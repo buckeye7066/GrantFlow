@@ -905,6 +905,121 @@ test('every decision includes MATCHER_VERSION 2.0.0', () => {
 })
 
 // ---------------------------------------------------------------------------
+// Pro bono / in-kind / referral-only → REJECT for all profile pipelines
+// ---------------------------------------------------------------------------
+
+test('pro bono opportunity is REJECT for any profile', () => {
+  const profile = { primary_type: 'individual', state: 'OH', needs: ['housing'] }
+  const opp = {
+    title: 'Free Pro Bono Legal Help',
+    description: 'Pro bono legal assistance at no cost',
+    application_url: 'https://legalaid.org',
+  }
+  const result = computeMatchDecision(profile, opp)
+  assertDecision(result, 'REJECT', 'pro bono = not direct funding')
+  assert.ok(result.ineligibilityReasons.some(r => r.toLowerCase().includes('pro bono')))
+})
+
+test('in-kind goods opportunity is REJECT for any profile', () => {
+  const profile = { primary_type: 'individual', state: 'TN', needs: ['housing'] }
+  const opp = {
+    title: 'In-Kind Furniture and Household Goods',
+    description: 'In-kind material support of donated household goods and furniture',
+    application_url: 'https://goods.org',
+  }
+  const result = computeMatchDecision(profile, opp)
+  assertDecision(result, 'REJECT', 'in-kind = not direct financial assistance')
+  assert.ok(result.ineligibilityReasons.some(r => r.toLowerCase().includes('in-kind')))
+})
+
+test('referral-only opportunity is REJECT for any profile', () => {
+  const profile = { primary_type: 'individual', state: 'FL', needs: ['housing'] }
+  const opp = {
+    title: 'Social Services Referral Program',
+    description: 'Referral only — agency referral required; no direct applications accepted',
+    application_url: 'https://agency.org',
+  }
+  const result = computeMatchDecision(profile, opp)
+  assertDecision(result, 'REJECT', 'referral-only = not a direct application')
+  assert.ok(result.ineligibilityReasons.some(r => r.toLowerCase().includes('referral')))
+})
+
+// ---------------------------------------------------------------------------
+// University / off-campus resource → REJECT for non-student profile
+// ---------------------------------------------------------------------------
+
+test('university off-campus housing resource is REJECT for non-student individual', () => {
+  const profile = { primary_type: 'individual', state: 'OH', needs: ['housing'] }
+  const opp = {
+    title: 'Off-Campus Housing Directory',
+    description: 'Off-campus housing listings and resources for enrolled students',
+    application_url: 'https://university.edu/offcampus',
+  }
+  const result = computeMatchDecision(profile, opp)
+  assertDecision(result, 'REJECT', 'off-campus housing = requires student status')
+})
+
+test('university off-campus housing is ACCEPT/REVIEW for student profile', () => {
+  const studentProfile = { primary_type: 'student', state: 'OH', needs: ['housing', 'education'], is_student: true }
+  const opp = {
+    title: 'Off-Campus Housing Directory',
+    description: 'Off-campus housing listings and resources for enrolled students',
+    application_url: 'https://university.edu/offcampus',
+    keywords: '["student", "housing"]',
+    entity_types_allowed: '["student"]',
+  }
+  const result = computeMatchDecision(studentProfile, opp)
+  assert.ok(result.decision !== 'REJECT', `Student + student housing should not REJECT, got: ${result.explanation}`)
+})
+
+// ---------------------------------------------------------------------------
+// Profile normalizer: section-derived disability/chronic illness → needCategories
+// ---------------------------------------------------------------------------
+
+test('profile with chronic_illness section derives disability need category', () => {
+  const profile = { primary_type: 'individual', state: 'TN' }
+  const sections = {
+    health_medical: { chronic_illness: true, chronic_illness_type: 'diabetes' },
+  }
+  const norm = normalizeProfile(profile, sections)
+  assert.ok(norm.needCategories.includes('disability'),
+    `Expected disability in needCategories, got: ${norm.needCategories.join(', ')}`)
+  assert.equal(norm.hasChronicIllness, true)
+})
+
+test('profile with disability_type in health section derives disability need category', () => {
+  const profile = { primary_type: 'individual', state: 'CA' }
+  const sections = {
+    health_medical: { disability_type: 'mobility impairment' },
+  }
+  const norm = normalizeProfile(profile, sections)
+  assert.ok(norm.needCategories.includes('disability'),
+    `Expected disability in needCategories, got: ${norm.needCategories.join(', ')}`)
+})
+
+// ---------------------------------------------------------------------------
+// Profile normalizer: location inference from basic_information section
+// ---------------------------------------------------------------------------
+
+test('profile normalizer infers state from basic_information section', () => {
+  const profile = { primary_type: 'individual' } // no top-level state
+  const sections = {
+    basic_information: { state: 'TN', city: 'Nashville' },
+  }
+  const norm = normalizeProfile(profile, sections)
+  assert.equal(norm.state, 'TN', 'State should be inferred from basic_information section')
+})
+
+test('profile normalizer infers state from location_focus section', () => {
+  const profile = { primary_type: 'individual' }
+  const sections = {
+    location_focus: { state: 'GA' },
+  }
+  const norm = normalizeProfile(profile, sections)
+  assert.equal(norm.state, 'GA', 'State should be inferred from location_focus section')
+})
+
+// ---------------------------------------------------------------------------
 // opportunityNormalizer: new flags are correctly extracted
 // ---------------------------------------------------------------------------
 

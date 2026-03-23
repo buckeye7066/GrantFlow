@@ -248,21 +248,37 @@ export function normalizeProfile(rawProfile, sections = null) {
   let county = profile.county ?? null
   let city = profile.city ?? null
 
-  // Extract location from sections if top-level is incomplete
+  // Extract location from sections if top-level is incomplete.
+  // Check standard section keys used in real profile data.
   if ((!state || !zip) && profileSections) {
-    const locationSection =
-      profileSections.location ??
-      profileSections.address ??
-      profileSections.contact_info ??
-      null
-    if (locationSection) {
-      const la = locationSection.answers ?? locationSection
-      if (la && typeof la === 'object') {
-        if (!state) state = la.state ?? la.primary_state ?? null
-        if (!zip) zip = la.zip ?? la.postal_code ?? la.zip_code ?? null
-        if (!county) county = la.county ?? null
-        if (!city) city = la.city ?? null
+    const locationCandidates = [
+      profileSections.basic_information,    // most common real section
+      profileSections.location_focus,       // service/preferred location
+      profileSections.location,
+      profileSections.address,
+      profileSections.contact_info,
+    ]
+    for (const section of locationCandidates) {
+      if (!section) continue
+      const la = section.answers ?? section
+      if (!la || typeof la !== 'object') continue
+      if (!state) {
+        // Handle nested address objects like { address: { state: 'TN' } }
+        const addrObj = la.address && typeof la.address === 'object' ? la.address : null
+        state = la.state ?? la.primary_state ?? addrObj?.state ?? null
+        // Parse state from a string address like "123 Main St, Nashville, TN 37201"
+        if (!state && typeof la.address === 'string') {
+          const m = la.address.match(/\b([A-Z]{2})\s*,?\s*\d{5}/)
+          if (m) state = m[1]
+        }
       }
+      if (!zip) {
+        const addrObj = la.address && typeof la.address === 'object' ? la.address : null
+        zip = la.zip ?? la.postal_code ?? la.zip_code ?? addrObj?.zip ?? addrObj?.postal_code ?? null
+      }
+      if (!county) county = la.county ?? null
+      if (!city) city = la.city ?? null
+      if (state && zip) break // Got everything we need
     }
     // Also check organization section
     const orgSection = profileSections.organization ?? profileSections.org ?? null
@@ -444,19 +460,27 @@ export function normalizeProfile(rawProfile, sections = null) {
       hasChronicIllnessFromSections =
         Boolean(ha.has_disability) ||
         Boolean(ha.has_chronic_illness) ||
-        Boolean(ha.chronic_illness) ||               // common field: { chronic_illness: true }
+        // common field: { chronic_illness: true }
+        Boolean(ha.chronic_illness) ||
         Boolean(ha.has_medical_condition) ||
         Boolean(ha.needs_dme) ||
         Boolean(ha.uses_assistive_technology) ||
         String(ha.conditions ?? '').length > 0 ||
-        String(ha.chronic_illness_type ?? '').length > 0 || // common field: chronic_illness_type
-        String(ha.disability_type ?? '').length > 0 ||      // common field: disability_type
+        // common fields: chronic_illness_type, disability_type
+        String(ha.chronic_illness_type ?? '').length > 0 ||
+        String(ha.disability_type ?? '').length > 0 ||
         safeParseArray(ha.diagnoses).length > 0
     }
   }
 
   const hasDisabilityNeed = needCategories.includes('disability') || hasChronicIllnessFromSections
   const hasChronicIllness = hasChronicIllnessFromSections || needCategories.includes('disability')
+
+  // When chronic illness / disability is section-derived, ensure 'disability' appears in needCategories
+  // so need alignment can match against opportunity needTypesSupported.
+  if (hasChronicIllnessFromSections && !needCategories.includes('disability')) {
+    needCategories.push('disability')
+  }
 
   // -- Emergency / disaster context --
   let hasEmergencyFromSections = false
