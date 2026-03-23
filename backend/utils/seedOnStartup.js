@@ -139,7 +139,7 @@ export function seedProfileGrants(db) {
     SELECT * FROM funding_opportunities 
     WHERE is_active = 1 
     AND (requires_match = 0 OR requires_match IS NULL)
-    LIMIT 200
+    LIMIT 500
   `).all();
   
   console.log(`[seedOnStartup] Found ${opportunities.length} opportunities to match`);
@@ -254,9 +254,10 @@ export function seedProfileGrants(db) {
       return { opp, score: Math.min(100, Math.max(0, score)), matchedFields };
     });
     
-    // Filter with higher threshold (65) and apply relevance filter
+    // Stage 1 (junk filter): only skip obvious non-matches (score < 5).
+    // computeMatchDecision() below is the final acceptance authority, not this score.
     const topMatches = scored
-      .filter(s => s.score >= 65)
+      .filter(s => s.score >= 5)
       .sort((a, b) => b.score - a.score)
       .slice(0, 50);
     

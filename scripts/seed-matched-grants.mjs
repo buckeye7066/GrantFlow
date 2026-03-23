@@ -275,16 +275,19 @@ async function main() {
       if (!relevance.pass) continue
 
       const { score, matchedFields } = calculateMatchScore(signals, opp)
-      if (score >= 80) {
+      // Stage 1 (junk filter): only skip obviously irrelevant candidates (score < 5).
+      // The canonical decision engine (computeMatchDecision) is the final acceptance
+      // authority — this heuristic must NOT exclude plausible canonical matches.
+      if (score >= 5) {
         scoredOpps.push({ opp, score, matchedFields })
       }
     }
     
-    // Sort by score and take top 10 — no fallback for below-threshold matches
+    // Sort by heuristic pre-score; take top 50 to pass to canonical engine — not an acceptance gate
     scoredOpps.sort((a, b) => b.score - a.score)
-    const grantsToCreate = scoredOpps.slice(0, 10)
+    const grantsToCreate = scoredOpps.slice(0, 50)
     
-    console.log(`  High matches (80%+, relevance-filtered): ${scoredOpps.length}`)
+    console.log(`  Heuristic candidates (junk-filtered, score>=5): ${scoredOpps.length}, passing top 50 to canonical engine`)
     
     // Ensure organization exists for the profile
     let orgId = profile.organization_id
