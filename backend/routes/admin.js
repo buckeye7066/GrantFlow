@@ -3299,6 +3299,9 @@ router.post('/seed-profile-grants', async (req, res) => {
   }
   try {
     const { excludeProfiles = [] } = req.body || {};
+    const { computeMatchDecision } = await import('../services/matchDecisionEngine.js');
+    const { saveToProfilePipeline } = await import('../services/opportunityMatcher.js');
+
     const profiles = await req.db.prepare('SELECT * FROM profiles WHERE status = ?').all('active');
     const opportunities = await req.db.prepare(`
       SELECT * FROM funding_opportunities 
@@ -3325,43 +3328,31 @@ router.post('/seed-profile-grants', async (req, res) => {
         try { sections[row.section_key] = JSON.parse(row.data || '{}'); } catch (e) { sections[row.section_key] = {}; }
       });
 
-      const profileContext = { profile: profile, sections: sections };
-      const profileSignals = buildProfileSignals(profileContext);
+      const profileContext = { profile, sections };
 
-      const scored = opportunities.map(opp => {
-        const { score, matchedFields } = calculateMatchScore(profileSignals, opp);
-        return { opp, score, matchedFields };
-      });
-
-      const topMatches = scored.filter(s => s.score >= 45).sort((a, b) => b.score - a.score).slice(0, 50);
-
-      let orgId = profile.organization_id;
-      if (!orgId) {
-        orgId = crypto.randomUUID();
-        await req.db
-          .prepare(
-            `INSERT INTO organizations (id, name, applicant_type, created_at, updated_at) VALUES (?, ?, 'individual_need', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
-          )
-          .run(orgId, profile.display_name || 'My Organization');
-        await req.db.prepare('UPDATE profiles SET organization_id = ? WHERE id = ?').run(orgId, profile.id);
-      }
+      // Pre-score all opportunities through the canonical decision engine
+      const candidates = opportunities
+        .map(opp => {
+          const decision = computeMatchDecision(profile, opp, { profileSections: sections });
+          return { opp, decision };
+        })
+        .filter(({ decision }) => decision.decision !== 'REJECT' && decision.score >= 45)
+        .sort((a, b) => b.decision.score - a.decision.score)
+        .slice(0, 50);
 
       let added = 0;
-      for (const { opp, score, matchedFields } of topMatches) {
-        const existing = await req.db
-          .prepare('SELECT id FROM grants WHERE organization_id = ? AND (funding_opportunity_id = ? OR title = ?)')
-          .get(orgId, opp.id, opp.title);
-        if (!existing) {
-          try {
-            await req.db.prepare(`
-              INSERT INTO grants (id, organization_id, funding_opportunity_id, title, funder, deadline, status, match_score, match_reasons, application_url, created_at, updated_at)
-              VALUES (?, ?, ?, ?, ?, ?, 'interested', ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-            `).run(crypto.randomUUID(), orgId, opp.id, opp.title, opp.sponsor, opp.deadline, score, JSON.stringify((matchedFields || []).slice(0, 10)), opp.application_url);
-            added++;
-          } catch (e) { /* ignore duplicates */ }
-        }
+      for (const { opp, decision } of candidates) {
+        const result = await saveToProfilePipeline(
+          req.db,
+          opp,
+          profile.id,
+          profileContext,
+          decision.score,
+          45,
+        );
+        if (result.saved) added++;
       }
-      results.push({ profile: profile.display_name, status: 'seeded', opportunities_found: topMatches.length, grants_added: added });
+      results.push({ profile: profile.display_name, status: 'seeded', opportunities_found: candidates.length, grants_added: added });
       totalGrantsAdded += added;
     }
     res.json({ success: true, message: 'Profile seeding complete', results, total_grants_added: totalGrantsAdded });
