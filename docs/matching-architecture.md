@@ -259,11 +259,21 @@ All insertion paths go through `saveToProfilePipeline()` in `opportunityMatcher.
 
 **Legacy fallback removed (v2.0.0)**: `opportunityMatcher.js` no longer imports or calls `calculateMatchScore` from `matchingEngine.js`. `computeMatchDecision()` is the sole scoring authority.
 
-The following callers use `saveToProfilePipeline`:
-- `backend/services/localCrawler.js`
-- `backend/services/comprehensiveCrawlerOptimized.js`
-- `backend/services/anyaAutonomousFunctionRunner.js`
-- `backend/scripts/backfill-profile-pipeline-from-opportunities.mjs`
+### Path audit (v2.0.0)
+
+| Path | Status | Notes |
+|---|---|---|
+| `backend/services/opportunityMatcher.js:saveToProfilePipeline` | ✅ canonical | Production pipeline insertion — sole INSERT authority |
+| `backend/services/localCrawler.js` | ✅ canonical | Calls `saveToProfilePipeline` |
+| `backend/services/comprehensiveCrawlerOptimized.js` | ✅ canonical | Calls `saveToProfilePipeline` |
+| `backend/services/anyaAutonomousFunctionRunner.js` | ✅ canonical | Calls `saveToProfilePipeline` |
+| `backend/scripts/backfill-profile-pipeline-from-opportunities.mjs` | ✅ canonical | Calls `saveToProfilePipeline` |
+| `backend/routes/admin.js POST /api/admin/backfill-matches` | ✅ canonical | Re-evaluates using `computeMatchDecision` |
+| `backend/utils/seedOnStartup.js` | ✅ canonical | Inserts into `funding_opportunities`, not grants pipeline |
+| `backend/scripts/seed-profile-grants.mjs` | ✅ canonical (v2.0.0) | Dev-only; guarded by NODE_ENV/DISABLE_SEEDING; uses `computeMatchDecision` |
+| `scripts/seed-profile-grants.mjs` | ✅ canonical (v2.0.0) | Dev-only; guarded by NODE_ENV/DISABLE_SEEDING; uses `computeMatchDecision` |
+| `scripts/seed-matched-grants.mjs` | ✅ canonical (v2.0.0) | Dev-only; guarded by NODE_ENV/DISABLE_SEEDING; uses `computeMatchDecision` |
+| `backend/scripts/create-orgs-and-grants.mjs` | ⚠️ deprecated | Test scaffold only; marked deprecated; uses random placeholder data |
 
 ## Relevance Filter
 
@@ -297,7 +307,8 @@ by `evaluateEligibility()`. Over time, patterns should be promoted from `relevan
 
 Tests are in:
 - `tests/unit/matchDecisionEngine.test.mjs` (existing — 55 tests)
-- `tests/unit/matchDecisionEngine.comprehensive.test.mjs` (v2 regression harness — 54 tests)
+- `tests/unit/matchDecisionEngine.comprehensive.test.mjs` (v2 regression harness — 63 tests)
+- `tests/unit/matchDecisionEngine.lifecycle.test.mjs` (lifecycle / pipeline tests — 16 tests)
 
 ### Comprehensive Test Coverage (v2)
 
@@ -321,11 +332,28 @@ Tests are in:
 10. **Fingerprint v2** includes `applicabilityUnknown`, `isCaregiver`, `hasChronicIllness`
 11. **New opportunity flags** (`isProBono`, `isInKind`, `isInstitutionalOnly`, `requiresDisasterContext`, `isDmeOrEquipment`, `diseaseSpecific`)
 
+### Lifecycle / Pipeline Tests (v2.0.0)
+
+`tests/unit/matchDecisionEngine.lifecycle.test.mjs` covers:
+
+1. **Profile-id scoping**: grants are stored with the correct `profile_id`
+2. **Cross-profile isolation**: pipeline of profile A does not leak into profile B
+3. **Duplicate prevention**: inserting the same opportunity twice is idempotent
+4. **Stale re-evaluation**: rows with old `matcher_version` are detected and re-evaluated
+5. **Null fingerprint detection**: rows without fingerprints are detected as never evaluated by v2.0.0
+6. **REJECT removal**: stale rows that now produce REJECT (e.g. loan) are deleted from pipeline
+7. **Profile fingerprint determinism**: same profile → same fingerprint; different state/needs → different fingerprint
+8. **Opportunity fingerprint determinism**: same opportunity → same fingerprint; `is_loan` change → different fingerprint
+9. **Canonical decision authority**: `computeMatchDecision` REJECT prevents pipeline INSERT via `saveToProfilePipeline`
+10. **Seeding guard**: `seedFundingOpportunities` returns 0 when `DISABLE_SEEDING=true`
+11. **Metadata persistence**: `matcher_version`, `profile_fingerprint`, `opportunity_fingerprint`, `match_decision`, `evaluated_at` all stored
+
 ### Running Tests
 
 ```sh
 node --test tests/unit/matchDecisionEngine.test.mjs
 node --test tests/unit/matchDecisionEngine.comprehensive.test.mjs
+node --test tests/unit/matchDecisionEngine.lifecycle.test.mjs
 ```
 
 Or as part of the full suite:

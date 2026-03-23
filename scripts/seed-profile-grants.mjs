@@ -20,6 +20,14 @@ import path from 'path';
 import crypto from 'crypto';
 import { fileURLToPath } from 'url';
 import { applyRelevanceFilter } from '../backend/services/relevanceFilter.js';
+import {
+  computeMatchDecision,
+  normalizeProfile,
+  normalizeOpportunity,
+  computeProfileFingerprint,
+  computeOpportunityFingerprint,
+  MATCHER_VERSION,
+} from '../backend/services/matchDecisionEngine.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -339,13 +347,27 @@ const placeholderGrantsRemoved = db.prepare(`
 `).run();
 console.log(`   Removed ${placeholderGrantsRemoved.changes} placeholder grants`);
 
-// Prepare insert statement
-const insertGrant = db.prepare(`
-  INSERT INTO grants (
-    id, organization_id, profile_id, title, funder, deadline, status, 
-    match_score, match_reasons, application_url, amount_requested, notes
-  ) VALUES (?, ?, ?, ?, ?, ?, 'interested', ?, ?, ?, ?, ?)
-`);
+// Prepare insert statement — detect whether decision columns are present
+const _grantCols = db.prepare('PRAGMA table_info(grants)').all().map(c => c.name);
+const _hasDecisionCols = _grantCols.includes('match_decision');
+
+const insertGrant = _hasDecisionCols
+  ? db.prepare(`
+      INSERT INTO grants (
+        id, organization_id, profile_id, title, funder, deadline, status,
+        match_score, match_reasons, application_url, amount_requested, notes,
+        funding_opportunity_id,
+        match_decision, match_explanation, matched_needs, eligibility_status,
+        ineligibility_reasons, profile_fingerprint, opportunity_fingerprint,
+        matcher_version, evaluated_at, match_confidence
+      ) VALUES (?, ?, ?, ?, ?, ?, 'interested', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `)
+  : db.prepare(`
+      INSERT INTO grants (
+        id, organization_id, profile_id, title, funder, deadline, status,
+        match_score, match_reasons, application_url, amount_requested, notes
+      ) VALUES (?, ?, ?, ?, ?, ?, 'interested', ?, ?, ?, ?, ?)
+    `);
 
 const checkExisting = db.prepare(`
   SELECT id FROM grants WHERE profile_id = ? AND title = ?
@@ -361,8 +383,14 @@ for (const profile of profiles) {
   // Get profile sections
   const sections = db.prepare('SELECT * FROM profile_sections WHERE profile_id = ?').all(profile.id);
   
-  // Build signals
+  // Build signals (used as pre-filter heuristic — final acceptance uses computeMatchDecision below)
   const signals = buildProfileSignals(profile, sections);
+
+  // Convert sections array to object format for canonical decision engine
+  const sectionsObj = {};
+  for (const row of sections) {
+    try { sectionsObj[row.section_key] = typeof row.data === 'string' ? JSON.parse(row.data) : (row.data || {}); } catch { sectionsObj[row.section_key] = {}; }
+  }
 
   // Fix: sections[].data is a JSON string — parse it before accessing .state
   function parseSectionData(sections, key) {
@@ -459,21 +487,59 @@ for (const profile of profiles) {
     // Check if already exists for this profile
     const existing = checkExisting.get(profile.id, opp.title);
     if (existing) continue;
-    
+
+    // --- CANONICAL DECISION ENGINE: final acceptance authority ---
+    const decision = computeMatchDecision(profile, opp, { profileSections: sectionsObj });
+
+    // Hard reject: never insert into profile pipeline
+    if (decision.decision === 'REJECT') continue;
+
+    // Use canonical score as the stored match score
+    const finalScore = decision.score;
+
     try {
-      insertGrant.run(
-        crypto.randomUUID(),
-        orgId,
-        profile.id,   // profile_id for correct pipeline scoping
-        opp.title,
-        opp.sponsor,
-        opp.deadline || null,
-        opp.match_score,
-        JSON.stringify(opp.match_reasons.slice(0, 5)),
-        opp.application_url || null,
-        opp.amount_max || opp.amount_min || null,
-        opp.description ? opp.description.substring(0, 500) : null
-      );
+      if (_hasDecisionCols) {
+        const profileFingerprint = computeProfileFingerprint(normalizeProfile(profile, sectionsObj)) ?? null;
+        const opportunityFingerprint = computeOpportunityFingerprint(normalizeOpportunity(opp)) ?? null;
+        insertGrant.run(
+          crypto.randomUUID(),
+          orgId,
+          profile.id,
+          opp.title,
+          opp.sponsor,
+          opp.deadline || null,
+          finalScore,
+          JSON.stringify(decision.matchedNeeds ?? []),
+          opp.application_url || null,
+          opp.amount_max || opp.amount_min || null,
+          opp.description ? opp.description.substring(0, 500) : null,
+          opp.id || null,
+          decision.decision,
+          decision.explanation ?? null,
+          JSON.stringify(decision.matchedNeeds ?? []),
+          String(decision.eligible),
+          JSON.stringify(decision.ineligibilityReasons ?? []),
+          profileFingerprint,
+          opportunityFingerprint,
+          MATCHER_VERSION,
+          decision.evaluatedAt ?? new Date().toISOString(),
+          decision.confidence ?? null,
+        );
+      } else {
+        insertGrant.run(
+          crypto.randomUUID(),
+          orgId,
+          profile.id,
+          opp.title,
+          opp.sponsor,
+          opp.deadline || null,
+          finalScore,
+          JSON.stringify(decision.matchedNeeds ?? []),
+          opp.application_url || null,
+          opp.amount_max || opp.amount_min || null,
+          opp.description ? opp.description.substring(0, 500) : null,
+        );
+      }
       addedForProfile++;
       totalGrantsAdded++;
     } catch (err) {

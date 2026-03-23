@@ -1,3 +1,16 @@
+/**
+ * DEPRECATED: create-orgs-and-grants.mjs
+ *
+ * This script uses random/placeholder data (random scores, hardcoded reasons) and
+ * bypasses the canonical decision engine (computeMatchDecision). It should NOT be
+ * used for seeding profile pipelines.
+ *
+ * For development seeding, use instead:
+ *   node backend/scripts/seed-profile-grants.mjs
+ *   node backend/scripts/backfill-profile-pipeline-from-opportunities.mjs
+ *
+ * Both of the above use computeMatchDecision() as the single decision authority.
+ */
 import Database from 'better-sqlite3';
 import crypto from 'crypto';
 
