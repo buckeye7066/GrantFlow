@@ -8,6 +8,14 @@ import { join, dirname } from 'path'
 import { fileURLToPath } from 'url'
 import crypto from 'crypto'
 import { applyRelevanceFilter } from '../backend/services/relevanceFilter.js'
+import {
+  computeMatchDecision,
+  normalizeProfile,
+  normalizeOpportunity,
+  computeProfileFingerprint,
+  computeOpportunityFingerprint,
+  MATCHER_VERSION,
+} from '../backend/services/matchDecisionEngine.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
@@ -190,6 +198,10 @@ async function main() {
   console.log('========================================\n')
   
   const db = new Database(DB_PATH)
+
+  // Detect whether decision columns are present in the grants table
+  const _grantCols = db.prepare('PRAGMA table_info(grants)').all().map(c => c.name)
+  const _hasDecisionCols = _grantCols.includes('match_decision')
   
   // Get all profiles
   const profiles = db.prepare('SELECT * FROM profiles WHERE status = ?').all('active')
@@ -206,6 +218,12 @@ async function main() {
     
     // Get profile sections
     const sections = db.prepare('SELECT section_key, data FROM profile_sections WHERE profile_id = ?').all(profile.id)
+    
+    // Convert sections array to object format for canonical decision engine
+    const sectionsObj = {}
+    for (const row of sections) {
+      try { sectionsObj[row.section_key] = typeof row.data === 'string' ? JSON.parse(row.data) : (row.data || {}) } catch { sectionsObj[row.section_key] = {} }
+    }
     
     // Get organization
     const organization = profile.organization_id 
@@ -280,7 +298,7 @@ async function main() {
     }
 
     // Create grants — always set profile_id for correct pipeline scoping
-    for (const { opp, score, matchedFields } of grantsToCreate) {
+    for (const { opp, score: _heuristicScore, matchedFields: _matchedFields } of grantsToCreate) {
       // Check if grant already exists for this profile/opportunity
       const existing = db.prepare(`
         SELECT id FROM grants 
@@ -291,31 +309,76 @@ async function main() {
       if (existing) {
         continue // Skip duplicate
       }
+
+      // --- CANONICAL DECISION ENGINE: final acceptance authority ---
+      const decision = computeMatchDecision(profile, opp, { profileSections: sectionsObj })
+
+      // Hard reject: never insert into profile pipeline
+      if (decision.decision === 'REJECT') continue
+
+      // Use canonical score as the stored match score
+      const finalScore = decision.score
       
       const grantId = crypto.randomUUID()
       
       try {
-        db.prepare(`
-          INSERT INTO grants (
-            id, organization_id, profile_id, funding_opportunity_id, title, funder,
-            deadline, status, match_score, match_reasons, application_url,
-            created_at, updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, 'interested', ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-        `).run(
-          grantId,
-          orgId,
-          profile.id,
-          opp.id,
-          opp.title,
-          opp.sponsor,
-          opp.deadline,
-          score,
-          JSON.stringify(matchedFields),
-          opp.application_url
-        )
+        if (_hasDecisionCols) {
+          const profileFingerprint = computeProfileFingerprint(normalizeProfile(profile, sectionsObj)) ?? null
+          const opportunityFingerprint = computeOpportunityFingerprint(normalizeOpportunity(opp)) ?? null
+          db.prepare(`
+            INSERT INTO grants (
+              id, organization_id, profile_id, funding_opportunity_id, title, funder,
+              deadline, status, match_score, match_reasons, application_url,
+              match_decision, match_explanation, matched_needs, eligibility_status,
+              ineligibility_reasons, profile_fingerprint, opportunity_fingerprint,
+              matcher_version, evaluated_at, match_confidence,
+              created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, 'interested', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+          `).run(
+            grantId,
+            orgId,
+            profile.id,
+            opp.id,
+            opp.title,
+            opp.sponsor,
+            opp.deadline,
+            finalScore,
+            JSON.stringify(decision.matchedNeeds ?? []),
+            opp.application_url,
+            decision.decision,
+            decision.explanation ?? null,
+            JSON.stringify(decision.matchedNeeds ?? []),
+            String(decision.eligible),
+            JSON.stringify(decision.ineligibilityReasons ?? []),
+            profileFingerprint,
+            opportunityFingerprint,
+            MATCHER_VERSION,
+            decision.evaluatedAt ?? new Date().toISOString(),
+            decision.confidence ?? null,
+          )
+        } else {
+          db.prepare(`
+            INSERT INTO grants (
+              id, organization_id, profile_id, funding_opportunity_id, title, funder,
+              deadline, status, match_score, match_reasons, application_url,
+              created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, 'interested', ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+          `).run(
+            grantId,
+            orgId,
+            profile.id,
+            opp.id,
+            opp.title,
+            opp.sponsor,
+            opp.deadline,
+            finalScore,
+            JSON.stringify(decision.matchedNeeds ?? []),
+            opp.application_url,
+          )
+        }
         
         totalGrantsCreated++
-        console.log(`    ✓ Added: ${opp.title} (${score}%)`)
+        console.log(`    ✓ Added: ${opp.title} (${finalScore}% canonical:${decision.decision})`)
       } catch (e) {
         if (!e.message.includes('UNIQUE')) {
           console.error(`    ✗ ${e.message}`)
