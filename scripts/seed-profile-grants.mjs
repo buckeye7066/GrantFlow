@@ -2,7 +2,9 @@
 /**
  * Seed Profile Grants
  * 
- * Seeds each profile with up to 50 real grants evaluated by the canonical decision engine.
+ * Seeds each profile with real grants evaluated by the canonical decision engine.
+ * Adaptive candidate selection: if junk-filtered candidates ≤ 200, all are evaluated
+ * canonically; if > 200, the top 200 by heuristic score are used as a generous ceiling.
  * Strategy: Stage 1 lightweight junk filter (heuristic >= 5) → Stage 2 canonical engine gate.
  * The local heuristic is only used to rank candidates before canonical evaluation,
  * NOT as an acceptance gate. computeMatchDecision() is the sole acceptance authority.
@@ -482,14 +484,36 @@ for (const profile of profiles) {
     }
   }
   
-  // Sort by heuristic pre-score and take top 50 — canonical engine is the final gate below
-  scoredOpps.sort((a, b) => b.match_score - a.match_score);
-  const top50 = scoredOpps.slice(0, 50);
-  
-  console.log(`   Found ${scoredOpps.length} heuristic candidates (junk-filtered), passing top 50 to canonical engine...`);
-  
+  // ---------------------------------------------------------------------------
+  // Adaptive candidate selection — three-tier strategy:
+  //   1. Junk filter (heuristic < 5): removes clear garbage (applied above).
+  //   2. Adaptive cap (≤ ADAPTIVE_CANDIDATE_CAP pass through; > cap takes top N):
+  //      bounds worst-case canonical engine calls while ensuring no plausible
+  //      canonical match is excluded merely because it ranked below an old
+  //      hard-50 cutoff. In practice, most profiles have well under 200
+  //      junk-filtered candidates so the cap rarely activates.
+  //   3. Canonical engine (computeMatchDecision): sole acceptance authority.
+  // ---------------------------------------------------------------------------
+  const ADAPTIVE_CANDIDATE_CAP = 200;
+  let candidatePool;
+  if (scoredOpps.length <= ADAPTIVE_CANDIDATE_CAP) {
+    // Evaluate ALL junk-filtered candidates — no cap needed.
+    candidatePool = scoredOpps;
+  } else {
+    // More than the cap: sort by heuristic and take the top N.
+    // A ceiling of 200 is generous enough that missing a strong canonical
+    // match is virtually impossible while keeping performance bounded.
+    scoredOpps.sort((a, b) => b.match_score - a.match_score);
+    candidatePool = scoredOpps.slice(0, ADAPTIVE_CANDIDATE_CAP);
+  }
+
+  const passingCount = scoredOpps.length <= ADAPTIVE_CANDIDATE_CAP
+    ? `all ${scoredOpps.length}`
+    : `top ${ADAPTIVE_CANDIDATE_CAP} of ${scoredOpps.length}`;
+  console.log(`   Found ${scoredOpps.length} heuristic candidates (junk-filtered), passing ${passingCount} to canonical engine...`);
+
   let addedForProfile = 0;
-  for (const opp of top50) {
+  for (const opp of candidatePool) {
     // Check if already exists for this profile
     const existing = checkExisting.get(profile.id, opp.title);
     if (existing) continue;
@@ -584,4 +608,4 @@ const fakeCheck = db.prepare(`
 console.log(`\n   Fake grants remaining: ${fakeCheck.count}`);
 
 db.close();
-console.log('\n✅ Done! Each profile now has up to 50 real grants with 80%+ match.');
+console.log('\n✅ Done! Each profile now has real grants evaluated by the canonical decision engine.');
