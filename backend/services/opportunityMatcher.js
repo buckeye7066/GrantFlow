@@ -2,10 +2,12 @@
  * Opportunity Matcher and Pipeline Manager
  * Evaluates opportunity matches and saves to appropriate pipelines
  * Delegates to matchDecisionEngine for one shared decision pipeline.
+ *
+ * MATCHER_VERSION 2.0.0: Legacy calculateMatchScore fallback removed.
+ * computeMatchDecision() is the sole authority for all pipeline decisions.
  */
 
 import crypto from 'crypto'
-import { calculateMatchScore } from './matchingEngine.js'
 import { applyRelevanceFilter, extractProfileData } from './relevanceFilter.js'
 import { computeMatchDecision, normalizeProfile, computeProfileFingerprint, normalizeOpportunity, computeOpportunityFingerprint } from './matchDecisionEngine.js'
 
@@ -27,6 +29,7 @@ function hasGrantsDecisionColumns(db) {
 /**
  * Calculate match percentage between opportunity and profile.
  * Uses the shared decision engine as the single source of truth.
+ * No legacy fallback — computeMatchDecision() is the sole authority.
  */
 function calculateMatchPercentage(opportunity, profileContext) {
   if (!profileContext) return 0
@@ -36,9 +39,8 @@ function calculateMatchPercentage(opportunity, profileContext) {
     const decision = computeMatchDecision(profile, opportunity, { profileSections: sections })
     return decision.score
   } catch {
-    // Fallback to legacy scorer if decision engine fails (e.g. incomplete data)
-    const { score } = calculateMatchScore(profileContext, opportunity)
-    return score
+    // If the decision engine fails entirely (e.g. null inputs), return 0 — never save.
+    return 0
   }
 }
 

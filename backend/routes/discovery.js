@@ -2,6 +2,10 @@ import express from 'express';
 import { ensureProfileAccess, isAdminUser, requireAuthenticatedUser } from '../utils/accessControl.js'
 import { trustedOriginClause, trustedSourceClause } from '../utils/recordOrigins.js'
 import { isJunkOpportunity } from '../services/contentFilter.js'
+// NOTE: calculateMatchScore is used here for display-only scoring of the discovery
+// feed. This route does NOT insert into the grants pipeline; it surfaces scored
+// opportunities for user browsing. The canonical computeMatchDecision() is used
+// for all pipeline insertions via saveToProfilePipeline.
 import { calculateMatchScore as scoreOpportunity } from '../services/matchingEngine.js'
 import { loadProfileContext } from '../services/profileHelpers.js'
 import { buildProfileFacets } from '../services/profile/profileTaxonomy.js'
