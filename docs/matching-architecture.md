@@ -289,7 +289,57 @@ The relevance filter is applied before the pipeline INSERT to catch any patterns
 by `evaluateEligibility()`. Over time, patterns should be promoted from `relevanceFilter.js` into
 `evaluateEligibility()` to maintain the canonical architecture.
 
-## Source Trust Scoring
+## Candidate Selection Strategy (Pre-Canonical Filtering)
+
+### Two-Stage Filtering Approach
+
+All seeding paths use a **two-stage** strategy to balance correctness and performance:
+
+#### Stage 1 — Lightweight Junk Filter
+A local heuristic scorer based on keyword overlap, geographic signals, and intent phrases is applied first. This stage **only removes clear garbage** (heuristic score < 5). Its sole purpose is to avoid calling the canonical engine on completely irrelevant opportunities (e.g., a state-specific program for California being evaluated for a New York profile with no matching signals).
+
+**Critical constraint**: Stage 1 must **never** exclude plausible canonical matches. Profiles with weak keyword tags but strong section-derived signals (e.g., `military_service.veteran = true`, `health_medical.disability_type`, `family_life.family_caregiver = true`) must still pass Stage 1 and reach the canonical engine.
+
+#### Stage 2 — Canonical Decision Engine
+`computeMatchDecision()` is the **sole acceptance authority**. No opportunity is saved to the pipeline unless the canonical engine returns ACCEPT or REVIEW. The canonical engine:
+- Performs hard eligibility checks (loans, demographic requirements, entity type, geography)
+- Calculates need alignment from normalized profile + opportunity data
+- Normalizes section-derived signals (veteran status, disability, caregiver, etc.)
+- Applies confidence and actionability checks (application URL, missing fields)
+
+### Which Paths Use Pre-Filtering
+
+| Path | Stage 1 Threshold | Stage 2 Gate | Notes |
+|---|---|---|---|
+| `backend/utils/seedOnStartup.js:seedProfileGrants()` | heuristic ≥ 5 | `computeMatchDecision` ACCEPT/REVIEW | Safe: threshold is very low |
+| `backend/scripts/seed-profile-grants.mjs` | heuristic ≥ 5 | `computeMatchDecision` ACCEPT/REVIEW; then post-decision score ≥ 40 (matches canonical ACCEPT minimum) | Safe: canonical runs first, score check is post-evaluation |
+| `scripts/seed-profile-grants.mjs` | heuristic ≥ 5 | `computeMatchDecision` ACCEPT/REVIEW | Safe: threshold is very low |
+| `scripts/seed-matched-grants.mjs` | heuristic ≥ 5 | `computeMatchDecision` ACCEPT/REVIEW | Safe: threshold is very low |
+| `backend/services/opportunityMatcher.js:saveToProfilePipeline()` | none (no heuristic) | `computeMatchDecision` ACCEPT/REVIEW | Canonical-only; no heuristic pre-filter |
+| `backend/scripts/backfill-profile-pipeline-from-opportunities.mjs` | none | delegates to `saveToProfilePipeline()` | Safe: no pre-filtering |
+
+### Why Remaining Pre-Filters Are Safe
+
+1. **Threshold is extremely permissive (< 5)**: A score of 0-4 requires essentially zero signal overlap — not even geographic, keyword, or intent phrase matches. A caregiver profile with caregiver section data evaluating a caregiver program will score well above 5 even with zero tag overlap.
+
+2. **Section-derived signals pass**: The heuristic uses `buildProfileSignals()` which reads section data (not just top-level tags). Veteran status from `military_service`, disability from `health_medical`, caregiver from `family_life` all produce keyword signals that raise the heuristic score above the junk threshold.
+
+3. **Geographic mismatch is a soft penalty, not a hard disqualification**: The heuristic subtracts points for wrong-state opportunities but does not zero them out. National opportunities always score above 5.
+
+4. `applyRelevanceFilter()` is applied after Stage 1 as a hard-disqualification safety net — it only blocks clear demographic/entity mismatches (veteran-only for non-veterans, student-only for non-students, etc.) and passes conservatively when profile data is missing.
+
+### Performance Strategy
+
+- **Candidate pool cap**: Top 50 by heuristic pre-score are passed to the canonical engine per profile. This bounds worst-case CPU cost while retaining the most plausible candidates.
+- **SQL LIMIT 500**: The database query fetches up to 500 active opportunities before heuristic scoring, ensuring sufficient coverage without loading the entire database.
+- **Canonical engine is not brute-forced**: The junk filter ensures the canonical engine only processes plausible candidates, maintaining acceptable performance at scale.
+
+### False Positive vs False Negative Trade-off
+
+- **At Stage 1 (candidate selection)**: Prefer **false positives** over false negatives. It is better to send an extra candidate to canonical evaluation than to exclude a strong canonical match prematurely.
+- **At Stage 2 (canonical decision)**: Prefer **conservative correctness**. The canonical engine must not lower its ACCEPT criteria to increase recall. ACCEPT requires score ≥ 40, needAlignment > 0, confidence ≥ 50, and a valid application URL.
+
+
 
 | Source | Score |
 |---|---|
@@ -309,6 +359,7 @@ Tests are in:
 - `tests/unit/matchDecisionEngine.test.mjs` (existing — 55 tests)
 - `tests/unit/matchDecisionEngine.comprehensive.test.mjs` (v2 regression harness — 63 tests)
 - `tests/unit/matchDecisionEngine.lifecycle.test.mjs` (lifecycle / pipeline tests — 16 tests)
+- `tests/unit/candidate-prefilter-safety.test.mjs` (pre-filter safety regression — 8 tests)
 
 ### Comprehensive Test Coverage (v2)
 
@@ -354,6 +405,7 @@ Tests are in:
 node --test tests/unit/matchDecisionEngine.test.mjs
 node --test tests/unit/matchDecisionEngine.comprehensive.test.mjs
 node --test tests/unit/matchDecisionEngine.lifecycle.test.mjs
+node --test tests/unit/candidate-prefilter-safety.test.mjs
 ```
 
 Or as part of the full suite:

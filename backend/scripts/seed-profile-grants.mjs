@@ -158,8 +158,9 @@ for (const profile of profiles) {
 
     heuristicScore = Math.max(0, Math.min(100, Math.floor(heuristicScore)));
 
-    // Pre-filter: skip obviously poor heuristic matches to avoid calling decision engine on every opp
-    if (heuristicScore < 10 || matchedOpps >= 50) continue;
+    // Stage 1 (junk filter): skip clear garbage (score < 5) to avoid unnecessary canonical calls.
+    // The canonical decision engine is the final acceptance authority — do not raise this threshold.
+    if (heuristicScore < 5) continue;
 
     // --- CANONICAL DECISION ENGINE: final acceptance authority ---
     const decision = computeMatchDecision(profile, opp, { profileSections: sections });
@@ -170,8 +171,9 @@ for (const profile of profiles) {
     // Use canonical score as the stored match score
     const score = decision.score;
 
-    // Only save if canonical score meets threshold (65 for this seeding script)
-    if (score < 65) continue;
+    // Only save if canonical score meets the ACCEPT threshold (>= 40).
+    // Canonical ACCEPT requires score >= 40, needAlignment > 0, confidence >= 50.
+    if (score < 40) continue;
 
     {
       const grantId = crypto.randomUUID();

@@ -2,7 +2,10 @@
 /**
  * Seed Profile Grants
  * 
- * Seeds each profile with 50 real grants that match at least 80%.
+ * Seeds each profile with up to 50 real grants evaluated by the canonical decision engine.
+ * Strategy: Stage 1 lightweight junk filter (heuristic >= 5) → Stage 2 canonical engine gate.
+ * The local heuristic is only used to rank candidates before canonical evaluation,
+ * NOT as an acceptance gate. computeMatchDecision() is the sole acceptance authority.
  * Only uses verified real funding opportunities - no fakes.
  */
 
@@ -458,7 +461,10 @@ for (const profile of profiles) {
     
     const { score, matchReasons } = calculateMatchScore(opp, signals, profileState);
     
-    if (score >= 80) {
+    // Stage 1 (junk filter): only skip obviously irrelevant candidates (score < 5).
+    // The canonical decision engine (computeMatchDecision) is the final acceptance
+    // authority — this heuristic must NOT exclude plausible canonical matches.
+    if (score >= 5) {
       // Apply relevance filter before adding to candidates
       const oppForFilter = {
         ...opp,
@@ -476,11 +482,11 @@ for (const profile of profiles) {
     }
   }
   
-  // Sort by score and take top 50
+  // Sort by heuristic pre-score and take top 50 — canonical engine is the final gate below
   scoredOpps.sort((a, b) => b.match_score - a.match_score);
   const top50 = scoredOpps.slice(0, 50);
   
-  console.log(`   Found ${scoredOpps.length} opportunities with 80%+ match, adding top 50...`);
+  console.log(`   Found ${scoredOpps.length} heuristic candidates (junk-filtered), passing top 50 to canonical engine...`);
   
   let addedForProfile = 0;
   for (const opp of top50) {
