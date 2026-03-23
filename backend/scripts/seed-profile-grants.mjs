@@ -34,7 +34,7 @@ const profiles = db.prepare('SELECT * FROM profiles').all();
 console.log(`Found ${profiles.length} profiles`);
 
 // Get funding opportunities
-const opportunities = db.prepare('SELECT * FROM funding_opportunities WHERE is_active = 1 OR is_active IS NULL LIMIT 200').all();
+const opportunities = db.prepare('SELECT * FROM funding_opportunities WHERE is_active = 1 OR is_active IS NULL LIMIT 500').all();
 console.log(`Found ${opportunities.length} opportunities\n`);
 
 // Detect whether decision columns are present in the grants table
