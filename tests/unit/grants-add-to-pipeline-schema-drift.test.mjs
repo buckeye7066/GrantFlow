@@ -151,7 +151,7 @@ test('DiscoverGrants: add-to-pipeline does not 500 when grants.profile_id is mis
           sponsor: 'United Way',
           url: opportunityUrl,
           deadline: 'rolling',
-          source: 'directory',
+          source: 'local_directory_united_way',
         },
       }),
     })
