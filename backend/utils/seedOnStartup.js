@@ -11,6 +11,7 @@ import crypto from 'crypto';
 import { applyRelevanceFilter } from '../services/relevanceFilter.js';
 import { buildProfileSignals } from '../services/profileHelpers.js';
 import { computeMatchDecision, MATCHER_VERSION, normalizeProfile, normalizeOpportunity, computeProfileFingerprint, computeOpportunityFingerprint } from '../services/matchDecisionEngine.js';
+import { PIPELINE_ALLOWED_SOURCES } from '../config/pipelineAllowedSources.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -338,6 +339,37 @@ export function cleanupIrrelevantGrants(db) {
   }
   console.log('[seedOnStartup] Running cleanup of irrelevant profile grants...');
 
+  // Phase 1: Remove pipeline entries whose linked opportunity has a disallowed source.
+  // This cleans up any entries that were inserted before source-allowlist enforcement
+  // was added to the POST /from-opportunity route.
+  let removedBySource = 0;
+  try {
+    const placeholders = PIPELINE_ALLOWED_SOURCES.map(() => '?').join(', ');
+    const disallowedBySource = db.prepare(`
+      SELECT g.id, g.title, fo.source
+      FROM grants g
+      JOIN funding_opportunities fo ON fo.id = g.funding_opportunity_id
+      WHERE g.profile_id IS NOT NULL
+        AND g.funding_opportunity_id IS NOT NULL
+        AND fo.source NOT IN (${placeholders})
+    `).all(...PIPELINE_ALLOWED_SOURCES);
+
+    for (const grant of disallowedBySource) {
+      try {
+        db.prepare('DELETE FROM grants WHERE id = ?').run(grant.id);
+        console.log(`[seedOnStartup] Removed disallowed-source grant "${grant.title}" (source="${grant.source}")`);
+        removedBySource++;
+      } catch (e) {
+        // Ignore per-row errors
+      }
+    }
+    if (removedBySource > 0) {
+      console.log(`[seedOnStartup] Removed ${removedBySource} pipeline row(s) from disallowed sources`);
+    }
+  } catch (e) {
+    console.warn('[seedOnStartup] Phase 1 source cleanup failed (non-fatal):', e?.message || e);
+  }
+
   // Get all profile-scoped grants with their associated profile data
   const grants = db.prepare(`
     SELECT g.id, g.title, g.funder, g.match_score,
@@ -351,7 +383,7 @@ export function cleanupIrrelevantGrants(db) {
 
   if (grants.length === 0) {
     console.log('[seedOnStartup] No profile-scoped grants to check');
-    return 0;
+    return removedBySource;
   }
 
   console.log(`[seedOnStartup] Checking ${grants.length} profile-scoped grants for relevance...`);
@@ -432,7 +464,7 @@ export function cleanupIrrelevantGrants(db) {
   }
 
   console.log(`[seedOnStartup] Cleanup complete: removed ${removed} irrelevant grants`);
-  return removed;
+  return removedBySource + removed;
 }
 
 export function seedOnStartup(db) {
