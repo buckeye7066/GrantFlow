@@ -186,6 +186,53 @@ export function evaluateEligibility(profileNorm, oppNorm) {
     missingFields.push('caregiver_status')
   }
 
+  // -- Workforce/employment training when profile is unable to work --
+  if (profileNorm.isUnableToWork && oppNorm.needTypesSupported?.includes('education')) {
+    const isWorkforceFocused = oppNorm.needTypesSupported?.every(n => ['education', 'business'].includes(n))
+    if (isWorkforceFocused && !oppNorm.needTypesSupported?.includes('disability')) {
+      ineligibilityReasons.push('Profile indicates unable to work; workforce training programs not applicable')
+    }
+  }
+
+  // -- Already-enrolled program check --
+  if (profileNorm.enrolledPrograms?.length > 0 && oppNorm.title) {
+    const titleLower = (oppNorm.title || '').toLowerCase()
+    for (const prog of profileNorm.enrolledPrograms) {
+      if (prog === 'medicaid' && (titleLower.includes('medicaid') && (titleLower.includes('contact') || titleLower.includes('enroll')))) {
+        ineligibilityReasons.push('Profile already enrolled in Medicaid')
+      }
+      if (prog === 'snap' && titleLower.includes('snap') && !titleLower.includes('education')) {
+        ineligibilityReasons.push('Profile already receiving SNAP benefits')
+      }
+      if (prog === 'ssi' && titleLower.includes('ssi (supplemental')) {
+        ineligibilityReasons.push('Profile already receiving SSI')
+      }
+      if (prog === 'ssdi' && titleLower.includes('ssdi (social security disability')) {
+        ineligibilityReasons.push('Profile already receiving SSDI')
+      }
+    }
+  }
+
+  // -- Children-required programs for childless households --
+  if (oppNorm.needTypesSupported?.includes('family_life') && oppNorm.title) {
+    const titleLower = (oppNorm.title || '').toLowerCase()
+    const isChildSpecific = titleLower.includes('head start') || titleLower.includes('child care') ||
+      titleLower.includes('wic') || titleLower.includes('children')
+    if (isChildSpecific && profileNorm.householdHasChildren === false && 
+        (profileNorm.ageGroup || '').toLowerCase().includes('senior')) {
+      ineligibilityReasons.push('Program requires children in household; profile is a childless senior household')
+    }
+  }
+
+  // -- Refugee/resettlement programs for non-refugees --
+  if (oppNorm.title) {
+    const titleLower = (oppNorm.title || '').toLowerCase()
+    const isRefugeeProgram = titleLower.includes('refugee') || titleLower.includes('resettlement')
+    if (isRefugeeProgram && !profileNorm.isRefugee) {
+      ineligibilityReasons.push('Program is for refugees/resettlement; profile has no refugee indicator')
+    }
+  }
+
   // -- DME / equipment mismatch: profile lacks disability/medical need --
   if (oppNorm.isDmeOrEquipment && !profileNorm.hasDisabilityNeed && !profileNorm.hasChronicIllness) {
     // Not a hard reject (someone could have need not yet noted), but flag missing data
