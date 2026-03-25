@@ -145,12 +145,19 @@ export function applyRelevanceFilter(opportunity, profileData) {
   const refugeePattern =
     /\b(refugee resettlement|resettlement only|for refugees only|newly arrived immigrants? only|office of refugee|refugee assistance|irc.{0,5}resettlement)\b/i
   if (refugeePattern.test(oppText)) {
-    const hasImmigrantIndicator = Boolean(
-      profileData.immigrant_status &&
-        profileData.immigrant_status !== 'no' &&
-        profileData.immigrant_status !== 'false' &&
-        profileData.immigrant_status !== false,
-    )
+        const NON_IMMIGRANT_STATUSES = new Set([
+                  'us_citizen', 'citizen', 'us citizen', 'permanent_resident',
+                  'permanent resident', 'green_card', 'green card', 'naturalized',
+                  'naturalized_citizen', 'born_in_us', 'native_born', 'n/a', 'none',
+                ])
+          const statusLower = String(profileData.immigrant_status || '').toLowerCase().trim()
+          const hasImmigrantIndicator = Boolean(
+                    profileData.immigrant_status &&
+                    profileData.immigrant_status !== 'no' &&
+                    profileData.immigrant_status !== 'false' &&
+                    profileData.immigrant_status !== false &&
+                    !NON_IMMIGRANT_STATUSES.has(statusLower)
+                  )
     if (!hasImmigrantIndicator) {
       return { pass: false, reason: 'Demographic mismatch: refugee-specific program, no immigrant indicator in profile' }
     }
