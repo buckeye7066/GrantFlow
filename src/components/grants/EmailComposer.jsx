@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect } from 'react';
-import { base44 } from '@/api/base44Client';
+import client from '@/api/client';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -49,7 +49,7 @@ export default function EmailComposer({ grant, organization, open, onClose }) {
         Return a JSON object with "subject" and "body" keys.
       `;
 
-      const response = await base44.integrations.Core.InvokeLLM({
+      const response = await client.integrations.Core.InvokeLLM({
         prompt,
         response_json_schema: {
           type: "object",

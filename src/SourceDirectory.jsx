@@ -1,7 +1,7 @@
 
 import React, { useState, useMemo, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { base44 } from '@/api/base44Client';
+import client from '@/api/client';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -88,7 +88,7 @@ export default function SourceDirectory() {
 
   const { data: sources = [], isLoading: isLoadingSources } = useQuery({
     queryKey: ['sourceDirectory'],
-    queryFn: () => base44.entities.SourceDirectory.list(),
+    queryFn: () => client.entities.SourceDirectory.list(),
     refetchInterval: crawlingInBackground.length > 0 ? 5000 : false,
   });
 
@@ -107,7 +107,7 @@ export default function SourceDirectory() {
       if (!source) return [];
       
       // Query opportunities that match this source
-      const opportunities = await base44.entities.FundingOpportunity.filter({
+      const opportunities = await client.entities.FundingOpportunity.filter({
         source: 'source_directory',
         sponsor: source.name
       });
@@ -120,11 +120,11 @@ export default function SourceDirectory() {
   // Query grants to check which opportunities are already in pipeline
   const { data: allGrants = [] } = useQuery({
     queryKey: ['grants'],
-    queryFn: () => base44.entities.Grant.list(),
+    queryFn: () => client.entities.Grant.list(),
   });
 
   async function fetchSourceById(sourceId) {
-    const rows = await base44.entities.SourceDirectory.filter({ id: sourceId })
+    const rows = await client.entities.SourceDirectory.filter({ id: sourceId })
     return Array.isArray(rows) ? rows[0] : null
   }
 
@@ -152,7 +152,7 @@ export default function SourceDirectory() {
 
   const crawlMutation = useMutation({
     mutationFn: async (sourceId) => {
-      await base44.functions.invoke('crawlSourceDirectory', { source_id: sourceId })
+      await client.functions.invoke('crawlSourceDirectory', { source_id: sourceId })
       return { sourceId, startedAt: Date.now() };
     },
     onSuccess: (data) => {
@@ -201,7 +201,7 @@ export default function SourceDirectory() {
     mutationFn: async (sourceIds) => {
       // Start all crawls sequentially to avoid spamming the function runtime.
       for (const sourceId of sourceIds) {
-        await base44.functions.invoke('crawlSourceDirectory', { source_id: sourceId })
+        await client.functions.invoke('crawlSourceDirectory', { source_id: sourceId })
       }
       return { sourceIds, count: sourceIds.length, startedAt: Date.now() };
     },
@@ -261,7 +261,7 @@ export default function SourceDirectory() {
       }
 
       // Call backend function to handle cascade deletion with service role
-      const response = await base44.functions.invoke('deleteSourceWithCascade', {
+      const response = await client.functions.invoke('deleteSourceWithCascade', {
         source_ids: sourceIdsToDelete,
         organization_id: selectedOrgId
       });
@@ -301,7 +301,7 @@ export default function SourceDirectory() {
 
   const discoverMutation = useMutation({
     mutationFn: async (orgId) => {
-      await base44.functions.invoke('discoverLocalSources', { organization_id: orgId })
+      await client.functions.invoke('discoverLocalSources', { organization_id: orgId })
       return { orgId, startedAt: Date.now() };
     },
     onSuccess: (data) => {
@@ -320,7 +320,7 @@ export default function SourceDirectory() {
         timeoutMs: 4 * 60 * 1000,
         poll: async () => {
           // When discovery writes new sources, the list for this org should grow.
-          const rows = await base44.entities.SourceDirectory.list()
+          const rows = await client.entities.SourceDirectory.list()
           const count = Array.isArray(rows)
             ? rows.filter((s) => String(s?.discovered_for_organization_id || '') === orgId).length
             : 0
@@ -349,7 +349,7 @@ export default function SourceDirectory() {
   // NEW: Search for specific source mutation
   const searchSourceMutation = useMutation({
     mutationFn: async ({ source_name, location, organization_id }) => {
-      const response = await base44.functions.invoke('searchForSource', {
+      const response = await client.functions.invoke('searchForSource', {
         source_name,
         location,
         organization_id
@@ -1123,7 +1123,7 @@ export default function SourceDirectory() {
                                                   onClick={async () => {
                                                     // Check for duplicates first
                                                     if (opp.url) {
-                                                      const existingGrants = await base44.entities.Grant.filter({
+                                                      const existingGrants = await client.entities.Grant.filter({
                                                         organization_id: selectedOrgId,
                                                         url: opp.url
                                                       });
@@ -1150,7 +1150,7 @@ export default function SourceDirectory() {
                                                       program_description: opp.descriptionMd,
                                                       status: 'discovered',
                                                     };
-                                                    await base44.entities.Grant.create(grantData);
+                                                    await client.entities.Grant.create(grantData);
                                                     queryClient.invalidateQueries({ queryKey: ['grants'] });
                                                     toast({
                                                       title: 'Added to Pipeline',

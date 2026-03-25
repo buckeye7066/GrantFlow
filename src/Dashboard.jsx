@@ -1,5 +1,5 @@
 import React, { useMemo } from "react";
-import { base44 } from "@/api/base44Client";
+import client from '@/api/client';
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { createPageUrl } from "@/utils";
@@ -29,22 +29,22 @@ export default function Dashboard() {
   // Data fetching with error handling
   const { data: organizations = [], isLoading: isLoadingOrgs, error: orgsError } = useQuery({
     queryKey: ['organizations'],
-    queryFn: () => base44.entities.Organization.list(),
+    queryFn: () => client.entities.Organization.list(),
   });
 
   const { data: grants = [], isLoading: isLoadingGrants, error: grantsError } = useQuery({
     queryKey: ['grants'],
-    queryFn: () => base44.entities.Grant.list('-created_date'),
+    queryFn: () => client.entities.Grant.list('-created_date'),
   });
 
   const { data: milestones = [], isLoading: isLoadingMilestones, error: milestonesError } = useQuery({
     queryKey: ['milestones'],
-    queryFn: () => base44.entities.Milestone.list('due_date'),
+    queryFn: () => client.entities.Milestone.list('due_date'),
   });
 
   const { data: expenses = [], isLoading: isLoadingExpenses, error: expensesError } = useQuery({
     queryKey: ['expenses'],
-    queryFn: () => base44.entities.Expense.list('-date'),
+    queryFn: () => client.entities.Expense.list('-date'),
   });
 
   // Memoized computed data

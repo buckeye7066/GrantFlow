@@ -1,9 +1,8 @@
 import React, { useMemo, useState, useEffect } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useSearchParams, useNavigate } from 'react-router-dom';
-import { base44 } from '@/api/base44Client';
 import { getProfile, listProfiles } from '@/api/profiles';
-import { apiFetch } from '@/api/client';
+import client, { apiFetch } from '@/api/client';
 import { runRealCrawler } from '@/api/crawlers';
 import { createPageUrl } from '@/utils';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
@@ -135,7 +134,7 @@ export default function DiscoverGrants() {
 
   const tokenAvailable = useMemo(() => {
     try {
-      return Boolean(accessToken || base44.getToken?.());
+      return Boolean(accessToken || client.getToken?.());
     } catch {
       return Boolean(accessToken);
     }
@@ -193,7 +192,7 @@ export default function DiscoverGrants() {
   // Also fetch organizations to get detailed org data for selected profile
   const { data: organizations = [] } = useQuery({
     queryKey: ['organizations'],
-    queryFn: () => base44.entities.Organization.list('name'),
+    queryFn: () => client.entities.Organization.list('name'),
     enabled: authReady,
   });
 
@@ -425,7 +424,7 @@ export default function DiscoverGrants() {
     // Check for duplicates if we have an org
     if (orgId && opportunity.url) {
       try {
-        const existingGrants = await base44.entities.Grant.filter({
+        const existingGrants = await client.entities.Grant.filter({
           organization_id: orgId,
           url: opportunity.url
         });

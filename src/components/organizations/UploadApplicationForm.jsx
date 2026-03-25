@@ -5,7 +5,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Alert, AlertDescription } from '@/components/ui/alert';
-import { base44 } from '@/api/base44Client';
+import client from '@/api/client';
 import { Upload, FileText, Loader2, CheckCircle2, X } from 'lucide-react';
 import { useToast } from '@/components/ui/use-toast';
 import { createLogger } from '@/utils/logger'
@@ -73,7 +73,7 @@ export default function UploadApplicationForm({ onSuccess, onCancel, existingOrg
         description: 'Uploading your completed application form.',
       });
 
-      const { file_url } = await base44.integrations.Core.UploadFile({ file });
+      const { file_url } = await client.integrations.Core.UploadFile({ file });
       
       setIsUploading(false);
       setIsProcessing(true);
@@ -84,7 +84,7 @@ export default function UploadApplicationForm({ onSuccess, onCancel, existingOrg
         description: 'AI is extracting information from your form. This may take 30-60 seconds.',
       });
 
-      const response = await base44.functions.invoke('processScannedApplication', {
+      const response = await client.functions.invoke('processScannedApplication', {
         file_url,
         organization_id: existingOrganizationId,
       });

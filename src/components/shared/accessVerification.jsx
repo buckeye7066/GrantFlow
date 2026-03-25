@@ -1,4 +1,4 @@
-import { base44 } from "@/api/base44Client";
+import client from '@/api/client';
 import { createLogger } from "@/utils/logger";
 
 /**
@@ -22,7 +22,7 @@ export async function verifyOrganizationAccess(organizationId, maxAttempts = 5) 
     await new Promise(resolve => setTimeout(resolve, waitTime));
     
     try {
-      const testFetch = await base44.entities.Organization.get(organizationId);
+      const testFetch = await client.entities.Organization.get(organizationId);
       if (testFetch && testFetch.id === organizationId) {
         log.debug('access verified')
         return true;

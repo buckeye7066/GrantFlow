@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect } from "react";
-import { base44 } from "@/api/base44Client";
+import client from '@/api/client';
 import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -31,22 +31,22 @@ export default function Billing() {
 
   const { data: organizations = [], isLoading: isLoadingOrgs } = useQuery({
     queryKey: ['organizations'],
-    queryFn: () => base44.entities.Organization.list('name'),
+    queryFn: () => client.entities.Organization.list('name'),
   });
 
   const { data: projects = [], isLoading: isLoadingProjects } = useQuery({
     queryKey: ['projects'],
-    queryFn: () => base44.entities.Project.list('-created_date'),
+    queryFn: () => client.entities.Project.list('-created_date'),
   });
 
   const { data: invoices = [], isLoading: isLoadingInvoices } = useQuery({
     queryKey: ['invoices'],
-    queryFn: () => base44.entities.Invoice.list('-issue_date'),
+    queryFn: () => client.entities.Invoice.list('-issue_date'),
   });
 
   const { data: timeLogs = [], isLoading: isLoadingTime } = useQuery({
     queryKey: ['timeLogs'],
-    queryFn: () => base44.entities.TimeEntry.filter({ billed: false }),
+    queryFn: () => client.entities.TimeEntry.filter({ billed: false }),
   });
 
   // Auto-select first organization if none selected

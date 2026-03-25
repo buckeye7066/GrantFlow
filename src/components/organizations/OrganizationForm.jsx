@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { base44 } from "@/api/base44Client";
+import client from '@/api/client';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -307,7 +307,7 @@ export default function OrganizationForm({ organization, onSubmit, onCancel, isS
 
   const { data: contactMethods = [], isLoading: isLoadingContacts } = useQuery({
     queryKey: ['contactMethods', organization?.id],
-    queryFn: () => organization?.id ? base44.entities.ContactMethod.filter({ organization_id: organization.id }) : [],
+    queryFn: () => organization?.id ? client.entities.ContactMethod.filter({ organization_id: organization.id }) : [],
     enabled: !!organization,
     initialData: [], // Provide initialData to avoid undefined before fetch
   });
@@ -325,7 +325,7 @@ export default function OrganizationForm({ organization, onSubmit, onCancel, isS
 
   const { data: taxonomyItems = [] } = useQuery({
     queryKey: ['taxonomy'],
-    queryFn: () => base44.entities.Taxonomy.filter({ active: true }),
+    queryFn: () => client.entities.Taxonomy.filter({ active: true }),
   });
 
   const { data: billingTiers = [], isLoading: isLoadingTiers } = useQuery({
@@ -371,7 +371,7 @@ export default function OrganizationForm({ organization, onSubmit, onCancel, isS
       if (!file) return;
       setIsUploading(true);
       try {
-          const { file_url } = await base44.integrations.Core.UploadFile({ file });
+          const { file_url } = await client.integrations.Core.UploadFile({ file });
           setFormData(prev => ({ ...prev, profile_image_url: file_url }));
       } catch (error) {
           console.error("Image upload failed:", error);
@@ -586,7 +586,7 @@ Extract the following fields if present:
 
 Return ONLY valid JSON. Do not include fields that aren't present in the text.`;
 
-      const response = await base44.integrations.Core.InvokeLLM({
+      const response = await client.integrations.Core.InvokeLLM({
         prompt,
         response_json_schema: {
           type: "object",
@@ -831,7 +831,7 @@ Keywords should be:
 - Useful for funding opportunity matching
 - A mix of broad and specific terms`;
 
-      const response = await base44.integrations.Core.InvokeLLM({
+      const response = await client.integrations.Core.InvokeLLM({
         prompt,
         response_json_schema: {
           type: "object",
@@ -886,7 +886,7 @@ Focus areas should be:
 - Broader than keywords but specific enough to be meaningful
 - Examples: "Youth Development", "Environmental Conservation", "STEM Education", "Mental Health Advocacy"`;
 
-      const response = await base44.integrations.Core.InvokeLLM({
+      const response = await client.integrations.Core.InvokeLLM({
         prompt,
         response_json_schema: {
           type: "object",
@@ -944,11 +944,11 @@ Focus areas should be:
         }
 
         const orgId = savedOrganization.id;
-        const existingContacts = await base44.entities.ContactMethod.filter({ organization_id: orgId });
+        const existingContacts = await client.entities.ContactMethod.filter({ organization_id: orgId });
 
         // Delete existing contacts
         if (existingContacts.length > 0) {
-            await Promise.all(existingContacts.map(contact => base44.entities.ContactMethod.delete(contact.id)));
+            await Promise.all(existingContacts.map(contact => client.entities.ContactMethod.delete(contact.id)));
         }
 
         // Create new contacts
@@ -957,7 +957,7 @@ Focus areas should be:
         const contactsToCreate = [...newEmails, ...newPhones].filter(c => c.value);
 
         if (contactsToCreate.length > 0) {
-            await base44.entities.ContactMethod.bulkCreate(contactsToCreate);
+            await client.entities.ContactMethod.bulkCreate(contactsToCreate);
         }
 
         queryClient.invalidateQueries({ queryKey: ['organizations'] });

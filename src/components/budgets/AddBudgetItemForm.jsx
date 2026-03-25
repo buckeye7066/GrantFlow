@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect } from "react";
-import { base44 } from "@/api/base44Client";
+import client from '@/api/client';
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -39,7 +39,7 @@ export default function AddBudgetItemForm({ grantId, onSuccess, onCancel }) {
   };
 
   const createMutation = useMutation({
-    mutationFn: (data) => base44.entities.Budget.create(data),
+    mutationFn: (data) => client.entities.Budget.create(data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['budgets', grantId] });
       // FIX: The onSave function did not exist. It has been replaced with the correct onSuccess prop.

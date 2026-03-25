@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { base44 } from "@/api/base44Client";
+import client from '@/api/client';
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -24,7 +24,7 @@ export default function Documents() {
 
   const { data: organizations = [] } = useQuery({
     queryKey: ['organizations'],
-    queryFn: () => base44.entities.Organization.list(),
+    queryFn: () => client.entities.Organization.list(),
     onSuccess: (data) => {
       if (data.length > 0 && !selectedOrgId) {
         setSelectedOrgId(data[0].id);
@@ -34,12 +34,12 @@ export default function Documents() {
 
   const { data: documents = [], isLoading: isLoadingDocuments } = useQuery({
     queryKey: ['documents', selectedOrgId],
-    queryFn: () => base44.entities.Document.filter({ organization_id: selectedOrgId }),
+    queryFn: () => client.entities.Document.filter({ organization_id: selectedOrgId }),
     enabled: !!selectedOrgId,
   });
 
   const deleteMutation = useMutation({
-    mutationFn: (id) => base44.entities.Document.delete(id),
+    mutationFn: (id) => client.entities.Document.delete(id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['documents', selectedOrgId] });
       setDeletingDoc(null);

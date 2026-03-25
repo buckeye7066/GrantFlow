@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { base44 } from '@/api/base44Client';
+import client from '@/api/client';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -19,7 +19,7 @@ const Diagnostics = () => {
 
   const { data: grants, isLoading: isLoadingGrants } = useQuery({
     queryKey: ['grants'],
-    queryFn: () => base44.entities.Grant.list(),
+    queryFn: () => client.entities.Grant.list(),
   });
 
   const runTests = async () => {
@@ -59,7 +59,7 @@ const Diagnostics = () => {
 
         // Client returns parsed JSON body: { success, analysis } (no .data wrapper)
         const body = await Promise.race([
-            base44.functions.invoke('analyzeGrant', payload),
+            client.functions.invoke('analyzeGrant', payload),
             timeoutPromise
         ]);
 
@@ -112,10 +112,10 @@ const Diagnostics = () => {
     
     try {
       // Upload file
-      const { file_url } = await base44.integrations.Core.UploadFile({ file: testFile });
+      const { file_url } = await client.integrations.Core.UploadFile({ file: testFile });
       
       // Try to parse it
-      const response = await base44.functions.invoke('parseNOFO', {
+      const response = await client.functions.invoke('parseNOFO', {
         file_url,
         json_schema: {
           type: "object",

@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { base44 } from '@/api/base44Client';
+import client from '@/api/client';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -288,7 +288,7 @@ export default function DiscoverGrants() {
 
   const { data: organizations = [] } = useQuery({
     queryKey: ['organizations'],
-    queryFn: () => base44.entities.Organization.list('name'),
+    queryFn: () => client.entities.Organization.list('name'),
   });
 
   // Memoized selected organization
@@ -352,7 +352,7 @@ export default function DiscoverGrants() {
   const handleAddToPipeline = async (opportunity) => {
     // Check for duplicates
     if (opportunity.url) {
-      const existingGrants = await base44.entities.Grant.filter({
+      const existingGrants = await client.entities.Grant.filter({
         organization_id: selectedOrgId,
         url: opportunity.url
       });
@@ -382,7 +382,7 @@ export default function DiscoverGrants() {
     };
 
     try {
-      const newGrant = await base44.entities.Grant.create(grantData);
+      const newGrant = await client.entities.Grant.create(grantData);
       queryClient.invalidateQueries({ queryKey: ['grants'] });
       toast({
         title: 'Grant Added to Pipeline',

@@ -48,7 +48,7 @@ Introduce a dedicated `src/stores/auth.ts` (or `.tsx`) that:
 - Handles storing tokens in memory + `localStorage` (not cookies, since we rely on bearer tokens).
 - Implements a `useAuthGuard` hook that checks token freshness, hydrates from `localStorage`, and orchestrates refresh flows.
 
-> _Note_: The existing `api` client already injects `Authorization` headers via `@base44/sdk`. We’ll need to extend or wrap that client so it can read the current access token from `useAuthStore` (or similar) instead of pulling the legacy profile ID.
+> _Note_: The existing `api` client injects `Authorization` headers. We’ll need to extend or wrap that client so it can read the current access token from `useAuthStore` (or similar) instead of pulling the legacy profile ID.
 
 ## Component breakdown
 

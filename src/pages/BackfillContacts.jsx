@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { base44 } from '@/api/base44Client';
+import client from '@/api/client';
 import { Button } from '@/components/ui/button';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/card';
 import { Progress } from '@/components/ui/progress';
@@ -23,11 +23,11 @@ export default function BackfillContacts() {
     try {
       log('Starting backfill process...');
       log('Fetching all organizations...');
-      const organizations = await base44.entities.Organization.list();
+      const organizations = await client.entities.Organization.list();
       log(`Found ${organizations.length} organizations.`);
 
       log('Fetching all existing contact methods to prevent duplicates...');
-      const existingContacts = await base44.entities.ContactMethod.list();
+      const existingContacts = await client.entities.ContactMethod.list();
       const existingSet = new Set(existingContacts.map(c => `${c.organization_id}-${c.type}-${c.value.trim().toLowerCase()}`));
       log(`Found ${existingContacts.length} existing contact methods.`);
 
@@ -79,7 +79,7 @@ export default function BackfillContacts() {
 
       if (newContactMethods.length > 0) {
         log(`Creating ${newContactMethods.length} new contact methods in bulk...`);
-        await base44.entities.ContactMethod.bulkCreate(newContactMethods);
+        await client.entities.ContactMethod.bulkCreate(newContactMethods);
         setState(prev => ({ ...prev, summary: { ...prev.summary, created: newContactMethods.length } }));
         log('Bulk creation successful.');
       } else {

@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from "react";
-import { base44 } from "@/api/base44Client";
+import client from '@/api/client';
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import { createPageUrl } from "@/utils";
@@ -36,7 +36,7 @@ export default function Organizations() {
     error 
   } = useQuery({
     queryKey: ['organizations'],
-    queryFn: () => base44.entities.Organization.list('name'),
+    queryFn: () => client.entities.Organization.list('name'),
   });
 
   // Memoized filtered organizations

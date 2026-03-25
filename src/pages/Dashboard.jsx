@@ -14,8 +14,7 @@ import {
 } from "lucide-react"
 import { differenceInDays, format } from "date-fns"
 
-import { base44 } from "@/api/base44Client"
-import { apiFetch } from "@/api/client"
+import client, { apiFetch } from '@/api/client'
 import { getPipelineStats, getReminders } from "@/api/dashboard"
 import { listProfiles, getProfile } from "@/api/profiles"
 import { parseDateSafe } from "@/components/shared/dateUtils"
@@ -97,7 +96,7 @@ export default function Dashboard() {
   
   const { data: currentUser } = useQuery({
     queryKey: ["currentUser"],
-    queryFn: () => base44.auth.me(),
+    queryFn: () => client.auth.me(),
     staleTime: 60_000,
   })
 
@@ -164,7 +163,7 @@ export default function Dashboard() {
   const { data: organizations = [], isLoading: isLoadingOrgs, error: orgsError } = useQuery({
     queryKey: ["organizations"],
     queryFn: async () => {
-      const res = await base44.entities.Organization.list()
+      const res = await client.entities.Organization.list()
       return Array.isArray(res) ? res : Array.isArray(res?.data) ? res.data : []
     },
     enabled: currentUser?.role === "admin",
@@ -174,7 +173,7 @@ export default function Dashboard() {
   const { data: grants = [], isLoading: isLoadingGrants, error: grantsError } = useQuery({
     queryKey: ["grants"],
     queryFn: async () => {
-      const res = await base44.entities.Grant.list("-created_date")
+      const res = await client.entities.Grant.list("-created_date")
       return Array.isArray(res) ? res : Array.isArray(res?.data) ? res.data : []
     },
     enabled: Boolean(currentUser),
@@ -184,7 +183,7 @@ export default function Dashboard() {
   const { data: milestones = [], isLoading: isLoadingMilestones, error: milestonesError } = useQuery({
     queryKey: ["milestones"],
     queryFn: async () => {
-      const res = await base44.entities.Milestone.list("due_date")
+      const res = await client.entities.Milestone.list("due_date")
       return Array.isArray(res) ? res : Array.isArray(res?.data) ? res.data : []
     },
     enabled: Boolean(currentUser),
@@ -194,7 +193,7 @@ export default function Dashboard() {
   const { data: expenses = [], isLoading: isLoadingExpenses, error: expensesError } = useQuery({
     queryKey: ["expenses"],
     queryFn: async () => {
-      const res = await base44.entities.Expense.list("-date")
+      const res = await client.entities.Expense.list("-date")
       return Array.isArray(res) ? res : Array.isArray(res?.data) ? res.data : []
     },
     enabled: Boolean(currentUser),

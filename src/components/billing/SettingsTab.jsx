@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { base44 } from '@/api/base44Client';
+import client from '@/api/client';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -19,7 +19,7 @@ export default function SettingsTab() {
 
   const { data: initialSettings, isLoading } = useQuery({
     queryKey: ['billingSettings'],
-    queryFn: () => base44.entities.BillingSettings.list().then(res => res[0] || {}),
+    queryFn: () => client.entities.BillingSettings.list().then(res => res[0] || {}),
     onSuccess: (data) => {
       if (data) {
         setSettings(data);
@@ -30,9 +30,9 @@ export default function SettingsTab() {
   const mutation = useMutation({
     mutationFn: (updatedSettings) => {
       if (updatedSettings.id) {
-        return base44.entities.BillingSettings.update(updatedSettings.id, updatedSettings);
+        return client.entities.BillingSettings.update(updatedSettings.id, updatedSettings);
       } else {
-        return base44.entities.BillingSettings.create(updatedSettings);
+        return client.entities.BillingSettings.create(updatedSettings);
       }
     },
     onSuccess: (savedSettings) => {
