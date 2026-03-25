@@ -548,6 +548,82 @@ export function normalizeProfile(rawProfile, sections = null) {
   // -- Age (for scholarship/senior eligibility) --
   const age = profile.age ?? null
 
+  // -- Age group signal --
+  const ageGroup = profile.age_group ?? null
+  const demographicsSection = profileSections?.demographics ?? null
+  let ageGroupFromSections = null
+  if (demographicsSection) {
+    const da = demographicsSection.answers ?? demographicsSection
+    if (da && typeof da === 'object') {
+      ageGroupFromSections = da.age_group ?? null
+    }
+  }
+  const resolvedAgeGroup = ageGroup ?? ageGroupFromSections
+
+  // -- Work capability signal --
+  let isUnableToWork = false
+  if (employmentSection) {
+    const empa = employmentSection.answers ?? employmentSection
+    if (empa && typeof empa === 'object') {
+      isUnableToWork = String(empa.notes ?? '').toLowerCase().includes('not able to work') ||
+        String(empa.notes ?? '').toLowerCase().includes('unable to work') ||
+        String(empa.notes ?? '').toLowerCase().includes('cannot work') ||
+        String(empa.current_status ?? '').toLowerCase().includes('disabled')
+    }
+  }
+
+  // -- Already-enrolled government programs signal --
+  const govSection = profileSections?.government_assistance ?? null
+  const enrolledPrograms = []
+  if (govSection) {
+    const ga = govSection.answers ?? govSection
+    if (ga && typeof ga === 'object') {
+      if (ga.medicaid_enrolled || ga.medicaid) enrolledPrograms.push('medicaid')
+      if (ga.medicare_recipient || ga.medicare) enrolledPrograms.push('medicare')
+      if (ga.ssi_recipient || ga.ssi) enrolledPrograms.push('ssi')
+      if (ga.ssdi_recipient || ga.ssdi) enrolledPrograms.push('ssdi')
+      if (ga.snap_recipient || ga.snap) enrolledPrograms.push('snap')
+      if (ga.tanf_recipient || ga.tanf) enrolledPrograms.push('tanf')
+      if (ga.section8_housing || ga.section_8) enrolledPrograms.push('section8')
+    }
+  }
+
+  // -- Ethnicity signal --
+  let ethnicity = profile.ethnicity ?? null
+  if (!ethnicity && demographicsSection) {
+    const da = demographicsSection.answers ?? demographicsSection
+    if (da && typeof da === 'object') {
+      ethnicity = da.ethnicity ?? null
+    }
+  }
+
+  // -- Household children signal --
+  const householdSection = profileSections?.household_details ?? null
+  let householdHasChildren = false
+  let householdSize = 0
+  if (householdSection) {
+    const hha = householdSection.answers ?? householdSection
+    if (hha && typeof hha === 'object') {
+      householdSize = Number(hha.household_size ?? 0)
+    }
+  }
+  if (familySection) {
+    const fa = familySection.answers ?? familySection
+    if (fa && typeof fa === 'object') {
+      householdHasChildren = Boolean(fa.has_children) || Number(fa.number_of_children ?? 0) > 0
+    }
+  }
+
+  // -- Refugee/immigrant signal --
+  let isRefugee = false
+  const immigrationSection = profileSections?.immigration ?? null
+  if (immigrationSection) {
+    const ia = immigrationSection.answers ?? immigrationSection
+    if (ia && typeof ia === 'object') {
+      isRefugee = Boolean(ia.is_refugee) || Boolean(ia.refugee_status)
+    }
+  }
+
   const normalized = {
     id: profile.id,
     entityType,
@@ -569,6 +645,13 @@ export function normalizeProfile(rawProfile, sections = null) {
     hasEmploymentNeed,
     hasBusinessNeed,
     age,
+    ageGroup: resolvedAgeGroup,
+    isUnableToWork,
+    enrolledPrograms,
+    ethnicity,
+    householdHasChildren,
+    householdSize,
+    isRefugee,
     displayName: profile.display_name ?? profile.name ?? null,
   }
 
