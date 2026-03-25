@@ -369,6 +369,107 @@ export function applyRelevanceFilter(opportunity, profileData) {
     }
   }
 
+
+  // ── 7. Already-Enrolled Programs ──────────────────────────────────────────
+  const govAssistance = profileData.government_assistance || {}
+  const alreadyEnrolled = []
+  if (govAssistance.medicaid_enrolled || govAssistance.medicaid || (profileData.insurance_provider || '').toLowerCase() === 'medicaid') alreadyEnrolled.push('medicaid')
+  if (govAssistance.snap_recipient || govAssistance.snap) alreadyEnrolled.push('snap')
+  if (govAssistance.ssi_recipient || govAssistance.ssi) alreadyEnrolled.push('ssi')
+  if (govAssistance.ssdi_recipient || govAssistance.ssdi) alreadyEnrolled.push('ssdi')
+  if (govAssistance.tanf_recipient || govAssistance.tanf) alreadyEnrolled.push('tanf')
+  if (govAssistance.medicare_recipient || govAssistance.medicare) alreadyEnrolled.push('medicare')
+
+  const alreadyEnrolledPattern = /\b(medicaid:? contact|enroll in medicaid|medicaid application|tenncare enrollment)\b/i
+  if (alreadyEnrolledPattern.test(oppText) && alreadyEnrolled.includes('medicaid')) {
+    return { pass: false, reason: 'Already enrolled: profile already on Medicaid' }
+  }
+  const snapEnrollPat = /\b(snap \(supplemental|supplemental nutrition assistance program\))\b/i
+  if (snapEnrollPat.test(oppText) && alreadyEnrolled.includes('snap')) {
+    return { pass: false, reason: 'Already enrolled: profile already receives SNAP' }
+  }
+  const ssiEnrollPat = /\b(ssi \(supplemental security|supplemental security income\))\b/i
+  if (ssiEnrollPat.test(oppText) && alreadyEnrolled.includes('ssi')) {
+    return { pass: false, reason: 'Already enrolled: profile already receives SSI' }
+  }
+  const ssdiEnrollPat = /\b(ssdi \(social security disability|social security disability insurance\))\b/i
+  if (ssdiEnrollPat.test(oppText) && alreadyEnrolled.includes('ssdi')) {
+    return { pass: false, reason: 'Already enrolled: profile already receives SSDI' }
+  }
+  const tanfEnrollPat = /\b(tanf \(temporary assistance|temporary assistance for needy families\))\b/i
+  if (tanfEnrollPat.test(oppText) && alreadyEnrolled.includes('tanf')) {
+    return { pass: false, reason: 'Already enrolled: profile already receives TANF' }
+  }
+
+  // ── 8. Workforce Training for Unable-to-Work Profiles ─────────────────────
+  const isUnableToWork = profileData.unable_to_work === true || profileData.unable_to_work === 'yes' || /not able to work|unable to work|cannot work/i.test(String(profileData.employment_notes || '')) || /disabled|unable/i.test(String(profileData.employment_status || ''))
+  const workforcePattern = /\b(workforce (training|innovation|development)|wioa\b|vocational rehabilitation|job training|employment training|career training|license reinstatement|job center|american job center|hpog|health profession opportunity)\b/i
+  if (workforcePattern.test(oppText) && isUnableToWork) {
+    return { pass: false, reason: 'Employment mismatch: workforce training program but profile indicates unable to work' }
+  }
+
+  // ── 9. Children Programs for Childless Senior Households ──────────────────
+  const hasChildren = profileData.has_children === true || Number(profileData.number_of_children) > 0 || profileData.household_members_under_18 > 0
+  const childProgramPattern = /\b(head start|early head start|child care assistance|ccdf|ccdbg|wic \(women|women,? infants,? and children|cover ?kids|first responder children)\b/i
+  const isSenior = (profileData.age_group || '').toLowerCase().includes('senior') || Number(profileData.age) >= 55
+  if (childProgramPattern.test(oppText) && !hasChildren && isSenior) {
+    return { pass: false, reason: 'Household mismatch: children-required program for childless senior household' }
+  }
+
+  // ── 10. Broad Blind/Vision Programs ───────────────────────────────────────
+  const broadBlindPat = /\b(national federation of the blind|american foundation for the blind|for the blind|blindness (program|assistance|support)|blind.{0,10}(assistance|program|resource|support))\b/i
+  if (broadBlindPat.test(oppText)) {
+    const dText = JSON.stringify(profileData.disability_status || '').toLowerCase()
+    if (!dText.includes('blind') && !dText.includes('visual') && !dText.includes('vision') && !(Array.isArray(profileData.tags) && profileData.tags.some(t => /blind|visual|vision/i.test(String(t))))) {
+      return { pass: false, reason: 'Disability mismatch: blindness program, no visual impairment in profile' }
+    }
+  }
+
+  // ── 11. Broad Nursing/Healthcare Professional Programs ────────────────────
+  const broadNursingPat = /\b(ncsbn|national council of state boards|american nurses association|nurse (re.?entry|recovery|remediation)|nursing (workforce|scholarship|recovery|reinstatement)|probe.{0,5}(ethics|professional)|professional boundaries.{0,5}ethics|ana foundation.{0,10}nurs)\b/i
+  if (broadNursingPat.test(oppText)) {
+    const empText = JSON.stringify(profileData.employment || '').toLowerCase()
+    const eduText = JSON.stringify(profileData.education || '').toLowerCase()
+    if (!empText.includes('nurs') && !eduText.includes('nurs') && !(Array.isArray(profileData.tags) && profileData.tags.some(t => String(t).toLowerCase().includes('nurs')))) {
+      return { pass: false, reason: 'Professional mismatch: nursing program, no nursing background in profile' }
+    }
+  }
+
+  // ── 12. Native/Indigenous Programs for Non-Native Profiles ────────────────
+  const nativePat = /\b(native cdfi|indigenous business|native american (business|grant|program)|tribal (grant|program|business)|bureau of indian affairs)\b/i
+  if (nativePat.test(oppText)) {
+    const hasNative = (profileData.ethnicity && /native|indigenous|tribal|indian|alaska.?native/i.test(String(profileData.ethnicity))) || (Array.isArray(profileData.tags) && profileData.tags.some(t => /native|indigenous|tribal/i.test(String(t))))
+    if (!hasNative) {
+      return { pass: false, reason: 'Demographic mismatch: Native/Indigenous program, no Native indicator in profile' }
+    }
+  }
+
+  // ── 13. Referral Directories (Not Funding Sources) ────────────────────────
+  const directoryPat = /\b(benefits\.gov|211\.org|tennessee 211|connect to help|resource directory|benefit (finder|screener))\b/i
+  if (directoryPat.test(oppText) && !opportunity.application_url) {
+    return { pass: false, reason: 'Not a funding source: resource is an info directory, not direct funding' }
+  }
+
+  // ── 14. AmeriCorps Institutional Grants for Individuals ───────────────────
+  const ameriCorpsInstPat = /\b(americorps (state|national).{0,20}(grant|competition)|americorps.{0,10}(competitive|grant).{0,10}(organization|nonprofit))\b/i
+  if (ameriCorpsInstPat.test(oppText) && !isNonprofitProfile && !isBusinessProfile) {
+    return { pass: false, reason: 'Entity mismatch: AmeriCorps institutional grant for individual profile' }
+  }
+
+  // ── 15. Wrong City for Geo-Located Resources ──────────────────────────────
+  const profileCity = (profileData.city || '').toLowerCase().trim()
+  if (profileCity) {
+    const nearMatch = (opportunity.title || '').match(/near\s+([A-Za-z\s]+),\s*([A-Z]{2})/i)
+    if (nearMatch) {
+      const oppCity = nearMatch[1].trim().toLowerCase()
+      const oppSt = nearMatch[2].trim().toLowerCase()
+      const profSt = (profileData.state || '').toLowerCase()
+      if (oppSt === profSt && oppCity !== profileCity && oppCity.substring(0, 4) !== profileCity.substring(0, 4)) {
+        return { pass: false, reason: 'Geographic mismatch: resource near ' + nearMatch[1].trim() + ' but profile in ' + profileData.city }
+      }
+    }
+  }
+
   return { pass: true }
 }
 
@@ -446,5 +547,20 @@ export function extractProfileData(profileContext) {
       extractStateFromAddress((sections.comprehensive_application || {}).address) ||
       null,
     tags: profile.tags || [],
+    government_assistance: sections.government_assistance || {},
+    insurance_provider: (sections.medical_insurance || {}).insurance_provider || null,
+    unable_to_work: (employment.notes || '').toLowerCase().includes('not able to work') || 
+      (employment.notes || '').toLowerCase().includes('unable to work') ||
+      (employment.current_status || '').toLowerCase().includes('disabled'),
+    employment_notes: employment.notes || null,
+    employment_status: employment.current_status || null,
+    has_children: Number((sections.household_details || {}).household_size || 0) > 2 || 
+      (family.has_children === true) || Number(family.number_of_children || 0) > 0,
+    number_of_children: family.number_of_children || 0,
+    household_members_under_18: family.members_under_18 || 0,
+    age_group: demographics.age_group || null,
+    ethnicity: demographics.ethnicity || null,
+    city: basic.city || (typeof basic.address === 'object' ? basic.address.city : null) || null,
+
   }
 }
