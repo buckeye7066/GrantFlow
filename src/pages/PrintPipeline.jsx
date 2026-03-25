@@ -2,7 +2,7 @@
 import React, { useEffect, useRef } from 'react';
 import { useLocation, Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { base44 } from '@/api/base44Client';
+import client from '@/api/client';
 import PrintablePipeline from '@/components/pipeline/PrintablePipeline';
 import { Loader2, AlertTriangle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -48,14 +48,14 @@ export default function PrintPipelinePage() {
   // Hooks must be called at the top level.
   const { data: organization, isLoading: isLoadingOrg, isError: isErrorOrg, error: errorOrg } = useQuery({
     queryKey: ['organization', organizationId],
-    queryFn: () => base44.entities.Organization.get(organizationId),
+    queryFn: () => client.entities.Organization.get(organizationId),
     enabled: !!organizationId, // Conditionally enable the query
     retry: 1,
   });
 
   const { data: grants, isLoading: isLoadingGrants, isError: isErrorGrants, error: errorGrants } = useQuery({
     queryKey: ['grants', 'byOrganization', organizationId],
-    queryFn: () => base44.entities.Grant.filter({ organization_id: organizationId }),
+    queryFn: () => client.entities.Grant.filter({ organization_id: organizationId }),
     enabled: !!organizationId, // Only run if organizationId is present
     retry: 1,
   });

@@ -1,6 +1,6 @@
 
 import React, { useState } from "react";
-import { base44 } from "@/api/base44Client";
+import client from '@/api/client';
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -24,13 +24,13 @@ export default function BudgetTab({ grant }) {
 
     const { data: budgetItems = [], isLoading: isLoadingBudget } = useQuery({
         queryKey: ['budgets', grantId],
-        queryFn: () => base44.entities.Budget.filter({ grant_id: grantId }),
+        queryFn: () => client.entities.Budget.filter({ grant_id: grantId }),
         enabled: !!grantId,
     });
 
     const { data: expenses = [], isLoading: isLoadingExpenses } = useQuery({
         queryKey: ['expenses', grantId],
-        queryFn: () => base44.entities.Expense.filter({ grant_id: grantId }),
+        queryFn: () => client.entities.Expense.filter({ grant_id: grantId }),
         enabled: !!grantId,
     });
 

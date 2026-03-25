@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { base44 } from '@/api/base44Client';
+import client from '@/api/client';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -17,8 +17,8 @@ export default function AIInvoiceGenerator({ organizationId, projectId, onApprov
     queryFn: async () => {
       // In a real scenario, this would be a more complex query fetching various user activities.
       // For now, we'll simulate by fetching recent entities.
-      const grants = await base44.entities.Grant.list(`-updated_date`, 10, { organization_id: organizationId });
-      const docs = await base44.entities.Document.list(`-updated_date`, 10, { organization_id: organizationId });
+      const grants = await client.entities.Grant.list(`-updated_date`, 10, { organization_id: organizationId });
+      const docs = await client.entities.Document.list(`-updated_date`, 10, { organization_id: organizationId });
       return { grants, docs };
     },
     enabled: !!organizationId,
@@ -46,7 +46,7 @@ export default function AIInvoiceGenerator({ organizationId, projectId, onApprov
     Based on this, propose 2-4 distinct billable line items. For each item, provide a professional description, estimate the hours (e.g., 0.5, 1.0, 2.5), and a suggested hourly rate. For example, reviewing and updating a grant could be 1.5 hours. Uploading and organizing documents could be 0.5 hours.`;
 
     try {
-      const result = await base44.integrations.Core.InvokeLLM({
+      const result = await client.integrations.Core.InvokeLLM({
         prompt,
         response_json_schema: {
           type: "object",

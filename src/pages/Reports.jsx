@@ -1,7 +1,7 @@
 
 import React, { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { base44 } from "@/api/base44Client";
+import client from '@/api/client';
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -66,31 +66,31 @@ export default function Reports() {
 
   const { data: grants = [] } = useQuery({
     queryKey: ['grants'],
-    queryFn: () => base44.entities.Grant.list(),
+    queryFn: () => client.entities.Grant.list(),
   });
 
   const { data: organizations = [] } = useQuery({
     queryKey: ['organizations'],
-    queryFn: () => base44.entities.Organization.list(),
+    queryFn: () => client.entities.Organization.list(),
   });
 
   const { data: complianceReports = [] } = useQuery({
     queryKey: ['complianceReports'],
-    queryFn: () => base44.entities.ComplianceReport.list('-due_date'),
+    queryFn: () => client.entities.ComplianceReport.list('-due_date'),
   });
   
   const { data: budgetItems = [] } = useQuery({
     queryKey: ['budgets'],
-    queryFn: () => base44.entities.Budget.list(),
+    queryFn: () => client.entities.Budget.list(),
   });
 
   const { data: expenses = [] } = useQuery({
     queryKey: ['expenses'],
-    queryFn: () => base44.entities.Expense.list(),
+    queryFn: () => client.entities.Expense.list(),
   });
 
   const createReportMutation = useMutation({
-    mutationFn: (data) => base44.entities.ComplianceReport.create(data),
+    mutationFn: (data) => client.entities.ComplianceReport.create(data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['complianceReports'] });
       setShowCreateReport(false);

@@ -1,6 +1,6 @@
 
 import React, { useState } from "react";
-import { base44 } from "@/api/base44Client";
+import client from '@/api/client';
 import { useQuery } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -20,7 +20,7 @@ export default function AIGrantScorer() {
 
   const { data: grants = [] } = useQuery({
     queryKey: ["grants"],
-    queryFn: () => base44.entities.Grant.list(),
+    queryFn: () => client.entities.Grant.list(),
   });
 
   const selectedGrant = grants.find(g => g.id === selectedGrantId);
@@ -64,7 +64,7 @@ INSTRUCTIONS FOR YOUR REVIEW:
 Return a JSON object with your complete analysis.`;
 
     try {
-      const response = await base44.integrations.Core.InvokeLLM({
+      const response = await client.integrations.Core.InvokeLLM({
         prompt,
         response_json_schema: {
           type: "object",

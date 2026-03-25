@@ -2,8 +2,7 @@ import { env } from '@/config/env.js'
 import { createLogger } from '@/utils/logger'
 import { toast as showToast } from '@/components/ui/use-toast'
 
-// API Client - Replaces Base44 SDK
-// This file provides the same interface as base44Client but uses your own backend
+// API Client
 
 // Use relative URLs in production (proxied by Vercel) to avoid CORS issues.
 // When the app is served under a base path (e.g. /grantflow), API requests must
@@ -245,8 +244,8 @@ class APIClient {
     return this.fetch(originalRequest.endpoint, originalRequest.options);
   }
 
-  // Base44 compatibility shims.
-  // Some parts of the app (and release-hardening tests) expect `base44.get/patch/...` to exist.
+  // HTTP method shims.
+  // Some parts of the app (and release-hardening tests) expect `client.get/patch/...` to exist.
   get(endpoint, options = {}) {
     return this.fetch(endpoint, { ...options, method: 'GET' })
   }
@@ -483,7 +482,7 @@ class APIClient {
     }
   }
 
-  // Entity wrapper for Base44-compatible interface
+  // Entity wrapper for CRUD interface
   createEntityClient(resource) {
     const normalizedResource = resource.replace(/^\/+/, '');
     const endpoint = normalizedResource.startsWith('api/')
@@ -503,7 +502,7 @@ class APIClient {
         if (sortBy) {
           const order = sortBy.startsWith('-') ? 'desc' : 'asc';
           const rawField = sortBy.replace(/^-/, '');
-          // Back-compat: Base44 commonly used *_date while our DB uses *_at.
+          // Back-compat: some older code used *_date while our DB uses *_at.
           const field =
             rawField === 'created_date'
               ? 'created_at'
@@ -724,7 +723,7 @@ class APIClient {
     }
   };
 
-  // Integrations wrapper (for backwards compatibility with Base44 SDK helpers)
+  // Integrations wrapper
   integrations = {
     Core: {
       InvokeLLM: async (payload = {}) => {
@@ -784,7 +783,7 @@ class APIClient {
           if (!resource && !this.stubWarnings.has(prop) && this.isDev && typeof console !== 'undefined') {
             // Keep dev noise low (avoid surfacing as "errors" in some console collectors)
             console.info(
-              `[base44] Using in-memory stub for entity "${prop}". API endpoint not configured.`,
+              `[APIClient] Using in-memory stub for entity "${prop}". API endpoint not configured.`,
             );
             this.stubWarnings.add(prop);
           }
@@ -817,9 +816,6 @@ class APIClient {
 // Create singleton instance
 const client = new APIClient();
 client.init();
-
-// Export as base44 for compatibility with existing code
-export const base44 = client;
 
 // Also export individual pieces
 export const {

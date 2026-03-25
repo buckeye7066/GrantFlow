@@ -6,7 +6,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
 import { Loader2, Sparkles, FileText } from 'lucide-react'; // Added FileText
 import { Card, CardContent, CardHeader, CardTitle, CardFooter } from '@/components/ui/card';
-import { base44 } from '@/api/base44Client';
+import client from '@/api/client';
 import { useToast } from '@/components/ui/use-toast';
 import { createLogger } from '@/utils/logger';
 import {
@@ -79,7 +79,7 @@ Please search the internet and provide the following contact information in JSON
 
 Return ONLY the JSON object. If you cannot find a specific piece of information, use null for that field.`;
 
-            const response = await base44.integrations.Core.InvokeLLM({
+            const response = await client.integrations.Core.InvokeLLM({
                 prompt,
                 add_context_from_internet: true,
                 response_json_schema: {

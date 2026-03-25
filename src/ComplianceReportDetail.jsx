@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { base44 } from '@/api/base44Client';
+import client from '@/api/client';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { createPageUrl } from '@/utils';
 import { Button } from '@/components/ui/button';
@@ -24,7 +24,7 @@ export default function ComplianceReportDetail() {
 
   const { data: report, isLoading: isLoadingReport } = useQuery({
     queryKey: ['complianceReport', reportId],
-    queryFn: () => base44.entities.ComplianceReport.get(reportId),
+    queryFn: () => client.entities.ComplianceReport.get(reportId),
     enabled: !!reportId,
   });
 
@@ -42,18 +42,18 @@ export default function ComplianceReportDetail() {
 
   const { data: grant } = useQuery({
     queryKey: ['grant', report?.grant_id],
-    queryFn: () => base44.entities.Grant.get(report.grant_id),
+    queryFn: () => client.entities.Grant.get(report.grant_id),
     enabled: !!report?.grant_id,
   });
 
   const { data: organization } = useQuery({
     queryKey: ['organization', report?.organization_id],
-    queryFn: () => base44.entities.Organization.get(report.organization_id),
+    queryFn: () => client.entities.Organization.get(report.organization_id),
     enabled: !!report?.organization_id,
   });
 
   const generateReportMutation = useMutation({
-    mutationFn: () => base44.functions.invoke('generateReport', { report_id: reportId }),
+    mutationFn: () => client.functions.invoke('generateReport', { report_id: reportId }),
     onSuccess: (response) => {
       queryClient.invalidateQueries({ queryKey: ['complianceReport', reportId] });
       toast({
@@ -71,7 +71,7 @@ export default function ComplianceReportDetail() {
   });
 
   const updateReportMutation = useMutation({
-    mutationFn: (data) => base44.entities.ComplianceReport.update(reportId, data),
+    mutationFn: (data) => client.entities.ComplianceReport.update(reportId, data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['complianceReport', reportId] });
       toast({

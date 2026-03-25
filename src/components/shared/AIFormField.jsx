@@ -3,7 +3,7 @@ import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Sparkles, Loader2 } from 'lucide-react';
-import { base44 } from '@/api/base44Client';
+import client from '@/api/client';
 
 export default function AIFormField({ 
   label, 
@@ -75,7 +75,7 @@ RESPONSE REQUIREMENTS:
 
 ${isIndividual ? 'REMEMBER: You are writing as ONE INDIVIDUAL PERSON. Use I, my, me.' : 'REMEMBER: You are writing as an ORGANIZATION. Use we, our, us.'}`;
 
-      const response = await base44.integrations.Core.InvokeLLM({ prompt: fullPrompt });
+      const response = await client.integrations.Core.InvokeLLM({ prompt: fullPrompt });
       onChange({ target: { name, value: response } });
     } catch (error) {
       console.error('AI generation failed:', error);

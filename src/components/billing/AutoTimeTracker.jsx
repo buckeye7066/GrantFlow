@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { base44 } from '@/api/base44Client';
+import client from '@/api/client';
 import { Clock, Pause, Play, Save } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -55,7 +55,7 @@ export default function AutoTimeTracker({ organizationId, organizationName }) {
   // Get user
   const [currentUser, setCurrentUser] = useState(null);
   useEffect(() => {
-    base44.auth.me().then(user => setCurrentUser(user)).catch((error) => {
+    client.auth.me().then(user => setCurrentUser(user)).catch((error) => {
       console.error('[AutoTimeTracker] Failed to fetch user:', error)
     });
   }, []);
@@ -70,7 +70,7 @@ export default function AutoTimeTracker({ organizationId, organizationName }) {
   // Get billing settings
   const [settings, setSettings] = useState(null);
   useEffect(() => {
-    base44.entities.BillingSettings.list().then(res => {
+    client.entities.BillingSettings.list().then(res => {
       if (res && res[0]) {
         setSettings(res[0]);
       }
@@ -81,7 +81,7 @@ export default function AutoTimeTracker({ organizationId, organizationName }) {
 
   const saveTimeMutation = useMutation({
     mutationFn: async (timeData) => {
-      const created = await base44.entities.TimeEntry.create(timeData);
+      const created = await client.entities.TimeEntry.create(timeData);
       return created;
     },
     onSuccess: () => {

@@ -1,7 +1,7 @@
 import React from 'react';
 import { useForm, Controller } from 'react-hook-form';
 import { useMutation } from '@tanstack/react-query';
-import { base44 } from '@/api/base44Client';
+import client from '@/api/client';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -66,14 +66,14 @@ export default function AddSourceForm({ source, organizationId, onSuccess, onCan
       // FIXED: Check if source has an ID to determine create vs update
       if (source && source.id) {
         log.debug('updating source', { id: source.id })
-        return base44.entities.SourceDirectory.update(source.id, data);
+        return client.entities.SourceDirectory.update(source.id, data);
       } else {
         log.debug('creating new source')
         const orgId = organizationId ?? data.discovered_for_organization_id ?? null
         if (!orgId) {
           throw new Error('Missing organization for source directory entry')
         }
-        return base44.entities.SourceDirectory.create({
+        return client.entities.SourceDirectory.create({
           ...data,
           discovered_for_organization_id: orgId,
         });

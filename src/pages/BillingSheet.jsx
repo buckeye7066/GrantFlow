@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { base44 } from '@/api/base44Client';
+import client from '@/api/client';
 import { Button } from '@/components/ui/button';
 import { FileDown, FileText } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
@@ -149,7 +149,7 @@ export default function BillingSheet() {
     queryKey: ['organization', organizationId],
     queryFn: async () => {
       if (!organizationId) return null;
-      return await base44.entities.Organization.get(organizationId);
+      return await client.entities.Organization.get(organizationId);
     },
     enabled: !!organizationId
   });

@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { base44 } from '@/api/base44Client';
+import client from '@/api/client';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -20,7 +20,7 @@ export default function ProfileMatcher() {
 
   const { data: organizations = [], isLoading: isLoadingOrgs } = useQuery({
     queryKey: ['organizations'],
-    queryFn: () => base44.entities.Organization.list('name'),
+    queryFn: () => client.entities.Organization.list('name'),
   });
 
   const selectedOrg = organizations.find(org => org.id === selectedOrgId);
@@ -32,7 +32,7 @@ export default function ProfileMatcher() {
     setError(null);
     
     try {
-      const response = await base44.functions.invoke('matchProfileToGrants', {
+      const response = await client.functions.invoke('matchProfileToGrants', {
         organization_id: selectedOrgId
       });
       

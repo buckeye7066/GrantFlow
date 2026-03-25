@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { base44 } from "@/api/base44Client";
+import client from '@/api/client';
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { createPageUrl } from "@/utils";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -85,25 +85,25 @@ export default function CreateInvoice() {
 
   const { data: organizations = [] } = useQuery({
     queryKey: ['organizations'],
-    queryFn: () => base44.entities.Organization.list('name'),
+    queryFn: () => client.entities.Organization.list('name'),
   });
 
   const { data: projects = [] } = useQuery({
     queryKey: ['projects'],
-    queryFn: () => base44.entities.Project.list('-created_date'),
+    queryFn: () => client.entities.Project.list('-created_date'),
   });
 
   const { data: settings } = useQuery({
     queryKey: ['billingSettings'],
     queryFn: async () => {
-      const results = await base44.entities.BillingSettings.list();
+      const results = await client.entities.BillingSettings.list();
       return results[0] || {};
     },
   });
 
   const { data: timeEntries = [] } = useQuery({
     queryKey: ['unbilledTime', formData.organization_id],
-    queryFn: () => base44.entities.TimeEntry.filter({
+    queryFn: () => client.entities.TimeEntry.filter({
       organization_id: formData.organization_id,
       invoiced: false,
     }),
@@ -111,7 +111,7 @@ export default function CreateInvoice() {
   });
 
   const createInvoiceMutation = useMutation({
-    mutationFn: (data) => base44.entities.Invoice.create(data),
+    mutationFn: (data) => client.entities.Invoice.create(data),
     onSuccess: (invoice) => {
       queryClient.invalidateQueries({ queryKey: ['invoices'] });
       toast({
@@ -379,7 +379,7 @@ export default function CreateInvoice() {
 
     // Update billing settings with new invoice number
     if (settings?.id) {
-      await base44.entities.BillingSettings.update(settings.id, {
+      await client.entities.BillingSettings.update(settings.id, {
         last_invoice_number: nextNumber,
       });
     }
@@ -388,7 +388,7 @@ export default function CreateInvoice() {
     if (formData.service_type === 'hourly_time' && timeEntries.length > 0) {
       await Promise.all(
         timeEntries.map(entry =>
-          base44.entities.TimeEntry.update(entry.id, { invoiced: true })
+          client.entities.TimeEntry.update(entry.id, { invoiced: true })
         )
       );
     }

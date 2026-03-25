@@ -11,8 +11,7 @@ import {
   refreshSession,
   logout as logoutRequest,
 } from '@/api/auth'
-import { base44 } from '@/api/base44Client'
-import { apiFetch } from '@/api/client'
+import client, { apiFetch } from '@/api/client'
 import { toast } from '@/components/ui/use-toast'
 
 const ACCESS_EXPIRY_STORAGE_KEY = 'grantflow:access-expiry'
@@ -154,15 +153,15 @@ export const useAuthStore = create((set, get) => ({
     const storedExpiry = localStorage.getItem(ACCESS_EXPIRY_STORAGE_KEY)
     const updates = {}
     if (accessToken) {
-      base44.setToken(accessToken)
+      client.setToken(accessToken)
       updates.accessToken = accessToken
     }
     if (refreshToken) {
-      base44.setRefreshToken?.(refreshToken)
+      client.setRefreshToken?.(refreshToken)
       updates.refreshToken = refreshToken
     }
     if (storedActiveProfileId) {
-      base44.setActiveProfileId?.(storedActiveProfileId)
+      client.setActiveProfileId?.(storedActiveProfileId)
       updates.activeProfileId = normalizeId(storedActiveProfileId)
     }
     if (storedMethod && AUTH_METHODS.has(storedMethod)) {
@@ -186,8 +185,8 @@ export const useAuthStore = create((set, get) => ({
     const preferredAuthMethod = get().preferredAuthMethod
     clearRefreshTimer()
     clearAccessExpiry()
-    base44.clearToken()
-    base44.setActiveProfileId?.(null)
+    client.clearToken()
+    client.setActiveProfileId?.(null)
     set({ ...initialState, preferredAuthMethod })
   },
 
@@ -211,7 +210,7 @@ export const useAuthStore = create((set, get) => ({
       const active = state.activeProfileId
       if (active && !profiles.some((p) => String(p?.id) === String(active))) {
         const nextActive = isAdmin ? null : (profiles[0]?.id ?? null)
-        base44.setActiveProfileId?.(nextActive)
+        client.setActiveProfileId?.(nextActive)
         set({ activeProfileId: nextActive })
       }
 
@@ -258,7 +257,7 @@ export const useAuthStore = create((set, get) => ({
         is_admin: isAdmin,
       }
 
-      base44.setActiveProfileId?.(activeProfileId)
+      client.setActiveProfileId?.(activeProfileId)
 
       set((state) => ({
         ...state,
@@ -293,7 +292,7 @@ export const useAuthStore = create((set, get) => ({
         payload.active_profile_id ?? payload.user?.active_profile_id ?? profiles[0]?.id ?? null,
       )
 
-      base44.setActiveProfileId?.(activeProfileId)
+      client.setActiveProfileId?.(activeProfileId)
       
       // Check if this is an admin user
       if (user.is_admin) {
@@ -451,7 +450,7 @@ export const useAuthStore = create((set, get) => ({
   startEmailSignIn: async (email) => {
     // If a previous session exists (often stale after deploy), clear it before starting a new login
     try {
-      base44.clearToken()
+      client.clearToken()
       clearRefreshTimer()
       clearAccessExpiry()
       set({
@@ -472,7 +471,7 @@ export const useAuthStore = create((set, get) => ({
   startPasswordSetup: async (email) => {
     // Clear any stale session before beginning auth.
     try {
-      base44.clearToken()
+      client.clearToken()
       clearRefreshTimer()
       clearAccessExpiry()
       set({
@@ -506,11 +505,11 @@ export const useAuthStore = create((set, get) => ({
     try {
       const result = await loginWithPassword({ email, password })
       if (result?.accessToken) {
-        base44.setToken(result.accessToken)
+        client.setToken(result.accessToken)
         set({ accessToken: result.accessToken })
       }
       if (result?.refreshToken) {
-        base44.setRefreshToken?.(result.refreshToken)
+        client.setRefreshToken?.(result.refreshToken)
         set({ refreshToken: result.refreshToken })
       }
       get().setAuthenticatedUser(result)
@@ -530,11 +529,11 @@ export const useAuthStore = create((set, get) => ({
     try {
       const result = await completePasswordSetup({ token, password })
       if (result?.accessToken) {
-        base44.setToken(result.accessToken)
+        client.setToken(result.accessToken)
         set({ accessToken: result.accessToken })
       }
       if (result?.refreshToken) {
-        base44.setRefreshToken?.(result.refreshToken)
+        client.setRefreshToken?.(result.refreshToken)
         set({ refreshToken: result.refreshToken })
       }
       get().setAuthenticatedUser(result)
@@ -554,11 +553,11 @@ export const useAuthStore = create((set, get) => ({
     try {
       const result = await verifyEmailCode({ email, code, profileId, verificationToken })
       if (result?.accessToken) {
-        base44.setToken(result.accessToken)
+        client.setToken(result.accessToken)
         set({ accessToken: result.accessToken })
       }
       if (result?.refreshToken) {
-        base44.setRefreshToken?.(result.refreshToken)
+        client.setRefreshToken?.(result.refreshToken)
         set({ refreshToken: result.refreshToken })
       }
       get().setAuthenticatedUser(result)
@@ -576,7 +575,7 @@ export const useAuthStore = create((set, get) => ({
   startPhoneSignIn: async (phone) => {
     // Same as email: clear stale session before starting new login
     try {
-      base44.clearToken()
+      client.clearToken()
       clearRefreshTimer()
       clearAccessExpiry()
       set({
@@ -599,11 +598,11 @@ export const useAuthStore = create((set, get) => ({
     try {
       const result = await verifyPhoneCode({ phone, code, profileId })
       if (result?.accessToken) {
-        base44.setToken(result.accessToken)
+        client.setToken(result.accessToken)
         set({ accessToken: result.accessToken })
       }
       if (result?.refreshToken) {
-        base44.setRefreshToken?.(result.refreshToken)
+        client.setRefreshToken?.(result.refreshToken)
         set({ refreshToken: result.refreshToken })
       }
       get().setAuthenticatedUser(result)
@@ -627,7 +626,7 @@ export const useAuthStore = create((set, get) => ({
   } = {}) => {
     set({ isLoading: true, error: null })
     try {
-      const response = await base44.auth.loginWithTokens({
+      const response = await client.auth.loginWithTokens({
         accessToken,
         refreshToken,
       })
@@ -665,7 +664,7 @@ export const useAuthStore = create((set, get) => ({
   },
 
   refreshSession: async () => {
-    const refreshToken = base44.getRefreshToken?.() ?? get().refreshToken
+    const refreshToken = client.getRefreshToken?.() ?? get().refreshToken
     if (!refreshToken) {
       get().clearState()
       throw new Error('Missing refresh token')
@@ -673,11 +672,11 @@ export const useAuthStore = create((set, get) => ({
     try {
       const response = await refreshSession(refreshToken)
       if (response?.accessToken) {
-        base44.setToken(response.accessToken)
+        client.setToken(response.accessToken)
         set({ accessToken: response.accessToken })
       }
       if (response?.refreshToken) {
-        base44.setRefreshToken?.(response.refreshToken)
+        client.setRefreshToken?.(response.refreshToken)
         set({ refreshToken: response.refreshToken })
       }
       get().setAuthenticatedUser(response)
@@ -692,7 +691,7 @@ export const useAuthStore = create((set, get) => ({
   },
 
   markSessionExpired: (message) => {
-    base44.clearToken()
+    client.clearToken()
     clearRefreshTimer()
     clearAccessExpiry()
     set({
@@ -713,7 +712,7 @@ export const useAuthStore = create((set, get) => ({
 
   logout: async () => {
     try {
-      const refreshToken = base44.getRefreshToken?.() ?? get().refreshToken
+      const refreshToken = client.getRefreshToken?.() ?? get().refreshToken
       if (refreshToken) {
         await logoutRequest(refreshToken)
       }
@@ -724,7 +723,7 @@ export const useAuthStore = create((set, get) => ({
 
   setActiveProfileId: (profileId) => {
     const normalized = normalizeId(profileId)
-    base44.setActiveProfileId?.(normalized)
+    client.setActiveProfileId?.(normalized)
     set({ activeProfileId: normalized })
   },
 
@@ -772,6 +771,6 @@ export const useAuthStore = create((set, get) => ({
   },
 }))
 
-base44.setAuthFailureHandler?.((message) => {
+client.setAuthFailureHandler?.((message) => {
   useAuthStore.getState().markSessionExpired(message)
 })

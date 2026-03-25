@@ -1,5 +1,5 @@
 import React from "react";
-import { base44 } from "@/api/base44Client";
+import client from '@/api/client';
 import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -11,12 +11,12 @@ import { createPageUrl } from "@/utils";
 export default function Calendar() {
   const { data: grants = [] } = useQuery({
     queryKey: ['grants'],
-    queryFn: () => base44.entities.Grant.list(),
+    queryFn: () => client.entities.Grant.list(),
   });
 
   const { data: milestones = [] } = useQuery({
     queryKey: ['milestones'],
-    queryFn: () => base44.entities.Milestone.list('due_date'),
+    queryFn: () => client.entities.Milestone.list('due_date'),
   });
 
   // Helper to validate date

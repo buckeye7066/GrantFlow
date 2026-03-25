@@ -7,7 +7,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
 import { format } from 'date-fns';
 import { DollarSign, Calendar, Percent, Building2, Heart, GraduationCap, FileCheck, Info, AlertTriangle, CheckCircle, Sparkles, Edit, Target, TrendingUp } from 'lucide-react';
-import { base44 } from '@/api/base44Client';
+import client from '@/api/client';
 import { useToast } from '@/components/ui/use-toast';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useAuthStore } from '@/stores/authStore';
@@ -81,7 +81,7 @@ export default function GrantOverview({ grant, organization, onUpdate, onOpenPri
     }, [profiles, activeProfileId]);
 
     const updateGrantMutation = useMutation({
-        mutationFn: (data) => base44.entities.Grant.update(grant.id, data),
+        mutationFn: (data) => client.entities.Grant.update(grant.id, data),
         onSuccess: () => {
             queryClient.invalidateQueries({ queryKey: ['grant', grant.id] });
             if (onUpdate) onUpdate();
@@ -128,7 +128,7 @@ Search the internet and provide verified, current contact information in JSON fo
 
 Return ONLY the JSON. Use null for any information you cannot verify with confidence.`;
 
-            const response = await base44.integrations.Core.InvokeLLM({
+            const response = await client.integrations.Core.InvokeLLM({
                 prompt,
                 add_context_from_internet: true,
                 response_json_schema: {

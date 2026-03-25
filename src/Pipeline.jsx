@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from "react";
-import { base44 } from "@/api/base44Client";
+import client from '@/api/client';
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useLocation } from "react-router-dom";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -68,23 +68,23 @@ export default function Pipeline() {
 
   const { data: grants = [], isLoading: isLoadingGrants } = useQuery({
     queryKey: ['grants'],
-    queryFn: () => base44.entities.Grant.list('-created_date'),
+    queryFn: () => client.entities.Grant.list('-created_date'),
   });
 
   const { data: organizations = [], isLoading: isLoadingOrgs } = useQuery({
     queryKey: ['organizations'],
-    queryFn: () => base44.entities.Organization.list(),
+    queryFn: () => client.entities.Organization.list(),
   });
 
   const updateGrantMutation = useMutation({
-    mutationFn: ({ id, data }) => base44.entities.Grant.update(id, data),
+    mutationFn: ({ id, data }) => client.entities.Grant.update(id, data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['grants'] });
     },
   });
 
   const deleteGrantMutation = useMutation({
-    mutationFn: (id) => base44.entities.Grant.delete(id),
+    mutationFn: (id) => client.entities.Grant.delete(id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['grants'] });
       setGrantToDelete(null);
@@ -105,7 +105,7 @@ export default function Pipeline() {
   const bulkDeleteMutation = useMutation({
     mutationFn: async (grantIds) => {
       // Parallelize deletions for better performance
-      await Promise.all(grantIds.map(id => base44.entities.Grant.delete(id)));
+      await Promise.all(grantIds.map(id => client.entities.Grant.delete(id)));
     },
     onSuccess: (_, grantIds) => {
       queryClient.invalidateQueries({ queryKey: ['grants'] });

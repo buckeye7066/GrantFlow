@@ -4,7 +4,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { FileText, Download, Trash2, Printer, Wand2 } from 'lucide-react';
 import { format } from 'date-fns';
-import { base44 } from '@/api/base44Client';
+import client from '@/api/client';
 import { getDocumentExtract, parseDocument } from '@/api/documents';
 import { useToast } from '@/components/ui/use-toast';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -111,10 +111,10 @@ export default function DocumentItem({ document, onDelete }) {
       return `/${fileUri}`;
     }
     try {
-      if (!base44?.integrations?.Core?.CreateFileSignedUrl) {
+      if (!client?.integrations?.Core?.CreateFileSignedUrl) {
         return null;
       }
-      const { signed_url } = await base44.integrations.Core.CreateFileSignedUrl({ file_uri: fileUri });
+      const { signed_url } = await client.integrations.Core.CreateFileSignedUrl({ file_uri: fileUri });
       return signed_url;
     } catch (error) {
       console.error('Failed to resolve remote document URL', error);

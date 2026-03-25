@@ -519,7 +519,7 @@ async function ensureDocumentDeleteAccess(req, res, context, document) {
   const actorEmail = context.ctx?.email ?? req.user?.email ?? req.user?.primary_email ?? null
   const actorActiveProfileId = context.ctx?.activeProfileId ? String(context.ctx.activeProfileId) : null
 
-  // Legacy/Base44 sessions can be profile-scoped without a durable profiles.user_id mapping.
+  // Legacy sessions can be profile-scoped without a durable profiles.user_id mapping.
   // Treat "active profile" as ownership for destructive actions on that same profile.
   if (actorActiveProfileId && actorActiveProfileId === profileId) return true
 
@@ -701,7 +701,7 @@ router.get('/:id/download', async (req, res) => {
   }
 })
 
-// POST /api/documents/upload (Base44 Compatibility)
+// POST /api/documents/upload (Legacy Compatibility)
 router.post('/upload', uploadLimiter, requireUploadsWritable, runUploadSingle('file'), async (req, res) => {
   try {
     const context = await buildAccessContext(req);
@@ -741,7 +741,7 @@ router.post('/upload', uploadLimiter, requireUploadsWritable, runUploadSingle('f
   }
 });
 
-// POST /api/documents/signed-url (Base44 Compatibility)
+// POST /api/documents/signed-url (Legacy Compatibility)
 router.post('/signed-url', (req, res) => {
   const { file_uri } = req.body ?? {};
   if (!file_uri) return res.status(400).json({ error: 'file_uri is required' });

@@ -453,7 +453,7 @@ router.get('/', async (req, res) => {
       }
     }
 
-    // Back-compat for Base44 / older UI duplicate-checks: they pass `url=<opportunityUrl>`.
+    // Back-compat for older UI duplicate-checks: they pass `url=<opportunityUrl>`.
     // In our schema, the canonical URL lives in `application_url`.
     if (urlFilter) {
       query += ' AND g.application_url = ?'
