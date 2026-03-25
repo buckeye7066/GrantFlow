@@ -1,7 +1,7 @@
 
 import React, { useMemo, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { base44 } from '@/api/base44Client';
+import client from '@/api/client';
 import { createLogger } from '@/utils/logger';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -51,7 +51,7 @@ export default function NOFOParser() {
 
   const { data: organizations = [], isLoading: isLoadingOrgs } = useQuery({
     queryKey: ['organizations'],
-    queryFn: () => base44.entities.Organization.list('-created_date'),
+    queryFn: () => client.entities.Organization.list('-created_date'),
   });
 
   const handleFileChange = (e) => {
@@ -94,7 +94,7 @@ export default function NOFOParser() {
       
       if (inputMode === 'file') {
         log.debug('Uploading file', file?.name);
-        const { file_url } = await base44.integrations.Core.UploadFile({ file });
+        const { file_url } = await client.integrations.Core.UploadFile({ file });
         fileUrl = file_url;
         log.debug('File uploaded', fileUrl);
       } else {
@@ -111,7 +111,7 @@ export default function NOFOParser() {
 
       // Use custom parseNOFO function
       log.debug('Invoking parseNOFO');
-      const response = await base44.functions.invoke('parseNOFO', {
+      const response = await client.functions.invoke('parseNOFO', {
         file_url: fileUrl,
         json_schema: grantSchemaForExtraction,
         is_url: inputMode === 'url'
@@ -181,7 +181,7 @@ export default function NOFOParser() {
     };
 
     try {
-        const newGrant = await base44.entities.Grant.create(grantPayload);
+        const newGrant = await client.entities.Grant.create(grantPayload);
 
         const analysisPayload = {
             grantId: newGrant.id,
@@ -193,7 +193,7 @@ export default function NOFOParser() {
             deadline: newGrant.deadline,
         };
 
-        await base44.functions.invoke('analyzeGrant', analysisPayload);
+        await client.functions.invoke('analyzeGrant', analysisPayload);
 
         queryClient.invalidateQueries({ queryKey: ['grants'] });
         toast({

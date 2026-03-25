@@ -1,6 +1,6 @@
 
 import React, { useState } from "react";
-import { base44 } from "@/api/base44Client";
+import client from '@/api/client';
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { createPageUrl } from "@/utils";
@@ -25,19 +25,19 @@ export default function BudgetDetail({ grantId }) {
 
   const { data: grant, isLoading: isLoadingGrant } = useQuery({
     queryKey: ['grant', grantId],
-    queryFn: () => base44.entities.Grant.get(grantId),
+    queryFn: () => client.entities.Grant.get(grantId),
     enabled: !!grantId,
   });
 
   const { data: budgetItems = [], isLoading: isLoadingBudget } = useQuery({
     queryKey: ['budgets', grantId],
-    queryFn: () => base44.entities.Budget.filter({ grant_id: grantId }),
+    queryFn: () => client.entities.Budget.filter({ grant_id: grantId }),
     enabled: !!grantId,
   });
 
   const { data: expenses = [], isLoading: isLoadingExpenses } = useQuery({
     queryKey: ['expenses', grantId],
-    queryFn: () => base44.entities.Expense.filter({ grant_id: grantId }),
+    queryFn: () => client.entities.Expense.filter({ grant_id: grantId }),
     enabled: !!grantId,
   });
 

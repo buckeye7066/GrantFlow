@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { base44 } from '@/api/base44Client';
+import client from '@/api/client';
 import { DragDropContext, Droppable, Draggable } from '@hello-pangea/dnd';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
@@ -24,7 +24,7 @@ export default function TaxonomyManagerModal({ group, open, onClose, onSave }) {
 
   const { data: taxonomyItems, isLoading } = useQuery({
     queryKey: ['taxonomy', group],
-    queryFn: () => base44.entities.Taxonomy.filter({ group }, 'sort_order'),
+    queryFn: () => client.entities.Taxonomy.filter({ group }, 'sort_order'),
     enabled: !!group && open,
   });
 
@@ -35,14 +35,14 @@ export default function TaxonomyManagerModal({ group, open, onClose, onSave }) {
   }, [taxonomyItems]);
 
   const updateItemMutation = useMutation({
-    mutationFn: ({ id, data }) => base44.entities.Taxonomy.update(id, data),
+    mutationFn: ({ id, data }) => client.entities.Taxonomy.update(id, data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['taxonomy', group] });
     },
   });
 
   const createItemMutation = useMutation({
-    mutationFn: (data) => base44.entities.Taxonomy.create(data),
+    mutationFn: (data) => client.entities.Taxonomy.create(data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['taxonomy', group] });
       setNewItem('');
@@ -50,7 +50,7 @@ export default function TaxonomyManagerModal({ group, open, onClose, onSave }) {
   });
   
   const bulkUpdateMutation = useMutation({
-    mutationFn: (updates) => Promise.all(updates.map(u => base44.entities.Taxonomy.update(u.id, u.data))),
+    mutationFn: (updates) => Promise.all(updates.map(u => client.entities.Taxonomy.update(u.id, u.data))),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['taxonomy', group] });
       toast.success("Changes saved successfully!");

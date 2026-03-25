@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { base44 } from '@/api/base44Client';
+import client from '@/api/client';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Link } from 'react-router-dom';
@@ -18,19 +18,19 @@ export default function OneTimeFix() {
 
   const { data: grants, isLoading: isLoadingGrants, refetch: refetchGrants } = useQuery({
     queryKey: ['grantsToFix'],
-    queryFn: () => base44.entities.Grant.list(),
+    queryFn: () => client.entities.Grant.list(),
   });
 
   const { data: organizations, isLoading: isLoadingOrgs } = useQuery({
     queryKey: ['organizationsForFix'],
-    queryFn: () => base44.entities.Organization.list(),
+    queryFn: () => client.entities.Organization.list(),
   });
 
   // Query for active backfill jobs
   const { data: activeJobs = [], refetch: refetchJobs } = useQuery({
     queryKey: ['backfillJobs'],
     queryFn: async () => {
-      const allJobs = await base44.entities.SearchJob.list('-created_date');
+      const allJobs = await client.entities.SearchJob.list('-created_date');
       return allJobs.filter(job => 
         job.profile_id?.startsWith('backfill_') && 
         job.status === 'running'
@@ -43,7 +43,7 @@ export default function OneTimeFix() {
   const { data: latestJob, refetch: refetchLatestJob } = useQuery({
     queryKey: ['latestBackfillJob'],
     queryFn: async () => {
-      const allJobs = await base44.entities.SearchJob.list('-created_date');
+      const allJobs = await client.entities.SearchJob.list('-created_date');
       const backfillJobs = allJobs.filter(job => job.profile_id?.startsWith('backfill_'));
       return backfillJobs[0] || null;
     },
@@ -69,7 +69,7 @@ export default function OneTimeFix() {
 
   const handleStartBackfill = async () => {
     try {
-      const response = await base44.functions.invoke('runGrantBackfill');
+      const response = await client.functions.invoke('runGrantBackfill');
       
       setCurrentJobId(response.data.jobId);
       

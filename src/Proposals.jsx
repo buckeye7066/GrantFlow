@@ -1,6 +1,6 @@
 
 import React, { useState, useMemo } from "react";
-import { base44 } from "@/api/base44Client";
+import client from '@/api/client';
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { createPageUrl } from "@/utils";
@@ -28,12 +28,12 @@ export default function Proposals() {
 
   const { data: grants = [], isLoading: isLoadingGrants } = useQuery({
     queryKey: ['grants'],
-    queryFn: () => base44.entities.Grant.list('-created_date'),
+    queryFn: () => client.entities.Grant.list('-created_date'),
   });
 
   const { data: organizations = [], isLoading: isLoadingOrgs } = useQuery({
     queryKey: ['organizations'],
-    queryFn: () => base44.entities.Organization.list(),
+    queryFn: () => client.entities.Organization.list(),
   });
 
   const activeProposals = grants.filter(g => ['drafting', 'interested', 'application_prep', 'revision'].includes(g.status));

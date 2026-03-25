@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { useQuery, useMutation } from '@tanstack/react-query';
-import { base44 } from '@/api/base44Client';
+import client from '@/api/client';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogClose } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -17,7 +17,7 @@ export default function SendInvoiceModal({ invoice, organization, onClose }) {
 
   const { data: contacts = [] } = useQuery({
     queryKey: ['contacts', organization.id],
-    queryFn: () => base44.entities.Contact.filter({ organization_id: organization.id }),
+    queryFn: () => client.entities.Contact.filter({ organization_id: organization.id }),
     enabled: !!organization.id,
   });
 
@@ -25,7 +25,7 @@ export default function SendInvoiceModal({ invoice, organization, onClose }) {
   // FIX: Fetch BillingSettings and populate the subject and body with templates.
   const { data: billingSettings } = useQuery({
     queryKey: ['billingSettings'],
-    queryFn: () => base44.entities.BillingSettings.list().then(res => res[0]),
+    queryFn: () => client.entities.BillingSettings.list().then(res => res[0]),
   });
 
   useEffect(() => {
@@ -47,7 +47,7 @@ export default function SendInvoiceModal({ invoice, organization, onClose }) {
   }, [invoice, organization, billingSettings]);
 
   const sendMutation = useMutation({
-    mutationFn: () => base44.functions.invoke('sendInvoice', {
+    mutationFn: () => client.functions.invoke('sendInvoice', {
       invoiceId: invoice.id,
       to,
       subject,

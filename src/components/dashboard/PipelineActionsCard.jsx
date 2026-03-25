@@ -75,7 +75,7 @@ export default function PipelineActionsCard() {
             </div>
             <h2 className="text-lg font-semibold text-card-foreground">Pipeline Command Center</h2>
             <p className="text-sm text-foreground max-w-md">
-              Kick off the same automations the Base44 workspace runs behind the scenes. These flows coordinate AI
+              Kick off automations that run behind the scenes. These flows coordinate AI
               matching, checklist generation, reminders, and deadline monitoring.
             </p>
           </div>

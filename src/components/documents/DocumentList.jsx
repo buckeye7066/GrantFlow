@@ -5,9 +5,7 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import DocumentItem from './DocumentItem';
 import { useToast } from '@/components/ui/use-toast';
-import { apiFetch } from '@/api/client';
-import { base44 } from '@/api/base44Client';
-
+import client, { apiFetch } from '@/api/client';
 export default function DocumentList({ profileId }) {
   const queryClient = useQueryClient();
   const { toast } = useToast();
@@ -63,11 +61,11 @@ export default function DocumentList({ profileId }) {
       return `/${fileUri}`;
     }
     try {
-      if (!base44?.integrations?.Core?.CreateFileSignedUrl) {
+      if (!client?.integrations?.Core?.CreateFileSignedUrl) {
         return null;
       }
       const { signed_url } =
-        await base44.integrations.Core.CreateFileSignedUrl({ file_uri: fileUri });
+        await client.integrations.Core.CreateFileSignedUrl({ file_uri: fileUri });
       return signed_url ?? null;
     } catch (error) {
       console.error(`Failed to resolve document URL for ${doc.name}:`, error);

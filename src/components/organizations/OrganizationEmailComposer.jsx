@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
-import { base44 } from '@/api/base44Client';
+import client from '@/api/client';
 import { formatAddress } from '@/utils';
 import {
   Dialog,
@@ -30,14 +30,14 @@ export default function OrganizationEmailComposer({ open, onClose, organization,
     // Fetch grants for this organization
     const { data: grants = [] } = useQuery({
         queryKey: ['grants', organization.id],
-        queryFn: () => base44.entities.Grant.filter({ organization_id: organization.id }),
+        queryFn: () => client.entities.Grant.filter({ organization_id: organization.id }),
         enabled: open && !!organization.id,
     });
 
     // Fetch contact methods
     const { data: contactMethods = [] } = useQuery({
         queryKey: ['contactMethods', organization.id],
-        queryFn: () => base44.entities.ContactMethod.filter({ organization_id: organization.id }),
+        queryFn: () => client.entities.ContactMethod.filter({ organization_id: organization.id }),
         enabled: open && !!organization.id,
     });
 
@@ -49,7 +49,7 @@ export default function OrganizationEmailComposer({ open, onClose, organization,
     }, [emails]);
 
     const sendEmailMutation = useMutation({
-        mutationFn: (emailData) => base44.integrations.Core.SendEmail(emailData),
+        mutationFn: (emailData) => client.integrations.Core.SendEmail(emailData),
         onSuccess: () => {
             toast({
                 title: "Update Email Sent! 📧",
@@ -150,7 +150,7 @@ ${pipelineSummary}
 Write the complete email body in plain text (no HTML):`;
 
         try {
-            const response = await base44.integrations.Core.InvokeLLM({ prompt });
+            const response = await client.integrations.Core.InvokeLLM({ prompt });
             setBody(response);
             toast({
                 title: "Status Update Generated! ✨",

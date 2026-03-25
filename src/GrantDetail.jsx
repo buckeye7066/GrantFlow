@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { base44 } from '@/api/base44Client';
+import client from '@/api/client';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { createPageUrl } from '@/utils';
 import { Button } from '@/components/ui/button';
@@ -91,7 +91,7 @@ export default function GrantDetail() {
     queryKey: ['grant', grantId],
     queryFn: () => {
         if (!grantId) return null;
-        return base44.entities.Grant.get(grantId);
+        return client.entities.Grant.get(grantId);
     },
     enabled: !!grantId,
     refetchInterval: (query) => {
@@ -113,18 +113,18 @@ export default function GrantDetail() {
 
   const { data: organization, isLoading: isLoadingOrg, isError: isErrorOrg, error: orgError } = useQuery({
     queryKey: ['organization', grant?.organization_id],
-    queryFn: () => base44.entities.Organization.get(grant.organization_id),
+    queryFn: () => client.entities.Organization.get(grant.organization_id),
     enabled: !!grant?.organization_id,
   });
   
   const { data: existingChecklistItems = [] } = useQuery({
     queryKey: ['checklistItems', grantId],
-    queryFn: () => base44.entities.ChecklistItem.filter({ grant_id: grantId }),
+    queryFn: () => client.entities.ChecklistItem.filter({ grant_id: grantId }),
     enabled: !!grantId,
   });
 
   const updateGrantMutation = useMutation({
-    mutationFn: (updatedData) => base44.entities.Grant.update(grantId, updatedData),
+    mutationFn: (updatedData) => client.entities.Grant.update(grantId, updatedData),
     onSuccess: (data) => {
       queryClient.setQueryData(['grant', grantId], data);
       queryClient.invalidateQueries({ queryKey: ['grants'] });
@@ -133,7 +133,7 @@ export default function GrantDetail() {
   });
 
   const deleteGrantMutation = useMutation({
-    mutationFn: () => base44.entities.Grant.delete(grantId),
+    mutationFn: () => client.entities.Grant.delete(grantId),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['grants'] });
       navigate(createPageUrl('Pipeline'));
@@ -144,7 +144,7 @@ export default function GrantDetail() {
     mutationFn: async (payload) => {
       try {
         // Client returns parsed JSON body: { success, analysis } (no .data wrapper)
-        const body = await base44.functions.invoke('analyzeGrant', payload);
+        const body = await client.functions.invoke('analyzeGrant', payload);
         
         if (body && body.success === false) {
           console.error('[GrantDetail] Function returned error:', body);
@@ -217,7 +217,7 @@ export default function GrantDetail() {
               }
 
               if (newItemsToCreate.length > 0) {
-                 await base44.entities.ChecklistItem.bulkCreate(newItemsToCreate);
+                 await client.entities.ChecklistItem.bulkCreate(newItemsToCreate);
                  queryClient.invalidateQueries({ queryKey: ['checklistItems', grantId] });
                  toast({ 
                    title: "Checklist Updated", 

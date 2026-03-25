@@ -1,6 +1,6 @@
 
 import React, { useMemo, useState } from 'react';
-import { base44 } from '@/api/base44Client';
+import client from '@/api/client';
 import { createLogger } from '@/utils/logger';
 import { formatAddress } from '@/utils';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -119,7 +119,7 @@ Keywords should be:
 - Useful for funding opportunity matching
 - A mix of broad and specific terms`;
 
-      const response = await base44.integrations.Core.InvokeLLM({
+      const response = await client.integrations.Core.InvokeLLM({
         prompt,
         response_json_schema: {
           type: "object",
@@ -180,7 +180,7 @@ Focus areas should be:
 - Broader than keywords but specific enough to be meaningful
 - Examples: "Youth Development", "Environmental Conservation", "STEM Education", "Mental Health Advocacy"`;
 
-      const response = await base44.integrations.Core.InvokeLLM({
+      const response = await client.integrations.Core.InvokeLLM({
         prompt,
         response_json_schema: {
           type: "object",

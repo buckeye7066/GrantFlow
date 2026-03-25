@@ -49,7 +49,7 @@ export async function isAdminUserWithDb(db, user) {
   //
   // IMPORTANT:
   // Some auth sessions carry only email (and no userId/profileId), or carry a profileId whose
-  // profiles.user_id is NULL (legacy/Base44 data). In those cases, we must still be able to
+  // profiles.user_id is NULL (legacy data). In those cases, we must still be able to
   // resolve the user record by email; otherwise admins can “lose” admin capabilities depending
   // on which profile they’re currently scoped to.
   try {
@@ -271,7 +271,7 @@ export async function getAccessibleProfileIds(db, user) {
   }
 
   // Token-scoped profileId is always treated as accessible for the session.
-  // This prevents lockouts for legacy/Base44 profiles that lack user_id/profile_emails mappings.
+  // This prevents lockouts for legacy profiles that lack user_id/profile_emails mappings.
   // Security note: This is intentional per product requirements to maintain backward compatibility.
   // Tokens are already validated by auth middleware, so compromised tokens are a separate concern
   // that should be addressed via token rotation, expiry, and monitoring rather than here.

@@ -1,5 +1,5 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { base44 } from "@/api/base44Client";
+import client from '@/api/client';
 import { useToast } from "@/components/ui/use-toast";
 
 /**
@@ -11,7 +11,7 @@ export function useOrganizationMutations() {
   const queryClient = useQueryClient();
 
   const createMutation = useMutation({
-    mutationFn: (data) => base44.entities.Organization.create(data),
+    mutationFn: (data) => client.entities.Organization.create(data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['organizations'] });
       toast({
@@ -29,7 +29,7 @@ export function useOrganizationMutations() {
   });
 
   const updateMutation = useMutation({
-    mutationFn: ({ id, data }) => base44.entities.Organization.update(id, data),
+    mutationFn: ({ id, data }) => client.entities.Organization.update(id, data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['organizations'] });
       toast({
@@ -48,7 +48,7 @@ export function useOrganizationMutations() {
 
   const deleteMutation = useMutation({
     mutationFn: async (organizationId) => {
-      const response = await base44.functions.invoke('deleteOrganizationWithCascade', {
+      const response = await client.functions.invoke('deleteOrganizationWithCascade', {
         organization_id: organizationId
       });
       

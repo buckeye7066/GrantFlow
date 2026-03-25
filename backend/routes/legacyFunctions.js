@@ -143,7 +143,7 @@ async function invokeOpenAiOptional(prompt) {
   }
 }
 
-// POST /api/crawlGrantsGov (legacy Base44 function endpoint)
+// POST /api/crawlGrantsGov (legacy function endpoint)
 router.post('/crawlGrantsGov', async (req, res) => {
   const user = requireUser(req, res)
   if (!user) return
@@ -195,7 +195,7 @@ router.post('/crawlGrantsGov', async (req, res) => {
   return res.json({ ok: true, crawl_log_id: logId })
 })
 
-// POST /api/crawlBenefitsGov (legacy Base44 function endpoint)
+// POST /api/crawlBenefitsGov (legacy function endpoint)
 router.post('/crawlBenefitsGov', async (req, res) => {
   const user = requireUser(req, res)
   if (!user) return
@@ -560,7 +560,7 @@ router.post('/deleteSourceWithCascade', async (req, res) => {
   }
 })
 
-// POST /api/analyzeGrant (legacy Base44 function endpoint)
+// POST /api/analyzeGrant (legacy function endpoint)
 // Used by Diagnostics + GrantDetail + NOFO Parser. Must exist in production.
 router.post('/analyzeGrant', async (req, res) => {
   const user = requireUser(req, res)

@@ -1,6 +1,6 @@
 
 import React, { useRef, useState } from "react";
-import { base44 } from "@/api/base44Client";
+import client from '@/api/client';
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { createPageUrl, formatAddress } from "@/utils";
@@ -36,7 +36,7 @@ export default function InvoiceView() {
     queryKey: ['invoice', invoiceId],
     queryFn: async () => {
       if (!invoiceId) return null;
-      return await base44.entities.Invoice.get(invoiceId);
+      return await client.entities.Invoice.get(invoiceId);
     },
     enabled: !!invoiceId
   });
@@ -45,7 +45,7 @@ export default function InvoiceView() {
     queryKey: ['organization', invoice?.organization_id],
     queryFn: async () => {
       if (!invoice?.organization_id) return null;
-      return await base44.entities.Organization.get(invoice.organization_id);
+      return await client.entities.Organization.get(invoice.organization_id);
     },
     enabled: !!invoice?.organization_id
   });
@@ -54,7 +54,7 @@ export default function InvoiceView() {
     queryKey: ['project', invoice?.project_id],
     queryFn: async () => {
       if (!invoice?.project_id) return null;
-      return await base44.entities.Project.get(invoice.project_id);
+      return await client.entities.Project.get(invoice.project_id);
     },
     enabled: !!invoice?.project_id
   });
@@ -63,14 +63,14 @@ export default function InvoiceView() {
     queryKey: ['invoice-lines', invoiceId],
     queryFn: async () => {
       if (!invoiceId) return [];
-      const allLines = await base44.entities.InvoiceLine.list();
+      const allLines = await client.entities.InvoiceLine.list();
       return allLines.filter(l => l.invoice_id === invoiceId).sort((a, b) => (a.line_order || 0) - (b.line_order || 0));
     },
     enabled: !!invoiceId
   });
 
   const deleteMutation = useMutation({
-    mutationFn: (invoiceIdToDelete) => base44.entities.Invoice.delete(invoiceIdToDelete),
+    mutationFn: (invoiceIdToDelete) => client.entities.Invoice.delete(invoiceIdToDelete),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['invoices'] });
       toast({
