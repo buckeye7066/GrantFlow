@@ -374,6 +374,17 @@ router.post('/run-multiple', ensureAuth, async (req, res) => {
   let totalFound = 0
   let totalInserted = 0
 
+    // Load profile data for relevance filtering
+    let profileData = null
+    try {
+      const ctx = await loadProfileContext(db, profile_id)
+      if (ctx?.profile) {
+        profileData = extractProfileData(ctx)
+      }
+    } catch (e) {
+      // continue without profile-based filtering
+    }
+
   try {
     const startAt = Date.now()
 
@@ -391,6 +402,7 @@ router.post('/run-multiple', ensureAuth, async (req, res) => {
 
         const mapped = result.results.map(mapResultToFrontendShape)
         const filtered = mapped
+        .filter((opp) => { const rel = applyRelevanceFilter(opp, profileData); return rel.pass; })
           .filter((opp) => typeof opp.match_score === 'number' && opp.match_score >= Number(min_match_score))
           .sort((a, b) => (b.match_score ?? 0) - (a.match_score ?? 0))
           .slice(0, 50)
@@ -703,6 +715,7 @@ router.post('/run-smart', ensureAuth, standardRateLimiter, async (req, res) => {
       try {
         const ctx = await loadProfileContext(db, profile_id)
         profileForEngines = ctx?.profile ?? null
+      var smartProfileData = ctx ? extractProfileData(ctx) : null
       } catch {
         // continue without profile context
       }
@@ -772,6 +785,7 @@ router.post('/run-smart', ensureAuth, standardRateLimiter, async (req, res) => {
     }
 
     const filtered = allOpportunities
+      .filter((opp) => { const rel = applyRelevanceFilter(opp, smartProfileData); return rel.pass; })
       .filter((opp) => typeof opp.match_score !== 'number' || opp.match_score >= minScore || opp.is_directory_resource)
       .sort((a, b) => (b.match_score ?? 0) - (a.match_score ?? 0))
       .slice(0, 100)
