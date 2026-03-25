@@ -1,4 +1,4 @@
-import { base44 } from "@/api/base44Client";
+import client from '@/api/client';
 import { createLogger } from "@/utils/logger";
 
 /**
@@ -61,7 +61,7 @@ export async function runComprehensiveMatch(selectedOrg, searchFilters) {
 
   const stateList = extractStateList(selectedOrg)
   
-  const response = await base44.functions.invoke('comprehensiveMatch', {
+  const response = await client.functions.invoke('comprehensiveMatch', {
     profile_json: selectedOrg,
     states: stateList,
     page: 1,
@@ -121,7 +121,7 @@ export async function runECFServiceSearch(selectedOrgId, queryClient) {
   log.debug('starting ECF service discovery')
   
   // First, invoke the ECF discovery function
-  const discoverResponse = await base44.functions.invoke('discoverECFServices', {
+  const discoverResponse = await client.functions.invoke('discoverECFServices', {
     profile_id: selectedOrgId
   });
 
@@ -133,7 +133,7 @@ export async function runECFServiceSearch(selectedOrgId, queryClient) {
   queryClient.invalidateQueries({ queryKey: ['fundingOpportunities'] });
   
   // Search for newly added services
-  const searchResponse = await base44.functions.invoke('searchOpportunities', {
+  const searchResponse = await client.functions.invoke('searchOpportunities', {
     profile_id: selectedOrgId,
     filters: {}
   });
@@ -174,7 +174,7 @@ export async function runStandardSearch(template, selectedOrgId, searchFilters) 
     searchParams.enhanced_prompt = template.prompt;
   }
 
-  const response = await base44.functions.invoke('searchOpportunities', searchParams);
+  const response = await client.functions.invoke('searchOpportunities', searchParams);
 
   // Empty results are a valid success response, not an error
   // Only throw if there's an actual API/network failure (success: false with error)

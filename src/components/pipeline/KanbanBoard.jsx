@@ -5,7 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import GrantCard from "./GrantCard";
 import { Award, Eye, FileEdit, Layers, Send, Archive, XCircle, HardHat, FileBarChart, CheckCircle } from 'lucide-react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { base44 } from '@/api/base44Client';
+import client from '@/api/client';
 import { useToast } from "@/components/ui/use-toast";
 
 const STATUSES = [
@@ -113,7 +113,7 @@ const STATUSES = [
                                                                                                                                                           APPLICANT: ${JSON.stringify(organization)}
                                                                                                                                                           OPPORTUNITY: ${JSON.stringify(grant)}`;
 
-                                                                                                                                                            const analysisResult = await base44.integrations.Core.InvokeLLM({
+                                                                                                                                                            const analysisResult = await client.integrations.Core.InvokeLLM({
                                                                                                                                                                     prompt: analysisPrompt,
                                                                                                                                                                         response_json_schema: {
                                                                                                                                                                                   type: "object",
@@ -127,7 +127,7 @@ const STATUSES = [
                                                                                                                                                                                     }
                                                                                                                                                                                 });
 
-                                                                                                                                                                                  await base44.entities.AiArtifact.create({
+                                                                                                                                                                                  await client.entities.AiArtifact.create({
                                                                                                                                                                                         grant_id: grant.id,
                                                                                                                                                                                             kind: 'analysis',
                                                                                                                                                                                                 content: JSON.stringify(analysisResult)
@@ -136,7 +136,7 @@ const STATUSES = [
                                                                                                                                                                                                     const urlToParse = grant.nofo_url || grant.url;
                                                                                                                                                                                                       if (urlToParse) {
                                                                                                                                                                                                             const parsingPrompt = `Extract all proposal sections and required attachments from this URL: ${urlToParse}. Return a JSON object with 'proposal_sections' (array of strings) and 'required_attachments' (array of strings).`;
-                                                                                                                                                                                                                const extracted = await base44.integrations.Core.InvokeLLM({
+                                                                                                                                                                                                                const extracted = await client.integrations.Core.InvokeLLM({
                                                                                                                                                                                                                           prompt: parsingPrompt,
                                                                                                                                                                                                                                 add_context_from_internet: true,
                                                                                                                                                                                                                                       response_json_schema: {
@@ -153,7 +153,7 @@ const STATUSES = [
                                                                                                                                                                                                                                                                     ...(extracted.required_attachments || []).map(title => ({ grant_id: grant.id, title, type: 'doc' }))
                                                                                                                                                                                                                                                     ];
                                                                                                                                                                                                                                                         if (checklistItems.length > 0) {
-                                                                                                                                                                                                                                                                  await base44.entities.ChecklistItem.bulkCreate(checklistItems);
+                                                                                                                                                                                                                                                                  await client.entities.ChecklistItem.bulkCreate(checklistItems);
                                                                                                                                                                                                                                                         }
                                                                                                                                                                                                                                                     }
                                                                                                                                                                                                                                                     };
@@ -165,7 +165,7 @@ const STATUSES = [
 
                                                                                                                                                                                                                                                                 const { data: checklistItems = [] } = useQuery({
                                                                                                                                                                                                                                                                         queryKey: ['checklistItems'],
-                                                                                                                                                                                                                                                                            queryFn: () => base44.entities.ChecklistItem.list()
+                                                                                                                                                                                                                                                                            queryFn: () => client.entities.ChecklistItem.list()
                                                                                                                                                                                                                                                                               });
 
                                                                                                                                                                                                                                                                                 const onDragEnd = async (result) => {

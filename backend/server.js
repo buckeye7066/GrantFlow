@@ -1613,11 +1613,11 @@ app.use('/api/preferences', preferencesRouter);
 // Incognito module endpoints (gated by user custom preferences)
 app.use('/api/incognito', incognitoRouter);
 app.use('/api/version', versionRouter);
-// Base44 function-style endpoints (used by NOFO Parser + Diagnostics)
+// Function-style endpoints (used by NOFO Parser + Diagnostics)
 app.use('/api', lazyRouter('./routes/nofo.js'));
-// Base44 legacy function-style endpoints (legacy UI flows: DataSources/SourceDirectory)
+// Legacy function-style endpoints (legacy UI flows: DataSources/SourceDirectory)
 app.use('/api', lazyRouter('./routes/legacyFunctions.js'));
-// Base44 legacy entity endpoints
+// Legacy entity endpoints
 app.use('/api/crawl-logs', crawlLogsRouter);
 // Geo Crawl monitor + start endpoints (admin-only)
 app.use('/api/geo-crawl', lazyRouter('./routes/geoCrawl.js', (mod) => mod.default({ uploadDir: uploadsDir, getOpenAI: null })));

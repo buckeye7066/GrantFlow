@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { base44 } from '@/api/base44Client';
+import client from '@/api/client';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
@@ -26,12 +26,12 @@ export default function NewProject() {
 
   const { data: organizations = [], isLoading: isLoadingOrgs } = useQuery({
     queryKey: ['organizations'],
-    queryFn: () => base44.entities.Organization.list(),
+    queryFn: () => client.entities.Organization.list(),
   });
   
   const { data: billingSettings } = useQuery({
       queryKey: ['billingAccount'],
-      queryFn: () => base44.entities.BillingAccount.list().then(res => res[0]),
+      queryFn: () => client.entities.BillingAccount.list().then(res => res[0]),
   });
 
   React.useEffect(() => {
@@ -41,7 +41,7 @@ export default function NewProject() {
   }, [billingSettings]);
 
   const mutation = useMutation({
-    mutationFn: (newProject) => base44.entities.Project.create(newProject),
+    mutationFn: (newProject) => client.entities.Project.create(newProject),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['projects'] });
       navigate(createPageUrl('Billing'));

@@ -1,6 +1,6 @@
 
 import React, { useState } from 'react';
-import { base44 } from '@/api/base44Client';
+import client from '@/api/client';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { X, Loader2, Sparkles } from 'lucide-react';
@@ -46,7 +46,7 @@ INSTRUCTIONS FOR YOUR ANALYSIS:
 Return a JSON object with the following structure:
 { "is_correct": boolean, "correction": "string or null", "explanation": "string explaining the change, or null" }`;
       
-      const response = await base44.integrations.Core.InvokeLLM({
+      const response = await client.integrations.Core.InvokeLLM({
         prompt,
         response_json_schema: {
           type: 'object',

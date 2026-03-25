@@ -5,7 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Building2, MapPin, Edit, TrendingUp, GraduationCap, Heart, User, Award, Zap, Trash2, Receipt } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
-import { base44 } from "@/api/base44Client";
+import client from '@/api/client';
 
 export default function OrganizationCard({ organization, grantCount, isSelected, onClick, onEdit, onAutomatedSearch, onDelete, onInvoice }) {
   const [imgError, setImgError] = React.useState(false);
@@ -21,7 +21,7 @@ export default function OrganizationCard({ organization, grantCount, isSelected,
 
   const { data: taxonomyItems = [] } = useQuery({
       queryKey: ['taxonomy'],
-      queryFn: () => base44.entities.Taxonomy.list(),
+      queryFn: () => client.entities.Taxonomy.list(),
       enabled: isIndividual && !!organization.assistance_categories,
   });
 

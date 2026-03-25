@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { base44 } from '@/api/base44Client';
+import client from '@/api/client';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
@@ -104,7 +104,7 @@ const AIAddPartnerDialog = ({ open, onOpenChange, onFound }) => {
     const { toast } = useToast();
 
     const aiAssistMutation = useMutation({
-        mutationFn: (name) => base44.integrations.Core.InvokeLLM({
+        mutationFn: (name) => client.integrations.Core.InvokeLLM({
             prompt: `You are a research assistant. Find information about the organization named '${name}'. Return its official website URL, a general public-facing contact email, and classify its organization type from this list: university, utility, foundation, municipality, other.`,
             add_context_from_internet: true,
             response_json_schema: {
@@ -203,19 +203,19 @@ export default function SourceRegistry() {
 
   const { data: partners = [], isLoading: isLoadingPartners } = useQuery({
     queryKey: ['partnerSources'],
-    queryFn: () => base44.entities.PartnerSource.list(),
+    queryFn: () => client.entities.PartnerSource.list(),
   });
   
   const { data: crawlLogs = [], isLoading: isLoadingLogs } = useQuery({
     queryKey: ['crawlLogs'],
-    queryFn: () => base44.entities.CrawlLog.list('-created_date', 50),
+    queryFn: () => client.entities.CrawlLog.list('-created_date', 50),
     refetchInterval: 30000, // Refetch every 30 seconds
   });
 
   const mutation = useMutation({
     mutationFn: (partnerData) => {
       const { id, ...data } = partnerData;
-      return id ? base44.entities.PartnerSource.update(id, data) : base44.entities.PartnerSource.create(data);
+      return id ? client.entities.PartnerSource.update(id, data) : client.entities.PartnerSource.create(data);
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['partnerSources'] });
@@ -236,7 +236,7 @@ export default function SourceRegistry() {
   });
 
   const deletePartnerMutation = useMutation({
-    mutationFn: (id) => base44.entities.PartnerSource.delete(id),
+    mutationFn: (id) => client.entities.PartnerSource.delete(id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['partnerSources'] });
       toast({
@@ -254,7 +254,7 @@ export default function SourceRegistry() {
   });
 
   const runFeedMutation = useMutation({
-    mutationFn: (partnerId) => base44.functions.invoke('runPartnerFeed', { partner_id: partnerId }),
+    mutationFn: (partnerId) => client.functions.invoke('runPartnerFeed', { partner_id: partnerId }),
     onSuccess: (data, partnerId) => {
         const partner = partners.find(p => p.id === partnerId);
         toast({
@@ -277,7 +277,7 @@ export default function SourceRegistry() {
   const aiGetSuggestionsMutation = useMutation({
     mutationFn: () => {
         const existingPartnerDetails = partners.map(p => `Name: ${p.name}, Type: ${p.org_type}, Status: ${p.status}`).join('; ');
-        return base44.integrations.Core.InvokeLLM({
+        return client.integrations.Core.InvokeLLM({
             prompt: `Based on this list of existing funding sources: [${existingPartnerDetails}]. Suggest 5 new, similar organizations (foundations, corporate CSR programs, government bodies) that could also be good funding sources. For each suggestion, provide its official website URL, a general public-facing contact email, and classify its organization type from this list: university, utility, foundation, municipality, other. Do not include any from the existing list.`,
             add_context_from_internet: true,
             response_json_schema: {
@@ -319,7 +319,7 @@ export default function SourceRegistry() {
       const results = [];
       for (const suggestion of suggestions) {
         try {
-          const newPartner = await base44.entities.PartnerSource.create({
+          const newPartner = await client.entities.PartnerSource.create({
             name: suggestion.name,
             org_type: suggestion.org_type || 'other',
             api_base_url: suggestion.api_base_url || '',

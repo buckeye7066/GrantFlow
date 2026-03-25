@@ -39,7 +39,7 @@ Command-line evidence (captured 2026-01-17):
 
 - Vercel logs (production) for the `www.axiombiolabs.org` domain + rewrites config.
 - Railway logs around the same timestamps (to confirm whether requests ever reached the backend).
-- (Optional) Base44 **reference** export verification failures (if any) to correlate missing config vs missing code.
+- (Optional) Deployment logs to correlate missing config vs missing code.
 
 ### Log access requests (copy/paste)
 

@@ -88,7 +88,7 @@ function toEditableString(value) {
 }
 
 function toEditableStringForField(fieldKey, value) {
-  // Special-case: address is often stored as an object (Base44 export),
+  // Special-case: address is often stored as an object,
   // but inline editing expects a human-friendly string.
   if (fieldKey === "address") {
     if (looksLikeAddressObject(value)) {
@@ -835,7 +835,7 @@ export default function ProfileOverview({
             <div>
               <p className="font-semibold">Comprehensive application parity in progress</p>
               <p className="text-sm mt-1 text-blue-800">
-                Each section below mirrors the Base44 schema. Edit manually or use AI assistance in the section editor to keep
+                Each section below maps to the application schema. Edit manually or use AI assistance in the section editor to keep
                 data synced between local and production deployments.
               </p>
             </div>

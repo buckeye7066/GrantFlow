@@ -38,7 +38,7 @@ import {
   SidebarProvider,
   SidebarTrigger,
 } from "@/components/ui/sidebar";
-import { base44 } from "@/api/base44Client";
+import client from '@/api/client';
 import { useQuery } from "@tanstack/react-query";
 import AutoTimeTracker from "@/components/billing/AutoTimeTracker";
 
@@ -153,12 +153,12 @@ export default function Layout({ children, currentPageName }) {
 
   const { data: user } = useQuery({
     queryKey: ['currentUser'],
-    queryFn: () => base44.auth.me(),
+    queryFn: () => client.auth.me(),
     retry: false,
   });
 
   const handleLogout = () => {
-    base44.auth.logout();
+    client.auth.logout();
   };
 
   return (

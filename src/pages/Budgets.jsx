@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { base44 } from "@/api/base44Client";
+import client from '@/api/client';
 import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle, CardFooter } from "@/components/ui/card";
 import { DollarSign, FileText, TrendingUp, TrendingDown, Banknote, Building2, Loader2 } from "lucide-react";
@@ -30,22 +30,22 @@ export default function Budgets() {
 
   const { data: organizations = [], isLoading: isLoadingOrgs } = useQuery({
     queryKey: ['organizations'],
-    queryFn: () => base44.entities.Organization.list('name'),
+    queryFn: () => client.entities.Organization.list('name'),
   });
 
   const { data: grants = [], isLoading: isLoadingGrants } = useQuery({
     queryKey: ['grants'],
-    queryFn: () => base44.entities.Grant.list(),
+    queryFn: () => client.entities.Grant.list(),
   });
 
   const { data: budgetItems = [], isLoading: isLoadingBudgets } = useQuery({
     queryKey: ['budgets'],
-    queryFn: () => base44.entities.Budget.list(),
+    queryFn: () => client.entities.Budget.list(),
   });
 
   const { data: expenses = [], isLoading: isLoadingExpenses } = useQuery({
     queryKey: ['expenses'],
-    queryFn: () => base44.entities.Expense.list(),
+    queryFn: () => client.entities.Expense.list(),
   });
 
   // Auto-select first organization if none selected

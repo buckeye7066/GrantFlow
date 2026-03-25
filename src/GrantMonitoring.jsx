@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { base44 } from '@/api/base44Client';
+import client from '@/api/client';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -46,26 +46,26 @@ export default function GrantMonitoring() {
 
   const { data: organizations = [], isLoading: isLoadingOrgs } = useQuery({
     queryKey: ['organizations'],
-    queryFn: () => base44.entities.Organization.list('name'),
+    queryFn: () => client.entities.Organization.list('name'),
   });
 
   const { data: grants = [], isLoading: isLoadingGrants } = useQuery({
     queryKey: ['grants'],
-    queryFn: () => base44.entities.Grant.list('-updated_date'),
+    queryFn: () => client.entities.Grant.list('-updated_date'),
   });
 
   const { data: allAlertConfigs = [], isLoading: isLoadingAlerts } = useQuery({
     queryKey: ['grantAlerts'],
-    queryFn: () => base44.entities.GrantAlert.list(),
+    queryFn: () => client.entities.GrantAlert.list(),
   });
 
   const { data: allMonitoringLogs = [], isLoading: isLoadingLogs } = useQuery({
     queryKey: ['monitoringLogs'],
-    queryFn: () => base44.entities.GrantMonitoringLog.list('-created_date', 100),
+    queryFn: () => client.entities.GrantMonitoringLog.list('-created_date', 100),
   });
 
   const checkAlertsMutation = useMutation({
-    mutationFn: () => base44.functions.invoke('checkGrantAlerts', {}),
+    mutationFn: () => client.functions.invoke('checkGrantAlerts', {}),
     onSuccess: (response) => {
       queryClient.invalidateQueries({ queryKey: ['monitoringLogs'] });
       queryClient.invalidateQueries({ queryKey: ['grantAlerts'] });
@@ -86,7 +86,7 @@ export default function GrantMonitoring() {
   });
 
   const acknowledgeEventMutation = useMutation({
-    mutationFn: (eventId) => base44.entities.GrantMonitoringLog.update(eventId, {
+    mutationFn: (eventId) => client.entities.GrantMonitoringLog.update(eventId, {
       acknowledged: true,
       acknowledged_at: new Date().toISOString()
     }),

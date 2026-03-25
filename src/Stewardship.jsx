@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect } from "react";
-import { base44 } from "@/api/base44Client";
+import client from '@/api/client';
 import { useQuery } from "@tanstack/react-query";
 import { Loader2, ShieldCheck, Inbox, DollarSign, CalendarCheck, BarChart3 } from "lucide-react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -32,11 +32,11 @@ export default function Stewardship() {
         queryKey: ['stewardshipData'],
         queryFn: async () => {
             const [grants, milestones, reports, budgets, expenses] = await Promise.all([
-                base44.entities.Grant.filter({ status: 'awarded' }),
-                base44.entities.Milestone.list(),
-                base44.entities.ComplianceReport.list(),
-                base44.entities.Budget.list(),
-                base44.entities.Expense.list(),
+                client.entities.Grant.filter({ status: 'awarded' }),
+                client.entities.Milestone.list(),
+                client.entities.ComplianceReport.list(),
+                client.entities.Budget.list(),
+                client.entities.Expense.list(),
             ]);
             return { grants, milestones, reports, budgets, expenses };
         }

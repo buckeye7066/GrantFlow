@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect } from "react";
-import { base44 } from "@/api/base44Client";
+import client from '@/api/client';
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -27,13 +27,13 @@ export default function TimeLogForm({ timeLog, onSuccess, onCancel }) {
 
   const { data: projects = [] } = useQuery({
     queryKey: ['projects'],
-    queryFn: () => base44.entities.Project.list(),
+    queryFn: () => client.entities.Project.list(),
   });
 
   // Fetch BillingSettings for default rate and rounding increment
   const { data: billingSettings } = useQuery({
     queryKey: ['billingSettings'],
-    queryFn: () => base44.entities.BillingSettings.list().then(res => res[0]),
+    queryFn: () => client.entities.BillingSettings.list().then(res => res[0]),
   });
 
   const selectedProject = projects.find(p => p.id === formData.project_id);
@@ -75,8 +75,8 @@ export default function TimeLogForm({ timeLog, onSuccess, onCancel }) {
   const mutation = useMutation({
     mutationFn: (data) => 
       timeLog 
-        ? base44.entities.TimeLog.update(timeLog.id, data)
-        : base44.entities.TimeLog.create(data),
+        ? client.entities.TimeLog.update(timeLog.id, data)
+        : client.entities.TimeLog.create(data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['timeLogs'] });
       onSuccess();

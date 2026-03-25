@@ -834,7 +834,7 @@ router.post('/reminders/plan', enforceTierCapability(TIER_CAPABILITIES.DOCUMENT_
   }
 });
 
-// General LLM invocation endpoint (Base44 SDK compatibility)
+// General LLM invocation endpoint
 router.post('/invoke', enforceTierCapability(TIER_CAPABILITIES.DOCUMENT_AI), async (req, res) => {
   try {
     const {

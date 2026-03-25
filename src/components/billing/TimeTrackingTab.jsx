@@ -1,6 +1,6 @@
 import React from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { base44 } from '@/api/base44Client';
+import client from '@/api/client';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Clock, Loader2 } from 'lucide-react';
@@ -11,13 +11,13 @@ export default function TimeTrackingTab({ grantId, organizationId }) {
   
   const { data: timeLogs = [], isLoading: isLoadingLogs } = useQuery({
       queryKey: ['timeEntries', organizationId],
-      queryFn: () => base44.entities.TimeEntry.filter({ organization_id: organizationId }),
+      queryFn: () => client.entities.TimeEntry.filter({ organization_id: organizationId }),
       enabled: !!organizationId,
   });
 
   const { data: grant, isLoading: isLoadingGrant } = useQuery({
       queryKey: ['grant', grantId],
-      queryFn: () => base44.entities.Grant.get(grantId),
+      queryFn: () => client.entities.Grant.get(grantId),
       enabled: !!grantId,
   });
 

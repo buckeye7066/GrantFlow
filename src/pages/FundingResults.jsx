@@ -1,8 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { base44 } from '@/api/base44Client';
-import { apiFetch } from '@/api/client';
+import client, { apiFetch } from '@/api/client';
 import { useFundingResultsStore } from '@/stores/fundingResultsStore';
 import { useAuthStore } from '@/stores/authStore';
 import { createPageUrl } from '@/utils';
@@ -89,7 +88,7 @@ export default function FundingResults() {
 
   const tokenAvailable = useMemo(() => {
     try {
-      return Boolean(accessToken || base44.getToken?.());
+      return Boolean(accessToken || client.getToken?.());
     } catch {
       return Boolean(accessToken);
     }
@@ -141,7 +140,7 @@ export default function FundingResults() {
     const orgId = organizationId ?? null;
     if (orgId && opportunity.url) {
       try {
-        const existingGrants = await base44.entities.Grant.filter({
+        const existingGrants = await client.entities.Grant.filter({
           organization_id: orgId,
           url: opportunity.url,
         });
