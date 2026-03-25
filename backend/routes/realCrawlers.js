@@ -377,6 +377,15 @@ router.post('/run-multiple', ensureAuth, async (req, res) => {
   try {
     const startAt = Date.now()
 
+    // Load profile context for relevance filtering
+    let profileData = null
+    try {
+      const ctx = await loadProfileContext(db, profile_id)
+      profileData = extractProfileData(ctx)
+    } catch (e) {
+      // continue without profile-based filtering
+    }
+
     for (const crawlerType of crawler_types) {
       if (!CRAWLER_TYPES.includes(crawlerType)) {
         failed.push({ crawler: crawlerType, error: 'Invalid crawler type', status: 400 })
@@ -390,7 +399,11 @@ router.post('/run-multiple', ensureAuth, async (req, res) => {
         })
 
         const mapped = result.results.map(mapResultToFrontendShape)
-        const filtered = mapped
+        const relevanceChecked = profileData ? mapped.filter((opp) => {
+        const relevance = applyRelevanceFilter(opp, profileData)
+        return relevance.pass
+      }) : mapped
+      const filtered = relevanceChecked
           .filter((opp) => typeof opp.match_score === 'number' && opp.match_score >= Number(min_match_score))
           .sort((a, b) => (b.match_score ?? 0) - (a.match_score ?? 0))
           .slice(0, 50)
@@ -771,7 +784,19 @@ router.post('/run-smart', ensureAuth, standardRateLimiter, async (req, res) => {
       console.warn('[run-smart] State waiver crawl failed (continuing):', waiverErr?.message)
     }
 
-    const filtered = allOpportunities
+    // Apply relevance filtering to remove irrelevant results
+    let smartProfileData = null
+    try {
+      const smartCtx = await loadProfileContext(db, profile_id)
+      smartProfileData = extractProfileData(smartCtx)
+    } catch (e) {
+      // continue without relevance filtering
+    }
+    const relevanceChecked = smartProfileData ? allOpportunities.filter((opp) => {
+      const relevance = applyRelevanceFilter(opp, smartProfileData)
+      return relevance.pass
+    }) : allOpportunities
+    const filtered = relevanceChecked
       .filter((opp) => typeof opp.match_score !== 'number' || opp.match_score >= minScore || opp.is_directory_resource)
       .sort((a, b) => (b.match_score ?? 0) - (a.match_score ?? 0))
       .slice(0, 100)
