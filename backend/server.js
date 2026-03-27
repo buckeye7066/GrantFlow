@@ -30,6 +30,7 @@ import itemsRouter from './routes/items.js';
 import profilesRouter from './routes/profiles.js';
 import remindersRouter from './routes/reminders.js';
 import crawlersRouter from './routes/crawlers.js';
+import vehiclesRouter from './routes/vehicles.js';
 import realCrawlersRouter from './routes/realCrawlers.js';
 import matchingRouter from './routes/matching.js';
 import grantMonitoringRouter from './routes/grantMonitoring.js';
@@ -1609,6 +1610,7 @@ app.use('/api/matching', requestTimeout(PIPELINE_TIMEOUT), matchingRouter);
 app.use('/api/grant-monitoring', grantMonitoringRouter);
 app.use('/api/crawlers', responseCache(30_000), crawlersRouter);
 app.use('/api/real-crawlers', realCrawlersRouter);
+app.use('/api/vehicles', vehiclesRouter);
 app.use('/api/preferences', preferencesRouter);
 // Incognito module endpoints (gated by user custom preferences)
 app.use('/api/incognito', incognitoRouter);
