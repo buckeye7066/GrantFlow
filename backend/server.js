@@ -76,6 +76,7 @@ import { seedBaselineFromRepo } from './utils/seedBaselineFromRepo.js';
 import { assertFundingApiKeys, getFundingApiKeyPresence } from './src/config/apiKeys.js';
 import { ensureProfileEmailSchema } from './utils/accessControl.js';
 import { dispatchCrawlerJob } from './services/crawlerDispatcher.js';
+import { cleanupStaleCrawlers } from './services/crawlerConcurrencyGuard.js'
 import { findDuplicateProfileGroups, mergeProfiles } from './services/profileDedupeService.js'
 import { assertEnv, getJwtSecretOrThrow } from './config/env.js'
 import { resolveUploadsDir, ensureUploadsDirWritable, isLikelyPersistentPath } from './utils/uploadsDir.js'
@@ -2170,6 +2171,18 @@ if (process.env.NODE_ENV !== 'test') {
       }
     })();
 
+    // One-time cleanup on startup to recover orphaned crawler jobs from crashes/restarts.
+    ;(async () => {
+      try {
+        const cleaned = await cleanupStaleCrawlers(db)
+        if (cleaned > 0) {
+          console.log(`[startup] Cleaned ${cleaned} stale crawler job(s) from previous run`)
+        }
+      } catch (err) {
+        console.warn('[startup] Stale crawler cleanup failed:', err?.message)
+      }
+    })()
+
     // Background queue poller: pick up orphaned 'queued' jobs that were never dispatched.
     const QUEUE_POLL_INTERVAL_MS = Number.parseInt(process.env.QUEUE_POLL_INTERVAL_MS || '60000', 10)
     const queuePollEnabled = String(process.env.QUEUE_POLL_ENABLED ?? 'true').toLowerCase() !== 'false'
@@ -2177,6 +2190,13 @@ if (process.env.NODE_ENV !== 'test') {
     if (queuePollEnabled) {
       const queuePollHandle = setInterval(async () => {
         try {
+          // Clean up stale running jobs before attempting to dispatch
+          try {
+            await cleanupStaleCrawlers(db)
+          } catch (err) {
+            console.warn('[queue-poller] Stale crawler cleanup failed (ignored):', err?.message)
+          }
+
           const queued = await db.prepare(`
             SELECT id FROM crawler_jobs
             WHERE status = 'queued'
