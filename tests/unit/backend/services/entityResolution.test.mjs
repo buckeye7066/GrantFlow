@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { resolveEntityMatch } from '../../../../backend/services/entityResolution.js'
+import { resolveEntityMatch, normalizeAddress } from '../../../../backend/services/entityResolution.js'
 
 test('matches identical UEI with full confidence', () => {
   const existing = { entity_id: 1, uei: 'ABC123XYZ999' }
@@ -69,4 +69,11 @@ test('returns no match for unrelated entities', () => {
   const result = resolveEntityMatch(existing, incoming)
 
   assert.equal(result.matched, false)
+})
+
+test('normalizeAddress: St and Street canonicalize identically', () => {
+  const withAbbrev = normalizeAddress({ line1: '123 Main St', city: 'Columbus', state: 'OH', zip: '43004' })
+  const withFull = normalizeAddress({ line1: '123 Main Street', city: 'Columbus', state: 'OH', zip: '43004' })
+
+  assert.equal(withAbbrev, withFull)
 })
