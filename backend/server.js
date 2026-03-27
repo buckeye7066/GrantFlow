@@ -2171,6 +2171,29 @@ if (process.env.NODE_ENV !== 'test') {
       }
     })();
 
+    // Re-queue jobs that previously failed due to concurrency exhaustion on startup stampede.
+    // These are recoverable — reset them so the staggered drain below can pick them up.
+    ;(async () => {
+      try {
+        const r = await db.prepare(`
+            UPDATE crawler_jobs
+            SET status = 'queued',
+                error = NULL,
+                dispatch_attempts = 0,
+                next_dispatch_at = NULL,
+                completed_at = NULL
+            WHERE status = 'failed'
+              AND error = 'Crawler dispatch exhausted due to concurrency limits'
+          `).run()
+        const count = Number(r?.changes ?? r?.rowCount ?? 0)
+        if (count > 0) {
+          console.log(`[startup] Re-queued ${count} concurrency-exhausted job(s) for retry`)
+        }
+      } catch (err) {
+        console.error('[startup] Failed to re-queue exhausted jobs:', err?.message || err)
+      }
+    })();
+
     // One-time cleanup on startup to recover orphaned crawler jobs from crashes/restarts.
     ;(async () => {
       try {
@@ -2187,7 +2210,44 @@ if (process.env.NODE_ENV !== 'test') {
     const QUEUE_POLL_INTERVAL_MS = Number.parseInt(process.env.QUEUE_POLL_INTERVAL_MS || '60000', 10)
     const queuePollEnabled = String(process.env.QUEUE_POLL_ENABLED ?? 'true').toLowerCase() !== 'false'
 
+    // Gradually dispatch queued jobs on startup to avoid a stampede that exhausts concurrency.
+    async function drainQueuedJobsGradually(dbRef, uploadsDirRef) {
+      const STARTUP_DELAY_MS = Number.parseInt(process.env.QUEUE_STARTUP_DELAY_MS || '15000', 10)
+      const STAGGER_DELAY_MS = Number.parseInt(process.env.QUEUE_STAGGER_DELAY_MS || '3000', 10)
+      const INITIAL_BATCH = 2
+
+      await new Promise((r) => setTimeout(r, STARTUP_DELAY_MS))
+
+      let queued
+      try {
+        queued = await dbRef.prepare(`
+          SELECT id FROM crawler_jobs
+          WHERE status = 'queued'
+          ORDER BY created_at ASC
+          LIMIT ?
+        `).all(INITIAL_BATCH)
+      } catch (err) {
+        console.warn('[startup-drain] Failed to query queued jobs:', err?.message)
+        return
+      }
+
+      if (!Array.isArray(queued) || queued.length === 0) return
+
+      console.log(`[startup-drain] Dispatching ${queued.length} queued job(s) with ${STAGGER_DELAY_MS}ms stagger`)
+      for (let i = 0; i < queued.length; i++) {
+        if (i > 0) await new Promise((r) => setTimeout(r, STAGGER_DELAY_MS))
+        try {
+          dispatchCrawlerJob({ db: dbRef, jobId: queued[i].id, uploadDir: uploadsDirRef, getOpenAI: null }).catch(() => {})
+        } catch { /* ignore individual dispatch errors */ }
+      }
+    }
+
     if (queuePollEnabled) {
+      // Run a staggered startup drain before the regular poller begins.
+      drainQueuedJobsGradually(db, uploadsDir).catch((err) => {
+        console.warn('[startup-drain] Staggered drain failed:', err?.message)
+      })
+
       const queuePollHandle = setInterval(async () => {
         try {
           // Clean up stale running jobs before attempting to dispatch

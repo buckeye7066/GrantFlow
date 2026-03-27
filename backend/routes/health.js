@@ -1,11 +1,16 @@
 import express from 'express'
 import fs from 'fs'
+import path from 'path'
+import { fileURLToPath } from 'url'
 import { getSafeHealthSummary } from '../services/diagnosticsService.js'
 import { ensureUploadsDirWritable, isLikelyPersistentPath } from '../utils/uploadsDir.js'
 import { getDataReadiness, getSystemAlerts } from '../services/dataReadinessService.js'
 import { getPipelineHealth } from '../middleware/pipelineMonitor.js'
 
 const router = express.Router()
+
+const __filename = fileURLToPath(import.meta.url)
+const __dirname = path.dirname(__filename)
 
 function getBuildInfo() {
   const commit =
@@ -15,7 +20,15 @@ function getBuildInfo() {
     process.env.VERCEL_GIT_COMMIT_SHA ||
     null
 
+  let pkgVersion = null
+  try {
+    const pkgPath = path.resolve(__dirname, '../../package.json')
+    const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'))
+    pkgVersion = pkg.version || null
+  } catch { /* ignore */ }
+
   return {
+    version: pkgVersion,
     commit_sha: commit ? String(commit) : null,
     node_env: process.env.NODE_ENV ? String(process.env.NODE_ENV) : null,
     runtime: process.env.RAILWAY_ENVIRONMENT ? 'railway' : process.env.VERCEL ? 'vercel' : null,
