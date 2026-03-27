@@ -285,34 +285,76 @@ export function dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }) {
     const startedCount = Number(startRes?.changes ?? startRes?.rowCount ?? 0)
     if (startedCount === 0) {
       // Another job is already running for this profile, or we hit the global concurrency cap.
-      // Apply bounded backoff and eventually dead-letter to prevent runaway retries.
+      // Apply bounded backoff and eventually re-queue with extended delay to prevent permanent loss.
       const attempts = Number(job.dispatch_attempts ?? 0) + 1
       const maxAttempts = getDispatchMaxAttempts()
 
       if (attempts > maxAttempts) {
-        const deadLetter = {
-          reason: 'dispatch_exhausted',
-          attempts,
-          max_attempts: maxAttempts,
-          profile_id: profileId,
-          max_global_concurrency: maxGlobalConcurrency,
-          last_attempt_at: new Date().toISOString(),
+        // Instead of permanently dead-lettering, re-queue with a longer backoff.
+        // Track re-queue cycles to enforce a hard cap and prevent infinite loops.
+        const existingMeta = (() => {
+          try { return JSON.parse(job.result_meta || '{}') } catch { return {} }
+        })()
+        const requeueCycles = Number(existingMeta?.requeue_cycles ?? 0)
+        const MAX_REQUEUE_CYCLES = 3
+
+        if (requeueCycles >= MAX_REQUEUE_CYCLES) {
+          // Hard cap reached — permanently dead-letter the job.
+          const deadLetter = {
+            reason: 'dispatch_exhausted',
+            attempts,
+            max_attempts: maxAttempts,
+            requeue_cycles: requeueCycles,
+            profile_id: profileId,
+            max_global_concurrency: maxGlobalConcurrency,
+            last_attempt_at: new Date().toISOString(),
+          }
+
+          await db.prepare(
+            `
+              UPDATE crawler_jobs
+              SET status = 'failed',
+                  completed_at = CURRENT_TIMESTAMP,
+                  error = ?,
+                  result_meta = COALESCE(?, result_meta)
+              WHERE id = ?
+            `,
+          ).run(
+            'Crawler dispatch exhausted due to concurrency limits',
+            JSON.stringify({ dead_letter: deadLetter }),
+            jobId,
+          )
+          return
         }
 
-        await db.prepare(
-          `
-            UPDATE crawler_jobs
-            SET status = 'failed',
-                completed_at = CURRENT_TIMESTAMP,
-                error = ?,
-                result_meta = COALESCE(?, result_meta)
-            WHERE id = ?
-          `,
-        ).run(
-          'Crawler dispatch exhausted due to concurrency limits',
-          JSON.stringify({ dead_letter: deadLetter }),
-          jobId,
-        )
+        // Re-queue with an extended backoff (5 minutes) and reset dispatch_attempts.
+        const requeueDelayMs = 5 * 60 * 1000
+        const nextAtIso = new Date(Date.now() + requeueDelayMs).toISOString()
+        const updatedMeta = JSON.stringify({ ...existingMeta, requeue_cycles: requeueCycles + 1 })
+
+        console.warn('[crawlerDispatcher] Dispatch attempts exhausted, re-queuing with extended backoff', {
+          jobId, attempts, maxAttempts, requeueCycle: requeueCycles + 1, nextRetryAt: nextAtIso,
+        })
+
+        try {
+          await db.prepare(
+            `
+              UPDATE crawler_jobs
+              SET dispatch_attempts = 0,
+                  next_dispatch_at = ?,
+                  error = NULL,
+                  result_meta = COALESCE(?, result_meta)
+              WHERE id = ?
+                AND status = 'queued'
+            `,
+          ).run(nextAtIso, updatedMeta, jobId)
+        } catch (error) {
+          console.warn('[crawlerDispatcher] Failed to persist re-queue metadata', error)
+        }
+
+        setTimeout(() => {
+          dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }).catch(() => {})
+        }, requeueDelayMs)
         return
       }
 

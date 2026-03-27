@@ -15,7 +15,18 @@ let cachedVersion = null
 function getVersionInfo() {
   if (cachedVersion) return cachedVersion
 
+  // Read version from package.json
+  let pkgVersion = 'unknown'
+  try {
+    const pkgPath = path.resolve(__dirname, '../../package.json')
+    const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'))
+    pkgVersion = pkg.version || 'unknown'
+  } catch {
+    // fallback to unknown
+  }
+
   const version = {
+    version: pkgVersion,
     commit: process.env.RAILWAY_GIT_COMMIT_SHA || process.env.GIT_COMMIT_SHA || 'unknown',
     commitShort: 'unknown',
     branch: process.env.RAILWAY_GIT_BRANCH || process.env.GIT_BRANCH || 'unknown',
