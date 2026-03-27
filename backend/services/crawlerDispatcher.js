@@ -15,7 +15,6 @@ import { prepareContextForSnapshot, restoreContextFromSnapshot } from './snapsho
 import { processProfileEnrichmentJob } from './profileEnrichment.js'
 import { processNationalJob } from './nationalJobRouter.js'
 import { logFailedJob, determineSeverity } from './deadLetterQueue.js'
-import { acquireCrawlerLock } from './crawlerConcurrencyGuard.js'
 import { runCrawler as runCuratedCrawler } from './crawlers/crawlerManager.js'
 
 const __filename = fileURLToPath(import.meta.url)
@@ -126,11 +125,14 @@ function clampInt(value, { min, max, fallback }) {
 }
 
 function getMaxGlobalConcurrency() {
-  return clampInt(process.env.CRAWLER_MAX_CONCURRENCY, { min: 1, max: 50, fallback: 6 })
+  // Prefer MAX_CONCURRENT_CRAWLERS (same as crawlerConcurrencyGuard.js) for consistency,
+  // fall back to CRAWLER_MAX_CONCURRENCY for backward compat.
+  const envValue = process.env.MAX_CONCURRENT_CRAWLERS || process.env.CRAWLER_MAX_CONCURRENCY
+  return clampInt(envValue, { min: 1, max: 50, fallback: 10 })
 }
 
 function getDispatchMaxAttempts() {
-  return clampInt(process.env.CRAWLER_DISPATCH_MAX_ATTEMPTS, { min: 1, max: 200, fallback: 30 })
+  return clampInt(process.env.CRAWLER_DISPATCH_MAX_ATTEMPTS, { min: 1, max: 200, fallback: 60 })
 }
 
 function computeBackoffMs(attempt) {
@@ -202,45 +204,6 @@ export function dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }) {
       return
     }
     
-    // Check concurrency limits before starting job
-    if (job.profile_id) {
-      const lockResult = await acquireCrawlerLock(db, job.profile_id, job.type, { jobId })
-      if (!lockResult.allowed) {
-        console.warn('[crawlerDispatcher] Concurrency limit reached', {
-          jobId,
-          profileId: job.profile_id,
-          reason: lockResult.reason,
-          existingJobId: lockResult.existingJobId ?? null,
-          runningCount: lockResult.runningCount ?? null,
-          limit: lockResult.limit ?? null,
-        })
-
-        // IMPORTANT: This is expected behavior, not a "failure".
-        // Do NOT mark the job failed (it pollutes diagnostics and blocks queues).
-        // Instead keep it queued and retry shortly.
-        try {
-          await db
-            .prepare(
-              `
-                UPDATE crawler_jobs
-                SET error = NULL
-                WHERE id = ?
-                  AND status = 'queued'
-              `,
-            )
-            .run(jobId)
-        } catch {
-          // ignore best-effort cleanup
-        }
-
-        setTimeout(() => {
-          dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }).catch(() => {})
-        }, 12_000)
-
-        return
-      }
-    }
-
     // If a previous dispatcher pass scheduled this job in the future, respect it.
     if (job.next_dispatch_at) {
       const nextAt = new Date(job.next_dispatch_at)
