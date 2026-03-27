@@ -209,7 +209,6 @@ export function normalizeAddress(address = {}) {
   const line1Raw = address.line1 || address.address1 || address.street || ''
   // Apply street-suffix canonicalization so "123 Main St" === "123 Main Street"
   const line1 = normalizeStreetLine(line1Raw)
-
   const city = String(address.city || '').toLowerCase()
   const state = normalizeJurisdiction(address.state || address.region || '')
   const zip = String(address.zip || address.postal_code || address.postalCode || '')
