@@ -19,10 +19,11 @@ const MAX_GLOBAL_CONCURRENT_CRAWLERS = parseInt(process.env.MAX_CONCURRENT_CRAWL
  * This prevents permanent per-profile locks.
  *
  * Defaults:
- * - stale threshold: 24h (matches product expectation: "running > 24 hours" is stale)
+ * - stale threshold: 2h (2× the 30-min job timeout configured by CRAWLER_JOB_TIMEOUT_MS in crawlerDispatcher.js;
+ *   a job running this long is certainly orphaned)
  * - cleanup interval: 5 minutes (best-effort; throttled per process)
  */
-const STALE_RUNNING_MS = parseInt(process.env.CRAWLER_STALE_RUNNING_MS || String(24 * 60 * 60 * 1000), 10)
+const STALE_RUNNING_MS = parseInt(process.env.CRAWLER_STALE_RUNNING_MS || String(2 * 60 * 60 * 1000), 10)
 const STALE_CLEANUP_INTERVAL_MS = parseInt(process.env.CRAWLER_STALE_CLEANUP_INTERVAL_MS || String(5 * 60 * 1000), 10)
 let lastStaleCleanupAtMs = 0
 
