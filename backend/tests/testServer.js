@@ -47,6 +47,7 @@ export function resetDb(db) {
     "DELETE FROM budgets",
     "DELETE FROM grants",
     "DELETE FROM funding_opportunities",
+    "DELETE FROM vehicle_opportunities",
     "DELETE FROM form_schemas",
     "DELETE FROM funders",
     "DELETE FROM crawler_jobs",
