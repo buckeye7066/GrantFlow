@@ -28,6 +28,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --dry-run)  DRY_RUN=true; shift ;;
     --force)    FORCE=true; DRY_RUN=false; shift ;;
+    --execute)  FORCE=true; DRY_RUN=false; shift ;;
     --remote)   REMOTE="$2"; shift 2 ;;
     --days)     STALE_DAYS="$2"; shift 2 ;;
     -h|--help)

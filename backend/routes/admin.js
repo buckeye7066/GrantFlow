@@ -150,13 +150,17 @@ async function withTimeout(promise, ms, label) {
 // This is now just an alias for consistency with existing code
 const ensureAdminRequest = ensureAdminUser;
 
-// Enforce admin access on all routes in this router.
-// Individual routes may still call ensureAdminRequest for clarity, but this
-// guarantees every endpoint is protected even if a future route omits the check.
+// Router-level admin auth middleware (defense-in-depth).
+// Individual handlers keep their own checks; this ensures every route on
+// this router requires admin authentication even if a check is missed.
 router.use(async (req, res, next) => {
-  if (!(await ensureAdminRequest(req, res))) return
-  return next()
-})
+  try {
+    const allowed = await ensureAdminUser(req, res);
+    if (allowed) next();
+  } catch (err) {
+    next(err);
+  }
+});
 
 // ----------------------------
 // Funding Providers (no secrets)

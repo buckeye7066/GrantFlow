@@ -3,6 +3,7 @@ node_modules
 .github
 docs
 tests
+scripts
 *.md
 .env
 .env.*
@@ -27,3 +28,12 @@ seed/*.db
 *.mkv
 *.flv
 *.wmv
+.eslintrc*
+.eslintignore
+vitest.*
+vite.config.*
+tailwind.config.*
+postcss.config.*
+tsconfig*
+*.test.*
+*.spec.*
