@@ -198,10 +198,22 @@ router.post('/run', ensureAuth, async (req, res) => {
 
     const strategy = getStrategy(crawler_type)
 
+    // Load profile context once — used for both the crawler and relevance filtering.
+    // Passing it explicitly prevents cross-profile contamination from live DB re-queries.
+    let profileContext = null
+    let profileData = {}
+    try {
+      profileContext = await loadProfileContext(db, profile_id)
+      profileData = extractProfileData(profileContext)
+    } catch (ctxErr) {
+      console.warn(`[RealCrawlers] Could not load profile context for relevance filter — filtering will be skipped: ${ctxErr?.message}`)
+    }
+
     const result = await runCrawler(db, profile_id, {
       minScore: Math.max(1, Math.floor(min_match_score * 0.25)),
       maxResults: strategy.maxResults || 100,
       crawlerType: crawler_type,
+      profileContext,
     })
 
     // If strategy was gated, return early with reason
@@ -223,15 +235,6 @@ router.post('/run', ensureAuth, async (req, res) => {
     }
 
     const mapped = result.results.map(mapResultToFrontendShape)
-
-    // Load profile context for relevance filtering
-    let profileData = {}
-    try {
-      const profileContext = await loadProfileContext(db, profile_id)
-      profileData = extractProfileData(profileContext)
-    } catch (ctxErr) {
-      console.warn(`[RealCrawlers] Could not load profile context for relevance filter — filtering will be skipped: ${ctxErr?.message}`)
-    }
 
     // Merge "near you" opportunities from funding_opportunities table
     const curatedTitles = mapped.map(o => o.title || o.name || '');
@@ -374,11 +377,13 @@ router.post('/run-multiple', ensureAuth, async (req, res) => {
   let totalFound = 0
   let totalInserted = 0
 
-    // Load profile data for relevance filtering
+    // Load profile data for relevance filtering and crawler context (prevents cross-profile contamination)
     let profileData = null
+    let profileContext = null
     try {
       const ctx = await loadProfileContext(db, profile_id)
       if (ctx?.profile) {
+        profileContext = ctx
         profileData = extractProfileData(ctx)
       }
     } catch (e) {
@@ -398,6 +403,7 @@ router.post('/run-multiple', ensureAuth, async (req, res) => {
           minScore: Math.max(1, Math.floor(Number(min_match_score) * 0.25)),
           maxResults: 50,
           crawlerType,
+          profileContext,
         })
 
         const mapped = result.results.map(mapResultToFrontendShape)
@@ -686,6 +692,18 @@ router.post('/run-smart', ensureAuth, standardRateLimiter, async (req, res) => {
   const allOpportunities = []
   const seenTitles = new Set()
 
+  // Load profile context once — reused across all crawlers and domain engines to prevent
+  // cross-profile contamination from repeated live DB queries.
+  let smartProfileContext = null
+  let smartProfileData = null
+  try {
+    const ctx = await loadProfileContext(db, profile_id)
+    smartProfileContext = ctx
+    smartProfileData = ctx ? extractProfileData(ctx) : null
+  } catch {
+    // continue without profile context; crawlers will fall back to live DB load
+  }
+
   try {
     // 1) Curated crawlers (local_funding + government_funding)
     for (const crawlerType of ['local_funding', 'government_funding']) {
@@ -694,6 +712,7 @@ router.post('/run-smart', ensureAuth, standardRateLimiter, async (req, res) => {
           minScore: Math.max(1, Math.floor(minScore * 0.25)),
           maxResults: 50,
           crawlerType,
+          profileContext: smartProfileContext,
         })
         if (result.debug?.gated) continue
         const mapped = result.results.map(mapResultToFrontendShape)
@@ -711,14 +730,7 @@ router.post('/run-smart', ensureAuth, standardRateLimiter, async (req, res) => {
 
     // 2) National: domain engines
     try {
-      let profileForEngines = null
-      try {
-        const ctx = await loadProfileContext(db, profile_id)
-        profileForEngines = ctx?.profile ?? null
-      var smartProfileData = ctx ? extractProfileData(ctx) : null
-      } catch {
-        // continue without profile context
-      }
+      const profileForEngines = smartProfileContext?.profile ?? null
       if (profileForEngines) {
         const domainOpps = await runAllDomainEngines(profileForEngines, {})
         for (const o of domainOpps) {
@@ -758,13 +770,7 @@ router.post('/run-smart', ensureAuth, standardRateLimiter, async (req, res) => {
 
     // 3) State waiver benefits if eligible
     try {
-      let profileForWaiver = null
-      try {
-        const ctx = await loadProfileContext(db, profile_id)
-        profileForWaiver = ctx?.profile ?? null
-      } catch {
-        // continue
-      }
+      const profileForWaiver = smartProfileContext?.profile ?? null
       if (profileForWaiver) {
         const waiverEligible = evaluateStateWaiverEligibility(profileForWaiver).eligible
         if (waiverEligible) {

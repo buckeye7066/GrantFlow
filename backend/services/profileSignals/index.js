@@ -236,4 +236,24 @@ export async function loadProfileSignals(db, profileId) {
   return { signals, intents, assistancePrograms, rawInputs, profileContext }
 }
 
-export default { loadProfileSignals };
+/**
+ * Build canonical signals from an already-loaded profile context (e.g. a snapshot).
+ * Prevents live DB re-queries and cross-profile contamination when the caller already
+ * holds the correct context.
+ *
+ * @param {Object} profileContext - Result of buildProfileContext / loadProfileContext
+ * @returns {{ signals, intents, assistancePrograms, rawInputs, profileContext }}
+ */
+export function buildSignalsFromContext(profileContext) {
+  const signals = toAnalysisShape(profileContext)
+  const sections = profileContext.sections || {}
+  const profile = profileContext.profile || {}
+
+  const intents = deriveIntents(signals)
+  const assistancePrograms = extractAssistancePrograms(sections)
+  const rawInputs = buildRawInputs(profile, sections)
+
+  return { signals, intents, assistancePrograms, rawInputs, profileContext }
+}
+
+export default { loadProfileSignals, buildSignalsFromContext };
