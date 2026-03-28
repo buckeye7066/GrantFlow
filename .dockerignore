@@ -21,6 +21,8 @@ coverage
 *.mov
 *.avi
 *.mkv
+*.flv
+*.wmv
 backend/data/
 backend/uploads/
 backend/temp_images/

@@ -97,6 +97,16 @@ router.post('/comprehensiveMatch', async (req, res) => {
       ? '(is_loan IS NULL OR is_loan = FALSE)'
       : '(is_loan = 0 OR is_loan IS NULL)',
   );
+
+    // Profile isolation: only global catalog entries (profile_id IS NULL) or this profile's own crawl results.
+    const matchProfileId = typeof profile_json === 'string' ? profile_json : (profile?.id ?? null)
+    if (matchProfileId) {
+      conditions.push('(profile_id IS NULL OR profile_id = ?)')
+      params.push(matchProfileId)
+    } else {
+      // Admin-provided raw JSON without an ID: restrict to global catalog only to prevent bleed
+      conditions.push('profile_id IS NULL')
+    }
     
     // State filtering
     if (profileStates.length > 0) {
@@ -304,14 +314,17 @@ router.post('/searchOpportunities', async (req, res) => {
         .prepare('SELECT * FROM profiles WHERE id = ?')
         .get(profile_id);
       
+      // Profile isolation: only global catalog entries or this profile's own crawl results.
+      conditions.push('(profile_id IS NULL OR profile_id = ?)')
+      params.push(profile_id)
+
       if (profile && profile.state) {
         conditions.push(`(state = ? OR state IS NULL OR state = 'nationwide')`);
         params.push(profile.state);
       }
-
-      // Profile isolation: each profile sees global catalog entries plus its own crawl results.
-      conditions.push('(profile_id IS NULL OR profile_id = ?)');
-      params.push(profile_id);
+    } else {
+      // No profile specified: restrict to global catalog only
+      conditions.push('profile_id IS NULL')
     }
     
     // Keyword search

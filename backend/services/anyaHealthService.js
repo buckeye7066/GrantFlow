@@ -1,295 +1,241 @@
 /**
  * Anya Background Health Service
  *
- * Runs periodic health checks every ANYA_HEALTH_INTERVAL_MS (default: 30 min).
- * Each check is independent and errors are caught so the service never crashes the server.
+ * Runs every 30 minutes (configurable via ANYA_HEALTH_INTERVAL_MS) to perform
+ * routine catalog and profile maintenance tasks:
  *
- * Tasks:
- *  1. Expire stale opportunities  — past-deadline records → is_active = false
- *  2. Detect profile bleed        — global catalog entries duplicating profile-scoped records
- *  3. Clean orphaned crawlers     — stuck crawler jobs older than 2 h → failed
- *  4. Audit profile signals       — flag profiles missing state/type fields
- *  5. Deduplicate opportunities   — merge exact title+sponsor+state duplicates
+ * 1. Expire stale opportunities — mark past-deadline records inactive
+ * 2. Detect profile bleed — find global catalog entries that duplicate profile-scoped records
+ * 3. Clean orphaned crawlers — fail stuck crawler jobs older than 2 hours
+ * 4. Audit profile signals — flag profiles missing state/type fields needed for matching
+ * 5. Deduplicate opportunities — merge exact title+sponsor+state duplicates
  */
 
-const DEFAULT_INTERVAL_MS = 30 * 60 * 1000 // 30 minutes
+const DEFAULT_INTERVAL_MS = 1800000 // 30 minutes
 
 let _db = null
 let _intervalId = null
-let _lastReport = null
+let _lastStatus = null
 let _running = false
 
-// ── individual task runners ──────────────────────────────────────────────────
-
 /**
- * Task 1: Mark opportunities with past deadlines as inactive.
+ * Run a single health check cycle. Safe to call manually.
+ * @param {object} db — better-sqlite3 / postgres db handle
+ * @returns {object} status report
  */
-async function expireStaleOpportunities(db) {
-  try {
-    const isPostgres = db?.dialect === 'postgres'
-    const falseVal = isPostgres ? 'FALSE' : '0'
-    const trueVal = isPostgres ? 'TRUE' : '1'
-    const nowExpr = isPostgres ? 'CURRENT_DATE' : "date('now')"
-
-    const result = db
-      .prepare(
-        `UPDATE funding_opportunities
-            SET is_active = ${falseVal}, updated_at = CURRENT_TIMESTAMP
-          WHERE is_active = ${trueVal}
-            AND deadline IS NOT NULL
-            AND deadline < ${nowExpr}
-            AND (deadline_type IS NULL OR deadline_type NOT IN ('rolling', 'ongoing'))`,
-      )
-      .run()
-    return { expired: result.changes ?? 0 }
-  } catch (err) {
-    return { error: err.message }
-  }
-}
-
-/**
- * Task 2: Detect profile bleed — global catalog entries that are exact duplicates
- * of profile-scoped records (same title + sponsor). These are artifacts from the
- * removed Phase 4 global sync in anyaStartupOperations.js.
- */
-async function detectProfileBleed(db) {
-  try {
-    const rows = db
-      .prepare(
-        `SELECT g.id, g.title, g.sponsor
-           FROM funding_opportunities g
-          WHERE g.profile_id IS NULL
-            AND g.sponsor IS NOT NULL
-            AND EXISTS (
-              SELECT 1 FROM funding_opportunities p
-               WHERE p.profile_id IS NOT NULL
-                 AND p.title = g.title
-                 AND p.sponsor IS NOT NULL
-                 AND p.sponsor = g.sponsor
-            )`,
-      )
-      .all()
-    return { count: rows.length, samples: rows.slice(0, 5) }
-  } catch (err) {
-    return { error: err.message }
-  }
-}
-
-/**
- * Task 3: Mark crawler jobs that have been running for more than 2 hours as failed.
- */
-async function cleanOrphanedCrawlers(db) {
-  try {
-    const isPostgres = db?.dialect === 'postgres'
-    const twoHoursAgo = isPostgres
-      ? "(NOW() - INTERVAL '2 hours')"
-      : "datetime('now', '-2 hours')"
-
-    const result = db
-      .prepare(
-        `UPDATE crawler_jobs
-            SET status = 'failed',
-                error = 'Marked failed by health service: job exceeded 2-hour timeout',
-                updated_at = CURRENT_TIMESTAMP
-          WHERE status = 'running'
-            AND started_at < ${twoHoursAgo}`,
-      )
-      .run()
-    return { cleaned: result.changes ?? 0 }
-  } catch (err) {
-    // crawler_jobs table may not exist in all deployments — treat as non-fatal
-    return { error: err.message }
-  }
-}
-
-/**
- * Task 4: Audit profiles for missing state/type signals required for matching.
- */
-async function auditProfileSignals(db) {
-  try {
-    const missing = db
-      .prepare(
-        `SELECT id, display_name
-           FROM profiles
-          WHERE status = 'active'
-            AND (state IS NULL OR state = '' OR profile_type IS NULL OR profile_type = '')`,
-      )
-      .all()
-    return { profiles_missing_signals: missing.length, samples: missing.slice(0, 5) }
-  } catch (err) {
-    return { error: err.message }
-  }
-}
-
-/**
- * Task 5: Deduplicate global catalog entries with the same title + sponsor + state.
- * Keeps the most recently updated record and marks the rest inactive.
- */
-async function deduplicateOpportunities(db) {
-  try {
-    const isPostgres = db?.dialect === 'postgres'
-    const falseVal = isPostgres ? 'FALSE' : '0'
-    const trueVal = isPostgres ? 'TRUE' : '1'
-
-    // Find duplicate groups in the global catalog (profile_id IS NULL)
-    const dupes = db
-      .prepare(
-        `SELECT title, sponsor, state, COUNT(*) AS cnt
-           FROM funding_opportunities
-          WHERE profile_id IS NULL
-            AND is_active = ${trueVal}
-          GROUP BY title, sponsor, state
-         HAVING COUNT(*) > 1`,
-      )
-      .all()
-
-    let deduped = 0
-    for (const group of dupes) {
-      // Keep the most recently updated record; mark the rest inactive
-      const candidates = db
-        .prepare(
-          `SELECT id FROM funding_opportunities
-            WHERE profile_id IS NULL
-              AND title = ?
-              AND (sponsor IS NULL AND ? IS NULL OR sponsor = ?)
-              AND (state IS NULL AND ? IS NULL OR state = ?)
-            ORDER BY updated_at DESC`,
-        )
-        .all(group.title, group.sponsor, group.sponsor, group.state, group.state)
-
-      // Skip the first (newest); deactivate the rest
-      for (let i = 1; i < candidates.length; i++) {
-        db.prepare(
-          `UPDATE funding_opportunities
-              SET is_active = ${falseVal}, updated_at = CURRENT_TIMESTAMP
-            WHERE id = ?`,
-        ).run(candidates[i].id)
-        deduped++
-      }
-    }
-
-    return { deduped, groups_found: dupes.length }
-  } catch (err) {
-    return { error: err.message }
-  }
-}
-
-// ── main health check runner ─────────────────────────────────────────────────
-
 export async function runHealthCheck(db) {
-  if (_running) {
-    console.log('[AnyaHealth] Skipping — previous check still running')
-    return _lastReport
-  }
-
-  _running = true
   const startTime = Date.now()
-  console.log('[AnyaHealth] Starting health check...')
-
-  const report = {
+  const status = {
     started_at: new Date().toISOString(),
     expire_stale: null,
     profile_bleed_check: null,
     orphaned_crawlers: null,
-    profile_signals_audit: null,
-    deduplication: null,
+    profile_signal_audit: null,
+    dedup_opportunities: null,
     errors: [],
-    duration_ms: 0,
   }
 
+  // 1. Expire stale opportunities
   try {
-    report.expire_stale = await expireStaleOpportunities(db)
-    if (report.expire_stale?.error) report.errors.push({ task: 'expire_stale', error: report.expire_stale.error })
+    const isPostgres = db?.dialect === 'postgres'
+    const inactiveVal = isPostgres ? 'FALSE' : '0'
+    const nowExpr = isPostgres ? 'CURRENT_DATE' : "date('now')"
+    const result = db
+      .prepare(
+        `UPDATE funding_opportunities
+         SET is_active = ${inactiveVal}, updated_at = CURRENT_TIMESTAMP
+         WHERE is_active = ${isPostgres ? 'TRUE' : '1'}
+           AND deadline IS NOT NULL
+           AND deadline < ${nowExpr}
+           AND deadline_type NOT IN ('rolling', 'ongoing')`,
+      )
+      .run()
+    const count = result.changes ?? result.rowCount ?? 0
+    status.expire_stale = { expired: count }
+    if (count > 0) {
+      console.log(`[AnyaHealth] Expired ${count} stale opportunities`)
+    }
   } catch (err) {
-    report.errors.push({ task: 'expire_stale', error: err.message })
+    console.error('[AnyaHealth] expire_stale error:', err.message)
+    status.errors.push({ task: 'expire_stale', error: err.message })
+    status.expire_stale = { error: err.message }
   }
 
+  // 2. Detect profile bleed — global catalog entries that are exact duplicates of profile-scoped records
   try {
-    report.profile_bleed_check = await detectProfileBleed(db)
-    if (report.profile_bleed_check?.error) report.errors.push({ task: 'profile_bleed_check', error: report.profile_bleed_check.error })
+    const bleedRows = db
+      .prepare(
+        `SELECT g.id, g.title, g.sponsor
+         FROM funding_opportunities g
+         WHERE g.profile_id IS NULL
+           AND EXISTS (
+             SELECT 1 FROM funding_opportunities p
+             WHERE p.profile_id IS NOT NULL
+               AND p.title = g.title
+               AND (p.sponsor = g.sponsor OR (p.sponsor IS NULL AND g.sponsor IS NULL))
+           )
+         LIMIT 500`,
+      )
+      .all()
+    status.profile_bleed_check = { count: bleedRows.length, sample_ids: bleedRows.slice(0, 5).map((r) => r.id) }
+    if (bleedRows.length > 0) {
+      console.warn(`[AnyaHealth] Detected ${bleedRows.length} potential profile-bleed entries in global catalog`)
+    }
   } catch (err) {
-    report.errors.push({ task: 'profile_bleed_check', error: err.message })
+    console.error('[AnyaHealth] profile_bleed_check error:', err.message)
+    status.errors.push({ task: 'profile_bleed_check', error: err.message })
+    status.profile_bleed_check = { error: err.message }
   }
 
+  // 3. Clean orphaned crawlers — stuck jobs older than 2 hours → mark failed
   try {
-    report.orphaned_crawlers = await cleanOrphanedCrawlers(db)
-    if (report.orphaned_crawlers?.error) report.errors.push({ task: 'orphaned_crawlers', error: report.orphaned_crawlers.error })
+    const isPostgres = db?.dialect === 'postgres'
+    const staleExpr = isPostgres
+      ? "(created_at < NOW() - INTERVAL '2 hours')"
+      : "(created_at < datetime('now', '-2 hours'))"
+    const result = db
+      .prepare(
+        `UPDATE crawler_jobs
+         SET status = 'failed', updated_at = CURRENT_TIMESTAMP
+         WHERE status IN ('queued', 'running')
+           AND ${staleExpr}`,
+      )
+      .run()
+    const count = result.changes ?? result.rowCount ?? 0
+    status.orphaned_crawlers = { cleaned: count }
+    if (count > 0) {
+      console.log(`[AnyaHealth] Cleaned ${count} orphaned crawler jobs`)
+    }
   } catch (err) {
-    report.errors.push({ task: 'orphaned_crawlers', error: err.message })
+    // crawler_jobs table may not exist in all environments — not fatal
+    if (!err.message?.includes('no such table') && !err.message?.includes('does not exist')) {
+      console.error('[AnyaHealth] orphaned_crawlers error:', err.message)
+      status.errors.push({ task: 'orphaned_crawlers', error: err.message })
+    }
+    status.orphaned_crawlers = { error: err.message }
   }
 
+  // 4. Audit profile signals — find profiles missing state or type
   try {
-    report.profile_signals_audit = await auditProfileSignals(db)
-    if (report.profile_signals_audit?.error) report.errors.push({ task: 'profile_signals_audit', error: report.profile_signals_audit.error })
+    const profiles = db.prepare("SELECT id, display_name, state, type FROM profiles WHERE status = 'active'").all()
+    const missingState = profiles.filter((p) => !p.state)
+    const missingType = profiles.filter((p) => !p.type)
+    status.profile_signal_audit = {
+      total_active: profiles.length,
+      missing_state: missingState.length,
+      missing_type: missingType.length,
+      missing_state_ids: missingState.slice(0, 10).map((p) => p.id),
+      missing_type_ids: missingType.slice(0, 10).map((p) => p.id),
+    }
+    if (missingState.length > 0 || missingType.length > 0) {
+      console.warn(
+        `[AnyaHealth] Profile signal gaps: ${missingState.length} missing state, ${missingType.length} missing type`,
+      )
+    }
   } catch (err) {
-    report.errors.push({ task: 'profile_signals_audit', error: err.message })
+    console.error('[AnyaHealth] profile_signal_audit error:', err.message)
+    status.errors.push({ task: 'profile_signal_audit', error: err.message })
+    status.profile_signal_audit = { error: err.message }
   }
 
+  // 5. Deduplicate global catalog — merge exact title+sponsor+state duplicates
   try {
-    report.deduplication = await deduplicateOpportunities(db)
-    if (report.deduplication?.error) report.errors.push({ task: 'deduplication', error: report.deduplication.error })
+    // Find duplicate groups (profile_id IS NULL only — never touch profile-scoped records)
+    const dupGroups = db
+      .prepare(
+        `SELECT title, sponsor, state, COUNT(*) as cnt, MIN(id) as keep_id
+         FROM funding_opportunities
+         WHERE profile_id IS NULL
+         GROUP BY title, sponsor, state
+         HAVING COUNT(*) > 1
+         LIMIT 200`,
+      )
+      .all()
+
+    let removed = 0
+    for (const group of dupGroups) {
+      try {
+        const result = db
+          .prepare(
+            `DELETE FROM funding_opportunities
+             WHERE profile_id IS NULL
+               AND title = ?
+               AND (sponsor = ? OR (sponsor IS NULL AND ? IS NULL))
+               AND (state = ? OR (state IS NULL AND ? IS NULL))
+               AND id != ?`,
+          )
+          .run(group.title, group.sponsor, group.sponsor, group.state, group.state, group.keep_id)
+        removed += result.changes ?? result.rowCount ?? 0
+      } catch (delErr) {
+        // Non-fatal: log and continue
+        console.error('[AnyaHealth] dedup delete error:', delErr.message)
+      }
+    }
+
+    status.dedup_opportunities = { groups_found: dupGroups.length, removed }
+    if (removed > 0) {
+      console.log(`[AnyaHealth] Deduped ${removed} duplicate global catalog entries across ${dupGroups.length} groups`)
+    }
   } catch (err) {
-    report.errors.push({ task: 'deduplication', error: err.message })
+    console.error('[AnyaHealth] dedup_opportunities error:', err.message)
+    status.errors.push({ task: 'dedup_opportunities', error: err.message })
+    status.dedup_opportunities = { error: err.message }
   }
 
-  report.duration_ms = Date.now() - startTime
-  report.completed_at = new Date().toISOString()
-
-  console.log(
-    `[AnyaHealth] Check complete in ${report.duration_ms}ms — ` +
-    `expired=${report.expire_stale?.expired ?? 'err'}, ` +
-    `bleed=${report.profile_bleed_check?.count ?? 'err'}, ` +
-    `orphaned_crawlers=${report.orphaned_crawlers?.cleaned ?? 'err'}, ` +
-    `deduped=${report.deduplication?.deduped ?? 'err'}`,
-  )
-
-  _lastReport = report
-  _running = false
-  return report
+  status.completed_at = new Date().toISOString()
+  status.duration_ms = Date.now() - startTime
+  return status
 }
 
-// ── service lifecycle ─────────────────────────────────────────────────────────
-
 /**
- * Start the background health service.
- * Safe to call multiple times — only one interval will be registered.
+ * Start the background health service. Safe to call multiple times — only one
+ * interval is ever running. Errors inside the check never crash the server.
+ *
+ * @param {object} db — db handle
+ * @returns {{ stop: Function }} — call stop() to halt the interval
  */
 export function startHealthService(db) {
-  if (_intervalId) return // already running
+  if (_intervalId) {
+    console.log('[AnyaHealth] Service already running — skipping duplicate start')
+    return { stop: stopHealthService }
+  }
 
   _db = db
   const intervalMs = Number(process.env.ANYA_HEALTH_INTERVAL_MS) || DEFAULT_INTERVAL_MS
 
-  console.log(`[AnyaHealth] Background service started (interval: ${intervalMs / 1000}s)`)
+  console.log(`[AnyaHealth] Starting background health service (interval: ${intervalMs}ms)`)
 
-  // Run an initial check shortly after startup
-  setTimeout(() => {
-    runHealthCheck(_db).catch((err) => {
-      console.error('[AnyaHealth] Initial check failed:', err?.message || err)
-    })
-  }, 60 * 1000) // 1-minute delay on startup
+  async function tick() {
+    if (_running) return
+    _running = true
+    try {
+      _lastStatus = await runHealthCheck(_db)
+    } catch (err) {
+      console.error('[AnyaHealth] Uncaught error in health check:', err.message)
+      _lastStatus = { error: err.message, completed_at: new Date().toISOString() }
+    } finally {
+      _running = false
+    }
+  }
 
-  _intervalId = setInterval(() => {
-    runHealthCheck(_db).catch((err) => {
-      console.error('[AnyaHealth] Scheduled check failed:', err?.message || err)
-    })
-  }, intervalMs)
+  _intervalId = setInterval(tick, intervalMs)
+  // Unref so the interval doesn't prevent the process from exiting in tests
+  if (_intervalId.unref) _intervalId.unref()
+
+  return { stop: stopHealthService }
 }
 
-/**
- * Stop the background health service.
- */
 export function stopHealthService() {
   if (_intervalId) {
     clearInterval(_intervalId)
     _intervalId = null
-    console.log('[AnyaHealth] Background service stopped')
+    console.log('[AnyaHealth] Service stopped')
   }
 }
 
 /**
- * Return the most recent health report (or null if no check has run yet).
+ * Returns the most recent health status (null if no check has run yet).
  */
-export function getLastHealthReport() {
-  return _lastReport
+export function getLastHealthStatus() {
+  return _lastStatus
 }

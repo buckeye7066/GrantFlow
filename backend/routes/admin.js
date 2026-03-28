@@ -35,7 +35,7 @@ import { createGeoCrawlRun } from '../services/geoCrawlRunStore.js'
 import { resolveUploadsDir, ensureUploadsDirWritable } from '../utils/uploadsDir.js'
 import { isDesignatedProfileId } from '../utils/ensureDesignatedProfiles.js'
 import { analyzeKnowledgeBaseDocument, processPendingKBDocuments, extractFundingOpportunitiesFromKB } from '../services/knowledgeBaseProcessor.js'
-import { runHealthCheck, getLastHealthReport } from '../services/anyaHealthService.js'
+import { runHealthCheck, getLastHealthStatus } from '../services/anyaHealthService.js'
 
 const router = express.Router();
 
@@ -167,7 +167,6 @@ router.use(async (req, res, next) => {
     next(err);
   }
 });
-
 
 // ----------------------------
 // Funding Providers (no secrets)
@@ -4946,30 +4945,31 @@ router.post('/backfill-matches', async (req, res) => {
   }
 })
 
-// ── Anya Health Service endpoints ──────────────────────────────────────────
-
 /**
  * GET /api/admin/anya-health
- * Returns the most recent health check report.
+ * Returns the most recent Anya health check status.
  */
 router.get('/anya-health', async (req, res) => {
   if (!(await ensureAdminRequest(req, res))) return
-  const report = getLastHealthReport()
-  res.json({ ok: true, report: report ?? null })
+  const status = getLastHealthStatus()
+  if (!status) {
+    return res.json({ status: 'no_check_run', message: 'No health check has run yet. Use POST /api/admin/anya-health/run to trigger one.' })
+  }
+  res.json(status)
 })
 
 /**
  * POST /api/admin/anya-health/run
- * Triggers an immediate health check and returns the result.
+ * Triggers an immediate Anya health check and returns the result.
  */
 router.post('/anya-health/run', async (req, res) => {
   if (!(await ensureAdminRequest(req, res))) return
   try {
-    const report = await runHealthCheck(req.db)
-    res.json({ ok: true, report })
-  } catch (error) {
-    console.error('[admin/anya-health/run] error:', error)
-    res.status(500).json({ ok: false, error: error.message })
+    const result = await runHealthCheck(req.db)
+    res.json(result)
+  } catch (err) {
+    console.error('[admin/anya-health/run] Error:', err)
+    res.status(500).json({ error: err.message })
   }
 })
 

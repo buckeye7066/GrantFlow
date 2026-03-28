@@ -211,6 +211,10 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
 
       conditions.push(trustedSourceClause())
 
+      // Profile isolation: only global catalog entries (profile_id IS NULL) or this profile's own crawl results.
+      conditions.push('(profile_id IS NULL OR profile_id = ?)')
+      params.push(profileId)
+
       // Geographic pre-filter: only load opps in the profile's state, national, or unspecified.
       const profileState = profileContext?.signals?.location?.state || profileContext?.profile?.state
       if (profileState) {

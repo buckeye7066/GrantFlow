@@ -2427,6 +2427,9 @@ if (process.env.NODE_ENV !== 'test') {
     console.log('[Anya] Autonomous operations disabled — running basic startup crawlers only');
   }
 
+  // Start the background health service (runs every 30 min, configurable via ANYA_HEALTH_INTERVAL_MS)
+  startHealthService(db);
+
   // Optional: continuous national programs crawler (Track A/B programs)
   if (process.env.NATIONAL_PROGRAMS_CRAWLER_ENABLED === 'true') {
     const intervalMinutes = Number.parseInt(

@@ -1,9 +1,6 @@
 import { fileURLToPath } from 'url'
 import { dirname, join } from 'path'
 import fs from 'fs'
-import OpenAI from 'openai'
-import { runComprehensiveCrawler as processComprehensiveCrawlerJob } from './comprehensiveCrawlerOptimized.js'
-import { dispatchCrawlerJob } from './crawlerDispatcher.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
@@ -59,10 +56,12 @@ export async function runStartupOperations(db) {
     }
     report.nationwide_opportunities = 0
 
-    // Phase 4 (REMOVED): Syncing profile-scoped crawl results into the global catalog
-    // caused profile bleed — Profile A's opportunities were visible to Profile B.
-    // Each profile now only sees global catalog entries (profile_id IS NULL) plus its
-    // own crawl results (profile_id = <their id>) via the matching and discovery routes.
+    // Phase 4: REMOVED — copying profile-scoped crawl results into the global catalog
+    // caused cross-profile data bleed (Profile A's opportunities appeared in Profile B's
+    // matches). Each profile now sees only its own crawl results plus global catalog
+    // entries (profile_id IS NULL) via the (profile_id IS NULL OR profile_id = ?) filter
+    // in matching.js and discovery.js.
+    console.log('[Anya Startup] Phase 4: Skipped (global sync removed to prevent profile bleed)')
 
     const duration = Date.now() - startTime
     report.completed_at = new Date().toISOString()
