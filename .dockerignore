@@ -1,21 +1,63 @@
+# Dependencies
 node_modules
+.npm
+
+# Version control
 .git
 .github
-docs
-tests
-*.md
+
+# Environment files
 .env
 .env.*
 !.env.example
-test-*.sh
-test-*.mjs
+
+# Build artifacts
 dist
 coverage
+.vite
+
+# Test files
+tests/
+test-*.sh
+test-*.mjs
+
+# Scripts (dev/maintenance only)
+scripts/
+
+# Documentation
+docs/
+*.md
+
+# Dev config files
+.eslintrc*
+eslint.config.*
+vitest.*
+tsconfig*.json
+postcss.config.*
+tailwind.config.*
+vite.config.*
+jsconfig.json
+
+# Database files
 *.db
 *.db-shm
 *.db-wal
 *.db-journal
+*.sqlite
+*.sqlite3
 backend/data/
 backend/uploads/
 backend/temp_images/
 seed/*.db
+
+# Large media files
+*.mp4
+*.webm
+*.mov
+*.avi
+*.mkv
+
+# Misc dev files
+.editorconfig
+.prettierrc*
+docker-compose*.yml
