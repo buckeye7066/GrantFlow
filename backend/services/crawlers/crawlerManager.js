@@ -12,7 +12,7 @@
  *   6. Store results
  */
 
-import { loadProfileSignals } from '../profileSignals/index.js';
+import { loadProfileSignals, buildSignalsFromContext } from '../profileSignals/index.js';
 import { matchPrograms } from './matchEngine.js';
 import { getStrategy, checkGates } from './strategyRegistry.js';
 import { FEDERAL_BENEFITS } from './data/federalBenefits.js';
@@ -350,15 +350,19 @@ function redactPII(obj) {
  * @returns {{ results, analysis, statePortal, countyContacts, debug }}
  */
 export async function runCrawler(db, profileId, options = {}) {
-  const { minScore, maxResults, forceRefresh = false, crawlerType = 'comprehensive' } = options;
+  const { minScore, maxResults, forceRefresh = false, crawlerType = 'comprehensive', profileContext: externalContext = null } = options;
   const timing = {};
   const t0 = Date.now();
 
   await ensureCrawlSchema(db);
 
   // ── Step 1: Load profile signals ──
+  // When a snapshot context is provided (e.g. from a crawler job snapshot), use it directly
+  // to prevent cross-profile contamination from live DB re-queries.
   const t1 = Date.now();
-  const { signals: analysis, intents, assistancePrograms, rawInputs } = await loadProfileSignals(db, profileId);
+  const { signals: analysis, intents, assistancePrograms, rawInputs } = externalContext
+    ? buildSignalsFromContext(externalContext)
+    : await loadProfileSignals(db, profileId);
   timing.signalLoad_ms = Date.now() - t1;
 
   // ── Step 2: Resolve strategy ──
