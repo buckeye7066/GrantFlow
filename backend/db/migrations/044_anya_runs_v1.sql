@@ -1,4 +1,4 @@
--- SQLite migration 006: Anya operational audit tables
+-- SQLite migration 044: Anya operational audit tables
 
 CREATE TABLE IF NOT EXISTS anya_runs (
   id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),

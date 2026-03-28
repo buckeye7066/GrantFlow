@@ -5,10 +5,10 @@
  * the exact failure points that cause 500 errors in production.
  */
 
-import { db } from './backend/db/index.js'
+import { db } from '../../backend/db/index.js'
 
 // Import the app directly
-const serverModule = await import('./backend/server.js')
+const serverModule = await import('../../backend/server.js')
 const app = serverModule.default
 
 console.log('[test] Starting direct from-opportunity failure reproduction test')
