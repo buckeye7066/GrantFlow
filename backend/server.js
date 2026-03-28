@@ -76,7 +76,7 @@ import { seedBaselineFromRepo } from './utils/seedBaselineFromRepo.js';
 import { assertFundingApiKeys, getFundingApiKeyPresence } from './src/config/apiKeys.js';
 import { ensureProfileEmailSchema } from './utils/accessControl.js';
 import { dispatchCrawlerJob, startQueueDrainInterval } from './services/crawlerDispatcher.js';
-import { cleanupStaleCrawlers } from './services/crawlerConcurrencyGuard.js'
+import { cleanupStaleCrawlers, cleanupStaleQueuedJobs } from './services/crawlerConcurrencyGuard.js'
 import { findDuplicateProfileGroups, mergeProfiles } from './services/profileDedupeService.js'
 import { assertEnv, getJwtSecretOrThrow } from './config/env.js'
 import { resolveUploadsDir, ensureUploadsDirWritable, isLikelyPersistentPath } from './utils/uploadsDir.js'
@@ -2203,6 +2203,10 @@ if (process.env.NODE_ENV !== 'test') {
         if (cleaned > 0) {
           console.log(`[startup] Cleaned ${cleaned} stale crawler job(s) from previous run`)
         }
+        const cleanedQueued = await cleanupStaleQueuedJobs(db)
+        if (cleanedQueued > 0) {
+          console.log(`[startup] Cleaned ${cleanedQueued} stale queued job(s) from previous run`)
+        }
       } catch (err) {
         console.warn('[startup] Stale crawler cleanup failed:', err?.message)
       }
@@ -2257,6 +2261,16 @@ if (process.env.NODE_ENV !== 'test') {
             await cleanupStaleCrawlers(db)
           } catch (err) {
             console.warn('[queue-poller] Stale crawler cleanup failed (ignored):', err?.message)
+          }
+
+          // Clean up queued jobs that have been waiting longer than 24 hours
+          try {
+            const cleanedQueued = await cleanupStaleQueuedJobs(db)
+            if (cleanedQueued > 0) {
+              console.warn(`[queue-poller] Cleaned ${cleanedQueued} stale queued job(s)`)
+            }
+          } catch (err) {
+            console.warn('[queue-poller] Stale queued job cleanup failed (ignored):', err?.message)
           }
 
           const queued = await db.prepare(`
