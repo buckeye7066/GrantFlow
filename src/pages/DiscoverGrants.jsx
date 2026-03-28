@@ -183,10 +183,20 @@ export default function DiscoverGrants() {
   }, [profiles]);
 
 
+  // Clear stale results and invalidate caches whenever the effective profile changes
+  useEffect(() => {
+    setSearchResults([]);
+    setProfileCompletionHint(null);
+    queryClient.invalidateQueries({ queryKey: ['discover-catalog'] });
+    queryClient.invalidateQueries({ queryKey: ['discover-profile'] });
+  }, [effectiveProfileId, queryClient]);
+
+
   const { data: profileDetail } = useQuery({
     queryKey: ['discover-profile', effectiveProfileId ?? selectedProfileId],
     queryFn: () => getProfile(effectiveProfileId || selectedProfileId),
     enabled: authReady && Boolean(effectiveProfileId || selectedProfileId),
+    refetchOnMount: 'always',
   });
 
   // Also fetch organizations to get detailed org data for selected profile
@@ -209,7 +219,12 @@ export default function DiscoverGrants() {
     [organizations, selectedProfile],
   );
 
-  const profileForSearch = profileDetail ?? selectedOrg ?? selectedProfile;
+  // Guard against stale profileDetail from a previously-selected profile.
+  // effectiveProfileId is the authoritative identifier; selectedProfileId is the fallback
+  // when effectiveProfileId hasn't resolved yet (e.g., URL param not set).
+  const profileDetailMatchesCurrent = profileDetail &&
+    (profileDetail.id === effectiveProfileId || profileDetail.id === selectedProfileId);
+  const profileForSearch = (profileDetailMatchesCurrent ? profileDetail : null) ?? selectedOrg ?? selectedProfile;
 
   // Catalog match: real funding opportunities from DB, scored by profile needs (relatable grants, not only directory links)
   const { data: catalogMatchResponse } = useQuery({
@@ -220,7 +235,7 @@ export default function DiscoverGrants() {
       return apiFetch(`/api/matching/profile/${effectiveProfileId}/opportunities?min_score=30&limit=200&skip_readiness_check=1`)
     },
     enabled: authReady && Boolean(effectiveProfileId),
-    staleTime: 2 * 60 * 1000,
+    staleTime: 0,
   })
 
   const catalogOpportunities = useMemo(() => {
