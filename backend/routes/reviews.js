@@ -1,7 +1,10 @@
 import express from 'express'
 import crypto from 'crypto'
+import { standardRateLimiter, mutationRateLimiter } from '../middleware/rateLimiting.js'
 
 const router = express.Router()
+
+router.use(standardRateLimiter)
 
 const ALLOWED_ACTIONS = new Set(['accept', 'reject', 'correct', 'escalate'])
 
@@ -230,7 +233,7 @@ router.get('/', async (req, res) => {
   }
 })
 
-router.post('/', async (req, res) => {
+router.post('/', mutationRateLimiter, async (req, res) => {
   const actorUserId = requireAuthenticatedUser(req, res)
   if (!actorUserId) return
 
