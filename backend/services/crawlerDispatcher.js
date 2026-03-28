@@ -74,6 +74,7 @@ async function processCuratedBenefitsJob({ db, job, profileContext }) {
     minScore: params.minScore ?? 25,
     maxResults: params.maxResults ?? 100,
     crawlerType,
+    profileContext,
   });
   return {
     result_count: result.results.length,
