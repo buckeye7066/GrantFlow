@@ -162,14 +162,14 @@ router.post('/comprehensiveMatch', async (req, res) => {
       ...(profileStates.length > 0 ? profileStates : []),
     );
     
-    console.log(`[comprehensiveMatch] Query found ${opportunities.length} opportunities`);
+    console.info(`[comprehensiveMatch] Query found ${opportunities.length} opportunities`);
 
     const healthSet = profileContext?.signals?.health
     const healthFacets = profileContext?.facets?.health ?? {}
     const kws = profileContext?.signals?.keywordSet ?? new Set()
 
     if (kws.size > 0 || (healthSet instanceof Set && healthSet.size > 0)) {
-      console.log(`[comprehensiveMatch] Profile signals:`, JSON.stringify({
+      console.info(`[comprehensiveMatch] Profile signals:`, JSON.stringify({
         keywords: [...kws].slice(0, 15),
         health: healthSet instanceof Set ? [...healthSet] : [],
       }));
@@ -186,7 +186,7 @@ router.post('/comprehensiveMatch', async (req, res) => {
     };
     const filteredOpportunities = opportunities.filter(opp => !isJunkOpportunity(opp, filterHints));
     const hasBizIntent = kws.has('small business') || kws.has('startup') || kws.has('entrepreneur') || kws.has('sba');
-    console.log(`[comprehensiveMatch] Filtered ${opportunities.length - filteredOpportunities.length} irrelevant opportunities, ${filteredOpportunities.length} remaining. Business intent: ${hasBizIntent}`);
+    console.info(`[comprehensiveMatch] Filtered ${opportunities.length - filteredOpportunities.length} irrelevant opportunities, ${filteredOpportunities.length} remaining. Business intent: ${hasBizIntent}`);
 
     const scoredOpportunities = filteredOpportunities.map(opp => {
       const computed = scoreOpportunity(profileContext, opp);
@@ -226,14 +226,14 @@ router.post('/comprehensiveMatch', async (req, res) => {
       acc[bucket] = (acc[bucket] || 0) + 1;
       return acc;
     }, {});
-    console.log(`[comprehensiveMatch] Score distribution:`, scoreSummary);
+    console.info(`[comprehensiveMatch] Score distribution:`, scoreSummary);
     
     if (scoredOpportunities.length > 0) {
       const topScores = scoredOpportunities
         .sort((a, b) => b.fit_score - a.fit_score)
         .slice(0, 5)
         .map(o => ({ title: o.program_name?.substring(0, 30), score: o.fit_score, matched: o.matched_fields }));
-      console.log(`[comprehensiveMatch] Top 5 scores:`, JSON.stringify(topScores));
+      console.info(`[comprehensiveMatch] Top 5 scores:`, JSON.stringify(topScores));
     }
     
     let matchThreshold = 50;
@@ -249,14 +249,14 @@ router.post('/comprehensiveMatch', async (req, res) => {
           .sort((a, b) => b.fit_score - a.fit_score);
         if (highScoring.length > 0) {
           matchThreshold = fallback;
-          console.log(`[comprehensiveMatch] Zero results at 50; relaxed to ${fallback} (${highScoring.length} results)`);
+          console.info(`[comprehensiveMatch] Zero results at 50; relaxed to ${fallback} (${highScoring.length} results)`);
           break;
         }
       }
       if (highScoring.length === 0) {
         highScoring = scoredOpportunities.sort((a, b) => b.fit_score - a.fit_score).slice(0, 20);
         matchThreshold = 0;
-        console.log(`[comprehensiveMatch] All thresholds exhausted; returning top ${highScoring.length}`);
+        console.info(`[comprehensiveMatch] All thresholds exhausted; returning top ${highScoring.length}`);
       }
     }
     

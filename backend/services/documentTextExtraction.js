@@ -123,7 +123,7 @@ async function tryExtractPdfWithPdftotext({ filePath, timeoutMs }) {
       const code = error?.code
       if (code === 'ENOENT') continue
     } finally {
-      await fsp.rm(dir, { recursive: true, force: true }).catch(() => {})
+      await fsp.rm(dir, { recursive: true, force: true }).catch(() => { /* temp cleanup */ })
     }
   }
   return null

@@ -1093,7 +1093,7 @@ router.post('/from-opportunity', async (req, res, next) => {
     let opportunity = null;
     let resolvedOpportunityId = null;  // Track the actual opportunity ID to use
     if (opportunity_id) {
-      console.log('[grants/from-opportunity] Attempting to fetch opportunity from DB', {
+      console.info('[grants/from-opportunity] Attempting to fetch opportunity from DB', {
         requestId,
         opportunity_id,
         has_fallback_data: Boolean(opportunity_data),
@@ -1102,7 +1102,7 @@ router.post('/from-opportunity', async (req, res, next) => {
         opportunity = await req.db.prepare('SELECT * FROM funding_opportunities WHERE id = ?').get(opportunity_id);
         if (opportunity) {
           resolvedOpportunityId = opportunity_id;
-          console.log('[grants/from-opportunity] Found opportunity in DB', {
+          console.info('[grants/from-opportunity] Found opportunity in DB', {
             requestId,
             opportunity_id,
             title: opportunity.title,
@@ -1119,7 +1119,7 @@ router.post('/from-opportunity', async (req, res, next) => {
             requestId,
           })
         } else {
-          console.log('[grants/from-opportunity] opportunity_id not found, using fallback data', {
+          console.info('[grants/from-opportunity] opportunity_id not found, using fallback data', {
             requestId,
             opportunity_id,
           })
@@ -1172,7 +1172,7 @@ router.post('/from-opportunity', async (req, res, next) => {
           application_method: coerceString(opportunity_data.application_method, { maxLen: 100 }) || null,
           applicationNote: coerceString(opportunity_data.applicationNote, { maxLen: 2000 }) || null,
         };
-        console.log('[grants/from-opportunity] Using direct opportunity data for:', opportunity.title);
+        console.info('[grants/from-opportunity] Using direct opportunity data for:', opportunity.title);
       } catch (parseError) {
         console.error('[grants/from-opportunity] failed to parse opportunity_data', {
           requestId,
@@ -1390,7 +1390,7 @@ router.post('/from-opportunity', async (req, res, next) => {
           await tx.prepare('UPDATE profiles SET organization_id = ? WHERE id = ?').run(orgId, finalProfileId);
 
           finalOrgId = orgId;
-          console.log(`[grants] Auto-created organization ${orgId} for profile ${finalProfileId}`, {
+          console.info(`[grants] Auto-created organization ${orgId} for profile ${finalProfileId}`, {
             applicant_type: applicantType,
           });
         }
@@ -1538,7 +1538,7 @@ router.post('/from-opportunity', async (req, res, next) => {
     const statusCode = result.already_exists ? 200 : 201;
     
     // Log successful grant creation with key details (no sensitive data)
-    console.log('[grants/from-opportunity] success', {
+    console.info('[grants/from-opportunity] success', {
       requestId,
       status: statusCode,
       grant_id: result.id,

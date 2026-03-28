@@ -9,7 +9,10 @@
  * 3. Clean orphaned crawlers — fail stuck crawler jobs older than 2 hours
  * 4. Audit profile signals — flag profiles missing state/type fields needed for matching
  * 5. Deduplicate opportunities — merge exact title+sponsor+state duplicates
+ * 6. Auto-repair scan — dry-run code quality scan (non-critical)
  */
+
+import { runAutoRepair } from './anyaAutoRepairService.js'
 
 const DEFAULT_INTERVAL_MS = 1800000 // 30 minutes
 
@@ -32,6 +35,7 @@ export async function runHealthCheck(db) {
     orphaned_crawlers: null,
     profile_signal_audit: null,
     dedup_opportunities: null,
+    auto_repair_scan: null,
     errors: [],
   }
 
@@ -180,6 +184,20 @@ export async function runHealthCheck(db) {
     console.error('[AnyaHealth] dedup_opportunities error:', err.message)
     status.errors.push({ task: 'dedup_opportunities', error: err.message })
     status.dedup_opportunities = { error: err.message }
+  }
+
+  // 6. Auto-repair scan — non-critical dry-run code quality check
+  try {
+    const repairReport = await runAutoRepair(db, { dryRun: true })
+    status.auto_repair_scan = {
+      scannedFiles: repairReport.scannedFiles,
+      empty_catch: repairReport.findings.empty_catch.length,
+      console_log: repairReport.findings.console_log.length,
+      profile_bleed: repairReport.findings.profile_bleed.length,
+    }
+  } catch (err) {
+    // Non-critical — never block the health check
+    status.auto_repair_scan = { error: err.message }
   }
 
   status.completed_at = new Date().toISOString()

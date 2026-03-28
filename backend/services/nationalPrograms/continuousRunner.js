@@ -98,8 +98,8 @@ export function startNationalProgramsCrawler({
   }
 
   // Kick off immediately, then on interval
-  tick().catch(() => {})
-  const handle = setInterval(() => tick().catch(() => {}), intervalMs)
+  tick().catch(e => console.warn('[background]', e?.message || e))
+  const handle = setInterval(() => tick().catch(e => console.warn('[background]', e?.message || e)), intervalMs)
   return () => clearInterval(handle)
 }
 

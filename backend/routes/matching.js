@@ -317,14 +317,14 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
           scored = allScored.filter((opp) => (opp.match_score ?? 0) >= threshold)
           if (scored.length > 0) {
             effectiveMinScore = threshold
-            console.log(`[matching] Zero results at min_score=${minScore}; relaxed to ${threshold} (${scored.length} results)`)
+            console.info(`[matching] Zero results at min_score=${minScore}; relaxed to ${threshold} (${scored.length} results)`)
             break
           }
         }
         if (scored.length === 0) {
           scored = allScored.slice(0, 20)
           effectiveMinScore = 0
-          console.log(`[matching] All thresholds exhausted; returning top ${scored.length} of ${allScored.length}`)
+          console.info(`[matching] All thresholds exhausted; returning top ${scored.length} of ${allScored.length}`)
         }
       }
 

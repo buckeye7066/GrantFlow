@@ -1550,7 +1550,7 @@ router.post('/school-lookup', async (req, res) => {
     }
 
     const trimmedName = school_name.trim();
-    console.log(`[school-lookup] Looking up data for: ${trimmedName}`);
+    console.info(`[school-lookup] Looking up data for: ${trimmedName}`);
 
     const anthropic = await createAnthropicClient();
     if (!anthropic) {
@@ -1618,7 +1618,7 @@ Return ONLY the JSON object, no backticks, no explanation.`
       return res.status(502).json({ error: 'Failed to parse AI response', raw: textBlocks.slice(0, 500) });
     }
 
-    console.log(`[school-lookup] Success for ${trimmedName}: ${Object.keys(parsed).length} fields`);
+    console.info(`[school-lookup] Success for ${trimmedName}: ${Object.keys(parsed).length} fields`);
     return res.json({ success: true, school_name: trimmedName, data: parsed, provider: 'anthropic-web-search' });
   } catch (error) {
     console.error('[school-lookup] Error:', error);

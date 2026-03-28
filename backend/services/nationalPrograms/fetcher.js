@@ -56,7 +56,7 @@ export class RateLimitedFetcher {
         .catch((err) => task.resolve({ ok: false, error: err }))
         .finally(() => {
           state.inFlight -= 1
-          this._pump(host).catch(() => {})
+          this._pump(host).catch(e => console.warn('[background]', e?.message || e))
         })
     }
   }

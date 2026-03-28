@@ -213,7 +213,7 @@ export function dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }) {
         const waitMs = nextAt.getTime() - Date.now()
         if (waitMs > 250) {
           setTimeout(() => {
-            dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }).catch(() => {})
+            dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }).catch(e => console.warn('[background]', e?.message || e))
           }, Math.min(waitMs, 60_000))
           return
         }
@@ -355,7 +355,7 @@ export function dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }) {
         }
 
         setTimeout(() => {
-          dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }).catch(() => {})
+          dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }).catch(e => console.warn('[background]', e?.message || e))
         }, requeueDelayMs)
         return
       }
@@ -379,7 +379,7 @@ export function dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }) {
       }
 
       setTimeout(() => {
-        dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }).catch(() => {})
+        dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }).catch(e => console.warn('[background]', e?.message || e))
       }, delayMs)
       return
     }
@@ -597,7 +597,7 @@ export function startQueueDrainInterval(db, uploadDir, getOpenAI) {
       for (let i = 0; i < ready.length; i++) {
         if (i > 0) await new Promise((r) => setTimeout(r, 1_000))
         try {
-          dispatchCrawlerJob({ db, jobId: ready[i].id, uploadDir, getOpenAI }).catch(() => {})
+          dispatchCrawlerJob({ db, jobId: ready[i].id, uploadDir, getOpenAI }).catch(e => console.warn('[background]', e?.message || e))
         } catch { /* ignore individual dispatch errors */ }
       }
     } catch (err) {
