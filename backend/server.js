@@ -75,7 +75,7 @@ import { decryptRuntimeSecret } from './utils/runtimeSecrets.js';
 import { seedBaselineFromRepo } from './utils/seedBaselineFromRepo.js';
 import { assertFundingApiKeys, getFundingApiKeyPresence } from './src/config/apiKeys.js';
 import { ensureProfileEmailSchema } from './utils/accessControl.js';
-import { dispatchCrawlerJob } from './services/crawlerDispatcher.js';
+import { dispatchCrawlerJob, startQueueDrainInterval } from './services/crawlerDispatcher.js';
 import { cleanupStaleCrawlers } from './services/crawlerConcurrencyGuard.js'
 import { findDuplicateProfileGroups, mergeProfiles } from './services/profileDedupeService.js'
 import { assertEnv, getJwtSecretOrThrow } from './config/env.js'
@@ -585,6 +585,8 @@ const allowedMigrations = [
   { table: 'crawler_jobs', column: 'idempotency_key', type: 'TEXT' },
   { table: 'crawler_jobs', column: 'dispatch_attempts', type: 'INTEGER DEFAULT 0' },
   { table: 'crawler_jobs', column: 'next_dispatch_at', type: 'DATETIME' },
+  // Heartbeat for long-running jobs (prevents stale cleanup of active jobs)
+  { table: 'crawler_jobs', column: 'last_heartbeat_at', type: 'DATETIME' },
   // Positive classification for "REAL" opportunity invariants
   { table: 'funding_opportunities', column: 'record_origin', type: "TEXT DEFAULT 'live_crawl'" },
   { table: 'funding_opportunities', column: 'evidence_url', type: 'TEXT' },
@@ -2281,6 +2283,12 @@ if (process.env.NODE_ENV !== 'test') {
       process.once('SIGTERM', () => clearInterval(queuePollHandle))
       process.once('SIGINT', () => clearInterval(queuePollHandle))
       console.log(`[startup] Background queue poller enabled (every ${QUEUE_POLL_INTERVAL_MS / 1000}s)`)
+
+      // Periodic queue-drain interval: recovers jobs orphaned by process restarts
+      // (their in-process setTimeout timers are lost; this picks them back up).
+      const drainIntervalHandle = startQueueDrainInterval(db, uploadsDir, null)
+      process.once('SIGTERM', () => clearInterval(drainIntervalHandle))
+      process.once('SIGINT', () => clearInterval(drainIntervalHandle))
     } else {
       console.log('[startup] Background queue poller disabled (set QUEUE_POLL_ENABLED=true to enable)')
     }
