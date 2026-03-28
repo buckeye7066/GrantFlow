@@ -132,9 +132,9 @@ describe('Production Hardening - Code Verification', () => {
     })
 
     it('should have dead letter queue migration', () => {
-      const migrationPath = join(__dirname, '..', '..', 'backend', 'db', 'migrations', '006_add_dead_letter_queue.sql')
+      const migrationPath = join(__dirname, '..', '..', 'backend', 'db', 'migrations', '043_add_dead_letter_queue.sql')
       assert.ok(fs.existsSync(migrationPath), 
-        '006_add_dead_letter_queue.sql migration should exist')
+        '043_add_dead_letter_queue.sql migration should exist')
     })
 
     it('should have deadLetterQueue service', () => {

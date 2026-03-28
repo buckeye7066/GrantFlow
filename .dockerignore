@@ -19,3 +19,11 @@ backend/data/
 backend/uploads/
 backend/temp_images/
 seed/*.db
+# Exclude large video/media files from Docker builds
+*.mp4
+*.webm
+*.mov
+*.avi
+*.mkv
+*.flv
+*.wmv

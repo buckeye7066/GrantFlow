@@ -1,10 +1,6 @@
 import { fileURLToPath } from 'url'
 import { dirname, join } from 'path'
-import { randomUUID } from 'crypto'
 import fs from 'fs'
-import OpenAI from 'openai'
-import { runComprehensiveCrawler as processComprehensiveCrawlerJob } from './comprehensiveCrawlerOptimized.js'
-import { dispatchCrawlerJob } from './crawlerDispatcher.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
@@ -60,62 +56,12 @@ export async function runStartupOperations(db) {
     }
     report.nationwide_opportunities = 0
 
-    // Phase 4: Sync profile opportunities to global (batched, capped at 5000)
-    console.log('[Anya Startup] Phase 4: Syncing opportunities to global pool...')
-    try {
-      const activeVal = db?.dialect === 'postgres' ? 'TRUE' : '1'
-      const profileOpps = db.prepare(`
-        SELECT DISTINCT title, sponsor, deadline, amount_min, amount_max, 
-               amount_description, application_url, state, opportunity_type,
-               categories, keywords, eligibility_bullets, source, source_url
-        FROM funding_opportunities 
-        WHERE profile_id IS NOT NULL 
-        AND is_active = ${activeVal}
-        LIMIT 5000
-      `).all()
-      
-      let synced = 0
-      const BATCH = 50
-      for (let i = 0; i < profileOpps.length; i += BATCH) {
-        const chunk = profileOpps.slice(i, i + BATCH)
-        try {
-          await db.withTransaction(async (tx) => {
-            for (const opp of chunk) {
-              const existing = tx.prepare(`
-                SELECT id FROM funding_opportunities 
-                WHERE title = ? AND sponsor = ? AND profile_id IS NULL
-                LIMIT 1
-              `).get(opp.title, opp.sponsor)
-              
-              if (!existing) {
-                const globalId = `global-${randomUUID()}`
-                tx.prepare(`
-                  INSERT INTO funding_opportunities (
-                    id, title, sponsor, deadline, amount_min, amount_max,
-                    amount_description, application_url, state, opportunity_type,
-                    categories, keywords, eligibility_bullets, source, source_url,
-                    is_active, profile_id, created_at, updated_at
-                  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ${activeVal}, NULL, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-                `).run(
-                  globalId, opp.title, opp.sponsor, opp.deadline, opp.amount_min, opp.amount_max,
-                  opp.amount_description, opp.application_url, opp.state, opp.opportunity_type,
-                  opp.categories, opp.keywords, opp.eligibility_bullets, opp.source, opp.source_url
-                )
-                synced++
-              }
-            }
-          })
-        } catch (batchErr) {
-          console.error(`[Anya Startup] Sync batch ${i}-${i + chunk.length} failed:`, batchErr.message)
-        }
-      }
-      console.log(`[Anya Startup] Synced ${synced} of ${profileOpps.length} opportunities to global pool`)
-    } catch (syncErr) {
-      report.errors.push({
-        phase: 'global_sync',
-        error: syncErr.message
-      })
-    }
+    // Phase 4: REMOVED — copying profile-scoped crawl results into the global catalog
+    // caused cross-profile data bleed (Profile A's opportunities appeared in Profile B's
+    // matches). Each profile now sees only its own crawl results plus global catalog
+    // entries (profile_id IS NULL) via the (profile_id IS NULL OR profile_id = ?) filter
+    // in matching.js and discovery.js.
+    console.log('[Anya Startup] Phase 4: Skipped (global sync removed to prevent profile bleed)')
 
     const duration = Date.now() - startTime
     report.completed_at = new Date().toISOString()

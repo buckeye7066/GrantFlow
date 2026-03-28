@@ -150,6 +150,14 @@ async function withTimeout(promise, ms, label) {
 // This is now just an alias for consistency with existing code
 const ensureAdminRequest = ensureAdminUser;
 
+// Enforce admin access on all routes in this router.
+// Individual routes may still call ensureAdminRequest for clarity, but this
+// guarantees every endpoint is protected even if a future route omits the check.
+router.use(async (req, res, next) => {
+  if (!(await ensureAdminRequest(req, res))) return
+  return next()
+})
+
 // ----------------------------
 // Funding Providers (no secrets)
 // ----------------------------
@@ -4924,6 +4932,36 @@ router.post('/backfill-matches', async (req, res) => {
   } catch (error) {
     console.error('[admin/backfill-matches] error:', error)
     res.status(500).json({ error: error.message })
+  }
+})
+
+import { runHealthCheck, getLastHealthStatus } from '../services/anyaHealthService.js'
+
+/**
+ * GET /api/admin/anya-health
+ * Returns the most recent Anya health check status.
+ */
+router.get('/anya-health', async (req, res) => {
+  if (!(await ensureAdminRequest(req, res))) return
+  const status = getLastHealthStatus()
+  if (!status) {
+    return res.json({ status: 'no_check_run', message: 'No health check has run yet. Use POST /api/admin/anya-health/run to trigger one.' })
+  }
+  res.json(status)
+})
+
+/**
+ * POST /api/admin/anya-health/run
+ * Triggers an immediate Anya health check and returns the result.
+ */
+router.post('/anya-health/run', async (req, res) => {
+  if (!(await ensureAdminRequest(req, res))) return
+  try {
+    const result = await runHealthCheck(req.db)
+    res.json(result)
+  } catch (err) {
+    console.error('[admin/anya-health/run] Error:', err)
+    res.status(500).json({ error: err.message })
   }
 })
 
