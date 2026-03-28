@@ -28,48 +28,66 @@ async function fetchGrantsGov(params = {}) {
     fundingCategories = null, // Array of category codes
   } = params;
 
-  try {
-    const payload = {
-      rows: Number(rows) || 25,
-      // Grants.gov supports multiple statuses; string delimiter is accepted by their docs.
-      // Keep it simple for now.
-      oppStatuses: String(oppStatus || 'forecasted|posted'),
-      keyword: String(keyword || ''),
-      startRecordNum: Number(startRow) || 0,
-      // Optional fields (safe defaults)
-      agencies: '',
-      fundingCategories: Array.isArray(fundingCategories) ? fundingCategories.join('|') : '',
-      aln: '',
-      oppNum: '',
-    };
+  const payload = {
+    rows: Number(rows) || 25,
+    oppStatuses: String(oppStatus || 'forecasted|posted'),
+    keyword: String(keyword || ''),
+    startRecordNum: Number(startRow) || 0,
+    agencies: '',
+    fundingCategories: Array.isArray(fundingCategories) ? fundingCategories.join('|') : '',
+    aln: '',
+    oppNum: '',
+  };
 
-    console.log('[GrantsGov] search2 request payload:', JSON.stringify(payload))
-    const response = await axios.post(GRANTS_GOV_SEARCH2, payload, {
-      timeout: 30000,
-      headers: {
-        'Content-Type': 'application/json',
-        Accept: 'application/json',
+  const MAX_RETRIES = 3;
+  const BASE_DELAY_MS = 1000;
+
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      console.log(`[GrantsGov] search2 request (attempt ${attempt}/${MAX_RETRIES}):`, JSON.stringify(payload))
+      const response = await axios.post(GRANTS_GOV_SEARCH2, payload, {
+        timeout: 30000,
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+        }
+      });
+
+      console.log('[GrantsGov] search2 HTTP status:', response.status)
+
+      const body = response?.data ?? null
+      if (!body) return null
+
+      const hitsNode = body?.data?.oppHits ? body.data : body?.data?.data?.oppHits ? body.data.data : body
+      const oppHits = Array.isArray(hitsNode?.oppHits) ? hitsNode.oppHits : []
+      console.log('[GrantsGov] search2 oppHits returned:', oppHits.length)
+      if (oppHits.length === 0) {
+        console.warn('[GrantsGov] search2 returned 0 results; full response:', JSON.stringify(body, null, 2))
       }
-    });
+      return hitsNode
+    } catch (error) {
+      const status = error?.response?.status;
+      const detail = error?.response?.data ? JSON.stringify(error.response.data).slice(0, 400) : null;
 
-    console.log('[GrantsGov] search2 HTTP status:', response.status)
+      // Permanent failures — do not retry
+      if (status && status >= 400 && status < 500 && status !== 429) {
+        console.error('[GrantsGov] Permanent API error, not retrying:', status, detail || error.message);
+        return null;
+      }
 
-    const body = response?.data ?? null
-    if (!body) return null
+      // Transient failure — retry with exponential backoff
+      const isLastAttempt = attempt === MAX_RETRIES;
+      if (isLastAttempt) {
+        console.error('[GrantsGov] API error after all retries:', status ? `${status}` : error.message, detail || '');
+        return null;
+      }
 
-    const hitsNode = body?.data?.oppHits ? body.data : body?.data?.data?.oppHits ? body.data.data : body
-    const oppHits = Array.isArray(hitsNode?.oppHits) ? hitsNode.oppHits : []
-    console.log('[GrantsGov] search2 oppHits returned:', oppHits.length)
-    if (oppHits.length === 0) {
-      console.warn('[GrantsGov] search2 returned 0 results; full response:', JSON.stringify(body, null, 2))
+      const delayMs = BASE_DELAY_MS * (2 ** (attempt - 1));
+      console.warn(`[GrantsGov] Transient API error (${status ?? error.message}), retrying in ${delayMs}ms (attempt ${attempt}/${MAX_RETRIES})...`);
+      await new Promise(r => setTimeout(r, delayMs));
     }
-    return hitsNode
-  } catch (error) {
-    const status = error?.response?.status;
-    const detail = error?.response?.data ? JSON.stringify(error.response.data).slice(0, 400) : null;
-    console.error('[GrantsGov] API error:', status ? `${status}` : error.message, detail || '');
-    return null;
   }
+  return null;
 }
 
 /**
@@ -165,6 +183,7 @@ export async function crawlGrantsGov(db, options = {}) {
   let totalInserted = 0;
   let totalUpdated = 0;
   let totalErrors = 0;
+  let keywordErrors = 0;
   
   // Search categories to maximize coverage
   const searchTerms = [
@@ -193,6 +212,7 @@ export async function crawlGrantsGov(db, options = {}) {
   for (const keyword of searchTerms) {
     console.log(`[GrantsGov] Searching: "${keyword || 'all open grants'}"...`);
     
+    let keywordFailed = false;
     for (let page = 0; page < maxPages; page++) {
       const startRow = page * rowsPerPage;
       
@@ -202,8 +222,15 @@ export async function crawlGrantsGov(db, options = {}) {
         startRow,
       });
       
-      if (!data || !data.oppHits || data.oppHits.length === 0) {
-        break; // No more results
+      if (!data) {
+        // fetchGrantsGov already logged the error; skip this keyword
+        console.warn(`[GrantsGov] Skipping remaining pages for keyword "${keyword || 'all open grants'}" after fetch failure`);
+        keywordFailed = true;
+        break;
+      }
+
+      if (!data.oppHits || data.oppHits.length === 0) {
+        break; // No more results for this keyword
       }
       
       for (const opp of data.oppHits) {
@@ -228,14 +255,18 @@ export async function crawlGrantsGov(db, options = {}) {
         break;
       }
     }
+
+    if (keywordFailed) keywordErrors++;
   }
   
-  console.log(`[GrantsGov] Complete: ${totalInserted} inserted, ${totalUpdated} updated, ${totalErrors} errors`);
+  console.log(`[GrantsGov] Complete: ${totalInserted} inserted, ${totalUpdated} updated, ${totalErrors} errors, ${keywordErrors}/${searchTerms.length} keywords failed`);
   
   return {
     inserted: totalInserted,
     updated: totalUpdated,
     errors: totalErrors,
+    keyword_errors: keywordErrors,
+    keywords_total: searchTerms.length,
   };
 }
 

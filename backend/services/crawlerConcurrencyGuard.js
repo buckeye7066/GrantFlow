@@ -295,3 +295,85 @@ export async function cleanupStaleCrawlers(db, staleThresholdMs = 30 * 60 * 1000
     return 0
   }
 }
+
+/**
+ * Mark stale queued jobs as failed.
+ * Jobs stuck in 'queued' for longer than staleThresholdMs are considered permanently lost
+ * (e.g. the process restarted and the dispatch loop never picked them up, or they exceeded
+ * all retry cycles).  This prevents queued jobs from accumulating indefinitely.
+ *
+ * Default threshold: 24 hours.
+ *
+ * @param {object} db - Database connection
+ * @param {number} staleThresholdMs - Time in ms before a queued job is considered stale (default 24h)
+ * @returns {Promise<number>} Number of queued jobs marked as failed
+ */
+export async function cleanupStaleQueuedJobs(db, staleThresholdMs = 24 * 60 * 60 * 1000) {
+  const thresholdDate = new Date(Date.now() - staleThresholdMs)
+  const thresholdIso = thresholdDate.toISOString()
+  const thresholdSqlite = thresholdIso.replace('T', ' ').replace('Z', '').replace(/\.\d+$/, '')
+
+  try {
+    const isPostgres = db?.dialect === 'postgres'
+    const threshold = isPostgres ? thresholdIso : thresholdSqlite
+
+    const staleJobs = await db
+      .prepare(
+        isPostgres
+          ? `
+              SELECT id, type, profile_id, created_at
+              FROM crawler_jobs
+              WHERE status = 'queued'
+                AND created_at < ?
+            `
+          : `
+              SELECT id, type, profile_id, created_at
+              FROM crawler_jobs
+              WHERE status = 'queued'
+                AND datetime(created_at) < datetime(?)
+            `,
+      )
+      .all(threshold)
+
+    let cleaned = 0
+    for (const job of staleJobs) {
+      const staleHours = Math.round(staleThresholdMs / (60 * 60 * 1000))
+      const errorMessage = `Job timed out in queue after ${staleHours > 0 ? `${staleHours}h` : `${staleThresholdMs}ms`}`
+
+      await db
+        .prepare(
+          `
+            UPDATE crawler_jobs
+            SET status = 'failed',
+                completed_at = CURRENT_TIMESTAMP,
+                error = ?
+            WHERE id = ?
+          `,
+        )
+        .run(errorMessage, job.id)
+
+      await logFailedJob(db, {
+        jobId: job.id,
+        jobType: job.type,
+        profileId: job.profile_id,
+        error: errorMessage,
+        severity: 'medium',
+      }).catch(err => {
+        console.warn('[crawler-concurrency] Failed to create dead letter entry for stale queued job:', err?.message)
+      })
+
+      cleaned++
+      console.warn('[crawler-concurrency] Cleaned stale queued job', {
+        jobId: job.id,
+        type: job.type,
+        profileId: job.profile_id,
+        createdAt: job.created_at,
+      })
+    }
+
+    return cleaned
+  } catch (error) {
+    console.error('[crawler-concurrency] Failed to cleanup stale queued jobs:', error?.message)
+    return 0
+  }
+}
