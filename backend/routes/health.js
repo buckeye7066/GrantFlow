@@ -14,6 +14,14 @@ const router = express.Router()
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 
+// Read package version once at startup (cached) to avoid per-request file system access.
+let _cachedPkgVersion = null
+try {
+  const pkgPath = path.resolve(__dirname, '../../package.json')
+  const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'))
+  _cachedPkgVersion = pkg.version || null
+} catch { /* ignore */ }
+
 function getBuildInfo() {
   const commit =
     process.env.RAILWAY_GIT_COMMIT_SHA ||
@@ -297,15 +305,8 @@ router.get('/api/health/alerts', async (req, res) => {
 
 // Deployment verification: shows what code version is actually running
 router.get('/api/health/deployment', (_req, res) => {
-  let pkgVersion = null
-  try {
-    const pkgPath = path.resolve(__dirname, '../../package.json')
-    const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'))
-    pkgVersion = pkg.version || null
-  } catch { /* ignore */ }
-
   res.json({
-    version: process.env.npm_package_version || pkgVersion || 'unknown',
+    version: process.env.npm_package_version || _cachedPkgVersion || 'unknown',
     commit: process.env.GIT_COMMIT_SHA || process.env.RAILWAY_GIT_COMMIT_SHA || process.env.COMMIT_SHA || 'unknown',
     branch: process.env.GIT_BRANCH || process.env.RAILWAY_GIT_BRANCH || 'unknown',
     deployedAt: process.env.DEPLOY_TIMESTAMP || 'unknown',

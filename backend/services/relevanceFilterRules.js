@@ -606,8 +606,7 @@ export const RELEVANCE_RULES = [
     },
     reason: (_pd, opportunity) => {
       const nearMatch = (opportunity?.title || '').match(/near\s+([A-Za-z\s]+),\s*([A-Z]{2})/i)
-      const pd = _pd
-      return `Geographic mismatch: resource near ${nearMatch?.[1]?.trim() || ''} but profile in ${pd.city || ''}`
+      return `Geographic mismatch: resource near ${nearMatch?.[1]?.trim() || ''} but profile in ${_pd.city || ''}`
     },
   },
 ]
