@@ -20,6 +20,7 @@
 *.toml      text eol=lf
 *.env       text eol=lf
 *.sh        text eol=lf
+*.sql       text eol=lf
 *.bash      text eol=lf
 
 # ── Config / lock files ───────────────────────────────────────────────────────

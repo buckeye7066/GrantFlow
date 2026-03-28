@@ -1,4 +1,4 @@
--- SQLite migration 005: crawler job snapshot/idempotency + dead-letter queue
+-- SQLite migration 042: crawler job snapshot/idempotency + dead-letter queue
 
 -- Crawler job stability metadata
 ALTER TABLE crawler_jobs ADD COLUMN profile_context_snapshot TEXT;

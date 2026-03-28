@@ -23,7 +23,7 @@ For documentation, see **`docs/README.md`** (index). Key: **`docs/CRAWLERS.md`**
 
 ## Getting started
 
-The backend service requires **Node.js 20+** and **PostgreSQL**.  See `docs/ENVIRONMENT.md` for environment variables and `docs/VERCEL_RAILWAY_DEPLOYMENT.md` for deployment options.
+The backend service requires **Node.js 20+** and **PostgreSQL**.  See `docs/ENVIRONMENT.md` for environment variables and `docs/VERCEL_RAILWAY_DEPLOYMENT.md` or `docs/DEPLOYMENT_DO.md` for deployment options.
 
 To set up a development environment:
 
