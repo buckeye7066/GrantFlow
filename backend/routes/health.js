@@ -1,11 +1,26 @@
 import express from 'express'
 import fs from 'fs'
+import path from 'path'
+import { fileURLToPath } from 'url'
 import { getSafeHealthSummary } from '../services/diagnosticsService.js'
 import { ensureUploadsDirWritable, isLikelyPersistentPath } from '../utils/uploadsDir.js'
 import { getDataReadiness, getSystemAlerts } from '../services/dataReadinessService.js'
 import { getPipelineHealth } from '../middleware/pipelineMonitor.js'
+import { MATCHER_VERSION } from '../services/matchDecisionEngine.js'
+import { RELEVANCE_RULES } from '../services/relevanceFilterRules.js'
 
 const router = express.Router()
+
+const __filename = fileURLToPath(import.meta.url)
+const __dirname = path.dirname(__filename)
+
+// Read package version once at startup (cached) to avoid per-request file system access.
+let _cachedPkgVersion = null
+try {
+  const pkgPath = path.resolve(__dirname, '../../package.json')
+  const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'))
+  _cachedPkgVersion = pkg.version || null
+} catch { /* ignore */ }
 
 function getBuildInfo() {
   const commit =
@@ -15,7 +30,15 @@ function getBuildInfo() {
     process.env.VERCEL_GIT_COMMIT_SHA ||
     null
 
+  let pkgVersion = null
+  try {
+    const pkgPath = path.resolve(__dirname, '../../package.json')
+    const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'))
+    pkgVersion = pkg.version || null
+  } catch { /* ignore */ }
+
   return {
+    version: pkgVersion,
     commit_sha: commit ? String(commit) : null,
     node_env: process.env.NODE_ENV ? String(process.env.NODE_ENV) : null,
     runtime: process.env.RAILWAY_ENVIRONMENT ? 'railway' : process.env.VERCEL ? 'vercel' : null,
@@ -278,6 +301,21 @@ router.get('/api/health/alerts', async (req, res) => {
       timestamp: new Date().toISOString(),
     })
   }
+})
+
+// Deployment verification: shows what code version is actually running
+router.get('/api/health/deployment', (_req, res) => {
+  res.json({
+    version: process.env.npm_package_version || _cachedPkgVersion || 'unknown',
+    commit: process.env.GIT_COMMIT_SHA || process.env.RAILWAY_GIT_COMMIT_SHA || process.env.COMMIT_SHA || 'unknown',
+    branch: process.env.GIT_BRANCH || process.env.RAILWAY_GIT_BRANCH || 'unknown',
+    deployedAt: process.env.DEPLOY_TIMESTAMP || 'unknown',
+    uptime: process.uptime(),
+    nodeVersion: process.version,
+    matcherVersion: MATCHER_VERSION,
+    relevanceFilterRuleCount: RELEVANCE_RULES.length,
+    timestamp: new Date().toISOString(),
+  })
 })
 
 export default router

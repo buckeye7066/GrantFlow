@@ -69,6 +69,7 @@ export const NAV_GROUPS = [
     icon: Search,
     items: [
       { title: "Discover Grants", routeName: "DiscoverGrants", url: createPageUrl("DiscoverGrants"), icon: Search },
+      { title: "Funding Results", routeName: "FundingResults", url: createPageUrl("FundingResults"), icon: Search },
       { title: "Smart Matcher", routeName: "SmartMatcher", url: createPageUrl("SmartMatcher"), icon: Brain },
       { title: "Profile Matcher", routeName: "ProfileMatcher", url: createPageUrl("ProfileMatcher"), icon: Target },
       { title: "Funding Opportunities", routeName: "FundingOpportunities", url: createPageUrl("FundingOpportunities"), icon: Layers },
@@ -161,7 +162,7 @@ export const ROUTE_LABELS = {
   ProfileDetail: "Profile",
   Funder: "Funders",
   DiscoverGrants: "Discover Grants",
-  SmartMatcher: "Smart Matcher",
+  FundingResults: "Funding Results",
   FundingOpportunities: "Funding Opportunities",
   ItemFunding: "Item Funding",
   ProfileMatcher: "Profile Matcher",
@@ -201,7 +202,7 @@ export const LIFECYCLE_PHASES = [
   { id: "find", label: "Find Grants", path: "/DiscoverGrants" },
   { id: "review", label: "Review Fit", path: "/Pipeline" },
   { id: "prepare", label: "Prepare Materials", path: "/Documents" },
-  { id: "submit", label: "Submit", path: "/Apply" },
+  { id: "submit", label: "Submit", path: "/Pipeline" },
   { id: "track", label: "Track Status", path: "/Pipeline" },
 ];
 

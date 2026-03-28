@@ -30,6 +30,7 @@ import itemsRouter from './routes/items.js';
 import profilesRouter from './routes/profiles.js';
 import remindersRouter from './routes/reminders.js';
 import crawlersRouter from './routes/crawlers.js';
+import vehiclesRouter from './routes/vehicles.js';
 import realCrawlersRouter from './routes/realCrawlers.js';
 import matchingRouter from './routes/matching.js';
 import grantMonitoringRouter from './routes/grantMonitoring.js';
@@ -74,7 +75,8 @@ import { decryptRuntimeSecret } from './utils/runtimeSecrets.js';
 import { seedBaselineFromRepo } from './utils/seedBaselineFromRepo.js';
 import { assertFundingApiKeys, getFundingApiKeyPresence } from './src/config/apiKeys.js';
 import { ensureProfileEmailSchema } from './utils/accessControl.js';
-import { dispatchCrawlerJob } from './services/crawlerDispatcher.js';
+import { dispatchCrawlerJob, startQueueDrainInterval } from './services/crawlerDispatcher.js';
+import { cleanupStaleCrawlers, cleanupStaleQueuedJobs } from './services/crawlerConcurrencyGuard.js'
 import { findDuplicateProfileGroups, mergeProfiles } from './services/profileDedupeService.js'
 import { assertEnv, getJwtSecretOrThrow } from './config/env.js'
 import { resolveUploadsDir, ensureUploadsDirWritable, isLikelyPersistentPath } from './utils/uploadsDir.js'
@@ -583,6 +585,8 @@ const allowedMigrations = [
   { table: 'crawler_jobs', column: 'idempotency_key', type: 'TEXT' },
   { table: 'crawler_jobs', column: 'dispatch_attempts', type: 'INTEGER DEFAULT 0' },
   { table: 'crawler_jobs', column: 'next_dispatch_at', type: 'DATETIME' },
+  // Heartbeat for long-running jobs (prevents stale cleanup of active jobs)
+  { table: 'crawler_jobs', column: 'last_heartbeat_at', type: 'DATETIME' },
   // Positive classification for "REAL" opportunity invariants
   { table: 'funding_opportunities', column: 'record_origin', type: "TEXT DEFAULT 'live_crawl'" },
   { table: 'funding_opportunities', column: 'evidence_url', type: 'TEXT' },
@@ -1609,15 +1613,16 @@ app.use('/api/matching', requestTimeout(PIPELINE_TIMEOUT), matchingRouter);
 app.use('/api/grant-monitoring', grantMonitoringRouter);
 app.use('/api/crawlers', responseCache(30_000), crawlersRouter);
 app.use('/api/real-crawlers', realCrawlersRouter);
+app.use('/api/vehicles', vehiclesRouter);
 app.use('/api/preferences', preferencesRouter);
 // Incognito module endpoints (gated by user custom preferences)
 app.use('/api/incognito', incognitoRouter);
 app.use('/api/version', versionRouter);
-// Base44 function-style endpoints (used by NOFO Parser + Diagnostics)
+// Function-style endpoints (used by NOFO Parser + Diagnostics)
 app.use('/api', lazyRouter('./routes/nofo.js'));
-// Base44 legacy function-style endpoints (legacy UI flows: DataSources/SourceDirectory)
+// Legacy function-style endpoints (legacy UI flows: DataSources/SourceDirectory)
 app.use('/api', lazyRouter('./routes/legacyFunctions.js'));
-// Base44 legacy entity endpoints
+// Legacy entity endpoints
 app.use('/api/crawl-logs', crawlLogsRouter);
 // Geo Crawl monitor + start endpoints (admin-only)
 app.use('/api/geo-crawl', lazyRouter('./routes/geoCrawl.js', (mod) => mod.default({ uploadDir: uploadsDir, getOpenAI: null })));
@@ -2168,13 +2173,106 @@ if (process.env.NODE_ENV !== 'test') {
       }
     })();
 
+    // Re-queue jobs that previously failed due to concurrency exhaustion on startup stampede.
+    // These are recoverable — reset them so the staggered drain below can pick them up.
+    ;(async () => {
+      try {
+        const r = await db.prepare(`
+            UPDATE crawler_jobs
+            SET status = 'queued',
+                error = NULL,
+                dispatch_attempts = 0,
+                next_dispatch_at = NULL,
+                completed_at = NULL
+            WHERE status = 'failed'
+              AND error = 'Crawler dispatch exhausted due to concurrency limits'
+          `).run()
+        const count = Number(r?.changes ?? r?.rowCount ?? 0)
+        if (count > 0) {
+          console.log(`[startup] Re-queued ${count} concurrency-exhausted job(s) for retry`)
+        }
+      } catch (err) {
+        console.error('[startup] Failed to re-queue exhausted jobs:', err?.message || err)
+      }
+    })();
+
+    // One-time cleanup on startup to recover orphaned crawler jobs from crashes/restarts.
+    ;(async () => {
+      try {
+        const cleaned = await cleanupStaleCrawlers(db)
+        if (cleaned > 0) {
+          console.log(`[startup] Cleaned ${cleaned} stale crawler job(s) from previous run`)
+        }
+        const cleanedQueued = await cleanupStaleQueuedJobs(db)
+        if (cleanedQueued > 0) {
+          console.log(`[startup] Cleaned ${cleanedQueued} stale queued job(s) from previous run`)
+        }
+      } catch (err) {
+        console.warn('[startup] Stale crawler cleanup failed:', err?.message)
+      }
+    })()
+
     // Background queue poller: pick up orphaned 'queued' jobs that were never dispatched.
     const QUEUE_POLL_INTERVAL_MS = Number.parseInt(process.env.QUEUE_POLL_INTERVAL_MS || '60000', 10)
     const queuePollEnabled = String(process.env.QUEUE_POLL_ENABLED ?? 'true').toLowerCase() !== 'false'
 
+    // Gradually dispatch queued jobs on startup to avoid a stampede that exhausts concurrency.
+    async function drainQueuedJobsGradually(dbRef, uploadsDirRef) {
+      const STARTUP_DELAY_MS = Number.parseInt(process.env.QUEUE_STARTUP_DELAY_MS || '15000', 10)
+      const STAGGER_DELAY_MS = Number.parseInt(process.env.QUEUE_STAGGER_DELAY_MS || '3000', 10)
+      const INITIAL_BATCH = 2
+
+      await new Promise((r) => setTimeout(r, STARTUP_DELAY_MS))
+
+      let queued
+      try {
+        queued = await dbRef.prepare(`
+          SELECT id FROM crawler_jobs
+          WHERE status = 'queued'
+          ORDER BY created_at ASC
+          LIMIT ?
+        `).all(INITIAL_BATCH)
+      } catch (err) {
+        console.warn('[startup-drain] Failed to query queued jobs:', err?.message)
+        return
+      }
+
+      if (!Array.isArray(queued) || queued.length === 0) return
+
+      console.log(`[startup-drain] Dispatching ${queued.length} queued job(s) with ${STAGGER_DELAY_MS}ms stagger`)
+      for (let i = 0; i < queued.length; i++) {
+        if (i > 0) await new Promise((r) => setTimeout(r, STAGGER_DELAY_MS))
+        try {
+          dispatchCrawlerJob({ db: dbRef, jobId: queued[i].id, uploadDir: uploadsDirRef, getOpenAI: null }).catch(() => {})
+        } catch { /* ignore individual dispatch errors */ }
+      }
+    }
+
     if (queuePollEnabled) {
+      // Run a staggered startup drain before the regular poller begins.
+      drainQueuedJobsGradually(db, uploadsDir).catch((err) => {
+        console.warn('[startup-drain] Staggered drain failed:', err?.message)
+      })
+
       const queuePollHandle = setInterval(async () => {
         try {
+          // Clean up stale running jobs before attempting to dispatch
+          try {
+            await cleanupStaleCrawlers(db)
+          } catch (err) {
+            console.warn('[queue-poller] Stale crawler cleanup failed (ignored):', err?.message)
+          }
+
+          // Clean up queued jobs that have been waiting longer than 24 hours
+          try {
+            const cleanedQueued = await cleanupStaleQueuedJobs(db)
+            if (cleanedQueued > 0) {
+              console.warn(`[queue-poller] Cleaned ${cleanedQueued} stale queued job(s)`)
+            }
+          } catch (err) {
+            console.warn('[queue-poller] Stale queued job cleanup failed (ignored):', err?.message)
+          }
+
           const queued = await db.prepare(`
             SELECT id FROM crawler_jobs
             WHERE status = 'queued'
@@ -2199,6 +2297,12 @@ if (process.env.NODE_ENV !== 'test') {
       process.once('SIGTERM', () => clearInterval(queuePollHandle))
       process.once('SIGINT', () => clearInterval(queuePollHandle))
       console.log(`[startup] Background queue poller enabled (every ${QUEUE_POLL_INTERVAL_MS / 1000}s)`)
+
+      // Periodic queue-drain interval: recovers jobs orphaned by process restarts
+      // (their in-process setTimeout timers are lost; this picks them back up).
+      const drainIntervalHandle = startQueueDrainInterval(db, uploadsDir, null)
+      process.once('SIGTERM', () => clearInterval(drainIntervalHandle))
+      process.once('SIGINT', () => clearInterval(drainIntervalHandle))
     } else {
       console.log('[startup] Background queue poller disabled (set QUEUE_POLL_ENABLED=true to enable)')
     }

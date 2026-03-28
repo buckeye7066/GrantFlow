@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { base44 } from '@/api/base44Client';
+import client from '@/api/client';
 import { createLogger } from '@/utils/logger'
 
 const log = createLogger('useDiscoverSearch')
@@ -51,7 +51,7 @@ export function useDiscoverSearch() {
       set(s => ({ ...s, phase: 'polling', progress: 0.1 }));
 
       // Invoke the search function
-      const response = await base44.functions.invoke('searchOpportunities', payload);
+      const response = await client.functions.invoke('searchOpportunities', payload);
 
       // response is the parsed JSON body (apiFetch throws on non-2xx)
       if (response?.success) {
@@ -87,7 +87,7 @@ export function useDiscoverSearch() {
             paging: { limit: 25, afterId: state.nextCursor.afterId }
         };
         
-        const response = await base44.functions.invoke('searchOpportunities', loadMorePayload);
+        const response = await client.functions.invoke('searchOpportunities', loadMorePayload);
         
         if (response?.success) {
             set(s => ({

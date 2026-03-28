@@ -1,6 +1,6 @@
 
 import React, { useState } from "react";
-import { base44 } from "@/api/base44Client";
+import client from '@/api/client';
 import { useMutation, useQueryClient, useQuery } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -31,7 +31,7 @@ export default function AddExpenseForm({ grantId, onSuccess }) {
   const { data: grant } = useQuery({
     queryKey: ['grant', grantId],
     queryFn: async () => {
-      const grants = await base44.entities.Grant.list();
+      const grants = await client.entities.Grant.list();
       const foundGrant = grants.find(g => g.id === grantId);
       if (foundGrant) {
         setFormData(prev => ({...prev, organization_id: foundGrant.organization_id}));
@@ -48,7 +48,7 @@ export default function AddExpenseForm({ grantId, onSuccess }) {
         ...data,
         date: data.date instanceof Date ? data.date.toISOString().split('T')[0] : data.date
       };
-      return base44.entities.Expense.create(submitData);
+      return client.entities.Expense.create(submitData);
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['expenses', grantId] });

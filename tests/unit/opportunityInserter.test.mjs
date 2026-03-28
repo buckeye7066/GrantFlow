@@ -43,7 +43,16 @@ function createDb() {
       is_loan INTEGER DEFAULT 0,
       is_active INTEGER DEFAULT 1,
       last_crawled DATETIME,
-      contact_info TEXT DEFAULT NULL
+      contact_info TEXT DEFAULT NULL,
+      funding_domain TEXT,
+      funding_subdomain TEXT,
+      source_category TEXT,
+      compliance_required TEXT DEFAULT '[]',
+      certifications_required TEXT DEFAULT '[]',
+      geo_eligibility TEXT,
+      signal_tags TEXT DEFAULT '[]',
+      verified_url INTEGER DEFAULT 0,
+      crawler_version TEXT
     );
 
     CREATE UNIQUE INDEX funding_opportunities_source_source_id_uniq

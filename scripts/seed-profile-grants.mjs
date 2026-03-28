@@ -2,7 +2,12 @@
 /**
  * Seed Profile Grants
  * 
- * Seeds each profile with 50 real grants that match at least 80%.
+ * Seeds each profile with real grants evaluated by the canonical decision engine.
+ * Adaptive candidate selection: if junk-filtered candidates ≤ 200, all are evaluated
+ * canonically; if > 200, the top 200 by heuristic score are used as a generous ceiling.
+ * Strategy: Stage 1 lightweight junk filter (heuristic >= 5) → Stage 2 canonical engine gate.
+ * The local heuristic is only used to rank candidates before canonical evaluation,
+ * NOT as an acceptance gate. computeMatchDecision() is the sole acceptance authority.
  * Only uses verified real funding opportunities - no fakes.
  */
 
@@ -19,6 +24,15 @@ import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 import { fileURLToPath } from 'url';
+import { applyRelevanceFilter } from '../backend/services/relevanceFilter.js';
+import {
+  computeMatchDecision,
+  normalizeProfile,
+  normalizeOpportunity,
+  computeProfileFingerprint,
+  computeOpportunityFingerprint,
+  MATCHER_VERSION,
+} from '../backend/services/matchDecisionEngine.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -338,16 +352,30 @@ const placeholderGrantsRemoved = db.prepare(`
 `).run();
 console.log(`   Removed ${placeholderGrantsRemoved.changes} placeholder grants`);
 
-// Prepare insert statement
-const insertGrant = db.prepare(`
-  INSERT INTO grants (
-    id, organization_id, title, funder, deadline, status, 
-    match_score, match_reasons, application_url, amount_requested, notes
-  ) VALUES (?, ?, ?, ?, ?, 'interested', ?, ?, ?, ?, ?)
-`);
+// Prepare insert statement — detect whether decision columns are present
+const _grantCols = db.prepare('PRAGMA table_info(grants)').all().map(c => c.name);
+const _hasDecisionCols = _grantCols.includes('match_decision');
+
+const insertGrant = _hasDecisionCols
+  ? db.prepare(`
+      INSERT INTO grants (
+        id, organization_id, profile_id, title, funder, deadline, status,
+        match_score, match_reasons, application_url, amount_requested, notes,
+        funding_opportunity_id,
+        match_decision, match_explanation, matched_needs, eligibility_status,
+        ineligibility_reasons, profile_fingerprint, opportunity_fingerprint,
+        matcher_version, evaluated_at, match_confidence
+      ) VALUES (?, ?, ?, ?, ?, ?, 'interested', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `)
+  : db.prepare(`
+      INSERT INTO grants (
+        id, organization_id, profile_id, title, funder, deadline, status,
+        match_score, match_reasons, application_url, amount_requested, notes
+      ) VALUES (?, ?, ?, ?, ?, ?, 'interested', ?, ?, ?, ?, ?)
+    `);
 
 const checkExisting = db.prepare(`
-  SELECT id FROM grants WHERE organization_id = ? AND title = ?
+  SELECT id FROM grants WHERE profile_id = ? AND title = ?
 `);
 
 console.log('\n4. Seeding grants for each profile...');
@@ -360,11 +388,51 @@ for (const profile of profiles) {
   // Get profile sections
   const sections = db.prepare('SELECT * FROM profile_sections WHERE profile_id = ?').all(profile.id);
   
-  // Build signals
+  // Build signals (used as pre-filter heuristic — final acceptance uses computeMatchDecision below)
   const signals = buildProfileSignals(profile, sections);
-  const profileState = profile.state || 
-    sections.find(s => s.section_key === 'location_focus')?.data?.state ||
-    sections.find(s => s.section_key === 'basic_information')?.data?.state;
+
+  // Convert sections array to object format for canonical decision engine
+  const sectionsObj = {};
+  for (const row of sections) {
+    try { sectionsObj[row.section_key] = typeof row.data === 'string' ? JSON.parse(row.data) : (row.data || {}); } catch { sectionsObj[row.section_key] = {}; }
+  }
+
+  // Fix: sections[].data is a JSON string — parse it before accessing .state
+  function parseSectionData(sections, key) {
+    const row = sections.find(s => s.section_key === key);
+    if (!row || !row.data) return {};
+    try { return typeof row.data === 'string' ? JSON.parse(row.data) : row.data; } catch { return {}; }
+  }
+  const locFocusData = parseSectionData(sections, 'location_focus');
+  const basicInfoData = parseSectionData(sections, 'basic_information');
+  const addr = basicInfoData.address;
+  let stateFromAddr = null;
+  if (typeof addr === 'string') {
+    stateFromAddr = (addr.match(/\b([A-Z]{2})\s*,?\s*\d{5}/) || [])[1] || null;
+  } else if (addr && typeof addr === 'object') {
+    stateFromAddr = addr.state || null;
+  }
+  const profileState = profile.state || locFocusData.state || basicInfoData.state || stateFromAddr || null;
+
+  // Build profileData for relevance filter
+  const demographicsData = parseSectionData(sections, 'demographics');
+  const militaryData = parseSectionData(sections, 'military_service');
+  const healthData = parseSectionData(sections, 'health_medical');
+  const familyData = parseSectionData(sections, 'family_life');
+  let parsedTags = [];
+  try { parsedTags = typeof profile.tags === 'string' ? JSON.parse(profile.tags) : (profile.tags || []); } catch { parsedTags = []; }
+  const profileData = {
+    primary_type: profile.primary_type || null,
+    veteran_status: militaryData.veteran || demographicsData.veteran_status || null,
+    immigrant_status: demographicsData.immigrant_status || null,
+    disability_status: healthData.disability_type || demographicsData.disability_status || null,
+    state: profileState,
+    tags: parsedTags,
+    gender: basicInfoData.gender || demographicsData.gender || null,
+    age: basicInfoData.age || demographicsData.age || null,
+    foster_youth: familyData.foster_youth || null,
+    first_responder: null,
+  };
   
   // Get or create organization for this profile
   let orgId = profile.organization_id;
@@ -395,7 +463,19 @@ for (const profile of profiles) {
     
     const { score, matchReasons } = calculateMatchScore(opp, signals, profileState);
     
-    if (score >= 80) {
+    // Stage 1 (junk filter): only skip obviously irrelevant candidates (score < 5).
+    // The canonical decision engine (computeMatchDecision) is the final acceptance
+    // authority — this heuristic must NOT exclude plausible canonical matches.
+    if (score >= 5) {
+      // Apply relevance filter before adding to candidates
+      const oppForFilter = {
+        ...opp,
+        keywords: Array.isArray(opp.keywords) ? opp.keywords : (() => { try { return JSON.parse(opp.keywords || '[]'); } catch { return []; } })(),
+        categories: Array.isArray(opp.categories) ? opp.categories : (() => { try { return JSON.parse(opp.categories || '[]'); } catch { return []; } })(),
+      };
+      const filterResult = applyRelevanceFilter(oppForFilter, profileData);
+      if (!filterResult.pass) continue;
+
       scoredOpps.push({
         ...opp,
         match_score: score,
@@ -404,31 +484,92 @@ for (const profile of profiles) {
     }
   }
   
-  // Sort by score and take top 50
-  scoredOpps.sort((a, b) => b.match_score - a.match_score);
-  const top50 = scoredOpps.slice(0, 50);
-  
-  console.log(`   Found ${scoredOpps.length} opportunities with 80%+ match, adding top 50...`);
-  
+  // ---------------------------------------------------------------------------
+  // Adaptive candidate selection — three-tier strategy:
+  //   1. Junk filter (heuristic < 5): removes clear garbage (applied above).
+  //   2. Adaptive cap (≤ ADAPTIVE_CANDIDATE_CAP pass through; > cap takes top N):
+  //      bounds worst-case canonical engine calls while ensuring no plausible
+  //      canonical match is excluded merely because it ranked below an old
+  //      hard-50 cutoff. In practice, most profiles have well under 200
+  //      junk-filtered candidates so the cap rarely activates.
+  //   3. Canonical engine (computeMatchDecision): sole acceptance authority.
+  // ---------------------------------------------------------------------------
+  const ADAPTIVE_CANDIDATE_CAP = 200;
+  let candidatePool;
+  if (scoredOpps.length <= ADAPTIVE_CANDIDATE_CAP) {
+    // Evaluate ALL junk-filtered candidates — no cap needed.
+    candidatePool = scoredOpps;
+  } else {
+    // More than the cap: sort by heuristic and take the top N.
+    // A ceiling of 200 is generous enough that missing a strong canonical
+    // match is virtually impossible while keeping performance bounded.
+    scoredOpps.sort((a, b) => b.match_score - a.match_score);
+    candidatePool = scoredOpps.slice(0, ADAPTIVE_CANDIDATE_CAP);
+  }
+
+  const passingCount = scoredOpps.length <= ADAPTIVE_CANDIDATE_CAP
+    ? `all ${scoredOpps.length}`
+    : `top ${ADAPTIVE_CANDIDATE_CAP} of ${scoredOpps.length}`;
+  console.log(`   Found ${scoredOpps.length} heuristic candidates (junk-filtered), passing ${passingCount} to canonical engine...`);
+
   let addedForProfile = 0;
-  for (const opp of top50) {
-    // Check if already exists
-    const existing = checkExisting.get(orgId, opp.title);
+  for (const opp of candidatePool) {
+    // Check if already exists for this profile
+    const existing = checkExisting.get(profile.id, opp.title);
     if (existing) continue;
-    
+
+    // --- CANONICAL DECISION ENGINE: final acceptance authority ---
+    const decision = computeMatchDecision(profile, opp, { profileSections: sectionsObj });
+
+    // Hard reject: never insert into profile pipeline
+    if (decision.decision === 'REJECT') continue;
+
+    // Use canonical score as the stored match score
+    const finalScore = decision.score;
+
     try {
-      insertGrant.run(
-        crypto.randomUUID(),
-        orgId,
-        opp.title,
-        opp.sponsor,
-        opp.deadline || null,
-        opp.match_score,
-        JSON.stringify(opp.match_reasons.slice(0, 5)),
-        opp.application_url || null,
-        opp.amount_max || opp.amount_min || null,
-        opp.description ? opp.description.substring(0, 500) : null
-      );
+      if (_hasDecisionCols) {
+        const profileFingerprint = computeProfileFingerprint(normalizeProfile(profile, sectionsObj)) ?? null;
+        const opportunityFingerprint = computeOpportunityFingerprint(normalizeOpportunity(opp)) ?? null;
+        insertGrant.run(
+          crypto.randomUUID(),
+          orgId,
+          profile.id,
+          opp.title,
+          opp.sponsor,
+          opp.deadline || null,
+          finalScore,
+          JSON.stringify(decision.matchedNeeds ?? []),
+          opp.application_url || null,
+          opp.amount_max || opp.amount_min || null,
+          opp.description ? opp.description.substring(0, 500) : null,
+          opp.id || null,
+          decision.decision,
+          decision.explanation ?? null,
+          JSON.stringify(decision.matchedNeeds ?? []),
+          String(decision.eligible),
+          JSON.stringify(decision.ineligibilityReasons ?? []),
+          profileFingerprint,
+          opportunityFingerprint,
+          MATCHER_VERSION,
+          decision.evaluatedAt ?? new Date().toISOString(),
+          decision.confidence ?? null,
+        );
+      } else {
+        insertGrant.run(
+          crypto.randomUUID(),
+          orgId,
+          profile.id,
+          opp.title,
+          opp.sponsor,
+          opp.deadline || null,
+          finalScore,
+          JSON.stringify(decision.matchedNeeds ?? []),
+          opp.application_url || null,
+          opp.amount_max || opp.amount_min || null,
+          opp.description ? opp.description.substring(0, 500) : null,
+        );
+      }
       addedForProfile++;
       totalGrantsAdded++;
     } catch (err) {
@@ -449,8 +590,7 @@ console.log(`   Total grants added: ${totalGrantsAdded}`);
 const grantsByProfile = db.prepare(`
   SELECT p.display_name, COUNT(g.id) as grant_count
   FROM profiles p
-  LEFT JOIN organizations o ON p.organization_id = o.id
-  LEFT JOIN grants g ON o.id = g.organization_id
+  LEFT JOIN grants g ON p.id = g.profile_id
   GROUP BY p.id
 `).all();
 
@@ -468,4 +608,4 @@ const fakeCheck = db.prepare(`
 console.log(`\n   Fake grants remaining: ${fakeCheck.count}`);
 
 db.close();
-console.log('\n✅ Done! Each profile now has up to 50 real grants with 80%+ match.');
+console.log('\n✅ Done! Each profile now has real grants evaluated by the canonical decision engine.');

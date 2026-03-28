@@ -208,7 +208,18 @@ CREATE TABLE IF NOT EXISTS funding_opportunities (
   profile_id TEXT,
 
   -- Misc
-  notes TEXT
+  notes TEXT,
+
+  -- Domain corpus metadata (National Funding Aggregator)
+  funding_domain TEXT,
+  funding_subdomain TEXT,
+  source_category TEXT,
+  compliance_required TEXT DEFAULT '[]',
+  certifications_required TEXT DEFAULT '[]',
+  geo_eligibility TEXT,
+  signal_tags TEXT DEFAULT '[]',
+  verified_url INTEGER DEFAULT 0,
+  crawler_version TEXT
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS ux_funding_opportunities_fingerprint
@@ -1016,7 +1027,10 @@ CREATE TABLE IF NOT EXISTS crawler_jobs (
   dispatch_attempts INTEGER DEFAULT 0,
   next_dispatch_at DATETIME,
   retry_count INTEGER DEFAULT 0,
-  last_retry_at DATETIME
+  last_retry_at DATETIME,
+  -- Heartbeat timestamp updated periodically by long-running jobs to prove liveness.
+  -- cleanupStaleCrawlers skips jobs with a recent heartbeat even if started_at is old.
+  last_heartbeat_at DATETIME
 );
 
 CREATE INDEX IF NOT EXISTS idx_crawler_jobs_status ON crawler_jobs(status);
@@ -1992,3 +2006,24 @@ CREATE TABLE IF NOT EXISTS crawl_metadata (
 
 CREATE INDEX IF NOT EXISTS idx_crawl_results_profile ON crawl_results(profile_id);
 CREATE INDEX IF NOT EXISTS idx_crawl_results_score ON crawl_results(match_score DESC);
+
+-- Vehicle Opportunities pipeline (see migration 037_vehicle_opportunities.sql for Postgres equivalent)
+CREATE TABLE IF NOT EXISTS vehicle_opportunities (
+  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+  vehicle_type TEXT NOT NULL,
+  title TEXT NOT NULL,
+  price REAL,
+  mileage INTEGER,
+  year INTEGER,
+  transmission TEXT,
+  color TEXT,
+  location TEXT,
+  link TEXT NOT NULL,
+  vin TEXT,
+  clean_title INTEGER DEFAULT 1,
+  source TEXT,
+  created_at DATETIME DEFAULT (datetime('now'))
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_vehicle_opportunities_link ON vehicle_opportunities(link);
+CREATE INDEX IF NOT EXISTS idx_vehicle_opportunities_created_at ON vehicle_opportunities(created_at);

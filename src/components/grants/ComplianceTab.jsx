@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { base44 } from '@/api/base44Client';
+import client from '@/api/client';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Loader2, PlusCircle, FileText } from 'lucide-react';
@@ -22,18 +22,18 @@ export default function ComplianceTab({ grant }) {
 
   const { data: award, isLoading: isLoadingAward } = useQuery({
     queryKey: ['grantAward', grant.id],
-    queryFn: () => base44.entities.GrantAward.filter({ grant_id: grant.id }).then(res => res[0]),
+    queryFn: () => client.entities.GrantAward.filter({ grant_id: grant.id }).then(res => res[0]),
     enabled: grant.status === 'awarded',
   });
 
   const { data: expenses = [], isLoading: isLoadingExpenses } = useQuery({
     queryKey: ['expenses', grant.id],
-    queryFn: () => base44.entities.Expense.filter({ grant_id: grant.id }),
+    queryFn: () => client.entities.Expense.filter({ grant_id: grant.id }),
     enabled: !!award,
   });
 
   const createAwardMutation = useMutation({
-    mutationFn: () => base44.entities.GrantAward.create({
+    mutationFn: () => client.entities.GrantAward.create({
       grant_id: grant.id,
       organization_id: grant.organization_id,
       award_amount: grant.typical_award || grant.amount_max || 0,

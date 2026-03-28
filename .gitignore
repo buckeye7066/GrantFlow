@@ -31,8 +31,12 @@ pnpm-debug.log*
 # OS / editor
 .DS_Store
 Thumbs.db
+Desktop.ini
 .vscode/
 .idea/
+.cursor/
+*.suo
+*.user
 
 # Databases / runtime data (local only)
 backend/data/

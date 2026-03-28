@@ -15,9 +15,7 @@ RUN apt-get update \
 COPY package*.json ./
 
 # Install ALL deps (incl dev) for build. Use lockfile.
-# --mount=type=cache persists the npm cache across builds for faster installs.
-RUN --mount=type=cache,target=/root/.npm \
-    npm ci --legacy-peer-deps
+RUN npm ci --legacy-peer-deps
 
 # Copy all source files
 COPY . .

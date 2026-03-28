@@ -1,6 +1,6 @@
 import React from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { base44 } from '@/api/base44Client';
+import client from '@/api/client';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -22,7 +22,7 @@ export default function InvoicesTab({ invoices, organizations }) {
   const queryClient = useQueryClient();
 
   const deleteMutation = useMutation({
-    mutationFn: (invoiceId) => base44.entities.Invoice.delete(invoiceId),
+    mutationFn: (invoiceId) => client.entities.Invoice.delete(invoiceId),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['invoices'] });
       toast({

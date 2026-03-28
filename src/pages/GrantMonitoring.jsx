@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { base44 } from '@/api/base44Client';
+import client from '@/api/client';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -52,12 +52,12 @@ export default function GrantMonitoring() {
 
   const { data: organizations = [], isLoading: isLoadingOrgs } = useQuery({
     queryKey: ['organizations'],
-    queryFn: () => base44.entities.Organization.list('name'),
+    queryFn: () => client.entities.Organization.list('name'),
   });
 
   const { data: grants = [], isLoading: isLoadingGrants } = useQuery({
     queryKey: ['grants'],
-    queryFn: () => base44.entities.Grant.list('-updated_date'),
+    queryFn: () => client.entities.Grant.list('-updated_date'),
   });
 
   const { data: allAlertConfigs = [], isLoading: isLoadingAlerts } = useQuery({

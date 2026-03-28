@@ -1,0 +1,81 @@
+# Normalize line endings to LF on check-in for all text files.
+# This prevents "blob not found" and line-ending-related corruption in Git.
+* text=auto eol=lf
+
+# ── Source code ──────────────────────────────────────────────────────────────
+*.js        text eol=lf
+*.jsx       text eol=lf
+*.ts        text eol=lf
+*.tsx       text eol=lf
+*.mjs       text eol=lf
+*.cjs       text eol=lf
+*.json      text eol=lf
+*.json5     text eol=lf
+*.css       text eol=lf
+*.html      text eol=lf
+*.md        text eol=lf
+*.mdx       text eol=lf
+*.yaml      text eol=lf
+*.yml       text eol=lf
+*.toml      text eol=lf
+*.env       text eol=lf
+*.sh        text eol=lf
+*.sql       text eol=lf
+*.bash      text eol=lf
+
+# ── Config / lock files ───────────────────────────────────────────────────────
+.gitignore      text eol=lf
+.gitattributes  text eol=lf
+.editorconfig   text eol=lf
+.eslintrc*      text eol=lf
+.prettierrc*    text eol=lf
+Dockerfile*     text eol=lf
+*.lock          text eol=lf -diff
+
+# ── Binary files — never diff/merge these as text ────────────────────────────
+# Images
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.ico   binary
+*.svg   text eol=lf
+*.webp  binary
+*.avif  binary
+
+# Video / audio
+*.mp4   binary
+*.webm  binary
+*.ogg   binary
+*.mp3   binary
+*.wav   binary
+
+# Fonts
+*.woff  binary
+*.woff2 binary
+*.ttf   binary
+*.otf   binary
+*.eot   binary
+
+# Archives / compiled assets
+*.zip   binary
+*.gz    binary
+*.tar   binary
+*.tgz   binary
+*.7z    binary
+*.pdf   binary
+
+# Native modules / compiled binaries
+*.node  binary
+*.so    binary
+*.dll   binary
+*.dylib binary
+*.exe   binary
+
+# SQLite databases
+*.db        binary
+*.db-shm    binary
+*.db-wal    binary
+*.db-journal binary
+*.sqlite    binary
+*.sqlite3   binary

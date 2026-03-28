@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { base44 } from '@/api/base44Client';
+import client from '@/api/client';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Dialog,
@@ -31,7 +31,7 @@ export default function AutomatedSearchConfig({ organization, open, onClose }) {
 
   const { data: existingConfig, isLoading: isLoadingConfig } = useQuery({
     queryKey: ['automatedSearch', organization.id],
-    queryFn: () => base44.entities.AutomatedSearch.filter({ organization_id: organization.id }).then(res => res[0]),
+    queryFn: () => client.entities.AutomatedSearch.filter({ organization_id: organization.id }).then(res => res[0]),
     enabled: !!organization.id && open,
   });
 
@@ -56,9 +56,9 @@ export default function AutomatedSearchConfig({ organization, open, onClose }) {
     mutationFn: (data) => {
       const payload = { ...data, organization_id: organization.id };
       if (existingConfig?.id) {
-        return base44.entities.AutomatedSearch.update(existingConfig.id, payload);
+        return client.entities.AutomatedSearch.update(existingConfig.id, payload);
       }
-      return base44.entities.AutomatedSearch.create(payload);
+      return client.entities.AutomatedSearch.create(payload);
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['automatedSearch'] });
@@ -67,7 +67,7 @@ export default function AutomatedSearchConfig({ organization, open, onClose }) {
   });
 
   const runNowMutation = useMutation({
-    mutationFn: () => base44.functions.invoke('runAutomatedDiscovery', {}),
+    mutationFn: () => client.functions.invoke('runAutomatedDiscovery', {}),
     onSuccess: (response) => {
       const result = response.data.results?.find(r => r.organization_id === organization.id);
       queryClient.invalidateQueries({ queryKey: ['grants'] });

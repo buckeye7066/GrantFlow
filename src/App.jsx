@@ -4,7 +4,7 @@ import './App.css'
 import Pages from '@/pages/index.jsx'
 import { Toaster } from '@/components/ui/toaster'
 import SessionExpiredDialog from '@/components/auth/SessionExpiredDialog'
-import { base44 } from '@/api/base44Client'
+import client from '@/api/client';
 import RouteErrorBoundary from '@/components/shared/RouteErrorBoundary.jsx'
 import { useAuthStore } from '@/stores/authStore'
 import { useSettingsStore } from '@/stores/settingsStore'
@@ -21,7 +21,7 @@ function App() {
   useEffect(() => {
     hydrateFromStorage()
 
-    const accessToken = base44.getToken?.()
+    const accessToken = client.getToken?.()
     if (!accessToken) {
       // No token present, clear any stale state and mark as bootstrapped
       clearState()
@@ -30,7 +30,7 @@ function App() {
     }
 
     // Token exists, validate it with the server
-    base44.auth
+    client.auth
       .me()
       .then((response) => {
         if (response) {
@@ -49,7 +49,7 @@ function App() {
   }, [hydrateFromStorage, setAuthenticatedUser, clearState])
 
   // Load persisted UI preferences once the user is authenticated so personalization
-  // (accent color, font size, etc.) applies across the appâ€”not only on the Settings page.
+  // (accent color, font size, etc.) applies across the app — not only on the Settings page.
   useEffect(() => {
     if (!isAuthenticated) return
     if (isPreferencesInitialized) return
@@ -59,7 +59,7 @@ function App() {
   if (!bootstrapped) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-slate-50 text-sm text-slate-500">
-        Loading your workspaceâ€¦
+        Loading your workspace...
       </div>
     )
   }

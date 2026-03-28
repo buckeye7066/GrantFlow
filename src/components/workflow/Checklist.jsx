@@ -17,7 +17,7 @@ import {
   Edit,
 } from "lucide-react";
 import { useMutation, useQueryClient, useQuery } from "@tanstack/react-query";
-import { base44 } from "@/api/base44Client";
+import client from '@/api/client';
 
 export default function Checklist({ grantId, organizationId }) {
   const queryClient = useQueryClient();
@@ -25,12 +25,12 @@ export default function Checklist({ grantId, organizationId }) {
   // The data can be `undefined` during the initial fetch.
   const { data: checklistItems } = useQuery({
     queryKey: ['checklistItems', grantId],
-    queryFn: () => base44.entities.ChecklistItem.filter({ grant_id: grantId }),
+    queryFn: () => client.entities.ChecklistItem.filter({ grant_id: grantId }),
     enabled: !!grantId
   });
 
   const updateItemMutation = useMutation({
-    mutationFn: ({ id, data }) => base44.entities.ChecklistItem.update(id, data),
+    mutationFn: ({ id, data }) => client.entities.ChecklistItem.update(id, data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['checklistItems', grantId] });
       queryClient.invalidateQueries({ queryKey: ['checklistItems'] }); // Invalidate general list for progress

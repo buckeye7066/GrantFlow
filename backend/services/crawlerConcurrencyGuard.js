@@ -19,10 +19,11 @@ const MAX_GLOBAL_CONCURRENT_CRAWLERS = parseInt(process.env.MAX_CONCURRENT_CRAWL
  * This prevents permanent per-profile locks.
  *
  * Defaults:
- * - stale threshold: 24h (matches product expectation: "running > 24 hours" is stale)
+ * - stale threshold: 2h (2× the 30-min job timeout configured by CRAWLER_JOB_TIMEOUT_MS in crawlerDispatcher.js;
+ *   a job running this long is certainly orphaned)
  * - cleanup interval: 5 minutes (best-effort; throttled per process)
  */
-const STALE_RUNNING_MS = parseInt(process.env.CRAWLER_STALE_RUNNING_MS || String(24 * 60 * 60 * 1000), 10)
+const STALE_RUNNING_MS = parseInt(process.env.CRAWLER_STALE_RUNNING_MS || String(2 * 60 * 60 * 1000), 10)
 const STALE_CLEANUP_INTERVAL_MS = parseInt(process.env.CRAWLER_STALE_CLEANUP_INTERVAL_MS || String(5 * 60 * 1000), 10)
 let lastStaleCleanupAtMs = 0
 
@@ -173,8 +174,38 @@ export async function acquireCrawlerLock(db, profileId, jobType, { jobId } = {})
 }
 
 /**
+ * Update the heartbeat timestamp for a running job to prove liveness.
+ * Call this periodically during long-running jobs so that cleanupStaleCrawlers
+ * does not prematurely kill a job that is still actively working.
+ *
+ * @param {object} db    - Database connection
+ * @param {string} jobId - The crawler_jobs.id to update
+ * @returns {Promise<void>}
+ */
+export async function updateJobHeartbeat(db, jobId) {
+  if (!db || !jobId) return
+  try {
+    await db
+      .prepare(
+        `
+          UPDATE crawler_jobs
+          SET last_heartbeat_at = CURRENT_TIMESTAMP
+          WHERE id = ?
+            AND status = 'running'
+        `,
+      )
+      .run(jobId)
+  } catch (error) {
+    // Best-effort; heartbeat failure should never crash a running job
+    console.warn('[crawler-concurrency] Failed to update job heartbeat:', error?.message)
+  }
+}
+
+/**
  * Mark stale crawlers as failed (cleanup orphaned jobs)
- * Jobs stuck in 'running' for > staleThresholdMs are considered orphaned
+ * Jobs stuck in 'running' for > staleThresholdMs are considered orphaned,
+ * UNLESS their last_heartbeat_at is recent (within staleThresholdMs), in which
+ * case they are still alive and should not be killed.
  * 
  * @param {object} db - Database connection
  * @param {number} staleThresholdMs - Time in ms before a job is considered stale
@@ -192,25 +223,33 @@ export async function cleanupStaleCrawlers(db, staleThresholdMs = 30 * 60 * 1000
       .prepare(
         isPostgres
           ? `
-              SELECT id, type, profile_id, started_at, created_at
+              SELECT id, type, profile_id, started_at, created_at, last_heartbeat_at
               FROM crawler_jobs
               WHERE status = 'running'
                 AND (
                   (started_at IS NOT NULL AND started_at < ?)
                   OR (started_at IS NULL AND created_at < ?)
                 )
+                AND (
+                  last_heartbeat_at IS NULL
+                  OR last_heartbeat_at < ?
+                )
             `
           : `
-              SELECT id, type, profile_id, started_at, created_at
+              SELECT id, type, profile_id, started_at, created_at, last_heartbeat_at
               FROM crawler_jobs
               WHERE status = 'running'
                 AND (
                   (started_at IS NOT NULL AND datetime(started_at) < datetime(?))
                   OR (started_at IS NULL AND datetime(created_at) < datetime(?))
                 )
+                AND (
+                  last_heartbeat_at IS NULL
+                  OR datetime(last_heartbeat_at) < datetime(?)
+                )
             `,
       )
-      .all(threshold, threshold)
+      .all(threshold, threshold, threshold)
     
     let cleaned = 0
     for (const job of staleJobs) {
@@ -253,6 +292,88 @@ export async function cleanupStaleCrawlers(db, staleThresholdMs = 30 * 60 * 1000
     return cleaned
   } catch (error) {
     console.error('[crawler-concurrency] Failed to cleanup stale crawlers:', error?.message)
+    return 0
+  }
+}
+
+/**
+ * Mark stale queued jobs as failed.
+ * Jobs stuck in 'queued' for longer than staleThresholdMs are considered permanently lost
+ * (e.g. the process restarted and the dispatch loop never picked them up, or they exceeded
+ * all retry cycles).  This prevents queued jobs from accumulating indefinitely.
+ *
+ * Default threshold: 24 hours.
+ *
+ * @param {object} db - Database connection
+ * @param {number} staleThresholdMs - Time in ms before a queued job is considered stale (default 24h)
+ * @returns {Promise<number>} Number of queued jobs marked as failed
+ */
+export async function cleanupStaleQueuedJobs(db, staleThresholdMs = 24 * 60 * 60 * 1000) {
+  const thresholdDate = new Date(Date.now() - staleThresholdMs)
+  const thresholdIso = thresholdDate.toISOString()
+  const thresholdSqlite = thresholdIso.replace('T', ' ').replace('Z', '').replace(/\.\d+$/, '')
+
+  try {
+    const isPostgres = db?.dialect === 'postgres'
+    const threshold = isPostgres ? thresholdIso : thresholdSqlite
+
+    const staleJobs = await db
+      .prepare(
+        isPostgres
+          ? `
+              SELECT id, type, profile_id, created_at
+              FROM crawler_jobs
+              WHERE status = 'queued'
+                AND created_at < ?
+            `
+          : `
+              SELECT id, type, profile_id, created_at
+              FROM crawler_jobs
+              WHERE status = 'queued'
+                AND datetime(created_at) < datetime(?)
+            `,
+      )
+      .all(threshold)
+
+    let cleaned = 0
+    for (const job of staleJobs) {
+      const staleHours = Math.round(staleThresholdMs / (60 * 60 * 1000))
+      const errorMessage = `Job timed out in queue after ${staleHours > 0 ? `${staleHours}h` : `${staleThresholdMs}ms`}`
+
+      await db
+        .prepare(
+          `
+            UPDATE crawler_jobs
+            SET status = 'failed',
+                completed_at = CURRENT_TIMESTAMP,
+                error = ?
+            WHERE id = ?
+          `,
+        )
+        .run(errorMessage, job.id)
+
+      await logFailedJob(db, {
+        jobId: job.id,
+        jobType: job.type,
+        profileId: job.profile_id,
+        error: errorMessage,
+        severity: 'medium',
+      }).catch(err => {
+        console.warn('[crawler-concurrency] Failed to create dead letter entry for stale queued job:', err?.message)
+      })
+
+      cleaned++
+      console.warn('[crawler-concurrency] Cleaned stale queued job', {
+        jobId: job.id,
+        type: job.type,
+        profileId: job.profile_id,
+        createdAt: job.created_at,
+      })
+    }
+
+    return cleaned
+  } catch (error) {
+    console.error('[crawler-concurrency] Failed to cleanup stale queued jobs:', error?.message)
     return 0
   }
 }

@@ -78,28 +78,40 @@ async function crawlGrantsGov(state = null, keywords = []) {
   const opportunities = [];
   
   try {
-    // Grants.gov has an XML/RSS feed and a search API
-    const baseUrl = 'https://www.grants.gov/grantsws/rest/opportunities/search';
+    // Use the public search2 POST endpoint (the legacy GET endpoint returns HTTP 405)
+    const searchUrl = 'https://api.grants.gov/v1/api/search2';
     
-    const params = new URLSearchParams({
+    const payload = {
       oppStatuses: 'forecasted|posted',
-      sortBy: 'openDate|desc',
-      rows: '100'
-    });
+      rows: 100,
+      keyword: keywords.length > 0 ? keywords.join(' ') : '',
+      agencies: '',
+      fundingCategories: '',
+      aln: '',
+      oppNum: '',
+      startRecordNum: 0,
+    };
     
     if (state) {
-      params.set('eligibilities', state);
+      payload.eligibilities = state;
     }
     
-    if (keywords.length > 0) {
-      params.set('keyword', keywords.join(' '));
-    }
-    
-    const response = await fetchWithRetry(`${baseUrl}?${params.toString()}`);
+    const response = await fetchWithRetry(searchUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+      },
+      body: JSON.stringify(payload),
+    });
     const data = await response.json();
     
-    if (data.oppHits && Array.isArray(data.oppHits)) {
-      for (const opp of data.oppHits) {
+    // Grants.gov wraps results in various structures — handle them all
+    const hitsNode = data?.data?.oppHits ? data.data : data?.data?.data?.oppHits ? data.data.data : data;
+    const oppHits = Array.isArray(hitsNode?.oppHits) ? hitsNode.oppHits : [];
+    
+    if (oppHits.length > 0) {
+      for (const opp of oppHits) {
         opportunities.push({
           id: randomUUID(),
           title: opp.title || opp.oppTitle,

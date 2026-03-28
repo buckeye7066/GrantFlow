@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect } from 'react';
-import { base44 } from '@/api/base44Client';
+import client from '@/api/client';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
@@ -40,23 +40,23 @@ export default function AIApplicationAssistant({ grant, organization, open, onCl
   const queryClient = useQueryClient();
 
   const createRequirementMutation = useMutation({
-    mutationFn: (reqData) => base44.entities.GrantRequirement.create(reqData),
+    mutationFn: (reqData) => client.entities.GrantRequirement.create(reqData),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['requirements', grant.id] }),
   });
 
   const createSectionMutation = useMutation({
-    mutationFn: (sectionData) => base44.entities.ProposalSection.create(sectionData),
+    mutationFn: (sectionData) => client.entities.ProposalSection.create(sectionData),
   });
 
   const updateSectionMutation = useMutation({
-    mutationFn: ({ id, data }) => base44.entities.ProposalSection.update(id, data),
+    mutationFn: ({ id, data }) => client.entities.ProposalSection.update(id, data),
     onSuccess: (updatedSection) => {
       queryClient.invalidateQueries({ queryKey: ['proposalSections', grant.id] });
     },
   });
   
   const updateGrantMutation = useMutation({
-    mutationFn: ({ id, data }) => base44.entities.Grant.update(id, data),
+    mutationFn: ({ id, data }) => client.entities.Grant.update(id, data),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['grant', grant.id] }),
   });
 
@@ -88,7 +88,7 @@ Return a JSON object with keys 'proposal_sections' and 'required_attachments'.
 For each proposal_section, include: 'section_name', 'description', 'page_limit', 'word_limit', 'scoring_weight'.
 For each required_attachment, include: 'title' and 'description'.`;
 
-      let extracted = await base44.integrations.Core.InvokeLLM({
+      let extracted = await client.integrations.Core.InvokeLLM({
         prompt: parsingPrompt,
         add_context_from_internet: true,
         response_json_schema: {
@@ -129,7 +129,7 @@ Example Output:
   }
 }`;
         
-        const fallbackResult = await base44.integrations.Core.InvokeLLM({
+        const fallbackResult = await client.integrations.Core.InvokeLLM({
           prompt: fallbackPrompt,
           add_context_from_internet: true,
           response_json_schema: {
@@ -191,7 +191,7 @@ Example Output:
       await queryClient.invalidateQueries({ queryKey: ['proposalSections', grant.id] });
       const proposalSectionsBlueprint = await queryClient.fetchQuery({
         queryKey: ['proposalSections', grant.id],
-        queryFn: () => base44.entities.ProposalSection.filter({ grant_id: grant.id }, 'section_order'),
+        queryFn: () => client.entities.ProposalSection.filter({ grant_id: grant.id }, 'section_order'),
       });
 
       if (!proposalSectionsBlueprint || proposalSectionsBlueprint.length === 0) {
@@ -213,7 +213,7 @@ ${JSON.stringify(sanitizeObjectForPrompt(organization), null, 2)}
 
 TASK: Return a JSON object with a single key "missing_data", which is an array of short strings describing missing data. E.g., {"missing_data": ["Specific GPA", "Number of community service hours"]}. If no data is missing, return {"missing_data": []}.`;
       
-      const gapResultObject = await base44.integrations.Core.InvokeLLM({
+      const gapResultObject = await client.integrations.Core.InvokeLLM({
         prompt: gapAnalysisPrompt,
         response_json_schema: {
           type: "object",
@@ -271,7 +271,7 @@ ${JSON.stringify(proposalSectionsBlueprint.map(s => ({id: s.id, name: s.section_
 
 Return a single JSON object where keys are the exact section IDs and values are the generated text.`;
 
-      const draftResponse = await base44.integrations.Core.InvokeLLM({
+      const draftResponse = await client.integrations.Core.InvokeLLM({
         prompt: draftPrompt,
         response_json_schema: responseSchema,
       });

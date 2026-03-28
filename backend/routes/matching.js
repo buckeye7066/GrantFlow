@@ -1,6 +1,6 @@
 import express from 'express'
 import { formatError } from '../middleware/errorHandler.js'
-import { calculateMatchScore } from '../services/matchingEngine.js'
+import { computeMatchDecision, normalizeProfile } from '../services/matchDecisionEngine.js'
 import { loadProfileContext } from '../services/profileHelpers.js'
 import { buildProfileFacets } from '../services/profile/profileTaxonomy.js'
 import { ensureProfileAccess } from '../utils/accessControl.js'
@@ -51,6 +51,11 @@ router.get('/profile/:profileId/grants', async (req, res) => {
       const baseContext = await loadProfileContext(req.db, profileId)
                    const profileContext = buildProfileFacets(baseContext)
 
+      // Pre-normalize profile once for the v2.0.0 decision engine
+      const rawProfileForGrants = profileContext?.profile ?? profileContext
+      const profileSectionsForGrants = profileContext?.sections ?? null
+      const profileNormForDecision = normalizeProfile(rawProfileForGrants, profileSectionsForGrants)
+
       if (!profileRow.organization_id) {
               return res.json([])
       }
@@ -97,7 +102,10 @@ router.get('/profile/:profileId/grants', async (req, res) => {
                                       deadline: row.grant_deadline,
                         }
 
-                                     const computed = calculateMatchScore(profileContext, candidate)
+                                     // Use the canonical decision engine for scoring; fall back gracefully
+                                     const decision = computeMatchDecision(profileNormForDecision, candidate)
+                                     // Don't surface hard REJECTS in the grants view either
+                                     if (decision.decision === 'REJECT') return null
               return {
                         grant_id: row.grant_id,
                         title: row.grant_title,
@@ -105,10 +113,13 @@ router.get('/profile/:profileId/grants', async (req, res) => {
                         status: row.grant_status,
                         deadline: row.grant_deadline,
                         funding_opportunity_id: row.funding_opportunity_id ?? null,
-                        match_score: computed.score,
-                        match_reasons: computed.reasons,
+                        match_score: decision.score,
+                        match_reasons: decision.matchedNeeds ?? [],
+                        match_decision: decision.decision,
+                        match_explanation: decision.explanation,
               }
       })
+      .filter((m) => m !== null)
 
       matches.sort((a, b) => (b.match_score ?? 0) - (a.match_score ?? 0))
                    res.json(matches)
@@ -259,15 +270,25 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
               needsTransport: kws.has('transportation') || kws.has('ride assistance'),
       }
 
+      // Pre-normalize profile once for the v2.0.0 REJECT filter (avoids re-running per opportunity)
+      const rawProfileForDecision = profileContext?.profile ?? profileContext
+      const profileSectionsForDecision = profileContext?.sections ?? null
+      const profileNormForDecision = normalizeProfile(rawProfileForDecision, profileSectionsForDecision)
+
       const allScored = candidates
                      .map((opp) => {
                                   if (isJunkOpportunity(opp, filterHints)) return null
 
-                                  const computed = calculateMatchScore(profileContext, opp)
+                                  // Run v2.0.0 engine: filter hard ineligibles (REJECT) before surfacing
+                                  const decision = computeMatchDecision(profileNormForDecision, opp)
+                                  if (decision.decision === 'REJECT') return null
+
                                return {
                                            ...opp,
-                                           match_score: computed.score,
-                                           match_reasons: computed.reasons,
+                                           match_score: decision.score,
+                                           match_reasons: decision.matchedNeeds ?? [],
+                                           match_decision: decision.decision,
+                                           match_explanation: decision.explanation,
                                            url: opp.application_url ?? opp.source_url ?? null,
                                }
                      })

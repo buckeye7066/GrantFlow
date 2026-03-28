@@ -1,9 +1,8 @@
 import React, { useMemo, useState, useEffect } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useSearchParams, useNavigate } from 'react-router-dom';
-import { base44 } from '@/api/base44Client';
 import { getProfile, listProfiles } from '@/api/profiles';
-import { apiFetch } from '@/api/client';
+import client, { apiFetch } from '@/api/client';
 import { runRealCrawler } from '@/api/crawlers';
 import { createPageUrl } from '@/utils';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
@@ -20,7 +19,67 @@ import { useAuthStore } from '@/stores/authStore';
 import { createLogger } from '@/utils/logger'
 import { getProfileContextIncompleteHint } from '@/components/discovery/profileContextIncompleteUi'
 
+/**
+ * Client-side relevance check mirroring the backend hard disqualification rules.
+ * Returns false only when there is a clear mismatch; passes when data is missing.
+ */
+function passesClientRelevanceCheck(opportunity, profile) {
+  if (!opportunity || !profile) return true
 
+  const oppText = `${opportunity.title || ''} ${opportunity.description || ''} ${opportunity.sponsor || ''}`.toLowerCase()
+  const profileType = (profile.primary_type || '').toLowerCase()
+  const sections = profile.sections
+    ? (Array.isArray(profile.sections)
+        ? Object.fromEntries(profile.sections.map((s) => [s?.section_key, s?.data]).filter(([k]) => Boolean(k)))
+        : profile.sections)
+    : {}
+  const basic = sections.basic_information || {}
+  const demographics = sections.demographics || {}
+  const employment = sections.employment || {}
+  const education = sections.education || {}
+
+  const profileGender = String(
+    profile.gender ||
+    basic.gender ||
+    demographics.gender ||
+    ''
+  ).toLowerCase()
+
+  const profileAge = Number(
+    profile.age ||
+    basic.age ||
+    demographics.age ||
+    0
+  )
+
+  // Entity type mismatch
+  const individualOnlyPrograms = /\b(snap|tanf|wic|ssdi|ssi\b|food stamps|section 8|housing voucher|personal.*benefit)\b/i
+  if (profileType === 'organization' && individualOnlyPrograms.test(oppText)) return false
+
+  const orgOnlyPrograms = /\b(501\(c\)\(3\)|501c3|ein required|duns|uei required|organizational capacity|nonprofit only)\b/i
+  if (profileType === 'individual' && orgOnlyPrograms.test(oppText)) return false
+
+  // Gender mismatch
+  const womenOnly = /\b(women only|for women|amber grant for women|female entrepreneurs only)\b/i
+  if (womenOnly.test(oppText) && profileGender && profileGender !== 'female') return false
+
+  // Age mismatch — children programs
+  const childrenOnly = /\b(children only|youth under 18|katie beckett|coverkids|cover kids|minor children)\b/i
+  if (childrenOnly.test(oppText) && profileAge > 18) return false
+
+  // Age mismatch — senior programs
+  const seniorOnly = /\b(seniors? only|age 55\+|age 60\+|age 65\+|aaad|area agency on aging)\b/i
+  if (seniorOnly.test(oppText) && profileAge > 0 && profileAge < 55) return false
+
+  // Nursing license mismatch
+  const nursingPrograms = /\b(nursing license (reinstatement|recovery)|nurse re.?entry|rn license recovery|lpn license recovery)\b/i
+  const employmentText = JSON.stringify(employment).toLowerCase()
+  const educationText = JSON.stringify(education).toLowerCase()
+  const profileHasNursing = employmentText.includes('nurs') || educationText.includes('nurs')
+  if (nursingPrograms.test(oppText) && !profileHasNursing) return false
+
+  return true
+}
 
 /**
  * Resolve profile_id: 1) explicit UI selection, 2) URL ?profile_id=, 3) null.
@@ -75,7 +134,7 @@ export default function DiscoverGrants() {
 
   const tokenAvailable = useMemo(() => {
     try {
-      return Boolean(accessToken || base44.getToken?.());
+      return Boolean(accessToken || client.getToken?.());
     } catch {
       return Boolean(accessToken);
     }
@@ -124,16 +183,26 @@ export default function DiscoverGrants() {
   }, [profiles]);
 
 
+  // Clear stale results and invalidate caches whenever the effective profile changes
+  useEffect(() => {
+    setSearchResults([]);
+    setProfileCompletionHint(null);
+    queryClient.invalidateQueries({ queryKey: ['discover-catalog'] });
+    queryClient.invalidateQueries({ queryKey: ['discover-profile'] });
+  }, [effectiveProfileId, queryClient]);
+
+
   const { data: profileDetail } = useQuery({
     queryKey: ['discover-profile', effectiveProfileId ?? selectedProfileId],
     queryFn: () => getProfile(effectiveProfileId || selectedProfileId),
     enabled: authReady && Boolean(effectiveProfileId || selectedProfileId),
+    refetchOnMount: 'always',
   });
 
   // Also fetch organizations to get detailed org data for selected profile
   const { data: organizations = [] } = useQuery({
     queryKey: ['organizations'],
-    queryFn: () => base44.entities.Organization.list('name'),
+    queryFn: () => client.entities.Organization.list('name'),
     enabled: authReady,
   });
 
@@ -150,7 +219,12 @@ export default function DiscoverGrants() {
     [organizations, selectedProfile],
   );
 
-  const profileForSearch = profileDetail ?? selectedOrg ?? selectedProfile;
+  // Guard against stale profileDetail from a previously-selected profile.
+  // effectiveProfileId is the authoritative identifier; selectedProfileId is the fallback
+  // when effectiveProfileId hasn't resolved yet (e.g., URL param not set).
+  const profileDetailMatchesCurrent = profileDetail &&
+    (profileDetail.id === effectiveProfileId || profileDetail.id === selectedProfileId);
+  const profileForSearch = (profileDetailMatchesCurrent ? profileDetail : null) ?? selectedOrg ?? selectedProfile;
 
   // Catalog match: real funding opportunities from DB, scored by profile needs (relatable grants, not only directory links)
   const { data: catalogMatchResponse } = useQuery({
@@ -161,7 +235,7 @@ export default function DiscoverGrants() {
       return apiFetch(`/api/matching/profile/${effectiveProfileId}/opportunities?min_score=30&limit=200&skip_readiness_check=1`)
     },
     enabled: authReady && Boolean(effectiveProfileId),
-    staleTime: 2 * 60 * 1000,
+    staleTime: 0,
   })
 
   const catalogOpportunities = useMemo(() => {
@@ -301,7 +375,7 @@ export default function DiscoverGrants() {
   const handleCrawlerResults = async (opportunities) => {
     log.debug('processing crawler results', { count: opportunities.length })
     
-    // Add all 50%+ matches to pipeline automatically
+    // Auto-add high-confidence matches (≥70%) that pass client-side relevance check
     let addedCount = 0
     let alreadyCount = 0
     let failedCount = 0
@@ -309,7 +383,7 @@ export default function DiscoverGrants() {
 
     for (const opp of opportunities) {
       const score = Number(opp.match_score ?? opp.match ?? 0);
-      if (Number.isFinite(score) && score >= 50) {
+      if (Number.isFinite(score) && score >= 70 && passesClientRelevanceCheck(opp, profileForSearch)) {
         attempted += 1
         try {
           const result = await handleAddToPipeline(opp, { silent: true })
@@ -365,7 +439,7 @@ export default function DiscoverGrants() {
     // Check for duplicates if we have an org
     if (orgId && opportunity.url) {
       try {
-        const existingGrants = await base44.entities.Grant.filter({
+        const existingGrants = await client.entities.Grant.filter({
           organization_id: orgId,
           url: opportunity.url
         });

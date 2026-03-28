@@ -150,6 +150,18 @@ async function withTimeout(promise, ms, label) {
 // This is now just an alias for consistency with existing code
 const ensureAdminRequest = ensureAdminUser;
 
+// Router-level admin auth middleware (defense-in-depth).
+// Individual handlers keep their own checks; this ensures every route on
+// this router requires admin authentication even if a check is missed.
+router.use(async (req, res, next) => {
+  try {
+    const allowed = await ensureAdminUser(req, res);
+    if (allowed) next();
+  } catch (err) {
+    next(err);
+  }
+});
+
 // ----------------------------
 // Funding Providers (no secrets)
 // ----------------------------
@@ -3299,6 +3311,9 @@ router.post('/seed-profile-grants', async (req, res) => {
   }
   try {
     const { excludeProfiles = [] } = req.body || {};
+    const { computeMatchDecision } = await import('../services/matchDecisionEngine.js');
+    const { saveToProfilePipeline } = await import('../services/opportunityMatcher.js');
+
     const profiles = await req.db.prepare('SELECT * FROM profiles WHERE status = ?').all('active');
     const opportunities = await req.db.prepare(`
       SELECT * FROM funding_opportunities 
@@ -3325,43 +3340,31 @@ router.post('/seed-profile-grants', async (req, res) => {
         try { sections[row.section_key] = JSON.parse(row.data || '{}'); } catch (e) { sections[row.section_key] = {}; }
       });
 
-      const profileContext = { profile: profile, sections: sections };
-      const profileSignals = buildProfileSignals(profileContext);
+      const profileContext = { profile, sections };
 
-      const scored = opportunities.map(opp => {
-        const { score, matchedFields } = calculateMatchScore(profileSignals, opp);
-        return { opp, score, matchedFields };
-      });
-
-      const topMatches = scored.filter(s => s.score >= 45).sort((a, b) => b.score - a.score).slice(0, 50);
-
-      let orgId = profile.organization_id;
-      if (!orgId) {
-        orgId = crypto.randomUUID();
-        await req.db
-          .prepare(
-            `INSERT INTO organizations (id, name, applicant_type, created_at, updated_at) VALUES (?, ?, 'individual_need', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
-          )
-          .run(orgId, profile.display_name || 'My Organization');
-        await req.db.prepare('UPDATE profiles SET organization_id = ? WHERE id = ?').run(orgId, profile.id);
-      }
+      // Pre-score all opportunities through the canonical decision engine
+      const candidates = opportunities
+        .map(opp => {
+          const decision = computeMatchDecision(profile, opp, { profileSections: sections });
+          return { opp, decision };
+        })
+        .filter(({ decision }) => decision.decision !== 'REJECT' && decision.score >= 45)
+        .sort((a, b) => b.decision.score - a.decision.score)
+        .slice(0, 50);
 
       let added = 0;
-      for (const { opp, score, matchedFields } of topMatches) {
-        const existing = await req.db
-          .prepare('SELECT id FROM grants WHERE organization_id = ? AND (funding_opportunity_id = ? OR title = ?)')
-          .get(orgId, opp.id, opp.title);
-        if (!existing) {
-          try {
-            await req.db.prepare(`
-              INSERT INTO grants (id, organization_id, funding_opportunity_id, title, funder, deadline, status, match_score, match_reasons, application_url, created_at, updated_at)
-              VALUES (?, ?, ?, ?, ?, ?, 'interested', ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-            `).run(crypto.randomUUID(), orgId, opp.id, opp.title, opp.sponsor, opp.deadline, score, JSON.stringify((matchedFields || []).slice(0, 10)), opp.application_url);
-            added++;
-          } catch (e) { /* ignore duplicates */ }
-        }
+      for (const { opp, decision } of candidates) {
+        const result = await saveToProfilePipeline(
+          req.db,
+          opp,
+          profile.id,
+          profileContext,
+          decision.score,
+          45,
+        );
+        if (result.saved) added++;
       }
-      results.push({ profile: profile.display_name, status: 'seeded', opportunities_found: topMatches.length, grants_added: added });
+      results.push({ profile: profile.display_name, status: 'seeded', opportunities_found: candidates.length, grants_added: added });
       totalGrantsAdded += added;
     }
     res.json({ success: true, message: 'Profile seeding complete', results, total_grants_added: totalGrantsAdded });
@@ -4733,4 +4736,207 @@ router.post('/dead-letter-queue/:id/resolve', async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 });
+/**
+ * POST /api/admin/clear-all-pipelines
+ * Deletes all grants (pipeline items), related milestones, pipeline events,
+ * application drafts, vnext applications, crawler jobs, and crawl results.
+ * Funding opportunities are preserved so re-crawling can repopulate.
+ */
+router.post('/clear-all-pipelines', async (req, res) => {
+  try {
+    if (!(await ensureAdminRequest(req, res))) return
+
+    const db = req.db
+    const results = {}
+
+    const safeDelete = async (label, sql, ...params) => {
+      try {
+        const r = await db.prepare(sql).run(...params)
+        results[label] = r?.changes ?? 0
+      } catch (e) {
+        results[label] = `error: ${e.message}`
+      }
+    }
+
+    // Order matters: delete children before parents (FK constraints)
+    await safeDelete('grant_pipeline_events', 'DELETE FROM grant_pipeline_events')
+    await safeDelete('grant_monitoring_logs', 'DELETE FROM grant_monitoring_logs')
+    await safeDelete('grant_monitoring_alerts', 'DELETE FROM grant_monitoring_alerts')
+    await safeDelete('milestones', 'DELETE FROM milestones')
+    await safeDelete('application_drafts', 'DELETE FROM application_drafts')
+    await safeDelete('budgets', 'DELETE FROM budgets')
+    await safeDelete('expenses', 'DELETE FROM expenses')
+    await safeDelete('ai_artifacts', 'DELETE FROM ai_artifacts')
+    await safeDelete('vnext_application_tasks', 'DELETE FROM vnext_application_tasks')
+    await safeDelete('vnext_applications', 'DELETE FROM vnext_applications')
+    await safeDelete('grants', 'DELETE FROM grants')
+    await safeDelete('crawl_results', 'DELETE FROM crawl_results')
+    await safeDelete('crawl_metadata', 'DELETE FROM crawl_metadata')
+    await safeDelete('crawler_jobs', 'DELETE FROM crawler_jobs')
+
+    console.log('[admin] clear-all-pipelines completed:', results)
+    res.json({
+      success: true,
+      message: 'All pipelines cleared. Funding opportunities preserved for re-crawling.',
+      deleted: results,
+    })
+  } catch (error) {
+    console.error('[admin] clear-all-pipelines error:', error)
+    res.status(500).json({ error: error.message })
+  }
+})
+
+/**
+ * POST /api/admin/backfill-matches
+ * Re-evaluates all existing profile pipeline entries using the current decision engine.
+ * Updates match_decision, match_explanation, matched_needs, eligibility_status,
+ * ineligibility_reasons, profile_fingerprint, opportunity_fingerprint, matcher_version, evaluated_at.
+ * Removes entries that are now hard-ineligible (REJECT).
+ */
+router.post('/backfill-matches', async (req, res) => {
+  try {
+    if (!(await ensureAdminRequest(req, res))) return
+
+    const db = req.db
+
+    // Check that migration columns exist
+    let hasDecisionColumns = false
+    try {
+      const cols = db.prepare('PRAGMA table_info(grants)').all()
+      hasDecisionColumns = cols.some((c) => c.name === 'match_decision')
+    } catch { /* ignore */ }
+
+    if (!hasDecisionColumns) {
+      return res.status(400).json({
+        error: 'Decision columns not found in grants table. Run `npm run migrate` first.',
+      })
+    }
+
+    const { computeMatchDecision, normalizeProfile, computeProfileFingerprint, normalizeOpportunity, computeOpportunityFingerprint, MATCHER_VERSION } = await import('../services/matchDecisionEngine.js')
+
+    // Load all pipeline entries with associated opportunity and profile data
+    const grants = await db
+      .prepare(
+        `SELECT g.id, g.profile_id, g.funding_opportunity_id, g.title,
+                fo.description, fo.sponsor, fo.eligibility_bullets, fo.categories,
+                fo.keywords, fo.is_national, fo.state, fo.application_url,
+                fo.source_url, fo.record_origin, fo.is_loan, fo.deadline,
+                fo.deadline_type, fo.funding_type, fo.opportunity_type,
+                fo.entity_types_allowed, fo.need_types_supported,
+                p.primary_type, p.tags,
+                ps.data AS sections_data
+         FROM grants g
+         LEFT JOIN funding_opportunities fo ON fo.id = g.funding_opportunity_id
+         LEFT JOIN profiles p ON p.id = g.profile_id
+         LEFT JOIN (
+           SELECT profile_id, json_group_object(section_key, json(data)) AS data
+           FROM profile_sections
+           WHERE profile_id IN (SELECT DISTINCT profile_id FROM grants WHERE profile_id IS NOT NULL)
+           GROUP BY profile_id
+         ) ps ON ps.profile_id = g.profile_id
+         WHERE g.profile_id IS NOT NULL`,
+      )
+      .all()
+
+    let accepted = 0
+    let reviewed = 0
+    let rejected = 0
+    let errors = 0
+
+    for (const row of grants) {
+      try {
+        const rawProfile = {
+          id: row.profile_id,
+          primary_type: row.primary_type,
+          tags: row.tags,
+        }
+        let sections = null
+        try { sections = row.sections_data ? JSON.parse(row.sections_data) : null } catch { /* ignore */ }
+
+        const rawOpp = {
+          id: row.funding_opportunity_id,
+          title: row.title,
+          description: row.description,
+          sponsor: row.sponsor,
+          eligibility_bullets: row.eligibility_bullets,
+          categories: row.categories,
+          keywords: row.keywords,
+          is_national: row.is_national,
+          state: row.state,
+          application_url: row.application_url,
+          source_url: row.source_url,
+          record_origin: row.record_origin,
+          is_loan: row.is_loan,
+          deadline: row.deadline,
+          deadline_type: row.deadline_type,
+          funding_type: row.funding_type,
+          opportunity_type: row.opportunity_type,
+          entity_types_allowed: row.entity_types_allowed,
+          need_types_supported: row.need_types_supported,
+        }
+
+        const decision = computeMatchDecision(rawProfile, rawOpp, { profileSections: sections })
+        const profileFingerprint = computeProfileFingerprint(normalizeProfile(rawProfile, sections))
+        const opportunityFingerprint = computeOpportunityFingerprint(normalizeOpportunity(rawOpp))
+
+        if (decision.decision === 'REJECT') {
+          // Remove hard-ineligible entries
+          await db.prepare('DELETE FROM grants WHERE id = ?').run(row.id)
+          rejected++
+        } else {
+          // Update metadata
+          await db.prepare(`
+            UPDATE grants SET
+              match_decision = ?,
+              match_explanation = ?,
+              matched_needs = ?,
+              eligibility_status = ?,
+              ineligibility_reasons = ?,
+              profile_fingerprint = ?,
+              opportunity_fingerprint = ?,
+              matcher_version = ?,
+              evaluated_at = ?,
+              match_confidence = ?,
+              match_score = ?
+            WHERE id = ?
+          `).run(
+            decision.decision,
+            decision.explanation,
+            JSON.stringify(decision.matchedNeeds),
+            String(decision.eligible),
+            JSON.stringify(decision.ineligibilityReasons),
+            profileFingerprint,
+            opportunityFingerprint,
+            MATCHER_VERSION,
+            new Date().toISOString(),
+            decision.confidence,
+            decision.score,
+            row.id,
+          )
+          if (decision.decision === 'ACCEPT') accepted++
+          else reviewed++
+        }
+      } catch (err) {
+        console.error(`[admin/backfill-matches] Error processing grant ${row.id}:`, err)
+        errors++
+      }
+    }
+
+    console.log(`[admin/backfill-matches] Completed: accepted=${accepted}, reviewed=${reviewed}, rejected=${rejected}, errors=${errors}`)
+
+    res.json({
+      success: true,
+      total: grants.length,
+      accepted,
+      reviewed,
+      rejected,
+      errors,
+      matcherVersion: MATCHER_VERSION,
+    })
+  } catch (error) {
+    console.error('[admin/backfill-matches] error:', error)
+    res.status(500).json({ error: error.message })
+  }
+})
+
 export default router;

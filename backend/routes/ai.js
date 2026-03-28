@@ -6,6 +6,8 @@ import { safeParseJSON } from '../utils/safeJson.js';
 import { formatError } from '../middleware/errorHandler.js';
 import { validatePagination } from '../utils/validation.js';
 import { DEFAULT_OPENAI_MODEL, OPENAI_TIMEOUT_MS, MAX_PROMPT_LENGTH } from '../config/constants.js';
+// NOTE: calculateMatchScore is used here for display-only scoring in AI chat context.
+// This route does NOT insert into the grants pipeline.
 import { calculateMatchScore } from '../services/matchingEngine.js';
 import { trustedOriginClause, trustedSourceClause } from '../utils/recordOrigins.js';
 import { createOpenAIClient, summarizeOpenAIError } from '../utils/openaiClient.js';
@@ -832,7 +834,7 @@ router.post('/reminders/plan', enforceTierCapability(TIER_CAPABILITIES.DOCUMENT_
   }
 });
 
-// General LLM invocation endpoint (Base44 SDK compatibility)
+// General LLM invocation endpoint
 router.post('/invoke', enforceTierCapability(TIER_CAPABILITIES.DOCUMENT_AI), async (req, res) => {
   try {
     const {

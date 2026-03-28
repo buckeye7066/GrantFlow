@@ -15,6 +15,7 @@ import {
   requireAuthenticatedUser,
 } from '../utils/accessControl.js'
 import { scheduleGrantApplicationApproach } from '../services/grantApplicationApproachAdvisor.js'
+import { isPipelineSourceAllowed } from '../config/pipelineAllowedSources.js'
 
 const router = express.Router();
 
@@ -452,7 +453,7 @@ router.get('/', async (req, res) => {
       }
     }
 
-    // Back-compat for Base44 / older UI duplicate-checks: they pass `url=<opportunityUrl>`.
+    // Back-compat for older UI duplicate-checks: they pass `url=<opportunityUrl>`.
     // In our schema, the canonical URL lives in `application_url`.
     if (urlFilter) {
       query += ' AND g.application_url = ?'
@@ -1188,6 +1189,19 @@ router.post('/from-opportunity', async (req, res, next) => {
     
     if (!opportunity) {
       return res.status(404).json({ error: 'Opportunity not found and no opportunity_data provided' });
+    }
+
+    // Guardrail: block pipeline inserts from non-approved sources.
+    // This mirrors the same gate in opportunityMatcher.js and prevents irrelevant
+    // funding sources from entering individual profile pipelines via the frontend.
+    const opportunitySource = opportunity.source ? String(opportunity.source).trim() : null
+    if (opportunitySource && !isPipelineSourceAllowed(opportunitySource)) {
+      return res.status(400).json({
+        error: 'source_not_allowed',
+        message: 'This funding source is not approved for individual pipelines.',
+        source: opportunitySource,
+        requestId,
+      })
     }
 
     // Guardrail: don't allow expired opportunities into pipelines.

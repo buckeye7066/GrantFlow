@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { base44 } from "@/api/base44Client";
+import client from '@/api/client';
 import { useMutation, useQueryClient, useQuery } from '@tanstack/react-query';
 import { Link, useNavigate } from 'react-router-dom';
 import { createPageUrl } from '@/utils';
@@ -74,7 +74,7 @@ export default function OrganizationProfile({
         await new Promise(resolve => setTimeout(resolve, 300));
 
         // FIXED: Use Profile API instead of Organization API since IDs are profile IDs
-        const result = await base44.entities.Profile.get(organizationId);
+        const result = await client.entities.Profile.get(organizationId);
         log.debug('query completed')
 
         if (!result) {
@@ -109,21 +109,21 @@ export default function OrganizationProfile({
   // Reintroduced useQuery hook for contactMethods
   const { data: contactMethods = [], isLoading: isLoadingContacts } = useQuery({
     queryKey: ['contactMethods', organizationId],
-    queryFn: () => base44.entities.ContactMethod.filter({ organization_id: organizationId }),
+    queryFn: () => client.entities.ContactMethod.filter({ organization_id: organizationId }),
     enabled: !!organizationId, // Only run if organization.id is available
   });
 
   // Fetch grants for this organization - including drafting stage
   const { data: grants = [], isLoading: isLoadingGrants } = useQuery({
     queryKey: ['grants', organizationId],
-    queryFn: () => base44.entities.Grant.filter({ organization_id: organizationId }),
+    queryFn: () => client.entities.Grant.filter({ organization_id: organizationId }),
     enabled: !!organizationId,
   });
 
   // NEW: Fetch funding sources for this organization
   const { data: fundingSources = [], isLoading: isLoadingSources } = useQuery({
     queryKey: ['fundingSources', organizationId],
-    queryFn: () => base44.entities.SourceDirectory.filter({ discovered_for_organization_id: organizationId }),
+    queryFn: () => client.entities.SourceDirectory.filter({ discovered_for_organization_id: organizationId }),
     enabled: !!organizationId,
   });
 
@@ -176,7 +176,7 @@ export default function OrganizationProfile({
 
 
   const updateGrantMutation = useMutation({
-    mutationFn: ({ id, data }) => base44.entities.Grant.update(id, data),
+    mutationFn: ({ id, data }) => client.entities.Grant.update(id, data),
     onSuccess: () => {
       // Invalidate grants query to trigger refetch in parent component
       queryClient.invalidateQueries({ queryKey: ['grants', organizationId] }); // Updated queryKey
@@ -187,7 +187,7 @@ export default function OrganizationProfile({
   });
 
   const deleteGrantMutation = useMutation({
-    mutationFn: (id) => base44.entities.Grant.delete(id),
+    mutationFn: (id) => client.entities.Grant.delete(id),
     onSuccess: () => {
       // Invalidate grants query to trigger refetch in parent component
       queryClient.invalidateQueries({ queryKey: ['grants', organizationId] }); // Updated queryKey
@@ -199,7 +199,7 @@ export default function OrganizationProfile({
 
   // Add mutation for updating organization (now using Profile API)
   const updateOrgMutation = useMutation({
-    mutationFn: ({ id, data }) => base44.entities.Profile.update(id, data),
+    mutationFn: ({ id, data }) => client.entities.Profile.update(id, data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['organization', organizationId] });
       queryClient.invalidateQueries({ queryKey: ['organizations'] });
@@ -222,7 +222,7 @@ export default function OrganizationProfile({
 
   // Add mutation for deleting organization (now using Profile API)
   const deleteOrgMutation = useMutation({
-    mutationFn: (id) => base44.entities.Profile.delete(id),
+    mutationFn: (id) => client.entities.Profile.delete(id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['organizations'] });
       toast({
@@ -383,7 +383,7 @@ export default function OrganizationProfile({
 **Final Output:**
 Return a single JSON object with the key "logo_url" containing the absolute, direct URL to the best image file you found. The URL must end in .png, .jpg, .jpeg, or .svg. For example: {"logo_url": "https://example.com/logo.svg"}`;
 
-          const response = await base44.integrations.Core.InvokeLLM({
+          const response = await client.integrations.Core.InvokeLLM({
             prompt,
             add_context_from_internet: true,
             response_json_schema: {

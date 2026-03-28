@@ -8,7 +8,7 @@ function read(relPath) {
   return fs.readFileSync(p, 'utf8')
 }
 
-test('frontend base44 compatibility methods exist in source', () => {
+test('frontend API client methods exist in source', () => {
   const src = read('src/api/client.js')
   // We validate by source scan to avoid importing Vite-only `import.meta.env` in Node.
   assert.match(src, /\n\s*get\s*\(endpoint[,)]/m)

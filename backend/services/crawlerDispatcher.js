@@ -15,8 +15,8 @@ import { prepareContextForSnapshot, restoreContextFromSnapshot } from './snapsho
 import { processProfileEnrichmentJob } from './profileEnrichment.js'
 import { processNationalJob } from './nationalJobRouter.js'
 import { logFailedJob, determineSeverity } from './deadLetterQueue.js'
-import { acquireCrawlerLock } from './crawlerConcurrencyGuard.js'
 import { runCrawler as runCuratedCrawler } from './crawlers/crawlerManager.js'
+import { updateJobHeartbeat } from './crawlerConcurrencyGuard.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
@@ -30,6 +30,17 @@ const dataDir = process.env.CRAWLER_DATA_DIR
  * This prevents jobs from hanging silently and blocking the per-profile lock forever.
  */
 const JOB_TIMEOUT_MS = parseInt(process.env.CRAWLER_JOB_TIMEOUT_MS || String(30 * 60 * 1000), 10)
+
+/**
+ * Longer timeout for pipeline_automation jobs, which make sequential AI calls per grant.
+ * Default 45 minutes; override via PIPELINE_JOB_TIMEOUT_MS.
+ */
+const PIPELINE_JOB_TIMEOUT_MS = parseInt(process.env.PIPELINE_JOB_TIMEOUT_MS || String(45 * 60 * 1000), 10)
+
+function getJobTimeoutMs(jobType) {
+  if (jobType === 'pipeline_automation') return PIPELINE_JOB_TIMEOUT_MS
+  return JOB_TIMEOUT_MS
+}
 
 function withTimeout(promise, ms, label) {
   let timeoutId
@@ -64,6 +75,7 @@ async function processCuratedBenefitsJob({ db, job, profileContext }) {
     minScore: params.minScore ?? 25,
     maxResults: params.maxResults ?? 100,
     crawlerType,
+    profileContext,
   });
   return {
     result_count: result.results.length,
@@ -115,11 +127,14 @@ function clampInt(value, { min, max, fallback }) {
 }
 
 function getMaxGlobalConcurrency() {
-  return clampInt(process.env.CRAWLER_MAX_CONCURRENCY, { min: 1, max: 50, fallback: 6 })
+  // Prefer MAX_CONCURRENT_CRAWLERS (same as crawlerConcurrencyGuard.js) for consistency,
+  // fall back to CRAWLER_MAX_CONCURRENCY for backward compat.
+  const envValue = process.env.MAX_CONCURRENT_CRAWLERS || process.env.CRAWLER_MAX_CONCURRENCY
+  return clampInt(envValue, { min: 1, max: 50, fallback: 10 })
 }
 
 function getDispatchMaxAttempts() {
-  return clampInt(process.env.CRAWLER_DISPATCH_MAX_ATTEMPTS, { min: 1, max: 200, fallback: 30 })
+  return clampInt(process.env.CRAWLER_DISPATCH_MAX_ATTEMPTS, { min: 1, max: 200, fallback: 60 })
 }
 
 function computeBackoffMs(attempt) {
@@ -191,45 +206,6 @@ export function dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }) {
       return
     }
     
-    // Check concurrency limits before starting job
-    if (job.profile_id) {
-      const lockResult = await acquireCrawlerLock(db, job.profile_id, job.type, { jobId })
-      if (!lockResult.allowed) {
-        console.warn('[crawlerDispatcher] Concurrency limit reached', {
-          jobId,
-          profileId: job.profile_id,
-          reason: lockResult.reason,
-          existingJobId: lockResult.existingJobId ?? null,
-          runningCount: lockResult.runningCount ?? null,
-          limit: lockResult.limit ?? null,
-        })
-
-        // IMPORTANT: This is expected behavior, not a "failure".
-        // Do NOT mark the job failed (it pollutes diagnostics and blocks queues).
-        // Instead keep it queued and retry shortly.
-        try {
-          await db
-            .prepare(
-              `
-                UPDATE crawler_jobs
-                SET error = NULL
-                WHERE id = ?
-                  AND status = 'queued'
-              `,
-            )
-            .run(jobId)
-        } catch {
-          // ignore best-effort cleanup
-        }
-
-        setTimeout(() => {
-          dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }).catch(() => {})
-        }, 12_000)
-
-        return
-      }
-    }
-
     // If a previous dispatcher pass scheduled this job in the future, respect it.
     if (job.next_dispatch_at) {
       const nextAt = new Date(job.next_dispatch_at)
@@ -311,34 +287,76 @@ export function dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }) {
     const startedCount = Number(startRes?.changes ?? startRes?.rowCount ?? 0)
     if (startedCount === 0) {
       // Another job is already running for this profile, or we hit the global concurrency cap.
-      // Apply bounded backoff and eventually dead-letter to prevent runaway retries.
+      // Apply bounded backoff and eventually re-queue with extended delay to prevent permanent loss.
       const attempts = Number(job.dispatch_attempts ?? 0) + 1
       const maxAttempts = getDispatchMaxAttempts()
 
       if (attempts > maxAttempts) {
-        const deadLetter = {
-          reason: 'dispatch_exhausted',
-          attempts,
-          max_attempts: maxAttempts,
-          profile_id: profileId,
-          max_global_concurrency: maxGlobalConcurrency,
-          last_attempt_at: new Date().toISOString(),
+        // Instead of permanently dead-lettering, re-queue with a longer backoff.
+        // Track re-queue cycles to enforce a hard cap and prevent infinite loops.
+        const existingMeta = (() => {
+          try { return JSON.parse(job.result_meta || '{}') } catch { return {} }
+        })()
+        const requeueCycles = Number(existingMeta?.requeue_cycles ?? 0)
+        const MAX_REQUEUE_CYCLES = 3
+
+        if (requeueCycles >= MAX_REQUEUE_CYCLES) {
+          // Hard cap reached — permanently dead-letter the job.
+          const deadLetter = {
+            reason: 'dispatch_exhausted',
+            attempts,
+            max_attempts: maxAttempts,
+            requeue_cycles: requeueCycles,
+            profile_id: profileId,
+            max_global_concurrency: maxGlobalConcurrency,
+            last_attempt_at: new Date().toISOString(),
+          }
+
+          await db.prepare(
+            `
+              UPDATE crawler_jobs
+              SET status = 'failed',
+                  completed_at = CURRENT_TIMESTAMP,
+                  error = ?,
+                  result_meta = COALESCE(?, result_meta)
+              WHERE id = ?
+            `,
+          ).run(
+            'Crawler dispatch exhausted due to concurrency limits',
+            JSON.stringify({ dead_letter: deadLetter }),
+            jobId,
+          )
+          return
         }
 
-        await db.prepare(
-          `
-            UPDATE crawler_jobs
-            SET status = 'failed',
-                completed_at = CURRENT_TIMESTAMP,
-                error = ?,
-                result_meta = COALESCE(?, result_meta)
-            WHERE id = ?
-          `,
-        ).run(
-          'Crawler dispatch exhausted due to concurrency limits',
-          JSON.stringify({ dead_letter: deadLetter }),
-          jobId,
-        )
+        // Re-queue with an extended backoff (5 minutes) and reset dispatch_attempts.
+        const requeueDelayMs = 5 * 60 * 1000
+        const nextAtIso = new Date(Date.now() + requeueDelayMs).toISOString()
+        const updatedMeta = JSON.stringify({ ...existingMeta, requeue_cycles: requeueCycles + 1 })
+
+        console.warn('[crawlerDispatcher] Dispatch attempts exhausted, re-queuing with extended backoff', {
+          jobId, attempts, maxAttempts, requeueCycle: requeueCycles + 1, nextRetryAt: nextAtIso,
+        })
+
+        try {
+          await db.prepare(
+            `
+              UPDATE crawler_jobs
+              SET dispatch_attempts = 0,
+                  next_dispatch_at = ?,
+                  error = NULL,
+                  result_meta = COALESCE(?, result_meta)
+              WHERE id = ?
+                AND status = 'queued'
+            `,
+          ).run(nextAtIso, updatedMeta, jobId)
+        } catch (error) {
+          console.warn('[crawlerDispatcher] Failed to persist re-queue metadata', error)
+        }
+
+        setTimeout(() => {
+          dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }).catch(() => {})
+        }, requeueDelayMs)
         return
       }
 
@@ -410,6 +428,16 @@ export function dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }) {
 
     const startedAt = Date.now()
 
+    // Heartbeat: set initial heartbeat immediately and then periodically so that
+    // cleanupStaleCrawlers() doesn't treat this actively-running job as orphaned.
+    const HEARTBEAT_INTERVAL_MS = 60_000
+    await updateJobHeartbeat(db, jobId)
+    const heartbeatIntervalId = setInterval(() => {
+      updateJobHeartbeat(db, jobId).catch((err) => {
+        console.warn('[crawlerDispatcher] Heartbeat interval error:', err?.message)
+      })
+    }, HEARTBEAT_INTERVAL_MS)
+
     try {
       const parameters = parseJSON(job.parameters)
       const context = {
@@ -423,7 +451,7 @@ export function dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }) {
 
       result = await withTimeout(
         handler(context),
-        JOB_TIMEOUT_MS,
+        getJobTimeoutMs(job.type),
         `Job ${jobId} (${job.type})`,
       )
 
@@ -473,7 +501,9 @@ export function dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }) {
             error = NULL
         WHERE id = ?
       `).run(resultCountValue, resultMetaJson, jobId)
+      clearInterval(heartbeatIntervalId)
     } catch (error) {
+      clearInterval(heartbeatIntervalId)
       const durationSeconds = Math.max(0, Math.round((Date.now() - startedAt) / 1000))
       const finalResultMeta = {
         duration_seconds: durationSeconds,
@@ -512,4 +542,69 @@ export function dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }) {
       })
     })
   })
+}
+
+/**
+ * Start a periodic interval that recovers queued jobs orphaned by process restarts.
+ *
+ * When a job has a `next_dispatch_at` in the future (set via backoff/retry), the in-process
+ * `setTimeout` that would re-dispatch it is lost if the server restarts.  This interval
+ * queries for ready-to-run queued jobs every QUEUE_DRAIN_INTERVAL_MS milliseconds and
+ * re-dispatches them with a 1-second stagger so they don't stampede concurrency.
+ *
+ * @param {object} db         - Database connection
+ * @param {string} uploadDir  - Path to the uploads directory
+ * @param {Function|null} getOpenAI - OpenAI factory, or null
+ * @returns {NodeJS.Timeout} The interval handle (call clearInterval to stop it)
+ */
+export function startQueueDrainInterval(db, uploadDir, getOpenAI) {
+  const intervalMs = Number.parseInt(
+    process.env.QUEUE_DRAIN_INTERVAL_MS || '60000',
+    10,
+  )
+
+  const intervalId = setInterval(async () => {
+    try {
+      const isPostgres = db?.dialect === 'postgres'
+      const nowIso = new Date().toISOString()
+      const nowSqlite = nowIso.replace('T', ' ').replace('Z', '').replace(/\.\d+$/, '')
+      const now = isPostgres ? nowIso : nowSqlite
+
+      const ready = await db
+        .prepare(
+          isPostgres
+            ? `
+                SELECT id FROM crawler_jobs
+                WHERE status = 'queued'
+                  AND (next_dispatch_at IS NULL OR next_dispatch_at <= ?)
+                ORDER BY created_at ASC
+                LIMIT 10
+              `
+            : `
+                SELECT id FROM crawler_jobs
+                WHERE status = 'queued'
+                  AND (next_dispatch_at IS NULL OR datetime(next_dispatch_at) <= datetime(?))
+                ORDER BY created_at ASC
+                LIMIT 10
+              `,
+        )
+        .all(now)
+
+      if (!Array.isArray(ready) || ready.length === 0) return
+
+      console.log(`[queue-drain-interval] Found ${ready.length} ready queued job(s), dispatching with 1s stagger`)
+
+      for (let i = 0; i < ready.length; i++) {
+        if (i > 0) await new Promise((r) => setTimeout(r, 1_000))
+        try {
+          dispatchCrawlerJob({ db, jobId: ready[i].id, uploadDir, getOpenAI }).catch(() => {})
+        } catch { /* ignore individual dispatch errors */ }
+      }
+    } catch (err) {
+      console.warn('[queue-drain-interval] Poll error (ignored):', err?.message || err)
+    }
+  }, intervalMs)
+
+  console.log(`[queue-drain-interval] Started (every ${intervalMs / 1000}s)`)
+  return intervalId
 }
