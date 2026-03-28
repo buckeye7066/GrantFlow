@@ -529,3 +529,68 @@ export function dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }) {
     })
   })
 }
+
+/**
+ * Start a periodic interval that recovers queued jobs orphaned by process restarts.
+ *
+ * When a job has a `next_dispatch_at` in the future (set via backoff/retry), the in-process
+ * `setTimeout` that would re-dispatch it is lost if the server restarts.  This interval
+ * queries for ready-to-run queued jobs every QUEUE_DRAIN_INTERVAL_MS milliseconds and
+ * re-dispatches them with a 1-second stagger so they don't stampede concurrency.
+ *
+ * @param {object} db         - Database connection
+ * @param {string} uploadDir  - Path to the uploads directory
+ * @param {Function|null} getOpenAI - OpenAI factory, or null
+ * @returns {NodeJS.Timeout} The interval handle (call clearInterval to stop it)
+ */
+export function startQueueDrainInterval(db, uploadDir, getOpenAI) {
+  const intervalMs = Number.parseInt(
+    process.env.QUEUE_DRAIN_INTERVAL_MS || '60000',
+    10,
+  )
+
+  const intervalId = setInterval(async () => {
+    try {
+      const isPostgres = db?.dialect === 'postgres'
+      const nowIso = new Date().toISOString()
+      const nowSqlite = nowIso.replace('T', ' ').replace('Z', '').replace(/\.\d+$/, '')
+      const now = isPostgres ? nowIso : nowSqlite
+
+      const ready = await db
+        .prepare(
+          isPostgres
+            ? `
+                SELECT id FROM crawler_jobs
+                WHERE status = 'queued'
+                  AND (next_dispatch_at IS NULL OR next_dispatch_at <= ?)
+                ORDER BY created_at ASC
+                LIMIT 10
+              `
+            : `
+                SELECT id FROM crawler_jobs
+                WHERE status = 'queued'
+                  AND (next_dispatch_at IS NULL OR datetime(next_dispatch_at) <= datetime(?))
+                ORDER BY created_at ASC
+                LIMIT 10
+              `,
+        )
+        .all(now)
+
+      if (!Array.isArray(ready) || ready.length === 0) return
+
+      console.log(`[queue-drain-interval] Found ${ready.length} ready queued job(s), dispatching with 1s stagger`)
+
+      for (let i = 0; i < ready.length; i++) {
+        if (i > 0) await new Promise((r) => setTimeout(r, 1_000))
+        try {
+          dispatchCrawlerJob({ db, jobId: ready[i].id, uploadDir, getOpenAI }).catch(() => {})
+        } catch { /* ignore individual dispatch errors */ }
+      }
+    } catch (err) {
+      console.warn('[queue-drain-interval] Poll error (ignored):', err?.message || err)
+    }
+  }, intervalMs)
+
+  console.log(`[queue-drain-interval] Started (every ${intervalMs / 1000}s)`)
+  return intervalId
+}

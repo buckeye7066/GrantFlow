@@ -6,6 +6,8 @@ import { getSafeHealthSummary } from '../services/diagnosticsService.js'
 import { ensureUploadsDirWritable, isLikelyPersistentPath } from '../utils/uploadsDir.js'
 import { getDataReadiness, getSystemAlerts } from '../services/dataReadinessService.js'
 import { getPipelineHealth } from '../middleware/pipelineMonitor.js'
+import { MATCHER_VERSION } from '../services/matchDecisionEngine.js'
+import { RELEVANCE_RULES } from '../services/relevanceFilterRules.js'
 
 const router = express.Router()
 
@@ -291,6 +293,28 @@ router.get('/api/health/alerts', async (req, res) => {
       timestamp: new Date().toISOString(),
     })
   }
+})
+
+// Deployment verification: shows what code version is actually running
+router.get('/api/health/deployment', (_req, res) => {
+  let pkgVersion = null
+  try {
+    const pkgPath = path.resolve(__dirname, '../../package.json')
+    const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'))
+    pkgVersion = pkg.version || null
+  } catch { /* ignore */ }
+
+  res.json({
+    version: process.env.npm_package_version || pkgVersion || 'unknown',
+    commit: process.env.GIT_COMMIT_SHA || process.env.RAILWAY_GIT_COMMIT_SHA || process.env.COMMIT_SHA || 'unknown',
+    branch: process.env.GIT_BRANCH || process.env.RAILWAY_GIT_BRANCH || 'unknown',
+    deployedAt: process.env.DEPLOY_TIMESTAMP || 'unknown',
+    uptime: process.uptime(),
+    nodeVersion: process.version,
+    matcherVersion: MATCHER_VERSION,
+    relevanceFilterRuleCount: RELEVANCE_RULES.length,
+    timestamp: new Date().toISOString(),
+  })
 })
 
 export default router
