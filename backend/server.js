@@ -59,6 +59,7 @@ import ensureUserPreferencesTable from './utils/ensureUserPreferencesTable.js';
 import { linkAllProfilesToAdmin } from './utils/adminProfileLinks.js';
 import { ensureProfileOrgLinks } from './utils/ensureProfileOrgLinks.js'
 import { runStartupOperations } from './services/anyaStartupOperations.js';
+import { startHealthService } from './services/anyaHealthService.js';
 import ensureMinimumNationalOpportunities from './utils/ensureMinimumNationalOpportunities.js';
 import seedAssistanceDirectories from './utils/seedAssistanceDirectories.js';
 import seedFaithBasedHousing from './utils/seedFaithBasedHousing.js';
@@ -2425,6 +2426,9 @@ if (process.env.NODE_ENV !== 'test') {
     }, 5000);
     console.log('[Anya] Autonomous operations disabled — running basic startup crawlers only');
   }
+
+  // Start the background health service (runs every 30 min, configurable via ANYA_HEALTH_INTERVAL_MS)
+  startHealthService(db);
 
   // Optional: continuous national programs crawler (Track A/B programs)
   if (process.env.NATIONAL_PROGRAMS_CRAWLER_ENABLED === 'true') {
