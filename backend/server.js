@@ -2462,6 +2462,13 @@ if (process.env.NODE_ENV !== 'test') {
       '[NationalPrograms] Continuous crawler disabled (set NATIONAL_PROGRAMS_CRAWLER_ENABLED=true to enable)',
     )
   }
+
+  // Start Anya background health service
+  try {
+    startHealthService(db)
+  } catch (err) {
+    console.error('[AnyaHealth] Failed to start health service:', err?.message || err)
+  }
   });
 } else {
   console.info('[server] NODE_ENV=test; HTTP listener disabled')

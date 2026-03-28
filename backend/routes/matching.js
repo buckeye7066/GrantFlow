@@ -238,6 +238,11 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
               params.push(pattern, pattern, pattern, pattern)
       }
 
+      // Profile isolation: each profile sees global catalog entries plus its own crawl results.
+      // This prevents cross-profile bleed where Profile A's crawl results appear in Profile B's matches.
+      conditions.push('(profile_id IS NULL OR profile_id = ?)')
+      params.push(profileId)
+
       const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''
 
       const deadlineNullSort = isPostgres

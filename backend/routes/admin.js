@@ -27,6 +27,7 @@ import { crawlItemFunding } from '../services/crawlers/itemFundingCrawler.js';
 import { runCrawler as runCuratedCrawlerForAudit } from '../services/crawlers/crawlerManager.js';
 import { findDuplicateProfileGroups, mergeProfiles } from '../services/profileDedupeService.js'
 import { ensureAdminUser, isAdminUser, addProfileEmails, listProfileEmails } from '../utils/accessControl.js'
+import { ensureAuth, ensureAdmin } from '../middleware/auth.js'
 import { repairProfileOwnership } from '../utils/profileOwnershipRepair.js'
 import zipcodes from 'zipcodes';
 import { resolveCountyForZip } from '../services/geo/zipCountyResolver.js';
@@ -34,8 +35,13 @@ import { createGeoCrawlRun } from '../services/geoCrawlRunStore.js'
 import { resolveUploadsDir, ensureUploadsDirWritable } from '../utils/uploadsDir.js'
 import { isDesignatedProfileId } from '../utils/ensureDesignatedProfiles.js'
 import { analyzeKnowledgeBaseDocument, processPendingKBDocuments, extractFundingOpportunitiesFromKB } from '../services/knowledgeBaseProcessor.js'
+import { runHealthCheck, getLastHealthStatus } from '../services/anyaHealthService.js'
 
 const router = express.Router();
+
+// Router-level admin guard: all routes in this file require authentication and admin privileges.
+router.use(ensureAuth)
+router.use(ensureAdmin)
 
 // Configuration constants
 const MAX_TEXT_LENGTH_FOR_AI = 10000; // Maximum characters to send to OpenAI
@@ -4938,8 +4944,6 @@ router.post('/backfill-matches', async (req, res) => {
     res.status(500).json({ error: error.message })
   }
 })
-
-import { runHealthCheck, getLastHealthStatus } from '../services/anyaHealthService.js'
 
 /**
  * GET /api/admin/anya-health
