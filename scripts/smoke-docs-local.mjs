@@ -13,7 +13,6 @@ import { promises as fsp } from 'node:fs'
 import { join } from 'node:path'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
-import { PDFDocument, StandardFonts, rgb } from 'pdf-lib'
 
 const base = String(process.env.SMOKE_API_BASE || 'http://127.0.0.1:18194').replace(/\/+$/, '')
 const adminToken = String(process.env.X_ADMIN_TOKEN || process.env.ADMIN_TOKEN || '').trim()
@@ -67,15 +66,40 @@ async function createProfile() {
 }
 
 async function buildPdfBytes() {
-  const pdfDoc = await PDFDocument.create()
-  const page = pdfDoc.addPage([500, 240])
-  const font = await pdfDoc.embedFont(StandardFonts.Helvetica)
-  page.drawText('Smoke PDF Profile Intake', { x: 40, y: 190, size: 18, font, color: rgb(0, 0, 0) })
-  page.drawText('Name: Smoke User', { x: 40, y: 150, size: 14, font })
-  page.drawText('Email: smoke.user@example.com', { x: 40, y: 130, size: 14, font })
-  page.drawText('Phone: 555-555-1212', { x: 40, y: 110, size: 14, font })
-  const bytes = await pdfDoc.save()
-  return Buffer.from(bytes)
+  // Hand-crafted minimal PDF (no pdf-lib dependency required)
+  const textLines = [
+    'Smoke PDF Profile Intake',
+    'Name: Smoke User',
+    'Email: smoke.user@example.com',
+    'Phone: 555-555-1212',
+  ]
+  const stream = textLines
+    .map((line, i) => `BT /F1 ${i === 0 ? 18 : 14} Tf 40 ${190 - i * 20} Td (${line}) Tj ET`)
+    .join('\n')
+  const parts = [
+    '%PDF-1.4\n',
+    '1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n',
+    '2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n',
+    '3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 500 240]/Contents 4 0 R/Resources<</Font<</F1 5 0 R>>>>>>endobj\n',
+    '5 0 obj<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>endobj\n',
+    `4 0 obj<</Length ${stream.length}>>\nstream\n${stream}\nendstream\nendobj\n`,
+  ]
+  const body = parts.join('')
+  const xrefOffset = body.length
+  const offsets = ['1 0 obj', '2 0 obj', '3 0 obj', '4 0 obj', '5 0 obj'].map(
+    (marker) => String(body.indexOf(marker)).padStart(10, '0'),
+  )
+  const xref = [
+    'xref',
+    '0 6',
+    '0000000000 65535 f ',
+    ...offsets.map((o) => `${o} 00000 n `),
+    'trailer<</Size 6/Root 1 0 R>>',
+    'startxref',
+    String(xrefOffset),
+    '%%EOF',
+  ].join('\n')
+  return Buffer.from(body + xref)
 }
 
 async function pickAnyTempImagePath() {
