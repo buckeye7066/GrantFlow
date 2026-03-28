@@ -16,6 +16,7 @@ import { processProfileEnrichmentJob } from './profileEnrichment.js'
 import { processNationalJob } from './nationalJobRouter.js'
 import { logFailedJob, determineSeverity } from './deadLetterQueue.js'
 import { runCrawler as runCuratedCrawler } from './crawlers/crawlerManager.js'
+import { updateJobHeartbeat } from './crawlerConcurrencyGuard.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
@@ -426,6 +427,16 @@ export function dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }) {
 
     const startedAt = Date.now()
 
+    // Heartbeat: set initial heartbeat immediately and then periodically so that
+    // cleanupStaleCrawlers() doesn't treat this actively-running job as orphaned.
+    const HEARTBEAT_INTERVAL_MS = 60_000
+    await updateJobHeartbeat(db, jobId)
+    const heartbeatIntervalId = setInterval(() => {
+      updateJobHeartbeat(db, jobId).catch((err) => {
+        console.warn('[crawlerDispatcher] Heartbeat interval error:', err?.message)
+      })
+    }, HEARTBEAT_INTERVAL_MS)
+
     try {
       const parameters = parseJSON(job.parameters)
       const context = {
@@ -489,7 +500,9 @@ export function dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }) {
             error = NULL
         WHERE id = ?
       `).run(resultCountValue, resultMetaJson, jobId)
+      clearInterval(heartbeatIntervalId)
     } catch (error) {
+      clearInterval(heartbeatIntervalId)
       const durationSeconds = Math.max(0, Math.round((Date.now() - startedAt) / 1000))
       const finalResultMeta = {
         duration_seconds: durationSeconds,
