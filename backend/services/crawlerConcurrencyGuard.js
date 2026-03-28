@@ -174,8 +174,38 @@ export async function acquireCrawlerLock(db, profileId, jobType, { jobId } = {})
 }
 
 /**
+ * Update the heartbeat timestamp for a running job to prove liveness.
+ * Call this periodically during long-running jobs so that cleanupStaleCrawlers
+ * does not prematurely kill a job that is still actively working.
+ *
+ * @param {object} db    - Database connection
+ * @param {string} jobId - The crawler_jobs.id to update
+ * @returns {Promise<void>}
+ */
+export async function updateJobHeartbeat(db, jobId) {
+  if (!db || !jobId) return
+  try {
+    await db
+      .prepare(
+        `
+          UPDATE crawler_jobs
+          SET last_heartbeat_at = CURRENT_TIMESTAMP
+          WHERE id = ?
+            AND status = 'running'
+        `,
+      )
+      .run(jobId)
+  } catch (error) {
+    // Best-effort; heartbeat failure should never crash a running job
+    console.warn('[crawler-concurrency] Failed to update job heartbeat:', error?.message)
+  }
+}
+
+/**
  * Mark stale crawlers as failed (cleanup orphaned jobs)
- * Jobs stuck in 'running' for > staleThresholdMs are considered orphaned
+ * Jobs stuck in 'running' for > staleThresholdMs are considered orphaned,
+ * UNLESS their last_heartbeat_at is recent (within staleThresholdMs), in which
+ * case they are still alive and should not be killed.
  * 
  * @param {object} db - Database connection
  * @param {number} staleThresholdMs - Time in ms before a job is considered stale
@@ -193,25 +223,33 @@ export async function cleanupStaleCrawlers(db, staleThresholdMs = 30 * 60 * 1000
       .prepare(
         isPostgres
           ? `
-              SELECT id, type, profile_id, started_at, created_at
+              SELECT id, type, profile_id, started_at, created_at, last_heartbeat_at
               FROM crawler_jobs
               WHERE status = 'running'
                 AND (
                   (started_at IS NOT NULL AND started_at < ?)
                   OR (started_at IS NULL AND created_at < ?)
                 )
+                AND (
+                  last_heartbeat_at IS NULL
+                  OR last_heartbeat_at < ?
+                )
             `
           : `
-              SELECT id, type, profile_id, started_at, created_at
+              SELECT id, type, profile_id, started_at, created_at, last_heartbeat_at
               FROM crawler_jobs
               WHERE status = 'running'
                 AND (
                   (started_at IS NOT NULL AND datetime(started_at) < datetime(?))
                   OR (started_at IS NULL AND datetime(created_at) < datetime(?))
                 )
+                AND (
+                  last_heartbeat_at IS NULL
+                  OR datetime(last_heartbeat_at) < datetime(?)
+                )
             `,
       )
-      .all(threshold, threshold)
+      .all(threshold, threshold, threshold)
     
     let cleaned = 0
     for (const job of staleJobs) {
