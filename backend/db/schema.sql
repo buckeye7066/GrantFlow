@@ -1027,7 +1027,10 @@ CREATE TABLE IF NOT EXISTS crawler_jobs (
   dispatch_attempts INTEGER DEFAULT 0,
   next_dispatch_at DATETIME,
   retry_count INTEGER DEFAULT 0,
-  last_retry_at DATETIME
+  last_retry_at DATETIME,
+  -- Heartbeat timestamp updated periodically by long-running jobs to prove liveness.
+  -- cleanupStaleCrawlers skips jobs with a recent heartbeat even if started_at is old.
+  last_heartbeat_at DATETIME
 );
 
 CREATE INDEX IF NOT EXISTS idx_crawler_jobs_status ON crawler_jobs(status);
