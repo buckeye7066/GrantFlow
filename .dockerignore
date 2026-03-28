@@ -1,20 +1,60 @@
+# Dependencies
 node_modules
+
+# Version control
 .git
 .github
+
+# Documentation
 docs
-tests
 *.md
+!README.md
+
+# Tests and test scripts
+tests
+test-*.sh
+test-*.mjs
+
+# Scripts (not needed at runtime)
+scripts
+
+# Build artifacts (rebuilt inside Docker)
+dist
+coverage
+
+# Environment files (injected at runtime)
 .env
 .env.*
 !.env.example
-test-*.sh
-test-*.mjs
-dist
-coverage
+
+# Large binary / media assets
+*.mp4
+*.webm
+*.mov
+*.avi
+*.mkv
+
+# Dev/lint config files
+.eslintrc*
+eslint.config.*
+vitest.*
+*.config.ts
+*.config.js
+!vite.config.ts
+postcss.config.js
+tailwind.config.js
+jsconfig.json
+tsconfig*.json
+
+# Database files
 *.db
 *.db-shm
 *.db-wal
 *.db-journal
+*.sqlite
+*.sqlite3
+
+# Runtime data dirs
 backend/data/
 backend/uploads/
 backend/temp_images/

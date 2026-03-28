@@ -34,8 +34,13 @@ import { createGeoCrawlRun } from '../services/geoCrawlRunStore.js'
 import { resolveUploadsDir, ensureUploadsDirWritable } from '../utils/uploadsDir.js'
 import { isDesignatedProfileId } from '../utils/ensureDesignatedProfiles.js'
 import { analyzeKnowledgeBaseDocument, processPendingKBDocuments, extractFundingOpportunitiesFromKB } from '../services/knowledgeBaseProcessor.js'
+import { ensureAdmin } from '../middleware/auth.js'
 
 const router = express.Router();
+
+// Router-level admin auth: every admin route requires admin authentication (defense-in-depth).
+// Individual handler checks are kept as an additional layer.
+router.use(ensureAdmin);
 
 // Configuration constants
 const MAX_TEXT_LENGTH_FOR_AI = 10000; // Maximum characters to send to OpenAI
