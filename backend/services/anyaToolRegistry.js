@@ -2007,7 +2007,7 @@ registerTool({
 
     try {
       const { dispatchCrawlerJob } = await import('./crawlerDispatcher.js')
-      dispatchCrawlerJob({ db, jobId }).catch(() => {})
+      dispatchCrawlerJob({ db, jobId }).catch(e => console.warn('[background]', e?.message || e))
     } catch { /* ignore */ }
 
     return {
@@ -2366,5 +2366,48 @@ registerTool({
         ? `Found ${flagged.length} pipeline item(s) that may require medical necessity documentation. Use medical.generateLOMN with the grantId to generate documents.`
         : 'No pipeline items currently require medical necessity documentation.',
     }
+  },
+})
+
+import { runAutoRepair } from './anyaAutoRepairService.js'
+
+registerTool({
+  name: 'admin.code.autoRepair',
+  description: 'Scan the codebase for common anti-patterns (empty catches, console.log in routes, missing profile_id isolation in SQL) and optionally repair them. profile_bleed findings are always report-only.',
+  requiresAdmin: true,
+  schema: {
+    type: 'object',
+    properties: {
+      dryRun: {
+        type: 'boolean',
+        default: true,
+        description: 'When true (default), return a report without modifying any files.',
+      },
+      repairTypes: {
+        type: 'array',
+        items: {
+          type: 'string',
+          enum: ['empty_catch', 'console_log', 'profile_bleed'],
+        },
+        description: 'Subset of repair types to run. Defaults to all three.',
+      },
+    },
+  },
+  handler: async (params, context) => {
+    const { db } = context
+    if (!db) throw new Error('Database connection unavailable')
+    const dryRun = params?.dryRun !== false
+    const repairTypes = params?.repairTypes
+    const report = await runAutoRepair(db, { dryRun, repairTypes })
+    const totalFindings =
+      report.findings.empty_catch.length +
+      report.findings.console_log.length +
+      report.findings.profile_bleed.length
+    const recommendation = dryRun
+      ? totalFindings > 0
+        ? `Found ${totalFindings} issue(s) across ${report.scannedFiles} files. Run with dryRun=false to apply repairs (profile_bleed issues require manual SQL fixes).`
+        : `No issues found across ${report.scannedFiles} files.`
+      : `Applied repairs: ${report.repaired.empty_catch} empty_catch fix(es), ${report.repaired.console_log} console_log fix(es). profile_bleed issues (${report.findings.profile_bleed.length}) require manual SQL fixes.`
+    return { ...report, recommendation }
   },
 })

@@ -36,6 +36,7 @@ import { resolveUploadsDir, ensureUploadsDirWritable } from '../utils/uploadsDir
 import { isDesignatedProfileId } from '../utils/ensureDesignatedProfiles.js'
 import { analyzeKnowledgeBaseDocument, processPendingKBDocuments, extractFundingOpportunitiesFromKB } from '../services/knowledgeBaseProcessor.js'
 import { runHealthCheck, getLastHealthStatus } from '../services/anyaHealthService.js'
+import { runAutoRepair } from '../services/anyaAutoRepairService.js'
 
 const router = express.Router();
 
@@ -3383,7 +3384,7 @@ router.post('/seed-profile-grants', async (req, res) => {
 // POST /api/admin/ingest - Trigger ingestion from all sources
 router.post('/ingest', async (req, res) => {
   try {
-    console.log('[admin/ingest] Starting manual ingestion...');
+    console.info('[admin/ingest] Starting manual ingestion...');
     
     // Import connectors dynamically
     const { fetchGrantsGov } = await import('../services/sources/grantsGov.js');
@@ -3394,7 +3395,7 @@ router.post('/ingest', async (req, res) => {
     
     // Ingest from Grants.gov
     try {
-      console.log('[admin/ingest] Fetching from Grants.gov...');
+      console.info('[admin/ingest] Fetching from Grants.gov...');
       const { opportunities: grantsGovOpps } = await fetchGrantsGov({ limit: 100, offset: 0 });
       const grantsGovResult = ingestOpportunities(req.db, grantsGovOpps, 'grants.gov');
       results.push({ source: 'grants.gov', ...grantsGovResult });
@@ -3405,7 +3406,7 @@ router.post('/ingest', async (req, res) => {
     
     // Ingest from USASpending.gov
     try {
-      console.log('[admin/ingest] Fetching from USASpending.gov...');
+      console.info('[admin/ingest] Fetching from USASpending.gov...');
       const { opportunities: usaSpendingOpps } = await fetchUSASpending({ limit: 100, page: 1 });
       const usaSpendingResult = ingestOpportunities(req.db, usaSpendingOpps, 'usaspending.gov');
       results.push({ source: 'usaspending.gov', ...usaSpendingResult });
@@ -3424,7 +3425,7 @@ router.post('/ingest', async (req, res) => {
       total_errors: results.reduce((sum, r) => sum + (r.errors || 0), 0),
     };
     
-    console.log('[admin/ingest] Ingestion completed:', summary);
+    console.info('[admin/ingest] Ingestion completed:', summary);
     
     res.json({
       success: summary.failures === 0,
@@ -4780,7 +4781,7 @@ router.post('/clear-all-pipelines', async (req, res) => {
     await safeDelete('crawl_metadata', 'DELETE FROM crawl_metadata')
     await safeDelete('crawler_jobs', 'DELETE FROM crawler_jobs')
 
-    console.log('[admin] clear-all-pipelines completed:', results)
+    console.info('[admin] clear-all-pipelines completed:', results)
     res.json({
       success: true,
       message: 'All pipelines cleared. Funding opportunities preserved for re-crawling.',
@@ -4928,7 +4929,7 @@ router.post('/backfill-matches', async (req, res) => {
       }
     }
 
-    console.log(`[admin/backfill-matches] Completed: accepted=${accepted}, reviewed=${reviewed}, rejected=${rejected}, errors=${errors}`)
+    console.info(`[admin/backfill-matches] Completed: accepted=${accepted}, reviewed=${reviewed}, rejected=${rejected}, errors=${errors}`)
 
     res.json({
       success: true,
@@ -4969,6 +4970,37 @@ router.post('/anya-health/run', async (req, res) => {
     res.json(result)
   } catch (err) {
     console.error('[admin/anya-health/run] Error:', err)
+    res.status(500).json({ error: err.message })
+  }
+})
+
+/**
+ * GET /api/admin/anya-repair
+ * Dry-run scan — returns a report without modifying any files.
+ */
+router.get('/anya-repair', async (req, res) => {
+  if (!(await ensureAdminRequest(req, res))) return
+  try {
+    const report = await runAutoRepair(req.db, { dryRun: true })
+    res.json(report)
+  } catch (err) {
+    console.error('[admin/anya-repair] Error:', err)
+    res.status(500).json({ error: err.message })
+  }
+})
+
+/**
+ * POST /api/admin/anya-repair/run
+ * Apply repairs. Accepts optional `repairTypes` array in request body.
+ */
+router.post('/anya-repair/run', async (req, res) => {
+  if (!(await ensureAdminRequest(req, res))) return
+  try {
+    const { repairTypes } = req.body || {}
+    const report = await runAutoRepair(req.db, { dryRun: false, repairTypes })
+    res.json(report)
+  } catch (err) {
+    console.error('[admin/anya-repair/run] Error:', err)
     res.status(500).json({ error: err.message })
   }
 })

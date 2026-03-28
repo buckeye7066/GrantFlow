@@ -1738,9 +1738,9 @@ async function scheduleCrawlerSmokeJobs({ db, uploadsDir }) {
       )
 
     // Fire-and-forget dispatch (non-blocking).
-    dispatchCrawlerJob({ db, jobId: comprehensiveJobId, uploadDir: uploadsDir, getOpenAI: null }).catch(() => {})
-    dispatchCrawlerJob({ db, jobId: scholarshipJobId, uploadDir: uploadsDir, getOpenAI: null }).catch(() => {})
-    dispatchCrawlerJob({ db, jobId: documentIngestJobId, uploadDir: uploadsDir, getOpenAI: null }).catch(() => {})
+    dispatchCrawlerJob({ db, jobId: comprehensiveJobId, uploadDir: uploadsDir, getOpenAI: null }).catch(e => console.warn('[background]', e?.message || e))
+    dispatchCrawlerJob({ db, jobId: scholarshipJobId, uploadDir: uploadsDir, getOpenAI: null }).catch(e => console.warn('[background]', e?.message || e))
+    dispatchCrawlerJob({ db, jobId: documentIngestJobId, uploadDir: uploadsDir, getOpenAI: null }).catch(e => console.warn('[background]', e?.message || e))
   } catch (error) {
     console.warn('[smoke] Failed to schedule crawler smoke jobs:', error?.message || String(error))
   }
@@ -2244,7 +2244,7 @@ if (process.env.NODE_ENV !== 'test') {
       for (let i = 0; i < queued.length; i++) {
         if (i > 0) await new Promise((r) => setTimeout(r, STAGGER_DELAY_MS))
         try {
-          dispatchCrawlerJob({ db: dbRef, jobId: queued[i].id, uploadDir: uploadsDirRef, getOpenAI: null }).catch(() => {})
+          dispatchCrawlerJob({ db: dbRef, jobId: queued[i].id, uploadDir: uploadsDirRef, getOpenAI: null }).catch(e => console.warn('[background]', e?.message || e))
         } catch { /* ignore individual dispatch errors */ }
       }
     }
@@ -2284,7 +2284,7 @@ if (process.env.NODE_ENV !== 'test') {
 
           for (const job of queued) {
             try {
-              dispatchCrawlerJob({ db, jobId: job.id, uploadDir: uploadsDir, getOpenAI: null }).catch(() => {})
+              dispatchCrawlerJob({ db, jobId: job.id, uploadDir: uploadsDir, getOpenAI: null }).catch(e => console.warn('[background]', e?.message || e))
             } catch { /* ignore individual dispatch errors */ }
           }
           if (queued.length > 0) {
@@ -2349,7 +2349,7 @@ if (process.env.NODE_ENV !== 'test') {
   const startupSmokeEnabled = parseBoolEnv(process.env.STARTUP_SMOKE_CRAWL_ENABLED) === true
   if (startupSmokeEnabled) {
     setTimeout(() => {
-      scheduleCrawlerSmokeJobs({ db, uploadsDir }).catch(() => {})
+      scheduleCrawlerSmokeJobs({ db, uploadsDir }).catch(e => console.warn('[background]', e?.message || e))
     }, 10_000)
     console.info('[startup] Startup smoke crawlers enabled (STARTUP_SMOKE_CRAWL_ENABLED=true)')
   } else {
@@ -2413,7 +2413,7 @@ if (process.env.NODE_ENV !== 'test') {
               console.error('[Anya] Scheduled check failed:', err?.message || err);
             });
           })
-          .catch(() => {});
+          .catch(e => console.warn('[background]', e?.message || e));
       }, SCHEDULE_CHECK_MS);
       console.log('[Anya] Scheduled runner enabled (checking every 30 min)');
     }

@@ -1772,7 +1772,7 @@ router.post('/email/start', emailStartLimiter, async (req, res) => {
       identifier: email,
       success: Boolean(emailSent),
       error: emailSent ? null : 'email_delivery_failed_or_unconfigured',
-    }).catch(() => {})
+    }).catch(e => console.warn('[background]', e?.message || e))
 
     console.info('[auth/email/start] Request completed successfully for:', email, 'email_sent:', emailSent, 'isProd:', isProd)
     return res.status(202).json(responseData)
@@ -1785,7 +1785,7 @@ router.post('/email/start', emailStartLimiter, async (req, res) => {
       identifier: typeof req.body?.email === 'string' ? req.body.email : 'unknown',
       success: false,
       error: error?.message || String(error),
-    }).catch(() => {})
+    }).catch(e => console.warn('[background]', e?.message || e))
     return res.status(500).json({ 
       error: 'An unexpected error occurred. Please try again.',
       error_type: 'internal_error',
@@ -1849,11 +1849,11 @@ router.post('/email/verify', async (req, res) => {
       .get(credential.id, incomingHash)
 
     if (matchedAny?.consumed_at) {
-      sendAuthAttemptNotification({ event: 'email_verify', identifier: email, success: false, error: 'code_consumed' }).catch(() => {})
+      sendAuthAttemptNotification({ event: 'email_verify', identifier: email, success: false, error: 'code_consumed' }).catch(e => console.warn('[background]', e?.message || e))
       return res.status(400).json({ error: 'Verification code already used. Request a new code.' })
     }
     if (matchedAny?.expires_at && matchedAny.expires_at < nowISOString()) {
-      sendAuthAttemptNotification({ event: 'email_verify', identifier: email, success: false, error: 'code_expired' }).catch(() => {})
+      sendAuthAttemptNotification({ event: 'email_verify', identifier: email, success: false, error: 'code_expired' }).catch(e => console.warn('[background]', e?.message || e))
       return res.status(400).json({ error: 'Verification code expired. Request a new code.' })
     }
 
@@ -1871,7 +1871,7 @@ router.post('/email/verify', async (req, res) => {
       ?.c
 
     if (!hasAnyActive) {
-      sendAuthAttemptNotification({ event: 'email_verify', identifier: email, success: false, error: 'no_active_codes' }).catch(() => {})
+      sendAuthAttemptNotification({ event: 'email_verify', identifier: email, success: false, error: 'no_active_codes' }).catch(e => console.warn('[background]', e?.message || e))
       return res.status(400).json({ error: 'Verification code expired. Request a new code.' })
     }
 
@@ -1911,7 +1911,7 @@ router.post('/email/verify', async (req, res) => {
       )
       .run(credential.id)
 
-    sendAuthAttemptNotification({ event: 'email_verify', identifier: email, success: false, error: 'invalid_code' }).catch(() => {})
+    sendAuthAttemptNotification({ event: 'email_verify', identifier: email, success: false, error: 'invalid_code' }).catch(e => console.warn('[background]', e?.message || e))
     return res.status(400).json({ error: 'Invalid verification code' })
   }
 
@@ -2039,7 +2039,7 @@ router.post('/email/verify', async (req, res) => {
       ip: req.ip,
       userAgent: req.headers['user-agent'],
     },
-  }).catch(() => {})
+  }).catch(e => console.warn('[background]', e?.message || e))
 
   // In-app admin notification (best-effort, stored in-memory) + durable audit sink.
   // Record ALL sign-ins (admins can filter in the UI). This is required for accurate "who logged in" reporting.
@@ -2103,7 +2103,7 @@ router.post('/phone/start', phoneStartLimiter, async (req, res) => {
     event: 'phone_start',
     identifier: normalized,
     success: true,
-  }).catch(() => {})
+  }).catch(e => console.warn('[background]', e?.message || e))
 
   return res.status(202).json({
     message: 'Verification code sent',
@@ -2191,7 +2191,7 @@ router.post('/phone/verify', async (req, res) => {
       identifier: normalized,
       success: false,
       error: 'invalid_code',
-    }).catch(() => {})
+    }).catch(e => console.warn('[background]', e?.message || e))
     return res.status(400).json({ error: 'Invalid verification code' })
   }
 
@@ -2314,7 +2314,7 @@ router.post('/phone/verify', async (req, res) => {
       ip: req.ip,
       userAgent: req.headers['user-agent'],
     },
-  }).catch(() => {})
+  }).catch(e => console.warn('[background]', e?.message || e))
 
   recordClientSignInEvent({
     db: req.db,
@@ -2996,7 +2996,7 @@ router.get('/:provider/callback', async (req, res) => {
         ip: req.ip,
         userAgent: req.headers['user-agent'],
       },
-    }).catch(() => {})
+    }).catch(e => console.warn('[background]', e?.message || e))
 
     if (!user?.is_admin) {
       recordClientSignInEvent({

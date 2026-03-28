@@ -1621,7 +1621,7 @@ router.post('/bulk-populate', async (req, res) => {
     const zipMap = JSON.parse(fs.readFileSync(zipFile, 'utf8'))
     const allZipCodes = Object.keys(zipMap).slice(0, max_zips)
     
-    console.log(`[bulk-populate] Starting population of ${allZipCodes.length} ZIP codes with ${limit_per_zip} opportunities each`)
+    console.info(`[bulk-populate] Starting population of ${allZipCodes.length} ZIP codes with ${limit_per_zip} opportunities each`)
     
     // Import the crawler function
     const { processComprehensiveCrawlerJob } = await import('../services/comprehensiveCrawlerOptimized.js')
@@ -1654,14 +1654,14 @@ router.post('/bulk-populate', async (req, res) => {
         totalInserted += result.inserted || 0
         totalEvaluated += result.evaluated || 0
         
-        console.log(`[bulk-populate] Batch ${Math.floor(i/batchSize) + 1}/${Math.ceil(allZipCodes.length/batchSize)}: ${result.inserted} opportunities`)
+        console.info(`[bulk-populate] Batch ${Math.floor(i/batchSize) + 1}/${Math.ceil(allZipCodes.length/batchSize)}: ${result.inserted} opportunities`)
       } catch (batchErr) {
         errors.push({ batch: i, error: batchErr.message })
         console.error(`[bulk-populate] Batch ${i} error:`, batchErr.message)
       }
     }
     
-    console.log(`[bulk-populate] Complete: ${totalInserted} opportunities inserted from ${allZipCodes.length} ZIPs`)
+    console.info(`[bulk-populate] Complete: ${totalInserted} opportunities inserted from ${allZipCodes.length} ZIPs`)
     
     res.json({
       success: true,
@@ -1686,7 +1686,7 @@ router.post('/crawl-all-counties', async (req, res) => {
   }
   
   try {
-    console.log('[crawl-all-counties] Starting county-level funding crawl...')
+    console.info('[crawl-all-counties] Starting county-level funding crawl...')
     
     const { crawlAllCounties } = await import('../services/countyFundingCrawler.js')
     const result = await crawlAllCounties(req.db)
@@ -1869,7 +1869,7 @@ router.post('/seed-state-assistance', async (req, res) => {
   }
   
   try {
-    console.log('[seed-state-assistance] Loading state assistance programs...')
+    console.info('[seed-state-assistance] Loading state assistance programs...')
     
     const fs = await import('fs')
     const path = await import('path')
@@ -1968,7 +1968,7 @@ router.post('/crawl-grants-gov', async (req, res) => {
   }
   
   try {
-    console.log('[crawl-grants-gov] Starting Grants.gov crawl...')
+    console.info('[crawl-grants-gov] Starting Grants.gov crawl...')
     
     const { crawlGrantsGov } = await import('../services/grantsDotGovCrawler.js')
     
@@ -2004,7 +2004,7 @@ router.post('/remove-loans', async (req, res) => {
   }
   
   try {
-    console.log('[remove-loans] Removing loans and matching-fund opportunities...')
+    console.info('[remove-loans] Removing loans and matching-fund opportunities...')
     
     // Delete loans
     const loansDeleted = await req.db.prepare(`
@@ -2048,7 +2048,7 @@ router.post('/seed-all-real', async (req, res) => {
   }
   
   try {
-    console.log('[seed-all-real] Starting comprehensive real funding seed...')
+    console.info('[seed-all-real] Starting comprehensive real funding seed...')
     
     const { seedAllRealFunding, getOpportunityCountsByState } = await import('../services/realLocationFundingCrawler.js')
     
@@ -2150,7 +2150,7 @@ router.post('/seed-real-opportunities', async (req, res) => {
       }
     }
     
-    console.log(`[seed-real] Complete: ${inserted} inserted, ${updated} updated`)
+    console.info(`[seed-real] Complete: ${inserted} inserted, ${updated} updated`)
     
     res.json({
       success: true,
@@ -2311,22 +2311,22 @@ router.post('/real-crawl', async (req, res) => {
     // Dynamic import of the real crawler
     const { crawlRealOpportunities, crawlAllStates } = await import('../services/realFundingCrawler.js')
     
-    console.log(`[real-crawl] Starting real opportunity crawl${state ? ` for ${state}` : all_states ? ' for all states' : ' (national)'}...`)
+    console.info(`[real-crawl] Starting real opportunity crawl${state ? ` for ${state}` : all_states ? ' for all states' : ' (national)'}...`)
     
     let result
     if (all_states) {
       result = await crawlAllStates(req.db, (progress) => {
-        console.log(`[real-crawl] Progress: ${JSON.stringify(progress)}`)
+        console.info(`[real-crawl] Progress: ${JSON.stringify(progress)}`)
       })
     } else {
       result = await crawlRealOpportunities(req.db, state, {
         onProgress: (progress) => {
-          console.log(`[real-crawl] Progress: ${JSON.stringify(progress)}`)
+          console.info(`[real-crawl] Progress: ${JSON.stringify(progress)}`)
         }
       })
     }
     
-    console.log(`[real-crawl] Complete: ${result.inserted || result.total_inserted} inserted`)
+    console.info(`[real-crawl] Complete: ${result.inserted || result.total_inserted} inserted`)
     
     res.json({
       success: true,
