@@ -16,11 +16,6 @@ coverage
 *.db-shm
 *.db-wal
 *.db-journal
-backend/data/
-backend/uploads/
-backend/temp_images/
-seed/*.db
-# Exclude large video/media files from Docker builds
 *.mp4
 *.webm
 *.mov
@@ -28,6 +23,10 @@ seed/*.db
 *.mkv
 *.flv
 *.wmv
+backend/data/
+backend/uploads/
+backend/temp_images/
+seed/*.db
 .eslintrc*
 .eslintignore
 vitest.*
