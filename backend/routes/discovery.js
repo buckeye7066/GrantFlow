@@ -116,6 +116,14 @@ router.post('/comprehensiveMatch', async (req, res) => {
         params.push(freshness_days);
       }
     }
+
+    // Profile isolation: each profile sees global catalog entries plus its own crawl results.
+    // This prevents cross-profile bleed where Profile A's crawl results appear in Profile B's matches.
+    // When profile_json is a string it is the profile_id; skip isolation for admin-supplied raw objects.
+    if (typeof profile_json === 'string') {
+      conditions.push('(profile_id IS NULL OR profile_id = ?)');
+      params.push(profile_json);
+    }
     
     // Build the query: pull state + national + NULL state for relatable funding (no RANDOM).
     // Goal: real funding sources for profile needs — candidates are geographically relevant, then scored by profile signals.
@@ -300,6 +308,10 @@ router.post('/searchOpportunities', async (req, res) => {
         conditions.push(`(state = ? OR state IS NULL OR state = 'nationwide')`);
         params.push(profile.state);
       }
+
+      // Profile isolation: each profile sees global catalog entries plus its own crawl results.
+      conditions.push('(profile_id IS NULL OR profile_id = ?)');
+      params.push(profile_id);
     }
     
     // Keyword search

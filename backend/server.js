@@ -59,6 +59,7 @@ import ensureUserPreferencesTable from './utils/ensureUserPreferencesTable.js';
 import { linkAllProfilesToAdmin } from './utils/adminProfileLinks.js';
 import { ensureProfileOrgLinks } from './utils/ensureProfileOrgLinks.js'
 import { runStartupOperations } from './services/anyaStartupOperations.js';
+import { startHealthService } from './services/anyaHealthService.js';
 import ensureMinimumNationalOpportunities from './utils/ensureMinimumNationalOpportunities.js';
 import seedAssistanceDirectories from './utils/seedAssistanceDirectories.js';
 import seedFaithBasedHousing from './utils/seedFaithBasedHousing.js';
@@ -2457,6 +2458,13 @@ if (process.env.NODE_ENV !== 'test') {
     console.log(
       '[NationalPrograms] Continuous crawler disabled (set NATIONAL_PROGRAMS_CRAWLER_ENABLED=true to enable)',
     )
+  }
+
+  // Start Anya background health service
+  try {
+    startHealthService(db)
+  } catch (err) {
+    console.error('[AnyaHealth] Failed to start health service:', err?.message || err)
   }
   });
 } else {

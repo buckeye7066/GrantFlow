@@ -27,6 +27,7 @@ import { crawlItemFunding } from '../services/crawlers/itemFundingCrawler.js';
 import { runCrawler as runCuratedCrawlerForAudit } from '../services/crawlers/crawlerManager.js';
 import { findDuplicateProfileGroups, mergeProfiles } from '../services/profileDedupeService.js'
 import { ensureAdminUser, isAdminUser, addProfileEmails, listProfileEmails } from '../utils/accessControl.js'
+import { ensureAuth, ensureAdmin } from '../middleware/auth.js'
 import { repairProfileOwnership } from '../utils/profileOwnershipRepair.js'
 import zipcodes from 'zipcodes';
 import { resolveCountyForZip } from '../services/geo/zipCountyResolver.js';
@@ -34,8 +35,13 @@ import { createGeoCrawlRun } from '../services/geoCrawlRunStore.js'
 import { resolveUploadsDir, ensureUploadsDirWritable } from '../utils/uploadsDir.js'
 import { isDesignatedProfileId } from '../utils/ensureDesignatedProfiles.js'
 import { analyzeKnowledgeBaseDocument, processPendingKBDocuments, extractFundingOpportunitiesFromKB } from '../services/knowledgeBaseProcessor.js'
+import { runHealthCheck, getLastHealthReport } from '../services/anyaHealthService.js'
 
 const router = express.Router();
+
+// Router-level admin guard: all routes in this file require authentication and admin privileges.
+router.use(ensureAuth)
+router.use(ensureAdmin)
 
 // Configuration constants
 const MAX_TEXT_LENGTH_FOR_AI = 10000; // Maximum characters to send to OpenAI
@@ -4924,6 +4930,33 @@ router.post('/backfill-matches', async (req, res) => {
   } catch (error) {
     console.error('[admin/backfill-matches] error:', error)
     res.status(500).json({ error: error.message })
+  }
+})
+
+// ── Anya Health Service endpoints ──────────────────────────────────────────
+
+/**
+ * GET /api/admin/anya-health
+ * Returns the most recent health check report.
+ */
+router.get('/anya-health', async (req, res) => {
+  if (!(await ensureAdminRequest(req, res))) return
+  const report = getLastHealthReport()
+  res.json({ ok: true, report: report ?? null })
+})
+
+/**
+ * POST /api/admin/anya-health/run
+ * Triggers an immediate health check and returns the result.
+ */
+router.post('/anya-health/run', async (req, res) => {
+  if (!(await ensureAdminRequest(req, res))) return
+  try {
+    const report = await runHealthCheck(req.db)
+    res.json({ ok: true, report })
+  } catch (error) {
+    console.error('[admin/anya-health/run] error:', error)
+    res.status(500).json({ ok: false, error: error.message })
   }
 })
 

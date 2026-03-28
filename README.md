@@ -2,9 +2,9 @@
 
 ## Overview
 
-GrantFlow is an open‑source platform for managing grant applications, tracking progress and compliance, and automating the grant lifecycle.  The system comprises a frontend built with **React**, **Vite**, **Tailwind CSS**, and a backend built with **Node.js**, **Express**, and **PostgreSQL** using Prisma ORM.  It also integrates AI tools to summarize grant proposals and provide recommendations.
+GrantFlow is an open‑source platform for managing grant applications, tracking progress and compliance, and automating the grant lifecycle.  The system comprises a frontend built with **React**, **Vite**, **Tailwind CSS**, and a backend built with **Node.js**, **Express**, and **PostgreSQL**.  It also integrates AI tools to summarize grant proposals and provide recommendations.
 
-This repository contains the core application code.  A separate marketing site is maintained in its own directory (see `marketing/README.md`) to avoid mixing deployment instructions and dependencies.
+This repository contains the core application code.
 
 ## Feature highlights
 
@@ -23,7 +23,7 @@ For documentation, see **`docs/README.md`** (index). Key: **`docs/CRAWLERS.md`**
 
 ## Getting started
 
-The backend service requires **Node.js 18+** and **PostgreSQL**.  See `docs/ENVIRONMENT.md` for environment variables and `docs/VERCEL_RAILWAY_DEPLOYMENT.md` or `docs/DEPLOYMENT_DO.md` for deployment options.
+The backend service requires **Node.js 20+** and **PostgreSQL**.  See `docs/ENVIRONMENT.md` for environment variables and `docs/VERCEL_RAILWAY_DEPLOYMENT.md` for deployment options.
 
 To set up a development environment:
 
@@ -37,7 +37,6 @@ npm run migrate
 npm run dev
 ```
 
-The marketing site can be developed from `marketing/`.
 
 ## Contributing
 
