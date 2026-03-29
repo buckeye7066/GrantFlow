@@ -18,6 +18,12 @@ import { runNationalCrawlerV2 } from '../backend/services/nationalCrawlerV2/run.
 const projectRoot = path.resolve(process.cwd())
 const dbPath = process.env.DATABASE_URL || path.join(projectRoot, 'backend', 'data', 'grantflow.db')
 
+if (/^postgres(ql)?:\/\//i.test(dbPath)) {
+  console.error('ERROR: This script only supports SQLite databases. DATABASE_URL points to PostgreSQL.')
+  console.error('Use the application API or a Postgres client instead.')
+  process.exit(1)
+}
+
 function main() {
   const scopeMode = process.env.CRAWLER_MODE || 'SMOKE_MODE'
   const state = process.env.CRAWLER_STATE || null
