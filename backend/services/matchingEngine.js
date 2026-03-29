@@ -9,7 +9,7 @@
  * - No randomness; same profile + opportunity always yields same score (auditability).
  */
 
-import { safeParseArrayField } from './profileHelpers.js'
+import { safeParseArrayField, resolveApplicantType } from './profileHelpers.js'
 import { buildProfileSignals } from './profileHelpers.js'
 
 const PRO_BONO_OPPORTUNITY_TYPES = new Set([
@@ -125,7 +125,7 @@ export function calculateMatchScore(profile, opportunity) {
     effectiveSignals?.applicantTypes && typeof effectiveSignals.applicantTypes[Symbol.iterator] === 'function'
       ? new Set(Array.from(effectiveSignals.applicantTypes).map((v) => String(v).toLowerCase()))
       : null
-  const profileType = effectiveProfile?.primary_type || effectiveProfile?.applicant_type || null
+  const profileType = resolveApplicantType(effectiveProfile)
   const hasApplicantTypeSignals = Boolean(profileType) || Boolean(applicantTypesSet?.size)
 
   if (hasApplicantTypeSignals && eligibilityMatchesApplicantType(opportunity, effectiveSignals ?? effectiveProfile)) {
@@ -630,7 +630,7 @@ function eligibilityMatchesApplicantType(opportunity, profile) {
     profile?.applicantTypes && typeof profile.applicantTypes[Symbol.iterator] === 'function'
       ? new Set(Array.from(profile.applicantTypes).map((v) => String(v).toLowerCase()))
       : null
-  const profileType = profile.primary_type || profile.applicant_type || '';
+  const profileType = resolveApplicantType(profile) || '';
   
   if ((!profileType || profileType.length === 0) && (!applicantTypesSet || applicantTypesSet.size === 0)) return false;
   

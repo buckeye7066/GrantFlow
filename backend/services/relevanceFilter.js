@@ -13,6 +13,7 @@
  */
 
 import { RELEVANCE_RULES } from './relevanceFilterRules.js'
+import { resolveApplicantType } from './profileHelpers.js'
 
 // State name → 2-letter abbreviation (uppercase) sorted by name length descending so
 // multi-word state names ("west virginia") match before single-word names ("virginia").
@@ -131,7 +132,7 @@ export function extractProfileData(profileContext) {
 
   return {
     primary_type:
-      profile.primary_type ||
+      resolveApplicantType(profile) ||
       comprehensive.applicant_type ||
       null,
     age:

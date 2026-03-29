@@ -1,6 +1,27 @@
 import zipcodes from 'zipcodes'
 import { resolveCountyForZip } from './geo/zipCountyResolver.js'
 
+/**
+ * Resolve the canonical applicant type from a profile object.
+ *
+ * The database column is `primary_type` but the frontend and some services
+ * use `applicant_type`.  profileTaxonomy uses `primary_profile_type` inside
+ * its facets object.  This helper normalises all three so callers never need
+ * to remember the precedence chain.
+ *
+ * @param {Object} profile - A profile row or profileContext.profile
+ * @returns {string|null}
+ */
+export function resolveApplicantType(profile) {
+  if (!profile || typeof profile !== 'object') return null
+  return (
+    profile.applicant_type ??
+    profile.primary_type ??
+    profile.primary_profile_type ??
+    null
+  )
+}
+
 function safeParseJSON(value, fallback) {
   if (!value) return fallback
   try {

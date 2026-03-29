@@ -13,7 +13,7 @@
  * @module crossProfileRecommender
  */
 
-import { safeParseArrayField } from './profileHelpers.js'
+import { safeParseArrayField, resolveApplicantType } from './profileHelpers.js'
 import { buildProfileSignals } from './profileHelpers.js'
 
 // ── Signal helpers ────────────────────────────────────────────────────────────
@@ -51,7 +51,7 @@ function buildKeywordSet(signals, profile) {
   if (state) set.add(`state:${state.toLowerCase()}`)
 
   // Add profile type
-  const type = profile?.primary_type || profile?.applicant_type || ''
+  const type = resolveApplicantType(profile) || ''
   if (type) set.add(`type:${type.toLowerCase()}`)
 
   return set

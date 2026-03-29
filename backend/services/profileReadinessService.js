@@ -13,7 +13,7 @@
  * running a (likely empty) search.
  */
 
-import { safeParseArrayField } from './profileHelpers.js'
+import { safeParseArrayField, resolveApplicantType } from './profileHelpers.js'
 
 /**
  * @param {object} db
@@ -90,7 +90,7 @@ export async function checkProfileReadiness(db, profileId) {
 
   // ── 3. Check applicant type ────────────────────────────────────────────────
   const primaryType =
-    profile.primary_type ||
+    resolveApplicantType(profile) ||
     basic.profile_category ||
     null
 

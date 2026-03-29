@@ -27,6 +27,7 @@
 
 import { filterEligibility } from './eligibilityFilter.js'
 import { NEEDS_TAXONOMY } from './needsTaxonomy.js'
+import { applyRelevanceFilter } from '../relevanceFilter.js'
 
 // ---------------------------------------------------------------------------
 // Dimension weights (must sum to 1.0)
@@ -437,6 +438,29 @@ export function scoreOpportunity(intel, opportunity) {
       why_matched: [],
       why_may_not_fit: eligResult.hard_failures.map(f =>
         eligResult.reasons.find(r => r.toLowerCase().includes(f.replace(/_/g, ' '))) ?? f),
+      matched_needs: [],
+      verification_guidance: [],
+    }
+  }
+
+  // Also run the relevance filter rules (state-mismatch, loan, demographic, etc.)
+  // to ensure both filter systems are applied on every scoring path.
+  const profileData = {
+    primary_type: intel.entityType || null,
+    veteran_status: intel.isVeteran ? 'veteran' : null,
+    disability_status: intel.hasDisability ? 'yes' : null,
+    state: intel.state || null,
+    tags: [],
+  }
+  const relevance = applyRelevanceFilter(opportunity, profileData)
+  if (!relevance.pass) {
+    return {
+      total_score: 0,
+      confidence: 85,
+      verdict: 'REJECT',
+      dimensions: { eligibility: 0 },
+      why_matched: [],
+      why_may_not_fit: [relevance.reason],
       matched_needs: [],
       verification_guidance: [],
     }

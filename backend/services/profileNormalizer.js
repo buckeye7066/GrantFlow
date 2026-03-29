@@ -7,6 +7,7 @@
  */
 
 import crypto from 'crypto'
+import { resolveApplicantType } from './profileHelpers.js'
 
 // ---------------------------------------------------------------------------
 // Need category alias map
@@ -235,8 +236,7 @@ export function normalizeProfile(rawProfile, sections = null) {
 
   // -- Entity type --
   const rawType =
-    profile.primary_type ??
-    profile.applicant_type ??
+    resolveApplicantType(profile) ??
     profile.type ??
     profile.entity_type ??
     null
