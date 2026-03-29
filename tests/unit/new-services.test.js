@@ -9,7 +9,7 @@ describe('Knowledge Base Processor', () => {
   })
 
   it('should export required functions', async () => {
-    const kbProcessor = await import('../backend/services/knowledgeBaseProcessor.js')
+    const kbProcessor = await import('../../backend/services/knowledgeBaseProcessor.js')
     
     expect(kbProcessor.analyzeKnowledgeBaseDocument).toBeDefined()
     expect(kbProcessor.processPendingKBDocuments).toBeDefined()
@@ -17,7 +17,7 @@ describe('Knowledge Base Processor', () => {
   })
 
   it('should handle insufficient text gracefully', async () => {
-    const { analyzeKnowledgeBaseDocument } = await import('../backend/services/knowledgeBaseProcessor.js')
+    const { analyzeKnowledgeBaseDocument } = await import('../../backend/services/knowledgeBaseProcessor.js')
     
     const result = await analyzeKnowledgeBaseDocument({
       documentId: 'test-doc',
@@ -32,7 +32,7 @@ describe('Knowledge Base Processor', () => {
 
 describe('Anya Task Execution Helper', () => {
   it('should export required functions', async () => {
-    const taskHelper = await import('../backend/services/anyaTaskExecutionHelper.js')
+    const taskHelper = await import('../../backend/services/anyaTaskExecutionHelper.js')
     
     expect(taskHelper.markTaskExecuted).toBeDefined()
     expect(taskHelper.listExecutableTasks).toBeDefined()

@@ -54,39 +54,13 @@ function getOpenAI() {
  * CRITICAL: Must match server.js implementation to ensure consistency.
  * Production requires a stable, secure secret - NO runtime generation.
  */
-function resolveJwtSecret() {
-  const raw = String(process.env.AUTH_JWT_SECRET || process.env.JWT_SECRET || '').trim()
-  const isProd = process.env.NODE_ENV === 'production'
-
-  if (!raw) {
-    if (isProd) {
-      // FAIL FAST in production - do not generate ephemeral secrets
-      console.error(
-        'FATAL ERROR: Missing AUTH_JWT_SECRET (or JWT_SECRET) in production.\n' +
-          'Set a strong random secret (recommended: 32+ bytes) and redeploy.\n' +
-          '  AUTH_JWT_SECRET="..."\n' +
-          'The application cannot start without a stable JWT secret.',
-      )
-      process.exit(1)
-    }
-    console.warn('[auth] AUTH_JWT_SECRET not set; using insecure development default (DO NOT use in production).')
-    return 'grantflow-dev-secret'
-  }
-
-  if (isProd && raw === 'grantflow-dev-secret') {
-    // FAIL FAST in production - do not use insecure defaults
-    console.error(
-      'FATAL ERROR: AUTH_JWT_SECRET is set to the insecure development default in production.\n' +
-        'Generate a strong random secret and redeploy.\n' +
-        'Example: openssl rand -base64 48',
-    )
-    process.exit(1)
-  }
-  // Non-prod fallback only (must never be random).
-  return String(process.env.AUTH_JWT_SECRET || process.env.JWT_SECRET || 'grantflow-dev-secret').trim()
+let JWT_SECRET
+try {
+  JWT_SECRET = getJwtSecretOrThrow(process.env)
+} catch (err) {
+  console.error(`FATAL ERROR: ${err.message}`)
+  process.exit(1)
 }
-
-const JWT_SECRET = resolveJwtSecret()
 
 function parseSeconds(value, fallback) {
   if (value === undefined || value === null) {

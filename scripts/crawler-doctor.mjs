@@ -18,6 +18,12 @@ const projectRoot = path.resolve(process.cwd())
 const dbPath = process.env.DATABASE_URL || path.join(projectRoot, 'backend', 'data', 'grantflow.db')
 const schemaPath = path.join(projectRoot, 'backend', 'db', 'schema.sql')
 
+if (/^postgres(ql)?:\/\//i.test(dbPath)) {
+  console.error('ERROR: This script only supports SQLite databases. DATABASE_URL points to PostgreSQL.')
+  console.error('Use the application API or a Postgres client instead.')
+  process.exit(1)
+}
+
 function runCmd(command, args, { env, cwd } = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, {

@@ -5,7 +5,7 @@ export default defineConfig({
     globals: true,
     setupFiles: ["./vitest.setup.js"],
     environment: "node",
-    include: ["src/**/*.test.{js,jsx}", "backend/tests/**/*.test.{js,mjs}"],
+    include: ["src/**/*.test.{js,jsx}", "backend/tests/**/*.test.{js,mjs}", "tests/**/*.test.{js,mjs}"],
     passWithNoTests: true,
     coverage: {
       provider: "v8",

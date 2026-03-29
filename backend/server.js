@@ -1062,38 +1062,13 @@ try {
   console.warn('[startup] Failed to seed faith-based housing:', error?.message || error)
 }
 
-function resolveJwtSecret() {
-  const raw = String(process.env.AUTH_JWT_SECRET || process.env.JWT_SECRET || '').trim();
-  const isProd = process.env.NODE_ENV === 'production';
-
-  if (!raw) {
-    if (isProd) {
-      // FAIL FAST in production - do not generate ephemeral secrets
-      console.error(
-        'FATAL ERROR: Missing AUTH_JWT_SECRET (or JWT_SECRET) in production.\n' +
-          'Set a strong random secret (recommended: 32+ bytes) and redeploy.\n' +
-          '  AUTH_JWT_SECRET="..."\n' +
-          'The application cannot start without a stable JWT secret.',
-      );
-      process.exit(1);
-    }
-    console.warn('[startup] AUTH_JWT_SECRET not set; using insecure development default (DO NOT use in production).');
-    return 'grantflow-dev-secret';
-  }
-
-  if (isProd && raw === 'grantflow-dev-secret') {
-    // FAIL FAST in production - do not use insecure defaults
-    console.error(
-      'FATAL ERROR: AUTH_JWT_SECRET is set to the insecure development default in production.\n' +
-        'Generate a strong random secret and redeploy.\n' +
-        'Example: openssl rand -base64 48',
-    );
-    process.exit(1);
-  }
-  return String(raw || '').trim()
+let EFFECTIVE_JWT_SECRET
+try {
+  EFFECTIVE_JWT_SECRET = getJwtSecretOrThrow(process.env)
+} catch (err) {
+  console.error(`FATAL ERROR: ${err.message}`)
+  process.exit(1)
 }
-
-const EFFECTIVE_JWT_SECRET = resolveJwtSecret()
 const isProd = process.env.NODE_ENV === 'production'
 
 app.use(async (req, res, next) => {
