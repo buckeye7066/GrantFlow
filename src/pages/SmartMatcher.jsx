@@ -1,5 +1,5 @@
 import React, { useMemo, useState, useCallback, useEffect } from "react"
-import { Sparkles, Search, Filter, SlidersHorizontal, Star, TrendingUp, Award, Plus, X, CheckSquare, Target } from "lucide-react"
+import { Sparkles, Search, Filter, SlidersHorizontal, Star, TrendingUp, Award, Plus, X, CheckSquare, Target, Loader2 } from "lucide-react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -7,7 +7,7 @@ import { Label } from "@/components/ui/label"
 import { Badge } from "@/components/ui/badge"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Checkbox } from "@/components/ui/checkbox"
-import { useQuery } from "@tanstack/react-query"
+import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { apiFetch } from "@/api/client"
 import { getItemSuggestions } from "@/api/items"
 import ProfileSelect from "@/components/shared/ProfileSelect"
@@ -85,6 +85,8 @@ export default function SmartMatcher() {
     const [minScore, setMinScore] = useState(50)
     const [selectedOpp, setSelectedOpp] = useState(null)
     const { toast } = useToast()
+    const queryClient = useQueryClient()
+    const [isSearchingNeeds, setIsSearchingNeeds] = useState(false)
 
   // -- Persistent checklist state per profile --
   const [checklistState, setChecklistState] = useState({ checked: {}, customItems: [] })
@@ -199,10 +201,18 @@ export default function SmartMatcher() {
                 .filter((i) => needsState.checked[i.id])
                 .map((i) => i.name)
         const allChecked = [...checkedInferred, ...checkedCustom]
-        if (allChecked.length > 0) {
-                setSearchQuery(allChecked.join(" "))
-        }
-  }, [inferredNeeds, needsState, setSearchQuery])
+        if (allChecked.length === 0) return
+
+        const query = allChecked.join(" ")
+        setSearchQuery(query)
+        setIsSearchingNeeds(true)
+
+        // Force refetch even if keywords haven't changed
+        queryClient.invalidateQueries({ queryKey: ["smart-matcher"] })
+
+        // Toast feedback
+        toast({ title: `Searching ${allChecked.length} selected need${allChecked.length === 1 ? "" : "s"}...` })
+  }, [inferredNeeds, needsState, setSearchQuery, queryClient, toast])
 
   // -- Matching data --
   const { data: scoredResponse, isLoading: isScoring } = useQuery({
@@ -221,6 +231,13 @@ export default function SmartMatcher() {
         enabled: Boolean(selectedProfileId) && selectedProfileId !== 'all',
         staleTime: 60_000,
   })
+
+  useEffect(() => {
+        if (!isScoring && isSearchingNeeds) {
+                setIsSearchingNeeds(false)
+                document.getElementById("match-results")?.scrollIntoView({ behavior: "smooth" })
+        }
+  }, [isScoring, isSearchingNeeds])
 
   const scoredOpportunities = useMemo(() => {
         const payload = scoredResponse?.data ?? scoredResponse ?? {}
@@ -397,14 +414,20 @@ export default function SmartMatcher() {
                                   {/* Search button */}
                                   <div className="pt-2">
                                       <Button
+                                          type="button"
                                           className="w-full"
                                           onClick={handleSearchNeeds}
                                           disabled={
+                                              isSearchingNeeds ||
                                               ![...inferredNeeds.map((s) => s.name), ...needsState.customItems.map((i) => i.id)]
                                                   .some((id) => needsState.checked[id])
                                           }
                                       >
-                                          <Search className="w-4 h-4 mr-2" />
+                                          {isSearchingNeeds ? (
+                                              <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                                          ) : (
+                                              <Search className="w-4 h-4 mr-2" />
+                                          )}
                                           Search Selected Needs
                                       </Button>
                                   </div>
@@ -487,7 +510,7 @@ export default function SmartMatcher() {
                     </Card>
                   ) : (
                     <>
-                                <div className="grid md:grid-cols-3 gap-4">
+                                <div id="match-results" className="grid md:grid-cols-3 gap-4">
                                               <Card>
                                                               <CardHeader className="pb-2">
                                                                                 <CardTitle className="text-sm font-medium text-slate-600 flex items-center gap-2">
