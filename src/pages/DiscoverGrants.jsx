@@ -16,6 +16,7 @@ import { useToast } from '@/components/ui/use-toast';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Label } from '@/components/ui/label';
 import { useAuthStore } from '@/stores/authStore';
+import ErrorBoundary from '@/components/shared/ErrorBoundary';
 import { createLogger } from '@/utils/logger'
 import { getProfileContextIncompleteHint } from '@/components/discovery/profileContextIncompleteUi'
 
@@ -117,6 +118,7 @@ export default function DiscoverGrants() {
   const profileSelectorRef = React.useRef(null)
   const searchActionsRef = React.useRef(null)
   const resultsRef = React.useRef(null)
+  const addingToPipelineRef = React.useRef(false)
   const [dismissedSuggestions, setDismissedSuggestions] = useState(() => {
     try {
       return JSON.parse(localStorage.getItem('grantflow:dismissed-suggestions') || '[]');
@@ -412,6 +414,15 @@ export default function DiscoverGrants() {
 
   const handleAddToPipeline = async (opportunity, { silent = false } = {}) => {
     log.debug('add to pipeline requested')
+
+    // Concurrency guard: prevent multiple simultaneous calls
+    if (addingToPipelineRef.current) {
+      return { status: 'failed', error: 'in_progress' }
+    }
+    addingToPipelineRef.current = true
+
+    try {
+
     if (!authReady) {
       if (!silent) {
         toast({
@@ -433,6 +444,19 @@ export default function DiscoverGrants() {
         })
       }
       return { status: 'failed', error: 'missing_profile' }
+    }
+
+    // Client-side pre-validation: check if funding source is approved for individual profiles
+    const profileType = selectedProfile?.primary_type?.toLowerCase()
+    if (profileType === 'individual' && opportunity.organization_only) {
+      if (!silent) {
+        toast({
+          variant: 'destructive',
+          title: 'Not eligible',
+          description: 'This funding source is not approved for individual pipelines.',
+        })
+      }
+      return { status: 'failed', error: 'not_approved_for_individuals' }
     }
 
     const orgId = selectedProfile?.organization_id;
@@ -552,6 +576,11 @@ export default function DiscoverGrants() {
         userMessage = 'The opportunity was not found in the database. Please try again.'
       } else if (errorCode === 'invalid_reference') {
         userMessage = 'One or more references are invalid. Please verify the opportunity and profile exist.'
+      } else if (
+        typeof error?.message === 'string' &&
+        error.message.toLowerCase().includes('not approved for individual pipelines')
+      ) {
+        userMessage = 'This funding source is not approved for individual pipelines. Please check eligibility before adding.'
       } else if (error?.message) {
         // Use the error message if available
         userMessage = error.message
@@ -574,6 +603,10 @@ export default function DiscoverGrants() {
       })
       
       return { status: 'failed', error: errorCode, message: userMessage, requestId }
+    }
+
+    } finally {
+      addingToPipelineRef.current = false
     }
   };
 
@@ -701,6 +734,7 @@ export default function DiscoverGrants() {
         </header>
 
         {/* Next Steps / Suggestions Panel */}
+        <ErrorBoundary>
         {suggestions.length > 0 && (
           <Card className="mb-8 border-amber-200 bg-amber-50/50">
             <CardHeader className="pb-3">
@@ -749,6 +783,7 @@ export default function DiscoverGrants() {
             </CardContent>
           </Card>
         )}
+        </ErrorBoundary>
 
         <Card className="shadow-lg mb-8">
           <CardHeader className="border-b border-border">
@@ -943,6 +978,7 @@ export default function DiscoverGrants() {
         </Card>
 
         {/* Results Display: catalog matches (real grants from DB) + crawler results (directories/live crawl), deduped */}
+        <ErrorBoundary>
         {((catalogOpportunities.length > 0) || searchResults.length > 0) && (
           <div ref={resultsRef}>
             <SearchResults
@@ -975,6 +1011,7 @@ export default function DiscoverGrants() {
             />
           </div>
         )}
+        </ErrorBoundary>
       </div>
     </div>
   );

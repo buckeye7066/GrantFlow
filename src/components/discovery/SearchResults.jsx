@@ -159,6 +159,16 @@ export default function SearchResults({ results = [], profileId, onAddToPipeline
   const queryClient = useQueryClient();
   const { toast } = useToast();
 
+  const uniqueSources = React.useMemo(() => {
+    if (!results || results.length === 0) return [];
+    const set = new Set();
+    results.forEach((opp) => {
+      const s = opp.source || opp.crawler_type || 'catalog';
+      if (s) set.add(s);
+    });
+    return Array.from(set);
+  }, [results]);
+
   const handleToggleSelection = (opportunityKey) => {
     setSelectedOpportunities(prev => {
       const newSet = new Set(Array.from(prev)); // Create proper new Set from array
@@ -256,15 +266,6 @@ export default function SearchResults({ results = [], profileId, onAddToPipeline
   }
 
   const allSelected = selectedOpportunities.size === results.length && results.length > 0;
-
-  const uniqueSources = React.useMemo(() => {
-    const set = new Set();
-    results.forEach((opp) => {
-      const s = opp.source || opp.crawler_type || 'catalog';
-      if (s) set.add(s);
-    });
-    return Array.from(set);
-  }, [results]);
 
   return (
     <div data-component="SearchResults" data-results-count={results.length} data-selected-count={selectedOpportunities.size}>
