@@ -16,6 +16,7 @@ import {
   computeOpportunityFingerprint,
   MATCHER_VERSION,
 } from '../backend/services/matchDecisionEngine.js'
+import { calculateMatchScore } from '../backend/services/matchingEngine.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
@@ -39,157 +40,6 @@ function safeParseJSON(value, fallback) {
     return JSON.parse(value)
   } catch (e) {
     return fallback
-  }
-}
-
-function buildProfileSignals(profile, sections, organization) {
-  const signals = {
-    keywords: new Set(),
-    demographics: new Set(),
-    military: new Set(),
-    assistance: new Set(),
-    family: new Set(),
-    location: {
-      state: null,
-      city: null,
-      zip: null,
-    }
-  }
-  
-  // Extract location
-  const locationSection = sections.find(s => s.section_key === 'location')
-  if (locationSection) {
-    const locData = safeParseJSON(locationSection.data, {})
-    signals.location.state = locData.state || null
-    signals.location.city = locData.city || null
-    signals.location.zip = locData.zip || null
-  }
-  
-  // Fallback to organization
-  if (organization) {
-    if (!signals.location.state && organization.state) {
-      signals.location.state = organization.state
-    }
-    if (organization.mission) {
-      // Extract keywords from mission
-      const missionWords = organization.mission.toLowerCase()
-        .split(/\s+/)
-        .filter(w => w.length > 3)
-      missionWords.forEach(w => signals.keywords.add(w))
-    }
-  }
-  
-  // Extract from organization section
-  const orgSection = sections.find(s => s.section_key === 'organization')
-  if (orgSection) {
-    const orgData = safeParseJSON(orgSection.data, {})
-    
-    // Categories as keywords
-    const categories = orgData.categories || []
-    categories.forEach(cat => {
-      signals.keywords.add(cat.toLowerCase())
-      // Also add individual words
-      cat.toLowerCase().split(/\s+/).forEach(w => {
-        if (w.length > 2) signals.keywords.add(w)
-      })
-    })
-    
-    // Check for special populations
-    if (orgData.serves_veterans) {
-      signals.military.add('veteran')
-      signals.keywords.add('veteran')
-      signals.keywords.add('veterans')
-    }
-    if (orgData.serves_disabled) {
-      signals.keywords.add('disability')
-      signals.keywords.add('disabled')
-    }
-    
-    // Organization type
-    if (orgData.organization_type) {
-      signals.keywords.add(orgData.organization_type.toLowerCase())
-    }
-  }
-  
-  // Add profile type
-  if (profile.primary_type) {
-    signals.keywords.add(profile.primary_type.toLowerCase())
-  }
-  
-  return signals
-}
-
-function calculateMatchScore(signals, opp) {
-  let score = 40 // Base score of 40%
-  const matchedFields = []
-  
-  // Parse opportunity data
-  const oppKeywords = safeParseJSON(opp.keywords, []).map(k => k.toLowerCase())
-  const oppCategories = safeParseJSON(opp.categories, []).map(c => c.toLowerCase())
-  const eligibility = safeParseJSON(opp.eligibility_bullets, []).map(e => e.toLowerCase())
-  
-  const oppTerms = new Set([...oppKeywords, ...oppCategories, ...eligibility])
-  const oppText = `${opp.title || ''} ${opp.description || ''}`.toLowerCase()
-  
-  // Location matching (up to 15 points)
-  if (opp.state && signals.location.state) {
-    const profileState = signals.location.state.toLowerCase()
-    const oppState = opp.state.toLowerCase()
-    
-    if (oppState === profileState) {
-      score += 15
-      matchedFields.push('state match')
-    } else if (oppState === 'nationwide' || opp.is_national) {
-      score += 10
-      matchedFields.push('national availability')
-    }
-  } else if (opp.state === 'nationwide' || opp.is_national) {
-    score += 10
-    matchedFields.push('national availability')
-  }
-  
-  // Keyword matching (up to 30 points)
-  let keywordMatches = 0
-  signals.keywords.forEach(keyword => {
-    for (const term of oppTerms) {
-      if (term.includes(keyword) || keyword.includes(term)) {
-        keywordMatches++
-        matchedFields.push(keyword)
-        break
-      }
-    }
-    // Also check title/description
-    if (oppText.includes(keyword)) {
-      keywordMatches += 0.5
-    }
-  })
-  score += Math.min(30, Math.floor(keywordMatches * 5))
-  
-  // Military matching (up to 20 points)
-  if (signals.military.size > 0) {
-    let militaryScore = 0
-    signals.military.forEach(mil => {
-      for (const term of oppTerms) {
-        if (term.includes(mil) || mil.includes(term) || oppText.includes(mil)) {
-          militaryScore += 10
-          matchedFields.push('military: ' + mil)
-          break
-        }
-      }
-    })
-    score += Math.min(20, militaryScore)
-  }
-  
-  // 501c3 bonus for nonprofits
-  if (opp.requires_501c3 && signals.keywords.has('nonprofit')) {
-    score += 5
-    matchedFields.push('nonprofit eligible')
-  }
-  
-  // Cap at 100
-  return {
-    score: Math.min(100, Math.max(0, score)),
-    matchedFields: [...new Set(matchedFields)].slice(0, 5)
   }
 }
 
@@ -225,16 +75,11 @@ async function main() {
       try { sectionsObj[row.section_key] = typeof row.data === 'string' ? JSON.parse(row.data) : (row.data || {}) } catch { sectionsObj[row.section_key] = {} }
     }
     
-    // Get organization
-    const organization = profile.organization_id 
-      ? db.prepare('SELECT * FROM organizations WHERE id = ?').get(profile.organization_id)
-      : null
-    
-    // Build signals
-    const signals = buildProfileSignals(profile, sections, organization)
-    console.log(`  Keywords: ${[...signals.keywords].slice(0, 5).join(', ')}...`)
-    console.log(`  State: ${signals.location.state || 'none'}`)
-    console.log(`  Military: ${signals.military.size > 0 ? [...signals.military].join(', ') : 'none'}`)
+    // Build profileContext for canonical engine
+    const profileContext = { profile, sections }
+    const profileState = sectionsObj?.location_focus?.state || sectionsObj?.location?.state || profile.state || null
+    console.log(`  State: ${profileState || 'none'}`)
+    console.log(`  Profile type: ${profile.primary_type || profile.applicant_type || 'none'}`)
 
     // Build profileData for relevance filter
     function parseSec(key) {
@@ -255,7 +100,7 @@ async function main() {
       veteran_status: milSec.veteran || demoSec.veteran_status || null,
       immigrant_status: demoSec.immigrant_status || null,
       disability_status: healthSec.disability_type || demoSec.disability_status || null,
-      state: signals.location.state || basicSec.state || locSec.state || null,
+      state: profileState || basicSec.state || locSec.state || null,
       tags: parsedTags,
       gender: basicSec.gender || demoSec.gender || null,
       age: basicSec.age || demoSec.age || null,
@@ -263,7 +108,7 @@ async function main() {
       first_responder: null,
     }
     
-    // Score each opportunity and apply relevance filter
+    // Score each opportunity using canonical engine and apply relevance filter
     const scoredOpps = []
     for (const opp of opportunities) {
       const oppForFilter = {
@@ -274,12 +119,12 @@ async function main() {
       const relevance = applyRelevanceFilter(oppForFilter, profileData)
       if (!relevance.pass) continue
 
-      const { score, matchedFields } = calculateMatchScore(signals, opp)
+      const { score, reasons: matchReasons } = calculateMatchScore(profileContext, opp)
       // Stage 1 (junk filter): only skip obviously irrelevant candidates (score < 5).
       // The canonical decision engine (computeMatchDecision) is the final acceptance
       // authority — this heuristic must NOT exclude plausible canonical matches.
       if (score >= 5) {
-        scoredOpps.push({ opp, score, matchedFields })
+        scoredOpps.push({ opp, score, matchReasons })
       }
     }
     
@@ -318,7 +163,7 @@ async function main() {
     }
 
     // Create grants — always set profile_id for correct pipeline scoping
-    for (const { opp, score: _heuristicScore, matchedFields: _matchedFields } of grantsToCreate) {
+    for (const { opp, score: _heuristicScore } of grantsToCreate) {
       // Check if grant already exists for this profile/opportunity
       const existing = db.prepare(`
         SELECT id FROM grants 

@@ -14,6 +14,7 @@ import {
   summarizeProfileSignals,
   safeParseArrayField,
 } from './profileHelpers.js'
+import { calculateMatchScore } from './matchingEngine.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
@@ -25,64 +26,6 @@ function loadJSON(filePath) {
     console.warn(`[itemCrawler] Could not load ${filePath}:`, e.message)
     return []
   }
-}
-
-/**
- * Calculate match score between item funding source and profile/item request
- */
-function calculateItemMatch(opp, itemKeywords, profileState, signals) {
-  let score = 30
-  const matchReasons = []
-  
-  const oppText = `${opp.title} ${opp.description}`.toLowerCase()
-  const oppKeywords = new Set([
-    ...(opp.keywords || []).map(k => k.toLowerCase()),
-    ...(opp.keywords_extra || []).map(k => k.toLowerCase()),
-    ...(opp.categories || []).map(c => c.toLowerCase())
-  ])
-  
-  // Item keyword matching (most important)
-  let itemMatches = 0
-  for (const keyword of itemKeywords) {
-    const kw = keyword.toLowerCase()
-    if (oppKeywords.has(kw) || oppText.includes(kw)) {
-      itemMatches++
-      matchReasons.push(`Item match: ${keyword}`)
-    }
-  }
-  score += Math.min(40, itemMatches * 15)
-  
-  // State match
-  if (opp.states?.includes('ALL') || opp.states?.includes(profileState) || opp.state === 'nationwide') {
-    score += 10
-    if (opp.states?.includes(profileState)) {
-      matchReasons.push(`Available in ${profileState}`)
-    }
-  } else if (opp.states && !opp.states.includes('ALL') && !opp.states.includes(profileState)) {
-    // Wrong state
-    score -= 20
-  }
-  
-  // Profile signals bonus
-  if (signals.keywords) {
-    let profileMatches = 0
-    for (const keyword of signals.keywords) {
-      if (oppKeywords.has(keyword) || oppText.includes(keyword)) {
-        profileMatches++
-      }
-    }
-    score += Math.min(10, profileMatches * 3)
-  }
-  
-  // 501c3 check
-  if (opp.requires_501c3 && !signals.is_nonprofit) {
-    score -= 15
-    matchReasons.push('Note: Requires 501(c)(3) status')
-  }
-  
-  score = Math.max(0, Math.min(100, score))
-  
-  return { score, matchReasons }
 }
 
 /**
@@ -205,7 +148,7 @@ export async function processItemCrawlerJob({ db, job, dataDir, profileContext }
   for (const opp of allOpps) {
     if (opp.requires_match) continue
     
-    const { score, matchReasons } = calculateItemMatch(opp, itemKeywords, profileState, signals)
+    const { score, reasons: matchReasons } = calculateMatchScore(profileContext, opp)
     
     scoredOpps.push({
       ...opp,

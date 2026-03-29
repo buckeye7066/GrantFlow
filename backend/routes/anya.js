@@ -1,4 +1,5 @@
 import express from 'express'
+import crypto from 'crypto'
 import {
   addMessage,
   createSession,
@@ -55,7 +56,12 @@ function adminAuth(req, res, next) {
     return res.status(401).json({ error: 'Missing admin credentials' })
   }
   
-  if (headerToken !== configuredToken) {
+  const headerBuf = Buffer.from(headerToken)
+  const configuredBuf = Buffer.from(configuredToken)
+  if (
+    headerBuf.length !== configuredBuf.length ||
+    !crypto.timingSafeEqual(headerBuf, configuredBuf)
+  ) {
     return res.status(403).json({ error: 'Invalid admin credentials' })
   }
   

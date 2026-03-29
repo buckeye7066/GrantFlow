@@ -1793,26 +1793,6 @@ export function buildProfileSignals({ profile, sections, asOf = null }) {
   }
 }
 
-export function calculateMatchScore(profile, opportunity) {
-  // Simple match scoring algorithm
-  let score = 50 // Base score
-  
-  // Geographic match
-  if (opportunity.state === profile.state || opportunity.is_national) {
-    score += 20
-  }
-  
-  // Type match
-  if (opportunity.eligibility_criteria?.includes(profile.primary_type)) {
-    score += 15
-  }
-  
-  // REMOVED: Random variation for testing - use deterministic scoring only
-  // Use matchingEngine.js for production scoring
-  
-  return Math.min(100, score)
-}
-
 export function summarizeProfileSignals(signals) {
   const parts = []
   if (signals.demographics?.size) {
