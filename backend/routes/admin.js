@@ -4809,8 +4809,19 @@ router.post('/backfill-matches', async (req, res) => {
     // Check that migration columns exist
     let hasDecisionColumns = false
     try {
-      const cols = db.prepare('PRAGMA table_info(grants)').all()
-      hasDecisionColumns = cols.some((c) => c.name === 'match_decision')
+      const dialect = db?.dialect || 'sqlite'
+      if (dialect === 'postgres') {
+        const row = await db
+          .prepare(
+            `SELECT 1 AS ok FROM information_schema.columns
+             WHERE table_schema = 'public' AND table_name = ? AND column_name = ? LIMIT 1`,
+          )
+          .get('grants', 'match_decision')
+        hasDecisionColumns = Boolean(row?.ok)
+      } else {
+        const cols = db.prepare('PRAGMA table_info(grants)').all()
+        hasDecisionColumns = cols.some((c) => c.name === 'match_decision')
+      }
     } catch { /* ignore */ }
 
     if (!hasDecisionColumns) {
@@ -4830,20 +4841,31 @@ router.post('/backfill-matches', async (req, res) => {
                 fo.source_url, fo.record_origin, fo.is_loan, fo.deadline,
                 fo.deadline_type, fo.funding_type, fo.opportunity_type,
                 fo.entity_types_allowed, fo.need_types_supported,
-                p.primary_type, p.tags,
-                ps.data AS sections_data
+                p.primary_type, p.tags
          FROM grants g
          LEFT JOIN funding_opportunities fo ON fo.id = g.funding_opportunity_id
          LEFT JOIN profiles p ON p.id = g.profile_id
-         LEFT JOIN (
-           SELECT profile_id, json_group_object(section_key, json(data)) AS data
-           FROM profile_sections
-           WHERE profile_id IN (SELECT DISTINCT profile_id FROM grants WHERE profile_id IS NOT NULL)
-           GROUP BY profile_id
-         ) ps ON ps.profile_id = g.profile_id
          WHERE g.profile_id IS NOT NULL`,
       )
       .all()
+
+    // Fetch profile sections separately to avoid SQLite-only json_group_object aggregate
+    const sectionRows = await db
+      .prepare(
+        `SELECT profile_id, section_key, data FROM profile_sections
+         WHERE profile_id IN (SELECT DISTINCT profile_id FROM grants WHERE profile_id IS NOT NULL)`,
+      )
+      .all()
+    const profileSectionsMap = new Map()
+    for (const r of sectionRows) {
+      if (!profileSectionsMap.has(r.profile_id)) profileSectionsMap.set(r.profile_id, {})
+      try {
+        profileSectionsMap.get(r.profile_id)[r.section_key] = JSON.parse(r.data)
+      } catch {
+        console.warn(`[admin/backfill-matches] Failed to parse section data for profile ${r.profile_id}, key ${r.section_key}`)
+        profileSectionsMap.get(r.profile_id)[r.section_key] = r.data
+      }
+    }
 
     let accepted = 0
     let reviewed = 0
@@ -4857,8 +4879,7 @@ router.post('/backfill-matches', async (req, res) => {
           primary_type: row.primary_type,
           tags: row.tags,
         }
-        let sections = null
-        try { sections = row.sections_data ? JSON.parse(row.sections_data) : null } catch { /* ignore */ }
+        let sections = profileSectionsMap.get(row.profile_id) ?? null
 
         const rawOpp = {
           id: row.funding_opportunity_id,

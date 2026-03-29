@@ -19,6 +19,12 @@ if (_nodeEnv === 'production' || _disableSeeding === 'true' || _disableSeeding =
   process.exit(1)
 }
 
+if (/^postgres(ql)?:\/\//i.test(process.env.DATABASE_URL || '')) {
+  console.error('ERROR: This script only supports SQLite databases. DATABASE_URL points to PostgreSQL.')
+  console.error('Use the application API or a Postgres client instead.')
+  process.exit(1)
+}
+
 import Database from 'better-sqlite3';
 import fs from 'fs';
 import path from 'path';
