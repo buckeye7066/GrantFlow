@@ -889,3 +889,220 @@ test('buildProfileIntelligence: different entity type produces different fingerp
 
   assert.notEqual(churchIntel.fingerprint, fireIntel.fingerprint)
 })
+
+// ---------------------------------------------------------------------------
+// Phase 7: Relevance Scorer Tests
+// ---------------------------------------------------------------------------
+
+import {
+  scoreOpportunity,
+} from '../../backend/services/profileIntelligence/relevanceScorer.js'
+
+test('relevanceScorer: scores a relevant opportunity for church', async () => {
+  const profile = makeProfile({ primary_type: 'church', state: 'OH' })
+  const intel = buildProfileIntelligence(profile, {})
+
+  const opportunity = makeOpportunity({
+    title: 'Church Building Repair and Renovation Grant',
+    description: 'Grants for church facility repair and renovation projects.',
+    source_url: 'https://hud.gov/community-grant',
+    is_national: 1,
+  })
+
+  const result = scoreOpportunity(intel, opportunity)
+
+  assert.ok(typeof result.total_score === 'number')
+  assert.ok(result.total_score >= 0 && result.total_score <= 100)
+  assert.ok(typeof result.verdict === 'string')
+  assert.ok(Array.isArray(result.why_matched))
+  assert.ok(Array.isArray(result.why_may_not_fit))
+  assert.ok(Array.isArray(result.verification_guidance))
+  assert.ok(result.verification_guidance.length > 0, 'should have verification guidance')
+})
+
+test('relevanceScorer: rejects expired opportunity', async () => {
+  const intel = buildProfileIntelligence(makeProfile(), {})
+
+  const opportunity = makeOpportunity({
+    deadline: '2020-01-01',
+    deadline_type: 'firm',
+    source_url: 'https://example.gov',
+  })
+
+  const result = scoreOpportunity(intel, opportunity)
+  assert.equal(result.verdict, 'REJECT')
+  assert.equal(result.total_score, 0)
+})
+
+test('relevanceScorer: returns REJECT for null inputs', () => {
+  const result = scoreOpportunity(null, null)
+  assert.equal(result.verdict, 'REJECT')
+})
+
+test('relevanceScorer: dimensions are all present and in 0-100 range', () => {
+  const intel = buildProfileIntelligence(makeProfile({ primary_type: 'fire_ems' }), {})
+  const opportunity = makeOpportunity({
+    source_url: 'https://afg.gov',
+    title: 'Assistance to Firefighters Grant',
+    description: 'Equipment and training grants for fire departments.',
+    is_national: 1,
+  })
+
+  const result = scoreOpportunity(intel, opportunity)
+  const expectedDims = ['eligibility', 'need_fit', 'entity_fit', 'geography_fit',
+    'source_quality', 'practicality']
+
+  for (const dim of expectedDims) {
+    assert.ok(dim in result.dimensions, `Missing dimension: ${dim}`)
+    assert.ok(result.dimensions[dim] >= 0 && result.dimensions[dim] <= 100,
+      `Dimension ${dim} out of range: ${result.dimensions[dim]}`)
+  }
+})
+
+test('relevanceScorer: higher score for better matched opportunity', () => {
+  const profile = makeProfile({ primary_type: 'fire_ems', state: 'OH' })
+  const intel = buildProfileIntelligence(profile, {})
+
+  const goodOpp = makeOpportunity({
+    title: 'Assistance to Firefighters Grant — Equipment',
+    description: 'AFG grants for fire department PPE, turnout gear, and fire apparatus.',
+    source_url: 'https://afg.fema.gov/opportunity',
+    is_national: 1,
+  })
+
+  const badOpp = makeOpportunity({
+    title: 'College Scholarship Program',
+    description: 'Scholarship for undergraduate students in STEM fields.',
+    source_url: 'https://foundation.org/scholarship',
+    is_national: 1,
+  })
+
+  const goodResult = scoreOpportunity(intel, goodOpp)
+  const badResult = scoreOpportunity(intel, badOpp)
+
+  assert.ok(goodResult.total_score > badResult.total_score,
+    `Good opp (${goodResult.total_score}) should score higher than bad opp (${badResult.total_score})`)
+})
+
+test('relevanceScorer: verification guidance is always populated', () => {
+  const intel = buildProfileIntelligence(makeProfile({ primary_type: 'church' }), {})
+  const opp = makeOpportunity({ source_url: 'https://grants.gov/church' })
+  const result = scoreOpportunity(intel, opp)
+
+  assert.ok(result.verification_guidance.length > 0,
+    'verification_guidance should never be empty')
+})
+
+// ---------------------------------------------------------------------------
+// Phase 9: Feedback Loop Tests
+// ---------------------------------------------------------------------------
+
+import {
+  FEEDBACK_ACTIONS,
+  validateFeedback,
+  createFeedbackRecord,
+  analyzeFeedback,
+  applyFeedbackToScore,
+} from '../../backend/services/profileIntelligence/feedbackLoop.js'
+
+test('feedbackLoop: validateFeedback — valid record', () => {
+  const result = validateFeedback({
+    profile_id: 'p1',
+    opportunity_id: 'o1',
+    action: FEEDBACK_ACTIONS.SAVED,
+  })
+  assert.ok(result.valid)
+  assert.ok(!result.error)
+})
+
+test('feedbackLoop: validateFeedback — missing profile_id', () => {
+  const result = validateFeedback({
+    opportunity_id: 'o1',
+    action: FEEDBACK_ACTIONS.SAVED,
+  })
+  assert.ok(!result.valid)
+  assert.ok(result.error)
+})
+
+test('feedbackLoop: validateFeedback — invalid action', () => {
+  const result = validateFeedback({
+    profile_id: 'p1',
+    opportunity_id: 'o1',
+    action: 'invalid_action',
+  })
+  assert.ok(!result.valid)
+})
+
+test('feedbackLoop: createFeedbackRecord normalizes input', () => {
+  const record = createFeedbackRecord({
+    profile_id: 'p1',
+    opportunity_id: 'o1',
+    action: FEEDBACK_ACTIONS.APPLIED,
+    need_code: 'ppe',
+    score_at_feedback: 85,
+  })
+
+  assert.equal(record.profile_id, 'p1')
+  assert.equal(record.opportunity_id, 'o1')
+  assert.equal(record.action, FEEDBACK_ACTIONS.APPLIED)
+  assert.equal(record.need_code, 'ppe')
+  assert.equal(record.score_at_feedback, 85)
+  assert.ok(typeof record.created_at === 'string')
+})
+
+test('feedbackLoop: analyzeFeedback blocks broken links', () => {
+  const records = [
+    { profile_id: 'p1', opportunity_id: 'o1', action: FEEDBACK_ACTIONS.LINK_BROKEN, need_code: null },
+    { profile_id: 'p1', opportunity_id: 'o2', action: FEEDBACK_ACTIONS.NOT_ACTUALLY_ELIGIBLE, need_code: null },
+    { profile_id: 'p1', opportunity_id: 'o3', action: FEEDBACK_ACTIONS.SAVED, need_code: 'ppe' },
+  ]
+
+  const signals = analyzeFeedback(records)
+  assert.ok(signals.blocked_opportunities.includes('o1'))
+  assert.ok(signals.blocked_opportunities.includes('o2'))
+  assert.ok(!signals.blocked_opportunities.includes('o3'))
+})
+
+test('feedbackLoop: analyzeFeedback boosts repeatedly saved needs', () => {
+  const records = [
+    { profile_id: 'p1', opportunity_id: 'o1', action: FEEDBACK_ACTIONS.SAVED, need_code: 'ppe' },
+    { profile_id: 'p1', opportunity_id: 'o2', action: FEEDBACK_ACTIONS.APPLIED, need_code: 'ppe' },
+    { profile_id: 'p1', opportunity_id: 'o3', action: FEEDBACK_ACTIONS.SAVED, need_code: 'vehicles' },
+    { profile_id: 'p1', opportunity_id: 'o4', action: FEEDBACK_ACTIONS.DISMISSED, need_code: 'housing_support' },
+  ]
+
+  const signals = analyzeFeedback(records)
+  assert.ok(signals.boosted_needs.includes('ppe'), 'ppe should be boosted (2 positive signals)')
+  assert.ok(!signals.boosted_needs.includes('vehicles'), 'vehicles only 1 positive, not boosted')
+})
+
+test('feedbackLoop: applyFeedbackToScore hard-blocks blocked opportunity', () => {
+  const scoreResult = {
+    total_score: 80,
+    verdict: 'STRONG_MATCH',
+    matched_needs: ['ppe'],
+    why_may_not_fit: [],
+    why_matched: ['Great match'],
+    verification_guidance: ['Check URL'],
+    dimensions: {},
+    confidence: 85,
+  }
+
+  const signals = {
+    blocked_opportunities: ['opp-blocked'],
+    boosted_needs: [],
+    downweighted_needs: [],
+    summary: { positive: 0, negative: 1, total: 1 },
+  }
+
+  const adjusted = applyFeedbackToScore(scoreResult, signals, 'opp-blocked')
+  assert.equal(adjusted.verdict, 'REJECT')
+  assert.equal(adjusted.total_score, 0)
+})
+
+test('feedbackLoop: analyzeFeedback with empty input returns safe defaults', () => {
+  const signals = analyzeFeedback([])
+  assert.deepEqual(signals.blocked_opportunities, [])
+  assert.deepEqual(signals.boosted_needs, [])
+  assert.equal(signals.summary.total, 0)
+})
