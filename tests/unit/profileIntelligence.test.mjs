@@ -1,13 +1,15 @@
 /**
  * Profile Intelligence — Unit Tests
  *
- * Tests for Phases 1-4 of the profile intelligence system:
- * 1. Profile normalization (profileNormalizerIntel.js)
- * 2. Needs taxonomy (needsTaxonomy.js)
- * 3. Need inference engine for multiple profile archetypes
- * 4. Search plan generator
- * 5. Match threshold enforcement — when slider at 80%, nothing below 80% returned
- * 6. Faith-based profile exclusion from public grants
+ * Phases tested:
+ * 1. Needs taxonomy (needsTaxonomy.js)
+ * 2. Profile normalization (profileNormalizerIntel.js)
+ * 3. Need inference engine for multiple profile archetypes (needsInferenceEngine.js)
+ * 4. Search plan generator (searchPlanGenerator.js)
+ *
+ * Additional test categories:
+ * - Match threshold enforcement (slider at 80% returns nothing below 80%)
+ * - Faith-based profile exclusion from public grants
  */
 
 import test from 'node:test'

@@ -184,15 +184,19 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
       }
 
       const DEFAULT_MIN_SCORE = 50
-      const requestedMinScore = req.query.min_score !== undefined && req.query.min_score !== ''
-        ? Number.parseInt(req.query.min_score, 10)
-        : null
-      const minScore = requestedMinScore !== null && Number.isFinite(requestedMinScore)
-        ? requestedMinScore
-        : DEFAULT_MIN_SCORE
-      // Track whether the caller explicitly set a min_score so we can enforce it strictly.
-      // When no explicit threshold is provided we allow the zero-results fallback.
-      const isExplicitThreshold = requestedMinScore !== null && Number.isFinite(requestedMinScore)
+      // Determine if the caller provided an explicit min_score threshold.
+      // We accept only numeric strings; non-numeric values (e.g. "abc") are treated
+      // as absent so they fall back to the system default without strict enforcement.
+      const rawMinScore = req.query.min_score
+      const parsedMinScore = rawMinScore !== undefined && rawMinScore !== ''
+        ? Number.parseInt(rawMinScore, 10)
+        : Number.NaN
+      const requestedMinScore = Number.isFinite(parsedMinScore) ? parsedMinScore : null
+      const minScore = requestedMinScore !== null ? requestedMinScore : DEFAULT_MIN_SCORE
+      // When the caller explicitly set a valid numeric min_score, honor it strictly.
+      // The zero-results fallback (which lowers the threshold automatically) is only
+      // allowed when no explicit threshold was provided — this enforces the match slider.
+      const isExplicitThreshold = requestedMinScore !== null
                    const limit = Math.min(Math.max(Number.parseInt(req.query.limit ?? '2000', 10) || 2000, 1), 5000)
                    const q = typeof req.query.q === 'string' ? req.query.q.trim().toLowerCase() : ''
 

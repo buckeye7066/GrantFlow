@@ -14,7 +14,17 @@
  *       It is the Phase 1 intelligence layer that complements it.
  */
 
-import { NEEDS_TAXONOMY, isValidNeedCode } from './needsTaxonomy.js'
+import { isValidNeedCode } from './needsTaxonomy.js'
+
+// ---------------------------------------------------------------------------
+// Module-level constants
+// ---------------------------------------------------------------------------
+
+/** Common stopwords to filter out during keyword extraction from narrative text. */
+const NARRATIVE_STOPWORDS = new Set([
+  'the', 'and', 'for', 'with', 'that', 'this', 'our', 'are', 'we', 'to', 'in',
+  'of', 'a', 'is', 'be', 'have', 'has', 'it', 'an',
+])
 
 // ---------------------------------------------------------------------------
 // Signal factory helpers
@@ -405,10 +415,9 @@ export function normalizeProfileIntelligence(profile, sections = {}) {
   }
   // Extract simple keywords from story text
   if (storyText) {
-    const stopwords = new Set(['the', 'and', 'for', 'with', 'that', 'this', 'our', 'are', 'we', 'to', 'in', 'of', 'a', 'is', 'be', 'have', 'has', 'it', 'an'])
     const words = storyText.toLowerCase().match(/\b[a-z]{4,}\b/g) || []
     const freq = {}
-    for (const w of words) { if (!stopwords.has(w)) freq[w] = (freq[w] || 0) + 1 }
+    for (const w of words) { if (!NARRATIVE_STOPWORDS.has(w)) freq[w] = (freq[w] || 0) + 1 }
     const topWords = Object.entries(freq)
       .sort((a, b) => b[1] - a[1])
       .slice(0, 20)
