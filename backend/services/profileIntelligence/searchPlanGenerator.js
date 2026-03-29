@@ -1,459 +1,314 @@
 /**
- * Search Plan Generator — Phase 4
+ * Search Plan Generator
  *
- * Converts normalized profile intelligence + inferred needs into targeted
- * search plans. Each plan is self-contained and actionable.
+ * Converts a ProfileIntelligence object + inferred needs into a prioritized
+ * list of search plans. Each search plan targets a specific need with:
+ * - Targeted search terms
+ * - Entity eligibility constraints
+ * - Geography constraints
+ * - Priority weight
+ * - Funding type expectations
+ * - Which sources to search (local/state/federal/private)
  *
- * A search plan includes:
- *   need_code, search_lane, search_terms[], boosted_terms[], entity_constraints[],
- *   geography_constraints, exclusions[], priority_weight, expected_funding_type,
- *   search_scope (local|state|federal|private|denominational|all)
+ * @typedef {Object} SearchPlan
+ * @property {string} need_code         - The need this plan addresses
+ * @property {string} need_label        - Human-readable need label
+ * @property {string} search_lane       - Category: 'federal'|'state'|'local'|'private'|'foundation'
+ * @property {string[]} search_terms    - Ordered search query strings
+ * @property {string[]} boosted_terms   - Additional terms from profile context
+ * @property {string[]} entity_types    - Entity types to include in search
+ * @property {string[]} geography_terms - Location context terms
+ * @property {string[]} exclusions      - Terms/types to exclude
+ * @property {number} priority          - 0–100, higher = search first
+ * @property {string} expected_funding  - 'grant'|'scholarship'|'rebate'|'contract'|'donor'
+ * @property {boolean} search_federal   - Whether to search federal sources
+ * @property {boolean} search_state     - Whether to search state-level sources
+ * @property {boolean} search_local     - Whether to search local sources
+ * @property {boolean} search_private   - Whether to search private/foundation sources
+ * @property {string} confidence        - 'high'|'medium'|'low'
+ * @property {string[]} why             - Explanation of why this plan was generated
  */
 
-import { getNeed, isValidNeedCode } from './needsTaxonomy.js'
+import { NEEDS_TAXONOMY, FUNDING_CATEGORY } from './needsTaxonomy.js'
 
 // ---------------------------------------------------------------------------
-// Helpers
+// Search lane definitions
 // ---------------------------------------------------------------------------
+const SEARCH_LANE = {
+  FEDERAL: 'federal',
+  STATE: 'state',
+  LOCAL: 'local',
+  PRIVATE: 'private',
+  FOUNDATION: 'foundation',
+  DENOMINATION: 'denomination',
+}
 
-function plan(needCode, opts = {}) {
-  return {
-    need_code: needCode,
-    search_lane: opts.search_lane ?? 'general',
-    search_terms: opts.search_terms ?? [],
-    boosted_terms: opts.boosted_terms ?? [],
-    entity_constraints: opts.entity_constraints ?? [],
-    geography_constraints: opts.geography_constraints ?? {},
-    exclusions: opts.exclusions ?? [],
-    priority_weight: opts.priority_weight ?? 0.5,
-    expected_funding_type: opts.expected_funding_type ?? 'grant',
-    search_scope: opts.search_scope ?? ['federal', 'state', 'private'],
+// ---------------------------------------------------------------------------
+// Lane configuration per funding type
+// ---------------------------------------------------------------------------
+function getLanesForFundingType(fundingType) {
+  switch (fundingType) {
+    case FUNDING_CATEGORY.GRANT:
+      return [SEARCH_LANE.FEDERAL, SEARCH_LANE.STATE, SEARCH_LANE.FOUNDATION, SEARCH_LANE.LOCAL]
+    case FUNDING_CATEGORY.SCHOLARSHIP:
+      return [SEARCH_LANE.FEDERAL, SEARCH_LANE.STATE, SEARCH_LANE.FOUNDATION, SEARCH_LANE.PRIVATE]
+    case FUNDING_CATEGORY.REBATE:
+      return [SEARCH_LANE.STATE, SEARCH_LANE.LOCAL, SEARCH_LANE.PRIVATE]
+    case FUNDING_CATEGORY.CONTRACT:
+      return [SEARCH_LANE.FEDERAL, SEARCH_LANE.STATE, SEARCH_LANE.LOCAL]
+    case FUNDING_CATEGORY.DONOR:
+      return [SEARCH_LANE.PRIVATE, SEARCH_LANE.FOUNDATION, SEARCH_LANE.DENOMINATION]
+    default:
+      return [SEARCH_LANE.FEDERAL, SEARCH_LANE.STATE, SEARCH_LANE.FOUNDATION]
   }
 }
 
 // ---------------------------------------------------------------------------
-// Per-need plan generators
+// Geography term builder
 // ---------------------------------------------------------------------------
+function buildGeographyTerms(intel) {
+  const terms = []
 
-function planFacilitiesRepair(intel, need) {
-  const state = intel.state
-  const isChurch = intel.is_faith_based || intel.entity_types?.includes('church')
-  const isRural = intel.is_rural
+  if (intel.state) terms.push(intel.state)
+  if (intel.city) terms.push(intel.city)
+  if (intel.county) terms.push(`${intel.county} county`)
+  if (intel.zip) terms.push(intel.zip)
 
-  const searchTerms = [
-    'facility repair grant',
-    'building rehabilitation grant',
-    'capital improvement grant',
-  ]
-  const boostedTerms = []
+  if (intel.geographicFlags.has('rural')) terms.push('rural')
+  if (intel.geographicFlags.has('tribal_land')) terms.push('tribal')
+  if (intel.geographicFlags.has('underserved')) terms.push('underserved')
 
-  if (isChurch) {
-    searchTerms.push('church building repair grant', 'religious facility repair grant')
-    boostedTerms.push('faith-based', 'church', 'religious organization')
+  return terms
+}
+
+// ---------------------------------------------------------------------------
+// Entity type terms for search
+// ---------------------------------------------------------------------------
+function buildEntityTerms(intel, needDef) {
+  const types = [...(needDef.related_entity_types ?? [])]
+
+  // Include current entity type
+  if (intel.entityType && !types.includes(intel.entityType)) {
+    types.unshift(intel.entityType)
   }
-  if (isRural) {
-    searchTerms.push('USDA community facilities grant', 'rural facility repair grant', 'rural building improvement grant')
-    boostedTerms.push('rural', 'underserved community')
-  }
-  if (state) {
-    searchTerms.push(`${state} facility repair grant`, `${state} building improvement grant`)
+
+  // Map to human-readable search terms
+  const termMap = {
+    individual: 'individual person',
+    nonprofit: 'nonprofit organization',
+    church: 'church congregation',
+    faith_based: 'faith-based organization',
+    school: 'K-12 school',
+    school_district: 'school district',
+    charter_school: 'charter school',
+    college: 'college university',
+    fire_ems: 'fire department EMS',
+    government: 'local government municipality',
+    tribal: 'tribal government',
+    hospital: 'hospital clinic',
+    housing_authority: 'housing authority',
+    community_action: 'community action agency',
   }
 
+  return types.slice(0, 3).map(t => termMap[t] ?? t)
+}
+
+// ---------------------------------------------------------------------------
+// Boosted terms from profile context
+// ---------------------------------------------------------------------------
+function buildBoostedTerms(intel, needCode) {
+  const boosted = []
+
+  // Geography boosts
+  if (intel.state) boosted.push(intel.state)
+  if (intel.geographicFlags.has('rural')) boosted.push('rural')
+  if (intel.geographicFlags.has('underserved')) boosted.push('underserved community')
+
+  // Special eligibility boosts
+  if (intel.eligibilityFlags.has('is_501c3')) boosted.push('501(c)(3)')
+  if (intel.eligibilityFlags.has('faith_based') || intel.isChurch) boosted.push('faith-based')
+  if (intel.isVeteran) boosted.push('veteran')
+  if (intel.isStudent) boosted.push('student')
+  if (intel.organizationFlags.has('hbcu')) boosted.push('HBCU')
+  if (intel.organizationFlags.has('hsi')) boosted.push('HSI')
+  if (intel.organizationFlags.has('volunteer_organization')) boosted.push('volunteer')
+
+  // Hardship boosts
+  if (intel.hardshipFlags.has('low_income') || intel.hardshipFlags.has('low_budget')) {
+    boosted.push('low income')
+  }
+  if (intel.hardshipFlags.has('financial_hardship')) boosted.push('hardship')
+
+  // Disability
+  if (intel.disabilityFlags.size > 0) boosted.push('disability')
+
+  // Minority
+  if (intel.demographicFlags.has('ethnicity:hispanic') ||
+    intel.demographicFlags.has('ethnicity:latino')) {
+    boosted.push('Hispanic Latino')
+  }
+  if (intel.demographicFlags.has('ethnicity:african_american') ||
+    intel.demographicFlags.has('ethnicity:black')) {
+    boosted.push('African American Black')
+  }
+  if (intel.organizationFlags.has('minority_owned_business') ||
+    intel.eligibilityFlags.has('minority_owned_business')) {
+    boosted.push('minority-owned')
+  }
+
+  return [...new Set(boosted)]
+}
+
+// ---------------------------------------------------------------------------
+// Exclusion terms
+// ---------------------------------------------------------------------------
+function buildExclusions(intel, needDef) {
   const exclusions = []
-  if (isChurch) {
-    exclusions.push('public-use required', 'secular use only')
+
+  // Exclude disallowed entity types
+  for (const disallowed of (needDef.disallowed_entity_types ?? [])) {
+    if (disallowed !== intel.entityType) {
+      exclusions.push(`not_eligible:${disallowed}`)
+    }
   }
 
-  return plan(need.code, {
-    search_lane: 'capital_facilities',
-    search_terms: searchTerms,
-    boosted_terms: boostedTerms,
-    entity_constraints: intel.entity_types ?? [],
-    geography_constraints: { state, is_rural: isRural },
-    exclusions,
-    priority_weight: need.weight,
-    expected_funding_type: 'grant',
-    search_scope: ['federal', 'state', 'private', ...(isChurch ? ['denominational'] : [])],
-  })
-}
-
-function planPublicSafetyEquipment(intel, need) {
-  const state = intel.state
-  const isRural = intel.is_rural
-  const isFireDept = intel.entity_types?.includes('volunteer_fire_dept')
-
-  const searchTerms = [
-    'public safety equipment grant',
-    'AFG grant',
-    'FEMA fire department grant',
-    'Assistance to Firefighters Grant',
-  ]
-  if (isFireDept) {
-    searchTerms.push(
-      'volunteer fire department equipment grant',
-      'rural fire department PPE grant',
-      'fire department communications grant',
-      'AFG equipment grant',
-    )
-  }
-  if (isRural) {
-    searchTerms.push('rural fire department grant', 'rural EMS equipment grant')
-  }
-  if (state) {
-    searchTerms.push(`${state} fire department grant`, `${state} public safety grant`)
+  // Faith-based exclusions: some federal grants exclude religious use
+  if (intel.isChurch || intel.eligibilityFlags.has('faith_based')) {
+    exclusions.push('public_facility_only:false')  // allow faith-based
   }
 
-  return plan(need.code, {
-    search_lane: 'public_safety',
-    search_terms: searchTerms,
-    boosted_terms: ['volunteer fire', 'rural fire', 'turnout gear', 'SCBA', 'apparatus'],
-    entity_constraints: ['volunteer_fire_dept', 'local_government'],
-    geography_constraints: { state, is_rural: isRural },
-    exclusions: ['individuals', 'for-profit'],
-    priority_weight: need.weight,
-    expected_funding_type: 'grant',
-    search_scope: ['federal', 'state', 'private'],
-  })
-}
-
-function planPPE(intel, need) {
-  const state = intel.state
-  const isFireDept = intel.entity_types?.includes('volunteer_fire_dept')
-
-  const searchTerms = ['PPE grant', 'personal protective equipment grant']
-  if (isFireDept) {
-    searchTerms.push('AFG PPE grant', 'turnout gear grant', 'fire department PPE', 'SCBA grant', 'helmet grant')
-  }
-  if (state) {
-    searchTerms.push(`${state} PPE grant`, `${state} fire department equipment`)
-  }
-
-  return plan(need.code, {
-    search_lane: 'public_safety',
-    search_terms: searchTerms,
-    boosted_terms: ['turnout gear', 'SCBA', 'self-contained breathing apparatus', 'helmets'],
-    entity_constraints: intel.entity_types ?? [],
-    geography_constraints: { state },
-    priority_weight: need.weight,
-    expected_funding_type: 'grant',
-    search_scope: ['federal', 'state'],
-  })
-}
-
-function planVehicles(intel, need) {
-  const state = intel.state
-  const isFireDept = intel.entity_types?.includes('volunteer_fire_dept')
-  const isRural = intel.is_rural
-
-  const searchTerms = ['vehicle grant nonprofit', 'emergency vehicle grant']
-  if (isFireDept) {
-    searchTerms.push(
-      'fire apparatus grant',
-      'AFG vehicle grant',
-      'fire truck grant',
-      'tanker grant',
-      'ambulance grant',
-    )
-  }
-  if (isRural) {
-    searchTerms.push('rural fire apparatus grant', 'rural emergency vehicle grant')
-  }
-  if (state) {
-    searchTerms.push(`${state} fire apparatus grant`)
-  }
-
-  return plan(need.code, {
-    search_lane: 'capital_equipment',
-    search_terms: searchTerms,
-    boosted_terms: ['apparatus', 'engine', 'tanker', 'rescue truck'],
-    entity_constraints: ['volunteer_fire_dept', 'nonprofit', 'local_government'],
-    geography_constraints: { state, is_rural: isRural },
-    exclusions: ['individuals'],
-    priority_weight: need.weight,
-    expected_funding_type: 'grant',
-    search_scope: ['federal', 'state'],
-  })
-}
-
-function planScholarships(intel, need) {
-  const state = intel.state
-  const religion = intel.demographic_flags?.find(f => f.startsWith('religion:'))
-  const isVeteran = intel.is_veteran
-  const hasDisability = intel.hardship_flags?.includes('disability')
-  const raceFlags = (intel.demographic_flags ?? []).filter(f => f.startsWith('race:'))
-
-  const searchTerms = [
-    'college scholarship',
-    'undergraduate scholarship',
-    'tuition assistance program',
-    'financial aid for college',
-  ]
-  if (state) {
-    searchTerms.push(`${state} scholarship program`, `${state} college grant`)
-  }
-  if (religion) {
-    const rel = religion.replace('religion:', '')
-    searchTerms.push(`${rel} scholarship`, `faith-based scholarship ${rel}`)
-  }
-  if (isVeteran) {
-    searchTerms.push('veteran scholarship', 'GI Bill dependent scholarship', 'military family scholarship')
-  }
-  if (hasDisability) {
-    searchTerms.push('disability scholarship', 'students with disabilities scholarship')
-  }
-  for (const rf of raceFlags) {
-    const race = rf.replace('race:', '').replace(/_/g, ' ')
-    searchTerms.push(`${race} scholarship`)
-  }
-
-  return plan(need.code, {
-    search_lane: 'education_scholarships',
-    search_terms: searchTerms,
-    boosted_terms: ['enrolled student', 'undergraduate', 'financial need'],
-    entity_constraints: ['individual_student', 'individual'],
-    geography_constraints: { state },
-    exclusions: ['organizations', 'nonprofits', 'businesses'],
-    priority_weight: need.weight,
-    expected_funding_type: 'scholarship',
-    search_scope: ['federal', 'state', 'private'],
-  })
-}
-
-function planUtilitiesSupport(intel, need) {
-  const state = intel.state
-  const isChurch = intel.is_faith_based || intel.entity_types?.includes('church')
-  const isIndividual = intel.entity_types?.includes('individual') || !intel.entity_types?.length
-
-  const searchTerms = ['utility assistance program', 'energy assistance program']
-  if (isIndividual) {
-    searchTerms.push('LIHEAP', 'heating assistance', 'cooling assistance', 'electric bill help', 'low income energy assistance')
-  }
-  if (isChurch) {
-    searchTerms.push('church utility grant', 'faith-based energy assistance', 'community facility utility grant')
-  }
-  if (intel.is_rural) {
-    searchTerms.push('rural energy assistance program', 'USDA energy program')
-  }
-  if (state) {
-    searchTerms.push(`${state} utility assistance`, `${state} energy program`, `${state} LIHEAP`)
-  }
-
-  return plan(need.code, {
-    search_lane: 'utilities_energy',
-    search_terms: searchTerms,
-    boosted_terms: ['low income', 'heating', 'cooling', 'electric'],
-    entity_constraints: intel.entity_types?.length ? intel.entity_types : ['individual'],
-    geography_constraints: { state },
-    priority_weight: need.weight,
-    expected_funding_type: 'grant',
-    search_scope: ['federal', 'state', 'local', 'private'],
-  })
-}
-
-function planHousingSupport(intel, need) {
-  const state = intel.state
-  const isVeteran = intel.is_veteran
-  const isIndividual = !intel.entity_types?.some(t => ['nonprofit', 'church', 'school_district'].includes(t))
-
-  const searchTerms = ['rental assistance program', 'housing assistance', 'emergency housing help']
-  if (isVeteran) {
-    searchTerms.push('VASH voucher', 'HUD-VASH housing', 'veteran housing assistance')
-  }
-  if (isIndividual) {
-    searchTerms.push('eviction prevention grant', 'rent assistance program', 'emergency rental help')
-  }
-  if (state) {
-    searchTerms.push(`${state} rental assistance`, `${state} housing assistance`)
-  }
-
-  return plan(need.code, {
-    search_lane: 'housing',
-    search_terms: searchTerms,
-    boosted_terms: ['rental', 'eviction', 'housing stability'],
-    entity_constraints: intel.entity_types?.length ? intel.entity_types : ['individual'],
-    geography_constraints: { state },
-    priority_weight: need.weight,
-    expected_funding_type: 'grant',
-    search_scope: ['federal', 'state', 'local', 'private'],
-  })
-}
-
-function planArtsEquipment(intel, need) {
-  const state = intel.state
-  const isSchool = intel.entity_types?.includes('school_district')
-
-  const searchTerms = ['arts education grant', 'school arts program grant']
-  if (isSchool) {
-    searchTerms.push(
-      'musical instruments grant for schools',
-      'band equipment grant',
-      'orchestra instruments donation',
-      'music program school grant',
-      'school arts equipment grant',
-    )
-  }
-  if (state) {
-    searchTerms.push(`${state} arts education grant`, `${state} school music grant`)
-  }
-
-  return plan(need.code, {
-    search_lane: 'arts_education',
-    search_terms: searchTerms,
-    boosted_terms: ['musical instruments', 'band', 'orchestra', 'choir'],
-    entity_constraints: ['school_district', 'nonprofit', 'arts_org'],
-    geography_constraints: { state },
-    priority_weight: need.weight,
-    expected_funding_type: 'grant',
-    search_scope: ['federal', 'state', 'private'],
-  })
-}
-
-function planAthleticsEquipment(intel, need) {
-  const state = intel.state
-  const isSchool = intel.entity_types?.includes('school_district')
-
-  const searchTerms = ['athletics equipment grant', 'sports equipment for youth']
-  if (isSchool) {
-    searchTerms.push(
-      'school sports equipment grant',
-      'youth sports gear donation',
-      'school athletics grant',
-      'Title IX sports equipment',
-    )
-  }
-  if (state) {
-    searchTerms.push(`${state} school athletics grant`, `${state} youth sports grant`)
-  }
-
-  return plan(need.code, {
-    search_lane: 'athletics_education',
-    search_terms: searchTerms,
-    boosted_terms: ['uniforms', 'helmets', 'athletic gear', 'sports equipment'],
-    entity_constraints: ['school_district', 'nonprofit', 'youth_org'],
-    geography_constraints: { state },
-    priority_weight: need.weight,
-    expected_funding_type: 'grant',
-    search_scope: ['state', 'private'],
-  })
-}
-
-function planTechnology(intel, need) {
-  const state = intel.state
-  const isSchool = intel.entity_types?.includes('school_district')
-  const isRural = intel.is_rural
-
-  const searchTerms = ['technology grant', 'digital equity grant', 'computer equipment grant']
-  if (isSchool) {
-    searchTerms.push('E-rate program', 'school technology grant', 'educational technology grant', 'classroom technology grant')
-  }
-  if (isRural) {
-    searchTerms.push('rural technology grant', 'rural digital inclusion grant')
-  }
-  if (state) {
-    searchTerms.push(`${state} technology grant`, `${state} digital equity program`)
-  }
-
-  return plan(need.code, {
-    search_lane: 'technology',
-    search_terms: searchTerms,
-    boosted_terms: ['computers', 'devices', 'software', 'IT infrastructure'],
-    entity_constraints: intel.entity_types ?? [],
-    geography_constraints: { state, is_rural: isRural },
-    priority_weight: need.weight,
-    expected_funding_type: 'grant',
-    search_scope: ['federal', 'state', 'private'],
-  })
-}
-
-function planGenericNeed(intel, need) {
-  const needDef = getNeed(need.code)
-  if (!needDef) return null
-  const state = intel.state
-
-  const searchTerms = [...(needDef.exampleSearchTerms ?? [])]
-  if (state) {
-    searchTerms.push(`${state} ${needDef.description.toLowerCase().split('.')[0]}`)
-  }
-
-  return plan(need.code, {
-    search_lane: need.code,
-    search_terms: searchTerms,
-    boosted_terms: needDef.synonyms?.slice(0, 5) ?? [],
-    entity_constraints: needDef.relatedEntityTypes ?? [],
-    geography_constraints: { state },
-    priority_weight: need.weight,
-    expected_funding_type: needDef.preferredFundingTypes?.[0] ?? 'grant',
-    search_scope: ['federal', 'state', 'private'],
-  })
+  return exclusions
 }
 
 // ---------------------------------------------------------------------------
-// Router: dispatch to the right generator
+// Build search plans for a single inferred need
 // ---------------------------------------------------------------------------
+function buildPlansForNeed(inferredNeed, intel) {
+  const def = NEEDS_TAXONOMY[inferredNeed.code]
+  if (!def) return []
 
-const PLAN_GENERATORS = {
-  facilities_repair: planFacilitiesRepair,
-  facilities_preservation: (intel, need) => planGenericNeed(intel, need),
-  public_safety_equipment: planPublicSafetyEquipment,
-  ppe: planPPE,
-  vehicles: planVehicles,
-  scholarships_tuition: planScholarships,
-  utilities_support: planUtilitiesSupport,
-  housing_support: planHousingSupport,
-  arts_equipment: planArtsEquipment,
-  athletics_equipment: planAthleticsEquipment,
-  technology: planTechnology,
-}
-
-// ---------------------------------------------------------------------------
-// Main entry point
-// ---------------------------------------------------------------------------
-
-/**
- * Generate search plans from a profile intelligence object (with inferred needs).
- *
- * @param {Object} intel - Output of annotateWithInferredNeeds() or similar
- * @param {Object} [opts]
- * @param {number} [opts.maxPlans=15]      - Maximum plans to return
- * @param {number} [opts.minNeedWeight=0.4] - Minimum need weight to generate a plan
- * @returns {Object[]} Array of search plans sorted by priority_weight descending
- */
-export function generateSearchPlans(intel, opts = {}) {
-  const maxPlans = opts.maxPlans ?? 15
-  const minNeedWeight = opts.minNeedWeight ?? 0.4
-
-  const allNeeds = [
-    ...(intel.likely_needs ?? []),
-    ...(intel.explicit_requested_needs ?? []),
-  ]
-
-  const seenCodes = new Set()
   const plans = []
+  const geographyTerms = buildGeographyTerms(intel)
+  const entityTerms = buildEntityTerms(intel, def)
+  const boostedTerms = buildBoostedTerms(intel, inferredNeed.code)
+  const exclusions = buildExclusions(intel, def)
+  const priority = Math.round(inferredNeed.weight * 100)
 
-  for (const need of allNeeds) {
-    if (seenCodes.has(need.code)) continue
-    if ((need.weight ?? 0) < minNeedWeight) continue
-    if (!isValidNeedCode(need.code)) continue
-    seenCodes.add(need.code)
+  for (const fundingCategory of def.funding_categories) {
+    const lanes = getLanesForFundingType(fundingCategory)
 
-    const generator = PLAN_GENERATORS[need.code] ?? planGenericNeed
-    const generated = generator(intel, need)
-    if (generated) {
-      // Inject geo context from intel
-      generated.geography_constraints = {
-        ...generated.geography_constraints,
-        state: intel.state ?? generated.geography_constraints?.state ?? null,
-        city: intel.city ?? null,
-        zip: intel.zip ?? null,
-        is_rural: intel.is_rural ?? generated.geography_constraints?.is_rural ?? false,
+    for (const lane of lanes) {
+      // Skip donor lanes for government entities
+      if (lane === SEARCH_LANE.DENOMINATION && !intel.isChurch) continue
+      if (lane === SEARCH_LANE.PRIVATE && intel.isGovernment) continue
+
+      // Build search terms from example terms + entity + geography
+      const searchTerms = [
+        ...def.example_search_terms.slice(0, 3),
+        ...entityTerms.slice(0, 2).map(et => `${et} ${def.label.toLowerCase()}`),
+      ]
+
+      // Add geography to search terms for state/local lanes
+      if (lane === SEARCH_LANE.STATE || lane === SEARCH_LANE.LOCAL) {
+        if (intel.state) {
+          searchTerms.unshift(`${intel.state} ${def.label.toLowerCase()} grant`)
+        }
       }
-      plans.push(generated)
+
+      plans.push({
+        need_code: inferredNeed.code,
+        need_label: def.label,
+        search_lane: lane,
+        search_terms: [...new Set(searchTerms)].slice(0, 5),
+        boosted_terms: boostedTerms,
+        entity_types: [...(def.related_entity_types ?? [])],
+        geography_terms: geographyTerms,
+        exclusions,
+        priority: lane === SEARCH_LANE.FEDERAL ? priority : Math.max(10, priority - 10),
+        expected_funding: fundingCategory,
+        search_federal: lane === SEARCH_LANE.FEDERAL,
+        search_state: lane === SEARCH_LANE.STATE,
+        search_local: lane === SEARCH_LANE.LOCAL,
+        search_private: [SEARCH_LANE.PRIVATE, SEARCH_LANE.FOUNDATION,
+          SEARCH_LANE.DENOMINATION].includes(lane),
+        confidence: inferredNeed.confidence,
+        why: inferredNeed.signals,
+      })
     }
   }
 
   return plans
-    .sort((a, b) => (b.priority_weight ?? 0) - (a.priority_weight ?? 0))
-    .slice(0, maxPlans)
 }
 
-export default { generateSearchPlans }
+// ---------------------------------------------------------------------------
+// Main export
+// ---------------------------------------------------------------------------
+
+/**
+ * Generate search plans from a ProfileIntelligence object.
+ *
+ * @param {import('./index.js').ProfileIntelligence} intel
+ * @param {Object} [options]
+ * @param {number} [options.maxPlans] - Max total plans to return (default: 20)
+ * @param {string[]} [options.onlyNeedCodes] - Only generate plans for these codes
+ * @param {boolean} [options.includeLowConfidence] - Include low-confidence needs (default: false)
+ * @returns {SearchPlan[]}
+ */
+export function generateSearchPlans(intel, options = {}) {
+  if (!intel || !intel.inferredNeeds) return []
+
+  const {
+    maxPlans = 20,
+    onlyNeedCodes = null,
+    includeLowConfidence = false,
+  } = options
+
+  let needs = intel.inferredNeeds
+
+  // Filter by specific codes if requested
+  if (onlyNeedCodes && onlyNeedCodes.length > 0) {
+    needs = needs.filter(n => onlyNeedCodes.includes(n.code))
+  }
+
+  // Filter out low-confidence unless opted in
+  if (!includeLowConfidence) {
+    needs = needs.filter(n => n.confidence !== 'low')
+  }
+
+  // Generate plans for each need
+  const allPlans = []
+  for (const need of needs) {
+    const plans = buildPlansForNeed(need, intel)
+    allPlans.push(...plans)
+  }
+
+  // Sort by priority descending, deduplicate same need+lane
+  const seen = new Set()
+  const deduped = allPlans
+    .sort((a, b) => b.priority - a.priority)
+    .filter(plan => {
+      const key = `${plan.need_code}:${plan.search_lane}:${plan.expected_funding}`
+      if (seen.has(key)) return false
+      seen.add(key)
+      return true
+    })
+
+  return deduped.slice(0, maxPlans)
+}
+
+/**
+ * Get a compact search plan summary for display.
+ */
+export function getSearchPlanSummary(plans) {
+  if (!plans || plans.length === 0) return []
+
+  return plans
+    .filter(p => p.confidence !== 'low')
+    .map(p => ({
+      need: p.need_label,
+      lane: p.search_lane,
+      terms: p.search_terms.slice(0, 2).join(', '),
+      funding: p.expected_funding,
+      priority: p.priority,
+    }))
+}

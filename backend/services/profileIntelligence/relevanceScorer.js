@@ -1,0 +1,519 @@
+/**
+ * Relevance Scorer v2 — Weighted dimensional scoring using ProfileIntelligence
+ *
+ * Scores an opportunity against a ProfileIntelligence object using:
+ * 1. Hard eligibility pass/fail (from eligibilityFilter)
+ * 2. Need fit — how well the opportunity matches inferred needs
+ * 3. Entity fit — entity type alignment
+ * 4. Geography fit — location alignment
+ * 5. Compliance fit — required credentials/registrations
+ * 6. Hardship/priority fit — underserved, rural, low-income boosts
+ * 7. Funding practicality — realistic to apply (not too burdensome)
+ * 8. Source quality — confidence in the source
+ * 9. Keyword relevance — story keyword overlap
+ *
+ * Returns a ScoreResult:
+ * {
+ *   total_score: 0–100,
+ *   confidence: 0–100,
+ *   verdict: 'STRONG_MATCH'|'GOOD_MATCH'|'POSSIBLE_MATCH'|'WEAK_MATCH'|'REJECT',
+ *   dimensions: { [dimension]: number },
+ *   why_matched: string[],
+ *   why_may_not_fit: string[],
+ *   matched_needs: string[],
+ *   verification_guidance: string[],
+ * }
+ */
+
+import { filterEligibility } from './eligibilityFilter.js'
+import { NEEDS_TAXONOMY } from './needsTaxonomy.js'
+
+// ---------------------------------------------------------------------------
+// Dimension weights (must sum to 1.0)
+// ---------------------------------------------------------------------------
+const DIMENSION_WEIGHTS = {
+  eligibility: 0.30,   // Hard eligibility is most important
+  need_fit: 0.25,       // How well needs align
+  entity_fit: 0.15,     // Entity type match
+  geography_fit: 0.10,  // Location alignment
+  compliance_fit: 0.05, // Credentials/registration
+  priority_fit: 0.05,   // Hardship/priority boosts
+  practicality: 0.05,   // Ease of application
+  source_quality: 0.05, // Source trustworthiness
+}
+
+// Verify weights sum to ~1.0
+const WEIGHT_SUM = Object.values(DIMENSION_WEIGHTS).reduce((a, b) => a + b, 0)
+if (Math.abs(WEIGHT_SUM - 1.0) > 0.001) {
+  // This would be a developer error, not a runtime error
+  console.warn(`[relevanceScorer] Dimension weights sum to ${WEIGHT_SUM}, not 1.0`)
+}
+
+// ---------------------------------------------------------------------------
+// Source quality scoring
+// ---------------------------------------------------------------------------
+const OFFICIAL_DOMAINS = new Set([
+  'grants.gov', 'sam.gov', 'hud.gov', 'acf.hhs.gov', 'ed.gov', 'sba.gov',
+  'usda.gov', 'fema.gov', 'va.gov', 'ssa.gov', 'benefits.gov', 'usa.gov',
+])
+
+function scoreSourceQuality(opportunity) {
+  const url = opportunity.source_url || opportunity.application_url ||
+    opportunity.apply_url || opportunity.url || ''
+  const urlLower = String(url).toLowerCase()
+
+  if (!url || urlLower.trim() === '') return 0
+
+  // Official .gov = highest trust
+  const match = urlLower.match(/(?:https?:\/\/)?(?:www\.)?([^/?\s]+)/)
+  const domain = match ? match[1] : ''
+  if (OFFICIAL_DOMAINS.has(domain)) return 100
+  if (urlLower.includes('.gov')) return 90
+  if (urlLower.includes('.edu')) return 75
+  if (urlLower.includes('.org')) return 60
+
+  const origin = String(opportunity.record_origin || '').toLowerCase()
+  if (origin === 'grants_gov' || origin === 'verified_real') return 90
+  if (origin === 'curated_verified') return 80
+  if (origin === 'live_crawl') return 40
+
+  return 35
+}
+
+// ---------------------------------------------------------------------------
+// Need fit scoring
+// ---------------------------------------------------------------------------
+function scoreNeedFit(intel, opportunity) {
+  if (!intel.inferredNeeds || intel.inferredNeeds.length === 0) return 50
+
+  const oppText = [
+    String(opportunity.title || ''),
+    String(opportunity.description || ''),
+  ].join(' ').toLowerCase()
+
+  const oppCategories = (() => {
+    try {
+      const cats = Array.isArray(opportunity.categories)
+        ? opportunity.categories
+        : JSON.parse(opportunity.categories || '[]')
+      return cats.map(c => String(c).toLowerCase()).join(' ')
+    } catch { return '' }
+  })()
+
+  const oppKeywords = (() => {
+    try {
+      const kws = Array.isArray(opportunity.keywords)
+        ? opportunity.keywords
+        : JSON.parse(opportunity.keywords || '[]')
+      return kws.map(k => String(k).toLowerCase()).join(' ')
+    } catch { return '' }
+  })()
+
+  const fullText = `${oppText} ${oppCategories} ${oppKeywords}`
+
+  let matchScore = 0
+  let totalWeight = 0
+  const matchedNeeds = []
+
+  for (const need of intel.inferredNeeds) {
+    const def = NEEDS_TAXONOMY[need.code]
+    if (!def) continue
+
+    const needWeight = need.weight
+    totalWeight += needWeight
+
+    // Check if opportunity text matches any synonyms or example terms
+    const synonymMatch = def.synonyms.some(s => fullText.includes(s.toLowerCase()))
+    const labelMatch = fullText.includes(def.label.toLowerCase())
+    const exampleMatch = def.example_search_terms.some(t =>
+      fullText.includes(t.toLowerCase().split(' ')[0]))  // first word of each example
+
+    if (synonymMatch || labelMatch) {
+      matchScore += needWeight * 1.0
+      matchedNeeds.push(need.code)
+    } else if (exampleMatch) {
+      matchScore += needWeight * 0.5
+    }
+  }
+
+  if (totalWeight === 0) return 50
+
+  const ratio = matchScore / totalWeight
+  return Math.round(ratio * 100)
+}
+
+// ---------------------------------------------------------------------------
+// Entity fit scoring
+// ---------------------------------------------------------------------------
+function scoreEntityFit(intel, opportunity) {
+  const oppType = String(opportunity.opportunity_type || '').toLowerCase()
+  const oppDesc = String(opportunity.description || '').toLowerCase()
+  const combined = `${oppType} ${oppDesc}`
+
+  const entityType = intel.entityType
+
+  // Perfect match signals
+  if (entityType === 'church' || entityType === 'faith_based') {
+    if (/church|faith.?based|religious|ministry|congregation/i.test(combined)) return 100
+    if (/nonprofit/i.test(combined)) return 80
+  }
+  if (entityType === 'fire_ems') {
+    if (/fire|ems|emergency service|first responder|rescue/i.test(combined)) return 100
+    if (/public safety|government/i.test(combined)) return 75
+  }
+  if (entityType === 'school' || entityType === 'school_district') {
+    if (/school|k.12|k12|education|classroom/i.test(combined)) return 100
+    if (/nonprofit|youth/i.test(combined)) return 70
+  }
+  if (entityType === 'individual') {
+    if (/individual|person|resident|household|family/i.test(combined)) return 100
+  }
+  if (entityType === 'nonprofit') {
+    if (/nonprofit|501.?c.?3|charitable/i.test(combined)) return 100
+  }
+  if (entityType === 'college' || entityType === 'university') {
+    if (/college|university|higher education/i.test(combined)) return 100
+  }
+  if (entityType === 'tribal') {
+    if (/tribal|tribe|native american|alaska native/i.test(combined)) return 100
+  }
+
+  // Generic match
+  if (/organization|eligible applicants/i.test(combined)) return 60
+
+  return 40  // No match found
+}
+
+// ---------------------------------------------------------------------------
+// Geography fit scoring
+// ---------------------------------------------------------------------------
+function scoreGeographyFit(intel, opportunity) {
+  const isNational = Boolean(opportunity.is_national) ||
+    String(opportunity.geography_scope || '').toLowerCase() === 'national'
+
+  if (isNational) return 100
+
+  const profileState = intel.state
+  if (!profileState) return 60  // Unknown — give benefit of doubt
+
+  const oppState = String(opportunity.state || '').toUpperCase()
+  if (!oppState) return 70  // Unknown state — give benefit of doubt
+
+  if (oppState === profileState || oppState.includes(profileState)) return 100
+
+  // Check states_supported
+  if (opportunity.states_supported) {
+    try {
+      const states = Array.isArray(opportunity.states_supported)
+        ? opportunity.states_supported
+        : JSON.parse(opportunity.states_supported)
+      if (states.map(s => s.toUpperCase()).includes(profileState)) return 100
+    } catch { /* ignore */ }
+  }
+
+  return 0  // State mismatch
+}
+
+// ---------------------------------------------------------------------------
+// Compliance fit scoring
+// ---------------------------------------------------------------------------
+function scoreComplianceFit(intel, opportunity) {
+  let score = 80  // Default: assume compliance unless known issues
+
+  const oppDesc = String(opportunity.description || '').toLowerCase()
+
+  // SAM.gov registration needed but not available
+  if (/sam\.gov|system for award|uei required/i.test(oppDesc)) {
+    if (!intel.eligibilityFlags.has('sam_registered') && !intel.eligibilityFlags.has('has_uei')) {
+      score -= 20
+    }
+  }
+
+  // 501(c)(3) needed
+  if (/501.?c.?3|nonprofit status required/i.test(oppDesc)) {
+    if (!intel.eligibilityFlags.has('is_501c3') && !intel.isNonprofit) {
+      score -= 30
+    }
+  }
+
+  return Math.max(0, score)
+}
+
+// ---------------------------------------------------------------------------
+// Priority/hardship fit scoring
+// ---------------------------------------------------------------------------
+function scorePriorityFit(intel, opportunity) {
+  let score = 50  // Neutral baseline
+
+  const oppDesc = String(opportunity.description || '').toLowerCase()
+  const oppTitle = String(opportunity.title || '').toLowerCase()
+  const combined = `${oppTitle} ${oppDesc}`
+
+  // Rural preference match
+  if (intel.geographicFlags.has('rural') &&
+    /rural|underserved|remote area/i.test(combined)) {
+    score += 25
+  }
+
+  // Low-income preference match
+  if ((intel.hardshipFlags.has('low_income') || intel.hardshipFlags.has('financial_hardship')) &&
+    /low.?income|below poverty|hardship|economically disadvantaged/i.test(combined)) {
+    score += 25
+  }
+
+  // Minority preference match
+  const isMSI = intel.organizationFlags.has('hbcu') ||
+    intel.organizationFlags.has('hsi') ||
+    intel.organizationFlags.has('msi')
+  if (isMSI && /minority.serving|hbcu|hsi|tribal college|msi/i.test(combined)) {
+    score += 20
+  }
+
+  // Veteran match
+  if (intel.isVeteran && /veteran|military/i.test(combined)) {
+    score += 20
+  }
+
+  return Math.min(100, score)
+}
+
+// ---------------------------------------------------------------------------
+// Practicality scoring
+// ---------------------------------------------------------------------------
+function scorePracticality(opportunity) {
+  let score = 70  // Baseline: most grants are practically accessible
+
+  // Match requirement reduces practicality
+  if (opportunity.match_required || opportunity.requires_match) {
+    score -= 20
+  }
+
+  // Reimbursement-only reduces practicality
+  if (opportunity.reimbursement_only) {
+    score -= 15
+  }
+
+  // No deadline (rolling) = more practical
+  if (!opportunity.deadline || opportunity.deadline_type === 'rolling') {
+    score += 10
+  }
+
+  // Having a clear URL increases practicality
+  const url = opportunity.source_url || opportunity.application_url || ''
+  if (url.trim().length > 0) score += 10
+
+  return Math.max(0, Math.min(100, score))
+}
+
+// ---------------------------------------------------------------------------
+// Keyword relevance scoring (story overlap)
+// ---------------------------------------------------------------------------
+function scoreKeywordRelevance(intel, opportunity) {
+  if (!intel.storyKeywords || intel.storyKeywords.length === 0) return 50
+
+  const oppText = [
+    String(opportunity.title || ''),
+    String(opportunity.description || ''),
+  ].join(' ').toLowerCase()
+
+  const profileKeywords = intel.storyKeywords.filter(k => k.length > 4)
+  if (profileKeywords.length === 0) return 50
+
+  const matchCount = profileKeywords.filter(kw => oppText.includes(kw)).length
+  const ratio = matchCount / Math.min(profileKeywords.length, 20)  // cap at 20 keywords
+
+  return Math.round(50 + ratio * 50)
+}
+
+// ---------------------------------------------------------------------------
+// Build explanation lists
+// ---------------------------------------------------------------------------
+function buildExplanation(intel, opportunity, eligResult, dimensions, matchedNeeds) {
+  const why_matched = []
+  const why_may_not_fit = []
+  const verification_guidance = []
+
+  // Positive reasons
+  if (dimensions.need_fit >= 70) {
+    const topNeeds = matchedNeeds.slice(0, 3).map(code => {
+      const def = NEEDS_TAXONOMY[code]
+      return def ? def.label : code
+    })
+    if (topNeeds.length > 0) {
+      why_matched.push(`Addresses inferred needs: ${topNeeds.join(', ')}`)
+    }
+  }
+
+  if (dimensions.geography_fit >= 80) {
+    why_matched.push('Geographic scope includes your location')
+  }
+
+  if (dimensions.entity_fit >= 80) {
+    why_matched.push(`Eligible entity types include ${intel.entityType}`)
+  }
+
+  if (dimensions.source_quality >= 80) {
+    why_matched.push('From a highly trusted official source')
+  }
+
+  if (dimensions.priority_fit >= 70) {
+    why_matched.push('Priority consideration for your profile characteristics')
+  }
+
+  // Negative reasons
+  if (eligResult.soft_warnings.includes('match_required')) {
+    why_may_not_fit.push('Requires matching funds or cost-share')
+  }
+  if (eligResult.soft_warnings.includes('reimbursement_only')) {
+    why_may_not_fit.push('Reimbursement-only — requires paying costs upfront')
+  }
+  if (eligResult.soft_warnings.includes('rural_preference_not_met')) {
+    why_may_not_fit.push('Opportunity prefers rural applicants')
+  }
+  if (eligResult.soft_warnings.includes('may_require_sam_registration')) {
+    why_may_not_fit.push('May require SAM.gov registration (federal grant)')
+  }
+
+  if (dimensions.need_fit < 40) {
+    why_may_not_fit.push('Opportunity focus may not directly match profile needs')
+  }
+
+  // Verification guidance
+  const url = opportunity.source_url || opportunity.application_url || ''
+  if (url) {
+    verification_guidance.push(`Verify eligibility at: ${url}`)
+  }
+  if (eligResult.unmet_requirements.includes('sam_registration')) {
+    verification_guidance.push('Check if SAM.gov registration is required before applying')
+  }
+  if (eligResult.unmet_requirements.includes('501c3_status')) {
+    verification_guidance.push('Confirm 501(c)(3) status is required for this grant')
+  }
+  verification_guidance.push('Read the full eligibility requirements before applying')
+
+  return { why_matched, why_may_not_fit, verification_guidance }
+}
+
+// ---------------------------------------------------------------------------
+// Main export
+// ---------------------------------------------------------------------------
+
+/**
+ * Score an opportunity against a ProfileIntelligence object.
+ *
+ * @param {import('./index.js').ProfileIntelligence} intel
+ * @param {Object} opportunity - Raw opportunity row
+ * @returns {ScoreResult}
+ */
+export function scoreOpportunity(intel, opportunity) {
+  if (!intel || !opportunity) {
+    return {
+      total_score: 0,
+      confidence: 0,
+      verdict: 'REJECT',
+      dimensions: {},
+      why_matched: [],
+      why_may_not_fit: ['Missing profile or opportunity data'],
+      matched_needs: [],
+      verification_guidance: [],
+    }
+  }
+
+  // Run eligibility filter first
+  const eligResult = filterEligibility(intel, opportunity)
+
+  // Hard reject on eligibility failures
+  if (eligResult.verdict === 'ineligible' ||
+      eligResult.hard_failures.includes('deadline_expired') ||
+      eligResult.hard_failures.includes('entity_type_mismatch') ||
+      eligResult.hard_failures.includes('requires_veteran') ||
+      eligResult.hard_failures.includes('requires_student') ||
+      eligResult.hard_failures.includes('geographic_mismatch')) {
+    return {
+      total_score: 0,
+      confidence: 90,
+      verdict: 'REJECT',
+      dimensions: { eligibility: 0 },
+      why_matched: [],
+      why_may_not_fit: eligResult.hard_failures.map(f =>
+        eligResult.reasons.find(r => r.toLowerCase().includes(f.replace(/_/g, ' '))) ?? f),
+      matched_needs: [],
+      verification_guidance: [],
+    }
+  }
+
+  // Calculate individual dimension scores
+  const matchedNeeds = []
+  const needFitScore = (() => {
+    const score = scoreNeedFit(intel, opportunity)
+    // Collect matched needs for explanation
+    if (intel.inferredNeeds && score > 0) {
+      const oppText = [
+        String(opportunity.title || ''),
+        String(opportunity.description || ''),
+      ].join(' ').toLowerCase()
+      for (const need of intel.inferredNeeds) {
+        const def = NEEDS_TAXONOMY[need.code]
+        if (def && def.synonyms.some(s => oppText.includes(s.toLowerCase()))) {
+          matchedNeeds.push(need.code)
+        }
+      }
+    }
+    return score
+  })()
+
+  const eligibilityScore = eligResult.verdict === 'eligible' ? 100
+    : eligResult.verdict === 'probably_eligible' ? 75
+    : 40
+
+  const dimensions = {
+    eligibility: eligibilityScore,
+    need_fit: needFitScore,
+    entity_fit: scoreEntityFit(intel, opportunity),
+    geography_fit: scoreGeographyFit(intel, opportunity),
+    compliance_fit: scoreComplianceFit(intel, opportunity),
+    priority_fit: scorePriorityFit(intel, opportunity),
+    practicality: scorePracticality(opportunity),
+    source_quality: scoreSourceQuality(opportunity),
+  }
+
+  // Weighted total
+  let total_score = 0
+  for (const [dim, weight] of Object.entries(DIMENSION_WEIGHTS)) {
+    total_score += (dimensions[dim] ?? 50) * weight
+  }
+  total_score = Math.round(Math.min(100, Math.max(0, total_score)))
+
+  // Confidence based on how much information we have
+  const hasStory = (intel.storyKeywords ?? []).length > 3
+  const hasNeeds = (intel.inferredNeeds ?? []).length > 0
+  const hasState = Boolean(intel.state)
+  const confidence = Math.round(
+    (hasStory ? 30 : 10) +
+    (hasNeeds ? 30 : 10) +
+    (hasState ? 20 : 10) +
+    (total_score > 60 ? 20 : 10)
+  )
+
+  // Verdict
+  let verdict
+  if (total_score >= 75) verdict = 'STRONG_MATCH'
+  else if (total_score >= 60) verdict = 'GOOD_MATCH'
+  else if (total_score >= 45) verdict = 'POSSIBLE_MATCH'
+  else if (total_score >= 30) verdict = 'WEAK_MATCH'
+  else verdict = 'REJECT'
+
+  const { why_matched, why_may_not_fit, verification_guidance } = buildExplanation(
+    intel, opportunity, eligResult, dimensions, matchedNeeds)
+
+  return {
+    total_score,
+    confidence: Math.min(100, confidence),
+    verdict,
+    dimensions,
+    why_matched,
+    why_may_not_fit,
+    matched_needs: [...new Set([...matchedNeeds, ...eligResult.matched_needs])],
+    verification_guidance,
+  }
+}
