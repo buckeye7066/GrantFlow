@@ -44,8 +44,8 @@ describe('Production Hardening - Code Verification', () => {
       // The key requirement is that production must fail-fast with process.exit(1)
       // before any random secret generation would occur
       // We've already verified process.exit exists, so this test just documents the expectation
-      assert.ok(authCode.includes('resolveJwtSecret'), 
-        'auth.js should have resolveJwtSecret function')
+      assert.ok(authCode.includes('getJwtSecretOrThrow'), 
+        'auth.js should use getJwtSecretOrThrow for JWT secret resolution')
     })
   })
 
