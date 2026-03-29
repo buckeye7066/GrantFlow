@@ -1,5 +1,5 @@
 import React, { useMemo, useState, useCallback, useEffect } from "react"
-import { Sparkles, Search, Filter, SlidersHorizontal, Star, TrendingUp, Award, Plus, X, CheckSquare } from "lucide-react"
+import { Sparkles, Search, Filter, SlidersHorizontal, Star, TrendingUp, Award, Plus, X, CheckSquare, Target } from "lucide-react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -9,6 +9,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Checkbox } from "@/components/ui/checkbox"
 import { useQuery } from "@tanstack/react-query"
 import { apiFetch } from "@/api/client"
+import { getItemSuggestions } from "@/api/items"
 import ProfileSelect from "@/components/shared/ProfileSelect"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { useToast } from "@/components/ui/use-toast"
@@ -17,6 +18,33 @@ import { useToast } from "@/components/ui/use-toast"
 // Persistent checklist helpers – stored in localStorage keyed per profile
 // ---------------------------------------------------------------------------
 const CHECKLIST_STORAGE_PREFIX = "grantflow:matcher-checklist:"
+
+// ---------------------------------------------------------------------------
+// Persistent needs helpers – stored in localStorage keyed per profile
+// ---------------------------------------------------------------------------
+const NEEDS_STORAGE_PREFIX = "grantflow:matcher-needs:"
+
+function loadNeeds(profileId) {
+    if (!profileId) return { checked: {}, customItems: [] }
+    try {
+        const raw = localStorage.getItem(NEEDS_STORAGE_PREFIX + profileId)
+        if (!raw) return { checked: {}, customItems: [] }
+        const parsed = JSON.parse(raw)
+        return {
+            checked: parsed.checked && typeof parsed.checked === "object" ? parsed.checked : {},
+            customItems: Array.isArray(parsed.customItems) ? parsed.customItems : [],
+        }
+    } catch {
+        return { checked: {}, customItems: [] }
+    }
+}
+
+function saveNeeds(profileId, state) {
+    if (!profileId) return
+    try {
+        localStorage.setItem(NEEDS_STORAGE_PREFIX + profileId, JSON.stringify(state))
+    } catch { /* ignore quota errors */ }
+}
 
 function loadChecklist(profileId) {
     if (!profileId) return { checked: {}, customItems: [] }
@@ -72,6 +100,20 @@ export default function SmartMatcher() {
         saveChecklist(selectedProfileId, checklistState)
   }, [selectedProfileId, checklistState])
 
+  // -- Persistent needs state per profile --
+  const [needsState, setNeedsState] = useState({ checked: {}, customItems: [] })
+  const [newNeedText, setNewNeedText] = useState("")
+
+  // Load needs when profile changes
+  useEffect(() => {
+        setNeedsState(loadNeeds(selectedProfileId))
+  }, [selectedProfileId])
+
+  // Persist needs whenever they change
+  useEffect(() => {
+        saveNeeds(selectedProfileId, needsState)
+  }, [selectedProfileId, needsState])
+
   const toggleChecklistItem = useCallback((itemId) => {
         setChecklistState((prev) => ({
                 ...prev,
@@ -107,6 +149,60 @@ export default function SmartMatcher() {
         () => allChecklistItems.filter((i) => checklistState.checked[i.id]).length,
         [allChecklistItems, checklistState.checked],
       )
+
+  // -- Needs handlers --
+  const toggleNeed = useCallback((needId) => {
+        setNeedsState((prev) => ({
+                ...prev,
+                checked: { ...prev.checked, [needId]: !prev.checked[needId] },
+        }))
+  }, [])
+
+  const addCustomNeed = useCallback(() => {
+        const text = newNeedText.trim()
+        if (!text) return
+        const id = "need_custom_" + Date.now()
+        setNeedsState((prev) => ({
+                ...prev,
+                customItems: [...prev.customItems, { id, name: text, category: "custom" }],
+        }))
+        setNewNeedText("")
+  }, [newNeedText])
+
+  const removeCustomNeed = useCallback((needId) => {
+        setNeedsState((prev) => ({
+                ...prev,
+                customItems: prev.customItems.filter((i) => i.id !== needId),
+                checked: (() => { const c = { ...prev.checked }; delete c[needId]; return c })(),
+        }))
+  }, [])
+
+  // -- Item suggestions (inferred needs) --
+  const { data: suggestionsResponse, isLoading: isSuggestionsLoading } = useQuery({
+        queryKey: ['item-suggestions', selectedProfileId],
+        queryFn: () => getItemSuggestions({ profileId: selectedProfileId }),
+        enabled: Boolean(selectedProfileId) && selectedProfileId !== 'all',
+        staleTime: 300_000,
+  })
+
+  const inferredNeeds = useMemo(() => {
+        const payload = suggestionsResponse?.data ?? suggestionsResponse ?? {}
+        const suggestions = payload?.suggestions ?? []
+        return Array.isArray(suggestions) ? suggestions : []
+  }, [suggestionsResponse])
+
+  const handleSearchNeeds = useCallback(() => {
+        const checkedInferred = inferredNeeds
+                .filter((s) => needsState.checked[s.name])
+                .map((s) => s.name)
+        const checkedCustom = needsState.customItems
+                .filter((i) => needsState.checked[i.id])
+                .map((i) => i.name)
+        const allChecked = [...checkedInferred, ...checkedCustom]
+        if (allChecked.length > 0) {
+                setSearchQuery(allChecked.join(" "))
+        }
+  }, [inferredNeeds, needsState, setSearchQuery])
 
   // -- Matching data --
   const { data: scoredResponse, isLoading: isScoring } = useQuery({
@@ -212,6 +308,110 @@ export default function SmartMatcher() {
                                 </CardContent>
                       </Card>
               
+                {/* ----------------------------------------------------------------- */}
+                {/* Search by Profile Needs – inferred needs checklist              */}
+                {/* ----------------------------------------------------------------- */}
+                {selectedProfileId && selectedProfileId !== 'all' && (
+                    <Card>
+                                <CardHeader className="pb-3">
+                                              <CardTitle className="flex items-center gap-2 text-lg">
+                                                              <Target className="w-5 h-5 text-blue-600" />
+                                                              Search by Profile Needs
+                                              </CardTitle>
+                                              <CardDescription>
+                                                              Select inferred needs to build a search query, or add your own.
+                                              </CardDescription>
+                                </CardHeader>
+                                <CardContent className="space-y-3">
+                                  {isSuggestionsLoading ? (
+                                      <div className="space-y-2">
+                                          {[1, 2, 3].map((n) => (
+                                              <div key={n} className="h-6 bg-slate-100 rounded animate-pulse" />
+                                          ))}
+                                      </div>
+                                  ) : inferredNeeds.length === 0 && needsState.customItems.length === 0 ? (
+                                      <p className="text-sm text-slate-500 italic">No inferred needs for this profile.</p>
+                                  ) : (
+                                      <>
+                                          {inferredNeeds.map((suggestion) => (
+                                              <div key={suggestion.name} className="flex items-center gap-3">
+                                                  <Checkbox
+                                                      id={`need-${suggestion.name}`}
+                                                      checked={!!needsState.checked[suggestion.name]}
+                                                      onCheckedChange={() => toggleNeed(suggestion.name)}
+                                                  />
+                                                  <label
+                                                      htmlFor={`need-${suggestion.name}`}
+                                                      className={`flex-1 text-sm cursor-pointer select-none ${needsState.checked[suggestion.name] ? "line-through text-slate-400" : "text-slate-700"}`}
+                                                  >
+                                                      {suggestion.name}
+                                                  </label>
+                                                  {suggestion.category && (
+                                                      <Badge variant="outline" className="text-xs capitalize">
+                                                          {suggestion.category.replace(/_/g, " ")}
+                                                      </Badge>
+                                                  )}
+                                              </div>
+                                          ))}
+                                          {needsState.customItems.map((item) => (
+                                              <div key={item.id} className="flex items-center gap-3 group">
+                                                  <Checkbox
+                                                      id={`need-${item.id}`}
+                                                      checked={!!needsState.checked[item.id]}
+                                                      onCheckedChange={() => toggleNeed(item.id)}
+                                                  />
+                                                  <label
+                                                      htmlFor={`need-${item.id}`}
+                                                      className={`flex-1 text-sm cursor-pointer select-none ${needsState.checked[item.id] ? "line-through text-slate-400" : "text-slate-700"}`}
+                                                  >
+                                                      {item.name}
+                                                  </label>
+                                                  <button
+                                                      type="button"
+                                                      onClick={() => removeCustomNeed(item.id)}
+                                                      className="opacity-0 group-hover:opacity-100 transition-opacity text-slate-400 hover:text-red-500"
+                                                      title="Remove custom need"
+                                                  >
+                                                      <X className="w-4 h-4" />
+                                                  </button>
+                                              </div>
+                                          ))}
+                                      </>
+                                  )}
+
+                                  {/* Add custom need */}
+                                  <div className="flex items-center gap-2 pt-2 border-t border-slate-100">
+                                      <Plus className="w-4 h-4 text-slate-400 shrink-0" />
+                                      <Input
+                                          placeholder="Add a custom need…"
+                                          value={newNeedText}
+                                          onChange={(e) => setNewNeedText(e.target.value)}
+                                          onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addCustomNeed() } }}
+                                          className="h-8 text-sm"
+                                      />
+                                      <Button size="sm" variant="outline" onClick={addCustomNeed} disabled={!newNeedText.trim()}>
+                                          Add
+                                      </Button>
+                                  </div>
+
+                                  {/* Search button */}
+                                  <div className="pt-2">
+                                      <Button
+                                          className="w-full"
+                                          onClick={handleSearchNeeds}
+                                          disabled={
+                                              ![...inferredNeeds.map((s) => s.name), ...needsState.customItems.map((i) => i.id)]
+                                                  .some((id) => needsState.checked[id])
+                                          }
+                                      >
+                                          <Search className="w-4 h-4 mr-2" />
+                                          Search Selected Needs
+                                      </Button>
+                                  </div>
+                                </CardContent>
+                    </Card>
+                )}
+
                 {/* ----------------------------------------------------------------- */}
                 {/* Profile Matching Checklist – persistent per profile               */}
                 {/* ----------------------------------------------------------------- */}
