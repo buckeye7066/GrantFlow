@@ -68,7 +68,7 @@ async function saveApplicationToDb(db, data) {
       data.message || null
     )
     
-    console.log('[serviceApplication] Saved to database:', id)
+    console.info('[serviceApplication] Saved to database:', id)
     return id
   } catch (error) {
     // Table might not exist yet - log but don't fail

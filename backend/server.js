@@ -59,6 +59,7 @@ import ensureUserPreferencesTable from './utils/ensureUserPreferencesTable.js';
 import { linkAllProfilesToAdmin } from './utils/adminProfileLinks.js';
 import { ensureProfileOrgLinks } from './utils/ensureProfileOrgLinks.js'
 import { runStartupOperations } from './services/anyaStartupOperations.js';
+import { startHealthService } from './services/anyaHealthService.js';
 import ensureMinimumNationalOpportunities from './utils/ensureMinimumNationalOpportunities.js';
 import seedAssistanceDirectories from './utils/seedAssistanceDirectories.js';
 import seedFaithBasedHousing from './utils/seedFaithBasedHousing.js';
@@ -1061,38 +1062,13 @@ try {
   console.warn('[startup] Failed to seed faith-based housing:', error?.message || error)
 }
 
-function resolveJwtSecret() {
-  const raw = String(process.env.AUTH_JWT_SECRET || process.env.JWT_SECRET || '').trim();
-  const isProd = process.env.NODE_ENV === 'production';
-
-  if (!raw) {
-    if (isProd) {
-      // FAIL FAST in production - do not generate ephemeral secrets
-      console.error(
-        'FATAL ERROR: Missing AUTH_JWT_SECRET (or JWT_SECRET) in production.\n' +
-          'Set a strong random secret (recommended: 32+ bytes) and redeploy.\n' +
-          '  AUTH_JWT_SECRET="..."\n' +
-          'The application cannot start without a stable JWT secret.',
-      );
-      process.exit(1);
-    }
-    console.warn('[startup] AUTH_JWT_SECRET not set; using insecure development default (DO NOT use in production).');
-    return 'grantflow-dev-secret';
-  }
-
-  if (isProd && raw === 'grantflow-dev-secret') {
-    // FAIL FAST in production - do not use insecure defaults
-    console.error(
-      'FATAL ERROR: AUTH_JWT_SECRET is set to the insecure development default in production.\n' +
-        'Generate a strong random secret and redeploy.\n' +
-        'Example: openssl rand -base64 48',
-    );
-    process.exit(1);
-  }
-  return String(raw || '').trim()
+let EFFECTIVE_JWT_SECRET
+try {
+  EFFECTIVE_JWT_SECRET = getJwtSecretOrThrow(process.env)
+} catch (err) {
+  console.error(`FATAL ERROR: ${err.message}`)
+  process.exit(1)
 }
-
-const EFFECTIVE_JWT_SECRET = resolveJwtSecret()
 const isProd = process.env.NODE_ENV === 'production'
 
 app.use(async (req, res, next) => {
@@ -1737,9 +1713,9 @@ async function scheduleCrawlerSmokeJobs({ db, uploadsDir }) {
       )
 
     // Fire-and-forget dispatch (non-blocking).
-    dispatchCrawlerJob({ db, jobId: comprehensiveJobId, uploadDir: uploadsDir, getOpenAI: null }).catch(() => {})
-    dispatchCrawlerJob({ db, jobId: scholarshipJobId, uploadDir: uploadsDir, getOpenAI: null }).catch(() => {})
-    dispatchCrawlerJob({ db, jobId: documentIngestJobId, uploadDir: uploadsDir, getOpenAI: null }).catch(() => {})
+    dispatchCrawlerJob({ db, jobId: comprehensiveJobId, uploadDir: uploadsDir, getOpenAI: null }).catch(e => console.warn('[background]', e?.message || e))
+    dispatchCrawlerJob({ db, jobId: scholarshipJobId, uploadDir: uploadsDir, getOpenAI: null }).catch(e => console.warn('[background]', e?.message || e))
+    dispatchCrawlerJob({ db, jobId: documentIngestJobId, uploadDir: uploadsDir, getOpenAI: null }).catch(e => console.warn('[background]', e?.message || e))
   } catch (error) {
     console.warn('[smoke] Failed to schedule crawler smoke jobs:', error?.message || String(error))
   }
@@ -2243,7 +2219,7 @@ if (process.env.NODE_ENV !== 'test') {
       for (let i = 0; i < queued.length; i++) {
         if (i > 0) await new Promise((r) => setTimeout(r, STAGGER_DELAY_MS))
         try {
-          dispatchCrawlerJob({ db: dbRef, jobId: queued[i].id, uploadDir: uploadsDirRef, getOpenAI: null }).catch(() => {})
+          dispatchCrawlerJob({ db: dbRef, jobId: queued[i].id, uploadDir: uploadsDirRef, getOpenAI: null }).catch(e => console.warn('[background]', e?.message || e))
         } catch { /* ignore individual dispatch errors */ }
       }
     }
@@ -2283,7 +2259,7 @@ if (process.env.NODE_ENV !== 'test') {
 
           for (const job of queued) {
             try {
-              dispatchCrawlerJob({ db, jobId: job.id, uploadDir: uploadsDir, getOpenAI: null }).catch(() => {})
+              dispatchCrawlerJob({ db, jobId: job.id, uploadDir: uploadsDir, getOpenAI: null }).catch(e => console.warn('[background]', e?.message || e))
             } catch { /* ignore individual dispatch errors */ }
           }
           if (queued.length > 0) {
@@ -2348,7 +2324,7 @@ if (process.env.NODE_ENV !== 'test') {
   const startupSmokeEnabled = parseBoolEnv(process.env.STARTUP_SMOKE_CRAWL_ENABLED) === true
   if (startupSmokeEnabled) {
     setTimeout(() => {
-      scheduleCrawlerSmokeJobs({ db, uploadsDir }).catch(() => {})
+      scheduleCrawlerSmokeJobs({ db, uploadsDir }).catch(e => console.warn('[background]', e?.message || e))
     }, 10_000)
     console.info('[startup] Startup smoke crawlers enabled (STARTUP_SMOKE_CRAWL_ENABLED=true)')
   } else {
@@ -2412,7 +2388,7 @@ if (process.env.NODE_ENV !== 'test') {
               console.error('[Anya] Scheduled check failed:', err?.message || err);
             });
           })
-          .catch(() => {});
+          .catch(e => console.warn('[background]', e?.message || e));
       }, SCHEDULE_CHECK_MS);
       console.log('[Anya] Scheduled runner enabled (checking every 30 min)');
     }
@@ -2425,6 +2401,9 @@ if (process.env.NODE_ENV !== 'test') {
     }, 5000);
     console.log('[Anya] Autonomous operations disabled — running basic startup crawlers only');
   }
+
+  // Start the background health service (runs every 30 min, configurable via ANYA_HEALTH_INTERVAL_MS)
+  startHealthService(db);
 
   // Optional: continuous national programs crawler (Track A/B programs)
   if (process.env.NATIONAL_PROGRAMS_CRAWLER_ENABLED === 'true') {
@@ -2457,6 +2436,13 @@ if (process.env.NODE_ENV !== 'test') {
     console.log(
       '[NationalPrograms] Continuous crawler disabled (set NATIONAL_PROGRAMS_CRAWLER_ENABLED=true to enable)',
     )
+  }
+
+  // Start Anya background health service
+  try {
+    startHealthService(db)
+  } catch (err) {
+    console.error('[AnyaHealth] Failed to start health service:', err?.message || err)
   }
   });
 } else {

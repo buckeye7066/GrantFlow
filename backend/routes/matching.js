@@ -183,7 +183,20 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
               }
       }
 
-      const minScore = Number.parseInt(req.query.min_score ?? '50', 10)
+      const DEFAULT_MIN_SCORE = 50
+      // Determine if the caller provided an explicit min_score threshold.
+      // We accept only numeric strings; non-numeric values (e.g. "abc") are treated
+      // as absent so they fall back to the system default without strict enforcement.
+      const rawMinScore = req.query.min_score
+      const parsedMinScore = rawMinScore !== undefined && rawMinScore !== ''
+        ? Number.parseInt(rawMinScore, 10)
+        : Number.NaN
+      const requestedMinScore = Number.isFinite(parsedMinScore) ? parsedMinScore : null
+      const minScore = requestedMinScore !== null ? requestedMinScore : DEFAULT_MIN_SCORE
+      // When the caller explicitly set a valid numeric min_score, honor it strictly.
+      // The zero-results fallback (which lowers the threshold automatically) is only
+      // allowed when no explicit threshold was provided — this enforces the match slider.
+      const isExplicitThreshold = requestedMinScore !== null
                    const limit = Math.min(Math.max(Number.parseInt(req.query.limit ?? '2000', 10) || 2000, 1), 5000)
                    const q = typeof req.query.q === 'string' ? req.query.q.trim().toLowerCase() : ''
 
@@ -211,6 +224,10 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
 
       conditions.push(trustedSourceClause())
 
+      // Profile isolation: only global catalog entries (profile_id IS NULL) or this profile's own crawl results.
+      conditions.push('(profile_id IS NULL OR profile_id = ?)')
+      params.push(profileId)
+
       // Geographic pre-filter: only load opps in the profile's state, national, or unspecified.
       const profileState = profileContext?.signals?.location?.state || profileContext?.profile?.state
       if (profileState) {
@@ -233,6 +250,11 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
               const pattern = `%${q}%`
               params.push(pattern, pattern, pattern, pattern)
       }
+
+      // Profile isolation: each profile sees global catalog entries plus its own crawl results.
+      // This prevents cross-profile bleed where Profile A's crawl results appear in Profile B's matches.
+      conditions.push('(profile_id IS NULL OR profile_id = ?)')
+      params.push(profileId)
 
       const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''
 
@@ -300,22 +322,24 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
         ? allScored.filter((opp) => (opp.match_score ?? 0) >= minScore)
         : allScored
 
-      // Zero-results fallback: progressively lower threshold so users always see results.
+      // Zero-results fallback: only applies when caller did NOT set an explicit threshold.
+      // When the user sets a threshold (e.g. 80% via the slider), we MUST NOT return
+      // results below that threshold — honoring the slider is a product requirement.
       let effectiveMinScore = minScore
-      if (scored.length === 0 && allScored.length > 0) {
+      if (scored.length === 0 && allScored.length > 0 && !isExplicitThreshold) {
         const fallbackThresholds = [30, 15, 0]
         for (const threshold of fallbackThresholds) {
           scored = allScored.filter((opp) => (opp.match_score ?? 0) >= threshold)
           if (scored.length > 0) {
             effectiveMinScore = threshold
-            console.log(`[matching] Zero results at min_score=${minScore}; relaxed to ${threshold} (${scored.length} results)`)
+            console.info(`[matching] Zero results at min_score=${minScore}; relaxed to ${threshold} (${scored.length} results)`)
             break
           }
         }
         if (scored.length === 0) {
           scored = allScored.slice(0, 20)
           effectiveMinScore = 0
-          console.log(`[matching] All thresholds exhausted; returning top ${scored.length} of ${allScored.length}`)
+          console.info(`[matching] All thresholds exhausted; returning top ${scored.length} of ${allScored.length}`)
         }
       }
 

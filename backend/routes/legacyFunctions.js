@@ -188,7 +188,7 @@ router.post('/crawlGrantsGov', async (req, res) => {
         durationMs: Date.now() - startedAt,
         errorMessage: error?.message || String(error),
         metadata: { completed_at: nowIso() },
-      }).catch(() => {})
+      }).catch(e => console.warn('[background]', e?.message || e))
     }
   }, 0)
 
@@ -318,7 +318,7 @@ router.post('/crawlBenefitsGov', async (req, res) => {
         durationMs: Date.now() - startedAt,
         errorMessage: error?.message || String(error),
         metadata: { completed_at: nowIso() },
-      }).catch(() => {})
+      }).catch(e => console.warn('[background]', e?.message || e))
     }
   }, 0)
 

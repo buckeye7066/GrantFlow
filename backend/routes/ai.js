@@ -123,17 +123,26 @@ async function invokeTextWithFallback({ model, system, prompt, temperature, maxT
 // Comprehensive match endpoint for discovery
 router.post('/comprehensive-match', async (req, res) => {
   try {
-    const { profile } = req.body
+    const { profile, profile_id } = req.body
     
     const isPostgres = req.db?.dialect === 'postgres'
     const activeVal = isPostgres ? 'TRUE' : '1'
+
+    // Profile isolation: only global catalog + this profile's own crawl results
+    const profileIdForIsolation = profile_id || profile?.id || null
+    const isolationClause = profileIdForIsolation
+      ? 'AND (profile_id IS NULL OR profile_id = ?)'
+      : 'AND profile_id IS NULL'
+    const isolationParams = profileIdForIsolation ? [profileIdForIsolation] : []
+
     const opportunities = await req.db.prepare(`
       SELECT * FROM funding_opportunities 
       WHERE is_active = ${activeVal}
       AND ${trustedOriginClause()} AND ${trustedSourceClause()}
+      ${isolationClause}
       ORDER BY created_at DESC 
       LIMIT 100
-    `).all()
+    `).all(...isolationParams)
     
     // Calculate match scores using deterministic algorithm
     const scoredOpps = opportunities.map(opp => {
@@ -217,13 +226,21 @@ router.post('/match', async (req, res) => {
     
     const isPostgresMatch = req.db?.dialect === 'postgres'
     const activeMatch = isPostgresMatch ? 'TRUE' : '1'
+
+    // Profile isolation: only global catalog + this profile's own crawl results
+    const profileIdForIsolation = profile_id || profile?.id || null
+    const isolationClause = profileIdForIsolation
+      ? 'AND (profile_id IS NULL OR profile_id = ?)'
+      : 'AND profile_id IS NULL'
+
     let query = `
       SELECT * FROM funding_opportunities 
       WHERE is_active = ${activeMatch}
       AND ${trustedOriginClause()} AND ${trustedSourceClause()}
       AND (is_national = ${activeMatch} OR state = ? OR state IS NULL)
+      ${isolationClause}
     `;
-    const params = [profile.state];
+    const params = profileIdForIsolation ? [profile.state, profileIdForIsolation] : [profile.state];
     
     // Filter by deadline (not expired)
     query += ` AND (deadline >= CURRENT_DATE OR deadline IS NULL OR deadline_type = 'rolling')`;
@@ -362,6 +379,14 @@ router.post('/match/ai', enforceTierCapability(TIER_CAPABILITIES.DOCUMENT_AI), a
     
     // Get opportunities (either specific ones or top matches)
     let opportunities;
+
+    // Profile isolation: only global catalog + this profile's own crawl results
+    const profileIdForIsolation = profile_id || profile?.id || null
+    const isolationClause = profileIdForIsolation
+      ? 'AND (profile_id IS NULL OR profile_id = ?)'
+      : 'AND profile_id IS NULL'
+    const isolationParams = profileIdForIsolation ? [profileIdForIsolation] : []
+
     if (opportunity_ids && opportunity_ids.length > 0) {
       const placeholders = opportunity_ids.map(() => '?').join(',');
       const isPgIds = req.db?.dialect === 'postgres'
@@ -371,7 +396,8 @@ router.post('/match/ai', enforceTierCapability(TIER_CAPABILITIES.DOCUMENT_AI), a
         WHERE id IN (${placeholders})
           AND is_active = ${actIds}
           AND ${trustedOriginClause()} AND ${trustedSourceClause()}
-      `).all(...opportunity_ids);
+          ${isolationClause}
+      `).all(...opportunity_ids, ...isolationParams);
     } else {
       const isPg = req.db?.dialect === 'postgres'
       const actVal = isPg ? 'TRUE' : '1'
@@ -381,8 +407,9 @@ router.post('/match/ai', enforceTierCapability(TIER_CAPABILITIES.DOCUMENT_AI), a
         AND ${trustedOriginClause()} AND ${trustedSourceClause()}
         AND (is_national = ${actVal} OR state = ? OR state IS NULL)
         AND (deadline >= CURRENT_DATE OR deadline IS NULL OR deadline_type = 'rolling')
+        ${isolationClause}
         LIMIT ?
-      `).all(profile.state, limit * 2);
+      `).all(profile.state, ...isolationParams, limit * 2);
     }
     
     if (opportunities.length === 0) {
@@ -1523,7 +1550,7 @@ router.post('/school-lookup', async (req, res) => {
     }
 
     const trimmedName = school_name.trim();
-    console.log(`[school-lookup] Looking up data for: ${trimmedName}`);
+    console.info(`[school-lookup] Looking up data for: ${trimmedName}`);
 
     const anthropic = await createAnthropicClient();
     if (!anthropic) {
@@ -1591,7 +1618,7 @@ Return ONLY the JSON object, no backticks, no explanation.`
       return res.status(502).json({ error: 'Failed to parse AI response', raw: textBlocks.slice(0, 500) });
     }
 
-    console.log(`[school-lookup] Success for ${trimmedName}: ${Object.keys(parsed).length} fields`);
+    console.info(`[school-lookup] Success for ${trimmedName}: ${Object.keys(parsed).length} fields`);
     return res.json({ success: true, school_name: trimmedName, data: parsed, provider: 'anthropic-web-search' });
   } catch (error) {
     console.error('[school-lookup] Error:', error);

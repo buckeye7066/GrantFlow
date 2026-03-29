@@ -194,7 +194,7 @@ router.post('/run', ensureAuth, async (req, res) => {
     const db = req.db
     const startTime = Date.now()
 
-    console.log(`[RealCrawlers] Running ${crawler_type} for profile ${profile_id}`)
+    console.info(`[RealCrawlers] Running ${crawler_type} for profile ${profile_id}`)
 
     const strategy = getStrategy(crawler_type)
 
@@ -246,7 +246,7 @@ router.post('/run', ensureAuth, async (req, res) => {
         if (typeof opp.match_score !== 'number' || opp.match_score < min_match_score) return false
         const relevance = applyRelevanceFilter(opp, profileData)
         if (!relevance.pass) {
-          console.log(`[RealCrawlers] Filtered out "${opp.title}" — ${relevance.reason}`)
+          console.info(`[RealCrawlers] Filtered out "${opp.title}" — ${relevance.reason}`)
           return false
         }
         return true
@@ -271,7 +271,7 @@ router.post('/run', ensureAuth, async (req, res) => {
 
     const duration = Date.now() - startTime
 
-    console.log(
+    console.info(
       `[RealCrawlers] ${crawler_type}: ${result.results.length} curated + ${nearbyOpps.length} nearby → ${filtered.length} returned (min_score=${min_match_score}) in ${duration}ms`,
     )
 
@@ -577,7 +577,7 @@ router.post('/specific-need', ensureAuth, async (req, res) => {
         webProfile = { signals: { location: {}, military: new Set(), assistance: new Set(), health: new Set() } }
       }
       const webResults = await searchWebForItem(need_text, webProfile)
-      console.log(`[specific-need] Web search for "${need_text}" found ${webResults.length} results`)
+      console.info(`[specific-need] Web search for "${need_text}" found ${webResults.length} results`)
 
       for (const wr of webResults) {
         const urlKey = (wr.url || '').toLowerCase().replace(/\/$/, '')

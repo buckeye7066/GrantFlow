@@ -49,7 +49,7 @@ function App() {
   }, [hydrateFromStorage, setAuthenticatedUser, clearState])
 
   // Load persisted UI preferences once the user is authenticated so personalization
-  // (accent color, font size, etc.) applies across the appâ€”not only on the Settings page.
+  // (accent color, font size, etc.) applies across the app—not only on the Settings page.
   useEffect(() => {
     if (!isAuthenticated) return
     if (isPreferencesInitialized) return
@@ -59,7 +59,7 @@ function App() {
   if (!bootstrapped) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-slate-50 text-sm text-slate-500">
-        Loading your workspaceâ€¦
+        Loading your workspace…
       </div>
     )
   }

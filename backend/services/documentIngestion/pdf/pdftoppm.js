@@ -85,13 +85,13 @@ export async function pdfToPngPages({
     return { dir, files }
   } catch (error) {
     // Cleanup on failure.
-    await fsp.rm(dir, { recursive: true, force: true }).catch(() => {})
+    await fsp.rm(dir, { recursive: true, force: true }).catch(() => { /* temp cleanup */ })
     throw error
   }
 }
 
 export async function cleanupPdfPages(tmpDir) {
   if (!tmpDir) return
-  await fsp.rm(tmpDir, { recursive: true, force: true }).catch(() => {})
+  await fsp.rm(tmpDir, { recursive: true, force: true }).catch(() => { /* temp cleanup */ })
 }
 

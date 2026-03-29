@@ -97,6 +97,16 @@ router.post('/comprehensiveMatch', async (req, res) => {
       ? '(is_loan IS NULL OR is_loan = FALSE)'
       : '(is_loan = 0 OR is_loan IS NULL)',
   );
+
+    // Profile isolation: only global catalog entries (profile_id IS NULL) or this profile's own crawl results.
+    const matchProfileId = typeof profile_json === 'string' ? profile_json : (profile?.id ?? null)
+    if (matchProfileId) {
+      conditions.push('(profile_id IS NULL OR profile_id = ?)')
+      params.push(matchProfileId)
+    } else {
+      // Admin-provided raw JSON without an ID: restrict to global catalog only to prevent bleed
+      conditions.push('profile_id IS NULL')
+    }
     
     // State filtering
     if (profileStates.length > 0) {
@@ -115,6 +125,14 @@ router.post('/comprehensiveMatch', async (req, res) => {
         conditions.push(`(deadline IS NULL OR deadline >= date('now', '-' || ? || ' days'))`);
         params.push(freshness_days);
       }
+    }
+
+    // Profile isolation: each profile sees global catalog entries plus its own crawl results.
+    // This prevents cross-profile bleed where Profile A's crawl results appear in Profile B's matches.
+    // When profile_json is a string it is the profile_id; skip isolation for admin-supplied raw objects.
+    if (typeof profile_json === 'string') {
+      conditions.push('(profile_id IS NULL OR profile_id = ?)');
+      params.push(profile_json);
     }
     
     // Build the query: pull state + national + NULL state for relatable funding (no RANDOM).
@@ -144,14 +162,14 @@ router.post('/comprehensiveMatch', async (req, res) => {
       ...(profileStates.length > 0 ? profileStates : []),
     );
     
-    console.log(`[comprehensiveMatch] Query found ${opportunities.length} opportunities`);
+    console.info(`[comprehensiveMatch] Query found ${opportunities.length} opportunities`);
 
     const healthSet = profileContext?.signals?.health
     const healthFacets = profileContext?.facets?.health ?? {}
     const kws = profileContext?.signals?.keywordSet ?? new Set()
 
     if (kws.size > 0 || (healthSet instanceof Set && healthSet.size > 0)) {
-      console.log(`[comprehensiveMatch] Profile signals:`, JSON.stringify({
+      console.info(`[comprehensiveMatch] Profile signals:`, JSON.stringify({
         keywords: [...kws].slice(0, 15),
         health: healthSet instanceof Set ? [...healthSet] : [],
       }));
@@ -168,7 +186,7 @@ router.post('/comprehensiveMatch', async (req, res) => {
     };
     const filteredOpportunities = opportunities.filter(opp => !isJunkOpportunity(opp, filterHints));
     const hasBizIntent = kws.has('small business') || kws.has('startup') || kws.has('entrepreneur') || kws.has('sba');
-    console.log(`[comprehensiveMatch] Filtered ${opportunities.length - filteredOpportunities.length} irrelevant opportunities, ${filteredOpportunities.length} remaining. Business intent: ${hasBizIntent}`);
+    console.info(`[comprehensiveMatch] Filtered ${opportunities.length - filteredOpportunities.length} irrelevant opportunities, ${filteredOpportunities.length} remaining. Business intent: ${hasBizIntent}`);
 
     const scoredOpportunities = filteredOpportunities.map(opp => {
       const computed = scoreOpportunity(profileContext, opp);
@@ -208,14 +226,14 @@ router.post('/comprehensiveMatch', async (req, res) => {
       acc[bucket] = (acc[bucket] || 0) + 1;
       return acc;
     }, {});
-    console.log(`[comprehensiveMatch] Score distribution:`, scoreSummary);
+    console.info(`[comprehensiveMatch] Score distribution:`, scoreSummary);
     
     if (scoredOpportunities.length > 0) {
       const topScores = scoredOpportunities
         .sort((a, b) => b.fit_score - a.fit_score)
         .slice(0, 5)
         .map(o => ({ title: o.program_name?.substring(0, 30), score: o.fit_score, matched: o.matched_fields }));
-      console.log(`[comprehensiveMatch] Top 5 scores:`, JSON.stringify(topScores));
+      console.info(`[comprehensiveMatch] Top 5 scores:`, JSON.stringify(topScores));
     }
     
     let matchThreshold = 50;
@@ -231,14 +249,14 @@ router.post('/comprehensiveMatch', async (req, res) => {
           .sort((a, b) => b.fit_score - a.fit_score);
         if (highScoring.length > 0) {
           matchThreshold = fallback;
-          console.log(`[comprehensiveMatch] Zero results at 50; relaxed to ${fallback} (${highScoring.length} results)`);
+          console.info(`[comprehensiveMatch] Zero results at 50; relaxed to ${fallback} (${highScoring.length} results)`);
           break;
         }
       }
       if (highScoring.length === 0) {
         highScoring = scoredOpportunities.sort((a, b) => b.fit_score - a.fit_score).slice(0, 20);
         matchThreshold = 0;
-        console.log(`[comprehensiveMatch] All thresholds exhausted; returning top ${highScoring.length}`);
+        console.info(`[comprehensiveMatch] All thresholds exhausted; returning top ${highScoring.length}`);
       }
     }
     
@@ -296,10 +314,17 @@ router.post('/searchOpportunities', async (req, res) => {
         .prepare('SELECT * FROM profiles WHERE id = ?')
         .get(profile_id);
       
+      // Profile isolation: only global catalog entries or this profile's own crawl results.
+      conditions.push('(profile_id IS NULL OR profile_id = ?)')
+      params.push(profile_id)
+
       if (profile && profile.state) {
         conditions.push(`(state = ? OR state IS NULL OR state = 'nationwide')`);
         params.push(profile.state);
       }
+    } else {
+      // No profile specified: restrict to global catalog only
+      conditions.push('profile_id IS NULL')
     }
     
     // Keyword search

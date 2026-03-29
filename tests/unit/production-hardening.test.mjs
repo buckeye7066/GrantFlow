@@ -44,8 +44,8 @@ describe('Production Hardening - Code Verification', () => {
       // The key requirement is that production must fail-fast with process.exit(1)
       // before any random secret generation would occur
       // We've already verified process.exit exists, so this test just documents the expectation
-      assert.ok(authCode.includes('resolveJwtSecret'), 
-        'auth.js should have resolveJwtSecret function')
+      assert.ok(authCode.includes('getJwtSecretOrThrow'), 
+        'auth.js should use getJwtSecretOrThrow for JWT secret resolution')
     })
   })
 
@@ -132,9 +132,9 @@ describe('Production Hardening - Code Verification', () => {
     })
 
     it('should have dead letter queue migration', () => {
-      const migrationPath = join(__dirname, '..', '..', 'backend', 'db', 'migrations', '006_add_dead_letter_queue.sql')
+      const migrationPath = join(__dirname, '..', '..', 'backend', 'db', 'migrations', '043_add_dead_letter_queue.sql')
       assert.ok(fs.existsSync(migrationPath), 
-        '006_add_dead_letter_queue.sql migration should exist')
+        '043_add_dead_letter_queue.sql migration should exist')
     })
 
     it('should have deadLetterQueue service', () => {
