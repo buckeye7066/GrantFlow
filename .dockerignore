@@ -4,6 +4,7 @@ node_modules
 docs
 tests
 scripts
+!scripts/ensure-build-natives.mjs
 *.md
 .env
 .env.*
