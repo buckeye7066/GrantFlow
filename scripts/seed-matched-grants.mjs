@@ -29,6 +29,12 @@ if (_nodeEnv === 'production' || _disableSeeding === 'true' || _disableSeeding =
   process.exit(1)
 }
 
+if (/^postgres(ql)?:\/\//i.test(process.env.DATABASE_URL || '')) {
+  console.error('ERROR: This script only supports SQLite databases. DATABASE_URL points to PostgreSQL.')
+  console.error('Use the application API or a Postgres client instead.')
+  process.exit(1)
+}
+
 const DB_PATH = join(__dirname, '../seed/grantflow.db')
 
 // Local implementation of profile signal building and matching

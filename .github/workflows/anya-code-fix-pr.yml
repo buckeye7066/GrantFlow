@@ -23,7 +23,7 @@ jobs:
           PATCH_CONTENT: ${{ inputs.patch_content }}
         run: |
           set -euo pipefail
-          printf '%s\n' "$PATCH_CONTENT" > /tmp/patch.diff
+          printf '%s' "$PATCH_CONTENT" > /tmp/patch.diff
           git apply /tmp/patch.diff
 
       - name: Show status

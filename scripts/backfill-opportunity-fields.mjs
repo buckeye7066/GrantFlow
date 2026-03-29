@@ -49,6 +49,13 @@ function defaultDbPath() {
 
 function main() {
   const { dryRun, limit, dbPath, table, fillCounty } = parseArgs(process.argv)
+
+  if (/^postgres(ql)?:\/\//i.test(process.env.DATABASE_URL || '')) {
+    console.error('ERROR: This script only supports SQLite databases. DATABASE_URL points to PostgreSQL.')
+    console.error('Use the application API or a Postgres client instead.')
+    process.exit(1)
+  }
+
   const target = path.resolve(dbPath || defaultDbPath())
 
   // Lightweight logging header.

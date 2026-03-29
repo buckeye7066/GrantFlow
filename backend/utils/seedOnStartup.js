@@ -496,8 +496,11 @@ export function seedOnStartup(db) {
   
   console.log('[seedOnStartup] Database seeding complete');
 
-  // Re-evaluate stale pipeline entries: fingerprint or matcher_version changed
-  reEvaluateStalePipelineEntries(db);
+  // Re-evaluate stale pipeline entries: fingerprint or matcher_version changed.
+  // Fire-and-forget: startup should not block on potentially long re-evaluation.
+  reEvaluateStalePipelineEntries(db).catch(err => {
+    console.error('[seedOnStartup] reEvaluateStalePipelineEntries failed:', err)
+  })
 }
 
 /**
@@ -511,7 +514,7 @@ export function seedOnStartup(db) {
  * This runs on every non-production startup to keep the pipeline consistent
  * after profile changes, opportunity updates, or engine upgrades.
  */
-export function reEvaluateStalePipelineEntries(db) {
+export async function reEvaluateStalePipelineEntries(db) {
   if (isSeedingBlocked()) {
     console.info('[seedOnStartup] reEvaluateStalePipelineEntries: blocked (production or DISABLE_SEEDING)')
     return { reEvaluated: 0, removed: 0 }
@@ -520,8 +523,19 @@ export function reEvaluateStalePipelineEntries(db) {
   // Check whether decision columns exist (pre-migration DBs may not have them)
   let hasDecisionColumns = false
   try {
-    const cols = db.prepare('PRAGMA table_info(grants)').all()
-    hasDecisionColumns = cols.some(c => c.name === 'matcher_version')
+    const dialect = db?.dialect || 'sqlite'
+    if (dialect === 'postgres') {
+      const row = await db
+        .prepare(
+          `SELECT 1 AS ok FROM information_schema.columns
+           WHERE table_schema = 'public' AND table_name = ? AND column_name = ? LIMIT 1`,
+        )
+        .get('grants', 'matcher_version')
+      hasDecisionColumns = Boolean(row?.ok)
+    } else {
+      const cols = db.prepare('PRAGMA table_info(grants)').all()
+      hasDecisionColumns = cols.some(c => c.name === 'matcher_version')
+    }
   } catch { /* ignore */ }
 
   if (!hasDecisionColumns) {
