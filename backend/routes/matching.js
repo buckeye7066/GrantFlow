@@ -183,7 +183,16 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
               }
       }
 
-      const minScore = Number.parseInt(req.query.min_score ?? '50', 10)
+      const DEFAULT_MIN_SCORE = 50
+      const requestedMinScore = req.query.min_score !== undefined && req.query.min_score !== ''
+        ? Number.parseInt(req.query.min_score, 10)
+        : null
+      const minScore = requestedMinScore !== null && Number.isFinite(requestedMinScore)
+        ? requestedMinScore
+        : DEFAULT_MIN_SCORE
+      // Track whether the caller explicitly set a min_score so we can enforce it strictly.
+      // When no explicit threshold is provided we allow the zero-results fallback.
+      const isExplicitThreshold = requestedMinScore !== null && Number.isFinite(requestedMinScore)
                    const limit = Math.min(Math.max(Number.parseInt(req.query.limit ?? '2000', 10) || 2000, 1), 5000)
                    const q = typeof req.query.q === 'string' ? req.query.q.trim().toLowerCase() : ''
 
@@ -309,9 +318,11 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
         ? allScored.filter((opp) => (opp.match_score ?? 0) >= minScore)
         : allScored
 
-      // Zero-results fallback: progressively lower threshold so users always see results.
+      // Zero-results fallback: only applies when caller did NOT set an explicit threshold.
+      // When the user sets a threshold (e.g. 80% via the slider), we MUST NOT return
+      // results below that threshold — honoring the slider is a product requirement.
       let effectiveMinScore = minScore
-      if (scored.length === 0 && allScored.length > 0) {
+      if (scored.length === 0 && allScored.length > 0 && !isExplicitThreshold) {
         const fallbackThresholds = [30, 15, 0]
         for (const threshold of fallbackThresholds) {
           scored = allScored.filter((opp) => (opp.match_score ?? 0) >= threshold)

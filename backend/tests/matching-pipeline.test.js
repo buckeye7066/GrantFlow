@@ -145,8 +145,13 @@ describe("Matching Pipeline", () => {
       record_origin: "curated_verified",
     })
 
+    // NOTE: When no explicit min_score is provided, the zero-results fallback is
+    // allowed (the system progressively lowers the threshold to always show something).
+    // When min_score IS explicitly set by the user (via the slider), it is honored
+    // strictly and the fallback does NOT apply — that behavior is tested in
+    // the profileIntelligence.test.mjs threshold enforcement tests.
     const res = await request(app)
-      .get(`/api/matching/profile/${profileId}/opportunities?min_score=50&skip_readiness_check=1`)
+      .get(`/api/matching/profile/${profileId}/opportunities?skip_readiness_check=1`)
       .set(TEST_ADMIN_AUTH_HEADER)
 
     expect(res.status).toBe(200)

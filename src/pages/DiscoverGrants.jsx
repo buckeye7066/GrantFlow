@@ -228,11 +228,12 @@ export default function DiscoverGrants() {
 
   // Catalog match: real funding opportunities from DB, scored by profile needs (relatable grants, not only directory links)
   const { data: catalogMatchResponse } = useQuery({
-    queryKey: ['discover-catalog', effectiveProfileId],
+    queryKey: ['discover-catalog', effectiveProfileId, minMatchScore],
     queryFn: async () => {
       if (!effectiveProfileId) return { opportunities: [] }
+      // Pass the user's slider threshold so the API enforces it strictly.
       // Bypass readiness gates so Discover always shows catalog matches when backend has opportunities
-      return apiFetch(`/api/matching/profile/${effectiveProfileId}/opportunities?min_score=30&limit=200&skip_readiness_check=1`)
+      return apiFetch(`/api/matching/profile/${effectiveProfileId}/opportunities?min_score=${minMatchScore}&limit=200&skip_readiness_check=1`)
     },
     enabled: authReady && Boolean(effectiveProfileId),
     staleTime: 0,
@@ -960,7 +961,13 @@ export default function DiscoverGrants() {
                   seen.add(key)
                   merged.push(opp)
                 }
-                return merged.sort((a, b) => (b.match_score ?? b.match ?? 0) - (a.match_score ?? a.match ?? 0))
+                // Enforce the user's minimum match score threshold client-side.
+                // The API already applies this for catalog results; this guard ensures
+                // crawler search results (which may arrive with any score) also respect it.
+                const thresholdFiltered = merged.filter(
+                  (o) => (o.match_score ?? o.match ?? 0) >= minMatchScore
+                )
+                return thresholdFiltered.sort((a, b) => (b.match_score ?? b.match ?? 0) - (a.match_score ?? a.match ?? 0))
               })()}
               profileId={effectiveProfileId ?? selectedProfileId}
               onAddToPipeline={handleAddToPipeline}
