@@ -48,9 +48,9 @@ jobs:
         id: get-prs
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HOURS_LOOKBACK: ${{ inputs.hours_lookback || '48' }}
         run: |
           # Calculate the date 48 hours ago (or custom hours from input)
-          HOURS_LOOKBACK="${{ inputs.hours_lookback || '48' }}"
           SINCE_DATE=$(date -u -d "${HOURS_LOOKBACK} hours ago" +"%Y-%m-%dT%H:%M:%SZ")
 
           echo "Looking for PRs updated since: $SINCE_DATE"
