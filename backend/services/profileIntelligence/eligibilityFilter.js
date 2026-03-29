@@ -17,6 +17,7 @@
  */
 
 import { NEEDS_TAXONOMY } from './needsTaxonomy.js'
+import { isValidHttpUrl } from '../crawlers/crawlerOpportunityContract.js'
 
 // ---------------------------------------------------------------------------
 // Entity type groups for eligibility matching
@@ -49,14 +50,17 @@ function isExpired(opportunity) {
   try {
     const d = new Date(deadline)
     if (Number.isNaN(d.getTime())) return false
-    return d < new Date()
+    const now = new Date()
+    d.setHours(0, 0, 0, 0)
+    now.setHours(0, 0, 0, 0)
+    return d < now
   } catch { return false }
 }
 
 function hasSourceUrl(opportunity) {
   const url = opportunity.source_url || opportunity.application_url ||
     opportunity.apply_url || opportunity.evidence_url || opportunity.url || ''
-  return url.trim().length > 0
+  return isValidHttpUrl(url.trim())
 }
 
 function extractOppEntityTypes(opportunity) {

@@ -491,7 +491,7 @@ export async function bulkUpsertFundingOpportunities(db, opportunities = []) {
           if (!policy.ok) continue
           const result = await upsertFundingOpportunity(db, opportunity)
           if (result?.inserted) inserted.push(result.id)
-        } catch { /* skip individual failures */ }
+        } catch (err) { console.error('[bulkUpsert] Individual insert failed:', err.message, opportunity?.title) }
       }
     }
   }

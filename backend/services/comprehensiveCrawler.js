@@ -16,6 +16,7 @@ import {
   safeParseArrayField,
 } from './profileHelpers.js'
 import { applyRelevanceFilter, extractProfileData } from './relevanceFilter.js'
+import { calculateMatchScore } from './matchingEngine.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
@@ -64,113 +65,6 @@ function loadRealOpportunities(dataDir) {
   }
   
   return allOpps
-}
-
-/**
- * Calculate match score between opportunity and profile signals
- */
-function calculateOpportunityMatch(opp, signals, profileState) {
-  let score = 0
-  const matchReasons = []
-
-  const stateMapping = {
-    alabama: 'AL', alaska: 'AK', arizona: 'AZ', arkansas: 'AR', california: 'CA',
-    colorado: 'CO', connecticut: 'CT', delaware: 'DE', florida: 'FL', georgia: 'GA',
-    hawaii: 'HI', idaho: 'ID', illinois: 'IL', indiana: 'IN', iowa: 'IA', kansas: 'KS',
-    kentucky: 'KY', louisiana: 'LA', maine: 'ME', maryland: 'MD', massachusetts: 'MA',
-    michigan: 'MI', minnesota: 'MN', mississippi: 'MS', missouri: 'MO', montana: 'MT',
-    nebraska: 'NE', nevada: 'NV', 'new hampshire': 'NH', 'new jersey': 'NJ',
-    'new mexico': 'NM', 'new york': 'NY', 'north carolina': 'NC',
-    'north dakota': 'ND', ohio: 'OH', oklahoma: 'OK', oregon: 'OR', pennsylvania: 'PA',
-    'rhode island': 'RI', 'south carolina': 'SC', 'south dakota': 'SD',
-    tennessee: 'TN', texas: 'TX', utah: 'UT', vermont: 'VT', virginia: 'VA',
-    washington: 'WA', 'west virginia': 'WV', wisconsin: 'WI', wyoming: 'WY',
-    'district of columbia': 'DC'
-  };
-
-  function normalizeState(state) {
-    if (!state) return '';
-    const s = state.toLowerCase().trim();
-    if (stateMapping[s]) return stateMapping[s].toUpperCase();
-    const sanitized = s.replace(/[^a-z]/g, '');
-    if (sanitized.length === 2) return sanitized.toUpperCase();
-    return sanitized.toUpperCase();
-  }
-
-  const normalizedOppState = normalizeState(opp.state || '');
-  const normalizedProfileState = normalizeState(profileState || '');
-  
-  const oppKeywords = new Set([
-    ...(opp.keywords || []).map(k => k.toLowerCase()),
-    ...(opp.categories || []).map(c => c.toLowerCase())
-  ])
-  
-  const oppText = `${opp.title} ${opp.description}`.toLowerCase()
-  
-  // State match (15 points) — uses normalized values for TN/Tennessee, CA/California etc.
-  const isNationwide = String(opp.state || '').toLowerCase().trim() === 'nationwide'
-  if (isNationwide || (normalizedOppState && normalizedProfileState && normalizedOppState === normalizedProfileState)) {
-    score += 15
-    if (!isNationwide && normalizedOppState === normalizedProfileState) {
-      matchReasons.push(`Location: ${profileState}`)
-    }
-  } else if (normalizedOppState && normalizedProfileState) {
-    score -= 20
-  }
-  
-  // Keyword matching (up to 25 points)
-  let keywordMatches = 0
-  const keywordIterable = signals?.keywords || signals?.keywordSet || signals?.keyword_set || null
-  if (keywordIterable) {
-    for (const keywordRaw of keywordIterable) {
-      const keyword = String(keywordRaw ?? '').toLowerCase().trim()
-      if (!keyword) continue
-      if (oppKeywords.has(keyword) || oppText.includes(keyword)) {
-        keywordMatches++
-        if (keywordMatches <= 3) {
-          matchReasons.push(`Keyword: ${keyword}`)
-        }
-      }
-    }
-  }
-  score += Math.min(25, keywordMatches * 5)
-  
-  // Demographics matching (up to 15 points)
-  if (signals.demographics) {
-    let demoMatches = 0
-    for (const demo of signals.demographics) {
-      if (oppText.includes(demo)) {
-        demoMatches++
-        matchReasons.push(`Demographic: ${demo}`)
-      }
-    }
-    score += Math.min(15, demoMatches * 5)
-  }
-  
-  // Disability/health matching (up to 15 points)
-  if (signals.health) {
-    for (const health of signals.health) {
-      if (oppText.includes(health) || oppKeywords.has(health)) {
-        score += 5
-        matchReasons.push(`Health: ${health}`)
-      }
-    }
-  }
-  
-  // Veteran matching (up to 15 points)
-  if (signals.military) {
-    for (const mil of signals.military) {
-      if (oppText.includes(mil) || oppKeywords.has('veteran')) {
-        score += 10
-        matchReasons.push(`Veteran status`)
-        break
-      }
-    }
-  }
-  
-  score = Math.max(0, Math.min(100, score))
-  
-  return { score, matchReasons }
 }
 
 /**
@@ -260,7 +154,7 @@ export async function processComprehensiveCrawlerJob({ db, job, dataDir, profile
     // Skip if requires matching funds
     if (opp.requires_match) continue
     
-    const { score, matchReasons } = calculateOpportunityMatch(opp, signals, profileState)
+    const { score, reasons: matchReasons } = calculateMatchScore(profileContext, opp)
     
     if (score >= matchThreshold) {
       // Apply hard disqualification rules as a post-filter

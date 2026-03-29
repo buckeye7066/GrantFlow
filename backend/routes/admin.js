@@ -13,7 +13,7 @@ import { seedRealOpportunities } from '../utils/seedRealOpportunities.js';
 import { seedAssistanceDirectories } from '../utils/seedAssistanceDirectories.js';
 import { ensureDesignatedProfiles } from '../utils/ensureDesignatedProfiles.js';
 import { seedBaselineFromRepo } from '../utils/seedBaselineFromRepo.js';
-import { buildProfileSignals, calculateMatchScore } from '../services/profileHelpers.js';
+import { buildProfileSignals } from '../services/profileHelpers.js';
 import { getSystemDiagnostics } from '../services/diagnosticsService.js';
 import { getFundingSourceStatus } from '../src/config/fundingSources.js'
 import { listClientSignInEvents } from '../services/adminLoginEventStore.js'

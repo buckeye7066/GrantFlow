@@ -14,6 +14,7 @@ import {
   summarizeProfileSignals,
 } from './profileHelpers.js'
 import { trustedOriginClause, trustedSourceClause } from '../utils/recordOrigins.js'
+import { calculateMatchScore } from './matchingEngine.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
@@ -47,107 +48,6 @@ function safeJsonArray(value) {
     .split(/[,;\n]+/)
     .map((v) => v.trim())
     .filter(Boolean)
-}
-
-/**
- * Calculate match score between local opportunity and profile.
- * Uses ALL profile signal categories: keywords, military, health,
- * assistance, demographics, family, occupation.
- */
-function calculateLocalMatch(opp, profileState, signals) {
-  let score = 40
-  const matchReasons = []
-  
-  if (opp.state === profileState) {
-    score += 25
-    matchReasons.push(`State match: ${profileState}`)
-  } else if (opp.state && opp.state !== profileState) {
-    return { score: 0, matchReasons: [] }
-  }
-  
-  const oppText = `${opp.title || ''} ${opp.description || ''} ${opp.sponsor || ''}`.toLowerCase()
-  const oppKeywords = new Set([
-    ...(Array.isArray(opp.keywords) ? opp.keywords : []).map((k) => String(k || '').toLowerCase()).filter(Boolean),
-    ...(Array.isArray(opp.categories) ? opp.categories : []).map((c) => String(c || '').toLowerCase()).filter(Boolean),
-  ])
-
-  const textOrKw = (term) => oppKeywords.has(term) || oppText.includes(term)
-  
-  // Keyword matching (up to 20 pts)
-  let keywordMatches = 0
-  const profileKeywords = signals?.keywordSet ? Array.from(signals.keywordSet) : []
-  for (const keyword of profileKeywords) {
-    const normalized = String(keyword).toLowerCase()
-    if (textOrKw(normalized)) {
-      keywordMatches++
-      if (keywordMatches <= 3) matchReasons.push(`Keyword: ${normalized}`)
-    }
-  }
-  score += Math.min(20, keywordMatches * 5)
-  
-  // Military signals (up to 10 pts)
-  const militarySet = signals?.military
-  if (militarySet instanceof Set && militarySet.size > 0) {
-    const vetTerms = ['veteran', 'military', 'armed forces', 'service member', 'va ']
-    if (vetTerms.some(t => oppText.includes(t)) || oppKeywords.has('veteran') || oppKeywords.has('military')) {
-      score += 10
-      matchReasons.push('Military/veteran match')
-    }
-  }
-  
-  // Health/disability signals (up to 10 pts)
-  const healthSet = signals?.health
-  if (healthSet instanceof Set && healthSet.size > 0) {
-    const healthTerms = ['disabilit', 'medical', 'health', 'patient', 'chronic', 'mental health', 'wheelchair', 'assistive']
-    if (healthTerms.some(t => oppText.includes(t)) || oppKeywords.has('disability') || oppKeywords.has('health')) {
-      score += 10
-      matchReasons.push('Health/disability match')
-    }
-  }
-  
-  // Assistance/low-income signals (up to 10 pts)
-  const assistanceSet = signals?.assistance
-  if (assistanceSet instanceof Set && assistanceSet.size > 0) {
-    const aidTerms = ['low income', 'poverty', 'financial need', 'snap', 'medicaid', 'ssi', 'tanf', 'assistance']
-    if (aidTerms.some(t => oppText.includes(t)) || oppKeywords.has('low_income') || oppKeywords.has('financial_need')) {
-      score += 10
-      matchReasons.push('Assistance/income match')
-    }
-  }
-
-  // Demographics signals (up to 5 pts)
-  const demoSet = signals?.demographics
-  if (demoSet instanceof Set && demoSet.size > 0) {
-    for (const demo of demoSet) {
-      if (textOrKw(demo)) {
-        score += 5
-        matchReasons.push(`Demographic match: ${demo}`)
-        break
-      }
-    }
-  }
-
-  // Family signals (up to 5 pts)
-  const familySet = signals?.family
-  if (familySet instanceof Set && familySet.size > 0) {
-    const familyTerms = ['single parent', 'foster', 'caregiver', 'homeless', 'domestic violence', 'incarcerat']
-    if (familyTerms.some(t => oppText.includes(t))) {
-      score += 5
-      matchReasons.push('Family situation match')
-    }
-  }
-  
-  // 501c3 check
-  const isNonprofit =
-    Boolean(signals?.keywordSet?.has?.('nonprofit')) ||
-    Boolean(signals?.keywordSet?.has?.('501c3')) ||
-    Boolean(signals?.keywordSet?.has?.('501(c)(3)'))
-  if (opp.requires_501c3 && !isNonprofit) {
-    score -= 20
-    matchReasons.push('Note: Requires 501(c)(3) status')
-  }
-  
-  return { score: Math.max(0, Math.min(100, score)), matchReasons }
 }
 
 /**
@@ -292,7 +192,7 @@ export async function processLocalCrawlerJob({ db, job, dataDir, profileContext 
   for (const opp of allOpps) {
     if (opp.requires_match) continue
     
-    const { score, matchReasons } = calculateLocalMatch(opp, profileState, signals)
+    const { score, reasons: matchReasons } = calculateMatchScore(profileContext, opp)
     
     scoredOpps.push({
       ...opp,

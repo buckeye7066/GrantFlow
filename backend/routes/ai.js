@@ -254,89 +254,17 @@ router.post('/match', async (req, res) => {
       return res.json({ opportunities: [], count: 0, profile_id });
     }
     
-    // Score opportunities using keyword matching
+    // Score opportunities using the canonical matching engine
     const scoredOpportunities = opportunities.map(opp => {
-      const oppText = `${opp.title || ''} ${opp.description || ''} ${opp.sponsor || ''}`.toLowerCase();
-      const eligibility = safeParseJSON(opp.eligibility_bullets, []).join(' ').toLowerCase();
-      const combined = `${oppText} ${eligibility}`;
-      
-      let score = 50; // Base score
-      const matchReasons = [];
-      
-      // Geographic match
-      if (opp.is_national || opp.state === profile.state) {
-        score += 10;
-        matchReasons.push('Geographic match');
-      }
-      
-      // Keyword matching
-      const allKeywords = [...keywords, ...focusAreas, ...programAreas];
-      const matchedKeywords = [];
-      
-      allKeywords.forEach(keyword => {
-        if (keyword && combined.includes(keyword.toLowerCase())) {
-          score += 5;
-          matchedKeywords.push(keyword);
-        }
-      });
-      
-      if (matchedKeywords.length > 0) {
-        matchReasons.push(`Keywords: ${matchedKeywords.slice(0, 3).join(', ')}`);
-      }
-      
-      // Applicant type matching
-      if (profile.applicant_type) {
-        const typeKeywords = {
-          'individual_need': ['individual', 'personal', 'person', 'citizen'],
-          'nonprofit': ['nonprofit', '501c3', 'organization', 'charity'],
-          'small_business': ['business', 'entrepreneur', 'startup', 'company'],
-          'student': ['student', 'scholarship', 'education', 'college', 'university']
-        };
-        
-        const keywords = typeKeywords[profile.applicant_type] || [];
-        keywords.forEach(kw => {
-          if (combined.includes(kw)) {
-            score += 5;
-            if (!matchReasons.includes('Applicant type match')) {
-              matchReasons.push('Applicant type match');
-            }
-          }
-        });
-      }
-      
-      // Veteran matching
-      if (profile.veteran && (combined.includes('veteran') || combined.includes('military'))) {
-        score += 15;
-        matchReasons.push('Veteran eligible');
-      }
-      
-      // Disability matching
-      if (profile.disabled && (combined.includes('disab') || combined.includes('special needs'))) {
-        score += 15;
-        matchReasons.push('Disability support');
-      }
-      
-      // First generation matching
-      if (profile.first_generation && combined.includes('first generation')) {
-        score += 10;
-        matchReasons.push('First generation');
-      }
-      
-      // Low income matching
-      if (profile.snap_recipient || profile.ssi_recipient || profile.tanf_recipient) {
-        if (combined.includes('low income') || combined.includes('need-based') || combined.includes('financial need')) {
-          score += 10;
-          matchReasons.push('Need-based');
-        }
-      }
+      const { score, reasons: matchReasons } = calculateMatchScore(profile, opp);
       
       return {
         ...opp,
         eligibility_bullets: safeParseJSON(opp.eligibility_bullets, []),
         categories: safeParseJSON(opp.categories, []),
         keywords: safeParseJSON(opp.keywords, []),
-        match_score: Math.min(score, 100),
-        match_reasons: matchReasons.slice(0, 5)
+        match_score: score,
+        match_reasons: (matchReasons || []).slice(0, 5)
       };
     });
     
