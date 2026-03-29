@@ -17,8 +17,14 @@ import Database from 'better-sqlite3'
 import ensureMinimumNationalOpportunities from '../backend/utils/ensureMinimumNationalOpportunities.js'
 
 const projectRoot = path.resolve(process.cwd())
-const dbPath = process.env.DATABASE_URL || path.join(projectRoot, 'backend', 'data', 'grantflow.db')
+const dbPath = process.env.DB_PATH || path.join(projectRoot, 'backend', 'data', 'grantflow.db')
 const schemaPath = path.join(projectRoot, 'backend', 'db', 'schema.sql')
+
+if (/^postgres(ql)?:\/\//i.test(process.env.DATABASE_URL || '')) {
+  console.error('ERROR: This script only supports SQLite databases. DATABASE_URL points to PostgreSQL.')
+  console.error('Use the application API or a Postgres client instead.')
+  process.exit(1)
+}
 
 function hasColumn(db, tableName, columnName) {
   try {

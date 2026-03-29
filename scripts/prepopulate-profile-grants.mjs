@@ -12,6 +12,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import Database from 'better-sqlite3'
+import { calculateMatchScore } from '../backend/services/matchingEngine.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -26,204 +27,6 @@ function ensureFile(filePath, description) {
   }
 }
 
-/**
- * Calculate match score between profile/org and opportunity
- * Adjusted to provide 80%+ scores for reasonable matches while maintaining quality
- */
-function calculateMatchScore(profile, organization, opportunity, profileSections) {
-  let score = 65 // Increased base score to 65 to ensure we reach 80% easily
-  const weights = {
-    geographic: 15,
-    keywords: 10,
-    categories: 5,
-    organizationType: 5,
-  }
-
-  // Use organization data if available
-  const entity = organization || profile
-  
-  // Extract state from various places
-  let entityState = entity.state
-  if (!entityState && profileSections) {
-    const locSection = profileSections.find(s => s.section_key === 'location_focus')
-    if (locSection) {
-      try {
-        const data = JSON.parse(locSection.data)
-        if (data.state) entityState = data.state
-        else if (data.geographic_focus && data.geographic_focus.includes(',')) {
-          entityState = data.geographic_focus.split(',').pop().trim()
-        }
-      } catch (e) {
-        const profileLabel = profile?.id || profile?.display_name || profile?.full_name || 'unknown-profile'
-        console.warn(
-          `[prepopulate-profile-grants] Failed to parse location_focus JSON for ${profileLabel}:`,
-          e?.message || e,
-        )
-      }
-    }
-  }
-
-  // 1. Geographic match (up to 15 points)
-  if (opportunity.is_national || opportunity.state === 'nationwide' || !opportunity.state) {
-    score += 15 // National grants get full points
-  } else if (entityState && opportunity.state) {
-    const s1 = String(entityState).toLowerCase()
-    const s2 = String(opportunity.state).toLowerCase()
-    if (s1 === s2 || s1.includes(s2) || s2.includes(s1)) {
-      score += weights.geographic // 15 points
-    } else {
-      score += 5 // 5 points for any grant
-    }
-  } else {
-    score += 10 // Generous fallback
-  }
-  
-  // 2. Keywords match (up to 10 points)
-  try {
-    const oppKeywords = JSON.parse(opportunity.keywords || '[]')
-    const entityKeywords = extractEntityKeywords(entity, profileSections)
-    
-    if (entityKeywords.length > 0) {
-      score += 5 // Interest bonus
-      const matches = entityKeywords.filter(ek => 
-        oppKeywords.some(ok => ok.toLowerCase().includes(ek.toLowerCase()) || ek.toLowerCase().includes(ok.toLowerCase()))
-      ).length
-      if (matches > 0) score += Math.min(5, matches)
-    } else {
-      score += 5
-    }
-  } catch (e) {
-    score += 5
-  }
-
-  // 3. Organization type (up to 5 points)
-  const orgType = (entity.applicant_type || entity.primary_type || '').toLowerCase()
-  if (orgType) {
-    score += weights.organizationType
-  }
-
-  return Math.min(100, Math.round(score))
-}
-
-function extractEntityKeywords(entity, sections) {
-  const keywords = []
-  
-  // From organization/profile data
-  if (entity.mission) keywords.push(...entity.mission.split(/\s+/).filter(w => w.length > 4))
-  if (entity.focus_areas) {
-    try {
-      const areas = JSON.parse(entity.focus_areas)
-      keywords.push(...areas)
-    } catch {
-      keywords.push(...entity.focus_areas.split(/[,;]/).map(s => s.trim()))
-    }
-  }
-  if (entity.keywords) {
-    try {
-      const kws = JSON.parse(entity.keywords)
-      keywords.push(...kws)
-    } catch {
-      // Ignore
-    }
-  }
-  if (entity.program_areas) {
-    try {
-      const areas = JSON.parse(entity.program_areas)
-      keywords.push(...areas)
-    } catch {
-      // Ignore
-    }
-  }
-  if (entity.tags) {
-    try {
-      const tags = JSON.parse(entity.tags)
-      keywords.push(...tags)
-    } catch {
-      // Ignore
-    }
-  }
-  
-  if (sections && sections.length > 0) {
-    sections.forEach(section => {
-      if (section.content) {
-        const words = section.content.split(/\s+/).filter(w => w.length > 4).slice(0, 20)
-        keywords.push(...words)
-      }
-    })
-  }
-  
-  return [...new Set(keywords)].slice(0, 50)
-}
-
-function extractEntityCategories(entity, sections) {
-  const categories = []
-  
-  if (entity.focus_areas) {
-    try {
-      const areas = JSON.parse(entity.focus_areas)
-      categories.push(...areas)
-    } catch {
-      categories.push(...entity.focus_areas.split(/[,;]/).map(s => s.trim()))
-    }
-  }
-  
-  if (entity.keywords) {
-    try {
-      const kws = JSON.parse(entity.keywords)
-      categories.push(...kws)
-    } catch {
-      // Ignore
-    }
-  }
-  
-  if (entity.tags) {
-    try {
-      const tags = JSON.parse(entity.tags)
-      categories.push(...tags)
-    } catch {
-      // Ignore
-    }
-  }
-  
-  return [...new Set(categories)]
-}
-
-function getMatchReasons(score, profile, organization, opportunity) {
-  const reasons = []
-  const entity = organization || profile
-  
-  if (entity.state === opportunity.state) {
-    reasons.push('Geographic match')
-  } else if (opportunity.is_national) {
-    reasons.push('National opportunity')
-  }
-  
-  try {
-    const oppKeywords = JSON.parse(opportunity.keywords || '[]')
-    if (oppKeywords.length > 0) {
-      reasons.push('Keyword alignment')
-    }
-  } catch (e) {
-    // Ignore
-  }
-  
-  try {
-    const oppCategories = JSON.parse(opportunity.categories || '[]')
-    if (oppCategories.length > 0) {
-      reasons.push('Category match')
-    }
-  } catch (e) {
-    // Ignore
-  }
-  
-  if (opportunity.requires_501c3) {
-    reasons.push('501(c)(3) eligible')
-  }
-  
-  reasons.push(`${score}% match score`)
-  
-  return reasons
-}
 
 function main() {
   const dbPath = path.resolve(projectRoot, 'backend', 'data', 'grantflow.db')
@@ -279,16 +82,15 @@ function main() {
         'SELECT * FROM profile_sections WHERE profile_id = ?'
       ).all(profile.id)
 
-      // Calculate match scores for all opportunities
+      // Calculate match scores for all opportunities using canonical engine
+      const profileContext = { profile, sections }
       const matchedOpportunities = opportunities
         .map(opp => {
-          const matchScore = calculateMatchScore(profile, organization, opp, sections)
-          if (matchScore >= 70) {
-            // console.log(`    DEBUG: ${opp.title} score=${matchScore}`)
-          }
+          const { score: matchScore, reasons: matchReasons } = calculateMatchScore(profileContext, opp)
           return {
             ...opp,
-            matchScore
+            matchScore,
+            matchReasons: matchReasons || [],
           }
         })
         .filter(opp => opp.matchScore >= TARGET_MATCH_SCORE)
@@ -296,7 +98,7 @@ function main() {
         .slice(0, TARGET_GRANTS_PER_PROFILE)
 
       if (profileIndex === 0) {
-        const scores = opportunities.map(o => calculateMatchScore(profile, organization, o, sections))
+        const scores = opportunities.map(o => calculateMatchScore(profileContext, o).score)
         const maxScore = Math.max(...scores)
         const avgScore = scores.reduce((a, b) => a + b, 0) / scores.length
         console.log(`  DEBUG [${profile.display_name}]: maxScore=${maxScore}, avgScore=${avgScore.toFixed(1)}`)
@@ -351,7 +153,7 @@ function main() {
             opp.deadline,
             opp.amount_max || opp.amount_min,
             opp.matchScore,
-            JSON.stringify(getMatchReasons(opp.matchScore, profile, organization, opp)),
+            JSON.stringify(opp.matchReasons),
             `Auto-matched at ${new Date().toISOString()}`,
             opp.application_url
           )

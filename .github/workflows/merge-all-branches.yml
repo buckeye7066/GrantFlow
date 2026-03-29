@@ -50,6 +50,9 @@ jobs:
         id: get-branches
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CURRENT_REF: ${{ github.ref_name }}
+          INPUT_EXCLUDE_BRANCHES: ${{ inputs.exclude_branches }}
+          INPUT_BATCH_SIZE: ${{ inputs.batch_size }}
         run: |
           echo "Fetching all branches from GitHub..."
 
@@ -61,11 +64,11 @@ jobs:
           echo "Found $TOTAL_BRANCHES total branches"
 
           # Default excludes
-          EXCLUDE_LIST="main,${{ github.ref_name }}"
+          EXCLUDE_LIST="main,$CURRENT_REF"
 
           # Add user-specified excludes
-          if [ -n "${{ inputs.exclude_branches }}" ]; then
-            EXCLUDE_LIST="$EXCLUDE_LIST,${{ inputs.exclude_branches }}"
+          if [ -n "$INPUT_EXCLUDE_BRANCHES" ]; then
+            EXCLUDE_LIST="$EXCLUDE_LIST,$INPUT_EXCLUDE_BRANCHES"
           fi
 
           echo "Excluding: $EXCLUDE_LIST"
@@ -92,7 +95,7 @@ jobs:
           echo "Branches to merge: $MERGE_COUNT"
 
           # Apply batch size limit if specified
-          BATCH_SIZE="${{ inputs.batch_size }}"
+          BATCH_SIZE="$INPUT_BATCH_SIZE"
           if [ "$BATCH_SIZE" != "0" ] && [ "$MERGE_COUNT" -gt "$BATCH_SIZE" ]; then
             head -n "$BATCH_SIZE" branches_to_merge.txt > branches_to_merge_batch.txt
             mv branches_to_merge_batch.txt branches_to_merge.txt

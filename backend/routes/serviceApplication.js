@@ -5,8 +5,15 @@ import { isDesignatedProfileId } from '../utils/ensureDesignatedProfiles.js'
 
 const router = express.Router()
 
-// Email recipient for service applications and contact forms
-const SERVICE_APPLICATION_EMAIL = process.env.SERVICE_APPLICATION_EMAIL || 'dr.johnwhite@axiombiolabs.org'
+// Email recipient for service applications and contact forms.
+// Must be set via SERVICE_APPLICATION_EMAIL environment variable.
+const SERVICE_APPLICATION_EMAIL = process.env.SERVICE_APPLICATION_EMAIL || null
+if (!SERVICE_APPLICATION_EMAIL) {
+  console.warn(
+    '[serviceApplication] WARNING: SERVICE_APPLICATION_EMAIL env var is not set. ' +
+    'Service application and contact form emails will not be sent.',
+  )
+}
 
 function normalizeEmail(value) {
   const v = String(value || '').trim().toLowerCase()
@@ -123,8 +130,12 @@ router.post('/', async (req, res) => {
         submittedAt: new Date().toISOString(),
       }
 
-      // Always send to admin email (determined server-side, not from client)
-      await sendServiceApplicationEmail(SERVICE_APPLICATION_EMAIL, emailContent)
+      // Send to admin email (determined server-side, not from client)
+      if (SERVICE_APPLICATION_EMAIL) {
+        await sendServiceApplicationEmail(SERVICE_APPLICATION_EMAIL, emailContent)
+      } else {
+        console.warn('[serviceApplication] Skipping contact email — SERVICE_APPLICATION_EMAIL not configured.')
+      }
 
       return res.json({
         success: true,
@@ -209,7 +220,11 @@ router.post('/submit', async (req, res) => {
     }
 
     // Send the email
-    await sendServiceApplicationEmail(SERVICE_APPLICATION_EMAIL, applicationData)
+    if (SERVICE_APPLICATION_EMAIL) {
+      await sendServiceApplicationEmail(SERVICE_APPLICATION_EMAIL, applicationData)
+    } else {
+      console.warn('[serviceApplication] Skipping application email — SERVICE_APPLICATION_EMAIL not configured.')
+    }
 
     res.json({
       success: true,

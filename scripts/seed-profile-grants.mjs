@@ -19,6 +19,12 @@ if (_nodeEnv === 'production' || _disableSeeding === 'true' || _disableSeeding =
   process.exit(1)
 }
 
+if (/^postgres(ql)?:\/\//i.test(process.env.DATABASE_URL || '')) {
+  console.error('ERROR: This script only supports SQLite databases. DATABASE_URL points to PostgreSQL.')
+  console.error('Use the application API or a Postgres client instead.')
+  process.exit(1)
+}
+
 import Database from 'better-sqlite3';
 import fs from 'fs';
 import path from 'path';
@@ -33,6 +39,7 @@ import {
   computeOpportunityFingerprint,
   MATCHER_VERSION,
 } from '../backend/services/matchDecisionEngine.js';
+import { calculateMatchScore } from '../backend/services/matchingEngine.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -108,221 +115,6 @@ function loadAllRealOpportunities() {
   return opportunities;
 }
 
-// Build signals from profile data
-function buildProfileSignals(profile, sections) {
-  const signals = {
-    keywords: new Set(),
-    demographics: new Set(),
-    health: new Set(),
-    military: new Set(),
-    education: new Set(),
-    family: new Set(),
-    financial: new Set(),
-    location: new Set(),
-    is_nonprofit: false
-  };
-  
-  // Basic profile fields
-  if (profile.state) signals.location.add(profile.state.toLowerCase());
-  if (profile.city) signals.location.add(profile.city.toLowerCase());
-  if (profile.focus_area) signals.keywords.add(profile.focus_area.toLowerCase());
-  if (profile.organization_type) {
-    signals.keywords.add(profile.organization_type.toLowerCase());
-    if (profile.organization_type.toLowerCase().includes('nonprofit') || 
-        profile.organization_type.toLowerCase().includes('501')) {
-      signals.is_nonprofit = true;
-    }
-  }
-  
-  // Parse JSON fields using safeParseArrayField
-  const tags = safeParseArrayField(profile.tags, []);
-  tags.forEach(t => signals.keywords.add(t.toLowerCase()));
-  
-  const interests = safeParseArrayField(profile.interests, []);
-  interests.forEach(i => signals.keywords.add(i.toLowerCase()));
-  
-  // Process sections
-  for (const section of sections) {
-    if (!section.data) continue;
-    
-    let data;
-    try {
-      data = typeof section.data === 'string' ? JSON.parse(section.data) : section.data;
-    } catch (e) {
-      continue;
-    }
-    
-    switch (section.section_key) {
-      case 'demographics':
-        if (data.hispanic_latino) { signals.demographics.add('hispanic'); signals.demographics.add('latino'); }
-        if (data.african_american || data.black) signals.demographics.add('african american');
-        if (data.asian) signals.demographics.add('asian');
-        if (data.native_american) { signals.demographics.add('native american'); signals.demographics.add('indigenous'); }
-        if (data.pacific_islander) signals.demographics.add('pacific islander');
-        if (data.female || data.woman) signals.demographics.add('women');
-        if (data.lgbtq) signals.demographics.add('lgbtq');
-        if (data.veteran) { signals.military.add('veteran'); signals.keywords.add('veteran'); }
-        break;
-        
-      case 'health_disabilities':
-      case 'health_medical':
-        if (data.disability) { signals.health.add('disability'); signals.keywords.add('disability'); }
-        if (data.chronic_illness) signals.health.add('chronic illness');
-        if (data.mental_health) signals.health.add('mental health');
-        if (data.epilepsy) signals.health.add('epilepsy');
-        break;
-        
-      case 'military_service':
-        if (data.veteran) { signals.military.add('veteran'); signals.keywords.add('veteran'); }
-        if (data.disabled_veteran) signals.military.add('disabled veteran');
-        if (data.military_spouse) signals.military.add('military spouse');
-        break;
-        
-      case 'education':
-        if (data.first_generation) { signals.education.add('first generation'); signals.keywords.add('first generation'); }
-        if (data.current_student) { signals.education.add('student'); signals.keywords.add('student'); }
-        if (data.intended_major) signals.keywords.add(data.intended_major.toLowerCase());
-        break;
-        
-      case 'family_life':
-        if (data.single_parent) { signals.family.add('single parent'); signals.keywords.add('single parent'); }
-        if (data.caregiver || data.family_caregiver) { signals.family.add('caregiver'); signals.keywords.add('caregiver'); }
-        if (data.domestic_violence_survivor) signals.family.add('domestic violence');
-        break;
-        
-      case 'financial_information':
-        if (data.financial_need_level === 'High' || data.financial_need_level === 'Critical') {
-          signals.financial.add('financial need');
-          signals.keywords.add('low income');
-        }
-        if (data.household_income && data.household_income < 50000) {
-          signals.financial.add('low income');
-          signals.keywords.add('low income');
-        }
-        break;
-        
-      case 'location_focus':
-        if (data.state) signals.location.add(data.state.toLowerCase());
-        if (data.appalachian_region) { signals.location.add('appalachian'); signals.keywords.add('appalachian'); }
-        if (data.rural_area) { signals.location.add('rural'); signals.keywords.add('rural'); }
-        break;
-        
-      case 'organization_details':
-        if (data.organization_type) signals.keywords.add(data.organization_type.toLowerCase());
-        if (data.is_501c3) signals.is_nonprofit = true;
-        if (data.mission) {
-          const missionTerms = ['health', 'education', 'community', 'youth', 'senior', 'disability', 
-                               'veteran', 'faith', 'food', 'housing', 'arts', 'environment'];
-          missionTerms.forEach(term => {
-            if (data.mission.toLowerCase().includes(term)) signals.keywords.add(term);
-          });
-        }
-        break;
-        
-      case 'basic_information':
-        if (data.state) signals.location.add(data.state.toLowerCase());
-        break;
-    }
-  }
-  
-  return signals;
-}
-
-// Calculate match score between opportunity and profile
-function calculateMatchScore(opp, signals, profileState) {
-  let score = 40; // Base score
-  const matchReasons = [];
-  
-  const oppKeywords = new Set([
-    ...(opp.keywords || []).map(k => k.toLowerCase()),
-    ...(opp.categories || []).map(c => c.toLowerCase())
-  ]);
-  
-  const oppText = `${opp.title || ''} ${opp.description || ''}`.toLowerCase();
-  
-  // State match (20 points)
-  const oppState = opp.state?.toLowerCase() || 'nationwide';
-  const pState = profileState?.toLowerCase();
-  
-  if (oppState === 'nationwide' || oppState === 'all') {
-    score += 15;
-    matchReasons.push('Available nationwide');
-  } else if (pState && oppState === pState) {
-    score += 20;
-    matchReasons.push(`State: ${profileState}`);
-  } else if (opp.states?.includes('ALL') || opp.states?.includes(profileState)) {
-    score += 18;
-    matchReasons.push(`Available in ${profileState}`);
-  } else if (oppState && pState && oppState !== pState) {
-    score -= 15; // Wrong state penalty
-  }
-  
-  // Keyword matching (up to 25 points)
-  let keywordMatches = 0;
-  for (const keyword of signals.keywords) {
-    if (oppKeywords.has(keyword) || oppText.includes(keyword)) {
-      keywordMatches++;
-      if (matchReasons.length < 5) {
-        matchReasons.push(`Match: ${keyword}`);
-      }
-    }
-  }
-  score += Math.min(25, keywordMatches * 5);
-  
-  // Demographics (up to 15 points)
-  for (const demo of signals.demographics) {
-    if (oppText.includes(demo) || oppKeywords.has(demo)) {
-      score += 5;
-      matchReasons.push(`Demographic: ${demo}`);
-      break;
-    }
-  }
-  
-  // Veteran status (15 points)
-  if (signals.military.size > 0) {
-    for (const mil of signals.military) {
-      if (oppText.includes(mil) || oppText.includes('veteran') || oppKeywords.has('veteran')) {
-        score += 15;
-        matchReasons.push('Veteran benefits');
-        break;
-      }
-    }
-  }
-  
-  // Disability/health (10 points)
-  if (signals.health.size > 0) {
-    for (const h of signals.health) {
-      if (oppText.includes(h) || oppKeywords.has('disability')) {
-        score += 10;
-        matchReasons.push('Disability support');
-        break;
-      }
-    }
-  }
-  
-  // Education (10 points)
-  if (signals.education.size > 0 && (oppKeywords.has('scholarship') || oppKeywords.has('education') || 
-      oppText.includes('scholarship') || oppText.includes('student'))) {
-    score += 10;
-    matchReasons.push('Education/scholarship');
-  }
-  
-  // Financial need (10 points)
-  if (signals.financial.size > 0 && (oppText.includes('low income') || oppText.includes('financial need') ||
-      oppText.includes('need-based'))) {
-    score += 10;
-    matchReasons.push('Financial need support');
-  }
-  
-  // 501c3 penalty if required but profile isn't nonprofit
-  if (opp.requires_501c3 && !signals.is_nonprofit) {
-    score -= 10;
-  }
-  
-  score = Math.max(0, Math.min(100, score));
-  
-  return { score, matchReasons };
-}
 
 // Main seeding logic
 console.log('\n1. Loading all real funding opportunities...');
@@ -387,9 +179,9 @@ for (const profile of profiles) {
   
   // Get profile sections
   const sections = db.prepare('SELECT * FROM profile_sections WHERE profile_id = ?').all(profile.id);
-  
-  // Build signals (used as pre-filter heuristic — final acceptance uses computeMatchDecision below)
-  const signals = buildProfileSignals(profile, sections);
+
+  // Build profileContext for canonical engine
+  const profileContext = { profile, sections };
 
   // Convert sections array to object format for canonical decision engine
   const sectionsObj = {};
@@ -461,7 +253,7 @@ for (const profile of profiles) {
     // Skip if requires matching funds
     if (opp.requires_match) continue;
     
-    const { score, matchReasons } = calculateMatchScore(opp, signals, profileState);
+    const { score, reasons: matchReasons } = calculateMatchScore(profileContext, opp);
     
     // Stage 1 (junk filter): only skip obviously irrelevant candidates (score < 5).
     // The canonical decision engine (computeMatchDecision) is the final acceptance

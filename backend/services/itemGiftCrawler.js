@@ -16,6 +16,7 @@ import fs from 'fs'
 import path from 'path'
 import { fileURLToPath } from 'url'
 import { upsertFundingOpportunity } from './opportunityInserter.js'
+import { calculateMatchScore } from './matchingEngine.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -55,33 +56,6 @@ function loadGiftSources() {
   return sources
 }
 
-function computeMatchScore(source, tokens) {
-  // Keep this simple and inclusive; we never hard-filter on missing profile fields.
-  const tags = Array.isArray(source?.item_tags) ? source.item_tags.map((t) => String(t).toLowerCase()) : []
-  const notes = String(source?.notes || '').toLowerCase()
-  const name = String(source?.name || '').toLowerCase()
-
-  let score = 40
-  let matches = 0
-  for (const token of tokens) {
-    if (token.length < 3) continue
-    if (tags.some((t) => t.includes(token) || token.includes(t))) {
-      matches += 1
-    } else if (name.includes(token) || notes.includes(token)) {
-      matches += 1
-    }
-  }
-
-  score += Math.min(50, matches * 12)
-
-  // Strong preference for sources that clearly publish a contact page.
-  if (source?.contact_url) score += 8
-  if (source?.contact_email) score += 6
-  if (source?.contact_phone) score += 4
-
-  return Math.max(0, Math.min(100, Math.round(score)))
-}
-
 export async function processItemGiftCrawlerJob({ db, job, profileContext }) {
   const parameters = job?.parameters ?? {}
   const item = normalizeText(parameters.item || parameters.item_request || parameters.search || '')
@@ -98,10 +72,28 @@ export async function processItemGiftCrawlerJob({ db, job, profileContext }) {
   // Score + filter: must have URL + contact method.
   const candidates = (sources || [])
     .filter((s) => s && s.website_url && hasContact(s))
-    .map((s) => ({
-      ...s,
-      match_score: computeMatchScore(s, tokens),
-    }))
+    .map((s) => {
+      // Build a synthetic opportunity from the gift source so the canonical engine can score it.
+      const syntheticOpp = {
+        title: s.name,
+        description: [s.notes, ...(s.item_tags || []), item].filter(Boolean).join(' '),
+        sponsor: s.name,
+        source_url: s.website_url,
+        application_url: s.contact_url ?? s.website_url,
+        state: 'nationwide',
+        is_national: true,
+        keywords: [...(s.item_tags || []), item, ...tokens],
+        categories: ['in-kind', 'donation'],
+      }
+      // Use profileContext if available, otherwise pass the synthetic opp alone (no profile signals)
+      const { score: baseScore } = calculateMatchScore(profileContext?.profile ? profileContext : {}, syntheticOpp)
+      // Apply directory-specific contact-availability bonus (not a profile-match concept).
+      let score = baseScore
+      if (s.contact_url) score = Math.min(100, score + 8)
+      if (s.contact_email) score = Math.min(100, score + 6)
+      if (s.contact_phone) score = Math.min(100, score + 4)
+      return { ...s, match_score: Math.round(score) }
+    })
     .sort((a, b) => (b.match_score ?? 0) - (a.match_score ?? 0))
 
   // Do not allow "0 results" when we have any candidates; relax threshold automatically.

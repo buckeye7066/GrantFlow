@@ -2,6 +2,7 @@ import js from '@eslint/js'
 import globals from 'globals'
 import react from 'eslint-plugin-react'
 import reactRefresh from 'eslint-plugin-react-refresh'
+import reactHooks from 'eslint-plugin-react-hooks'
 
 export default [
   {
@@ -22,7 +23,7 @@ export default [
         ...globals.node,
       },
     },
-    plugins: { react, 'react-refresh': reactRefresh },
+    plugins: { react, 'react-refresh': reactRefresh, 'react-hooks': reactHooks },
     settings: {
       react: {
         version: 'detect',

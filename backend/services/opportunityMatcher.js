@@ -16,12 +16,23 @@ import { isPipelineSourceAllowed } from '../config/pipelineAllowedSources.js'
 // running PRAGMA table_info(grants) on every saveToProfilePipeline call.
 const _decisionColumnCache = new WeakMap()
 
-function hasGrantsDecisionColumns(db) {
+async function hasGrantsDecisionColumns(db) {
   if (_decisionColumnCache.has(db)) return _decisionColumnCache.get(db)
   let result = false
   try {
-    const cols = db.prepare('PRAGMA table_info(grants)').all()
-    result = cols.some((c) => c.name === 'match_decision')
+    const dialect = db?.dialect || 'sqlite'
+    if (dialect === 'postgres') {
+      const row = await db
+        .prepare(
+          `SELECT 1 AS ok FROM information_schema.columns
+           WHERE table_schema = 'public' AND table_name = ? AND column_name = ? LIMIT 1`,
+        )
+        .get('grants', 'match_decision')
+      result = Boolean(row?.ok)
+    } else {
+      const cols = db.prepare('PRAGMA table_info(grants)').all()
+      result = cols.some((c) => c.name === 'match_decision')
+    }
   } catch { /* ignore */ }
   _decisionColumnCache.set(db, result)
   return result
@@ -176,7 +187,7 @@ export async function saveToProfilePipeline(
     const contactInfo = parseContactInfo(opportunity)
 
     // Detect which columns exist in the grants table (handles DBs without migration applied)
-    const hasDecisionColumns = hasGrantsDecisionColumns(db)
+    const hasDecisionColumns = await hasGrantsDecisionColumns(db)
 
     if (hasDecisionColumns) {
       await db

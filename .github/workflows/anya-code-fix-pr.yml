@@ -7,6 +7,9 @@ on:
         required: true
         type: string
 
+permissions:
+  contents: read
+
 jobs:
   apply_patch:
     runs-on: ubuntu-latest
@@ -16,11 +19,11 @@ jobs:
 
       - name: Apply patch
         shell: bash
+        env:
+          PATCH_CONTENT: ${{ inputs.patch_content }}
         run: |
           set -euo pipefail
-          cat > /tmp/patch.diff << 'PATCH'
-          ${{ inputs.patch_content }}
-          PATCH
+          printf '%s' "$PATCH_CONTENT" > /tmp/patch.diff
           git apply /tmp/patch.diff
 
       - name: Show status

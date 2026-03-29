@@ -2,6 +2,7 @@ import express from 'express';
 import crypto from 'crypto';
 import { isAdminUser, requireAuthenticatedUser } from '../utils/accessControl.js'
 import { trustedOriginClause, trustedSourceClause } from '../utils/recordOrigins.js'
+import { isExpiredOpportunity, isDirectoryLike } from './opportunityHelpers.js'
 
 const router = express.Router();
 
@@ -36,31 +37,6 @@ function parseLooseDate(value) {
     .trim();
   const d = new Date(cleaned);
   return Number.isNaN(d.getTime()) ? null : d;
-}
-
-function isDirectoryLike(row) {
-  if (!row || typeof row !== 'object') return false;
-  const type = String(row.type || '').trim().toUpperCase();
-  if (type === 'DIRECTORY') return true;
-  const origin = String(row.record_origin || '').trim().toLowerCase();
-  if (origin.includes('directory')) return true;
-  const oppType = String(row.opportunity_type || '').trim().toLowerCase();
-  return oppType.includes('directory');
-}
-
-function isExpiredOpportunity(row, { now = new Date() } = {}) {
-  if (!row) return false;
-  if (isDirectoryLike(row)) return false;
-
-  const deadlineType = String(row.deadline_type || '').trim().toLowerCase();
-  if (deadlineType === 'rolling' || deadlineType === 'ongoing') return false;
-
-  const deadlineDate = parseLooseDate(row.deadline);
-  if (!deadlineDate) return false;
-
-  const cutoff = new Date(now);
-  cutoff.setHours(0, 0, 0, 0);
-  return deadlineDate.getTime() < cutoff.getTime();
 }
 
 function safeParseJSON(value, fallback = []) {
