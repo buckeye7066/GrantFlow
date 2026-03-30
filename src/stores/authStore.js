@@ -129,6 +129,12 @@ const initialState = {
   needsProfileCreation: false,
   onboardingVideoRequested: false,
   profileWizardRequested: false,
+  // Backend-persisted onboarding/tour state (from GET /api/auth/me)
+  hasCompletedOnboarding: false,
+  onboardingCompletedAt: null,
+  lastSeenManualVersion: 0,
+  lastCompletedTourVersion: 0,
+  tourDismissedAt: null,
 }
 
 function normalizeId(value) {
@@ -241,14 +247,24 @@ export const useAuthStore = create((set, get) => ({
     }
 
     // Canonical auth bootstrap (`GET /api/auth/me`) shape:
-    // { userId, email, isAdmin, activeProfileId, accessibleProfileCount, accessibleOrgCount }
+    // { userId, email, isAdmin, activeProfileId, accessibleProfileCount, accessibleOrgCount,
+    //   hasCompletedOnboarding, onboardingCompletedAt, lastSeenManualVersion,
+    //   lastCompletedTourVersion, tourDismissedAt }
     if (payload.userId) {
       const activeProfileId = normalizeId(payload.activeProfileId ?? null)
       const isAdmin = Boolean(payload.isAdmin)
       const accessibleProfileCount = Number(payload.accessibleProfileCount ?? 0) || 0
 
+      // Use backend has_completed_onboarding as the authoritative source.
+      // Fall back to localStorage for backward-compat while migration rolls out.
+      const backendCompleted = Boolean(payload.hasCompletedOnboarding)
+      const localCompleted = typeof window !== 'undefined'
+        ? localStorage.getItem('grantflow:onboarding-complete') === 'true'
+        : false
+      const hasCompletedOnboarding = backendCompleted || localCompleted
+
       const needsProfileCreation =
-        !isAdmin && accessibleProfileCount === 0 && !get().hasSeenOnboarding
+        !isAdmin && accessibleProfileCount === 0 && !hasCompletedOnboarding
 
       const user = {
         id: payload.userId,
@@ -268,6 +284,13 @@ export const useAuthStore = create((set, get) => ({
         sessionExpired: false,
         sessionMessage: null,
         needsProfileCreation,
+        // Onboarding/tour state from backend
+        hasSeenOnboarding: hasCompletedOnboarding,
+        hasCompletedOnboarding,
+        onboardingCompletedAt: payload.onboardingCompletedAt ?? null,
+        lastSeenManualVersion: Number(payload.lastSeenManualVersion ?? 0),
+        lastCompletedTourVersion: Number(payload.lastCompletedTourVersion ?? 0),
+        tourDismissedAt: payload.tourDismissedAt ?? null,
       }))
 
       // Always refresh profiles after canonical auth bootstrap.
@@ -747,7 +770,37 @@ export const useAuthStore = create((set, get) => ({
     if (typeof window !== 'undefined') {
       localStorage.setItem('grantflow:onboarding-complete', 'true')
     }
-    set({ hasSeenOnboarding: true })
+    set({ hasSeenOnboarding: true, hasCompletedOnboarding: true, onboardingCompletedAt: new Date().toISOString() })
+    // Persist to backend (fire-and-forget; localStorage is still the fallback)
+    apiFetch('/api/auth/onboarding-state', {
+      method: 'PATCH',
+      body: JSON.stringify({ has_completed_onboarding: true }),
+    }).catch((err) => console.warn('[authStore] Failed to persist onboarding state:', err))
+  },
+
+  /**
+   * Persist tour completion state to the backend.
+   * @param {number} version - The tour version that was completed.
+   */
+  markTourComplete: (version) => {
+    const now = new Date().toISOString()
+    set({ lastCompletedTourVersion: version, tourDismissedAt: now })
+    apiFetch('/api/auth/onboarding-state', {
+      method: 'PATCH',
+      body: JSON.stringify({ last_completed_tour_version: version, tour_dismissed_at: now }),
+    }).catch((err) => console.warn('[authStore] Failed to persist tour state:', err))
+  },
+
+  /**
+   * Persist manual version seen to the backend.
+   * @param {number} version - The manual version that was viewed.
+   */
+  markManualSeen: (version) => {
+    set({ lastSeenManualVersion: version })
+    apiFetch('/api/auth/onboarding-state', {
+      method: 'PATCH',
+      body: JSON.stringify({ last_seen_manual_version: version }),
+    }).catch((err) => console.warn('[authStore] Failed to persist manual version:', err))
   },
 
   setNeedsProfileCreation: (needs) => {

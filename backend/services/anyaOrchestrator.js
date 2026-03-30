@@ -4,6 +4,7 @@ import { createCircuitBreaker } from '../utils/circuitBreaker.js'
 import { createOpenAIClient, summarizeOpenAIError } from '../utils/openaiClient.js'
 import path from 'path'
 import { promises as fs } from 'fs'
+import { getAppOverview } from './anyaHelpKnowledge.js'
 
 const TASK_STATUSES = new Set(['open', 'in_progress', 'completed', 'cancelled'])
 const TASK_PRIORITIES = new Set(['low', 'normal', 'high', 'urgent'])
@@ -1027,7 +1028,7 @@ export async function generateAssistantResponse(db, user, sessionId, { content }
       )
     : _STATIC_PROMPT_ADMIN_SECTION
 
-  const systemPrompt = dynamicHeader + _STATIC_PROMPT_BASE + (isAdmin ? adminSection : _STATIC_PROMPT_USER_SECTION)
+  const systemPrompt = dynamicHeader + _STATIC_PROMPT_BASE + (isAdmin ? adminSection : _STATIC_PROMPT_USER_SECTION) + '\n\nGrantFlow App Knowledge (pages, fields, matching impact):\n' + getAppOverview()
 
   // 1) Try OpenAI first (if configured)
   if (openai) {

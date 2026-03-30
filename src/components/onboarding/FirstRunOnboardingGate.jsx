@@ -3,13 +3,18 @@
  * - User has 0 profiles, OR
  * - User has profiles but active profile is missing zip/state.
  * Uses backend preferences for completion/skip (no localStorage).
+ * Respects backend has_completed_onboarding — existing users are never re-shown the wizard.
  */
 import React from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { apiFetch } from '@/api/client'
+import { useAuthStore } from '@/stores/authStore'
 import FirstRunOnboardingWizard from './FirstRunOnboardingWizard'
 
 export default function FirstRunOnboardingGate({ profiles = [], activeProfileId }) {
+  // If the user has already completed onboarding (backend state), never show the gate.
+  const hasCompletedOnboarding = useAuthStore((state) => state.hasCompletedOnboarding)
+
   const { data: prefs } = useQuery({
     queryKey: ['userPreferences'],
     queryFn: () => apiFetch('/api/preferences'),
@@ -32,7 +37,9 @@ export default function FirstRunOnboardingGate({ profiles = [], activeProfileId 
   const hasState = Boolean(basicSection?.state?.trim?.())
   const activeProfileComplete = hasZip && hasState
 
+  // Never show to users who have already completed backend onboarding
   const shouldShow =
+    !hasCompletedOnboarding &&
     !completed &&
     !skipped &&
     (profiles.length === 0 || !activeProfileComplete)
