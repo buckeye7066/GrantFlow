@@ -208,15 +208,21 @@ export default function SmartMatcher() {
   }, [suggestionsResponse])
 
   // -- Auto-populate search keywords from inferred needs on first profile load --
+  // Only runs once per profile selection; skips if the user has already typed a query.
   useEffect(() => {
         if (!selectedProfileId || selectedProfileId === 'all') return
         if (isSuggestionsLoading) return
         if (inferredNeeds.length === 0) return
         if (autoPopulatedProfileRef.current === selectedProfileId) return
+        // Don't overwrite a query the user typed manually
+        if (searchQuery.trim()) {
+                autoPopulatedProfileRef.current = selectedProfileId
+                return
+        }
         autoPopulatedProfileRef.current = selectedProfileId
         const keywords = inferredNeeds.slice(0, 5).map((n) => n.name).join(" ")
         setSearchQuery(keywords)
-  }, [selectedProfileId, inferredNeeds, isSuggestionsLoading])
+  }, [selectedProfileId, inferredNeeds, isSuggestionsLoading, searchQuery])
 
   // -- Fetch selected profile data --
   const { data: selectedProfile } = useQuery({
@@ -231,8 +237,9 @@ export default function SmartMatcher() {
         mutationFn: () => runSmartCrawler({ profileId: selectedProfileId, minMatchScore: minScore }),
         onSuccess: (data) => {
                 queryClient.invalidateQueries({ queryKey: ['smart-matcher'] })
+                const count = data?.count ?? 0
                 toast({
-                        title: `Found ${data?.count ?? 0} new opportunit${(data?.count ?? 0) === 1 ? 'y' : 'ies'}`,
+                        title: `Found ${count} new opportunit${count === 1 ? 'y' : 'ies'}`,
                         description: data?.sources_used?.length
                                 ? `Sources: ${data.sources_used.join(', ')}`
                                 : 'Matching results refreshed.',
