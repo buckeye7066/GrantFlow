@@ -65,7 +65,7 @@ test('isPipelineSourceAllowed (A): returns true for every allowed source', () =>
 })
 
 test('isPipelineSourceAllowed (A): returns false for unknown/disallowed sources', () => {
-  const disallowed = ['grants.gov', 'regression_test', 'template', 'spam', 'fake_source', '']
+  const disallowed = ['regression_test', 'template', 'spam', 'fake_source', '']
   for (const src of disallowed) {
     assert.equal(isPipelineSourceAllowed(src), false, `Expected false for "${src}"`)
   }
@@ -78,7 +78,7 @@ test('isPipelineSourceAllowed (A): returns false for null/undefined', () => {
 
 test('isPipelineSourceAllowed (A): trims whitespace before checking', () => {
   assert.equal(isPipelineSourceAllowed('  verified_real  '), true)
-  assert.equal(isPipelineSourceAllowed('  grants.gov  '), false)
+  assert.equal(isPipelineSourceAllowed('  fake_source  '), false)
 })
 
 // ---------------------------------------------------------------------------
@@ -91,7 +91,7 @@ test('cleanupIrrelevantGrants (B): removes profile grants with disallowed opport
   // Insert a disallowed-source opportunity
   db.prepare(`
     INSERT OR IGNORE INTO funding_opportunities (id, title, source, is_active, description, application_url)
-    VALUES ('opp-bad-src', 'Test Grant', 'grants.gov', 1, 'desc', 'https://example.com')
+    VALUES ('opp-bad-src', 'Test Grant', 'spam_source', 1, 'desc', 'https://example.com')
   `).run()
 
   // Insert a profile (display_name is required)
@@ -128,7 +128,7 @@ test('cleanupIrrelevantGrants (C): preserves profile grants with allowed opportu
   // Insert a disallowed-source opportunity and an allowed-source opportunity
   db.prepare(`
     INSERT OR IGNORE INTO funding_opportunities (id, title, source, is_active, description, application_url, is_national)
-    VALUES ('opp-bad-c', 'Bad Source Grant', 'grants.gov', 1, 'desc', 'https://example.com', 1)
+    VALUES ('opp-bad-c', 'Bad Source Grant', 'spam_source', 1, 'desc', 'https://example.com', 1)
   `).run()
   db.prepare(`
     INSERT OR IGNORE INTO funding_opportunities (id, title, source, is_active, description, application_url, is_national)
