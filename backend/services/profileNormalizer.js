@@ -315,6 +315,13 @@ export function normalizeProfile(rawProfile, sections = null) {
       if (NEED_ALIAS_MAP[sectionKey.toLowerCase()]) {
         rawNeeds.push(sectionKey)
       }
+      // Also handle '_information' suffix keys used in real profile sections
+      // e.g. "health_information" → "health" → maps to "health_medical"
+      // e.g. "housing_information" → "housing", "education_information" → "education"
+      const baseKey = sectionKey.toLowerCase().replace(/_information$/, '')
+      if (baseKey !== sectionKey.toLowerCase() && NEED_ALIAS_MAP[baseKey]) {
+        rawNeeds.push(baseKey)
+      }
     }
   }
 
@@ -357,6 +364,7 @@ export function normalizeProfile(rawProfile, sections = null) {
   let isStudentFromSections = false
   const educationSection =
     profileSections?.education ??
+    profileSections?.education_information ??
     profileSections?.student ??
     null
   if (educationSection) {
@@ -451,6 +459,7 @@ export function normalizeProfile(rawProfile, sections = null) {
   let hasChronicIllnessFromSections = false
   const healthSection =
     profileSections?.health_medical ??
+    profileSections?.health_information ??
     profileSections?.medical ??
     profileSections?.health ??
     null
@@ -507,6 +516,7 @@ export function normalizeProfile(rawProfile, sections = null) {
   let hasHousingInstabilityFromSections = false
   const housingSection =
     profileSections?.housing ??
+    profileSections?.housing_information ??
     profileSections?.shelter ??
     null
   if (housingSection) {
@@ -524,10 +534,16 @@ export function normalizeProfile(rawProfile, sections = null) {
 
   const hasHousingNeed = needCategories.includes('housing') || hasHousingInstabilityFromSections
 
+  // Ensure 'housing' appears in needCategories when section-derived housing instability is detected
+  if (hasHousingInstabilityFromSections && !needCategories.includes('housing')) {
+    needCategories.push('housing')
+  }
+
   // -- Employment need signals --
   let hasEmploymentNeed = false
   const employmentSection =
     profileSections?.employment ??
+    profileSections?.employment_information ??
     profileSections?.work ??
     profileSections?.income ??
     null
@@ -544,6 +560,47 @@ export function normalizeProfile(rawProfile, sections = null) {
   }
 
   const hasBusinessNeed = needCategories.includes('business') || isBusiness
+
+  // -- Financial information section: derive need categories from explicit content --
+  // Real profiles store financial data in a 'financial_information' section which doesn't
+  // directly map to a canonical need type. Parse its content to infer relevant needs.
+  const financialSection =
+    profileSections?.financial_information ??
+    profileSections?.financial ??
+    null
+  if (financialSection) {
+    const fa = financialSection.answers ?? financialSection
+    if (fa && typeof fa === 'object') {
+      // Combine all text fields to look for explicit need indicators
+      const finText = [
+        fa.notes, fa.challenges, fa.needs, fa.description, fa.financial_needs,
+        fa.housing_costs, fa.rent_mortgage, fa.food_costs, fa.utility_costs,
+      ].filter(Boolean).join(' ').toLowerCase()
+
+      const finNeedKeywords = {
+        housing: ['rent', 'housing', 'evict', 'mortgage'],
+        food: ['food', 'groceries', 'hunger', 'nutrition'],
+        utilities: ['utility', 'electric', 'gas bill', 'water bill', 'heating'],
+        health_medical: ['medical', 'health', 'prescription'],
+      }
+      for (const [need, keywords] of Object.entries(finNeedKeywords)) {
+        if (!needCategories.includes(need) && keywords.some((kw) => finText.includes(kw))) {
+          needCategories.push(need)
+        }
+      }
+
+      // Low-income household signals: add food and utilities as baseline needs
+      const monthlyIncome = Number(fa.monthly_income ?? fa.income ?? 0)
+      const annualIncome = Number(fa.annual_income ?? fa.household_income ?? 0)
+      const isLowIncome = fa.is_low_income || fa.financial_hardship || fa.receives_benefits ||
+        (monthlyIncome > 0 && monthlyIncome < 2000) ||
+        (annualIncome > 0 && annualIncome < 24000)
+      if (isLowIncome) {
+        if (!needCategories.includes('food')) needCategories.push('food')
+        if (!needCategories.includes('utilities')) needCategories.push('utilities')
+      }
+    }
+  }
 
   // -- Age (for scholarship/senior eligibility) --
   const age = profile.age ?? null

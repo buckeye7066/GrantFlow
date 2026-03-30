@@ -310,8 +310,17 @@ export function calculateNeedAlignment(profileNorm, oppNorm) {
   const profileNeeds = profileNorm?.needCategories ?? []
   const oppNeeds = oppNorm?.needTypesSupported ?? []
 
-  if (profileNeeds.length === 0 || oppNeeds.length === 0) {
+  if (profileNeeds.length === 0) {
     return { score: 0, matchedNeeds: [] }
+  }
+
+  // When the opportunity has no explicit need types declared, give a baseline score
+  // as a benefit of the doubt — many legitimate general-assistance programs don't
+  // enumerate need types, but are still relevant for any profile with needs.
+  // Score of 25 is chosen to produce a composite score around 40-50 for trusted sources,
+  // which is enough to surface as REVIEW without falsely inflating low-quality matches.
+  if (oppNeeds.length === 0) {
+    return { score: 25, matchedNeeds: [] }
   }
 
   const matchedNeeds = profileNeeds.filter((n) => oppNeeds.includes(n))
@@ -388,6 +397,18 @@ export function computeMatchDecision(rawProfile, rawOpportunity, opts = {}) {
   if (profileNorm.isBusiness && oppNorm.entityTypesAllowed?.includes('business')) {
     matchedProfileTraits.push('business')
   }
+  // Individual/family match: applies when profile is individual/caregiver and the
+  // opportunity either explicitly targets individuals/families or has unknown applicability
+  // (many consumer-facing programs don't enumerate entity types but are intended for individuals).
+  const isIndividualOrFamily = ['individual', 'caregiver'].includes(profileNorm.entityType)
+  if (
+    isIndividualOrFamily &&
+    (oppNorm.entityTypesAllowed?.includes('individual') ||
+      oppNorm.entityTypesAllowed?.includes('caregiver') ||
+      oppNorm.applicabilityUnknown)
+  ) {
+    matchedProfileTraits.push('individual_match')
+  }
   // Geographic match trait
   const geo = oppNorm.geography ?? {}
   if (geo.isNational && profileNorm.state) matchedProfileTraits.push('national_eligible')
@@ -395,7 +416,14 @@ export function computeMatchDecision(rawProfile, rawOpportunity, opts = {}) {
 
   // Step 5: Composite score
   // Weights: need alignment 45%, source trust 25%, entity type match 20%, geo bonus 10%
-  const entityTypeBonus = matchedProfileTraits.some(t => ['veteran', 'student', 'nonprofit', 'business'].includes(t)) ? 20 : 0
+  // Individual/family match earns a smaller bonus (15 pts) since it's a less specific match
+  // than veteran/student/nonprofit/business targeting.
+  let entityTypeBonus = 0
+  if (matchedProfileTraits.some(t => ['veteran', 'student', 'nonprofit', 'business'].includes(t))) {
+    entityTypeBonus = 20
+  } else if (matchedProfileTraits.includes('individual_match')) {
+    entityTypeBonus = 15
+  }
   const geoBonus = matchedProfileTraits.some(t => ['national_eligible', 'state_match'].includes(t)) ? 10 : 0
   const rawScore = (needAlignmentScore * 0.45) + (sourceTrust * 0.25) + entityTypeBonus + geoBonus
   const score = Math.min(100, Math.round(rawScore))
@@ -410,16 +438,16 @@ export function computeMatchDecision(rawProfile, rawOpportunity, opts = {}) {
   confidence = Math.max(0, Math.min(100, confidence))
 
   // Step 7: Decision
-  // ACCEPT requires: eligible=true, score≥40, needAlignment>0, hasApplicationUrl, confidence≥50
-  // Unknown applicability forces REVIEW (conservative: don't false-ACCEPT ambiguous opportunities)
-  // Too many missing fields forces REVIEW
+  // ACCEPT requires: eligible=true, score≥40, needAlignment>0 OR baseline (25), hasApplicationUrl, confidence≥50
+  // For individual/family profiles, applicabilityUnknown is treated as a soft match (not forced REVIEW)
+  // since many consumer-facing assistance programs don't specify an entity type restriction.
   let decision
   if (eligible === false) {
     decision = 'REJECT'
   } else if (
     eligible === 'maybe' ||
     missingFields.length > 2 ||
-    oppNorm.applicabilityUnknown
+    (oppNorm.applicabilityUnknown && !isIndividualOrFamily)
   ) {
     decision = 'REVIEW'
   } else if (score < 40 || needAlignmentScore === 0) {
@@ -448,8 +476,10 @@ export function computeMatchDecision(rawProfile, rawOpportunity, opts = {}) {
   if (missingFields.length > 0) {
     explanationParts.push(`Missing data: ${missingFields.join(', ')}.`)
   }
-  if (oppNorm.applicabilityUnknown) {
+  if (oppNorm.applicabilityUnknown && !isIndividualOrFamily) {
     explanationParts.push('Opportunity applicability is unclear; conservative REVIEW applied.')
+  } else if (oppNorm.applicabilityUnknown && isIndividualOrFamily) {
+    explanationParts.push('Opportunity applicability unspecified; assumed eligible for individual/family.')
   }
   if (!oppNorm.hasApplicationUrl && decision !== 'REJECT') {
     explanationParts.push('No application URL found; cannot confirm actionability.')
