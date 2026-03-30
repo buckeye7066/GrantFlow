@@ -3,6 +3,7 @@ import path from 'path'
 import crypto from 'crypto'
 import { fileURLToPath } from 'url'
 import { buildProfileContext, buildProfileSignals } from './profileHelpers.js'
+import { getOpenAIOptional, invokeJsonWithFallback } from '../utils/aiProviders.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -120,42 +121,241 @@ export async function listActiveCatalogItems(db, { limit = 500 } = {}) {
   }))
 }
 
+// Map from catalog item category to the signal needs that qualify it for display.
+const CATEGORY_NEED_REQUIREMENTS = {
+  mobility: ['disability'],
+  medical: ['disability', 'healthcare'],
+  employment: ['employment'],
+  education: ['education', 'scholarship'],
+  technology: ['internet', 'education', 'employment', 'business'],
+  business: ['business', 'employment'],
+  housing: ['housing'],
+  food: ['food'],
+  transportation: ['transportation', 'disability'],
+  legal: ['legal'],
+  financial: ['cash_assistance', 'employment', 'business'],
+}
+
+// Medical/mobility items that require a *specific* health signal (not just a generic need).
+// If an item matches one of these patterns but the profile lacks the required health signal,
+// the item scores 0 and is not shown.
+const MEDICAL_SPECIFIC_REQUIREMENTS = [
+  { namePattern: /hearing|deaf/i, requiredHealth: ['hearing_impairment'] },
+  { namePattern: /vision|glass|eye/i, requiredHealth: ['visual_impairment'] },
+  { namePattern: /wheelchair|wheel chair/i, requiredHealth: ['physical_disability', 'disability'] },
+  { namePattern: /adaptive.*van|wheelchair.*van|handicap.*van/i, requiredHealth: ['physical_disability', 'disability'] },
+]
+
 function scoreCatalogItem(item, signals) {
   const reasons = []
-  const tokens = new Set(signals?.keywords ?? [])
-  const tagTokens = new Set([...(item.tags || []), ...(item.synonyms || []), item.name].flatMap(tokenize))
 
+  // Normalize signal sets (may arrive as Set objects or plain arrays)
+  const toSet = (v) => (v instanceof Set ? v : new Set(Array.isArray(v) ? v : []))
+  const tokens = new Set(signals?.keywords ?? [])
+  const signalNeeds = toSet(signals?.needs)
+  const healthSignals = toSet(signals?.health)
+  const intentPhrases = toSet(signals?.intentPhrases)
+  const occupationSignals = toSet(signals?.occupation)
+
+  // Start at 0 — items must earn their score through signal relevance.
+  let score = 0
+
+  const category = String(item.category || '').toLowerCase()
+  const requiredNeeds = CATEGORY_NEED_REQUIREMENTS[category] ?? []
+  const categoryNeedMatch = requiredNeeds.some((need) => signalNeeds.has(need))
+  const isMedicalOrMobility = category === 'medical' || category === 'mobility'
+
+  if (isMedicalOrMobility) {
+    // Medical/mobility items are gated behind specific health conditions.
+    const itemText = [item.name, ...(item.synonyms ?? [])].join(' ')
+    let specificReq = null
+    for (const req of MEDICAL_SPECIFIC_REQUIREMENTS) {
+      if (req.namePattern.test(itemText)) {
+        specificReq = req
+        break
+      }
+    }
+    if (specificReq) {
+      // Only display if the profile has the matching health signal.
+      const matchedSignal = specificReq.requiredHealth.find((h) => healthSignals.has(h))
+      if (matchedSignal) {
+        score += 60
+        reasons.push(`Health condition match: ${matchedSignal}`)
+      }
+      // If the pattern matched but the health signal is absent, score stays 0.
+    } else if (categoryNeedMatch) {
+      // Generic medical/mobility item without a specific pattern — show if the
+      // profile has a matching disability or healthcare need.
+      score += 45
+      reasons.push(`Category "${category}" matches profile need`)
+    }
+  } else if (categoryNeedMatch) {
+    score += 50
+    const matchedNeeds = requiredNeeds.filter((n) => signalNeeds.has(n))
+    reasons.push(`Category "${category}" matches: ${matchedNeeds.join(', ')}`)
+  }
+
+  // Keyword overlap: bonus when there is already a category match; standalone only
+  // when the overlap is very strong (≥3 tokens).
+  const tagTokens = new Set([...(item.tags || []), ...(item.synonyms || []), item.name].flatMap(tokenize))
   let overlap = 0
   for (const token of tagTokens) {
     if (!token || token.length < 3) continue
     if (tokens.has(token)) overlap += 1
   }
+  if (overlap > 0) {
+    if (score > 0) {
+      score += Math.min(20, overlap * 8)
+      reasons.push(`Keyword overlap (${overlap})`)
+    } else if (overlap >= 3) {
+      score += Math.min(30, overlap * 8)
+      reasons.push(`Strong keyword match (${overlap})`)
+    }
+  }
 
-  // Base score keeps results inclusive; no hard filters based on missing profile fields.
-  let score = 35 + Math.min(45, overlap * 8)
+  // Intent phrase matching: goal phrases (e.g. "food truck business") boost items
+  // whose name/tags/synonyms share at least two significant words with the phrase.
+  const intentArr = Array.from(intentPhrases)
+  if (intentArr.length > 0) {
+    const allItemText = [item.name, ...(item.tags ?? []), ...(item.synonyms ?? [])].join(' ').toLowerCase()
+    for (const phrase of intentArr) {
+      if (!phrase) continue
+      const phraseWords = String(phrase).split(/\s+/).filter((w) => w.length >= 3)
+      const matchCount = phraseWords.filter((w) => allItemText.includes(w)).length
+      if (matchCount >= 2 || (matchCount >= 1 && phraseWords.length <= 2)) {
+        score += 25
+        reasons.push('Matches goal phrase')
+        break
+      }
+    }
+  }
 
   // Applicant type boosts (soft)
   const applicantTypes = signals?.applicantTypes ? Array.from(signals.applicantTypes) : []
-  const isStudent = applicantTypes.some((t) => String(t).includes('student'))
-  if (isStudent && ['education', 'technology'].includes(String(item.category || ''))) {
-    score += 10
+  if (applicantTypes.some((t) => String(t).includes('student')) && ['education', 'technology'].includes(category)) {
+    score += 15
     reasons.push('Student profile boost')
   }
 
-  const assistance = signals?.assistance ? Array.from(signals.assistance) : []
-  const hasDisabilitySignal =
-    assistance.some((t) => String(t).includes('disabil')) ||
-    (signals?.health ? Array.from(signals.health).some((t) => String(t).includes('disabil')) : false)
-  if (hasDisabilitySignal && ['mobility', 'medical'].includes(String(item.category || ''))) {
+  // Employment/occupation boost
+  if (category === 'employment' && occupationSignals.size > 0 && score > 0) {
     score += 10
-    reasons.push('Disability/medical support boost')
+    reasons.push('Occupation signals present')
   }
-
-  if (overlap > 0) reasons.push(`Matches profile keywords (${overlap})`)
 
   return {
     score: Math.max(0, Math.min(100, Math.round(score))),
     reasons,
+  }
+}
+
+// ---------------------------------------------------------------------------
+// AI-powered need inference
+// ---------------------------------------------------------------------------
+
+// Simple in-memory cache: avoids repeated AI calls for the same profile goal.
+const _aiInferenceCache = new Map()
+const AI_CACHE_TTL_MS = 10 * 60 * 1000 // 10 minutes
+const AI_CACHE_MAX_SIZE = 100
+
+// Score assigned to AI-inferred items; high enough to surface above catalog matches
+// but below items with direct health-signal matches (which score 60+).
+const AI_INFERRED_BASE_SCORE = 75
+
+function _getCachedAIResult(cacheKey) {
+  const entry = _aiInferenceCache.get(cacheKey)
+  if (!entry) return null
+  if (Date.now() - entry.timestamp > AI_CACHE_TTL_MS) {
+    _aiInferenceCache.delete(cacheKey)
+    return null
+  }
+  return entry.items
+}
+
+function _setCachedAIResult(cacheKey, items) {
+  // Purge expired entries before evicting by size to favour TTL-based cleanup.
+  if (_aiInferenceCache.size >= AI_CACHE_MAX_SIZE) {
+    const now = Date.now()
+    for (const [k, v] of _aiInferenceCache) {
+      if (now - v.timestamp > AI_CACHE_TTL_MS) _aiInferenceCache.delete(k)
+    }
+    // If still full after TTL purge, remove the oldest entry (FIFO).
+    if (_aiInferenceCache.size >= AI_CACHE_MAX_SIZE) {
+      const firstKey = _aiInferenceCache.keys().next().value
+      _aiInferenceCache.delete(firstKey)
+    }
+  }
+  _aiInferenceCache.set(cacheKey, { items, timestamp: Date.now() })
+}
+
+async function inferNeedsWithAI(signals, profileContext) {
+  const profile = profileContext?.profile ?? {}
+  const comprehensive = profileContext?.sections?.comprehensive_application ?? {}
+
+  const goalText = [
+    profile.primary_goal,
+    comprehensive.primary_goal,
+    comprehensive.mission,
+    comprehensive.career_goal,
+    comprehensive.use_of_funds,
+  ]
+    .filter(Boolean)
+    .join(' ')
+    .trim()
+
+  const intentPhrases = Array.from(signals?.intentPhrases ?? []).join('; ')
+  const detectedNeeds = Array.from(signals?.needs ?? []).join(', ')
+
+  if (!goalText && !intentPhrases) return []
+
+  // Cache key combines goal text and intent phrases
+  const cacheKey = `${goalText}||${intentPhrases}`
+  const cached = _getCachedAIResult(cacheKey)
+  if (cached) return cached
+
+  const openai = getOpenAIOptional()
+  const contextSummary = goalText || intentPhrases
+
+  const systemPrompt =
+    'You are a needs assessment specialist helping identify what specific items, resources, or services a person requires to accomplish their goals.'
+
+  const userPrompt =
+    `Profile goal/narrative: "${contextSummary}"\n` +
+    `Detected need categories: ${detectedNeeds || 'none'}\n\n` +
+    `List 6–8 specific items or resources this person needs to accomplish their stated goals.\n` +
+    `Focus ONLY on what is clearly relevant. Do NOT include generic or unrelated items (e.g. do not suggest hearing aids for a food-truck entrepreneur).\n\n` +
+    `Return JSON: { "items": [{ "name": "Item Name", "category": "category", "reason": "one-sentence reason" }] }\n` +
+    `Valid categories: business, employment, education, technology, mobility, medical, food, housing, transportation, legal, financial`
+
+  try {
+    const result = await invokeJsonWithFallback({
+      openai,
+      system: systemPrompt,
+      prompt: userPrompt,
+      temperature: 0.2,
+      maxTokens: 600,
+    })
+
+    if (!result.ok || !result.json) return []
+
+    const rawItems = result.json?.items
+    if (!Array.isArray(rawItems)) return []
+
+    const items = rawItems
+      .filter((item) => item?.name && typeof item.name === 'string')
+      .map((item) => ({
+        name: String(item.name).trim(),
+        category: String(item.category || 'general').toLowerCase(),
+        score: AI_INFERRED_BASE_SCORE, // AI-inferred items start with a high relevance score
+        reasons: [item.reason ? String(item.reason).trim() : 'AI-inferred from profile goals'],
+        source: 'ai_inferred',
+      }))
+
+    _setCachedAIResult(cacheKey, items)
+    return items
+  } catch (err) {
+    console.warn('[itemCatalog] AI inference error', err?.message || err)
+    return []
   }
 }
 
@@ -175,6 +375,7 @@ export async function suggestItemsForProfile(db, { profileId, limit = 8 } = {}) 
     sections: profileContext?.sections ?? {},
   })
 
+  // 1. Score catalog items using the profile's actual signals
   const catalog = await listActiveCatalogItems(db, { limit: 500 })
   const scoredAll = catalog
     .map((item) => {
@@ -189,24 +390,42 @@ export async function suggestItemsForProfile(db, { profileId, limit = 8 } = {}) 
     })
     .sort((a, b) => b.score - a.score)
 
-  // Safety: Never let low-signal discovered tokens crowd out useful suggestions.
-  // - Prefer curated items
-  // - Require higher score for anya_discovered items
+  // Only surface items that have meaningful signal overlap.
+  // Discovered items are held to a higher bar to prevent noise.
   const curated = scoredAll.filter((s) => s.source !== 'anya_discovered' && s.score >= 40)
   const discovered = scoredAll.filter((s) => s.source === 'anya_discovered' && s.score >= 55)
-  const merged = [...curated, ...discovered].sort((a, b) => b.score - a.score)
+  const catalogMatches = [...curated, ...discovered].sort((a, b) => b.score - a.score)
 
-  // Fallback: if we still have too few, allow curated down to 0 score (but keep discovered gated).
   const safeLimit = Math.max(1, Math.min(Number(limit) || 8, 20))
-  const candidateList =
-    merged.length >= safeLimit
-      ? merged
-      : [...curated, ...scoredAll.filter((s) => s.source !== 'anya_discovered')]
 
-  // De-dupe by name (safety: prevent duplicates when fallback extends the list)
+  // 2. AI-powered need inference from goal/intent fields.
+  // Runs when the profile has narrative or goal content so that goal-specific items
+  // (e.g. "food truck", "business license") can supplement the static catalog.
+  let aiItems = []
+  try {
+    const profile = profileContext?.profile ?? {}
+    const comprehensive = profileContext?.sections?.comprehensive_application ?? {}
+    const hasGoalContent = Boolean(
+      profile.primary_goal ||
+        comprehensive.primary_goal ||
+        comprehensive.mission ||
+        comprehensive.career_goal ||
+        comprehensive.use_of_funds ||
+        (signals.intentPhrases && signals.intentPhrases.size > 0),
+    )
+    if (hasGoalContent) {
+      aiItems = await inferNeedsWithAI(signals, profileContext)
+    }
+  } catch (err) {
+    console.warn('[itemCatalog] AI inference failed, using catalog only', err?.message)
+  }
+
+  // 3. Merge catalog + AI results (catalog first for curated quality), then de-dupe
+  const allCandidates = [...catalogMatches, ...aiItems]
+
   const seenNames = new Set()
   const finalList = []
-  for (const entry of candidateList) {
+  for (const entry of allCandidates) {
     if (!entry?.name) continue
     const key = normalizeLower(entry.name)
     if (!key || seenNames.has(key)) continue
