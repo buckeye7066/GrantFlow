@@ -15,7 +15,7 @@ export default function FirstRunOnboardingGate({ profiles = [], activeProfileId 
   // If the user has already completed onboarding (backend state), never show the gate.
   const hasCompletedOnboarding = useAuthStore((state) => state.hasCompletedOnboarding)
 
-  const { data: prefs } = useQuery({
+  const { data: prefs, isSuccess: prefsLoaded } = useQuery({
     queryKey: ['userPreferences'],
     queryFn: () => apiFetch('/api/preferences'),
     staleTime: 60_000,
@@ -37,24 +37,28 @@ export default function FirstRunOnboardingGate({ profiles = [], activeProfileId 
   const hasState = Boolean(basicSection?.state?.trim?.())
   const activeProfileComplete = hasZip && hasState
 
-  // Never show to users who have already completed backend onboarding
+  // Don't evaluate shouldShow until preferences have loaded at least once
   const shouldShow =
+    prefsLoaded &&
     !hasCompletedOnboarding &&
     !completed &&
     !skipped &&
     (profiles.length === 0 || !activeProfileComplete)
 
   const [showWizard, setShowWizard] = React.useState(false)
+  const dismissedRef = React.useRef(false)
 
   React.useEffect(() => {
-    if (shouldShow) setShowWizard(true)
+    if (shouldShow && !dismissedRef.current) setShowWizard(true)
   }, [shouldShow])
 
   const handleComplete = () => {
+    dismissedRef.current = true
     setShowWizard(false)
   }
 
   const handleSkip = () => {
+    dismissedRef.current = true
     setShowWizard(false)
   }
 
