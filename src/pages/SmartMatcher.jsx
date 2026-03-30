@@ -1,5 +1,5 @@
-import React, { useMemo, useState, useCallback, useEffect } from "react"
-import { Sparkles, Search, Filter, SlidersHorizontal, Star, TrendingUp, Award, Plus, X, CheckSquare, Target, Loader2 } from "lucide-react"
+import React, { useMemo, useState, useCallback, useEffect, useRef } from "react"
+import { Sparkles, Search, Filter, SlidersHorizontal, Star, TrendingUp, Award, Plus, X, CheckSquare, Target, Loader2, MapPin, User, Zap } from "lucide-react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -7,9 +7,12 @@ import { Label } from "@/components/ui/label"
 import { Badge } from "@/components/ui/badge"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Checkbox } from "@/components/ui/checkbox"
-import { useQuery, useQueryClient } from "@tanstack/react-query"
+import { Alert, AlertDescription } from "@/components/ui/alert"
+import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query"
 import { apiFetch } from "@/api/client"
 import { getItemSuggestions } from "@/api/items"
+import { getProfile } from "@/api/profiles"
+import { runSmartCrawler } from "@/api/crawlers"
 import ProfileSelect from "@/components/shared/ProfileSelect"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { useToast } from "@/components/ui/use-toast"
@@ -87,6 +90,8 @@ export default function SmartMatcher() {
     const { toast } = useToast()
     const queryClient = useQueryClient()
     const [isSearchingNeeds, setIsSearchingNeeds] = useState(false)
+    // Tracks which profile we already auto-populated keywords for (avoids re-populating on re-render)
+    const autoPopulatedProfileRef = useRef(null)
 
   // -- Persistent checklist state per profile --
   const [checklistState, setChecklistState] = useState({ checked: {}, customItems: [] })
@@ -115,6 +120,15 @@ export default function SmartMatcher() {
   useEffect(() => {
         saveNeeds(selectedProfileId, needsState)
   }, [selectedProfileId, needsState])
+
+  // -- Reset all search state when profile switches --
+  useEffect(() => {
+        setSearchQuery("")
+        setSelectedOpp(null)
+        setIsSearchingNeeds(false)
+        autoPopulatedProfileRef.current = null
+        queryClient.invalidateQueries({ queryKey: ["smart-matcher"] })
+  }, [selectedProfileId, queryClient])
 
   const toggleChecklistItem = useCallback((itemId) => {
         setChecklistState((prev) => ({
@@ -192,6 +206,49 @@ export default function SmartMatcher() {
         const suggestions = payload?.suggestions ?? []
         return Array.isArray(suggestions) ? suggestions : []
   }, [suggestionsResponse])
+
+  // -- Auto-populate search keywords from inferred needs on first profile load --
+  // Only runs once per profile selection; skips if the user has already typed a query.
+  useEffect(() => {
+        if (!selectedProfileId || selectedProfileId === 'all') return
+        if (isSuggestionsLoading) return
+        if (inferredNeeds.length === 0) return
+        if (autoPopulatedProfileRef.current === selectedProfileId) return
+        // Don't overwrite a query the user typed manually
+        if (searchQuery.trim()) {
+                autoPopulatedProfileRef.current = selectedProfileId
+                return
+        }
+        autoPopulatedProfileRef.current = selectedProfileId
+        const keywords = inferredNeeds.slice(0, 5).map((n) => n.name).join(" ")
+        setSearchQuery(keywords)
+  }, [selectedProfileId, inferredNeeds, isSuggestionsLoading, searchQuery])
+
+  // -- Fetch selected profile data --
+  const { data: selectedProfile } = useQuery({
+        queryKey: ['profile', selectedProfileId],
+        queryFn: () => getProfile(selectedProfileId),
+        enabled: Boolean(selectedProfileId) && selectedProfileId !== 'all',
+        staleTime: 300_000,
+  })
+
+  // -- Smart crawler mutation --
+  const crawlMutation = useMutation({
+        mutationFn: () => runSmartCrawler({ profileId: selectedProfileId, minMatchScore: minScore }),
+        onSuccess: (data) => {
+                queryClient.invalidateQueries({ queryKey: ['smart-matcher'] })
+                const count = data?.count ?? 0
+                toast({
+                        title: `Found ${count} new opportunit${count === 1 ? 'y' : 'ies'}`,
+                        description: data?.sources_used?.length
+                                ? `Sources: ${data.sources_used.join(', ')}`
+                                : 'Matching results refreshed.',
+                })
+        },
+        onError: (err) => {
+                toast({ title: 'Crawl failed', description: err?.message ?? 'Unknown error', variant: 'destructive' })
+        },
+  })
 
   const handleSearchNeeds = useCallback(() => {
         const checkedInferred = inferredNeeds
@@ -290,6 +347,26 @@ export default function SmartMatcher() {
                                                                             placeholder="Select a profile to match..."
                                                                           />
                                             </div>
+                                            {/* Profile summary card */}
+                                            {selectedProfile && selectedProfileId && selectedProfileId !== 'all' && (
+                                              <Alert className="bg-blue-50 border-blue-200">
+                                                <User className="h-4 w-4 text-blue-600" />
+                                                <AlertDescription className="text-blue-800">
+                                                  <span className="font-semibold">{selectedProfile.display_name || selectedProfile.name || 'Unnamed profile'}</span>
+                                                  {(selectedProfile.primary_type || selectedProfile.applicant_type) && (
+                                                    <Badge variant="outline" className="ml-2 text-xs border-blue-300 text-blue-700">
+                                                      {(selectedProfile.primary_type || selectedProfile.applicant_type).replace(/_/g, ' ')}
+                                                    </Badge>
+                                                  )}
+                                                  {selectedProfile.state && (
+                                                    <span className="ml-2 inline-flex items-center gap-1 text-xs text-blue-600">
+                                                      <MapPin className="w-3 h-3" />
+                                                      {[selectedProfile.city, selectedProfile.state].filter(Boolean).join(', ')}
+                                                    </span>
+                                                  )}
+                                                </AlertDescription>
+                                              </Alert>
+                                            )}
                                             <div className="grid md:grid-cols-2 gap-4">
                                                           <div>
                                                                           <Label>Search Keywords</Label>
@@ -318,8 +395,24 @@ export default function SmartMatcher() {
                                                           </div>
                                             </div>
                                   {selectedProfileId && selectedProfileId !== 'all' && (
-                        <div className="text-xs text-slate-600">
-                          {isScoring ? 'Scoring opportunities using full profile data\u2026' : `Showing ${filteredOpportunities.length} matches (server-scored)`}
+                        <div className="flex items-center justify-between gap-4">
+                          <div className="text-xs text-slate-600">
+                            {isScoring ? 'Scoring opportunities using full profile data\u2026' : `Showing ${filteredOpportunities.length} matches (server-scored)`}
+                          </div>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => crawlMutation.mutate()}
+                            disabled={crawlMutation.isPending}
+                            className="shrink-0 border-emerald-300 text-emerald-700 hover:bg-emerald-50"
+                          >
+                            {crawlMutation.isPending ? (
+                              <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                            ) : (
+                              <Zap className="w-4 h-4 mr-2" />
+                            )}
+                            {crawlMutation.isPending ? 'Finding funding…' : 'Find New Funding'}
+                          </Button>
                         </div>
                                             )}
                                 </CardContent>
