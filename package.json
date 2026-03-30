@@ -63,7 +63,8 @@
     "test:auto-merge": "node ./scripts/test-auto-merge-workflow.mjs",
     "merge:all-branches": "node ./scripts/merge-all-branches.mjs",
     "geo:dev-start": "node ./scripts/dev-start-geo-crawl.mjs",
-    "release:gates": "node ./scripts/release-gates.mjs"
+    "release:gates": "node ./scripts/release-gates.mjs",
+    "purge:regional": "node backend/scripts/regional-purge.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.30.1",
