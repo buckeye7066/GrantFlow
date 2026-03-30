@@ -681,28 +681,50 @@ test('unknown applicability: opportunity with no text signals → applicabilityU
   assert.deepEqual(opp.entityTypesAllowed, [], 'No entity signals should produce empty entityTypesAllowed')
 })
 
-test('unknown applicability: never produces ACCEPT even with need alignment', () => {
-  const profile = { primary_type: 'individual', state: 'OH', needs: ['housing', 'utilities'] }
+test('unknown applicability + non-individual profile: forces REVIEW/REJECT', () => {
+  // For non-individual profiles (e.g. business), unknown applicability should still be conservative
+  const profile = { primary_type: 'business', state: 'OH', needs: ['business'] }
   const opp = {
     title: 'General Support Program XYZ',
-    // Use a description with no entity type signals to ensure applicabilityUnknown=true
     description: 'Funding for program beneficiaries meeting eligibility criteria.',
     application_url: 'https://mystery.org/apply',
     is_national: 1,
-    entity_types_allowed: '[]', // explicit empty
-    categories: '["housing", "utilities"]',
+    entity_types_allowed: '[]',
+    categories: '["business"]',
     is_loan: 0,
   }
   const oppNorm = normalizeOpportunity(opp)
-  // Only run this assertion if text extraction also found no entity signals
-  // (i.e. truly unknown applicability)
   if (oppNorm.applicabilityUnknown) {
     const result = computeMatchDecision(profile, opp)
     assert.ok(
       result.decision === 'REVIEW' || result.decision === 'REJECT',
-      `Unknown applicability should force REVIEW/REJECT, got ${result.decision}: ${result.explanation}`,
+      `Unknown applicability for non-individual should force REVIEW/REJECT, got ${result.decision}: ${result.explanation}`,
     )
-    assert.notEqual(result.decision, 'ACCEPT', 'Unknown applicability must never produce ACCEPT')
+    assert.notEqual(result.decision, 'ACCEPT', 'Unknown applicability for non-individual must not produce ACCEPT')
+  }
+})
+
+test('unknown applicability + individual profile: can produce ACCEPT when well-aligned', () => {
+  // For individual/family profiles, unknown applicability is treated as a soft match.
+  // Consumer-facing programs often don't enumerate entity types but are intended for individuals.
+  const profile = { primary_type: 'individual', state: 'OH', needs: ['housing', 'utilities'] }
+  const opp = {
+    title: 'General Support Program XYZ',
+    description: 'Funding for program beneficiaries meeting eligibility criteria.',
+    application_url: 'https://mystery.org/apply',
+    is_national: 1,
+    entity_types_allowed: '[]',
+    categories: '["housing", "utilities"]',
+    is_loan: 0,
+  }
+  const oppNorm = normalizeOpportunity(opp)
+  if (oppNorm.applicabilityUnknown) {
+    const result = computeMatchDecision(profile, opp)
+    // Individual/family profile with good alignment: ACCEPT is allowed
+    assert.ok(
+      ['ACCEPT', 'REVIEW'].includes(result.decision),
+      `Individual profile with unknown applicability should allow ACCEPT/REVIEW, got ${result.decision}: ${result.explanation}`,
+    )
   }
 })
 
