@@ -76,17 +76,16 @@ export default function createGeoCrawlRouter({ uploadDir, getOpenAI } = {}) {
         crawlerJobId: jobId,
       })
 
-      // Dispatch asynchronously (don't block response)
-      try {
-        dispatchCrawlerJob({
-          db: req.db,
-          jobId,
-          uploadDir,
-          getOpenAI,
-        })
-      } catch (error) {
+      // Dispatch asynchronously (don't block response).
+      // Use .catch() instead of try/catch so async Promise rejections are also captured.
+      dispatchCrawlerJob({
+        db: req.db,
+        jobId,
+        uploadDir,
+        getOpenAI,
+      }).catch((error) => {
         console.warn('[geo-crawl/start] Failed to dispatch job:', error?.message || error)
-      }
+      })
 
       const job = await req.db
         .prepare('SELECT id, type, status, created_at, started_at, completed_at, result_count, error FROM crawler_jobs WHERE id = ?')
