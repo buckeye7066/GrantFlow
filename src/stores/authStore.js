@@ -256,7 +256,8 @@ export const useAuthStore = create((set, get) => ({
       const accessibleProfileCount = Number(payload.accessibleProfileCount ?? 0) || 0
 
       // Use backend has_completed_onboarding as the authoritative source.
-      // Fall back to localStorage for backward-compat while migration rolls out.
+      // Fall back to localStorage for backward-compat during rollout of migration 047.
+      // TODO: Remove localStorage fallback once all users have migrated (> 30 days post-deploy).
       const backendCompleted = Boolean(payload.hasCompletedOnboarding)
       const localCompleted = typeof window !== 'undefined'
         ? localStorage.getItem('grantflow:onboarding-complete') === 'true'

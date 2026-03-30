@@ -3148,6 +3148,9 @@ router.patch('/onboarding-state', async (req, res) => {
       return res.status(400).json({ error: 'No valid fields provided' })
     }
 
+    // Safety note: `updates` array contains only hardcoded column-name fragments
+    // (e.g. 'has_completed_onboarding = ?'). All values go through ? placeholders.
+    // No user input enters the SQL template itself.
     values.push(userId)
     await req.db.prepare(`UPDATE users SET ${updates.join(', ')} WHERE id = ?`).run(...values)
 

@@ -49,7 +49,7 @@ export default function AnyaGuidedTour() {
     // Admin users never get auto-shown the tour
     if (isAdmin) return
     // Show tour if user hasn't completed the current version yet
-    if (user && lastCompletedTourVersion < CURRENT_TOUR_VERSION) {
+    if (user && (lastCompletedTourVersion ?? 0) < CURRENT_TOUR_VERSION) {
       setIsOpen(true)
       setCurrentStep(0)
     }
