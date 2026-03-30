@@ -232,6 +232,20 @@ function _isSenior(pd) {
   )
 }
 
+function _hasConcreteDeadline(opportunity) {
+  if (!opportunity) return false
+
+  const raw = [
+    opportunity.deadline,
+    opportunity.deadline_text,
+    opportunity.close_date,
+    opportunity.closing_date,
+    opportunity.application_deadline,
+  ].filter(Boolean).join(' ').trim()
+
+  return Boolean(raw)
+}
+
 // ── Rule definitions ──────────────────────────────────────────────────────────
 
 export const RELEVANCE_RULES = [
@@ -608,5 +622,45 @@ export const RELEVANCE_RULES = [
       const nearMatch = (opportunity?.title || '').match(/near\s+([A-Za-z\s]+),\s*([A-Z]{2})/i)
       return `Geographic mismatch: resource near ${nearMatch?.[1]?.trim() || ''} but profile in ${_pd.city || ''}`
     },
+  },
+
+  // ── 16. Content type: procurement / contract solicitations ────────────────
+  {
+    id: 'content_procurement_contract',
+    category: 'content_type',
+    description: 'Procurement/contract solicitations that are not grant opportunities',
+    oppPattern: /\b(request for proposals|rfp|solicit(?:ation|e)|contract opportunity|statement of work|bidder|vendor)\b/i,
+    profileCheck: () => true,
+    reason: 'Content type mismatch: procurement/contract solicitation, not a grant opportunity',
+  },
+
+  // ── 17. Content type: fundraising / crowdfunding asks ─────────────────────
+  {
+    id: 'content_fundraising_crowdfunding',
+    category: 'content_type',
+    description: 'Fundraising/crowdfunding asks that are not award opportunities',
+    oppPattern: /\b(donate to|crowdfund|gofundme|kickstarter|indiegogo|fundraiser)\b/i,
+    profileCheck: () => true,
+    reason: 'Content type mismatch: fundraising/crowdfunding ask, not an award opportunity',
+  },
+
+  // ── 18. Content type: PI / institution-restricted academic calls ──────────
+  {
+    id: 'content_pi_institution_restricted',
+    category: 'content_type',
+    description: 'PI/institution-restricted academic calls not open to general applicants',
+    oppPattern: /\b(institutions? of higher education|principal investigator|faculty member|doctoral dissertation research)\b/i,
+    profileCheck: () => true,
+    reason: 'Content type mismatch: PI/institution-restricted academic call',
+  },
+
+  // ── 19. Content type: rolling / open-until-filled with no clear deadline ──
+  {
+    id: 'content_rolling_no_clear_deadline',
+    category: 'content_type',
+    description: 'Rolling/open-until-filled listings with no clear deadline window',
+    oppPattern: /\b(rolling basis|open until filled|applications accepted on a rolling basis)\b/i,
+    profileCheck: (_pd, _oppText, opportunity) => !_hasConcreteDeadline(opportunity),
+    reason: 'Content type mismatch: rolling/open-until-filled listing with no clear deadline window',
   },
 ]
