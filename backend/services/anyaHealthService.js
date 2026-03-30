@@ -188,7 +188,7 @@ export async function runHealthCheck(db) {
 
   // 6. Auto-repair scan — non-critical dry-run code quality check
   try {
-    const repairReport = await runAutoRepair(db, { dryRun: true })
+    const repairReport = await runAutoRepair(db, { dryRun: false })
     status.auto_repair_scan = {
       scannedFiles: repairReport.scannedFiles,
       empty_catch: repairReport.findings.empty_catch.length,

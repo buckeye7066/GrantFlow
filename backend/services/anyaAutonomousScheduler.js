@@ -21,7 +21,7 @@ function isProdEnv() {
  */
 const AUTONOMOUS_CONFIG = {
   // Enable/disable autonomous operations
-  enabled: process.env.ANYA_AUTONOMOUS_ENABLED === 'true',
+  enabled: process.env.ANYA_AUTONOMOUS_ENABLED !== 'false',
   
   // When to run operations
   runOnStartup: process.env.ANYA_RUN_ON_STARTUP === 'true',

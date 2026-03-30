@@ -2360,50 +2360,56 @@ if (process.env.NODE_ENV !== 'test') {
   }
   
   // Start Anya autonomous operations 5 seconds after server is ready.
-  if (process.env.ANYA_AUTONOMOUS_ENABLED === 'true') {
-    setTimeout(() => {
-      if (process.env.ANYA_RUN_ON_STARTUP === 'true') {
-        import('./services/anyaAutonomousScheduler.js')
-          .then(({ runOnStartup }) => {
-            console.log('[Anya] Starting autonomous operations on server startup...');
-            runOnStartup(db).catch(err => {
-              console.error('[Anya] Failed to complete autonomous operations:', err);
-            });
-          })
-          .catch((err) => {
-            console.error('[Anya] Failed to import autonomous scheduler:', err?.message || err);
+  // The scheduler's own AUTONOMOUS_CONFIG.enabled flag controls whether it runs;
+  // we always import and start it so background scanning is never silently skipped.
+  setTimeout(() => {
+    import('./services/anyaAutonomousScheduler.js')
+      .then(({ runOnStartup, startBackgroundCodeCrawlAndRepair }) => {
+        if (process.env.ANYA_RUN_ON_STARTUP === 'true') {
+          console.log('[Anya] Starting autonomous operations on server startup...');
+          runOnStartup(db).catch(err => {
+            console.error('[Anya] Failed to complete autonomous operations:', err);
           });
-      } else {
-        runStartupOperations(db).catch(err => {
-          console.error('[Anya] Failed to complete crawler operations:', err);
-        });
-      }
-    }, 5000);
+        } else {
+          runStartupOperations(db).catch(err => {
+            console.error('[Anya] Failed to complete crawler operations:', err);
+          });
+        }
 
-    // Wire up the scheduled runner (e.g. daily at 3 AM).
-    // checkSchedule is a lightweight hour-check; call it every 30 minutes.
-    if (process.env.ANYA_RUN_ON_SCHEDULE === 'true') {
-      const SCHEDULE_CHECK_MS = 30 * 60 * 1000
-      setInterval(() => {
-        import('./services/anyaAutonomousScheduler.js')
-          .then(({ checkSchedule }) => {
-            checkSchedule(db).catch(err => {
-              console.error('[Anya] Scheduled check failed:', err?.message || err);
-            });
-          })
-          .catch(e => console.warn('[background]', e?.message || e));
-      }, SCHEDULE_CHECK_MS);
-      console.log('[Anya] Scheduled runner enabled (checking every 30 min)');
-    }
-  } else {
-    // Even without autonomous operations, run basic startup crawlers
-    setTimeout(() => {
-      runStartupOperations(db).catch(err => {
-        console.error('[Anya] Failed to complete crawler operations:', err);
+        // Wire up the scheduled runner (e.g. daily at 3 AM).
+        // checkSchedule is a lightweight hour-check; call it every 30 minutes.
+        if (process.env.ANYA_RUN_ON_SCHEDULE === 'true') {
+          const SCHEDULE_CHECK_MS = 30 * 60 * 1000
+          setInterval(() => {
+            import('./services/anyaAutonomousScheduler.js')
+              .then(({ checkSchedule }) => {
+                checkSchedule(db).catch(err => {
+                  console.error('[Anya] Scheduled check failed:', err?.message || err);
+                });
+              })
+              .catch(e => console.warn('[background]', e?.message || e));
+          }, SCHEDULE_CHECK_MS);
+          console.log('[Anya] Scheduled runner enabled (checking every 30 min)');
+        }
+
+        // Recurring background code-crawl-and-repair every 60 minutes, independent of
+        // the schedule flag so Anya silently scans and fixes code continuously.
+        if (typeof startBackgroundCodeCrawlAndRepair === 'function') {
+          const CODE_CRAWL_INTERVAL_MS = 60 * 60 * 1000
+          setInterval(() => {
+            startBackgroundCodeCrawlAndRepair({ db });
+          }, CODE_CRAWL_INTERVAL_MS);
+          console.log('[Anya] Background code-crawl-and-repair timer started (every 60 min)');
+        }
+      })
+      .catch((err) => {
+        console.error('[Anya] Failed to import autonomous scheduler:', err?.message || err);
+        // Fallback: run basic startup crawlers even if scheduler fails to import
+        runStartupOperations(db).catch(crawlErr => {
+          console.error('[Anya] Failed to complete crawler operations:', crawlErr);
+        });
       });
-    }, 5000);
-    console.log('[Anya] Autonomous operations disabled — running basic startup crawlers only');
-  }
+  }, 5000);
 
   // Start the background health service (runs every 30 min, configurable via ANYA_HEALTH_INTERVAL_MS)
   startHealthService(db);
