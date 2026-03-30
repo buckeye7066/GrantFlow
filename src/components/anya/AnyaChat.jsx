@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react"
 import { useNavigate } from "react-router-dom"
 import { v4 as uuid } from "uuid"
-import { Loader2, Search, Send, Sparkles, Plus, Shield, Database, Activity, Code, Wrench, ChevronDown, ChevronRight, Compass, FolderOpen, Kanban, User, Monitor } from "lucide-react"
+import { Loader2, Search, Send, Sparkles, Plus, Shield, Database, Activity, Code, Wrench, ChevronDown, ChevronRight, Compass, FolderOpen, Kanban, User, Monitor, Trash2, RotateCcw } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import { ScrollArea } from "@/components/ui/scroll-area"
@@ -14,6 +14,7 @@ import { createLogger } from "@/utils/logger"
 import {
   getAnyaSessions,
   createAnyaSession,
+  deleteAnyaSession,
   getAnyaMessages,
   postAnyaMessage,
   listAnyaTools,
@@ -384,6 +385,46 @@ export default function AnyaChat({ profileId }) {
     }
   }, [sessionId, anyaContext, refreshMessages])
 
+  const [isClearingConversation, setIsClearingConversation] = useState(false)
+
+  /** Clear messages locally (keeps the same session) */
+  const handleClearConversation = useCallback(async () => {
+    setIsClearingConversation(true)
+    try {
+      setMessages([])
+      setTasks([])
+      toast({ title: "Conversation cleared", description: "Messages removed from view." })
+    } finally {
+      setIsClearingConversation(false)
+    }
+  }, [])
+
+  /** Delete current session and start a brand-new one */
+  const handleStartNewConversation = useCallback(async () => {
+    setIsClearingConversation(true)
+    try {
+      if (sessionId) {
+        try {
+          await deleteAnyaSession(sessionId)
+        } catch (_e) { log.debug('[AnyaChat] deleteAnyaSession error (non-critical)', _e) }
+      }
+      setMessages([])
+      setTasks([])
+      setSessionId(null)
+      const newSession = await createAnyaSession({ profileId: effectiveProfileId ?? undefined })
+      setSessionId(newSession?.id ?? null)
+      toast({ title: "New conversation started" })
+    } catch (err) {
+      toast({
+        variant: "destructive",
+        title: "Failed to start new conversation",
+        description: err instanceof Error ? err.message : "Please try again.",
+      })
+    } finally {
+      setIsClearingConversation(false)
+    }
+  }, [sessionId, effectiveProfileId])
+
   if (isUnavailable) {
     return (
       <div className="rounded-xl border border-slate-200 bg-white/80 p-4 text-sm text-slate-700 shadow-sm">
@@ -638,6 +679,32 @@ export default function AnyaChat({ profileId }) {
                     ADMIN
                   </Badge>
                 )}
+                <div className="ml-auto flex items-center gap-1">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-7 w-7 p-0 text-slate-500 hover:text-red-600 hover:bg-red-50"
+                    onClick={handleClearConversation}
+                    disabled={isClearingConversation || messages.length === 0}
+                    title="Clear conversation (keeps same session)"
+                  >
+                    {isClearingConversation ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <Trash2 className="h-3.5 w-3.5" />
+                    )}
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-7 w-7 p-0 text-slate-500 hover:text-purple-600 hover:bg-purple-50"
+                    onClick={handleStartNewConversation}
+                    disabled={isClearingConversation}
+                    title="Start new conversation"
+                  >
+                    <RotateCcw className="h-3.5 w-3.5" />
+                  </Button>
+                </div>
               </div>
               <p className="text-xs text-slate-600">
                 Ask about grant matches, automation jobs, or request code assistance. All actions stay

@@ -1019,7 +1019,7 @@ router.delete('/:id', async (req, res) => {
   const admin = req.ctx?.isAdmin === true
   if (!admin) {
     const matchesProfileId = authProfileId === String(id)
-    const matchesUserId = authUserId && existing.user_id && authUserId === existing.user_id
+    const matchesUserId = authUserId && existing.user_id && String(authUserId) === String(existing.user_id)
     if (!matchesProfileId && !matchesUserId) {
       return denyAuth(req, res)
     }

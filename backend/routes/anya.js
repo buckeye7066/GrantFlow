@@ -197,6 +197,27 @@ router.get('/sessions/:sessionId', async (req, res) => {
   }
 })
 
+router.delete('/sessions/:sessionId', async (req, res) => {
+  try {
+    const { sessionId } = req.params
+    const session = await getSession(req.db, req.ctx, sessionId)
+    if (!session) {
+      return res.status(404).json({ error: 'Session not found' })
+    }
+    // Delete messages then the session itself (best-effort cascade)
+    try {
+      await req.db.prepare('DELETE FROM anya_messages WHERE session_id = ?').run(sessionId)
+    } catch (_e) { console.debug('[anya] delete session messages error (non-critical):', _e?.message || _e) }
+    try {
+      await req.db.prepare('DELETE FROM anya_tasks WHERE session_id = ?').run(sessionId)
+    } catch (_e) { console.debug('[anya] delete session tasks error (non-critical):', _e?.message || _e) }
+    await req.db.prepare('DELETE FROM anya_sessions WHERE id = ?').run(sessionId)
+    res.status(204).send()
+  } catch (error) {
+    handleError(res, error)
+  }
+})
+
 router.get('/sessions/:sessionId/messages', async (req, res) => {
   try {
     const messages = await getMessages(req.db, req.ctx, req.params.sessionId, {
