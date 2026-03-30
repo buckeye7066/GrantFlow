@@ -2450,7 +2450,7 @@ router.post('/profile-change', standardRateLimiter, async (req, res) => {
         type: decision.action,
         reason: decision.reason,
         estimated_fanout_pct,
-        estimated_cost_units: estimated_cost_units,
+        estimated_cost_units,
         enqueued_at: job.created_at,
         expected_complete_by: estimateCompletion(decision.action, job.created_at)
       }

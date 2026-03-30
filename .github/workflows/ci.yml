@@ -38,7 +38,9 @@ jobs:
       - name: Playwright smoke
         # Non-blocking: smoke tests require a running database (Postgres) which is not
         # available in CI yet. The step still runs to surface issues but won't block CI.
+        # Step-level timeout prevents Playwright install from exhausting the job timeout.
         continue-on-error: true
+        timeout-minutes: 5
         env:
           ALLOW_EPHEMERAL_UPLOADS: 'true'
         run: |

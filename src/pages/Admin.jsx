@@ -12,6 +12,7 @@ import AdminProfileDedupe from '@/components/admin/AdminProfileDedupe.jsx';
 import AdminProfileIntegrity from '@/components/admin/AdminProfileIntegrity.jsx';
 import AdminKnowledgeBase from '@/components/admin/AdminKnowledgeBase.jsx'
 import AdminServiceCatalog from '@/components/admin/AdminServiceCatalog.jsx'
+import AdminExclusionRules from '@/components/admin/AdminExclusionRules'
 import Billing from '@/pages/Billing';
 import Automation from '@/pages/Automation';
 import { useAuthStore } from '@/stores/authStore';
@@ -91,6 +92,7 @@ export default function Admin() {
               <Wrench className="w-4 h-4 mr-2" />
               Maintenance
             </TabsTrigger>
+            <TabsTrigger value="exclusions">Exclusions</TabsTrigger>
           </TabsList>
           
           <TabsContent value="applications" className="mt-6">
@@ -142,6 +144,10 @@ export default function Admin() {
 
           <TabsContent value="maintenance" className="mt-6">
             <AdminMaintenance />
+          </TabsContent>
+
+          <TabsContent value="exclusions" className="mt-6">
+            <AdminExclusionRules />
           </TabsContent>
         </Tabs>
       </div>
