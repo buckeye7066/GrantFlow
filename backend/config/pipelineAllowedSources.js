@@ -15,6 +15,10 @@
  * - local_directory_united_way: United Way local directory
  * - local_directory_feeding_america: Feeding America local directory
  * - local_directory_cap: Community Action Partnership local directory
+ * - grants.gov: Grants.gov connector/crawler results
+ * - catalog: catalog match query results (fallback source in DiscoverGrants)
+ * - comprehensive_match: comprehensive match flow results
+ * - discovery: default fallback source for opportunities without an explicit source
  */
 export const PIPELINE_ALLOWED_SOURCES = [
   'verified_real',
@@ -26,6 +30,11 @@ export const PIPELINE_ALLOWED_SOURCES = [
   'local_directory_united_way',
   'local_directory_feeding_america',
   'local_directory_cap',
+  // Discovery & matching flow sources
+  'grants.gov',
+  'catalog',
+  'comprehensive_match',
+  'discovery',
 ];
 
 export const PIPELINE_ALLOWED_SOURCES_SET = new Set(PIPELINE_ALLOWED_SOURCES);
