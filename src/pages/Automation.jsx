@@ -11,6 +11,7 @@ import {
   MapPin,
   RefreshCw,
   Rocket,
+  School,
   ShoppingCart,
   Sparkles,
   Target,
@@ -57,6 +58,7 @@ async function startGeoCrawl(payload) {
 
 const JOB_LABELS = {
   local: "Local 25-mile sweep",
+  portal_check: "Portal award check",
   scholarship: "Scholarship intelligence",
   comprehensive: "Comprehensive match",
   item_search: "Item funding search",
@@ -77,6 +79,7 @@ const STATUS_VARIANTS = {
 const METRIC_TYPE_ORDER = Object.keys(JOB_LABELS)
 
 const JOB_ICON_MAP = {
+  portal_check: School,
   local: MapPin,
   scholarship: GraduationCap,
   comprehensive: Globe2,
@@ -1948,6 +1951,14 @@ export default function Automation() {
           onClick={() => handleQueueJob("scholarship")}
           disabled={!isAdmin && !activeProfileId}
           loading={createJobMutation.isPending && createJobMutation.variables?.type === "scholarship"}
+        />
+        <QuickActionCard
+          icon={School}
+          title="Portal award check"
+          description="Proactively check financial aid and scholarship portals for new award notifications and sync them to the student's profile."
+          onClick={() => handleQueueJob("portal_check", { check_type: "manual", max_portals: 20 })}
+          disabled={!isAdmin && !activeProfileId}
+          loading={createJobMutation.isPending && createJobMutation.variables?.type === "portal_check"}
         />
         <QuickActionCard
           icon={Target}

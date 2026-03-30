@@ -1215,7 +1215,7 @@ registerTool({
         type: 'array',
         items: {
           type: 'string',
-          enum: ['local', 'scholarship', 'curated_benefits', 'comprehensive', 'item_search', 'profile_enrichment', 'avatar_lookup']
+          enum: ['local', 'scholarship', 'curated_benefits', 'comprehensive', 'item_search', 'profile_enrichment', 'avatar_lookup', 'portal_check']
         },
         description: 'Array of crawler types to trigger (default: all)'
       },
@@ -1277,7 +1277,7 @@ registerTool({
       profileId: { type: 'string', description: 'Profile ID to schedule crawlers for' },
       crawlerType: {
         type: 'string',
-        enum: ['local', 'scholarship', 'curated_benefits', 'comprehensive', 'item_search', 'profile_enrichment', 'avatar_lookup'],
+        enum: ['local', 'scholarship', 'curated_benefits', 'comprehensive', 'item_search', 'profile_enrichment', 'avatar_lookup', 'portal_check'],
         description: 'Type of crawler to schedule. curated_benefits runs the new profile-matched system. Use comprehensive with parameters.mode=geo for Geo Crawl.'
       },
       schedule: { type: 'string', description: 'Cron expression (e.g., "0 9 * * 1" for every Monday at 9am)' },

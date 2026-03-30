@@ -1,8 +1,10 @@
-import React from "react"
-import { ExternalLink } from "lucide-react"
+import React, { useState } from "react"
+import { ExternalLink, RefreshCw, CheckCircle2, Clock } from "lucide-react"
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
+import { createCrawlerJob } from "@/api/crawlers"
+import { useToast } from "@/components/ui/use-toast"
 
 function normalizeState(value) {
   const v = String(value || "").trim().toUpperCase()
@@ -35,8 +37,36 @@ function PortalSection({ title, items }) {
   )
 }
 
-export default function StudentPortalsCard({ state }) {
+export default function StudentPortalsCard({ state, profileId }) {
   const st = normalizeState(state)
+  const { toast } = useToast()
+  const [checking, setChecking] = useState(false)
+  const [lastChecked, setLastChecked] = useState(null)
+
+  const handleCheckNow = async () => {
+    if (!profileId || checking) return
+    setChecking(true)
+    try {
+      await createCrawlerJob({
+        type: "portal_check",
+        profile_id: profileId,
+        parameters: { check_type: "manual", max_portals: 20 },
+      })
+      setLastChecked(new Date())
+      toast({
+        title: "Portal check queued",
+        description: "Checking financial aid portals for new award updates\u2026",
+      })
+    } catch (err) {
+      toast({
+        title: "Portal check failed",
+        description: err?.message || "Unable to start portal check.",
+        variant: "destructive",
+      })
+    } finally {
+      setChecking(false)
+    }
+  }
 
   const admissionsAndAid = [
     { label: "FAFSA (Federal Student Aid)", href: "https://studentaid.gov/h/apply-for-aid/fafsa" },
@@ -78,7 +108,29 @@ export default function StudentPortalsCard({ state }) {
   return (
     <Card>
       <CardHeader className="pb-3">
-        <CardTitle className="text-base">Student portals</CardTitle>
+        <div className="flex items-center justify-between gap-2">
+          <CardTitle className="text-base">Student portals</CardTitle>
+          {profileId ? (
+            <div className="flex items-center gap-2">
+              {lastChecked && (
+                <span className="flex items-center gap-1 text-xs text-slate-500">
+                  <Clock className="h-3.5 w-3.5" />
+                  Last checked {lastChecked.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                </span>
+              )}
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleCheckNow}
+                disabled={checking}
+                className="h-7 gap-1 px-2 text-xs"
+              >
+                <RefreshCw className={`h-3.5 w-3.5 ${checking ? "animate-spin" : ""}`} />
+                {checking ? "Checking\u2026" : "Check Now"}
+              </Button>
+            </div>
+          ) : null}
+        </div>
       </CardHeader>
       <CardContent>
         <div className="space-y-5">
@@ -87,11 +139,10 @@ export default function StudentPortalsCard({ state }) {
           <PortalSection title="Licensure + certification" items={licensureAndCertification} />
         </div>
         <p className="mt-3 text-xs text-slate-500">
-          Tip: keep these logins handy. Add each university’s direct application, portal, and fee/payment links inside the
+          Tip: keep these logins handy. Add each university&apos;s direct application, portal, and fee/payment links inside the
           university cards below.
         </p>
       </CardContent>
     </Card>
   )
 }
-
