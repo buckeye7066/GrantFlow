@@ -54,6 +54,14 @@ export const NEED_ALIAS_MAP = {
   groceries: 'food',
   snap: 'food',
 
+  // Employment / workforce
+  employment: 'employment',
+  job: 'employment',
+  jobs: 'employment',
+  workforce: 'employment',
+  job_training: 'employment',
+  career: 'employment',
+
   // Education / student
   education: 'education',
   student: 'education',
@@ -62,7 +70,6 @@ export const NEED_ALIAS_MAP = {
   scholarship: 'education',
   school: 'education',
   training: 'education',
-  workforce: 'education',
   vocational: 'education',
   financial_aid: 'education',
 
@@ -135,6 +142,26 @@ export const NEED_ALIAS_MAP = {
   goods: 'clothing_goods',
   household_goods: 'clothing_goods',
   furniture: 'clothing_goods',
+
+  // Cash assistance / financial aid
+  cash_assistance: 'cash_assistance',
+  income_support: 'cash_assistance',
+  financial_assistance: 'cash_assistance',
+  tanf: 'cash_assistance',
+  ssi: 'cash_assistance',
+  ssdi: 'cash_assistance',
+
+  // Legal services
+  legal: 'legal',
+  legal_aid: 'legal',
+  legal_help: 'legal',
+
+  // Substance recovery (maps to health_medical)
+  substance_recovery: 'health_medical',
+  substance_abuse: 'health_medical',
+  addiction: 'health_medical',
+  rehab: 'health_medical',
+  recovery: 'health_medical',
 }
 
 // ---------------------------------------------------------------------------
@@ -228,7 +255,19 @@ function safeParseArray(val) {
 // ---------------------------------------------------------------------------
 // Normalize a profile + sections into a canonical structure
 // ---------------------------------------------------------------------------
-export function normalizeProfile(rawProfile, sections = null) {
+/**
+ * Normalize a raw profile and its sections into the canonical structure used
+ * by the decision engine.
+ *
+ * @param {Object} rawProfile     - Raw profile row or { profile, sections } object
+ * @param {Object|null} sections  - Profile sections keyed by section name
+ * @param {Object|null} signals   - Optional signals object from buildProfileSignals().
+ *   When provided, signals.needs (a Set of inferred need strings) is merged into
+ *   needCategories after the normalizer's own extraction, canonicalized via NEED_ALIAS_MAP.
+ *   This bridges the rich signal engine output into the scoring pipeline.
+ * @returns {Object|null} Normalized profile or null if rawProfile is falsy
+ */
+export function normalizeProfile(rawProfile, sections = null, signals = null) {
   if (!rawProfile) return null
 
   const profile = rawProfile?.profile ?? rawProfile
@@ -326,6 +365,19 @@ export function normalizeProfile(rawProfile, sections = null) {
   }
 
   const needCategories = [...new Set(rawNeeds.map(normalizeNeedCategory).filter(Boolean))]
+
+  // -- Merge signals.needs from buildProfileSignals() if provided --
+  // The signal engine produces a richer set of inferred needs from profile sections
+  // (healthcare, employment, cash_assistance, transportation, etc.) that normalizeProfile()
+  // may not extract on its own. Merge these in using the alias map so they're canonical.
+  if (signals?.needs instanceof Set) {
+    for (const need of signals.needs) {
+      const canonical = normalizeNeedCategory(need)
+      if (canonical && !needCategories.includes(canonical)) {
+        needCategories.push(canonical)
+      }
+    }
+  }
 
   // ---------------------------------------------------------------------------
   // Derive richer signals from section content
@@ -512,6 +564,11 @@ export function normalizeProfile(rawProfile, sections = null) {
 
   const hasEmergencyNeed = needCategories.includes('emergency') || hasEmergencyFromSections
 
+  // Ensure 'emergency' appears in needCategories when section-derived emergency is detected
+  if (hasEmergencyFromSections && !needCategories.includes('emergency')) {
+    needCategories.push('emergency')
+  }
+
   // -- Housing instability --
   let hasHousingInstabilityFromSections = false
   const housingSection =
@@ -559,7 +616,17 @@ export function normalizeProfile(rawProfile, sections = null) {
     }
   }
 
+  // Ensure 'employment' appears in needCategories when section-derived employment need is detected
+  if (hasEmploymentNeed && !needCategories.includes('employment')) {
+    needCategories.push('employment')
+  }
+
   const hasBusinessNeed = needCategories.includes('business') || isBusiness
+
+  // Ensure 'business' appears in needCategories when business status is detected
+  if (isBusiness && !needCategories.includes('business')) {
+    needCategories.push('business')
+  }
 
   // -- Financial information section: derive need categories from explicit content --
   // Real profiles store financial data in a 'financial_information' section which doesn't

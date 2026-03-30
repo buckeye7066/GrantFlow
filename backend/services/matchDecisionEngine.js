@@ -325,8 +325,15 @@ export function calculateNeedAlignment(profileNorm, oppNorm) {
 
   const matchedNeeds = profileNeeds.filter((n) => oppNeeds.includes(n))
 
-  // Exact matches get full credit; partial overlap scales down
-  const score = Math.round((matchedNeeds.length / Math.max(profileNeeds.length, 1)) * 100)
+  // Two-sided coverage: average of profile-side coverage and opportunity-side coverage.
+  // This avoids penalizing profiles with many needs (old formula: matched/profileNeeds
+  // meant more needs = lower score). Now each side contributes equally: a profile with
+  // 5 needs matching 2 of an opportunity's 3 needs scores (2/5 + 2/3) / 2 = 53%.
+  // Note: oppNeeds.length === 0 is already guarded by the early return above, but we
+  // use Math.max defensively to make the intent explicit.
+  const profileCoverage = matchedNeeds.length / profileNeeds.length
+  const oppCoverage = matchedNeeds.length / Math.max(oppNeeds.length, 1)
+  const score = Math.round(((profileCoverage + oppCoverage) / 2) * 100)
 
   return { score: Math.min(100, score), matchedNeeds }
 }
@@ -416,13 +423,13 @@ export function computeMatchDecision(rawProfile, rawOpportunity, opts = {}) {
 
   // Step 5: Composite score
   // Weights: need alignment 45%, source trust 25%, entity type match 20%, geo bonus 10%
-  // Individual/family match earns a smaller bonus (15 pts) since it's a less specific match
-  // than veteran/student/nonprofit/business targeting.
+  // Individual/family match earns a near-equal bonus (18 pts) since they are the most
+  // common profile type and many consumer-facing assistance programs target them.
   let entityTypeBonus = 0
   if (matchedProfileTraits.some(t => ['veteran', 'student', 'nonprofit', 'business'].includes(t))) {
     entityTypeBonus = 20
   } else if (matchedProfileTraits.includes('individual_match')) {
-    entityTypeBonus = 15
+    entityTypeBonus = 18
   }
   const geoBonus = matchedProfileTraits.some(t => ['national_eligible', 'state_match'].includes(t)) ? 10 : 0
   const rawScore = (needAlignmentScore * 0.45) + (sourceTrust * 0.25) + entityTypeBonus + geoBonus
