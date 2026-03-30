@@ -1335,8 +1335,8 @@ router.post('/jobs/:id/cancel', async (req, res) => {
       if (!(await ensureProfileAccess(req, res, String(job.profile_id)))) return
     }
 
-    if (job.status !== 'queued') {
-      return res.status(400).json({ error: 'Only queued jobs can be cancelled' })
+    if (job.status !== 'queued' && job.status !== 'running') {
+      return res.status(400).json({ error: 'Only queued or running jobs can be cancelled' })
     }
 
     await req.db

@@ -694,7 +694,11 @@ export const useAuthStore = create((set, get) => ({
       throw new Error('Missing refresh token')
     }
     try {
-      const response = await refreshSession(refreshToken)
+      // Use client.refreshTokens() so this shares the single-flight refreshPromise
+      // with handleUnauthorized(). This prevents a simultaneous timer-based refresh
+      // and a 401-triggered refresh from both hitting /api/auth/refresh at the same
+      // time (which would invalidate the rotate-on-use refresh token).
+      const response = await client.refreshTokens()
       if (response?.accessToken) {
         client.setToken(response.accessToken)
         set({ accessToken: response.accessToken })

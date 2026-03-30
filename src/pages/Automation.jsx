@@ -28,7 +28,7 @@ import { Textarea } from "@/components/ui/textarea"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Badge } from "@/components/ui/badge"
 import { ScrollArea } from "@/components/ui/scroll-area"
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Separator } from "@/components/ui/separator"
 import { format, formatDistanceToNow } from "date-fns"
 import { useToast } from "@/components/ui/use-toast"
@@ -956,6 +956,9 @@ function JobDetailsDialog({ job, onOpenChange, onRetry, retrying, onCancel, canc
             <Sparkles className="h-5 w-5 text-blue-600" />
             Automation job details
           </DialogTitle>
+          <DialogDescription>
+            View status, parameters, and results for this automation job.
+          </DialogDescription>
         </DialogHeader>
         <div className="space-y-4 text-sm text-slate-700">
           <div className="flex justify-end gap-2">
