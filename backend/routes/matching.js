@@ -54,7 +54,7 @@ router.get('/profile/:profileId/grants', async (req, res) => {
       // Pre-normalize profile once for the v2.0.0 decision engine
       const rawProfileForGrants = profileContext?.profile ?? profileContext
       const profileSectionsForGrants = profileContext?.sections ?? null
-      const profileNormForDecision = normalizeProfile(rawProfileForGrants, profileSectionsForGrants)
+      const profileNormForDecision = normalizeProfile(rawProfileForGrants, profileSectionsForGrants, baseContext.signals)
 
       if (!profileRow.organization_id) {
               return res.json([])
@@ -251,11 +251,6 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
               params.push(pattern, pattern, pattern, pattern)
       }
 
-      // Profile isolation: each profile sees global catalog entries plus its own crawl results.
-      // This prevents cross-profile bleed where Profile A's crawl results appear in Profile B's matches.
-      conditions.push('(profile_id IS NULL OR profile_id = ?)')
-      params.push(profileId)
-
       const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''
 
       const deadlineNullSort = isPostgres
@@ -295,7 +290,7 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
       // Pre-normalize profile once for the v2.0.0 REJECT filter (avoids re-running per opportunity)
       const rawProfileForDecision = profileContext?.profile ?? profileContext
       const profileSectionsForDecision = profileContext?.sections ?? null
-      const profileNormForDecision = normalizeProfile(rawProfileForDecision, profileSectionsForDecision)
+      const profileNormForDecision = normalizeProfile(rawProfileForDecision, profileSectionsForDecision, baseContext.signals)
 
       const allScored = candidates
                      .map((opp) => {
