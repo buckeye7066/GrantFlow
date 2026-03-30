@@ -3,14 +3,16 @@ import { useNavigate } from 'react-router-dom'
 import { useAuthStore } from '@/stores/authStore'
 import OnboardingManual from './OnboardingManual'
 import ProfileCreationWizard from './ProfileCreationWizard'
+import { CURRENT_MANUAL_VERSION } from '@/config/helpRegistry'
 
 export default function OnboardingFlow() {
   const navigate = useNavigate()
   const {
-    hasSeenOnboarding,
+    hasCompletedOnboarding,
     needsProfileCreation,
     profiles,
     markOnboardingComplete,
+    markManualSeen,
     setNeedsProfileCreation,
     user,
     onboardingVideoRequested,
@@ -18,10 +20,11 @@ export default function OnboardingFlow() {
     acknowledgeOnboardingVideo,
     acknowledgeProfileWizard,
   } = useAuthStore((state) => ({
-    hasSeenOnboarding: state.hasSeenOnboarding,
+    hasCompletedOnboarding: state.hasCompletedOnboarding,
     needsProfileCreation: state.needsProfileCreation,
     profiles: state.profiles,
     markOnboardingComplete: state.markOnboardingComplete,
+    markManualSeen: state.markManualSeen,
     setNeedsProfileCreation: state.setNeedsProfileCreation,
     user: state.user,
     onboardingVideoRequested: state.onboardingVideoRequested,
@@ -34,11 +37,13 @@ export default function OnboardingFlow() {
   const [showProfileWizard, setShowProfileWizard] = useState(false)
 
   useEffect(() => {
+    // Admin users never get auto-triggered onboarding
     if (user?.is_admin) {
       return
     }
 
-    if (!hasSeenOnboarding) {
+    // Only show manual to users who have not yet completed onboarding (backend state)
+    if (!hasCompletedOnboarding) {
       setShowVideo(true)
       return
     }
@@ -46,8 +51,9 @@ export default function OnboardingFlow() {
     if (needsProfileCreation && profiles.length === 0) {
       setShowProfileWizard(true)
     }
-  }, [hasSeenOnboarding, needsProfileCreation, profiles, user])
+  }, [hasCompletedOnboarding, needsProfileCreation, profiles, user])
 
+  // Manual relaunch via "User Manual" button in header (works for all users)
   useEffect(() => {
     if (onboardingVideoRequested) {
       setShowVideo(true)
@@ -65,6 +71,7 @@ export default function OnboardingFlow() {
   const handleVideoComplete = () => {
     setShowVideo(false)
     markOnboardingComplete()
+    markManualSeen(CURRENT_MANUAL_VERSION)
     
     // Check if we need to create a profile
     if (profiles.length === 0) {
@@ -117,3 +124,4 @@ export default function OnboardingFlow() {
     </>
   )
 }
+

@@ -2027,3 +2027,21 @@ CREATE TABLE IF NOT EXISTS vehicle_opportunities (
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_vehicle_opportunities_link ON vehicle_opportunities(link);
 CREATE INDEX IF NOT EXISTS idx_vehicle_opportunities_created_at ON vehicle_opportunities(created_at);
+
+-- Exclusion Rules (procurement noise suppression)
+CREATE TABLE IF NOT EXISTS exclusion_rules (
+  rule_id TEXT PRIMARY KEY,
+  pattern TEXT,
+  action TEXT,
+  confidence_score REAL
+);
+
+-- Exclusion Audit (trail of suppression decisions)
+CREATE TABLE IF NOT EXISTS exclusion_audit (
+  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+  rule_id TEXT,
+  opportunity_id TEXT,
+  decision TEXT,
+  false_positive BOOLEAN,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);

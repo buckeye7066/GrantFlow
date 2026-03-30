@@ -12,43 +12,11 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/component
 import { Link } from 'react-router-dom'
 import { X, CheckCircle, ChevronDown, ChevronRight, Search } from 'lucide-react'
 import { NAV_GROUPS } from '@/nav/navConfig'
-
-/** Plain-language descriptions for each nav item (keyed by routeName). */
-const MANUAL_TEXT = {
-  Dashboard: 'Your home base: overview of grants, deadlines, and activity. Jump back here anytime.',
-  Calendar: 'See grant deadlines and key dates in a calendar view.',
-  MyProfiles: 'Manage your organization profiles—the entities you apply for grants as.',
-  Organizations: 'View and manage organizations linked to your account.',
-  Settings: 'Account preferences, notifications, and general app settings.',
-  DiscoverGrants: 'Search and discover funding opportunities. Run crawlers and browse results.',
-  SmartMatcher: 'AI-powered matching: find grants that fit your profile automatically.',
-  ProfileMatcher: 'Match your profile against funding criteria to see fit scores.',
-  FundingOpportunities: 'Browse all funding opportunities in one place. Filter and sort.',
-  Funder: 'Explore funders and their grant programs.',
-  DataSources: 'Manage external data sources that feed grant information.',
-  SourceDirectory: 'Browse the directory of funding sources and APIs.',
-  NOFOParser: 'Parse Notice of Funding Opportunity (NOFO) documents for structured data.',
-  AIGrantScorer: 'Score grants with AI to prioritize which to pursue.',
-  Pipeline: 'Your grant pipeline: track applications from discovery to submission.',
-  Proposals: 'Manage proposals and application drafts.',
-  Documents: 'Upload, store, and organize application documents.',
-  PrintableApplication: 'Generate a printable version of an application for offline work.',
-  GrantDeadline: 'Track upcoming grant deadlines so you never miss one.',
-  GrantMonitoring: 'Monitor grant status and follow up on submissions.',
-  Reports: 'Reports and analytics on your grant activity.',
-  AdvancedAnalytics: 'Deep-dive analytics and visualizations for power users.',
-  Outreach: 'Manage outreach to funders and partners.',
-  Stewardship: 'Track stewardship activities and donor relationships.',
-  Automation: 'Configure automated workflows and crawler schedules.',
-  Billing: 'Billing, invoicing, and subscription management.',
-  Budgets: 'Manage budgets and expense tracking for grants.',
-  Diagnostics: 'System diagnostics and troubleshooting tools.',
-  Admin: 'Admin panel for system configuration and user management.',
-  Incognito: 'Privacy mode: remove sensitive data before sharing screenshots or exports.',
-}
+import { getHelpForRoute } from '@/config/helpRegistry'
 
 function getDescription(item) {
-  return MANUAL_TEXT[item.routeName] ?? `Opens the ${item.title} page.`
+  const entry = getHelpForRoute(item.routeName)
+  return entry?.description ?? `Opens the ${item.title} page.`
 }
 
 function matchesSearch(item, group, query) {
@@ -153,6 +121,7 @@ export default function OnboardingManual({ open, onComplete, onSkip }) {
                         const showAdvanced = item.isAdvanced
                         const showPrivacy =
                           item.routeName === 'Incognito' || item.title === 'Incognito'
+                        const entry = getHelpForRoute(item.routeName)
                         return (
                           <div key={item.routeName} className="space-y-1">
                             <div className="flex items-center gap-2 flex-wrap">
@@ -175,6 +144,9 @@ export default function OnboardingManual({ open, onComplete, onSkip }) {
                               )}
                             </div>
                             <p className="text-sm text-muted-foreground">{getDescription(item)}</p>
+                            {entry?.purpose && entry.purpose !== entry.description && (
+                              <p className="text-xs text-muted-foreground/75 italic">{entry.purpose}</p>
+                            )}
                             <Link
                               to={item.url}
                               className="inline-flex text-sm text-primary hover:underline"

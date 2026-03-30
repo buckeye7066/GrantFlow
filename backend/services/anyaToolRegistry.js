@@ -2411,3 +2411,66 @@ registerTool({
     return { ...report, recommendation }
   },
 })
+
+import { getHelpForRoute, getHelpForField, searchHelp } from './anyaHelpKnowledge.js'
+
+registerTool({
+  name: 'app.explainFeature',
+  description: 'Explain what a GrantFlow page or feature does, who can use it, its main actions, and how it relates to other features. Provide the routeName (e.g. SmartMatcher, Pipeline, MyProfiles).',
+  schema: {
+    type: 'object',
+    properties: {
+      routeName: {
+        type: 'string',
+        description: 'The GrantFlow page routeName to explain (e.g. SmartMatcher, Pipeline, Dashboard, MyProfiles).',
+      },
+    },
+    required: ['routeName'],
+  },
+  handler: async (params, _context) => {
+    const { routeName } = params ?? {}
+    if (!routeName) throw new Error('routeName is required')
+    const entry = getHelpForRoute(routeName)
+    if (!entry) {
+      const results = searchHelp(routeName)
+      if (results.length > 0) {
+        return {
+          found: false,
+          suggestion: `No exact match for "${routeName}". Did you mean one of: ${results.slice(0, 3).map((r) => r.key).join(', ')}?`,
+          results: results.slice(0, 3),
+        }
+      }
+      return { found: false, message: `No help entry found for "${routeName}".` }
+    }
+    return { found: true, ...entry }
+  },
+})
+
+registerTool({
+  name: 'app.explainField',
+  description: 'Explain what a specific profile field does, why it matters for grant matching, and whether it affects crawlers. Provide the field key (e.g. zip, state, entity_type, health_conditions).',
+  schema: {
+    type: 'object',
+    properties: {
+      fieldKey: {
+        type: 'string',
+        description: 'The profile field key to explain (e.g. zip, state, entity_type, naics_codes, revenue, health_conditions, military_status).',
+      },
+    },
+    required: ['fieldKey'],
+  },
+  handler: async (params, _context) => {
+    const { fieldKey } = params ?? {}
+    if (!fieldKey) throw new Error('fieldKey is required')
+    const result = getHelpForField(fieldKey)
+    if (!result) {
+      return { found: false, message: `No field definition found for key "${fieldKey}". Known fields include: zip, state, entity_type, naics_codes, revenue, health_conditions, financial_details, education, military_status, government_assistance, family_composition.` }
+    }
+    return {
+      found: true,
+      field: result.field,
+      foundOnPage: result.page.key,
+      pageTitle: result.page.title,
+    }
+  },
+})

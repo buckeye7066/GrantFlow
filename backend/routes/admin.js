@@ -37,6 +37,7 @@ import { isDesignatedProfileId } from '../utils/ensureDesignatedProfiles.js'
 import { analyzeKnowledgeBaseDocument, processPendingKBDocuments, extractFundingOpportunitiesFromKB } from '../services/knowledgeBaseProcessor.js'
 import { runHealthCheck, getLastHealthStatus } from '../services/anyaHealthService.js'
 import { runAutoRepair } from '../services/anyaAutoRepairService.js'
+import { runRegionalPurge, getPurgeSummary, getPurgeEvents } from '../services/regionalPurgeService.js'
 
 const router = express.Router();
 
@@ -2387,16 +2388,14 @@ router.post('/geo/crawl/start', async (req, res) => {
     }
 
     // Dispatch asynchronously (don't block response).
-    try {
-      dispatchCrawlerJob({
-        db: req.db,
-        jobId: job.id,
-        uploadDir: getUploadsDir(req),
-        getOpenAI,
-      });
-    } catch (error) {
+    dispatchCrawlerJob({
+      db: req.db,
+      jobId: job.id,
+      uploadDir: getUploadsDir(req),
+      getOpenAI,
+    }).catch((error) => {
       console.warn('[admin/geo/crawl/start] Failed to dispatch job:', error?.message || error);
-    }
+    });
 
     res.status(201).json({ success: true, job, run_id: geoRunId });
   } catch (error) {
@@ -4968,6 +4967,78 @@ router.post('/backfill-matches', async (req, res) => {
 })
 
 /**
+ * POST /api/admin/purge/regional/run
+ * Trigger the regional purge for discovered or specified states.
+ *
+ * Body (all optional):
+ *   dry_run                  boolean  – if true, no DB mutations (default: false)
+ *   states                   string[] – explicit states; auto-discovered if omitted
+ *   limit                    number   – max opps to check (default 500)
+ *   onlySuppressedCandidates boolean  – only re-check watch/suppressed items
+ */
+router.post('/purge/regional/run', async (req, res) => {
+  if (!(await ensureAdminRequest(req, res))) return
+  try {
+    const {
+      dry_run: dryRun = false,
+      states,
+      limit = 500,
+      onlySuppressedCandidates = false,
+    } = req.body || {}
+
+    const result = await runRegionalPurge(req.db, {
+      dryRun: Boolean(dryRun),
+      states: Array.isArray(states) && states.length > 0 ? states : undefined,
+      limit: Math.min(Number(limit) || 500, 5000),
+      onlySuppressedCandidates: Boolean(onlySuppressedCandidates),
+    })
+
+    res.json({ ok: true, dryRun: Boolean(dryRun), ...result })
+  } catch (err) {
+    console.error('[admin/purge/regional/run] Error:', err)
+    res.status(500).json({ error: err?.message || 'Purge failed' })
+  }
+})
+
+/**
+ * GET /api/admin/purge/regional/summary
+ * Returns recent suppression event totals and the 20 most recent events.
+ */
+router.get('/purge/regional/summary', async (req, res) => {
+  if (!(await ensureAdminRequest(req, res))) return
+  try {
+    const summary = getPurgeSummary(req.db)
+    res.json({ ok: true, ...summary })
+  } catch (err) {
+    console.error('[admin/purge/regional/summary] Error:', err)
+    res.status(500).json({ error: err?.message })
+  }
+})
+
+/**
+ * GET /api/admin/purge/regional/events
+ * Paginated event log.
+ *
+ * Query params:
+ *   page     number  – 1-based page number (default 1)
+ *   pageSize number  – rows per page (default 50, max 200)
+ *   state    string  – optional 2-letter state filter
+ */
+router.get('/purge/regional/events', async (req, res) => {
+  if (!(await ensureAdminRequest(req, res))) return
+  try {
+    const page = Math.max(1, Number(req.query.page) || 1)
+    const pageSize = Math.min(200, Math.max(1, Number(req.query.pageSize) || 50))
+    const state = req.query.state ? String(req.query.state).toUpperCase() : undefined
+    const result = getPurgeEvents(req.db, { page, pageSize, state })
+    res.json({ ok: true, ...result })
+  } catch (err) {
+    console.error('[admin/purge/regional/events] Error:', err)
+    res.status(500).json({ error: err?.message })
+  }
+})
+
+/**
  * GET /api/admin/anya-health
  * Returns the most recent Anya health check status.
  */
@@ -5022,6 +5093,40 @@ router.post('/anya-repair/run', async (req, res) => {
     res.json(report)
   } catch (err) {
     console.error('[admin/anya-repair/run] Error:', err)
+    res.status(500).json({ error: err.message })
+  }
+})
+
+/**
+ * GET /api/admin/exclusion-rules
+ * Returns all configured exclusion rules.
+ */
+router.get('/exclusion-rules', async (req, res) => {
+  try {
+    const rules = await req.db.prepare(`SELECT * FROM exclusion_rules`).all()
+    res.json({ rules })
+  } catch (err) {
+    console.error('[admin/exclusion-rules] Error:', err)
+    res.status(500).json({ error: err.message })
+  }
+})
+
+/**
+ * POST /api/admin/exclusion-rules
+ * Create or replace an exclusion rule.
+ */
+router.post('/exclusion-rules', async (req, res) => {
+  try {
+    const { rule_id, pattern, action } = req.body
+
+    await req.db.prepare(`
+      INSERT OR REPLACE INTO exclusion_rules (rule_id, pattern, action)
+      VALUES (?, ?, ?)
+    `).run(rule_id, pattern, action)
+
+    res.json({ success: true })
+  } catch (err) {
+    console.error('[admin/exclusion-rules] Error:', err)
     res.status(500).json({ error: err.message })
   }
 })
