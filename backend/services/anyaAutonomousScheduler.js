@@ -3,6 +3,7 @@ import { runAutonomousCrawlers } from './anyaAutonomousFunctionRunner.js'
 import { runAutonomousFunctionTests } from './anyaAutonomousFunctionTesting.js'
 import { repairFailingTests } from './anyaTestRepair.js'
 import { discoverNewCatalogItems } from './itemCatalogService.js'
+import { runPortalCheck } from './portalCheckService.js'
 import { promises as fs } from 'fs'
 import path from 'path'
 import { AUDIT_CATEGORIES, SEVERITY, logAuditEvent } from './auditService.js'
@@ -33,6 +34,7 @@ const AUTONOMOUS_CONFIG = {
     functionTests: process.env.ANYA_FUNCTION_TESTS !== 'false', 
     crawlers: process.env.ANYA_CRAWLERS !== 'false',
     itemDiscovery: process.env.ANYA_ITEM_DISCOVERY !== 'false',
+    portalChecks: process.env.ANYA_PORTAL_CHECKS !== 'false',
   },
   
   // Schedule (cron-like format)
@@ -239,6 +241,48 @@ export async function runAllAutonomousOperations(context, trigger = 'manual') {
       } catch (error) {
         report.errors.push({ phase: 'itemDiscovery', error: error.message })
         report.operations.itemDiscovery = { status: 'failed', error: error.message }
+      }
+    }
+
+    // Phase 5: Portal check-in for student profiles
+    if (AUTONOMOUS_CONFIG.operations.portalChecks && context.db) {
+      console.log('[Anya Scheduler] Phase 5: Running portal checks for student profiles...')
+      try {
+        // Student primary_type values — mirrors the list used in autoDiscoveryCrawlers.js
+        // and grants.js. No shared constant exists; keep in sync if new student types are added.
+        const studentTypes = ['high_school_student', 'college_student', 'graduate_student', 'student']
+        const typePlaceholders = studentTypes.map(() => '?').join(', ')
+        const studentProfiles = await context.db
+          .prepare(
+            `SELECT id FROM profiles
+             WHERE status = 'active'
+               AND primary_type IN (${typePlaceholders})`,
+          )
+          .all(...studentTypes)
+
+        let portalChecksTotal = 0
+        let portalAwardsTotal = 0
+
+        for (const profile of studentProfiles) {
+          try {
+            const result = await runPortalCheck(context.db, profile.id, { checkType: 'scheduled' })
+            portalChecksTotal += result.portalsChecked ?? 0
+            portalAwardsTotal += result.awardsDetected ?? 0
+          } catch (profileErr) {
+            console.warn(`[Anya Scheduler] Portal check failed for profile ${profile.id}:`, profileErr?.message)
+          }
+        }
+
+        report.operations.portalChecks = {
+          status: 'completed',
+          profiles_checked: studentProfiles.length,
+          portals_checked: portalChecksTotal,
+          awards_detected: portalAwardsTotal,
+        }
+        console.log(`[Anya Scheduler] Portal checks complete: ${portalAwardsTotal} awards detected across ${portalChecksTotal} portals for ${studentProfiles.length} profiles`)
+      } catch (error) {
+        report.errors.push({ phase: 'portalChecks', error: error.message })
+        report.operations.portalChecks = { status: 'failed', error: error.message }
       }
     }
     
