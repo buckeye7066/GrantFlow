@@ -2388,16 +2388,14 @@ router.post('/geo/crawl/start', async (req, res) => {
     }
 
     // Dispatch asynchronously (don't block response).
-    try {
-      dispatchCrawlerJob({
-        db: req.db,
-        jobId: job.id,
-        uploadDir: getUploadsDir(req),
-        getOpenAI,
-      });
-    } catch (error) {
+    dispatchCrawlerJob({
+      db: req.db,
+      jobId: job.id,
+      uploadDir: getUploadsDir(req),
+      getOpenAI,
+    }).catch((error) => {
       console.warn('[admin/geo/crawl/start] Failed to dispatch job:', error?.message || error);
-    }
+    });
 
     res.status(201).json({ success: true, job, run_id: geoRunId });
   } catch (error) {
