@@ -87,13 +87,13 @@ const DISEASE_SPECIFIC_PATTERNS = [
 // Pro bono / in-kind / referral-only indicators
 // ---------------------------------------------------------------------------
 const PRO_BONO_PATTERNS = [
-  'pro bono', 'no cost', 'free legal', 'free services', 'legal aid',
+  'pro bono', 'free legal', 'legal aid',
   'volunteer services', 'donated services',
 ]
 
 const IN_KIND_PATTERNS = [
   'in-kind', 'in kind', 'goods and services', 'non-monetary', 'material support',
-  'food pantry', 'food bank', 'clothing', 'household goods', 'furniture donation',
+  'household goods', 'furniture donation',
 ]
 
 const REFERRAL_ONLY_PATTERNS = [
