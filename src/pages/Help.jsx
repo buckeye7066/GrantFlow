@@ -9,6 +9,7 @@ import {
 } from "@/components/ui/collapsible";
 import { ChevronDown, ChevronRight, Search, ExternalLink } from "lucide-react";
 import { createPageUrl } from "@/utils";
+import { searchHelpRegistry, HELP_REGISTRY } from "@/config/helpRegistry";
 
 const BIG_BUTTONS = [
   {
@@ -45,29 +46,27 @@ const BIG_BUTTONS = [
   },
 ];
 
-const COMMON_TASKS = [
-  { title: "Dashboard", desc: "See your overview and quick links.", url: createPageUrl("Dashboard") },
-  { title: "Calendar", desc: "View all your grant deadlines on a calendar.", url: createPageUrl("Calendar") },
-  { title: "Settings", desc: "Change your account preferences.", url: createPageUrl("Settings") },
-  { title: "My Profiles", desc: "Manage who you are (organisation, student, etc.).", url: createPageUrl("MyProfiles") },
-  { title: "Organizations", desc: "Add or edit organisations you apply as.", url: createPageUrl("Organizations") },
-  { title: "Discover Grants", desc: "Search and find grants that match you.", url: createPageUrl("DiscoverGrants") },
-  { title: "Smart Matcher", desc: "Let AI find grants that fit your profile.", url: createPageUrl("SmartMatcher") },
-  { title: "Profile Matcher", desc: "See how well you match a grant.", url: createPageUrl("ProfileMatcher") },
-  { title: "Funding Opportunities", desc: "Browse all funding in one place.", url: createPageUrl("FundingOpportunities") },
-  { title: "Funder", desc: "Explore funders and their programs.", url: createPageUrl("Funder") },
-  { title: "Pipeline", desc: "Track grants from finding to submitting.", url: createPageUrl("Pipeline") },
-  { title: "Proposals", desc: "Manage your proposals and drafts.", url: createPageUrl("Proposals") },
-  { title: "Documents", desc: "Upload and organise your application files.", url: createPageUrl("Documents") },
-  { title: "Printable Application", desc: "Print an application for offline work.", url: createPageUrl("PrintableApplication") },
-  { title: "Grant Deadline", desc: "See upcoming deadlines.", url: createPageUrl("GrantDeadline") },
-  { title: "Grant Monitoring", desc: "Follow up on submitted grants.", url: createPageUrl("GrantMonitoring") },
-  { title: "Reports", desc: "View reports and analytics.", url: createPageUrl("Reports") },
-  { title: "Outreach", desc: "Manage outreach to funders.", url: createPageUrl("Outreach") },
-  { title: "Stewardship", desc: "Track donor and funder relationships.", url: createPageUrl("Stewardship") },
-  { title: "Data Sources", desc: "Manage where grant data comes from.", url: createPageUrl("DataSources") },
-  { title: "Source Directory", desc: "Browse funding sources and APIs.", url: createPageUrl("SourceDirectory") },
-];
+/** Derive common-tasks list from the help registry so descriptions stay in sync. */
+function buildCommonTasks() {
+  const routeOrder = [
+    'Dashboard', 'Calendar', 'Settings', 'MyProfiles', 'Organizations',
+    'DiscoverGrants', 'SmartMatcher', 'ProfileMatcher', 'FundingOpportunities',
+    'Funder', 'Pipeline', 'Proposals', 'Documents', 'PrintableApplication',
+    'GrantDeadline', 'GrantMonitoring', 'Reports', 'Outreach', 'Stewardship',
+    'DataSources', 'SourceDirectory',
+  ]
+  return routeOrder.map((key) => {
+    const entry = HELP_REGISTRY.find((e) => e.key === key)
+    if (!entry) return null
+    return {
+      title: entry.title,
+      desc: entry.description,
+      url: createPageUrl(key),
+    }
+  }).filter(Boolean)
+}
+
+const COMMON_TASKS = buildCommonTasks()
 
 const FAQ_ITEMS = [
   {
@@ -135,11 +134,12 @@ export default function Help() {
 
   const filteredTasks = useMemo(() => {
     if (!searchQuery.trim()) return COMMON_TASKS;
-    const q = searchQuery.trim().toLowerCase();
-    return COMMON_TASKS.filter(
-      (t) =>
-        t.title.toLowerCase().includes(q) || t.desc.toLowerCase().includes(q)
-    );
+    const results = searchHelpRegistry(searchQuery);
+    const resultKeys = new Set(results.map((r) => r.key));
+    return COMMON_TASKS.filter((t) => {
+      const key = HELP_REGISTRY.find((e) => e.title === t.title)?.key;
+      return resultKeys.has(key);
+    });
   }, [searchQuery]);
 
   const filteredFaqs = useMemo(() => {

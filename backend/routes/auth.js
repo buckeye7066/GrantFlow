@@ -3049,6 +3049,31 @@ router.get('/me', async (req, res) => {
       console.error('[auth/me] Database error fetching org count:', dbError)
     }
 
+    // Fetch durable onboarding/tour state from the users table
+    let hasCompletedOnboarding = false
+    let onboardingCompletedAt = null
+    let lastSeenManualVersion = 0
+    let lastCompletedTourVersion = 0
+    let tourDismissedAt = null
+
+    try {
+      const onboardingRow = await req.db.prepare(
+        `SELECT has_completed_onboarding, onboarding_completed_at, last_seen_manual_version,
+                last_completed_tour_version, tour_dismissed_at
+         FROM users WHERE id = ?`
+      ).get(userId)
+      if (onboardingRow) {
+        hasCompletedOnboarding = Boolean(onboardingRow.has_completed_onboarding)
+        onboardingCompletedAt = onboardingRow.onboarding_completed_at ?? null
+        lastSeenManualVersion = Number(onboardingRow.last_seen_manual_version ?? 0)
+        lastCompletedTourVersion = Number(onboardingRow.last_completed_tour_version ?? 0)
+        tourDismissedAt = onboardingRow.tour_dismissed_at ?? null
+      }
+    } catch (dbError) {
+      // Columns may not exist yet if migration hasn't run — degrade gracefully
+      console.warn('[auth/me] Could not fetch onboarding state (migration pending?):', dbError.message)
+    }
+
     return res.json({
       userId,
       email,
@@ -3056,6 +3081,11 @@ router.get('/me', async (req, res) => {
       activeProfileId,
       accessibleProfileCount,
       accessibleOrgCount,
+      hasCompletedOnboarding,
+      onboardingCompletedAt,
+      lastSeenManualVersion,
+      lastCompletedTourVersion,
+      tourDismissedAt,
     })
   } catch (error) {
     console.error('[auth/me] Unexpected error:', error)
@@ -3063,6 +3093,87 @@ router.get('/me', async (req, res) => {
       error: 'An unexpected error occurred',
       error_type: 'internal_error',
       details: process.env.NODE_ENV !== 'production' ? error.message : undefined
+    })
+  }
+})
+
+/**
+ * PATCH /api/auth/onboarding-state
+ * Persists durable onboarding / tour state to the users table.
+ * Accepts any subset of: has_completed_onboarding, last_seen_manual_version,
+ * last_completed_tour_version, tour_dismissed_at.
+ */
+router.patch('/onboarding-state', async (req, res) => {
+  try {
+    const userId = req.ctx?.userId ?? req.user?.userId ?? req.user?.id ?? null
+    if (!userId) {
+      return res.status(401).json({ error: 'Not authenticated' })
+    }
+
+    const {
+      has_completed_onboarding,
+      last_seen_manual_version,
+      last_completed_tour_version,
+      tour_dismissed_at,
+    } = req.body ?? {}
+
+    const updates = []
+    const values = []
+
+    if (typeof has_completed_onboarding === 'boolean') {
+      updates.push('has_completed_onboarding = ?')
+      values.push(has_completed_onboarding ? 1 : 0)
+      if (has_completed_onboarding) {
+        updates.push('onboarding_completed_at = ?')
+        values.push(new Date().toISOString())
+      }
+    }
+
+    if (typeof last_seen_manual_version === 'number') {
+      updates.push('last_seen_manual_version = ?')
+      values.push(last_seen_manual_version)
+    }
+
+    if (typeof last_completed_tour_version === 'number') {
+      updates.push('last_completed_tour_version = ?')
+      values.push(last_completed_tour_version)
+    }
+
+    if (typeof tour_dismissed_at === 'string') {
+      updates.push('tour_dismissed_at = ?')
+      values.push(tour_dismissed_at)
+    }
+
+    if (updates.length === 0) {
+      return res.status(400).json({ error: 'No valid fields provided' })
+    }
+
+    // Safety note: `updates` array contains only hardcoded column-name fragments
+    // (e.g. 'has_completed_onboarding = ?'). All values go through ? placeholders.
+    // No user input enters the SQL template itself.
+    values.push(userId)
+    await req.db.prepare(`UPDATE users SET ${updates.join(', ')} WHERE id = ?`).run(...values)
+
+    // Return updated state
+    const row = await req.db.prepare(
+      `SELECT has_completed_onboarding, onboarding_completed_at, last_seen_manual_version,
+              last_completed_tour_version, tour_dismissed_at
+       FROM users WHERE id = ?`
+    ).get(userId)
+
+    return res.json({
+      hasCompletedOnboarding: Boolean(row?.has_completed_onboarding),
+      onboardingCompletedAt: row?.onboarding_completed_at ?? null,
+      lastSeenManualVersion: Number(row?.last_seen_manual_version ?? 0),
+      lastCompletedTourVersion: Number(row?.last_completed_tour_version ?? 0),
+      tourDismissedAt: row?.tour_dismissed_at ?? null,
+    })
+  } catch (error) {
+    console.error('[auth/onboarding-state] Unexpected error:', error)
+    return res.status(500).json({
+      error: 'An unexpected error occurred',
+      error_type: 'internal_error',
+      details: process.env.NODE_ENV !== 'production' ? error.message : undefined,
     })
   }
 })

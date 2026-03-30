@@ -67,20 +67,6 @@ function _extractStateNameFromTitle(title) {
   return null
 }
 
-function _hasConcreteDeadline(opportunity) {
-  if (!opportunity) return false
-
-  const raw = [
-    opportunity.deadline,
-    opportunity.deadline_text,
-    opportunity.close_date,
-    opportunity.closing_date,
-    opportunity.application_deadline,
-  ].filter(Boolean).join(' ').trim()
-
-  return Boolean(raw)
-}
-
 // ── Profile predicate helpers ─────────────────────────────────────────────────
 
 function _isVeteranProfile(pd) {
@@ -244,6 +230,20 @@ function _isSenior(pd) {
   return (
     (pd.age_group || '').toLowerCase().includes('senior') || Number(pd.age) >= 55
   )
+}
+
+function _hasConcreteDeadline(opportunity) {
+  if (!opportunity) return false
+
+  const raw = [
+    opportunity.deadline,
+    opportunity.deadline_text,
+    opportunity.close_date,
+    opportunity.closing_date,
+    opportunity.application_deadline,
+  ].filter(Boolean).join(' ').trim()
+
+  return Boolean(raw)
 }
 
 // ── Rule definitions ──────────────────────────────────────────────────────────
