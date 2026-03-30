@@ -812,7 +812,7 @@ export default function ProfileDetail() {
           {isStudentProfile ? (
             <TabsContent value="universities" className="mt-6">
               <div className="space-y-6">
-                <StudentPortalsCard state={studentState} />
+                <StudentPortalsCard state={studentState} profileId={profileId} />
               <UniversityApplicationsSection
                 applications={universityApplications}
                 onSave={handleSaveUniversityApplications}

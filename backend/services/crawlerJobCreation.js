@@ -111,6 +111,7 @@ export async function createCrawlerJob(db, options) {
     'pipeline_automation',
     'profile_enrichment',
     'national_zip_scan',
+    'portal_check',
   ]
 
   if (!VALID_TYPES.includes(type)) {

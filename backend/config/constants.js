@@ -96,6 +96,7 @@ export const CRAWLER_JOB_TYPES = [
   'special_needs',
   'local_funding',
   'item_matching',
+  'portal_check',
 ];
 
 export const CRAWLER_JOB_STATUSES = [

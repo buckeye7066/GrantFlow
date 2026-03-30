@@ -198,6 +198,14 @@ export async function triggerAutoDiscoveryCrawlers(db, profileId, options = {}) 
                           profile_id: profileId,
                           parameters: {}
                 })
+
+                // 5b. Portal check (proactively check financial aid portals for award updates)
+                jobs.push({
+                          id: randomUUID(),
+                          type: 'portal_check',
+                          profile_id: profileId,
+                          parameters: { check_type: 'auto-discovery' }
+                })
         }
 
         // 6. Special Needs crawler (disability services, adaptive equipment)

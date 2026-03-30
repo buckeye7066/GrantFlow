@@ -17,6 +17,7 @@ import { processNationalJob } from './nationalJobRouter.js'
 import { logFailedJob, determineSeverity } from './deadLetterQueue.js'
 import { runCrawler as runCuratedCrawler } from './crawlers/crawlerManager.js'
 import { updateJobHeartbeat } from './crawlerConcurrencyGuard.js'
+import { runPortalCheck } from './portalCheckService.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
@@ -53,6 +54,29 @@ function withTimeout(promise, ms, label) {
   })
   return Promise.race([promise, timeoutPromise]).finally(() => clearTimeout(timeoutId))
 }
+
+async function processPortalCheckJob({ db, job }) {
+  const profileId = job?.profile_id
+  if (!profileId) throw new Error('portal_check requires a profile_id')
+  const params = typeof job?.parameters === 'string' ? JSON.parse(job.parameters) : (job?.parameters || {})
+  const result = await runPortalCheck(db, profileId, {
+    checkType: params.check_type || 'scheduled',
+    maxPortals: params.max_portals ?? 20,
+  })
+  return {
+    result_count: result.awardsDetected,
+    result_meta: {
+      portals_checked: result.portalsChecked,
+      awards_detected: result.awardsDetected,
+      updates: result.updates.map((u) => ({
+        portalName: u.portalName,
+        updateType: u.updateType,
+        awardAmount: u.awardAmount,
+      })),
+    },
+  }
+}
+
 
 async function processCuratedBenefitsJob({ db, job, profileContext }) {
   const profileId = job?.profile_id || profileContext?.profile?.id;
@@ -108,6 +132,7 @@ const HANDLERS = {
   special_needs: processCuratedBenefitsJob,
   local_funding: processCuratedBenefitsJob,
   item_matching: processCuratedBenefitsJob,
+  portal_check: processPortalCheckJob,
 }
 
 function parseJSON(value) {

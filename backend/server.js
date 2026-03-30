@@ -56,6 +56,7 @@ import outreachLogsRouter from './routes/outreachLogs.js'
 import versionRouter from './routes/version.js'
 import ensureDesignatedProfiles from './utils/ensureDesignatedProfiles.js';
 import ensureUserPreferencesTable from './utils/ensureUserPreferencesTable.js';
+import ensurePortalCheckResultsTable from './utils/ensurePortalCheckResultsTable.js';
 import { linkAllProfilesToAdmin } from './utils/adminProfileLinks.js';
 import { ensureProfileOrgLinks } from './utils/ensureProfileOrgLinks.js'
 import { runStartupOperations } from './services/anyaStartupOperations.js';
@@ -857,6 +858,7 @@ if (IS_SMOKE_MODE) {
   await ensureDesignatedProfiles(db)
   await linkAllProfilesToAdmin(db)
   await ensureUserPreferencesTable(db)
+  await ensurePortalCheckResultsTable(db)
 } else {
   try {
     const mode = String(process.env.BASELINE_SEED_MODE || '').trim().toLowerCase() || 'auto'
@@ -895,6 +897,7 @@ if (IS_SMOKE_MODE) {
     console.warn('[startup] Failed to ensure profile organization links:', error?.message || error)
   }
   await ensureUserPreferencesTable(db)
+  await ensurePortalCheckResultsTable(db)
   await repairInvalidDocumentStatuses(db)
   await repairMissingUploadAvatars({ db, uploadsDir })
 }

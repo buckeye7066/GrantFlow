@@ -13,6 +13,8 @@ import { DEFAULT_PAGE_LIMIT, CRAWLER_JOB_TYPES, CRAWLER_JOB_STATUSES } from '../
 import { requireTierCapability, TIER_CAPABILITIES } from '../utils/tierGating.js'
 import { ensureProfileAccess } from '../utils/accessControl.js'
 import { enforceCrawlerJobTier, getCrawlerJobCapability } from '../middleware/entitlements.js'
+import { getPortalCheckStatus } from '../services/portalCheckService.js'
+import { standardRateLimiter } from '../middleware/rateLimiting.js'
 
 const router = express.Router()
 
@@ -43,6 +45,7 @@ const TYPES_REQUIRING_PROFILE = new Set([
   'avatar_lookup',
   'document_ingest',
   'profile_enrichment',
+  'portal_check',
 ])
 
 const __filename = fileURLToPath(import.meta.url)
@@ -2335,6 +2338,29 @@ router.post('/real-crawl', async (req, res) => {
   } catch (error) {
     console.error('[real-crawl] Error:', error)
     res.status(500).json(formatError(error))
+  }
+})
+
+/**
+ * GET /api/crawlers/portal-check-results/:profileId
+ * Returns the most recent portal check result per portal URL for a student profile.
+ */
+router.get('/portal-check-results/:profileId', standardRateLimiter, async (req, res) => {
+  const ctx = ensureAuth(req, res)
+  if (!ctx) return
+
+  try {
+    const { profileId } = req.params
+
+    if (!ctx.isAdmin) {
+      if (!(await ensureProfileAccess(req, res, String(profileId)))) return
+    }
+
+    const results = await getPortalCheckStatus(req.db, profileId)
+    return res.json({ profileId, results })
+  } catch (error) {
+    console.error('[portal-check-results] Error:', error)
+    return res.status(500).json(formatError(error))
   }
 })
 
