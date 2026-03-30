@@ -11,6 +11,7 @@ import crypto from 'crypto'
 import { applyRelevanceFilter, extractProfileData } from './relevanceFilter.js'
 import { computeMatchDecision, normalizeProfile, computeProfileFingerprint, normalizeOpportunity, computeOpportunityFingerprint } from './matchDecisionEngine.js'
 import { isPipelineSourceAllowed } from '../config/pipelineAllowedSources.js'
+import { evaluateExclusion } from './exclusionEngine.js'
 
 // Cache the result of the decision-columns PRAGMA check per DB instance to avoid
 // running PRAGMA table_info(grants) on every saveToProfilePipeline call.
@@ -109,16 +110,38 @@ export async function saveToProfilePipeline(
       }
     }
 
+    // Exclusion Engine (hard gate) — suppress procurement noise before scoring
+    let exclusion = { decision: 'ALLOW' }
+    try {
+      const exclusionRules = await db.prepare(`SELECT * FROM exclusion_rules WHERE action IS NOT NULL`).all()
+      exclusion = evaluateExclusion(opportunity, exclusionRules || [])
+    } catch { /* table may not exist yet; treat as ALLOW */ }
+
+    if (exclusion.decision === 'SUPPRESS') {
+      return {
+        saved: false,
+        reason: `Excluded by rule ${exclusion.rule_id}`,
+        matchPercentage,
+        threshold,
+      }
+    }
+
     // Use decision engine score when available, fall back to legacy scorer
     if (matchPercentage === null) {
       matchPercentage = decision?.score ?? calculateMatchPercentage(opportunity, profileContext)
     }
 
+    // Apply WATCH penalty before threshold comparison
+    let adjustedScore = matchPercentage
+    if (exclusion?.decision === 'WATCH') {
+      adjustedScore = Math.max(0, matchPercentage - 15)
+    }
+
     // Only save to pipeline if match meets threshold
-    if (matchPercentage < threshold) {
+    if (adjustedScore < threshold) {
       return {
         saved: false,
-        reason: `Match score ${matchPercentage}% below ${threshold}% threshold`,
+        reason: `Match score ${adjustedScore}% below ${threshold}% threshold`,
         matchPercentage,
         threshold,
       }

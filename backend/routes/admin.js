@@ -5026,4 +5026,38 @@ router.post('/anya-repair/run', async (req, res) => {
   }
 })
 
+/**
+ * GET /api/admin/exclusion-rules
+ * Returns all configured exclusion rules.
+ */
+router.get('/exclusion-rules', async (req, res) => {
+  try {
+    const rules = await req.db.prepare(`SELECT * FROM exclusion_rules`).all()
+    res.json({ rules })
+  } catch (err) {
+    console.error('[admin/exclusion-rules] Error:', err)
+    res.status(500).json({ error: err.message })
+  }
+})
+
+/**
+ * POST /api/admin/exclusion-rules
+ * Create or replace an exclusion rule.
+ */
+router.post('/exclusion-rules', async (req, res) => {
+  try {
+    const { rule_id, pattern, action } = req.body
+
+    await req.db.prepare(`
+      INSERT OR REPLACE INTO exclusion_rules (rule_id, pattern, action)
+      VALUES (?, ?, ?)
+    `).run(rule_id, pattern, action)
+
+    res.json({ success: true })
+  } catch (err) {
+    console.error('[admin/exclusion-rules] Error:', err)
+    res.status(500).json({ error: err.message })
+  }
+})
+
 export default router;

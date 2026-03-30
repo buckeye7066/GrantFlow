@@ -23,8 +23,19 @@ jobs:
           PATCH_CONTENT: ${{ inputs.patch_content }}
         run: |
           set -euo pipefail
+          git config --global core.autocrlf false
+          git config --global core.eol lf
           printf '%s' "$PATCH_CONTENT" > /tmp/patch.diff
-          git apply /tmp/patch.diff
+
+          if git apply --check /tmp/patch.diff; then
+            git apply /tmp/patch.diff
+            echo "Patch applied successfully."
+          elif git apply --reverse --check /tmp/patch.diff; then
+            echo "Patch already present. Continuing without failure."
+          else
+            echo "Patch cannot be applied cleanly and is not already present."
+            exit 1
+          fi
 
       - name: Show status
         run: |
