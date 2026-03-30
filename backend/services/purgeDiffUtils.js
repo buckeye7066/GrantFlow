@@ -129,3 +129,81 @@ export function stableTextHash(text) {
   const norm = normalizeText(text)
   return crypto.createHash('sha256').update(norm).digest('hex')
 }
+
+// ─── Jaccard similarity ──────────────────────────────────────────────────────
+
+/**
+ * Compute Jaccard similarity between two texts based on token sets.
+ * J(A, B) = |A ∩ B| / |A ∪ B|
+ *
+ * Returns 1 for identical token sets, 0 for completely disjoint sets.
+ */
+export function jaccardSimilarity(a, b) {
+  const setA = new Set(tokenize(normalizeText(a)))
+  const setB = new Set(tokenize(normalizeText(b)))
+  if (setA.size === 0 && setB.size === 0) return 1
+  const intersection = [...setA].filter((token) => setB.has(token)).length
+  const union = new Set([...setA, ...setB]).size
+  return union === 0 ? 1 : intersection / union
+}
+
+/**
+ * Token diff ratio based on Jaccard distance: 1 − J(A, B).
+ * Returns 0 for identical texts, 1 for completely different texts.
+ */
+export function tokenDiffRatio(a, b) {
+  return 1 - jaccardSimilarity(a, b)
+}
+
+// ─── Jaro-Winkler similarity ────────────────────────────────────────────────
+
+/**
+ * Compute Jaro-Winkler similarity between two strings.
+ * Returns a value between 0 (no similarity) and 1 (identical).
+ */
+export function jaroWinkler(a, b) {
+  const left = String(a || '')
+  const right = String(b || '')
+  if (left === right) return 1
+  if (!left.length || !right.length) return 0
+
+  const matchDistance = Math.max(Math.floor(Math.max(left.length, right.length) / 2) - 1, 0)
+  const leftMatches = new Array(left.length).fill(false)
+  const rightMatches = new Array(right.length).fill(false)
+
+  let matches = 0
+  for (let i = 0; i < left.length; i += 1) {
+    const start = Math.max(0, i - matchDistance)
+    const end = Math.min(i + matchDistance + 1, right.length)
+    for (let j = start; j < end; j += 1) {
+      if (rightMatches[j]) continue
+      if (left[i] !== right[j]) continue
+      leftMatches[i] = true
+      rightMatches[j] = true
+      matches += 1
+      break
+    }
+  }
+
+  if (matches === 0) return 0
+
+  let transpositions = 0
+  let k = 0
+  for (let i = 0; i < left.length; i += 1) {
+    if (!leftMatches[i]) continue
+    while (!rightMatches[k]) k += 1
+    if (left[i] !== right[k]) transpositions += 1
+    k += 1
+  }
+
+  const m = matches
+  const jaro = ((m / left.length) + (m / right.length) + ((m - transpositions / 2) / m)) / 3
+
+  let prefix = 0
+  for (let i = 0; i < Math.min(4, left.length, right.length); i += 1) {
+    if (left[i] !== right[i]) break
+    prefix += 1
+  }
+
+  return jaro + prefix * 0.1 * (1 - jaro)
+}
