@@ -329,8 +329,10 @@ export function calculateNeedAlignment(profileNorm, oppNorm) {
   // This avoids penalizing profiles with many needs (old formula: matched/profileNeeds
   // meant more needs = lower score). Now each side contributes equally: a profile with
   // 5 needs matching 2 of an opportunity's 3 needs scores (2/5 + 2/3) / 2 = 53%.
+  // Note: oppNeeds.length === 0 is already guarded by the early return above, but we
+  // use Math.max defensively to make the intent explicit.
   const profileCoverage = matchedNeeds.length / profileNeeds.length
-  const oppCoverage = matchedNeeds.length / oppNeeds.length
+  const oppCoverage = matchedNeeds.length / Math.max(oppNeeds.length, 1)
   const score = Math.round(((profileCoverage + oppCoverage) / 2) * 100)
 
   return { score: Math.min(100, score), matchedNeeds }

@@ -255,6 +255,18 @@ function safeParseArray(val) {
 // ---------------------------------------------------------------------------
 // Normalize a profile + sections into a canonical structure
 // ---------------------------------------------------------------------------
+/**
+ * Normalize a raw profile and its sections into the canonical structure used
+ * by the decision engine.
+ *
+ * @param {Object} rawProfile     - Raw profile row or { profile, sections } object
+ * @param {Object|null} sections  - Profile sections keyed by section name
+ * @param {Object|null} signals   - Optional signals object from buildProfileSignals().
+ *   When provided, signals.needs (a Set of inferred need strings) is merged into
+ *   needCategories after the normalizer's own extraction, canonicalized via NEED_ALIAS_MAP.
+ *   This bridges the rich signal engine output into the scoring pipeline.
+ * @returns {Object|null} Normalized profile or null if rawProfile is falsy
+ */
 export function normalizeProfile(rawProfile, sections = null, signals = null) {
   if (!rawProfile) return null
 
