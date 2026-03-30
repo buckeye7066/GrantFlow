@@ -165,83 +165,79 @@ class APIClient {
       throw this.createAuthError('Session expired');
     }
     
-    // Single-flight refresh: if a refresh is already in progress, await it
-    if (this.refreshPromise) {
-      log.debug('refresh already in progress; waiting')
-      try {
-        await this.refreshPromise;
-        // After the refresh completes, retry the original request
-        log.debug('refresh complete; retrying original request')
-        return this.fetch(originalRequest.endpoint, originalRequest.options);
-      } catch (error) {
-        console.error('[APIClient] Refresh failed while waiting:', error.message);
-        throw error;
-      }
+    // Delegate to the shared single-flight refreshTokens() so all callers
+    // (handleUnauthorized, authStore timer, proactive refresh) share one promise.
+    log.debug('starting token refresh via refreshTokens()')
+    try {
+      await this.refreshTokens()
+    } catch (error) {
+      console.error('[APIClient] Token refresh failed:', error.message)
+      const authError = this.createAuthError('Your session has expired. Please sign in again.')
+      authError.isAuthError = true
+      throw authError
     }
-    
-    // Start a new refresh
-    log.debug('starting token refresh')
+
+    // Retry the original request with the new token.
+    log.debug('retrying original request after refresh')
+    return this.fetch(originalRequest.endpoint, originalRequest.options);
+  }
+
+  /**
+   * Refresh the access token using the single-flight refreshPromise.
+   * Call this instead of hitting /api/auth/refresh directly so that concurrent
+   * callers (e.g. authStore's scheduleSessionRefresh timer) share the same
+   * in-flight request and we never send two simultaneous refresh calls.
+   *
+   * @returns {Promise<{accessToken: string, refreshToken?: string}>} The new tokens.
+   */
+  async refreshTokens() {
+    const refreshToken = this.getRefreshToken()
+    if (!refreshToken) {
+      this.clearToken()
+      throw this.createAuthError('Authentication required')
+    }
+
+    // Reuse any in-flight refresh.
+    if (this.refreshPromise) {
+      log.debug('refreshTokens: reusing in-flight refresh promise')
+      return this.refreshPromise
+    }
+
+    // Start a new single-flight refresh.
+    log.debug('refreshTokens: starting new refresh')
     this.refreshPromise = (async () => {
       try {
         const response = await fetch(`${this.baseUrl}/api/auth/refresh`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          credentials: 'include', // Ensure cookies are sent with the request
+          credentials: 'include',
           body: JSON.stringify({ refreshToken }),
-        });
-        
+        })
+
         if (!response.ok) {
-          const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
-          console.error('[APIClient] Refresh request failed:', response.status, errorData);
-          
-          // Clear tokens immediately on 401 from refresh endpoint
+          const errorData = await response.json().catch(() => ({ error: 'Unknown error' }))
           if (response.status === 401) {
-            console.warn('[APIClient] Invalid refresh token, clearing auth state');
-            this.clearToken();
+            this.clearToken()
           }
-          
-          throw new Error(errorData.error || `Refresh failed with status ${response.status}`);
+          throw new Error(errorData.error || `Refresh failed with status ${response.status}`)
         }
-        
-        const data = await response.json();
-        log.debug('refresh successful; updating tokens')
-        
-        if (data?.accessToken) {
-          this.setToken(data.accessToken);
-        } else {
-          console.warn('[APIClient] No accessToken in refresh response');
-        }
-        
-        if (data?.refreshToken) {
-          this.setRefreshToken(data.refreshToken);
-        }
-        
-        return data;
+
+        const data = await response.json()
+        if (data?.accessToken) this.setToken(data.accessToken)
+        if (data?.refreshToken) this.setRefreshToken(data.refreshToken)
+        return data
       } catch (error) {
-        // Refresh failed - clear everything and notify once
-        console.error('[APIClient] Token refresh failed:', error.message);
-        this.clearToken();
-        
-        // Create a user-friendly error
-        const authError = this.createAuthError('Your session has expired. Please sign in again.');
-        authError.isAuthError = true; // Flag this as an auth error
-        
+        this.clearToken()
         if (this.onAuthFailure) {
-          this.onAuthFailure('Your session expired. Sign in again to continue.');
-        } else {
-          this.auth.redirectToLogin();
+          this.onAuthFailure('Your session expired. Sign in again to continue.')
         }
-        throw authError;
+        throw error
       } finally {
-        // Clear the promise after completion (success or failure)
-        this.refreshPromise = null;
+        this.refreshPromise = null
       }
-    })();
-    
-    await this.refreshPromise;
-    // Retry the original request with new token
-    log.debug('retrying original request after refresh')
-    return this.fetch(originalRequest.endpoint, originalRequest.options);
+    })()
+
+    return this.refreshPromise
   }
 
   // HTTP method shims.
@@ -696,11 +692,9 @@ class APIClient {
     
     logout: () => {
       this.clearToken();
-      try {
-        this.fetch('/api/auth/logout', { method: 'POST' });
-      } catch {
-        // non-blocking
-      }
+      this.fetch('/api/auth/logout', { method: 'POST' }).catch(() => {
+        // Non-blocking — best-effort server notification; ignore errors.
+      });
       if (typeof window !== 'undefined') {
         window.location.href = `${env.appBase.replace(/\/$/, '')}/login`;
       }

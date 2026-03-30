@@ -16,7 +16,7 @@ import { processProfileEnrichmentJob } from './profileEnrichment.js'
 import { processNationalJob } from './nationalJobRouter.js'
 import { logFailedJob, determineSeverity } from './deadLetterQueue.js'
 import { runCrawler as runCuratedCrawler } from './crawlers/crawlerManager.js'
-import { updateJobHeartbeat } from './crawlerConcurrencyGuard.js'
+import { updateJobHeartbeat, maybeCleanupStaleRunningJobs } from './crawlerConcurrencyGuard.js'
 import { runPortalCheck } from './portalCheckService.js'
 
 const __filename = fileURLToPath(import.meta.url)
@@ -610,6 +610,12 @@ export function startQueueDrainInterval(db, uploadDir, getOpenAI) {
 
   const intervalId = setInterval(async () => {
     try {
+      // Run stale-job cleanup on every tick so orphaned running jobs release
+      // their per-profile locks even when no new jobs are being queued.
+      await maybeCleanupStaleRunningJobs(db).catch(e =>
+        console.warn('[queue-drain-interval] Stale cleanup error (ignored):', e?.message || e),
+      )
+
       const isPostgres = db?.dialect === 'postgres'
       const nowIso = new Date().toISOString()
       const nowSqlite = nowIso.replace('T', ' ').replace('Z', '').replace(/\.\d+$/, '')
