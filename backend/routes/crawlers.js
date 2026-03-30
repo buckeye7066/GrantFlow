@@ -15,6 +15,13 @@ import { ensureProfileAccess } from '../utils/accessControl.js'
 import { enforceCrawlerJobTier, getCrawlerJobCapability } from '../middleware/entitlements.js'
 import { getPortalCheckStatus } from '../services/portalCheckService.js'
 import { standardRateLimiter } from '../middleware/rateLimiting.js'
+import {
+  classifyProfileChange,
+  decideRevalAction,
+  computeChangeDigest,
+  mapActionToCrawlerJob,
+  estimateCompletion
+} from '../services/profileRevalEngine.js'
 
 const router = express.Router()
 
@@ -2361,6 +2368,97 @@ router.get('/portal-check-results/:profileId', standardRateLimiter, async (req, 
   } catch (error) {
     console.error('[portal-check-results] Error:', error)
     return res.status(500).json(formatError(error))
+  }
+})
+
+router.post('/profile-change', standardRateLimiter, async (req, res) => {
+  const ctx = ensureAuth(req, res)
+  if (!ctx) return
+
+  try {
+    const {
+      profile_id,
+      changed_fields,
+      timestamp,
+      estimated_fanout_pct = 0,
+      affected_items = 0,
+      estimated_cost_units = 0,
+      daily_budget = 1000,
+      manual_force_full_reval = false
+    } = req.body || {}
+
+    if (!profile_id || !Array.isArray(changed_fields)) {
+      return res.status(400).json({ error: 'Invalid input' })
+    }
+
+    if (!ctx.isAdmin) {
+      if (!(await ensureProfileAccess(req, res, String(profile_id)))) return
+    }
+
+    const trigger = classifyProfileChange(changed_fields)
+
+    const decision = decideRevalAction({
+      trigger,
+      fanout_pct: estimated_fanout_pct,
+      affected_items,
+      cost_units: estimated_cost_units,
+      daily_budget,
+      manual_force: manual_force_full_reval
+    })
+
+    const emitId = computeChangeDigest(changed_fields, timestamp)
+
+    if (decision.block) {
+      return res.status(202).json({
+        emit_id: emitId,
+        status: 'blocked',
+        reason: decision.reason,
+        action: 'human_review_required'
+      })
+    }
+
+    const crawlerType = mapActionToCrawlerJob(decision.action)
+
+    const creation = await createCrawlerJob(req.db, {
+      type: crawlerType,
+      profileId: profile_id,
+      parameters: {
+        reval_mode: decision.action,
+        trigger,
+        changed_fields,
+        emit_id: emitId
+      },
+      requestedBy: ctx.userId ?? 'system',
+      buildSnapshot: false
+    })
+
+    const job = await req.db.prepare('SELECT * FROM crawler_jobs WHERE id = ?').get(creation.jobId)
+
+    setImmediate(() => {
+      dispatchCrawlerJob({
+        db: req.db,
+        jobId: job.id,
+        uploadDir,
+        getOpenAI
+      })
+    })
+
+    res.json({
+      emit_id: emitId,
+      reval_job: {
+        job_id: job.id,
+        type: decision.action,
+        reason: decision.reason,
+        estimated_fanout_pct,
+        estimated_cost_units: estimated_cost_units,
+        enqueued_at: job.created_at,
+        expected_complete_by: estimateCompletion(decision.action, job.created_at)
+      }
+    })
+
+  } catch (err) {
+    console.error('[profile-reval]', err)
+    res.status(500).json({ error: 'internal_error' })
   }
 })
 
