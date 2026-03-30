@@ -151,6 +151,10 @@ const NEED_TEXT_PATTERNS = Object.entries({
   emergency: ['emergency', 'crisis', 'disaster', 'fema', 'urgent', 'emergency assistance', 'disaster relief'],
   veteran: ['veteran', 'military service', 'armed forces', 'veterans benefits', 'veteran program'],
   clothing_goods: ['clothing', 'household goods', 'furniture', 'appliances', 'goods donation'],
+  technology_equipment: ['computer', 'laptop', 'desktop', 'tablet', 'internet', 'hotspot',
+    'wifi', 'broadband', 'digital', 'technology', 'device', 'equipment grant',
+    'digital equity', 'digital inclusion', 'connectivity', 'tech assistance',
+    'computer access', 'internet access'],
 })
 
 // ---------------------------------------------------------------------------

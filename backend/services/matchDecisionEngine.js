@@ -121,16 +121,29 @@ export function evaluateEligibility(profileNorm, oppNorm) {
     ineligibilityReasons.push('Opportunity is a loan, not a grant')
   }
 
-  // -- Pro bono / in-kind / referral-only: never direct funding for individual profile pipelines --
-  // These are services or referrals, not grants. Hard-reject for all profile types.
+  // -- Pro bono / in-kind / referral-only --
+  // For individual/caregiver profiles, these ARE relevant assistance types
+  // (e.g. clothing closets, computer donation programs, referral-based social services).
+  // Only hard-reject for nonprofit and business profiles seeking direct grant funding.
+  const isIndividualOrCaregiverProfile = ['individual', 'caregiver'].includes(profileNorm.entityType)
+
   if (oppNorm.isProBono) {
-    ineligibilityReasons.push('Opportunity is pro bono services, not a grant or direct funding')
+    if (!isIndividualOrCaregiverProfile) {
+      ineligibilityReasons.push('Opportunity is pro bono services, not a grant or direct funding')
+    }
+    // For individuals/caregivers: pro bono legal aid etc. is valuable — allow as REVIEW via missingFields
   }
   if (oppNorm.isInKind) {
-    ineligibilityReasons.push('Opportunity provides in-kind goods/services, not direct financial assistance')
+    if (!isIndividualOrCaregiverProfile) {
+      ineligibilityReasons.push('Opportunity provides in-kind goods/services, not direct financial assistance')
+    }
+    // For individuals/caregivers: in-kind clothing, furniture, computer programs are exactly what they need
   }
   if (oppNorm.isReferralOnly) {
-    ineligibilityReasons.push('Opportunity is a referral service only, not a direct grant application')
+    if (!isIndividualOrCaregiverProfile) {
+      ineligibilityReasons.push('Opportunity is a referral service only, not a direct grant application')
+    }
+    // For individuals/caregivers: referral-based social services are a valid pathway
   }
 
   // -- Closed deadline --

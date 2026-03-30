@@ -1,6 +1,7 @@
 import express from 'express'
 import { formatError } from '../middleware/errorHandler.js'
 import { computeMatchDecision, normalizeProfile } from '../services/matchDecisionEngine.js'
+import { normalizeNeedCategory } from '../services/profileNormalizer.js'
 import { loadProfileContext } from '../services/profileHelpers.js'
 import { buildProfileFacets } from '../services/profile/profileTaxonomy.js'
 import { ensureProfileAccess } from '../utils/accessControl.js'
@@ -200,6 +201,14 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
                    const limit = Math.min(Math.max(Number.parseInt(req.query.limit ?? '2000', 10) || 2000, 1), 5000)
                    const q = typeof req.query.q === 'string' ? req.query.q.trim().toLowerCase() : ''
 
+      // Shared helper: split a search query string into individual phrases.
+      // Splits on commas, " and " (with surrounding whitespace), or 2+ spaces,
+      // producing terms that each independently contribute to SQL/scoring logic.
+      const splitSearchTerms = (query) =>
+        query.split(/,\s*|\s+and\s+|\s{2,}/)
+          .map((t) => t.trim())
+          .filter((t) => t.length >= 2)
+
       const baseContext = await loadProfileContext(req.db, profileId)
                    const profileContext = buildProfileFacets(baseContext)
 
@@ -244,11 +253,22 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
             )
 
       if (q) {
-              conditions.push(
-                        '(LOWER(title) LIKE ? OR LOWER(description) LIKE ? OR LOWER(keywords) LIKE ? OR LOWER(categories) LIKE ?)',
-                      )
-              const pattern = `%${q}%`
-              params.push(pattern, pattern, pattern, pattern)
+              // Split on commas, "and", or multiple spaces to get individual search phrases
+              // so each term independently matches via OR logic rather than requiring the
+              // entire 80+ character phrase to appear verbatim in any DB field.
+              const terms = splitSearchTerms(q)
+
+              if (terms.length > 0) {
+                const termClauses = terms.map(
+                  () =>
+                    '(LOWER(title) LIKE ? OR LOWER(description) LIKE ? OR LOWER(keywords) LIKE ? OR LOWER(categories) LIKE ?)',
+                )
+                conditions.push(`(${termClauses.join(' OR ')})`)
+                for (const term of terms) {
+                  const pattern = `%${term}%`
+                  params.push(pattern, pattern, pattern, pattern)
+                }
+              }
       }
 
       const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''
@@ -291,6 +311,29 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
       const rawProfileForDecision = profileContext?.profile ?? profileContext
       const profileSectionsForDecision = profileContext?.sections ?? null
       const profileNormForDecision = normalizeProfile(rawProfileForDecision, profileSectionsForDecision, baseContext.signals)
+
+      // Merge search-keyword-derived needs into profile for scoring.
+      // The search keywords only filter the SQL query by default; here we also
+      // inject any recognized canonical need categories so that need alignment
+      // scoring returns meaningful scores for sparse individual profiles.
+      if (q) {
+        const searchTerms = splitSearchTerms(q)
+          .map((t) => t.toLowerCase().replace(/[\s-]+/g, '_'))
+
+        for (const term of searchTerms) {
+          const canonical = normalizeNeedCategory(term)
+          if (canonical && !profileNormForDecision.needCategories.includes(canonical)) {
+            profileNormForDecision.needCategories.push(canonical)
+          }
+          // Also try individual words within compound terms (e.g. "work_clothing" → "clothing")
+          for (const word of term.split('_')) {
+            const wCanonical = normalizeNeedCategory(word)
+            if (wCanonical && !profileNormForDecision.needCategories.includes(wCanonical)) {
+              profileNormForDecision.needCategories.push(wCanonical)
+            }
+          }
+        }
+      }
 
       const allScored = candidates
                      .map((opp) => {

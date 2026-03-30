@@ -147,6 +147,28 @@ test('profileNormalizer: normalizeNeedCategory aliases housing variants', () => 
   assert.equal(normalizeNeedCategory('housing_instability'), 'housing')
 })
 
+test('profileNormalizer: normalizeNeedCategory aliases technology/equipment → technology_equipment', () => {
+  assert.equal(normalizeNeedCategory('laptop'), 'technology_equipment')
+  assert.equal(normalizeNeedCategory('computer'), 'technology_equipment')
+  assert.equal(normalizeNeedCategory('desktop'), 'technology_equipment')
+  assert.equal(normalizeNeedCategory('hotspot'), 'technology_equipment')
+  assert.equal(normalizeNeedCategory('wifi'), 'technology_equipment')
+  assert.equal(normalizeNeedCategory('tablet'), 'technology_equipment')
+  assert.equal(normalizeNeedCategory('technology'), 'technology_equipment')
+  assert.equal(normalizeNeedCategory('digital_access'), 'technology_equipment')
+  assert.equal(normalizeNeedCategory('digital_equity'), 'technology_equipment')
+  assert.equal(normalizeNeedCategory('equipment'), 'technology_equipment')
+})
+
+test('profileNormalizer: normalizeNeedCategory aliases work clothing → clothing_goods', () => {
+  assert.equal(normalizeNeedCategory('uniforms'), 'clothing_goods')
+  assert.equal(normalizeNeedCategory('work_clothing'), 'clothing_goods')
+  assert.equal(normalizeNeedCategory('work_uniforms'), 'clothing_goods')
+  assert.equal(normalizeNeedCategory('work_clothes'), 'clothing_goods')
+  assert.equal(normalizeNeedCategory('professional_clothing'), 'clothing_goods')
+  assert.equal(normalizeNeedCategory('interview_clothing'), 'clothing_goods')
+})
+
 test('profileNormalizer: normalizeEntityType aliases individual variants', () => {
   assert.equal(normalizeEntityType('individual_need'), 'individual')
   assert.equal(normalizeEntityType('family'), 'individual')
