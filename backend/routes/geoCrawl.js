@@ -76,7 +76,8 @@ export default function createGeoCrawlRouter({ uploadDir, getOpenAI } = {}) {
         crawlerJobId: jobId,
       })
 
-      // Dispatch asynchronously (don't block response)
+      // Dispatch asynchronously (don't block response).
+      // Use .catch() instead of try/catch so async Promise rejections are also captured.
       dispatchCrawlerJob({
         db: req.db,
         jobId,

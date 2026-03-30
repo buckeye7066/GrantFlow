@@ -274,7 +274,14 @@ export function dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }) {
     // If a profile-scoped job is queued while another job for that profile is already running,
     // do NOT fail the job (that pollutes diagnostics). Instead keep it queued and retry soon.
     const profileId = job.profile_id ?? null
-    const startSql = profileId
+
+    // Admin-initiated geo crawl jobs (type='comprehensive', mode='geo', profile_id=NULL) are
+    // long-running discovery jobs that must not be starved by the global concurrency cap.
+    // They run in their own "slot" — exempt from the running-count check.
+    const jobParams = parseJSON(job.parameters)
+    const isGeoCrawlJob = !profileId && job.type === 'comprehensive' && jobParams?.mode === 'geo'
+
+    const startSql = isGeoCrawlJob
       ? `
           UPDATE crawler_jobs
           SET status = 'running',
@@ -284,30 +291,43 @@ export function dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }) {
               next_dispatch_at = NULL
           WHERE id = ?
             AND status = 'queued'
-            AND (SELECT COUNT(*) FROM crawler_jobs WHERE status = 'running') < ?
-            AND NOT EXISTS (
-              SELECT 1
-              FROM crawler_jobs
-              WHERE profile_id = ?
-                AND status = 'running'
-                AND id <> ?
-            )
         `
-      : `
-          UPDATE crawler_jobs
-          SET status = 'running',
-              started_at = CURRENT_TIMESTAMP,
-              error = NULL,
-              parameters = COALESCE(parameters, '{}'),
-              next_dispatch_at = NULL
-          WHERE id = ?
-            AND status = 'queued'
-            AND (SELECT COUNT(*) FROM crawler_jobs WHERE status = 'running') < ?
-        `
+      : profileId
+        ? `
+            UPDATE crawler_jobs
+            SET status = 'running',
+                started_at = CURRENT_TIMESTAMP,
+                error = NULL,
+                parameters = COALESCE(parameters, '{}'),
+                next_dispatch_at = NULL
+            WHERE id = ?
+              AND status = 'queued'
+              AND (SELECT COUNT(*) FROM crawler_jobs WHERE status = 'running') < ?
+              AND NOT EXISTS (
+                SELECT 1
+                FROM crawler_jobs
+                WHERE profile_id = ?
+                  AND status = 'running'
+                  AND id <> ?
+              )
+          `
+        : `
+            UPDATE crawler_jobs
+            SET status = 'running',
+                started_at = CURRENT_TIMESTAMP,
+                error = NULL,
+                parameters = COALESCE(parameters, '{}'),
+                next_dispatch_at = NULL
+            WHERE id = ?
+              AND status = 'queued'
+              AND (SELECT COUNT(*) FROM crawler_jobs WHERE status = 'running') < ?
+          `
 
-    const startRes = profileId
-      ? await db.prepare(startSql).run(jobId, maxGlobalConcurrency, profileId, jobId)
-      : await db.prepare(startSql).run(jobId, maxGlobalConcurrency)
+    const startRes = isGeoCrawlJob
+      ? await db.prepare(startSql).run(jobId)
+      : profileId
+        ? await db.prepare(startSql).run(jobId, maxGlobalConcurrency, profileId, jobId)
+        : await db.prepare(startSql).run(jobId, maxGlobalConcurrency)
 
     const startedCount = Number(startRes?.changes ?? startRes?.rowCount ?? 0)
     if (startedCount === 0) {
