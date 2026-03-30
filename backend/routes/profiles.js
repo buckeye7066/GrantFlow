@@ -832,10 +832,56 @@ return res.status(500).json({ error: 'Failed to load profile sections', details:
     billing = null
   }
 
+  // Compute pipeline_funds_total for the detail view (same logic as enrichProfileWithSummary)
+  let pipelineTotal = 0
+  const activeStatuses = [
+    'discovery',
+    'discovered',
+    'interested',
+    'auto_applied',
+    'drafting',
+    'app_prep',
+    'application_prep',
+    'revision',
+    'portal',
+    'submitted',
+    'pending_review',
+    'under_review',
+    'follow_up',
+    'report',
+  ]
+  const pipelinePlaceholders = activeStatuses.map(() => '?').join(',')
+  try {
+    const pipelineRow = await req.db
+      .prepare(
+        `SELECT COALESCE(SUM(g.amount_requested), 0) as total FROM grants g WHERE g.profile_id = ? AND g.status IN (${pipelinePlaceholders})`,
+      )
+      .get(row.id, ...activeStatuses)
+    pipelineTotal = pipelineRow?.total ?? 0
+  } catch (error) {
+    // Fall back to organization-level total if profile_id column doesn't exist
+    const msg = error?.message || String(error)
+    if (!/profile_id/i.test(msg)) {
+      console.warn('[profiles] pipeline detail query failed; falling back to org total:', msg)
+    }
+    try {
+      const pipelineRow = await req.db
+        .prepare(
+          `SELECT COALESCE(SUM(g.amount_requested), 0) as total FROM grants g WHERE g.organization_id = ? AND g.status IN (${pipelinePlaceholders})`,
+        )
+        .get(row.organization_id, ...activeStatuses)
+      pipelineTotal = pipelineRow?.total ?? 0
+    } catch (fallbackError) {
+      console.warn('[profiles] pipeline org detail query failed:', fallbackError?.message)
+      pipelineTotal = 0
+    }
+  }
+
   return res.json({
     ...mapProfile(row),
     sections,
     billing,
+    pipeline_funds_total: pipelineTotal,
   })
 })
 
