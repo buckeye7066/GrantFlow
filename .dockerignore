@@ -31,9 +31,5 @@ seed/*.db
 .eslintrc*
 .eslintignore
 vitest.*
-vite.config.*
-tailwind.config.*
-postcss.config.*
-tsconfig*
 *.test.*
 *.spec.*
