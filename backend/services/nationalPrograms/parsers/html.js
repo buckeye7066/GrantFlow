@@ -15,12 +15,12 @@ export function parseHtmlToText(html, { url } = {}) {
   // Remove common non-content
   $('script,noscript,style,nav,header,footer,svg,canvas,form,iframe').remove()
 
-  const title = normalizeWhitespace($('title').first().text()) || null
-  const h1 = normalizeWhitespace($('h1').first().text()) || null
+  const title = normalizeWhitespace($('title').first().text()) || 'Untitled'
+  const h1 = normalizeWhitespace($('h1').first().text()) || ''
   const bodyText = normalizeWhitespace($('body').text())
 
   // Use a conservative cap to avoid gigantic rows in SQLite
-  const extractedText = bodyText.length > 200000 ? bodyText.slice(0, 200000) : bodyText
+  const extractedText = bodyText.length > 200000 ? bodyText.slice(0, bodyText.lastIndexOf(' ', 200000)) : bodyText
 
   const links = []
   $('a[href]').each((_, a) => {
@@ -29,8 +29,8 @@ export function parseHtmlToText(html, { url } = {}) {
     try {
       const abs = new URL(href, url).toString()
       links.push(abs)
-    } catch {
-      // ignore
+    } catch (e) {
+      console.warn(`Invalid URL in HTML parser: ${href} from ${url}`, e)
     }
   })
 
