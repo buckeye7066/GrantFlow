@@ -27,19 +27,28 @@ async function queryNearbyOpportunities(db, analysis, curatedTitles, limit = 50)
   try {
     const isPg = db?.dialect === 'postgres'
     const activeVal = isPg ? 'TRUE' : '1'
-    const rows = await db.prepare(`
-      SELECT id, title, description, sponsor, source, source_url, url, application_url,
+    const isPg = db?.dialect === 'postgres'
+    const activeVal = isPg ? 'TRUE' : '1'
+    const query = isPg
+      ? `SELECT id, title, description, sponsor, source, source_url, url, application_url,
              state, is_national, opportunity_type, type, deadline_type, amount_max,
              contact_info, categories, keywords, match_reasons, match_score,
              funding_type, record_origin
-      FROM funding_opportunities
-      const query = isPg
-        ? 'SELECT ... FROM funding_opportunities WHERE is_active = TRUE AND (state = $1 OR state = \'nationwide\' OR is_national = TRUE) AND ' + trustedOriginClause() + ' AND ' + trustedSourceClause() + ' ORDER BY ... LIMIT $2'
-        : 'SELECT ... FROM funding_opportunities WHERE is_active = 1 AND (state = ? OR state = \'nationwide\' OR is_national = 1) AND ' + trustedOriginClause() + ' AND ' + trustedSourceClause() + ' ORDER BY ... LIMIT ?'
-      return db.prepare(query).all(state || 'nationwide', limit)
-      ORDER BY match_score DESC NULLS LAST, last_verified_at DESC NULLS LAST
-      LIMIT ?
-    `).all(state || 'nationwide', limit);
+         FROM funding_opportunities 
+         WHERE is_active = TRUE AND (state = $1 OR state = 'nationwide' OR is_national = TRUE) 
+         AND ${trustedOriginClause()} AND ${trustedSourceClause()} 
+         ORDER BY match_score DESC NULLS LAST, last_verified_at DESC NULLS LAST 
+         LIMIT $2`
+      : `SELECT id, title, description, sponsor, source, source_url, url, application_url,
+             state, is_national, opportunity_type, type, deadline_type, amount_max,
+             contact_info, categories, keywords, match_reasons, match_score,
+             funding_type, record_origin
+         FROM funding_opportunities 
+         WHERE is_active = 1 AND (state = ? OR state = 'nationwide' OR is_national = 1) 
+         AND ${trustedOriginClause()} AND ${trustedSourceClause()} 
+         ORDER BY match_score DESC NULLS LAST, last_verified_at DESC NULLS LAST 
+         LIMIT ?`
+    const rows = await db.prepare(query).all(state || 'nationwide', limit);
 
     const normalizeTitle = (t) => String(t || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
     const seenTitles = new Set(curatedTitles.map(normalizeTitle));
