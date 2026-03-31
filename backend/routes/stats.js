@@ -36,24 +36,20 @@ router.get('/dashboard', async (req, res) => {
       // Return real database stats for admin
       const profilesCount = await req.db
         .prepare('SELECT COUNT(*) as count FROM profiles')
-        .all()
-        .then(rows => rows[0])
+        .get()
       
       const organizationsCount = await req.db
         .prepare('SELECT COUNT(*) as count FROM organizations')
-        .all()
-        .then(rows => rows[0])
+        .get()
       
       const grantsCount = await req.db
         .prepare('SELECT COUNT(*) as count FROM grants')
-        .all()
-        .then(rows => rows[0])
+        .get()
       
       const activePredicate = req.db?.dialect === 'postgres' ? 'is_active = TRUE' : 'is_active = 1'
       const opportunitiesCount = await req.db
         .prepare(`SELECT COUNT(*) as count FROM funding_opportunities WHERE ${activePredicate}`)
-        .all()
-        .then(rows => rows[0])
+        .get()
       
       const awardedGrants = await req.db
         .prepare(`
@@ -61,8 +57,7 @@ router.get('/dashboard', async (req, res) => {
           FROM grants
           WHERE status = 'awarded' AND amount_awarded > 0
         `)
-        .all()
-        .then(rows => rows[0])
+        .get()
       
       const pipelineTotal = await req.db
         .prepare(`
@@ -70,8 +65,7 @@ router.get('/dashboard', async (req, res) => {
           FROM grants
           WHERE status IN ('interested', 'drafting', 'app_prep', 'revision', 'submitted', 'under_review')
         `)
-        .all()
-        .then(rows => rows[0])
+        .get()
 
       return res.json({
         organizations: organizationsCount?.count ?? 0,
