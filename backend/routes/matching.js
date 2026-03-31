@@ -31,17 +31,17 @@ function isHardEligibilityReject(decision) {
 function requireAuth(req, res) {
     if (!req.ctx?.userId) {
           res.status(401).json({ error: 'Authentication required' })
-          throw new Error('Authentication required')
+          return null
     }
     return req.ctx
 }
 
 async function requireProfileAccess(req, res, profileId) {
     const ctx = requireAuth(req, res)
-    if (!ctx) throw new Error('Authentication required')
+    if (!ctx) return null
     if (ctx.isAdmin) return ctx
     const ok = await ensureProfileAccess(req, res, profileId)
-    if (!ok) throw new Error('Access denied')
+    if (!ok) return null
     return ctx
 }
 
@@ -51,7 +51,7 @@ async function requireProfileAccess(req, res, profileId) {
 router.get('/profile/:profileId/grants', async (req, res) => {
     const profileId = req.params.profileId
     const auth = await requireProfileAccess(req, res, profileId)
-    if (!auth) return
+    if (!auth || res.headersSent) return
 
              try {
                    const profileRow = await req.db.prepare('SELECT * FROM profiles WHERE id = ?').get(profileId)
@@ -132,7 +132,9 @@ router.get('/profile/:profileId/grants', async (req, res) => {
                    res.json(matches)
              } catch (error) {
                    console.error('Error matching profile to grants:', error)
-                   res.status(500).json(formatError(error))
+                   if (!res.headersSent) {
+                       res.status(500).json(formatError(error))
+                   }
              }
 })
 
@@ -151,7 +153,7 @@ router.get('/profile/:profileId/grants', async (req, res) => {
 router.get('/profile/:profileId/opportunities', async (req, res) => {
     const profileId = req.params.profileId
     const auth = await requireProfileAccess(req, res, profileId)
-    if (!auth) return
+    if (!auth || res.headersSent) return
 
              try {
                    const profileRow = await req.db.prepare('SELECT * FROM profiles WHERE id = ?').get(profileId)
@@ -404,7 +406,9 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
       })
              } catch (error) {
                    console.error('Error matching profile to opportunities:', error)
-                   res.status(500).json(formatError(error))
+                   if (!res.headersSent) {
+                       res.status(500).json(formatError(error))
+                   }
              }
 })
 
