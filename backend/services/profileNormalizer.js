@@ -6,7 +6,7 @@
  * need category normalization, and fingerprint computation.
  */
 
-import crypto from 'crypto'
+import { createHash } from 'crypto'
 import { resolveApplicantType } from './profileHelpers.js'
 
 // ---------------------------------------------------------------------------
@@ -825,8 +825,7 @@ export function computeProfileFingerprint(normalizedProfile) {
     hasChronicIllness: normalizedProfile.hasChronicIllness,
     hasEmergencyNeed: normalizedProfile.hasEmergencyNeed,
   }
-  return crypto
-    .createHash('sha256')
+  return createHash('sha256')
     .update(JSON.stringify(relevant))
     .digest('hex')
     .slice(0, 16)
