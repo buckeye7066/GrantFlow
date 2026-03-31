@@ -178,10 +178,7 @@ router.get('/', async (req, res) => {
     // AUTH GUARD: Require authentication
     const user = requireAuthenticatedUser(req, res)
     if (!user) {
-      return res.status(401).json({ 
-        error: 'Authentication required',
-        message: 'You must be logged in to view reminders'
-      });
+      return;
     }
     
     if (!req.db) {
@@ -195,7 +192,7 @@ router.get('/', async (req, res) => {
       if (isAdminUser(user)) return await fetchReminderSnapshot(req.db)
       const orgIds = await getAccessibleOrganizationIds(req.db, user)
       return await fetchReminderSnapshot(req.db, DAYS_LOOKAHEAD, {
-        organizationIds: Array.from(orgIds ?? []),
+        organizationIds: Array.isArray(orgIds) ? Array.from(orgIds) : [],
       })
     })()
     
