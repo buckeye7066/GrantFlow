@@ -21,6 +21,8 @@ export function normalizeDateToIso(value) {
     const dd = Number.parseInt(mdy[2], 10)
     const yyyy = Number.parseInt(mdy[3], 10)
     if (mm >= 1 && mm <= 12 && dd >= 1 && dd <= 31 && yyyy >= 1900 && yyyy <= 2100) {
+      const testDate = new Date(yyyy, mm - 1, dd)
+      if (testDate.getFullYear() !== yyyy || testDate.getMonth() !== mm - 1 || testDate.getDate() !== dd) return null
       return `${String(yyyy).padStart(4, '0')}-${String(mm).padStart(2, '0')}-${String(dd).padStart(2, '0')}`
     }
   }
@@ -28,6 +30,9 @@ export function normalizeDateToIso(value) {
   // Last resort: parseable Date → ISO date.
   const parsed = new Date(raw)
   if (Number.isNaN(parsed.getTime())) return null
-  return parsed.toISOString().slice(0, 10)
+  const year = parsed.getFullYear()
+  const month = String(parsed.getMonth() + 1).padStart(2, '0')
+  const day = String(parsed.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
 }
 
