@@ -51,7 +51,7 @@ export async function fetchGrantsGov(options = {}) {
         Accept: 'application/json',
         'Content-Type': 'application/json',
       },
-      data: payload,
+      body: JSON.stringify(payload),
       timeout: 60000, // 60 second timeout for this API
       returnMeta: true,
     });
@@ -95,13 +95,20 @@ function parseGrantsGovResponse(data) {
   let records = [];
   
   // search2 returns opportunities under `data.oppHits` (sometimes nested under `data.data`).
-  const envelope = data && typeof data === 'object' ? data : null
-  const dataNode = envelope?.data?.oppHits ? envelope.data : envelope?.data?.data?.oppHits ? envelope.data.data : envelope
-
-  if (dataNode && dataNode.oppHits) {
-    records = Array.isArray(dataNode.oppHits) ? dataNode.oppHits : [dataNode.oppHits];
+  if (!data || typeof data !== 'object') {
+    return [];
+  }
+  
+  // Handle nested response structure from Grants.gov API
+  if (data.data?.oppHits) {
+    records = Array.isArray(data.data.oppHits) ? data.data.oppHits : [data.data.oppHits];
+  } else if (data.oppHits) {
+    records = Array.isArray(data.oppHits) ? data.oppHits : [data.oppHits];
   } else if (Array.isArray(data)) {
     records = data;
+  } else {
+    console.warn('[grants.gov] Unexpected response format:', Object.keys(data));
+    return [];
   }
   
   for (const record of records) {
