@@ -255,6 +255,9 @@ export async function runAutonomousCrawlers(options, context) {
       while (Date.now() - startWaitTime < timeoutMs) {
         // Check status of all jobs
         const jobIds = report.jobs.map(j => j.job_id)
+        if (jobIds.length === 0) {
+          return { job_id: jobId, profile_id: profileId, message: 'No jobs to check' }
+        }
         const placeholders = jobIds.map(() => '?').join(',')
         const jobs = await db
           .prepare(`SELECT id, status, error FROM crawler_jobs WHERE id IN (${placeholders})`)
@@ -290,95 +293,95 @@ export async function runAutonomousCrawlers(options, context) {
           break
         }
 
-      // Wait before next poll
-      await new Promise(resolve => setTimeout(resolve, pollInterval))
-    }
+        // Wait before next poll
+        await new Promise(resolve => setTimeout(resolve, pollInterval))
+      }
 
-    // Process completed jobs to save opportunities
-    if (report.jobs_completed > 0) {
-      const completedJobs = report.jobs.filter(j => j.status === 'completed')
-      
-      for (const job of completedJobs) {
-        try {
-          // Save results to global opportunities if enabled
-          if (saveAllToGlobal) {
-            const saveResult = await saveCrawlerResultsToGlobal({ jobId: job.job_id }, context)
-            job.global_save = saveResult
+      // Process completed jobs to save opportunities
+      if (report.jobs_completed > 0) {
+        const completedJobs = report.jobs.filter(j => j.status === 'completed')
+        
+        for (const job of completedJobs) {
+          try {
+            // Save results to global opportunities if enabled
+            if (saveAllToGlobal) {
+              const saveResult = await saveCrawlerResultsToGlobal({ jobId: job.job_id }, context)
+              job.global_save = saveResult
+            }
+            
+            // Process opportunities for profile pipeline with match filtering
+            if (matchThreshold > 0) {
+              await saveHighMatchesToProfile({
+                jobId: job.job_id,
+                profileId: job.profile_id,
+                matchThreshold,
+              }, context)
+              job.profile_save = { threshold: matchThreshold, status: 'completed' }
+            }
+          } catch (error) {
+            report.errors.push({
+              job_id: job.job_id,
+              error: `Failed to save opportunities: ${error.message}`,
+            })
           }
-          
-          // Process opportunities for profile pipeline with match filtering
-          if (matchThreshold > 0) {
-            await saveHighMatchesToProfile({
-              jobId: job.job_id,
-              profileId: job.profile_id,
-              matchThreshold,
-            }, context)
-            job.profile_save = { threshold: matchThreshold, status: 'completed' }
-          }
-        } catch (error) {
-          report.errors.push({
-            job_id: job.job_id,
-            error: `Failed to save opportunities: ${error.message}`,
-          })
         }
       }
-    }
 
-    // Handle failed jobs with retries
-    if (report.jobs_failed > 0 && maxRetries > 0) {
-        const failedJobs = report.jobs.filter(j => j.status === 'failed')
-        
-        for (const failedJob of failedJobs) {
-          const retriesUsed = (await db
-            .prepare(`SELECT retry_count FROM crawler_jobs WHERE id = ?`)
-            .get(failedJob.job_id))?.retry_count || 0
+      // Handle failed jobs with retries
+      if (report.jobs_failed > 0 && maxRetries > 0) {
+          const failedJobs = report.jobs.filter(j => j.status === 'failed')
+          
+          for (const failedJob of failedJobs) {
+            const retriesUsed = (await db
+              .prepare(`SELECT retry_count FROM crawler_jobs WHERE id = ?`)
+              .get(failedJob.job_id))?.retry_count || 0
 
-          if (retriesUsed < maxRetries) {
-            try {
-              const newJobId = randomUUID()
-              const parameters = {
-                autonomous_run: true,
-                profile_id: failedJob.profile_id,
-                retried_from_job_id: failedJob.job_id,
+            if (retriesUsed < maxRetries) {
+              try {
+                const newJobId = randomUUID()
+                const parameters = {
+                  autonomous_run: true,
+                  profile_id: failedJob.profile_id,
+                  retried_from_job_id: failedJob.job_id,
+                }
+
+                await db.prepare(
+                  `
+                  INSERT INTO crawler_jobs (id, type, profile_id, status, parameters, created_at)
+                  VALUES (?, ?, ?, 'queued', ?, CURRENT_TIMESTAMP)
+                  `
+                ).run(newJobId, failedJob.crawler_type, failedJob.profile_id, JSON.stringify(parameters))
+
+                await db.prepare(
+                  `
+                  UPDATE crawler_jobs
+                  SET retry_count = COALESCE(retry_count, 0) + 1,
+                      last_retry_at = CURRENT_TIMESTAMP
+                  WHERE id = ?
+                  `
+                ).run(failedJob.job_id)
+
+                report.jobs_retried++
+                failedJob.retry_job_id = newJobId
+
+                await auditLog(
+                  {
+                    action: 'crawler_job_retried',
+                    original_job_id: failedJob.job_id,
+                    new_job_id: newJobId,
+                    retry_count: retriesUsed + 1,
+                  },
+                  context,
+                )
+              } catch (error) {
+                report.errors.push({
+                  job_id: failedJob.job_id,
+                  error: `Failed to retry: ${error.message}`,
+                })
               }
-
-              await db.prepare(
-                `
-                INSERT INTO crawler_jobs (id, type, profile_id, status, parameters, created_at)
-                VALUES (?, ?, ?, 'queued', ?, CURRENT_TIMESTAMP)
-                `
-              ).run(newJobId, failedJob.crawler_type, failedJob.profile_id, JSON.stringify(parameters))
-
-              await db.prepare(
-                `
-                UPDATE crawler_jobs
-                SET retry_count = COALESCE(retry_count, 0) + 1,
-                    last_retry_at = CURRENT_TIMESTAMP
-                WHERE id = ?
-                `
-              ).run(failedJob.job_id)
-
-              report.jobs_retried++
-              failedJob.retry_job_id = newJobId
-
-              await auditLog(
-                {
-                  action: 'crawler_job_retried',
-                  original_job_id: failedJob.job_id,
-                  new_job_id: newJobId,
-                  retry_count: retriesUsed + 1,
-                },
-                context,
-              )
-            } catch (error) {
-              report.errors.push({
-                job_id: failedJob.job_id,
-                error: `Failed to retry: ${error.message}`,
-              })
             }
           }
         }
-      }
     }
 
     const duration = Date.now() - startTime
