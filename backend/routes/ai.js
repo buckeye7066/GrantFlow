@@ -6,9 +6,9 @@ import { safeParseJSON } from '../utils/safeJson.js';
 import { formatError } from '../middleware/errorHandler.js';
 import { validatePagination } from '../utils/validation.js';
 import { DEFAULT_OPENAI_MODEL, OPENAI_TIMEOUT_MS, MAX_PROMPT_LENGTH } from '../config/constants.js';
-// NOTE: calculateMatchScore is used here for display-only scoring in AI chat context.
+// NOTE: scoreOpportunity is used here for display-only scoring in AI chat context.
 // This route does NOT insert into the grants pipeline.
-import { calculateMatchScore } from '../services/matchingEngine.js';
+import { scoreOpportunity } from '../services/matchEngine.js';
 import { trustedOriginClause, trustedSourceClause } from '../utils/recordOrigins.js';
 import { createOpenAIClient, summarizeOpenAIError } from '../utils/openaiClient.js';
 import { enforceTierCapability } from '../middleware/entitlements.js'
@@ -146,7 +146,7 @@ router.post('/comprehensive-match', async (req, res) => {
     
     // Calculate match scores using deterministic algorithm
     const scoredOpps = opportunities.map(opp => {
-      const matchResult = calculateMatchScore(profile, opp);
+      const matchResult = scoreOpportunity(profile, opp);
       return {
         ...opp,
         fit_score: matchResult.score,
@@ -256,7 +256,7 @@ router.post('/match', async (req, res) => {
     
     // Score opportunities using the canonical matching engine
     const scoredOpportunities = opportunities.map(opp => {
-      const { score, reasons: matchReasons } = calculateMatchScore(profile, opp);
+      const { score, reasons: matchReasons } = scoreOpportunity(profile, opp);
       
       return {
         ...opp,

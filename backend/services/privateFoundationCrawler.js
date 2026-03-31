@@ -11,7 +11,7 @@
  */
 
 import crypto from 'crypto'
-import { applyRelevanceFilter, extractProfileData } from './relevanceFilter.js'
+import { extractProfileData } from './relevanceFilter.js'
 
 // ── Foundation registry ────────────────────────────────────────────────────────
 
@@ -642,10 +642,6 @@ export async function crawlPrivateFoundations(profileContext, db = null) {
     }
 
     const opp = foundationToOpportunity(foundation)
-
-    // Hard relevance filter
-    const { pass } = applyRelevanceFilter(opp, profileData)
-    if (!pass) continue
 
     // Score relevance
     const score = scoreFoundation(foundation, signals)
