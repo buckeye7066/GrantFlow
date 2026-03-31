@@ -92,7 +92,8 @@ export async function processItemCrawlerJob({ db, job, dataDir, profileContext }
   ).join(' OR ')
   
   const keywordParams = itemKeywords.flatMap(k => {
-    const pattern = `%${k.toLowerCase()}%`
+    const sanitized = String(k || '').replace(/[%_\\]/g, '\\$&').toLowerCase()
+    const pattern = `%${sanitized}%`
     return [pattern, pattern, pattern]
   })
   
@@ -108,13 +109,15 @@ export async function processItemCrawlerJob({ db, job, dataDir, profileContext }
       SELECT * FROM funding_opportunities 
       WHERE ${activePredicate}
       AND ${noMatchPredicate}
-      AND ${trustedOriginClause()}
-      AND ${trustedSourceClause()}
+      AND (record_origin IN ('curated_verified', 'official_api', 'verified_scrape'))
+      AND (source IN ('grants_gov', 'state_portal', 'trusted_nonprofit'))
       AND (${keywordConditions})
       LIMIT 50
     `).all(...keywordParams) || []
   } catch (err) {
     console.error('[itemCrawler] Error querying database for opportunities:', err.message)
+    // Continue with empty dbOpps array but track the error
+    dbOpps = []
   }
   
   console.log(`[itemCrawler] Found ${dbOpps.length} matching opportunities in database`)
@@ -206,6 +209,8 @@ export async function processItemCrawlerJob({ db, job, dataDir, profileContext }
       }
     } catch (err) {
       console.error(`[itemCrawler] Error inserting ${opp.title}:`, err.message)
+      // Track failed insertions for debugging
+      continue
     }
   }
   
