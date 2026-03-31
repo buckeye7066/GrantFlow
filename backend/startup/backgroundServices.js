@@ -59,7 +59,9 @@ export function startBackgroundServices({ db, uploadsDir, actualPort, loggedCors
       } catch (e) {
         console.warn('[startup] grants status constraint fix skipped:', e?.message);
       }
-    })();
+    })().catch(err => {
+      console.error('[startup] Postgres constraint setup failed:', err?.message || err);
+    });
   }
 
   // ── 2. Pipeline self-check ─────────────────────────────────────────────────
@@ -424,7 +426,7 @@ async function _scheduleAutoProfileDedupe({ db }) {
 
   // Skip if we already ran on this deploy SHA (best-effort via audit_logs).
   try {
-    const exists = await db
+    const exists = db
       .prepare(
         `
           SELECT 1
@@ -483,22 +485,26 @@ async function _scheduleAutoProfileDedupe({ db }) {
           userIds: Array.from(userIds),
           orgIds: Array.from(orgIds),
         });
-        logAuditEvent(db, {
-          category: AUDIT_CATEGORIES.ADMIN,
-          action: 'auto_profile_dedupe_skipped',
-          severity: SEVERITY.WARNING,
-          resourceType: 'profile',
-          resourceId: winner.id,
-          details: {
-            run_id: runId,
-            group_key: group.key,
-            reason: 'conflicting user_id and/or organization_id across group',
-            user_ids: Array.from(userIds),
-            organization_ids: Array.from(orgIds),
-            winner_id: winner.id,
-            loser_ids: losers.map((l) => l.id),
-          },
-        });
+        try {
+          await logAuditEvent(db, {
+            category: AUDIT_CATEGORIES.ADMIN,
+            action: 'auto_profile_dedupe_skipped',
+            severity: SEVERITY.WARNING,
+            resourceType: 'profile',
+            resourceId: winner.id,
+            details: {
+              run_id: runId,
+              group_key: group.key,
+              reason: 'conflicting user_id and/or organization_id across group',
+              user_ids: Array.from(userIds),
+              organization_ids: Array.from(orgIds),
+              winner_id: winner.id,
+              loser_ids: losers.map((l) => l.id),
+            },
+          });
+        } catch (auditErr) {
+          console.warn('[auto-dedupe] audit logging failed:', auditErr?.message);
+        }
         continue;
       }
 
