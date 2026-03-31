@@ -14,16 +14,28 @@ import { runDomainCrawler } from './domainCrawlerEngine.js'
  * @returns {Promise<Object[]>} Array of opportunity objects
  */
 export async function crawlDomain(profile, crawlerType, options = {}) {
+  if (!profile) {
+    throw new Error('Profile is required for domain crawling')
+  }
+  if (!crawlerType) {
+    throw new Error('Crawler type is required')
+  }
   const config = DOMAIN_CRAWLER_REGISTRY.find((c) => c.id === crawlerType)
   if (!config) {
-    return []
+    throw new Error(`Domain crawler '${crawlerType}' not found in registry`)
   }
 
-  const results = await runDomainCrawler({
-    profile,
-    config,
-    options,
-  })
+  let results
+  try {
+    results = await runDomainCrawler({
+      profile,
+      config,
+      options,
+    })
+  } catch (error) {
+    console.error(`Domain crawler ${crawlerType} failed:`, error)
+    return []
+  }
 
   return results
 }
