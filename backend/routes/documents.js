@@ -956,9 +956,16 @@ router.post('/ingest', uploadLimiter, requireUploadsWritable, runUploadSingle('d
     try {
       await req.db.prepare(insertDocumentSql).run(...insertDocumentArgs)
     } catch (error) {
+      // Clean up uploaded file if database insert fails
+      if (file?.path) {
+        try {
+          fs.unlinkSync(file.path);
+        } catch (unlinkError) {
+          console.error('Failed to cleanup file after DB error:', unlinkError);
+        }
+      }
+      
       const msg = String(error?.message || error)
-      // Safety retry: if an old code path still attempted to set status (or the DB has a legacy constraint edge),
-      // retry the insert without status. (This statement already omits status.)
       if (msg.includes('documents_status_check')) {
         await req.db.prepare(insertDocumentSql).run(...insertDocumentArgs)
       } else {
