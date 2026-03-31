@@ -1188,11 +1188,11 @@ router.get('/geo/scored', async (req, res) => {
     if (profileId && profileId !== 'all' && profileId !== 'admin') {
       try {
         const { loadProfileContext } = await import('../services/profileHelpers.js');
-        const { calculateMatchScore } = await import('../services/matchingEngine.js');
+        const { scoreOpportunity } = await import('../services/matchEngine.js');
 
         const profileContext = await loadProfileContext(db, profileId);
         for (const opp of decorated) {
-          const result = calculateMatchScore(profileContext, opp);
+          const result = scoreOpportunity(profileContext, opp);
           opp.match_score = result.score;
           opp.match_reasons = result.reasons || [];
         }

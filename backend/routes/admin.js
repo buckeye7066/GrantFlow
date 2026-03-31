@@ -3317,7 +3317,7 @@ router.post('/seed-profile-grants', async (req, res) => {
   }
   try {
     const { excludeProfiles = [] } = req.body || {};
-    const { computeMatchDecision } = await import('../services/matchDecisionEngine.js');
+    const { computeMatchDecision } = await import('../services/matchEngine.js');
     const { saveToProfilePipeline } = await import('../services/opportunityMatcher.js');
 
     const profiles = await req.db.prepare('SELECT * FROM profiles WHERE status = ?').all('active');
@@ -4829,7 +4829,7 @@ router.post('/backfill-matches', async (req, res) => {
       })
     }
 
-    const { computeMatchDecision, normalizeProfile, computeProfileFingerprint, normalizeOpportunity, computeOpportunityFingerprint, MATCHER_VERSION } = await import('../services/matchDecisionEngine.js')
+    const { computeMatchDecision, normalizeProfile, computeProfileFingerprint, normalizeOpportunity, computeOpportunityFingerprint, MATCHER_VERSION } = await import('../services/matchEngine.js')
 
     // Load all pipeline entries with associated opportunity and profile data
     const grants = await db

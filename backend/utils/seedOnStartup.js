@@ -10,7 +10,7 @@ import { fileURLToPath } from 'url';
 import crypto from 'crypto';
 import { applyRelevanceFilter } from '../services/relevanceFilter.js';
 import { buildProfileSignals } from '../services/profileHelpers.js';
-import { computeMatchDecision, MATCHER_VERSION, normalizeProfile, normalizeOpportunity, computeProfileFingerprint, computeOpportunityFingerprint } from '../services/matchDecisionEngine.js';
+import { computeMatchDecision, MATCHER_VERSION, normalizeProfile, normalizeOpportunity, computeProfileFingerprint, computeOpportunityFingerprint } from '../services/matchEngine.js';
 import { PIPELINE_ALLOWED_SOURCES } from '../config/pipelineAllowedSources.js';
 
 const __filename = fileURLToPath(import.meta.url);

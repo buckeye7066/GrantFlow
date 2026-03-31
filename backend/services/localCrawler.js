@@ -14,7 +14,7 @@ import {
   summarizeProfileSignals,
 } from './profileHelpers.js'
 import { trustedOriginClause, trustedSourceClause } from '../utils/recordOrigins.js'
-import { calculateMatchScore } from './matchingEngine.js'
+import { scoreOpportunity } from './matchEngine.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
@@ -192,7 +192,7 @@ export async function processLocalCrawlerJob({ db, job, dataDir, profileContext 
   for (const opp of allOpps) {
     if (opp.requires_match) continue
     
-    const { score, reasons: matchReasons } = calculateMatchScore(profileContext, opp)
+    const { score, reasons: matchReasons } = scoreOpportunity(profileContext, opp)
     
     scoredOpps.push({
       ...opp,
