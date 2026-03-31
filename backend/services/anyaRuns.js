@@ -10,33 +10,38 @@ function safeJson(value, fallback = '{}') {
 
 export async function createAnyaRun(db, { mode, kind, sessionId, userId, profileId, toolName, request } = {}) {
   const id = randomUUID()
-  await db
-    .prepare(
-      `
-        INSERT INTO anya_runs (
-          id,
-          status,
-          mode,
-          kind,
-          session_id,
-          user_id,
-          profile_id,
-          tool_name,
-          request_json
-        ) VALUES (?, 'running', ?, ?, ?, ?, ?, ?, ?)
-      `,
-    )
-    .run(
-      id,
-      mode || 'copilot',
-      kind,
-      sessionId ?? null,
-      userId ?? null,
-      profileId ?? null,
-      toolName ?? null,
-      safeJson(request),
-    )
-  return id
+  try {
+    await db
+      .prepare(
+        `
+          INSERT INTO anya_runs (
+            id,
+            status,
+            mode,
+            kind,
+            session_id,
+            user_id,
+            profile_id,
+            tool_name,
+            request_json
+          ) VALUES (?, 'running', ?, ?, ?, ?, ?, ?, ?)
+        `,
+      )
+      .run(
+        id,
+        mode || 'copilot',
+        kind,
+        sessionId ?? null,
+        userId ?? null,
+        profileId ?? null,
+        toolName ?? null,
+        safeJson(request),
+      )
+    return id
+  } catch (error) {
+    console.error('Failed to create Anya run:', error)
+    throw new Error(`Cannot create Anya run: ${error.message}`)
+  }
 }
 
 export async function appendAnyaRunLog(db, runId, level, message, meta) {
@@ -50,24 +55,29 @@ export async function appendAnyaRunLog(db, runId, level, message, meta) {
         `,
       )
       .run(randomUUID(), runId, level || 'info', String(message || ''), safeJson(meta))
-  } catch {
-    // best-effort
+  } catch (error) {
+    console.error(`Failed to log Anya run ${runId}:`, error)
   }
 }
 
 export async function completeAnyaRun(db, runId, { status, response, error } = {}) {
   if (!runId) return
-  await db
-    .prepare(
-      `
-        UPDATE anya_runs
-        SET status = ?,
-            completed_at = CURRENT_TIMESTAMP,
-            response_json = COALESCE(?, response_json),
-            error = COALESCE(?, error)
-        WHERE id = ?
-      `,
-    )
-    .run(status || 'completed', response ? safeJson(response) : null, error ? String(error) : null, runId)
+  try {
+    await db
+      .prepare(
+        `
+          UPDATE anya_runs
+          SET status = ?,
+              completed_at = CURRENT_TIMESTAMP,
+              response_json = COALESCE(?, response_json),
+              error = COALESCE(?, error)
+          WHERE id = ?
+        `,
+      )
+      .run(status || 'completed', response ? safeJson(response) : null, error ? String(error) : null, runId)
+  } catch (dbError) {
+    console.error(`Failed to complete Anya run ${runId}:`, dbError)
+    throw new Error(`Cannot complete Anya run: ${dbError.message}`)
+  }
 }
 
