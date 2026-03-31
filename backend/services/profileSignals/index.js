@@ -22,7 +22,7 @@ function deriveIntents(analysis) {
   const military = analysis.military || new Set();
   const family = analysis.family || new Set();
 
-  if (occ.has?.('small_business_owner')
+  if (occ.has('small_business_owner')
     || occ.has?.('minority_owned_business')
     || occ.has?.('women_owned_business')
     || needs.has?.('business')
@@ -30,11 +30,11 @@ function deriveIntents(analysis) {
     intents.add('business');
   }
 
-  if (analysis.applicantType === 'student' || needs.has?.('scholarship') || needs.has?.('education')) {
+  if (analysis.applicantType === 'student' || needs.has('scholarship') || needs.has('education')) {
     intents.add('education');
   }
 
-  if (health.size > 0 || needs.has?.('healthcare') || needs.has?.('disability')) {
+  if (health.size > 0 || needs.has('healthcare') || needs.has('disability')) {
     intents.add('healthcare');
   }
 
@@ -42,53 +42,53 @@ function deriveIntents(analysis) {
     intents.add('military');
   }
 
-  if (needs.has?.('housing') || family.has?.('homeless')) {
+  if (needs.has('housing') || family.has('homeless')) {
     intents.add('housing');
   }
 
-  if (needs.has?.('employment') && !intents.has('business')) {
+  if (needs.has('employment') && !intents.has('business')) {
     intents.add('workforce');
   }
 
-  if (needs.has?.('utilities') || needs.has?.('weatherization')) {
+  if (needs.has('utilities') || needs.has('weatherization')) {
     intents.add('utilities');
   }
 
-  if (needs.has?.('food')) {
+  if (needs.has('food')) {
     intents.add('food');
   }
 
-  if (needs.has?.('childcare')) {
+  if (needs.has('childcare')) {
     intents.add('childcare');
   }
 
-  if (needs.has?.('transportation')) {
+  if (needs.has('transportation')) {
     intents.add('transportation');
   }
 
-  if (needs.has?.('internet')) {
+  if (needs.has('internet')) {
     intents.add('broadband');
   }
 
-  if (needs.has?.('legal')) {
+  if (needs.has('legal')) {
     intents.add('legal');
   }
 
-  if (health.has?.('disability') || health.has?.('physical_disability')
-    || health.has?.('developmental_disability') || health.has?.('visual_impairment')
-    || health.has?.('hearing_impairment') || needs.has?.('disability')) {
+  if (health.has('disability') || health.has('physical_disability')
+    || health.has('developmental_disability') || health.has('visual_impairment')
+    || health.has('hearing_impairment') || needs.has('disability')) {
     intents.add('special_needs');
   }
 
-  if (needs.has?.('mental_health') || health.has?.('mental_health')) {
+  if (needs.has('mental_health') || health.has('mental_health')) {
     intents.add('mental_health');
   }
 
-  if (needs.has?.('substance_recovery') || health.has?.('substance_recovery')) {
+  if (needs.has('substance_recovery') || health.has('substance_recovery')) {
     intents.add('substance_recovery');
   }
 
-  if (needs.has?.('certification_assistance') || needs.has?.('cpr_first_aid_training') ||
+  if (needs.has('certification_assistance') || needs.has('cpr_first_aid_training') ||
       (analysis.keywords || []).some(k =>
         /cpr|first\s*aid|aed|bls|heartsaver|instructor\s*cert|safety\s*train|certification\s*class/i.test(k))) {
     intents.add('community_health_training');
@@ -97,8 +97,8 @@ function deriveIntents(analysis) {
     intents.add('employment');
   }
 
-  if (needs.has?.('license_reinstatement_support') || needs.has?.('professional_remediation_funding') ||
-      needs.has?.('nursing_reentry_support') ||
+  if (needs.has('license_reinstatement_support') || needs.has('professional_remediation_funding') ||
+      needs.has('nursing_reentry_support') ||
       (analysis.keywords || []).some(k =>
         /probe|reinstatement|remediation|ethics\s*class|ethics\s*course|board.?required|return\s*to\s*practice|relicens|recertif|nurse\s*re.?entry|license\s*back|professional\s*boundar/i.test(k))) {
     intents.add('license_reinstatement');
