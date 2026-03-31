@@ -73,7 +73,8 @@ async function upsertBasicInformationEmail(db, { profileId, email, actorUserId }
   return { updated: true }
 }
 
-async function adminSelfHealOrgProfileEmails(db, { actorUserId } = {}) {
+async function adminSelfHealOrgProfileEmails(db, { actorUserId, isAdmin = false } = {}) {
+  if (!isAdmin) return { ran: false, error: 'Unauthorized' }
   // Throttle (avoid heavy work on every request)
   const now = Date.now()
   if (now - lastAdminSelfHealAtMs < ADMIN_SELF_HEAL_INTERVAL_MS) return { ran: false }
@@ -201,10 +202,10 @@ export async function buildRequestContext(db, user) {
           }
         }
       } else {
-        ctx.isAdmin = Boolean(emailIsConfiguredAdmin)
+        ctx.isAdmin = false
       }
     } else {
-      ctx.isAdmin = Boolean(emailIsConfiguredAdmin)
+      ctx.isAdmin = false
     }
   } catch (error) {
     console.warn('[requestContext] Failed to resolve admin status from DB:', error?.message)
@@ -220,7 +221,7 @@ export async function buildRequestContext(db, user) {
     // Admin-only self-healing: ensure org profiles are shareable via organizations.email.
     // Best-effort and throttled.
     try {
-      await adminSelfHealOrgProfileEmails(db, { actorUserId: ctx.userId ?? null })
+      await adminSelfHealOrgProfileEmails(db, { actorUserId: ctx.userId ?? null, isAdmin: ctx.isAdmin })
     } catch {
       // ignore (best-effort)
     }
