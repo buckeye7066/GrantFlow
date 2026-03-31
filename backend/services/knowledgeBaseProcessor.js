@@ -96,7 +96,7 @@ export async function analyzeKnowledgeBaseDocument({ documentId, extractedText, 
           SET 
             processing_status = 'analyzed',
             processing_metadata = ?,
-            updated_at = CURRENT_TIMESTAMP
+            updated_at = datetime('now')
           WHERE id = ?
         `
       )
@@ -122,7 +122,7 @@ export async function analyzeKnowledgeBaseDocument({ documentId, extractedText, 
             SET 
               processing_status = 'error',
               processing_error = ?,
-              updated_at = CURRENT_TIMESTAMP
+              updated_at = datetime('now')
             WHERE id = ?
           `
         )
