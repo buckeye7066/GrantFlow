@@ -266,8 +266,8 @@ export function normalizeOpportunity(rawOpp) {
 
   // -- Need types supported --
   const explicitNeedTypes = safeParseArray(rawOpp.need_types_supported)
-  const catNeedTypes = safeParseArray(rawOpp.categories).map(normalizeNeedCategory).filter(Boolean)
-  const keywordNeedTypes = safeParseArray(rawOpp.keywords).map(normalizeNeedCategory).filter(Boolean)
+  const catNeedTypes = safeParseArray(rawOpp.categories).map(cat => NEED_ALIAS_MAP[cat?.toLowerCase()] || cat).filter(Boolean)
+  const keywordNeedTypes = safeParseArray(rawOpp.keywords).map(kw => NEED_ALIAS_MAP[kw?.toLowerCase()] || kw).filter(Boolean)
   const textNeedTypes = extractNeedTypesFromText(text)
   const allNeedTypes = [...new Set([
     ...explicitNeedTypes,
