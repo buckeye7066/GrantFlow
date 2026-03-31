@@ -111,7 +111,7 @@ export function shouldRetryJob(job, error) {
  * Schedule a job for retry with exponential backoff
  * @param {object} db - Database connection
  * @param {string} jobId - Crawler job ID
- * @param {object} deadLetterEntryId - Dead letter entry ID
+ * @param {string|number} deadLetterEntryId - Dead letter entry ID
  * @returns {Promise<Date|null>} Next retry time, or null if not scheduled
  */
 export async function scheduleJobRetry(db, jobId, deadLetterEntryId) {
@@ -131,6 +131,13 @@ export async function scheduleJobRetry(db, jobId, deadLetterEntryId) {
     // Calculate next retry time
     const delaySeconds = calculateRetryDelay(retryCount)
     const nextRetryAt = new Date(Date.now() + delaySeconds * 1000)
+    
+    // Check if job should be retried first
+    const shouldRetry = shouldRetryJob(job, '');
+    if (!shouldRetry) {
+      console.warn('[backpressure] Job should not be retried', { jobId });
+      return null;
+    }
     
     // Update job retry count and reset to queued
     await db
