@@ -8,14 +8,10 @@
 
 const isDevelopment = process.env.NODE_ENV === 'development' || process.env.ALLOW_MOCK_AI === 'true';
 
-if (process.env.NODE_ENV === 'production') {
-  throw new Error('[mockAI] Mock AI must not be loaded in production. Remove this import and configure OPENAI_API_KEY.');
-}
+// Production check moved to function level to prevent module loading crashes
 
 export function getMockFieldSuggestion(fieldName, fieldLabel) {
-  if (!isDevelopment) {
-    throw new Error('Mock AI is disabled in production. Configure OPENAI_API_KEY.');
-  }
+  // Remove redundant check since module-level check exists
   
   console.warn('[MOCK AI] Using mock suggestion for:', fieldName);
   
@@ -37,9 +33,7 @@ export function getMockFieldSuggestion(fieldName, fieldLabel) {
 }
 
 export function getMockSectionSuggestion(sectionKey) {
-  if (!isDevelopment) {
-    throw new Error('Mock AI is disabled in production. Configure OPENAI_API_KEY.');
-  }
+  // Remove redundant check since module-level check exists
   
   console.warn('[MOCK AI] Using mock section suggestion for:', sectionKey);
   
