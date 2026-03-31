@@ -110,7 +110,7 @@ export async function triggerAutoDiscoveryCrawlers(db, profileId, options = {}) 
       return
     }
 
-    const profile = await db.prepare('SELECT * FROM profiles WHERE id = ?').get(profileId)
+    const profile = db.prepare('SELECT * FROM profiles WHERE id = ?').get(profileId)
     if (!profile) {
       console.warn('[auto-discovery] Profile not found:', profileId)
       return
@@ -119,7 +119,7 @@ export async function triggerAutoDiscoveryCrawlers(db, profileId, options = {}) 
     // Load sections once (for health indicators + signals). Safe if table is missing.
     let sections = {}
     try {
-      const rows = await db
+      const rows = db
         .prepare('SELECT section_key, data FROM profile_sections WHERE profile_id = ?')
         .all(profileId)
       for (const row of rows || []) {
@@ -231,7 +231,7 @@ export async function triggerAutoDiscoveryCrawlers(db, profileId, options = {}) 
     `)
 
     for (const job of jobs) {
-      await insertStmt.run(job.id, job.type, job.profile_id, JSON.stringify(job.parameters))
+      insertStmt.run(job.id, job.type, job.profile_id, JSON.stringify(job.parameters))
     }
 
     // Dispatch jobs asynchronously (fire and forget)
