@@ -109,7 +109,6 @@ router.get('/', async (req, res) => {
               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `
       await req.db.prepare(insertSql).run(id, userId, DEFAULT_PREFERENCES.sidebar_position, DEFAULT_PREFERENCES.sidebar_collapsed, DEFAULT_PREFERENCES.dashboard_layout, DEFAULT_PREFERENCES.card_density, DEFAULT_PREFERENCES.table_row_density, DEFAULT_PREFERENCES.theme, DEFAULT_PREFERENCES.accent_color, DEFAULT_PREFERENCES.sidebar_color_scheme, DEFAULT_PREFERENCES.high_contrast, DEFAULT_PREFERENCES.default_landing_page, DEFAULT_PREFERENCES.items_per_page, DEFAULT_PREFERENCES.date_format, DEFAULT_PREFERENCES.currency_display, DEFAULT_PREFERENCES.timezone, DEFAULT_PREFERENCES.email_notifications, DEFAULT_PREFERENCES.grant_deadline_reminder_days, DEFAULT_PREFERENCES.weekly_digest, DEFAULT_PREFERENCES.browser_notifications, DEFAULT_PREFERENCES.font_size, DEFAULT_PREFERENCES.reduce_motion, DEFAULT_PREFERENCES.screen_reader_optimized, JSON.stringify(defaultCustom))
-      await req.db.prepare(insertSql).run(id, userId, JSON.stringify(defaultCustom))
       preferences = await req.db
         .prepare('SELECT * FROM user_preferences WHERE id = ?')
         .get(id)
