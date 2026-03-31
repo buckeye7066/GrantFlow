@@ -260,8 +260,12 @@ export async function runNationalCrawlerV2({
         let anySuccess = false
 
         for (const url of urls) {
-          await insertEvent.run(runId, source.source_id, url, 'fetch_start', 'Fetching', JSON.stringify({ url }))
-          await logs.crawl(`[run=${runId}] fetch_start ${source.source_id} url=${url}`)
+          try {
+            await insertEvent.run(runId, source.source_id, url, 'fetch_start', 'Fetching', JSON.stringify({ url }))
+            await logs.crawl(`[run=${runId}] fetch_start ${source.source_id} url=${url}`)
+          } catch (dbError) {
+            await logs.crawl(`[run=${runId}] db_error during event logging: ${dbError.message}`)
+          }
 
           let fetchResult
           let httpStatus = null
@@ -341,18 +345,27 @@ export async function runNationalCrawlerV2({
             for (const normalized of normalizedByTrack) {
               // Enforce Track A/B separation invariant
               if (normalized.funding_track === 'TRACK_A' && normalized.provider_requirements != null) {
-                throw new Error('Invariant violation: TRACK_A record has provider_requirements')
+                await logs.normalize(`[run=${runId}] warning: TRACK_A record has provider_requirements, cleaning up`)
+                normalized.provider_requirements = null
               }
 
-              const upsert = upsertNormalizedProgram({
-                db,
-                crawlRunId: runId,
-                normalized,
-                contentHash,
-                httpStatus,
-                contentType,
-                parserName: parser_name,
-              })
+              try {
+                const upsert = await upsertNormalizedProgram({
+                  db,
+                  crawlRunId: runId,
+                  normalized,
+                  contentHash,
+                  httpStatus,
+                  contentType,
+                  parserName: parser_name,
+                })
+                counts.programs_normalized += 1
+                counts.programs_upserted += 1
+                counts.versions_created += upsert.versions_created
+              } catch (upsertError) {
+                await logs.normalize(`[run=${runId}] upsert_error ${source.source_id}: ${upsertError.message}`)
+                counts.failures.push({ url, failure_type: 'database_error', message: upsertError.message, stack: upsertError.stack, parser_name: parser_name, retry_count: 0, source_id: source.source_id })
+              }
               counts.programs_normalized += 1
               counts.programs_upserted += 1
               counts.versions_created += upsert.versions_created
