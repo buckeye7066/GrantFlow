@@ -71,7 +71,7 @@ function startServer(extraEnv = {}) {
     const timeout = setTimeout(() => {
       try { child.kill('SIGTERM') } catch { /* ignore */ }
       reject(new Error(`server did not become ready\nstdout:\n${stdout}\nstderr:\n${stderr}`))
-    }, 90_000)
+    }, 60_000)
 
     const onData = () => {
       const match = stdout.match(/\[Server\] Ready on port\s+(\d+)/)
@@ -85,7 +85,7 @@ function startServer(extraEnv = {}) {
 
     child.on('error', (err) => {
       clearTimeout(timeout)
-      reject(new Error(`server failed to spawn: ${String(err?.message || err)}\nstdout:\n${stdout}\nstderr:\n${stderr}`))
+      reject(new Error(`server failed to spawn: ${err?.message || err}\nstdout:\n${stdout}\nstderr:\n${stderr}`))
     })
 
     child.on('exit', (code) => {
