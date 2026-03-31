@@ -19,8 +19,26 @@ const DIRECTORY_RESOURCES = [
 
 export async function runUtilitiesHardshipEngine(profile, options = {}) {
   try {
-    return normalizeAndFilter(DIRECTORY_RESOURCES, ENGINE_ID, { strict_no_loans: false, strict_no_matching: false })
-  } catch {
+    // Filter resources based on profile needs, location, eligibility
+    const filteredResources = DIRECTORY_RESOURCES.filter(resource => {
+      // Basic eligibility check
+      if (profile.location?.state && resource.state_specific && resource.state_specific !== profile.location.state) {
+        return false
+      }
+      // Check if utility assistance matches profile needs
+      if (profile.needs && !profile.needs.some(need => 
+        need.toLowerCase().includes('utility') || 
+        need.toLowerCase().includes('energy') || 
+        need.toLowerCase().includes('water') ||
+        need.toLowerCase().includes('bill')
+      )) {
+        return false
+      }
+      return true
+    })
+    return normalizeAndFilter(filteredResources, ENGINE_ID, { strict_no_loans: false, strict_no_matching: false })
+  } catch (error) {
+    console.error(`[${ENGINE_ID}] Engine error:`, error)
     return []
   }
 }
