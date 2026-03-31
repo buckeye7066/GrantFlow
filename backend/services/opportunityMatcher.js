@@ -266,7 +266,7 @@ export async function saveToProfilePipeline(
           contactInfo.name,
           contactInfo.email,
           contactInfo.phone,
-          opportunity.amount_max || opportunity.maxAmount || null,
+          opportunity.amount_requested || opportunity.requestedAmount || null,
           opportunity.amount_min || opportunity.amountMin || null,
           opportunity.amount_max || opportunity.amountMax || null,
           decision?.decision ?? null,
@@ -325,7 +325,7 @@ export async function saveToProfilePipeline(
           contactInfo.name,
           contactInfo.email,
           contactInfo.phone,
-          opportunity.amount_max || opportunity.maxAmount || null,
+          opportunity.amount_requested || opportunity.requestedAmount || null,
           opportunity.amount_min || opportunity.amountMin || null,
           opportunity.amount_max || opportunity.amountMax || null,
         )
@@ -373,7 +373,7 @@ export async function trackGlobalOpportunity(db, opportunity) {
       ) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
     `)
     
-    await trackingQuery.run(
+    trackingQuery.run(
       opportunity.source || 'unknown',
       null, // Global, not profile-specific
       'success',
