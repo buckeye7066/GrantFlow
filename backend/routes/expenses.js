@@ -12,7 +12,7 @@ const router = express.Router();
 
 async function ensureExpenseAccess(req, res, expenseId) {
   const user = requireAuthenticatedUser(req, res)
-  if (!user) return null
+  if (!user) return false
 
   const expense = await req.db.prepare('SELECT * FROM expenses WHERE id = ?').get(expenseId)
   if (!expense) {
@@ -38,6 +38,7 @@ async function ensureExpenseAccess(req, res, expenseId) {
   return null
 }
 
+router.use(requireAuthenticatedUser);
 router.get('/', async (req, res) => {
   try {
     const user = requireAuthenticatedUser(req, res)
@@ -62,7 +63,7 @@ router.get('/', async (req, res) => {
 
     if (!isAdminUser(user) && !grant_id && !organization_id) {
       const orgIds = await getAccessibleOrganizationIds(req.db, user)
-      if (!orgIds || orgIds.size === 0) return res.json([])
+      if (!orgIds || orgIds.size === 0) return res.status(403).json({ error: 'No accessible organizations' })
       const placeholders = Array.from(orgIds).map(() => '?').join(',')
       query += ` AND organization_id IN (${placeholders})`
       params.push(...Array.from(orgIds))
