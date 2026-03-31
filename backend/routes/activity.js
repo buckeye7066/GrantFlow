@@ -34,8 +34,8 @@ router.post('/page-view', async (req, res) => {
     const title = safeString(req.body?.title, 256)
     const referrer = safeString(req.body?.referrer, 2048)
 
-    logAuditEvent(req.db, {
-      category: AUDIT_CATEGORIES.AUTH,
+    await logAuditEvent(req.db, {
+      category: AUDIT_CATEGORIES.USER_ACTIVITY,
       action: 'client_page_view',
       severity: SEVERITY.INFO,
       userId: req.ctx?.userId ?? null,
