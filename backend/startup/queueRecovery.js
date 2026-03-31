@@ -22,7 +22,7 @@ export function runQueueRecovery({ db, uploadsDir }) {
   ;(async () => {
     try {
       if (db.dialect === 'postgres') {
-        const r = await db
+        const r = db
           .prepare(
             `
               UPDATE crawler_jobs
@@ -60,7 +60,7 @@ export function runQueueRecovery({ db, uploadsDir }) {
   // ── 2. Re-queue concurrency-exhausted jobs ─────────────────────────────────
   ;(async () => {
     try {
-      const r = await db
+      const r = db
         .prepare(
           `
             UPDATE crawler_jobs
@@ -149,7 +149,7 @@ export function runQueueRecovery({ db, uploadsDir }) {
           );
         }
 
-        const queued = await db
+        const queued = db
           .prepare(
             `
               SELECT id FROM crawler_jobs
@@ -218,7 +218,7 @@ async function _drainQueuedJobsGradually(dbRef, uploadsDirRef) {
 
   let queued;
   try {
-    queued = await dbRef
+    queued = dbRef
       .prepare(
         `
           SELECT id FROM crawler_jobs
