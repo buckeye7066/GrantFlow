@@ -60,7 +60,7 @@ const SEASONAL_PROGRAMS = [
     id: 'tennessee_promise',
     programName: 'Tennessee Promise Scholarship',
     openMonth: 9,
-    closeMonth: 11,
+    closeMonth: 10,  // Deadline typically early November, safer to show as closed by November
     description:
       'Tennessee Promise applications open in September for high school seniors. Scholarship covers last-dollar tuition at TN community colleges.',
     states: ['tn'],
@@ -359,10 +359,10 @@ const SEASONAL_PROGRAMS = [
 function isProgramOpenInMonth(program, month) {
   const { openMonth, closeMonth } = program
   if (openMonth <= closeMonth) {
-    return month >= openMonth && month <= closeMonth
+    return month >= openMonth && month < closeMonth
   }
   // Wraps across year boundary
-  return month >= openMonth || month <= closeMonth
+  return month >= openMonth || month < closeMonth
 }
 
 /**
