@@ -183,7 +183,7 @@ async function upsertOpportunity(db, opp) {
  */
 export async function crawlStateCounties(db, state, options = {}) {
   const counties = await loadCounties();
-  const stateCounties = counties[state] || [];
+  const stateCounties = counties.filter(c => c.state === state);
   
   if (stateCounties.length === 0) {
     console.log(`[CountyCrawler] No counties found for state: ${state}`);
@@ -215,7 +215,7 @@ export async function crawlStateCounties(db, state, options = {}) {
 export async function crawlAllCounties(db, options = {}) {
   const { batchSize = 5, delayMs = 100 } = options;
   const counties = await loadCounties();
-  const states = Object.keys(counties);
+  const states = [...new Set(counties.map(c => c.state))];
   
   console.log(`[CountyCrawler] Starting crawl of ${states.length} states...`);
   
