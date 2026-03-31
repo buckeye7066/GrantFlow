@@ -13,8 +13,8 @@ function normalizeLimit(val, fallback = 200) {
 }
 
 async function ensureProfileAccess(req, res, profileId) {
-  const user = requireAuthenticatedUser(req, res)
-  if (!user) return null
+  if (!requireAuthenticatedUser(req, res)) return null
+  // user validation passed
 
   const row = await req.db
     .prepare('SELECT id, user_id, organization_id FROM profiles WHERE id = ?')
@@ -96,6 +96,7 @@ router.post('/', async (req, res) => {
     const funder = String(data.funder || '').trim()
     const method = String(data.method || '').trim()
     if (!funder) return res.status(400).json({ error: 'funder required' })
+    if (!method) return res.status(400).json({ error: 'method required' })
     if (!['email', 'call', 'meeting'].includes(method)) {
       return res.status(400).json({ error: "method must be one of: 'email', 'call', 'meeting'" })
     }
@@ -174,8 +175,8 @@ router.post('/', async (req, res) => {
 
 router.delete('/:id', async (req, res) => {
   try {
-    const user = requireAuthenticatedUser(req, res)
-    if (!user) return
+    if (!requireAuthenticatedUser(req, res)) return
+    // user validation passed
 
     await ensureOutreachLogsTable(req.db)
 
