@@ -85,7 +85,7 @@ function buildGeographyTerms(intel) {
 // Entity type terms for search
 // ---------------------------------------------------------------------------
 function buildEntityTerms(intel, needDef) {
-  const types = [...(needDef.related_entity_types ?? [])]
+  const types = [...(needDef?.related_entity_types ?? [])]
 
   // Include current entity type
   if (intel.entityType && !types.includes(intel.entityType)) {
@@ -221,7 +221,7 @@ function buildPlansForNeed(inferredNeed, intel) {
         search_lane: lane,
         search_terms: [...new Set(searchTerms)].slice(0, 5),
         boosted_terms: boostedTerms,
-        entity_types: [...(def.related_entity_types ?? [])],
+        entity_types: [...(def?.related_entity_types ?? [])],
         geography_terms: geographyTerms,
         exclusions,
         priority: lane === SEARCH_LANE.FEDERAL ? priority : Math.max(10, priority - 10),
@@ -255,7 +255,7 @@ function buildPlansForNeed(inferredNeed, intel) {
  * @returns {SearchPlan[]}
  */
 export function generateSearchPlans(intel, options = {}) {
-  if (!intel || !intel.inferredNeeds) return []
+  if (!intel || !intel.inferredNeeds || !Array.isArray(intel.inferredNeeds)) return []
 
   const {
     maxPlans = 20,
@@ -267,12 +267,12 @@ export function generateSearchPlans(intel, options = {}) {
 
   // Filter by specific codes if requested
   if (onlyNeedCodes && onlyNeedCodes.length > 0) {
-    needs = needs.filter(n => onlyNeedCodes.includes(n.code))
+    needs = Array.isArray(needs) ? needs.filter(n => onlyNeedCodes?.includes(n.code)) : []
   }
 
   // Filter out low-confidence unless opted in
   if (!includeLowConfidence) {
-    needs = needs.filter(n => n.confidence !== 'low')
+    needs = Array.isArray(needs) ? needs.filter(n => n.confidence !== 'low') : []
   }
 
   // Generate plans for each need
