@@ -13,6 +13,16 @@ import { isJunkOpportunity } from '../services/contentFilter.js'
 const router = express.Router()
 
 /**
+ * Returns true when a REJECT decision represents a hard eligibility failure
+ * (e.g. loan program, veteran-only for non-veteran) rather than a score-based
+ * weak-match rejection. Score-based filtering is handled by the min_score threshold.
+ */
+function isHardEligibilityReject(decision) {
+  return decision.decision === 'REJECT' &&
+    decision.ineligibilityReasons?.some(r => !/^Score \d+/.test(r))
+}
+
+/**
    * Junk origins (synthetic, manual) are excluded via a shared blocklist
    * in utils/recordOrigins.js. Content-level junk (CDC, MedlinePlus, etc.)
    * is caught by the shared isJunkOpportunity() filter from services/contentFilter.js.
@@ -107,8 +117,7 @@ router.get('/profile/:profileId/grants', async (req, res) => {
                                      const decision = computeMatchDecision(profileContext, candidate)
                                      // Don't surface hard eligibility REJECTs in the grants view
                                      // (score-based weak-match REJECT is not filtered here)
-                                     if (decision.decision === 'REJECT' &&
-                                       decision.ineligibilityReasons?.some(r => !/^Score \d+/.test(r))) return null
+                                     if (isHardEligibilityReject(decision)) return null
               return {
                         grant_id: row.grant_id,
                         title: row.grant_title,
@@ -344,8 +353,7 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
                                   // Run canonical engine: filter hard eligibility failures (REJECT) before surfacing
                                   // Score-based weak-match REJECT is not filtered here — that is handled by min_score below.
                                   const decision = computeMatchDecision(profileContext, opp)
-                                  if (decision.decision === 'REJECT' &&
-                                    decision.ineligibilityReasons?.some(r => !/^Score \d+/.test(r))) return null
+                                  if (isHardEligibilityReject(decision)) return null
 
                                return {
                                            ...opp,
