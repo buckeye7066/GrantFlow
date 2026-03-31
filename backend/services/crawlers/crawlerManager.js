@@ -64,6 +64,7 @@ async function ensureCrawlSchema(db) {
   } catch (err) {
     if (!String(err?.message).includes('already exists')) {
       console.error('[CrawlerManager] Schema ensure error:', err.message);
+      throw err; // Re-throw non-duplicate errors
     }
     crawlSchemaEnsured = true;
   }
@@ -520,15 +521,20 @@ async function storeResults(db, profileId, results, analysis, stateMeta, countyC
     `);
 
     for (const result of results) {
-      await stmt.run(
-        profileId, result.id, result.name,
-        result.url || result.applicationUrl || null,
-        result.description, result.matchScore,
-        JSON.stringify(result.matchReasons),
-        JSON.stringify(result.matchedCategories),
-        result.type, result.fundingType, result.maxAmount || null,
-        result.id?.startsWith('school-') ? 'school' : (result.stateRestriction ? 'state' : (result.id?.startsWith('fed-') ? 'federal' : 'national')),
-      );
+      try {
+        await stmt.run(
+          profileId, result.id, result.name,
+          result.url || result.applicationUrl || null,
+          result.description, result.matchScore,
+          JSON.stringify(result.matchReasons),
+          JSON.stringify(result.matchedCategories),
+          result.type, result.fundingType, result.maxAmount || null,
+          result.id?.startsWith('school-') ? 'school' : (result.stateRestriction ? 'state' : (result.id?.startsWith('fed-') ? 'federal' : 'national')),
+        );
+      } catch (err) {
+        console.error(`Failed to store result ${result.id}:`, err.message);
+        throw err;
+      }
     }
 
     const analysisJson = JSON.stringify({
@@ -590,7 +596,9 @@ async function storeResults(db, profileId, results, analysis, stateMeta, countyC
         });
         fundingUpserted++;
       } catch (e) {
-        console.warn(`[CrawlerManager] upsert failed for ${result.id}: ${e.message}`);
+        console.error(`[CrawlerManager] upsert failed for ${result.id}: ${e.message}`);
+        // Continue with other results but track failures
+        fundingUpserted--; // Decrement on failure
       }
     }
     console.log(`[CrawlerManager] Stored ${results.length} crawl_results + ${fundingUpserted} funding_opportunities`);
