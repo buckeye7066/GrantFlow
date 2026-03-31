@@ -163,32 +163,13 @@ router.put('/tiers/:id', requireAdmin, async (req, res) => {
 router.get('/accounts', requireAdmin, async (req, res) => {
   try {
     await ensureBillingSchema(req.db)
-    const orderBy =
-      req.db?.dialect === 'postgres'
-        ? 'ORDER BY p.display_name ASC'
-        : 'ORDER BY p.display_name COLLATE NOCASE ASC'
+    const orderBy = req.db?.dialect === 'postgres' ? 'ORDER BY p.display_name ASC' : 'ORDER BY p.display_name COLLATE NOCASE ASC'
 
-    const rows = (
-      await req.db
-        .prepare(
-          `
-            SELECT
-              ba.*,
-              bt.name AS tier_name,
-              bt.description AS tier_description,
-              bt.base_monthly_cents AS tier_monthly,
-              bt.hourly_rate_cents AS tier_hourly,
-              bt.enable_pipeline_automation AS tier_enable_pipeline_automation,
-              bt.enable_item_funding AS tier_enable_item_funding,
-              bt.enable_document_ai AS tier_enable_document_ai,
-              p.display_name AS profile_name,
-              p.primary_type AS profile_type
-            FROM billing_accounts ba
-            JOIN billing_tiers bt ON bt.id = ba.tier_id
-            JOIN profiles p ON p.id = ba.profile_id
-            ${orderBy}
-          `,
-        )
+    const query = req.db?.dialect === 'postgres' 
+      ? `SELECT ba.*, bt.name AS tier_name, bt.description AS tier_description, bt.base_monthly_cents AS tier_monthly, bt.hourly_rate_cents AS tier_hourly, bt.enable_pipeline_automation AS tier_enable_pipeline_automation, bt.enable_item_funding AS tier_enable_item_funding, bt.enable_document_ai AS tier_enable_document_ai, p.display_name AS profile_name, p.primary_type AS profile_type FROM billing_accounts ba JOIN billing_tiers bt ON bt.id = ba.tier_id JOIN profiles p ON p.id = ba.profile_id ORDER BY p.display_name ASC`
+      : `SELECT ba.*, bt.name AS tier_name, bt.description AS tier_description, bt.base_monthly_cents AS tier_monthly, bt.hourly_rate_cents AS tier_hourly, bt.enable_pipeline_automation AS tier_enable_pipeline_automation, bt.enable_item_funding AS tier_enable_item_funding, bt.enable_document_ai AS tier_enable_document_ai, p.display_name AS profile_name, p.primary_type AS profile_type FROM billing_accounts ba JOIN billing_tiers bt ON bt.id = ba.tier_id JOIN profiles p ON p.id = ba.profile_id ORDER BY p.display_name COLLATE NOCASE ASC`
+
+    const rows = (await req.db.prepare(query)
         .all()
     ).map((row) => ({
       ...mapAccountRow(row),
@@ -202,13 +183,10 @@ router.get('/accounts', requireAdmin, async (req, res) => {
   }
 })
 
-router.get('/accounts/:profileId', async (req, res) => {
+router.get('/accounts/:profileId', requireAdmin, async (req, res) => {
   try {
     await ensureBillingSchema(req.db)
     const profileId = req.params.profileId
-    if (!(await ensureProfileAccessByEmail(req, res, profileId))) {
-      return
-    }
     const profile = await req.db
       .prepare(
         `
@@ -223,6 +201,10 @@ router.get('/accounts/:profileId', async (req, res) => {
       return res.status(404).json({ error: 'Profile not found' })
     }
 
+    const profile = await req.db.prepare('SELECT id FROM profiles WHERE id = ?').get(profileId)
+    if (!profile) {
+      return res.status(404).json({ error: 'Profile not found' })
+    }
     const accountRow = await ensureBillingAccount(req.db, profileId)
     const events = await fetchAccountEvents(req.db, accountRow.id)
 
@@ -263,6 +245,10 @@ router.put('/accounts/:profileId', requireAdmin, async (req, res) => {
       return res.status(400).json({ error: 'Specified tier does not exist' })
     }
 
+    const profile = await req.db.prepare('SELECT id FROM profiles WHERE id = ?').get(profileId)
+    if (!profile) {
+      return res.status(404).json({ error: 'Profile not found' })
+    }
     const accountRow = await ensureBillingAccount(req.db, profileId)
     const previous = { ...accountRow }
 
