@@ -56,6 +56,7 @@ import {
 import { getBackgroundCodeCrawlState } from './anyaAutonomousScheduler.js'
 import { AUDIT_CATEGORIES, SEVERITY, logAuditEvent } from './auditService.js'
 import { trustedOriginClause, trustedSourceClause } from '../utils/recordOrigins.js'
+import { scoreOpportunity } from './matchEngine.js'
 
 const tools = new Map()
 
@@ -95,8 +96,6 @@ const ALLOWED_EXTENSIONS = new Set([
 const MAX_FILE_BYTES = 350_000
 const DEFAULT_GRANT_LIMIT = 5
 // Match scoring - no base score, must earn points through actual matches
-const BASE_MATCH_SCORE = 0
-
 function safeParseJSON(value, fallback) {
   if (!value) return fallback
   try {
@@ -200,63 +199,6 @@ function generateFitExplanation(opp, profile, matchReasons) {
   }
   
   return explanation
-}
-
-function calculateMatchScore(opp, profile, matchReasons) {
-  if (!profile) return 0
-  
-  let score = 0
-  
-  // Location match (up to 25 points)
-  if (opp.state && profile.state) {
-    if (opp.state.toLowerCase() === profile.state.toLowerCase()) {
-      score += 25  // Exact state match
-    } else if (opp.is_national || opp.state === 'nationwide') {
-      score += 15  // National availability
-    }
-  } else if (opp.is_national || opp.state === 'nationwide') {
-    score += 15  // National availability when no profile state
-  }
-  
-  // Category matches (up to 40 points)
-  const oppCategories = cleanList(safeParseJSON(opp.categories, []), 10)
-  const profileCategories = cleanList(safeParseJSON(profile.categories, []), 10)
-  const matchingCategories = findMatchingCategories(oppCategories, profileCategories)
-  if (matchingCategories.length > 0) {
-    // Require at least 1 category match to get points
-    score += Math.min(matchingCategories.length * 15, 40)
-  }
-  
-  // Keywords/focus alignment (up to 20 points)
-  const oppKeywords = cleanList(safeParseJSON(opp.keywords, []), 10)
-  const profileFocus = (profile.primary_goal || '') + ' ' + (profile.mission || '')
-  if (oppKeywords.length > 0 && profileFocus.length > 10) {
-    const focusLower = profileFocus.toLowerCase()
-    const keywordMatches = oppKeywords.filter(k => focusLower.includes(k.toLowerCase())).length
-    score += Math.min(keywordMatches * 10, 20)
-  }
-  
-  // Organization type match (up to 10 points)
-  const oppEligibility = cleanList(safeParseJSON(opp.eligibility_bullets, []), 10)
-  const orgType = profile.organization_type || ''
-  if (oppEligibility.length > 0 && orgType) {
-    const eligibilityText = oppEligibility.join(' ').toLowerCase()
-    if (eligibilityText.includes('501(c)(3)') || eligibilityText.includes('nonprofit')) {
-      if (orgType.toLowerCase().includes('nonprofit') || orgType.toLowerCase().includes('501')) {
-        score += 10
-      }
-    }
-    if (eligibilityText.includes('faith') || eligibilityText.includes('church')) {
-      if (orgType.toLowerCase().includes('faith') || orgType.toLowerCase().includes('church')) {
-        score += 10
-      }
-    }
-  }
-  
-  // Match reasons bonus (up to 5 points)
-  score += Math.min(matchReasons.length * 2, 5)
-  
-  return Math.min(100, Math.max(0, score))
 }
 
 function formatAmountRange(min, max, description) {
@@ -470,7 +412,7 @@ function formatGrantSummaries(opportunities, profile = null) {
     // Calculate match score
     let matchScore = null
     if (profile) {
-      matchScore = calculateMatchScore(opp, profile, matchReasons)
+      matchScore = scoreOpportunity(profile, opp).score
     }
     
     // Generate fit explanation
@@ -768,7 +710,7 @@ registerTool({
 
 registerTool({
   name: 'grants.summarizeMatches',
-  description: 'Summarise the most recently matched funding opportunities for a specific profile.',
+  description: 'Summarises and explains the most recently matched funding opportunities for a specific profile, including why each one matched.',
   schema: {
     type: 'object',
     properties: {
@@ -882,7 +824,7 @@ registerTool({
 })
 registerTool({
   name: 'admin.crawler.list',
-  description: 'List all crawler jobs with their status. Admin only.',
+  description: 'Explains crawler job status to the user — lists all crawler jobs and their current state. Admin only.',
   requiresAdmin: true,
   schema: {
     type: 'object',
@@ -897,7 +839,7 @@ registerTool({
 
 registerTool({
   name: 'admin.crawler.run',
-  description: 'Trigger any crawler type with custom parameters. Admin only.',
+  description: 'Explains to the user what a crawler run does, then triggers the requested crawler type. Admin only.',
   requiresAdmin: true,
   schema: {
     type: 'object',
@@ -926,7 +868,7 @@ registerTool({
 
 registerTool({
   name: 'admin.crawler.check',
-  description: 'Validate crawler outputs and check for errors in recent jobs. Admin only.',
+  description: 'Explains crawler output quality to the user — validates crawler outputs and surfaces any errors from recent jobs. Admin only.',
   requiresAdmin: true,
   schema: {
     type: 'object',

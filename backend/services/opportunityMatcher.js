@@ -9,7 +9,7 @@
 
 import crypto from 'crypto'
 import { applyRelevanceFilter, extractProfileData } from './relevanceFilter.js'
-import { computeMatchDecision, normalizeProfile, computeProfileFingerprint, normalizeOpportunity, computeOpportunityFingerprint } from './matchDecisionEngine.js'
+import { computeMatchDecision, normalizeProfile, computeProfileFingerprint, normalizeOpportunity, computeOpportunityFingerprint } from './matchEngine.js'
 import { isPipelineSourceAllowed } from '../config/pipelineAllowedSources.js'
 import { evaluateExclusion } from './exclusionEngine.js'
 

@@ -1,6 +1,6 @@
 import express from 'express'
 import { formatError } from '../middleware/errorHandler.js'
-import { computeMatchDecision, normalizeProfile } from '../services/matchDecisionEngine.js'
+import { computeMatchDecision, normalizeProfile } from '../services/matchEngine.js'
 import { normalizeNeedCategory } from '../services/profileNormalizer.js'
 import { loadProfileContext } from '../services/profileHelpers.js'
 import { buildProfileFacets } from '../services/profile/profileTaxonomy.js'
@@ -11,6 +11,16 @@ import { trustedOriginClause, trustedSourceClause } from '../utils/recordOrigins
 import { isJunkOpportunity } from '../services/contentFilter.js'
 
 const router = express.Router()
+
+/**
+ * Returns true when a REJECT decision represents a hard eligibility failure
+ * (e.g. loan program, veteran-only for non-veteran) rather than a score-based
+ * weak-match rejection. Score-based filtering is handled by the min_score threshold.
+ */
+function isHardEligibilityReject(decision) {
+  return decision.decision === 'REJECT' &&
+    decision.ineligibilityReasons?.some(r => !/^Score \d+/.test(r))
+}
 
 /**
    * Junk origins (synthetic, manual) are excluded via a shared blocklist
@@ -104,9 +114,10 @@ router.get('/profile/:profileId/grants', async (req, res) => {
                         }
 
                                      // Use the canonical decision engine for scoring; fall back gracefully
-                                     const decision = computeMatchDecision(profileNormForDecision, candidate)
-                                     // Don't surface hard REJECTS in the grants view either
-                                     if (decision.decision === 'REJECT') return null
+                                     const decision = computeMatchDecision(profileContext, candidate)
+                                     // Don't surface hard eligibility REJECTs in the grants view
+                                     // (score-based weak-match REJECT is not filtered here)
+                                     if (isHardEligibilityReject(decision)) return null
               return {
                         grant_id: row.grant_id,
                         title: row.grant_title,
@@ -339,9 +350,10 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
                      .map((opp) => {
                                   if (isJunkOpportunity(opp, filterHints)) return null
 
-                                  // Run v2.0.0 engine: filter hard ineligibles (REJECT) before surfacing
-                                  const decision = computeMatchDecision(profileNormForDecision, opp)
-                                  if (decision.decision === 'REJECT') return null
+                                  // Run canonical engine: filter hard eligibility failures (REJECT) before surfacing
+                                  // Score-based weak-match REJECT is not filtered here — that is handled by min_score below.
+                                  const decision = computeMatchDecision(profileContext, opp)
+                                  if (isHardEligibilityReject(decision)) return null
 
                                return {
                                            ...opp,

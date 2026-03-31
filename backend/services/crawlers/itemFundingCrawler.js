@@ -20,7 +20,7 @@
  * CRITICAL: No fabricated data. Every result must have a real URL.
  */
 import * as cheerio from 'cheerio'
-import { calculateMatchScore } from '../matchingEngine.js'
+import { scoreOpportunity as calculateMatchScore } from '../matchEngine.js'
 
 function buildSearchKeywords(profile, maxKeywords = 10) {
   const kw = new Set();

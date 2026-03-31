@@ -41,7 +41,6 @@ import incognitoRouter from './routes/incognito.js';
 import adminRouter from './routes/admin.js';
 import discoveryRouter from './routes/discovery.js';
 import statsRouter from './routes/stats.js';
-import jwt from 'jsonwebtoken';
 import healthRouter from './routes/health.js';
 import crawlLogsRouter from './routes/crawlLogs.js'
 import sourceDirectoryRouter from './routes/sourceDirectory.js'
@@ -54,17 +53,31 @@ import billingSettingsRouter from './routes/billingSettings.js'
 import contactMethodsRouter from './routes/contactMethods.js'
 import outreachLogsRouter from './routes/outreachLogs.js'
 import versionRouter from './routes/version.js'
+import ensureDesignatedProfiles from './utils/ensureDesignatedProfiles.js';
+import ensureUserPreferencesTable from './utils/ensureUserPreferencesTable.js';
+import ensurePortalCheckResultsTable from './utils/ensurePortalCheckResultsTable.js';
+import { linkAllProfilesToAdmin } from './utils/adminProfileLinks.js';
+import { ensureProfileOrgLinks } from './utils/ensureProfileOrgLinks.js'
+import { bootstrapAnya } from './services/anyaBootstrap.js';
+import ensureMinimumNationalOpportunities from './utils/ensureMinimumNationalOpportunities.js';
+import seedAssistanceDirectories from './utils/seedAssistanceDirectories.js';
+import seedFaithBasedHousing from './utils/seedFaithBasedHousing.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import { attachRequestContext } from './middleware/requestContext.js';
+import { createAuthIdentityMiddleware } from './middleware/authIdentity.js';
+import { createEnsureAdminUserMiddleware } from './middleware/ensureAdminUser.js';
+import { createAuthMeRouter } from './routes/authMe.js';
 import { pipelineMonitor, getPipelineHealth } from './middleware/pipelineMonitor.js';
 import { requestTimeout } from './middleware/requestTimeout.js';
 import { responseCache } from './middleware/responseCache.js';
 import { MAX_JSON_BODY_SIZE } from './config/constants.js';
 import { getSafeHealthSummary } from './services/diagnosticsService.js';
 import { assertFundingApiKeys, getFundingApiKeyPresence } from './src/config/apiKeys.js';
-import { ensureProfileEmailSchema } from './utils/accessControl.js';
-import { assertEnv } from './config/env.js'
-import { resolveUploadsDir } from './utils/uploadsDir.js'
+import { dispatchCrawlerJob, startQueueDrainInterval } from './services/crawlerDispatcher.js';
+import { cleanupStaleCrawlers, cleanupStaleQueuedJobs } from './services/crawlerConcurrencyGuard.js'
+import { findDuplicateProfileGroups, mergeProfiles } from './services/profileDedupeService.js'
+import { assertEnv, getJwtSecretOrThrow } from './config/env.js'
+import { resolveUploadsDir, ensureUploadsDirWritable, isLikelyPersistentPath } from './utils/uploadsDir.js'
 import servicesRouter from './routes/services.js'
 import stripeRouter from './routes/stripe.js'
 import stripeWebhookRouter from './routes/stripeWebhook.js'
@@ -362,231 +375,18 @@ await runSelfHeal({ db, uploadsDir, IS_SMOKE_MODE, baseDir: __dirname });
 
 const isProd = process.env.NODE_ENV === 'production'
 
-app.use(async (req, res, next) => {
-  const authHeader = req.headers.authorization || '';
-  const xAdminToken = req.headers['x-admin-token'];
-  const xAnyaToken = req.headers['x-anya-token'];
-  let user = { role: 'guest', profileId: null };
-  let handled = false;
-
-  // 1. Check X-Admin-Token
-  const expectedAdminToken = ADMIN_TOKEN;
-  const expectedBulkKey = process.env.BULK_POPULATE_KEY || null;
-  if (
-    !handled &&
-    xAdminToken &&
-    ((expectedAdminToken && xAdminToken === expectedAdminToken) ||
-      (expectedBulkKey && xAdminToken === expectedBulkKey))
-  ) {
-    user = {
-      role: 'admin',
-      // Canonical admin is DB-backed via req.ctx. We still mark this token flow as admin,
-      // but requestContext will resolve the final answer from users.is_admin.
-      is_admin: true,
-      // Deterministic userId so we can back it with a real DB user row (users.is_admin = true).
-      userId: 'system_admin_token',
-      profileId: null,
-      full_name: ADMIN_NAME,
-      email: ADMIN_EMAIL,
-    };
-    handled = true;
-  }
-
-  // 2. Check X-Anya-Token (autonomous bot)
-  if (!handled && xAnyaToken && process.env.ANYA_API_KEY && xAnyaToken === process.env.ANYA_API_KEY) {
-    user = {
-      role: 'admin',
-      is_admin: true,
-      userId: 'system_anya_token',
-      full_name: 'Anya Assistant',
-      email: 'anya@grantflow.app',
-    };
-    handled = true;
-  }
-
-  // 3. Check Authorization Bearer token
-  if (!handled && authHeader.startsWith('Bearer ')) {
-    const token = authHeader.slice(7).trim();
-    if (token) {
-      // Accept admin/bulk tokens via Authorization header for frontend/dev compatibility.
-      // This does NOT expand the trust boundary; these same tokens are already accepted via X-Admin-Token.
-      if (
-        (expectedAdminToken && token === expectedAdminToken) ||
-        (expectedBulkKey && token === expectedBulkKey)
-      ) {
-        user = {
-          role: 'admin',
-          is_admin: true,
-          userId: 'system_admin_token',
-          profileId: null,
-          full_name: ADMIN_NAME,
-          email: ADMIN_EMAIL,
-        }
-        handled = true
-      }
-
-      // Allow the Anya API key to authenticate via Authorization bearer as well.
-      if (!handled && process.env.ANYA_API_KEY && token === process.env.ANYA_API_KEY) {
-        user = {
-          role: 'admin',
-          is_admin: true,
-          userId: 'system_anya_token',
-          full_name: 'Anya Assistant',
-          email: 'anya@grantflow.app',
-        }
-        handled = true
-      }
-
-      if (!handled) {
-        try {
-          const payload = jwt.verify(token, EFFECTIVE_JWT_SECRET);
-        // Stateless JWT acceptance (important for multi-instance deployments where SQLite session storage
-        // is not shared across instances). If the token is correctly signed and unexpired, trust its claims.
-        // We still try to validate against DB sessions when available, but we do not require it.
-        let tokenRoles = []
-        let tokenIsAdmin = false
-        let tokenEmail = null
-        let tokenName = null
-
-        if (payload && typeof payload === 'object') {
-          tokenRoles = Array.isArray(payload.roles) ? payload.roles : []
-          tokenIsAdmin = tokenRoles.includes('admin')
-          tokenEmail = payload.email ?? null
-          tokenName = payload.name ?? null
-
-          if (payload.sub) {
-            user = {
-              role: tokenIsAdmin ? 'admin' : 'user',
-              is_admin: Boolean(tokenIsAdmin),
-              userId: payload.sub,
-              profileId: payload.profile_id ?? null,
-              sessionId: payload.sid ?? null,
-              full_name: tokenName,
-              email: tokenEmail,
-              roles: tokenRoles,
-            }
-            handled = true
-          }
-        }
-
-        // Best-effort DB session validation/enrichment (when sessions are stored locally).
-        if (payload?.sid) {
-          const sessionRow = await db
-            .prepare(
-              `
-                SELECT s.*, u.display_name, u.primary_email, u.is_admin
-                FROM user_sessions s
-                JOIN users u ON u.id = s.user_id
-                WHERE s.id = ?
-              `,
-            )
-            .get(payload.sid);
-          if (
-            sessionRow &&
-            !sessionRow.revoked_at &&
-            (!sessionRow.refresh_expires_at || new Date(sessionRow.refresh_expires_at) > new Date())
-          ) {
-            // Admin is DB-backed: users.is_admin.
-            // Never downgrade admin if the token already claims it (e.g. admin token, DB lag).
-            const effectiveIsAdmin = Boolean(tokenIsAdmin || sessionRow.is_admin)
-            user = {
-              role: effectiveIsAdmin ? 'admin' : 'user',
-              is_admin: effectiveIsAdmin,
-              userId: sessionRow.user_id,
-              profileId: payload.profile_id ?? sessionRow.profile_id ?? null,
-              sessionId: sessionRow.id,
-              full_name: sessionRow.display_name ?? tokenName ?? null,
-              email: sessionRow.primary_email ?? tokenEmail ?? null,
-              roles: tokenRoles,
-            }
-            handled = true;
-          }
-        }
-        } catch (error) {
-          // fall through to legacy handling
-        }
-      }
-    }
-
-    if (!handled && token && ADMIN_TOKEN && token === ADMIN_TOKEN) {
-      user = {
-        role: 'admin',
-        is_admin: true,
-        userId: 'system_admin_token',
-        profileId: null,
-        full_name: ADMIN_NAME,
-        email: ADMIN_EMAIL,
-      };
-      handled = true;
-    }
-
-    // Legacy "profile-id bearer token" is unsafe; allow only in non-prod with explicit opt-in.
-    const allowLegacyProfileToken =
-      isProd === false && String(process.env.ALLOW_LEGACY_PROFILE_TOKEN || '').trim().toLowerCase() === 'true'
-
-    if (!handled && token && allowLegacyProfileToken) {
-      try {
-        const profile = await db
-          .prepare('SELECT id, display_name FROM profiles WHERE id = ?')
-          .get(token);
-        if (profile) {
-          user = {
-            role: 'user',
-            profileId: profile.id,
-            profileName: profile.display_name,
-          };
-          handled = true;
-        }
-      } catch (error) {
-        // Ignore lookup errors and fall back to guest
-        console.warn('Failed to lookup profile by token:', error?.message || error);
-      }
-    }
-  }
-
-  req.user = user;
-  next();
-});
+app.use(createAuthIdentityMiddleware({
+  adminToken: ADMIN_TOKEN,
+  adminName: ADMIN_NAME,
+  adminEmail: ADMIN_EMAIL,
+  jwtSecret: EFFECTIVE_JWT_SECRET,
+  db,
+  isProd,
+}))
 
 // Ensure synthetic admin-token users exist so foreign keys don't explode.
 // This keeps admin-token flows (Anya, etc.) stable even on fresh DBs.
-app.use(async (req, _res, next) => {
-  const user = req.user
-  if (!user || user.role !== 'admin' || !user.userId) return next()
-
-  try {
-    const existing = await db
-      .prepare(
-        `
-          SELECT id
-          FROM users
-          WHERE id = ?
-          LIMIT 1
-        `,
-      )
-      .get(user.userId)
-
-    if (!existing?.id) {
-      await db
-        .prepare(
-          `
-            INSERT INTO users (id, display_name, primary_email, is_admin)
-            VALUES (?, ?, ?, ?)
-          `,
-        )
-        .run(
-          user.userId,
-          user.full_name || ADMIN_NAME || 'Admin User',
-          user.email || ADMIN_EMAIL || null,
-          true,
-        )
-    }
-  } catch {
-    // Best-effort only: do not block requests if the users table is unavailable.
-  }
-
-  return next()
-})
+app.use(createEnsureAdminUserMiddleware({ db, adminName: ADMIN_NAME, adminEmail: ADMIN_EMAIL }))
 
 // Attach canonical request context (MUST run after auth middleware)
 // This provides req.ctx with userId, email, isAdmin (DB-backed), accessible profiles/orgs
@@ -595,247 +395,8 @@ app.use(attachRequestContext())
 // Health check with dependency checks
 // Health check endpoint (v3.0 - complete county data)
 
-// Authentication diagnostics endpoint
-app.get('/api/auth/diagnostics', async (req, res) => {
-  const diagnostics = {
-    status: 'operational',
-    timestamp: new Date().toISOString(),
-    auth: {
-      jwtSecret: process.env.AUTH_JWT_SECRET || process.env.JWT_SECRET ? 'configured' : 'not configured',
-      routes: 'registered',
-      database: 'unknown',
-      adminTokenConfigured: Boolean(process.env.ADMIN_TOKEN || process.env.ANYA_ADMIN_TOKEN),
-      bulkKeyConfigured: Boolean(process.env.BULK_POPULATE_KEY),
-    },
-    providers: {}
-  };
-
-  // Check database connection
-  try {
-    if (db.healthcheck) {
-      const hc = await db.healthcheck();
-      if (!hc?.ok) throw new Error(hc?.error || 'Database healthcheck failed')
-    } else {
-      await db.prepare('SELECT COUNT(*) as count FROM users').get();
-    }
-    diagnostics.auth.database = 'connected';
-  } catch (error) {
-    diagnostics.auth.database = 'error: ' + error.message;
-    diagnostics.status = 'degraded';
-  }
-
-  // Check OAuth provider configurations
-  const providers = ['google', 'facebook', 'yahoo'];
-  providers.forEach(provider => {
-    const upper = provider.toUpperCase();
-    const hasClientId = Boolean(
-      process.env[`AUTH_${upper}_CLIENT_ID`] || 
-      process.env[`${upper}_CLIENT_ID`] || 
-      process.env[`OAUTH_${upper}_CLIENT_ID`]
-    );
-    const hasClientSecret = Boolean(
-      process.env[`AUTH_${upper}_CLIENT_SECRET`] || 
-      process.env[`${upper}_CLIENT_SECRET`] || 
-      process.env[`OAUTH_${upper}_CLIENT_SECRET`]
-    );
-    diagnostics.providers[provider] = {
-      configured: hasClientId && hasClientSecret,
-      clientId: hasClientId ? 'present' : 'missing',
-      clientSecret: hasClientSecret ? 'present' : 'missing'
-    };
-  });
-
-  const statusCode = diagnostics.status === 'operational' ? 200 : 503;
-  res.status(statusCode).json(diagnostics);
-});
-
-// Rate limiter for /api/auth/me endpoint to prevent abuse
-const authMeLimiter = rateLimit({
-  windowMs: 5 * 60 * 1000, // 5 minutes
-  limit: 100, // Allow 100 requests per 5 minutes per IP
-  standardHeaders: 'draft-7',
-  legacyHeaders: false,
-  message: { error: 'Too many requests, please try again later.' }
-});
-
-app.get('/api/auth/me', authMeLimiter, async (req, res) => {
-  try {
-    const user = req.user ?? { role: 'guest' };
-    if (user.role === 'guest') {
-      return res.status(401).json({ error: 'unauthorized' });
-    }
-
-    if (user.userId) {
-      let dbUser, profiles;
-      
-      try {
-        dbUser = await req.db
-          .prepare(
-            `
-              SELECT *
-              FROM users
-              WHERE id = ?
-            `,
-          )
-          .get(user.userId);
-      } catch (dbError) {
-        console.error('[/api/auth/me] Database error fetching user:', dbError);
-        return res.status(503).json({
-          error: 'service_unavailable',
-          error_type: 'database_error',
-          message: 'Auth service temporarily unavailable. Please retry shortly.',
-        })
-      }
-
-      if (!dbUser) {
-        // Dev/admin token convenience: ADMIN_TOKEN can authenticate an admin user without a stored user record.
-        // Create the user record on-demand so the frontend auth bootstrap (`/api/auth/me`) is not brittle.
-        if (user.role === 'admin' || user.is_admin === true) {
-          try {
-            db.prepare(
-              `
-                INSERT INTO users (id, display_name, primary_email, is_admin)
-                VALUES (?, ?, ?, ?)
-              `,
-            ).run(
-              user.userId,
-              user.full_name || ADMIN_NAME || 'Admin User',
-              user.email || ADMIN_EMAIL || null,
-              true,
-            )
-
-            dbUser = db
-              .prepare(
-                `
-                  SELECT *
-                  FROM users
-                  WHERE id = ?
-                `,
-              )
-              .get(user.userId)
-          } catch (repairError) {
-            console.warn('[/api/auth/me] Unable to self-heal missing admin user:', repairError?.message || repairError)
-          }
-        }
-
-        if (!dbUser) {
-          return res.status(401).json({ error: 'unauthorized' });
-        }
-      }
-
-      try {
-        const isAdminUser =
-          Boolean(dbUser?.is_admin) || user.role === 'admin' || user.is_admin === true
-
-        if (isAdminUser) {
-          // Admin UX expects cross-org profile selection.
-          // Return a large (but bounded) list to avoid "missing profiles" in the UI.
-          profiles = await req.db
-            .prepare(
-              `
-                SELECT id, display_name, organization_id, status
-                FROM profiles
-                ORDER BY created_at DESC
-                LIMIT 1000
-              `,
-            )
-            .all()
-
-          // Lightweight, actionable logging for the "missing profiles" failure mode.
-          if (Array.isArray(profiles) && profiles.length === 0) {
-            console.warn('[/api/auth/me] Admin profile list is empty (expected baseline profiles)', {
-              user_id: dbUser?.id ?? null,
-            })
-          }
-        } else {
-          const emails = Array.from(
-            new Set(
-              [dbUser?.primary_email, user?.email]
-                .map((v) => String(v || '').trim().toLowerCase())
-                .filter(Boolean),
-            ),
-          )
-
-          // Ensure schema exists (idempotent). If it fails, fall back to user_id only.
-          try {
-            await ensureProfileEmailSchema(req.db)
-          } catch {
-            // ignore
-          }
-
-          if (emails.length > 0) {
-            const placeholders = emails.map(() => '?').join(', ')
-            profiles = await req.db
-              .prepare(
-                `
-                  SELECT DISTINCT p.id, p.display_name, p.organization_id, p.status
-                  FROM profiles p
-                  LEFT JOIN profile_emails pe ON pe.profile_id = p.id
-                  WHERE p.user_id = ?
-                     OR lower(pe.email) IN (${placeholders})
-                  ORDER BY p.created_at ASC
-                `,
-              )
-              .all(dbUser.id, ...emails)
-          } else {
-            profiles = await req.db
-              .prepare(
-                `
-                  SELECT id, display_name, organization_id, status
-                  FROM profiles
-                  WHERE user_id = ?
-                  ORDER BY created_at ASC
-                `,
-              )
-              .all(dbUser.id)
-          }
-        }
-      } catch (dbError) {
-        console.error('[/api/auth/me] Database error fetching profiles:', dbError);
-        // Return user data without profiles if profiles query fails (avoid 5xx for auth bootstrap).
-        profiles = [];
-      }
-
-      // Do not "bleed" into an arbitrary profile_id from the token; only use it if it’s in the accessible list.
-      const profileIds = new Set((profiles || []).map((p) => p?.id).filter(Boolean))
-      const safeActiveProfileId = user.profileId && profileIds.has(user.profileId) ? user.profileId : profiles?.[0]?.id ?? null
-
-      return res.json({
-        user: {
-          id: dbUser.id,
-          display_name: dbUser.display_name,
-          primary_email: dbUser.primary_email,
-          primary_phone: dbUser.primary_phone,
-          avatar_url: dbUser.avatar_url,
-          is_admin: Boolean(dbUser.is_admin),
-        },
-        profiles: Array.isArray(profiles) ? profiles : [],
-        active_profile_id: safeActiveProfileId,
-      });
-    }
-
-    if (user.role === 'admin') {
-      return res.json({
-        role: 'admin',
-        full_name: user.full_name ?? ADMIN_NAME,
-        email: user.email ?? ADMIN_EMAIL,
-      });
-    }
-
-    return res.json({
-      role: 'user',
-      profile_id: user.profileId,
-      full_name: user.profileName ?? 'Profile User',
-    });
-  } catch (error) {
-    console.error('[/api/auth/me] Unexpected error:', error);
-    return res.status(503).json({
-      error: 'service_unavailable',
-      error_type: 'internal_error',
-      message: 'Auth service temporarily unavailable. Please retry shortly.',
-    })
-  }
-});
+// Authentication /me and /diagnostics endpoints (extracted from server.js for testability)
+app.use('/api/auth', createAuthMeRouter({ db, adminName: ADMIN_NAME, adminEmail: ADMIN_EMAIL }))
 
 // Pipeline monitoring (zero-result + slow-response tracking)
 app.use(pipelineMonitor())
@@ -1131,8 +692,275 @@ if (process.env.NODE_ENV !== 'test') {
     // ── Phase 3: Queue recovery ───────────────────────────────────────────────
     runQueueRecovery({ db, uploadsDir });
 
-    // ── Phase 4: Background services ─────────────────────────────────────────
-    startBackgroundServices({ db, uploadsDir, actualPort, loggedCorsOrigins });
+    // Reset jobs stuck in 'running' from a previous process crash/restart (no persistent worker).
+    (async () => {
+      try {
+        if (db.dialect === 'postgres') {
+          const r = await db.prepare(`
+            UPDATE crawler_jobs
+            SET status = 'failed', error = 'Auto-reset: stuck after server restart', completed_at = NOW()
+            WHERE status = 'running' AND started_at < (NOW() - INTERVAL '30 minutes')
+          `).run();
+          if (r?.changes > 0) console.log(`[startup] Reset ${r.changes} stuck crawler job(s)`);
+        } else {
+          const r = db.prepare(`
+            UPDATE crawler_jobs
+            SET status = 'failed', error = 'Auto-reset: stuck after server restart', completed_at = datetime('now')
+            WHERE status = 'running' AND started_at < datetime('now', '-30 minutes')
+          `).run();
+          if (r?.changes > 0) console.log(`[startup] Reset ${r.changes} stuck crawler job(s)`);
+        }
+      } catch (err) {
+        console.error('[startup] Failed to reset stuck jobs:', err?.message || err);
+      }
+    })();
+
+    // Re-queue jobs that previously failed due to concurrency exhaustion on startup stampede.
+    // These are recoverable — reset them so the staggered drain below can pick them up.
+    ;(async () => {
+      try {
+        const r = await db.prepare(`
+            UPDATE crawler_jobs
+            SET status = 'queued',
+                error = NULL,
+                dispatch_attempts = 0,
+                next_dispatch_at = NULL,
+                completed_at = NULL
+            WHERE status = 'failed'
+              AND error = 'Crawler dispatch exhausted due to concurrency limits'
+          `).run()
+        const count = Number(r?.changes ?? r?.rowCount ?? 0)
+        if (count > 0) {
+          console.log(`[startup] Re-queued ${count} concurrency-exhausted job(s) for retry`)
+        }
+      } catch (err) {
+        console.error('[startup] Failed to re-queue exhausted jobs:', err?.message || err)
+      }
+    })();
+
+    // One-time cleanup on startup to recover orphaned crawler jobs from crashes/restarts.
+    ;(async () => {
+      try {
+        const cleaned = await cleanupStaleCrawlers(db)
+        if (cleaned > 0) {
+          console.log(`[startup] Cleaned ${cleaned} stale crawler job(s) from previous run`)
+        }
+        const cleanedQueued = await cleanupStaleQueuedJobs(db)
+        if (cleanedQueued > 0) {
+          console.log(`[startup] Cleaned ${cleanedQueued} stale queued job(s) from previous run`)
+        }
+      } catch (err) {
+        console.warn('[startup] Stale crawler cleanup failed:', err?.message)
+      }
+    })()
+
+    // Background queue poller: pick up orphaned 'queued' jobs that were never dispatched.
+    const QUEUE_POLL_INTERVAL_MS = Number.parseInt(process.env.QUEUE_POLL_INTERVAL_MS || '60000', 10)
+    const queuePollEnabled = String(process.env.QUEUE_POLL_ENABLED ?? 'true').toLowerCase() !== 'false'
+
+    // Gradually dispatch queued jobs on startup to avoid a stampede that exhausts concurrency.
+    async function drainQueuedJobsGradually(dbRef, uploadsDirRef) {
+      const STARTUP_DELAY_MS = Number.parseInt(process.env.QUEUE_STARTUP_DELAY_MS || '15000', 10)
+      const STAGGER_DELAY_MS = Number.parseInt(process.env.QUEUE_STAGGER_DELAY_MS || '3000', 10)
+      const INITIAL_BATCH = 2
+
+      await new Promise((r) => setTimeout(r, STARTUP_DELAY_MS))
+
+      let queued
+      try {
+        queued = await dbRef.prepare(`
+          SELECT id FROM crawler_jobs
+          WHERE status = 'queued'
+          ORDER BY created_at ASC
+          LIMIT ?
+        `).all(INITIAL_BATCH)
+      } catch (err) {
+        console.warn('[startup-drain] Failed to query queued jobs:', err?.message)
+        return
+      }
+
+      if (!Array.isArray(queued) || queued.length === 0) return
+
+      console.log(`[startup-drain] Dispatching ${queued.length} queued job(s) with ${STAGGER_DELAY_MS}ms stagger`)
+      for (let i = 0; i < queued.length; i++) {
+        if (i > 0) await new Promise((r) => setTimeout(r, STAGGER_DELAY_MS))
+        try {
+          dispatchCrawlerJob({ db: dbRef, jobId: queued[i].id, uploadDir: uploadsDirRef, getOpenAI: null }).catch(e => console.warn('[background]', e?.message || e))
+        } catch { /* ignore individual dispatch errors */ }
+      }
+    }
+
+    if (queuePollEnabled) {
+      // Run a staggered startup drain before the regular poller begins.
+      drainQueuedJobsGradually(db, uploadsDir).catch((err) => {
+        console.warn('[startup-drain] Staggered drain failed:', err?.message)
+      })
+
+      const queuePollHandle = setInterval(async () => {
+        try {
+          // Clean up stale running jobs before attempting to dispatch
+          try {
+            await cleanupStaleCrawlers(db)
+          } catch (err) {
+            console.warn('[queue-poller] Stale crawler cleanup failed (ignored):', err?.message)
+          }
+
+          // Clean up queued jobs that have been waiting longer than 24 hours
+          try {
+            const cleanedQueued = await cleanupStaleQueuedJobs(db)
+            if (cleanedQueued > 0) {
+              console.warn(`[queue-poller] Cleaned ${cleanedQueued} stale queued job(s)`)
+            }
+          } catch (err) {
+            console.warn('[queue-poller] Stale queued job cleanup failed (ignored):', err?.message)
+          }
+
+          const queued = await db.prepare(`
+            SELECT id FROM crawler_jobs
+            WHERE status = 'queued'
+            ORDER BY created_at ASC
+            LIMIT 3
+          `).all()
+          if (!Array.isArray(queued) || queued.length === 0) return
+
+          for (const job of queued) {
+            try {
+              dispatchCrawlerJob({ db, jobId: job.id, uploadDir: uploadsDir, getOpenAI: null }).catch(e => console.warn('[background]', e?.message || e))
+            } catch { /* ignore individual dispatch errors */ }
+          }
+          if (queued.length > 0) {
+            console.log(`[queue-poller] Dispatched ${queued.length} orphaned queued job(s)`)
+          }
+        } catch (err) {
+          console.error('[queue-poller] Poll error:', err?.message || err)
+        }
+      }, QUEUE_POLL_INTERVAL_MS)
+
+      process.once('SIGTERM', () => clearInterval(queuePollHandle))
+      process.once('SIGINT', () => clearInterval(queuePollHandle))
+      console.log(`[startup] Background queue poller enabled (every ${QUEUE_POLL_INTERVAL_MS / 1000}s)`)
+
+      // Periodic queue-drain interval: recovers jobs orphaned by process restarts
+      // (their in-process setTimeout timers are lost; this picks them back up).
+      const drainIntervalHandle = startQueueDrainInterval(db, uploadsDir, null)
+      process.once('SIGTERM', () => clearInterval(drainIntervalHandle))
+      process.once('SIGINT', () => clearInterval(drainIntervalHandle))
+    } else {
+      console.log('[startup] Background queue poller disabled (set QUEUE_POLL_ENABLED=true to enable)')
+    }
+
+    // ── Startup self-check: verify the matching pipeline can score ──
+    (async () => {
+      try {
+        const { trustedOriginClause, trustedSourceClause } = await import('./utils/recordOrigins.js')
+        const activeVal = db.dialect === 'postgres' ? 'TRUE' : '1'
+        const count = db.prepare(`
+          SELECT COUNT(*) AS n FROM funding_opportunities
+          WHERE is_active = ${activeVal} AND ${trustedOriginClause()} AND ${trustedSourceClause()}
+        `).get()
+        const n = Number(count?.n ?? 0)
+        if (n === 0) {
+          console.warn('[startup][WARN] 0 active trusted funding opportunities — users will see no matches')
+        } else {
+          console.log(`[startup] ${n} active trusted funding opportunities ready for matching`)
+        }
+      } catch (err) {
+        console.error('[startup] Pipeline self-check failed:', err?.message || err)
+      }
+    })()
+
+    // Expose a stable in-process base URL for Anya autonomous function tests.
+    // NOTE: When PORT=0 (ephemeral), the actual listening port differs from process.env.PORT.
+    try {
+      globalThis.__grantflow_internal_base_url = `http://127.0.0.1:${actualPort}`
+    } catch {
+      // best-effort only
+    }
+  
+  // Initialize feature flags
+  try {
+    initializeFeatureFlags(db);
+    console.log('[FeatureFlags] Initialized successfully');
+  } catch (err) {
+    console.warn('[FeatureFlags] Failed to initialize:', err.message);
+  }
+
+  // Startup smoke crawlers (PRODUCTION): default OFF.
+  // These are useful for deploy verification, but must not run automatically unless explicitly enabled.
+  const startupSmokeEnabled = parseBoolEnv(process.env.STARTUP_SMOKE_CRAWL_ENABLED) === true
+  if (startupSmokeEnabled) {
+    setTimeout(() => {
+      scheduleCrawlerSmokeJobs({ db, uploadsDir }).catch(e => console.warn('[background]', e?.message || e))
+    }, 10_000)
+    console.info('[startup] Startup smoke crawlers enabled (STARTUP_SMOKE_CRAWL_ENABLED=true)')
+  } else {
+    console.info(
+      '[startup] Startup smoke crawlers disabled (set STARTUP_SMOKE_CRAWL_ENABLED=true to enable)',
+    )
+  }
+
+  // Auto-merge duplicate profiles once per deploy (production only).
+  setTimeout(() => {
+    scheduleAutoProfileDedupe({ db }).catch((err) => {
+      console.warn('[auto-dedupe] failed:', err?.message || String(err))
+    })
+  }, 20_000)
+  
+  // Log server startup event
+  try {
+    logAuditEvent(db, {
+      category: AUDIT_CATEGORIES.SYSTEM,
+      action: 'server_startup',
+      severity: SEVERITY.INFO,
+      details: {
+        port: actualPort,
+        environment: process.env.NODE_ENV || 'development',
+        corsOrigins: loggedCorsOrigins,
+      },
+    });
+  } catch (err) {
+    // Non-critical - don't fail server startup
+  }
+  
+  // Bootstrap all Anya services 5 seconds after server is ready.
+  // All orchestration is in anyaBootstrap.js — this is the only Anya call in server.js.
+  setTimeout(() => {
+    bootstrapAnya(db).catch(err => console.error('[AnyaBootstrap] Failed:', err?.message || err))
+  }, 5000);
+
+  // Optional: continuous national programs crawler (Track A/B programs)
+  if (process.env.NATIONAL_PROGRAMS_CRAWLER_ENABLED === 'true') {
+    const intervalMinutes = Number.parseInt(
+      process.env.NATIONAL_PROGRAMS_CRAWLER_INTERVAL_MINUTES || '360',
+      10,
+    )
+    const maxUrls = Number.parseInt(process.env.NATIONAL_PROGRAMS_MAX_URLS || '200', 10)
+    const maxDepth = Number.parseInt(process.env.NATIONAL_PROGRAMS_MAX_DEPTH || '2', 10)
+
+    setTimeout(() => {
+      import('./services/nationalPrograms/continuousRunner.js')
+        .then(({ startNationalProgramsCrawler }) => {
+          console.log(
+            `[NationalPrograms] Continuous crawler enabled (every ${intervalMinutes} minutes, maxUrls=${maxUrls}, maxDepth=${maxDepth})`,
+          )
+          startNationalProgramsCrawler({
+            db,
+            uploadDir: uploadsDir,
+            intervalMinutes,
+            maxUrls,
+            maxDepth,
+          })
+        })
+        .catch((err) => {
+          console.error('[NationalPrograms] Failed to start continuous crawler:', err?.message || err)
+        })
+    }, 8000)
+  } else {
+    console.log(
+      '[NationalPrograms] Continuous crawler disabled (set NATIONAL_PROGRAMS_CRAWLER_ENABLED=true to enable)',
+    )
+  }
+
   });
 } else {
   console.info('[server] NODE_ENV=test; HTTP listener disabled')

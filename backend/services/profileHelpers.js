@@ -1,5 +1,6 @@
 import zipcodes from 'zipcodes'
 import { resolveCountyForZip } from './geo/zipCountyResolver.js'
+import crypto from 'crypto'
 
 /**
  * Resolve the canonical applicant type from a profile object.
@@ -1812,6 +1813,160 @@ export function buildProfileSignals({ profile, sections, asOf = null }) {
     sports: sportsSet,
     organization: organizationSignals,
   }
+}
+
+// ============================================================
+// PROFILE DIGEST — for crawler idempotency (GF-AUDIT-019)
+// ============================================================
+
+/**
+ * Return the list of section fields that are "material" for crawl purposes.
+ * Changes to these fields should produce a different idempotency key,
+ * triggering a fresh discovery run.  Cosmetic fields (notes, updated_by,
+ * updated_at, display preferences) are intentionally excluded.
+ *
+ * @returns {Object.<string, string[]>} Map of section_key → material field names
+ */
+export function getMaterialFields() {
+  return {
+    basic_information: [
+      'name', 'email', 'phone', 'address', 'zip_code', 'postal_code',
+      'city', 'state', 'country',
+    ],
+    organization_details: [
+      'organization_name', 'organization_type', 'mission', 'primary_type',
+      'is_501c3', 'ein', 'uei', 'sam_registered', 'faith_based',
+      'year_founded', 'annual_budget', 'staff_count',
+    ],
+    financial_information: [
+      'annual_income', 'household_income', 'income_level', 'assets',
+      'receiving_benefits', 'benefits_list',
+    ],
+    demographics: [
+      'race', 'ethnicity', 'age', 'gender', 'disability_status',
+      'veteran_status', 'immigration_status',
+    ],
+    narrative: [
+      'mission_statement', 'programs_description', 'target_population',
+      'geographic_focus', 'primary_focus_area',
+    ],
+    location_focus: [
+      'service_area', 'counties', 'cities', 'states', 'national',
+      'zip_codes',
+    ],
+    student_details: [
+      'school_name', 'grade_level', 'gpa', 'major', 'degree_level',
+      'enrollment_status',
+    ],
+    health_medical: [
+      'chronic_illness', 'conditions', 'disability', 'mental_health',
+      'substance_recovery',
+    ],
+    military_service: [
+      'veteran', 'branch', 'service_era', 'discharge_status',
+    ],
+    small_business_details: [
+      'naics_code', 'business_type', 'employee_count', 'annual_revenue',
+      'years_in_business',
+    ],
+    programs_services: [
+      'primary_programs', 'populations_served', 'service_types',
+    ],
+    family_life: [
+      'household_size', 'children_count', 'marital_status', 'dependents',
+    ],
+  }
+}
+
+/**
+ * Compute a short content-based digest of the material profile fields.
+ *
+ * The digest is intentionally coarse — it is designed to change when a user
+ * edits any field that would meaningfully alter crawler search strategy, but
+ * to remain stable across cosmetic/timestamp-only saves.
+ *
+ * @param {object} db - Database connection
+ * @param {string} profileId - Profile ID
+ * @returns {Promise<string>} First 16 hex chars of SHA-256 over material fields
+ */
+export async function computeProfileDigest(db, profileId) {
+  if (!profileId) return 'no-profile'
+
+  try {
+    // Load base profile (primary_type is material; location fields live in sections)
+    const profile = await db
+      .prepare('SELECT primary_type FROM profiles WHERE id = ? LIMIT 1')
+      .get(profileId)
+
+    if (!profile) return 'profile-not-found'
+
+    // Load all profile sections
+    const sectionRows = await db
+      .prepare('SELECT section_key, data FROM profile_sections WHERE profile_id = ? ORDER BY section_key')
+      .all(profileId)
+
+    const materialMap = getMaterialFields()
+
+    // Build a stable object containing only material fields across all sections
+    const digest = {}
+
+    // Include material profile-level fields
+    digest['__profile__'] = {
+      primary_type: profile.primary_type ?? null,
+    }
+
+    for (const row of sectionRows) {
+      const sectionKey = row.section_key
+      const materialKeys = materialMap[sectionKey]
+      if (!materialKeys) continue // section not tracked — skip
+
+      let data
+      try {
+        data = JSON.parse(row.data || '{}')
+      } catch {
+        data = {}
+      }
+
+      const materialData = {}
+      for (const field of materialKeys) {
+        const val = data[field]
+        if (val !== undefined && val !== null && val !== '') {
+          materialData[field] = val
+        }
+      }
+
+      if (Object.keys(materialData).length > 0) {
+        digest[sectionKey] = materialData
+      }
+    }
+
+    // Stable stringify (sorted keys at every level) then SHA-256, first 16 chars
+    function stableStr(val) {
+      if (val === null || val === undefined) return 'null'
+      if (typeof val !== 'object') return JSON.stringify(val)
+      if (Array.isArray(val)) return '[' + val.map(stableStr).join(',') + ']'
+      const sorted = Object.keys(val).sort()
+      return '{' + sorted.map(k => JSON.stringify(k) + ':' + stableStr(val[k])).join(',') + '}'
+    }
+    const stable = stableStr(digest)
+    return crypto.createHash('sha256').update(stable).digest('hex').substring(0, 16)
+  } catch (err) {
+    console.warn('[computeProfileDigest] Failed to compute digest:', err?.message)
+    return 'digest-error'
+  }
+}
+
+/**
+ * Compare two profile digests and determine whether the change is material.
+ * A change is material when the digests differ (non-cosmetic fields changed).
+ *
+ * @param {string} oldDigest - Digest before the change
+ * @param {string} newDigest - Digest after the change
+ * @returns {boolean} true if the profile changed materially
+ */
+export function hasMaterialProfileChange(oldDigest, newDigest) {
+  if (!oldDigest || !newDigest) return false
+  return oldDigest !== newDigest
 }
 
 export function summarizeProfileSignals(signals) {

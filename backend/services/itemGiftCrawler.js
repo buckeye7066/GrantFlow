@@ -16,7 +16,7 @@ import fs from 'fs'
 import path from 'path'
 import { fileURLToPath } from 'url'
 import { upsertFundingOpportunity } from './opportunityInserter.js'
-import { calculateMatchScore } from './matchingEngine.js'
+import { scoreOpportunity } from './matchEngine.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -86,7 +86,7 @@ export async function processItemGiftCrawlerJob({ db, job, profileContext }) {
         categories: ['in-kind', 'donation'],
       }
       // Use profileContext if available, otherwise pass the synthetic opp alone (no profile signals)
-      const { score: baseScore } = calculateMatchScore(profileContext?.profile ? profileContext : {}, syntheticOpp)
+      const { score: baseScore } = scoreOpportunity(profileContext?.profile ? profileContext : {}, syntheticOpp)
       // Apply directory-specific contact-availability bonus (not a profile-match concept).
       let score = baseScore
       if (s.contact_url) score = Math.min(100, score + 8)

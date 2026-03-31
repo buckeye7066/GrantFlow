@@ -6,7 +6,7 @@
  */
 
 import crypto from 'crypto'
-import { buildProfileContext } from './profileHelpers.js'
+import { buildProfileContext, computeProfileDigest } from './profileHelpers.js'
 import { validateJobStatus, validateZipCode, validateStateCode, validateUuid } from '../utils/dbValidation.js'
 
 // Postgres migrations run asynchronously at startup (see `backend/start.js`), so during deploys
@@ -56,15 +56,23 @@ function stableStringify(value) {
 }
 
 /**
- * Generate idempotency key for a crawler job
+ * Generate idempotency key for a crawler job.
+ *
+ * When a `profileContextDigest` is provided the key incorporates the current
+ * material profile content, so that a meaningful profile edit produces a
+ * different key — and therefore a fresh job — even if type/profileId/params
+ * are unchanged (GF-AUDIT-019).
+ *
  * @param {string} type - Job type
  * @param {string} profileId - Profile ID (optional)
  * @param {object} parameters - Job parameters
+ * @param {string} [profileContextDigest] - Short digest of material profile fields
  * @returns {string} Idempotency key (32 chars)
  */
-export function generateIdempotencyKey(type, profileId, parameters) {
+export function generateIdempotencyKey(type, profileId, parameters, profileContextDigest) {
   const normalizedParams = JSON.stringify(parameters || {})
-  const input = `${type}:${profileId || 'null'}:${normalizedParams}`
+  const digestPart = profileContextDigest ? `:${profileContextDigest}` : ''
+  const input = `${type}:${profileId || 'null'}:${normalizedParams}${digestPart}`
   return crypto.createHash('sha256').update(input).digest('hex').substring(0, 32)
 }
 
@@ -81,6 +89,7 @@ export function generateIdempotencyKey(type, profileId, parameters) {
  * @param {string} [options.status='queued'] - Initial status
  * @param {boolean} [options.buildSnapshot=true] - Whether to build profile context snapshot
  * @param {boolean} [options.skipIdempotencyCheck=false] - Skip idempotency check (dangerous!)
+ * @param {string} [options.profileContextDigest] - Pre-computed material profile digest; auto-computed when buildSnapshot && profileId
  * @returns {Promise<object>} Created or existing job { jobId, created, existing }
  */
 export async function createCrawlerJob(db, options) {
@@ -93,6 +102,7 @@ export async function createCrawlerJob(db, options) {
     status = 'queued',
     buildSnapshot = true,
     skipIdempotencyCheck = false,
+    profileContextDigest: callerProvidedDigest = null,
   } = options
 
   const createdAtIso = new Date().toISOString()
@@ -126,7 +136,15 @@ export async function createCrawlerJob(db, options) {
   // IMPORTANT:
   // When callers explicitly skip idempotency (force-rerun), we must not reuse the same key,
   // otherwise the UNIQUE index on crawler_jobs.idempotency_key will throw and the job can't be created.
-  let idempotencyKey = skipIdempotencyCheck ? null : generateIdempotencyKey(type, profileId, parameters)
+  //
+  // For profile-scoped jobs we include a digest of the material profile fields so that a meaningful
+  // profile edit produces a different key (GF-AUDIT-019).  The digest is either provided by the caller
+  // or auto-computed here when we already have a profileId (and snapshot building is enabled).
+  let profileContextDigest = callerProvidedDigest
+  if (!skipIdempotencyCheck && profileId && !profileContextDigest) {
+    profileContextDigest = await computeProfileDigest(db, profileId)
+  }
+  let idempotencyKey = skipIdempotencyCheck ? null : generateIdempotencyKey(type, profileId, parameters, profileContextDigest)
 
   // Check for existing job with same idempotency key (unless explicitly skipped)
   if (!skipIdempotencyCheck) {
