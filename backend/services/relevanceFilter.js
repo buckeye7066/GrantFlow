@@ -173,11 +173,11 @@ export function extractProfileData(profileContext) {
     insurance_provider: (sections.medical_insurance || {}).insurance_provider || null,
     unable_to_work: (employment.notes || '').toLowerCase().includes('not able to work') || 
       (employment.notes || '').toLowerCase().includes('unable to work') ||
-      (employment.current_status || '').toLowerCase().includes('disabled'),
+      (employment.current_status || '').toLowerCase().includes('disabled') ||
+      health.disability_status === true,
     employment_notes: employment.notes || null,
     employment_status: employment.current_status || null,
-    has_children: Number((sections.household_details || {}).household_size || 0) > 2 || 
-      (family.has_children === true) || Number(family.number_of_children || 0) > 0,
+    has_children: (family.has_children === true) || Number(family.number_of_children || 0) > 0 || Number(family.members_under_18 || 0) > 0,
     number_of_children: family.number_of_children || 0,
     household_members_under_18: family.members_under_18 || 0,
     age_group: demographics.age_group || null,
