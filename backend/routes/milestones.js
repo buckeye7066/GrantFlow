@@ -10,6 +10,13 @@ import {
 
 const router = express.Router();
 
+// Apply authentication middleware to all routes
+router.use(async (req, res, next) => {
+  const user = requireAuthenticatedUser(req, res);
+  if (!user) return;
+  next();
+});
+
 async function ensureMilestoneAccess(req, res, milestoneId) {
   const user = requireAuthenticatedUser(req, res)
   if (!user) return null
@@ -113,6 +120,8 @@ router.post('/', async (req, res) => {
     const id = crypto.randomUUID()
     const { grant_id, title, description, due_date, type } = req.body
     if (!grant_id) return res.status(400).json({ error: 'grant_id is required' })
+    if (!title?.trim()) return res.status(400).json({ error: 'title is required' })
+    if (!due_date) return res.status(400).json({ error: 'due_date is required' })
     const grant = await ensureGrantAccess(req, res, String(grant_id))
     if (!grant) return
     await req.db
