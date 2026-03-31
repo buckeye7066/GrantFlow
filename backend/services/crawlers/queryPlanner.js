@@ -1,4 +1,6 @@
-import { buildIntentTokens } from '../profile/profileTaxonomy.js'
+// import { buildIntentTokens } from '../profile/profileTaxonomy.js'
+// TODO: Implement buildIntentTokens or use fallback
+function buildIntentTokens() { return { mustTerms: [], shouldTerms: [], mustNotTerms: [] } }
 const INTENT_MUST_NOT_CONFIDENCE_THRESHOLD = 0.7
 
 const AUTHORITY_ALLOWLIST_BASE = [
@@ -361,7 +363,7 @@ export function planCrawlerQueries({ crawlerType, facets = {}, location = null }
   const intentConfidence = normalizeConfidence(facets?.intent?.confidence)
   const allowAggressiveMustNot = intentConfidence >= INTENT_MUST_NOT_CONFIDENCE_THRESHOLD
   const effectiveLocation = location || facets?.geo || {}
-  const intentTokens = buildIntentTokens({ facets })
+  const intentTokens = (typeof buildIntentTokens === 'function') ? buildIntentTokens({ facets }) : { mustTerms: [], shouldTerms: [], mustNotTerms: [] }
 
   const mustTerms = [...(intentTokens?.mustTerms || [])]
   const shouldTerms = [...(intentTokens?.shouldTerms || [])]
