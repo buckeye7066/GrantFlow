@@ -8,7 +8,7 @@
 export function requestTimeout(ms) {
   return function timeout(req, res, next) {
     const timer = setTimeout(() => {
-      if (!res.headersSent) {
+      if (!res.headersSent && !res.writableEnded) {
         console.error(`[timeout] ${req.method} ${req.originalUrl} exceeded ${ms}ms`)
         try {
           res.status(504).json({
@@ -23,15 +23,20 @@ export function requestTimeout(ms) {
     }, ms)
 
     const cleanup = () => {
-      clearTimeout(timer)
+      if (timer) {
+        clearTimeout(timer)
+        timer = null
+      }
       req.removeListener('close', cleanup)
       res.removeListener('close', cleanup)
       res.removeListener('finish', cleanup)
+      res.removeListener('error', cleanup)
     }
     
     req.on('close', cleanup)
     res.on('close', cleanup)
     res.on('finish', cleanup)
+    res.on('error', cleanup)
     next()
   }
 }
