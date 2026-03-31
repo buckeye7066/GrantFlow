@@ -10,7 +10,7 @@ function requireAdmin(req, res, next) {
   if (!req.ctx?.isAdmin) {
     return res.status(403).json({ error: 'Access denied' })
   }
-  return true
+  next()
 }
 
 async function ensureDefaults(db) {
@@ -61,7 +61,7 @@ async function ensureDefaults(db) {
 router.get('/alerts', async (req, res) => {
   if (!requireAdmin(req, res)) return
   try {
-    await await ensureDefaults(req.db)
+    await ensureDefaults(req.db)
     const { organization_id } = req.query
     const rows = organization_id
       ? await req.db
