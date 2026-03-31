@@ -123,7 +123,12 @@ try {
   console.warn('[funding-api-keys] startup check failed:', error?.message || String(error))
 }
 
-const ADMIN_TOKEN = process.env.ADMIN_TOKEN || process.env.ANYA_ADMIN_TOKEN || null;
+const ADMIN_TOKEN = process.env.ADMIN_TOKEN || process.env.ANYA_ADMIN_TOKEN || (() => {
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error('ADMIN_TOKEN is required in production');
+  }
+  return null;
+})();
 const ADMIN_NAME = process.env.ADMIN_NAME || 'Admin User';
 const ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'admin@grantflow.app';
 
@@ -288,8 +293,8 @@ try {
       },
     }));
   }
-} catch {
-  // ignore legacy-dir probing failures
+} catch (error) {
+  console.warn('[uploads] Legacy directory probe failed:', error?.message || error);
 }
 app.use('/uploads', (req, res) => {
   const reqPath = String(req.path || '').replace(/^\/+/, '')
@@ -880,6 +885,8 @@ if (process.env.NODE_ENV !== 'test') {
   // Initialize feature flags
   try {
     // Import at top: import { initializeFeatureFlags } from './services/featureFlags.js';
+import { initializeFeatureFlags } from './services/featureFlags.js';
+// ... (add to imports at top)
 initializeFeatureFlags(db);
     console.log('[FeatureFlags] Initialized successfully');
   } catch (err) {
@@ -889,10 +896,14 @@ initializeFeatureFlags(db);
   // Startup smoke crawlers (PRODUCTION): default OFF.
   // These are useful for deploy verification, but must not run automatically unless explicitly enabled.
   // Import at top: import { parseBoolEnv } from './utils/env.js';
+import { parseBoolEnv } from './utils/env.js';
+// ... (add to imports at top)
 const startupSmokeEnabled = parseBoolEnv(process.env.STARTUP_SMOKE_CRAWL_ENABLED) === true
   if (startupSmokeEnabled) {
     setTimeout(() => {
       // Import at top: import { scheduleCrawlerSmokeJobs } from './services/crawlerSmokeJobs.js';
+import { scheduleCrawlerSmokeJobs } from './services/crawlerSmokeJobs.js';
+// ... (add to imports at top)
 scheduleCrawlerSmokeJobs({ db, uploadsDir }).catch(e => console.warn('[background]', e?.message || e))
     }, 10_000)
     console.info('[startup] Startup smoke crawlers enabled (STARTUP_SMOKE_CRAWL_ENABLED=true)')
@@ -905,6 +916,8 @@ scheduleCrawlerSmokeJobs({ db, uploadsDir }).catch(e => console.warn('[backgroun
   // Auto-merge duplicate profiles once per deploy (production only).
   setTimeout(() => {
     // Import at top: import { scheduleAutoProfileDedupe } from './services/autoProfileDedupe.js';
+import { scheduleAutoProfileDedupe } from './services/autoProfileDedupe.js';
+// ... (add to imports at top)
 scheduleAutoProfileDedupe({ db }).catch((err) => {
       console.warn('[auto-dedupe] failed:', err?.message || String(err))
     })
