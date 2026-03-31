@@ -99,7 +99,11 @@ export async function bootstrapAnya(db) {
     // 5. Schedule runner (if ANYA_RUN_ON_SCHEDULE === 'true')
     if (process.env.ANYA_RUN_ON_SCHEDULE === 'true') {
       const SCHEDULE_CHECK_MS = 30 * 60 * 1000
-      _scheduleIntervalId = setInterval(() => {
+      // Clear existing interval if it exists
+if (_scheduleIntervalId) {
+  clearInterval(_scheduleIntervalId)
+}
+_scheduleIntervalId = setInterval(() => {
         checkSchedule(db).catch(err => {
           console.error('[AnyaBootstrap] Scheduled check failed:', err?.message || err)
         })
