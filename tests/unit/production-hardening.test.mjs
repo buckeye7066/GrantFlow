@@ -30,11 +30,13 @@ describe('Production Hardening - Code Verification', () => {
     it('should have fail-fast logic in server.js', () => {
       const serverPath = join(__dirname, '..', '..', 'backend', 'server.js')
       const serverCode = fs.readFileSync(serverPath, 'utf8')
-      
+      const bootstrapPath = join(__dirname, '..', '..', 'backend', 'startup', 'bootstrap.js')
+      const bootstrapCode = fs.existsSync(bootstrapPath) ? fs.readFileSync(bootstrapPath, 'utf8') : ''
+
       assert.ok(serverCode.includes('process.exit(1)'), 
         'server.js should call process.exit(1) for missing JWT secret')
-      assert.ok(serverCode.includes('FATAL ERROR'), 
-        'server.js should have FATAL ERROR message')
+      assert.ok(serverCode.includes('FATAL ERROR') || bootstrapCode.includes('FATAL ERROR'), 
+        'server.js or bootstrap.js should have FATAL ERROR message')
     })
 
     it('should not generate random secrets in production', () => {

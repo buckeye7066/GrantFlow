@@ -5,7 +5,7 @@ import cors from 'cors';
 import helmet from 'helmet';
 import compression from 'compression';
 import { fileURLToPath } from 'url';
-import { dirname, join, resolve } from 'path';
+import { dirname, join } from 'path';
 import fs from 'fs';
 import rateLimit from 'express-rate-limit';
 import crypto from 'crypto';
@@ -72,10 +72,6 @@ import { requestTimeout } from './middleware/requestTimeout.js';
 import { responseCache } from './middleware/responseCache.js';
 import { MAX_JSON_BODY_SIZE } from './config/constants.js';
 import { getSafeHealthSummary } from './services/diagnosticsService.js';
-import { initializeFeatureFlags } from './services/featureFlagService.js';
-import { logAuditEvent, AUDIT_CATEGORIES, SEVERITY } from './services/auditService.js';
-import { decryptRuntimeSecret } from './utils/runtimeSecrets.js';
-import { seedBaselineFromRepo } from './utils/seedBaselineFromRepo.js';
 import { assertFundingApiKeys, getFundingApiKeyPresence } from './src/config/apiKeys.js';
 import { dispatchCrawlerJob, startQueueDrainInterval } from './services/crawlerDispatcher.js';
 import { cleanupStaleCrawlers, cleanupStaleQueuedJobs } from './services/crawlerConcurrencyGuard.js'
@@ -85,10 +81,13 @@ import { resolveUploadsDir, ensureUploadsDirWritable, isLikelyPersistentPath } f
 import servicesRouter from './routes/services.js'
 import stripeRouter from './routes/stripe.js'
 import stripeWebhookRouter from './routes/stripeWebhook.js'
-import { seedServiceCatalogFromExtract } from './services/serviceCatalogStore.js'
 import adminServiceCatalogRouter from './routes/adminServiceCatalog.js'
 import collegesRouter from './routes/colleges.js'
-import { allowedOriginCheckSQL } from './utils/recordOrigins.js'
+// Startup phase modules
+import { runBootstrap } from './startup/bootstrap.js';
+import { runSelfHeal } from './startup/selfHeal.js';
+import { runQueueRecovery } from './startup/queueRecovery.js';
+import { startBackgroundServices } from './startup/backgroundServices.js';
 
 /**
  * Lazy-loading route helper — caches the imported router after first load.
@@ -140,95 +139,6 @@ const app = express();
 app.set('trust proxy', 1);
 app.set('etag', 'strong');
 const PORT = ENV?.PORT ?? process.env.PORT ?? 8080;
-
-// --- Upload storage health (single source of truth) ---
-const isProdEnv = String(process.env.NODE_ENV || '').toLowerCase() === 'production'
-const allowEphemeralUploads = String(process.env.ALLOW_EPHEMERAL_UPLOADS || '').toLowerCase() === 'true'
-const isRailwayRuntime = Boolean(
-  String(process.env.RAILWAY_ENVIRONMENT || '').trim() ||
-    String(process.env.RAILWAY_PROJECT_ID || '').trim() ||
-    String(process.env.RAILWAY_SERVICE_ID || '').trim(),
-)
-let storageStatus = {
-  uploads_dir: uploadsDir,
-  legacy_uploads_dir: legacyUploadsDir,
-  writable: false,
-  likely_persistent: isLikelyPersistentPath(uploadsDir),
-  status: 'unknown', // ok|degraded|error|unknown
-  last_error: null,
-  checked_at: new Date().toISOString(),
-}
-
-try {
-  const writable = await ensureUploadsDirWritable(uploadsDir)
-  storageStatus = {
-    ...storageStatus,
-    writable: Boolean(writable?.ok),
-    last_error: writable?.ok ? null : writable?.error || 'uploads_unwritable',
-    checked_at: new Date().toISOString(),
-  }
-
-  if (isProdEnv) {
-    const missingEnv = !String(process.env.UPLOADS_DIR || '').trim()
-    const persistentOk = storageStatus.likely_persistent === true
-    const writableOk = storageStatus.writable === true
-    // Railway production deployments may temporarily lack a volume mount (or a configured UPLOADS_DIR),
-    // which would otherwise crash the process and fail healthchecks. If UPLOADS_DIR is missing entirely
-    // we allow a degraded boot on Railway so the service can still start; operators can then attach a
-    // volume and set UPLOADS_DIR without getting stuck in a deploy-fail loop.
-    const allowImplicitEphemeralOnRailway = missingEnv && isRailwayRuntime && !allowEphemeralUploads
-
-    if ((missingEnv || !persistentOk || !writableOk) && !allowEphemeralUploads && !allowImplicitEphemeralOnRailway) {
-      const reason = missingEnv
-        ? 'UPLOADS_DIR is required in production'
-        : !persistentOk
-          ? `UPLOADS_DIR is not a likely persistent mount: ${uploadsDir}`
-          : `UPLOADS_DIR is not writable: ${uploadsDir}`
-      console.error('[storage] FATAL: refusing to boot with non-persistent uploads storage', {
-        uploadsDir,
-        missingEnv,
-        likely_persistent: storageStatus.likely_persistent,
-        writable: storageStatus.writable,
-        last_error: storageStatus.last_error,
-      })
-      // Hard fail in production so we never "think it saved" to an ephemeral filesystem.
-      process.exit(1)
-    }
-
-    if (missingEnv || !persistentOk || !writableOk) {
-      storageStatus = { ...storageStatus, status: 'degraded' }
-      console.error('[storage] DEGRADED upload storage', {
-        uploadsDir,
-        missingEnv,
-        allowImplicitEphemeralOnRailway,
-        isRailwayRuntime,
-        likely_persistent: storageStatus.likely_persistent,
-        writable: storageStatus.writable,
-        last_error: storageStatus.last_error,
-      })
-    } else {
-      storageStatus = { ...storageStatus, status: 'ok' }
-    }
-  } else {
-    storageStatus = { ...storageStatus, status: storageStatus.writable ? 'ok' : 'degraded' }
-  }
-} catch (error) {
-  storageStatus = {
-    ...storageStatus,
-    status: 'error',
-    writable: false,
-    last_error: error?.message || String(error),
-    checked_at: new Date().toISOString(),
-  }
-  // fail-fast already handled above; if we got here, still crash in prod, warn in dev.
-  if (isProdEnv) {
-    console.error('[storage] FATAL upload storage error:', storageStatus.last_error)
-    process.exit(1)
-  }
-  console.error('[storage] Upload storage unavailable (dev mode continuing):', storageStatus.last_error)
-}
-
-app.locals.uploads = { uploadsDir, legacyUploadsDir, storageStatus }
 
 // Security headers (must run early, before routes).
 // Keep CSP behavior unchanged (some deployments may already set CSP at a proxy/CDN layer).
@@ -405,75 +315,6 @@ app.use('/uploads', (req, res) => {
   return res.status(404).send('Not Found')
 });
 
-async function repairMissingUploadAvatars({ db, uploadsDir }) {
-  // If the DB references upload URLs that no longer exist on disk (common after an ephemeral volume reset),
-  // browsers will spam 404s. The correct fix is to stop referencing non-existent files.
-  try {
-    const rows = await db
-      .prepare(
-        `
-          SELECT id, avatar_url
-          FROM profiles
-          WHERE avatar_url IS NOT NULL
-            AND TRIM(avatar_url) <> ''
-        `,
-      )
-      .all()
-
-    let repaired = 0
-    for (const row of rows) {
-      const raw = String(row.avatar_url || '').trim()
-      if (!raw) continue
-
-      let pathname = raw
-      try {
-        if (/^https?:\/\//i.test(raw)) pathname = new URL(raw).pathname
-      } catch {
-        // keep raw as-is
-      }
-
-      if (!pathname.includes('/uploads/')) continue
-      const fileName = pathname.split('/').pop()
-      if (!fileName) continue
-
-      const fullPath = join(uploadsDir, fileName)
-      if (fs.existsSync(fullPath)) continue
-
-      // Remove the reference so the frontend uses its built-in non-upload fallback.
-      await db.prepare('UPDATE profiles SET avatar_url = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(row.id)
-      repaired += 1
-    }
-
-    if (repaired > 0) {
-      console.warn('[startup] repaired missing upload avatars', { repaired })
-    }
-  } catch (error) {
-    console.warn('[startup] failed to repair missing upload avatars:', error?.message || error)
-  }
-}
-
-async function repairInvalidDocumentStatuses(db) {
-  // Postgres uses a CHECK constraint on documents.status; if any legacy rows exist (e.g. "processed"),
-  // *any* UPDATE touching that row will fail until status is repaired.
-  const allowed = ['draft', 'review', 'final', 'submitted']
-  try {
-    await db
-      .prepare(
-        `
-          UPDATE documents
-          SET status = 'draft',
-              updated_at = CURRENT_TIMESTAMP
-          WHERE status IS NOT NULL
-            AND status NOT IN ('draft','review','final','submitted')
-        `,
-      )
-      .run()
-  } catch (error) {
-    // Non-fatal: some deployments may not have the documents table yet.
-    console.warn('[startup] Failed to repair invalid document statuses:', error?.message || error)
-  }
-}
-
 // Serve static files from Vite build
 // Hashed asset files (JS/CSS with content hash in filename) get long-lived immutable cache.
 // The SPA entry point (index.html) must not be cached so users always get the latest version.
@@ -504,574 +345,34 @@ if (APP_BASE_PATH && APP_BASE_PATH !== '/') {
   app.use(APP_BASE_PATH, express.static(distPath));
 }
 
-// Validate database connection on startup (works for both sqlite and postgres)
-try {
-  console.info('[database] Validating database connection...');
-  const hc = await db.healthcheck();
-  if (!hc?.ok) {
-    throw new Error(hc?.error || 'Database healthcheck failed')
-  }
-  console.info('[database] Database connection validated successfully', {
-    dialect: db.dialect,
-    path: db.path ?? null,
-  });
-} catch (dbError) {
-  console.error('[database] CRITICAL: Failed to initialize database:', dbError);
-  // Production safety: do not hard-exit. A hard exit yields a perpetual 502 and blocks recovery via Admin UI.
-  // We keep the process alive so `/api/health` and admin diagnostics can surface the failure reason.
-  console.error('[database] Continuing startup in degraded mode (DB unavailable).');
-  app.locals.db_startup_error = dbError instanceof Error ? dbError.message : String(dbError)
-}
+// ── Phase 1: Boot-critical startup ────────────────────────────────────────────
+// Handles: upload storage health, DB validation, schema migrations,
+// runtime secrets restoration, crawler-jobs constraint rebuild, JWT resolution.
+const { storageStatus, EFFECTIVE_JWT_SECRET } = await runBootstrap({
+  db,
+  uploadsDir,
+  legacyUploadsDir,
+  baseDir: __dirname,
+});
+app.locals.uploads = { uploadsDir, legacyUploadsDir, storageStatus };
 
-// NOTE: Schema/migrations should be applied via `npm run migrate` in production.
-// We keep the legacy "apply schema on startup" behavior only for sqlite local dev.
-const shouldAutoMigrate =
-  String(process.env.DB_AUTO_MIGRATE || '').toLowerCase() === 'true' ||
-  (db.dialect === 'sqlite' && process.env.NODE_ENV !== 'production');
-
-// Load persisted runtime secrets (encrypted) if missing from environment.
-// This is intended as an emergency stopgap for hosted environments where env var updates are delayed.
-try {
-  async function restoreRuntimeSecretIfMissing(key) {
-    const current = String(process.env[key] || '').trim()
-    const looksMissing = !current || current.includes('*')
-    if (!looksMissing) return
-
-    const row = await db
-      .prepare(
-        `
-          SELECT value_ciphertext, iv, tag, updated_at
-          FROM app_runtime_secrets
-          WHERE key = ?
-          LIMIT 1
-        `,
-      )
-      .get(key)
-
-    if (row?.value_ciphertext && row?.iv && row?.tag) {
-      const restored = decryptRuntimeSecret(row)
-      if (restored && String(restored).trim()) {
-        process.env[key] = String(restored).trim()
-        // Never log full secrets. Only log a short prefix for OpenAI key debugging.
-        console.info(`[startup] Restored ${key} from app_runtime_secrets`, {
-          updated_at: row.updated_at ?? null,
-          ...(key === 'OPENAI_API_KEY' ? { prefix: `${String(process.env[key]).slice(0, 7)}...` } : {}),
-        })
-      }
-    }
-  }
-
-  // Restore common secrets used by the Admin Panel + Funding API clients.
-  await restoreRuntimeSecretIfMissing('OPENAI_API_KEY')
-  await restoreRuntimeSecretIfMissing('RESEND_API_KEY')
-  await restoreRuntimeSecretIfMissing('ANTHROPIC_API_KEY')
-  await restoreRuntimeSecretIfMissing('ANYA_ADMIN_TOKEN')
-  await restoreRuntimeSecretIfMissing('SAM_GOV_PUBLIC_API_KEY')
-  await restoreRuntimeSecretIfMissing('SIMPLER_GRANTS_API_KEY')
-  await restoreRuntimeSecretIfMissing('API_DATA_GOV_KEY')
-  await restoreRuntimeSecretIfMissing('GRANTS_GOV_API_KEY')
-} catch (error) {
-  console.warn('[startup] Failed to restore runtime secrets:', error?.message || error)
-}
-
-// Schema migrations - Add columns if they don't exist
-// Table and column names are validated against a whitelist for security
-const allowedMigrations = [
-  { table: 'profiles', column: 'avatar_url', type: 'TEXT' },
-  { table: 'profiles', column: 'user_id', type: 'TEXT REFERENCES users(id) ON DELETE SET NULL' },
-  { table: 'crawler_jobs', column: 'result_meta', type: 'TEXT' },
-  { table: 'crawler_jobs', column: 'retry_count', type: 'INTEGER DEFAULT 0' },
-  { table: 'crawler_jobs', column: 'last_retry_at', type: 'DATETIME' },
-  // Crawler stability metadata (idempotency + snapshots + dispatch backpressure)
-  { table: 'crawler_jobs', column: 'profile_context_snapshot', type: 'TEXT' },
-  { table: 'crawler_jobs', column: 'idempotency_key', type: 'TEXT' },
-  { table: 'crawler_jobs', column: 'dispatch_attempts', type: 'INTEGER DEFAULT 0' },
-  { table: 'crawler_jobs', column: 'next_dispatch_at', type: 'DATETIME' },
-  // Heartbeat for long-running jobs (prevents stale cleanup of active jobs)
-  { table: 'crawler_jobs', column: 'last_heartbeat_at', type: 'DATETIME' },
-  // Positive classification for "REAL" opportunity invariants
-  { table: 'funding_opportunities', column: 'record_origin', type: "TEXT DEFAULT 'live_crawl'" },
-  { table: 'funding_opportunities', column: 'evidence_url', type: 'TEXT' },
-  { table: 'funding_opportunities', column: 'last_verified_at', type: 'DATETIME' },
-  // Link documents to per-school university applications (student profiles)
-  { table: 'documents', column: 'university_application_id', type: 'TEXT' },
-  { table: 'documents', column: 'university_application_name', type: 'TEXT' },
-  // Password auth (first-login password setup + password login)
-  { table: 'users', column: 'password_hash', type: 'TEXT' },
-  // Grant application guidance (how to apply)
-  { table: 'grants', column: 'application_method', type: 'TEXT' },
-  { table: 'grants', column: 'application_steps', type: 'TEXT' },
-  { table: 'grants', column: 'contact_name', type: 'TEXT' },
-  { table: 'grants', column: 'contact_email', type: 'TEXT' },
-  { table: 'grants', column: 'contact_phone', type: 'TEXT' },
-  // Loan/grants filtering (realCrawlers buildCandidateOpportunityQuery)
-  { table: 'funding_opportunities', column: 'is_loan', type: 'INTEGER DEFAULT 0' },
-  // Crawl metadata analysis blob (migration 032 / crawl metadata)
-  { table: 'crawl_metadata', column: 'analysis_json', type: 'TEXT' },
-];
-
-const validTables = new Set(['profiles', 'crawler_jobs', 'users', 'organizations', 'grants', 'funding_opportunities', 'documents', 'crawl_metadata']);
-const validColumnPattern = /^[a-z_]+$/;
-
-// Apply full schema first so fresh DBs (e.g. unit tests) have base tables, then add any missing columns.
-if (shouldAutoMigrate) {
-  const schemaPath = join(__dirname, 'db', 'schema.sql');
-  if (fs.existsSync(schemaPath)) {
-    try {
-      const schema = fs.readFileSync(schemaPath, 'utf8');
-      await db.exec(schema);
-      console.info('[database] Schema applied (auto-migrate enabled)', { dialect: db.dialect });
-    } catch (schemaError) {
-      console.error('[database] Error running schema migrations:', schemaError);
-      // Do not hard-exit; keep the service reachable for diagnostics.
-    }
-  }
-}
-
-// Then add columns that may be missing (schema.sql may not include every migration column).
-// This legacy auto-migration is SQLite-only. Postgres must be migrated deterministically via SQL migrations.
-if (db.dialect === 'sqlite') {
-  allowedMigrations.forEach(({ table, column, type }) => {
-    if (!validTables.has(table) || !validColumnPattern.test(column)) {
-      console.error(`Migration error: Invalid table "${table}" or column "${column}"`);
-      return;
-    }
-    try {
-      db.prepare(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`).run();
-    } catch (error) {
-      if (!error.message.includes('duplicate column')) {
-        console.warn(`Migration warning for ${table}.${column}:`, error.message);
-      }
-    }
-  });
-} else {
-  console.info('[database] Skipping legacy column auto-migrations (dialect != sqlite)');
-}
-
-// Production hardening (SQLite): if the DB was created before profiles existed (or after an ephemeral reset),
-// `/api/profiles` will 5xx and upstream proxies often surface it as 502. We self-heal by applying schema.sql
-// when core tables are missing. This is intentionally SQLite-only; Postgres must use deterministic migrations.
-if (db.dialect === 'sqlite') {
-  try {
-    let missingCore = false
-    const tablesToCheck = ['profiles', 'profile_sections', 'documents', 'crawler_jobs', 'users']
-    for (const table of tablesToCheck) {
-      try {
-        db.prepare(`SELECT 1 FROM ${table} LIMIT 1`).get()
-      } catch (error) {
-        const msg = String(error?.message || error)
-        if (msg.includes('no such table') || msg.includes('SQLITE_ERROR')) {
-          missingCore = true
-          console.warn('[database] Detected missing core table; will apply schema.sql', {
-            table,
-            error: msg,
-          })
-          break
-        }
-      }
-    }
-
-    if (missingCore) {
-      const schemaPath = join(__dirname, 'db', 'schema.sql')
-      if (fs.existsSync(schemaPath)) {
-        const schema = fs.readFileSync(schemaPath, 'utf8')
-        await db.exec(schema)
-        console.info('[database] Schema applied (self-heal)', { dialect: db.dialect })
-      } else {
-        console.error('[database] schema.sql missing; cannot self-heal sqlite schema', { schemaPath })
-      }
-    }
-  } catch (error) {
-    console.error('[database] Failed during sqlite schema self-heal:', error?.message || error)
-  }
-}
-
-function ensureCrawlerJobsSupportsAllTypes() {
-  // SQLite-only safety: older local DBs may have an outdated CHECK constraint on crawler_jobs.type.
-  // If it rejects any currently-supported type, rebuild the table with the modern constraint.
-  const testTypes = [
-    'local',
-    'scholarship',
-    'health_resources',
-    'comprehensive',
-    'national',
-    'item_search',
-    'item_gift_search',
-    'avatar_lookup',
-    'document_ingest',
-    'pipeline_automation',
-    'profile_enrichment',
-    'national_zip_scan',
-  ]
-  let needsRebuild = false
-
-  for (const type of testTypes) {
-    try {
-      const testId = `__schema_test_${type}__`
-      db.prepare(
-        `
-          INSERT INTO crawler_jobs (id, type, status)
-          VALUES (?, ?, 'queued')
-        `,
-      ).run(testId, type)
-      db.prepare(
-        `
-          DELETE FROM crawler_jobs
-          WHERE id = ?
-        `,
-      ).run(testId)
-    } catch (error) {
-      if (error?.message && error.message.includes('CHECK constraint failed')) {
-        needsRebuild = true
-        break
-      }
-    }
-  }
-
-  if (!needsRebuild) return
-
-  const rebuild = db.transaction(() => {
-    db.prepare(
-      `
-        CREATE TABLE crawler_jobs_new (
-          id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
-          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-          started_at DATETIME,
-          completed_at DATETIME,
-          type TEXT NOT NULL CHECK(type IN (
-            'local',
-            'scholarship',
-            'health_resources',
-            'comprehensive',
-            'national',
-            'item_search',
-            'item_gift_search',
-            'avatar_lookup',
-            'document_ingest',
-            'pipeline_automation',
-            'profile_enrichment',
-            'national_zip_scan'
-          )),
-          status TEXT NOT NULL DEFAULT 'queued' CHECK(status IN (
-            'queued',
-            'running',
-            'completed',
-            'failed',
-            'cancelled'
-          )),
-          profile_id TEXT REFERENCES profiles(id) ON DELETE SET NULL,
-          organization_id TEXT REFERENCES organizations(id) ON DELETE SET NULL,
-          parameters TEXT DEFAULT '{}',
-          profile_context_snapshot TEXT,
-          idempotency_key TEXT,
-          result_count INTEGER DEFAULT 0,
-          result_meta TEXT,
-          error TEXT,
-          requested_by TEXT,
-          dispatch_attempts INTEGER DEFAULT 0,
-          next_dispatch_at DATETIME,
-          retry_count INTEGER DEFAULT 0,
-          last_retry_at DATETIME
-        )
-      `,
-    ).run()
-
-    db.prepare(
-      `
-        INSERT INTO crawler_jobs_new (
-          id,
-          created_at,
-          started_at,
-          completed_at,
-          type,
-          status,
-          profile_id,
-          organization_id,
-          parameters,
-          profile_context_snapshot,
-          idempotency_key,
-          result_count,
-          result_meta,
-          error,
-          requested_by,
-          dispatch_attempts,
-          next_dispatch_at,
-          retry_count,
-          last_retry_at
-        )
-        SELECT
-          id,
-          created_at,
-          started_at,
-          completed_at,
-          type,
-          status,
-          profile_id,
-          organization_id,
-          parameters,
-          NULL as profile_context_snapshot,
-          NULL as idempotency_key,
-          result_count,
-          result_meta,
-          error,
-          requested_by,
-          0 as dispatch_attempts,
-          NULL as next_dispatch_at,
-          COALESCE(retry_count, 0),
-          last_retry_at
-        FROM crawler_jobs
-      `,
-    ).run()
-
-    db.prepare('DROP TABLE crawler_jobs').run()
-    db.prepare('ALTER TABLE crawler_jobs_new RENAME TO crawler_jobs').run()
-    db.prepare('CREATE INDEX IF NOT EXISTS idx_crawler_jobs_status ON crawler_jobs(status)').run()
-    db.prepare('CREATE INDEX IF NOT EXISTS idx_crawler_jobs_profile ON crawler_jobs(profile_id)').run()
-    db.prepare('CREATE INDEX IF NOT EXISTS idx_crawler_jobs_type ON crawler_jobs(type)').run()
-    db.prepare('CREATE UNIQUE INDEX IF NOT EXISTS idx_crawler_jobs_idempotency ON crawler_jobs(idempotency_key) WHERE idempotency_key IS NOT NULL').run()
-  })
-
-  rebuild()
-}
-
-if (db.dialect === 'sqlite') {
-  ensureCrawlerJobsSupportsAllTypes()
-}
-
-// Smoke mode: used by unit/contract tests (fast deterministic boot).
-// Many unit tests start the server with PORT=0 + DB_AUTO_MIGRATE=true but do not set SMOKE_MODE explicitly.
-// In that case, we infer smoke mode so that heavy startup tasks never block the "Ready" signal.
-const explicitSmoke = String(process.env.SMOKE_MODE || '').trim().toLowerCase() === 'true'
+// ── Smoke-mode detection ───────────────────────────────────────────────────────
+// Many unit tests start the server with PORT=0 + DB_AUTO_MIGRATE=true but do not
+// set SMOKE_MODE explicitly. Infer smoke mode so heavy startup tasks never block
+// the "Ready" signal.
+const explicitSmoke = String(process.env.SMOKE_MODE || '').trim().toLowerCase() === 'true';
 const inferredSmoke =
   String(PORT) === '0' &&
   String(process.env.DB_AUTO_MIGRATE || '').trim().toLowerCase() === 'true' &&
-  String(process.env.NODE_ENV || '').trim().toLowerCase() !== 'production'
-const IS_SMOKE_MODE = explicitSmoke || inferredSmoke
+  String(process.env.NODE_ENV || '').trim().toLowerCase() !== 'production';
+const IS_SMOKE_MODE = explicitSmoke || inferredSmoke;
 
-// Restore baseline data (profiles + sections, plus other seed tables if DB appears empty).
-// This makes the app self-heal after an ephemeral DB reset, so "real profiles" reappear on next login.
-if (IS_SMOKE_MODE) {
-  // Contract/unit tests start the backend in "smoke" mode and only need a fast, deterministic boot.
-  // Heavy boot tasks (baseline seeding, network-dependent backfills, large DB scans) must not block PORT binding.
-  console.info('[startup] SMOKE_MODE enabled; skipping baseline seed + heavy startup tasks')
-  // Still ensure core fixtures exist so auth/access tests have profiles to attach to.
-  await ensureDesignatedProfiles(db)
-  await linkAllProfilesToAdmin(db)
-  await ensureUserPreferencesTable(db)
-  await ensurePortalCheckResultsTable(db)
-} else {
-  try {
-    const mode = String(process.env.BASELINE_SEED_MODE || '').trim().toLowerCase() || 'auto'
-    const result = await seedBaselineFromRepo(db, {
-      mode: mode === 'force' ? 'force' : mode === 'off' ? 'off' : 'auto',
-    })
-    console.info('[startup] baseline seed', {
-      ok: result.ok,
-      skipped: result.skipped,
-      reason: result.reason ?? null,
-      seed_path: result.seed_path ?? null,
-      exported_at: result.exported_at ?? null,
-      before: result.before ?? null,
-      after: result.after ?? null,
-      decisions: result.decisions ?? null,
-    })
-  } catch (error) {
-    // Fallback to designated profiles so the server can still boot, but log loudly.
-    console.error('[startup] Failed to seed baseline from repo. Falling back to designated profiles.', {
-      error: error?.message || String(error),
-    })
-    await ensureDesignatedProfiles(db)
-  }
-  // Always ensure designated profiles exist (idempotent); baseline seed may not include newer fixtures.
-  await ensureDesignatedProfiles(db)
-  await linkAllProfilesToAdmin(db)
-  // Prevent "orphaned profiles" by ensuring every active profile has an organization_id.
-  // Bounded + idempotent so production startups stay safe.
-  try {
-    await ensureProfileOrgLinks(db, {
-      limit: Number(process.env.STARTUP_PROFILE_ORG_LINK_LIMIT || 5000),
-      includeDeleted: false,
-      dryRun: false,
-    })
-  } catch (error) {
-    console.warn('[startup] Failed to ensure profile organization links:', error?.message || error)
-  }
-  await ensureUserPreferencesTable(db)
-  await ensurePortalCheckResultsTable(db)
-  await repairInvalidDocumentStatuses(db)
-  await repairMissingUploadAvatars({ db, uploadsDir })
-}
+// ── Phase 2: Self-heal + baseline seeding ─────────────────────────────────────
+// Handles: upload-avatar repair, document-status repair, baseline seed, service
+// catalog, opportunity seeding, national minimums, assistance directories,
+// faith-based housing.
+await runSelfHeal({ db, uploadsDir, IS_SMOKE_MODE, baseDir: __dirname });
 
-// Ensure the Payment Sheet service catalog + terms exist (fast + idempotent).
-try {
-  await seedServiceCatalogFromExtract(db)
-} catch (error) {
-  console.warn('[startup] Failed to seed service catalog from extract:', error?.message || error)
-}
-
-// Check funding opportunities count and provide guidance
-if (!IS_SMOKE_MODE && db.dialect === 'sqlite') {
-  try {
-    const oppCount = db.prepare('SELECT COUNT(*) as count FROM funding_opportunities WHERE is_active = 1').get();
-    if (oppCount && oppCount.count === 0) {
-      console.info('[startup] No funding opportunities found, auto-seeding...');
-      try {
-        const { seedRealOpportunities } = await import('./utils/seedRealOpportunities.js')
-        await seedRealOpportunities(db)
-        const newCount = db.prepare('SELECT COUNT(*) as count FROM funding_opportunities WHERE is_active = 1').get()
-        console.info(`[startup] Seeded ${newCount.count} funding opportunities`)
-      } catch (e) {
-        console.warn('[startup] Failed to auto-seed funding opportunities:', e?.message || e)
-      }
-    } else {
-      console.info(`[startup] Found ${oppCount.count} existing funding opportunities`);
-    }
-  } catch (error) {
-    console.warn('[startup] Error checking opportunities count:', error.message);
-  }
-} else {
-  console.info('[startup] Skipping SQLite-only opportunity seeding checks', { smoke: IS_SMOKE_MODE, dialect: db.dialect })
-}
-
-function parseBoolEnv(value) {
-  if (value == null) return null
-  const v = String(value).trim().toLowerCase()
-  if (['1', 'true', 'yes', 'y', 'on'].includes(v)) return true
-  if (['0', 'false', 'no', 'n', 'off'].includes(v)) return false
-  return null
-}
-
-// Ensure at least N REAL national opportunities are available (visible from any ZIP).
-// - Non-prod: default ON (local reliability).
-// - Prod: default OFF unless first-boot (no opportunities at all) or explicitly enabled.
-try {
-  if (IS_SMOKE_MODE) {
-    console.info('[startup]', JSON.stringify({ event: 'min_national_ensure', enabled_by: 'smoke_mode', minimum: null, skipped: true }))
-  } else {
-  const minimum = Number.parseInt(process.env.MIN_NATIONAL_OPPORTUNITIES || '3', 10)
-  const min = Number.isFinite(minimum) ? minimum : 3
-
-  const isProd = process.env.NODE_ENV === 'production'
-  const flag = parseBoolEnv(process.env.ENABLE_MIN_NATIONAL_ENSURE)
-  // This helper is SQLite-only today (PRAGMA usage + sync calls). Skip on Postgres until refactored.
-  if (db.dialect !== 'sqlite') {
-    console.info('[startup]', JSON.stringify({ event: 'min_national_ensure', enabled_by: 'skipped_postgres', minimum: min, skipped: true }))
-  } else {
-    const activeTotalRow = db
-      .prepare('SELECT COUNT(*) as count FROM funding_opportunities WHERE is_active = 1')
-      .get()
-    const activeTotal = Number(activeTotalRow?.count ?? 0)
-
-  let shouldEnsure = false
-  let enabledBy = 'disabled'
-
-  if (flag === true) {
-    shouldEnsure = true
-    enabledBy = 'flag'
-  } else if (flag === false) {
-    shouldEnsure = false
-    enabledBy = 'flag_off'
-  } else if (!isProd) {
-    shouldEnsure = true
-    enabledBy = 'default_nonprod'
-  } else if (activeTotal === 0) {
-    shouldEnsure = true
-    enabledBy = 'first_boot'
-  }
-
-    if (shouldEnsure) {
-      const ensured = await ensureMinimumNationalOpportunities(db, min)
-    const backfilled = (ensured.events || []).some((e) => e.type === 'backfill' || e.type === 'schema_backfill')
-
-    const evt = {
-      event: 'min_national_ensure',
-      enabled_by: enabledBy,
-      minimum: ensured.minimum,
-      ok: ensured.ok,
-      total: ensured.total,
-      ensured: ensured.ensured,
-      backfilled,
-      sources: (ensured.events || []).filter((e) => e.type === 'backfill').map((e) => e.source),
-    }
-
-    // Structured log for observability (backfill is acceptable but must be visible)
-    console.info('[startup]', JSON.stringify(evt))
-
-    if (!ensured.ok) {
-      console.warn(`[startup] National minimum not met: have ${ensured.total}, need ${ensured.minimum}`)
-    }
-    } else {
-      console.info('[startup]', JSON.stringify({ event: 'min_national_ensure', enabled_by: enabledBy, minimum: min, skipped: true }))
-    }
-  }
-  }
-} catch (error) {
-  console.warn('[startup] Failed to ensure national minimum opportunities:', error?.message || error)
-}
-
-// Ensure curated assistance directories are available even when the DB already has many county_crawler records.
-// This increases "real & relevant" coverage for special needs / emergency assistance matching without fabricating data.
-try {
-  if (IS_SMOKE_MODE) {
-    console.info('[startup] Skipping assistance directory seeding (SMOKE_MODE)')
-  } else if (db.dialect !== 'sqlite') {
-    // This helper is SQLite-only today (sync calls + local JSON files). Skip on Postgres until refactored.
-    console.info('[startup] Skipping assistance directory seeding (dialect != sqlite)')
-  } else {
-    const existing = db
-      .prepare("SELECT COUNT(*) as count FROM funding_opportunities WHERE source IN ('state_211','assistance_network')")
-      .get()?.count
-    if ((existing ?? 0) < 250) {
-      console.info('[startup] Seeding assistance directories (state_211 + assistance_network)...')
-      const dataDir = join(__dirname, 'data')
-      const hasAssistanceSeedFiles =
-        fs.existsSync(join(dataDir, 'state_assistance_programs.json')) ||
-        fs.existsSync(join(dataDir, 'local_assistance_networks.json'))
-
-      if (!hasAssistanceSeedFiles) {
-        console.info(
-          `[startup] Assistance directory seed files missing under ${dataDir}; skipping`,
-        )
-      } else {
-        const result = await seedAssistanceDirectories(db)
-        const after = db
-          .prepare("SELECT COUNT(*) as count FROM funding_opportunities WHERE source IN ('state_211','assistance_network')")
-          .get()?.count
-        console.info('[startup] Seeded assistance directories', { ...result, after })
-      }
-    } else {
-      console.info('[startup] Assistance directories already seeded', { count: existing })
-    }
-  }
-} catch (error) {
-  console.warn('[startup] Failed to seed assistance directories:', error?.message || error)
-}
-
-try {
-  const faithCount = db
-    .prepare("SELECT COUNT(*) as count FROM funding_opportunities WHERE source = 'faith_based_assistance' AND state = 'OH' AND is_active = 1")
-    .get()?.count ?? 0
-  if (faithCount < 6) {
-    console.info('[startup] Seeding faith-based housing assistance (Lorain County OH)...')
-    const result = await seedFaithBasedHousing(db)
-    const afterCount = db
-      .prepare("SELECT COUNT(*) as count FROM funding_opportunities WHERE source = 'faith_based_assistance' AND state = 'OH' AND is_active = 1")
-      .get()?.count
-    console.info('[startup] Seeded faith-based housing', { ...result, after: afterCount })
-  } else {
-    console.info('[startup] Faith-based housing already seeded', { count: faithCount })
-  }
-} catch (error) {
-  console.warn('[startup] Failed to seed faith-based housing:', error?.message || error)
-}
-
-let EFFECTIVE_JWT_SECRET
-try {
-  EFFECTIVE_JWT_SECRET = getJwtSecretOrThrow(process.env)
-} catch (err) {
-  console.error(`FATAL ERROR: ${err.message}`)
-  process.exit(1)
-}
 const isProd = process.env.NODE_ENV === 'production'
 
 app.use(createAuthIdentityMiddleware({
@@ -1155,7 +456,9 @@ app.use('/api/crawl-logs', crawlLogsRouter);
 app.use('/api/geo-crawl', lazyRouter('./routes/geoCrawl.js', (mod) => mod.default({ uploadDir: uploadsDir, getOpenAI: null })));
 app.use('/api/colleges', collegesRouter);
 
-function resolveBuildSha() {
+// ── Build metadata endpoint (public, no secrets) ──────────────────────────────
+// NOTE: This endpoint is used to confirm production is on the expected commit.
+function _resolveBuildSha() {
   return (
     process.env.RAILWAY_GIT_COMMIT_SHA ||
     process.env.GIT_COMMIT_SHA ||
@@ -1165,269 +468,9 @@ function resolveBuildSha() {
   )
 }
 
-async function scheduleCrawlerSmokeJobs({ db, uploadsDir }) {
-  // Goal: prove crawlers can run end-to-end on the currently deployed build, without needing a human
-  // to click UI buttons. This runs once per deployed SHA and is intentionally tiny.
-  if (process.env.NODE_ENV !== 'production') return
-
-  const sha = resolveBuildSha()
-  const suffix = (sha ? String(sha).slice(0, 8) : crypto.randomUUID().slice(0, 8)).replace(/[^a-z0-9_-]/gi, '')
-
-  const profileId = `smoke-profile-${suffix}`
-  const documentId = `smoke-document-${suffix}`
-  const comprehensiveJobId = `smoke-comprehensive-${suffix}`
-  const documentIngestJobId = `smoke-document-ingest-${suffix}`
-  const scholarshipJobId = `smoke-scholarship-${suffix}`
-
-  const insertProfileSql =
-    db?.dialect === 'postgres'
-      ? `
-          INSERT INTO profiles (id, display_name, primary_type, status, tags)
-          VALUES (?, ?, ?, ?, ?)
-          ON CONFLICT (id) DO NOTHING
-        `
-      : `
-          INSERT OR IGNORE INTO profiles (id, display_name, primary_type, status, tags)
-          VALUES (?, ?, ?, ?, ?)
-        `
-
-  const insertDocumentSql =
-    db?.dialect === 'postgres'
-      ? `
-          INSERT INTO documents (id, profile_id, name, type, extracted_text, processing_status, status)
-          VALUES (?, ?, ?, ?, ?, ?, ?)
-          ON CONFLICT (id) DO NOTHING
-        `
-      : `
-          INSERT OR IGNORE INTO documents (id, profile_id, name, type, extracted_text, processing_status, status)
-          VALUES (?, ?, ?, ?, ?, ?, ?)
-        `
-
-  const insertJobSql =
-    db?.dialect === 'postgres'
-      ? `
-          INSERT INTO crawler_jobs (id, type, status, profile_id, parameters, requested_by)
-          VALUES (?, ?, 'queued', ?, ?, ?)
-          ON CONFLICT (id) DO NOTHING
-        `
-      : `
-          INSERT OR IGNORE INTO crawler_jobs (id, type, status, profile_id, parameters, requested_by)
-          VALUES (?, ?, 'queued', ?, ?, ?)
-        `
-
-  try {
-    // Use a student-ish primary_type so scholarship crawler has relevant context.
-    await db
-      .prepare(insertProfileSql)
-      .run(profileId, 'GrantFlow Smoke Profile', 'college_student', 'active', JSON.stringify(['student']))
-
-    await db
-      .prepare(insertDocumentSql)
-      .run(
-        documentId,
-        profileId,
-        `smoke-${suffix}.txt`,
-        'source_material',
-        'GrantFlow smoke document (no PII).',
-        'pending',
-        'draft',
-      )
-
-    await db
-      .prepare(insertJobSql)
-      .run(
-        comprehensiveJobId,
-        'comprehensive',
-        profileId,
-        JSON.stringify({ max_results: 1, match_threshold: 80, save_to_database: false }),
-        'system-smoke',
-      )
-
-    await db
-      .prepare(insertJobSql)
-      .run(
-        scholarshipJobId,
-        'scholarship',
-        profileId,
-        JSON.stringify({ limit: 1 }),
-        'system-smoke',
-      )
-
-    await db
-      .prepare(insertJobSql)
-      .run(
-        documentIngestJobId,
-        'document_ingest',
-        profileId,
-        JSON.stringify({ document_id: documentId, skip_ai: true }),
-        'system-smoke',
-      )
-
-    // Fire-and-forget dispatch (non-blocking).
-    dispatchCrawlerJob({ db, jobId: comprehensiveJobId, uploadDir: uploadsDir, getOpenAI: null }).catch(e => console.warn('[background]', e?.message || e))
-    dispatchCrawlerJob({ db, jobId: scholarshipJobId, uploadDir: uploadsDir, getOpenAI: null }).catch(e => console.warn('[background]', e?.message || e))
-    dispatchCrawlerJob({ db, jobId: documentIngestJobId, uploadDir: uploadsDir, getOpenAI: null }).catch(e => console.warn('[background]', e?.message || e))
-  } catch (error) {
-    console.warn('[smoke] Failed to schedule crawler smoke jobs:', error?.message || String(error))
-  }
-}
-
-async function scheduleAutoProfileDedupe({ db }) {
-  // Goal: delete duplicate profiles automatically without requiring a human to click buttons.
-  // This runs once per deployed SHA and is intentionally conservative.
-  if (process.env.NODE_ENV !== 'production') return
-  if (!db) return
-
-  const sha = resolveBuildSha()
-  const runId = sha ? `auto-dedupe-${String(sha).slice(0, 12)}` : `auto-dedupe-${crypto.randomUUID().slice(0, 12)}`
-  console.info('[auto-dedupe] starting', { runId, sha: sha ? String(sha).slice(0, 12) : null })
-
-  // Skip if we already ran on this deploy SHA (best-effort via audit_logs).
-  try {
-    const exists = await db
-      .prepare(
-        `
-          SELECT 1
-          FROM audit_logs
-          WHERE category = 'admin'
-            AND action = 'auto_profile_dedupe'
-            AND resource_id = ?
-          LIMIT 1
-        `,
-      )
-      .get(runId)
-    if (exists) {
-      console.info('[auto-dedupe] already ran for this deploy; skipping', { runId })
-      return
-    }
-  } catch {
-    // audit_logs may not exist yet; proceed.
-  }
-
-  const startedAt = Date.now()
-  let mergedGroups = 0
-  let mergedLosers = 0
-  let skippedGroups = 0
-
-  try {
-    const report = await findDuplicateProfileGroups(db, {
-      strategy: 'exact_name',
-      limitGroups: 500,
-      minGroupSize: 2,
-      includeInactive: false,
-    })
-
-    for (const group of report?.groups || []) {
-      const winner = group?.winner
-      const losers = Array.isArray(group?.losers) ? group.losers : []
-      if (!winner?.id || losers.length === 0) continue
-
-      // Safety: skip if multiple distinct non-null users or organizations are involved.
-      const userIds = new Set([winner.user_id, ...losers.map((l) => l.user_id)].filter(Boolean).map(String))
-      const orgIds = new Set([winner.organization_id, ...losers.map((l) => l.organization_id)].filter(Boolean).map(String))
-      if (userIds.size > 1 || orgIds.size > 1) {
-        skippedGroups += 1
-        console.info('[auto-dedupe] skipped group (conflicting links)', {
-          runId,
-          key: group.key,
-          winnerId: winner.id,
-          loserCount: losers.length,
-          userIds: Array.from(userIds),
-          orgIds: Array.from(orgIds),
-        })
-        logAuditEvent(db, {
-          category: AUDIT_CATEGORIES.ADMIN,
-          action: 'auto_profile_dedupe_skipped',
-          severity: SEVERITY.WARNING,
-          resourceType: 'profile',
-          resourceId: winner.id,
-          details: {
-            run_id: runId,
-            group_key: group.key,
-            reason: 'conflicting user_id and/or organization_id across group',
-            user_ids: Array.from(userIds),
-            organization_ids: Array.from(orgIds),
-            winner_id: winner.id,
-            loser_ids: losers.map((l) => l.id),
-          },
-        })
-        continue
-      }
-
-      const loserIds = losers.map((l) => l.id).filter(Boolean)
-      try {
-        await mergeProfiles(db, {
-          winnerId: winner.id,
-          loserIds,
-          dryRun: false,
-          actorUserId: null,
-        })
-        mergedGroups += 1
-        mergedLosers += loserIds.length
-        console.info('[auto-dedupe] merged group', { runId, key: group.key, winnerId: winner.id, loserCount: loserIds.length })
-        logAuditEvent(db, {
-          category: AUDIT_CATEGORIES.ADMIN,
-          action: 'auto_profile_merge',
-          severity: SEVERITY.INFO,
-          resourceType: 'profile',
-          resourceId: winner.id,
-          details: { run_id: runId, group_key: group.key, winner_id: winner.id, loser_ids: loserIds },
-        })
-      } catch (mergeError) {
-        skippedGroups += 1
-        console.warn('[auto-dedupe] merge failed', {
-          runId,
-          key: group.key,
-          winnerId: winner.id,
-          loserCount: loserIds.length,
-          error: mergeError?.message || String(mergeError),
-        })
-        logAuditEvent(db, {
-          category: AUDIT_CATEGORIES.ADMIN,
-          action: 'auto_profile_merge_failed',
-          severity: SEVERITY.ERROR,
-          resourceType: 'profile',
-          resourceId: winner.id,
-          details: {
-            run_id: runId,
-            group_key: group.key,
-            winner_id: winner.id,
-            loser_ids: loserIds,
-            error: mergeError?.message || String(mergeError),
-          },
-        })
-      }
-    }
-  } finally {
-    logAuditEvent(db, {
-      category: AUDIT_CATEGORIES.ADMIN,
-      action: 'auto_profile_dedupe',
-      severity: SEVERITY.INFO,
-      resourceType: 'system',
-      resourceId: runId,
-      details: {
-        sha: sha || null,
-        merged_groups: mergedGroups,
-        merged_losers: mergedLosers,
-        skipped_groups: skippedGroups,
-        duration_seconds: Math.max(0, Math.round((Date.now() - startedAt) / 1000)),
-      },
-    })
-    console.info('[auto-dedupe] finished', {
-      runId,
-      mergedGroups,
-      mergedLosers,
-      skippedGroups,
-      durationSeconds: Math.max(0, Math.round((Date.now() - startedAt) / 1000)),
-    })
-  }
-}
-
-// Build metadata endpoint (public, no secrets)
-// NOTE: This endpoint is used to confirm production is on the expected commit.
 app.get('/api/meta/build', (_req, res) => {
   res.json({
-    sha: resolveBuildSha(),
+    sha: _resolveBuildSha(),
     built_at:
       process.env.BUILD_TIMESTAMP ||
       process.env.RAILWAY_DEPLOYMENT_START_TIME ||
@@ -1639,43 +682,15 @@ if (process.env.NODE_ENV !== 'test') {
   });
 
   server.on('listening', () => {
-    const loggedCorsOrigins = Array.isArray(corsOptions.origin) ? corsOptions.origin : [corsOptions.origin];
+    const loggedCorsOrigins = Array.isArray(corsOptions.origin)
+      ? corsOptions.origin
+      : [corsOptions.origin];
     console.log(`CORS origins: ${loggedCorsOrigins.join(', ')}`);
     const actualPort = server.address()?.port ?? PORT;
     console.log('[Server] Ready on port', actualPort);
 
-    // Auto-heal Postgres CHECK constraints that may be outdated if migrations haven't run.
-    if (db.dialect === 'postgres') {
-      (async () => {
-        try {
-          await db.exec(`
-            ALTER TABLE funding_opportunities
-              DROP CONSTRAINT IF EXISTS funding_opportunities_record_origin_check;
-            ALTER TABLE funding_opportunities
-              ADD CONSTRAINT funding_opportunities_record_origin_check
-              CHECK (${allowedOriginCheckSQL()});
-          `)
-          console.log('[startup] record_origin CHECK constraint verified/expanded')
-        } catch (e) {
-          console.warn('[startup] record_origin constraint fix skipped:', e?.message)
-        }
-
-        try {
-          await db.exec(`
-            ALTER TABLE grants DROP CONSTRAINT IF EXISTS grants_status_check;
-            ALTER TABLE grants ADD CONSTRAINT grants_status_check CHECK (status IN (
-              'discovery','discovered','interested','auto_applied','drafting',
-              'application_prep','revision','portal','submitted','pending_review',
-              'follow_up','awarded','report','declined_no_review','declined','closed',
-              'app_prep','under_review','rejected','archived'
-            ));
-          `)
-          console.log('[startup] grants status CHECK constraint verified/expanded')
-        } catch (e) {
-          console.warn('[startup] grants status constraint fix skipped:', e?.message)
-        }
-      })()
-    }
+    // ── Phase 3: Queue recovery ───────────────────────────────────────────────
+    runQueueRecovery({ db, uploadsDir });
 
     // Reset jobs stuck in 'running' from a previous process crash/restart (no persistent worker).
     (async () => {

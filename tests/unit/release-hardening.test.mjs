@@ -26,9 +26,15 @@ test('geo endpoints no longer hard-fail when zip dataset missing', () => {
 
 test('uploads are configurable via UPLOADS_DIR', () => {
   const server = read('backend/server.js')
+  const bootstrap = fs.existsSync(path.resolve(process.cwd(), 'backend/startup/bootstrap.js'))
+    ? read('backend/startup/bootstrap.js')
+    : ''
   const profiles = read('backend/routes/profiles.js')
   const uploadsPath = read('backend/utils/uploadsPath.js')
-  assert.ok(server.includes('process.env.UPLOADS_DIR'), 'backend/server.js should honor UPLOADS_DIR')
+  assert.ok(
+    server.includes('process.env.UPLOADS_DIR') || bootstrap.includes('process.env.UPLOADS_DIR'),
+    'backend/server.js or bootstrap.js should honor UPLOADS_DIR',
+  )
   assert.ok(
     profiles.includes('resolveUploadsDir') || profiles.includes('getUploadsDir'),
     'backend/routes/profiles.js should honor UPLOADS_DIR via uploadsPath utility',
