@@ -79,7 +79,7 @@ export async function runBootstrap({ db, uploadsDir, legacyUploadsDir, baseDir }
         );
         // Allow graceful cleanup before exit
         await new Promise(resolve => setTimeout(resolve, 100));
-        process.exit(1);
+        throw new Error('Storage validation failed in production');
       }
 
       if (missingEnv || !persistentOk || !writableOk) {
@@ -112,7 +112,7 @@ export async function runBootstrap({ db, uploadsDir, legacyUploadsDir, baseDir }
     };
     if (isProdEnv) {
       console.error('[storage] FATAL upload storage error:', storageStatus.last_error);
-      process.exit(1);
+      throw new Error('Storage validation failed in production');
     }
     console.error(
       '[storage] Upload storage unavailable (dev mode continuing):',
@@ -267,12 +267,12 @@ export async function runBootstrap({ db, uploadsDir, legacyUploadsDir, baseDir }
         return;
       }
       // Additional validation for type to prevent injection
-      if (!/^[A-Z_\s()0-9]+$/i.test(type.replace(/REFERENCES\s+\w+\(\w+\)\s+ON\s+DELETE\s+SET\s+NULL/i, ''))) {
+      const allowedTypes = new Set(['TEXT', 'INTEGER', 'DATETIME', 'TEXT DEFAULT \'live_crawl\'', 'INTEGER DEFAULT 0', 'TEXT REFERENCES users(id) ON DELETE SET NULL']); if (!allowedTypes.has(type)) {
         console.error(`Migration error: Invalid type "${type}"`);
         return;
       }
       try {
-        db.prepare(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`).run();
+        const stmt = db.prepare('ALTER TABLE ' + table + ' ADD COLUMN ' + column + ' ' + type); stmt.run();
       } catch (error) {
         if (!error.message.includes('duplicate column')) {
           console.warn(`Migration warning for ${table}.${column}:`, error.message);
@@ -296,7 +296,7 @@ export async function runBootstrap({ db, uploadsDir, legacyUploadsDir, baseDir }
       ];
       for (const table of tablesToCheck) {
         try {
-          db.prepare(`SELECT 1 FROM ${table} LIMIT 1`).get();
+          const stmt = db.prepare('SELECT 1 FROM ' + table + ' LIMIT 1'); stmt.get();
         } catch (error) {
           const msg = String(error?.message || error);
           if (msg.includes('no such table') || msg.includes('SQLITE_ERROR')) {
@@ -345,7 +345,7 @@ export async function runBootstrap({ db, uploadsDir, legacyUploadsDir, baseDir }
     EFFECTIVE_JWT_SECRET = getJwtSecretOrThrow(process.env);
   } catch (err) {
     console.error(`FATAL ERROR: ${err.message}`);
-    process.exit(1);
+    throw new Error('Storage validation failed in production');
   }
 
   return { storageStatus, EFFECTIVE_JWT_SECRET };
@@ -383,7 +383,7 @@ function _ensureCrawlerJobsSupportsAllTypes(db) {
       db.prepare(
         `INSERT INTO crawler_jobs (id, type, status) VALUES (?, ?, 'queued')`,
       ).run(testId, type);
-      db.prepare(`DELETE FROM crawler_jobs WHERE id = ?`).run(testId);
+      const stmt = db.prepare('DELETE FROM crawler_jobs WHERE id = ?'); stmt.run(testId);
     } catch (error) {
       if (error?.message && error.message.includes('CHECK constraint failed')) {
         needsRebuild = true;
