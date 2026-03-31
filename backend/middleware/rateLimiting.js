@@ -1,12 +1,17 @@
 import rateLimit from 'express-rate-limit';
 import { RATE_LIMIT_WINDOW_MS, RATE_LIMIT_MAX_REQUESTS, MUTATION_RATE_LIMIT_MAX } from '../config/constants.js';
 
+// Fallback defaults if constants are undefined
+const windowMs = RATE_LIMIT_WINDOW_MS || 15 * 60 * 1000; // 15 minutes
+const maxRequests = RATE_LIMIT_MAX_REQUESTS || 100;
+const mutationMax = MUTATION_RATE_LIMIT_MAX || 20;
+
 /**
  * Standard rate limiter for general API requests
  */
 export const standardRateLimiter = rateLimit({
-  windowMs: RATE_LIMIT_WINDOW_MS,
-  max: RATE_LIMIT_MAX_REQUESTS,
+  windowMs: windowMs,
+  max: maxRequests,
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: 'Too many requests, please try again later' }
@@ -16,8 +21,8 @@ export const standardRateLimiter = rateLimit({
  * Stricter rate limiter for mutation operations (POST, PUT, PATCH, DELETE)
  */
 export const mutationRateLimiter = rateLimit({
-  windowMs: RATE_LIMIT_WINDOW_MS,
-  max: MUTATION_RATE_LIMIT_MAX,
+  windowMs: windowMs,
+  max: mutationMax,
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: 'Too many mutation requests, please try again later' },
