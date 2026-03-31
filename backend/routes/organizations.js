@@ -13,6 +13,7 @@ import { COMPREHENSIVE_APPLICATION_DEFAULTS } from '../config/comprehensiveAppli
 import { getAccessibleOrganizationIds, isAdminUser, ensureOrganizationAccess, requireAuthenticatedUser } from '../utils/accessControl.js'
 
 const router = express.Router();
+router.use(ensureAuth); // Apply auth to all routes
 
 // Whitelist of allowed columns for UPDATE operations
 const ALLOWED_ORGANIZATION_COLUMNS = new Set([
@@ -102,8 +103,13 @@ async function ensureCanonicalSections(db, profileId, updatedBy = 'org-sync') {
         `
   const insert = db.prepare(sql)
   for (const sectionKey of canonicalSectionKeys) {
-    const defaults = CANONICAL_SECTION_DEFAULTS[sectionKey] ?? {}
-    await insert.run(profileId, sectionKey, JSON.stringify(defaults), updatedBy)
+    try {
+      const defaults = CANONICAL_SECTION_DEFAULTS[sectionKey] ?? {}
+      await insert.run(profileId, sectionKey, JSON.stringify(defaults), updatedBy)
+    } catch (error) {
+      console.error(`Failed to insert profile section ${sectionKey}:`, error)
+      throw error
+    }
   }
 }
 
@@ -126,7 +132,12 @@ async function upsertProfileSection(db, profileId, sectionKey, data, updatedBy =
             updated_by = excluded.updated_by,
             updated_at = CURRENT_TIMESTAMP
         `
-  await db.prepare(sql).run(profileId, sectionKey, JSON.stringify(data ?? {}), updatedBy)
+  try {
+    await db.prepare(sql).run(profileId, sectionKey, JSON.stringify(data ?? {}), updatedBy)
+  } catch (error) {
+    console.error(`Failed to upsert profile section ${sectionKey}:`, error)
+    throw error
+  }
 }
 
 async function syncOrganizationToProfileSections(db, { organizationId, orgRow, payload, actor }) {
@@ -218,9 +229,14 @@ async function syncOrganizationToProfileSections(db, { organizationId, orgRow, p
     'org-sync',
   )
 
-  await db
-    .prepare('UPDATE profiles SET updated_at = CURRENT_TIMESTAMP WHERE id = ?')
-    .run(profileId)
+  try {
+    await db
+      .prepare('UPDATE profiles SET updated_at = CURRENT_TIMESTAMP WHERE id = ?')
+      .run(profileId)
+  } catch (error) {
+    console.error('Failed to update profile timestamp:', error)
+    throw error
+  }
 
   return profileId
 }
@@ -243,9 +259,13 @@ router.get('/', ensureAuth, async (req, res) => {
       if (!orgIds || orgIds.size === 0) {
         return res.json([])
       }
-      const placeholders = Array.from(orgIds).map(() => '?').join(', ')
-      query += ` AND id IN (${placeholders})`
-      params.push(...Array.from(orgIds))
+      if (orgIds.size > 0) {
+        const placeholders = Array.from(orgIds).map(() => '?').join(', ')
+        query += ` AND id IN (${placeholders})`
+        params.push(...Array.from(orgIds))
+      } else {
+        query += ' AND 1=0' // No accessible orgs
+      }
     }
     
     if (search) {
@@ -267,7 +287,13 @@ router.get('/', ensureAuth, async (req, res) => {
     query += ' ORDER BY created_at DESC LIMIT ? OFFSET ?';
     params.push(limit, offset);
     
-    const orgs = await req.db.prepare(query).all(...params);
+    let orgs;
+    try {
+      orgs = await req.db.prepare(query).all(...params);
+    } catch (error) {
+      console.error('Database query failed:', error);
+      throw error;
+    }
     
     // Parse JSON fields safely
     const parsed = orgs.map(org => ({
