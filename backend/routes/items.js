@@ -6,8 +6,7 @@ import { formatError } from '../middleware/errorHandler.js'
 const router = express.Router()
 
 router.get('/suggestions', async (req, res) => {
-  const user = requireAuthenticatedUser(req, res)
-  if (!user) return
+  if (!requireAuthenticatedUser(req, res)) return
 
   try {
     const profileIdRaw = req.query.profile_id ? String(req.query.profile_id) : null
@@ -35,8 +34,7 @@ router.get('/suggestions', async (req, res) => {
 
 // Admin/manual trigger: discover new items from existing DB opportunities
 router.post('/discover', async (req, res) => {
-  const user = requireAuthenticatedUser(req, res)
-  if (!user) return
+  if (!requireAuthenticatedUser(req, res)) return
   if (!req.ctx?.isAdmin) return res.status(403).json({ error: 'Admin privileges required' })
 
   try {
@@ -52,8 +50,7 @@ router.post('/discover', async (req, res) => {
 
 // Lightweight admin/debug endpoint: ensure catalog exists (idempotent)
 router.post('/seed', async (req, res) => {
-  const user = requireAuthenticatedUser(req, res)
-  if (!user) return
+  if (!requireAuthenticatedUser(req, res)) return
   if (!req.ctx?.isAdmin) return res.status(403).json({ error: 'Admin privileges required' })
 
   try {
