@@ -10,15 +10,19 @@ function normalizeWhitespace(text) {
 }
 
 export async function parsePdfToText(buffer) {
-  const data = await pdfParse(buffer)
-  const text = normalizeWhitespace(data?.text || '')
-  const extractedText = text.length > 200000 ? text.slice(0, 200000) : text
-  return {
-    contentType: 'application/pdf',
-    title: null,
-    h1: null,
-    extractedText,
-    links: [],
+  try {
+    const data = await pdfParse(buffer)
+    const text = normalizeWhitespace(data?.text || '')
+    const extractedText = text.length > 200000 ? text.slice(0, 200000) : text
+    return {
+      contentType: 'application/pdf',
+      title: null,
+      h1: null,
+      extractedText,
+      links: [],
+    }
+  } catch (error) {
+    throw new Error(`PDF parsing failed: ${error.message}`)
   }
 }
 
