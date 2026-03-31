@@ -19,8 +19,14 @@ const DIRECTORY_RESOURCES = [
 
 export async function runHousingCommunityFinanceEngine(profile, options = {}) {
   try {
-    return normalizeAndFilter(DIRECTORY_RESOURCES, ENGINE_ID, { strict_no_loans: false, strict_no_matching: false })
-  } catch {
+    const filtered = DIRECTORY_RESOURCES.filter(resource => {
+      if (profile.location?.rural && !resource.categories.includes('rural')) return false
+      if (profile.needs?.includes('housing') || profile.needs?.includes('rental')) return true
+      return false
+    })
+    return normalizeAndFilter(filtered, ENGINE_ID, { strict_no_loans: false, strict_no_matching: false })
+  } catch (error) {
+    console.error(`Housing engine error: ${error.message}`)
     return []
   }
 }
