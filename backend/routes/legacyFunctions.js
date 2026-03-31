@@ -84,7 +84,8 @@ async function loadOrganizationLocation(db, organizationId) {
       .prepare('SELECT state, zip FROM organizations WHERE id = ? LIMIT 1')
       .get(String(organizationId))
     return { state: row?.state ?? null, zip: row?.zip ?? null }
-  } catch {
+  } catch (error) {
+    console.warn('[loadOrganizationLocation] Database error:', error?.message)
     return { state: null, zip: null }
   }
 }
@@ -179,6 +180,7 @@ router.post('/crawlGrantsGov', async (req, res) => {
         metadata: { ...result, completed_at: nowIso() },
       })
     } catch (error) {
+      console.error('[crawlGrantsGov] Background crawl failed:', error?.message || error)
       await updateCrawlLog(req.db, {
         id: logId,
         status: 'error',
@@ -309,6 +311,7 @@ router.post('/crawlBenefitsGov', async (req, res) => {
         metadata: { completed_at: nowIso(), state: resolvedState },
       })
     } catch (error) {
+      console.error('[crawlGrantsGov] Background crawl failed:', error?.message || error)
       await updateCrawlLog(req.db, {
         id: logId,
         status: 'error',
