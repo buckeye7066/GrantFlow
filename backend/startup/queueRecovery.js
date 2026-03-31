@@ -22,8 +22,7 @@ export function runQueueRecovery({ db, uploadsDir }) {
   ;(async () => {
     try {
       if (db.dialect === 'postgres') {
-        const r = db
-          .prepare(
+        const r = await db.query(
             `
               UPDATE crawler_jobs
               SET status = 'failed',
@@ -31,9 +30,8 @@ export function runQueueRecovery({ db, uploadsDir }) {
                   completed_at = NOW()
               WHERE status = 'running'
                 AND started_at < (NOW() - INTERVAL '30 minutes')
-            `,
-          )
-          .run();
+            `
+          );
         if (r?.changes > 0)
           console.log(`[startup] Reset ${r.changes} stuck crawler job(s)`);
       } else {
@@ -163,7 +161,7 @@ export function runQueueRecovery({ db, uploadsDir }) {
 
         for (const job of queued) {
           try {
-            dispatchCrawlerJob({
+            await dispatchCrawlerJob({
               db,
               jobId: job.id,
               uploadDir: uploadsDir,
@@ -241,7 +239,7 @@ async function _drainQueuedJobsGradually(dbRef, uploadsDirRef) {
   for (let i = 0; i < queued.length; i++) {
     if (i > 0) await new Promise((r) => setTimeout(r, STAGGER_DELAY_MS));
     try {
-      dispatchCrawlerJob({
+      await dispatchCrawlerJob({
         db: dbRef,
         jobId: queued[i].id,
         uploadDir: uploadsDirRef,
