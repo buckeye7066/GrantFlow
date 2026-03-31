@@ -101,13 +101,14 @@ router.get('/', async (req, res) => {
       const insertSql =
         dialect === 'postgres'
           ? `
-              INSERT INTO user_preferences (id, user_id, custom_preferences)
-              VALUES (?, ?, ?::jsonb)
+              INSERT INTO user_preferences (id, user_id, sidebar_position, sidebar_collapsed, dashboard_layout, card_density, table_row_density, theme, accent_color, sidebar_color_scheme, high_contrast, default_landing_page, items_per_page, date_format, currency_display, timezone, email_notifications, grant_deadline_reminder_days, weekly_digest, browser_notifications, font_size, reduce_motion, screen_reader_optimized, custom_preferences)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb)
             `
           : `
-              INSERT INTO user_preferences (id, user_id, custom_preferences)
-              VALUES (?, ?, ?)
+              INSERT INTO user_preferences (id, user_id, sidebar_position, sidebar_collapsed, dashboard_layout, card_density, table_row_density, theme, accent_color, sidebar_color_scheme, high_contrast, default_landing_page, items_per_page, date_format, currency_display, timezone, email_notifications, grant_deadline_reminder_days, weekly_digest, browser_notifications, font_size, reduce_motion, screen_reader_optimized, custom_preferences)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `
+      await req.db.prepare(insertSql).run(id, userId, DEFAULT_PREFERENCES.sidebar_position, DEFAULT_PREFERENCES.sidebar_collapsed, DEFAULT_PREFERENCES.dashboard_layout, DEFAULT_PREFERENCES.card_density, DEFAULT_PREFERENCES.table_row_density, DEFAULT_PREFERENCES.theme, DEFAULT_PREFERENCES.accent_color, DEFAULT_PREFERENCES.sidebar_color_scheme, DEFAULT_PREFERENCES.high_contrast, DEFAULT_PREFERENCES.default_landing_page, DEFAULT_PREFERENCES.items_per_page, DEFAULT_PREFERENCES.date_format, DEFAULT_PREFERENCES.currency_display, DEFAULT_PREFERENCES.timezone, DEFAULT_PREFERENCES.email_notifications, DEFAULT_PREFERENCES.grant_deadline_reminder_days, DEFAULT_PREFERENCES.weekly_digest, DEFAULT_PREFERENCES.browser_notifications, DEFAULT_PREFERENCES.font_size, DEFAULT_PREFERENCES.reduce_motion, DEFAULT_PREFERENCES.screen_reader_optimized, JSON.stringify(defaultCustom))
       await req.db.prepare(insertSql).run(id, userId, JSON.stringify(defaultCustom))
       preferences = await req.db
         .prepare('SELECT * FROM user_preferences WHERE id = ?')
@@ -168,17 +169,21 @@ router.put('/', async (req, res) => {
     let existing = await req.db.prepare('SELECT id FROM user_preferences WHERE user_id = ?').get(userId)
     if (!existing?.id) {
       const id = `pref-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
+      const defaultCustom = {
+        feature_flags: { anyaCopilotEnabled: true, anyaScreenshotEnabled: false },
+        incognitoEnabled: false,
+      }
       const insertSql =
         dialect === 'postgres'
           ? `
-              INSERT INTO user_preferences (id, user_id, custom_preferences)
-              VALUES (?, ?, ?::jsonb)
+              INSERT INTO user_preferences (id, user_id, sidebar_position, sidebar_collapsed, dashboard_layout, card_density, table_row_density, theme, accent_color, sidebar_color_scheme, high_contrast, default_landing_page, items_per_page, date_format, currency_display, timezone, email_notifications, grant_deadline_reminder_days, weekly_digest, browser_notifications, font_size, reduce_motion, screen_reader_optimized, custom_preferences)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb)
             `
           : `
-              INSERT INTO user_preferences (id, user_id, custom_preferences)
-              VALUES (?, ?, ?)
+              INSERT INTO user_preferences (id, user_id, sidebar_position, sidebar_collapsed, dashboard_layout, card_density, table_row_density, theme, accent_color, sidebar_color_scheme, high_contrast, default_landing_page, items_per_page, date_format, currency_display, timezone, email_notifications, grant_deadline_reminder_days, weekly_digest, browser_notifications, font_size, reduce_motion, screen_reader_optimized, custom_preferences)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `
-      await req.db.prepare(insertSql).run(id, userId, JSON.stringify({}))
+      await req.db.prepare(insertSql).run(id, userId, DEFAULT_PREFERENCES.sidebar_position, DEFAULT_PREFERENCES.sidebar_collapsed, DEFAULT_PREFERENCES.dashboard_layout, DEFAULT_PREFERENCES.card_density, DEFAULT_PREFERENCES.table_row_density, DEFAULT_PREFERENCES.theme, DEFAULT_PREFERENCES.accent_color, DEFAULT_PREFERENCES.sidebar_color_scheme, DEFAULT_PREFERENCES.high_contrast, DEFAULT_PREFERENCES.default_landing_page, DEFAULT_PREFERENCES.items_per_page, DEFAULT_PREFERENCES.date_format, DEFAULT_PREFERENCES.currency_display, DEFAULT_PREFERENCES.timezone, DEFAULT_PREFERENCES.email_notifications, DEFAULT_PREFERENCES.grant_deadline_reminder_days, DEFAULT_PREFERENCES.weekly_digest, DEFAULT_PREFERENCES.browser_notifications, DEFAULT_PREFERENCES.font_size, DEFAULT_PREFERENCES.reduce_motion, DEFAULT_PREFERENCES.screen_reader_optimized, JSON.stringify(defaultCustom))
     }
 
     const updates = []
@@ -257,14 +262,14 @@ router.post('/reset', async (req, res) => {
     const insertSql =
       dialect === 'postgres'
         ? `
-            INSERT INTO user_preferences (id, user_id, custom_preferences)
-            VALUES (?, ?, ?::jsonb)
+            INSERT INTO user_preferences (id, user_id, sidebar_position, sidebar_collapsed, dashboard_layout, card_density, table_row_density, theme, accent_color, sidebar_color_scheme, high_contrast, default_landing_page, items_per_page, date_format, currency_display, timezone, email_notifications, grant_deadline_reminder_days, weekly_digest, browser_notifications, font_size, reduce_motion, screen_reader_optimized, custom_preferences)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb)
           `
         : `
-            INSERT INTO user_preferences (id, user_id, custom_preferences)
-            VALUES (?, ?, ?)
+            INSERT INTO user_preferences (id, user_id, sidebar_position, sidebar_collapsed, dashboard_layout, card_density, table_row_density, theme, accent_color, sidebar_color_scheme, high_contrast, default_landing_page, items_per_page, date_format, currency_display, timezone, email_notifications, grant_deadline_reminder_days, weekly_digest, browser_notifications, font_size, reduce_motion, screen_reader_optimized, custom_preferences)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           `
-    await req.db.prepare(insertSql).run(id, userId, JSON.stringify({}))
+    await req.db.prepare(insertSql).run(id, userId, DEFAULT_PREFERENCES.sidebar_position, DEFAULT_PREFERENCES.sidebar_collapsed, DEFAULT_PREFERENCES.dashboard_layout, DEFAULT_PREFERENCES.card_density, DEFAULT_PREFERENCES.table_row_density, DEFAULT_PREFERENCES.theme, DEFAULT_PREFERENCES.accent_color, DEFAULT_PREFERENCES.sidebar_color_scheme, DEFAULT_PREFERENCES.high_contrast, DEFAULT_PREFERENCES.default_landing_page, DEFAULT_PREFERENCES.items_per_page, DEFAULT_PREFERENCES.date_format, DEFAULT_PREFERENCES.currency_display, DEFAULT_PREFERENCES.timezone, DEFAULT_PREFERENCES.email_notifications, DEFAULT_PREFERENCES.grant_deadline_reminder_days, DEFAULT_PREFERENCES.weekly_digest, DEFAULT_PREFERENCES.browser_notifications, DEFAULT_PREFERENCES.font_size, DEFAULT_PREFERENCES.reduce_motion, DEFAULT_PREFERENCES.screen_reader_optimized, JSON.stringify({ feature_flags: { anyaCopilotEnabled: true, anyaScreenshotEnabled: false }, incognitoEnabled: false }))
     
     const preferences = await req.db
       .prepare('SELECT * FROM user_preferences WHERE id = ?')
