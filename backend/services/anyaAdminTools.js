@@ -373,7 +373,7 @@ export async function adminCodeAnalyze({ filePath }, context) {
     throw new Error('filePath is required')
   }
 
-  const resolvedPath = path.resolve(REPO_ROOT, filePath)
+  const resolvedPath = path.resolve(REPO_ROOT, filePath); if (!resolvedPath.startsWith(REPO_ROOT)) { throw new Error('Path outside repository root not allowed'); }; if (!resolvedPath.startsWith(REPO_ROOT)) { throw new Error('Path outside repository root not allowed'); }
   const relativePath = path.relative(REPO_ROOT, resolvedPath)
 
   try {
@@ -460,7 +460,7 @@ export async function adminCodeEdit({ filePath, changes, save = false }, context
     }
   }
 
-  const resolvedPath = path.resolve(REPO_ROOT, filePath)
+  const resolvedPath = path.resolve(REPO_ROOT, filePath); if (!resolvedPath.startsWith(REPO_ROOT)) { throw new Error('Path outside repository root not allowed'); }; if (!resolvedPath.startsWith(REPO_ROOT)) { throw new Error('Path outside repository root not allowed'); }
   const relativePath = path.relative(REPO_ROOT, resolvedPath)
 
   // Ensure file is within allowed directories for safety
@@ -523,7 +523,7 @@ export async function adminCodeEdit({ filePath, changes, save = false }, context
         backupDir,
         `${path.basename(filePath)}.${timestamp}.backup`
       )
-      await fs.writeFile(backupPath, content, 'utf8')
+      try { await fs.writeFile(backupPath, content, 'utf8') } catch (err) { throw new Error(`Backup failed: ${err.message}`) }
 
       // Apply changes
       const modifiedLines = [...lines]
@@ -539,7 +539,7 @@ export async function adminCodeEdit({ filePath, changes, save = false }, context
       })
 
       const newContent = modifiedLines.join('\n')
-      await fs.writeFile(resolvedPath, newContent, 'utf8')
+      try { await fs.writeFile(resolvedPath, newContent, 'utf8') } catch (err) { throw new Error(`File write failed: ${err.message}`) }
 
       return {
         file: relativePath,
@@ -974,7 +974,7 @@ export async function adminDbStats(_params, context) {
           tableCounts[table.name] = 'Error: Invalid table name'
           return
         }
-        const count = db.prepare(`SELECT COUNT(*) as count FROM ${table.name}`).get()
+        if (!/^[a-zA-Z0-9_]+$/.test(table.name)) { tableCounts[table.name] = 'Invalid table name'; continue; } const count = db.prepare(`SELECT COUNT(*) as count FROM ${table.name}`).get()
         tableCounts[table.name] = count.count
       } catch (error) {
         tableCounts[table.name] = `Error: ${error.message}`
