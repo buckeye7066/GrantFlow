@@ -424,7 +424,7 @@ export async function createSession(db, user, { profileId, title, metadata } = {
   }
 
   const id = randomUUID()
-  const userIdForFk = await resolveExistingUserId(db, user)
+  const userIdForFk = user.isAdmin && user.userId?.startsWith('admin-') ? null : await resolveExistingUserId(db, user)
   let info
   try {
     info = await db
@@ -871,13 +871,17 @@ export async function generateAssistantResponse(db, user, sessionId, { content }
     '/health',
   ]
 
-  const isHealthQuery = isAdmin && healthKeywords.some(keyword => lowerContent.includes(keyword))
+  const isHealthQuery = isAdmin && user.email === ADMIN_EMAIL && healthKeywords.some(keyword => lowerContent.includes(keyword))
 
  if (isHealthQuery) {
   try {
     const { invokeTool: invokeRegisteredTool } = await import('./anyaToolRegistry.js')
     console.log('[Anya] Health query detected, invoking system.health tool')
-    const healthData = await invokeRegisteredTool('system.health', {}, { db, user })
+    const availableTools = listToolMetadata(user)
+if (!availableTools.find(t => t.name === 'system.health')) {
+  throw new Error('system.health tool not available')
+}
+const healthData = await invokeRegisteredTool('system.health', {}, { db, user })
 
     // Format the health data into a human-readable response.
     // IMPORTANT: system.health may return different shapes depending on auth level or internal errors.
@@ -1046,19 +1050,24 @@ export async function generateAssistantResponse(db, user, sessionId, { content }
     try {
       console.log('[Anya] Calling OpenAI API with model:', DEFAULT_ASSISTANT_MODEL)
       const response = await openAIBreaker.exec(
-        async () =>
-          await openai.chat.completions.create({
+        async () => {
+          const response = await openai.chat.completions.create({
             model: DEFAULT_ASSISTANT_MODEL,
             messages: [{ role: 'system', content: systemPrompt }, ...conversationMessages],
             temperature: 0.3,
             max_tokens: 1000,
-          }),
+          })
+          if (!response || !response.choices || !response.choices[0]) {
+            throw new Error('Empty OpenAI response')
+          }
+          return response
+        },
         {
           shouldTrip: (err) => {
             const summary = summarizeOpenAIError(err)
             if (summary.isAuth || summary.isRateLimit) return true
             const status = summary.status
-            return status == null || status >= 500
+            return (status != null && status >= 500) || summary.isServerError
           },
         },
       )
