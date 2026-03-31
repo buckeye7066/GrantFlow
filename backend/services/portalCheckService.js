@@ -294,13 +294,17 @@ async function checkPortal(portal) {
 async function syncAwardToProfile(db, profileId, update) {
   if (!update.applicationId) return
 
-  const row = await db
-    .prepare(
-      `SELECT data FROM profile_sections
+  const row = await new Promise((resolve, reject) => {
+    try {
+      const stmt = db.prepare(`SELECT data FROM profile_sections
        WHERE profile_id = ? AND section_key = 'university_applications'
-       LIMIT 1`,
-    )
-    .get(profileId)
+       LIMIT 1`)
+      const result = stmt.get(profileId)
+      resolve(result)
+    } catch (err) {
+      reject(err)
+    }
+  })
 
   if (!row?.data) return
 
@@ -353,16 +357,20 @@ async function syncAwardToProfile(db, profileId, update) {
   nextApps.splice(idx, 1, app)
   const nextPayload = { ...(parsed || {}), applications: nextApps }
 
-  await db
-    .prepare(
-      `INSERT INTO profile_sections (profile_id, section_key, data, updated_by)
+  await new Promise((resolve, reject) => {
+    try {
+      const stmt = db.prepare(`INSERT INTO profile_sections (profile_id, section_key, data, updated_by)
        VALUES (?, 'university_applications', ?, 'portal_check')
        ON CONFLICT(profile_id, section_key) DO UPDATE SET
          data = excluded.data,
          updated_at = CURRENT_TIMESTAMP,
-         updated_by = excluded.updated_by`,
-    )
-    .run(profileId, JSON.stringify(nextPayload))
+         updated_by = excluded.updated_by`)
+      const result = stmt.run(profileId, JSON.stringify(nextPayload))
+      resolve(result)
+    } catch (err) {
+      reject(err)
+    }
+  })
 }
 
 // ---------------------------------------------------------------------------
@@ -374,13 +382,17 @@ async function storePortalCheckResult(db, { profileId, portalName, portalUrl, ch
   const checkedAt = new Date().toISOString()
 
   try {
-    await db
-      .prepare(
-        `INSERT INTO portal_check_results
+    await new Promise((resolve, reject) => {
+    try {
+      const stmt = db.prepare(`INSERT INTO portal_check_results
            (id, profile_id, portal_name, portal_url, check_type, status, awards_detected, results_json, checked_at)
-         VALUES (?, ?, ?, ?, ?, 'completed', ?, ?, ?)`,
-      )
-      .run(id, profileId, portalName, portalUrl || null, checkType || 'scheduled', awardsDetected, resultsJson, checkedAt)
+         VALUES (?, ?, ?, ?, ?, 'completed', ?, ?, ?)`)
+      const result = stmt.run(id, profileId, portalName, portalUrl || null, checkType || 'scheduled', awardsDetected, resultsJson, checkedAt)
+      resolve(result)
+    } catch (err) {
+      reject(err)
+    }
+  })
   } catch (err) {
     console.warn('[portal-check] failed to store result:', err?.message)
   }
@@ -398,23 +410,31 @@ export async function getPortalCheckStatus(db, profileId) {
 
     const isPostgres = db?.dialect === 'postgres'
     const rows = isPostgres
-      ? await db
-          .prepare(
-            `SELECT DISTINCT ON (portal_url)
+      ? await new Promise((resolve, reject) => {
+          try {
+            const stmt = db.prepare(`SELECT DISTINCT ON (portal_url)
                portal_name, portal_url, awards_detected, checked_at
              FROM portal_check_results
              WHERE profile_id = ?
-             ORDER BY portal_url, checked_at DESC`,
-          )
-          .all(profileId)
-      : await db
-          .prepare(
-            `SELECT portal_name, portal_url, awards_detected, MAX(checked_at) as checked_at
+             ORDER BY portal_url, checked_at DESC`)
+            const result = stmt.all(profileId)
+            resolve(result)
+          } catch (err) {
+            reject(err)
+          }
+        })
+      : await new Promise((resolve, reject) => {
+          try {
+            const stmt = db.prepare(`SELECT portal_name, portal_url, awards_detected, MAX(checked_at) as checked_at
              FROM portal_check_results
              WHERE profile_id = ?
-             GROUP BY portal_url`,
-          )
-          .all(profileId)
+             GROUP BY portal_url`)
+            const result = stmt.all(profileId)
+            resolve(result)
+          } catch (err) {
+            reject(err)
+          }
+        })
 
     return rows || []
   } catch {
@@ -444,9 +464,15 @@ export async function runPortalCheck(db, profileId, options = {}) {
   await ensurePortalCheckResultsTable(db)
 
   // Load profile sections
-  const sectionsRows = await db
-    .prepare(`SELECT section_key, data FROM profile_sections WHERE profile_id = ?`)
-    .all(profileId)
+  const sectionsRows = await new Promise((resolve, reject) => {
+    try {
+      const stmt = db.prepare(`SELECT section_key, data FROM profile_sections WHERE profile_id = ?`)
+      const result = stmt.all(profileId)
+      resolve(result)
+    } catch (err) {
+      reject(err)
+    }
+  })
 
   const profileSections = {}
   for (const row of sectionsRows || []) {
@@ -458,9 +484,15 @@ export async function runPortalCheck(db, profileId, options = {}) {
   }
 
   // Get state from profile
-  const profile = await db
-    .prepare(`SELECT * FROM profiles WHERE id = ? LIMIT 1`)
-    .get(profileId)
+  const profile = await new Promise((resolve, reject) => {
+    try {
+      const stmt = db.prepare(`SELECT * FROM profiles WHERE id = ? LIMIT 1`)
+      const result = stmt.get(profileId)
+      resolve(result)
+    } catch (err) {
+      reject(err)
+    }
+  })
 
   const state =
     profileSections?.personal_info?.state ||
