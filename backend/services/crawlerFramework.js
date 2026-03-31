@@ -45,8 +45,18 @@ export async function runFullCrawl(db, profileId, options = {}) {
   const startedAt = Date.now();
 
   try {
-    const { runCrawler: _runCrawler } = await import('./crawlers/crawlerManager.js');
-    const result = await _runCrawler(db, profileId, {
+    let _runCrawler;
+try {
+  const module = await import('./crawlers/crawlerManager.js');
+  _runCrawler = module.runCrawler;
+  if (!_runCrawler) throw new Error('runCrawler not exported');
+} catch (importErr) {
+  throw new Error(`Failed to load crawlerManager: ${importErr.message}`);
+}
+    if (!db || typeof db !== 'object') {
+  throw new Error('Valid database connection required');
+}
+const result = await _runCrawler(db, profileId, {
       maxResults,
       minScore,
       ...(sources ? { crawlerType: sources[0] } : {}),
@@ -84,6 +94,12 @@ export async function runFullCrawl(db, profileId, options = {}) {
  * @returns {Promise<{ opportunities: Array, stats: Object }>}
  */
 export async function runFederalCrawl(db, profileId, profileContext, options = {}) {
+  if (!profileId) {
+    throw new Error('profileId is required for crawling');
+  }
+  if (!profileContext || typeof profileContext !== 'object') {
+    console.warn('[crawlerFramework] Missing profileContext - results may not be relevant');
+  }
   const { limit = 100, storeResults = true } = options;
   const startedAt = Date.now();
   const allOpportunities = [];
@@ -93,7 +109,16 @@ export async function runFederalCrawl(db, profileId, profileContext, options = {
 
   // Fetch from Grants.gov
   try {
-    const { fetchGrantsGov: _fetchGrantsGov } = await import('./sources/grantsGov.js');
+    let _fetchGrantsGov;
+try {
+  const module = await import('./sources/grantsGov.js');
+  _fetchGrantsGov = module.fetchGrantsGov;
+  if (!_fetchGrantsGov) throw new Error('fetchGrantsGov not exported');
+} catch (importErr) {
+  console.error('[crawlerFramework] Failed to load grantsGov:', importErr.message);
+  errors.push({ source: 'grants.gov', error: `Module load failed: ${importErr.message}` });
+  continue;
+}
     const { opportunities } = await _fetchGrantsGov({ limit: perSource, offset: 0 });
     allOpportunities.push(...opportunities);
     console.log(`[crawlerFramework] Grants.gov: ${opportunities.length} results`);
