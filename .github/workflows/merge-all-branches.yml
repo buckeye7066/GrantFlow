@@ -108,7 +108,7 @@ jobs:
           cat branches_to_merge.txt
 
       - name: Create PRs and merge branches
-        if: steps.get-branches.outputs.branch_count > 0
+        if: fromJSON(steps.get-branches.outputs.branch_count) > 0
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           DRY_RUN: ${{ inputs.dry_run }}
@@ -236,6 +236,6 @@ jobs:
           fi
 
       - name: No branches to merge
-        if: steps.get-branches.outputs.branch_count == 0
+        if: fromJSON(steps.get-branches.outputs.branch_count) == 0
         run: |
           echo "ℹ️  No branches found to merge."

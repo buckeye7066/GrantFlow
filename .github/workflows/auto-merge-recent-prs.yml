@@ -69,7 +69,7 @@ jobs:
           echo "pr_count=$PR_COUNT" >> $GITHUB_OUTPUT
 
       - name: Process and merge qualifying PRs
-        if: steps.get-prs.outputs.pr_count > 0
+        if: fromJSON(steps.get-prs.outputs.pr_count) > 0
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           DRY_RUN: ${{ inputs.dry_run || 'false' }}
@@ -160,6 +160,6 @@ jobs:
           fi
 
       - name: No PRs found
-        if: steps.get-prs.outputs.pr_count == 0
+        if: fromJSON(steps.get-prs.outputs.pr_count) == 0
         run: |
           echo "ℹ️  No pull requests found that were updated in the specified time window."
