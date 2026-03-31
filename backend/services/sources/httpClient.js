@@ -65,14 +65,14 @@ export async function fetchWithRetry(url, options = {}) {
       const isLastAttempt = attempt === maxRetries;
       
       // Don't retry on client errors (4xx)
-      if (error.response && error.response.status >= 400 && error.response.status < 500) {
-        console.error(`[httpClient] Client error ${error.response.status}, not retrying`);
+      if (error.response?.status >= 400 && error.response?.status < 500) {
+        console.error(`[httpClient] Client error ${error.response?.status || 'unknown'}, not retrying`);
         throw error;
       }
       
       if (!isLastAttempt) {
         // Calculate exponential backoff delay
-        const backoffMs = DEFAULT_BACKOFF_MS * Math.pow(2, attempt);
+        const backoffMs = Math.min(DEFAULT_BACKOFF_MS * Math.pow(2, attempt), 30000);
         console.warn(`[httpClient] Request failed, retrying in ${backoffMs}ms...`);
         await sleep(backoffMs);
       }
@@ -80,7 +80,7 @@ export async function fetchWithRetry(url, options = {}) {
   }
   
   console.error(`[httpClient] All retry attempts failed for ${url}`);
-  throw lastError;
+  throw new Error(`HTTP request failed after ${maxRetries + 1} attempts: ${lastError.message}`);
 }
 
 /**
