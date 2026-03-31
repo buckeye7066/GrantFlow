@@ -640,7 +640,10 @@ function extractSearchKeywords(profile, profileSections, intel) {
  * @returns {ProfileIntelligence}
  */
 export function buildProfileIntelligence(profile, profileSections) {
-  if (!profile) return null
+  if (!profile) {
+    console.warn('buildProfileIntelligence: null profile provided')
+    return null
+  }
 
   // Parse sections if string
   const sections = typeof profileSections === 'string'
@@ -745,7 +748,7 @@ function computeIntelligenceFingerprint(intel, inferredNeeds) {
     isNonprofit: intel.isNonprofit,
     isBusiness: intel.isBusiness,
     hardshipFlags: Array.from(intel.hardshipFlags).sort(),
-    topNeeds: (inferredNeeds ?? []).slice(0, 5).map(n => n.code),
+    topNeeds: Array.isArray(inferredNeeds) ? inferredNeeds.slice(0, 5).map(n => n.code) : [],
   }
   return crypto
     .createHash('sha256')
@@ -761,7 +764,7 @@ function computeIntelligenceFingerprint(intel, inferredNeeds) {
 export function getProfileNeedsSummary(intel) {
   if (!intel || !intel.inferredNeeds) return []
 
-  return intel.inferredNeeds
+  return (intel.inferredNeeds || [])
     .filter(n => n.confidence !== 'low')
     .map(n => {
       const def = NEEDS_TAXONOMY[n.code]
