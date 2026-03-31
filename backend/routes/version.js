@@ -21,8 +21,8 @@ function getVersionInfo() {
     const pkgPath = path.resolve(__dirname, '../../package.json')
     const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'))
     pkgVersion = pkg.version || 'unknown'
-  } catch {
-    // fallback to unknown
+  } catch (error) {
+    console.warn('[version] Could not read package.json:', error.message)
   }
 
   const version = {
@@ -45,7 +45,7 @@ function getVersionInfo() {
       version.commitShort = execSync('git rev-parse --short HEAD', { cwd: gitDir, encoding: 'utf8' }).trim()
       version.branch = execSync('git rev-parse --abbrev-ref HEAD', { cwd: gitDir, encoding: 'utf8' }).trim()
     } catch (err) {
-      // Git not available or not a git repo - use fallback
+      console.warn('[version] Git commands failed:', err.message)
       version.commitShort = version.commit.substring(0, 7)
     }
   } else {
