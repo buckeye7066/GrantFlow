@@ -10,6 +10,8 @@
  * @module needsBasedQueryExpander
  */
 
+import { fromLegacyHelpers } from './profile/canonicalSignals.js'
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function isTruthy(v) {
@@ -48,7 +50,7 @@ const SITUATION_RULES = [
     id: 'single_parent_low_income',
     conditions: {
       custom: (s) =>
-        (s.family?.has('single_parent') || s.family?.has('single mother') || s.family?.has('single father')) &&
+        (s.family?.includes('single_parent') || s.family?.includes('single mother') || s.family?.includes('single father')) &&
         s.financial?.below_poverty_line,
     },
     programs: [
@@ -78,7 +80,7 @@ const SITUATION_RULES = [
     id: 'single_parent_tennessee',
     conditions: {
       custom: (s) =>
-        (s.family?.has('single_parent') || s.family?.has('single mother') || s.family?.has('single father')) &&
+        (s.family?.includes('single_parent') || s.family?.includes('single mother') || s.family?.includes('single father')) &&
         (s.location?.state || '').toLowerCase() === 'tn',
     },
     programs: [
@@ -108,8 +110,8 @@ const SITUATION_RULES = [
     id: 'veteran_housing',
     conditions: {
       custom: (s) =>
-        (s.military?.size > 0 || s.demographics?.has('veteran')) &&
-        (s.assistance?.has('housing') || s.keywords?.includes('homeless') || s.keywords?.includes('eviction')),
+        (s.military?.length > 0 || s.demographics?.includes('veteran')) &&
+        (s.assistance?.includes('housing') || s.keywords?.includes('homeless') || s.keywords?.includes('eviction')),
     },
     programs: [
       {
@@ -138,8 +140,8 @@ const SITUATION_RULES = [
     id: 'veteran_disability',
     conditions: {
       custom: (s) =>
-        (s.military?.size > 0 || s.demographics?.has('veteran')) &&
-        (s.demographics?.has('disability') || s.health?.size > 0),
+        (s.military?.length > 0 || s.demographics?.includes('veteran')) &&
+        (s.demographics?.includes('disability') || s.health?.length > 0),
     },
     programs: [
       {
@@ -161,7 +163,7 @@ const SITUATION_RULES = [
   {
     id: 'foster_youth_education',
     conditions: {
-      custom: (s) => s.family?.has('foster') || s.keywords?.includes('foster care'),
+      custom: (s) => s.family?.includes('foster') || s.keywords?.includes('foster care'),
     },
     programs: [
       {
@@ -191,7 +193,7 @@ const SITUATION_RULES = [
     conditions: {
       custom: (s) =>
         s.financial?.below_poverty_line &&
-        (s.family?.has('children') || s.family?.has('school')) &&
+        (s.family?.includes('children') || s.family?.includes('school')) &&
         (s.location?.state || '').toLowerCase() === 'tn',
     },
     programs: [
@@ -221,8 +223,8 @@ const SITUATION_RULES = [
     id: 'disability_employment',
     conditions: {
       custom: (s) =>
-        (s.demographics?.has('disability') || s.health?.size > 0) &&
-        (s.occupation?.size > 0 || s.keywords?.includes('employment') || s.keywords?.includes('work')),
+        (s.demographics?.includes('disability') || s.health?.length > 0) &&
+        (s.occupation?.length > 0 || s.keywords?.includes('employment') || s.keywords?.includes('work')),
     },
     programs: [
       {
@@ -252,7 +254,7 @@ const SITUATION_RULES = [
     conditions: {
       custom: (s) =>
         s.financial?.below_poverty_line &&
-        (s.assistance?.has('utility') || s.assistance?.has('energy') || s.keywords?.includes('heat')),
+        (s.assistance?.includes('utility') || s.assistance?.includes('energy') || s.keywords?.includes('heat')),
     },
     programs: [
       {
@@ -275,7 +277,7 @@ const SITUATION_RULES = [
     id: 'senior_low_income',
     conditions: {
       custom: (s) =>
-        (s.demographics?.has('senior') || s.demographics?.has('elderly') || s.demographics?.has('65')) &&
+        (s.demographics?.includes('senior') || s.demographics?.includes('elderly') || s.demographics?.includes('65')) &&
         s.financial?.below_poverty_line,
     },
     programs: [
@@ -305,7 +307,7 @@ const SITUATION_RULES = [
     id: 'pregnant_low_income',
     conditions: {
       custom: (s) =>
-        (s.family?.has('pregnant') || s.demographics?.has('pregnant') || s.family?.has('newborn')) &&
+        (s.family?.includes('pregnant') || s.demographics?.includes('pregnant') || s.family?.includes('newborn')) &&
         s.financial?.below_poverty_line,
     },
     programs: [
@@ -335,10 +337,10 @@ const SITUATION_RULES = [
     id: 'immigrant_refugee',
     conditions: {
       custom: (s) =>
-        s.immigration?.size > 0 ||
-        s.demographics?.has('immigrant') ||
-        s.demographics?.has('refugee') ||
-        s.demographics?.has('daca'),
+        s.immigration?.length > 0 ||
+        s.demographics?.includes('immigrant') ||
+        s.demographics?.includes('refugee') ||
+        s.demographics?.includes('daca'),
     },
     programs: [
       {
@@ -394,7 +396,7 @@ const SITUATION_RULES = [
     id: 'domestic_violence',
     conditions: {
       custom: (s) =>
-        s.family?.has('domestic violence') || s.family?.has('dv survivor') || s.keywords?.includes('domestic violence'),
+        s.family?.includes('domestic violence') || s.family?.includes('dv survivor') || s.keywords?.includes('domestic violence'),
     },
     programs: [
       {
@@ -417,9 +419,9 @@ const SITUATION_RULES = [
     id: 'caregiver',
     conditions: {
       custom: (s) =>
-        s.occupation?.has('caregiver') ||
+        s.occupation?.includes('caregiver') ||
         s.keywords?.includes('caregiver') ||
-        s.occupation?.has('family caregiver'),
+        s.occupation?.includes('family caregiver'),
     },
     programs: [
       {
@@ -466,13 +468,13 @@ const SITUATION_RULES = [
     conditions: {
       custom: (s) =>
         (s.organization?.type === 'small_business' ||
-          s.occupation?.has('small business') ||
-          s.occupation?.has('entrepreneur')) &&
-        (s.demographics?.has('minority') ||
-          s.demographics?.has('black') ||
-          s.demographics?.has('hispanic') ||
-          s.demographics?.has('asian') ||
-          s.demographics?.has('native american')),
+          s.occupation?.includes('small business') ||
+          s.occupation?.includes('entrepreneur')) &&
+        (s.demographics?.includes('minority') ||
+          s.demographics?.includes('black') ||
+          s.demographics?.includes('hispanic') ||
+          s.demographics?.includes('asian') ||
+          s.demographics?.includes('native american')),
     },
     programs: [
       {
@@ -495,7 +497,7 @@ const SITUATION_RULES = [
     id: 'rural_agriculture',
     conditions: {
       custom: (s) =>
-        s.geographic?.has('rural') ||
+        s.geographic?.includes('rural') ||
         s.keywords?.includes('farm') ||
         s.keywords?.includes('agriculture') ||
         s.keywords?.includes('rural'),
@@ -521,7 +523,7 @@ const SITUATION_RULES = [
     id: 'high_school_college_bound_tennessee',
     conditions: {
       custom: (s) =>
-        (s.applicantType?.has('high_school_student') || s.applicantType?.has('student')) &&
+        (s.applicantTypes?.includes('high_school_student') || s.applicantTypes?.includes('student')) &&
         (s.location?.state || '').toLowerCase() === 'tn',
     },
     programs: [
@@ -551,7 +553,7 @@ const SITUATION_RULES = [
     id: 'unemployed_job_seeker',
     conditions: {
       custom: (s) =>
-        s.occupation?.has('unemployed') ||
+        s.occupation?.includes('unemployed') ||
         s.keywords?.includes('unemployed') ||
         s.keywords?.includes('job seeker') ||
         s.keywords?.includes('laid off'),
@@ -577,7 +579,7 @@ const SITUATION_RULES = [
     id: 'housing_instability',
     conditions: {
       custom: (s) =>
-        s.assistance?.has('housing') ||
+        s.assistance?.includes('housing') ||
         s.keywords?.includes('homeless') ||
         s.keywords?.includes('eviction') ||
         s.keywords?.includes('housing unstable'),
@@ -609,7 +611,7 @@ const SITUATION_RULES = [
     id: 'at_risk_youth',
     conditions: {
       custom: (s) =>
-        s.applicantType?.has('youth') ||
+        s.applicantTypes?.includes('youth') ||
         s.keywords?.includes('at-risk youth') ||
         s.keywords?.includes('runaway') ||
         s.keywords?.includes('youth homelessness'),
@@ -635,7 +637,7 @@ const SITUATION_RULES = [
     id: 'food_insecurity',
     conditions: {
       custom: (s) =>
-        s.assistance?.has('food') ||
+        s.assistance?.includes('food') ||
         s.keywords?.includes('food insecurity') ||
         s.keywords?.includes('hunger') ||
         s.keywords?.includes('food bank'),
@@ -661,7 +663,7 @@ const SITUATION_RULES = [
     id: 'medical_debt_uninsured',
     conditions: {
       custom: (s) =>
-        s.health?.size > 0 &&
+        s.health?.length > 0 &&
         (s.keywords?.includes('uninsured') ||
           s.keywords?.includes('medical debt') ||
           s.keywords?.includes('no insurance')),
@@ -739,7 +741,7 @@ const SITUATION_RULES = [
     id: 'language_barrier',
     conditions: {
       custom: (s) =>
-        s.immigration?.size > 0 ||
+        s.immigration?.length > 0 ||
         s.keywords?.includes('spanish') ||
         s.keywords?.includes('non-english') ||
         s.keywords?.includes('ESL'),
@@ -766,8 +768,8 @@ const SITUATION_RULES = [
     conditions: {
       custom: (s) =>
         s.organization?.type === 'nonprofit' ||
-        s.applicantType?.has('nonprofit') ||
-        s.applicantType?.has('organization'),
+        s.applicantTypes?.includes('nonprofit') ||
+        s.applicantTypes?.includes('organization'),
     },
     programs: [
       {
@@ -790,7 +792,7 @@ const SITUATION_RULES = [
     id: 'mental_health_low_income',
     conditions: {
       custom: (s) =>
-        (s.health?.has('mental health') || s.keywords?.includes('mental health')) &&
+        (s.health?.includes('mental health') || s.keywords?.includes('mental health')) &&
         s.financial?.below_poverty_line,
     },
     programs: [
@@ -814,7 +816,7 @@ const SITUATION_RULES = [
     id: 'college_student_financial_need',
     conditions: {
       custom: (s) =>
-        (s.applicantType?.has('college_student') || s.applicantType?.has('student')) &&
+        (s.applicantTypes?.includes('college_student') || s.applicantTypes?.includes('student')) &&
         s.financial?.below_poverty_line,
     },
     programs: [
@@ -838,7 +840,7 @@ const SITUATION_RULES = [
     id: 'child_special_needs',
     conditions: {
       custom: (s) =>
-        s.family?.has('special needs') ||
+        s.family?.includes('special needs') ||
         s.keywords?.includes('idd') ||
         s.keywords?.includes('intellectual disability') ||
         s.keywords?.includes('autism'),
@@ -870,8 +872,8 @@ const SITUATION_RULES = [
     id: 'veteran_education',
     conditions: {
       custom: (s) =>
-        (s.military?.size > 0 || s.demographics?.has('veteran')) &&
-        (s.applicantType?.has('student') || s.keywords?.includes('education') || s.keywords?.includes('college')),
+        (s.military?.length > 0 || s.demographics?.includes('veteran')) &&
+        (s.applicantTypes?.includes('student') || s.keywords?.includes('education') || s.keywords?.includes('college')),
     },
     programs: [
       {
@@ -894,8 +896,8 @@ const SITUATION_RULES = [
     id: 'hiv_aids',
     conditions: {
       custom: (s) =>
-        s.health?.has('hiv') ||
-        s.health?.has('aids') ||
+        s.health?.includes('hiv') ||
+        s.health?.includes('aids') ||
         s.keywords?.includes('hiv') ||
         s.keywords?.includes('aids'),
     },
@@ -922,39 +924,36 @@ function extractSignals(profileContext) {
   const sections = profileContext.sections || {}
   const financial = sections.financial_information || sections.financial || {}
 
-  // Merge section-level signals for condition checking
+  // Convert to canonical form so all collections are Arrays (never Sets).
+  // This fixes the prior bug where keywords was converted to Set while
+  // SITUATION_RULES used Array.prototype.includes() on it.
+  const canonical = fromLegacyHelpers(signals)
+
+  // Merge section-level raw string values into keywords for broader matching
+  const sectionKeywords = Object.values(sections).flatMap((s) =>
+    typeof s === 'object' && s !== null
+      ? Object.values(s).flatMap((v) => (typeof v === 'string' ? [v.toLowerCase()] : []))
+      : [],
+  )
+  const mergedKeywords = [
+    ...canonical.keywords.map((v) => v.toLowerCase()),
+    ...sectionKeywords,
+  ]
+  const uniqueKeywords = [...new Set(mergedKeywords)]
+
   return {
-    ...signals,
-    keywords: new Set(
-      [
-        ...(Array.isArray(signals.keywords) ? signals.keywords : []),
-        ...Object.values(sections).flatMap((s) =>
-          typeof s === 'object' && s !== null
-            ? Object.values(s).flatMap((v) => (typeof v === 'string' ? [v.toLowerCase()] : []))
-            : [],
-        ),
-      ].map((v) => v.toLowerCase()),
-    ),
+    ...canonical,
+    keywords: uniqueKeywords,
     financial: {
-      ...signals.financial,
+      ...canonical.financial,
       below_poverty_line:
         financial.below_poverty_line === true ||
         financial.below_poverty_line === 'yes' ||
         (financial.income_percentage_fpl && parseInt(financial.income_percentage_fpl) <= 200) ||
         false,
     },
-    // Ensure Set-based fields from buildProfileSignals remain intact
-    family: signals.family instanceof Set ? signals.family : new Set(signals.family || []),
-    demographics: signals.demographics instanceof Set ? signals.demographics : new Set(signals.demographics || []),
-    military: signals.military instanceof Set ? signals.military : new Set(signals.military || []),
-    health: signals.health instanceof Set ? signals.health : new Set(signals.health || []),
-    occupation: signals.occupation instanceof Set ? signals.occupation : new Set(signals.occupation || []),
-    immigration: signals.immigration instanceof Set ? signals.immigration : new Set(signals.immigration || []),
-    geographic: signals.geographic instanceof Set ? signals.geographic : new Set(signals.geographic || []),
-    assistance: signals.assistance instanceof Set ? signals.assistance : new Set(signals.assistance || []),
-    applicantType: signals.applicantTypes instanceof Set ? signals.applicantTypes : new Set(signals.applicantTypes || []),
-    location: signals.location || {},
-    organization: signals.organization || {},
+    location: canonical.location,
+    organization: canonical.organization,
   }
 }
 
