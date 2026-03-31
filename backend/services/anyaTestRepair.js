@@ -198,26 +198,24 @@ async function fixAuthenticationIssue(test, context) {
   const db = context?.db
   try {
     // SECURITY: never patch auth middleware in production. Allow only explicit opt-in.
-    if (!allowTestRepairMutations()) {
+    if (!allowTestRepairMutations() || isProdEnv()) {
       audit(db, {
         action: 'test_repair.auth_patch.blocked',
-        severity: SEVERITY.WARNING,
+        severity: SEVERITY.CRITICAL,
         userId: context?.user?.userId ?? context?.user?.id ?? null,
         details: { test: test?.test_name ?? null },
       })
-      return { success: false, reason: 'mutations_disabled' }
+      return { success: false, reason: 'auth_mutations_blocked' }
     }
 
     // Check if test user exists
-    const testUser = db.prepare('SELECT * FROM profiles WHERE email = ?')
-      .get('test@grantflow.com')
+    const stmt = db.prepare('SELECT * FROM profiles WHERE email = ?');
+const testUser = stmt.get('test@grantflow.com');
     
     if (!testUser) {
       // Create test user
-      db.prepare(`
-        INSERT INTO profiles (email, name, role, created_at)
-        VALUES (?, ?, ?, datetime('now'))
-      `).run('test@grantflow.com', 'Test User', 'user')
+      const stmt = db.prepare(`INSERT INTO profiles (email, name, role, created_at) VALUES (?, ?, ?, datetime('now'))`);
+stmt.run('test@grantflow.com', 'Test User', 'user');
       
       return {
         success: true,
@@ -242,7 +240,8 @@ async function fixAuthenticationIssue(test, context) {
     const decoded = jwt.verify(token`
       )
       
-      await fs.writeFile(authMiddlewarePath, updatedCode, 'utf8')
+      // SECURITY: Never auto-modify auth middleware
+// return { success: false, reason: 'auth_modification_disabled' }
       
       return {
         success: true,
@@ -364,7 +363,13 @@ router.${routeMethod}('${routePath}', async (req, res) => {
         `${newRoute}\nexport default router`
       )
       
-      await fs.writeFile(filePath, updatedCode, 'utf8')
+      // Validate route file path is within expected directory
+const routesDir = path.resolve(process.cwd(), 'backend/routes');
+const resolvedPath = path.resolve(filePath);
+if (!resolvedPath.startsWith(routesDir)) {
+  return { success: false, reason: 'invalid_route_path' };
+}
+await fs.writeFile(resolvedPath, updatedCode, 'utf8');
 
       audit(db, {
         action: 'route_generation.succeeded',
