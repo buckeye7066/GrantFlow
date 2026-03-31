@@ -165,15 +165,7 @@ export async function processProfileEnrichmentJob({ db, job, profileContext, get
 
   const enrichmentLog = []
 
-  sections.forEach((section) => {
-    if (!section || typeof section !== 'object') return
-    const sectionKey = section.key
-    if (typeof sectionKey !== 'string' || !sectionKey) return
-    const data = section.data
-    if (!data || typeof data !== 'object') return
-
-    // handled below (async)
-  })
+  // Remove this entire forEach block as it's redundant with the for loop below
 
   for (const section of sections) {
     if (!section || typeof section !== 'object') continue
@@ -194,6 +186,16 @@ export async function processProfileEnrichmentJob({ db, job, profileContext, get
   }
 
   const resultMeta = { sections: enrichmentLog, prompt: prompt || null }
+
+  db.prepare(
+    `UPDATE crawler_jobs
+     SET status = 'completed',
+         completed_at = CURRENT_TIMESTAMP,
+         result_count = ?,
+         result_meta = ?,
+         error = NULL
+     WHERE id = ?`
+  ).run(updatedSections.length, JSON.stringify(resultMeta), job.id)
 
   return {
     result_count: updatedSections.length,
