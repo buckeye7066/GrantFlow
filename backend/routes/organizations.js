@@ -105,7 +105,7 @@ async function ensureCanonicalSections(db, profileId, updatedBy = 'org-sync') {
   for (const sectionKey of canonicalSectionKeys) {
     try {
       const defaults = CANONICAL_SECTION_DEFAULTS[sectionKey] ?? {}
-      await insert.run(profileId, sectionKey, JSON.stringify(defaults), updatedBy)
+      insert.run(profileId, sectionKey, JSON.stringify(defaults), updatedBy)
     } catch (error) {
       console.error(`Failed to insert profile section ${sectionKey}:`, error)
       throw error
@@ -133,7 +133,7 @@ async function upsertProfileSection(db, profileId, sectionKey, data, updatedBy =
             updated_at = CURRENT_TIMESTAMP
         `
   try {
-    await db.prepare(sql).run(profileId, sectionKey, JSON.stringify(data ?? {}), updatedBy)
+    db.prepare(sql).run(profileId, sectionKey, JSON.stringify(data ?? {}), updatedBy)
   } catch (error) {
     console.error(`Failed to upsert profile section ${sectionKey}:`, error)
     throw error
@@ -230,7 +230,7 @@ async function syncOrganizationToProfileSections(db, { organizationId, orgRow, p
   )
 
   try {
-    await db
+    db
       .prepare('UPDATE profiles SET updated_at = CURRENT_TIMESTAMP WHERE id = ?')
       .run(profileId)
   } catch (error) {
@@ -289,7 +289,7 @@ router.get('/', ensureAuth, async (req, res) => {
     
     let orgs;
     try {
-      orgs = await req.db.prepare(query).all(...params);
+      orgs = req.db.prepare(query).all(...params);
     } catch (error) {
       console.error('Database query failed:', error);
       throw error;
@@ -320,14 +320,14 @@ router.get('/', ensureAuth, async (req, res) => {
  * Profile sections hold the narrative/comprehensive data that the raw organizations table may not have.
  */
 async function mergeProfileSectionsIntoOrg(db, orgId, base) {
-  const profileRow = await db
+  const profileRow = db
     .prepare(
       `SELECT id FROM profiles WHERE organization_id = ? ORDER BY created_at ASC LIMIT 1`
     )
     .get(orgId)
   if (!profileRow?.id) return base
 
-  const sectionRows = await db
+  const sectionRows = db
     .prepare(
       `SELECT section_key, data FROM profile_sections WHERE profile_id = ?`
     )
@@ -402,7 +402,7 @@ async function mergeProfileSectionsIntoOrg(db, orgId, base) {
 router.get('/:id', ensureAuth, async (req, res) => {
   try {
     if (!(await ensureOrganizationAccess(req, res, req.params.id))) return
-    const org = await req.db.prepare('SELECT * FROM organizations WHERE id = ?').get(req.params.id);
+    const org = req.db.prepare('SELECT * FROM organizations WHERE id = ?').get(req.params.id);
     
     if (!org) {
       return res.status(404).json({ error: 'Organization not found' });
@@ -465,12 +465,12 @@ router.post('/', ensureAuth, mutationRateLimiter, async (req, res) => {
     const placeholders = columns.map(() => '?').join(', ');
     const values = [id, ...Object.values(sanitizedData)];
     
-    await req.db.prepare(`
+    req.db.prepare(`
       INSERT INTO organizations (${columns.join(', ')})
       VALUES (${placeholders})
     `).run(...values);
     
-    const org = await req.db.prepare('SELECT * FROM organizations WHERE id = ?').get(id);
+    const org = req.db.prepare('SELECT * FROM organizations WHERE id = ?').get(id);
 
     // Keep profile_sections (and matching/crawlers) in sync with comprehensive application data.
     let profileId = null
@@ -518,13 +518,13 @@ router.put('/:id', ensureAuth, mutationRateLimiter, async (req, res) => {
     const setClause = Object.keys(sanitizedData).map(key => `${key} = ?`).join(', ');
     const values = [...Object.values(sanitizedData), req.params.id];
     
-    await req.db.prepare(`
+    req.db.prepare(`
       UPDATE organizations 
       SET ${setClause}, updated_at = CURRENT_TIMESTAMP 
       WHERE id = ?
     `).run(...values);
     
-    const org = await req.db.prepare('SELECT * FROM organizations WHERE id = ?').get(req.params.id);
+    const org = req.db.prepare('SELECT * FROM organizations WHERE id = ?').get(req.params.id);
 
     // Keep profile_sections (and matching/crawlers) in sync with comprehensive application data.
     let profileId = null
@@ -551,13 +551,13 @@ router.delete('/:id', ensureAuth, mutationRateLimiter, async (req, res) => {
   try {
     if (!(await ensureOrganizationAccess(req, res, req.params.id))) return
     // Check if organization exists
-    const org = await req.db.prepare('SELECT id FROM organizations WHERE id = ?').get(req.params.id);
+    const org = req.db.prepare('SELECT id FROM organizations WHERE id = ?').get(req.params.id);
     if (!org) {
       return res.status(404).json({ error: 'Organization not found' });
     }
     
     // Soft delete by setting deleted_at (schema-managed; do not attempt runtime ALTER in Postgres)
-    await req.db.prepare('UPDATE organizations SET deleted_at = CURRENT_TIMESTAMP WHERE id = ?').run(req.params.id);
+    req.db.prepare('UPDATE organizations SET deleted_at = CURRENT_TIMESTAMP WHERE id = ?').run(req.params.id);
     
     res.json({ success: true, message: 'Organization marked as deleted' });
   } catch (error) {
@@ -570,7 +570,7 @@ router.delete('/:id', ensureAuth, mutationRateLimiter, async (req, res) => {
 router.get('/:id/grants', ensureAuth, async (req, res) => {
   try {
     if (!(await ensureOrganizationAccess(req, res, req.params.id))) return
-    const grants = await req.db.prepare(`
+    const grants = req.db.prepare(`
       SELECT * FROM grants 
       WHERE organization_id = ? 
       ORDER BY created_at DESC
@@ -587,7 +587,7 @@ router.get('/:id/grants', ensureAuth, async (req, res) => {
 router.get('/:id/documents', ensureAuth, async (req, res) => {
   try {
     if (!(await ensureOrganizationAccess(req, res, req.params.id))) return
-    const documents = await req.db.prepare(`
+    const documents = req.db.prepare(`
       SELECT * FROM documents 
       WHERE organization_id = ? 
       ORDER BY created_at DESC
