@@ -22,7 +22,7 @@ export function classifyProfileChange(fields) {
     }
 
     if (f.field.includes('geo') || f.field.includes('radius')) {
-      if (Math.abs(Number(f.new)) > 5 || Math.abs(Number(f.new)) > 10) geo = true
+      if (Math.abs(Number(f.new)) > 10 || Math.abs(Number(f.old) - Number(f.new)) > 5) geo = true
     }
 
     if (f.field.includes('revenue')) revenue = true
@@ -45,12 +45,15 @@ export function decideRevalAction({
 }) {
   let action = 'targeted_reval'
 
-  if (manual_force) action = 'full_recrawl'
-  else if (trigger === 'naics_minor') action = 're-score'
-
-  if (fanout_pct <= FANOUT_LOW || affected_items <= MAX_ITEMS_LOW) action = 're-score'
-  else if (fanout_pct <= FANOUT_HIGH) action = 'targeted_reval'
-  else action = 'full_recrawl'
+  if (manual_force) {
+    action = 'full_recrawl'
+  } else if (trigger === 'naics_minor') {
+    action = 're-score'
+  } else {
+    if (fanout_pct <= FANOUT_LOW || affected_items <= MAX_ITEMS_LOW) action = 're-score'
+    else if (fanout_pct <= FANOUT_HIGH) action = 'targeted_reval'
+    else action = 'full_recrawl'
+  }
 
   if (action === 'full_recrawl' && cost_units > 10 * daily_budget) {
     return { block: true, reason: 'cost_guardrail' }
