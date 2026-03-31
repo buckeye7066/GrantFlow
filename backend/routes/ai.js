@@ -26,8 +26,9 @@ const router = express.Router();
 // All AI endpoints are authenticated; these endpoints can expose profile/org/grant context.
 router.use((req, res, next) => {
   const user = requireAuthenticatedUser(req, res)
-  if (!user) return
-  return next()
+  if (!user) return // stops execution
+  req.user = user
+  next()
 })
 
 function getOpenAI() {
@@ -852,7 +853,7 @@ router.post('/invoke', enforceTierCapability(TIER_CAPABILITIES.DOCUMENT_AI), asy
       system: systemCombined || null,
       prompt: userPrompt,
       temperature: typeof temperature === 'number' ? temperature : 0.3,
-      maxTokens: typeof max_tokens === 'number' ? Math.max(1, Math.min(max_tokens, 4000)) : 1200,
+      maxTokens: typeof max_tokens === 'number' ? Math.max(1, Math.min(max_tokens, 2000)) : 1200,
     })
 
     const rawText = result.text || ''
