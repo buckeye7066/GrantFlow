@@ -117,7 +117,7 @@ export async function loadProfileContext(db, profileId) {
 
   // Foolproof: guarantee signals are always usable by crawlers/matching (never null or empty when profile exists).
   if (!signals || typeof signals !== 'object') {
-    signals = buildProfileSignals({ profile: mergedProfile, sections: {}, asOf: null })
+    signals = buildProfileSignals({ profile: mergedProfile, sections: {}, asOf: referenceIsoRaw })
   }
   if (!signals.location || typeof signals.location !== 'object') {
     signals.location = {
