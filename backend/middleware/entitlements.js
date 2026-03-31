@@ -35,7 +35,8 @@ export function enforceTierCapability(capabilityKey, { profileIdResolver } = {})
         return res.status(400).json({ error: 'profile_id required', capability: capabilityKey })
       }
 
-      if (!req.db) { return res.status(500).json({ error: 'Database connection unavailable' }); } if (!req.db) { return res.status(500).json({ error: 'Database connection unavailable' }); } const okProfile = await profileExists(req.db, profileId)
+      if (!req.db) { return res.status(500).json({ error: 'Database connection unavailable' }); }
+      const okProfile = await profileExists(req.db, profileId)
       if (!okProfile) {
         return res.status(400).json({ error: 'Profile not found', profile_id: profileId })
       }
@@ -88,7 +89,8 @@ export function enforceCrawlerJobTier() {
         return res.status(400).json({ error: 'profile_id required', capability })
       }
 
-      if (!req.db) { return res.status(500).json({ error: 'Database connection unavailable' }); } if (!req.db) { return res.status(500).json({ error: 'Database connection unavailable' }); } const okProfile = await profileExists(req.db, profileId)
+      if (!req.db) { return res.status(500).json({ error: 'Database connection unavailable' }); }
+      const okProfile = await profileExists(req.db, profileId)
       if (!okProfile) {
         return res.status(400).json({ error: 'Profile not found', profile_id: profileId })
       }
