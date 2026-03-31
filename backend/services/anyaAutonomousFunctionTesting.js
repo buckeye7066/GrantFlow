@@ -32,7 +32,11 @@ async function auditLog(entry, context) {
       })
       return
     } catch (error) {
-      console.warn('[anyaAutonomousFunctionTesting] audit db write failed:', error?.message || error)
+      console.warn('[anyaAutonomousFunctionTesting] audit db write failed:', {
+        error: error?.message || error,
+        action: entry?.action,
+        userId: context?.user?.userId ?? context?.user?.id ?? null
+      })
     }
   }
 
@@ -46,8 +50,8 @@ async function auditLog(entry, context) {
       await fs.mkdir(auditDir, { recursive: true })
       const logFile = path.join(auditDir, 'autonomous-function-tests.log')
       await fs.appendFile(logFile, JSON.stringify(logEntry) + '\n', 'utf8')
-    } catch {
-      // best-effort
+    } catch (error) {
+      console.warn('[anyaAutonomousFunctionTesting] Failed to write dev audit log:', error.message)
     }
   }
 }
@@ -150,8 +154,8 @@ function resolveInternalBaseUrl() {
     if (typeof globalUrl === 'string' && globalUrl.trim()) {
       return globalUrl.trim().replace(/\/+$/, '')
     }
-  } catch {
-    // ignore
+  } catch (error) {
+    console.debug('[anyaAutonomousFunctionTesting] globalThis access failed:', error.message)
   }
 
   const port = String(process.env.PORT || '').trim()
@@ -161,7 +165,13 @@ function resolveInternalBaseUrl() {
 
 function resolveAdminToken() {
   const token = String(process.env.ANYA_ADMIN_TOKEN || process.env.ADMIN_TOKEN || '').trim()
-  return token || null
+  if (!token) return null
+  // Basic validation
+  if (token.length < 32 || !/^[a-zA-Z0-9._-]+$/.test(token)) {
+    console.warn('[anyaAutonomousFunctionTesting] Invalid admin token format')
+    return null
+  }
+  return token
 }
 
 async function fetchWithTimeout(url, init, timeoutMs = 20_000) {
@@ -224,8 +234,9 @@ async function executeApiTest(test, context) {
     let bodyText = ''
     try {
       bodyText = await res.text()
-    } catch {
-      bodyText = ''
+    } catch (error) {
+      console.warn(`[anyaAutonomousFunctionTesting] Failed to read response body for ${test.path}:`, error.message)
+      bodyText = '<response body read error>'
     }
 
     result.http_status = status
@@ -504,7 +515,8 @@ export async function getAutonomousFunctionTestsStatus(db = null) {
         .map((line) => {
           try {
             return JSON.parse(line)
-          } catch {
+          } catch (error) {
+            console.debug('[anyaAutonomousFunctionTesting] Failed to parse audit log line:', error.message)
             return null
           }
         })
