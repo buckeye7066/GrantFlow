@@ -17,12 +17,13 @@ export function auditLogger(req, res, next) {
   res.end = function(...args) {
     const duration = Date.now() - startTime;
     
-    // Only log significant events (mutations, admin actions, or errors)
-    const isMutation = ['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method);
-    const isAdminAction = req.path.startsWith('/api/admin');
-    const isError = res.statusCode >= 400;
-    
-    if (isMutation || isAdminAction || isError) {
+    try {
+      // Only log significant events (mutations, admin actions, or errors)
+      const isMutation = ['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method);
+      const isAdminAction = req.path.startsWith('/api/admin');
+      const isError = res.statusCode >= 400;
+      
+      if (isMutation || isAdminAction || isError) {
       const logEntry = {
         id: randomUUID(),
         correlation_id: correlationId,
@@ -43,25 +44,16 @@ export function auditLogger(req, res, next) {
       if (req.db) {
         try {
           // Create audit_logs table if it doesn't exist
-          req.db.prepare(`
-            CREATE TABLE IF NOT EXISTS audit_logs (
-              id TEXT PRIMARY KEY,
-              correlation_id TEXT,
-              timestamp TEXT,
-              user_id TEXT,
-              method TEXT,
-              path TEXT,
-              status INTEGER,
-              duration_ms INTEGER,
-              ip TEXT,
-              payload TEXT
-            )
-          `).run();
-          
-          req.db.prepare(`
+          // Use async operations to prevent blocking
+          const insertStmt = req.db.prepare(`
             INSERT INTO audit_logs (id, correlation_id, timestamp, user_id, method, path, status, duration_ms, ip, payload)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-          `).run(
+          `);
+          
+          // Execute async to prevent blocking
+          setImmediate(() => {
+            try {
+              insertStmt.run(
             logEntry.id,
             logEntry.correlation_id,
             logEntry.timestamp,
@@ -75,7 +67,12 @@ export function auditLogger(req, res, next) {
           );
         } catch (e) {
           // Fallback if table structure doesn't match or fails
-          console.warn('[audit] Failed to persist audit log to DB', e.message);
+          console.error('[audit] Failed to persist audit log to DB', {
+            error: e.message,
+            stack: e.stack,
+            correlation_id: correlationId,
+            path: req.path
+          });
         }
       }
     }
