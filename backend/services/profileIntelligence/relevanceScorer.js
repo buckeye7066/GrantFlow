@@ -124,10 +124,12 @@ function scoreNeedFit(intel, opportunity) {
     totalWeight += needWeight
 
     // Check if opportunity text matches any synonyms or example terms
-    const synonymMatch = def.synonyms.some(s => fullText.includes(s.toLowerCase()))
+    const synonymMatch = (def.synonyms || []).some(s => fullText.includes(String(s || '').toLowerCase()))
     const labelMatch = fullText.includes(def.label.toLowerCase())
-    const exampleMatch = def.example_search_terms.some(t =>
-      fullText.includes(t.toLowerCase().split(' ')[0]))  // first word of each example
+    const exampleMatch = (def.example_search_terms || []).some(t => {
+      const term = String(t || '').toLowerCase().split(' ')[0]
+      return term && fullText.includes(term)
+    })  // first word of each example
 
     if (synonymMatch || labelMatch) {
       matchScore += needWeight * 1.0
@@ -478,7 +480,7 @@ export function scoreOpportunity(intel, opportunity) {
       ].join(' ').toLowerCase()
       for (const need of intel.inferredNeeds) {
         const def = NEEDS_TAXONOMY[need.code]
-        if (def && def.synonyms.some(s => oppText.includes(s.toLowerCase()))) {
+        if (def && (def.synonyms || []).some(s => oppText.includes(String(s || '').toLowerCase()))) {
           matchedNeeds.push(need.code)
         }
       }
@@ -499,6 +501,7 @@ export function scoreOpportunity(intel, opportunity) {
     priority_fit: scorePriorityFit(intel, opportunity),
     practicality: scorePracticality(opportunity),
     source_quality: scoreSourceQuality(opportunity),
+    keyword_relevance: scoreKeywordRelevance(intel, opportunity),
   }
 
   // Weighted total
