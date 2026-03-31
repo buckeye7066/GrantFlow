@@ -40,8 +40,9 @@ export class RateLimitedFetcher {
     const state = this._state(host)
     return new Promise((resolve) => {
       state.queue.push({ url, options, resolve })
-      this._pump(host).catch(() => {
-        // no-op; individual task resolves to error response
+      this._pump(host).catch((err) => {
+        console.error(`[RateLimitedFetcher] Pump error for ${host}:`, err)
+        // Individual task resolves to error response
       })
     })
   }
@@ -56,7 +57,10 @@ export class RateLimitedFetcher {
         .catch((err) => task.resolve({ ok: false, error: err }))
         .finally(() => {
           state.inFlight -= 1
-          this._pump(host).catch(e => console.warn('[background]', e?.message || e))
+          this._pump(host).catch(e => {
+            console.error('[RateLimitedFetcher] Background pump error:', e)
+            // Consider adding error reporting service integration
+          })
         })
     }
   }
@@ -95,7 +99,15 @@ export class RateLimitedFetcher {
     }
 
     const err = lastError instanceof Error ? lastError : new Error(String(lastError))
-    err.code = err.code || 'FETCH_FAILED'
+    if (!err.code) {
+      if (err.name === 'AbortError') {
+        err.code = 'TIMEOUT'
+      } else if (err.message?.includes('ENOTFOUND')) {
+        err.code = 'DNS_LOOKUP_FAILED'
+      } else {
+        err.code = 'FETCH_FAILED'
+      }
+    }
     throw err
   }
 }
