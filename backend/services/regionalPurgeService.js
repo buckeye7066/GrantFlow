@@ -401,7 +401,7 @@ function persistSuppressionTransition(db, {
   // Determine is_active for the opportunity
   const isActive = nextState !== SUPPRESSION_STATES.SUPPRESSED ? (isPg ? true : 1) : (isPg ? false : 0)
 
-  try {
+  const transaction = db.transaction(() => {
     db.prepare(`
       UPDATE funding_opportunities
       SET suppression_state    = ?,
@@ -436,13 +436,7 @@ function persistSuppressionTransition(db, {
       now,
       opportunity.id,
     )
-  } catch (err) {
-    console.error('[regionalPurge] Failed to update opportunity:', err?.message)
-    throw err
-  }
 
-  // Emit durable suppression event
-  try {
     const eventId = randomUUID()
     db.prepare(`
       INSERT INTO opportunity_suppression_events
@@ -463,9 +457,13 @@ function persistSuppressionTransition(db, {
       now,
       JSON.stringify({ statusHint: verificationResult.statusHint }),
     )
+  })
+
+  try {
+    transaction()
   } catch (err) {
-    // Non-fatal: the opportunity state was already updated.
-    console.warn('[regionalPurge] Failed to write suppression event:', err?.message)
+    console.error('[regionalPurge] Failed to persist suppression transition:', err?.message)
+    throw err
   }
 }
 
