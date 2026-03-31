@@ -39,7 +39,8 @@ router.post('/checkout/service', ensureAuth, async (req, res) => {
   }
   if (!purchaseId) return res.status(400).json({ ok: false, error: 'purchase_id required' })
 
-  const userId = req.ctx?.userId ?? req.user?.userId ?? null
+  const userId = req.ctx?.userId ?? req.user?.userId
+if (!userId) return res.status(401).json({ ok: false, error: 'Authentication required' })
   const purchase = await req.db
     .prepare(
       `
@@ -186,7 +187,8 @@ router.post('/checkout/hourly', ensureAuth, async (req, res) => {
   }
   if (!purchaseId) return res.status(400).json({ ok: false, error: 'purchase_id required' })
 
-  const userId = req.ctx?.userId ?? req.user?.userId ?? null
+  const userId = req.ctx?.userId ?? req.user?.userId
+if (!userId) return res.status(401).json({ ok: false, error: 'Authentication required' })
   const purchase = await req.db
     .prepare('SELECT * FROM service_purchases WHERE id = ? LIMIT 1')
     .get(purchaseId)
