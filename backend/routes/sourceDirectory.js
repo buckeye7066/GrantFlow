@@ -135,7 +135,7 @@ router.post('/', async (req, res) => {
         createdAt,
         updatedAt,
         String(orgId),
-        const name = String(data.name || '').trim(); if (!name) return res.status(400).json({ error: 'name is required' }); name,
+        (() => { const name = String(data.name || '').trim(); if (!name) throw new Error('name is required'); return name; })(),
         data.parent_organization ?? null,
         data.source_type ?? null,
         data.website_url ?? null,
@@ -197,7 +197,7 @@ router.put('/:id', async (req, res) => {
       )
       .run(
         updatedAt,
-        data.name !== undefined ? const name = String(data.name || '').trim(); if (!name) return res.status(400).json({ error: 'name is required' }); name : null,
+        data.name !== undefined ? (() => { const name = String(data.name || '').trim(); if (!name) throw new Error('name is required'); return name; })() : null,
         data.parent_organization ?? null,
         data.source_type ?? null,
         data.website_url ?? null,
