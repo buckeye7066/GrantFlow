@@ -12,7 +12,7 @@ const router = express.Router();
 
 async function ensureExpenseAccess(req, res, expenseId) {
   const user = requireAuthenticatedUser(req, res)
-  if (!user) return false
+  if (!user) return null
 
   const expense = await req.db.prepare('SELECT * FROM expenses WHERE id = ?').get(expenseId)
   if (!expense) {
@@ -38,11 +38,10 @@ async function ensureExpenseAccess(req, res, expenseId) {
   return null
 }
 
-router.use(requireAuthenticatedUser);
+// Move this line to the top after const router = express.Router();
 router.get('/', async (req, res) => {
   try {
-    const user = requireAuthenticatedUser(req, res)
-    if (!user) return
+    // Remove this - user should be available from middleware
 
     const { grant_id, organization_id } = req.query;
     let query = 'SELECT * FROM expenses WHERE 1=1';
@@ -78,8 +77,7 @@ router.get('/', async (req, res) => {
 
 router.post('/', async (req, res) => {
   try {
-    const user = requireAuthenticatedUser(req, res)
-    if (!user) return
+    // Remove this - user should be available from middleware
 
     const id = crypto.randomUUID();
     const { grant_id, organization_id, description, amount, category, date } = req.body;
