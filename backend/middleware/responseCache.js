@@ -1,14 +1,26 @@
 const cache = new Map();
 
 // Clear expired entries periodically
-setInterval(() => {
-  const now = Date.now();
-  for (const [key, value] of cache.entries()) {
-    if (now - value.timestamp >= 30000) {
-      cache.delete(key);
+let cleanupInterval;
+function startCleanup() {
+  cleanupInterval = setInterval(() => {
+    const now = Date.now();
+    for (const [key, value] of cache.entries()) {
+      if (now - value.timestamp >= 30000) {
+        cache.delete(key);
+      }
     }
+  }, 60000);
+}
+function stopCleanup() {
+  if (cleanupInterval) {
+    clearInterval(cleanupInterval);
+    cleanupInterval = null;
   }
-}, 60000);
+}
+process.on('SIGTERM', stopCleanup);
+process.on('SIGINT', stopCleanup);
+startCleanup();
 
 export function responseCache(ttlMs = 30000) {
   return (req, res, next) => {
