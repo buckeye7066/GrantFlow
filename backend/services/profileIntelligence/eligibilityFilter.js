@@ -51,6 +51,7 @@ function isExpired(opportunity) {
     const d = new Date(deadline)
     if (Number.isNaN(d.getTime())) return false
     const now = new Date()
+    if (Number.isNaN(now.getTime())) return false
     d.setHours(0, 0, 0, 0)
     now.setHours(0, 0, 0, 0)
     return d < now
@@ -161,7 +162,7 @@ function checkGeography(intel, opportunity) {
   }
 
   // Check if profile state matches
-  if (oppState.includes(profileState)) {
+  if (oppState.includes(String(profileState))) {
     return { pass: true, reason: `State match: ${profileState}` }
   }
 
@@ -175,7 +176,7 @@ function checkGeography(intel, opportunity) {
     } catch {
       statesArr = String(opportunity.states_supported).split(',').map(s => s.trim().toUpperCase())
     }
-    if (statesArr.map(s => s.toUpperCase()).includes(profileState)) {
+    if (statesArr.map(s => String(s).toUpperCase()).includes(String(profileState).toUpperCase())) {
       return { pass: true, reason: `State in supported list: ${profileState}` }
     }
   }
