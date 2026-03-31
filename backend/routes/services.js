@@ -18,6 +18,8 @@ router.use(async (req, _res, next) => {
     await seedServiceCatalogFromExtract(req.db)
   } catch (error) {
     console.warn('[services] failed to ensure catalog seed:', error?.message || String(error))
+    // Continue with degraded functionality - catalog operations may fail
+    req.catalogSeedFailed = true
   }
   next()
 })
@@ -70,7 +72,7 @@ router.post('/purchases', ensureAuth, async (req, res) => {
 
   let clientCategory = typeof body.client_category === 'string' ? body.client_category.trim() : ''
   if (!clientCategory && profileId) {
-    clientCategory = (await getClientCategoryForProfile(req.db, profileId)) || ''
+    clientCategory = (await getClientCategoryForProfile(req.db, profileId, req.ctx?.userId ?? req.user?.userId ?? null)) || ''
   }
 
   if (!serviceSlug) return res.status(400).json({ ok: false, error: 'service_slug required' })
@@ -182,7 +184,8 @@ router.get('/purchases', ensureAuth, async (req, res) => {
       milestones = await req.db
         .prepare('SELECT * FROM milestone_payments WHERE purchase_id = ? ORDER BY phase ASC')
         .all(pid)
-    } catch {
+    } catch (error) {
+      console.error(`Failed to fetch milestones for purchase ${pid}:`, error)
       milestones = []
     }
 
@@ -191,7 +194,8 @@ router.get('/purchases', ensureAuth, async (req, res) => {
       time = await req.db
         .prepare('SELECT COALESCE(SUM(rounded_minutes), 0) AS total FROM hourly_time_entries WHERE purchase_id = ?')
         .get(pid)
-    } catch {
+    } catch (error) {
+      console.error(`Failed to fetch time entries for purchase ${pid}:`, error)
       time = { total: 0 }
     }
 
@@ -200,7 +204,8 @@ router.get('/purchases', ensureAuth, async (req, res) => {
       invoices = await req.db
         .prepare('SELECT * FROM hourly_invoices WHERE purchase_id = ? ORDER BY created_at DESC LIMIT 10')
         .all(pid)
-    } catch {
+    } catch (error) {
+      console.error(`Failed to fetch invoices for purchase ${pid}:`, error)
       invoices = []
     }
 
