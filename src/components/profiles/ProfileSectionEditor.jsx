@@ -21,6 +21,7 @@ import { Switch } from "@/components/ui/switch"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
 import ProfileFieldWithAI from "@/components/profiles/ProfileFieldWithAI"
+import { SECTION_METADATA } from "@/config/sectionMetadata"
 
 function isPlainObject(value) {
   if (!value || typeof value !== 'object') return false
@@ -579,6 +580,15 @@ const narrativeSchema = z.object({
   special_circumstances: z.string().optional().or(z.literal("")),
 })
 
+/**
+ * UI section configuration.
+ *
+ * Titles and descriptions are derived from the canonical {@link SECTION_METADATA} module
+ * (`src/config/sectionMetadata.js`), which is the single source of truth.
+ * UI-specific concerns (Zod schemas, React components, field props) live here.
+ *
+ * @see src/config/sectionMetadata.js
+ */
 export const SECTION_CONFIG = {
   basic_information: {
     title: "Basic Information",
@@ -1210,6 +1220,15 @@ export const SECTION_CONFIG = {
       { name: "special_circumstances", label: "Special circumstances", component: Textarea, props: { rows: 3 } },
     ],
   },
+}
+
+// Enforce SECTION_METADATA as the single source of truth for titles and descriptions.
+// Any update to sectionMetadata.js automatically propagates here at module load time.
+for (const [key, meta] of Object.entries(SECTION_METADATA)) {
+  if (key in SECTION_CONFIG) {
+    SECTION_CONFIG[key].title = meta.title
+    SECTION_CONFIG[key].description = meta.description
+  }
 }
 
 export default function ProfileSectionEditor({

@@ -167,7 +167,7 @@ export const PROFILE_SCHEMA = {
     title: 'Medical Insurance',
     description:
       'Insurance coverage details used for care coordination, assistance programs, and documentation (do not invent identifiers).',
-    applies_to: ['medical_assistance', 'medical_need', 'individual_need', 'family', 'medical_assistance'],
+    applies_to: ['medical_assistance', 'medical_need', 'individual_need', 'family'],
     fields: {
       insurance_provider: {
         type: 'string',
@@ -202,7 +202,7 @@ export const PROFILE_SCHEMA = {
     title: 'Medical History & Needs',
     description:
       'Medical background needed to target condition-specific resources and support letters (avoid unnecessary PHI; keep concise).',
-    applies_to: ['medical_assistance', 'medical_need', 'individual_need', 'family', 'medical_assistance'],
+    applies_to: ['medical_assistance', 'medical_need', 'individual_need', 'family'],
     fields: {
       primary_condition: { type: 'string', default: '', description: 'Primary condition/diagnosis when explicitly stated.' },
       secondary_conditions: {

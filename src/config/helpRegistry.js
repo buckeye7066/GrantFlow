@@ -3,6 +3,9 @@
  * field explanations, tour steps, and Anya app knowledge.
  *
  * Consumed by: OnboardingManual, Help page, AnyaGuidedTour, anyaHelpKnowledge (backend).
+ *
+ * For profile section titles, descriptions, and field-level metadata, see:
+ * @see src/config/sectionMetadata.js
  */
 
 export const CURRENT_TOUR_VERSION = 1
