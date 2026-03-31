@@ -31,8 +31,8 @@ function buildFilters({ search, jurisdiction, state, county, isActive, dialect }
 
   if (typeof isActive === 'string') {
     const v = isActive.trim().toLowerCase()
-    if (v === 'true' || v === '1') where.push(dialect === 'postgres' ? 'is_active = TRUE' : 'is_active = 1')
-    if (v === 'false' || v === '0') where.push('is_active = 0')
+    if (v === 'true' || v === '1') where.push(dialect === 'postgres' ? 'is_active = $1' : 'is_active = ?'); params.push(dialect === 'postgres' ? true : 1)
+    if (v === 'false' || v === '0') { where.push('is_active = ?'); params.push(0); }
   }
 
   if (jurisdiction) {
@@ -77,7 +77,7 @@ router.get('/', async (req, res) => {
 
     const fetchTrack = async (t) => {
       const table = tableForTrack(t)
-      const { clause, params } = buildFilters({ search, jurisdiction, state, county, isActive, dialect: req.db?.dialect })
+      const { clause, params } = buildFilters({ search, jurisdiction, state, county, isActive, dialect: req.db?.dialect || 'sqlite' })
       const rows = await req.db
         .prepare(
           `
@@ -168,7 +168,7 @@ router.get('/:track/:programId', async (req, res) => {
     const programId = req.params.programId
     const table = tableForTrack(track)
 
-    const program = await req.db.prepare(`SELECT * FROM ${table === 'programs_provider' ? 'programs_provider' : 'programs_client'} WHERE program_id = ?`).get(programId)
+    const program = await req.db.prepare(`SELECT * FROM ${req.db.dialect === 'postgres' ? '"' + (table === 'programs_provider' ? 'programs_provider' : 'programs_client') + '"' : '`' + (table === 'programs_provider' ? 'programs_provider' : 'programs_client') + '`'} WHERE program_id = ?`).get(programId)
     if (!program) return res.status(404).json({ error: 'Program not found' })
 
     const versions = await req.db
