@@ -22,9 +22,216 @@ import { normalizeOpportunity } from './opportunityNormalizer.js'
 
 export { normalizeProfile, computeProfileFingerprint } from './profileNormalizer.js'
 export { normalizeOpportunity, computeOpportunityFingerprint } from './opportunityNormalizer.js'
-export { calculateSourceTrust, evaluateEligibility, calculateNeedAlignment } from './matchDecisionEngine.js'
 
 export const MATCHER_VERSION = '3.0.0'
+
+// ---------------------------------------------------------------------------
+// Source trust scoring
+// ---------------------------------------------------------------------------
+
+const OFFICIAL_SOURCE_DOMAINS = new Set([
+  'grants.gov', 'sam.gov', 'hud.gov', 'acf.hhs.gov', 'ed.gov', 'sba.gov',
+  'usda.gov', 'fema.gov', 'va.gov', 'ssa.gov', 'benefits.gov', 'usa.gov',
+])
+
+const TRUSTED_INTERMEDIARY_DOMAINS = new Set([
+  '211.org', 'unitedway.org', 'redcross.org', 'salvationarmy.org',
+  'needhelppayingbills.com', 'benefitscheckup.org', 'findhelp.org',
+  'auntbertha.com', 'communityaction.org',
+])
+
+function _extractDomain(url) {
+  try {
+    const m = url.match(/(?:https?:\/\/)?(?:www\.)?([^/?\s]+)/)
+    return m ? m[1] : ''
+  } catch { return '' }
+}
+
+/**
+ * Calculate source trust score (0-100). Higher = more trustworthy / official.
+ */
+export function calculateSourceTrust(opportunity) {
+  if (!opportunity) return 20
+  const url = opportunity.application_url || opportunity.apply_url ||
+    opportunity.source_url || opportunity.evidence_url || opportunity.url || ''
+  const urlLower = String(url).toLowerCase()
+  if (!url || urlLower.trim() === '') return 10
+  if (OFFICIAL_SOURCE_DOMAINS.has(_extractDomain(urlLower))) return 95
+  if (urlLower.includes('.gov')) return 90
+  if (urlLower.includes('.edu')) return 75
+  for (const domain of TRUSTED_INTERMEDIARY_DOMAINS) {
+    if (urlLower.includes(domain)) return 70
+  }
+  if (urlLower.includes('.org')) return 60
+  const origin = opportunity.record_origin ?? ''
+  if (origin === 'grants_gov' || origin === 'verified_real') return 90
+  if (origin === 'curated_verified') return 80
+  if (origin === 'curated_benefits' || origin === 'curated_program') return 65
+  if (origin === 'live_crawl') return 40
+  return 35
+}
+
+// ---------------------------------------------------------------------------
+// Eligibility evaluation
+// ---------------------------------------------------------------------------
+
+/**
+ * Evaluate hard eligibility rules.
+ * @param {Object} profileNorm - From normalizeProfile()
+ * @param {Object} oppNorm     - From normalizeOpportunity()
+ * @returns {{ eligible: true|false|"maybe", ineligibilityReasons: string[], missingFields: string[] }}
+ */
+export function evaluateEligibility(profileNorm, oppNorm) {
+  const ineligibilityReasons = []
+  const missingFields = []
+
+  if (!profileNorm || !oppNorm) {
+    return { eligible: 'maybe', ineligibilityReasons: [], missingFields: ['profile', 'opportunity'] }
+  }
+
+  if (oppNorm.isLoan) ineligibilityReasons.push('Opportunity is a loan, not a grant')
+
+  const isIndividualOrCaregiverProfile = ['individual', 'caregiver'].includes(profileNorm.entityType)
+  if (oppNorm.isProBono && !isIndividualOrCaregiverProfile) {
+    ineligibilityReasons.push('Opportunity is pro bono services, not a grant or direct funding')
+  }
+  if (oppNorm.isInKind && !isIndividualOrCaregiverProfile) {
+    ineligibilityReasons.push('Opportunity provides in-kind goods/services, not direct financial assistance')
+  }
+  if (oppNorm.isReferralOnly && !isIndividualOrCaregiverProfile) {
+    ineligibilityReasons.push('Opportunity is a referral service only, not a direct grant application')
+  }
+
+  if (oppNorm.deadlineStatus === 'closed') ineligibilityReasons.push('Application deadline has passed')
+  if (oppNorm.requiresVeteran && !profileNorm.isVeteran) ineligibilityReasons.push('Requires veteran status')
+  if (oppNorm.requiresStudent && !profileNorm.isStudent) ineligibilityReasons.push('Requires student status')
+  if (oppNorm.requiresNonprofit && !profileNorm.isNonprofit) ineligibilityReasons.push('Requires 501(c)(3) or nonprofit status')
+  if (oppNorm.requiresBusiness && !profileNorm.isBusiness) ineligibilityReasons.push('Requires business or self-employment')
+
+  if (oppNorm.isInstitutionalOnly || oppNorm.isResearchOnly) {
+    const isOrdinaryIndividual = !profileNorm.isNonprofit && !profileNorm.isBusiness &&
+      profileNorm.entityType !== 'researcher' && profileNorm.entityType !== 'organization'
+    if (isOrdinaryIndividual) {
+      ineligibilityReasons.push('Opportunity is for institutions or research organizations only')
+    }
+  }
+
+  if (oppNorm.diseaseSpecific && !profileNorm.hasChronicIllness && !profileNorm.hasDisabilityNeed) {
+    ineligibilityReasons.push('Opportunity targets a specific medical condition not indicated in profile')
+  }
+  if (oppNorm.requiresDisasterContext && !profileNorm.hasEmergencyNeed) {
+    ineligibilityReasons.push('Opportunity requires disaster or emergency context not present in profile')
+  }
+  if (oppNorm.isCaregiverProgram && !profileNorm.isCaregiver && !profileNorm.hasFosterIndicator) {
+    missingFields.push('caregiver_status')
+  }
+  if (profileNorm.isUnableToWork && oppNorm.needTypesSupported?.includes('education')) {
+    const isWorkforceFocused = oppNorm.needTypesSupported?.every(n => ['education', 'business'].includes(n))
+    if (isWorkforceFocused && !oppNorm.needTypesSupported?.includes('disability')) {
+      ineligibilityReasons.push('Profile indicates unable to work; workforce training programs not applicable')
+    }
+  }
+
+  if (profileNorm.enrolledPrograms?.length > 0 && oppNorm.title) {
+    const titleLower = (oppNorm.title || '').toLowerCase()
+    for (const prog of profileNorm.enrolledPrograms) {
+      if (prog === 'medicaid' && titleLower.includes('medicaid') && (titleLower.includes('contact') || titleLower.includes('enroll'))) {
+        ineligibilityReasons.push('Profile already enrolled in Medicaid')
+      }
+      if (prog === 'snap' && titleLower.includes('snap') && !titleLower.includes('education')) {
+        ineligibilityReasons.push('Profile already receiving SNAP benefits')
+      }
+      if (prog === 'ssi' && titleLower.includes('ssi (supplemental')) {
+        ineligibilityReasons.push('Profile already receiving SSI')
+      }
+      if (prog === 'ssdi' && titleLower.includes('ssdi (social security disability')) {
+        ineligibilityReasons.push('Profile already receiving SSDI')
+      }
+    }
+  }
+
+  if (oppNorm.needTypesSupported?.includes('family_life') && oppNorm.title) {
+    const titleLower = (oppNorm.title || '').toLowerCase()
+    const isChildSpecific = titleLower.includes('head start') || titleLower.includes('child care') ||
+      titleLower.includes('wic') || titleLower.includes('children')
+    if (isChildSpecific && profileNorm.householdHasChildren === false &&
+        (profileNorm.ageGroup || '').toLowerCase().includes('senior')) {
+      ineligibilityReasons.push('Program requires children in household; profile is a childless senior household')
+    }
+  }
+
+  if (oppNorm.title) {
+    const titleLower = (oppNorm.title || '').toLowerCase()
+    const isRefugeeProgram = titleLower.includes('refugee') || titleLower.includes('resettlement')
+    if (isRefugeeProgram && !profileNorm.isRefugee) {
+      ineligibilityReasons.push('Program is for refugees/resettlement; profile has no refugee indicator')
+    }
+  }
+
+  if (oppNorm.isDmeOrEquipment && !profileNorm.hasDisabilityNeed && !profileNorm.hasChronicIllness) {
+    missingFields.push('disability_or_medical_need_for_equipment')
+  }
+
+  const allowedTypes = oppNorm.entityTypesAllowed ?? []
+  if (allowedTypes.length > 0 && !allowedTypes.includes('individual')) {
+    const profileType = profileNorm.entityType
+    if (profileType && !allowedTypes.includes(profileType)) {
+      const qualifiesByTrait = (
+        (allowedTypes.includes('veteran') && profileNorm.isVeteran) ||
+        (allowedTypes.includes('student') && profileNorm.isStudent) ||
+        (allowedTypes.includes('nonprofit') && profileNorm.isNonprofit) ||
+        (allowedTypes.includes('business') && profileNorm.isBusiness) ||
+        (allowedTypes.includes('caregiver') && profileNorm.isCaregiver)
+      )
+      if (!qualifiesByTrait && profileType !== 'organization') {
+        ineligibilityReasons.push(`Opportunity is for ${allowedTypes.join('/')} but profile is ${profileType}`)
+      }
+    }
+  }
+
+  const geo = oppNorm.geography ?? {}
+  if (!geo.isNational && geo.state) {
+    if (profileNorm.state && profileNorm.state !== geo.state) {
+      ineligibilityReasons.push(`Geographic mismatch: opportunity is for ${geo.state}, profile is in ${profileNorm.state}`)
+    } else if (!profileNorm.state && !profileNorm.zip) {
+      missingFields.push('profile_location')
+    }
+  }
+
+  if (!profileNorm.entityType) missingFields.push('entity_type')
+  if (!oppNorm.hasApplicationUrl) missingFields.push('application_url')
+
+  const hardIneligible = ineligibilityReasons.length > 0
+  const hasMissingData = missingFields.length > 0
+  let eligible
+  if (hardIneligible) eligible = false
+  else if (hasMissingData) eligible = 'maybe'
+  else eligible = true
+
+  return { eligible, ineligibilityReasons, missingFields }
+}
+
+// ---------------------------------------------------------------------------
+// Need alignment
+// ---------------------------------------------------------------------------
+
+/**
+ * Calculate how well the opportunity's need types match the profile's need categories.
+ * @param {Object} profileNorm - From normalizeProfile()
+ * @param {Object} oppNorm     - From normalizeOpportunity()
+ * @returns {{ score: number, matchedNeeds: string[] }}
+ */
+export function calculateNeedAlignment(profileNorm, oppNorm) {
+  const profileNeeds = profileNorm?.needCategories ?? []
+  const oppNeeds = oppNorm?.needTypesSupported ?? []
+  if (profileNeeds.length === 0) return { score: 0, matchedNeeds: [] }
+  if (oppNeeds.length === 0) return { score: 25, matchedNeeds: [] }
+  const matchedNeeds = profileNeeds.filter((n) => oppNeeds.includes(n))
+  const profileCoverage = matchedNeeds.length / profileNeeds.length
+  const oppCoverage = matchedNeeds.length / Math.max(oppNeeds.length, 1)
+  const score = Math.min(100, Math.round(((profileCoverage + oppCoverage) / 2) * 100))
+  return { score, matchedNeeds }
+}
 
 // ---------------------------------------------------------------------------
 // Internal constants
