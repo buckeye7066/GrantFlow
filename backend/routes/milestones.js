@@ -79,7 +79,7 @@ router.get('/', async (req, res) => {
     // Apply filter conditions
     if (completed === 'true') query += ' AND m.completed = 1'
     if (completed === 'false') {
-      query += req.db?.dialect === 'postgres' ? ' AND m.completed = FALSE' : ' AND m.completed = 0'
+      query += ' AND m.completed = 0'
     }
     if (upcoming === 'true') {
       query +=
@@ -135,7 +135,7 @@ router.put('/:id', async (req, res) => {
       .prepare(
         'UPDATE milestones SET title = ?, description = ?, due_date = ?, completed = ?, completed_date = ?, type = ? WHERE id = ?'
       )
-      .run(title, description, due_date, Boolean(completed), completed_date, type, req.params.id)
+      .run(title, description, due_date, completed ? 1 : 0, completed_date, type, req.params.id)
     const milestone = await req.db.prepare('SELECT * FROM milestones WHERE id = ?').get(req.params.id)
     res.json(milestone)
   } catch (error) {
@@ -150,7 +150,7 @@ router.patch('/:id/complete', async (req, res) => {
     const completed_date = new Date().toISOString().split('T')[0]
     await req.db
       .prepare('UPDATE milestones SET completed = ?, completed_date = ? WHERE id = ?')
-      .run(true, completed_date, req.params.id)
+      .run(1, completed_date, req.params.id)
     const milestone = await req.db.prepare('SELECT * FROM milestones WHERE id = ?').get(req.params.id)
     res.json(milestone)
   } catch (error) {
