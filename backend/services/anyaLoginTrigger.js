@@ -25,7 +25,7 @@ async function createAnyaSession(db, userId, profileId, title) {
     ) VALUES (?, ?, ?, ?, ?, ?)
   `)
   
-  await stmt.run(
+  stmt.run(
     sessionId,
     userId || null,
     profileId || null,
@@ -57,7 +57,7 @@ async function createCrawlerJob(db, profileId, crawlerType, parameters = {}) {
     ) VALUES (?, ?, ?, ?, ?)
   `)
   
-  await stmt.run(
+  stmt.run(
     jobId,
     profileId,
     crawlerType,
@@ -83,7 +83,7 @@ async function addAnyaMessage(db, sessionId, role, content) {
     ) VALUES (?, ?, ?, ?)
   `)
   
-  await stmt.run(
+  stmt.run(
     messageId,
     sessionId,
     role,
@@ -104,7 +104,7 @@ export async function initializeAnyaOnLogin(db, user, profileId = null, { upload
   try {
     // Resolve profile for this user
     if (!profileId && user?.id) {
-      const row = await db.prepare(`
+      const row = db.prepare(`
         SELECT id FROM profiles WHERE user_id = ? LIMIT 1
       `).get(user.id)
       profileId = row?.id || null
@@ -112,7 +112,7 @@ export async function initializeAnyaOnLogin(db, user, profileId = null, { upload
 
     // Admins: fall back to any profile if theirs isn't linked
     if (!profileId && isAdmin(user)) {
-      const row = await db.prepare(`
+      const row = db.prepare(`
         SELECT id FROM profiles ORDER BY created_at ASC LIMIT 1
       `).get()
       profileId = row?.id || null
@@ -184,7 +184,7 @@ export const initializeAnyaForAdmin = initializeAnyaOnLogin
 export async function getAnyaSessionInfo(db, sessionId) {
   if (!sessionId) return null
   
-  const session = await db.prepare(`
+  const session = db.prepare(`
     SELECT * FROM anya_sessions WHERE id = ? LIMIT 1
   `).get(sessionId)
   
