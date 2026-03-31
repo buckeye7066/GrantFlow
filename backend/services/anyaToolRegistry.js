@@ -710,7 +710,7 @@ registerTool({
 
 registerTool({
   name: 'grants.summarizeMatches',
-  description: 'Summarise the most recently matched funding opportunities for a specific profile.',
+  description: 'Summarises and explains the most recently matched funding opportunities for a specific profile, including why each one matched.',
   schema: {
     type: 'object',
     properties: {
@@ -824,7 +824,7 @@ registerTool({
 })
 registerTool({
   name: 'admin.crawler.list',
-  description: 'List all crawler jobs with their status. Admin only.',
+  description: 'Explains crawler job status to the user — lists all crawler jobs and their current state. Admin only.',
   requiresAdmin: true,
   schema: {
     type: 'object',
@@ -839,7 +839,7 @@ registerTool({
 
 registerTool({
   name: 'admin.crawler.run',
-  description: 'Trigger any crawler type with custom parameters. Admin only.',
+  description: 'Explains to the user what a crawler run does, then triggers the requested crawler type. Admin only.',
   requiresAdmin: true,
   schema: {
     type: 'object',
@@ -868,7 +868,7 @@ registerTool({
 
 registerTool({
   name: 'admin.crawler.check',
-  description: 'Validate crawler outputs and check for errors in recent jobs. Admin only.',
+  description: 'Explains crawler output quality to the user — validates crawler outputs and surfaces any errors from recent jobs. Admin only.',
   requiresAdmin: true,
   schema: {
     type: 'object',
