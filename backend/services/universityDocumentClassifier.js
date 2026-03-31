@@ -57,7 +57,8 @@ function scoreSchoolMatch({ schoolName, haystack }) {
 
 export async function loadUniversityApplicationsForProfile(db, profileId) {
   if (!profileId) return []
-  const row = await db
+  try {
+    const row = await db
     .prepare(
       `
         SELECT data
@@ -67,7 +68,7 @@ export async function loadUniversityApplicationsForProfile(db, profileId) {
         LIMIT 1
       `,
     )
-    .get(profileId)
+    .get(String(profileId).replace(/[^0-9]/g, ''))
   if (!row?.data) return []
   try {
     const parsed = JSON.parse(row.data)
@@ -78,7 +79,8 @@ export async function loadUniversityApplicationsForProfile(db, profileId) {
         name: app?.name ?? '',
       }))
       .filter((a) => a.id && a.name)
-  } catch {
+  } catch (error) {
+    console.error('Failed to parse university applications data:', error)
     return []
   }
 }
