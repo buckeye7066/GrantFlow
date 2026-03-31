@@ -1,5 +1,16 @@
 import Database from 'better-sqlite3';
 import pg from 'pg';
+
+// Validate critical environment on startup
+if (process.env.NODE_ENV === 'production') {
+  const hasRailwayEnv = Boolean(process.env.RAILWAY_PROJECT_ID || process.env.RAILWAY_SERVICE_ID);
+  const hasPostgresUrl = /^postgres(ql)?:\/\//i.test(String(process.env.DATABASE_URL || ''));
+  const hasPostgresVars = Boolean(process.env.PGHOST && process.env.PGUSER && process.env.PGDATABASE);
+  
+  if (hasRailwayEnv && !hasPostgresUrl && !hasPostgresVars) {
+    throw new Error('[db] FATAL: Railway production deployment detected but no Postgres configuration found. Set DATABASE_URL or PGHOST/PGUSER/PGDATABASE.');
+  }
+}
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
@@ -106,10 +117,16 @@ function resolveDefaultSqlitePath(dataDir) {
   const railwayDir = '/mnt/data';
   try {
     if (fs.existsSync(railwayDir) && fs.statSync(railwayDir).isDirectory()) {
+      // Verify volume is actually writable
+      const testFile = join(railwayDir, '.write-test');
+      fs.writeFileSync(testFile, 'test');
+      fs.unlinkSync(testFile);
       return join(railwayDir, 'grantflow.db');
     }
-  } catch {
-    // ignore
+  } catch (error) {
+    if (process.env.NODE_ENV === 'production' && isRailwayRuntime()) {
+      console.error('[db] Railway volume /mnt/data exists but is not writable:', error.message);
+    }
   }
 
   return join(dataDir, 'grantflow.db');
@@ -405,17 +422,15 @@ class SqliteDb {
   }
 
   async withTransaction(fn) {
-    this.exec('BEGIN');
+    // Use better-sqlite3's built-in transaction for proper isolation
+    const txFn = this._db.transaction((txThis) => {
+      return fn(txThis);
+    });
+    
     try {
-      const result = await fn(this);
-      this.exec('COMMIT');
-      return result;
+      return await txFn(this);
     } catch (error) {
-      try {
-        this.exec('ROLLBACK');
-      } catch {
-        // ignore rollback errors
-      }
+      // better-sqlite3 handles rollback automatically
       throw error;
     }
   }
@@ -589,7 +604,21 @@ class PostgresDb {
 let singleton = null;
 
 export function getDb() {
-  if (singleton) return singleton;
+  if (singleton) {
+    // Validate singleton is still healthy in production
+    if (process.env.NODE_ENV === 'production') {
+      try {
+        if (singleton.dialect === 'sqlite') {
+          singleton._db.prepare('SELECT 1').get();
+        }
+      } catch (error) {
+        console.error('[db] Singleton database connection is broken, recreating:', error.message);
+        singleton = null;
+        // Fall through to recreate
+      }
+    }
+    if (singleton) return singleton;
+  }
 
   const provider = detectProvider();
 
