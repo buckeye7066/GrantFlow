@@ -77,6 +77,8 @@ export async function runBootstrap({ db, uploadsDir, legacyUploadsDir, baseDir }
             last_error: storageStatus.last_error,
           },
         );
+        // Allow graceful cleanup before exit
+        await new Promise(resolve => setTimeout(resolve, 100));
         process.exit(1);
       }
 
@@ -264,6 +266,11 @@ export async function runBootstrap({ db, uploadsDir, legacyUploadsDir, baseDir }
         console.error(`Migration error: Invalid table "${table}" or column "${column}"`);
         return;
       }
+      // Additional validation for type to prevent injection
+      if (!/^[A-Z_\s()0-9]+$/i.test(type.replace(/REFERENCES\s+\w+\(\w+\)\s+ON\s+DELETE\s+SET\s+NULL/i, ''))) {
+        console.error(`Migration error: Invalid type "${type}"`);
+        return;
+      }
       try {
         db.prepare(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`).run();
       } catch (error) {
@@ -299,6 +306,9 @@ export async function runBootstrap({ db, uploadsDir, legacyUploadsDir, baseDir }
               { table, error: msg },
             );
             break;
+          } else {
+            // Log unexpected database errors that might indicate corruption
+            console.error('[database] Unexpected error checking table:', { table, error: msg });
           }
         }
       }
@@ -364,6 +374,11 @@ function _ensureCrawlerJobsSupportsAllTypes(db) {
 
   for (const type of testTypes) {
     try {
+      // Validate type matches expected pattern
+      if (!/^[a-z_]+$/.test(type)) {
+        console.error(`Invalid test type: ${type}`);
+        continue;
+      }
       const testId = `__schema_test_${type}__`;
       db.prepare(
         `INSERT INTO crawler_jobs (id, type, status) VALUES (?, ?, 'queued')`,
