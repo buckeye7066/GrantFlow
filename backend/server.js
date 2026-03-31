@@ -879,7 +879,8 @@ if (process.env.NODE_ENV !== 'test') {
   
   // Initialize feature flags
   try {
-    initializeFeatureFlags(db);
+    // Import at top: import { initializeFeatureFlags } from './services/featureFlags.js';
+initializeFeatureFlags(db);
     console.log('[FeatureFlags] Initialized successfully');
   } catch (err) {
     console.warn('[FeatureFlags] Failed to initialize:', err.message);
@@ -887,10 +888,12 @@ if (process.env.NODE_ENV !== 'test') {
 
   // Startup smoke crawlers (PRODUCTION): default OFF.
   // These are useful for deploy verification, but must not run automatically unless explicitly enabled.
-  const startupSmokeEnabled = parseBoolEnv(process.env.STARTUP_SMOKE_CRAWL_ENABLED) === true
+  // Import at top: import { parseBoolEnv } from './utils/env.js';
+const startupSmokeEnabled = parseBoolEnv(process.env.STARTUP_SMOKE_CRAWL_ENABLED) === true
   if (startupSmokeEnabled) {
     setTimeout(() => {
-      scheduleCrawlerSmokeJobs({ db, uploadsDir }).catch(e => console.warn('[background]', e?.message || e))
+      // Import at top: import { scheduleCrawlerSmokeJobs } from './services/crawlerSmokeJobs.js';
+scheduleCrawlerSmokeJobs({ db, uploadsDir }).catch(e => console.warn('[background]', e?.message || e))
     }, 10_000)
     console.info('[startup] Startup smoke crawlers enabled (STARTUP_SMOKE_CRAWL_ENABLED=true)')
   } else {
@@ -901,17 +904,21 @@ if (process.env.NODE_ENV !== 'test') {
 
   // Auto-merge duplicate profiles once per deploy (production only).
   setTimeout(() => {
-    scheduleAutoProfileDedupe({ db }).catch((err) => {
+    // Import at top: import { scheduleAutoProfileDedupe } from './services/autoProfileDedupe.js';
+scheduleAutoProfileDedupe({ db }).catch((err) => {
       console.warn('[auto-dedupe] failed:', err?.message || String(err))
     })
   }, 20_000)
   
   // Log server startup event
   try {
-    logAuditEvent(db, {
-      category: AUDIT_CATEGORIES.SYSTEM,
+    // Import at top: import { logAuditEvent, AUDIT_CATEGORIES, SEVERITY } from './services/auditService.js';
+logAuditEvent(db, {
+      // Import at top: import { AUDIT_CATEGORIES } from './services/auditService.js';
+category: AUDIT_CATEGORIES.SYSTEM,
       action: 'server_startup',
-      severity: SEVERITY.INFO,
+      // Import at top: import { SEVERITY } from './services/auditService.js';
+severity: SEVERITY.INFO,
       details: {
         port: actualPort,
         environment: process.env.NODE_ENV || 'development',
