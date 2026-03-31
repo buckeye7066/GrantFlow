@@ -99,14 +99,7 @@ router.post('/comprehensiveMatch', async (req, res) => {
   );
 
     // Profile isolation: only global catalog entries (profile_id IS NULL) or this profile's own crawl results.
-    const matchProfileId = typeof profile_json === 'string' ? profile_json : (profile?.id ?? null)
-    if (matchProfileId) {
-      conditions.push('(profile_id IS NULL OR profile_id = ?)')
-      params.push(matchProfileId)
-    } else {
-      // Admin-provided raw JSON without an ID: restrict to global catalog only to prevent bleed
-      conditions.push('profile_id IS NULL')
-    }
+    // Profile isolation handled below after freshness filter
     
     // State filtering
     if (profileStates.length > 0) {
@@ -157,10 +150,7 @@ router.post('/comprehensiveMatch', async (req, res) => {
       : '';
     query += ` ORDER BY ${stateOrderClause}CASE WHEN ${isNationalSort} THEN 0 ELSE 1 END, CASE WHEN ${deadlineNullSort} THEN 0 ELSE 1 END, deadline ASC, updated_at DESC LIMIT ${candidateLimit}`;
 
-    const opportunities = await req.db.prepare(query).all(
-      ...params,
-      ...(profileStates.length > 0 ? profileStates : []),
-    );
+    const opportunities = await req.db.prepare(query).all(...params);
     
     console.info(`[comprehensiveMatch] Query found ${opportunities.length} opportunities`);
 
@@ -391,8 +381,8 @@ router.post('/searchOpportunities', async (req, res) => {
         sponsor: opp.sponsor || opp.funder,
         url: url,
         deadline: opp.deadline,
-      award_min: null,
-      award_max: null,
+      award_min: opp.amount_min,
+      award_max: opp.amount_max,
       description: opp.description || opp.summary,
       state: opp.state,
       source: opp.source || 'database',
@@ -442,7 +432,7 @@ router.post('/archOpportunities', async (req, res) => {
       const placeholders = opportunity_ids.map(() => '?').join(',');
       const query = `
         UPDATE funding_opportunities 
-        SET archived = 1, archived_at = CURRENT_TIMESTAMP 
+        SET archived = ${isPostgres ? 'TRUE' : '1'}, archived_at = CURRENT_TIMESTAMP 
         WHERE id IN (${placeholders})
       `;
       
@@ -459,7 +449,7 @@ router.post('/archOpportunities', async (req, res) => {
       const placeholders = opportunity_ids.map(() => '?').join(',');
       const query = `
         UPDATE funding_opportunities 
-        SET archived = 0, archived_at = NULL 
+        SET archived = ${isPostgres ? 'FALSE' : '0'}, archived_at = NULL 
         WHERE id IN (${placeholders})
       `;
       
@@ -475,7 +465,7 @@ router.post('/archOpportunities', async (req, res) => {
       // List archived opportunities
       const query = `
         SELECT * FROM funding_opportunities 
-        WHERE archived = 1 
+        WHERE archived = ${isPostgres ? 'TRUE' : '1'} 
         ORDER BY archived_at DESC 
         LIMIT 100
       `;
