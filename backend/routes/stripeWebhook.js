@@ -40,16 +40,13 @@ router.post('/', async (req, res) => {
         const purchaseId = String(metadata.purchase_id || '').trim()
         const phase = String(metadata.milestone_phase || '').trim()
         if (purchaseId && phase) {
-          await req.db.prepare(
-            `
-              UPDATE milestone_payments
-              SET status = 'paid',
-                  stripe_payment_intent_id = COALESCE(stripe_payment_intent_id, ?),
-                  paid_at = CURRENT_TIMESTAMP,
-                  updated_at = CURRENT_TIMESTAMP
-              WHERE purchase_id = ? AND phase = ?
-            `,
-          ).run(paymentIntent, purchaseId, phase)
+          const transaction = req.db.transaction(() => {
+            req.db.prepare(
+              `UPDATE milestone_payments SET status = 'paid', stripe_payment_intent_id = COALESCE(stripe_payment_intent_id, ?), paid_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE purchase_id = ? AND phase = ?`
+            ).run(paymentIntent, purchaseId, phase)
+            // Additional updates within same transaction
+          })
+          transaction()
           // Mark purchase in_progress once kickoff is paid
           if (phase === 'kickoff') {
             await req.db.prepare(
@@ -117,10 +114,17 @@ router.post('/', async (req, res) => {
       }
     }
   } catch (error) {
+    console.error('Stripe webhook processing failed:', {
+      eventType: event?.type,
+      eventId: event?.id,
+      error: error.message,
+      stack: error.stack
+    })
     return res.status(500).json({
       ok: false,
       error: 'webhook_handler_failed',
       type: event?.type || null,
+      message: error.message
     })
   }
 
