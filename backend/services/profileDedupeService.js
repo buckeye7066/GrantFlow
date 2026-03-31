@@ -368,7 +368,10 @@ async function columnExists(tx, tableName, columnName) {
 
   // SQLite: PRAGMA table_info doesn't accept bound params, so we must validate the identifier.
   if (!/^[a-zA-Z0-9_]+$/.test(table)) return false
-  const rows = await tx.prepare(`PRAGMA table_info(${table})`).all()
+  // Use allowlist validation instead of regex for critical security
+const ALLOWED_TABLES = ['profiles', 'profile_sections', 'documents', 'crawler_jobs', 'anya_sessions', 'billing_accounts', 'profile_emails', 'profile_documents'];
+if (!ALLOWED_TABLES.includes(table)) return false;
+const rows = await tx.prepare(`PRAGMA table_info(${table})`).all()
   return (rows || []).some((r) => String(r?.name || '') === col)
 }
 
@@ -471,10 +474,11 @@ export async function mergeProfiles(db, {
   }
 
   return await db.withTransaction(async (tx) => {
-    const winner = await tx
-      .prepare('SELECT id, display_name, user_id, organization_id FROM profiles WHERE id = ?')
-      .get(winnerId)
-    if (!winner) throw new Error(`Winner profile not found: ${winnerId}`)
+    try {
+      const winner = await tx
+        .prepare('SELECT id, display_name, user_id, organization_id FROM profiles WHERE id = ?')
+        .get(winnerId)
+      if (!winner) throw new Error(`Winner profile not found: ${winnerId}`)
 
     const changes = []
 
@@ -602,7 +606,10 @@ export async function mergeProfiles(db, {
       }
 
       if (loserAcct && !winnerAcct) {
-        await tx.prepare('UPDATE billing_accounts SET profile_id = ? WHERE id = ?').run(winnerId, loserAcct.id)
+        const result = await tx.prepare('UPDATE billing_accounts SET profile_id = ? WHERE id = ?').run(winnerId, loserAcct.id)
+        if (result.changes === 0) {
+          throw new Error(`Failed to transfer billing account ${loserAcct.id} to winner ${winnerId}`)
+        }
         return { type: 'billing.transfer', accountId: loserAcct.id, to: winnerId }
       }
 
@@ -669,7 +676,12 @@ export async function mergeProfiles(db, {
           { table: 'anya_sessions', idColumn: 'profile_id' },
           { table: 'anya_tasks', idColumn: 'profile_id' },
           { table: 'anya_tool_usage', idColumn: 'profile_id' },
-          { table: 'service_applications', idColumn: 'profile_id' },
+          // Check for active applications before merge
+        const activeApps = await tx.prepare('SELECT COUNT(*) as count FROM service_applications WHERE profile_id = ? AND status IN (?, ?, ?)').get(loserId, 'submitted', 'under_review', 'approved')
+        if (activeApps.count > 0 && !dryRun) {
+          throw new Error(`Cannot merge profile ${loserId} - has ${activeApps.count} active funding applications`)
+        }
+        { table: 'service_applications', idColumn: 'profile_id' },
           { table: 'funding_opportunities', idColumn: 'profile_id' },
         ]
 
