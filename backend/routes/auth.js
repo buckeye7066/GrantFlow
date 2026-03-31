@@ -1763,7 +1763,7 @@ router.post('/email/start', emailStartLimiter, async (req, res) => {
     return res.status(500).json({ 
       error: 'An unexpected error occurred. Please try again.',
       error_type: 'internal_error',
-      details: process.env.NODE_ENV !== 'production' ? error.message : undefined
+      details: undefined // Never expose internal error details
     })
   }
 })
@@ -2711,7 +2711,7 @@ router.post('/password/setup/complete', async (req, res) => {
       return res.status(400).json({ error: 'invalid_or_expired_token', error_type: 'invalid_or_expired_token' })
     }
 
-    const passwordHash = await bcrypt.hash(passwordRaw, 12)
+    const passwordHash = await bcrypt.hash(passwordRaw, 15)
     await req.db
       .prepare('UPDATE users SET password_hash = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
       .run(passwordHash, user.id)
@@ -2893,7 +2893,7 @@ router.get('/:provider/start', async (req, res) => {
     return res.status(500).json({ 
       error: 'Failed to initiate OAuth flow',
       provider,
-      details: process.env.NODE_ENV !== 'production' ? error.message : undefined
+      details: undefined // Never expose internal error details
     })
   }
 })
@@ -3092,7 +3092,7 @@ router.get('/me', async (req, res) => {
     return res.status(500).json({ 
       error: 'An unexpected error occurred',
       error_type: 'internal_error',
-      details: process.env.NODE_ENV !== 'production' ? error.message : undefined
+      details: undefined // Never expose internal error details
     })
   }
 })
@@ -3173,7 +3173,7 @@ router.patch('/onboarding-state', async (req, res) => {
     return res.status(500).json({
       error: 'An unexpected error occurred',
       error_type: 'internal_error',
-      details: process.env.NODE_ENV !== 'production' ? error.message : undefined,
+      details: undefined // Never expose internal error details,
     })
   }
 })
