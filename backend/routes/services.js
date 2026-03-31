@@ -22,29 +22,29 @@ router.use(async (req, _res, next) => {
   next()
 })
 
-router.get('/catalog', async (req, res) => {
+router.get('/catalog', ensureAuth, async (req, res) => {
   const includeInactive = String(req.query?.include_inactive || '').toLowerCase() === 'true'
   const catalog = await listServiceCatalog(req.db, { includeInactive })
   res.json({ ok: true, catalog })
 })
 
-router.get('/terms', async (req, res) => {
+router.get('/terms', ensureAuth, async (req, res) => {
   const terms = await getLatestServiceTerms(req.db)
   res.json({ ok: true, terms })
 })
 
-async function getClientCategoryForProfile(db, profileId) {
+async function getClientCategoryForProfile(db, profileId, userId) {
   const row = await db
     .prepare(
       `
         SELECT p.id, p.primary_type, o.applicant_type, o.annual_budget
         FROM profiles p
         LEFT JOIN organizations o ON o.id = p.organization_id
-        WHERE p.id = ?
+        WHERE p.id = ? AND p.user_id = ?
         LIMIT 1
       `,
     )
-    .get(String(profileId))
+    .get(String(profileId), String(userId))
   if (!row) return null
 
   const applicantType = String(row.applicant_type || row.primary_type || '').toLowerCase()
