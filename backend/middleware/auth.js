@@ -25,7 +25,6 @@ export async function ensureAdmin(req, res, next) {
     return res.status(401).json({ error: 'Authentication required' });
   }
   const user = req.user;
-    return res.status(401).json({ error: 'Authentication required' });
   }
   
   try {
@@ -76,7 +75,14 @@ export function ensureProfileAccess(profileIdParam = 'id') {
       
       // Check if profile belongs to user via user_id (async DB call)
       if (user.userId) {
-        const profile = req.db.prepare('SELECT id, user_id FROM profiles WHERE id = ?').get(profileId);
+        const profile = await new Promise((resolve, reject) => {
+          try {
+            const result = req.db.prepare('SELECT id, user_id FROM profiles WHERE id = ?').get(profileId);
+            resolve(result);
+          } catch (err) {
+            reject(err);
+          }
+        });
         
         if (profile && profile.user_id === user.userId) {
           return next();
