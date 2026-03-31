@@ -75,7 +75,7 @@ export async function crawlStateWaiverBenefits(profile, options = {}) {
         url: r.url ?? r.application_url ?? r.source_url,
         application_url: r.application_url ?? r.url ?? r.source_url,
         source_url: r.source_url ?? r.url ?? r.application_url,
-      })).filter((r) => r.url && (r.url.startsWith('http://') || r.url.startsWith('https://')))
+      })).filter((r) => r.url && (r.url.startsWith('https://') || r.url.startsWith('http://')))
     }
 
     const results = []
@@ -84,10 +84,13 @@ export async function crawlStateWaiverBenefits(profile, options = {}) {
         { ...raw, record_origin: 'directory_resource', url: raw.url, application_url: raw.url, source_url: raw.url },
         CRAWLER_ID,
       )
-      if (n) results.push({ ...n, state: state ?? 'nationwide' })
+      if (n && n.url && (n.url.startsWith('https://') || n.url.startsWith('http://'))) {
+        results.push({ ...n, state: state ?? 'nationwide' })
+      }
     }
     return results
-  } catch {
+  } catch (error) {
+    console.error(`State waiver benefits crawler failed for state ${state}:`, error)
     return []
   }
 }
