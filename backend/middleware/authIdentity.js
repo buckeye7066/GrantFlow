@@ -147,20 +147,29 @@ export function createAuthIdentityMiddleware({ adminToken, adminName, adminEmail
             // Best-effort DB session validation/enrichment (when sessions are stored locally).
             if (payload?.sid) {
               try {
-              const sessionRow = await db
-                .prepare(
-                  `
-                    SELECT s.*, u.display_name, u.primary_email, u.is_admin
-                    FROM user_sessions s
-                    JOIN users u ON u.id = s.user_id
-                    WHERE s.id = ?
-                  `,
-                )
-                .get(payload.sid)
+              const sessionRow = await new Promise((resolve, reject) => {
+                  try {
+                    const stmt = db.prepare(`
+                      SELECT s.*, u.display_name, u.primary_email, u.is_admin
+                      FROM user_sessions s
+                      JOIN users u ON u.id = s.user_id
+                      WHERE s.id = ?
+                    `);
+                    resolve(stmt.get(payload.sid));
+                  } catch (err) {
+                    reject(err);
+                  }
+                });
               // ... rest of session handling logic
             } catch (error) {
               console.warn('Failed to validate session:', error?.message || error)
               // Continue with token-only authentication
+              if (error?.code === 'SQLITE_CORRUPT' || error?.code === 'ECONNRESET') {
+                // Critical DB errors should fail auth completely
+                user = { role: 'guest', profileId: null }
+                req.user = user
+                return next()
+              }
             }
               if (
                 sessionRow &&
@@ -214,9 +223,14 @@ export function createAuthIdentityMiddleware({ adminToken, adminName, adminEmail
         if (!handled && allowLegacyProfileToken) {
           try {
             try {
-            const profile = await db
-              .prepare('SELECT id, display_name FROM profiles WHERE id = ?')
-              .get(token)
+            const profile = await new Promise((resolve, reject) => {
+              try {
+                const stmt = db.prepare('SELECT id, display_name FROM profiles WHERE id = ?');
+                resolve(stmt.get(token));
+              } catch (err) {
+                reject(err);
+              }
+            });
             if (profile) {
               user = {
                 role: 'user',
@@ -226,18 +240,6 @@ export function createAuthIdentityMiddleware({ adminToken, adminName, adminEmail
               handled = true
             }
           } catch (error) {
-            console.warn('Failed to lookup profile by token:', error?.message || error)
-          }
-            if (profile) {
-              user = {
-                role: 'user',
-                profileId: profile.id,
-                profileName: profile.display_name,
-              }
-              handled = true
-            }
-          } catch (error) {
-            // Ignore lookup errors and fall back to guest
             console.warn('Failed to lookup profile by token:', error?.message || error)
           }
         }
