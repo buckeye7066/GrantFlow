@@ -58,13 +58,11 @@ export async function createAnyaRun(db, options) {
             operation_type,
             status,
             user_id,
-            profile_id,
-            requested_by,
-            authorized
-          ) VALUES (?, ?, ?, ?, 'queued', ?, ?, ?, ?)
+            created_at
+          ) VALUES (?, ?, ?, ?, 'queued', ?, CURRENT_TIMESTAMP)
         `
       )
-      .run(id, runId, mode, operationType, userId, profileId, requestedBy, authorized ? 1 : 0)
+      .run(id, runId, mode, operationType, userId)
     
     console.log('[anya-runs] Created Anya run entry', {
       id,
@@ -143,21 +141,11 @@ export async function completeAnyaRun(db, id, results = {}) {
       `
         UPDATE anya_runs
         SET status = 'completed',
-            completed_at = CURRENT_TIMESTAMP,
-            tools_used = ?,
-            input_tokens = ?,
-            output_tokens = ?,
-            duration_ms = ?
+            completed_at = CURRENT_TIMESTAMP
         WHERE id = ?
       `
     )
-    .run(
-      JSON.stringify(toolsUsed),
-      inputTokens,
-      outputTokens,
-      durationMs,
-      id
-    )
+    .run(id)
   
   console.log('[anya-runs] Completed Anya run', {
     id,
@@ -184,13 +172,11 @@ export async function failAnyaRun(db, id, error) {
       `
         UPDATE anya_runs
         SET status = 'failed',
-            completed_at = CURRENT_TIMESTAMP,
-            error_message = ?,
-            error_stack = ?
+            completed_at = CURRENT_TIMESTAMP
         WHERE id = ?
       `
     )
-    .run(errorMessage, errorStack, id)
+    .run(id)
   
   console.error('[anya-runs] Failed Anya run', {
     id,
@@ -216,10 +202,7 @@ export async function getAnyaRunsByUser(db, userId, limit = 50) {
           operation_type,
           status,
           created_at,
-          completed_at,
-          duration_ms,
-          input_tokens,
-          output_tokens
+          completed_at
         FROM anya_runs
         WHERE user_id = ?
         ORDER BY created_at DESC
@@ -249,11 +232,8 @@ export async function getAnyaRunsByMode(db, mode, limit = 50) {
           operation_type,
           status,
           user_id,
-          profile_id,
           created_at,
-          completed_at,
-          duration_ms,
-          authorized
+          completed_at
         FROM anya_runs
         WHERE mode = ?
         ORDER BY created_at DESC
@@ -277,10 +257,7 @@ export async function getAnyaRunStatistics(db, since = null) {
       SELECT 
         mode,
         status,
-        COUNT(*) as count,
-        AVG(duration_ms) as avg_duration_ms,
-        SUM(input_tokens) as total_input_tokens,
-        SUM(output_tokens) as total_output_tokens
+        COUNT(*) as count
       FROM anya_runs
       WHERE created_at >= ?
       GROUP BY mode, status
@@ -290,10 +267,7 @@ export async function getAnyaRunStatistics(db, since = null) {
       SELECT 
         mode,
         status,
-        COUNT(*) as count,
-        AVG(duration_ms) as avg_duration_ms,
-        SUM(input_tokens) as total_input_tokens,
-        SUM(output_tokens) as total_output_tokens
+        COUNT(*) as count
       FROM anya_runs
       GROUP BY mode, status
       ORDER BY mode, status
