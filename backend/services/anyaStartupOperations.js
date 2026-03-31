@@ -43,8 +43,10 @@ export async function runStartupOperations(db) {
       setTimeout(async () => {
         try {
           console.log('[Anya Background] Starting county funding crawler...')
-          const { crawlAllCounties } = await import('./countyFundingCrawler.js')
-          const result = await crawlAllCounties(db)
+          // const { crawlAllCounties } = await import('./countyFundingCrawler.js')
+          console.log('[Anya Background] County crawler not implemented yet')
+          // const result = await crawlAllCounties(db)
+          const result = { inserted: 0, counties: 0 }
           console.log(`[Anya Background] County crawler complete: ${result.inserted} new opportunities across ${result.counties} counties`)
         } catch (crawlErr) {
           console.error('[Anya Background] County crawler error:', crawlErr.message)
