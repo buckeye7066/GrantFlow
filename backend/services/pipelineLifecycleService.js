@@ -65,15 +65,14 @@ export async function archiveExpiredGrants(db) {
 
   let expiredGrants
   try {
-    expiredGrants = await db
-      .prepare(
+    const stmt = db.prepare(
         `SELECT id, title, profile_id, organization_id, deadline, status
          FROM grants
          WHERE deadline IS NOT NULL
            AND deadline < ?
-           AND status IN (${placeholders})`,
+           AND status IN (${placeholders})`
       )
-      .all(cutoff, ...ARCHIVEABLE_STATUSES)
+      expiredGrants = await stmt.all(cutoff, ...ARCHIVEABLE_STATUSES)
   } catch {
     return { archived: [] }
   }
@@ -83,15 +82,14 @@ export async function archiveExpiredGrants(db) {
   const archived = []
   for (const grant of expiredGrants) {
     try {
-      await db
-        .prepare(
+      const updateStmt = db.prepare(
           `UPDATE grants
            SET status = 'archived',
                updated_at = CURRENT_TIMESTAMP,
                notes = COALESCE(notes || ' | ', '') || 'Auto-archived: deadline passed (' || deadline || ')'
-           WHERE id = ?`,
+           WHERE id = ?`
         )
-        .run(grant.id)
+        await updateStmt.run(grant.id)
       archived.push({ ...grant, newStatus: 'archived' })
     } catch {
       // Individual update failure is non-fatal
@@ -118,15 +116,14 @@ export async function flagStaleDiscoveries(db, staleDays = 60) {
 
   let staleGrants
   try {
-    staleGrants = await db
-      .prepare(
+    const staleStmt = db.prepare(
         `SELECT id, title, profile_id, organization_id, created_at, status
          FROM grants
          WHERE status = 'discovered'
            AND created_at < ?
-           AND (notes IS NULL OR notes NOT LIKE '%stale%')`,
+           AND (notes IS NULL OR notes NOT LIKE '%stale%')`
       )
-      .all(cutoff)
+      staleGrants = await staleStmt.all(cutoff)
   } catch {
     return { flagged: [] }
   }
@@ -137,14 +134,13 @@ export async function flagStaleDiscoveries(db, staleDays = 60) {
   for (const grant of staleGrants) {
     try {
       const age = daysBetween(grant.created_at, today())
-      await db
-        .prepare(
+      const flagStmt = db.prepare(
           `UPDATE grants
            SET updated_at = CURRENT_TIMESTAMP,
                notes = COALESCE(notes || ' | ', '') || 'Stale: discovered ' || ? || ' days ago with no action'
-           WHERE id = ?`,
+           WHERE id = ?`
         )
-        .run(age, grant.id)
+        await flagStmt.run(age, grant.id)
       flagged.push({ ...grant, daysStale: age })
     } catch {
       // Non-fatal
@@ -171,8 +167,7 @@ export async function detectNewCycles(db) {
 
   let candidates
   try {
-    candidates = await db
-      .prepare(
+    const cycleStmt = db.prepare(
         `SELECT id, title, profile_id, organization_id, deadline, application_url, status
          FROM grants
          WHERE status IN ('archived', 'closed', 'declined', 'declined_no_review')
@@ -180,9 +175,9 @@ export async function detectNewCycles(db) {
            AND deadline < ?
            AND (notes IS NULL OR notes NOT LIKE '%new cycle detected%')
          ORDER BY deadline ASC
-         LIMIT 200`,
+         LIMIT 200`
       )
-      .all(cycleThreshold)
+      candidates = await cycleStmt.all(cycleThreshold)
   } catch {
     return { newCycles: [] }
   }
@@ -231,9 +226,8 @@ export async function detectNewCycles(db) {
 async function buildProfileReports(db, runResults) {
   let profiles
   try {
-    profiles = await db
-      .prepare('SELECT id, display_name FROM profiles ORDER BY display_name')
-      .all()
+    const profileStmt = db.prepare('SELECT id, display_name FROM profiles ORDER BY display_name')
+    profiles = await profileStmt.all()
   } catch {
     return []
   }
@@ -242,14 +236,13 @@ async function buildProfileReports(db, runResults) {
   for (const profile of profiles) {
     let breakdown
     try {
-      breakdown = await db
-        .prepare(
+      const breakdownStmt = db.prepare(
           `SELECT status, COUNT(*) as count
            FROM grants
            WHERE profile_id = ?
-           GROUP BY status`,
+           GROUP BY status`
         )
-        .all(profile.id)
+        breakdown = await breakdownStmt.all(profile.id)
     } catch {
       breakdown = []
     }
