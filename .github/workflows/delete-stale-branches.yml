@@ -7,8 +7,8 @@ on:
       dry_run:
         description: 'Dry run (list branches but do not delete)'
         required: false
-        default: 'false'
-        type: string
+        default: false
+        type: boolean
 
 permissions:
   contents: write
