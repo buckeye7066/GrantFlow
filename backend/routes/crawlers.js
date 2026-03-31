@@ -5,7 +5,7 @@ import { fileURLToPath } from 'url'
 import { dirname, join } from 'path'
 import { dispatchCrawlerJob } from '../services/crawlerDispatcher.js'
 import { createCrawlerJob, validateJobParameters, generateIdempotencyKey } from '../services/crawlerJobCreation.js'
-import { buildProfileContext } from '../services/profileHelpers.js'
+import { buildProfileContext, computeProfileDigest } from '../services/profileHelpers.js'
 import { validatePagination } from '../utils/validation.js'
 import { createOpenAIClient } from '../utils/openaiClient.js'
 import { formatError } from '../middleware/errorHandler.js'
@@ -1109,9 +1109,16 @@ router.post('/jobs', enforceCrawlerJobTier(), async (req, res) => {
       force: forceFlag,
     })
 
+    // For profile-scoped jobs, compute a material-fields digest so that meaningful
+    // profile edits produce a different idempotency key (GF-AUDIT-019).
+    let profileDigest = null
+    if (!forceFlag && targetProfileId && TYPES_REQUIRING_PROFILE.has(type)) {
+      profileDigest = await computeProfileDigest(req.db, targetProfileId)
+    }
+
     const idempotencyKey = forceFlag
       ? null
-      : generateIdempotencyKey(type, targetProfileId, validatedParameters)
+      : generateIdempotencyKey(type, targetProfileId, validatedParameters, profileDigest)
 
     let creation
     try {
@@ -1125,6 +1132,8 @@ router.post('/jobs', enforceCrawlerJobTier(), async (req, res) => {
         // Keep HTTP fast; dispatcher can rebuild snapshots when starting.
         buildSnapshot: false,
         skipIdempotencyCheck: Boolean(forceFlag),
+        // Pass pre-computed digest so createCrawlerJob doesn't re-query the DB
+        profileContextDigest: profileDigest,
       })
     } catch (createError) {
       // If two requests race, the UNIQUE(idempotency_key) constraint may throw.
