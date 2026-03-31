@@ -33,10 +33,10 @@ async function queryNearbyOpportunities(db, analysis, curatedTitles, limit = 50)
              contact_info, categories, keywords, match_reasons, match_score,
              funding_type, record_origin
       FROM funding_opportunities
-      WHERE is_active = ${activeVal}
-        AND (state = ? OR state = 'nationwide' OR is_national = ${activeVal})
-        AND ${trustedOriginClause()}
-        AND ${trustedSourceClause()}
+      const query = isPg
+        ? 'SELECT ... FROM funding_opportunities WHERE is_active = TRUE AND (state = $1 OR state = \'nationwide\' OR is_national = TRUE) AND ' + trustedOriginClause() + ' AND ' + trustedSourceClause() + ' ORDER BY ... LIMIT $2'
+        : 'SELECT ... FROM funding_opportunities WHERE is_active = 1 AND (state = ? OR state = \'nationwide\' OR is_national = 1) AND ' + trustedOriginClause() + ' AND ' + trustedSourceClause() + ' ORDER BY ... LIMIT ?'
+      return db.prepare(query).all(state || 'nationwide', limit)
       ORDER BY match_score DESC NULLS LAST, last_verified_at DESC NULLS LAST
       LIMIT ?
     `).all(state || 'nationwide', limit);
