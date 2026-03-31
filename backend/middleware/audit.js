@@ -42,14 +42,36 @@ export function auditLogger(req, res, next) {
       
       if (req.db) {
         try {
+          // Create audit_logs table if it doesn't exist
           req.db.prepare(`
-            INSERT INTO crawler_jobs (id, type, status, parameters, requested_by, result_meta)
-            VALUES (?, 'audit_log', 'completed', ?, ?, ?)
+            CREATE TABLE IF NOT EXISTS audit_logs (
+              id TEXT PRIMARY KEY,
+              correlation_id TEXT,
+              timestamp TEXT,
+              user_id TEXT,
+              method TEXT,
+              path TEXT,
+              status INTEGER,
+              duration_ms INTEGER,
+              ip TEXT,
+              payload TEXT
+            )
+          `).run();
+          
+          req.db.prepare(`
+            INSERT INTO audit_logs (id, correlation_id, timestamp, user_id, method, path, status, duration_ms, ip, payload)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           `).run(
-            logEntry.id, 
-            JSON.stringify({ path: logEntry.path, method: logEntry.method }),
+            logEntry.id,
+            logEntry.correlation_id,
+            logEntry.timestamp,
             logEntry.user_id,
-            JSON.stringify(logEntry)
+            logEntry.method,
+            logEntry.path,
+            logEntry.status,
+            logEntry.duration_ms,
+            logEntry.ip,
+            JSON.stringify(logEntry.payload)
           );
         } catch (e) {
           // Fallback if table structure doesn't match or fails
@@ -71,7 +93,7 @@ function redactSensitiveData(obj) {
   const redacted = Array.isArray(obj) ? [] : {};
   
   for (const [key, value] of Object.entries(obj)) {
-    if (sensitiveKeys.some(sk => key.toLowerCase().includes(sensitiveKeys))) {
+    if (sensitiveKeys.some(sk => key.toLowerCase().includes(sk))) {
       redacted[key] = '[REDACTED]';
     } else if (typeof value === 'object') {
       redacted[key] = redactSensitiveData(value);
