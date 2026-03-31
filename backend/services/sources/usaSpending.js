@@ -61,7 +61,7 @@ export async function fetchUSASpending(options = {}) {
       headers: {
         'Content-Type': 'application/json',
       },
-      data: payload,
+      body: JSON.stringify(payload),
       timeout: 60000,
     });
     
@@ -82,7 +82,8 @@ export async function fetchUSASpending(options = {}) {
     };
   } catch (error) {
     console.error(`[usaspending.gov] Error fetching opportunities:`, error.message);
-    throw error;
+    console.error(`[usaspending.gov] Request details:`, { url, payload });
+    throw new Error(`USASpending.gov fetch failed: ${error.message}`);
   }
 }
 
@@ -102,6 +103,8 @@ function parseUSASpendingResponse(data) {
       }
     } catch (error) {
       console.error('[usaspending.gov] Error normalizing record:', error.message);
+      // Log the problematic record for debugging
+      console.error('[usaspending.gov] Problematic record:', JSON.stringify(record, null, 2));
       // Continue processing other records
     }
   }
