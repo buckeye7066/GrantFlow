@@ -19,18 +19,18 @@ export function createFetcher({ userAgent, perHostConcurrency, perHostMinDelayMs
 }
 
 export async function fetchToBuffer(fetcher, url) {
-  const res = await fetcher.fetch(url)
+  let res; try { res = await fetcher.fetch(url); } catch (error) { return { ok: false, status: null, contentType: null, buffer: null, error: error.message }; }
   const status = res?.status ?? null
   const contentType = res?.headers?.get?.('content-type') || null
   const ok = Boolean(res?.ok)
-  const buffer = Buffer.from(await res.arrayBuffer())
+  let buffer; try { buffer = Buffer.from(await res.arrayBuffer()); } catch (error) { return { ok: false, status, contentType, buffer: null, error: 'Failed to read response body' }; }
   return { ok, status, contentType, buffer }
 }
 
 export async function fetchFileUrl(url) {
   const u = new URL(url)
-  const filePath = fileURLToPath(u)
-  const buffer = await fs.readFile(filePath)
+  let filePath; try { filePath = fileURLToPath(u); } catch (error) { return { ok: false, status: 400, contentType: null, buffer: null, error: 'Invalid file URL' }; }
+  let buffer; try { buffer = await fs.readFile(filePath); } catch (error) { return { ok: false, status: 404, contentType: null, buffer: null, error: `File not found: ${filePath}` }; }
   const ext = path.extname(filePath).toLowerCase()
   const contentType =
     ext === '.pdf'
