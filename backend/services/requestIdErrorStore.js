@@ -14,10 +14,12 @@ function truncate(text, limit = 4000) {
 }
 
 function pruneIfNeeded() {
-  while (store.size > MAX_ENTRIES) {
+  let iterations = 0
+  while (store.size > MAX_ENTRIES && iterations < MAX_ENTRIES) {
     const firstKey = store.keys().next().value
     if (!firstKey) break
     store.delete(firstKey)
+    iterations++
   }
 }
 
@@ -25,6 +27,16 @@ export function recordRequestError({ requestId, path, method, statusCode, messag
   const id = normalizeRequestId(requestId)
   if (!id) return
 
+  const now = Date.now()
+  const TTL = 24 * 60 * 60 * 1000 // 24 hours
+  
+  // Clean expired entries
+  for (const [key, value] of store.entries()) {
+    if (now - new Date(value.occurred_at).getTime() > TTL) {
+      store.delete(key)
+    }
+  }
+  
   store.set(id, {
     request_id: id,
     occurred_at: new Date().toISOString(),
