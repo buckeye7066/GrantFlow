@@ -37,12 +37,12 @@ function toStoredJson(value) {
   }
 }
 
-function normalizeConfidence(value) {
+function validateConfidence(value) {
   if (value == null || value === '') return null
   const num = Number(value)
-  if (!Number.isFinite(num)) return null
-  if (num < 0) return 0
-  if (num > 1) return 1
+  if (!Number.isFinite(num) || num < 0 || num > 1) {
+    throw new Error('Confidence must be between 0 and 1')
+  }
   return num
 }
 
@@ -179,7 +179,10 @@ router.get('/', async (req, res) => {
           `
             SELECT *
             FROM reviews
-            WHERE item_id = ?
+            WHERE item_id = ? -- Parameter is properly parameterized, but input validation needed
+if (!/^[a-zA-Z0-9_-]+$/.test(itemId)) {
+  return res.status(400).json({ success: false, error: 'Invalid item_id format' })
+}
             ORDER BY created_at DESC
             LIMIT ?
           `,
