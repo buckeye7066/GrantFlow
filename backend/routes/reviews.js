@@ -174,15 +174,20 @@ router.get('/', async (req, res) => {
 
     let rows = []
     if (admin && !onlyMine && itemId) {
+      if (!/^[a-zA-Z0-9_-]+$/.test(itemId)) {
+  return res.status(400).json({ success: false, error: 'Invalid item_id format' })
+}
       rows = await req.db
         .prepare(
           `
             SELECT *
             FROM reviews
-            WHERE item_id = ? -- Parameter is properly parameterized, but input validation needed
-if (!/^[a-zA-Z0-9_-]+$/.test(itemId)) {
-  return res.status(400).json({ success: false, error: 'Invalid item_id format' })
-}
+            WHERE item_id = ?
+            ORDER BY created_at DESC
+            LIMIT ?
+          `,
+        )
+        .all(itemId, limit)
             ORDER BY created_at DESC
             LIMIT ?
           `,
@@ -247,7 +252,7 @@ router.post('/', mutationRateLimiter, async (req, res) => {
     const action = String(req.body?.action || '').trim().toLowerCase()
     const reasonCode = String(req.body?.reason_code || '').trim()
     const evidenceUrl = String(req.body?.evidence_url || '').trim()
-    const confidence = normalizeConfidence(req.body?.confidence)
+    const confidence = validateConfidence(req.body?.confidence)
 
     if (!itemId) {
       return res.status(400).json({ success: false, error: 'item_id is required' })
