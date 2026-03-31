@@ -14,7 +14,7 @@ export function startNationalProgramsCrawler({
   maxDepth = 2,
   agents = null,
 } = {}) {
-  if (!db) throw new Error('Database connection required for national programs crawler')
+  if (!db || typeof db.prepare !== 'function') throw new Error('Database connection required for national programs crawler')
 
   const intervalMs = Math.max(5, intervalMinutes) * 60 * 1000
 
@@ -22,22 +22,31 @@ export function startNationalProgramsCrawler({
     const startedAt = Date.now()
     try {
       // Avoid overlapping runs
-      const existing = db
-        .prepare(
-          `
-            SELECT id, status, created_at
-            FROM crawler_jobs
-            WHERE type = 'national'
-              AND (status = 'queued' OR status = 'running')
-              AND (
-                parameters LIKE '%"mode":"programs"%'
-                OR parameters LIKE '%"mode": "programs"%'
-              )
-            ORDER BY created_at DESC
-            LIMIT 1
-          `,
-        )
-        .get()
+      let existing;
+      try {
+        existing = db
+          .prepare(
+            `
+              SELECT id, status, created_at
+              FROM crawler_jobs
+              WHERE type = 'national'
+                AND (status = 'queued' OR status = 'running')
+                AND (
+                  parameters LIKE '%"mode":"programs"%'
+                  OR parameters LIKE '%"mode": "programs"%'
+                )
+              ORDER BY created_at DESC
+              LIMIT 1
+            `,
+          )
+          .get()
+      } catch (dbError) {
+        await auditLog({
+          action: 'continuous_db_error',
+          error: dbError instanceof Error ? dbError.message : String(dbError),
+        })
+        return
+      }
 
       if (existing) {
         await auditLog({
@@ -58,12 +67,21 @@ export function startNationalProgramsCrawler({
         continuous_run: true,
       }
 
-      db.prepare(
-        `
-          INSERT INTO crawler_jobs (id, type, status, parameters, requested_by, created_at)
-          VALUES (?, 'national', 'queued', ?, 'system', CURRENT_TIMESTAMP)
-        `,
-      ).run(jobId, JSON.stringify(parameters))
+      try {
+        db.prepare(
+          `
+            INSERT INTO crawler_jobs (id, type, status, parameters, requested_by, created_at)
+            VALUES (?, 'national', 'queued', ?, 'system', CURRENT_TIMESTAMP)
+          `,
+        ).run(jobId, JSON.stringify(parameters))
+      } catch (insertError) {
+        await auditLog({
+          action: 'continuous_insert_error',
+          job_id: jobId,
+          error: insertError instanceof Error ? insertError.message : String(insertError),
+        })
+        return
+      }
 
       await auditLog({
         action: 'continuous_job_created',
@@ -83,6 +101,12 @@ export function startNationalProgramsCrawler({
           job_id: jobId,
           error: err instanceof Error ? err.message : String(err),
         })
+        // Mark job as failed in database so it doesn't block future runs
+        try {
+          db.prepare('UPDATE crawler_jobs SET status = "failed" WHERE id = ?').run(jobId)
+        } catch (updateError) {
+          console.error('Failed to update job status:', updateError)
+        }
       })
     } catch (error) {
       await auditLog({
