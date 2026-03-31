@@ -21,7 +21,7 @@ const SECTION_SPECS = [
     sectionKey: 'military_service',
     sectionLabel: 'Military Service',
     importance: 'high',
-    requiredFields: ['veteran', 'branch', 'discharge_status'],
+    requiredFields: ['veteran'],
     programsUnlocked: [
       'VA Benefits', 'VA Healthcare', 'VA Pension', 'HUD-VASH',
       'SSVF (Supportive Services for Veteran Families)',
@@ -36,7 +36,7 @@ const SECTION_SPECS = [
     sectionKey: 'health_medical',
     sectionLabel: 'Health & Medical',
     importance: 'high',
-    requiredFields: ['disability_type', 'chronic_illness', 'conditions'],
+    requiredFields: ['disability_type'],
     programsUnlocked: [
       'SSI (Disability)', 'SSDI', 'Medicaid Waiver Programs',
       'ABLE Accounts', 'Ryan White HIV/AIDS Program',
@@ -52,7 +52,7 @@ const SECTION_SPECS = [
     sectionKey: 'financial_information',
     sectionLabel: 'Financial Information',
     importance: 'high',
-    requiredFields: ['annual_income', 'household_income', 'employment_status'],
+    requiredFields: ['annual_income', 'household_income'],
     programsUnlocked: [
       'SNAP', 'TANF', 'LIHEAP', 'Medicaid', 'CHIP',
       'Section 8 / HCV', 'EITC', 'WIC', 'Lifeline',
@@ -203,7 +203,7 @@ function calculateCompletion(sections) {
     if (!sectionData || typeof sectionData !== 'object') continue
 
     const requiredPresent = spec.requiredFields.filter((f) => hasValue(sectionData[f])).length
-    const ratio = requiredPresent / spec.requiredFields.length
+    const ratio = spec.requiredFields?.length > 0 ? requiredPresent / spec.requiredFields.length : 0
     filledWeight += w * ratio
   }
 
@@ -234,7 +234,7 @@ export function analyzeProfileGaps(profileContext) {
     return { gaps: [], completionPercentage: 0, potentialProgramsUnlocked: 0 }
   }
 
-  const sections = profileContext.sections || {}
+  const sections = profileContext?.sections || {}
   const gaps = []
 
   for (const spec of SECTION_SPECS) {
