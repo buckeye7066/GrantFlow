@@ -43,7 +43,7 @@ export async function checkProfileReadiness(db, profileId) {
   // ── 1. Load profile row ────────────────────────────────────────────────────
   let profile
   try {
-    profile = await db.prepare('SELECT * FROM profiles WHERE id = ? LIMIT 1').get(String(profileId))
+    const stmt = await db.prepare('SELECT * FROM profiles WHERE id = ? LIMIT 1'); profile = await stmt.get(String(profileId))
   } catch (error) {
     return {
       ready: false,
@@ -70,14 +70,16 @@ export async function checkProfileReadiness(db, profileId) {
     sectionRows = await db
       .prepare('SELECT section_key, data FROM profile_sections WHERE profile_id = ?')
       .all(String(profileId))
-  } catch {
+  } catch (error) {
+    console.warn('Profile sections query failed:', error.message);
     // sections table may not exist on first boot; treat as empty
   }
 
   const sections = sectionRows.reduce((acc, row) => {
     try {
       acc[row.section_key] = row.data ? JSON.parse(row.data) : {}
-    } catch {
+    } catch (error) {
+      console.warn(`Failed to parse JSON for section ${row.section_key}:`, error.message);
       acc[row.section_key] = {}
     }
     return acc
