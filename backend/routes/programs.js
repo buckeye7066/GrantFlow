@@ -3,6 +3,14 @@ import { validatePagination } from '../utils/validation.js'
 
 const router = express.Router()
 
+// Add database middleware
+router.use((req, res, next) => {
+  if (!req.db) {
+    return res.status(500).json({ error: 'Database not available' })
+  }
+  next()
+})
+
 function normalizeTrack(track) {
   if (!track) return null
   const t = String(track).trim().toLowerCase()
@@ -74,7 +82,7 @@ router.get('/', async (req, res) => {
         .prepare(
           `
             SELECT *
-            FROM ${table}
+            FROM ${table === 'programs_provider' ? 'programs_provider' : 'programs_client'}
             ${clause}
             ORDER BY last_verified DESC, updated_at DESC
             LIMIT ?
@@ -86,7 +94,7 @@ router.get('/', async (req, res) => {
         .prepare(
           `
             SELECT COUNT(*) AS total
-            FROM ${table}
+            FROM ${table === 'programs_provider' ? 'programs_provider' : 'programs_client'}
             ${clause}
           `,
         )
@@ -160,7 +168,7 @@ router.get('/:track/:programId', async (req, res) => {
     const programId = req.params.programId
     const table = tableForTrack(track)
 
-    const program = await req.db.prepare(`SELECT * FROM ${table} WHERE program_id = ?`).get(programId)
+    const program = await req.db.prepare(`SELECT * FROM ${table === 'programs_provider' ? 'programs_provider' : 'programs_client'} WHERE program_id = ?`).get(programId)
     if (!program) return res.status(404).json({ error: 'Program not found' })
 
     const versions = await req.db
