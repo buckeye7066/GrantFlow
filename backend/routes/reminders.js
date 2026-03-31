@@ -62,7 +62,9 @@ function normalizeMilestone(row) {
 
 export async function fetchReminderSnapshot(db, lookaheadDays = DAYS_LOOKAHEAD, options = {}) {
   const organizationIds =
-    options && Array.isArray(options.organizationIds) ? options.organizationIds.filter(Boolean) : null
+    options && Array.isArray(options.organizationIds) 
+      ? options.organizationIds.filter(id => id != null && typeof id === 'number')
+      : null
 
   // Compute date window boundaries in JavaScript
   const now = new Date();
@@ -158,9 +160,10 @@ export async function fetchReminderSnapshot(db, lookaheadDays = DAYS_LOOKAHEAD, 
 
   if (organizationIds && organizationIds.length > 0) {
     const placeholders = organizationIds.map(() => '?').join(',')
+    const whereClause = `AND COALESCE(m.organization_id, g.organization_id) IN (${placeholders})`
     milestoneSqlWithScope = milestoneSqlWithScope.replace(
-      'ORDER BY m.due_date ASC',
-      `AND COALESCE(m.organization_id, g.organization_id) IN (${placeholders})\n          ORDER BY m.due_date ASC`,
+      'WHERE m.completed',
+      `WHERE ${whereClause} AND m.completed`
     )
     milestoneParams.push(...organizationIds)
   }
