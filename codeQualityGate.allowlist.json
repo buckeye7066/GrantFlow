@@ -25,7 +25,7 @@
     "backend/routes/grantMonitoring.js",
     "backend/routes/grants.js",
     "backend/routes/geoCrawl.js",
-    "backend/routes/jobs.js",
+
     "backend/routes/legacyFunctions.js",
     "backend/routes/matching.js",
     "backend/routes/nfPrograms.js",
@@ -71,15 +71,15 @@
     "backend/services/crawlerConcurrencyGuard.js",
     "backend/services/crawlerDispatcher.js",
     "backend/services/crawlerJobCreation.js",
-    "backend/services/crawlers/crawlerHelpers.js",
+
     "backend/services/crawlers/ecfBenefitsCrawler.js",
-    "backend/services/crawlers/governmentFundingCrawler.js",
-    "backend/services/crawlers/healthResourcesCrawler.js",
+
+
     "backend/services/crawlers/itemFundingCrawler.js",
-    "backend/services/crawlers/localFundingCrawler.js",
+
     "backend/services/crawlers/nationalZipCrawler.js",
-    "backend/services/crawlers/specialNeedsCrawler.js",
-    "backend/services/crawlers/studentGrantsCrawler.js",
+
+
     "backend/services/deadLetterQueue.js",
     "backend/services/documentIngestion.js",
     "backend/services/email.js",
@@ -92,7 +92,7 @@
     "backend/services/opportunityMatcher.js",
     "backend/services/realFundingCrawler.js",
     "backend/services/realLocationFundingCrawler.js",
-    "backend/services/scholarshipCrawler.js",
+
     "backend/services/sources/grantsGov.js",
     "backend/services/sources/httpClient.js",
     "backend/services/sources/ingestionService.js",
