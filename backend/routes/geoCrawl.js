@@ -68,7 +68,7 @@ export default function createGeoCrawlRouter({ uploadDir, getOpenAI } = {}) {
         .run(jobId, JSON.stringify(parameters))
 
       // Durable run row for monitor (DB-backed, survives refresh)
-      const createdByUserId = getAuthUserId(req.ctx ?? req.user ?? user) ?? null
+      const createdByUserId = getAuthUserId(req.ctx ?? req.user ?? isAuthorized) ?? null
       await createGeoCrawlRun(req.db, {
         id: geoRunId,
         state: runAllStates ? null : state,
