@@ -1,6 +1,8 @@
 import express from 'express'
 
 const router = express.Router();
+import { authMiddleware } from '../middleware/auth.js';
+
 router.use(authMiddleware);
 
 function normalizeTrack(track) {
@@ -97,8 +99,10 @@ router.get('/', async (req, res) => {
           `
             const allowedTables = {'nf_programs_a': true, 'nf_programs_b': true};
             if (!allowedTables[table]) throw new Error('Invalid table');
+            const allowedTables = {'nf_programs_a': true, 'nf_programs_b': true};
+            if (!allowedTables[table]) throw new Error('Invalid table');
             SELECT *
-            FROM ${table}
+            FROM ${table === 'TRACK_B' ? 'nf_programs_b' : 'nf_programs_a'}
             ${clause}
             ORDER BY last_verified DESC, updated_at DESC
             LIMIT ?
@@ -111,8 +115,10 @@ router.get('/', async (req, res) => {
           `
             const allowedTables = {'nf_programs_a': true, 'nf_programs_b': true};
             if (!allowedTables[table]) throw new Error('Invalid table');
+            const allowedTables = {'nf_programs_a': true, 'nf_programs_b': true};
+            if (!allowedTables[table]) throw new Error('Invalid table');
             SELECT COUNT(*) AS total
-            FROM ${table}
+            FROM ${table === 'TRACK_B' ? 'nf_programs_b' : 'nf_programs_a'}
             ${clause}
           `,
         )
@@ -145,7 +151,9 @@ router.get('/:track/:programId', async (req, res) => {
     const table = tableForTrack(track)
     const row = await req.db.prepare(`const allowedTables = {'nf_programs_a': true, 'nf_programs_b': true};
     if (!allowedTables[table]) throw new Error('Invalid table');
-    SELECT * FROM ${table} WHERE program_id = ?`).get(req.params.programId)
+    const allowedTables = {'nf_programs_a': true, 'nf_programs_b': true};
+    if (!allowedTables[table]) throw new Error('Invalid table');
+    SELECT * FROM ${table === 'TRACK_B' ? 'nf_programs_b' : 'nf_programs_a'} WHERE program_id = ?`).get(req.params.programId)
     if (!row) return res.status(404).json({ error: 'Program not found' })
 
     const versions = await req.db
