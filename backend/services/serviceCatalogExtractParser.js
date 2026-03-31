@@ -34,7 +34,7 @@ function parseMoneyToCents(raw) {
     .replace(/,/g, '')
     .trim()
   const n = Number(cleaned)
-  if (!Number.isFinite(n)) return null
+  if (!Number.isFinite(n) || n <= 0) throw new Error(`invalid_price:${raw}`)
   return Math.round(n * 100)
 }
 
@@ -112,7 +112,7 @@ export function parsePaymentSheetExtract(markdown) {
       const label = priceMatch[1].toLowerCase()
       const amountRaw = priceMatch[2]
       const cents = parseMoneyToCents(amountRaw)
-      if (cents == null) continue
+      // cents will throw if invalid, no need to check null
 
       if (label === 'flat') {
         currentService.prices = {
@@ -188,7 +188,10 @@ export function parsePaymentSheetExtract(markdown) {
 
 export function loadPaymentSheetExtractFromDisk() {
   const p = getCanonicalServiceCatalogExtractPath()
-  if (!fs.existsSync(p)) throw new Error(`extract_not_found:${p}`)
+  if (!fs.existsSync(p)) {
+    console.error(`Service catalog extract not found: ${p}`)
+    throw new Error(`extract_not_found:${p}`)
+  }
   return fs.readFileSync(p, 'utf8')
 }
 
