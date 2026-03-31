@@ -14,22 +14,21 @@ async function contactsHasProfileIdColumn(db) {
   if (contactsHasProfileIdColumnCache !== null) return contactsHasProfileIdColumnCache
   try {
     if (db?.dialect === 'postgres') {
-      const row = await db
-        .prepare(
+      const result = await db.query(
           `
             SELECT 1 AS ok
             FROM information_schema.columns
             WHERE table_name = 'contacts' AND column_name = 'profile_id'
             LIMIT 1
-          `,
+          `
         )
-        .get()
+      const row = result.rows?.[0]
       contactsHasProfileIdColumnCache = Boolean(row?.ok)
       return contactsHasProfileIdColumnCache
     }
 
     // sqlite
-    const rows = await db.prepare(`PRAGMA table_info(contacts)`).all()
+    const rows = db.prepare(`PRAGMA table_info(contacts)`).all()
     contactsHasProfileIdColumnCache = (rows || []).some((r) => String(r?.name || '') === 'profile_id')
     return contactsHasProfileIdColumnCache
   } catch {
@@ -96,16 +95,15 @@ router.get('/', async (req, res) => {
       // - If contacts.profile_id is NULL, treat as org-shared (legacy) and allow it for all profiles in org.
       // This prevents cross-profile confusion/leakage once profile_id is populated, without breaking legacy rows.
       const effectiveProfileId = queryProfileIdRaw || activeProfileId || null
-      if (effectiveProfileId) {
-        const hasColumn = await contactsHasProfileIdColumn(req.db)
-        if (!hasColumn) {
-          // Migration not applied yet; keep legacy org-scoped behavior (but logging above still records profile context).
-        } else {
-          const canAccess = await ensureProfileAccess(req, res, String(effectiveProfileId))
-          if (!canAccess) return
-          clauses.push('(profile_id IS NULL OR profile_id = ?)')
-          params.push(String(effectiveProfileId))
-        }
+      const hasColumn = await contactsHasProfileIdColumn(req.db)
+      if (hasColumn && effectiveProfileId) {
+        const canAccess = await ensureProfileAccess(req, res, String(effectiveProfileId))
+        if (!canAccess) return
+        clauses.push('(profile_id IS NULL OR profile_id = ?)')
+        params.push(String(effectiveProfileId))
+      } else if (hasColumn && !effectiveProfileId) {
+        // If profile_id column exists but no profile specified, require explicit profile context
+        return res.status(400).json({ error: 'profile_id required when profile_id column exists' })
       }
     }
 
@@ -137,6 +135,17 @@ router.get('/:id', async (req, res) => {
     const row = await req.db.prepare('SELECT * FROM contacts WHERE id = ?').get(String(req.params.id))
     if (!row) return res.status(404).json({ error: 'Not found' })
     if (!(await ensureOrganizationAccess(req, res, String(row.organization_id)))) return
+    
+    // Apply same profile access control as list endpoint
+    const hasColumn = await contactsHasProfileIdColumn(req.db)
+    if (hasColumn && row.profile_id && req.ctx?.activeProfileId) {
+      const canAccess = await ensureProfileAccess(req, res, String(req.ctx.activeProfileId))
+      if (!canAccess) return
+      if (String(row.profile_id) !== String(req.ctx.activeProfileId)) {
+        return res.status(404).json({ error: 'Not found' })
+      }
+    }
+    
     return res.json(row)
   } catch (error) {
     console.error('[contacts] get error:', error)
