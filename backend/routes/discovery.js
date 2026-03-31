@@ -145,12 +145,12 @@ router.post('/comprehensiveMatch', async (req, res) => {
     const isNationalSort = req.db?.dialect === 'postgres'
       ? "(is_national = TRUE OR state = 'nationwide')"
       : "(is_national = 1 OR state = 'nationwide')";
-    const stateOrderClause = statePlaceholders
-      ? `CASE WHEN state IN (${statePlaceholders}) THEN 0 ELSE 1 END, `
+    const stateOrderClause = profileStates.length > 0
+      ? `CASE WHEN state IN (${'?,'.repeat(profileStates.length).slice(0,-1)}) THEN 0 ELSE 1 END, `
       : '';
     query += ` ORDER BY ${stateOrderClause}CASE WHEN ${isNationalSort} THEN 0 ELSE 1 END, CASE WHEN ${deadlineNullSort} THEN 0 ELSE 1 END, deadline ASC, updated_at DESC LIMIT ${candidateLimit}`;
 
-    const opportunities = await req.db.prepare(query).all(...params);
+    const opportunities = req.db.prepare(query).all(...params);
     
     console.info(`[comprehensiveMatch] Query found ${opportunities.length} opportunities`);
 
@@ -356,7 +356,7 @@ router.post('/searchOpportunities', async (req, res) => {
     const offset = (page - 1) * per_page;
     params.push(per_page, offset);
     
-    const opportunities = await req.db.prepare(query).all(...params);
+    const opportunities = req.db.prepare(query).all(...params);
     
     // Count total for pagination
     let countQuery = 'SELECT COUNT(*) as total FROM funding_opportunities';
@@ -364,7 +364,7 @@ router.post('/searchOpportunities', async (req, res) => {
       countQuery += ' WHERE ' + conditions.join(' AND ');
     }
     const countParams = params.slice(0, -2); // Remove LIMIT and OFFSET params
-    const countRow = await req.db.prepare(countQuery).get(...countParams);
+    const countRow = req.db.prepare(countQuery).get(...countParams);
     const total = Number(countRow?.total ?? 0) || 0;
     
     // Format results
@@ -436,7 +436,7 @@ router.post('/archOpportunities', async (req, res) => {
         WHERE id IN (${placeholders})
       `;
       
-      await req.db.prepare(query).run(...opportunity_ids);
+      req.db.prepare(query).run(...opportunity_ids);
       
       res.json({
         success: true,
@@ -453,7 +453,7 @@ router.post('/archOpportunities', async (req, res) => {
         WHERE id IN (${placeholders})
       `;
       
-      await req.db.prepare(query).run(...opportunity_ids);
+      req.db.prepare(query).run(...opportunity_ids);
       
       res.json({
         success: true,
@@ -470,7 +470,7 @@ router.post('/archOpportunities', async (req, res) => {
         LIMIT 100
       `;
       
-      const archived = await req.db.prepare(query).all();
+      const archived = req.db.prepare(query).all();
       
       res.json({
         success: true,
@@ -511,7 +511,7 @@ router.post('/discoverECFServices', async (req, res) => {
 
     if (!(await ensureProfileAccess(req, res, String(profile_id)))) return
     
-    const profile = await req.db
+    const profile = req.db
       .prepare('SELECT * FROM profiles WHERE id = ?')
       .get(profile_id);
     
@@ -560,7 +560,7 @@ router.post('/discoverECFServices', async (req, res) => {
       LIMIT 50
     `;
     
-    const services = await req.db.prepare(query).all(...params);
+    const services = req.db.prepare(query).all(...params);
     
     res.json({
       success: true,
