@@ -29,7 +29,7 @@ function isRetryableAxiosError(error) {
     code === 'ETIMEDOUT' ||
     code === 'ESOCKETTIMEDOUT' ||
     code === 'EAI_AGAIN' ||
-    code === 'ENOTFOUND' ||
+    // code === 'ENOTFOUND' || // DNS resolution failure - usually permanent
     code === 'ECONNABORTED'
   )
 }
@@ -103,7 +103,7 @@ export async function requestWithRetry(config, options = {}) {
     }
   }
 
-  throw lastError ?? new Error('request failed')
+  throw lastError ?? new Error(`Request to ${requestUrl} failed after ${retries + 1} attempts`)
 }
 
 export async function getWithRetry(url, config = {}, options = {}) {
