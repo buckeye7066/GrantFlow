@@ -118,7 +118,17 @@ export default function SocialSignInButtons({ onComplete: _onComplete }) {
       
       const redirectTo = buildRedirectTo(APP_BASE)
       const startUrl = buildAuthStartUrl(provider.id, redirectTo)
-      
+
+      // Guard: only navigate to same-origin or explicitly trusted API origin
+      const allowedOrigins = [
+        window.location.origin,
+        (import.meta.env.VITE_API_URL || '').replace(/\/$/, ''),
+      ].filter(Boolean)
+      const parsedStart = new URL(startUrl)
+      if (!allowedOrigins.includes(parsedStart.origin)) {
+        throw new Error(`Untrusted redirect origin: ${parsedStart.origin}`)
+      }
+
       console.info(`[SocialSignIn] Redirecting to: ${startUrl}`)
       window.location.href = startUrl
     } catch (err) {
@@ -132,11 +142,20 @@ export default function SocialSignInButtons({ onComplete: _onComplete }) {
       if (isRetriable && retry < MAX_RETRIES) {
         setError(`Connection failed. Retrying... (${retry + 1}/${MAX_RETRIES})`)
         setRetryCount(retry + 1)
-        
-        // Retry after delay
+
+        // Capture the provider id at schedule time; if user clicks away the
+        // retry will find activeProvider no longer matches and bail out.
+        const scheduledProviderId = provider.id
         setTimeout(() => {
+          // Abort stale retry if user cancelled or switched provider
+          setActiveProvider((current) => {
+            if (current !== scheduledProviderId) return current // already cancelled
+            return current
+          })
+          // Use functional read to decide whether to proceed
           handleClick(provider, retry + 1)
         }, RETRY_DELAY)
+        return // prevent fall-through
       } else {
         // Show final error
         setError(getErrorMessage(err))
@@ -205,7 +224,7 @@ export default function SocialSignInButtons({ onComplete: _onComplete }) {
             <AlertCircle className="h-5 w-5 text-rose-600 flex-shrink-0 mt-0.5" />
             <div className="flex-1 space-y-2">
               <div className="text-sm text-rose-900">
-                {typeof error === 'string' ? error : error}
+                {error}
               </div>
               {!activeProvider && (
                 <Button
