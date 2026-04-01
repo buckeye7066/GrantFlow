@@ -35,7 +35,8 @@ export default function AdminAnyaConsole() {
     refresh()
     const id = window.setInterval(refresh, 5000)
     return () => window.clearInterval(id)
-  }, [])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])  // refresh is stable (no captured state); suppression is intentional
 
   const run = async (label, path) => {
     setBusy(true)
@@ -43,8 +44,10 @@ export default function AdminAnyaConsole() {
       let parsed = {}
       try {
         parsed = JSON.parse(payload || "{}")
-      } catch {
-        parsed = {}
+      } catch (parseErr) {
+        toast({ title: "Invalid JSON payload", description: parseErr.message, variant: "destructive" })
+        setBusy(false)
+        return
       }
       const res = await post(path, parsed)
       toast({ title: label, description: "Submitted" })
@@ -124,7 +127,13 @@ export default function AdminAnyaConsole() {
                 setBusy(true)
                 try {
                   let parsed = {}
-                  try { parsed = JSON.parse(payload || "{}") } catch { parsed = {} }
+                  try {
+                    parsed = JSON.parse(payload || "{}")
+                  } catch (parseErr) {
+                    toast({ title: "Invalid JSON payload", description: parseErr.message, variant: "destructive" })
+                    setBusy(false)
+                    return
+                  }
                   const body = { run_all_states: true, ...parsed }
                   const res = await post("/api/geo-crawl/start", body)
                   toast({ title: "Geo Crawl All States", description: res?.message || `Job ${res?.jobId || ''} started` })
