@@ -163,6 +163,12 @@ function applicantTerms(facets = {}) {
   if (hasAnyToken(seeds, ['small_business', 'business'])) terms.push('small business')
   if (hasAnyToken(seeds, ['family'])) terms.push('family support')
   if (hasAnyToken(seeds, ['medical_assistance', 'medical'])) terms.push('medical assistance')
+  if (hasAnyToken(seeds, ['veteran', 'military'])) terms.push('veteran assistance')
+  if (hasAnyToken(seeds, ['caregiver'])) terms.push('caregiver support program')
+  if (hasAnyToken(seeds, ['disabled', 'disability'])) terms.push('disability grant')
+  if (hasAnyToken(seeds, ['emergency', 'crisis'])) terms.push('emergency assistance program')
+  if (hasAnyToken(seeds, ['senior', 'elderly', 'older_adult'])) terms.push('senior assistance program')
+  if (hasAnyToken(seeds, ['individual', 'person'])) terms.push('individual grant')
   return uniqueStrings(terms)
 }
 
@@ -321,13 +327,13 @@ function profileSignalTerms(facets = {}, crawlerType = 'comprehensive') {
   if (org.organization_type === 'school') addIf(orgW, 'school district grant')
 
   // Immigration status
-  const immigration = facets?.immigration ?? facets?.demographics ?? {}
-  if (immigration.refugee) addIf(0.8, 'refugee resettlement assistance')
-  if (immigration.new_immigrant || immigration.immigrant_status === 'new_immigrant') addIf(0.7, 'immigrant assistance program')
-  if (immigration.permanent_resident) addIf(0.5, 'permanent resident benefits')
+  const immigration = facets?.immigration ?? facets?.demographics ?? facets?.profile ?? {}
+  if (immigration.refugee || immigration.is_refugee) addIf(0.8, 'refugee resettlement assistance')
+  if (immigration.new_immigrant || immigration.immigrant_status === 'new_immigrant' || immigration.is_immigrant) addIf(0.7, 'immigrant assistance program')
+  if (immigration.permanent_resident || immigration.is_permanent_resident) addIf(0.5, 'permanent resident benefits')
 
   // Geographic qualifiers
-  const geo = facets?.geographic ?? facets?.location_focus ?? {}
+  const geo = facets?.geographic ?? facets?.location_focus ?? facets?.location ?? {}
   if (geo.rural_resident || geo.rural) addIf(0.7, 'rural community grant')
   if (geo.appalachian_region || geo.appalachian) addIf(0.7, 'appalachian community program')
   if (geo.urban_underserved) addIf(0.6, 'urban underserved assistance')
@@ -351,8 +357,8 @@ function profileSignalTerms(facets = {}, crawlerType = 'comprehensive') {
   if (fam.disaster_survivor) addIf(0.7, 'disaster relief assistance')
 
   return {
-    mustTerms: uniqueStrings(mustTerms).slice(0, 8),
-    shouldTerms: uniqueStrings(shouldTerms).slice(0, 16),
+    mustTerms: uniqueStrings(mustTerms).slice(0, 20),
+    shouldTerms: uniqueStrings(shouldTerms).slice(0, 40),
   }
 }
 
@@ -416,7 +422,10 @@ export function planCrawlerQueries({ crawlerType, facets = {}, location = null }
     shouldTerms.push('community based support')
     const stateTerms = stateAnalogTerms(effectiveLocation?.state || '')
     shouldTerms.push(...stateTerms)
-    preferredSponsors.push('TennCare', 'Tennessee DIDD')
+    const userState = normalizeString(effectiveLocation?.state || '').toUpperCase()
+    if (!userState || userState === 'TN') {
+      preferredSponsors.push('TennCare', 'Tennessee DIDD')
+    }
     dedupeKeys.push('benefit_categories')
   }
 
