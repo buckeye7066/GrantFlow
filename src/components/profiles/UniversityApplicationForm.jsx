@@ -855,7 +855,7 @@ export default function UniversityApplicationForm({
                             <SelectValue placeholder="Select a plan (optional)" />
                           </SelectTrigger>
                           <SelectContent>
-                            <SelectItem value="">None</SelectItem>
+                            <SelectItem value="none">None</SelectItem>
                             {mealPlansArray.fields.map((plan) => (
                               <SelectItem key={plan.id} value={plan.id}>
                                 {String(plan.name || "Meal plan").trim() || "Meal plan"}
@@ -955,7 +955,7 @@ export default function UniversityApplicationForm({
                       variant="ghost"
                       size="icon"
                       onClick={() => pipelineArray.remove(index)}
-                      disabled={pipelineArray.fields.length <= 1}
+                      disabled={false}
                     >
                       <Trash2 className="w-4 h-4" />
                     </Button>
