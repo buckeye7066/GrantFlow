@@ -66,12 +66,22 @@ export async function extractTextWithFallback({
     ocrUsed = true
     methodsUsed = Array.from(new Set([...methodsUsed, 'ocr']))
     warnings.push(...(Array.isArray(ocr?.warnings) ? ocr.warnings : []))
-    text = ocrText
+    if (ocrText) {
+      text = ocrText
+    } else {
+      warnings.push('OCR returned no text for image; retaining base extraction result if available.')
+    }
     pages = 1
   }
 
   // PDFs: OCR fallback when thresholds are met.
-  if (detected.source_type === 'pdf') {
+  const effectivelyPdf = detected.source_type === 'pdf' ||
+    (detected.source_type !== 'image' && (mimeType === 'application/pdf' || String(fileName || '').toLowerCase().endsWith('.pdf')))
+
+  if (effectivelyPdf) {
+    if (detected.source_type !== 'pdf') {
+      warnings.push(`File detected as '${detected.source_type}' but mimeType/fileName suggests PDF; attempting PDF OCR fallback.`)
+    }
     const shouldOcr = shouldOcrPdf({ extractedText: text, pages })
     if (shouldOcr) {
       let tmpDir = null
