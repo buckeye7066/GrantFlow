@@ -341,16 +341,20 @@ export function fromNormalizer(normalized) {
     zip: normalized.zip ?? normalized.postal_code ?? null,
   })
 
-  const needCategories = Array.isArray(normalized.needCategories)
-    ? normalized.needCategories
-    : []
+  const needCategories = toArray([
+    ...(Array.isArray(normalized.needCategories) ? normalized.needCategories : []),
+    ...(Array.isArray(normalized.needs) ? normalized.needs : []),
+  ])
   const entityType = normalized.entityType ?? 'individual'
 
-  // Derive military / demographics from normalizeProfile's boolean flags
-  const military = normalized.isVeteran ? ['veteran'] : []
-  const demographics = []
-  if (normalized.isStudent) demographics.push('student')
-  if (normalized.hasChronicIllness) demographics.push('disability')
+  // Merge boolean-flag shortcuts WITH any richer tokens already present
+  const militaryBase = normalized.isVeteran ? ['veteran'] : []
+  const military = toArray([...militaryBase, ...(normalized.military ?? [])])
+
+  const demographicsBase = []
+  if (normalized.isStudent) demographicsBase.push('student')
+  if (normalized.hasChronicIllness) demographicsBase.push('disability')
+  const demographics = toArray([...demographicsBase, ...(normalized.demographics ?? [])])
 
   return {
     applicantType: entityType,
@@ -386,7 +390,7 @@ export function fromNormalizer(normalized) {
     coverage:
       normalized.coverage && typeof normalized.coverage === 'object'
         ? normalized.coverage
-        : {},
+        : { pct: 0, sections_present: 0, sections_expected: 0 },
     rawSections: normalized.rawSections ?? {},
   }
 }
