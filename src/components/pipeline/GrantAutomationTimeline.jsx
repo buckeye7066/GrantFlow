@@ -172,7 +172,7 @@ export default function GrantAutomationTimeline({ grantId }) {
                       </p>
                       <ul className="space-y-1.5">
                         {actions.map((action, idx) => (
-                          <li key={`${idx}-${action.description}`} className="text-sm text-slate-600">
+                          <li key={idx} className="text-sm text-slate-600">
                             <span className="font-medium text-slate-700">{action.owner ?? "team"}:</span>{" "}
                             {action.description}
                             {typeof action.due_in_days === "number" ? (
