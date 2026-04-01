@@ -66,7 +66,7 @@ export default function PrintableProfile({ organization, grants = [], contactMet
       } else {
         // Distinguish missing status from unrecognised status for observability
         if (process.env.NODE_ENV !== 'production') {
-          // eslint-disable-next-line no-console
+           
           console.warn('[PrintableProfile] Grant with unexpected status:', grant.id, grant.status);
         }
         if (!grouped['unknown']) {
