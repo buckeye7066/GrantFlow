@@ -94,6 +94,8 @@ export default function Documents() {
     mutationFn: (id) => deleteDocument(id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['documents', selectedProfileId] });
+      queryClient.invalidateQueries({ queryKey: ['documents-profile-detail', selectedProfileId] });
+      queryClient.invalidateQueries({ queryKey: ['profiles'] });
       setDeletingDoc(null);
     },
   });
