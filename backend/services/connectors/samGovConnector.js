@@ -78,6 +78,9 @@ export async function searchAssistanceListings(params = {}) {
     const data = await rateLimitedFetch(url, apiKey);
     
     const listings = data.assistanceListings || [];
+    if (!data.assistanceListings) {
+      console.warn('[SAM.gov] Response missing assistanceListings field; got keys:', Object.keys(data || {}).join(', ') || '(empty)');
+    }
     const loanOrMatchRe = /\bloan\b|\bmicroloan\b|\bfinancing\b|\bmatching\b|\bcost share\b|\bmatch required\b|\b1:1\b|\bdollar for dollar\b/i;
     
     return listings
