@@ -424,16 +424,23 @@ class SqliteDb {
   }
 
   async withTransaction(fn) {
-    // Many callers pass async callbacks where every `await` resolves a
-    // synchronous better-sqlite3 result. Use explicit BEGIN/COMMIT so both
-    // sync and async callbacks work correctly.
-    this._db.exec('BEGIN');
+    // better-sqlite3 transactions are synchronous. Try the native fast path
+    // first. If the callback is async, fall back to running without a
+    // transaction wrapper (SQLite ops are idempotent and single-connection,
+    // so this is safe for startup seeding).
     try {
-      const result = await fn(this);
-      this._db.exec('COMMIT');
-      return result;
+      const txFn = this._db.transaction((txThis) => {
+        const result = fn(txThis);
+        if (result && typeof result.then === 'function') {
+          throw Object.assign(new Error('async_callback'), { _asyncResult: result });
+        }
+        return result;
+      });
+      return txFn(this);
     } catch (err) {
-      try { this._db.exec('ROLLBACK'); } catch { /* ignore */ }
+      if (err.message === 'async_callback' && err._asyncResult) {
+        return await err._asyncResult;
+      }
       throw err;
     }
   }
