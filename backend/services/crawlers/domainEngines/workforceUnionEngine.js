@@ -18,9 +18,21 @@ const DIRECTORY_RESOURCES = [
 ]
 
 export async function runWorkforceUnionEngine(profile, options = {}) {
+  // Use profile for filtering when available
+  const userLocation = profile?.location;
+  const workforceNeeds = profile?.needs?.filter(need => 
+    need.category === 'workforce' || need.category === 'employment'
+  ) || [];
   try {
-    return normalizeAndFilter(DIRECTORY_RESOURCES, ENGINE_ID, { strict_no_loans: false, strict_no_matching: false })
-  } catch {
+    return normalizeAndFilter(DIRECTORY_RESOURCES, ENGINE_ID, { 
+    strict_no_loans: options.strict_no_loans ?? false, 
+    strict_no_matching: options.strict_no_matching ?? false,
+    profile,
+    userLocation,
+    workforceNeeds
+  })
+  } catch (error) {
+    console.error(`[${ENGINE_ID}] Engine failed:`, error);
     return []
   }
 }

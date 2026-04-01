@@ -442,7 +442,8 @@ export function buildCanonicalSignals(rawProfile, rawSections = {}) {
   try {
     const legacySignals = buildProfileSignals({ profile, sections })
     return fromLegacyHelpers(legacySignals)
-  } catch {
+  } catch (error) {
+    console.error('Failed to build canonical signals:', error)
     return emptyCanonicalSignals()
   }
 }

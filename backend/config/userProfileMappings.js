@@ -44,7 +44,9 @@ export function getDesignatedProfileForEmail(email) {
   }
   
   const normalizedEmail = email.trim().toLowerCase()
-  return USER_PROFILE_MAPPINGS[normalizedEmail] ?? null
+  // Find matching key case-insensitively
+  const matchingKey = Object.keys(USER_PROFILE_MAPPINGS).find(key => key.toLowerCase() === normalizedEmail)
+  return matchingKey ? USER_PROFILE_MAPPINGS[matchingKey] : null
 }
 
 /**
@@ -58,5 +60,5 @@ export function hasDesignatedProfile(email) {
   }
   
   const normalizedEmail = email.trim().toLowerCase()
-  return normalizedEmail in USER_PROFILE_MAPPINGS
+  return Object.keys(USER_PROFILE_MAPPINGS).some(key => key.toLowerCase() === normalizedEmail)
 }

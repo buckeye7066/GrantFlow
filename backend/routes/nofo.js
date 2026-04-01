@@ -37,7 +37,8 @@ function tryExtractFirstJson(text) {
   if (!match) return null
   try {
     return JSON.parse(match[0])
-  } catch {
+  } catch (error) {
+    console.warn('[tryExtractFirstJson] Parse failed:', error.message)
     return null
   }
 }
@@ -64,7 +65,8 @@ async function fetchPdfTextFromUrl(fileUrl) {
   const asString = () => {
     try {
       return buf.toString('utf8')
-    } catch {
+    } catch (error) {
+      console.warn('[fetchPdfTextFromUrl] String conversion failed:', error.message)
       return ''
     }
   }

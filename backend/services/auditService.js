@@ -41,7 +41,7 @@ function fireAndForget(value) {
 /**
  * Log an audit event to the database
  */
-export function logAuditEvent(db, {
+export async function logAuditEvent(db, {
   category,
   action,
   severity = SEVERITY.INFO,
@@ -92,7 +92,10 @@ export function logAuditEvent(db, {
       ipAddress,
       userAgent
     )
-    fireAndForget(write)
+    // Don't fireAndForget a synchronous operation
+    if (write && typeof write.then === 'function') {
+      fireAndForget(write)
+    }
     
     // Log critical events to console as well
     if (severity === SEVERITY.CRITICAL || severity === SEVERITY.ERROR) {
@@ -316,7 +319,7 @@ async function ensureAuditTable(db) {
   }
 
   // sqlite
-  db.exec(`
+  await db.exec(`
       CREATE TABLE IF NOT EXISTS audit_logs (
         id TEXT PRIMARY KEY,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,

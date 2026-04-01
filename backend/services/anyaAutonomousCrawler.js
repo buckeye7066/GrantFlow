@@ -18,7 +18,7 @@ async function auditLog(entry, context) {
   const db = context?.db
   if (db) {
     try {
-      logAuditEvent(db, {
+      await logAuditEvent(db, {
         category: AUDIT_CATEGORIES.ANYA,
         action: `autonomous.${String(entry?.action || 'event')}`,
         severity: SEVERITY.INFO,
@@ -120,7 +120,8 @@ export async function runAutonomousCodeCrawl(options, context) {
 
     // Group findings by file
     const fileIssues = {}
-    for (const finding of crawlResult.findings || []) {
+    const findings = Array.isArray(crawlResult?.findings) ? crawlResult.findings : [];
+for (const finding of findings) {
       if (!fileIssues[finding.file]) {
         fileIssues[finding.file] = []
       }
@@ -171,7 +172,7 @@ export async function runAutonomousCodeCrawl(options, context) {
               line: issue.line,
               oldText: actualLine.trim(),
               // Remove the noisy debug line entirely (avoid comment spam in production code).
-              newText: '',
+              newText: '// console.log removed by autonomous crawler',
             })
           }
         }
@@ -186,7 +187,9 @@ export async function runAutonomousCodeCrawl(options, context) {
           ]
           
           for (const variant of variations) {
-            if (issue.preview.includes(variant.old)) {
+            const normalizedPreview = issue.preview.replace(/\s+/g, ' ').trim();
+const normalizedOld = variant.old.replace(/\s+/g, ' ').trim();
+if (normalizedPreview.includes(normalizedOld)) {
               changes.push({
                 line: issue.line,
                 oldText: variant.old,
@@ -277,7 +280,7 @@ export async function getAutonomousStatus() {
   const logFile = path.join(auditDir, 'autonomous-crawler.log')
   
   try {
-    const content = await fs.readFile(logFile, 'utf8')
+    const content = await fs.readFile(logFile, 'utf8').catch(() => '')
     const lines = content.trim().split('\n').filter(Boolean)
     const recentLogs = lines.slice(-20).map(line => {
       try {

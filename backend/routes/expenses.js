@@ -38,10 +38,10 @@ async function ensureExpenseAccess(req, res, expenseId) {
   return null
 }
 
+// Move this line to the top after const router = express.Router();
 router.get('/', async (req, res) => {
   try {
-    const user = requireAuthenticatedUser(req, res)
-    if (!user) return
+    const user = req.user
 
     const { grant_id, organization_id } = req.query;
     let query = 'SELECT * FROM expenses WHERE 1=1';
@@ -62,7 +62,7 @@ router.get('/', async (req, res) => {
 
     if (!isAdminUser(user) && !grant_id && !organization_id) {
       const orgIds = await getAccessibleOrganizationIds(req.db, user)
-      if (!orgIds || orgIds.size === 0) return res.json([])
+      if (!orgIds || orgIds.size === 0) return res.status(403).json({ error: 'No accessible organizations' })
       const placeholders = Array.from(orgIds).map(() => '?').join(',')
       query += ` AND organization_id IN (${placeholders})`
       params.push(...Array.from(orgIds))
@@ -77,8 +77,7 @@ router.get('/', async (req, res) => {
 
 router.post('/', async (req, res) => {
   try {
-    const user = requireAuthenticatedUser(req, res)
-    if (!user) return
+    // Remove this - user should be available from middleware
 
     const id = crypto.randomUUID();
     const { grant_id, organization_id, description, amount, category, date } = req.body;

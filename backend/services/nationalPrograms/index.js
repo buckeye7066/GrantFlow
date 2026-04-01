@@ -112,7 +112,17 @@ export async function processNationalProgramsJob({ db, job, dataDir }) {
         const contentType = response?.headers?.get?.('content-type') || null
 
         buffer = Buffer.from(await response.arrayBuffer())
-        const doc = await parseResponseToDocument(url, response, buffer)
+        let doc;
+        try {
+          doc = await parseResponseToDocument(url, response, buffer)
+        } catch (parseError) {
+          stats.errors.push({
+            url,
+            agent: agent.id,
+            error: `Parse error: ${parseError instanceof Error ? parseError.message : String(parseError)}`
+          })
+          continue
+        }
         stats.parsed += 1
 
         const normalized = normalizeFromDocument({
@@ -137,7 +147,7 @@ export async function processNationalProgramsJob({ db, job, dataDir }) {
                 }
               : { ...normalized.base }
 
-          const upserted = upsertProgramWithVersion({
+          const upserted = await upsertProgramWithVersion({
             db,
             track,
             normalized: payload,
@@ -179,8 +189,12 @@ export async function processNationalProgramsJob({ db, job, dataDir }) {
               'Auto-linked because a single source URL contained both client-facing and provider-facing signals.',
             )
             stats.crosslinks_created += 1
-          } catch {
-            // ignore duplicates / constraint issues
+          } catch (crosslinkError) {
+            stats.errors.push({
+              url,
+              agent: agent.id,
+              error: `Crosslink creation failed: ${crosslinkError instanceof Error ? crosslinkError.message : String(crosslinkError)}`
+            })
           }
         }
 

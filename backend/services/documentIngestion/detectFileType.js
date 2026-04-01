@@ -36,6 +36,6 @@ export function detectFileType({ filePath, mimeType, fileName } = {}) {
   }
 
   // Still return something deterministic; caller can reject unsupported types.
-  return { source_type: null, mime: safeMime || null, ext }
+  return { source_type: 'unknown', mime: safeMime || null, ext }
 }
 

@@ -31,8 +31,8 @@ function extractUrlsWithContext(text) {
                   if (seen.has(url)) continue
                   seen.add(url)
                   const titleFromLine = line.replace(URL_REGEX, '').replace(/^[-*\u2022\s]+|\s*[-*\u2022]\s*$/g, '').trim().slice(0, 300)
-                  const titleFromUrl = parsedUrl.pathname ? decodeURIComponent(parsedUrl.pathname.split('/').filter(Boolean).pop() || parsedUrl.hostname) : parsedUrl.hostname
-                  const title = titleFromLine || titleFromUrl || `Grant link (${parsedUrl.hostname})`
+                  const titleFromUrl = parsedUrl?.pathname ? decodeURIComponent(parsedUrl.pathname.split('/').filter(Boolean).pop() || parsedUrl.hostname) : parsedUrl?.hostname
+                  const title = titleFromLine || titleFromUrl || `Grant link (${parsedUrl?.hostname || 'unknown'})`
                   results.push({ url, title, line })
           }
     }

@@ -130,7 +130,10 @@ export async function runDomainCorpusCrawl(db, options = {}) {
       stats.crawlers_run++
     } catch (err) {
       stats.crawlers_failed++
-      console.warn(`[domainCorpusCrawler] ${config.id} failed:`, err?.message || String(err))
+      console.error(`[domainCorpusCrawler] CRITICAL: ${config.id} failed:`, err?.message || String(err))
+      if (err.name === 'TimeoutError' || err.message?.includes('timed out')) {
+        throw new Error(`Domain crawler ${config.id} timeout - funding opportunity collection compromised`)
+      }
     }
   }
 
@@ -162,7 +165,8 @@ export async function runDomainCorpusCrawl(db, options = {}) {
     }
     stats.crawlers_run += DOMAIN_ENGINES.length
   } catch (err) {
-    console.warn('[domainCorpusCrawler] Domain engines phase failed:', err?.message || err)
+    console.error('[domainCorpusCrawler] CRITICAL: Domain engines phase failed:', err?.message || err)
+    throw new Error('Domain engines failure - core funding categories unavailable')
   }
 
   // Dedupe by URL
@@ -175,8 +179,14 @@ export async function runDomainCorpusCrawl(db, options = {}) {
     return true
   })
 
-  const inserted = await bulkUpsertFundingOpportunities(db, deduped)
-  stats.total_inserted = inserted.length
+  let inserted
+  try {
+    inserted = await bulkUpsertFundingOpportunities(db, deduped)
+    stats.total_inserted = inserted.length
+  } catch (err) {
+    console.error('[domainCorpusCrawler] CRITICAL: Database insert failed:', err?.message)
+    throw new Error(`Failed to persist ${deduped.length} funding opportunities - data loss risk`)
+  }
 
   // URL verification: HEAD on first N new URLs
   if (!options.skipVerification && inserted.length > 0) {
@@ -196,15 +206,19 @@ export async function runDomainCorpusCrawl(db, options = {}) {
       try {
         const { ok } = await headForVerification(url, { timeoutMs: 4000 })
         if (ok) {
-          await db
-            .prepare(
-              `UPDATE funding_opportunities SET verified_url = ?, last_verified_at = ? WHERE id = ?`,
-            )
-            .run(verVal, now, row.id)
-          stats.total_verified++
+          try {
+            await db
+              .prepare(
+                `UPDATE funding_opportunities SET verified_url = ?, last_verified_at = ? WHERE id = ?`,
+              )
+              .run(verVal, now, row.id)
+            stats.total_verified++
+          } catch (dbErr) {
+            console.warn(`[domainCorpusCrawler] Failed to update verification for ${row.id}:`, dbErr?.message)
+          }
         }
-      } catch {
-        // Best-effort: do not crash
+      } catch (httpErr) {
+        console.debug(`[domainCorpusCrawler] URL verification failed for ${url}:`, httpErr?.message)
       }
     }
   }

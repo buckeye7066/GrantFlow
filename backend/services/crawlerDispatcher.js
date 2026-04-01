@@ -62,6 +62,8 @@ async function processPortalCheckJob({ db, job }) {
   const result = await runPortalCheck(db, profileId, {
     checkType: params.check_type || 'scheduled',
     maxPortals: params.max_portals ?? 20,
+  }).catch(error => {
+    throw new Error(`Portal check failed: ${error.message}`);
   })
   return {
     result_count: result.awardsDetected,
@@ -100,7 +102,9 @@ async function processCuratedBenefitsJob({ db, job, profileContext }) {
     maxResults: params.maxResults ?? 100,
     crawlerType,
     profileContext,
-  });
+  }).catch(error => {
+    throw new Error(`Curated crawler failed: ${error.message}`);
+  })
   return {
     result_count: result.results.length,
     result_meta: {
@@ -433,7 +437,9 @@ export function dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }) {
     let profileContext = null
     try {
       if (job.profile_id) {
-        const { snapshotJson, repaired } = await ensureJobSnapshot(db, job)
+        const { snapshotJson, repaired } = await ensureJobSnapshot(db, job).catch(error => {
+    throw new Error(`Snapshot creation failed: ${error.message}`);
+  })
         if (snapshotJson) {
           profileContext = restoreContextFromSnapshot(parseJSON(snapshotJson))
           if (repaired) {
@@ -476,7 +482,9 @@ export function dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }) {
     // Heartbeat: set initial heartbeat immediately and then periodically so that
     // cleanupStaleCrawlers() doesn't treat this actively-running job as orphaned.
     const HEARTBEAT_INTERVAL_MS = 60_000
-    await updateJobHeartbeat(db, jobId)
+    await updateJobHeartbeat(db, jobId).catch(error => {
+    console.warn('[crawlerDispatcher] Initial heartbeat failed:', error.message);
+  })
     const heartbeatIntervalId = setInterval(() => {
       updateJobHeartbeat(db, jobId).catch((err) => {
         console.warn('[crawlerDispatcher] Heartbeat interval error:', err?.message)

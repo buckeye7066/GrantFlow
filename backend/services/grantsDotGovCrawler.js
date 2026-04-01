@@ -139,7 +139,8 @@ function cryptoSafeId(opp) {
       hash = (hash * 31 + text.charCodeAt(i)) >>> 0;
     }
     return String(hash);
-  } catch {
+  } catch (error) {
+    console.warn('[GrantsGov] Failed to generate crypto-safe ID:', error.message);
     return String(Date.now());
   }
 }
@@ -176,6 +177,9 @@ function buildEligibility({ oppNumber, agencyName, agencyCode, openDate, closeDa
  * Crawl Grants.gov and populate database
  */
 export async function crawlGrantsGov(db, options = {}) {
+  if (!db) {
+    throw new Error('Database connection required for crawlGrantsGov');
+  }
   const { maxPages = 4, rowsPerPage = 25 } = options;
   
   console.log('[GrantsGov] Starting crawl...');

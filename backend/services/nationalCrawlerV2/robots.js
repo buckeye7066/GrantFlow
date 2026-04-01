@@ -21,18 +21,24 @@ function parseRobots(text) {
 
     if (key === 'user-agent') {
       const ua = value.toLowerCase()
-      currentAgents = [ua]
+      if (currentAgents.length === 0) {
+        currentAgents = [ua]
+      } else {
+        currentAgents.push(ua)
+      }
       continue
     }
 
     if (key === 'disallow') {
       const path = value
-      rules.push({ agents: currentAgents.length ? currentAgents : ['*'], type: 'disallow', path })
+      const agentsForRule = currentAgents.length ? [...currentAgents] : ['*']
+      rules.push({ agents: agentsForRule, type: 'disallow', path })
     }
 
     if (key === 'allow') {
       const path = value
-      rules.push({ agents: currentAgents.length ? currentAgents : ['*'], type: 'allow', path })
+      const agentsForRule = currentAgents.length ? [...currentAgents] : ['*']
+      rules.push({ agents: agentsForRule, type: 'allow', path })
     }
   }
 
@@ -82,7 +88,8 @@ export class RobotsCache {
         const text = await res.text()
         rules = parseRobots(text)
       }
-    } catch {
+    } catch (err) {
+      console.warn(`Failed to fetch robots.txt for ${origin}:`, err.message)
       rules = []
     }
 

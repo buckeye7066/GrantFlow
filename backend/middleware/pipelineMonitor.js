@@ -40,7 +40,7 @@ function recordEvent(bucket, event) {
 function isZeroResult(body) {
   if (!body || typeof body !== 'object') return false
   if (body.returned === 0) return true
-  if (body.total === 0 && body.opportunities?.length === 0) return true
+  if ((body.total === 0) || (body.opportunities?.length === 0)) return true
   if (Array.isArray(body.opportunities) && body.opportunities.length === 0) return true
   return false
 }
@@ -52,8 +52,8 @@ export function pipelineMonitor() {
 
     const start = Date.now()
     const originalJson = res.json.bind(res)
-
     res.json = function monitoredJson(body) {
+      res.json = originalJson // restore original
       const elapsed = Date.now() - start
       const slow = elapsed > SLOW_THRESHOLD_MS
       const zeroResult = isZeroResult(body)
@@ -77,7 +77,7 @@ export function pipelineMonitor() {
         console.warn(`[pipeline-monitor] SLOW ${req.method} ${req.path} (${elapsed}ms)`)
       }
 
-      return originalJson(body)
+      return originalJson.call(this, body)
     }
 
     next()

@@ -97,16 +97,20 @@ export async function extractTextWithFallback({
         const rasterFiles = Array.isArray(raster?.files) ? raster.files : []
         for (let i = 0; i < rasterFiles.length; i++) {
           const imgPath = rasterFiles[i]
-          const r = await provider.recognize({
-            filePath: imgPath,
-            mime: 'image/png',
-            language: ocrLanguage,
-            handwriting,
-          })
-          const pageText = normalizeText(r?.text || '')
-          if (pageText) perPageTexts.push(`\n\n--- Page ${i + 1} (OCR) ---\n${pageText}`)
-          if (typeof r?.confidence === 'number' && Number.isFinite(r.confidence)) perPageConfs.push(r.confidence)
-          if (Array.isArray(r?.warnings) && r.warnings.length) warnings.push(...r.warnings)
+          try {
+            const r = await provider.recognize({
+              filePath: imgPath,
+              mime: 'image/png',
+              language: ocrLanguage,
+              handwriting,
+            })
+            const pageText = normalizeText(r?.text || '')
+            if (pageText) perPageTexts.push(`\n\n--- Page ${i + 1} (OCR) ---\n${pageText}`)
+            if (typeof r?.confidence === 'number' && Number.isFinite(r.confidence)) perPageConfs.push(r.confidence)
+            if (Array.isArray(r?.warnings) && r.warnings.length) warnings.push(...r.warnings)
+          } catch (pageError) {
+            warnings.push(`OCR failed for page ${i + 1}: ${pageError?.message || String(pageError)}`)
+          }
         }
 
         ocrText = normalizeText(perPageTexts.join('\n').trim())
@@ -138,7 +142,7 @@ export async function extractTextWithFallback({
       } finally {
         if (typeof raster?.cleanup === 'function') {
           await raster.cleanup()
-        } else {
+        } else if (tmpDir) {
           await cleanupPdfPages(tmpDir)
         }
       }

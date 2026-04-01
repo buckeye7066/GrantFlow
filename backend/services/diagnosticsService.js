@@ -68,7 +68,7 @@ async function getDatabaseDiagnostics(db) {
     if (dialect === 'sqlite') {
       try {
         await db.prepare('SELECT COUNT(*) FROM sqlite_master').get();
-        writable = true
+        // writable already set to true above
       } catch (error) {
         writable = false;
       }
@@ -129,7 +129,7 @@ async function getTableCount(db, tableName) {
       return 0;
     }
     
-    const result = await db.prepare(`SELECT COUNT(*) as count FROM ${tableName}`).get();
+    const result = await db.prepare(`SELECT COUNT(*) as count FROM \`${tableName}\``).get();
     return Number(result?.count || 0);
   } catch (error) {
     return 0;
@@ -224,22 +224,22 @@ function getEnvironmentFlags() {
   return {
     // Canonical: SAM_GOV_PUBLIC_API_KEY (keep legacy SAM_GOV_API_KEY for backward compatibility)
     SAM_GOV_PUBLIC_API_KEY_present:
-      Boolean(process.env.SAM_GOV_PUBLIC_API_KEY || process.env.SAM_GOV_API_KEY) || 'optional',
-    GRANTS_GOV_API_KEY_present: Boolean(process.env.GRANTS_GOV_API_KEY) || 'optional',
-    SIMPLER_GRANTS_API_KEY_present: Boolean(process.env.SIMPLER_GRANTS_API_KEY) || 'optional',
-    API_DATA_GOV_KEY_present: Boolean(process.env.API_DATA_GOV_KEY) || 'optional',
+      Boolean(process.env.SAM_GOV_PUBLIC_API_KEY || process.env.SAM_GOV_API_KEY),
+    GRANTS_GOV_API_KEY_present: Boolean(process.env.GRANTS_GOV_API_KEY),
+    SIMPLER_GRANTS_API_KEY_present: Boolean(process.env.SIMPLER_GRANTS_API_KEY),
+    API_DATA_GOV_KEY_present: Boolean(process.env.API_DATA_GOV_KEY),
     OPENAI_API_KEY_present: Boolean(process.env.OPENAI_API_KEY),
     ANTHROPIC_API_KEY_present: Boolean(process.env.ANTHROPIC_API_KEY),
     RESEND_API_KEY_present: Boolean(process.env.RESEND_API_KEY),
     FROM_EMAIL_set: Boolean(process.env.FROM_EMAIL),
     AUTH_NOTIFY_ON_LOGIN_enabled: String(process.env.AUTH_NOTIFY_ON_LOGIN || '').toLowerCase() === 'true',
     AUTH_NOTIFY_EMAIL_set: Boolean(process.env.AUTH_NOTIFY_EMAIL),
-    ANYA_ADMIN_TOKEN_present: Boolean(process.env.ANYA_ADMIN_TOKEN) || 'optional',
+    ANYA_ADMIN_TOKEN_present: Boolean(process.env.ANYA_ADMIN_TOKEN),
     NODE_ENV: process.env.NODE_ENV || 'development',
     DB_PATH_set: Boolean(process.env.DB_PATH),
     AUTH_PUBLIC_URL_set: Boolean(process.env.AUTH_PUBLIC_URL || process.env.PUBLIC_URL),
     AUTH_FRONTEND_URL_set: Boolean(process.env.AUTH_FRONTEND_URL || process.env.FRONTEND_BASE_URL),
-    TWILIO_configured: Boolean(process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN) || 'optional',
+    TWILIO_configured: Boolean(process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN),
   };
 }
 

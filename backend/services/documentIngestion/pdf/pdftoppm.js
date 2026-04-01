@@ -56,6 +56,9 @@ export async function pdfToPngPages({
   maxPages = null,
   dpi = 150,
 } = {}) {
+  if (!pdfPath || typeof pdfPath !== 'string') {
+    throw new Error('pdfPath must be a non-empty string')
+  }
   const bin = await resolveBinary()
   if (!bin) {
     throw new Error(
@@ -80,6 +83,8 @@ export async function pdfToPngPages({
       .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))
       .map((f) => path.join(dir, f))
     if (files.length === 0) {
+      // Cleanup on failure before throwing
+      await fsp.rm(dir, { recursive: true, force: true }).catch(() => {})
       throw new Error('pdftoppm produced no images')
     }
     return { dir, files }

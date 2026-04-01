@@ -122,8 +122,8 @@ function resolveDocumentFilePath({ req, doc }) {
       tried.push(legacy)
       try {
         if (fs.existsSync(legacy)) return { ok: true, path: legacy, tried }
-      } catch {
-        // ignore
+      } catch (error) {
+        console.error('File access error:', error);
       }
     }
   }
@@ -301,7 +301,16 @@ async function downloadRemoteFileToUploads({ url, req }) {
     // If redirects occurred, validate the final URL too.
     try {
       if (resp.url) {
-        assertRemoteUrlAllowed(resp.url);
+        // Check if final URL after redirects is still safe
+        const finalUrl = new URL(resp.url);
+        if (finalUrl.hostname !== initial.hostname) {
+          // Additional validation for redirect target
+          assertRemoteUrlAllowed(resp.url);
+          // Prevent redirect to private networks even if initial URL was public
+          if (net.isIP(finalUrl.hostname) && isPrivateIpAddress(finalUrl.hostname)) {
+            throw new Error('Redirect to private network not allowed');
+          }
+        }
       }
     } catch {
       throw new Error('Final URL host is not allowed');
@@ -326,9 +335,24 @@ async function downloadRemoteFileToUploads({ url, req }) {
     const unique = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
     const extension = fileNameFromUrl.includes('.') ? `.${fileNameFromUrl.split('.').pop()}` : '';
     const filename = `${unique}${extension}`;
+    // Validate filename to prevent directory traversal
+    if (filename.includes('..') || filename.includes('/') || filename.includes('\\')) {
+      throw new Error('Invalid filename');
+    }
     const absPath = join(getUploadsDir(req), filename);
 
-    const buf = Buffer.from(await resp.arrayBuffer());
+    const chunks = [];
+    let totalSize = 0;
+    const maxSize = 50 * 1024 * 1024;
+    
+    for await (const chunk of resp.body) {
+      totalSize += chunk.length;
+      if (totalSize > maxSize) {
+        throw new Error('Remote file is too large (max 50MB).');
+      }
+      chunks.push(chunk);
+    }
+    const buf = Buffer.concat(chunks);
     if (buf.length > 50 * 1024 * 1024) {
       throw new Error('Remote file is too large (max 50MB).');
     }
@@ -956,9 +980,16 @@ router.post('/ingest', uploadLimiter, requireUploadsWritable, runUploadSingle('d
     try {
       await req.db.prepare(insertDocumentSql).run(...insertDocumentArgs)
     } catch (error) {
+      // Clean up uploaded file if database insert fails
+      if (file?.path) {
+        try {
+          fs.unlinkSync(file.path);
+        } catch (unlinkError) {
+          console.error('Failed to cleanup file after DB error:', unlinkError);
+        }
+      }
+      
       const msg = String(error?.message || error)
-      // Safety retry: if an old code path still attempted to set status (or the DB has a legacy constraint edge),
-      // retry the insert without status. (This statement already omits status.)
       if (msg.includes('documents_status_check')) {
         await req.db.prepare(insertDocumentSql).run(...insertDocumentArgs)
       } else {
@@ -1080,8 +1111,12 @@ router.put('/:id', async (req, res) => {
     if (fields.length === 0) return res.status(400).json({ error: 'No fields provided' });
 
     const values = Object.values(req.body);
-    const setClause = fields.map(f => `${f} = ?`).join(', ');
-    await req.db.prepare(`UPDATE documents SET ${setClause}, updated_at = CURRENT_TIMESTAMP WHERE id = ?`).run(...values, req.params.id);
+    const allowedFields = ['name', 'type', 'notes', 'status', 'processing_status'];
+    const safeFields = fields.filter(f => allowedFields.includes(f));
+    if (safeFields.length === 0) return res.status(400).json({ error: 'No valid fields provided' });
+    const setClause = safeFields.map(f => `${f} = ?`).join(', ');
+    const safeValues = safeFields.map(f => req.body[f]);
+    await req.db.prepare(`UPDATE documents SET ${setClause}, updated_at = CURRENT_TIMESTAMP WHERE id = ?`).run(...safeValues, req.params.id);
     res.json(await req.db.prepare('SELECT * FROM documents WHERE id = ?').get(req.params.id));
   } catch (error) {
     res.status(500).json({ error: error.message });

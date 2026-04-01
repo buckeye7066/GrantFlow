@@ -6,14 +6,14 @@
  * with accurate, up-to-date structured data.
  */
 
-export const CURRENT_TOUR_VERSION = 1
-export const CURRENT_MANUAL_VERSION = 1
+const CURRENT_TOUR_VERSION = 1
+const CURRENT_MANUAL_VERSION = 1
 
 /**
  * Canonical help data for every page in GrantFlow (mirrors src/config/helpRegistry.js).
  * Keys must match routeNames from navConfig.js.
  */
-export const HELP_REGISTRY = [
+const HELP_REGISTRY = [
   {
     key: 'Dashboard',
     route: '/Dashboard',
@@ -235,7 +235,7 @@ export const HELP_REGISTRY = [
     navGroup: 'find',
     title: 'Smart Matcher',
     description: 'Find grants that fit your profile automatically, with plain-language explanations for every result.',
-    purpose: 'GrantFlow uses a single matching engine (matchEngine.js v3.0.0) that scores each opportunity 0-100 based on: geographic match (state/county/city/ZIP), applicant type match, keyword overlap, category alignment, and eligibility checks. Every result includes a reasons[] array explaining why it matched. The more complete your profile, the better the matches.',
+    purpose: 'GrantFlow uses a single matching engine (matchEngine.js v3.0.0) that scores each opportunity 0-100 based on: geographic match (state/county/city/ZIP), applicant type match, keyword overlap, category alignment, and eligibility checks. Every result includes a reasons[] array explaining why it matched. The canonical decision engine assigns ACCEPT (score ≥ 60), REVIEW (30-59), or REJECT (< 30 or hard ineligible). The more complete your profile, the better the matches.', // Keep version in sync with MATCHER_VERSION in matchEngine.js
     whoCanUse: 'all',
     mainActions: ['Run Smart Match for active profile', 'View match scores and explanations', 'Add top matches to pipeline'],
     relatedFeatures: ['ProfileMatcher', 'FundingResults', 'MyProfiles'],
@@ -550,7 +550,7 @@ export const HELP_REGISTRY = [
  * @param {string} routeName
  * @returns {object|undefined}
  */
-export function getHelpForRoute(routeName) {
+function getHelpForRoute(routeName) {
   return HELP_REGISTRY.find((entry) => entry.key === routeName)
 }
 
@@ -559,7 +559,7 @@ export function getHelpForRoute(routeName) {
  * @param {string} fieldKey
  * @returns {{ field: object, page: object }|undefined}
  */
-export function getHelpForField(fieldKey) {
+function getHelpForField(fieldKey) {
   for (const entry of HELP_REGISTRY) {
     const field = entry.fields?.find((f) => f.key === fieldKey)
     if (field) return { field, page: entry }
@@ -572,7 +572,7 @@ export function getHelpForField(fieldKey) {
  * @param {string} query
  * @returns {Array<object>}
  */
-export function searchHelp(query) {
+function searchHelp(query) {
   if (!query || !query.trim()) return HELP_REGISTRY
   const q = query.trim().toLowerCase()
   return HELP_REGISTRY.filter((entry) => {
@@ -596,7 +596,7 @@ export function searchHelp(query) {
  * into Anya's system prompt.
  * @returns {string} JSON string
  */
-export function getAppOverview() {
+function getAppOverview() {
   const overview = {
     pages: HELP_REGISTRY.map((e) => ({
       key: e.key,
@@ -624,4 +624,14 @@ export function getAppOverview() {
     ),
   }
   return JSON.stringify(overview, null, 2)
+}
+
+module.exports = {
+  CURRENT_TOUR_VERSION,
+  CURRENT_MANUAL_VERSION,
+  HELP_REGISTRY,
+  getHelpForRoute,
+  getHelpForField,
+  searchHelp,
+  getAppOverview
 }

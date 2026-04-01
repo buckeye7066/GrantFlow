@@ -1464,7 +1464,7 @@ function upsertOpportunity(db, opp, state = 'nationwide') {
     }
   } catch (error) {
     console.error(`[RealFunding] Error upserting ${opp.id}:`, error.message);
-    return { error: error.message };
+    throw error;
   }
 }
 
@@ -1476,6 +1476,10 @@ export function seedNationalPrograms(db) {
   let inserted = 0, updated = 0, errors = 0;
   
   for (const program of NATIONAL_PROGRAMS) {
+    if (!program.id || !program.title || !program.sponsor) {
+      console.warn(`[RealFunding] Skipping invalid program:`, program.id);
+      continue;
+    }
     const result = upsertOpportunity(db, { ...program, is_national: true }, 'nationwide');
     if (result.inserted) inserted++;
     else if (result.updated) updated++;
@@ -1561,11 +1565,9 @@ export async function seedAllRealFunding(db) {
   // Get counts
   const counts = getOpportunityCountsByState(db);
   
-  const totalRow = await db
-    .prepare(db?.dialect === 'postgres'
-      ? 'SELECT COUNT(*) as count FROM funding_opportunities WHERE is_active = TRUE'
-      : 'SELECT COUNT(*) as count FROM funding_opportunities WHERE is_active = 1')
-    .get()
+  const totalRow = await (db?.dialect === 'postgres' 
+      ? db.prepare('SELECT COUNT(*) as count FROM funding_opportunities WHERE is_active = TRUE').get()
+      : db.prepare('SELECT COUNT(*) as count FROM funding_opportunities WHERE is_active = 1').get())
   const total = Number(totalRow?.count || 0)
   
   console.log(`[RealFunding] Complete. Total active opportunities: ${total}`);

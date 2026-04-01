@@ -19,8 +19,27 @@ const DIRECTORY_RESOURCES = [
 
 export async function runEducationStudentEngine(profile, options = {}) {
   try {
-    return normalizeAndFilter(DIRECTORY_RESOURCES, ENGINE_ID, { strict_no_loans: true, strict_no_matching: false })
+    const filteredResources = DIRECTORY_RESOURCES.filter(resource => {
+      if (!profile) return true;
+      
+      // Filter by education level/type if specified in profile
+      if (profile.education_level && resource.keywords) {
+        const educationKeywords = ['college', 'undergraduate', 'graduate', 'K-12', 'vocational'];
+        const hasEducationMatch = resource.keywords.some(keyword => 
+          educationKeywords.includes(keyword.toLowerCase()));
+        if (!hasEducationMatch && profile.education_level !== 'any') return false;
+      }
+      
+      // Filter by military status for military-specific grants
+      if (resource.categories.includes('military') && !profile.military_affiliation) {
+        return false;
+      }
+      
+      return true;
+    });
+    
+    return normalizeAndFilter(filteredResources, ENGINE_ID, { strict_no_loans: true, strict_no_matching: false });
   } catch {
-    return []
+    return [];
   }
 }

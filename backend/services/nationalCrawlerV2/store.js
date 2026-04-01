@@ -43,7 +43,7 @@ export function upsertNormalizedProgram({
   const programId = normalized.program_id
   const fetchedAt = normalized.source_last_crawled_at || new Date().toISOString()
 
-  const existing = db.prepare(`SELECT * FROM ${table} WHERE program_id = ?`).get(programId)
+  const allowedTables = ['nf_programs_a', 'nf_programs_b']; if (!allowedTables.includes(table)) throw new Error('Invalid table'); const existing = db.prepare(`SELECT * FROM ${table} WHERE program_id = ?`).get(programId)
 
   const deactivateDueToStatus = httpStatus === 404 || httpStatus === 410
   const wasActive = existing ? Number(existing.is_active) === 1 : true
@@ -109,7 +109,7 @@ export function upsertNormalizedProgram({
   if (!existing) {
     db.prepare(
       `
-        INSERT INTO ${table} (
+        if (!['nf_programs_a', 'nf_programs_b'].includes(table)) throw new Error('Invalid table'); INSERT INTO ${table} (
           program_id, program_name, funding_track, jurisdiction, state, county,
           administering_agency, program_type, eligible_population, covered_services,
           income_limits, diagnosis_requirements, age_requirements, provider_requirements,
@@ -152,7 +152,7 @@ export function upsertNormalizedProgram({
   } else if (changeType !== 'unchanged') {
     db.prepare(
       `
-        UPDATE ${table}
+        if (!['nf_programs_a', 'nf_programs_b'].includes(table)) throw new Error('Invalid table'); if (!['nf_programs_a', 'nf_programs_b'].includes(table)) throw new Error('Invalid table'); UPDATE ${table}
         SET program_name = ?,
             jurisdiction = ?,
             state = ?,
@@ -210,7 +210,7 @@ export function upsertNormalizedProgram({
   } else {
     db.prepare(
       `
-        UPDATE ${table}
+        if (!['nf_programs_a', 'nf_programs_b'].includes(table)) throw new Error('Invalid table'); if (!['nf_programs_a', 'nf_programs_b'].includes(table)) throw new Error('Invalid table'); UPDATE ${table}
         SET source_last_crawled_at = ?,
             last_verified = COALESCE(last_verified, ?),
             last_fetch_status = ?,
@@ -313,7 +313,7 @@ export function upsertNormalizedProgram({
   const existingLog = safeJsonParse(existing?.change_log, [])
   const updatedLog = [...existingLog, logEntry].slice(-50)
 
-  db.prepare(`UPDATE ${table} SET change_log = ? WHERE program_id = ?`).run(
+  db.prepare(`if (!['nf_programs_a', 'nf_programs_b'].includes(table)) throw new Error('Invalid table'); if (!['nf_programs_a', 'nf_programs_b'].includes(table)) throw new Error('Invalid table'); UPDATE ${table} SET change_log = ? WHERE program_id = ?`).run(
     JSON.stringify(updatedLog),
     programId,
   )

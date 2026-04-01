@@ -99,7 +99,7 @@ async function ensureGeoCrawlSchema(db) {
         `
       : `
           CREATE TABLE IF NOT EXISTS funding_opportunity_geo_index (
-            id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+            id TEXT PRIMARY KEY,
             opportunity_id TEXT NOT NULL REFERENCES funding_opportunities(id) ON DELETE CASCADE,
             geo_run_id TEXT,
             state TEXT,
@@ -116,8 +116,10 @@ async function ensureGeoCrawlSchema(db) {
     //   Otherwise later requests will keep failing with "relation does not exist".
     try {
       // Core tables must exist for the monitor endpoints to work.
-      await db.prepare(createRuns).run()
-      await db.prepare(createEvents).run()
+      const runStmt = db.prepare(createRuns)
+      const eventStmt = db.prepare(createEvents)
+      await runStmt.run()
+      await eventStmt.run()
 
       // Optional: association index table (used for durable per-zip attribution).
       try {

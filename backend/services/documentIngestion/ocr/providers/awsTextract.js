@@ -38,12 +38,32 @@ export function createAwsTextractProvider() {
         }
       }
 
-      const bytes = await fsp.readFile(filePath)
-      const resp = await client.send(
-        new DetectDocumentTextCommand({
-          Document: { Bytes: bytes },
-        }),
-      )
+      let bytes
+      try {
+        bytes = await fsp.readFile(filePath)
+      } catch (error) {
+        return {
+          text: '',
+          perPage: null,
+          confidence: null,
+          warnings: [`File read error: ${error.message}`],
+        }
+      }
+      let resp
+      try {
+        resp = await client.send(
+          new DetectDocumentTextCommand({
+            Document: { Bytes: bytes },
+          }),
+        )
+      } catch (error) {
+        return {
+          text: '',
+          perPage: null,
+          confidence: null,
+          warnings: [`AWS Textract API error: ${error.message}`],
+        }
+      }
 
       const blocks = Array.isArray(resp?.Blocks) ? resp.Blocks : []
       const lines = blocks.filter((b) => b?.BlockType === 'LINE' && typeof b?.Text === 'string')

@@ -318,6 +318,21 @@ export function scoreProgram(program, analysis, strategyOpts = {}) {
   maxPossible += 25;
     let intentBonus = computeIntentBonus(program, intents);
 
+// Add missing computeIntentBonus function before this call
+function computeIntentBonus(program, intents) {
+  const progIntents = program.intentMatch || [];
+  if (progIntents.length === 0 || intents.size === 0) return 0;
+
+  let hits = 0;
+  for (const pi of progIntents) {
+    if (intents.has(pi)) hits++;
+  }
+  if (hits === 0) return 0;
+
+  // Strong bonus: 15 pts for first hit, 5 for each additional (cap 25)
+  return Math.min(25, 15 + (hits - 1) * 5);
+}
+
     // Apply strategy-level intentBoost when the program matches a boosted intent
     const boostMap = strategyOpts.intentBoost || {};
     for (const [boostIntent, boostPts] of Object.entries(boostMap)) {

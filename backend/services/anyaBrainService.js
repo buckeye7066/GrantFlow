@@ -328,13 +328,13 @@ export function cleanupBrain(db) {
   // Delete old context (older than 30 days)
   results.oldContext = db.prepare(`
     DELETE FROM anya_context
-    WHERE created_at < ${db?.dialect === 'postgres' ? "(NOW() - INTERVAL '30 days')" : "datetime('now', '-30 days')"}
+    WHERE created_at < ` + (db?.dialect === 'postgres' ? "(NOW() - INTERVAL '30 days')" : "datetime('now', '-30 days')") + `
   `).run().changes
   
   // Delete old tool usage (older than 90 days)
   results.oldToolUsage = db.prepare(`
     DELETE FROM anya_tool_usage
-    WHERE created_at < ${db?.dialect === 'postgres' ? "(NOW() - INTERVAL '90 days')" : "datetime('now', '-90 days')"}
+    WHERE created_at < ` + (db?.dialect === 'postgres' ? "(NOW() - INTERVAL '90 days')" : "datetime('now', '-90 days')") + `
   `).run().changes
   
   return results

@@ -345,6 +345,18 @@ CREATE TABLE IF NOT EXISTS grants (
   funder_fax TEXT,
   funder_address TEXT,
 
+  -- Match decision metadata (canonical from matchEngine.js)
+  match_decision TEXT,
+  match_explanation TEXT,
+  matched_needs TEXT DEFAULT '[]',
+  eligibility_status TEXT,
+  ineligibility_reasons TEXT DEFAULT '[]',
+  profile_fingerprint TEXT,
+  opportunity_fingerprint TEXT,
+  matcher_version TEXT,
+  evaluated_at DATETIME,
+  match_confidence INTEGER,
+
   -- Tracking
   assigned_to TEXT,
   priority TEXT CHECK(priority IN ('low', 'medium', 'high', 'urgent'))

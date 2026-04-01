@@ -6,7 +6,15 @@
  * Requires environment variable: SAM_GOV_API_KEY
  */
 
-import { fetchWithRetry } from './httpClient.js';
+import fetch from 'node-fetch';
+
+async function fetchWithRetry(url, options) {
+  const response = await fetch(url, options);
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+  }
+  return response.json();
+}
 import crypto from 'crypto';
 
 const SAM_GOV_API_BASE = 'https://api.sam.gov/opportunities/v2/search';
@@ -84,7 +92,15 @@ export async function fetchSamGov(options = {}) {
     };
   } catch (error) {
     console.error('[sam.gov] Error fetching opportunities:', error.message);
-    throw error;
+    return {
+      opportunities: [],
+      metadata: {
+        source: SOURCE_NAME,
+        fetched_at: new Date().toISOString(),
+        count: 0,
+        error: error.message
+      }
+    };
   }
 }
 

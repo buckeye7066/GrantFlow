@@ -9,19 +9,19 @@ export default function createGeoCrawlRouter({ uploadDir, getOpenAI } = {}) {
 
   async function requireAdmin(req, res) {
     const user = requireAuthenticatedUser(req, res)
-    if (!user) return null
+    if (!user) return false
     const isAdmin = await isAdminUserWithDb(req.db, req.ctx ?? req.user ?? user)
     if (!isAdmin) {
       res.status(403).json({ error: 'Admin access required' })
-      return null
+      return false
     }
     return user
   }
 
   router.post('/start', async (req, res) => {
     try {
-      const user = await requireAdmin(req, res)
-      if (!user) return
+      const isAuthorized = await requireAdmin(req, res)
+      if (!isAuthorized) return
 
       const incoming = req.body && typeof req.body === 'object' ? req.body : {}
       const state = incoming.state ? String(incoming.state).toUpperCase() : null
@@ -68,7 +68,7 @@ export default function createGeoCrawlRouter({ uploadDir, getOpenAI } = {}) {
         .run(jobId, JSON.stringify(parameters))
 
       // Durable run row for monitor (DB-backed, survives refresh)
-      const createdByUserId = getAuthUserId(req.ctx ?? req.user ?? user) ?? null
+      const createdByUserId = getAuthUserId(req.ctx ?? req.user ?? isAuthorized) ?? null
       await createGeoCrawlRun(req.db, {
         id: geoRunId,
         state: runAllStates ? null : state,
@@ -100,8 +100,8 @@ export default function createGeoCrawlRouter({ uploadDir, getOpenAI } = {}) {
 
   router.get('/runs/:runId', async (req, res) => {
     try {
-      const user = await requireAdmin(req, res)
-      if (!user) return
+      const isAuthorized = await requireAdmin(req, res)
+      if (!isAuthorized) return
 
       const runId = String(req.params.runId || '').trim()
       if (!runId) return res.status(400).json({ error: 'runId is required' })
@@ -118,8 +118,8 @@ export default function createGeoCrawlRouter({ uploadDir, getOpenAI } = {}) {
 
   router.get('/runs/:runId/events', async (req, res) => {
     try {
-      const user = await requireAdmin(req, res)
-      if (!user) return
+      const isAuthorized = await requireAdmin(req, res)
+      if (!isAuthorized) return
 
       const runId = String(req.params.runId || '').trim()
       if (!runId) return res.status(400).json({ error: 'runId is required' })

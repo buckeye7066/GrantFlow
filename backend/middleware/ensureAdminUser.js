@@ -25,12 +25,12 @@
  * @returns {import('express').RequestHandler}
  */
 export function createEnsureAdminUserMiddleware({ db, adminName, adminEmail }) {
-  return async function ensureAdminUserMiddleware(req, _res, next) {
+  return function ensureAdminUserMiddleware(req, _res, next) {
     const user = req.user
     if (!user || user.role !== 'admin' || !user.userId) return next()
 
     try {
-      const existing = await db
+      const existing = db
         .prepare(
           `
             SELECT id
@@ -42,7 +42,7 @@ export function createEnsureAdminUserMiddleware({ db, adminName, adminEmail }) {
         .get(user.userId)
 
       if (!existing?.id) {
-        await db
+        db
           .prepare(
             `
               INSERT INTO users (id, display_name, primary_email, is_admin)
@@ -54,6 +54,7 @@ export function createEnsureAdminUserMiddleware({ db, adminName, adminEmail }) {
             user.full_name || adminName || 'Admin User',
             user.email || adminEmail || null,
             true,
+            user.role
           )
       }
     } catch {

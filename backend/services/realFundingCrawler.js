@@ -15,7 +15,7 @@
 import { randomUUID } from 'crypto';
 
 // Use native fetch (Node 18+) or fall back to node-fetch
-const fetchImpl = globalThis.fetch || (await import('node-fetch').then(m => m.default));
+const fetchImpl = globalThis.fetch || (async () => { const nodeFetch = await import('node-fetch'); return nodeFetch.default; })();
 
 // Rate limiting helper
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
@@ -42,7 +42,7 @@ async function fetchWithRetry(url, options = {}, retries = 3) {
   for (let i = 0; i < retries; i++) {
     try {
       const response = await fetchImpl(url, {
-        timeout: 30000,
+        timeout: 60000,
         headers: {
           'User-Agent': 'GrantFlow Funding Crawler/1.0 (https://grantflow.app; contact@grantflow.app)',
           'Accept': 'application/json, text/html, */*',
@@ -107,8 +107,8 @@ async function crawlGrantsGov(state = null, keywords = []) {
     const data = await response.json();
     
     // Grants.gov wraps results in various structures — handle them all
-    const hitsNode = data?.data?.oppHits ? data.data : data?.data?.data?.oppHits ? data.data.data : data;
-    const oppHits = Array.isArray(hitsNode?.oppHits) ? hitsNode.oppHits : [];
+    const hitsNode = data?.data?.oppHits ? data.data : data?.data?.data?.oppHits ? data.data.data : data?.oppHits ? data : {};
+    const oppHits = Array.isArray(hitsNode?.oppHits) ? hitsNode.oppHits : hitsNode?.results ? (Array.isArray(hitsNode.results) ? hitsNode.results : []) : [];
     
     if (oppHits.length > 0) {
       for (const opp of oppHits) {
@@ -1075,15 +1075,16 @@ export async function crawlRealOpportunities(db, state = null, options = {}) {
         updated++;
       } else {
         // Insert new
-        db.prepare(`
-          INSERT INTO funding_opportunities (
+        const insertStmt = db.prepare(`
+          INSERT OR IGNORE INTO funding_opportunities (
             id, title, sponsor, source, source_id, source_url, description,
             amount_min, amount_max, deadline, deadline_type, application_url,
             is_national, state, categories, keywords, eligibility_bullets,
             opportunity_type, requires_501c3, requires_match, is_loan, is_active,
             created_at, updated_at
           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-        `).run(
+        `);
+        const result = insertStmt.run(
           // Never use dataset IDs as the DB primary key (can collide across sources/runs).
           randomUUID(), opp.title, opp.sponsor, opp.source, opp.source_id, opp.source_url,
           opp.description, opp.amount_min, opp.amount_max, opp.deadline, opp.deadline_type,

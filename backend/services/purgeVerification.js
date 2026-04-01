@@ -59,8 +59,9 @@ export async function verifyOpportunityUrl(sourceUrl, { fetchFn, timeoutMs = 120
     return { verified: false, signals, verificationLevel, statusHint }
   }
 
-  const fetch_ = fetchFn || globalThis.fetch
+  const fetch_ = fetchFn || globalThis.fetch || require('node-fetch').default
   if (!fetch_) {
+    signals.push({ type: 'fetch_unavailable', value: 'error', detail: 'No fetch implementation available' })
     return { verified: false, signals, verificationLevel, statusHint }
   }
 
@@ -78,7 +79,7 @@ export async function verifyOpportunityUrl(sourceUrl, { fetchFn, timeoutMs = 120
         redirect: 'follow',
       })
       httpStatus = res.status
-      try { responseText = await res.text() } catch { /* ignore */ }
+      try { responseText = await res.text() } catch (err) { signals.push({ type: 'response_parse_error', value: 'warning', detail: err?.message || 'Failed to parse response text' }) }
     } finally {
       clearTimeout(timer)
     }

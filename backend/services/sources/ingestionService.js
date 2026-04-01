@@ -97,7 +97,11 @@ export function ingestOpportunities(db, opportunities, sourceName) {
     for (const opp of opportunities) {
       try {
         // Check if exists before upsert to track insert vs update
-        const existing = checkExists.get(opp.source, opp.source_id);
+        // Validate input parameters before SQL execution
+if (!opp.source || !opp.source_id) {
+  throw new Error('Invalid opportunity: missing source or source_id');
+}
+const existing = checkExists.get(opp.source, opp.source_id);
 
         if (existing) {
           updateStmt.run(
@@ -199,6 +203,13 @@ export function ingestOpportunities(db, opportunities, sourceName) {
       error_messages: errorMessages,
     };
   } catch (error) {
+    // Rollback transaction if possible
+    try {
+      if (db.inTransaction) db.rollback();
+    } catch (rollbackError) {
+      console.error('[ingestion] Rollback failed:', rollbackError.message);
+    }
+    
     // Update ingestion run as failed
     const failRun = db.prepare(`
       UPDATE ingestion_runs

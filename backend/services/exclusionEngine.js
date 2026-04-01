@@ -1,8 +1,8 @@
 export function evaluateExclusion(opportunity, rules) {
   const text = `${opportunity.title || ''} ${opportunity.description || ''}`.toLowerCase()
 
-  for (const rule of rules) {
-    const regex = new RegExp(rule.pattern, 'i')
+  for (const rule of (rules || [])) {
+    const regex = new RegExp(rule.pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i')
     if (!regex.test(text)) continue
 
     return {

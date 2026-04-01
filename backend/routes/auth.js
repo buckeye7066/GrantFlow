@@ -1763,7 +1763,7 @@ router.post('/email/start', emailStartLimiter, async (req, res) => {
     return res.status(500).json({ 
       error: 'An unexpected error occurred. Please try again.',
       error_type: 'internal_error',
-      details: process.env.NODE_ENV !== 'production' ? error.message : undefined
+      details: undefined // Never expose internal error details
     })
   }
 })
@@ -1999,6 +1999,15 @@ router.post('/email/verify', async (req, res) => {
       .catch((err) => {
         console.error('[Anya] Failed to import autonomous scheduler:', err?.message || err);
       })
+  }
+
+  // CodeGuard audit on admin login — self-throttles to once per 6 hours
+  if (user.role === 'admin') {
+    import('../services/anyaStartupAudit.js')
+      .then(({ triggerStartupAudit }) => {
+        triggerStartupAudit(req.db)
+      })
+      .catch(() => { /* non-critical */ })
   }
 
   // Admin notice on successful sign-in (post-verify)
@@ -2274,6 +2283,15 @@ router.post('/phone/verify', async (req, res) => {
       jobs_created: Object.keys(anyaInfo.jobIds).length,
       profile_id: anyaInfo.profileId,
     }
+  }
+
+  // CodeGuard audit on admin phone login — self-throttles to once per 6 hours
+  if (user.role === 'admin') {
+    import('../services/anyaStartupAudit.js')
+      .then(({ triggerStartupAudit }) => {
+        triggerStartupAudit(req.db)
+      })
+      .catch(() => { /* non-critical */ })
   }
 
   // Admin notice on successful sign-in (post-verify)
@@ -2711,7 +2729,7 @@ router.post('/password/setup/complete', async (req, res) => {
       return res.status(400).json({ error: 'invalid_or_expired_token', error_type: 'invalid_or_expired_token' })
     }
 
-    const passwordHash = await bcrypt.hash(passwordRaw, 12)
+    const passwordHash = await bcrypt.hash(passwordRaw, 15)
     await req.db
       .prepare('UPDATE users SET password_hash = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
       .run(passwordHash, user.id)
@@ -2893,7 +2911,7 @@ router.get('/:provider/start', async (req, res) => {
     return res.status(500).json({ 
       error: 'Failed to initiate OAuth flow',
       provider,
-      details: process.env.NODE_ENV !== 'production' ? error.message : undefined
+      details: undefined // Never expose internal error details
     })
   }
 })
@@ -3092,7 +3110,7 @@ router.get('/me', async (req, res) => {
     return res.status(500).json({ 
       error: 'An unexpected error occurred',
       error_type: 'internal_error',
-      details: process.env.NODE_ENV !== 'production' ? error.message : undefined
+      details: undefined // Never expose internal error details
     })
   }
 })
@@ -3173,7 +3191,7 @@ router.patch('/onboarding-state', async (req, res) => {
     return res.status(500).json({
       error: 'An unexpected error occurred',
       error_type: 'internal_error',
-      details: process.env.NODE_ENV !== 'production' ? error.message : undefined,
+      details: undefined // Never expose internal error details,
     })
   }
 })

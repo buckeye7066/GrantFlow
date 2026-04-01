@@ -19,8 +19,29 @@ const DIRECTORY_RESOURCES = [
 
 export async function runGeoDesignationEngine(profile, options = {}) {
   try {
-    return normalizeAndFilter(DIRECTORY_RESOURCES, ENGINE_ID, { strict_no_loans: false, strict_no_matching: false })
-  } catch {
+    if (!profile) return []
+    
+    const userState = profile.location?.state
+    const isRural = profile.demographics?.rural_status
+    const isTribal = profile.demographics?.tribal_member
+    const userRegion = profile.location?.region
+    
+    let filtered = DIRECTORY_RESOURCES
+    
+    // Filter by geographic relevance
+    if (isTribal) {
+      filtered = filtered.filter(r => r.categories.includes('tribal') || r.categories.includes('rural'))
+    } else if (isRural) {
+      filtered = filtered.filter(r => r.categories.includes('rural') || r.categories.includes('community'))
+    } else if (userRegion === 'appalachian') {
+      filtered = filtered.filter(r => r.categories.includes('appalachian') || r.categories.includes('rural'))
+    } else if (userRegion === 'delta') {
+      filtered = filtered.filter(r => r.keywords.includes('Delta') || r.categories.includes('rural'))
+    }
+    
+    return normalizeAndFilter(filtered, ENGINE_ID, { strict_no_loans: false, strict_no_matching: false })
+  } catch (error) {
+    console.error(`Geographic designation engine failed: ${error.message}`)
     return []
   }
 }

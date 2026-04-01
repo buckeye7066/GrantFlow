@@ -149,7 +149,14 @@ export async function processLocalCrawlerJob({ db, job, dataDir, profileContext 
     console.log(`[localCrawler] Found ${dbOpps.length} local opportunities in database`)
   } catch (error) {
     console.error('[localCrawler] Error querying database for opportunities:', error.message)
-    // Continue with localOpps only - don't fail if DB query fails
+    // Database failure is critical for local matching - return partial results with warning
+    return {
+      evaluated: localOpps.length,
+      inserted: 0,
+      opportunityLogs: [],
+      error: `Database query failed: ${error.message}`,
+      warning: 'Only file-based opportunities processed due to database error'
+    }
   }
   
   // Combine and dedupe
@@ -266,8 +273,8 @@ export async function processLocalCrawlerJob({ db, job, dataDir, profileContext 
         updatedCount++
       }
       
-      // Save to profile pipeline if match meets the effective threshold used to select topOpps
-      if (profileId && opp.match_score >= thresholdUsed) {
+      // Save to profile pipeline if match meets the original requested threshold
+      if (profileId && opp.match_score >= requestedThreshold) {
         const oppWithId = { ...opp, id: result.id, source: 'local_foundation' }
         const pipelineResult = await saveToProfilePipeline(db, oppWithId, profileId, profileContext, opp.match_score, thresholdUsed)
         if (pipelineResult.saved) {

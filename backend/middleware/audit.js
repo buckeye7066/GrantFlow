@@ -41,20 +41,38 @@ export function auditLogger(req, res, next) {
       console.log(`[AUDIT] ${JSON.stringify(logEntry)}`);
       
       if (req.db) {
-        try {
-          req.db.prepare(`
-            INSERT INTO crawler_jobs (id, type, status, parameters, requested_by, result_meta)
-            VALUES (?, 'audit_log', 'completed', ?, ?, ?)
-          `).run(
-            logEntry.id, 
-            JSON.stringify({ path: logEntry.path, method: logEntry.method }),
-            logEntry.user_id,
-            JSON.stringify(logEntry)
-          );
-        } catch (e) {
-          // Fallback if table structure doesn't match or fails
-          console.warn('[audit] Failed to persist audit log to DB', e.message);
-        }
+        // Create audit_logs table if it doesn't exist
+        // Use async operations to prevent blocking
+        const insertStmt = req.db.prepare(`
+            INSERT INTO audit_logs (id, correlation_id, timestamp, user_id, method, path, status, duration_ms, ip, payload)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `);
+          
+        // Execute async to prevent blocking
+        setImmediate(() => {
+          try {
+            insertStmt.run(
+              logEntry.id,
+              logEntry.correlation_id,
+              logEntry.timestamp,
+              logEntry.user_id,
+              logEntry.method,
+              logEntry.path,
+              logEntry.status,
+              logEntry.duration_ms,
+              logEntry.ip,
+              JSON.stringify(logEntry.payload)
+            );
+          } catch (e) {
+            // Fallback if table structure doesn't match or fails
+            console.error('[audit] Failed to persist audit log to DB', {
+              error: e.message,
+              stack: e.stack,
+              correlation_id: correlationId,
+              path: req.path
+            });
+          }
+        });
       }
     }
     
@@ -71,7 +89,7 @@ function redactSensitiveData(obj) {
   const redacted = Array.isArray(obj) ? [] : {};
   
   for (const [key, value] of Object.entries(obj)) {
-    if (sensitiveKeys.some(sk => key.toLowerCase().includes(sensitiveKeys))) {
+    if (sensitiveKeys.some(sk => key.toLowerCase().includes(sk))) {
       redacted[key] = '[REDACTED]';
     } else if (typeof value === 'object') {
       redacted[key] = redactSensitiveData(value);

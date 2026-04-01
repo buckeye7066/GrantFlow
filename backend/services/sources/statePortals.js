@@ -104,12 +104,13 @@ export async function fetchStatePortals(stateCode, options = {}) {
       url = `${url}?${qs}`;
     }
 
-    const data = await fetchWithRetry(url, {
+    const response = await fetch(url, {
       method: portal.method,
       headers: { Accept: 'application/json' },
-      timeout: 30000,
-      ...(portal.method === 'POST' ? { data: params } : {}),
+      ...(portal.method === 'POST' ? { body: JSON.stringify(params), headers: { Accept: 'application/json', 'Content-Type': 'application/json' } } : {}),
     });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const data = await response.json();
 
     const opportunities = portal.parse(data, url);
 
@@ -219,7 +220,8 @@ function parseDate(dateStr) {
     const date = new Date(dateStr);
     if (isNaN(date.getTime())) return null;
     return date.toISOString().split('T')[0];
-  } catch {
+  } catch (error) {
+    console.warn(`[state-portals] Date parsing failed for: ${dateStr}`, error.message);
     return null;
   }
 }

@@ -1,4 +1,5 @@
 import express from 'express'
+import { requireAuth } from '../middleware/auth.js'
 import crypto from 'crypto'
 import { sendServiceApplicationEmail } from '../services/email.js'
 import { isDesignatedProfileId } from '../utils/ensureDesignatedProfiles.js'
@@ -29,9 +30,10 @@ async function hardDeleteProfileWithFallback(db, profileId) {
 
   // Designated/demo profiles should never be hard-deleted (boot seeding may resurrect).
   if (isDesignatedProfileId(id)) {
-    await db
-      .prepare(`UPDATE profiles SET status = 'deleted', updated_at = ${nowSql} WHERE id = ?`)
-      .run(id)
+    const updateSql = dialect === 'postgres' ? 
+  'UPDATE profiles SET status = \'deleted\', updated_at = now() WHERE id = ?' :
+  'UPDATE profiles SET status = \'deleted\', updated_at = CURRENT_TIMESTAMP WHERE id = ?'
+await db.prepare(updateSql).run(id)
     return { ok: true, deleted: 'soft', reason: 'designated_profile' }
   }
 
@@ -40,9 +42,10 @@ async function hardDeleteProfileWithFallback(db, profileId) {
     return { ok: true, deleted: 'hard' }
   } catch (error) {
     // If FK constraints prevent delete, fall back to a durable soft-delete.
-    await db
-      .prepare(`UPDATE profiles SET status = 'deleted', updated_at = ${nowSql} WHERE id = ?`)
-      .run(id)
+    const updateSql = dialect === 'postgres' ? 
+  'UPDATE profiles SET status = \'deleted\', updated_at = now() WHERE id = ?' :
+  'UPDATE profiles SET status = \'deleted\', updated_at = CURRENT_TIMESTAMP WHERE id = ?'
+await db.prepare(updateSql).run(id)
     return { ok: true, deleted: 'soft', error: error?.message || String(error) }
   }
 }
@@ -78,8 +81,11 @@ async function saveApplicationToDb(db, data) {
     console.info('[serviceApplication] Saved to database:', id)
     return id
   } catch (error) {
-    // Table might not exist yet - log but don't fail
     console.warn('[serviceApplication] Could not save to DB:', error.message)
+    // Re-throw for critical errors, return null only for missing table
+    if (!error.message?.includes('no such table') && !error.message?.includes('does not exist')) {
+      throw error
+    }
     return null
   }
 }
@@ -246,7 +252,7 @@ router.post('/submit', async (req, res) => {
  */
 router.get('/list', async (req, res) => {
   try {
-    if (!req.ctx?.isAdmin) {
+    if (!req.ctx || !req.ctx.isAdmin) {
       return res.status(403).json({
         success: false,
         message: 'Admin access required',
@@ -306,7 +312,7 @@ router.get('/list', async (req, res) => {
 router.patch('/:id', async (req, res) => {
   try {
     // Check admin access (canonical)
-    if (!req.ctx?.isAdmin) {
+    if (!req.ctx || !req.ctx.isAdmin) {
       return res.status(403).json({
         success: false,
         message: 'Admin access required',
@@ -369,7 +375,7 @@ router.patch('/:id', async (req, res) => {
  */
 router.delete('/:id', async (req, res) => {
   try {
-    if (!req.ctx?.isAdmin) {
+    if (!req.ctx || !req.ctx.isAdmin) {
       return res.status(403).json({
         success: false,
         message: 'Admin access required',
@@ -407,7 +413,7 @@ router.delete('/:id', async (req, res) => {
  */
 router.post('/:id/delete-profile', async (req, res) => {
   try {
-    if (!req.ctx?.isAdmin) {
+    if (!req.ctx || !req.ctx.isAdmin) {
       return res.status(403).json({
         success: false,
         message: 'Admin access required',

@@ -99,14 +99,7 @@ router.post('/comprehensiveMatch', async (req, res) => {
   );
 
     // Profile isolation: only global catalog entries (profile_id IS NULL) or this profile's own crawl results.
-    const matchProfileId = typeof profile_json === 'string' ? profile_json : (profile?.id ?? null)
-    if (matchProfileId) {
-      conditions.push('(profile_id IS NULL OR profile_id = ?)')
-      params.push(matchProfileId)
-    } else {
-      // Admin-provided raw JSON without an ID: restrict to global catalog only to prevent bleed
-      conditions.push('profile_id IS NULL')
-    }
+    // Profile isolation handled below after freshness filter
     
     // State filtering
     if (profileStates.length > 0) {
@@ -152,15 +145,12 @@ router.post('/comprehensiveMatch', async (req, res) => {
     const isNationalSort = req.db?.dialect === 'postgres'
       ? "(is_national = TRUE OR state = 'nationwide')"
       : "(is_national = 1 OR state = 'nationwide')";
-    const stateOrderClause = statePlaceholders
-      ? `CASE WHEN state IN (${statePlaceholders}) THEN 0 ELSE 1 END, `
+    const stateOrderClause = profileStates.length > 0
+      ? `CASE WHEN state IN (${'?,'.repeat(profileStates.length).slice(0,-1)}) THEN 0 ELSE 1 END, `
       : '';
     query += ` ORDER BY ${stateOrderClause}CASE WHEN ${isNationalSort} THEN 0 ELSE 1 END, CASE WHEN ${deadlineNullSort} THEN 0 ELSE 1 END, deadline ASC, updated_at DESC LIMIT ${candidateLimit}`;
 
-    const opportunities = await req.db.prepare(query).all(
-      ...params,
-      ...(profileStates.length > 0 ? profileStates : []),
-    );
+    const opportunities = req.db.prepare(query).all(...params);
     
     console.info(`[comprehensiveMatch] Query found ${opportunities.length} opportunities`);
 
@@ -366,7 +356,7 @@ router.post('/searchOpportunities', async (req, res) => {
     const offset = (page - 1) * per_page;
     params.push(per_page, offset);
     
-    const opportunities = await req.db.prepare(query).all(...params);
+    const opportunities = req.db.prepare(query).all(...params);
     
     // Count total for pagination
     let countQuery = 'SELECT COUNT(*) as total FROM funding_opportunities';
@@ -374,7 +364,7 @@ router.post('/searchOpportunities', async (req, res) => {
       countQuery += ' WHERE ' + conditions.join(' AND ');
     }
     const countParams = params.slice(0, -2); // Remove LIMIT and OFFSET params
-    const countRow = await req.db.prepare(countQuery).get(...countParams);
+    const countRow = req.db.prepare(countQuery).get(...countParams);
     const total = Number(countRow?.total ?? 0) || 0;
     
     // Format results
@@ -391,8 +381,8 @@ router.post('/searchOpportunities', async (req, res) => {
         sponsor: opp.sponsor || opp.funder,
         url: url,
         deadline: opp.deadline,
-      award_min: null,
-      award_max: null,
+      award_min: opp.amount_min,
+      award_max: opp.amount_max,
       description: opp.description || opp.summary,
       state: opp.state,
       source: opp.source || 'database',
@@ -429,6 +419,7 @@ router.post('/archOpportunities', async (req, res) => {
       return res.status(403).json({ success: false, error: 'Admin privileges required' })
     }
     const { opportunity_ids = [], action = 'archive' } = req.body;
+    const isPostgres = req.db?.dialect === 'postgres'
     
     if (!Array.isArray(opportunity_ids) || opportunity_ids.length === 0) {
       return res.status(400).json({
@@ -442,11 +433,11 @@ router.post('/archOpportunities', async (req, res) => {
       const placeholders = opportunity_ids.map(() => '?').join(',');
       const query = `
         UPDATE funding_opportunities 
-        SET archived = 1, archived_at = CURRENT_TIMESTAMP 
+        SET archived = ${isPostgres ? 'TRUE' : '1'}, archived_at = CURRENT_TIMESTAMP 
         WHERE id IN (${placeholders})
       `;
       
-      await req.db.prepare(query).run(...opportunity_ids);
+      req.db.prepare(query).run(...opportunity_ids);
       
       res.json({
         success: true,
@@ -459,11 +450,11 @@ router.post('/archOpportunities', async (req, res) => {
       const placeholders = opportunity_ids.map(() => '?').join(',');
       const query = `
         UPDATE funding_opportunities 
-        SET archived = 0, archived_at = NULL 
+        SET archived = ${isPostgres ? 'FALSE' : '0'}, archived_at = NULL 
         WHERE id IN (${placeholders})
       `;
       
-      await req.db.prepare(query).run(...opportunity_ids);
+      req.db.prepare(query).run(...opportunity_ids);
       
       res.json({
         success: true,
@@ -475,12 +466,12 @@ router.post('/archOpportunities', async (req, res) => {
       // List archived opportunities
       const query = `
         SELECT * FROM funding_opportunities 
-        WHERE archived = 1 
+        WHERE archived = ${isPostgres ? 'TRUE' : '1'} 
         ORDER BY archived_at DESC 
         LIMIT 100
       `;
       
-      const archived = await req.db.prepare(query).all();
+      const archived = req.db.prepare(query).all();
       
       res.json({
         success: true,
@@ -521,7 +512,7 @@ router.post('/discoverECFServices', async (req, res) => {
 
     if (!(await ensureProfileAccess(req, res, String(profile_id)))) return
     
-    const profile = await req.db
+    const profile = req.db
       .prepare('SELECT * FROM profiles WHERE id = ?')
       .get(profile_id);
     
@@ -570,7 +561,7 @@ router.post('/discoverECFServices', async (req, res) => {
       LIMIT 50
     `;
     
-    const services = await req.db.prepare(query).all(...params);
+    const services = req.db.prepare(query).all(...params);
     
     res.json({
       success: true,

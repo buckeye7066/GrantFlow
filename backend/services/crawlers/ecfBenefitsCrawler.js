@@ -295,6 +295,9 @@ export function checkIfCaretaker(profile) {
 }
 
 export function evaluateEcfUnlockEligibility(profile) {
+  if (!profile) {
+    return { eligibleIndividual: false, eligibleSupport: false, supportType: null }
+  }
   const eligibleIndividual = checkECFEligibility(profile)
   const eligibleProvider = checkIfProvider(profile)
   const eligibleCaretaker = checkIfCaretaker(profile)
@@ -415,6 +418,9 @@ async function searchFamilySupportBenefits(source, profile) {
 }
 
 function calculateECFMatchScore(benefit, profile, type) {
+  if (!benefit || !profile || !type) {
+    return 0
+  }
   let score = 70 // Base score for ECF benefits
   
   // Type-specific scoring

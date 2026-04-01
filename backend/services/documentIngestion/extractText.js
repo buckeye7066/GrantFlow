@@ -30,7 +30,7 @@ export async function extractText({ filePath, mimeType, fileName, maxChars } = {
   }
 
   if (detected.source_type === 'text') {
-    const raw = await fsp.readFile(filePath, 'utf8').catch(() => '')
+    const raw = await fsp.readFile(filePath, 'utf8').catch((err) => { warnings.push(`File read error: ${err.message}`); return ''; })
     const text = clampText(raw, maxChars)
     return {
       text,
@@ -46,8 +46,8 @@ export async function extractText({ filePath, mimeType, fileName, maxChars } = {
   }
 
   if (detected.source_type === 'docx') {
-    const buffer = await fsp.readFile(filePath)
-    const { value } = await mammoth.extractRawText({ buffer })
+    const buffer = await fsp.readFile(filePath).catch((err) => { warnings.push(`PDF file read error: ${err.message}`); throw err; }).catch((err) => { warnings.push(`DOCX file read error: ${err.message}`); throw err; })
+    const { value } = await mammoth.extractRawText({ buffer }).catch((err) => { warnings.push(`DOCX extraction error: ${err.message}`); return { value: '' }; })
     const text = clampText(value, maxChars)
     return {
       text,
@@ -63,8 +63,8 @@ export async function extractText({ filePath, mimeType, fileName, maxChars } = {
   }
 
   if (detected.source_type === 'pdf') {
-    const buffer = await fsp.readFile(filePath)
-    const parsed = await pdfParse(buffer)
+    const buffer = await fsp.readFile(filePath).catch((err) => { warnings.push(`PDF file read error: ${err.message}`); throw err; }).catch((err) => { warnings.push(`DOCX file read error: ${err.message}`); throw err; })
+    const parsed = await pdfParse(buffer).catch((err) => { warnings.push(`PDF parsing error: ${err.message}`); return { text: '', numpages: null }; })
     const text = clampText(parsed?.text || '', maxChars)
     const pages = typeof parsed?.numpages === 'number' && Number.isFinite(parsed.numpages) ? parsed.numpages : null
     if (!text || isMostlyWhitespace(text)) warnings.push('PDF text extraction returned little or no selectable text.')

@@ -12,30 +12,63 @@ function normalizeWhitespace(text) {
 }
 
 export async function parseContent({ url, contentType, buffer, sourceFamily }) {
-  const ct = (contentType || '').split(';')[0].trim().toLowerCase()
-  const lowerUrl = String(url || '').toLowerCase()
+  try {
+    const ct = (contentType || '').split(';')[0].trim().toLowerCase()
+    const lowerUrl = String(url || '').toLowerCase()
 
-  if (sourceFamily === 'mock') {
-    const text = normalizeWhitespace(buffer.toString('utf8'))
-    return { parser_name: 'mock.json', extracted_text: text, doc: null }
+    if (sourceFamily === 'mock') {
+      const text = normalizeWhitespace(buffer.toString('utf8'))
+      return { parser_name: 'mock.json', extracted_text: text, doc: null }
+    }
+
+    if (ct.includes('application/pdf') || lowerUrl.endsWith('.pdf')) {
+      try {
+        const doc = await parsePdfToText(buffer)
+        return { parser_name: 'pdf-parse', extracted_text: doc.extractedText, doc }
+      } catch (pdfError) {
+        console.warn(`PDF parsing failed for ${url}:`, pdfError.message)
+        // Fall back to treating as HTML
+        if (!buffer || !Buffer.isBuffer(buffer)) {
+    console.warn(`Invalid buffer for ${url}`)
+    return { parser_name: 'error', extracted_text: '', doc: null }
   }
-
-  if (ct.includes('application/pdf') || lowerUrl.endsWith('.pdf')) {
-    const doc = await parsePdfToText(buffer)
-    return { parser_name: 'pdf-parse', extracted_text: doc.extractedText, doc }
-  }
-
-  if (
-    ct.includes('application/vnd.openxmlformats-officedocument.wordprocessingml.document') ||
-    lowerUrl.endsWith('.docx')
-  ) {
-    const doc = await parseDocxToText(buffer)
-    return { parser_name: 'mammoth', extracted_text: doc.extractedText, doc }
-  }
-
-  // default html
   const html = buffer.toString('utf8')
-  const doc = parseHtmlToText(html, { url })
-  return { parser_name: 'cheerio', extracted_text: doc.extractedText, doc }
+        const doc = parseHtmlToText(html, { url })
+        return { parser_name: 'cheerio-fallback', extracted_text: doc.extractedText, doc }
+      }
+    }
+
+    if (
+      ct.includes('application/vnd.openxmlformats-officedocument.wordprocessingml.document') ||
+      lowerUrl.endsWith('.docx')
+    ) {
+      try {
+        const doc = await parseDocxToText(buffer)
+        return { parser_name: 'mammoth', extracted_text: doc.extractedText, doc }
+      } catch (docxError) {
+        console.warn(`DOCX parsing failed for ${url}:`, docxError.message)
+        // Fall back to treating as HTML
+        if (!buffer || !Buffer.isBuffer(buffer)) {
+    console.warn(`Invalid buffer for ${url}`)
+    return { parser_name: 'error', extracted_text: '', doc: null }
+  }
+  const html = buffer.toString('utf8')
+        const doc = parseHtmlToText(html, { url })
+        return { parser_name: 'cheerio-fallback', extracted_text: doc.extractedText, doc }
+      }
+    }
+
+    // default html
+    if (!buffer || !Buffer.isBuffer(buffer)) {
+    console.warn(`Invalid buffer for ${url}`)
+    return { parser_name: 'error', extracted_text: '', doc: null }
+  }
+  const html = buffer.toString('utf8')
+    const doc = parseHtmlToText(html, { url })
+    return { parser_name: 'cheerio', extracted_text: doc.extractedText, doc }
+  } catch (error) {
+    console.error(`Content parsing failed for ${url}:`, error.message)
+    return { parser_name: 'error', extracted_text: '', doc: null }
+  }
 }
 

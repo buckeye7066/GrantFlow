@@ -18,8 +18,30 @@ const DIRECTORY_RESOURCES = [
 
 export async function runTaxIncentiveEngine(profile, options = {}) {
   try {
-    return normalizeAndFilter(DIRECTORY_RESOURCES, ENGINE_ID, { strict_no_loans: false, strict_no_matching: false })
-  } catch {
+    // Filter tax incentives based on profile eligibility
+    let relevantResources = DIRECTORY_RESOURCES;
+    
+    if (profile.income && profile.income < 30000) {
+      relevantResources = relevantResources.filter(r => 
+        r.keywords.includes('EITC') || r.title.includes('Low Income')
+      );
+    }
+    
+    if (profile.hasChildren) {
+      relevantResources = relevantResources.filter(r => 
+        r.keywords.includes('child') || r.categories.includes('family')
+      );
+    }
+    
+    if (profile.businessType === 'small_business') {
+      relevantResources = relevantResources.filter(r => 
+        r.keywords.includes('small business') || r.categories.includes('business')
+      );
+    }
+    
+    return normalizeAndFilter(relevantResources, ENGINE_ID, { strict_no_loans: false, strict_no_matching: false })
+  } catch (error) {
+    console.error(`Tax incentive engine error: ${error.message}`);
     return []
   }
 }

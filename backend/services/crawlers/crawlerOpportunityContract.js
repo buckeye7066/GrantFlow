@@ -1,5 +1,9 @@
 import { ALLOWED_RECORD_ORIGINS } from '../../utils/recordOrigins.js'
 
+if (!ALLOWED_RECORD_ORIGINS || typeof ALLOWED_RECORD_ORIGINS.has !== 'function') {
+  throw new Error('ALLOWED_RECORD_ORIGINS must be a Set with .has() method')
+}
+
 function normalizeString(value) {
   if (typeof value !== 'string') return ''
   return value.trim()
@@ -236,7 +240,7 @@ export function enforceCrawlerOpportunityContract(
 // ALLOWED_RECORD_ORIGINS imported from ../../utils/recordOrigins.js
 
 export function normalizeRecordOrigin(value) {
-  if (typeof value === 'string' && ALLOWED_RECORD_ORIGINS.has(value)) return value
+  if (typeof value === 'string' && ALLOWED_RECORD_ORIGINS && typeof ALLOWED_RECORD_ORIGINS.has === 'function' && ALLOWED_RECORD_ORIGINS.has(value)) return value
   if (typeof value === 'string' && value.startsWith('directory:')) return 'directory_resource'
   return 'live_crawl'
 }

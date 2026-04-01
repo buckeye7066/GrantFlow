@@ -285,7 +285,7 @@ export function seedProfileGrants(db) {
       const filterResult = applyRelevanceFilter(oppForFilter, profileData);
       if (!filterResult.pass) continue;
 
-      // v2.0.0 canonical decision engine: skip hard ineligibles (REJECT)
+      // Canonical decision engine: skip hard ineligibles (REJECT)
       const decision = computeMatchDecision(profile, opp, { profileSections: sectionsObj });
       if (decision.decision === 'REJECT') continue;
 
@@ -546,7 +546,7 @@ export async function reEvaluateStalePipelineEntries(db) {
   console.log('[seedOnStartup] Re-evaluating stale profile pipeline entries...')
 
   // Find all profile-scoped grants where matcher_version differs from the current version
-  // OR where profile_fingerprint / opportunity_fingerprint is null (never evaluated by v2.0.0)
+  // OR where profile_fingerprint / opportunity_fingerprint is null (never evaluated by current engine)
   const staleGrants = db.prepare(`
     SELECT g.id AS grant_id, g.profile_id, g.funding_opportunity_id, g.title,
            g.matcher_version, g.profile_fingerprint, g.opportunity_fingerprint,

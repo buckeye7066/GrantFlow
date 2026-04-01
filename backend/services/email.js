@@ -141,12 +141,12 @@ export async function sendPasswordSetupEmail(email, link) {
         <h2>Set your GrantFlow password</h2>
         <p>To finish signing in, set a password using this one-time link:</p>
         <p style="margin: 20px 0;">
-          <a href="${link}" style="display: inline-block; padding: 12px 16px; background: #0f172a; color: #fff; text-decoration: none; border-radius: 8px;">
+          <a href="${link.replace(/"/g, '&quot;').replace(/'/g, '&#x27;').replace(/</g, '&lt;').replace(/>/g, '&gt;')}" style="display: inline-block; padding: 12px 16px; background: #0f172a; color: #fff; text-decoration: none; border-radius: 8px;">
             Set password
           </a>
         </p>
         <p>If the button doesn't work, copy and paste this URL:</p>
-        <pre style="white-space: pre-wrap; word-break: break-all; background-color: #f5f5f5; padding: 12px; border-radius: 8px;">${link}</pre>
+        <pre style="white-space: pre-wrap; word-break: break-all; background-color: #f5f5f5; padding: 12px; border-radius: 8px;">${link.replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/&/g, '&amp;')}</pre>
         <p>This link expires in 30 minutes and can only be used once.</p>
         <p>If you didn't request this, you can safely ignore this email.</p>
       </div>
@@ -224,10 +224,10 @@ export async function sendAuthAttemptNotification({ event, identifier, success, 
         <div style="font-family: monospace;">
           <h3>Authentication Event</h3>
           <ul>
-            <li><strong>Event:</strong> ${event}</li>
-            <li><strong>Identifier:</strong> ${identifier}</li>
-            <li><strong>Success:</strong> ${success}</li>
-            ${error ? `<li><strong>Error:</strong> ${error}</li>` : ''}
+            <li><strong>Event:</strong> ${String(event).replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/&/g, '&amp;')}</li>
+            <li><strong>Identifier:</strong> ${String(identifier).replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/&/g, '&amp;')}</li>
+            <li><strong>Success:</strong> ${String(success).replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/&/g, '&amp;')}</li>
+            ${error ? `<li><strong>Error:</strong> ${String(error).replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/&/g, '&amp;')}</li>` : ''}
             <li><strong>Time:</strong> ${new Date().toISOString()}</li>
           </ul>
         </div>
@@ -267,7 +267,7 @@ export async function sendApplicationEmail(toEmail, applicationData) {
         <div style="font-family: Arial, sans-serif;">
           <h2>Application Submitted Successfully</h2>
           <p>Your application has been received.</p>
-          <pre>${JSON.stringify(applicationData, null, 2)}</pre>
+          <pre>${JSON.stringify(applicationData, null, 2).replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/&/g, '&amp;')}</pre>
         </div>
       `,
       text: `Your GrantFlow application has been submitted.\n\n${JSON.stringify(applicationData, null, 2)}`,

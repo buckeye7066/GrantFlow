@@ -1,10 +1,17 @@
 /**
  * Opportunity Matcher and Pipeline Manager
- * Evaluates opportunity matches and saves to appropriate pipelines
- * Delegates to matchDecisionEngine for one shared decision pipeline.
+ * Evaluates opportunity matches and saves to appropriate pipelines.
+ * Delegates to matchEngine.js (v3.0.0) for all scoring and decisions.
  *
- * MATCHER_VERSION 2.0.0: Legacy calculateMatchScore fallback removed.
- * computeMatchDecision() is the sole authority for all pipeline decisions.
+ * Pipeline gates (in order):
+ *   1. SOURCE_ALLOWLIST  — blocks non-approved sources
+ *   2. DECISION_ENGINE   — REJECT = hard ineligible
+ *   3. EXCLUSION_ENGINE   — custom suppression rules
+ *   4. THRESHOLD          — numeric floor (bypassed when engine returns ACCEPT/REVIEW)
+ *   5. RELEVANCE_FILTER   — hard disqualification rules
+ *   6. IDEMPOTENCY        — dedup by profile + opportunity
+ *
+ * computeMatchDecision() is the sole scoring/decision authority.
  */
 
 import crypto from 'crypto'
@@ -75,15 +82,14 @@ export async function saveToProfilePipeline(
     const thresholdNum = Number(minMatchThreshold)
     const threshold = Number.isFinite(thresholdNum) ? Math.max(0, Math.min(100, thresholdNum)) : 55
 
-    // ── Source allowlist enforcement ──────────────────────────────────────
-    // Block pipeline inserts from non-approved sources regardless of score.
-    // This is the hard gate that prevents synthetic/template/spam sources
-    // from entering any profile's pipeline via any code path.
+    // Gate 1: Source allowlist — blocks non-approved sources entirely
     const oppSource = opportunity?.source ? String(opportunity.source).trim() : null
     if (oppSource && !isPipelineSourceAllowed(oppSource)) {
+      console.log(`[opportunityMatcher] Gate:SOURCE_ALLOWLIST suppressed "${opportunity.title}" — source "${oppSource}" not allowed`)
       return {
         saved: false,
         reason: `Source "${oppSource}" is not in the pipeline allowed sources list`,
+        gate: 'SOURCE_ALLOWLIST',
         matchPercentage: null,
         threshold,
       }
@@ -99,18 +105,20 @@ export async function saveToProfilePipeline(
       decision = null
     }
 
-    // If decision is REJECT (hard ineligible), never save regardless of score
+    // Gate 2: Canonical decision engine — REJECT means hard ineligible
     if (decision?.decision === 'REJECT') {
+      console.log(`[opportunityMatcher] Gate:DECISION_ENGINE rejected "${opportunity.title}" — ${(decision.ineligibilityReasons ?? []).join('; ')}`)
       return {
         saved: false,
         reason: `Rejected: ${(decision.ineligibilityReasons ?? []).join('; ')}`,
+        gate: 'DECISION_ENGINE',
         matchPercentage: decision.score ?? 0,
         threshold,
         decision: 'REJECT',
       }
     }
 
-    // Exclusion Engine (hard gate) — suppress procurement noise before scoring
+    // Gate 3: Exclusion engine — custom suppression rules
     let exclusion = { decision: 'ALLOW' }
     try {
       const exclusionRules = await db.prepare(`SELECT * FROM exclusion_rules WHERE action IS NOT NULL`).all()
@@ -118,9 +126,11 @@ export async function saveToProfilePipeline(
     } catch { /* table may not exist yet; treat as ALLOW */ }
 
     if (exclusion.decision === 'SUPPRESS') {
+      console.log(`[opportunityMatcher] Gate:EXCLUSION_ENGINE suppressed "${opportunity.title}" — rule ${exclusion.rule_id}`)
       return {
         saved: false,
         reason: `Excluded by rule ${exclusion.rule_id}`,
+        gate: 'EXCLUSION_ENGINE',
         matchPercentage,
         threshold,
       }
@@ -137,25 +147,32 @@ export async function saveToProfilePipeline(
       adjustedScore = Math.max(0, matchPercentage - 15)
     }
 
-    // Only save to pipeline if match meets threshold
-    if (adjustedScore < threshold) {
+    // Threshold gate — respects canonical decisions from the engine.
+    // If the decision engine produced ACCEPT or REVIEW, its authority takes precedence
+    // over the numeric threshold. The threshold only applies as a fallback when the
+    // decision engine did not run (decision is null) or for edge-case WATCH penalties.
+    const canonicalDecision = decision?.decision
+    const bypassThreshold = canonicalDecision === 'ACCEPT' || canonicalDecision === 'REVIEW'
+
+    // Gate 4: Score threshold — only applies when decision engine did not produce ACCEPT/REVIEW
+    if (!bypassThreshold && adjustedScore < threshold) {
+      console.log(`[opportunityMatcher] Gate:THRESHOLD suppressed "${opportunity.title}" — score ${adjustedScore}% < ${threshold}%, decision was ${canonicalDecision ?? 'null'}`)
       return {
         saved: false,
         reason: `Match score ${adjustedScore}% below ${threshold}% threshold`,
+        gate: 'THRESHOLD',
         matchPercentage,
         threshold,
       }
     }
 
-    // Apply hard disqualification rules — always enforced regardless of caller.
-    // This ensures paths that call saveToProfilePipeline directly (localCrawler,
-    // anyaAutonomousFunctionRunner, backfill scripts) cannot bypass the filter.
+    // Gate 5: Relevance filter — hard disqualification rules (always enforced)
     if (profileContext) {
       const profileData = extractProfileData(profileContext)
       const relevance = applyRelevanceFilter(opportunity, profileData)
       if (!relevance.pass) {
-        console.log(`[opportunityMatcher] saveToProfilePipeline filtered out "${opportunity.title}" — ${relevance.reason}`)
-        return { saved: false, reason: relevance.reason, matchPercentage, threshold }
+        console.log(`[opportunityMatcher] Gate:RELEVANCE_FILTER suppressed "${opportunity.title}" — ${relevance.reason}`)
+        return { saved: false, reason: relevance.reason, gate: 'RELEVANCE_FILTER', matchPercentage, threshold }
       }
     }
 
@@ -205,6 +222,12 @@ export async function saveToProfilePipeline(
       normalizeOpportunity(opportunity)
     )
     
+    // Canonical match_reasons: prefer the decision engine's scoring reasons.
+    // Falls back to caller-supplied reasons only when the engine didn't run.
+    const canonicalReasons = decision?.reasons?.length
+      ? decision.reasons
+      : (profileContext?.match_reasons ?? opportunity.match_reasons ?? [])
+
     // Add to pipeline — preserve application URL, contact info, amounts, and submission method
     const grantId = crypto.randomUUID()
     const contactInfo = parseContactInfo(opportunity)
@@ -259,14 +282,14 @@ export async function saveToProfilePipeline(
           'discovered',
           opportunity.deadline ?? null,
           matchPercentage,
-          JSON.stringify(profileContext?.match_reasons ?? opportunity.match_reasons ?? []),
-          `Auto-added: ${matchPercentage}% match for profile ${profileId} (threshold ${threshold}%)`,
+          JSON.stringify(canonicalReasons),
+          `Auto-added: ${matchPercentage}% match for profile ${profileId} (decision: ${decision?.decision ?? 'N/A'})`,
           opportunity.application_url || opportunity.applicationUrl || opportunity.url || null,
           opportunity.application_method || opportunity.submission_method || guessMethodFromOpportunity(opportunity) || null,
           contactInfo.name,
           contactInfo.email,
           contactInfo.phone,
-          opportunity.amount_max || opportunity.maxAmount || null,
+          opportunity.amount_requested || opportunity.requestedAmount || null,
           opportunity.amount_min || opportunity.amountMin || null,
           opportunity.amount_max || opportunity.amountMax || null,
           decision?.decision ?? null,
@@ -318,14 +341,14 @@ export async function saveToProfilePipeline(
           'discovered',
           opportunity.deadline ?? null,
           matchPercentage,
-          JSON.stringify(profileContext?.match_reasons ?? opportunity.match_reasons ?? []),
-          `Auto-added: ${matchPercentage}% match for profile ${profileId} (threshold ${threshold}%)`,
+          JSON.stringify(canonicalReasons),
+          `Auto-added: ${matchPercentage}% match for profile ${profileId} (decision: ${decision?.decision ?? 'N/A'})`,
           opportunity.application_url || opportunity.applicationUrl || opportunity.url || null,
           opportunity.application_method || opportunity.submission_method || guessMethodFromOpportunity(opportunity) || null,
           contactInfo.name,
           contactInfo.email,
           contactInfo.phone,
-          opportunity.amount_max || opportunity.maxAmount || null,
+          opportunity.amount_requested || opportunity.requestedAmount || null,
           opportunity.amount_min || opportunity.amountMin || null,
           opportunity.amount_max || opportunity.amountMax || null,
         )
@@ -373,7 +396,7 @@ export async function trackGlobalOpportunity(db, opportunity) {
       ) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
     `)
     
-    await trackingQuery.run(
+    trackingQuery.run(
       opportunity.source || 'unknown',
       null, // Global, not profile-specific
       'success',
@@ -397,37 +420,26 @@ export async function processCrawledOpportunities(db, opportunities, profileId, 
     savedGlobally: 0,
     matches: []
   }
-  
-  const profileData = extractProfileData(profileContext)
 
   for (const opportunity of opportunities) {
-    // Skip non-allowed sources entirely (avoid computing match score)
     if (!isPipelineSourceAllowed(opportunity.source)) {
       continue
     }
 
-    // Calculate match percentage
-    const matchPercentage = calculateMatchPercentage(opportunity, profileContext)
-    
-    if (matchPercentage >= minMatchThreshold) {
-      // Apply hard disqualification rules as a post-filter
-      const relevance = applyRelevanceFilter(opportunity, profileData)
-      if (!relevance.pass) {
-        console.log(`[opportunityMatcher] Filtered out "${opportunity.title}" — ${relevance.reason}`)
-        continue
-      }
-      const pipelineResult = await saveToProfilePipeline(db, opportunity, profileId, profileContext, matchPercentage, minMatchThreshold)
-      if (pipelineResult.saved) {
-        results.savedToPipeline++
-        results.matches.push({
-          title: opportunity.title,
-          matchPercentage,
-          pipelineId: pipelineResult.pipelineId
-        })
-      }
+    // Delegate fully to saveToProfilePipeline — it runs the canonical decision engine,
+    // threshold gate, relevance filter, and idempotency check as one unified pipeline.
+    // No pre-filtering here; that was duplicating logic and could diverge from the
+    // canonical authority in saveToProfilePipeline.
+    const pipelineResult = await saveToProfilePipeline(db, opportunity, profileId, profileContext, null, minMatchThreshold)
+    if (pipelineResult.saved) {
+      results.savedToPipeline++
+      results.matches.push({
+        title: opportunity.title,
+        matchPercentage: pipelineResult.matchPercentage,
+        pipelineId: pipelineResult.pipelineId
+      })
     }
     
-    // All opportunities are saved globally by default through upsertFundingOpportunity
     results.savedGlobally++
   }
   

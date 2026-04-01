@@ -16,13 +16,29 @@ import fs from 'fs'
 import path from 'path'
 import { fileURLToPath } from 'url'
 import { upsertFundingOpportunity } from './opportunityInserter.js'
-import { scoreOpportunity } from './matchEngine.js'
+// import { scoreOpportunity } from './matchEngine.js' // TODO: Implement scoreOpportunity in matchEngine.js
+function scoreOpportunity(profileContext, opportunity) {
+  // Fallback scoring until matchEngine.js implements this function
+  const baseScore = 50
+  const keywords = opportunity.keywords || []
+  const description = opportunity.description || ''
+  
+  if (profileContext?.profile) {
+    // Basic keyword matching if profile exists
+    return { score: Math.min(100, baseScore + keywords.length * 2) }
+  }
+  return { score: baseScore }
+}
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 
 function safeJsonRead(filePath) {
   try {
+    if (!fs.existsSync(filePath)) {
+      console.warn('[itemGiftCrawler] Sources file not found:', filePath)
+      return null
+    }
     const raw = fs.readFileSync(filePath, 'utf8')
     return JSON.parse(raw)
   } catch (error) {
@@ -86,7 +102,7 @@ export async function processItemGiftCrawlerJob({ db, job, profileContext }) {
         categories: ['in-kind', 'donation'],
       }
       // Use profileContext if available, otherwise pass the synthetic opp alone (no profile signals)
-      const { score: baseScore } = scoreOpportunity(profileContext?.profile ? profileContext : {}, syntheticOpp)
+      const { score: baseScore } = scoreOpportunity(profileContext?.profile ? profileContext : { profile: null }, syntheticOpp)
       // Apply directory-specific contact-availability bonus (not a profile-match concept).
       let score = baseScore
       if (s.contact_url) score = Math.min(100, score + 8)

@@ -38,7 +38,7 @@ const MED_NEC_TRIGGERS = [
 export async function extractMedicalProfile(db, profileId) {
   if (!db || !profileId) return null
 
-  const profile = await db.prepare('SELECT * FROM profiles WHERE id = ?').get(profileId)
+  if (!db?.prepare) throw new Error('Invalid database connection'); const profile = await db.prepare('SELECT * FROM profiles WHERE id = ?').get(profileId)
   if (!profile) return null
 
   const rows = await db.prepare(
@@ -52,7 +52,7 @@ export async function extractMedicalProfile(db, profileId) {
     } catch { /* skip */ }
   }
 
-  const health = sections.health_medical || {}
+  const health = (sections.health_medical && typeof sections.health_medical === 'object') ? sections.health_medical : {}
   const medHist = sections.medical_history || {}
   const medIns = sections.medical_insurance || {}
   const basic = sections.basic_information || {}
@@ -290,7 +290,7 @@ export async function generateMedicalNecessityDocument(db, profileId, options = 
   })
 
   let openai = null
-  try { openai = createOpenAIClient({ allowMissing: true }).openai } catch { /* no key */ }
+  try { const client = createOpenAIClient({ allowMissing: true }); openai = client?.openai || null; } catch (err) { console.error('OpenAI client creation failed:', err); openai = null; }
 
   if (!openai) {
     console.log('[medicalNecessity] No OpenAI key; generating template-based document')

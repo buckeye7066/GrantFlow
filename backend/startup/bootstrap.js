@@ -77,7 +77,9 @@ export async function runBootstrap({ db, uploadsDir, legacyUploadsDir, baseDir }
             last_error: storageStatus.last_error,
           },
         );
-        process.exit(1);
+        // Allow graceful cleanup before exit
+        await new Promise(resolve => setTimeout(resolve, 100));
+        throw new Error('Storage validation failed in production');
       }
 
       if (missingEnv || !persistentOk || !writableOk) {
@@ -110,7 +112,7 @@ export async function runBootstrap({ db, uploadsDir, legacyUploadsDir, baseDir }
     };
     if (isProdEnv) {
       console.error('[storage] FATAL upload storage error:', storageStatus.last_error);
-      process.exit(1);
+      throw new Error('Storage validation failed in production');
     }
     console.error(
       '[storage] Upload storage unavailable (dev mode continuing):',
@@ -227,6 +229,27 @@ export async function runBootstrap({ db, uploadsDir, legacyUploadsDir, baseDir }
     { table: 'funding_opportunities', column: 'is_loan', type: 'INTEGER DEFAULT 0' },
     // Crawl metadata analysis blob (migration 032 / crawl metadata)
     { table: 'crawl_metadata', column: 'analysis_json', type: 'TEXT' },
+    // Match decision metadata (migration 036) — canonical from matchEngine.js
+    { table: 'grants', column: 'match_decision', type: 'TEXT' },
+    { table: 'grants', column: 'match_explanation', type: 'TEXT' },
+    { table: 'grants', column: 'matched_needs', type: "TEXT DEFAULT '[]'" },
+    { table: 'grants', column: 'eligibility_status', type: 'TEXT' },
+    { table: 'grants', column: 'ineligibility_reasons', type: "TEXT DEFAULT '[]'" },
+    { table: 'grants', column: 'profile_fingerprint', type: 'TEXT' },
+    { table: 'grants', column: 'opportunity_fingerprint', type: 'TEXT' },
+    { table: 'grants', column: 'matcher_version', type: 'TEXT' },
+    { table: 'grants', column: 'evaluated_at', type: 'DATETIME' },
+    { table: 'grants', column: 'match_confidence', type: 'INTEGER' },
+    // Funding opportunities normalized eligibility (migration 036)
+    { table: 'funding_opportunities', column: 'entity_types_allowed', type: "TEXT DEFAULT '[]'" },
+    { table: 'funding_opportunities', column: 'need_types_supported', type: "TEXT DEFAULT '[]'" },
+    { table: 'funding_opportunities', column: 'deadline_status', type: 'TEXT' },
+    { table: 'funding_opportunities', column: 'official_source_type', type: 'TEXT' },
+    { table: 'funding_opportunities', column: 'source_trust_score', type: 'INTEGER' },
+    { table: 'funding_opportunities', column: 'opportunity_fingerprint', type: 'TEXT' },
+    // Profile fingerprint and normalized snapshot (migration 036)
+    { table: 'profiles', column: 'profile_fingerprint', type: 'TEXT' },
+    { table: 'profiles', column: 'normalized_snapshot', type: 'TEXT' },
   ];
 
   const validTables = new Set([
@@ -264,8 +287,13 @@ export async function runBootstrap({ db, uploadsDir, legacyUploadsDir, baseDir }
         console.error(`Migration error: Invalid table "${table}" or column "${column}"`);
         return;
       }
+      // Additional validation for type to prevent injection
+      const allowedTypes = new Set(['TEXT', 'INTEGER', 'DATETIME', 'TEXT DEFAULT \'live_crawl\'', 'INTEGER DEFAULT 0', 'TEXT REFERENCES users(id) ON DELETE SET NULL', "TEXT DEFAULT '[]'"]); if (!allowedTypes.has(type)) {
+        console.error(`Migration error: Invalid type "${type}"`);
+        return;
+      }
       try {
-        db.prepare(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`).run();
+        const stmt = db.prepare('ALTER TABLE ' + table + ' ADD COLUMN ' + column + ' ' + type); stmt.run();
       } catch (error) {
         if (!error.message.includes('duplicate column')) {
           console.warn(`Migration warning for ${table}.${column}:`, error.message);
@@ -289,7 +317,7 @@ export async function runBootstrap({ db, uploadsDir, legacyUploadsDir, baseDir }
       ];
       for (const table of tablesToCheck) {
         try {
-          db.prepare(`SELECT 1 FROM ${table} LIMIT 1`).get();
+          const stmt = db.prepare('SELECT 1 FROM ' + table + ' LIMIT 1'); stmt.get();
         } catch (error) {
           const msg = String(error?.message || error);
           if (msg.includes('no such table') || msg.includes('SQLITE_ERROR')) {
@@ -299,6 +327,9 @@ export async function runBootstrap({ db, uploadsDir, legacyUploadsDir, baseDir }
               { table, error: msg },
             );
             break;
+          } else {
+            // Log unexpected database errors that might indicate corruption
+            console.error('[database] Unexpected error checking table:', { table, error: msg });
           }
         }
       }
@@ -335,7 +366,7 @@ export async function runBootstrap({ db, uploadsDir, legacyUploadsDir, baseDir }
     EFFECTIVE_JWT_SECRET = getJwtSecretOrThrow(process.env);
   } catch (err) {
     console.error(`FATAL ERROR: ${err.message}`);
-    process.exit(1);
+    throw new Error('Storage validation failed in production');
   }
 
   return { storageStatus, EFFECTIVE_JWT_SECRET };
@@ -364,11 +395,16 @@ function _ensureCrawlerJobsSupportsAllTypes(db) {
 
   for (const type of testTypes) {
     try {
+      // Validate type matches expected pattern
+      if (!/^[a-z_]+$/.test(type)) {
+        console.error(`Invalid test type: ${type}`);
+        continue;
+      }
       const testId = `__schema_test_${type}__`;
       db.prepare(
         `INSERT INTO crawler_jobs (id, type, status) VALUES (?, ?, 'queued')`,
       ).run(testId, type);
-      db.prepare(`DELETE FROM crawler_jobs WHERE id = ?`).run(testId);
+      const stmt = db.prepare('DELETE FROM crawler_jobs WHERE id = ?'); stmt.run(testId);
     } catch (error) {
       if (error?.message && error.message.includes('CHECK constraint failed')) {
         needsRebuild = true;

@@ -15,7 +15,8 @@ function isPostgres(db) {
 
 export async function getDocumentExtract(db, documentId) {
   if (!documentId) return null
-  return db.prepare('SELECT * FROM document_extracts WHERE document_id = ? LIMIT 1').get(documentId)
+  const stmt = db.prepare('SELECT * FROM document_extracts WHERE document_id = ? LIMIT 1')
+  return isPostgres(db) ? await stmt.get(documentId) : stmt.get(documentId)
 }
 
 export async function ensureDocumentExtract(db, {
@@ -50,7 +51,7 @@ export async function ensureDocumentExtract(db, {
   const pg = isPostgres(db)
 
   if (pg) {
-    await db.prepare(
+    const stmt = db.prepare(
       `
         INSERT INTO document_extracts (
           id, document_id, status, source_type, methods_used, warnings, confidence, file_hash, ocr_used
@@ -59,9 +60,10 @@ export async function ensureDocumentExtract(db, {
         )
         ON CONFLICT (document_id) DO NOTHING
       `,
-    ).run(id, documentId, sourceType, fileHash)
+    )
+    await stmt.run(id, documentId, sourceType, fileHash)
   } else {
-    await db.prepare(
+    const stmt = db.prepare(
       `
         INSERT INTO document_extracts (
           id, document_id, status, source_type, methods_used, warnings, confidence, file_hash, ocr_used
@@ -69,7 +71,8 @@ export async function ensureDocumentExtract(db, {
           ?, ?, 'pending', ?, '[]', '[]', 0.0, ?, 0
         )
       `,
-    ).run(id, documentId, sourceType, fileHash)
+    )
+    stmt.run(id, documentId, sourceType, fileHash)
   }
 
   return getDocumentExtract(db, documentId)

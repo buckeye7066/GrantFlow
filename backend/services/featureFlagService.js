@@ -54,7 +54,10 @@ const CACHE_TTL_MS = 60 * 1000 // 1 minute
  * Initialize feature flags (create table if needed)
  */
 export function initializeFeatureFlags(db) {
-  if (!db) return
+  if (!db) {
+    console.error('[FeatureFlags] Database connection required for initialization')
+    throw new Error('Database connection required for feature flag initialization')
+  }
 
   // Postgres: for now, keep feature flags in-memory only (defaults) to avoid dialect-specific
   // table DDL during the DB migration rollout. We'll migrate these tables explicitly later.
@@ -134,7 +137,10 @@ export function initializeFeatureFlags(db) {
  * Refresh the in-memory cache
  */
 function refreshCache(db) {
-  if (!db) return
+  if (!db) {
+    console.error('[FeatureFlags] Cannot refresh cache without database connection')
+    return
+  }
   if (db.dialect === 'postgres') return
   
   try {
@@ -150,6 +156,10 @@ function refreshCache(db) {
  * Check if a feature flag is enabled for a given context
  */
 export function isFeatureEnabled(db, flagKey, { userId = null, profileId = null, isAdmin = false } = {}) {
+  if (!db) {
+    console.warn('[FeatureFlags] No database connection, using defaults only')
+  }
+  
   // Refresh cache if stale
   if (Date.now() - lastCacheRefresh > CACHE_TTL_MS) {
     refreshCache(db)
@@ -204,7 +214,11 @@ export function isFeatureEnabled(db, flagKey, { userId = null, profileId = null,
   }
   
   // Check percentage rollout
-  if (flag.percentage < 100 && userId) {
+  if (flag.percentage < 100) {
+    if (!userId) {
+      // No user context - use random fallback for percentage rollout
+      return Math.random() * 100 < flag.percentage
+    }
     // Use consistent hashing based on userId for stable rollout
     const hash = simpleHash(userId + flagKey)
     const bucket = hash % 100
@@ -218,7 +232,18 @@ export function isFeatureEnabled(db, flagKey, { userId = null, profileId = null,
  * Get all feature flags (admin only)
  */
 export function getAllFlags(db) {
-  if (!db) return []
+  if (!db) {
+    console.error('[FeatureFlags] Database required to get all flags')
+    // Return default flags when DB unavailable
+    return Object.entries(DEFAULT_FLAGS).map(([key, config]) => ({
+      flag_key: key,
+      enabled: config.enabled,
+      description: config.description || '',
+      percentage: config.percentage || 100,
+      requires_admin: config.requiresAdmin || false,
+      metadata: {}
+    }))
+  }
   
   try {
     const flags = db.prepare('SELECT * FROM feature_flags ORDER BY flag_key').all()

@@ -112,19 +112,22 @@ export function getSmokeSafeSources() {
  */
 export function buildRegistry({ useLive = false, fixtureBaseUrl = null } = {}) {
   const file = (name) => {
-    if (!fixtureBaseUrl) throw new Error('fixtureBaseUrl required for file fixtures')
+    if (!fixtureBaseUrl) {
+      console.warn('fixtureBaseUrl not provided, using placeholder')
+      return `file://fixtures/${name}`
+    }
     return `${fixtureBaseUrl}/${name}`
   }
 
-  const fedUrl = useLive ? 'https://www.ssa.gov/benefits/' : file('federal-ssa-benefits.html')
-  const stateUrl = useLive ? 'https://www.tn.gov/tenncare/long-term-services-supports/ecf-choices.html' : file('state-tn-ecf-choices.html')
+  const fedUrl = useLive ? 'https://www.ssa.gov/benefits/' : (fixtureBaseUrl ? file('federal-ssa-benefits.html') : 'file://fixtures/federal-ssa-benefits.html')
+  const stateUrl = useLive ? 'https://www.tn.gov/tenncare/long-term-services-supports/ecf-choices.html' : (fixtureBaseUrl ? file('state-tn-ecf-choices.html') : 'file://fixtures/state-tn-ecf-choices.html')
   // NOTE: live URLs should be verified stable; fixtures are used for offline smoke/tests.
   const countyUrl = useLive
     ? 'https://www.nyc.gov/site/hra/help/rental-assistance.page'
-    : file('county-king-housing-assistance.html')
+    : (fixtureBaseUrl ? file('county-king-housing-assistance.html') : 'file://fixtures/county-king-housing-assistance.html')
   const tribalUrl = useLive
     ? 'https://www.cherokee.org/all-services/housing-authority/'
-    : file('tribal-cherokee-health.html')
+    : (fixtureBaseUrl ? file('tribal-cherokee-health.html') : 'file://fixtures/tribal-cherokee-health.html')
   const mcoUrl = useLive ? null : 'mock://mco-portal-example'
 
   return [

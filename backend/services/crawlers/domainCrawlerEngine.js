@@ -141,6 +141,7 @@ function lightPreScore(opp, profile, config) {
  * - Applies strict exclusions.
  */
 export async function runDomainCrawler({ profile, config, options = {} }) {
+  try {
   const minDirectory = config.min_directory_items ?? 6
 
   // Validate profile
@@ -229,5 +230,9 @@ export async function runDomainCrawler({ profile, config, options = {} }) {
     match_reasons: opp.record_origin === 'directory_resource' ? ['Directory resource'] : [],
   }))
 
-  return scored
+    return scored
+  } catch (error) {
+    console.error('Domain crawler error:', error)
+    return []
+  }
 }

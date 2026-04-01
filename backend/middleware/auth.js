@@ -8,7 +8,7 @@ import { isAdminUserWithDb } from '../utils/accessControl.js'
  * Ensure user is authenticated
  */
 export function ensureAuth(req, res, next) {
-  const userId = req.ctx?.userId ?? req.user?.userId ?? null
+  const userId = req.user?.userId ?? null
   if (!userId) {
     return res.status(401).json({ error: 'Authentication required' });
   }
@@ -21,11 +21,10 @@ export function ensureAuth(req, res, next) {
  * This replaces fragile token-only checks with DB resolution.
  */
 export async function ensureAdmin(req, res, next) {
-  const user = req.user ?? { role: 'guest' };
-  
-  if (user.role === 'guest') {
+  if (!req.user) {
     return res.status(401).json({ error: 'Authentication required' });
   }
+  const user = req.user;
   
   try {
     // Use req.ctx.isAdmin if available (canonical from requestContext middleware)
@@ -46,7 +45,10 @@ export async function ensureAdmin(req, res, next) {
  */
 export function ensureProfileAccess(profileIdParam = 'id') {
   return async (req, res, next) => {
-    const user = req.user ?? { role: 'guest' };
+    if (!req.user) {
+      return res.status(401).json({ error: 'Authentication required' });
+    }
+    const user = req.user;
     const profileId = req.params[profileIdParam];
     
     if (!profileId) {

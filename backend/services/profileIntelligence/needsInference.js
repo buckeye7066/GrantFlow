@@ -311,7 +311,7 @@ function inferIndividualHardshipNeeds(intel, resultMap) {
   if (entityType !== ET.INDIVIDUAL) return
 
   // Housing instability
-  if (hardshipFlags.has('housing_instability') || hardshipFlags.has('homeless') ||
+  if ((hardshipFlags ?? new Set()).has('housing_instability') || (hardshipFlags ?? new Set()).has('homeless') ||
     storyKeywords.some(k => /evict|homeless|housing|rent|shelter/i.test(k))) {
     mergeNeed(resultMap, 'housing_support', CONF_HIGH_MEDIUM,
       ['housing instability signal'],
@@ -320,7 +320,7 @@ function inferIndividualHardshipNeeds(intel, resultMap) {
   }
 
   // Utility need
-  if (hardshipFlags.has('utility_hardship') ||
+  if ((hardshipFlags ?? new Set()).has('utility_hardship') ||
     storyKeywords.some(k => /electric|gas bill|utility|heat|water bill|liheap/i.test(k))) {
     mergeNeed(resultMap, 'utilities_support', CONF_HIGH_MEDIUM,
       ['utility hardship signal'],
@@ -329,7 +329,7 @@ function inferIndividualHardshipNeeds(intel, resultMap) {
   }
 
   // Food insecurity
-  if (hardshipFlags.has('food_insecurity') ||
+  if ((hardshipFlags ?? new Set()).has('food_insecurity') ||
     storyKeywords.some(k => /food|hunger|snap|wic|grocery/i.test(k))) {
     mergeNeed(resultMap, 'food_programs', CONF_HIGH_MEDIUM,
       ['food insecurity signal'],
@@ -338,7 +338,7 @@ function inferIndividualHardshipNeeds(intel, resultMap) {
   }
 
   // Medical/health
-  if (disabilityFlags.size > 0 || hardshipFlags.has('medical_hardship') ||
+  if (disabilityFlags.size > 0 || (hardshipFlags ?? new Set()).has('medical_hardship') ||
     storyKeywords.some(k => /medical bill|prescription|doctor|health|dental|vision|mental health/i.test(k))) {
     mergeNeed(resultMap, 'health_medical_support', CONF_HIGH_MEDIUM,
       ['medical/health hardship signal or disability flag'],
@@ -359,7 +359,7 @@ function inferIndividualHardshipNeeds(intel, resultMap) {
   }
 
   // Emergency/crisis
-  if (hardshipFlags.has('in_crisis') || hardshipFlags.has('emergency') ||
+  if ((hardshipFlags ?? new Set()).has('in_crisis') || (hardshipFlags ?? new Set()).has('emergency') ||
     storyKeywords.some(k => /emergency|crisis|urgent|desperate/i.test(k))) {
     mergeNeed(resultMap, 'emergency_assistance', CONF_HIGH_MEDIUM,
       ['emergency/crisis signal'],
@@ -385,7 +385,7 @@ function inferIndividualHardshipNeeds(intel, resultMap) {
   }
 
   // Debt relief
-  if (hardshipFlags.has('debt_burden') ||
+  if ((hardshipFlags ?? new Set()).has('debt_burden') ||
     storyKeywords.some(k => /debt|loan|credit|bankruptcy/i.test(k))) {
     mergeNeed(resultMap, 'debt_relief', CONF_MEDIUM_LOW,
       ['debt/financial burden signal'],
@@ -394,7 +394,7 @@ function inferIndividualHardshipNeeds(intel, resultMap) {
   }
 
   // General hardship → emergency assistance
-  if (hardshipFlags.size >= 2) {
+  if ((hardshipFlags ?? new Set()).size >= 2) {
     mergeNeed(resultMap, 'emergency_assistance', CONF_MEDIUM,
       ['multiple hardship flags indicate overall crisis'],
       ['financial_situation'],
@@ -418,7 +418,7 @@ function inferStudentNeeds(intel, resultMap) {
     ['primary_type'],
     ['aspirational_goal'])
 
-  if (hardshipFlagsFromIntel(intel).size > 0) {
+  if ((intel.hardshipFlags ?? new Set()).size > 0) {
     mergeNeed(resultMap, 'housing_support', 0.7,
       ['student with hardship flags may need campus/off-campus housing'],
       ['financial_situation'],
@@ -444,9 +444,7 @@ function inferStudentNeeds(intel, resultMap) {
   }
 }
 
-function hardshipFlagsFromIntel(intel) {
-  return intel.hardshipFlags ?? new Set()
-}
+// Remove unused helper function - use inline null checks instead
 
 function inferVeteranNeeds(intel, resultMap) {
   const { isVeteran, militaryFlags, storyKeywords } = intel

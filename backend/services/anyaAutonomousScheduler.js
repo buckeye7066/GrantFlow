@@ -104,8 +104,8 @@ async function logOperation(operation, status, details = {}, context = null) {
       await fs.mkdir(logDir, { recursive: true })
       const logFile = path.join(logDir, 'autonomous-scheduler.log')
       await fs.appendFile(logFile, JSON.stringify(logEntry) + '\n', 'utf8')
-    } catch {
-      // best-effort
+    } catch (error) {
+      console.warn('[anyaAutonomousScheduler] Failed to write dev audit log:', error?.message)
     }
   }
 }

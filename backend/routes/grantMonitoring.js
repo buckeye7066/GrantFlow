@@ -3,16 +3,14 @@ import crypto from 'crypto'
 import { formatError } from '../middleware/errorHandler.js'
 
 const router = express.Router()
-function requireAdmin(req, res) {
+function requireAdmin(req, res, next) {
   if (!req.ctx?.userId) {
-    res.status(401).json({ error: 'Authentication required' })
-    return false
+    return res.status(401).json({ error: 'Authentication required' })
   }
   if (!req.ctx?.isAdmin) {
-    res.status(403).json({ error: 'Access denied' })
-    return false
+    return res.status(403).json({ error: 'Access denied' })
   }
-  return true
+  next()
 }
 
 async function ensureDefaults(db) {
@@ -162,7 +160,7 @@ router.put('/logs/:id', async (req, res) => {
 router.post('/check', async (req, res) => {
   if (!requireAdmin(req, res)) return
   try {
-    ensureDefaults(req.db)
+    await ensureDefaults(req.db)
 
     const orgId = req.body?.organization_id ?? null
     const orgFilter = orgId ? ' AND organization_id = ?' : ''

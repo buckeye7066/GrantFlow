@@ -4,6 +4,7 @@ import { requireAuthenticatedUser, ensureGrantAccess, getAccessibleOrganizationI
 import { ensureProfileAccess } from '../utils/accessControl.js'
 
 const router = express.Router()
+router.use(requireAuthenticatedUser)
 
 function safeJsonParse(value, fallback) {
   try {
@@ -141,6 +142,7 @@ router.post('/', async (req, res) => {
     const quantity = Number(data.quantity ?? 1) || 0
     const unitCost = Number(data.unit_cost ?? 0) || 0
     const total = Number(data.total ?? quantity * unitCost) || 0
+if (total <= 0) return res.status(400).json({ error: 'Budget total must be greater than zero' })
     const justification = data.justification ?? null
 
     const lineItemsJson = JSON.stringify({
@@ -191,6 +193,7 @@ router.put('/:id', async (req, res) => {
     const quantity = data.quantity !== undefined ? Number(data.quantity) || 0 : Number(current.quantity ?? 1) || 0
     const unitCost = data.unit_cost !== undefined ? Number(data.unit_cost) || 0 : Number(current.unit_cost ?? 0) || 0
     const total = data.total !== undefined ? Number(data.total) || 0 : Number(current.total ?? existing.total_amount ?? quantity * unitCost) || 0
+if (total <= 0) return res.status(400).json({ error: 'Budget total must be greater than zero' })
     const justification = data.justification !== undefined ? data.justification : current.justification ?? null
     const status = data.status ?? existing.status ?? 'draft'
 

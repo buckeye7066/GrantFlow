@@ -11,7 +11,7 @@ const insertSectionStmt = (db) => {
     db?.dialect === 'postgres'
       ? `
           INSERT INTO profile_sections (profile_id, section_key, data, updated_by)
-          VALUES (?, ?, ?, ?)
+          VALUES ($1, $2, $3, $4)
           ON CONFLICT (profile_id, section_key) DO NOTHING
         `
       : `
@@ -25,8 +25,8 @@ const updateSectionStmt = (db) =>
   db.prepare(
     `
     UPDATE profile_sections
-    SET data = ?, updated_by = ?, updated_at = CURRENT_TIMESTAMP
-    WHERE id = ?
+    SET data = $1, updated_by = $2, updated_at = CURRENT_TIMESTAMP
+    WHERE id = $3
     `,
   )
 
@@ -35,7 +35,7 @@ const selectSectionsStmt = (db) =>
     `
     SELECT id, section_key, data
     FROM profile_sections
-    WHERE profile_id = ?
+    WHERE profile_id = $1
     ORDER BY section_key
     `,
   )
@@ -52,7 +52,11 @@ export async function ensureProfileSections(db, profileId, updatedBy = 'system')
   const insert = insertSectionStmt(db)
   for (const sectionKey of canonicalSectionKeys) {
     const defaults = CANONICAL_SECTION_DEFAULTS[sectionKey] ?? {}
-    await insert.run(profileId, sectionKey, JSON.stringify(defaults), updatedBy)
+    if (db?.dialect === 'postgres') {
+      await insert.run([profileId, sectionKey, JSON.stringify(defaults), updatedBy])
+    } else {
+      await insert.run(profileId, sectionKey, JSON.stringify(defaults), updatedBy)
+    }
   }
 }
 
@@ -64,11 +68,12 @@ export function normalizeSectionData(data, sectionKey) {
 }
 
 export async function repairProfileSections(db, profileId, updatedBy = 'system-repair') {
-  const rowsBefore = await selectSectionsStmt(db).all(profileId)
+  const selectStmt = selectSectionsStmt(db)
+  const rowsBefore = db?.dialect === 'postgres' ? await selectStmt.all([profileId]) : await selectStmt.all(profileId)
   const existingKeys = new Set(rowsBefore.map((row) => row.section_key))
   const missingSections = canonicalSectionKeys.filter((key) => !existingKeys.has(key))
   await ensureProfileSections(db, profileId, updatedBy)
-  const rows = await selectSectionsStmt(db).all(profileId)
+  const rows = db?.dialect === 'postgres' ? await selectStmt.all([profileId]) : await selectStmt.all(profileId)
   const updateStmt = updateSectionStmt(db)
   const updatedSections = []
 
@@ -77,7 +82,11 @@ export async function repairProfileSections(db, profileId, updatedBy = 'system-r
     const normalized = normalizeSectionData(parsed, row.section_key)
     const normalizedStr = JSON.stringify(normalized)
     if (normalizedStr !== row.data) {
-      await updateStmt.run(normalizedStr, updatedBy, row.id)
+      if (db?.dialect === 'postgres') {
+        await updateStmt.run([normalizedStr, updatedBy, row.id])
+      } else {
+        await updateStmt.run(normalizedStr, updatedBy, row.id)
+      }
       updatedSections.push(row.section_key)
     }
   }
@@ -89,8 +98,9 @@ export async function repairProfileSections(db, profileId, updatedBy = 'system-r
   }
 }
 
-export function calculateProfileCompleteness(db, profileId) {
-  const rows = selectSectionsStmt(db).all(profileId)
+export async function calculateProfileCompleteness(db, profileId) {
+  const selectStmt = selectSectionsStmt(db)
+  const rows = db?.dialect === 'postgres' ? await selectStmt.all([profileId]) : await selectStmt.all(profileId)
   const sectionMap = new Map(
     rows.map((row) => [row.section_key, safeParseJSON(row.data, {})]),
   )

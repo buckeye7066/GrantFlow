@@ -51,7 +51,7 @@ async function requireProfileAccess(req, res, profileId) {
 router.get('/profile/:profileId/grants', async (req, res) => {
     const profileId = req.params.profileId
     const auth = await requireProfileAccess(req, res, profileId)
-    if (!auth) return
+    if (!auth || res.headersSent) return
 
              try {
                    const profileRow = await req.db.prepare('SELECT * FROM profiles WHERE id = ?').get(profileId)
@@ -62,7 +62,7 @@ router.get('/profile/:profileId/grants', async (req, res) => {
       const baseContext = await loadProfileContext(req.db, profileId)
                    const profileContext = buildProfileFacets(baseContext)
 
-      // Pre-normalize profile once for the v2.0.0 decision engine
+      // Pre-normalize profile once for the decision engine
       const rawProfileForGrants = profileContext?.profile ?? profileContext
       const profileSectionsForGrants = profileContext?.sections ?? null
       const profileNormForDecision = normalizeProfile(rawProfileForGrants, profileSectionsForGrants, baseContext.signals)
@@ -86,32 +86,27 @@ router.get('/profile/:profileId/grants', async (req, res) => {
                      .all(profileRow.organization_id)
 
       const matches = rows.map((row) => {
-              const candidate = row.id
-                ? {
-                              title: row.title,
-                              description: row.description,
-                              is_national: row.is_national,
-                              state: row.state,
-                              keywords: row.keywords,
-                              categories: row.categories,
-                              deadline: row.deadline ?? row.grant_deadline,
-                              deadline_type: row.deadline_type,
-                              amount_min: row.amount_min,
-                              amount_max: row.amount_max,
-                              requires_501c3: row.requires_501c3,
-                              requires_match: row.requires_match,
-                              match_percentage: row.match_percentage,
-                              eligibility_bullets: row.eligibility_bullets,
+              // Skip grants without funding opportunity data to prevent corrupted matching
+                if (!row.id) {
+                    console.warn(`Grant ${row.grant_id} has no funding opportunity data, skipping match calculation`)
+                    return null
                 }
-                        : {
-                                      title: row.grant_title,
-                                      description: row.grant_notes ?? null,
-                                      is_national: null,
-                                      state: null,
-                                      keywords: null,
-                                      categories: null,
-                                      deadline: row.grant_deadline,
-                        }
+                const candidate = {
+                    title: row.title,
+                    description: row.description,
+                    is_national: row.is_national,
+                    state: row.state,
+                    keywords: row.keywords,
+                    categories: row.categories,
+                    deadline: row.deadline ?? row.grant_deadline,
+                    deadline_type: row.deadline_type,
+                    amount_min: row.amount_min,
+                    amount_max: row.amount_max,
+                    requires_501c3: row.requires_501c3,
+                    requires_match: row.requires_match,
+                    match_percentage: row.match_percentage,
+                    eligibility_bullets: row.eligibility_bullets,
+                }
 
                                      // Use the canonical decision engine for scoring; fall back gracefully
                                      const decision = computeMatchDecision(profileContext, candidate)
@@ -137,7 +132,9 @@ router.get('/profile/:profileId/grants', async (req, res) => {
                    res.json(matches)
              } catch (error) {
                    console.error('Error matching profile to grants:', error)
-                   res.status(500).json(formatError(error))
+                   if (!res.headersSent) {
+                       res.status(500).json(formatError(error))
+                   }
              }
 })
 
@@ -156,7 +153,7 @@ router.get('/profile/:profileId/grants', async (req, res) => {
 router.get('/profile/:profileId/opportunities', async (req, res) => {
     const profileId = req.params.profileId
     const auth = await requireProfileAccess(req, res, profileId)
-    if (!auth) return
+    if (!auth || res.headersSent) return
 
              try {
                    const profileRow = await req.db.prepare('SELECT * FROM profiles WHERE id = ?').get(profileId)
@@ -164,9 +161,8 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
                            return res.status(404).json({ error: 'Profile not found' })
                    }
 
-      if (req.query.skip_readiness_check !== '1') {
-              const readiness = await checkProfileReadiness(req.db, profileId)
-              if (!readiness.ready) {
+      const readiness = await checkProfileReadiness(req.db, profileId)
+      if (!readiness.ready && req.query.skip_readiness_check !== '1') {
                         return res.status(422).json({
                                     error: 'profile_not_ready',
                                     message: readiness.guidance || 'Profile requires additional information before matching.',
@@ -175,6 +171,9 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
                                     guidance: readiness.guidance,
                         })
               }
+      // Log warning if readiness check was bypassed
+      if (!readiness.ready && req.query.skip_readiness_check === '1') {
+          console.warn(`Profile ${profileId} readiness bypassed: score=${readiness.score}, missing=${readiness.missing?.join(', ')}`)
       }
 
       if (req.query.skip_readiness_check !== '1') {
@@ -318,7 +317,7 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
               needsTransport: kws.has('transportation') || kws.has('ride assistance'),
       }
 
-      // Pre-normalize profile once for the v2.0.0 REJECT filter (avoids re-running per opportunity)
+      // Pre-normalize profile once for the REJECT filter (avoids re-running per opportunity)
       const rawProfileForDecision = profileContext?.profile ?? profileContext
       const profileSectionsForDecision = profileContext?.sections ?? null
       const profileNormForDecision = normalizeProfile(rawProfileForDecision, profileSectionsForDecision, baseContext.signals)
@@ -407,7 +406,9 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
       })
              } catch (error) {
                    console.error('Error matching profile to opportunities:', error)
-                   res.status(500).json(formatError(error))
+                   if (!res.headersSent) {
+                       res.status(500).json(formatError(error))
+                   }
              }
 })
 

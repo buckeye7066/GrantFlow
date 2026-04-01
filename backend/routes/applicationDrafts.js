@@ -38,6 +38,10 @@ router.get('/', async (req, res) => {
       if (allowedList) {
         const placeholders = allowedList.map(() => '?').join(', ')
         clauses.push(`g.organization_id IN (${placeholders})`)
+        // Validate allowedList contains only valid org IDs
+        if (!allowedList.every(id => typeof id === 'string' && id.match(/^[a-zA-Z0-9_-]+$/))) {
+          return res.status(403).json({ error: 'Invalid organization access' })
+        }
         params.push(...allowedList)
       }
     }
@@ -46,9 +50,9 @@ router.get('/', async (req, res) => {
     const rows = await req.db
       .prepare(
         `
-          SELECT a.*
+          SELECT a.*, g.organization_id
           FROM application_drafts a
-          LEFT JOIN grants g ON g.id = a.grant_id
+          INNER JOIN grants g ON g.id = a.grant_id
           ${where}
           ORDER BY a.updated_at DESC
           LIMIT ?

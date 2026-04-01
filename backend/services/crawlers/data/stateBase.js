@@ -19,7 +19,7 @@ import { STATE_REGISTRY } from './stateRegistry.js';
  */
 export function generateStatePrograms(stateCode) {
   const reg = STATE_REGISTRY[stateCode];
-  if (!reg) return { benefits: [], meta: null, countyResources: {} };
+  if (!reg) return { benefits: [], meta: { code: stateCode, name: 'Unknown State', benefitsPortal: null, benefitsPortalName: null, dhsPhone: null, is211Available: false }, countyResources: {} };
 
   const sc = stateCode.toLowerCase();
   const meta = {
@@ -75,7 +75,7 @@ export function generateStatePrograms(stateCode) {
     // ── Medicaid ──
     {
       id: `${sc}-medicaid`,
-      name: `${reg.medicaidName || reg.name + ' Medicaid'}`,
+      name: `${reg.medicaidName || (reg.name + ' Medicaid')}`,
       description: `${reg.medicaidExpanded ? 'Free or low-cost' : 'Health'} coverage for qualifying ${reg.name} residents. ${reg.medicaidExpanded ? `${reg.name} expanded Medicaid — adults up to 138% FPL qualify.` : `Coverage for children, pregnant women, elderly, and disabled. ${reg.name} has not expanded Medicaid for all adults.`} Covers medical, dental, vision, mental health, prescriptions, and more.`,
       url: reg.medicaidUrl || reg.benefitsPortal,
       categories: ['healthcare'],

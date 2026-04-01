@@ -34,6 +34,9 @@ router.get('/', async (req, res) => {
 
   try {
     const limit = Math.max(1, Math.min(Number(req.query?.limit) || 50, 500))
+    if (!req.db) {
+      return res.status(500).json({ error: 'Database connection not available' })
+    }
     const rows = await req.db
       .prepare(
         `
@@ -81,6 +84,9 @@ router.post('/filter', async (req, res) => {
     }
 
     const where = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : ''
+    if (!req.db) {
+      return res.status(500).json({ error: 'Database connection not available' })
+    }
     const rows = await req.db
       .prepare(
         `

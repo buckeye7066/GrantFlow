@@ -20,7 +20,10 @@ try {
   const pkgPath = path.resolve(__dirname, '../../package.json')
   const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'))
   _cachedPkgVersion = pkg.version || null
-} catch { /* ignore */ }
+} catch (error) {
+  console.warn('Failed to load package.json version:', error.message)
+  _cachedPkgVersion = 'unknown'
+}
 
 function getBuildInfo() {
   const commit =
@@ -30,15 +33,8 @@ function getBuildInfo() {
     process.env.VERCEL_GIT_COMMIT_SHA ||
     null
 
-  let pkgVersion = null
-  try {
-    const pkgPath = path.resolve(__dirname, '../../package.json')
-    const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'))
-    pkgVersion = pkg.version || null
-  } catch { /* ignore */ }
-
   return {
-    version: pkgVersion,
+    version: _cachedPkgVersion,
     commit_sha: commit ? String(commit) : null,
     node_env: process.env.NODE_ENV ? String(process.env.NODE_ENV) : null,
     runtime: process.env.RAILWAY_ENVIRONMENT ? 'railway' : process.env.VERCEL ? 'vercel' : null,
@@ -99,7 +95,8 @@ async function checkRequiredSchema(db) {
         if (!row) return { ok: false, reason: 'missing_schema', missing: item }
       } else {
         if (!/^[a-zA-Z0-9_]+$/.test(item.table)) return { ok: false, reason: 'invalid_table_identifier', table: item.table }
-        const rows = await db.prepare(`PRAGMA table_info(${item.table})`).all()
+        const stmt = db.prepare('SELECT * FROM pragma_table_info(?)')
+        const rows = await stmt.all(item.table)
         const has = (rows || []).some((r) => String(r?.name || '') === item.column)
         if (!has) return { ok: false, reason: 'missing_schema', missing: item }
       }

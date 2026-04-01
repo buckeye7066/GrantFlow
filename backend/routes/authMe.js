@@ -52,7 +52,7 @@ export function createAuthMeRouter({ db, adminName, adminEmail }) {
         let dbUser, profiles
 
         try {
-          dbUser = await db
+          dbUser = db
             .prepare(
               `
                 SELECT *
@@ -116,7 +116,7 @@ export function createAuthMeRouter({ db, adminName, adminEmail }) {
           if (isAdminUser) {
             // Admin UX expects cross-org profile selection.
             // Return a large (but bounded) list to avoid "missing profiles" in the UI.
-            profiles = await db
+            profiles = db
               .prepare(
                 `
                   SELECT id, display_name, organization_id, status
@@ -144,14 +144,14 @@ export function createAuthMeRouter({ db, adminName, adminEmail }) {
 
             // Ensure schema exists (idempotent). If it fails, fall back to user_id only.
             try {
-              await ensureProfileEmailSchema(db)
+              ensureProfileEmailSchema(db)
             } catch {
               // ignore
             }
 
             if (emails.length > 0) {
               const placeholders = emails.map(() => '?').join(', ')
-              profiles = await db
+              profiles = db
                 .prepare(
                   `
                     SELECT DISTINCT p.id, p.display_name, p.organization_id, p.status
@@ -164,7 +164,7 @@ export function createAuthMeRouter({ db, adminName, adminEmail }) {
                 )
                 .all(dbUser.id, ...emails)
             } else {
-              profiles = await db
+              profiles = db
                 .prepare(
                   `
                     SELECT id, display_name, organization_id, status
@@ -248,7 +248,7 @@ export function createAuthMeRouter({ db, adminName, adminEmail }) {
         const hc = await db.healthcheck()
         if (!hc?.ok) throw new Error(hc?.error || 'Database healthcheck failed')
       } else {
-        await db.prepare('SELECT COUNT(*) as count FROM users').get()
+        db.prepare('SELECT COUNT(*) as count FROM users').get()
       }
       diagnostics.auth.database = 'connected'
     } catch (error) {

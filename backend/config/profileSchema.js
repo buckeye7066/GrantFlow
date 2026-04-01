@@ -113,7 +113,8 @@ export const PROFILE_SCHEMA = {
     description: 'Medical/health characteristics frequently used in assistance eligibility.',
     fields: {
       conditions: {
-        type: 'array<object>',
+        type: 'array',
+        items: { type: 'object' },
         default: [],
         description:
           'List of health conditions (objects). Minimum shape: { name, icd10?, stage?, diagnosed_year? }. Informational only (no medical advice).',
@@ -480,7 +481,10 @@ export function getFlatFieldToSectionMap() {
     const schema = PROFILE_SCHEMA[sectionKey]
     const fields = schema?.fields ?? {}
     for (const fieldName of Object.keys(fields)) {
-      if (!map.has(fieldName)) map.set(fieldName, { sectionKey, storageKey: fieldName })
+      if (map.has(fieldName)) {
+        console.warn(`Duplicate field '${fieldName}' in sections '${map.get(fieldName).sectionKey}' and '${sectionKey}'`)
+      }
+      map.set(fieldName, { sectionKey, storageKey: fieldName })
     }
   }
   // UI uses current_college; schema uses current_institution in education.

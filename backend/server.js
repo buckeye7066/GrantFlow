@@ -122,7 +122,12 @@ try {
   console.warn('[funding-api-keys] startup check failed:', error?.message || String(error))
 }
 
-const ADMIN_TOKEN = process.env.ADMIN_TOKEN || process.env.ANYA_ADMIN_TOKEN || null;
+const ADMIN_TOKEN = process.env.ADMIN_TOKEN || process.env.ANYA_ADMIN_TOKEN || (() => {
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error('ADMIN_TOKEN is required in production');
+  }
+  return null;
+})();
 const ADMIN_NAME = process.env.ADMIN_NAME || 'Admin User';
 const ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'admin@grantflow.app';
 
@@ -287,8 +292,8 @@ try {
       },
     }));
   }
-} catch {
-  // ignore legacy-dir probing failures
+} catch (error) {
+  console.warn('[uploads] Legacy directory probe failed:', error?.message || error);
 }
 app.use('/uploads', (req, res) => {
   const reqPath = String(req.path || '').replace(/^\/+/, '')
