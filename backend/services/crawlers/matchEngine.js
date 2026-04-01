@@ -127,7 +127,7 @@ function computeNegativePenalty(program, analysis) {
 
   for (const rule of NEGATIVE_RULES) {
         const eligKey = `requires${rule.healthRequired.charAt(0).toUpperCase() + rule.healthRequired.slice(1).replace(/_([a-z])/g, (_, c) => c.toUpperCase())}`;
-        if (program.eligibility[eligKey] && !analysis.health.has(rule.healthRequired)) {
+        if (program.eligibility[eligKey] && !(analysis.health?.has(rule.healthRequired))) {
                 return rule.penalty;
         }
   }
@@ -317,21 +317,6 @@ export function scoreProgram(program, analysis, strategyOpts = {}) {
   // ── Intent alignment (up to 25 points) ──
   maxPossible += 25;
     let intentBonus = computeIntentBonus(program, intents);
-
-// Add missing computeIntentBonus function before this call
-function computeIntentBonus(program, intents) {
-  const progIntents = program.intentMatch || [];
-  if (progIntents.length === 0 || intents.size === 0) return 0;
-
-  let hits = 0;
-  for (const pi of progIntents) {
-    if (intents.has(pi)) hits++;
-  }
-  if (hits === 0) return 0;
-
-  // Strong bonus: 15 pts for first hit, 5 for each additional (cap 25)
-  return Math.min(25, 15 + (hits - 1) * 5);
-}
 
     // Apply strategy-level intentBoost when the program matches a boosted intent
     const boostMap = strategyOpts.intentBoost || {};
@@ -606,7 +591,9 @@ function computeIntentBonus(program, intents) {
   score += eligibilityPenalty;
 
   // ── Normalize to 0-100 ──
-  const normalizedScore = Math.max(0, Math.round(Math.min(100, (score / maxPossible) * 100)));
+  const normalizedScore = maxPossible > 0
+    ? Math.max(0, Math.round(Math.min(100, (score / maxPossible) * 100)))
+    : 0;
 
   // Build matched signals list
   const matchedSignals = [];
@@ -682,13 +669,28 @@ export function matchPrograms(allPrograms, analysis, options = {}) {
     if (normName) seenNames.add(normName);
 
     // Filter informational-only pages
-    if (isInformationalOnly(program)) { stats.informational++; continue; }
+    if (isInformationalOnly(program)) {
+      stats.informational++;
+      if (!stats.filteredLog) stats.filteredLog = [];
+      stats.filteredLog.push({ id: program.id, name: program.name, reason: 'informational_page' });
+      continue;
+    }
 
     // Filter copay/patient-assistance when no matching conditions
-    if (isCopayOrPatientAssistanceIrrelevant(program, analysis)) { stats.copayGated++; continue; }
+    if (isCopayOrPatientAssistanceIrrelevant(program, analysis)) {
+      stats.copayGated++;
+      if (!stats.filteredLog) stats.filteredLog = [];
+      stats.filteredLog.push({ id: program.id, name: program.name, reason: 'copay_gated_no_condition_match' });
+      continue;
+    }
 
     // Filter loans/matching funds
-    if (isExcluded(program)) { stats.excluded++; continue; }
+    if (isExcluded(program)) {
+      stats.excluded++;
+      if (!stats.filteredLog) stats.filteredLog = [];
+      stats.filteredLog.push({ id: program.id, name: program.name, reason: 'loan_or_matching_fund' });
+      continue;
+    }
 
     // Score against profile
     const scored = scoreProgram(program, analysis, strategyOpts);
