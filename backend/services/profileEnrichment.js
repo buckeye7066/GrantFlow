@@ -99,8 +99,9 @@ export async function processProfileEnrichmentJob({ db, job, profileContext, get
     return acc
   }, {})
 
+  // Build signals from the freshly-fetched DB sections so the AI sees the most current profile
   const signalSummary = summarizeProfileSignals(
-    profileContext.signals ?? buildProfileSignals({ profile, sections: profileContext.sections ?? {} }),
+    profileContext.signals ?? buildProfileSignals({ profile, sections: existingSections }),
   )
 
   const payload = {
@@ -168,13 +169,43 @@ export async function processProfileEnrichmentJob({ db, job, profileContext, get
   // Remove this entire forEach block as it's redundant with the for loop below
 
   for (const section of sections) {
-    if (!section || typeof section !== 'object') continue
+    if (!section || typeof section !== 'object') {
+      enrichmentLog.push({ section_key: null, updated_fields: [], notes: 'Skipped: section entry was not an object' })
+      continue
+    }
     const sectionKey = section.key
-    if (typeof sectionKey !== 'string' || !sectionKey) continue
+    if (typeof sectionKey !== 'string' || !sectionKey) {
+      enrichmentLog.push({ section_key: null, updated_fields: [], notes: 'Skipped: section key missing or not a string' })
+      continue
+    }
     const data = section.data
-    if (!data || typeof data !== 'object') continue
+    if (!data || typeof data !== 'object') {
+      enrichmentLog.push({ section_key: sectionKey, updated_fields: [], notes: 'Skipped: section data missing or not an object' })
+      continue
+    }
 
-    const merged = mergeSection(existingSections[sectionKey], data)
+    // Only accept fields the model was explicitly shown (keys present in existing section
+    // or explicitly enumerated safe scalars). Never let the model mint new top-level keys
+    // that did not already exist in the existing section OR were not in the original payload.
+    const existingKeys = new Set(Object.keys(existingSections[sectionKey] ?? {}))
+    const payloadSection = payload.sections.find((s) => s.key === sectionKey)
+    const allowedKeys = new Set([
+      ...existingKeys,
+      ...Object.keys(payloadSection?.existing ?? {}),
+    ])
+    // Strip any key the model invented that we never provided
+    const safeData = Object.fromEntries(
+      Object.entries(data).filter(([k]) => allowedKeys.has(k)),
+    )
+    if (Object.keys(safeData).length === 0) {
+      enrichmentLog.push({
+        section_key: sectionKey,
+        updated_fields: [],
+        notes: 'AI returned only invented keys â skipped to prevent hallucination',
+      })
+      continue
+    }
+    const merged = mergeSection(existingSections[sectionKey], safeData)
     await upsertEnrichedSection(db, profile.id, sectionKey, merged)
     existingSections[sectionKey] = merged
     updatedSections.push(sectionKey)
@@ -187,7 +218,7 @@ export async function processProfileEnrichmentJob({ db, job, profileContext, get
 
   const resultMeta = { sections: enrichmentLog, prompt: prompt || null }
 
-  db.prepare(
+  await db.prepare(
     `UPDATE crawler_jobs
      SET status = 'completed',
          completed_at = CURRENT_TIMESTAMP,
