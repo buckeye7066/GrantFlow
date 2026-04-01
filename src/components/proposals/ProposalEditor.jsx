@@ -89,7 +89,7 @@ export default function ProposalEditor({ grant, organization }) {
 
   useEffect(() => {
     setDraftContent(activeSection?.content ?? '')
-  }, [activeSection?.section_key])
+  }, [activeSection?.section_key, activeSection?.content])
 
   const upsertSectionMutation = useMutation({
     mutationFn: ({ sectionKey, title, content }) => saveSection(applicationId, sectionKey, { title, content }),
@@ -107,7 +107,8 @@ export default function ProposalEditor({ grant, organization }) {
       title: activeSection.title ?? null,
       content: debouncedDraftContent,
     })
-  }, [debouncedDraftContent, applicationId, activeSection])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [debouncedDraftContent, applicationId, activeSection?.section_key])
 
   const autoPopulateMutation = useMutation({
     mutationFn: () => autoPopulate(applicationId),
@@ -128,8 +129,8 @@ export default function ProposalEditor({ grant, organization }) {
     onSuccess: (result) => {
       const url = result?.artifact?.download_url
       if (url) {
-        downloadAuthenticatedUrl(url, { fallbackFileName: `application_${applicationId || 'export'}.docx` }).catch(() => {
-          // ignore: keep UI responsive
+        downloadAuthenticatedUrl(url, { fallbackFileName: `application_${applicationId || 'export'}.docx` }).catch((err) => {
+          console.error('[ProposalEditor] export download failed', err)
         })
       }
     },
