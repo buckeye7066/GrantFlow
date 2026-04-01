@@ -43,12 +43,25 @@ export function auditLogger(req, res, next) {
 
         if (req.db) {
           try {
-            // Create audit_logs table if it doesn't exist
-            // Use async operations to prevent blocking
+            // Ensure audit_logs table exists (idempotent)
+            req.db.prepare(`
+              CREATE TABLE IF NOT EXISTS audit_logs (
+                id TEXT PRIMARY KEY,
+                correlation_id TEXT,
+                timestamp TEXT,
+                user_id TEXT,
+                method TEXT,
+                path TEXT,
+                status INTEGER,
+                duration_ms INTEGER,
+                ip TEXT,
+                payload TEXT
+              )
+            `).run();
             const insertStmt = req.db.prepare(`
-            INSERT INTO audit_logs (id, correlation_id, timestamp, user_id, method, path, status, duration_ms, ip, payload)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-          `);
+              INSERT INTO audit_logs (id, correlation_id, timestamp, user_id, method, path, status, duration_ms, ip, payload)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            `);
 
             // Execute async to prevent blocking
             setImmediate(() => {
@@ -71,7 +84,11 @@ export function auditLogger(req, res, next) {
                   error: e.message,
                   stack: e.stack,
                   correlation_id: correlationId,
-                  path: req.path
+                  path: req.path,
+                  lost_entry_id: logEntry.id,
+                  lost_user_id: logEntry.user_id,
+                  lost_method: logEntry.method,
+                  lost_status: logEntry.status
                 });
               }
             });
