@@ -49,7 +49,10 @@ const AUTONOMOUS_CONFIG = {
       dryRun: process.env.ANYA_DRY_RUN === 'true',
     },
     crawlers: {
-      matchThreshold: parseInt(process.env.ANYA_MATCH_THRESHOLD) || 80,
+      // matchThreshold is intentionally removed from the scheduler config.
+      // Pre-filtering by score before computeMatchDecision() runs violates
+      // Goal 4 (single decision authority) and Goal 7 (recall over suppression).
+      // The canonical decision engine in matchEngine.js is the sole gating authority.
       saveAllToGlobal: process.env.ANYA_SAVE_GLOBAL !== 'false',
       waitForCompletion: process.env.ANYA_WAIT_COMPLETION === 'true',
     },
@@ -209,10 +212,16 @@ export async function runAllAutonomousOperations(context, trigger = 'manual') {
     if (AUTONOMOUS_CONFIG.operations.crawlers) {
       console.log('[Anya Scheduler] Phase 3: Running crawlers...')
       try {
-        const result = await runAutonomousCrawlers(
-          AUTONOMOUS_CONFIG.params.crawlers,
-          context
-        )
+        const crawlerParams = {
+  ...AUTONOMOUS_CONFIG.params.crawlers,
+  // Carry profile context so anyaAutonomousFunctionRunner can scope
+  // each crawler invocation to the profile's location, needs, and type.
+  profileId: context?.profileId ?? context?.profile_id ?? null,
+  location: context?.profile?.location ?? null,
+  needs: context?.profile?.needs ?? null,
+  applicantType: context?.profile?.primary_type ?? null,
+}
+const result = await runAutonomousCrawlers(crawlerParams, context)
         report.operations.crawlers = {
           status: 'completed',
           profiles_processed: result.profiles_processed,
@@ -250,15 +259,13 @@ export async function runAllAutonomousOperations(context, trigger = 'manual') {
       try {
         // Student primary_type values — mirrors the list used in autoDiscoveryCrawlers.js
         // and grants.js. No shared constant exists; keep in sync if new student types are added.
-        const studentTypes = ['high_school_student', 'college_student', 'graduate_student', 'student']
-        const typePlaceholders = studentTypes.map(() => '?').join(', ')
-        const studentProfiles = await context.db
+        // Portal checks apply to all active profiles, not only students.
+        // Restricting to student types violates Goal 6 (serve all applicant types).
+        const eligibleProfiles = await context.db
           .prepare(
-            `SELECT id FROM profiles
-             WHERE status = 'active'
-               AND primary_type IN (${typePlaceholders})`,
+            `SELECT id FROM profiles WHERE status = 'active'`,
           )
-          .all(...studentTypes)
+          .all()
 
         let portalChecksTotal = 0
         let portalAwardsTotal = 0
@@ -501,12 +508,41 @@ export function getAutonomousConfig() {
 /**
  * Update configuration at runtime (admin only)
  */
+const BLOCKED_CONFIG_KEYS = new Set(['matchThreshold'])
+
 export function updateAutonomousConfig(updates) {
   Object.keys(updates).forEach(key => {
     if (key in AUTONOMOUS_CONFIG) {
+      if (BLOCKED_CONFIG_KEYS.has(key)) {
+        console.warn(
+          `[anyaAutonomousScheduler] updateAutonomousConfig: refusing blocked key "${key}" ` +
+          'â pre-filter thresholds must not override computeMatchDecision() (Goals 4, 7)'
+        )
+        return
+      }
+      // Only allow shallow merges on the nested objects (params, operations)
+      // to prevent full replacement of sub-trees.
+      if (
+        key === 'params' || key === 'operations'
+      ) {
+        if (updates[key] !== null && typeof updates[key] === 'object' && !Array.isArray(updates[key])) {
+          Object.keys(updates[key]).forEach(subKey => {
+            if (key === 'params' && subKey in AUTONOMOUS_CONFIG.params) {
+              if (AUTONOMOUS_CONFIG.params[subKey] !== null && typeof AUTONOMOUS_CONFIG.params[subKey] === 'object') {
+                Object.assign(AUTONOMOUS_CONFIG.params[subKey], updates[key][subKey])
+              } else {
+                AUTONOMOUS_CONFIG.params[subKey] = updates[key][subKey]
+              }
+            } else if (key === 'operations' && subKey in AUTONOMOUS_CONFIG.operations) {
+              AUTONOMOUS_CONFIG.operations[subKey] = updates[key][subKey]
+            }
+          })
+        }
+        return
+      }
       AUTONOMOUS_CONFIG[key] = updates[key]
     }
   })
-  
+
   return AUTONOMOUS_CONFIG
 }
