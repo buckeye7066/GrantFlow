@@ -532,7 +532,7 @@ router.get('/', listProfilesLimiter, async (req, res) => {
     const message = String(error?.message || error)
     const schemaMissing =
       message.toLowerCase().includes('no such table') ||
-      message.toLowerCase().includes('relation') && message.toLowerCase().includes('profiles')
+      (message.toLowerCase().includes('relation') && message.toLowerCase().includes('profiles'))
 
     console.error('[profiles] list failed', {
       requestId: req.requestId || null,
@@ -754,7 +754,7 @@ router.post('/', createProfileLimiter, async (req, res) => {
       requestedBy: req.ctx?.userId ?? 'system',
     })
     // Dispatch the local job immediately (fire-and-forget)
-    const { dispatchCrawlerJob } = await import('../services/crawlerDispatcher.js')
+    // dispatchCrawlerJob is already imported at the top of this module â no re-import needed.
     const localJob = await req.db
       .prepare(
         `SELECT id FROM crawler_jobs WHERE profile_id = ? AND type = 'local' AND status = 'queued' ORDER BY created_at DESC LIMIT 1`,
@@ -819,9 +819,9 @@ router.get('/:id', async (req, res) => {
       updated_by: section.updated_by,
     }))
   } catch (error) {
-    // Never 500 just because sections are missing/migrating.
-        console.warn('[profiles] Unable to load profile sections:', id, error?.message)
-return res.status(500).json({ error: 'Failed to load profile sections', details: error?.message })
+    // Never 500 just because sections are missing/migrating â return empty array.
+    console.warn('[profiles] Unable to load profile sections:', id, error?.message)
+    sections = []
   }
 
   let billing = null
@@ -1189,7 +1189,16 @@ router.post('/:id/avatar/ai', async (req, res) => {
   const authProfileId = req.ctx?.activeProfileId ? String(req.ctx.activeProfileId) : null
 
   // Fail loudly if upload storage is unavailable; this job writes a file under /uploads.
-  const storage = req?.storageStatus || req?.app?.locals?.uploads?.storageStatus || null
+  const uploadStorageStatus = req?.storageStatus || req?.app?.locals?.uploads?.storageStatus || null
+  if (uploadStorageStatus && uploadStorageStatus.writable === false) {
+    return res.status(503).json({
+      ok: false,
+      error: 'Upload storage is unavailable',
+      code: 'UPLOAD_STORAGE_UNAVAILABLE',
+      uploads_dir: uploadStorageStatus.uploads_dir || null,
+      status: uploadStorageStatus.status || 'degraded',
+    })
+  }
   if (storage && storage.writable === false) {
     return res.status(503).json({
       ok: false,
