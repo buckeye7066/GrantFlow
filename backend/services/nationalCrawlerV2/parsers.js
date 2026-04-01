@@ -29,12 +29,12 @@ export async function parseContent({ url, contentType, buffer, sourceFamily }) {
         console.warn(`PDF parsing failed for ${url}:`, pdfError.message)
         // Fall back to treating as HTML
         if (!buffer || !Buffer.isBuffer(buffer)) {
-    console.warn(`Invalid buffer for ${url}`)
-    return { parser_name: 'error', extracted_text: '', doc: null }
-  }
-  const html = buffer.toString('utf8')
-        const doc = parseHtmlToText(html, { url })
-        return { parser_name: 'cheerio-fallback', extracted_text: doc.extractedText, doc }
+          console.warn(`Invalid buffer for ${url}`)
+          return { parser_name: 'error', extracted_text: '', doc: null }
+        }
+        const fallbackHtmlPdf = buffer.toString('utf8')
+        const fallbackPdfDoc = parseHtmlToText(fallbackHtmlPdf, { url })
+        return { parser_name: 'cheerio-fallback', extracted_text: fallbackPdfDoc.extractedText, doc: fallbackPdfDoc }
       }
     }
 
@@ -49,23 +49,23 @@ export async function parseContent({ url, contentType, buffer, sourceFamily }) {
         console.warn(`DOCX parsing failed for ${url}:`, docxError.message)
         // Fall back to treating as HTML
         if (!buffer || !Buffer.isBuffer(buffer)) {
-    console.warn(`Invalid buffer for ${url}`)
-    return { parser_name: 'error', extracted_text: '', doc: null }
-  }
-  const html = buffer.toString('utf8')
-        const doc = parseHtmlToText(html, { url })
-        return { parser_name: 'cheerio-fallback', extracted_text: doc.extractedText, doc }
+          console.warn(`Invalid buffer for ${url}`)
+          return { parser_name: 'error', extracted_text: '', doc: null }
+        }
+        const fallbackHtmlDocx = buffer.toString('utf8')
+        const fallbackDocxDoc = parseHtmlToText(fallbackHtmlDocx, { url })
+        return { parser_name: 'cheerio-fallback', extracted_text: fallbackDocxDoc.extractedText, doc: fallbackDocxDoc }
       }
     }
 
     // default html
     if (!buffer || !Buffer.isBuffer(buffer)) {
-    console.warn(`Invalid buffer for ${url}`)
-    return { parser_name: 'error', extracted_text: '', doc: null }
-  }
-  const html = buffer.toString('utf8')
-    const doc = parseHtmlToText(html, { url })
-    return { parser_name: 'cheerio', extracted_text: doc.extractedText, doc }
+      console.warn(`Invalid buffer for ${url}`)
+      return { parser_name: 'error', extracted_text: '', doc: null }
+    }
+    const defaultHtml = buffer.toString('utf8')
+    const defaultDoc = parseHtmlToText(defaultHtml, { url })
+    return { parser_name: 'cheerio', extracted_text: defaultDoc.extractedText, doc: defaultDoc }
   } catch (error) {
     console.error(`Content parsing failed for ${url}:`, error.message)
     return { parser_name: 'error', extracted_text: '', doc: null }
