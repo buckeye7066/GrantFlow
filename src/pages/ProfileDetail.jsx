@@ -486,26 +486,47 @@ export default function ProfileDetail() {
     : []
 
 
-  const handleSaveUniversityApplications = async (nextApplications) => {
-    try {
-      setSavingSectionKey("university_applications")
-      await upsertSectionMutation.mutateAsync({
-        sectionKey: "university_applications",
-        values: { applications: nextApplications },
-      })
-    } finally {
-      setSavingSectionKey(null)
-    }
-  }
+  const handleSaveUniversityApplications = React.useCallback(
+    async (nextApplications) => {
+      try {
+        setSavingSectionKey("university_applications")
+        await upsertSectionMutation.mutateAsync({
+          sectionKey: "university_applications",
+          values: { applications: nextApplications },
+        })
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Unable to save university applications."
+        toast({
+          title: "Save failed",
+          description: message,
+          variant: "destructive",
+        })
+      } finally {
+        setSavingSectionKey(null)
+      }
+    },
+    [upsertSectionMutation, toast],
+  )
 
-  const handleAskUniversityApplications = async () => {
-    setAiLoadingKey("university_applications")
-    try {
-      return await aiSuggestionMutation.mutateAsync("university_applications")
-    } finally {
-      setAiLoadingKey(null)
-    }
-  }
+  const handleAskUniversityApplications = React.useCallback(
+    async () => {
+      setAiLoadingKey("university_applications")
+      try {
+        return await aiSuggestionMutation.mutateAsync("university_applications")
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Unable to fetch AI suggestion."
+        toast({
+          title: "AI request failed",
+          description: message,
+          variant: "destructive",
+        })
+        return null
+      } finally {
+        setAiLoadingKey(null)
+      }
+    },
+    [aiSuggestionMutation, toast],
+  )
 
   return (
     <div className="p-6 md:p-10">
