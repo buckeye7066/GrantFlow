@@ -316,12 +316,21 @@ export default function OrganizationForm({ organization, onSubmit, onCancel, isS
   const [formData, setFormData] = useState(() => initializeFormData(organization, contactMethods));
 
   // Update formData when organization or contactMethods change
-  useEffect(() => {
-    // Only reset if organization or contactMethods have loaded/changed
-    if (!isLoadingContacts) { // Ensures contactMethods are available
-        setFormData(initializeFormData(organization, contactMethods));
-    }
-  }, [organization, contactMethods, isLoadingContacts]);
+  const prevOrgIdRef = React.useRef(organization?.id);
+const prevLoadingRef = React.useRef(isLoadingContacts);
+
+useEffect(() => {
+  const orgChanged = organization?.id !== prevOrgIdRef.current;
+  const justFinishedLoading = prevLoadingRef.current === true && isLoadingContacts === false;
+  prevOrgIdRef.current = organization?.id;
+  prevLoadingRef.current = isLoadingContacts;
+
+  // Only reset the entire form when the org identity changes or contacts finish loading for the first time.
+  // Do NOT reset on every contactMethods reference change to avoid overwriting in-progress edits.
+  if ((orgChanged || justFinishedLoading) && !isLoadingContacts) {
+    setFormData(initializeFormData(organization, contactMethods));
+  }
+}, [organization, contactMethods, isLoadingContacts]);
 
   const { data: taxonomyItems = [] } = useQuery({
     queryKey: ['taxonomy'],
@@ -777,10 +786,42 @@ Return ONLY valid JSON. Do not include fields that aren't present in the text.`;
 
       if (response && typeof response === 'object') {
         // Update formData with extracted values, preserving existing values not overwritten by AI
-        setFormData(prev => ({
-          ...prev,
-          ...response
-        }));
+        // Coerce numeric and array fields from LLM response before merging
+const NUMERIC_FIELDS = [
+  'gpa', 'act_score', 'sat_score', 'community_service_hours',
+  'annual_budget', 'staff_count', 'indirect_rate',
+  'age', 'household_income', 'household_size', 'cancer_diagnosis_year'
+];
+const FLOAT_FIELDS = ['gpa', 'indirect_rate', 'annual_budget', 'household_income'];
+const ARRAY_FIELDS = [
+  'keywords', 'focus_areas', 'program_areas', 'populations_served',
+  'service_geography', 'extracurricular_activities', 'achievements',
+  'assistance_categories', 'student_grade_levels', 'target_colleges',
+  'email', 'phone'
+];
+const coercedResponse = { ...response };
+NUMERIC_FIELDS.forEach(field => {
+  if (coercedResponse[field] !== undefined && coercedResponse[field] !== null) {
+    const parsed = FLOAT_FIELDS.includes(field)
+      ? parseFloat(coercedResponse[field])
+      : parseInt(coercedResponse[field], 10);
+    coercedResponse[field] = isNaN(parsed) ? null : parsed;
+  }
+});
+ARRAY_FIELDS.forEach(field => {
+  if (coercedResponse[field] !== undefined) {
+    if (Array.isArray(coercedResponse[field])) return;
+    if (typeof coercedResponse[field] === 'string' && coercedResponse[field].trim()) {
+      coercedResponse[field] = coercedResponse[field].split(',').map(s => s.trim()).filter(Boolean);
+    } else {
+      coercedResponse[field] = [];
+    }
+  }
+});
+setFormData(prev => ({
+  ...prev,
+  ...coercedResponse
+}));
 
         toast({
           title: "✨ Profile Data Extracted!",
