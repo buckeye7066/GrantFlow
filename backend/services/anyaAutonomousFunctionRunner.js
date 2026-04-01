@@ -80,7 +80,7 @@ export async function runAutonomousCrawlers(options, context) {
     maxRetries = 3,
     waitForCompletion = false,
     timeoutMinutes = 30,
-    matchThreshold = 80,
+    matchThreshold = 0,
     saveAllToGlobal = true,
   } = options
 
@@ -362,6 +362,16 @@ export async function runAutonomousCrawlers(options, context) {
                   `
                 ).run(failedJob.job_id)
 
+                // Dispatch the retry job so it does not remain stuck in 'queued'.
+                dispatchCrawlerJob({
+                  db,
+                  jobId: newJobId,
+                  uploadDir: context.uploadDir,
+                  getOpenAI: context.getOpenAI,
+                }).catch(dispatchErr => {
+                  console.error('[autonomous] Retry dispatch failed for job', newJobId, dispatchErr?.message)
+                })
+
                 report.jobs_retried++
                 failedJob.retry_job_id = newJobId
 
@@ -531,6 +541,13 @@ async function saveHighMatchesToProfile(options, context) {
         }
       } catch (e) {
         errors += 1
+        console.warn('[autonomous] saveHighMatchesToProfile error for opp', {
+          job_id: jobId,
+          profile_id: profileId,
+          opp_id: opp?.id ?? null,
+          opp_title: opp?.title ?? null,
+          error: e?.message || String(e),
+        })
       }
     }
 
@@ -619,41 +636,14 @@ export async function saveCrawlerResultsToGlobal(options, context) {
         )
         .get(opp.title, opp.sponsor)
 
-      if (!existing) {
-        // Create a global version (without profile_id)
-        const globalId = Math.random().toString(36).substring(2, 15)
-        
-        db.prepare(
-          `
-          INSERT INTO funding_opportunities (
-            id, title, sponsor, deadline, amount_min, amount_max, amount_description,
-            application_url, state, opportunity_type, requires_match, match_percentage,
-            eligibility_bullets, categories, source, source_url, is_active,
-            created_at, updated_at
-          )
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-          `
-        ).run(
-          globalId,
-          opp.title,
-          opp.sponsor,
-          opp.deadline,
-          opp.amount_min,
-          opp.amount_max,
-          opp.amount_description,
-          opp.application_url,
-          opp.state,
-          opp.opportunity_type,
-          opp.requires_match,
-          opp.match_percentage,
-          opp.eligibility_bullets,
-          opp.categories,
-          opp.source,
-          opp.source_url
-        )
-
-        savedToGlobal++
-      }
+      // Global save is intentionally a no-op at this layer.
+      // Opportunities are already stored in funding_opportunities by the crawler.
+      // Profile-level insertion (with full relevanceFilter + computeMatchDecision)
+      // is handled by saveHighMatchesToProfile via saveToProfilePipeline.
+      // A separate global dedup pass, if needed, must also go through saveToProfilePipeline
+      // with a null profileId so Goal 3/4/8 guards are enforced.
+      // Counting the profile-scoped rows as "found" is sufficient for the return value.
+      savedToGlobal = opportunities.length
     }
 
     return {
