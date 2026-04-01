@@ -172,19 +172,36 @@ export function getStrategy(crawlerType) {
  * Check whether a strategy's hard gates are satisfied by profile intents.
  * Returns { gated: false } if OK, or { gated: true, reason } if blocked.
  */
+/**
+ * Check whether a strategy's hard gates are satisfied by profile intents.
+ * A strategy is gated only when EVERY hard gate is missing from the profile.
+ * If at least one gate is present, the strategy proceeds (partial match is
+ * better than full suppression â final decisions belong to computeMatchDecision).
+ * Returns { gated: false } if OK, or { gated: true, reason, missingGates } if blocked.
+ *
+ * Goals served: 3 (legitimate hard-reject only), 5 (intent set from full profile),
+ *               7 (recall over suppression), 8 (reason logged for observability).
+ */
 export function checkGates(strategy, intents) {
   if (!strategy.hardGates || strategy.hardGates.length === 0) {
     return { gated: false };
   }
-  for (const gate of strategy.hardGates) {
-    if (!intents.has(gate)) {
-      return {
-        gated: true,
-        reason: `Strategy "${strategy.id}" requires intent "${gate}" but profile lacks it. ` +
-          `Profile intents: [${[...intents].join(', ')}]`,
-      };
-    }
+
+  const missingGates = strategy.hardGates.filter(gate => !intents.has(gate));
+
+  // Only gate when ALL required intents are absent â if ANY is present,
+  // defer final eligibility judgment to the match engine (Goal 7).
+  if (missingGates.length === strategy.hardGates.length) {
+    return {
+      gated: true,
+      missingGates,
+      reason:
+        `Strategy "${strategy.id}" requires at least one of [${strategy.hardGates.join(', ')}] ` +
+        `but profile has none. Profile intents: [${[...intents].join(', ')}]. ` +
+        `Suppressing strategy to avoid irrelevant results (Goals 3, 7).`,
+    };
   }
+
   return { gated: false };
 }
 
@@ -199,4 +216,14 @@ export function listStrategies() {
   }));
 }
 
-export default { getStrategy, checkGates, listStrategies, STRATEGIES };
+/**
+ * Returns true only if the decision engine's score meets the strategy floor.
+ * MUST be called AFTER computeMatchDecision() â never before.
+ * Using this as a pre-engine filter violates Goals 4 and 7.
+ */
+export function meetsMinScore(strategy, engineScore) {
+  if (typeof engineScore !== 'number') return true; // unknown score â do not suppress (Goal 7)
+  return engineScore >= (strategy.minScore ?? 0);
+}
+
+export default { getStrategy, checkGates, listStrategies, meetsMinScore, STRATEGIES };
