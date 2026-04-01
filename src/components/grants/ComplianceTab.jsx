@@ -73,9 +73,16 @@ export default function ComplianceTab({ grant }) {
     );
   }
 
-  const policy = JSON.parse(award.policy_json || '{}');
-  const totalSpent = expenses.reduce((sum, ex) => sum + ex.amount, 0);
-  const budgetRemaining = award.award_amount - totalSpent;
+  let policy = {};
+try {
+  policy = JSON.parse(award.policy_json || '{}');
+} catch (e) {
+  console.error('[ComplianceTab] Malformed policy_json for award', award.id, e);
+  policy = { ...defaultPolicy, _parseError: true };
+}
+  const totalSpent = expenses.reduce((sum, ex) => sum + (parseFloat(ex.amount) || 0), 0);
+  const awardAmount = parseFloat(award.award_amount) || 0;
+const budgetRemaining = awardAmount - totalSpent;
 
   return (
     <div className="space-y-6">
@@ -84,7 +91,7 @@ export default function ComplianceTab({ grant }) {
           <CardTitle>Award Summary</CardTitle>
         </CardHeader>
         <CardContent className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
-          <div><span className="font-semibold">Total Award:</span> ${award.award_amount.toLocaleString()}</div>
+          <div><span className="font-semibold">Total Award:</span> ${awardAmount.toLocaleString()}</div>
           <div><span className="font-semibold">Total Spent:</span> ${totalSpent.toLocaleString()}</div>
           <div><span className="font-semibold">Remaining:</span> ${budgetRemaining.toLocaleString()}</div>
         </CardContent>
@@ -112,7 +119,7 @@ export default function ComplianceTab({ grant }) {
                     {expenses.map(ex => (
                         <li key={ex.id} className="flex justify-between p-2 border-b">
                             <span>{ex.date}: {ex.description}</span>
-                            <span>${ex.amount.toLocaleString()}</span>
+                            <span>${(parseFloat(ex.amount) || 0).toLocaleString()}</span>
                         </li>
                     ))}
                 </ul>
