@@ -367,7 +367,12 @@ export default function GrantMonitoring() {
               <div className="space-y-3">
                 {monitoringLogs.slice(0, 20).map((event) => {
                   const grant = grants.find(g => g.id === event.grant_id);
-                  const eventData = JSON.parse(event.event_data || '{}');
+                  let eventData = {};
+try {
+  eventData = JSON.parse(event.event_data || '{}');
+} catch (_parseErr) {
+  eventData = {};
+}
                   
                   return (
                     <div
@@ -465,7 +470,13 @@ export default function GrantMonitoring() {
                 <div>
                   <Label className="text-sm text-slate-500">Details</Label>
                   <pre className="text-sm bg-slate-50 p-3 rounded mt-1 overflow-auto">
-                    {JSON.stringify(JSON.parse(selectedEvent.event_data || '{}'), null, 2)}
+                    {(() => {
+  try {
+    return JSON.stringify(JSON.parse(selectedEvent.event_data || '{}'), null, 2);
+  } catch (_e) {
+    return selectedEvent.event_data || '{}';
+  }
+})()}
                   </pre>
                 </div>
                 <div>
