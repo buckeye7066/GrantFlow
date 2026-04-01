@@ -275,17 +275,21 @@ router.post('/sessions/:sessionId/messages', async (req, res) => {
       content: assistantText,
     })
 
-    await completeAnyaRun(req.db, runId, { status: 'completed', response: { assistantText } })
+    if (runId) {
+      await completeAnyaRun(req.db, runId, { status: 'completed', response: { assistantText } })
+    }
 
     res.status(201).json({
       session_id: req.params.sessionId,
       messages: [userMessage, assistantMessage],
     })
   } catch (error) {
-    try {
-      await completeAnyaRun(req.db, runId, { status: 'failed', error: error?.message || String(error) })
-    } catch {
-      // ignore
+    if (runId) {
+      try {
+        await completeAnyaRun(req.db, runId, { status: 'failed', error: error?.message || String(error) })
+      } catch (runCompleteErr) {
+        console.warn('[anya] Failed to mark run as failed in DB (run may be stuck in running state):', runCompleteErr?.message || runCompleteErr)
+      }
     }
     handleError(res, error)
   }
@@ -466,10 +470,12 @@ router.post('/tools/:toolName/invoke', async (req, res) => {
     await completeAnyaRun(req.db, runId, { status: 'completed', response: result })
     res.status(201).json({ result })
   } catch (error) {
-    try {
-      await completeAnyaRun(req.db, runId, { status: 'failed', error: error?.message || String(error) })
-    } catch {
-      // ignore
+    if (runId) {
+      try {
+        await completeAnyaRun(req.db, runId, { status: 'failed', error: error?.message || String(error) })
+      } catch (runCompleteErr) {
+        console.warn('[anya] Failed to mark run as failed in DB (run may be stuck in running state):', runCompleteErr?.message || runCompleteErr)
+      }
     }
     handleError(res, error)
   }
