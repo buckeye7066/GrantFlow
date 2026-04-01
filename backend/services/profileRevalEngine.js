@@ -37,6 +37,16 @@ export function classifyProfileChange(fields) {
     return 'naics_minor'
   }
 
+  // Detect other meaningful profile sections before returning unknown
+  const DEEP_PROFILE_FIELDS = [
+    'military', 'veteran', 'disability', 'housing', 'emergency',
+    'education', 'family', 'caregiver', 'health', 'business'
+  ]
+  const isDeepChange = fields.some(f =>
+    DEEP_PROFILE_FIELDS.some(key => f.field.toLowerCase().includes(key))
+  )
+  if (isDeepChange) return 'deep_profile_change'
+
   return 'unknown'
 }
 
@@ -50,7 +60,7 @@ export function decideRevalAction({
   } else if (trigger === 'naics_minor') {
     action = 're-score'
   } else {
-    if (fanout_pct <= FANOUT_LOW || affected_items <= MAX_ITEMS_LOW) action = 're-score'
+    if (fanout_pct <= FANOUT_LOW && affected_items <= MAX_ITEMS_LOW) action = 're-score'
     else if (fanout_pct <= FANOUT_HIGH) action = 'targeted_reval'
     else action = 'full_recrawl'
   }
@@ -64,6 +74,7 @@ export function decideRevalAction({
 
 export function mapActionToCrawlerJob(action) {
   if (action === 're-score') return 'profile_enrichment'
+  if (action === 'targeted_reval') return 'targeted_profile_crawl'
   return 'comprehensive'
 }
 
