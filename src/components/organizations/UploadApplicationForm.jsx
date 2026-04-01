@@ -73,8 +73,13 @@ export default function UploadApplicationForm({ onSuccess, onCancel, existingOrg
         description: 'Uploading your completed application form.',
       });
 
-      const { file_url } = await client.integrations.Core.UploadFile({ file });
-      
+      const uploadResult = await client.integrations.Core.UploadFile({ file });
+      const file_url = uploadResult?.file_url;
+
+      if (!file_url || typeof file_url !== 'string' || file_url.trim() === '') {
+        throw new Error('Upload succeeded but no file URL was returned. Cannot proceed with processing.');
+      }
+
       setIsUploading(false);
       setIsProcessing(true);
 
@@ -191,7 +196,7 @@ export default function UploadApplicationForm({ onSuccess, onCancel, existingOrg
                         <span className="font-semibold">Click to upload</span> or drag and drop
                       </p>
                       <p className="text-xs text-slate-500">
-                        JPG, PNG, or HEIC (Max 10MB)
+                        JPG, PNG, or HEIC (Max 50MB)
                       </p>
                     </>
                   )}
