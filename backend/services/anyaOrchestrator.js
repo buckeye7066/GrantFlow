@@ -480,26 +480,6 @@ export async function createSession(db, user, { profileId, title, metadata } = {
   // Admin-token auth can supply a synthetic userId (e.g. "admin-token") that doesn't exist in `users`.
   // The `anya_sessions.user_id` column is optional, but SQLite foreign keys will reject unknown IDs.
   // Use a best-effort lookup and store NULL when the user record is absent.
-  let effectiveUserId = user.userId ?? null
-  if (effectiveUserId) {
-    try {
-      const row = await db
-        .prepare(
-          `
-            SELECT id
-            FROM users
-            WHERE id = ?
-            LIMIT 1
-          `,
-        )
-        .get(effectiveUserId)
-      if (!row?.id) effectiveUserId = null
-    } catch {
-      // If the DB doesn't have a users table (or it errors), avoid failing session creation.
-      effectiveUserId = null
-    }
-  }
-
   const id = randomUUID()
   const userIdForFk = user.isAdmin && user.userId?.startsWith('admin-') ? null : await resolveExistingUserId(db, user)
   let info
@@ -657,7 +637,7 @@ export async function getMessages(db, user, sessionId, { limit = 50, direction =
     .all(session.id, safeLimit)
 
   const mapped = rows.map(mapMessage)
-  return direction === 'latest' ? mapped : mapped
+  return direction === 'latest' ? mapped.reverse() : mapped
 }
 
 export async function listTasks(db, user, sessionId) {
@@ -998,8 +978,8 @@ export async function generateAssistantResponse(db, user, sessionId, { content }
     'what is broken',
   ]
 
-  const isHealthQuery = isAdmin && user.email === ADMIN_EMAIL && healthKeywords.some(keyword => lowerContent.includes(keyword))
-  const isAuditQuery = isAdmin && user.email === ADMIN_EMAIL && auditKeywords.some(keyword => lowerContent.includes(keyword))
+  const isHealthQuery = isAdmin && userEmail === ADMIN_EMAIL && healthKeywords.some(keyword => lowerContent.includes(keyword))
+  const isAuditQuery = isAdmin && userEmail === ADMIN_EMAIL && auditKeywords.some(keyword => lowerContent.includes(keyword))
 
   // Audit queries trigger a CodeGuard deep sweep — more useful than basic health
   if (isAuditQuery) {
