@@ -31,6 +31,9 @@ const ProfileField = ({ label, value, onCopy }) => {
 };
 
 export default function GrantPortalAssistant({ open, onClose, grant, organization }) {
+  if (!grant || !organization) {
+    return null;
+  }
   const { toast } = useToast();
   const log = React.useMemo(() => createLogger('GrantPortalAssistant'), []);
   const [portalQuestion, setPortalQuestion] = useState('');
@@ -67,10 +70,25 @@ export default function GrantPortalAssistant({ open, onClose, grant, organizatio
     setError(null);
     setAiAnswer('');
 
-    const profileContext = Object.entries(organization)
-      .filter(([, value]) => value && (!Array.isArray(value) || value.length > 0))
-      .map(([key, value]) => `- ${key}: ${Array.isArray(value) ? value.join(', ') : value}`)
-      .join('\n');
+    const ALLOWED_PROFILE_KEYS = new Set([
+  'name', 'ein', 'uei', 'sam_registered', 'address', 'city', 'state', 'zip',
+  'website', 'email', 'phone', 'mission', 'primary_goal', 'target_population',
+  'geographic_focus', 'funding_amount_needed', 'timeline', 'past_experience',
+  'unique_qualities', 'collaboration_partners', 'sustainability_plan',
+  'barriers_faced', 'gpa', 'act_score', 'sat_score', 'student_grade_level',
+  'intended_major', 'extracurricular_activities', 'achievements',
+  'community_service_hours', 'keywords', 'focus_areas'
+]);
+const profileContext = Object.entries(organization)
+  .filter(([key, value]) =>
+    ALLOWED_PROFILE_KEYS.has(key) &&
+    value !== null &&
+    value !== undefined &&
+    value !== '' &&
+    (!Array.isArray(value) || value.length > 0)
+  )
+  .map(([key, value]) => `- ${key}: ${Array.isArray(value) ? value.join(', ') : String(value)}`)
+  .join('\n');
 
     const grantContext = `
 - Grant Title: ${grant.title}
@@ -106,8 +124,15 @@ INSTRUCTIONS:
         method: 'POST',
         body: JSON.stringify({ prompt }),
       });
-      log.debug('AI response received');
-      setAiAnswer(response);
+      log.debug('AI response received', { responseType: typeof response });
+      const answerText =
+        typeof response === 'string'
+          ? response
+          : response?.answer ?? response?.text ?? response?.data ?? JSON.stringify(response);
+      if (!answerText || !answerText.trim()) {
+        throw new Error('AI returned an empty response');
+      }
+      setAiAnswer(answerText);
       toast({
         title: "Answer Generated!",
         description: "You can now copy and paste this into the portal."
@@ -130,7 +155,19 @@ INSTRUCTIONS:
     { label: 'EIN', value: organization.ein },
     { label: 'UEI', value: organization.uei },
     { label: 'SAM Registered', value: organization.sam_registered ? 'Yes' : 'No' },
-    { label: 'Address', value: `${formatAddress(organization.address)} ${organization.city || ''}, ${organization.state || ''} ${organization.zip || ''}`.trim() },
+    { label: 'Address', value: (() => {
+    const parts = [
+      formatAddress(organization.address),
+      organization.city,
+      organization.state,
+      organization.zip
+    ].map(p => (p ?? '').trim()).filter(Boolean);
+    if (parts.length === 0) return null;
+    const cityStateZip = [organization.city, organization.state, organization.zip]
+      .map(p => (p ?? '').trim()).filter(Boolean).join(' ');
+    const street = (formatAddress(organization.address) ?? '').trim();
+    return [street, cityStateZip].filter(Boolean).join(', ');
+  })() },
     { label: 'Website', value: organization.website },
     { label: 'Emails', value: organization.email },
     { label: 'Phone Numbers', value: organization.phone },
