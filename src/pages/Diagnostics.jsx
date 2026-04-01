@@ -24,7 +24,11 @@ const Diagnostics = () => {
 
   const runTests = async () => {
     if (!grants || grants.length === 0) {
-      alert("No grants found to test.");
+      const reason = !grants
+        ? 'Grant query returned undefined â possible API or auth error'
+        : 'Grant list is empty â pipeline may be suppressing all records or DB is unpopulated';
+      alert(`No grants found to test. Reason: ${reason}`);
+      console.warn('[Diagnostics] runTests aborted:', reason);
       return;
     }
 
@@ -66,11 +70,21 @@ const Diagnostics = () => {
         const ms = Date.now() - t0;
         
         if (body?.success) {
+          const missingAuditFields = [
+            'match_decision',
+            'match_explanation',
+            'match_confidence',
+            'matcher_version',
+          ].filter(f => body?.analysis?.[f] == null);
           testResult = {
             title: grant.title,
-            status: 'ok',
-            message: `Success (${ms} ms) - Analysis complete`,
-            warnings: [],
+            status: missingAuditFields.length > 0 ? 'warn' : 'ok',
+            message: `Success (${ms} ms) - Analysis complete${
+              missingAuditFields.length > 0
+                ? ` [AUDIT GAPS: ${missingAuditFields.join(', ')}]`
+                : ''
+            }`,
+            warnings: missingAuditFields,
           };
           setSummary(prev => ({ ...prev, ok: prev.ok + 1 }));
         } else {
@@ -126,8 +140,19 @@ const Diagnostics = () => {
         }
       });
       
+      const parsedUrl =
+        response?.application_url ||
+        response?.data?.application_url ||
+        response?.url ||
+        null;
+      const missingUrl = !parsedUrl;
       setParseResult({
-        status: 'success',
+        status: missingUrl ? 'warn' : 'success',
+        applicationUrl: parsedUrl,
+        missingApplicationUrl: missingUrl,
+        message: missingUrl
+          ? 'Parsed successfully but no application_url found â record would be REJECTED by Goal 1 gate'
+          : `application_url present: ${parsedUrl}`,
         data: response
       });
       
