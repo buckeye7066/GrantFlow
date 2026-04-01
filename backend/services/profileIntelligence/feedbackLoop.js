@@ -171,14 +171,23 @@ export function analyzeFeedback(feedbackRecords) {
 export function applyFeedbackToScore(scoreResult, feedbackSignals, opportunityId) {
   if (!scoreResult || !feedbackSignals) return scoreResult
 
-  // Hard block
+  // Hard block: signal that this opportunity is blocked by prior feedback.
+  // Do NOT emit a final verdict here â return a score of 0 with a flag so that
+  // computeMatchDecision() receives the signal and issues the authoritative REJECT
+  // with proper ineligibility_reasons, matcher_version, and evaluated_at.
   if (feedbackSignals.blocked_opportunities.includes(opportunityId)) {
     return {
       ...scoreResult,
       total_score: 0,
-      verdict: 'REJECT',
+      feedback_hard_blocked: true,
+      // Preserve existing verdict; computeMatchDecision() will overwrite with REJECT
+      verdict: scoreResult.verdict,
+      ineligibility_reasons: [
+        ...(scoreResult.ineligibility_reasons ?? []),
+        'Previously marked as broken link or confirmed ineligible by user',
+      ],
       why_may_not_fit: [
-        ...scoreResult.why_may_not_fit,
+        ...(scoreResult.why_may_not_fit ?? []),
         'Previously marked as broken link or not eligible',
       ],
     }
@@ -193,26 +202,38 @@ export function applyFeedbackToScore(scoreResult, feedbackSignals, opportunityId
     adjusted_score = Math.min(100, adjusted_score + 5 * boostedMatches.length)
   }
 
-  // Downweight for matched downweighted needs
+  // Downweight for matched downweighted needs.
+  // Cap total downweight penalty at 20 pts (2 needs max) to avoid suppressing
+  // opportunities the user genuinely qualifies for â Goal 7 (recall over suppression).
   const downweightedMatches = scoreResult.matched_needs.filter(
     n => feedbackSignals.downweighted_needs.includes(n))
   if (downweightedMatches.length > 0) {
-    adjusted_score = Math.max(0, adjusted_score - 10 * downweightedMatches.length)
+    const penalty = Math.min(20, 10 * downweightedMatches.length)
+    adjusted_score = Math.max(0, adjusted_score - penalty)
   }
 
-  if (adjusted_score === scoreResult.total_score) return scoreResult
+  if (adjusted_score === scoreResult.total_score) {
+    return {
+      ...scoreResult,
+      feedback_adjusted: false,
+      feedback_evaluated: true,
+    }
+  }
 
-  // Recompute verdict
-  let verdict
-  if (adjusted_score >= 75) verdict = 'STRONG_MATCH'
-  else if (adjusted_score >= 60) verdict = 'GOOD_MATCH'
-  else if (adjusted_score >= 45) verdict = 'POSSIBLE_MATCH'
-  else if (adjusted_score >= 30) verdict = 'WEAK_MATCH'
-  else verdict = 'REJECT'
-
+  // Do NOT re-derive a verdict here. Only carry the adjusted score forward so
+  // computeMatchDecision() can re-evaluate it as the single decision authority.
+  // Callers MUST pass this adjusted scoreResult back through computeMatchDecision()
+  // before storing any verdict in the pipeline.
   return {
     ...scoreResult,
     total_score: Math.round(adjusted_score),
-    verdict,
+    // Preserve the original verdict â caller must re-run computeMatchDecision()
+    // to produce an authoritative verdict from the adjusted score.
+    verdict: scoreResult.verdict,
+    feedback_adjusted: true,
+    feedback_adjustment_delta: Math.round(adjusted_score) - scoreResult.total_score,
+    match_explanation: scoreResult.match_explanation
+      ? `${scoreResult.match_explanation} [Feedback-adjusted by ${Math.round(adjusted_score - scoreResult.total_score) >= 0 ? '+' : ''}${Math.round(adjusted_score - scoreResult.total_score)} pts based on prior interactions]`
+      : '[Feedback-adjusted score â re-run through computeMatchDecision for full explanation]',
   }
 }
