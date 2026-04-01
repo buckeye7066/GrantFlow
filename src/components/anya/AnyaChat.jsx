@@ -292,6 +292,18 @@ export default function AnyaChat({ profileId }) {
 
     if (effectiveProfileId || isAdmin) {
       bootstrap()
+    } else {
+      // No profile bound â surface a synthetic guidance message so Anya
+      // fulfils Goal 10 (profile improvement) and Goal 14 (strategist).
+      setMessages([
+        {
+          id: 'no-profile-guidance',
+          role: 'assistant',
+          created_at: new Date().toISOString(),
+          content:
+            'Hi! To get personalised grant matches I need a profile. Head to My Profiles to create or select one, then come back here and I can analyse your matches, flag gaps, and suggest next steps.',
+        },
+      ])
     }
 
     return () => {
@@ -423,7 +435,7 @@ export default function AnyaChat({ profileId }) {
     } finally {
       setIsClearingConversation(false)
     }
-  }, [sessionId, effectiveProfileId])
+  }, [sessionId, effectiveProfileId, log])
 
   if (isUnavailable) {
     return (
@@ -655,7 +667,7 @@ export default function AnyaChat({ profileId }) {
   const isCodeSearchDisabled =
     !hasCodeSearchTool || !sessionId || isLoading || isInvokingTool || isLoadingTools
   const isGrantInsightsDisabled =
-    !hasGrantTool || !sessionId || isLoading || isFetchingInsights || isLoadingTools
+    !hasGrantTool || !sessionId || !profileId || isLoading || isFetchingInsights || isLoadingTools
   const isTaskFormDisabled = !sessionId || isLoading || isSavingTask
 
   return (
@@ -997,7 +1009,6 @@ export default function AnyaChat({ profileId }) {
           </span>
           <Button
             type="submit"
-            onClick={handleSend}
             disabled={isDisabled || isSending || !input.trim()}
             size="sm"
             className="gap-2"
