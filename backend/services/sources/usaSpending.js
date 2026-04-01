@@ -157,19 +157,18 @@ function normalizeUSASpendingRecord(record) {
     application_url: sourceUrl,
     deadline: parseDate(endDate),
     deadline_type: endDate ? 'fixed' : 'rolling',
-    amount_min: awardAmount ? Math.round(awardAmount * 0.5) : null, // Estimate min as 50% of award
-    amount_max: awardAmount,
-    amount_description: awardAmount ? `Up to $${awardAmount.toLocaleString()}` : null,
+    amount_min: null, // Cannot derive minimum from a single historical award record
+    amount_max: awardAmount, // Historical award amount â informational only, not a program cap
+    amount_description: awardAmount
+      ? `Historical award: $${awardAmount.toLocaleString()} (single past disbursement, not a program range)`
+      : null,
     is_national: isNational ? 1 : 0,
     state: isNational ? null : state,
     categories: JSON.stringify(categories),
     keywords: JSON.stringify(keywords),
-    eligibility_bullets: JSON.stringify([
-      'Must meet federal grant eligibility requirements',
-      'May require specific organizational qualifications',
-    ]),
-    requires_501c3: 0, // Unknown from this data source
-    requires_match: 0, // Unknown from this data source
+    eligibility_bullets: JSON.stringify([]), // No eligibility data available from USASpending
+    requires_501c3: null, // Unknown â do not assume false
+    requires_match: null, // Unknown â do not assume false
     match_percentage: null,
     opportunity_type: 'grant',
     is_active: 1,
@@ -184,9 +183,9 @@ function normalizeUSASpendingRecord(record) {
 function generateTitle(agency, awardType, recipient) {
   const cleanAgency = agency ? agency.replace(/^Department of /i, '').trim() : 'Federal';
   const cleanType = awardType || 'Grant';
-  
-  // Keep it concise
-  return `${cleanAgency} ${cleanType} Program`;
+  // Label as a historical award, not an open program, to prevent misleading display
+  const recipientLabel = recipient ? ` (Recipient: ${recipient})` : '';
+  return `[Historical] ${cleanAgency} ${cleanType}${recipientLabel}`;
 }
 
 /**
