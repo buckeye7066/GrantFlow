@@ -255,7 +255,7 @@ export function expandNeed(needText) {
     return {
       canonicalNeed: best.entry.canonicalNeed,
       synonyms: best.entry.synonyms,
-      mustTerms: [best.key, ...text.split(/\s+/).filter(w => w.length > 2)],
+      mustTerms: [...new Set([best.key, ...text.split(/\s+/).filter(w => w.length > 2)])],
       programCategories: [...allCats],
       matchedKey: best.key,
     };
@@ -278,26 +278,38 @@ export function expandNeed(needText) {
     return {
       canonicalNeed: best.entry.canonicalNeed,
       synonyms: best.entry.synonyms,
-      mustTerms: [best.syn, ...text.split(/\s+/).filter(w => w.length > 2)],
+      mustTerms: [...new Set([best.syn, ...text.split(/\s+/).filter(w => w.length > 2)])],
       programCategories: [...allCats],
       matchedKey: best.syn,
     };
   }
 
-  // Fallback: treat each word as a potential need
+  // Fallback: collect ALL word-level matches and merge their categories for maximum recall
   const words = text.split(/\s+/).filter(w => w.length > 2);
+  const fallbackMatches = [];
   for (const word of words) {
     for (const [key, entry] of Object.entries(TAXONOMY)) {
       if (key.includes(word) || entry.synonyms.some(s => s.toLowerCase().includes(word))) {
-        return {
-          canonicalNeed: entry.canonicalNeed,
-          synonyms: entry.synonyms,
-          mustTerms: words,
-          programCategories: entry.programCategories,
-          matchedKey: key,
-        };
+        fallbackMatches.push({ key, entry });
+        break; // one entry per word is enough; avoid duplicate entries for same key
       }
     }
+  }
+  if (fallbackMatches.length > 0) {
+    // Primary canonical need from the first (longest-key) match
+    fallbackMatches.sort((a, b) => b.key.length - a.key.length);
+    const primary = fallbackMatches[0];
+    const mergedCats = new Set(primary.entry.programCategories);
+    for (const fm of fallbackMatches.slice(1)) {
+      for (const c of fm.entry.programCategories) mergedCats.add(c);
+    }
+    return {
+      canonicalNeed: primary.entry.canonicalNeed,
+      synonyms: primary.entry.synonyms,
+      mustTerms: words,
+      programCategories: [...mergedCats],
+      matchedKey: primary.key,
+    };
   }
 
   return {
@@ -329,13 +341,16 @@ export function scoreNeedMatch(program, expandedNeed) {
     }
   }
 
-  // Must-term presence
+  // Must-term presence â cap total must-term contribution to avoid raw-word inflation
+  let mustHits = 0;
   for (const term of expandedNeed.mustTerms) {
     if (programText.includes(term.toLowerCase())) {
-      score += 15;
+      mustHits++;
       matchedTerms.push(`term:${term}`);
     }
   }
+  // Cap must-term contribution at 20 pts regardless of word count
+  score += Math.min(20, mustHits * 5);
 
   // Synonym presence
   let synHits = 0;
@@ -347,7 +362,15 @@ export function scoreNeedMatch(program, expandedNeed) {
   }
   score += Math.min(30, synHits * 10);
 
-  if (score === 0) return null;
+  // Return a low-signal result rather than null so the decision engine can still evaluate;
+  // null suppresses before computeMatchDecision() sees the record (violates Goal 7)
+  if (score === 0) {
+    return {
+      score: 0,
+      matchedTerms: [],
+      canonicalNeed: expandedNeed.canonicalNeed,
+    };
+  }
 
   return {
     score: Math.min(100, score),
