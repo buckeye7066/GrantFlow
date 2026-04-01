@@ -3,12 +3,16 @@ import express from 'express'
 const router = express.Router()
 
 // Marketing stats for non-admin users
+// Align marketing stats keys with the admin response shape so
+// frontend components can rely on a single stable contract.
 const MARKETING_STATS = {
   organizations: 3144,
   fundsSecured: 22895000,
-  activeGrants: 31560,
+  grantsTotal: 31560,      // renamed from activeGrants to match admin shape
   activeProfiles: 3144,
   opportunitiesFound: 15000,
+  pipelineTotal: 0,        // not meaningful for marketing view; set to 0
+  isRealData: false,
 }
 
 /**
