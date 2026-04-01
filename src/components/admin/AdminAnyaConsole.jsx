@@ -35,8 +35,7 @@ export default function AdminAnyaConsole() {
     refresh()
     const id = window.setInterval(refresh, 5000)
     return () => window.clearInterval(id)
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])  // refresh is stable (no captured state); suppression is intentional
+  }, [])
 
   const run = async (label, path) => {
     setBusy(true)

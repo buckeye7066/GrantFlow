@@ -67,7 +67,6 @@ export default function AdminKnowledgeBase() {
     if (activeTab === 'browse') {
       loadList({ q })
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTab])
 
   const openDoc = async (id) => {

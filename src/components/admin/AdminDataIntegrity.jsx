@@ -130,7 +130,7 @@ export default function AdminDataIntegrity() {
                     (data?.opportunities?.missing_fields?.missing_application_url || 0) > 0
                       ? 'text-red-600'
                       : 'text-slate-500'
-                  }`}>App URLs â </p>
+                  }`}>App URLs </p>
                   <p className={`font-bold ${
                     (data?.opportunities?.missing_fields?.missing_application_url || 0) > 0
                       ? 'text-red-700'
