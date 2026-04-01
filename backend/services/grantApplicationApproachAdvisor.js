@@ -10,7 +10,13 @@ function normalizeString(value) {
 function normalizeUrl(url) {
   const u = normalizeString(url)
   if (!u) return null
-  return u
+  try {
+    const parsed = new URL(u)
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return null
+    return parsed.href
+  } catch {
+    return null
+  }
 }
 
 function parseContactInfo(raw) {
@@ -120,8 +126,16 @@ async function updateGrantGuidance(db, grantId, payload) {
   setIf('contact_name', payload.contact_name ?? null)
   setIf('contact_email', payload.contact_email ?? null)
   setIf('contact_phone', payload.contact_phone ?? null)
-  if (payload.portal_url) setIf('portal_url', payload.portal_url)
-  if (payload.application_url) setIf('application_url', payload.application_url)
+  if (payload.portal_url) {
+    setIf('portal_url', payload.portal_url)
+  } else {
+    console.debug('[grant-application-approach] portal_url not set â value was empty or invalid', { grantId })
+  }
+  if (payload.application_url) {
+    setIf('application_url', payload.application_url)
+  } else {
+    console.warn('[grant-application-approach] application_url not set â grant may lack a valid application path', { grantId })
+  }
 
   if (updates.length === 0) return
 
@@ -226,8 +240,8 @@ export async function analyzeAndPersistGrantApplicationApproach({ db, grantId, p
 
       final = {
         application_method: parsed?.application_method || heuristic.application_method,
-        portal_url: parsed?.portal_url || heuristic.portal_url,
-        application_url: parsed?.application_url || heuristic.application_url,
+        portal_url: normalizeUrl(parsed?.portal_url) || heuristic.portal_url,
+        application_url: normalizeUrl(parsed?.application_url) || heuristic.application_url,
         contact_name: parsed?.contact_name || heuristic.contact_name,
         contact_email: parsed?.contact_email || heuristic.contact_email,
         contact_phone: parsed?.contact_phone || heuristic.contact_phone,
