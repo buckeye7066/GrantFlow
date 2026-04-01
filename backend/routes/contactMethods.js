@@ -13,7 +13,7 @@ function normalizeLimit(val, fallback = 200) {
 
 router.get('/', async (req, res) => {
   const user = requireAuthenticatedUser(req, res)
-  if (!user) return res.status(401).json({ error: 'Authentication required' }) res.status(401).json({ error: 'Authentication required' }) res.status(401).json({ error: 'Authentication required' }) res.status(401).json({ error: 'Authentication required' }) res.status(401).json({ error: 'Authentication required' })
+  if (!user) return res.status(401).json({ error: 'Authentication required' })
 
   try {
     const limit = normalizeLimit(req.query.limit, 500)
@@ -73,7 +73,7 @@ router.get('/', async (req, res) => {
 
 router.get('/:id', async (req, res) => {
   const user = requireAuthenticatedUser(req, res)
-  if (!user) return res.status(401).json({ error: 'Authentication required' }) res.status(401).json({ error: 'Authentication required' }) res.status(401).json({ error: 'Authentication required' }) res.status(401).json({ error: 'Authentication required' }) res.status(401).json({ error: 'Authentication required' })
+  if (!user) return res.status(401).json({ error: 'Authentication required' })
 
   try {
     const row = await req.db.prepare('SELECT * FROM contact_methods WHERE id = ?').get(String(req.params.id))
@@ -88,7 +88,7 @@ router.get('/:id', async (req, res) => {
 
 router.post('/', async (req, res) => {
   const user = requireAuthenticatedUser(req, res)
-  if (!user) return res.status(401).json({ error: 'Authentication required' }) res.status(401).json({ error: 'Authentication required' }) res.status(401).json({ error: 'Authentication required' }) res.status(401).json({ error: 'Authentication required' }) res.status(401).json({ error: 'Authentication required' })
+  if (!user) return res.status(401).json({ error: 'Authentication required' })
 
   try {
     const data = req.body ?? {}
@@ -101,7 +101,7 @@ router.post('/', async (req, res) => {
     if (!validTypes.includes(type)) return res.status(400).json({ error: 'Invalid contact type' })
     const value = String(data.value || '').trim()
     if (type === 'email' && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)) return res.status(400).json({ error: 'Invalid email format' })
-    if (type === 'phone' && !/^[\d\s\-\+\(\)]+$/.test(value)) return res.status(400).json({ error: 'Invalid phone format' })
+    if (type === 'phone' && !/^[\d\s\-()+]+$/.test(value)) return res.status(400).json({ error: 'Invalid phone format' })
     if (!type || !value) return res.status(400).json({ error: 'type and value required' })
 
     const id = data.id ? String(data.id) : crypto.randomUUID()
@@ -137,7 +137,7 @@ router.post('/', async (req, res) => {
 
 router.put('/:id', async (req, res) => {
   const user = requireAuthenticatedUser(req, res)
-  if (!user) return res.status(401).json({ error: 'Authentication required' }) res.status(401).json({ error: 'Authentication required' }) res.status(401).json({ error: 'Authentication required' }) res.status(401).json({ error: 'Authentication required' }) res.status(401).json({ error: 'Authentication required' })
+  if (!user) return res.status(401).json({ error: 'Authentication required' })
 
   try {
     const existing = await req.db.prepare('SELECT * FROM contact_methods WHERE id = ?').get(String(req.params.id))
@@ -175,7 +175,7 @@ router.put('/:id', async (req, res) => {
 
 router.delete('/:id', async (req, res) => {
   const user = requireAuthenticatedUser(req, res)
-  if (!user) return res.status(401).json({ error: 'Authentication required' }) res.status(401).json({ error: 'Authentication required' }) res.status(401).json({ error: 'Authentication required' }) res.status(401).json({ error: 'Authentication required' }) res.status(401).json({ error: 'Authentication required' })
+  if (!user) return res.status(401).json({ error: 'Authentication required' })
 
   try {
     const existing = await req.db.prepare('SELECT * FROM contact_methods WHERE id = ?').get(String(req.params.id))

@@ -41,7 +41,7 @@ async function ensureExpenseAccess(req, res, expenseId) {
 // Move this line to the top after const router = express.Router();
 router.get('/', async (req, res) => {
   try {
-    // Remove this - user should be available from middleware
+    const user = req.user
 
     const { grant_id, organization_id } = req.query;
     let query = 'SELECT * FROM expenses WHERE 1=1';

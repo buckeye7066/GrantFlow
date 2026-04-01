@@ -109,16 +109,7 @@ export async function runFederalCrawl(db, profileId, profileContext, options = {
 
   // Fetch from Grants.gov
   try {
-    let _fetchGrantsGov;
-try {
-  const module = await import('./sources/grantsGov.js');
-  _fetchGrantsGov = module.fetchGrantsGov;
-  if (!_fetchGrantsGov) throw new Error('fetchGrantsGov not exported');
-} catch (importErr) {
-  console.error('[crawlerFramework] Failed to load grantsGov:', importErr.message);
-  errors.push({ source: 'grants.gov', error: `Module load failed: ${importErr.message}` });
-  continue;
-}
+    const { fetchGrantsGov: _fetchGrantsGov } = await import('./sources/grantsGov.js');
     const { opportunities } = await _fetchGrantsGov({ limit: perSource, offset: 0 });
     allOpportunities.push(...opportunities);
     console.log(`[crawlerFramework] Grants.gov: ${opportunities.length} results`);

@@ -366,9 +366,6 @@ export async function runNationalCrawlerV2({
                 await logs.normalize(`[run=${runId}] upsert_error ${source.source_id}: ${upsertError.message}`)
                 counts.failures.push({ url, failure_type: 'database_error', message: upsertError.message, stack: upsertError.stack, parser_name: parser_name, retry_count: 0, source_id: source.source_id })
               }
-              counts.programs_normalized += 1
-              counts.programs_upserted += 1
-              counts.versions_created += upsert.versions_created
             }
 
             anySuccess = true

@@ -23,7 +23,7 @@ export function formatError(error) {
 /**
  * Express error handling middleware
  */
-export function errorHandler(err, req, res, next) {
+export async function errorHandler(err, req, res, next) {
   const requestId = req.requestId || req.request_id || null;
   const statusCode = err.statusCode || err.status || 500;
 

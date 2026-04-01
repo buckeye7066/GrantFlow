@@ -7,7 +7,7 @@
 
 export function requestTimeout(ms) {
   return function timeout(req, res, next) {
-    const timer = setTimeout(() => {
+    let timer = setTimeout(() => {
       if (!res.headersSent && !res.writableEnded) {
         console.error(`[timeout] ${req.method} ${req.originalUrl} exceeded ${ms}ms`)
         try {

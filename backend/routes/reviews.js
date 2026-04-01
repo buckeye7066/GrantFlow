@@ -188,11 +188,6 @@ router.get('/', async (req, res) => {
           `,
         )
         .all(itemId, limit)
-            ORDER BY created_at DESC
-            LIMIT ?
-          `,
-        )
-        .all(itemId, limit)
     } else if (admin && !onlyMine) {
       rows = await req.db
         .prepare(

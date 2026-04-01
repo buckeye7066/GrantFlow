@@ -112,11 +112,6 @@ export async function extractTextWithFallback({
             warnings.push(`OCR failed for page ${i + 1}: ${pageError?.message || String(pageError)}`)
           }
         }
-          const pageText = normalizeText(r?.text || '')
-          if (pageText) perPageTexts.push(`\n\n--- Page ${i + 1} (OCR) ---\n${pageText}`)
-          if (typeof r?.confidence === 'number' && Number.isFinite(r.confidence)) perPageConfs.push(r.confidence)
-          if (Array.isArray(r?.warnings) && r.warnings.length) warnings.push(...r.warnings)
-        }
 
         ocrText = normalizeText(perPageTexts.join('\n').trim())
         ocrUsed = true

@@ -160,17 +160,6 @@ export function createAuthIdentityMiddleware({ adminToken, adminName, adminEmail
                     reject(err);
                   }
                 });
-              // ... rest of session handling logic
-            } catch (error) {
-              console.warn('Failed to validate session:', error?.message || error)
-              // Continue with token-only authentication
-              if (error?.code === 'SQLITE_CORRUPT' || error?.code === 'ECONNRESET') {
-                // Critical DB errors should fail auth completely
-                user = { role: 'guest', profileId: null }
-                req.user = user
-                return next()
-              }
-            }
               if (
                 sessionRow &&
                 !sessionRow.revoked_at &&
@@ -191,6 +180,16 @@ export function createAuthIdentityMiddleware({ adminToken, adminName, adminEmail
                 }
                 handled = true
               }
+            } catch (error) {
+              console.warn('Failed to validate session:', error?.message || error)
+              // Continue with token-only authentication
+              if (error?.code === 'SQLITE_CORRUPT' || error?.code === 'ECONNRESET') {
+                // Critical DB errors should fail auth completely
+                user = { role: 'guest', profileId: null }
+                req.user = user
+                return next()
+              }
+            }
             }
           } catch {
             // fall through to legacy handling
@@ -222,7 +221,6 @@ export function createAuthIdentityMiddleware({ adminToken, adminName, adminEmail
 
         if (!handled && allowLegacyProfileToken) {
           try {
-            try {
             const profile = await new Promise((resolve, reject) => {
               try {
                 const stmt = db.prepare('SELECT id, display_name FROM profiles WHERE id = ?');

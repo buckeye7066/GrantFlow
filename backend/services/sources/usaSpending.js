@@ -82,7 +82,7 @@ export async function fetchUSASpending(options = {}) {
     };
   } catch (error) {
     console.error(`[usaspending.gov] Error fetching opportunities:`, error.message);
-    console.error(`[usaspending.gov] Request details:`, { url, payload });
+    console.error(`[usaspending.gov] Request details:`, { endpoint: `${API_BASE}/search/spending_by_award/` });
     throw new Error(`USASpending.gov fetch failed: ${error.message}`);
   }
 }

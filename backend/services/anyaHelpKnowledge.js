@@ -6,9 +6,8 @@
  * with accurate, up-to-date structured data.
  */
 
-module.exports = {
-  CURRENT_TOUR_VERSION: 1,
-  CURRENT_MANUAL_VERSION: 1,
+const CURRENT_TOUR_VERSION = 1
+const CURRENT_MANUAL_VERSION = 1
 
 /**
  * Canonical help data for every page in GrantFlow (mirrors src/config/helpRegistry.js).

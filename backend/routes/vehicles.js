@@ -192,8 +192,8 @@ router.post('/ingest', async (req, res) => {
           data.vin,
           data.clean_title,
           data.source,
-        );
-      id = row?.id;
+        ]);
+      id = result.rows[0]?.id;
     } else {
       // SQLite: generate id manually; clean_title stored as integer (1/0)
       const { randomUUID } = await import('crypto');

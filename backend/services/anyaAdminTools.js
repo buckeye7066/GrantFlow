@@ -974,7 +974,7 @@ export async function adminDbStats(_params, context) {
           tableCounts[table.name] = 'Error: Invalid table name'
           return
         }
-        if (!/^[a-zA-Z0-9_]+$/.test(table.name)) { tableCounts[table.name] = 'Invalid table name'; continue; } const count = db.prepare(`SELECT COUNT(*) as count FROM ${table.name}`).get()
+        const count = db.prepare(`SELECT COUNT(*) as count FROM ${table.name}`).get()
         tableCounts[table.name] = count.count
       } catch (error) {
         tableCounts[table.name] = `Error: ${error.message}`

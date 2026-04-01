@@ -27,8 +27,6 @@ async function queryNearbyOpportunities(db, analysis, curatedTitles, limit = 50)
   try {
     const isPg = db?.dialect === 'postgres'
     const activeVal = isPg ? 'TRUE' : '1'
-    const isPg = db?.dialect === 'postgres'
-    const activeVal = isPg ? 'TRUE' : '1'
     const query = isPg
       ? `SELECT id, title, description, sponsor, source, source_url, url, application_url,
              state, is_national, opportunity_type, type, deadline_type, amount_max,

@@ -335,7 +335,6 @@ async function downloadRemoteFileToUploads({ url, req }) {
     const unique = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
     const extension = fileNameFromUrl.includes('.') ? `.${fileNameFromUrl.split('.').pop()}` : '';
     const filename = `${unique}${extension}`;
-    const filename = `${unique}${extension}`;
     // Validate filename to prevent directory traversal
     if (filename.includes('..') || filename.includes('/') || filename.includes('\\')) {
       throw new Error('Invalid filename');

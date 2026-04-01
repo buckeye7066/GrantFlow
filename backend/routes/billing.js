@@ -201,10 +201,6 @@ router.get('/accounts/:profileId', requireAdmin, async (req, res) => {
       return res.status(404).json({ error: 'Profile not found' })
     }
 
-    const profile = await req.db.prepare('SELECT id FROM profiles WHERE id = ?').get(profileId)
-    if (!profile) {
-      return res.status(404).json({ error: 'Profile not found' })
-    }
     const accountRow = await ensureBillingAccount(req.db, profileId)
     const events = await fetchAccountEvents(req.db, accountRow.id)
 
@@ -245,10 +241,6 @@ router.put('/accounts/:profileId', requireAdmin, async (req, res) => {
       return res.status(400).json({ error: 'Specified tier does not exist' })
     }
 
-    const profile = await req.db.prepare('SELECT id FROM profiles WHERE id = ?').get(profileId)
-    if (!profile) {
-      return res.status(404).json({ error: 'Profile not found' })
-    }
     const accountRow = await ensureBillingAccount(req.db, profileId)
     const previous = { ...accountRow }
 

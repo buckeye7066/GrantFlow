@@ -17,13 +17,12 @@ export function auditLogger(req, res, next) {
   res.end = function(...args) {
     const duration = Date.now() - startTime;
     
-    try {
-      // Only log significant events (mutations, admin actions, or errors)
-      const isMutation = ['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method);
-      const isAdminAction = req.path.startsWith('/api/admin');
-      const isError = res.statusCode >= 400;
-      
-      if (isMutation || isAdminAction || isError) {
+    // Only log significant events (mutations, admin actions, or errors)
+    const isMutation = ['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method);
+    const isAdminAction = req.path.startsWith('/api/admin');
+    const isError = res.statusCode >= 400;
+    
+    if (isMutation || isAdminAction || isError) {
       const logEntry = {
         id: randomUUID(),
         correlation_id: correlationId,
@@ -42,38 +41,38 @@ export function auditLogger(req, res, next) {
       console.log(`[AUDIT] ${JSON.stringify(logEntry)}`);
       
       if (req.db) {
-        try {
-          // Create audit_logs table if it doesn't exist
-          // Use async operations to prevent blocking
-          const insertStmt = req.db.prepare(`
+        // Create audit_logs table if it doesn't exist
+        // Use async operations to prevent blocking
+        const insertStmt = req.db.prepare(`
             INSERT INTO audit_logs (id, correlation_id, timestamp, user_id, method, path, status, duration_ms, ip, payload)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           `);
           
-          // Execute async to prevent blocking
-          setImmediate(() => {
-            try {
-              insertStmt.run(
-            logEntry.id,
-            logEntry.correlation_id,
-            logEntry.timestamp,
-            logEntry.user_id,
-            logEntry.method,
-            logEntry.path,
-            logEntry.status,
-            logEntry.duration_ms,
-            logEntry.ip,
-            JSON.stringify(logEntry.payload)
-          );
-        } catch (e) {
-          // Fallback if table structure doesn't match or fails
-          console.error('[audit] Failed to persist audit log to DB', {
-            error: e.message,
-            stack: e.stack,
-            correlation_id: correlationId,
-            path: req.path
-          });
-        }
+        // Execute async to prevent blocking
+        setImmediate(() => {
+          try {
+            insertStmt.run(
+              logEntry.id,
+              logEntry.correlation_id,
+              logEntry.timestamp,
+              logEntry.user_id,
+              logEntry.method,
+              logEntry.path,
+              logEntry.status,
+              logEntry.duration_ms,
+              logEntry.ip,
+              JSON.stringify(logEntry.payload)
+            );
+          } catch (e) {
+            // Fallback if table structure doesn't match or fails
+            console.error('[audit] Failed to persist audit log to DB', {
+              error: e.message,
+              stack: e.stack,
+              correlation_id: correlationId,
+              path: req.path
+            });
+          }
+        });
       }
     }
     

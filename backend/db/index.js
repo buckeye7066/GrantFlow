@@ -427,12 +427,7 @@ class SqliteDb {
       return fn(txThis);
     });
     
-    try {
-      return await txFn(this);
-    } catch (error) {
-      // better-sqlite3 handles rollback automatically
-      throw error;
-    }
+    return await txFn(this);
   }
 
   close() {

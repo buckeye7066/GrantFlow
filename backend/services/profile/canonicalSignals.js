@@ -440,8 +440,7 @@ export function buildCanonicalSignals(rawProfile, rawSections = {}) {
   const sections = rawProfile?.sections ?? rawSections ?? {}
 
   try {
-    // Fallback when buildProfileSignals is unavailable
-return emptyCanonicalSignals()
+    const legacySignals = buildProfileSignals({ profile, sections })
     return fromLegacyHelpers(legacySignals)
   } catch (error) {
     console.error('Failed to build canonical signals:', error)

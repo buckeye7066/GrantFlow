@@ -419,6 +419,7 @@ router.post('/archOpportunities', async (req, res) => {
       return res.status(403).json({ success: false, error: 'Admin privileges required' })
     }
     const { opportunity_ids = [], action = 'archive' } = req.body;
+    const isPostgres = req.db?.dialect === 'postgres'
     
     if (!Array.isArray(opportunity_ids) || opportunity_ids.length === 0) {
       return res.status(400).json({

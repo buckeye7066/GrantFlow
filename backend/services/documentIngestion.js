@@ -51,12 +51,14 @@ function normalizeEnableAi(value) {
 async function createAnthropicClient() {
   const key = String(process.env.ANTHROPIC_API_KEY || '').trim()
   if (!key) return null
-  try { const Anthropic = (await import('@anthropic-ai/sdk')).default; return new Anthropic({ apiKey: key, timeout: Number(process.env.ANYA_ANTHROPIC_TIMEOUT_MS || 20_000), maxRetries: Number(process.env.ANYA_ANTHROPIC_MAX_RETRIES || 1) }); } catch (error) { console.error('Failed to load Anthropic SDK:', error); return null; }
-  return new Anthropic({
+  try {
+    const Anthropic = (await import('@anthropic-ai/sdk')).default
+    return new Anthropic({
     apiKey: key,
     timeout: Number(process.env.ANYA_ANTHROPIC_TIMEOUT_MS || 20_000),
     maxRetries: Number(process.env.ANYA_ANTHROPIC_MAX_RETRIES || 1),
   })
+  } catch (error) { console.error('Failed to load Anthropic SDK:', error); return null; }
 }
 
 function extractAnthropicText(response) {

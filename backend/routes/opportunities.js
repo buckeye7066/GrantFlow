@@ -905,7 +905,6 @@ router.get('/meta/sources', async (req, res) => {
     const isPostgres = req.db?.dialect === 'postgres'
     const activeVal = isPostgres ? 'TRUE' : '1'
     const conditions = ['source IS NOT NULL', `is_active = ?`, trustedOriginClause(), trustedSourceClause()]; const params = [activeVal];
-    const params = [];
     applyComplianceFilters(req.query.compliance, conditions, params);
     const whereClause = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
 
@@ -930,7 +929,6 @@ router.get('/meta/states', async (req, res) => {
     const isPostgres = req.db?.dialect === 'postgres'
     const activeVal = isPostgres ? 'TRUE' : '1'
     const conditions = ['state IS NOT NULL', `is_active = ?`, trustedOriginClause(), trustedSourceClause()]; const params = [activeVal];
-    const params = [];
     applyComplianceFilters(req.query.compliance, conditions, params);
     const whereClause = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
 

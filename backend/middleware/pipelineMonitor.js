@@ -52,8 +52,6 @@ export function pipelineMonitor() {
 
     const start = Date.now()
     const originalJson = res.json.bind(res)
-
-    const originalJson = res.json
     res.json = function monitoredJson(body) {
       res.json = originalJson // restore original
       const elapsed = Date.now() - start

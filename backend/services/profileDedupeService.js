@@ -474,8 +474,7 @@ export async function mergeProfiles(db, {
   }
 
   return await db.withTransaction(async (tx) => {
-    try {
-      const winner = await tx
+    const winner = await tx
         .prepare('SELECT id, display_name, user_id, organization_id FROM profiles WHERE id = ?')
         .get(winnerId)
       if (!winner) throw new Error(`Winner profile not found: ${winnerId}`)
@@ -669,6 +668,11 @@ export async function mergeProfiles(db, {
         changes.push({ type: 'funding_opportunities.repoint', from: loserId, to: winnerId })
         changes.push({ type: 'anya_brain_memory.repoint', from: loserId, to: winnerId })
       } else {
+        // Check for active applications before merge
+        const activeApps = await tx.prepare('SELECT COUNT(*) as count FROM service_applications WHERE profile_id = ? AND status IN (?, ?, ?)').get(loserId, 'submitted', 'under_review', 'approved')
+        if (activeApps.count > 0 && !dryRun) {
+          throw new Error(`Cannot merge profile ${loserId} - has ${activeApps.count} active funding applications`)
+        }
         const repoints = [
           { table: 'documents', idColumn: 'profile_id' },
           { table: 'crawler_jobs', idColumn: 'profile_id' },
@@ -676,12 +680,7 @@ export async function mergeProfiles(db, {
           { table: 'anya_sessions', idColumn: 'profile_id' },
           { table: 'anya_tasks', idColumn: 'profile_id' },
           { table: 'anya_tool_usage', idColumn: 'profile_id' },
-          // Check for active applications before merge
-        const activeApps = await tx.prepare('SELECT COUNT(*) as count FROM service_applications WHERE profile_id = ? AND status IN (?, ?, ?)').get(loserId, 'submitted', 'under_review', 'approved')
-        if (activeApps.count > 0 && !dryRun) {
-          throw new Error(`Cannot merge profile ${loserId} - has ${activeApps.count} active funding applications`)
-        }
-        { table: 'service_applications', idColumn: 'profile_id' },
+          { table: 'service_applications', idColumn: 'profile_id' },
           { table: 'funding_opportunities', idColumn: 'profile_id' },
         ]
 
