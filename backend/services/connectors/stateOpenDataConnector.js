@@ -108,22 +108,61 @@ export async function searchStateData(state, params = {}) {
   // https://data.ohio.gov/resource/dataset-id.json?$where=status='open'&$limit=100
   
   // For now, return state agency information as DIRECTORY entries
-  const stateResources = [
-    {
-      title: `${state} State Grants Portal`,
-      description: 'Central portal for state grant opportunities',
-      sponsor: `${state} State Government`,
-      source: portal.domain,
-      source_url: `https://${portal.domain}`,
-      type: 'DIRECTORY', // Portal/directory, not a specific grant
-      state: state,
-      evidence_url: `https://${portal.domain}`,
-      last_verified_at: new Date().toISOString(),
-      is_active: true,
-      last_crawled: new Date().toISOString()
-    }
-  ];
-  
+  // No real dataset IDs are configured for any portal in STATE_DATA_PORTALS.
+  // Returning placeholder DIRECTORY stubs risks injecting records with no
+  // application path into the pipeline (violates Goal 1) and polluting
+  // results with junk entries (violates Goal 3).
+  // Return empty array until real dataset IDs are configured.
+  const hasDataset = portal.grants_dataset || portal.programs_dataset;
+  if (!hasDataset) {
+    console.warn(
+      `[State Open Data] No dataset IDs configured for ${state} (${portal.name}). ` +
+      'Skipping stub entry â configure grants_dataset or programs_dataset to enable.'
+    );
+    return [];
+  }
+
+  // --- Real Socrata query path (reached only when dataset IDs are configured) ---
+  const datasetId = portal.grants_dataset || portal.programs_dataset;
+  const queryUrl =
+    `https://${portal.domain}/resource/${datasetId}.json` +
+    `?$limit=${params.limit || 100}`;
+
+  let rows;
+  try {
+    rows = await rateLimitedFetch(queryUrl);
+  } catch (err) {
+    console.error(`[State Open Data] Fetch failed for ${state}: ${err.message}`);
+    return [];
+  }
+
+  // Map raw Socrata rows to GrantFlow opportunity shape.
+  // Rows without an application URL are classified as DIRECTORY and
+  // must be filtered by the caller before pipeline insertion.
+  const stateResources = rows.map(row => ({
+    title: row.title || row.program_name || row.name || '(untitled)',
+    description: row.description || row.summary || '',
+    sponsor: row.agency || row.organization || `${state} State Government`,
+    source: portal.domain,
+    source_url: row.url || row.application_url || row.link || null,
+    application_url: row.application_url || row.url || row.link || null,
+    type: (row.application_url || row.url || row.link) ? 'OPPORTUNITY' : 'DIRECTORY',
+    state: state,
+    evidence_url: row.url || `https://${portal.domain}/resource/${datasetId}`,
+    last_verified_at: new Date().toISOString(),
+    is_active: true,
+    last_crawled: new Date().toISOString()
+  }));
+
+  const withUrl = stateResources.filter(r => r.application_url);
+  const withoutUrl = stateResources.length - withUrl.length;
+  if (withoutUrl > 0) {
+    console.warn(
+      `[State Open Data] ${state}: ${withoutUrl}/${stateResources.length} rows ` +
+      'had no application URL â classified as DIRECTORY, excluded from OPPORTUNITY set.'
+    );
+  }
+
   return stateResources;
 }
 
@@ -132,17 +171,51 @@ export async function searchStateData(state, params = {}) {
  */
 export async function getStateProgramDetails(state, programId) {
   const portal = STATE_DATA_PORTALS[state];
-  
+
   if (!portal) {
     throw new Error(`No portal configured for ${state}`);
   }
-  
-  // In production, query specific dataset
+
+  const datasetId = portal.programs_dataset || portal.grants_dataset;
+  if (!datasetId) {
+    // No real dataset configured â log and return null so callers can skip
+    // pipeline insertion rather than inserting a stub with no application path.
+    console.warn(
+      `[State Open Data] getStateProgramDetails(${state}, ${programId}): ` +
+      'no dataset ID configured â returning null to prevent stub insertion.'
+    );
+    return null;
+  }
+
+  const queryUrl =
+    `https://${portal.domain}/resource/${datasetId}.json` +
+    `?$where=id='${encodeURIComponent(programId)}'&$limit=1`;
+
+  let rows;
+  try {
+    rows = await rateLimitedFetch(queryUrl);
+  } catch (err) {
+    console.error(
+      `[State Open Data] getStateProgramDetails fetch failed ` +
+      `(${state}/${programId}): ${err.message}`
+    );
+    return null;
+  }
+
+  if (!rows || rows.length === 0) {
+    console.warn(
+      `[State Open Data] No record found for programId=${programId} in ${state}.`
+    );
+    return null;
+  }
+
+  const row = rows[0];
   return {
-    title: programId,
+    title: row.title || row.program_name || row.name || programId,
     state: state,
-    type: 'PROGRAM', // State programs are typically standing programs
-    evidence_url: `https://${portal.domain}`,
+    type: 'PROGRAM',
+    application_url: row.application_url || row.url || row.link || null,
+    evidence_url: row.url || `https://${portal.domain}/resource/${datasetId}`,
     last_verified_at: new Date().toISOString()
   };
 }
