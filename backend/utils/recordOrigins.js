@@ -54,7 +54,13 @@ export function trustedOriginClause(alias) {
  * Source values (the `source` column) that should never appear in user-facing results.
  * Unified across matching.js and discovery.js to prevent drift.
  */
-export const UNTRUSTED_SOURCES = ['synthetic', 'template', 'comprehensive_crawler', 'fake']
+// 'comprehensive_crawler' was previously blocked here, which silently excluded
+// all opportunities discovered by the primary crawler (comprehensiveCrawlerOptimized.js)
+// from every user-facing query â a guaranteed recall loss for Goal 7.
+// Removed from the blocklist. If specific crawler records are untrustworthy,
+// they must be rejected at insertion time by relevanceFilter / opportunityMatcher
+// (Goals 3, 4) and logged with a reason (Goal 8).
+export const UNTRUSTED_SOURCES = ['synthetic', 'template', 'fake']
 
 /**
  * Returns a SQL fragment for the `source` column blocklist.
@@ -72,6 +78,8 @@ export function trustedSourceClause(alias) {
  * e.g. "record_origin IN ('live_crawl','curated_verified', ...)"
  */
 export function allowedOriginCheckSQL() {
-  const quoted = [...ALLOWED_RECORD_ORIGINS].map(o => `'${o}'`).join(',')
+  const quoted = [...ALLOWED_RECORD_ORIGINS]
+    .map(o => `'${escapeSqlStringLiteral(o)}'`)
+    .join(',')
   return `record_origin IN (${quoted})`
 }
