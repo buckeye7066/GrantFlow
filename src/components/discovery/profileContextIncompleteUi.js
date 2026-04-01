@@ -28,8 +28,12 @@ function uniqueStrings(values = []) {
 
 function toChecklist(requiredMissing = []) {
   const normalized = uniqueStrings(requiredMissing)
-  const source = normalized.length > 0 ? normalized : [...DEFAULT_REQUIRED_FACETS]
-  return source.map((facet) => REQUIRED_FACET_LABELS[facet] || facet)
+  // Do NOT substitute defaults when the list is empty â an empty list means
+  // the server fired PROFILE_CONTEXT_INCOMPLETE but did not specify which
+  // facets are missing.  Returning an empty checklist forces the caller to
+  // display a generic "complete your profile" message rather than misleading
+  // the user into thinking only the three surface fields are needed.
+  return normalized.map((facet) => REQUIRED_FACET_LABELS[facet] || facet)
 }
 
 function extractRequiredMissing(payload) {
@@ -63,11 +67,17 @@ export function getProfileContextIncompleteHint(errorLike) {
     const impliedByRequiredMissing = status === 400 && requiredMissing.length > 0
     if (!coded && !impliedByRequiredMissing) continue
 
+    const knownMissing = requiredMissing.length > 0 ? requiredMissing : []
     return {
       code: PROFILE_CONTEXT_INCOMPLETE,
-      required_missing: requiredMissing.length > 0 ? requiredMissing : [...DEFAULT_REQUIRED_FACETS],
-      checklist: toChecklist(requiredMissing),
-      headline: 'Complete profile sections: Profile Type + State/ZIP + Goal',
+      required_missing: knownMissing,
+      checklist: toChecklist(knownMissing),
+      // When we have no specifics, use a generic headline so the UI/Anya
+      // does not claim to know which fields are missing.
+      headline:
+        knownMissing.length > 0
+          ? 'Complete profile sections: ' + knownMissing.map((f) => REQUIRED_FACET_LABELS[f] || f).join(' + ')
+          : 'Your profile needs more detail before searching â open your profile to review missing sections.',
     }
   }
 
