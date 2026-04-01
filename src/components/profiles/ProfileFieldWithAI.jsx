@@ -65,21 +65,28 @@ export default function ProfileFieldWithAI({
     
     try {
       // Prepare context for AI
+      const safeFormContext = formContext && typeof formContext === 'object' && !Array.isArray(formContext)
+        ? formContext
+        : {}
+      // formContext is merged FIRST so that explicit keys always win
       const context = {
+        ...safeFormContext,
         fieldName: safeField.name,
         fieldLabel: safeField.label,
         currentValue: displayValue || '',
         fieldDescription: safeField.description || '',
         sectionKey,
         profileId,
-        ...formContext // Additional form data for context
       }
       
       // Request AI suggestion
       const response = await requestProfileFieldAI(context)
       
-      if (response?.suggestion) {
-        onChange(response.suggestion)
+      if (response?.suggestion !== undefined && response.suggestion !== null) {
+        const suggestionValue = typeof response.suggestion === 'string'
+          ? response.suggestion
+          : safeStringifyValue(response.suggestion)
+        onChange(suggestionValue)
         toast({
           title: "AI suggestion applied",
           description: `Updated ${safeField.label} with AI-generated content`,
@@ -139,7 +146,10 @@ export default function ProfileFieldWithAI({
         {...safeField.props}
         {...props}
         value={displayValue}
-        onChange={(e) => onChange(e?.target ? e.target.value : e)}
+        onChange={(e) => {
+          const rawVal = e?.target ? e.target.value : e
+          onChange(rawVal)
+        }}
       />
       
       {safeField.description && (
