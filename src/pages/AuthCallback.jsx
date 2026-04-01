@@ -89,7 +89,8 @@ export default function AuthCallback() {
       refreshToken,
     }
     if (expiresInParam) {
-      sessionMeta.expiresIn = Number(expiresInParam) || expiresInParam
+      const parsed = Number(expiresInParam)
+sessionMeta.expiresIn = Number.isFinite(parsed) ? parsed : undefined
     }
     if (accessExpiresParam) {
       sessionMeta.accessExpires = accessExpiresParam
@@ -100,7 +101,7 @@ export default function AuthCallback() {
 
     loginWithTokens(sessionMeta)
       .then((result) => {
-        if (!result || typeof result !== 'object') {
+        if (!result || typeof result !== 'object' || result.error || !result.user) {
           throw new Error('AUTHENTICATION_FAILED')
         }
         setStatus('success')
@@ -141,7 +142,7 @@ export default function AuthCallback() {
           {status === 'error' ? (
             <div className="flex w-full flex-col gap-3">
               <Button onClick={() => navigate('/login', { replace: true })}>Return to login</Button>
-              <Button variant="outline" onClick={() => navigate(-1)}>
+              <Button variant="outline" onClick={() => navigate('/login', { replace: true })}>
                 Try provider again
               </Button>
             </div>
