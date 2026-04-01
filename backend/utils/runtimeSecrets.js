@@ -8,18 +8,33 @@ function deriveKey() {
     try {
       const buf = raw.match(/^[0-9a-f]+$/i) ? Buffer.from(raw, 'hex') : Buffer.from(raw, 'base64')
       if (buf.length >= 32) return buf.subarray(0, 32)
-    } catch {
-      // ignore
+      // Key material decoded but too short â hash-stretch it so the explicit key is still used
+      return crypto.createHash('sha256').update(buf).digest()
+    } catch (err) {
+      // Explicit key could not be parsed â fail loudly rather than silently downgrading
+      throw new Error(
+        `[runtimeSecrets] RUNTIME_SECRETS_KEY is set but could not be parsed (${err.message}). ` +
+        'Refusing to fall back to weaker key material. Fix the env var or remove it to use the automatic fallback.'
+      )
     }
-    return crypto.createHash('sha256').update(raw).digest()
   }
 
   // Fallback to existing secrets in prod. These should already be set.
   const material =
     process.env.AUTH_JWT_SECRET ||
     process.env.JWT_SECRET ||
-    process.env.SESSION_SECRET ||
-    'grantflow-dev-secret'
+    process.env.SESSION_SECRET
+
+  if (!material) {
+    if (process.env.NODE_ENV === 'production') {
+      throw new Error(
+        '[runtimeSecrets] No key material available in production. ' +
+        'Set RUNTIME_SECRETS_KEY, AUTH_JWT_SECRET, JWT_SECRET, or SESSION_SECRET.'
+      )
+    }
+    // Dev/test only â predictable key is acceptable outside production
+    return crypto.createHash('sha256').update('grantflow-dev-secret').digest()
+  }
 
   return crypto.createHash('sha256').update(String(material)).digest()
 }
