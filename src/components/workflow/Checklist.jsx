@@ -110,17 +110,17 @@ export default function Checklist({ grantId, organizationId }) {
                 </div>
               </div>
             )}
-            {Object.entries(groupedItems).map(([type, items]) => {
+            {Object.entries(groupedItems).map(([type, groupItems]) => {
               const Icon = getTypeIcon(type);
               const typeLabel = type.charAt(0).toUpperCase() + type.slice(1) + 's';
               return (
                 <div key={type}>
                   <h4 className="font-semibold text-slate-900 flex items-center gap-2 mb-3">
                     <Icon className={`w-4 h-4 ${type === 'question' ? 'text-amber-600' : 'text-blue-600'}`} />
-                    {typeLabel} ({items.length})
+                    {typeLabel} ({groupItems.length})
                   </h4>
                   <div className="space-y-2">
-                    {items.sort((a, b) => (a.order || 0) - (b.order || 0)).map((item) => (
+                    {groupItems.sort((a, b) => (a.order || 0) - (b.order || 0)).map((item) => (
                       <div
                         key={item.id}
                         className={`p-4 rounded-lg border transition-all ${
