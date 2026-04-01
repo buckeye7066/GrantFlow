@@ -81,7 +81,18 @@ Return a JSON object with your complete analysis.`;
           },
         },
       });
-      setScoringResult(response);
+      const validated = {
+        total_score: Math.min(100, Math.max(0, Number(response.total_score) || 0)),
+        responsiveness_score: Math.min(25, Math.max(0, Number(response.responsiveness_score) || 0)),
+        clarity_score: Math.min(25, Math.max(0, Number(response.clarity_score) || 0)),
+        impact_score: Math.min(25, Math.max(0, Number(response.impact_score) || 0)),
+        feasibility_score: Math.min(25, Math.max(0, Number(response.feasibility_score) || 0)),
+        strengths: Array.isArray(response.strengths) ? response.strengths : [],
+        weaknesses: Array.isArray(response.weaknesses) ? response.weaknesses : [],
+        suggestions: Array.isArray(response.suggestions) ? response.suggestions : [],
+        missing_information: Array.isArray(response.missing_information) ? response.missing_information : [],
+      };
+      setScoringResult(validated);
     } catch (err) {
       setError(`Scoring failed: ${err.message}`);
     } finally {
