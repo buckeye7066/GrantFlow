@@ -77,12 +77,13 @@ export function isJunkOpportunity(opp, hints = {}) {
   //    - If profile has NO health needs: filter them out
   //    - If no profile info (hints empty): keep if from curated source, else filter
   const { hasHealthNeeds, needsTransport } = hints
-  if (!hasHealthNeeds) {
-    const isCopay = COPAY_PATTERNS.some(p => combined.includes(p))
-    if (isCopay) {
-      if (hasHealthNeeds === false) return true
-      if (hasHealthNeeds === undefined && !opp.record_origin?.startsWith('curated')) return true
-    }
+  const isCopay = COPAY_PATTERNS.some(p => combined.includes(p))
+  if (isCopay) {
+    // Explicit denial: profile says no health needs â filter
+    if (hasHealthNeeds === false) return true
+    // Unknown profile: only filter non-curated sources to prefer recall (Goal 7)
+    if (hasHealthNeeds === undefined && !opp.record_origin?.startsWith('curated')) return true
+    // hasHealthNeeds === true â always keep
   }
 
   // 5. Health resource directories — only filter when profile has no health needs
@@ -91,7 +92,7 @@ export function isJunkOpportunity(opp, hints = {}) {
   }
 
   // 6. Transportation assistance — only filter when profile doesn't need it
-  if (needsTransport === false && combined.includes('transportation assistance') && !combined.includes('business')) {
+  if (needsTransport === false && combined.includes('transportation assistance')) {
     return true
   }
 
