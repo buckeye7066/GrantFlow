@@ -41,7 +41,7 @@ const StatCard = ({ title, value, icon: Icon, color }) => (
       <div className="flex justify-between items-start">
         <div>
           <p className={`text-sm font-medium ${color}`}>{title}</p>
-          <p className="text-3xl font-bold text-slate-900 mt-2">${typeof value === 'number' ? value.toLocaleString() : value}</p>
+          <p className="text-3xl font-bold text-slate-900 mt-2">{typeof value === 'number' ? value.toLocaleString() : value}</p>
         </div>
         <div className="p-3 bg-slate-100 rounded-xl">
           <Icon className={`w-6 h-6 ${color}`} />
@@ -110,7 +110,14 @@ export default function Reports() {
 
   const handleCreateReport = () => {
     const grant = grants.find(g => g.id === newReportData.grant_id);
-    if (!grant) return;
+    if (!grant) {
+      toast({
+        title: "Grant Not Found",
+        description: "The selected grant could not be found. Please re-select and try again.",
+        variant: "destructive",
+      });
+      return;
+    }
 
     createReportMutation.mutate({
       ...newReportData,
@@ -139,12 +146,12 @@ export default function Reports() {
   
   const submittedCount = (grantsByStatus['submitted'] || 0) + (grantsByStatus['awarded'] || 0) + (grantsByStatus['declined'] || 0);
   const successRate = submittedCount > 0 ? (grantsByStatus['awarded'] || 0) / submittedCount * 100 : 0;
-  const totalAwarded = sumBy(awardedGrants, 'typical_award') || sumBy(awardedGrants, 'amount_max') || 0;
+  const totalAwarded = sumBy(awardedGrants, g => g.typical_award || g.amount_max || 0);
 
   const fundingByFunderType = Object.entries(groupBy(awardedGrants, 'funder_type'))
     .map(([name, grants]) => ({
       name: name.charAt(0).toUpperCase() + name.slice(1),
-      value: sumBy(grants, 'typical_award') || sumBy(grants, 'amount_max') || 0
+      value: sumBy(grants, g => g.typical_award || g.amount_max || 0)
     }))
     .filter(d => d.value > 0);
 
