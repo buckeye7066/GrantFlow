@@ -246,10 +246,13 @@ export function validateUrl(url) {
   const normalized = String(url).trim()
 
   try {
-    new URL(normalized)
+    const parsed = new URL(normalized)
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      throw new Error(`Invalid URL protocol '${parsed.protocol}': only http and https are allowed.`)
+    }
     return normalized
-  } catch {
-    throw new Error(`Invalid URL: ${url}`)
+  } catch (err) {
+    throw new Error(`Invalid URL: ${url}. ${err.message}`)
   }
 }
 
@@ -287,6 +290,21 @@ export async function validateForeignKey(db, table, column, value) {
     return true // NULL is allowed
   }
 
+  const ALLOWED_FK_TARGETS = {
+    profiles: ['id', 'user_id'],
+    opportunities: ['id', 'opportunity_id'],
+    pipeline_entries: ['id'],
+    jobs: ['id', 'job_id'],
+    documents: ['id'],
+    users: ['id', 'user_id'],
+  }
+
+  if (!ALLOWED_FK_TARGETS[table] || !ALLOWED_FK_TARGETS[table].includes(column)) {
+    throw new Error(
+      `validateForeignKey: table '${table}' or column '${column}' is not in the allowed whitelist.`
+    )
+  }
+
   const row = await db
     .prepare(`SELECT ${column} FROM ${table} WHERE ${column} = ? LIMIT 1`)
     .get(value)
@@ -311,8 +329,8 @@ export function validatePositiveInteger(value) {
 
   const num = Number(value)
 
-  if (!Number.isInteger(num) || num < 0) {
-    throw new Error(`Invalid positive integer: ${value}`)
+  if (!Number.isInteger(num) || num <= 0) {
+    throw new Error(`Invalid positive integer: ${value}. Must be a positive (non-zero) integer.`)
   }
 
   return num
@@ -331,8 +349,8 @@ export function validatePositiveNumber(value) {
 
   const num = Number(value)
 
-  if (isNaN(num) || num < 0) {
-    throw new Error(`Invalid positive number: ${value}`)
+  if (isNaN(num) || num <= 0) {
+    throw new Error(`Invalid positive number: ${value}. Must be a positive (non-zero) number.`)
   }
 
   return num
