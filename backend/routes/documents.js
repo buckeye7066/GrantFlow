@@ -269,7 +269,15 @@ function assertRemoteUrlAllowed(rawUrl) {
 
   const hostname = (parsed.hostname || '').toLowerCase().trim();
   if (!hostname) throw new Error('Invalid URL host');
-  if (hostname === 'localhost' || hostname === '0.0.0.0' || hostname.endsWith('.local')) {
+  const BLOCKED_HOSTNAMES = new Set([
+    'localhost',
+    '0.0.0.0',
+    'metadata.google.internal',
+    'metadata.goog',
+    'instance-data',
+    'instance-metadata',
+  ]);
+  if (BLOCKED_HOSTNAMES.has(hostname) || hostname.endsWith('.local') || hostname.endsWith('.internal')) {
     throw new Error('URL host is not allowed');
   }
   if (net.isIP(hostname)) {
@@ -299,21 +307,18 @@ async function downloadRemoteFileToUploads({ url, req }) {
       throw new Error(`Unable to download file (${resp.status})`);
     }
     // If redirects occurred, validate the final URL too.
-    try {
-      if (resp.url) {
-        // Check if final URL after redirects is still safe
+    if (resp.url) {
+      try {
         const finalUrl = new URL(resp.url);
-        if (finalUrl.hostname !== initial.hostname) {
-          // Additional validation for redirect target
-          assertRemoteUrlAllowed(resp.url);
-          // Prevent redirect to private networks even if initial URL was public
-          if (net.isIP(finalUrl.hostname) && isPrivateIpAddress(finalUrl.hostname)) {
-            throw new Error('Redirect to private network not allowed');
-          }
+        // Always validate the final URL regardless of whether hostname changed
+        assertRemoteUrlAllowed(resp.url);
+        // Belt-and-suspenders: also block raw IP redirects to private ranges
+        if (net.isIP(finalUrl.hostname) && isPrivateIpAddress(finalUrl.hostname)) {
+          throw new Error('Redirect to private network not allowed');
         }
+      } catch (redirectErr) {
+        throw new Error(`Final URL host is not allowed: ${redirectErr.message}`);
       }
-    } catch {
-      throw new Error('Final URL host is not allowed');
     }
     const contentType = resp.headers.get('content-type') || 'application/octet-stream';
     const contentLength = Number(resp.headers.get('content-length') || '0');
@@ -991,7 +996,20 @@ router.post('/ingest', uploadLimiter, requireUploadsWritable, runUploadSingle('d
       
       const msg = String(error?.message || error)
       if (msg.includes('documents_status_check')) {
-        await req.db.prepare(insertDocumentSql).run(...insertDocumentArgs)
+        // Retry without the status field â use a SQL variant that omits status entirely
+        // so the DB default applies and avoids the constraint violation.
+        const insertNoStatusSql = `
+          INSERT INTO documents (
+            id, organization_id, grant_id, profile_id, university_application_id, university_application_name, name, type,
+            file_url, file_path, file_size, mime_type,
+            extracted_text, processing_status, notes
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `
+        // Replace the status-constrained processingStatus with null to use DB default
+        const safeArgs = [...insertDocumentArgs]
+        // processing_status is index 13 (0-based); set to null to use DB default
+        safeArgs[13] = null
+        await req.db.prepare(insertNoStatusSql).run(...safeArgs)
       } else {
         throw error
       }
