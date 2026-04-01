@@ -672,7 +672,15 @@ export function buildProfileIntelligence(profile, profileSections) {
 
   // Boolean convenience flags
   const isVeteran = militaryFlags.has('veteran') || safeBool(profile.is_veteran)
-  const isStudent = entityType === 'student' || safeStr(profile.primary_type).toLowerCase() === 'student'
+  const isStudent = entityType === 'student'
+    || safeStr(profile.primary_type).toLowerCase() === 'student'
+    || safeStr(profile.primary_type).toLowerCase() === 'individual_student'
+    || (() => {
+        const eduSection = readSection(sections, 'education', 'academic', 'school_enrollment')
+        return eduSection
+          ? safeBool(eduSection.currently_enrolled) || safeBool(eduSection.is_student)
+          : false
+      })()
   const isNonprofit = ['nonprofit', 'church', 'faith_based', 'community_action',
     'library', 'school', 'school_district', 'charter_school', 'college',
     'hospital', 'housing_authority'].includes(entityType) ||
@@ -681,7 +689,7 @@ export function buildProfileIntelligence(profile, profileSections) {
   const isChurch = entityType === 'church'
   const isFireEms = entityType === 'fire_ems'
   const isSchool = ['school', 'school_district', 'charter_school'].includes(entityType)
-  const isGovernment = ['government', 'tribal'].includes(entityType)
+  const isGovernment = ['government', 'tribal', 'fire_ems', 'housing_authority'].includes(entityType)
 
   // Story keywords
   const storyKeywords = extractStoryKeywords(profile, sections)
@@ -716,7 +724,7 @@ export function buildProfileIntelligence(profile, profileSections) {
     isSchool,
     isGovernment,
     displayName: safeStr(profile.display_name || profile.name || ''),
-    financialFlags: hardshipFlags,  // alias for inference rules
+    financialFlags: new Set(hardshipFlags),  // shallow copy â prevents mutation aliasing
   }
 
   // Infer needs
@@ -748,6 +756,11 @@ function computeIntelligenceFingerprint(intel, inferredNeeds) {
     isNonprofit: intel.isNonprofit,
     isBusiness: intel.isBusiness,
     hardshipFlags: Array.from(intel.hardshipFlags).sort(),
+    disabilityFlags: Array.from(intel.disabilityFlags).sort(),
+    militaryFlags: Array.from(intel.militaryFlags).sort(),
+    eligibilityFlags: Array.from(intel.eligibilityFlags).sort(),
+    demographicFlags: Array.from(intel.demographicFlags).sort(),
+    geographicFlags: Array.from(intel.geographicFlags).sort(),
     topNeeds: Array.isArray(inferredNeeds) ? inferredNeeds.slice(0, 5).map(n => n.code) : [],
   }
   return crypto
