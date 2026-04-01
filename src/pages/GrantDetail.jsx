@@ -101,13 +101,17 @@ export default function GrantDetail() {
     enabled: !!grantId,
     refetchInterval: (query) => {
       const grantData = query.state?.data;
-      // Only refetch if actively running, and stop after 2 minutes
       if (grantData && ['queued', 'running'].includes(grantData.ai_status)) {
         const updatedAt = grantData.ai_updated_at ? new Date(grantData.ai_updated_at) : new Date();
         const elapsed = Date.now() - updatedAt.getTime();
-        // Stop refetching after 2 minutes to prevent infinite loops
         if (elapsed > 120000) {
-          console.warn('[GrantDetail] Stopping refetch - timeout');
+          console.warn('[GrantDetail] Stopping refetch - timeout; forcing error state');
+          // Persist the timeout as an error so the UI is not silently stuck
+          client.entities.Grant.update(grantData.id, {
+            ai_status: 'error',
+            ai_error: 'Analysis timed out after 2 minutes. Please try again.',
+            ai_updated_at: new Date().toISOString(),
+          }).catch((e) => console.error('[GrantDetail] Failed to write timeout error:', e));
           return false;
         }
         return 2000;
@@ -118,7 +122,7 @@ export default function GrantDetail() {
 
   const { data: organization, isLoading: isLoadingOrg, isError: isErrorOrg, error: orgError } = useQuery({
     queryKey: ['organization', grant?.organization_id],
-    queryFn: () => client.entities.Organization.get(grant.organization_id),
+    queryFn: () => client.entities.Organization.get(grant?.organization_id),
     enabled: !!grant?.organization_id,
   });
   
@@ -400,8 +404,16 @@ export default function GrantDetail() {
           <Tabs value={activeTab} onValueChange={setActiveTab} className="bg-white rounded-xl shadow-sm border">
             <TabsList className="p-2 m-2">
                 <TabsTrigger value="coach"><Brain className="w-4 h-4 mr-2"/>AI Coach</TabsTrigger>
-                <TabsTrigger value="portal-assist" onClick={(e) => { e.preventDefault(); setIsPortalAssistantOpen(true); }}><Sparkles className="w-4 h-4 mr-2"/>Portal Assistant</TabsTrigger>
-                <TabsTrigger value="print-app" onClick={(e) => { e.preventDefault(); setIsPrintableAppOpen(true); }}><FileText className="w-4 h-4 mr-2"/>Print Application</TabsTrigger>
+                <Button
+  variant="ghost"
+  className="inline-flex items-center justify-center whitespace-nowrap rounded-sm px-3 py-1.5 text-sm font-medium"
+  onClick={() => setIsPortalAssistantOpen(true)}
+><Sparkles className="w-4 h-4 mr-2"/>Portal Assistant</Button>
+<Button
+  variant="ghost"
+  className="inline-flex items-center justify-center whitespace-nowrap rounded-sm px-3 py-1.5 text-sm font-medium"
+  onClick={() => setIsPrintableAppOpen(true)}
+><FileText className="w-4 h-4 mr-2"/>Print Application</Button>
                 <TabsTrigger value="checklist"><CheckSquare className="w-4 h-4 mr-2"/>Checklist</TabsTrigger>
                 <TabsTrigger value="budget"><DollarSign className="w-4 h-4 mr-2"/>Budget</TabsTrigger>
                 <TabsTrigger value="timelogs"><Clock className="w-4 h-4 mr-2"/>Time Logs</TabsTrigger>
