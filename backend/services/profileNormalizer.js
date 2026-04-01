@@ -822,8 +822,17 @@ export function computeProfileFingerprint(normalizedProfile) {
     isNonprofit: normalizedProfile.isNonprofit,
     isBusiness: normalizedProfile.isBusiness,
     isCaregiver: normalizedProfile.isCaregiver,
+    hasFosterIndicator: normalizedProfile.hasFosterIndicator,
     hasChronicIllness: normalizedProfile.hasChronicIllness,
+    hasDisabilityNeed: normalizedProfile.hasDisabilityNeed,
     hasEmergencyNeed: normalizedProfile.hasEmergencyNeed,
+    hasHousingNeed: normalizedProfile.hasHousingNeed,
+    hasEmploymentNeed: normalizedProfile.hasEmploymentNeed,
+    hasBusinessNeed: normalizedProfile.hasBusinessNeed,
+    isRefugee: normalizedProfile.isRefugee,
+    householdHasChildren: normalizedProfile.householdHasChildren,
+    ageGroup: normalizedProfile.ageGroup,
+    enrolledPrograms: (normalizedProfile.enrolledPrograms ?? []).slice().sort(),
   }
   return createHash('sha256')
     .update(JSON.stringify(relevant))
