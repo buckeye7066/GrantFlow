@@ -333,9 +333,20 @@ export const useAuthStore = create((set, get) => ({
           hasSeenOnboarding: true, // Skip onboarding for admins
         })
 
-        // Ensure admins see all profiles (server-backed).
+        // Ensure admins see all profiles (server-backed) and reconcile activeProfileId.
         get()
           .refreshProfiles({ reason: 'admin_login', force: true })
+          .then((refreshedProfiles) => {
+            const currentActive = get().activeProfileId
+            if (
+              currentActive &&
+              !refreshedProfiles.some((p) => String(p?.id) === String(currentActive))
+            ) {
+              // Active profile from login payload no longer valid after full refresh.
+              client.setActiveProfileId?.(null)
+              set({ activeProfileId: null })
+            }
+          })
           .catch(() => {})
         
         // Trigger crawler jobs asynchronously (fire-and-forget)
@@ -347,7 +358,11 @@ export const useAuthStore = create((set, get) => ({
       }
       
       // Regular user
-      const needsProfileCreation = profiles.length === 0 && !get().hasSeenOnboarding
+      // Use backend hasCompletedOnboarding (from payload.user if available) as authoritative source,
+      // falling back to the store's current hasSeenOnboarding flag.
+      const userCompletedOnboarding =
+        Boolean(payload.user?.has_completed_onboarding) || get().hasSeenOnboarding
+      const needsProfileCreation = profiles.length === 0 && !userCompletedOnboarding
       set({
         user,
         profiles,
@@ -358,6 +373,7 @@ export const useAuthStore = create((set, get) => ({
         sessionMessage: null,
         preferredAuthMethod: get().preferredAuthMethod,
         needsProfileCreation,
+        hasSeenOnboarding: userCompletedOnboarding,
       })
 
       // If login payload looks sparse, refresh from server so profile dropdown matches reality.
@@ -531,10 +547,16 @@ export const useAuthStore = create((set, get) => ({
       if (result?.accessToken) {
         client.setToken(result.accessToken)
         set({ accessToken: result.accessToken })
+        if (typeof window !== 'undefined') {
+          localStorage.setItem('grantflow:access-token', result.accessToken)
+        }
       }
       if (result?.refreshToken) {
         client.setRefreshToken?.(result.refreshToken)
         set({ refreshToken: result.refreshToken })
+        if (typeof window !== 'undefined') {
+          localStorage.setItem('grantflow:refresh-token', result.refreshToken)
+        }
       }
       get().setAuthenticatedUser(result)
       if (result) {
@@ -555,10 +577,16 @@ export const useAuthStore = create((set, get) => ({
       if (result?.accessToken) {
         client.setToken(result.accessToken)
         set({ accessToken: result.accessToken })
+        if (typeof window !== 'undefined') {
+          localStorage.setItem('grantflow:access-token', result.accessToken)
+        }
       }
       if (result?.refreshToken) {
         client.setRefreshToken?.(result.refreshToken)
         set({ refreshToken: result.refreshToken })
+        if (typeof window !== 'undefined') {
+          localStorage.setItem('grantflow:refresh-token', result.refreshToken)
+        }
       }
       get().setAuthenticatedUser(result)
       if (result) {
@@ -579,10 +607,16 @@ export const useAuthStore = create((set, get) => ({
       if (result?.accessToken) {
         client.setToken(result.accessToken)
         set({ accessToken: result.accessToken })
+        if (typeof window !== 'undefined') {
+          localStorage.setItem('grantflow:access-token', result.accessToken)
+        }
       }
       if (result?.refreshToken) {
         client.setRefreshToken?.(result.refreshToken)
         set({ refreshToken: result.refreshToken })
+        if (typeof window !== 'undefined') {
+          localStorage.setItem('grantflow:refresh-token', result.refreshToken)
+        }
       }
       get().setAuthenticatedUser(result)
       if (result) {
@@ -624,10 +658,16 @@ export const useAuthStore = create((set, get) => ({
       if (result?.accessToken) {
         client.setToken(result.accessToken)
         set({ accessToken: result.accessToken })
+        if (typeof window !== 'undefined') {
+          localStorage.setItem('grantflow:access-token', result.accessToken)
+        }
       }
       if (result?.refreshToken) {
         client.setRefreshToken?.(result.refreshToken)
         set({ refreshToken: result.refreshToken })
+        if (typeof window !== 'undefined') {
+          localStorage.setItem('grantflow:refresh-token', result.refreshToken)
+        }
       }
       get().setAuthenticatedUser(result)
       if (result) {
@@ -655,28 +695,26 @@ export const useAuthStore = create((set, get) => ({
         refreshToken,
       })
 
-      if (accessToken) {
-        set({ accessToken })
-      }
-      if (refreshToken) {
-        set({ refreshToken })
-      }
-
-      if (expiresIn !== undefined || accessExpires !== undefined || refreshExpires !== undefined) {
-        get().scheduleSessionRefresh({ expiresIn, accessExpires, refreshExpires })
-      }
-
+      // Defer all state writes until after the full response is validated.
       if (response) {
+        if (accessToken) {
+          set({ accessToken })
+        }
+        if (refreshToken) {
+          set({ refreshToken })
+        }
+        if (expiresIn !== undefined || accessExpires !== undefined || refreshExpires !== undefined) {
+          get().scheduleSessionRefresh({ expiresIn, accessExpires, refreshExpires })
+        }
         get().setAuthenticatedUser(response)
+        set((state) => ({
+          ...state,
+          isAuthenticated: true,
+          sessionExpired: false,
+          sessionMessage: null,
+          error: null,
+        }))
       }
-
-      set((state) => ({
-        ...state,
-        isAuthenticated: Boolean(response),
-        sessionExpired: false,
-        sessionMessage: null,
-        error: null,
-      }))
 
       return response
     } catch (error) {
