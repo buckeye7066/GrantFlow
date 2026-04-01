@@ -59,7 +59,7 @@ export default function Funder() {
         const funder = funderMap.get(grant.funder)
         funder.grants.push(grant)
         if (grant.status === 'awarded' && grant.amount_awarded) {
-          funder.totalAwarded += grant.amount_awarded
+          funder.totalAwarded += Number(grant.amount_awarded) || 0
         }
         if (['submitted', 'under_review', 'awarded'].includes(grant.status)) {
           funder.activeGrants++
@@ -199,7 +199,7 @@ export default function Funder() {
         {filteredFunders.length > 0 ? (
           <div className="space-y-3">
             {filteredFunders.map((funder, index) => (
-              <Card key={index} className="hover:border-blue-200 transition-colors">
+              <Card key={funder.name} className="hover:border-blue-200 transition-colors">
                 <CardContent className="p-6">
                   <div className="flex items-start justify-between gap-4">
                     <div className="flex-1">
@@ -260,7 +260,7 @@ export default function Funder() {
                     </div>
                     
                     <Button variant="outline" size="sm" asChild>
-                      <Link to={createPageUrl("Pipeline")}>
+                      <Link to={`${createPageUrl("Pipeline")}?funder=${encodeURIComponent(funder.name)}`}>
                         View Grants
                       </Link>
                     </Button>
