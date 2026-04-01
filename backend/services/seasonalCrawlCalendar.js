@@ -359,7 +359,7 @@ const SEASONAL_PROGRAMS = [
 function isProgramOpenInMonth(program, month) {
   const { openMonth, closeMonth } = program
   if (openMonth <= closeMonth) {
-    return month >= openMonth && month < closeMonth
+    return month >= openMonth && month <= closeMonth
   }
   // Wraps across year boundary
   return month >= openMonth || month < closeMonth
@@ -455,7 +455,8 @@ export function getSeasonalCrawlBoosts(profileContext, month) {
       const programStates = Array.isArray(program.states)
         ? program.states.map((s) => s.toLowerCase())
         : []
-      if (profileState && !programStates.includes(profileState)) return false
+      // If profileState is unknown, exclude state-specific programs to avoid wrong-state junk
+      if (!profileState || !programStates.includes(profileState)) return false
     }
 
     // Profile type filter — if profileTypes list is restrictive, skip non-matching profiles
