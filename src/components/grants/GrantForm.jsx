@@ -229,6 +229,7 @@ Return ONLY the JSON object. If you cannot find a specific piece of information,
                             />
                             <p className="text-xs text-slate-500">Specific instructions for how to apply for this opportunity</p>
                         </div>
+                    </div>
                     <div className="space-y-2">
                         <Label htmlFor="url">Application URL</Label>
                         <Input

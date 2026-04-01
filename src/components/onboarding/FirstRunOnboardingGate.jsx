@@ -49,14 +49,6 @@ export default function FirstRunOnboardingGate({ profiles = [], activeProfileId 
     !skipped &&
     (profiles.length === 0 || !activeProfileComplete)
 
-  // Don't evaluate shouldShow until preferences have loaded at least once
-  const shouldShow =
-    prefsLoaded &&
-    !hasCompletedOnboarding &&
-    !completed &&
-    !skipped &&
-    (profiles.length === 0 || !activeProfileComplete)
-
   const [showWizard, setShowWizard] = React.useState(false)
   const dismissedRef = React.useRef(false)
 

@@ -148,7 +148,7 @@ Return ONLY the JSON. Use null for any information you cannot verify with confid
             }
 
             const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-            const PHONE_RE = /^[\d\s().+\-]{7,20}$/;
+            const PHONE_RE = /^[\d\s().+-]{7,20}$/;
 
             const updates = {
                 contact_verified: true,
