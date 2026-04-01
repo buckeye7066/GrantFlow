@@ -97,9 +97,13 @@ export function createAuthMeRouter({ db, adminName, adminEmail }) {
                 )
                 .get(user.userId)
             } catch (repairError) {
-              console.warn(
+              console.error(
                 '[/api/auth/me] Unable to self-heal missing admin user:',
-                repairError?.message || repairError,
+                {
+                  message: repairError?.message || String(repairError),
+                  userId: user.userId,
+                  role: user.role,
+                },
               )
             }
           }
@@ -159,7 +163,7 @@ export function createAuthMeRouter({ db, adminName, adminEmail }) {
                     LEFT JOIN profile_emails pe ON pe.profile_id = p.id
                     WHERE p.user_id = ?
                        OR lower(pe.email) IN (${placeholders})
-                    ORDER BY p.created_at ASC
+                    ORDER BY p.id ASC
                   `,
                 )
                 .all(dbUser.id, ...emails)
@@ -170,7 +174,7 @@ export function createAuthMeRouter({ db, adminName, adminEmail }) {
                     SELECT id, display_name, organization_id, status
                     FROM profiles
                     WHERE user_id = ?
-                    ORDER BY created_at ASC
+                    ORDER BY id ASC
                   `,
                 )
                 .all(dbUser.id)
@@ -206,13 +210,17 @@ export function createAuthMeRouter({ db, adminName, adminEmail }) {
           role: 'admin',
           full_name: user.full_name ?? adminName,
           email: user.email ?? adminEmail,
+          profiles: [],
+          active_profile_id: null,
         })
       }
 
       return res.json({
         role: 'user',
-        profile_id: user.profileId,
+        profile_id: user.profileId ?? null,
         full_name: user.profileName ?? 'Profile User',
+        profiles: [],
+        active_profile_id: user.profileId ?? null,
       })
     } catch (error) {
       console.error('[/api/auth/me] Unexpected error:', error)
