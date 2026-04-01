@@ -1,5 +1,5 @@
 import express from 'express'
-import crypto from 'crypto'
+// crypto import removed - was unused
 import ensureUserPreferencesTable from '../utils/ensureUserPreferencesTable.js'
 
 const router = express.Router()
@@ -92,7 +92,7 @@ router.get('/', async (req, res) => {
     
     if (!preferences) {
       // Create default preferences for user (rollout: Anya copilot ON, screenshot OFF)
-      const id = `pref-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
+      const id = crypto.randomUUID()
       // Initialize custom preferences with feature flags and incognito toggle
       const defaultCustom = {
         feature_flags: { anyaCopilotEnabled: true, anyaScreenshotEnabled: false },
@@ -121,8 +121,14 @@ router.get('/', async (req, res) => {
         // Ensure feature flags and incognitoEnabled exist in custom preferences
         const updatedCustom = {
           ...(custom || {}),
-          feature_flags: { anyaCopilotEnabled: true, anyaScreenshotEnabled: false },
-          incognitoEnabled: false,
+          feature_flags: {
+            anyaCopilotEnabled: true,
+            anyaScreenshotEnabled: false,
+            ...((custom || {}).feature_flags && typeof (custom || {}).feature_flags === 'object'
+              ? (custom || {}).feature_flags
+              : {}),
+          },
+          incognitoEnabled: (custom || {}).incognitoEnabled ?? false,
         }
         const updateSql =
           dialect === 'postgres'
@@ -167,7 +173,7 @@ router.put('/', async (req, res) => {
     // Ensure row exists before update.
     let existing = await req.db.prepare('SELECT id FROM user_preferences WHERE user_id = ?').get(userId)
     if (!existing?.id) {
-      const id = `pref-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
+      const id = crypto.randomUUID()
       const defaultCustom = {
         feature_flags: { anyaCopilotEnabled: true, anyaScreenshotEnabled: false },
         incognitoEnabled: false,
@@ -213,7 +219,7 @@ router.put('/', async (req, res) => {
       if (allowedFields.includes(key) && value !== undefined) {
         if (typeof value === 'boolean') {
           updates.push(`${key} = ?`)
-          values.push(Boolean(value))
+          values.push(value ? 1 : 0)
         } else {
           updates.push(`${key} = ?`)
           values.push(value)
@@ -227,11 +233,8 @@ router.put('/', async (req, res) => {
     
     values.push(userId)
     
-    await req.db.prepare(`
-      UPDATE user_preferences 
-      SET ${updates.join(', ')}, updated_at = CURRENT_TIMESTAMP
-      WHERE user_id = ?
-    `).run(...values)
+    const updateSql = `UPDATE user_preferences SET ${updates.join(', ')}, updated_at = CURRENT_TIMESTAMP WHERE user_id = ?`
+    await req.db.prepare(updateSql).run(values)
     
     const updated = await req.db
       .prepare('SELECT * FROM user_preferences WHERE user_id = ?')
@@ -257,7 +260,7 @@ router.post('/reset', async (req, res) => {
 
     await req.db.prepare('DELETE FROM user_preferences WHERE user_id = ?').run(userId)
     
-    const id = `pref-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
+    const id = crypto.randomUUID()
     const insertSql =
       dialect === 'postgres'
         ? `
