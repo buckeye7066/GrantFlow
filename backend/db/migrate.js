@@ -106,10 +106,17 @@ async function applyMigration(filename) {
 
   console.log(`Applying: ${filename}`);
 
-  await db.withTransaction(async (tx) => {
-    await tx.exec(sql);
-    await tx.prepare('INSERT INTO _migrations (name) VALUES (?)').run(filename);
-  });
+  if (db.dialect === 'postgres') {
+    await db.withTransaction(async (tx) => {
+      await tx.exec(sql);
+      await tx.prepare('INSERT INTO _migrations (name) VALUES (?)').run(filename);
+    });
+  } else {
+    db.withTransaction((tx) => {
+      tx.exec(sql);
+      tx.prepare('INSERT INTO _migrations (name) VALUES (?)').run(filename);
+    });
+  }
 }
 
 function isIdempotentAlreadyAppliedError(err) {
