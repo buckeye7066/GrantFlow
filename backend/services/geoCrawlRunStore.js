@@ -6,6 +6,9 @@ function nowExpr(db) {
 
 let ensured = false
 let ensurePromise = null
+// NOTE: ensured is intentionally module-scoped so schema creation runs once per
+// process lifetime. If schema migrations are needed, restart the process or add
+// versioned migration logic. Do NOT add in-request ALTER TABLE calls here.
 
 async function ensureGeoCrawlSchema(db) {
   if (!db || typeof db.prepare !== 'function') return
@@ -272,7 +275,7 @@ export async function completeGeoCrawlRun(db, runId, { status = 'complete', erro
   if (!runId) return
   await ensureGeoCrawlSchema(db)
   const normalized =
-    status === 'failed' || status === 'paused' || status === 'running' || status === 'queued'
+    status === 'failed' || status === 'paused'
       ? status
       : 'complete'
 
@@ -343,24 +346,14 @@ export async function listGeoCrawlEvents(db, runId, { afterId = 0, limit = 200 }
   const lim = Math.max(1, Math.min(500, Number(limit || 200)))
   const after = Math.max(0, Number(afterId || 0))
 
-  const sql =
-    db?.dialect === 'postgres'
-      ? `
-          SELECT *
-          FROM geo_crawl_events
-          WHERE run_id = ?
-            AND id > ?
-          ORDER BY id ASC
-          LIMIT ?
-        `
-      : `
-          SELECT *
-          FROM geo_crawl_events
-          WHERE run_id = ?
-            AND id > ?
-          ORDER BY id ASC
-          LIMIT ?
-        `
+  const sql = `
+    SELECT *
+    FROM geo_crawl_events
+    WHERE run_id = ?
+      AND id > ?
+    ORDER BY id ASC
+    LIMIT ?
+  `
   return (await db.prepare(sql).all(runId, after, lim)) ?? []
 }
 
