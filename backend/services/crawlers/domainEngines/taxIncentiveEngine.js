@@ -21,23 +21,37 @@ export async function runTaxIncentiveEngine(profile, options = {}) {
     // Filter tax incentives based on profile eligibility
     let relevantResources = DIRECTORY_RESOURCES;
     
+    // Build an inclusive set: start with base resources, then UNION in profile-relevant resources
+    const profileMatched = new Set()
+
     if (profile.income && profile.income < 30000) {
-      relevantResources = relevantResources.filter(r => 
-        r.keywords.includes('EITC') || r.title.includes('Low Income')
-      );
+      DIRECTORY_RESOURCES.forEach(r => {
+        if (r.keywords.includes('EITC') || r.title.includes('Low Income') || r.categories.includes('tax')) {
+          profileMatched.add(r)
+        }
+      })
     }
-    
+
     if (profile.hasChildren) {
-      relevantResources = relevantResources.filter(r => 
-        r.keywords.includes('child') || r.categories.includes('family')
-      );
+      DIRECTORY_RESOURCES.forEach(r => {
+        if (r.keywords.some(k => k === 'child') || r.categories.includes('family')) {
+          profileMatched.add(r)
+        }
+      })
     }
-    
+
     if (profile.businessType === 'small_business') {
-      relevantResources = relevantResources.filter(r => 
-        r.keywords.includes('small business') || r.categories.includes('business')
-      );
+      DIRECTORY_RESOURCES.forEach(r => {
+        if (r.keywords.includes('small business') || r.categories.includes('business')) {
+          profileMatched.add(r)
+        }
+      })
     }
+
+    // If no profile signals matched, pass full directory to preserve recall
+    const relevantResources = profileMatched.size > 0
+      ? Array.from(profileMatched)
+      : DIRECTORY_RESOURCES
     
     return normalizeAndFilter(relevantResources, ENGINE_ID, { strict_no_loans: false, strict_no_matching: false })
   } catch (error) {
