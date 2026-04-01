@@ -141,6 +141,10 @@ export function createAuthIdentityMiddleware({ adminToken, adminName, adminEmail
                   roles: tokenRoles,
                 }
                 handled = true
+              } else {
+                // JWT verified but has no sub â treat as guest to avoid identity confusion
+                user = { role: 'guest', profileId: null }
+                handled = true
               }
             }
 
@@ -163,13 +167,15 @@ export function createAuthIdentityMiddleware({ adminToken, adminName, adminEmail
                 });
               } catch (error) {
                 console.warn('Failed to validate session:', error?.message || error)
-                // Continue with token-only authentication
                 if (error?.code === 'SQLITE_CORRUPT' || error?.code === 'ECONNRESET') {
-                  // Critical DB errors should fail auth completely
-                  user = { role: 'guest', profileId: null }
-                  req.user = user
-                  return next()
+                  // Critical DB errors: fail auth completely, ensure next() is called only once
+                  req.user = { role: 'guest', profileId: null }
+                  handled = true
+                  // Break out of the outer JWT try by re-throwing so the single next() at
+                  // the bottom of the middleware handles response dispatch.
+                  throw error
                 }
+                // Non-critical: continue with token-only authentication (handled already set)
               }
               if (
                 sessionRow &&
@@ -221,29 +227,24 @@ export function createAuthIdentityMiddleware({ adminToken, adminName, adminEmail
             .toLowerCase() === 'true'
 
         if (!handled && allowLegacyProfileToken) {
-          try {
+          // Guard: only attempt lookup if token looks like a UUID (not a JWT)
+          const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+          if (UUID_RE.test(token)) {
             try {
-              const profile = await new Promise((resolve, reject) => {
-                try {
-                  const stmt = db.prepare('SELECT id, display_name FROM profiles WHERE id = ?');
-                  resolve(stmt.get(token));
-                } catch (err) {
-                  reject(err);
-                }
-              });
+              const stmt = db.prepare('SELECT id, display_name FROM profiles WHERE id = ?')
+              const profile = stmt.get(token)
               if (profile) {
                 user = {
                   role: 'user',
+                  userId: profile.id,   // required for audit trails and Anya grounding
                   profileId: profile.id,
                   profileName: profile.display_name,
                 }
                 handled = true
               }
             } catch (error) {
-              console.warn('Failed to lookup profile by token:', error?.message || error)
+              console.warn('Legacy profile token lookup failed:', error?.message || error)
             }
-          } catch (error) {
-            console.warn('Legacy profile token path failed:', error?.message || error)
           }
         }
       }
