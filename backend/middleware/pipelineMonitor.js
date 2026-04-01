@@ -35,13 +35,22 @@ function recordEvent(bucket, event) {
   if (event.error) bucket.errors++
   bucket.recent.push(event)
   if (bucket.recent.length > WINDOW_SIZE) bucket.recent.shift()
+  if (event.zeroResult) bucket.lastZeroResultAt = event.ts
+  if (event.error) bucket.lastErrorAt = event.ts
 }
 
 function isZeroResult(body) {
   if (!body || typeof body !== 'object') return false
+  // Explicit numeric-zero counters
   if (body.returned === 0) return true
-  if ((body.total === 0) || (body.opportunities?.length === 0)) return true
-  if (Array.isArray(body.opportunities) && body.opportunities.length === 0) return true
+  if (body.included === 0) return true
+  if (body.count === 0) return true
+  if (body.total === 0) return true
+  // Array payload shapes used across GrantFlow endpoints
+  const arrayFields = ['opportunities', 'results', 'grants', 'matches', 'items']
+  for (const field of arrayFields) {
+    if (Array.isArray(body[field]) && body[field].length === 0) return true
+  }
   return false
 }
 
@@ -71,7 +80,12 @@ export function pipelineMonitor() {
       })
 
       if (zeroResult) {
-        console.warn(`[pipeline-monitor] ZERO RESULTS ${req.method} ${req.path} (${elapsed}ms)`)
+        const totalFound = body?.total_found ?? body?.total ?? body?.candidates_evaluated ?? 'unknown'
+        const included = body?.included ?? body?.returned ?? body?.count ?? 0
+        console.warn(
+          `[pipeline-monitor] ZERO RESULTS ${req.method} ${req.path} (${elapsed}ms) ` +
+          `total_found=${totalFound} included=${included} status=${res.statusCode}`
+        )
       }
       if (slow) {
         console.warn(`[pipeline-monitor] SLOW ${req.method} ${req.path} (${elapsed}ms)`)
@@ -92,9 +106,8 @@ export function getPipelineHealth() {
     const errorRate = b.total > 0 ? (b.errors / b.total * 100).toFixed(1) : '0.0'
 
     let status = 'healthy'
-    if (parseFloat(zeroRate) > 50) status = 'critical'
-    else if (parseFloat(zeroRate) > 20) status = 'degraded'
-    else if (parseFloat(errorRate) > 10) status = 'degraded'
+    if (parseFloat(zeroRate) > 50 || parseFloat(errorRate) > 50) status = 'critical'
+    else if (parseFloat(zeroRate) > 20 || parseFloat(errorRate) > 10) status = 'degraded'
 
     health[name] = {
       status,
