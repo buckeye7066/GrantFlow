@@ -131,9 +131,8 @@ export async function runDomainCorpusCrawl(db, options = {}) {
     } catch (err) {
       stats.crawlers_failed++
       console.error(`[domainCorpusCrawler] CRITICAL: ${config.id} failed:`, err?.message || String(err))
-      if (err.name === 'TimeoutError' || err.message?.includes('timed out')) {
-        throw new Error(`Domain crawler ${config.id} timeout - funding opportunity collection compromised`)
-      }
+      // Do NOT re-throw timeout errors mid-loop; log and continue so remaining crawlers run.
+      // The caller can inspect stats.crawlers_failed to decide whether to abort.
     }
   }
 
@@ -178,6 +177,8 @@ export async function runDomainCorpusCrawl(db, options = {}) {
     seen.add(key)
     return true
   })
+  stats.number_deduped = allOpportunities.length - deduped.length
+  stats.total_candidates = allOpportunities.length
 
   let inserted
   try {
