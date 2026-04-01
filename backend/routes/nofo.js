@@ -124,6 +124,7 @@ router.post('/parseNOFO', async (req, res) => {
 
     const { text, contentType } = await fetchPdfTextFromUrl(fileUrl)
     if (!text) {
+      console.warn('[parseNOFO] Empty text extracted from URL:', fileUrl, '| contentType:', contentType)
       return res.status(422).json({
         success: false,
         message: contentType.includes('pdf')
@@ -193,10 +194,11 @@ router.post('/parseNOFO', async (req, res) => {
 
     // No provider available or both failed: return a minimal best-effort object so the UI can proceed.
     return res.json({
-      success: true,
+      success: false,
       output: heuristicFallback(clipped),
       ai_provider: 'fallback',
-      warning: 'AI provider unavailable; returned best-effort extraction.',
+      partial: true,
+      warning: 'AI provider unavailable; returned best-effort extraction. Do not store this record without manual review.',
     })
   } catch (error) {
     console.error('[parseNOFO] Failed:', error)
