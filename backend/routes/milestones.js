@@ -12,9 +12,13 @@ const router = express.Router();
 
 // Apply authentication middleware to all routes
 router.use(async (req, res, next) => {
-  const user = requireAuthenticatedUser(req, res);
-  if (!user) return;
-  next();
+  try {
+    const user = requireAuthenticatedUser(req, res);
+    if (!user) return;
+    next();
+  } catch (error) {
+    res.status(500).json({ error: 'Authentication check failed' });
+  }
 });
 
 async function ensureMilestoneAccess(req, res, milestoneId) {
@@ -43,15 +47,16 @@ async function ensureMilestoneAccess(req, res, milestoneId) {
   if (isAdminUser(user)) return row
 
   const orgId = row.grant_organization_id ?? row.organization_id ?? null
-  if (orgId && (await ensureOrganizationAccess(req, res, String(orgId)))) {
-    return row
-  }
-
-  // ensureOrganizationAccess already sent the 403 if orgId existed.
   if (!orgId) {
     res.status(403).json({ error: 'Not authorized' })
+    return null
   }
-  return null
+  const access = await ensureOrganizationAccess(req, res, String(orgId))
+  if (!access) {
+    // ensureOrganizationAccess already sent 403
+    return null
+  }
+  return row
 }
 
 router.get('/', async (req, res) => {
@@ -73,7 +78,10 @@ router.get('/', async (req, res) => {
     } else if (!isAdminUser(user)) {
       // No grant specified: limit to accessible organizations
       const orgIds = await getAccessibleOrganizationIds(req.db, user)
-      if (!orgIds || orgIds.size === 0) return res.json([])
+      if (!orgIds || orgIds.size === 0) {
+        console.warn('[milestones] GET / - user has no accessible organizations, returning empty list', { userId: user.id });
+        return res.json([]);
+      }
       const placeholders = Array.from(orgIds)
         .map(() => '?')
         .join(',')
@@ -139,6 +147,8 @@ router.put('/:id', async (req, res) => {
     const existing = await ensureMilestoneAccess(req, res, req.params.id)
     if (!existing) return
     const { title, description, due_date, completed, type } = req.body
+    if (!title?.trim()) return res.status(400).json({ error: 'title is required' })
+    if (!due_date) return res.status(400).json({ error: 'due_date is required' })
     const completed_date = completed ? new Date().toISOString().split('T')[0] : null
     await req.db
       .prepare(
