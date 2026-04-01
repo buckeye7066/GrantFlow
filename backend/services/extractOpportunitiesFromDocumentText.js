@@ -42,21 +42,28 @@ function extractUrlsWithContext(text) {
 /**
  * Upsert opportunities from document text into funding_opportunities so they appear globally in Discover.
  */
-export async function extractAndUpsertOpportunitiesFromText(db, text) {
+export async function extractAndUpsertOpportunitiesFromText(db, text, profile = null) {
     const entries = extractUrlsWithContext(text)
     const results = { inserted: 0, skipped: 0, errors: [] }
     for (const { url, title } of entries) {
           try {
                   const opportunity = {
-                            title: title.slice(0, 500),
-                            source_url: url,
-                            application_url: url,
-                            description: `Imported from URL. Source: ${url}`,
-                            source: 'url_import',
-                            record_origin: 'url_import',
-                            opportunity_type: 'grant',
-                            is_national: true,
-                  }
+  title: title.slice(0, 500),
+  source_url: url,
+  application_url: url,
+  description: `Imported from URL. Source: ${url}`,
+  source: 'url_import',
+  record_origin: 'url_import',
+  opportunity_type: 'grant',
+  is_national: true,
+  eligibility_status: 'pending',
+  match_decision: 'PENDING',
+  match_explanation: 'Imported from URL; pending full evaluation by matchEngine.',
+  matched_needs: [],
+  ineligibility_reasons: [],
+  matcher_version: null,
+  evaluated_at: null,
+}
                   const out = await upsertFundingOpportunity(db, opportunity)
                   if (out.inserted) results.inserted += 1
                   else results.skipped += 1
