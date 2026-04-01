@@ -18,8 +18,15 @@ const __dirname = path.dirname(__filename)
 let _cachedPkgVersion = null
 try {
   const pkgPath = path.resolve(__dirname, '../../package.json')
-  const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'))
-  _cachedPkgVersion = pkg.version || null
+  const rawPkg = fs.readFileSync(pkgPath, 'utf8')
+  let parsedPkg
+  try {
+    parsedPkg = JSON.parse(rawPkg)
+  } catch (parseError) {
+    console.warn('Failed to parse package.json:', parseError.message)
+    parsedPkg = {}
+  }
+  _cachedPkgVersion = parsedPkg.version || null
 } catch (error) {
   console.warn('Failed to load package.json version:', error.message)
   _cachedPkgVersion = 'unknown'
@@ -95,6 +102,8 @@ async function checkRequiredSchema(db) {
         if (!row) return { ok: false, reason: 'missing_schema', missing: item }
       } else {
         if (!/^[a-zA-Z0-9_]+$/.test(item.table)) return { ok: false, reason: 'invalid_table_identifier', table: item.table }
+        if (!/^[a-zA-Z0-9_]+$/.test(item.table)) return { ok: false, reason: 'invalid_table_identifier', table: item.table }
+        if (!/^[a-zA-Z0-9_]+$/.test(item.column)) return { ok: false, reason: 'invalid_column_identifier', column: item.column }
         const stmt = db.prepare('SELECT * FROM pragma_table_info(?)')
         const rows = await stmt.all(item.table)
         const has = (rows || []).some((r) => String(r?.name || '') === item.column)
