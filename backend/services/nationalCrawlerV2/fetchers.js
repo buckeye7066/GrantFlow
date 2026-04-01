@@ -23,8 +23,16 @@ export async function fetchToBuffer(fetcher, url) {
   const status = res?.status ?? null
   const contentType = res?.headers?.get?.('content-type') || null
   const ok = Boolean(res?.ok)
-  let buffer; try { buffer = Buffer.from(await res.arrayBuffer()); } catch (error) { return { ok: false, status, contentType, buffer: null, error: 'Failed to read response body' }; }
-  return { ok, status, contentType, buffer }
+  if (!res || typeof res.arrayBuffer !== 'function') {
+    return { ok: false, status, contentType, buffer: null, error: 'Response object missing arrayBuffer method' };
+  }
+  let buffer;
+  try {
+    buffer = Buffer.from(await res.arrayBuffer());
+  } catch (error) {
+    return { ok: false, status, contentType, buffer: null, error: `Failed to read response body: ${error.message}` };
+  }
+  return { ok, status, contentType, buffer, contentHash: sha256(buffer.toString('utf8')) }
 }
 
 export async function fetchFileUrl(url) {
