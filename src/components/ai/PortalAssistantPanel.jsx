@@ -77,6 +77,18 @@ function AnswerCard({ answer, index }) {
 
 export default function PortalAssistantPanel({ open, onClose, grant }) {
   const [portalUrl, setPortalUrl] = useState(grant?.application_url || grant?.url || '');
+
+  // Reset derived state whenever the grant changes
+  const prevGrantId = React.useRef(grant?.id);
+  React.useEffect(() => {
+    if (grant?.id !== prevGrantId.current) {
+      prevGrantId.current = grant?.id;
+      setPortalUrl(grant?.application_url || grant?.url || '');
+      setCustomQuestions('');
+      setResult(null);
+      setError(null);
+    }
+  }, [grant]);
   const [customQuestions, setCustomQuestions] = useState('');
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState(null);
@@ -84,7 +96,10 @@ export default function PortalAssistantPanel({ open, onClose, grant }) {
   const { toast } = useToast();
 
   const handleAssist = useCallback(async () => {
-    if (!grant?.id) return;
+    if (!grant?.id) {
+      setError('No grant selected. Please open a specific grant before using the assistant.');
+      return;
+    }
     setLoading(true);
     setError(null);
     setResult(null);
@@ -94,18 +109,39 @@ export default function PortalAssistantPanel({ open, onClose, grant }) {
         ? customQuestions.split('\n').filter(q => q.trim())
         : undefined;
 
+      // Validate portalUrl before sending
+      let validatedPortalUrl;
+      if (portalUrl) {
+        try {
+          const parsed = new URL(portalUrl.trim());
+          if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
+            throw new Error('URL must start with http:// or https://');
+          }
+          validatedPortalUrl = parsed.href;
+        } catch (urlErr) {
+          setError(`Invalid portal URL: ${urlErr.message}`);
+          setLoading(false);
+          return;
+        }
+      }
+
       const resp = await apiFetch('/api/ai/portal-assist', {
         method: 'POST',
         body: JSON.stringify({
           grant_id: grant.id,
-          portal_url: portalUrl || undefined,
+          portal_url: validatedPortalUrl,
           questions,
         }),
       });
 
       if (!resp.ok) {
-        const err = await resp.json().catch(() => ({}));
-        throw new Error(err.error || `Request failed (${resp.status})`);
+        let errBody = {};
+        try {
+          errBody = await resp.json();
+        } catch (_parseErr) {
+          // response body was not JSON; fall through to status-based message
+        }
+        throw new Error(errBody.error || errBody.message || `Request failed (${resp.status})`);
       }
 
       const data = await resp.json();
