@@ -252,7 +252,7 @@ export async function runRegionalPurge(db, options = {}) {
   const stateFilter = `state IN (${statePlaceholders})`
   const candidateFilter = onlySuppressedCandidates
     ? `(suppression_state = 'watch' OR suppression_state = 'suppressed')`
-    : `(suppression_state IS NULL OR suppression_state = 'active' OR suppression_state = 'watch')`
+    : `(suppression_state IS NULL OR suppression_state = 'active' OR suppression_state = 'watch' OR suppression_state = 'suppressed')`
 
   let opportunities
   try {
@@ -274,6 +274,13 @@ export async function runRegionalPurge(db, options = {}) {
 
   // Ensure the suppression event table exists
   ensureSuppressionEventsTable(db)
+
+  if (opportunities.length === 0) {
+    console.warn(
+      `[regionalPurge] No candidate opportunities returned for states: ${targetStates.join(', ')}. ` +
+      `candidateFilter=${candidateFilter.replace(/\s+/g, ' ')} onlySuppressedCandidates=${onlySuppressedCandidates}`
+    )
+  }
 
   for (const opp of opportunities) {
     const state = opp.state || 'UNKNOWN'
