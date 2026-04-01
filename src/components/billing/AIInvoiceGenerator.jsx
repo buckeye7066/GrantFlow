@@ -29,12 +29,21 @@ export default function AIInvoiceGenerator({ organizationId, projectId, onApprov
     setError(null);
     setProposedItems([]);
 
+    const grants = activities?.grants ?? [];
+    const docs = activities?.docs ?? [];
+
+    if (grants.length === 0 && docs.length === 0) {
+      setError('No recent activity found. Please ensure grants or documents exist for this project before generating invoice items.');
+      setIsLoading(false);
+      return;
+    }
+
     const activitySummary = `
       Recent Grant Updates:
-      ${activities.grants.map(g => `- Grant "${g.title}" status changed to ${g.status} on ${new Date(g.updated_date).toLocaleDateString()}`).join('\n')}
+      ${grants.map(g => `- Grant "${g.title ?? 'Untitled'}" status changed to ${g.status ?? 'unknown'} on ${g.updated_date ? new Date(g.updated_date).toLocaleDateString() : 'unknown date'}`).join('\n')}
 
       Recent Document Uploads:
-      ${activities.docs.map(d => `- Uploaded "${d.title}" (${d.document_type}) on ${new Date(d.created_date).toLocaleDateString()}`).join('\n')}
+      ${docs.map(d => `- Uploaded "${d.title ?? 'Untitled'}" (${d.document_type ?? 'unknown type'}) on ${d.created_date ? new Date(d.created_date).toLocaleDateString() : 'unknown date'}`).join('\n')}
     `;
     
     const prompt = `You are an expert grant writer's billing assistant. Based on the following recent activity for a client, generate a list of billable line items for an invoice.
@@ -66,7 +75,12 @@ export default function AIInvoiceGenerator({ organizationId, projectId, onApprov
           }
         }
       });
-      setProposedItems(result.line_items.map(item => ({...item, isEditing: false })));
+      const lineItems = Array.isArray(result?.line_items) ? result.line_items : [];
+      if (lineItems.length === 0) {
+        setError('AI did not return any line items. Try again or add items manually.');
+      } else {
+        setProposedItems(lineItems.map(item => ({ ...item, rate: item.rate ?? 0, isEditing: false })));
+      }
     } catch (err) {
       setError("Failed to generate suggestions. Please try again or add items manually.");
       console.error(err);
@@ -88,7 +102,12 @@ export default function AIInvoiceGenerator({ organizationId, projectId, onApprov
   };
 
   const handleApproveAll = () => {
-    onApprove(proposedItems);
+    if (typeof onApprove !== 'function') {
+      console.error('[AIInvoiceGenerator] onApprove prop is not a function; cannot submit invoice items.');
+      return;
+    }
+    const itemsToSubmit = proposedItems.map(({ isEditing, ...rest }) => rest);
+    onApprove(itemsToSubmit);
   };
   
   const handleRemoveItem = (index) => {
