@@ -373,7 +373,11 @@ export async function adminCodeAnalyze({ filePath }, context) {
     throw new Error('filePath is required')
   }
 
-  const resolvedPath = path.resolve(REPO_ROOT, filePath); if (!resolvedPath.startsWith(REPO_ROOT)) { throw new Error('Path outside repository root not allowed'); }; if (!resolvedPath.startsWith(REPO_ROOT)) { throw new Error('Path outside repository root not allowed'); }
+  const resolvedPath = path.resolve(REPO_ROOT, filePath);
+const repoRootWithSep = REPO_ROOT.endsWith(path.sep) ? REPO_ROOT : REPO_ROOT + path.sep;
+if (resolvedPath !== REPO_ROOT && !resolvedPath.startsWith(repoRootWithSep)) {
+  throw new Error('Path outside repository root not allowed');
+}
   const relativePath = path.relative(REPO_ROOT, resolvedPath)
 
   try {
@@ -460,7 +464,11 @@ export async function adminCodeEdit({ filePath, changes, save = false }, context
     }
   }
 
-  const resolvedPath = path.resolve(REPO_ROOT, filePath); if (!resolvedPath.startsWith(REPO_ROOT)) { throw new Error('Path outside repository root not allowed'); }; if (!resolvedPath.startsWith(REPO_ROOT)) { throw new Error('Path outside repository root not allowed'); }
+  const resolvedPath = path.resolve(REPO_ROOT, filePath);
+const repoRootWithSep = REPO_ROOT.endsWith(path.sep) ? REPO_ROOT : REPO_ROOT + path.sep;
+if (resolvedPath !== REPO_ROOT && !resolvedPath.startsWith(repoRootWithSep)) {
+  throw new Error('Path outside repository root not allowed');
+}
   const relativePath = path.relative(REPO_ROOT, resolvedPath)
 
   // Ensure file is within allowed directories for safety
@@ -921,12 +929,14 @@ export async function adminDbQuery({ sql, limit = 100 }, context) {
     
     // Append LIMIT clause to the query if not already present.
     // Build finalSql from trimmedSql (already lowercased/sanitized) to prevent case-bypass attacks.
-    let finalSql = trimmedSql
-    if (!finalSql.includes('limit')) {
-      finalSql += ` limit ${safeLimit}`
-    }
-    
-    const results = db.prepare(finalSql).all()
+    // Security checks use trimmedSql (lowercased). Execution uses the original, case-preserved sql.
+const originalTrimmed = sql.trim();
+let finalSql = originalTrimmed;
+if (!trimmedSql.includes('limit')) {
+  finalSql += ` LIMIT ${safeLimit}`;
+}
+
+const results = db.prepare(finalSql).all()
 
     return {
       query: sql,
@@ -970,11 +980,11 @@ export async function adminDbStats(_params, context) {
       try {
         // Validate table name - only allow alphanumeric, underscores, and dashes
         // This protects against SQL injection via table name
-        if (!/^[a-zA-Z0-9_-]+$/.test(table.name)) {
+        if (!/^[a-zA-Z0-9_]+$/.test(table.name)) {
           tableCounts[table.name] = 'Error: Invalid table name'
           return
         }
-        if (!/^[a-zA-Z0-9_]+$/.test(table.name)) { tableCounts[table.name] = 'Invalid table name'; return; } const count = db.prepare(`SELECT COUNT(*) as count FROM ${table.name}`).get()
+        const count = db.prepare(`SELECT COUNT(*) as count FROM ${table.name}`).get()
         tableCounts[table.name] = count.count
       } catch (error) {
         tableCounts[table.name] = `Error: ${error.message}`
