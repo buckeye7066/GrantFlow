@@ -65,7 +65,7 @@ router.get('/profile/:profileId/grants', async (req, res) => {
       // Pre-normalize profile once for the decision engine
       const rawProfileForGrants = profileContext?.profile ?? profileContext
       const profileSectionsForGrants = profileContext?.sections ?? null
-      const profileNormForDecision = normalizeProfile(rawProfileForGrants, profileSectionsForGrants, baseContext.signals)
+      const profileNormForGrants = normalizeProfile(rawProfileForGrants, profileSectionsForGrants, baseContext.signals)
 
       if (!profileRow.organization_id) {
               return res.json([])
@@ -109,22 +109,31 @@ router.get('/profile/:profileId/grants', async (req, res) => {
                 }
 
                                      // Use the canonical decision engine for scoring; fall back gracefully
-                                     const decision = computeMatchDecision(profileContext, candidate)
+                                     const decision = computeMatchDecision(profileNormForDecision, candidate)
                                      // Don't surface hard eligibility REJECTs in the grants view
                                      // (score-based weak-match REJECT is not filtered here)
                                      if (isHardEligibilityReject(decision)) return null
-              return {
-                        grant_id: row.grant_id,
-                        title: row.grant_title,
-                        funder: row.grant_funder,
-                        status: row.grant_status,
-                        deadline: row.grant_deadline,
-                        funding_opportunity_id: row.funding_opportunity_id ?? null,
-                        match_score: decision.score,
-                        match_reasons: decision.matchedNeeds ?? [],
-                        match_decision: decision.decision,
-                        match_explanation: decision.explanation,
-              }
+              if (isHardEligibilityReject(decision)) {
+  console.info(`[matching/grants] Hard-reject grant ${row.grant_id}: ${decision.ineligibilityReasons?.join('; ')}`)
+  return null
+}
+return {
+  grant_id: row.grant_id,
+  title: row.grant_title,
+  funder: row.grant_funder,
+  status: row.grant_status,
+  deadline: row.grant_deadline,
+  funding_opportunity_id: row.funding_opportunity_id ?? null,
+  match_score: decision.score,
+  match_reasons: decision.matchedNeeds ?? [],
+  match_decision: decision.decision,
+  match_explanation: decision.explanation,
+  match_confidence: decision.confidence ?? null,
+  eligibility_status: decision.eligibilityStatus ?? null,
+  ineligibility_reasons: decision.ineligibilityReasons ?? [],
+  matcher_version: decision.matcherVersion ?? null,
+  evaluated_at: new Date().toISOString(),
+}
       })
       .filter((m) => m !== null)
 
@@ -347,11 +356,14 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
 
       const allScored = candidates
                      .map((opp) => {
-                                  if (isJunkOpportunity(opp, filterHints)) return null
+                                  if (isJunkOpportunity(opp, filterHints)) {
+  console.debug(`[matching/opportunities] Junk-filtered opp ${opp.id} ("${opp.title?.slice(0, 60)}")`)
+  return null
+}
 
                                   // Run canonical engine: filter hard eligibility failures (REJECT) before surfacing
                                   // Score-based weak-match REJECT is not filtered here — that is handled by min_score below.
-                                  const decision = computeMatchDecision(profileContext, opp)
+                                  const decision = computeMatchDecision(profileNormForDecision, opp)
                                   if (isHardEligibilityReject(decision)) return null
 
                                return {
@@ -398,7 +410,8 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
       res.json({
               profile_id: profileId,
               min_score: Number.isFinite(effectiveMinScore) ? effectiveMinScore : null,
-              total_scored: candidates.length,
+              total_candidates: candidates.length,
+total_scored: allScored.length,
               returned: capped.length,
               opportunities: capped,
               threshold_relaxed: effectiveMinScore !== minScore ? true : undefined,
