@@ -111,19 +111,21 @@ function getJobStatusMessage(job) {
     case "scholarship":
       return "Analyzing scholarship databases..."
 
-    case "item_search":
+    case "item_search": {
       const item = params.item || meta.item
       if (item) {
         return `Searching for "${item}" funding...`
       }
       return "Querying item-specific grants..."
+    }
 
-    case "profile_enrichment":
+    case "profile_enrichment": {
       const sections = params.sections || []
       if (sections.length > 0) {
         return `Enriching ${sections.length} profile section${sections.length > 1 ? "s" : ""}...`
       }
       return "Analyzing profile data..."
+    }
 
     case "pipeline_automation":
       return "Processing grant pipeline..."
@@ -182,8 +184,10 @@ export default function CrawlerProgressMeter({ jobId, onClose }) {
   const jobQuery = useQuery({
     queryKey: ["crawler-job-progress", jobId],
     queryFn: () => getCrawlerJob(jobId),
-    refetchInterval: (data) => {
-      // Stop polling if job is no longer running
+    refetchInterval: (query) => {
+      // TanStack Query v5 passes the Query object; v4 passes raw data.
+      // Normalise to raw data for both versions.
+      const data = query?.state?.data ?? query
       if (data?.status === "running") {
         return 2000 // Poll every 2 seconds when running
       }
@@ -334,7 +338,7 @@ export default function CrawlerProgressMeter({ jobId, onClose }) {
           <div className="grid grid-cols-2 gap-3 text-sm">
             <div>
               <span className="text-slate-500">Job ID:</span>
-              <p className="font-mono text-xs text-slate-700">{job.id.slice(0, 16)}...</p>
+              <p className="font-mono text-xs text-slate-700">{String(job.id ?? "").slice(0, 16)}...</p>
             </div>
             <div>
               <span className="text-slate-500">Profile:</span>
