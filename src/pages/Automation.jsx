@@ -1296,8 +1296,13 @@ function JobDetailsDialog({ job, onOpenChange, onRetry, retrying, onCancel, canc
                               {entry.match_reasons.slice(0, 4).map((reason, reasonIndex) => (
                                 <li key={reasonIndex}>{reason}</li>
                               ))}
+                              {entry.match_reasons.length > 4 ? (
+                                <li className="text-slate-400">+{entry.match_reasons.length - 4} more reason{entry.match_reasons.length - 4 === 1 ? "" : "s"}</li>
+                              ) : null}
                             </ul>
-                          ) : null}
+                          ) : (
+                            <p className="text-slate-400 text-[11px]">No match reasons recorded.</p>
+                          )}
                         </li>
                       ))}
                     </ul>
