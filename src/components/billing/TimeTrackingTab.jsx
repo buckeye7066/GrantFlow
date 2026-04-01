@@ -12,7 +12,7 @@ export default function TimeTrackingTab({ grantId, organizationId }) {
   const { data: timeLogs = [], isLoading: isLoadingLogs } = useQuery({
       queryKey: ['timeEntries', organizationId],
       queryFn: () => client.entities.TimeEntry.filter({ organization_id: organizationId }),
-      enabled: !!organizationId,
+      enabled: !!organizationId && !!grantId,
   });
 
   const { data: grant, isLoading: isLoadingGrant } = useQuery({
@@ -66,10 +66,10 @@ export default function TimeTrackingTab({ grantId, organizationId }) {
                 <div key={log.id} className="p-3 border rounded-md bg-slate-50">
                   <div className="flex justify-between items-center">
                     <p className="font-semibold">{log.note || 'General Activity'}</p>
-                    <span className="font-bold text-lg">{(log.rounded_minutes / 60).toFixed(2)}h</span>
+                    <span className="font-bold text-lg">{log.rounded_minutes != null ? (log.rounded_minutes / 60).toFixed(2) + 'h' : 'â'}</span>
                   </div>
                   <div className="text-sm text-slate-500 mt-1">
-                    <span>{format(new Date(log.start_at), 'MMM d, yyyy')}</span> | <span>{log.task_category}</span>
+                    <span>{isValidDate(log.start_at) ? format(new Date(log.start_at), 'MMM d, yyyy') : 'Unknown date'}</span> | <span>{log.task_category || 'Uncategorized'}</span>
                   </div>
                 </div>
               );
