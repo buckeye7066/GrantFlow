@@ -182,11 +182,16 @@ export async function triggerAutoDiscoveryCrawlers(db, profileId, options = {}) 
     })
 
         // 4. Government Funding crawler (federal and state grants)
+        // Pass profile signals so the crawler can scope queries by state, need, and applicant type
         jobs.push({
-                id: randomUUID(),
-                type: 'government_funding',
-                profile_id: profileId,
-                parameters: {}
+          id: randomUUID(),
+          type: 'government_funding',
+          profile_id: profileId,
+          parameters: {
+            state: profile.state ?? null,
+            applicant_type: profile.primary_type ?? null,
+            needs: signals?.needs ? Array.from(signals.needs) : []
+          }
         })
 
         // 5. Student Grants crawler (scholarships, tuition assistance)
@@ -209,20 +214,24 @@ export async function triggerAutoDiscoveryCrawlers(db, profileId, options = {}) 
         }
 
         // 6. Special Needs crawler (disability services, adaptive equipment)
-        jobs.push({
-                id: randomUUID(),
-                type: 'special_needs',
-                profile_id: profileId,
-                parameters: {}
-        })
+        // Only queue when the profile has health/disability indicators
+        if (isHealth) {
+          jobs.push({
+            id: randomUUID(),
+            type: 'special_needs',
+            profile_id: profileId,
+            parameters: {}
+          })
 
-        // 7. ECF / HCBS Benefits crawler (Medicaid waivers, community-based services)
-        jobs.push({
-                id: randomUUID(),
-                type: 'ecf_hcbs',
-                profile_id: profileId,
-                parameters: {}
-        })
+          // 7. ECF / HCBS Benefits crawler (Medicaid waivers, community-based services)
+          // Only relevant for profiles with Medicaid/health/disability signals
+          jobs.push({
+            id: randomUUID(),
+            type: 'ecf_hcbs',
+            profile_id: profileId,
+            parameters: {}
+          })
+        }
     
     // Insert all jobs into database
     const insertStmt = db.prepare(`
@@ -230,6 +239,10 @@ export async function triggerAutoDiscoveryCrawlers(db, profileId, options = {}) 
       VALUES (?, ?, 'queued', ?, ?, 'auto-discovery')
     `)
 
+    console.info(
+      `[auto-discovery] Queuing ${jobs.length} crawler job(s) for profile ${profileId}:`,
+      jobs.map((j) => j.type)
+    )
     for (const job of jobs) {
       insertStmt.run(job.id, job.type, job.profile_id, JSON.stringify(job.parameters))
     }
