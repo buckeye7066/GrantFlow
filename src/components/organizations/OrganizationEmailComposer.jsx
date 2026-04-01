@@ -43,10 +43,14 @@ export default function OrganizationEmailComposer({ open, onClose, organization,
 
     // Set first email as default recipient
     useEffect(() => {
-        if (emails.length > 0 && !recipient) {
+        if (!open) return;
+        // Reset recipient every time the dialog opens or the emails list changes
+        if (emails.length > 0) {
             setRecipient(emails[0].value);
+        } else {
+            setRecipient('');
         }
-    }, [emails]);
+    }, [open, emails]);
 
     const sendEmailMutation = useMutation({
         mutationFn: (emailData) => client.integrations.Core.SendEmail(emailData),
@@ -126,32 +130,109 @@ ${organization.staff_count ? `Staff Count: ${organization.staff_count}` : ''}
             `.trim();
         }).join('\n\n') : 'No grants currently in the pipeline.';
 
-        const prompt = `You are Dr. John White, a professional grant consultant. Write a warm, professional email to ${organization.name} providing a status update on their grant-seeking efforts.
+        // Build profileSummary and pipelineSummary INSIDE the try block so any
+// property-access errors are caught and isGenerating is always reset.
+const generateEmailBody = async () => {
+    setIsGenerating(true);
+    try {
+        const profileSummary = [
+            `**PROFILE INFORMATION ON FILE**`,
+            `Organization Name: ${organization.name ?? '(unknown)'}`,
+            organization.applicant_type ? `Type: ${organization.applicant_type.replace(/_/g, ' ')}` : '',
+            organization.ein ? `EIN: ${organization.ein}` : '',
+            organization.uei ? `UEI: ${organization.uei}` : '',
+            (organization.address || organization.city || organization.state)
+                ? `Address: ${formatAddress(organization.address) || ''} ${organization.city ?? ''}, ${organization.state ?? ''} ${organization.zip ?? ''}`.trim()
+                : '',
+            contactMethods.filter(c => c.type === 'email').length > 0
+                ? `Email: ${contactMethods.filter(c => c.type === 'email').map(c => c.value).join(', ')}`
+                : '',
+            contactMethods.filter(c => c.type === 'phone').length > 0
+                ? `Phone: ${contactMethods.filter(c => c.type === 'phone').map(c => c.value).join(', ')}`
+                : '',
+            organization.website ? `Website: ${organization.website}` : '',
+            organization.mission ? `\nMission: ${organization.mission}` : '',
+            organization.annual_budget != null
+                ? `Annual Budget: $${Number(organization.annual_budget).toLocaleString()}`
+                : '',
+            organization.staff_count ? `Staff Count: ${organization.staff_count}` : '',
+        ].filter(Boolean).join('\n').trim();
 
-**CONTEXT:**
+        const statusLabels = {
+            discovered: 'Recently Discovered',
+            interested: 'Under Assessment',
+            drafting: 'Application in Progress',
+            application_prep: 'Ready for Submission',
+            portal: 'Portal Entry in Progress',
+            submitted: 'Submitted - Awaiting Decision',
+            pending_review: 'Under Review',
+            follow_up: 'Follow-Up Required',
+            awarded: '\u2705 AWARDED',
+            declined: 'Declined',
+            closed: 'Closed',
+            report: 'Reporting Phase',
+        };
 
-${profileSummary}
+        const pipelineSummary = grants.length > 0
+            ? grants.map(grant => {
+                let deadlineText = '';
+                if (grant.deadline) {
+                    if (typeof grant.deadline === 'string' && grant.deadline.toLowerCase() === 'rolling') {
+                        deadlineText = 'Deadline: Rolling';
+                    } else {
+                        const deadlineDate = new Date(grant.deadline);
+                        if (!isNaN(deadlineDate.getTime())) {
+                            deadlineText = `Deadline: ${format(deadlineDate, 'MMM d, yyyy')}`;
+                        }
+                    }
+                }
+                return [
+                    `\u2022 ${grant.title}`,
+                    `  Funder: ${grant.funder}`,
+                    `  Status: ${statusLabels[grant.status] || grant.status}`,
+                    deadlineText ? `  ${deadlineText}` : '',
+                    grant.amount_max != null
+                        ? `  Award Amount: Up to $${Number(grant.amount_max).toLocaleString()}`
+                        : '',
+                ].filter(Boolean).join('\n');
+            }).join('\n\n')
+            : 'No grants currently in the pipeline.';
 
-**CURRENT GRANT PIPELINE:**
+        const prompt = `You are Dr. John White, a professional grant consultant. Write a warm, professional email to ${organization.name ?? 'the organization'} providing a status update on their grant-seeking efforts.\n\n**CONTEXT:**\n\n${profileSummary}\n\n**CURRENT GRANT PIPELINE:**\n\n${pipelineSummary}\n\n**EMAIL REQUIREMENTS:**\n- Start with a friendly greeting\n- Provide a brief summary of their current pipeline activity\n- List each grant opportunity with its current status\n- Reference the profile information you have on file\n- Ask them to review everything and reply with any updates, corrections, or additions\n- Emphasize that keeping information current helps find the best opportunities\n- Keep the tone encouraging and supportive\n- Sign as "Dr. John White, Grant Consultant"\n- Keep under 300 words\n\nWrite the complete email body in plain text (no HTML):`;
 
-${pipelineSummary}
-
-**EMAIL REQUIREMENTS:**
-- Start with a friendly greeting
-- Provide a brief summary of their current pipeline activity
-- List each grant opportunity with its current status
-- Reference the profile information you have on file
-- Ask them to review everything and reply with any updates, corrections, or additions
-- Emphasize that keeping information current helps find the best opportunities
-- Keep the tone encouraging and supportive
-- Sign as "Dr. John White, Grant Consultant"
-- Keep under 300 words
-
-Write the complete email body in plain text (no HTML):`;
+        const response = await client.integrations.Core.InvokeLLM({ prompt });
+        const bodyText = typeof response === 'string'
+            ? response
+            : (response?.result ?? response?.text ?? JSON.stringify(response));
+        if (!bodyText || bodyText.trim().length === 0) {
+            throw new Error('LLM returned an empty response');
+        }
+        setBody(bodyText);
+        toast({
+            title: 'Status Update Generated! \u2728',
+            description: 'Review and edit before sending',
+        });
+    } catch (error) {
+        console.error('Failed to generate email:', error);
+        toast({
+            variant: 'destructive',
+            title: 'Generation Failed',
+            description: 'Could not generate email. Please write one manually.',
+        });
+    } finally {
+        setIsGenerating(false);
+    }
+};
 
         try {
             const response = await client.integrations.Core.InvokeLLM({ prompt });
-            setBody(response);
+            const bodyText = typeof response === 'string'
+                ? response
+                : (response?.result ?? response?.text ?? JSON.stringify(response));
+            if (!bodyText || bodyText.trim().length === 0) {
+                throw new Error('LLM returned an empty response');
+            }
+            setBody(bodyText);
             toast({
                 title: "Status Update Generated! ✨",
                 description: "Review and edit before sending"
