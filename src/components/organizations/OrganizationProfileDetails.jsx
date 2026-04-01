@@ -9,10 +9,10 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Label } from '@/components/ui/label';
-import { Mail, Phone, Globe, MapPin, DollarSign, Users, Award, CheckCircle, Briefcase, Building, GraduationCap, Heart, Tags, Target, Edit, X, Save, Sparkles, Loader2 } from 'lucide-react';
+import { Mail, Phone, Globe, MapPin, CheckCircle, Briefcase, Building, Heart, Tags, Target, Edit, X, Save } from 'lucide-react';
 import EditableField from '../shared/EditableField';
 import EditableTagList from '../shared/EditableTagList';
-import AIFormField from '../shared/AIFormField';
+// removed â AIFormField is not used in this component
 import { useToast } from '@/components/ui/use-toast';
 
 export default function OrganizationProfileDetails({ organization, contactMethods = [], onUpdate, isUpdating, taxonomyItems = [] }) {
@@ -130,10 +130,25 @@ Keywords should be:
       });
 
       if (response?.keywords && Array.isArray(response.keywords)) {
-        handleUpdate('keywords', response.keywords);
+        // Sanitise: strings only, non-empty, max 60 chars, deduplicate
+        const existing = organization.keywords || [];
+        const sanitised = response.keywords
+          .filter(k => typeof k === 'string' && k.trim().length > 0)
+          .map(k => k.trim().slice(0, 60))
+          .filter(k => !existing.includes(k));
+        const merged = [...existing, ...sanitised];
+        if (sanitised.length === 0) {
+          toast({
+            variant: 'destructive',
+            title: 'No New Keywords',
+            description: 'AI suggestions were already present or invalid.',
+          });
+          return;
+        }
+        handleUpdate('keywords', merged);
         toast({
-          title: "Keywords Generated",
-          description: `Added ${response.keywords.length} keywords to help match funding opportunities.`,
+          title: 'Keywords Generated',
+          description: `Added ${sanitised.length} new keyword(s) to help match funding opportunities.`,
         });
       } else {
         toast({
@@ -191,10 +206,24 @@ Focus areas should be:
       });
 
       if (response?.focus_areas && Array.isArray(response.focus_areas)) {
-        handleUpdate('focus_areas', response.focus_areas);
+        const existing = organization.focus_areas || [];
+        const sanitised = response.focus_areas
+          .filter(f => typeof f === 'string' && f.trim().length > 0)
+          .map(f => f.trim().slice(0, 80))
+          .filter(f => !existing.includes(f));
+        const merged = [...existing, ...sanitised];
+        if (sanitised.length === 0) {
+          toast({
+            variant: 'destructive',
+            title: 'No New Focus Areas',
+            description: 'AI suggestions were already present or invalid.',
+          });
+          return;
+        }
+        handleUpdate('focus_areas', merged);
         toast({
-          title: "Focus Areas Generated",
-          description: `Added ${response.focus_areas.length} focus areas to your profile.`,
+          title: 'Focus Areas Generated',
+          description: `Added ${sanitised.length} new focus area(s) to your profile.`,
         });
       } else {
         toast({
