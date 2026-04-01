@@ -119,17 +119,45 @@ export async function initializeAnyaOnLogin(db, user, profileId = null, { upload
     }
 
     if (!profileId) {
-      return null
+      // No profile found: create a guidance-only session so the user gets
+      // actionable feedback rather than silence (Goals 10, 14).
+      try {
+        const guidanceSessionId = await createAnyaSession(db, user?.id || null, null, 'Profile Setup Required')
+        await addAnyaMessage(
+          db,
+          guidanceSessionId,
+          'assistant',
+          `Welcome! To find funding opportunities for you, I need a little more information. Please complete your profile â including your location, household needs, and applicant type â so I can start searching. Go to Profile to get started.`
+        )
+        return { sessionId: guidanceSessionId, jobIds: {}, profileId: null }
+      } catch (guidanceErr) {
+        console.error('[anyaLoginTrigger] Failed to create guidance session for profileless user:', guidanceErr)
+        return null
+      }
     }
 
     const admin = isAdmin(user)
     const sessionTitle = admin ? 'Admin Login Auto-Crawl Session' : 'Login Auto-Crawl Session'
     const sessionId = await createAnyaSession(db, user.id, profileId, sessionTitle)
 
+    // Fetch profile data needed for profile-scoped crawl parameters
+    const profileRow = db.prepare(
+      `SELECT state, zip_code, needs, applicant_type FROM profiles WHERE id = ? LIMIT 1`
+    ).get(profileId)
+
+    const profileContext = profileRow
+      ? {
+          state: profileRow.state || null,
+          zip_code: profileRow.zip_code || null,
+          needs: profileRow.needs || null,
+          applicant_type: profileRow.applicant_type || null,
+        }
+      : {}
+
     const coreDefs = [
-      ['local', { radius_miles: 25, max_results: 100 }],
-      ['scholarship', { max_results: 50 }],
-      ['comprehensive', { max_results: 200 }],
+      ['local', { radius_miles: 25, max_results: 100, ...profileContext }],
+      ['scholarship', { max_results: 50, ...profileContext }],
+      ['comprehensive', { max_results: 200, ...profileContext }],
     ]
     if (admin) {
       coreDefs.push(
@@ -148,14 +176,34 @@ export async function initializeAnyaOnLogin(db, user, profileId = null, { upload
 
     // Dispatch + welcome message in background — do NOT block login response
     setImmediate(() => {
+      const dispatchResults = []
+
       for (const [type, jobId] of Object.entries(jobIds)) {
         try {
           const promise = dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI })
           if (promise && typeof promise.catch === 'function') {
-            promise.catch(err => console.error(`[anyaLoginTrigger] Job ${jobId} (${type}) dispatch failed:`, err))
+            promise.catch(err => {
+              console.error(`[anyaLoginTrigger] Job ${jobId} (${type}) dispatch failed:`, err)
+              try {
+                db.prepare(
+                  `UPDATE crawler_jobs SET status = 'failed', error = ? WHERE id = ?`
+                ).run(String(err?.message || err), jobId)
+              } catch (dbErr) {
+                console.error(`[anyaLoginTrigger] Failed to record dispatch failure for job ${jobId}:`, dbErr)
+              }
+            })
           }
+          dispatchResults.push({ type, jobId, dispatched: true })
         } catch (err) {
           console.error(`[anyaLoginTrigger] Job ${jobId} (${type}) dispatch failed:`, err)
+          dispatchResults.push({ type, jobId, dispatched: false, error: String(err?.message || err) })
+          try {
+            db.prepare(
+              `UPDATE crawler_jobs SET status = 'failed', error = ? WHERE id = ?`
+            ).run(String(err?.message || err), jobId)
+          } catch (dbErr) {
+            console.error(`[anyaLoginTrigger] Failed to record dispatch failure for job ${jobId}:`, dbErr)
+          }
         }
       }
 
