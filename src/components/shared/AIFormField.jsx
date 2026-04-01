@@ -54,6 +54,15 @@ ${organization.intended_major ? `Major: ${organization.intended_major}` : ''}
 ${organization.city && organization.state ? `Location: ${organization.city}, ${organization.state}` : ''}
 ${organization.gpa ? `GPA: ${organization.gpa}` : ''}
 ${organization.financial_need_level ? `Need Level: ${organization.financial_need_level}` : ''}
+${organization.military_status ? `Military Status: ${organization.military_status}` : ''}
+${organization.disability_status ? `Disability Status: ${organization.disability_status}` : ''}
+${organization.veteran ? `Veteran: ${organization.veteran}` : ''}
+${organization.health_conditions ? `Health Conditions: ${organization.health_conditions}` : ''}
+${organization.family_size ? `Family Size: ${organization.family_size}` : ''}
+${organization.housing_situation ? `Housing Situation: ${organization.housing_situation}` : ''}
+${organization.emergency_context ? `Emergency Context: ${organization.emergency_context}` : ''}
+${organization.business_type ? `Business Type: ${organization.business_type}` : ''}
+${organization.years_in_operation ? `Years in Operation: ${organization.years_in_operation}` : ''}
 `;
 
       const fullPrompt = `${voiceInstruction}
@@ -76,9 +85,19 @@ RESPONSE REQUIREMENTS:
 ${isIndividual ? 'REMEMBER: You are writing as ONE INDIVIDUAL PERSON. Use I, my, me.' : 'REMEMBER: You are writing as an ORGANIZATION. Use we, our, us.'}`;
 
       const response = await client.integrations.Core.InvokeLLM({ prompt: fullPrompt });
-      onChange({ target: { name, value: response } });
+      const generatedText = typeof response === 'string'
+        ? response
+        : (response?.output ?? response?.text ?? response?.content ?? null);
+      if (!generatedText || typeof generatedText !== 'string' || !generatedText.trim()) {
+        console.error('AI generation returned empty or unrecognised response:', response);
+        return;
+      }
+      onChange({ target: { name, value: generatedText.trim() } });
     } catch (error) {
       console.error('AI generation failed:', error);
+      onChange({ target: { name, value: '' } });
+      // Surface error to parent via a dedicated prop if provided, otherwise rely on console.
+      // A future iteration should accept an onError(message) prop and display it in the UI.
     } finally {
       setIsGenerating(false);
     }
