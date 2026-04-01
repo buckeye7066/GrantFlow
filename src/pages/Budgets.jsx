@@ -15,7 +15,7 @@ const StatCard = ({ title, value, icon: Icon, color }) => (
       <div className="flex justify-between items-start">
         <div>
           <p className={`text-sm font-medium ${color}`}>{title}</p>
-          <p className="text-3xl font-bold text-slate-900 mt-2">${value.toLocaleString()}</p>
+          <p className="text-3xl font-bold text-slate-900 mt-2">${(value ?? 0).toLocaleString()}</p>
         </div>
         <div className="p-3 bg-slate-100 rounded-xl">
           <Icon className={`w-6 h-6 ${color}`} />
@@ -169,14 +169,16 @@ export default function Budgets() {
                           <div className="relative pt-1">
                             <div className="overflow-hidden h-2 text-xs flex rounded bg-slate-200">
                               <div
-                                style={{ width: `${(grantTotalBudget > 0 ? (grantTotalSpent / grantTotalBudget) * 100 : 0)}%` }}
+                                style={{ width: `${Math.min(100, grantTotalBudget > 0 ? (grantTotalSpent / grantTotalBudget) * 100 : 0)}%` }}
                                 className="shadow-none flex flex-col text-center whitespace-nowrap text-white justify-center bg-emerald-500"
                               ></div>
                             </div>
                           </div>
                           <div className="flex justify-between items-center font-bold">
                             <span className="text-slate-500">Remaining</span>
-                            <span className="text-emerald-600">${grantRemaining.toLocaleString()}</span>
+                            <span className={grantRemaining < 0 ? "text-red-600" : "text-emerald-600"}>
+  {grantRemaining < 0 ? `-$${Math.abs(grantRemaining).toLocaleString()}` : `$${grantRemaining.toLocaleString()}`}
+</span>
                           </div>
                         </CardContent>
                         <CardFooter className="bg-slate-50 p-4 mt-4">
