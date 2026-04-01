@@ -16,8 +16,9 @@ export const BUSINESS_PROGRAMS = [
   {
     id: 'biz-sba-grants',
     name: 'SBA Small Business Grants & Funding Programs',
-    description: 'Directory of all active SBA grant programs including SBIR, STTR, Community Advantage, and disaster-related grants for small businesses.',
+    description: 'Directory of all active SBA grant programs including SBIR, STTR, and disaster-related grants for small businesses.',
     url: 'https://www.sba.gov/funding-programs/grants',
+    application_url: 'https://www.sba.gov/funding-programs/grants',
     categories: ['business', 'employment', 'cash_assistance'],
     type: 'portal',
     fundingType: 'direct_grant',
@@ -29,7 +30,8 @@ export const BUSINESS_PROGRAMS = [
     id: 'biz-sbir',
     name: 'SBIR / STTR — Small Business Innovation Research',
     description: 'Federal grants for small businesses engaged in R&D with commercialization potential. Over $4B awarded annually across 11 federal agencies. Phase I awards typically $50K–$275K.',
-    url: 'https://www.sbir.gov/about',
+    url: 'https://www.sbir.gov/apply',
+    application_url: 'https://www.sbir.gov/apply',
     categories: ['business', 'employment', 'cash_assistance'],
     type: 'grant',
     fundingType: 'direct_grant',
@@ -104,7 +106,7 @@ export const BUSINESS_PROGRAMS = [
   {
     id: 'biz-accion',
     name: 'Accion Opportunity Fund — Microenterprise Grants',
-    description: 'Small business grants and microloans for underserved entrepreneurs. Grant programs specifically for women, minorities, and low-income business owners. No collateral required.',
+    description: 'Small business grants for underserved entrepreneurs, with grant programs specifically for women, minorities, and low-income business owners. Note: Accion also offers microloans; only grant programs are surfaced here. No collateral required for grants.',
     url: 'https://www.accionopportunityfund.org/',
     categories: ['business', 'employment', 'cash_assistance'],
     type: 'grant',
@@ -284,18 +286,9 @@ export const BUSINESS_PROGRAMS = [
     fundingType: 'direct_service',
     intentMatch: ['self_employment', 'business', 'entrepreneurship'],
   },
-  {
-    id: 'biz-sba-community-advantage',
-    name: 'SBA Community Advantage Program',
-    description: 'Mission-focused lending up to $350,000 for small businesses in underserved markets. Prioritizes businesses in low-income areas, veteran-owned, and minority-owned businesses.',
-    url: 'https://www.sba.gov/funding-programs/loans/community-advantage',
-    categories: ['business', 'employment', 'cash_assistance'],
-    type: 'assistance',
-    fundingType: 'direct_service',
-    occupationMatch: ['small_business_owner', 'minority_owned_business', 'women_owned_business'],
-    geoMatch: ['rural', 'urban_underserved'],
-    intentMatch: ['business'],
-  },
+  // REMOVED: biz-sba-community-advantage is an SBA loan product ('Mission-focused lending'),
+  // not a grant. The URL path /funding-programs/loans/ confirms this.
+  // Per file policy (NO loans) and Goal 3 hard-reject rules, this entry is excluded.
   {
     id: 'biz-native-cdfi',
     name: 'Native CDFI Network — Indigenous Business Support',
