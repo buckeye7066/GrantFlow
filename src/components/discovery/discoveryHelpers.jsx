@@ -79,8 +79,25 @@ export async function runComprehensiveMatch(selectedOrg, searchFilters) {
     title: opp.program_name,
     sponsor: opp.sponsor,
     // Only use URL if it's valid (not a placeholder)
-    url: opp.url && !opp.url.includes('example.org') && !opp.url.includes('example.com') ? opp.url : null,
-    application_url: opp.url && !opp.url.includes('example.org') && !opp.url.includes('example.com') ? opp.url : null,
+    url: (() => {
+      const raw = opp.url;
+      if (!raw) return null;
+      if (raw.includes('example.org') || raw.includes('example.com')) {
+        log.warn('placeholder URL rejected', { id: opp.id, title: opp.program_name, url: raw });
+        return null;
+      }
+      return raw;
+    })(),
+    application_url: (() => {
+      // Prefer the dedicated application_url field if the backend provides it
+      const appUrl = opp.application_url || opp.url;
+      if (!appUrl) return null;
+      if (appUrl.includes('example.org') || appUrl.includes('example.com')) {
+        log.warn('placeholder application_url rejected', { id: opp.id, title: opp.program_name, application_url: appUrl });
+        return null;
+      }
+      return appUrl;
+    })(),
     deadlineAt: opp.deadline,
     awardMin: opp.amount_min,
     awardMax: opp.amount_max,
@@ -93,23 +110,27 @@ export async function runComprehensiveMatch(selectedOrg, searchFilters) {
     matched_fields: opp.matched_fields || []
   }));
 
-  // Filter to only show 80%+ matches as requested
-  const highMatchOpportunities = allOpportunities.filter(opp => {
+  // Return ALL opportunities from the backend â the decision engine (computeMatchDecision)
+  // is the sole acceptance authority (Goal 4). Suppressing by score here would override
+  // canonical ACCEPT/REVIEW decisions and hide results from the user (Goals 7, 8).
+  // UI layers may sort or visually tier by match_score but must never hard-drop records.
+  const suppressed = allOpportunities.filter(opp => {
     const matchScore = typeof opp.match === 'number' ? opp.match : 0;
-    log.debug('match score', { title: opp.title, matchScore })
-    return matchScore >= 80;
+    return matchScore < 80;
   });
 
-  log.debug('filtered matches', {
-    total: allOpportunities.length,
-    kept: highMatchOpportunities.length,
-    threshold: 80,
-  })
+  if (suppressed.length > 0) {
+    log.debug('low-score opportunities retained (not suppressed) â decision engine is authority', {
+      total: allOpportunities.length,
+      below_80: suppressed.length,
+      titles: suppressed.map(o => o.title),
+    });
+  }
 
   return {
-    opportunities: highMatchOpportunities,
-    count: highMatchOpportunities.length,
-    message: `Found ${highMatchOpportunities.length} highly relevant opportunities (80%+ match) from ${allOpportunities.length} total.`
+    opportunities: allOpportunities,
+    count: allOpportunities.length,
+    message: `Found ${allOpportunities.length} matching opportunities. Sorted by relevance.`
   };
 }
 
