@@ -39,9 +39,17 @@ function startServer(extraEnv = {}) {
     const timeout = setTimeout(() => {
       try {
         child.kill('SIGTERM')
-      } catch {}
+      } catch (killErr) {
+        // process may have already exited; ignore but log for observability
+        process.stderr.write(`[test] kill failed: ${killErr.message}\n`)
+      }
       reject(new Error(`server did not become ready\nstdout:\n${stdout}\nstderr:\n${stderr}`))
     }, 30_000)
+
+    child.on('error', (spawnErr) => {
+      clearTimeout(timeout)
+      reject(new Error(`server spawn failed: ${spawnErr.message}\nstdout:\n${stdout}\nstderr:\n${stderr}`))
+    })
 
     const onData = () => {
       const match = stdout.match(/\[Server\] Ready on port\s+(\d+)/)
@@ -73,7 +81,13 @@ async function fetchJson(url, init = {}) {
 
 test('colleges local-funding: 400 when zip missing', async () => {
   const srv = startServer()
-  const { port } = await srv.ready
+  let port
+  try {
+    ;({ port } = await srv.ready)
+  } catch (err) {
+    await srv.stop()
+    throw err
+  }
 
   try {
     const { status, json } = await fetchJson(`http://127.0.0.1:${port}/api/colleges/local-funding`)
