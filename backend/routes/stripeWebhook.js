@@ -22,7 +22,13 @@ router.post('/', async (req, res) => {
   }
 
   // Idempotency: only process once per event id.
-  const record = await recordStripeEventIfNew(req.db, event)
+  let record
+  try {
+    record = await recordStripeEventIfNew(req.db, event)
+  } catch (recordErr) {
+    console.error('Stripe webhook: failed to record event idempotency key', { eventId: event?.id, error: recordErr?.message })
+    return res.status(500).json({ ok: false, error: 'idempotency_check_failed', message: recordErr?.message })
+  }
   if (record?.ok && record.inserted === false) {
     return res.json({ ok: true, received: true, duplicate: true })
   }
@@ -40,37 +46,18 @@ router.post('/', async (req, res) => {
         const purchaseId = String(metadata.purchase_id || '').trim()
         const phase = String(metadata.milestone_phase || '').trim()
         if (purchaseId && phase) {
+          const newStatus = phase === 'kickoff' ? 'in_progress' : phase === 'submission' ? 'paid' : null
           const transaction = req.db.transaction(() => {
             req.db.prepare(
               `UPDATE milestone_payments SET status = 'paid', stripe_payment_intent_id = COALESCE(stripe_payment_intent_id, ?), paid_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE purchase_id = ? AND phase = ?`
             ).run(paymentIntent, purchaseId, phase)
-            // Additional updates within same transaction
+            if (newStatus) {
+              req.db.prepare(
+                `UPDATE service_purchases SET status = ?, stripe_payment_intent_id = COALESCE(stripe_payment_intent_id, ?), updated_at = CURRENT_TIMESTAMP WHERE id = ?`
+              ).run(newStatus, paymentIntent, purchaseId)
+            }
           })
           transaction()
-          // Mark purchase in_progress once kickoff is paid
-          if (phase === 'kickoff') {
-            await req.db.prepare(
-              `
-                UPDATE service_purchases
-                SET status = 'in_progress',
-                    stripe_payment_intent_id = COALESCE(stripe_payment_intent_id, ?),
-                    updated_at = CURRENT_TIMESTAMP
-                WHERE id = ?
-              `,
-            ).run(paymentIntent, purchaseId)
-          }
-          // Mark purchase completed once submission is paid
-          if (phase === 'submission') {
-            await req.db.prepare(
-              `
-                UPDATE service_purchases
-                SET status = 'paid',
-                    stripe_payment_intent_id = COALESCE(stripe_payment_intent_id, ?),
-                    updated_at = CURRENT_TIMESTAMP
-                WHERE id = ?
-              `,
-            ).run(paymentIntent, purchaseId)
-          }
         }
       } else if (kind === 'hourly_invoice') {
         const invoiceId = String(metadata.hourly_invoice_id || '').trim()
