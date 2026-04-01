@@ -59,6 +59,7 @@ function buildCommonTasks() {
     const entry = HELP_REGISTRY.find((e) => e.key === key)
     if (!entry) return null
     return {
+      key,
       title: entry.title,
       desc: entry.description,
       url: createPageUrl(key),
@@ -79,7 +80,7 @@ const FAQ_ITEMS = [
   },
   {
     q: "What does Smart Matcher do?",
-    a: "Smart Matcher uses AI to find grants that fit your profile. Tell it about yourself and it suggests grants you might qualify for.",
+    a: "Smart Matcher analyses your saved profile â including location, needs, applicant type, and eligibility details â and runs them through GrantFlow's matching engine to surface grants you are likely to qualify for. The more complete your profile, the better the matches.",
   },
   {
     q: "Where do my uploaded documents go?",
@@ -242,13 +243,13 @@ export default function Help() {
           </h2>
           <div className="space-y-2">
             {filteredFaqs.length > 0 ? (
-              filteredFaqs.map((faq, i) => (
+              filteredFaqs.map((faq) => (
                 <FaqItem
                   key={faq.q}
                   question={faq.q}
                   answer={faq.a}
-                  isOpen={openFaqIndex === i}
-                  onToggle={() => setOpenFaqIndex(openFaqIndex === i ? null : i)}
+                  isOpen={openFaqIndex === faq.q}
+                  onToggle={() => setOpenFaqIndex(openFaqIndex === faq.q ? null : faq.q)}
                 />
               ))
             ) : (
