@@ -3,27 +3,22 @@ import crypto from 'crypto'
 import { formatError } from '../middleware/errorHandler.js'
 
 const router = express.Router()
-function requireAdmin(req, res, next) {
+function isAdmin(req, res) {
   if (!req.ctx?.userId) {
-    return res.status(401).json({ error: 'Authentication required' })
+    res.status(401).json({ error: 'Authentication required' })
+    return false
   }
   if (!req.ctx?.isAdmin) {
-    return res.status(403).json({ error: 'Access denied' })
+    res.status(403).json({ error: 'Access denied' })
+    return false
   }
-  next()
+  return true
 }
 
 async function ensureDefaults(db) {
   // Ensure default alert configs exist for all organizations.
   const orgs = await db.prepare('SELECT id FROM organizations').all()
-  const insert = db.prepare(`
-    INSERT INTO grant_monitoring_alerts (id, organization_id, alert_type, enabled, threshold_days, notification_methods)
-    VALUES (@id, @organization_id, @alert_type, @enabled, @threshold_days, @notification_methods)
-  `)
-
-  const exists = db.prepare(
-    'SELECT 1 FROM grant_monitoring_alerts WHERE organization_id = ? AND alert_type = ? LIMIT 1',
-  )
+  // Statements prepared inside the transaction below; no outer statements needed.
 
   const defaults = [
     { alert_type: 'deadline_approaching', enabled: true, threshold_days: 14 },
@@ -236,22 +231,24 @@ router.post('/check', async (req, res) => {
 
         if (daysUntil <= 14) {
           const eventType = 'deadline_approaching'
-          if (await seenRecentTx.get(grant.id, eventType)) continue
-          const severity = daysUntil <= 7 ? 'critical' : 'high'
-          await insertTx.run(
-            crypto.randomUUID(),
-            grant.organization_id,
-            grant.id,
-            eventType,
-            severity,
-            JSON.stringify({
-              grant_title: grant.title,
-              deadline: grant.deadline,
-              days_until: daysUntil,
-              match_score: grant.match_score ?? null,
-            }),
-          )
-          eventsLogged += 1
+          const alreadySeen = await seenRecentTx.get(grant.id, eventType)
+          if (!alreadySeen) {
+            const severity = daysUntil <= 7 ? 'critical' : 'high'
+            await insertTx.run(
+              crypto.randomUUID(),
+              grant.organization_id,
+              grant.id,
+              eventType,
+              severity,
+              JSON.stringify({
+                grant_title: grant.title,
+                deadline: grant.deadline,
+                days_until: daysUntil,
+                match_score: grant.match_score ?? null,
+              }),
+            )
+            eventsLogged += 1
+          }
         }
       }
     })
