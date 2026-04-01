@@ -16,6 +16,7 @@ const router = express.Router();
 router.use((req, res, next) => {
   const user = requireAuthenticatedUser(req, res)
   if (!user) return
+  req.user = req.user ?? user
   return next()
 })
 
@@ -176,13 +177,18 @@ router.post('/comprehensiveMatch', async (req, res) => {
     };
     const filteredOpportunities = opportunities.filter(opp => !isJunkOpportunity(opp, filterHints));
     const hasBizIntent = kws.has('small business') || kws.has('startup') || kws.has('entrepreneur') || kws.has('sba');
-    console.info(`[comprehensiveMatch] Filtered ${opportunities.length - filteredOpportunities.length} irrelevant opportunities, ${filteredOpportunities.length} remaining. Business intent: ${hasBizIntent}`);
+    const junkCount = opportunities.length - filteredOpportunities.length;
+    console.info(`[comprehensiveMatch] Filtered ${junkCount} irrelevant opportunities, ${filteredOpportunities.length} remaining. Business intent: ${hasBizIntent}`);
+    if (filteredOpportunities.length === 0 && opportunities.length > 0) {
+      console.warn(`[comprehensiveMatch] ALL ${opportunities.length} candidates were junk-filtered for profile ${typeof profile_json === 'string' ? profile_json : 'inline'}. Review isJunkOpportunity thresholds.`);
+    }
 
     const scoredOpportunities = filteredOpportunities.map(opp => {
       const computed = scoreOpportunity(profileContext, opp);
 
       let url = opp.url || opp.application_url;
       if (url && (url.includes('example.org') || url.includes('example.com') || url.includes('placeholder'))) {
+        console.warn(`[comprehensiveMatch] Nulled placeholder URL for opp ${opp.id}: ${url}`);
         url = null;
       }
 
@@ -206,6 +212,9 @@ router.post('/comprehensiveMatch', async (req, res) => {
         fit_score: computed.score,
         match_score: computed.score,
         match_reasons: computed.reasons,
+        match_explanation: computed.explanation ?? computed.reasons?.join(' | ') ?? '',
+        matched_needs: computed.matched_needs ?? [],
+        eligibility_status: computed.eligibility_status ?? null,
         matched_fields: computed.reasons.slice(0, 10),
       };
     });
@@ -226,10 +235,15 @@ router.post('/comprehensiveMatch', async (req, res) => {
       console.info(`[comprehensiveMatch] Top 5 scores:`, JSON.stringify(topScores));
     }
     
-    let matchThreshold = 50;
+    let matchThreshold = 30;
     let highScoring = scoredOpportunities
       .filter(o => o.fit_score >= matchThreshold)
       .sort((a, b) => b.fit_score - a.fit_score);
+
+    const suppressedCount = scoredOpportunities.length - highScoring.length;
+    if (suppressedCount > 0) {
+      console.info(`[comprehensiveMatch] ${suppressedCount} opportunities below display threshold ${matchThreshold} not shown`);
+    }
 
     // Zero-results fallback: progressively lower threshold
     if (highScoring.length === 0 && scoredOpportunities.length > 0) {
@@ -420,7 +434,6 @@ router.post('/archOpportunities', async (req, res) => {
       return res.status(403).json({ success: false, error: 'Admin privileges required' })
     }
     const { opportunity_ids = [], action = 'archive' } = req.body;
-    const isPostgres = req.db?.dialect === 'postgres'
     
     if (!Array.isArray(opportunity_ids) || opportunity_ids.length === 0) {
       return res.status(400).json({
