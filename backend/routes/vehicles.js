@@ -13,8 +13,6 @@ import express from 'express';
 import { randomUUID } from 'crypto';
 import { formatError } from '../middleware/errorHandler.js';
 import { scheduleDebouncedVehicleSync } from '../services/githubSyncVehicles.js';
-import db from '../services/database.js';
-
 const router = express.Router();
 
 /**
@@ -114,6 +112,7 @@ function detectScam(data) {
  *   500  { ok: false, error }
  */
 router.post('/ingest', async (req, res) => {
+  const db = req.db;
   const { data, errors } = validateAndCoerce(req.body || {});
 
   if (errors.length > 0) {

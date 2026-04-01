@@ -20,8 +20,8 @@ import { safeParseArrayField, resolveApplicantType, buildProfileSignals } from '
 import { normalizeProfile } from './profileNormalizer.js'
 import { normalizeOpportunity } from './opportunityNormalizer.js'
 
-export { normalizeProfile } from './profileNormalizer.js'
-export { normalizeOpportunity } from './opportunityNormalizer.js'
+export { normalizeProfile, computeProfileFingerprint } from './profileNormalizer.js'
+export { normalizeOpportunity, computeOpportunityFingerprint } from './opportunityNormalizer.js'
 
 export const MATCHER_VERSION = '3.0.0'
 
