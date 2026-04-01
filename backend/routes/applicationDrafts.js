@@ -15,7 +15,7 @@ router.get('/', async (req, res) => {
   if (!user) return
 
   try {
-    const limit = normalizeLimit(req.query.limit, 500)
+    const limit = normalizeLimit(req.query.limit, 50)
     const grantId = req.query.grant_id ? String(req.query.grant_id) : null
     const id = req.query.id ? String(req.query.id) : null
 
@@ -36,12 +36,12 @@ router.get('/', async (req, res) => {
       const allowedList = allowed === null ? null : Array.from(allowed || [])
       if (allowedList && allowedList.length === 0) return res.json([])
       if (allowedList) {
-        const placeholders = allowedList.map(() => '?').join(', ')
-        clauses.push(`g.organization_id IN (${placeholders})`)
-        // Validate allowedList contains only valid org IDs
-        if (!allowedList.every(id => typeof id === 'string' && id.match(/^[a-zA-Z0-9_-]+$/))) {
+        // Validate allowedList contains only valid org IDs BEFORE staging into query
+        if (!allowedList.every(orgId => typeof orgId === 'string' && /^[a-zA-Z0-9_-]+$/.test(orgId))) {
           return res.status(403).json({ error: 'Invalid organization access' })
         }
+        const placeholders = allowedList.map(() => '?').join(', ')
+        clauses.push(`g.organization_id IN (${placeholders})`)
         params.push(...allowedList)
       }
     }
