@@ -58,11 +58,14 @@ export async function createAnyaRun(db, options) {
             operation_type,
             status,
             user_id,
+            profile_id,
+            requested_by,
+            authorized,
             created_at
-          ) VALUES (?, ?, ?, ?, 'queued', ?, CURRENT_TIMESTAMP)
+          ) VALUES (?, ?, ?, ?, 'queued', ?, ?, ?, ?, CURRENT_TIMESTAMP)
         `
       )
-      .run(id, runId, mode, operationType, userId)
+      .run(id, runId, mode, operationType, userId, profileId, requestedBy, authorized ? 1 : 0)
     
     console.log('[anya-runs] Created Anya run entry', {
       id,
@@ -141,11 +144,15 @@ export async function completeAnyaRun(db, id, results = {}) {
       `
         UPDATE anya_runs
         SET status = 'completed',
-            completed_at = CURRENT_TIMESTAMP
+            completed_at = CURRENT_TIMESTAMP,
+            tools_used = ?,
+            input_tokens = ?,
+            output_tokens = ?,
+            duration_ms = ?
         WHERE id = ?
       `
     )
-    .run(id)
+    .run(JSON.stringify(toolsUsed), inputTokens, outputTokens, durationMs, id)
   
   console.log('[anya-runs] Completed Anya run', {
     id,
@@ -172,11 +179,13 @@ export async function failAnyaRun(db, id, error) {
       `
         UPDATE anya_runs
         SET status = 'failed',
-            completed_at = CURRENT_TIMESTAMP
+            completed_at = CURRENT_TIMESTAMP,
+            error_message = ?,
+            error_stack = ?
         WHERE id = ?
       `
     )
-    .run(id)
+    .run(errorMessage, errorStack, id)
   
   console.error('[anya-runs] Failed Anya run', {
     id,
@@ -273,6 +282,8 @@ export async function getAnyaRunStatistics(db, since = null) {
       ORDER BY mode, status
     `
   
-  const rows = await db.prepare(query).all(since || undefined)
+  const rows = since
+    ? await db.prepare(query).all(since)
+    : await db.prepare(query).all()
   return rows
 }
