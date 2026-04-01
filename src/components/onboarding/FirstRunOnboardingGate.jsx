@@ -32,10 +32,22 @@ export default function FirstRunOnboardingGate({ profiles = [], activeProfileId 
     staleTime: 30_000,
   })
 
+  // Treat profile as 'not yet known' (undefined) while query is in flight
+  const profileDataReady = activeProfileId
+    ? activeProfileDetail !== undefined
+    : true
   const basicSection = activeProfileDetail?.sections?.find?.((s) => s.section_key === 'basic_information')?.data
   const hasZip = Boolean(basicSection?.zip?.trim?.())
   const hasState = Boolean(basicSection?.state?.trim?.())
   const activeProfileComplete = hasZip && hasState
+
+  const shouldShow =
+    prefsLoaded &&
+    profileDataReady &&
+    !hasCompletedOnboarding &&
+    !completed &&
+    !skipped &&
+    (profiles.length === 0 || !activeProfileComplete)
 
   // Don't evaluate shouldShow until preferences have loaded at least once
   const shouldShow =
@@ -49,7 +61,13 @@ export default function FirstRunOnboardingGate({ profiles = [], activeProfileId 
   const dismissedRef = React.useRef(false)
 
   React.useEffect(() => {
-    if (shouldShow && !dismissedRef.current) setShowWizard(true)
+    if (shouldShow && !dismissedRef.current) {
+      setShowWizard(true)
+    } else if (!shouldShow) {
+      // Reset dismissed state when the trigger condition clears
+      // so a genuinely new incomplete profile can show the wizard.
+      dismissedRef.current = false
+    }
   }, [shouldShow])
 
   const handleComplete = () => {
