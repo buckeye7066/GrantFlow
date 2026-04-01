@@ -74,7 +74,9 @@ export function isLoanOrMatchingFund(opportunity) {
   const oppType = String(opportunity.opportunity_type || '').toLowerCase()
   if (['loan', 'loan_program', 'microloan'].includes(oppType)) return true
   const text = `${opportunity.title || ''} ${opportunity.description || ''} ${opportunity.eligibility || ''}`.toLowerCase()
-  const loanKeywords = ['\\bloan\\b', '\\bmicroloan\\b', '\\bfinancing\\b', '\\bapr\\b']
+  const loanKeywords = ['\\bloan\\b', '\\bmicroloan\\b', '\\bfinancing\\b']
+  // '\\bapr\\b' removed: 'APR' as a word is ambiguous with 'April' in deadline strings;
+  // loan detection via is_loan flag and explicit type field is the reliable path.
   const matchKeywords = ['matching funds', 'match required', 'cost share', '1:1 match', 'dollar for dollar']
   if (loanKeywords.some((kw) => new RegExp(kw).test(text))) return true
   if (matchKeywords.some((kw) => text.includes(kw))) return true
@@ -182,6 +184,8 @@ export function enforceCrawlerOpportunityContract(
 ) {
   if (!isPlainObject(rawOpportunity)) return null
   if (violatesMustNot(rawOpportunity, queryPlan)) return null
+  // Goal 3: hard-reject loans and matching-fund requirements before any further processing
+  if (isLoanOrMatchingFund(rawOpportunity)) return null
 
   const url = rawOpportunity.url || rawOpportunity.application_url || rawOpportunity.source_url || null
   if (!isValidHttpUrl(url)) return null
@@ -214,8 +218,19 @@ export function enforceCrawlerOpportunityContract(
   ])
   const opportunityType = inferOpportunityType({ rawOpportunity, crawlerType, sourceFallback })
 
+  // Strip audit/decision fields that must only be set by computeMatchDecision()
+  const DECISION_ENGINE_FIELDS = [
+    'match_decision', 'match_explanation', 'eligibility_status',
+    'ineligibility_reasons', 'matcher_version', 'evaluated_at',
+    'match_confidence', 'fingerprint', 'profile_fingerprint',
+    'opportunity_fingerprint', 'matched_needs',
+  ]
+  const safeRaw = Object.fromEntries(
+    Object.entries(rawOpportunity).filter(([k]) => !DECISION_ENGINE_FIELDS.includes(k))
+  )
+
   const normalized = {
-    ...rawOpportunity,
+    ...safeRaw,
     title,
     sponsor: rawOpportunity.sponsor ?? rawOpportunity.funder ?? sourceFallback ?? null,
     description: description || null,
