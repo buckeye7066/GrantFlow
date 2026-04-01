@@ -26,7 +26,7 @@ async function hardDeleteProfileWithFallback(db, profileId) {
   if (!id) return { ok: false, error: 'profile_id_required' }
 
   const dialect = db?.dialect || 'sqlite'
-  const nowSql = dialect === 'postgres' ? 'now()' : 'CURRENT_TIMESTAMP'
+  // nowSql removed â inline literals are used directly in both UPDATE statements below
 
   // Designated/demo profiles should never be hard-deleted (boot seeding may resurrect).
   if (isDesignatedProfileId(id)) {
@@ -86,6 +86,7 @@ async function saveApplicationToDb(db, data) {
     if (!error.message?.includes('no such table') && !error.message?.includes('does not exist')) {
       throw error
     }
+    console.error('[serviceApplication] service_applications table missing â submission NOT persisted to DB. applicationId will be null.', { type: data.type, email: data.email })
     return null
   }
 }
@@ -325,15 +326,18 @@ router.patch('/:id', async (req, res) => {
     const updates = []
     const params = []
     
-    if (status) {
-      updates.push('status = ?')
-      params.push(status)
-      
-      if (status === 'reviewed') {
-        updates.push('reviewed_by = ?', 'reviewed_at = CURRENT_TIMESTAMP')
-        params.push(req.ctx?.userId || null)
-      }
-    }
+    const ALLOWED_STATUSES = ['new', 'reviewed', 'approved', 'rejected', 'archived']
+if (status) {
+  if (!ALLOWED_STATUSES.includes(status)) {
+    return res.status(400).json({ success: false, message: `Invalid status value. Allowed: ${ALLOWED_STATUSES.join(', ')}` })
+  }
+  updates.push('status = ?')
+  params.push(status)
+  if (status === 'reviewed') {
+    updates.push('reviewed_by = ?', 'reviewed_at = CURRENT_TIMESTAMP')
+    params.push(req.ctx?.userId || null)
+  }
+}
     
     if (notes !== undefined) {
       updates.push('notes = ?')
@@ -355,11 +359,13 @@ router.patch('/:id', async (req, res) => {
     `).run(...params)
     
     const updated = await req.db.prepare('SELECT * FROM service_applications WHERE id = ?').get(id)
-    
-    res.json({
-      success: true,
-      application: updated,
-    })
+if (!updated) {
+  return res.status(404).json({ success: false, message: 'Application not found' })
+}
+res.json({
+  success: true,
+  application: updated,
+})
   } catch (error) {
     console.error('[serviceApplication] Error updating application:', error)
     res.status(500).json({
