@@ -35,7 +35,8 @@ function daysBetween(dateStr1, dateStr2) {
 function isExpired(deadlineStr) {
   if (!deadlineStr) return false
   try {
-    return new Date(deadlineStr) < new Date(today())
+    // Compare as strings (both YYYY-MM-DD) to avoid timezone shifts
+    return deadlineStr.slice(0, 10) < today()
   } catch {
     return false
   }
@@ -73,7 +74,8 @@ export async function archiveExpiredGrants(db) {
            AND status IN (${placeholders})`
       )
       expiredGrants = await stmt.all(cutoff, ...ARCHIVEABLE_STATUSES)
-  } catch {
+  } catch (err) {
+    console.error('[pipelineLifecycle] archiveExpiredGrants query failed:', err?.message || err)
     return { archived: [] }
   }
 
@@ -124,7 +126,8 @@ export async function flagStaleDiscoveries(db, staleDays = 60) {
            AND (notes IS NULL OR notes NOT LIKE '%stale%')`
       )
       staleGrants = await staleStmt.all(cutoff)
-  } catch {
+  } catch (err) {
+    console.error('[pipelineLifecycle] flagStaleDiscoveries query failed:', err?.message || err)
     return { flagged: [] }
   }
 
@@ -178,7 +181,8 @@ export async function detectNewCycles(db) {
          LIMIT 200`
       )
       candidates = await cycleStmt.all(cycleThreshold)
-  } catch {
+  } catch (err) {
+    console.error('[pipelineLifecycle] detectNewCycles query failed:', err?.message || err)
     return { newCycles: [] }
   }
 
@@ -276,11 +280,9 @@ export async function runPipelineLifecycle(db) {
     return { archived: 0, flaggedStale: 0, newCyclesDetected: 0, report: [] }
   }
 
-  const [archiveResult, staleResult, cycleResult] = await Promise.all([
-    archiveExpiredGrants(db),
-    flagStaleDiscoveries(db),
-    detectNewCycles(db),
-  ])
+  const archiveResult = await archiveExpiredGrants(db)
+  const staleResult = await flagStaleDiscoveries(db)
+  const cycleResult = await detectNewCycles(db)
 
   const runResults = {
     archived: archiveResult.archived,
@@ -307,7 +309,7 @@ if (
   process.argv[1].includes('pipelineLifecycleService')
 ) {
   // Dynamic import to avoid loading DB in non-standalone contexts
-  const { createRequire } = await import('module')
+  const { createRequire } = await import('module') // removed â createRequire is not used anywhere below; delete this line entirely
   const require = createRequire(import.meta.url)
 
   let db
