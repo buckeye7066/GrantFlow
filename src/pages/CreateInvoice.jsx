@@ -224,12 +224,13 @@ export default function CreateInvoice() {
           result.calculatedFee = fees.transfer_scholarship_pack || 450;
           break;
         
-        case 'hourly_time':
+        case 'hourly_time': {
           // Calculate from unbilled time
           const totalMinutes = timeEntries.reduce((sum, entry) => sum + (entry.rounded_minutes || 0), 0);
           const totalHours = totalMinutes / 60;
           result.calculatedFee = totalHours * result.baseRate;
           break;
+        }
         
         default:
           result.calculatedFee = 0;
@@ -251,8 +252,8 @@ export default function CreateInvoice() {
         
         case 'comprehensive_dossier':
           if (result.calculatedFee > caps.dossier_max) {
-            result.discountAmount = result.calculatedFee - caps.dossier_min;
-            result.calculatedFee = caps.dossier_min;
+            result.discountAmount = result.calculatedFee - caps.dossier_max;
+            result.calculatedFee = caps.dossier_max;
             result.discountDescription = 'Hardship Cap Applied';
           }
           break;
@@ -267,8 +268,8 @@ export default function CreateInvoice() {
         
         case 'scholarship_pack':
           if (result.calculatedFee > caps.scholarship_pack_max) {
-            result.discountAmount = result.calculatedFee - caps.scholarship_pack_min;
-            result.calculatedFee = caps.scholarship_pack_min;
+            result.discountAmount = result.calculatedFee - caps.scholarship_pack_max;
+            result.calculatedFee = caps.scholarship_pack_max;
             result.discountDescription = 'Hardship Cap Applied';
           }
           break;
@@ -523,7 +524,7 @@ export default function CreateInvoice() {
                     <SelectValue placeholder="Link to project..." />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value={null}>No Project</SelectItem>
+                    <SelectItem value="">No Project</SelectItem>
                     {projects.filter(p => p.organization_id === formData.organization_id).map(project => (
                       <SelectItem key={project.id} value={project.id}>{project.project_name}</SelectItem>
                     ))}
