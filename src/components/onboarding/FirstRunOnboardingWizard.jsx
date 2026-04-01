@@ -99,11 +99,15 @@ export default function FirstRunOnboardingWizard({ open, onComplete, onSkip, pro
 
       if (!profileId) {
         const name = formData.display_name?.trim() || 'My Profile'
+        const inferredType =
+          formData.looking_for === 'ministry_nonprofit' ? 'nonprofit'
+          : formData.looking_for === 'scholarships' ? 'student'
+          : 'individual'
         const created = await apiFetch('/api/profiles', {
           method: 'POST',
           body: JSON.stringify({
             display_name: name,
-            primary_type: 'individual',
+            primary_type: inferredType,
             tags: formData.looking_for ? [formData.looking_for] : [],
           }),
         })
@@ -113,7 +117,7 @@ export default function FirstRunOnboardingWizard({ open, onComplete, onSkip, pro
 
       let basicData = { zip, state }
       if (formData.display_name?.trim()) basicData.full_name = formData.display_name.trim()
-      if (activeProfile?.id) {
+      if (activeProfile?.id && profileId) {
         try {
           const existing = await apiFetch(`/api/profiles/${profileId}/sections/basic_information`)
           if (existing?.data && typeof existing.data === 'object') {
@@ -124,6 +128,20 @@ export default function FirstRunOnboardingWizard({ open, onComplete, onSkip, pro
       await upsertProfileSection(profileId, 'basic_information', basicData, 'onboarding-wizard')
 
       const custom = (await apiFetch('/api/preferences'))?.custom_preferences ?? {}
+      // Write looking_for intent into the profile tags so match engine and crawlers can use it
+      if (formData.looking_for && formData.looking_for !== 'general') {
+        try {
+          await apiFetch(`/api/profiles/${profileId}`, {
+            method: 'PATCH',
+            body: JSON.stringify({
+              tags: [formData.looking_for],
+            }),
+          })
+        } catch (_intentErr) {
+          // non-fatal: preference still recorded below
+        }
+      }
+
       await apiFetch('/api/preferences', {
         method: 'PUT',
         body: JSON.stringify({
