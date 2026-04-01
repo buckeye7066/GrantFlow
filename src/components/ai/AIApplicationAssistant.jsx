@@ -278,13 +278,26 @@ Return a single JSON object where keys are the exact section IDs and values are 
 
       // 6. SAVE DRAFTS
       setStep('saving_draft');
-      const updatePromises = Object.entries(draftResponse).map(([sectionId, content]) => {
-        return updateSectionMutation.mutateAsync({
-          id: sectionId,
-          data: { draft_content: content }
-        });
-      });
-      await Promise.all(updatePromises);
+      const validSectionIds = new Set(proposalSectionsBlueprint.map(s => s.id));
+const updatePromises = Object.entries(draftResponse)
+  .filter(([sectionId, content]) => {
+    if (!validSectionIds.has(sectionId)) {
+      console.warn(`[AIApplicationAssistant] LLM returned unknown section id '${sectionId}' â skipping`);
+      return false;
+    }
+    if (typeof content !== 'string' || content.trim().length === 0) {
+      console.warn(`[AIApplicationAssistant] LLM returned empty/non-string draft for section '${sectionId}' â skipping`);
+      return false;
+    }
+    return true;
+  })
+  .map(([sectionId, content]) =>
+    updateSectionMutation.mutateAsync({
+      id: sectionId,
+      data: { draft_content: content }
+    })
+  );
+await Promise.all(updatePromises);
       
       // 7. COMPLETE
       setStep('complete');
