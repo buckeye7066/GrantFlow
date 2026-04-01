@@ -42,6 +42,9 @@ export default function VNextApplication() {
 
   const transitionMutation = useMutation({
     mutationFn: async (targetState) => {
+      if (!env.shouldersVnext) {
+        throw new Error('vNext feature flag is disabled')
+      }
       setLastBlockers([])
       return await apiFetch(`/api/vnext/applications/${id}/transition`, {
         method: 'POST',
@@ -110,9 +113,12 @@ export default function VNextApplication() {
     )
   }
 
-  const missing = app?.missing_requirements
+  const missing = (app?.missing_requirements && typeof app.missing_requirements === 'object')
+    ? app.missing_requirements
+    : null
   const missingFields = Array.isArray(missing?.missing_fields) ? missing.missing_fields.length : null
   const missingDocs = Array.isArray(missing?.missing_docs) ? missing.missing_docs.length : null
+  const missingnessUnavailable = app != null && missing === null
 
   return (
     <div className="max-w-5xl mx-auto p-6 space-y-4">
@@ -203,17 +209,25 @@ export default function VNextApplication() {
           <CardTitle>Manual transitions</CardTitle>
         </CardHeader>
         <CardContent className="flex flex-wrap gap-2">
-          {STATE_ORDER.map((s) => (
-            <Button
-              key={s}
-              variant={s === currentState ? 'default' : 'outline'}
-              size="sm"
-              disabled={transitionMutation.isPending}
-              onClick={() => transitionMutation.mutate(s)}
-            >
-              {s}
-            </Button>
-          ))}
+          {STATE_ORDER.map((s) => {
+            const currentIdx = STATE_ORDER.indexOf(currentState)
+            const targetIdx = STATE_ORDER.indexOf(s)
+            // Only allow transitions to adjacent next state or back one step (for corrections);
+            // never allow skipping more than one state forward to protect pipeline integrity.
+            const isForwardSkip = targetIdx > currentIdx + 1
+            return (
+              <Button
+                key={s}
+                variant={s === currentState ? 'default' : 'outline'}
+                size="sm"
+                disabled={transitionMutation.isPending || isForwardSkip}
+                title={isForwardSkip ? `Cannot skip from ${currentState} to ${s}` : undefined}
+                onClick={() => transitionMutation.mutate(s)}
+              >
+                {s}
+              </Button>
+            )
+          })}
         </CardContent>
       </Card>
     </div>
