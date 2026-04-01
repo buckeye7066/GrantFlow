@@ -38,18 +38,33 @@ const MED_NEC_TRIGGERS = [
 export async function extractMedicalProfile(db, profileId) {
   if (!db || !profileId) return null
 
-  if (!db?.prepare) throw new Error('Invalid database connection'); const profile = await db.prepare('SELECT * FROM profiles WHERE id = ?').get(profileId)
+  if (!db?.prepare) throw new Error('Invalid database connection')
+  let profile
+  try {
+    profile = db.prepare('SELECT * FROM profiles WHERE id = ?').get(profileId)
+  } catch (dbErr) {
+    console.error('[medicalNecessity] DB error fetching profile', profileId, dbErr)
+    throw new Error(`Database error fetching profile ${profileId}: ${dbErr.message}`)
+  }
   if (!profile) return null
 
-  const rows = await db.prepare(
-    'SELECT section_key, data FROM profile_sections WHERE profile_id = ?'
-  ).all(profileId)
+  let rows
+  try {
+    rows = db.prepare(
+      'SELECT section_key, data FROM profile_sections WHERE profile_id = ?'
+    ).all(profileId)
+  } catch (dbErr) {
+    console.error('[medicalNecessity] DB error fetching profile sections', profileId, dbErr)
+    rows = []
+  }
 
   const sections = {}
   for (const r of (rows || [])) {
     try {
       sections[r.section_key] = typeof r.data === 'string' ? JSON.parse(r.data) : r.data
-    } catch { /* skip */ }
+    } catch (parseErr) {
+      console.warn('[medicalNecessity] Failed to parse section', r.section_key, 'for profile', profileId, parseErr.message)
+    }
   }
 
   const health = (sections.health_medical && typeof sections.health_medical === 'object') ? sections.health_medical : {}
@@ -230,13 +245,19 @@ function guessBestDocType(triggers) {
 }
 
 export async function scanPipelineForMedNec(db, profileId) {
-  const grants = await db.prepare(`
-    SELECT g.id, g.title, g.status, g.funding_opportunity_id, g.application_method,
-           fo.description, fo.eligibility_bullets, fo.application_url
-    FROM grants g
-    LEFT JOIN funding_opportunities fo ON g.funding_opportunity_id = fo.id
-    WHERE g.profile_id = ? AND g.status NOT IN ('closed', 'declined', 'archived')
-  `).all(profileId)
+  let grants
+  try {
+    grants = db.prepare(`
+      SELECT g.id, g.title, g.status, g.funding_opportunity_id, g.application_method,
+             fo.description, fo.eligibility_bullets, fo.application_url
+      FROM grants g
+      LEFT JOIN funding_opportunities fo ON g.funding_opportunity_id = fo.id
+      WHERE g.profile_id = ? AND g.status NOT IN ('closed', 'declined', 'archived')
+    `).all(profileId)
+  } catch (dbErr) {
+    console.error('[medicalNecessity] scanPipelineForMedNec DB error for profile', profileId, dbErr)
+    return []
+  }
 
   const flagged = []
   for (const g of (grants || [])) {
@@ -275,7 +296,7 @@ export async function generateMedicalNecessityDocument(db, profileId, options = 
 
   let opportunity = null
   if (opportunityId) {
-    opportunity = await db.prepare('SELECT * FROM funding_opportunities WHERE id = ?').get(opportunityId)
+    opportunity = db.prepare('SELECT * FROM funding_opportunities WHERE id = ?').get(opportunityId)
   }
   let grant = null
   if (grantId) {
@@ -290,7 +311,16 @@ export async function generateMedicalNecessityDocument(db, profileId, options = 
   })
 
   let openai = null
-  try { const client = createOpenAIClient({ allowMissing: true }); openai = client?.openai || null; } catch (err) { console.error('OpenAI client creation failed:', err); openai = null; }
+  try {
+    const client = createOpenAIClient({ allowMissing: true })
+    openai = client?.openai || null
+    if (!openai) {
+      console.warn('[medicalNecessity] OpenAI client unavailable (no key or misconfigured)')
+    }
+  } catch (err) {
+    console.error('[medicalNecessity] OpenAI client creation failed:', err)
+    openai = null
+  }
 
   if (!openai) {
     console.log('[medicalNecessity] No OpenAI key; generating template-based document')
