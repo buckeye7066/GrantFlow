@@ -143,16 +143,27 @@ Return ONLY the JSON. Use null for any information you cannot verify with confid
                 }
             });
 
+            if (!response || typeof response !== 'object') {
+                throw new Error('AI returned an invalid response. Cannot update contact information.');
+            }
+
+            const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+            const PHONE_RE = /^[\d\s().+\-]{7,20}$/;
+
             const updates = {
                 contact_verified: true,
                 contact_verified_date: new Date().toISOString(),
-                contact_notes: response.verification_notes || 'Re-verified via AI'
+                contact_notes: (typeof response.verification_notes === 'string' && response.verification_notes.trim())
+                    ? response.verification_notes.trim()
+                    : 'Re-verified via AI'
             };
-            
-            if (response.email) updates.funder_email = response.email;
-            if (response.phone) updates.funder_phone = response.phone;
-            if (response.fax) updates.funder_fax = response.fax;
-            if (response.address) updates.funder_address = response.address;
+
+            if (response.email && EMAIL_RE.test(response.email)) updates.funder_email = response.email;
+            if (response.phone && PHONE_RE.test(response.phone)) updates.funder_phone = response.phone;
+            if (response.fax && PHONE_RE.test(response.fax)) updates.funder_fax = response.fax;
+            if (response.address && typeof response.address === 'string' && response.address.trim().length > 5) {
+                updates.funder_address = response.address.trim();
+            }
 
             await updateGrantMutation.mutateAsync(updates);
 
@@ -396,7 +407,7 @@ Return ONLY the JSON. Use null for any information you cannot verify with confid
                         </div>
                     )}
 
-                    {['portal', 'submitted', 'application_prep', 'revision'].includes(grant.status) && (grant.application_url || grant.url || grant.funder_address || grant.funder_fax) && (
+                    {(['portal', 'submitted', 'application_prep', 'revision', 'awarded', 'identified'].includes(grant.status) || !grant.status) && (grant.application_url || grant.url || grant.funder_address || grant.funder_fax) && (
                         <Alert className="border-2 border-blue-200 bg-blue-50">
                             <Info className="h-4 w-4 text-blue-600" />
                             <AlertTitle className="text-blue-900">Ready to Submit</AlertTitle>
