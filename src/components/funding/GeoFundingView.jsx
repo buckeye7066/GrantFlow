@@ -146,7 +146,9 @@ function ZipSection({ zip, county, count, state, profileId, defaultOpen }) {
             </div>
           ) : opportunities.length === 0 ? (
             <div className="px-6 py-4 text-sm text-slate-400">
-              No opportunities found for this zip code.
+              {showScore
+                ? "No matching opportunities for your profile in this zip code. Try completing more profile sections to improve matching."
+                : "No opportunities indexed for this zip code yet."}
             </div>
           ) : (
             <div className="ml-6 border-l border-slate-200">
@@ -232,6 +234,18 @@ export default function GeoFundingView({ profileId }) {
           <Skeleton key={i} className="h-16 w-full rounded-lg" />
         ))}
       </div>
+    )
+  }
+
+  if (summaryQuery.isError) {
+    return (
+      <Card className="border border-dashed border-red-300 bg-red-50">
+        <CardContent className="py-12 text-center">
+          <p className="text-sm text-red-600">
+            Unable to load geographic funding data. Please refresh or contact support.
+          </p>
+        </CardContent>
+      </Card>
     )
   }
 
