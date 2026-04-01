@@ -120,8 +120,8 @@ const AIAddPartnerDialog = ({ open, onOpenChange, onFound }) => {
             const newPartnerData = {
                 name: partnerName,
                 org_type: data.org_type || 'other',
-                api_base_url: data.api_base_url || '',
-                contact_email: data.contact_email || '',
+                api_base_url: (data.api_base_url && /^https?:\/\//i.test(data.api_base_url)) ? data.api_base_url : '',
+                contact_email: (data.contact_email && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(data.contact_email)) ? data.contact_email : '',
                 auth_type: 'none',
                 status: 'inactive',
             };
@@ -322,8 +322,8 @@ export default function SourceRegistry() {
           const newPartner = await client.entities.PartnerSource.create({
             name: suggestion.name,
             org_type: suggestion.org_type || 'other',
-            api_base_url: suggestion.api_base_url || '',
-            contact_email: suggestion.contact_email || '',
+            api_base_url: (suggestion.api_base_url && /^https?:\/\//i.test(suggestion.api_base_url)) ? suggestion.api_base_url : '',
+            contact_email: (suggestion.contact_email && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(suggestion.contact_email)) ? suggestion.contact_email : '',
             auth_type: 'none',
             auth_secret_name: '',
             status: 'inactive',
@@ -361,15 +361,18 @@ export default function SourceRegistry() {
     },
   });
 
-  useEffect(() => {
-      if (aiSuggestionsModalOpen) {
-          aiGetSuggestionsMutation.mutate();
-      } else {
-          aiGetSuggestionsMutation.reset(); // Reset mutation state when dialog closes
-          setAiSuggestions([]); // Clear suggestions when dialog closes
-          setSelectedSuggestions([]); // Clear selected suggestions when dialog closes
-      }
-  }, [aiSuggestionsModalOpen]);
+  const aiGetSuggestionsMutate = aiGetSuggestionsMutation.mutate;
+const aiGetSuggestionsMutationReset = aiGetSuggestionsMutation.reset;
+
+useEffect(() => {
+  if (aiSuggestionsModalOpen) {
+    aiGetSuggestionsMutate();
+  } else {
+    aiGetSuggestionsMutationReset();
+    setAiSuggestions([]);
+    setSelectedSuggestions([]);
+  }
+}, [aiSuggestionsModalOpen, aiGetSuggestionsMutate, aiGetSuggestionsMutationReset]);
 
   const handleSave = (data) => {
     mutation.mutate(data);
