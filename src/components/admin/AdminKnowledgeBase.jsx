@@ -65,8 +65,9 @@ export default function AdminKnowledgeBase() {
 
   useEffect(() => {
     if (activeTab === 'browse') {
-      loadList({ q: '' })
+      loadList({ q })
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTab])
 
   const openDoc = async (id) => {
@@ -117,6 +118,7 @@ export default function AdminKnowledgeBase() {
       if (!safeUrl) throw new Error('Enter a URL')
       const data = await apiFetch('/api/admin/knowledge/ingest-url', {
         method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           url: safeUrl,
           name: urlName.trim() || undefined,
