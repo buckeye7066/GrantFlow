@@ -121,15 +121,33 @@ export async function runHealthCheck(db) {
 
   // 4. Audit profile signals — find profiles missing state or type
   try {
-    const profiles = db.prepare("SELECT id, display_name, state, type FROM profiles WHERE status = 'active'").all()
+    const profiles = db
+      .prepare(
+        "SELECT id, display_name, state, type, needs_json, military_json, education_json, health_json, housing_json, business_json FROM profiles WHERE status = 'active'",
+      )
+      .all()
     const missingState = profiles.filter((p) => !p.state)
     const missingType = profiles.filter((p) => !p.type)
+    const missingNeeds = profiles.filter((p) => !p.needs_json)
+    const missingDepthSections = profiles.filter(
+      (p) =>
+        !p.military_json && !p.education_json && !p.health_json && !p.housing_json && !p.business_json,
+    )
     status.profile_signal_audit = {
       total_active: profiles.length,
       missing_state: missingState.length,
       missing_type: missingType.length,
+      missing_needs: missingNeeds.length,
+      missing_all_depth_sections: missingDepthSections.length,
       missing_state_ids: missingState.slice(0, 10).map((p) => p.id),
       missing_type_ids: missingType.slice(0, 10).map((p) => p.id),
+      missing_needs_ids: missingNeeds.slice(0, 10).map((p) => p.id),
+      missing_depth_ids: missingDepthSections.slice(0, 10).map((p) => p.id),
+    }
+    if (missingState.length > 0 || missingType.length > 0 || missingNeeds.length > 0 || missingDepthSections.length > 0) {
+      console.warn(
+        `[AnyaHealth] Profile signal gaps: ${missingState.length} missing state, ${missingType.length} missing type, ${missingNeeds.length} missing needs, ${missingDepthSections.length} missing all depth sections`,
+      )
     }
     if (missingState.length > 0 || missingType.length > 0) {
       console.warn(
