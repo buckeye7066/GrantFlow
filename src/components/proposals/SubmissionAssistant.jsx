@@ -62,9 +62,13 @@ export default function SubmissionAssistant({ open, onClose, grant, organization
     onSuccess: (result) => {
       const url = result?.artifact?.download_url
       if (url) {
-        downloadAuthenticatedUrl(url, { fallbackFileName: `application_${applicationId || 'export'}.docx` }).catch(() => {
-          // errors are surfaced via the browser + backend; keep UI stable
+        downloadAuthenticatedUrl(url, { fallbackFileName: `application_${applicationId || 'export'}.docx` }).catch((err) => {
+          console.error('[SubmissionAssistant] export download failed', err)
+          // NOTE: surface this to the user via a toast/alert in a follow-up;
+          // at minimum we log so the failure is observable.
         })
+      } else {
+        console.warn('[SubmissionAssistant] exportPackage returned no download_url', result)
       }
     },
   })
@@ -110,7 +114,14 @@ export default function SubmissionAssistant({ open, onClose, grant, organization
   const canSubmit =
     Boolean(applicationId) &&
     Boolean(submissionMethod) &&
-    (submissionMethod === 'download' || recipientEmail || recipientFax || recipientAddress || notes)
+    (
+      submissionMethod === 'download' ||
+      submissionMethod === 'portal' ||
+      recipientEmail ||
+      recipientFax ||
+      recipientAddress ||
+      notes
+    )
 
   const busy = validateMutation.isPending || exportMutation.isPending || submitMutation.isPending || autoPopulateMutation.isPending
 
