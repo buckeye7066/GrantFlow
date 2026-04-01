@@ -2,18 +2,20 @@ import Database from 'better-sqlite3';
 import pg from 'pg';
 
 // Validate critical environment on startup
+import fs from 'fs';
+import { fileURLToPath } from 'url';
+import { dirname, join } from 'path';
+
+// Validate critical environment on startup
 if (process.env.NODE_ENV === 'production') {
   const hasRailwayEnv = Boolean(process.env.RAILWAY_PROJECT_ID || process.env.RAILWAY_SERVICE_ID);
   const hasPostgresUrl = /^postgres(ql)?:\/\//i.test(String(process.env.DATABASE_URL || ''));
   const hasPostgresVars = Boolean(process.env.PGHOST && process.env.PGUSER && process.env.PGDATABASE);
-  
+
   if (hasRailwayEnv && !hasPostgresUrl && !hasPostgresVars) {
     throw new Error('[db] FATAL: Railway production deployment detected but no Postgres configuration found. Set DATABASE_URL or PGHOST/PGUSER/PGDATABASE.');
   }
 }
-import fs from 'fs';
-import { fileURLToPath } from 'url';
-import { dirname, join } from 'path';
 
 const { Pool } = pg;
 
@@ -422,12 +424,19 @@ class SqliteDb {
   }
 
   async withTransaction(fn) {
-    // Use better-sqlite3's built-in transaction for proper isolation
+    // better-sqlite3 transactions are synchronous.
+    // If fn returns a Promise, we must reject rather than silently commit before the async work finishes.
     const txFn = this._db.transaction((txThis) => {
-      return fn(txThis);
+      const result = fn(txThis);
+      if (result && typeof result.then === 'function') {
+        throw new Error(
+          '[SqliteDb.withTransaction] Callback must be synchronous for SQLite transactions. ' +
+          'Use PostgresDb or restructure your callback to avoid async operations inside the transaction.'
+        );
+      }
+      return result;
     });
-    
-    return await txFn(this);
+    return txFn(this);
   }
 
   close() {
@@ -507,12 +516,15 @@ class PostgresDb {
   constructor(connectionString) {
     this.dialect = 'postgres';
     this.url = connectionString;
+    const sslMode = String(process.env.PGSSLMODE || '').trim().toLowerCase();
+    const requireSsl = connectionString.includes('sslmode=require') || (isProd() && isRailwayRuntime() && sslMode !== 'disable');
     this._pool = new Pool({
       connectionString,
       max: Number(process.env.DB_POOL_MAX || process.env.PG_POOL_MAX || 20),
       idleTimeoutMillis: Number(process.env.PG_POOL_IDLE_MS || 30000),
       connectionTimeoutMillis: Number(process.env.PG_POOL_CONN_TIMEOUT_MS || 10000),
       statement_timeout: Number(process.env.PG_STATEMENT_TIMEOUT_MS || 15000),
+      ...(requireSsl ? { ssl: { rejectUnauthorized: false } } : {}),
     });
   }
 
