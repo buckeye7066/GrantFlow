@@ -16,8 +16,7 @@ function normalizeTrack(track) {
   const t = String(track).trim().toLowerCase()
   if (t === 'client' || t === 'a' || t === 'beneficiary') return 'CLIENT'
   if (t === 'provider' || t === 'b' || t === 'caregiver') return 'PROVIDER'
-  if (t === 'CLIENT') return 'CLIENT'
-  if (t === 'PROVIDER') return 'PROVIDER'
+  // removed: t is already lowercased, these branches are unreachable
   return null
 }
 
@@ -31,8 +30,13 @@ function buildFilters({ search, jurisdiction, state, county, isActive, dialect }
 
   if (typeof isActive === 'string') {
     const v = isActive.trim().toLowerCase()
-    if (v === 'true' || v === '1') where.push(dialect === 'postgres' ? 'is_active = $1' : 'is_active = ?'); params.push(dialect === 'postgres' ? true : 1)
-    if (v === 'false' || v === '0') { where.push('is_active = ?'); params.push(0); }
+    if (v === 'true' || v === '1') {
+      where.push('is_active = ?')
+      params.push(1)
+    } else if (v === 'false' || v === '0') {
+      where.push('is_active = ?')
+      params.push(0)
+    }
   }
 
   if (jurisdiction) {
