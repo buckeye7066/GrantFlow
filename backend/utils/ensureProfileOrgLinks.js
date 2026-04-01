@@ -127,7 +127,7 @@ export async function ensureProfileOrgLinks(db, opts = {}) {
 
       // 1) Match existing org by email.
       if (email) {
-        const match = await tx
+        const emailMatch = await tx
           .prepare(
             `
               SELECT id
@@ -138,27 +138,27 @@ export async function ensureProfileOrgLinks(db, opts = {}) {
             `,
           )
           .get(email)
-        if (match?.id) {
-          orgId = String(match.id)
+        if (emailMatch?.id) {
+          orgId = String(emailMatch.id)
           summary.matched_by_email += 1
         }
       }
 
-      // 2) Match existing org by normalized name.
+      // 2) Match existing org by normalized name (also guards against duplicate creation for email-less profiles).
       if (!orgId) {
-        const match = await tx
+        const nameMatch = await tx
           .prepare(
             `
               SELECT id
               FROM organizations
-              WHERE name = ?
+              WHERE name = ? AND (email IS NULL OR email = '')
               ORDER BY updated_at DESC
               LIMIT 1
             `,
           )
           .get(desiredName)
-        if (match?.id) {
-          orgId = String(match.id)
+        if (nameMatch?.id) {
+          orgId = String(nameMatch.id)
           summary.matched_by_name += 1
         }
       }
@@ -166,7 +166,6 @@ export async function ensureProfileOrgLinks(db, opts = {}) {
       // 3) Create a new org.
       if (!orgId) {
         orgId = crypto.randomUUID()
-        summary.created_new_org += 1
         summary.planned_org_creates += 1
 
         if (!dryRun) {
@@ -180,6 +179,7 @@ export async function ensureProfileOrgLinks(db, opts = {}) {
             )
             .run(orgId, desiredName, email, applicantType)
           summary.applied_org_creates += 1
+          summary.created_new_org += 1
         }
       }
 
