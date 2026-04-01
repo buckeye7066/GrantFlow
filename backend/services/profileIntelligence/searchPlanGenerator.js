@@ -74,9 +74,9 @@ function buildGeographyTerms(intel) {
   if (intel.county) terms.push(`${intel.county} county`)
   if (intel.zip) terms.push(intel.zip)
 
-  if (intel.geographicFlags.has('rural')) terms.push('rural')
-  if (intel.geographicFlags.has('tribal_land')) terms.push('tribal')
-  if (intel.geographicFlags.has('underserved')) terms.push('underserved')
+  if (intel.geographicFlags?.has('rural')) terms.push('rural')
+  if (intel.geographicFlags?.has('tribal_land')) terms.push('tribal')
+  if (intel.geographicFlags?.has('underserved')) terms.push('underserved')
 
   return terms
 }
@@ -125,34 +125,34 @@ function buildBoostedTerms(intel, needCode) {
   if (intel.geographicFlags.has('underserved')) boosted.push('underserved community')
 
   // Special eligibility boosts
-  if (intel.eligibilityFlags.has('is_501c3')) boosted.push('501(c)(3)')
-  if (intel.eligibilityFlags.has('faith_based') || intel.isChurch) boosted.push('faith-based')
+  if (intel.eligibilityFlags?.has('is_501c3')) boosted.push('501(c)(3)')
+  if (intel.eligibilityFlags?.has('faith_based') || intel.isChurch) boosted.push('faith-based')
   if (intel.isVeteran) boosted.push('veteran')
   if (intel.isStudent) boosted.push('student')
-  if (intel.organizationFlags.has('hbcu')) boosted.push('HBCU')
-  if (intel.organizationFlags.has('hsi')) boosted.push('HSI')
-  if (intel.organizationFlags.has('volunteer_organization')) boosted.push('volunteer')
+  if (intel.organizationFlags?.has('hbcu')) boosted.push('HBCU')
+  if (intel.organizationFlags?.has('hsi')) boosted.push('HSI')
+  if (intel.organizationFlags?.has('volunteer_organization')) boosted.push('volunteer')
 
   // Hardship boosts
-  if (intel.hardshipFlags.has('low_income') || intel.hardshipFlags.has('low_budget')) {
+  if (intel.hardshipFlags?.has('low_income') || intel.hardshipFlags?.has('low_budget')) {
     boosted.push('low income')
   }
-  if (intel.hardshipFlags.has('financial_hardship')) boosted.push('hardship')
+  if (intel.hardshipFlags?.has('financial_hardship')) boosted.push('hardship')
 
   // Disability
-  if (intel.disabilityFlags.size > 0) boosted.push('disability')
+  if ((intel.disabilityFlags?.size ?? 0) > 0) boosted.push('disability')
 
   // Minority
-  if (intel.demographicFlags.has('ethnicity:hispanic') ||
-    intel.demographicFlags.has('ethnicity:latino')) {
+  if (intel.demographicFlags?.has('ethnicity:hispanic') ||
+    intel.demographicFlags?.has('ethnicity:latino')) {
     boosted.push('Hispanic Latino')
   }
-  if (intel.demographicFlags.has('ethnicity:african_american') ||
-    intel.demographicFlags.has('ethnicity:black')) {
+  if (intel.demographicFlags?.has('ethnicity:african_american') ||
+    intel.demographicFlags?.has('ethnicity:black')) {
     boosted.push('African American Black')
   }
-  if (intel.organizationFlags.has('minority_owned_business') ||
-    intel.eligibilityFlags.has('minority_owned_business')) {
+  if (intel.organizationFlags?.has('minority_owned_business') ||
+    intel.eligibilityFlags?.has('minority_owned_business')) {
     boosted.push('minority-owned')
   }
 
@@ -163,6 +163,7 @@ function buildBoostedTerms(intel, needCode) {
 // Exclusion terms
 // ---------------------------------------------------------------------------
 function buildExclusions(intel, needDef) {
+  if (!needDef) return []
   const exclusions = []
 
   // Exclude disallowed entity types
@@ -224,7 +225,12 @@ function buildPlansForNeed(inferredNeed, intel) {
         entity_types: [...(def?.related_entity_types ?? [])],
         geography_terms: geographyTerms,
         exclusions,
-        priority: lane === SEARCH_LANE.FEDERAL ? priority : Math.max(10, priority - 10),
+        priority: (() => {
+          if (lane === SEARCH_LANE.FEDERAL) return priority
+          // State/local lanes are equally primary for community-level needs
+          if (lane === SEARCH_LANE.STATE || lane === SEARCH_LANE.LOCAL) return Math.max(10, priority - 5)
+          return Math.max(10, priority - 10)
+        })(),
         expected_funding: fundingCategory,
         search_federal: lane === SEARCH_LANE.FEDERAL,
         search_state: lane === SEARCH_LANE.STATE,
@@ -272,7 +278,15 @@ export function generateSearchPlans(intel, options = {}) {
 
   // Filter out low-confidence unless opted in
   if (!includeLowConfidence) {
+    const before = needs.length
     needs = Array.isArray(needs) ? needs.filter(n => n.confidence !== 'low') : []
+    const dropped = before - needs.length
+    if (dropped > 0) {
+      console.debug(
+        `[searchPlanGenerator] Suppressed ${dropped} low-confidence need(s) from plan generation. ` +
+        'Pass includeLowConfidence:true to include them.'
+      )
+    }
   }
 
   // Generate plans for each need
@@ -284,14 +298,23 @@ export function generateSearchPlans(intel, options = {}) {
 
   // Sort by priority descending, deduplicate same need+lane
   const seen = new Set()
+  let dedupDropped = 0
   const deduped = allPlans
     .sort((a, b) => b.priority - a.priority)
     .filter(plan => {
       const key = `${plan.need_code}:${plan.search_lane}:${plan.expected_funding}`
-      if (seen.has(key)) return false
+      if (seen.has(key)) { dedupDropped++; return false }
       seen.add(key)
       return true
     })
+
+  if (dedupDropped > 0) {
+    console.debug(`[searchPlanGenerator] Deduplication removed ${dedupDropped} duplicate search plan(s).`)
+  }
+  const truncated = deduped.length - Math.min(deduped.length, maxPlans)
+  if (truncated > 0) {
+    console.debug(`[searchPlanGenerator] maxPlans=${maxPlans} truncated ${truncated} lower-priority plan(s).`)
+  }
 
   return deduped.slice(0, maxPlans)
 }
