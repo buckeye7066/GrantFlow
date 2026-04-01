@@ -275,8 +275,8 @@ router.post('/crawlBenefitsGov', async (req, res) => {
         try {
           const title = String(p?.title || 'Benefit Program').trim()
           const sponsor = String(p?.sponsor || `${resolvedState} program`).trim()
-          const sourceUrl = p?.source_url || p?.application_url || 'https://www.benefits.gov'
-          const appUrl = p?.application_url || sourceUrl
+          const sourceUrl = p?.source_url || p?.application_url || null
+          const appUrl = p?.application_url || p?.source_url || null
           const opp = {
             id: stableId('benefits-gov', resolvedState, title),
             title,
@@ -301,6 +301,7 @@ router.post('/crawlBenefitsGov', async (req, res) => {
           if (r?.error) errors += 1
         } catch (e) {
           errors += 1
+          console.warn('[crawlBenefitsGov] upsertFundingOpportunity failed for opportunity:', p?.title ?? '(unknown)', e?.message || e)
         }
       }
 
@@ -362,19 +363,19 @@ router.post('/discoverLocalSources', async (req, res) => {
       {
         name: `${city ? `${city} ` : ''}Community Foundation`,
         source_type: 'community_foundation',
-        website_url: 'https://example.com',
+        website_url: null,
         notes: 'Seeded by local discovery. Replace with real URLs.',
       },
       {
         name: `${state ? `${state} ` : ''}Department of Development`,
         source_type: 'state_agency',
-        website_url: 'https://example.com',
+        website_url: null,
         notes: 'Seeded by local discovery. Replace with real URLs.',
       },
       {
         name: 'Regional Hospital System Grants',
         source_type: 'hospital_system',
-        website_url: 'https://example.com',
+        website_url: null,
         notes: 'Seeded by local discovery. Replace with real URLs.',
       },
     ]
@@ -430,7 +431,7 @@ router.post('/searchForSource', async (req, res) => {
     id: null,
     discovered_for_organization_id: String(organization_id),
     name,
-    website_url: 'https://example.com',
+    website_url: null,
     scholarship_page_url: '',
     city: '',
     state: '',
