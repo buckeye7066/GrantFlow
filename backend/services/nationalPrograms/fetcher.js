@@ -38,11 +38,11 @@ export class RateLimitedFetcher {
   async fetch(url, options = {}) {
     const host = hostOf(url) ?? 'unknown'
     const state = this._state(host)
-    return new Promise((resolve) => {
+    return new Promise((resolve, reject) => {
       state.queue.push({ url, options, resolve })
       this._pump(host).catch((err) => {
         console.error(`[RateLimitedFetcher] Pump error for ${host}:`, err)
-        // Individual task resolves to error response
+        resolve({ ok: false, error: err })
       })
     })
   }
@@ -58,8 +58,13 @@ export class RateLimitedFetcher {
         .finally(() => {
           state.inFlight -= 1
           this._pump(host).catch(e => {
-            console.error('[RateLimitedFetcher] Background pump error:', e)
-            // Consider adding error reporting service integration
+            console.error('[RateLimitedFetcher] Background pump error for host ' + host + ':', e)
+            // Drain remaining queued tasks so callers are not left hanging
+            const st = this._state(host)
+            while (st.queue.length > 0) {
+              const t = st.queue.shift()
+              t.resolve({ ok: false, error: e })
+            }
           })
         })
     }
