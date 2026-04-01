@@ -308,7 +308,7 @@ function inferIndividualHardshipNeeds(intel, resultMap) {
   const { entityType, hardshipFlags, demographicFlags, militaryFlags, disabilityFlags,
     storyKeywords, enrolledPrograms } = intel
 
-  if (entityType !== ET.INDIVIDUAL) return
+  if (entityType !== ET.INDIVIDUAL && entityType !== 'student') return
 
   // Housing instability
   if ((hardshipFlags ?? new Set()).has('housing_instability') || (hardshipFlags ?? new Set()).has('homeless') ||
@@ -338,7 +338,7 @@ function inferIndividualHardshipNeeds(intel, resultMap) {
   }
 
   // Medical/health
-  if (disabilityFlags.size > 0 || (hardshipFlags ?? new Set()).has('medical_hardship') ||
+  if ((disabilityFlags ?? new Set()).size > 0 || (hardshipFlags ?? new Set()).has('medical_hardship') ||
     storyKeywords.some(k => /medical bill|prescription|doctor|health|dental|vision|mental health/i.test(k))) {
     mergeNeed(resultMap, 'health_medical_support', CONF_HIGH_MEDIUM,
       ['medical/health hardship signal or disability flag'],
@@ -347,7 +347,7 @@ function inferIndividualHardshipNeeds(intel, resultMap) {
   }
 
   // Disability-specific
-  if (disabilityFlags.size > 0) {
+  if ((disabilityFlags ?? new Set()).size > 0) {
     mergeNeed(resultMap, 'health_medical_support', CONF_HIGH_MEDIUM,
       ['disability/chronic illness flag'],
       ['health_medical'],
@@ -403,7 +403,7 @@ function inferIndividualHardshipNeeds(intel, resultMap) {
 }
 
 function inferStudentNeeds(intel, resultMap) {
-  const { entityType, isStudent, storyKeywords, demographicFlags, disabilityFlags } = intel
+  const { entityType, isStudent, storyKeywords, demographicFlags = new Set(), disabilityFlags = new Set(), hardshipFlags = new Set() } = intel
 
   // Student individual or entity_type=student
   if (!isStudent && entityType !== 'student') return
@@ -429,7 +429,7 @@ function inferStudentNeeds(intel, resultMap) {
       ['active_unmet_need'])
   }
 
-  if (disabilityFlags.size > 0) {
+  if ((disabilityFlags ?? new Set()).size > 0) {
     mergeNeed(resultMap, 'health_medical_support', CONF_MEDIUM,
       ['student with disability'],
       ['health_medical'],
