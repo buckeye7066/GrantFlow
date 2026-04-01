@@ -52,8 +52,8 @@ export default function InvoiceView() {
     queryKey: ['invoice-lines', invoiceId],
     queryFn: async () => {
       if (!invoiceId) return [];
-      const allLines = await client.entities.InvoiceLine.list();
-      return allLines.filter(l => l.invoice_id === invoiceId).sort((a, b) => (a.line_order || 0) - (b.line_order || 0));
+      const allLines = await client.entities.InvoiceLine.list({ invoice_id: invoiceId });
+      return allLines.sort((a, b) => (a.line_order || 0) - (b.line_order || 0));
     },
     enabled: !!invoiceId
   });
@@ -152,7 +152,7 @@ export default function InvoiceView() {
               <Printer className="w-4 h-4 mr-2" />
               Print
             </Button>
-            <Button variant="outline" onClick={handlePrint}>
+            <Button variant="outline" onClick={handleDownloadPdf}>
               <Download className="w-4 h-4 mr-2" />
               Download PDF
             </Button>
@@ -168,7 +168,7 @@ export default function InvoiceView() {
               <div>
                 <h1 className="text-4xl font-bold text-slate-900 mb-2">INVOICE</h1>
                 <p className="text-slate-600">Invoice #: {invoice.invoice_number}</p>
-                <p className="text-slate-600">Date: {invoice.issue_date && !isNaN(new Date(invoice.issue_date)) ? format(new Date(invoice.issue_date), 'MMM dd, yyyy') : 'N/A'}</p>
+                <p className="text-slate-600">Date: {invoice.issue_date && !isNaN(new Date(invoice.issue_date).getTime()) ? format(new Date(invoice.issue_date), 'MMM dd, yyyy') : 'N/A'}</p>
                 {invoice.due_date && !isNaN(new Date(invoice.due_date)) && (
                   <p className="text-slate-600">Due: {format(new Date(invoice.due_date), 'MMM dd, yyyy')}</p>
                 )}
