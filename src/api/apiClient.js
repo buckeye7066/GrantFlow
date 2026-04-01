@@ -29,18 +29,26 @@ export const del = (...args) => client.delete(...args)
 export const setAccessToken = (t) => client.setToken(t)
 export const getAccessToken = () => client.getToken()
 export const clearAccessToken = () => {
-  client.token = null
-  if (typeof window !== 'undefined') {
-    window.localStorage.removeItem('grantflow:access-token')
+  if (typeof client.clearToken === 'function') {
+    client.clearToken()
+  } else {
+    client.token = null
+    if (typeof window !== 'undefined') {
+      window.localStorage.removeItem('grantflow:access-token')
+    }
   }
 }
 
 export const setRefreshToken = (t) => client.setRefreshToken(t)
 export const getRefreshToken = () => client.getRefreshToken()
 export const clearRefreshToken = () => {
-  client.refreshToken = null
-  if (typeof window !== 'undefined') {
-    window.localStorage.removeItem('grantflow:refresh-token')
+  if (typeof client.clearRefreshToken === 'function') {
+    client.clearRefreshToken()
+  } else {
+    client.refreshToken = null
+    if (typeof window !== 'undefined') {
+      window.localStorage.removeItem('grantflow:refresh-token')
+    }
   }
 }
 
