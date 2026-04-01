@@ -217,9 +217,7 @@ function evaluatePrograms(s) {
   // ── WIC ───────────────────────────────────────────────────────────────────
   const wicEligible =
     (p !== null ? p <= 185 : true) &&
-    (s.isPregnant ||
-      (children > 0 && age !== null && age <= 5) ||
-      s.isPregnant)
+    (s.isPregnant || children > 0)
   add(
     {
       id: 'wic',
@@ -326,7 +324,10 @@ function evaluatePrograms(s) {
   )
 
   // ── EITC ──────────────────────────────────────────────────────────────────
-  const eitcIncomeCap = hs === 1 ? 18600 : hs === 2 ? 49400 : 56000 // rough 2024 thresholds
+  // EITC 2024 income limits indexed by number of qualifying children (0/1/2/3+)
+const eitcChildren = Math.min(s.numChildren, 3)
+const eitcIncomeCaps = [19524, 43492, 49399, 53120] // single/MFS filer caps; MFJ ~$6k higher
+const eitcIncomeCap = eitcIncomeCaps[eitcChildren]
   add(
     {
       id: 'eitc',
@@ -495,7 +496,7 @@ export function screenBenefitEligibility(profileContext) {
     }
   }
 
-  const alreadyReceiving = signals.receivingBenefits
+  const alreadyReceiving = [...new Set(signals.receivingBenefits)]
 
   return { eligible, alreadyReceiving, suggestions }
 }
