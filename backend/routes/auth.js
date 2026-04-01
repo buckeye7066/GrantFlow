@@ -2001,6 +2001,15 @@ router.post('/email/verify', async (req, res) => {
       })
   }
 
+  // CodeGuard audit on admin login — self-throttles to once per 6 hours
+  if (user.role === 'admin') {
+    import('../services/anyaStartupAudit.js')
+      .then(({ triggerStartupAudit }) => {
+        triggerStartupAudit(req.db)
+      })
+      .catch(() => { /* non-critical */ })
+  }
+
   // Admin notice on successful sign-in (post-verify)
   sendAuthAttemptNotification({
     event: 'sign_in',
@@ -2274,6 +2283,15 @@ router.post('/phone/verify', async (req, res) => {
       jobs_created: Object.keys(anyaInfo.jobIds).length,
       profile_id: anyaInfo.profileId,
     }
+  }
+
+  // CodeGuard audit on admin phone login — self-throttles to once per 6 hours
+  if (user.role === 'admin') {
+    import('../services/anyaStartupAudit.js')
+      .then(({ triggerStartupAudit }) => {
+        triggerStartupAudit(req.db)
+      })
+      .catch(() => { /* non-critical */ })
   }
 
   // Admin notice on successful sign-in (post-verify)

@@ -220,7 +220,19 @@ export function startBackgroundServices({ db, uploadsDir, actualPort, loggedCors
     );
   }
 
-  // ── 10. National programs continuous crawler (opt-in) ─────────────────────
+  // ── 10. CodeGuard startup audit (Anya's system health brain) ─────────────
+  // Delayed 30s to ensure all routes are registered before endpoint probing.
+  setTimeout(() => {
+    import('../services/anyaStartupAudit.js')
+      .then(({ triggerStartupAudit }) => {
+        triggerStartupAudit(db, { port: actualPort });
+      })
+      .catch((err) => {
+        console.warn('[codeGuard] Failed to start audit:', err?.message || err);
+      });
+  }, 30_000);
+
+  // ── 11. National programs continuous crawler (opt-in) ─────────────────────
   if (process.env.NATIONAL_PROGRAMS_CRAWLER_ENABLED === 'true') {
     const intervalMinutes = Number.parseInt(
       process.env.NATIONAL_PROGRAMS_CRAWLER_INTERVAL_MINUTES || '360',

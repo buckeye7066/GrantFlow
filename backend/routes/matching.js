@@ -62,7 +62,7 @@ router.get('/profile/:profileId/grants', async (req, res) => {
       const baseContext = await loadProfileContext(req.db, profileId)
                    const profileContext = buildProfileFacets(baseContext)
 
-      // Pre-normalize profile once for the v2.0.0 decision engine
+      // Pre-normalize profile once for the decision engine
       const rawProfileForGrants = profileContext?.profile ?? profileContext
       const profileSectionsForGrants = profileContext?.sections ?? null
       const profileNormForDecision = normalizeProfile(rawProfileForGrants, profileSectionsForGrants, baseContext.signals)
@@ -317,7 +317,7 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
               needsTransport: kws.has('transportation') || kws.has('ride assistance'),
       }
 
-      // Pre-normalize profile once for the v2.0.0 REJECT filter (avoids re-running per opportunity)
+      // Pre-normalize profile once for the REJECT filter (avoids re-running per opportunity)
       const rawProfileForDecision = profileContext?.profile ?? profileContext
       const profileSectionsForDecision = profileContext?.sections ?? null
       const profileNormForDecision = normalizeProfile(rawProfileForDecision, profileSectionsForDecision, baseContext.signals)

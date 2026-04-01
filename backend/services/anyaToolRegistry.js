@@ -2416,3 +2416,97 @@ registerTool({
     }
   },
 })
+
+// ---------------------------------------------------------------------------
+// CodeGuard audit tools — Anya's system health brain
+// ---------------------------------------------------------------------------
+
+import {
+  testEndpoints as cgTestEndpoints,
+  auditMatchQuality as cgAuditMatchQuality,
+  verifyMissionGoals as cgVerifyMissionGoals,
+  getAuditSummary as cgGetAuditSummary,
+} from './codeGuardService.js'
+
+registerTool({
+  name: 'admin.codeGuard.endpointHealth',
+  description: 'Run live health checks against all GrantFlow API endpoints. Returns pass/fail/skip counts and response times. Use when asked about system health, API status, or endpoint reliability.',
+  requiresAdmin: true,
+  schema: {
+    type: 'object',
+    properties: {
+      port: { type: 'number', description: 'Server port (defaults to process.env.PORT or 3001)' },
+    },
+  },
+  handler: async (params, context) => {
+    const db = context?.db
+    if (!db) throw new Error('Database connection required')
+    const port = params?.port || process.env.PORT || 3001
+    const baseUrl = `http://localhost:${port}`
+    const token = process.env.ADMIN_TOKEN || process.env.ANYA_ADMIN_TOKEN || null
+    return cgTestEndpoints(db, baseUrl, token)
+  },
+})
+
+registerTool({
+  name: 'admin.codeGuard.matchAudit',
+  description: 'Audit match quality across all profiles. Grades each profile A-F based on pipeline completeness (decision metadata, explanations, URLs, matched needs). Use when asked about match quality, pipeline health, or profile-level performance.',
+  requiresAdmin: true,
+  schema: { type: 'object', properties: {} },
+  handler: async (_params, context) => {
+    const db = context?.db
+    if (!db) throw new Error('Database connection required')
+    return cgAuditMatchQuality(db)
+  },
+})
+
+registerTool({
+  name: 'admin.codeGuard.missionVerify',
+  description: 'Run the 15-goal GrantFlow mission verification. Tests real funding URLs, need matching, junk rejection, decision engine usage, profile depth, applicant types, recall balance, explainability, fingerprints, crawling, Anya health, and more. Returns a scorecard with PASS/WARN/FAIL per goal.',
+  requiresAdmin: true,
+  schema: { type: 'object', properties: {} },
+  handler: async (_params, context) => {
+    const db = context?.db
+    if (!db) throw new Error('Database connection required')
+    return cgVerifyMissionGoals(db)
+  },
+})
+
+registerTool({
+  name: 'admin.codeGuard.status',
+  description: 'Get the latest CodeGuard audit summary (endpoint health, match quality grades, mission score). This data is collected automatically on admin startup and refreshed every 6 hours. Use when asked "how is the system?" or "what does CodeGuard say?"',
+  requiresAdmin: true,
+  schema: { type: 'object', properties: {} },
+  handler: async (_params, context) => {
+    const db = context?.db
+    if (!db) throw new Error('Database connection required')
+    return { summary: cgGetAuditSummary(db) }
+  },
+})
+
+registerTool({
+  name: 'admin.codeGuard.deepSweep',
+  description: 'Run a full deep sweep: endpoint health + match quality audit + mission verification, all at once. Equivalent to CodeGuard\'s Deep Sweep mode. Use when asked to do a full system check or comprehensive audit.',
+  requiresAdmin: true,
+  schema: { type: 'object', properties: {} },
+  handler: async (_params, context) => {
+    const db = context?.db
+    if (!db) throw new Error('Database connection required')
+    const port = process.env.PORT || 3001
+    const baseUrl = `http://localhost:${port}`
+    const token = process.env.ADMIN_TOKEN || process.env.ANYA_ADMIN_TOKEN || null
+
+    const [endpoints, matchQuality, mission] = await Promise.allSettled([
+      cgTestEndpoints(db, baseUrl, token),
+      cgAuditMatchQuality(db),
+      cgVerifyMissionGoals(db),
+    ])
+
+    return {
+      endpoints: endpoints.status === 'fulfilled' ? endpoints.value : { error: endpoints.reason?.message },
+      matchQuality: matchQuality.status === 'fulfilled' ? matchQuality.value : { error: matchQuality.reason?.message },
+      mission: mission.status === 'fulfilled' ? mission.value : { error: mission.reason?.message },
+      summary: cgGetAuditSummary(db),
+    }
+  },
+})

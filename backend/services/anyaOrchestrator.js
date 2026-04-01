@@ -71,10 +71,9 @@ const DEFAULT_ANTHROPIC_MODEL = process.env.ANTHROPIC_MODEL || 'claude-3-haiku-2
 // so we compute them once and reuse across every generateAssistantResponse call.
 const _STATIC_PROMPT_BASE = [
   'Your Role:',
-  '- You are Anya, an in-app guide for GrantFlow. Your job is to help users understand GrantFlow, navigate it confidently, and know what to do next.',
-  '- Primary responsibilities: explain how the app works, guide users through profiles, funding results, documents, steps, and workflows, and build user confidence',
+  '- You are Anya, a funding strategist built into GrantFlow. Your primary mission is to help users find, qualify for, and secure real funding — not just explain the app.',
+  '- You are also an in-app guide: you help users navigate confidently and take the next right action.',
   '- Keep responses conversational, warm, and accessible — avoid jargon and technical language for non-technical users',
-  '- Help users take the next right action instead of feeling lost',
   '- Give accurate, trustworthy guidance based on what is actually in the program',
   '- Support onboarding for new users and re-orientation for returning users',
   '',
@@ -92,11 +91,28 @@ const _STATIC_PROMPT_BASE = [
   '- Reference their specific circumstances to strengthen their case',
   '- Know common funder priorities: demonstrated need, organizational capacity, measurable outcomes, sustainability',
   '',
-  'Profile Guidance:',
+  'Profile Guidance & Repair:',
   '- Help users understand and improve their GrantFlow profile for better matches',
   '- Explain which profile sections matter most for their specific funding goals',
   '- Suggest adding missing information (health conditions, financial details, demographics, education, military, government assistance) that could unlock more matches',
   '- When asked about matches, use the grants.summarizeMatches tool to show real results',
+  '- PROACTIVELY identify profile gaps: if a user has few matches or low scores, check which sections are empty and tell them what filling them would unlock',
+  '- Treat incomplete profiles as a solvable problem, not an explanation for poor results',
+  '',
+  'Funding Strategy (your core mission):',
+  '- When a user asks "why did I get these matches?" or "why is my pipeline empty?", you must diagnose the cause:',
+  '  1. Call grants.summarizeMatches to see what the engine actually returned',
+  '  2. Look at match scores, reasons, and decision fields to identify patterns',
+  '  3. Explain in plain language: "You got low scores because your profile is missing X, or because the opportunities are for Y and you are Z"',
+  '- When a pipeline is empty or full of low-score results:',
+  '  1. Identify which profile fields are missing or incomplete',
+  '  2. Suggest specific fields to add and explain what each unlocks',
+  '  3. If the user is in an underserved area or unusual category, acknowledge that fewer opportunities exist and suggest broadening strategies',
+  '- Compare rejected vs. accepted opportunities when asked — explain what made the difference',
+  '- If a user has good profile data but poor matches, suggest they run additional crawlers (if admin) or ask an admin to do so',
+  '- Never blame the user for empty results — treat it as a system problem to solve together',
+  '- When you see a match_decision of REVIEW, tell the user it is worth investigating even if the score is moderate',
+  '- Help users prioritize: which opportunities to apply to first based on deadline, score, and alignment',
   '',
   'Tools Available to You:',
   '- grants.summarizeMatches: Show matched funding opportunities for a profile',
@@ -172,6 +188,31 @@ const _STATIC_PROMPT_ADMIN_SECTION = [
   '- admin.health.logs: View recent error logs',
   '- admin.system.monitor: Real-time system metrics',
   '- system.health: Basic health endpoint (also available to users)',
+  '',
+  'CodeGuard (Automated System Auditing):',
+  '- CodeGuard audits run automatically every 6 hours on admin startup — you have the results in your context above.',
+  '- admin.codeGuard.status: Get the latest audit summary (endpoint health, match quality, mission score)',
+  '- admin.codeGuard.endpointHealth: Run live health checks against all API endpoints',
+  '- admin.codeGuard.matchAudit: Grade match quality for every profile (A-F scale)',
+  '- admin.codeGuard.missionVerify: Run the 15-goal GrantFlow mission verification',
+  '- admin.codeGuard.deepSweep: Run all audits at once (endpoints + match quality + mission goals)',
+  '- When asked about system health, you SHOULD reference the CodeGuard audit data in your context — it was gathered from real endpoint tests and DB queries, not guesses',
+  '- If the mission score is below 80%, proactively mention which goals are failing and suggest fixes',
+  '- If match quality shows profiles graded D or F, proactively suggest profile improvements or crawler re-runs',
+  '',
+  'IMPORTANT — Understanding casual/layman requests:',
+  '- Users will NOT say "run admin.codeGuard.deepSweep." They will say things like:',
+  '  "check the code" → run admin.codeGuard.deepSweep',
+  '  "run a scan" or "scan everything" → run admin.codeGuard.deepSweep',
+  '  "how are the matches?" or "are profiles matching well?" → run admin.codeGuard.matchAudit',
+  '  "check the endpoints" or "are the APIs working?" → run admin.codeGuard.endpointHealth',
+  '  "mission check" or "are we meeting our goals?" → run admin.codeGuard.missionVerify',
+  '  "what needs fixing?" or "any problems?" → run admin.codeGuard.deepSweep',
+  '  "how is everything?" or "status report" → first reference your CodeGuard context, then offer to run a fresh sweep',
+  '  "grade the profiles" → run admin.codeGuard.matchAudit',
+  '  "pipeline health" or "pipeline quality" → run admin.codeGuard.matchAudit',
+  '- When in doubt about what the admin wants, run the deep sweep — it covers everything',
+  '- NEVER respond with just the tool name. Translate results into plain language with actionable next steps.',
   '',
   '**CRITICAL TRUTH GATE RULE FOR SYSTEM HEALTH QUERIES:**',
   '- When asked about system health, crawler status, or if "everything is working"',
@@ -847,9 +888,10 @@ export async function generateAssistantResponse(db, user, sessionId, { content }
   // This provides special recognition for the main system administrator
   const isPrimaryAdmin = isAdmin && userEmail === ADMIN_EMAIL
 
-  // TRUTH GATE: Detect system health queries and handle them directly
-  // Only for admin users to prevent false positives in normal conversation
+  // TRUTH GATE: Detect system health and code audit queries and handle them directly.
+  // Two categories: health (system status) and audit (code/pipeline quality).
   const lowerContent = trimmed.toLowerCase()
+
   const healthKeywords = [
     'are crawlers working',
     'crawler status',
@@ -869,9 +911,133 @@ export async function generateAssistantResponse(db, user, sessionId, { content }
     'is it working',
     'system health',
     '/health',
+    'how are things',
+    'how is everything',
+    'how\'s everything',
+    'anything broken',
+    'what\'s the status',
+    'what is the status',
+    'are things working',
+    'everything running',
+    'status update',
+    'status report',
+  ]
+
+  const auditKeywords = [
+    'check the code',
+    'check code',
+    'code check',
+    'run a scan',
+    'run scan',
+    'deep sweep',
+    'deepsweep',
+    'full scan',
+    'full audit',
+    'run audit',
+    'code audit',
+    'codeguard',
+    'code guard',
+    'match quality',
+    'match audit',
+    'pipeline quality',
+    'pipeline health',
+    'mission score',
+    'mission check',
+    'mission verify',
+    'how are the matches',
+    'how\'s the pipeline',
+    'grade the profiles',
+    'check the system',
+    'system audit',
+    'run checks',
+    'run the checks',
+    'scan everything',
+    'check everything',
+    'is the code ok',
+    'is the code good',
+    'any problems',
+    'any issues',
+    'what needs fixing',
+    'what\'s broken',
+    'what is broken',
   ]
 
   const isHealthQuery = isAdmin && user.email === ADMIN_EMAIL && healthKeywords.some(keyword => lowerContent.includes(keyword))
+  const isAuditQuery = isAdmin && user.email === ADMIN_EMAIL && auditKeywords.some(keyword => lowerContent.includes(keyword))
+
+  // Audit queries trigger a CodeGuard deep sweep — more useful than basic health
+  if (isAuditQuery) {
+    try {
+      const { invokeTool: invokeRegisteredTool } = await import('./anyaToolRegistry.js')
+      console.log('[Anya] Audit query detected, invoking admin.codeGuard.deepSweep')
+      const sweepResult = await invokeRegisteredTool('admin.codeGuard.deepSweep', {}, { db, user })
+      const data = sweepResult?.output ?? sweepResult
+
+      const shortName = (!userName || userName === 'there') ? '' : (typeof userName === 'string' ? userName.split(' ')[0] : userName)
+      const greeting = shortName ? `Hey ${shortName}!` : 'Hey!'
+      const lines = [`${greeting} I just ran a full system audit. Here's what I found:\n`]
+
+      if (data?.summary) {
+        lines.push(data.summary)
+        lines.push('')
+      }
+
+      const mission = data?.mission
+      if (mission && !mission.error) {
+        lines.push(`**Mission Score: ${mission.score}%** (${mission.pass} pass, ${mission.warn} warn, ${mission.fail} fail of ${mission.total})`)
+        const failing = (mission.goals || []).filter(g => g.status === 'FAIL')
+        if (failing.length > 0) {
+          lines.push('\nGoals that need attention:')
+          for (const g of failing) {
+            lines.push(`- **Goal ${g.id}: ${g.name}** — ${g.detail}`)
+          }
+        }
+        const warnings = (mission.goals || []).filter(g => g.status === 'WARN')
+        if (warnings.length > 0) {
+          lines.push('\nGoals with warnings:')
+          for (const g of warnings) {
+            lines.push(`- Goal ${g.id}: ${g.name} — ${g.detail}`)
+          }
+        }
+      }
+
+      const mq = data?.matchQuality
+      if (mq && !mq.error) {
+        const g = mq.grades || {}
+        lines.push(`\n**Match Quality:** ${mq.totalProfiles} profiles — A:${g.A} B:${g.B} C:${g.C} D:${g.D} F:${g.F}`)
+        const problems = (mq.profiles || []).filter(p => p.grade === 'D' || p.grade === 'F')
+        if (problems.length > 0) {
+          lines.push('Profiles that need work:')
+          for (const p of problems) {
+            lines.push(`- **${p.name}** (grade ${p.grade}) — ${p.total} grants, avg score ${p.avgScore}`)
+          }
+        }
+      }
+
+      const ep = data?.endpoints
+      if (ep && !ep.error) {
+        lines.push(`\n**Endpoints:** ${ep.passed} pass, ${ep.failed} fail, ${ep.skipped} skip of ${ep.total}`)
+        const failures = (ep.results || []).filter(r => r.status === 'FAIL')
+        if (failures.length > 0) {
+          lines.push('Failing endpoints:')
+          for (const f of failures) {
+            lines.push(`- ${f.name}: ${f.code ?? f.reason}`)
+          }
+        }
+      }
+
+      if (mission && !mission.error && mission.score >= 80) {
+        lines.push('\nOverall the system is looking solid. 👍')
+      } else if (mission && !mission.error) {
+        lines.push('\nThere are some things to address — want me to dig into any of these?')
+      }
+
+      return lines.join('\n')
+    } catch (error) {
+      console.error('[Anya] Failed to run audit:', error)
+      return `I tried to run a full system audit but hit an error: ${error.message}\n\nYou can try asking me to run specific checks like "check endpoint health" or "grade the profiles".`
+    }
+  }
 
  if (isHealthQuery) {
   try {
@@ -1043,7 +1209,16 @@ const healthData = await invokeRegisteredTool('system.health', {}, { db, user })
       )
     : _STATIC_PROMPT_ADMIN_SECTION
 
-  const systemPrompt = dynamicHeader + _STATIC_PROMPT_BASE + (isAdmin ? adminSection : _STATIC_PROMPT_USER_SECTION) + _STATIC_APP_KNOWLEDGE
+  // Inject CodeGuard audit summary for admin users so Anya can reference real system state
+  let codeGuardContext = ''
+  if (isAdmin) {
+    try {
+      const { getAuditSummary } = await import('./codeGuardService.js')
+      codeGuardContext = '\n\n' + getAuditSummary(db)
+    } catch { /* non-critical — service may not be loaded yet */ }
+  }
+
+  const systemPrompt = dynamicHeader + _STATIC_PROMPT_BASE + (isAdmin ? adminSection : _STATIC_PROMPT_USER_SECTION) + codeGuardContext + _STATIC_APP_KNOWLEDGE
 
   // 1) Try OpenAI first (if configured)
   if (openai) {

@@ -229,6 +229,27 @@ export async function runBootstrap({ db, uploadsDir, legacyUploadsDir, baseDir }
     { table: 'funding_opportunities', column: 'is_loan', type: 'INTEGER DEFAULT 0' },
     // Crawl metadata analysis blob (migration 032 / crawl metadata)
     { table: 'crawl_metadata', column: 'analysis_json', type: 'TEXT' },
+    // Match decision metadata (migration 036) — canonical from matchEngine.js
+    { table: 'grants', column: 'match_decision', type: 'TEXT' },
+    { table: 'grants', column: 'match_explanation', type: 'TEXT' },
+    { table: 'grants', column: 'matched_needs', type: "TEXT DEFAULT '[]'" },
+    { table: 'grants', column: 'eligibility_status', type: 'TEXT' },
+    { table: 'grants', column: 'ineligibility_reasons', type: "TEXT DEFAULT '[]'" },
+    { table: 'grants', column: 'profile_fingerprint', type: 'TEXT' },
+    { table: 'grants', column: 'opportunity_fingerprint', type: 'TEXT' },
+    { table: 'grants', column: 'matcher_version', type: 'TEXT' },
+    { table: 'grants', column: 'evaluated_at', type: 'DATETIME' },
+    { table: 'grants', column: 'match_confidence', type: 'INTEGER' },
+    // Funding opportunities normalized eligibility (migration 036)
+    { table: 'funding_opportunities', column: 'entity_types_allowed', type: "TEXT DEFAULT '[]'" },
+    { table: 'funding_opportunities', column: 'need_types_supported', type: "TEXT DEFAULT '[]'" },
+    { table: 'funding_opportunities', column: 'deadline_status', type: 'TEXT' },
+    { table: 'funding_opportunities', column: 'official_source_type', type: 'TEXT' },
+    { table: 'funding_opportunities', column: 'source_trust_score', type: 'INTEGER' },
+    { table: 'funding_opportunities', column: 'opportunity_fingerprint', type: 'TEXT' },
+    // Profile fingerprint and normalized snapshot (migration 036)
+    { table: 'profiles', column: 'profile_fingerprint', type: 'TEXT' },
+    { table: 'profiles', column: 'normalized_snapshot', type: 'TEXT' },
   ];
 
   const validTables = new Set([
@@ -267,7 +288,7 @@ export async function runBootstrap({ db, uploadsDir, legacyUploadsDir, baseDir }
         return;
       }
       // Additional validation for type to prevent injection
-      const allowedTypes = new Set(['TEXT', 'INTEGER', 'DATETIME', 'TEXT DEFAULT \'live_crawl\'', 'INTEGER DEFAULT 0', 'TEXT REFERENCES users(id) ON DELETE SET NULL']); if (!allowedTypes.has(type)) {
+      const allowedTypes = new Set(['TEXT', 'INTEGER', 'DATETIME', 'TEXT DEFAULT \'live_crawl\'', 'INTEGER DEFAULT 0', 'TEXT REFERENCES users(id) ON DELETE SET NULL', "TEXT DEFAULT '[]'"]); if (!allowedTypes.has(type)) {
         console.error(`Migration error: Invalid type "${type}"`);
         return;
       }
