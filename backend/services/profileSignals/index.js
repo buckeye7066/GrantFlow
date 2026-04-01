@@ -16,16 +16,16 @@ import { loadProfileContext } from '../profileHelpers.js';
  */
 function deriveIntents(analysis) {
   const intents = new Set();
-  const occ = analysis.occupation || new Set();
-  const needs = analysis.needs || new Set();
-  const health = analysis.health || new Set();
-  const military = analysis.military || new Set();
-  const family = analysis.family || new Set();
+  const occ = analysis.occupation instanceof Set ? analysis.occupation : new Set(Array.isArray(analysis.occupation) ? analysis.occupation : []);
+  const needs = analysis.needs instanceof Set ? analysis.needs : new Set(Array.isArray(analysis.needs) ? analysis.needs : []);
+  const health = analysis.health instanceof Set ? analysis.health : new Set(Array.isArray(analysis.health) ? analysis.health : []);
+  const military = analysis.military instanceof Set ? analysis.military : new Set(Array.isArray(analysis.military) ? analysis.military : []);
+  const family = analysis.family instanceof Set ? analysis.family : new Set(Array.isArray(analysis.family) ? analysis.family : []);
 
   if (occ.has('small_business_owner')
-    || occ.has?.('minority_owned_business')
-    || occ.has?.('women_owned_business')
-    || needs.has?.('business')
+    || occ.has('minority_owned_business')
+    || occ.has('women_owned_business')
+    || needs.has('business')
     || (analysis.keywords || []).some(k => /business|entrepreneur|startup|self.?employ|microenterprise/i.test(k))) {
     intents.add('business');
   }
@@ -196,6 +196,7 @@ function toAnalysisShape(profileContext) {
     occupation: s.occupation || new Set(),
     immigration: s.immigration || new Set(),
     geographic: s.geographic || new Set(),
+    emergency: s.emergency || new Set(),
     income: s.financial || {},
     education: s.education || {},
     interests: s.interests || new Set(),
@@ -229,9 +230,31 @@ export async function loadProfileSignals(db, profileId) {
   const sections = profileContext.sections || {}
   const profile = profileContext.profile || {}
 
-  const intents = deriveIntents(signals)
-  const assistancePrograms = extractAssistancePrograms(sections)
-  const rawInputs = buildRawInputs(profile, sections)
+  let intents;
+  try {
+    intents = deriveIntents(signals);
+  } catch (err) {
+    console.error(`[profileSignals] deriveIntents failed for profile ${profileId}:`, err);
+    intents = new Set();
+  }
+
+  let assistancePrograms;
+  try {
+    assistancePrograms = extractAssistancePrograms(sections);
+  } catch (err) {
+    console.error(`[profileSignals] extractAssistancePrograms failed for profile ${profileId}:`, err);
+    assistancePrograms = [];
+  }
+
+  let rawInputs;
+  try {
+    rawInputs = buildRawInputs(profile, sections);
+  } catch (err) {
+    console.error(`[profileSignals] buildRawInputs failed for profile ${profileId}:`, err);
+    rawInputs = { profileId, error: err.message };
+  }
+
+  console.info(`[profileSignals] profile=${profileId} intents=[${[...intents].join(',')}] programs=[${assistancePrograms.join(',')}]`);
 
   return { signals, intents, assistancePrograms, rawInputs, profileContext }
 }
@@ -248,10 +271,31 @@ export function buildSignalsFromContext(profileContext) {
   const signals = toAnalysisShape(profileContext)
   const sections = profileContext.sections || {}
   const profile = profileContext.profile || {}
+  const profileId = profileContext.profile_id || profile.id || 'unknown';
 
-  const intents = deriveIntents(signals)
-  const assistancePrograms = extractAssistancePrograms(sections)
-  const rawInputs = buildRawInputs(profile, sections)
+  let intents;
+  try {
+    intents = deriveIntents(signals);
+  } catch (err) {
+    console.error(`[profileSignals] buildSignalsFromContext deriveIntents failed for profile ${profileId}:`, err);
+    intents = new Set();
+  }
+
+  let assistancePrograms;
+  try {
+    assistancePrograms = extractAssistancePrograms(sections);
+  } catch (err) {
+    console.error(`[profileSignals] buildSignalsFromContext extractAssistancePrograms failed for profile ${profileId}:`, err);
+    assistancePrograms = [];
+  }
+
+  let rawInputs;
+  try {
+    rawInputs = buildRawInputs(profile, sections);
+  } catch (err) {
+    console.error(`[profileSignals] buildSignalsFromContext buildRawInputs failed for profile ${profileId}:`, err);
+    rawInputs = { profileId, error: err.message };
+  }
 
   return { signals, intents, assistancePrograms, rawInputs, profileContext }
 }
