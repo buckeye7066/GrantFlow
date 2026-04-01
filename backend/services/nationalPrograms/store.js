@@ -330,7 +330,7 @@ export async function upsertProgramWithVersion({
         UPDATE ${table}
         SET last_seen_at = ?,
             last_fetch_status = ?,
-            last_content_hash = COALESCE(last_content_hash, ?),
+            last_content_hash = ?,
             last_verified = COALESCE(last_verified, ?)
         WHERE program_id = ?
       `,
@@ -419,6 +419,8 @@ export async function upsertProgramWithVersion({
           ? `Updated fields: ${changedFields.join(', ')}`
           : changeType === 'created'
           ? 'Created'
+          : changeType === 'updated'
+          ? `Content hash changed (extracted text or raw content differs); no normalized field changes detected`
           : 'Updated',
         confidence,
       )
