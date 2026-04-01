@@ -46,7 +46,9 @@ function parseAmount(opp) {
 }
 
 function getMatchReasons(opp) {
-  const reasons = opp?.match_reasons ?? opp?.matchReasons ?? opp?.matched_fields ?? [];
+  // Prefer authoritative decision-engine fields; never fall back to raw
+  // crawler indexer fields (matched_fields) which are not engine-sourced.
+  const reasons = opp?.match_reasons ?? opp?.matchReasons ?? [];
   return Array.isArray(reasons) ? reasons : [];
 }
 
@@ -98,7 +100,13 @@ export default function FundingResults() {
   const filteredAndSorted = useMemo(() => {
     let list = [...(results || [])];
     if (strongMatchesOnly) {
-      list = list.filter((o) => (Number(o?.match_score ?? o?.match ?? 0) >= 70));
+      // Only suppress when the engine has NOT already made an ACCEPT/REVIEW decision.
+      // If match_decision is ACCEPT or REVIEW, honour the engine regardless of score.
+      list = list.filter((o) => {
+        const decision = o?.match_decision ?? o?.matchDecision ?? null;
+        if (decision === 'ACCEPT' || decision === 'REVIEW') return true;
+        return Number(o?.match_score ?? o?.match ?? 0) >= 70;
+      });
     }
     if (sortBy === 'match') {
       list.sort((a, b) => (Number(b?.match_score ?? b?.match ?? 0) - Number(a?.match_score ?? a?.match ?? 0)));
@@ -161,8 +169,14 @@ export default function FundingResults() {
       }
       return { status: 'failed', error: 'missing_title' };
     }
+    const applicationUrl = opportunity.application_url ?? opportunity.url ?? null;
+    if (!applicationUrl) {
+      if (!silent) {
+        toast({ variant: 'destructive', title: 'No application link', description: `"${opportunity.title}" has no application URL and cannot be added to the pipeline.` });
+      }
+      return { status: 'failed', error: 'missing_application_url' };
+    }
 
-    const reasons = getMatchReasons(opportunity);
     try {
       const newGrant = await apiFetch('/api/grants/from-opportunity', {
         method: 'POST',
@@ -170,8 +184,10 @@ export default function FundingResults() {
           opportunity_id: opportunity.id || null,
           profile_id: profileId,
           organization_id: orgId || null,
-          match_score: opportunity.match ?? opportunity.match_score,
-          match_reasons: reasons,
+          // Do NOT forward client-side match_score or match_reasons.
+          // The server must re-run relevanceFilter + computeMatchDecision
+          // using the authoritative opportunity record and full profile.
+          // All scoring, explanation, and audit fields are written server-side.
           opportunity_data: {
             title: opportunity.title,
             sponsor: opportunity.sponsor ?? opportunity.funder,
