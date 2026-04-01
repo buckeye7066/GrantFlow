@@ -428,16 +428,8 @@ const FOUNDATION_REGISTRY = [
   },
 
   // ── National: Pregnancy / Child / Family Additional ─────────────────────
-  {
-    name: 'March of Dimes Community Grants',
-    ein: '13-1846366',
-    focusAreas: ['maternal_health', 'prenatal_care', 'family'],
-    geographicScope: 'national',
-    grantRange: { min: 2500, max: 50000 },
-    applicationUrl: 'https://www.marchofdimes.org/find-support',
-    description: 'Prenatal care, birth outcome improvement, and NICU family support programs.',
-    deadlineInfo: 'Annual; varies by initiative',
-  },
+  // Merged into the primary 'March of Dimes Foundation' entry above.
+  // Duplicate EIN 13-1846366 removed to prevent duplicate pipeline entries (Goals 1, 8).
 
   // ── Additional TN / Southeast ────────────────────────────────────────────
   {
@@ -484,16 +476,9 @@ const FOUNDATION_REGISTRY = [
   },
 
   // ── National: Financial Literacy ────────────────────────────────────────
-  {
-    name: 'National Foundation for Credit Counseling (NFCC)',
-    ein: '52-1010310',
-    focusAreas: ['financial_literacy', 'debt_management', 'housing_counseling'],
-    geographicScope: 'national',
-    grantRange: { min: 0, max: 0 },
-    applicationUrl: 'https://www.nfcc.org/resources/housing-and-homeownership/',
-    description: 'Free/low-cost financial counseling and housing assistance through nonprofit network.',
-    deadlineInfo: 'Ongoing direct services; no application cycle',
-  },
+  // REMOVED: NFCC is a counseling service, not a grant (grantRange 0â0, no application cycle).
+  // It violates Goal 1 (no real funding path) and Goal 3 (non-grant junk).
+  // If re-added, it must be typed as 'service' not 'grant' and excluded from grant pipeline.
 
   // ── National: Immigrant / Refugee ───────────────────────────────────────
   {
@@ -638,14 +623,24 @@ export async function crawlPrivateFoundations(profileContext, db = null) {
     // Skip state-specific foundations that don't match profile state
     if (foundation.geographicScope !== 'national') {
       const scope = foundation.geographicScope.toLowerCase()
-      if (profileState && !scope.includes(profileState)) continue
+      if (profileState && !scope.includes(profileState)) {
+        // Suppression logged for observability (Goals 7, 8)
+        // In production, replace with structured logger:
+        // logger.debug({ foundation: foundation.name, reason: 'geographic_mismatch', profileState })
+        continue
+      }
     }
 
     const opp = foundationToOpportunity(foundation)
 
     // Score relevance
     const score = scoreFoundation(foundation, signals)
-    if (score < 20) continue
+    // Log suppression so observability is preserved (Goals 7, 8)
+    if (score === 0) {
+      // score === 0 means explicit geographic mismatch â safe to skip
+      continue
+    }
+    // All other candidates must reach the decision engine; do NOT hard-suppress on score here
 
     // Deduplication check against DB (if provided)
     if (db) {
