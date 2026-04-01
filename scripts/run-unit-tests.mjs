@@ -42,9 +42,23 @@ async function main() {
     env: process.env,
   })
 
+  let exited = false
   child.on('exit', (code) => {
+    exited = true
     process.exitCode = code ?? 1
   })
+
+  // Test-spawned server processes may keep open handles that prevent
+  // node --test from exiting. Hard-kill after a generous timeout so the
+  // CI pipeline can proceed to vitest and build steps.
+  const HARD_TIMEOUT_MS = Number(process.env.UNIT_TEST_HARD_TIMEOUT_MS) || 5 * 60 * 1000
+  setTimeout(() => {
+    if (!exited) {
+      console.error(`[unit] Hard timeout (${HARD_TIMEOUT_MS / 1000}s) reached — killing test runner`)
+      try { child.kill('SIGKILL') } catch { /* already dead */ }
+    }
+    process.exit(process.exitCode ?? 1)
+  }, HARD_TIMEOUT_MS).unref()
 }
 
 main().catch((error) => {
