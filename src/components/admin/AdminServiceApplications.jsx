@@ -90,6 +90,7 @@ export default function AdminServiceApplications() {
       
       await apiFetch(`/api/service-application/${id}`, {
         method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
       });
       
@@ -128,7 +129,10 @@ export default function AdminServiceApplications() {
 
   const deleteProfileForApplication = async (id) => {
     try {
-      const res = await apiFetch(`/api/service-application/${id}/delete-profile`, { method: 'POST' })
+      const res = await apiFetch(`/api/service-application/${id}/delete-profile`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      })
       toast({
         title: 'Deleted',
         description: res?.profile_id
