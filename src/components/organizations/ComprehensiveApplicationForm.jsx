@@ -415,25 +415,37 @@ export default function ComprehensiveApplicationForm({ onSubmit, onCancel, isSub
 
     setIsSendingEmail(true);
     try {
-      // Calculate age from date of birth if provided
-      let finalData = { ...formData };
-      if (finalData.date_of_birth && !finalData.age) {
-        const birthDate = new Date(finalData.date_of_birth);
-        const today = new Date();
-        const age = today.getFullYear() - birthDate.getFullYear();
-        const monthDiff = today.getMonth() - birthDate.getMonth();
-        if (monthDiff < 0 || (monthDiff === 0 && today.getDate() < birthDate.getDate())) {
-          finalData.age = age - 1;
-        } else {
-          finalData.age = age;
-        }
-      }
+      function computeAge(dateOfBirth) {
+  if (!dateOfBirth) return null;
+  const birthDate = new Date(dateOfBirth);
+  const today = new Date();
+  const age = today.getFullYear() - birthDate.getFullYear();
+  const monthDiff = today.getMonth() - birthDate.getMonth();
+  if (monthDiff < 0 || (monthDiff === 0 && today.getDate() < birthDate.getDate())) {
+    return age - 1;
+  }
+  return age;
+}
+
+// Inside the component, replace both duplicated blocks with:
+const buildFinalData = (data) => ({
+  ...data,
+  age: data.age ?? computeAge(data.date_of_birth),
+});
+
+// handleSubmit becomes:
+const handleSubmit = (e) => {
+  e.preventDefault();
+  onSubmit(buildFinalData(formData));
+};
+
+// handleEmailApplication uses:
+const finalData = buildFinalData(formData);
 
       // Send via API - endpoint accepts application data without requiring profile ID
       await apiFetch('/api/profiles/send-application-email', {
         method: 'POST',
         body: JSON.stringify({
-          toEmail: 'dr.johnwhite@axiombiolabs.org',
           applicationData: finalData
         }),
       });
@@ -634,9 +646,12 @@ export default function ComprehensiveApplicationForm({ onSubmit, onCancel, isSub
                   <Label htmlFor="website">Website</Label>
                   <Input
                     id="website"
+                    type="url"
                     value={formData.website}
                     onChange={(e) => handleChange('website', e.target.value)}
                     placeholder="https://example.org"
+                    pattern="https?://.+"
+                    title="Must start with http:// or https://"
                   />
                 </div>
               </div>
