@@ -101,8 +101,15 @@ export async function saveToProfilePipeline(
     let decision
     try {
       decision = computeMatchDecision(rawProfile, opportunity, { profileSections })
-    } catch {
-      decision = null
+    } catch (decisionErr) {
+      console.warn(`[opportunityMatcher] computeMatchDecision threw for "${opportunity?.title}" â treating as REJECT to avoid inserting unscored opportunity:`, decisionErr?.message)
+      return {
+        saved: false,
+        reason: `Decision engine error: ${decisionErr?.message ?? 'unknown'}`,
+        gate: 'DECISION_ENGINE',
+        matchPercentage: 0,
+        threshold,
+      }
     }
 
     // Gate 2: Canonical decision engine — REJECT means hard ineligible
@@ -284,7 +291,20 @@ export async function saveToProfilePipeline(
           matchPercentage,
           JSON.stringify(canonicalReasons),
           `Auto-added: ${matchPercentage}% match for profile ${profileId} (decision: ${decision?.decision ?? 'N/A'})`,
-          opportunity.application_url || opportunity.applicationUrl || opportunity.url || null,
+          (() => {
+            const candidates = [
+              opportunity.application_url,
+              opportunity.applicationUrl,
+              opportunity.url,
+            ]
+            for (const u of candidates) {
+              if (u && typeof u === 'string') {
+                const trimmed = u.trim()
+                if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) return trimmed
+              }
+            }
+            return null
+          })(),
           opportunity.application_method || opportunity.submission_method || guessMethodFromOpportunity(opportunity) || null,
           contactInfo.name,
           contactInfo.email,
@@ -343,7 +363,20 @@ export async function saveToProfilePipeline(
           matchPercentage,
           JSON.stringify(canonicalReasons),
           `Auto-added: ${matchPercentage}% match for profile ${profileId} (decision: ${decision?.decision ?? 'N/A'})`,
-          opportunity.application_url || opportunity.applicationUrl || opportunity.url || null,
+          (() => {
+            const candidates = [
+              opportunity.application_url,
+              opportunity.applicationUrl,
+              opportunity.url,
+            ]
+            for (const u of candidates) {
+              if (u && typeof u === 'string') {
+                const trimmed = u.trim()
+                if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) return trimmed
+              }
+            }
+            return null
+          })(),
           opportunity.application_method || opportunity.submission_method || guessMethodFromOpportunity(opportunity) || null,
           contactInfo.name,
           contactInfo.email,
@@ -421,8 +454,10 @@ export async function processCrawledOpportunities(db, opportunities, profileId, 
     matches: []
   }
 
+  let sourceBlockedCount = 0
   for (const opportunity of opportunities) {
     if (!isPipelineSourceAllowed(opportunity.source)) {
+      sourceBlockedCount++
       continue
     }
 
@@ -433,14 +468,13 @@ export async function processCrawledOpportunities(db, opportunities, profileId, 
     const pipelineResult = await saveToProfilePipeline(db, opportunity, profileId, profileContext, null, minMatchThreshold)
     if (pipelineResult.saved) {
       results.savedToPipeline++
+      results.savedGlobally++
       results.matches.push({
         title: opportunity.title,
         matchPercentage: pipelineResult.matchPercentage,
         pipelineId: pipelineResult.pipelineId
       })
     }
-    
-    results.savedGlobally++
   }
   
   console.log(`[opportunityMatcher] Processed ${results.total} opportunities:`)
