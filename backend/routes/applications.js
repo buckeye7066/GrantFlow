@@ -27,8 +27,11 @@ const router = express.Router()
 router.use(requireAuthenticatedUser)
 
 async function ensureApplicationAccess(req, res, applicationId) {
-  const user = requireAuthenticatedUser(req, res)
-  if (!user) return null
+  const userId = getAuthUserId(req?.user ?? req?.ctx)
+  if (!userId) {
+    res.status(401).json({ error: 'Unauthorized' })
+    return null
+  }
 
   const row = await req.db.prepare('SELECT * FROM applications WHERE id = ?').get(applicationId && typeof applicationId === 'string' ? applicationId : String(applicationId || ''))
   if (!row) {
@@ -191,7 +194,14 @@ router.get('/:id/artifacts/:artifactId/download', async (req, res) => {
 
   res.setHeader('Content-Type', contentType)
   res.setHeader('Content-Disposition', `attachment; filename="application_${row.id}_${artifact.id}${ext || ''}"`)
-  return fs.createReadStream(resolved).pipe(res)
+  const stream = fs.createReadStream(resolved)
+stream.on('error', (err) => {
+  console.error('[applications] artifact stream error', { artifactId: req.params.artifactId, err })
+  if (!res.headersSent) {
+    res.status(500).json({ error: 'File read error' })
+  }
+})
+stream.pipe(res)
 })
 
 export default router
