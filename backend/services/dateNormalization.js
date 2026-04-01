@@ -11,8 +11,19 @@ export function normalizeDateToIso(value) {
   if (!raw) return null
 
   // Grants.gov sometimes returns "YYYY-MM-DD-00-00-00" (keep date portion).
-  const ymdPrefix = raw.match(/^(\d{4}-\d{2}-\d{2})/)
-  if (ymdPrefix) return ymdPrefix[1]
+  const ymdPrefix = raw.match(/^(\d{4})-(\d{2})-(\d{2})/)
+  if (ymdPrefix) {
+    const yyyy = Number.parseInt(ymdPrefix[1], 10)
+    const mm = Number.parseInt(ymdPrefix[2], 10)
+    const dd = Number.parseInt(ymdPrefix[3], 10)
+    if (yyyy >= 1900 && yyyy <= 2100 && mm >= 1 && mm <= 12 && dd >= 1 && dd <= 31) {
+      const testDate = new Date(Date.UTC(yyyy, mm - 1, dd))
+      if (testDate.getUTCFullYear() === yyyy && testDate.getUTCMonth() === mm - 1 && testDate.getUTCDate() === dd) {
+        return `${String(yyyy).padStart(4, '0')}-${String(mm).padStart(2, '0')}-${String(dd).padStart(2, '0')}`
+      }
+    }
+    return null
+  }
 
   // Common US format "MM/DD/YYYY"
   const mdy = raw.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/)
@@ -30,9 +41,9 @@ export function normalizeDateToIso(value) {
   // Last resort: parseable Date → ISO date.
   const parsed = new Date(raw)
   if (Number.isNaN(parsed.getTime())) return null
-  const year = parsed.getFullYear()
-  const month = String(parsed.getMonth() + 1).padStart(2, '0')
-  const day = String(parsed.getDate()).padStart(2, '0')
+  const year = parsed.getUTCFullYear()
+  const month = String(parsed.getUTCMonth() + 1).padStart(2, '0')
+  const day = String(parsed.getUTCDate()).padStart(2, '0')
   return `${year}-${month}-${day}`
 }
 
