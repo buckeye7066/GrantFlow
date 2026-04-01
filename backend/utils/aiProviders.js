@@ -9,11 +9,12 @@ async function getAnthropicClient() {
   if (!key) return null
 
   const Anthropic = (await import('@anthropic-ai/sdk')).default
-  cachedAnthropic = new Anthropic({
+  const client = new Anthropic({
     apiKey: key,
     timeout: Number(process.env.ANYA_ANTHROPIC_TIMEOUT_MS || process.env.ANTHROPIC_TIMEOUT_MS || 15_000),
     maxRetries: Number(process.env.ANYA_ANTHROPIC_MAX_RETRIES || process.env.ANTHROPIC_MAX_RETRIES || 1),
   })
+  cachedAnthropic = client
   return cachedAnthropic
 }
 
@@ -108,6 +109,7 @@ export async function invokeTextWithFallback({
       return { ok: true, provider: 'anthropic', text, raw: text, usage: null, openaiError, anthropicError: null }
     } catch (error) {
       anthropicError = error
+      console.error('[aiProviders] Anthropic text call failed:', error?.message ?? error)
     }
   }
 
@@ -186,6 +188,7 @@ export async function invokeJsonWithFallback({
       return { ok: true, provider: 'anthropic', json: parsed, raw: rawText, usage: null, openaiError, anthropicError: null }
     } catch (error) {
       anthropicError = error
+      console.error('[aiProviders] Anthropic text call failed:', error?.message ?? error)
     }
   }
 
