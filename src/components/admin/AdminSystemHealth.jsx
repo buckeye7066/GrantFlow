@@ -149,7 +149,9 @@ export default function AdminSystemHealth() {
                     <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">{item.type}</p>
                     <p className="text-sm font-medium text-slate-900 mt-2 flex items-center gap-2">
                       <CheckCircle2 className="w-4 h-4 text-emerald-500" />
-                      {formatDistanceToNow(new Date(item.last_success), { addSuffix: true })}
+                      {item.last_success && !isNaN(new Date(item.last_success).getTime())
+  ? formatDistanceToNow(new Date(item.last_success), { addSuffix: true })
+  : 'Never'}
                     </p>
                   </div>
                 ))}
