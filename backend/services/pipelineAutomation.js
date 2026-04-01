@@ -58,11 +58,7 @@ function validateAdvance(current, suggested) {
     const delta = compareStatuses(currentMapped, suggestedMapped)
     // If AI suggests moving backward or staying, keep current
   if (delta < 0) return currentMapped
-    // Safety net: if AI suggests an intermediate prep stage, override to 'portal'
-    const PREP_STAGES = ['drafting', 'application_prep', 'revision', 'app_prep']
-    if (PREP_STAGES.includes(suggestedMapped) && PREP_STAGES.includes(currentMapped)) {
-        return 'portal'
-    }
+    // Allow normal forward movement through prep stages without overriding.
     // Allow forward movement to whatever stage the AI recommends
     return suggestedMapped
 }
@@ -349,7 +345,10 @@ export async function processPipelineAutomationJob({ db, job, profileContext, ge
   let openai = null
     try {
           openai = typeof getOpenAI === 'function' ? getOpenAI() : null
-    } catch {
+    } catch (clientError) {
+          console.warn('[pipeline_automation] getOpenAI() threw; falling back to Anthropic', {
+                error: clientError?.message || String(clientError),
+          })
           openai = null
     }
     const anthropic = await createAnthropicClient()
@@ -394,7 +393,7 @@ export async function processPipelineAutomationJob({ db, job, profileContext, ge
               }
       } catch (error) {
               const summary = summarizeOpenAIError(error)
-              if (anthropic && (summary.isAuth || !openai)) {
+              if (anthropic) {
                         try {
                                     const response = await anthropic.messages.create({
                                                   model: process.env.ANTHROPIC_MODEL || 'claude-3-haiku-20240307',
@@ -470,13 +469,6 @@ export async function processPipelineAutomationJob({ db, job, profileContext, ge
                         : null
 
       let appliedStatus = validatedStatus
-
-      if (handoffRequired && compareStatuses(currentStatus, validatedStatus) > 0) {
-              // When handoff is required, still advance the grant to the target stage
-                // but flag it for human review. The grant should be in the correct column
-                // so the user can see what needs attention.
-                appliedStatus = validatedStatus
-      }
 
       if (handoffRequired) {
               handoffs += 1
