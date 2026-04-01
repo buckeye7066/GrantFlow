@@ -107,7 +107,6 @@ export default function ProposalEditor({ grant, organization }) {
       title: activeSection.title ?? null,
       content: debouncedDraftContent,
     })
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [debouncedDraftContent, applicationId, activeSection?.section_key])
 
   const autoPopulateMutation = useMutation({
