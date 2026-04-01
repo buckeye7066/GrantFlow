@@ -49,7 +49,29 @@ export default function GrantForm({ grant, organization, onSubmit, onCancel, isS
 
     const handleSubmit = (e) => {
         e.preventDefault();
-        onSubmit(formData);
+        // Goal 1: application_url must be a real URL or explicitly absent
+        const trimmedUrl = (formData.url || '').trim();
+        if (trimmedUrl) {
+            try {
+                const parsed = new URL(trimmedUrl);
+                if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+                    toast({
+                        variant: 'destructive',
+                        title: 'Invalid Application URL',
+                        description: 'The URL must start with http:// or https://'
+                    });
+                    return;
+                }
+            } catch {
+                toast({
+                    variant: 'destructive',
+                    title: 'Invalid Application URL',
+                    description: 'Please enter a valid URL (e.g. https://grants.example.org/apply) or leave it blank.'
+                });
+                return;
+            }
+        }
+        onSubmit({ ...formData, url: trimmedUrl });
     };
 
     const handleAutofillContact = async () => {
@@ -189,7 +211,7 @@ Return ONLY the JSON object. If you cannot find a specific piece of information,
                                     <SelectItem value="auto_fafsa">Automatic via FAFSA</SelectItem>
                                     <SelectItem value="auto_profile">Automatic Profile Match</SelectItem>
                                     <SelectItem value="nomination">Nomination Required</SelectItem>
-                                    <SelectItem value="invitation">Invitation Only</SelectItem>
+                                    <SelectItem value="invitation">Invitation Only (will be marked ineligible by default)</SelectItem>
                                     <SelectItem value="no_application">No Application Needed</SelectItem>
                                 </SelectContent>
                             </Select>
@@ -207,6 +229,17 @@ Return ONLY the JSON object. If you cannot find a specific piece of information,
                             />
                             <p className="text-xs text-slate-500">Specific instructions for how to apply for this opportunity</p>
                         </div>
+                    <div className="space-y-2">
+                        <Label htmlFor="url">Application URL</Label>
+                        <Input
+                            id="url"
+                            name="url"
+                            type="url"
+                            placeholder="https://grants.example.org/apply"
+                            value={formData.url}
+                            onChange={handleChange}
+                        />
+                        <p className="text-xs text-slate-500">Direct link where applicants can apply. Required for the opportunity to be matched.</p>
                     </div>
 
                     {/* AI-Powered Contact Information Section - Retained */}
