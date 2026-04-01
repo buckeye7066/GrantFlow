@@ -8,6 +8,8 @@
 
 import fetch from 'node-fetch';
 
+import crypto from 'crypto';
+
 async function fetchWithRetry(url, options) {
   const response = await fetch(url, options);
   if (!response.ok) {
@@ -15,7 +17,6 @@ async function fetchWithRetry(url, options) {
   }
   return response.json();
 }
-import crypto from 'crypto';
 
 const SAM_GOV_API_BASE = 'https://api.sam.gov/opportunities/v2/search';
 const SOURCE_NAME = 'sam.gov';
@@ -59,14 +60,17 @@ export async function fetchSamGov(options = {}) {
   console.log(`[sam.gov] Fetching opportunities (limit: ${limit}, offset: ${offset})`);
 
   try {
-    const params = new URLSearchParams({
+    const paramObj = {
       api_key: apiKey,
       limit: String(Math.max(1, Math.min(Number(limit) || 25, SAM_GOV_MAX_LIMIT))),
       offset: String(Math.max(0, Number(offset) || 0)),
       postedFrom,
       postedTo,
-      ptype,
-    });
+    };
+    if (ptype && typeof ptype === 'string') {
+      paramObj.ptype = ptype;
+    }
+    const params = new URLSearchParams(paramObj);
 
     const url = `${SAM_GOV_API_BASE}?${params.toString()}`;
 
