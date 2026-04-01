@@ -135,8 +135,11 @@ function extractOppNeedCodes(opportunity) {
 
   // Map text to need codes via taxonomy synonyms
   for (const [code, def] of Object.entries(NEEDS_TAXONOMY)) {
-    const matchesSynonym = def.synonyms.some(s => textToSearch.includes(s.toLowerCase()))
-    const matchesLabel = textToSearch.includes(def.label.toLowerCase())
+    if (!def || typeof def !== 'object') continue
+    const synonyms = Array.isArray(def.synonyms) ? def.synonyms : []
+    const label = typeof def.label === 'string' ? def.label : ''
+    const matchesSynonym = synonyms.some(s => textToSearch.includes(String(s).toLowerCase()))
+    const matchesLabel = label.length > 0 && textToSearch.includes(label.toLowerCase())
     if (matchesSynonym || matchesLabel) codes.push(code)
   }
 
@@ -417,14 +420,16 @@ export function filterEligibility(intel, opportunity) {
   }
 
   // ── Compute verdict ───────────────────────────────────────────────────────
+  // Hard failures are absolute blockers â any single one means ineligible.
+  // Soft warnings reduce score but never block outright.
   let score = 100
-  score -= hard_failures.length * 30
   score -= soft_warnings.length * 10
   score = Math.max(0, Math.min(100, score))
 
   let verdict
   if (hard_failures.length > 0) {
-    verdict = score <= 0 ? 'ineligible' : 'probably_ineligible'
+    verdict = 'ineligible'
+    score = 0
   } else if (soft_warnings.length > 0) {
     verdict = 'probably_eligible'
   } else {
@@ -448,11 +453,10 @@ export function filterEligibility(intel, opportunity) {
  */
 export function shouldHardReject(intel, opportunity) {
   const result = filterEligibility(intel, opportunity)
-  return result.verdict === 'ineligible' ||
-    result.hard_failures.includes('entity_type_mismatch') ||
-    result.hard_failures.includes('deadline_expired') ||
-    result.hard_failures.includes('geographic_mismatch') ||
-    result.hard_failures.includes('requires_veteran') ||
-    result.hard_failures.includes('requires_student') ||
-    result.hard_failures.includes('requires_501c3')
+  // Hard-reject ONLY when the verdict is definitively ineligible.
+  // Do NOT add per-failure-code overrides here â that fragments decision
+  // authority away from computeMatchDecision() and over-suppresses
+  // 'probably_ineligible' cases that the decision engine should still
+  // evaluate (Goal 4, Goal 7).
+  return result.verdict === 'ineligible'
 }
