@@ -108,6 +108,8 @@ function applyExclusions(opportunities, config) {
 function lightPreScore(opp, profile, config) {
   const signals = profile?.signals ?? null
   const keywordSet = signals?.keywordSet
+  const profileState = (signals?.location?.state ?? profile?.state ?? '').toLowerCase().trim()
+
   if (!keywordSet || typeof keywordSet.has !== 'function') {
     return 50 // neutral
   }
@@ -127,6 +129,9 @@ function lightPreScore(opp, profile, config) {
     const k = String(b).toLowerCase()
     if (text.includes(k)) matches += 2
   }
+
+  // Location boost: if the opportunity text references the user's state, lift the pre-score
+  if (profileState && text.includes(profileState)) matches += 3
 
   if (matches > 0) return Math.min(85, 50 + matches * 8)
   return 50
@@ -180,18 +185,16 @@ export async function runDomainCrawler({ profile, config, options = {} }) {
   const afterExclusions = applyExclusions(normalizedDir, config)
 
   // Ensure minimum directory items
-  let directory = afterExclusions
-  if (directory.length < minDirectory && normalizedDir.length >= minDirectory) {
-    directory = normalizedDir.slice(0, minDirectory)
-  } else if (directory.length < minDirectory) {
-    directory = normalizedDir
-  }
-
-  // Pad with directory if we're short (rare)
-  while (directory.length < minDirectory && normalizedDir.length > directory.length) {
-    const extra = normalizedDir.find((n) => !directory.includes(n))
-    if (extra) directory.push(extra)
-    else break
+  // Honor hard-exclusions even when below min_directory target.
+  // Never reinstate loan/matching-fund items to meet a quota.
+  // Log when we cannot meet the minimum so operators can expand directoryResources.
+  const directory = afterExclusions
+  if (directory.length < minDirectory) {
+    console.warn(
+      `[domainCrawlerEngine] crawler="${config.id}" directory items after exclusions: ${directory.length} ` +
+      `(target ${minDirectory}). Some items were excluded as loans/matching-funds. ` +
+      `Expand directoryResources or relax strict_no_loans/strict_no_matching in config to meet target.`
+    )
   }
 
   // Live fetchers: best-effort, never throw (placeholder for future expansion)
@@ -216,8 +219,11 @@ export async function runDomainCrawler({ profile, config, options = {} }) {
   // Dedupe by URL
   const seen = new Set()
   const deduped = all.filter((o) => {
-    const key = (o.url || o.application_url || o.source_url || '').toLowerCase()
-    if (!key) return true
+    const key = (o.url || o.application_url || o.source_url || '').toLowerCase().trim()
+    if (!key) {
+      console.warn(`[domainCrawlerEngine] crawler="${config.id}" dropping URL-less record: title="${o.title}"`)
+      return false
+    }
     if (seen.has(key)) return false
     seen.add(key)
     return true
@@ -226,8 +232,11 @@ export async function runDomainCrawler({ profile, config, options = {} }) {
   // Light pre-score; route will rescore with calculateMatchScore
   const scored = deduped.map((opp) => ({
     ...opp,
-    match_score: lightPreScore(opp, profile, config),
-    match_reasons: opp.record_origin === 'directory_resource' ? ['Directory resource'] : [],
+    pre_score: lightPreScore(opp, profile, config),
+    pre_score_note: 'crawler_prescore_only â will be overwritten by computeMatchDecision()',
+    match_score: null,
+    match_reasons: [],
+    match_explanation: null,
   }))
 
     return scored
