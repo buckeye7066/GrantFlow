@@ -33,7 +33,7 @@ export default function OneTimeFix() {
       const allJobs = await client.entities.SearchJob.list('-created_date');
       return allJobs.filter(job => 
         job.profile_id?.startsWith('backfill_') && 
-        job.status === 'running'
+        ['running','in_progress','processing'].includes(job.status)
       );
     },
     refetchInterval: 5000, // Poll every 5 seconds for running jobs
@@ -48,8 +48,8 @@ export default function OneTimeFix() {
       return backfillJobs[0] || null;
     },
     refetchInterval: (query) => {
-      const job = query.state?.data;
-      return job?.status === 'running' ? 5000 : false;
+      const job = query.state?.data ?? query.data;
+      return ['running','in_progress','processing'].includes(job?.status) ? 5000 : false;
     },
   });
 
@@ -107,11 +107,12 @@ export default function OneTimeFix() {
     }
   }
 
-  const progressPercent = latestJob?.status === 'running' 
-    ? (latestJob.progress || 0) * 100 
-    : latestJob?.status === 'done' 
-    ? 100 
+  const rawProgress = latestJob?.status === 'running'
+    ? (latestJob.progress || 0) * 100
+    : latestJob?.status === 'done'
+    ? 100
     : 0;
+const progressPercent = Math.min(100, Math.max(0, rawProgress));
 
   return (
     <div className="p-8">
