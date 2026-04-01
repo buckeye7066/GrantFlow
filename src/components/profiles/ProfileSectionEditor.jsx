@@ -1268,12 +1268,17 @@ export default function ProfileSectionEditor({
 
   const handleAskAI = async () => {
     if (!config || !onAskAI) return
+    // Capture stable references before the async gap.
+    const capturedDefaults = config.defaults ?? {}
+    const capturedConfig = config
     setAiStatus('loading')
     setAiError(null)
     try {
       const suggestion = await onAskAI(form.getValues())
+      // Guard: if section changed while awaiting, do nothing.
+      if (config !== capturedConfig) return
       if (suggestion && typeof suggestion === 'object') {
-        form.reset({ ...defaults, ...suggestion })
+        form.reset({ ...capturedDefaults, ...suggestion })
         setAiStatus('succeeded')
       } else {
         setAiStatus('idle')
