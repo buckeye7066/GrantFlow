@@ -64,28 +64,33 @@ export default function PrintPipelinePage() {
   // It waits a brief moment for the browser to render the content, then triggers the print dialog.
   useEffect(() => {
     const handleAfterPrint = () => {
-        // After the print dialog is closed, navigate back.
-        // history.back() is often preferred over navigate(-1) for simple back navigation
-        // as it directly manipulates the browser history.
-        history.back();
+        // Use window.history.back() explicitly to avoid ambiguous bare global.
+        // If the page has no history (opened in new tab), fall back to the
+        // Organizations page so the user is never stranded.
+        if (window.history.length > 1) {
+          window.history.back();
+        } else {
+          window.location.href = createPageUrl('Organizations');
+        }
     };
 
     const canPrint = !isLoadingOrg && !isLoadingGrants && !isErrorOrg && !isErrorGrants && organization && grants;
     if (canPrint && !printTriggered.current) {
-        printTriggered.current = true; // Prevents re-triggering on re-renders
-        
-        // Add event listener for after print dialog closes
+        // Set the flag AFTER scheduling, and reset it in cleanup so
+        // React 18 Strict Mode double-invoke does not permanently suppress print.
+        printTriggered.current = true;
+
         window.addEventListener('afterprint', handleAfterPrint);
 
-        // Give the browser a moment to paint the content before printing
         const timer = setTimeout(() => {
             window.print();
-        }, 300); // 300ms delay is usually sufficient
+        }, 300);
 
         return () => {
             clearTimeout(timer);
-            // Clean up the event listener when the component unmounts or dependencies change
             window.removeEventListener('afterprint', handleAfterPrint);
+            // Reset so the real mount (after StrictMode teardown) can proceed.
+            printTriggered.current = false;
         };
     }
   }, [isLoadingOrg, isLoadingGrants, isErrorOrg, isErrorGrants, organization, grants]);
