@@ -114,7 +114,7 @@ export async function ensureProfileOrgLinks(db, opts = {}) {
     return { ok: true, dry_run: dryRun, ...summary }
   }
 
-  await db.withTransaction(async (tx) => {
+  const _linkProfiles = (tx) => {
     for (const row of candidates) {
       const profileId = String(row?.id || '').trim()
       if (!profileId) continue
@@ -125,18 +125,9 @@ export async function ensureProfileOrgLinks(db, opts = {}) {
 
       let orgId = null
 
-      // 1) Match existing org by email.
       if (email) {
-        const emailMatch = await tx
-          .prepare(
-            `
-              SELECT id
-              FROM organizations
-              WHERE lower(email) = ?
-              ORDER BY updated_at DESC
-              LIMIT 1
-            `,
-          )
+        const emailMatch = tx
+          .prepare('SELECT id FROM organizations WHERE lower(email) = ? ORDER BY updated_at DESC LIMIT 1')
           .get(email)
         if (emailMatch?.id) {
           orgId = String(emailMatch.id)
@@ -144,18 +135,9 @@ export async function ensureProfileOrgLinks(db, opts = {}) {
         }
       }
 
-      // 2) Match existing org by normalized name (also guards against duplicate creation for email-less profiles).
       if (!orgId) {
-        const nameMatch = await tx
-          .prepare(
-            `
-              SELECT id
-              FROM organizations
-              WHERE name = ? AND (email IS NULL OR email = '')
-              ORDER BY updated_at DESC
-              LIMIT 1
-            `,
-          )
+        const nameMatch = tx
+          .prepare("SELECT id FROM organizations WHERE name = ? AND (email IS NULL OR email = '') ORDER BY updated_at DESC LIMIT 1")
           .get(desiredName)
         if (nameMatch?.id) {
           orgId = String(nameMatch.id)
@@ -163,21 +145,15 @@ export async function ensureProfileOrgLinks(db, opts = {}) {
         }
       }
 
-      // 3) Create a new org.
       if (!orgId) {
         orgId = crypto.randomUUID()
         summary.planned_org_creates += 1
 
         if (!dryRun) {
-          await tx
-            .prepare(
-              `
-                INSERT INTO organizations (
-                  id, name, email, applicant_type, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ${nowSql}, ${nowSql})
-              `,
-            )
-            .run(orgId, desiredName, email, applicantType)
+          tx.prepare(
+            `INSERT INTO organizations (id, name, email, applicant_type, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ${nowSql}, ${nowSql})`,
+          ).run(orgId, desiredName, email, applicantType)
           summary.applied_org_creates += 1
           summary.created_new_org += 1
         }
@@ -185,13 +161,18 @@ export async function ensureProfileOrgLinks(db, opts = {}) {
 
       summary.planned_profile_updates += 1
       if (!dryRun) {
-        await tx
-          .prepare(`UPDATE profiles SET organization_id = ?, updated_at = ${nowSql} WHERE id = ?`)
+        tx.prepare(`UPDATE profiles SET organization_id = ?, updated_at = ${nowSql} WHERE id = ?`)
           .run(orgId, profileId)
         summary.applied_profile_updates += 1
       }
     }
-  })
+  }
+
+  if (dialect === 'postgres') {
+    await db.withTransaction(async (tx) => { _linkProfiles(tx) })
+  } else {
+    db.withTransaction((tx) => { _linkProfiles(tx) })
+  }
 
   console.info('[profile-org-links] ok', { ...summary, dryRun })
   return { ok: true, dry_run: dryRun, ...summary }

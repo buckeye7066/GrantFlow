@@ -424,19 +424,18 @@ class SqliteDb {
   }
 
   async withTransaction(fn) {
-    // better-sqlite3 transactions are synchronous.
-    // If fn returns a Promise, we must reject rather than silently commit before the async work finishes.
-    const txFn = this._db.transaction((txThis) => {
-      const result = fn(txThis);
-      if (result && typeof result.then === 'function') {
-        throw new Error(
-          '[SqliteDb.withTransaction] Callback must be synchronous for SQLite transactions. ' +
-          'Use PostgresDb or restructure your callback to avoid async operations inside the transaction.'
-        );
-      }
+    // Many callers pass async callbacks where every `await` resolves a
+    // synchronous better-sqlite3 result. Use explicit BEGIN/COMMIT so both
+    // sync and async callbacks work correctly.
+    this._db.exec('BEGIN');
+    try {
+      const result = await fn(this);
+      this._db.exec('COMMIT');
       return result;
-    });
-    return txFn(this);
+    } catch (err) {
+      try { this._db.exec('ROLLBACK'); } catch { /* ignore */ }
+      throw err;
+    }
   }
 
   close() {
