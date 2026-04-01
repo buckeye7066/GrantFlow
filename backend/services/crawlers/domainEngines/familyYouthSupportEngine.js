@@ -19,8 +19,46 @@ const DIRECTORY_RESOURCES = [
 
 export async function runFamilyYouthSupportEngine(profile, options = {}) {
   try {
-    return normalizeAndFilter(DIRECTORY_RESOURCES, ENGINE_ID, { strict_no_loans: false, strict_no_matching: false })
-  } catch {
+    const profileContext = {
+      state: profile?.location?.state || profile?.state || null,
+      hasChildren: !!(profile?.family?.has_children || profile?.family?.num_children > 0),
+      hasFosterContext: !!(profile?.family?.foster_care || profile?.family?.is_foster_parent),
+      hasYouthApplicant: !!(profile?.demographics?.age && profile?.demographics?.age < 25),
+      isHomelessYouth: !!(profile?.housing?.status === 'homeless' && profile?.demographics?.age && profile?.demographics?.age < 25),
+      needsChildCare: !!(profile?.needs?.includes?.('child_care') || profile?.family?.needs_child_care),
+      needsEmergencyFamily: !!(profile?.emergency?.active || profile?.needs?.includes?.('emergency')),
+    }
+
+    // Filter directory resources to those relevant to this profile
+    const relevantResources = DIRECTORY_RESOURCES.filter(resource => {
+      // Homeless youth resource: only relevant if youth + homeless context
+      if (resource.keywords.includes('homeless youth')) {
+        return profileContext.isHomelessYouth || profileContext.hasYouthApplicant
+      }
+      // Foster/child welfare: only relevant if foster context or has children
+      if (resource.keywords.some(k => ['foster', 'child welfare'].includes(k))) {
+        return profileContext.hasFosterContext || profileContext.hasChildren
+      }
+      // Child care specific resources
+      if (resource.keywords.some(k => ['child care', 'CCDF'].includes(k))) {
+        return profileContext.hasChildren || profileContext.needsChildCare
+      }
+      // Youth programs: relevant for youth applicants or families with children
+      if (resource.categories.includes('youth')) {
+        return profileContext.hasYouthApplicant || profileContext.hasChildren
+      }
+      // TANF / family assistance: always relevant for family profiles
+      return true
+    })
+
+    return normalizeAndFilter(relevantResources, ENGINE_ID, {
+      strict_no_loans: false,
+      strict_no_matching: false,
+      profile,
+    })
+  } catch (err) {
+    // Log suppression reason so the pipeline can diagnose empty results (Goal 8)
+    console.error(`[${ENGINE_ID}] engine error:`, err?.message || err)
     return []
   }
 }
