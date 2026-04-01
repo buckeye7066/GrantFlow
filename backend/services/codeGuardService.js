@@ -260,7 +260,7 @@ export async function verifyMissionGoals(db) {
     const grants = db.prepare(`SELECT match_score, matched_needs, match_decision FROM grants WHERE profile_id IS NOT NULL LIMIT 100`).all()
     const withNeeds = grants.filter(g => {
       const needs = safeParseJson(g.matched_needs, [])
-      return needs.length > 0 || (g.match_score ?? 0) > 0
+      return needs.length > 0
     }).length
     const pct = grants.length ? Math.round(withNeeds / grants.length * 100) : 0
     if (grants.length === 0) report(2, 'Match to profile needs', 'FAIL', 'No profile-scoped grants')
@@ -270,7 +270,7 @@ export async function verifyMissionGoals(db) {
 
   // Goal 3: Reject irrelevant/misleading results
   try {
-    const junkRe = /\b(loan|repayment|closed|coming soon|placeholder|test record)\b/i
+    const junkRe = /\b(loan|loans?|microloan|repayment|closed|coming soon|placeholder|test record|not accepting|applications closed)\b/i
     const grants = db.prepare('SELECT title, notes FROM grants WHERE profile_id IS NOT NULL LIMIT 200').all()
     const junk = grants.filter(g => junkRe.test(g.title || '') || junkRe.test(g.notes || ''))
     if (grants.length === 0) report(3, 'Reject irrelevant results', 'WARN', 'No grants to check')
@@ -520,8 +520,8 @@ export function shouldRunAudit(db) {
  * Mark the current time as the last audit run.
  * @param {Object} db
  */
-export function markAuditComplete(db) {
-  storeMemory(db, {
+export async function markAuditComplete(db) {
+  await storeMemory(db, {
     scope: 'global',
     memoryKey: 'codeguard.last_audit',
     memoryType: 'fact',
