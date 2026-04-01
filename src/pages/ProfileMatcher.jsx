@@ -186,9 +186,9 @@ export default function ProfileMatcher() {
                     <div className="flex items-start gap-6">
                       {/* Match Score Circle */}
                       <div className="flex-shrink-0">
-                        <div className={`relative w-24 h-24 rounded-full border-4 flex items-center justify-center ${getMatchColor(match.match_score)}`}>
+                        <div className={`relative w-24 h-24 rounded-full border-4 flex items-center justify-center ${match.match_score != null ? getMatchColor(match.match_score) : 'text-slate-400 bg-slate-50 border-slate-200'}`}>
                           <div className="text-center">
-                            <div className="text-2xl font-bold">{match.match_score}</div>
+                            <div className="text-2xl font-bold">{match.match_score != null ? match.match_score : 'â'}</div>
                             <div className="text-xs font-medium">MATCH</div>
                           </div>
                         </div>
@@ -270,7 +270,7 @@ export default function ProfileMatcher() {
                           {match.deadline && (
                             <div className="flex items-center gap-2 text-sm text-slate-600">
                               <Calendar className="w-4 h-4" />
-                              <span>Due: {format(new Date(match.deadline), 'MMM d, yyyy')}</span>
+                              <span>Due: {(() => { const d = new Date(match.deadline); return isNaN(d.getTime()) ? 'Unknown' : format(d, 'MMM d, yyyy'); })()}</span>
                             </div>
                           )}
                           <Link to={createPageUrl("GrantDetail", { id: match.grant_id })}>
