@@ -143,7 +143,7 @@ export function generateStatePrograms(stateCode) {
       id: `${sc}-housing-authority`,
       name: `${reg.housingName}`,
       description: `${reg.name}'s state housing finance agency. Provides programs for affordable housing, homebuyer assistance, homelessness prevention, emergency repair, and rental assistance.`,
-      url: reg.housingUrl,
+      url: reg.housingUrl || reg.benefitsPortal || null,
       categories: ['housing'],
       eligibility: { incomeLimit: 'Varies by program' },
       type: 'portal',
@@ -155,7 +155,7 @@ export function generateStatePrograms(stateCode) {
       id: `${sc}-voc-rehab`,
       name: `${reg.name} Vocational Rehabilitation`,
       description: `Employment services for ${reg.name} residents with disabilities: job training, education, job placement, assistive technology, and support services.`,
-      url: 'https://rsa.ed.gov/about/states',
+      url: reg.vocRehabUrl || 'https://rsa.ed.gov/about/states',
       categories: ['employment', 'disability', 'education'],
       eligibility: { requiresDisability: true },
       type: 'benefit',
@@ -195,6 +195,11 @@ export function generateStatePrograms(stateCode) {
   // Append state-specific enrichment programs when present
   if (Array.isArray(reg.extraPrograms)) {
     for (const ep of reg.extraPrograms) {
+      // Goal 1: skip extra programs that have no valid application URL at source
+      if (!ep.url || typeof ep.url !== 'string' || !/^https?:\/\//i.test(ep.url.trim())) {
+        console.warn(`[stateBase] ${stateCode}: extraProgram '${ep.id || ep.name}' skipped â missing or invalid URL`);
+        continue;
+      }
       benefits.push({
         ...ep,
         id: ep.id || `${sc}-extra-${benefits.length}`,
@@ -203,7 +208,24 @@ export function generateStatePrograms(stateCode) {
     }
   }
 
-  return { benefits, meta, countyResources: {} };
+  // Goal 1 + Goal 3: strip any entry whose URL is missing or non-HTTP before returning
+  const validBenefits = [];
+  const droppedBenefits = [];
+  for (const b of benefits) {
+    if (typeof b.url === 'string' && /^https?:\/\//i.test(b.url.trim())) {
+      validBenefits.push(b);
+    } else {
+      droppedBenefits.push({ id: b.id, reason: 'missing_or_invalid_url', url: b.url });
+    }
+  }
+  if (droppedBenefits.length > 0) {
+    // Goal 8: log suppressed entries so pipeline observers know why recall was reduced
+    console.warn(
+      `[stateBase] ${stateCode}: ${droppedBenefits.length} baseline program(s) dropped â no valid application URL`,
+      droppedBenefits
+    );
+  }
+  return { benefits: validBenefits, meta, countyResources: {}, droppedCount: droppedBenefits.length };
 }
 
 /**
