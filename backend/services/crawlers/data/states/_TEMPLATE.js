@@ -67,13 +67,17 @@ export const STATE_BENEFITS = [
     id: 'xx-snap',
     name: '[State] SNAP (Food Assistance)',
     description: '',
-    url: '',
-    applicationUrl: '',
+    url: '', // REQUIRED
+    applicationUrl: '', // REQUIRED
     categories: ['food'],
-    eligibility: { incomeLimit: '' },
+    eligibility: { incomeLimit: '' }, // REQUIRED: fill verified income limit
+    applicantTypes: [], // REQUIRED: fill for each state
     type: 'benefit',
     fundingType: 'direct_benefit',
     recurring: true,
+    // source is set by the loader to the state code (e.g. 'state_data:OH')
+    // fingerprint is computed by the crawler from id + url + categories
+    // Do NOT hardcode these here; the loader must inject them at import time.
   },
 
   // ── Utilities ──
@@ -192,8 +196,12 @@ export const STATE_BENEFITS = [
     id: 'xx-211',
     name: '[State] 211',
     description: '',
-    url: '',
+    url: '', // REQUIRED
     categories: ['utilities', 'housing', 'food', 'healthcare', 'cash_assistance', 'employment', 'mental_health', 'legal', 'transportation', 'childcare'],
+    // applicantTypes: who can use this â fill in for each concrete state file
+    // e.g. ['individual', 'family', 'senior', 'veteran', 'disabled', 'student', 'nonprofit']
+    applicantTypes: [], // REQUIRED: fill for each state
+    eligibility: {}, // REQUIRED: fill for each state
     type: 'referral',
     fundingType: 'referral_service',
   },
@@ -210,4 +218,18 @@ export const COUNTY_RESOURCES = {
   // },
 };
 
-export default { STATE_META, STATE_BENEFITS, COUNTY_RESOURCES };
+// Validate before export so any loader that imports this module gets
+// an empty array rather than blank-URL placeholder records.
+const _validatedBenefits = STATE_BENEFITS.filter(entry => {
+  if (!entry.url || entry.url.trim() === '') {
+    // eslint-disable-next-line no-console
+    console.warn(
+      `[STATE TEMPLATE] Skipping entry '${entry.id}' â url is empty. ` +
+      'Fill in a verified URL before activating this state file.'
+    );
+    return false;
+  }
+  return true;
+});
+
+export default { STATE_META, STATE_BENEFITS: _validatedBenefits, COUNTY_RESOURCES };
