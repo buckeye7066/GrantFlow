@@ -61,7 +61,7 @@ export async function logAuditEvent(db, {
   try {
     // Ensure audit_logs table exists (best-effort).
     // This is intentionally safe to call on every write; both sqlite + postgres use IF NOT EXISTS.
-    fireAndForget(ensureAuditTable(db))
+    await ensureAuditTable(db)
     
     const id = randomUUID()
     const scrubbed = details ? scrubSensitive(details) : null
@@ -202,12 +202,12 @@ export async function queryAuditLogs(db, {
     }
     
     // Get total count
-    const totalRow = await db.prepare(countQuery).get(...params)
+    const totalRow = await db.prepare(countQuery).get(params)
     const total = coerceCount(totalRow?.count)
     
     // Get paginated results
     query += ' ORDER BY created_at DESC LIMIT ? OFFSET ?'
-    const logs = await db.prepare(query).all(...params, limit, offset)
+    const logs = await db.prepare(query).all([...params, limit, offset])
     
     return {
       logs: (logs || []).map(log => ({
@@ -319,8 +319,8 @@ async function ensureAuditTable(db) {
   }
 
   // sqlite
-  await db.exec(`
-      CREATE TABLE IF NOT EXISTS audit_logs (
+  const stmts = [
+    `CREATE TABLE IF NOT EXISTS audit_logs (
         id TEXT PRIMARY KEY,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         category TEXT NOT NULL,
@@ -333,14 +333,16 @@ async function ensureAuditTable(db) {
         details TEXT,
         ip_address TEXT,
         user_agent TEXT
-      );
-      
-      CREATE INDEX IF NOT EXISTS idx_audit_category ON audit_logs(category);
-      CREATE INDEX IF NOT EXISTS idx_audit_action ON audit_logs(action);
-      CREATE INDEX IF NOT EXISTS idx_audit_severity ON audit_logs(severity);
-      CREATE INDEX IF NOT EXISTS idx_audit_user ON audit_logs(user_id);
-      CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_logs(created_at);
-    `)
+      )`,
+    `CREATE INDEX IF NOT EXISTS idx_audit_category ON audit_logs(category)`,
+    `CREATE INDEX IF NOT EXISTS idx_audit_action ON audit_logs(action)`,
+    `CREATE INDEX IF NOT EXISTS idx_audit_severity ON audit_logs(severity)`,
+    `CREATE INDEX IF NOT EXISTS idx_audit_user ON audit_logs(user_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_logs(created_at)`,
+  ]
+  for (const sql of stmts) {
+    await db.exec(sql)
+  }
 }
 
 /**
@@ -383,7 +385,7 @@ export function createAuditMiddleware(category, action) {
         : res.statusCode >= 400 ? SEVERITY.WARNING 
         : SEVERITY.INFO
       
-      logAuditEvent(req.db, {
+      fireAndForget(logAuditEvent(req.db, {
         category,
         action,
         severity,
@@ -399,7 +401,7 @@ export function createAuditMiddleware(category, action) {
         },
         ipAddress: req.ip || req.connection?.remoteAddress,
         userAgent: req.get('user-agent'),
-      })
+      }))
       
       originalEnd.apply(res, args)
     }
