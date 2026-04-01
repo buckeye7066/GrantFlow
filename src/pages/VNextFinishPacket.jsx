@@ -33,6 +33,7 @@ export default function VNextFinishPacket() {
           <AlertTitle>vNext disabled</AlertTitle>
           <AlertDescription>
             Set <span className="font-mono">VITE_SHOULDERS_VNEXT=true</span> to enable the UI.
+            {id ? <> Application id: <span className="font-mono">{id}</span></> : null}
           </AlertDescription>
         </Alert>
       </div>
@@ -90,7 +91,7 @@ export default function VNextFinishPacket() {
               Back
             </Button>
           </Link>
-          {boundary?.url ? (
+          {boundary?.url && /^https?:\/\//i.test(boundary.url) ? (
             <a href={boundary.url} target="_blank" rel="noreferrer">
               <Button>
                 <ExternalLink className="w-4 h-4 mr-2" />
