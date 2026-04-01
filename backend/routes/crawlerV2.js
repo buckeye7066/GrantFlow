@@ -37,8 +37,11 @@ router.get('/health', async (req, res) => {
     const staleDays = Math.max(1, Number.parseInt(process.env.CRAWLER_STALE_DAYS || '30', 10) || 30)
     const stalePredicate =
       req.db?.dialect === 'postgres'
-        ? `last_verified < (NOW() - ($1::int * INTERVAL '1 day'))`
+        ? `last_verified < (NOW() - (? * INTERVAL '1 day'))`
         : `DATETIME(last_verified) < DATETIME('now', ?)`
+
+    const staleParam =
+      req.db?.dialect === 'postgres' ? staleDays : `-${staleDays} day`
 
     // Note: keep parameter format simple and portable for our DB wrapper.
     const staleA = await req.db
