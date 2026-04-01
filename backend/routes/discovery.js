@@ -414,6 +414,7 @@ router.post('/searchOpportunities', async (req, res) => {
  */
 router.post('/archOpportunities', async (req, res) => {
   try {
+    const isPostgres = req.db?.dialect === 'postgres'
     const user = req.user ?? { role: 'guest' }
     if (!isAdminUser(user)) {
       return res.status(403).json({ success: false, error: 'Admin privileges required' })

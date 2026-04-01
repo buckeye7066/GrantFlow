@@ -22,40 +22,39 @@ export async function fetchUSASpending(options = {}) {
   
   console.log(`[usaspending.gov] Fetching opportunities (limit: ${limit}, page: ${page})`);
   
-  try {
-    // Use the spending by award endpoint to find recent grants
-    const url = `${API_BASE}/search/spending_by_award/`;
-    
-    // Build request payload
-    const payload = {
-      filters: {
-        award_type_codes: ['02', '03', '04', '05'], // Grant types
-        time_period: [
-          {
-            start_date: getDateMonthsAgo(12), // Last 12 months
-            end_date: getCurrentDate(),
-          },
-        ],
-      },
-      fields: [
-        'Award ID',
-        'Recipient Name',
-        'Award Amount',
-        'Description',
-        'Start Date',
-        'End Date',
-        'Awarding Agency',
-        'Awarding Sub Agency',
-        'recipient_location_state_code',
-        'Award Type',
-        'prime_award_base_transaction_description',
+  // Use the spending by award endpoint to find recent grants (declared outside try for catch logging)
+  const url = `${API_BASE}/search/spending_by_award/`;
+
+  const payload = {
+    filters: {
+      award_type_codes: ['02', '03', '04', '05'], // Grant types
+      time_period: [
+        {
+          start_date: getDateMonthsAgo(12), // Last 12 months
+          end_date: getCurrentDate(),
+        },
       ],
-      page,
-      limit,
-      order: 'desc',
-      sort: 'Award Amount',
-    };
-    
+    },
+    fields: [
+      'Award ID',
+      'Recipient Name',
+      'Award Amount',
+      'Description',
+      'Start Date',
+      'End Date',
+      'Awarding Agency',
+      'Awarding Sub Agency',
+      'recipient_location_state_code',
+      'Award Type',
+      'prime_award_base_transaction_description',
+    ],
+    page,
+    limit,
+    order: 'desc',
+    sort: 'Award Amount',
+  };
+
+  try {
     const data = await fetchWithRetry(url, {
       method: 'POST',
       headers: {

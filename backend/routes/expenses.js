@@ -41,7 +41,8 @@ async function ensureExpenseAccess(req, res, expenseId) {
 // Move this line to the top after const router = express.Router();
 router.get('/', async (req, res) => {
   try {
-    const user = req.user
+    const user = requireAuthenticatedUser(req, res)
+    if (!user) return
 
     const { grant_id, organization_id } = req.query;
     let query = 'SELECT * FROM expenses WHERE 1=1';

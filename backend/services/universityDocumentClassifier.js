@@ -68,18 +68,25 @@ export async function loadUniversityApplicationsForProfile(db, profileId) {
       `,
     )
     .get(String(profileId).replace(/[^0-9]/g, ''))
-  if (!row?.data) return []
-  try {
-    const parsed = JSON.parse(row.data)
-    const apps = Array.isArray(parsed?.applications) ? parsed.applications : []
-    return apps
-      .map((app) => ({
-        id: app?.id ?? null,
-        name: app?.name ?? '',
-      }))
-      .filter((a) => a.id && a.name)
+    if (!row?.data) return []
+    try {
+      const parsed = JSON.parse(row.data)
+      const apps = Array.isArray(parsed?.applications) ? parsed.applications : []
+      return apps
+        .map((app) => ({
+          id: app?.id ?? null,
+          name: app?.name ?? '',
+        }))
+        .filter((a) => a.id && a.name)
+    } catch (error) {
+      console.error('Failed to parse university applications data:', error)
+      return []
+    }
   } catch (error) {
-    console.error('Failed to parse university applications data:', error)
+    console.error(
+      'Failed to load university applications for profile from database:',
+      error,
+    )
     return []
   }
 }

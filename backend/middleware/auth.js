@@ -25,7 +25,7 @@ export async function ensureAdmin(req, res, next) {
     return res.status(401).json({ error: 'Authentication required' });
   }
   const user = req.user;
-  
+
   try {
     // Use req.ctx.isAdmin if available (canonical from requestContext middleware)
     const isAdmin = req.ctx?.isAdmin ?? (await isAdminUserWithDb(req.db, user));

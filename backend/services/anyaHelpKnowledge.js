@@ -1,19 +1,19 @@
 /**
  * anyaHelpKnowledge.js — Server-side help knowledge for Anya.
  *
- * This module mirrors the frontend helpRegistry data in a CommonJS/ESM-compatible
- * Node.js module so Anya can answer questions about any page, feature, or field
+ * This module mirrors the frontend helpRegistry data as an ES module so Anya can
+ * answer questions about any page, feature, or field
  * with accurate, up-to-date structured data.
  */
 
-const CURRENT_TOUR_VERSION = 1
-const CURRENT_MANUAL_VERSION = 1
+export const CURRENT_TOUR_VERSION = 1
+export const CURRENT_MANUAL_VERSION = 1
 
 /**
  * Canonical help data for every page in GrantFlow (mirrors src/config/helpRegistry.js).
  * Keys must match routeNames from navConfig.js.
  */
-const HELP_REGISTRY = [
+export const HELP_REGISTRY = [
   {
     key: 'Dashboard',
     route: '/Dashboard',
@@ -550,7 +550,7 @@ const HELP_REGISTRY = [
  * @param {string} routeName
  * @returns {object|undefined}
  */
-function getHelpForRoute(routeName) {
+export function getHelpForRoute(routeName) {
   return HELP_REGISTRY.find((entry) => entry.key === routeName)
 }
 
@@ -559,7 +559,7 @@ function getHelpForRoute(routeName) {
  * @param {string} fieldKey
  * @returns {{ field: object, page: object }|undefined}
  */
-function getHelpForField(fieldKey) {
+export function getHelpForField(fieldKey) {
   for (const entry of HELP_REGISTRY) {
     const field = entry.fields?.find((f) => f.key === fieldKey)
     if (field) return { field, page: entry }
@@ -572,7 +572,7 @@ function getHelpForField(fieldKey) {
  * @param {string} query
  * @returns {Array<object>}
  */
-function searchHelp(query) {
+export function searchHelp(query) {
   if (!query || !query.trim()) return HELP_REGISTRY
   const q = query.trim().toLowerCase()
   return HELP_REGISTRY.filter((entry) => {
@@ -596,7 +596,7 @@ function searchHelp(query) {
  * into Anya's system prompt.
  * @returns {string} JSON string
  */
-function getAppOverview() {
+export function getAppOverview() {
   const overview = {
     pages: HELP_REGISTRY.map((e) => ({
       key: e.key,
@@ -624,14 +624,4 @@ function getAppOverview() {
     ),
   }
   return JSON.stringify(overview, null, 2)
-}
-
-module.exports = {
-  CURRENT_TOUR_VERSION,
-  CURRENT_MANUAL_VERSION,
-  HELP_REGISTRY,
-  getHelpForRoute,
-  getHelpForField,
-  searchHelp,
-  getAppOverview
 }

@@ -10,6 +10,7 @@
  */
 
 import express from 'express';
+import { randomUUID } from 'crypto';
 import { formatError } from '../middleware/errorHandler.js';
 import { scheduleDebouncedVehicleSync } from '../services/githubSyncVehicles.js';
 import db from '../services/database.js';
@@ -175,11 +176,11 @@ router.post('/ingest', async (req, res) => {
       // PostgreSQL: gen_random_uuid() — let the DB generate the id
       // clean_title is a native boolean column in Postgres
       const result = await db.query(
-          `INSERT INTO vehicle_opportunities
-             (vehicle_type, title, price, mileage, year, transmission, color, location, link, vin, clean_title, source)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-           RETURNING id`,
-          [
+        `INSERT INTO vehicle_opportunities
+           (vehicle_type, title, price, mileage, year, transmission, color, location, link, vin, clean_title, source)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+         RETURNING id`,
+        [
           data.vehicle_type,
           data.title,
           data.price,
@@ -192,11 +193,11 @@ router.post('/ingest', async (req, res) => {
           data.vin,
           data.clean_title,
           data.source,
-        ]);
+        ],
+      );
       id = result.rows[0]?.id;
     } else {
       // SQLite: generate id manually; clean_title stored as integer (1/0)
-      const { randomUUID } = await import('crypto');
       id = randomUUID();
       await db
         .prepare(

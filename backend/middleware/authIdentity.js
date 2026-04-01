@@ -146,8 +146,9 @@ export function createAuthIdentityMiddleware({ adminToken, adminName, adminEmail
 
             // Best-effort DB session validation/enrichment (when sessions are stored locally).
             if (payload?.sid) {
+              let sessionRow
               try {
-              const sessionRow = await new Promise((resolve, reject) => {
+                sessionRow = await new Promise((resolve, reject) => {
                   try {
                     const stmt = db.prepare(`
                       SELECT s.*, u.display_name, u.primary_email, u.is_admin
@@ -160,6 +161,16 @@ export function createAuthIdentityMiddleware({ adminToken, adminName, adminEmail
                     reject(err);
                   }
                 });
+              } catch (error) {
+                console.warn('Failed to validate session:', error?.message || error)
+                // Continue with token-only authentication
+                if (error?.code === 'SQLITE_CORRUPT' || error?.code === 'ECONNRESET') {
+                  // Critical DB errors should fail auth completely
+                  user = { role: 'guest', profileId: null }
+                  req.user = user
+                  return next()
+                }
+              }
               if (
                 sessionRow &&
                 !sessionRow.revoked_at &&
@@ -180,16 +191,6 @@ export function createAuthIdentityMiddleware({ adminToken, adminName, adminEmail
                 }
                 handled = true
               }
-            } catch (error) {
-              console.warn('Failed to validate session:', error?.message || error)
-              // Continue with token-only authentication
-              if (error?.code === 'SQLITE_CORRUPT' || error?.code === 'ECONNRESET') {
-                // Critical DB errors should fail auth completely
-                user = { role: 'guest', profileId: null }
-                req.user = user
-                return next()
-              }
-            }
             }
           } catch {
             // fall through to legacy handling
@@ -221,24 +222,28 @@ export function createAuthIdentityMiddleware({ adminToken, adminName, adminEmail
 
         if (!handled && allowLegacyProfileToken) {
           try {
-            const profile = await new Promise((resolve, reject) => {
-              try {
-                const stmt = db.prepare('SELECT id, display_name FROM profiles WHERE id = ?');
-                resolve(stmt.get(token));
-              } catch (err) {
-                reject(err);
+            try {
+              const profile = await new Promise((resolve, reject) => {
+                try {
+                  const stmt = db.prepare('SELECT id, display_name FROM profiles WHERE id = ?');
+                  resolve(stmt.get(token));
+                } catch (err) {
+                  reject(err);
+                }
+              });
+              if (profile) {
+                user = {
+                  role: 'user',
+                  profileId: profile.id,
+                  profileName: profile.display_name,
+                }
+                handled = true
               }
-            });
-            if (profile) {
-              user = {
-                role: 'user',
-                profileId: profile.id,
-                profileName: profile.display_name,
-              }
-              handled = true
+            } catch (error) {
+              console.warn('Failed to lookup profile by token:', error?.message || error)
             }
           } catch (error) {
-            console.warn('Failed to lookup profile by token:', error?.message || error)
+            console.warn('Legacy profile token path failed:', error?.message || error)
           }
         }
       }

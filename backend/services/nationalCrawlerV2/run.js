@@ -349,8 +349,9 @@ export async function runNationalCrawlerV2({
                 normalized.provider_requirements = null
               }
 
+              let upsert = null
               try {
-                const upsert = await upsertNormalizedProgram({
+                upsert = await upsertNormalizedProgram({
                   db,
                   crawlRunId: runId,
                   normalized,
@@ -359,12 +360,14 @@ export async function runNationalCrawlerV2({
                   contentType,
                   parserName: parser_name,
                 })
-                counts.programs_normalized += 1
-                counts.programs_upserted += 1
-                counts.versions_created += upsert.versions_created
               } catch (upsertError) {
                 await logs.normalize(`[run=${runId}] upsert_error ${source.source_id}: ${upsertError.message}`)
                 counts.failures.push({ url, failure_type: 'database_error', message: upsertError.message, stack: upsertError.stack, parser_name: parser_name, retry_count: 0, source_id: source.source_id })
+              }
+              if (upsert != null) {
+                counts.programs_normalized += 1
+                counts.programs_upserted += 1
+                counts.versions_created += upsert.versions_created
               }
             }
 

@@ -256,7 +256,8 @@ export async function runAutonomousCrawlers(options, context) {
         // Check status of all jobs
         const jobIds = report.jobs.map(j => j.job_id)
         if (jobIds.length === 0) {
-          return { message: 'No jobs to check' }
+          // Nothing to poll; fall through to duration/audit and return full report (no single job/profile).
+          break
         }
         const placeholders = jobIds.map(() => '?').join(',')
         const jobs = await db

@@ -108,14 +108,24 @@ export async function runFederalCrawl(db, profileId, profileContext, options = {
   const perSource = Math.ceil(limit / 2);
 
   // Fetch from Grants.gov
+  let _fetchGrantsGov;
   try {
-    const { fetchGrantsGov: _fetchGrantsGov } = await import('./sources/grantsGov.js');
-    const { opportunities } = await _fetchGrantsGov({ limit: perSource, offset: 0 });
-    allOpportunities.push(...opportunities);
-    console.log(`[crawlerFramework] Grants.gov: ${opportunities.length} results`);
-  } catch (err) {
-    console.error('[crawlerFramework] Grants.gov fetch error:', err.message);
-    errors.push({ source: 'grants.gov', error: err.message });
+    const module = await import('./sources/grantsGov.js');
+    _fetchGrantsGov = module.fetchGrantsGov;
+    if (!_fetchGrantsGov) throw new Error('fetchGrantsGov not exported');
+  } catch (importErr) {
+    console.error('[crawlerFramework] Failed to load grantsGov:', importErr.message);
+    errors.push({ source: 'grants.gov', error: `Module load failed: ${importErr.message}` });
+  }
+  if (_fetchGrantsGov) {
+    try {
+      const { opportunities } = await _fetchGrantsGov({ limit: perSource, offset: 0 });
+      allOpportunities.push(...opportunities);
+      console.log(`[crawlerFramework] Grants.gov: ${opportunities.length} results`);
+    } catch (err) {
+      console.error('[crawlerFramework] Grants.gov fetch error:', err.message);
+      errors.push({ source: 'grants.gov', error: err.message });
+    }
   }
 
   // Fetch from USASpending

@@ -15,6 +15,28 @@ import { storeMemory, getMemory } from './anyaBrainService.js'
 const AUDIT_COOLDOWN_HOURS = 6
 
 // ---------------------------------------------------------------------------
+// The 15 GrantFlow mission goals — canonical reference for all audit logic
+// ---------------------------------------------------------------------------
+
+export const MISSION_GOALS = [
+  { id: 1, short: 'Real funding', rule: 'Opportunities must have an actual application path. ACCEPT requires application_url.' },
+  { id: 2, short: 'Match to needs', rule: 'Map real user needs (housing, education, medical, business, caregiving, emergency) to funding via profile normalisation and need categories.' },
+  { id: 3, short: 'Reject junk', rule: 'Hard-reject loans, closed deadlines, wrong entity types, wrong state, institutional-only for individuals, disease-specific with no condition, disaster programs with no emergency context.' },
+  { id: 4, short: 'Single decision authority', rule: 'computeMatchDecision() is the sole authority. All insertion flows through saveToProfilePipeline(). No parallel scoring paths.' },
+  { id: 5, short: 'Full profile depth', rule: 'Matching uses the full normalised profile — military, education, family, health, emergency, business, housing — not surface tags.' },
+  { id: 6, short: 'Multiple applicant types', rule: 'Serve individuals, families, students, veterans, nonprofits, businesses, caregivers, disabled, emergency-affected without collapsing distinctions.' },
+  { id: 7, short: 'Recall over suppression', rule: 'Prefer false positives over false negatives in candidate selection; be conservative only at final acceptance. Threshold gate must not override ACCEPT/REVIEW.' },
+  { id: 8, short: 'Explainable pipeline', rule: 'Store match_decision, explanation, matched_needs, eligibility_status, reasons, fingerprints, matcher_version, evaluated_at, confidence in DB.' },
+  { id: 9, short: 'Re-evaluation', rule: 'Fingerprints and matcher_version enable re-evaluation when profiles, opportunities, or logic change.' },
+  { id: 10, short: 'Profile improvement', rule: 'Help users understand which profile fields improve matching. Proactively identify gaps.' },
+  { id: 11, short: 'Profile-driven crawling', rule: 'Crawlers use location, needs, and type from the profile to determine what to search.' },
+  { id: 12, short: 'Plain-language explanations', rule: 'Return human-readable reasons[] and explanations, not just raw scores.' },
+  { id: 13, short: 'Application workflow', rule: 'Full lifecycle: discovery → pipeline → proposals → documents → deadlines → monitoring → outreach → stewardship.' },
+  { id: 14, short: 'Anya as strategist', rule: 'Anya diagnoses poor matches, rescues empty pipelines, compares rejected vs accepted, guides profile improvement.' },
+  { id: 15, short: 'Anya grounded in app', rule: 'Anya responses grounded in real profile/opportunity data and help knowledge — no generic AI chatter.' },
+]
+
+// ---------------------------------------------------------------------------
 // Endpoint health check
 // ---------------------------------------------------------------------------
 
@@ -228,10 +250,10 @@ export async function verifyMissionGoals(db) {
     const opps = db.prepare('SELECT application_url, url, source_url FROM funding_opportunities LIMIT 100').all()
     const withUrl = opps.filter(o => o.application_url || o.url || o.source_url).length
     const pct = opps.length ? Math.round(withUrl / opps.length * 100) : 0
-    if (opps.length === 0) report(1, 'Real funding with URLs', 'FAIL', 'Zero opportunities in DB')
-    else if (pct >= 80) report(1, 'Real funding with URLs', 'PASS', `${pct}% have URLs (${withUrl}/${opps.length})`)
-    else report(1, 'Real funding with URLs', 'WARN', `Only ${pct}% have URLs (${withUrl}/${opps.length})`)
-  } catch (e) { report(1, 'Real funding with URLs', 'FAIL', e.message) }
+    if (opps.length === 0) report(1, MISSION_GOALS[0].short, 'FAIL', 'Zero opportunities in DB')
+    else if (pct >= 80) report(1, MISSION_GOALS[0].short, 'PASS', `${pct}% have URLs (${withUrl}/${opps.length})`)
+    else report(1, MISSION_GOALS[0].short, 'WARN', `Only ${pct}% have URLs (${withUrl}/${opps.length})`)
+  } catch (e) { report(1, MISSION_GOALS[0].short, 'FAIL', e.message) }
 
   // Goal 2: Match to actual profile needs
   try {
@@ -458,7 +480,16 @@ export function getAuditSummary(db) {
     lines.push(`Mission Score (${mv.timestamp}): ${mv.score}% — ${mv.pass} pass, ${mv.warn} warn, ${mv.fail} fail of ${mv.total}`)
     const failing = (mv.goals || []).filter(g => g.status === 'FAIL')
     if (failing.length > 0) {
-      lines.push(`  Failing goals: ${failing.map(g => `#${g.id} ${g.name}: ${g.detail}`).join('; ')}`)
+      lines.push(`  Failing goals:`)
+      for (const g of failing) {
+        const goalDef = MISSION_GOALS.find(m => m.id === g.id)
+        const rule = goalDef ? ` Rule: ${goalDef.rule}` : ''
+        lines.push(`    #${g.id} ${g.name}: ${g.detail}${rule}`)
+      }
+    }
+    const warning = (mv.goals || []).filter(g => g.status === 'WARN')
+    if (warning.length > 0) {
+      lines.push(`  Warning goals: ${warning.map(g => `#${g.id} ${g.name}: ${g.detail}`).join('; ')}`)
     }
   }
 

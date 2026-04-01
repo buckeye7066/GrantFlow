@@ -853,39 +853,11 @@ if (process.env.NODE_ENV !== 'test') {
       console.log('[startup] Background queue poller disabled (set QUEUE_POLL_ENABLED=true to enable)')
     }
 
-    // ── Startup self-check: verify the matching pipeline can score ──
-    (async () => {
-      try {
-        const { trustedOriginClause, trustedSourceClause } = await import('./utils/recordOrigins.js')
-        const activeVal = db.dialect === 'postgres' ? 'TRUE' : '1'
-        const count = db.prepare(`
-          SELECT COUNT(*) AS n FROM funding_opportunities
-          WHERE is_active = ${activeVal} AND ${trustedOriginClause()} AND ${trustedSourceClause()}
-        `).get()
-        const n = Number(count?.n ?? 0)
-        if (n === 0) {
-          console.warn('[startup][WARN] 0 active trusted funding opportunities — users will see no matches')
-        } else {
-          console.log(`[startup] ${n} active trusted funding opportunities ready for matching`)
-        }
-      } catch (err) {
-        console.error('[startup] Pipeline self-check failed:', err?.message || err)
-      }
-    })()
-
-    // Expose a stable in-process base URL for Anya autonomous function tests.
-    // NOTE: When PORT=0 (ephemeral), the actual listening port differs from process.env.PORT.
-    try {
-      globalThis.__grantflow_internal_base_url = `http://127.0.0.1:${actualPort}`
-    } catch {
-      // best-effort only
-    }
-  
-  // Delegate remaining background services (feature flags, smoke crawlers, auto-dedupe,
-  // audit log, Anya scheduler, health service, national programs crawler) to the
-  // dedicated startup module that owns all required imports.
-  startBackgroundServices({ db, uploadsDir, actualPort, loggedCorsOrigins });
-
+    // ── Phase 4: Background services ──────────────────────────────────────────
+    // All startup tasks (pipeline self-check, feature flags, smoke crawlers,
+    // auto-dedupe, audit log, Anya scheduler, CodeGuard audit, national
+    // programs) are handled by the single canonical entry point.
+    startBackgroundServices({ db, uploadsDir, actualPort, loggedCorsOrigins });
   });
 } else {
   console.info('[server] NODE_ENV=test; HTTP listener disabled')

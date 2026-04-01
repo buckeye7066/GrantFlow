@@ -104,10 +104,15 @@ export async function fetchStatePortals(stateCode, options = {}) {
       url = `${url}?${qs}`;
     }
 
+    const headers = { Accept: 'application/json' };
+    if (portal.method === 'POST') {
+      headers['Content-Type'] = 'application/json';
+    }
+
     const response = await fetch(url, {
       method: portal.method,
-      headers: { Accept: 'application/json' },
-      ...(portal.method === 'POST' ? { body: JSON.stringify(params), headers: { Accept: 'application/json', 'Content-Type': 'application/json' } } : {}),
+      headers,
+      ...(portal.method === 'POST' ? { body: JSON.stringify(params) } : {}),
     });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const data = await response.json();

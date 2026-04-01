@@ -175,8 +175,8 @@ router.get('/', async (req, res) => {
     let rows = []
     if (admin && !onlyMine && itemId) {
       if (!/^[a-zA-Z0-9_-]+$/.test(itemId)) {
-  return res.status(400).json({ success: false, error: 'Invalid item_id format' })
-}
+        return res.status(400).json({ success: false, error: 'Invalid item_id format' })
+      }
       rows = await req.db
         .prepare(
           `
