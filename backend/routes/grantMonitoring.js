@@ -54,7 +54,7 @@ async function ensureDefaults(db) {
 }
 
 router.get('/alerts', async (req, res) => {
-  if (!requireAdmin(req, res)) return
+  if (!isAdmin(req, res)) return
   try {
     await ensureDefaults(req.db)
     const { organization_id } = req.query
@@ -87,7 +87,7 @@ router.get('/alerts', async (req, res) => {
 })
 
 router.get('/logs', async (req, res) => {
-  if (!requireAdmin(req, res)) return
+  if (!isAdmin(req, res)) return
   try {
     const limit = Math.min(500, Math.max(1, Number.parseInt(req.query.limit ?? 100, 10)))
     const { organization_id } = req.query
@@ -123,7 +123,7 @@ router.get('/logs', async (req, res) => {
 })
 
 router.put('/logs/:id', async (req, res) => {
-  if (!requireAdmin(req, res)) return
+  if (!isAdmin(req, res)) return
   try {
     const id = req.params.id
     const acknowledged = Boolean(req.body?.acknowledged)
@@ -153,7 +153,7 @@ router.put('/logs/:id', async (req, res) => {
 })
 
 router.post('/check', async (req, res) => {
-  if (!requireAdmin(req, res)) return
+  if (!isAdmin(req, res)) return
   try {
     await ensureDefaults(req.db)
 

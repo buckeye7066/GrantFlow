@@ -73,6 +73,11 @@ export function trustedSourceClause(alias) {
   return `(${col} IS NULL OR ${col} NOT IN (${quoted}))`
 }
 
+/** Escape a value for use inside a SQL single-quoted string literal. */
+function escapeSqlStringLiteral(s) {
+  return String(s).replace(/'/g, "''")
+}
+
 /**
  * Returns a Postgres CHECK constraint body using every allowed origin.
  * e.g. "record_origin IN ('live_crawl','curated_verified', ...)"

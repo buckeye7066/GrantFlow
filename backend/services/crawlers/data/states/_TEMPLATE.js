@@ -222,7 +222,6 @@ export const COUNTY_RESOURCES = {
 // an empty array rather than blank-URL placeholder records.
 const _validatedBenefits = STATE_BENEFITS.filter(entry => {
   if (!entry.url || entry.url.trim() === '') {
-    // eslint-disable-next-line no-console
     console.warn(
       `[STATE TEMPLATE] Skipping entry '${entry.id}' â url is empty. ` +
       'Fill in a verified URL before activating this state file.'

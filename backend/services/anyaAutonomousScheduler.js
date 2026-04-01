@@ -270,7 +270,7 @@ const result = await runAutonomousCrawlers(crawlerParams, context)
         let portalChecksTotal = 0
         let portalAwardsTotal = 0
 
-        for (const profile of studentProfiles) {
+        for (const profile of eligibleProfiles) {
           try {
             const result = await runPortalCheck(context.db, profile.id, { checkType: 'scheduled' })
             portalChecksTotal += result.portalsChecked ?? 0
@@ -282,11 +282,11 @@ const result = await runAutonomousCrawlers(crawlerParams, context)
 
         report.operations.portalChecks = {
           status: 'completed',
-          profiles_checked: studentProfiles.length,
+          profiles_checked: eligibleProfiles.length,
           portals_checked: portalChecksTotal,
           awards_detected: portalAwardsTotal,
         }
-        console.log(`[Anya Scheduler] Portal checks complete: ${portalAwardsTotal} awards detected across ${portalChecksTotal} portals for ${studentProfiles.length} profiles`)
+        console.log(`[Anya Scheduler] Portal checks complete: ${portalAwardsTotal} awards detected across ${portalChecksTotal} portals for ${eligibleProfiles.length} profiles`)
       } catch (error) {
         report.errors.push({ phase: 'portalChecks', error: error.message })
         report.operations.portalChecks = { status: 'failed', error: error.message }

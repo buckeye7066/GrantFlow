@@ -18,9 +18,6 @@ const DIRECTORY_RESOURCES = [
 
 export async function runTaxIncentiveEngine(profile, options = {}) {
   try {
-    // Filter tax incentives based on profile eligibility
-    let relevantResources = DIRECTORY_RESOURCES;
-    
     // Build an inclusive set: start with base resources, then UNION in profile-relevant resources
     const profileMatched = new Set()
 

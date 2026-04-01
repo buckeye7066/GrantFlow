@@ -116,7 +116,8 @@ export function dedupeKeyFromRow(row) {
     const d = parseLooseDate(row.deadline);
     return d ? d.toISOString().slice(0, 10) : String(row.deadline || '').trim().toLowerCase();
   })();
-  if (url) return `url:${url}`;
+  const rowUrl = normalizeUrlForDedupe(row.url);
+  if (rowUrl) return `url:${rowUrl}`;
   const sourceId = row.source_id != null ? String(row.source_id).trim().toLowerCase() : '';
   if (sourceId) return `sid:${sourceId}`;
   if (title && sponsor) return `tsd:${title}::${sponsor}::${deadlineIso}`;

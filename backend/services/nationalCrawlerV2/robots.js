@@ -12,6 +12,7 @@ function parseRobots(text) {
 
   const rules = []
   let currentAgents = []
+  let lastKeyWasUserAgent = false
 
   for (const line of lines) {
     const idx = line.indexOf(':')

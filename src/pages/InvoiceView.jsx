@@ -87,6 +87,15 @@ export default function InvoiceView() {
     window.print();
   };
 
+  const handleDownloadPdf = () => {
+    toast({
+      title: "Save as PDF",
+      description:
+        'In the print dialog, choose "Save as PDF" or "Microsoft Print to PDF" as the destination.',
+    });
+    window.print();
+  };
+
   if (!invoice) {
     return (
       <div className="p-6">

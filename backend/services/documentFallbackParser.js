@@ -155,8 +155,9 @@ export async function applyFallbackUniversityUpdates({ db, profileId, document, 
   nextApps.splice(idx, 1, app)
   const nextPayload = { ...(parsed || {}), applications: nextApps }
 
-  await db.prepare(
-    `
+  await db
+    .prepare(
+      `
       INSERT INTO profile_sections (profile_id, section_key, data, updated_by)
       VALUES (?, 'university_applications', ?, ?)
       ON CONFLICT(profile_id, section_key) DO UPDATE SET
@@ -164,16 +165,8 @@ export async function applyFallbackUniversityUpdates({ db, profileId, document, 
         updated_at = CURRENT_TIMESTAMP,
         updated_by = excluded.updated_by
     `,
-await db.prepare(
-    `
-      INSERT INTO profile_sections (profile_id, section_key, data, updated_by)
-      VALUES (?, 'university_applications', ?, ?)
-      ON CONFLICT(profile_id, section_key) DO UPDATE SET
-        data = excluded.data,
-        updated_at = CURRENT_TIMESTAMP,
-        updated_by = excluded.updated_by
-    `,
-  ).run(profileId, JSON.stringify(nextPayload), `document:${document?.id ?? 'unknown'}`)
+    )
+    .run(profileId, JSON.stringify(nextPayload), `document:${document?.id ?? 'unknown'}`)
 
   return { updated: true, updated_fields: Array.from(updatedFields) }
 }

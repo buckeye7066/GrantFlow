@@ -57,17 +57,18 @@ function scoreSchoolMatch({ schoolName, haystack }) {
 
 export async function loadUniversityApplicationsForProfile(db, profileId) {
   if (!profileId) return []
-  const row = await db
-    .prepare(
-      `
+  try {
+    const row = await db
+      .prepare(
+        `
         SELECT data
         FROM profile_sections
         WHERE profile_id = ?
           AND section_key = 'university_applications'
         LIMIT 1
       `,
-    )
-    .get(String(profileId).replace(/[^0-9]/g, ''))
+      )
+      .get(String(profileId).replace(/[^0-9]/g, ''))
     if (!row?.data) return []
     try {
       const parsed = JSON.parse(row.data)

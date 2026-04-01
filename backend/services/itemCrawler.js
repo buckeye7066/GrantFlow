@@ -16,7 +16,6 @@ import {
 } from './profileHelpers.js'
 import { scoreOpportunity, computeMatchDecision } from './matchEngine.js'
 import { relevanceFilter } from './relevanceFilter.js'
-import { relevanceFilter } from './relevanceFilter.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
@@ -168,12 +167,12 @@ export async function processItemCrawlerJob({ db, job, dataDir, profileContext }
   const topOpps = scoredOpps.slice(0, maxResults)
   
   console.log(
-    `[itemCrawler] Found ${topOpps.length} matching item funding sources (threshold: ${requestedThreshold}%)`,
+    `[itemCrawler] Found ${topOpps.length} matching item funding sources (threshold: ${matchThreshold}%)`,
   )
   if (scoredOpps.length > 0 && topOpps.length === 0) {
     console.warn(
       `[itemCrawler] SUPPRESSION WARNING: ${scoredOpps.length} opportunities scored but 0 passed to insertion. ` +
-      `Top raw score: ${scoredOpps[0]?.match_score ?? 'n/a'}. Threshold: ${requestedThreshold}. ` +
+      `Top raw score: ${scoredOpps[0]?.match_score ?? 'n/a'}. Threshold: ${matchThreshold}. ` +
       `Review threshold or decision engine configuration.`
     )
   }
@@ -231,9 +230,9 @@ export async function processItemCrawlerJob({ db, job, dataDir, profileContext }
     matched: topOpps.length,
     result_meta: {
       total_scored: scoredOpps.length,
-      match_threshold: requestedThreshold,
-      match_threshold_requested: requestedThreshold,
-      match_threshold_used: requestedThreshold,
+      match_threshold: matchThreshold,
+      match_threshold_requested: matchThreshold,
+      match_threshold_used: matchThreshold,
       match_threshold_fallback_applied: false,
     },
     opportunityLogs: topOpps.map(o => ({
