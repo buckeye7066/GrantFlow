@@ -102,7 +102,7 @@ export default function BudgetDetail({ grantId }) {
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
             <Card><CardHeader><CardTitle>Total Budget</CardTitle></CardHeader><CardContent><p className="text-3xl font-bold">${totalBudget.toLocaleString()}</p></CardContent></Card>
             <Card><CardHeader><CardTitle>Total Spent</CardTitle></CardHeader><CardContent><p className="text-3xl font-bold">${totalExpenses.toLocaleString()}</p></CardContent></Card>
-            <Card><CardHeader><CardTitle>Remaining</CardTitle></CardHeader><CardContent><p className="text-3xl font-bold text-emerald-600">${remainingBudget.toLocaleString()}</p></CardContent></Card>
+            <Card><CardHeader><CardTitle>Remaining</CardTitle></CardHeader><CardContent><p className={`text-3xl font-bold ${remainingBudget < 0 ? 'text-red-600' : 'text-emerald-600'}`}>${remainingBudget.toLocaleString()}</p></CardContent></Card>
         </div>
 
         <Tabs defaultValue="budget">
@@ -230,7 +230,7 @@ export default function BudgetDetail({ grantId }) {
                     <TableBody>
                       {expenses.map(expense => (
                         <TableRow key={expense.id}>
-                          <TableCell>{format(new Date(expense.date), 'MMM d, yyyy')}</TableCell>
+                          <TableCell>{expense.date ? format(new Date(expense.date), 'MMM d, yyyy') : 'â'}</TableCell>
                           <TableCell>
                             <p className="font-medium">{expense.vendor}</p>
                             <p className="text-sm text-slate-500">{expense.description}</p>
