@@ -223,10 +223,16 @@ export default function CrawlerSelection({
   };
 
   const handleSelectAll = () => {
-    if (selectedCrawlers.size === CRAWLER_CONFIGS.length) {
+    const selectableCrawlers = CRAWLER_CONFIGS.filter(
+      (c) => c.id !== 'ecf_benefits' || ecfUnlock.allowed
+    );
+    const allSelectableSelected = selectableCrawlers.every((c) =>
+      selectedCrawlers.has(c.id)
+    );
+    if (allSelectableSelected) {
       setSelectedCrawlers(new Set());
     } else {
-      setSelectedCrawlers(new Set(CRAWLER_CONFIGS.map(c => c.id)));
+      setSelectedCrawlers(new Set(selectableCrawlers.map((c) => c.id)));
     }
   };
 
@@ -347,9 +353,22 @@ export default function CrawlerSelection({
     log.debug('crawler results', { opportunities: successfulResults.length, minMatchScore })
 
     // Notify parent (even when empty, so DiscoverGrants can show zero-results state)
-    if (onCrawlComplete) {
-      await onCrawlComplete(successfulResults);
-    }
+    // Log suppression details before notifying parent so the audit trail is
+// always written regardless of whether the parent component uses the data.
+const totalFound = allResults
+  .filter(r => r.success)
+  .reduce((sum, r) => sum + (r.data?.total_found ?? r.data?.count ?? 0), 0);
+if (totalFound > 0 && successfulResults.length === 0) {
+  log.warn('suppression: total_found > 0 but included === 0', {
+    totalFound,
+    minMatchScore,
+    crawlers: crawlersToRun,
+  });
+}
+
+if (onCrawlComplete) {
+  await onCrawlComplete(successfulResults);
+}
 
     setIsRunning(false);
 
@@ -632,9 +651,18 @@ export default function CrawlerSelection({
                           <div className="text-xs text-green-700 dark:text-green-300 font-medium">
                             Included {result.count || 0} of {result.total_found ?? (result.count || 0)} found
                           </div>
+                          {result.matcher_version && (
+                            <div className="text-xs text-muted-foreground">
+                              Matcher v{result.matcher_version}
+                              {result.evaluated_at ? ` Â· evaluated ${new Date(result.evaluated_at).toLocaleTimeString()}` : ''}
+                            </div>
+                          )}
                           {(result.count || 0) === 0 && (result.total_found ?? 0) > 0 && (
                             <div className="text-xs text-amber-700 dark:text-amber-200">
-                              None met the match threshold. Try lowering the minimum score above, or add more profile details (ZIP, state, keywords) for better matches.
+                              {Array.isArray(result.ineligibility_reasons) && result.ineligibility_reasons.length > 0
+                                ? `Excluded because: ${result.ineligibility_reasons.slice(0, 2).join('; ')}.`
+                                : 'None met the match threshold.'}{' '}
+                              Try adding more profile details (ZIP, state, keywords) for better matches.
                             </div>
                           )}
                         </div>
