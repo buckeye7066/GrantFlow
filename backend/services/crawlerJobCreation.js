@@ -19,6 +19,7 @@ async function postgresHasProfileContextSnapshotColumn(db) {
   if (postgresHasProfileContextSnapshotColumnPromise) {
     return await postgresHasProfileContextSnapshotColumnPromise
   }
+  // Only cache for confirmed Postgres connections to avoid cross-dialect cache poisoning
 
   postgresHasProfileContextSnapshotColumnPromise = (async () => {
     try {
@@ -70,7 +71,7 @@ function stableStringify(value) {
  * @returns {string} Idempotency key (32 chars)
  */
 export function generateIdempotencyKey(type, profileId, parameters, profileContextDigest) {
-  const normalizedParams = JSON.stringify(parameters || {})
+  const normalizedParams = stableStringify(parameters || {})
   const digestPart = profileContextDigest ? `:${profileContextDigest}` : ''
   const input = `${type}:${profileId || 'null'}:${normalizedParams}${digestPart}`
   return crypto.createHash('sha256').update(input).digest('hex').substring(0, 32)
@@ -302,7 +303,15 @@ export async function createCrawlerJob(db, options) {
     jobId,
     created: true,
     existing: false,
-    job: { id: jobId, type, status, profile_id: profileId, idempotency_key: idempotencyKey },
+    job: {
+      id: jobId,
+      type,
+      status: normalizedStatus,
+      profile_id: profileId,
+      idempotency_key: idempotencyKey,
+      profile_context_digest: profileContextDigest || null,
+      has_snapshot: !!profileContextSnapshot,
+    },
   }
 }
 
