@@ -26,15 +26,19 @@ export default function ComplianceReportDetail() {
     queryKey: ['complianceReport', reportId],
     queryFn: () => client.entities.ComplianceReport.get(reportId),
     enabled: !!reportId,
-    onSuccess: (data) => {
+  });
+
+  // Sync editableData whenever the fetched report changes (replaces unreliable onSuccess)
+  React.useEffect(() => {
+    if (report) {
       setEditableData({
-        narrative: data.narrative || '',
-        activities_summary: data.activities_summary || '',
-        challenges_faced: data.challenges_faced || '',
-        next_steps: data.next_steps || '',
+        narrative: report.narrative || '',
+        activities_summary: report.activities_summary || '',
+        challenges_faced: report.challenges_faced || '',
+        next_steps: report.next_steps || '',
       });
     }
-  });
+  }, [report]);
 
   const { data: grant } = useQuery({
     queryKey: ['grant', report?.grant_id],
@@ -105,7 +109,12 @@ export default function ComplianceReportDetail() {
     return <div className="p-8 text-center">Report not found.</div>;
   }
 
-  const financialData = report.financial_data ? JSON.parse(report.financial_data) : null;
+  let financialData = null;
+  try {
+    financialData = report.financial_data ? JSON.parse(report.financial_data) : null;
+  } catch {
+    financialData = null;
+  }
   const isGenerating = generateReportMutation.isPending;
   const isDraft = report.status === 'draft' || report.status === 'scheduled';
 
