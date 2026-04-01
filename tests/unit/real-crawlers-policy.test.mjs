@@ -111,8 +111,16 @@ test('real-crawlers: DB fallback excludes loan, matching_funds, missing URL; ret
   assert.ok(!titles.includes('No URL Grant'), 'missing URL must not be returned')
   assert.ok(opps.every((o) => (o?.url || o?.application_url || o?.source_url || '').startsWith('http')), 'all returned must have real URL')
   assert.ok(opps.every((o) => String(o?.opportunity_type || '').toLowerCase() !== 'loan'), 'no loan type in results')
+  assert.ok(
+    opps.every((o) => typeof o.match_score === 'number' || typeof o.score === 'number'),
+    'all returned opportunities must carry a numeric match score (Goal 8)'
+  )
+  assert.ok(
+    opps.every((o) => o.match_decision || o.decision),
+    'all returned opportunities must carry a match_decision field (Goal 8)'
+  )
   assert.ok(opps.length > 0, 'curated pipeline should return at least one policy-compliant opportunity for an individual_need profile in TN')
-  assert.ok(opps.every((o) => String(o?.opportunity_type || '').toLowerCase() !== 'loan'), 'returned results must not include loans')
+  assert.ok(titles.includes('Valid Federal Grant'), 'the single valid seed grant must appear in results')
 })
 
 test('real-crawlers: min_match_score threshold enforced', async () => {
@@ -160,7 +168,13 @@ test('real-crawlers: min_match_score threshold enforced', async () => {
   const opps = run.json?.opportunities ?? []
   assert.ok(Array.isArray(opps))
   assert.ok(opps.every((o) => typeof o.match_score === 'number'), 'all returned must have numeric match_score')
-  if (opps.length > 0 && !run.json?.debug?.db?.fallback_applied) {
-    assert.ok(opps.every((o) => o.match_score >= 80), 'when no fallback, all must have match_score >= min_match_score')
+  // The threshold assertion must always run when results are returned.
+  // If the API legitimately uses a fallback path, it must still honour min_match_score
+  // or explicitly return an empty array â not silently lower-score results.
+  if (opps.length > 0) {
+    assert.ok(
+      opps.every((o) => o.match_score >= 80),
+      `all returned opportunities must have match_score >= 80; got scores: ${opps.map((o) => o.match_score).join(', ')}`
+    )
   }
 })
