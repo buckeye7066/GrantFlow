@@ -64,16 +64,16 @@ async function getDatabaseDiagnostics(db) {
     const dbPath = dialect === 'sqlite' ? (process.env.DB_PATH || 'data/grantflow.db') : null;
     
     // Check if database is writable by attempting a simple query (SQLite only).
-    let writable = dialect === 'sqlite';
+    let writable = null;
     if (dialect === 'sqlite') {
       try {
-        await db.prepare('SELECT COUNT(*) FROM sqlite_master').get();
-        // writable already set to true above
+        // Use a write-and-rollback transaction to truly probe writability.
+        await db.prepare('BEGIN IMMEDIATE').run();
+        await db.prepare('ROLLBACK').run();
+        writable = true;
       } catch (error) {
         writable = false;
       }
-    } else {
-      writable = null
     }
     
     // Get table counts
@@ -416,6 +416,11 @@ export function analyzeSystemHealth(diagnostics) {
     // Check schema
     if (diagnostics.db.schema_checks.error) {
       issues.push('Database schema check failed');
+    } else {
+      const missing = diagnostics.db.schema_checks?.details?.missing_columns;
+      if (Array.isArray(missing) && missing.length > 0) {
+        warnings.push(`funding_opportunities missing columns: ${missing.join(', ')}`);
+      }
     }
   }
   
