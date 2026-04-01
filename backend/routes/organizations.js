@@ -204,10 +204,10 @@ async function syncOrganizationToProfileSections(db, { organizationId, orgRow, p
       ...CANONICAL_SECTION_DEFAULTS.financial_information,
       household_income: payload?.household_income ?? orgRow?.household_income ?? null,
       household_size: payload?.household_size ?? orgRow?.household_size ?? null,
-      financial_need_level: payload?.financial_need_level ?? '',
-      low_income: Boolean(payload?.low_income ?? false),
-      unemployed: Boolean(payload?.unemployed ?? false),
-      displaced_worker: Boolean(payload?.displaced_worker ?? false),
+      financial_need_level: payload?.financial_need_level ?? orgRow?.financial_need_level ?? '',
+      low_income: Boolean(payload?.low_income ?? orgRow?.low_income ?? false),
+      unemployed: Boolean(payload?.unemployed ?? orgRow?.unemployed ?? false),
+      displaced_worker: Boolean(payload?.displaced_worker ?? orgRow?.displaced_worker ?? false),
     },
     'org-sync',
   )
@@ -259,13 +259,9 @@ router.get('/', ensureAuth, async (req, res) => {
       if (!orgIds || orgIds.size === 0) {
         return res.json([])
       }
-      if (orgIds.size > 0) {
-        const placeholders = Array.from(orgIds).map(() => '?').join(', ')
-        query += ` AND id IN (${placeholders})`
-        params.push(...Array.from(orgIds))
-      } else {
-        query += ' AND 1=0' // No accessible orgs
-      }
+      const placeholders = Array.from(orgIds).map(() => '?').join(', ')
+      query += ` AND id IN (${placeholders})`
+      params.push(...Array.from(orgIds))
     }
     
     if (search) {
@@ -307,8 +303,12 @@ router.get('/', ensureAuth, async (req, res) => {
       federal_registrations: safeParseJSON(org.federal_registrations, []),
       financial_challenges: safeParseJSON(org.financial_challenges, [])
     }));
-    
-    res.json(parsed);
+
+    const merged = await Promise.all(
+      parsed.map(org => mergeProfileSectionsIntoOrg(req.db, org.id, org))
+    );
+
+    res.json(merged);
   } catch (error) {
     console.error('Error listing organizations:', error);
     res.status(500).json(formatError(error));
@@ -558,6 +558,11 @@ router.delete('/:id', ensureAuth, mutationRateLimiter, async (req, res) => {
     
     // Soft delete by setting deleted_at (schema-managed; do not attempt runtime ALTER in Postgres)
     req.db.prepare('UPDATE organizations SET deleted_at = CURRENT_TIMESTAMP WHERE id = ?').run(req.params.id);
+
+    // Propagate soft-delete to linked profile so the matcher and Anya skip it
+    req.db
+      .prepare(`UPDATE profiles SET status = 'deleted', updated_at = CURRENT_TIMESTAMP WHERE organization_id = ?`)
+      .run(req.params.id);
     
     res.json({ success: true, message: 'Organization marked as deleted' });
   } catch (error) {
