@@ -102,7 +102,14 @@ router.post('/', async (req, res) => {
     }
 
     const occurredAtRaw = data.occurred_at ?? data.occurredAt ?? null
-    const occurredAt = occurredAtRaw ? String(occurredAtRaw) : null
+    let occurredAt = null
+if (occurredAtRaw) {
+  const parsed = new Date(String(occurredAtRaw))
+  if (!Number.isFinite(parsed.getTime())) {
+    return res.status(400).json({ error: 'occurred_at is not a valid ISO date string' })
+  }
+  occurredAt = parsed.toISOString()
+}
 
     const metadata =
       data.metadata && typeof data.metadata === 'object' ? JSON.stringify(data.metadata) : data.metadata ?? null
@@ -152,7 +159,7 @@ router.post('/', async (req, res) => {
         occurredAt,
         data.subject ?? null,
         data.notes ?? null,
-        metadata ?? '{}',
+        metadata,
         createdBy,
       )
 
