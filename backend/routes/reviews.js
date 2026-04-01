@@ -85,7 +85,19 @@ async function ensureReviewsTable(db) {
         CREATE INDEX IF NOT EXISTS idx_reviews_created_at ON reviews(created_at);
       `
 
-  await db.exec(createTableSql)
+  // Split DDL into discrete statements so failures are isolated and logged
+    const stmts = createTableSql
+      .split(';')
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0)
+    for (const stmt of stmts) {
+      try {
+        await db.exec(stmt)
+      } catch (ddlErr) {
+        // Log but do not throw â index creation failures are non-fatal
+        console.warn('[reviews] DDL warning (non-fatal):', stmt.slice(0, 80), ddlErr.message)
+      }
+    }
 }
 
 function mapReviewRow(row) {
@@ -264,9 +276,25 @@ router.post('/', mutationRateLimiter, async (req, res) => {
     if (!evidenceUrl) {
       return res.status(400).json({ success: false, error: 'evidence_url is required' })
     }
+    try {
+      const parsedUrl = new URL(evidenceUrl)
+      if (parsedUrl.protocol !== 'http:' && parsedUrl.protocol !== 'https:') {
+        return res.status(400).json({ success: false, error: 'evidence_url must use http or https' })
+      }
+    } catch {
+      return res.status(400).json({ success: false, error: 'evidence_url must be a valid URL' })
+    }
 
     if (action === 'correct' && req.body?.new_value == null) {
       return res.status(400).json({ success: false, error: 'new_value is required for correct actions' })
+    }
+
+    // Verify the item exists in the pipeline before recording a review
+    const pipelineRow = await req.db
+      .prepare('SELECT id FROM profile_pipeline WHERE id = ? LIMIT 1')
+      .get(itemId)
+    if (!pipelineRow) {
+      return res.status(404).json({ success: false, error: 'item_id not found in pipeline' })
     }
 
     const reviewId = crypto.randomUUID()
