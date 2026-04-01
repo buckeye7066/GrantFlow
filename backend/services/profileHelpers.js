@@ -1659,10 +1659,14 @@ export function buildProfileSignals({ profile, sections, asOf = null }) {
     professional_remediation_funding: ['probe','remediation','ethics course','professional boundaries','disciplinary remediation','board required education','mandated continuing education','professional compliance training'],
   }
   const needs = new Set()
+  // Check both individual tokens (keywordSet) AND full phrases (phraseSet) so multi-word
+  // triggers like 'food bank', 'mental health', 'probe ethics' are correctly matched.
   const allKws = Array.from(keywordSet)
-  for (const kw of allKws) {
+  const allPhrases = Array.from(phraseSet)
+  const allSignals = [...allKws, ...allPhrases]
+  for (const signal of allSignals) {
     for (const [need, triggers] of Object.entries(NEED_MAP)) {
-      if (triggers.some(t => kw.includes(t))) needs.add(need)
+      if (triggers.some(t => signal.includes(t))) needs.add(need)
     }
   }
   if (assistanceSet.has('medicaid') || assistanceSet.has('medicare')) needs.add('healthcare')
@@ -1683,11 +1687,34 @@ export function buildProfileSignals({ profile, sections, asOf = null }) {
   let applicantType = 'individual'
   if (applicantTypeSet.has('organization') || applicantTypeSet.has('nonprofit') || applicantTypeSet.has('501c3')) {
     applicantType = 'organization'
-  } else if (applicantTypeSet.has('student') || applicantTypeSet.has('college student') || applicantTypeSet.has('high school student') || demographicSet.has('current_student')) {
+  } else if (applicantTypeSet.has('small business') || applicantTypeSet.has('small_business') ||
+             applicantTypeSet.has('women-owned business') || applicantTypeSet.has('minority-owned business') ||
+             applicantTypeSet.has('veteran-owned business') || applicantTypeSet.has('self_employed')) {
+    applicantType = 'business'
+    needs.add('business')
+  } else if (applicantTypeSet.has('student') || applicantTypeSet.has('college student') ||
+             applicantTypeSet.has('high school student') || demographicSet.has('current_student')) {
     applicantType = 'student'
     needs.add('education'); needs.add('scholarship')
+  } else if (militarySet.has('veteran') || militarySet.has('disabled_veteran')) {
+    applicantType = 'veteran'
+  } else if (familySet.has('caregiver')) {
+    applicantType = 'caregiver'
   }
-  if (needs.size === 0) {
+  // Map education/business/employment section signals to needs before fallback
+  if (applicantTypeSet.has('student') || education.level || fullEducation.currentSchool) {
+    needs.add('education')
+  }
+  if (applicantTypeSet.has('small business') || applicantTypeSet.has('small_business') ||
+      sections?.small_business_details?.naics_code) {
+    needs.add('business')
+  }
+  if (assistanceSet.has('unemployed') || assistanceSet.has('displaced_worker') ||
+      assistanceSet.has('underemployed')) {
+    needs.add('employment')
+  }
+  // Only inject generic fallback when the profile has truly no data at all
+  if (needs.size === 0 && keywordSet.size === 0 && applicantTypeSet.size === 0) {
     ;['utilities','housing','food','healthcare','cash_assistance'].forEach(n => needs.add(n))
   }
 
@@ -1781,7 +1808,13 @@ export function buildProfileSignals({ profile, sections, asOf = null }) {
     fields_used: keywordSet.size + phraseSet.size,
     sections_present: presentSections.length,
     sections_expected: expectedSections.length,
-    pct: presentSections.length > 0 ? 100 : 0, // 100% if any sections present
+    // Reflect actual section coverage as a fraction so crawlers can distinguish
+    // a profile with 1 section from one with 18 sections.
+    pct: expectedSections.length > 0
+      ? Math.round((presentSections.length / expectedSections.length) * 100)
+      : 0,
+    // Separate signal richness metric: non-zero only when signals were extracted
+    signal_richness: keywordSet.size > 0 ? Math.min(100, keywordSet.size) : 0,
   }
 
   return {
@@ -1941,14 +1974,20 @@ export async function computeProfileDigest(db, profileId) {
     }
 
     // Stable stringify (sorted keys at every level) then SHA-256, first 16 chars
-    function stableStr(val) {
-      if (val === null || val === undefined) return 'null'
-      if (typeof val !== 'object') return JSON.stringify(val)
-      if (Array.isArray(val)) return '[' + val.map(stableStr).join(',') + ']'
-      const sorted = Object.keys(val).sort()
-      return '{' + sorted.map(k => JSON.stringify(k) + ':' + stableStr(val[k])).join(',') + '}'
+    let stable
+    try {
+      function stableStr(val) {
+        if (val === null || val === undefined) return 'null'
+        if (typeof val !== 'object') return JSON.stringify(val)
+        if (Array.isArray(val)) return '[' + val.map(stableStr).join(',') + ']'
+        const sorted = Object.keys(val).sort()
+        return '{' + sorted.map(k => JSON.stringify(k) + ':' + stableStr(val[k])).join(',') + '}'
+      }
+      stable = stableStr(digest)
+    } catch (strErr) {
+      console.warn('[computeProfileDigest] stableStr failed, falling back to JSON.stringify:', strErr?.message)
+      stable = JSON.stringify(digest) || profileId
     }
-    const stable = stableStr(digest)
     return crypto.createHash('sha256').update(stable).digest('hex').substring(0, 16)
   } catch (err) {
     console.warn('[computeProfileDigest] Failed to compute digest:', err?.message)
