@@ -108,7 +108,7 @@ export default function AdminDataIntegrity() {
             </div>
             <div className="space-y-1">
               <p className="text-xs font-semibold text-slate-500 uppercase">Missing Critical Fields</p>
-              <div className="grid grid-cols-3 gap-2 mt-2">
+              <div className="grid grid-cols-2 gap-2 mt-2">
                 <div className="bg-slate-50 p-2 rounded text-center">
                   <p className="text-[10px] text-slate-500">Titles</p>
                   <p className="font-bold">{data?.opportunities?.missing_fields?.missing_title || 0}</p>
@@ -120,6 +120,22 @@ export default function AdminDataIntegrity() {
                 <div className="bg-slate-50 p-2 rounded text-center">
                   <p className="text-[10px] text-slate-500">Agencies</p>
                   <p className="font-bold">{data?.opportunities?.missing_fields?.missing_agency || 0}</p>
+                </div>
+                <div className={`p-2 rounded text-center ${
+                  (data?.opportunities?.missing_fields?.missing_application_url || 0) > 0
+                    ? 'bg-red-50'
+                    : 'bg-slate-50'
+                }`}>
+                  <p className={`text-[10px] font-semibold ${
+                    (data?.opportunities?.missing_fields?.missing_application_url || 0) > 0
+                      ? 'text-red-600'
+                      : 'text-slate-500'
+                  }`}>App URLs â </p>
+                  <p className={`font-bold ${
+                    (data?.opportunities?.missing_fields?.missing_application_url || 0) > 0
+                      ? 'text-red-700'
+                      : ''
+                  }`}>{data?.opportunities?.missing_fields?.missing_application_url || 0}</p>
                 </div>
               </div>
             </div>
