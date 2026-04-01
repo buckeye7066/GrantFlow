@@ -147,7 +147,7 @@ function scanProfileBleed(filePath, content) {
     // Collect a window of ±10 lines as the SQL block context
     const start = Math.max(0, i - 10)
     const end = Math.min(lines.length - 1, i + 10)
-    const key = `${start}-${end}`
+    const key = `${start}-${end}-${i}`
     if (visited.has(key)) continue
     visited.add(key)
     const block = lines.slice(start, end + 1).join('\n')
@@ -260,7 +260,7 @@ export async function runAutoRepair(db, { dryRun = true, repairTypes } = {}) {
 
     // --- empty_catch ---
     if (types.includes('empty_catch')) {
-      const { matches } = scanEmptyCatch(filePath, content)
+      const { matches } = scanEmptyCatch(filePath, newContent)
       if (matches > 0) {
         const rel = path.relative(PROJECT_ROOT, filePath)
         report.findings.empty_catch.push({ file: rel, matches })
@@ -278,7 +278,7 @@ export async function runAutoRepair(db, { dryRun = true, repairTypes } = {}) {
 
     // --- console_log ---
     if (types.includes('console_log')) {
-      const { matches } = scanConsoleLog(filePath, content)
+      const { matches } = scanConsoleLog(filePath, newContent)
       if (matches > 0) {
         const rel = path.relative(PROJECT_ROOT, filePath)
         report.findings.console_log.push({ file: rel, matches })
