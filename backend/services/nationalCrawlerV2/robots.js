@@ -21,18 +21,24 @@ function parseRobots(text) {
 
     if (key === 'user-agent') {
       const ua = value.toLowerCase()
-      if (currentAgents.length === 0) {
-        currentAgents = [ua]
-      } else {
-        currentAgents.push(ua)
+      // If the previous token was a directive (not user-agent), a new group is
+      // starting â reset currentAgents so groups don't bleed into each other.
+      if (!lastKeyWasUserAgent) {
+        currentAgents = []
       }
+      currentAgents.push(ua)
+      lastKeyWasUserAgent = true
       continue
     }
 
+    // Any directive (allow/disallow) means the next user-agent starts a new group.
+    lastKeyWasUserAgent = false
+
     if (key === 'disallow') {
-      const path = value
+      // Empty Disallow means 'allow everything' â skip storing a rule.
+      if (!value) continue
       const agentsForRule = currentAgents.length ? [...currentAgents] : ['*']
-      rules.push({ agents: agentsForRule, type: 'disallow', path })
+      rules.push({ agents: agentsForRule, type: 'disallow', path: value })
     }
 
     if (key === 'allow') {
