@@ -25,6 +25,31 @@ export function parseLooseDate(value) {
     .replace(/,/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
+  // Attempt structured parse for common written formats before falling back.
+  // Month-Day-Year and Month Year patterns are handled explicitly.
+  const monthNames = 'january|february|march|april|may|june|july|august|september|october|november|december';
+  const mdyMatch = cleaned.match(
+    new RegExp(`\\b(${monthNames})\\s+(\\d{1,2})\\s+(\\d{4})\\b`, 'i')
+  );
+  if (mdyMatch) {
+    const d2 = new Date(`${mdyMatch[1]} ${mdyMatch[2]} ${mdyMatch[3]} 00:00:00 UTC`);
+    return Number.isNaN(d2.getTime()) ? null : d2;
+  }
+  const myMatch = cleaned.match(
+    new RegExp(`\\b(${monthNames})\\s+(\\d{4})\\b`, 'i')
+  );
+  if (myMatch) {
+    // Use last day of month as conservative expiry boundary.
+    const d2 = new Date(`${myMatch[1]} 1 ${myMatch[2]} 00:00:00 UTC`);
+    if (!Number.isNaN(d2.getTime())) {
+      d2.setUTCMonth(d2.getUTCMonth() + 1, 0); // last day of that month
+    }
+    return Number.isNaN(d2.getTime()) ? null : d2;
+  }
+  // Ambiguous strings with no year cannot be reliably dated; return null
+  // so they are NOT treated as expired (prefer recall, Goal 7).
+  const hasYear = /\b(19|20)\d{2}\b/.test(cleaned);
+  if (!hasYear) return null;
   const d = new Date(cleaned);
   return Number.isNaN(d.getTime()) ? null : d;
 }
@@ -68,14 +93,23 @@ export function isExpiredOpportunity(row, { now = new Date() } = {}) {
   if (deadlineType === 'rolling' || deadlineType === 'ongoing') return false;
   const deadlineDate = parseLooseDate(row.deadline);
   if (!deadlineDate) return false;
-  const cutoff = new Date(now);
-  cutoff.setHours(0, 0, 0, 0);
+  // Compare using UTC dates so the cutoff is timezone-neutral,
+  // matching the UTC-midnight deadlines produced by parseLooseDate.
+  const cutoff = new Date(Date.UTC(
+    now.getUTCFullYear(),
+    now.getUTCMonth(),
+    now.getUTCDate()
+  ));
   return deadlineDate.getTime() < cutoff.getTime();
 }
 
 export function dedupeKeyFromRow(row) {
   if (!row) return null;
-  const url = normalizeUrlForDedupe(row.application_url) || normalizeUrlForDedupe(row.source_url);
+  const appUrl = normalizeUrlForDedupe(row.application_url);
+  if (appUrl) return `url:${appUrl}`;
+  // Fall through to source_url only if no application_url exists.
+  const srcUrl = normalizeUrlForDedupe(row.source_url);
+  if (srcUrl) return `srcurl:${srcUrl}`;
   const title = String(row.title || '').trim().toLowerCase();
   const sponsor = String(row.sponsor || '').trim().toLowerCase();
   const deadlineIso = (() => {
