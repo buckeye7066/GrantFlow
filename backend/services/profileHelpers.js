@@ -1702,7 +1702,7 @@ export function buildProfileSignals({ profile, sections, asOf = null }) {
     applicantType = 'caregiver'
   }
   // Map education/business/employment section signals to needs before fallback
-  if (applicantTypeSet.has('student') || education.level || fullEducation.currentSchool) {
+  if (applicantTypeSet.has('student') || education.level || education.current_institution || education.school_name) {
     needs.add('education')
   }
   if (applicantTypeSet.has('small business') || applicantTypeSet.has('small_business') ||
