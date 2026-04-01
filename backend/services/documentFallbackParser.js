@@ -142,7 +142,7 @@ export async function applyFallbackUniversityUpdates({ db, profileId, document, 
               `Detected award amount: ${scholarship.raw}`,
           }
 
-    if (existingStageIndex === -1) pipeline.unshift(nextStage)
+    if (existingStageIndex === -1) pipeline.push(nextStage)
     else pipeline.splice(existingStageIndex, 1, nextStage)
 
     app.financial_aid_pipeline = pipeline
@@ -156,6 +156,15 @@ export async function applyFallbackUniversityUpdates({ db, profileId, document, 
   const nextPayload = { ...(parsed || {}), applications: nextApps }
 
   await db.prepare(
+    `
+      INSERT INTO profile_sections (profile_id, section_key, data, updated_by)
+      VALUES (?, 'university_applications', ?, ?)
+      ON CONFLICT(profile_id, section_key) DO UPDATE SET
+        data = excluded.data,
+        updated_at = CURRENT_TIMESTAMP,
+        updated_by = excluded.updated_by
+    `,
+await db.prepare(
     `
       INSERT INTO profile_sections (profile_id, section_key, data, updated_by)
       VALUES (?, 'university_applications', ?, ?)
