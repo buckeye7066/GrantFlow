@@ -13,8 +13,7 @@
  * @module crossProfileRecommender
  */
 
-import { safeParseArrayField, resolveApplicantType } from './profileHelpers.js'
-import { buildProfileSignals } from './profileHelpers.js'
+import { safeParseArrayField, resolveApplicantType, buildProfileSignals } from './profileHelpers.js'
 
 // ── Signal helpers ────────────────────────────────────────────────────────────
 
@@ -195,7 +194,7 @@ export async function findSimilarProfiles(db, profileId, minSimilarity = 0.3) {
     if (similarity < minSimilarity) continue
 
     const sharedSignals = setIntersection(targetEntry.keywordSet, entry.keywordSet)
-      .filter((s) => !s.startsWith('type:') || s !== `type:${entry.profile.primary_type}`) // De-noise
+      .filter((s) => !s.startsWith('type:')) // De-noise: type tokens are not informative in shared-signal explanations
       .slice(0, 10) // Cap at 10 for readability
 
     similar.push({
@@ -268,7 +267,8 @@ export async function getRecommendationsFromSimilarProfiles(db, profileId) {
            LIMIT 20`,
         )
         .all(similarProfile.profileId, ...POSITIVE_STATUSES)
-    } catch {
+    } catch (err) {
+      console.warn('[crossProfileRecommender] Failed to load grants for similar profile', similarProfile.profileId, err?.message)
       continue
     }
 
@@ -300,6 +300,7 @@ export async function getRecommendationsFromSimilarProfiles(db, profileId) {
         estimatedRelevance,
         applicationUrl: grant.application_url || null,
         sourceStatus: grant.status,
+        requiresValidation: true, // MUST be run through relevanceFilter + computeMatchDecision before pipeline insertion
       })
     }
   }
