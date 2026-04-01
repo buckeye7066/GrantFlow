@@ -10,12 +10,17 @@ import { Label } from '@/components/ui/label';
 import { GripVertical, Plus, Trash2, Loader2 } from 'lucide-react';
 import { toast } from "sonner";
 
-const toKebabCase = (str) =>
-  str &&
-  str
-    .match(/[A-Z]{2,}(?=[A-Z][a-z]+[0-9]*|\b)|[A-Z]?[a-z]+[0-9]*|[A-Z]|[0-9]+/g)
-    .map((x) => x.toLowerCase())
-    .join('-');
+const toKebabCase = (str) => {
+  if (!str) return '';
+  const tokens = str.match(
+    /[A-Z]{2,}(?=[A-Z][a-z]+[0-9]*|\b)|[A-Z]?[a-z]+[0-9]*|[A-Z]|[0-9]+/g
+  );
+  if (!tokens || tokens.length === 0) {
+    // Fallback: strip non-alphanumeric, lowercase, collapse spaces to hyphens
+    return str.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  }
+  return tokens.map((x) => x.toLowerCase()).join('-');
+};
 
 export default function TaxonomyManagerModal({ group, open, onClose, onSave }) {
   const queryClient = useQueryClient();
@@ -82,13 +87,27 @@ export default function TaxonomyManagerModal({ group, open, onClose, onSave }) {
   };
 
   const handleSave = () => {
-    const updates = items.map(item => ({ id: item.id, data: { sort_order: item.sort_order, active: item.active, label: item.label } }));
+    const updates = items.map(item => ({
+      id: item.id,
+      data: {
+        sort_order: item.sort_order,
+        active: item.active,
+        label: item.label,
+        slug: item.slug,
+      },
+    }));
     bulkUpdateMutation.mutate(updates);
   };
 
   const handleLabelChange = (id, newLabel) => {
-    setItems(items.map(item => item.id === id ? { ...item, label: newLabel } : item));
-  }
+    setItems(
+      items.map(item =>
+        item.id === id
+          ? { ...item, label: newLabel, slug: toKebabCase(newLabel) }
+          : item
+      )
+    );
+  };
   
   const handleActiveChange = (id, checked) => {
     setItems(items.map(item => item.id === id ? { ...item, active: checked } : item));
@@ -113,7 +132,7 @@ export default function TaxonomyManagerModal({ group, open, onClose, onSave }) {
                 {(provided) => (
                   <div {...provided.droppableProps} ref={provided.innerRef} className="space-y-2">
                     {items.map((item, index) => (
-                      <Draggable key={item.id} draggableId={item.id} index={index}>
+                      <Draggable key={String(item.id)} draggableId={String(item.id)} index={index}>
                         {(provided) => (
                           <div
                             ref={provided.innerRef}
