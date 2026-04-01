@@ -15,7 +15,6 @@ import {
   safeParseArrayField,
 } from './profileHelpers.js'
 import { scoreOpportunity, computeMatchDecision } from './matchEngine.js'
-import { relevanceFilter } from './relevanceFilter.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
