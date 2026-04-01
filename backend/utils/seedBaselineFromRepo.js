@@ -165,10 +165,9 @@ export async function seedBaselineFromRepo(db, opts = {}) {
     profile_documents_upserted: 0,
   }
 
-  await db.withTransaction(async (tx) => {
-    // Tombstones prevent baseline seeding from resurrecting hard-deleted profiles.
+  const _doSeed = (tx) => {
     const isPostgres = tx?.dialect === 'postgres'
-    await tx.prepare(
+    tx.prepare(
       isPostgres
         ? `
           CREATE TABLE IF NOT EXISTS profile_tombstones (
@@ -190,7 +189,7 @@ export async function seedBaselineFromRepo(db, opts = {}) {
 
     let tombstoneRows = []
     try {
-      tombstoneRows = await tx.prepare('SELECT profile_id FROM profile_tombstones').all()
+      tombstoneRows = tx.prepare('SELECT profile_id FROM profile_tombstones').all()
     } catch {
       tombstoneRows = []
     }
@@ -502,7 +501,7 @@ export async function seedBaselineFromRepo(db, opts = {}) {
       return v ? v : null
     }
 
-    async function selectExistingIds(table, ids) {
+    function selectExistingIds(table, ids) {
       const list = Array.from(ids || []).map(normalizeId).filter(Boolean)
       if (list.length === 0) return new Set()
       // Safe table allowlist (prevents SQL injection).
@@ -515,7 +514,7 @@ export async function seedBaselineFromRepo(db, opts = {}) {
       ])
       if (!allowed.has(table)) throw new Error(`[baseline-seed] invalid table lookup: ${table}`)
       const placeholders = list.map(() => '?').join(', ')
-      const rows = await tx.prepare(`SELECT id FROM ${table} WHERE id IN (${placeholders})`).all(...list)
+      const rows = tx.prepare(`SELECT id FROM ${table} WHERE id IN (${placeholders})`).all(...list)
       return new Set((rows || []).map((r) => normalizeId(r?.id)).filter(Boolean))
     }
 
@@ -557,11 +556,11 @@ export async function seedBaselineFromRepo(db, opts = {}) {
       ].filter(Boolean),
     )
 
-    const knownOrgIds = await selectExistingIds('organizations', referencedOrgIds)
-    const knownProfileIds = await selectExistingIds('profiles', referencedProfileIds)
-    const knownOppIds = await selectExistingIds('funding_opportunities', referencedOppIds)
-    const knownGrantIds = await selectExistingIds('grants', referencedGrantIds)
-    const knownDocIds = await selectExistingIds('documents', referencedDocIds)
+    const knownOrgIds = selectExistingIds('organizations', referencedOrgIds)
+    const knownProfileIds = selectExistingIds('profiles', referencedProfileIds)
+    const knownOppIds = selectExistingIds('funding_opportunities', referencedOppIds)
+    const knownGrantIds = selectExistingIds('grants', referencedGrantIds)
+    const knownDocIds = selectExistingIds('documents', referencedDocIds)
 
     const fkAdjustments = {
       profiles_null_org: 0,
@@ -578,7 +577,7 @@ export async function seedBaselineFromRepo(db, opts = {}) {
     if (shouldSeedProfiles) {
       for (const org of seed.organizations) {
         if (!org?.id || !org?.name) continue
-        await upsertOrg.run({
+        upsertOrg.run({
           id: org.id,
           name: org.name,
           email: org.email ?? null,
@@ -606,7 +605,7 @@ export async function seedBaselineFromRepo(db, opts = {}) {
         const desiredOrgId = normalizeId(p.organization_id)
         const safeOrgId = desiredOrgId && knownOrgIds.has(desiredOrgId) ? desiredOrgId : null
         if (desiredOrgId && !safeOrgId) fkAdjustments.profiles_null_org++
-        await upsertProfile.run({
+        upsertProfile.run({
           id: profileId,
           display_name: p.display_name,
           primary_type: p.primary_type ?? null,
@@ -627,7 +626,7 @@ export async function seedBaselineFromRepo(db, opts = {}) {
           fkAdjustments.sections_skipped_missing_profile++
           continue
         }
-        await upsertSection.run({
+        upsertSection.run({
           id: crypto.randomUUID(),
           profile_id: profileId,
           section_key: s.section_key,
@@ -640,7 +639,7 @@ export async function seedBaselineFromRepo(db, opts = {}) {
     if (shouldSeedOpportunities) {
       for (const o of seed.opportunities) {
         if (!o?.id || !o?.title) continue
-        await upsertOpp.run({
+        upsertOpp.run({
           id: o.id,
           title: o.title,
           sponsor: o.sponsor ?? null,
@@ -692,7 +691,7 @@ export async function seedBaselineFromRepo(db, opts = {}) {
         const safeOppId =
           desiredOppId && knownOppIds.has(desiredOppId) ? desiredOppId : null
         if (desiredOppId && !safeOppId) fkAdjustments.grants_null_missing_opportunity++
-        await upsertGrant.run({
+        upsertGrant.run({
           id: g.id,
           organization_id: orgId ?? null,
           funding_opportunity_id: safeOppId,
@@ -755,12 +754,12 @@ export async function seedBaselineFromRepo(db, opts = {}) {
           notes: d.notes ?? null,
         }
         try {
-          await upsertDoc.run(payload)
+          upsertDoc.run(payload)
         } catch (error) {
           const msg = String(error?.message || error)
           if (msg.includes('documents_status_check')) {
             // Retry without status. (This upsert no longer includes status.)
-            await upsertDoc.run(payload)
+            upsertDoc.run(payload)
           } else {
             throw error
           }
@@ -782,7 +781,7 @@ export async function seedBaselineFromRepo(db, opts = {}) {
           fkAdjustments.profile_docs_skipped_missing_doc++
           continue
         }
-        await upsertProfileDoc.run(profileId, docId)
+        upsertProfileDoc.run(profileId, docId)
         counts.profile_documents_upserted++
       }
     }
@@ -792,7 +791,14 @@ export async function seedBaselineFromRepo(db, opts = {}) {
     if (hadAdjustments) {
       console.info('[seedBaselineFromRepo] FK adjustments applied', fkAdjustments)
     }
-  })
+  }
+
+  const dialect = db?.dialect || 'sqlite'
+  if (dialect === 'postgres') {
+    await db.withTransaction(async (tx) => { _doSeed(tx) })
+  } else {
+    db.withTransaction((tx) => { _doSeed(tx) })
+  }
 
   const after = {
     profiles: Number((await db.prepare('SELECT COUNT(*) as count FROM profiles').get())?.count || 0),
