@@ -70,6 +70,7 @@ export async function ensureDocumentExtract(db, {
         ) VALUES (
           ?, ?, 'pending', ?, '[]', '[]', 0.0, ?, 0
         )
+        ON CONFLICT (document_id) DO NOTHING
       `,
     )
     stmt.run(id, documentId, sourceType, fileHash)
@@ -187,7 +188,7 @@ export async function saveDocumentExtractResult(db, documentId, result) {
       ocrText,
       warningsJson,
       confidence,
-      provenanceJson || 'null',
+      provenanceJson,
       ocrUsed,
       startedAt || finishedAt,
       finishedAt,
@@ -239,31 +240,37 @@ export async function tryReuseExtractByHash(db, { fileHash, documentId } = {}) {
 
   // Look for any ready extract with this hash and reuse its content.
   // NOTE: This intentionally ignores document_id uniqueness by copying content into the current row.
-  const existing = pg
-    ? await db
-        .prepare(
-          `
-            SELECT *
-            FROM document_extracts
-            WHERE file_hash = ?
-              AND status = 'ready'
-            ORDER BY finished_at DESC NULLS LAST, updated_at DESC
-            LIMIT 1
-          `,
-        )
-        .get(fileHash)
-    : await db
-        .prepare(
-          `
-            SELECT *
-            FROM document_extracts
-            WHERE file_hash = ?
-              AND status = 'ready'
-            ORDER BY COALESCE(finished_at, updated_at) DESC, updated_at DESC
-            LIMIT 1
-          `,
-        )
-        .get(fileHash)
+  let existing = null
+  try {
+    existing = pg
+      ? await db
+          .prepare(
+            `
+              SELECT *
+              FROM document_extracts
+              WHERE file_hash = ?
+                AND status = 'ready'
+              ORDER BY finished_at DESC NULLS LAST, updated_at DESC
+              LIMIT 1
+            `,
+          )
+          .get(fileHash)
+      : await db
+          .prepare(
+            `
+              SELECT *
+              FROM document_extracts
+              WHERE file_hash = ?
+                AND status = 'ready'
+              ORDER BY COALESCE(finished_at, updated_at) DESC, updated_at DESC
+              LIMIT 1
+            `,
+          )
+          .get(fileHash)
+  } catch (err) {
+    console.warn('[documentExtractStore] tryReuseExtractByHash lookup failed:', err?.message)
+    return null
+  }
 
   if (!existing) return null
 
