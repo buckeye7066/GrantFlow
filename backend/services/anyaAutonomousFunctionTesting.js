@@ -20,7 +20,7 @@ async function auditLog(entry, context) {
   const db = context?.db
   if (db) {
     try {
-      logAuditEvent(db, {
+      await logAuditEvent(db, {
         category: AUDIT_CATEGORIES.ANYA,
         action: `autonomous_function_tests.${String(entry?.action || 'event')}`,
         severity: SEVERITY.INFO,
@@ -535,6 +535,13 @@ export async function getAutonomousFunctionTestsStatus(db = null) {
           recent_operations: 0,
           message: 'No autonomous function testing operations have been run yet',
         }
+      }
+      // Non-ENOENT filesystem errors should still return a valid shape, not undefined.
+      console.warn('[anyaAutonomousFunctionTesting] Unexpected error reading dev audit log:', error?.message || error)
+      return {
+        last_run: null,
+        recent_operations: 0,
+        message: `Audit log read error: ${error?.message || String(error)}`,
       }
     }
   }
