@@ -79,9 +79,18 @@ export default function BackfillContacts() {
 
       if (newContactMethods.length > 0) {
         log(`Creating ${newContactMethods.length} new contact methods in bulk...`);
-        await client.entities.ContactMethod.bulkCreate(newContactMethods);
-        setState(prev => ({ ...prev, summary: { ...prev.summary, created: newContactMethods.length } }));
-        log('Bulk creation successful.');
+        const bulkResult = await client.entities.ContactMethod.bulkCreate(newContactMethods);
+        const createdCount = Array.isArray(bulkResult) ? bulkResult.length : newContactMethods.length;
+        const failedCount = newContactMethods.length - createdCount;
+        setState(prev => ({
+          ...prev,
+          summary: {
+            ...prev.summary,
+            created: createdCount,
+            errors: prev.summary.errors + failedCount
+          }
+        }));
+        log(`Bulk creation complete: ${createdCount} created, ${failedCount} failed.`);
       } else {
         log('No new contact methods to create.');
       }
@@ -92,7 +101,11 @@ export default function BackfillContacts() {
     } catch (error) {
       console.error("Backfill failed:", error);
       log(`ERROR: ${error.message}`);
-      setState(prev => ({ ...prev, status: 'error' }));
+      setState(prev => ({
+        ...prev,
+        status: 'error',
+        summary: { ...prev.summary, errors: prev.summary.errors + 1 }
+      }));
     }
   };
 
