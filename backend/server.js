@@ -58,7 +58,6 @@ import ensureUserPreferencesTable from './utils/ensureUserPreferencesTable.js';
 import ensurePortalCheckResultsTable from './utils/ensurePortalCheckResultsTable.js';
 import { linkAllProfilesToAdmin } from './utils/adminProfileLinks.js';
 import { ensureProfileOrgLinks } from './utils/ensureProfileOrgLinks.js'
-import { bootstrapAnya } from './services/anyaBootstrap.js';
 import ensureMinimumNationalOpportunities from './utils/ensureMinimumNationalOpportunities.js';
 import seedAssistanceDirectories from './utils/seedAssistanceDirectories.js';
 import seedFaithBasedHousing from './utils/seedFaithBasedHousing.js';
@@ -877,89 +876,10 @@ if (process.env.NODE_ENV !== 'test') {
       // best-effort only
     }
   
-  // Initialize feature flags
-  try {
-    initializeFeatureFlags(db);
-    console.log('[FeatureFlags] Initialized successfully');
-  } catch (err) {
-    console.warn('[FeatureFlags] Failed to initialize:', err.message);
-  }
-
-  // Startup smoke crawlers (PRODUCTION): default OFF.
-  // These are useful for deploy verification, but must not run automatically unless explicitly enabled.
-  const startupSmokeEnabled = parseBoolEnv(process.env.STARTUP_SMOKE_CRAWL_ENABLED) === true
-  if (startupSmokeEnabled) {
-    setTimeout(() => {
-      scheduleCrawlerSmokeJobs({ db, uploadsDir }).catch(e => console.warn('[background]', e?.message || e))
-    }, 10_000)
-    console.info('[startup] Startup smoke crawlers enabled (STARTUP_SMOKE_CRAWL_ENABLED=true)')
-  } else {
-    console.info(
-      '[startup] Startup smoke crawlers disabled (set STARTUP_SMOKE_CRAWL_ENABLED=true to enable)',
-    )
-  }
-
-  // Auto-merge duplicate profiles once per deploy (production only).
-  setTimeout(() => {
-    scheduleAutoProfileDedupe({ db }).catch((err) => {
-      console.warn('[auto-dedupe] failed:', err?.message || String(err))
-    })
-  }, 20_000)
-  
-  // Log server startup event
-  try {
-    logAuditEvent(db, {
-      category: AUDIT_CATEGORIES.SYSTEM,
-      action: 'server_startup',
-      severity: SEVERITY.INFO,
-      details: {
-        port: actualPort,
-        environment: process.env.NODE_ENV || 'development',
-        corsOrigins: loggedCorsOrigins,
-      },
-    });
-  } catch (err) {
-    // Non-critical - don't fail server startup
-  }
-  
-  // Bootstrap all Anya services 5 seconds after server is ready.
-  // All orchestration is in anyaBootstrap.js — this is the only Anya call in server.js.
-  setTimeout(() => {
-    bootstrapAnya(db).catch(err => console.error('[AnyaBootstrap] Failed:', err?.message || err))
-  }, 5000);
-
-  // Optional: continuous national programs crawler (Track A/B programs)
-  if (process.env.NATIONAL_PROGRAMS_CRAWLER_ENABLED === 'true') {
-    const intervalMinutes = Number.parseInt(
-      process.env.NATIONAL_PROGRAMS_CRAWLER_INTERVAL_MINUTES || '360',
-      10,
-    )
-    const maxUrls = Number.parseInt(process.env.NATIONAL_PROGRAMS_MAX_URLS || '200', 10)
-    const maxDepth = Number.parseInt(process.env.NATIONAL_PROGRAMS_MAX_DEPTH || '2', 10)
-
-    setTimeout(() => {
-      import('./services/nationalPrograms/continuousRunner.js')
-        .then(({ startNationalProgramsCrawler }) => {
-          console.log(
-            `[NationalPrograms] Continuous crawler enabled (every ${intervalMinutes} minutes, maxUrls=${maxUrls}, maxDepth=${maxDepth})`,
-          )
-          startNationalProgramsCrawler({
-            db,
-            uploadDir: uploadsDir,
-            intervalMinutes,
-            maxUrls,
-            maxDepth,
-          })
-        })
-        .catch((err) => {
-          console.error('[NationalPrograms] Failed to start continuous crawler:', err?.message || err)
-        })
-    }, 8000)
-  } else {
-    console.log(
-      '[NationalPrograms] Continuous crawler disabled (set NATIONAL_PROGRAMS_CRAWLER_ENABLED=true to enable)',
-    )
-  }
+  // Delegate remaining background services (feature flags, smoke crawlers, auto-dedupe,
+  // audit log, Anya scheduler, health service, national programs crawler) to the
+  // dedicated startup module that owns all required imports.
+  startBackgroundServices({ db, uploadsDir, actualPort, loggedCorsOrigins });
 
   });
 } else {
