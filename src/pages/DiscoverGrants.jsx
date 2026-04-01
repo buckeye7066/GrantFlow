@@ -172,17 +172,19 @@ export default function DiscoverGrants() {
     }
   }, [selectedProfileId]);
 
-  // Restore last selected profile on mount
+  // Restore last selected profile on mount â only when no URL param and no current selection.
   useEffect(() => {
+    const urlProfileId = searchParams.get('profile_id')
+    if (urlProfileId) return // URL param takes precedence; don't clobber it
     if (!selectedProfileId && profiles.length > 0) {
       try {
         const lastProfile = localStorage.getItem('grantflow:discover-last-profile');
-        if (lastProfile && profiles.some(p => p.id === lastProfile)) {
+        if (lastProfile && profiles.some(p => String(p.id) === String(lastProfile))) {
           setSelectedProfileId(lastProfile);
         }
       } catch { /* ignore storage errors */ }
     }
-  }, [profiles]);
+  }, [profiles, searchParams, selectedProfileId]);
 
 
   // Clear stale results and invalidate caches whenever the effective profile changes
@@ -224,8 +226,11 @@ export default function DiscoverGrants() {
   // Guard against stale profileDetail from a previously-selected profile.
   // effectiveProfileId is the authoritative identifier; selectedProfileId is the fallback
   // when effectiveProfileId hasn't resolved yet (e.g., URL param not set).
-  const profileDetailMatchesCurrent = profileDetail &&
-    (profileDetail.id === effectiveProfileId || profileDetail.id === selectedProfileId);
+  const profileDetailMatchesCurrent = profileDetail != null &&
+    (
+      String(profileDetail.id) === String(effectiveProfileId) ||
+      String(profileDetail.id) === String(selectedProfileId)
+    );
   const profileForSearch = (profileDetailMatchesCurrent ? profileDetail : null) ?? selectedOrg ?? selectedProfile;
 
   // Catalog match: real funding opportunities from DB, scored by profile needs (relatable grants, not only directory links)
@@ -245,22 +250,37 @@ export default function DiscoverGrants() {
     const payload = catalogMatchResponse?.data ?? catalogMatchResponse ?? {}
     const rows = payload?.opportunities ?? []
     if (!Array.isArray(rows)) return []
-    return rows.map((opp) => ({
-      id: opp.id,
-      title: opp.title,
-      program_name: opp.title,
-      sponsor: opp.sponsor || opp.funder,
-      url: opp.application_url ?? opp.source_url ?? opp.url,
-      deadline: opp.deadline,
-      deadlineAt: opp.deadline,
-      description: opp.description,
-      descriptionMd: opp.description,
-      match_score: opp.match_score,
-      match: opp.match_score,
-      matched_fields: opp.match_reasons ?? [],
-      matchReasons: opp.match_reasons ?? [],
-      source: opp.source || 'catalog',
-    }))
+    return rows
+      .map((opp) => {
+        const resolvedUrl = opp.application_url ?? opp.source_url ?? opp.url ?? null
+        if (!resolvedUrl) {
+          log.debug('catalog opportunity has no application URL â excluded from display', {
+            id: opp.id,
+            title: opp.title,
+          })
+        }
+        return {
+          id: opp.id,
+          title: opp.title,
+          program_name: opp.title,
+          sponsor: opp.sponsor || opp.funder,
+          url: resolvedUrl,
+          deadline: opp.deadline,
+          deadlineAt: opp.deadline,
+          description: opp.description,
+          descriptionMd: opp.description,
+          match_score: opp.match_score,
+          match: opp.match_score,
+          matched_fields: opp.match_reasons ?? [],
+          matchReasons: opp.match_reasons ?? [],
+          no_application_url: !resolvedUrl,
+          source: opp.source || 'catalog',
+        }
+      })
+      .filter((opp) => {
+        if (opp.no_application_url) return false
+        return true
+      })
   }, [catalogMatchResponse])
 
   const isECFProfile =
@@ -320,7 +340,10 @@ export default function DiscoverGrants() {
       },
       interests: profileForSearch?.signals?.interests ? Array.from(profileForSearch.signals.interests).slice(0, 10) : (profileForSearch?.tags || []).slice(0, 10),
       demographics: profileForSearch?.signals?.demographics ? Array.from(profileForSearch.signals.demographics).slice(0, 10) : [],
-      career_goals: profileForSearch?.sections?.career_goals?.primary_goal || profileForSearch?.career_goal || null,
+      career_goals: (() => {
+        const sMap = sectionsMap(profileForSearch)
+        return sMap?.career_goals?.primary_goal || profileForSearch?.career_goal || null
+      })(),
     } : null
     try {
       const data = await runRealCrawler({
@@ -384,28 +407,49 @@ export default function DiscoverGrants() {
     let failedCount = 0
     let attempted = 0
 
+    // Do NOT auto-add â let the backend's full relevanceFilter + computeMatchDecision run.
+    // Surface all returned opportunities to the user via setSearchResults; the user or
+    // the backend pipeline (triggered by handleAddToPipeline) applies canonical decisions.
+    // Log suppression counts so observability is preserved.
+    let clientFilteredOut = 0
     for (const opp of opportunities) {
-      const score = Number(opp.match_score ?? opp.match ?? 0);
-      if (Number.isFinite(score) && score >= 70 && passesClientRelevanceCheck(opp, profileForSearch)) {
-        attempted += 1
-        try {
-          const result = await handleAddToPipeline(opp, { silent: true })
-          if (result?.status === 'added') addedCount += 1
-          else if (result?.status === 'already') alreadyCount += 1
-          else failedCount += 1
-        } catch (error) {
-          failedCount += 1
-          console.error('[DiscoverGrants] Error adding to pipeline:', error)
-        }
+      if (!passesClientRelevanceCheck(opp, profileForSearch)) {
+        clientFilteredOut += 1
+        log.debug('client relevance pre-filter excluded opportunity', {
+          title: opp.title,
+          id: opp.id,
+          score: opp.match_score ?? opp.match ?? 0,
+        })
       }
+    }
+    if (clientFilteredOut > 0) {
+      log.debug('client relevance pre-filter summary', {
+        total: opportunities.length,
+        excluded: clientFilteredOut,
+        included: opportunities.length - clientFilteredOut,
+      })
     }
 
     // Refresh pipeline once (avoid spamming invalidations during batch add).
     queryClient.invalidateQueries({ queryKey: ['grants'] })
 
+    const belowThreshold = opportunities.filter(
+      (o) => (o.match_score ?? o.match ?? 0) < minMatchScore
+    ).length
+    const aboveThreshold = opportunities.length - belowThreshold
+    const suppressionNote =
+      belowThreshold > 0
+        ? ` (${belowThreshold} below your ${minMatchScore}% threshold, lower the slider to see more)`
+        : ''
+    if (aboveThreshold === 0 && opportunities.length > 0) {
+      log.debug('all crawler results suppressed by minMatchScore threshold', {
+        total: opportunities.length,
+        minMatchScore,
+      })
+    }
     toast({
       title: 'Search complete',
-      description: `Found ${opportunities.length} opportunities. Pipeline update: ${addedCount} added, ${alreadyCount} already in pipeline, ${failedCount} failed (from ${attempted} eligible).`,
+      description: `Found ${opportunities.length} opportunities â ${aboveThreshold} shown${suppressionNote}.`,
     })
     
     // Update search results to show crawler results
