@@ -24,7 +24,9 @@ const grantSchemaForExtraction = {
     deadline: { type: "string", format: "date", description: "The application deadline. Standardize to YYYY-MM-DD format." },
     amount_min: { type: "number" },
     amount_max: { type: "number" },
+    application_url: { type: "string", description: "The direct URL where applicants submit their application or access the application portal. Must be a full URL starting with http:// or https://." },
     eligibility_summary: { type: "string", description: "A concise summary of who is eligible to apply." },
+    applicant_types: { type: "array", items: { type: "string" }, description: "List of eligible applicant types, e.g. ['individual', 'nonprofit', 'small_business', 'veteran', 'student']." },
     program_description: { type: "string", description: "A detailed summary of the grant's purpose and goals." },
     selection_criteria: { type: "string", description: "A summary of how applications will be judged or scored." },
     funder_email: { type: "string", description: "Primary contact email for submissions" },
@@ -193,14 +195,28 @@ export default function NOFOParser() {
             deadline: newGrant.deadline,
         };
 
-        await client.functions.invoke('analyzeGrant', analysisPayload);
+        const analysisResult = await client.functions.invoke('analyzeGrant', analysisPayload);
+
+        if (!analysisResult?.data?.success) {
+            // Grant is saved; analysis failed. Log and warn but do not block navigation.
+            // The record will remain ai_status='queued' for background retry.
+            log.warn('analyzeGrant did not return success', {
+                grantId: newGrant.id,
+                response: analysisResult?.data,
+            });
+            toast({
+                variant: 'destructive',
+                title: 'Analysis Queued',
+                description: `Grant "${newGrant.title}" saved but AI analysis could not start. It will retry automatically.`,
+            });
+        } else {
+            toast({
+                title: "Saved and Analyzing",
+                description: `Grant "${newGrant.title}" created and sent for AI analysis.`,
+            });
+        }
 
         queryClient.invalidateQueries({ queryKey: ['grants'] });
-        toast({
-            title: "Saved and Analyzing",
-            description: `Grant "${newGrant.title}" created and sent for AI analysis.`,
-        });
-
         navigate(createPageUrl("GrantDetail", { id: newGrant.id }));
     } catch (err) {
         const errorMessage = `Failed to save grant or start analysis: ${err.message}`;
