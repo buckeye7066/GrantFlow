@@ -67,15 +67,14 @@ export async function crawlECFBenefits(profile, options = {}) {
           
           const matchScore = calculateECFMatchScore(benefit, profile, 'individual')
           
-          if (matchScore >= 80) {
-            results.push({
-              ...benefit,
-              match_score: matchScore,
-              crawler_type: 'ecf_benefits',
-              benefit_type: 'individual',
-              source: source.name
-            })
-          }
+          // Pass all candidates to the pipeline; let computeMatchDecision() be the sole authority.
+          results.push({
+            ...benefit,
+            match_score: matchScore,
+            crawler_type: 'ecf_benefits',
+            benefit_type: 'individual',
+            source: source.name
+          })
         }
       } catch (error) {
         console.error(`[ECFBenefitsCrawler] Error searching ${source.name}:`, error.message)
@@ -94,15 +93,14 @@ export async function crawlECFBenefits(profile, options = {}) {
           
           const matchScore = calculateECFMatchScore(benefit, profile, 'provider')
           
-          if (matchScore >= 80) {
-            results.push({
-              ...benefit,
-              match_score: matchScore,
-              crawler_type: 'ecf_benefits',
-              benefit_type: 'family_support',
-              source: source.name
-            })
-          }
+          // Pass all candidates to the pipeline; let computeMatchDecision() be the sole authority.
+          results.push({
+            ...benefit,
+            match_score: matchScore,
+            crawler_type: 'ecf_benefits',
+            benefit_type: 'family_support',
+            source: source.name
+          })
         }
       } catch (error) {
         console.error(`[ECFBenefitsCrawler] Error searching ${source.name}:`, error.message)
@@ -110,7 +108,7 @@ export async function crawlECFBenefits(profile, options = {}) {
     }
   }
   
-  console.log(`[ECFBenefitsCrawler] Found ${results.length} ECF benefits with 80%+ match`)
+  console.log(`[ECFBenefitsCrawler] Returning ${results.length} ECF benefit candidate(s) to pipeline for decision-engine evaluation`)
   return results
 }
 
@@ -311,10 +309,17 @@ export function evaluateEcfUnlockEligibility(profile) {
   }
 }
 
+// STUB â replace with real HTTP fetch + cheerio parse against source.baseUrl.
+// The url field must be a verified, directly-navigable application page, not just the program homepage.
+// Profile fields (state, disability_type, support_needs) must drive query parameters / URL path selection.
 async function searchIndividualBenefits(source, profile) {
   const benefits = []
-  
-  // Simulated benefits based on ECF CHOICES program
+  // TODO: perform actual fetch:
+  //   const { data } = await axios.get(source.baseUrl, { timeout: 10000 })
+  //   const $ = cheerio.load(data)
+  //   ... extract application URLs and validate them before pushing
+  console.warn(`[ECFBenefitsCrawler] searchIndividualBenefits is using stub data for source: ${source.name}. Replace with real crawler logic.`)
+
   if (source.type === 'state_program') {
     benefits.push({
       title: 'ECF CHOICES Essential Supports',
@@ -370,9 +375,12 @@ async function searchIndividualBenefits(source, profile) {
   return benefits
 }
 
+// STUB â replace with real HTTP fetch + cheerio parse against source.baseUrl.
+// Profile fields (state, organization_type, services) must drive URL/query selection.
 async function searchFamilySupportBenefits(source, profile) {
   const benefits = []
-  
+  console.warn(`[ECFBenefitsCrawler] searchFamilySupportBenefits is using stub data for source: ${source.name}. Replace with real crawler logic.`)
+
   if (source.type === 'cls_fm') {
     benefits.push({
       title: 'CLS-FM Provider Reimbursement',
@@ -432,25 +440,36 @@ function calculateECFMatchScore(benefit, profile, type) {
     score += 15
   }
   
-  // Category matching
-  const profileNeeds = profile.support_needs || profile.service_needs || []
+  // Category matching â read from normalised sections first, fall back to legacy flat fields.
+  const sections = profile?.sections ?? {}
+  const signals = profile?.signals
+  const profileNeeds = [
+    ...(Array.isArray(profile.support_needs) ? profile.support_needs : []),
+    ...(Array.isArray(profile.service_needs) ? profile.service_needs : []),
+    ...(Array.isArray(sections?.health_medical?.support_needs) ? sections.health_medical.support_needs : []),
+    ...(Array.isArray(sections?.government_assistance?.service_needs) ? sections.government_assistance.service_needs : [])
+  ]
   const benefitCategories = benefit.benefit_categories || []
-  
-  const matchedCategories = profileNeeds.filter(need => 
-    benefitCategories.some(cat => cat.toLowerCase().includes(need.toLowerCase()))
+
+  const matchedCategories = profileNeeds.filter(need =>
+    benefitCategories.some(cat => cat.toLowerCase().includes(String(need || '').toLowerCase()))
   )
-  
+
   if (matchedCategories.length > 0) {
     score += Math.min(20, matchedCategories.length * 10)
   }
-  
-  // State match for state programs
-  if (benefit.sponsor?.includes('Tennessee') && profile.state === 'TN') {
+
+  // State match â read from signals.location first, then flat field.
+  const profileState = signals?.location?.state ?? profile?.state ?? null
+  if (benefit.sponsor?.includes('Tennessee') && String(profileState || '').toUpperCase() === 'TN') {
     score += 10
   }
-  
-  // Disability type match
-  if (profile.disability_type && benefit.eligibility?.toLowerCase().includes(profile.disability_type.toLowerCase())) {
+
+  // Disability type match â read from sections.health_medical first, then flat field.
+  const disabilityTypes = Array.isArray(sections?.health_medical?.disability_type)
+    ? sections.health_medical.disability_type
+    : (profile.disability_type ? [profile.disability_type] : [])
+  if (disabilityTypes.some(dt => benefit.eligibility?.toLowerCase().includes(String(dt || '').toLowerCase()))) {
     score += 10
   }
   
