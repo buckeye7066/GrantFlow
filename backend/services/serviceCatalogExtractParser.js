@@ -34,7 +34,10 @@ function parseMoneyToCents(raw) {
     .replace(/,/g, '')
     .trim()
   const n = Number(cleaned)
-  if (!Number.isFinite(n) || n <= 0) throw new Error(`invalid_price:${raw}`)
+  if (!Number.isFinite(n) || n <= 0) {
+    console.warn(`[serviceCatalogExtractParser] invalid_price skipped: ${raw}`)
+    return null
+  }
   return Math.round(n * 100)
 }
 
@@ -112,9 +115,11 @@ export function parsePaymentSheetExtract(markdown) {
       const label = priceMatch[1].toLowerCase()
       const amountRaw = priceMatch[2]
       const cents = parseMoneyToCents(amountRaw)
-      // cents will throw if invalid, no need to check null
-
-      if (label === 'flat') {
+      if (cents === null) {
+        console.warn(
+          `[serviceCatalogExtractParser] skipping price tier '${label}' for '${currentService.title}' â could not parse: ${amountRaw}`
+        )
+      } else if (label === 'flat') {
         currentService.prices = {
           individual: cents,
           small: cents,
