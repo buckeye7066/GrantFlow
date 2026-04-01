@@ -23,23 +23,22 @@ export async function runEducationStudentEngine(profile, options = {}) {
       if (!profile) return true;
       
       // Filter by education level/type if specified in profile
-      if (profile.education_level && resource.keywords) {
-        const educationKeywords = ['college', 'undergraduate', 'graduate', 'K-12', 'vocational'];
-        const hasEducationMatch = resource.keywords.some(keyword => 
-          educationKeywords.includes(keyword.toLowerCase()));
-        if (!hasEducationMatch && profile.education_level !== 'any') return false;
-      }
+      // Do NOT filter directory resources by education_level here.
+      // Pre-engine filtering causes silent suppression before the decision engine runs.
+      // Profile education_level is used downstream by the decision engine for scoring.
       
       // Filter by military status for military-specific grants
-      if (resource.categories.includes('military') && !profile.military_affiliation) {
-        return false;
-      }
+      // Do NOT filter out military-tagged resources when military_affiliation is absent.
+      // A resource like the Iraq/Afghanistan Service Grant targets dependents, not just veterans.
+      // Profile completeness gaps should surface as Goal 10 guidance, not silent exclusion.
+      // The decision engine evaluates military eligibility with full profile context.
       
       return true;
     });
     
     return normalizeAndFilter(filteredResources, ENGINE_ID, { strict_no_loans: true, strict_no_matching: false });
-  } catch {
-    return [];
+  } catch (err) {
+    console.error(`[${ENGINE_ID}] runEducationStudentEngine failed:`, err)
+    return []
   }
 }
