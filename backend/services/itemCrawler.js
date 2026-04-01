@@ -14,7 +14,9 @@ import {
   summarizeProfileSignals,
   safeParseArrayField,
 } from './profileHelpers.js'
-import { scoreOpportunity } from './matchEngine.js'
+import { scoreOpportunity, computeMatchDecision } from './matchEngine.js'
+import { relevanceFilter } from './relevanceFilter.js'
+import { relevanceFilter } from './relevanceFilter.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
@@ -109,8 +111,7 @@ export async function processItemCrawlerJob({ db, job, dataDir, profileContext }
       SELECT * FROM funding_opportunities 
       WHERE ${activePredicate}
       AND ${noMatchPredicate}
-      AND (record_origin IN ('curated_verified', 'official_api', 'verified_scrape'))
-      AND (source IN ('grants_gov', 'state_portal', 'trusted_nonprofit'))
+      AND (record_origin IN ('curated_verified', 'official_api', 'verified_scrape', 'item_funding', 'foundation_portal'))
       AND (${keywordConditions})
       LIMIT 50
     `).all(...keywordParams) || []
@@ -162,14 +163,20 @@ export async function processItemCrawlerJob({ db, job, dataDir, profileContext }
   
   // Sort and filter by requested threshold only — no fallback relaxation
   scoredOpps.sort((a, b) => b.match_score - a.match_score)
-  const requestedThreshold = Number(matchThreshold) || 0
-  const filteredOpps = scoredOpps.filter((opp) => (opp.match_score ?? 0) >= requestedThreshold)
-
-  const topOpps = filteredOpps.slice(0, maxResults)
+  // Do not pre-filter by raw score; computeMatchDecision is the sole authority.
+  // maxResults caps volume only; canonical ACCEPT/REVIEW decisions are never suppressed by threshold.
+  const topOpps = scoredOpps.slice(0, maxResults)
   
   console.log(
     `[itemCrawler] Found ${topOpps.length} matching item funding sources (threshold: ${requestedThreshold}%)`,
   )
+  if (scoredOpps.length > 0 && topOpps.length === 0) {
+    console.warn(
+      `[itemCrawler] SUPPRESSION WARNING: ${scoredOpps.length} opportunities scored but 0 passed to insertion. ` +
+      `Top raw score: ${scoredOpps[0]?.match_score ?? 'n/a'}. Threshold: ${requestedThreshold}. ` +
+      `Review threshold or decision engine configuration.`
+    )
+  }
   
   // Insert into database
   let upsertedCount = 0
@@ -184,7 +191,9 @@ export async function processItemCrawlerJob({ db, job, dataDir, profileContext }
         amount_min: opp.amount_min,
         amount_max: opp.amount_max,
         deadline: opp.deadline,
-        application_url: opp.application_url ?? null,
+        application_url: (typeof opp.application_url === 'string' && opp.application_url.startsWith('http'))
+          ? opp.application_url
+          : null,
         source_url: opp.source_url ?? opp.application_url ?? null,
         categories: opp.categories,
         keywords: [...(opp.keywords || []), ...(opp.keywords_extra || [])],
