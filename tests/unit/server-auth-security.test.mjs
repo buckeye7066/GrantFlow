@@ -54,6 +54,7 @@ function startServer(extraEnv = {}) {
 
     child.on('error', (err) => {
       clearTimeout(timeout)
+      child.stdout.off('data', onData)
       reject(new Error(`server failed to spawn: ${String(err?.message || err)}\nstdout:\n${stdout}\nstderr:\n${stderr}`))
     })
 
@@ -83,14 +84,16 @@ test('security: default bulk populate key is not accepted', async () => {
   })
 
   const { port } = await srv.ready
-  const res = await fetch(`http://127.0.0.1:${port}/api/auth/me`, {
-    headers: {
-      'X-Admin-Token': 'grantflow-bulk-2026',
-    },
-  })
-
-  assert.equal(res.status, 401)
-  await srv.stop()
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/api/auth/me`, {
+      headers: {
+        'X-Admin-Token': 'grantflow-bulk-2026',
+      },
+    })
+    assert.equal(res.status, 401)
+  } finally {
+    await srv.stop()
+  }
 })
 
 test('security: legacy profile-id bearer token requires explicit opt-in', async () => {
@@ -103,13 +106,21 @@ test('security: legacy profile-id bearer token requires explicit opt-in', async 
   const { port, dbPath } = await srv.ready
 
   // Insert a profile row directly so the legacy path would have succeeded if enabled.
-  const Database = (await import('better-sqlite3')).default
+  let Database
+  try {
+    Database = (await import('better-sqlite3')).default
+  } catch (importErr) {
+    throw new Error(`better-sqlite3 not available in test environment â cannot seed profile row: ${importErr.message}`)
+  }
   const db = new Database(dbPath)
-  db.exec(`
-    INSERT INTO profiles (id, display_name, status)
-    VALUES ('00000000-0000-0000-0000-000000000001', 'Test Profile', 'active');
-  `)
-  db.close()
+  try {
+    db.exec(`
+      INSERT INTO profiles (id, display_name, status)
+      VALUES ('00000000-0000-0000-0000-000000000001', 'Test Profile', 'active');
+    `)
+  } finally {
+    db.close()
+  }
 
   const res = await fetch(`http://127.0.0.1:${port}/api/auth/me`, {
     headers: {
