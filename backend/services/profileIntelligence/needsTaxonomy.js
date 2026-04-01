@@ -432,7 +432,7 @@ export const NEEDS_TAXONOMY = {
     // Churches can offer scholarships through educational ministries, but inference
     // does not infer this by default. Churches may still qualify if explicitly
     // requested via funding_ask or keywords.
-    disallowed_entity_types: [ENTITY_TYPE.FIRE_EMS, ENTITY_TYPE.CHURCH],
+    disallowed_entity_types: [ENTITY_TYPE.FIRE_EMS],
     funding_categories: [FUNDING_CATEGORY.SCHOLARSHIP, FUNDING_CATEGORY.GRANT],
     example_search_terms: [
       'college scholarship', 'tuition assistance grant', 'first-generation student scholarship',
@@ -452,7 +452,8 @@ export const NEEDS_TAXONOMY = {
     ],
     related_entity_types: [ENTITY_TYPE.INDIVIDUAL],
     disallowed_entity_types: [],
-    funding_categories: [FUNDING_CATEGORY.GRANT, FUNDING_CATEGORY.OFTEN_NOT_FUNDABLE],
+    funding_categories: [FUNDING_CATEGORY.GRANT],
+// Note: debt relief has low grant availability; use scoring_hint 'low_funding_availability' to deprioritize, not a pseudo funding-category.
     example_search_terms: [
       'debt relief program', 'financial counseling assistance',
     ],
