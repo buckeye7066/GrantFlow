@@ -134,16 +134,20 @@ export const useSettingsStore = create((set, get) => ({
         body: JSON.stringify(updates),
       })
       set({ preferences: { ...DEFAULT_PREFERENCES, ...data }, error: null })
+      get().applyTheme()
     } catch (error) {
       console.error('Failed to update preferences:', error)
       // Revert on error
       set({ preferences: currentPrefs, error: error.message })
+      get().applyTheme()
     }
   },
 
   // Update a single preference
   updatePreference: (key, value) => {
-    get().updatePreferences({ [key]: value })
+    get().updatePreferences({ [key]: value }).catch((err) => {
+      console.error('updatePreference failed:', err)
+    })
   },
 
   // Reset to defaults
@@ -161,6 +165,7 @@ export const useSettingsStore = create((set, get) => ({
     } catch (error) {
       console.error('Failed to reset preferences:', error)
       set({ error: error.message, isLoading: false })
+      get().applyTheme()
     }
   },
 
