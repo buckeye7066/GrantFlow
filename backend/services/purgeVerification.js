@@ -59,7 +59,11 @@ export async function verifyOpportunityUrl(sourceUrl, { fetchFn, timeoutMs = 120
     return { verified: false, signals, verificationLevel, statusHint }
   }
 
-  const fetch_ = fetchFn || globalThis.fetch || require('node-fetch').default
+  const fetch_ = fetchFn ?? globalThis.fetch
+if (!fetch_) {
+  signals.push({ type: 'fetch_unavailable', value: 'error', detail: 'No fetch implementation available â inject fetchFn or run in an environment with globalThis.fetch' })
+  return { verified: false, signals, verificationLevel, statusHint }
+}
   if (!fetch_) {
     signals.push({ type: 'fetch_unavailable', value: 'error', detail: 'No fetch implementation available' })
     return { verified: false, signals, verificationLevel, statusHint }
@@ -136,7 +140,7 @@ export async function verifyOpportunityUrl(sourceUrl, { fetchFn, timeoutMs = 120
   } else if (textResult.statusHint === 'active') {
     statusHint = 'active'
     // Active signal overrides a prior secondary 404 hint.
-    if (verificationLevel === 'secondary') verificationLevel = 'secondary'
+    if (verificationLevel === 'secondary') verificationLevel = 'none'
   }
 
   const verified = verificationLevel === 'primary'
