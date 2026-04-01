@@ -312,8 +312,9 @@ async function seedBillingTiersIfMissing(db) {
       toDbBool(true),
       toDbBool(true),
     )
-  } catch {
-    // If this fails for any reason, we still want the caller to proceed with a clear error.
+  } catch (err) {
+    // Log the failure so operators can diagnose billing tier seed issues.
+    console.error('[billingAccounts] seedBillingTiersIfMissing: failed to insert seed tiers:', err?.message ?? err)
   }
 }
 
@@ -340,7 +341,7 @@ async function resolveTierIdForInsert(db, requestedTierId) {
   if (fallback?.id) return fallback.id
 
   throw new Error(
-    `Billing tiers are missing: cannot create billing account for profile ${requestedTierId}. Run DB migrations/seed to populate billing_tiers.`,
+    `Billing tiers are missing: requested tier '${requestedTierId}' not found and no fallback tier exists. Run DB migrations/seed to populate billing_tiers.`,
   )
 }
 
