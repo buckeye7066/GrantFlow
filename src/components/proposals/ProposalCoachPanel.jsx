@@ -104,7 +104,30 @@ const ProposalCoachPanel = ({ grant, onAnalyze, isAnalyzing, onStartApplication,
     };
     
     const renderContent = () => {
-        if (ai_status === 'ready' && ai_summary) {
+        if (ai_status === 'ready') {
+            if (!ai_summary) {
+                return (
+                    <div className="relative z-10">
+                        <Alert variant="destructive">
+                            <AlertTriangle className="h-4 w-4" />
+                            <AlertDescription>
+                                <p className="font-semibold mb-2">Analysis Incomplete</p>
+                                <p className="text-xs mb-4">The analysis completed but returned no summary. Please re-analyze.</p>
+                                <Button
+                                    type="button"
+                                    onClick={handleAnalyzeClick}
+                                    disabled={loading}
+                                    variant="destructive"
+                                    size="sm"
+                                >
+                                    {loading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <RefreshCw className="w-4 h-4 mr-2" />}
+                                    Re-Analyze
+                                </Button>
+                            </AlertDescription>
+                        </Alert>
+                    </div>
+                );
+            }
             return (
                 <div className="relative z-10 space-y-4">
                     <ReactMarkdown className="prose prose-sm max-w-none">{ai_summary}</ReactMarkdown>
@@ -177,9 +200,10 @@ const ProposalCoachPanel = ({ grant, onAnalyze, isAnalyzing, onStartApplication,
                         onClick={handleAnalyzeClick}
                         disabled={loading}
                         size="sm"
+                        title={loading ? 'Analysis is in progress â wait for it to finish or time out before retrying.' : undefined}
                     >
                         <RefreshCw className={`w-4 h-4 mr-2 ${loading ? 'animate-spin' : ''}`} />
-                        Retry if Stuck
+                        {loading ? 'In progressâ¦' : 'Retry if Stuck'}
                     </Button>
                 </div>
             );
