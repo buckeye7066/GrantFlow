@@ -20,7 +20,8 @@ export function parseHtmlToText(html, { url } = {}) {
   const bodyText = normalizeWhitespace($('body').text())
 
   // Use a conservative cap to avoid gigantic rows in SQLite
-  const extractedText = bodyText.length > 200000 ? bodyText.slice(0, bodyText.lastIndexOf(' ', 200000)) : bodyText
+  const lastSpace = bodyText.length > 200000 ? bodyText.lastIndexOf(' ', 200000) : -1
+const extractedText = lastSpace > 0 ? bodyText.slice(0, lastSpace) : bodyText.length > 200000 ? bodyText.slice(0, 200000) : bodyText
 
   const links = []
   $('a[href]').each((_, a) => {
