@@ -33,14 +33,15 @@ import { applyRelevanceFilter } from '../relevanceFilter.js'
 // Dimension weights (must sum to 1.0)
 // ---------------------------------------------------------------------------
 const DIMENSION_WEIGHTS = {
-  eligibility: 0.30,   // Hard eligibility is most important
-  need_fit: 0.25,       // How well needs align
-  entity_fit: 0.15,     // Entity type match
-  geography_fit: 0.10,  // Location alignment
-  compliance_fit: 0.05, // Credentials/registration
-  priority_fit: 0.05,   // Hardship/priority boosts
-  practicality: 0.05,   // Ease of application
-  source_quality: 0.05, // Source trustworthiness
+  eligibility: 0.28,      // Hard eligibility is most important
+  need_fit: 0.23,          // How well needs align
+  entity_fit: 0.14,        // Entity type match
+  geography_fit: 0.10,     // Location alignment
+  compliance_fit: 0.05,    // Credentials/registration
+  priority_fit: 0.05,      // Hardship/priority boosts
+  practicality: 0.05,      // Ease of application
+  source_quality: 0.05,    // Source trustworthiness
+  keyword_relevance: 0.05, // Story keyword overlap
 }
 
 // Verify weights sum to ~1.0
@@ -301,9 +302,16 @@ function scorePracticality(opportunity) {
     score += 10
   }
 
-  // Having a clear URL increases practicality
+  // Having a clear, parseable URL increases practicality
   const url = opportunity.source_url || opportunity.application_url || ''
-  if (url.trim().length > 0) score += 10
+  let urlIsValid = false
+  try {
+    const parsed = new URL(url.trim())
+    urlIsValid = parsed.protocol === 'http:' || parsed.protocol === 'https:'
+  } catch {
+    urlIsValid = false
+  }
+  if (urlIsValid) score += 10
 
   return Math.max(0, Math.min(100, score))
 }
@@ -426,12 +434,14 @@ export function scoreOpportunity(intel, opportunity) {
   const eligResult = filterEligibility(intel, opportunity)
 
   // Hard reject on eligibility failures
-  if (eligResult.verdict === 'ineligible' ||
-      eligResult.hard_failures.includes('deadline_expired') ||
-      eligResult.hard_failures.includes('entity_type_mismatch') ||
-      eligResult.hard_failures.includes('requires_veteran') ||
-      eligResult.hard_failures.includes('requires_student') ||
-      eligResult.hard_failures.includes('geographic_mismatch')) {
+  // Only hard-reject on objectively unrecoverable failures.
+  // 'requires_veteran', 'requires_student', and 'geographic_mismatch' are
+  // scored dimensionally below; do NOT short-circuit here â let the weighted
+  // total reach the caller (computeMatchDecision) which is the sole authority.
+  const HARD_REJECT_CODES = ['deadline_expired', 'entity_type_mismatch']
+  const hasHardFailure = eligResult.verdict === 'ineligible' ||
+    eligResult.hard_failures.some(f => HARD_REJECT_CODES.includes(f))
+  if (hasHardFailure) {
     return {
       total_score: 0,
       confidence: 90,
@@ -447,12 +457,28 @@ export function scoreOpportunity(intel, opportunity) {
 
   // Also run the relevance filter rules (state-mismatch, loan, demographic, etc.)
   // to ensure both filter systems are applied on every scoring path.
+  // Build a profile snapshot that surfaces all ProfileIntelligence signals
+  // so relevanceFilter can apply its full hard-disqualification ruleset.
+  const inferredTags = [
+    ...(intel.isVeteran ? ['veteran'] : []),
+    ...(intel.isStudent ? ['student'] : []),
+    ...(intel.isSenior ? ['senior'] : []),
+    ...(intel.isCaregiver ? ['caregiver'] : []),
+    ...(intel.hasDisability ? ['disability'] : []),
+    ...(intel.isNonprofit ? ['nonprofit', '501c3'] : []),
+    ...(intel.geographicFlags ? [...intel.geographicFlags] : []),
+    ...(intel.hardshipFlags ? [...intel.hardshipFlags] : []),
+    ...(intel.organizationFlags ? [...intel.organizationFlags] : []),
+    ...(intel.eligibilityFlags ? [...intel.eligibilityFlags] : []),
+    ...(intel.inferredNeeds ? intel.inferredNeeds.map(n => n.code) : []),
+  ]
   const profileData = {
     primary_type: intel.entityType || null,
     veteran_status: intel.isVeteran ? 'veteran' : null,
     disability_status: intel.hasDisability ? 'yes' : null,
+    student_status: intel.isStudent ? 'yes' : null,
     state: intel.state || null,
-    tags: [],
+    tags: inferredTags,
   }
   const relevance = applyRelevanceFilter(opportunity, profileData)
   if (!relevance.pass) {
