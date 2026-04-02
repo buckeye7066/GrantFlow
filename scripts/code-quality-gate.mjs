@@ -2,6 +2,7 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import process from 'node:process'
+import { spawn } from 'node:child_process'
 
 const REPO_ROOT = path.resolve(process.cwd())
 
@@ -140,6 +141,37 @@ async function scanFile(filePath, allowlist) {
   return violations
 }
 
+/**
+ * Run ESLint check and return { success, errorCount, warningCount }
+ */
+async function runEslintCheck() {
+  return new Promise((resolve) => {
+    const child = spawn('npx', ['eslint', '--max-warnings', '0', 'src/**/*.{js,jsx}', 'backend/**/*.js'], {
+      cwd: REPO_ROOT,
+      shell: process.platform === 'win32',
+      stdio: ['pipe', 'pipe', 'pipe']
+    })
+    
+    let stdout = ''
+    let stderr = ''
+    
+    child.stdout.on('data', (data) => { stdout += data.toString() })
+    child.stderr.on('data', (data) => { stderr += data.toString() })
+    
+    child.on('close', (code) => {
+      resolve({ 
+        success: code === 0, 
+        output: stdout + stderr,
+        exitCode: code
+      })
+    })
+    
+    child.on('error', (err) => {
+      resolve({ success: false, output: err.message, exitCode: 1 })
+    })
+  })
+}
+
 function formatViolation(v) {
   return `${v.file}:${v.line} [${v.rule}] ${v.text}`
 }
@@ -148,6 +180,21 @@ async function main() {
   const { report, target } = parseArgs(process.argv)
   const allowlist = await readAllowlist()
 
+  // Step 1: Run ESLint check first (catches syntax errors, duplicate declarations, etc.)
+  console.log('[quality-gate] Running ESLint check...')
+  const eslintResult = await runEslintCheck()
+  
+  if (!eslintResult.success) {
+    console.log('[quality-gate] ESLint FAILED:\n')
+    console.log(eslintResult.output)
+    console.log('\n[quality-gate] FAILED: ESLint found errors. Fix these before proceeding.')
+    console.log('[quality-gate] Tip: Run "npx eslint --fix ..." to auto-fix some issues.')
+    process.exitCode = 1
+    return
+  }
+  console.log('[quality-gate] ESLint passed ✓')
+
+  // Step 2: Run pattern-based quality checks
   const targetDirs = target
     ? [target]
     : DEFAULT_TARGET_DIRS
