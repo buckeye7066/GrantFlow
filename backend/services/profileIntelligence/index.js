@@ -625,7 +625,7 @@ function extractSearchKeywords(profile, profileSections, intel) {
   if (intel.isVeteran) keywords.add('veteran')
   if (intel.isStudent) keywords.add('student')
 
-  return Array.from(keywords).filter(k => k.length > 2)
+  return Array.from(keywords).filter(k => k.length >= 2)
 }
 
 // ---------------------------------------------------------------------------
@@ -673,8 +673,7 @@ export function buildProfileIntelligence(profile, profileSections) {
   // Boolean convenience flags
   const isVeteran = militaryFlags.has('veteran') || safeBool(profile.is_veteran)
   const isStudent = entityType === 'student'
-    || safeStr(profile.primary_type).toLowerCase() === 'student'
-    || safeStr(profile.primary_type).toLowerCase() === 'individual_student'
+    || ['student', 'individual_student'].includes(safeStr(profile.primary_type).toLowerCase())
     || (() => {
         const eduSection = readSection(sections, 'education', 'academic', 'school_enrollment')
         return eduSection
@@ -761,6 +760,9 @@ function computeIntelligenceFingerprint(intel, inferredNeeds) {
     eligibilityFlags: Array.from(intel.eligibilityFlags).sort(),
     demographicFlags: Array.from(intel.demographicFlags).sort(),
     geographicFlags: Array.from(intel.geographicFlags).sort(),
+    organizationFlags: Array.from(intel.organizationFlags).sort(),
+    facilityFlags: Array.from(intel.facilityFlags).sort(),
+    emergencyFlags: Array.from(intel.emergencyFlags).sort(),
     topNeeds: Array.isArray(inferredNeeds) ? inferredNeeds.slice(0, 5).map(n => n.code) : [],
   }
   return crypto
