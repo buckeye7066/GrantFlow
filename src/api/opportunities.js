@@ -17,8 +17,12 @@ function buildQuery(params = {}) {
   const searchParams = new URLSearchParams()
   Object.entries(effectiveParams).forEach(([key, value]) => {
     if (value === undefined || value === null || value === "") return
-    if (key !== "compliance" && value === "all") return
-    if (value && typeof value === "object" && !Array.isArray(value)) return
+    const ALL_VALUE_KEYS = new Set(["compliance"])
+    if (!ALL_VALUE_KEYS.has(key) && value === "all") return
+    if (value && typeof value === "object" && !Array.isArray(value)) {
+      console.warn('[buildQuery] Skipping non-serialisable object filter key:', key, value)
+      return
+    }
     searchParams.set(key, String(value))
   })
   return searchParams.toString() ? `?${searchParams.toString()}` : ""
