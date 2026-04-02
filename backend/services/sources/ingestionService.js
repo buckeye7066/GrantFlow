@@ -204,11 +204,8 @@ const existing = checkExists.get(opp.source, opp.source_id);
     };
   } catch (error) {
     // Rollback transaction if possible
-    try {
-      if (db.inTransaction) db.rollback();
-    } catch (rollbackError) {
-      console.error('[ingestion] Rollback failed:', rollbackError.message);
-    }
+    // better-sqlite3 rolls back automatically when the transaction function throws.
+// No manual rollback call is needed or available.
     
     // Update ingestion run as failed
     const failRun = db.prepare(`
@@ -243,7 +240,11 @@ const existing = checkExists.get(opp.source, opp.source_id);
  * @returns {object} Status by source
  */
 export function getIngestionStatus(db) {
-  const sources = ['grants.gov', 'usaspending.gov'];
+  // Derive the source list dynamically from what is actually in the DB
+const sourceRows = db.prepare(
+  `SELECT DISTINCT source FROM ingestion_runs ORDER BY source`
+).all();
+const sources = sourceRows.map(r => r.source);
   const status = {};
   
   for (const source of sources) {
