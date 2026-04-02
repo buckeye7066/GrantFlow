@@ -435,31 +435,11 @@ class SqliteDb {
   }
 
   async withTransaction(fn) {
-    // Detect async callbacks upfront so we can choose the right strategy.
-    // Use multiple detection methods: constructor name, toString, and Symbol.toStringTag.
-    const isAsync = fn.constructor?.name === 'AsyncFunction'
-      || fn[Symbol.toStringTag] === 'AsyncFunction'
-      || /^async\b/.test(fn.toString())
-
-    if (!isAsync) {
-      // Preferred: use better-sqlite3's native synchronous transaction wrapper.
-      const txFn = this._db.transaction((txThis) => {
-        const result = fn(txThis);
-        if (result && typeof result.then === 'function') {
-          throw new Error(
-            '[SqliteDb.withTransaction] Callback returned a Promise but was not declared async. ' +
-            'Declare the callback as async or make it fully synchronous.'
-          );
-        }
-        return result;
-      });
-      return txFn(this);
-    }
-
-    // Async path: manage the transaction manually with BEGIN/COMMIT.
-    // SQLite prepare().get/all/run() are synchronous, so awaiting them is safe,
-    // but the microtask yields between awaits can let a concurrent request try to
-    // BEGIN on the same connection. Serialize with an async lock.
+    // Always use manual BEGIN/COMMIT/ROLLBACK rather than better-sqlite3's
+    // native transaction() wrapper.  The native wrapper rejects async callbacks
+    // with "Transaction function cannot return a promise" and detecting async
+    // reliably across Node versions / transpilers proved fragile.  The manual
+    // path works for both sync and async callbacks.
     while (this._asyncTxLock) {
       await this._asyncTxLock;
     }
