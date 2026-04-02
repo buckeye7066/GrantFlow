@@ -6,7 +6,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } f
 import { Button } from '@/components/ui/button';
 import { Alert, AlertTitle, AlertDescription } from '@/components/ui/alert';
 import { Loader2, Sparkles, AlertTriangle, FileCheck2, ClipboardList, PackageOpen, FileText, Brain } from 'lucide-react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { createPageUrl } from '@/utils';
 
 const STEPS = {
@@ -38,6 +38,7 @@ export default function AIApplicationAssistant({ grant, organization, open, onCl
   const [step, setStep] = useState('loading');
   const [error, setError] = useState(null);
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
 
   const createRequirementMutation = useMutation({
     mutationFn: (reqData) => client.entities.GrantRequirement.create(reqData),
@@ -72,7 +73,6 @@ export default function AIApplicationAssistant({ grant, organization, open, onCl
     setStep('loading');
     setError(null);
     runFullProcess();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, grant?.id]); // re-run when the targeted grant changes
 
   const runFullProcess = async () => {
