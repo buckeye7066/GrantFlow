@@ -229,6 +229,41 @@ async function syncOrganizationToProfileSections(db, { organizationId, orgRow, p
     'org-sync',
   )
 
+  await upsertProfileSection(
+    db,
+    profileId,
+    'military_service',
+    {
+      ...CANONICAL_SECTION_DEFAULTS.military_service,
+      is_veteran: Boolean(payload?.veteran ?? orgRow?.veteran ?? false),
+      is_active_duty: Boolean(payload?.active_duty ?? orgRow?.active_duty ?? false),
+    },
+    'org-sync',
+  )
+
+  await upsertProfileSection(
+    db,
+    profileId,
+    'disability_information',
+    {
+      ...CANONICAL_SECTION_DEFAULTS.disability_information,
+      has_disability: Boolean(payload?.disabled ?? orgRow?.disabled ?? false),
+      disability_types: safeParseJSON(payload?.disabilities ?? orgRow?.disabilities, []),
+    },
+    'org-sync',
+  )
+
+  await upsertProfileSection(
+    db,
+    profileId,
+    'housing_situation',
+    {
+      ...CANONICAL_SECTION_DEFAULTS.housing_situation,
+      financial_challenges: safeParseJSON(payload?.financial_challenges ?? orgRow?.financial_challenges, []),
+    },
+    'org-sync',
+  )
+
   try {
     db
       .prepare('UPDATE profiles SET updated_at = CURRENT_TIMESTAMP WHERE id = ?')
@@ -250,13 +285,14 @@ router.get('/', ensureAuth, async (req, res) => {
     const { search, state, type } = req.query;
     const { limit, offset } = validatePagination(req.query);
     
-    let query = 'SELECT * FROM organizations WHERE 1=1';
+    let query = 'SELECT * FROM organizations WHERE deleted_at IS NULL';
     const params = [];
 
     // Access control: non-admins can only see organizations linked to their profiles.
     if (!isAdminUser(user)) {
       const orgIds = await getAccessibleOrganizationIds(req.db, user)
       if (!orgIds || orgIds.size === 0) {
+        console.info('[organizations] GET / â user %s has no accessible org IDs; returning empty list', user?.id ?? 'unknown')
         return res.json([])
       }
       const placeholders = Array.from(orgIds).map(() => '?').join(', ')
@@ -576,9 +612,11 @@ router.get('/:id/grants', ensureAuth, async (req, res) => {
   try {
     if (!(await ensureOrganizationAccess(req, res, req.params.id))) return
     const grants = req.db.prepare(`
-      SELECT * FROM grants 
-      WHERE organization_id = ? 
-      ORDER BY created_at DESC
+      SELECT g.* FROM grants g
+      JOIN organizations o ON o.id = g.organization_id
+      WHERE g.organization_id = ?
+        AND o.deleted_at IS NULL
+      ORDER BY g.created_at DESC
     `).all(req.params.id);
     
     res.json(grants);
@@ -593,9 +631,11 @@ router.get('/:id/documents', ensureAuth, async (req, res) => {
   try {
     if (!(await ensureOrganizationAccess(req, res, req.params.id))) return
     const documents = req.db.prepare(`
-      SELECT * FROM documents 
-      WHERE organization_id = ? 
-      ORDER BY created_at DESC
+      SELECT d.* FROM documents d
+      JOIN organizations o ON o.id = d.organization_id
+      WHERE d.organization_id = ?
+        AND o.deleted_at IS NULL
+      ORDER BY d.created_at DESC
     `).all(req.params.id);
     
     res.json(documents);
