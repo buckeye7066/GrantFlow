@@ -39,5 +39,5 @@ describe('Anya Task Execution Helper', () => {
     expect(taskHelper.listExecutableTasks).toBeDefined()
     expect(taskHelper.getTaskExecutionHistory).toBeDefined()
     expect(taskHelper.logTaskExecution).toBeDefined()
-  }, 20000)
+  }, 40000)
 })

@@ -376,7 +376,20 @@ const IS_SMOKE_MODE = explicitSmoke || inferredSmoke;
 // Handles: upload-avatar repair, document-status repair, baseline seed, service
 // catalog, opportunity seeding, national minimums, assistance directories,
 // faith-based housing.
-await runSelfHeal({ db, uploadsDir, IS_SMOKE_MODE, baseDir: __dirname });
+let _selfHealStarted = false
+async function runSelfHealOnce() {
+  if (_selfHealStarted) return
+  _selfHealStarted = true
+  try {
+    await runSelfHeal({ db, uploadsDir, IS_SMOKE_MODE, baseDir: __dirname })
+    console.info('[startup] self-heal completed')
+  } catch (error) {
+    console.error('[startup] self-heal failed (continuing):', error?.message || error)
+  }
+}
+if (process.env.NODE_ENV === 'test') {
+  await runSelfHealOnce()
+}
 
 const isProd = process.env.NODE_ENV === 'production'
 
@@ -693,6 +706,10 @@ if (process.env.NODE_ENV !== 'test') {
     console.log(`CORS origins: ${loggedCorsOrigins.join(', ')}`);
     const actualPort = server.address()?.port ?? PORT;
     console.log('[Server] Ready on port', actualPort);
+
+    // Run heavy startup healing only after the server is reachable.
+    // This prevents cold-start 502 windows from being reported as "CORS blocked".
+    void runSelfHealOnce()
 
     // ── Phase 3: Queue recovery ───────────────────────────────────────────────
     runQueueRecovery({ db, uploadsDir });
