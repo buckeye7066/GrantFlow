@@ -139,7 +139,7 @@ router.get('/export/training', async (req, res) => {
     const rows = await req.db
       .prepare(
         `
-          SELECT id, item_id, reviewer_user_id, action, new_value, reason_code, evidence_url, confidence, metadata, created_at
+          SELECT id, item_id, reviewer_user_id, action, prior_value, new_value, reason_code, evidence_url, confidence, metadata, created_at
           FROM reviews
           WHERE action = 'correct'
             AND new_value IS NOT NULL
@@ -214,6 +214,9 @@ router.get('/', async (req, res) => {
         )
         .all(limit)
     } else if (itemId) {
+      if (!/^[a-zA-Z0-9_-]+$/.test(itemId)) {
+        return res.status(400).json({ success: false, error: 'Invalid item_id format' })
+      }
       rows = await req.db
         .prepare(
           `
