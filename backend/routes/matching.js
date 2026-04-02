@@ -112,8 +112,7 @@ router.get('/profile/:profileId/grants', async (req, res) => {
                                      const decision = computeMatchDecision(profileNormForGrants, candidate, { profileSections: profileSectionsForGrants })
                                      // Don't surface hard eligibility REJECTs in the grants view
                                      // (score-based weak-match REJECT is not filtered here)
-                                     if (isHardEligibilityReject(decision)) return null
-              if (isHardEligibilityReject(decision)) {
+                                     if (isHardEligibilityReject(decision)) {
   console.info(`[matching/grants] Hard-reject grant ${row.grant_id}: ${decision.ineligibilityReasons?.join('; ')}`)
   return null
 }
@@ -357,14 +356,17 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
       const allScored = candidates
                      .map((opp) => {
                                   if (isJunkOpportunity(opp, filterHints)) {
-  console.debug(`[matching/opportunities] Junk-filtered opp ${opp.id} ("${opp.title?.slice(0, 60)}")`)
+  console.info(`[matching/opportunities] Junk-filtered opp ${opp.id} ("${opp.title?.slice(0, 60)}")`)
   return null
 }
 
                                   // Run canonical engine: filter hard eligibility failures (REJECT) before surfacing
                                   // Score-based weak-match REJECT is not filtered here — that is handled by min_score below.
                                   const decision = computeMatchDecision(profileNormForDecision, opp, { profileSections: profileSectionsForDecision })
-                                  if (isHardEligibilityReject(decision)) return null
+                                  if (isHardEligibilityReject(decision)) {
+                                    console.info(`[matching/opportunities] Hard-reject opp ${opp.id} ("${opp.title?.slice(0, 60)}"): ${decision.ineligibilityReasons?.join('; ')}`)
+                                    return null
+                                  }
 
                                return {
                                            ...opp,
@@ -372,6 +374,11 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
                                            match_reasons: decision.matchedNeeds ?? [],
                                            match_decision: decision.decision,
                                            match_explanation: decision.explanation,
+                                           match_confidence: decision.confidence ?? null,
+                                           eligibility_status: decision.eligibilityStatus ?? null,
+                                           ineligibility_reasons: decision.ineligibilityReasons ?? [],
+                                           matcher_version: decision.matcherVersion ?? null,
+                                           evaluated_at: new Date().toISOString(),
                                            url: opp.application_url ?? opp.source_url ?? null,
                                }
                      })
