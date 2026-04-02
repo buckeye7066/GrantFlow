@@ -51,6 +51,12 @@ jobs:
       - name: Install deps
         run: npm ci --include=optional || npm install --include=optional
 
+      - name: Corruption hotspot guard
+        run: node scripts/guard-corruption-hotspots.mjs
+
+      - name: Code quality gate
+        run: node scripts/code-quality-gate.mjs
+
       - name: Preflight gates
         run: npm run release:gates
 
@@ -67,7 +73,14 @@ jobs:
 
           git checkout -b "$BRANCH_NAME"
           git add -A
-          git commit -m "Apply Anya code fix patch"
+          git commit -m "$(cat <<'EOF'
+fix: apply Anya code fix patch
+
+Apply the generated patch only after corruption, quality, and release gates pass.
+
+Made-with: Cursor
+EOF
+)"
           git push origin "$BRANCH_NAME"
 
           gh pr create \
