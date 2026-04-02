@@ -92,9 +92,10 @@ export async function logAuditEvent(db, {
       ipAddress,
       userAgent
     )
-    // Don't fireAndForget a synchronous operation
+    // Await if the driver returns a Promise (async adapters); otherwise the
+    // synchronous RunResult from better-sqlite3 is already committed.
     if (write && typeof write.then === 'function') {
-      fireAndForget(write)
+      await write
     }
     
     // Log critical events to console as well
@@ -202,12 +203,12 @@ export async function queryAuditLogs(db, {
     }
     
     // Get total count
-    const totalRow = await db.prepare(countQuery).get(params)
+    const totalRow = await db.prepare(countQuery).get(...params)
     const total = coerceCount(totalRow?.count)
     
     // Get paginated results
     query += ' ORDER BY created_at DESC LIMIT ? OFFSET ?'
-    const logs = await db.prepare(query).all([...params, limit, offset])
+    const logs = await db.prepare(query).all(...params, limit, offset)
     
     return {
       logs: (logs || []).map(log => ({
