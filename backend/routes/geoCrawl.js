@@ -38,7 +38,6 @@ export default function createGeoCrawlRouter({ uploadDir, getOpenAI } = {}) {
       const geoRunId = crypto.randomUUID()
 
       const parameters = {
-        ...incoming,
         mode: 'geo',
         geo_run_id: geoRunId,
         state: state ?? undefined,
@@ -51,10 +50,9 @@ export default function createGeoCrawlRouter({ uploadDir, getOpenAI } = {}) {
             : incoming.max_zips ?? incoming.maxZips ?? incoming.zip_limit ?? incoming.zipLimit ?? undefined,
         // Feature toggles (crawler reads these)
         discover_local_resources: incoming.discover_local_resources ?? incoming.discoverLocalResources ?? true,
-        // Default offline_only=false so each ZIP gets Grants.gov + Overpass (no cap on max sources per zip; min 3).
+        // Default offline_only=false so each ZIP gets Grants.gov + Overpass.
         offline_only: incoming.offline_only ?? incoming.offlineOnly ?? false,
       }
-      delete parameters.zips
 
       const jobId = crypto.randomUUID()
 
@@ -124,8 +122,8 @@ export default function createGeoCrawlRouter({ uploadDir, getOpenAI } = {}) {
       const runId = String(req.params.runId || '').trim()
       if (!runId) return res.status(400).json({ error: 'runId is required' })
 
-      const afterId = req.query?.after_id ?? req.query?.afterId ?? 0
-      const limit = req.query?.limit ?? 200
+      const afterId = Number(req.query?.after_id ?? req.query?.afterId ?? 0) || 0
+      const limit = Math.min(Number(req.query?.limit ?? 200) || 200, 1000)
 
       const events = await listGeoCrawlEvents(req.db, runId, { afterId, limit })
       const lastEventId = events.length ? events[events.length - 1].id : Number(afterId || 0)
