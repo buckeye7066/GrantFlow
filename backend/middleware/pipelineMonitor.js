@@ -45,7 +45,13 @@ function isZeroResult(body) {
   if (body.returned === 0) return true
   if (body.included === 0) return true
   if (body.count === 0) return true
-  if (body.total === 0) return true
+  // Only treat body.total as a zero-result signal when no array payload
+  // contradicts it â prevents false positives from paginated/crawl responses.
+  if (body.total === 0) {
+    const arrayFields2 = ['opportunities', 'results', 'grants', 'matches', 'items']
+    const hasItems = arrayFields2.some(f => Array.isArray(body[f]) && body[f].length > 0)
+    if (!hasItems) return true
+  }
   // Array payload shapes used across GrantFlow endpoints
   const arrayFields = ['opportunities', 'results', 'grants', 'matches', 'items']
   for (const field of arrayFields) {
@@ -82,9 +88,13 @@ export function pipelineMonitor() {
       if (zeroResult) {
         const totalFound = body?.total_found ?? body?.total ?? body?.candidates_evaluated ?? 'unknown'
         const included = body?.included ?? body?.returned ?? body?.count ?? 0
+        const suppressionNote =
+          (typeof totalFound === 'number' && totalFound > 0 && included === 0)
+            ? ' â  SUPPRESSION DETECTED: candidates found but none included â check relevanceFilter/matchEngine gates'
+            : ''
         console.warn(
           `[pipeline-monitor] ZERO RESULTS ${req.method} ${req.path} (${elapsed}ms) ` +
-          `total_found=${totalFound} included=${included} status=${res.statusCode}`
+          `total_found=${totalFound} included=${included} status=${res.statusCode}${suppressionNote}`
         )
       }
       if (slow) {
@@ -118,6 +128,8 @@ export function getPipelineHealth() {
       slow_rate: `${slowRate}%`,
       error_count: b.errors,
       error_rate: `${errorRate}%`,
+      last_zero_result_at: b.lastZeroResultAt ?? null,
+      last_error_at: b.lastErrorAt ?? null,
       last_events: b.recent.slice(-5),
     }
   }
@@ -138,5 +150,7 @@ export function resetPipelineMetrics() {
     b.slow = 0
     b.errors = 0
     b.recent = []
+    b.lastZeroResultAt = undefined
+    b.lastErrorAt = undefined
   }
 }
