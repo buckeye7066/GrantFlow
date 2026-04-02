@@ -40,7 +40,6 @@ export function responseCache(ttlMs = 30000) {
     // and must be invalidated externally on profile/opportunity mutations.
     const userId = req.user?.id;
 if (!userId) return next(); // Never cache unauthenticated or unidentifiable requests
-if (!userId) return next(); // Never cache unauthenticated requests
     const key = `${userId}:${req.originalUrl}`;
     const cached = cache.get(key);
 
