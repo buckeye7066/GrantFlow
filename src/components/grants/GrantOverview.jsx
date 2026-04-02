@@ -165,6 +165,13 @@ Return ONLY the JSON. Use null for any information you cannot verify with confid
                 updates.funder_address = response.address.trim();
             }
 
+            // Do NOT auto-set contact_verified:true for AI results.
+            // Remove contact_verified and contact_verified_date from auto-updates;
+            // require explicit human confirmation via handleMarkAsVerified.
+            delete updates.contact_verified;
+            delete updates.contact_verified_date;
+            updates.contact_notes = `AI re-verification (unconfirmed): ${updates.contact_notes}`;
+
             await updateGrantMutation.mutateAsync(updates);
 
             toast({
