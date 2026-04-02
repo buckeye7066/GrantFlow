@@ -47,7 +47,7 @@ export function classifyProfileChange(fields) {
   )
   if (isDeepChange) return 'deep_profile_change'
 
-  return 'unknown'
+  return 'profile_field_change'
 }
 
 export function decideRevalAction({
@@ -61,6 +61,10 @@ export function decideRevalAction({
     action = 'full_recrawl'
   } else if (trigger === 'naics_minor') {
     action = 're-score'
+  } else if (trigger === 'deep_profile_change' || trigger === 'profile_field_change') {
+    // Deep profile changes (veteran, disability, housing, etc.) require at minimum
+    // a targeted crawl so new-category opportunities are discovered â not just rescored.
+    action = 'targeted_reval'
   } else {
     if (fanout_pct <= FANOUT_LOW && affected_items <= MAX_ITEMS_LOW) action = 're-score'
     else if (fanout_pct <= FANOUT_HIGH) action = 'targeted_reval'
@@ -68,7 +72,9 @@ export function decideRevalAction({
   }
 
   if (action === 'full_recrawl' && cost_units > 10 * daily_budget) {
-    return { block: true, reason: 'cost_guardrail' }
+    // Cannot afford full_recrawl â degrade gracefully instead of hard-blocking.
+    // targeted_reval is the next best action and must always be allowed through.
+    return { block: false, action: 'targeted_reval', reason: 'cost_guardrail_downgrade' }
   }
 
   return { block: false, action, reason: trigger }
