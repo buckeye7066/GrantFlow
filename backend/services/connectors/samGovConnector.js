@@ -81,32 +81,41 @@ export async function searchAssistanceListings(params = {}) {
     if (!data.assistanceListings) {
       console.warn('[SAM.gov] Response missing assistanceListings field; got keys:', Object.keys(data || {}).join(', ') || '(empty)');
     }
-    const loanOrMatchRe = /\bloan\b|\bmicroloan\b|\bfinancing\b|\bmatching\b|\bcost share\b|\bmatch required\b|\b1:1\b|\bdollar for dollar\b/i;
+    const loanOrMatchRe = /\bloan\b|\bmicroloan\b|\brepayable\b|\bcost.?share required\b|\bmatch(?:ing)? required\b|\brequires? match\b|\b1:1 match\b|\bdollar.?for.?dollar\b/i;
     
-    return listings
-      .filter((listing) => {
-        const text = `${listing.programTitle || ''} ${listing.programObjectives || ''} ${listing.applicantEligibility || ''}`;
-        return !loanOrMatchRe.test(text);
-      })
+    let rejectedLoanCount = 0;
+    const filteredListings = listings.filter((listing) => {
+      const text = `${listing.programTitle || ''} ${listing.programObjectives || ''} ${listing.applicantEligibility || ''}`;
+      const isLoanOrMatch = loanOrMatchRe.test(text);
+      if (isLoanOrMatch) {
+        rejectedLoanCount++;
+        console.debug(`[SAM.gov] Pre-filter REJECTED (loan/match): ${listing.programNumber} - ${listing.programTitle}`);
+      }
+      return !isLoanOrMatch;
+    });
+    if (rejectedLoanCount > 0) {
+      console.info(`[SAM.gov] Pre-filter suppressed ${rejectedLoanCount}/${listings.length} listings (loan/match-required keywords).`);
+    }
+    return filteredListings
       .map(listing => ({
       title: listing.programTitle || '',
       sponsor: listing.federalAgency || '',
       source: 'sam.gov',
       source_id: listing.programNumber || '', // CFDA number
-      source_url: `https://sam.gov/fal/${listing.programNumber}`,
+      source_url: listing.programNumber ? `https://sam.gov/fal/${listing.programNumber}` : null,
       description: listing.programObjectives || '',
       eligibility_bullets: listing.applicantEligibility ? [listing.applicantEligibility] : [],
       amount_min: null, // Varies by program
       amount_max: null,
       deadline: null, // Standing programs typically don't have single deadline
       deadline_type: 'rolling', // Most assistance listings are ongoing programs
-      application_url: `https://sam.gov/fal/${listing.programNumber}`,
+      application_url: listing.programNumber ? `https://sam.gov/fal/${listing.programNumber}` : null,
       is_national: true,
       categories: [listing.functionalCode].filter(Boolean),
       keywords: [listing.programTitle, listing.programNumber].filter(Boolean),
       opportunity_type: 'program',
       type: 'PROGRAM', // Standing assistance program, NOT an open solicitation
-      evidence_url: url,
+      evidence_url: listing.programNumber ? `https://sam.gov/fal/${listing.programNumber}` : url,
       last_verified_at: new Date().toISOString(),
       is_active: true,
       last_crawled: new Date().toISOString(),
@@ -129,8 +138,11 @@ export async function getAssistanceListingDetails(cfdaNumber) {
   const apiKey = process.env.SAM_GOV_API_KEY;
   
   try {
-    const url = `${BASE_URL}/assistance-listings/${cfdaNumber}`;
-    const data = await rateLimitedFetch(url, apiKey);
+    if (!cfdaNumber) {
+    throw new Error('[SAM.gov] getAssistanceListingDetails: cfdaNumber is required');
+  }
+  const url = `${BASE_URL}/assistance-listings/${cfdaNumber}`;
+  const data = await rateLimitedFetch(url, apiKey);
     
     const listing = data;
     
@@ -149,7 +161,7 @@ export async function getAssistanceListingDetails(cfdaNumber) {
       application_url: `https://sam.gov/fal/${cfdaNumber}`,
       is_national: true,
       type: 'PROGRAM',
-      evidence_url: url,
+      evidence_url: listing.programNumber ? `https://sam.gov/fal/${listing.programNumber}` : url,
       last_verified_at: new Date().toISOString(),
       cfda_number: cfdaNumber,
       authorization: listing.authorization || null,
