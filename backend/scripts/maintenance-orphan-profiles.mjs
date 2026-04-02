@@ -126,7 +126,6 @@ async function main() {
         ['DELETE FROM profiles WHERE id = ?', [pid]],
       ]) {
         try {
-          // eslint-disable-next-line no-await-in-loop
           await tx.prepare(stmt[0]).run(...stmt[1])
         } catch {
           // tolerate schema drift

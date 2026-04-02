@@ -28,7 +28,6 @@ function sleep(ms) {
 
 async function waitForJob(jobId, { timeoutMs = 60 * 60 * 1000, pollMs = 2500 } = {}) {
   const start = Date.now()
-  // eslint-disable-next-line no-constant-condition
   while (true) {
     const row = await db.prepare('SELECT id, status, error, started_at, created_at, completed_at, type, profile_id FROM crawler_jobs WHERE id = ?').get(jobId)
     if (!row) throw new Error(`crawler_jobs row missing for job ${jobId}`)
