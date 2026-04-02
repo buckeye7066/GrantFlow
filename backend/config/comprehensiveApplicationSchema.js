@@ -219,7 +219,7 @@ export const COMPREHENSIVE_APPLICATION_DEFAULTS = Object.freeze({
 
 const GROUP_RULES = [
   { group: 'basic', match: /^(name|date_of_birth|email|phone|address|city|state|zip|age|applicant_type)$/ },
-  { group: 'organization', match: /^(nonprofit_|organization_|annual_budget|staff_count|website|ntee_code|evidence_based_program|sam_gov_registered|grants_gov_active|hipaa_compliant|ferpa_compliant|faith_based_organization|serves_rural_area|liability_|directors_officers_insurance|workers_comp_insurance|professional_liability_insurance|business_501c[34]_certified|minority_owned_certification|women_owned_certification|veteran_owned_business|promise_zone_designation|opportunity_zone_designation)/ },
+  { group: 'organization', match: /^(nonprofit_type|nonprofit_type$|organization_ein|organization_uei|organization_cage_code|annual_budget|staff_count|website|ntee_code|evidence_based_program|sam_gov_registered|grants_gov_active|hipaa_compliant|ferpa_compliant|faith_based_organization|serves_rural_area|liability_insurance|liability_coverage_limit|directors_officers_insurance|workers_comp_insurance|professional_liability_insurance|business_501c3_certified|business_501c4_certified|minority_owned_certification|women_owned_certification|veteran_owned_business|promise_zone_designation|opportunity_zone_designation)$/ },
   { group: 'student', match: /^(student_|current_college|target_colleges|gpa|act_score|sat_score|intended_major|first_generation|stem_student|extracurricular_activities|achievements|community_service_hours)$/ },
   { group: 'financial', match: /^(household_|financial_need_level|low_income|unemployed|displaced_worker)$/ },
   { group: 'assistance', match: /^(medicaid_|medicare_recipient|ssi_recipient|ssdi_recipient|snap_recipient|tanf_recipient|section8_housing|tenncare_id)$/ },
@@ -243,9 +243,20 @@ function titleizeKey(key) {
     .replace(/\b\w/g, (c) => c.toUpperCase())
 }
 
+const KNOWN_OTHER_KEYS = new Set([
+  'minor_child', 'young_adult', 'business_affected_covid',
+]);
+
 function inferGroup(key) {
   for (const rule of GROUP_RULES) {
     if (rule.match.test(key)) return rule.group
+  }
+  if (!KNOWN_OTHER_KEYS.has(key)) {
+    // Warn at module load time so CI / startup logs surface schema drift immediately.
+    console.warn(
+      `[comprehensiveApplicationSchema] inferGroup: unmapped key "${key}" fell through to "other". ` +
+      'Add it to GROUP_RULES or KNOWN_OTHER_KEYS to ensure correct profile-section mapping.'
+    );
   }
   return 'other'
 }
