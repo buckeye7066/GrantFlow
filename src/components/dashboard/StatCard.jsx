@@ -5,7 +5,7 @@ import { Card, CardContent } from "@/components/ui/card";
 export default function StatCard({ title, value, icon: Icon, color, link }) {
   const CardWrapper = link ? Link : 'div';
   const wrapperProps = link ? { to: link } : {};
-  const displayValue = typeof value === 'number' ? value.toLocaleString() : value;
+  const displayValue = typeof value === 'number' ? value.toLocaleString() : (value ?? 'â');
 
   return (
     <CardWrapper {...wrapperProps}>
@@ -18,7 +18,7 @@ export default function StatCard({ title, value, icon: Icon, color, link }) {
               <p className="text-3xl font-bold text-card-foreground mt-2">{displayValue}</p>
             </div>
             <div className={`p-3 rounded-xl bg-gradient-to-br ${color} shadow-lg`}>
-              <Icon className="w-6 h-6 text-white" />
+              {Icon && <Icon className="w-6 h-6 text-white" />}
             </div>
           </div>
         </CardContent>
