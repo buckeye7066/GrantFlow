@@ -18,7 +18,7 @@ function isAdmin(req, res) {
 async function ensureDefaults(db) {
   // Ensure default alert configs exist for all organizations.
   const orgs = await db.prepare('SELECT id FROM organizations').all()
-  // Statements prepared inside the transaction below; no outer statements needed.
+  // Statements are prepared inside withTransaction below to stay within the same connection/tx scope.
 
   const defaults = [
     { alert_type: 'deadline_approaching', enabled: true, threshold_days: 14 },
@@ -231,6 +231,14 @@ router.post('/check', async (req, res) => {
 
         if (daysUntil <= 14) {
           const eventType = 'deadline_approaching'
+          // Respect per-org alert config: skip if the org has disabled this alert type.
+          const alertCfg = await tx
+            .prepare(
+              `SELECT enabled FROM grant_monitoring_alerts
+               WHERE organization_id = ? AND alert_type = ? LIMIT 1`,
+            )
+            .get(grant.organization_id, eventType)
+          if (alertCfg && !alertCfg.enabled) continue
           const alreadySeen = await seenRecentTx.get(grant.id, eventType)
           if (!alreadySeen) {
             const severity = daysUntil <= 7 ? 'critical' : 'high'
