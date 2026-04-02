@@ -142,7 +142,9 @@ export async function initializeAnyaOnLogin(db, user, profileId = null, { upload
 
     // Fetch profile data needed for profile-scoped crawl parameters
     const profileRow = db.prepare(
-      `SELECT state, zip_code, needs, applicant_type FROM profiles WHERE id = ? LIMIT 1`
+      `SELECT state, zip_code, needs, applicant_type,
+              military, education, health, housing, business, family, emergency
+       FROM profiles WHERE id = ? LIMIT 1`
     ).get(profileId)
 
     const profileContext = profileRow
@@ -151,6 +153,13 @@ export async function initializeAnyaOnLogin(db, user, profileId = null, { upload
           zip_code: profileRow.zip_code || null,
           needs: profileRow.needs || null,
           applicant_type: profileRow.applicant_type || null,
+          military: profileRow.military || null,
+          education: profileRow.education || null,
+          health: profileRow.health || null,
+          housing: profileRow.housing || null,
+          business: profileRow.business || null,
+          family: profileRow.family || null,
+          emergency: profileRow.emergency || null,
         }
       : {}
 
@@ -161,11 +170,11 @@ export async function initializeAnyaOnLogin(db, user, profileId = null, { upload
     ]
     if (admin) {
       coreDefs.push(
-        ['profile_enrichment', {}],
-        ['government_funding', {}],
-        ['special_needs', {}],
-        ['ecf_hcbs', {}],
-        ['student_grants', {}],
+        ['profile_enrichment', { ...profileContext }],
+        ['government_funding', { ...profileContext }],
+        ['special_needs', { ...profileContext }],
+        ['ecf_hcbs', { ...profileContext }],
+        ['student_grants', { ...profileContext }],
       )
     }
 
@@ -207,9 +216,27 @@ export async function initializeAnyaOnLogin(db, user, profileId = null, { upload
         }
       }
 
+      const failedCount = dispatchResults.filter(r => !r.dispatched).length
+      if (failedCount > 0) {
+        console.warn(
+          `[anyaLoginTrigger] ${failedCount}/${dispatchResults.length} crawler jobs failed to dispatch for profileId=${profileId}`,
+          dispatchResults.filter(r => !r.dispatched)
+        )
+      } else {
+        console.info(
+          `[anyaLoginTrigger] All ${dispatchResults.length} crawler jobs dispatched for profileId=${profileId}`
+        )
+      }
+
+      const locationHint = profileContext.zip_code || profileContext.state
+        ? ` near ${[profileContext.zip_code, profileContext.state].filter(Boolean).join(', ')}`
+        : ''
+      const needsHint = profileContext.needs
+        ? ` focused on your needs (${String(profileContext.needs).split(',').slice(0, 3).join(', ')})`
+        : ''
       const welcomeMessage = admin
         ? `Welcome back! I've automatically started background tasks: Local, Scholarship, Comprehensive, Profile Enrichment, Government Funding, Special Needs & ECF/HCBS, and Student Grants. Ask me about crawler status anytime.`
-        : `Welcome! I'm searching for local opportunities, scholarships, and nationwide matches for your profile. Results will be ready shortly.`
+        : `Welcome! I'm searching for local opportunities${locationHint}${needsHint}, plus scholarships and nationwide matches. Results will be ready shortly.`
 
       addAnyaMessage(db, sessionId, 'assistant', welcomeMessage).catch(err =>
         console.error('[anyaLoginTrigger] Failed to add welcome message:', err)
