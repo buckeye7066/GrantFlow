@@ -72,6 +72,7 @@ export function createAuthIdentityMiddleware({ adminToken, adminName, adminEmail
         role: 'admin',
         is_admin: true,
         userId: 'system_anya_token',
+        profileId: null,
         full_name: 'Anya Assistant',
         email: 'anya@grantflow.app',
       }
@@ -105,6 +106,7 @@ export function createAuthIdentityMiddleware({ adminToken, adminName, adminEmail
             role: 'admin',
             is_admin: true,
             userId: 'system_anya_token',
+            profileId: null,
             full_name: 'Anya Assistant',
             email: 'anya@grantflow.app',
           }
@@ -158,13 +160,17 @@ export function createAuthIdentityMiddleware({ adminToken, adminName, adminEmail
                       JOIN users u ON u.id = s.user_id
                       WHERE s.id = ?
                     `)
-              sessionRow = sessionStmt.get(payload.sid)
+                sessionRow = sessionStmt.get(payload.sid)
               } catch (error) {
                 console.warn('Failed to validate session:', error?.message || error)
                 if (error?.code === 'SQLITE_CORRUPT' || error?.code === 'ECONNRESET') {
                   // Critical DB errors: fail auth completely and stop processing immediately.
                   console.error('[authIdentity] Critical DB error during session validation:', error?.code, error?.message)
-                  req.user = { role: 'guest', profileId: null }
+                  // Preserve the JWT-derived identity that was already set before DB enrichment was
+                  // attempted. Demoting to guest here discards a verified JWT claim without audit trail.
+                  // Keep the user object that was set from the valid JWT (handled is already true)
+                  // and let the request continue with token-only identity rather than a silent guest demotion.
+                  req.user = user
                   return next()
                 }
                 // Non-critical: continue with token-only authentication (handled already set)
