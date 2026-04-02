@@ -1,7 +1,6 @@
-Fix async withTransaction for SQLite: add serialized async path
+Fix last 4 test failures: auth access, directory resource survival
 
-SqliteDb.withTransaction now detects async callbacks and routes them
-through manual BEGIN IMMEDIATE/COMMIT with a serialization lock instead
-of throwing. Synchronous callbacks still use the native better-sqlite3
-transaction wrapper. This fixes 500 errors in integration tests where
-request-path code passes async callbacks to withTransaction.
+- grants.js: Fix from-opportunity route using ensureOrganizationAccess with profile ID
+  (was passing profileId to org-level check, causing 403)
+- realCrawlers.js: Exempt directory resources from REJECT policy filter
+  (curated_verified and directory sources always survive per project rules)

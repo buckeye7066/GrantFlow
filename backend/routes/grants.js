@@ -1063,10 +1063,7 @@ router.post('/from-opportunity', async (req, res, next) => {
     // - If only organization_id provided, require org access.
     try {
       if (normalizedProfileId) {
-        // Add to imports at top:
-// import { ensureProfileAccess } from '../utils/accessControl.js'
-// Or replace with existing function:
-if (!(await ensureOrganizationAccess(req, res, normalizedProfileId))) return
+        if (!(await ensureProfileAccess(req, res, normalizedProfileId))) return
       } else if (normalizedOrgId) {
         if (!(await ensureOrganizationAccess(req, res, normalizedOrgId))) return
       }

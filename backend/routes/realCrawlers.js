@@ -290,12 +290,19 @@ router.post('/run', ensureAuth, async (req, res) => {
     })
 
     // Policy enforcement: remove hard-REJECT items (loans, matching_funds, etc.)
-    // and items without an actionable URL.
+    // and items without an actionable URL. Directory resources always survive.
     const prePolicyCount = filtered.length
     filtered = filtered.filter(opp => {
-      if (opp.match_decision === 'REJECT') return false
       const effectiveUrl = opp.url || opp.application_url || opp.source_url || ''
       if (!effectiveUrl.startsWith('http')) return false
+      const isDirectoryResource = opp.record_origin === 'curated_verified' ||
+        String(opp.source || '').startsWith('directory') ||
+        String(opp.source || '').includes('local_directory')
+      if (opp.match_decision === 'REJECT' && !isDirectoryResource) return false
+      if (opp.match_decision === 'REJECT' && isDirectoryResource) {
+        opp.match_decision = 'REVIEW'
+        opp.decision = 'REVIEW'
+      }
       return true
     })
     if (prePolicyCount > 0 && filtered.length < prePolicyCount) {
