@@ -24,27 +24,34 @@ export async function runGeoDesignationEngine(profile, options = {}) {
     const isTribal = profile?.demographics?.tribal_affiliation === true
     const isAppalachian = profile?.location?.is_appalachian === true
     const isDelta = profile?.location?.is_delta === true
+    const tribalKnown = typeof profile?.demographics?.tribal_affiliation === 'boolean'
+    const appalachianKnown = typeof profile?.location?.is_appalachian === 'boolean'
+    const ruralKnown = typeof profile?.location?.is_rural === 'boolean'
+    const deltaKnown = typeof profile?.location?.is_delta === 'boolean'
 
     const filtered = DIRECTORY_RESOURCES.filter((resource) => {
       // Always include state-generic directories unless we can narrow
       if (resource.categories.includes('community') || resource.categories.includes('economic')) {
         return true
       }
-      if (resource.categories.includes('tribal') && !isTribal) {
+      // Only suppress tribal resources when profile explicitly says non-tribal.
+      if (resource.categories.includes('tribal') && tribalKnown && !isTribal) {
         return false
       }
-      if (resource.categories.includes('appalachian') && !isAppalachian) {
+      // Only suppress Appalachian resources when profile explicitly says not Appalachian.
+      if (resource.categories.includes('appalachian') && appalachianKnown && !isAppalachian) {
         return false
       }
       if (
         resource.categories.includes('rural') &&
+        ruralKnown &&
         !isRural &&
-        !isAppalachian &&
-        !isDelta &&
-        state === ''
+        ((appalachianKnown && !isAppalachian) || !appalachianKnown) &&
+        ((deltaKnown && !isDelta) || !deltaKnown) &&
+        state !== ''
       ) {
-        // Only skip if we have enough profile data to know user is NOT rural;
-        // if state is unknown keep it (Goal 7: prefer recall over suppression)
+        // Only skip when we have location context and no rural signals.
+        // If state is unknown, keep rural directories (prefer recall over suppression).
         return false
       }
       return true
