@@ -72,9 +72,8 @@ export function decideRevalAction({
   }
 
   if (action === 'full_recrawl' && cost_units > 10 * daily_budget) {
-    // Cannot afford full_recrawl â degrade gracefully instead of hard-blocking.
-    // targeted_reval is the next best action and must always be allowed through.
-    return { block: false, action: 'targeted_reval', reason: 'cost_guardrail_downgrade' }
+    // Cost guardrail: explicitly block unbounded recrawls.
+    return { block: true, action, reason: 'cost_guardrail' }
   }
 
   return { block: false, action, reason: trigger }

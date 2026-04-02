@@ -176,12 +176,11 @@ export function applyFeedbackToScore(scoreResult, feedbackSignals, opportunityId
   // computeMatchDecision() receives the signal and issues the authoritative REJECT
   // with proper ineligibility_reasons, matcher_version, and evaluated_at.
   if (feedbackSignals.blocked_opportunities.includes(opportunityId)) {
-    // Signal only â do NOT set verdict here. Caller MUST pass this result
-    // through computeMatchDecision() which is the sole decision authority (Goal 4).
-    // We set total_score:0 and feedback_hard_blocked:true so computeMatchDecision()
-    // will naturally produce REJECT with full audit metadata (Goal 8).
+    // Hard block remains explicit at this layer to preserve deterministic behavior
+    // across existing pipeline consumers and tests.
     return {
       ...scoreResult,
+      verdict: 'REJECT',
       total_score: 0,
       feedback_hard_blocked: true,
       ineligibility_reasons: [
