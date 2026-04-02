@@ -204,7 +204,6 @@ async function main() {
   })
   assert(String(submitted?.status || '').toLowerCase() === 'submitted', 'markSubmitted should set status=submitted')
 
-  // eslint-disable-next-line no-console
   console.log('[smoke-apply-engine] OK', {
     applicationId: app.id,
     artifacts: artifacts.map((a) => ({ id: a.id, format: a.format })),
@@ -213,7 +212,6 @@ async function main() {
 }
 
 main().catch((err) => {
-  // eslint-disable-next-line no-console
   console.error('[smoke-apply-engine] FAILED', err)
   process.exit(1)
 })
