@@ -334,10 +334,19 @@ async function processOneOpportunity(db, opp, { dryRun, fetchFn }) {
 
   // ── Step 2: verify change via primary source ─────────────────────────────
   let verificationResult = { verified: false, signals: [], verificationLevel: 'none', statusHint: 'unknown' }
-  if (changeResult.changed && sourceUrl) {
+  if (!sourceUrl) {
+    // GOAL 1/3: No application URL â treat as suppression candidate immediately.
+    // Store a specific reason so the audit trail is clear (Goal 8).
+    verificationResult = {
+      verified: true,
+      signals: ['no_source_url'],
+      verificationLevel: 'primary',
+      statusHint: 'closed',
+    }
+  } else if (changeResult.changed) {
     verificationResult = await verifyOpportunityUrl(sourceUrl, { fetchFn })
-  } else if (sourceUrl) {
-    // Even if no material change, do a lightweight HTTP check
+  } else {
+    // Lightweight check even when no material change detected.
     try {
       verificationResult = await verifyOpportunityUrl(sourceUrl, { fetchFn })
     } catch { /* non-fatal */ }
@@ -351,12 +360,20 @@ async function processOneOpportunity(db, opp, { dryRun, fetchFn }) {
   const isVerifiedActive = verificationResult.statusHint === 'active'
   const isVerifiedClosed = verificationResult.statusHint === 'closed'
 
+  // GOAL 3/4/7: Only hard-suppress on primary-source CLOSED signal.
+  // Material-change-only (text diff) must NOT immediately suppress; use WATCH
+  // so the next purge cycle can re-verify before removing from the pipeline.
   if (isVerifiedClosed && verificationResult.verificationLevel === 'primary') {
     nextState = SUPPRESSION_STATES.SUPPRESSED
     reason = changeResult.reason || 'http_410'
-  } else if (isMaterialAndVerified) {
+  } else if (isMaterialAndVerified && isVerifiedClosed) {
+    // Both a material change AND an explicit closed signal are required for suppression.
     nextState = SUPPRESSION_STATES.SUPPRESSED
-    reason = changeResult.reason || 'text_diff_verified'
+    reason = changeResult.reason || 'text_diff_verified_closed'
+  } else if (isMaterialAndVerified && !isVerifiedClosed) {
+    // Material change detected but source does NOT confirm closed â hold at WATCH.
+    nextState = SUPPRESSION_STATES.WATCH
+    reason = 'material_change_unconfirmed_closed'
   } else if (changeResult.changed && !verificationResult.verified) {
     // Material change but unverified — mark as watch
     nextState = SUPPRESSION_STATES.WATCH
@@ -377,7 +394,15 @@ async function processOneOpportunity(db, opp, { dryRun, fetchFn }) {
   const previousState = opp.suppression_state || SUPPRESSION_STATES.ACTIVE
 
   // ── Step 4: persist ────────────────────────────────────────────────────
-  if (!dryRun && nextState !== previousState) {
+  if (dryRun) {
+    // GOAL 8: Always log the computed outcome in dry-run so operators can audit
+    // what would have changed without DB writes.
+    console.info(
+      `[regionalPurge][dryRun] opp=${opp.id} prev=${previousState} next=${nextState}` +
+      ` reason=${reason ?? 'none'} statusHint=${verificationResult.statusHint}` +
+      ` similarity=${changeResult.similarity?.toFixed(3) ?? 'n/a'}`
+    )
+  } else if (nextState !== previousState) {
     persistSuppressionTransition(db, {
       opportunity: opp,
       previousState,
@@ -388,8 +413,8 @@ async function processOneOpportunity(db, opp, { dryRun, fetchFn }) {
       currentHash,
       currentText,
     })
-  } else if (!dryRun) {
-    // Update last_checked_at and hashes even if state didn't change
+  } else {
+    // State unchanged â update heartbeat columns only.
     updateLastChecked(db, opp, currentHash, currentText)
   }
 
@@ -406,7 +431,11 @@ function persistSuppressionTransition(db, {
   const isPg = db?.dialect === 'postgres'
 
   // Determine is_active for the opportunity
-  const isActive = nextState !== SUPPRESSION_STATES.SUPPRESSED ? (isPg ? true : 1) : (isPg ? false : 0)
+  // GOAL 7/13: Do NOT flip is_active=0 at suppression time.
+  // The opportunity remains queryable so existing pipeline rows and
+  // audit queries still resolve. Consumers filter on suppression_state instead.
+  // Only hard-delete or deactivation workflows should touch is_active.
+  const isActive = isPg ? true : 1
 
   const transaction = db.transaction(() => {
     db.prepare(`
