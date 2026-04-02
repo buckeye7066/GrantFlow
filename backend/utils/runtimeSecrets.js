@@ -6,7 +6,14 @@ function deriveKey() {
     // Accept base64 or hex; fall back to utf8.
     const raw = explicit.trim()
     try {
-      const buf = raw.match(/^[0-9a-f]+$/i) ? Buffer.from(raw, 'hex') : Buffer.from(raw, 'base64')
+      const isHex = /^[0-9a-fA-F]+$/.test(raw) && raw.length % 2 === 0
+if (!isHex && !/^[A-Za-z0-9+/]+=*$/.test(raw)) {
+  throw new Error(
+    `[runtimeSecrets] RUNTIME_SECRETS_KEY does not look like valid hex or base64. ` +
+    'Provide a 32-byte value encoded as 64 hex chars or 44 base64 chars.'
+  )
+}
+const buf = isHex ? Buffer.from(raw, 'hex') : Buffer.from(raw, 'base64')
       if (buf.length >= 32) return buf.subarray(0, 32)
       // Key material decoded but too short â hash-stretch it so the explicit key is still used
       return crypto.createHash('sha256').update(buf).digest()
@@ -20,10 +27,19 @@ function deriveKey() {
   }
 
   // Fallback to existing secrets in prod. These should already be set.
-  const material =
-    process.env.AUTH_JWT_SECRET ||
-    process.env.JWT_SECRET ||
-    process.env.SESSION_SECRET
+  const KEY_CANDIDATES = [
+    ['AUTH_JWT_SECRET', process.env.AUTH_JWT_SECRET],
+    ['JWT_SECRET', process.env.JWT_SECRET],
+    ['SESSION_SECRET', process.env.SESSION_SECRET],
+  ]
+  const found = KEY_CANDIDATES.find(([, v]) => v)
+  const material = found ? found[1] : undefined
+  if (found) {
+    console.warn(
+      `[runtimeSecrets] Using ${found[0]} as fallback key material. ` +
+      'Set RUNTIME_SECRETS_KEY explicitly to avoid silent key changes on secret rotation.'
+    )
+  }
 
   if (!material) {
     if (process.env.NODE_ENV === 'production') {
