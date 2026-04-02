@@ -10,8 +10,8 @@ import { format } from 'date-fns';
 export default function TimeTrackingTab({ grantId, organizationId }) {
   
   const { data: timeLogs = [], isLoading: isLoadingLogs } = useQuery({
-      queryKey: ['timeEntries', organizationId],
-      queryFn: () => client.entities.TimeEntry.filter({ organization_id: organizationId }),
+      queryKey: ['timeEntries', organizationId, grantId],
+      queryFn: () => client.entities.TimeEntry.filter({ organization_id: organizationId, grant_id: grantId }),
       enabled: !!organizationId && !!grantId,
   });
 
