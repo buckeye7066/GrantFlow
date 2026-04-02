@@ -124,12 +124,13 @@ function normalizeLocation(raw) {
   if (!raw || typeof raw !== 'object') {
     return { state: null, county: null, city: null, zipCode: null }
   }
+  const rawState = raw.state ?? null
+  const rawZip = raw.zipCode ?? raw.zip ?? null
   return {
-    state: raw.state ?? null,
+    state: rawState && typeof rawState === 'string' ? rawState.trim().toUpperCase().slice(0, 2) || null : null,
     county: raw.county ?? null,
     city: raw.city ?? null,
-    // Accept both 'zip' (legacy) and 'zipCode' (canonical)
-    zipCode: raw.zipCode ?? raw.zip ?? null,
+    zipCode: rawZip && typeof rawZip === 'string' ? rawZip.trim().replace(/\D/g, '').slice(0, 5) || null : null,
   }
 }
 
@@ -412,9 +413,13 @@ export function fromAnalysisShape(analysis) {
 
   // toAnalysisShape renames 'financial' → 'income'; map it back before
   // delegating to fromLegacyHelpers.
+  const mergedFinancial =
+    analysis.financial && typeof analysis.financial === 'object' && Object.keys(analysis.financial).length > 0
+      ? analysis.financial
+      : (analysis.income && typeof analysis.income === 'object' ? analysis.income : {})
   const normalised = {
     ...analysis,
-    financial: analysis.income ?? analysis.financial ?? {},
+    financial: mergedFinancial,
   }
   return fromLegacyHelpers(normalised)
 }
