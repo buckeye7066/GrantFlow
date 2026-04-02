@@ -9,7 +9,7 @@ import { CheckCircle, XCircle, Loader2, PlayCircle, Clock, FileText } from 'luci
 const Diagnostics = () => {
   const [isTesting, setIsTesting] = useState(false);
   const [results, setResults] = useState([]);
-  const [summary, setSummary] = useState({ ok: 0, fail: 0, totalMs: 0 });
+  const [summary, setSummary] = useState({ ok: 0, warn: 0, fail: 0, totalMs: 0 });
   const [currentTest, setCurrentTest] = useState('');
   
   // NEW: Test file upload and parsing
@@ -86,7 +86,11 @@ const Diagnostics = () => {
             }`,
             warnings: missingAuditFields,
           };
-          setSummary(prev => ({ ...prev, ok: prev.ok + 1 }));
+          if (missingAuditFields.length > 0) {
+            setSummary(prev => ({ ...prev, warn: (prev.warn || 0) + 1 }));
+          } else {
+            setSummary(prev => ({ ...prev, ok: prev.ok + 1 }));
+          }
         } else {
           testResult = {
             title: grant.title,
@@ -204,12 +208,14 @@ const Diagnostics = () => {
                   <div key={index} className="flex items-start gap-2">
                     {result.status === 'ok' ? (
                       <CheckCircle className="w-4 h-4 text-green-500 flex-shrink-0 mt-0.5" />
+                    ) : result.status === 'warn' ? (
+                      <CheckCircle className="w-4 h-4 text-amber-500 flex-shrink-0 mt-0.5" />
+                    ) : result.message.includes('Timeout') ? (
+                      <Clock className="w-4 h-4 text-amber-500 flex-shrink-0 mt-0.5" />
                     ) : (
-                      result.message.includes('Timeout') ? 
-                        <Clock className="w-4 h-4 text-amber-500 flex-shrink-0 mt-0.5" /> :
-                        <XCircle className="w-4 h-4 text-red-500 flex-shrink-0 mt-0.5" />
+                      <XCircle className="w-4 h-4 text-red-500 flex-shrink-0 mt-0.5" />
                     )}
-                    <span className={result.status === 'fail' ? (result.message.includes('Timeout') ? 'text-amber-600' : 'text-red-600') : ''}>
+                    <span className={result.status === 'fail' ? (result.message.includes('Timeout') ? 'text-amber-600' : 'text-red-600') : result.status === 'warn' ? 'text-amber-600' : ''}>
                       <strong>{result.title}:</strong> {result.message}
                     </span>
                   </div>
@@ -217,7 +223,7 @@ const Diagnostics = () => {
               </div>
               {!isTesting && (
                  <div className="mt-4 p-4 bg-blue-50 border border-blue-200 rounded-lg text-blue-800">
-                    <strong>Diagnostic Complete:</strong> {summary.ok} passed / {summary.fail} failed in {(summary.totalMs / 1000).toFixed(2)}s
+                    <strong>Diagnostic Complete:</strong> {summary.ok} passed / {summary.warn > 0 ? `${summary.warn} audit-gap / ` : ''}{summary.fail} failed in {(summary.totalMs / 1000).toFixed(2)}s
                 </div>
               )}
             </div>
@@ -257,9 +263,11 @@ const Diagnostics = () => {
           
           {parseResult && (
             <div className={`mt-4 p-4 rounded-lg border ${
-              parseResult.status === 'success' 
-                ? 'bg-green-50 border-green-200' 
-                : 'bg-red-50 border-red-200'
+              parseResult.status === 'success'
+                ? 'bg-green-50 border-green-200'
+                : parseResult.status === 'warn'
+                  ? 'bg-amber-50 border-amber-200'
+                  : 'bg-red-50 border-red-200'
             }`}>
               <h4 className="font-semibold mb-2">
                 {parseResult.status === 'success' ? '✓ Success' : '✗ Failed'}
