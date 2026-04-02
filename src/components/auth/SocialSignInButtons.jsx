@@ -120,9 +120,19 @@ export default function SocialSignInButtons({ onComplete: _onComplete }) {
       const startUrl = buildAuthStartUrl(provider.id, redirectTo)
 
       // Guard: only navigate to same-origin or explicitly trusted API origin
+      // Derive the API origin (scheme+host+port only) from VITE_API_URL when set
+      let apiOrigin = ''
+      const rawApiUrl = (import.meta.env.VITE_API_URL || '').replace(/\/$/, '')
+      if (rawApiUrl) {
+        try {
+          apiOrigin = new URL(rawApiUrl).origin
+        } catch {
+          console.warn('[SocialSignIn] VITE_API_URL is not a valid URL, ignoring for origin guard:', rawApiUrl)
+        }
+      }
       const allowedOrigins = [
         window.location.origin,
-        (import.meta.env.VITE_API_URL || '').replace(/\/$/, ''),
+        apiOrigin,
       ].filter(Boolean)
       const parsedStart = new URL(startUrl)
       if (!allowedOrigins.includes(parsedStart.origin)) {
@@ -149,11 +159,15 @@ export default function SocialSignInButtons({ onComplete: _onComplete }) {
         setTimeout(() => {
           // Abort stale retry if user cancelled or switched provider
           setActiveProvider((current) => {
-            if (current !== scheduledProviderId) return current // already cancelled
+            if (current !== scheduledProviderId) {
+              // Provider changed â do not retry
+              return current
+            }
+            // Schedule the retry outside the setter so we only call it when still active
+            // We use a microtask to avoid calling setState-derived logic inside a setter
+            Promise.resolve().then(() => handleClick(provider, retry + 1))
             return current
           })
-          // Use functional read to decide whether to proceed
-          handleClick(provider, retry + 1)
         }, RETRY_DELAY)
         return // prevent fall-through
       } else {
