@@ -197,18 +197,9 @@ export function createAuthIdentityMiddleware({ adminToken, adminName, adminEmail
           }
         }
 
-        // 3d. Legacy admin token fallback (duplicate check after JWT block)
-        if (!handled && expectedAdminToken && token === expectedAdminToken) {
-          user = {
-            role: 'admin',
-            is_admin: true,
-            userId: 'system_admin_token',
-            profileId: null,
-            full_name: adminName,
-            email: adminEmail,
-          }
-          handled = true
-        }
+        // 3d. (Intentionally removed â admin/bulk token check already handled in 3a.
+        //      Keeping a duplicate branch here creates a false sense of fallback
+        //      and risks divergence if 3a is ever modified.)
 
         // 3e. Legacy "profile-id bearer token" is unsafe; allow only in non-prod with explicit opt-in.
         //
