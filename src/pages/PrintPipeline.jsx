@@ -80,17 +80,19 @@ export default function PrintPipelinePage() {
         // React 18 Strict Mode double-invoke does not permanently suppress print.
         printTriggered.current = true;
 
-        window.addEventListener('afterprint', handleAfterPrint);
-
         const timer = setTimeout(() => {
+            // Attach the listener immediately before print so it cannot be
+            // removed by a cleanup between attachment and the print dialog.
+            window.addEventListener('afterprint', handleAfterPrint, { once: true });
             window.print();
         }, 300);
 
         return () => {
             clearTimeout(timer);
             window.removeEventListener('afterprint', handleAfterPrint);
-            // Reset so the real mount (after StrictMode teardown) can proceed.
-            printTriggered.current = false;
+            // Do NOT reset printTriggered here. Once print has been scheduled
+            // it must not fire again due to reference churn on the same data.
+            // The ref persists across re-renders so this is safe.
         };
     }
   }, [isLoadingOrg, isLoadingGrants, isErrorOrg, isErrorGrants, organization, grants]);
@@ -130,8 +132,16 @@ export default function PrintPipelinePage() {
     />;
   }
   
-  // Note: An empty grants array is a valid state handled by the PrintablePipeline component itself,
-  // so we don't need an explicit "EmptyState" for it here. The child component will show "No grants".
+  // Note: An empty grants array is a valid state; PrintablePipeline renders a
+  // "No grants in pipeline" section so the printed report is never silently blank.
+  if (grants && grants.length === 0) {
+    // Still render PrintablePipeline so it can produce the empty-state printed page,
+    // but also log for observability so server-side monitoring can detect empty prints.
+    console.warn(
+      `[PrintPipeline] Rendering empty pipeline report for organizationId=${organizationId}. ` +
+      'No grants found â printed report will show empty state.'
+    );
+  }
 
   // 5. Render content on success
   return <PrintablePipeline organization={organization} grants={grants || []} />;
