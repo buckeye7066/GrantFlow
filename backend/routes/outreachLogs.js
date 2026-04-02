@@ -97,8 +97,9 @@ router.post('/', async (req, res) => {
     const method = String(data.method || '').trim()
     if (!funder) return res.status(400).json({ error: 'funder required' })
     if (!method) return res.status(400).json({ error: 'method required' })
-    if (!['email', 'call', 'meeting'].includes(method)) {
-      return res.status(400).json({ error: "method must be one of: 'email', 'call', 'meeting'" })
+    const ALLOWED_METHODS = ['email', 'call', 'meeting', 'letter', 'portal', 'in-person', 'other']
+    if (!ALLOWED_METHODS.includes(method)) {
+      return res.status(400).json({ error: `method must be one of: ${ALLOWED_METHODS.join(', ')}` })
     }
 
     const occurredAtRaw = data.occurred_at ?? data.occurredAt ?? null
@@ -111,8 +112,10 @@ if (occurredAtRaw) {
   occurredAt = parsed.toISOString()
 }
 
-    const metadata =
-      data.metadata && typeof data.metadata === 'object' ? JSON.stringify(data.metadata) : data.metadata ?? null
+    let metadata = null
+    if (data.metadata !== undefined && data.metadata !== null) {
+      metadata = typeof data.metadata === 'object' ? JSON.stringify(data.metadata) : String(data.metadata)
+    }
 
     const id = crypto.randomUUID()
     const createdBy = req.ctx?.userId ?? req.ctx?.email ?? null
@@ -131,7 +134,7 @@ if (occurredAtRaw) {
             notes,
             metadata,
             created_by
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb, ?)
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10)
         `
         : `
           INSERT INTO outreach_logs (
