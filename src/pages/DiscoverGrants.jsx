@@ -273,6 +273,14 @@ export default function DiscoverGrants() {
           match: opp.match_score,
           matched_fields: opp.match_reasons ?? [],
           matchReasons: opp.match_reasons ?? [],
+          // Preserve decision-engine audit metadata for UI display (Goals 8, 12)
+          match_decision: opp.match_decision ?? null,
+          match_explanation: opp.match_explanation ?? null,
+          matched_needs: opp.matched_needs ?? [],
+          eligibility_status: opp.eligibility_status ?? null,
+          ineligibility_reasons: opp.ineligibility_reasons ?? [],
+          matcher_version: opp.matcher_version ?? null,
+          match_confidence: opp.match_confidence ?? null,
           no_application_url: !resolvedUrl,
           source: opp.source || 'catalog',
         }
@@ -506,27 +514,12 @@ export default function DiscoverGrants() {
     const orgId = selectedProfile?.organization_id;
     
     // Check for duplicates if we have an org
-    if (orgId && opportunity.url) {
-      try {
-        const existingGrants = await client.entities.Grant.filter({
-          organization_id: orgId,
-          url: opportunity.url
-        });
-        
-        if (existingGrants.length > 0) {
-          if (!silent) {
-            toast({
-              title: 'Already in pipeline',
-              description: `"${opportunity.title}" is already in your pipeline.`,
-            })
-          }
-          return { status: 'already', grant: existingGrants[0] }
-        }
-      } catch (e) {
-        // Ignore duplicate check errors, continue to add
-        console.warn('Duplicate check failed:', e);
-      }
-    }
+    // Duplicate detection is delegated entirely to the backend (saveToProfilePipeline
+    // returns already_exists:true). Performing a client-side pre-check via the legacy
+    // Grant ORM is unreliable (stale data, no pipeline-stage awareness) and can block
+    // re-evaluation of previously soft-deleted entries. Remove the client-side gate so
+    // the canonical decision engine always runs (Goals 3, 4, 8).
+    // The backend already_exists response below handles the 'already in pipeline' UX.
 
     try {
       // Validate required data before sending
@@ -1044,9 +1037,29 @@ export default function DiscoverGrants() {
                 // Enforce the user's minimum match score threshold client-side.
                 // The API already applies this for catalog results; this guard ensures
                 // crawler search results (which may arrive with any score) also respect it.
-                const thresholdFiltered = merged.filter(
-                  (o) => (o.match_score ?? o.match ?? 0) >= minMatchScore
-                )
+                // Log suppression so observability is preserved (Goals 7, 8).
+                // Only apply threshold to crawler results (source !== 'catalog') because
+                // catalog results are already pre-filtered by the API min_score param.
+                // Never suppress an opportunity that carries a backend ACCEPT decision (Goal 4).
+                const suppressedItems = []
+                const thresholdFiltered = merged.filter((o) => {
+                  const score = o.match_score ?? o.match ?? 0
+                  const isCatalog = o.source === 'catalog'
+                  const hasBackendAccept = o.match_decision === 'ACCEPT'
+                  if (isCatalog || hasBackendAccept) return true // already server-filtered or canonically accepted
+                  if (score < minMatchScore) {
+                    suppressedItems.push({ title: o.title, id: o.id, score })
+                    return false
+                  }
+                  return true
+                })
+                if (suppressedItems.length > 0) {
+                  log.debug('client threshold gate suppressed crawler results', {
+                    threshold: minMatchScore,
+                    suppressed: suppressedItems.length,
+                    items: suppressedItems,
+                  })
+                }
                 return thresholdFiltered.sort((a, b) => (b.match_score ?? b.match ?? 0) - (a.match_score ?? a.match ?? 0))
               })()}
               profileId={effectiveProfileId ?? selectedProfileId}
