@@ -86,7 +86,9 @@ async function hasColumn(db, { tableName, columnName }) {
     return Boolean(row?.ok)
   }
 
-  const rows = await db.prepare(`PRAGMA table_info(${String(tableName)})`).all()
+  const safeName = /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(String(tableName)) ? String(tableName) : null
+  if (!safeName) throw new Error(`hasColumn: invalid tableName '${String(tableName)}'`)
+  const rows = await db.prepare(`PRAGMA table_info(${safeName})`).all()
   return rows.some((r) => String(r?.name || '').toLowerCase() === String(columnName).toLowerCase())
 }
 
@@ -238,10 +240,14 @@ export async function analyzeAndPersistGrantApplicationApproach({ db, grantId, p
       const mergedSteps =
         steps.length > 0 ? steps.join('\n') : heuristic.application_steps
 
-      final = {
+      const resolvedAppUrl = normalizeUrl(parsed?.application_url) || heuristic.application_url
+    if (!resolvedAppUrl) {
+      console.warn('[grant-application-approach] no valid application_url found after AI enrichment; guidance persisted without application path', { grantId })
+    }
+    final = {
         application_method: parsed?.application_method || heuristic.application_method,
         portal_url: normalizeUrl(parsed?.portal_url) || heuristic.portal_url,
-        application_url: normalizeUrl(parsed?.application_url) || heuristic.application_url,
+        application_url: resolvedAppUrl ?? null,
         contact_name: parsed?.contact_name || heuristic.contact_name,
         contact_email: parsed?.contact_email || heuristic.contact_email,
         contact_phone: parsed?.contact_phone || heuristic.contact_phone,
@@ -268,6 +274,7 @@ export function scheduleGrantApplicationApproach({ db, grantId, profileSummary =
       console.warn('[grant-application-approach] failed', {
         grantId,
         message: error?.message || String(error),
+        stack: error?.stack || null,
       })
     })
   }, 0)
