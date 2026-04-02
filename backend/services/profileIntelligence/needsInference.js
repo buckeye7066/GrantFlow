@@ -368,7 +368,7 @@ function inferIndividualHardshipNeeds(intel, resultMap) {
   }
 
   // Childcare
-  if (demographicFlags.has('has_children') ||
+  if ((demographicFlags ?? new Set()).has('has_children') ||
     storyKeywords.some(k => /childcare|daycare|child care|head start/i.test(k))) {
     mergeNeed(resultMap, 'childcare_support', CONF_MEDIUM,
       ['children/childcare signal'],
@@ -418,7 +418,7 @@ function inferStudentNeeds(intel, resultMap) {
     ['primary_type'],
     ['aspirational_goal'])
 
-  if ((intel.hardshipFlags ?? new Set()).size > 0) {
+  if (hardshipFlags.size > 0) {
     mergeNeed(resultMap, 'housing_support', 0.7,
       ['student with hardship flags may need campus/off-campus housing'],
       ['financial_situation'],
@@ -477,7 +477,8 @@ function inferVeteranNeeds(intel, resultMap) {
 function inferNonprofitNeeds(intel, resultMap) {
   const { entityType, storyKeywords, organizationFlags, financialFlags } = intel
 
-  if (entityType !== ET.NONPROFIT && entityType !== ET.COMMUNITY_ACTION) return
+  const ORG_TYPES = [ET.NONPROFIT, ET.COMMUNITY_ACTION, ET.HOUSING_AUTHORITY, ET.CDFI, ET.LIBRARY, ET.TRIBAL, ET.GOVERNMENT]
+  if (!ORG_TYPES.includes(entityType)) return
 
   mergeNeed(resultMap, 'program_operations', 0.7,
     ['entity_type=nonprofit — general operating support commonly needed'],
