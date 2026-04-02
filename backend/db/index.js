@@ -142,6 +142,17 @@ function toParamArray(args) {
   return isArrayArgList(args) ? args[0] : args;
 }
 
+function normalizePostgresParams(values) {
+  if (!Array.isArray(values)) return values
+  return values.map((v) => {
+    if (v === undefined) return null
+    if (typeof v === 'object' && v !== null && !Buffer.isBuffer(v) && !(v instanceof Date) && !Array.isArray(v)) {
+      try { return JSON.stringify(v) } catch { return String(v) }
+    }
+    return v
+  })
+}
+
 // Convert SQLite-style `?` placeholders to Postgres-style `$1, $2, ...`.
 // We only replace placeholders that are outside of single/double-quoted strings.
 function qmarkToDollarPlaceholders(sql) {
@@ -483,10 +494,10 @@ class PostgresTx {
     const converted = hasNamed ? atNameToDollarPlaceholders(sql) : qmarkToDollarPlaceholders(sql);
     return {
       get: async (...args) => {
-        const values =
+        const values = normalizePostgresParams(
           hasNamed && isObjectBindings(args)
             ? bindingsToValues(converted.names, args[0])
-            : toParamArray(args);
+            : toParamArray(args));
         try {
           const res = await this._client.query(converted.text, values);
           return res.rows[0];
@@ -495,10 +506,10 @@ class PostgresTx {
         }
       },
       all: async (...args) => {
-        const values =
+        const values = normalizePostgresParams(
           hasNamed && isObjectBindings(args)
             ? bindingsToValues(converted.names, args[0])
-            : toParamArray(args);
+            : toParamArray(args));
         try {
           const res = await this._client.query(converted.text, values);
           return res.rows;
@@ -507,10 +518,10 @@ class PostgresTx {
         }
       },
       run: async (...args) => {
-        const values =
+        const values = normalizePostgresParams(
           hasNamed && isObjectBindings(args)
             ? bindingsToValues(converted.names, args[0])
-            : toParamArray(args);
+            : toParamArray(args));
         try {
           const res = await this._client.query(converted.text, values);
           return {
@@ -525,7 +536,6 @@ class PostgresTx {
   }
 
   async exec(sql) {
-    // Allow multi-statement SQL (needed for schema migrations).
     await this._client.query({ text: sql, queryMode: 'simple' });
   }
 }
@@ -543,6 +553,7 @@ class PostgresDb {
   constructor(connectionString) {
     this.dialect = 'postgres';
     this.url = connectionString;
+    this._poolEnded = false;
     const sslMode = String(process.env.PGSSLMODE || '').trim().toLowerCase();
     const requireSsl = connectionString.includes('sslmode=require') || (isProd() && isRailwayRuntime() && sslMode !== 'disable');
     this._pool = new Pool({
@@ -553,6 +564,9 @@ class PostgresDb {
       statement_timeout: Number(process.env.PG_STATEMENT_TIMEOUT_MS || 15000),
       ...(requireSsl ? { ssl: { rejectUnauthorized: false } } : {}),
     });
+    this._pool.on('error', (err) => {
+      console.error('[db] PostgreSQL pool background error:', err?.message || err)
+    })
   }
 
   prepare(sql) {
@@ -561,7 +575,8 @@ class PostgresDb {
     const converted = hasNamed ? atNameToDollarPlaceholders(sql) : qmarkToDollarPlaceholders(sql);
     return {
       get: async (...args) => {
-        const values = hasNamed && isObjectBindings(args) ? bindingsToValues(converted.names, args[0]) : toParamArray(args);
+        const values = normalizePostgresParams(
+          hasNamed && isObjectBindings(args) ? bindingsToValues(converted.names, args[0]) : toParamArray(args));
         try {
           const res = await this._pool.query(converted.text, values);
           return res.rows[0];
@@ -570,7 +585,8 @@ class PostgresDb {
         }
       },
       all: async (...args) => {
-        const values = hasNamed && isObjectBindings(args) ? bindingsToValues(converted.names, args[0]) : toParamArray(args);
+        const values = normalizePostgresParams(
+          hasNamed && isObjectBindings(args) ? bindingsToValues(converted.names, args[0]) : toParamArray(args));
         try {
           const res = await this._pool.query(converted.text, values);
           return res.rows;
@@ -579,10 +595,10 @@ class PostgresDb {
         }
       },
       run: async (...args) => {
-        const values = hasNamed && isObjectBindings(args) ? bindingsToValues(converted.names, args[0]) : toParamArray(args);
+        const values = normalizePostgresParams(
+          hasNamed && isObjectBindings(args) ? bindingsToValues(converted.names, args[0]) : toParamArray(args));
         try {
           const res = await this._pool.query(converted.text, values);
-          // better-sqlite3 shape compatibility (best-effort)
           return {
             changes: res.rowCount ?? 0,
             lastInsertRowid: null,
@@ -595,7 +611,6 @@ class PostgresDb {
   }
 
   async exec(sql) {
-    // Allow multi-statement SQL (needed for schema migrations).
     await this._pool.query({ text: sql, queryMode: 'simple' });
   }
 
@@ -631,6 +646,8 @@ class PostgresDb {
   }
 
   async close() {
+    if (this._poolEnded) return
+    this._poolEnded = true
     await this._pool.end();
   }
 }

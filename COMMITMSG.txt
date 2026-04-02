@@ -1,6 +1,0 @@
-Fix last 4 test failures: auth access, directory resource survival
-
-- grants.js: Fix from-opportunity route using ensureOrganizationAccess with profile ID
-  (was passing profileId to org-level check, causing 403)
-- realCrawlers.js: Exempt directory resources from REJECT policy filter
-  (curated_verified and directory sources always survive per project rules)

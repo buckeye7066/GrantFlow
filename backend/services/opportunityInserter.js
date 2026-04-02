@@ -416,6 +416,25 @@ export async function upsertFundingOpportunity(db, opportunity) {
       @signal_tags,
       @crawler_version
     )
+    ON CONFLICT(source, source_id) DO UPDATE SET
+      title = COALESCE(excluded.title, funding_opportunities.title),
+      sponsor = COALESCE(excluded.sponsor, funding_opportunities.sponsor),
+      description = COALESCE(excluded.description, funding_opportunities.description),
+      source_url = COALESCE(excluded.source_url, funding_opportunities.source_url),
+      evidence_url = COALESCE(excluded.evidence_url, funding_opportunities.evidence_url),
+      application_url = COALESCE(excluded.application_url, funding_opportunities.application_url),
+      eligibility_bullets = COALESCE(excluded.eligibility_bullets, funding_opportunities.eligibility_bullets),
+      categories = COALESCE(excluded.categories, funding_opportunities.categories),
+      keywords = COALESCE(excluded.keywords, funding_opportunities.keywords),
+      amount_min = COALESCE(excluded.amount_min, funding_opportunities.amount_min),
+      amount_max = COALESCE(excluded.amount_max, funding_opportunities.amount_max),
+      amount_description = COALESCE(excluded.amount_description, funding_opportunities.amount_description),
+      deadline = COALESCE(excluded.deadline, funding_opportunities.deadline),
+      record_origin = COALESCE(excluded.record_origin, funding_opportunities.record_origin),
+      last_verified_at = COALESCE(excluded.last_verified_at, funding_opportunities.last_verified_at),
+      match_reasons = COALESCE(excluded.match_reasons, funding_opportunities.match_reasons),
+      updated_at = CURRENT_TIMESTAMP,
+      last_crawled = CURRENT_TIMESTAMP
   `)
 
   await insert.run({

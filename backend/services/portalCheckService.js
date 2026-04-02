@@ -90,7 +90,7 @@ function detectAwardKeywords(text) {
 // HTTP fetch — lightweight, no external dependencies
 // ---------------------------------------------------------------------------
 
-function fetchUrl(urlString, timeoutMs = 10_000) {
+function fetchUrlOnce(urlString, timeoutMs = 20_000) {
   return new Promise((resolve, reject) => {
     let parsed
     try {
@@ -112,12 +112,11 @@ function fetchUrl(urlString, timeoutMs = 10_000) {
     }
 
     const req = lib.request(options, (res) => {
-      // Follow one level of redirect
       if (
         [301, 302, 303, 307, 308].includes(res.statusCode) &&
         res.headers.location
       ) {
-        resolve(fetchUrl(res.headers.location, timeoutMs))
+        resolve(fetchUrlOnce(res.headers.location, timeoutMs))
         res.resume()
         return
       }
@@ -125,7 +124,6 @@ function fetchUrl(urlString, timeoutMs = 10_000) {
       const chunks = []
       res.on('data', (chunk) => {
         chunks.push(chunk)
-        // Limit to 512 KB to avoid massive downloads
         if (chunks.reduce((n, c) => n + c.length, 0) > 512 * 1024) {
           req.destroy()
         }
@@ -140,11 +138,24 @@ function fetchUrl(urlString, timeoutMs = 10_000) {
     })
 
     req.setTimeout(timeoutMs, () => {
-      req.destroy(new Error(`Request timed out: ${urlString}`))
+      req.destroy(new Error(`Request timed out after ${timeoutMs}ms: ${urlString}`))
     })
     req.on('error', reject)
     req.end()
   })
+}
+
+async function fetchUrl(urlString, timeoutMs = 20_000) {
+  try {
+    return await fetchUrlOnce(urlString, timeoutMs)
+  } catch (firstErr) {
+    await new Promise((r) => setTimeout(r, 2000))
+    try {
+      return await fetchUrlOnce(urlString, timeoutMs)
+    } catch {
+      throw firstErr
+    }
+  }
 }
 
 function stripHtml(html) {
@@ -266,7 +277,7 @@ async function checkPortal(portal) {
 
   let rawText = ''
   try {
-    const res = await fetchUrl(portal.portalUrl, 8_000)
+    const res = await fetchUrl(portal.portalUrl, 20_000)
     rawText = stripHtml(res.body).slice(0, 4_000) // Keep first 4K chars
     base.rawContent = rawText
   } catch (err) {
