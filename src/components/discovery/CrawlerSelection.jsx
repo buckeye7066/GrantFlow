@@ -81,7 +81,11 @@ export default function CrawlerSelection({
   const [errors, setErrors] = useState({});
   const [profileFixHints, setProfileFixHints] = useState({});
   const [showFallbackDetails, setShowFallbackDetails] = useState(false);
-  const [minMatchScore, setMinMatchScore] = useState(50); // Lowered to 50 to show more results; crawlers now use 100% of profile signals for scoring
+  // Default to 0 so ALL candidates reach the decision engine.
+// The canonical ACCEPT/REVIEW/REJECT label from computeMatchDecision() is
+// the sole authority (Goal 4). A non-zero default here acts as a pre-filter
+// that can suppress canonical ACCEPT records (violates Goals 4 & 7).
+const [minMatchScore, setMinMatchScore] = useState(0);
   const { toast } = useToast();
   const log = React.useMemo(() => createLogger('CrawlerSelection'), [])
 
@@ -191,7 +195,9 @@ export default function CrawlerSelection({
   // If user switches profiles and ECF is no longer eligible, auto-uncheck it.
   useEffect(() => {
     if (ecfUnlock.allowed) return
-    if (!ecfUnlock.confident) return
+    // Remove ECF selection regardless of confidence when the profile changes;
+    // the confidence guard previously allowed a stale selection to persist
+    // across profile switches, which could run the crawler without valid context.
     setSelectedCrawlers((prev) => {
       if (!prev.has('ecf_benefits')) return prev
       const next = new Set(prev)
@@ -355,9 +361,11 @@ export default function CrawlerSelection({
     // Notify parent (even when empty, so DiscoverGrants can show zero-results state)
     // Log suppression details before notifying parent so the audit trail is
 // always written regardless of whether the parent component uses the data.
+// Use only total_found for suppression detection; falling back to count
+// (included) would give 0 in exactly the suppression scenario we want to detect.
 const totalFound = allResults
   .filter(r => r.success)
-  .reduce((sum, r) => sum + (r.data?.total_found ?? r.data?.count ?? 0), 0);
+  .reduce((sum, r) => sum + (r.data?.total_found ?? 0), 0);
 if (totalFound > 0 && successfulResults.length === 0) {
   log.warn('suppression: total_found > 0 but included === 0', {
     totalFound,
@@ -657,14 +665,26 @@ if (onCrawlComplete) {
                               {result.evaluated_at ? ` Â· evaluated ${new Date(result.evaluated_at).toLocaleTimeString()}` : ''}
                             </div>
                           )}
-                          {(result.count || 0) === 0 && (result.total_found ?? 0) > 0 && (
-                            <div className="text-xs text-amber-700 dark:text-amber-200">
-                              {Array.isArray(result.ineligibility_reasons) && result.ineligibility_reasons.length > 0
-                                ? `Excluded because: ${result.ineligibility_reasons.slice(0, 2).join('; ')}.`
-                                : 'None met the match threshold.'}{' '}
-                              Try adding more profile details (ZIP, state, keywords) for better matches.
-                            </div>
-                          )}
+                          {(result.count || 0) === 0 && (result.total_found ?? 0) > 0 && (() => {
+                            // Collect reasons from batch-level field OR from per-opportunity records
+                            const batchReasons = Array.isArray(result.ineligibility_reasons)
+                              ? result.ineligibility_reasons
+                              : [];
+                            const oppReasons = Array.isArray(result.opportunities)
+                              ? result.opportunities
+                                  .flatMap(o => Array.isArray(o.ineligibility_reasons) ? o.ineligibility_reasons : [])
+                                  .filter((r, i, a) => a.indexOf(r) === i) // dedupe
+                              : [];
+                            const allReasons = batchReasons.length > 0 ? batchReasons : oppReasons;
+                            return (
+                              <div className="text-xs text-amber-700 dark:text-amber-200">
+                                {allReasons.length > 0
+                                  ? `Excluded because: ${allReasons.slice(0, 2).join('; ')}.`
+                                  : 'None met the match threshold.'}{' '}
+                                Try adding more profile details (ZIP, state, keywords) for better matches.
+                              </div>
+                            );
+                          })()}
                         </div>
                       )}
                       
