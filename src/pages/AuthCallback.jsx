@@ -120,7 +120,7 @@ sessionMeta.expiresIn = Number.isFinite(parsed) ? parsed : undefined
         timeoutRef.current = null
       }
     }
-  }, [errorCode, params, loginWithTokens, navigate])
+  }, [errorCode, params, expiresInParam, accessExpiresParam, refreshExpiresParam, loginWithTokens, navigate])
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-slate-100 px-4 py-12">
@@ -142,7 +142,7 @@ sessionMeta.expiresIn = Number.isFinite(parsed) ? parsed : undefined
           {status === 'error' ? (
             <div className="flex w-full flex-col gap-3">
               <Button onClick={() => navigate('/login', { replace: true })}>Return to login</Button>
-              <Button variant="outline" onClick={() => navigate('/login', { replace: true })}>
+              <Button variant="outline" onClick={() => navigate(-1)}>
                 Try provider again
               </Button>
             </div>
