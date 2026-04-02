@@ -51,10 +51,15 @@ export default function VNextApplication() {
         body: JSON.stringify({ targetState }),
       })
     },
-    onError: async (err) => {
+    onError: (err) => {
       try {
-        const msg = String(err?.message || err)
-        setLastBlockers([{ code: 'REQUEST_FAILED', message: msg }])
+        const data = err?.data ?? err?.response ?? null
+        if (Array.isArray(data?.blockers) && data.blockers.length > 0) {
+          setLastBlockers(data.blockers)
+        } else {
+          const msg = String(err?.message || err)
+          setLastBlockers([{ code: 'REQUEST_FAILED', message: msg }])
+        }
       } catch {
         setLastBlockers([{ code: 'REQUEST_FAILED', message: 'Request failed' }])
       }
@@ -215,13 +220,20 @@ export default function VNextApplication() {
             // Only allow transitions to adjacent next state or back one step (for corrections);
             // never allow skipping more than one state forward to protect pipeline integrity.
             const isForwardSkip = targetIdx > currentIdx + 1
+            const isBackwardSkip = targetIdx < currentIdx - 1
+            const isDisabled = transitionMutation.isPending || isForwardSkip || isBackwardSkip
+            const disabledTitle = isForwardSkip
+              ? `Cannot skip forward from ${currentState} to ${s}`
+              : isBackwardSkip
+              ? `Cannot rewind more than one step from ${currentState} to ${s}`
+              : undefined
             return (
               <Button
                 key={s}
                 variant={s === currentState ? 'default' : 'outline'}
                 size="sm"
-                disabled={transitionMutation.isPending || isForwardSkip}
-                title={isForwardSkip ? `Cannot skip from ${currentState} to ${s}` : undefined}
+                disabled={isDisabled}
+                title={disabledTitle}
                 onClick={() => transitionMutation.mutate(s)}
               >
                 {s}
