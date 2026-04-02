@@ -134,6 +134,20 @@ function computeNegativePenalty(program, analysis) {
     return 0;
 }
 
+function getNegativeGateReason(program, analysis) {
+  if (!program?.eligibility) return null;
+  const healthSignals = analysis?.health;
+  for (const rule of NEGATIVE_RULES) {
+    const eligKey = `requires${rule.healthRequired.charAt(0).toUpperCase()}${rule.healthRequired
+      .slice(1)
+      .replace(/_([a-z])/g, (_, c) => c.toUpperCase())}`;
+    if (program.eligibility[eligKey] && !(healthSignals?.has?.(rule.healthRequired))) {
+      return rule.label;
+    }
+  }
+  return null;
+}
+
 // ── Informational page filter ──
 
 const INFORMATIONAL_DOMAINS = [
@@ -410,23 +424,9 @@ export function scoreProgram(program, analysis, strategyOpts = {}) {
           score += 7;
     }
 
-  // ── Negative match penalty (only hard-gate on truly disqualifying negatives) ──
+  // ── Negative match penalty (hard-gate disqualifying negatives) ──
   const negPenalty = computeNegativePenalty(program, analysis);
-  if (negPenalty <= -100) {
-    // Return a scored sentinel so callers can log the reason rather than silently dropping
-    return {
-      ...program,
-      matchScore: 0,
-      matchReasons: [`Hard-gated: ${NEGATIVE_RULES.find(r => {
-        const k = 'requires' + r.healthRequired.charAt(0).toUpperCase() + r.healthRequired.slice(1).replace(/_([a-z])/g, (_, c) => c.toUpperCase());
-        return program.eligibility?.[k] && !analysis.health?.has(r.healthRequired);
-      })?.label ?? 'condition mismatch'}`],
-      matchedCategories: [],
-      _hardGated: true,
-      _hardGateReason: 'negative_health_mismatch',
-      match_explain: { matchedSignals: [], matchedNeeds: [], matchedNeedTerms: [], scoreBreakdown: { normalized: 0, raw: negPenalty, penalties: negPenalty } },
-    };
-  }
+  if (negPenalty <= -100) return null;
     score += negPenalty;
 
   // ── Military match (5 points) ──
@@ -709,7 +709,20 @@ export function matchPrograms(allPrograms, analysis, options = {}) {
 
     // Score against profile
     const scored = scoreProgram(program, analysis, strategyOpts);
-    if (!scored) { stats.nullScore++; continue; }
+    if (!scored) {
+      stats.nullScore++;
+      const hardGateReason = getNegativeGateReason(program, analysis);
+      if (hardGateReason) {
+        if (!stats.filteredLog) stats.filteredLog = [];
+        stats.filteredLog.push({
+          id: program.id,
+          name: program.name,
+          reason: 'negative_health_mismatch',
+          detail: hardGateReason,
+        });
+      }
+      continue;
+    }
     if (scored.matchScore < minScore) {
   stats.belowMin++;
   if (!stats.filteredLog) stats.filteredLog = [];
