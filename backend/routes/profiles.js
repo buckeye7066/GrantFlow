@@ -1199,15 +1199,6 @@ router.post('/:id/avatar/ai', async (req, res) => {
       status: uploadStorageStatus.status || 'degraded',
     })
   }
-  // removed â storage is a multer diskStorage instance, not a status object; this check always evaluates storage as truthy and never as { writable: false }, creating dead/misleading guard code
-    return res.status(503).json({
-      ok: false,
-      error: 'Upload storage is unavailable',
-      code: 'UPLOAD_STORAGE_UNAVAILABLE',
-      uploads_dir: storage.uploads_dir || null,
-      status: storage.status || 'degraded',
-    })
-  }
 
   const profileRow = await req.db.prepare(`${profileSelect} WHERE p.id = ?`).get(id)
   if (!profileRow) {
