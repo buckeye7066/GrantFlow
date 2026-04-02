@@ -113,11 +113,15 @@ export function dedupeKeyFromRow(row) {
   const title = String(row.title || '').trim().toLowerCase();
   const sponsor = String(row.sponsor || '').trim().toLowerCase();
   const deadlineIso = (() => {
-    const d = parseLooseDate(row.deadline);
-    return d ? d.toISOString().slice(0, 10) : String(row.deadline || '').trim().toLowerCase();
+    try {
+      const d = parseLooseDate(row.deadline);
+      return d ? d.toISOString().slice(0, 10) : String(row.deadline || '').trim().toLowerCase();
+    } catch {
+      return String(row.deadline || '').trim().toLowerCase();
+    }
   })();
   const rowUrl = normalizeUrlForDedupe(row.url);
-  if (rowUrl) return `url:${rowUrl}`;
+  if (rowUrl) return `rowurl:${rowUrl}`;
   const sourceId = row.source_id != null ? String(row.source_id).trim().toLowerCase() : '';
   if (sourceId) return `sid:${sourceId}`;
   if (title && sponsor) return `tsd:${title}::${sponsor}::${deadlineIso}`;
