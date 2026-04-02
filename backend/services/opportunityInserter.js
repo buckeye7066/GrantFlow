@@ -20,7 +20,8 @@ function normalizeNonEmptyString(value) {
 
 function normalizeUrl(value) {
   const text = normalizeNonEmptyString(value)
-  return text
+  if (!text) return null
+  return isValidRealUrl(text) ? text : null
 }
 
 function stableSourceIdFromOpportunity(source, opportunity) {
@@ -184,7 +185,7 @@ export async function upsertFundingOpportunity(db, opportunity) {
         amount_description = ?,
         deadline = ?,
         deadline_type = ?,
-        application_url = COALESCE(?, application_url),
+        application_url = ?,
         is_national = COALESCE(?, is_national),
         state = COALESCE(?, state),
         categories = COALESCE(?, categories),
@@ -218,7 +219,7 @@ export async function upsertFundingOpportunity(db, opportunity) {
         amount_description = COALESCE(?, amount_description),
         deadline = COALESCE(?, deadline),
         deadline_type = COALESCE(?, deadline_type),
-        application_url = COALESCE(?, application_url),
+        application_url = ?,
         is_national = COALESCE(?, is_national),
         state = COALESCE(?, state),
         categories = COALESCE(?, categories),
@@ -430,6 +431,24 @@ export async function upsertFundingOpportunity(db, opportunity) {
       amount_max = COALESCE(excluded.amount_max, funding_opportunities.amount_max),
       amount_description = COALESCE(excluded.amount_description, funding_opportunities.amount_description),
       deadline = COALESCE(excluded.deadline, funding_opportunities.deadline),
+      deadline_type = COALESCE(excluded.deadline_type, funding_opportunities.deadline_type),
+      opportunity_type = COALESCE(excluded.opportunity_type, funding_opportunities.opportunity_type),
+      funding_type = COALESCE(excluded.funding_type, funding_opportunities.funding_type),
+      type = COALESCE(excluded.type, funding_opportunities.type),
+      is_national = COALESCE(excluded.is_national, funding_opportunities.is_national),
+      state = COALESCE(excluded.state, funding_opportunities.state),
+      contact_info = COALESCE(excluded.contact_info, funding_opportunities.contact_info),
+      requires_501c3 = COALESCE(excluded.requires_501c3, funding_opportunities.requires_501c3),
+      requires_match = COALESCE(excluded.requires_match, funding_opportunities.requires_match),
+      match_percentage = COALESCE(excluded.match_percentage, funding_opportunities.match_percentage),
+      signal_tags = COALESCE(excluded.signal_tags, funding_opportunities.signal_tags),
+      funding_domain = COALESCE(excluded.funding_domain, funding_opportunities.funding_domain),
+      funding_subdomain = COALESCE(excluded.funding_subdomain, funding_opportunities.funding_subdomain),
+      source_category = COALESCE(excluded.source_category, funding_opportunities.source_category),
+      compliance_required = COALESCE(excluded.compliance_required, funding_opportunities.compliance_required),
+      certifications_required = COALESCE(excluded.certifications_required, funding_opportunities.certifications_required),
+      geo_eligibility = COALESCE(excluded.geo_eligibility, funding_opportunities.geo_eligibility),
+      crawler_version = COALESCE(excluded.crawler_version, funding_opportunities.crawler_version),
       record_origin = COALESCE(excluded.record_origin, funding_opportunities.record_origin),
       last_verified_at = COALESCE(excluded.last_verified_at, funding_opportunities.last_verified_at),
       match_reasons = COALESCE(excluded.match_reasons, funding_opportunities.match_reasons),
@@ -497,7 +516,10 @@ export async function bulkUpsertFundingOpportunities(db, opportunities = []) {
       await db.withTransaction(async (tx) => {
         for (const opportunity of batch) {
           const policy = enforceOpportunityPolicy(opportunity)
-          if (!policy.ok) continue
+          if (!policy.ok) {
+            console.warn('[bulkUpsert] Policy rejection:', policy.reason ?? 'unknown', '|', opportunity?.title ?? 'untitled', '|', opportunity?.source_url ?? '')
+            continue
+          }
           const result = await upsertFundingOpportunity(tx, opportunity)
           if (result?.inserted) inserted.push(result.id)
         }
@@ -507,10 +529,13 @@ export async function bulkUpsertFundingOpportunities(db, opportunities = []) {
       for (const opportunity of batch) {
         try {
           const policy = enforceOpportunityPolicy(opportunity)
-          if (!policy.ok) continue
+          if (!policy.ok) {
+            console.warn('[bulkUpsert] Policy rejection:', policy.reason ?? 'unknown', '|', opportunity?.title ?? 'untitled', '|', opportunity?.source_url ?? '')
+            continue
+          }
           const result = await upsertFundingOpportunity(db, opportunity)
           if (result?.inserted) inserted.push(result.id)
-        } catch (err) { console.error('[bulkUpsert] Individual insert failed:', err.message, opportunity?.title) }
+        } catch (indivErr) { console.error('[bulkUpsert] Individual insert failed:', indivErr.message, opportunity?.title) }
       }
     }
   }
