@@ -106,7 +106,11 @@ function NeedItemCard({ item, profileId, onSearchItem }) {
                 disabled={searching}
               >
                 {searching ? <Loader2 className="w-3 h-3 animate-spin" /> : <Search className="w-3 h-3" />}
-                {sources ? `${sources.length} sources found` : 'Find funding sources'}
+                {sources && sources.length > 0
+  ? `${sources.length} source${sources.length !== 1 ? 's' : ''} found${sources.length > 5 ? ' (showing 5)' : ''}`
+  : sources !== null
+    ? 'Find funding sources'
+    : '0 sources found'}
               </Button>
               <Button
                 size="sm"
