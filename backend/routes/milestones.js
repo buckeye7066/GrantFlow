@@ -14,10 +14,12 @@ const router = express.Router();
 router.use(async (req, res, next) => {
   try {
     const user = requireAuthenticatedUser(req, res);
-    if (!user) return;
+    if (!user) return; // requireAuthenticatedUser already sent 401
     next();
   } catch (error) {
-    res.status(500).json({ error: 'Authentication check failed' });
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'Authentication check failed' });
+    }
   }
 });
 
@@ -130,6 +132,7 @@ router.post('/', async (req, res) => {
     if (!grant_id) return res.status(400).json({ error: 'grant_id is required' })
     if (!title?.trim()) return res.status(400).json({ error: 'title is required' })
     if (!due_date) return res.status(400).json({ error: 'due_date is required' })
+if (isNaN(Date.parse(due_date))) return res.status(400).json({ error: 'due_date must be a valid date (YYYY-MM-DD)' })
     const grant = await ensureGrantAccess(req, res, String(grant_id))
     if (!grant) return
     await req.db
@@ -149,6 +152,7 @@ router.put('/:id', async (req, res) => {
     const { title, description, due_date, completed, type } = req.body
     if (!title?.trim()) return res.status(400).json({ error: 'title is required' })
     if (!due_date) return res.status(400).json({ error: 'due_date is required' })
+if (isNaN(Date.parse(due_date))) return res.status(400).json({ error: 'due_date must be a valid date (YYYY-MM-DD)' })
     const completed_date = completed ? new Date().toISOString().split('T')[0] : null
     await req.db
       .prepare(
