@@ -109,7 +109,7 @@ export async function fetchStatePortals(stateCode, options = {}) {
       headers['Content-Type'] = 'application/json';
     }
 
-    const response = await fetch(url, {
+    const response = await fetchWithRetry(url, {
       method: portal.method,
       headers,
       ...(portal.method === 'POST' ? { body: JSON.stringify(params) } : {}),
@@ -169,7 +169,7 @@ function normalizeStateRecord(record, stateCode, portalName, sourceUrl) {
   const amountMax =
     parseAmount(record.max_award || record.award_ceiling || record.amount || record.max_amount);
   const appUrl =
-    record.application_url || record.apply_url || record.url || record.link || sourceUrl || null;
+    record.application_url || record.apply_url || record.url || record.link || null;
 
   if (!title) {
     console.warn(`[state-portals] Skipping record missing title (state: ${stateCode})`);
