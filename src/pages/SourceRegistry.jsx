@@ -120,7 +120,15 @@ const AIAddPartnerDialog = ({ open, onOpenChange, onFound }) => {
             const newPartnerData = {
                 name: partnerName,
                 org_type: data.org_type || 'other',
-                api_base_url: (data.api_base_url && /^https?:\/\//i.test(data.api_base_url)) ? data.api_base_url : '',
+                api_base_url: (() => {
+  try {
+    if (!data.api_base_url) return '';
+    const parsed = new URL(data.api_base_url);
+    return (parsed.protocol === 'http:' || parsed.protocol === 'https:') ? parsed.href : '';
+  } catch (_) {
+    return '';
+  }
+})(),
                 contact_email: (data.contact_email && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(data.contact_email)) ? data.contact_email : '',
                 auth_type: 'none',
                 status: 'inactive',
@@ -322,7 +330,15 @@ export default function SourceRegistry() {
           const newPartner = await client.entities.PartnerSource.create({
             name: suggestion.name,
             org_type: suggestion.org_type || 'other',
-            api_base_url: (suggestion.api_base_url && /^https?:\/\//i.test(suggestion.api_base_url)) ? suggestion.api_base_url : '',
+            api_base_url: (() => {
+  try {
+    if (!suggestion.api_base_url) return '';
+    const parsed = new URL(suggestion.api_base_url);
+    return (parsed.protocol === 'http:' || parsed.protocol === 'https:') ? parsed.href : '';
+  } catch (_) {
+    return '';
+  }
+})(),
             contact_email: (suggestion.contact_email && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(suggestion.contact_email)) ? suggestion.contact_email : '',
             auth_type: 'none',
             auth_secret_name: '',
