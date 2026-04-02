@@ -81,8 +81,8 @@ export function isJunkOpportunity(opp, hints = {}) {
   if (isCopay) {
     // Explicit denial: profile says no health needs â filter
     if (hasHealthNeeds === false) return true
-    // Unknown profile: only filter non-curated sources to prefer recall (Goal 7)
-    if (hasHealthNeeds === undefined && !opp.record_origin?.startsWith('curated')) return true
+    // Unknown profile: keep all copay records and let the decision engine decide (Goal 7)
+    // Do not filter when profile health status is unknown â recall is preferred at this stage
     // hasHealthNeeds === true â always keep
   }
 
