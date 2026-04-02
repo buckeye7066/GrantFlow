@@ -114,56 +114,60 @@ export async function ensureProfileOrgLinks(db, opts = {}) {
     return { ok: true, dry_run: dryRun, ...summary }
   }
 
+  const stmtEmailMatch = db.prepare('SELECT id FROM organizations WHERE lower(email) = ? ORDER BY updated_at DESC LIMIT 1')
+  const stmtNameMatch = db.prepare("SELECT id FROM organizations WHERE name = ? AND (email IS NULL OR email = '') ORDER BY updated_at DESC LIMIT 1")
+  const stmtInsertOrg = db.prepare(
+    `INSERT INTO organizations (id, name, email, applicant_type, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ${nowSql}, ${nowSql})`
+  )
+  const stmtUpdateProfile = db.prepare(`UPDATE profiles SET organization_id = ?, updated_at = ${nowSql} WHERE id = ?`)
+
   const _linkProfilesSync = (tx) => {
     for (const row of candidates) {
       const profileId = String(row?.id || '').trim()
       if (!profileId) continue
 
-      const desiredName = normalizeOrgName(row?.display_name) || `Profile ${profileId}`
-      const email = normalizeEmail(row?.email_signal)
-      const applicantType = normalizeApplicantTypeFromProfile(row?.primary_type)
+      try {
+        const desiredName = normalizeOrgName(row?.display_name) || `Profile ${profileId}`
+        const email = normalizeEmail(row?.email_signal)
+        const applicantType = normalizeApplicantTypeFromProfile(row?.primary_type)
 
-      let orgId = null
+        let orgId = null
 
-      if (email) {
-        const emailMatch = tx
-          .prepare('SELECT id FROM organizations WHERE lower(email) = ? ORDER BY updated_at DESC LIMIT 1')
-          .get(email)
-        if (emailMatch?.id) {
-          orgId = String(emailMatch.id)
-          summary.matched_by_email += 1
+        if (email) {
+          const emailMatch = stmtEmailMatch.get(email)
+          if (emailMatch?.id) {
+            orgId = String(emailMatch.id)
+            summary.matched_by_email += 1
+          }
         }
-      }
 
-      if (!orgId) {
-        const nameMatch = tx
-          .prepare("SELECT id FROM organizations WHERE name = ? AND (email IS NULL OR email = '') ORDER BY updated_at DESC LIMIT 1")
-          .get(desiredName)
-        if (nameMatch?.id) {
-          orgId = String(nameMatch.id)
-          summary.matched_by_name += 1
+        if (!orgId) {
+          const nameMatch = stmtNameMatch.get(desiredName)
+          if (nameMatch?.id) {
+            orgId = String(nameMatch.id)
+            summary.matched_by_name += 1
+          }
         }
-      }
 
-      if (!orgId) {
-        orgId = crypto.randomUUID()
-        summary.planned_org_creates += 1
+        if (!orgId) {
+          orgId = crypto.randomUUID()
+          summary.planned_org_creates += 1
 
+          if (!dryRun) {
+            stmtInsertOrg.run(orgId, desiredName, email, applicantType)
+            summary.applied_org_creates += 1
+            summary.created_new_org += 1
+          }
+        }
+
+        summary.planned_profile_updates += 1
         if (!dryRun) {
-          tx.prepare(
-            `INSERT INTO organizations (id, name, email, applicant_type, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ${nowSql}, ${nowSql})`,
-          ).run(orgId, desiredName, email, applicantType)
-          summary.applied_org_creates += 1
-          summary.created_new_org += 1
+          stmtUpdateProfile.run(orgId, profileId)
+          summary.applied_profile_updates += 1
         }
-      }
-
-      summary.planned_profile_updates += 1
-      if (!dryRun) {
-        tx.prepare(`UPDATE profiles SET organization_id = ?, updated_at = ${nowSql} WHERE id = ?`)
-          .run(orgId, profileId)
-        summary.applied_profile_updates += 1
+      } catch (rowErr) {
+        console.warn('[profile-org-links] skipped profile due to error', { profileId, error: rowErr?.message })
       }
     }
   }
@@ -225,7 +229,7 @@ export async function ensureProfileOrgLinks(db, opts = {}) {
   if (dialect === 'postgres') {
     await db.withTransaction(async (tx) => { await _linkProfilesAsync(tx) })
   } else {
-    db.withTransaction((tx) => { _linkProfilesSync(tx) })
+    await db.withTransaction((tx) => { _linkProfilesSync(tx) })
   }
 
   console.info('[profile-org-links] ok', { ...summary, dryRun })
