@@ -50,7 +50,7 @@ export async function extractAndUpsertOpportunitiesFromText(db, text, profile = 
                   const opportunity = {
   title: title.slice(0, 500),
   source_url: url,
-  application_url: url,
+  application_url: url,  // Stored as candidate; must be verified before decision engine sets ACCEPT
   description: `Imported from URL. Source: ${url}`,
   source: 'url_import',
   record_origin: 'url_import',
@@ -59,9 +59,9 @@ export async function extractAndUpsertOpportunitiesFromText(db, text, profile = 
   eligibility_status: 'pending',
   match_decision: 'PENDING',
   match_explanation: 'Imported from URL; pending full evaluation by matchEngine.',
-  matched_needs: [],
-  ineligibility_reasons: [],
-  matcher_version: null,
+  matched_needs: JSON.stringify([]),
+  ineligibility_reasons: JSON.stringify([]),
+  matcher_version: 'pending',
   evaluated_at: null,
 }
                   const out = await upsertFundingOpportunity(db, opportunity)
