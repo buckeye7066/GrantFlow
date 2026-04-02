@@ -16,7 +16,7 @@
  *   normalizeOpportunity from ./opportunityNormalizer.js
  */
 
-import { safeParseArrayField, resolveApplicantType, buildProfileSignals } from './profileHelpers.js'
+import { safeParseArrayField, resolveApplicantType, buildProfileSignals, extractStateFromContext, extractZipFromContext, extractCityFromContext } from './profileHelpers.js'
 import { normalizeProfile } from './profileNormalizer.js'
 import { normalizeOpportunity } from './opportunityNormalizer.js'
 
@@ -1309,10 +1309,19 @@ export function computeMatchDecision(rawProfile, rawOpportunity, opts = {}) {
     ? rawOpportunity
     : normalizeOpportunity(rawOpportunity)
 
-  // Scoring via scoreOpportunity — pass sections so geo/signals can be resolved
-  const profileForScoring = opts.profileSections
-    ? { profile: rawProfile, sections: opts.profileSections }
-    : rawProfile
+  // Enrich rawProfile with location from sections when the profile row lacks geo fields.
+  // This ensures scoreOpportunity can resolve geographic tiers without changing the
+  // profile shape (which would break needs/keyword scoring that relies on Array fields).
+  let profileForScoring = rawProfile
+  if (opts.profileSections) {
+    const ctx = { profile: rawProfile, sections: opts.profileSections }
+    const state = rawProfile?.state || extractStateFromContext(ctx) || null
+    const zip = rawProfile?.postal_code || rawProfile?.zip_code || extractZipFromContext(ctx) || null
+    const city = rawProfile?.city || extractCityFromContext(ctx) || null
+    if (state || zip || city) {
+      profileForScoring = { ...rawProfile, state, postal_code: zip, city }
+    }
+  }
   const { score, reasons, match_explain } = scoreOpportunity(profileForScoring, rawOpportunity)
 
   // Decision via makeDecision
