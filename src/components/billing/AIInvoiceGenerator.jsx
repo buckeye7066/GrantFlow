@@ -79,7 +79,12 @@ export default function AIInvoiceGenerator({ organizationId, projectId, onApprov
       if (lineItems.length === 0) {
         setError('AI did not return any line items. Try again or add items manually.');
       } else {
-        setProposedItems(lineItems.map(item => ({ ...item, rate: item.rate ?? 0, isEditing: false })));
+        setProposedItems(lineItems.map(item => ({
+  ...item,
+  rate: item.rate ?? 0,
+  rateIsEstimated: item.rate == null,
+  isEditing: item.rate == null, // auto-open edit mode when rate is missing so user must confirm
+})));
       }
     } catch (err) {
       setError("Failed to generate suggestions. Please try again or add items manually.");
@@ -167,7 +172,11 @@ export default function AIInvoiceGenerator({ organizationId, projectId, onApprov
                         type="number"
                         step="0.1"
                         value={item.hours}
-                        onChange={(e) => handleItemChange(index, 'hours', parseFloat(e.target.value) || 0)}
+                        onChange={(e) => {
+  const parsed = parseFloat(e.target.value);
+  const clamped = Number.isFinite(parsed) ? Math.max(0, Math.min(parsed, 999)) : 0;
+  handleItemChange(index, 'hours', clamped);
+}}
                         className="h-8"
                       />
                   </div>
@@ -194,7 +203,7 @@ export default function AIInvoiceGenerator({ organizationId, projectId, onApprov
               </div>
             ))}
              <div className="flex justify-end gap-3 pt-4">
-              <Button variant="outline" onClick={onCancel}>Cancel</Button>
+              <Button variant="outline" onClick={() => { if (typeof onCancel === 'function') onCancel(); }}>Cancel</Button>
               <Button onClick={handleApproveAll} className="bg-blue-600 hover:bg-blue-700">
                 <Check className="w-4 h-4 mr-2" />
                 Add {proposedItems.length} Items to Invoice
