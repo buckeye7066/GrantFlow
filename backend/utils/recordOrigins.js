@@ -45,8 +45,11 @@ export const UNTRUSTED_ORIGINS = ['synthetic', 'manual']
  * @param {string} [alias] - Optional table alias, e.g. 'fo' → 'fo.record_origin'
  */
 export function trustedOriginClause(alias) {
-  const col = alias ? `${alias}.record_origin` : 'record_origin'
-  const quoted = UNTRUSTED_ORIGINS.map(o => `'${o}'`).join(',')
+  if (alias !== undefined && !/^[A-Za-z_][A-Za-z0-9_]*$/.test(alias)) {
+  throw new Error(`trustedOriginClause: invalid alias '${alias}'`)
+}
+const col = alias ? `${alias}.record_origin` : 'record_origin'
+  const quoted = UNTRUSTED_ORIGINS.map(o => `'${escapeSqlStringLiteral(o)}'`).join(',')
   return `(${col} IS NULL OR ${col} NOT IN (${quoted}))`
 }
 
@@ -69,7 +72,7 @@ export const UNTRUSTED_SOURCES = ['synthetic', 'template', 'fake']
  */
 export function trustedSourceClause(alias) {
   const col = alias ? `${alias}.source` : 'source'
-  const quoted = UNTRUSTED_SOURCES.map(o => `'${o}'`).join(',')
+  const quoted = UNTRUSTED_SOURCES.map(o => `'${escapeSqlStringLiteral(o)}'`).join(',')
   return `(${col} IS NULL OR ${col} NOT IN (${quoted}))`
 }
 
