@@ -27,8 +27,9 @@ const STATUSES = [
 ];
 
 const formatMoney = (amount) => {
-    if (typeof amount !== 'number') return null;
-    return '$' + amount.toLocaleString('en-US');
+    const parsed = typeof amount === 'number' ? amount : Number(amount);
+    if (!Number.isFinite(parsed)) return null;
+    return '$' + parsed.toLocaleString('en-US');
 };
 
 export default function PrintablePipeline({ grants = [], organization }) {
@@ -78,9 +79,15 @@ export default function PrintablePipeline({ grants = [], organization }) {
 
           <main className="gf-print-body">
             <div className="gf-columns">
-              {STATUSES.map(col => {
-                const columnGrants = grantsByStatus[col.value] ?? [];
-                if (columnGrants.length === 0) return null;
+              const knownStatusValues = new Set(STATUSES.map(s => s.value));
+const unknownStatuses = Object.keys(grantsByStatus)
+  .filter(k => !knownStatusValues.has(k))
+  .map(k => ({ value: k, label: k }));
+const allStatuses = [...STATUSES, ...unknownStatuses];
+
+{allStatuses.map(col => {
+  const columnGrants = grantsByStatus[col.value] ?? [];
+  if (columnGrants.length === 0) return null;
 
                 return (
                   <section key={col.value} className="gf-column">
@@ -92,7 +99,7 @@ export default function PrintablePipeline({ grants = [], organization }) {
                           {grant.program_description && <p className="gf-card-summary">{grant.program_description}</p>}
                           <ul className="gf-card-meta">
                             {grant.funder && <li>{grant.funder}</li>}
-                            {grant.deadline && !isNaN(new Date(grant.deadline)) && <li>Deadline: {format(new Date(grant.deadline), 'P')}</li>}
+                            {grant.deadline && !isNaN(Date.parse(grant.deadline)) && <li>Deadline: {format(new Date(grant.deadline), 'P')}</li>}
                             {grant.amount_max && <li>Award: {formatMoney(grant.amount_max)}</li>}
                           </ul>
                         </article>
