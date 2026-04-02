@@ -173,13 +173,27 @@ export default function NOFOParser() {
     setIsSavingGrant(true);
     setError(null);
 
+    const rawAppUrl = extractedData.application_url || '';
+    const validatedAppUrl =
+      rawAppUrl.startsWith('http://') || rawAppUrl.startsWith('https://')
+        ? rawAppUrl
+        : '';
+
+    if (!validatedAppUrl) {
+      log.warn('NOFOParser: no valid application_url extracted â grant will be saved without an application path', {
+        title: extractedData.title,
+        raw: rawAppUrl,
+      });
+    }
+
     const grantPayload = {
-        ...extractedData,
-        organization_id: selectedOrgId,
-        status: 'discovered',
-        opportunity_type: 'grant',
-        ai_status: 'queued',
-        url: inputMode === 'url' ? url : (extractedData.url || ''),
+      ...extractedData,
+      application_url: validatedAppUrl,
+      organization_id: selectedOrgId,
+      status: 'discovered',
+      opportunity_type: 'grant',
+      ai_status: 'queued',
+      url: inputMode === 'url' ? url : (extractedData.url || ''),
     };
 
     try {
@@ -198,11 +212,18 @@ export default function NOFOParser() {
         const analysisResult = await client.functions.invoke('analyzeGrant', analysisPayload);
 
         if (!analysisResult?.data?.success) {
-            // Grant is saved; analysis failed. Log and warn but do not block navigation.
-            // The record will remain ai_status='queued' for background retry.
-            log.warn('analyzeGrant did not return success', {
+            log.warn('analyzeGrant did not return success â patching record with analysis_failed status', {
                 grantId: newGrant.id,
                 response: analysisResult?.data,
+            });
+            // Patch the record so the pipeline state machine reflects the failure
+            // and operators can query for records needing retry.
+            await client.entities.Grant.update(newGrant.id, {
+                ai_status: 'analysis_failed',
+                match_explanation: 'AI analysis could not complete at time of submission. Queued for retry.',
+                evaluated_at: new Date().toISOString(),
+            }).catch((patchErr) => {
+                log.error('Failed to patch grant ai_status after analysis failure', { grantId: newGrant.id, patchErr });
             });
             toast({
                 variant: 'destructive',
@@ -391,7 +412,21 @@ export default function NOFOParser() {
                         <div className="space-y-3">
                             <p><strong>Title:</strong> {extractedData.title || 'N/A'}</p>
                             <p><strong>Funder:</strong> {extractedData.funder || 'N/A'}</p>
-                            <p><strong>Deadline:</strong> {extractedData.deadline || 'N/A'}</p>
+                            {(() => {
+  const dl = extractedData.deadline;
+  const isPast = dl && new Date(dl) < new Date();
+  return (
+    <p>
+      <strong>Deadline:</strong>{' '}
+      {dl || 'N/A'}
+      {isPast && (
+        <span className="ml-2 text-xs font-semibold text-red-600 bg-red-50 px-2 py-0.5 rounded">
+          â  Deadline has passed â this opportunity may be rejected by the pipeline
+        </span>
+      )}
+    </p>
+  );
+})()}
                             <p><strong>Opportunity #:</strong> {extractedData.opportunity_number || 'N/A'}</p>
                             <p><strong>Award Range:</strong> ${extractedData.amount_min?.toLocaleString() || 'N/A'} - ${extractedData.amount_max?.toLocaleString() || 'N/A'}</p>
                             {extractedData.funder_email && <p><strong>Email:</strong> {extractedData.funder_email}</p>}
