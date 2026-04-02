@@ -121,8 +121,8 @@ function buildBoostedTerms(intel, needCode) {
 
   // Geography boosts
   if (intel.state) boosted.push(intel.state)
-  if (intel.geographicFlags.has('rural')) boosted.push('rural')
-  if (intel.geographicFlags.has('underserved')) boosted.push('underserved community')
+  if (intel.geographicFlags?.has('rural')) boosted.push('rural')
+  if (intel.geographicFlags?.has('underserved')) boosted.push('underserved community')
 
   // Special eligibility boosts
   if (intel.eligibilityFlags?.has('is_501c3')) boosted.push('501(c)(3)')
@@ -174,7 +174,7 @@ function buildExclusions(intel, needDef) {
   }
 
   // Faith-based exclusions: some federal grants exclude religious use
-  if (intel.isChurch || intel.eligibilityFlags.has('faith_based')) {
+  if (intel.isChurch || intel.eligibilityFlags?.has('faith_based')) {
     exclusions.push('public_facility_only:false')  // allow faith-based
   }
 
@@ -326,7 +326,6 @@ export function getSearchPlanSummary(plans) {
   if (!plans || plans.length === 0) return []
 
   return plans
-    .filter(p => p.confidence !== 'low')
     .map(p => ({
       need: p.need_label,
       lane: p.search_lane,
