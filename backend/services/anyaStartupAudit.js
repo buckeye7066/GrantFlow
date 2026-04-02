@@ -28,6 +28,10 @@ let _auditRunning = false
  * @param {string} [opts.adminToken] - Bearer token for authed endpoints
  */
 export function triggerStartupAudit(db, opts = {}) {
+  if (!db) {
+    console.warn('[anyaStartupAudit] No DB connection provided â audit skipped')
+    return
+  }
   if (_auditRunning) return
   if (!shouldRunAudit(db)) return
 
@@ -62,8 +66,10 @@ export function triggerStartupAudit(db, opts = {}) {
     }
 
     try {
-      markAuditComplete(db)
-    } catch { /* non-critical */ }
+      await markAuditComplete(db)
+    } catch (e) {
+      console.warn('[anyaStartupAudit] markAuditComplete failed (non-critical):', e?.message)
+    }
 
     const elapsed = ((Date.now() - startTime) / 1000).toFixed(1)
     console.log(`[anyaStartupAudit] Background audit complete in ${elapsed}s`)
