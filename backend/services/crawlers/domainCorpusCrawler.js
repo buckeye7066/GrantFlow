@@ -119,7 +119,16 @@ export async function runDomainCorpusCrawl(db, options = {}) {
         if (opp.record_origin === 'live_crawl') liveCount++
         else directoryCount++
 
-        const withMeta = attachCorpusMetadata(opp, config)
+        const withMeta = {
+  ...attachCorpusMetadata(opp, config),
+  match_decision: 'PENDING',
+  match_explanation: 'Awaiting profile match evaluation',
+  matched_needs: JSON.stringify([]),
+  eligibility_status: 'unreviewed',
+  ineligibility_reasons: JSON.stringify([]),
+  evaluated_at: null,
+  match_confidence: null,
+}
         allOpportunities.push(withMeta)
       }
 
@@ -158,6 +167,13 @@ export async function runDomainCorpusCrawl(db, options = {}) {
         state: 'nationwide',
         record_origin: 'live_crawl',
         source: o.source ?? o.crawler_type,
+        match_decision: 'PENDING',
+        match_explanation: 'Awaiting profile match evaluation',
+        matched_needs: JSON.stringify([]),
+        eligibility_status: 'unreviewed',
+        ineligibility_reasons: JSON.stringify([]),
+        evaluated_at: null,
+        match_confidence: null,
       }
       allOpportunities.push(withMeta)
       stats.number_directory_resources += 1
@@ -179,6 +195,11 @@ export async function runDomainCorpusCrawl(db, options = {}) {
   })
   stats.number_deduped = allOpportunities.length - deduped.length
   stats.total_candidates = allOpportunities.length
+  if (stats.number_deduped > 0) {
+    console.info(
+      `[domainCorpusCrawler] Deduplication removed ${stats.number_deduped} duplicate URLs from ${allOpportunities.length} candidates.`,
+    )
+  }
 
   let inserted
   try {
