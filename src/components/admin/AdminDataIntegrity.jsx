@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { apiFetch } from '@/api/client';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { Database, AlertTriangle, CheckCircle2, RefreshCw, Wrench, ShieldAlert } from 'lucide-react';
+import { Database, AlertTriangle, CheckCircle2, RefreshCw, Wrench, ShieldAlert, Loader2 } from 'lucide-react';
 import { useToast } from '@/components/ui/use-toast';
 
 export default function AdminDataIntegrity() {
@@ -146,21 +146,4 @@ export default function AdminDataIntegrity() {
   );
 }
 
-function Loader2(props) {
-  return (
-    <svg
-      {...props}
-      xmlns="http://www.w3.org/2000/svg"
-      width="24"
-      height="24"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <path d="M21 12a9 9 0 1 1-6.219-8.56" />
-    </svg>
-  );
-}
+// Loader2 is now imported from lucide-react above â local definition removed.
