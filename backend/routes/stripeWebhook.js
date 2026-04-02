@@ -46,7 +46,14 @@ router.post('/', async (req, res) => {
         const purchaseId = String(metadata.purchase_id || '').trim()
         const phase = String(metadata.milestone_phase || '').trim()
         if (purchaseId && phase) {
-          const newStatus = phase === 'kickoff' ? 'in_progress' : phase === 'submission' ? 'paid' : null
+          const MILESTONE_PHASE_TO_STATUS = { kickoff: 'in_progress', submission: 'paid' }
+          const newStatus = MILESTONE_PHASE_TO_STATUS[phase] ?? null
+          // Only process recognised phases; log and skip unknown ones to avoid
+          // partial-state corruption in the purchase pipeline.
+          const knownPhases = Object.keys(MILESTONE_PHASE_TO_STATUS)
+          if (!knownPhases.includes(phase)) {
+            console.warn('Stripe webhook: unrecognised milestone_phase â skipping purchase state update', { purchaseId, phase, eventId: event?.id })
+          }
           const transaction = req.db.transaction(() => {
             req.db.prepare(
               `UPDATE milestone_payments SET status = 'paid', stripe_payment_intent_id = COALESCE(stripe_payment_intent_id, ?), paid_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE purchase_id = ? AND phase = ?`
@@ -62,41 +69,41 @@ router.post('/', async (req, res) => {
       } else if (kind === 'hourly_invoice') {
         const invoiceId = String(metadata.hourly_invoice_id || '').trim()
         const purchaseId = String(metadata.purchase_id || '').trim()
-        if (invoiceId) {
-          await req.db.prepare(
-            `
-              UPDATE hourly_invoices
-              SET status = 'paid',
-                  stripe_payment_intent_id = COALESCE(stripe_payment_intent_id, ?),
-                  paid_at = CURRENT_TIMESTAMP
-              WHERE id = ?
-            `,
-          ).run(paymentIntent, invoiceId)
-        }
-        if (purchaseId) {
-          await req.db.prepare(
-            `
-              UPDATE service_purchases
-              SET status = 'paid',
-                  stripe_payment_intent_id = COALESCE(stripe_payment_intent_id, ?),
-                  updated_at = CURRENT_TIMESTAMP
-              WHERE id = ?
-            `,
-          ).run(paymentIntent, purchaseId)
-        }
+        const hourlyTransaction = req.db.transaction(() => {
+          if (invoiceId) {
+            req.db.prepare(
+              `UPDATE hourly_invoices
+               SET status = 'paid',
+                   stripe_payment_intent_id = COALESCE(stripe_payment_intent_id, ?),
+                   paid_at = CURRENT_TIMESTAMP
+               WHERE id = ?`
+            ).run(paymentIntent, invoiceId)
+          }
+          if (purchaseId) {
+            req.db.prepare(
+              `UPDATE service_purchases
+               SET status = 'paid',
+                   stripe_payment_intent_id = COALESCE(stripe_payment_intent_id, ?),
+                   updated_at = CURRENT_TIMESTAMP
+               WHERE id = ?`
+            ).run(paymentIntent, purchaseId)
+          }
+        })
+        hourlyTransaction()
       } else if (kind === 'service_purchase') {
         const purchaseId = String(metadata.purchase_id || '').trim()
         if (purchaseId) {
-          await req.db.prepare(
-            `
-              UPDATE service_purchases
-              SET status = 'paid',
-                  stripe_payment_intent_id = COALESCE(stripe_payment_intent_id, ?),
-                  stripe_checkout_session_id = COALESCE(stripe_checkout_session_id, ?),
-                  updated_at = CURRENT_TIMESTAMP
-              WHERE id = ?
-            `,
+          const spResult = req.db.prepare(
+            `UPDATE service_purchases
+             SET status = 'paid',
+                 stripe_payment_intent_id = COALESCE(stripe_payment_intent_id, ?),
+                 stripe_checkout_session_id = COALESCE(stripe_checkout_session_id, ?),
+                 updated_at = CURRENT_TIMESTAMP
+             WHERE id = ?`
           ).run(paymentIntent, checkoutSessionId, purchaseId)
+          if (spResult.changes === 0) {
+            console.error('Stripe webhook: service_purchase UPDATE matched 0 rows â purchaseId not found in DB', { purchaseId, eventId: event?.id, checkoutSessionId })
+          }
         }
       }
     }
