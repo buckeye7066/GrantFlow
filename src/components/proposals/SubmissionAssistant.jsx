@@ -71,6 +71,9 @@ export default function SubmissionAssistant({ open, onClose, grant, organization
         console.warn('[SubmissionAssistant] exportPackage returned no download_url', result)
       }
     },
+    onError: (err) => {
+      console.error('[SubmissionAssistant] exportPackage API call failed', err)
+    },
   })
 
   const submitMutation = useMutation({
@@ -80,6 +83,9 @@ export default function SubmissionAssistant({ open, onClose, grant, organization
       queryClient.invalidateQueries({ queryKey: ['grants'] })
       queryClient.invalidateQueries({ queryKey: ['application', applicationId] })
       onClose?.()
+    },
+    onError: (err) => {
+      console.error('[SubmissionAssistant] submit failed', err)
     },
   })
 
@@ -114,14 +120,13 @@ export default function SubmissionAssistant({ open, onClose, grant, organization
   const canSubmit =
     Boolean(applicationId) &&
     Boolean(submissionMethod) &&
-    (
-      submissionMethod === 'download' ||
-      submissionMethod === 'portal' ||
-      recipientEmail ||
-      recipientFax ||
-      recipientAddress ||
-      notes
-    )
+    (() => {
+      if (submissionMethod === 'download' || submissionMethod === 'portal') return true
+      if (submissionMethod === 'email') return Boolean(recipientEmail)
+      if (submissionMethod === 'fax') return Boolean(recipientFax)
+      if (submissionMethod === 'mail') return Boolean(recipientAddress)
+      return false
+    })()
 
   const busy = validateMutation.isPending || exportMutation.isPending || submitMutation.isPending || autoPopulateMutation.isPending
 
