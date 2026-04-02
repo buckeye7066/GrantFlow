@@ -42,44 +42,49 @@ export function auditLogger(req, res, next) {
         console.log(`[AUDIT] ${JSON.stringify(logEntry)}`);
 
         if (req.db) {
+          // One-time DDL + statement cache keyed on the db instance
           try {
-            // Ensure audit_logs table exists (idempotent)
-            req.db.prepare(`
-              CREATE TABLE IF NOT EXISTS audit_logs (
-                id TEXT PRIMARY KEY,
-                correlation_id TEXT,
-                timestamp TEXT,
-                user_id TEXT,
-                method TEXT,
-                path TEXT,
-                status INTEGER,
-                duration_ms INTEGER,
-                ip TEXT,
-                payload TEXT
-              )
-            `).run();
-            const insertStmt = req.db.prepare(`
-              INSERT INTO audit_logs (id, correlation_id, timestamp, user_id, method, path, status, duration_ms, ip, payload)
-              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            `);
+            if (!req.db.__auditReady) {
+              req.db.prepare(`
+                CREATE TABLE IF NOT EXISTS audit_logs (
+                  id TEXT PRIMARY KEY,
+                  correlation_id TEXT,
+                  timestamp TEXT,
+                  user_id TEXT,
+                  method TEXT,
+                  path TEXT,
+                  status INTEGER,
+                  duration_ms INTEGER,
+                  ip TEXT,
+                  payload TEXT
+                )
+              `).run();
+              req.db.__auditInsert = req.db.prepare(`
+                INSERT INTO audit_logs (id, correlation_id, timestamp, user_id, method, path, status, duration_ms, ip, payload)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              `);
+              req.db.__auditReady = true;
+            }
 
-            // Execute async to prevent blocking
+            // Capture stable references before setImmediate
+            const stmtRef = req.db.__auditInsert;
+            const entrySnapshot = [
+              logEntry.id,
+              logEntry.correlation_id,
+              logEntry.timestamp,
+              logEntry.user_id,
+              logEntry.method,
+              logEntry.path,
+              logEntry.status,
+              logEntry.duration_ms,
+              logEntry.ip,
+              JSON.stringify(logEntry.payload)
+            ];
+
             setImmediate(() => {
               try {
-                insertStmt.run(
-                  logEntry.id,
-                  logEntry.correlation_id,
-                  logEntry.timestamp,
-                  logEntry.user_id,
-                  logEntry.method,
-                  logEntry.path,
-                  logEntry.status,
-                  logEntry.duration_ms,
-                  logEntry.ip,
-                  JSON.stringify(logEntry.payload)
-                );
+                stmtRef.run(...entrySnapshot);
               } catch (e) {
-                // Fallback if table structure doesn't match or fails
                 console.error('[audit] Failed to persist audit log to DB', {
                   error: e.message,
                   stack: e.stack,
@@ -126,7 +131,7 @@ function redactSensitiveData(obj) {
   for (const [key, value] of Object.entries(obj)) {
     if (sensitiveKeys.some(sk => key.toLowerCase().includes(sk))) {
       redacted[key] = '[REDACTED]';
-    } else if (typeof value === 'object') {
+    } else if (value !== null && typeof value === 'object') {
       redacted[key] = redactSensitiveData(value);
     } else {
       redacted[key] = value;
