@@ -70,6 +70,8 @@ export async function extractTextWithFallback({
       text = ocrText
     } else {
       warnings.push('OCR returned no text for image; retaining base extraction result if available.')
+      ocrUsed = false
+      ocrConfidence = null
     }
     if (pages !== null && pages !== 1) {
       warnings.push(`Base extractor reported ${pages} pages for an image file; overriding to 1.`)
@@ -135,7 +137,12 @@ export async function extractTextWithFallback({
         } else if (ocrUsed) {
           // OCR ran but no page returned a finite confidence score
           ocrConfidence = -1
-          warnings.push('OCR ran but no page returned a finite confidence value; ocr_confidence set to -1 as sentinel.')
+          const allFailed = perPageTexts.length === 0 && rasterFiles.length > 0
+          if (allFailed) {
+            warnings.push('OCR ran but every page threw an error; ocr_confidence set to -1 as sentinel.')
+          } else {
+            warnings.push('OCR ran but no page returned a finite confidence value; ocr_confidence set to -1 as sentinel.')
+          }
         }
 
         const baseTrimmed = String(text || '').trim()
