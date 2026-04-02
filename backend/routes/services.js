@@ -25,14 +25,24 @@ router.use(async (req, _res, next) => {
 })
 
 router.get('/catalog', async (req, res) => {
-  const includeInactive = String(req.query?.include_inactive || '').toLowerCase() === 'true'
-  const catalog = await listServiceCatalog(req.db, { includeInactive })
-  res.json({ ok: true, catalog })
+  try {
+    const includeInactive = String(req.query?.include_inactive || '').toLowerCase() === 'true'
+    const catalog = await listServiceCatalog(req.db, { includeInactive })
+    res.json({ ok: true, catalog })
+  } catch (error) {
+    console.error('[services] GET /catalog error:', error?.message || String(error))
+    res.status(500).json({ ok: false, error: 'Failed to load service catalog' })
+  }
 })
 
 router.get('/terms', ensureAuth, async (req, res) => {
-  const terms = await getLatestServiceTerms(req.db)
-  res.json({ ok: true, terms })
+  try {
+    const terms = await getLatestServiceTerms(req.db)
+    res.json({ ok: true, terms })
+  } catch (error) {
+    console.error('[services] GET /terms error:', error?.message || String(error))
+    res.status(500).json({ ok: false, error: 'Failed to load service terms' })
+  }
 })
 
 async function getClientCategoryForProfile(db, profileId, userId) {
