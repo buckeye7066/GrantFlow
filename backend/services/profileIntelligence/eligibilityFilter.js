@@ -135,13 +135,17 @@ function extractOppNeedCodes(opportunity) {
     })()),
   ].join(' ').toLowerCase()
 
-  // Map text to need codes via taxonomy synonyms
+  // Map text to need codes via taxonomy synonyms (word-boundary match to avoid substring noise)
   for (const [code, def] of Object.entries(NEEDS_TAXONOMY)) {
     if (!def || typeof def !== 'object') continue
     const synonyms = Array.isArray(def.synonyms) ? def.synonyms : []
     const label = typeof def.label === 'string' ? def.label : ''
-    const matchesSynonym = synonyms.some(s => textToSearch.includes(String(s).toLowerCase()))
-    const matchesLabel = label.length > 0 && textToSearch.includes(label.toLowerCase())
+    const matchesSynonym = synonyms.some(s => {
+      const escaped = String(s).toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+      return new RegExp(`\\b${escaped}\\b`).test(textToSearch)
+    })
+    const matchesLabel = label.length > 0 &&
+      new RegExp(`\\b${label.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`).test(textToSearch)
     if (matchesSynonym || matchesLabel) codes.push(code)
   }
 
@@ -263,7 +267,7 @@ export function filterEligibility(intel, opportunity) {
 
   // 3. Loan (never eligible for grant seekers)
   const isLoan = Boolean(opportunity.is_loan) ||
-    /\bloan\b/i.test(String(opportunity.opportunity_type || ''))
+    /^loan$/i.test(String(opportunity.opportunity_type || '').trim())
   if (isLoan) {
     hard_failures.push('is_loan')
     reasons.push('Opportunity is a loan, not a grant')
@@ -424,18 +428,18 @@ export function filterEligibility(intel, opportunity) {
   // ── Compute verdict ───────────────────────────────────────────────────────
   // Hard failures are absolute blockers â any single one means ineligible.
   // Soft warnings reduce score but never block outright.
-  let score = 100
-  score -= soft_warnings.length * 10
-  score = Math.max(0, Math.min(100, score))
-
+  let score
   let verdict
   if (hard_failures.length > 0) {
     verdict = 'ineligible'
     score = 0
-  } else if (soft_warnings.length > 0) {
-    verdict = 'probably_eligible'
   } else {
-    verdict = 'eligible'
+    score = Math.max(0, Math.min(100, 100 - soft_warnings.length * 10))
+    if (score >= 70) {
+      verdict = soft_warnings.length > 0 ? 'probably_eligible' : 'eligible'
+    } else {
+      verdict = 'probably_ineligible'
+    }
   }
 
   return {
