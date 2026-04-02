@@ -54,8 +54,10 @@ function detectScholarshipAmount(text) {
     }
   }
 
-  // Fallback: largest amount (often scholarship/award).
-  return amounts.sort((a, b) => b.value - a.value)[0]
+  // Fallback: largest amount (often scholarship/award), flagged as low-confidence.
+  const sorted = amounts.slice().sort((a, b) => b.value - a.value)
+  if (!sorted[0]) return null
+  return { ...sorted[0], lowConfidence: true }
 }
 
 export function buildFallbackDocumentSummary({ document, extractedText }) {
@@ -99,7 +101,11 @@ export async function applyFallbackUniversityUpdates({ db, profileId, document, 
   let parsed
   try {
     parsed = JSON.parse(row.data)
-  } catch {
+  } catch (parseErr) {
+    console.error(
+      '[documentFallbackParser] Failed to parse university_applications JSON',
+      { profileId, applicationId, error: String(parseErr) }
+    )
     return { updated: false, updated_fields: [] }
   }
 
@@ -123,23 +129,30 @@ export async function applyFallbackUniversityUpdates({ db, profileId, document, 
     const label = 'Scholarship letter received'
     const existingStageIndex = pipeline.findIndex((s) => String(s?.label || '').toLowerCase() === label.toLowerCase())
     const now = new Date().toISOString().slice(0, 10)
+    const confidenceNote = scholarship.lowConfidence
+      ? `Possible award amount (low confidence â no keyword context): ${scholarship.raw}`
+      : `Detected award amount: ${scholarship.raw}`
     const nextStage =
       existingStageIndex === -1
         ? {
             id: `stage_${Math.random().toString(36).slice(2, 10)}`,
             label,
-            status: 'completed',
+            status: scholarship.lowConfidence ? 'needs_review' : 'completed',
             due_date: null,
-            completed_at: now,
-            notes: `Detected award amount: ${scholarship.raw}`,
+            completed_at: scholarship.lowConfidence ? null : now,
+            notes: confidenceNote,
           }
         : {
             ...pipeline[existingStageIndex],
-            status: 'completed',
-            completed_at: pipeline[existingStageIndex]?.completed_at || now,
+            status: scholarship.lowConfidence
+              ? pipeline[existingStageIndex]?.status || 'needs_review'
+              : 'completed',
+            completed_at: scholarship.lowConfidence
+              ? pipeline[existingStageIndex]?.completed_at || null
+              : pipeline[existingStageIndex]?.completed_at || now,
             notes:
               pipeline[existingStageIndex]?.notes ||
-              `Detected award amount: ${scholarship.raw}`,
+              confidenceNote,
           }
 
     if (existingStageIndex === -1) pipeline.push(nextStage)
