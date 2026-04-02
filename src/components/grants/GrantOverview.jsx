@@ -415,7 +415,13 @@ Return ONLY the JSON. Use null for any information you cannot verify with confid
                                 {(grant.application_url || grant.url) && (
                                     <div>
                                         <strong>Apply online:</strong>{' '}
-                                        <a href={grant.application_url || grant.url} target="_blank" rel="noopener noreferrer" className="underline font-semibold">{grant.application_url || grant.url}</a>
+                                        {(() => {
+  const applyUrl = grant.application_url || grant.url;
+  const isValidUrl = typeof applyUrl === 'string' && /^https?:\/\//i.test(applyUrl);
+  return isValidUrl
+    ? <a href={applyUrl} target="_blank" rel="noopener noreferrer" className="underline font-semibold">{applyUrl}</a>
+    : <span className="text-slate-500 italic">URL not available</span>;
+})()}
                                     </div>
                                 )}
                                 {grant.funder_address && (
