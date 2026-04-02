@@ -407,7 +407,7 @@ Return ONLY the JSON. Use null for any information you cannot verify with confid
                         </div>
                     )}
 
-                    {(['portal', 'submitted', 'application_prep', 'revision', 'awarded', 'identified'].includes(grant.status) || !grant.status) && (grant.application_url || grant.url || grant.funder_address || grant.funder_fax) && (
+                    {(grant.status !== 'rejected' && grant.status !== 'declined' && grant.status !== 'closed') && (grant.application_url || grant.url || grant.funder_address || grant.funder_fax) && (
                         <Alert className="border-2 border-blue-200 bg-blue-50">
                             <Info className="h-4 w-4 text-blue-600" />
                             <AlertTitle className="text-blue-900">Ready to Submit</AlertTitle>
