@@ -33,10 +33,7 @@ export default function AddExpenseForm({ grantId, onSuccess }) {
     queryFn: async () => {
       const grants = await client.entities.Grant.list();
       const foundGrant = grants.find(g => g.id === grantId);
-      if (foundGrant) {
-        setFormData(prev => ({...prev, organization_id: foundGrant.organization_id}));
-      }
-      return foundGrant;
+      return foundGrant ?? null;
     },
     enabled: !!grantId,
   });
