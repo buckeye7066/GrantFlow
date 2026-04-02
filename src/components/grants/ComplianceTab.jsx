@@ -30,14 +30,14 @@ export default function ComplianceTab({ grant }) {
   const { data: expenses = [], isLoading: isLoadingExpenses } = useQuery({
     queryKey: ['expenses', grant.id],
     queryFn: () => client.entities.Expense.filter({ grant_id: grant.id }),
-    enabled: !isLoadingAward && !!award,
+    enabled: !!award?.id,
   });
 
   const createAwardMutation = useMutation({
     mutationFn: () => client.entities.GrantAward.create({
       grant_id: grant.id,
       organization_id: grant.organization_id,
-      award_amount: grant.typical_award || grant.amount_max || 0,
+      award_amount: parseFloat(grant.typical_award || grant.amount_max || 0) || 0,
       funder_name: grant.funder,
       start_date: new Date().toISOString().split('T')[0],
       policy_json: JSON.stringify(defaultPolicy),
@@ -45,6 +45,9 @@ export default function ComplianceTab({ grant }) {
     }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['grantAward', grant.id] });
+    },
+    onError: (err) => {
+      console.error('[ComplianceTab] Failed to create award record', err);
     },
   });
 
