@@ -28,6 +28,17 @@ function mapProfileToOrganization(profile) {
     profile_image_url: profile.avatar_url ?? null,
     mission: profile.mission,
     tags: profile.tags ?? [],
+    // Preserve deep profile sections so downstream components and search
+    // can inspect sub-type detail without a second fetch (Goals 5, 6).
+    location: profile.location ?? null,
+    needs: profile.needs ?? [],
+    military: profile.military ?? null,
+    education: profile.education ?? null,
+    family: profile.family ?? null,
+    health: profile.health ?? null,
+    emergency: profile.emergency ?? null,
+    business: profile.business ?? null,
+    housing: profile.housing ?? null,
   }
 }
 
@@ -66,9 +77,13 @@ export default function Organizations() {
 
   const filteredOrgs = useMemo(() => {
     return organizations.filter((org) => {
-      const matchesSearch =
-        org.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        org.applicant_type?.toLowerCase().includes(searchTerm.toLowerCase())
+      const lowerSearch = searchTerm.toLowerCase()
+const matchesSearch =
+        org.name.toLowerCase().includes(lowerSearch) ||
+        (org.applicant_type?.toLowerCase().includes(lowerSearch) ?? false) ||
+        (org.mission?.toLowerCase().includes(lowerSearch) ?? false) ||
+        (Array.isArray(org.tags) && org.tags.some((t) => t.toLowerCase().includes(lowerSearch))) ||
+        (Array.isArray(org.needs) && org.needs.some((n) => n.toLowerCase().includes(lowerSearch)))
 
       const matchesType = typeFilter === "all" || org.applicant_type === typeFilter
 
