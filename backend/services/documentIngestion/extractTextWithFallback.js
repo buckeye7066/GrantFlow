@@ -71,6 +71,9 @@ export async function extractTextWithFallback({
     } else {
       warnings.push('OCR returned no text for image; retaining base extraction result if available.')
     }
+    if (pages !== null && pages !== 1) {
+      warnings.push(`Base extractor reported ${pages} pages for an image file; overriding to 1.`)
+    }
     pages = 1
   }
 
@@ -129,6 +132,10 @@ export async function extractTextWithFallback({
         if (perPageConfs.length > 0) {
           const avg = perPageConfs.reduce((a, b) => a + b, 0) / perPageConfs.length
           ocrConfidence = avg
+        } else if (ocrUsed) {
+          // OCR ran but no page returned a finite confidence score
+          ocrConfidence = -1
+          warnings.push('OCR ran but no page returned a finite confidence value; ocr_confidence set to -1 as sentinel.')
         }
 
         const baseTrimmed = String(text || '').trim()
@@ -154,9 +161,9 @@ export async function extractTextWithFallback({
         )
       } finally {
         if (typeof raster?.cleanup === 'function') {
-          await raster.cleanup()
+          try { await raster.cleanup() } catch (_) { /* cleanup best-effort */ }
         } else if (tmpDir) {
-          await cleanupPdfPages(tmpDir)
+          try { await cleanupPdfPages(tmpDir) } catch (_) { /* cleanup best-effort */ }
         }
       }
     }
