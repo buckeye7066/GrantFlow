@@ -194,12 +194,41 @@ export default function NOFOParser() {
       opportunity_type: 'grant',
       ai_status: 'queued',
       url: inputMode === 'url' ? url : (extractedData.url || ''),
+      // Seed audit fields so the pipeline function receives a well-formed
+      // record and does not overwrite computed values with null (Goals 8, 9).
+      match_decision: null,
+      match_explanation: null,
+      matched_needs: [],
+      eligibility_status: 'pending',
+      ineligibility_reasons: [],
+      fingerprints: null,
+      matcher_version: null,
+      evaluated_at: null,
+      match_confidence: null,
     };
 
     try {
-        const newGrant = await client.entities.Grant.create(grantPayload);
+        // Route through the canonical pipeline insertion function so that
+        // relevanceFilter hard-disqualification and computeMatchDecision run
+        // before any record is written to the DB (Goals 3, 4, 8).
+        const pipelineResult = await client.functions.invoke('saveToProfilePipeline', {
+          opportunity: grantPayload,
+          organizationId: selectedOrgId,
+          source: 'nofo_parser',
+        });
 
-        const analysisPayload = {
+        if (!pipelineResult?.data?.success) {
+          // Surface the canonical rejection reason so operators understand why
+          // (Goal 8 - explainable pipeline, Goal 12 - plain language).
+          const reason = pipelineResult?.data?.rejection_reason ||
+                         pipelineResult?.data?.message ||
+                         'Pipeline rejected this opportunity. Check eligibility criteria.';
+          throw new Error(reason);
+        }
+
+        const newGrant = pipelineResult.data.grant;
+
+        const analysisResult = await client.functions.invoke('analyzeGrant', {
             grantId: newGrant.id,
             title: newGrant.title,
             programDescription: newGrant.program_description,
@@ -207,9 +236,7 @@ export default function NOFOParser() {
             selectionCriteria: newGrant.selection_criteria,
             awardCeiling: newGrant.amount_max,
             deadline: newGrant.deadline,
-        };
-
-        const analysisResult = await client.functions.invoke('analyzeGrant', analysisPayload);
+        });
 
         if (!analysisResult?.data?.success) {
             log.warn('analyzeGrant did not return success â patching record with analysis_failed status', {
