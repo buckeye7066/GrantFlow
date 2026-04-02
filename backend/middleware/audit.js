@@ -45,25 +45,35 @@ export function auditLogger(req, res, next) {
           // One-time DDL + statement cache keyed on the db instance
           try {
             if (!req.db.__auditReady) {
-              req.db.prepare(`
-                CREATE TABLE IF NOT EXISTS audit_logs (
-                  id TEXT PRIMARY KEY,
-                  correlation_id TEXT,
-                  timestamp TEXT,
-                  user_id TEXT,
-                  method TEXT,
-                  path TEXT,
-                  status INTEGER,
-                  duration_ms INTEGER,
-                  ip TEXT,
-                  payload TEXT
-                )
-              `).run();
-              req.db.__auditInsert = req.db.prepare(`
-                INSERT INTO audit_logs (id, correlation_id, timestamp, user_id, method, path, status, duration_ms, ip, payload)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-              `);
-              req.db.__auditReady = true;
+              try {
+                req.db.prepare(`
+                  CREATE TABLE IF NOT EXISTS audit_logs (
+                    id TEXT PRIMARY KEY,
+                    correlation_id TEXT,
+                    timestamp TEXT,
+                    user_id TEXT,
+                    method TEXT,
+                    path TEXT,
+                    status INTEGER,
+                    duration_ms INTEGER,
+                    ip TEXT,
+                    payload TEXT
+                  )
+                `).run();
+                req.db.__auditInsert = req.db.prepare(`
+                  INSERT INTO audit_logs (id, correlation_id, timestamp, user_id, method, path, status, duration_ms, ip, payload)
+                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                `);
+                req.db.__auditReady = true;
+              } catch (ddlErr) {
+                // Mark as permanently failed so we stop retrying DDL on every request
+                req.db.__auditReady = 'failed';
+                console.error('[audit] DDL/prepare failed; DB audit disabled for this instance', {
+                  error: ddlErr.message,
+                  stack: ddlErr.stack,
+                  correlation_id: correlationId
+                });
+              }
             }
 
             // Capture stable references before setImmediate
@@ -125,7 +135,9 @@ export function auditLogger(req, res, next) {
 function redactSensitiveData(obj) {
   if (!obj || typeof obj !== 'object') return obj;
 
-  const sensitiveKeys = ['password', 'token', 'secret', 'ssn', 'ein', 'uei', 'email', 'phone', 'address'];
+  const sensitiveKeys = ['password', 'token', 'secret', 'ssn', 'ein', 'email', 'phone', 'address'];
+  // Note: 'uei' (Unique Entity Identifier) is a public SAM.gov identifier and must NOT be redacted
+  // so that audit logs retain full traceability of entity-based matching decisions.
   const redacted = Array.isArray(obj) ? [] : {};
 
   for (const [key, value] of Object.entries(obj)) {
