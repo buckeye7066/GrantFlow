@@ -100,9 +100,9 @@ router.post('/', async (req, res) => {
     const type = String(data.type || '').trim()
     if (!validTypes.includes(type)) return res.status(400).json({ error: 'Invalid contact type' })
     const value = String(data.value || '').trim()
+    if (!type || !value) return res.status(400).json({ error: 'type and value required' })
     if (type === 'email' && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)) return res.status(400).json({ error: 'Invalid email format' })
     if (type === 'phone' && !/^[\d\s\-()+]+$/.test(value)) return res.status(400).json({ error: 'Invalid phone format' })
-    if (!type || !value) return res.status(400).json({ error: 'type and value required' })
 
     const id = data.id ? String(data.id) : crypto.randomUUID()
     const isPrimary = data.is_primary ? 1 : 0
