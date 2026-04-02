@@ -424,19 +424,46 @@ class SqliteDb {
   }
 
   async withTransaction(fn) {
-    // better-sqlite3 transactions are synchronous.
-    // If fn returns a Promise, we must reject rather than silently commit before the async work finishes.
-    const txFn = this._db.transaction((txThis) => {
-      const result = fn(txThis);
-      if (result && typeof result.then === 'function') {
-        throw new Error(
-          '[SqliteDb.withTransaction] Callback must be synchronous for SQLite transactions. ' +
-          'Use PostgresDb or restructure your callback to avoid async operations inside the transaction.'
-        );
-      }
+    // Detect async callbacks upfront so we can choose the right strategy.
+    const isAsync = fn.constructor?.name === 'AsyncFunction'
+
+    if (!isAsync) {
+      // Preferred: use better-sqlite3's native synchronous transaction wrapper.
+      const txFn = this._db.transaction((txThis) => {
+        const result = fn(txThis);
+        if (result && typeof result.then === 'function') {
+          throw new Error(
+            '[SqliteDb.withTransaction] Callback returned a Promise but was not declared async. ' +
+            'Declare the callback as async or make it fully synchronous.'
+          );
+        }
+        return result;
+      });
+      return txFn(this);
+    }
+
+    // Async path: manage the transaction manually with BEGIN/COMMIT.
+    // SQLite prepare().get/all/run() are synchronous, so awaiting them is safe,
+    // but the microtask yields between awaits can let a concurrent request try to
+    // BEGIN on the same connection. Serialize with an async lock.
+    while (this._asyncTxLock) {
+      await this._asyncTxLock;
+    }
+    let unlock;
+    this._asyncTxLock = new Promise((r) => { unlock = r; });
+
+    this._db.exec('BEGIN IMMEDIATE');
+    try {
+      const result = await fn(this);
+      this._db.exec('COMMIT');
       return result;
-    });
-    return txFn(this);
+    } catch (err) {
+      try { this._db.exec('ROLLBACK'); } catch { /* ignore rollback errors */ }
+      throw err;
+    } finally {
+      this._asyncTxLock = null;
+      unlock();
+    }
   }
 
   close() {

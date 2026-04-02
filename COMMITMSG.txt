@@ -1,6 +1,7 @@
-Fix scoring regressions: restore REJECT for low scores, improve detection regexes
+Fix async withTransaction for SQLite: add serialized async path
 
-- matchEngine.js: Restore REJECT for score < 30 (was incorrectly REVIEW)
-- matchEngine.js: Expand RE_UNIVERSITY_PROGRAM to match "off-campus housing" and "enrolled students"
-- matchEngine.js: Add RE_BUSINESS_EXCLUSIVE regex for "exclusively for business owners" patterns
-- matchEngine.js: Expand RE_NONPROFIT_REQUIRED to match "exclusively to 501(c)(3)"
+SqliteDb.withTransaction now detects async callbacks and routes them
+through manual BEGIN IMMEDIATE/COMMIT with a serialization lock instead
+of throwing. Synchronous callbacks still use the native better-sqlite3
+transaction wrapper. This fixes 500 errors in integration tests where
+request-path code passes async callbacks to withTransaction.
