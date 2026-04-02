@@ -69,14 +69,16 @@ export default function ProfileFieldWithAI({
         ? formContext
         : {}
       // formContext is merged FIRST so that explicit keys always win
+      // System-supplied keys are the baseline; caller-supplied formContext keys
+      // take precedence so richer context from the parent is never discarded.
       const context = {
-        ...safeFormContext,
         fieldName: safeField.name,
         fieldLabel: safeField.label,
         currentValue: displayValue || '',
         fieldDescription: safeField.description || '',
         sectionKey,
         profileId,
+        ...safeFormContext,
       }
       
       // Request AI suggestion
@@ -90,6 +92,14 @@ export default function ProfileFieldWithAI({
         toast({
           title: "AI suggestion applied",
           description: `Updated ${safeField.label} with AI-generated content`,
+        })
+      } else {
+        // No suggestion returned â inform the user so they can improve their profile
+        const hint = response?.hint || "Try filling in more profile fields to get better suggestions."
+        toast({
+          title: "No suggestion available",
+          description: hint,
+          variant: "default",
         })
       }
     } catch (error) {
