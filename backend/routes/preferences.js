@@ -1,5 +1,5 @@
 import express from 'express'
-// crypto import removed - was unused
+import { randomUUID } from 'crypto'
 import ensureUserPreferencesTable from '../utils/ensureUserPreferencesTable.js'
 
 const router = express.Router()
@@ -92,7 +92,7 @@ router.get('/', async (req, res) => {
     
     if (!preferences) {
       // Create default preferences for user (rollout: Anya copilot ON, screenshot OFF)
-      const id = crypto.randomUUID()
+      const id = randomUUID()
       // Initialize custom preferences with feature flags and incognito toggle
       const defaultCustom = {
         feature_flags: { anyaCopilotEnabled: true, anyaScreenshotEnabled: false },
@@ -173,7 +173,7 @@ router.put('/', async (req, res) => {
     // Ensure row exists before update.
     let existing = await req.db.prepare('SELECT id FROM user_preferences WHERE user_id = ?').get(userId)
     if (!existing?.id) {
-      const id = crypto.randomUUID()
+      const id = randomUUID()
       const defaultCustom = {
         feature_flags: { anyaCopilotEnabled: true, anyaScreenshotEnabled: false },
         incognitoEnabled: false,
@@ -234,7 +234,7 @@ router.put('/', async (req, res) => {
     values.push(userId)
     
     const updateSql = `UPDATE user_preferences SET ${updates.join(', ')}, updated_at = CURRENT_TIMESTAMP WHERE user_id = ?`
-    await req.db.prepare(updateSql).run(values)
+    await req.db.prepare(updateSql).run(...values)
     
     const updated = await req.db
       .prepare('SELECT * FROM user_preferences WHERE user_id = ?')
@@ -260,7 +260,7 @@ router.post('/reset', async (req, res) => {
 
     await req.db.prepare('DELETE FROM user_preferences WHERE user_id = ?').run(userId)
     
-    const id = crypto.randomUUID()
+    const id = randomUUID()
     const insertSql =
       dialect === 'postgres'
         ? `
