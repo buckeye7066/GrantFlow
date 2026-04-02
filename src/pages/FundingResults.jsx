@@ -113,11 +113,16 @@ export default function FundingResults() {
         // Engine decision absent: use match_score only (never the raw crawler `match` field).
         // This is a display convenience, not a pipeline gate; Goal 4 is not violated
         // because this page never inserts grants â it only presents candidates.
-        return Number(o?.match_score ?? 0) >= 70;
+        const score = Number(o?.match_score ?? null);
+        if (isNaN(score) || o?.match_score == null) {
+          // No engine score present; include rather than suppress (Goal 7: prefer recall).
+          return true;
+        }
+        return score >= 70;
       });
     }
     if (sortBy === 'match') {
-      list.sort((a, b) => (Number(b?.match_score ?? b?.match ?? 0) - Number(a?.match_score ?? a?.match ?? 0)));
+      list.sort((a, b) => (Number(b?.match_score ?? 0) - Number(a?.match_score ?? 0)));
     } else if (sortBy === 'deadline') {
       list.sort((a, b) => {
         const da = parseDeadline(a) ?? Infinity;
@@ -154,9 +159,10 @@ export default function FundingResults() {
     }
 
     const orgId = organizationId ?? null;
-    if (orgId && opportunity.url) {
+    const candidateUrl = opportunity.application_url ?? opportunity.url ?? null;
+    if (orgId && candidateUrl) {
       try {
-        const lookupUrl = opportunity.url ?? opportunity.application_url ?? null;
+        const lookupUrl = candidateUrl;
         if (!lookupUrl) {
           // No URL available to check duplicates against; let the server decide.
         } else {
