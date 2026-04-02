@@ -22,6 +22,12 @@ export function normalizeOpportunity(raw, crawlerType) {
   // Must look like a valid URL
   const urlStr = String(url).trim()
   if (!urlStr.startsWith('http://') && !urlStr.startsWith('https://')) return null
+  try {
+    const parsed = new URL(urlStr)
+    if (!parsed.hostname || parsed.hostname.trim() === '') return null
+  } catch (_) {
+    return null
+  }
 
   return {
     title: String(title).trim(),
@@ -95,8 +101,18 @@ function applyExclusions(opportunities, config) {
       .filter(Boolean)
       .join(' ')
 
-    if (config.strict_no_loans && looksLikeLoan(text)) return false
-    if (config.strict_no_matching && looksLikeMatchingFunds(text)) return false
+    if (config.strict_no_loans && looksLikeLoan(text)) {
+      console.warn(
+        `[domainCrawlerEngine] crawler="${config.id}" pre-excluding loan record: title="${opp.title}" url="${opp.url}"`
+      )
+      return false
+    }
+    if (config.strict_no_matching && looksLikeMatchingFunds(text)) {
+      console.warn(
+        `[domainCrawlerEngine] crawler="${config.id}" pre-excluding matching-funds record: title="${opp.title}" url="${opp.url}"`
+      )
+      return false
+    }
     return true
   })
 }
@@ -161,6 +177,13 @@ export async function runDomainCrawler({ profile, config, options = {} }) {
   const zip = signals?.location?.zip ?? profile?.zip_code ?? profile?.state ?? null
   const state = signals?.location?.state ?? profile?.state ?? null
   const profileThin = !zip && !state && keywordCount < 5
+  if (profileThin) {
+    console.warn(
+      `[domainCrawlerEngine] crawler="${config.id}" profile is thin (no zip, no state, <5 keywords). ` +
+      `Results will be directory-only and pre-scores will be neutral. ` +
+      `Prompt user to complete profile fields: zip_code, state, and need categories.`
+    )
+  }
 
   // Build directory resources (always included, even for thin profiles)
   const directoryResources = config.directoryResources ?? []
