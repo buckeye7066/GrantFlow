@@ -984,13 +984,12 @@ export async function generateAssistantResponse(db, user, sessionId, { content }
     'what is broken',
   ]
 
-  const isHealthQuery = isAdmin && userEmail === ADMIN_EMAIL && healthKeywords.some(keyword => lowerContent.includes(keyword))
-  const isAuditQuery = isAdmin && userEmail === ADMIN_EMAIL && auditKeywords.some(keyword => lowerContent.includes(keyword))
+  const isHealthQuery = isAdmin && healthKeywords.some(keyword => lowerContent.includes(keyword))
+  const isAuditQuery = isAdmin && auditKeywords.some(keyword => lowerContent.includes(keyword))
 
   // Audit queries trigger a CodeGuard deep sweep — more useful than basic health
   if (isAuditQuery) {
     try {
-      const { invokeTool: invokeRegisteredTool } = await import('./anyaToolRegistry.js')
       console.log('[Anya] Audit query detected, invoking admin.codeGuard.deepSweep')
       const sweepResult = await invokeRegisteredTool('admin.codeGuard.deepSweep', {}, { db, user })
       const data = sweepResult?.output ?? sweepResult
@@ -1063,7 +1062,6 @@ export async function generateAssistantResponse(db, user, sessionId, { content }
 
  if (isHealthQuery) {
   try {
-    const { invokeTool: invokeRegisteredTool } = await import('./anyaToolRegistry.js')
     console.log('[Anya] Health query detected, invoking system.health tool')
     const availableTools = listToolMetadata(user)
 if (!availableTools.find(t => t.name === 'system.health')) {
@@ -1370,16 +1368,9 @@ const healthData = await invokeRegisteredTool('system.health', {}, { db, user })
 
 // Cache tool lists at process start — tools are registered once and never change at runtime.
 // Two variants: one for admin users (all tools), one for non-admin (filtered).
-const _toolListCache = { admin: null, user: null }
-
 export function listTools(user) {
   assertAuthenticated(user)
-  const isAdmin = Boolean(user?.isAdmin)
-  const cacheKey = isAdmin ? 'admin' : 'user'
-  if (!_toolListCache[cacheKey]) {
-    _toolListCache[cacheKey] = listToolMetadata(user)
-  }
-  return _toolListCache[cacheKey]
+  return listToolMetadata(user)
 }
 
 export async function invokeTool(db, user, toolName, params, { sessionId } = {}) {
