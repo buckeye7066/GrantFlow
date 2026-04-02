@@ -43,6 +43,28 @@ router.get('/health', async (req, res) => {
     const staleParam =
       req.db?.dialect === 'postgres' ? staleDays : `-${staleDays} day`
 
+    const staleA = await req.db
+      .prepare(
+        `
+          SELECT COUNT(*) AS count
+          FROM nf_programs_a
+          WHERE last_verified IS NOT NULL
+            AND ${stalePredicate}
+        `,
+      )
+      .get(staleParam)?.count
+
+    const staleB = await req.db
+      .prepare(
+        `
+          SELECT COUNT(*) AS count
+          FROM nf_programs_b
+          WHERE last_verified IS NOT NULL
+            AND ${stalePredicate}
+        `,
+      )
+      .get(staleParam)?.count
+
     // Note: keep parameter format simple and portable for our DB wrapper.
     const staleA = await req.db
       .prepare(
@@ -83,6 +105,7 @@ router.get('/health', async (req, res) => {
 })
 
 router.get('/runs', async (req, res) => {
+  if (!requireAdminOrToken(req, res)) return
   try {
     const limit = Math.min(200, Math.max(1, Number.parseInt(req.query.limit ?? 50, 10) || 50))
     const offset = Math.max(0, Number.parseInt(req.query.offset ?? 0, 10) || 0)
@@ -105,6 +128,7 @@ router.get('/runs', async (req, res) => {
 })
 
 router.get('/runs/:id', async (req, res) => {
+  if (!requireAdminOrToken(req, res)) return
   try {
     const run = await req.db
       .prepare('SELECT * FROM crawl_runs WHERE crawl_run_id = ?')
