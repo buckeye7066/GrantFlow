@@ -165,10 +165,11 @@ const defaultCorsOrigins = [
   'https://www.axiombiolabs.org',
   'https://grantflow-production.up.railway.app',
 ];
-const configuredCorsOrigins = Array.isArray(ENV?.corsOrigins) && ENV.corsOrigins.length > 0 ? ENV.corsOrigins : null;
+const configuredCorsOrigins = Array.isArray(ENV?.corsOrigins) && ENV.corsOrigins.length > 0 ? ENV.corsOrigins : [];
+const effectiveCorsOrigins = Array.from(new Set([...defaultCorsOrigins, ...configuredCorsOrigins]));
 
 const corsOptions = {
-  origin: configuredCorsOrigins && configuredCorsOrigins.length > 0 ? configuredCorsOrigins : defaultCorsOrigins,
+  origin: effectiveCorsOrigins,
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Admin-Token', 'X-Anya-Token', 'X-Profile-Id', 'X-Request-Id'],
