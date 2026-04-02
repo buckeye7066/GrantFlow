@@ -96,28 +96,22 @@ export async function updateAnyaRunStatus(db, id, status) {
     throw new Error(`Invalid status: ${status}. Must be one of: ${VALID_STATUSES.join(', ')}`)
   }
   
-  const updates = {
-    status,
+  const isTerminal = ['completed', 'failed', 'cancelled'].includes(status)
+  const setClause = isTerminal
+    ? 'status = ?, completed_at = CURRENT_TIMESTAMP'
+    : 'status = ?'
+  const values = [status]
+  
+  try {
+    await db
+      .prepare(`UPDATE anya_runs SET ${setClause} WHERE id = ?`)
+      .run(...values, id)
+
+    console.log('[anya-runs] Updated Anya run status', { id, status })
+  } catch (error) {
+    console.error('[anya-runs] Failed to update Anya run status', { id, status, error })
+    throw error
   }
-  
-  // Set completed_at for terminal statuses
-  if (['completed', 'failed', 'cancelled'].includes(status)) {
-    updates.completed_at = 'CURRENT_TIMESTAMP'
-  }
-  
-  const setClause = Object.keys(updates).map(key => 
-    key === 'completed_at' ? `${key} = CURRENT_TIMESTAMP` : `${key} = ?`
-  ).join(', ')
-  
-  const values = Object.entries(updates)
-    .filter(([key]) => key !== 'completed_at')
-    .map(([, value]) => value)
-  
-  await db
-    .prepare(`UPDATE anya_runs SET ${setClause} WHERE id = ?`)
-    .run(...values, id)
-  
-  console.log('[anya-runs] Updated Anya run status', { id, status })
 }
 
 /**
@@ -282,8 +276,12 @@ export async function getAnyaRunStatistics(db, since = null) {
       ORDER BY mode, status
     `
   
-  const rows = since
-    ? await db.prepare(query).all(since)
-    : await db.prepare(query).all()
-  return rows
+  try {
+    const stmt = db.prepare(query)
+    const rows = since ? await stmt.all(since) : await stmt.all()
+    return rows
+  } catch (error) {
+    console.error('[anya-runs] Failed to fetch Anya run statistics', { since, error })
+    throw error
+  }
 }
