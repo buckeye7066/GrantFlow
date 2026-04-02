@@ -44,6 +44,19 @@ function tryExtractFirstJson(text) {
 }
 
 async function fetchPdfTextFromUrl(fileUrl) {
+  let parsedUrl
+  try {
+    parsedUrl = new URL(fileUrl)
+  } catch {
+    const err = new Error(`Invalid URL: ${fileUrl}`)
+    err.status = 400
+    throw err
+  }
+  if (parsedUrl.protocol !== 'http:' && parsedUrl.protocol !== 'https:') {
+    const err = new Error(`Unsupported URL scheme: ${parsedUrl.protocol}`)
+    err.status = 400
+    throw err
+  }
   const resp = await fetch(fileUrl, {
     headers: {
       // Grants.gov and some provider sites require a User-Agent to return the full document/page.
@@ -163,7 +176,7 @@ router.post('/parseNOFO', async (req, res) => {
 
         const raw = completion.choices?.[0]?.message?.content
         const parsed = raw ? tryExtractFirstJson(raw) : null
-        if (parsed && typeof parsed === 'object') {
+        if (parsed && typeof parsed === 'object' && Object.keys(parsed).length > 0) {
           return res.json({ success: true, output: parsed, ai_provider: 'openai' })
         }
       } catch (error) {
@@ -184,7 +197,7 @@ router.post('/parseNOFO', async (req, res) => {
         })
         const raw = extractAnthropicText(response)
         const parsed = raw ? tryExtractFirstJson(raw) : null
-        if (parsed && typeof parsed === 'object') {
+        if (parsed && typeof parsed === 'object' && Object.keys(parsed).length > 0) {
           return res.json({ success: true, output: parsed, ai_provider: 'anthropic' })
         }
       } catch (error) {
@@ -193,7 +206,7 @@ router.post('/parseNOFO', async (req, res) => {
     }
 
     // No provider available or both failed: return a minimal best-effort object so the UI can proceed.
-    return res.json({
+    return res.status(503).json({
       success: false,
       output: heuristicFallback(clipped),
       ai_provider: 'fallback',
