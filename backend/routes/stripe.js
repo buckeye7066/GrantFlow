@@ -40,7 +40,8 @@ router.post('/checkout/service', ensureAuth, async (req, res) => {
   if (!purchaseId) return res.status(400).json({ ok: false, error: 'purchase_id required' })
 
   const userId = req.ctx?.userId ?? req.user?.userId
-if (!userId) return res.status(401).json({ ok: false, error: 'Authentication required' })
+  if (!userId) return res.status(401).json({ ok: false, error: 'Authentication required' })
+
   const purchase = await req.db
     .prepare(
       `
@@ -54,7 +55,7 @@ if (!userId) return res.status(401).json({ ok: false, error: 'Authentication req
     .get(purchaseId)
 
   if (!purchase) return res.status(404).json({ ok: false, error: 'purchase not found' })
-  if (!userId || String(purchase.user_id) !== String(userId)) return res.status(403).json({ ok: false, error: 'Not authorized' })
+  if (String(purchase.user_id) !== String(userId)) return res.status(403).json({ ok: false, error: 'Not authorized' })
 
   const pricingModel = String(purchase.pricing_model)
   const clientCategory = String(purchase.client_category)
@@ -78,8 +79,11 @@ if (!userId) return res.status(401).json({ ok: false, error: 'Authentication req
     const milestones = await req.db
       .prepare('SELECT phase, status FROM milestone_payments WHERE purchase_id = ? ORDER BY phase ASC')
       .all(purchaseId)
+    if (!milestones || milestones.length === 0) {
+      return res.status(409).json({ ok: false, error: 'milestone_payments_not_initialized', code: 'MILESTONE_NOT_SETUP' })
+    }
     const order = ['kickoff', 'draft', 'submission']
-    const firstUnpaid = order.find((p) => (milestones || []).find((m) => m.phase === p)?.status !== 'paid') || null
+    const firstUnpaid = order.find((p) => (milestones).find((m) => m.phase === p)?.status !== 'paid') || null
     if (firstUnpaid !== phase) {
       return res.status(409).json({
         ok: false,
@@ -151,6 +155,10 @@ if (!userId) return res.status(401).json({ ok: false, error: 'Authentication req
     idempotencyKey,
   })
 
+  if (!session?.id || !session?.url) {
+    return res.status(503).json({ ok: false, error: 'stripe_session_create_failed', code: 'STRIPE_SESSION_ERROR' })
+  }
+
   // Persist checkout session id
   if (pricingModel === 'milestone') {
     await req.db
@@ -188,12 +196,13 @@ router.post('/checkout/hourly', ensureAuth, async (req, res) => {
   if (!purchaseId) return res.status(400).json({ ok: false, error: 'purchase_id required' })
 
   const userId = req.ctx?.userId ?? req.user?.userId
-if (!userId) return res.status(401).json({ ok: false, error: 'Authentication required' })
+  if (!userId) return res.status(401).json({ ok: false, error: 'Authentication required' })
+
   const purchase = await req.db
     .prepare('SELECT * FROM service_purchases WHERE id = ? LIMIT 1')
     .get(purchaseId)
   if (!purchase) return res.status(404).json({ ok: false, error: 'purchase not found' })
-  if (!userId || String(purchase.user_id) !== String(userId)) return res.status(403).json({ ok: false, error: 'Not authorized' })
+  if (String(purchase.user_id) !== String(userId)) return res.status(403).json({ ok: false, error: 'Not authorized' })
   if (String(purchase.pricing_model) !== 'hourly') return res.status(400).json({ ok: false, error: 'purchase is not hourly' })
 
   const totalRow = await req.db
@@ -262,6 +271,13 @@ if (!userId) return res.status(401).json({ ok: false, error: 'Authentication req
     },
     idempotencyKey: `hourly:${purchaseId}:${invoiceId}`,
   })
+
+  if (!session?.id || !session?.url) {
+    await req.db
+      .prepare('UPDATE hourly_invoices SET status = ? WHERE id = ?')
+      .run('failed', invoiceId)
+    return res.status(503).json({ ok: false, error: 'stripe_session_create_failed', code: 'STRIPE_SESSION_ERROR' })
+  }
 
   await req.db
     .prepare('UPDATE hourly_invoices SET stripe_checkout_session_id = ? WHERE id = ?')
