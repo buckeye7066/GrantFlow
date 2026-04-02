@@ -74,7 +74,7 @@ router.get('/', async (req, res) => {
       // row-level restriction needed.
     }
 
-    query += ' ORDER BY date DESC';
+    query += ' ORDER BY date DESC LIMIT 1000';
     res.json(await req.db.prepare(query).all(...params));
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -120,9 +120,13 @@ router.put('/:id', async (req, res) => {
     if (!existing) return
 
     const { description, amount, category, date, approved } = req.body;
+    const parsedAmount = parseFloat(amount);
+    if (!Number.isFinite(parsedAmount) || parsedAmount < 0) {
+      return res.status(400).json({ error: 'amount must be a non-negative number' });
+    }
     await req.db
       .prepare('UPDATE expenses SET description = ?, amount = ?, category = ?, date = ?, approved = ? WHERE id = ?')
-      .run(description, amount, category, date, Boolean(approved), req.params.id);
+      .run(description, parsedAmount, category, date, Boolean(approved), req.params.id);
     res.json(await req.db.prepare('SELECT * FROM expenses WHERE id = ?').get(req.params.id));
   } catch (error) {
     res.status(500).json({ error: error.message });
