@@ -182,7 +182,7 @@ export async function scheduleJobRetry(db, jobId, deadLetterEntryId, errorContex
  * @returns {Promise<Array>} Array of jobs ready for retry
  */
 export async function getJobsReadyForRetry(db, limit = 10) {
-  const now = new Date().toISOString()
+  const now = new Date().toISOString().replace('T', ' ').replace(/\.\d+Z$/, '')
   
   const rows = await db
     .prepare(
@@ -224,7 +224,7 @@ export async function markExhaustedJobs(db) {
           SET status = 'failed',
               completed_at = CURRENT_TIMESTAMP,
               error = 'Exceeded maximum retry attempts (' || retry_count || '/' || ? || ')'
-          WHERE status IN ('queued', 'failed')
+          WHERE status = 'queued'
             AND retry_count > ?
         `
       )
