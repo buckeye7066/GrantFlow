@@ -61,12 +61,17 @@ router.get('/', async (req, res) => {
       params.push(String(organization_id))
     }
 
-    if (!isAdminUser(user) && !grant_id && !organization_id) {
-      const orgIds = await getAccessibleOrganizationIds(req.db, user)
-      if (!orgIds || orgIds.size === 0) return res.status(403).json({ error: 'No accessible organizations' })
-      const placeholders = Array.from(orgIds).map(() => '?').join(',')
-      query += ` AND organization_id IN (${placeholders})`
-      params.push(...Array.from(orgIds))
+    if (!isAdminUser(user)) {
+      if (!grant_id && !organization_id) {
+        const orgIds = await getAccessibleOrganizationIds(req.db, user)
+        if (!orgIds || orgIds.size === 0) return res.status(403).json({ error: 'No accessible organizations' })
+        const placeholders = Array.from(orgIds).map(() => '?').join(',')
+        query += ` AND organization_id IN (${placeholders})`
+        params.push(...Array.from(orgIds))
+      }
+      // When grant_id or organization_id IS supplied, ensureGrantAccess /
+      // ensureOrganizationAccess above already verified access â no extra
+      // row-level restriction needed.
     }
 
     query += ' ORDER BY date DESC';
@@ -78,7 +83,8 @@ router.get('/', async (req, res) => {
 
 router.post('/', async (req, res) => {
   try {
-    // Remove this - user should be available from middleware
+    const user = requireAuthenticatedUser(req, res);
+    if (!user) return;
 
     const id = crypto.randomUUID();
     const { grant_id, organization_id, description, amount, category, date } = req.body;
@@ -92,11 +98,16 @@ router.post('/', async (req, res) => {
       return res.status(400).json({ error: 'grant_id or organization_id is required' })
     }
 
+    const parsedAmount = parseFloat(amount);
+    if (!Number.isFinite(parsedAmount) || parsedAmount < 0) {
+      return res.status(400).json({ error: 'amount must be a non-negative number' });
+    }
+
     await req.db
       .prepare(
         'INSERT INTO expenses (id, grant_id, organization_id, description, amount, category, date) VALUES (?, ?, ?, ?, ?, ?, ?)',
       )
-      .run(id, grant_id, organization_id, description, amount, category, date);
+      .run(id, grant_id, organization_id, description, parsedAmount, category, date);
     res.status(201).json(await req.db.prepare('SELECT * FROM expenses WHERE id = ?').get(id));
   } catch (error) {
     res.status(500).json({ error: error.message });
