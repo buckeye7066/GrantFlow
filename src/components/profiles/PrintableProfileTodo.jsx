@@ -35,6 +35,7 @@ function escapeHtml(value) {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;")
+    .replace(/\//g, "&#x2F;")
 }
 
 function buildPrintHtml(todo, applicantName) {
@@ -184,16 +185,26 @@ export default function PrintableProfileTodo({ profileId, profileName }) {
     if (!todoData?.todo) return
     const win = window.open("", "_blank", "noopener,noreferrer")
     if (!win) return
-    const html = buildPrintHtml(todoData.todo, todoData.applicant_name || profileName || "Profile")
+    let html
+    try {
+      html = buildPrintHtml(todoData.todo, todoData.applicant_name || profileName || "Profile")
+    } catch (err) {
+      win.close()
+      console.error("[PrintableProfileTodo] buildPrintHtml failed:", err)
+      return
+    }
     win.document.write(html)
     win.document.close()
     win.focus()
-    win.print()
+    win.onload = () => { win.print() }
   }
 
   const todo = todoData?.todo
   const categories = todo?.categories || []
-  const totalItems = todo?.total_items || categories.reduce((sum, c) => sum + (c.items?.length || 0), 0)
+  const computedTotal = categories.reduce((sum, c) => sum + (c.items?.length || 0), 0)
+  const totalItems = (typeof todo?.total_items === "number" && todo.total_items > 0)
+    ? todo.total_items
+    : computedTotal
 
   return (
     <Card className="border-slate-200 bg-white">
