@@ -152,28 +152,20 @@ export function createAuthIdentityMiddleware({ adminToken, adminName, adminEmail
             if (payload?.sid) {
               let sessionRow
               try {
-                sessionRow = await new Promise((resolve, reject) => {
-                  try {
-                    const stmt = db.prepare(`
+                const sessionStmt = db.prepare(`
                       SELECT s.*, u.display_name, u.primary_email, u.is_admin
                       FROM user_sessions s
                       JOIN users u ON u.id = s.user_id
                       WHERE s.id = ?
-                    `);
-                    resolve(stmt.get(payload.sid));
-                  } catch (err) {
-                    reject(err);
-                  }
-                });
+                    `)
+              sessionRow = sessionStmt.get(payload.sid)
               } catch (error) {
                 console.warn('Failed to validate session:', error?.message || error)
                 if (error?.code === 'SQLITE_CORRUPT' || error?.code === 'ECONNRESET') {
-                  // Critical DB errors: fail auth completely, ensure next() is called only once
+                  // Critical DB errors: fail auth completely and stop processing immediately.
+                  console.error('[authIdentity] Critical DB error during session validation:', error?.code, error?.message)
                   req.user = { role: 'guest', profileId: null }
-                  handled = true
-                  // Break out of the outer JWT try by re-throwing so the single next() at
-                  // the bottom of the middleware handles response dispatch.
-                  throw error
+                  return next()
                 }
                 // Non-critical: continue with token-only authentication (handled already set)
               }
@@ -198,8 +190,10 @@ export function createAuthIdentityMiddleware({ adminToken, adminName, adminEmail
                 handled = true
               }
             }
-          } catch {
-            // fall through to legacy handling
+          } catch (jwtErr) {
+            // JWT verification failed (expired, bad signature, malformed).
+            // Log for audit trail but do NOT set handled=true so legacy paths can still run.
+            console.warn('[authIdentity] JWT verification failed:', jwtErr?.message || jwtErr)
           }
         }
 
@@ -232,7 +226,7 @@ export function createAuthIdentityMiddleware({ adminToken, adminName, adminEmail
           if (UUID_RE.test(token)) {
             try {
               const stmt = db.prepare('SELECT id, display_name FROM profiles WHERE id = ?')
-              const profile = await stmt.get(token)
+              const profile = stmt.get(token)
               if (profile) {
                 user = {
                   role: 'user',
