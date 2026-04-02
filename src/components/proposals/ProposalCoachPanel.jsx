@@ -240,7 +240,12 @@ const ProposalCoachPanel = ({ grant, onAnalyze, isAnalyzing, onStartApplication,
                             if (draftLoading) return
                             setDraftLoading(true)
                             try {
-                              await onDraftDetails()
+                              await onDraftDetails({
+                              grantId: grant?.id,
+                              program_description: programDescription,
+                              eligibility_summary: eligibilitySummary,
+                              selection_criteria: selectionCriteria,
+                            })
                               toast({ title: 'Draft added', description: 'Program Description / Eligibility Summary updated.' })
                             } catch (e) {
                               toast({ variant: 'destructive', title: 'AI draft failed', description: e?.message || 'Try again.' })
@@ -316,7 +321,7 @@ const ProposalCoachPanel = ({ grant, onAnalyze, isAnalyzing, onStartApplication,
                                     eligibility_summary: eligibilitySummary,
                                     selection_criteria: selectionCriteria,
                                   })
-                                  toast({ title: 'Saved', description: 'Grant info updated.' })
+                                  toast({ title: 'Saved', description: 'Grant info updated. Click "Analyze Now" to generate AI insights.' })
                                   setEditOpen(false)
                                 } catch (e) {
                                   toast({ variant: 'destructive', title: 'Save failed', description: e?.message || 'Try again.' })
