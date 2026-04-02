@@ -977,7 +977,7 @@ CREATE INDEX IF NOT EXISTS idx_opportunities_deadline ON funding_opportunities(d
 CREATE INDEX IF NOT EXISTS idx_opportunities_is_active ON funding_opportunities(is_active);
 CREATE INDEX IF NOT EXISTS idx_opportunities_state ON funding_opportunities(state);
 CREATE INDEX IF NOT EXISTS idx_fo_record_origin_active ON funding_opportunities(record_origin, is_active);
-CREATE INDEX IF NOT EXISTS idx_fo_source_source_id ON funding_opportunities(source, source_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_fo_source_source_id ON funding_opportunities(source, source_id);
 CREATE INDEX IF NOT EXISTS idx_fo_is_loan ON funding_opportunities(is_loan);
 CREATE INDEX IF NOT EXISTS idx_fo_state_active_deadline ON funding_opportunities(state, is_active, deadline);
 CREATE INDEX IF NOT EXISTS idx_fo_profile_id ON funding_opportunities(profile_id);
