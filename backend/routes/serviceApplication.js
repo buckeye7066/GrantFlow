@@ -30,11 +30,15 @@ async function hardDeleteProfileWithFallback(db, profileId) {
 
   // Designated/demo profiles should never be hard-deleted (boot seeding may resurrect).
   if (isDesignatedProfileId(id)) {
-    const updateSql = dialect === 'postgres' ? 
-  'UPDATE profiles SET status = \'deleted\', updated_at = now() WHERE id = ?' :
-  'UPDATE profiles SET status = \'deleted\', updated_at = CURRENT_TIMESTAMP WHERE id = ?'
-await db.prepare(updateSql).run(id)
-    return { ok: true, deleted: 'soft', reason: 'designated_profile' }
+    const updateSql = dialect === 'postgres'
+    ? 'UPDATE profiles SET status = \'deleted\', updated_at = now() WHERE id = ?'
+    : 'UPDATE profiles SET status = \'deleted\', updated_at = CURRENT_TIMESTAMP WHERE id = ?'
+  try {
+    await db.prepare(updateSql).run(id)
+  } catch (err) {
+    return { ok: false, deleted: 'none', error: err?.message || String(err) }
+  }
+  return { ok: true, deleted: 'soft', reason: 'designated_profile' }
   }
 
   try {
@@ -97,7 +101,7 @@ async function saveApplicationToDb(db, data) {
  */
 router.post('/', async (req, res) => {
   try {
-    const { type, name, email, subject, message, recipient } = req.body
+    const { type, name, email, subject, message } = req.body // recipient intentionally omitted â always use SERVICE_APPLICATION_EMAIL
 
     // Handle contact_admin type
     if (type === 'contact_admin') {
@@ -277,7 +281,12 @@ router.get('/list', async (req, res) => {
     let total = { count: 0 }
     try {
       applications = await req.db.prepare(query).all(...params)
-      total = await req.db.prepare('SELECT COUNT(*) as count FROM service_applications').get()
+      const countQuery = status
+        ? 'SELECT COUNT(*) as count FROM service_applications WHERE status = ?'
+        : 'SELECT COUNT(*) as count FROM service_applications'
+      total = status
+        ? await req.db.prepare(countQuery).get(status)
+        : await req.db.prepare(countQuery).get()
     } catch (dbError) {
       const msg = String(dbError?.message || dbError)
       const missingTable =
