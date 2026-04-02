@@ -66,7 +66,7 @@ router.post('/prepare', async (req, res) => {
   const okOrg = await ensureOrganizationAccess(req, res, organizationId && typeof organizationId === 'string' ? organizationId : String(organizationId || ''))
   if (!okOrg) return
 
-  const userId = req.ctx?.userId ?? getAuthUserId(user)
+  const userId = req.ctx?.userId ?? getAuthUserId(req?.user ?? req?.ctx)
   const app = await prepareApplication({
     db: req.db,
     grantId: grantId && typeof grantId === 'string' ? grantId : String(grantId || ''),
