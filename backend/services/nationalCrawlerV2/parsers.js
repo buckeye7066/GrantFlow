@@ -17,6 +17,10 @@ export async function parseContent({ url, contentType, buffer, sourceFamily }) {
     const lowerUrl = String(url || '').toLowerCase()
 
     if (sourceFamily === 'mock') {
+      if (!buffer || !Buffer.isBuffer(buffer)) {
+        console.warn(`Invalid buffer for mock source at ${url}`)
+        return { parser_name: 'error', extracted_text: '', doc: null }
+      }
       const text = normalizeWhitespace(buffer.toString('utf8'))
       return { parser_name: 'mock.json', extracted_text: text, doc: null }
     }
@@ -24,7 +28,11 @@ export async function parseContent({ url, contentType, buffer, sourceFamily }) {
     if (ct.includes('application/pdf') || lowerUrl.endsWith('.pdf')) {
       try {
         const doc = await parsePdfToText(buffer)
-        return { parser_name: 'pdf-parse', extracted_text: doc.extractedText, doc }
+        const pdfText = (doc && doc.extractedText) ? doc.extractedText : ''
+        if (!pdfText) {
+          console.warn(`PDF parser returned empty text for ${url}`)
+        }
+        return { parser_name: 'pdf-parse', extracted_text: pdfText, doc }
       } catch (pdfError) {
         console.warn(`PDF parsing failed for ${url}:`, pdfError.message)
         // Fall back to treating as HTML
@@ -44,7 +52,11 @@ export async function parseContent({ url, contentType, buffer, sourceFamily }) {
     ) {
       try {
         const doc = await parseDocxToText(buffer)
-        return { parser_name: 'mammoth', extracted_text: doc.extractedText, doc }
+        const docxText = (doc && doc.extractedText) ? doc.extractedText : ''
+        if (!docxText) {
+          console.warn(`DOCX parser returned empty text for ${url}`)
+        }
+        return { parser_name: 'mammoth', extracted_text: docxText, doc }
       } catch (docxError) {
         console.warn(`DOCX parsing failed for ${url}:`, docxError.message)
         // Fall back to treating as HTML
