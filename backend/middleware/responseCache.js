@@ -38,7 +38,8 @@ export function responseCache(ttlMs = 30000) {
     // req.originalUrl includes the path and query string, so it's a precise key
     // Key must include user identity to prevent cross-user cache poisoning
     // and must be invalidated externally on profile/opportunity mutations.
-    const userId = req.user?.id ?? req.headers['x-user-id'];
+    const userId = req.user?.id;
+if (!userId) return next(); // Never cache unauthenticated or unidentifiable requests
 if (!userId) return next(); // Never cache unauthenticated requests
     const key = `${userId}:${req.originalUrl}`;
     const cached = cache.get(key);
@@ -53,13 +54,18 @@ if (!userId) return next(); // Never cache unauthenticated requests
     const originalJson = res.json.bind(res);
     res.json = function cachedJson(data) {
       res.json = originalJson; // restore immediately to prevent re-entrant patching
-      if (res.statusCode >= 200 && res.statusCode < 300) {
-        if (cache.size >= 500) {
-          cache.delete(cache.keys().next().value);
-        }
-        cache.set(key, { data, timestamp: Date.now() });
-        console.debug(`[responseCache] MISS+SET key=${key}`);
-      }
+      // Only cache explicitly declared safe read-only endpoints to avoid
+// serving stale pipeline/match/profile data. Check a whitelist of
+// path prefixes that are known to be read-only and non-critical.
+const CACHEABLE_PREFIXES = ['/api/help', '/api/categories', '/api/states'];
+const isCacheable = CACHEABLE_PREFIXES.some(p => req.originalUrl.startsWith(p));
+if (isCacheable && res.statusCode >= 200 && res.statusCode < 300) {
+  if (cache.size >= 500) {
+    cache.delete(cache.keys().next().value);
+  }
+  cache.set(key, { data, timestamp: Date.now() });
+  console.debug(`[responseCache] MISS+SET key=${key}`);
+}
       return originalJson(data);
     };
 
