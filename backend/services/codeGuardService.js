@@ -11,7 +11,7 @@
  */
 
 import { storeMemory, getMemory } from './anyaBrainService.js'
-import { MISSION_GOALS, GRANTFLOW_GOALS, ANYA_GOALS, GRANTFLOW_GOALS_TEXT, ANYA_GOALS_TEXT } from '../config/missionGoals.js'
+import { MISSION_GOALS } from '../config/missionGoals.js'
 
 export { MISSION_GOALS }
 
@@ -109,7 +109,7 @@ export async function testEndpoints(db, baseUrl, adminToken = null) {
   }
 
   try {
-    storeMemory(db, {
+    await storeMemory(db, {
       scope: 'global',
       memoryKey: 'codeguard.endpoint_health',
       memoryType: 'fact',
@@ -197,7 +197,7 @@ export async function auditMatchQuality(db) {
   }
 
   try {
-    storeMemory(db, {
+    await storeMemory(db, {
       scope: 'global',
       memoryKey: 'codeguard.match_quality',
       memoryType: 'fact',
@@ -229,7 +229,7 @@ export async function verifyMissionGoals(db) {
   // Goal 1: Real funding with application URLs
   try {
     const opps = db.prepare('SELECT application_url, url, source_url FROM funding_opportunities LIMIT 100').all()
-    const withUrl = opps.filter(o => o.application_url || o.url || o.source_url).length
+    const withUrl = opps.filter(o => o.application_url && o.application_url.startsWith('http')).length
     const pct = opps.length ? Math.round(withUrl / opps.length * 100) : 0
     if (opps.length === 0) report(1, MISSION_GOALS[0].short, 'FAIL', 'Zero opportunities in DB')
     else if (pct >= 80) report(1, MISSION_GOALS[0].short, 'PASS', `${pct}% have URLs (${withUrl}/${opps.length})`)
@@ -402,7 +402,7 @@ export async function verifyMissionGoals(db) {
   }
 
   try {
-    storeMemory(db, {
+    await storeMemory(db, {
       scope: 'global',
       memoryKey: 'codeguard.mission_score',
       memoryType: 'fact',
@@ -492,7 +492,8 @@ export function shouldRunAudit(db) {
     if (!last?.content?.timestamp) return true
     const hoursSince = (Date.now() - new Date(last.content.timestamp).getTime()) / 3_600_000
     return hoursSince >= AUDIT_COOLDOWN_HOURS
-  } catch {
+  } catch (e) {
+    console.warn('[codeGuard] shouldRunAudit check failed, defaulting to run:', e.message)
     return true
   }
 }
