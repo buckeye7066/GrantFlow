@@ -93,12 +93,10 @@ export default function ServiceApplication() {
 
   const calculateTotal = () => {
     if (!formData.clientCategory) return 0
-    const categoryKey = {
-      individual: 'individual',
-      small: 'small',
-      midSize: 'midSize',
-      large: 'large',
-    }[formData.clientCategory]
+    const validCategories = ['individual', 'small', 'midSize', 'large']
+    const categoryKey = validCategories.includes(formData.clientCategory)
+      ? formData.clientCategory
+      : null
 
     return formData.selectedServices.reduce((total, service) => {
       return total + (SERVICE_PRICING[service]?.[categoryKey] || 0)
@@ -116,7 +114,7 @@ export default function ServiceApplication() {
     if (formData.selectedServices.length === 0) {
       newErrors.selectedServices = 'Please select at least one service'
     }
-    if (formData.selectedServices.length > 0 && calculateTotal() > 0 && !formData.agreeToCost) {
+    if (formData.selectedServices.length > 0 && formData.clientCategory && !formData.agreeToCost) {
   newErrors.agreeToCost = 'Please acknowledge the estimated cost'
 }
     if (!formData.agreeToTerms) newErrors.agreeToTerms = 'Please agree to the terms and conditions'
@@ -144,6 +142,9 @@ export default function ServiceApplication() {
         body: JSON.stringify({
           ...formData,
           totalCost: calculateTotal(),
+          totalCostNote: formData.selectedServices.includes('Hourly Consultation & Advisory')
+            ? 'Hourly rate shown; actual total depends on hours worked'
+            : 'Flat-fee estimate',
           submittedAt: new Date().toISOString(),
         }),
       })
