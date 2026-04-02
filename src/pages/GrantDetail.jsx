@@ -105,13 +105,7 @@ export default function GrantDetail() {
         const updatedAt = grantData.ai_updated_at ? new Date(grantData.ai_updated_at) : new Date();
         const elapsed = Date.now() - updatedAt.getTime();
         if (elapsed > 120000) {
-          console.warn('[GrantDetail] Stopping refetch - timeout; forcing error state');
-          // Persist the timeout as an error so the UI is not silently stuck
-          client.entities.Grant.update(grantData.id, {
-            ai_status: 'error',
-            ai_error: 'Analysis timed out after 2 minutes. Please try again.',
-            ai_updated_at: new Date().toISOString(),
-          }).catch((e) => console.error('[GrantDetail] Failed to write timeout error:', e));
+          console.warn('[GrantDetail] Stopping refetch - timeout reached');
           return false;
         }
         return 2000;
@@ -347,8 +341,16 @@ export default function GrantDetail() {
   const handleStarToggle = () => { updateGrantMutation.mutate({ starred: !grant.starred }); };
   
   const handleApplyWithAI = () => {
-    log.debug('start application clicked', { status: grant.status })
-    navigate(`/Apply?id=${encodeURIComponent(String(grantId))}`)
+    log.debug('start application clicked', { status: grant.status });
+    if (!grant.application_url && !grant.url) {
+      toast({
+        variant: 'destructive',
+        title: 'No Application URL',
+        description: 'This grant has no application URL on record. Please edit the grant to add one before starting the application.',
+      });
+      return;
+    }
+    navigate(`/Apply?id=${encodeURIComponent(String(grantId))}`);
   };
   
   if (isEditing) {
