@@ -65,29 +65,6 @@ router.get('/health', async (req, res) => {
       )
       .get(staleParam)?.count
 
-    // Note: keep parameter format simple and portable for our DB wrapper.
-    const staleA = await req.db
-      .prepare(
-        `
-          SELECT COUNT(*) AS count
-          FROM nf_programs_a
-          WHERE last_verified IS NOT NULL
-            AND ${req.db?.dialect === 'postgres' ? `last_verified < (NOW() - (? * INTERVAL '1 day'))` : `DATETIME(last_verified) < DATETIME('now', ?)`}
-        `,
-      )
-      .get(req.db?.dialect === 'postgres' ? staleDays : `-${staleDays} day`)?.count
-
-    const staleB = await req.db
-      .prepare(
-        `
-          SELECT COUNT(*) AS count
-          FROM nf_programs_b
-          WHERE last_verified IS NOT NULL
-            AND ${req.db?.dialect === 'postgres' ? `last_verified < (NOW() - (? * INTERVAL '1 day'))` : `DATETIME(last_verified) < DATETIME('now', ?)`}
-        `,
-      )
-      .get(req.db?.dialect === 'postgres' ? staleDays : `-${staleDays} day`)?.count
-
     res.json({
       status: 'ok',
       running_runs: Number(running ?? 0),
