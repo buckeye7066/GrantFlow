@@ -212,14 +212,25 @@ export async function runAllAutonomousOperations(context, trigger = 'manual') {
     if (AUTONOMOUS_CONFIG.operations.crawlers) {
       console.log('[Anya Scheduler] Phase 3: Running crawlers...')
       try {
-        const crawlerParams = {
+        const crawlerProfileId = context?.profileId ?? context?.profile_id ?? null
+const crawlerLocation = context?.profile?.location ?? null
+const crawlerNeeds = context?.profile?.needs ?? null
+const crawlerApplicantType = context?.profile?.primary_type ?? null
+
+if (!crawlerProfileId || !crawlerLocation) {
+  console.warn(
+    '[Anya Scheduler] Phase 3: crawler context is missing profileId or location â ' +
+    'results will not be profile-scoped (Goals 11, 5). profileId=' + crawlerProfileId +
+    ' location=' + String(crawlerLocation)
+  )
+}
+
+const crawlerParams = {
   ...AUTONOMOUS_CONFIG.params.crawlers,
-  // Carry profile context so anyaAutonomousFunctionRunner can scope
-  // each crawler invocation to the profile's location, needs, and type.
-  profileId: context?.profileId ?? context?.profile_id ?? null,
-  location: context?.profile?.location ?? null,
-  needs: context?.profile?.needs ?? null,
-  applicantType: context?.profile?.primary_type ?? null,
+  profileId: crawlerProfileId,
+  location: crawlerLocation,
+  needs: crawlerNeeds,
+  applicantType: crawlerApplicantType,
 }
 const result = await runAutonomousCrawlers(crawlerParams, context)
         report.operations.crawlers = {
