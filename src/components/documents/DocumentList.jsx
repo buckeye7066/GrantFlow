@@ -67,8 +67,8 @@ export default function DocumentList({ profileId }) {
       const { signed_url } =
         await client.integrations.Core.CreateFileSignedUrl({ file_uri: fileUri });
       return signed_url ?? null;
-    } catch (error) {
-      console.error(`Failed to resolve document URL for ${doc.name}:`, error);
+    } catch (resolveError) {
+      console.error(`Failed to resolve document URL for ${doc.name}:`, resolveError);
       return null;
     }
   };
@@ -113,6 +113,7 @@ export default function DocumentList({ profileId }) {
   };
 
   const handlePrintAll = async () => {
+    let skipped = 0;
     for (let i = 0; i < documents.length; i++) {
       const doc = documents[i];
       const url = await resolveDocumentUrl(doc);
@@ -121,7 +122,16 @@ export default function DocumentList({ profileId }) {
         if (i < documents.length - 1) {
           await new Promise((resolve) => setTimeout(resolve, 250));
         }
+      } else {
+        skipped += 1;
       }
+    }
+    if (skipped > 0) {
+      toast({
+        title: 'Some documents could not be printed',
+        description: `${skipped} document${skipped > 1 ? 's' : ''} had no printable content or a resolvable URL and were skipped.`,
+        variant: 'destructive',
+      });
     }
   };
 
