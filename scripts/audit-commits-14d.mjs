@@ -57,7 +57,8 @@ function analyzeCommit({ sha, subject, date, files, patch }) {
 }
 
 function main() {
-  const outPath = 'C:/Users/firer/.cursor/projects/g-GrantFlowbackup/agent-tools/commit-audit-14d.json'
+  const outPath = process.env.COMMIT_AUDIT_OUT_PATH
+  || new URL('../../agent-tools/commit-audit-14d.json', import.meta.url).pathname
   const rawCommits = run('git log main --since=\"14 days ago\" --pretty=format:%H%x09%s%x09%ad --date=iso')
   const commitLines = rawCommits.split(/\r?\n/).filter(Boolean)
   const commits = []
