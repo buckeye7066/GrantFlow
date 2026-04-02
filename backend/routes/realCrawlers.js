@@ -257,14 +257,13 @@ router.post('/run', ensureAuth, async (req, res) => {
 
     let filtered = allMapped
       .filter((opp) => {
-        const isDirectory = opp.is_directory_resource ||
-          String(opp.source || '').startsWith('directory') ||
+        const isDbDirectory = String(opp.source || '').startsWith('directory') ||
           String(opp.record_origin || '').startsWith('directory')
-        if (!isDirectory) {
+        if (!isDbDirectory) {
           if (typeof opp.match_score !== 'number' || opp.match_score < min_match_score) return false
         }
         const relevance = applyRelevanceFilter(opp, profileData)
-        if (!relevance.pass && !isDirectory) {
+        if (!relevance.pass && !isDbDirectory) {
           console.info(`[RealCrawlers] Filtered out "${opp.title}" — ${relevance.reason}`)
           return false
         }
@@ -277,8 +276,7 @@ router.post('/run', ensureAuth, async (req, res) => {
     if (filtered.length === 0 && allMapped.length > 0) {
       filtered = allMapped
         .filter((opp) => {
-          const isDir = opp.is_directory_resource ||
-            String(opp.source || '').startsWith('directory') ||
+          const isDir = String(opp.source || '').startsWith('directory') ||
             String(opp.record_origin || '').startsWith('directory')
           if (!isDir && (typeof opp.match_score !== 'number' || opp.match_score < min_match_score)) return false
           const relevance = applyRelevanceFilter(opp, profileData)

@@ -1309,8 +1309,11 @@ export function computeMatchDecision(rawProfile, rawOpportunity, opts = {}) {
     ? rawOpportunity
     : normalizeOpportunity(rawOpportunity)
 
-  // Scoring via scoreOpportunity
-  const { score, reasons, match_explain } = scoreOpportunity(rawProfile, rawOpportunity)
+  // Scoring via scoreOpportunity — pass sections so geo/signals can be resolved
+  const profileForScoring = opts.profileSections
+    ? { profile: rawProfile, sections: opts.profileSections }
+    : rawProfile
+  const { score, reasons, match_explain } = scoreOpportunity(profileForScoring, rawOpportunity)
 
   // Decision via makeDecision
   let { decision, explanation, reasons: decisionReasons } = makeDecision(score, rawProfile, rawOpportunity)
