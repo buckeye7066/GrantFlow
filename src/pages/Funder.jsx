@@ -27,13 +27,27 @@ export default function Funder() {
 
   const { data: grants = [] } = useQuery({
     queryKey: ['grants'],
-    queryFn: async () => normalizeList(await apiFetch('/api/grants')),
+    queryFn: async () => {
+  const raw = await apiFetch('/api/grants')
+  const list = normalizeList(raw)
+  if (!Array.isArray(raw) && list.length === 0) {
+    console.warn('[Funder] /api/grants returned unexpected shape:', typeof raw, raw)
+  }
+  return list
+},
     staleTime: 60_000,
   })
 
   const { data: opportunities = [] } = useQuery({
     queryKey: ['opportunities'],
-    queryFn: async () => normalizeList(await apiFetch('/api/opportunities')),
+    queryFn: async () => {
+  const raw = await apiFetch('/api/opportunities')
+  const list = normalizeList(raw)
+  if (!Array.isArray(raw) && list.length === 0) {
+    console.warn('[Funder] /api/opportunities returned unexpected shape:', typeof raw, raw)
+  }
+  return list
+},
     staleTime: 60_000,
   })
 
@@ -199,7 +213,7 @@ export default function Funder() {
         {filteredFunders.length > 0 ? (
           <div className="space-y-3">
             {filteredFunders.map((funder, index) => (
-              <Card key={funder.name} className="hover:border-blue-200 transition-colors">
+              <Card key={`${funder.name}-${index}`} className="hover:border-blue-200 transition-colors">
                 <CardContent className="p-6">
                   <div className="flex items-start justify-between gap-4">
                     <div className="flex-1">
