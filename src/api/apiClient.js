@@ -32,7 +32,12 @@ export const clearAccessToken = () => {
   if (typeof client.clearToken === 'function') {
     client.clearToken()
   } else {
-    client.token = null
+    // client.clearToken is not available â log a warning so this gap is caught
+    // during development rather than silently leaving stale auth state.
+    console.warn('[apiClient] client.clearToken is not a function; token state may be incomplete. Upgrade client.js to expose clearToken().')
+    if (typeof client.setToken === 'function') {
+      client.setToken(null)
+    }
     if (typeof window !== 'undefined') {
       window.localStorage.removeItem('grantflow:access-token')
     }
@@ -45,7 +50,10 @@ export const clearRefreshToken = () => {
   if (typeof client.clearRefreshToken === 'function') {
     client.clearRefreshToken()
   } else {
-    client.refreshToken = null
+    console.warn('[apiClient] client.clearRefreshToken is not a function; refresh token state may be incomplete. Upgrade client.js to expose clearRefreshToken().')
+    if (typeof client.setRefreshToken === 'function') {
+      client.setRefreshToken(null)
+    }
     if (typeof window !== 'undefined') {
       window.localStorage.removeItem('grantflow:refresh-token')
     }
