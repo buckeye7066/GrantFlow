@@ -283,7 +283,9 @@ const [minMatchScore, setMinMatchScore] = useState(0);
           profileId: effectiveProfileId,
           crawlerType: crawlerId,
           profileData,
-          minMatchScore,
+          // minMatchScore is intentionally NOT forwarded to the backend.
+          // computeMatchDecision() is the sole authority (Goal 4).
+          // Client-side display filtering may be applied after results arrive (Goal 7).
           itemRequest: profileData ? {
               location: {
                 state: profileData?.signals?.location?.state || profileData?.state || null,
@@ -293,6 +295,15 @@ const [minMatchScore, setMinMatchScore] = useState(0);
               interests: profileData?.signals?.interests ? Array.from(profileData.signals.interests).slice(0, 10) : (profileData?.tags || []).slice(0, 10),
               demographics: profileData?.signals?.demographics ? Array.from(profileData.signals.demographics).slice(0, 10) : [],
               career_goals: profileData?.sections?.career_goals?.primary_goal || profileData?.career_goal || null,
+              // Deep profile sections for full-depth crawl context (Goals 5, 11)
+              military: profileData?.sections?.military ?? null,
+              health: profileData?.sections?.health ?? profileData?.sections?.health_disability ?? null,
+              housing: profileData?.sections?.housing ?? null,
+              emergency: profileData?.sections?.emergency ?? null,
+              business: profileData?.sections?.business ?? null,
+              family: profileData?.sections?.family_life ?? null,
+              education: profileData?.sections?.education ?? null,
+              applicant_type: profileData?.applicant_type ?? profileData?.sections?.basic_information?.applicant_type ?? null,
             } : null,
         });
 
@@ -405,7 +416,10 @@ if (onCrawlComplete) {
     });
   };
 
-  const allSelected = selectedCrawlers.size === CRAWLER_CONFIGS.length;
+  const selectableCrawlerIds = CRAWLER_CONFIGS
+  .filter((c) => c.id !== 'ecf_benefits' || ecfUnlock.allowed)
+  .map((c) => c.id);
+const allSelected = selectableCrawlerIds.length > 0 && selectableCrawlerIds.every((id) => selectedCrawlers.has(id));
   const someSelected = selectedCrawlers.size > 0;
   const hasValidProfile = Boolean((typeof profileId === 'string' ? profileId.trim() : null) || null);
   const anyDbFallback = Object.values(results || {}).some((r) => r && r.used_db_fallback);
@@ -680,8 +694,8 @@ if (onCrawlComplete) {
                               <div className="text-xs text-amber-700 dark:text-amber-200">
                                 {allReasons.length > 0
                                   ? `Excluded because: ${allReasons.slice(0, 2).join('; ')}.`
-                                  : 'None met the match threshold.'}{' '}
-                                Try adding more profile details (ZIP, state, keywords) for better matches.
+                                  : 'All were filtered out by eligibility rules.'}{' '}
+                                Try adding more profile details (ZIP, state, keywords) or check your profile for missing sections.
                               </div>
                             );
                           })()}
