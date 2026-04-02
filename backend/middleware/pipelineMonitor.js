@@ -53,9 +53,15 @@ function isZeroResult(body) {
     if (!hasItems) return true
   }
   // Array payload shapes used across GrantFlow endpoints
-  const arrayFields = ['opportunities', 'results', 'grants', 'matches', 'items']
-  for (const field of arrayFields) {
-    if (Array.isArray(body[field]) && body[field].length === 0) return true
+  // Only treat an empty array as zero-result when no numeric counter
+  // contradicts it (i.e. no non-zero returned/included/count present).
+  const numericCounters = [body.returned, body.included, body.count]
+  const hasNonZeroCounter = numericCounters.some(v => typeof v === 'number' && v > 0)
+  if (!hasNonZeroCounter) {
+    const arrayFields = ['opportunities', 'results', 'grants', 'matches', 'items']
+    for (const field of arrayFields) {
+      if (Array.isArray(body[field]) && body[field].length === 0) return true
+    }
   }
   return false
 }
