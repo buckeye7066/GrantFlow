@@ -90,11 +90,12 @@ const ENABLE_ADMIN_AUTO_CRAWL =
 
 // Helper function to trigger crawler jobs for admin
 async function triggerAdminCrawlers() {
-  try {
-    if (!ENABLE_ADMIN_AUTO_CRAWL) return
+  if (!ENABLE_ADMIN_AUTO_CRAWL) return
 
-    // If enabled, only queue crawls that do NOT require a profile context.
-    // (Profile-scoped crawlers should be run explicitly from the UI with a selected profile.)
+  // Only queue a context-free national crawl when explicitly enabled via env flag.
+  // Profile-scoped crawlers must be triggered from the UI with a selected profile
+  // so that location, needs, and applicant type are available to the crawler.
+  try {
     await apiFetch('/api/crawlers/jobs', {
       method: 'POST',
       body: JSON.stringify({
@@ -105,10 +106,11 @@ async function triggerAdminCrawlers() {
 
     toast({
       title: 'Background crawl queued',
-      description: 'A comprehensive crawl was queued in the background.',
+      description: 'A national comprehensive crawl was queued. For profile-matched results, start a crawl from the Profile page.',
     })
   } catch (error) {
-    console.error('Failed to trigger admin crawlers:', error)
+    // Log but do not re-throw â this is a non-critical background task.
+    console.error('[authStore] Failed to trigger admin crawlers:', error)
   }
 }
 
@@ -698,10 +700,18 @@ export const useAuthStore = create((set, get) => ({
       // Defer all state writes until after the full response is validated.
       if (response) {
         if (accessToken) {
+          client.setToken(accessToken)
           set({ accessToken })
+          if (typeof window !== 'undefined') {
+            localStorage.setItem('grantflow:access-token', accessToken)
+          }
         }
         if (refreshToken) {
+          client.setRefreshToken?.(refreshToken)
           set({ refreshToken })
+          if (typeof window !== 'undefined') {
+            localStorage.setItem('grantflow:refresh-token', refreshToken)
+          }
         }
         if (expiresIn !== undefined || accessExpires !== undefined || refreshExpires !== undefined) {
           get().scheduleSessionRefresh({ expiresIn, accessExpires, refreshExpires })
