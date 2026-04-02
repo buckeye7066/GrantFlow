@@ -39,10 +39,11 @@ export class RateLimitedFetcher {
     const host = hostOf(url) ?? 'unknown'
     const state = this._state(host)
     return new Promise((resolve, reject) => {
-      state.queue.push({ url, options, resolve })
+      state.queue.push({ url, options, resolve, reject })
       this._pump(host).catch((err) => {
         console.error(`[RateLimitedFetcher] Pump error for ${host}:`, err)
-        resolve({ ok: false, error: err })
+        // Do NOT resolve here â the task itself carries resolve/reject.
+        // A pump-level crash that was not tied to a specific task is just logged.
       })
     })
   }
@@ -54,7 +55,13 @@ export class RateLimitedFetcher {
       state.inFlight += 1
       this._runTask(state, task)
         .then(task.resolve)
-        .catch((err) => task.resolve({ ok: false, error: err }))
+        .catch((err) => {
+          if (typeof task.reject === 'function') {
+            task.reject(err)
+          } else {
+            task.resolve({ ok: false, status: 0, error: err })
+          }
+        })
         .finally(() => {
           state.inFlight -= 1
           this._pump(host).catch(e => {
@@ -74,8 +81,10 @@ export class RateLimitedFetcher {
     const { url, options } = task
     const now = Date.now()
     const wait = Math.max(0, state.lastAt + this.perHostMinDelayMs - now)
+    // Update lastAt immediately (before awaiting) so concurrent tasks
+    // from the same host stagger themselves correctly.
+    state.lastAt = now + wait
     if (wait > 0) await sleep(wait)
-    state.lastAt = Date.now()
 
     const headers = {
       'user-agent': this.userAgent,
