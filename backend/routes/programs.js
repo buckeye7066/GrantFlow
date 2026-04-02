@@ -22,7 +22,9 @@ function normalizeTrack(track) {
 }
 
 function tableForTrack(track) {
-  return track === 'PROVIDER' ? 'programs_provider' : 'programs_client'
+  if (track === 'PROVIDER') return 'programs_provider'
+  if (track === 'CLIENT') return 'programs_client'
+  throw new Error(`tableForTrack: unexpected track value: ${track}`)
 }
 
 function buildFilters({ search, jurisdiction, state, county, isActive, dialect }) {
@@ -95,6 +97,7 @@ router.get('/', async (req, res) => {
           `,
         )
         .all(...params, limit, offset)
+      const countParams = [...params]
       const total = (await req.db
         .prepare(
           `
@@ -103,7 +106,7 @@ router.get('/', async (req, res) => {
             ${clause}
           `,
         )
-        .get(...params))?.total
+        .get(...countParams))?.total
       return { data: rows, total: total ?? rows.length }
     }
 
@@ -173,8 +176,7 @@ router.get('/:track/:programId', async (req, res) => {
     const programId = req.params.programId
     const table = tableForTrack(track)
 
-    const safeTable = table === 'programs_provider' ? 'programs_provider' : 'programs_client'
-const program = await req.db.prepare(`SELECT * FROM ${safeTable} WHERE program_id = ?`).get(programId)
+    const program = await req.db.prepare(`SELECT * FROM ${table} WHERE program_id = ?`).get(programId)
     if (!program) return res.status(404).json({ error: 'Program not found' })
 
     const versions = await req.db
