@@ -96,6 +96,13 @@ export default function GrantMonitoring() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['monitoringLogs'] });
       toast({ title: 'Event Acknowledged' });
+    },
+    onError: (error) => {
+      toast({
+        variant: 'destructive',
+        title: 'Acknowledge Failed',
+        description: error?.message || 'Could not acknowledge event. Please try again.',
+      });
     }
   });
 
@@ -410,7 +417,9 @@ try {
                               </p>
                             )}
                             <p className="text-xs text-slate-400 mt-1">
-                              {formatDistanceToNow(new Date(event.created_date), { addSuffix: true })}
+                              {event.created_date && !isNaN(new Date(event.created_date).getTime())
+                                ? formatDistanceToNow(new Date(event.created_date), { addSuffix: true })
+                                : 'Unknown time'}
                             </p>
                           </div>
                         </div>
@@ -483,10 +492,14 @@ try {
                   <Label className="text-sm text-slate-500">Occurred</Label>
                   <p className="text-sm">{format(new Date(selectedEvent.created_date), 'PPpp')}</p>
                 </div>
-                {selectedEvent.acknowledged && (
+                {selectedEvent.acknowledged && selectedEvent.acknowledged_at && (
                   <div>
                     <Label className="text-sm text-slate-500">Acknowledged</Label>
-                    <p className="text-sm">{format(new Date(selectedEvent.acknowledged_at), 'PPpp')}</p>
+                    <p className="text-sm">
+                      {isNaN(new Date(selectedEvent.acknowledged_at).getTime())
+                        ? 'Unknown time'
+                        : format(new Date(selectedEvent.acknowledged_at), 'PPpp')}
+                    </p>
                   </div>
                 )}
               </div>
@@ -507,10 +520,12 @@ try {
               <p className="text-sm text-slate-600 mb-4">
                 Alert settings are per-organization. Select an organization above to configure its alerts.
               </p>
-              <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
-                <p className="text-sm text-blue-900">
-                  <Zap className="w-4 h-4 inline mr-1" />
-                  Configure alert preferences, notification methods, and thresholds for each organization. This integrates with your dashboard notification preferences.
+              <div className="bg-amber-50 border border-amber-200 rounded-lg p-4">
+                <p className="text-sm text-amber-900 font-semibold">
+                  <AlertTriangle className="w-4 h-4 inline mr-1" />
+                  Alert configuration is not yet available in this view.
+                  Use your organization dashboard to manage notification preferences,
+                  or contact support to enable alerts for this account.
                 </p>
               </div>
             </div>
