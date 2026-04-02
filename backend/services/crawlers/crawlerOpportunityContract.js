@@ -237,7 +237,7 @@ export function enforceCrawlerOpportunityContract(
     description: description || null,
     source: rawOpportunity.source ?? sourceFallback ?? crawlerType,
     source_url: rawOpportunity.source_url ?? url,
-    application_url: isValidHttpUrl(rawOpportunity.application_url) ? rawOpportunity.application_url : null,
+    application_url: isValidHttpUrl(rawOpportunity.application_url) ? rawOpportunity.application_url : url,
     url,
     categories,
     keywords,
