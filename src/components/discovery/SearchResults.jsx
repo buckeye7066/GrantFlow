@@ -80,6 +80,15 @@ export const AddToPipelineButton = ({ opportunity, onAddToPipeline, organization
   const queryClient = useQueryClient();
   const { toast } = useToast();
   const [lastStatus, setLastStatus] = React.useState(null);
+  // Reset local status if the opportunity prop changes (e.g. new search results)
+  const opportunityRef = React.useRef(opportunity?.id ?? opportunity?.title);
+  React.useEffect(() => {
+    const currentKey = opportunity?.id ?? opportunity?.title;
+    if (opportunityRef.current !== currentKey) {
+      opportunityRef.current = currentKey;
+      setLastStatus(null);
+    }
+  }, [opportunity]);
 
   const mutation = useMutation({
     mutationFn: (opp) => onAddToPipeline(opp, { silent: true }),
@@ -215,16 +224,21 @@ export default function SearchResults({ results = [], profileId, onAddToPipeline
     let failCount = 0;
     let duplicateCount = 0;
 
+    const failedTitles = [];
     for (let i = 0; i < selectedOpps.length; i++) {
       const opp = selectedOpps[i];
       try {
-        const result = await onAddToPipeline(opp, { silent: true });
+        const result = await onAddToPipeline(opp, { silent: false });
         if (result?.status === 'already') duplicateCount++;
         else if (result?.status === 'added') successCount++;
-        else failCount++;
+        else {
+          failCount++;
+          failedTitles.push(opp?.title || 'Unknown');
+        }
       } catch (error) {
-        console.error(`Failed to add ${opp.title}:`, error);
+        console.error(`Failed to add ${opp?.title}:`, error);
         failCount++;
+        failedTitles.push(opp?.title || 'Unknown');
       }
       setProcessingProgress({ current: i + 1, total: selectedOpps.length });
     }
