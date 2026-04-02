@@ -1,6 +1,4 @@
-// import { buildIntentTokens } from '../profile/profileTaxonomy.js'
-// TODO: Implement buildIntentTokens or use fallback
-function buildIntentTokens() { return { mustTerms: [], shouldTerms: [], mustNotTerms: [] } }
+import { buildIntentTokens } from '../profile/profileTaxonomy.js'
 const INTENT_MUST_NOT_CONFIDENCE_THRESHOLD = 0.7
 
 const AUTHORITY_ALLOWLIST_BASE = [
@@ -345,13 +343,15 @@ function profileSignalTerms(facets = {}, crawlerType = 'comprehensive') {
   if (org.organization_type === 'school') addIf(orgW, 'school district grant')
 
   // Immigration status
-  const immigration = facets?.immigration ?? facets?.demographics ?? facets?.profile ?? {}
+  const immigration = facets?.immigration ?? {}
   if (immigration.refugee || immigration.is_refugee) addIf(0.8, 'refugee resettlement assistance')
   if (immigration.new_immigrant || immigration.immigrant_status === 'new_immigrant' || immigration.is_immigrant) addIf(0.7, 'immigrant assistance program')
   if (immigration.permanent_resident || immigration.is_permanent_resident) addIf(0.5, 'permanent resident benefits')
 
   // Geographic qualifiers
-  const geo = facets?.geographic ?? facets?.location_focus ?? facets?.location ?? {}
+  const geo = (typeof facets?.geographic === 'object' && facets.geographic !== null)
+    ? facets.geographic
+    : {}
   if (geo.rural_resident || geo.rural) addIf(0.7, 'rural community grant')
   if (geo.appalachian_region || geo.appalachian) addIf(0.7, 'appalachian community program')
   if (geo.urban_underserved) addIf(0.6, 'urban underserved assistance')
@@ -463,8 +463,8 @@ export function planCrawlerQueries({ crawlerType, facets = {}, location = null }
   else requiredConcepts.push('national_match')
 
   return {
-    mustTerms: uniqueStrings(mustTerms).slice(0, 24),
-    shouldTerms: uniqueStrings(shouldTerms).slice(0, 48),
+    mustTerms: uniqueStrings(mustTerms).slice(0, 32),
+    shouldTerms: uniqueStrings(shouldTerms).slice(0, 60),
     mustNotTerms: uniqueStrings(mustNotTerms).slice(0, 32),
     preferredSponsors: uniqueStrings(preferredSponsors).slice(0, 24),
     authorityDomainsAllowlist: uniqueStrings(authorityDomainsAllowlist),
