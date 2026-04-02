@@ -146,9 +146,9 @@ async function scanFile(filePath, allowlist) {
  */
 async function runEslintCheck() {
   return new Promise((resolve) => {
-    const child = spawn('npx', ['eslint', '--max-warnings', '0', 'src/**/*.{js,jsx}', 'backend/**/*.js'], {
+    const child = spawn('npx', ['eslint', '--max-warnings', '0', '--ext', '.js,.jsx,.mjs,.cjs', 'src', 'backend'], {
       cwd: REPO_ROOT,
-      shell: process.platform === 'win32',
+      shell: false,
       stdio: ['pipe', 'pipe', 'pipe']
     })
     
@@ -158,16 +158,20 @@ async function runEslintCheck() {
     child.stdout.on('data', (data) => { stdout += data.toString() })
     child.stderr.on('data', (data) => { stderr += data.toString() })
     
-    child.on('close', (code) => {
-      resolve({ 
-        success: code === 0, 
-        output: stdout + stderr,
-        exitCode: code
-      })
-    })
-    
+    let settled = false
     child.on('error', (err) => {
-      resolve({ success: false, output: err.message, exitCode: 1 })
+      if (settled) return
+      settled = true
+      resolve({ success: false, output: `spawn error: ${err.message}`, exitCode: 1 })
+    })
+    child.on('close', (code) => {
+      if (settled) return
+      settled = true
+      resolve({
+        success: code === 0,
+        output: stdout + stderr,
+        exitCode: code ?? 1,
+      })
     })
   })
 }
