@@ -125,14 +125,32 @@ export default function PortalAssistantPanel({ open, onClose, grant }) {
         }
       }
 
-      const resp = await apiFetch('/api/ai/portal-assist', {
-        method: 'POST',
-        body: JSON.stringify({
-          grant_id: grant.id,
-          portal_url: validatedPortalUrl,
-          questions,
-        }),
+      // Warn the user if the supplied portal URL diverges from the stored application URL
+const storedUrl = grant?.application_url || grant?.url || '';
+if (validatedPortalUrl && storedUrl) {
+  try {
+    const suppliedHost = new URL(validatedPortalUrl).hostname;
+    const storedHost = new URL(storedUrl).hostname;
+    if (suppliedHost !== storedHost) {
+      toast({
+        title: 'URL mismatch',
+        description: `The URL you entered (${suppliedHost}) differs from the stored application URL (${storedHost}). The AI will use your custom URL.`,
+        variant: 'default',
       });
+    }
+  } catch (_) {
+    // one of the URLs failed to parse â ignore the comparison
+  }
+}
+
+const resp = await apiFetch('/api/ai/portal-assist', {
+  method: 'POST',
+  body: JSON.stringify({
+    grant_id: grant.id,
+    portal_url: validatedPortalUrl,
+    questions,
+  }),
+});
 
       if (!resp.ok) {
         let errBody = {};
@@ -186,13 +204,24 @@ export default function PortalAssistantPanel({ open, onClose, grant }) {
                   placeholder="https://..."
                   className="flex-1"
                 />
-                {portalUrl && (
-                  <Button variant="outline" size="icon" asChild>
-                    <a href={portalUrl} target="_blank" rel="noopener noreferrer">
-                      <ExternalLink className="w-4 h-4" />
-                    </a>
-                  </Button>
-                )}
+                {(() => {
+                  let safeLinkUrl = null;
+                  try {
+                    const parsed = new URL(portalUrl.trim());
+                    if (parsed.protocol === 'https:' || parsed.protocol === 'http:') {
+                      safeLinkUrl = parsed.href;
+                    }
+                  } catch (_) {
+                    // not a valid URL â suppress the link
+                  }
+                  return safeLinkUrl ? (
+                    <Button variant="outline" size="icon" asChild>
+                      <a href={safeLinkUrl} target="_blank" rel="noopener noreferrer">
+                        <ExternalLink className="w-4 h-4" />
+                      </a>
+                    </Button>
+                  ) : null;
+                })()}
               </div>
               <p className="text-xs text-slate-500 mt-1">
                 AI will read this page to understand what the funder is asking
