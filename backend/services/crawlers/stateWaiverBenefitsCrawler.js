@@ -12,8 +12,11 @@ function getStateFromProfile(profile) {
   if (!profile || typeof profile !== 'object') return null
   const state =
     profile?.signals?.location?.state ??
+    profile?.location?.state ??
+    profile?.address?.state ??
     profile?.state ??
     profile?.sections?.basic_information?.state ??
+    profile?.sections?.location?.state ??
     null
   return state && typeof state === 'string' ? String(state).trim().toUpperCase() : null
 }
@@ -26,13 +29,13 @@ export function evaluateStateWaiverEligibility(profile) {
   if (!state) {
     return { eligible: false, state: null, reason: 'No state in profile. Add state to find state-specific programs.' }
   }
-  const eligible = Boolean(state)
+  // State is guaranteed non-null/non-empty here because getStateFromProfile already
+  // filters and uppercases; Boolean(state) is always true at this point.
+  // Return a meaningful reason so callers can surface it.
   return {
-    eligible,
+    eligible: true,
     state,
-    reason: eligible
-      ? null
-      : 'Add state to your profile to find state-specific waiver and community support programs.',
+    reason: `Searching state-specific waiver and community support programs for ${state}.`,
   }
 }
 
@@ -83,7 +86,18 @@ export async function crawlStateWaiverBenefits(profile, options = {}) {
         CRAWLER_ID,
       )
       if (n && n.url && (n.url.startsWith('https://') || n.url.startsWith('http://'))) {
-        results.push({ ...n, state: state ?? 'nationwide' })
+        // Re-assert directory tags after normalisation so relevanceFilter can
+        // hard-reject these from ACCEPT regardless of what normalizeOpportunity does.
+        results.push({
+          ...n,
+          state: state ?? 'nationwide',
+          record_type: 'directory_resource',
+          record_status: 'informational',
+          // Do NOT set application_url for directory resources â they are not
+          // application paths.  Downstream relevanceFilter must see no application_url
+          // so Goal 1 check correctly flags them as non-actionable.
+          application_url: null,
+        })
       }
     }
     return results
