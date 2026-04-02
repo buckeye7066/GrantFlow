@@ -19,7 +19,42 @@ const DIRECTORY_RESOURCES = [
 
 export async function runGeoDesignationEngine(profile, options = {}) {
   try {
-    return normalizeAndFilter(DIRECTORY_RESOURCES, ENGINE_ID, { strict_no_loans: false, strict_no_matching: false })
+    const state = profile?.location?.state?.toLowerCase() ?? ''
+    const isRural = profile?.location?.is_rural === true
+    const isTribal = profile?.demographics?.tribal_affiliation === true
+    const isAppalachian = profile?.location?.is_appalachian === true
+    const isDelta = profile?.location?.is_delta === true
+
+    const filtered = DIRECTORY_RESOURCES.filter((resource) => {
+      // Always include state-generic directories unless we can narrow
+      if (resource.categories.includes('community') || resource.categories.includes('economic')) {
+        return true
+      }
+      if (resource.categories.includes('tribal') && !isTribal) {
+        return false
+      }
+      if (resource.categories.includes('appalachian') && !isAppalachian) {
+        return false
+      }
+      if (
+        resource.categories.includes('rural') &&
+        !isRural &&
+        !isAppalachian &&
+        !isDelta &&
+        state === ''
+      ) {
+        // Only skip if we have enough profile data to know user is NOT rural;
+        // if state is unknown keep it (Goal 7: prefer recall over suppression)
+        return false
+      }
+      return true
+    })
+
+    return normalizeAndFilter(filtered, ENGINE_ID, {
+      strict_no_loans: false,
+      strict_no_matching: false,
+      profile,
+    })
   } catch (error) {
     console.error(`Geographic designation engine failed: ${error.message}`)
     return []
