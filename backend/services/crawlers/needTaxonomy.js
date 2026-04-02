@@ -287,11 +287,19 @@ export function expandNeed(needText) {
   // Fallback: collect ALL word-level matches and merge their categories for maximum recall
   const words = text.split(/\s+/).filter(w => w.length > 2);
   const fallbackMatches = [];
+  // Collect ALL taxonomy keys that contain any word, then deduplicate by key name.
+  // Sort by key length descending before iterating so longer (more specific) keys win
+  // when we later pick the primary canonical need.
+  const taxonomyEntries = Object.entries(TAXONOMY).sort((a, b) => b[0].length - a[0].length);
+  const seenFallbackKeys = new Set();
   for (const word of words) {
-    for (const [key, entry] of Object.entries(TAXONOMY)) {
-      if (key.includes(word) || entry.synonyms.some(s => s.toLowerCase().includes(word))) {
+    for (const [key, entry] of taxonomyEntries) {
+      if (!seenFallbackKeys.has(key) &&
+          (key.includes(word) || entry.synonyms.some(s => s.toLowerCase().includes(word)))) {
         fallbackMatches.push({ key, entry });
-        break; // one entry per word is enough; avoid duplicate entries for same key
+        seenFallbackKeys.add(key);
+        // Do NOT break â a single word may match multiple taxonomy keys;
+        // we want all of them for maximum recall (Goal 7)
       }
     }
   }
@@ -332,14 +340,17 @@ export function scoreNeedMatch(program, expandedNeed) {
   let score = 0;
   const matchedTerms = [];
 
-  // Category overlap
+  // Category overlap â capped at 40 pts total to prevent broad-category programs
+  // from reaching acceptance thresholds on category tags alone (Goal 3).
   const cats = new Set(program.categories || []);
+  let catScore = 0;
   for (const cat of expandedNeed.programCategories) {
     if (cats.has(cat)) {
-      score += 25;
+      catScore += 25;
       matchedTerms.push(`category:${cat}`);
     }
   }
+  score += Math.min(40, catScore);
 
   // Must-term presence â cap total must-term contribution to avoid raw-word inflation
   let mustHits = 0;
@@ -376,6 +387,8 @@ export function scoreNeedMatch(program, expandedNeed) {
     score: Math.min(100, score),
     matchedTerms,
     canonicalNeed: expandedNeed.canonicalNeed,
+    matchedProgramCategories: expandedNeed.programCategories.filter(c => (program.categories || []).includes(c)),
+    mustTermHits: expandedNeed.mustTerms.filter(t => programText.includes(t.toLowerCase())),
   };
 }
 
