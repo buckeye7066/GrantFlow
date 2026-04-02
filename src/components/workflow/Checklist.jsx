@@ -120,7 +120,7 @@ export default function Checklist({ grantId, organizationId }) {
                     {typeLabel} ({groupItems.length})
                   </h4>
                   <div className="space-y-2">
-                    {groupItems.sort((a, b) => (a.order || 0) - (b.order || 0)).map((item) => (
+                    {[...groupItems].sort((a, b) => (a.order || 0) - (b.order || 0)).map((item) => (
                       <div
                         key={item.id}
                         className={`p-4 rounded-lg border transition-all ${
