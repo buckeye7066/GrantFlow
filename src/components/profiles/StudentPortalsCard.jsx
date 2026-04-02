@@ -139,9 +139,13 @@ export default function StudentPortalsCard({ state, profileId }) {
         title: "Portal check queued",
         description: "Checking financial aid portals for new award updates\u2026",
       })
+      // Invalidate once at 3 s, then again at 10 s as a fallback for slow jobs
       setTimeout(() => {
         queryClient.invalidateQueries({ queryKey: ["portal-check-status", profileId] })
       }, PORTAL_CHECK_REFRESH_DELAY_MS)
+      setTimeout(() => {
+        queryClient.invalidateQueries({ queryKey: ["portal-check-status", profileId] })
+      }, 10_000)
     } catch (err) {
       toast({
         title: "Portal check failed",
@@ -153,11 +157,30 @@ export default function StudentPortalsCard({ state, profileId }) {
     }
   }
 
-  const handleConfirmAward = (result) => {
-    toast({
-      title: "Award confirmed",
-      description: `${result.portal_name} award added to your profile pipeline.`,
-    })
+  const handleConfirmAward = async (result) => {
+    try {
+      await apiFetch(`/api/profiles/${profileId}/pipeline`, {
+        method: "POST",
+        body: JSON.stringify({
+          source: "portal_check",
+          portal_name: result.portal_name,
+          portal_url: result.portal_url ?? null,
+          results_json: result.results_json ?? null,
+          confirmed_at: new Date().toISOString(),
+        }),
+      })
+      queryClient.invalidateQueries({ queryKey: ["portal-check-status", profileId] })
+      toast({
+        title: "Award confirmed",
+        description: `${result.portal_name} award added to your profile pipeline.`,
+      })
+    } catch (err) {
+      toast({
+        title: "Confirm failed",
+        description: err?.message || "Unable to save award to pipeline.",
+        variant: "destructive",
+      })
+    }
   }
 
   const admissionsAndAid = [
