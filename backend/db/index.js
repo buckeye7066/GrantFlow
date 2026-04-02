@@ -436,7 +436,10 @@ class SqliteDb {
 
   async withTransaction(fn) {
     // Detect async callbacks upfront so we can choose the right strategy.
+    // Use multiple detection methods: constructor name, toString, and Symbol.toStringTag.
     const isAsync = fn.constructor?.name === 'AsyncFunction'
+      || fn[Symbol.toStringTag] === 'AsyncFunction'
+      || /^async\b/.test(fn.toString())
 
     if (!isAsync) {
       // Preferred: use better-sqlite3's native synchronous transaction wrapper.

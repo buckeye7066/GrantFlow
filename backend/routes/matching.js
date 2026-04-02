@@ -109,7 +109,7 @@ router.get('/profile/:profileId/grants', async (req, res) => {
                 }
 
                                      // Use the canonical decision engine for scoring; fall back gracefully
-                                     const decision = computeMatchDecision(profileNormForGrants, candidate)
+                                     const decision = computeMatchDecision(profileNormForGrants, candidate, { profileSections: profileSectionsForGrants })
                                      // Don't surface hard eligibility REJECTs in the grants view
                                      // (score-based weak-match REJECT is not filtered here)
                                      if (isHardEligibilityReject(decision)) return null
@@ -363,7 +363,7 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
 
                                   // Run canonical engine: filter hard eligibility failures (REJECT) before surfacing
                                   // Score-based weak-match REJECT is not filtered here — that is handled by min_score below.
-                                  const decision = computeMatchDecision(profileNormForDecision, opp)
+                                  const decision = computeMatchDecision(profileNormForDecision, opp, { profileSections: profileSectionsForDecision })
                                   if (isHardEligibilityReject(decision)) return null
 
                                return {
