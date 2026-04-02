@@ -715,13 +715,15 @@ class APIClient {
         // Non-blocking — best-effort server notification; ignore errors.
       });
       if (typeof window !== 'undefined') {
-        window.location.href = `${env.appBase.replace(/\/$/, '')}/login`;
+        const base = (env.appBase || '').replace(/\/$/, '');
+        window.location.href = `${base}/login`;
       }
     },
     
     redirectToLogin: () => {
       if (typeof window !== 'undefined') {
-        window.location.href = `${env.appBase.replace(/\/$/, '')}/login`;
+        const base = (env.appBase || '').replace(/\/$/, '');
+        window.location.href = `${base}/login`;
       }
     }
   };
