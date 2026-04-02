@@ -147,8 +147,12 @@ export async function processItemCrawlerJob({ db, job, dataDir, profileContext }
   // Score opportunities
   const scoredOpps = []
   
+  let requiresMatchSkipped = 0
   for (const opp of allOpps) {
-    if (opp.requires_match) continue
+    if (opp.requires_match) {
+      requiresMatchSkipped++
+      continue
+    }
     
     const { score, reasons: matchReasons } = scoreOpportunity(profileContext, opp)
     
@@ -157,6 +161,11 @@ export async function processItemCrawlerJob({ db, job, dataDir, profileContext }
       match_score: score,
       match_reasons: matchReasons
     })
+  }
+  if (requiresMatchSkipped > 0) {
+    console.log(
+      `[itemCrawler] Pre-score skip: ${requiresMatchSkipped} opportunities omitted because requires_match=true (needs separate match flow).`,
+    )
   }
   
   // Sort and filter by requested threshold only — no fallback relaxation
@@ -182,6 +191,25 @@ export async function processItemCrawlerJob({ db, job, dataDir, profileContext }
   let updatedCount = 0
   for (const opp of topOpps) {
     try {
+      // Goal 4: computeMatchDecision is the sole authority before any insertion
+      const decision = computeMatchDecision(profileContext, opp, opp.match_score, opp.match_reasons)
+
+      // Goal 3: hard-reject anything the decision engine rejects
+      if (decision.decision === 'REJECT') {
+        console.log(
+          `[itemCrawler] REJECTED "${opp.title}" â ${decision.explanation ?? 'decision engine reject'}`,
+        )
+        continue
+      }
+
+      // Goal 1: require a real application URL for ACCEPT; downgrade to REVIEW otherwise
+      const validUrl =
+        typeof opp.application_url === 'string' && opp.application_url.startsWith('http')
+          ? opp.application_url
+          : null
+      const effectiveDecision =
+        decision.decision === 'ACCEPT' && !validUrl ? 'REVIEW' : decision.decision
+
       const result = await upsertFundingOpportunity(db, {
         title: opp.title,
         sponsor: opp.sponsor,
@@ -189,9 +217,7 @@ export async function processItemCrawlerJob({ db, job, dataDir, profileContext }
         amount_min: opp.amount_min,
         amount_max: opp.amount_max,
         deadline: opp.deadline,
-        application_url: (typeof opp.application_url === 'string' && opp.application_url.startsWith('http'))
-          ? opp.application_url
-          : null,
+        application_url: validUrl,
         source_url: opp.source_url ?? opp.application_url ?? null,
         categories: opp.categories,
         keywords: [...(opp.keywords || []), ...(opp.keywords_extra || [])],
@@ -202,9 +228,18 @@ export async function processItemCrawlerJob({ db, job, dataDir, profileContext }
         source: 'item_funding',
         source_id: opp.id,
         record_origin: 'curated_verified',
-        match_reasons: opp.match_reasons
+        // Goal 8: persist all canonical decision metadata
+        match_decision: effectiveDecision,
+        match_explanation: decision.explanation ?? null,
+        matched_needs: decision.matched_needs ?? [],
+        eligibility_status: decision.eligibility_status ?? null,
+        ineligibility_reasons: decision.ineligibility_reasons ?? [],
+        match_confidence: decision.confidence ?? opp.match_score,
+        match_reasons: opp.match_reasons,
+        matcher_version: decision.matcher_version ?? null,
+        evaluated_at: new Date().toISOString(),
       })
-      
+
       if (result.id) {
         upsertedCount++
       }
@@ -216,7 +251,6 @@ export async function processItemCrawlerJob({ db, job, dataDir, profileContext }
       }
     } catch (err) {
       console.error(`[itemCrawler] Error inserting ${opp.title}:`, err.message)
-      // Track failed insertions for debugging
       continue
     }
   }
