@@ -207,7 +207,14 @@ export default function Pricing() {
                     ))}
                   </ul>
 
-                  <Link to={createPageUrl('Organizations')} className="block">
+                  <Link
+                    to={createPageUrl(
+                      tier.applicantTypes
+                        ? 'CreateProfile'
+                        : 'Organizations'
+                    )}
+                    className="block"
+                  >
                     <Button className="w-full" variant="outline">
                       Get Started
                     </Button>
@@ -270,15 +277,15 @@ export default function Pricing() {
                 <div>
                   <p className="text-sm font-semibold">Email</p>
                   <a 
-                    href="mailto:dr.johnwhite@axiombiolabs.org" 
+                    href={`mailto:${import.meta.env.VITE_SUPPORT_EMAIL ?? 'support@grantflow.app'}`}
                     className="text-sm text-blue-600 hover:underline"
                   >
-                    dr.johnwhite@axiombiolabs.org
+                    {import.meta.env.VITE_SUPPORT_EMAIL ?? 'support@grantflow.app'}
                   </a>
                 </div>
                 <div>
                   <p className="text-sm font-semibold">Fax</p>
-                  <p className="text-sm text-slate-600">423-414-5290</p>
+                  <p className="text-sm text-slate-600">{import.meta.env.VITE_SUPPORT_FAX ?? ''}</p>
                 </div>
               </div>
               <div className="pt-3">
