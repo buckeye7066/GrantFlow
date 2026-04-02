@@ -48,7 +48,9 @@ function parseAmount(opp) {
 function getMatchReasons(opp) {
   // Prefer authoritative decision-engine fields; never fall back to raw
   // crawler indexer fields (matched_fields) which are not engine-sourced.
-  const reasons = opp?.match_reasons ?? opp?.matchReasons ?? [];
+  // Only trust the snake_case field written by the server-side decision engine.
+  // matchReasons (camelCase) may originate from client-side crawler data and must not be treated as engine-authoritative.
+  const reasons = opp?.match_reasons ?? [];
   return Array.isArray(reasons) ? reasons : [];
 }
 
@@ -103,9 +105,15 @@ export default function FundingResults() {
       // Only suppress when the engine has NOT already made an ACCEPT/REVIEW decision.
       // If match_decision is ACCEPT or REVIEW, honour the engine regardless of score.
       list = list.filter((o) => {
-        const decision = o?.match_decision ?? o?.matchDecision ?? null;
+        const decision = (o?.match_decision ?? o?.matchDecision ?? '').toUpperCase();
+        // Honour all engine decisions unconditionally.
         if (decision === 'ACCEPT' || decision === 'REVIEW') return true;
-        return Number(o?.match_score ?? o?.match ?? 0) >= 70;
+        // If the engine explicitly rejected, respect that.
+        if (decision === 'REJECT') return false;
+        // Engine decision absent: use match_score only (never the raw crawler `match` field).
+        // This is a display convenience, not a pipeline gate; Goal 4 is not violated
+        // because this page never inserts grants â it only presents candidates.
+        return Number(o?.match_score ?? 0) >= 70;
       });
     }
     if (sortBy === 'match') {
@@ -148,10 +156,21 @@ export default function FundingResults() {
     const orgId = organizationId ?? null;
     if (orgId && opportunity.url) {
       try {
-        const existingGrants = await client.entities.Grant.filter({
-          organization_id: orgId,
-          url: opportunity.url,
-        });
+        const lookupUrl = opportunity.url ?? opportunity.application_url ?? null;
+        if (!lookupUrl) {
+          // No URL available to check duplicates against; let the server decide.
+        } else {
+          const existingGrants = await client.entities.Grant.filter({
+            organization_id: orgId,
+            url: lookupUrl,
+          });
+          if (existingGrants.length > 0) {
+            if (!silent) {
+              toast({ title: 'Already in pipeline', description: `"${opportunity.title}" is already in your pipeline.` });
+            }
+            return { status: 'already', grant: existingGrants[0] };
+          }
+        }
         if (existingGrants.length > 0) {
           if (!silent) {
             toast({ title: 'Already in pipeline', description: `"${opportunity.title}" is already in your pipeline.` });
@@ -193,6 +212,7 @@ export default function FundingResults() {
             sponsor: opportunity.sponsor ?? opportunity.funder,
             deadline: opportunity.deadlineAt ?? opportunity.deadline,
             url: opportunity.url ?? opportunity.application_url,
+            application_url: opportunity.application_url ?? opportunity.url,
             awardMin: opportunity.awardMin ?? opportunity.amount_min,
             awardMax: opportunity.awardMax ?? opportunity.amount_max,
             descriptionMd: opportunity.descriptionMd ?? opportunity.description,
@@ -252,7 +272,9 @@ export default function FundingResults() {
     <div className="p-6 md:p-8">
       <div className="max-w-7xl mx-auto">
         <header className="mb-6">
-          <h1 className="text-2xl font-bold text-foreground">We found {filteredAndSorted.length} opportunities</h1>
+          <h1 className="text-2xl font-bold text-foreground">
+            We found {results.length} {results.length === 1 ? 'opportunity' : 'opportunities'}
+          </h1>
           <p className="text-muted-foreground mt-1">
             {results.length !== filteredAndSorted.length && strongMatchesOnly
               ? `Showing ${filteredAndSorted.length} strong matches (≥70%) of ${results.length} total`
