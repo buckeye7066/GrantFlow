@@ -156,14 +156,27 @@ for (const finding of findings) {
         continue
       }
 
+      // Read file content once per file, before processing issues
+      let fileLines = []
+      try {
+        const fileContent = await fs.readFile(path.resolve(REPO_ROOT, filePath), 'utf8')
+        fileLines = fileContent.split('\n')
+      } catch (readError) {
+        report.errors.push({
+          file: filePath,
+          type: 'read_error',
+          message: readError.message,
+        })
+        continue
+      }
+
       // Determine what fixes to apply
       const changes = []
       
       for (const issue of issues) {
         // Fix console.log statements
         if (fixConsoleLog && issue.description === 'console.log statement found') {
-          // Read the actual line to get the full console.log statement
-          const fileContent = await fs.readFile(path.resolve(REPO_ROOT, filePath), 'utf8')
+          const actualLine = fileLines[issue.line - 1]
           const lines = fileContent.split('\n')
           const actualLine = lines[issue.line - 1]
           
@@ -171,8 +184,8 @@ for (const finding of findings) {
             changes.push({
               line: issue.line,
               oldText: actualLine.trim(),
-              // Remove the noisy debug line entirely (avoid comment spam in production code).
-              newText: '// console.log removed by autonomous crawler',
+              // Comment-out rather than delete so the original content is preserved in the diff/backup
+              newText: `// [autonomous-crawler] removed console.log: ${actualLine.trim()}`,
             })
           }
         }
@@ -275,10 +288,39 @@ if (normalizedPreview.includes(normalizedOld)) {
 /**
  * Get status of autonomous operations
  */
-export async function getAutonomousStatus() {
+export async function getAutonomousStatus(context) {
+  // Primary source: database audit log (available in all environments)
+  if (context?.db) {
+    try {
+      const rows = await context.db.all(
+        `SELECT details, created_at FROM audit_log
+         WHERE resource_type = 'anya_autonomous_crawler'
+           AND action LIKE 'autonomous.%'
+         ORDER BY created_at DESC
+         LIMIT 20`,
+      )
+      const recentLogs = rows.map(r => {
+        try {
+          return typeof r.details === 'string' ? JSON.parse(r.details) : r.details
+        } catch {
+          return null
+        }
+      }).filter(Boolean)
+      const lastRun = recentLogs.find(log => log.action === 'autonomous_crawl_complete')
+      return {
+        last_run: lastRun || null,
+        recent_operations: recentLogs.length,
+        source: 'database',
+      }
+    } catch (dbError) {
+      console.warn('[getAutonomousStatus] db query failed, falling back to filesystem:', dbError?.message)
+    }
+  }
+
+  // Fallback: dev filesystem log
   const auditDir = path.join(REPO_ROOT, 'backend', 'data', 'audit')
   const logFile = path.join(auditDir, 'autonomous-crawler.log')
-  
+
   try {
     const content = await fs.readFile(logFile, 'utf8').catch(() => '')
     const lines = content.trim().split('\n').filter(Boolean)
@@ -290,12 +332,13 @@ export async function getAutonomousStatus() {
       }
     }).filter(Boolean)
 
-    const lastRun = recentLogs.reverse().find(log => log.action === 'autonomous_crawl_complete')
+    const lastRun = recentLogs.slice().reverse().find(log => log.action === 'autonomous_crawl_complete')
 
     return {
       last_run: lastRun || null,
       recent_operations: recentLogs.length,
       audit_log_path: path.relative(REPO_ROOT, logFile),
+      source: 'filesystem',
     }
   } catch (error) {
     if (error.code === 'ENOENT') {
