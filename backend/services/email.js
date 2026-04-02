@@ -90,7 +90,7 @@ export async function sendVerificationEmail(email, code) {
         <h2>GrantFlow Login Verification</h2>
         <p>Your verification code is:</p>
         <div style="background-color: #f5f5f5; padding: 20px; text-align: center; font-size: 32px; font-weight: bold; letter-spacing: 8px; margin: 20px 0;">
-          ${code}
+          ${String(code).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')}
         </div>
         <p>This code will expire in 10 minutes.</p>
         <p>If you didn't request this code, you can safely ignore this email.</p>
@@ -243,6 +243,10 @@ export async function sendAuthAttemptNotification({ event, identifier, success, 
 }
 
 export async function sendApplicationEmail(toEmail, applicationData) {
+  if (!toEmail) {
+    console.error('[email/sendApplicationEmail] Missing recipient email address')
+    throw new Error('Cannot send application email: recipient email address is required')
+  }
   const resend = getResend()
 
   if (!resend) {
