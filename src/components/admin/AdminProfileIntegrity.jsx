@@ -74,7 +74,7 @@ export default function AdminProfileIntegrity() {
       setRepairing(true)
       setRepairOutput(null)
       const payload = {
-        dry_run: dryRun !== false,
+        dry_run: dryRun === true,
         actions,
         options: {
           ...options,
@@ -84,8 +84,8 @@ export default function AdminProfileIntegrity() {
       const res = await post('/api/admin/profiles/integrity/repair', payload)
       setRepairOutput(res)
 
-      const planned = res?.reattach?.planned ?? 0
-      const applied = res?.reattach?.applied ?? 0
+      const planned = res?.reattach?.planned ?? res?.planned ?? res?.results?.planned ?? 0
+      const applied = res?.reattach?.applied ?? res?.applied ?? res?.results?.applied ?? 0
       if (dryRun !== false) {
         toast({ title: 'Dry-run ready', description: `Planned ${planned} change(s)` })
       } else {
