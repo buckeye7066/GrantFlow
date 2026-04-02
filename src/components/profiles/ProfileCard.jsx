@@ -39,8 +39,9 @@ export default function ProfileCard({ profile, onViewInvoices, onDelete, isAdmin
   const effectiveHourly = hourlyRate * (1 - discountPercent / 100);
 
   const formatCurrency = (cents) => {
-    if (!cents) return "$0";
-    return `$${(cents / 100).toFixed(0)}`;
+    const n = Number(cents ?? 0);
+    if (!Number.isFinite(n)) return "$0";
+    return `$${(n / 100).toFixed(0)}`;
   };
 
   const formatUsd = (amount) => {
@@ -273,18 +274,20 @@ export default function ProfileCard({ profile, onViewInvoices, onDelete, isAdmin
               <span className="sr-only">Hard delete</span>
             </Button>
           ) : null}
-          <Button
-            variant="destructive"
-            size="sm"
-            className="shrink-0"
-            aria-label={`Delete profile ${displayName}`}
-            onClick={(event) => {
-              event.stopPropagation();
-              onDelete?.(profile);
-            }}
-          >
-            <Trash2 className="h-4 w-4" />
-          </Button>
+          {!isDeletedProfile && (
+            <Button
+              variant="destructive"
+              size="sm"
+              className="shrink-0"
+              aria-label={`Delete profile ${displayName}`}
+              onClick={(event) => {
+                event.stopPropagation();
+                onDelete?.(profile);
+              }}
+            >
+              <Trash2 className="h-4 w-4" />
+            </Button>
+          )}
         </div>
       </div>
     </Card>
