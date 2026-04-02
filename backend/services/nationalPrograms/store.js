@@ -91,7 +91,14 @@ export async function upsertProgramWithVersion({
   const deactivateDueToStatus = httpStatus === 404 || httpStatus === 410
   const wasActive = existing ? Number(existing.is_active) === 1 : true
   const isSuccessfulFetch = typeof httpStatus === 'number' ? httpStatus >= 200 && httpStatus < 400 : true
-  const shouldReactivate = existing && !wasActive && isSuccessfulFetch && !deactivateDueToStatus
+  // Only auto-reactivate if the program was deactivated solely due to a
+// prior 404/410 fetch. Programs deactivated for other reasons (manual,
+// business-logic) must NOT be silently re-activated by a crawler run.
+const wasDeactivatedByFetch =
+  existing && !wasActive && existing.last_fetch_status != null &&
+  (Number(existing.last_fetch_status) === 404 || Number(existing.last_fetch_status) === 410)
+const shouldReactivate =
+  wasDeactivatedByFetch && isSuccessfulFetch && !deactivateDueToStatus
 
   const changeType = (() => {
     if (!existing) return 'created'
@@ -122,6 +129,16 @@ export async function upsertProgramWithVersion({
   const fundingAmountsJson = JSON.stringify(nextSnapshot.funding_amounts || [])
   const changeLogJson = JSON.stringify(newLog)
   const sourceUrl = normalized.source_url
+  if (!sourceUrl || typeof sourceUrl !== 'string' || !sourceUrl.startsWith('http')) {
+    return {
+      program_id: null,
+      canonical_key: canonicalKey,
+      change_type: 'rejected_no_url',
+      changed_fields: [],
+      confidence: 0,
+      version_id: null,
+    }
+  }
 
   const nextIsActive = deactivateDueToStatus ? 0 : 1
 
