@@ -13,6 +13,7 @@ export default function AIFormField({
   placeholder, 
   aiPrompt,
   organization,
+  onError,
   rows = 4 
 }) {
   const [isGenerating, setIsGenerating] = React.useState(false);
@@ -63,6 +64,12 @@ ${organization.housing_situation ? `Housing Situation: ${organization.housing_si
 ${organization.emergency_context ? `Emergency Context: ${organization.emergency_context}` : ''}
 ${organization.business_type ? `Business Type: ${organization.business_type}` : ''}
 ${organization.years_in_operation ? `Years in Operation: ${organization.years_in_operation}` : ''}
+${organization.income_level ? `Income Level: ${organization.income_level}` : ''}
+${organization.race_ethnicity ? `Race/Ethnicity: ${organization.race_ethnicity}` : ''}
+${organization.gender ? `Gender: ${organization.gender}` : ''}
+${organization.first_generation_college ? `First-Generation College Student: ${organization.first_generation_college}` : ''}
+${organization.caregiver_status ? `Caregiver Status: ${organization.caregiver_status}` : ''}
+${organization.dependents ? `Dependents: ${organization.dependents}` : ''}
 `;
 
       const fullPrompt = `${voiceInstruction}
@@ -95,9 +102,12 @@ ${isIndividual ? 'REMEMBER: You are writing as ONE INDIVIDUAL PERSON. Use I, my,
       onChange({ target: { name, value: generatedText.trim() } });
     } catch (error) {
       console.error('AI generation failed:', error);
-      onChange({ target: { name, value: '' } });
-      // Surface error to parent via a dedicated prop if provided, otherwise rely on console.
-      // A future iteration should accept an onError(message) prop and display it in the UI.
+      // Do NOT overwrite the field â preserve whatever the user already typed.
+      // Surface the failure through an optional onError prop so the parent can
+      // display a plain-language toast/alert without losing field content.
+      if (typeof onError === 'function') {
+        onError('AI suggestion failed. Your existing text has been preserved.');
+      }
     } finally {
       setIsGenerating(false);
     }
