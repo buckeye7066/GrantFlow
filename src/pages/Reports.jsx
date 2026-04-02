@@ -119,6 +119,19 @@ export default function Reports() {
       return;
     }
 
+    if (
+      newReportData.report_period_start &&
+      newReportData.report_period_end &&
+      new Date(newReportData.report_period_end) < new Date(newReportData.report_period_start)
+    ) {
+      toast({
+        title: "Invalid Period",
+        description: "Report period end date must be on or after the start date.",
+        variant: "destructive",
+      });
+      return;
+    }
+
     createReportMutation.mutate({
       ...newReportData,
       organization_id: grant.organization_id,
@@ -146,12 +159,13 @@ export default function Reports() {
   
   const submittedCount = (grantsByStatus['submitted'] || 0) + (grantsByStatus['awarded'] || 0) + (grantsByStatus['declined'] || 0);
   const successRate = submittedCount > 0 ? (grantsByStatus['awarded'] || 0) / submittedCount * 100 : 0;
-  const totalAwarded = sumBy(awardedGrants, g => g.typical_award || g.amount_max || 0);
+  const totalAwarded = sumBy(awardedGrants, g => g.awarded_amount || g.typical_award || g.amount_max || 0);
 
   const fundingByFunderType = Object.entries(groupBy(awardedGrants, 'funder_type'))
-    .map(([name, grants]) => ({
+    .filter(([name]) => name && name !== 'undefined' && name !== 'null')
+    .map(([name, grantGroup]) => ({
       name: name.charAt(0).toUpperCase() + name.slice(1),
-      value: sumBy(grants, g => g.typical_award || g.amount_max || 0)
+      value: sumBy(grantGroup, g => g.awarded_amount || g.typical_award || g.amount_max || 0)
     }))
     .filter(d => d.value > 0);
 
@@ -168,11 +182,13 @@ export default function Reports() {
     : complianceReports.filter(r => r.organization_id === selectedOrgId);
 
   // Categorize reports - with proper date validation
-  const upcomingReports = filteredReports.filter(r => {
+  const allUpcomingReports = filteredReports.filter(r => {
     if (!['scheduled', 'draft'].includes(r.status)) return false;
     if (!isValidDate(r.due_date)) return false;
     return new Date(r.due_date) >= new Date();
-  }).slice(0, 5);
+  });
+  const upcomingReports = allUpcomingReports.slice(0, 5);
+  const hasMoreUpcoming = allUpcomingReports.length > 5;
 
   const overdueReports = filteredReports.filter(r => {
     if (!['scheduled', 'draft'].includes(r.status)) return false;
