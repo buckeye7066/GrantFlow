@@ -112,7 +112,7 @@ export async function runSelfHeal({ db, uploadsDir, IS_SMOKE_MODE, baseDir }) {
       const oppCount = db
         .prepare('SELECT COUNT(*) as count FROM funding_opportunities WHERE is_active = ?')
         .get(1);
-      if (oppCount && oppCount.count === 0) {
+      if (oppCount && Number(oppCount.count) === 0) {
         console.info('[startup] No funding opportunities found, auto-seeding...');
         try {
           const { seedRealOpportunities } = await import(
@@ -124,7 +124,7 @@ export async function runSelfHeal({ db, uploadsDir, IS_SMOKE_MODE, baseDir }) {
               'SELECT COUNT(*) as count FROM funding_opportunities WHERE is_active = 1',
             )
             .get();
-          console.info(`[startup] Seeded ${newCount.count} funding opportunities`);
+          console.info(`[startup] Seeded ${Number(newCount.count)} funding opportunities`);
         } catch (e) {
           console.warn(
             '[startup] Failed to auto-seed funding opportunities:',
@@ -346,7 +346,7 @@ async function repairMissingUploadAvatars({ db, uploadsDir }) {
   // If the DB references upload URLs that no longer exist on disk (common after an
   // ephemeral volume reset), browsers will spam 404s.
   try {
-    const rows = await db
+    const rows = db
       .prepare(
         `
           SELECT id, avatar_url
@@ -377,7 +377,7 @@ async function repairMissingUploadAvatars({ db, uploadsDir }) {
       if (fs.existsSync(fullPath)) continue;
 
       // Remove the reference so the frontend uses its built-in non-upload fallback.
-      await db
+      db
         .prepare(
           'UPDATE profiles SET avatar_url = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
         )
@@ -400,7 +400,7 @@ async function repairInvalidDocumentStatuses(db) {
   // Postgres uses a CHECK constraint on documents.status; if any legacy rows exist
   // (e.g. "processed"), any UPDATE touching that row will fail.
   try {
-    await db
+    db
       .prepare(
         `
           UPDATE documents
