@@ -10,7 +10,7 @@ export default function createGeoCrawlRouter({ uploadDir, getOpenAI } = {}) {
   async function requireAdmin(req, res) {
     const user = requireAuthenticatedUser(req, res)
     if (!user) return false
-    const isAdmin = await isAdminUserWithDb(req.db, req.ctx ?? req.user ?? user)
+    const isAdmin = await isAdminUserWithDb(req.db, req.ctx ?? req.user ?? user).catch(() => false)
     if (!isAdmin) {
       res.status(403).json({ error: 'Admin access required' })
       return false
@@ -59,8 +59,16 @@ export default function createGeoCrawlRouter({ uploadDir, getOpenAI } = {}) {
       await req.db
         .prepare(
           `
+            const callerProfileId = typeof incoming.profile_id === 'string' ? incoming.profile_id : (typeof incoming.profileId === 'string' ? incoming.profileId : null)
+
+      await req.db
+        .prepare(
+          `
             INSERT INTO crawler_jobs (id, type, status, profile_id, organization_id, parameters, requested_by)
-            VALUES (?, 'comprehensive', 'queued', NULL, NULL, ?, 'admin')
+            VALUES (?, 'comprehensive', 'queued', ?, NULL, ?, 'admin')
+          `,
+        )
+        .run(jobId, callerProfileId, JSON.stringify(parameters))
           `,
         )
         .run(jobId, JSON.stringify(parameters))
