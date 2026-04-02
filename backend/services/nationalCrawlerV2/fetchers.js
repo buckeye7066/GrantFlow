@@ -19,7 +19,7 @@ export function createFetcher({ userAgent, perHostConcurrency, perHostMinDelayMs
 }
 
 export async function fetchToBuffer(fetcher, url) {
-  let res; try { res = await fetcher.fetch(url); } catch (error) { return { ok: false, status: null, contentType: null, buffer: null, error: error.message }; }
+  let res; try { res = await fetcher.fetch(url); } catch (error) { return { ok: false, status: null, contentType: null, buffer: null, error: error.message, errorType: 'network' }; }
   const status = res?.status ?? null
   const contentType = res?.headers?.get?.('content-type') || null
   const ok = Boolean(res?.ok)
@@ -32,7 +32,7 @@ export async function fetchToBuffer(fetcher, url) {
   } catch (error) {
     return { ok: false, status, contentType, buffer: null, error: `Failed to read response body: ${error.message}` };
   }
-  return { ok, status, contentType, buffer, contentHash: sha256(buffer.toString('utf8')) }
+  return { ok, status, contentType, buffer, contentHash: sha256(buffer.toString('base64')) }
 }
 
 export async function fetchFileUrl(url) {
@@ -51,7 +51,7 @@ export async function fetchFileUrl(url) {
     status: 200,
     contentType,
     buffer,
-    contentHash: sha256(buffer.toString('utf8')),
+    contentHash: sha256(buffer.toString('base64')),
   }
 }
 
