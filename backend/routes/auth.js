@@ -215,7 +215,8 @@ async function upsertProfileEmailLink(db, profileId, email, addedBy = 'auth-auto
   if (!profileId || !normalized) return
   try {
     await ensureProfileEmailSchema(db)
-  } catch {
+  } catch (schemaErr) {
+    console.warn('[auth] upsertProfileEmailLink: schema ensure failed, skipping link:', schemaErr?.message || schemaErr)
     return
   }
 
@@ -304,7 +305,7 @@ function verifyOtpToken(token) {
     const decoded = jwt.verify(token, JWT_SECRET)
     if (!decoded || typeof decoded !== 'object') return null
     if (decoded.typ !== 'otp') return null
-    if (decoded.kind !== 'email') return null
+    if (decoded.kind !== 'email' && decoded.kind !== 'phone') return null
     if (typeof decoded.identifier !== 'string' || typeof decoded.code_hash !== 'string') return null
     return decoded
   } catch {
@@ -1274,6 +1275,7 @@ async function ensureProviderUser(db, provider, profile) {
       )
       .run(userId, profile.displayName ?? 'GrantFlow User', email, profile.avatarUrl ?? null, isAdmin)
     user = await getUserById(db, userId)
+    await assignProfileToUser(db, userId, email)
     return user
   }
 
@@ -1989,7 +1991,7 @@ router.post('/email/verify', async (req, res) => {
   }
 
   // Trigger Anya's autonomous scheduler for admin login if configured
-  if (user.role === 'admin' && process.env.ANYA_RUN_ON_ADMIN_LOGIN === 'true') {
+  if ((user.is_admin || user.role === 'admin') && process.env.ANYA_RUN_ON_ADMIN_LOGIN === 'true') {
     import('../services/anyaAutonomousScheduler.js')
       .then(({ runOnAdminLogin }) => {
         runOnAdminLogin(req.db, user.id).catch(err => {
@@ -2002,7 +2004,7 @@ router.post('/email/verify', async (req, res) => {
   }
 
   // CodeGuard audit on admin login — self-throttles to once per 6 hours
-  if (user.role === 'admin') {
+  if (user.is_admin || user.role === 'admin') {
     import('../services/anyaStartupAudit.js')
       .then(({ triggerStartupAudit }) => {
         triggerStartupAudit(req.db)
@@ -2049,7 +2051,15 @@ router.post('/phone/start', phoneStartLimiter, async (req, res) => {
     return res.status(400).json({ error: 'Phone number must be in E.164 format (e.g. +1234567890)' })
   }
 
-  const { user, credential } = await ensurePhoneCredential(req.db, normalized)
+  let user, credential
+  try {
+    const result = await ensurePhoneCredential(req.db, normalized)
+    user = result.user
+    credential = result.credential
+  } catch (dbError) {
+    console.error('[auth/phone/start] Database error ensuring credential:', dbError)
+    return res.status(500).json({ error: 'Database error occurred. Please try again.', error_type: 'database_error' })
+  }
   const now = new Date()
 
   if (credential.last_sent_at) {
@@ -2286,7 +2296,7 @@ router.post('/phone/verify', async (req, res) => {
   }
 
   // CodeGuard audit on admin phone login — self-throttles to once per 6 hours
-  if (user.role === 'admin') {
+  if (user.is_admin || user.role === 'admin') {
     import('../services/anyaStartupAudit.js')
       .then(({ triggerStartupAudit }) => {
         triggerStartupAudit(req.db)
