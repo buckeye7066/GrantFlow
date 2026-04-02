@@ -392,7 +392,13 @@ export default function AdminServiceApplications() {
                 {selectedApp?.status !== 'converted' && (
                   <Button
                     variant="default"
-                    onClick={() => updateApplicationStatus(selectedApp.id, 'converted')}
+                    onClick={() => {
+                      const ok = window.confirm(
+                        'Convert this application to a profile?\n\nThis will mark the application as converted.',
+                      );
+                      if (!ok) return;
+                      updateApplicationStatus(selectedApp.id, 'converted');
+                    }}
                   >
                     <UserPlus className="h-4 w-4 mr-2" />
                     Convert to Profile
