@@ -15,7 +15,8 @@ import { validateJobStatus, validateZipCode, validateStateCode, validateUuid } f
 let postgresHasProfileContextSnapshotColumnPromise = null
 
 async function postgresHasProfileContextSnapshotColumn(db) {
-  if (!db || db?.dialect !== 'postgres') return true
+  if (!db) throw new Error('[createCrawlerJob] db is required for postgresHasProfileContextSnapshotColumn probe')
+  if (db?.dialect !== 'postgres') return true
   if (postgresHasProfileContextSnapshotColumnPromise) {
     return await postgresHasProfileContextSnapshotColumnPromise
   }
@@ -145,7 +146,9 @@ export async function createCrawlerJob(db, options) {
   if (!skipIdempotencyCheck && profileId && !profileContextDigest) {
     profileContextDigest = await computeProfileDigest(db, profileId)
   }
-  let idempotencyKey = skipIdempotencyCheck ? null : generateIdempotencyKey(type, profileId, parameters, profileContextDigest)
+  let idempotencyKey = skipIdempotencyCheck
+    ? `force_${crypto.randomUUID().replace(/-/g, '').substring(0, 28)}`
+    : generateIdempotencyKey(type, profileId, parameters, profileContextDigest)
 
   // Check for existing job with same idempotency key (unless explicitly skipped)
   if (!skipIdempotencyCheck) {
@@ -186,8 +189,17 @@ export async function createCrawlerJob(db, options) {
   // Build profile context snapshot if requested and profileId provided
   let profileContextSnapshot = null
   if (buildSnapshot && profileId) {
-    const context = await buildProfileContext(db, profileId, { asOf: createdAtIso })
-    profileContextSnapshot = stableStringify(context)
+    try {
+      const context = await buildProfileContext(db, profileId, { asOf: createdAtIso })
+      profileContextSnapshot = stableStringify(context)
+    } catch (snapshotErr) {
+      console.warn('[createCrawlerJob] Failed to build profile context snapshot; proceeding without snapshot', {
+        profileId,
+        type,
+        error: snapshotErr?.message || String(snapshotErr),
+      })
+      profileContextSnapshot = null
+    }
   }
 
   // Create job ID
