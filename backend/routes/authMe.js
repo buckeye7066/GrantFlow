@@ -149,8 +149,11 @@ export function createAuthMeRouter({ db, adminName, adminEmail }) {
             // Ensure schema exists (idempotent). If it fails, fall back to user_id only.
             try {
               ensureProfileEmailSchema(db)
-            } catch {
-              // ignore
+            } catch (schemaErr) {
+              console.warn('[/api/auth/me] ensureProfileEmailSchema failed â falling back to user_id-only profile query', {
+                error: schemaErr?.message || String(schemaErr),
+                user_id: dbUser?.id ?? null,
+              })
             }
 
             if (emails.length > 0) {
@@ -206,6 +209,9 @@ export function createAuthMeRouter({ db, adminName, adminEmail }) {
       }
 
       if (user.role === 'admin') {
+        console.warn('[/api/auth/me] Admin token has no userId â returning profile-less response', {
+          email: user.email ?? null,
+        })
         return res.json({
           role: 'admin',
           full_name: user.full_name ?? adminName,
@@ -215,6 +221,10 @@ export function createAuthMeRouter({ db, adminName, adminEmail }) {
         })
       }
 
+      console.warn('[/api/auth/me] Non-admin token has no userId â returning profile-less response', {
+        role: user.role ?? null,
+        profileId: user.profileId ?? null,
+      })
       return res.json({
         role: 'user',
         profile_id: user.profileId ?? null,
