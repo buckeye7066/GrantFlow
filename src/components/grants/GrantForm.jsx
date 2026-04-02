@@ -29,7 +29,7 @@ export default function GrantForm({ grant, organization, onSubmit, onCancel, isS
         deadline: grant?.deadline || '', // New field
         amount_max: grant?.amount_max || '', // New field
         amount_min: grant?.amount_min || '', // New field
-        application_url: grant?.application_url || grant?.url || '', // canonical DB column name
+        application_url: grant?.application_url || '', // Only use canonical column; grant.url is a discovery URL, not an application portal
         eligibility_summary: grant?.eligibility_summary || '',
         program_description: grant?.program_description || '',
         selection_criteria: grant?.selection_criteria || '',
@@ -73,15 +73,23 @@ export default function GrantForm({ grant, organization, onSubmit, onCancel, isS
         }
         // Goal 1: warn (not hard-block) when url is absent so curator is alerted,
 // and always submit the field under the canonical key 'application_url'.
-if (!trimmedUrl) {
+const urlExemptMethods = ['auto_fafsa', 'auto_profile', 'nomination', 'invitation', 'no_application'];
+const urlRequired = !urlExemptMethods.includes(formData.application_method);
+if (!trimmedUrl && urlRequired) {
     toast({
         variant: 'destructive',
         title: 'Application URL Required',
-        description: 'An application URL is required for this opportunity to be matched to users. Add a URL or mark the opportunity as not applicable.'
+        description: 'An application URL is required for standard opportunities. If no URL exists, choose an application method such as "Automatic via FAFSA" or "No Application Needed".'
     });
     return;
 }
-onSubmit({ ...formData, application_url: trimmedUrl });
+if (!trimmedUrl && !urlRequired) {
+    toast({
+        title: 'No URL â method noted',
+        description: `This opportunity uses "${formData.application_method}" â no URL required. Instructions field will guide applicants.`
+    });
+}
+onSubmit({ ...formData, application_url: trimmedUrl || null });
     };
 
     const handleAutofillContact = async () => {
