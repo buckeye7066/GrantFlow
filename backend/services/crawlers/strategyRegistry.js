@@ -182,23 +182,46 @@ export function getStrategy(crawlerType) {
  * Goals served: 3 (legitimate hard-reject only), 5 (intent set from full profile),
  *               7 (recall over suppression), 8 (reason logged for observability).
  */
+/**
+ * Check whether a strategy's hard gates are satisfied by profile intents.
+ * Returns { gated: false } if OK, or { gated: true, reason, missingGates } if blocked.
+ *
+ * IMPORTANT: gated:true means the STRATEGY is skipped at the crawler/pipeline level.
+ * Per-opportunity filtering remains the responsibility of relevanceFilter and
+ * computeMatchDecision (Goals 3, 4). This gate is ONLY applied when the profile
+ * has NO signal whatsoever for the strategy domain AND the intents Set is non-empty
+ * (i.e., the profile was actually evaluated â an empty intents Set means the profile
+ * was not fully processed and gating must be skipped to avoid suppressing due to
+ * incomplete extraction).
+ *
+ * Goals served: 3, 5, 7, 8.
+ */
 export function checkGates(strategy, intents) {
   if (!strategy.hardGates || strategy.hardGates.length === 0) {
     return { gated: false };
   }
 
+  // If the intents Set is empty, the profile may not have been fully extracted.
+  // Do NOT gate on an empty profile â surface results so the user can see options
+  // and improve their profile (Goals 7, 10).
+  if (!intents || intents.size === 0) {
+    return { gated: false };
+  }
+
   const missingGates = strategy.hardGates.filter(gate => !intents.has(gate));
 
-  // Only gate when ALL required intents are absent â if ANY is present,
-  // defer final eligibility judgment to the match engine (Goal 7).
+  // Only gate when ALL required intents are absent AND the profile has other intents
+  // (proving the profile was evaluated but genuinely lacks this domain).
+  // Defer final eligibility judgment to the match engine for all per-opportunity decisions.
   if (missingGates.length === strategy.hardGates.length) {
+    const reason =
+      `Strategy "${strategy.id}" requires at least one of [${strategy.hardGates.join(', ')}] ` +
+      `but profile has none. Profile intents: [${[...intents].join(', ')}]. ` +
+      `Strategy skipped â per-opportunity filtering remains with relevanceFilter/computeMatchDecision (Goals 3, 4, 7).`;
     return {
       gated: true,
       missingGates,
-      reason:
-        `Strategy "${strategy.id}" requires at least one of [${strategy.hardGates.join(', ')}] ` +
-        `but profile has none. Profile intents: [${[...intents].join(', ')}]. ` +
-        `Suppressing strategy to avoid irrelevant results (Goals 3, 7).`,
+      reason,
     };
   }
 
