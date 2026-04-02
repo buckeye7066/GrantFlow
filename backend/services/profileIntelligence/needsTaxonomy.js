@@ -452,8 +452,11 @@ export const NEEDS_TAXONOMY = {
     ],
     related_entity_types: [ENTITY_TYPE.INDIVIDUAL],
     disallowed_entity_types: [],
-    funding_categories: [FUNDING_CATEGORY.GRANT],
-// Note: debt relief has low grant availability; use scoring_hint 'low_funding_availability' to deprioritize, not a pseudo funding-category.
+    // GRANT intentionally excluded: debt relief is almost never funded by grants;
+    // listing GRANT here causes crawlers to surface loan products that must be
+    // hard-rejected by relevanceFilter (Goal 3). OFTEN_NOT_FUNDABLE signals to
+    // the decision engine to apply low_funding_availability logic.
+    funding_categories: [FUNDING_CATEGORY.OFTEN_NOT_FUNDABLE],
     example_search_terms: [
       'debt relief program', 'financial counseling assistance',
     ],
@@ -787,15 +790,21 @@ export function resolveNeedFromSynonym(text) {
     // Check synonyms — prefer longer matches (more specific)
     for (const s of def.synonyms) {
       const sl = s.toLowerCase()
-      if (lower.includes(sl) && sl.length > bestMatchLength) {
+      // Use word-boundary-aware matching: check both directions so that
+      // a short synonym 'van' doesn't match inside 'advantage', and a
+      // multi-word synonym 'cargo van' still matches input 'cargo van'.
+      const inputContainsSynonym = new RegExp(`(?<![a-z0-9])${sl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![a-z0-9])`).test(lower)
+      const synonymContainsInput = sl === lower
+      if ((inputContainsSynonym || synonymContainsInput) && sl.length > bestMatchLength) {
         bestMatchLength = sl.length
         bestCode = code
       }
     }
 
-    // Check label match
+    // Check label match with word-boundary guard
     const labelLower = def.label.toLowerCase()
-    if (lower.includes(labelLower) && labelLower.length > bestMatchLength) {
+    const labelRegex = new RegExp(`(?<![a-z0-9])${labelLower.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![a-z0-9])`)
+    if (labelRegex.test(lower) && labelLower.length > bestMatchLength) {
       bestMatchLength = labelLower.length
       bestCode = code
     }
@@ -807,11 +816,23 @@ export function resolveNeedFromSynonym(text) {
 /**
  * Get needs applicable to an entity type.
  */
+// Entity type aliases: types that should inherit needs from a parent type
+const ENTITY_TYPE_ALIASES = {
+  [ENTITY_TYPE.FAITH_BASED]: [ENTITY_TYPE.CHURCH, ENTITY_TYPE.NONPROFIT],
+  [ENTITY_TYPE.COLLEGE]: [ENTITY_TYPE.SCHOOL],
+  [ENTITY_TYPE.COMMUNITY_ACTION]: [ENTITY_TYPE.NONPROFIT],
+  [ENTITY_TYPE.HOUSING_AUTHORITY]: [ENTITY_TYPE.GOVERNMENT, ENTITY_TYPE.NONPROFIT],
+  [ENTITY_TYPE.CDFI]: [ENTITY_TYPE.NONPROFIT],
+}
+
 export function getNeedsForEntityType(entityType) {
   const results = []
+  // Build the set of types to check (the entity type itself plus any aliased parent types)
+  const typesToCheck = new Set([entityType, ...(ENTITY_TYPE_ALIASES[entityType] || [])])
   for (const def of Object.values(NEEDS_TAXONOMY)) {
     if (def.disallowed_entity_types.includes(entityType)) continue
-    if (def.related_entity_types.includes(entityType)) results.push(def.code)
+    const isRelated = [...typesToCheck].some(t => def.related_entity_types.includes(t))
+    if (isRelated) results.push(def.code)
   }
   return results
 }
