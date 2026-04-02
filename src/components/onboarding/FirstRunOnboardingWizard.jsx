@@ -84,13 +84,17 @@ export default function FirstRunOnboardingWizard({ open, onComplete, onSkip, pro
     const zip = String(formData.zip || '').trim()
     const state = String(formData.state || '').trim().toUpperCase()
     if (!zip || !state) {
-      setError('ZIP and State are required.')
-      return
-    }
-    if (state.length !== 2) {
-      setError('State must be a 2-letter abbreviation (e.g., TN).')
-      return
-    }
+  setError('ZIP and State are required.')
+  return
+}
+if (!/^\d{5}(-\d{4})?$/.test(zip)) {
+  setError('ZIP must be a valid 5-digit (or ZIP+4) US postal code.')
+  return
+}
+if (state.length !== 2) {
+  setError('State must be a 2-letter abbreviation (e.g., TN).')
+  return
+}
 
     setLoading(true)
     setError(null)
@@ -100,19 +104,24 @@ export default function FirstRunOnboardingWizard({ open, onComplete, onSkip, pro
       if (!profileId) {
         const name = formData.display_name?.trim() || 'My Profile'
         const inferredType =
-          formData.looking_for === 'ministry_nonprofit' ? 'nonprofit'
-          : formData.looking_for === 'scholarships' ? 'student'
-          : 'individual'
+  formData.looking_for === 'ministry_nonprofit' ? 'nonprofit'
+  : formData.looking_for === 'scholarships' ? 'student'
+  : formData.looking_for === 'disability' ? 'individual_disability'
+  : formData.looking_for === 'emergency_help' ? 'individual_emergency'
+  : formData.looking_for === 'medical' ? 'individual_medical'
+  : 'individual'
         const created = await apiFetch('/api/profiles', {
-          method: 'POST',
-          body: JSON.stringify({
-            display_name: name,
-            primary_type: inferredType,
-            tags: formData.looking_for ? [formData.looking_for] : [],
-          }),
-        })
-        profileId = created?.id
-        if (!profileId) throw new Error('Failed to create profile')
+  method: 'POST',
+  body: JSON.stringify({
+    display_name: name,
+    primary_type: inferredType,
+    zip: zip,
+    state: state,
+    tags: formData.looking_for ? [formData.looking_for] : [],
+  }),
+})
+profileId = created?.id
+if (!profileId) throw new Error('Failed to create profile')
       }
 
       let basicData = { zip, state }
