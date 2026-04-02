@@ -141,6 +141,9 @@ export async function extractTextWithFallback({
           pages = rasterFiles.length
         } else {
           warnings.push('OCR completed but produced little text; keeping PDF text extraction result.')
+          if (!ocrText && rasterFiles.length > 0) {
+            warnings.push(`OCR_EMPTY: processed ${rasterFiles.length} page(s) but extracted zero characters â document may be a scanned image with unrecognised content.`)
+          }
         }
       } catch (error) {
         // Do not hard-fail the entire ingestion just because OCR tooling is missing.
@@ -166,6 +169,7 @@ export async function extractTextWithFallback({
 
   const meta = {
     source_type: detected.source_type,
+    file_name: fileName ?? null,
     methods_used: methodsUsed,
     pages: pages ?? null,
     char_count: charCount,
@@ -180,7 +184,7 @@ export async function extractTextWithFallback({
       extractor: 'grantflow-document-ingestion',
       version: '1',
       ocr_provider: ocrUsed ? provider.id : null,
-      timestamps: { started_at: startedAt, finished_at: nowIso() },
+      timestamps: { started_at: startedAt, finished_at: meta.finished_at },
     },
   }
 
