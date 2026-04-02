@@ -66,8 +66,18 @@ export async function fetchWithRetry(url, options = {}) {
       
       // Don't retry on client errors (4xx)
       if (error.response?.status >= 400 && error.response?.status < 500) {
-        console.error(`[httpClient] Client error ${error.response?.status || 'unknown'}, not retrying`);
-        throw error;
+        const status = error.response.status;
+        if (status === 401 || status === 403) {
+          console.error(`[httpClient] Auth error ${status} for ${url} â credentials may need rotation, not retrying`);
+        } else if (status === 404 || status === 410) {
+          console.warn(`[httpClient] Resource not found (${status}) for ${url} â URL may be stale or dead`);
+        } else {
+          console.error(`[httpClient] Client error ${status} for ${url}, not retrying`);
+        }
+        const clientErr = new Error(`HTTP ${status} for ${url}: ${error.message}`);
+        clientErr.httpStatus = status;
+        clientErr.url = url;
+        throw clientErr;
       }
       
       if (!isLastAttempt) {
@@ -80,7 +90,11 @@ export async function fetchWithRetry(url, options = {}) {
   }
   
   console.error(`[httpClient] All retry attempts failed for ${url}`);
-  throw new Error(`HTTP request failed after ${maxRetries + 1} attempts: ${lastError.message}`);
+  const finalErr = new Error(`HTTP request failed after ${maxRetries + 1} attempts for ${url}: ${lastError.message}`);
+finalErr.url = url;
+finalErr.httpStatus = lastError.response?.status ?? null;
+finalErr.cause = lastError;
+throw finalErr;
 }
 
 /**
