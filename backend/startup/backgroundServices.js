@@ -137,7 +137,7 @@ export function startBackgroundServices({ db, uploadsDir, actualPort, loggedCors
 
   // ── 7. Server-startup audit-log event ─────────────────────────────────────
   try {
-    logAuditEvent(db, {
+    void logAuditEvent(db, {
       category: AUDIT_CATEGORIES.SYSTEM,
       action: 'server_startup',
       severity: SEVERITY.INFO,
@@ -146,6 +146,8 @@ export function startBackgroundServices({ db, uploadsDir, actualPort, loggedCors
         environment: process.env.NODE_ENV || 'development',
         corsOrigins: loggedCorsOrigins,
       },
+    }).catch((error) => {
+      console.warn('[startup] server_startup audit log failed:', error?.message || error);
     });
   } catch {
     // Non-critical — do not fail server startup
@@ -536,7 +538,7 @@ async function _scheduleAutoProfileDedupe({ db }) {
           winnerId: winner.id,
           loserCount: loserIds.length,
         });
-        logAuditEvent(db, {
+        await logAuditEvent(db, {
           category: AUDIT_CATEGORIES.ADMIN,
           action: 'auto_profile_merge',
           severity: SEVERITY.INFO,
@@ -558,7 +560,7 @@ async function _scheduleAutoProfileDedupe({ db }) {
           loserCount: loserIds.length,
           error: mergeError?.message || String(mergeError),
         });
-        logAuditEvent(db, {
+        await logAuditEvent(db, {
           category: AUDIT_CATEGORIES.ADMIN,
           action: 'auto_profile_merge_failed',
           severity: SEVERITY.ERROR,
@@ -575,7 +577,7 @@ async function _scheduleAutoProfileDedupe({ db }) {
       }
     }
   } finally {
-    logAuditEvent(db, {
+    await logAuditEvent(db, {
       category: AUDIT_CATEGORIES.ADMIN,
       action: 'auto_profile_dedupe',
       severity: SEVERITY.INFO,
