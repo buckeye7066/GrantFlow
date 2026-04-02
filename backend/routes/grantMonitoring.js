@@ -127,7 +127,11 @@ router.put('/logs/:id', async (req, res) => {
   try {
     const id = req.params.id
     const acknowledged = Boolean(req.body?.acknowledged)
-    const acknowledgedAt = req.body?.acknowledged_at ?? new Date().toISOString()
+    const rawAcknowledgedAt = req.body?.acknowledged_at
+    const parsedAt = rawAcknowledgedAt ? new Date(rawAcknowledgedAt) : null
+    const acknowledgedAt = (parsedAt && !Number.isNaN(parsedAt.getTime()))
+      ? parsedAt.toISOString()
+      : new Date().toISOString()
 
     const existing = await req.db.prepare('SELECT id FROM grant_monitoring_logs WHERE id = ?').get(id)
     if (!existing) {
@@ -161,12 +165,14 @@ router.post('/check', async (req, res) => {
     const orgFilter = orgId ? ' AND organization_id = ?' : ''
     const params = orgId ? [String(orgId)] : []
 
+    const statusPlaceholders = "('discovered','interested','drafting','app_prep','revision')"
     const grants = await req.db
       .prepare(
         `
           SELECT id, organization_id, title, status, deadline, match_score
           FROM grants
-          WHERE 1=1
+          WHERE status IN ${statusPlaceholders}
+            AND deadline IS NOT NULL
           ${orgFilter}
         `,
       )
