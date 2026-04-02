@@ -147,16 +147,16 @@ function normalizeUSASpendingRecord(record) {
   const categories = parseAwardType(awardType);
   
   return {
-    id: crypto.randomUUID(),
+    id: crypto.createHash('sha256').update(`usaspending:${awardId}`).digest('hex').substring(0, 36),
     source: SOURCE_NAME,
     source_id: awardId,
     source_url: sourceUrl,
     title: cleanText(title),
     sponsor: cleanText(agency),
     description: cleanText(description),
-    application_url: sourceUrl,
-    deadline: parseDate(endDate),
-    deadline_type: endDate ? 'fixed' : 'rolling',
+    application_url: null, // USASpending records are historical awards; no application portal exists
+    deadline: null, // Historical award end date is not an application deadline
+    deadline_type: 'unknown',
     amount_min: null, // Cannot derive minimum from a single historical award record
     amount_max: awardAmount, // Historical award amount â informational only, not a program cap
     amount_description: awardAmount
@@ -171,7 +171,7 @@ function normalizeUSASpendingRecord(record) {
     requires_match: null, // Unknown â do not assume false
     match_percentage: null,
     opportunity_type: 'grant',
-    is_active: 1,
+    is_active: 0, // Historical spending records are not active open programs
     raw_source_payload: JSON.stringify(record),
     last_crawled: new Date().toISOString(),
   };
