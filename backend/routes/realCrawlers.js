@@ -257,9 +257,14 @@ router.post('/run', ensureAuth, async (req, res) => {
 
     let filtered = allMapped
       .filter((opp) => {
-        if (typeof opp.match_score !== 'number' || opp.match_score < min_match_score) return false
+        const isDirectory = opp.is_directory_resource ||
+          String(opp.source || '').startsWith('directory') ||
+          String(opp.record_origin || '').startsWith('directory')
+        if (!isDirectory) {
+          if (typeof opp.match_score !== 'number' || opp.match_score < min_match_score) return false
+        }
         const relevance = applyRelevanceFilter(opp, profileData)
-        if (!relevance.pass) {
+        if (!relevance.pass && !isDirectory) {
           console.info(`[RealCrawlers] Filtered out "${opp.title}" — ${relevance.reason}`)
           return false
         }
@@ -272,9 +277,12 @@ router.post('/run', ensureAuth, async (req, res) => {
     if (filtered.length === 0 && allMapped.length > 0) {
       filtered = allMapped
         .filter((opp) => {
-          if (typeof opp.match_score !== 'number' || opp.match_score < min_match_score) return false
+          const isDir = opp.is_directory_resource ||
+            String(opp.source || '').startsWith('directory') ||
+            String(opp.record_origin || '').startsWith('directory')
+          if (!isDir && (typeof opp.match_score !== 'number' || opp.match_score < min_match_score)) return false
           const relevance = applyRelevanceFilter(opp, profileData)
-          return relevance.pass
+          return relevance.pass || isDir
         })
         .sort((a, b) => (b.match_score ?? 0) - (a.match_score ?? 0))
         .slice(0, 50)
@@ -289,15 +297,21 @@ router.post('/run', ensureAuth, async (req, res) => {
       return { ...opp, match_decision: decision, decision, match_decision_explanation: explanation }
     })
 
-    // Policy enforcement: remove hard-REJECT items (loans, matching_funds, etc.)
-    // and items without an actionable URL. Directory resources always survive.
+    // Policy enforcement: remove loans, matching-funds, no-URL, and hard-REJECT items.
+    // Directory resources survive REJECT unless they are themselves loans/matching-funds.
     const prePolicyCount = filtered.length
     filtered = filtered.filter(opp => {
       const effectiveUrl = opp.url || opp.application_url || opp.source_url || ''
       if (!effectiveUrl.startsWith('http')) return false
-      const isDirectoryResource = opp.record_origin === 'curated_verified' ||
+
+      const oppType = String(opp.opportunity_type || '').toLowerCase()
+      if (['loan', 'loan_program', 'microloan'].includes(oppType) || opp.is_loan) return false
+      if (opp.requires_match) return false
+
+      const isDirectoryResource = opp.is_directory_resource ||
         String(opp.source || '').startsWith('directory') ||
-        String(opp.source || '').includes('local_directory')
+        String(opp.source || '').includes('local_directory') ||
+        String(opp.record_origin || '').startsWith('directory')
       if (opp.match_decision === 'REJECT' && !isDirectoryResource) return false
       if (opp.match_decision === 'REJECT' && isDirectoryResource) {
         opp.match_decision = 'REVIEW'

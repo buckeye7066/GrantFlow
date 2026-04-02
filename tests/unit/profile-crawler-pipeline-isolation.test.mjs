@@ -177,16 +177,17 @@ test('phase5: crawler runs persist pipeline per-profile and are idempotent', asy
         ('00000000-0000-0000-0000-00000000c101', '${user1Id}', 'email_otp', '${email1}', 0),
         ('00000000-0000-0000-0000-00000000c102', '${user2Id}', 'email_otp', '${email2}', 0);
 
-      INSERT INTO profiles (id, display_name, user_id, status, tags)
+      INSERT INTO profiles (id, display_name, user_id, status, primary_type, tags)
       VALUES
-        ('${profile1Id}', 'Profile One', '${user1Id}', 'active', '["nonprofit","community"]'),
-        ('${profile2Id}', 'Profile Two', '${user2Id}', 'active', '["community","small business"]');
+        ('${profile1Id}', 'Profile One', '${user1Id}', 'active', 'nonprofit', '["nonprofit","community","capacity building"]'),
+        ('${profile2Id}', 'Profile Two', '${user2Id}', 'active', 'small_business', '["community","small business","entrepreneurship"]');
 
-      -- Minimal location context so crawlers score high matches deterministically.
-      INSERT INTO profile_sections (id, profile_id, section_key, data)
+      INSERT INTO profile_sections (id, profile_id, section_key, data, updated_by)
       VALUES
-        ('00000000-0000-0000-0000-00000000d101', '${profile1Id}', 'basic_information', '{"state":"OH","zip":"43004"}'),
-        ('00000000-0000-0000-0000-00000000d102', '${profile2Id}', 'basic_information', '{"state":"CA","zip":"94105"}');
+        ('00000000-0000-0000-0000-00000000d101', '${profile1Id}', 'basic_information', '{"full_name":"Profile One","city":"Columbus","state":"OH","zip":"43004","profile_category":"nonprofit"}', 'test'),
+        ('00000000-0000-0000-0000-00000000d102', '${profile2Id}', 'basic_information', '{"full_name":"Profile Two","city":"San Francisco","state":"CA","zip":"94105","profile_category":"small_business"}', 'test'),
+        ('00000000-0000-0000-0000-00000000d103', '${profile1Id}', 'narrative', '{"primary_goal":"Need community grants for nonprofit capacity building","target_population":"Ohio communities","geographic_focus":"Columbus OH"}', 'test'),
+        ('00000000-0000-0000-0000-00000000d104', '${profile2Id}', 'narrative', '{"primary_goal":"Seeking small business startup grants and community impact funding","target_population":"Small businesses in California","geographic_focus":"San Francisco CA"}', 'test');
     `)
     db.close()
 

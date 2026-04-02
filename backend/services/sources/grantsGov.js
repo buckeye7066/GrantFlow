@@ -20,26 +20,15 @@ const SOURCE_NAME = 'grants.gov';
  * @returns {Promise<object>} Normalized opportunities and metadata
  */
 export async function fetchGrantsGov(options = {}) {
-  const { limit = 25, offset = 0 } = options;
+  const { limit = 25, offset = 0, keyword = 'grant' } = options;
   
   console.log(`[grants.gov] Fetching opportunities (limit: ${limit}, offset: ${offset})`);
   
   try {
-    // Build POST body per Grants.gov search2 docs.
-    // Minimal required example (no auth):
-    // {
-    //   "rows": 25,
-    //   "oppStatuses": "forecasted|posted",
-    //   "keyword": "",
-    //   "agencies": "",
-    //   "fundingCategories": ""
-    // }
     const payload = {
       rows: Math.max(1, Math.min(Number(limit) || 25, 1000)),
       oppStatuses: 'forecasted|posted',
-      keyword: '',
-      agencies: '',
-      fundingCategories: '',
+      keyword: keyword || 'grant',
       startRecordNum: Math.max(0, Number(offset) || 0),
     };
     
