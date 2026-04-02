@@ -10,12 +10,30 @@ import fetch from 'node-fetch';
 
 import crypto from 'crypto';
 
-async function fetchWithRetry(url, options) {
-  const response = await fetch(url, options);
-  if (!response.ok) {
-    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+async function fetchWithRetry(url, options, maxRetries = 3) {
+  let lastError;
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      const response = await fetch(url, options);
+      if (response.status === 429 || response.status === 503) {
+        const backoffMs = attempt * 2000;
+        console.warn(`[sam.gov] HTTP ${response.status} on attempt ${attempt}/${maxRetries}, retrying in ${backoffMs}ms`);
+        await new Promise((resolve) => setTimeout(resolve, backoffMs));
+        lastError = new Error(`HTTP ${response.status}: ${response.statusText}`);
+        continue;
+      }
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
+      return response.json();
+    } catch (err) {
+      lastError = err;
+      if (attempt < maxRetries) {
+        await new Promise((resolve) => setTimeout(resolve, attempt * 1000));
+      }
+    }
   }
-  return response.json();
+  throw lastError;
 }
 
 const SAM_GOV_API_BASE = 'https://api.sam.gov/opportunities/v2/search';
@@ -90,6 +108,8 @@ export async function fetchSamGov(options = {}) {
         source: SOURCE_NAME,
         fetched_at: new Date().toISOString(),
         count: opportunities.length,
+        total_records: data?.totalRecords ?? null,
+        has_more: typeof data?.totalRecords === 'number' ? data.totalRecords > (Number(offset) + opportunities.length) : null,
         offset,
         limit,
       },
@@ -123,7 +143,7 @@ function parseSamGovResponse(data) {
         opportunities.push(normalized);
       }
     } catch (error) {
-      console.error('[sam.gov] Error normalizing record:', error.message);
+      console.error('[sam.gov] Error normalizing record:', error.message, { noticeId: record?.noticeId, solicitationNumber: record?.solicitationNumber });
     }
   }
 
