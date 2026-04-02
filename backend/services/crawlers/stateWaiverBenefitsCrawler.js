@@ -26,32 +26,13 @@ export function evaluateStateWaiverEligibility(profile) {
   if (!state) {
     return { eligible: false, state: null, reason: 'No state in profile. Add state to find state-specific programs.' }
   }
-  const hasWaiverOrSupportSignals =
-    profile?.medicaid_waiver_program != null ||
-    profile?.sections?.government_assistance?.medicaid_waiver_program != null ||
-    (profile?.signals?.keywordSet && typeof profile.signals.keywordSet.has === 'function' && (
-      profile.signals.keywordSet.has('medicaid') ||
-      profile.signals.keywordSet.has('waiver') ||
-      profile.signals.keywordSet.has('hcbs') ||
-      profile.signals.keywordSet.has('ltss')
-    ))
-  const hasCaregiverOrDisability =
-    profile?.sections?.family_life?.family_caregiver === true ||
-    profile?.sections?.family_life?.caregiver === true ||
-    profile?.caregiver === true ||
-    (profile?.signals?.keywordSet && typeof profile.signals.keywordSet.has === 'function' && (
-      profile.signals.keywordSet.has('caregiver') ||
-      profile.signals.keywordSet.has('disability')
-    ))
-  const eligible = Boolean(state) && (hasWaiverOrSupportSignals || hasCaregiverOrDisability)
+  const eligible = Boolean(state)
   return {
     eligible,
     state,
     reason: eligible
       ? null
-      : state
-        ? 'Your profile has a state but no waiver, disability, or caregiver signals. Add relevant needs to find state waiver and community support programs.'
-        : 'Add state to your profile to find state-specific waiver and community support programs.',
+      : 'Add state to your profile to find state-specific waiver and community support programs.',
   }
 }
 

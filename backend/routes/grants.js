@@ -397,10 +397,7 @@ router.get('/', async (req, res) => {
     if (!isAdminUser(user)) {
       // If an active profile is selected, list the profile-scoped pipeline.
       if (profile_id) {
-        // Add to imports at top:
-// import { ensureProfileAccess } from '../utils/accessControl.js'
-// Or replace with existing function:
-if (!(await ensureOrganizationAccess(req, res, String(profile_id)))) return
+        if (!(await ensureProfileAccess(req, res, String(profile_id)))) return
         query += ` AND g.profile_id = ?`
         params.push(String(profile_id))
       } else {
@@ -502,10 +499,7 @@ router.get('/pipeline', async (req, res) => {
     if (!isAdminUser(user)) {
       // If a profile is selected (query or X-Profile-Id), scope the pipeline strictly to it.
       if (profile_id) {
-        // Add to imports at top:
-// import { ensureProfileAccess } from '../utils/accessControl.js'
-// Or replace with existing function:
-if (!(await ensureOrganizationAccess(req, res, String(profile_id)))) return
+        if (!(await ensureProfileAccess(req, res, String(profile_id)))) return
         query += ` WHERE g.profile_id = ?`
         params.push(String(profile_id))
       } else {

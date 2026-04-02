@@ -528,22 +528,21 @@ export async function invokeTool(name, params, context) {
 
   const tool = tools.get(name)
 
-  // Check admin access using DB-backed verification
+  // Check admin access: prefer the already-resolved ctx.isAdmin (DB-backed,
+  // canonical from requestContext middleware) before falling back to a fresh DB lookup.
   if (tool.requiresAdmin) {
+    const ctx = context?.ctx
     const user = context?.user
     const db = context?.db
-    const req = context?.req
-    
-    if (!user) {
+
+    if (!user && !ctx) {
       const error = new Error(`Tool "${name}" requires admin privileges`)
       error.status = 403
       throw error
     }
 
-    // Prefer DB-backed admin check for reliability
-    let isAdmin = false
-    if (db) {
-      // Import at function scope to avoid circular dependency
+    let isAdmin = ctx?.isAdmin === true
+    if (!isAdmin && db && user) {
       const { isAdminUserWithDb } = await import('../utils/accessControl.js')
       try {
         isAdmin = await isAdminUserWithDb(db, user)
@@ -551,8 +550,8 @@ export async function invokeTool(name, params, context) {
         console.warn('[anyaToolRegistry] DB admin check failed, falling back to token:', error?.message)
         isAdmin = user.role === 'admin' || user.is_admin === true
       }
-    } else {
-      // Fallback to token-based check if no DB available
+    }
+    if (!isAdmin && user) {
       isAdmin = user.role === 'admin' || user.is_admin === true
     }
 
@@ -579,8 +578,8 @@ export async function invokeTool(name, params, context) {
           requires_admin: true,
           params: params ?? {},
         },
-        ipAddress: req?.ip ?? req?.headers?.['x-forwarded-for'] ?? null,
-        userAgent: req?.headers?.['user-agent'] ?? null,
+        ipAddress: context?.ip ?? context?.headers?.['x-forwarded-for'] ?? null,
+        userAgent: context?.headers?.['user-agent'] ?? null,
       })
     } catch (error) {
       // Never block tool execution on audit failures.

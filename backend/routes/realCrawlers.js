@@ -11,6 +11,7 @@ import { loadProfileContext } from '../services/profileHelpers.js'
 import { buildProfileFacets } from '../services/profile/profileTaxonomy.js'
 import { trustedOriginClause, trustedSourceClause } from '../utils/recordOrigins.js'
 import { applyRelevanceFilter, extractProfileData } from '../services/relevanceFilter.js'
+import { makeDecision } from '../services/matchEngine.js'
 import { runAllDomainEngines } from '../services/crawlers/domainEngines/index.js'
 import { crawlStateWaiverBenefits, evaluateStateWaiverEligibility } from '../services/crawlers/stateWaiverBenefitsCrawler.js'
 
@@ -26,27 +27,29 @@ async function queryNearbyOpportunities(db, analysis, curatedTitles, limit = 50)
   const state = analysis?.location?.state;
   try {
     const isPg = db?.dialect === 'postgres'
-    const activeVal = isPg ? 'TRUE' : '1'
+    // Fetch more rows than requested: curated upserts overlap with curatedTitles and
+    // will be deduplicated, so we need headroom to find genuinely new records.
+    const sqlLimit = Math.max(limit * 4, 200)
     const query = isPg
-      ? `SELECT id, title, description, sponsor, source, source_url, url, application_url,
+      ? `SELECT id, title, description, sponsor, source, source_url, application_url, apply_url,
              state, is_national, opportunity_type, type, deadline_type, amount_max,
-             contact_info, categories, keywords, match_reasons, match_score,
-             funding_type, record_origin
+             contact_info, categories, keywords, match_reasons,
+             funding_type, record_origin, requires_match, match_percentage, is_loan
          FROM funding_opportunities 
          WHERE is_active = TRUE AND (state = $1 OR state = 'nationwide' OR is_national = TRUE) 
          AND ${trustedOriginClause()} AND ${trustedSourceClause()} 
-         ORDER BY match_score DESC NULLS LAST, last_verified_at DESC NULLS LAST 
+         ORDER BY last_verified_at DESC NULLS LAST 
          LIMIT $2`
-      : `SELECT id, title, description, sponsor, source, source_url, url, application_url,
+      : `SELECT id, title, description, sponsor, source, source_url, application_url, apply_url,
              state, is_national, opportunity_type, type, deadline_type, amount_max,
-             contact_info, categories, keywords, match_reasons, match_score,
-             funding_type, record_origin
+             contact_info, categories, keywords, match_reasons,
+             funding_type, record_origin, requires_match, match_percentage, is_loan
          FROM funding_opportunities 
          WHERE is_active = 1 AND (state = ? OR state = 'nationwide' OR is_national = 1) 
          AND ${trustedOriginClause()} AND ${trustedSourceClause()} 
-         ORDER BY match_score DESC NULLS LAST, last_verified_at DESC NULLS LAST 
+         ORDER BY last_verified_at DESC NULLS LAST 
          LIMIT ?`
-    const rows = await db.prepare(query).all(state || 'nationwide', limit);
+    const rows = await db.prepare(query).all(state || 'nationwide', sqlLimit);
 
     const normalizeTitle = (t) => String(t || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
     const seenTitles = new Set(curatedTitles.map(normalizeTitle));
@@ -58,15 +61,16 @@ async function queryNearbyOpportunities(db, analysis, curatedTitles, limit = 50)
         seenTitles.add(norm);
         return true;
       })
+      .slice(0, limit)
       .map(row => ({
         id: row.id || `fo-${row.title?.slice(0, 20)}`,
         title: row.title,
         name: row.title,
         description: row.description,
-        url: row.url || row.application_url || row.source_url || null,
-        application_url: row.application_url || row.url || null,
-        source_url: row.source_url || row.url || null,
-        match_score: row.match_score || 50,
+        url: row.application_url || row.apply_url || row.source_url || null,
+        application_url: row.application_url || row.apply_url || null,
+        source_url: row.source_url || row.application_url || null,
+        match_score: 50,
         match_reasons: safeJsonParse(row.match_reasons, []),
         categories: safeJsonParse(row.categories, []),
         opportunity_type: row.opportunity_type || row.type || 'program',
@@ -81,6 +85,9 @@ async function queryNearbyOpportunities(db, analysis, curatedTitles, limit = 50)
         is_national: Boolean(row.is_national),
         state: row.state || null,
         contact_info: row.contact_info || null,
+        requires_match: Boolean(row.requires_match),
+        match_percentage: row.match_percentage || null,
+        is_loan: Boolean(row.is_loan),
         eligibility_bullets: [],
         match_explain: { source: 'funding_opportunities_db', nearYou: true },
       }));
@@ -263,17 +270,36 @@ router.post('/run', ensureAuth, async (req, res) => {
 
     let thresholdFallbackMessage = null
     if (filtered.length === 0 && allMapped.length > 0) {
-      // Threshold fallback: show best available matches that still pass relevance
-      // filtering. This ensures directory resources (food banks, United Way, etc.)
-      // are not silently suppressed by a high match-score threshold.
       filtered = allMapped
         .filter((opp) => {
+          if (typeof opp.match_score !== 'number' || opp.match_score < min_match_score) return false
           const relevance = applyRelevanceFilter(opp, profileData)
           return relevance.pass
         })
         .sort((a, b) => (b.match_score ?? 0) - (a.match_score ?? 0))
         .slice(0, 50)
-      thresholdFallbackMessage = `No results met your threshold of ${min_match_score}%. Showing best available matches.`
+      if (filtered.length > 0) {
+        thresholdFallbackMessage = `No results met initial filters. Showing best available matches above ${min_match_score}%.`
+      }
+    }
+
+    const effectiveProfile = profileContext?.profile ?? {}
+    filtered = filtered.map(opp => {
+      const { decision, explanation } = makeDecision(opp.match_score ?? 0, effectiveProfile, opp)
+      return { ...opp, match_decision: decision, decision, match_decision_explanation: explanation }
+    })
+
+    // Policy enforcement: remove hard-REJECT items (loans, matching_funds, etc.)
+    // and items without an actionable URL.
+    const prePolicyCount = filtered.length
+    filtered = filtered.filter(opp => {
+      if (opp.match_decision === 'REJECT') return false
+      const effectiveUrl = opp.url || opp.application_url || opp.source_url || ''
+      if (!effectiveUrl.startsWith('http')) return false
+      return true
+    })
+    if (prePolicyCount > 0 && filtered.length < prePolicyCount) {
+      console.info(`[RealCrawlers] Policy filter: ${prePolicyCount} → ${filtered.length} (removed ${prePolicyCount - filtered.length} REJECT/no-URL)`)
     }
 
     const duration = Date.now() - startTime

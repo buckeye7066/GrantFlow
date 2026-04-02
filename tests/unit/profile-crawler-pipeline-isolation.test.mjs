@@ -197,12 +197,11 @@ test('phase5: crawler runs persist pipeline per-profile and are idempotent', asy
     const job1 = await createCrawlerJob({ port, token: token1, profileId: profile1Id, type: 'local', force: true })
     const job2 = await createCrawlerJob({ port, token: token2, profileId: profile2Id, type: 'local', force: true })
 
-    await waitForJobComplete({ port, token: token1, jobId: job1.id })
-    await waitForJobComplete({ port, token: token2, jobId: job2.id })
+    const job1Result = await waitForJobComplete({ port, token: token1, jobId: job1.id })
+    const job2Result = await waitForJobComplete({ port, token: token2, jobId: job2.id })
 
     const grants1a = await listGrantsForProfile({ port, token: token1, profileId: profile1Id })
     const grants2a = await listGrantsForProfile({ port, token: token2, profileId: profile2Id })
-
     assert.ok(grants1a.length > 0, 'expected profile 1 to receive pipeline grants')
     assert.ok(grants2a.length > 0, 'expected profile 2 to receive pipeline grants')
 

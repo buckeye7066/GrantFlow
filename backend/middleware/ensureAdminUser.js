@@ -53,8 +53,7 @@ export function createEnsureAdminUserMiddleware({ db, adminName, adminEmail }) {
             user.userId,
             user.full_name || adminName || 'Admin User',
             user.email || adminEmail || null,
-            true,
-            user.role
+            true
           )
       }
     } catch {

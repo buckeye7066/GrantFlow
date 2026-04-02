@@ -8,7 +8,9 @@
 
 const isDevelopment = process.env.NODE_ENV === 'development' || process.env.ALLOW_MOCK_AI === 'true';
 
-// Production check moved to function level to prevent module loading crashes
+if (process.env.NODE_ENV === 'production' && process.env.ALLOW_MOCK_AI !== 'true') {
+  throw new Error('mockAI must not be loaded in production — set ALLOW_MOCK_AI=true to override');
+}
 
 export function getMockFieldSuggestion(fieldName, fieldLabel) {
   // Remove redundant check since module-level check exists

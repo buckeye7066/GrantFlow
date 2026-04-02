@@ -253,6 +253,20 @@ const AMBIGUOUS_SINGLE_WORDS = new Set([
   'resource', 'free', 'apply', 'person', 'people',
 ])
 
+const NEED_SYNONYMS = {
+  housing: ['rent', 'rental', 'eviction', 'shelter', 'housing', 'tenant', 'apartment', 'mortgage', 'homeless'],
+  rent: ['housing', 'rental', 'rent', 'eviction', 'tenant', 'apartment', 'shelter'],
+  utilities: ['utility', 'utilities', 'energy', 'electric', 'heating', 'water', 'gas'],
+  food: ['food', 'nutrition', 'hunger', 'snap', 'meal', 'pantry', 'grocery'],
+  medical: ['health', 'medical', 'healthcare', 'hospital', 'prescription', 'dental', 'vision'],
+  disability: ['disability', 'disabled', 'accessible', 'accommodation', 'mobility'],
+  transportation: ['transportation', 'transit', 'bus', 'vehicle', 'rideshare', 'car'],
+  education: ['education', 'tuition', 'scholarship', 'school', 'college', 'university', 'academic'],
+  childcare: ['childcare', 'daycare', 'preschool', 'child care', 'children'],
+  financial_assistance: ['financial', 'assistance', 'emergency', 'cash', 'payment', 'aid'],
+  clothing_goods: ['clothing', 'clothes', 'furniture', 'goods', 'household', 'material'],
+}
+
 const STATE_MAPPING = {
   alabama: 'AL', alaska: 'AK', arizona: 'AZ', arkansas: 'AR', california: 'CA',
   colorado: 'CO', connecticut: 'CT', delaware: 'DE', florida: 'FL', georgia: 'GA',
@@ -918,11 +932,15 @@ export function scoreOpportunity(profile, opportunity) {
   const oppKws = safeParseArrayField(opportunity.keywords, [])
   const oppCats = safeParseArrayField(opportunity.categories, [])
   const allOppSignals = [...oppKws, ...oppCats].map((t) => String(t).toLowerCase())
-  if (rawNeeds.length > 0 && allOppSignals.length > 0) {
+  if (rawNeeds.length > 0) {
     let needHits = 0
     for (const n of rawNeeds) {
       const nLower = String(n).toLowerCase()
-      if (allOppSignals.some((s) => s.includes(nLower) || nLower.includes(s))) needHits++
+      const synonyms = NEED_SYNONYMS[nLower] || [nLower]
+      const matched =
+        allOppSignals.some((s) => synonyms.some((syn) => s.includes(syn) || syn.includes(s))) ||
+        synonyms.some((syn) => oppText.includes(syn))
+      if (matched) needHits++
     }
     if (needHits > 0) {
       const needPts = Math.min(20, Math.round((needHits / rawNeeds.length) * 20))
@@ -1212,8 +1230,12 @@ export function makeDecision(score, profile, opportunity) {
   const isProBono = /\bpro\s*bono\b/i.test(oppText)
   const isInKind = /\bin[- ]kind\b/i.test(oppText)
   const isReferralOnly = /\breferral\s+only\b/i.test(oppText) || /\bagency\s+referral\s+required\b/i.test(oppText)
-  if ((isProBono || isInKind || isReferralOnly) && !isIndividualOrCaregiver) {
+  if (isProBono || isInKind || isReferralOnly) {
     const label = isProBono ? 'pro bono' : isInKind ? 'in-kind' : 'referral-only'
+    if (isIndividualOrCaregiver) {
+      reasons.push(`${label} opportunity — still relevant assistance for individuals/caregivers`)
+      return { decision: 'REVIEW', explanation: `${label} opportunity may be useful assistance for ${profileType} profile.`, reasons }
+    }
     const profileLabel = isNonprofit ? 'nonprofits' : 'businesses'
     reasons.push(`${label} opportunity — not direct funding for ${profileLabel}`)
     return { decision: 'REJECT', explanation: `${label} opportunity is not direct financial assistance for ${profileLabel}.`, reasons }
@@ -1243,8 +1265,8 @@ export function makeDecision(score, profile, opportunity) {
     return { decision: 'REVIEW', explanation: `Score ${score}/100 warrants review; moderate match signals.`, reasons }
   }
 
-  reasons.push(`Score ${score} < 30 — weak match`)
-  return { decision: 'REJECT', explanation: `Score ${score}/100 indicates insufficient match.`, reasons }
+  reasons.push(`Score ${score} < 30 — weak match, kept for review`)
+  return { decision: 'REVIEW', explanation: `Score ${score}/100 is low but opportunity kept for review.`, reasons }
 }
 
 // ---------------------------------------------------------------------------

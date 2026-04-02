@@ -273,8 +273,8 @@ export async function processLocalCrawlerJob({ db, job, dataDir, profileContext 
         updatedCount++
       }
       
-      // Save to profile pipeline if match meets the original requested threshold
-      if (profileId && opp.match_score >= requestedThreshold) {
+      // Save to profile pipeline using the relaxed threshold (topOpps already passed it)
+      if (profileId && opp.match_score >= thresholdUsed) {
         const oppWithId = { ...opp, id: result.id, source: 'local_foundation' }
         const pipelineResult = await saveToProfilePipeline(db, oppWithId, profileId, profileContext, opp.match_score, thresholdUsed)
         if (pipelineResult.saved) {

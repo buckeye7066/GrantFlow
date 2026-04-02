@@ -24,7 +24,7 @@ router.use(async (req, _res, next) => {
   next()
 })
 
-router.get('/catalog', ensureAuth, async (req, res) => {
+router.get('/catalog', async (req, res) => {
   const includeInactive = String(req.query?.include_inactive || '').toLowerCase() === 'true'
   const catalog = await listServiceCatalog(req.db, { includeInactive })
   res.json({ ok: true, catalog })

@@ -232,7 +232,7 @@ export function createAuthIdentityMiddleware({ adminToken, adminName, adminEmail
           if (UUID_RE.test(token)) {
             try {
               const stmt = db.prepare('SELECT id, display_name FROM profiles WHERE id = ?')
-              const profile = stmt.get(token)
+              const profile = await stmt.get(token)
               if (profile) {
                 user = {
                   role: 'user',
