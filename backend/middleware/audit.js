@@ -95,15 +95,16 @@ export function auditLogger(req, res, next) {
               try {
                 stmtRef.run(...entrySnapshot);
               } catch (e) {
+                // Use snapshotted values â req/logEntry may be stale by the time setImmediate fires
                 console.error('[audit] Failed to persist audit log to DB', {
                   error: e.message,
                   stack: e.stack,
-                  correlation_id: correlationId,
-                  path: req.path,
-                  lost_entry_id: logEntry.id,
-                  lost_user_id: logEntry.user_id,
-                  lost_method: logEntry.method,
-                  lost_status: logEntry.status
+                  correlation_id: entrySnapshot[1],
+                  path: entrySnapshot[5],
+                  lost_entry_id: entrySnapshot[0],
+                  lost_user_id: entrySnapshot[3],
+                  lost_method: entrySnapshot[4],
+                  lost_status: entrySnapshot[6]
                 });
               }
             });
@@ -135,7 +136,12 @@ export function auditLogger(req, res, next) {
 function redactSensitiveData(obj) {
   if (!obj || typeof obj !== 'object') return obj;
 
-  const sensitiveKeys = ['password', 'token', 'secret', 'ssn', 'ein', 'email', 'phone', 'address'];
+  const sensitiveKeys = [
+    'password', 'token', 'secret',
+    'ssn', 'ein',
+    'email', 'phone', 'address',
+    'dob', 'birth', 'medical', 'diagnosis', 'condition', 'income', 'salary'
+  ];
   // Note: 'uei' (Unique Entity Identifier) is a public SAM.gov identifier and must NOT be redacted
   // so that audit logs retain full traceability of entity-based matching decisions.
   const redacted = Array.isArray(obj) ? [] : {};
