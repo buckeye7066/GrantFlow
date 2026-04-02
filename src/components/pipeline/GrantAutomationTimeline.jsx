@@ -104,7 +104,11 @@ export default function GrantAutomationTimeline({ grantId }) {
             {events.map((event, index) => {
               const createdAt = event.created_at ? new Date(event.created_at) : null
               const confidencePct =
-                typeof event.confidence === "number" ? Math.round(event.confidence * 100) : null
+                typeof event.confidence === "number"
+  ? event.confidence > 1
+    ? Math.round(event.confidence)          // already a 0-100 integer
+    : Math.round(event.confidence * 100)    // 0-1 float â percentage
+  : null
               const actions = Array.isArray(event.recommended_actions) ? event.recommended_actions : []
               const showDivider = index !== events.length - 1
 
@@ -132,8 +136,7 @@ export default function GrantAutomationTimeline({ grantId }) {
                     <ArrowRight className="h-3 w-3 text-slate-400" />
                     <StatusBadge status={event.applied_status} label={`Now • ${event.applied_status ?? "—"}`} />
                     {event.suggested_status &&
-                      event.suggested_status !== event.applied_status &&
-                      event.suggested_status !== event.previous_status ? (
+                      event.suggested_status !== event.applied_status ? (
                       <StatusBadge status={event.suggested_status} label={`Suggested ${event.suggested_status}`} />
                     ) : null}
                     {confidencePct !== null ? (
