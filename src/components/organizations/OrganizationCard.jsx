@@ -17,7 +17,7 @@ export default function OrganizationCard({ organization, grantCount, isSelected,
 
   const ORGANIZATION_TYPES = ['organization', 'nonprofit', 'business', 'government'];
 const isOrganization = ORGANIZATION_TYPES.includes(organization.applicant_type);
-const isUnknownType = !organization.applicant_type;
+const isUnknownType = !organization.applicant_type || (!isOrganization && !isStudent && !isIndividual);
   const isStudent = ['high_school_student', 'college_student', 'graduate_student'].includes(organization.applicant_type);
   const isIndividual = [
   'individual_need',
@@ -30,7 +30,7 @@ const isUnknownType = !organization.applicant_type;
 ].includes(organization.applicant_type);
 
   const { data: taxonomyItems = [] } = useQuery({
-      queryKey: ['taxonomy'],
+      queryKey: ['taxonomy', organization.applicant_type],
       queryFn: () => client.entities.Taxonomy.list(),
       enabled: isIndividual && !!organization.assistance_categories,
   });
@@ -198,7 +198,7 @@ const isUnknownType = !organization.applicant_type;
                 ))}
                 {(organization.assistance_categories?.length || 0) > 2 && (
                      <Badge variant="outline" className="bg-rose-50 text-rose-700 text-xs">
-                        +{(organization.assistance_categories.length || 0) - 2} more
+                        +{(organization.assistance_categories?.length || 0) - 2} more
                     </Badge>
                 )}
               </div>
