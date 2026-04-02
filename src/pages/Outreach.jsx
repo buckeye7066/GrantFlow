@@ -59,7 +59,10 @@ export default function Outreach() {
   const outreachLogsQuery = useQuery({
     queryKey: ['outreachLogs', activeProfileId],
     enabled: Boolean(activeProfileId),
-    queryFn: () => apiFetch(`/api/outreach-logs?profile_id=${encodeURIComponent(activeProfileId)}`),
+    queryFn: () =>
+  apiFetch('/api/outreach-logs', {
+    headers: { 'X-Profile-Id': activeProfileId },
+  }),
     staleTime: 15_000,
   })
 
@@ -67,6 +70,7 @@ export default function Outreach() {
     mutationFn: async (payload) => {
       return apiFetch('/api/outreach-logs', {
         method: 'POST',
+        headers: { 'X-Profile-Id': activeProfileId },
         body: JSON.stringify(payload),
       })
     },
@@ -91,9 +95,7 @@ export default function Outreach() {
       return
     }
     setLogMethod(method)
-    if (!logFunder && funders.length === 1) {
-      setLogFunder(funders[0].name)
-    }
+    setLogFunder(funders.length === 1 ? funders[0].name : "")
     setLogDialogOpen(true)
   }
 
