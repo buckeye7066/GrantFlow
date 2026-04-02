@@ -16,7 +16,8 @@ function normalizeTrack(track) {
   const t = String(track).trim().toLowerCase()
   if (t === 'client' || t === 'a' || t === 'beneficiary') return 'CLIENT'
   if (t === 'provider' || t === 'b' || t === 'caregiver') return 'PROVIDER'
-  // removed: t is already lowercased, these branches are unreachable
+  // Unrecognised but non-empty track: log so operators can detect bad callers
+  console.warn('[programs] normalizeTrack: unrecognised track value:', track)
   return null
 }
 
@@ -86,7 +87,7 @@ router.get('/', async (req, res) => {
         .prepare(
           `
             SELECT *
-            FROM ${table === 'programs_provider' ? 'programs_provider' : 'programs_client'}
+            FROM ${table}
             ${clause}
             ORDER BY last_verified DESC, updated_at DESC
             LIMIT ?
@@ -98,7 +99,7 @@ router.get('/', async (req, res) => {
         .prepare(
           `
             SELECT COUNT(*) AS total
-            FROM ${table === 'programs_provider' ? 'programs_provider' : 'programs_client'}
+            FROM ${table}
             ${clause}
           `,
         )
@@ -172,7 +173,8 @@ router.get('/:track/:programId', async (req, res) => {
     const programId = req.params.programId
     const table = tableForTrack(track)
 
-    const program = await req.db.prepare(`SELECT * FROM ${req.db.dialect === 'postgres' ? '"' + (table === 'programs_provider' ? 'programs_provider' : 'programs_client') + '"' : '`' + (table === 'programs_provider' ? 'programs_provider' : 'programs_client') + '`'} WHERE program_id = ?`).get(programId)
+    const safeTable = table === 'programs_provider' ? 'programs_provider' : 'programs_client'
+const program = await req.db.prepare(`SELECT * FROM ${safeTable} WHERE program_id = ?`).get(programId)
     if (!program) return res.status(404).json({ error: 'Program not found' })
 
     const versions = await req.db
