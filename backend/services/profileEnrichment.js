@@ -142,6 +142,12 @@ export async function processProfileEnrichmentJob({ db, job, profileContext, get
   if (!result.ok || !result.json) {
     const warning =
       'AI enrichment unavailable (OpenAI invalid/missing and no Anthropic fallback configured).'
+    const failMeta = {
+      warning,
+      provider: result.provider,
+      sections_attempted: sectionsToEnrich,
+      reason: result.error ?? 'AI provider unavailable',
+    }
     db.prepare(
       `
         UPDATE crawler_jobs
@@ -152,8 +158,8 @@ export async function processProfileEnrichmentJob({ db, job, profileContext, get
             error = NULL
         WHERE id = ?
       `,
-    ).run(JSON.stringify({ warning, provider: result.provider }), job.id)
-    return { updated_sections: [], notes: [warning], log: [] }
+    ).run(JSON.stringify(failMeta), job.id)
+    return { updated_sections: [], notes: [warning], log: sectionsToEnrich.map((k) => ({ section_key: k, updated_fields: [], notes: warning })) }
   }
 
   const parsed = result.json
