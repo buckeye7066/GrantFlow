@@ -23,21 +23,34 @@ const insertSectionStmt = (db) => {
 
 const updateSectionStmt = (db) =>
   db.prepare(
-    `
-    UPDATE profile_sections
-    SET data = $1, updated_by = $2, updated_at = CURRENT_TIMESTAMP
-    WHERE id = $3
-    `,
+    db?.dialect === 'postgres'
+      ? `
+          UPDATE profile_sections
+          SET data = $1, updated_by = $2, updated_at = CURRENT_TIMESTAMP
+          WHERE id = $3
+        `
+      : `
+          UPDATE profile_sections
+          SET data = ?, updated_by = ?, updated_at = CURRENT_TIMESTAMP
+          WHERE id = ?
+        `,
   )
 
 const selectSectionsStmt = (db) =>
   db.prepare(
-    `
-    SELECT id, section_key, data
-    FROM profile_sections
-    WHERE profile_id = $1
-    ORDER BY section_key
-    `,
+    db?.dialect === 'postgres'
+      ? `
+          SELECT id, section_key, data
+          FROM profile_sections
+          WHERE profile_id = $1
+          ORDER BY section_key
+        `
+      : `
+          SELECT id, section_key, data
+          FROM profile_sections
+          WHERE profile_id = ?
+          ORDER BY section_key
+        `,
   )
 
 function hasValue(value) {
