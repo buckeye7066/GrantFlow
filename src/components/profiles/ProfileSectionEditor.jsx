@@ -1269,16 +1269,17 @@ export default function ProfileSectionEditor({
   const handleAskAI = async () => {
     if (!config || !onAskAI) return
     // Capture stable references before the async gap.
-    const capturedDefaults = config.defaults ?? {}
     const capturedConfig = config
+    const currentValues = form.getValues()
     setAiStatus('loading')
     setAiError(null)
     try {
-      const suggestion = await onAskAI(form.getValues())
+      const suggestion = await onAskAI(currentValues)
       // Guard: if section changed while awaiting, do nothing.
       if (config !== capturedConfig) return
       if (suggestion && typeof suggestion === 'object') {
-        form.reset({ ...capturedDefaults, ...suggestion })
+        // Merge AI suggestion ON TOP of current user values so no existing data is erased.
+        form.reset({ ...currentValues, ...suggestion })
         setAiStatus('succeeded')
       } else {
         setAiStatus('idle')
@@ -1466,6 +1467,9 @@ export default function ProfileSectionEditor({
                                         placeholder="Contact name"
                                         disabled={isSaving || aiStatus === 'loading'}
                                       />
+                                      {form.formState.errors?.contacts?.[index]?.name && (
+                                        <p className="text-xs text-red-600 mt-1">{form.formState.errors.contacts[index].name.message}</p>
+                                      )}
                                     </div>
                                     <div>
                                       <Label htmlFor={`contact-email-${index}`} className="text-xs">Email</Label>
