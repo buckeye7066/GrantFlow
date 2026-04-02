@@ -20,16 +20,17 @@ export default function ComplianceTab({ grant }) {
   const queryClient = useQueryClient();
   const [showExpenseForm, setShowExpenseForm] = useState(false);
 
-  const { data: award, isLoading: isLoadingAward } = useQuery({
+  const { data: award, isLoading: isLoadingAward, isError: isAwardError } = useQuery({
     queryKey: ['grantAward', grant.id],
     queryFn: () => client.entities.GrantAward.filter({ grant_id: grant.id }).then(res => res[0]),
     enabled: grant.status === 'awarded',
+    retry: 1,
   });
 
   const { data: expenses = [], isLoading: isLoadingExpenses } = useQuery({
     queryKey: ['expenses', grant.id],
     queryFn: () => client.entities.Expense.filter({ grant_id: grant.id }),
-    enabled: !!award,
+    enabled: !isLoadingAward && !!award,
   });
 
   const createAwardMutation = useMutation({
@@ -58,6 +59,15 @@ export default function ComplianceTab({ grant }) {
 
   if (isLoadingAward) {
     return <div className="flex justify-center p-8"><Loader2 className="w-6 h-6 animate-spin" /></div>;
+  }
+
+  if (isAwardError) {
+    return (
+      <div className="text-center py-10 text-red-600">
+        <h3 className="text-lg font-medium">Unable to Load Award Record</h3>
+        <p className="text-sm mt-2">Could not retrieve the award for this grant. Please refresh or contact support before making changes.</p>
+      </div>
+    );
   }
 
   if (!award) {
@@ -115,14 +125,18 @@ const budgetRemaining = awardAmount - totalSpent;
                 />
             )}
             {isLoadingExpenses ? <Loader2 className="w-6 h-6 animate-spin" /> : (
-                <ul className="space-y-2">
-                    {expenses.map(ex => (
-                        <li key={ex.id} className="flex justify-between p-2 border-b">
-                            <span>{ex.date}: {ex.description}</span>
-                            <span>${(parseFloat(ex.amount) || 0).toLocaleString()}</span>
-                        </li>
-                    ))}
-                </ul>
+                {expenses.length === 0 ? (
+                    <p className="text-center text-slate-500 py-4">No expenses logged yet. Use "Log Expense" to record spend against this award.</p>
+                ) : (
+                    <ul className="space-y-2">
+                        {expenses.map(ex => (
+                            <li key={ex.id} className="flex justify-between p-2 border-b">
+                                <span>{ex.date}: {ex.description}</span>
+                                <span>${(parseFloat(ex.amount) || 0).toLocaleString()}</span>
+                            </li>
+                        ))}
+                    </ul>
+                )}
             )}
         </CardContent>
       </Card>
