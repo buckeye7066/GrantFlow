@@ -193,6 +193,7 @@ export default function DocumentList({ profileId }) {
             key={document.id}
             document={document}
             onDelete={handleDelete}
+            onResolveUrl={resolveDocumentUrl}
           />
         ))}
       </div>
