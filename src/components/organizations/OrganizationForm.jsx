@@ -274,10 +274,13 @@ const initializeFormData = (org, contactMethods) => {
   delete initialData.assistance_category; // Remove old field
 
   // Map organization_type to nonprofit_type for consistency with outline's formData
-  if (initialData.organization_type && !initialData.nonprofit_type) {
-    initialData.nonprofit_type = initialData.organization_type;
+  if (initialData.organization_type) {
+    // Always prefer the more specific nonprofit_type if both exist; otherwise use organization_type
+    if (!initialData.nonprofit_type) {
+      initialData.nonprofit_type = initialData.organization_type;
+    }
   }
-  delete initialData.organization_type; // Remove old field
+  delete initialData.organization_type; // Remove old field after migration
 
   return {
     ...initialData,
@@ -790,7 +793,8 @@ Return ONLY valid JSON. Do not include fields that aren't present in the text.`;
 const NUMERIC_FIELDS = [
   'gpa', 'act_score', 'sat_score', 'community_service_hours',
   'annual_budget', 'staff_count', 'indirect_rate',
-  'age', 'household_income', 'household_size', 'cancer_diagnosis_year'
+  'age', 'household_income', 'household_size', 'cancer_diagnosis_year',
+  'discount_percent', 'custom_monthly_cents'
 ];
 const FLOAT_FIELDS = ['gpa', 'indirect_rate', 'annual_budget', 'household_income'];
 const ARRAY_FIELDS = [
