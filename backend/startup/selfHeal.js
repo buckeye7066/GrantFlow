@@ -110,8 +110,11 @@ export async function runSelfHeal({ db, uploadsDir, IS_SMOKE_MODE, baseDir }) {
   if (!IS_SMOKE_MODE && db.dialect === 'sqlite') {
     try {
       const oppCount = db
-        .prepare('SELECT COUNT(*) as count FROM funding_opportunities WHERE is_active = ?')
-        .get(1);
+        .prepare('SELECT COUNT(*) as count FROM funding_opportunities')
+        .get();
+      const activeCount = db
+        .prepare('SELECT COUNT(*) as count FROM funding_opportunities WHERE is_active = 1')
+        .get();
       if (oppCount && Number(oppCount.count) === 0) {
         console.info('[startup] No funding opportunities found, auto-seeding...');
         try {
@@ -309,7 +312,7 @@ export async function runSelfHeal({ db, uploadsDir, IS_SMOKE_MODE, baseDir }) {
     const faithCount =
       db
         .prepare(
-          "SELECT COUNT(*) as count FROM funding_opportunities WHERE source = 'faith_based_assistance' AND state = 'OH' AND is_active = 1",
+          "SELECT COUNT(*) as count FROM funding_opportunities WHERE source = 'faith_based_assistance' AND is_active = 1",
         )
         .get()?.count ?? 0;
 
