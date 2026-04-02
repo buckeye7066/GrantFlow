@@ -33,6 +33,8 @@ router.get('/dashboard', async (req, res) => {
           fundsSecured: 0,
           activeProfiles: 0,
           opportunitiesFound: 0,
+          grantsTotal: 0,
+          pipelineTotal: 0,
           isRealData: true,
         })
       }
@@ -50,9 +52,8 @@ router.get('/dashboard', async (req, res) => {
         .prepare('SELECT COUNT(*) as count FROM grants')
         .get()
       
-      const activePredicate = req.db?.dialect === 'postgres' ? 'is_active = TRUE' : 'is_active = 1'
       const opportunitiesCount = await req.db
-        .prepare(`SELECT COUNT(*) as count FROM funding_opportunities WHERE ${activePredicate}`)
+        .prepare('SELECT COUNT(*) as count FROM funding_opportunities WHERE is_active = 1')
         .get()
       
       const awardedGrants = await req.db
@@ -89,12 +90,15 @@ router.get('/dashboard', async (req, res) => {
     })
   } catch (error) {
     console.error('[stats/dashboard] Error:', error)
-    return res.status(500).json({ 
+    return res.status(500).json({
       error: 'Failed to fetch dashboard stats',
       organizations: 0,
       fundsSecured: 0,
       activeProfiles: 0,
       opportunitiesFound: 0,
+      grantsTotal: 0,
+      pipelineTotal: 0,
+      isRealData: false,
     })
   }
 })
