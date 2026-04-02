@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import path from 'node:path'
 
 const __filename = fileURLToPath(import.meta.url)
@@ -14,7 +14,7 @@ const {
   normalizeUrlForDedupe,
   dedupeKeyFromRow,
   isExpiredOpportunity,
-} = await import(helpersPath)
+} = await import(pathToFileURL(helpersPath).href)
 
 // ─── parseLooseDate ─────────────────────────────────────────────
 test('parseLooseDate - ISO format', () => {
@@ -27,15 +27,15 @@ test('parseLooseDate - human format "April 14th, 2001"', () => {
   const d = parseLooseDate('April 14th, 2001')
   assert.ok(d instanceof Date)
   assert.equal(d.getFullYear(), 2001)
-  assert.equal(d.getMonth(), 3) // April = 3
-  assert.equal(d.getDate(), 14)
+  assert.equal(d.getUTCMonth(), 3) // April = 3
+  assert.equal(d.getUTCDate(), 14)
 })
 
 test('parseLooseDate - comma spacing "March 1, 2025"', () => {
   const d = parseLooseDate('March 1, 2025')
   assert.ok(d instanceof Date)
   assert.equal(d.getFullYear(), 2025)
-  assert.equal(d.getMonth(), 2) // March = 2
+  assert.equal(d.getUTCMonth(), 2) // March = 2
 })
 
 test('parseLooseDate - returns null for invalid input', () => {

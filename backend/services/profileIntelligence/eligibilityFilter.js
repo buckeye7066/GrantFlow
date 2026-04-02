@@ -45,16 +45,18 @@ function isExpired(opportunity) {
   if (!deadline) return false
 
   const deadlineType = opportunity.deadline_type
-  if (deadlineType === 'rolling' || deadlineType === 'open') return false
+  if (deadlineType === 'rolling' || deadlineType === 'open' || deadlineType === 'ongoing') return false
 
   try {
     const d = new Date(deadline)
     if (Number.isNaN(d.getTime())) return false
     const now = new Date()
     if (Number.isNaN(now.getTime())) return false
-    d.setHours(0, 0, 0, 0)
-    now.setHours(0, 0, 0, 0)
-    return d < now
+    // Normalize both dates to UTC midnight so same-day deadlines do not
+    // flip to "expired" in negative local timezones.
+    const deadlineUtc = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate())
+    const todayUtc = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())
+    return deadlineUtc < todayUtc
   } catch { return false }
 }
 

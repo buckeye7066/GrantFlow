@@ -21,6 +21,10 @@
 
 import jwt from 'jsonwebtoken'
 
+async function resolveDbMaybePromise(value) {
+  return await Promise.resolve(value)
+}
+
 /**
  * Factory that returns an Express middleware which resolves req.user.
  *
@@ -154,13 +158,13 @@ export function createAuthIdentityMiddleware({ adminToken, adminName, adminEmail
             if (payload?.sid) {
               let sessionRow
               try {
-                const sessionStmt = db.prepare(`
-                      SELECT s.*, u.display_name, u.primary_email, u.is_admin
-                      FROM user_sessions s
-                      JOIN users u ON u.id = s.user_id
-                      WHERE s.id = ?
-                    `)
-                sessionRow = sessionStmt.get(payload.sid)
+                const stmt = db.prepare(`
+                  SELECT s.*, u.display_name, u.primary_email, u.is_admin
+                  FROM user_sessions s
+                  JOIN users u ON u.id = s.user_id
+                  WHERE s.id = ?
+                `)
+                sessionRow = await resolveDbMaybePromise(stmt.get(payload.sid))
               } catch (error) {
                 console.warn('Failed to validate session:', error?.message || error)
                 if (error?.code === 'SQLITE_CORRUPT' || error?.code === 'ECONNRESET') {
@@ -223,7 +227,7 @@ export function createAuthIdentityMiddleware({ adminToken, adminName, adminEmail
           if (UUID_RE.test(token)) {
             try {
               const stmt = db.prepare('SELECT id, display_name FROM profiles WHERE id = ?')
-              const profile = stmt.get(token)
+              const profile = await resolveDbMaybePromise(stmt.get(token))
               if (profile) {
                 user = {
                   role: 'user',
