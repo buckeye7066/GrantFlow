@@ -15,6 +15,18 @@ if (import.meta.env.DEV) {
   if (raw && !/^https?:\/\//i.test(String(raw))) {
     console.warn('[env] VITE_API_URL should be http(s)://...; falling back to same-origin proxy. value=', raw)
   }
+  if (!raw && API_URL && API_URL !== '') {
+    console.warn(
+      '[env] API_URL resolved from appBase as a path prefix:',
+      API_URL,
+      'â ensure Vercel rewrites map',
+      API_URL + '/api/:path*',
+      'to the backend, otherwise all API calls will 404 silently.',
+    )
+  }
+  if (!raw && API_URL === '') {
+    console.info('[env] API_URL is empty string â using same-origin proxy (relative URLs). Ensure the proxy is configured.')
+  }
 }
 
 const log = createLogger('APIClient')
@@ -320,9 +332,20 @@ class APIClient {
       headers['Authorization'] = `Bearer ${token}`;
     }
 
-    const activeProfileId = this.getActiveProfileId?.()
+    const activeProfileId = this.getActiveProfileId()
     if (activeProfileId) {
-      headers['X-Profile-Id'] = headers['X-Profile-Id'] || activeProfileId
+      // Always enforce the current active profile â do not allow a stale value
+      // passed in via requestOptions.headers to silently override it.
+      if (!headers['X-Profile-Id']) {
+        headers['X-Profile-Id'] = activeProfileId
+      } else if (headers['X-Profile-Id'] !== String(activeProfileId)) {
+        log.warn(
+          `[APIClient] X-Profile-Id header mismatch: passed=${headers['X-Profile-Id']} active=${activeProfileId}. Using active profile id.`
+        )
+        headers['X-Profile-Id'] = activeProfileId
+      }
+    } else if (headers['X-Profile-Id']) {
+      log.warn('[APIClient] X-Profile-Id set in headers but no active profile on client â forwarding caller value.')
     }
 
     headers['X-Request-Id'] = headers['X-Request-Id'] || requestId;
@@ -396,8 +419,10 @@ class APIClient {
           throw this.createAuthError('Authentication failed after retry');
         }
         
-        // Mark the retry and handle unauthorized
-        const retryOptions = { ...requestOptions, _isRetry: true };
+        // Mark the retry and handle unauthorized.
+        // Pass _isRetry through the original options so handleUnauthorized's
+        // re-invocation of this.fetch() still carries the guard flag.
+        const retryOptions = { ...options, _isRetry: true };
         return this.handleUnauthorized({ endpoint, options: retryOptions });
       }
 
@@ -574,7 +599,7 @@ class APIClient {
         if (!Array.isArray(items) || items.length === 0) {
           return [];
         }
-        return Promise.all(
+        const results = await Promise.allSettled(
           items.map((item) =>
             this.fetch(endpoint, {
               method: 'POST',
@@ -582,6 +607,14 @@ class APIClient {
             }),
           ),
         );
+        const failures = results.filter((r) => r.status === 'rejected');
+        if (failures.length > 0) {
+          log.warn(
+            `[APIClient] bulkCreate: ${failures.length}/${items.length} items failed`,
+            failures.map((f) => f.reason?.message),
+          );
+        }
+        return results.map((r) => (r.status === 'fulfilled' ? r.value : null));
       },
     };
   }
