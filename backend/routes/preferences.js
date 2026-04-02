@@ -209,17 +209,32 @@ router.put('/', async (req, res) => {
         }
       }
       const incoming = typeof req.body.custom_preferences === 'object' ? req.body.custom_preferences : {}
+      // Deep-merge one level: top-level keys are merged; object sub-keys are also merged
       const merged = { ...existingCustom, ...incoming }
+      if (
+        incoming.feature_flags &&
+        typeof incoming.feature_flags === 'object' &&
+        existingCustom.feature_flags &&
+        typeof existingCustom.feature_flags === 'object'
+      ) {
+        merged.feature_flags = { ...existingCustom.feature_flags, ...incoming.feature_flags }
+      }
       updates.push(dialect === 'postgres' ? 'custom_preferences = ?::jsonb' : 'custom_preferences = ?')
       values.push(JSON.stringify(merged))
     }
     
+    const BOOLEAN_FIELDS = new Set([
+      'sidebar_collapsed', 'high_contrast', 'email_notifications',
+      'weekly_digest', 'browser_notifications', 'reduce_motion',
+      'screen_reader_optimized',
+    ])
     Object.entries(req.body).forEach(([key, value]) => {
       if (key === 'custom_preferences') return // already handled above
       if (allowedFields.includes(key) && value !== undefined) {
-        if (typeof value === 'boolean') {
+        if (BOOLEAN_FIELDS.has(key)) {
+          // Coerce strings/numbers/booleans to 0/1 reliably
           updates.push(`${key} = ?`)
-          values.push(value ? 1 : 0)
+          values.push(value && value !== 'false' && value !== '0' ? 1 : 0)
         } else {
           updates.push(`${key} = ?`)
           values.push(value)
