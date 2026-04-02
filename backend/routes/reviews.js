@@ -154,7 +154,9 @@ router.get('/export/training', async (req, res) => {
       return JSON.stringify({
         review_id: row.id,
         item_id: row.item_id,
-        reviewer_user_id: row.reviewer_user_id,
+        // Omit reviewer_user_id from training export to avoid PII leakage;
+        // reviewer identity is retained in the reviews table for audit.
+        prior_value: parseStoredJson(row.prior_value),
         corrected_value: parseStoredJson(row.new_value),
         reason_code: row.reason_code,
         evidence_url: row.evidence_url,
@@ -289,6 +291,21 @@ router.post('/', mutationRateLimiter, async (req, res) => {
       return res.status(400).json({ success: false, error: 'new_value is required for correct actions' })
     }
 
+    // If correcting a URL-type field, validate new_value is a reachable http/https URL
+    if (action === 'correct' && typeof req.body?.new_value === 'string') {
+      const trimmedNewValue = req.body.new_value.trim()
+      if (trimmedNewValue.startsWith('http://') || trimmedNewValue.startsWith('https://')) {
+        try {
+          const parsedNew = new URL(trimmedNewValue)
+          if (parsedNew.protocol !== 'http:' && parsedNew.protocol !== 'https:') {
+            return res.status(400).json({ success: false, error: 'new_value URL must use http or https' })
+          }
+        } catch {
+          return res.status(400).json({ success: false, error: 'new_value appears to be a URL but is not valid' })
+        }
+      }
+    }
+
     // Verify the item exists in the pipeline before recording a review
     const pipelineRow = await req.db
       .prepare('SELECT id FROM profile_pipeline WHERE id = ? LIMIT 1')
@@ -331,6 +348,57 @@ router.post('/', mutationRateLimiter, async (req, res) => {
       )
 
     const created = await req.db.prepare('SELECT * FROM reviews WHERE id = ?').get(reviewId)
+
+    // Propagate human review decisions back to the canonical pipeline row
+    // so the pipeline state machine and audit trail stay consistent.
+    if (action === 'accept') {
+      await req.db
+        .prepare(
+          `UPDATE profile_pipeline
+           SET match_decision = 'ACCEPT',
+               eligibility_status = 'eligible',
+               match_explanation = 'Human reviewer accepted: ' || ?,
+               evaluated_at = CURRENT_TIMESTAMP
+           WHERE id = ?`
+        )
+        .run(reasonCode, itemId)
+      console.info('[reviews] Pipeline row accepted by reviewer:', actorUserId, 'item:', itemId)
+    } else if (action === 'reject') {
+      await req.db
+        .prepare(
+          `UPDATE profile_pipeline
+           SET match_decision = 'REJECT',
+               eligibility_status = 'ineligible',
+               match_explanation = 'Human reviewer rejected: ' || ?,
+               evaluated_at = CURRENT_TIMESTAMP
+           WHERE id = ?`
+        )
+        .run(reasonCode, itemId)
+      console.info('[reviews] Pipeline row rejected by reviewer:', actorUserId, 'item:', itemId)
+    } else if (action === 'correct' && req.body?.new_value != null) {
+      // Log the correction intent; field-level application requires knowing which
+      // column is being corrected (passed via reason_code convention e.g. 'field:application_url').
+      // Apply only safe, known fields to prevent arbitrary column injection.
+      const CORRECTABLE_FIELDS = new Set(['application_url', 'match_explanation', 'match_confidence'])
+      const fieldMatch = reasonCode.match(/^field:([a-zA-Z0-9_]+)$/)
+      const targetField = fieldMatch ? fieldMatch[1] : null
+      if (targetField && CORRECTABLE_FIELDS.has(targetField)) {
+        const correctedVal = typeof req.body.new_value === 'string'
+          ? req.body.new_value
+          : JSON.stringify(req.body.new_value)
+        // Use a safe static column map to avoid injection
+        const COLUMN_SQL = {
+          application_url: 'UPDATE profile_pipeline SET application_url = ?, evaluated_at = CURRENT_TIMESTAMP WHERE id = ?',
+          match_explanation: 'UPDATE profile_pipeline SET match_explanation = ?, evaluated_at = CURRENT_TIMESTAMP WHERE id = ?',
+          match_confidence: 'UPDATE profile_pipeline SET match_confidence = ?, evaluated_at = CURRENT_TIMESTAMP WHERE id = ?',
+        }
+        await req.db.prepare(COLUMN_SQL[targetField]).run(correctedVal, itemId)
+        console.info('[reviews] Pipeline field corrected:', targetField, 'by reviewer:', actorUserId, 'item:', itemId)
+      } else {
+        console.info('[reviews] Correction recorded in reviews table only (field not auto-applicable):', reasonCode, 'item:', itemId)
+      }
+    }
+
     res.status(201).json({
       success: true,
       review: mapReviewRow(created),
