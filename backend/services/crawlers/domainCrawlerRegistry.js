@@ -676,7 +676,7 @@ export const DOMAIN_CRAWLER_REGISTRY = [
       { title: 'EPA Grants', description: 'Environmental Protection Agency grants', url: 'https://www.epa.gov/grants', categories: ['environment'], keywords: ['environment'] },
       { title: 'National Fish and Wildlife Foundation', description: 'NFWF conservation grants', url: 'https://www.nfwf.org/programs', categories: ['environment'], keywords: ['conservation'] },
       { title: 'USDA Conservation Programs', description: 'NRCS and conservation', url: 'https://www.nrcs.usda.gov/programs', categories: ['environment'], keywords: ['conservation'] },
-      { title: 'NOAA Grants', description: 'Ocean and atmospheric grants', url: 'https://www.grants.gov/search-results-detail/349399', categories: ['environment'], keywords: ['environment'] },
+      { title: 'NOAA Grants', description: 'Ocean and atmospheric grants', url: 'https://www.noaa.gov/grants', categories: ['environment'], keywords: ['environment'] },
       { title: 'National Forest Foundation', description: 'Forest conservation', url: 'https://www.nationalforests.org/', categories: ['environment'], keywords: ['forest'] },
       { title: 'Keep America Beautiful', description: 'Community beautification', url: 'https://kab.org/', categories: ['environment'], keywords: ['environment'] },
     ],
@@ -691,7 +691,7 @@ export const DOMAIN_CRAWLER_REGISTRY = [
     strict_no_loans: false,
     strict_no_matching: false,
     directoryResources: [
-      { title: 'USA.gov Faith-Based Funding', description: 'Federal faith-based initiatives', url: 'https://www.whitehouse.gov/ceq/grants/', categories: ['faith'], keywords: ['faith'] },
+      { title: 'USA.gov Faith-Based Funding', description: 'Federal faith-based initiatives and grant programs', url: 'https://www.usa.gov/non-profit-grants', categories: ['faith'], keywords: ['faith'] },
       { title: 'Lilly Endowment', description: 'Religious and community grants', url: 'https://lillyendowment.org/', categories: ['faith'], keywords: ['faith'] },
       { title: 'Scholarships for Ministry', description: 'Seminary and ministry education', url: 'https://studentaid.gov/', categories: ['faith'], keywords: ['ministry'] },
       { title: 'National Council of Churches', description: 'Ecumenical resources', url: 'https://nationalcouncilofchurches.us/', categories: ['faith'], keywords: ['faith'] },
@@ -980,7 +980,7 @@ export const DOMAIN_CRAWLER_REGISTRY = [
     strict_no_matching: false,
     directoryResources: [
       { title: 'FEMA Individual Assistance', description: 'Disaster assistance for individuals', url: 'https://www.fema.gov/assistance/individual', categories: ['disaster'], keywords: ['FEMA'] },
-      { title: 'SBA Disaster Loans', description: 'Disaster business assistance', url: 'https://www.sba.gov/funding-programs/disaster-assistance', categories: ['disaster'], keywords: ['disaster'] },
+      { title: 'SBA Disaster Recovery Grants', description: 'Disaster business grant assistance (non-loan programs only)', url: 'https://www.sba.gov/funding-programs/grants', categories: ['disaster'], keywords: ['disaster'] },
       { title: 'Red Cross Disaster Relief', description: 'Emergency assistance', url: 'https://www.redcross.org/get-help.html', categories: ['disaster'], keywords: ['disaster'] },
       { title: 'Salvation Army Disaster Services', description: 'Disaster response', url: 'https://www.salvationarmyusa.org/usn/disaster-services/', categories: ['disaster'], keywords: ['disaster'] },
       { title: '211 Disaster Help', description: 'Local disaster resources', url: 'https://www.211.org/services/disaster-recovery', categories: ['disaster'], keywords: ['disaster'] },
