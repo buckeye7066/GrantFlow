@@ -234,7 +234,13 @@ export default function SmartMatcher() {
 
   // -- Smart crawler mutation --
   const crawlMutation = useMutation({
-        mutationFn: () => runSmartCrawler({ profileId: selectedProfileId, minMatchScore: minScore }),
+        mutationFn: () => runSmartCrawler({
+        profileId: selectedProfileId,
+        minMatchScore: minScore,
+        state: selectedProfile?.state ?? undefined,
+        city: selectedProfile?.city ?? undefined,
+        applicantType: selectedProfile?.primary_type ?? selectedProfile?.applicant_type ?? undefined,
+}),
         onSuccess: (data) => {
                 queryClient.invalidateQueries({ queryKey: ['smart-matcher'] })
                 const count = data?.count ?? 0
@@ -306,7 +312,7 @@ export default function SmartMatcher() {
         return [...scoredOpportunities].sort((a, b) => (b.match_score ?? 0) - (a.match_score ?? 0))
   }, [scoredOpportunities])
 
-  const topMatches = filteredOpportunities.slice(0, 10)
+  const topMatches = filteredOpportunities.filter(o => (o.match_score ?? 0) >= 85)
     const goodMatches = filteredOpportunities.filter(o => (o.match_score ?? 0) >= 70 && (o.match_score ?? 0) < 85)
     const allQualified = filteredOpportunities
 
@@ -316,6 +322,17 @@ export default function SmartMatcher() {
         const url = selectedOpp?.application_url ?? selectedOpp?.source_url ?? selectedOpp?.url ?? null
         if (!url || typeof url !== 'string') {
                 toast({ title: 'No application link available', description: 'This opportunity does not include a valid URL yet.', variant: 'destructive' })
+                return
+        }
+        let parsedUrl
+        try {
+                parsedUrl = new URL(url)
+        } catch {
+                toast({ title: 'Invalid application URL', description: 'The stored URL is malformed and cannot be opened.', variant: 'destructive' })
+                return
+        }
+        if (parsedUrl.protocol !== 'https:' && parsedUrl.protocol !== 'http:') {
+                toast({ title: 'Unsafe application URL', description: 'Only http and https links can be opened.', variant: 'destructive' })
                 return
         }
         window.open(url, '_blank', 'noopener,noreferrer')
@@ -718,7 +735,17 @@ export default function SmartMatcher() {
                                       ) : (
                                         <Card>
                                                             <CardContent className="p-12 text-center">
-                                                                                  <p className="text-slate-600">No matches found. Try lowering the minimum score or adjusting keywords.</p>
+                                                                                  <div className="space-y-3">
+  <p className="text-slate-600">No matches found. Try lowering the minimum score or adjusting keywords.</p>
+  {checkedCount < allChecklistItems.length && (
+    <Alert className="bg-amber-50 border-amber-200">
+      <AlertDescription className="text-amber-800 text-sm">
+        <span className="font-semibold">Profile tip:</span> You have completed {checkedCount} of {allChecklistItems.length} profile checklist items.
+        Completing more items (especially state/ZIP, profile type, and primary goal) significantly improves match quality.
+      </AlertDescription>
+    </Alert>
+  )}
+</div>
                                                             </CardContent>
                                         </Card>
                                                               )}
