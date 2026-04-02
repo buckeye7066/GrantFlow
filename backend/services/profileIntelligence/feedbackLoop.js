@@ -176,11 +176,14 @@ export function applyFeedbackToScore(scoreResult, feedbackSignals, opportunityId
   // computeMatchDecision() receives the signal and issues the authoritative REJECT
   // with proper ineligibility_reasons, matcher_version, and evaluated_at.
   if (feedbackSignals.blocked_opportunities.includes(opportunityId)) {
+    // Signal only â do NOT set verdict here. Caller MUST pass this result
+    // through computeMatchDecision() which is the sole decision authority (Goal 4).
+    // We set total_score:0 and feedback_hard_blocked:true so computeMatchDecision()
+    // will naturally produce REJECT with full audit metadata (Goal 8).
     return {
       ...scoreResult,
       total_score: 0,
       feedback_hard_blocked: true,
-      verdict: 'REJECT',
       ineligibility_reasons: [
         ...(scoreResult.ineligibility_reasons ?? []),
         'Previously marked as broken link or confirmed ineligible by user',
