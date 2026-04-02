@@ -2,12 +2,22 @@ import { createOpenAIClient, summarizeOpenAIError } from './openaiClient.js'
 import { safeParseJSON } from './safeJson.js'
 
 let cachedAnthropic = null
+let cachedAnthropicKey = null
 
 async function getAnthropicClient() {
-  if (cachedAnthropic) return cachedAnthropic
   const key = String(process.env.ANTHROPIC_API_KEY || '').trim()
-  if (!key) return null
-
+  if (!key) {
+    if (cachedAnthropic) {
+      console.warn('[aiProviders] ANTHROPIC_API_KEY removed after init â clearing cached client')
+      cachedAnthropic = null
+      cachedAnthropicKey = null
+    }
+    return null
+  }
+  if (cachedAnthropic && cachedAnthropicKey === key) return cachedAnthropic
+  if (cachedAnthropic && cachedAnthropicKey !== key) {
+    console.warn('[aiProviders] ANTHROPIC_API_KEY changed â rebuilding Anthropic client')
+  }
   const Anthropic = (await import('@anthropic-ai/sdk')).default
   const client = new Anthropic({
     apiKey: key,
@@ -15,6 +25,7 @@ async function getAnthropicClient() {
     maxRetries: Number(process.env.ANYA_ANTHROPIC_MAX_RETRIES || process.env.ANTHROPIC_MAX_RETRIES || 1),
   })
   cachedAnthropic = client
+  cachedAnthropicKey = key
   return cachedAnthropic
 }
 
@@ -108,8 +119,8 @@ export async function invokeTextWithFallback({
       const text = extractAnthropicText(response)
       return { ok: true, provider: 'anthropic', text, raw: text, usage: null, openaiError, anthropicError: null }
     } catch (error) {
-      anthropicError = error
-      console.error('[aiProviders] Anthropic text call failed:', error?.message ?? error)
+      anthropicError = error?.message ?? String(error)
+      console.error('[aiProviders] Anthropic text call failed:', anthropicError)
     }
   }
 
@@ -187,8 +198,8 @@ export async function invokeJsonWithFallback({
       }
       return { ok: true, provider: 'anthropic', json: parsed, raw: rawText, usage: null, openaiError, anthropicError: null }
     } catch (error) {
-      anthropicError = error
-      console.error('[aiProviders] Anthropic text call failed:', error?.message ?? error)
+      anthropicError = error?.message ?? String(error)
+      console.error('[aiProviders] Anthropic JSON call failed:', anthropicError)
     }
   }
 
