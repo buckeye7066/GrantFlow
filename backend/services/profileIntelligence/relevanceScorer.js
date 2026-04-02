@@ -66,6 +66,25 @@ function scoreSourceQuality(opportunity) {
 
   if (!url || urlLower.trim() === '') return 0
 
+  // Validate that the URL is a real HTTP/HTTPS URL before trusting it
+  let isValidHttpUrl = false
+  try {
+    const parsed = new URL(url.trim())
+    isValidHttpUrl = parsed.protocol === 'http:' || parsed.protocol === 'https:'
+  } catch {
+    isValidHttpUrl = false
+  }
+
+  // Placeholder strings are not real application paths
+  const PLACEHOLDER_PATTERNS = /^(tbd|n\/a|na|contact|see website|pending|unknown|none|#)$/i
+  if (!isValidHttpUrl || PLACEHOLDER_PATTERNS.test(urlLower.trim())) {
+    // Fall back to record_origin trust only â no URL bonus
+    const origin = String(opportunity.record_origin || '').toLowerCase()
+    if (origin === 'grants_gov' || origin === 'verified_real') return 50
+    if (origin === 'curated_verified') return 40
+    return 0
+  }
+
   // Official .gov = highest trust
   const match = urlLower.match(/(?:https?:\/\/)?(?:www\.)?([^/?\s]+)/)
   const domain = match ? match[1] : ''
@@ -438,7 +457,7 @@ export function scoreOpportunity(intel, opportunity) {
   // 'requires_veteran', 'requires_student', and 'geographic_mismatch' are
   // scored dimensionally below; do NOT short-circuit here â let the weighted
   // total reach the caller (computeMatchDecision) which is the sole authority.
-  const HARD_REJECT_CODES = ['deadline_expired', 'entity_type_mismatch']
+  const HARD_REJECT_CODES = ['deadline_expired']
   const hasHardFailure = eligResult.verdict === 'ineligible' ||
     eligResult.hard_failures.some(f => HARD_REJECT_CODES.includes(f))
   if (hasHardFailure) {
@@ -477,7 +496,14 @@ export function scoreOpportunity(intel, opportunity) {
     veteran_status: intel.isVeteran ? 'veteran' : null,
     disability_status: intel.hasDisability ? 'yes' : null,
     student_status: intel.isStudent ? 'yes' : null,
+    senior_status: intel.isSenior ? 'yes' : null,
+    caregiver_status: intel.isCaregiver ? 'yes' : null,
+    nonprofit_status: intel.isNonprofit ? 'yes' : null,
     state: intel.state || null,
+    medical_conditions: intel.medicalConditions || [],
+    emergency_context: intel.emergencyContext || null,
+    business_flags: intel.businessFlags ? [...intel.businessFlags] : [],
+    family_flags: intel.familyFlags ? [...intel.familyFlags] : [],
     tags: inferredTags,
   }
   const relevance = applyRelevanceFilter(opportunity, profileData)
@@ -497,21 +523,43 @@ export function scoreOpportunity(intel, opportunity) {
   // Calculate individual dimension scores
   const matchedNeeds = []
   const needFitScore = (() => {
-    const score = scoreNeedFit(intel, opportunity)
-    // Collect matched needs for explanation
-    if (intel.inferredNeeds && score > 0) {
-      const oppText = [
-        String(opportunity.title || ''),
-        String(opportunity.description || ''),
-      ].join(' ').toLowerCase()
+    const oppText = [
+      String(opportunity.title || ''),
+      String(opportunity.description || ''),
+    ].join(' ').toLowerCase()
+    const oppCategories = (() => {
+      try {
+        const cats = Array.isArray(opportunity.categories)
+          ? opportunity.categories
+          : JSON.parse(opportunity.categories || '[]')
+        return cats.map(c => String(c).toLowerCase()).join(' ')
+      } catch { return '' }
+    })()
+    const oppKeywords = (() => {
+      try {
+        const kws = Array.isArray(opportunity.keywords)
+          ? opportunity.keywords
+          : JSON.parse(opportunity.keywords || '[]')
+        return kws.map(k => String(k).toLowerCase()).join(' ')
+      } catch { return '' }
+    })()
+    const fullText = `${oppText} ${oppCategories} ${oppKeywords}`
+    if (intel.inferredNeeds) {
       for (const need of intel.inferredNeeds) {
         const def = NEEDS_TAXONOMY[need.code]
-        if (def && (def.synonyms || []).some(s => oppText.includes(String(s || '').toLowerCase()))) {
+        if (!def) continue
+        const synonymMatch = (def.synonyms || []).some(s => fullText.includes(String(s || '').toLowerCase()))
+        const labelMatch = fullText.includes(def.label.toLowerCase())
+        const exampleMatch = (def.example_search_terms || []).some(t => {
+          const term = String(t || '').toLowerCase().split(' ')[0]
+          return term && fullText.includes(term)
+        })
+        if (synonymMatch || labelMatch || exampleMatch) {
           matchedNeeds.push(need.code)
         }
       }
     }
-    return score
+    return scoreNeedFit(intel, opportunity)
   })()
 
   const eligibilityScore = eligResult.verdict === 'eligible' ? 100
