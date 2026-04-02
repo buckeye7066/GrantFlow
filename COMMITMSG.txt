@@ -1,23 +1,6 @@
-Fix remaining 23 test failures: auth, scoring, domain engines, mockAI, crawlers
+Fix scoring regressions: restore REJECT for low scores, improve detection regexes
 
-Auth fixes:
-- ensureAdminUser.js: Fix parameter count mismatch (5 args vs 4 placeholders)
-- authIdentity.js: Add await on legacy profile token DB lookup
-- services.js: Remove ensureAuth from /catalog route (public endpoint)
-
-Scoring engine:
-- matchEngine.js: Add NEED_SYNONYMS map for semantic need matching
-- matchEngine.js: Check oppText (title/desc) for need alignment, not just keywords/categories
-- matchEngine.js: Force REVIEW (not REJECT) for individual/caregiver + pro bono/in-kind/referral
-
-Domain engines:
-- stateWaiverBenefitsCrawler.js: Simplify eligibility to state-based (per project rules)
-- familyYouthSupportEngine.js: Return all directory resources (per directory survival rule)
-- geoDesignationEngine.js: Return all directory resources (per directory survival rule)
-
-Other fixes:
-- mockAI.js: Restore module-level production throw guard
-- realCrawlers.js: Add match_decision field to all returned opportunities (Goal 8)
-- realCrawlers.js: Policy filter removes REJECT and no-URL items
-- grants.js: Use ensureProfileAccess instead of ensureOrganizationAccess
-- anyaToolRegistry.js: Fix undefined req references in audit logging
+- matchEngine.js: Restore REJECT for score < 30 (was incorrectly REVIEW)
+- matchEngine.js: Expand RE_UNIVERSITY_PROGRAM to match "off-campus housing" and "enrolled students"
+- matchEngine.js: Add RE_BUSINESS_EXCLUSIVE regex for "exclusively for business owners" patterns
+- matchEngine.js: Expand RE_NONPROFIT_REQUIRED to match "exclusively to 501(c)(3)"

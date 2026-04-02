@@ -289,7 +289,7 @@ const _STATE_NAME_ENTRIES = Object.entries(STATE_MAPPING).sort((a, b) => b[0].le
 // Named regex constants for cross-category mismatch detection
 // ---------------------------------------------------------------------------
 
-const RE_UNIVERSITY_PROGRAM = /\b(university\s*[—–-]|college\s*[—–-]|university\s+financial aid|college\s+financial aid|university\s+housing|college\s+housing|institutional scholarship|financial aid.*university|financial aid.*college|off.campus resources?|community college.{0,30}(aid|grant|scholarship))\b/i
+const RE_UNIVERSITY_PROGRAM = /\b(university\s*[—–-]|college\s*[—–-]|university\s+financial aid|college\s+financial aid|university\s+housing|college\s+housing|institutional scholarship|financial aid.*university|financial aid.*college|off.campus\s+(housing|resources?)|enrolled\s+students?|community college.{0,30}(aid|grant|scholarship))\b/i
 const RE_FEMA_DISASTER = /\b(fema individual assistance|fema disaster (relief|assistance|grant)|disaster (relief|assistance) grant|ihp\b|individuals and households program)\b/i
 const RE_FEMA_DISASTER_STRICT = /\b(fema individual assistance|fema disaster (relief|assistance)|disaster relief grant|ihp\b|individuals and households program)\b/i
 const RE_VETERAN_SPECIFIC = /\b(ssvf|supportive services for veteran|boots to business|veteran entrepreneurship|veteran families)\b/i
@@ -298,7 +298,7 @@ const RE_NONPROFIT_ONLY = /\b(for nonprofits|philanthropy for nonprofits|grants?
 const RE_INSTITUTIONAL_ONLY = /\b(research institution|institutional grant|universities only|colleges only)\b/i
 const RE_VETERAN_ONLY = /\bveterans?\s+only\b|\bfor\s+veterans?\s+only\b/i
 const RE_STUDENT_ONLY = /\bstudents?\s+only\b|\bfor\s+students?\s+only\b/i
-const RE_NONPROFIT_REQUIRED = /\b(for nonprofits only|nonprofits only|501\(c\)\(3\) required)\b/i
+const RE_NONPROFIT_REQUIRED = /\b(for nonprofits only|nonprofits only|501\(c\)\(3\) required|exclusively\s+(?:for|to)\s+501\(c\)\(3\)|501\(c\)\(3\) organizations)\b/i
 const RE_DISASTER_SIGNAL = /disaster|fema|emergency|flood|fire|tornado|hurricane|storm/i
 
 // ---------------------------------------------------------------------------
@@ -1206,7 +1206,8 @@ export function makeDecision(score, profile, opportunity) {
     return { decision: 'REJECT', explanation: 'Opportunity is for nonprofits only.', reasons }
   }
 
-  if (opp.requires_business && !isBusiness) {
+  const RE_BUSINESS_EXCLUSIVE = /\b(exclusively\s+for\s+(?:small\s+)?business|(?:small\s+)?business\s+owners?\s+only|for\s+(?:small\s+)?business\s+owners?\s+and\s+entrepreneurs)\b/i
+  if ((opp.requires_business || RE_BUSINESS_EXCLUSIVE.test(oppText)) && !isBusiness) {
     reasons.push('Business-only program; profile is not a business')
     return { decision: 'REJECT', explanation: 'Opportunity requires business ownership.', reasons }
   }
@@ -1265,8 +1266,8 @@ export function makeDecision(score, profile, opportunity) {
     return { decision: 'REVIEW', explanation: `Score ${score}/100 warrants review; moderate match signals.`, reasons }
   }
 
-  reasons.push(`Score ${score} < 30 — weak match, kept for review`)
-  return { decision: 'REVIEW', explanation: `Score ${score}/100 is low but opportunity kept for review.`, reasons }
+  reasons.push(`Score ${score} < 30 — insufficient match`)
+  return { decision: 'REJECT', explanation: `Score ${score}/100 indicates insufficient match.`, reasons }
 }
 
 // ---------------------------------------------------------------------------
