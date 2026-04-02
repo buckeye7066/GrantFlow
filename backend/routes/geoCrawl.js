@@ -55,11 +55,10 @@ export default function createGeoCrawlRouter({ uploadDir, getOpenAI } = {}) {
       }
 
       const jobId = crypto.randomUUID()
-
-      await req.db
-        .prepare(
-          `
-            const callerProfileId = typeof incoming.profile_id === 'string' ? incoming.profile_id : (typeof incoming.profileId === 'string' ? incoming.profileId : null)
+      const callerProfileId =
+        typeof incoming.profile_id === 'string'
+          ? incoming.profile_id
+          : (typeof incoming.profileId === 'string' ? incoming.profileId : null)
 
       await req.db
         .prepare(
@@ -69,9 +68,6 @@ export default function createGeoCrawlRouter({ uploadDir, getOpenAI } = {}) {
           `,
         )
         .run(jobId, callerProfileId, JSON.stringify(parameters))
-          `,
-        )
-        .run(jobId, JSON.stringify(parameters))
 
       // Durable run row for monitor (DB-backed, survives refresh)
       const createdByUserId = getAuthUserId(req.ctx ?? req.user ?? isAuthorized) ?? null
