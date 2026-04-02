@@ -318,7 +318,7 @@ export default function UniversityApplicationForm({
 
     const normalisedAcceptance =
       typeof acceptanceRate === "number" && Number.isFinite(acceptanceRate)
-        ? acceptanceRate > 1 && acceptanceRate <= 100
+        ? acceptanceRate >= 1
           ? acceptanceRate
           : acceptanceRate * 100
         : null
@@ -420,9 +420,7 @@ export default function UniversityApplicationForm({
       // Preserve per-school offerings catalog when editing via the form.
       activity_catalog: Array.isArray(values.activity_catalog)
         ? values.activity_catalog
-        : Array.isArray(initialValues?.activity_catalog)
-          ? initialValues.activity_catalog
-          : [],
+        : [],
       actions: {
         apply_url: values.actions?.apply_url?.trim() ?? "",
         pay_fee_url: values.actions?.pay_fee_url?.trim() ?? "",
