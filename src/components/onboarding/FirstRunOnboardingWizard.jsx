@@ -91,8 +91,9 @@ if (!/^\d{5}(-\d{4})?$/.test(zip)) {
   setError('ZIP must be a valid 5-digit (or ZIP+4) US postal code.')
   return
 }
-if (state.length !== 2) {
-  setError('State must be a 2-letter abbreviation (e.g., TN).')
+const VALID_STATES = new Set(['AL','AK','AZ','AR','CA','CO','CT','DE','FL','GA','HI','ID','IL','IN','IA','KS','KY','LA','ME','MD','MA','MI','MN','MS','MO','MT','NE','NV','NH','NJ','NM','NY','NC','ND','OH','OK','OR','PA','RI','SC','SD','TN','TX','UT','VT','VA','WA','WV','WI','WY','DC'])
+if (!VALID_STATES.has(state)) {
+  setError('Please select a valid US state or territory.')
   return
 }
 
@@ -103,12 +104,12 @@ if (state.length !== 2) {
 
       if (!profileId) {
         const name = formData.display_name?.trim() || 'My Profile'
-        const inferredType =
+        // Map to canonical primary_type values recognised by the backend schema.
+// Need-specific context (disability, medical, emergency) is preserved via tags
+// and the looking_for_intent preference â not encoded in primary_type.
+const inferredType =
   formData.looking_for === 'ministry_nonprofit' ? 'nonprofit'
   : formData.looking_for === 'scholarships' ? 'student'
-  : formData.looking_for === 'disability' ? 'individual_disability'
-  : formData.looking_for === 'emergency_help' ? 'individual_emergency'
-  : formData.looking_for === 'medical' ? 'individual_medical'
   : 'individual'
         const created = await apiFetch('/api/profiles', {
   method: 'POST',
