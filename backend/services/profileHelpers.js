@@ -44,6 +44,7 @@ function safeParseJSON(value, fallback) {
 export function safeParseArrayField(value, fallback = []) {
   if (!value) return fallback
   if (Array.isArray(value)) return value
+  if (value instanceof Set) return Array.from(value)
   if (typeof value === 'string') {
     const trimmed = value.trim()
     if (trimmed.startsWith('[')) {
@@ -1712,6 +1713,14 @@ export function buildProfileSignals({ profile, sections, asOf = null }) {
   if (assistanceSet.has('unemployed') || assistanceSet.has('displaced_worker') ||
       assistanceSet.has('underemployed')) {
     needs.add('employment')
+  }
+  // Preserve the profile's existing needs so they survive the signal layer.
+  // Without this, a profile with needs: ['disability'] would lose that signal when
+  // sections don't produce keyword triggers for 'disability'.
+  const existingNeeds = safeParseArrayField(profile?.needs, [])
+  for (const n of existingNeeds) {
+    const key = typeof n === 'string' ? n.trim().toLowerCase().replace(/\s+/g, '_') : null
+    if (key) needs.add(key)
   }
   // Only inject generic fallback when the profile has truly no data at all
   if (needs.size === 0 && keywordSet.size === 0 && applicantTypeSet.size === 0) {
