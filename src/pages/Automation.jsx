@@ -1292,14 +1292,17 @@ function JobDetailsDialog({ job, onOpenChange, onRetry, retrying, onCancel, canc
                             <p className="text-slate-600">Match score: {entry.match_score}</p>
                           ) : null}
                           {Array.isArray(entry.match_reasons) && entry.match_reasons.length > 0 ? (
-                            <ul className="list-disc pl-4 text-slate-500 space-y-0.5">
-                              {entry.match_reasons.slice(0, 4).map((reason, reasonIndex) => (
-                                <li key={reasonIndex}>{reason}</li>
-                              ))}
-                              {entry.match_reasons.length > 4 ? (
-                                <li className="text-slate-400">+{entry.match_reasons.length - 4} more reason{entry.match_reasons.length - 4 === 1 ? "" : "s"}</li>
-                              ) : null}
-                            </ul>
+                            <div>
+                              <p className="text-[10px] uppercase tracking-wide text-slate-400 mb-0.5">Match reasons (crawler-reported)</p>
+                              <ul className="list-disc pl-4 text-slate-500 space-y-0.5">
+                                {entry.match_reasons.slice(0, 4).map((reason, reasonIndex) => (
+                                  <li key={reasonIndex}>{reason}</li>
+                                ))}
+                                {entry.match_reasons.length > 4 ? (
+                                  <li className="text-slate-400">+{entry.match_reasons.length - 4} more reason{entry.match_reasons.length - 4 === 1 ? "" : "s"}</li>
+                                ) : null}
+                              </ul>
+                            </div>
                           ) : (
                             <p className="text-slate-400 text-[11px]">No match reasons recorded.</p>
                           )}
@@ -1672,11 +1675,16 @@ export default function Automation() {
       })
       return
     }
+    const geoCrawlProfileId = isAdmin
+      ? (selectedProfile && selectedProfile !== "none" ? selectedProfile : undefined)
+      : activeProfileId ?? undefined
+
     geoCrawlMutation.mutate({
       state,
       zip_limit: 25,
       min_sources_per_zip: 3,
       discover_local_resources: true,
+      profile_id: geoCrawlProfileId,
     })
   }
 
