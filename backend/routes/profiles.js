@@ -1049,7 +1049,7 @@ router.delete('/:id', async (req, res) => {
 
     // Best-effort cleanup of rows owned by the profile. Do NOT attempt `SET profile_id = NULL`.
     try {
-      await req.db.transaction(async (tx) => {
+      await req.db.withTransaction(async (tx) => {
         try {
           await tx.prepare('DELETE FROM profile_documents WHERE profile_id = ?').run(id)
         } catch {
@@ -1199,7 +1199,7 @@ router.post('/:id/avatar/ai', async (req, res) => {
       status: uploadStorageStatus.status || 'degraded',
     })
   }
-  if (storage && storage.writable === false) {
+  // removed â storage is a multer diskStorage instance, not a status object; this check always evaluates storage as truthy and never as { writable: false }, creating dead/misleading guard code
     return res.status(503).json({
       ok: false,
       error: 'Upload storage is unavailable',
@@ -1251,11 +1251,13 @@ router.post('/:id/avatar/ai', async (req, res) => {
 
   const job = await req.db.prepare('SELECT * FROM crawler_jobs WHERE id = ?').get(jobId)
 
-  dispatchCrawlerJob({
+  Promise.resolve().then(() => dispatchCrawlerJob({
     db: req.db,
     jobId: job.id,
     uploadDir: getUploadsDir(req),
     getOpenAI,
+  })).catch((err) => {
+    console.warn('[profiles] avatar AI crawl dispatch failed:', err?.message || String(err))
   })
 
   res.status(202).json({
@@ -1472,8 +1474,8 @@ router.put('/:id/sections/:sectionKey', async (req, res) => {
       // Sync contacts emails (admin-only for security)
       if (isAdmin && Array.isArray(data?.contacts)) {
         const contactEmails = data.contacts
-          .map(contact => normalizeEmail(contact?.email))
-          .filter(email => email && isValidEmail(email))
+          .map((contact) => normalizeEmail(contact?.email))
+          .filter((contactEmail) => contactEmail && isValidEmail(contactEmail))
         
         if (contactEmails.length > 0) {
           await addProfileEmails(req.db, {
