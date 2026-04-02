@@ -27,7 +27,14 @@ export async function writeApplicationArtifact({ applicationId, artifactId, exte
     throw Object.assign(new Error('buffer must be a Buffer or Uint8Array'), { status: 400 })
   }
   const base = resolveBaseDir()
+  const resolvedBase = path.resolve(base)
   const appDir = path.join(base, String(applicationId))
+  const resolvedAppDir = path.resolve(appDir)
+  if (!resolvedAppDir.startsWith(resolvedBase + path.sep) && resolvedAppDir !== resolvedBase) {
+    const err = new Error('Invalid applicationId: path traversal detected')
+    err.status = 400
+    throw err
+  }
   await ensureDir(appDir)
 
   const safeExt = String(extension || '').replace(/[^a-z0-9]/gi, '').toLowerCase() || 'bin'
@@ -46,7 +53,7 @@ export async function writeApplicationArtifact({ applicationId, artifactId, exte
 
   await fs.writeFile(resolvedFull, buffer)
 
-  return { storage_path: fullPath, file_name: fileName }
+  return { storage_path: resolvedFull, file_name: fileName }
 }
 
 export function assertArtifactPathIsSafe({ applicationId, storagePath }) {
