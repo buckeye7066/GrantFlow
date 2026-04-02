@@ -3,7 +3,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Progress } from "@/components/ui/progress";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts';
 
-export default function BurnRateCard({ budgetItems, expenses }) {
+export default function BurnRateCard({ budgetItems = [], expenses = [] }) {
     const totalBudget = budgetItems.reduce((sum, item) => sum + (item.total || 0), 0);
     const totalSpent = expenses.reduce((sum, item) => sum + (item.amount || 0), 0);
     const fundsRemaining = totalBudget - totalSpent;
@@ -18,9 +18,11 @@ export default function BurnRateCard({ budgetItems, expenses }) {
     }, {});
 
     expenses.forEach(expense => {
-        if (dataByCategory[expense.category]) {
-            dataByCategory[expense.category].actual += expense.amount || 0;
+        const cat = expense.category || 'Uncategorised';
+        if (!dataByCategory[cat]) {
+            dataByCategory[cat] = { name: cat, budget: 0, actual: 0 };
         }
+        dataByCategory[cat].actual += expense.amount || 0;
     });
 
     const chartData = Object.values(dataByCategory);
