@@ -166,6 +166,10 @@ export async function processLocalCrawlerJob({ db, job, dataDir, profileContext 
   for (const opp of localOpps) {
     const title = opp?.title ? String(opp.title) : ''
     if (!title) continue
+    if (!opp?.application_url || typeof opp.application_url !== 'string' || !opp.application_url.trim()) {
+      console.warn(`[localCrawler] Skipping "${title}" â missing application_url (Goal 1)`)
+      continue
+    }
     if (!seenTitles.has(title)) {
       seenTitles.add(title)
       allOpps.push({
@@ -177,10 +181,14 @@ export async function processLocalCrawlerJob({ db, job, dataDir, profileContext 
       })
     }
   }
-  
+
   for (const opp of dbOpps) {
     const title = opp?.title ? String(opp.title) : ''
     if (!title) continue
+    if (!opp?.application_url || typeof opp.application_url !== 'string' || !opp.application_url.trim()) {
+      console.warn(`[localCrawler] Skipping DB opp "${title}" â missing application_url (Goal 1)`)
+      continue
+    }
     if (!seenTitles.has(title)) {
       seenTitles.add(title)
       allOpps.push({
@@ -196,8 +204,12 @@ export async function processLocalCrawlerJob({ db, job, dataDir, profileContext 
   // Score opportunities
   const scoredOpps = []
   
+  let requiresMatchSkipped = 0
   for (const opp of allOpps) {
-    if (opp.requires_match) continue
+    if (opp.requires_match) {
+      requiresMatchSkipped++
+      continue
+    }
     
     const { score, reasons: matchReasons } = scoreOpportunity(profileContext, opp)
     
@@ -274,9 +286,13 @@ export async function processLocalCrawlerJob({ db, job, dataDir, profileContext 
       }
       
       // Save to profile pipeline using the relaxed threshold (topOpps already passed it)
-      if (profileId && opp.match_score >= thresholdUsed) {
+      if (profileId) {
         const oppWithId = { ...opp, id: result.id, source: 'local_foundation' }
-        const pipelineResult = await saveToProfilePipeline(db, oppWithId, profileId, profileContext, opp.match_score, thresholdUsed)
+        // Do NOT pass pre-computed score â let saveToProfilePipeline run
+        // computeMatchDecision() as the single canonical authority (Goal 4).
+        // relevanceFilter hard-rejection, audit metadata, and ACCEPT/REVIEW
+        // decisions are all produced inside that call (Goals 3, 8).
+        const pipelineResult = await saveToProfilePipeline(db, oppWithId, profileId, profileContext)
         if (pipelineResult.saved) {
           savedToPipeline++
         }
@@ -297,6 +313,7 @@ export async function processLocalCrawlerJob({ db, job, dataDir, profileContext 
     savedToPipeline,
     result_meta: {
       total_scored: scoredOpps.length,
+      skipped_requires_match: requiresMatchSkipped,
       match_threshold_requested: requestedThreshold,
       match_threshold_used: thresholdUsed,
       match_threshold_fallback_applied: thresholdFallbackApplied,
