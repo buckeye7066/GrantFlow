@@ -15,7 +15,12 @@ const router = express.Router();
 // Discovery endpoints can reference stored profiles; require auth globally.
 router.use((req, res, next) => {
   const user = requireAuthenticatedUser(req, res)
-  if (!user) return
+  if (!user) {
+    if (!res.headersSent) {
+      res.status(401).json({ success: false, error: 'Authentication required' });
+    }
+    return;
+  }
   req.user = req.user ?? user
   return next()
 })
@@ -149,6 +154,10 @@ router.post('/comprehensiveMatch', async (req, res) => {
     const stateOrderClause = profileStates.length > 0
       ? `CASE WHEN state IN (${'?,'.repeat(profileStates.length).slice(0,-1)}) THEN 0 ELSE 1 END, `
       : '';
+    // Append profileStates again for the ORDER BY CASE placeholders
+    if (profileStates.length > 0) {
+      params.push(...profileStates);
+    }
     query += ` ORDER BY ${stateOrderClause}CASE WHEN ${isNationalSort} THEN 0 ELSE 1 END, CASE WHEN ${deadlineNullSort} THEN 0 ELSE 1 END, deadline ASC, updated_at DESC LIMIT ${candidateLimit}`;
 
     const opportunities = req.db.prepare(query).all(...params);
@@ -245,15 +254,15 @@ router.post('/comprehensiveMatch', async (req, res) => {
       console.info(`[comprehensiveMatch] ${suppressedCount} opportunities below display threshold ${matchThreshold} not shown`);
     }
 
-    // Zero-results fallback: progressively lower threshold
+    // Zero-results fallback: progressively lower threshold (skip 30 â already tried above)
     if (highScoring.length === 0 && scoredOpportunities.length > 0) {
-      for (const fallback of [30, 15, 0]) {
+      for (const fallback of [15, 0]) {
         highScoring = scoredOpportunities
           .filter(o => o.fit_score >= fallback)
           .sort((a, b) => b.fit_score - a.fit_score);
         if (highScoring.length > 0) {
           matchThreshold = fallback;
-          console.info(`[comprehensiveMatch] Zero results at 50; relaxed to ${fallback} (${highScoring.length} results)`);
+          console.info(`[comprehensiveMatch] Zero results at 30; relaxed to ${fallback} (${highScoring.length} results)`);
           break;
         }
       }
@@ -382,25 +391,52 @@ router.post('/searchOpportunities', async (req, res) => {
     const total = Number(countRow?.total ?? 0) || 0;
     
     // Format results
+    // Load profile context once for scoring if a profile was supplied
+    let searchProfileContext = null;
+    if (profile_id) {
+      try {
+        const baseCtx = await loadProfileContext(req.db, String(profile_id));
+        searchProfileContext = buildProfileFacets(baseCtx);
+      } catch (_e) {
+        // Profile context unavailable; fall back to unscored results
+      }
+    }
+
     const results = (opportunities || []).map(opp => {
       // Filter out placeholder URLs
-      let url = opp.url || opp.application_url || null
+      let url = opp.url || opp.application_url || null;
       if (url && (url.includes('example.org') || url.includes('example.com') || url.includes('placeholder'))) {
         url = null;
       }
-      
+
+      let matchReasons = [];
+      let matchExplanation = '';
+      let matchedNeeds = [];
+      let fitScore = null;
+      if (searchProfileContext) {
+        const computed = scoreOpportunity(searchProfileContext, opp);
+        fitScore = computed.score;
+        matchReasons = computed.reasons ?? [];
+        matchExplanation = computed.explanation ?? computed.reasons?.join(' | ') ?? '';
+        matchedNeeds = computed.matched_needs ?? [];
+      }
+
       return {
         id: opp.id,
         title: opp.title || opp.program_name,
         sponsor: opp.sponsor || opp.funder,
-        url: url,
+        url,
         deadline: opp.deadline,
-      award_min: opp.amount_min,
-      award_max: opp.amount_max,
-      description: opp.description || opp.summary,
-      state: opp.state,
-      source: opp.source || 'database',
-      eligibility: opp.eligibility_bullets
+        award_min: opp.amount_min,
+        award_max: opp.amount_max,
+        description: opp.description || opp.summary,
+        state: opp.state,
+        source: opp.source || 'database',
+        eligibility: opp.eligibility_bullets,
+        fit_score: fitScore,
+        match_reasons: matchReasons,
+        match_explanation: matchExplanation,
+        matched_needs: matchedNeeds,
       };
     });
     
@@ -575,8 +611,13 @@ router.post('/discoverECFServices', async (req, res) => {
       LIMIT 50
     `;
     
-    const services = req.db.prepare(query).all(...params);
-    
+    const rawServices = req.db.prepare(query).all(...params);
+    const services = rawServices.filter(svc => !isJunkOpportunity(svc, {}));
+    const ecfJunkCount = rawServices.length - services.length;
+    if (ecfJunkCount > 0) {
+      console.info(`[discoverECFServices] Filtered ${ecfJunkCount} junk entries for profile ${profile_id}`);
+    }
+
     res.json({
       success: true,
       services,
