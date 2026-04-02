@@ -29,7 +29,7 @@ export default function GrantForm({ grant, organization, onSubmit, onCancel, isS
         deadline: grant?.deadline || '', // New field
         amount_max: grant?.amount_max || '', // New field
         amount_min: grant?.amount_min || '', // New field
-        url: grant?.url || '', // New field
+        application_url: grant?.application_url || grant?.url || '', // canonical DB column name
         eligibility_summary: grant?.eligibility_summary || '',
         program_description: grant?.program_description || '',
         selection_criteria: grant?.selection_criteria || '',
@@ -71,7 +71,17 @@ export default function GrantForm({ grant, organization, onSubmit, onCancel, isS
                 return;
             }
         }
-        onSubmit({ ...formData, url: trimmedUrl });
+        // Goal 1: warn (not hard-block) when url is absent so curator is alerted,
+// and always submit the field under the canonical key 'application_url'.
+if (!trimmedUrl) {
+    toast({
+        variant: 'destructive',
+        title: 'Application URL Required',
+        description: 'An application URL is required for this opportunity to be matched to users. Add a URL or mark the opportunity as not applicable.'
+    });
+    return;
+}
+onSubmit({ ...formData, application_url: trimmedUrl });
     };
 
     const handleAutofillContact = async () => {
@@ -233,11 +243,11 @@ Return ONLY the JSON object. If you cannot find a specific piece of information,
                     <div className="space-y-2">
                         <Label htmlFor="url">Application URL</Label>
                         <Input
-                            id="url"
-                            name="url"
+                            id="application_url"
+                            name="application_url"
                             type="url"
                             placeholder="https://grants.example.org/apply"
-                            value={formData.url}
+                            value={formData.application_url}
                             onChange={handleChange}
                         />
                         <p className="text-xs text-slate-500">Direct link where applicants can apply. Required for the opportunity to be matched.</p>
