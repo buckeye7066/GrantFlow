@@ -453,11 +453,13 @@ function calculateKeywordOverlap(profile, opportunity) {
   const profileKeywords = safeParseArrayField(profile.keywords, [])
   const focusAreas = safeParseArrayField(profile.focus_areas, [])
   const programAreas = safeParseArrayField(profile.program_areas, [])
+  const profileNeeds = safeParseArrayField(profile.needs, [])
 
   const allTerms = [
     ...phraseSet, ...interestSet, ...demographicSet, ...militarySet,
     ...assistanceSet, ...genderSet, ...applicantTypes,
     ...keywordSet, ...profileKeywords, ...focusAreas, ...programAreas,
+    ...profileNeeds,
   ]
     .map((k) => String(k).toLowerCase().trim())
     .filter((k) => k.length > 0)
@@ -531,6 +533,7 @@ function calculateCategoryMatch(profile, opportunity) {
     ...safeParseArrayField(profile.program_areas, []),
     ...(profile?.interests && typeof profile.interests[Symbol.iterator] === 'function'
       ? Array.from(profile.interests) : []),
+    ...safeParseArrayField(profile.needs, []),
   ]
   const oppCategories = safeParseArrayField(opportunity.categories, [])
 
@@ -910,6 +913,24 @@ export function scoreOpportunity(profile, opportunity) {
     }
   }
 
+  // ── Need-to-opportunity alignment (up to 20 pts) ──
+  const rawNeeds = safeParseArrayField(effectiveProfile?.needs, [])
+  const oppKws = safeParseArrayField(opportunity.keywords, [])
+  const oppCats = safeParseArrayField(opportunity.categories, [])
+  const allOppSignals = [...oppKws, ...oppCats].map((t) => String(t).toLowerCase())
+  if (rawNeeds.length > 0 && allOppSignals.length > 0) {
+    let needHits = 0
+    for (const n of rawNeeds) {
+      const nLower = String(n).toLowerCase()
+      if (allOppSignals.some((s) => s.includes(nLower) || nLower.includes(s))) needHits++
+    }
+    if (needHits > 0) {
+      const needPts = Math.min(20, Math.round((needHits / rawNeeds.length) * 20))
+      score += needPts
+      reasons.push(`Need alignment (${needPts} pts for ${needHits}/${rawNeeds.length} needs)`)
+    }
+  }
+
   // ── Amount eligibility (10 pts) ──
   if (amountInRange(effectiveProfile?.funding_amount_needed, opportunity)) {
     score += 10
@@ -1137,8 +1158,12 @@ export function makeDecision(score, profile, opportunity) {
   const isBusiness = ['small_business', 'business'].includes(profileType) || Boolean(prof.is_business)
   const isIndividual = ['individual', 'individual_need', 'family', 'medical_assistance'].includes(profileType)
 
-  // Hard REJECT conditions
-  if (['loan', 'loan_program', 'microloan'].includes(opportunityType) || /\bloan\b/.test(oppText)) {
+  const isIndividualOrCaregiver = isIndividual || profileType === 'caregiver'
+  const isResearcher = profileType === 'researcher'
+  const profNeeds = safeParseArrayField(prof.needs, []).map((n) => String(n).toLowerCase())
+
+  // Hard REJECT conditions — explicit boolean flags take priority over regex
+  if (['loan', 'loan_program', 'microloan'].includes(opportunityType) || opp.is_loan || /\bloan\b/.test(oppText)) {
     reasons.push('Loan program — not a grant')
     return { decision: 'REJECT', explanation: 'Opportunity is a loan program, not a grant.', reasons }
   }
@@ -1148,27 +1173,62 @@ export function makeDecision(score, profile, opportunity) {
     return { decision: 'REJECT', explanation: 'Opportunity requires matching funds which profile cannot provide.', reasons }
   }
 
-  if (RE_VETERAN_ONLY.test(oppText) && !isVeteran) {
+  if ((opp.requires_veteran || RE_VETERAN_ONLY.test(oppText)) && !isVeteran) {
     reasons.push('Veteran-only program; profile is not a veteran')
     return { decision: 'REJECT', explanation: 'Opportunity requires veteran status.', reasons }
   }
 
-  if (RE_STUDENT_ONLY.test(oppText) && !isStudentProfile) {
+  if ((opp.requires_student || RE_STUDENT_ONLY.test(oppText)) && !isStudentProfile) {
     reasons.push('Student-only program; profile is not a student')
     return { decision: 'REJECT', explanation: 'Opportunity requires student status.', reasons }
   }
 
-  if (RE_NONPROFIT_REQUIRED.test(oppText) && isIndividual) {
-    reasons.push('Nonprofit-only program; profile is an individual')
-    return { decision: 'REJECT', explanation: 'Opportunity is for nonprofits only; profile is an individual.', reasons }
+  if ((opp.requires_nonprofit || RE_NONPROFIT_REQUIRED.test(oppText)) && !isNonprofit) {
+    reasons.push('Nonprofit-only program; profile is not a nonprofit')
+    return { decision: 'REJECT', explanation: 'Opportunity is for nonprofits only.', reasons }
   }
 
-  if (RE_INSTITUTIONAL_ONLY.test(oppText) && !isNonprofit && !isBusiness) {
-    reasons.push('Research/institutional-only program; profile lacks org credentials')
-    return {
-      decision: 'REJECT',
-      explanation: 'Opportunity is for research institutions only; profile has no organization credentials.',
-      reasons,
+  if (opp.requires_business && !isBusiness) {
+    reasons.push('Business-only program; profile is not a business')
+    return { decision: 'REJECT', explanation: 'Opportunity requires business ownership.', reasons }
+  }
+
+  if ((opp.is_institutional_only || opp.is_research_only || RE_INSTITUTIONAL_ONLY.test(oppText)) && !isNonprofit && !isBusiness && !isResearcher) {
+    reasons.push('Research/institutional-only program; profile lacks org/research credentials')
+    return { decision: 'REJECT', explanation: 'Opportunity is for research institutions only; profile has no organization credentials.', reasons }
+  }
+
+  if (opp.disease_specific && !profNeeds.includes('disability') && !profNeeds.includes('health_medical')) {
+    reasons.push('Disease-specific program; profile has no matching condition')
+    return { decision: 'REJECT', explanation: 'Opportunity is disease-specific; profile has no matching condition.', reasons }
+  }
+
+  if (opp.requires_disaster_context && !profNeeds.includes('emergency') && !prof.disaster_affected) {
+    reasons.push('Disaster-only program; profile is not disaster-affected or in emergency need')
+    return { decision: 'REJECT', explanation: 'Opportunity requires disaster context.', reasons }
+  }
+
+  // Pro bono / in-kind / referral-only: REJECT for nonprofits/businesses (not direct funding)
+  const isProBono = /\bpro\s*bono\b/i.test(oppText)
+  const isInKind = /\bin[- ]kind\b/i.test(oppText)
+  const isReferralOnly = /\breferral\s+only\b/i.test(oppText) || /\bagency\s+referral\s+required\b/i.test(oppText)
+  if ((isProBono || isInKind || isReferralOnly) && !isIndividualOrCaregiver) {
+    const label = isProBono ? 'pro bono' : isInKind ? 'in-kind' : 'referral-only'
+    const profileLabel = isNonprofit ? 'nonprofits' : 'businesses'
+    reasons.push(`${label} opportunity — not direct funding for ${profileLabel}`)
+    return { decision: 'REJECT', explanation: `${label} opportunity is not direct financial assistance for ${profileLabel}.`, reasons }
+  }
+
+  // Geographic hard mismatch — state-specific opportunity for a profile in a different state
+  const profState = String(prof.state || '').trim()
+  const oppStateRaw = String(opp.state || '').trim()
+  const oppIsNational = Boolean(opp.is_national) || oppStateRaw.toLowerCase() === 'nationwide'
+  if (profState && oppStateRaw && !oppIsNational) {
+    const pNorm = normalizeState(profState)
+    const oNorm = normalizeState(oppStateRaw)
+    if (pNorm && oNorm && pNorm !== oNorm) {
+      reasons.push(`Geographic mismatch — opportunity is in ${oppStateRaw}, profile is in ${profState}`)
+      return { decision: 'REJECT', explanation: `Geographic mismatch: opportunity is restricted to ${oppStateRaw}.`, reasons }
     }
   }
 
@@ -1230,7 +1290,7 @@ export function computeMatchDecision(rawProfile, rawOpportunity, opts = {}) {
   const { score, reasons, match_explain } = scoreOpportunity(rawProfile, rawOpportunity)
 
   // Decision via makeDecision
-  const { decision, explanation, reasons: decisionReasons } = makeDecision(score, rawProfile, rawOpportunity)
+  let { decision, explanation, reasons: decisionReasons } = makeDecision(score, rawProfile, rawOpportunity)
 
   // Need alignment from normalised objects
   let needAlignment = 0
@@ -1251,6 +1311,21 @@ export function computeMatchDecision(rawProfile, rawOpportunity, opts = {}) {
     }
   }
 
+  // Post-decision guards
+  const hasUrl = Boolean(rawOpportunity?.application_url || rawOpportunity?.url)
+  const profileHasNeeds = (profileNorm?.needCategories?.length ?? 0) > 0
+
+  if (decision === 'ACCEPT' && !hasUrl) {
+    decision = 'REVIEW'
+    explanation = 'Downgraded from ACCEPT — missing application URL.'
+    decisionReasons = [...decisionReasons, 'Missing application URL']
+  }
+  if (decision === 'ACCEPT' && needAlignment === 0 && !profileHasNeeds) {
+    decision = 'REVIEW'
+    explanation = 'Downgraded from ACCEPT — no profile needs to align with.'
+    decisionReasons = [...decisionReasons, 'Zero need alignment with empty profile needs']
+  }
+
   // Eligibility
   let eligible = 'maybe'
   const ineligibilityReasons = []
@@ -1268,6 +1343,9 @@ export function computeMatchDecision(rawProfile, rawOpportunity, opts = {}) {
   if (matchedNeeds.length > 0) confidence += Math.min(15, matchedNeeds.length * 5)
   confidence = Math.max(0, Math.min(100, confidence))
 
+  const matchedProfileTraits = match_explain?.matchedSignals ?? []
+  const missingEligibilityFields = []
+
   return {
     score,
     reasons,
@@ -1276,6 +1354,9 @@ export function computeMatchDecision(rawProfile, rawOpportunity, opts = {}) {
     explanation,
     eligible,
     ineligibilityReasons,
+    matchedNeeds,
+    matchedProfileTraits,
+    missingEligibilityFields,
     needAlignment,
     confidence,
     matcherVersion: MATCHER_VERSION,

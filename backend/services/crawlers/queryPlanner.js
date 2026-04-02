@@ -194,6 +194,21 @@ function intentDisambiguation({ facets, mustTerms, shouldTerms, mustNotTerms, re
     requiredConcepts.push('business funding')
   }
 
+  // 1b) Food security (food bank / pantry) vs restaurant startup noise.
+  const isFoodSecurityIntent =
+    intentCategory === 'food_security' ||
+    hasAnyToken(intentKeywords, ['food pantry', 'food bank', 'nutrition support', 'hunger'])
+  if (isFoodSecurityIntent && !isFoodTruckIntent) {
+    shouldTerms.push('food assistance')
+    shouldTerms.push('food pantry near me')
+    shouldTerms.push('hunger relief program')
+    if (allowAggressiveMustNot) {
+      mustNotTerms.push('food truck startup')
+      mustNotTerms.push('restaurant franchise')
+      mustNotTerms.push('catering business')
+    }
+  }
+
   // 2) Strike assistance (workers in active labor strikes).
   if (hasAnyToken(intentKeywords, ['strike', 'walkout', 'labor dispute', 'union hardship'])) {
     shouldTerms.push('strike hardship fund')
@@ -313,7 +328,10 @@ function profileSignalTerms(facets = {}, crawlerType = 'comprehensive') {
 
   const assist = facets?.assistance ?? {}
   const assistW = weights.assistance ?? 0.3
-  if (assist.receives_snap || assist.snap) addIf(assistW, 'SNAP recipient benefits')
+  if (assist.receives_snap || assist.snap || assist.snap_recipient) {
+    addIf(assistW, 'SNAP recipient benefits')
+    addIf(assistW, 'food assistance')
+  }
   if (assist.receives_ssi || assist.ssi) addIf(assistW, 'SSI recipient programs')
   if (assist.receives_ssdi || assist.ssdi) addIf(assistW, 'SSDI recipient assistance')
   if (assist.receives_tanf || assist.tanf) addIf(assistW, 'TANF additional benefits')

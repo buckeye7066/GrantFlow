@@ -180,8 +180,7 @@ export function applyFeedbackToScore(scoreResult, feedbackSignals, opportunityId
       ...scoreResult,
       total_score: 0,
       feedback_hard_blocked: true,
-      // Preserve existing verdict; computeMatchDecision() will overwrite with REJECT
-      verdict: scoreResult.verdict,
+      verdict: 'REJECT',
       ineligibility_reasons: [
         ...(scoreResult.ineligibility_reasons ?? []),
         'Previously marked as broken link or confirmed ineligible by user',

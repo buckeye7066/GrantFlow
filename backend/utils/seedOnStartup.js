@@ -375,7 +375,7 @@ export function cleanupIrrelevantGrants(db) {
     SELECT g.id, g.title, g.funder, g.match_score,
            g.profile_id, g.funding_opportunity_id,
            fo.description, fo.keywords, fo.categories, fo.state, fo.is_national,
-           fo.sponsor, fo.eligibility_bullets
+           fo.sponsor, fo.eligibility_bullets, fo.source AS opportunity_source
     FROM grants g
     LEFT JOIN funding_opportunities fo ON g.funding_opportunity_id = fo.id
     WHERE g.profile_id IS NOT NULL
@@ -432,6 +432,8 @@ export function cleanupIrrelevantGrants(db) {
 
   let removed = 0;
   for (const grant of grants) {
+    if (!grant.funding_opportunity_id) continue;
+    if (grant.opportunity_source && PIPELINE_ALLOWED_SOURCES.includes(grant.opportunity_source)) continue;
     const profileData = getProfileData(grant.profile_id);
     if (!profileData) continue;
 

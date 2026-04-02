@@ -22,7 +22,8 @@ export async function crawlDomain(profile, crawlerType, options = {}) {
   }
   const config = DOMAIN_CRAWLER_REGISTRY.find((c) => c.id === crawlerType)
   if (!config) {
-    throw new Error(`Domain crawler '${crawlerType}' not found in registry`)
+    console.warn(`[domainCrawlers] Unknown crawler type '${crawlerType}' — returning empty array`)
+    return []
   }
 
   let results

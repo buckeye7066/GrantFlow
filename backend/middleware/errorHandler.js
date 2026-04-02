@@ -23,13 +23,12 @@ export function formatError(error) {
 /**
  * Express error handling middleware
  */
-export async function errorHandler(err, req, res, next) {
+export function errorHandler(err, req, res, next) {
   const requestId = req.requestId || req.request_id || null;
   const statusCode = err.statusCode || err.status || 500;
 
-  // Store recent errors for admin lookup by request_id (in-memory, best-effort).
   try {
-    await recordRequestError({
+    recordRequestError({
       requestId,
       path: req.path,
       method: req.method,

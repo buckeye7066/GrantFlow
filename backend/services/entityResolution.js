@@ -329,6 +329,7 @@ function buildNoMatch(reason) {
     matched: false,
     method: null,
     confidence: 0,
+    reason: reason || null,
     reviewRequired: false,
     autoMergeEligible: false,
     reasons: reason ? [reason] : [],

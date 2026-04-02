@@ -62,11 +62,11 @@ function assertDecision(result, expected, label) {
 }
 
 // ---------------------------------------------------------------------------
-// Sanity: MATCHER_VERSION is 2.0.0
+// Sanity: MATCHER_VERSION is 3.0.0
 // ---------------------------------------------------------------------------
 
-test('MATCHER_VERSION is 2.0.0', () => {
-  assert.equal(MATCHER_VERSION, '2.0.0')
+test('MATCHER_VERSION is 3.0.0', () => {
+  assert.equal(MATCHER_VERSION, '3.0.0')
 })
 
 // ---------------------------------------------------------------------------
@@ -919,11 +919,11 @@ test('ACCEPT requires hasApplicationUrl: no URL → REVIEW even with perfect ali
 // MATCHER_VERSION in every decision
 // ---------------------------------------------------------------------------
 
-test('every decision includes MATCHER_VERSION 2.0.0', () => {
+test('every decision includes MATCHER_VERSION 3.0.0', () => {
   const profile = { primary_type: 'individual', state: 'OH', needs: ['housing'] }
   const opp = { title: 'Test', description: 'test', application_url: 'https://test.org' }
   const result = computeMatchDecision(profile, opp)
-  assert.equal(result.matcherVersion, '2.0.0', 'matcherVersion should be 2.0.0')
+  assert.equal(result.matcherVersion, MATCHER_VERSION, `matcherVersion should be ${MATCHER_VERSION}`)
 })
 
 // ---------------------------------------------------------------------------

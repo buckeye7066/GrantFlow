@@ -57,6 +57,8 @@ export function decideRevalAction({
 
   if (manual_force) {
     action = 'full_recrawl'
+  } else if (fanout_pct > FANOUT_HIGH) {
+    action = 'full_recrawl'
   } else if (trigger === 'naics_minor') {
     action = 're-score'
   } else {

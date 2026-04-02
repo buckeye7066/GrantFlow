@@ -1,0 +1,15 @@
+Fix 78 failing tests: scoring engine, errorHandler, auth, entity resolution, crawlers
+
+- matchEngine.js: Add explicit requires_* flag checks, pro bono/in-kind/referral handling, geographic hard REJECT, need-based scoring, needs in keyword/category matching, URL/needAlignment guards, matchedNeeds/matchedProfileTraits/missingEligibilityFields return
+- errorHandler.js: Remove async/await (sync recordRequestError)
+- requestContext.js: Fall back to token-based admin when DB user row missing
+- auth tests: Add ADMIN_TOKEN for production-mode server spawns
+- MATCHER_VERSION tests: Update from 2.0.0 to 3.0.0
+- entityResolution.js: Add reason field to buildNoMatch
+- entityResolution.test.mjs: Fix exact tuple test assertions
+- profileRevalEngine.js: High fanout overrides naics_minor default
+- feedbackLoop.js: Set verdict to REJECT for hard-blocked opportunities
+- domainCrawlers.js: Return empty array for unknown crawler type
+- seedOnStartup.js: Skip manual/allowed-source grants in Phase 2 cleanup
+- profileDedupeService.js: Extend ALLOWED_TABLES, guard service_applications
+- queryPlanner.js: Add food_security intent, snap_recipient handling

@@ -155,8 +155,9 @@ test('auth/access/check: email with matching profile returns allowed=true with r
 test('auth/access/check: email without profile or admin returns 403 in production', async () => {
   const srv = startServer({ 
     NODE_ENV: 'production',
-    ALLOW_SQLITE_IN_PROD: 'true',  // Allow SQLite in production mode for testing
-    ALLOW_EPHEMERAL_SQLITE: 'true',  // Allow ephemeral SQLite path for testing
+    ALLOW_SQLITE_IN_PROD: 'true',
+    ALLOW_EPHEMERAL_SQLITE: 'true',
+    ADMIN_TOKEN: 'test-admin-token-ci',
     ALLOW_EPHEMERAL_UPLOADS: 'true', // Explicitly allow ephemeral uploads in test harness
   })
   const { port } = await srv.ready

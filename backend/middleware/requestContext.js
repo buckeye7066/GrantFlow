@@ -202,14 +202,14 @@ export async function buildRequestContext(db, user) {
           }
         }
       } else {
-        ctx.isAdmin = false
+        ctx.isAdmin = Boolean(user.is_admin || user.role === 'admin')
       }
     } else {
-      ctx.isAdmin = false
+      ctx.isAdmin = Boolean(user.is_admin || user.role === 'admin')
     }
   } catch (error) {
     console.warn('[requestContext] Failed to resolve admin status from DB:', error?.message)
-    ctx.isAdmin = false
+    ctx.isAdmin = Boolean(user.is_admin || user.role === 'admin')
   }
 
   // Step 5: Compute accessible profiles and orgs

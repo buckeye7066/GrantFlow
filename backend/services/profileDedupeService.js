@@ -369,7 +369,7 @@ async function columnExists(tx, tableName, columnName) {
   // SQLite: PRAGMA table_info doesn't accept bound params, so we must validate the identifier.
   if (!/^[a-zA-Z0-9_]+$/.test(table)) return false
   // Use allowlist validation instead of regex for critical security
-const ALLOWED_TABLES = ['profiles', 'profile_sections', 'documents', 'crawler_jobs', 'anya_sessions', 'billing_accounts', 'profile_emails', 'profile_documents'];
+const ALLOWED_TABLES = ['profiles', 'profile_sections', 'documents', 'crawler_jobs', 'anya_sessions', 'billing_accounts', 'profile_emails', 'profile_documents', 'anya_brain_memory', 'service_applications', 'crawler_schedules', 'anya_tasks', 'anya_tool_usage', 'funding_opportunities', 'audit_logs', 'grants'];
 if (!ALLOWED_TABLES.includes(table)) return false;
 const rows = await tx.prepare(`PRAGMA table_info(${table})`).all()
   return (rows || []).some((r) => String(r?.name || '') === col)
@@ -668,10 +668,12 @@ export async function mergeProfiles(db, {
         changes.push({ type: 'funding_opportunities.repoint', from: loserId, to: winnerId })
         changes.push({ type: 'anya_brain_memory.repoint', from: loserId, to: winnerId })
       } else {
-        // Check for active applications before merge
-        const activeApps = await tx.prepare('SELECT COUNT(*) as count FROM service_applications WHERE profile_id = ? AND status IN (?, ?, ?)').get(loserId, 'submitted', 'under_review', 'approved')
-        if (activeApps.count > 0 && !dryRun) {
-          throw new Error(`Cannot merge profile ${loserId} - has ${activeApps.count} active funding applications`)
+        // Check for active applications before merge (only if table+column exist)
+        if (await tableExists(tx, 'service_applications') && await columnExists(tx, 'service_applications', 'status')) {
+          const activeApps = await tx.prepare('SELECT COUNT(*) as count FROM service_applications WHERE profile_id = ? AND status IN (?, ?, ?)').get(loserId, 'submitted', 'under_review', 'approved')
+          if (activeApps?.count > 0 && !dryRun) {
+            throw new Error(`Cannot merge profile ${loserId} - has ${activeApps.count} active funding applications`)
+          }
         }
         const repoints = [
           { table: 'documents', idColumn: 'profile_id' },
