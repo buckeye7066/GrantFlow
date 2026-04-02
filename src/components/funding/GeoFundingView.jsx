@@ -87,11 +87,11 @@ function OpportunityRow({ opp, showScore }) {
       </div>
       {url && (
         <a
-          href={url}
+          href={opp.application_url || opp.source_url || opp.url}
           target="_blank"
           rel="noopener noreferrer"
           className="shrink-0 text-blue-600 hover:text-blue-800 p-1"
-          title="Open application"
+          title={opp.application_url ? "Open application" : "View source (application link unavailable)"}
         >
           <ExternalLink className="w-4 h-4" />
         </a>
@@ -144,10 +144,14 @@ function ZipSection({ zip, county, count, state, profileId, defaultOpen }) {
               <Loader2 className="w-4 h-4 animate-spin" />
               Loading opportunities…
             </div>
+          ) : scoredQuery.isError ? (
+            <div className="px-6 py-4 text-sm text-red-500">
+              Failed to load opportunities for this zip code. Please try again.
+            </div>
           ) : opportunities.length === 0 ? (
             <div className="px-6 py-4 text-sm text-slate-400">
               {showScore
-                ? "No matching opportunities for your profile in this zip code. Try completing more profile sections to improve matching."
+                ? "No matches found for your profile in this zip code. Adding details like housing needs, income, military status, or disabilities to your profile often unlocks more results."
                 : "No opportunities indexed for this zip code yet."}
             </div>
           ) : (
