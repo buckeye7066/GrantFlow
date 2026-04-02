@@ -37,9 +37,9 @@ export default function ComplianceTab({ grant }) {
     mutationFn: () => client.entities.GrantAward.create({
       grant_id: grant.id,
       organization_id: grant.organization_id,
-      award_amount: parseFloat(grant.typical_award || grant.amount_max || 0) || 0,
+      award_amount: 0, // Must be updated by user after receiving official award notice
       funder_name: grant.funder,
-      start_date: new Date().toISOString().split('T')[0],
+      start_date: grant.start_date || new Date().toISOString().split('T')[0],
       policy_json: JSON.stringify(defaultPolicy),
       reporting_cadence: 'quarterly',
     }),
@@ -106,7 +106,10 @@ const budgetRemaining = awardAmount - totalSpent;
         <CardContent className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
           <div><span className="font-semibold">Total Award:</span> ${awardAmount.toLocaleString()}</div>
           <div><span className="font-semibold">Total Spent:</span> ${totalSpent.toLocaleString()}</div>
-          <div><span className="font-semibold">Remaining:</span> ${budgetRemaining.toLocaleString()}</div>
+          <div className={budgetRemaining < 0 ? 'text-red-600 font-bold' : ''}>
+  <span className="font-semibold">Remaining:</span> ${budgetRemaining.toLocaleString()}
+  {budgetRemaining < 0 && <span className="ml-2 text-xs">(OVER BUDGET)</span>}
+</div>
         </CardContent>
       </Card>
 
@@ -134,7 +137,7 @@ const budgetRemaining = awardAmount - totalSpent;
                     <ul className="space-y-2">
                         {expenses.map(ex => (
                             <li key={ex.id} className="flex justify-between p-2 border-b">
-                                <span>{ex.date}: {ex.description}</span>
+                                <span>{ex.date ? ex.date : 'â'}: {ex.description || '(no description)'}{ex.category ? ` [${ex.category}]` : ''}</span>
                                 <span>${(parseFloat(ex.amount) || 0).toLocaleString()}</span>
                             </li>
                         ))}
