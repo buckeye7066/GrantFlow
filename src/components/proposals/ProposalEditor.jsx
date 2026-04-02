@@ -107,7 +107,8 @@ export default function ProposalEditor({ grant, organization }) {
       title: activeSection.title ?? null,
       content: debouncedDraftContent,
     })
-  }, [debouncedDraftContent, applicationId, activeSection?.section_key])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [debouncedDraftContent, applicationId, activeSection?.section_key, activeSection?.content, activeSection?.title])
 
   const autoPopulateMutation = useMutation({
     mutationFn: () => autoPopulate(applicationId),
@@ -141,9 +142,15 @@ export default function ProposalEditor({ grant, organization }) {
     const name = String(newSectionName || '').trim()
     if (!name) return
     const key = nextSectionKey(name, sectionKeySet)
-    upsertSectionMutation.mutate({ sectionKey: key, title: name, content: '' })
-    setNewSectionName('')
-    setActiveSectionKey(key)
+    upsertSectionMutation.mutate(
+      { sectionKey: key, title: name, content: '' },
+      {
+        onSuccess: () => {
+          setNewSectionName('')
+          setActiveSectionKey(key)
+        },
+      },
+    )
   }
 
   const isBusy = isPreparing || isLoadingSections
