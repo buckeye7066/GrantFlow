@@ -11,10 +11,12 @@ export default function AdminSystemHealth() {
   const [storage, setStorage] = useState(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [fetchError, setFetchError] = useState(null);
 
   const fetchHealth = async () => {
     try {
       setRefreshing(true);
+      setFetchError(null);
       const [healthData, storageData] = await Promise.all([
         apiFetch('/api/admin/system-health'),
         apiFetch('/api/health/storage').catch((err) => ({ ok: false, status: 'error', error: err?.message || String(err) })),
@@ -23,6 +25,7 @@ export default function AdminSystemHealth() {
       setStorage(storageData);
     } catch (err) {
       console.error('Failed to fetch system health', err);
+      setFetchError(err?.message || String(err));
     } finally {
       setLoading(false);
       setRefreshing(false);
