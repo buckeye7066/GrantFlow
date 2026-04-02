@@ -59,7 +59,7 @@ export default function VNextFinishPacket() {
     )
   }
 
-  if (query.error || !query.data) {
+  if (!query.data) {
     return (
       <div className="max-w-4xl mx-auto p-6">
         <Alert variant="destructive">
