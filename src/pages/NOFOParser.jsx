@@ -218,11 +218,16 @@ export default function NOFOParser() {
         });
 
         if (!pipelineResult?.data?.success) {
-          // Surface the canonical rejection reason so operators understand why
-          // (Goal 8 - explainable pipeline, Goal 12 - plain language).
-          const reason = pipelineResult?.data?.rejection_reason ||
-                         pipelineResult?.data?.message ||
-                         'Pipeline rejected this opportunity. Check eligibility criteria.';
+          const reason =
+            pipelineResult?.data?.rejection_reason ||
+            pipelineResult?.data?.ineligibility_reasons?.[0] ||
+            pipelineResult?.data?.message ||
+            'Pipeline rejected this opportunity. Check eligibility criteria.';
+          log.warn('NOFOParser: pipeline rejected opportunity', {
+            title: grantPayload.title,
+            rejection_reason: reason,
+            raw_response: pipelineResult?.data,
+          });
           throw new Error(reason);
         }
 
