@@ -31,11 +31,20 @@ export default function AdminAnyaConsole() {
     }
   }
 
+  const refresh = useCallback(async () => {
+    try {
+      const res = await getStatus("all")
+      setStatus(res)
+    } catch (err) {
+      toast({ title: "Failed to load Anya status", description: err.message, variant: "destructive" })
+    }
+  }, [toast])
+
   useEffect(() => {
     refresh()
     const id = window.setInterval(refresh, 5000)
     return () => window.clearInterval(id)
-  }, [])
+  }, [refresh])
 
   const run = async (label, path) => {
     setBusy(true)
@@ -130,8 +139,7 @@ export default function AdminAnyaConsole() {
                     parsed = JSON.parse(payload || "{}")
                   } catch (parseErr) {
                     toast({ title: "Invalid JSON payload", description: parseErr.message, variant: "destructive" })
-                    setBusy(false)
-                    return
+                    return  // finally will call setBusy(false)
                   }
                   const body = { run_all_states: true, ...parsed }
                   const res = await post("/api/geo-crawl/start", body)
