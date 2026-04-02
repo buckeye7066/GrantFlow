@@ -172,6 +172,7 @@ async function ensureGeoCrawlSchema(db) {
       // Allow future calls to retry schema creation.
       ensurePromise = null
       ensured = false
+      console.error('[geoCrawlRunStore] Schema creation failed â future calls will retry:', error?.message || error)
       throw error
     }
   })()
@@ -303,7 +304,10 @@ export async function appendGeoCrawlEvent(
   runId,
   { level = 'info', state = null, zip = null, county = null, source = null, message = '', foundCountDelta = 0 } = {},
 ) {
-  if (!runId) return null
+  if (!runId) {
+    console.warn('[geoCrawlRunStore] appendGeoCrawlEvent called without runId â event lost:', { level, state, zip, message })
+    return null
+  }
   await ensureGeoCrawlSchema(db)
   const lvl = ['info', 'warn', 'error'].includes(String(level)) ? String(level) : 'info'
   const st = state ? String(state).toUpperCase() : null
@@ -334,7 +338,10 @@ export async function appendGeoCrawlEvent(
 }
 
 export async function getGeoCrawlRun(db, runId) {
-  if (!runId) return null
+  if (!runId) {
+    console.warn('[geoCrawlRunStore] appendGeoCrawlEvent called without runId â event lost:', { level, state, zip, message })
+    return null
+  }
   await ensureGeoCrawlSchema(db)
   const row = await db.prepare('SELECT * FROM geo_crawl_runs WHERE id = ?').get(runId)
   return row ?? null
