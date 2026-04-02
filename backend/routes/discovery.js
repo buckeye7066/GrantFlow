@@ -137,7 +137,7 @@ router.post('/comprehensiveMatch', async (req, res) => {
     // Build the query: pull state + national + NULL state for relatable funding (no RANDOM).
     // Goal: real funding sources for profile needs — candidates are geographically relevant, then scored by profile signals.
     const candidateLimit = 3000;
-    const statePlaceholders = profileStates.length > 0 ? profileStates.map(() => '?').join(',') : null;
+    const candidateStatePlaceholders = profileStates.length > 0 ? profileStates.map(() => '?').join(',') : null;
     let query =
       req.db?.dialect === 'postgres'
         ? 'SELECT * FROM funding_opportunities WHERE is_active = TRUE'
@@ -175,6 +175,8 @@ router.post('/comprehensiveMatch', async (req, res) => {
       }));
     }
 
+    const militarySection = profileContext?.sections?.military ?? {};
+    const familySection = profileContext?.sections?.family ?? {};
     const filterHints = {
       hasHealthNeeds:
         (healthSet instanceof Set && healthSet.size > 0) ||
@@ -183,6 +185,8 @@ router.post('/comprehensiveMatch', async (req, res) => {
         healthFacets.chronic_illness || healthFacets.mental_health_condition ||
         kws.has('disability') || kws.has('chronic') || kws.has('mental health') || kws.has('epilepsy'),
       needsTransport: kws.has('transportation') || kws.has('ride assistance'),
+      isVeteran: !!(militarySection.is_veteran || militarySection.branch),
+      hasChildren: !!(familySection.has_children || familySection.num_dependents > 0),
     };
     const filteredOpportunities = opportunities.filter(opp => !isJunkOpportunity(opp, filterHints));
     const hasBizIntent = kws.has('small business') || kws.has('startup') || kws.has('entrepreneur') || kws.has('sba');
@@ -196,9 +200,17 @@ router.post('/comprehensiveMatch', async (req, res) => {
       const computed = scoreOpportunity(profileContext, opp);
 
       let url = opp.url || opp.application_url;
-      if (url && (url.includes('example.org') || url.includes('example.com') || url.includes('placeholder'))) {
-        console.warn(`[comprehensiveMatch] Nulled placeholder URL for opp ${opp.id}: ${url}`);
-        url = null;
+      if (url) {
+        const urlLower = url.toLowerCase();
+        if (
+          urlLower.includes('example.org') ||
+          urlLower.includes('example.com') ||
+          urlLower.includes('placeholder') ||
+          (!urlLower.startsWith('http://') && !urlLower.startsWith('https://'))
+        ) {
+          console.warn(`[comprehensiveMatch] Nulled invalid/placeholder URL for opp ${opp.id}: ${url}`);
+          url = null;
+        }
       }
 
       let eligSummary = ''
@@ -251,7 +263,10 @@ router.post('/comprehensiveMatch', async (req, res) => {
 
     const suppressedCount = scoredOpportunities.length - highScoring.length;
     if (suppressedCount > 0) {
-      console.info(`[comprehensiveMatch] ${suppressedCount} opportunities below display threshold ${matchThreshold} not shown`);
+      console.info(`[comprehensiveMatch] ${suppressedCount} opportunities below display threshold ${matchThreshold} not shown (threshold will be relaxed if highScoring.length === 0)`);
+      if (highScoring.length === 0) {
+        console.warn(`[comprehensiveMatch] ALL ${scoredOpportunities.length} scored candidates are below threshold ${matchThreshold} â fallback will activate. Top suppressed scores: ${scoredOpportunities.slice(0,5).map(o => o.fit_score).join(', ')}`);
+      }
     }
 
     // Zero-results fallback: progressively lower threshold (skip 30 â already tried above)
@@ -402,11 +417,24 @@ router.post('/searchOpportunities', async (req, res) => {
       }
     }
 
-    const results = (opportunities || []).map(opp => {
+    const junkFiltered = (opportunities || []).filter(opp => !isJunkOpportunity(opp, {}));
+    const searchJunkCount = opportunities.length - junkFiltered.length;
+    if (searchJunkCount > 0) {
+      console.info(`[searchOpportunities] Filtered ${searchJunkCount} junk entries`);
+    }
+    const results = junkFiltered.map(opp => {
       // Filter out placeholder URLs
       let url = opp.url || opp.application_url || null;
-      if (url && (url.includes('example.org') || url.includes('example.com') || url.includes('placeholder'))) {
-        url = null;
+      if (url) {
+        const urlLower = url.toLowerCase();
+        if (
+          urlLower.includes('example.org') ||
+          urlLower.includes('example.com') ||
+          urlLower.includes('placeholder') ||
+          (!urlLower.startsWith('http://') && !urlLower.startsWith('https://'))
+        ) {
+          url = null;
+        }
       }
 
       let matchReasons = [];
