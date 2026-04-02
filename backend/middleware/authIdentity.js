@@ -21,8 +21,10 @@
 
 import jwt from 'jsonwebtoken'
 
-async function resolveDbMaybePromise(value) {
-  return await Promise.resolve(value)
+// better-sqlite3 is synchronous; no Promise wrapper needed.
+// If the DB handle is ever swapped for an async driver, update call sites directly.
+function resolveDbMaybePromise(value) {
+  return value
 }
 
 /**
