@@ -354,17 +354,22 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
         }
       }
 
+      let junkCount = 0
+      let hardRejectCount = 0
+
       const allScored = candidates
                      .map((opp) => {
                                   if (isJunkOpportunity(opp, filterHints)) {
-  console.info(`[matching/opportunities] Junk-filtered opp ${opp.id} ("${opp.title?.slice(0, 60)}")`)
-  return null
-}
+                                    junkCount += 1
+                                    console.info(`[matching/opportunities] Junk-filtered opp ${opp.id} ("${opp.title?.slice(0, 60)}")`)
+                                    return null
+                                  }
 
                                   // Run canonical engine: filter hard eligibility failures (REJECT) before surfacing
                                   // Score-based weak-match REJECT is not filtered here — that is handled by min_score below.
                                   const decision = computeMatchDecision(profileNormForDecision, opp, { profileSections: profileSectionsForDecision })
                                   if (isHardEligibilityReject(decision)) {
+                                    hardRejectCount += 1
                                     console.info(`[matching/opportunities] Hard-reject opp ${opp.id} ("${opp.title?.slice(0, 60)}"): ${decision.ineligibilityReasons?.join('; ')}`)
                                     return null
                                   }
@@ -416,7 +421,7 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
       if (candidates.length > 0 && allScored.length === 0) {
         console.warn(
           `[matching/opportunities] TOTAL SUPPRESSION: ${candidates.length} candidates loaded, ` +
-          `0 passed scoring. junk_filtered=${_junkCount} hard_rejected=${_hardRejectCount} ` +
+          `0 passed scoring. junk_filtered=${junkCount} hard_rejected=${hardRejectCount} ` +
           `profile=${profileId}`
         )
       }
@@ -429,8 +434,8 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
               min_score: Number.isFinite(effectiveMinScore) ? effectiveMinScore : null,
               total_candidates: candidates.length,
               total_scored: allScored.length,
-              total_junk_filtered: _junkCount,
-              total_hard_rejected: _hardRejectCount,
+              total_junk_filtered: junkCount,
+              total_hard_rejected: hardRejectCount,
               returned: capped.length,
               opportunities: capped,
               threshold_relaxed: effectiveMinScore !== minScore ? true : undefined,
