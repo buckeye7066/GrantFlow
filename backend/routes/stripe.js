@@ -1,7 +1,6 @@
 import express from 'express'
 import crypto from 'node:crypto'
-import { ensureAuth } from '../middleware/auth.js'
-import { ensureAdmin } from '../middleware/auth.js'
+import { ensureAuth, ensureAdmin } from '../middleware/auth.js'
 import { ensureServiceCatalogSchema, MILESTONE_PHASES } from '../services/serviceCatalogStore.js'
 import { createCheckoutSessionForPrice, getOrCreateStripeCustomerId } from '../services/stripeService.js'
 import { roundBillableMinutes } from '../services/hourlyRounding.js'
@@ -82,8 +81,7 @@ router.post('/checkout/service', ensureAuth, async (req, res) => {
     if (!milestones || milestones.length === 0) {
       return res.status(409).json({ ok: false, error: 'milestone_payments_not_initialized', code: 'MILESTONE_NOT_SETUP' })
     }
-    const order = ['kickoff', 'draft', 'submission']
-    const firstUnpaid = order.find((p) => (milestones).find((m) => m.phase === p)?.status !== 'paid') || null
+    const firstUnpaid = MILESTONE_PHASES.find((p) => milestones.find((m) => m.phase === p)?.status !== 'paid') || null
     if (firstUnpaid !== phase) {
       return res.status(409).json({
         ok: false,
@@ -257,24 +255,32 @@ router.post('/checkout/hourly', ensureAuth, async (req, res) => {
     return res.status(503).json({ ok: false, error: 'stripe_customer_unavailable', code: 'STRIPE_NOT_CONFIGURED' })
   }
 
-  const session = await createCheckoutSessionForPrice({
-    priceId: String(priceRow.stripe_price_id),
-    quantity: units,
-    customerId: String(customer.stripe_customer_id),
-    successUrl: buildSuccessUrl(purchaseId),
-    cancelUrl: buildCancelUrl(purchaseId),
-    metadata: {
-      kind: 'hourly_invoice',
-      purchase_id: String(purchaseId),
-      hourly_invoice_id: String(invoiceId),
-      units: String(units),
-    },
-    idempotencyKey: `hourly:${purchaseId}:${invoiceId}`,
-  })
+  let session
+  try {
+    session = await createCheckoutSessionForPrice({
+      priceId: String(priceRow.stripe_price_id),
+      quantity: units,
+      customerId: String(customer.stripe_customer_id),
+      successUrl: buildSuccessUrl(purchaseId),
+      cancelUrl: buildCancelUrl(purchaseId),
+      metadata: {
+        kind: 'hourly_invoice',
+        purchase_id: String(purchaseId),
+        hourly_invoice_id: String(invoiceId),
+        units: String(units),
+      },
+      idempotencyKey: `hourly:${purchaseId}:${invoiceId}`,
+    })
+  } catch (stripeErr) {
+    await req.db
+      .prepare('UPDATE hourly_invoices SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
+      .run('failed', invoiceId)
+    return res.status(503).json({ ok: false, error: 'stripe_session_create_failed', code: 'STRIPE_SESSION_ERROR' })
+  }
 
   if (!session?.id || !session?.url) {
     await req.db
-      .prepare('UPDATE hourly_invoices SET status = ? WHERE id = ?')
+      .prepare('UPDATE hourly_invoices SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
       .run('failed', invoiceId)
     return res.status(503).json({ ok: false, error: 'stripe_session_create_failed', code: 'STRIPE_SESSION_ERROR' })
   }
