@@ -67,9 +67,15 @@ async function getDatabaseDiagnostics(db) {
     let writable = null;
     if (dialect === 'sqlite') {
       try {
-        // Use a write-and-rollback transaction to truly probe writability.
-        await db.prepare('BEGIN IMMEDIATE').run();
-        await db.prepare('ROLLBACK').run();
+        // Use db.exec for transaction control keywords, which all major
+        // SQLite wrappers (better-sqlite3, sqlite, sqlite3) support.
+        if (typeof db.exec === 'function') {
+          await Promise.resolve(db.exec('BEGIN IMMEDIATE; ROLLBACK;'));
+        } else {
+          // Fallback: attempt a harmless write to a temp table and roll back
+          await db.prepare("SAVEPOINT _diag_probe").run();
+          await db.prepare("RELEASE _diag_probe").run();
+        }
         writable = true;
       } catch (error) {
         writable = false;
@@ -199,6 +205,8 @@ async function checkFundingOpportunitiesSchema(db) {
       crawlLogsExists = false;
     }
     
+    const targetColumns = ['type', 'evidence_url', 'last_verified_at', 'title', 'sponsor', 'deadline'];
+    const missingColumns = targetColumns.filter((col) => !columnNames.includes(col));
     return {
       funding_opportunities_has_type: columnNames.includes('type'),
       funding_opportunities_has_evidence_url: columnNames.includes('evidence_url'),
@@ -207,6 +215,10 @@ async function checkFundingOpportunitiesSchema(db) {
       funding_opportunities_has_sponsor: columnNames.includes('sponsor'),
       funding_opportunities_has_deadline: columnNames.includes('deadline'),
       crawl_logs_exists: crawlLogsExists,
+      details: {
+        dialect: 'sqlite',
+        missing_columns: missingColumns,
+      },
     };
   } catch (error) {
     return {
@@ -415,11 +427,15 @@ export function analyzeSystemHealth(diagnostics) {
     
     // Check schema
     if (diagnostics.db.schema_checks.error) {
-      issues.push('Database schema check failed');
+      issues.push(
+        `Database schema check failed: ${diagnostics.db.schema_checks.message || diagnostics.db.schema_checks.error}`
+      );
     } else {
       const missing = diagnostics.db.schema_checks?.details?.missing_columns;
       if (Array.isArray(missing) && missing.length > 0) {
         warnings.push(`funding_opportunities missing columns: ${missing.join(', ')}`);
+      } else if (!Array.isArray(missing)) {
+        warnings.push('Schema check did not return column details â audit incomplete');
       }
     }
   }
