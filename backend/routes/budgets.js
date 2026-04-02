@@ -50,7 +50,7 @@ router.get('/', async (req, res) => {
   if (!user) return
 
   try {
-    const limit = normalizeLimit(req.query.limit, 500)
+    const limit = normalizeLimit(req.query.limit, 200)
     const grantId = req.query.grant_id ? String(req.query.grant_id) : null
     const id = req.query.id ? String(req.query.id) : null
 
@@ -66,7 +66,14 @@ router.get('/', async (req, res) => {
       params.push(grantId)
     }
 
-    if (!req.ctx?.isAdmin) {
+    if (req.ctx?.isAdmin) {
+      // Admins are scoped to organisations they can access
+      const orgIds = await getAccessibleOrganizationIds(req)
+      if (orgIds && orgIds.length > 0) {
+        clauses.push(`g.organization_id IN (${orgIds.map(() => '?').join(',')})`)
+        params.push(...orgIds)
+      }
+    } else {
       // Profile-scoped access: Only show budgets for grants in the active profile
       const profileId = req.ctx?.activeProfileId
       if (!profileId) {
@@ -80,7 +87,6 @@ router.get('/', async (req, res) => {
       }
 
       // Filter by profile_id: only grants belonging to the active profile
-      // The JOIN on grants ensures we get the correct profile_id from the grant
       clauses.push('g.profile_id = ?')
       params.push(String(profileId))
     }
@@ -141,6 +147,10 @@ router.post('/', async (req, res) => {
     const quantity = Number(data.quantity ?? 1) || 0
     const unitCost = Number(data.unit_cost ?? 0) || 0
     const total = data.total !== undefined ? Number(data.total) : quantity * unitCost
+    // Warn in logs when client-supplied total contradicts line-item arithmetic
+    if (data.total !== undefined && Number.isFinite(quantity * unitCost) && quantity * unitCost !== 0 && Math.abs(Number(data.total) - quantity * unitCost) > 0.01) {
+      console.warn(`[budgets] POST: client total ${data.total} differs from quantity*unitCost ${quantity * unitCost} for grant ${grantId}`)
+    }
 if (!Number.isFinite(total)) return res.status(400).json({ error: 'Budget total must be a valid number' })
 if (total < 0) return res.status(400).json({ error: 'Budget total cannot be negative' })
     const justification = data.justification ?? null
