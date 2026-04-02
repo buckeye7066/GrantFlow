@@ -40,13 +40,13 @@ await db.prepare(updateSql).run(id)
   try {
     await db.prepare('DELETE FROM profiles WHERE id = ?').run(id)
     return { ok: true, deleted: 'hard' }
-  } catch (error) {
+  } catch (err) {
     // If FK constraints prevent delete, fall back to a durable soft-delete.
-    const updateSql = dialect === 'postgres' ? 
-  'UPDATE profiles SET status = \'deleted\', updated_at = now() WHERE id = ?' :
-  'UPDATE profiles SET status = \'deleted\', updated_at = CURRENT_TIMESTAMP WHERE id = ?'
-await db.prepare(updateSql).run(id)
-    return { ok: true, deleted: 'soft', error: error?.message || String(error) }
+    const fallbackSql = dialect === 'postgres'
+      ? 'UPDATE profiles SET status = \'deleted\', updated_at = now() WHERE id = ?'
+      : 'UPDATE profiles SET status = \'deleted\', updated_at = CURRENT_TIMESTAMP WHERE id = ?'
+    await db.prepare(fallbackSql).run(id)
+    return { ok: true, deleted: 'soft', error: err?.message || String(err) }
   }
 }
 
@@ -325,30 +325,36 @@ router.patch('/:id', async (req, res) => {
     
     const updates = []
     const params = []
-    
+
     const ALLOWED_STATUSES = ['new', 'reviewed', 'approved', 'rejected', 'archived']
-if (status) {
-  if (!ALLOWED_STATUSES.includes(status)) {
-    return res.status(400).json({ success: false, message: `Invalid status value. Allowed: ${ALLOWED_STATUSES.join(', ')}` })
-  }
-  updates.push('status = ?')
-  params.push(status)
-  if (status === 'reviewed') {
-    updates.push('reviewed_by = ?', 'reviewed_at = CURRENT_TIMESTAMP')
-    params.push(req.ctx?.userId || null)
-  }
-}
-    
+    if (status) {
+      if (!ALLOWED_STATUSES.includes(status)) {
+        return res.status(400).json({ success: false, message: `Invalid status value. Allowed: ${ALLOWED_STATUSES.join(', ')}` })
+      }
+      updates.push('status = ?')
+      params.push(status)
+      if (status === 'reviewed') {
+        updates.push('reviewed_by = ?')
+        params.push(req.ctx?.userId || null)
+        updates.push('reviewed_at = CURRENT_TIMESTAMP')
+      }
+    }
+
     if (notes !== undefined) {
       updates.push('notes = ?')
       params.push(notes)
     }
-    
+
     if (profile_id) {
       updates.push('profile_id = ?')
       params.push(profile_id)
     }
-    
+
+    // Guard: require at least one meaningful field before running the UPDATE
+    if (updates.length === 0) {
+      return res.status(400).json({ success: false, message: 'No updatable fields provided' })
+    }
+
     updates.push('updated_at = CURRENT_TIMESTAMP')
     params.push(id)
     
