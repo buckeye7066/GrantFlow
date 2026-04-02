@@ -143,9 +143,11 @@ if (failed.length > 0) {
                         const hasDescription = !!record.program_description;
                         const hasSummary = !!record.eligibility_summary;
                         const hasCriteria = !!record.selection_criteria;
+                        const hasAppUrl = !!record.application_url;
                         
                         return (
                                     <div className="eligibility-status">
+                                      {!hasAppUrl && <Tag color="volcano">No App URL</Tag>}
                                       {hasDescription && <Tag color="green"><CheckOutlined /> Description</Tag>}
                                       {hasSummary && <Tag color="green"><CheckOutlined /> Summary</Tag>}
                                       {hasCriteria && <Tag color="green"><CheckOutlined /> Criteria</Tag>}
