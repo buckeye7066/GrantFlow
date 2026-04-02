@@ -327,6 +327,9 @@ export async function runAutonomousFunctionTests(options, context) {
           } else if (testResult.status === 'failed') {
             report.tests_failed++
             report.errors_found++
+          } else if (testResult.status === 'warning') {
+            report.tests_warned = (report.tests_warned || 0) + 1
+            report.errors_found++
           } else {
             report.tests_skipped++
           }
@@ -370,7 +373,7 @@ export async function runAutonomousFunctionTests(options, context) {
     report.results.forEach(suite => {
       if (suite.tests) {
         suite.tests.forEach(test => {
-          if (test.status === 'failed' || test.status === 'error') {
+          if (test.status === 'failed' || test.status === 'error' || test.status === 'warning') {
             failedTests.push({
               ...test,
               suite: suite.suite
