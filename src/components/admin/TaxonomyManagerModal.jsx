@@ -34,6 +34,12 @@ export default function TaxonomyManagerModal({ group, open, onClose, onSave }) {
   });
 
   useEffect(() => {
+    // Reset local state immediately when group changes so stale items
+    // from a previous group cannot be accidentally saved to the new group.
+    setItems([]);
+  }, [group]);
+
+  useEffect(() => {
     if (taxonomyItems) {
       setItems(taxonomyItems);
     }
@@ -68,11 +74,19 @@ export default function TaxonomyManagerModal({ group, open, onClose, onSave }) {
 
   const handleAddItem = () => {
     if (!newItem.trim()) return;
+    const candidateSlug = toKebabCase(newItem.trim());
+    const isDuplicate = items.some(
+      (item) => item.slug === candidateSlug || item.label.trim().toLowerCase() === newItem.trim().toLowerCase()
+    );
+    if (isDuplicate) {
+      toast.error(`An option with the name "${newItem.trim()}" already exists in this group.`);
+      return;
+    }
     const maxSortOrder = items.reduce((max, item) => Math.max(max, item.sort_order), -1);
     createItemMutation.mutate({
       group,
       label: newItem.trim(),
-      slug: toKebabCase(newItem.trim()),
+      slug: candidateSlug,
       active: true,
       sort_order: maxSortOrder + 1,
     });
@@ -87,7 +101,21 @@ export default function TaxonomyManagerModal({ group, open, onClose, onSave }) {
   };
 
   const handleSave = () => {
-    const updates = items.map(item => ({
+    const slugs = items.map((item) => item.slug);
+    const uniqueSlugs = new Set(slugs);
+    if (uniqueSlugs.size !== slugs.length) {
+      const seen = new Set();
+      const dupes = slugs.filter((s) => {
+        if (seen.has(s)) return true;
+        seen.add(s);
+        return false;
+      });
+      toast.error(
+        `Cannot save: duplicate slugs detected (${[...new Set(dupes)].join(', ')}). Rename conflicting options before saving.`
+      );
+      return;
+    }
+    const updates = items.map((item) => ({
       id: item.id,
       data: {
         sort_order: item.sort_order,
@@ -100,10 +128,17 @@ export default function TaxonomyManagerModal({ group, open, onClose, onSave }) {
   };
 
   const handleLabelChange = (id, newLabel) => {
+    const candidateSlug = toKebabCase(newLabel);
+    const collision = items.some(
+      (item) => item.id !== id && item.slug === candidateSlug
+    );
+    if (collision) {
+      toast.warning(`Another option already uses the slug "${candidateSlug}". Choose a more specific label to avoid conflicts.`);
+    }
     setItems(
       items.map(item =>
         item.id === id
-          ? { ...item, label: newLabel, slug: toKebabCase(newLabel) }
+          ? { ...item, label: newLabel, slug: candidateSlug }
           : item
       )
     );
