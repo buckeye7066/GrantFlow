@@ -57,13 +57,30 @@ async function fetchPdfTextFromUrl(fileUrl) {
     err.status = 400
     throw err
   }
-  const resp = await fetch(fileUrl, {
-    headers: {
-      // Grants.gov and some provider sites require a User-Agent to return the full document/page.
-      'User-Agent': 'GrantFlow NOFO Parser (+https://app.axiombiolabs.org)',
-      Accept: 'text/html,application/pdf;q=0.9,*/*;q=0.8',
-    },
-  })
+  const FETCH_TIMEOUT_MS = Number(process.env.NOFO_FETCH_TIMEOUT_MS || 20_000)
+  const controller = new AbortController()
+  const fetchTimer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS)
+  let resp
+  try {
+    resp = await fetch(fileUrl, {
+      signal: controller.signal,
+      headers: {
+        // Grants.gov and some provider sites require a User-Agent to return the full document/page.
+        'User-Agent': 'GrantFlow NOFO Parser (+https://app.axiombiolabs.org)',
+        Accept: 'text/html,application/pdf;q=0.9,*/*;q=0.8',
+      },
+    })
+  } catch (fetchErr) {
+    clearTimeout(fetchTimer)
+    const err = new Error(
+      fetchErr.name === 'AbortError'
+        ? `Fetch timed out after ${FETCH_TIMEOUT_MS}ms: ${fileUrl}`
+        : `Fetch error: ${fetchErr.message}`
+    )
+    err.status = 504
+    throw err
+  }
+  clearTimeout(fetchTimer)
   if (!resp.ok) {
     const err = new Error(`Failed to fetch file (HTTP ${resp.status})`)
     err.status = resp.status
@@ -206,12 +223,18 @@ router.post('/parseNOFO', async (req, res) => {
     }
 
     // No provider available or both failed: return a minimal best-effort object so the UI can proceed.
+    // Both AI providers unavailable or failed. Return NO output object so callers
+    // cannot accidentally pipe an incomplete record into the pipeline (Goal 1).
+    // Include the heuristic data only under a clearly-namespaced key so the UI
+    // can display something useful without treating it as a storable grant record.
     return res.status(503).json({
       success: false,
-      output: heuristicFallback(clipped),
+      output: null,
+      heuristic_preview: heuristicFallback(clipped),
       ai_provider: 'fallback',
       partial: true,
-      warning: 'AI provider unavailable; returned best-effort extraction. Do not store this record without manual review.',
+      warning:
+        'AI provider unavailable. Heuristic preview is for display only â it must not be stored or matched without full AI extraction and manual review.',
     })
   } catch (error) {
     console.error('[parseNOFO] Failed:', error)
