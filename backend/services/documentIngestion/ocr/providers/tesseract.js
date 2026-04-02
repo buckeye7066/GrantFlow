@@ -34,8 +34,8 @@ export function createTesseractProvider() {
           try {
             await worker.loadLanguage(lang)
             await worker.initialize(lang)
-          } catch {
-            // ignore
+          } catch (langErr) {
+            warnings.push(`Language init failed for '${lang}': ${langErr?.message ?? langErr} â OCR quality may be degraded`)
           }
         }
 
@@ -64,9 +64,7 @@ export function createTesseractProvider() {
 
         return {
           text,
-          perPage: Array.isArray(pages)
-            ? pages.map((_p, idx) => ({ page: idx + 1, text: text, confidence: conf }))
-            : null,
+          perPage: null,
           confidence: conf,
           warnings,
         }
