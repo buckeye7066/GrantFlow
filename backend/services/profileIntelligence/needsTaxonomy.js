@@ -425,8 +425,9 @@ export const NEEDS_TAXONOMY = {
     label: 'Scholarships & Tuition Assistance',
     description: 'Scholarships, grants for college/vocational education, tuition assistance',
     synonyms: [
-      'scholarship', 'tuition grant', 'financial aid', 'Pell Grant', 'college funding',
-      'vocational scholarship', 'FAFSA', 'student aid',
+      'scholarship', 'scholarships', 'tuition grant', 'tuition assistance',
+      'financial aid', 'Pell Grant', 'college funding',
+      'vocational scholarship', 'vocational scholarships', 'FAFSA', 'student aid',
     ],
     related_entity_types: [ENTITY_TYPE.INDIVIDUAL, ENTITY_TYPE.SCHOOL, ENTITY_TYPE.COLLEGE],
     // Churches can offer scholarships through educational ministries, but inference
