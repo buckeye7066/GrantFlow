@@ -144,7 +144,11 @@ export async function triggerAutoDiscoveryCrawlers(db, profileId, options = {}) 
       id: randomUUID(),
       type: 'local',
       profile_id: profileId,
-      parameters: { radius: 25 }
+      parameters: {
+        radius: 25,
+        zip: profile.zip ?? null,
+        state: profile.state ?? null
+      }
     })
     
     // 2. Scholarship crawler (if student indicators exist)
@@ -177,7 +181,14 @@ export async function triggerAutoDiscoveryCrawlers(db, profileId, options = {}) 
       type: 'comprehensive',
       profile_id: profileId,
       parameters: {
-        fallback_zip_limit: 100 // Start with 100 zips, expand over time
+        fallback_zip_limit: 100,
+        state: profile.state ?? null,
+        zip: profile.zip ?? null,
+        applicant_type: profile.primary_type ?? null,
+        needs: signals?.needs ? Array.from(signals.needs) : [],
+        has_military: Boolean(sections?.military?.is_veteran || sections?.military?.is_active_duty),
+        has_business: Boolean(sections?.business?.has_business),
+        has_housing_need: Boolean(sections?.housing?.housing_instability || sections?.housing?.homeless)
       }
     })
 
@@ -205,31 +216,57 @@ export async function triggerAutoDiscoveryCrawlers(db, profileId, options = {}) 
                 })
 
                 // 5b. Portal check (proactively check financial aid portals for award updates)
-                jobs.push({
-                          id: randomUUID(),
-                          type: 'portal_check',
-                          profile_id: profileId,
-                          parameters: { check_type: 'auto-discovery' }
-                })
+          jobs.push({
+            id: randomUUID(),
+            type: 'portal_check',
+            profile_id: profileId,
+            parameters: {
+              check_type: 'auto-discovery',
+              school_name: sections?.education?.school_name ?? null,
+              portal_url: sections?.education?.portal_url ?? null,
+              aid_year: sections?.education?.aid_year ?? null,
+              state: profile.state ?? null
+            }
+          })
         }
 
         // 6. Special Needs crawler (disability services, adaptive equipment)
         // Only queue when the profile has health/disability indicators
         if (isHealth) {
+          const healthSection = sections?.health_medical ?? {}
+          const disabilityTypes = Array.isArray(healthSection.disability_type) ? healthSection.disability_type : []
+          const conditions = Array.isArray(healthSection.conditions) ? healthSection.conditions : []
+          const hasMedicaid = Boolean(
+            signals?.assistance?.has?.('medicaid') ||
+            healthSection.medicaid_recipient
+          )
+
           jobs.push({
             id: randomUUID(),
             type: 'special_needs',
             profile_id: profileId,
-            parameters: {}
+            parameters: {
+              state: profile.state ?? null,
+              disability_types: disabilityTypes,
+              conditions,
+              wheelchair_user: Boolean(healthSection.wheelchair_user),
+              visual_impairment: Boolean(healthSection.visual_impairment),
+              hearing_impairment: Boolean(healthSection.hearing_impairment),
+              neurodivergent: Boolean(healthSection.neurodivergent)
+            }
           })
 
           // 7. ECF / HCBS Benefits crawler (Medicaid waivers, community-based services)
-          // Only relevant for profiles with Medicaid/health/disability signals
           jobs.push({
             id: randomUUID(),
             type: 'ecf_hcbs',
             profile_id: profileId,
-            parameters: {}
+            parameters: {
+              state: profile.state ?? null,
+              has_medicaid: hasMedicaid,
+              disability_types: disabilityTypes,
+              conditions
+            }
           })
         }
     
