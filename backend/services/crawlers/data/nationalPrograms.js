@@ -112,15 +112,15 @@ export const NATIONAL_PROGRAMS = [
   {
     id: 'np-meals-on-wheels',
     name: 'Meals on Wheels',
-    description: 'Free or low-cost meal delivery for homebound seniors and people with disabilities. Also provides safety checks and social interaction.',
+    description: 'Free or low-cost meal delivery for homebound seniors (typically 60+) and people with disabilities. Eligibility varies by local program. Also provides safety checks and social interaction.',
     url: 'https://www.mealsonwheelsamerica.org/find-meals',
     categories: ['food'],
-    eligibility: { minAge: 60, homebound: true },
+    eligibility: { minAge: 60, homebound: true, note: 'Age requirement may be waived for homebound disabled individuals â varies by local program' },
     type: 'assistance',
     fundingType: 'direct_service',
     demographicMatch: ['senior'],
     healthMatch: ['disability','physical_disability'],
-      intentMatch: ['food', 'special_needs'],
+    intentMatch: ['food', 'special_needs', 'senior'],
   },
 
   // ════════════════════════════════════════
@@ -340,8 +340,8 @@ export const NATIONAL_PROGRAMS = [
   {
     id: 'np-fema-funeral',
     name: 'FEMA Funeral Assistance (Disaster-Related)',
-    description: 'Financial assistance for funeral expenses related to a federally declared disaster, including COVID-19 deaths. Up to $9,000 per deceased individual.',
-    url: 'https://www.fema.gov/disaster/coronavirus/economic/funeral-assistance',
+    description: 'Financial assistance for funeral expenses related to a federally declared disaster. Up to $9,000 per deceased individual. Available when a disaster is federally declared.',
+    url: 'https://www.fema.gov/assistance/individual/program/funeral-assistance',
     categories: ['burial'],
     eligibility: { requiresDisasterRelatedDeath: true },
     type: 'grant',
@@ -361,6 +361,7 @@ export const NATIONAL_PROGRAMS = [
     eligibility: { incomeLimit: '$67,000 annual income' },
     type: 'assistance',
     fundingType: 'direct_service',
+    intentMatch: ['tax', 'cash_assistance'],
   },
 
   // ════════════════════════════════════════
@@ -605,11 +606,11 @@ export const NATIONAL_PROGRAMS = [
   },
   {
     id: 'np-usda-community-facilities',
-    name: 'USDA Community Facilities Direct Loan & Grant Program',
-    description: 'Grants and low-interest loans for essential community facilities in rural areas including vehicles, vans, and equipment for nonprofits, tribal organizations, and public entities.',
+    name: 'USDA Community Facilities Grant Program (Rural Nonprofits)',
+    description: 'Grants for essential community facilities in rural areas including vehicles, vans, and equipment for nonprofits, tribal organizations, and public entities. Note: the program also offers loans â only the grant component is surfaced here.',
     url: 'https://www.rd.usda.gov/programs-services/community-facilities/community-facilities-direct-loan-grant-program',
     categories: ['equipment', 'transportation', 'business'],
-    type: 'benefit',
+    type: 'grant',
     fundingType: 'direct_grant',
     intentMatch: ['transportation', 'business'],
   },
