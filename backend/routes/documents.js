@@ -310,10 +310,13 @@ async function downloadRemoteFileToUploads({ url, req }) {
     if (resp.url) {
       try {
         const finalUrl = new URL(resp.url);
-        // Always validate the final URL regardless of whether hostname changed
-        assertRemoteUrlAllowed(resp.url);
-        // Belt-and-suspenders: also block raw IP redirects to private ranges
-        if (net.isIP(finalUrl.hostname) && isPrivateIpAddress(finalUrl.hostname)) {
+        // Normalise: strip trailing dot from hostname (DNS FQDN form).
+        const normalisedFinalUrl = new URL(resp.url);
+        normalisedFinalUrl.hostname = finalUrl.hostname.replace(/\.$/, '');
+        // Always validate the final URL regardless of whether hostname changed.
+        assertRemoteUrlAllowed(normalisedFinalUrl.toString());
+        // Belt-and-suspenders: also block raw IP redirects to private ranges.
+        if (net.isIP(normalisedFinalUrl.hostname) && isPrivateIpAddress(normalisedFinalUrl.hostname)) {
           throw new Error('Redirect to private network not allowed');
         }
       } catch (redirectErr) {
@@ -998,17 +1001,23 @@ router.post('/ingest', uploadLimiter, requireUploadsWritable, runUploadSingle('d
       if (msg.includes('documents_status_check')) {
         // Retry without the status field â use a SQL variant that omits status entirely
         // so the DB default applies and avoids the constraint violation.
+        // The documents_status_check constraint is on the `status` column.
+        // Our INSERT does not include `status` at all, so this constraint
+        // cannot fire from this INSERT. If it does fire, it means the schema
+        // has a trigger or default that inserts a bad status value.
+        // Retry by explicitly inserting without processing_status (let DB default apply).
         const insertNoStatusSql = `
           INSERT INTO documents (
             id, organization_id, grant_id, profile_id, university_application_id, university_application_name, name, type,
             file_url, file_path, file_size, mime_type,
-            extracted_text, processing_status, notes
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            extracted_text, notes
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `
-        // Replace the status-constrained processingStatus with null to use DB default
-        const safeArgs = [...insertDocumentArgs]
-        // processing_status is index 13 (0-based); set to null to use DB default
-        safeArgs[13] = null
+        // Build args without processing_status (index 13 in original insertDocumentArgs).
+        const safeArgs = [
+          ...insertDocumentArgs.slice(0, 13),
+          insertDocumentArgs[14], // notes
+        ]
         await req.db.prepare(insertNoStatusSql).run(...safeArgs)
       } else {
         throw error
@@ -1059,7 +1068,14 @@ router.post('/ingest', uploadLimiter, requireUploadsWritable, runUploadSingle('d
       (extractedTextFromHtml && addToOpportunities && profileId);
     if (shouldQueue) {
       if (!skipParsing && profileId) {
-        if (!(await requireTierCapability(req, res, profileId, TIER_CAPABILITIES.DOCUMENT_AI))) return
+        if (!(await requireTierCapability(req, res, profileId, TIER_CAPABILITIES.DOCUMENT_AI))) {
+          // Tier gate sent a response; still return 202 for the document record
+          // that was already inserted â but we cannot send two responses.
+          // Instead, return early here; the caller will not get a 202,
+          // and the document is in the DB with processing_status = 'pending'.
+          // The UI should poll /extract for status.
+          return
+        }
       }
 
       const requestedBy = context.ctx?.userId ?? context.ctx?.activeProfileId ?? 'system';
@@ -1365,6 +1381,8 @@ router.post('/parse-all', async (req, res) => {
             await req.db
               .prepare('UPDATE crawler_jobs SET parameters = ? WHERE id = ?')
               .run(JSON.stringify(params), already.id)
+            // Dispatch the updated job so the worker picks up enable_ai=true.
+            jobsToDispatch.push(already.id)
             queued += 1
           }
         }
