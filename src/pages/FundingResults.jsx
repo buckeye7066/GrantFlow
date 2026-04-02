@@ -46,12 +46,16 @@ function parseAmount(opp) {
 }
 
 function getMatchReasons(opp) {
-  // Prefer authoritative decision-engine fields; never fall back to raw
-  // crawler indexer fields (matched_fields) which are not engine-sourced.
-  // Only trust the snake_case field written by the server-side decision engine.
-  // matchReasons (camelCase) may originate from client-side crawler data and must not be treated as engine-authoritative.
-  const reasons = opp?.match_reasons ?? [];
-  return Array.isArray(reasons) ? reasons : [];
+  // Only trust match_reasons (snake_case) written by the server-side decision engine.
+  // matchReasons (camelCase) may come from client-side crawler data and is not engine-authoritative.
+  const reasons = opp?.match_reasons;
+  if (Array.isArray(reasons) && reasons.length > 0) return reasons;
+  // Engine reasons absent: surface a non-empty placeholder so the user is not silently given nothing.
+  // This is a display-layer fallback only; it does not affect pipeline insertion logic.
+  const decision = (opp?.match_decision ?? opp?.matchDecision ?? '').toUpperCase();
+  if (decision === 'ACCEPT') return ['Engine accepted this opportunity for your profile.'];
+  if (decision === 'REVIEW') return ['Engine flagged this opportunity for manual review.'];
+  return [];
 }
 
 function MatchReasonsCollapsible({ reasons }) {
@@ -211,8 +215,11 @@ export default function FundingResults() {
             title: opportunity.title,
             sponsor: opportunity.sponsor ?? opportunity.funder,
             deadline: opportunity.deadlineAt ?? opportunity.deadline,
-            url: opportunity.url ?? opportunity.application_url,
-            application_url: opportunity.application_url ?? opportunity.url,
+            // application_url is the authoritative Goal 1 field. url is the detail/source page.
+            // Both are forwarded explicitly so the server can distinguish them.
+            // The server must use application_url as the primary application path.
+            application_url: opportunity.application_url ?? null,
+            url: opportunity.url ?? null,
             awardMin: opportunity.awardMin ?? opportunity.amount_min,
             awardMax: opportunity.awardMax ?? opportunity.amount_max,
             descriptionMd: opportunity.descriptionMd ?? opportunity.description,
