@@ -292,8 +292,22 @@ const [minMatchScore, setMinMatchScore] = useState(0);
                 city: profileData?.signals?.location?.city || profileData?.city || null,
                 zip: profileData?.signals?.location?.zip || profileData?.zip_code || null,
               },
-              interests: profileData?.signals?.interests ? Array.from(profileData.signals.interests).slice(0, 10) : (profileData?.tags || []).slice(0, 10),
-              demographics: profileData?.signals?.demographics ? Array.from(profileData.signals.demographics).slice(0, 10) : [],
+              interests: profileData?.signals?.interests
+                ? (typeof profileData.signals.interests[Symbol.iterator] === 'function'
+                    ? Array.from(profileData.signals.interests)
+                    : Object.values(profileData.signals.interests)
+                  ).slice(0, 10)
+                : (profileData?.tags || []).slice(0, 10),
+              demographics: profileData?.signals?.demographics
+                ? (typeof profileData.signals.demographics[Symbol.iterator] === 'function'
+                    ? Array.from(profileData.signals.demographics)
+                    : Object.values(profileData.signals.demographics)
+                  ).slice(0, 10)
+                : [
+                    profileData?.sections?.basic_information?.veteran_status,
+                    profileData?.sections?.basic_information?.disability_status,
+                    profileData?.sections?.basic_information?.applicant_type,
+                  ].filter(Boolean).slice(0, 10),
               career_goals: profileData?.sections?.career_goals?.primary_goal || profileData?.career_goal || null,
               // Deep profile sections for full-depth crawl context (Goals 5, 11)
               military: profileData?.sections?.military ?? null,
