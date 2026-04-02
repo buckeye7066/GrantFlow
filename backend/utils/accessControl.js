@@ -173,6 +173,15 @@ export async function getAccessibleProfileIds(db, user) {
     rows.forEach((row) => {
       if (row?.id) ids.add(row.id)
     })
+    // Profiles created by this user (e.g. admin-created shells later reassigned) stay visible to the creator.
+    try {
+      const createdRows = await db.prepare('SELECT id FROM profiles WHERE created_by = ?').all(userId)
+      createdRows.forEach((row) => {
+        if (row?.id) ids.add(row.id)
+      })
+    } catch {
+      // ignore (older schemas)
+    }
   }
 
   // Allow additional profile access via email mapping (e.g. board members).
