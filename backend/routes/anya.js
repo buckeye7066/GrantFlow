@@ -36,8 +36,8 @@ function adminAuth(req, res, next) {
     return next()
   }
   
-  // Priority 2: Check if user has admin role in token
-  if (req.user?.role === 'admin' || req.user?.is_admin === true) {
+  // Priority 2: Check if user has admin role in token AND ctx confirms it
+  if ((req.user?.role === 'admin' || req.user?.is_admin === true) && req.ctx?.isAdmin === true) {
     return next()
   }
   
@@ -497,7 +497,7 @@ router.post('/autonomous/code', adminAuth, async (req, res) => {
 router.post('/autonomous/code/background', adminAuth, async (req, res) => {
   try {
     const { startBackgroundCodeCrawlAndRepair } = await import('../services/anyaAutonomousScheduler.js')
-    const context = { db: req.db, user: req.ctx?.user ?? req.user }
+    const context = { db: req.db, ctx: req.ctx, user: req.user }
     const result = startBackgroundCodeCrawlAndRepair(context)
     if (result.queued) {
       res.status(202).json(result)
