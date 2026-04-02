@@ -229,6 +229,7 @@ export async function runAutoRepair(db, { dryRun = true, repairTypes } = {}) {
       empty_catch: [],
       console_log: [],
       profile_bleed: [],
+      repairs: [],
     },
     repaired: {
       empty_catch: 0,
@@ -296,7 +297,7 @@ export async function runAutoRepair(db, { dryRun = true, repairTypes } = {}) {
 
     // --- profile_bleed (always report-only) ---
     if (types.includes('profile_bleed')) {
-      const { issues } = scanProfileBleed(filePath, content)
+      const { issues } = scanProfileBleed(filePath, newContent)
       if (issues.length > 0) {
         const rel = path.relative(PROJECT_ROOT, filePath)
         report.findings.profile_bleed.push({ file: rel, issues })
