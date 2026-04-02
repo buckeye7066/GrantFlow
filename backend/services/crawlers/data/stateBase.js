@@ -155,7 +155,7 @@ export function generateStatePrograms(stateCode) {
       id: `${sc}-voc-rehab`,
       name: `${reg.name} Vocational Rehabilitation`,
       description: `Employment services for ${reg.name} residents with disabilities: job training, education, job placement, assistive technology, and support services.`,
-      url: reg.vocRehabUrl || 'https://rsa.ed.gov/about/states',
+      url: reg.vocRehabUrl && /^https?:\/\//i.test(reg.vocRehabUrl.trim()) ? reg.vocRehabUrl : null,
       categories: ['employment', 'disability', 'education'],
       eligibility: { requiresDisability: true },
       type: 'benefit',
@@ -215,7 +215,7 @@ export function generateStatePrograms(stateCode) {
     if (typeof b.url === 'string' && /^https?:\/\//i.test(b.url.trim())) {
       validBenefits.push(b);
     } else {
-      droppedBenefits.push({ id: b.id, reason: 'missing_or_invalid_url', url: b.url });
+      droppedBenefits.push({ id: b.id, reason: 'missing_or_invalid_url', url: b.url, categories: b.categories ?? [] });
     }
   }
   if (droppedBenefits.length > 0) {
