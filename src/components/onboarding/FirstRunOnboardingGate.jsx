@@ -46,7 +46,17 @@ const profileDataReady =
   const basicSection = activeProfileDetail?.sections?.find?.((s) => s.section_key === 'basic_information')?.data
   const hasZip = Boolean(basicSection?.zip?.trim?.())
   const hasState = Boolean(basicSection?.state?.trim?.())
-  const activeProfileComplete = hasZip && hasState
+  // A profile is considered 'complete enough to skip onboarding' only when
+  // it has location AND at least one needs-signal section populated.
+  // This ensures users who only provided a zip are still guided to enrich
+  // their profile for deep matching (Goal 5, Goal 10).
+  const needsSections = ['housing', 'education', 'health', 'employment', 'business', 'military', 'family', 'emergency']
+  const hasNeedsData = Boolean(
+    activeProfileDetail?.sections?.some?.(
+      (s) => needsSections.includes(s.section_key) && s.data && Object.keys(s.data).length > 0
+    )
+  )
+  const activeProfileComplete = hasZip && hasState && hasNeedsData
 
   const shouldShow =
     prefsLoaded &&
@@ -59,16 +69,21 @@ const profileDataReady =
   const [showWizard, setShowWizard] = React.useState(false)
   const dismissedRef = React.useRef(false)
 
+  const prevActiveProfileIdRef = React.useRef(activeProfileId)
+
   React.useEffect(() => {
+    // If the active profile changed, the user is working with a different
+    // profile â reset the dismissed flag so the wizard can re-trigger
+    // for the new (possibly incomplete) profile.
+    if (activeProfileId !== prevActiveProfileIdRef.current) {
+      prevActiveProfileIdRef.current = activeProfileId
+      dismissedRef.current = false
+    }
+
     if (shouldShow && !dismissedRef.current) {
       setShowWizard(true)
     }
-    // Do NOT reset dismissedRef here. It should only be reset when
-    // shouldShow has been stably false for a meaningful period, which
-    // is handled naturally because a new incomplete profile will produce
-    // a new activeProfileId, causing the profile query to refetch and
-    // dismissedRef to remain false from its initial value on remount.
-  }, [shouldShow])
+  }, [shouldShow, activeProfileId])
 
   const handleComplete = () => {
     dismissedRef.current = true
