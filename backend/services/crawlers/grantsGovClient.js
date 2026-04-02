@@ -50,11 +50,12 @@ function normaliseLegacyHit(hit) {
     'Visit Grants.gov for full eligibility details and application instructions.',
   ].filter(Boolean).join(' ')
 
-  const url = id != null
-    ? `${GRANTS_GOV_DETAIL}${id}`
-    : number
-      ? `https://www.grants.gov/search-grants?query=${encodeURIComponent(String(number))}`
-      : 'https://www.grants.gov/search-grants'
+  // Without an id OR a number we cannot form a meaningful application URL;
+// return null so the caller's .filter(Boolean) drops this record entirely.
+if (id == null && !number) return null
+const url = id != null
+  ? `${GRANTS_GOV_DETAIL}${id}`
+  : `https://www.grants.gov/search-grants?query=${encodeURIComponent(String(number))}`
 
   return {
     title,
@@ -96,11 +97,12 @@ function normaliseSimplerHit(hit) {
     'Visit Grants.gov for full eligibility details.',
   ].filter(Boolean).join(' ')
 
-  const url = id != null
-    ? `${GRANTS_GOV_DETAIL}${id}`
-    : number
-      ? `https://www.grants.gov/search-grants?query=${encodeURIComponent(String(number))}`
-      : 'https://www.grants.gov/search-grants'
+  // Without an id OR a number we cannot form a meaningful application URL;
+// return null so the caller's .filter(Boolean) drops this record entirely.
+if (id == null && !number) return null
+const url = id != null
+  ? `${GRANTS_GOV_DETAIL}${id}`
+  : `https://www.grants.gov/search-grants?query=${encodeURIComponent(String(number))}`
 
   return {
     title,
@@ -312,11 +314,20 @@ export async function searchGrants(keyword, opts = {}) {
   const seen = new Set()
   const merged = []
   for (const opp of [...legacyResult.hits, ...simplerResult.hits]) {
-    const key = (opp.title || '').toLowerCase().trim()
-    if (!key || seen.has(key)) continue
-    seen.add(key)
-    merged.push(opp)
+  // Prefer a stable compound key (source_id + api_source); fall back to title
+  const stableKey = opp.source_id != null
+    ? `${opp._api_source}::${opp.source_id}`
+    : (opp.title || '').toLowerCase().trim()
+  if (!stableKey) continue
+  if (seen.has(stableKey)) {
+    console.debug(
+      `[GrantsGovClient] Dedup skip: "${opp.title}" (key=${stableKey}, source=${opp._api_source})`
+    )
+    continue
   }
+  seen.add(stableKey)
+  merged.push(opp)
+}
   diagnostics.merged = merged.length
 
   const anyOk = (legacyResult.ok && legacyResult.hits.length > 0) || (simplerResult.ok && simplerResult.hits.length > 0)
@@ -370,11 +381,19 @@ export async function searchGrantsBatch(strategies, opts = {}) {
       }
 
       for (const opp of result.opportunities) {
-        const key = (opp.title || '').toLowerCase().trim()
-        if (key && seenTitles.has(key)) continue
-        if (key) seenTitles.add(key)
-        allOpportunities.push({ ...opp, _discovery_strategy: strategy.label })
-      }
+  const stableKey = opp.source_id != null
+    ? `${opp._api_source}::${opp.source_id}`
+    : (opp.title || '').toLowerCase().trim()
+  if (!stableKey) continue
+  if (seenTitles.has(stableKey)) {
+    console.debug(
+      `[GrantsGovClient] Batch dedup skip: "${opp.title}" (key=${stableKey}, strategy=${strategy.label})`
+    )
+    continue
+  }
+  seenTitles.add(stableKey)
+  allOpportunities.push({ ...opp, _discovery_strategy: strategy.label })
+}
     }
 
     if (i + batchSize < strategies.length) {
