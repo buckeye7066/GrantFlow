@@ -115,7 +115,7 @@ export async function analyzeKnowledgeBaseDocument({ documentId, extractedText, 
     return {
       success: true,
       document_id: documentId,
-      analysis,
+      analysis: enrichedMetadata,
     }
   } catch (error) {
     console.error('[KB Processor] Analysis failed', {
@@ -163,7 +163,7 @@ export async function processPendingKBDocuments(db, limit = 10) {
           SELECT id, extracted_text
           FROM documents
           WHERE type = 'knowledge'
-            AND processing_status IN ('completed', 'pending', 'error')
+            AND processing_status IN ('pending')
             AND (processing_metadata IS NULL OR processing_metadata = '')
             AND extracted_text IS NOT NULL
             AND length(extracted_text) > 50
@@ -281,6 +281,9 @@ export async function extractFundingOpportunitiesFromKB(db) {
             // Callers MUST pass this through relevanceFilter + computeMatchDecision
             // before any pipeline insertion. Direct DB insert is forbidden (Goal 4).
             _requires_decision_engine: true,
+            // Emit a structured warning so monitoring can detect if this record
+            // reaches the DB without a decision_engine audit trail (Goal 4, Goal 8).
+            _kb_source_warning: `KB-extracted opportunity from doc ${doc.id} â must be routed through opportunityMatcher gate before pipeline insert`,
             // Preserve raw metadata so the decision engine can compute fingerprints
             // and full audit fields (Goal 8, Goal 9)
             _raw_metadata: metadata,
