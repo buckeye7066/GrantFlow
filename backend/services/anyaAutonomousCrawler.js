@@ -1,9 +1,41 @@
 import path from 'path'
 import { promises as fs } from 'fs'
+import { spawn } from 'node:child_process'
 import { adminCodeCrawl, adminCodeAnalyze, adminCodeEdit } from './anyaAdminTools.js'
 import { AUDIT_CATEGORIES, SEVERITY, logAuditEvent } from './auditService.js'
 
 const REPO_ROOT = path.resolve(process.cwd())
+
+function runNodeSyntaxCheck(absolutePath) {
+  return new Promise((resolve) => {
+    const child = spawn(process.execPath, ['--check', absolutePath], {
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+    let stderr = ''
+    child.stderr.on('data', (chunk) => {
+      stderr += chunk.toString()
+    })
+    child.on('error', (error) => {
+      resolve({ ok: false, error: error?.message || String(error) })
+    })
+    child.on('close', (code) => {
+      if (code === 0) {
+        resolve({ ok: true, error: null })
+        return
+      }
+      resolve({ ok: false, error: stderr.trim() || `node --check failed with exit code ${code}` })
+    })
+  })
+}
+
+async function restoreFromBackup({ filePath, backupRelativePath }) {
+  if (!backupRelativePath) return { restored: false, reason: 'backup_missing' }
+  const targetPath = path.resolve(REPO_ROOT, filePath)
+  const backupPath = path.resolve(REPO_ROOT, backupRelativePath)
+  const backupContent = await fs.readFile(backupPath, 'utf8')
+  await fs.writeFile(targetPath, backupContent, 'utf8')
+  return { restored: true, backupPath: backupRelativePath }
+}
 
 function isProdEnv() {
   const nodeEnv = String(process.env.NODE_ENV || '').toLowerCase()
@@ -80,13 +112,15 @@ export async function runAutonomousCodeCrawl(options, context) {
     fixEmptyCatch = false,
     fixTodos = false,
   } = options
+  const writesExplicitlyEnabled = String(process.env.ANYA_AUTONOMOUS_WRITE_CHANGES || '').toLowerCase() === 'true'
+  const effectiveDryRun = Boolean(dryRun || !writesExplicitlyEnabled)
 
   const startTime = Date.now()
   const report = {
     started_at: new Date().toISOString(),
     directory: directory || 'entire repository',
     pattern,
-    dry_run: dryRun,
+    dry_run: effectiveDryRun,
     max_iterations: maxIterations,
     max_file_changes: maxFileChanges,
     files_scanned: 0,
@@ -101,7 +135,8 @@ export async function runAutonomousCodeCrawl(options, context) {
   await auditLog({
     action: 'autonomous_crawl_start',
     options,
-    dry_run: dryRun,
+    dry_run: effectiveDryRun,
+    writes_explicitly_enabled: writesExplicitlyEnabled,
   }, context)
 
   try {
@@ -120,8 +155,8 @@ export async function runAutonomousCodeCrawl(options, context) {
 
     // Group findings by file
     const fileIssues = {}
-    const findings = Array.isArray(crawlResult?.findings) ? crawlResult.findings : [];
-for (const finding of findings) {
+    const findings = Array.isArray(crawlResult?.findings) ? crawlResult.findings : []
+    for (const finding of findings) {
       if (!fileIssues[finding.file]) {
         fileIssues[finding.file] = []
       }
@@ -144,9 +179,8 @@ for (const finding of findings) {
       report.files_analyzed++
 
       // Analyze file for detailed issues
-      let analysisResult
       try {
-        analysisResult = await adminCodeAnalyze({ filePath }, context)
+        await adminCodeAnalyze({ filePath }, context)
       } catch (error) {
         report.errors.push({
           file: filePath,
@@ -157,9 +191,10 @@ for (const finding of findings) {
       }
 
       // Read file content once per file, before processing issues
+      let fileContent = ''
       let fileLines = []
       try {
-        const fileContent = await fs.readFile(path.resolve(REPO_ROOT, filePath), 'utf8')
+        fileContent = await fs.readFile(path.resolve(REPO_ROOT, filePath), 'utf8')
         fileLines = fileContent.split('\n')
       } catch (readError) {
         report.errors.push({
@@ -172,16 +207,21 @@ for (const finding of findings) {
 
       // Determine what fixes to apply
       const changes = []
-      
+      const changedLines = new Set()
+      const pushUniqueChange = (change) => {
+        if (changedLines.has(change.line)) return false
+        changedLines.add(change.line)
+        changes.push(change)
+        return true
+      }
+
       for (const issue of issues) {
         // Fix console.log statements
         if (fixConsoleLog && issue.description === 'console.log statement found') {
           const actualLine = fileLines[issue.line - 1]
-          const lines = fileContent.split('\n')
-          const actualLine = lines[issue.line - 1]
-          
+
           if (actualLine && actualLine.includes('console.log')) {
-            changes.push({
+            pushUniqueChange({
               line: issue.line,
               oldText: actualLine.trim(),
               // Comment-out rather than delete so the original content is preserved in the diff/backup
@@ -198,12 +238,12 @@ for (const finding of findings) {
             { old: 'catch (err) {}', new: 'catch (err) { console.error("Error:", err) }' },
             { old: 'catch {}', new: 'catch (error) { console.error("Error:", error) }' },
           ]
-          
+
           for (const variant of variations) {
-            const normalizedPreview = issue.preview.replace(/\s+/g, ' ').trim();
-const normalizedOld = variant.old.replace(/\s+/g, ' ').trim();
-if (normalizedPreview.includes(normalizedOld)) {
-              changes.push({
+            const normalizedPreview = String(issue?.preview || '').replace(/\s+/g, ' ').trim()
+            const normalizedOld = variant.old.replace(/\s+/g, ' ').trim()
+            if (normalizedPreview.includes(normalizedOld)) {
+              pushUniqueChange({
                 line: issue.line,
                 oldText: variant.old,
                 newText: variant.new,
@@ -233,19 +273,47 @@ if (normalizedPreview.includes(normalizedOld)) {
             {
               filePath,
               changes,
-              save: !dryRun,
+              save: !effectiveDryRun,
             },
             context
           )
 
-          if (editResult.saved || dryRun) {
+          if (editResult.saved && !effectiveDryRun) {
+            const absoluteFilePath = path.resolve(REPO_ROOT, filePath)
+            const syntaxCheck = await runNodeSyntaxCheck(absoluteFilePath)
+            if (!syntaxCheck.ok) {
+              const restoreOutcome = await restoreFromBackup({
+                filePath,
+                backupRelativePath: editResult.backup_created || null,
+              })
+              const restoreNote = restoreOutcome.restored
+                ? `File restored from backup ${restoreOutcome.backupPath}`
+                : 'Failed to restore from backup'
+              report.errors.push({
+                file: filePath,
+                type: 'post_edit_validation_failed',
+                message: `Rejected invalid edit: ${syntaxCheck.error}. ${restoreNote}`,
+              })
+              await auditLog({
+                action: 'file_edit_reverted',
+                file: filePath,
+                reason: 'post_edit_validation_failed',
+                validation_error: syntaxCheck.error,
+                backup: editResult.backup_created || null,
+                restored: restoreOutcome.restored,
+              }, context)
+              continue
+            }
+          }
+
+          if (editResult.saved || effectiveDryRun) {
             report.files_modified++
             report.issues_fixed += changes.length
             report.modifications.push({
               file: filePath,
               changes_count: changes.length,
               backup: editResult.backup_created || null,
-              dry_run: dryRun,
+              dry_run: effectiveDryRun,
             })
 
             await auditLog({
@@ -253,7 +321,7 @@ if (normalizedPreview.includes(normalizedOld)) {
               file: filePath,
               changes_count: changes.length,
               backup: editResult.backup_created,
-              dry_run: dryRun,
+              dry_run: effectiveDryRun,
             }, context)
           }
         } catch (error) {
