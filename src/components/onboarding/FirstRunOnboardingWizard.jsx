@@ -126,14 +126,14 @@ if (!profileId) throw new Error('Failed to create profile')
 
       let basicData = { zip, state }
       if (formData.display_name?.trim()) basicData.full_name = formData.display_name.trim()
-      if (activeProfile?.id && profileId) {
-        try {
-          const existing = await apiFetch(`/api/profiles/${profileId}/sections/basic_information`)
-          if (existing?.data && typeof existing.data === 'object') {
-            basicData = { ...existing.data, ...basicData }
-          }
-        } catch (_) { /* section may not exist */ }
-      }
+      // Always attempt to merge with existing section data regardless of whether
+// the profile is new or pre-existing.
+try {
+  const existing = await apiFetch(`/api/profiles/${profileId}/sections/basic_information`)
+  if (existing?.data && typeof existing.data === 'object') {
+    basicData = { ...existing.data, ...basicData }
+  }
+} catch (_) { /* section may not exist yet â safe to proceed with basicData only */ }
       await upsertProfileSection(profileId, 'basic_information', basicData, 'onboarding-wizard')
 
       const custom = (await apiFetch('/api/preferences'))?.custom_preferences ?? {}
@@ -176,7 +176,12 @@ if (!profileId) throw new Error('Failed to create profile')
     }
   }
 
-  const canProceed = step === 1 || (step === 2 && formData.zip?.trim() && formData.state?.trim())
+  const ZIP_RE = /^\d{5}(-\d{4})?$/
+const canProceed =
+  step === 1 ||
+  (step === 2 &&
+    ZIP_RE.test(String(formData.zip || '').trim()) &&
+    formData.state?.trim().length === 2)
 
   return (
     <Dialog open={open} onOpenChange={() => {}}>
