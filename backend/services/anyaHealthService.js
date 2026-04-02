@@ -149,11 +149,6 @@ export async function runHealthCheck(db) {
         `[AnyaHealth] Profile signal gaps: ${missingState.length} missing state, ${missingType.length} missing type, ${missingNeeds.length} missing needs, ${missingDepthSections.length} missing all depth sections`,
       )
     }
-    if (missingState.length > 0 || missingType.length > 0) {
-      console.warn(
-        `[AnyaHealth] Profile signal gaps: ${missingState.length} missing state, ${missingType.length} missing type`,
-      )
-    }
   } catch (err) {
     console.error('[AnyaHealth] profile_signal_audit error:', err.message)
     status.errors.push({ task: 'profile_signal_audit', error: err.message })
@@ -177,6 +172,34 @@ export async function runHealthCheck(db) {
     let removed = 0
     for (const group of dupGroups) {
       try {
+        // Prefer the duplicate with a valid application_url; fall back to MIN(id)
+        const bestRow = db
+          .prepare(
+            `SELECT id FROM funding_opportunities
+             WHERE profile_id IS NULL
+               AND title = ?
+               AND (sponsor = ? OR (sponsor IS NULL AND ? IS NULL))
+               AND (state = ? OR (state IS NULL AND ? IS NULL))
+             ORDER BY
+               CASE WHEN application_url IS NOT NULL AND application_url != '' THEN 0 ELSE 1 END ASC,
+               id ASC
+             LIMIT 1`,
+          )
+          .get(group.title, group.sponsor, group.sponsor, group.state, group.state)
+        if (!bestRow) continue
+        const keepId = bestRow.id
+        // Collect IDs to be removed for audit log
+        const toRemove = db
+          .prepare(
+            `SELECT id FROM funding_opportunities
+             WHERE profile_id IS NULL
+               AND title = ?
+               AND (sponsor = ? OR (sponsor IS NULL AND ? IS NULL))
+               AND (state = ? OR (state IS NULL AND ? IS NULL))
+               AND id != ?`,
+          )
+          .all(group.title, group.sponsor, group.sponsor, group.state, group.state, keepId)
+        if (toRemove.length === 0) continue
         const result = db
           .prepare(
             `DELETE FROM funding_opportunities
@@ -186,8 +209,14 @@ export async function runHealthCheck(db) {
                AND (state = ? OR (state IS NULL AND ? IS NULL))
                AND id != ?`,
           )
-          .run(group.title, group.sponsor, group.sponsor, group.state, group.state, group.keep_id)
-        removed += result.changes ?? result.rowCount ?? 0
+          .run(group.title, group.sponsor, group.sponsor, group.state, group.state, keepId)
+        const delta = result.changes ?? result.rowCount ?? 0
+        removed += delta
+        if (delta > 0) {
+          console.log(
+            `[AnyaHealth] dedup: kept id=${keepId}, removed ids=${toRemove.map((r) => r.id).join(',')}, title="${group.title}"`,
+          )
+        }
       } catch (delErr) {
         // Non-fatal: log and continue
         console.error('[AnyaHealth] dedup delete error:', delErr.message)
