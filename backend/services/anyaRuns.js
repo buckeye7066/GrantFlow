@@ -74,10 +74,18 @@ export async function completeAnyaRun(db, runId, { status, response, error } = {
           WHERE id = ?
         `,
       )
-      .run(status || 'completed', response ? safeJson(response) : null, error ? String(error) : null, runId)
+      .run(
+        status || 'completed',
+        response !== undefined ? safeJson(response) : null,
+        error !== undefined ? String(error) : null,
+        runId,
+      )
   } catch (dbError) {
     console.error(`Failed to complete Anya run ${runId}:`, dbError)
-    throw new Error(`Cannot complete Anya run: ${dbError.message}`)
+    // Do NOT re-throw: the Anya computation already succeeded.
+    // The DB write failure is an observability loss (Goal 8) but must not
+    // surface as a workflow error to the caller (Goal 13).
+    // Operators should monitor console errors for anya_runs write failures.
   }
 }
 
