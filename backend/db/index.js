@@ -527,10 +527,22 @@ class PostgresTx {
 // Fix SQLite boolean-as-integer comparisons for PostgreSQL compatibility.
 // SQLite uses INTEGER for booleans (0/1), but PostgreSQL uses BOOLEAN (TRUE/FALSE).
 // This converts patterns like "is_active = 1" to "is_active = TRUE" for known boolean column prefixes.
+// Only rewrite known boolean column names that are definitively boolean in the schema.
+// Do NOT use a prefix wildcard (is_\w+) as it matches integer columns like is_priority_level.
+const KNOWN_BOOLEAN_COLUMNS = [
+  'is_active', 'is_archived', 'is_verified', 'is_published', 'is_deleted',
+  'is_eligible', 'is_approved', 'is_rejected', 'is_flagged', 'is_locked',
+  'is_recurring', 'is_featured', 'is_hidden', 'is_system',
+  'active', 'activated', 'verified', 'archived', 'published', 'ocr_used'
+];
+const BOOL_COL_PATTERN = KNOWN_BOOLEAN_COLUMNS.map(c => c.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
+const BOOL_TRUE_RE = new RegExp(`\\b(${BOOL_COL_PATTERN})\\s*=\\s*1\\b`, 'gi');
+const BOOL_FALSE_RE = new RegExp(`\\b(${BOOL_COL_PATTERN})\\s*=\\s*0\\b`, 'gi');
+
 function fixBooleanIntegers(sql) {
-    return sql
-      .replace(/\b(is_\w+|active|activated|verified|archived|published|ocr_used)\s*=\s*1\b/gi, '$1 = TRUE')
-      .replace(/\b(is_\w+|active|activated|verified|archived|published|ocr_used)\s*=\s*0\b/gi, '$1 = FALSE');
+  return sql
+    .replace(BOOL_TRUE_RE, '$1 = TRUE')
+    .replace(BOOL_FALSE_RE, '$1 = FALSE');
 }
 class PostgresDb {
   constructor(connectionString) {
@@ -625,7 +637,11 @@ class PostgresDb {
   // Compatibility shim: many existing call sites use better-sqlite3's `db.transaction(fn)()`.
   // Under Postgres this returns an async function (callers must `await` it when we flip DB_PROVIDER).
   transaction(fn) {
-    return async (...args) => this.withTransaction((tx) => fn(...args, tx));
+    // Wrap fn so it runs inside a transaction.
+    // The callback receives the same arguments it would under better-sqlite3
+    // (no injected tx object) so existing call sites work without modification.
+    // Code that needs an explicit tx object should call withTransaction() directly.
+    return async (...args) => this.withTransaction(() => fn(...args));
   }
 
   async close() {
@@ -644,11 +660,18 @@ export function getDb() {
       try {
         if (singleton.dialect === 'sqlite') {
           singleton._db.prepare('SELECT 1').get();
+        } else if (singleton.dialect === 'postgres') {
+          // Non-blocking: only re-create if healthcheck rejects.
+          // We do NOT await here to keep getDb() synchronous at the call site;
+          // broken pools will surface on the next real query.
+          singleton.healthcheck().catch((error) => {
+            console.error('[db] Postgres singleton healthcheck failed, clearing singleton for recreation on next call:', error.message);
+            singleton = null;
+          });
         }
       } catch (error) {
         console.error('[db] Singleton database connection is broken, recreating:', error.message);
         singleton = null;
-        // Fall through to recreate
       }
     }
     if (singleton) return singleton;
