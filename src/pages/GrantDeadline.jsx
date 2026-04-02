@@ -56,7 +56,7 @@ export default function GrantDeadline() {
           daysUntil,
           isRolling,
           status: grant.status,
-          urgency: daysUntil !== null ? (daysUntil <= 7 ? 'critical' : daysUntil <= 14 ? 'warning' : 'normal') : 'rolling',
+          urgency: daysUntil !== null ? (daysUntil < 0 ? 'overdue' : daysUntil <= 7 ? 'critical' : daysUntil <= 14 ? 'warning' : 'normal') : 'rolling',
           grant,
         })
       }
@@ -77,7 +77,7 @@ export default function GrantDeadline() {
           daysUntil,
           isRolling: false,
           status: milestone.status || 'pending',
-          urgency: daysUntil !== null ? (daysUntil <= 3 ? 'critical' : daysUntil <= 7 ? 'warning' : 'normal') : 'normal',
+          urgency: daysUntil !== null ? (daysUntil < 0 ? 'overdue' : daysUntil <= 3 ? 'critical' : daysUntil <= 7 ? 'warning' : 'normal') : 'normal',
           milestone,
         })
       }
@@ -101,6 +101,7 @@ export default function GrantDeadline() {
 
   const filteredItems = useMemo(() => {
     if (statusFilter === 'all') return deadlineItems
+    if (statusFilter === 'overdue') return deadlineItems.filter(i => i.urgency === 'overdue')
     if (statusFilter === 'critical') return deadlineItems.filter(i => i.urgency === 'critical')
     if (statusFilter === 'warning') return deadlineItems.filter(i => i.urgency === 'warning')
     if (statusFilter === 'rolling') return deadlineItems.filter(i => i.isRolling)
@@ -109,6 +110,7 @@ export default function GrantDeadline() {
 
   const stats = useMemo(() => ({
     total: deadlineItems.length,
+    overdue: deadlineItems.filter(i => i.urgency === 'overdue').length,
     critical: deadlineItems.filter(i => i.urgency === 'critical').length,
     warning: deadlineItems.filter(i => i.urgency === 'warning').length,
     rolling: deadlineItems.filter(i => i.isRolling).length,
@@ -116,6 +118,7 @@ export default function GrantDeadline() {
 
   const getUrgencyColor = (urgency) => {
     switch (urgency) {
+      case 'overdue': return 'text-red-800 bg-red-100 border-red-400'
       case 'critical': return 'text-red-600 bg-red-50 border-red-200'
       case 'warning': return 'text-amber-600 bg-amber-50 border-amber-200'
       case 'rolling': return 'text-blue-600 bg-blue-50 border-blue-200'
