@@ -306,6 +306,14 @@ function Invoke-AutoMergePRs {
 
         if (-not $hasAutoMergeLabel -and -not $isBot) { continue }
 
+        $isCodeGuardLike = (($pr.title -match '\[CodeGuard\]') -or ($pr.head.ref -match '(^|/)(codeguard|anya-fix|autofix)(/|$)'))
+        if ($isCodeGuardLike) {
+            $hasCodeguardReviewed = ($pr.labels | Where-Object { $_.name -eq 'codeguard-reviewed' }).Count -gt 0
+            if (-not $hasCodeguardReviewed) {
+                continue
+            }
+        }
+
         # Check commit status
         $sha        = $pr.head.sha
         $statusUri  = "$script:ApiBase/repos/$script:Repo/commits/$sha/status"
@@ -316,12 +324,23 @@ function Invoke-AutoMergePRs {
             $checksOk = $false
         }
 
+        # Require at least one approval before listing as safe.
+        $reviewsUri = "$script:ApiBase/repos/$script:Repo/pulls/$($pr.number)/reviews"
+        try {
+            $reviews = Invoke-GitHubApi -Uri $reviewsUri -Headers $readHeaders
+            $approvals = @($reviews | Where-Object { $_.state -eq 'APPROVED' }).Count
+        } catch {
+            $approvals = 0
+        }
+        if ($approvals -eq 0) { continue }
+
         $safePRs += [PSCustomObject]@{
             Number  = $pr.number
             Title   = $pr.title
             Author  = $pr.user.login
             Status  = if ($checksOk) { 'passing' } else { 'not passing' }
             Checks  = $checksOk
+            Approvals = $approvals
         }
     }
 

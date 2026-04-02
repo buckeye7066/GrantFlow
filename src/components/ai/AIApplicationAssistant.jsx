@@ -72,7 +72,6 @@ export default function AIApplicationAssistant({ grant, organization, open, onCl
     setStep('loading');
     setError(null);
     runFullProcess();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]); // intentional: runFullProcess is stable per-render; ref guards concurrent calls
 
   const runFullProcess = async () => {

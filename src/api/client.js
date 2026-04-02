@@ -469,6 +469,25 @@ class APIClient {
         timeoutErr.requestId = headers['X-Request-Id'] || null;
         throw timeoutErr;
       }
+
+      // Browser/network transport failure (DNS/CORS/proxy/backend unreachable).
+      // fetch() throws TypeError before an HTTP response exists, so this is not a
+      // server 500 and should be surfaced distinctly to callers/UI.
+      if (error instanceof TypeError && /failed to fetch/i.test(String(error.message || ''))) {
+        const networkErr = new Error(
+          'Network request failed before the server responded. Check backend availability, API URL/proxy, and CORS.',
+        );
+        networkErr.status = 0;
+        networkErr.requestId = headers['X-Request-Id'] || null;
+        networkErr.errorCode = 'NETWORK_FETCH_FAILED';
+        networkErr.details = {
+          endpoint,
+          url,
+          method,
+          originalError: String(error.message || error),
+        };
+        throw networkErr;
+      }
       
       // Re-throw other errors
       if (error && typeof error === 'object' && !error.requestId) {

@@ -158,7 +158,7 @@ export async function runRealCrawler({
   if (!pid) {
     throw new Error('profile_id is required to run real crawlers. Select a profile first.')
   }
-  return apiFetch('/api/real-crawlers/run', {
+  const result = await apiFetch('/api/real-crawlers/run', {
     method: 'POST',
     body: JSON.stringify({
       crawler_type: crawlerType,
@@ -168,4 +168,8 @@ export async function runRealCrawler({
       min_match_score: minMatchScore,
     }),
   })
+  if (result?.success === false) {
+    throw new Error(result?.error || 'Crawler failed')
+  }
+  return result
 }

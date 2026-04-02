@@ -24,6 +24,7 @@ const EXCLUDE_BRANCHES = EXCLUDE_ARG
 
 const DEFAULT_EXCLUDES = ['main', 'copilot/merge-and-delete-branches'];
 const ALL_EXCLUDES = [...new Set([...DEFAULT_EXCLUDES, ...EXCLUDE_BRANCHES])];
+const CODEGUARD_PR_RE = /(\[codeguard\]|(^|\/)(codeguard|anya-fix|autofix)(\/|$))/i;
 
 function log(emoji, message) {
   console.log(`${emoji} ${message}`);
@@ -44,6 +45,19 @@ function executeCommand(command, options = {}) {
       output: error.stdout?.trim(),
       stderr: error.stderr?.trim()
     };
+  }
+}
+
+function isCodeguardLike(text = '') {
+  return CODEGUARD_PR_RE.test(String(text));
+}
+
+function parseJsonOutput(result, fallback = null) {
+  if (!result?.success || !result.output) return fallback;
+  try {
+    return JSON.parse(result.output);
+  } catch {
+    return fallback;
   }
 }
 
@@ -134,6 +148,38 @@ async function mergePR(prNumber) {
   return { success: true };
 }
 
+async function getPRSafety(prNumber) {
+  const result = executeCommand(
+    `gh pr view ${prNumber} --json number,title,headRefName,mergeable,statusCheckRollup,reviews,labels`,
+    { silent: true },
+  );
+  const pr = parseJsonOutput(result);
+  if (!pr) {
+    return { ok: false, reason: 'pr_view_failed' };
+  }
+
+  if (pr.mergeable !== 'MERGEABLE') {
+    return { ok: false, reason: `not_mergeable:${pr.mergeable}` };
+  }
+
+  const checks = Array.isArray(pr.statusCheckRollup) ? pr.statusCheckRollup : [];
+  const failing = checks.filter((c) => (c?.conclusion || '') === 'FAILURE' || (c?.conclusion || '') === 'CANCELLED').length;
+  const pending = checks.filter((c) => (c?.status || '') === 'IN_PROGRESS' || (c?.status || '') === 'QUEUED').length;
+  if (failing > 0) return { ok: false, reason: `failing_checks:${failing}` };
+  if (pending > 0) return { ok: false, reason: `pending_checks:${pending}` };
+
+  const approvals = (Array.isArray(pr.reviews) ? pr.reviews : []).filter((r) => r?.state === 'APPROVED').length;
+  if (approvals === 0) return { ok: false, reason: 'missing_approval' };
+
+  const labelNames = (Array.isArray(pr.labels) ? pr.labels : []).map((l) => l?.name).filter(Boolean);
+  const isCodeguard = isCodeguardLike(`${pr.title || ''} ${pr.headRefName || ''}`);
+  if (isCodeguard && !labelNames.includes('codeguard-reviewed')) {
+    return { ok: false, reason: 'missing_codeguard-reviewed_label' };
+  }
+
+  return { ok: true };
+}
+
 async function deleteBranch(branch) {
   if (DRY_RUN) {
     log('🔍', `[DRY RUN] Would delete branch: ${branch}`);
@@ -172,7 +218,7 @@ async function main() {
   
   // Get all branches
   const allBranches = await getAllBranches();
-  const branchesToMerge = allBranches.filter(b => !ALL_EXCLUDES.includes(b));
+  const branchesToMerge = allBranches.filter((b) => !ALL_EXCLUDES.includes(b) && !isCodeguardLike(b));
   
   log('📊', `Total branches: ${allBranches.length}`);
   log('📊', `Branches to merge: ${branchesToMerge.length}`);
@@ -214,6 +260,12 @@ async function main() {
     
     if (prResult.existing) {
       results.existing.push({ branch, pr: prResult.number });
+      const safety = await getPRSafety(prResult.number);
+      if (!safety.ok) {
+        log('⏸️', `Skipping existing PR #${prResult.number} for ${branch}: ${safety.reason}`);
+        results.skipped.push({ branch, reason: safety.reason });
+        continue;
+      }
       // Try to merge existing PR
       const mergeResult = await mergePR(prResult.number);
       if (mergeResult.success) {
@@ -225,6 +277,13 @@ async function main() {
     results.created.push({ branch, pr: prResult.number });
     
     if (prResult.dryRun) {
+      continue;
+    }
+
+    const safety = await getPRSafety(prResult.number);
+    if (!safety.ok) {
+      log('⏸️', `PR #${prResult.number} for ${branch} not auto-merge safe: ${safety.reason}`);
+      results.skipped.push({ branch, reason: safety.reason });
       continue;
     }
     
