@@ -16,7 +16,7 @@ function isPostgres(db) {
 export async function getDocumentExtract(db, documentId) {
   if (!documentId) return null
   const stmt = db.prepare('SELECT * FROM document_extracts WHERE document_id = ? LIMIT 1')
-  return isPostgres(db) ? await stmt.get(documentId) : stmt.get(documentId)
+  return isPostgres(db) ? await stmt.get(documentId) : await Promise.resolve(stmt.get(documentId))
 }
 
 export async function ensureDocumentExtract(db, {
@@ -25,6 +25,9 @@ export async function ensureDocumentExtract(db, {
   fileHash = null,
 } = {}) {
   if (!documentId) throw new Error('documentId is required')
+  if (!fileHash) {
+    console.warn('[documentExtractStore] ensureDocumentExtract called without fileHash for document', documentId, 'â hash-reuse will be unavailable')
+  }
 
   const existing = await getDocumentExtract(db, documentId)
   if (existing) {
@@ -73,7 +76,7 @@ export async function ensureDocumentExtract(db, {
         ON CONFLICT (document_id) DO NOTHING
       `,
     )
-    stmt.run(id, documentId, sourceType, fileHash)
+    await Promise.resolve(stmt.run(id, documentId, sourceType, fileHash))
   }
 
   return getDocumentExtract(db, documentId)
@@ -306,7 +309,7 @@ export async function tryReuseExtractByHash(db, { fileHash, documentId } = {}) {
       existing.ocr_text ?? null,
       typeof existing.warnings === 'string' ? existing.warnings : JSON.stringify(existing.warnings ?? []),
       existing.confidence ?? 0,
-      typeof existing.provenance === 'string' ? existing.provenance : JSON.stringify(existing.provenance ?? null),
+      existing.provenance == null ? null : (typeof existing.provenance === 'string' ? existing.provenance : JSON.stringify(existing.provenance)),
       Boolean(existing.ocr_used),
       documentId,
     )
@@ -341,7 +344,7 @@ export async function tryReuseExtractByHash(db, { fileHash, documentId } = {}) {
       existing.ocr_text ?? null,
       typeof existing.warnings === 'string' ? existing.warnings : JSON.stringify(existing.warnings ?? []),
       existing.confidence ?? 0,
-      typeof existing.provenance === 'string' ? existing.provenance : JSON.stringify(existing.provenance ?? null),
+      existing.provenance == null ? null : (typeof existing.provenance === 'string' ? existing.provenance : JSON.stringify(existing.provenance)),
       existing.ocr_used ? 1 : 0,
       documentId,
     )
