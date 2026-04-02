@@ -11,30 +11,11 @@
  */
 
 import { storeMemory, getMemory } from './anyaBrainService.js'
+import { MISSION_GOALS, GRANTFLOW_GOALS, ANYA_GOALS, GRANTFLOW_GOALS_TEXT, ANYA_GOALS_TEXT } from '../config/missionGoals.js'
+
+export { MISSION_GOALS }
 
 const AUDIT_COOLDOWN_HOURS = 6
-
-// ---------------------------------------------------------------------------
-// The 15 GrantFlow mission goals — canonical reference for all audit logic
-// ---------------------------------------------------------------------------
-
-export const MISSION_GOALS = [
-  { id: 1, short: 'Real funding', rule: 'Opportunities must have an actual application path. ACCEPT requires application_url.' },
-  { id: 2, short: 'Match to needs', rule: 'Map real user needs (housing, education, medical, business, caregiving, emergency) to funding via profile normalisation and need categories.' },
-  { id: 3, short: 'Reject junk', rule: 'Hard-reject loans, closed deadlines, wrong entity types, wrong state, institutional-only for individuals, disease-specific with no condition, disaster programs with no emergency context.' },
-  { id: 4, short: 'Single decision authority', rule: 'computeMatchDecision() is the sole authority. All insertion flows through saveToProfilePipeline(). No parallel scoring paths.' },
-  { id: 5, short: 'Full profile depth', rule: 'Matching uses the full normalised profile — military, education, family, health, emergency, business, housing — not surface tags.' },
-  { id: 6, short: 'Multiple applicant types', rule: 'Serve individuals, families, students, veterans, nonprofits, businesses, caregivers, disabled, emergency-affected without collapsing distinctions.' },
-  { id: 7, short: 'Recall over suppression', rule: 'Prefer false positives over false negatives in candidate selection; be conservative only at final acceptance. Threshold gate must not override ACCEPT/REVIEW.' },
-  { id: 8, short: 'Explainable pipeline', rule: 'Store match_decision, explanation, matched_needs, eligibility_status, reasons, fingerprints, matcher_version, evaluated_at, confidence in DB.' },
-  { id: 9, short: 'Re-evaluation', rule: 'Fingerprints and matcher_version enable re-evaluation when profiles, opportunities, or logic change.' },
-  { id: 10, short: 'Profile improvement', rule: 'Help users understand which profile fields improve matching. Proactively identify gaps.' },
-  { id: 11, short: 'Profile-driven crawling', rule: 'Crawlers use location, needs, and type from the profile to determine what to search.' },
-  { id: 12, short: 'Plain-language explanations', rule: 'Return human-readable reasons[] and explanations, not just raw scores.' },
-  { id: 13, short: 'Application workflow', rule: 'Full lifecycle: discovery → pipeline → proposals → documents → deadlines → monitoring → outreach → stewardship.' },
-  { id: 14, short: 'Anya as strategist', rule: 'Anya diagnoses poor matches, rescues empty pipelines, compares rejected vs accepted, guides profile improvement.' },
-  { id: 15, short: 'Anya grounded in app', rule: 'Anya responses grounded in real profile/opportunity data and help knowledge — no generic AI chatter.' },
-]
 
 // ---------------------------------------------------------------------------
 // Endpoint health check

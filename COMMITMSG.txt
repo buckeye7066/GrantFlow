@@ -1,0 +1,17 @@
+Add canonical mission goals for GrantFlow and Anya
+
+Created backend/config/missionGoals.js as the single source of truth
+for all mission goals. 10 GrantFlow goals (find real funding, match to
+needs, use full profile, support all user types, evolve, intelligent
+crawling, clear UI, avoid zero results, explainable, discovery to action)
+and 8 Anya goals (explain, plain language, guide workflows, next action,
+accessible, grounded in data, onboarding, improve confidence).
+
+Updated codeGuardService.js to import from the canonical source instead
+of maintaining its own copy.
+
+Updated anyaOrchestrator.js to inject both goal sets into Anya's system
+prompt so her responses are governed by these missions.
+
+Added .cursor/rules/mission-goals.mdc (local only, gitignored) so every
+future Cursor session has these goals in context when editing code.
