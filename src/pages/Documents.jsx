@@ -96,6 +96,7 @@ export default function Documents() {
       queryClient.invalidateQueries({ queryKey: ['documents', selectedProfileId] });
       queryClient.invalidateQueries({ queryKey: ['documents-profile-detail', selectedProfileId] });
       queryClient.invalidateQueries({ queryKey: ['profiles'] });
+      queryClient.invalidateQueries({ queryKey: ['profile', selectedProfileId] });
       setDeletingDoc(null);
     },
   });
@@ -105,14 +106,20 @@ export default function Documents() {
       const trimmed = String(url || "").trim();
       if (!trimmed) throw new Error("Enter a URL");
       const fileUrl = /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
-      let name = "URL import";
+      // Validate the constructed URL before submitting â rejects inputs like
+      // 'not a url at all' that would produce a malformed https:// string.
+      let parsedUrl;
       try {
-        const parsed = new URL(fileUrl);
-        const base = parsed.pathname.split("/").filter(Boolean).pop();
-        name = base ? decodeURIComponent(base) : `URL import (${parsed.hostname})`;
+        parsedUrl = new URL(fileUrl);
       } catch {
-        // keep default name
+        throw new Error("Enter a valid URL (e.g. https://example.gov/grant)");
       }
+      if (!parsedUrl.hostname || parsedUrl.hostname.indexOf('.') === -1) {
+        throw new Error("Enter a valid URL with a full domain (e.g. https://example.gov/grant)");
+      }
+      let name = "URL import";
+      const base = parsedUrl.pathname.split("/").filter(Boolean).pop();
+      name = base ? decodeURIComponent(base) : `URL import (${parsedUrl.hostname})`;
       return ingestDocument({
         profile_id: profileId,
         file_url: fileUrl,
