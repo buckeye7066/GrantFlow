@@ -158,12 +158,13 @@ export function mergePlanKeywords(baseKeywords = [], queryPlan = null) {
 }
 
 export function violatesMustNot(rawOpportunity, queryPlan = null) {
+  if (!rawOpportunity || typeof rawOpportunity !== 'object') return false
   const mustNot = Array.isArray(queryPlan?.mustNotTerms) ? queryPlan.mustNotTerms : []
   if (mustNot.length === 0) return false
   const text = normalizeLower(
-    `${rawOpportunity?.title || ''} ${rawOpportunity?.description || ''} ${
-      Array.isArray(rawOpportunity?.keywords) ? rawOpportunity.keywords.join(' ') : ''
-    } ${Array.isArray(rawOpportunity?.categories) ? rawOpportunity.categories.join(' ') : ''}`,
+    `${rawOpportunity.title || ''} ${rawOpportunity.description || ''} ${
+      Array.isArray(rawOpportunity.keywords) ? rawOpportunity.keywords.join(' ') : ''
+    } ${Array.isArray(rawOpportunity.categories) ? rawOpportunity.categories.join(' ') : ''}`,
   )
   return mustNot.some((term) => {
     const needle = normalizeLower(term)
@@ -236,7 +237,7 @@ export function enforceCrawlerOpportunityContract(
     description: description || null,
     source: rawOpportunity.source ?? sourceFallback ?? crawlerType,
     source_url: rawOpportunity.source_url ?? url,
-    application_url: rawOpportunity.application_url ?? url,
+    application_url: isValidHttpUrl(rawOpportunity.application_url) ? rawOpportunity.application_url : null,
     url,
     categories,
     keywords,
