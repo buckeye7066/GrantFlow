@@ -124,7 +124,8 @@ return {
   deadline: row.grant_deadline,
   funding_opportunity_id: row.funding_opportunity_id ?? null,
   match_score: decision.score,
-  match_reasons: decision.matchedNeeds ?? [],
+  match_reasons: decision.reasons ?? decision.matchedNeeds ?? [],
+  matched_needs: decision.matchedNeeds ?? [],
   match_decision: decision.decision,
   match_explanation: decision.explanation,
   match_confidence: decision.confidence ?? null,
@@ -371,7 +372,8 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
                                return {
                                            ...opp,
                                            match_score: decision.score,
-                                           match_reasons: decision.matchedNeeds ?? [],
+                                           match_reasons: decision.reasons ?? decision.matchedNeeds ?? [],
+  matched_needs: decision.matchedNeeds ?? [],
                                            match_decision: decision.decision,
                                            match_explanation: decision.explanation,
                                            match_confidence: decision.confidence ?? null,
@@ -387,7 +389,7 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
       allScored.sort((a, b) => (b.match_score ?? 0) - (a.match_score ?? 0))
 
       let scored = Number.isFinite(minScore)
-        ? allScored.filter((opp) => (opp.match_score ?? 0) >= minScore)
+        ? allScored.filter((opp) => (opp.match_score ?? 0) >= minScore || opp.match_decision === 'ACCEPT' || opp.match_decision === 'REVIEW')
         : allScored
 
       // Zero-results fallback: only applies when caller did NOT set an explicit threshold.
@@ -411,6 +413,14 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
         }
       }
 
+      if (candidates.length > 0 && allScored.length === 0) {
+        console.warn(
+          `[matching/opportunities] TOTAL SUPPRESSION: ${candidates.length} candidates loaded, ` +
+          `0 passed scoring. junk_filtered=${_junkCount} hard_rejected=${_hardRejectCount} ` +
+          `profile=${profileId}`
+        )
+      }
+
       const MAX_RESPONSE = 500
       const capped = scored.length > MAX_RESPONSE ? scored.slice(0, MAX_RESPONSE) : scored
 
@@ -418,7 +428,9 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
               profile_id: profileId,
               min_score: Number.isFinite(effectiveMinScore) ? effectiveMinScore : null,
               total_candidates: candidates.length,
-total_scored: allScored.length,
+              total_scored: allScored.length,
+              total_junk_filtered: _junkCount,
+              total_hard_rejected: _hardRejectCount,
               returned: capped.length,
               opportunities: capped,
               threshold_relaxed: effectiveMinScore !== minScore ? true : undefined,
