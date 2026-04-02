@@ -76,6 +76,9 @@ async function getClientCategoryForProfile(db, profileId, userId) {
 router.post('/purchases', ensureAuth, async (req, res) => {
   await ensureServiceCatalogSchema(req.db)
 
+  const userId = req.ctx?.userId ?? req.user?.userId ?? null
+  if (!userId) return res.status(401).json({ ok: false, error: 'Authentication required' })
+
   const body = req.body ?? {}
   const serviceSlug = typeof body.service_slug === 'string' ? body.service_slug.trim() : ''
   const profileId = typeof body.profile_id === 'string' ? body.profile_id.trim() : (req.ctx?.activeProfileId ? String(req.ctx.activeProfileId) : '')
@@ -99,33 +102,9 @@ router.post('/purchases', ensureAuth, async (req, res) => {
   const terms = await getLatestServiceTerms(req.db)
   const purchaseId = crypto.randomUUID()
 
-  await req.db.prepare(
-    `
-      INSERT INTO service_purchases (
-        id, user_id, profile_id, organization_id,
-        service_id, client_category, pricing_model,
-        status, agreed_terms_version, agreed_at,
-        created_at, updated_at
-      ) VALUES (
-        ?, ?, ?, (SELECT organization_id FROM profiles WHERE id = ?),
-        ?, ?, ?,
-        'draft', ?, CURRENT_TIMESTAMP,
-        CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
-      )
-    `,
-  ).run(
-    purchaseId,
-    req.ctx?.userId ?? req.user?.userId ?? null,
-    profileId || null,
-    profileId || null,
-    String(svc.id),
-    clientCategory,
-    String(svc.pricing_model),
-    terms?.version || null,
-  )
-
+  // Pre-validate all milestone prices before writing anything
+  let milestonePrices = []
   if (String(svc.pricing_model) === 'milestone') {
-    // Create milestone payment rows (pending) based on phase price rows
     for (const phase of MILESTONE_PHASES) {
       const price = await req.db
         .prepare(
@@ -143,17 +122,54 @@ router.post('/purchases', ensureAuth, async (req, res) => {
       if (!price) {
         return res.status(500).json({ ok: false, error: `missing milestone price for ${phase}` })
       }
-      await req.db.prepare(
-        `
-          INSERT INTO milestone_payments (
-            id, purchase_id, phase, amount_cents, currency, status, created_at, updated_at
-          ) VALUES (
-            ?, ?, ?, ?, 'usd', 'pending', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
-          )
-        `,
-      ).run(crypto.randomUUID(), purchaseId, phase, Number(price.amount_cents))
+      milestonePrices.push({ phase, amount_cents: Number(price.amount_cents) })
     }
   }
+
+  // All prices confirmed â now write atomically
+  const insertPurchase = req.db.prepare(
+    `
+      INSERT INTO service_purchases (
+        id, user_id, profile_id, organization_id,
+        service_id, client_category, pricing_model,
+        status, agreed_terms_version, agreed_at,
+        created_at, updated_at
+      ) VALUES (
+        ?, ?, ?, (SELECT organization_id FROM profiles WHERE id = ?),
+        ?, ?, ?,
+        'draft', ?, CURRENT_TIMESTAMP,
+        CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+      )
+    `,
+  )
+
+  const insertMilestone = req.db.prepare(
+    `
+      INSERT INTO milestone_payments (
+        id, purchase_id, phase, amount_cents, currency, status, created_at, updated_at
+      ) VALUES (
+        ?, ?, ?, ?, 'usd', 'pending', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+      )
+    `,
+  )
+
+  const runTransaction = req.db.transaction(() => {
+    insertPurchase.run(
+      purchaseId,
+      req.ctx?.userId ?? req.user?.userId ?? null,
+      profileId || null,
+      profileId || null,
+      String(svc.id),
+      clientCategory,
+      String(svc.pricing_model),
+      terms?.version || null,
+    )
+    for (const { phase, amount_cents } of milestonePrices) {
+      insertMilestone.run(crypto.randomUUID(), purchaseId, phase, amount_cents)
+    }
+  })
+
+  runTransaction()
 
   res.status(201).json({
     ok: true,
