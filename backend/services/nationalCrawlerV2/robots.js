@@ -107,14 +107,25 @@ export class RobotsCache {
   _evaluate(rules, url, userAgent) {
     const ua = (userAgent || '*').toLowerCase()
     const p = pathOf(url)
-    const applicable = rules.filter((r) => r.agents.includes('*') || r.agents.includes(ua))
+    // RFC 9309: specific-agent rules take full precedence over wildcard rules.
+    const specificRules = rules.filter((r) => r.agents.includes(ua))
+    const applicable = specificRules.length > 0
+      ? specificRules
+      : rules.filter((r) => r.agents.includes('*'))
     if (applicable.length === 0) return true
 
     // Simplified: choose the longest matching rule (allow wins if same length)
     let best = null
     for (const rule of applicable) {
       if (!rule.path) continue
-      if (!p.startsWith(rule.path)) continue
+      // RFC 9309: '*' matches any sequence; '$' anchors to end-of-path
+      const pattern = rule.path
+        .split('*')
+        .map((seg) => seg.replace(/[$]/g, '\\$&').replace(/[.+?^{}()|[\]\\]/g, '\\$&'))
+        .join('.*')
+      const anchored = rule.path.endsWith('$') ? pattern.replace(/\\\$$/, '$') : pattern
+      const re = new RegExp('^' + anchored)
+      if (!re.test(p)) continue
       if (!best) best = rule
       else if (rule.path.length > best.path.length) best = rule
       else if (rule.path.length === best.path.length && rule.type === 'allow') best = rule
