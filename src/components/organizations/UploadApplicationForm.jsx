@@ -26,10 +26,15 @@ export default function UploadApplicationForm({ onSuccess, onCancel, existingOrg
         'image/jpg',
         'image/png',
         'image/heic',
-        'image/heif'
+        'image/heif',
+        'application/octet-stream',
+        ''
       ];
-      
-      if (!validTypes.includes(selectedFile.type)) {
+      const validExtensions = ['.jpg', '.jpeg', '.png', '.heic', '.heif'];
+      const fileName = selectedFile.name.toLowerCase();
+      const hasValidExtension = validExtensions.some(ext => fileName.endsWith(ext));
+
+      if (!validTypes.includes(selectedFile.type) && !hasValidExtension) {
         toast({
           variant: 'destructive',
           title: 'Invalid File Type',
@@ -94,7 +99,11 @@ export default function UploadApplicationForm({ onSuccess, onCancel, existingOrg
         organization_id: existingOrganizationId,
       });
 
-      log.debug('processScannedApplication response received')
+      log.debug('processScannedApplication response received');
+
+      if (!response || !response.data) {
+        throw new Error('No response received from processScannedApplication. The server may be unavailable.');
+      }
 
       if (response.data.success) {
         toast({
