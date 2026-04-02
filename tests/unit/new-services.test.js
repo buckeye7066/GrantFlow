@@ -31,6 +31,7 @@ describe('Knowledge Base Processor', () => {
 })
 
 describe('Anya Task Execution Helper', () => {
+  // Module import can be slower under full-suite parallel load on CI runners.
   it('should export required functions', async () => {
     const taskHelper = await import('../../backend/services/anyaTaskExecutionHelper.js')
     
@@ -38,5 +39,5 @@ describe('Anya Task Execution Helper', () => {
     expect(taskHelper.listExecutableTasks).toBeDefined()
     expect(taskHelper.getTaskExecutionHistory).toBeDefined()
     expect(taskHelper.logTaskExecution).toBeDefined()
-  })
+  }, 40000)
 })

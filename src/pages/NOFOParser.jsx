@@ -421,7 +421,7 @@ export default function NOFOParser() {
       {dl || 'N/A'}
       {isPast && (
         <span className="ml-2 text-xs font-semibold text-red-600 bg-red-50 px-2 py-0.5 rounded">
-          â  Deadline has passed â this opportunity may be rejected by the pipeline
+          Deadline has passed - this opportunity may be rejected by the pipeline
         </span>
       )}
     </p>

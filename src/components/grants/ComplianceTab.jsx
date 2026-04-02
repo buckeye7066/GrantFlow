@@ -125,7 +125,7 @@ const budgetRemaining = awardAmount - totalSpent;
                 />
             )}
             {isLoadingExpenses ? <Loader2 className="w-6 h-6 animate-spin" /> : (
-                {expenses.length === 0 ? (
+                expenses.length === 0 ? (
                     <p className="text-center text-slate-500 py-4">No expenses logged yet. Use "Log Expense" to record spend against this award.</p>
                 ) : (
                     <ul className="space-y-2">
@@ -136,7 +136,7 @@ const budgetRemaining = awardAmount - totalSpent;
                             </li>
                         ))}
                     </ul>
-                )}
+                )
             )}
         </CardContent>
       </Card>

@@ -339,7 +339,7 @@ export async function appendGeoCrawlEvent(
 
 export async function getGeoCrawlRun(db, runId) {
   if (!runId) {
-    console.warn('[geoCrawlRunStore] appendGeoCrawlEvent called without runId â event lost:', { level, state, zip, message })
+    console.warn('[geoCrawlRunStore] getGeoCrawlRun called without runId')
     return null
   }
   await ensureGeoCrawlSchema(db)

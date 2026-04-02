@@ -171,12 +171,6 @@ export default function FundingResults() {
             return { status: 'already', grant: existingGrants[0] };
           }
         }
-        if (existingGrants.length > 0) {
-          if (!silent) {
-            toast({ title: 'Already in pipeline', description: `"${opportunity.title}" is already in your pipeline.` });
-          }
-          return { status: 'already', grant: existingGrants[0] };
-        }
       } catch (e) {
         console.warn('Duplicate check failed:', e);
       }

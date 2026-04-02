@@ -165,10 +165,11 @@ const defaultCorsOrigins = [
   'https://www.axiombiolabs.org',
   'https://grantflow-production.up.railway.app',
 ];
-const configuredCorsOrigins = Array.isArray(ENV?.corsOrigins) && ENV.corsOrigins.length > 0 ? ENV.corsOrigins : null;
+const configuredCorsOrigins = Array.isArray(ENV?.corsOrigins) && ENV.corsOrigins.length > 0 ? ENV.corsOrigins : [];
+const effectiveCorsOrigins = Array.from(new Set([...defaultCorsOrigins, ...configuredCorsOrigins]));
 
 const corsOptions = {
-  origin: configuredCorsOrigins && configuredCorsOrigins.length > 0 ? configuredCorsOrigins : defaultCorsOrigins,
+  origin: effectiveCorsOrigins,
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Admin-Token', 'X-Anya-Token', 'X-Profile-Id', 'X-Request-Id'],
@@ -375,7 +376,20 @@ const IS_SMOKE_MODE = explicitSmoke || inferredSmoke;
 // Handles: upload-avatar repair, document-status repair, baseline seed, service
 // catalog, opportunity seeding, national minimums, assistance directories,
 // faith-based housing.
-await runSelfHeal({ db, uploadsDir, IS_SMOKE_MODE, baseDir: __dirname });
+let _selfHealStarted = false
+async function runSelfHealOnce() {
+  if (_selfHealStarted) return
+  _selfHealStarted = true
+  try {
+    await runSelfHeal({ db, uploadsDir, IS_SMOKE_MODE, baseDir: __dirname })
+    console.info('[startup] self-heal completed')
+  } catch (error) {
+    console.error('[startup] self-heal failed (continuing):', error?.message || error)
+  }
+}
+if (process.env.NODE_ENV === 'test') {
+  await runSelfHealOnce()
+}
 
 const isProd = process.env.NODE_ENV === 'production'
 
@@ -692,6 +706,10 @@ if (process.env.NODE_ENV !== 'test') {
     console.log(`CORS origins: ${loggedCorsOrigins.join(', ')}`);
     const actualPort = server.address()?.port ?? PORT;
     console.log('[Server] Ready on port', actualPort);
+
+    // Run heavy startup healing only after the server is reachable.
+    // This prevents cold-start 502 windows from being reported as "CORS blocked".
+    void runSelfHealOnce()
 
     // ── Phase 3: Queue recovery ───────────────────────────────────────────────
     runQueueRecovery({ db, uploadsDir });

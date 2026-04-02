@@ -129,7 +129,9 @@ Lists open PRs that meet **all** of the following criteria:
 - Not a draft
 - `mergeable` is `true`
 - All status checks are passing
+- At least one approval review is present
 - Has the `auto-merge` label **or** was created by `github-actions[bot]` (e.g., the `anya-code-fix-pr` workflow)
+- If title/branch looks like CodeGuard/autofix, it must also include the `codeguard-reviewed` label
 
 Merges using the **squash** method. Requires `GRANTFLOW_ADMIN_TOKEN`.
 

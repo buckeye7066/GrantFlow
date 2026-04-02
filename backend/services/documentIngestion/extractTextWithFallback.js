@@ -166,6 +166,7 @@ export async function extractTextWithFallback({
   const charCount = finalText.length
   const wordCount = countWords(finalText)
   const avgCharsPerPage = pages && pages > 0 ? charCount / Math.max(1, pages) : null
+  const finishedAt = nowIso()
 
   const meta = {
     source_type: detected.source_type,
@@ -179,12 +180,12 @@ export async function extractTextWithFallback({
     ocr_used: ocrUsed,
     ocr_confidence: ocrConfidence,
     started_at: startedAt,
-    finished_at: nowIso(),
+    finished_at: finishedAt,
     provenance: {
       extractor: 'grantflow-document-ingestion',
       version: '1',
       ocr_provider: ocrUsed ? provider.id : null,
-      timestamps: { started_at: startedAt, finished_at: meta.finished_at },
+      timestamps: { started_at: startedAt, finished_at: finishedAt },
     },
   }
 

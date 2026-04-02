@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react"
+import React, { useCallback, useEffect, useState } from "react"
 import { AlertCircle, Bot, Loader2, PlayCircle, RefreshCw } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -21,15 +21,6 @@ export default function AdminAnyaConsole() {
   const [busy, setBusy] = useState(false)
   const [status, setStatus] = useState(null)
   const [payload, setPayload] = useState('{"dryRun": false}')
-
-  const refresh = async () => {
-    try {
-      const res = await getStatus("all")
-      setStatus(res)
-    } catch (err) {
-      toast({ title: "Failed to load Anya status", description: err.message, variant: "destructive" })
-    }
-  }
 
   const refresh = useCallback(async () => {
     try {

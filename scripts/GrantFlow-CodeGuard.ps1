@@ -116,14 +116,34 @@ function Invoke-GitHubApi {
         }
         return Invoke-RestMethod @params
     } catch {
-        $statusCode = $_.Exception.Response?.StatusCode?.value__
+        $statusCode = $null
+        try {
+            if ($_.Exception -and $_.Exception.Response -and $_.Exception.Response.StatusCode) {
+                $statusCode = $_.Exception.Response.StatusCode.value__
+            }
+        } catch {
+            $statusCode = $null
+        }
         $message    = $_.Exception.Message
 
         if ($statusCode -eq 401 -or $statusCode -eq 403) {
             # Check for rate-limit header
-            $remaining = $_.Exception.Response?.Headers?['X-RateLimit-Remaining']
+            $remaining = $null
+            $resetUnix = $null
+            try {
+                $responseHeaders = $null
+                if ($_.Exception -and $_.Exception.Response) {
+                    $responseHeaders = $_.Exception.Response.Headers
+                }
+                if ($responseHeaders) {
+                    $remaining = $responseHeaders['X-RateLimit-Remaining']
+                    $resetUnix = $responseHeaders['X-RateLimit-Reset']
+                }
+            } catch {
+                $remaining = $null
+                $resetUnix = $null
+            }
             if ($remaining -eq '0') {
-                $resetUnix  = $_.Exception.Response?.Headers?['X-RateLimit-Reset']
                 $resetTime  = if ($resetUnix) {
                     [System.DateTimeOffset]::FromUnixTimeSeconds([long]$resetUnix).LocalDateTime.ToString('HH:mm:ss')
                 } else { 'unknown' }
@@ -306,6 +326,14 @@ function Invoke-AutoMergePRs {
 
         if (-not $hasAutoMergeLabel -and -not $isBot) { continue }
 
+        $isCodeGuardLike = (($pr.title -match '\[CodeGuard\]') -or ($pr.head.ref -match '(^|/)(codeguard|anya-fix|autofix)(/|$)'))
+        if ($isCodeGuardLike) {
+            $hasCodeguardReviewed = ($pr.labels | Where-Object { $_.name -eq 'codeguard-reviewed' }).Count -gt 0
+            if (-not $hasCodeguardReviewed) {
+                continue
+            }
+        }
+
         # Check commit status
         $sha        = $pr.head.sha
         $statusUri  = "$script:ApiBase/repos/$script:Repo/commits/$sha/status"
@@ -316,12 +344,23 @@ function Invoke-AutoMergePRs {
             $checksOk = $false
         }
 
+        # Require at least one approval before listing as safe.
+        $reviewsUri = "$script:ApiBase/repos/$script:Repo/pulls/$($pr.number)/reviews"
+        try {
+            $reviews = Invoke-GitHubApi -Uri $reviewsUri -Headers $readHeaders
+            $approvals = @($reviews | Where-Object { $_.state -eq 'APPROVED' }).Count
+        } catch {
+            $approvals = 0
+        }
+        if ($approvals -eq 0) { continue }
+
         $safePRs += [PSCustomObject]@{
             Number  = $pr.number
             Title   = $pr.title
             Author  = $pr.user.login
             Status  = if ($checksOk) { 'passing' } else { 'not passing' }
             Checks  = $checksOk
+            Approvals = $approvals
         }
     }
 
@@ -478,11 +517,12 @@ function Show-WorkflowRuns {
 
         $runName   = if ($run.name)        { $run.name.Substring(0, [Math]::Min(39, $run.name.Length)) }        else { '' }
         $runBranch = if ($run.head_branch) { $run.head_branch.Substring(0, [Math]::Min(29, $run.head_branch.Length)) } else { '' }
+        $runConclusion = if ($run.conclusion) { $run.conclusion } else { 'pending' }
         $line = '{0,-12} {1,-40} {2,-12} {3,-12} {4,-30} {5}' -f `
             $run.id,
             $runName,
             $run.status,
-            ($run.conclusion ?? 'pending'),
+            $runConclusion,
             $runBranch,
             $run.created_at
 

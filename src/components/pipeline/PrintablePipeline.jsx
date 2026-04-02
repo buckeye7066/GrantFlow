@@ -54,6 +54,14 @@ export default function PrintablePipeline({ grants = [], organization }) {
     window.close();
   };
 
+  const knownStatusValues = React.useMemo(() => new Set(STATUSES.map((s) => s.value)), []);
+  const allStatuses = React.useMemo(() => {
+    const unknownStatuses = Object.keys(grantsByStatus)
+      .filter((k) => !knownStatusValues.has(k))
+      .map((k) => ({ value: k, label: k }));
+    return [...STATUSES, ...unknownStatuses];
+  }, [grantsByStatus, knownStatusValues]);
+
   return (
       <div className="bg-white min-h-screen">
         <header className="p-4 sm:p-6 border-b bg-slate-50 flex justify-between items-center print:hidden">
@@ -79,16 +87,9 @@ export default function PrintablePipeline({ grants = [], organization }) {
 
           <main className="gf-print-body">
             <div className="gf-columns">
-              const knownStatusValues = new Set(STATUSES.map(s => s.value));
-const unknownStatuses = Object.keys(grantsByStatus)
-  .filter(k => !knownStatusValues.has(k))
-  .map(k => ({ value: k, label: k }));
-const allStatuses = [...STATUSES, ...unknownStatuses];
-
-{allStatuses.map(col => {
-  const columnGrants = grantsByStatus[col.value] ?? [];
-  if (columnGrants.length === 0) return null;
-
+              {allStatuses.map((col) => {
+                const columnGrants = grantsByStatus[col.value] ?? [];
+                if (columnGrants.length === 0) return null;
                 return (
                   <section key={col.value} className="gf-column">
                     <h2 className="gf-col-title">{col.label} ({columnGrants.length})</h2>
