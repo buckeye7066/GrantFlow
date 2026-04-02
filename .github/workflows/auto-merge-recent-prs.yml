@@ -58,7 +58,7 @@ jobs:
           # Get all open PRs updated in the last N hours
           gh pr list \
             --state open \
-            --json number,title,updatedAt,headRefName,mergeable,statusCheckRollup \
+            --json number,title,updatedAt,headRefName,mergeable,statusCheckRollup,labels \
             --jq "[.[] | select(.updatedAt >= \"$SINCE_DATE\")]" > recent_prs.json
 
           cat recent_prs.json
@@ -86,6 +86,10 @@ jobs:
             PR_TITLE=$(echo "$pr" | jq -r '.title')
             PR_BRANCH=$(echo "$pr" | jq -r '.headRefName')
             MERGEABLE=$(echo "$pr" | jq -r '.mergeable')
+            PR_IS_CODEGUARD=false
+            if echo "$PR_TITLE $PR_BRANCH" | grep -Eiq '(\[CodeGuard\]|(^|/)(codeguard|anya-fix|autofix)(/|$))'; then
+              PR_IS_CODEGUARD=true
+            fi
 
             echo ""
             echo "=========================================="
@@ -124,6 +128,16 @@ jobs:
               echo "⏸️  PR #$PR_NUMBER has no approvals yet. Skipping."
               SKIP_COUNT=$((SKIP_COUNT + 1))
               continue
+            fi
+
+            # CodeGuard/autofix PRs require explicit manual opt-in label.
+            if [ "$PR_IS_CODEGUARD" = "true" ]; then
+              HAS_MANUAL_LABEL=$(echo "$pr" | jq -r '[.labels[]?.name | select(. == "codeguard-reviewed")] | length')
+              if [ "$HAS_MANUAL_LABEL" -eq 0 ]; then
+                echo "⏸️  PR #$PR_NUMBER appears CodeGuard/autofix-generated and lacks 'codeguard-reviewed'. Skipping."
+                SKIP_COUNT=$((SKIP_COUNT + 1))
+                continue
+              fi
             fi
 
             # All checks passed - merge the PR
