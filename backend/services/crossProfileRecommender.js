@@ -237,14 +237,16 @@ export async function getRecommendationsFromSimilarProfiles(db, profileId) {
   if (similar.length === 0) return { recommendations: [] }
 
   // Get grants from target profile to avoid recommending what they already have
-  let existingGrantTitles
+  let existingGrantIds = new Set()
+  let existingGrantTitles = new Set()
   try {
     const existing = await db
-      .prepare('SELECT title FROM grants WHERE profile_id = ?')
+      .prepare('SELECT id, title FROM grants WHERE profile_id = ?')
       .all(profileId)
+    existingGrantIds = new Set(existing.map((g) => g.id).filter(Boolean))
     existingGrantTitles = new Set(existing.map((g) => g.title.toLowerCase()))
-  } catch {
-    existingGrantTitles = new Set()
+  } catch (existingErr) {
+    console.warn('[crossProfileRecommender] Could not load existing grants for profile', profileId, existingErr?.message)
   }
 
   const recommendations = []
@@ -291,6 +293,10 @@ export async function getRecommendationsFromSimilarProfiles(db, profileId) {
       const statusWeight = grant.status === 'awarded' ? 1.0 : 0.7
       const estimatedRelevance = Math.round(similarProfile.similarity * statusWeight * 100) / 100
 
+      // Validate application_url (Goal 1: real funding only)
+      const appUrl = grant.application_url || null
+      if (!appUrl) continue
+
       recommendations.push({
         grantTitle: grant.title,
         grantId: grant.id,
@@ -298,9 +304,10 @@ export async function getRecommendationsFromSimilarProfiles(db, profileId) {
         sourceProfileName: similarProfile.displayName,
         matchReason,
         estimatedRelevance,
-        applicationUrl: grant.application_url || null,
+        applicationUrl: appUrl,
         sourceStatus: grant.status,
-        requiresValidation: true, // MUST be run through relevanceFilter + computeMatchDecision before pipeline insertion
+        requiresValidation: true, // Callers MUST call relevanceFilter + computeMatchDecision before any pipeline insertion
+        _validatedByRecommender: false, // Explicit flag: decision engine has NOT been run
       })
     }
   }
