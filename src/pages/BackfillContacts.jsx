@@ -79,9 +79,18 @@ export default function BackfillContacts() {
 
       if (newContactMethods.length > 0) {
         log(`Creating ${newContactMethods.length} new contact methods in bulk...`);
-        const bulkResult = await client.entities.ContactMethod.bulkCreate(newContactMethods);
-        const createdCount = Array.isArray(bulkResult) ? bulkResult.length : newContactMethods.length;
-        const failedCount = newContactMethods.length - createdCount;
+        let bulkResult;
+        let createdCount = 0;
+        let failedCount = 0;
+        try {
+          bulkResult = await client.entities.ContactMethod.bulkCreate(newContactMethods);
+          createdCount = Array.isArray(bulkResult) ? bulkResult.length : newContactMethods.length;
+          failedCount = newContactMethods.length - createdCount;
+        } catch (bulkError) {
+          log(`ERROR during bulk create: ${bulkError.message}`);
+          failedCount = newContactMethods.length;
+          createdCount = 0;
+        }
         setState(prev => ({
           ...prev,
           summary: {
@@ -136,8 +145,8 @@ export default function BackfillContacts() {
                 <Progress value={progress} className="w-full" />
                 
                 <div className="p-4 bg-slate-900 text-white rounded-md font-mono text-sm h-64 overflow-y-auto">
-                  {logs.map((log, index) => (
-                    <p key={index} className={log.startsWith('ERROR') ? 'text-red-400' : ''}>{log}</p>
+                  {logs.map((entry, index) => (
+                    <p key={index} className={entry.startsWith('ERROR') ? 'text-red-400' : ''}>{entry}</p>
                   ))}
                 </div>
 
