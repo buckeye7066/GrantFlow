@@ -405,7 +405,10 @@ export default function AnyaChat({ profileId }) {
     try {
       setMessages([])
       setTasks([])
-      toast({ title: "Conversation cleared", description: "Messages removed from view." })
+      // Intentionally a local-only clear: the session and its server-side
+      // history are preserved so the user can scroll back if they remount.
+      // The toast copy is updated to set accurate expectations.
+      toast({ title: "Conversation cleared", description: "Messages hidden locally. History is preserved on the server â use \"New conversation\" to start fresh." })
     } finally {
       setIsClearingConversation(false)
     }
@@ -614,13 +617,13 @@ export default function AnyaChat({ profileId }) {
   }
 
   const handleGrantInsights = async () => {
-    if (!sessionId || !profileId) return
+    if (!sessionId || !effectiveProfileId) return
     setIsFetchingInsights(true)
     try {
       await invokeAnyaTool(
         "grants.summarizeMatches",
         {
-          profile_id: profileId,
+          profile_id: effectiveProfileId,
           limit: 5,
         },
         { sessionId },
