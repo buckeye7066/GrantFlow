@@ -33,9 +33,16 @@ export default function FirstRunOnboardingGate({ profiles = [], activeProfileId 
   })
 
   // Treat profile as 'not yet known' (undefined) while query is in flight
-  const profileDataReady = activeProfileId
-    ? activeProfileDetail !== undefined
-    : true
+  // Only declare profile ready when we either have no profiles at all
+// (nothing to load) or we have an activeProfileId AND its data has loaded.
+// If profiles exist but no activeProfileId is selected yet, hold off
+// so we don't falsely trigger the wizard on a transient null.
+const profileDataReady =
+  profiles.length === 0
+    ? true
+    : activeProfileId
+      ? activeProfileDetail !== undefined
+      : false
   const basicSection = activeProfileDetail?.sections?.find?.((s) => s.section_key === 'basic_information')?.data
   const hasZip = Boolean(basicSection?.zip?.trim?.())
   const hasState = Boolean(basicSection?.state?.trim?.())
@@ -55,11 +62,12 @@ export default function FirstRunOnboardingGate({ profiles = [], activeProfileId 
   React.useEffect(() => {
     if (shouldShow && !dismissedRef.current) {
       setShowWizard(true)
-    } else if (!shouldShow) {
-      // Reset dismissed state when the trigger condition clears
-      // so a genuinely new incomplete profile can show the wizard.
-      dismissedRef.current = false
     }
+    // Do NOT reset dismissedRef here. It should only be reset when
+    // shouldShow has been stably false for a meaningful period, which
+    // is handled naturally because a new incomplete profile will produce
+    // a new activeProfileId, causing the profile query to refetch and
+    // dismissedRef to remain false from its initial value on remount.
   }, [shouldShow])
 
   const handleComplete = () => {
