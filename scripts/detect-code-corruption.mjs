@@ -1,12 +1,13 @@
 #!/usr/bin/env node
 /**
- * detect-code-corruption.mjs - Detects common AI/CodeGuard code corruption patterns
+ * detect-code-corruption.mjs - Detects common automated code fixer corruption patterns
  * 
  * This script catches syntax errors and common corruption patterns that slip through
- * when automated code fixers make changes without proper validation:
+ * when automated code fixers (like AI assistants, CodeGuard, or similar tools) make 
+ * changes without proper validation:
  * 
- * 1. Duplicate function/variable declarations
- * 2. Missing imports for used identifiers
+ * 1. Duplicate function/variable declarations (AI adds new version without removing old)
+ * 2. Missing imports for used identifiers (code moved without its dependencies)
  * 3. Misplaced code (e.g., error messages from wrong functions)
  * 4. Parsing errors (syntax issues)
  * 
@@ -109,7 +110,7 @@ function categorizeEslintErrors(results) {
  */
 async function main() {
   console.log('╔══════════════════════════════════════════════════════════════╗')
-  console.log('║        Code Corruption Detection (CodeGuard Safeguard)       ║')
+  console.log('║        Code Corruption Detection (Automated Fixer Safeguard) ║')
   console.log('╚══════════════════════════════════════════════════════════════╝\n')
   
   let hasCorruption = false
