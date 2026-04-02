@@ -23,27 +23,31 @@ let lastRequestTime = 0;
 /**
  * Rate-limited fetch wrapper
  */
+// rateLimitedFetch is intentionally retained for future live integration.
+// It is NOT called by the current static-catalogue path.
 async function rateLimitedFetch(url) {
   const now = Date.now();
   const timeSinceLastRequest = now - lastRequestTime;
-  
+
   if (timeSinceLastRequest < RATE_LIMIT_MS) {
-    await new Promise(resolve => setTimeout(resolve, RATE_LIMIT_MS - timeSinceLastRequest));
+    await new Promise(resolve =>
+      setTimeout(resolve, RATE_LIMIT_MS - timeSinceLastRequest)
+    );
   }
-  
+
   lastRequestTime = Date.now();
-  
+
   const response = await fetch(url, {
     headers: {
       'User-Agent': 'GrantFlow/1.0 (grant management system - educational use)',
       'Accept': 'text/html,application/xhtml+xml'
     }
   });
-  
+
   if (!response.ok) {
     throw new Error(`Benefits.gov error: ${response.status} ${response.statusText}`);
   }
-  
+
   return response.text();
 }
 
@@ -136,14 +140,24 @@ export async function searchStateBenefits(state, profile = {}) {
  * NOTE: This is a stub - in production, integrate with state APIs
  */
 export async function getBenefitDetails(benefitId, state) {
+  if (!benefitId || typeof benefitId !== 'string' || !benefitId.trim()) {
+    console.warn('[Benefits.gov] getBenefitDetails called with empty benefitId â returning null (Goal 1 guard)');
+    return null;
+  }
+  const safeBenefitId = encodeURIComponent(benefitId.trim());
+  const evidenceUrl = `${BASE_URL}/benefit/${safeBenefitId}`;
+
   console.log(`[Benefits.gov] Getting benefit details for ${benefitId} in ${state}`);
-  
-  // In production, fetch from state-specific databases or APIs
+
+  // Stub: application_url is required for any record that reaches ACCEPT (Goal 1).
+  // Callers MUST supplement this with a real portal URL before pipeline insertion.
   return {
     title: benefitId,
     type: 'PROGRAM',
     state: state,
-    evidence_url: `${BASE_URL}/benefit/${benefitId}`,
+    evidence_url: evidenceUrl,
+    application_url: null, // Must be populated by caller before pipeline insert
+    _stub: true,           // Signal to pipeline that this record is incomplete
     last_verified_at: new Date().toISOString()
   };
 }
