@@ -106,6 +106,11 @@ export async function searchNIHOpportunities(params = {}) {
         'Nonprofit organizations',
         'U.S. entities'
       ],
+      eligible_applicant_types: ['institution', 'small_business', 'nonprofit'],
+      // Explicitly excludes individual/family/veteran/student applicant types.
+      // relevanceFilter MUST hard-reject when profile.applicant_type is
+      // 'individual','family','veteran','student','caregiver' and
+      // eligible_applicant_types does not include that type.
       application_url: mech.url,
       is_national: true,
       categories: ['Health', 'Research', 'Biomedical'],
@@ -121,8 +126,11 @@ export async function searchNIHOpportunities(params = {}) {
       is_loan: false,
       requires_match: false,
       ineligibility_reasons: ['unverified_mechanism_template', 'no_active_foa', 'requires_verified_ingestion'],
-      match_decision: 'SKIP',
-      match_explanation: 'Baseline mechanism template only. No active FOA verified. Must not enter pipeline until cross-referenced with NIH Guide RSS feed for an open, dated announcement.'
+      // DO NOT add match_decision or match_explanation here.
+      // These fields are owned exclusively by computeMatchDecision() (Goal 4).
+      // Callers MUST check is_active === false and type === 'PROGRAM' before
+      // forwarding to saveToProfilePipeline(). The connector signals
+      // non-readiness via is_active:false + type:'PROGRAM' only.
     });
   });
   
@@ -173,8 +181,9 @@ export async function searchNSFOpportunities(params = {}) {
       is_loan: false,
       requires_match: false,
       ineligibility_reasons: ['unverified_mechanism_template', 'no_active_foa', 'requires_verified_ingestion'],
-      match_decision: 'SKIP',
-      match_explanation: 'Baseline mechanism template only. No active FOA verified. Must not enter pipeline until cross-referenced with NSF funding announcements for an open, dated solicitation.'
+      // DO NOT add match_decision or match_explanation here.
+      // Callers MUST gate on is_active === false + type === 'PROGRAM'.
+      // computeMatchDecision() is the sole decision authority (Goal 4).
     }
   ];
   
@@ -190,11 +199,13 @@ export async function getResearchOpportunityDetails(opportunityId, agency = 'NIH
       title: `NIH ${opportunityId} (Mechanism)`,
       sponsor: 'National Institutes of Health',
       type: 'PROGRAM',
+      // application_url intentionally absent: no verified FOA exists.
+      // Callers MUST treat absence of application_url as a hard disqualifier
+      // per Goal 1. Do NOT insert this record into the pipeline.
       application_url: null,
       evidence_url: `https://grants.nih.gov/grants/guide/${opportunityId}`,
       last_verified_at: null,
       is_active: false,
-      match_decision: 'SKIP',
       ineligibility_reasons: ['unverified_mechanism_template', 'no_application_url']
     };
   } else if (agency === 'NSF') {
@@ -202,11 +213,11 @@ export async function getResearchOpportunityDetails(opportunityId, agency = 'NIH
       title: `NSF ${opportunityId} (Mechanism)`,
       sponsor: 'National Science Foundation',
       type: 'PROGRAM',
+      // application_url intentionally absent: no verified FOA exists.
       application_url: null,
       evidence_url: `https://www.nsf.gov/funding/pgm_summ.jsp?pims_id=${opportunityId}`,
       last_verified_at: null,
       is_active: false,
-      match_decision: 'SKIP',
       ineligibility_reasons: ['unverified_mechanism_template', 'no_application_url']
     };
   }
