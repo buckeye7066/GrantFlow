@@ -311,14 +311,13 @@ export async function runAutonomousCrawlers(options, context) {
             }
             
             // Process opportunities for profile pipeline with match filtering
-            if (matchThreshold > 0) {
-              await saveHighMatchesToProfile({
-                jobId: job.job_id,
-                profileId: job.profile_id,
-                matchThreshold,
-              }, context)
-              job.profile_save = { threshold: matchThreshold, status: 'completed' }
-            }
+            // Always run profile pipeline matching; threshold=0 means accept all ACCEPT/REVIEW decisions.
+await saveHighMatchesToProfile({
+  jobId: job.job_id,
+  profileId: job.profile_id,
+  matchThreshold: matchThreshold ?? 0,
+}, context)
+job.profile_save = { threshold: matchThreshold ?? 0, status: 'completed' }
           } catch (error) {
             report.errors.push({
               job_id: job.job_id,
@@ -441,7 +440,7 @@ async function saveHighMatchesToProfile(options, context) {
     const threshold = Number.isFinite(thresholdNum) ? Math.max(0, Math.min(100, thresholdNum)) : 55
 
     // Get the crawler job
-    const job = db.prepare('SELECT * FROM crawler_jobs WHERE id = ?').get(jobId)
+    const job = await db.prepare('SELECT * FROM crawler_jobs WHERE id = ?').get(jobId)
     if (!job || job.status !== 'completed') {
       return { job_id: jobId, profile_id: profileId, message: 'Job not completed or not found' }
     }
@@ -465,6 +464,7 @@ async function saveHighMatchesToProfile(options, context) {
       comprehensive: ['verified_real'],
       item_search: ['item_funding'],
       item_gift_search: ['item_gift'],
+      profile_enrichment: ['profile_enrichment'],
     }
 
     const sources = sourcesByJobType[job.type] || null
@@ -552,7 +552,16 @@ async function saveHighMatchesToProfile(options, context) {
     }
 
     // If we found opportunities but saved none, log why (failure-state visibility).
-    if (checked > 0 && saved === 0) {
+    if (checked === 0) {
+      console.info('[autonomous] saveHighMatchesToProfile: zero opportunities found for job', {
+        job_id: jobId,
+        profile_id: profileId,
+        job_type: job.type,
+        sources,
+        since,
+        threshold,
+      })
+    } else if (saved === 0) {
       console.info('[autonomous] no pipeline inserts for job', {
         job_id: jobId,
         profile_id: profileId,
