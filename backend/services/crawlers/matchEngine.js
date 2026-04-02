@@ -199,7 +199,7 @@ function isCopayOrPatientAssistanceIrrelevant(program, analysis) {
   if (!isCopayProgram) return false;
 
   // If the program requires a medical condition AND profile has no health signals → exclude
-  if (program.eligibility?.requiresMedicalCondition && analysis.health.size === 0) {
+  if (program.eligibility?.requiresMedicalCondition && (analysis.health?.size ?? 0) === 0) {
         return true;
   }
 
@@ -331,8 +331,9 @@ export function scoreProgram(program, analysis, strategyOpts = {}) {
           matchReasons.push('Strong intent alignment with your profile');
     } else if (program.intentMatch && program.intentMatch.length > 0) {
           score += 0;
+          matchReasons.push('No intent alignment with your profile');
     } else {
-          score += 5;
+          score += 2;
     }
 
     // ── needEmphasis bonus (up to 10 points) ──
@@ -411,7 +412,21 @@ export function scoreProgram(program, analysis, strategyOpts = {}) {
 
   // ── Negative match penalty (only hard-gate on truly disqualifying negatives) ──
   const negPenalty = computeNegativePenalty(program, analysis);
-  if (negPenalty <= -100) return null;
+  if (negPenalty <= -100) {
+    // Return a scored sentinel so callers can log the reason rather than silently dropping
+    return {
+      ...program,
+      matchScore: 0,
+      matchReasons: [`Hard-gated: ${NEGATIVE_RULES.find(r => {
+        const k = 'requires' + r.healthRequired.charAt(0).toUpperCase() + r.healthRequired.slice(1).replace(/_([a-z])/g, (_, c) => c.toUpperCase());
+        return program.eligibility?.[k] && !analysis.health?.has(r.healthRequired);
+      })?.label ?? 'condition mismatch'}`],
+      matchedCategories: [],
+      _hardGated: true,
+      _hardGateReason: 'negative_health_mismatch',
+      match_explain: { matchedSignals: [], matchedNeeds: [], matchedNeedTerms: [], scoreBreakdown: { normalized: 0, raw: negPenalty, penalties: negPenalty } },
+    };
+  }
     score += negPenalty;
 
   // ── Military match (5 points) ──
@@ -695,7 +710,12 @@ export function matchPrograms(allPrograms, analysis, options = {}) {
     // Score against profile
     const scored = scoreProgram(program, analysis, strategyOpts);
     if (!scored) { stats.nullScore++; continue; }
-    if (scored.matchScore < minScore) { stats.belowMin++; continue; }
+    if (scored.matchScore < minScore) {
+  stats.belowMin++;
+  if (!stats.filteredLog) stats.filteredLog = [];
+  stats.filteredLog.push({ id: program.id, name: program.name, reason: 'below_min_score', score: scored.matchScore, threshold: minScore });
+  continue;
+}
 
     // Attach strategy context to match_explain
     if (scored.match_explain) {
@@ -704,7 +724,11 @@ export function matchPrograms(allPrograms, analysis, options = {}) {
       scored.match_explain.urlPolicy = {
         urlUsed: scored.url || scored.applicationUrl || null,
         isDirectory: scored.type === 'portal' || scored.type === 'referral',
-        acceptedReason: (scored.url || scored.applicationUrl) ? 'valid_url' : 'no_url',
+        acceptedReason: (() => {
+  const candidate = scored.url || scored.applicationUrl;
+  if (!candidate) return 'no_url';
+  try { new URL(candidate); return 'valid_url'; } catch { return 'invalid_url_format'; }
+})(),
       };
     }
 
