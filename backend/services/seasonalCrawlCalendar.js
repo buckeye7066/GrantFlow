@@ -362,7 +362,7 @@ function isProgramOpenInMonth(program, month) {
     return month >= openMonth && month <= closeMonth
   }
   // Wraps across year boundary
-  return month >= openMonth || month < closeMonth
+  return month >= openMonth || month <= closeMonth
 }
 
 /**
@@ -456,7 +456,12 @@ export function getSeasonalCrawlBoosts(profileContext, month) {
         ? program.states.map((s) => s.toLowerCase())
         : []
       // If profileState is unknown, exclude state-specific programs to avoid wrong-state junk
-      if (!profileState || !programStates.includes(profileState)) return false
+      if (!profileState) {
+  // State unknown â skipping state-specific program to avoid wrong-state matches
+  // (Goal 10: caller should prompt user to complete state field)
+  return false;
+}
+if (!programStates.includes(profileState)) return false
     }
 
     // Profile type filter — if profileTypes list is restrictive, skip non-matching profiles
