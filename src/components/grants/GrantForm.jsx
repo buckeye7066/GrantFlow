@@ -50,7 +50,7 @@ export default function GrantForm({ grant, organization, onSubmit, onCancel, isS
     const handleSubmit = (e) => {
         e.preventDefault();
         // Goal 1: application_url must be a real URL or explicitly absent
-        const trimmedUrl = (formData.url || '').trim();
+        const trimmedUrl = (formData.application_url || '').trim();
         if (trimmedUrl) {
             try {
                 const parsed = new URL(trimmedUrl);
@@ -241,7 +241,7 @@ Return ONLY the JSON object. If you cannot find a specific piece of information,
                         </div>
                     </div>
                     <div className="space-y-2">
-                        <Label htmlFor="url">Application URL</Label>
+                        <Label htmlFor="application_url">Application URL</Label>
                         <Input
                             id="application_url"
                             name="application_url"
