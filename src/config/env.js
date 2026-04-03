@@ -21,6 +21,8 @@ const EnvSchema = z.object({
   VITE_SHOULDERS_VNEXT: z.string().optional(),
   VITE_ANYA_COPILOT_ENABLED: z.string().optional(),
   VITE_ANYA_SCREENSHOT_ENABLED: z.string().optional(),
+  /** Set true to keep calling VITE_API_URL (e.g. Railway) from axiombiolabs production (not recommended). */
+  VITE_FORCE_RAILWAY_API: z.string().optional(),
 })
 
 export const env = (() => {
@@ -35,6 +37,7 @@ export const env = (() => {
     VITE_SHOULDERS_VNEXT: import.meta.env.VITE_SHOULDERS_VNEXT,
     VITE_ANYA_COPILOT_ENABLED: import.meta.env.VITE_ANYA_COPILOT_ENABLED,
     VITE_ANYA_SCREENSHOT_ENABLED: import.meta.env.VITE_ANYA_SCREENSHOT_ENABLED,
+    VITE_FORCE_RAILWAY_API: import.meta.env.VITE_FORCE_RAILWAY_API,
   }
 
   const parsed = EnvSchema.safeParse(raw)
@@ -47,7 +50,23 @@ export const env = (() => {
   const canonicalStrict = String(raw.VITE_CANONICAL_HOST_STRICT || '').toLowerCase() === 'true'
 
   const apiUrlRaw = String(raw.VITE_API_URL || '').trim()
-  const apiUrl = apiUrlRaw ? apiUrlRaw : ''
+  let apiUrl = apiUrlRaw ? apiUrlRaw : ''
+
+  // Production on axiombiolabs: Vercel rewrites `/grantflow/api/*` → Railway. Calling Railway directly
+  // forces cross-origin CORS and surfaces edge 502s as misleading "CORS" errors in DevTools.
+  if (typeof window !== 'undefined') {
+    const forceRailway = String(raw.VITE_FORCE_RAILWAY_API || '').toLowerCase() === 'true'
+    const host = String(window.location.hostname || '')
+    if (
+      !forceRailway &&
+      raw.PROD &&
+      apiUrl &&
+      /railway\.app/i.test(apiUrl) &&
+      /axiombiolabs\.org$/i.test(host)
+    ) {
+      apiUrl = ''
+    }
+  }
 
   const shouldersVnext =
     String(raw.VITE_SHOULDERS_VNEXT || '').trim().toLowerCase() === 'true'
