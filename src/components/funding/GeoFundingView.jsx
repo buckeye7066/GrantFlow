@@ -275,8 +275,6 @@ export default function GeoFundingView({ profileId }) {
     )
   }
 
-  const maxOpportunityCount = states.reduce((max, s) => Math.max(max, s.opportunity_count || 0), 0)
-
   return (
     <div className="space-y-2">
       <div className="flex items-center justify-between mb-4">

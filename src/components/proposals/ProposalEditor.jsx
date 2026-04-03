@@ -17,7 +17,6 @@ import {
   validate,
 } from '@/api/applicationsApi'
 import { downloadAuthenticatedUrl } from '@/utils/authenticatedDownload'
-import { useToast } from '@/components/ui/use-toast'
 
 function slugify(input) {
   return String(input || '')
