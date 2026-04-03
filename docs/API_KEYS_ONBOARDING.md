@@ -51,7 +51,7 @@ This document explains **exactly how to manually obtain API keys** for official 
 
 **Is an API key required?**
 
-- **Public search works without a key**, but **some endpoints require an API key** that you obtain via **Grants.gov Help Desk ticket** (per the Grants.gov API guide and API portal).
+- **Yes.** As of 2026, the `search2` endpoint (`https://api.grants.gov/v1/api/search2`) requires an `X-API-Key` header and returns `401 Unauthorized` without one. Obtain a key via the **Grants.gov Help Desk** (see the API guide linked above) and set it as `GRANTS_GOV_API_KEY`.
 
 **How to obtain (manual)**
 
@@ -67,22 +67,13 @@ This document explains **exactly how to manually obtain API keys** for official 
 
 **Test command**
 
-- Public search (no key) — the grantsws search endpoint is a **POST**:
+- With API key (`X-API-Key` header required since 2026):
 
 ```bash
-curl -X POST "https://apply07.grants.gov/grantsws/rest/opportunities/search" \
+curl -X POST "https://api.grants.gov/v1/api/search2" \
   -H "Accept: application/json" \
   -H "Content-Type: application/json" \
-  -d '{"keyword":"health","oppStatuses":"posted","rows":1,"startRecordNum":0}'
-```
-
-- If you were issued a grantsws key for a protected endpoint, Grants.gov docs commonly show an `Authorization` header of the form `APIKEY=<key>` (do not paste your real key into shell history in shared environments):
-
-```bash
-curl -X POST "https://apply07.grants.gov/grantsws/rest/opportunities/search" \
-  -H "Accept: application/json" \
-  -H "Content-Type: application/json" \
-  -H "Authorization: APIKEY=REDACTED" \
+  -H "X-API-Key: REDACTED" \
   -d '{"keyword":"health","oppStatuses":"posted","rows":1,"startRecordNum":0}'
 ```
 

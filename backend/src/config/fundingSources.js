@@ -32,7 +32,7 @@ export const FUNDING_SOURCES = Object.freeze([
     name: 'Grants.gov REST APIs (grantsws)',
     docs_url: 'https://www.grants.gov/api/api-guide',
     env_vars: ['GRANTS_GOV_API_KEY'],
-    key_required: false,
+    key_required: true,
   },
   {
     id: 'api.data.gov',

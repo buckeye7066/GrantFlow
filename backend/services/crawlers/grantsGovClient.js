@@ -27,6 +27,16 @@ const MAX_ROWS_PER_QUERY = 25
 const SIMPLER_API_KEY = process.env.SIMPLER_GRANTS_API_KEY || ''
 const SIMPLER_API_ENABLED = SIMPLER_API_KEY.length > 0
 
+// Grants.gov legacy search2 API now requires an API key (returns 401 without one).
+// Set GRANTS_GOV_API_KEY in your environment (.env / Railway / Vercel secrets).
+const LEGACY_API_KEY = process.env.GRANTS_GOV_API_KEY || ''
+if (!LEGACY_API_KEY) {
+  console.warn(
+    '[GrantsGovClient] GRANTS_GOV_API_KEY env var is not set; ' +
+      'Grants.gov search2 requests will likely return 401 Unauthorized.',
+  )
+}
+
 // ── Normaliser (both APIs → common shape) ──────────────────────────────────────
 
 function normaliseLegacyHit(hit) {
@@ -135,10 +145,14 @@ async function queryLegacyAPI(keyword, rows = MAX_ROWS_PER_QUERY) {
   }
 
   try {
+    const legacyHeaders = {
+      'Content-Type': 'application/json',
+      ...(LEGACY_API_KEY ? { 'X-API-Key': LEGACY_API_KEY } : {}),
+    }
     const response = await postWithRetry(
       LEGACY_API,
       payload,
-      { headers: { 'Content-Type': 'application/json' } },
+      { headers: legacyHeaders },
       { timeoutMs: API_TIMEOUT_MS, retries: API_RETRIES },
     )
 
