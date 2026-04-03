@@ -2,6 +2,8 @@ import express from 'express'
 import pdfParse from 'pdf-parse'
 import fetch from 'node-fetch'
 import { createOpenAIClient, summarizeOpenAIError } from '../utils/openaiClient.js'
+import { requireAuthenticatedUser } from '../utils/accessControl.js'
+import { standardRateLimiter } from '../middleware/rateLimiting.js'
 
 const router = express.Router()
 
@@ -142,8 +144,10 @@ function heuristicFallback(text) {
 
 // POST /api/parseNOFO
 // Body: { file_url: string, json_schema?: object, is_url?: boolean }
-router.post('/parseNOFO', async (req, res) => {
+router.post('/parseNOFO', standardRateLimiter, async (req, res) => {
   try {
+    const user = requireAuthenticatedUser(req, res)
+    if (!user) return
     const fileUrl = typeof req.body?.file_url === 'string' ? req.body.file_url.trim() : ''
     const schema = req.body?.json_schema && typeof req.body.json_schema === 'object' ? req.body.json_schema : null
     const isUrl = req.body?.is_url === true || req.body?.is_url === 'true'

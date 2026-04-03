@@ -9,11 +9,11 @@ export default function createGeoCrawlRouter({ uploadDir, getOpenAI } = {}) {
 
   async function requireAdmin(req, res) {
     const user = requireAuthenticatedUser(req, res)
-    if (!user) return false
+    if (!user) return null
     const isAdmin = await isAdminUserWithDb(req.db, req.ctx ?? req.user ?? user).catch(() => false)
     if (!isAdmin) {
       res.status(403).json({ error: 'Admin access required' })
-      return false
+      return null
     }
     return user
   }

@@ -234,6 +234,14 @@ router.post('/checkout/hourly', ensureAuth, async (req, res) => {
     return res.status(409).json({ ok: false, error: 'stripe_price_not_mapped', code: 'STRIPE_PRICE_MISSING' })
   }
 
+  // Deduplication: check for an existing pending invoice for this purchase to prevent duplicates.
+  const existingInvoice = await req.db
+    .prepare(`SELECT id FROM hourly_invoices WHERE purchase_id = ? AND status = 'pending' LIMIT 1`)
+    .get(purchaseId)
+  if (existingInvoice) {
+    return res.status(409).json({ ok: false, error: 'invoice_already_pending', code: 'INVOICE_DUPLICATE', invoice_id: existingInvoice.id })
+  }
+
   const invoiceId = crypto.randomUUID()
   const amountCents = Number(priceRow.amount_cents) * units
   await req.db.prepare(

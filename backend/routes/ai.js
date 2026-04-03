@@ -941,22 +941,36 @@ router.post('/portal-assist', enforceTierCapability(TIER_CAPABILITIES.DOCUMENT_A
     // Fetch portal page content if URL given and no content provided
     let portalContent = page_content || '';
     if (!portalContent && portal_url) {
+      let safePortalUrl = null
       try {
-        const resp = await fetch(portal_url, {
-          headers: { 'User-Agent': 'GrantFlow Application Assistant/1.0' },
-          signal: AbortSignal.timeout(15000),
-        });
-        if (resp.ok) {
-          const html = await resp.text();
-          portalContent = html
-            .replace(/<script[\s\S]*?<\/script>/gi, '')
-            .replace(/<style[\s\S]*?<\/style>/gi, '')
-            .replace(/<[^>]+>/g, ' ')
-            .replace(/\s{2,}/g, ' ')
-            .slice(0, 12000);
+        const parsed = new URL(portal_url)
+        // Only allow https:// URLs pointing to public hosts (no internal/private IPs)
+        const hostname = parsed.hostname.toLowerCase()
+        const isPrivate = /^(localhost|127\.\d+\.\d+\.\d+|10\.\d+\.\d+\.\d+|172\.(1[6-9]|2\d|3[01])\.\d+\.\d+|192\.168\.\d+\.\d+|169\.254\.\d+\.\d+|::1|0\.0\.0\.0|fc[0-9a-f]{2}|fd[0-9a-f]{2})/.test(hostname)
+        if (parsed.protocol === 'https:' && !isPrivate) {
+          safePortalUrl = parsed.href
         }
-      } catch (e) {
-        console.warn('[portal-assist] Failed to fetch portal:', e?.message);
+      } catch {
+        // invalid URL — skip fetch
+      }
+      if (safePortalUrl) {
+        try {
+          const resp = await fetch(safePortalUrl, {
+            headers: { 'User-Agent': 'GrantFlow Application Assistant/1.0' },
+            signal: AbortSignal.timeout(15000),
+          });
+          if (resp.ok) {
+            const html = await resp.text();
+            portalContent = html
+              .replace(/<script[\s\S]*?<\/script>/gi, '')
+              .replace(/<style[\s\S]*?<\/style>/gi, '')
+              .replace(/<[^>]+>/g, ' ')
+              .replace(/\s{2,}/g, ' ')
+              .slice(0, 12000);
+          }
+        } catch (e) {
+          console.warn('[portal-assist] Failed to fetch portal:', e?.message);
+        }
       }
     }
 
