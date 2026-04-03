@@ -241,22 +241,27 @@ test('eligibilityFilter hasSourceUrl accepts valid https URL', async () => {
 })
 
 // ──────────────────────────────────────────────────────────────────────────────
-// D-018: mockAI throws in production
+// D-018: mockAI throws in production (check is at call site, not import time)
 // ──────────────────────────────────────────────────────────────────────────────
 test('mockAI throws immediately if NODE_ENV is production', async () => {
-  // The module-level guard throws at import time when NODE_ENV=production.
-  // We use a cache-busting query parameter so Node.js ESM treats it as a fresh module URL.
+  // The guard was moved from module-level into each exported function so the
+  // module can be imported in production without crashing routes that reference
+  // it. The functions must still throw when NODE_ENV=production.
   const original = process.env.NODE_ENV
   try {
     process.env.NODE_ENV = 'production'
-    const uniqueUrl = new URL(
-      `../../backend/services/mockAI.js?nocache=${Date.now()}`,
-      import.meta.url
-    ).href
-    await assert.rejects(
-      () => import(uniqueUrl),
+    const { getMockFieldSuggestion, getMockSectionSuggestion } = await import(
+      '../../backend/services/mockAI.js'
+    )
+    assert.throws(
+      () => getMockFieldSuggestion('f', 'F'),
       (err) => /production/i.test(err?.message ?? ''),
-      'mockAI must throw when NODE_ENV=production'
+      'getMockFieldSuggestion must throw when NODE_ENV=production'
+    )
+    assert.throws(
+      () => getMockSectionSuggestion('s'),
+      (err) => /production/i.test(err?.message ?? ''),
+      'getMockSectionSuggestion must throw when NODE_ENV=production'
     )
   } finally {
     process.env.NODE_ENV = original
