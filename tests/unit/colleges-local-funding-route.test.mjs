@@ -8,6 +8,28 @@ import { spawn } from 'node:child_process'
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
+import { createHmac } from 'node:crypto'
+
+const TEST_JWT_SECRET = 'test-secret'
+
+function base64url(obj) {
+  return Buffer.from(JSON.stringify(obj)).toString('base64url')
+}
+
+function makeAuthToken() {
+  const header = base64url({ alg: 'HS256', typ: 'JWT' })
+  const payload = base64url({
+    sub: 'test-user-id',
+    role: 'user',
+    email: 'test@example.com',
+    iat: Math.floor(Date.now() / 1000),
+    exp: Math.floor(Date.now() / 1000) + 3600,
+  })
+  const sig = createHmac('sha256', TEST_JWT_SECRET)
+    .update(`${header}.${payload}`)
+    .digest('base64url')
+  return `${header}.${payload}.${sig}`
+}
 
 function startServer(extraEnv = {}) {
   const tmp = mkdtempSync(path.join(tmpdir(), 'grantflow-colleges-test-'))
@@ -22,7 +44,7 @@ function startServer(extraEnv = {}) {
       DB_PROVIDER: 'sqlite',
       SQLITE_DB_PATH: dbPath,
       DB_AUTO_MIGRATE: 'true',
-      AUTH_JWT_SECRET: 'test-secret',
+      AUTH_JWT_SECRET: TEST_JWT_SECRET,
       ...extraEnv,
     },
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -79,6 +101,24 @@ async function fetchJson(url, init = {}) {
   return { status: res.status, json }
 }
 
+test('colleges local-funding: 401 when not authenticated', async () => {
+  const srv = startServer()
+  let port
+  try {
+    ;({ port } = await srv.ready)
+  } catch (err) {
+    await srv.stop()
+    throw err
+  }
+
+  try {
+    const { status } = await fetchJson(`http://127.0.0.1:${port}/api/colleges/local-funding?zip=43210`)
+    assert.equal(status, 401)
+  } finally {
+    await srv.stop()
+  }
+})
+
 test('colleges local-funding: 400 when zip missing', async () => {
   const srv = startServer()
   let port
@@ -90,7 +130,9 @@ test('colleges local-funding: 400 when zip missing', async () => {
   }
 
   try {
-    const { status, json } = await fetchJson(`http://127.0.0.1:${port}/api/colleges/local-funding`)
+    const { status, json } = await fetchJson(`http://127.0.0.1:${port}/api/colleges/local-funding`, {
+      headers: { Authorization: `Bearer ${makeAuthToken()}` },
+    })
     assert.equal(status, 400)
     assert.equal(json?.error, 'zip_missing')
   } finally {
@@ -105,6 +147,7 @@ test('colleges local-funding: 400 when zip invalid', async () => {
   try {
     const { status, json } = await fetchJson(
       `http://127.0.0.1:${port}/api/colleges/local-funding?zip=bad`,
+      { headers: { Authorization: `Bearer ${makeAuthToken()}` } },
     )
     assert.equal(status, 400)
     assert.equal(json?.error, 'zip_invalid')
@@ -120,6 +163,7 @@ test('colleges local-funding: 200 with valid zip', async () => {
   try {
     const { status, json } = await fetchJson(
       `http://127.0.0.1:${port}/api/colleges/local-funding?zip=43210`,
+      { headers: { Authorization: `Bearer ${makeAuthToken()}` } },
     )
     assert.equal(status, 200)
     assert.equal(json?.success, true)
@@ -130,3 +174,4 @@ test('colleges local-funding: 200 with valid zip', async () => {
     await srv.stop()
   }
 })
+
