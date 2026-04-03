@@ -83,12 +83,10 @@ describe('Pipeline insertion audit metadata', () => {
       match_confidence: null,
     }
 
-    for (const [key, defaultValue] of Object.entries(auditFields)) {
-      expect(key, `Audit field "${key}" should be defined`).toBeDefined()
-      if (Array.isArray(defaultValue)) {
-        expect(Array.isArray(defaultValue)).toBe(true)
-      } else {
-        expect(defaultValue).toBe(defaultValue) // always true — validates field exists
+    for (const [key] of Object.entries(auditFields)) {
+      expect(auditFields).toHaveProperty(key)
+      if (Array.isArray(auditFields[key])) {
+        expect(Array.isArray(auditFields[key])).toBe(true)
       }
     }
   })

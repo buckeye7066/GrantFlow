@@ -21,7 +21,7 @@ function analyzeCommit({ sha, subject, date, files, patch }) {
 
   // Scope duplicate-declaration detection per file to avoid cross-file false positives.
   const filePatches = patch.split(/^diff --git /m).filter(Boolean)
-  const allDuplicates = new Map()
+  const allDuplicateNames = new Set()
   for (const filePatch of filePatches) {
     const addedLines = getAddedLines(filePatch)
     const declarationCounts = new Map()
@@ -32,12 +32,10 @@ function analyzeCommit({ sha, subject, date, files, patch }) {
       declarationCounts.set(name, (declarationCounts.get(name) || 0) + 1)
     }
     for (const [name, count] of declarationCounts) {
-      if (count > 1) {
-        allDuplicates.set(name, (allDuplicates.get(name) || 0) + count)
-      }
+      if (count > 1) allDuplicateNames.add(name)
     }
   }
-  const duplicateDeclarations = [...allDuplicates.keys()].slice(0, 20)
+  const duplicateDeclarations = [...allDuplicateNames].slice(0, 20)
   if (duplicateDeclarations.length > 0) {
     findings.push(`duplicate_added_declarations:${duplicateDeclarations.join(',')}`)
   }

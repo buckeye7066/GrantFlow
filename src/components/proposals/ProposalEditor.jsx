@@ -372,7 +372,7 @@ export default function ProposalEditor({ grant, organization }) {
                 value={draftContent}
                 onChange={(e) => {
                   // Capture which section this content belongs to at the time of typing.
-                  draftTargetSectionKeyRef.current = activeSectionKey ?? null
+                  draftTargetSectionKeyRef.current = activeSection?.section_key ?? null
                   setDraftContent(e.target.value)
                 }}
                 rows={18}

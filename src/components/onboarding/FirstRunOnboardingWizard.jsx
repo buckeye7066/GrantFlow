@@ -148,7 +148,7 @@ try {
       await upsertProfileSection(profileId, 'basic_information', basicData, 'onboarding-wizard')
 
       const custom = (await apiFetch('/api/preferences'))?.custom_preferences ?? {}
-      // Write normalised need-category tag into the profile so the match engine and
+      // Write normalized need-category tag into the profile so the match engine and
       // crawlers can use it. Apply for all looking_for values including 'general'.
       if (formData.looking_for) {
         const normalisedTag = LOOKING_FOR_TAG_MAP[formData.looking_for] ?? formData.looking_for
