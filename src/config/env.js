@@ -52,19 +52,24 @@ export const env = (() => {
   const apiUrlRaw = String(raw.VITE_API_URL || '').trim()
   let apiUrl = apiUrlRaw ? apiUrlRaw : ''
 
-  // Production on axiombiolabs: Vercel rewrites `/grantflow/api/*` → Railway. Calling Railway directly
-  // forces cross-origin CORS and surfaces edge 502s as misleading "CORS" errors in DevTools.
+  // On axiombiolabs hosts: never use an absolute API URL that points at a different origin than the page.
+  // Vercel rewrites `/grantflow/api/*` → backend; cross-origin fetches get misleading "CORS" on 502s.
   if (typeof window !== 'undefined') {
-    const forceRailway = String(raw.VITE_FORCE_RAILWAY_API || '').toLowerCase() === 'true'
+    const forceExternal = String(raw.VITE_FORCE_RAILWAY_API || '').toLowerCase() === 'true'
     const host = String(window.location.hostname || '')
     if (
-      !forceRailway &&
-      raw.PROD &&
+      !forceExternal &&
       apiUrl &&
-      /railway\.app/i.test(apiUrl) &&
+      /^https?:\/\//i.test(apiUrl) &&
       /axiombiolabs\.org$/i.test(host)
     ) {
-      apiUrl = ''
+      try {
+        if (new URL(apiUrl).origin !== window.location.origin) {
+          apiUrl = ''
+        }
+      } catch {
+        apiUrl = ''
+      }
     }
   }
 
@@ -89,3 +94,41 @@ export const env = (() => {
     anyaScreenshotEnabled: anyaScreenshotEnv,
   }
 })()
+
+/**
+ * Prefix used before `/api/...` in fetch (e.g. `/grantflow` or absolute backend URL).
+ * Re-applies axiombiolabs same-origin guard so APIClient cannot point at Railway when the env object is stale.
+ */
+export function getApiBasePrefixForFetch() {
+  let apiUrl = String(env.apiUrl || '').trim()
+  const appBase = env.appBase && env.appBase !== '/' ? env.appBase : ''
+  if (typeof window !== 'undefined' && apiUrl && /^https?:\/\//i.test(apiUrl)) {
+    const forceExternal = String(import.meta.env.VITE_FORCE_RAILWAY_API || '').toLowerCase() === 'true'
+    const host = String(window.location.hostname || '')
+    if (
+      !forceExternal &&
+      /axiombiolabs\.org$/i.test(host)
+    ) {
+      try {
+        if (new URL(apiUrl).origin !== window.location.origin) {
+          apiUrl = ''
+        }
+      } catch {
+        apiUrl = ''
+      }
+    }
+  }
+  if (apiUrl) return apiUrl.replace(/\/$/, '')
+  return appBase || ''
+}
+
+/** Full URL for OAuth/health helpers when API is same-origin under a path (e.g. /grantflow/api). */
+export function getAbsoluteApiRootForOAuth() {
+  const prefix = getApiBasePrefixForFetch()
+  if (prefix.startsWith('http')) return prefix.replace(/\/$/, '')
+  if (typeof window !== 'undefined') {
+    const path = prefix.startsWith('/') ? prefix : `/${prefix || ''}`
+    return `${window.location.origin}${path}`.replace(/\/$/, '')
+  }
+  return ''
+}

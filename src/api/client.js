@@ -1,4 +1,4 @@
-import { env } from '@/config/env.js'
+import { env, getApiBasePrefixForFetch } from '@/config/env.js'
 import { createLogger } from '@/utils/logger'
 import { toast as showToast } from '@/components/ui/use-toast'
 
@@ -7,7 +7,8 @@ import { toast as showToast } from '@/components/ui/use-toast'
 // Use relative URLs in production (proxied by Vercel) to avoid CORS issues.
 // When the app is served under a base path (e.g. /grantflow), API requests must
 // use that prefix so rewrites like /grantflow/api/:path* reach the backend.
-const API_URL = env.apiUrl || (env.appBase && env.appBase !== '/' ? env.appBase : '')
+// getApiBasePrefixForFetch() re-applies axiombiolabs same-origin rules (never Railway cross-origin).
+const API_URL = getApiBasePrefixForFetch()
 
 // Frontend startup sanity (non-fatal): warn on env drift / misconfiguration.
 if (import.meta.env.DEV) {
