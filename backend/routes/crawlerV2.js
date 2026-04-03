@@ -35,35 +35,16 @@ router.get('/health', async (req, res) => {
       .get()?.count
 
     const staleDays = Math.max(1, Number.parseInt(process.env.CRAWLER_STALE_DAYS || '30', 10) || 30)
-    const stalePredicate =
-      req.db?.dialect === 'postgres'
-        ? `last_verified < (NOW() - (? * INTERVAL '1 day'))`
-        : `DATETIME(last_verified) < DATETIME('now', ?)`
-
-    const staleParam =
-      req.db?.dialect === 'postgres' ? staleDays : `-${staleDays} day`
-
-    const staleA = await req.db
-      .prepare(
-        `
-          SELECT COUNT(*) AS count
-          FROM nf_programs_a
-          WHERE last_verified IS NOT NULL
-            AND ${stalePredicate}
-        `,
-      )
-      .get(staleParam)?.count
-
-    const staleB = await req.db
-      .prepare(
-        `
-          SELECT COUNT(*) AS count
-          FROM nf_programs_b
-          WHERE last_verified IS NOT NULL
-            AND ${stalePredicate}
-        `,
-      )
-      .get(staleParam)?.count
+    const isPostgres = req.db?.dialect === 'postgres'
+    const staleSqlA = isPostgres
+      ? `SELECT COUNT(*) AS count FROM nf_programs_a WHERE last_verified IS NOT NULL AND last_verified < (NOW() - (? * INTERVAL '1 day'))`
+      : `SELECT COUNT(*) AS count FROM nf_programs_a WHERE last_verified IS NOT NULL AND DATETIME(last_verified) < DATETIME('now', ?)`
+    const staleSqlB = isPostgres
+      ? `SELECT COUNT(*) AS count FROM nf_programs_b WHERE last_verified IS NOT NULL AND last_verified < (NOW() - (? * INTERVAL '1 day'))`
+      : `SELECT COUNT(*) AS count FROM nf_programs_b WHERE last_verified IS NOT NULL AND DATETIME(last_verified) < DATETIME('now', ?)`
+    const staleParam = isPostgres ? staleDays : `-${staleDays} day`
+    const staleA = await req.db.prepare(staleSqlA).get(staleParam)?.count
+    const staleB = await req.db.prepare(staleSqlB).get(staleParam)?.count
 
     res.json({
       status: 'ok',

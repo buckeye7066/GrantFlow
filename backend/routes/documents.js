@@ -27,6 +27,14 @@ function getOpenAI() {
 
 const router = express.Router();
 
+// Require authentication for all document routes
+router.use((req, res, next) => {
+  if (!req.ctx?.userId) {
+    return res.status(401).json({ error: 'Not authenticated' });
+  }
+  return next();
+});
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 function getUploadsDir(req) {
