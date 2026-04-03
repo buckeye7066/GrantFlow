@@ -98,6 +98,53 @@ async function main() {
       const pid = String(p.id || '').trim()
       if (!pid) continue
 
+      // Check for in-flight crawler jobs before deletion. If any exist, skip the profile
+      // to avoid orphaning running crawl work or causing FK errors mid-crawl.
+      let inFlightJobs = []
+      try {
+        inFlightJobs = await tx
+          .prepare(
+            `SELECT id, type, status FROM crawler_jobs
+             WHERE profile_id = ? AND status IN ('running', 'queued', 'RUNNING', 'QUEUED')`,
+          )
+          .all(pid)
+      } catch {
+        // tolerate schema drift
+      }
+      if (inFlightJobs.length > 0) {
+        console.warn('[orphan-maint] skipping profile with in-flight crawler jobs', {
+          profile_id: pid,
+          in_flight: inFlightJobs.map((j) => ({ id: j.id, type: j.type, status: j.status })),
+        })
+        continue
+      }
+
+      // Log/archive fingerprint data before deletion so re-evaluation history is not silently lost.
+      try {
+        const profileRow = await tx.prepare('SELECT * FROM profiles WHERE id = ?').get(pid)
+        if (profileRow) {
+          const fingerprintFields = Object.fromEntries(
+            Object.entries(profileRow).filter(([k]) => k.toLowerCase().includes('fingerprint')),
+          )
+          if (Object.keys(fingerprintFields).length > 0) {
+            console.log('[orphan-maint] archiving fingerprint before delete', {
+              profile_id: pid,
+              at: nowIso(),
+              fingerprints: fingerprintFields,
+            })
+          }
+        }
+      } catch {
+        // tolerate schema drift
+      }
+
+      // Explicitly delete from a dedicated fingerprints table if it exists.
+      try {
+        await tx.prepare('DELETE FROM profile_fingerprints WHERE profile_id = ?').run(pid)
+      } catch {
+        // tolerate schema drift (table may not exist)
+      }
+
       // Mark deleted status first (audit-friendly), then tombstone + hard delete.
       try {
         await tx.prepare("UPDATE profiles SET status = 'deleted' WHERE id = ?").run(pid)

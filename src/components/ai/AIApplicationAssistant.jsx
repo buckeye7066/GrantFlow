@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import client from '@/api/client';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
@@ -63,19 +63,7 @@ export default function AIApplicationAssistant({ grant, organization, open, onCl
 
   const runningRef = React.useRef(false);
 
-  useEffect(() => {
-    if (!open) {
-      runningRef.current = false;
-      return;
-    }
-    if (runningRef.current) return;
-    runningRef.current = true;
-    setStep('loading');
-    setError(null);
-    runFullProcess();
-  }, [open, grant?.id]); // re-run when the targeted grant changes
-
-  const runFullProcess = async () => {
+  const runFullProcess = useCallback(async () => {
     try {
       // 1. PARSE INSTRUCTIONS FROM URL
       setStep('parsing');
@@ -324,7 +312,6 @@ const updatePromises = Object.entries(draftResponse)
       data: { draft_content: content }
     })
   );
-await Promise.all(updatePromises);
 
       if (updatePromises.length === 0) {
         console.warn('[AIApplicationAssistant] No draft sections were saved â LLM response keys did not match known section IDs.');
@@ -332,6 +319,8 @@ await Promise.all(updatePromises);
         setStep('error');
         return;
       }
+
+await Promise.all(updatePromises);
 
       // 7. COMPLETE
       setStep('complete');
@@ -346,7 +335,19 @@ await Promise.all(updatePromises);
       setError('An unexpected AI processing error occurred. This could be due to an issue accessing the grant URL, parsing the content, or a problem with the AI model. Please check the grant details and try again.');
       setStep('error');
     }
-  };
+  }, [grant, organization, onClose, createRequirementMutation, createSectionMutation, updateSectionMutation, updateGrantMutation, queryClient, navigate]);
+
+  useEffect(() => {
+    if (!open) {
+      runningRef.current = false;
+      return;
+    }
+    if (runningRef.current) return;
+    runningRef.current = true;
+    setStep('loading');
+    setError(null);
+    runFullProcess();
+  }, [open, grant?.id, runFullProcess]); // re-run when the targeted grant changes
 
   const CurrentIcon = STEPS[step].icon;
   const iconIsSpinning = ['loading', 'parsing', 'creating_blueprint', 'gap_analysis', 'generating_draft', 'saving_draft', 'complete'].includes(step);

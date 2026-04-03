@@ -325,6 +325,8 @@ async function _scheduleCrawlerSmokeJobs({ db, uploadsDir }) {
           VALUES (?, ?, ?, ?, ?)
         `;
 
+  const deleteProfileSql = 'DELETE FROM profiles WHERE id = ?';
+
   const insertDocumentSql =
     db?.dialect === 'postgres'
       ? `
@@ -352,49 +354,60 @@ async function _scheduleCrawlerSmokeJobs({ db, uploadsDir }) {
   try {
     await db
       .prepare(insertProfileSql)
-      .run(profileId, 'GrantFlow Smoke Profile', 'college_student', 'active', JSON.stringify(['student']));
+      .run(profileId, 'GrantFlow Smoke Profile', 'college_student', 'smoke_test', JSON.stringify(['student']));
 
-    await db
-      .prepare(insertDocumentSql)
-      .run(
-        documentId,
-        profileId,
-        `smoke-${suffix}.txt`,
-        'source_material',
-        'GrantFlow smoke document (no PII).',
-        'pending',
-        'draft',
-      );
+    try {
+      await db
+        .prepare(insertDocumentSql)
+        .run(
+          documentId,
+          profileId,
+          `smoke-${suffix}.txt`,
+          'source_material',
+          'GrantFlow smoke document (no PII).',
+          'pending',
+          'draft',
+        );
 
-    await db
-      .prepare(insertJobSql)
-      .run(
-        comprehensiveJobId,
-        'comprehensive',
-        profileId,
-        JSON.stringify({ max_results: 1, match_threshold: 80, save_to_database: false }),
-        'system-smoke',
-      );
+      await db
+        .prepare(insertJobSql)
+        .run(
+          comprehensiveJobId,
+          'comprehensive',
+          profileId,
+          JSON.stringify({ max_results: 1, match_threshold: 80, save_to_database: false }),
+          'system-smoke',
+        );
 
-    await db
-      .prepare(insertJobSql)
-      .run(
-        scholarshipJobId,
-        'scholarship',
-        profileId,
-        JSON.stringify({ limit: 1 }),
-        'system-smoke',
-      );
+      await db
+        .prepare(insertJobSql)
+        .run(
+          scholarshipJobId,
+          'scholarship',
+          profileId,
+          JSON.stringify({ limit: 1, save_to_database: false }),
+          'system-smoke',
+        );
 
-    await db
-      .prepare(insertJobSql)
-      .run(
-        documentIngestJobId,
-        'document_ingest',
-        profileId,
-        JSON.stringify({ document_id: documentId, skip_ai: true }),
-        'system-smoke',
-      );
+      await db
+        .prepare(insertJobSql)
+        .run(
+          documentIngestJobId,
+          'document_ingest',
+          profileId,
+          JSON.stringify({ document_id: documentId, skip_ai: true, save_to_database: false }),
+          'system-smoke',
+        );
+    } catch (jobError) {
+      // If job insertion fails after profile was created, clean up the smoke profile
+      // so it does not persist as an orphan with status 'smoke_test'.
+      try {
+        await db.prepare(deleteProfileSql).run(profileId);
+      } catch {
+        // best-effort cleanup
+      }
+      throw jobError;
+    }
 
     // Fire-and-forget dispatch (non-blocking).
     dispatchCrawlerJob({

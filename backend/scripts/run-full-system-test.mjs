@@ -8,6 +8,7 @@ import { createCrawlerJob } from '../services/crawlerJobCreation.js'
 import { buildProfileContext } from '../services/profileHelpers.js'
 import { saveToProfilePipeline } from '../services/opportunityMatcher.js'
 import { createGeoCrawlRun } from '../services/geoCrawlRunStore.js'
+import { logAuditEvent, AUDIT_CATEGORIES, SEVERITY } from '../services/auditService.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __scriptDir = path.dirname(__filename)
@@ -116,7 +117,29 @@ async function saveJobHighMatchesToPipeline({ jobId, profileId, threshold = 50 }
   }
 
   if (opps.length > 0 && saved === 0) {
-    console.info('[full-test] 0 pipeline inserts', { job_id: jobId, profile_id: profileId, opps: opps.length, eligible, threshold })
+    const suppressionDetails = { job_id: jobId, profile_id: profileId, opps: opps.length, eligible, skipped, threshold }
+    console.info('[full-test] 0 pipeline inserts', suppressionDetails)
+    // Persist suppression evidence to the audit log so it is not lost if stdout is not monitored.
+    try {
+      await logAuditEvent(db, {
+        category: AUDIT_CATEGORIES.CRAWLER,
+        action: 'pipeline_suppression',
+        severity: SEVERITY.WARNING,
+        profileId,
+        resourceType: 'crawler_job',
+        resourceId: jobId,
+        details: {
+          total_found: opps.length,
+          included: saved,
+          eligible,
+          skipped,
+          threshold,
+          reason: 'All discovered opportunities were below match threshold or filtered by pipeline rules',
+        },
+      })
+    } catch (auditErr) {
+      console.warn('[full-test] failed to persist suppression audit event:', auditErr?.message || auditErr)
+    }
   }
 
   return { job_id: jobId, profile_id: profileId, opportunities: opps.length, eligible, saved, skipped, threshold }
@@ -326,6 +349,35 @@ async function main() {
 
     const geoJobId = crypto.randomUUID()
     const geoRunId = crypto.randomUUID()
+
+    // Use the first active profile as the reference profile for the geo crawl so the
+    // crawler and match engine have real profile context (Goal 11, Goal 2).
+    const geoProfile = profiles[0] || null
+    const geoProfileId = geoProfile?.id || null
+
+    // Build profile signals for geo crawl parameters so the comprehensive crawler can
+    // drive search queries and the match engine can compare against real user needs.
+    let geoProfileSignals = {}
+    if (geoProfileId) {
+      try {
+        const geoContext = await buildProfileContext(db, geoProfileId)
+        const s = geoContext?.signals || {}
+        geoProfileSignals = {
+          profile_id: geoProfileId,
+          need_categories: (() => {
+            if (Array.isArray(s.needs)) return s.needs
+            if (s.needs instanceof Set) return Array.from(s.needs)
+            return undefined
+          })(),
+          applicant_type: s.applicantType || geoContext?.profile?.primary_type || undefined,
+          location: s.location && typeof s.location === 'object' ? s.location : undefined,
+        }
+      } catch (ctxErr) {
+        console.warn('[full-test] could not build profile context for geo crawl (continuing):', ctxErr?.message || ctxErr)
+        geoProfileSignals = { profile_id: geoProfileId }
+      }
+    }
+
     const parameters = {
       mode: 'geo',
       geo_run_id: geoRunId,
@@ -339,16 +391,18 @@ async function main() {
       min_sources_per_zip: Number(process.env.GEO_MIN_SOURCES_PER_ZIP ?? 3),
       // Full US runs are long; resumability helps. Profile-zip runs are short; keep resume off by default.
       resume: runAllStates ? true : false,
+      // Profile signals so the crawler and matcher have real user context.
+      ...geoProfileSignals,
     }
 
     await db
       .prepare(
         `
           INSERT INTO crawler_jobs (id, type, status, profile_id, organization_id, parameters, requested_by)
-          VALUES (?, 'comprehensive', 'queued', NULL, NULL, ?, 'admin-script')
+          VALUES (?, 'comprehensive', 'queued', ?, NULL, ?, 'admin-script')
         `,
       )
-      .run(geoJobId, JSON.stringify(parameters))
+      .run(geoJobId, geoProfileId, JSON.stringify(parameters))
 
     // Ensure the run exists before Geo Crawl tries to append events (FK on geo_crawl_events.run_id).
     await createGeoCrawlRun(db, {
