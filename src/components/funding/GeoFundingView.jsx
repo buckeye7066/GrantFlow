@@ -116,6 +116,7 @@ function ZipSection({ zip, county, count, state, profileId, defaultOpen }) {
   })
 
   const opportunities = scoredQuery.data?.data ?? []
+  const totalFound = scoredQuery.data?.total_found ?? null
   const showScore = Boolean(profileId && profileId !== "all")
 
   return (
@@ -151,7 +152,9 @@ function ZipSection({ zip, county, count, state, profileId, defaultOpen }) {
           ) : opportunities.length === 0 ? (
             <div className="px-6 py-4 text-sm text-slate-400">
               {showScore
-                ? "No matches found for your profile in this zip code. Adding details like housing needs, income, military status, or disabilities to your profile often unlocks more results."
+                ? totalFound != null && totalFound > 0
+                  ? `${totalFound} ${totalFound === 1 ? "opportunity" : "opportunities"} found but none matched your profile. Adding details like housing needs, income, military status, or disabilities to your profile often unlocks more results.`
+                  : "No matches found for your profile in this zip code. Adding details like housing needs, income, military status, or disabilities to your profile often unlocks more results."
                 : "No opportunities indexed for this zip code yet."}
             </div>
           ) : (
@@ -171,7 +174,7 @@ function ZipSection({ zip, county, count, state, profileId, defaultOpen }) {
   )
 }
 
-function StateSection({ stateEntry, profileId }) {
+function StateSection({ stateEntry, profileId, maxOpportunityCount = 1 }) {
   const [open, setOpen] = useState(false)
   const { state, opportunity_count, zips } = stateEntry
   const stateName = STATE_NAMES[state] || state
@@ -198,7 +201,7 @@ function StateSection({ stateEntry, profileId }) {
           </div>
         </div>
         <div className="shrink-0 w-20">
-          <Progress value={Math.min(100, (opportunity_count / 50) * 100)} className="h-1.5" />
+          <Progress value={Math.min(100, (opportunity_count / maxOpportunityCount) * 100)} className="h-1.5" />
         </div>
       </button>
 
@@ -230,6 +233,9 @@ export default function GeoFundingView({ profileId }) {
 
   const summary = summaryQuery.data
   const states = summary?.states ?? []
+  const maxOpportunityCount = states.length > 0
+    ? Math.max(...states.map((s) => s.opportunity_count || 0), 1)
+    : 1
 
   if (summaryQuery.isLoading) {
     return (
@@ -286,7 +292,7 @@ export default function GeoFundingView({ profileId }) {
         )}
       </div>
       {states.map((s) => (
-        <StateSection key={s.state} stateEntry={s} profileId={profileId} />
+        <StateSection key={s.state} stateEntry={s} profileId={profileId} maxOpportunityCount={maxOpportunityCount} />
       ))}
     </div>
   )

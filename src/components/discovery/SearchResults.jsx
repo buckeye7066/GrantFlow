@@ -231,7 +231,13 @@ export default function SearchResults({ results = [], profileId, onAddToPipeline
         const result = await onAddToPipeline(opp, { silent: false });
         if (result?.status === 'already') duplicateCount++;
         else if (result?.status === 'added') successCount++;
-        else {
+        else if (result?.status === 'review') {
+          // Marked for human review — not a failure
+          successCount++;
+        } else if (result?.status === 'rejected' || result?.status === 'filtered') {
+          // Rejected/filtered by eligibility rules — not a failure
+          duplicateCount++; // count as non-added, non-failure
+        } else {
           failCount++;
           failedTitles.push(opp?.title || 'Unknown');
         }
@@ -378,6 +384,11 @@ export default function SearchResults({ results = [], profileId, onAddToPipeline
                 {(opp.source || opp.crawler_type) && (
                   <Badge variant="outline" className="text-xs shrink-0">
                     {formatSourceLabel(opp.source || opp.crawler_type)}
+                  </Badge>
+                )}
+                {!opp.application_url && (
+                  <Badge variant="outline" className="text-xs shrink-0 border-amber-300 text-amber-700 bg-amber-50">
+                    No apply link
                   </Badge>
                 )}
                 {(() => {

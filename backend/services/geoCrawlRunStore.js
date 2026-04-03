@@ -15,7 +15,7 @@ async function ensureGeoCrawlSchema(db) {
   if (ensured) return
   if (ensurePromise) return ensurePromise
 
-  ensurePromise = (async () => {
+  const p = (async () => {
     const isPostgres = db?.dialect === 'postgres'
 
     // Runs table
@@ -170,13 +170,14 @@ async function ensureGeoCrawlSchema(db) {
       ensured = true
     } catch (error) {
       // Allow future calls to retry schema creation.
-      ensurePromise = null
+      if (ensurePromise === p) ensurePromise = null
       ensured = false
       console.error('[geoCrawlRunStore] Schema creation failed â future calls will retry:', error?.message || error)
       throw error
     }
   })()
 
+  ensurePromise = p
   return ensurePromise
 }
 
@@ -192,7 +193,7 @@ export async function createGeoCrawlRun(
     db?.dialect === 'postgres'
       ? `
           INSERT INTO geo_crawl_runs (id, created_at, created_by_user_id, status, state, crawler_job_id, last_heartbeat_at)
-          VALUES (?, CURRENT_TIMESTAMP, ?, 'queued', ?, ?, CURRENT_TIMESTAMP)
+          VALUES ($1, CURRENT_TIMESTAMP, $2, 'queued', $3, $4, CURRENT_TIMESTAMP)
         `
       : `
           INSERT INTO geo_crawl_runs (id, created_at, created_by_user_id, status, state, crawler_job_id, last_heartbeat_at)
@@ -212,7 +213,7 @@ export async function markGeoCrawlRunRunning(db, runId) {
           UPDATE geo_crawl_runs
           SET status = 'running',
               last_heartbeat_at = CURRENT_TIMESTAMP
-          WHERE id = ?
+          WHERE id = $1
         `
       : `
           UPDATE geo_crawl_runs
@@ -231,12 +232,12 @@ export async function updateGeoCrawlRunCurrent(db, runId, { state, zip, county, 
     db?.dialect === 'postgres'
       ? `
           UPDATE geo_crawl_runs
-          SET state = COALESCE(?, state),
-              current_zip = ?,
-              current_county = ?,
-              current_source = ?,
+          SET state = COALESCE($1, state),
+              current_zip = $2,
+              current_county = $3,
+              current_source = $4,
               last_heartbeat_at = CURRENT_TIMESTAMP
-          WHERE id = ?
+          WHERE id = $5
         `
       : `
           UPDATE geo_crawl_runs
@@ -257,10 +258,10 @@ export async function incrementGeoCrawlRunCounts(db, runId, { processedZipDelta 
     db?.dialect === 'postgres'
       ? `
           UPDATE geo_crawl_runs
-          SET processed_zip_count = COALESCE(processed_zip_count, 0) + ?,
-              found_opportunity_count = COALESCE(found_opportunity_count, 0) + ?,
+          SET processed_zip_count = COALESCE(processed_zip_count, 0) + $1,
+              found_opportunity_count = COALESCE(found_opportunity_count, 0) + $2,
               last_heartbeat_at = CURRENT_TIMESTAMP
-          WHERE id = ?
+          WHERE id = $3
         `
       : `
           UPDATE geo_crawl_runs
@@ -284,10 +285,10 @@ export async function completeGeoCrawlRun(db, runId, { status = 'complete', erro
     db?.dialect === 'postgres'
       ? `
           UPDATE geo_crawl_runs
-          SET status = ?,
-              last_error = ?,
+          SET status = $1,
+              last_error = $2,
               last_heartbeat_at = CURRENT_TIMESTAMP
-          WHERE id = ?
+          WHERE id = $3
         `
       : `
           UPDATE geo_crawl_runs
@@ -316,7 +317,7 @@ export async function appendGeoCrawlEvent(
     db?.dialect === 'postgres'
       ? `
           INSERT INTO geo_crawl_events (run_id, ts, level, state, zip, county, source, message, found_count_delta)
-          VALUES (?, CURRENT_TIMESTAMP, ?, ?, ?, ?, ?, ?, ?)
+          VALUES ($1, CURRENT_TIMESTAMP, $2, $3, $4, $5, $6, $7, $8)
           RETURNING id
         `
       : `
@@ -343,7 +344,8 @@ export async function getGeoCrawlRun(db, runId) {
     return null
   }
   await ensureGeoCrawlSchema(db)
-  const row = await db.prepare('SELECT * FROM geo_crawl_runs WHERE id = ?').get(runId)
+  const sql = db?.dialect === 'postgres' ? 'SELECT * FROM geo_crawl_runs WHERE id = $1' : 'SELECT * FROM geo_crawl_runs WHERE id = ?'
+  const row = await db.prepare(sql).get(runId)
   return row ?? null
 }
 
@@ -353,7 +355,16 @@ export async function listGeoCrawlEvents(db, runId, { afterId = 0, limit = 200 }
   const lim = Math.max(1, Math.min(500, Number(limit || 200)))
   const after = Math.max(0, Number(afterId || 0))
 
-  const sql = `
+  const sql = db?.dialect === 'postgres'
+    ? `
+    SELECT *
+    FROM geo_crawl_events
+    WHERE run_id = $1
+      AND id > $2
+    ORDER BY id ASC
+    LIMIT $3
+  `
+    : `
     SELECT *
     FROM geo_crawl_events
     WHERE run_id = ?

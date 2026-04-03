@@ -67,6 +67,7 @@ import { createAuthIdentityMiddleware } from './middleware/authIdentity.js';
 import { createEnsureAdminUserMiddleware } from './middleware/ensureAdminUser.js';
 import { createAuthMeRouter } from './routes/authMe.js';
 import { pipelineMonitor, getPipelineHealth } from './middleware/pipelineMonitor.js';
+import { ensureAuth } from './middleware/auth.js';
 import { requestTimeout } from './middleware/requestTimeout.js';
 import { responseCache } from './middleware/responseCache.js';
 import { MAX_JSON_BODY_SIZE } from './config/constants.js';
@@ -551,7 +552,7 @@ app.use('/api/crawler-v2', lazyRouter('./routes/crawlerV2.js'));
 app.use('/api/nf-programs', lazyRouter('./routes/nfPrograms.js'));
 
 // Pipeline stats
-app.get('/api/pipeline/stats', async (req, res) => {
+app.get('/api/pipeline/stats', ensureAuth, async (req, res) => {
   try {
     const rows = await db.prepare(`
       SELECT status, COUNT(*) as count
@@ -618,30 +619,6 @@ app.get('*', spaFallbackLimiter, (req, res, next) => {
 
 // Use centralized error handler middleware
 app.use(errorHandler);
-
-// Error handling for route errors
-app.use((err, req, res, next) => {
-  console.error('[server] Unhandled error:', {
-    message: err.message,
-    stack: err.stack,
-    path: req.path,
-    method: req.method,
-    body: req.body,
-    headers: {
-      'content-type': req.headers['content-type'],
-      'authorization': req.headers.authorization ? '[REDACTED]' : undefined
-    }
-  });
-  
-  const isProduction = process.env.NODE_ENV === 'production';
-  const statusCode = err.statusCode || err.status || 500;
-  
-  res.status(statusCode).json({ 
-    error: isProduction ? 'Internal server error' : err.message,
-    error_type: err.error_type || 'internal_error',
-    ...(isProduction ? {} : { stack: err.stack })
-  });
-});
 
 // 404 handler
 app.use((req, res) => {

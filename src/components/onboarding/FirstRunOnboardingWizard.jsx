@@ -38,6 +38,16 @@ const LOOKING_FOR_OPTIONS = [
   { value: 'general', label: messages.lookingForOptions.general },
 ]
 
+// Maps wizard looking_for values to normalized need-category vocabulary used by the match engine.
+const LOOKING_FOR_TAGS = {
+  scholarships: ['education', 'scholarships'],
+  emergency_help: ['emergency', 'crisis_assistance'],
+  disability: ['disability', 'special_needs'],
+  ministry_nonprofit: ['nonprofit', 'ministry'],
+  medical: ['medical', 'health'],
+  general: [],
+}
+
 const US_STATES = [
   'AL', 'AK', 'AZ', 'AR', 'CA', 'CO', 'CT', 'DE', 'FL', 'GA', 'HI', 'ID', 'IL', 'IN', 'IA', 'KS', 'KY', 'LA', 'ME', 'MD', 'MA', 'MI', 'MN', 'MS', 'MO', 'MT', 'NE', 'NV', 'NH', 'NJ', 'NM', 'NY', 'NC', 'ND', 'OH', 'OK', 'OR', 'PA', 'RI', 'SC', 'SD', 'TN', 'TX', 'UT', 'VT', 'VA', 'WA', 'WV', 'WI', 'WY', 'DC',
 ]
@@ -118,7 +128,7 @@ const inferredType =
     primary_type: inferredType,
     zip: zip,
     state: state,
-    tags: formData.looking_for ? [formData.looking_for] : [],
+    tags: LOOKING_FOR_TAGS[formData.looking_for] ?? [],
   }),
 })
 profileId = created?.id
@@ -138,18 +148,17 @@ try {
       await upsertProfileSection(profileId, 'basic_information', basicData, 'onboarding-wizard')
 
       const custom = (await apiFetch('/api/preferences'))?.custom_preferences ?? {}
-      // Write looking_for intent into the profile tags so match engine and crawlers can use it
-      if (formData.looking_for && formData.looking_for !== 'general') {
-        try {
-          await apiFetch(`/api/profiles/${profileId}`, {
-            method: 'PATCH',
-            body: JSON.stringify({
-              tags: [formData.looking_for],
-            }),
-          })
-        } catch (_intentErr) {
-          // non-fatal: preference still recorded below
-        }
+      // Write normalized need-category tags to the profile so match engine and crawlers can use them.
+      // Always update tags when the wizard completes, including for 'general' (which clears tags).
+      try {
+        await apiFetch(`/api/profiles/${profileId}`, {
+          method: 'PATCH',
+          body: JSON.stringify({
+            tags: LOOKING_FOR_TAGS[formData.looking_for] ?? [],
+          }),
+        })
+      } catch (_intentErr) {
+        // non-fatal: preference still recorded below
       }
 
       await apiFetch('/api/preferences', {

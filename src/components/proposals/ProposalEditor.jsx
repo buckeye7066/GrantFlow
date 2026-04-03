@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -16,6 +16,7 @@ import {
   validate,
 } from '@/api/applicationsApi'
 import { downloadAuthenticatedUrl } from '@/utils/authenticatedDownload'
+import { useToast } from '@/components/ui/use-toast'
 
 function slugify(input) {
   return String(input || '')
@@ -39,6 +40,7 @@ function nextSectionKey(name, existingKeys) {
 
 export default function ProposalEditor({ grant, organization }) {
   const queryClient = useQueryClient()
+  const { toast } = useToast()
 
   const [applicationId, setApplicationId] = useState(null)
   const [activeSectionKey, setActiveSectionKey] = useState(null)
@@ -47,6 +49,9 @@ export default function ProposalEditor({ grant, organization }) {
   const debouncedDraftContent = useDebounce(draftContent, 1000)
   const [showSubmissionAssistant, setShowSubmissionAssistant] = useState(false)
   const [validationResult, setValidationResult] = useState(null)
+  // Track the section key+content at debounce-initiation time to prevent
+  // stale saves writing old content to the wrong section on rapid switching.
+  const pendingSaveRef = useRef(null)
 
   const { data: application, isLoading: isPreparing } = useQuery({
     queryKey: ['applyApplication', grant?.id, organization?.id],
@@ -98,14 +103,34 @@ export default function ProposalEditor({ grant, organization }) {
     },
   })
 
+  // Capture the pending save info when content changes (at debounce-initiation time).
+  useEffect(() => {
+    if (!applicationId || !activeSection) return
+    pendingSaveRef.current = {
+      sectionKey: String(activeSection.section_key),
+      title: activeSection.title ?? null,
+      content: draftContent,
+    }
+  }, [draftContent, applicationId, activeSection?.section_key, activeSection?.title])
+
+  // Cancel any pending debounced save when the active section changes.
+  useEffect(() => {
+    pendingSaveRef.current = null
+  }, [activeSectionKey])
+
   useEffect(() => {
     if (!applicationId) return
     if (!activeSection) return
     if (debouncedDraftContent === (activeSection?.content ?? '')) return
+    // Use the section key+content that was captured when the debounce started,
+    // not the current activeSection (which may have changed during the delay).
+    const pending = pendingSaveRef.current
+    if (!pending) return
+    if (pending.sectionKey !== String(activeSection.section_key)) return
     upsertSectionMutation.mutate({
-      sectionKey: String(activeSection.section_key),
-      title: activeSection.title ?? null,
-      content: debouncedDraftContent,
+      sectionKey: pending.sectionKey,
+      title: pending.title,
+      content: pending.content,
     })
   }, [debouncedDraftContent, applicationId, activeSection?.section_key, activeSection?.content, activeSection?.title])
 
@@ -130,6 +155,12 @@ export default function ProposalEditor({ grant, organization }) {
       if (url) {
         downloadAuthenticatedUrl(url, { fallbackFileName: `application_${applicationId || 'export'}.docx` }).catch((err) => {
           console.error('[ProposalEditor] export download failed', err)
+        })
+      } else {
+        toast({
+          variant: 'destructive',
+          title: 'Export incomplete',
+          description: 'Export completed but no download was available. Please try again.',
         })
       }
     },
