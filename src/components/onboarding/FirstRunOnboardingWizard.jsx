@@ -38,7 +38,9 @@ const LOOKING_FOR_OPTIONS = [
   { value: 'general', label: messages.lookingForOptions.general },
 ]
 
-// Maps wizard looking_for values to normalized need-category vocabulary used by the match engine.
+// Maps wizard looking_for values to normalized need-category vocabulary used by the match engine
+// and crawler signals. This ensures profile tags align with needsTaxonomy need codes so that
+// matching, relevance filtering, and search-plan generation all recognise the user's intent.
 const LOOKING_FOR_TAGS = {
   scholarships: ['education', 'scholarships'],
   emergency_help: ['emergency', 'crisis_assistance'],

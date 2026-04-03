@@ -127,6 +127,9 @@ export default function ProposalEditor({ grant, organization }) {
     const pending = pendingSaveRef.current
     if (!pending) return
     if (pending.sectionKey !== String(activeSection.section_key)) return
+    // Guard: only save if the debounced content matches the captured content.
+    // A mismatch means the section switched mid-debounce — skip to avoid stale writes.
+    if (pending.content !== debouncedDraftContent) return
     upsertSectionMutation.mutate({
       sectionKey: pending.sectionKey,
       title: pending.title,
