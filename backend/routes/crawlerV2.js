@@ -36,32 +36,15 @@ router.get('/health', async (req, res) => {
 
     const staleDays = Math.max(1, Number.parseInt(process.env.CRAWLER_STALE_DAYS || '30', 10) || 30)
     const isPostgres = req.db?.dialect === 'postgres'
-
-    let staleA, staleB
-    if (isPostgres) {
-      staleA = await req.db
-        .prepare(
-          `SELECT COUNT(*) AS count FROM nf_programs_a WHERE last_verified IS NOT NULL AND last_verified < (NOW() - (? * INTERVAL '1 day'))`,
-        )
-        .get(staleDays)?.count
-      staleB = await req.db
-        .prepare(
-          `SELECT COUNT(*) AS count FROM nf_programs_b WHERE last_verified IS NOT NULL AND last_verified < (NOW() - (? * INTERVAL '1 day'))`,
-        )
-        .get(staleDays)?.count
-    } else {
-      const staleParam = `-${staleDays} day`
-      staleA = await req.db
-        .prepare(
-          `SELECT COUNT(*) AS count FROM nf_programs_a WHERE last_verified IS NOT NULL AND DATETIME(last_verified) < DATETIME('now', ?)`,
-        )
-        .get(staleParam)?.count
-      staleB = await req.db
-        .prepare(
-          `SELECT COUNT(*) AS count FROM nf_programs_b WHERE last_verified IS NOT NULL AND DATETIME(last_verified) < DATETIME('now', ?)`,
-        )
-        .get(staleParam)?.count
-    }
+    const staleSqlA = isPostgres
+      ? `SELECT COUNT(*) AS count FROM nf_programs_a WHERE last_verified IS NOT NULL AND last_verified < (NOW() - (? * INTERVAL '1 day'))`
+      : `SELECT COUNT(*) AS count FROM nf_programs_a WHERE last_verified IS NOT NULL AND DATETIME(last_verified) < DATETIME('now', ?)`
+    const staleSqlB = isPostgres
+      ? `SELECT COUNT(*) AS count FROM nf_programs_b WHERE last_verified IS NOT NULL AND last_verified < (NOW() - (? * INTERVAL '1 day'))`
+      : `SELECT COUNT(*) AS count FROM nf_programs_b WHERE last_verified IS NOT NULL AND DATETIME(last_verified) < DATETIME('now', ?)`
+    const staleParam = isPostgres ? staleDays : `-${staleDays} day`
+    const staleA = await req.db.prepare(staleSqlA).get(staleParam)?.count
+    const staleB = await req.db.prepare(staleSqlB).get(staleParam)?.count
 
     res.json({
       status: 'ok',
