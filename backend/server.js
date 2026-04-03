@@ -168,11 +168,57 @@ const defaultCorsOrigins = [
 const configuredCorsOrigins = Array.isArray(ENV?.corsOrigins) && ENV.corsOrigins.length > 0 ? ENV.corsOrigins : [];
 const effectiveCorsOrigins = Array.from(new Set([...defaultCorsOrigins, ...configuredCorsOrigins]));
 
+function normalizeCorsOrigin(origin) {
+  if (!origin || typeof origin !== 'string') return null;
+  try {
+    return new URL(origin).origin;
+  } catch {
+    return origin.replace(/\/$/, '');
+  }
+}
+
+const allowedOriginSet = new Set(effectiveCorsOrigins.map((o) => normalizeCorsOrigin(o)).filter(Boolean));
+
+function isOriginAllowed(requestOrigin) {
+  if (!requestOrigin) return true; // same-origin / curl / non-browser
+  const n = normalizeCorsOrigin(requestOrigin);
+  if (!n) return false;
+  if (allowedOriginSet.has(n)) return true;
+  // Any HTTPS host under axiombiolabs.org (app, www, future subdomains)
+  if (/^https:\/\/([a-z0-9-]+\.)*axiombiolabs\.org$/i.test(n)) return true;
+  return false;
+}
+
 const corsOptions = {
-  origin: effectiveCorsOrigins,
+  origin(origin, callback) {
+    if (!origin) {
+      callback(null, true);
+      return;
+    }
+    if (isOriginAllowed(origin)) {
+      callback(null, true);
+      return;
+    }
+    console.warn('[cors] blocked Origin:', origin);
+    callback(null, false);
+  },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Admin-Token', 'X-Anya-Token', 'X-Profile-Id', 'X-Request-Id'],
+  allowedHeaders: [
+    'Content-Type',
+    'Authorization',
+    'X-Admin-Token',
+    'X-Anya-Token',
+    'X-Profile-Id',
+    'X-Request-Id',
+    'Accept',
+    'Origin',
+    'X-Requested-With',
+    'Cache-Control',
+    'Pragma',
+  ],
+  exposedHeaders: ['X-Request-Id'],
+  maxAge: 86_400,
 };
 
 app.use(cors(corsOptions));
@@ -700,10 +746,7 @@ if (process.env.NODE_ENV !== 'test') {
   });
 
   server.on('listening', () => {
-    const loggedCorsOrigins = Array.isArray(corsOptions.origin)
-      ? corsOptions.origin
-      : [corsOptions.origin];
-    console.log(`CORS origins: ${loggedCorsOrigins.join(', ')}`);
+    console.log(`CORS allowlist + axiombiolabs.org: ${effectiveCorsOrigins.join(', ')}`);
     const actualPort = server.address()?.port ?? PORT;
     console.log('[Server] Ready on port', actualPort);
 
@@ -875,7 +918,7 @@ if (process.env.NODE_ENV !== 'test') {
     // All startup tasks (pipeline self-check, feature flags, smoke crawlers,
     // auto-dedupe, audit log, Anya scheduler, CodeGuard audit, national
     // programs) are handled by the single canonical entry point.
-    startBackgroundServices({ db, uploadsDir, actualPort, loggedCorsOrigins });
+    startBackgroundServices({ db, uploadsDir, actualPort, loggedCorsOrigins: effectiveCorsOrigins });
   });
 } else {
   console.info('[server] NODE_ENV=test; HTTP listener disabled')

@@ -2,6 +2,7 @@ import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { Facebook, Loader2, Globe, AlertCircle, RefreshCw } from 'lucide-react'
 import { useState, useCallback } from 'react'
+import { getAbsoluteApiRootForOAuth } from '@/config/env.js'
 
 const PROVIDERS = [
   {
@@ -32,8 +33,7 @@ function buildRedirectTo(appBase) {
 }
 
 function buildAuthStartUrl(providerId, redirectTo) {
-  const apiBase = (import.meta.env.VITE_API_URL || '').replace(/\/$/, '')
-  const base = apiBase || (typeof window !== 'undefined' ? window.location.origin : '')
+  const base = getAbsoluteApiRootForOAuth()
   return `${base}/api/auth/${providerId}/start?redirect_to=${encodeURIComponent(redirectTo)}`
 }
 
@@ -42,9 +42,8 @@ function buildAuthStartUrl(providerId, redirectTo) {
  */
 async function checkBackendHealth() {
   try {
-    const apiBase = (import.meta.env.VITE_API_URL || '').replace(/\/$/, '')
-    const base = apiBase || (typeof window !== 'undefined' ? window.location.origin : '')
-    const response = await fetch(`${base}/health`, { 
+    const base = getAbsoluteApiRootForOAuth()
+    const response = await fetch(`${base}/api/health`, {
       method: 'GET',
       signal: AbortSignal.timeout(5000) // 5 second timeout
     })
@@ -119,23 +118,21 @@ export default function SocialSignInButtons({ onComplete: _onComplete }) {
       const redirectTo = buildRedirectTo(APP_BASE)
       const startUrl = buildAuthStartUrl(provider.id, redirectTo)
 
-      // Guard: only navigate to same-origin or explicitly trusted API origin
-      // Derive the API origin (scheme+host+port only) from VITE_API_URL when set
-      let apiOrigin = ''
-      const rawApiUrl = (import.meta.env.VITE_API_URL || '').replace(/\/$/, '')
-      if (rawApiUrl) {
+      // Guard: same-origin, or explicit VITE_API_URL origin when VITE_FORCE_RAILWAY_API is set
+      const parsedStart = new URL(startUrl)
+      const forceExternal = String(import.meta.env.VITE_FORCE_RAILWAY_API || '').toLowerCase() === 'true'
+      let trustedExternal = ''
+      if (forceExternal && import.meta.env.VITE_API_URL) {
         try {
-          apiOrigin = new URL(rawApiUrl).origin
+          trustedExternal = new URL(String(import.meta.env.VITE_API_URL).trim()).origin
         } catch {
-          console.warn('[SocialSignIn] VITE_API_URL is not a valid URL, ignoring for origin guard:', rawApiUrl)
+          /* ignore */
         }
       }
-      const allowedOrigins = [
-        window.location.origin,
-        apiOrigin,
-      ].filter(Boolean)
-      const parsedStart = new URL(startUrl)
-      if (!allowedOrigins.includes(parsedStart.origin)) {
+      const allowed =
+        parsedStart.origin === window.location.origin ||
+        (forceExternal && trustedExternal && parsedStart.origin === trustedExternal)
+      if (!allowed) {
         throw new Error(`Untrusted redirect origin: ${parsedStart.origin}`)
       }
 

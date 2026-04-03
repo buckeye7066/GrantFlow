@@ -72,6 +72,7 @@ function canAccessProfileRowFromCtx(ctx, profileRow) {
   if (!profileRow) return false
   if (canAccessProfileIdFromCtx(ctx, profileRow.id)) return true
   if (ctx?.userId && profileRow.user_id && String(ctx.userId) === String(profileRow.user_id)) return true
+  if (ctx?.userId && profileRow.created_by && String(ctx.userId) === String(profileRow.created_by)) return true
   return false
 }
 
@@ -90,8 +91,11 @@ router.param('id', async (req, res, next, id) => {
 
     // As a last resort, verify ownership by userId (covers cases where access sets are empty/unavailable).
     if (req.ctx?.userId) {
-      const row = await req.db.prepare('SELECT user_id FROM profiles WHERE id = ?').get(String(id))
+      const row = await req.db
+        .prepare('SELECT user_id, created_by FROM profiles WHERE id = ?')
+        .get(String(id))
       if (row?.user_id && String(row.user_id) === String(req.ctx.userId)) return next()
+      if (row?.created_by && String(row.created_by) === String(req.ctx.userId)) return next()
     }
 
     return res.status(403).json({ error: 'Not authorized to access this profile' })
@@ -359,11 +363,27 @@ router.get('/', listProfilesLimiter, async (req, res) => {
     // Canonical truth is req.ctx, but harden against any transient ctx-building issues
     // by falling back to a DB-backed admin check (never token-only).
     const user = req.user ?? { role: 'guest' }
-    const isAdmin = req.ctx?.isAdmin === true ? true : await isAdminUserWithDb(req.db, user)
+    let isAdmin = req.ctx?.isAdmin === true ? true : await isAdminUserWithDb(req.db, user)
     const includeSummary = req.query.summary === 'true'
     const includeDeleted = req.query.includeDeleted === 'true'
     const scopeMine = req.query.scope === 'mine' || req.query.mine === 'true'
     const userId = req.ctx?.userId ?? getAuthUserId(user) ?? null
+
+    // Resolve accessible profile IDs once. `null` from getAccessibleProfileIds means admin (all profiles).
+    // If ctx missed admin but the DB says admin, upgrade `isAdmin` before pagination so admins get limit=1000.
+    let resolvedAccessibleIds = req.ctx?.accessibleProfileIds
+    if (!isAdmin && !scopeMine) {
+      if (resolvedAccessibleIds == null) {
+        try {
+          resolvedAccessibleIds = await getAccessibleProfileIds(req.db, user)
+        } catch {
+          resolvedAccessibleIds = new Set()
+        }
+      }
+      if (resolvedAccessibleIds === null) {
+        isAdmin = true
+      }
+    }
 
     // Validate pagination parameters.
     // For admins, default to the max page size unless a limit is explicitly provided.
@@ -393,6 +413,14 @@ router.get('/', listProfilesLimiter, async (req, res) => {
         const owned = await req.db.prepare('SELECT id FROM profiles WHERE user_id = ?').all(String(userId))
         for (const row of owned || []) {
           if (row?.id) ids.add(String(row.id))
+        }
+        try {
+          const created = await req.db.prepare('SELECT id FROM profiles WHERE created_by = ?').all(String(userId))
+          for (const row of created || []) {
+            if (row?.id) ids.add(String(row.id))
+          }
+        } catch {
+          // ignore schema drift
         }
       }
 
@@ -480,18 +508,7 @@ router.get('/', listProfilesLimiter, async (req, res) => {
       // This includes ownership (profiles.user_id) AND shared access via profile_emails.
       if (!userId) return res.status(401).json({ error: 'Authentication required' })
 
-      // Prefer the canonical access set computed by requestContext.
-      // If it's missing for some reason, recompute it (still DB-backed and safe).
-      let accessibleProfileIds = req.ctx?.accessibleProfileIds
-      if (accessibleProfileIds == null) {
-        try {
-          accessibleProfileIds = await getAccessibleProfileIds(req.db, user)
-        } catch {
-          accessibleProfileIds = new Set()
-        }
-      }
-
-      const ids = accessibleProfileIds instanceof Set ? Array.from(accessibleProfileIds) : []
+      const ids = resolvedAccessibleIds instanceof Set ? Array.from(resolvedAccessibleIds) : []
 
       if (ids.length === 0) {
         return res.json([])
