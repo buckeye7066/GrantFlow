@@ -6,14 +6,15 @@
  * @deprecated Use real AI service instead
  */
 
-const isDevelopment = process.env.NODE_ENV === 'development' || process.env.ALLOW_MOCK_AI === 'true';
-
-if (process.env.NODE_ENV === 'production' && process.env.ALLOW_MOCK_AI !== 'true') {
-  throw new Error('mockAI must not be loaded in production — set ALLOW_MOCK_AI=true to override');
+function assertNotProduction() {
+  if (process.env.NODE_ENV === 'production' && process.env.ALLOW_MOCK_AI !== 'true') {
+    throw new Error('mockAI must not be used in production — set ALLOW_MOCK_AI=true to override');
+  }
 }
 
 export function getMockFieldSuggestion(fieldName, fieldLabel) {
-  console.warn('[MOCK AI] Using mock suggestion for:', fieldName, 'â NOT grounded in real profile data. For development/test only.');
+  assertNotProduction();
+  console.warn('[MOCK AI] Using mock suggestion for:', fieldName, '— NOT grounded in real profile data. For development/test only.');
   
   // Return clearly-labelled placeholder text so callers and testers can
   // identify mock data at a glance. Never return fake statistics or
@@ -22,7 +23,8 @@ export function getMockFieldSuggestion(fieldName, fieldLabel) {
 }
 
 export function getMockSectionSuggestion(sectionKey) {
-  console.warn('[MOCK AI] Using mock section suggestion for:', sectionKey, 'â NOT grounded in real profile data. For development/test only.');
+  assertNotProduction();
+  console.warn('[MOCK AI] Using mock section suggestion for:', sectionKey, '— NOT grounded in real profile data. For development/test only.');
   
   // Return an empty object so callers receive a safe, schema-compatible
   // response without injecting fabricated demographics into the profile
