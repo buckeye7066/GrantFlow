@@ -33,6 +33,16 @@ import {
 } from '../geoCrawlRunStore.js'
 import { resolveCountyForZip } from '../geo/zipCountyResolver.js'
 
+// Grants.gov API key — required since the search2 endpoint started returning 401 Unauthorized.
+// Set GRANTS_GOV_API_KEY in your environment (.env / Railway / Vercel secrets).
+const GRANTS_GOV_API_KEY = process.env.GRANTS_GOV_API_KEY || ''
+if (!GRANTS_GOV_API_KEY) {
+  console.warn(
+    '[GeoCrawl] GRANTS_GOV_API_KEY env var is not set; ' +
+      'Grants.gov search2 requests will likely return 401 Unauthorized.',
+  )
+}
+
 // All US ZIP codes (~43k total).
 // We load from the local `zipcodes` dataset to avoid network lookups.
 // NOTE: This list is used when Geo Crawl is run without a state scope.
@@ -430,7 +440,7 @@ async function searchGrantsGovByZip(zip, coords) {
   const opportunities = []
   
   try {
-    // Grants.gov "search2" public API (2026).
+    // Grants.gov "search2" API (requires X-API-Key since 2026).
     // Docs: https://api.grants.gov/v1/api/search2
     const body = {
       rows: 10,
@@ -441,7 +451,10 @@ async function searchGrantsGovByZip(zip, coords) {
     }
 
     const response = await axios.post('https://api.grants.gov/v1/api/search2', body, {
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        ...(GRANTS_GOV_API_KEY ? { 'X-API-Key': GRANTS_GOV_API_KEY } : {}),
+      },
       timeout: DEFAULT_CONFIG.timeout_ms,
     })
 

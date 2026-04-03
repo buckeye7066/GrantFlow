@@ -5,17 +5,26 @@
  * API Documentation: https://www.grants.gov/web/grants/xml-web-services.html
  * Base URL: https://www.grants.gov/grantsws/rest
  * 
- * LEGAL: Public API, free to use for legitimate grant searching
+ * NOTE: The search2 endpoint requires an X-API-Key header since 2026 (401 without it).
  * RATE LIMIT: Not explicitly documented, use conservative 1 req/sec
  * TOS: https://www.grants.gov/web/grants/support/terms-of-use.html
  */
 
 import fetch from 'node-fetch';
 
-// Public, unauthenticated endpoint (no API keys, no auth headers).
+// Grants.gov search2 endpoint — now requires an API key (returns 401 without one).
+// Set GRANTS_GOV_API_KEY in your environment (.env / Railway / Vercel secrets).
 const SEARCH2_URL = 'https://api.grants.gov/v1/api/search2';
 const BASE_URL = 'https://www.grants.gov/grantsws/rest';
 const RATE_LIMIT_MS = 1000; // 1 second between requests
+
+const GRANTS_GOV_API_KEY = process.env.GRANTS_GOV_API_KEY || ''
+if (!GRANTS_GOV_API_KEY) {
+  console.warn(
+    '[grants.gov] GRANTS_GOV_API_KEY env var is not set; ' +
+      'Grants.gov search2 requests will likely return 401 Unauthorized.',
+  )
+}
 
 let lastRequestTime = 0;
 
@@ -80,6 +89,7 @@ export async function searchOpportunities(params = {}) {
       headers: {
         Accept: 'application/json',
         'Content-Type': 'application/json',
+        ...(GRANTS_GOV_API_KEY ? { 'X-API-Key': GRANTS_GOV_API_KEY } : {}),
       },
       body: JSON.stringify(searchPayload),
       returnMeta: true,
