@@ -7,8 +7,16 @@
 import express from 'express'
 import zipcodes from 'zipcodes'
 import { trustedOriginClause, trustedSourceClause } from '../utils/recordOrigins.js'
+import { requireAuthenticatedUser } from '../utils/accessControl.js'
+import { standardRateLimiter } from '../middleware/rateLimiting.js'
 
 const router = express.Router()
+
+router.use(standardRateLimiter, (req, res, next) => {
+  const user = requireAuthenticatedUser(req, res)
+  if (!user) return
+  next()
+})
 
 const REQUEST_ID_HEADER = 'x-request-id'
 

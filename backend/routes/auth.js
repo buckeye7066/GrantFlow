@@ -206,6 +206,13 @@ const phoneStartLimiter = rateLimit({
   legacyHeaders: false,
 })
 
+const passwordRateLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: Number.parseInt(process.env.AUTH_PASSWORD_RATE_LIMIT ?? '5', 10),
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+})
+
 function normalizeEmail(email = '') {
   return email.trim().toLowerCase()
 }
@@ -2413,7 +2420,7 @@ router.post('/access/check', async (req, res) => {
   }
 })
 
-router.post('/password/setup/start', async (req, res) => {
+router.post('/password/setup/start', passwordRateLimiter, async (req, res) => {
   try {
     await ensurePasswordAuthSchema(req.db)
 
@@ -2594,7 +2601,7 @@ router.post('/password/setup/start', async (req, res) => {
 })
 
 // Password reset: always send a one-time link (even if a password already exists).
-router.post('/password/reset/start', async (req, res) => {
+router.post('/password/reset/start', passwordRateLimiter, async (req, res) => {
   try {
     await ensurePasswordAuthSchema(req.db)
 
@@ -2710,7 +2717,7 @@ router.post('/password/reset/start', async (req, res) => {
   }
 })
 
-router.post('/password/setup/complete', async (req, res) => {
+router.post('/password/setup/complete', passwordRateLimiter, async (req, res) => {
   try {
     await ensurePasswordAuthSchema(req.db)
 
@@ -2797,7 +2804,7 @@ router.post('/password/setup/complete', async (req, res) => {
   }
 })
 
-router.post('/password/login', async (req, res) => {
+router.post('/password/login', passwordRateLimiter, async (req, res) => {
   try {
     await ensurePasswordAuthSchema(req.db)
 

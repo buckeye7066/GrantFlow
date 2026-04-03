@@ -63,7 +63,7 @@ function normalizeMilestone(row) {
 export async function fetchReminderSnapshot(db, lookaheadDays = DAYS_LOOKAHEAD, options = {}) {
   const organizationIds =
     options && Array.isArray(options.organizationIds) 
-      ? options.organizationIds.filter(id => id != null && typeof id === 'number')
+      ? options.organizationIds.filter(id => id != null && (typeof id === 'number' || typeof id === 'string'))
       : null
 
   // Compute date window boundaries in JavaScript

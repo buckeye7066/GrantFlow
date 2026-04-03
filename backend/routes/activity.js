@@ -1,7 +1,15 @@
 import express from 'express'
 import { AUDIT_CATEGORIES, SEVERITY, logAuditEvent } from '../services/auditService.js'
+import { requireAuthenticatedUser } from '../utils/accessControl.js'
+import { standardRateLimiter } from '../middleware/rateLimiting.js'
 
 const router = express.Router()
+
+router.use(standardRateLimiter, (req, res, next) => {
+  const user = requireAuthenticatedUser(req, res)
+  if (!user) return
+  next()
+})
 
 function isAuthenticatedFromCtx(ctx) {
   return Boolean(ctx && (ctx.userId || ctx.activeProfileId || ctx.email))

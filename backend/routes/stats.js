@@ -1,4 +1,6 @@
 import express from 'express'
+import { requireAuthenticatedUser } from '../utils/accessControl.js'
+import { standardRateLimiter } from '../middleware/rateLimiting.js'
 
 const router = express.Router()
 
@@ -21,8 +23,11 @@ const MARKETING_STATS = {
  * - Admin users see real database stats
  * - Regular users see marketing stats
  */
-router.get('/dashboard', async (req, res) => {
+router.get('/dashboard', standardRateLimiter, async (req, res) => {
   try {
+    const user = requireAuthenticatedUser(req, res)
+    if (!user) return
+
     const isAdmin = Boolean(req.ctx?.isAdmin)
 
     if (isAdmin) {
