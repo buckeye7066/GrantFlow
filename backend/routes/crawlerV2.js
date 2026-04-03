@@ -35,35 +35,33 @@ router.get('/health', async (req, res) => {
       .get()?.count
 
     const staleDays = Math.max(1, Number.parseInt(process.env.CRAWLER_STALE_DAYS || '30', 10) || 30)
-    const stalePredicate =
-      req.db?.dialect === 'postgres'
-        ? `last_verified < (NOW() - (? * INTERVAL '1 day'))`
-        : `DATETIME(last_verified) < DATETIME('now', ?)`
+    const isPostgres = req.db?.dialect === 'postgres'
 
-    const staleParam =
-      req.db?.dialect === 'postgres' ? staleDays : `-${staleDays} day`
-
-    const staleA = await req.db
-      .prepare(
-        `
-          SELECT COUNT(*) AS count
-          FROM nf_programs_a
-          WHERE last_verified IS NOT NULL
-            AND ${stalePredicate}
-        `,
-      )
-      .get(staleParam)?.count
-
-    const staleB = await req.db
-      .prepare(
-        `
-          SELECT COUNT(*) AS count
-          FROM nf_programs_b
-          WHERE last_verified IS NOT NULL
-            AND ${stalePredicate}
-        `,
-      )
-      .get(staleParam)?.count
+    let staleA, staleB
+    if (isPostgres) {
+      staleA = await req.db
+        .prepare(
+          `SELECT COUNT(*) AS count FROM nf_programs_a WHERE last_verified IS NOT NULL AND last_verified < (NOW() - (? * INTERVAL '1 day'))`,
+        )
+        .get(staleDays)?.count
+      staleB = await req.db
+        .prepare(
+          `SELECT COUNT(*) AS count FROM nf_programs_b WHERE last_verified IS NOT NULL AND last_verified < (NOW() - (? * INTERVAL '1 day'))`,
+        )
+        .get(staleDays)?.count
+    } else {
+      const staleParam = `-${staleDays} day`
+      staleA = await req.db
+        .prepare(
+          `SELECT COUNT(*) AS count FROM nf_programs_a WHERE last_verified IS NOT NULL AND DATETIME(last_verified) < DATETIME('now', ?)`,
+        )
+        .get(staleParam)?.count
+      staleB = await req.db
+        .prepare(
+          `SELECT COUNT(*) AS count FROM nf_programs_b WHERE last_verified IS NOT NULL AND DATETIME(last_verified) < DATETIME('now', ?)`,
+        )
+        .get(staleParam)?.count
+    }
 
     res.json({
       status: 'ok',

@@ -992,31 +992,17 @@ export async function adminDbStats(_params, context) {
     })
 
     // Recent activity
-    const since24hPredicate =
-      db?.dialect === 'postgres'
-        ? `created_at >= (NOW() - INTERVAL '24 hours')`
-        : `created_at >= datetime('now', '-24 hours')`
+    const isPostgres = db?.dialect === 'postgres'
+    const recentCrawlersSql = isPostgres
+      ? `SELECT status, COUNT(*) as count FROM crawler_jobs WHERE created_at >= (NOW() - INTERVAL '24 hours') GROUP BY status`
+      : `SELECT status, COUNT(*) as count FROM crawler_jobs WHERE created_at >= datetime('now', '-24 hours') GROUP BY status`
+    const recentSessionsSql = isPostgres
+      ? `SELECT COUNT(*) as count FROM anya_sessions WHERE created_at >= (NOW() - INTERVAL '24 hours')`
+      : `SELECT COUNT(*) as count FROM anya_sessions WHERE created_at >= datetime('now', '-24 hours')`
 
-    const recentCrawlers = await db
-      .prepare(
-        `
-          SELECT status, COUNT(*) as count
-          FROM crawler_jobs
-          WHERE ${since24hPredicate}
-          GROUP BY status
-        `,
-      )
-      .all()
+    const recentCrawlers = await db.prepare(recentCrawlersSql).all()
 
-    const recentSessions = await db
-      .prepare(
-        `
-          SELECT COUNT(*) as count
-          FROM anya_sessions
-          WHERE ${since24hPredicate}
-        `,
-      )
-      .get()
+    const recentSessions = await db.prepare(recentSessionsSql).get()
 
     return {
       database: db?.dialect === 'postgres' ? 'PostgreSQL' : 'SQLite',

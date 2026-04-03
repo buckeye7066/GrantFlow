@@ -137,7 +137,6 @@ router.post('/comprehensiveMatch', async (req, res) => {
     // Build the query: pull state + national + NULL state for relatable funding (no RANDOM).
     // Goal: real funding sources for profile needs — candidates are geographically relevant, then scored by profile signals.
     const candidateLimit = 3000;
-    const candidateStatePlaceholders = profileStates.length > 0 ? profileStates.map(() => '?').join(',') : null;
     let query =
       req.db?.dialect === 'postgres'
         ? 'SELECT * FROM funding_opportunities WHERE is_active = TRUE'
@@ -151,13 +150,13 @@ router.post('/comprehensiveMatch', async (req, res) => {
     const isNationalSort = req.db?.dialect === 'postgres'
       ? "(is_national = TRUE OR state = 'nationwide')"
       : "(is_national = 1 OR state = 'nationwide')";
-    const stateOrderClause = profileStates.length > 0
-      ? `CASE WHEN state IN (${'?,'.repeat(profileStates.length).slice(0,-1)}) THEN 0 ELSE 1 END, `
+    // Validate state codes (2 uppercase letters) before embedding in ORDER BY.
+    // This avoids a second params.push while keeping state-priority ordering safe.
+    const validStatePattern = /^[A-Z]{2}$/;
+    const safeStates = profileStates.filter(s => typeof s === 'string' && validStatePattern.test(s));
+    const stateOrderClause = safeStates.length > 0
+      ? `CASE WHEN state IN (${safeStates.map(s => `'${s}'`).join(',')}) THEN 0 ELSE 1 END, `
       : '';
-    // Append profileStates again for the ORDER BY CASE placeholders
-    if (profileStates.length > 0) {
-      params.push(...profileStates);
-    }
     query += ` ORDER BY ${stateOrderClause}CASE WHEN ${isNationalSort} THEN 0 ELSE 1 END, CASE WHEN ${deadlineNullSort} THEN 0 ELSE 1 END, deadline ASC, updated_at DESC LIMIT ${candidateLimit}`;
 
     const opportunities = req.db.prepare(query).all(...params);
@@ -319,8 +318,8 @@ router.post('/searchOpportunities', async (req, res) => {
     const params = [];
     const isPostgres = req.db?.dialect === 'postgres';
 
-    const activeVal = isPostgres ? 'TRUE' : '1'
-    conditions.push(`is_active = ${activeVal}`);
+    conditions.push('is_active = ?');
+    params.push(isPostgres ? true : 1);
     conditions.push(trustedOriginClause());
     conditions.push(trustedSourceClause());
 
