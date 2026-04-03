@@ -231,7 +231,10 @@ export default function SearchResults({ results = [], profileId, onAddToPipeline
         const result = await onAddToPipeline(opp, { silent: false });
         if (result?.status === 'already') duplicateCount++;
         else if (result?.status === 'added') successCount++;
-        else {
+        else if (['filtered', 'rejected', 'ineligible', 'skipped'].includes(result?.status)) {
+          // Valid non-error outcomes: not added but not a pipeline error.
+          duplicateCount++;
+        } else {
           failCount++;
           failedTitles.push(opp?.title || 'Unknown');
         }

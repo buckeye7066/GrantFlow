@@ -38,6 +38,16 @@ const LOOKING_FOR_OPTIONS = [
   { value: 'general', label: messages.lookingForOptions.general },
 ]
 
+// Map raw looking_for values to normalised need-category tags used by the matching engine.
+const LOOKING_FOR_TAG_MAP = {
+  scholarships: 'education_scholarship',
+  emergency_help: 'emergency_financial_assistance',
+  disability: 'disability_assistance',
+  ministry_nonprofit: 'nonprofit_capacity_building',
+  medical: 'health_medical',
+  general: 'general_funding',
+}
+
 const US_STATES = [
   'AL', 'AK', 'AZ', 'AR', 'CA', 'CO', 'CT', 'DE', 'FL', 'GA', 'HI', 'ID', 'IL', 'IN', 'IA', 'KS', 'KY', 'LA', 'ME', 'MD', 'MA', 'MI', 'MN', 'MS', 'MO', 'MT', 'NE', 'NV', 'NH', 'NJ', 'NM', 'NY', 'NC', 'ND', 'OH', 'OK', 'OR', 'PA', 'RI', 'SC', 'SD', 'TN', 'TX', 'UT', 'VT', 'VA', 'WA', 'WV', 'WI', 'WY', 'DC',
 ]
@@ -138,13 +148,15 @@ try {
       await upsertProfileSection(profileId, 'basic_information', basicData, 'onboarding-wizard')
 
       const custom = (await apiFetch('/api/preferences'))?.custom_preferences ?? {}
-      // Write looking_for intent into the profile tags so match engine and crawlers can use it
-      if (formData.looking_for && formData.looking_for !== 'general') {
+      // Write normalized need-category tag into the profile so the match engine and
+      // crawlers can use it. Apply for all looking_for values including 'general'.
+      if (formData.looking_for) {
+        const normalisedTag = LOOKING_FOR_TAG_MAP[formData.looking_for] ?? formData.looking_for
         try {
           await apiFetch(`/api/profiles/${profileId}`, {
             method: 'PATCH',
             body: JSON.stringify({
-              tags: [formData.looking_for],
+              tags: [normalisedTag],
             }),
           })
         } catch (_intentErr) {
