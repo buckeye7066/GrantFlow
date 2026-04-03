@@ -63,11 +63,6 @@ export default function AIApplicationAssistant({ grant, organization, open, onCl
 
   const runningRef = React.useRef(false);
 
-  // Reset running state when the grant changes (prevents stale closure from prior modal use)
-  useEffect(() => {
-    runningRef.current = false;
-  }, [grant?.id]);
-
   const runFullProcess = useCallback(async () => {
     try {
       // 1. PARSE INSTRUCTIONS FROM URL
@@ -322,7 +317,6 @@ const updatePromises = Object.entries(draftResponse)
       data: { draft_content: draftContent }
     })
   );
-await Promise.all(updatePromises);
 
       if (updatePromises.length === 0) {
         console.warn('[AIApplicationAssistant] No draft sections were saved — LLM response keys did not match known sequential keys.');
@@ -330,6 +324,8 @@ await Promise.all(updatePromises);
         setStep('error');
         return;
       }
+
+await Promise.all(updatePromises);
 
       // 7. COMPLETE
       setStep('complete');
@@ -344,7 +340,7 @@ await Promise.all(updatePromises);
       setError('An unexpected AI processing error occurred. This could be due to an issue accessing the grant URL, parsing the content, or a problem with the AI model. Please check the grant details and try again.');
       setStep('error');
     }
-  }, [grant, organization, createSectionMutation, createRequirementMutation, updateSectionMutation, updateGrantMutation, queryClient, navigate, onClose]);
+  }, [grant, organization, onClose, createRequirementMutation, createSectionMutation, updateSectionMutation, updateGrantMutation, queryClient, navigate]);
 
   useEffect(() => {
     if (!open) {

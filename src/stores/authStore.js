@@ -75,6 +75,18 @@ function clearRefreshTimer() {
 
 const AUTH_METHODS = new Set(['email', 'phone', 'social'])
 
+/** Normalize admin flags from /api/auth/me, JWT payloads, and legacy login shapes. */
+export function normalizeUserAdmin(user) {
+  if (!user || typeof user !== 'object') return false
+  return Boolean(
+    user.is_admin === true ||
+      user.is_admin === 1 ||
+      user.isAdmin === true ||
+      user.role === 'admin' ||
+      (Array.isArray(user.roles) && user.roles.includes('admin')),
+  )
+}
+
 // Vite env values are typically strings, but be defensive (some tooling can coerce to boolean).
 const IS_SMOKE_UI =
   String(import.meta?.env?.VITE_SMOKE_MODE ?? '').toLowerCase() === 'true' ||
@@ -200,7 +212,7 @@ export const useAuthStore = create((set, get) => ({
 
   refreshProfiles: async ({ reason = 'manual', force = false } = {}) => {
     const state = get()
-    const isAdmin = Boolean(state?.user?.is_admin)
+    const isAdmin = normalizeUserAdmin(state?.user)
     const prevCount = Array.isArray(state?.profiles) ? state.profiles.length : 0
 
     if (!state?.isAuthenticated) return []
@@ -254,7 +266,11 @@ export const useAuthStore = create((set, get) => ({
     //   lastCompletedTourVersion, tourDismissedAt }
     if (payload.userId) {
       const activeProfileId = normalizeId(payload.activeProfileId ?? null)
-      const isAdmin = Boolean(payload.isAdmin)
+      const isAdmin = normalizeUserAdmin({
+        isAdmin: payload.isAdmin,
+        is_admin: payload.isAdmin,
+        role: payload.role,
+      })
       const accessibleProfileCount = Number(payload.accessibleProfileCount ?? 0) || 0
 
       // Use backend has_completed_onboarding as the authoritative source.
@@ -306,7 +322,10 @@ export const useAuthStore = create((set, get) => ({
 
     // Handle standard auth response with user object
     if (payload.user) {
-      const user = payload.user
+      const user = {
+        ...payload.user,
+        is_admin: normalizeUserAdmin(payload.user),
+      }
 
       // Backend returns profiles nested under user (auth/me + auth/email/verify),
       // while some legacy callers may still provide them at the top-level.
@@ -321,7 +340,7 @@ export const useAuthStore = create((set, get) => ({
       client.setActiveProfileId?.(activeProfileId)
       
       // Check if this is an admin user
-      if (user.is_admin) {
+      if (normalizeUserAdmin(user)) {
         set({
           user,
           profiles,
