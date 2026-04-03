@@ -180,7 +180,7 @@ export default function NOFOParser() {
         : '';
 
     if (!validatedAppUrl) {
-      log.warn('NOFOParser: no valid application_url extracted â grant will be saved without an application path', {
+      log.warn('NOFOParser: no valid application_url extracted â grant will be marked ineligible (missing_application_url)', {
         title: extractedData.title,
         raw: rawAppUrl,
       });
@@ -199,8 +199,8 @@ export default function NOFOParser() {
       match_decision: null,
       match_explanation: null,
       matched_needs: [],
-      eligibility_status: 'pending',
-      ineligibility_reasons: [],
+      eligibility_status: validatedAppUrl ? 'pending' : 'INELIGIBLE',
+      ineligibility_reasons: validatedAppUrl ? [] : ['missing_application_url'],
       fingerprints: null,
       matcher_version: null,
       evaluated_at: null,

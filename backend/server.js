@@ -67,6 +67,7 @@ import { createAuthIdentityMiddleware } from './middleware/authIdentity.js';
 import { createEnsureAdminUserMiddleware } from './middleware/ensureAdminUser.js';
 import { createAuthMeRouter } from './routes/authMe.js';
 import { pipelineMonitor, getPipelineHealth } from './middleware/pipelineMonitor.js';
+import { ensureAuth } from './middleware/auth.js';
 import { requestTimeout } from './middleware/requestTimeout.js';
 import { responseCache } from './middleware/responseCache.js';
 import { MAX_JSON_BODY_SIZE } from './config/constants.js';
@@ -602,10 +603,7 @@ app.use('/api/crawler-v2', lazyRouter('./routes/crawlerV2.js'));
 app.use('/api/nf-programs', lazyRouter('./routes/nfPrograms.js'));
 
 // Pipeline stats — requires authentication
-app.get('/api/pipeline/stats', async (req, res) => {
-  if (!req.user) {
-    return res.status(401).json({ ok: false, error: 'Authentication required' })
-  }
+app.get('/api/pipeline/stats', ensureAuth, async (req, res) => {
   try {
     const rows = await db.prepare(`
       SELECT status, COUNT(*) as count

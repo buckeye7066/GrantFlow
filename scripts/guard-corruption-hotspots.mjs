@@ -14,6 +14,7 @@ const HOTSPOT_FILES = [
   'backend/services/matchEngine.js',
   'backend/services/profileIntelligence/relevanceScorer.js',
   'backend/services/opportunityMatcher.js',
+  'backend/services/opportunityNormalizer.js',
 ]
 
 function read(relPath) {
@@ -54,7 +55,13 @@ function main() {
   // 1) Catch unresolved merge markers in backend JS sources.
   for (const absPath of walkJsFiles(path.join(REPO_ROOT, 'backend'))) {
     const rel = path.relative(REPO_ROOT, absPath).replace(/\\/g, '/')
-    const text = fs.readFileSync(absPath, 'utf8')
+    let text = ''
+    try {
+      text = fs.readFileSync(absPath, 'utf8')
+    } catch (err) {
+      failures.push(`${rel}: could not read file — ${err.message}`)
+      continue
+    }
     if (/(^|\r?\n)<{7} |(^|\r?\n)={7}\r?$|(^|\r?\n)>{7} /m.test(text)) {
       failures.push(`${rel}: unresolved merge marker pattern found`)
     }
@@ -62,13 +69,13 @@ function main() {
 
   // 2) Known historical duplicate-declaration regressions.
   const crawlerV2 = read('backend/routes/crawlerV2.js')
-  const staleACount = countMatches(crawlerV2, /\bconst\s+staleA\b/g)
-  const staleBCount = countMatches(crawlerV2, /\bconst\s+staleB\b/g)
+  const staleACount = countMatches(crawlerV2, /^\s*(?:const|let)\s+staleA\b/gm)
+  const staleBCount = countMatches(crawlerV2, /^\s*(?:const|let)\s+staleB\b/gm)
   if (staleACount !== 1) failures.push(`backend/routes/crawlerV2.js: expected exactly 1 "const staleA", found ${staleACount}`)
   if (staleBCount !== 1) failures.push(`backend/routes/crawlerV2.js: expected exactly 1 "const staleB", found ${staleBCount}`)
 
   const autonomousCrawler = read('backend/services/anyaAutonomousCrawler.js')
-  const actualLineCount = countMatches(autonomousCrawler, /\bconst\s+actualLine\b/g)
+  const actualLineCount = countMatches(autonomousCrawler, /^\s*(?:const|let)\s+actualLine\b/gm)
   if (actualLineCount > 1) {
     failures.push(`backend/services/anyaAutonomousCrawler.js: expected <= 1 "const actualLine", found ${actualLineCount}`)
   }
@@ -76,6 +83,10 @@ function main() {
   // 3) Parse-check hotspot files (fast syntax tripwire).
   for (const rel of HOTSPOT_FILES) {
     const abs = path.join(REPO_ROOT, rel)
+    if (!fs.existsSync(abs)) {
+      failures.push(`${rel}: file not found`)
+      continue
+    }
     const syntaxError = checkSyntax(abs)
     if (syntaxError) failures.push(`${rel}: ${syntaxError}`)
   }

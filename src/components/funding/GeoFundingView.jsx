@@ -116,6 +116,7 @@ function ZipSection({ zip, county, count, state, profileId, defaultOpen }) {
   })
 
   const opportunities = scoredQuery.data?.data ?? []
+  const totalFound = scoredQuery.data?.total_found ?? null
   const showScore = Boolean(profileId && profileId !== "all")
 
   return (
@@ -151,7 +152,9 @@ function ZipSection({ zip, county, count, state, profileId, defaultOpen }) {
           ) : opportunities.length === 0 ? (
             <div className="px-6 py-4 text-sm text-slate-400">
               {showScore
-                ? "No matches found for your profile in this zip code. Adding details like housing needs, income, military status, or disabilities to your profile often unlocks more results."
+                ? totalFound != null && totalFound > 0
+                  ? `${totalFound} ${totalFound === 1 ? "opportunity" : "opportunities"} found but none matched your profile. Adding details like housing needs, income, military status, or disabilities to your profile often unlocks more results.`
+                  : "No matches found for your profile in this zip code. Adding details like housing needs, income, military status, or disabilities to your profile often unlocks more results."
                 : "No opportunities indexed for this zip code yet."}
             </div>
           ) : (
@@ -231,6 +234,9 @@ export default function GeoFundingView({ profileId }) {
 
   const summary = summaryQuery.data
   const states = summary?.states ?? []
+  const maxOpportunityCount = states.length > 0
+    ? Math.max(...states.map((s) => s.opportunity_count || 0), 1)
+    : 1
 
   if (summaryQuery.isLoading) {
     return (
@@ -268,8 +274,6 @@ export default function GeoFundingView({ profileId }) {
       </Card>
     )
   }
-
-  const maxOpportunityCount = states.reduce((max, s) => Math.max(max, s.opportunity_count || 0), 0)
 
   return (
     <div className="space-y-2">

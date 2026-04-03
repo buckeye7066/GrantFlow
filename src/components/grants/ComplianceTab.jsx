@@ -99,6 +99,12 @@ const budgetRemaining = awardAmount - totalSpent;
 
   return (
     <div className="space-y-6">
+      {policy._parseError && (
+        <div className="flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+          <span className="shrink-0">⚠️</span>
+          <span>Using default compliance policy — custom policy could not be loaded.</span>
+        </div>
+      )}
       <Card>
         <CardHeader>
           <CardTitle>Award Summary</CardTitle>

@@ -52,6 +52,9 @@ export default function ProposalEditor({ grant, organization }) {
   const debouncedDraftContent = useDebounce(draftContent, 1000)
   const [showSubmissionAssistant, setShowSubmissionAssistant] = useState(false)
   const [validationResult, setValidationResult] = useState(null)
+  // Track the section key+content at debounce-initiation time to prevent
+  // stale saves writing old content to the wrong section on rapid switching.
+  const pendingSaveRef = useRef(null)
 
   const { data: application, isLoading: isPreparing } = useQuery({
     queryKey: ['applyApplication', grant?.id, organization?.id],
@@ -106,6 +109,21 @@ export default function ProposalEditor({ grant, organization }) {
     },
   })
 
+  // Capture the pending save info when content changes (at debounce-initiation time).
+  useEffect(() => {
+    if (!applicationId || !activeSection) return
+    pendingSaveRef.current = {
+      sectionKey: String(activeSection.section_key),
+      title: activeSection.title ?? null,
+      content: draftContent,
+    }
+  }, [draftContent, applicationId, activeSection?.section_key, activeSection?.title])
+
+  // Cancel any pending debounced save when the active section changes.
+  useEffect(() => {
+    pendingSaveRef.current = null
+  }, [activeSectionKey])
+
   useEffect(() => {
     if (!applicationId) return
     if (!activeSection) return
@@ -114,10 +132,18 @@ export default function ProposalEditor({ grant, organization }) {
     const savedFor = draftTargetSectionKeyRef.current
     if (String(savedFor ?? '') !== String(activeSection.section_key)) return
     if (debouncedDraftContent === (activeSection?.content ?? '')) return
+    // Use the section key+content that was captured when the debounce started,
+    // not the current activeSection (which may have changed during the delay).
+    const pending = pendingSaveRef.current
+    if (!pending) return
+    if (pending.sectionKey !== String(activeSection.section_key)) return
+    // Guard: only save if the debounced content matches the captured content.
+    // A mismatch means the section switched mid-debounce — skip to avoid stale writes.
+    if (pending.content !== debouncedDraftContent) return
     upsertSectionMutation.mutate({
-      sectionKey: String(activeSection.section_key),
-      title: activeSection.title ?? null,
-      content: debouncedDraftContent,
+      sectionKey: pending.sectionKey,
+      title: pending.title,
+      content: pending.content,
     })
   }, [debouncedDraftContent, applicationId, activeSection?.section_key, activeSection?.content, activeSection?.title])
 

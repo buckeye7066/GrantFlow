@@ -721,7 +721,7 @@ class APIClient {
 
         return await this.fetch('/api/auth/me');
       } catch (error) {
-        // If it's an auth error (401 or session expired), return null gracefully
+        // If it's an auth error (401 or 403), return null gracefully — user needs to sign in
         if (error.status === 401 || error.status === 403 || error.isAuthError) {
           log.debug('auth check failed; user needs to sign in')
           this.clearToken();

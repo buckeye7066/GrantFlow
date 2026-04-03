@@ -105,9 +105,9 @@ export default function GrantAutomationTimeline({ grantId }) {
               const createdAt = event.created_at ? new Date(event.created_at) : null
               const confidencePct =
                 typeof event.confidence === "number"
-  ? event.confidence > 1
+  ? Number.isInteger(event.confidence) && event.confidence > 1
     ? Math.round(event.confidence)          // already a 0-100 integer
-    : Math.round(event.confidence * 100)    // 0-1 float â percentage
+    : Math.round(event.confidence * 100)    // 0-1 float (including 1.0) → percentage
   : null
               const actions = Array.isArray(event.recommended_actions) ? event.recommended_actions : []
               const showDivider = index !== events.length - 1

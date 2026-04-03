@@ -383,6 +383,11 @@ export default function SearchResults({ results = [], profileId, onAddToPipeline
                     {formatSourceLabel(opp.source || opp.crawler_type)}
                   </Badge>
                 )}
+                {!opp.application_url && (
+                  <Badge variant="outline" className="text-xs shrink-0 border-amber-300 text-amber-700 bg-amber-50">
+                    No apply link
+                  </Badge>
+                )}
                 {(() => {
                   const { label, fundingLabel, isProBono } = getOpportunityTypeBadge(opp);
                   return isProBono ? (

@@ -471,10 +471,13 @@ Return ONLY the JSON. Use null for any information you cannot verify with confid
                     {(grant.application_url || grant.url) && (
                         <div className="flex items-center gap-2">
                             <span className="text-sm font-medium text-slate-600">Portal/Apply Link:</span>
-                            <a href={grant.application_url || grant.url} target="_blank" rel="noopener noreferrer"
-                               className="text-blue-600 hover:underline text-sm truncate max-w-md">
-                                {grant.application_url || grant.url}
-                            </a>
+                            {(() => {
+                              const portalUrl = grant.application_url || grant.url;
+                              const isValid = typeof portalUrl === 'string' && /^https?:\/\//i.test(portalUrl) && !['N/A', 'TBD', 'n/a', 'tbd'].includes(portalUrl.trim());
+                              return isValid
+                                ? <a href={portalUrl} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline text-sm truncate max-w-md">{portalUrl}</a>
+                                : <span className="text-slate-500 italic text-sm">No application link available</span>;
+                            })()}
                         </div>
                     )}
 

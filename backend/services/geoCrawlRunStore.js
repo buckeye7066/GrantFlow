@@ -15,7 +15,7 @@ async function ensureGeoCrawlSchema(db) {
   if (ensured) return
   if (ensurePromise) return ensurePromise
 
-  ensurePromise = (async () => {
+  const p = (async () => {
     const isPostgres = db?.dialect === 'postgres'
 
     // Runs table
@@ -172,13 +172,14 @@ async function ensureGeoCrawlSchema(db) {
       ensurePromise = null
     } catch (error) {
       // Allow future calls to retry schema creation.
-      ensurePromise = null
+      if (ensurePromise === p) ensurePromise = null
       ensured = false
       console.error('[geoCrawlRunStore] Schema creation failed â future calls will retry:', error?.message || error)
       throw error
     }
   })()
 
+  ensurePromise = p
   return ensurePromise
 }
 

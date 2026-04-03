@@ -128,7 +128,7 @@ const inferredType =
     primary_type: inferredType,
     zip: zip,
     state: state,
-    tags: formData.looking_for ? [formData.looking_for] : [],
+    tags: [LOOKING_FOR_TAG_MAP[formData.looking_for] ?? formData.looking_for],
   }),
 })
 profileId = created?.id
