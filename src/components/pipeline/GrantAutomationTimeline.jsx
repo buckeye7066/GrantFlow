@@ -133,7 +133,9 @@ export default function GrantAutomationTimeline({ grantId }) {
 
                   <div className="mt-2 flex flex-wrap items-center gap-2">
                     <StatusBadge status={event.previous_status} label={`Prev • ${event.previous_status ?? "—"}`} />
-                    <ArrowRight className="h-3 w-3 text-slate-400" />
+                    {(event.previous_status || event.applied_status) && (
+                      <ArrowRight className="h-3 w-3 text-slate-400" />
+                    )}
                     <StatusBadge status={event.applied_status} label={`Now • ${event.applied_status ?? "—"}`} />
                     {event.suggested_status &&
                       event.suggested_status !== event.applied_status ? (

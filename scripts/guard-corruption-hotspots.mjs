@@ -10,6 +10,10 @@ const HOTSPOT_FILES = [
   'backend/routes/matching.js',
   'backend/routes/profiles.js',
   'backend/services/anyaAutonomousCrawler.js',
+  // Core decision-engine files — historically high-churn, historically problematic
+  'backend/services/matchEngine.js',
+  'backend/services/profileIntelligence/relevanceScorer.js',
+  'backend/services/opportunityMatcher.js',
 ]
 
 function read(relPath) {
@@ -51,7 +55,7 @@ function main() {
   for (const absPath of walkJsFiles(path.join(REPO_ROOT, 'backend'))) {
     const rel = path.relative(REPO_ROOT, absPath).replace(/\\/g, '/')
     const text = fs.readFileSync(absPath, 'utf8')
-    if (/(^|\n)<{7} |(^|\n)={7}$|(^|\n)>{7} /m.test(text)) {
+    if (/(^|\r?\n)<{7} |(^|\r?\n)={7}\r?$|(^|\r?\n)>{7} /m.test(text)) {
       failures.push(`${rel}: unresolved merge marker pattern found`)
     }
   }

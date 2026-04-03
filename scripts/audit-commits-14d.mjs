@@ -19,24 +19,32 @@ function analyzeCommit({ sha, subject, date, files, patch }) {
     findings.push('conflict_marker_pattern')
   }
 
-  const addedLines = getAddedLines(patch)
-  const declarationCounts = new Map()
-  for (const line of addedLines) {
-    const match = line.match(/\b(?:const|let)\s+([A-Za-z_$][\w$]*)\b/)
-    if (!match) continue
-    const name = match[1]
-    declarationCounts.set(name, (declarationCounts.get(name) || 0) + 1)
+  // Scope duplicate-declaration detection per file to avoid cross-file false positives.
+  const filePatches = patch.split(/^diff --git /m).filter(Boolean)
+  const allDuplicates = new Map()
+  for (const filePatch of filePatches) {
+    const addedLines = getAddedLines(filePatch)
+    const declarationCounts = new Map()
+    for (const line of addedLines) {
+      const match = line.match(/\b(?:const|let)\s+([A-Za-z_$][\w$]*)\b/)
+      if (!match) continue
+      const name = match[1]
+      declarationCounts.set(name, (declarationCounts.get(name) || 0) + 1)
+    }
+    for (const [name, count] of declarationCounts) {
+      if (count > 1) {
+        allDuplicates.set(name, (allDuplicates.get(name) || 0) + count)
+      }
+    }
   }
-  const duplicateDeclarations = [...declarationCounts.entries()]
-    .filter(([, count]) => count > 1)
-    .map(([name]) => name)
-    .slice(0, 20)
+  const duplicateDeclarations = [...allDuplicates.keys()].slice(0, 20)
   if (duplicateDeclarations.length > 0) {
     findings.push(`duplicate_added_declarations:${duplicateDeclarations.join(',')}`)
   }
 
+  const allAddedLines = getAddedLines(patch)
   const repeatedLineCounts = new Map()
-  for (const line of addedLines) {
+  for (const line of allAddedLines) {
     const normalized = line.slice(1).trim()
     if (normalized.length < 24) continue
     repeatedLineCounts.set(normalized, (repeatedLineCounts.get(normalized) || 0) + 1)
