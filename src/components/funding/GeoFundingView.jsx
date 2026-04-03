@@ -174,10 +174,11 @@ function ZipSection({ zip, county, count, state, profileId, defaultOpen }) {
   )
 }
 
-function StateSection({ stateEntry, profileId, maxOpportunityCount = 1 }) {
+function StateSection({ stateEntry, profileId, maxOpportunityCount }) {
   const [open, setOpen] = useState(false)
   const { state, opportunity_count, zips } = stateEntry
   const stateName = STATE_NAMES[state] || state
+  const progressMax = maxOpportunityCount > 0 ? maxOpportunityCount : 50
 
   return (
     <Card className="border border-slate-200 shadow-sm overflow-hidden">
@@ -201,7 +202,7 @@ function StateSection({ stateEntry, profileId, maxOpportunityCount = 1 }) {
           </div>
         </div>
         <div className="shrink-0 w-20">
-          <Progress value={Math.min(100, (opportunity_count / maxOpportunityCount) * 100)} className="h-1.5" />
+          <Progress value={Math.min(100, (opportunity_count / progressMax) * 100)} className="h-1.5" />
         </div>
       </button>
 
@@ -273,6 +274,8 @@ export default function GeoFundingView({ profileId }) {
       </Card>
     )
   }
+
+  const maxOpportunityCount = states.reduce((max, s) => Math.max(max, s.opportunity_count || 0), 0)
 
   return (
     <div className="space-y-2">

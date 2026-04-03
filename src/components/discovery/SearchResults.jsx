@@ -231,12 +231,9 @@ export default function SearchResults({ results = [], profileId, onAddToPipeline
         const result = await onAddToPipeline(opp, { silent: false });
         if (result?.status === 'already') duplicateCount++;
         else if (result?.status === 'added') successCount++;
-        else if (result?.status === 'review') {
-          // Marked for human review — not a failure
-          successCount++;
-        } else if (result?.status === 'rejected' || result?.status === 'filtered') {
-          // Rejected/filtered by eligibility rules — not a failure
-          duplicateCount++; // count as non-added, non-failure
+        else if (['filtered', 'rejected', 'ineligible', 'skipped'].includes(result?.status)) {
+          // Valid non-error outcomes: not added but not a pipeline error.
+          duplicateCount++;
         } else {
           failCount++;
           failedTitles.push(opp?.title || 'Unknown');

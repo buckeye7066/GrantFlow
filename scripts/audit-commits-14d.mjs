@@ -19,43 +19,30 @@ function analyzeCommit({ sha, subject, date, files, patch }) {
     findings.push('conflict_marker_pattern')
   }
 
-  // Scope duplicate-declaration detection per-file to avoid false positives
-  // from the same identifier being declared in two different files.
-  const perFileLines = new Map() // filePath -> addedLines[]
-  let currentFile = null
-  for (const rawLine of patch.split(/\r?\n/)) {
-    if (rawLine.startsWith('diff --git ')) {
-      // Extract the b/ path as the current file context
-      const m = rawLine.match(/diff --git a\/.+ b\/(.+)/)
-      currentFile = m ? m[1] : rawLine
-      if (!perFileLines.has(currentFile)) perFileLines.set(currentFile, [])
-    } else if (rawLine.startsWith('+') && !rawLine.startsWith('+++')) {
-      if (currentFile) perFileLines.get(currentFile).push(rawLine)
-    }
-  }
-
-  const allDuplicateDeclarations = []
-  for (const [, fileLines] of perFileLines) {
+  // Scope duplicate-declaration detection per file to avoid cross-file false positives.
+  const filePatches = patch.split(/^diff --git /m).filter(Boolean)
+  const allDuplicateNames = new Set()
+  for (const filePatch of filePatches) {
+    const addedLines = getAddedLines(filePatch)
     const declarationCounts = new Map()
-    for (const line of fileLines) {
+    for (const line of addedLines) {
       const match = line.match(/\b(?:const|let)\s+([A-Za-z_$][\w$]*)\b/)
       if (!match) continue
       const name = match[1]
       declarationCounts.set(name, (declarationCounts.get(name) || 0) + 1)
     }
-    const fileDuplicates = [...declarationCounts.entries()]
-      .filter(([, count]) => count > 1)
-      .map(([name]) => name)
-    allDuplicateDeclarations.push(...fileDuplicates)
+    for (const [name, count] of declarationCounts) {
+      if (count > 1) allDuplicateNames.add(name)
+    }
   }
-  const duplicateDeclarations = allDuplicateDeclarations.slice(0, 20)
+  const duplicateDeclarations = [...allDuplicateNames].slice(0, 20)
   if (duplicateDeclarations.length > 0) {
     findings.push(`duplicate_added_declarations:${duplicateDeclarations.join(',')}`)
   }
 
-  const addedLines = getAddedLines(patch)
+  const allAddedLines = getAddedLines(patch)
   const repeatedLineCounts = new Map()
-  for (const line of addedLines) {
+  for (const line of allAddedLines) {
     const normalized = line.slice(1).trim()
     if (normalized.length < 24) continue
     repeatedLineCounts.set(normalized, (repeatedLineCounts.get(normalized) || 0) + 1)

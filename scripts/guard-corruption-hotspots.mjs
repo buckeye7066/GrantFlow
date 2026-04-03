@@ -10,9 +10,9 @@ const HOTSPOT_FILES = [
   'backend/routes/matching.js',
   'backend/routes/profiles.js',
   'backend/services/anyaAutonomousCrawler.js',
-  // Core decision-engine files (Bug 17.1)
+  // Core decision-engine files — historically high-churn, historically problematic
   'backend/services/matchEngine.js',
-  'backend/services/relevanceFilter.js',
+  'backend/services/profileIntelligence/relevanceScorer.js',
   'backend/services/opportunityMatcher.js',
   'backend/services/opportunityNormalizer.js',
 ]
@@ -62,8 +62,7 @@ function main() {
       failures.push(`${rel}: could not read file — ${err.message}`)
       continue
     }
-    // Handle both LF and CRLF line endings (Bug 17.3)
-    if (/(^|\n)<{7} |(^|\r?\n)={7}\r?$|(^|\n)>{7} /m.test(text)) {
+    if (/(^|\r?\n)<{7} |(^|\r?\n)={7}\r?$|(^|\r?\n)>{7} /m.test(text)) {
       failures.push(`${rel}: unresolved merge marker pattern found`)
     }
   }

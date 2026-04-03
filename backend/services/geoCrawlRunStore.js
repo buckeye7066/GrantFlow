@@ -168,6 +168,8 @@ async function ensureGeoCrawlSchema(db) {
       }
 
       ensured = true
+      // Clear the promise on success so the module-level reference is freed.
+      ensurePromise = null
     } catch (error) {
       // Allow future calls to retry schema creation.
       if (ensurePromise === p) ensurePromise = null
@@ -344,7 +346,9 @@ export async function getGeoCrawlRun(db, runId) {
     return null
   }
   await ensureGeoCrawlSchema(db)
-  const sql = db?.dialect === 'postgres' ? 'SELECT * FROM geo_crawl_runs WHERE id = $1' : 'SELECT * FROM geo_crawl_runs WHERE id = ?'
+  const sql = db?.dialect === 'postgres'
+    ? 'SELECT * FROM geo_crawl_runs WHERE id = $1'
+    : 'SELECT * FROM geo_crawl_runs WHERE id = ?'
   const row = await db.prepare(sql).get(runId)
   return row ?? null
 }
@@ -357,21 +361,21 @@ export async function listGeoCrawlEvents(db, runId, { afterId = 0, limit = 200 }
 
   const sql = db?.dialect === 'postgres'
     ? `
-    SELECT *
-    FROM geo_crawl_events
-    WHERE run_id = $1
-      AND id > $2
-    ORDER BY id ASC
-    LIMIT $3
-  `
+      SELECT *
+      FROM geo_crawl_events
+      WHERE run_id = $1
+        AND id > $2
+      ORDER BY id ASC
+      LIMIT $3
+    `
     : `
-    SELECT *
-    FROM geo_crawl_events
-    WHERE run_id = ?
-      AND id > ?
-    ORDER BY id ASC
-    LIMIT ?
-  `
+      SELECT *
+      FROM geo_crawl_events
+      WHERE run_id = ?
+        AND id > ?
+      ORDER BY id ASC
+      LIMIT ?
+    `
   return (await db.prepare(sql).all(runId, after, lim)) ?? []
 }
 

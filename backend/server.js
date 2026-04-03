@@ -75,7 +75,6 @@ import { getSafeHealthSummary } from './services/diagnosticsService.js';
 import { assertFundingApiKeys, getFundingApiKeyPresence } from './src/config/apiKeys.js';
 import { dispatchCrawlerJob, startQueueDrainInterval } from './services/crawlerDispatcher.js';
 import { cleanupStaleCrawlers, cleanupStaleQueuedJobs } from './services/crawlerConcurrencyGuard.js'
-import { findDuplicateProfileGroups, mergeProfiles } from './services/profileDedupeService.js'
 import { assertEnv, getJwtSecretOrThrow } from './config/env.js'
 import { resolveUploadsDir, ensureUploadsDirWritable, isLikelyPersistentPath } from './utils/uploadsDir.js'
 import servicesRouter from './routes/services.js'
@@ -466,8 +465,14 @@ app.use('/api/auth', createAuthMeRouter({ db, adminName: ADMIN_NAME, adminEmail:
 // Pipeline monitoring (zero-result + slow-response tracking)
 app.use(pipelineMonitor())
 
-// Pipeline health dashboard (admin-only)
+// Pipeline health dashboard (admin-only) — requires admin token or admin user
 app.get('/api/admin/pipeline-health', (req, res) => {
+  const adminToken = ADMIN_TOKEN
+  const providedToken = req.headers['x-admin-token'] || req.headers['x-anya-token']
+  const isAdminUser = req.user?.isAdmin
+  if (!isAdminUser && !(adminToken && providedToken === adminToken)) {
+    return res.status(403).json({ ok: false, error: 'Forbidden' })
+  }
   res.json(getPipelineHealth())
 })
 
@@ -597,7 +602,7 @@ app.use('/api', requestTimeout(PIPELINE_TIMEOUT), discoveryRouter);
 app.use('/api/crawler-v2', lazyRouter('./routes/crawlerV2.js'));
 app.use('/api/nf-programs', lazyRouter('./routes/nfPrograms.js'));
 
-// Pipeline stats
+// Pipeline stats — requires authentication
 app.get('/api/pipeline/stats', ensureAuth, async (req, res) => {
   try {
     const rows = await db.prepare(`
@@ -678,7 +683,16 @@ function gracefulShutdown(signal) {
   if (!server) return
   console.log(`\nReceived ${signal}, closing server gracefully...`);
   
+  // Force close after 10 seconds — store handle so it can be cleared on clean exit.
+  const shutdownTimer = setTimeout(() => {
+    console.error('Forced shutdown after timeout');
+    process.exit(1);
+  }, 10000);
+  // Allow the event loop to exit naturally if close() completes before the timer fires.
+  if (shutdownTimer.unref) shutdownTimer.unref();
+
   server.close(async () => {
+    clearTimeout(shutdownTimer);
     console.log('HTTP server closed');
     
     try {
@@ -694,12 +708,6 @@ function gracefulShutdown(signal) {
     console.log('Graceful shutdown complete');
     process.exit(0);
   });
-  
-  // Force close after 10 seconds
-  setTimeout(() => {
-    console.error('Forced shutdown after timeout');
-    process.exit(1);
-  }, 10000);
 }
 
 if (process.env.NODE_ENV !== 'test') {

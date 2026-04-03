@@ -20,6 +20,16 @@ const fetchImpl = globalThis.fetch || (async () => { const nodeFetch = await imp
 // Rate limiting helper
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
+// Grants.gov API key — required since the search2 endpoint started returning 401 Unauthorized.
+// Set GRANTS_GOV_API_KEY in your environment (.env / Railway / Vercel secrets).
+const GRANTS_GOV_API_KEY = process.env.GRANTS_GOV_API_KEY || ''
+if (!GRANTS_GOV_API_KEY) {
+  console.warn(
+    '[RealCrawler] GRANTS_GOV_API_KEY env var is not set; ' +
+      'Grants.gov search2 requests will likely return 401 Unauthorized.',
+  )
+}
+
 // State abbreviation to full name mapping
 const STATE_NAMES = {
   'AL': 'Alabama', 'AK': 'Alaska', 'AZ': 'Arizona', 'AR': 'Arkansas', 'CA': 'California',
@@ -101,6 +111,7 @@ async function crawlGrantsGov(state = null, keywords = []) {
       headers: {
         'Content-Type': 'application/json',
         Accept: 'application/json',
+        ...(GRANTS_GOV_API_KEY ? { 'X-API-Key': GRANTS_GOV_API_KEY } : {}),
       },
       body: JSON.stringify(payload),
     });

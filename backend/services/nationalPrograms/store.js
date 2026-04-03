@@ -26,6 +26,9 @@ function diffChangedFields(prev = {}, next = {}) {
   return changed
 }
 
+const ALLOWED_TRACKS = ['PROVIDER', 'CLIENT']
+const TRACK_TABLE_MAP = { PROVIDER: 'programs_provider', CLIENT: 'programs_client' }
+
 export async function upsertProgramWithVersion({
   db,
   track,
@@ -37,7 +40,8 @@ export async function upsertProgramWithVersion({
   contentType,
   fetchedAt,
 }) {
-  const table = track === 'PROVIDER' ? 'programs_provider' : 'programs_client'
+  if (!ALLOWED_TRACKS.includes(track)) throw new Error(`upsertProgramWithVersion: invalid track '${track}'`)
+  const table = TRACK_TABLE_MAP[track]
 
   const canonicalKey = buildCanonicalKey({
     fundingTrack: track,

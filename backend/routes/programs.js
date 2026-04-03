@@ -1,7 +1,15 @@
 import express from 'express'
 import { validatePagination } from '../utils/validation.js'
+import { requireAuthenticatedUser } from '../utils/accessControl.js'
 
 const router = express.Router()
+
+// Require authentication for all program routes
+router.use((req, res, next) => {
+  const user = requireAuthenticatedUser(req, res)
+  if (!user) return
+  return next()
+})
 
 // Add database middleware
 router.use((req, res, next) => {

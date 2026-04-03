@@ -4,7 +4,8 @@
  * Fetches REAL federal funding opportunities from the official Grants.gov API
  * https://www.grants.gov/web/grants/search-grants.html
  * 
- * This uses the public Grants.gov API to get actual federal grant opportunities
+ * This uses the Grants.gov API to get actual federal grant opportunities.
+ * NOTE: The search2 endpoint requires GRANTS_GOV_API_KEY (returns 401 without it).
  */
 
 import axios from 'axios';
@@ -15,6 +16,16 @@ import { upsertFundingOpportunity } from './opportunityInserter.js';
 // Use the public REST API `search2` endpoint (POST JSON).
 const GRANTS_GOV_SEARCH2 = 'https://api.grants.gov/v1/api/search2';
 const GRANTS_GOV_VIEW = 'https://www.grants.gov/search-results-detail/';
+
+// Grants.gov API key — required since the search2 endpoint started returning 401 Unauthorized.
+// Set GRANTS_GOV_API_KEY in your environment (.env / Railway / Vercel secrets).
+const GRANTS_GOV_API_KEY = process.env.GRANTS_GOV_API_KEY || ''
+if (!GRANTS_GOV_API_KEY) {
+  console.warn(
+    '[GrantsGov] GRANTS_GOV_API_KEY env var is not set; ' +
+      'Grants.gov search2 requests will likely return 401 Unauthorized.',
+  )
+}
 
 /**
  * Fetch opportunities from Grants.gov API
@@ -50,6 +61,7 @@ async function fetchGrantsGov(params = {}) {
         headers: {
           'Content-Type': 'application/json',
           Accept: 'application/json',
+          ...(GRANTS_GOV_API_KEY ? { 'X-API-Key': GRANTS_GOV_API_KEY } : {}),
         }
       });
 

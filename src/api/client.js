@@ -727,8 +727,18 @@ class APIClient {
           this.clearToken();
           return null;
         }
-        // For network errors and 5xx server errors, re-throw so callers can retry or show an error
-        // rather than silently destroying session context on a transient outage.
+        // Network/transport failures (server unreachable, DNS, etc.): log but return null
+        // so that the app can still render without a user context.
+        if (
+          error.status === 0 ||
+          error.name === 'AbortError' ||
+          error.errorCode === 'NETWORK_FETCH_FAILED' ||
+          (error instanceof TypeError && /failed to fetch/i.test(String(error.message || '')))
+        ) {
+          console.warn('[APIClient] Network error checking auth status (server may be starting):', error.message);
+          return null;
+        }
+        // For other errors (5xx, unexpected), rethrow so callers can detect server issues.
         throw error;
       }
     },

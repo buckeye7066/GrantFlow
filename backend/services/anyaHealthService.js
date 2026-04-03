@@ -42,18 +42,20 @@ export async function runHealthCheck(db) {
   // 1. Expire stale opportunities
   try {
     const isPostgres = db?.dialect === 'postgres'
-    const inactiveVal = isPostgres ? 'FALSE' : '0'
-    const nowExpr = isPostgres ? 'CURRENT_DATE' : "date('now')"
-    const result = db
-      .prepare(
-        `UPDATE funding_opportunities
-         SET is_active = ${inactiveVal}, updated_at = CURRENT_TIMESTAMP
-         WHERE is_active = ${isPostgres ? 'TRUE' : '1'}
+    const expireSql = isPostgres
+      ? `UPDATE funding_opportunities
+         SET is_active = FALSE, updated_at = CURRENT_TIMESTAMP
+         WHERE is_active = TRUE
            AND deadline IS NOT NULL
-           AND deadline < ${nowExpr}
-           AND deadline_type NOT IN ('rolling', 'ongoing')`,
-      )
-      .run()
+           AND deadline < CURRENT_DATE
+           AND deadline_type NOT IN ('rolling', 'ongoing')`
+      : `UPDATE funding_opportunities
+         SET is_active = 0, updated_at = CURRENT_TIMESTAMP
+         WHERE is_active = 1
+           AND deadline IS NOT NULL
+           AND deadline < date('now')
+           AND deadline_type NOT IN ('rolling', 'ongoing')`
+    const result = db.prepare(expireSql).run()
     const count = result.changes ?? result.rowCount ?? 0
     status.expire_stale = { expired: count }
     if (count > 0) {
@@ -94,17 +96,16 @@ export async function runHealthCheck(db) {
   // 3. Clean orphaned crawlers — stuck jobs older than 2 hours → mark failed
   try {
     const isPostgres = db?.dialect === 'postgres'
-    const staleExpr = isPostgres
-      ? "(created_at < NOW() - INTERVAL '2 hours')"
-      : "(created_at < datetime('now', '-2 hours'))"
-    const result = db
-      .prepare(
-        `UPDATE crawler_jobs
+    const cleanOrphansSql = isPostgres
+      ? `UPDATE crawler_jobs
          SET status = 'failed', updated_at = CURRENT_TIMESTAMP
          WHERE status IN ('queued', 'running')
-           AND ${staleExpr}`,
-      )
-      .run()
+           AND (created_at < NOW() - INTERVAL '2 hours')`
+      : `UPDATE crawler_jobs
+         SET status = 'failed', updated_at = CURRENT_TIMESTAMP
+         WHERE status IN ('queued', 'running')
+           AND (created_at < datetime('now', '-2 hours'))`
+    const result = db.prepare(cleanOrphansSql).run()
     const count = result.changes ?? result.rowCount ?? 0
     status.orphaned_crawlers = { cleaned: count }
     if (count > 0) {

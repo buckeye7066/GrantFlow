@@ -7,10 +7,18 @@
 import { fetchWithRetry } from './httpClient.js';
 import crypto from 'crypto';
 
-// Public, unauthenticated Grants.gov search2 endpoint (2026).
-// IMPORTANT: no API key, no Authorization header, POST JSON only.
+// Grants.gov search2 endpoint — now requires an API key (returns 401 without one).
+// Set GRANTS_GOV_API_KEY in your environment (.env / Railway / Vercel secrets).
 const GRANTS_GOV_SEARCH2_URL = 'https://api.grants.gov/v1/api/search2';
 const SOURCE_NAME = 'grants.gov';
+
+const GRANTS_GOV_API_KEY = process.env.GRANTS_GOV_API_KEY || ''
+if (!GRANTS_GOV_API_KEY) {
+  console.warn(
+    '[grants.gov] GRANTS_GOV_API_KEY env var is not set; ' +
+      'Grants.gov search2 requests will likely return 401 Unauthorized.',
+  )
+}
 
 /**
  * Fetch opportunities from Grants.gov
@@ -39,6 +47,7 @@ export async function fetchGrantsGov(options = {}) {
       headers: {
         Accept: 'application/json',
         'Content-Type': 'application/json',
+        ...(GRANTS_GOV_API_KEY ? { 'X-API-Key': GRANTS_GOV_API_KEY } : {}),
       },
       body: JSON.stringify(payload),
       timeout: 60000, // 60 second timeout for this API

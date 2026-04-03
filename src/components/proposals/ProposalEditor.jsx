@@ -7,6 +7,7 @@ import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Loader2, Plus, Send, CheckCircle, AlertTriangle, Sparkles, Download } from 'lucide-react'
 import SubmissionAssistant from './SubmissionAssistant'
 import { useDebounce } from '../hooks/useDebounce'
+import { useToast } from '@/components/ui/use-toast'
 import {
   autoPopulate,
   exportPackage,
@@ -46,6 +47,9 @@ export default function ProposalEditor({ grant, organization }) {
   const [activeSectionKey, setActiveSectionKey] = useState(null)
   const [newSectionName, setNewSectionName] = useState('')
   const [draftContent, setDraftContent] = useState('')
+  // Track the section key that corresponds to the current draftContent so the
+  // debounced auto-save always writes to the correct section even after a rapid switch.
+  const draftTargetSectionKeyRef = useRef(null)
   const debouncedDraftContent = useDebounce(draftContent, 1000)
   const [showSubmissionAssistant, setShowSubmissionAssistant] = useState(false)
   const [validationResult, setValidationResult] = useState(null)
@@ -93,6 +97,9 @@ export default function ProposalEditor({ grant, organization }) {
   )
 
   useEffect(() => {
+    // Capture the section key synchronously so the debounced save knows which
+    // section the content belongs to (prevents stale-closure write to wrong section).
+    draftTargetSectionKeyRef.current = activeSection?.section_key ?? null
     setDraftContent(activeSection?.content ?? '')
   }, [activeSection?.section_key, activeSection?.content])
 
@@ -121,6 +128,10 @@ export default function ProposalEditor({ grant, organization }) {
   useEffect(() => {
     if (!applicationId) return
     if (!activeSection) return
+    // Guard: skip if the debounced content was typed for a different section
+    // (rapid section-switch can cause the debounce to fire after the active section changed).
+    const savedFor = draftTargetSectionKeyRef.current
+    if (String(savedFor ?? '') !== String(activeSection.section_key)) return
     if (debouncedDraftContent === (activeSection?.content ?? '')) return
     // Use the section key+content that was captured when the debounce started,
     // not the current activeSection (which may have changed during the delay).
@@ -158,14 +169,15 @@ export default function ProposalEditor({ grant, organization }) {
       if (url) {
         downloadAuthenticatedUrl(url, { fallbackFileName: `application_${applicationId || 'export'}.docx` }).catch((err) => {
           console.error('[ProposalEditor] export download failed', err)
+          toast({ variant: 'destructive', title: 'Export failed', description: 'The export file could not be downloaded. Please try again.' })
         })
       } else {
-        toast({
-          variant: 'destructive',
-          title: 'Export incomplete',
-          description: 'Export completed but no download was available. Please try again.',
-        })
+        toast({ variant: 'destructive', title: 'Export unavailable', description: 'The server did not return a download URL. Please try again.' })
       }
+    },
+    onError: (err) => {
+      console.error('[ProposalEditor] export failed', err)
+      toast({ variant: 'destructive', title: 'Export failed', description: err?.message || 'An unexpected error occurred during export.' })
     },
   })
 
@@ -385,7 +397,11 @@ export default function ProposalEditor({ grant, organization }) {
               </div>
               <Textarea
                 value={draftContent}
-                onChange={(e) => setDraftContent(e.target.value)}
+                onChange={(e) => {
+                  // Capture which section this content belongs to at the time of typing.
+                  draftTargetSectionKeyRef.current = activeSection?.section_key ?? null
+                  setDraftContent(e.target.value)
+                }}
                 rows={18}
                 className="font-mono text-sm"
                 placeholder="Draft your section here…"
