@@ -90,7 +90,7 @@ function Init-KB{
   Ensure-KBField $kb 'lastScannedCommit' $null
   Ensure-KBField $kb 'lastScanDate' $null
   Ensure-KBField $kb 'runCount' 0
-  Ensure-KBField $kb 'fileRisk' @{}
+  Ensure-KBField $kb 'fileRisk' ([PSCustomObject]@{})
   Ensure-KBField $kb 'bugPatterns' @()
   Ensure-KBField $kb 'endpointHealth' @{}
   Ensure-KBField $kb 'matchGrades' @()
@@ -129,7 +129,13 @@ function Get-Tok([string]$Env,[string]$Pr){
 
 # Record that a file had bugs (increases its risk score for future priority)
 function Learn-FileRisk([string]$FilePath,[int]$BugCount){
-  if(!$script:KB.fileRisk){$script:KB|Add-Member -NotePropertyName 'fileRisk' -NotePropertyValue @{} -Force}
+  if(!$script:KB.fileRisk){$script:KB|Add-Member -NotePropertyName 'fileRisk' -NotePropertyValue ([PSCustomObject]@{}) -Force}
+  # Ensure fileRisk is a PSCustomObject (raw hashtable from Init-KB won't support Add-Member correctly)
+  if($script:KB.fileRisk -is [hashtable]){
+    $converted=[PSCustomObject]@{}
+    foreach($k in $script:KB.fileRisk.Keys){$converted|Add-Member -NotePropertyName $k -NotePropertyValue $script:KB.fileRisk[$k] -Force}
+    $script:KB|Add-Member -NotePropertyName 'fileRisk' -NotePropertyValue $converted -Force
+  }
   $current=0
   if($script:KB.fileRisk.PSObject.Properties.Name -contains $FilePath){
     $current=$script:KB.fileRisk.$FilePath
@@ -550,6 +556,294 @@ function Test-LocalPreFlight([string]$Content,[string]$FilePath,[string]$PrevCon
   return $true
 }
 
+# ===================================================================
+#  LOGIC BUG VERIFICATION - Three-layer post-fix validation
+# ===================================================================
+
+# Layer 0: Decide which verification layers to run based on file path
+function Get-VerificationStrategy([string]$FilePath){
+  # Default: Claude review only
+  $strategy=@{UseClaude=$true;UseTests=$false;UseInvariants=$false}
+
+  # Skip all verification for low-risk files
+  if($FilePath -match '(\.test\.|\.spec\.|__tests__|__mocks__|fixtures|seed-data|scripts/|\.md$|\.json$|\.css$)'){
+    return @{UseClaude=$false;UseTests=$false;UseInvariants=$false}
+  }
+
+  # Mission-critical pipeline: all three layers
+  if($FilePath -match 'backend/services/(match|relevance|opportunity|profileHelper|comprehensiveCrawler|saveToProfile)'){
+    $strategy.UseTests=$true;$strategy.UseInvariants=$true
+  }
+  # Decision engine and filter: all three layers
+  elseif($FilePath -match 'backend/services/(computeMatch|decisionEngine|relevanceFilter)'){
+    $strategy.UseTests=$true;$strategy.UseInvariants=$true
+  }
+  # Anya services: Claude + invariants (grounding rules matter)
+  elseif($FilePath -match 'backend/services/anya|backend/prompts/anya'){
+    $strategy.UseInvariants=$true
+  }
+  # Routes: Claude + tests (API contract matters)
+  elseif($FilePath -match 'backend/routes/'){
+    $strategy.UseTests=$true
+  }
+  # DB layer and middleware: Claude + tests
+  elseif($FilePath -match 'backend/(db|middleware)/'){
+    $strategy.UseTests=$true
+  }
+  # Backend services (general): Claude + tests
+  elseif($FilePath -match 'backend/services/'){
+    $strategy.UseTests=$true
+  }
+  # Stores (state management): Claude + tests
+  elseif($FilePath -match 'src/stores/'){
+    $strategy.UseTests=$true
+  }
+  # API layer: Claude + tests
+  elseif($FilePath -match 'src/api/'){
+    $strategy.UseTests=$true
+  }
+  # Frontend components/pages: Claude only (no backend side effects)
+  # elseif($FilePath -match 'src/(components|pages)/') — default is already Claude-only
+
+  return $strategy
+}
+
+# Layer 1: Post-fix Claude verification (second opinion)
+function Test-ClaudeVerification([string]$OldContent,[string]$NewContent,[string]$FilePath){
+  if($OldContent -eq $NewContent){return $true}
+  # Build a focused diff context (first 80 chars of each changed line)
+  $oldLines=$OldContent -split "`n"
+  $newLines=$NewContent -split "`n"
+  $diffSummary=[System.Text.StringBuilder]::new()
+  $changedCount=0
+  for($i=0;$i -lt [math]::Max($oldLines.Count,$newLines.Count);$i++){
+    $ol=if($i -lt $oldLines.Count){$oldLines[$i]}else{''}
+    $nl=if($i -lt $newLines.Count){$newLines[$i]}else{''}
+    if($ol -ne $nl){
+      $changedCount++
+      if($changedCount -le 40){
+        [void]$diffSummary.AppendLine("L$($i+1) OLD: $($ol.Trim().Substring(0,[math]::Min(100,$ol.Trim().Length)))")
+        [void]$diffSummary.AppendLine("L$($i+1) NEW: $($nl.Trim().Substring(0,[math]::Min(100,$nl.Trim().Length)))")
+      }
+    }
+  }
+  if($changedCount -eq 0){return $true}
+
+  $verdict=Invoke-CJ "You are a code review safety gate. You REJECT changes that introduce logic bugs. You APPROVE changes that are safe." @"
+VERIFY this auto-fix to $FilePath ($changedCount line(s) changed).
+
+Does the NEW code introduce ANY of these logic regressions?
+1. Changed return type or shape that callers depend on
+2. Removed a null/undefined check that guarded against crashes
+3. Removed or reordered a side effect (DB write, API call, logging)
+4. Changed conditional logic that alters which branch executes
+5. Removed error handling (try/catch, .catch, error callback)
+6. Changed a function signature (added/removed/reordered params)
+7. Broke an async flow (missing await, changed promise chain)
+8. Removed an import/require that is still used below the change
+
+Return ONLY JSON:
+{"approved":true,"reason":"one line why safe"}
+or
+{"approved":false,"reason":"what logic bug the fix introduces","severity":"CRITICAL|WARNING"}
+
+CHANGES:
+$($diffSummary.ToString())
+
+FULL NEW FILE (first 300 lines):
+$(($newLines|Select-Object -First 300) -join "`n")
+"@
+
+  if(!$verdict){
+    Write-Log "VERIFY: Claude verification unavailable for ${FilePath}, proceeding with caution" 'WARN'
+    return $true
+  }
+  if($verdict.approved){
+    Write-Log "VERIFY OK ${FilePath}: $($verdict.reason)" 'OK'
+    return $true
+  }
+  Write-Log "VERIFY REJECTED ${FilePath}: $($verdict.reason) [$($verdict.severity)]" 'ERROR'
+  return $false
+}
+
+# Layer 2: Run unit tests against patched file in local clone
+function Test-UnitTests([string]$Content,[string]$FilePath){
+  if(-not $script:M.LocalRepoRoot){
+    Write-Log "VERIFY: No local repo clone — skipping unit tests for ${FilePath}" 'WARN'
+    return $true
+  }
+  $root=$script:M.LocalRepoRoot
+  $full=Join-Path $root $FilePath
+
+  # Find related test files
+  $baseName=[System.IO.Path]::GetFileNameWithoutExtension($FilePath)
+  $dir=[System.IO.Path]::GetDirectoryName($FilePath)
+  $testPatterns=@(
+    (Join-Path $root ($dir -replace '\\','/')  "$baseName.test.*"),
+    (Join-Path $root ($dir -replace '\\','/')  "$baseName.spec.*"),
+    (Join-Path $root ($dir -replace '\\','/') "__tests__" "$baseName.*")
+  )
+
+  $testFiles=@()
+  foreach($tp in $testPatterns){
+    $found=Get-ChildItem -Path (Split-Path $tp -Parent) -Filter (Split-Path $tp -Leaf) -ErrorAction SilentlyContinue
+    if($found){$testFiles+=$found.FullName}
+  }
+
+  if($testFiles.Count -eq 0){
+    Write-Log "VERIFY: No test files found for ${FilePath} — skipping unit test layer" 'INFO'
+    return $true
+  }
+
+  # Write the patched file to local clone (Test-LocalPreFlight already wrote it, but ensure it's current)
+  $utf8=New-Object System.Text.UTF8Encoding $false
+  try{[System.IO.File]::WriteAllText($full,$Content,$utf8)}catch{
+    Write-Log "VERIFY: Cannot write patched file for test — $($_.Exception.Message)" 'WARN'
+    return $true
+  }
+
+  # Run vitest on the specific test file(s)
+  $testPath=$testFiles[0]
+  $relTest=[System.IO.Path]::GetRelativePath($root,$testPath) -replace '\\','/'
+  Write-Log "VERIFY: Running tests — $relTest" 'INFO'
+
+  Push-Location $root
+  $passed=$true
+  try{
+    $npmCmd=Get-Command npm.cmd -ErrorAction SilentlyContinue
+    $npm=if($npmCmd){'npm.cmd'}else{'npm'}
+    $output=& $npm exec -- vitest run $relTest --reporter=json 2>&1
+    if($LASTEXITCODE -ne 0){
+      $passed=$false
+      # Extract failure summary from output
+      $failLines=($output|Out-String) -split "`n"|Where-Object{$_ -match '(FAIL|Error|AssertionError|expected)'}|Select-Object -First 5
+      $failSummary=($failLines -join ' ').Substring(0,[math]::Min(200,($failLines -join ' ').Length))
+      Write-Log "VERIFY TESTS FAILED ${FilePath}: $failSummary" 'ERROR'
+    }else{
+      Write-Log "VERIFY TESTS PASSED ${FilePath}" 'OK'
+    }
+  }catch{
+    Write-Log "VERIFY: Test runner error — $($_.Exception.Message)" 'WARN'
+    $passed=$true  # Don't block on test infrastructure failures
+  }finally{
+    Pop-Location
+  }
+  return $passed
+}
+
+# Layer 3: Domain-specific semantic invariants for GrantFlow
+function Test-SemanticInvariants([string]$Content,[string]$FilePath){
+  $issues=@()
+
+  # --- PIPELINE INTEGRITY INVARIANTS (Goals 3, 4) ---
+  # Any file that inserts into the pipeline MUST call relevanceFilter or reference it
+  if($Content -match 'INSERT\s+INTO\s+.*pipeline|saveToProfilePipeline|\.create\s*\(\s*\{.*pipeline'){
+    if($Content -notmatch 'relevanceFilter|relevance_filter|filterRelevance'){
+      $issues+="GOAL 3,4: File inserts into pipeline without referencing relevanceFilter"
+    }
+  }
+
+  # Any file with saveToProfilePipeline must flow through computeMatchDecision or accept its output
+  if($Content -match 'saveToProfilePipeline'){
+    if($Content -notmatch 'computeMatchDecision|match_decision|matchDecision'){
+      $issues+="GOAL 4: saveToProfilePipeline called without computeMatchDecision in scope"
+    }
+  }
+
+  # --- AUDIT COLUMN INVARIANTS (Goal 8) ---
+  # If a file calls saveToProfilePipeline, it should pass audit metadata
+  if($Content -match 'saveToProfilePipeline\s*\('){
+    $auditColumns=@('match_decision','match_explanation','matched_needs','matcher_version')
+    $missingCols=@()
+    foreach($col in $auditColumns){
+      if($Content -notmatch $col){$missingCols+=$col}
+    }
+    if($missingCols.Count -ge 3){
+      $issues+="GOAL 8: saveToProfilePipeline called but missing audit columns: $($missingCols -join ', ')"
+    }
+  }
+
+  # --- DECISION AUTHORITY INVARIANT (Goal 4) ---
+  # Files should not implement parallel scoring outside the decision engine
+  if($FilePath -notmatch 'matchingEngine|matchEngine|computeMatch'){
+    if($Content -match 'function\s+(computeScore|calculateMatch|scoreOpportunity|rankGrants)\s*\('){
+      $issues+="GOAL 4: Defines a scoring/matching function outside the canonical decision engine"
+    }
+  }
+
+  # --- ANYA GROUNDING INVARIANTS (Goals 14, 15) ---
+  if($FilePath -match 'anya'){
+    # Anya must not return hardcoded responses without data lookup
+    if($Content -match 'function\s+\w*[Rr]espond\w*\s*\(' -or $Content -match 'function\s+\w*[Aa]nswer\w*\s*\('){
+      if($Content -notmatch '(fetchProfile|getProfile|queryOpportunities|toolRegistry|adminTools|helpKnowledge)'){
+        $issues+="GOAL 14,15: Anya response function exists without data-grounding tool references"
+      }
+    }
+  }
+
+  # --- URL VALIDATION INVARIANT (Goal 1) ---
+  # If storing URLs in DB, should validate them
+  if($Content -match 'application_url|source_url|\.url\s*=' -and $Content -match 'INSERT|\.create\s*\(|\.update\s*\('){
+    if($Content -notmatch '(validateUrl|isValidUrl|url_validator|URL\s*\(|new\s+URL|\.startsWith\s*\(\s*[''"]http)'){
+      $issues+="GOAL 1: URLs stored in DB without visible validation"
+    }
+  }
+
+  # --- SUPPRESSION VISIBILITY INVARIANT (Goals 7, 8) ---
+  # If filtering/rejecting grants, must log the reason
+  if($Content -match '(reject|disqualif|exclude|filter.*out|skip.*grant)' -and $Content -match '(opportunity|grant|funding)'){
+    if($Content -notmatch '(log|logger|console\.(log|warn|info)|Write-Log|reason|explanation|ineligibility_reasons)'){
+      $issues+="GOAL 7,8: Grant filtering/rejection without logging rejection reason"
+    }
+  }
+
+  # --- PROFILE DEPTH INVARIANT (Goal 5) ---
+  # Match-related files should read beyond surface fields
+  if($FilePath -match '(match|relevance|opportunity)' -and $FilePath -match 'backend/services/'){
+    $surfaceOnly=$Content -match '(profile\.name|profile\.zip|profile\.type|profile\.email)' -and
+      $Content -notmatch '(profile\.(military|education|family|health|emergency|business|housing|employment|financial|disability)|normalised|normalized|deep_profile|profile_sections)'
+    if($surfaceOnly){
+      $issues+="GOAL 5: Matching service reads only surface profile fields (name/zip/type) without deep sections"
+    }
+  }
+
+  if($issues.Count -gt 0){
+    foreach($iss in $issues){Write-Log "INVARIANT FAIL ${FilePath}: $iss" 'ERROR'}
+    return $false
+  }
+  Write-Log "INVARIANTS OK ${FilePath}" 'OK'
+  return $true
+}
+
+# Orchestrator: runs the appropriate verification layers for a given file
+function Test-LogicVerification([string]$OldContent,[string]$NewContent,[string]$FilePath){
+  if($FilePath -notmatch '\.(js|mjs|jsx|ts|tsx)$'){return $true}
+  if($OldContent -eq $NewContent){return $true}
+
+  $strategy=Get-VerificationStrategy $FilePath
+  # If all layers are off (low-risk file), pass immediately
+  if(-not $strategy.UseClaude -and -not $strategy.UseTests -and -not $strategy.UseInvariants){return $true}
+
+  Write-Log "VERIFY ${FilePath}: Claude=$($strategy.UseClaude) Tests=$($strategy.UseTests) Invariants=$($strategy.UseInvariants)" 'INFO'
+
+  # Layer 3 first (instant, free) — fail fast on invariant violations
+  if($strategy.UseInvariants){
+    if(-not (Test-SemanticInvariants $NewContent $FilePath)){return $false}
+  }
+
+  # Layer 1 (cheap API call) — catch logic regressions
+  if($strategy.UseClaude){
+    if(-not (Test-ClaudeVerification $OldContent $NewContent $FilePath)){return $false}
+  }
+
+  # Layer 2 (slow but definitive) — run unit tests
+  if($strategy.UseTests){
+    if(-not (Test-UnitTests $NewContent $FilePath)){return $false}
+  }
+
+  return $true
+}
+
 function Write-GH([string]$P,[string]$C,[string]$S,[string]$Msg,[string]$PrevContent=''){
   Ensure-CodeGuardWorkBranch
   if(-not (Test-MainBranchHealth)){
@@ -568,6 +862,11 @@ function Write-GH([string]$P,[string]$C,[string]$S,[string]$Msg,[string]$PrevCon
   }
   if(-not (Test-LocalPreFlight $C $P $PrevContent)){
     Write-Log "BLOCKED commit to ${P} - local preflight (eslint/node) failed" 'ERROR'
+    $script:S.Errs++
+    return $false
+  }
+  if(-not (Test-LogicVerification $PrevContent $C $P)){
+    Write-Log "BLOCKED commit to ${P} - logic verification failed" 'ERROR'
     $script:S.Errs++
     return $false
   }
@@ -843,10 +1142,15 @@ $($promptParts -join "`n`n---`n`n")
             $content=$targetFd.c;$applied=0
             foreach($fx in $fixable){
               $orig=[string]$fx.original_code;$repl=[string]$fx.fixed_code
-              if($orig -and $content.Contains($orig)){
-                $content=$content.Replace($orig,$repl);$applied++
-                $goalServed=if($fx.goals_served){"(Goals $($fx.goals_served -join ','))"}else{''}
-                [void]$fixes.Add("$($result.file): $($fx.description) $goalServed")
+              if($orig){
+                $sr=Invoke-SafeReplace $content $orig $repl $result.file
+                if($sr.Matched){
+                  $content=$sr.Content;$applied++
+                  $goalServed=if($fx.goals_served){"(Goals $($fx.goals_served -join ','))"}else{''}
+                  [void]$fixes.Add("$($result.file): $($fx.description) $goalServed [match:$($sr.Method)]")
+                } else {
+                  [void]$rpt.Add("- [SKIP] Fix not applied (code mismatch): $($fx.description)")
+                }
               }
             }
             if($applied -gt 0 -and $content -ne $targetFd.c){
@@ -865,7 +1169,8 @@ $($promptParts -join "`n`n---`n`n")
 
   # Flush remaining batch
   if($batch.Count -gt 0){
-    $promptParts=foreach($af in $batch){"FILE: $($af.p)`n$($af.c)"}
+    $filesToAnalyze=$batch.ToArray()
+    $promptParts=foreach($af in $filesToAnalyze){"FILE: $($af.p)`n$($af.c)"}
     $a=Invoke-CJ $sysCtx "Analyze for bugs that break GrantFlow's mission goals (see system context). For each error state which goals_violated. For each fix state goals_served and fix_rationale. Return ONLY JSON: {`"results`":[{`"file`":`"PATH`",`"errors`":[{`"line`":null,`"severity`":`"CRITICAL`",`"type`":`"category`",`"goals_violated`":[],`"description`":`"problem`",`"original_code`":`"`",`"fixed_code`":`"`",`"goals_served`":[],`"fix_rationale`":`"`",`"can_auto_fix`":true}],`"summary`":`"`"}]}`n$($promptParts -join "`n---`n")"
     if($a -and $a.results){
       foreach($result in $a.results){
@@ -877,6 +1182,32 @@ $($promptParts -join "`n`n---`n`n")
           [void]$rpt.Add("## $($result.file)")
           foreach($e in $result.errors){[void]$rpt.Add("- [$($e.severity)] $($e.type): $($e.description)")}
           [void]$rpt.Add("")
+          $fixable=$result.errors|Where-Object{$_.can_auto_fix -and $_.original_code -and $_.fixed_code}
+          if($fixable.Count -gt 0){
+            $targetFd=$filesToAnalyze|Where-Object{$_.p -eq $result.file}|Select-Object -First 1
+            if($targetFd){
+              $content=$targetFd.c;$applied=0
+              foreach($fx in $fixable){
+                $orig=[string]$fx.original_code;$repl=[string]$fx.fixed_code
+                if($orig){
+                  $sr=Invoke-SafeReplace $content $orig $repl $result.file
+                  if($sr.Matched){
+                    $content=$sr.Content;$applied++
+                    $goalServed=if($fx.goals_served){"(Goals $($fx.goals_served -join ','))"}else{''}
+                    [void]$fixes.Add("$($result.file): $($fx.description) $goalServed [match:$($sr.Method)]")
+                  } else {
+                    [void]$rpt.Add("- [SKIP] Fix not applied (code mismatch): $($fx.description)")
+                  }
+                }
+              }
+              if($applied -gt 0 -and $content -ne $targetFd.c){
+                $commitGoals=($fixable|Where-Object{$_.goals_served}|ForEach-Object{$_.goals_served}|Sort-Object -Unique) -join ','
+                $commitMsg=if($commitGoals){"Fix $applied issue(s) [Goals $commitGoals]"}else{"Fix $applied issue(s)"}
+                if(Write-GH $result.file $content $targetFd.sha $commitMsg $targetFd.c){$script:S.Fixes+=$applied}
+                Start-Sleep 1
+              }
+            }
+          }
         }
       }
     }
@@ -1028,7 +1359,8 @@ function Start-TestAndFix{
       if($em.Length -gt 80){$em=$em.Substring(0,80)+'...'}
       [void]$rpt.Add("FAIL [$c] $($ep.p) (${ms}ms) $em")
       $fail++;$script:S.Fail++
-      Learn-EndpointHealth $ep.p ([int]$c) $ms $false
+      $cInt=if($c -match '^\d+$'){[int]$c}else{0}
+      Learn-EndpointHealth $ep.p $cInt $ms $false
       [void]$fails.Add(@{e="$($ep.m) $($ep.p)";c=$c;m=$em;n=$ep.n})
       Write-Log "  FAIL [$c] $($ep.p)" 'ERROR'
     }
@@ -2134,8 +2466,7 @@ if($testResult){
   exit 1
 }
 
-Start-Process $script:M.App
-Start-Sleep -Milliseconds 500
+if($Mode -eq 'Menu'){Start-Process $script:M.App;Start-Sleep -Milliseconds 500}
 
 function Run-Mode([string]$M){
   switch($M){
