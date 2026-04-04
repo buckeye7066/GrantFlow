@@ -128,7 +128,7 @@ function EngagementRow({ profileDetail, activeGrants, urgentDeadlines }) {
             {completionPct === 100 && <CheckCircle2 className="w-4 h-4 text-emerald-500" />}
           </div>
           <Progress value={completionPct} className="h-2" />
-          <p className="text-xs text-slate-500">
+          <p className="text-xs text-slate-600">
             {completionPct < 100 ? `${filledCount} of ${totalCount} sections filled` : 'Profile complete'}
           </p>
         </CardContent>
@@ -143,7 +143,7 @@ function EngagementRow({ profileDetail, activeGrants, urgentDeadlines }) {
         </CardHeader>
         <CardContent>
           <p className="text-lg font-semibold">{savedIds.length}</p>
-          <p className="text-xs text-slate-500 mt-1">
+          <p className="text-xs text-slate-600 mt-1">
             {savedIds.length === 0 ? 'Star grants in Discovery to save them' : 'Bookmarked for later'}
           </p>
           {savedIds.length > 0 && (
