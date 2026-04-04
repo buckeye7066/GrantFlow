@@ -35,6 +35,8 @@ import StudentPortalsCard from "@/components/profiles/StudentPortalsCard.jsx"
 import HealthResourcesCard from "@/components/profiles/HealthResourcesCard.jsx"
 import { SECTION_METADATA } from "@/config/sectionMetadata"
 
+const CORE_SECTION_KEYS = Object.keys(SECTION_METADATA).slice(0, 8)
+
 export default function ProfileDetail() {
   const [searchParams] = useSearchParams()
   const navigate = useNavigate()
@@ -443,7 +445,6 @@ export default function ProfileDetail() {
     [aiSuggestionMutation, toast],
   )
 
-  const CORE_SECTION_KEYS = Object.keys(SECTION_METADATA).slice(0, 8)
   const filledSectionKeys = React.useMemo(() => {
     if (!profile?.sections) return []
     const sectionDataMap = Object.fromEntries(
