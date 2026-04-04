@@ -24,12 +24,12 @@ export function showECFErrorToast(toast) {
 export function toastSearchStart(toast, isComprehensive) {
   if (isComprehensive) {
     toast({
-      title: '🔍 Deep Search in Progress...',
-      description: 'AI is analyzing your profile and searching across 1000+ funding sources. This may take 30-60 seconds...',
+      title: 'Deep Search in Progress',
+      description: 'AI is analyzing your profile and searching across 1000+ funding sources. This may take 30-60 seconds.',
     });
   } else {
     toast({
-      title: '🔍 Searching...',
+      title: 'Searching...',
       description: 'Looking for matching opportunities...',
     });
   }
@@ -37,23 +37,41 @@ export function toastSearchStart(toast, isComprehensive) {
 
 export function toastECFStart(toast) {
   toast({
-    title: '🔍 Discovering ECF Services...',
+    title: 'Discovering ECF Services',
     description: 'Searching for local benefits and services for ECF CHOICES participants...',
   });
 }
 
-export function toastSuccess(toast, count, searchName) {
+/**
+ * Build a profile-aware zero-result description.
+ * profileGaps is an object with optional booleans: missingLocation, missingEntityType, missingKeywords.
+ */
+export function buildZeroResultDescription(profileGaps = {}) {
+  const { missingLocation, missingEntityType, missingKeywords } = profileGaps;
+  if (missingLocation) {
+    return 'No results found. Add your location (state or ZIP) to find state and local programs.';
+  }
+  if (missingEntityType) {
+    return 'No results found. Tell us who you are (individual, nonprofit, business) to see relevant grants.';
+  }
+  if (missingKeywords) {
+    return 'No results found. Add focus areas or describe your situation to improve matches.';
+  }
+  return 'No results found. Try widening your search — remove some filters or ask Anya to find alternatives.';
+}
+
+export function toastSuccess(toast, count, searchName, profileGaps) {
   toast({
-    title: searchName === 'comprehensive' ? '✅ Deep Search Complete' : '✨ Discovery Complete',
-    description: count > 0 
+    title: searchName === 'comprehensive' ? 'Deep Search Complete' : 'Discovery Complete',
+    description: count > 0
       ? `Found ${count} matching opportunities.`
-      : 'No opportunities found matching your criteria.',
+      : buildZeroResultDescription(profileGaps),
   });
 }
 
 export function toastECFSuccess(toast, count) {
   toast({
-    title: '✅ ECF Services Discovered',
+    title: 'ECF Services Discovered',
     description: `Found ${count} services and benefits available in your area.`,
   });
 }

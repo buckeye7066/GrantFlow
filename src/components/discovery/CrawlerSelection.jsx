@@ -223,10 +223,15 @@ export default function CrawlerSelection({
   };
 
   const handleSelectAll = () => {
-    if (selectedCrawlers.size === CRAWLER_CONFIGS.length) {
+    // Only consider selectable (non-locked) crawlers for the toggle
+    const selectableIds = CRAWLER_CONFIGS
+      .filter((c) => !(c.id === 'ecf_benefits' && !ecfUnlock.allowed))
+      .map((c) => c.id);
+    const allSelectableSelected = selectableIds.every((id) => selectedCrawlers.has(id));
+    if (allSelectableSelected) {
       setSelectedCrawlers(new Set());
     } else {
-      setSelectedCrawlers(new Set(CRAWLER_CONFIGS.map(c => c.id)));
+      setSelectedCrawlers(new Set(selectableIds));
     }
   };
 
@@ -378,8 +383,10 @@ export default function CrawlerSelection({
     });
   };
 
-  const allSelected = selectedCrawlers.size === CRAWLER_CONFIGS.length;
   const someSelected = selectedCrawlers.size > 0;
+  const allSelected = someSelected && CRAWLER_CONFIGS
+    .filter((c) => !(c.id === 'ecf_benefits' && !ecfUnlock.allowed))
+    .every((c) => selectedCrawlers.has(c.id));
   const hasValidProfile = Boolean((typeof profileId === 'string' ? profileId.trim() : null) || null);
   const anyDbFallback = Object.values(results || {}).some((r) => r && r.used_db_fallback);
   const missingZipLikely = Object.values(results || {}).some((r) => r?.debug && r.debug.has_zip === false);

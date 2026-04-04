@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { TrendingUp, FileText, Plus } from "lucide-react";
 
-export default function RecentGrantsCard({ grants }) {
+export default function RecentGrantsCard({ grants = [] }) {
   return (
     <Card className="shadow-lg bg-card text-card-foreground">
       <CardHeader className="border-b border-border pb-4">

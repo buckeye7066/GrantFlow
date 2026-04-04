@@ -10,6 +10,7 @@ const DiscoverGrants = lazy(() => import("./DiscoverGrants"));
 const SmartMatcher = lazy(() => import("./SmartMatcher"));
 const ItemFunding = lazy(() => import("./ItemFunding"));
 const Pipeline = lazy(() => import("./Pipeline"));
+const Applications = lazy(() => import("./Applications"));
 const Proposals = lazy(() => import("./Proposals"));
 const Outreach = lazy(() => import("./Outreach"));
 const GrantDeadline = lazy(() => import("./GrantDeadline"));
@@ -87,7 +88,9 @@ const PAGES = {
     ItemFunding: ItemFunding,
     
     Pipeline: Pipeline,
-    
+
+    Applications: Applications,
+
     Proposals: Proposals,
     
     Outreach: Outreach,
@@ -239,6 +242,8 @@ function LayoutRoutes() {
                 <Route path="/ItemFunding" element={withBoundary(<ItemFunding />, "ItemFunding")} />
 
                 <Route path="/Pipeline" element={withBoundary(<Pipeline />, "Pipeline")} />
+
+                <Route path="/Applications" element={withBoundary(<Applications />, "Applications")} />
 
                 <Route path="/Proposals" element={withBoundary(<Proposals />, "Proposals")} />
 

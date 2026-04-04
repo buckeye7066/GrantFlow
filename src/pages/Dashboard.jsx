@@ -420,8 +420,16 @@ export default function Dashboard() {
       <div className="p-6 md:p-8">
         <Alert variant="destructive">
           <AlertCircle className="h-4 w-4" />
-          <AlertDescription>
-            Failed to load dashboard data. Please try refreshing the page.
+          <AlertDescription className="flex flex-col gap-3">
+            <span>Failed to load dashboard data. Check your connection, then try refreshing.</span>
+            <Button
+              size="sm"
+              variant="outline"
+              className="w-fit"
+              onClick={() => window.location.reload()}
+            >
+              Refresh page
+            </Button>
           </AlertDescription>
         </Alert>
       </div>

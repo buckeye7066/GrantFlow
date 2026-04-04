@@ -8,7 +8,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import { MoreVertical, Star, Edit, Trash2, Calendar, DollarSign, Building2, Target, CheckSquare, Sparkles, ExternalLink, AlertCircle } from 'lucide-react';
+import { MoreVertical, Star, Edit, Trash2, Calendar, DollarSign, Building2, Target, CheckSquare, Sparkles, ExternalLink, AlertCircle, Clock } from 'lucide-react';
 import { format, isPast } from 'date-fns';
 import { Link, useNavigate } from 'react-router-dom';
 import { createPageUrl } from '@/utils';
@@ -72,6 +72,17 @@ export default function GrantCard({ grant, organization, organizationName, onSta
   const isDeadlineValid = deadlineDate && !isNaN(deadlineDate.getTime());
   const isExpired = isDeadlineValid && isPast(deadlineDate) && grant.deadline.toLowerCase() !== 'rolling';
 
+  // Deadline urgency: days remaining (null when no valid deadline or already expired)
+  const daysUntilDeadline = isDeadlineValid && !isExpired
+    ? Math.ceil((deadlineDate.getTime() - Date.now()) / (1000 * 60 * 60 * 24))
+    : null;
+  const deadlineUrgency = daysUntilDeadline !== null
+    ? daysUntilDeadline <= 7 ? 'critical' : daysUntilDeadline <= 14 ? 'warning' : 'normal'
+    : null;
+
+  // Freshness badge — only show for stale or unverified
+  const freshness = grant.freshness ?? null;
+
   // Normalize snake_case eligibility_bullets from backend to camelCase
   const eligibilityBullets = grant.eligibilityBullets ?? grant.eligibility_bullets ?? [];
   // Check if this is a discovery result (from FundingOpportunity entity)
@@ -119,6 +130,23 @@ export default function GrantCard({ grant, organization, organizationName, onSta
                 </Badge>
               </HelpTip>
             )}
+          {/* Freshness Badge — only shown for stale or unverified opportunities */}
+          {freshness === 'stale' && (
+            <HelpTip text="Last verified 90+ days ago — verify this is still active before applying.">
+              <Badge variant="outline" className="text-xs bg-amber-50 text-amber-700 border-amber-300 cursor-help">
+                <Clock className="w-3 h-3 mr-1" />
+                !
+              </Badge>
+            </HelpTip>
+          )}
+          {freshness === 'unverified' && (
+            <HelpTip text="Verification date unknown — confirm this opportunity is still open before applying.">
+              <Badge variant="outline" className="text-xs bg-slate-100 text-slate-500 border-slate-300 cursor-help">
+                <Clock className="w-3 h-3 mr-1" />
+                ?
+              </Badge>
+            </HelpTip>
+          )}
           {/* Pro Bono / In-Kind / Service Type Badge */}
           {['pro_bono', 'in_kind', 'charity_care', 'training_paid', 'legal_aid', 'clinic_service', 'equipment_donation'].includes(grant.opportunity_type) && (
             <Badge variant="secondary" className="text-xs bg-purple-100 text-purple-800 border-purple-200">
@@ -274,8 +302,31 @@ export default function GrantCard({ grant, organization, organizationName, onSta
           )}
 
           <div className="flex flex-wrap gap-2 items-center">
-            {isDeadlineValid && (
-              <div className={`flex items-center gap-1 text-xs ${isExpired ? 'text-red-600 font-semibold' : 'text-slate-600'}`}>
+            {isExpired && (
+              <div className="flex items-center gap-1 text-xs text-red-600 font-semibold">
+                <Calendar className="w-3 h-3" />
+                <span className="line-through">{format(deadlineDate, 'MMM d, yyyy')}</span>
+                <span className="no-underline ml-0.5">— Deadline passed</span>
+              </div>
+            )}
+            {!isExpired && isDeadlineValid && deadlineUrgency === 'critical' && (
+              <HelpTip text={`Only ${daysUntilDeadline} day${daysUntilDeadline === 1 ? '' : 's'} remaining — act soon!`}>
+                <div className="flex items-center gap-1 text-xs text-red-600 font-semibold cursor-help">
+                  <Calendar className="w-3 h-3" />
+                  <span>⚠ {daysUntilDeadline} day{daysUntilDeadline === 1 ? '' : 's'} left ({format(deadlineDate, 'MMM d')})</span>
+                </div>
+              </HelpTip>
+            )}
+            {!isExpired && isDeadlineValid && deadlineUrgency === 'warning' && (
+              <HelpTip text={`Deadline in ${daysUntilDeadline} days — start preparing your application.`}>
+                <div className="flex items-center gap-1 text-xs text-amber-600 font-medium cursor-help">
+                  <Calendar className="w-3 h-3" />
+                  <span>{format(deadlineDate, 'MMM d, yyyy')} ({daysUntilDeadline}d)</span>
+                </div>
+              </HelpTip>
+            )}
+            {!isExpired && isDeadlineValid && deadlineUrgency === 'normal' && (
+              <div className="flex items-center gap-1 text-xs text-slate-600">
                 <Calendar className="w-3 h-3" />
                 <span>{format(deadlineDate, 'MMM d, yyyy')}</span>
               </div>

@@ -8,7 +8,7 @@ import { createPageUrl } from '@/utils';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Button } from '@/components/ui/button';
-import { Loader2, Search, User, Lightbulb, ArrowRight, CheckCircle2, AlertTriangle } from 'lucide-react';
+import { Loader2, Search, User, Lightbulb, ArrowRight, CheckCircle2, AlertTriangle, MessageCircle } from 'lucide-react';
 import HelpTip from '@/components/help/HelpTip';
 import SearchResults from '@/components/discovery/SearchResults';
 import { Badge } from '@/components/ui/badge';
@@ -18,6 +18,8 @@ import { Label } from '@/components/ui/label';
 import { useAuthStore } from '@/stores/authStore';
 import { createLogger } from '@/utils/logger'
 import { getProfileContextIncompleteHint } from '@/components/discovery/profileContextIncompleteUi'
+import { openAnyaPanel } from '@/components/anya/AnyaFloatingButton'
+import { buildZeroResultDescription } from '@/components/discovery/discoveryToasts'
 
 /**
  * Client-side relevance check mirroring the backend hard disqualification rules.
@@ -113,6 +115,7 @@ export default function DiscoverGrants() {
   const [searchResults, setSearchResults] = useState([]);
   const [minMatchScore, setMinMatchScore] = useState(35);
   const [isSearching, setIsSearching] = useState(false);
+  const [hasSearched, setHasSearched] = useState(false);
   const [profileCompletionHint, setProfileCompletionHint] = useState(null)
   const profileSelectorRef = React.useRef(null)
   const searchActionsRef = React.useRef(null)
@@ -170,9 +173,10 @@ export default function DiscoverGrants() {
     }
   }, [selectedProfileId]);
 
-  // Restore last selected profile on mount
+  // Restore last selected profile on mount (only when no URL param is present, to avoid overriding it).
   useEffect(() => {
-    if (!selectedProfileId && profiles.length > 0) {
+    const urlProfileId = searchParams.get('profile_id')
+    if (!selectedProfileId && !urlProfileId && profiles.length > 0) {
       try {
         const lastProfile = localStorage.getItem('grantflow:discover-last-profile');
         if (lastProfile && profiles.some(p => p.id === lastProfile)) {
@@ -180,12 +184,13 @@ export default function DiscoverGrants() {
         }
       } catch { /* ignore storage errors */ }
     }
-  }, [profiles]);
+  }, [profiles, searchParams, selectedProfileId]);
 
 
   // Clear stale results and invalidate caches whenever the effective profile changes
   useEffect(() => {
     setSearchResults([]);
+    setHasSearched(false);
     setProfileCompletionHint(null);
     queryClient.invalidateQueries({ queryKey: ['discover-catalog'] });
     queryClient.invalidateQueries({ queryKey: ['discover-profile'] });
@@ -295,6 +300,34 @@ export default function DiscoverGrants() {
     return missing
   }, [selectedProfile, profileDetail, profileForSearch, selectedOrg])
 
+  // Structured profile gap flags for profile-aware zero-result guidance
+  const profileGaps = useMemo(() => {
+    if (!selectedProfile) return {}
+    const sections = sectionsMap(profileDetail)
+    const basic = sections.basic_information || {}
+    const locationFocus = sections.location_focus || {}
+    const hasLocation =
+      basic.state ||
+      locationFocus.state ||
+      profileForSearch?.state ||
+      selectedOrg?.state ||
+      basic.zip ||
+      basic.zip_code ||
+      locationFocus.zip ||
+      locationFocus.zip_code ||
+      profileForSearch?.zip_code ||
+      profileForSearch?.zip
+    const hasEntityType = Boolean(selectedProfile.primary_type || profileForSearch?.primary_type)
+    const interests = profileForSearch?.signals?.interests
+    const tags = profileForSearch?.tags
+    const hasKeywords = (interests && interests.size > 0) || (Array.isArray(tags) && tags.length > 0)
+    return {
+      missingLocation: !hasLocation,
+      missingEntityType: !hasEntityType,
+      missingKeywords: !hasKeywords,
+    }
+  }, [selectedProfile, profileDetail, profileForSearch, selectedOrg])
+
   const handleFindFunding = async () => {
     const profileIdToUse = effectiveProfileId ?? selectedProfileId
     const pid = (typeof profileIdToUse === 'string' ? profileIdToUse.trim() : null) || null
@@ -400,12 +433,20 @@ export default function DiscoverGrants() {
     // Refresh pipeline once (avoid spamming invalidations during batch add).
     queryClient.invalidateQueries({ queryKey: ['grants'] })
 
-    toast({
-      title: 'Search complete',
-      description: `Found ${opportunities.length} opportunities. Pipeline update: ${addedCount} added, ${alreadyCount} already in pipeline, ${failedCount} failed (from ${attempted} eligible).`,
-    })
-    
+    if (opportunities.length === 0) {
+      toast({
+        title: 'No results found',
+        description: buildZeroResultDescription(profileGaps),
+      })
+    } else {
+      toast({
+        title: 'Search complete',
+        description: `Found ${opportunities.length} opportunities. Pipeline update: ${addedCount} added, ${alreadyCount} already in pipeline, ${failedCount} failed (from ${attempted} eligible).`,
+      })
+    }
+
     // Update search results to show crawler results
+    setHasSearched(true)
     setSearchResults(opportunities);
   };
 
@@ -940,6 +981,64 @@ export default function DiscoverGrants() {
             </div>
           </CardContent>
         </Card>
+
+        {/* Zero-result guidance: shown after a search completes with no results */}
+        {hasSearched && searchResults.length === 0 && catalogOpportunities.length === 0 && !isSearching && (
+          <Card className="mb-8 border-amber-200 bg-amber-50/50">
+            <CardContent className="p-6">
+              <div className="flex flex-col items-start gap-4 sm:flex-row sm:items-center">
+                <AlertTriangle className="h-6 w-6 shrink-0 text-amber-600" />
+                <div className="flex-1 space-y-2">
+                  <p className="font-semibold text-amber-900">No matching opportunities found</p>
+                  <p className="text-sm text-amber-800">
+                    {buildZeroResultDescription(profileGaps)}
+                  </p>
+                  {profileGaps.missingLocation && (
+                    <p className="text-xs text-amber-700">
+                      Tip: Add your state or ZIP code to your profile to unlock local and state-level programs.
+                    </p>
+                  )}
+                  {profileGaps.missingEntityType && (
+                    <p className="text-xs text-amber-700">
+                      Tip: Set your profile type (individual, nonprofit, small business) so we can filter irrelevant programs.
+                    </p>
+                  )}
+                  {profileGaps.missingKeywords && (
+                    <p className="text-xs text-amber-700">
+                      Tip: Add interests, focus areas, or describe your situation in your profile for better matches.
+                    </p>
+                  )}
+                </div>
+                <div className="flex flex-col gap-2 sm:items-end">
+                  {selectedProfile?.id && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="border-amber-400 text-amber-900 hover:bg-amber-100 whitespace-nowrap"
+                      onClick={() => navigate(createPageUrl('ProfileDetail', { id: selectedProfile.id }))}
+                    >
+                      Update Profile
+                    </Button>
+                  )}
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="gap-2 border-purple-300 text-purple-700 hover:bg-purple-50 whitespace-nowrap"
+                    onClick={() => {
+                      const msg = profileGaps.missingLocation
+                        ? "Help me find grants — I haven't set my location yet"
+                        : "Help me improve my profile to get better grant matches"
+                      openAnyaPanel({ prefillMessage: msg })
+                    }}
+                  >
+                    <MessageCircle className="h-4 w-4" />
+                    Get Help from Anya
+                  </Button>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        )}
 
         {/* Results Display: catalog matches (real grants from DB) + crawler results (directories/live crawl), deduped */}
         {((catalogOpportunities.length > 0) || searchResults.length > 0) && (

@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { apiFetch } from '@/api/client'
+import { toast } from '@/components/ui/use-toast'
 
 const DEFAULT_PREFERENCES = {
   sidebar_position: 'left',
@@ -111,11 +112,12 @@ export const useSettingsStore = create((set, get) => ({
       get().applyTheme()
     } catch (error) {
       console.error('Failed to fetch preferences:', error)
-      set({ 
-        error: error.message, 
+      set({
+        error: error.message,
         isLoading: false,
-        isInitialized: true 
+        isInitialized: true
       })
+      // Use defaults silently — no toast needed since app still functions with DEFAULT_PREFERENCES.
     }
   },
 
@@ -136,8 +138,17 @@ export const useSettingsStore = create((set, get) => ({
       set({ preferences: { ...DEFAULT_PREFERENCES, ...data }, error: null })
     } catch (error) {
       console.error('Failed to update preferences:', error)
-      // Revert on error
+      // Revert on error and notify user so they know the change didn't save
       set({ preferences: currentPrefs, error: error.message })
+      try {
+        toast({
+          variant: 'destructive',
+          title: 'Settings not saved',
+          description: 'Your preference change could not be saved. Please try again.',
+        })
+      } catch {
+        // toast may not be mounted in all contexts
+      }
     }
   },
 

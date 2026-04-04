@@ -25,7 +25,7 @@ import { isGrantExpired } from "@/components/shared/grantUtils";
 import { createPageUrl } from "@/utils";
 import { countBy } from "lodash";
 import { listProfiles } from "@/api/profiles";
-import { apiFetch } from "@/api/apiClient";
+import { apiFetch } from "@/api/client";
 import { env } from "@/config/env.js";
 import { useAuthStore } from "@/stores/authStore";
 

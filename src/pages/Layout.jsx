@@ -37,6 +37,7 @@ import AnyaFloatingButton from "@/components/anya/AnyaFloatingButton";
 import { AnyaContextProvider } from "@/contexts/AnyaContext";
 import { useFeatureFlags } from "@/lib/featureFlags";
 import ProBonoBanner from "@/components/banners/ProBonoBanner.jsx";
+import NotificationBell from "@/components/notifications/NotificationBell";
 import FirstRunOnboardingGate from "@/components/onboarding/FirstRunOnboardingGate";
 import AppBreadcrumb from "@/components/shared/AppBreadcrumb";
 import GrantLifecyclePhaseIndicator from "@/components/shared/GrantLifecyclePhaseIndicator";
@@ -313,6 +314,7 @@ export default function Layout({ children, currentPageName }) {
               <Sparkles className="w-3.5 h-3.5 mr-2" />
               User Manual
             </Button>
+            <NotificationBell />
             <Button
               variant="outline"
               size="icon"
