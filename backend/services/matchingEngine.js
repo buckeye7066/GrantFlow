@@ -76,16 +76,11 @@ export function calculateMatchScore(profile, opportunity) {
   let geoPoints = 0
 
   // Check unknown profile location first — no location data means we cannot verify
-  // geographic eligibility for location-specific opportunities.
-  // For national opportunities, treat an unknown location as a neutral match.
+  // geographic eligibility even for national opportunities. Always apply a -5 penalty
+  // so that incomplete profiles are consistently nudged to add their location.
   if (!profileZip && !profileCounty && !profileCity && !profileState) {
-    if (oppIsNational || !oppState) {
-      geoTier = 'national'
-      geoPoints = 8 // National opportunity, unknown location — neutral positive
-    } else {
-      geoTier = 'unknown'
-      geoPoints = -5 // Location-specific opportunity, no profile location
-    }
+    geoTier = 'unknown'
+    geoPoints = -5 // Unknown location — cannot verify geographic eligibility
   } else if (profileZip && oppZip && String(profileZip).trim() === String(oppZip).trim()) {
     geoTier = 'zip'
     geoPoints = 25
@@ -122,9 +117,8 @@ export function calculateMatchScore(profile, opportunity) {
   else if (geoTier === 'county') reasons.push('Geography: County match')
   else if (geoTier === 'city') reasons.push('Geography: City match (text)')
   else if (geoTier === 'state') reasons.push('Geography: State match')
-  else if (geoTier === 'national' && (!profileZip && !profileCounty && !profileCity && !profileState)) reasons.push('National eligibility (location not set on profile)')
   else if (geoTier === 'national') reasons.push('National eligibility')
-  else if (geoTier === 'unknown') reasons.push('Location unknown — cannot verify geographic eligibility for this state-specific opportunity')
+  else if (geoTier === 'unknown') reasons.push('Location unknown — add your state to improve match accuracy')
   else if (geoTier === 'mismatch') reasons.push('Geography mismatch (soft penalty)')
   
   // Applicant type match (25 pts)

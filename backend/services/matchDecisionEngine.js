@@ -32,7 +32,7 @@ export { normalizeOpportunity, computeOpportunityFingerprint } from './opportuni
 import { normalizeProfile, computeProfileFingerprint } from './profileNormalizer.js'
 import { normalizeOpportunity, computeOpportunityFingerprint } from './opportunityNormalizer.js'
 
-export const MATCHER_VERSION = '2.0.0'
+export const MATCHER_VERSION = '3.0.0'
 
 // ---------------------------------------------------------------------------
 // Source trust scoring
@@ -121,15 +121,20 @@ export function evaluateEligibility(profileNorm, oppNorm) {
     ineligibilityReasons.push('Opportunity is a loan, not a grant')
   }
 
-  // -- Pro bono / in-kind / referral-only: never direct funding for individual profile pipelines --
-  // These are services or referrals, not grants. Hard-reject for all profile types.
-  if (oppNorm.isProBono) {
+  // -- Pro bono / in-kind / referral-only --
+  // For org/business/nonprofit profiles seeking grant funding: hard-reject — these are
+  // services, not direct funding. For individual/family/caregiver profiles: allow as REVIEW
+  // (clothing closets, legal aid, and social service referrals are genuinely useful).
+  const isOrgProfile = ['nonprofit', 'business', 'organization', 'school', 'church'].includes(
+    (profileNorm.entityType || '').toLowerCase()
+  )
+  if (oppNorm.isProBono && isOrgProfile) {
     ineligibilityReasons.push('Opportunity is pro bono services, not a grant or direct funding')
   }
-  if (oppNorm.isInKind) {
+  if (oppNorm.isInKind && isOrgProfile) {
     ineligibilityReasons.push('Opportunity provides in-kind goods/services, not direct financial assistance')
   }
-  if (oppNorm.isReferralOnly) {
+  if (oppNorm.isReferralOnly && isOrgProfile) {
     ineligibilityReasons.push('Opportunity is a referral service only, not a direct grant application')
   }
 
@@ -310,10 +315,15 @@ export function calculateNeedAlignment(profileNorm, oppNorm) {
   const profileNeeds = profileNorm?.needCategories ?? []
   const oppNeeds = oppNorm?.needTypesSupported ?? []
 
-  // When the profile has no recorded needs (sparse profile) or the opportunity
-  // declares no specific need types (general funding), use a neutral baseline so
-  // that entity-type and geography signals alone can still carry a decision to ACCEPT.
-  if (profileNeeds.length === 0 || oppNeeds.length === 0) {
+  // Profile has no recorded needs → zero alignment (can't ACCEPT without need signal).
+  // This enforces that ACCEPT always requires some need-to-funding alignment.
+  if (profileNeeds.length === 0) {
+    return { score: 0, matchedNeeds: [] }
+  }
+
+  // Opportunity declares no specific need types (general-purpose funding) →
+  // neutral baseline so entity-type + geography can carry a decision to ACCEPT.
+  if (oppNeeds.length === 0) {
     return { score: 30, matchedNeeds: [] }
   }
 
