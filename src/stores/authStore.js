@@ -333,8 +333,9 @@ export const useAuthStore = create((set, get) => ({
         ? payload.profiles
         : (Array.isArray(payload.user?.profiles) ? payload.user.profiles : [])
 
+      const isAdminUser = normalizeUserAdmin(user)
       const activeProfileId = normalizeId(
-        payload.active_profile_id ?? payload.user?.active_profile_id ?? profiles[0]?.id ?? null,
+        payload.active_profile_id ?? payload.user?.active_profile_id ?? (isAdminUser ? null : profiles[0]?.id ?? null),
       )
 
       client.setActiveProfileId?.(activeProfileId)

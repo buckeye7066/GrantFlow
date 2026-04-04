@@ -137,7 +137,7 @@ export default function Layout({ children, currentPageName }) {
 
   const displayName = user?.display_name || user?.full_name || 'User';
   const displayEmail = user?.primary_email || user?.email || undefined;
-  const selectedProfileId = activeProfileId ?? (profiles?.[0]?.id ?? '');
+  const selectedProfileId = activeProfileId ?? (isAdmin ? '__admin__' : (profiles?.[0]?.id ?? ''));
   const initials =
     displayName
       .split(' ')

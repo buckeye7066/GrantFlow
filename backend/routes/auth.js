@@ -517,7 +517,7 @@ function buildUserPayload(userRow, profiles, activeProfileId) {
     avatar_url: userRow.avatar_url,
     is_admin: Boolean(userRow.is_admin),
     profiles,
-    active_profile_id: activeProfileId ?? profiles[0]?.id ?? null,
+    active_profile_id: activeProfileId ?? (userRow.is_admin ? null : profiles[0]?.id ?? null),
   }
 }
 
@@ -1953,7 +1953,7 @@ router.post('/email/verify', async (req, res) => {
     }
   }
 
-  if (!activeProfileId && profiles.length > 0) {
+  if (!activeProfileId && profiles.length > 0 && !user.is_admin) {
     activeProfileId = profiles[0].id
   }
 
@@ -2257,7 +2257,7 @@ router.post('/phone/verify', async (req, res) => {
     }
   }
 
-  if (!activeProfileId && profiles.length > 0) {
+  if (!activeProfileId && profiles.length > 0 && !user.is_admin) {
     activeProfileId = profiles[0].id
   }
 
@@ -2766,7 +2766,7 @@ router.post('/password/setup/complete', passwordRateLimiter, async (req, res) =>
     }
 
     const profiles = await getUserProfiles(req.db, user.id)
-    if (!activeProfileId && profiles.length > 0) activeProfileId = profiles[0].id
+    if (!activeProfileId && profiles.length > 0 && !user.is_admin) activeProfileId = profiles[0].id
 
     const session = await createSessionAndTokens(req.db, {
       user,
@@ -2857,7 +2857,7 @@ router.post('/password/login', passwordRateLimiter, async (req, res) => {
     }
 
     const profiles = await getUserProfiles(req.db, user.id)
-    if (!activeProfileId && profiles.length > 0) activeProfileId = profiles[0].id
+    if (!activeProfileId && profiles.length > 0 && !user.is_admin) activeProfileId = profiles[0].id
 
     const session = await createSessionAndTokens(req.db, {
       user,

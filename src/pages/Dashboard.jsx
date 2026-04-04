@@ -476,6 +476,7 @@ export default function Dashboard() {
   )
 
   const activeProfileId = useMemo(() => {
+    if (currentUser?.role === 'admin') return null
     if (profileDetail?.id) return profileDetail.id
     if (currentUser?.active_profile_id) return currentUser.active_profile_id
     if (currentUser?.profile_id) return currentUser.profile_id
