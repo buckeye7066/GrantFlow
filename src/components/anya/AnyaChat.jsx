@@ -1,7 +1,7 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react"
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useLocation, useNavigate } from "react-router-dom"
 import { v4 as uuid } from "uuid"
-import { Loader2, Search, Send, Sparkles, Plus, Shield, Database, Activity, Code, Wrench, ChevronDown, ChevronRight, Compass, FolderOpen, Kanban, User, Monitor, Trash2, RotateCcw } from "lucide-react"
+import { Loader2, Search, Send, Sparkles, Plus, Shield, Database, Activity, Code, Wrench, ChevronDown, ChevronRight, Compass, FolderOpen, Kanban, User, Monitor, Trash2, RotateCcw, MapPin, CheckSquare } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import { ScrollArea } from "@/components/ui/scroll-area"
@@ -26,6 +26,8 @@ import {
 import { useAnyaContext, serializeAnyaContext } from "@/contexts/AnyaContext"
 import { createPageUrl } from "@/utils"
 import { useFeatureFlags } from "@/lib/featureFlags"
+import { apiFetch } from "@/api/client"
+import { useQueryClient } from "@tanstack/react-query"
 import {
   Dialog,
   DialogContent,
@@ -37,6 +39,296 @@ import {
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Checkbox } from "@/components/ui/checkbox"
+
+// ---------------------------------------------------------------------------
+// Onboarding constants
+// ---------------------------------------------------------------------------
+
+const ONBOARDING_LS_KEY = "anya_onboarded"
+const NUDGE_SS_KEY = "anya_nudge_shown"
+const TOTAL_PROFILE_SECTIONS = 21
+
+const PROFILE_TYPES = [
+  "Individual",
+  "Family",
+  "Student",
+  "Nonprofit",
+  "Business",
+  "Church",
+  "School",
+  "Volunteer Fire Dept",
+  "Other",
+]
+
+const LIFE_SITUATIONS = [
+  "Currently on strike",
+  "Recently laid off",
+  "Caregiver",
+  "Fleeing domestic violence",
+  "Recently released",
+  "Disaster survivor",
+  "Chronic illness",
+  "Foster care alumni",
+  "Refugee/immigrant",
+  "In recovery",
+  "Experiencing homelessness",
+]
+
+// Maps onboarding display labels → backend primary_type values
+const PROFILE_TYPE_MAP = {
+  Individual: "individual",
+  Family: "family",
+  Student: "student",
+  Nonprofit: "nonprofit",
+  Business: "small_business",
+  Church: "church",
+  School: "school",
+  "Volunteer Fire Dept": "volunteer_fire",
+  Other: "individual",
+}
+
+// Maps life situation labels → profile section field patches
+function situationsToSectionPatches(situations) {
+  const financial = {}
+  const employment = {}
+  const housing = {}
+  const health = {}
+  const demographics = {}
+
+  for (const s of situations) {
+    switch (s) {
+      case "Currently on strike":
+      case "Recently laid off":
+        employment.employment_status = "unemployed"
+        financial.displaced_worker = true
+        break
+      case "Caregiver":
+        demographics.is_caregiver = true
+        break
+      case "Fleeing domestic violence":
+        financial.financial_need_level = "high"
+        housing.housing_status = "unstable"
+        break
+      case "Recently released":
+        demographics.recently_incarcerated = true
+        break
+      case "Disaster survivor":
+        financial.financial_need_level = "high"
+        break
+      case "Chronic illness":
+        health.has_chronic_condition = true
+        break
+      case "Foster care alumni":
+        demographics.foster_care_alumni = true
+        break
+      case "Refugee/immigrant":
+        demographics.is_refugee_or_immigrant = true
+        break
+      case "In recovery":
+        health.in_recovery = true
+        break
+      case "Experiencing homelessness":
+        housing.housing_status = "homeless"
+        financial.financial_need_level = "high"
+        break
+    }
+  }
+
+  const patches = []
+  if (Object.keys(financial).length) patches.push({ section_key: "financial_information", data: financial })
+  if (Object.keys(employment).length) patches.push({ section_key: "employment", data: employment })
+  if (Object.keys(housing).length) patches.push({ section_key: "housing", data: housing })
+  if (Object.keys(health).length) patches.push({ section_key: "health_medical", data: health })
+  if (Object.keys(demographics).length) patches.push({ section_key: "demographics", data: demographics })
+  return patches
+}
+
+const US_STATES = [
+  "Alabama","Alaska","Arizona","Arkansas","California","Colorado","Connecticut",
+  "Delaware","Florida","Georgia","Hawaii","Idaho","Illinois","Indiana","Iowa",
+  "Kansas","Kentucky","Louisiana","Maine","Maryland","Massachusetts","Michigan",
+  "Minnesota","Mississippi","Missouri","Montana","Nebraska","Nevada","New Hampshire",
+  "New Jersey","New Mexico","New York","North Carolina","North Dakota","Ohio",
+  "Oklahoma","Oregon","Pennsylvania","Rhode Island","South Carolina","South Dakota",
+  "Tennessee","Texas","Utah","Vermont","Virginia","Washington","West Virginia",
+  "Wisconsin","Wyoming","District of Columbia",
+]
+
+// ---------------------------------------------------------------------------
+// Onboarding step component
+// ---------------------------------------------------------------------------
+
+function OnboardingFlow({ step, onAdvance, onboarding }) {
+  const { profileType, setProfileType, situations, setSituations, state, setState } = onboarding
+
+  const toggleSituation = (item) => {
+    setSituations((prev) =>
+      prev.includes(item) ? prev.filter((s) => s !== item) : [...prev, item]
+    )
+  }
+
+  const AnyaBubble = ({ children }) => (
+    <div className="rounded-lg border border-blue-200 bg-blue-50/80 px-3 py-2 text-sm text-slate-800 shadow-sm">
+      <div className="flex items-center gap-2 pb-1 text-xs text-slate-600">
+        <Badge variant="secondary" className="text-[11px] uppercase tracking-wide">Anya</Badge>
+      </div>
+      <div className="whitespace-pre-wrap leading-relaxed">{children}</div>
+    </div>
+  )
+
+  if (step === 0) {
+    return (
+      <div className="flex flex-col gap-4 p-4">
+        <AnyaBubble>
+          {`Hi! I'm Anya, your GrantFlow guide. I'll help you find funding that actually fits your situation — grants, benefits, programs, and more. Ready to get started? This takes about 3 minutes.`}
+        </AnyaBubble>
+        <div className="flex justify-end">
+          <Button size="sm" className="gap-2" onClick={() => onAdvance(1)}>
+            Let&apos;s go →
+          </Button>
+        </div>
+      </div>
+    )
+  }
+
+  if (step === 1) {
+    return (
+      <div className="flex flex-col gap-4 p-4">
+        <AnyaBubble>
+          {`First, what best describes you? I'll use this to find the right funding sources.`}
+        </AnyaBubble>
+        <div className="flex flex-wrap gap-2">
+          {PROFILE_TYPES.map((type) => (
+            <button
+              key={type}
+              type="button"
+              onClick={() => {
+                setProfileType(type)
+                onAdvance(2)
+              }}
+              className={cn(
+                "rounded-full border px-3 py-1.5 text-xs font-medium transition-colors",
+                profileType === type
+                  ? "border-purple-500 bg-purple-100 text-purple-800"
+                  : "border-slate-200 bg-white text-slate-700 hover:border-purple-300 hover:bg-purple-50 hover:text-purple-700"
+              )}
+            >
+              {type}
+            </button>
+          ))}
+        </div>
+      </div>
+    )
+  }
+
+  if (step === 2) {
+    return (
+      <div className="flex flex-col gap-4 p-4">
+        <AnyaBubble>
+          {`Are any of these situations relevant to you right now? (Select all that apply)`}
+        </AnyaBubble>
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+          {LIFE_SITUATIONS.map((item) => (
+            <label
+              key={item}
+              className="flex cursor-pointer items-center gap-2 rounded-md border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700 shadow-sm hover:border-purple-200 hover:bg-purple-50 transition-colors"
+            >
+              <Checkbox
+                checked={situations.includes(item)}
+                onCheckedChange={() => toggleSituation(item)}
+                className="h-3.5 w-3.5"
+              />
+              <span>{item}</span>
+            </label>
+          ))}
+        </div>
+        <div className="flex justify-between gap-2">
+          <Button variant="ghost" size="sm" onClick={() => onAdvance(3)}>
+            None of these
+          </Button>
+          <Button size="sm" onClick={() => onAdvance(3)}>
+            Next →
+          </Button>
+        </div>
+        {situations.length > 0 && (
+          <p className="text-xs text-slate-500 italic">
+            Thank you for sharing. I&apos;ll keep this in mind while finding resources that can genuinely help.
+          </p>
+        )}
+      </div>
+    )
+  }
+
+  if (step === 3) {
+    return (
+      <div className="flex flex-col gap-4 p-4">
+        <AnyaBubble>
+          {`What state are you in? This unlocks state-specific programs.`}
+        </AnyaBubble>
+        <div className="flex items-center gap-2">
+          <MapPin className="h-4 w-4 text-slate-500 shrink-0" />
+          <select
+            value={state}
+            onChange={(e) => setState(e.target.value)}
+            className="flex-1 rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-purple-400"
+          >
+            <option value="">Select a state…</option>
+            {US_STATES.map((s) => (
+              <option key={s} value={s}>{s}</option>
+            ))}
+          </select>
+        </div>
+        <div className="flex justify-end">
+          <Button size="sm" disabled={!state} onClick={() => onAdvance(4)}>
+            Next →
+          </Button>
+        </div>
+      </div>
+    )
+  }
+
+  if (step === 4) {
+    return (
+      <div className="flex flex-col gap-4 p-4">
+        <AnyaBubble>
+          {`Great — you're all set! I've noted your profile type${profileType ? ` (${profileType})` : ""}${state ? ` and location (${state})` : ""}. Here's what to do next:\n\n1. Open Profile Editor to fill in your full details (takes 5 min)\n2. Run Discovery to see your matched opportunities\n3. Come back here any time to ask me questions`}
+        </AnyaBubble>
+        <div className="flex flex-wrap gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            className="gap-1.5"
+            onClick={() => {
+              window.dispatchEvent(new CustomEvent("navigate", { detail: { path: createPageUrl("MyProfiles") } }))
+            }}
+          >
+            <User className="h-3.5 w-3.5" />
+            Open Profile Editor →
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            className="gap-1.5"
+            onClick={() => {
+              window.dispatchEvent(new CustomEvent("navigate", { detail: { path: createPageUrl("DiscoverGrants") } }))
+            }}
+          >
+            <Compass className="h-3.5 w-3.5" />
+            Run Discovery →
+          </Button>
+        </div>
+        <div className="flex justify-end">
+          <Button size="sm" className="gap-2" onClick={() => onAdvance(null)}>
+            <CheckSquare className="h-4 w-4" />
+            Got it!
+          </Button>
+        </div>
+      </div>
+    )
+  }
+
+  return null
+}
 
 const MessageBubble = React.memo(function MessageBubble({ message }) {
   const isAssistant = message.role === "assistant"
@@ -84,6 +376,7 @@ function resolvePageName(pathname) {
   if (path === "/" || path === "/dashboard" || path.startsWith("/dashboard")) return "Dashboard"
   if (path.startsWith("/discover") || path.startsWith("/grants")) return "Discovery"
   if (path.startsWith("/pipeline")) return "Pipeline"
+  if (path.startsWith("/proposals")) return "Proposals"
   if (path.startsWith("/applications")) return "Applications"
   if (path.startsWith("/profile")) return "Profile"
   if (path.startsWith("/settings")) return "Settings"
@@ -92,13 +385,41 @@ function resolvePageName(pathname) {
 
 export default function AnyaChat({ profileId, currentPage: currentPageProp, prefillMessage, onPrefillConsumed }) {
   const user = useAuthStore((state) => state.user)
+  const profiles = useAuthStore((state) => state.profiles)
   const isAdmin = Boolean(user?.is_admin)
   const effectiveProfileId = profileId ?? null
   const [isUnavailable, setIsUnavailable] = useState(false)
+  const queryClient = useQueryClient()
   const log = useMemo(() => createLogger("AnyaChat"), [])
   const location = useLocation()
   const currentPage = currentPageProp ?? resolvePageName(location?.pathname) ?? "Unknown"
-  
+
+  // ---------------------------------------------------------------------------
+  // First-run / onboarding detection
+  // ---------------------------------------------------------------------------
+  const isFirstRun = useMemo(() => {
+    if (typeof window === "undefined") return false
+    if (localStorage.getItem(ONBOARDING_LS_KEY)) return false
+    if (!profiles || profiles.length === 0) return true
+    const activeProfile = profiles.find((p) => String(p.id) === String(effectiveProfileId)) ?? profiles[0]
+    const sectionsComplete = Number(activeProfile?.sections_complete ?? 0)
+    return sectionsComplete <= 1
+  }, [profiles, effectiveProfileId])
+
+  // onboardingStep: null = not in onboarding; 0-4 = step index
+  const [onboardingStep, setOnboardingStep] = useState(null)
+  const onboardingStartedRef = useRef(false)
+
+  // Onboarding data collected across steps
+  const [obProfileType, setObProfileType] = useState("")
+  const [obSituations, setObSituations] = useState([])
+  const [obState, setObState] = useState("")
+
+  // ---------------------------------------------------------------------------
+  // Profile completeness nudge (shown once per session for returning users)
+  // ---------------------------------------------------------------------------
+  const [nudgeMessage, setNudgeMessage] = useState(null)
+
   const [sessionId, setSessionId] = useState(null)
   const [messages, setMessages] = useState([])
   const [input, setInput] = useState("")
@@ -119,7 +440,107 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, pref
   const [isAdminToolsOpen, setIsAdminToolsOpen] = useState(false)
   const [adminToolForm, setAdminToolForm] = useState({})
   const [invokingAdminTool, setInvokingAdminTool] = useState(null)
-  const isSendingRef = React.useRef(false)
+  const isSendingRef = useRef(false)
+
+  // ---------------------------------------------------------------------------
+  // Auto-start onboarding when first-run and the panel mounts
+  // ---------------------------------------------------------------------------
+  useEffect(() => {
+    if (!isFirstRun) return
+    if (onboardingStartedRef.current) return
+    onboardingStartedRef.current = true
+    setOnboardingStep(0)
+  }, [isFirstRun])
+
+  // Handle advancing onboarding steps (null = complete → persist to profile)
+  const handleOnboardingAdvance = useCallback(async (nextStep) => {
+    if (nextStep !== null) {
+      setOnboardingStep(nextStep)
+      return
+    }
+
+    // Onboarding complete — persist collected data to the backend profile
+    localStorage.setItem(ONBOARDING_LS_KEY, "1")
+    setOnboardingStep(null)
+
+    try {
+      const activeProfile =
+        (profiles ?? []).find((p) => String(p.id) === String(effectiveProfileId)) ??
+        (profiles ?? [])[0]
+
+      const primaryType = PROFILE_TYPE_MAP[obProfileType] || "individual"
+
+      let profileId = activeProfile?.id
+      if (!profileId) {
+        // No profile yet — create one with collected type
+        const created = await apiFetch("/api/profiles", {
+          method: "POST",
+          body: JSON.stringify({
+            display_name: user?.name || user?.email || "My Profile",
+            primary_type: primaryType,
+          }),
+        })
+        profileId = created.id
+      } else {
+        // Update existing profile's primary_type
+        await apiFetch(`/api/profiles/${profileId}`, {
+          method: "PUT",
+          body: JSON.stringify({ primary_type: primaryType }),
+        })
+      }
+
+      // Persist state → basic_information section
+      if (obState) {
+        await apiFetch(`/api/profiles/${profileId}/sections/basic_information`, {
+          method: "PUT",
+          body: JSON.stringify({ data: { state: obState }, updated_by: "anya-onboarding" }),
+        })
+      }
+
+      // Persist life situations → relevant sections
+      const patches = situationsToSectionPatches(obSituations)
+      await Promise.all(
+        patches.map((p) =>
+          apiFetch(`/api/profiles/${profileId}/sections/${p.section_key}`, {
+            method: "PUT",
+            body: JSON.stringify({ data: p.data, updated_by: "anya-onboarding" }),
+          })
+        )
+      )
+
+      // Refresh profile data across the app
+      queryClient.invalidateQueries({ queryKey: ["profiles"] })
+      queryClient.invalidateQueries({ queryKey: ["profile"] })
+
+      log.info("[onboarding] Profile data persisted", { profileId, primaryType, state: obState, situations: obSituations.length })
+    } catch (err) {
+      // Don't block the user — onboarding is marked complete, data can be added manually
+      log.warn("[onboarding] Failed to persist profile data:", err.message)
+    }
+  }, [profiles, effectiveProfileId, obProfileType, obState, obSituations, user, queryClient, log])
+
+  // ---------------------------------------------------------------------------
+  // Profile completeness nudge — show once per session for returning users
+  // ---------------------------------------------------------------------------
+  useEffect(() => {
+    if (isFirstRun) return
+    if (typeof window === "undefined") return
+    if (sessionStorage.getItem(NUDGE_SS_KEY)) return
+    if (!profiles || profiles.length === 0) return
+
+    const activeProfile =
+      profiles.find((p) => String(p.id) === String(effectiveProfileId)) ?? profiles[0]
+    if (!activeProfile) return
+
+    const sectionsComplete = Number(activeProfile?.sections_complete ?? 0)
+    const pct = Math.round((sectionsComplete / TOTAL_PROFILE_SECTIONS) * 100)
+    if (pct < 50) {
+      const missingSections = TOTAL_PROFILE_SECTIONS - sectionsComplete
+      const nudge = `Quick tip: Your profile is ${pct}% complete. Adding ${missingSections} more section${missingSections === 1 ? "" : "s"} would unlock more matches. Want me to guide you there?`
+      setNudgeMessage(nudge)
+      sessionStorage.setItem(NUDGE_SS_KEY, "1")
+    }
+  }, [isFirstRun, profiles, effectiveProfileId])
 
   const hasMessages = messages.length > 0
   const hasTasks = tasks.length > 0
@@ -1015,7 +1436,21 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, pref
       </div>
 
       <ScrollArea className="flex-1 min-h-[200px] px-4 py-4">
-        {!isLoading && !hasMessages ? (
+        {/* Onboarding flow — shown in-panel instead of normal chat */}
+        {onboardingStep !== null ? (
+          <OnboardingFlow
+            step={onboardingStep}
+            onAdvance={handleOnboardingAdvance}
+            onboarding={{
+              profileType: obProfileType,
+              setProfileType: setObProfileType,
+              situations: obSituations,
+              setSituations: setObSituations,
+              state: obState,
+              setState: setObState,
+            }}
+          />
+        ) : !isLoading && !hasMessages ? (
           <div className="flex h-full flex-col items-center justify-center gap-6 px-4 py-8 text-center">
             <div className="flex h-16 w-16 items-center justify-center rounded-full overflow-hidden bg-gradient-to-br from-purple-600 to-blue-600 shadow-md">
               <img src="/images/anya-avatar.svg" alt="Anya" className="h-full w-full object-cover" />
@@ -1080,6 +1515,23 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, pref
           </div>
         ) : (
           <div className="flex flex-col gap-3">
+            {/* Profile completeness nudge — shown once per session */}
+            {nudgeMessage ? (
+              <div className="rounded-lg border border-amber-200 bg-amber-50/80 px-3 py-2 text-sm text-slate-800 shadow-sm">
+                <div className="flex items-center justify-between gap-2 pb-1 text-xs text-slate-600">
+                  <Badge variant="secondary" className="text-[11px] uppercase tracking-wide">Anya</Badge>
+                  <button
+                    type="button"
+                    className="text-slate-400 hover:text-slate-600 text-xs"
+                    onClick={() => setNudgeMessage(null)}
+                    aria-label="Dismiss"
+                  >
+                    ✕
+                  </button>
+                </div>
+                <p className="whitespace-pre-wrap leading-relaxed">{nudgeMessage}</p>
+              </div>
+            ) : null}
             {messages.map((message) => (
               <MessageBubble key={message.id} message={message} />
             ))}

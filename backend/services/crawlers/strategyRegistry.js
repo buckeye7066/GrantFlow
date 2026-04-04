@@ -177,7 +177,7 @@ const STRATEGIES = {
   volunteer_fire: {
     id: 'volunteer_fire',
     label: 'Volunteer Fire & EMS Grants',
-    candidateSources: ['federal', 'state', 'national'],
+    candidateSources: ['volunteer_fire', 'federal', 'state', 'national'],
     hardGates: [],
     needEmphasis: ['equipment', 'certification_assistance', 'volunteer_training_support', 'cpr_first_aid_training'],
     intentBoost: { volunteer_fire: 25, firefighter: 20, ems: 20, certification: 15 },

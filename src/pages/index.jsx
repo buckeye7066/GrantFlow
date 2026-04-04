@@ -58,6 +58,7 @@ const Login = lazy(() => import("./Login"));
 const AuthCallback = lazy(() => import("./AuthCallback"));
 const ServiceApplication = lazy(() => import("./ServiceApplication"));
 const SetPassword = lazy(() => import("./SetPassword"));
+const SavedGrants = lazy(() => import("./SavedGrants"));
 
 import { Route, Routes, useLocation, Navigate } from 'react-router-dom';
 import { useAuthStore } from "@/stores/authStore";
@@ -83,6 +84,7 @@ const PAGES = {
     Funder: Funder,
     
     DiscoverGrants: DiscoverGrants,
+    SavedGrants: SavedGrants,
     FundingResults: FundingResults,
     
     ItemFunding: ItemFunding,
@@ -321,6 +323,8 @@ function LayoutRoutes() {
                 <Route path="/OrganizationProfile" element={withBoundary(<OrganizationProfile />, "OrganizationProfile")} />
 
                 <Route path="/Admin" element={withBoundary(<Admin />, "Admin")} />
+
+                <Route path="/SavedGrants" element={withBoundary(<SavedGrants />, "SavedGrants")} />
 
                 </Routes>
             </Layout>

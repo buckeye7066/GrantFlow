@@ -5131,4 +5131,21 @@ router.post('/exclusion-rules', async (req, res) => {
   }
 })
 
+/**
+ * POST /api/admin/verify-links
+ * Triggers a background link verification pass on funding_opportunities.
+ * Checks up to 200 URLs that haven't been verified in the last 30 days.
+ */
+router.post('/verify-links', async (req, res) => {
+  try {
+    if (!(await ensureAdminRequest(req, res))) return
+    const { runLinkVerification } = await import('../services/linkVerificationService.js')
+    const stats = await runLinkVerification(req.db, { limit: 200 })
+    res.json({ success: true, stats })
+  } catch (err) {
+    console.error('[admin/verify-links] Error:', err)
+    res.status(500).json({ success: false, error: err.message })
+  }
+})
+
 export default router;

@@ -1,6 +1,6 @@
 import React, { useMemo, useState, useEffect } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { useSearchParams, useNavigate } from 'react-router-dom';
+import { useSearchParams, useNavigate, Link } from 'react-router-dom';
 import { getProfile, listProfiles } from '@/api/profiles';
 import client, { apiFetch } from '@/api/client';
 import { runRealCrawler } from '@/api/crawlers';
@@ -1003,80 +1003,129 @@ export default function DiscoverGrants() {
           </CardContent>
         </Card>
 
-        {/* Zero-result guidance: shown after a search completes with no results */}
+        {/* Zero-result recovery card: shown after a search completes with no results */}
         {hasSearched && searchResults.length === 0 && catalogOpportunities.length === 0 && !isSearching && (
           <Card className="mb-8 border-amber-200 bg-amber-50/50">
-            <CardContent className="p-6">
-              <div className="flex flex-col items-start gap-4 sm:flex-row sm:items-center">
-                <AlertTriangle className="h-6 w-6 shrink-0 text-amber-600" />
-                <div className="flex-1 space-y-2">
-                  <p className="font-semibold text-amber-900">No matching opportunities found</p>
-                  <p className="text-sm text-amber-800">
-                    {buildZeroResultDescription(profileGaps)}
-                  </p>
-                  {profileGaps.missingLocation && (
-                    <p className="text-xs text-amber-700">
-                      Tip: Add your state or ZIP code to your profile to unlock local and state-level programs.
-                    </p>
-                  )}
-                  {profileGaps.missingEntityType && (
-                    <p className="text-xs text-amber-700">
-                      Tip: Set your profile type (individual, nonprofit, small business) so we can filter irrelevant programs.
-                    </p>
-                  )}
-                  {profileGaps.missingKeywords && (
-                    <p className="text-xs text-amber-700">
-                      Tip: Add interests, focus areas, or describe your situation in your profile for better matches.
-                    </p>
-                  )}
-                  {/* Browse by Need categories */}
-                  <div className="pt-2">
-                    <p className="text-sm font-medium text-amber-900 mb-2">Not finding what you need? Browse by category:</p>
-                    <div className="flex flex-wrap gap-2">
-                      {NEED_CATEGORIES.map((cat) => (
-                        <button
-                          key={cat.label}
-                          type="button"
-                          onClick={async () => {
-                            setCategoryQuery(cat.query)
-                            await handleFindFunding(cat.query)
-                          }}
-                          disabled={isSearching || !selectedProfile}
-                          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium bg-white border border-amber-300 text-amber-900 hover:bg-amber-100 hover:border-amber-400 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                        >
-                          <span>{cat.icon}</span>
-                          {cat.label}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
+            <CardContent className="p-6 space-y-5">
+              <div className="flex items-start gap-3">
+                <AlertTriangle className="h-6 w-6 shrink-0 text-amber-600 mt-0.5" />
+                <div>
+                  <h3 className="text-lg font-semibold text-amber-900">No matches yet — let&apos;s fix that</h3>
+                  <p className="text-sm text-amber-800 mt-1">{buildZeroResultDescription(profileGaps)}</p>
                 </div>
-                <div className="flex flex-col gap-2 sm:items-end">
-                  {selectedProfile?.id && (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="border-amber-400 text-amber-900 hover:bg-amber-100 whitespace-nowrap"
-                      onClick={() => navigate(createPageUrl('ProfileDetail', { id: selectedProfile.id }))}
+              </div>
+
+              {/* Profile gap checklist with direct links */}
+              {selectedProfile?.id && (profileGaps.missingLocation || profileGaps.missingEntityType || profileGaps.missingKeywords) && (
+                <div className="space-y-2">
+                  <p className="text-sm font-medium text-amber-900">Complete these profile fields to improve matches:</p>
+                  <ul className="space-y-1.5">
+                    {profileGaps.missingLocation && (
+                      <li className="flex items-start gap-2 text-sm text-amber-800">
+                        <span className="mt-0.5 text-amber-500">&#x25CB;</span>
+                        <Link
+                          to={`/ProfileDetail?id=${selectedProfile.id}&section=basic_information`}
+                          className="underline hover:text-amber-900 font-medium"
+                        >
+                          Add your location (state or ZIP code)
+                        </Link>
+                        <span className="text-amber-700">— unlocks local and state-level programs</span>
+                      </li>
+                    )}
+                    {profileGaps.missingEntityType && (
+                      <li className="flex items-start gap-2 text-sm text-amber-800">
+                        <span className="mt-0.5 text-amber-500">&#x25CB;</span>
+                        <Link
+                          to={`/ProfileDetail?id=${selectedProfile.id}&section=basic_information`}
+                          className="underline hover:text-amber-900 font-medium"
+                        >
+                          Set your profile type
+                        </Link>
+                        <span className="text-amber-700">— filters irrelevant programs</span>
+                      </li>
+                    )}
+                    {profileGaps.missingKeywords && (
+                      <li className="flex items-start gap-2 text-sm text-amber-800">
+                        <span className="mt-0.5 text-amber-500">&#x25CB;</span>
+                        <Link
+                          to={`/ProfileDetail?id=${selectedProfile.id}&section=financial_information`}
+                          className="underline hover:text-amber-900 font-medium"
+                        >
+                          Add interests or focus areas
+                        </Link>
+                        <span className="text-amber-700">— improves keyword matching</span>
+                      </li>
+                    )}
+                  </ul>
+                </div>
+              )}
+
+              {/* Browse by Need categories */}
+              <div>
+                <p className="text-sm font-medium text-amber-900 mb-2">Not finding what you need? Browse by category:</p>
+                <div className="flex flex-wrap gap-2">
+                  {NEED_CATEGORIES.map((cat) => (
+                    <button
+                      key={cat.label}
+                      type="button"
+                      onClick={async () => {
+                        setCategoryQuery(cat.query)
+                        await handleFindFunding(cat.query)
+                      }}
+                      disabled={isSearching || !selectedProfile}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium bg-white border border-amber-300 text-amber-900 hover:bg-amber-100 hover:border-amber-400 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                     >
-                      Update Profile
-                    </Button>
+                      <span>{cat.icon}</span>
+                      {cat.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="flex flex-wrap gap-2 pt-1">
+                <Button
+                  size="sm"
+                  onClick={() => {
+                    setMinMatchScore(0)
+                    setCategoryQuery(null)
+                    void handleFindFunding(null)
+                  }}
+                  disabled={isSearching || !selectedProfile}
+                  className="bg-amber-600 hover:bg-amber-700 text-white"
+                >
+                  {isSearching ? (
+                    <>
+                      <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />
+                      Searching…
+                    </>
+                  ) : (
+                    'Try Broader Search'
                   )}
+                </Button>
+                {selectedProfile?.id && (
                   <Button
                     variant="outline"
                     size="sm"
-                    className="gap-2 border-purple-300 text-purple-700 hover:bg-purple-50 whitespace-nowrap"
-                    onClick={() => {
-                      const msg = profileGaps.missingLocation
-                        ? "Help me find grants — I haven't set my location yet"
-                        : "Help me improve my profile to get better grant matches"
-                      openAnyaPanel({ prefillMessage: msg })
-                    }}
+                    className="border-amber-400 text-amber-900 hover:bg-amber-100 whitespace-nowrap"
+                    onClick={() => navigate(createPageUrl('ProfileDetail', { id: selectedProfile.id }))}
                   >
-                    <MessageCircle className="h-4 w-4" />
-                    Get Help from Anya
+                    Update Profile
                   </Button>
-                </div>
+                )}
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="gap-2 border-purple-300 text-purple-700 hover:bg-purple-50 whitespace-nowrap"
+                  onClick={() => {
+                    const msg = profileGaps.missingLocation
+                      ? "Help me find grants — I haven't set my location yet"
+                      : "Help me improve my profile to get better grant matches"
+                    openAnyaPanel({ prefillMessage: msg })
+                  }}
+                >
+                  <MessageCircle className="h-4 w-4" />
+                  Get Help from Anya
+                </Button>
               </div>
             </CardContent>
           </Card>

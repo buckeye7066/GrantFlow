@@ -92,6 +92,7 @@ import { allowedOriginCheckSQL } from './utils/recordOrigins.js'
 import notificationsRouter from './routes/notifications.js'
 import { expirePassedDeadlines } from './services/deadlineExpiryService.js'
 import { generateDeadlineNotifications } from './services/deadlineNotificationService.js'
+import { runLinkVerification } from './services/linkVerificationService.js'
 
 /**
  * Lazy-loading route helper — caches the imported router after first load.
@@ -2479,6 +2480,22 @@ if (process.env.NODE_ENV !== 'test') {
     process.once('SIGINT', () => clearInterval(handle))
     console.info('[deadline-cron] Daily deadline cron scheduled (runs at 2am)')
   })()
+
+  // Run link verification daily in background (non-blocking)
+  async function scheduleLinkVerification(dbInstance) {
+    const runOnce = async () => {
+      try {
+        const stats = await runLinkVerification(dbInstance, { limit: 100 })
+        console.log('[link-verify] completed:', stats)
+      } catch (err) {
+        console.warn('[link-verify] failed:', err.message)
+      }
+    }
+    // Run once at startup after a 30s delay, then every 24h
+    setTimeout(runOnce, 30_000)
+    setInterval(runOnce, 24 * 60 * 60 * 1000)
+  }
+  scheduleLinkVerification(db)
 
   // Start the background health service (runs every 30 min, configurable via ANYA_HEALTH_INTERVAL_MS)
   startHealthService(db);

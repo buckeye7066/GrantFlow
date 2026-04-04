@@ -5,10 +5,11 @@ import { createPageUrl } from '@/utils';
 import GrantCard from '../pipeline/GrantCard';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { Loader2, Plus, Check, CheckSquare, Square, Search, Database } from 'lucide-react';
+import { Loader2, Plus, Check, CheckSquare, Square, Search, Database, Star } from 'lucide-react';
 import { useToast } from "@/components/ui/use-toast";
 import { Progress } from "@/components/ui/progress";
 import { Checkbox } from '@/components/ui/checkbox';
+import { useSavedGrantsStore } from '@/stores/savedGrantsStore';
 
 const SOURCE_LABELS = {
   local_funding: 'Local funding',
@@ -167,6 +168,7 @@ export default function SearchResults({ results = [], profileId, onAddToPipeline
   const [processingProgress, setProcessingProgress] = React.useState({ current: 0, total: 0 });
   const queryClient = useQueryClient();
   const { toast } = useToast();
+  const { savedIds, toggleGrant, isSaved } = useSavedGrantsStore();
 
   const uniqueSources = React.useMemo(() => {
     if (!results || results.length === 0) return [];
@@ -372,12 +374,27 @@ export default function SearchResults({ results = [], profileId, onAddToPipeline
                   onCheckedChange={() => handleToggleSelection(oppKey)}
                   id={`select-${oppKey}`}
                 />
-                <label 
-                  htmlFor={`select-${oppKey}`} 
+                <label
+                  htmlFor={`select-${oppKey}`}
                   className="text-sm font-medium cursor-pointer flex-1 min-w-0"
                 >
                   Select
                 </label>
+                {/* Save / star bookmark */}
+                {(opp.id || opp.source_id) && (
+                  <button
+                    type="button"
+                    title={isSaved(opp.id ?? opp.source_id) ? 'Remove from saved' : 'Save this grant'}
+                    onClick={() => toggleGrant(opp.id ?? opp.source_id)}
+                    className="shrink-0 text-slate-400 hover:text-yellow-500 transition-colors"
+                  >
+                    <Star
+                      className="w-4 h-4"
+                      fill={isSaved(opp.id ?? opp.source_id) ? 'currentColor' : 'none'}
+                      style={isSaved(opp.id ?? opp.source_id) ? { color: '#f59e0b' } : {}}
+                    />
+                  </button>
+                )}
                 {(opp.source || opp.crawler_type) && (
                   <Badge variant="outline" className="text-xs shrink-0">
                     {formatSourceLabel(opp.source || opp.crawler_type)}
@@ -405,10 +422,11 @@ export default function SearchResults({ results = [], profileId, onAddToPipeline
                 })()}
               </div>
               <div className="flex-grow">
-                 <GrantCard 
-                   grant={opp} 
+                 <GrantCard
+                   grant={{ ...opp, starred: !!(opp.id || opp.source_id) && isSaved(opp.id ?? opp.source_id) }}
                    organizationName={organizationName}
                    showSummary={true}
+                   onStarToggle={(opp.id || opp.source_id) ? () => toggleGrant(opp.id ?? opp.source_id) : undefined}
                  />
               </div>
               <div className="p-4 bg-slate-50 border-t">

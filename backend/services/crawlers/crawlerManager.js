@@ -26,6 +26,7 @@ import { UTILITY_ASSISTANCE_PROGRAMS } from './data/utilityAssistance.js';
 import { FAITH_BASED_PROGRAMS } from './data/faithBasedPrograms.js';
 import { FAMILY_PROGRAMS } from './data/familyPrograms.js';
 import { SCHOOL_PROGRAMS } from './data/schoolPrograms.js';
+import { VOLUNTEER_FIRE_PROGRAMS } from './data/volunteerFirePrograms.js';
 import { generateStatePrograms, isStateInRegistry } from './data/stateBase.js';
 import { upsertFundingOpportunity } from '../opportunityInserter.js';
 
@@ -123,6 +124,7 @@ const SOURCE_LABELS = {
   utility_assistance: 'Utility Assistance Programs',
   family: 'Family Programs',
   school: 'K-12 School Programs',
+  volunteer_fire: 'Volunteer Fire Programs',
 };
 
 // ── Candidate loader: builds program array per strategy ──
@@ -220,6 +222,11 @@ function loadCandidates(strategy, stateData, analysis, intents) {
   if (sources.has('school')) {
     programs.push(...SCHOOL_PROGRAMS);
     candidateCounts.school = SCHOOL_PROGRAMS.length;
+  }
+
+  if (sources.has('volunteer_fire')) {
+    programs.push(...VOLUNTEER_FIRE_PROGRAMS);
+    candidateCounts.volunteer_fire = VOLUNTEER_FIRE_PROGRAMS.length;
   }
 
   return { programs, candidateCounts };

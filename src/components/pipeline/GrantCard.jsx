@@ -8,7 +8,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import { MoreVertical, Star, Edit, Trash2, Calendar, DollarSign, Building2, Target, CheckSquare, Sparkles, ExternalLink, AlertCircle, Clock, Info, CalendarClock, CheckCircle2 } from 'lucide-react';
+import { MoreVertical, Star, Edit, Trash2, Calendar, DollarSign, Building2, Target, CheckSquare, Sparkles, ExternalLink, AlertCircle, Clock, Info, CalendarClock, CheckCircle2, FileEdit, Link2Off } from 'lucide-react';
 import { format, isPast } from 'date-fns';
 import { Link, useNavigate } from 'react-router-dom';
 import { createPageUrl } from '@/utils';
@@ -169,6 +169,15 @@ export default function GrantCard({ grant, organization, organizationName, onSta
               <Badge variant="outline" className="text-xs bg-slate-100 text-slate-500 border-slate-300 cursor-help">
                 <Clock className="w-3 h-3 mr-1" />
                 ?
+              </Badge>
+            </HelpTip>
+          )}
+          {/* Link broken badge — warns user the application URL returned 4xx/5xx */}
+          {grant.link_status === 'broken' && (
+            <HelpTip text="The application link may be broken — our last check got an error. The URL may have moved or expired.">
+              <Badge variant="outline" className="text-xs bg-red-50 text-red-700 border-red-300 cursor-help">
+                <Link2Off className="w-3 h-3 mr-1" />
+                Link Issue
               </Badge>
             </HelpTip>
           )}
@@ -405,7 +414,7 @@ export default function GrantCard({ grant, organization, organizationName, onSta
           )}
 
           {/* Action buttons for discovery cards */}
-          {(onAddToPipeline || (!isExpired && isDeadlineValid)) && (
+          {(onAddToPipeline || (!isExpired && isDeadlineValid) || (grant.id && (grant.application_url || grant.source_id))) && (
             <div className="flex flex-wrap gap-2 pt-1 border-t border-slate-100 mt-1" onClick={(e) => { e.preventDefault(); e.stopPropagation(); }}>
               {/* Add to Pipeline / In Pipeline button */}
               {onAddToPipeline && (
@@ -430,6 +439,20 @@ export default function GrantCard({ grant, organization, organizationName, onSta
                     + Add to Pipeline
                   </Button>
                 )
+              )}
+              {/* Start Proposal — only when grant has an application_url or source_id */}
+              {grant.id && (grant.application_url || grant.source_id) && (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  className="text-xs shrink-0 border-blue-300 text-blue-700 hover:bg-blue-50"
+                  title="Start a proposal for this grant"
+                  onClick={() => navigate(`/Apply?id=${grant.id}`)}
+                >
+                  <FileEdit className="w-3.5 h-3.5 mr-1" />
+                  Start Proposal
+                </Button>
               )}
               {/* Set Deadline Reminder */}
               {!isExpired && isDeadlineValid && (

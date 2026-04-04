@@ -33,6 +33,7 @@ import { Switch } from "@/components/ui/switch"
 import UniversityApplicationsSection from "@/components/profiles/UniversityApplicationsSection.jsx"
 import StudentPortalsCard from "@/components/profiles/StudentPortalsCard.jsx"
 import HealthResourcesCard from "@/components/profiles/HealthResourcesCard.jsx"
+import { SECTION_METADATA } from "@/config/sectionMetadata"
 
 export default function ProfileDetail() {
   const [searchParams] = useSearchParams()
@@ -528,6 +529,31 @@ export default function ProfileDetail() {
     [aiSuggestionMutation, toast],
   )
 
+  const CORE_SECTION_KEYS = Object.keys(SECTION_METADATA).slice(0, 8)
+  const filledSectionKeys = React.useMemo(() => {
+    if (!profile?.sections) return []
+    const sectionDataMap = Object.fromEntries(
+      (Array.isArray(profile.sections) ? profile.sections : [])
+        .map((s) => [s?.section_key, s?.data])
+        .filter(([k]) => Boolean(k))
+    )
+    return CORE_SECTION_KEYS.filter((key) => {
+      const data = sectionDataMap[key]
+      if (!data || typeof data !== 'object') return false
+      return Object.values(data).some((v) => {
+        if (v === null || v === undefined || v === '' || v === false) return false
+        if (Array.isArray(v)) return v.length > 0
+        return true
+      })
+    })
+  }, [profile])
+
+  const totalSections = CORE_SECTION_KEYS.length
+  const completedSections = filledSectionKeys.length
+  const completionPct = totalSections > 0 ? Math.round((completedSections / totalSections) * 100) : 0
+  const nextEmptySection = CORE_SECTION_KEYS.find((k) => !filledSectionKeys.includes(k))
+  const nextEmptySectionTitle = nextEmptySection ? (SECTION_METADATA[nextEmptySection]?.title ?? nextEmptySection) : null
+
   return (
     <div className="p-6 md:p-10">
       <div className="mx-auto flex max-w-6xl flex-col gap-6">
@@ -550,6 +576,40 @@ export default function ProfileDetail() {
               </Button>
             )}
           </div>
+        </div>
+
+        {/* Profile completeness progress bar */}
+        <div className="rounded-lg border border-slate-200 bg-white p-4 space-y-2">
+          <div className="flex items-center justify-between text-sm">
+            <span className="font-medium text-slate-700">
+              {completedSections} of {totalSections} sections complete ({completionPct}%)
+            </span>
+            {completionPct === 100 && (
+              <span className="text-emerald-600 font-medium text-xs">Profile complete</span>
+            )}
+          </div>
+          <div className="w-full bg-gray-200 rounded h-2">
+            <div
+              className="h-2 rounded transition-all duration-300"
+              style={{
+                width: `${completionPct}%`,
+                backgroundColor: completionPct >= 80 ? '#10b981' : completionPct >= 50 ? '#3b82f6' : '#f59e0b',
+              }}
+            />
+          </div>
+          {nextEmptySectionTitle && (
+            <p className="text-xs text-slate-500">
+              Fill in{' '}
+              <button
+                type="button"
+                className="underline text-blue-600 hover:text-blue-800"
+                onClick={() => handleOpenSection(nextEmptySection)}
+              >
+                {nextEmptySectionTitle}
+              </button>{' '}
+              to unlock more matches.
+            </p>
+          )}
         </div>
 
         <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">

@@ -3,7 +3,7 @@ import { useQuery } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 import { Button } from '@/components/ui/button'
 import { Loader2, ArrowLeft } from 'lucide-react'
-import { apiFetch } from '@/api/apiClient'
+import { apiFetch } from '@/api/client'
 import ProposalEditor from '@/components/proposals/ProposalEditor'
 
 function getQueryParam(name) {
