@@ -30,7 +30,7 @@ import {
   UploadCloud,
 } from "lucide-react"
 import { normalizeTargetColleges } from "@/utils/targetCollegesSync"
-import { SECTION_CONFIG } from "@/components/profiles/ProfileSectionEditor.jsx"
+import { SECTION_METADATA } from "@/config/sectionMetadata"
 import { useDashboardPreferences } from "@/contexts/DashboardPreferencesContext.jsx"
 import EditableField from "@/components/shared/EditableField.jsx"
 import { useAuthenticatedAvatar } from "@/hooks/useAuthenticatedAvatar"
@@ -58,7 +58,7 @@ const SECTION_ICONS = {
 
 function isSectionApplicable(sectionKey, config, profile) {
   if (!config) return true
-  // Optional, forward-compatible: allow SECTION_CONFIG entries to specify applies_to types.
+  // Optional, forward-compatible: allow SECTION_METADATA entries to specify applies_to types.
   const appliesTo = config.applies_to ?? config.appliesTo ?? null
   if (!Array.isArray(appliesTo) || appliesTo.length === 0) return true
   const primaryType = profile?.primary_type ?? profile?.primaryType ?? null
@@ -349,7 +349,7 @@ function SectionPreview({
   isAIProcessing,
   onNavigateToUniversities,
 }) {
-  const config = SECTION_CONFIG[sectionKey]
+  const config = SECTION_METADATA[sectionKey]
   const SectionIcon = SECTION_ICONS[sectionKey] ?? FolderOpen
   const dataEntries = Object.entries(section?.data ?? {})
     .map(normalizeEntry)
@@ -559,9 +559,9 @@ export default function ProfileOverview({
   }
   const gridColumnsClass = columnMap[dashboardPrefs.layoutColumns] ?? "md:grid-cols-2"
   const gapClass = dashboardPrefs.layoutStyle === "compact" ? "gap-4" : "gap-6"
-  const allSectionKeys = useMemo(() => Object.keys(SECTION_CONFIG), [])
+  const allSectionKeys = useMemo(() => Object.keys(SECTION_METADATA), [])
   const applicableSectionKeys = useMemo(() => {
-    return allSectionKeys.filter((key) => isSectionApplicable(key, SECTION_CONFIG[key], profile))
+    return allSectionKeys.filter((key) => isSectionApplicable(key, SECTION_METADATA[key], profile))
   }, [allSectionKeys, profile])
   const totalSections = allSectionKeys.length
   const sectionsMap = useMemo(() => {
