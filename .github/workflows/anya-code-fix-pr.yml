@@ -73,14 +73,7 @@ jobs:
 
           git checkout -b "$BRANCH_NAME"
           git add -A
-          git commit -m "$(cat <<'EOF'
-fix: apply Anya code fix patch
-
-Apply the generated patch only after corruption, quality, and release gates pass.
-
-Made-with: Cursor
-EOF
-)"
+          git commit -m "fix: apply Anya code fix patch"
           git push origin "$BRANCH_NAME"
 
           gh pr create \
