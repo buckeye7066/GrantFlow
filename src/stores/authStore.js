@@ -227,9 +227,10 @@ export const useAuthStore = create((set, get) => ({
       set({ profiles })
 
       // Safety: if the active profile no longer exists in the accessible list, reset it.
+      // '__admin__' is a virtual sentinel and is never in the profiles list — skip it.
       const active = state.activeProfileId
-      if (active && !profiles.some((p) => String(p?.id) === String(active))) {
-        const nextActive = isAdmin ? null : (profiles[0]?.id ?? null)
+      if (active && active !== '__admin__' && !profiles.some((p) => String(p?.id) === String(active))) {
+        const nextActive = isAdmin ? '__admin__' : (profiles[0]?.id ?? null)
         client.setActiveProfileId?.(nextActive)
         set({ activeProfileId: nextActive })
       }
@@ -265,12 +266,14 @@ export const useAuthStore = create((set, get) => ({
     //   hasCompletedOnboarding, onboardingCompletedAt, lastSeenManualVersion,
     //   lastCompletedTourVersion, tourDismissedAt }
     if (payload.userId) {
-      const activeProfileId = normalizeId(payload.activeProfileId ?? null)
       const isAdmin = normalizeUserAdmin({
         isAdmin: payload.isAdmin,
         is_admin: payload.isAdmin,
         role: payload.role,
       })
+      // Admin users always use the virtual '__admin__' profile so the sidebar
+      // never shows a stale profile ID from the JWT payload.
+      const activeProfileId = isAdmin ? '__admin__' : normalizeId(payload.activeProfileId ?? null)
       const accessibleProfileCount = Number(payload.accessibleProfileCount ?? 0) || 0
 
       // Use backend has_completed_onboarding as the authoritative source.
@@ -334,9 +337,13 @@ export const useAuthStore = create((set, get) => ({
         : (Array.isArray(payload.user?.profiles) ? payload.user.profiles : [])
 
       const isAdminUser = normalizeUserAdmin(user)
-      const activeProfileId = normalizeId(
-        payload.active_profile_id ?? payload.user?.active_profile_id ?? (isAdminUser ? null : profiles[0]?.id ?? null),
-      )
+      // Admin users always use the virtual '__admin__' profile so the sidebar
+      // never shows a stale profile ID from the login payload.
+      const activeProfileId = isAdminUser
+        ? '__admin__'
+        : normalizeId(
+            payload.active_profile_id ?? payload.user?.active_profile_id ?? profiles[0]?.id ?? null,
+          )
 
       client.setActiveProfileId?.(activeProfileId)
       
@@ -355,18 +362,20 @@ export const useAuthStore = create((set, get) => ({
           hasSeenOnboarding: true, // Skip onboarding for admins
         })
 
-        // Ensure admins see all profiles (server-backed) and reconcile activeProfileId.
+        // Ensure admins see all profiles (server-backed) but preserve '__admin__' sentinel.
         get()
           .refreshProfiles({ reason: 'admin_login', force: true })
           .then((refreshedProfiles) => {
             const currentActive = get().activeProfileId
+            // '__admin__' is virtual — never in the profiles list, so skip the reset check.
             if (
               currentActive &&
+              currentActive !== '__admin__' &&
               !refreshedProfiles.some((p) => String(p?.id) === String(currentActive))
             ) {
               // Active profile from login payload no longer valid after full refresh.
-              client.setActiveProfileId?.(null)
-              set({ activeProfileId: null })
+              client.setActiveProfileId?.('__admin__')
+              set({ activeProfileId: '__admin__' })
             }
           })
           .catch(() => {})
@@ -486,7 +495,7 @@ export const useAuthStore = create((set, get) => ({
         get()
           .refreshSession()
           .catch((error) => {
-            console.error('Automatic session refresh failed:', error)
+            console.warn('Automatic session refresh failed:', error)
             get().markSessionExpired('Your session expired. Please sign in again.')
           })
       }, 0)
@@ -503,7 +512,7 @@ export const useAuthStore = create((set, get) => ({
       get()
         .refreshSession()
         .catch((error) => {
-          console.error('Automatic session refresh failed:', error)
+          console.warn('Automatic session refresh failed:', error)
           get().markSessionExpired('Your session expired. Please sign in again.')
         })
     }, refreshDelay)

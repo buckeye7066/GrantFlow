@@ -253,7 +253,9 @@ export function DashboardPreferencesProvider({ children }) {
 export function useDashboardPreferences() {
   const ctx = useContext(PreferencesContext)
   if (!ctx) {
-    throw new Error("useDashboardPreferences must be used within DashboardPreferencesProvider")
+    // Return a safe no-op default so components rendered outside the provider
+    // (e.g. during route error recovery) don't crash with a TDZ/throw.
+    return { state: defaultState, dispatch: () => {} }
   }
   return ctx
 }
