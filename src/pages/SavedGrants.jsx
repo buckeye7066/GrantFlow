@@ -1,18 +1,66 @@
-import React from 'react'
+import React, { useState, useCallback } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 import { apiFetch } from '@/api/client'
 import { useSavedGrantsStore } from '@/stores/savedGrantsStore'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
-import { Loader2, Star, Trash2 } from 'lucide-react'
+import { Textarea } from '@/components/ui/textarea'
+import { Loader2, Star, Trash2, StickyNote, Check } from 'lucide-react'
 import GrantCard from '@/components/pipeline/GrantCard'
+
+function NoteEditor({ grantId }) {
+  const { getNote, updateNote } = useSavedGrantsStore()
+  const existing = getNote(grantId)
+  const [value, setValue] = useState(existing)
+  const [open, setOpen] = useState(false)
+  const [saved, setSaved] = useState(false)
+
+  const handleSave = useCallback(() => {
+    updateNote(grantId, value)
+    setSaved(true)
+    setTimeout(() => setSaved(false), 1500)
+  }, [grantId, value, updateNote])
+
+  if (!open) {
+    return (
+      <button
+        type="button"
+        className="flex items-center gap-1 text-xs text-slate-500 hover:text-blue-600 transition-colors"
+        onClick={() => setOpen(true)}
+      >
+        <StickyNote className="w-3.5 h-3.5" />
+        {existing ? 'Edit note' : 'Add note'}
+      </button>
+    )
+  }
+
+  return (
+    <div className="mt-2 space-y-1.5">
+      <Textarea
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        placeholder="Why did you save this? Any reminders..."
+        className="text-xs min-h-[60px] resize-none"
+        autoFocus
+      />
+      <div className="flex items-center gap-2">
+        <Button type="button" size="sm" variant="outline" className="text-xs h-7" onClick={handleSave}>
+          {saved ? <Check className="w-3 h-3 mr-1 text-green-600" /> : null}
+          {saved ? 'Saved' : 'Save note'}
+        </Button>
+        <Button type="button" size="sm" variant="ghost" className="text-xs h-7" onClick={() => setOpen(false)}>
+          Cancel
+        </Button>
+      </div>
+    </div>
+  )
+}
 
 export default function SavedGrants() {
   const navigate = useNavigate()
   const { savedIds, removeGrant, sync, synced } = useSavedGrantsStore()
 
-  // Sync with backend on first mount
   React.useEffect(() => {
     if (!synced) sync()
   }, [synced, sync])
@@ -76,12 +124,13 @@ export default function SavedGrants() {
                         grant={{ ...grant, starred: true }}
                         onStarToggle={() => removeGrant(id)}
                       />
-                      <div className="mt-2 flex justify-end">
+                      <div className="mt-2 flex items-center justify-between gap-2">
+                        <NoteEditor grantId={id} />
                         <Button
                           type="button"
                           size="sm"
                           variant="ghost"
-                          className="text-xs text-red-500 hover:text-red-700 hover:bg-red-50"
+                          className="text-xs text-red-500 hover:text-red-700 hover:bg-red-50 shrink-0"
                           onClick={() => removeGrant(id)}
                         >
                           <Trash2 className="w-3.5 h-3.5 mr-1" />

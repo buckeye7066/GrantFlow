@@ -22,6 +22,8 @@ function saveToStorage(ids) {
 
 export const useSavedGrantsStore = create((set, get) => ({
   savedIds: loadFromStorage(),
+  /** Map of opportunity_id → notes string (populated after sync) */
+  notesMap: {},
   synced: false,
 
   /** Fetch saved IDs from backend and merge with localStorage cache */
@@ -45,7 +47,12 @@ export const useSavedGrantsStore = create((set, get) => ({
       // Final set = union of both
       const merged = [...new Set([...backendIds, ...localIds])]
       saveToStorage(merged)
-      set({ savedIds: merged, synced: true })
+      // Build notes map from backend response
+      const notes = {}
+      for (const row of (res?.saved ?? [])) {
+        if (row.notes) notes[row.opportunity_id] = row.notes
+      }
+      set({ savedIds: merged, notesMap: notes, synced: true })
     } catch {
       // Offline or not logged in — keep localStorage only
       set({ synced: false })
@@ -85,5 +92,17 @@ export const useSavedGrantsStore = create((set, get) => ({
 
   isSaved(id) {
     return get().savedIds.includes(id)
+  },
+
+  getNote(id) {
+    return get().notesMap[id] ?? ''
+  },
+
+  async updateNote(id, notes) {
+    set((state) => ({ notesMap: { ...state.notesMap, [id]: notes } }))
+    apiFetch(`/api/saved-grants/${encodeURIComponent(id)}/notes`, {
+      method: 'PATCH',
+      body: JSON.stringify({ notes }),
+    }).catch(() => {})
   },
 }))

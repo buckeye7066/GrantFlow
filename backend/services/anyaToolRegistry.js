@@ -990,6 +990,165 @@ registerTool({
 })
 
 // ============================================================================
+// Profile guided completion tool
+// ============================================================================
+
+registerTool({
+  name: 'profile.updateSection',
+  description: 'Update a specific profile section with data gathered from conversation. Use this when the user provides information about themselves (location, finances, health, employment, etc.) and you want to save it to their profile. Merge-safe: only provided fields are updated; existing data is preserved.',
+  schema: {
+    type: 'object',
+    properties: {
+      profileId: { type: 'string', description: 'The profile ID to update.' },
+      sectionKey: {
+        type: 'string',
+        description: 'The section to update. Valid keys: basic_information, organization_details, financial_information, government_assistance, health_medical, demographics, family_life, military_service, occupation, location_focus, education, employment, housing, family, programs_services, narrative, small_business_details, nonprofit_compliance.',
+      },
+      fields: {
+        type: 'object',
+        description: 'Key-value pairs to save into the section. Only provided fields are updated; existing fields are preserved.',
+      },
+    },
+    required: ['profileId', 'sectionKey', 'fields'],
+  },
+  handler: async (params, context) => {
+    if (!context?.db) throw new Error('Database connection unavailable')
+    const db = context.db
+    const ctx = context?.ctx
+
+    const profileId = String(params?.profileId || '').trim()
+    const sectionKey = String(params?.sectionKey || '').trim()
+    const fields = params?.fields
+
+    if (!profileId) throw new Error('profileId is required')
+    if (!sectionKey) throw new Error('sectionKey is required')
+    if (!fields || typeof fields !== 'object' || Object.keys(fields).length === 0) {
+      throw new Error('fields must be a non-empty object')
+    }
+
+    if (!ensureProfileAccess(ctx, profileId)) {
+      const error = new Error('Not authorized to update this profile')
+      error.status = 403
+      throw error
+    }
+
+    const profile = db.prepare('SELECT id FROM profiles WHERE id = ?').get(profileId)
+    if (!profile) {
+      const error = new Error('Profile not found')
+      error.status = 404
+      throw error
+    }
+
+    // Read existing section data and merge
+    let existingData = {}
+    try {
+      const row = db.prepare('SELECT data FROM profile_sections WHERE profile_id = ? AND section_key = ?').get(profileId, sectionKey)
+      if (row?.data) existingData = JSON.parse(row.data)
+    } catch { /* section may not exist yet */ }
+
+    const merged = { ...existingData, ...fields }
+
+    const updatedBy = ctx?.email || ctx?.userId || 'anya-guided'
+    db.prepare(`
+      INSERT INTO profile_sections (profile_id, section_key, data, updated_by)
+      VALUES (?, ?, ?, ?)
+      ON CONFLICT(profile_id, section_key) DO UPDATE SET
+        data = excluded.data,
+        updated_by = excluded.updated_by,
+        updated_at = CURRENT_TIMESTAMP
+    `).run(profileId, sectionKey, JSON.stringify(merged), updatedBy)
+
+    // Count total filled sections for progress
+    const allSections = db.prepare('SELECT section_key, data FROM profile_sections WHERE profile_id = ?').all(profileId)
+    let filledCount = 0
+    for (const s of allSections) {
+      try {
+        const d = JSON.parse(s.data || '{}')
+        const hasValue = Object.values(d).some((v) =>
+          v !== null && v !== undefined && v !== '' && v !== false && !(Array.isArray(v) && v.length === 0)
+        )
+        if (hasValue) filledCount++
+      } catch { /* skip */ }
+    }
+
+    return {
+      saved: true,
+      sectionKey,
+      fieldsUpdated: Object.keys(fields),
+      profileCompletion: `${filledCount} of ${allSections.length} sections have data`,
+      hint: filledCount < 8
+        ? 'Ask the user about their next most impactful section to keep improving matches.'
+        : 'Profile is well-filled. Suggest running Discovery to see updated matches.',
+    }
+  },
+})
+
+registerTool({
+  name: 'profile.getCompletionStatus',
+  description: 'Check which profile sections are filled and which are empty. Use this to decide what to ask the user about next.',
+  schema: {
+    type: 'object',
+    properties: {
+      profileId: { type: 'string', description: 'The profile ID to check.' },
+    },
+    required: ['profileId'],
+  },
+  handler: async (params, context) => {
+    if (!context?.db) throw new Error('Database connection unavailable')
+    const db = context.db
+    const ctx = context?.ctx
+
+    const profileId = String(params?.profileId || '').trim()
+    if (!profileId) throw new Error('profileId is required')
+
+    if (!ensureProfileAccess(ctx, profileId)) {
+      const error = new Error('Not authorized to view this profile')
+      error.status = 403
+      throw error
+    }
+
+    const profile = db.prepare('SELECT primary_type FROM profiles WHERE id = ?').get(profileId)
+    if (!profile) throw new Error('Profile not found')
+
+    const rows = db.prepare('SELECT section_key, data FROM profile_sections WHERE profile_id = ?').all(profileId)
+    const filled = []
+    const empty = []
+
+    for (const row of rows) {
+      let d = {}
+      try { d = JSON.parse(row.data || '{}') } catch { /* skip */ }
+      const hasValue = Object.values(d).some((v) =>
+        v !== null && v !== undefined && v !== '' && v !== false && !(Array.isArray(v) && v.length === 0)
+      )
+      if (hasValue) {
+        filled.push(row.section_key)
+      } else {
+        empty.push(row.section_key)
+      }
+    }
+
+    // Priority order for what to fill next based on matching impact
+    const impactOrder = [
+      'basic_information', 'financial_information', 'health_medical',
+      'government_assistance', 'demographics', 'employment', 'housing',
+      'education', 'family_life', 'military_service', 'narrative',
+    ]
+    const suggestedNext = impactOrder.filter((k) => empty.includes(k)).slice(0, 3)
+
+    return {
+      profileType: profile.primary_type,
+      filledSections: filled,
+      emptySections: empty,
+      completionPct: rows.length > 0 ? Math.round((filled.length / rows.length) * 100) : 0,
+      suggestedNext,
+      guidance: suggestedNext.length > 0
+        ? `Ask the user about: ${suggestedNext.join(', ')}. These have the most impact on matching.`
+        : 'Profile is well-filled. Suggest running Discovery.',
+    }
+  },
+})
+
+// ============================================================================
 // Admin-only tools
 // ============================================================================
 

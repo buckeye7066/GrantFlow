@@ -8,6 +8,7 @@
  */
 
 import { randomUUID } from 'crypto'
+import { dispatchDeadlineAlerts } from './deadlineEmailSmsService.js'
 
 const THRESHOLDS_DAYS = [7, 3, 1]
 
@@ -105,6 +106,7 @@ export async function generateDeadlineNotifications(db) {
            fo.deadline AS deadline,
            u.id AS user_id,
            u.primary_email AS user_email,
+           u.primary_phone AS user_phone,
            p.id AS profile_id
          FROM grants g
          JOIN funding_opportunities fo
@@ -206,6 +208,16 @@ export async function generateDeadlineNotifications(db) {
         )
         .run(randomUUID(), userId, notifTitle, notifMessage, data)
       created++
+
+      // Dispatch email/SMS (best-effort, non-blocking)
+      dispatchDeadlineAlerts(db, {
+        userId,
+        userEmail: row.user_email,
+        userPhone: row.user_phone,
+        grantTitle: title,
+        daysRemaining: threshold,
+        deadline: row.deadline,
+      }).catch((err) => console.warn('[deadlineNotifications] Email/SMS dispatch failed:', err?.message))
     } catch (error) {
       console.warn('[deadlineNotifications] Failed to insert notification:', error?.message || error)
     }
