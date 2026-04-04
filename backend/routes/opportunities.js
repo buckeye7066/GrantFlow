@@ -1299,6 +1299,9 @@ router.post('/', async (req, res) => {
     `).run(...values);
 
     const opp = await req.db.prepare('SELECT * FROM funding_opportunities WHERE id = ?').get(id);
+    if (!opp) {
+      return res.status(500).json({ error: 'Opportunity created but could not be retrieved' });
+    }
     res.status(201).json(decorateOpportunity(opp));
   } catch (error) {
     console.error('Error creating opportunity:', error);

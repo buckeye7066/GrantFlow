@@ -63,7 +63,8 @@ export async function searchAwards(params = {}) {
       keywords: [params.keyword || ''],
       time_period: [
         {
-          start_date: params.startDate || '2023-01-01',
+          // Default: rolling 2-year lookback from today (no hardcoded stale dates)
+          start_date: params.startDate || (() => { const d = new Date(); d.setFullYear(d.getFullYear() - 2); return d.toISOString().split('T')[0] })(),
           end_date: params.endDate || new Date().toISOString().split('T')[0]
         }
       ],

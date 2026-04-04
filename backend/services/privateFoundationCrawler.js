@@ -519,6 +519,65 @@ const FOUNDATION_REGISTRY = [
     deadlineInfo: 'Invitation-based grantmaking',
   },
 
+  // ── National: Volunteer Fire / EMS ─────────────────────────────────────
+  {
+    name: 'FEMA Assistance to Firefighters Grant (AFG)',
+    ein: '00-0000000',
+    focusAreas: ['fire_department', 'ems', 'emergency_services', 'equipment', 'training'],
+    geographicScope: 'national',
+    grantRange: { min: 5000, max: 2000000 },
+    applicationUrl: 'https://www.fema.gov/grants/preparedness/firefighters',
+    description:
+      'Competitive federal grants for volunteer and career fire departments to obtain equipment, personal protective equipment, training, and wellness/fitness programs. No match required for volunteer depts under 20 personnel.',
+    deadlineInfo: 'Annual NOFO typically published Feb–April; applications open ~6 weeks',
+  },
+  {
+    name: 'FEMA SAFER Grant (Staffing for Adequate Fire and Emergency Response)',
+    ein: '00-0000000',
+    focusAreas: ['fire_department', 'ems', 'staffing', 'volunteer_recruitment'],
+    geographicScope: 'national',
+    grantRange: { min: 10000, max: 1000000 },
+    applicationUrl: 'https://www.fema.gov/grants/preparedness/safer',
+    description:
+      'SAFER grants help fire departments increase the number of frontline firefighters. Covers hiring costs for career departments and recruitment/retention for volunteer departments.',
+    deadlineInfo: 'Annual NOFO typically published spring; check grants.gov for open period',
+  },
+  {
+    name: 'Rural Fire Assistance Program (DOI / BLM)',
+    ein: '00-0000000',
+    focusAreas: ['fire_department', 'rural', 'wildland_fire', 'equipment'],
+    geographicScope: 'national',
+    grantRange: { min: 5000, max: 100000 },
+    applicationUrl: 'https://www.nifc.gov/fire-information/fire-prevention/rural-fire-assistance',
+    description:
+      'Department of Interior Rural Fire Assistance provides training and equipment grants to rural and volunteer fire departments in or near public lands.',
+    deadlineInfo: 'Rolling; contact local BLM office for open solicitations',
+  },
+
+  // ── National: Faith-Based / Church Organizations ────────────────────────
+  {
+    name: 'USDA Community Facilities Grant (Faith-Based & Rural)',
+    ein: '00-0000000',
+    focusAreas: ['church', 'faith_based', 'community_development', 'rural', 'infrastructure'],
+    geographicScope: 'national',
+    grantRange: { min: 5000, max: 500000 },
+    applicationUrl: 'https://www.rd.usda.gov/programs-services/community-facilities/community-facilities-direct-loan-grant-program',
+    description:
+      'USDA Community Facilities grants fund essential community facilities in rural areas — including churches and faith-based nonprofits that serve community needs such as food pantries, childcare, and emergency shelter.',
+    deadlineInfo: 'Rolling; contact local USDA Rural Development office',
+  },
+  {
+    name: 'HHS Center for Faith-Based and Neighborhood Partnerships Grants',
+    ein: '00-0000000',
+    focusAreas: ['church', 'faith_based', 'social_services', 'community'],
+    geographicScope: 'national',
+    grantRange: { min: 10000, max: 500000 },
+    applicationUrl: 'https://www.hhs.gov/about/agencies/iea/partnerships/index.html',
+    description:
+      'HHS funds faith-based and community organizations to deliver social services including substance abuse treatment, homeless services, and prisoner reentry. Faith-based orgs may apply equally to HHS grant programs.',
+    deadlineInfo: 'Multiple annual NOFAs; see grants.gov for open solicitations',
+  },
+
   // ── National: Child Development ─────────────────────────────────────────
   {
     name: 'Zero to Three Foundation',

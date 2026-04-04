@@ -67,10 +67,16 @@ const DEFAULT_ANTHROPIC_MODEL = process.env.ANTHROPIC_MODEL || 'claude-3-haiku-2
 // so we compute them once and reuse across every generateAssistantResponse call.
 const _STATIC_PROMPT_BASE = [
   'Your Role:',
-  '- Help users with grant discovery, application writing, funding opportunity tracking, and document preparation',
-  '- Always be concise, actionable, and specific — ground your guidance in real GrantFlow data',
-  '- When helping with grant applications, draw on the user\'s full profile: health conditions, financial situation, demographics, education, military status, family, government assistance status',
-  '- Keep responses focused and practical — suggest concrete next steps',
+  '- You are the in-app guide for GrantFlow. Help users understand what GrantFlow is, how it works, and what to do next.',
+  '- For new users: explain the app in plain language. Walk them through what a profile is, why it matters, and what happens after they fill it out.',
+  '- For returning users: orient them quickly — remind them where they left off and suggest the next most useful action.',
+  '- Explain what users are seeing on any screen. If they describe a result, an error, or a section they don\'t understand, explain it clearly.',
+  '- Help users with grant discovery, application writing, funding opportunity tracking, and document preparation.',
+  '- Always be concise, actionable, and specific — ground your guidance in real GrantFlow data.',
+  '- When helping with grant applications, draw on the user\'s full profile: health conditions, financial situation, demographics, education, military status, family, government assistance status.',
+  '- Keep responses focused and practical — suggest concrete next steps.',
+  '- Make the system less intimidating for nontechnical users. Use plain language. Avoid jargon.',
+  '- When a user seems lost or unsure what to do, offer the 2-3 most helpful next actions directly.',
   '',
   'Grant Writing & Application Help:',
   '- When a user asks for help writing a grant application, ask which opportunity they are targeting',
@@ -568,7 +574,8 @@ export async function getMessages(db, user, sessionId, { limit = 50, direction =
     .all(session.id, safeLimit)
 
   const mapped = rows.map(mapMessage)
-  return direction === 'latest' ? mapped : mapped
+  // 'latest' fetches rows DESC (newest first); reverse so callers see chronological order.
+  return direction === 'latest' ? mapped.reverse() : mapped
 }
 
 export async function listTasks(db, user, sessionId) {
@@ -821,7 +828,7 @@ export async function updateTask(
   return mapTask(updated)
 }
 
-export async function generateAssistantResponse(db, user, sessionId, { content }) {
+export async function generateAssistantResponse(db, user, sessionId, { content, currentPage }) {
   const trimmed = (content ?? '').trim()
   if (!trimmed) {
     return "I'm here and ready to help—just let me know what you'd like to work on."
@@ -910,7 +917,7 @@ export async function generateAssistantResponse(db, user, sessionId, { content }
     lines.push('')
 
     if (crawlerStats) {
-      lines.push(`• Crawler runs (24h): ${crawlerStats.totalRuns ?? crawlerStats.totalRuns ?? 0}`)
+      lines.push(`• Crawler runs (24h): ${crawlerStats.totalRuns ?? 0}`)
       lines.push(`• Recent failures: ${crawlerStats.recentFailures ?? 0}`)
       lines.push('')
     }
@@ -1027,7 +1034,25 @@ export async function generateAssistantResponse(db, user, sessionId, { content }
       )
     : _STATIC_PROMPT_ADMIN_SECTION
 
-  const systemPrompt = dynamicHeader + _STATIC_PROMPT_BASE + (isAdmin ? adminSection : _STATIC_PROMPT_USER_SECTION)
+  const pageGuidanceMap = {
+    Dashboard: 'User sees recent grants, pipeline stats, and activity. Help them understand their match scores, navigate to discovery, or explain what the pipeline is.',
+    Discovery: 'User is searching for grants. Help them refine their profile, understand search results, or explain what each grant means.',
+    Pipeline: 'User sees their saved grants. Help them understand status stages, deadlines, and next steps for applying.',
+    Applications: 'User is tracking their grant applications. Help them understand the status lifecycle and what to do next.',
+    Profile: 'User is filling out their profile. Encourage completeness — more profile data = better matches.',
+    Settings: 'User is managing preferences. Help with notification settings or data management.',
+  }
+  const resolvedPage = currentPage || 'Unknown'
+  const pageGuidance = pageGuidanceMap[resolvedPage] || 'Give general GrantFlow guidance.'
+  const pageContextSection = [
+    '## Current Page Context',
+    `The user is currently on: ${resolvedPage}`,
+    '',
+    `Page-specific guidance: ${pageGuidance}`,
+    '',
+  ].join('\n')
+
+  const systemPrompt = dynamicHeader + pageContextSection + _STATIC_PROMPT_BASE + (isAdmin ? adminSection : _STATIC_PROMPT_USER_SECTION)
 
   // 1) Try OpenAI first (if configured)
   if (openai) {

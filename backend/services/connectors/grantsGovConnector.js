@@ -1,10 +1,9 @@
 /**
  * Grants.gov API Connector
- * Integrates with the official Grants.gov REST API
- * 
- * API Documentation: https://www.grants.gov/web/grants/xml-web-services.html
- * Base URL: https://www.grants.gov/grantsws/rest
- * 
+ * Integrates with the official Grants.gov REST API v2 (current as of 2026)
+ *
+ * API Documentation: https://api.grants.gov/api-docs/ (v2)
+ * Simpler Grants API: https://api.simpler.grants.gov/docs
  * LEGAL: Public API, free to use for legitimate grant searching
  * RATE LIMIT: Not explicitly documented, use conservative 1 req/sec
  * TOS: https://www.grants.gov/web/grants/support/terms-of-use.html
@@ -13,8 +12,10 @@
 import fetch from 'node-fetch';
 
 // Public, unauthenticated endpoint (no API keys, no auth headers).
-const SEARCH2_URL = 'https://api.grants.gov/v1/api/search2';
-const BASE_URL = 'https://www.grants.gov/grantsws/rest';
+// v2 is the current Grants.gov API version (2026).
+const SEARCH2_URL = 'https://api.grants.gov/v2/api/search2';
+// Simpler Grants API (newer, JSON-first, paginated):
+const SIMPLER_OPPORTUNITY_URL = 'https://api.simpler.grants.gov/v1/opportunities';
 const RATE_LIMIT_MS = 1000; // 1 second between requests
 
 let lastRequestTime = 0;
@@ -167,29 +168,31 @@ export async function searchOpportunities(params = {}) {
  */
 export async function getOpportunityDetails(opportunityId) {
   try {
-    const data = await rateLimitedFetch(`${BASE_URL}/opportunity/details/${opportunityId}`);
-    
+    // Use the Simpler Grants API v1 for individual opportunity detail lookups.
+    // Falls back to the search-results-detail web page URL if the API returns no data.
+    const data = await rateLimitedFetch(`${SIMPLER_OPPORTUNITY_URL}/${opportunityId}`);
+
     const opp = data;
-    
+
     return {
       title: opp.oppTitle || '',
       sponsor: opp.agencyName || '',
       source: 'grants.gov',
       source_id: opp.oppNumber || '',
-      source_url: `https://www.grants.gov/web/grants/view-opportunity.html?oppId=${opportunityId}`,
+      source_url: `https://www.grants.gov/search-results-detail/${opportunityId}`,
       description: opp.description || opp.oppDescription || '',
       eligibility_bullets: opp.eligibility || [],
-      amount_min: opp.awardCeiling ? parseFloat(opp.awardCeiling) : null,
-      amount_max: opp.awardFloor ? parseFloat(opp.awardFloor) : null,
+      amount_min: opp.awardFloor ? parseFloat(opp.awardFloor) : null,
+      amount_max: opp.awardCeiling ? parseFloat(opp.awardCeiling) : null,
       deadline: opp.closeDate ? new Date(opp.closeDate).toISOString().split('T')[0] : null,
       deadline_type: 'fixed',
-      application_url: `https://www.grants.gov/web/grants/view-opportunity.html?oppId=${opportunityId}`,
+      application_url: `https://www.grants.gov/search-results-detail/${opportunityId}`,
       is_national: true,
       categories: opp.categories || [],
       keywords: [opp.oppTitle, opp.agencyCode, opp.cfdaNumber].filter(Boolean),
       opportunity_type: 'grant',
       type: 'OPPORTUNITY',
-      evidence_url: `${BASE_URL}/opportunity/details/${opportunityId}`,
+      evidence_url: `https://www.grants.gov/search-results-detail/${opportunityId}`,
       last_verified_at: new Date().toISOString(),
       requires_501c3: opp.eligibility?.some(e => e.includes('501(c)(3)')) || false,
       is_active: opp.oppStatus === 'posted',

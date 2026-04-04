@@ -56,23 +56,37 @@ router.get('/profile/:profileId/grants', async (req, res) => {
       const profileSectionsForGrants = profileContext?.sections ?? null
       const profileNormForDecision = normalizeProfile(rawProfileForGrants, profileSectionsForGrants)
 
-      if (!profileRow.organization_id) {
-              return res.json([])
+      // Query grants by organization_id if set, otherwise fall back to profile_id-scoped grants.
+      let rows
+      if (profileRow.organization_id) {
+        rows = await req.db
+          .prepare(
+            `SELECT g.id AS grant_id, g.title AS grant_title, g.funder AS grant_funder,
+                    g.status AS grant_status, g.deadline AS grant_deadline, g.notes AS grant_notes,
+                    g.funding_opportunity_id, fo.*
+             FROM grants g
+             LEFT JOIN funding_opportunities fo ON fo.id = g.funding_opportunity_id
+             WHERE g.organization_id = ?
+             ORDER BY g.updated_at DESC, g.created_at DESC`,
+          )
+          .all(profileRow.organization_id)
+      } else {
+        // Profile exists but has no linked organization — check for profile-scoped grants.
+        rows = await req.db
+          .prepare(
+            `SELECT g.id AS grant_id, g.title AS grant_title, g.funder AS grant_funder,
+                    g.status AS grant_status, g.deadline AS grant_deadline, g.notes AS grant_notes,
+                    g.funding_opportunity_id, fo.*
+             FROM grants g
+             LEFT JOIN funding_opportunities fo ON fo.id = g.funding_opportunity_id
+             WHERE g.profile_id = ?
+             ORDER BY g.updated_at DESC, g.created_at DESC`,
+          )
+          .all(profileId)
+        if (rows.length === 0) {
+          return res.json([])
+        }
       }
-
-      const rows = await req.db
-                     .prepare(
-                               `
-                                       SELECT g.id AS grant_id, g.title AS grant_title, g.funder AS grant_funder,
-                                                      g.status AS grant_status, g.deadline AS grant_deadline, g.notes AS grant_notes,
-                                                                     g.funding_opportunity_id, fo.*
-                                                                             FROM grants g
-                                                                                     LEFT JOIN funding_opportunities fo ON fo.id = g.funding_opportunity_id
-                                                                                             WHERE g.organization_id = ?
-                                                                                                     ORDER BY g.updated_at DESC, g.created_at DESC
-                                                                                                             `,
-                             )
-                     .all(profileRow.organization_id)
 
       const matches = rows.map((row) => {
               const candidate = row.id
@@ -238,10 +252,7 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
               params.push(pattern, pattern, pattern, pattern)
       }
 
-      // Profile isolation: each profile sees global catalog entries plus its own crawl results.
-      // This prevents cross-profile bleed where Profile A's crawl results appear in Profile B's matches.
-      conditions.push('(profile_id IS NULL OR profile_id = ?)')
-      params.push(profileId)
+      // (profile isolation already applied above; no duplicate needed)
 
       const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''
 

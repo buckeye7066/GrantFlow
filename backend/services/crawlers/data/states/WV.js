@@ -124,7 +124,7 @@ export const STATE_BENEFITS = [
     id: 'wv-monpower-checkup',
     name: 'Mon Power Home Check-Up Program',
     description: 'Free home energy audit plus installation of energy-saving improvements: insulation, LED bulbs, showerheads, faucet aerators, and possible refrigerator replacement.',
-    url: 'https://liheapch.acf.gov/profiles/WV.htm',
+    url: 'https://www.monpower.com/home/assistance-programs',
     applicationNote: 'Call 1-800-207-1250 to see if you qualify.',
     categories: ['utilities','weatherization'],
     eligibility: { incomeLimit: '200% FPL', utilityProvider: 'Mon Power' },

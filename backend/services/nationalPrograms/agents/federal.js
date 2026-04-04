@@ -4,8 +4,8 @@ export const federalAgent = {
   state: null,
   administeringAgency: null,
   seedUrls: [
-    // CMS / Medicaid / HCBS
-    'https://www.medicaid.gov/medicaid/index.html',
+    // CMS / Medicaid / HCBS (updated paths — /medicaid/index.html redirects as of 2024)
+    'https://www.medicaid.gov/',
     'https://www.medicaid.gov/medicaid/waivers/index.html',
     // SSA benefits
     'https://www.ssa.gov/benefits/',
@@ -17,6 +17,12 @@ export const federalAgent = {
     'https://www.va.gov/health-care/',
     // ACL aging/disability supports
     'https://acl.gov/programs',
+    // FEMA individual assistance / disaster relief
+    'https://www.disasterassistance.gov/',
+    // USDA Rural Development (churches, fire depts, rural orgs)
+    'https://www.rd.usda.gov/programs-services/community-facilities',
+    // FEMA Grants — AFG, SAFER (fire departments)
+    'https://www.fema.gov/grants',
   ],
   defaultTrack: 'CLIENT',
 }

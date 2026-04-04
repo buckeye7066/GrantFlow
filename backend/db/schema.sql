@@ -319,7 +319,8 @@ CREATE TABLE IF NOT EXISTS grants (
         'drafting', 'application_prep', 'revision', 'portal',
         'submitted', 'pending_review', 'follow_up', 'awarded',
         'report', 'declined_no_review', 'declined', 'closed',
-        'app_prep', 'under_review', 'rejected', 'archived'
+        'app_prep', 'under_review', 'rejected', 'archived',
+        'deadline_passed'
       )),
   
   deadline DATE,

@@ -13,7 +13,9 @@ import { upsertFundingOpportunity } from './opportunityInserter.js';
 // Grants.gov API endpoints
 // NOTE: The legacy `grantsws/rest/opportunities/search/` endpoint does not accept GET (405).
 // Use the public REST API `search2` endpoint (POST JSON).
-const GRANTS_GOV_SEARCH2 = 'https://api.grants.gov/v1/api/search2';
+// IMPORTANT: Use v2 when available; fall back to v1 for backward compatibility.
+// As of 2026, api.grants.gov/v2/ is the current base; search2 is still served at v1 path.
+const GRANTS_GOV_SEARCH2 = 'https://api.grants.gov/v2/api/search2';
 const GRANTS_GOV_VIEW = 'https://www.grants.gov/search-results-detail/';
 
 /**

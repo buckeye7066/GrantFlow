@@ -11,6 +11,7 @@ import {
   Kanban,
   FolderOpen,
   FileText,
+  ClipboardList,
   Calendar,
   CalendarClock,
   BarChart3,
@@ -86,6 +87,7 @@ export const NAV_GROUPS = [
     icon: Kanban,
     items: [
       { title: "Pipeline", routeName: "Pipeline", url: createPageUrl("Pipeline"), icon: Kanban },
+      { title: "Applications", routeName: "Applications", url: createPageUrl("Applications"), icon: ClipboardList },
       { title: "Proposals", routeName: "Proposals", url: createPageUrl("Proposals"), icon: FileText },
       { title: "Documents", routeName: "Documents", url: createPageUrl("Documents"), icon: FolderOpen },
       { title: "Printable Application", routeName: "PrintableApplication", url: createPageUrl("PrintableApplication"), icon: FileText },
@@ -167,6 +169,7 @@ export const ROUTE_LABELS = {
   ItemFunding: "Item Funding",
   ProfileMatcher: "Profile Matcher",
   Pipeline: "Pipeline",
+  Applications: "Applications",
   GrantDetail: "Grant",
   Apply: "Apply",
   VNextApplication: "Application",
@@ -202,8 +205,8 @@ export const LIFECYCLE_PHASES = [
   { id: "find", label: "Find Grants", path: "/DiscoverGrants" },
   { id: "review", label: "Review Fit", path: "/Pipeline" },
   { id: "prepare", label: "Prepare Materials", path: "/Documents" },
-  { id: "submit", label: "Submit", path: "/Pipeline" },
-  { id: "track", label: "Track Status", path: "/Pipeline" },
+  { id: "submit", label: "Submit", path: "/Applications" },
+  { id: "track", label: "Track Status", path: "/Applications" },
 ];
 
 /**

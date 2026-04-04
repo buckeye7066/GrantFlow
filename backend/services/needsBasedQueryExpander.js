@@ -521,7 +521,7 @@ const SITUATION_RULES = [
     id: 'high_school_college_bound_tennessee',
     conditions: {
       custom: (s) =>
-        (s.applicantType?.has('high_school_student') || s.applicantType?.has('student')) &&
+        (s.applicantTypes?.has('high_school_student') || s.applicantTypes?.has('student') || s.applicantType === 'student') &&
         (s.location?.state || '').toLowerCase() === 'tn',
     },
     programs: [

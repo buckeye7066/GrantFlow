@@ -1,4 +1,4 @@
-import React, { useState } from "react"
+import React, { useEffect, useState } from "react"
 import { Sparkles, X, AlertCircle } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from "@/components/ui/sheet"
@@ -7,13 +7,33 @@ import AnyaChat from "./AnyaChat"
 import { cn } from "@/lib/utils"
 import { useAuthStore } from "@/stores/authStore"
 
+/**
+ * Programmatically open the Anya panel from anywhere in the app.
+ * Dispatches a custom event that AnyaFloatingButton listens for.
+ */
+export function openAnyaPanel({ prefillMessage } = {}) {
+  window.dispatchEvent(new CustomEvent("anya:open", { detail: { prefillMessage: prefillMessage ?? null } }))
+}
+
 export default function AnyaFloatingButton({ profileId, className }) {
   const [isOpen, setIsOpen] = useState(false)
+  const [prefillMessage, setPrefillMessage] = useState(null)
   const isAdmin = useAuthStore((state) => Boolean(state.user?.is_admin))
   const canOpen = isAdmin || Boolean(profileId)
   const targetProfileId = profileId ?? (isAdmin ? null : undefined)
 
+  useEffect(() => {
+    function handleOpen(event) {
+      const msg = event?.detail?.prefillMessage ?? null
+      setPrefillMessage(msg)
+      setIsOpen(true)
+    }
+    window.addEventListener("anya:open", handleOpen)
+    return () => window.removeEventListener("anya:open", handleOpen)
+  }, [])
+
   const handleClick = () => {
+    setPrefillMessage(null)
     setIsOpen(true)
   }
 
@@ -94,16 +114,20 @@ export default function AnyaFloatingButton({ profileId, className }) {
           </SheetHeader>
           <div className="flex-1 overflow-hidden">
           {canOpen ? (
-            <AnyaChat profileId={targetProfileId ?? undefined} />
+            <AnyaChat profileId={targetProfileId ?? undefined} prefillMessage={prefillMessage} onPrefillConsumed={() => setPrefillMessage(null)} />
             ) : (
               <div className="p-6 flex items-center justify-center h-full">
                 <Alert className="max-w-md">
                   <AlertCircle className="h-4 w-4" />
                   <AlertDescription className="mt-2">
                     <p className="font-semibold mb-2">No profile selected</p>
-                    <p className="text-sm text-slate-600">
-                      To chat with Anya, you need to create or select a profile first. 
-                      Profiles help Anya understand your organization's needs and provide personalized grant recommendations.
+                    <p className="text-sm text-slate-600 mb-3">
+                      GrantFlow helps you find, track, and apply for grants, scholarships, and funding programs.
+                      To chat with Anya, create a profile first — Anya uses your profile (location, goals, demographics)
+                      to find opportunities that genuinely match your situation.
+                    </p>
+                    <p className="text-xs text-slate-500">
+                      Go to <strong>My Profiles</strong> to create or select a profile, then return here to get started.
                     </p>
                   </AlertDescription>
                 </Alert>

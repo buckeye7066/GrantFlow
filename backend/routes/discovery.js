@@ -9,6 +9,7 @@ import { isJunkOpportunity } from '../services/contentFilter.js'
 import { calculateMatchScore as scoreOpportunity } from '../services/matchingEngine.js'
 import { loadProfileContext } from '../services/profileHelpers.js'
 import { buildProfileFacets } from '../services/profile/profileTaxonomy.js'
+import { deduplicateOpportunities, decorateOpportunityFreshness } from '../services/opportunityMatcher.js'
 
 const router = express.Router();
 
@@ -127,14 +128,6 @@ router.post('/comprehensiveMatch', async (req, res) => {
       }
     }
 
-    // Profile isolation: each profile sees global catalog entries plus its own crawl results.
-    // This prevents cross-profile bleed where Profile A's crawl results appear in Profile B's matches.
-    // When profile_json is a string it is the profile_id; skip isolation for admin-supplied raw objects.
-    if (typeof profile_json === 'string') {
-      conditions.push('(profile_id IS NULL OR profile_id = ?)');
-      params.push(profile_json);
-    }
-    
     // Build the query: pull state + national + NULL state for relatable funding (no RANDOM).
     // Goal: real funding sources for profile needs — candidates are geographically relevant, then scored by profile signals.
     const candidateLimit = 3000;
@@ -202,13 +195,17 @@ router.post('/comprehensiveMatch', async (req, res) => {
         eligSummary = Array.isArray(bullets) ? bullets.join('; ') : (opp.eligibility_bullets || '')
       } catch { eligSummary = opp.eligibility_bullets || '' }
 
+      const freshness = decorateOpportunityFreshness(opp)
       return {
         id: opp.id,
         source_id: opp.source_id,
+        source: opp.source ?? null,
+        title: opp.title || opp.program_name,
         program_name: opp.title || opp.program_name,
         sponsor: opp.sponsor || opp.funder,
         url,
         deadline: opp.deadline,
+        state: opp.state ?? null,
         amount_min: opp.amount_min ?? null,
         amount_max: opp.amount_max ?? null,
         description: opp.description || opp.summary,
@@ -217,6 +214,10 @@ router.post('/comprehensiveMatch', async (req, res) => {
         match_score: computed.score,
         match_reasons: computed.reasons,
         matched_fields: computed.reasons.slice(0, 10),
+        updated_at: opp.updated_at ?? null,
+        freshness: freshness.freshness,
+        days_since_verified: freshness.days_since_verified,
+        freshness_warning: freshness.freshness_warning,
       };
     });
     
@@ -236,15 +237,23 @@ router.post('/comprehensiveMatch', async (req, res) => {
       console.log(`[comprehensiveMatch] Top 5 scores:`, JSON.stringify(topScores));
     }
     
+    // Deduplicate before threshold filtering — keeps highest-trust record when same grant
+    // appears from multiple crawl sources. Display-only: no DB records are changed.
+    const dedupedOpportunities = deduplicateOpportunities(scoredOpportunities)
+    const dedupedCount = scoredOpportunities.length - dedupedOpportunities.length
+    if (dedupedCount > 0) {
+      console.log(`[comprehensiveMatch] Deduplication removed ${dedupedCount} duplicate opportunities`)
+    }
+
     let matchThreshold = 50;
-    let highScoring = scoredOpportunities
+    let highScoring = dedupedOpportunities
       .filter(o => o.fit_score >= matchThreshold)
       .sort((a, b) => b.fit_score - a.fit_score);
 
     // Zero-results fallback: progressively lower threshold
-    if (highScoring.length === 0 && scoredOpportunities.length > 0) {
+    if (highScoring.length === 0 && dedupedOpportunities.length > 0) {
       for (const fallback of [30, 15, 0]) {
-        highScoring = scoredOpportunities
+        highScoring = dedupedOpportunities
           .filter(o => o.fit_score >= fallback)
           .sort((a, b) => b.fit_score - a.fit_score);
         if (highScoring.length > 0) {
@@ -254,12 +263,12 @@ router.post('/comprehensiveMatch', async (req, res) => {
         }
       }
       if (highScoring.length === 0) {
-        highScoring = scoredOpportunities.sort((a, b) => b.fit_score - a.fit_score).slice(0, 20);
+        highScoring = dedupedOpportunities.sort((a, b) => b.fit_score - a.fit_score).slice(0, 20);
         matchThreshold = 0;
         console.log(`[comprehensiveMatch] All thresholds exhausted; returning top ${highScoring.length}`);
       }
     }
-    
+
     res.json({
       success: true,
       opportunities: highScoring,
@@ -267,7 +276,8 @@ router.post('/comprehensiveMatch', async (req, res) => {
       page,
       threshold_used: matchThreshold,
       threshold_relaxed: matchThreshold < 50 ? true : undefined,
-      total_evaluated: scoredOpportunities.length
+      total_evaluated: scoredOpportunities.length,
+      total_after_dedupe: dedupedOpportunities.length,
     });
     
   } catch (error) {
@@ -377,28 +387,35 @@ router.post('/searchOpportunities', async (req, res) => {
     const countRow = await req.db.prepare(countQuery).get(...countParams);
     const total = Number(countRow?.total ?? 0) || 0;
     
-    // Format results
-    const results = (opportunities || []).map(opp => {
+    // Format results with freshness decoration
+    const rawResults = (opportunities || []).map(opp => {
       // Filter out placeholder URLs
       let url = opp.url || opp.application_url || null
       if (url && (url.includes('example.org') || url.includes('example.com') || url.includes('placeholder'))) {
         url = null;
       }
-      
+      const freshness = decorateOpportunityFreshness(opp)
       return {
         id: opp.id,
+        source_id: opp.source_id ?? null,
         title: opp.title || opp.program_name,
         sponsor: opp.sponsor || opp.funder,
         url: url,
         deadline: opp.deadline,
-      award_min: null,
-      award_max: null,
-      description: opp.description || opp.summary,
-      state: opp.state,
-      source: opp.source || 'database',
-      eligibility: opp.eligibility_bullets
+        award_min: opp.amount_min ?? null,
+        award_max: opp.amount_max ?? null,
+        description: opp.description || opp.summary,
+        state: opp.state,
+        source: opp.source || 'database',
+        eligibility: opp.eligibility_bullets,
+        updated_at: opp.updated_at ?? null,
+        freshness: freshness.freshness,
+        days_since_verified: freshness.days_since_verified,
+        freshness_warning: freshness.freshness_warning,
       };
     });
+    // Deduplicate before returning (display-only; no DB records are changed)
+    const results = deduplicateOpportunities(rawResults);
     
     res.json({
       success: true,
@@ -440,9 +457,10 @@ router.post('/archOpportunities', async (req, res) => {
     if (action === 'archive') {
       // Mark opportunities as archived
       const placeholders = opportunity_ids.map(() => '?').join(',');
+      const isPostgresArch = req.db?.dialect === 'postgres'
       const query = `
-        UPDATE funding_opportunities 
-        SET archived = 1, archived_at = CURRENT_TIMESTAMP 
+        UPDATE funding_opportunities
+        SET archived = ${isPostgresArch ? 'TRUE' : '1'}, archived_at = CURRENT_TIMESTAMP
         WHERE id IN (${placeholders})
       `;
       
@@ -457,9 +475,10 @@ router.post('/archOpportunities', async (req, res) => {
     } else if (action === 'unarchive') {
       // Unarchive opportunities
       const placeholders = opportunity_ids.map(() => '?').join(',');
+      const isPostgresUnarch = req.db?.dialect === 'postgres'
       const query = `
-        UPDATE funding_opportunities 
-        SET archived = 0, archived_at = NULL 
+        UPDATE funding_opportunities
+        SET archived = ${isPostgresUnarch ? 'FALSE' : '0'}, archived_at = NULL
         WHERE id IN (${placeholders})
       `;
       

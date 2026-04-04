@@ -16,6 +16,8 @@ import {
 } from '../utils/accessControl.js'
 import { scheduleGrantApplicationApproach } from '../services/grantApplicationApproachAdvisor.js'
 import { isPipelineSourceAllowed } from '../config/pipelineAllowedSources.js'
+import { mergeOpportunitySignals } from '../services/profileHelpers.js'
+import { decorateOpportunityFreshness } from '../services/opportunityMatcher.js'
 
 const router = express.Router();
 
@@ -465,12 +467,18 @@ router.get('/', async (req, res) => {
     
     const grants = await req.db.prepare(query).all(...params);
     
-    // Parse JSON fields safely
-    const parsed = grants.map(grant => ({
-      ...grant,
-      match_reasons: safeParseJSON(grant.match_reasons, [])
-    }));
-    
+    // Parse JSON fields safely and decorate with freshness
+    const parsed = grants.map(grant => {
+      const withReasons = { ...grant, match_reasons: safeParseJSON(grant.match_reasons, []) }
+      const freshness = decorateOpportunityFreshness(withReasons)
+      return {
+        ...withReasons,
+        freshness: freshness.freshness,
+        days_since_verified: freshness.days_since_verified,
+        freshness_warning: freshness.freshness_warning,
+      }
+    });
+
     res.json(parsed);
   } catch (error) {
     console.error('Error listing grants:', error);
@@ -555,11 +563,15 @@ router.get('/pipeline', async (req, res) => {
     };
     
     grants.forEach(grant => {
+      const withReasons = { ...grant, match_reasons: safeParseJSON(grant.match_reasons, []) }
+      const freshness = decorateOpportunityFreshness(withReasons)
       const parsed = {
-        ...grant,
-        match_reasons: safeParseJSON(grant.match_reasons, [])
+        ...withReasons,
+        freshness: freshness.freshness,
+        days_since_verified: freshness.days_since_verified,
+        freshness_warning: freshness.freshness_warning,
       };
-      
+
       if (pipeline.hasOwnProperty(grant.status)) {
         pipeline[grant.status].push(parsed);
       }
@@ -944,18 +956,35 @@ router.patch('/:id/status', mutationRateLimiter, async (req, res) => {
     if (!grantAccess) return
 
     const { status } = req.body;
-    
+
     if (!GRANT_STATUSES.includes(status)) {
       return res.status(400).json({ error: 'Invalid status' });
     }
-    
+
     await req.db.prepare(`
-      UPDATE grants 
-      SET status = ?, updated_at = CURRENT_TIMESTAMP 
+      UPDATE grants
+      SET status = ?, updated_at = CURRENT_TIMESTAMP
       WHERE id = ?
     `).run(status, req.params.id);
-    
+
     const grant = await req.db.prepare('SELECT * FROM grants WHERE id = ?').get(req.params.id);
+
+    // Non-blocking: when a grant is marked as applied, extract opportunity signals.
+    if (status === 'applied' && grant?.profile_id && grant?.funding_opportunity_id) {
+      ;(async () => {
+        try {
+          const opp = await req.db
+            .prepare('SELECT categories, keywords, need_types_supported FROM funding_opportunities WHERE id = ?')
+            .get(grant.funding_opportunity_id)
+          if (opp) {
+            await mergeOpportunitySignals(req.db, grant.profile_id, opp, 'apply')
+          }
+        } catch {
+          // Signal merge must not affect the status update response.
+        }
+      })()
+    }
+
     res.json(grant);
   } catch (error) {
     console.error('Error updating grant status:', error);
@@ -1553,6 +1582,15 @@ router.post('/from-opportunity', async (req, res, next) => {
     if (!result.already_exists && result?.id) {
       scheduleGrantApplicationApproach({ db: req.db, grantId: result.id })
     }
+
+    // Non-blocking: extract opportunity signals into profile implicit_signals.
+    // Only run for newly saved grants with a known profile.
+    if (!result.already_exists && normalizedProfileId && opportunity) {
+      mergeOpportunitySignals(req.db, normalizedProfileId, opportunity, 'save').catch(() => {
+        // Signal merge failures must never affect the pipeline save response.
+      })
+    }
+
     res.status(statusCode).json(result);
   } catch (error) {
     // IMPORTANT:

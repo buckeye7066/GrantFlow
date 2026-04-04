@@ -79,7 +79,8 @@ async function crawlGrantsGov(state = null, keywords = []) {
   
   try {
     // Use the public search2 POST endpoint (the legacy GET endpoint returns HTTP 405)
-    const searchUrl = 'https://api.grants.gov/v1/api/search2';
+    // NOTE: v2 is the current Grants.gov API version (2026).
+    const searchUrl = 'https://api.grants.gov/v2/api/search2';
     
     const payload = {
       oppStatuses: 'forecasted|posted',
@@ -155,12 +156,15 @@ async function crawlUSASpending(state = null) {
   
   try {
     // USASpending API for federal assistance
+    const today = new Date()
+    const endDate = today.toISOString().split('T')[0]
+    const startDate = new Date(today.getFullYear() - 2, today.getMonth(), today.getDate()).toISOString().split('T')[0]
     const response = await fetchWithRetry('https://api.usaspending.gov/api/v2/search/spending_by_category/cfda/', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         filters: {
-          time_period: [{ start_date: '2024-01-01', end_date: '2026-12-31' }],
+          time_period: [{ start_date: startDate, end_date: endDate }],
           ...(state ? { place_of_performance_locations: [{ country: 'USA', state }] } : {})
         },
         limit: 100,
@@ -217,11 +221,11 @@ async function crawlStateGrants(state) {
     'NY': 'https://grantsgateway.ny.gov/IntelliGrants_NYSGG/module/nysgg/goportal.aspx',
     'CA': 'https://www.grants.ca.gov/',
     'TX': 'https://gov.texas.gov/organization/financial-services/grants',
-    'FL': 'https://www.flgov.com/grant-opportunities/',
+    'FL': 'https://www.myfloridacfo.com/division/aa/grants',
     'PA': 'https://www.grants.pa.gov/',
-    'IL': 'https://www2.illinois.gov/sites/GATA/Grants/Pages/default.aspx',
+    'IL': 'https://www.illinois.gov/content/state/en/agencies/gata.html',
     'OH': 'https://grants.ohio.gov/',
-    'GA': 'https://gema.georgia.gov/grants',
+    'GA': 'https://www.georgia.gov/grants',
     'NC': 'https://www.osbm.nc.gov/grants',
     'MI': 'https://www.michigan.gov/leo/bureaus-agencies/michiganworks/grants'
   };
@@ -281,13 +285,13 @@ function getKnownStatePrograms(state) {
     sponsor: `${stateName} Department of Housing/Community Development`,
     source: 'hud_cdbg',
     source_id: `cdbg-${state}`,
-    source_url: `https://www.hud.gov/states/${state.toLowerCase()}/community`,
+    source_url: `https://www.hud.gov/program_offices/comm_planning/cdbg`,
     description: `The CDBG program provides annual grants to states, cities, and counties to develop viable urban communities by providing decent housing, a suitable living environment, and expanding economic opportunities, principally for low- and moderate-income persons in ${stateName}.`,
     amount_min: 10000,
     amount_max: 1000000,
     deadline: null,
     deadline_type: 'rolling',
-    application_url: `https://www.hud.gov/states/${state.toLowerCase()}/community`,
+    application_url: `https://www.hud.gov/program_offices/comm_planning/cdbg`,
     is_national: false,
     state: state,
     categories: ['community development', 'housing', 'economic development'],

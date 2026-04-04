@@ -75,12 +75,24 @@ function _isVeteranProfile(pd) {
 
 function _isBusinessProfile(pd) {
   const t = (pd.primary_type || '').toLowerCase()
-  return t === 'small_business' || t === 'organization' || t === 'nonprofit'
+  // 'nonprofit' is NOT a business type — removing it prevents nonprofits from being
+  // incorrectly included in business-only program checks.
+  return t === 'small_business' || t === 'organization'
 }
 
 function _isNonprofitProfile(pd) {
   const t = (pd.primary_type || '').toLowerCase()
-  return t === 'organization' || t === 'nonprofit'
+  // Churches, schools, and volunteer fire departments are nonprofits and should
+  // qualify for nonprofit-targeted programs.
+  return (
+    t === 'organization' ||
+    t === 'nonprofit' ||
+    t === 'church' ||
+    t === 'school' ||
+    t === 'volunteer_fire' ||
+    t === 'volunteer_fire_department' ||
+    t === 'vfd'
+  )
 }
 
 function _isStudentProfile(pd) {

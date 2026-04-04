@@ -30,15 +30,8 @@ function getBuildInfo() {
     process.env.VERCEL_GIT_COMMIT_SHA ||
     null
 
-  let pkgVersion = null
-  try {
-    const pkgPath = path.resolve(__dirname, '../../package.json')
-    const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'))
-    pkgVersion = pkg.version || null
-  } catch { /* ignore */ }
-
   return {
-    version: pkgVersion,
+    version: _cachedPkgVersion,
     commit_sha: commit ? String(commit) : null,
     node_env: process.env.NODE_ENV ? String(process.env.NODE_ENV) : null,
     runtime: process.env.RAILWAY_ENVIRONMENT ? 'railway' : process.env.VERCEL ? 'vercel' : null,

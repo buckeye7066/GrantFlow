@@ -310,8 +310,11 @@ export function calculateNeedAlignment(profileNorm, oppNorm) {
   const profileNeeds = profileNorm?.needCategories ?? []
   const oppNeeds = oppNorm?.needTypesSupported ?? []
 
+  // When the profile has no recorded needs (sparse profile) or the opportunity
+  // declares no specific need types (general funding), use a neutral baseline so
+  // that entity-type and geography signals alone can still carry a decision to ACCEPT.
   if (profileNeeds.length === 0 || oppNeeds.length === 0) {
-    return { score: 0, matchedNeeds: [] }
+    return { score: 30, matchedNeeds: [] }
   }
 
   const matchedNeeds = profileNeeds.filter((n) => oppNeeds.includes(n))

@@ -53,7 +53,16 @@ function loadRealOpportunities() {
     'state_programs',
     'disability_assistance',
     'veteran_assistance',
-    'nonprofit_grants'
+    'nonprofit_grants',
+    // Additional profile types: individuals, families, churches, fire departments, rural orgs
+    'individual_grants',
+    'family_assistance',
+    'church_grants',
+    'religious_organization_grants',
+    'fire_department_grants',
+    'rural_organization_grants',
+    'tribal_grants',
+    'small_business_grants',
   ]
   
   for (const cat of categories) {

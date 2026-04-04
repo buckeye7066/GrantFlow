@@ -1,4 +1,5 @@
 import express from 'express'
+import crypto from 'crypto'
 import {
   addMessage,
   createSession,
@@ -55,7 +56,11 @@ function adminAuth(req, res, next) {
     return res.status(401).json({ error: 'Missing admin credentials' })
   }
   
-  if (headerToken !== configuredToken) {
+  // Use timing-safe comparison to prevent timing attacks on the admin token
+  const a = Buffer.from(String(headerToken))
+  const b = Buffer.from(String(configuredToken))
+  const tokenMatch = a.length === b.length && crypto.timingSafeEqual(a, b)
+  if (!tokenMatch) {
     return res.status(403).json({ error: 'Invalid admin credentials' })
   }
   
@@ -208,6 +213,9 @@ router.post('/sessions/:sessionId/messages', async (req, res) => {
   try {
     const content = req.body?.message ?? req.body?.content
     const mode = (req.body?.mode ?? 'copilot') || 'copilot'
+    const currentPage = (typeof req.body?.current_page === 'string' && req.body.current_page.trim())
+      ? req.body.current_page.trim()
+      : null
     if (mode === 'admin_ops' && !req.ctx?.isAdmin) {
       return res.status(403).json({ error: 'Admin privileges required' })
     }
@@ -233,6 +241,7 @@ router.post('/sessions/:sessionId/messages', async (req, res) => {
     try {
       assistantText = await generateAssistantResponse(req.db, req.ctx, req.params.sessionId, {
         content,
+        currentPage,
       })
     } catch (assistantError) {
       console.error('[anya] Unable to generate assistant reply:', assistantError)

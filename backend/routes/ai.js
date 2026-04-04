@@ -40,12 +40,17 @@ function getOpenAIOptional() {
 
 async function createAnthropicClient() {
   if (!process.env.ANTHROPIC_API_KEY) return null
-  const Anthropic = (await import('@anthropic-ai/sdk')).default
-  return new Anthropic({
-    apiKey: process.env.ANTHROPIC_API_KEY,
-    timeout: Number(process.env.ANYA_ANTHROPIC_TIMEOUT_MS || 15_000),
-    maxRetries: Number(process.env.ANYA_ANTHROPIC_MAX_RETRIES || 1),
-  })
+  try {
+    const Anthropic = (await import('@anthropic-ai/sdk')).default
+    return new Anthropic({
+      apiKey: process.env.ANTHROPIC_API_KEY,
+      timeout: Number(process.env.ANYA_ANTHROPIC_TIMEOUT_MS || 15_000),
+      maxRetries: Number(process.env.ANYA_ANTHROPIC_MAX_RETRIES || 1),
+    })
+  } catch (err) {
+    console.warn('[ai] Anthropic client unavailable:', err?.message || String(err))
+    return null
+  }
 }
 
 function extractAnthropicText(response) {
@@ -136,14 +141,14 @@ router.post('/comprehensive-match', async (req, res) => {
     const isolationParams = profileIdForIsolation ? [profileIdForIsolation] : []
 
     const opportunities = await req.db.prepare(`
-      SELECT * FROM funding_opportunities 
+      SELECT * FROM funding_opportunities
       WHERE is_active = ${activeVal}
       AND ${trustedOriginClause()} AND ${trustedSourceClause()}
       ${isolationClause}
-      ORDER BY created_at DESC 
-      LIMIT 100
+      ORDER BY created_at DESC
+      LIMIT 500
     `).all(...isolationParams)
-    
+
     // Calculate match scores using deterministic algorithm
     const scoredOpps = opportunities.map(opp => {
       const matchResult = calculateMatchScore(profile, opp);
@@ -153,10 +158,31 @@ router.post('/comprehensive-match', async (req, res) => {
         match_reasons: matchResult.reasons
       };
     });
-    
+
+    // Zero-result fallback: progressively lower threshold so users never see empty results
+    // when relevant funding likely exists.
+    let matchThreshold = 50
+    let matched = scoredOpps.filter(o => o.fit_score >= matchThreshold)
+    if (matched.length === 0 && scoredOpps.length > 0) {
+      for (const fallback of [30, 15, 0]) {
+        matched = scoredOpps.filter(o => o.fit_score >= fallback)
+        if (matched.length > 0) {
+          matchThreshold = fallback
+          break
+        }
+      }
+      if (matched.length === 0) {
+        matched = scoredOpps.slice(0, 20)
+        matchThreshold = 0
+      }
+    }
+    matched.sort((a, b) => b.fit_score - a.fit_score)
+
     res.json({
-      opportunities: scoredOpps.filter(o => o.fit_score >= 50), // Minimum threshold
+      opportunities: matched,
       total: scoredOpps.length,
+      threshold_used: matchThreshold,
+      threshold_relaxed: matchThreshold < 50 ? true : undefined,
       profile
     })
   } catch (error) {
@@ -165,35 +191,54 @@ router.post('/comprehensive-match', async (req, res) => {
   }
 })
 
-// ECF service search endpoint
+// ECF service search endpoint — returns real DB entries for this profile's state
 router.post('/ecf-service-search', async (req, res) => {
   try {
-    const { profile } = req.body
-    
-    const services = [
-      {
-        name: 'Respite Care Services',
-        description: 'Temporary relief for caregivers',
-        provider: 'Regional DD Board',
-        match_score: 92
-      },
-      {
-        name: 'Assistive Technology',
-        description: 'Adaptive equipment and devices',
-        provider: 'AT Program',
-        match_score: 88
-      },
-      {
-        name: 'Community Integration Support',
-        description: 'Social and community participation',
-        provider: 'ECF CHOICES',
-        match_score: 85
-      }
-    ]
-    
+    const { profile, profile_id } = req.body
+
+    const isPostgresEcf = req.db?.dialect === 'postgres'
+    const activeEcf = isPostgresEcf ? 'TRUE' : '1'
+
+    // Profile isolation
+    const isolationId = profile_id || profile?.id || null
+    const isolationClause = isolationId
+      ? 'AND (profile_id IS NULL OR profile_id = ?)'
+      : 'AND profile_id IS NULL'
+    const isolationParams = isolationId ? [isolationId] : []
+
+    // State filter from profile
+    const profileState = profile?.state || null
+    const stateClause = profileState
+      ? `AND (state = ? OR state IS NULL OR state = 'nationwide')`
+      : ''
+    const stateParams = profileState ? [profileState] : []
+
+    const services = await req.db.prepare(`
+      SELECT * FROM funding_opportunities
+      WHERE is_active = ${activeEcf}
+        AND ${trustedOriginClause()} AND ${trustedSourceClause()}
+        ${isolationClause}
+        ${stateClause}
+        AND (
+          LOWER(categories) LIKE '%ecf%'
+          OR LOWER(categories) LIKE '%waiver%'
+          OR LOWER(categories) LIKE '%home and community%'
+          OR LOWER(title) LIKE '%choices%'
+          OR LOWER(source) LIKE '%ecf%'
+        )
+      ORDER BY updated_at DESC
+      LIMIT 50
+    `).all(...isolationParams, ...stateParams)
+
+    // Score each service against the profile using keyword matching
+    const scored = services.map(svc => {
+      const matchResult = calculateMatchScore(profile || {}, svc)
+      return { ...svc, match_score: matchResult.score, match_reasons: matchResult.reasons }
+    }).sort((a, b) => b.match_score - a.match_score)
+
     res.json({
-      services,
-      total: services.length,
+      services: scored,
+      total: scored.length,
       profile
     })
   } catch (error) {
@@ -293,8 +338,8 @@ router.post('/match', async (req, res) => {
           'student': ['student', 'scholarship', 'education', 'college', 'university']
         };
         
-        const keywords = typeKeywords[profile.applicant_type] || [];
-        keywords.forEach(kw => {
+        const typeMatchKeywords = typeKeywords[profile.applicant_type] || [];
+        typeMatchKeywords.forEach(kw => {
           if (combined.includes(kw)) {
             score += 5;
             if (!matchReasons.includes('Applicant type match')) {

@@ -43,6 +43,7 @@ export function generateStatePrograms(stateCode) {
       type: 'portal',
       fundingType: 'direct_benefit',
       priority: 1,
+      intentMatch: ['food', 'cash_assistance', 'healthcare', 'utilities', 'childcare'],
     },
 
     // ── SNAP ──
@@ -56,6 +57,7 @@ export function generateStatePrograms(stateCode) {
       type: 'benefit',
       fundingType: 'direct_benefit',
       recurring: true,
+      intentMatch: ['food'],
     },
 
     // ── TANF / Cash Assistance ──
@@ -70,6 +72,7 @@ export function generateStatePrograms(stateCode) {
       fundingType: 'direct_benefit',
       recurring: true,
       familyMatch: ['has_children', 'single_parent'],
+      intentMatch: ['cash_assistance', 'employment'],
     },
 
     // ── Medicaid ──
@@ -83,6 +86,7 @@ export function generateStatePrograms(stateCode) {
       type: 'benefit',
       fundingType: 'direct_benefit',
       recurring: true,
+      intentMatch: ['healthcare'],
     },
 
     // ── LIHEAP ──
@@ -96,6 +100,7 @@ export function generateStatePrograms(stateCode) {
       type: 'benefit',
       fundingType: 'direct_benefit',
       recurring: true,
+      intentMatch: ['utilities'],
     },
 
     // ── Weatherization ──
@@ -103,12 +108,13 @@ export function generateStatePrograms(stateCode) {
       id: `${sc}-weatherization`,
       name: `${reg.name} Weatherization Assistance Program`,
       description: `Free home energy improvements for low-income ${reg.name} homeowners and renters: insulation, air sealing, furnace repair/replacement. Priority for elderly, disabled, and families with children.`,
-      url: `https://www.energy.gov/scep/wap/weatherization-assistance-program-1`,
+      url: `https://www.energy.gov/scep/wap/weatherization-assistance-program`,
       categories: ['utilities', 'weatherization', 'housing'],
       eligibility: { incomeLimit: '200% FPL' },
       type: 'grant',
       fundingType: 'direct_service',
       recurring: false,
+      intentMatch: ['utilities', 'housing'],
     },
 
     // ── HCBS Waiver (ECF CHOICES equivalent) ──
@@ -123,6 +129,7 @@ export function generateStatePrograms(stateCode) {
       fundingType: 'direct_service',
       recurring: true,
       healthMatch: ['disability', 'physical_disability', 'developmental_disability', 'intellectual_disability'],
+      intentMatch: ['disability', 'healthcare'],
     },
 
     // ── I/DD Agency Portal ──
@@ -136,6 +143,7 @@ export function generateStatePrograms(stateCode) {
       type: 'portal',
       fundingType: 'direct_service',
       healthMatch: ['disability', 'developmental_disability', 'intellectual_disability'],
+      intentMatch: ['disability'],
     },
 
     // ── State Housing Authority ──
@@ -148,6 +156,7 @@ export function generateStatePrograms(stateCode) {
       eligibility: { incomeLimit: 'Varies by program' },
       type: 'portal',
       fundingType: 'direct_service',
+      intentMatch: ['housing'],
     },
 
     // ── Vocational Rehabilitation ──
@@ -162,6 +171,7 @@ export function generateStatePrograms(stateCode) {
       fundingType: 'direct_service',
       recurring: true,
       healthMatch: ['disability', 'physical_disability', 'visual_impairment', 'hearing_impairment', 'mental_health', 'developmental_disability'],
+      intentMatch: ['employment', 'disability', 'education'],
     },
 
     // ── Childcare Assistance ──
@@ -176,6 +186,7 @@ export function generateStatePrograms(stateCode) {
       fundingType: 'direct_benefit',
       recurring: true,
       familyMatch: ['has_children', 'single_parent'],
+      intentMatch: ['childcare'],
     },
 
     // ── 211 Referral Service ──
@@ -189,6 +200,7 @@ export function generateStatePrograms(stateCode) {
       type: 'referral',
       fundingType: 'referral_service',
       recurring: true,
+      intentMatch: ['utilities', 'housing', 'food', 'healthcare', 'cash_assistance', 'employment'],
     },
   ];
 

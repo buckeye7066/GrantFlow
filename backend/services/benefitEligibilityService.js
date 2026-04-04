@@ -403,10 +403,12 @@ function evaluatePrograms(s) {
   add(
     {
       id: 'acp',
-      name: 'Affordable Connectivity Program (ACP) — Broadband Discount',
+      name: 'Affordable Connectivity Program (ACP) — ENDED June 2024',
       description:
-        'Up to $30/month off internet service ($75 on tribal lands). Note: ACP funding is limited — check current availability.',
-      applicationUrl: 'https://acpbenefit.org/',
+        'The ACP program ended in June 2024. New enrollments are no longer accepted. ' +
+        'Alternative: Lifeline program offers $9.25/month broadband discount for qualifying households. ' +
+        'See https://www.lifelinesupport.org/',
+      applicationUrl: 'https://www.lifelinesupport.org/',
     },
     p !== null && p <= 200,
     p !== null

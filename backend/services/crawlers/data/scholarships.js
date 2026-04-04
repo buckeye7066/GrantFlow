@@ -645,7 +645,7 @@ export const SCHOLARSHIPS = [
     id: 'sch-grad-fellowships',
     name: 'Graduate Fellowship & Assistantship Resources',
     description: 'NSF Graduate Research Fellowship ($37,000/year + tuition), Ford Foundation, Fulbright, and university-specific assistantships and fellowships.',
-    url: 'https://www.nsf.gov/funding/pgm_summ.jsp?pims_id=6201',
+    url: 'https://www.nsf.gov/funding/opportunities/nsf-graduate-research-fellowship-program-grfp',
     categories: ['scholarship','education'],
     eligibility: { requiresStudent: true },
     type: 'referral',

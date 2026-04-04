@@ -50,6 +50,7 @@ import budgetsRouter from './routes/budgets.js'
 import contactsRouter from './routes/contacts.js'
 import applicationDraftsRouter from './routes/applicationDrafts.js'
 import applicationsRouter from './routes/applications.js'
+import grantApplicationsRouter from './routes/grantApplications.js'
 import billingSettingsRouter from './routes/billingSettings.js'
 import contactMethodsRouter from './routes/contactMethods.js'
 import outreachLogsRouter from './routes/outreachLogs.js'
@@ -88,6 +89,9 @@ import { seedServiceCatalogFromExtract } from './services/serviceCatalogStore.js
 import adminServiceCatalogRouter from './routes/adminServiceCatalog.js'
 import collegesRouter from './routes/colleges.js'
 import { allowedOriginCheckSQL } from './utils/recordOrigins.js'
+import notificationsRouter from './routes/notifications.js'
+import { expirePassedDeadlines } from './services/deadlineExpiryService.js'
+import { generateDeadlineNotifications } from './services/deadlineNotificationService.js'
 
 /**
  * Lazy-loading route helper — caches the imported router after first load.
@@ -1600,6 +1604,7 @@ app.use('/api/contacts', contactsRouter);
 app.use('/api/outreach-logs', outreachLogsRouter);
 app.use('/api/application-drafts', applicationDraftsRouter);
 app.use('/api/applications', applicationsRouter);
+app.use('/api/grant-applications', grantApplicationsRouter);
 app.use('/api/vnext/applications', lazyRouter('./routes/vnextApplications.js'));
 app.use('/api/billing-settings', billingSettingsRouter);
 app.use('/api/contact-methods', contactMethodsRouter);
@@ -1628,6 +1633,7 @@ app.use('/api/crawl-logs', crawlLogsRouter);
 // Geo Crawl monitor + start endpoints (admin-only)
 app.use('/api/geo-crawl', lazyRouter('./routes/geoCrawl.js', (mod) => mod.default({ uploadDir: uploadsDir, getOpenAI: null })));
 app.use('/api/colleges', collegesRouter);
+app.use('/api/notifications', notificationsRouter);
 
 function resolveBuildSha() {
   return (
@@ -2141,7 +2147,7 @@ if (process.env.NODE_ENV !== 'test') {
               'discovery','discovered','interested','auto_applied','drafting',
               'application_prep','revision','portal','submitted','pending_review',
               'follow_up','awarded','report','declined_no_review','declined','closed',
-              'app_prep','under_review','rejected','archived'
+              'app_prep','under_review','rejected','archived','deadline_passed'
             ));
           `)
           console.log('[startup] grants status CHECK constraint verified/expanded')
@@ -2426,6 +2432,53 @@ if (process.env.NODE_ENV !== 'test') {
     }, 5000);
     console.log('[Anya] Autonomous operations disabled — running basic startup crawlers only');
   }
+
+  // Deadline expiry + notification cron (runs daily at 2am, and once at startup after 5s delay).
+  // Marks opportunities with passed deadlines as inactive and generates approaching-deadline notifications.
+  async function runDeadlineCron() {
+    try {
+      const expiryResult = await expirePassedDeadlines(db)
+      console.info('[deadline-cron] Expiry run complete', expiryResult)
+    } catch (err) {
+      console.error('[deadline-cron] Expiry failed:', err?.message || err)
+    }
+    try {
+      const notifResult = await generateDeadlineNotifications(db)
+      console.info('[deadline-cron] Notification run complete', notifResult)
+    } catch (err) {
+      console.error('[deadline-cron] Notifications failed:', err?.message || err)
+    }
+  }
+
+  // Run once at startup (5s delay to let the DB settle).
+  setTimeout(() => {
+    runDeadlineCron().catch((err) => {
+      console.error('[deadline-cron] Startup run failed:', err?.message || err)
+    })
+  }, 5000)
+
+  // Run daily at 2am: check every 60s whether it's time to run.
+  // This avoids needing a real cron daemon while still running close to 2am.
+  ;(function scheduleDailyDeadlineCron() {
+    let lastRunDate = null
+    const DAILY_CRON_INTERVAL_MS = 60 * 1000 // check every minute
+
+    const handle = setInterval(() => {
+      const now = new Date()
+      const todayStr = now.toISOString().slice(0, 10)
+      // Run at 2am (hours === 2) and only once per calendar day.
+      if (now.getHours() === 2 && lastRunDate !== todayStr) {
+        lastRunDate = todayStr
+        runDeadlineCron().catch((err) => {
+          console.error('[deadline-cron] Daily run failed:', err?.message || err)
+        })
+      }
+    }, DAILY_CRON_INTERVAL_MS)
+
+    process.once('SIGTERM', () => clearInterval(handle))
+    process.once('SIGINT', () => clearInterval(handle))
+    console.info('[deadline-cron] Daily deadline cron scheduled (runs at 2am)')
+  })()
 
   // Start the background health service (runs every 30 min, configurable via ANYA_HEALTH_INTERVAL_MS)
   startHealthService(db);

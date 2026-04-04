@@ -13,7 +13,10 @@
  */
 
 import fetch from 'node-fetch';
-import * as cheerio from 'cheerio';
+// NOTE: cheerio was imported here for planned HTML scraping of benefits.gov but is not
+// currently used because screen scraping benefits.gov violates their TOS.
+// Use the official benefits.gov API when it becomes available, or integrate
+// state-specific benefit APIs directly.
 
 const BASE_URL = 'https://www.benefits.gov';
 const RATE_LIMIT_MS = 3000; // 1 request per 3 seconds - very conservative

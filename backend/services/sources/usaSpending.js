@@ -144,6 +144,9 @@ function normalizeUSASpendingRecord(record) {
   // Parse categories from award type
   const categories = parseAwardType(awardType);
   
+  // IMPORTANT: USAspending records are PAST AWARDS, not open opportunities.
+  // They are stored as type DIRECTORY / is_active=0 so they do not surface
+  // as actionable grants. They serve as intelligence for identifying active agencies.
   return {
     id: crypto.randomUUID(),
     source: SOURCE_NAME,
@@ -151,26 +154,28 @@ function normalizeUSASpendingRecord(record) {
     source_url: sourceUrl,
     title: cleanText(title),
     sponsor: cleanText(agency),
-    description: cleanText(description),
-    application_url: sourceUrl,
-    deadline: parseDate(endDate),
-    deadline_type: endDate ? 'fixed' : 'rolling',
-    amount_min: awardAmount ? Math.round(awardAmount * 0.5) : null, // Estimate min as 50% of award
+    description: `[Past award — not an open opportunity] ${cleanText(description)}`,
+    application_url: 'https://www.grants.gov/', // Direct users to grants.gov for open solicitations
+    deadline: null, // Past awards do not have application deadlines
+    deadline_type: 'rolling',
+    amount_min: null, // Do NOT fabricate a min amount from award totals
     amount_max: awardAmount,
-    amount_description: awardAmount ? `Up to $${awardAmount.toLocaleString()}` : null,
+    amount_description: awardAmount ? `Historical award: $${awardAmount.toLocaleString()}` : null,
     is_national: isNational ? 1 : 0,
     state: isNational ? null : state,
     categories: JSON.stringify(categories),
     keywords: JSON.stringify(keywords),
     eligibility_bullets: JSON.stringify([
-      'Must meet federal grant eligibility requirements',
-      'May require specific organizational qualifications',
+      'Historical award data — verify if program is currently accepting applications',
+      'Search Grants.gov for open solicitations from this agency',
     ]),
     requires_501c3: 0, // Unknown from this data source
     requires_match: 0, // Unknown from this data source
     match_percentage: null,
     opportunity_type: 'grant',
-    is_active: 1,
+    // CRITICAL: mark as inactive — this is historical intelligence, not an open grant
+    is_active: 0,
+    record_origin: 'usaspending_award_history',
     raw_source_payload: JSON.stringify(record),
     last_crawled: new Date().toISOString(),
   };

@@ -340,13 +340,15 @@ export const NATIONAL_PROGRAMS = [
   {
     id: 'np-fema-funeral',
     name: 'FEMA Funeral Assistance (Disaster-Related)',
-    description: 'Financial assistance for funeral expenses related to a federally declared disaster, including COVID-19 deaths. Up to $9,000 per deceased individual.',
-    url: 'https://www.fema.gov/disaster/coronavirus/economic/funeral-assistance',
+    description: 'Financial assistance for funeral expenses related to a federally declared disaster. The COVID-19 Funeral Assistance program closed December 31, 2024. Future disaster-related funeral assistance may be available for new federally declared disasters at fema.gov.',
+    url: 'https://www.fema.gov/assistance/individual/program/funeral',
     categories: ['burial'],
     eligibility: { requiresDisasterRelatedDeath: true },
     type: 'grant',
     fundingType: 'direct_grant',
     maxAmount: 9000,
+    status: 'program_ended',
+    is_active: false,
   },
 
   // ════════════════════════════════════════
@@ -385,7 +387,7 @@ export const NATIONAL_PROGRAMS = [
     id: 'np-first-responder-childrens',
     name: 'First Responder Children\'s Foundation',
     description: 'Scholarships for children of first responders (firefighters, EMS, law enforcement) and financial assistance for families of fallen first responders.',
-    url: 'https://www.1702702.org/',
+    url: 'https://www.1stresponderchildren.org/',
     categories: ['scholarship','education','cash_assistance'],
     type: 'grant',
     fundingType: 'direct_grant',

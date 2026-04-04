@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react"
-import { useNavigate } from "react-router-dom"
+import { useLocation, useNavigate } from "react-router-dom"
 import { v4 as uuid } from "uuid"
 import { Loader2, Search, Send, Sparkles, Plus, Shield, Database, Activity, Code, Wrench, ChevronDown, ChevronRight, Compass, FolderOpen, Kanban, User, Monitor } from "lucide-react"
 import { Button } from "@/components/ui/button"
@@ -77,12 +77,26 @@ const MessageBubble = React.memo(function MessageBubble({ message }) {
   )
 })
 
-export default function AnyaChat({ profileId }) {
+function resolvePageName(pathname) {
+  if (!pathname) return null
+  const path = pathname.toLowerCase()
+  if (path === "/" || path === "/dashboard" || path.startsWith("/dashboard")) return "Dashboard"
+  if (path.startsWith("/discover") || path.startsWith("/grants")) return "Discovery"
+  if (path.startsWith("/pipeline")) return "Pipeline"
+  if (path.startsWith("/applications")) return "Applications"
+  if (path.startsWith("/profile")) return "Profile"
+  if (path.startsWith("/settings")) return "Settings"
+  return null
+}
+
+export default function AnyaChat({ profileId, currentPage: currentPageProp, prefillMessage, onPrefillConsumed }) {
   const user = useAuthStore((state) => state.user)
   const isAdmin = Boolean(user?.is_admin)
   const effectiveProfileId = profileId ?? null
   const [isUnavailable, setIsUnavailable] = useState(false)
   const log = useMemo(() => createLogger("AnyaChat"), [])
+  const location = useLocation()
+  const currentPage = currentPageProp ?? resolvePageName(location?.pathname) ?? "Unknown"
   
   const [sessionId, setSessionId] = useState(null)
   const [messages, setMessages] = useState([])
@@ -212,6 +226,7 @@ export default function AnyaChat({ profileId }) {
         setMessages(Array.isArray(history) ? history : [])
       } catch (error) {
         console.error("[AnyaChat] refresh failed", error)
+        // Non-fatal: keep existing messages visible; Anya header already shows status.
       }
     },
     [sessionId],
@@ -322,6 +337,41 @@ export default function AnyaChat({ profileId }) {
     }
   }, [isAdmin])
 
+  // Auto-send a pre-filled message when the panel is opened with one (e.g. from zero-result guidance)
+  useEffect(() => {
+    if (!prefillMessage || !sessionId || isSendingRef.current) return
+    const trimmed = prefillMessage.trim()
+    if (!trimmed) return
+    if (typeof onPrefillConsumed === "function") onPrefillConsumed()
+    isSendingRef.current = true
+    setIsSending(true)
+    const optimisticId = uuid()
+    setMessages((prev) => [
+      ...prev,
+      { id: optimisticId, session_id: sessionId, created_at: new Date().toISOString(), role: "user", content: trimmed },
+    ])
+    postAnyaMessage(sessionId, trimmed, { currentPage })
+      .then((response) => {
+        if (Array.isArray(response?.messages) && response.messages.length > 0) {
+          setMessages((prev) => {
+            const without = prev.filter((m) => m.id !== optimisticId)
+            return [...without, ...response.messages]
+          })
+        } else {
+          refreshMessages(sessionId)
+        }
+      })
+      .catch((err) => {
+        console.error("[AnyaChat] prefill send failed:", err)
+        setMessages((prev) => prev.filter((m) => m.id !== optimisticId))
+      })
+      .finally(() => {
+        isSendingRef.current = false
+        setIsSending(false)
+      })
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [prefillMessage, sessionId])
+
   const { anyaCopilotEnabled: copilotEnabled, anyaScreenshotEnabled: screenshotEnabled } = useFeatureFlags()
   const anyaContext = useAnyaContext()
   const navigate = useNavigate()
@@ -427,7 +477,7 @@ export default function AnyaChat({ profileId }) {
       setMessages((prev) => [...prev, optimisticMessage])
       setInput("")
 
-      const response = await postAnyaMessage(sessionId, trimmed)
+      const response = await postAnyaMessage(sessionId, trimmed, { currentPage })
       if (Array.isArray(response?.messages) && response.messages.length > 0) {
         setMessages((prev) => {
           const withoutOptimistic = prev.filter((m) => m.id !== optimisticId)
@@ -640,8 +690,8 @@ export default function AnyaChat({ profileId }) {
                 )}
               </div>
               <p className="text-xs text-slate-600">
-                Ask about grant matches, automation jobs, or request code assistance. All actions stay
-                within this profile.
+                GrantFlow helps you find, track, and apply for grants. Ask Anya to find grants that match
+                your profile, explain next steps, summarise deadlines, or navigate any part of the app.
               </p>
             </div>
             {copilotEnabled ? (
@@ -885,8 +935,67 @@ export default function AnyaChat({ profileId }) {
 
       <ScrollArea className="flex-1 min-h-[200px] px-4 py-4">
         {!isLoading && !hasMessages ? (
-          <div className="flex h-full flex-col items-center justify-center gap-3 text-sm text-slate-500">
-            <p>Anya is ready. Start by asking about a grant or automation job.</p>
+          <div className="flex h-full flex-col items-center justify-center gap-6 px-4 py-8 text-center">
+            <div className="flex h-16 w-16 items-center justify-center rounded-full overflow-hidden bg-gradient-to-br from-purple-600 to-blue-600 shadow-md">
+              <img src="/images/anya-avatar.svg" alt="Anya" className="h-full w-full object-cover" />
+            </div>
+            <div className="space-y-2">
+              <p className="text-base font-semibold text-slate-800">Hi! I'm Anya, your GrantFlow guide.</p>
+              <p className="text-sm text-slate-500 max-w-xs mx-auto">
+                I can help you find grants that match your profile, explain what you're seeing, walk you through your pipeline, and answer questions about the application process.
+              </p>
+            </div>
+            <div className="flex flex-wrap justify-center gap-2">
+              {[
+                "Find grants for my profile",
+                "Explain my match scores",
+                "What should I do next?",
+                "Help me fill out my profile",
+              ].map((suggestion) => (
+                <button
+                  key={suggestion}
+                  type="button"
+                  disabled={isDisabled}
+                  onClick={() => {
+                    setInput(suggestion)
+                    // Auto-submit after state updates
+                    setTimeout(() => {
+                      const trimmed = suggestion.trim()
+                      if (!trimmed || !sessionId || isSendingRef.current) return
+                      isSendingRef.current = true
+                      setIsSending(true)
+                      const optimisticId = uuid()
+                      setMessages([{ id: optimisticId, session_id: sessionId, created_at: new Date().toISOString(), role: "user", content: trimmed }])
+                      setInput("")
+                      postAnyaMessage(sessionId, trimmed, { currentPage })
+                        .then((response) => {
+                          if (Array.isArray(response?.messages) && response.messages.length > 0) {
+                            setMessages((prev) => {
+                              const without = prev.filter((m) => m.id !== optimisticId)
+                              return [...without, ...response.messages]
+                            })
+                          } else {
+                            refreshMessages(sessionId)
+                          }
+                        })
+                        .catch((err) => {
+                          console.error("[AnyaChat] suggestion send failed:", err)
+                          setMessages((prev) => prev.filter((m) => m.id !== optimisticId))
+                          setInput(trimmed)
+                          toast({ variant: "destructive", title: "Failed to send message", description: err instanceof Error ? err.message : "Please try again shortly." })
+                        })
+                        .finally(() => {
+                          isSendingRef.current = false
+                          setIsSending(false)
+                        })
+                    }, 0)
+                  }}
+                  className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 shadow-sm hover:border-purple-300 hover:bg-purple-50 hover:text-purple-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {suggestion}
+                </button>
+              ))}
+            </div>
           </div>
         ) : (
           <div className="flex flex-col gap-3">

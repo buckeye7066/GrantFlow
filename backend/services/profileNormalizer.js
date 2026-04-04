@@ -169,7 +169,16 @@ export const ENTITY_TYPE_ALIAS_MAP = {
   community_organization: 'nonprofit',
   faith_based: 'nonprofit',
   church: 'nonprofit',
+  ministry: 'nonprofit',
   religious_organization: 'nonprofit',
+  volunteer_fire: 'nonprofit',
+  fire_department: 'nonprofit',
+  volunteer_fire_department: 'nonprofit',
+  ems: 'nonprofit',
+  emergency_services: 'nonprofit',
+  fire_station: 'nonprofit',
+  first_responder_org: 'nonprofit',
+  rescue_squad: 'nonprofit',
 
   business: 'business',
   small_business: 'business',
@@ -190,6 +199,15 @@ export const ENTITY_TYPE_ALIAS_MAP = {
   organization: 'organization',
   institution: 'organization',
   government: 'organization',
+  school: 'organization',
+  school_district: 'organization',
+  k12_school: 'organization',
+  charter_school: 'organization',
+  public_school: 'organization',
+  private_school: 'organization',
+  library: 'organization',
+  housing_authority: 'organization',
+  tribal_organization: 'organization',
 }
 
 // ---------------------------------------------------------------------------
@@ -382,11 +400,20 @@ export function normalizeProfile(rawProfile, sections = null) {
     isStudentFromSections
 
   // -- Nonprofit status --
+  // Includes volunteer fire departments, EMS organizations, churches, ministries, and
+  // other community service organizations that operate as nonprofits even if not 501(c)(3).
+  const rawTypeLower = String(rawType ?? '').toLowerCase()
   const isNonprofit =
     Boolean(profile.is_nonprofit) ||
     Boolean(profile.requires_501c3) ||
     entityType === 'nonprofit' ||
-    String(rawType ?? '').toLowerCase().includes('nonprofit')
+    rawTypeLower.includes('nonprofit') ||
+    rawTypeLower.includes('volunteer_fire') ||
+    rawTypeLower.includes('fire_department') ||
+    rawTypeLower.includes('church') ||
+    rawTypeLower.includes('ministry') ||
+    rawTypeLower.includes('rescue_squad') ||
+    rawTypeLower.includes('ems')
 
   // -- Business status: top-level flags or business section --
   let isBusinessFromSections = false

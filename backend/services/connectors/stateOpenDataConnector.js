@@ -20,38 +20,61 @@ const RATE_LIMIT_MS = 1000; // 1 request per second
 
 let lastRequestTime = 0;
 
-// State-specific Socrata endpoints
+// State-specific Socrata/open-data endpoints.
+// grants_dataset: Socrata 4×4 dataset ID for open grant solicitations (if available).
+// programs_dataset: Socrata 4×4 dataset ID for program/assistance listings (if available).
+// portal_grants_url: Direct URL to the state grants portal (authoritative fallback).
 const STATE_DATA_PORTALS = {
   'OH': {
     domain: 'data.ohio.gov',
-    grants_dataset: null, // Ohio doesn't have a centralized grants dataset on Socrata
+    grants_dataset: null, // Ohio does not publish a unified grants dataset on Socrata
     programs_dataset: null,
+    portal_grants_url: 'https://grants.ohio.gov/',
     name: 'Ohio Open Data'
   },
   'CA': {
     domain: 'data.ca.gov',
-    grants_dataset: null,
+    grants_dataset: null, // CA grants are published at grants.ca.gov, not data.ca.gov
     programs_dataset: null,
+    portal_grants_url: 'https://www.grants.ca.gov/',
     name: 'California Open Data'
   },
   'NY': {
+    // NY publishes state contracts/grants via data.ny.gov; dataset '63vv-5f67' is state grants awarded.
     domain: 'data.ny.gov',
-    grants_dataset: null,
+    grants_dataset: '63vv-5f67', // NY State Grants Awarded (Socrata)
     programs_dataset: null,
+    portal_grants_url: 'https://grantsgateway.ny.gov/',
     name: 'New York Open Data'
   },
   'TX': {
     domain: 'data.texas.gov',
-    grants_dataset: null,
+    grants_dataset: null, // Texas grants portal is separate from open data
     programs_dataset: null,
+    portal_grants_url: 'https://gov.texas.gov/organization/financial-services/grants',
     name: 'Texas Open Data'
   },
   'FL': {
-    domain: 'data.fl.gov',
+    domain: 'open.floridacommerce.org', // Florida DEO open data (replaces data.fl.gov for grants)
     grants_dataset: null,
     programs_dataset: null,
+    portal_grants_url: 'https://floridajobs.org/business-growth-and-partnerships/for-businesses-and-employers/browse-business-resources/grants',
     name: 'Florida Open Data'
-  }
+  },
+  'PA': {
+    domain: 'data.pa.gov',
+    grants_dataset: null,
+    programs_dataset: null,
+    portal_grants_url: 'https://www.grants.pa.gov/',
+    name: 'Pennsylvania Open Data'
+  },
+  'TN': {
+    domain: 'data.tn.gov',
+    grants_dataset: null,
+    programs_dataset: null,
+    portal_grants_url: 'https://www.tn.gov/finance/strategic-initiatives/state-grants.html',
+    name: 'Tennessee Open Data'
+  },
 };
 
 /**
@@ -107,23 +130,59 @@ export async function searchStateData(state, params = {}) {
   // Example Socrata query structure:
   // https://data.ohio.gov/resource/dataset-id.json?$where=status='open'&$limit=100
   
-  // For now, return state agency information as DIRECTORY entries
-  const stateResources = [
-    {
-      title: `${state} State Grants Portal`,
-      description: 'Central portal for state grant opportunities',
-      sponsor: `${state} State Government`,
-      source: portal.domain,
-      source_url: `https://${portal.domain}`,
-      type: 'DIRECTORY', // Portal/directory, not a specific grant
-      state: state,
-      evidence_url: `https://${portal.domain}`,
-      last_verified_at: new Date().toISOString(),
-      is_active: true,
-      last_crawled: new Date().toISOString()
+  const stateResources = [];
+
+  // Return authoritative grants portal as a DIRECTORY entry
+  const portalUrl = portal.portal_grants_url || `https://${portal.domain}`;
+  stateResources.push({
+    title: `${state} State Grants Portal`,
+    description: 'Central portal for state grant opportunities',
+    sponsor: `${state} State Government`,
+    source: portal.domain,
+    source_url: portalUrl,
+    type: 'DIRECTORY', // Portal/directory, not a specific grant
+    state: state,
+    evidence_url: portalUrl,
+    last_verified_at: new Date().toISOString(),
+    is_active: true,
+    last_crawled: new Date().toISOString()
+  });
+
+  // If a Socrata grants dataset is configured, attempt to query it
+  if (portal.grants_dataset) {
+    try {
+      const socrataUrl = `https://${portal.domain}/resource/${portal.grants_dataset}.json?$limit=50`;
+      const data = await rateLimitedFetch(socrataUrl);
+      if (Array.isArray(data)) {
+        for (const record of data) {
+          const title = record.program_name || record.grant_name || record.title || record.program || null;
+          if (!title) continue;
+          stateResources.push({
+            title: String(title),
+            sponsor: record.agency || record.grantor || `${state} State Government`,
+            source: portal.domain,
+            source_id: record.id || record.program_number || null,
+            source_url: record.url || record.program_url || portalUrl,
+            description: record.description || record.program_description || `State grant program in ${state}`,
+            deadline: record.deadline || record.close_date || null,
+            deadline_type: record.deadline ? 'fixed' : 'rolling',
+            amount_min: record.min_award ? parseFloat(record.min_award) : null,
+            amount_max: record.max_award || record.award_ceiling ? parseFloat(record.max_award || record.award_ceiling) : null,
+            type: 'OPPORTUNITY',
+            state: state,
+            evidence_url: socrataUrl,
+            last_verified_at: new Date().toISOString(),
+            is_active: true,
+            last_crawled: new Date().toISOString()
+          });
+        }
+        console.log(`[State Open Data] ${state}: Fetched ${data.length} records from Socrata dataset ${portal.grants_dataset}`);
+      }
+    } catch (socrataError) {
+      console.warn(`[State Open Data] ${state}: Socrata fetch failed (${socrataError.message}), using portal directory entry only`);
     }
-  ];
-  
+  }
+
   return stateResources;
 }
 

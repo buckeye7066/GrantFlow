@@ -1,19 +1,24 @@
 /**
  * SAM.gov Assistance Listings Connector
  * Federal assistance programs and CFDA numbers
- * 
+ *
  * API Documentation: https://open.gsa.gov/api/fh-public-api/
- * Base URL: https://api.sam.gov/prod/federalassistance/v1
- * 
+ * Base URL: https://api.sam.gov/opportunities/v2/ (as of 2024+)
+ *   Assistance listings: https://api.sam.gov/assistance-listing/v1/
+ *
  * LEGAL: Public domain federal data, free to use
  * RATE LIMIT: Not explicitly stated, use 2 req/sec conservative
  * API KEY: Required - register at https://open.gsa.gov/api/fh-public-api/
- * TOS: https://www.sam.gov/SAM/pages/public/termsOfUse.jsf
+ *   Set SAM_GOV_API_KEY environment variable.
+ * TOS: https://sam.gov/content/home
  */
 
 import fetch from 'node-fetch';
 
-const BASE_URL = 'https://api.sam.gov/prod/federalassistance/v1';
+// NOTE: The /prod/ path segment was removed in 2023. The current canonical base is:
+//   https://api.sam.gov/assistance-listing/v1/
+// If SAM_GOV_API_BASE_URL is set in env, it takes precedence (useful for staging).
+const BASE_URL = process.env.SAM_GOV_API_BASE_URL || 'https://api.sam.gov/assistance-listing/v1';
 const RATE_LIMIT_MS = 500; // 2 requests per second
 
 let lastRequestTime = 0;
@@ -59,7 +64,12 @@ async function rateLimitedFetch(url, apiKey) {
  */
 export async function searchAssistanceListings(params = {}) {
   const apiKey = process.env.SAM_GOV_API_KEY;
-  
+
+  if (!apiKey) {
+    console.warn('[SAM.gov] SAM_GOV_API_KEY is not set — skipping SAM.gov assistance listings search.')
+    return []
+  }
+
   const queryParams = new URLSearchParams({
     limit: params.limit || 100,
     offset: params.offset || 0
@@ -90,14 +100,14 @@ export async function searchAssistanceListings(params = {}) {
       sponsor: listing.federalAgency || '',
       source: 'sam.gov',
       source_id: listing.programNumber || '', // CFDA number
-      source_url: `https://sam.gov/fal/${listing.programNumber}`,
+      source_url: `https://sam.gov/fal/${listing.programNumber}/view`,
       description: listing.programObjectives || '',
       eligibility_bullets: listing.applicantEligibility ? [listing.applicantEligibility] : [],
       amount_min: null, // Varies by program
       amount_max: null,
       deadline: null, // Standing programs typically don't have single deadline
       deadline_type: 'rolling', // Most assistance listings are ongoing programs
-      application_url: `https://sam.gov/fal/${listing.programNumber}`,
+      application_url: `https://sam.gov/fal/${listing.programNumber}/view`,
       is_national: true,
       categories: [listing.functionalCode].filter(Boolean),
       keywords: [listing.programTitle, listing.programNumber].filter(Boolean),
@@ -136,14 +146,14 @@ export async function getAssistanceListingDetails(cfdaNumber) {
       sponsor: listing.federalAgency || '',
       source: 'sam.gov',
       source_id: cfdaNumber,
-      source_url: `https://sam.gov/fal/${cfdaNumber}`,
+      source_url: `https://sam.gov/fal/${cfdaNumber}/view`,
       description: listing.programObjectives || '',
       eligibility_bullets: [
         listing.applicantEligibility,
         listing.beneficiaryEligibility
       ].filter(Boolean),
       deadline_type: 'rolling',
-      application_url: `https://sam.gov/fal/${cfdaNumber}`,
+      application_url: `https://sam.gov/fal/${cfdaNumber}/view`,
       is_national: true,
       type: 'PROGRAM',
       evidence_url: url,

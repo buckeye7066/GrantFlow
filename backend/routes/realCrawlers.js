@@ -319,7 +319,7 @@ router.post('/run', ensureAuth, async (req, res) => {
     })
   } catch (error) {
     console.error(`[RealCrawlers] Error in ${crawler_type}:`, error)
-    res.status(200).json({
+    res.status(500).json({
       success: false,
       error: 'Crawler execution failed',
       message: error?.message || String(error),
@@ -637,7 +637,7 @@ router.post('/specific-need', ensureAuth, async (req, res) => {
     })
   } catch (error) {
     console.error('[RealCrawlers] Error in specific-need:', error)
-    res.status(200).json({
+    res.status(500).json({
       success: false,
       error: 'Specific need search failed',
       message: error?.message || String(error),

@@ -617,7 +617,7 @@ export async function saveCrawlerResultsToGlobal(options, context) {
 
       if (!existing) {
         // Create a global version (without profile_id)
-        const globalId = Math.random().toString(36).substring(2, 15)
+        const globalId = randomUUID()
         
         db.prepare(
           `

@@ -2,6 +2,7 @@ import { promises as fs } from 'fs'
 import path from 'path'
 import { fileURLToPath } from 'url'
 import { dirname } from 'path'
+import { randomUUID } from 'crypto'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
@@ -644,7 +645,7 @@ export async function adminCrawlerRun({ type, profileId, parameters = {} }, cont
     throw new Error(`Invalid crawler type. Allowed: ${allowedTypes.join(', ')}`)
   }
 
-  const jobId = Math.random().toString(36).substring(2, 15)
+  const jobId = randomUUID()
   const parametersJson = JSON.stringify(parameters)
 
   db.prepare(
@@ -753,7 +754,7 @@ export async function adminCrawlerRetry({ jobId }, context) {
     throw new Error('Job not found')
   }
 
-  const newJobId = Math.random().toString(36).substring(2, 15)
+  const newJobId = randomUUID()
   const parameters = originalJob.parameters ? JSON.parse(originalJob.parameters) : {}
   parameters.retried_from_job_id = jobId
 

@@ -13,7 +13,9 @@
 import { getWithRetry, postWithRetry } from './httpClient.js'
 
 // ── Endpoints ──────────────────────────────────────────────────────────────────
-const LEGACY_API = 'https://api.grants.gov/v1/api/search2'
+// NOTE: api.grants.gov/v2/ is the current Grants.gov API version (2026).
+const LEGACY_API = 'https://api.grants.gov/v2/api/search2'
+// Simpler.Grants.gov is a separately maintained newer API requiring an API key.
 const SIMPLER_API = 'https://api.simpler.grants.gov/v1/opportunities/search'
 const GRANTS_GOV_DETAIL = 'https://www.grants.gov/search-results-detail/'
 

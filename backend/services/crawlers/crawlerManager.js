@@ -19,6 +19,10 @@ import { FEDERAL_BENEFITS } from './data/federalBenefits.js';
 import { NATIONAL_PROGRAMS } from './data/nationalPrograms.js';
 import { BUSINESS_PROGRAMS } from './data/businessPrograms.js';
 import { SCHOLARSHIPS } from './data/scholarships.js';
+import { PRESCRIPTION_ASSISTANCE_PROGRAMS } from './data/prescriptionAssistance.js';
+import { SENIOR_PROGRAMS } from './data/seniorPrograms.js';
+import { PROPERTY_TAX_RELIEF_PROGRAMS } from './data/propertyTaxRelief.js';
+import { UTILITY_ASSISTANCE_PROGRAMS } from './data/utilityAssistance.js';
 import { generateStatePrograms, isStateInRegistry } from './data/stateBase.js';
 import { upsertFundingOpportunity } from '../opportunityInserter.js';
 
@@ -102,6 +106,10 @@ const SOURCE_LABELS = {
   business: 'Business Programs',
   scholarships: 'Scholarships',
   schoolCards: 'School Cards',
+  prescription: 'Prescription Assistance',
+  senior: 'Senior Programs',
+  property_tax: 'Property Tax Relief',
+  utility_assistance: 'Utility Assistance Programs',
 };
 
 // ── Candidate loader: builds program array per strategy ──
@@ -159,6 +167,31 @@ function loadCandidates(strategy, stateData, analysis, intents) {
     } else {
       candidateCounts.scholarships = 0;
     }
+  }
+
+  if (sources.has('prescription')) {
+    programs.push(...PRESCRIPTION_ASSISTANCE_PROGRAMS);
+    candidateCounts.prescription = PRESCRIPTION_ASSISTANCE_PROGRAMS.length;
+  }
+
+  if (sources.has('senior')) {
+    programs.push(...SENIOR_PROGRAMS);
+    candidateCounts.senior = SENIOR_PROGRAMS.length;
+  }
+
+  if (sources.has('property_tax')) {
+    programs.push(...PROPERTY_TAX_RELIEF_PROGRAMS);
+    candidateCounts.property_tax = PROPERTY_TAX_RELIEF_PROGRAMS.length;
+  }
+
+  if (sources.has('utility_assistance')) {
+    // Filter by state restriction when a state is known, or include all if no state available
+    const userState = analysis.location?.state;
+    const filtered = userState
+      ? UTILITY_ASSISTANCE_PROGRAMS.filter(p => !p.stateRestriction || p.stateRestriction === userState)
+      : UTILITY_ASSISTANCE_PROGRAMS;
+    programs.push(...filtered);
+    candidateCounts.utility_assistance = filtered.length;
   }
 
   return { programs, candidateCounts };

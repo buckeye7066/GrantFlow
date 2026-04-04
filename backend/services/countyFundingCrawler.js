@@ -97,7 +97,8 @@ const ORG_PATTERNS = {
   },
   housing_authority: {
     pattern: (county, state) => [
-      `https://www.hud.gov/program_offices/public_indian_housing/pha/contacts/${state.toLowerCase()}`,
+      // HUD PHA contacts page uses state parameter as query string, not path segment
+      `https://www.hud.gov/program_offices/public_indian_housing/pha/contacts?state=${state.toUpperCase()}`,
     ],
     fallback: 'https://www.hud.gov/program_offices/public_indian_housing/pha/contacts',
     category: 'housing',
@@ -115,13 +116,23 @@ const ORG_PATTERNS = {
   },
   salvation_army: {
     pattern: (county, state) => [
-      `https://www.salvationarmyusa.org/usn/plugins/gdosCenterSearch`,
+      `https://www.salvationarmyusa.org/usn/locate-a-salvation-army/`,
     ],
-    fallback: 'https://www.salvationarmyusa.org/usn/plugins/gdosCenterSearch',
+    fallback: 'https://www.salvationarmyusa.org/usn/locate-a-salvation-army/',
     category: 'emergency',
     title_template: (county, state) => `Salvation Army - ${county} County`,
     description: 'Emergency assistance with rent, utilities, food, and disaster relief.'
-  }
+  },
+  // Volunteer fire departments — FEMA AFG and SAFER grants, plus state fire assistance
+  volunteer_fire_dept: {
+    pattern: (county, state) => [
+      `https://www.fema.gov/grants/preparedness/firefighters`,
+    ],
+    fallback: 'https://www.fema.gov/grants/preparedness/firefighters',
+    category: 'fire_department',
+    title_template: (county, state) => `Volunteer Fire Department Grants - ${county} County`,
+    description: 'FEMA Assistance to Firefighters Grant (AFG) and SAFER grants for volunteer fire departments. Equipment, training, and staffing/recruitment grants available annually.'
+  },
 };
 
 /**

@@ -431,3 +431,195 @@ function guessMethodFromOpportunity(opportunity) {
   if (opportunity.application_url || opportunity.applicationUrl || opportunity.url) return 'portal'
   return null
 }
+
+// ---------------------------------------------------------------------------
+// Opportunity freshness decoration (display layer only)
+// ---------------------------------------------------------------------------
+
+/**
+ * Derive a freshness tier from an opportunity's updated_at timestamp.
+ *
+ * Returns:
+ *   'fresh'       — verified/crawled within last 30 days
+ *   'recent'      — 30-90 days old
+ *   'stale'       — 90-180 days old
+ *   'unverified'  — no updated_at, or older than 180 days
+ */
+export function computeFreshness(updatedAt) {
+  if (!updatedAt) return 'unverified'
+  const updated = new Date(updatedAt)
+  if (Number.isNaN(updated.getTime())) return 'unverified'
+  const now = Date.now()
+  const ageMs = now - updated.getTime()
+  const ageDays = Math.floor(ageMs / (1000 * 60 * 60 * 24))
+  if (ageDays <= 30) return 'fresh'
+  if (ageDays <= 90) return 'recent'
+  if (ageDays <= 180) return 'stale'
+  return 'unverified'
+}
+
+/**
+ * Decorate an opportunity object with freshness fields for API responses.
+ * Adds:
+ *   freshness           — 'fresh' | 'recent' | 'stale' | 'unverified'
+ *   days_since_verified — number (null if unknown)
+ *   freshness_warning   — boolean (true when stale or unverified)
+ *
+ * Non-destructive: returns a shallow-merged new object.
+ */
+export function decorateOpportunityFreshness(opp) {
+  const updatedAt = opp?.updated_at ?? null
+  const freshness = computeFreshness(updatedAt)
+
+  let days_since_verified = null
+  if (updatedAt) {
+    const updated = new Date(updatedAt)
+    if (!Number.isNaN(updated.getTime())) {
+      days_since_verified = Math.floor((Date.now() - updated.getTime()) / (1000 * 60 * 60 * 24))
+    }
+  }
+
+  return {
+    ...opp,
+    freshness,
+    days_since_verified,
+    freshness_warning: freshness === 'stale' || freshness === 'unverified',
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Opportunity deduplication (display layer only — never deletes DB records)
+// ---------------------------------------------------------------------------
+
+const DEDUPE_STRIP_WORDS = /\b(program|grant|grants|assistance|for|the|a|an|of|in|and|or|fund|funding)\b/g
+const DEDUPE_PUNCT = /[^a-z0-9 ]/g
+
+/**
+ * Normalize a title for deduplication comparison.
+ * Lowercases, strips punctuation, and removes common filler words.
+ */
+function normalizeTitleForDedupe(title) {
+  if (!title || typeof title !== 'string') return ''
+  return title
+    .toLowerCase()
+    .replace(DEDUPE_PUNCT, ' ')
+    .replace(DEDUPE_STRIP_WORDS, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+/**
+ * Calculate simple character-level Jaccard similarity between two normalized strings.
+ * Returns 0..1.
+ */
+function titleSimilarity(a, b) {
+  if (!a || !b) return 0
+  if (a === b) return 1
+  const setA = new Set(a.split(' ').filter(Boolean))
+  const setB = new Set(b.split(' ').filter(Boolean))
+  if (setA.size === 0 && setB.size === 0) return 1
+  let intersection = 0
+  for (const w of setA) {
+    if (setB.has(w)) intersection++
+  }
+  const union = setA.size + setB.size - intersection
+  return union > 0 ? intersection / union : 0
+}
+
+/**
+ * Source trust rank for deduplication — higher = more preferred.
+ * Mirrors the logic in matchDecisionEngine.calculateSourceTrust() at a coarser level.
+ */
+function getSourceRank(opp) {
+  const url = String(
+    opp?.application_url || opp?.apply_url || opp?.source_url || opp?.url || ''
+  ).toLowerCase()
+  if (url.includes('.gov')) return 4
+  if (url.includes('.edu')) return 3
+  if (url.includes('.org')) return 2
+  const origin = opp?.record_origin ?? ''
+  if (origin === 'grants_gov' || origin === 'verified_real') return 4
+  if (origin === 'curated_verified') return 3
+  if (origin === 'curated_benefits' || origin === 'curated_program') return 2
+  return 1
+}
+
+/**
+ * Build a dedupe key for exact-match elimination.
+ * Combines source_id+source (same crawl record re-inserted) and
+ * normalized title + scope (state or 'national').
+ */
+function buildDedupeKey(opp) {
+  // Exact same record from a re-crawl
+  if (opp?.source_id && opp?.source) {
+    return `srcid:${String(opp.source_id).toLowerCase()}|${String(opp.source).toLowerCase()}`
+  }
+  const scope = opp?.state ? String(opp.state).toLowerCase() : 'national'
+  const normTitle = normalizeTitleForDedupe(opp?.title ?? opp?.program_name ?? '')
+  return `title:${normTitle}|scope:${scope}`
+}
+
+/**
+ * Deduplicate a list of opportunity objects for display purposes.
+ * Does NOT mutate the DB. Keeps the highest-source-trust record when duplicates collide.
+ *
+ * Strategy:
+ * 1. Exact source_id+source match → same physical record
+ * 2. Same normalized title + scope (state/national) → semantic duplicate
+ * 3. Near-duplicate title (>85% word Jaccard) + same scope → fuzzy duplicate
+ *
+ * @param {Object[]} opportunities
+ * @returns {Object[]} Deduplicated list preserving insertion order for first-seen entries.
+ */
+export function deduplicateOpportunities(opportunities) {
+  if (!Array.isArray(opportunities) || opportunities.length === 0) return opportunities
+
+  // Phase 1: exact key deduplication
+  const seen = new Map() // key → best opportunity
+  for (const opp of opportunities) {
+    const key = buildDedupeKey(opp)
+    if (!seen.has(key)) {
+      seen.set(key, opp)
+    } else {
+      const existing = seen.get(key)
+      if (getSourceRank(opp) > getSourceRank(existing)) {
+        seen.set(key, opp)
+      }
+    }
+  }
+
+  // Phase 2: fuzzy title deduplication within same scope
+  const candidates = Array.from(seen.values())
+  const kept = []
+  const dropped = new Set()
+
+  for (let i = 0; i < candidates.length; i++) {
+    if (dropped.has(i)) continue
+    const oppI = candidates[i]
+    const normI = normalizeTitleForDedupe(oppI?.title ?? oppI?.program_name ?? '')
+    const scopeI = oppI?.state ? String(oppI.state).toLowerCase() : 'national'
+
+    for (let j = i + 1; j < candidates.length; j++) {
+      if (dropped.has(j)) continue
+      const oppJ = candidates[j]
+      const scopeJ = oppJ?.state ? String(oppJ.state).toLowerCase() : 'national'
+      if (scopeI !== scopeJ) continue
+
+      const normJ = normalizeTitleForDedupe(oppJ?.title ?? oppJ?.program_name ?? '')
+      const sim = titleSimilarity(normI, normJ)
+      if (sim >= 0.85) {
+        // Keep the higher-trust one; drop the other
+        if (getSourceRank(oppJ) > getSourceRank(oppI)) {
+          dropped.add(i)
+          break // i is already dropped; no need to compare it further
+        } else {
+          dropped.add(j)
+        }
+      }
+    }
+
+    if (!dropped.has(i)) kept.push(oppI)
+  }
+
+  return kept
+}

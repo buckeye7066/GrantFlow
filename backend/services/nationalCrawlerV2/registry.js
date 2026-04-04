@@ -59,7 +59,7 @@ export const SMOKE_SAFE_SOURCES = [
     county: null,
     source_family: SOURCE_FAMILIES.AGENCY_HTML,
     base_url: 'https://www.tn.gov',
-    seed_urls: ['https://www.tn.gov/tenncare.html'],
+    seed_urls: ['https://www.tn.gov/tenncare'],
     enabled: 1,
     tags: ['smoke_safe'],
     configuration: {
@@ -117,7 +117,7 @@ export function buildRegistry({ useLive = false, fixtureBaseUrl = null } = {}) {
   }
 
   const fedUrl = useLive ? 'https://www.ssa.gov/benefits/' : file('federal-ssa-benefits.html')
-  const stateUrl = useLive ? 'https://www.tn.gov/tenncare/long-term-services-supports/ecf-choices.html' : file('state-tn-ecf-choices.html')
+  const stateUrl = useLive ? 'https://www.tn.gov/tenncare/long-term-services-supports' : file('state-tn-ecf-choices.html')
   // NOTE: live URLs should be verified stable; fixtures are used for offline smoke/tests.
   const countyUrl = useLive
     ? 'https://www.nyc.gov/site/hra/help/rental-assistance.page'

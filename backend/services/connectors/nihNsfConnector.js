@@ -1,10 +1,12 @@
 /**
  * NIH/NSF Feeds Connector
  * Research funding opportunities from NIH RePORTER and NSF Awards
- * 
- * NIH RePORTER API: https://api.reporter.nih.gov/
- * NSF Awards API: https://www.research.gov/common/webapi/awardapisearch-v1.htm
- * 
+ *
+ * NIH RePORTER API v2: https://api.reporter.nih.gov/v2/
+ *   - FOA search: POST https://api.reporter.nih.gov/v2/grants/search
+ * NSF Awards API: https://api.nsf.gov/services/v1/awards.json
+ *   (Note: research.gov/awardapi-service/v1/ is an older path; api.nsf.gov is canonical)
+ *
  * LEGAL: Public domain federal data
  * RATE LIMIT: NIH - 100 req/min, NSF - not specified (use conservative)
  * TOS: Public use encouraged for research purposes
@@ -13,7 +15,9 @@
 import fetch from 'node-fetch';
 
 const NIH_BASE_URL = 'https://api.reporter.nih.gov/v2';
-const NSF_BASE_URL = 'https://www.research.gov/awardapi-service/v1/awards.json';
+// NOTE: research.gov/awardapi-service/v1/ is a deprecated path.
+// The canonical NSF Awards API is https://api.nsf.gov/services/v1/awards.json
+const NSF_BASE_URL = 'https://api.nsf.gov/services/v1/awards.json';
 
 const RATE_LIMIT_MS = 600; // ~100 requests per minute for NIH
 
@@ -113,7 +117,7 @@ export async function searchNIHOpportunities(params = {}) {
       is_active: true,
       last_crawled: new Date().toISOString(),
       amount_min: 100000,
-      amount_max: 500000, // Typical R01 range
+      amount_max: 500000, // Typical R01 direct costs per year; modular budget cap $250K/yr
       is_loan: false,
       requires_match: false
     });

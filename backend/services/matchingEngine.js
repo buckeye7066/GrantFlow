@@ -76,10 +76,16 @@ export function calculateMatchScore(profile, opportunity) {
   let geoPoints = 0
 
   // Check unknown profile location first — no location data means we cannot verify
-  // geographic eligibility for any opportunity, including national ones.
+  // geographic eligibility for location-specific opportunities.
+  // For national opportunities, treat an unknown location as a neutral match.
   if (!profileZip && !profileCounty && !profileCity && !profileState) {
-    geoTier = 'unknown'
-    geoPoints = -5
+    if (oppIsNational || !oppState) {
+      geoTier = 'national'
+      geoPoints = 8 // National opportunity, unknown location — neutral positive
+    } else {
+      geoTier = 'unknown'
+      geoPoints = -5 // Location-specific opportunity, no profile location
+    }
   } else if (profileZip && oppZip && String(profileZip).trim() === String(oppZip).trim()) {
     geoTier = 'zip'
     geoPoints = 25
@@ -116,8 +122,9 @@ export function calculateMatchScore(profile, opportunity) {
   else if (geoTier === 'county') reasons.push('Geography: County match')
   else if (geoTier === 'city') reasons.push('Geography: City match (text)')
   else if (geoTier === 'state') reasons.push('Geography: State match')
+  else if (geoTier === 'national' && (!profileZip && !profileCounty && !profileCity && !profileState)) reasons.push('National eligibility (location not set on profile)')
   else if (geoTier === 'national') reasons.push('National eligibility')
-  else if (geoTier === 'unknown') reasons.push('Location unknown — cannot verify geographic eligibility')
+  else if (geoTier === 'unknown') reasons.push('Location unknown — cannot verify geographic eligibility for this state-specific opportunity')
   else if (geoTier === 'mismatch') reasons.push('Geography mismatch (soft penalty)')
   
   // Applicant type match (25 pts)
@@ -241,6 +248,25 @@ export function calculateMatchScore(profile, opportunity) {
     reasons.push(`Deadline urgency (${deadlineScore} pts)`);
   }
   
+  // intentMatch scoring — boost when opportunity's declared intents overlap with profile signals.
+  // intentMatch arrays live on program/opportunity objects in the data files (stateBase.js,
+  // nationalPrograms.js, etc.) and are propagated through to opportunity records. Each matched
+  // intent adds +5, first match gets a stronger +15 bonus, capped at +15 total.
+  // This is deliberately separate from the facet/keyword scoring above so it can be audited.
+  if (Array.isArray(opportunity?.intentMatch) && opportunity.intentMatch.length > 0) {
+    const profileKeywords = effectiveSignals?.keywordSet instanceof Set
+      ? effectiveSignals.keywordSet
+      : new Set(Array.isArray(effectiveSignals?.keywords) ? effectiveSignals.keywords.map(k => String(k).toLowerCase()) : [])
+    const intentOverlap = opportunity.intentMatch.filter(intent =>
+      profileKeywords.has(String(intent).toLowerCase())
+    )
+    if (intentOverlap.length > 0) {
+      const intentBonus = Math.min(15, 5 + (intentOverlap.length - 1) * 5)
+      score += intentBonus
+      reasons.push(`Intent alignment: ${intentOverlap.join(', ')} (+${intentBonus})`)
+    }
+  }
+
   // Requirements penalties
   const ein = effectiveProfile?.ein ?? effectiveProfile?.uei ?? null
   const applicantTypeNormalized = String(profileType || '').toLowerCase()

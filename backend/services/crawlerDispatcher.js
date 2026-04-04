@@ -66,9 +66,12 @@ async function processCuratedBenefitsJob({ db, job, profileContext }) {
     government_funding: 'government_funding',
     student_grants: 'student_grants',
     ecf_benefits: 'ecf_benefits',
+    ecf_hcbs: 'ecf_benefits',       // alias used by autoDiscoveryCrawlers.js
     special_needs: 'special_needs',
     local_funding: 'local_funding',
     item_matching: 'item_matching',
+    nonprofit_org: 'nonprofit_org',
+    volunteer_fire: 'volunteer_fire',
   };
   const crawlerType = JOB_TYPE_TO_STRATEGY[job?.type] || 'comprehensive';
   const result = await runCuratedCrawler(db, profileId, {
@@ -105,6 +108,7 @@ const HANDLERS = {
   government_funding: processCuratedBenefitsJob,
   student_grants: processCuratedBenefitsJob,
   ecf_benefits: processCuratedBenefitsJob,
+  ecf_hcbs: processCuratedBenefitsJob,   // alias used by autoDiscoveryCrawlers.js
   special_needs: processCuratedBenefitsJob,
   local_funding: processCuratedBenefitsJob,
   item_matching: processCuratedBenefitsJob,

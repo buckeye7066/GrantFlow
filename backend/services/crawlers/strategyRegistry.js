@@ -15,7 +15,7 @@ const STRATEGIES = {
   comprehensive: {
     id: 'comprehensive',
     label: 'Comprehensive Search',
-    candidateSources: ['federal', 'state', 'national', 'business', 'scholarships', 'schoolCards'],
+    candidateSources: ['federal', 'state', 'national', 'business', 'scholarships', 'schoolCards', 'prescription', 'senior', 'property_tax', 'utility_assistance'],
     hardGates: [],
     needEmphasis: [],
     intentBoost: {},
@@ -27,9 +27,9 @@ const STRATEGIES = {
   local_funding: {
     id: 'local_funding',
     label: 'Local & State Funding',
-    candidateSources: ['state', 'national'],
+    candidateSources: ['state', 'national', 'senior', 'property_tax', 'utility_assistance'],
     hardGates: [],
-    needEmphasis: ['housing', 'utilities', 'food', 'cash_assistance', 'childcare', 'transportation'],
+    needEmphasis: ['housing', 'utilities', 'food', 'cash_assistance', 'childcare', 'transportation', 'property_tax_relief'],
     intentBoost: { locality: 15 },
     urlPolicy: 'standard',
     maxResults: 60,
@@ -39,11 +39,11 @@ const STRATEGIES = {
   government_funding: {
     id: 'government_funding',
     label: 'Government Benefits',
-    candidateSources: ['federal', 'state'],
+    candidateSources: ['federal', 'state', 'senior', 'property_tax', 'utility_assistance'],
     hardGates: [],
     needEmphasis: ['utilities', 'housing', 'food', 'healthcare', 'cash_assistance', 'disability', 'employment',
       'certification_assistance', 'workforce_training', 'license_reinstatement_support',
-      'workforce_reentry_training'],
+      'workforce_reentry_training', 'property_tax_relief'],
     intentBoost: {},
     urlPolicy: 'strict',
     maxResults: 60,
@@ -65,14 +65,14 @@ const STRATEGIES = {
   health_resources: {
     id: 'health_resources',
     label: 'Health & Medical Assistance',
-    candidateSources: ['federal', 'state', 'national'],
+    candidateSources: ['federal', 'state', 'national', 'prescription', 'senior'],
     hardGates: ['healthcare'],
-    needEmphasis: ['healthcare', 'mental_health', 'disability', 'substance_recovery'],
-    intentBoost: { healthcare: 20 },
+    needEmphasis: ['healthcare', 'mental_health', 'disability', 'substance_recovery', 'prescription_assistance'],
+    intentBoost: { healthcare: 20, prescription_assistance: 15 },
     urlPolicy: 'standard',
     maxResults: 60,
     minScore: 25,
-    categoryFilter: ['healthcare', 'mental_health', 'substance_recovery', 'disability'],
+    categoryFilter: ['healthcare', 'mental_health', 'substance_recovery', 'disability', 'prescription_assistance'],
   },
 
   special_needs: {
@@ -158,6 +158,34 @@ const STRATEGIES = {
     urlPolicy: 'strict',
     maxResults: 30,
     minScore: 20,
+  },
+
+  nonprofit_org: {
+    id: 'nonprofit_org',
+    label: 'Nonprofit & Community Organization Grants',
+    candidateSources: ['federal', 'state', 'national'],
+    hardGates: [],
+    needEmphasis: ['capacity_building', 'program_funding', 'community_development', 'education', 'healthcare', 'housing'],
+    intentBoost: { nonprofit: 20, community: 15, organization: 15 },
+    urlPolicy: 'standard',
+    maxResults: 80,
+    minScore: 20,
+    categoryFilter: ['capacity_building', 'program_funding', 'community_development', 'education',
+      'healthcare', 'housing', 'employment', 'cash_assistance'],
+  },
+
+  volunteer_fire: {
+    id: 'volunteer_fire',
+    label: 'Volunteer Fire & EMS Grants',
+    candidateSources: ['federal', 'state', 'national'],
+    hardGates: [],
+    needEmphasis: ['equipment', 'certification_assistance', 'volunteer_training_support', 'cpr_first_aid_training'],
+    intentBoost: { volunteer_fire: 25, firefighter: 20, ems: 20, certification: 15 },
+    urlPolicy: 'standard',
+    maxResults: 60,
+    minScore: 20,
+    categoryFilter: ['equipment', 'certification_assistance', 'volunteer_training_support',
+      'cpr_first_aid_training', 'employment', 'community_development'],
   },
 };
 

@@ -771,6 +771,26 @@ export function buildProfileSignals({ profile, sections, asOf = null }) {
   if (financialSection.household_size) {
     financial.householdSize = parseNumber(financialSection.household_size)
   }
+
+  // Compute below_poverty_line from explicit field OR from income+size vs federal poverty guidelines.
+  // 2024 FPL base: $15,060 for 1 person; +$5,380 per additional person.
+  if (financialSection.below_poverty_line === true || financialSection.below_poverty_line === 'yes') {
+    financial.below_poverty_line = true
+  } else if (financial.householdIncome !== null && financial.householdSize !== null) {
+    const fpl = 15060 + Math.max(0, financial.householdSize - 1) * 5380
+    if (financial.householdIncome <= fpl) {
+      financial.below_poverty_line = true
+    }
+  } else if (financial.householdIncome !== null && financial.householdIncome < 15060) {
+    // Single person household implied when size unknown
+    financial.below_poverty_line = true
+  }
+  if (financial.below_poverty_line) {
+    assistanceSet.add('low_income')
+    registerKeyword('poverty')
+    registerKeyword('below poverty line')
+  }
+
   if (financialSection.low_income) {
     assistanceSet.add('low_income')
     ASSISTANCE_SYNONYMS.low_income.forEach((label) => registerKeyword(label))
@@ -1849,4 +1869,64 @@ export function summarizeProfileSignals(signals) {
     }
   }
   return parts.join(' • ')
+}
+
+/**
+ * Merge grant categories/keywords into a profile's implicit_signals field.
+ * Call this after a user saves or applies to a grant so future crawls are
+ * better tuned to their revealed interests.
+ *
+ * @param {object} db - Database instance
+ * @param {string} profileId - Profile to update
+ * @param {object} opportunity - Opportunity record (categories, keywords, need_types_supported)
+ * @param {'save'|'apply'} action - The triggering action
+ */
+export async function mergeOpportunitySignals(db, profileId, opportunity, action = 'save') {
+  if (!db || !profileId || !opportunity) return
+
+  // Fetch current implicit_signals
+  const profileRow = await db
+    .prepare('SELECT implicit_signals FROM profiles WHERE id = ?')
+    .get(profileId)
+  if (!profileRow) return
+
+  const current = safeParseJSON(profileRow.implicit_signals, {})
+
+  // Helper: deduplicate-merge an array into an existing set-like array
+  const mergeInto = (existing, incoming) => {
+    const arr = Array.isArray(existing) ? existing : []
+    const next = Array.isArray(incoming) ? incoming : []
+    const set = new Set([...arr, ...next.map((v) => String(v).trim().toLowerCase()).filter(Boolean)])
+    return Array.from(set)
+  }
+
+  // Parse incoming categories and keywords from the opportunity
+  const incomingCategories = safeParseArrayField(opportunity.categories, [])
+  const incomingKeywords = safeParseArrayField(opportunity.keywords, [])
+  const incomingNeedTypes = safeParseArrayField(opportunity.need_types_supported, [])
+
+  // Merge into interested_categories (categories + need_types combined)
+  current.interested_categories = mergeInto(
+    current.interested_categories,
+    [...incomingCategories, ...incomingNeedTypes]
+  )
+
+  // Merge keywords into interested_keywords
+  current.interested_keywords = mergeInto(current.interested_keywords, incomingKeywords)
+
+  // Increment counters
+  if (action === 'save') {
+    current.save_count = (current.save_count ?? 0) + 1
+  } else if (action === 'apply') {
+    current.apply_count = (current.apply_count ?? 0) + 1
+    // Track categories the user applied to specifically
+    current.applied_categories = mergeInto(
+      current.applied_categories,
+      [...incomingCategories, ...incomingNeedTypes]
+    )
+  }
+
+  await db
+    .prepare('UPDATE profiles SET implicit_signals = ? WHERE id = ?')
+    .run(JSON.stringify(current), profileId)
 }

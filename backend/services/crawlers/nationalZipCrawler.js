@@ -430,8 +430,8 @@ async function searchGrantsGovByZip(zip, coords) {
   const opportunities = []
   
   try {
-    // Grants.gov "search2" public API (2026).
-    // Docs: https://api.grants.gov/v1/api/search2
+    // Grants.gov "search2" public API — v2 is the current version (2026).
+    // Docs: https://api.grants.gov/v2/api/search2
     const body = {
       rows: 10,
       startRecordNum: 0,
@@ -440,7 +440,7 @@ async function searchGrantsGovByZip(zip, coords) {
       sortBy: 'openDate|desc',
     }
 
-    const response = await axios.post('https://api.grants.gov/v1/api/search2', body, {
+    const response = await axios.post('https://api.grants.gov/v2/api/search2', body, {
       headers: { 'Content-Type': 'application/json' },
       timeout: DEFAULT_CONFIG.timeout_ms,
     })
@@ -642,11 +642,11 @@ async function searchStateGrantsByZip(zip, coords) {
     NY: 'https://grantsgateway.ny.gov/IntelliGrants_NYSGG/module/nysgg/goportal.aspx',
     CA: 'https://www.grants.ca.gov/',
     TX: 'https://gov.texas.gov/organization/financial-services/grants',
-    FL: 'https://www.flgov.com/grant-opportunities/',
+    FL: 'https://www.myfloridacfo.com/division/aa/grants',
     PA: 'https://www.grants.pa.gov/',
-    IL: 'https://www2.illinois.gov/sites/GATA/Grants/Pages/default.aspx',
+    IL: 'https://www.illinois.gov/content/state/en/agencies/gata.html',
     OH: 'https://grants.ohio.gov/',
-    GA: 'https://gema.georgia.gov/grants',
+    GA: 'https://www.georgia.gov/grants',
     NC: 'https://www.osbm.nc.gov/grants',
     MI: 'https://www.michigan.gov/leo/bureaus-agencies/michiganworks/grants',
     TN: 'https://www.tn.gov/finance/grants.html',
@@ -1061,11 +1061,11 @@ async function completeStateRunRow(db, runRow, { status, processed, sources, fai
  * Save opportunity to database
  */
 async function saveOpportunity(db, opp) {
-  if (!opp?.title) return 0
-  if (!opp?.source || !opp?.source_id) return 0
+  if (!opp?.title) return { inserted: false, id: null }
+  if (!opp?.source || !opp?.source_id) return { inserted: false, id: null }
   // Only persist real, usable resources: require at least one valid URL
   const hasUrl = normalizeUrl(opp?.url) || normalizeUrl(opp?.source_url) || normalizeUrl(opp?.application_url)
-  if (!hasUrl) return 0
+  if (!hasUrl) return { inserted: false, id: null }
 
   const id = crypto.randomUUID()
   const insertSql =

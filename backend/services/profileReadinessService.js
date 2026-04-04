@@ -175,7 +175,9 @@ export async function checkProfileReadiness(db, profileId) {
       '.'
   }
 
-  const ready = missing.length === 0
+  // Ready when at least 2 of 3 key signals are present (intent_signals alone should not block crawling).
+  const keyMissing = missing.filter((m) => ['applicant_type', 'location', 'intent_signals'].includes(m))
+  const ready = keyMissing.length <= 1
 
   return {
     ready,

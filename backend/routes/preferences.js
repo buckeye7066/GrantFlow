@@ -92,7 +92,7 @@ router.get('/', async (req, res) => {
     
     if (!preferences) {
       // Create default preferences for user (rollout: Anya copilot ON, screenshot OFF)
-      const id = `pref-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
+      const id = crypto.randomUUID()
       // Initialize custom preferences with feature flags and incognito toggle
       const defaultCustom = {
         feature_flags: { anyaCopilotEnabled: true, anyaScreenshotEnabled: false },
@@ -167,7 +167,7 @@ router.put('/', async (req, res) => {
     // Ensure row exists before update.
     let existing = await req.db.prepare('SELECT id FROM user_preferences WHERE user_id = ?').get(userId)
     if (!existing?.id) {
-      const id = `pref-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
+      const id = crypto.randomUUID()
       const insertSql =
         dialect === 'postgres'
           ? `
@@ -252,8 +252,8 @@ router.post('/reset', async (req, res) => {
     const dialect = req.db?.dialect || 'sqlite'
 
     await req.db.prepare('DELETE FROM user_preferences WHERE user_id = ?').run(userId)
-    
-    const id = `pref-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
+
+    const id = crypto.randomUUID()
     const insertSql =
       dialect === 'postgres'
         ? `

@@ -33,7 +33,7 @@ function safeParseArray(val) {
 const ENTITY_PATTERNS = [
   { type: 'student', patterns: ['student', 'undergraduate', 'graduate', 'college student', 'k-12', 'high school', 'university student', 'enrolled student'] },
   { type: 'veteran', patterns: ['veteran', 'military', 'armed forces', 'service member', 'vets', 'active duty', 'military personnel'] },
-  { type: 'nonprofit', patterns: ['nonprofit', 'non-profit', '501(c)(3)', '501c3', 'charitable organization', 'charity', 'faith-based', 'church', 'religious organization', 'ministry', 'faith organization'] },
+  { type: 'nonprofit', patterns: ['nonprofit', 'non-profit', '501(c)(3)', '501c3', 'charitable organization', 'charity', 'faith-based', 'church', 'religious organization', 'ministry', 'faith organization', 'volunteer fire', 'fire department', 'fire station', 'ems organization', 'first responder organization', 'rescue squad', 'emergency services organization'] },
   { type: 'business', patterns: ['business', 'small business', 'entrepreneur', 'startup', 'self-employed', 'sole proprietor', 'llc', 'corporation', 'microenterprise', 'business owner', 'for-profit'] },
   { type: 'individual', patterns: ['individual', 'person', 'resident', 'household', 'family', 'low-income', 'applicant', 'adult', 'senior'] },
   { type: 'researcher', patterns: ['researcher', 'academic', 'faculty', 'scientist', 'investigator', 'principal investigator', 'research institution', 'university'] },

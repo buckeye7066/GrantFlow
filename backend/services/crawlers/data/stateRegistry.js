@@ -121,7 +121,7 @@ export const STATE_REGISTRY = {
   },
   CO: {
     name: 'Colorado',
-    benefitsPortal: 'https://peak--coloradopeak.force.com/',
+    benefitsPortal: 'https://coloradopeak.secure.force.com/',
     benefitsPortalName: 'Colorado PEAK',
     dhsPhone: '1-303-866-5700',
     tanfName: 'Colorado Works',
@@ -428,7 +428,7 @@ export const STATE_REGISTRY = {
   MD: {
     name: 'Maryland',
     benefitsPortal: 'https://mydhrbenefits.dhr.state.md.us/',
-    benefitsPortalName: 'Maryland Health Connection',
+    benefitsPortalName: 'Maryland DHR Benefits Portal',
     dhsPhone: '1-800-332-6347',
     tanfName: 'Temporary Cash Assistance (TCA)',
     medicaidName: 'Maryland Medicaid',

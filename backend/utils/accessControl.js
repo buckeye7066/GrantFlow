@@ -285,7 +285,7 @@ export async function getAccessibleProfileIds(db, user) {
 
 export async function isProfileOwner(db, user, profileId) {
   if (!profileId) return false
-  if (isAdminUser(user)) return true
+  if (await isAdminUserWithDb(db, user)) return true
   const userId = getAuthUserId(user)
   if (!userId) return false
   const row = await db.prepare('SELECT id FROM profiles WHERE id = ? AND user_id = ?').get(profileId, userId)

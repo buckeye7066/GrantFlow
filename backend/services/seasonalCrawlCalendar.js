@@ -269,16 +269,18 @@ const SEASONAL_PROGRAMS = [
   // ── Broadband / Digital ────────────────────────────────────────────────────
   {
     id: 'acp_broadband',
-    programName: 'Affordable Connectivity Program (ACP)',
+    programName: 'Affordable Connectivity Program (ACP) — ENDED',
     openMonth: 1,
     closeMonth: 12,
     description:
-      'ACP provides ongoing broadband discounts for qualifying low-income households. Program funding may be limited — enroll while available.',
+      'WARNING: The ACP ended in June 2024 — new enrollments are no longer accepted. ' +
+      'Households should look for the successor Broadband Equity, Access, and Deployment (BEAD) ' +
+      'state programs or the Lifeline program as alternatives. See https://www.fcc.gov/acp',
     states: 'all',
     profileTypes: ['individual', 'family'],
-    crawlPriority: 'medium',
-    searchTerms: ['Affordable Connectivity Program broadband discount internet bill'],
-    applicationUrl: 'https://acpbenefit.org/',
+    crawlPriority: 'low',
+    searchTerms: ['broadband internet discount low income Lifeline BEAD program'],
+    applicationUrl: 'https://www.lifelinesupport.org/',
   },
 
   // ── State-Specific Programs (Tennessee) ───────────────────────────────────
