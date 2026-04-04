@@ -350,7 +350,7 @@ function collectGrantMatches(db, profileId, limit) {
         SELECT id, title, sponsor, deadline, amount_min, amount_max, amount_description,
                application_url, state, opportunity_type, requires_match, match_percentage,
                eligibility_bullets, categories, source, source_url, updated_at, match_reasons,
-               description, regions, keywords
+               description, regions, keywords, link_status
         FROM funding_opportunities
         WHERE ${activePredicate} AND profile_id = ?
           AND ${trustedOriginClause()}
@@ -374,7 +374,7 @@ function collectGrantMatches(db, profileId, limit) {
         SELECT id, title, sponsor, deadline, amount_min, amount_max, amount_description,
                application_url, state, opportunity_type, requires_match, match_percentage,
                eligibility_bullets, categories, source, source_url, updated_at, match_reasons,
-               description, regions, keywords
+               description, regions, keywords, link_status
         FROM funding_opportunities
         WHERE ${activePredicate}
           AND ${trustedOriginClause()}
@@ -440,6 +440,7 @@ function formatGrantSummaries(opportunities, profile = null) {
       match_score: matchScore,
       match_reasons: matchReasons,
       fit_explanation: fitExplanation,
+      link_status: opp.link_status ?? 'unverified',
     }
   })
 }
@@ -2441,6 +2442,10 @@ function extractSubmissionInfo(opp) {
     contactName: contact.name || null,
     website: contact.website || opp.url || null,
     applicationNote: opp.applicationNote || null,
+    linkStatus: opp.link_status ?? 'unverified',
+    linkWarning: opp.link_status === 'broken'
+      ? 'Warning: The application link may be broken. Our last check received an error. Try the URL, and if it fails, contact the funder directly.'
+      : null,
   }
 }
 

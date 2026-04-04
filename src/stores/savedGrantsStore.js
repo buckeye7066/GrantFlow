@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import { apiFetch } from '@/api/client'
 
 const STORAGE_KEY = 'grantflow:saved-grants'
 
@@ -21,6 +22,35 @@ function saveToStorage(ids) {
 
 export const useSavedGrantsStore = create((set, get) => ({
   savedIds: loadFromStorage(),
+  synced: false,
+
+  /** Fetch saved IDs from backend and merge with localStorage cache */
+  async sync() {
+    try {
+      const res = await apiFetch('/api/saved-grants')
+      const backendIds = res?.ids ?? []
+      const localIds = get().savedIds
+
+      // Merge: anything in local but not backend gets pushed up
+      const toUpload = localIds.filter((id) => !backendIds.includes(id))
+      await Promise.all(
+        toUpload.map((id) =>
+          apiFetch('/api/saved-grants', {
+            method: 'POST',
+            body: JSON.stringify({ opportunity_id: id }),
+          }).catch(() => {})
+        )
+      )
+
+      // Final set = union of both
+      const merged = [...new Set([...backendIds, ...localIds])]
+      saveToStorage(merged)
+      set({ savedIds: merged, synced: true })
+    } catch {
+      // Offline or not logged in — keep localStorage only
+      set({ synced: false })
+    }
+  },
 
   saveGrant(id) {
     const current = get().savedIds
@@ -28,12 +58,21 @@ export const useSavedGrantsStore = create((set, get) => ({
     const next = [...current, id]
     saveToStorage(next)
     set({ savedIds: next })
+    // Fire-and-forget backend save
+    apiFetch('/api/saved-grants', {
+      method: 'POST',
+      body: JSON.stringify({ opportunity_id: id }),
+    }).catch(() => {})
   },
 
   removeGrant(id) {
     const next = get().savedIds.filter((s) => s !== id)
     saveToStorage(next)
     set({ savedIds: next })
+    // Fire-and-forget backend delete
+    apiFetch(`/api/saved-grants/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    }).catch(() => {})
   },
 
   toggleGrant(id) {

@@ -115,6 +115,12 @@ const _STATIC_PROMPT_BASE = [
   '- If it\'s a portal, walk them through the portal step by step',
   '- Help advance pipeline items: discovered → interested → drafting → application_prep → portal/submitted',
   '',
+  'Link Verification Awareness:',
+  '- Opportunities have a link_status field: "ok", "broken", "redirect", "unverified", or "skipped".',
+  '- When presenting an opportunity with link_status "broken", warn the user: "Note: our last check found the application link may be broken. Try the URL, and if it doesn\'t work, contact the funder directly."',
+  '- When link_status is "redirect", mention that the URL may have moved but should still work.',
+  '- Do NOT warn about "ok", "unverified", or "skipped" links — only flag broken or redirect.',
+  '',
 ].join('\n')
 
 const _STATIC_PROMPT_ADMIN_SECTION = [

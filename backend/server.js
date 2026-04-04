@@ -90,6 +90,7 @@ import adminServiceCatalogRouter from './routes/adminServiceCatalog.js'
 import collegesRouter from './routes/colleges.js'
 import { allowedOriginCheckSQL } from './utils/recordOrigins.js'
 import notificationsRouter from './routes/notifications.js'
+import savedGrantsRouter from './routes/savedGrants.js'
 import { expirePassedDeadlines } from './services/deadlineExpiryService.js'
 import { generateDeadlineNotifications } from './services/deadlineNotificationService.js'
 import { runLinkVerification } from './services/linkVerificationService.js'
@@ -1635,6 +1636,7 @@ app.use('/api/crawl-logs', crawlLogsRouter);
 app.use('/api/geo-crawl', lazyRouter('./routes/geoCrawl.js', (mod) => mod.default({ uploadDir: uploadsDir, getOpenAI: null })));
 app.use('/api/colleges', collegesRouter);
 app.use('/api/notifications', notificationsRouter);
+app.use('/api/saved-grants', savedGrantsRouter);
 
 function resolveBuildSha() {
   return (

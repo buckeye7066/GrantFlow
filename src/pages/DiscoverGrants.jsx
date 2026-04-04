@@ -426,6 +426,16 @@ export default function DiscoverGrants() {
     }
   }
 
+  // Auto-run Discovery when arriving from onboarding with ?autorun=1
+  const autorunTriggered = React.useRef(false)
+  useEffect(() => {
+    if (autorunTriggered.current) return
+    if (searchParams.get('autorun') !== '1') return
+    if (!effectiveProfileId || isSearching || hasSearched) return
+    autorunTriggered.current = true
+    handleFindFunding()
+  }, [effectiveProfileId, searchParams, isSearching, hasSearched])
+
   const handleCrawlerResults = async (opportunities) => {
     log.debug('processing crawler results', { count: opportunities.length })
     

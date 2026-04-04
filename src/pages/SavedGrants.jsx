@@ -10,7 +10,12 @@ import GrantCard from '@/components/pipeline/GrantCard'
 
 export default function SavedGrants() {
   const navigate = useNavigate()
-  const { savedIds, removeGrant } = useSavedGrantsStore()
+  const { savedIds, removeGrant, sync, synced } = useSavedGrantsStore()
+
+  // Sync with backend on first mount
+  React.useEffect(() => {
+    if (!synced) sync()
+  }, [synced, sync])
 
   const { data: grants = [], isLoading } = useQuery({
     queryKey: ['savedGrants', savedIds],

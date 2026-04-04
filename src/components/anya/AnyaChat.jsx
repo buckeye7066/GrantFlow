@@ -291,36 +291,31 @@ function OnboardingFlow({ step, onAdvance, onboarding }) {
     return (
       <div className="flex flex-col gap-4 p-4">
         <AnyaBubble>
-          {`Great — you're all set! I've noted your profile type${profileType ? ` (${profileType})` : ""}${state ? ` and location (${state})` : ""}. Here's what to do next:\n\n1. Open Profile Editor to fill in your full details (takes 5 min)\n2. Run Discovery to see your matched opportunities\n3. Come back here any time to ask me questions`}
+          {`Great — you're all set! I've saved your profile type${profileType ? ` (${profileType})` : ""}${state ? ` and location (${state})` : ""}. Let's find your first matches!`}
         </AnyaBubble>
         <div className="flex flex-wrap gap-2">
+          <Button
+            size="sm"
+            className="gap-1.5"
+            onClick={() => {
+              onAdvance(null)
+              window.dispatchEvent(new CustomEvent("navigate", { detail: { path: createPageUrl("DiscoverGrants") + "?autorun=1" } }))
+            }}
+          >
+            <Compass className="h-3.5 w-3.5" />
+            Find My Matches →
+          </Button>
           <Button
             variant="outline"
             size="sm"
             className="gap-1.5"
             onClick={() => {
+              onAdvance(null)
               window.dispatchEvent(new CustomEvent("navigate", { detail: { path: createPageUrl("MyProfiles") } }))
             }}
           >
             <User className="h-3.5 w-3.5" />
-            Open Profile Editor →
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            className="gap-1.5"
-            onClick={() => {
-              window.dispatchEvent(new CustomEvent("navigate", { detail: { path: createPageUrl("DiscoverGrants") } }))
-            }}
-          >
-            <Compass className="h-3.5 w-3.5" />
-            Run Discovery →
-          </Button>
-        </div>
-        <div className="flex justify-end">
-          <Button size="sm" className="gap-2" onClick={() => onAdvance(null)}>
-            <CheckSquare className="h-4 w-4" />
-            Got it!
+            Fill in more details first
           </Button>
         </div>
       </div>
