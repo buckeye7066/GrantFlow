@@ -153,6 +153,51 @@ const organizationDetailsSchema = z.object({
       return Number.isFinite(parsed) ? parsed : ""
     }),
   mission: z.string().optional().or(z.literal("")),
+  // Federal Compliance
+  sam_gov_registered: booleanField,
+  grants_gov_account: booleanField,
+  era_commons_account: booleanField,
+  sam_exclusions_passed: booleanField,
+  audited_financials: booleanField,
+  nicra_rate: z
+    .union([z.number(), z.string()])
+    .optional()
+    .transform((value) => {
+      if (value === "" || value === undefined || value === null) return ""
+      const parsed = Number(value)
+      return Number.isFinite(parsed) ? parsed : ""
+    }),
+  ntee_code: z.string().optional().or(z.literal("")),
+  // General Qualifications
+  is_faith_based: booleanField,
+  is_rural_serving: booleanField,
+  is_minority_serving: booleanField,
+  is_501c3_public_charity: booleanField,
+  is_501c3_private_foundation: booleanField,
+  // Business Certifications
+  cert_8a: booleanField,
+  cert_hubzone: booleanField,
+  cert_sdvosb: booleanField,
+  cert_mbe: booleanField,
+  cert_wbe: booleanField,
+  cert_sbir_sttr: booleanField,
+  // Geographic & Special Designations
+  in_opportunity_zone: booleanField,
+  in_qct: booleanField,
+  in_epa_ej_area: booleanField,
+  in_usda_persistent_poverty_county: booleanField,
+  in_appalachian_region: booleanField,
+  broadband_unserved: booleanField,
+  in_fema_disaster_area: booleanField,
+  // Specialized Org Types
+  is_tribal_government: booleanField,
+  is_community_action_agency: booleanField,
+  is_housing_authority: booleanField,
+  is_workforce_dev_board: booleanField,
+  is_cdfi: booleanField,
+  is_msi_hbcu: booleanField,
+  is_rural_health_clinic: booleanField,
+  is_cooperative: booleanField,
 })
 
 const toBoolean = (value) => {
@@ -226,6 +271,11 @@ const financialInformationSchema = z.object({
   receives_assistance: stringListField,
   assistance_notes: z.string().optional().or(z.literal("")),
   notes: z.string().optional().or(z.literal("")),
+  underemployed: booleanField,
+  has_medical_debt: booleanField,
+  has_education_debt: booleanField,
+  bankruptcy_foreclosure: booleanField,
+  first_time_homebuyer: booleanField,
 })
 
 const assistanceSchema = z.object({
@@ -428,6 +478,14 @@ const demographicsSchema = z.object({
   age_group: z.string().optional().or(z.literal("")),
   white_caucasian: booleanField,
   notes: z.string().optional().or(z.literal("")),
+  good_credit_score: booleanField,
+  religious_denomination: z.string().optional().or(z.literal("")),
+  jewish_heritage: booleanField,
+  irish_heritage: booleanField,
+  italian_heritage: booleanField,
+  greek_heritage: booleanField,
+  armenian_heritage: booleanField,
+  appalachian_heritage: booleanField,
 })
 
 const familyLifeSchema = z.object({
@@ -527,6 +585,14 @@ const educationSchema = z.object({
   leadership_roles: stringListField,
   valedictorian: booleanField,
   notes: z.string().optional().or(z.literal("")),
+  pell_grant_eligible: booleanField,
+  fafsa_completed: booleanField,
+  first_generation_college_student: booleanField,
+  dual_enrollment: booleanField,
+  rotc_jrotc: booleanField,
+  cte_pathway: z.string().optional().or(z.literal("")),
+  honor_societies: z.string().optional().or(z.literal("")),
+  efc_sai_band: z.string().optional().or(z.literal("")),
 })
 
 const employmentSchema = z.object({
@@ -643,6 +709,44 @@ export const SECTION_CONFIG = {
       annual_budget: "",
       staff_count: "",
       mission: "",
+      // Federal Compliance
+      sam_gov_registered: false,
+      grants_gov_account: false,
+      era_commons_account: false,
+      sam_exclusions_passed: false,
+      audited_financials: false,
+      nicra_rate: "",
+      ntee_code: "",
+      // General Qualifications
+      is_faith_based: false,
+      is_rural_serving: false,
+      is_minority_serving: false,
+      is_501c3_public_charity: false,
+      is_501c3_private_foundation: false,
+      // Business Certifications
+      cert_8a: false,
+      cert_hubzone: false,
+      cert_sdvosb: false,
+      cert_mbe: false,
+      cert_wbe: false,
+      cert_sbir_sttr: false,
+      // Geographic & Special Designations
+      in_opportunity_zone: false,
+      in_qct: false,
+      in_epa_ej_area: false,
+      in_usda_persistent_poverty_county: false,
+      in_appalachian_region: false,
+      broadband_unserved: false,
+      in_fema_disaster_area: false,
+      // Specialized Org Types
+      is_tribal_government: false,
+      is_community_action_agency: false,
+      is_housing_authority: false,
+      is_workforce_dev_board: false,
+      is_cdfi: false,
+      is_msi_hbcu: false,
+      is_rural_health_clinic: false,
+      is_cooperative: false,
     },
     // Mission is captured in the Narrative section for all profile types; keep stored value but don't ask twice.
     hidden_fields: [
@@ -658,6 +762,44 @@ export const SECTION_CONFIG = {
       { name: "cage_code", label: "CAGE Code", component: Input },
       { name: "annual_budget", label: "Annual budget", component: Input, props: { type: "number", min: 0 } },
       { name: "staff_count", label: "Staff count", component: Input, props: { type: "number", min: 0 } },
+      // Federal Compliance
+      { name: "sam_gov_registered", label: "SAM.gov Registered", type: "boolean", description: "Required for all federal grants." },
+      { name: "grants_gov_account", label: "Grants.gov Account Active", type: "boolean", description: "Increases eligibility for federal opportunities." },
+      { name: "era_commons_account", label: "eRA Commons Account (NIH/Health Research)", type: "boolean" },
+      { name: "sam_exclusions_passed", label: "SAM Exclusions Check Passed", type: "boolean", description: "Not debarred from federal contracts." },
+      { name: "audited_financials", label: "Audited Financials Available", type: "boolean" },
+      { name: "nicra_rate", label: "NICRA Indirect Cost Rate (%)", component: Input, props: { type: "number", min: 0, max: 100, step: "0.01" }, description: "Federally Negotiated Indirect Cost Rate." },
+      { name: "ntee_code", label: "NTEE Code", component: Input, props: { placeholder: "e.g., A01, B20" }, description: "National Taxonomy of Exempt Entities." },
+      // General Qualifications
+      { name: "is_faith_based", label: "Faith-Based Organization / Church / Ministry", type: "boolean" },
+      { name: "is_rural_serving", label: "Serves Rural Area", type: "boolean" },
+      { name: "is_minority_serving", label: "Minority-Serving Organization", type: "boolean" },
+      { name: "is_501c3_public_charity", label: "501(c)(3) Public Charity", type: "boolean" },
+      { name: "is_501c3_private_foundation", label: "501(c)(3) Private Foundation", type: "boolean" },
+      // Business Certifications
+      { name: "cert_8a", label: "8(a) Certified", type: "boolean", description: "SBA program for disadvantaged businesses." },
+      { name: "cert_hubzone", label: "HUBZone Certified", type: "boolean" },
+      { name: "cert_sdvosb", label: "Service-Disabled Veteran-Owned Small Business (SDVOSB)", type: "boolean" },
+      { name: "cert_mbe", label: "Minority Business Enterprise (MBE)", type: "boolean" },
+      { name: "cert_wbe", label: "Women Business Enterprise (WBE)", type: "boolean" },
+      { name: "cert_sbir_sttr", label: "SBIR/STTR Eligible", type: "boolean" },
+      // Geographic & Special Designations
+      { name: "in_opportunity_zone", label: "Opportunity Zone Location", type: "boolean", description: "Economically distressed community eligible for tax incentives." },
+      { name: "in_qct", label: "Qualified Census Tract (QCT)", type: "boolean", description: "HUD-designated low-income area." },
+      { name: "in_epa_ej_area", label: "EPA Environmental Justice Area", type: "boolean" },
+      { name: "in_usda_persistent_poverty_county", label: "USDA Persistent-Poverty County", type: "boolean" },
+      { name: "in_appalachian_region", label: "Appalachian Region", type: "boolean", description: "Served by Appalachian Regional Commission." },
+      { name: "broadband_unserved", label: "Broadband-Unserved (FCC Map Block)", type: "boolean", description: "No high-speed internet — USDA ReConnect and NTIA grants." },
+      { name: "in_fema_disaster_area", label: "FEMA Disaster Declaration Area", type: "boolean" },
+      // Specialized Org Types
+      { name: "is_tribal_government", label: "Tribal Government / Tribally Controlled Organization", type: "boolean" },
+      { name: "is_community_action_agency", label: "Community Action Agency (CAA)", type: "boolean", description: "CSBG eligible entity." },
+      { name: "is_housing_authority", label: "Housing Authority", type: "boolean" },
+      { name: "is_workforce_dev_board", label: "Workforce Development Board", type: "boolean" },
+      { name: "is_cdfi", label: "CDFI Partner", type: "boolean", description: "Community Development Financial Institution." },
+      { name: "is_msi_hbcu", label: "MSI/HBCU/HSI/TCU", type: "boolean", description: "Minority-Serving Institution." },
+      { name: "is_rural_health_clinic", label: "Rural Health Clinic (RHC)", type: "boolean" },
+      { name: "is_cooperative", label: "Cooperative (Ag/Electric/Housing/Worker)", type: "boolean" },
     ],
   },
   financial_information: {
@@ -678,6 +820,11 @@ export const SECTION_CONFIG = {
       receives_assistance: "",
       assistance_notes: "",
       notes: "",
+      underemployed: false,
+      has_medical_debt: false,
+      has_education_debt: false,
+      bankruptcy_foreclosure: false,
+      first_time_homebuyer: false,
     },
     fields: [
       { name: "annual_income", label: "Annual income (USD)", component: Input, props: { type: "number", min: 0 } },
@@ -692,6 +839,11 @@ export const SECTION_CONFIG = {
       { name: "receives_assistance", label: "Receives assistance (list)", component: Textarea, props: { rows: 2, placeholder: "Separate with commas (e.g. SNAP, Medicaid)" } },
       { name: "assistance_notes", label: "Assistance notes", component: Textarea, props: { rows: 2, placeholder: "Any nuance about benefits or barriers" } },
       { name: "notes", label: "Notes", component: Textarea, props: { rows: 3, placeholder: "Context for financial need" } },
+      { name: "underemployed", label: "Underemployed", type: "boolean", description: "Working part-time or below skill level." },
+      { name: "has_medical_debt", label: "Medical Debt", type: "boolean", description: "Outstanding medical bills — debt relief programs available." },
+      { name: "has_education_debt", label: "Education/Student Loan Debt", type: "boolean", description: "Student loan forgiveness programs available." },
+      { name: "bankruptcy_foreclosure", label: "Bankruptcy / Foreclosure", type: "boolean", description: "Recent financial crisis — recovery assistance available." },
+      { name: "first_time_homebuyer", label: "First-Time Homebuyer", type: "boolean", description: "Down payment assistance programs available." },
     ],
   },
   government_assistance: {
@@ -915,6 +1067,14 @@ export const SECTION_CONFIG = {
       age_group: "",
       white_caucasian: false,
       notes: "",
+      good_credit_score: false,
+      religious_denomination: "",
+      jewish_heritage: false,
+      irish_heritage: false,
+      italian_heritage: false,
+      greek_heritage: false,
+      armenian_heritage: false,
+      appalachian_heritage: false,
     },
     fields: [
       { name: "african_american", label: "African American / Black", type: "boolean" },
@@ -935,6 +1095,14 @@ export const SECTION_CONFIG = {
       { name: "age_group", label: "Age group", component: Input, props: { placeholder: "youth, young adult, senior, etc." } },
       { name: "white_caucasian", label: "White / Caucasian", type: "boolean" },
       { name: "notes", label: "Demographic notes", component: Textarea, props: { rows: 3, placeholder: "Additional context or identities" } },
+      { name: "good_credit_score", label: "Good Credit Score (700+)", type: "boolean", description: "Qualifies for financial literacy programs and non-loan support." },
+      { name: "religious_denomination", label: "Religious Denomination", component: Input, props: { placeholder: "e.g., Baptist, Methodist, Catholic, Lutheran" }, description: "Denominational scholarships available." },
+      { name: "jewish_heritage", label: "Jewish Heritage", type: "boolean", description: "Extensive funding from Jewish federations, Hillel, and synagogues." },
+      { name: "irish_heritage", label: "Irish Heritage", type: "boolean", description: "Hibernian societies, Irish cultural organizations." },
+      { name: "italian_heritage", label: "Italian Heritage", type: "boolean" },
+      { name: "greek_heritage", label: "Greek Heritage", type: "boolean", description: "AHEPA, Hellenic societies." },
+      { name: "armenian_heritage", label: "Armenian Heritage", type: "boolean" },
+      { name: "appalachian_heritage", label: "Appalachian Heritage", type: "boolean" },
     ],
   },
 
@@ -957,6 +1125,14 @@ export const SECTION_CONFIG = {
       leadership_roles: "",
       valedictorian: false,
       notes: "",
+      pell_grant_eligible: false,
+      fafsa_completed: false,
+      first_generation_college_student: false,
+      dual_enrollment: false,
+      rotc_jrotc: false,
+      cte_pathway: "",
+      honor_societies: "",
+      efc_sai_band: "",
     },
     fields: [
       { name: "highest_level", label: "Highest level completed", component: Input, props: { placeholder: "high_school, associate, bachelor, etc." } },
@@ -970,6 +1146,14 @@ export const SECTION_CONFIG = {
       { name: "leadership_roles", label: "Leadership roles (list)", component: Textarea, props: { rows: 2, placeholder: "Separate with commas" } },
       { name: "valedictorian", label: "Valedictorian", type: "boolean" },
       { name: "notes", label: "Education notes", component: Textarea, props: { rows: 3 } },
+      { name: "pell_grant_eligible", label: "Pell Grant Eligible", type: "boolean", description: "Federal grant for low-income students." },
+      { name: "fafsa_completed", label: "FAFSA Completed", type: "boolean", description: "Required for most federal financial aid." },
+      { name: "first_generation_college_student", label: "First-Generation College Student", type: "boolean", description: "First in your family to attend college." },
+      { name: "dual_enrollment", label: "Dual Enrollment / Early College", type: "boolean" },
+      { name: "rotc_jrotc", label: "ROTC / JROTC Participation", type: "boolean", description: "Military training — ROTC scholarships available." },
+      { name: "cte_pathway", label: "CTE Pathway", component: Input, props: { placeholder: "e.g., EMT, welding, cybersecurity, nursing" }, description: "Career/Technical Education pathway." },
+      { name: "honor_societies", label: "Honor Societies", component: Input, props: { placeholder: "e.g., NHS, Phi Theta Kappa" } },
+      { name: "efc_sai_band", label: "EFC/SAI Band", component: Input, props: { placeholder: "Expected Family Contribution / Student Aid Index" } },
     ],
   },
 

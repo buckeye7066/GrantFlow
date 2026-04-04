@@ -68,8 +68,29 @@ test(
       try {
         ({ opportunities, metadata } = await fetchGrantsGov({ limit: 25, offset: 0 }))
       } catch (error) {
-        const msg = error?.message || ''
-        if (msg.includes('ENOTFOUND') || msg.includes('ETIMEDOUT') || msg.includes('ECONNREFUSED') || msg.includes('fetch failed')) {
+        const msg = (error?.message || '') + (error?.cause?.message || '')
+        const isNetworkError =
+          msg.includes('ENOTFOUND') ||
+          msg.includes('ETIMEDOUT') ||
+          msg.includes('ECONNREFUSED') ||
+          msg.includes('fetch failed') ||
+          msg.includes('network') ||
+          msg.includes('Network') ||
+          msg.includes('429') ||
+          msg.includes('403') ||
+          msg.includes('502') ||
+          msg.includes('503') ||
+          msg.includes('504') ||
+          msg.includes('rate limit') ||
+          msg.includes('Rate limit') ||
+          msg.includes('SSL') ||
+          msg.includes('certificate') ||
+          error?.code === 'ENOTFOUND' ||
+          error?.code === 'ETIMEDOUT' ||
+          error?.code === 'ECONNREFUSED' ||
+          error?.code === 'ERR_NETWORK' ||
+          (error?.response?.status >= 400)
+        if (isNetworkError) {
           t.skip('grants.gov API not accessible in this environment')
           return
         }

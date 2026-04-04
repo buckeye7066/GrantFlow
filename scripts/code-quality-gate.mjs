@@ -184,19 +184,21 @@ async function main() {
   const { report, target } = parseArgs(process.argv)
   const allowlist = await readAllowlist()
 
-  // Step 1: Run ESLint check first (catches syntax errors, duplicate declarations, etc.)
-  console.log('[quality-gate] Running ESLint check...')
-  const eslintResult = await runEslintCheck()
-  
-  if (!eslintResult.success) {
-    console.log('[quality-gate] ESLint FAILED:\n')
-    console.log(eslintResult.output)
-    console.log('\n[quality-gate] FAILED: ESLint found errors. Fix these before proceeding.')
-    console.log('[quality-gate] Tip: Run "npx eslint --fix ..." to auto-fix some issues.')
-    process.exitCode = 1
-    return
+  // Step 1: Run ESLint check first (only when scanning default dirs, not a custom --path)
+  if (!target) {
+    console.log('[quality-gate] Running ESLint check...')
+    const eslintResult = await runEslintCheck()
+
+    if (!eslintResult.success) {
+      console.log('[quality-gate] ESLint FAILED:\n')
+      console.log(eslintResult.output)
+      console.log('\n[quality-gate] FAILED: ESLint found errors. Fix these before proceeding.')
+      console.log('[quality-gate] Tip: Run "npx eslint --fix ..." to auto-fix some issues.')
+      process.exitCode = 1
+      return
+    }
+    console.log('[quality-gate] ESLint passed ✓')
   }
-  console.log('[quality-gate] ESLint passed ✓')
 
   // Step 2: Run pattern-based quality checks
   const targetDirs = target

@@ -838,6 +838,11 @@ export function buildProfileSignals({ profile, sections, asOf = null }) {
       registerKeyword('job seeker')
     }
   }
+  if (financialSection.has_medical_debt) { assistanceSet.add('medical_debt'); registerKeyword('medical_debt'); registerKeyword('healthcare_debt_relief') }
+  if (financialSection.has_education_debt) { assistanceSet.add('student_loan'); registerKeyword('student_loan'); registerKeyword('loan_forgiveness') }
+  if (financialSection.bankruptcy_foreclosure) { assistanceSet.add('financial_recovery'); registerKeyword('bankruptcy'); registerKeyword('foreclosure'); registerKeyword('financial_recovery') }
+  if (financialSection.first_time_homebuyer) { assistanceSet.add('first_time_homebuyer'); registerKeyword('first_time_homebuyer'); registerKeyword('down_payment_assistance') }
+  if (financialSection.underemployed) { assistanceSet.add('underemployed'); registerKeyword('underemployed'); registerKeyword('workforce'); registerKeyword('job_training') }
 
   // ============ GOVERNMENT ASSISTANCE ============
   const government = sections?.government_assistance ?? {}
@@ -973,6 +978,19 @@ export function buildProfileSignals({ profile, sections, asOf = null }) {
   if (demographicsSection.notes) {
     collectNarrativeKeywords({ notes: demographicsSection.notes }, registerKeyword)
   }
+  // Cultural/ethnic heritage — unlocks heritage-specific scholarships and grants
+  if (demographicsSection.jewish_heritage) { registerKeyword('jewish_heritage'); registerKeyword('jewish'); registerKeyword('hillel') }
+  if (demographicsSection.irish_heritage) { registerKeyword('irish_heritage'); registerKeyword('irish_american') }
+  if (demographicsSection.italian_heritage) { registerKeyword('italian_heritage'); registerKeyword('italian_american') }
+  if (demographicsSection.greek_heritage) { registerKeyword('greek_heritage'); registerKeyword('greek_american'); registerKeyword('ahepa') }
+  if (demographicsSection.armenian_heritage) { registerKeyword('armenian_heritage'); registerKeyword('armenian_american') }
+  if (demographicsSection.appalachian_heritage) { registerKeyword('appalachian_heritage'); registerKeyword('appalachian'); registerKeyword('arc') }
+  if (demographicsSection.religious_denomination && typeof demographicsSection.religious_denomination === 'string') {
+    registerKeyword(demographicsSection.religious_denomination.toLowerCase().replace(/\s+/g, '_'))
+    registerKeyword('denominational_scholarship')
+  }
+  if (demographicsSection.lgbtq) { registerKeyword('lgbtq'); registerKeyword('lgbtq_scholarship'); registerKeyword('queer') }
+  if (demographicsSection.good_credit_score) { registerKeyword('good_credit'); registerKeyword('financial_literacy') }
 
   // ============ FAMILY LIFE ============
   const family = sections?.family_life ?? {}
@@ -1167,6 +1185,37 @@ export function buildProfileSignals({ profile, sections, asOf = null }) {
   if (organizationDetails.programs_offered && Array.isArray(organizationDetails.programs_offered)) {
     organizationDetails.programs_offered.forEach(prog => registerKeyword(prog))
   }
+
+  // --- Compliance signals — each one unlocks specific grant eligibility ---
+  if (organizationDetails.sam_gov_registered) { registerKeyword('sam_gov_registered'); registerKeyword('federal_eligible') }
+  if (organizationDetails.grants_gov_account) { registerKeyword('grants_gov_account') }
+  if (organizationDetails.era_commons_account) { registerKeyword('era_commons'); registerKeyword('nih_eligible'); registerKeyword('health_research') }
+  if (organizationDetails.nicra_rate > 0) { registerKeyword('indirect_cost_rate'); registerKeyword('nicra') }
+  if (organizationDetails.ntee_code) { registerKeyword(organizationDetails.ntee_code.toLowerCase()) }
+  if (organizationDetails.is_faith_based) { registerKeyword('faith_based'); registerKeyword('church'); registerKeyword('religious_org') }
+  if (organizationDetails.is_rural_serving) { registerKeyword('rural'); registerKeyword('rural_serving') }
+  if (organizationDetails.is_minority_serving) { registerKeyword('minority_serving'); registerKeyword('msi') }
+  // Business certifications — critical for set-aside contracts and grants
+  if (organizationDetails.cert_8a) { registerKeyword('8a_certified'); registerKeyword('sba_8a'); registerKeyword('disadvantaged_business') }
+  if (organizationDetails.cert_hubzone) { registerKeyword('hubzone'); registerKeyword('historically_underutilized') }
+  if (organizationDetails.cert_sdvosb) { registerKeyword('sdvosb'); registerKeyword('veteran_owned_business') }
+  if (organizationDetails.cert_mbe) { registerKeyword('minority_owned_business'); registerKeyword('mbe') }
+  if (organizationDetails.cert_wbe) { registerKeyword('women_owned_business'); registerKeyword('wbe') }
+  if (organizationDetails.cert_sbir_sttr) { registerKeyword('sbir'); registerKeyword('sttr'); registerKeyword('research_innovation') }
+  // Geographic designations — grant eligibility multipliers
+  if (organizationDetails.in_opportunity_zone) { registerKeyword('opportunity_zone'); registerKeyword('oz_investment') }
+  if (organizationDetails.in_qct) { registerKeyword('qualified_census_tract'); registerKeyword('qct'); registerKeyword('low_income_community') }
+  if (organizationDetails.in_epa_ej_area) { registerKeyword('environmental_justice'); registerKeyword('ej_community') }
+  if (organizationDetails.in_usda_persistent_poverty_county) { registerKeyword('persistent_poverty'); registerKeyword('rural_poverty') }
+  if (organizationDetails.in_appalachian_region) { registerKeyword('appalachian_region'); registerKeyword('arc'); registerKeyword('appalachian') }
+  if (organizationDetails.broadband_unserved) { registerKeyword('broadband_unserved'); registerKeyword('digital_equity'); registerKeyword('reconnect') }
+  // Specialized org types
+  if (organizationDetails.is_tribal_government) { registerKeyword('tribal_government'); registerKeyword('federally_recognized_tribe'); registerKeyword('indian_tribe') }
+  if (organizationDetails.is_community_action_agency) { registerKeyword('community_action_agency'); registerKeyword('caa'); registerKeyword('csbg_eligible') }
+  if (organizationDetails.is_cdfi) { registerKeyword('cdfi'); registerKeyword('community_development_financial_institution') }
+  if (organizationDetails.is_msi_hbcu) { registerKeyword('hbcu'); registerKeyword('msi'); registerKeyword('minority_serving_institution') }
+  if (organizationDetails.is_housing_authority) { registerKeyword('housing_authority'); registerKeyword('public_housing'); registerKeyword('hud') }
+  if (organizationDetails.is_cooperative) { registerKeyword('cooperative'); registerKeyword('co_op'); registerKeyword('usda_rural') }
 
   // ============ PROGRAMS & SERVICES (profile's stated needs → match to relatable funding) ============
   const programsServices = sections?.programs_services ?? {}
@@ -1400,6 +1449,16 @@ export function buildProfileSignals({ profile, sections, asOf = null }) {
   if (education.target_colleges && Array.isArray(education.target_colleges)) {
     education.target_colleges.forEach((c) => registerKeyword(c))
   }
+  if (education.pell_grant_eligible) { registerKeyword('pell_grant'); registerKeyword('need_based_aid'); registerKeyword('low_income_student') }
+  if (education.fafsa_completed) { registerKeyword('fafsa'); registerKeyword('federal_financial_aid') }
+  if (education.cte_pathway && typeof education.cte_pathway === 'string') {
+    registerKeyword('cte'); registerKeyword('career_technical')
+    registerKeyword(education.cte_pathway.toLowerCase().replace(/\s+/g, '_'))
+  }
+  if (education.rotc_jrotc) { registerKeyword('rotc'); registerKeyword('military_scholarship') }
+  if (education.honor_societies) { registerKeyword('honor_society'); registerKeyword('academic_achievement') }
+  if (education.first_generation_college_student) { registerKeyword('first_generation'); registerKeyword('first_gen_college') }
+  if (education.dual_enrollment) { registerKeyword('dual_enrollment'); registerKeyword('early_college') }
 
   // ============ MEDICAL INSURANCE ============
   // Insurance plan type unlocks assistance program matching (Medicaid/Medicare → benefits crawlers)
@@ -1697,6 +1756,11 @@ export function buildProfileSignals({ profile, sections, asOf = null }) {
   if (assistanceSet.has('section_8') || assistanceSet.has('section8')) needs.add('housing')
   if (assistanceSet.has('liheap')) needs.add('utilities')
   if (assistanceSet.has('wic')) needs.add('food')
+  if (assistanceSet.has('medical_debt')) needs.add('healthcare')
+  if (assistanceSet.has('student_loan')) needs.add('education')
+  if (assistanceSet.has('financial_recovery')) needs.add('cash_assistance')
+  if (assistanceSet.has('first_time_homebuyer')) needs.add('housing')
+  if (assistanceSet.has('underemployed')) needs.add('employment')
   if (healthSet.size > 0) needs.add('healthcare')
   if (healthSet.has('disability') || healthSet.has('physical_disability') || healthSet.has('visual_impairment') || healthSet.has('hearing_impairment')) needs.add('disability')
   if (healthSet.has('mental_health')) needs.add('mental_health')
