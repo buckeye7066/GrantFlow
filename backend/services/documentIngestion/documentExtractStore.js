@@ -15,7 +15,8 @@ function isPostgres(db) {
 
 export async function getDocumentExtract(db, documentId) {
   if (!documentId) return null
-  return db.prepare('SELECT * FROM document_extracts WHERE document_id = ? LIMIT 1').get(documentId)
+  const stmt = db.prepare('SELECT * FROM document_extracts WHERE document_id = ? LIMIT 1')
+  return isPostgres(db) ? await stmt.get(documentId) : await Promise.resolve(stmt.get(documentId))
 }
 
 export async function ensureDocumentExtract(db, {
@@ -24,6 +25,9 @@ export async function ensureDocumentExtract(db, {
   fileHash = null,
 } = {}) {
   if (!documentId) throw new Error('documentId is required')
+  if (!fileHash) {
+    console.warn('[documentExtractStore] ensureDocumentExtract called without fileHash for document', documentId, 'â hash-reuse will be unavailable')
+  }
 
   const existing = await getDocumentExtract(db, documentId)
   if (existing) {
@@ -50,7 +54,7 @@ export async function ensureDocumentExtract(db, {
   const pg = isPostgres(db)
 
   if (pg) {
-    await db.prepare(
+    const stmt = db.prepare(
       `
         INSERT INTO document_extracts (
           id, document_id, status, source_type, methods_used, warnings, confidence, file_hash, ocr_used
@@ -59,17 +63,20 @@ export async function ensureDocumentExtract(db, {
         )
         ON CONFLICT (document_id) DO NOTHING
       `,
-    ).run(id, documentId, sourceType, fileHash)
+    )
+    await stmt.run(id, documentId, sourceType, fileHash)
   } else {
-    await db.prepare(
+    const stmt = db.prepare(
       `
         INSERT INTO document_extracts (
           id, document_id, status, source_type, methods_used, warnings, confidence, file_hash, ocr_used
         ) VALUES (
           ?, ?, 'pending', ?, '[]', '[]', 0.0, ?, 0
         )
+        ON CONFLICT (document_id) DO NOTHING
       `,
-    ).run(id, documentId, sourceType, fileHash)
+    )
+    await Promise.resolve(stmt.run(id, documentId, sourceType, fileHash))
   }
 
   return getDocumentExtract(db, documentId)
@@ -184,7 +191,7 @@ export async function saveDocumentExtractResult(db, documentId, result) {
       ocrText,
       warningsJson,
       confidence,
-      provenanceJson || 'null',
+      provenanceJson,
       ocrUsed,
       startedAt || finishedAt,
       finishedAt,
@@ -236,31 +243,37 @@ export async function tryReuseExtractByHash(db, { fileHash, documentId } = {}) {
 
   // Look for any ready extract with this hash and reuse its content.
   // NOTE: This intentionally ignores document_id uniqueness by copying content into the current row.
-  const existing = pg
-    ? await db
-        .prepare(
-          `
-            SELECT *
-            FROM document_extracts
-            WHERE file_hash = ?
-              AND status = 'ready'
-            ORDER BY finished_at DESC NULLS LAST, updated_at DESC
-            LIMIT 1
-          `,
-        )
-        .get(fileHash)
-    : await db
-        .prepare(
-          `
-            SELECT *
-            FROM document_extracts
-            WHERE file_hash = ?
-              AND status = 'ready'
-            ORDER BY COALESCE(finished_at, updated_at) DESC, updated_at DESC
-            LIMIT 1
-          `,
-        )
-        .get(fileHash)
+  let existing = null
+  try {
+    existing = pg
+      ? await db
+          .prepare(
+            `
+              SELECT *
+              FROM document_extracts
+              WHERE file_hash = ?
+                AND status = 'ready'
+              ORDER BY finished_at DESC NULLS LAST, updated_at DESC
+              LIMIT 1
+            `,
+          )
+          .get(fileHash)
+      : await db
+          .prepare(
+            `
+              SELECT *
+              FROM document_extracts
+              WHERE file_hash = ?
+                AND status = 'ready'
+              ORDER BY COALESCE(finished_at, updated_at) DESC, updated_at DESC
+              LIMIT 1
+            `,
+          )
+          .get(fileHash)
+  } catch (err) {
+    console.warn('[documentExtractStore] tryReuseExtractByHash lookup failed:', err?.message)
+    return null
+  }
 
   if (!existing) return null
 
@@ -296,7 +309,7 @@ export async function tryReuseExtractByHash(db, { fileHash, documentId } = {}) {
       existing.ocr_text ?? null,
       typeof existing.warnings === 'string' ? existing.warnings : JSON.stringify(existing.warnings ?? []),
       existing.confidence ?? 0,
-      typeof existing.provenance === 'string' ? existing.provenance : JSON.stringify(existing.provenance ?? null),
+      existing.provenance == null ? null : (typeof existing.provenance === 'string' ? existing.provenance : JSON.stringify(existing.provenance)),
       Boolean(existing.ocr_used),
       documentId,
     )
@@ -331,7 +344,7 @@ export async function tryReuseExtractByHash(db, { fileHash, documentId } = {}) {
       existing.ocr_text ?? null,
       typeof existing.warnings === 'string' ? existing.warnings : JSON.stringify(existing.warnings ?? []),
       existing.confidence ?? 0,
-      typeof existing.provenance === 'string' ? existing.provenance : JSON.stringify(existing.provenance ?? null),
+      existing.provenance == null ? null : (typeof existing.provenance === 'string' ? existing.provenance : JSON.stringify(existing.provenance)),
       existing.ocr_used ? 1 : 0,
       documentId,
     )

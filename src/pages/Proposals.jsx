@@ -36,7 +36,10 @@ export default function Proposals() {
     queryFn: () => client.entities.Organization.list(),
   });
 
-  const activeProposals = grants.filter(g => ['drafting', 'interested', 'application_prep', 'revision'].includes(g.status));
+  const activeProposals = useMemo(
+    () => grants.filter(g => ['drafting', 'interested', 'application_prep', 'revision'].includes(g.status)),
+    [grants]
+  );
 
   // Extract all unique tags
   const allTags = useMemo(() => {
@@ -74,12 +77,11 @@ export default function Proposals() {
       filtered = filtered.filter(p => p.organization_id === filterOrg);
     }
 
-    // Deadline status filters
-    if (filters.hideExpired) {
-      filtered = filtered.filter(proposal => !isExpired(proposal));
-    }
+    // Deadline status filters â mutually exclusive; showOnlyExpired takes precedence
     if (filters.showOnlyExpired) {
       filtered = filtered.filter(proposal => isExpired(proposal));
+    } else if (filters.hideExpired) {
+      filtered = filtered.filter(proposal => !isExpired(proposal));
     }
 
     // Search filter
@@ -96,15 +98,23 @@ export default function Proposals() {
     // Amount filters
     if (filters.minAmount !== '') {
       const minAmount = parseFloat(filters.minAmount);
-      filtered = filtered.filter(proposal => 
-        proposal.amount_max && proposal.amount_max >= minAmount
-      );
+      filtered = filtered.filter(proposal => {
+        const bestAmount =
+          proposal.amount_max ?? proposal.typical_award ?? proposal.amount_min ?? null;
+        // If no amount data at all, keep the record (prefer recall over suppression)
+        if (bestAmount === null) return true;
+        return bestAmount >= minAmount;
+      });
     }
     if (filters.maxAmount !== '') {
       const maxAmount = parseFloat(filters.maxAmount);
-      filtered = filtered.filter(proposal =>
-        proposal.amount_max && proposal.amount_max <= maxAmount
-      );
+      filtered = filtered.filter(proposal => {
+        const lowestAmount =
+          proposal.amount_min ?? proposal.typical_award ?? proposal.amount_max ?? null;
+        // If no amount data at all, keep the record (prefer recall over suppression)
+        if (lowestAmount === null) return true;
+        return lowestAmount <= maxAmount;
+      });
     }
 
     // Funder type filter

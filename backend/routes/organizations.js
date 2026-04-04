@@ -13,6 +13,7 @@ import { COMPREHENSIVE_APPLICATION_DEFAULTS } from '../config/comprehensiveAppli
 import { getAccessibleOrganizationIds, isAdminUser, ensureOrganizationAccess, requireAuthenticatedUser } from '../utils/accessControl.js'
 
 const router = express.Router();
+router.use(ensureAuth); // Apply auth to all routes
 
 // Whitelist of allowed columns for UPDATE operations
 const ALLOWED_ORGANIZATION_COLUMNS = new Set([
@@ -102,8 +103,13 @@ async function ensureCanonicalSections(db, profileId, updatedBy = 'org-sync') {
         `
   const insert = db.prepare(sql)
   for (const sectionKey of canonicalSectionKeys) {
-    const defaults = CANONICAL_SECTION_DEFAULTS[sectionKey] ?? {}
-    await insert.run(profileId, sectionKey, JSON.stringify(defaults), updatedBy)
+    try {
+      const defaults = CANONICAL_SECTION_DEFAULTS[sectionKey] ?? {}
+      insert.run(profileId, sectionKey, JSON.stringify(defaults), updatedBy)
+    } catch (error) {
+      console.error(`Failed to insert profile section ${sectionKey}:`, error)
+      throw error
+    }
   }
 }
 
@@ -126,7 +132,12 @@ async function upsertProfileSection(db, profileId, sectionKey, data, updatedBy =
             updated_by = excluded.updated_by,
             updated_at = CURRENT_TIMESTAMP
         `
-  await db.prepare(sql).run(profileId, sectionKey, JSON.stringify(data ?? {}), updatedBy)
+  try {
+    db.prepare(sql).run(profileId, sectionKey, JSON.stringify(data ?? {}), updatedBy)
+  } catch (error) {
+    console.error(`Failed to upsert profile section ${sectionKey}:`, error)
+    throw error
+  }
 }
 
 async function syncOrganizationToProfileSections(db, { organizationId, orgRow, payload, actor }) {
@@ -193,10 +204,10 @@ async function syncOrganizationToProfileSections(db, { organizationId, orgRow, p
       ...CANONICAL_SECTION_DEFAULTS.financial_information,
       household_income: payload?.household_income ?? orgRow?.household_income ?? null,
       household_size: payload?.household_size ?? orgRow?.household_size ?? null,
-      financial_need_level: payload?.financial_need_level ?? '',
-      low_income: Boolean(payload?.low_income ?? false),
-      unemployed: Boolean(payload?.unemployed ?? false),
-      displaced_worker: Boolean(payload?.displaced_worker ?? false),
+      financial_need_level: payload?.financial_need_level ?? orgRow?.financial_need_level ?? '',
+      low_income: Boolean(payload?.low_income ?? orgRow?.low_income ?? false),
+      unemployed: Boolean(payload?.unemployed ?? orgRow?.unemployed ?? false),
+      displaced_worker: Boolean(payload?.displaced_worker ?? orgRow?.displaced_worker ?? false),
     },
     'org-sync',
   )
@@ -218,9 +229,49 @@ async function syncOrganizationToProfileSections(db, { organizationId, orgRow, p
     'org-sync',
   )
 
-  await db
-    .prepare('UPDATE profiles SET updated_at = CURRENT_TIMESTAMP WHERE id = ?')
-    .run(profileId)
+  await upsertProfileSection(
+    db,
+    profileId,
+    'military_service',
+    {
+      ...CANONICAL_SECTION_DEFAULTS.military_service,
+      is_veteran: Boolean(payload?.veteran ?? orgRow?.veteran ?? false),
+      is_active_duty: Boolean(payload?.active_duty ?? orgRow?.active_duty ?? false),
+    },
+    'org-sync',
+  )
+
+  await upsertProfileSection(
+    db,
+    profileId,
+    'disability_information',
+    {
+      ...CANONICAL_SECTION_DEFAULTS.disability_information,
+      has_disability: Boolean(payload?.disabled ?? orgRow?.disabled ?? false),
+      disability_types: safeParseJSON(payload?.disabilities ?? orgRow?.disabilities, []),
+    },
+    'org-sync',
+  )
+
+  await upsertProfileSection(
+    db,
+    profileId,
+    'housing_situation',
+    {
+      ...CANONICAL_SECTION_DEFAULTS.housing_situation,
+      financial_challenges: safeParseJSON(payload?.financial_challenges ?? orgRow?.financial_challenges, []),
+    },
+    'org-sync',
+  )
+
+  try {
+    db
+      .prepare('UPDATE profiles SET updated_at = CURRENT_TIMESTAMP WHERE id = ?')
+      .run(profileId)
+  } catch (error) {
+    console.error('Failed to update profile timestamp:', error)
+    throw error
+  }
 
   return profileId
 }
@@ -234,13 +285,14 @@ router.get('/', ensureAuth, async (req, res) => {
     const { search, state, type } = req.query;
     const { limit, offset } = validatePagination(req.query);
     
-    let query = 'SELECT * FROM organizations WHERE 1=1';
+    let query = 'SELECT * FROM organizations WHERE deleted_at IS NULL';
     const params = [];
 
     // Access control: non-admins can only see organizations linked to their profiles.
     if (!isAdminUser(user)) {
       const orgIds = await getAccessibleOrganizationIds(req.db, user)
       if (!orgIds || orgIds.size === 0) {
+        console.info('[organizations] GET / â user %s has no accessible org IDs; returning empty list', user?.id ?? 'unknown')
         return res.json([])
       }
       const placeholders = Array.from(orgIds).map(() => '?').join(', ')
@@ -267,7 +319,13 @@ router.get('/', ensureAuth, async (req, res) => {
     query += ' ORDER BY created_at DESC LIMIT ? OFFSET ?';
     params.push(limit, offset);
     
-    const orgs = await req.db.prepare(query).all(...params);
+    let orgs;
+    try {
+      orgs = req.db.prepare(query).all(...params);
+    } catch (error) {
+      console.error('Database query failed:', error);
+      throw error;
+    }
     
     // Parse JSON fields safely
     const parsed = orgs.map(org => ({
@@ -281,8 +339,12 @@ router.get('/', ensureAuth, async (req, res) => {
       federal_registrations: safeParseJSON(org.federal_registrations, []),
       financial_challenges: safeParseJSON(org.financial_challenges, [])
     }));
-    
-    res.json(parsed);
+
+    const merged = await Promise.all(
+      parsed.map(org => mergeProfileSectionsIntoOrg(req.db, org.id, org))
+    );
+
+    res.json(merged);
   } catch (error) {
     console.error('Error listing organizations:', error);
     res.status(500).json(formatError(error));
@@ -294,14 +356,14 @@ router.get('/', ensureAuth, async (req, res) => {
  * Profile sections hold the narrative/comprehensive data that the raw organizations table may not have.
  */
 async function mergeProfileSectionsIntoOrg(db, orgId, base) {
-  const profileRow = await db
+  const profileRow = db
     .prepare(
       `SELECT id FROM profiles WHERE organization_id = ? ORDER BY created_at ASC LIMIT 1`
     )
     .get(orgId)
   if (!profileRow?.id) return base
 
-  const sectionRows = await db
+  const sectionRows = db
     .prepare(
       `SELECT section_key, data FROM profile_sections WHERE profile_id = ?`
     )
@@ -376,7 +438,7 @@ async function mergeProfileSectionsIntoOrg(db, orgId, base) {
 router.get('/:id', ensureAuth, async (req, res) => {
   try {
     if (!(await ensureOrganizationAccess(req, res, req.params.id))) return
-    const org = await req.db.prepare('SELECT * FROM organizations WHERE id = ?').get(req.params.id);
+    const org = req.db.prepare('SELECT * FROM organizations WHERE id = ?').get(req.params.id);
     
     if (!org) {
       return res.status(404).json({ error: 'Organization not found' });
@@ -439,12 +501,12 @@ router.post('/', ensureAuth, mutationRateLimiter, async (req, res) => {
     const placeholders = columns.map(() => '?').join(', ');
     const values = [id, ...Object.values(sanitizedData)];
     
-    await req.db.prepare(`
+    req.db.prepare(`
       INSERT INTO organizations (${columns.join(', ')})
       VALUES (${placeholders})
     `).run(...values);
     
-    const org = await req.db.prepare('SELECT * FROM organizations WHERE id = ?').get(id);
+    const org = req.db.prepare('SELECT * FROM organizations WHERE id = ?').get(id);
 
     // Keep profile_sections (and matching/crawlers) in sync with comprehensive application data.
     let profileId = null
@@ -492,13 +554,13 @@ router.put('/:id', ensureAuth, mutationRateLimiter, async (req, res) => {
     const setClause = Object.keys(sanitizedData).map(key => `${key} = ?`).join(', ');
     const values = [...Object.values(sanitizedData), req.params.id];
     
-    await req.db.prepare(`
+    req.db.prepare(`
       UPDATE organizations 
       SET ${setClause}, updated_at = CURRENT_TIMESTAMP 
       WHERE id = ?
     `).run(...values);
     
-    const org = await req.db.prepare('SELECT * FROM organizations WHERE id = ?').get(req.params.id);
+    const org = req.db.prepare('SELECT * FROM organizations WHERE id = ?').get(req.params.id);
 
     // Keep profile_sections (and matching/crawlers) in sync with comprehensive application data.
     let profileId = null
@@ -525,13 +587,18 @@ router.delete('/:id', ensureAuth, mutationRateLimiter, async (req, res) => {
   try {
     if (!(await ensureOrganizationAccess(req, res, req.params.id))) return
     // Check if organization exists
-    const org = await req.db.prepare('SELECT id FROM organizations WHERE id = ?').get(req.params.id);
+    const org = req.db.prepare('SELECT id FROM organizations WHERE id = ?').get(req.params.id);
     if (!org) {
       return res.status(404).json({ error: 'Organization not found' });
     }
     
     // Soft delete by setting deleted_at (schema-managed; do not attempt runtime ALTER in Postgres)
-    await req.db.prepare('UPDATE organizations SET deleted_at = CURRENT_TIMESTAMP WHERE id = ?').run(req.params.id);
+    req.db.prepare('UPDATE organizations SET deleted_at = CURRENT_TIMESTAMP WHERE id = ?').run(req.params.id);
+
+    // Propagate soft-delete to linked profile so the matcher and Anya skip it
+    req.db
+      .prepare(`UPDATE profiles SET status = 'deleted', updated_at = CURRENT_TIMESTAMP WHERE organization_id = ?`)
+      .run(req.params.id);
     
     res.json({ success: true, message: 'Organization marked as deleted' });
   } catch (error) {
@@ -544,10 +611,12 @@ router.delete('/:id', ensureAuth, mutationRateLimiter, async (req, res) => {
 router.get('/:id/grants', ensureAuth, async (req, res) => {
   try {
     if (!(await ensureOrganizationAccess(req, res, req.params.id))) return
-    const grants = await req.db.prepare(`
-      SELECT * FROM grants 
-      WHERE organization_id = ? 
-      ORDER BY created_at DESC
+    const grants = req.db.prepare(`
+      SELECT g.* FROM grants g
+      JOIN organizations o ON o.id = g.organization_id
+      WHERE g.organization_id = ?
+        AND o.deleted_at IS NULL
+      ORDER BY g.created_at DESC
     `).all(req.params.id);
     
     res.json(grants);
@@ -561,10 +630,12 @@ router.get('/:id/grants', ensureAuth, async (req, res) => {
 router.get('/:id/documents', ensureAuth, async (req, res) => {
   try {
     if (!(await ensureOrganizationAccess(req, res, req.params.id))) return
-    const documents = await req.db.prepare(`
-      SELECT * FROM documents 
-      WHERE organization_id = ? 
-      ORDER BY created_at DESC
+    const documents = req.db.prepare(`
+      SELECT d.* FROM documents d
+      JOIN organizations o ON o.id = d.organization_id
+      WHERE d.organization_id = ?
+        AND o.deleted_at IS NULL
+      ORDER BY d.created_at DESC
     `).all(req.params.id);
     
     res.json(documents);

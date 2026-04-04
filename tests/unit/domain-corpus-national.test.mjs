@@ -24,16 +24,22 @@ function createTestDb() {
   const db = new Database(dbPath)
 
   // Add withTransaction method to match the wrapped DB interface used by opportunityInserter
-  db.withTransaction = async function withTransaction(fn) {
-    this.exec('BEGIN')
-    try {
-      const result = await fn(this)
-      this.exec('COMMIT')
-      return result
-    } catch (error) {
-      try { this.exec('ROLLBACK') } catch { /* ignore */ }
-      throw error
-    }
+  db.withTransaction = function withTransaction(fn) {
+    // better-sqlite3 is synchronous; wrap with its own transaction() for
+    // true atomicity. opportunityInserter must call withTransaction with a
+    // synchronous inner function, which matches the real production wrapper.
+    return new Promise((resolve, reject) => {
+      const txFn = this.transaction((txDb) => {
+        // fn must be synchronous in better-sqlite3 context
+        return fn(txDb)
+      })
+      try {
+        const result = txFn(this)
+        resolve(result)
+      } catch (err) {
+        reject(err)
+      }
+    })
   }
 
   // Create minimal funding_opportunities table matching opportunityInserter INSERT columns
@@ -114,12 +120,21 @@ test('no opportunity saved without URL - upsertFundingOpportunity skips', async 
       source: 'test',
       // no url, application_url, or source_url
     })
-    assert.equal(result.inserted, false)
-    assert.equal(result.skipped, true)
-    assert.ok(result.reason?.includes('URL') || result.reason?.includes('url'))
-
+    // Goal 1: inserter must reject records lacking an application path
+    assert.strictEqual(result.inserted, false, 'inserted must be false when no URL provided')
+    assert.strictEqual(result.skipped, true, 'skipped must be true when no URL provided')
+    // Goal 8: suppression reason must be present and human-readable
+    assert.ok(
+      typeof result.reason === 'string' && result.reason.length > 0,
+      'reason must be a non-empty string'
+    )
+    assert.ok(
+      /url/i.test(result.reason),
+      `Reason must reference missing URL, got: "${result.reason}"`
+    )
+    // Goal 8: nothing written to DB
     const count = db.prepare('SELECT COUNT(*) as c FROM funding_opportunities').get()
-    assert.equal(count.c, 0)
+    assert.strictEqual(count.c, 0, 'No rows should be inserted when URL is missing')
   } finally {
     db.close()
   }
@@ -132,10 +147,26 @@ test('business_startup_grants excludes loans and matching funds', async () => {
   const profile = { signals: { keywordSet: new Set(['startup']), location: {} } }
   const results = await runDomainCrawler({ profile, config, options: {} })
 
+  // Goal 7: crawler must return at least some candidates for a valid profile
+  assert.ok(
+    Array.isArray(results),
+    'runDomainCrawler must return an array'
+  )
+  assert.ok(
+    results.length > 0,
+    `business_startup_grants crawler returned 0 results â possible suppression bug (Goal 7/Goal 8)`
+  )
+
   for (const opp of results) {
+    // Goal 1: every returned opportunity must have an application path
+    assert.ok(
+      opp.application_url || opp.source_url || opp.url,
+      `Opportunity "${opp.title}" lacks any URL â violates Goal 1`
+    )
     const text = [opp.title, opp.description, ...(opp.eligibility_bullets || []), ...(opp.keywords || [])]
       .filter(Boolean)
       .join(' ')
+    // Goal 3: hard-reject loans and matching-fund requirements
     assert.equal(looksLikeLoan(text), false, `Loan keywords in: ${opp.title}`)
     assert.equal(looksLikeMatchingFunds(text), false, `Matching fund keywords in: ${opp.title}`)
   }
@@ -145,9 +176,18 @@ test('verified_url remains 0 when skipVerification=true', async () => {
   const { db } = createTestDb()
   try {
     await runDomainCorpusCrawl(db, { skipVerification: true })
-    const rows = db.prepare('SELECT verified_url FROM funding_opportunities LIMIT 5').all()
-    for (const row of rows) {
-      assert.equal(row.verified_url, 0, 'With skipVerification, verified_url should remain 0')
+    const allRows = db.prepare('SELECT verified_url FROM funding_opportunities').all()
+    // Goal 1 / Goal 8: if anything was inserted it must have verified_url=0
+    assert.ok(
+      allRows.length > 0,
+      'skipVerification crawl inserted 0 rows â corpus may be empty or crawler broken'
+    )
+    for (const row of allRows) {
+      assert.strictEqual(
+        row.verified_url,
+        0,
+        'With skipVerification=true, verified_url must remain 0 on every row'
+      )
     }
   } finally {
     db.close()

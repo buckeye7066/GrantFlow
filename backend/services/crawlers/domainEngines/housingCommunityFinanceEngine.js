@@ -19,8 +19,21 @@ const DIRECTORY_RESOURCES = [
 
 export async function runHousingCommunityFinanceEngine(profile, options = {}) {
   try {
-    return normalizeAndFilter(DIRECTORY_RESOURCES, ENGINE_ID, { strict_no_loans: false, strict_no_matching: false })
-  } catch {
+    const HOUSING_NEED_SIGNALS = ['housing', 'rental', 'shelter', 'homeownership', 'down_payment', 'repair', 'eviction', 'mortgage', 'affordable_housing']
+    const hasHousingNeed = !profile.needs || profile.needs.length === 0
+      || profile.needs.some(n => HOUSING_NEED_SIGNALS.includes(n))
+    const filtered = hasHousingNeed
+      ? DIRECTORY_RESOURCES
+      : DIRECTORY_RESOURCES.filter(resource => {
+          const titleLower = resource.title.toLowerCase()
+          const descLower = resource.description.toLowerCase()
+          return (profile.needs || []).some(need =>
+            titleLower.includes(need) || descLower.includes(need)
+          )
+        })
+    return normalizeAndFilter(filtered, ENGINE_ID, { strict_no_loans: false, strict_no_matching: false })
+  } catch (error) {
+    console.error(`[${ENGINE_ID}] engine error: ${error.message}`)
     return []
   }
 }

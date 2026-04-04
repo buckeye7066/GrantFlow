@@ -87,13 +87,13 @@ const DISEASE_SPECIFIC_PATTERNS = [
 // Pro bono / in-kind / referral-only indicators
 // ---------------------------------------------------------------------------
 const PRO_BONO_PATTERNS = [
-  'pro bono', 'no cost', 'free legal', 'free services', 'legal aid',
+  'pro bono', 'free legal', 'legal aid',
   'volunteer services', 'donated services',
 ]
 
 const IN_KIND_PATTERNS = [
   'in-kind', 'in kind', 'goods and services', 'non-monetary', 'material support',
-  'food pantry', 'food bank', 'clothing', 'household goods', 'furniture donation',
+  'household goods', 'furniture donation',
 ]
 
 const REFERRAL_ONLY_PATTERNS = [
@@ -138,7 +138,10 @@ const NEED_TEXT_PATTERNS = Object.entries({
   utilities: ['utilities', 'electric', 'gas bill', 'water bill', 'heating', 'cooling', 'internet access', 'utility assistance'],
   health_medical: ['medical', 'health', 'healthcare', 'prescription', 'dental', 'vision', 'mental health', 'behavioral health', 'therapy', 'health care', 'patient assistance', 'patient aid', 'medical assistance', 'chronic illness', 'chronic condition', 'diabetes', 'cancer', 'disease', 'condition-specific', 'disease-specific', 'illness'],
   food: ['food', 'nutrition', 'groceries', 'hunger', 'snap', 'meal', 'food assistance', 'food insecurity'],
-  education: ['education', 'tuition', 'scholarship', 'college', 'training', 'workforce', 'vocational', 'financial aid', 'student aid'],
+  education: ['education', 'tuition', 'scholarship', 'college', 'financial aid', 'student aid'],
+  employment: ['employment', 'workforce', 'job training', 'job placement', 'career', 'vocational', 'work training', 'employment assistance', 'job search', 'resume', 'job readiness'],
+  cash_assistance: ['cash assistance', 'financial assistance', 'emergency funds', 'direct payment', 'stipend', 'cash benefit', 'cash payment', 'monetary assistance', 'financial support'],
+  legal: ['legal aid', 'legal assistance', 'legal services', 'attorney', 'lawyer', 'legal help', 'legal counsel', 'civil legal'],
   disability: ['disability', 'disabled', 'adaptive', 'assistive technology', 'wheelchair', 'dme', 'chronic illness', 'mobility', 'adaptive equipment'],
   family_life: ['childcare', 'child care', 'caregiver', 'family', 'parenting', 'foster', 'adoption', 'kinship'],
   transportation: ['transportation', 'vehicle', 'car', 'transit', 'bus pass', 'rideshare', 'vehicle assistance'],
@@ -148,6 +151,10 @@ const NEED_TEXT_PATTERNS = Object.entries({
   emergency: ['emergency', 'crisis', 'disaster', 'fema', 'urgent', 'emergency assistance', 'disaster relief'],
   veteran: ['veteran', 'military service', 'armed forces', 'veterans benefits', 'veteran program'],
   clothing_goods: ['clothing', 'household goods', 'furniture', 'appliances', 'goods donation'],
+  technology_equipment: ['computer', 'laptop', 'desktop', 'tablet', 'internet', 'hotspot',
+    'wifi', 'broadband', 'digital', 'technology', 'device', 'equipment grant',
+    'digital equity', 'digital inclusion', 'connectivity', 'tech assistance',
+    'computer access', 'internet access'],
 })
 
 // ---------------------------------------------------------------------------
@@ -259,8 +266,8 @@ export function normalizeOpportunity(rawOpp) {
 
   // -- Need types supported --
   const explicitNeedTypes = safeParseArray(rawOpp.need_types_supported)
-  const catNeedTypes = safeParseArray(rawOpp.categories).map(normalizeNeedCategory).filter(Boolean)
-  const keywordNeedTypes = safeParseArray(rawOpp.keywords).map(normalizeNeedCategory).filter(Boolean)
+  const catNeedTypes = safeParseArray(rawOpp.categories).map(cat => NEED_ALIAS_MAP[cat?.toLowerCase()] || cat).filter(Boolean)
+  const keywordNeedTypes = safeParseArray(rawOpp.keywords).map(kw => NEED_ALIAS_MAP[kw?.toLowerCase()] || kw).filter(Boolean)
   const textNeedTypes = extractNeedTypesFromText(text)
   const allNeedTypes = [...new Set([
     ...explicitNeedTypes,

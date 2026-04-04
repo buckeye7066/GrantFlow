@@ -31,8 +31,8 @@ function extractUrlsWithContext(text) {
                   if (seen.has(url)) continue
                   seen.add(url)
                   const titleFromLine = line.replace(URL_REGEX, '').replace(/^[-*\u2022\s]+|\s*[-*\u2022]\s*$/g, '').trim().slice(0, 300)
-                  const titleFromUrl = parsedUrl.pathname ? decodeURIComponent(parsedUrl.pathname.split('/').filter(Boolean).pop() || parsedUrl.hostname) : parsedUrl.hostname
-                  const title = titleFromLine || titleFromUrl || `Grant link (${parsedUrl.hostname})`
+                  const titleFromUrl = parsedUrl?.pathname ? decodeURIComponent(parsedUrl.pathname.split('/').filter(Boolean).pop() || parsedUrl.hostname) : parsedUrl?.hostname
+                  const title = titleFromLine || titleFromUrl || `Grant link (${parsedUrl?.hostname || 'unknown'})`
                   results.push({ url, title, line })
           }
     }
@@ -42,21 +42,28 @@ function extractUrlsWithContext(text) {
 /**
  * Upsert opportunities from document text into funding_opportunities so they appear globally in Discover.
  */
-export async function extractAndUpsertOpportunitiesFromText(db, text) {
+export async function extractAndUpsertOpportunitiesFromText(db, text, profile = null) {
     const entries = extractUrlsWithContext(text)
     const results = { inserted: 0, skipped: 0, errors: [] }
     for (const { url, title } of entries) {
           try {
                   const opportunity = {
-                            title: title.slice(0, 500),
-                            source_url: url,
-                            application_url: url,
-                            description: `Imported from URL. Source: ${url}`,
-                            source: 'url_import',
-                            record_origin: 'url_import',
-                            opportunity_type: 'grant',
-                            is_national: true,
-                  }
+  title: title.slice(0, 500),
+  source_url: url,
+  application_url: url,  // Stored as candidate; must be verified before decision engine sets ACCEPT
+  description: `Imported from URL. Source: ${url}`,
+  source: 'url_import',
+  record_origin: 'url_import',
+  opportunity_type: 'grant',
+  is_national: true,
+  eligibility_status: 'pending',
+  match_decision: 'PENDING',
+  match_explanation: 'Imported from URL; pending full evaluation by matchEngine.',
+  matched_needs: JSON.stringify([]),
+  ineligibility_reasons: JSON.stringify([]),
+  matcher_version: 'pending',
+  evaluated_at: null,
+}
                   const out = await upsertFundingOpportunity(db, opportunity)
                   if (out.inserted) results.inserted += 1
                   else results.skipped += 1

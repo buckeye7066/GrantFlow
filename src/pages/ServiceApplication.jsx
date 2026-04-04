@@ -70,7 +70,14 @@ export default function ServiceApplication() {
   const [errors, setErrors] = useState({})
 
   const handleInputChange = (field, value) => {
-    setFormData((prev) => ({ ...prev, [field]: value }))
+    setFormData((prev) => {
+      const next = { ...prev, [field]: value }
+      // If clientCategory changes after cost was acknowledged, revoke acknowledgement
+      if (field === 'clientCategory' && prev.clientCategory !== value) {
+        next.agreeToCost = false
+      }
+      return next
+    })
     // Clear error for this field
     setErrors((prev) => ({ ...prev, [field]: '' }))
   }
@@ -86,12 +93,10 @@ export default function ServiceApplication() {
 
   const calculateTotal = () => {
     if (!formData.clientCategory) return 0
-    const categoryKey = {
-      individual: 'individual',
-      small: 'small',
-      midSize: 'midSize',
-      large: 'large',
-    }[formData.clientCategory]
+    const validCategories = ['individual', 'small', 'midSize', 'large']
+    const categoryKey = validCategories.includes(formData.clientCategory)
+      ? formData.clientCategory
+      : null
 
     return formData.selectedServices.reduce((total, service) => {
       return total + (SERVICE_PRICING[service]?.[categoryKey] || 0)
@@ -109,7 +114,9 @@ export default function ServiceApplication() {
     if (formData.selectedServices.length === 0) {
       newErrors.selectedServices = 'Please select at least one service'
     }
-    if (!formData.agreeToCost) newErrors.agreeToCost = 'Please acknowledge the estimated cost'
+    if (formData.selectedServices.length > 0 && formData.clientCategory && !formData.agreeToCost) {
+  newErrors.agreeToCost = 'Please acknowledge the estimated cost'
+}
     if (!formData.agreeToTerms) newErrors.agreeToTerms = 'Please agree to the terms and conditions'
 
     setErrors(newErrors)
@@ -135,6 +142,9 @@ export default function ServiceApplication() {
         body: JSON.stringify({
           ...formData,
           totalCost: calculateTotal(),
+          totalCostNote: formData.selectedServices.includes('Hourly Consultation & Advisory')
+            ? 'Hourly rate shown; actual total depends on hours worked'
+            : 'Flat-fee estimate',
           submittedAt: new Date().toISOString(),
         }),
       })
@@ -174,10 +184,10 @@ export default function ServiceApplication() {
             <p>Fax: 423.414.5290</p>
           </div>
           <Button
-            onClick={() => navigate('/login')}
+            onClick={() => navigate('/dashboard')}
             className="mt-6"
           >
-            Return to Login
+            Go to Dashboard
           </Button>
         </div>
       </AuthShell>

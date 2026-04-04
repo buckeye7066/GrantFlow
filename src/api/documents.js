@@ -4,7 +4,7 @@ export function listDocuments(filters = {}) {
   const params = new URLSearchParams()
   Object.entries(filters)
     .filter(([, value]) => value !== undefined && value !== null && value !== '')
-    .forEach(([key, value]) => params.set(key, value))
+    .forEach(([key, value]) => params.set(key, String(value)))
 
   const query = params.toString()
   const url = query ? `/api/documents?${query}` : '/api/documents'
@@ -43,9 +43,10 @@ export function parseAllProfileDocuments(profileId, options = {}) {
   if (!profileId) {
     throw new Error('profileId is required')
   }
+  const { profile_id: _ignored, ...safeOptions } = options || {}
   const payload = {
     profile_id: profileId,
-    ...(options || {}),
+    ...safeOptions,
   }
   return apiFetch('/api/documents/parse-all', {
     method: 'POST',

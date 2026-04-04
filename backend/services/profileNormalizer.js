@@ -6,7 +6,8 @@
  * need category normalization, and fingerprint computation.
  */
 
-import crypto from 'crypto'
+import { createHash } from 'crypto'
+import { resolveApplicantType } from './profileHelpers.js'
 
 // ---------------------------------------------------------------------------
 // Need category alias map
@@ -53,6 +54,14 @@ export const NEED_ALIAS_MAP = {
   groceries: 'food',
   snap: 'food',
 
+  // Employment / workforce
+  employment: 'employment',
+  job: 'employment',
+  jobs: 'employment',
+  workforce: 'employment',
+  job_training: 'employment',
+  career: 'employment',
+
   // Education / student
   education: 'education',
   student: 'education',
@@ -61,7 +70,6 @@ export const NEED_ALIAS_MAP = {
   scholarship: 'education',
   school: 'education',
   training: 'education',
-  workforce: 'education',
   vocational: 'education',
   financial_aid: 'education',
 
@@ -134,6 +142,50 @@ export const NEED_ALIAS_MAP = {
   goods: 'clothing_goods',
   household_goods: 'clothing_goods',
   furniture: 'clothing_goods',
+  uniforms: 'clothing_goods',
+  work_clothing: 'clothing_goods',
+  work_uniforms: 'clothing_goods',
+  work_clothes: 'clothing_goods',
+  professional_clothing: 'clothing_goods',
+  interview_clothing: 'clothing_goods',
+
+  // Technology / equipment / digital access
+  technology: 'technology_equipment',
+  computer: 'technology_equipment',
+  laptop: 'technology_equipment',
+  desktop: 'technology_equipment',
+  tablet: 'technology_equipment',
+  hotspot: 'technology_equipment',
+  wifi: 'technology_equipment',
+  broadband: 'technology_equipment',
+  digital_access: 'technology_equipment',
+  digital_equity: 'technology_equipment',
+  digital_inclusion: 'technology_equipment',
+  device: 'technology_equipment',
+  phone: 'technology_equipment',
+  cell_phone: 'technology_equipment',
+  smartphone: 'technology_equipment',
+  equipment: 'technology_equipment',
+
+  // Cash assistance / financial aid
+  cash_assistance: 'cash_assistance',
+  income_support: 'cash_assistance',
+  financial_assistance: 'cash_assistance',
+  tanf: 'cash_assistance',
+  ssi: 'cash_assistance',
+  ssdi: 'cash_assistance',
+
+  // Legal services
+  legal: 'legal',
+  legal_aid: 'legal',
+  legal_help: 'legal',
+
+  // Substance recovery (maps to health_medical)
+  substance_recovery: 'health_medical',
+  substance_abuse: 'health_medical',
+  addiction: 'health_medical',
+  rehab: 'health_medical',
+  recovery: 'health_medical',
 }
 
 // ---------------------------------------------------------------------------
@@ -245,7 +297,19 @@ function safeParseArray(val) {
 // ---------------------------------------------------------------------------
 // Normalize a profile + sections into a canonical structure
 // ---------------------------------------------------------------------------
-export function normalizeProfile(rawProfile, sections = null) {
+/**
+ * Normalize a raw profile and its sections into the canonical structure used
+ * by the decision engine.
+ *
+ * @param {Object} rawProfile     - Raw profile row or { profile, sections } object
+ * @param {Object|null} sections  - Profile sections keyed by section name
+ * @param {Object|null} signals   - Optional signals object from buildProfileSignals().
+ *   When provided, signals.needs (a Set of inferred need strings) is merged into
+ *   needCategories after the normalizer's own extraction, canonicalized via NEED_ALIAS_MAP.
+ *   This bridges the rich signal engine output into the scoring pipeline.
+ * @returns {Object|null} Normalized profile or null if rawProfile is falsy
+ */
+export function normalizeProfile(rawProfile, sections = null, signals = null) {
   if (!rawProfile) return null
 
   const profile = rawProfile?.profile ?? rawProfile
@@ -253,8 +317,7 @@ export function normalizeProfile(rawProfile, sections = null) {
 
   // -- Entity type --
   const rawType =
-    profile.primary_type ??
-    profile.applicant_type ??
+    resolveApplicantType(profile) ??
     profile.type ??
     profile.entity_type ??
     null
@@ -333,10 +396,30 @@ export function normalizeProfile(rawProfile, sections = null) {
       if (NEED_ALIAS_MAP[sectionKey.toLowerCase()]) {
         rawNeeds.push(sectionKey)
       }
+      // Also handle '_information' suffix keys used in real profile sections
+      // e.g. "health_information" → "health" → maps to "health_medical"
+      // e.g. "housing_information" → "housing", "education_information" → "education"
+      const baseKey = sectionKey.toLowerCase().replace(/_information$/, '')
+      if (baseKey !== sectionKey.toLowerCase() && NEED_ALIAS_MAP[baseKey]) {
+        rawNeeds.push(baseKey)
+      }
     }
   }
 
   const needCategories = [...new Set(rawNeeds.map(normalizeNeedCategory).filter(Boolean))]
+
+  // -- Merge signals.needs from buildProfileSignals() if provided --
+  // The signal engine produces a richer set of inferred needs from profile sections
+  // (healthcare, employment, cash_assistance, transportation, etc.) that normalizeProfile()
+  // may not extract on its own. Merge these in using the alias map so they're canonical.
+  if (signals?.needs instanceof Set) {
+    for (const need of signals.needs) {
+      const canonical = normalizeNeedCategory(need)
+      if (canonical && !needCategories.includes(canonical)) {
+        needCategories.push(canonical)
+      }
+    }
+  }
 
   // ---------------------------------------------------------------------------
   // Derive richer signals from section content
@@ -375,6 +458,7 @@ export function normalizeProfile(rawProfile, sections = null) {
   let isStudentFromSections = false
   const educationSection =
     profileSections?.education ??
+    profileSections?.education_information ??
     profileSections?.student ??
     null
   if (educationSection) {
@@ -478,6 +562,7 @@ export function normalizeProfile(rawProfile, sections = null) {
   let hasChronicIllnessFromSections = false
   const healthSection =
     profileSections?.health_medical ??
+    profileSections?.health_information ??
     profileSections?.medical ??
     profileSections?.health ??
     null
@@ -530,10 +615,16 @@ export function normalizeProfile(rawProfile, sections = null) {
 
   const hasEmergencyNeed = needCategories.includes('emergency') || hasEmergencyFromSections
 
+  // Ensure 'emergency' appears in needCategories when section-derived emergency is detected
+  if (hasEmergencyFromSections && !needCategories.includes('emergency')) {
+    needCategories.push('emergency')
+  }
+
   // -- Housing instability --
   let hasHousingInstabilityFromSections = false
   const housingSection =
     profileSections?.housing ??
+    profileSections?.housing_information ??
     profileSections?.shelter ??
     null
   if (housingSection) {
@@ -551,10 +642,16 @@ export function normalizeProfile(rawProfile, sections = null) {
 
   const hasHousingNeed = needCategories.includes('housing') || hasHousingInstabilityFromSections
 
+  // Ensure 'housing' appears in needCategories when section-derived housing instability is detected
+  if (hasHousingInstabilityFromSections && !needCategories.includes('housing')) {
+    needCategories.push('housing')
+  }
+
   // -- Employment need signals --
   let hasEmploymentNeed = false
   const employmentSection =
     profileSections?.employment ??
+    profileSections?.employment_information ??
     profileSections?.work ??
     profileSections?.income ??
     null
@@ -570,7 +667,58 @@ export function normalizeProfile(rawProfile, sections = null) {
     }
   }
 
+  // Ensure 'employment' appears in needCategories when section-derived employment need is detected
+  if (hasEmploymentNeed && !needCategories.includes('employment')) {
+    needCategories.push('employment')
+  }
+
   const hasBusinessNeed = needCategories.includes('business') || isBusiness
+
+  // Ensure 'business' appears in needCategories when business status is detected
+  if (isBusiness && !needCategories.includes('business')) {
+    needCategories.push('business')
+  }
+
+  // -- Financial information section: derive need categories from explicit content --
+  // Real profiles store financial data in a 'financial_information' section which doesn't
+  // directly map to a canonical need type. Parse its content to infer relevant needs.
+  const financialSection =
+    profileSections?.financial_information ??
+    profileSections?.financial ??
+    null
+  if (financialSection) {
+    const fa = financialSection.answers ?? financialSection
+    if (fa && typeof fa === 'object') {
+      // Combine all text fields to look for explicit need indicators
+      const finText = [
+        fa.notes, fa.challenges, fa.needs, fa.description, fa.financial_needs,
+        fa.housing_costs, fa.rent_mortgage, fa.food_costs, fa.utility_costs,
+      ].filter(Boolean).join(' ').toLowerCase()
+
+      const finNeedKeywords = {
+        housing: ['rent', 'housing', 'evict', 'mortgage'],
+        food: ['food', 'groceries', 'hunger', 'nutrition'],
+        utilities: ['utility', 'electric', 'gas bill', 'water bill', 'heating'],
+        health_medical: ['medical', 'health', 'prescription'],
+      }
+      for (const [need, keywords] of Object.entries(finNeedKeywords)) {
+        if (!needCategories.includes(need) && keywords.some((kw) => finText.includes(kw))) {
+          needCategories.push(need)
+        }
+      }
+
+      // Low-income household signals: add food and utilities as baseline needs
+      const monthlyIncome = Number(fa.monthly_income ?? fa.income ?? 0)
+      const annualIncome = Number(fa.annual_income ?? fa.household_income ?? 0)
+      const isLowIncome = fa.is_low_income || fa.financial_hardship || fa.receives_benefits ||
+        (monthlyIncome > 0 && monthlyIncome < 2000) ||
+        (annualIncome > 0 && annualIncome < 24000)
+      if (isLowIncome) {
+        if (!needCategories.includes('food')) needCategories.push('food')
+        if (!needCategories.includes('utilities')) needCategories.push('utilities')
+      }
+    }
+  }
 
   // -- Age (for scholarship/senior eligibility) --
   const age = profile.age ?? null
@@ -701,11 +849,19 @@ export function computeProfileFingerprint(normalizedProfile) {
     isNonprofit: normalizedProfile.isNonprofit,
     isBusiness: normalizedProfile.isBusiness,
     isCaregiver: normalizedProfile.isCaregiver,
+    hasFosterIndicator: normalizedProfile.hasFosterIndicator,
     hasChronicIllness: normalizedProfile.hasChronicIllness,
+    hasDisabilityNeed: normalizedProfile.hasDisabilityNeed,
     hasEmergencyNeed: normalizedProfile.hasEmergencyNeed,
+    hasHousingNeed: normalizedProfile.hasHousingNeed,
+    hasEmploymentNeed: normalizedProfile.hasEmploymentNeed,
+    hasBusinessNeed: normalizedProfile.hasBusinessNeed,
+    isRefugee: normalizedProfile.isRefugee,
+    householdHasChildren: normalizedProfile.householdHasChildren,
+    ageGroup: normalizedProfile.ageGroup,
+    enrolledPrograms: (normalizedProfile.enrolledPrograms ?? []).slice().sort(),
   }
-  return crypto
-    .createHash('sha256')
+  return createHash('sha256')
     .update(JSON.stringify(relevant))
     .digest('hex')
     .slice(0, 16)

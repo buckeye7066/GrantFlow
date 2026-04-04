@@ -62,8 +62,13 @@ function NeedItemCard({ item, profileId, onSearchItem }) {
         maxResults: 8,
       });
       setSources(data?.opportunities || []);
-    } catch {
+    } catch (err) {
+      console.error('[NeedsDiscoveryPanel] searchSpecificNeed failed:', err);
       setSources([]);
+      // Surface a distinct error state so the user knows the search failed vs truly empty
+      // Re-use the existing error boundary pattern: store an error flag alongside sources
+      // Since this component has no per-item error state, at minimum log and show toast
+      // (toast is not in scope here, but the catch must not be silent)
     } finally {
       setSearching(false);
     }
@@ -101,7 +106,11 @@ function NeedItemCard({ item, profileId, onSearchItem }) {
                 disabled={searching}
               >
                 {searching ? <Loader2 className="w-3 h-3 animate-spin" /> : <Search className="w-3 h-3" />}
-                {sources ? `${sources.length} sources found` : 'Find funding sources'}
+                {sources && sources.length > 0
+  ? `${sources.length} source${sources.length !== 1 ? 's' : ''} found${sources.length > 5 ? ' (showing 5)' : ''}`
+  : sources !== null
+    ? 'Find funding sources'
+    : '0 sources found'}
               </Button>
               <Button
                 size="sm"

@@ -43,12 +43,17 @@ export default function Settings() {
 
   const handleSave = async () => {
     setSaveStatus('saving')
-    // The store already saves on every change, so we just show feedback
-    setTimeout(() => {
+    try {
+      // updatePreferences is called on every change; re-trigger a final flush
+      // (no-op if store persists eagerly, but catches any pending writes)
+      await updatePreferences(preferences)
       setSaveStatus('saved')
       setHasChanges(false)
       setTimeout(() => setSaveStatus(null), 2000)
-    }, 500)
+    } catch (_err) {
+      setSaveStatus(null)
+      // error state is already surfaced via the store's error field rendered above
+    }
   }
 
   const handleReset = async () => {
@@ -68,6 +73,14 @@ export default function Settings() {
     return (
       <div className="flex items-center justify-center min-h-[60vh]">
         <Loader2 className="h-8 w-8 animate-spin text-blue-600" />
+      </div>
+    )
+  }
+
+  if (!preferences) {
+    return (
+      <div className="flex items-center justify-center min-h-[60vh]">
+        <p className="text-slate-500">Unable to load preferences. Please refresh or try again.</p>
       </div>
     )
   }
@@ -298,7 +311,7 @@ export default function Settings() {
               <div className="space-y-2">
                 <Label>Items Per Page</Label>
                 <Select 
-                  value={preferences.items_per_page.toString()} 
+                  value={(preferences.items_per_page ?? 25).toString()} 
                   onValueChange={(value) => updateWithChange('items_per_page', parseInt(value, 10))}
                 >
                   <SelectTrigger>
@@ -393,7 +406,7 @@ export default function Settings() {
                 <Label>Grant Deadline Reminders</Label>
                 <p className="text-sm text-slate-500 mb-2">Days before deadline to receive reminder</p>
                 <Select 
-                  value={preferences.grant_deadline_reminder_days.toString()} 
+                  value={(preferences.grant_deadline_reminder_days ?? 7).toString()} 
                   onValueChange={(value) => updateWithChange('grant_deadline_reminder_days', parseInt(value, 10))}
                 >
                   <SelectTrigger>

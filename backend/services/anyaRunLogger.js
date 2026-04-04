@@ -60,8 +60,9 @@ export async function createAnyaRun(db, options) {
             user_id,
             profile_id,
             requested_by,
-            authorized
-          ) VALUES (?, ?, ?, ?, 'queued', ?, ?, ?, ?)
+            authorized,
+            created_at
+          ) VALUES (?, ?, ?, ?, 'queued', ?, ?, ?, ?, CURRENT_TIMESTAMP)
         `
       )
       .run(id, runId, mode, operationType, userId, profileId, requestedBy, authorized ? 1 : 0)
@@ -95,28 +96,22 @@ export async function updateAnyaRunStatus(db, id, status) {
     throw new Error(`Invalid status: ${status}. Must be one of: ${VALID_STATUSES.join(', ')}`)
   }
   
-  const updates = {
-    status,
+  const isTerminal = ['completed', 'failed', 'cancelled'].includes(status)
+  const setClause = isTerminal
+    ? 'status = ?, completed_at = CURRENT_TIMESTAMP'
+    : 'status = ?'
+  const values = [status]
+  
+  try {
+    await db
+      .prepare(`UPDATE anya_runs SET ${setClause} WHERE id = ?`)
+      .run(...values, id)
+
+    console.log('[anya-runs] Updated Anya run status', { id, status })
+  } catch (error) {
+    console.error('[anya-runs] Failed to update Anya run status', { id, status, error })
+    throw error
   }
-  
-  // Set completed_at for terminal statuses
-  if (['completed', 'failed', 'cancelled'].includes(status)) {
-    updates.completed_at = 'CURRENT_TIMESTAMP'
-  }
-  
-  const setClause = Object.keys(updates).map(key => 
-    key === 'completed_at' ? `${key} = CURRENT_TIMESTAMP` : `${key} = ?`
-  ).join(', ')
-  
-  const values = Object.entries(updates)
-    .filter(([key]) => key !== 'completed_at')
-    .map(([, value]) => value)
-  
-  await db
-    .prepare(`UPDATE anya_runs SET ${setClause} WHERE id = ?`)
-    .run(...values, id)
-  
-  console.log('[anya-runs] Updated Anya run status', { id, status })
 }
 
 /**
@@ -151,13 +146,7 @@ export async function completeAnyaRun(db, id, results = {}) {
         WHERE id = ?
       `
     )
-    .run(
-      JSON.stringify(toolsUsed),
-      inputTokens,
-      outputTokens,
-      durationMs,
-      id
-    )
+    .run(JSON.stringify(toolsUsed), inputTokens, outputTokens, durationMs, id)
   
   console.log('[anya-runs] Completed Anya run', {
     id,
@@ -216,10 +205,7 @@ export async function getAnyaRunsByUser(db, userId, limit = 50) {
           operation_type,
           status,
           created_at,
-          completed_at,
-          duration_ms,
-          input_tokens,
-          output_tokens
+          completed_at
         FROM anya_runs
         WHERE user_id = ?
         ORDER BY created_at DESC
@@ -249,11 +235,8 @@ export async function getAnyaRunsByMode(db, mode, limit = 50) {
           operation_type,
           status,
           user_id,
-          profile_id,
           created_at,
-          completed_at,
-          duration_ms,
-          authorized
+          completed_at
         FROM anya_runs
         WHERE mode = ?
         ORDER BY created_at DESC
@@ -277,10 +260,7 @@ export async function getAnyaRunStatistics(db, since = null) {
       SELECT 
         mode,
         status,
-        COUNT(*) as count,
-        AVG(duration_ms) as avg_duration_ms,
-        SUM(input_tokens) as total_input_tokens,
-        SUM(output_tokens) as total_output_tokens
+        COUNT(*) as count
       FROM anya_runs
       WHERE created_at >= ?
       GROUP BY mode, status
@@ -290,15 +270,18 @@ export async function getAnyaRunStatistics(db, since = null) {
       SELECT 
         mode,
         status,
-        COUNT(*) as count,
-        AVG(duration_ms) as avg_duration_ms,
-        SUM(input_tokens) as total_input_tokens,
-        SUM(output_tokens) as total_output_tokens
+        COUNT(*) as count
       FROM anya_runs
       GROUP BY mode, status
       ORDER BY mode, status
     `
   
-  const rows = await db.prepare(query).all(since || undefined)
-  return rows
+  try {
+    const stmt = db.prepare(query)
+    const rows = since ? await stmt.all(since) : await stmt.all()
+    return rows
+  } catch (error) {
+    console.error('[anya-runs] Failed to fetch Anya run statistics', { since, error })
+    throw error
+  }
 }

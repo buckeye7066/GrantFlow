@@ -346,6 +346,18 @@ CREATE TABLE IF NOT EXISTS grants (
   funder_fax TEXT,
   funder_address TEXT,
 
+  -- Match decision metadata (canonical from matchEngine.js)
+  match_decision TEXT,
+  match_explanation TEXT,
+  matched_needs TEXT DEFAULT '[]',
+  eligibility_status TEXT,
+  ineligibility_reasons TEXT DEFAULT '[]',
+  profile_fingerprint TEXT,
+  opportunity_fingerprint TEXT,
+  matcher_version TEXT,
+  evaluated_at DATETIME,
+  match_confidence INTEGER,
+
   -- Tracking
   assigned_to TEXT,
   priority TEXT CHECK(priority IN ('low', 'medium', 'high', 'urgent'))
@@ -966,7 +978,7 @@ CREATE INDEX IF NOT EXISTS idx_opportunities_deadline ON funding_opportunities(d
 CREATE INDEX IF NOT EXISTS idx_opportunities_is_active ON funding_opportunities(is_active);
 CREATE INDEX IF NOT EXISTS idx_opportunities_state ON funding_opportunities(state);
 CREATE INDEX IF NOT EXISTS idx_fo_record_origin_active ON funding_opportunities(record_origin, is_active);
-CREATE INDEX IF NOT EXISTS idx_fo_source_source_id ON funding_opportunities(source, source_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_fo_source_source_id ON funding_opportunities(source, source_id);
 CREATE INDEX IF NOT EXISTS idx_fo_is_loan ON funding_opportunities(is_loan);
 CREATE INDEX IF NOT EXISTS idx_fo_state_active_deadline ON funding_opportunities(state, is_active, deadline);
 CREATE INDEX IF NOT EXISTS idx_fo_profile_id ON funding_opportunities(profile_id);
@@ -2028,3 +2040,21 @@ CREATE TABLE IF NOT EXISTS vehicle_opportunities (
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_vehicle_opportunities_link ON vehicle_opportunities(link);
 CREATE INDEX IF NOT EXISTS idx_vehicle_opportunities_created_at ON vehicle_opportunities(created_at);
+
+-- Exclusion Rules (procurement noise suppression)
+CREATE TABLE IF NOT EXISTS exclusion_rules (
+  rule_id TEXT PRIMARY KEY,
+  pattern TEXT,
+  action TEXT,
+  confidence_score REAL
+);
+
+-- Exclusion Audit (trail of suppression decisions)
+CREATE TABLE IF NOT EXISTS exclusion_audit (
+  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+  rule_id TEXT,
+  opportunity_id TEXT,
+  decision TEXT,
+  false_positive BOOLEAN,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);

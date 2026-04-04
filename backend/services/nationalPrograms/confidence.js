@@ -33,11 +33,11 @@ function fieldFilled(value) {
 
 export function computeConfidence(track, program) {
   const fields = track === 'PROVIDER' ? REQUIRED_FIELDS_PROVIDER : REQUIRED_FIELDS_CLIENT
-  const filled = fields.reduce((acc, key) => acc + (fieldFilled(program?.[key]) ? 1 : 0), 0)
+  const filled = fields.reduce((acc, key) => acc + (fieldFilled(program && program[key]) ? 1 : 0), 0)
   const base = fields.length > 0 ? filled / fields.length : 0
 
   // Boost if we have a plausible funding amounts structure
-  const amountsBoost = fieldFilled(program?.funding_amounts) ? 0.05 : 0
+  const amountsBoost = fieldFilled(program && program.funding_amounts) ? 0.05 : 0
 
   // Penalize if too many fields are unknown-ish placeholders
   const placeholders = ['unknown', 'n/a', 'na', 'tbd', 'none']

@@ -86,7 +86,7 @@ async function ensureMigrationsTable() {
   }
 
   // sqlite
-  db.exec(`
+  await db.exec(`
     CREATE TABLE IF NOT EXISTS _migrations (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       name TEXT NOT NULL UNIQUE,
@@ -106,10 +106,17 @@ async function applyMigration(filename) {
 
   console.log(`Applying: ${filename}`);
 
-  await db.withTransaction(async (tx) => {
-    await tx.exec(sql);
-    await tx.prepare('INSERT INTO _migrations (name) VALUES (?)').run(filename);
-  });
+  if (db.dialect === 'postgres') {
+    await db.withTransaction(async (tx) => {
+      await tx.exec(sql);
+      await tx.prepare('INSERT INTO _migrations (name) VALUES (?)').run(filename);
+    });
+  } else {
+    db.withTransaction((tx) => {
+      tx.exec(sql);
+      tx.prepare('INSERT INTO _migrations (name) VALUES (?)').run(filename);
+    });
+  }
 }
 
 function isIdempotentAlreadyAppliedError(err) {
@@ -145,6 +152,9 @@ async function main() {
 
   if (!ensureDirExists(migrationsDir)) {
     console.error('ERROR: migrations directory not found:', migrationsDir);
+    await db.close?.();
+    await db.close?.();
+    await db.close?.();
     process.exit(1);
   }
 
@@ -161,6 +171,8 @@ async function main() {
 
   if (pending.length === 0) {
     console.log('✓ Database is up to date. No migrations to apply.');
+    await db.close?.();
+    await db.close?.();
     process.exit(0);
   }
 
@@ -180,12 +192,17 @@ async function main() {
       }
 
       console.error(`  ✗ Failed: ${error?.message || error}\n`);
-      process.exit(1);
+      await db.close?.();
+    await db.close?.();
+    await db.close?.();
+    process.exit(1);
     }
   }
 
   console.log('✓ All migrations applied successfully');
-  process.exit(0);
+  await db.close?.();
+    await db.close?.();
+    process.exit(0);
 }
 
 main();

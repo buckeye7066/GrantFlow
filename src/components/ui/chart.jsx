@@ -50,20 +50,18 @@ const ChartStyle = ({
   id,
   config
 }) => {
-  const colorConfig = Object.entries(config).filter(([, config]) => config.theme || config.color)
+  const colorConfig = React.useMemo(
+    () => Object.entries(config).filter(([, itemCfg]) => itemCfg.theme || itemCfg.color),
+    [config]
+  )
 
-  if (!colorConfig.length) {
-    return null
-  }
-
-  // Use useEffect to set CSS variables dynamically instead of dangerouslySetInnerHTML
   React.useEffect(() => {
+    if (!colorConfig.length) return
     Object.entries(THEMES).forEach(([theme, prefix]) => {
-      const selector = prefix ? `${prefix} [data-chart="${id}"]` : `[data-chart="${id}"]`
-      const elements = prefix 
-        ? document.querySelectorAll(selector)
-        : document.querySelectorAll(`[data-chart="${id}"]`)
-      
+      const selector = prefix
+        ? `${prefix} [data-chart="${id}"]`
+        : `[data-chart="${id}"]`
+      const elements = document.querySelectorAll(selector)
       elements.forEach(element => {
         colorConfig.forEach(([key, itemConfig]) => {
           const color = itemConfig.theme?.[theme] || itemConfig.color
@@ -73,7 +71,7 @@ const ChartStyle = ({
         })
       })
     })
-  }, [id, config, colorConfig])
+  }, [id, colorConfig])
 
   return null
 }

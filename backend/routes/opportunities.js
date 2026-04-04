@@ -2,6 +2,7 @@ import express from 'express';
 import crypto from 'crypto';
 import { isAdminUser, requireAuthenticatedUser } from '../utils/accessControl.js'
 import { trustedOriginClause, trustedSourceClause } from '../utils/recordOrigins.js'
+import { isExpiredOpportunity, isDirectoryLike } from './opportunityHelpers.js'
 
 const router = express.Router();
 
@@ -36,31 +37,6 @@ function parseLooseDate(value) {
     .trim();
   const d = new Date(cleaned);
   return Number.isNaN(d.getTime()) ? null : d;
-}
-
-function isDirectoryLike(row) {
-  if (!row || typeof row !== 'object') return false;
-  const type = String(row.type || '').trim().toUpperCase();
-  if (type === 'DIRECTORY') return true;
-  const origin = String(row.record_origin || '').trim().toLowerCase();
-  if (origin.includes('directory')) return true;
-  const oppType = String(row.opportunity_type || '').trim().toLowerCase();
-  return oppType.includes('directory');
-}
-
-function isExpiredOpportunity(row, { now = new Date() } = {}) {
-  if (!row) return false;
-  if (isDirectoryLike(row)) return false;
-
-  const deadlineType = String(row.deadline_type || '').trim().toLowerCase();
-  if (deadlineType === 'rolling' || deadlineType === 'ongoing') return false;
-
-  const deadlineDate = parseLooseDate(row.deadline);
-  if (!deadlineDate) return false;
-
-  const cutoff = new Date(now);
-  cutoff.setHours(0, 0, 0, 0);
-  return deadlineDate.getTime() < cutoff.getTime();
 }
 
 function safeParseJSON(value, fallback = []) {
@@ -928,8 +904,7 @@ router.get('/meta/sources', async (req, res) => {
   try {
     const isPostgres = req.db?.dialect === 'postgres'
     const activeVal = isPostgres ? 'TRUE' : '1'
-    const conditions = ['source IS NOT NULL', `is_active = ${activeVal}`, trustedOriginClause(), trustedSourceClause()];
-    const params = [];
+    const conditions = ['source IS NOT NULL', `is_active = ?`, trustedOriginClause(), trustedSourceClause()]; const params = [activeVal];
     applyComplianceFilters(req.query.compliance, conditions, params);
     const whereClause = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
 
@@ -953,8 +928,7 @@ router.get('/meta/states', async (req, res) => {
   try {
     const isPostgres = req.db?.dialect === 'postgres'
     const activeVal = isPostgres ? 'TRUE' : '1'
-    const conditions = ['state IS NOT NULL', `is_active = ${activeVal}`, trustedOriginClause(), trustedSourceClause()];
-    const params = [];
+    const conditions = ['state IS NOT NULL', `is_active = ?`, trustedOriginClause(), trustedSourceClause()]; const params = [activeVal];
     applyComplianceFilters(req.query.compliance, conditions, params);
     const whereClause = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
 
@@ -1212,11 +1186,11 @@ router.get('/geo/scored', async (req, res) => {
     if (profileId && profileId !== 'all' && profileId !== 'admin') {
       try {
         const { loadProfileContext } = await import('../services/profileHelpers.js');
-        const { calculateMatchScore } = await import('../services/matchingEngine.js');
+        const { scoreOpportunity } = await import('../services/matchEngine.js');
 
         const profileContext = await loadProfileContext(db, profileId);
         for (const opp of decorated) {
-          const result = calculateMatchScore(profileContext, opp);
+          const result = scoreOpportunity(profileContext, opp);
           opp.match_score = result.score;
           opp.match_reasons = result.reasons || [];
         }
@@ -1250,7 +1224,7 @@ router.get('/:id([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-
     const activeVal = isPostgres ? 'TRUE' : '1'
     const opp = await req.db.prepare(`
       SELECT * FROM funding_opportunities
-      WHERE id = ? AND is_active = ${activeVal}
+      WHERE id = ? AND is_active = ?
         AND ${trustedOriginClause()} AND ${trustedSourceClause()}
     `).get(req.params.id);
 

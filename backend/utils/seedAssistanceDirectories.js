@@ -55,9 +55,17 @@ export async function seedAssistanceDirectories(db) {
 
   let attempted = 0
 
-  const upsertOne = async (item, source) => {
-    const url = item?.url || item?.source_url || item?.application_url || item?.evidence_url
-    if (!url) return
+  let skipped = 0
+
+const upsertOne = async (item, source) => {
+  const url = item?.url || item?.source_url || item?.application_url || item?.evidence_url
+  if (!url) {
+    skipped++
+    console.warn(
+      `[seedAssistanceDirectories] Skipping record with no URL (source=${source}, title=${item?.title || item?.name || 'unknown'}) â violates Goal 1 (no application path)`,
+    )
+    return
+  }
 
     const isNational = Boolean(item?.is_national) || item?.state === 'nationwide'
     const state = item?.state || (isNational ? 'nationwide' : null)
@@ -84,7 +92,23 @@ export async function seedAssistanceDirectories(db) {
       record_origin: 'curated_verified',
     }
 
-    await upsertFundingOpportunity(db, opportunity)
+    // upsertFundingOpportunity is the correct call for the opportunity catalogue (not the user pipeline).
+// However the record MUST be validated before insertion:
+// 1. URL must be non-empty and well-formed before reaching the DB (Goal 1).
+// 2. The opportunity must pass relevanceFilter before catalogue insertion (Goal 3).
+// 3. Audit fields must be stamped so re-evaluation is possible (Goals 8, 9).
+//
+// Apply URL validation and stamp provenance metadata here:
+if (!url || !/^https?:\/\/.+/.test(url)) return  // Goal 1: reject records with no real application path
+
+const catalogueRecord = {
+  ...opportunity,
+  record_origin: 'curated_verified',
+  matcher_version: null,   // not yet matched to a profile; set at match time
+  evaluated_at: null,      // set when match engine runs
+  inserted_at: new Date().toISOString(),
+}
+await upsertFundingOpportunity(db, catalogueRecord)
   }
 
   for (const p of programs) {
@@ -92,7 +116,9 @@ export async function seedAssistanceDirectories(db) {
     try {
       await upsertOne(p, 'state_211')
     } catch (e) {
-      // ignore per item
+      console.warn(
+        `[seedAssistanceDirectories] Failed to upsert state program (title=${p?.title || p?.name || 'unknown'}): ${e?.message || String(e)}`,
+      )
     }
   }
 
@@ -101,12 +127,15 @@ export async function seedAssistanceDirectories(db) {
     try {
       await upsertOne(n, 'assistance_network')
     } catch (e) {
-      // ignore per item
+      console.warn(
+        `[seedAssistanceDirectories] Failed to upsert network record (title=${n?.title || n?.name || 'unknown'}): ${e?.message || String(e)}`,
+      )
     }
   }
 
   return {
     attempted,
+    skipped,          // records dropped because no application URL
     state_programs: programs.length,
     networks: networks.length,
   }

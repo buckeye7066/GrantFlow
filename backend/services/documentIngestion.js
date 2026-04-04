@@ -51,12 +51,14 @@ function normalizeEnableAi(value) {
 async function createAnthropicClient() {
   const key = String(process.env.ANTHROPIC_API_KEY || '').trim()
   if (!key) return null
-  const Anthropic = (await import('@anthropic-ai/sdk')).default
-  return new Anthropic({
+  try {
+    const Anthropic = (await import('@anthropic-ai/sdk')).default
+    return new Anthropic({
     apiKey: key,
     timeout: Number(process.env.ANYA_ANTHROPIC_TIMEOUT_MS || 20_000),
     maxRetries: Number(process.env.ANYA_ANTHROPIC_MAX_RETRIES || 1),
   })
+  } catch (error) { console.error('Failed to load Anthropic SDK:', error); return null; }
 }
 
 function extractAnthropicText(response) {
@@ -697,7 +699,7 @@ export async function processDocumentIngestionJob({
         heuristicBasic,
       )
       if (updatedBasic.size > 0) {
-        await upsertProfileSection(db, profile.id, 'basic_information', mergedBasic, document.id)
+        if (!profile?.id) throw new Error('Profile ID required for section updates'); await upsertProfileSection(db, profile.id, 'basic_information', mergedBasic, document.id)
         sections.basic_information = mergedBasic
         updates.push({ section_key: 'basic_information', updated_fields: Array.from(updatedBasic) })
         aiSectionsLog.basic_information = { ...(aiSectionsLog.basic_information || {}), heuristic: heuristicBasic }
@@ -709,7 +711,7 @@ export async function processDocumentIngestionJob({
         heuristicOrg,
       )
       if (updatedOrg.size > 0) {
-        await upsertProfileSection(db, profile.id, 'organization_details', mergedOrg, document.id)
+        if (!profile?.id) throw new Error('Profile ID required for section updates'); await upsertProfileSection(db, profile.id, 'organization_details', mergedOrg, document.id)
         sections.organization_details = mergedOrg
         updates.push({ section_key: 'organization_details', updated_fields: Array.from(updatedOrg) })
         aiSectionsLog.organization_details = { ...(aiSectionsLog.organization_details || {}), heuristic: heuristicOrg }
@@ -721,7 +723,7 @@ export async function processDocumentIngestionJob({
         heuristicInsurance,
       )
       if (updatedIns.size > 0) {
-        await upsertProfileSection(db, profile.id, 'medical_insurance', mergedIns, document.id)
+        if (!profile?.id) throw new Error('Profile ID required for section updates'); await upsertProfileSection(db, profile.id, 'medical_insurance', mergedIns, document.id)
         sections.medical_insurance = mergedIns
         updates.push({ section_key: 'medical_insurance', updated_fields: Array.from(updatedIns) })
         aiSectionsLog.medical_insurance = { ...(aiSectionsLog.medical_insurance || {}), heuristic: heuristicInsurance }
@@ -774,7 +776,7 @@ export async function processDocumentIngestionJob({
         const { data: merged, updatedFields } = mergeSectionData(existing, suggestion)
 
         if (updatedFields.size > 0) {
-          await upsertProfileSection(db, profile.id, sectionKey, merged, document.id)
+          if (!profile?.id) throw new Error('Profile ID required for section updates'); if (!profile?.id) throw new Error('Profile ID required for section updates'); await upsertProfileSection(db, profile.id, sectionKey, merged, document.id)
           sections[sectionKey] = merged
           updates.push({
             section_key: sectionKey,
@@ -836,7 +838,7 @@ export async function processDocumentIngestionJob({
             const { data: merged, updatedFields } = mergeSectionData(existing, suggestion)
 
             if (updatedFields.size > 0) {
-              await upsertProfileSection(db, profile.id, sectionKey, merged, document.id)
+              if (!profile?.id) throw new Error('Profile ID required for section updates'); if (!profile?.id) throw new Error('Profile ID required for section updates'); await upsertProfileSection(db, profile.id, sectionKey, merged, document.id)
               sections[sectionKey] = merged
               updates.push({
                 section_key: sectionKey,

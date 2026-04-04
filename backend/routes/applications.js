@@ -24,12 +24,16 @@ import {
 import { assertArtifactPathIsSafe } from '../apply/storageAdapter.js'
 
 const router = express.Router()
+router.use(requireAuthenticatedUser)
 
 async function ensureApplicationAccess(req, res, applicationId) {
-  const user = requireAuthenticatedUser(req, res)
-  if (!user) return null
+  const userId = getAuthUserId(req?.user ?? req?.ctx)
+  if (!userId) {
+    res.status(401).json({ error: 'Unauthorized' })
+    return null
+  }
 
-  const row = await req.db.prepare('SELECT * FROM applications WHERE id = ?').get(String(applicationId))
+  const row = await req.db.prepare('SELECT * FROM applications WHERE id = ?').get(applicationId && typeof applicationId === 'string' ? applicationId : String(applicationId || ''))
   if (!row) {
     res.status(404).json({ error: 'Not found' })
     return null
@@ -40,7 +44,7 @@ async function ensureApplicationAccess(req, res, applicationId) {
 
   // Extra safety: ensure org access (grant access should already imply this).
   if (row.organization_id) {
-    const ok = await ensureOrganizationAccess(req, res, String(row.organization_id))
+    const ok = await ensureOrganizationAccess(req, res, row.organization_id && typeof row.organization_id === 'string' ? row.organization_id : String(row.organization_id || ''))
     if (!ok) return null
   }
 
@@ -56,17 +60,17 @@ router.post('/prepare', async (req, res) => {
     return res.status(400).json({ error: 'grantId and organizationId are required' })
   }
 
-  const grant = await ensureGrantAccess(req, res, String(grantId))
+  const grant = await ensureGrantAccess(req, res, grantId && typeof grantId === 'string' ? grantId : String(grantId || ''))
   if (!grant) return
 
-  const okOrg = await ensureOrganizationAccess(req, res, String(organizationId))
+  const okOrg = await ensureOrganizationAccess(req, res, organizationId && typeof organizationId === 'string' ? organizationId : String(organizationId || ''))
   if (!okOrg) return
 
-  const userId = req.ctx?.userId ?? getAuthUserId(user)
+  const userId = req.ctx?.userId ?? getAuthUserId(req?.user ?? req?.ctx)
   const app = await prepareApplication({
     db: req.db,
-    grantId: String(grantId),
-    organizationId: String(organizationId),
+    grantId: grantId && typeof grantId === 'string' ? grantId : String(grantId || ''),
+    organizationId: organizationId && typeof organizationId === 'string' ? organizationId : String(organizationId || ''),
     userId,
   })
   return res.status(201).json(app)
@@ -100,7 +104,7 @@ router.put('/:id/sections/:sectionKey', async (req, res) => {
   const section = await upsertSection({
     db: req.db,
     applicationId: row.id,
-    sectionKey: String(req.params.sectionKey),
+    sectionKey: req.params.sectionKey && typeof req.params.sectionKey === 'string' ? req.params.sectionKey : String(req.params.sectionKey || ''),
     title,
     content,
   })
@@ -121,7 +125,7 @@ router.put('/:id/checklist/:key', async (req, res) => {
   const item = await setChecklistItem({
     db: req.db,
     applicationId: row.id,
-    key: String(req.params.key),
+    key: req.params.key && typeof req.params.key === 'string' ? req.params.key : String(req.params.key || ''),
     label,
     status,
   })
@@ -171,7 +175,7 @@ router.get('/:id/artifacts/:artifactId/download', async (req, res) => {
 
   const artifact = await req.db
     .prepare('SELECT * FROM application_artifacts WHERE id = ? AND application_id = ?')
-    .get(String(req.params.artifactId), String(row.id))
+    .get(req.params.artifactId && typeof req.params.artifactId === 'string' ? req.params.artifactId : String(req.params.artifactId || ''), row.id && typeof row.id === 'string' ? row.id : String(row.id || ''))
 
   if (!artifact) return res.status(404).json({ error: 'Not found' })
 
@@ -190,7 +194,14 @@ router.get('/:id/artifacts/:artifactId/download', async (req, res) => {
 
   res.setHeader('Content-Type', contentType)
   res.setHeader('Content-Disposition', `attachment; filename="application_${row.id}_${artifact.id}${ext || ''}"`)
-  return fs.createReadStream(resolved).pipe(res)
+  const stream = fs.createReadStream(resolved)
+stream.on('error', (err) => {
+  console.error('[applications] artifact stream error', { artifactId: req.params.artifactId, err })
+  if (!res.headersSent) {
+    res.status(500).json({ error: 'File read error' })
+  }
+})
+stream.pipe(res)
 })
 
 export default router

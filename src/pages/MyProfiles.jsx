@@ -17,7 +17,7 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { useToast } from "@/components/ui/use-toast";
 import ProfileCard from "@/components/profiles/ProfileCard";
 import { createPageUrl } from "@/utils";
-import { useAuthStore } from "@/stores/authStore";
+import { useAuthStore, normalizeUserAdmin } from "@/stores/authStore";
 import { Checkbox } from "@/components/ui/checkbox";
 
 // Deletion confirmation message
@@ -34,7 +34,7 @@ export default function MyProfiles() {
   const queryClient = useQueryClient();
   const { toast } = useToast();
   const user = useAuthStore((state) => state.user);
-  const isAdmin = Boolean(user?.is_admin);
+  const isAdmin = normalizeUserAdmin(user);
 
   const [viewMode, setViewMode] = useState(() => (isAdmin ? "all" : "mine"));
   const [includeDeleted, setIncludeDeleted] = useState(false);

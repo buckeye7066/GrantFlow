@@ -35,6 +35,11 @@ export async function createAnyaSession({ profileId, title, metadata } = {}) {
   })
 }
 
+export async function deleteAnyaSession(sessionId) {
+  if (!sessionId) return
+  return apiFetch(`/api/anya/sessions/${sessionId}`, { method: "DELETE" })
+}
+
 export async function getAnyaMessages(sessionId, { limit, direction } = {}) {
   if (!sessionId) return []
   const searchParams = new URLSearchParams()

@@ -64,7 +64,11 @@ export default function PrintableProfile({ organization, grants = [], contactMet
       if (grant.status && grouped[grant.status]) {
         grouped[grant.status].grants.push(grant);
       } else {
-        // Handle grants with an unrecognized or missing status
+        // Distinguish missing status from unrecognised status for observability
+        if (process.env.NODE_ENV !== 'production') {
+           
+          console.warn('[PrintableProfile] Grant with unexpected status:', grant.id, grant.status);
+        }
         if (!grouped['unknown']) {
           grouped['unknown'] = { label: "Unknown Status", grants: [] };
         }
@@ -75,7 +79,9 @@ export default function PrintableProfile({ organization, grants = [], contactMet
     // Create an ordered array of statuses that actually have grants
     const orderedAndFiltered = STATUSES.map(s => {
       const statusGroup = grouped[s.value];
-      return statusGroup && statusGroup.grants.length > 0 ? statusGroup : null;
+      return statusGroup && statusGroup.grants.length > 0
+        ? { value: s.value, label: statusGroup.label, grants: statusGroup.grants }
+        : null;
     }).filter(Boolean); // Filter out empty status groups
 
     // If there are any 'unknown' grants, add them at the end
@@ -156,6 +162,9 @@ export default function PrintableProfile({ organization, grants = [], contactMet
                               {grant.amount_max && <li>Typical Award: {formatMoney(grant.amount_max)}</li>}
                               {grant.deadline && !isNaN(new Date(grant.deadline)) && <li>Deadline: {format(new Date(grant.deadline), 'P')}</li>}
                               {grant.opportunity_type && <li>Category: {grant.opportunity_type.replace(/_/g, ' ')}</li>}
+                              {grant.application_url && (
+                                <li>Apply: <a href={grant.application_url} target="_blank" rel="noopener noreferrer" className="gf-item-url">{grant.application_url}</a></li>
+                              )}
                             </ul>
                         )}
                       </article>

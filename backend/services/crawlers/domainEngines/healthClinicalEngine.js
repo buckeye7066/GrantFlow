@@ -20,8 +20,42 @@ const DIRECTORY_RESOURCES = [
 
 export async function runHealthClinicalEngine(profile, options = {}) {
   try {
-    return normalizeAndFilter(DIRECTORY_RESOURCES, ENGINE_ID, { strict_no_loans: false, strict_no_matching: false })
-  } catch {
+    const needs = profile.needs || []
+    const conditions = profile.health?.conditions || []
+    const isRural = profile.location?.rural === true
+
+    const HEALTH_NEED_SIGNALS = ['health', 'medical', 'mental_health', 'prescription', 'behavioral_health', 'clinical']
+    const hasHealthNeed = needs.length === 0 || needs.some(n => HEALTH_NEED_SIGNALS.includes(n))
+
+    let candidates = DIRECTORY_RESOURCES
+
+    if (!hasHealthNeed) {
+      console.warn(`[${ENGINE_ID}] profile has no health need signals â returning empty candidate set`)
+      return []
+    }
+
+    // Retain all general health resources; only exclude disease-specific when no matching condition
+    const DISEASE_SPECIFIC = ['cancer']
+    candidates = candidates.filter(resource => {
+      const resourceKeywords = resource.keywords.map(k => k.toLowerCase())
+      const isDiseaseSpecific = DISEASE_SPECIFIC.some(d => resourceKeywords.includes(d))
+      if (isDiseaseSpecific) {
+        return conditions.some(c => DISEASE_SPECIFIC.includes(c.toLowerCase()))
+      }
+      if (resource.categories.includes('rural') && !isRural) {
+        // Still include rural resources for non-rural â let decision engine weight them
+        return true
+      }
+      return true
+    })
+
+    if (candidates.length === 0) {
+      console.warn(`[${ENGINE_ID}] zero candidates after profile filtering for profile needs: ${JSON.stringify(needs)}`)
+    }
+
+    return normalizeAndFilter(candidates, ENGINE_ID, { strict_no_loans: false, strict_no_matching: false })
+  } catch (error) {
+    console.error(`[${ENGINE_ID}] engine error: ${error.message}`)
     return []
   }
 }

@@ -57,28 +57,37 @@ function scoreSchoolMatch({ schoolName, haystack }) {
 
 export async function loadUniversityApplicationsForProfile(db, profileId) {
   if (!profileId) return []
-  const row = await db
-    .prepare(
-      `
+  try {
+    const row = await db
+      .prepare(
+        `
         SELECT data
         FROM profile_sections
         WHERE profile_id = ?
           AND section_key = 'university_applications'
         LIMIT 1
       `,
+      )
+      .get(String(profileId).replace(/[^0-9]/g, ''))
+    if (!row?.data) return []
+    try {
+      const parsed = JSON.parse(row.data)
+      const apps = Array.isArray(parsed?.applications) ? parsed.applications : []
+      return apps
+        .map((app) => ({
+          id: app?.id ?? null,
+          name: app?.name ?? '',
+        }))
+        .filter((a) => a.id && a.name)
+    } catch (error) {
+      console.error('Failed to parse university applications data:', error)
+      return []
+    }
+  } catch (error) {
+    console.error(
+      'Failed to load university applications for profile from database:',
+      error,
     )
-    .get(profileId)
-  if (!row?.data) return []
-  try {
-    const parsed = JSON.parse(row.data)
-    const apps = Array.isArray(parsed?.applications) ? parsed.applications : []
-    return apps
-      .map((app) => ({
-        id: app?.id ?? null,
-        name: app?.name ?? '',
-      }))
-      .filter((a) => a.id && a.name)
-  } catch {
     return []
   }
 }

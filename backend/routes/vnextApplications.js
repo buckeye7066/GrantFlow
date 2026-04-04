@@ -292,7 +292,7 @@ router.get('/:id/finish-packet', standardRateLimiter, async (req, res) => {
   }
 
   const submission_instructions = []
-  const mode = String(opportunity?.application_mode || opportunity?.application_mode || 'unknown').toLowerCase()
+  const mode = String(opportunity?.application_mode || opportunity?.application_method || 'unknown').toLowerCase()
   const applyUrl = String(opportunity?.apply_url || opportunity?.application_url || '').trim()
 
   if (mode === 'portal' || (applyUrl && /^https?:\/\//i.test(applyUrl))) {

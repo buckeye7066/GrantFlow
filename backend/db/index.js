@@ -1,8 +1,21 @@
 import Database from 'better-sqlite3';
 import pg from 'pg';
+
+// Validate critical environment on startup
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
+
+// Validate critical environment on startup
+if (process.env.NODE_ENV === 'production') {
+  const hasRailwayEnv = Boolean(process.env.RAILWAY_PROJECT_ID || process.env.RAILWAY_SERVICE_ID);
+  const hasPostgresUrl = /^postgres(ql)?:\/\//i.test(String(process.env.DATABASE_URL || ''));
+  const hasPostgresVars = Boolean(process.env.PGHOST && process.env.PGUSER && process.env.PGDATABASE);
+
+  if (hasRailwayEnv && !hasPostgresUrl && !hasPostgresVars) {
+    throw new Error('[db] FATAL: Railway production deployment detected but no Postgres configuration found. Set DATABASE_URL or PGHOST/PGUSER/PGDATABASE.');
+  }
+}
 
 const { Pool } = pg;
 
@@ -106,10 +119,16 @@ function resolveDefaultSqlitePath(dataDir) {
   const railwayDir = '/mnt/data';
   try {
     if (fs.existsSync(railwayDir) && fs.statSync(railwayDir).isDirectory()) {
+      // Verify volume is actually writable
+      const testFile = join(railwayDir, '.write-test');
+      fs.writeFileSync(testFile, 'test');
+      fs.unlinkSync(testFile);
       return join(railwayDir, 'grantflow.db');
     }
-  } catch {
-    // ignore
+  } catch (error) {
+    if (process.env.NODE_ENV === 'production' && isRailwayRuntime()) {
+      console.error('[db] Railway volume /mnt/data exists but is not writable:', error.message);
+    }
   }
 
   return join(dataDir, 'grantflow.db');
@@ -121,6 +140,17 @@ function isArrayArgList(args) {
 
 function toParamArray(args) {
   return isArrayArgList(args) ? args[0] : args;
+}
+
+function normalizePostgresParams(values) {
+  if (!Array.isArray(values)) return values
+  return values.map((v) => {
+    if (v === undefined) return null
+    if (typeof v === 'object' && v !== null && !Buffer.isBuffer(v) && !(v instanceof Date) && !Array.isArray(v)) {
+      try { return JSON.stringify(v) } catch { return String(v) }
+    }
+    return v
+  })
 }
 
 // Convert SQLite-style `?` placeholders to Postgres-style `$1, $2, ...`.
@@ -405,18 +435,28 @@ class SqliteDb {
   }
 
   async withTransaction(fn) {
-    this.exec('BEGIN');
+    // Always use manual BEGIN/COMMIT/ROLLBACK rather than better-sqlite3's
+    // native transaction() wrapper.  The native wrapper rejects async callbacks
+    // with "Transaction function cannot return a promise" and detecting async
+    // reliably across Node versions / transpilers proved fragile.  The manual
+    // path works for both sync and async callbacks.
+    while (this._asyncTxLock) {
+      await this._asyncTxLock;
+    }
+    let unlock;
+    this._asyncTxLock = new Promise((r) => { unlock = r; });
+
+    this._db.exec('BEGIN IMMEDIATE');
     try {
       const result = await fn(this);
-      this.exec('COMMIT');
+      this._db.exec('COMMIT');
       return result;
-    } catch (error) {
-      try {
-        this.exec('ROLLBACK');
-      } catch {
-        // ignore rollback errors
-      }
-      throw error;
+    } catch (err) {
+      try { this._db.exec('ROLLBACK'); } catch { /* ignore rollback errors */ }
+      throw err;
+    } finally {
+      this._asyncTxLock = null;
+      unlock();
     }
   }
 
@@ -437,10 +477,10 @@ class PostgresTx {
     const converted = hasNamed ? atNameToDollarPlaceholders(sql) : qmarkToDollarPlaceholders(sql);
     return {
       get: async (...args) => {
-        const values =
+        const values = normalizePostgresParams(
           hasNamed && isObjectBindings(args)
             ? bindingsToValues(converted.names, args[0])
-            : toParamArray(args);
+            : toParamArray(args));
         try {
           const res = await this._client.query(converted.text, values);
           return res.rows[0];
@@ -449,10 +489,10 @@ class PostgresTx {
         }
       },
       all: async (...args) => {
-        const values =
+        const values = normalizePostgresParams(
           hasNamed && isObjectBindings(args)
             ? bindingsToValues(converted.names, args[0])
-            : toParamArray(args);
+            : toParamArray(args));
         try {
           const res = await this._client.query(converted.text, values);
           return res.rows;
@@ -461,10 +501,10 @@ class PostgresTx {
         }
       },
       run: async (...args) => {
-        const values =
+        const values = normalizePostgresParams(
           hasNamed && isObjectBindings(args)
             ? bindingsToValues(converted.names, args[0])
-            : toParamArray(args);
+            : toParamArray(args));
         try {
           const res = await this._client.query(converted.text, values);
           return {
@@ -479,7 +519,6 @@ class PostgresTx {
   }
 
   async exec(sql) {
-    // Allow multi-statement SQL (needed for schema migrations).
     await this._client.query({ text: sql, queryMode: 'simple' });
   }
 }
@@ -488,22 +527,41 @@ class PostgresTx {
 // Fix SQLite boolean-as-integer comparisons for PostgreSQL compatibility.
 // SQLite uses INTEGER for booleans (0/1), but PostgreSQL uses BOOLEAN (TRUE/FALSE).
 // This converts patterns like "is_active = 1" to "is_active = TRUE" for known boolean column prefixes.
+// Only rewrite known boolean column names that are definitively boolean in the schema.
+// Do NOT use a prefix wildcard (is_\w+) as it matches integer columns like is_priority_level.
+const KNOWN_BOOLEAN_COLUMNS = [
+  'is_active', 'is_archived', 'is_verified', 'is_published', 'is_deleted',
+  'is_eligible', 'is_approved', 'is_rejected', 'is_flagged', 'is_locked',
+  'is_recurring', 'is_featured', 'is_hidden', 'is_system',
+  'active', 'activated', 'verified', 'archived', 'published', 'ocr_used'
+];
+const BOOL_COL_PATTERN = KNOWN_BOOLEAN_COLUMNS.map(c => c.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
+const BOOL_TRUE_RE = new RegExp(`\\b(${BOOL_COL_PATTERN})\\s*=\\s*1\\b`, 'gi');
+const BOOL_FALSE_RE = new RegExp(`\\b(${BOOL_COL_PATTERN})\\s*=\\s*0\\b`, 'gi');
+
 function fixBooleanIntegers(sql) {
-    return sql
-      .replace(/\b(is_\w+|active|activated|verified|archived|published|ocr_used)\s*=\s*1\b/gi, '$1 = TRUE')
-      .replace(/\b(is_\w+|active|activated|verified|archived|published|ocr_used)\s*=\s*0\b/gi, '$1 = FALSE');
+  return sql
+    .replace(BOOL_TRUE_RE, '$1 = TRUE')
+    .replace(BOOL_FALSE_RE, '$1 = FALSE');
 }
 class PostgresDb {
   constructor(connectionString) {
     this.dialect = 'postgres';
     this.url = connectionString;
+    this._poolEnded = false;
+    const sslMode = String(process.env.PGSSLMODE || '').trim().toLowerCase();
+    const requireSsl = connectionString.includes('sslmode=require') || (isProd() && isRailwayRuntime() && sslMode !== 'disable');
     this._pool = new Pool({
       connectionString,
       max: Number(process.env.DB_POOL_MAX || process.env.PG_POOL_MAX || 20),
       idleTimeoutMillis: Number(process.env.PG_POOL_IDLE_MS || 30000),
       connectionTimeoutMillis: Number(process.env.PG_POOL_CONN_TIMEOUT_MS || 10000),
       statement_timeout: Number(process.env.PG_STATEMENT_TIMEOUT_MS || 15000),
+      ...(requireSsl ? { ssl: { rejectUnauthorized: false } } : {}),
     });
+    this._pool.on('error', (err) => {
+      console.error('[db] PostgreSQL pool background error:', err?.message || err)
+    })
   }
 
   prepare(sql) {
@@ -512,7 +570,8 @@ class PostgresDb {
     const converted = hasNamed ? atNameToDollarPlaceholders(sql) : qmarkToDollarPlaceholders(sql);
     return {
       get: async (...args) => {
-        const values = hasNamed && isObjectBindings(args) ? bindingsToValues(converted.names, args[0]) : toParamArray(args);
+        const values = normalizePostgresParams(
+          hasNamed && isObjectBindings(args) ? bindingsToValues(converted.names, args[0]) : toParamArray(args));
         try {
           const res = await this._pool.query(converted.text, values);
           return res.rows[0];
@@ -521,7 +580,8 @@ class PostgresDb {
         }
       },
       all: async (...args) => {
-        const values = hasNamed && isObjectBindings(args) ? bindingsToValues(converted.names, args[0]) : toParamArray(args);
+        const values = normalizePostgresParams(
+          hasNamed && isObjectBindings(args) ? bindingsToValues(converted.names, args[0]) : toParamArray(args));
         try {
           const res = await this._pool.query(converted.text, values);
           return res.rows;
@@ -530,10 +590,10 @@ class PostgresDb {
         }
       },
       run: async (...args) => {
-        const values = hasNamed && isObjectBindings(args) ? bindingsToValues(converted.names, args[0]) : toParamArray(args);
+        const values = normalizePostgresParams(
+          hasNamed && isObjectBindings(args) ? bindingsToValues(converted.names, args[0]) : toParamArray(args));
         try {
           const res = await this._pool.query(converted.text, values);
-          // better-sqlite3 shape compatibility (best-effort)
           return {
             changes: res.rowCount ?? 0,
             lastInsertRowid: null,
@@ -546,7 +606,6 @@ class PostgresDb {
   }
 
   async exec(sql) {
-    // Allow multi-statement SQL (needed for schema migrations).
     await this._pool.query({ text: sql, queryMode: 'simple' });
   }
 
@@ -578,10 +637,16 @@ class PostgresDb {
   // Compatibility shim: many existing call sites use better-sqlite3's `db.transaction(fn)()`.
   // Under Postgres this returns an async function (callers must `await` it when we flip DB_PROVIDER).
   transaction(fn) {
-    return async (...args) => this.withTransaction((tx) => fn(...args, tx));
+    // Wrap fn so it runs inside a transaction.
+    // The callback receives the same arguments it would under better-sqlite3
+    // (no injected tx object) so existing call sites work without modification.
+    // Code that needs an explicit tx object should call withTransaction() directly.
+    return async (...args) => this.withTransaction(() => fn(...args));
   }
 
   async close() {
+    if (this._poolEnded) return
+    this._poolEnded = true
     await this._pool.end();
   }
 }
@@ -589,7 +654,28 @@ class PostgresDb {
 let singleton = null;
 
 export function getDb() {
-  if (singleton) return singleton;
+  if (singleton) {
+    // Validate singleton is still healthy in production
+    if (process.env.NODE_ENV === 'production') {
+      try {
+        if (singleton.dialect === 'sqlite') {
+          singleton._db.prepare('SELECT 1').get();
+        } else if (singleton.dialect === 'postgres') {
+          // Non-blocking: only re-create if healthcheck rejects.
+          // We do NOT await here to keep getDb() synchronous at the call site;
+          // broken pools will surface on the next real query.
+          singleton.healthcheck().catch((error) => {
+            console.error('[db] Postgres singleton healthcheck failed, clearing singleton for recreation on next call:', error.message);
+            singleton = null;
+          });
+        }
+      } catch (error) {
+        console.error('[db] Singleton database connection is broken, recreating:', error.message);
+        singleton = null;
+      }
+    }
+    if (singleton) return singleton;
+  }
 
   const provider = detectProvider();
 

@@ -26,6 +26,8 @@ function diffFields(prev, next) {
   return changed
 }
 
+const ALLOWED_NF_TABLES = ['nf_programs_a', 'nf_programs_b']
+
 function tableFor(track) {
   return track === 'TRACK_B' ? 'nf_programs_b' : 'nf_programs_a'
 }
@@ -40,6 +42,7 @@ export function upsertNormalizedProgram({
   parserName,
 }) {
   const table = tableFor(normalized.funding_track)
+  if (!ALLOWED_NF_TABLES.includes(table)) throw new Error(`upsertNormalizedProgram: invalid table '${table}'`)
   const programId = normalized.program_id
   const fetchedAt = normalized.source_last_crawled_at || new Date().toISOString()
 

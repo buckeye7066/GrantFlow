@@ -29,9 +29,10 @@ export default function Outreach() {
   // Fetch grants to show funder contacts
   const { data: grants = [] } = useQuery({
     queryKey: ['grants', activeProfileId],
+    enabled: Boolean(activeProfileId),
     queryFn: () =>
       apiFetch('/api/grants', {
-        headers: activeProfileId ? { 'X-Profile-Id': activeProfileId } : undefined,
+        headers: { 'X-Profile-Id': activeProfileId },
       }),
     staleTime: 60_000,
   })
@@ -58,7 +59,10 @@ export default function Outreach() {
   const outreachLogsQuery = useQuery({
     queryKey: ['outreachLogs', activeProfileId],
     enabled: Boolean(activeProfileId),
-    queryFn: () => apiFetch(`/api/outreach-logs?profile_id=${encodeURIComponent(activeProfileId)}`),
+    queryFn: () =>
+  apiFetch('/api/outreach-logs', {
+    headers: { 'X-Profile-Id': activeProfileId },
+  }),
     staleTime: 15_000,
   })
 
@@ -66,6 +70,7 @@ export default function Outreach() {
     mutationFn: async (payload) => {
       return apiFetch('/api/outreach-logs', {
         method: 'POST',
+        headers: { 'X-Profile-Id': activeProfileId },
         body: JSON.stringify(payload),
       })
     },
@@ -90,9 +95,7 @@ export default function Outreach() {
       return
     }
     setLogMethod(method)
-    if (!logFunder && funders.length === 1) {
-      setLogFunder(funders[0].name)
-    }
+    setLogFunder(funders.length === 1 ? funders[0].name : "")
     setLogDialogOpen(true)
   }
 
@@ -116,6 +119,8 @@ export default function Outreach() {
 
       toast({ title: 'Saved', description: 'Your outreach log was added.' })
       setLogDialogOpen(false)
+      setLogFunder("")
+      setLogOccurredAt(new Date().toISOString().slice(0, 10))
       setLogSubject("")
       setLogNotes("")
     } catch (error) {

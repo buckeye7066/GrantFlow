@@ -48,9 +48,9 @@ jobs:
         id: get-prs
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HOURS_LOOKBACK: ${{ inputs.hours_lookback || '48' }}
         run: |
           # Calculate the date 48 hours ago (or custom hours from input)
-          HOURS_LOOKBACK="${{ inputs.hours_lookback || '48' }}"
           SINCE_DATE=$(date -u -d "${HOURS_LOOKBACK} hours ago" +"%Y-%m-%dT%H:%M:%SZ")
 
           echo "Looking for PRs updated since: $SINCE_DATE"
@@ -58,7 +58,7 @@ jobs:
           # Get all open PRs updated in the last N hours
           gh pr list \
             --state open \
-            --json number,title,updatedAt,headRefName,mergeable,statusCheckRollup \
+            --json number,title,updatedAt,headRefName,mergeable,statusCheckRollup,labels \
             --jq "[.[] | select(.updatedAt >= \"$SINCE_DATE\")]" > recent_prs.json
 
           cat recent_prs.json
@@ -69,7 +69,7 @@ jobs:
           echo "pr_count=$PR_COUNT" >> $GITHUB_OUTPUT
 
       - name: Process and merge qualifying PRs
-        if: steps.get-prs.outputs.pr_count > 0
+        if: fromJSON(steps.get-prs.outputs.pr_count) > 0
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           DRY_RUN: ${{ inputs.dry_run || 'false' }}
@@ -86,6 +86,10 @@ jobs:
             PR_TITLE=$(echo "$pr" | jq -r '.title')
             PR_BRANCH=$(echo "$pr" | jq -r '.headRefName')
             MERGEABLE=$(echo "$pr" | jq -r '.mergeable')
+            PR_IS_CODEGUARD=false
+            if echo "$PR_TITLE $PR_BRANCH" | grep -Eiq '(\[CodeGuard\]|(^|/)(codeguard|anya-fix|autofix)(/|$))'; then
+              PR_IS_CODEGUARD=true
+            fi
 
             echo ""
             echo "=========================================="
@@ -126,6 +130,16 @@ jobs:
               continue
             fi
 
+            # CodeGuard/autofix PRs require explicit manual opt-in label.
+            if [ "$PR_IS_CODEGUARD" = "true" ]; then
+              HAS_MANUAL_LABEL=$(echo "$pr" | jq -r '[.labels[]?.name | select(. == "codeguard-reviewed")] | length')
+              if [ "$HAS_MANUAL_LABEL" -eq 0 ]; then
+                echo "⏸️  PR #$PR_NUMBER appears CodeGuard/autofix-generated and lacks 'codeguard-reviewed'. Skipping."
+                SKIP_COUNT=$((SKIP_COUNT + 1))
+                continue
+              fi
+            fi
+
             # All checks passed - merge the PR
             if [ "$DRY_RUN" = "true" ]; then
               echo "🔍 [DRY RUN] Would merge PR #$PR_NUMBER: $PR_TITLE"
@@ -160,6 +174,6 @@ jobs:
           fi
 
       - name: No PRs found
-        if: steps.get-prs.outputs.pr_count == 0
+        if: fromJSON(steps.get-prs.outputs.pr_count) == 0
         run: |
           echo "ℹ️  No pull requests found that were updated in the specified time window."

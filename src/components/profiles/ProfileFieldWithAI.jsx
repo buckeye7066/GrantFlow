@@ -65,6 +65,12 @@ export default function ProfileFieldWithAI({
     
     try {
       // Prepare context for AI
+      const safeFormContext = formContext && typeof formContext === 'object' && !Array.isArray(formContext)
+        ? formContext
+        : {}
+      // formContext is merged FIRST so that explicit keys always win
+      // System-supplied keys are the baseline; caller-supplied formContext keys
+      // take precedence so richer context from the parent is never discarded.
       const context = {
         fieldName: safeField.name,
         fieldLabel: safeField.label,
@@ -72,17 +78,28 @@ export default function ProfileFieldWithAI({
         fieldDescription: safeField.description || '',
         sectionKey,
         profileId,
-        ...formContext // Additional form data for context
+        ...safeFormContext,
       }
       
       // Request AI suggestion
       const response = await requestProfileFieldAI(context)
       
-      if (response?.suggestion) {
-        onChange(response.suggestion)
+      if (response?.suggestion !== undefined && response.suggestion !== null) {
+        const suggestionValue = typeof response.suggestion === 'string'
+          ? response.suggestion
+          : safeStringifyValue(response.suggestion)
+        onChange(suggestionValue)
         toast({
           title: "AI suggestion applied",
           description: `Updated ${safeField.label} with AI-generated content`,
+        })
+      } else {
+        // No suggestion returned â inform the user so they can improve their profile
+        const hint = response?.hint || "Try filling in more profile fields to get better suggestions."
+        toast({
+          title: "No suggestion available",
+          description: hint,
+          variant: "default",
         })
       }
     } catch (error) {
@@ -139,7 +156,10 @@ export default function ProfileFieldWithAI({
         {...safeField.props}
         {...props}
         value={displayValue}
-        onChange={(e) => onChange(e?.target ? e.target.value : e)}
+        onChange={(e) => {
+          const rawVal = e?.target ? e.target.value : e
+          onChange(rawVal)
+        }}
       />
       
       {safeField.description && (

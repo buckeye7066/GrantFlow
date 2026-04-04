@@ -20,30 +20,34 @@ export default function ComplianceTab({ grant }) {
   const queryClient = useQueryClient();
   const [showExpenseForm, setShowExpenseForm] = useState(false);
 
-  const { data: award, isLoading: isLoadingAward } = useQuery({
+  const { data: award, isLoading: isLoadingAward, isError: isAwardError } = useQuery({
     queryKey: ['grantAward', grant.id],
     queryFn: () => client.entities.GrantAward.filter({ grant_id: grant.id }).then(res => res[0]),
     enabled: grant.status === 'awarded',
+    retry: 1,
   });
 
   const { data: expenses = [], isLoading: isLoadingExpenses } = useQuery({
     queryKey: ['expenses', grant.id],
     queryFn: () => client.entities.Expense.filter({ grant_id: grant.id }),
-    enabled: !!award,
+    enabled: !!award?.id,
   });
 
   const createAwardMutation = useMutation({
     mutationFn: () => client.entities.GrantAward.create({
       grant_id: grant.id,
       organization_id: grant.organization_id,
-      award_amount: grant.typical_award || grant.amount_max || 0,
+      award_amount: 0, // Must be updated by user after receiving official award notice
       funder_name: grant.funder,
-      start_date: new Date().toISOString().split('T')[0],
+      start_date: grant.start_date || new Date().toISOString().split('T')[0],
       policy_json: JSON.stringify(defaultPolicy),
       reporting_cadence: 'quarterly',
     }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['grantAward', grant.id] });
+    },
+    onError: (err) => {
+      console.error('[ComplianceTab] Failed to create award record', err);
     },
   });
 
@@ -60,6 +64,15 @@ export default function ComplianceTab({ grant }) {
     return <div className="flex justify-center p-8"><Loader2 className="w-6 h-6 animate-spin" /></div>;
   }
 
+  if (isAwardError) {
+    return (
+      <div className="text-center py-10 text-red-600">
+        <h3 className="text-lg font-medium">Unable to Load Award Record</h3>
+        <p className="text-sm mt-2">Could not retrieve the award for this grant. Please refresh or contact support before making changes.</p>
+      </div>
+    );
+  }
+
   if (!award) {
     return (
       <div className="text-center py-10">
@@ -73,20 +86,36 @@ export default function ComplianceTab({ grant }) {
     );
   }
 
-  const policy = JSON.parse(award.policy_json || '{}');
-  const totalSpent = expenses.reduce((sum, ex) => sum + ex.amount, 0);
-  const budgetRemaining = award.award_amount - totalSpent;
+  let policy = {};
+try {
+  policy = JSON.parse(award.policy_json || '{}');
+} catch (e) {
+  console.error('[ComplianceTab] Malformed policy_json for award', award.id, e);
+  policy = { ...defaultPolicy, _parseError: true };
+}
+  const totalSpent = expenses.reduce((sum, ex) => sum + (parseFloat(ex.amount) || 0), 0);
+  const awardAmount = parseFloat(award.award_amount) || 0;
+const budgetRemaining = awardAmount - totalSpent;
 
   return (
     <div className="space-y-6">
+      {policy._parseError && (
+        <div className="flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+          <span className="shrink-0">⚠️</span>
+          <span>Using default compliance policy — custom policy could not be loaded.</span>
+        </div>
+      )}
       <Card>
         <CardHeader>
           <CardTitle>Award Summary</CardTitle>
         </CardHeader>
         <CardContent className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
-          <div><span className="font-semibold">Total Award:</span> ${award.award_amount.toLocaleString()}</div>
+          <div><span className="font-semibold">Total Award:</span> ${awardAmount.toLocaleString()}</div>
           <div><span className="font-semibold">Total Spent:</span> ${totalSpent.toLocaleString()}</div>
-          <div><span className="font-semibold">Remaining:</span> ${budgetRemaining.toLocaleString()}</div>
+          <div className={budgetRemaining < 0 ? 'text-red-600 font-bold' : ''}>
+  <span className="font-semibold">Remaining:</span> ${budgetRemaining.toLocaleString()}
+  {budgetRemaining < 0 && <span className="ml-2 text-xs">(OVER BUDGET)</span>}
+</div>
         </CardContent>
       </Card>
 
@@ -108,14 +137,18 @@ export default function ComplianceTab({ grant }) {
                 />
             )}
             {isLoadingExpenses ? <Loader2 className="w-6 h-6 animate-spin" /> : (
-                <ul className="space-y-2">
-                    {expenses.map(ex => (
-                        <li key={ex.id} className="flex justify-between p-2 border-b">
-                            <span>{ex.date}: {ex.description}</span>
-                            <span>${ex.amount.toLocaleString()}</span>
-                        </li>
-                    ))}
-                </ul>
+                expenses.length === 0 ? (
+                    <p className="text-center text-slate-500 py-4">No expenses logged yet. Use "Log Expense" to record spend against this award.</p>
+                ) : (
+                    <ul className="space-y-2">
+                        {expenses.map(ex => (
+                            <li key={ex.id} className="flex justify-between p-2 border-b">
+                                <span>{ex.date ? ex.date : 'â'}: {ex.description || '(no description)'}{ex.category ? ` [${ex.category}]` : ''}</span>
+                                <span>${(parseFloat(ex.amount) || 0).toLocaleString()}</span>
+                            </li>
+                        ))}
+                    </ul>
+                )
             )}
         </CardContent>
       </Card>

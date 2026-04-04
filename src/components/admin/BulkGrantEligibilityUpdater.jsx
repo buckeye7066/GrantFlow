@@ -26,14 +26,21 @@ const BulkGrantEligibilityUpdater = () => {
           setLoading(true);
           try {
                   const response = await fetch('/api/grants?limit=1000', {
-                            headers: {
-                                        'Authorization': `Bearer ${localStorage.getItem('grantflow:access-token')}`,
-                                        'Content-Type': 'application/json'
-                            }
-                  });
-                  const data = await response.json();
-                  setGrants(data.grants || []);
-                  message.success('Grants loaded successfully');
+  headers: {
+    'Authorization': `Bearer ${localStorage.getItem('grantflow:access-token')}`,
+    'Content-Type': 'application/json'
+  }
+});
+if (!response.ok) {
+  const errText = await response.text();
+  throw new Error(`Failed to load grants (HTTP ${response.status}): ${errText}`);
+}
+const data = await response.json();
+if (!Array.isArray(data.grants)) {
+  throw new Error('Unexpected response shape: data.grants is not an array');
+}
+setGrants(data.grants);
+message.success(`Grants loaded successfully (${data.grants.length} records)`);
           } catch (error) {
                   message.error('Failed to load grants: ' + error.message);
           } finally {
@@ -43,13 +50,16 @@ const BulkGrantEligibilityUpdater = () => {
 
     // Filter grants
     const filteredGrants = grants.filter(grant => {
-          const matchesSearch = grant.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                                     grant.funder.toLowerCase().includes(searchTerm.toLowerCase());
-          const matchesCategory = filterCategory === 'all' || 
-                                       grant.category === filterCategory ||
-                                       (filterCategory === 'missing_eligibility' && !grant.eligibility_summary);
-          return matchesSearch && matchesCategory;
-    });
+  const title = (grant.title || '').toLowerCase();
+  const funder = (grant.funder || '').toLowerCase();
+  const term = searchTerm.toLowerCase();
+  const matchesSearch = title.includes(term) || funder.includes(term);
+  const matchesCategory =
+    filterCategory === 'all' ||
+    grant.category === filterCategory ||
+    (filterCategory === 'missing_eligibility' && !grant.eligibility_summary);
+  return matchesSearch && matchesCategory;
+});
 
     // Apply bulk updates to selected grants
     const applyBulkUpdate = async () => {
@@ -60,23 +70,35 @@ const BulkGrantEligibilityUpdater = () => {
 
           setLoading(true);
           try {
-                  const updatePromises = selectedGrants.map(grantId => {
-                            return fetch(`/api/grants/${grantId}`, {
-                                        method: 'PUT',
-                                        headers: {
-                                                      'Authorization': `Bearer ${localStorage.getItem('grantflow:access-token')}`,
-                                                      'Content-Type': 'application/json'
-                                        },
-                                        body: JSON.stringify({
-                                                      ...bulkEditData,
-                                                      updated_date: new Date().toISOString(),
-                                                      updated_by: localStorage.getItem('user:email')
-                                        })
-                            });
-                  });
+                  const updatePromises = selectedGrants.map(async (grantId) => {
+  const res = await fetch(`/api/grants/${grantId}`, {
+    method: 'PUT',
+    headers: {
+      'Authorization': `Bearer ${localStorage.getItem('grantflow:access-token')}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      ...bulkEditData,
+      updated_date: new Date().toISOString(),
+      updated_by: localStorage.getItem('user:email')
+    })
+  });
+  if (!res.ok) {
+    const errBody = await res.text();
+    throw new Error(`Grant ${grantId} update failed (${res.status}): ${errBody}`);
+  }
+  return res.json();
+});
 
-            await Promise.all(updatePromises);
-                  message.success(`Successfully updated ${selectedGrants.length} grants`);
+const results = await Promise.allSettled(updatePromises);
+const failed = results.filter(r => r.status === 'rejected');
+const succeeded = results.filter(r => r.status === 'fulfilled');
+if (failed.length > 0) {
+  console.error('[BulkGrantEligibilityUpdater] partial failure:', failed.map(f => f.reason?.message));
+  message.warning(`Updated ${succeeded.length} grants; ${failed.length} failed â check console for details`);
+} else {
+  message.success(`Successfully updated ${succeeded.length} grants`);
+}
                   setEditModal(false);
                   setSelectedGrants([]);
                   setBulkEditData({
@@ -121,9 +143,11 @@ const BulkGrantEligibilityUpdater = () => {
                         const hasDescription = !!record.program_description;
                         const hasSummary = !!record.eligibility_summary;
                         const hasCriteria = !!record.selection_criteria;
+                        const hasAppUrl = !!record.application_url;
                         
                         return (
                                     <div className="eligibility-status">
+                                      {!hasAppUrl && <Tag color="volcano">No App URL</Tag>}
                                       {hasDescription && <Tag color="green"><CheckOutlined /> Description</Tag>}
                                       {hasSummary && <Tag color="green"><CheckOutlined /> Summary</Tag>}
                                       {hasCriteria && <Tag color="green"><CheckOutlined /> Criteria</Tag>}

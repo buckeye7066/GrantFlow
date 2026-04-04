@@ -1,14 +1,20 @@
 import express from 'express'
+import { requireAuthenticatedUser } from '../utils/accessControl.js'
+import { standardRateLimiter } from '../middleware/rateLimiting.js'
 
 const router = express.Router()
 
 // Marketing stats for non-admin users
+// Align marketing stats keys with the admin response shape so
+// frontend components can rely on a single stable contract.
 const MARKETING_STATS = {
   organizations: 3144,
   fundsSecured: 22895000,
-  activeGrants: 31560,
+  grantsTotal: 31560,      // renamed from activeGrants to match admin shape
   activeProfiles: 3144,
   opportunitiesFound: 15000,
+  pipelineTotal: 0,        // not meaningful for marketing view; set to 0
+  isRealData: false,
 }
 
 /**
@@ -17,8 +23,11 @@ const MARKETING_STATS = {
  * - Admin users see real database stats
  * - Regular users see marketing stats
  */
-router.get('/dashboard', async (req, res) => {
+router.get('/dashboard', standardRateLimiter, async (req, res) => {
   try {
+    const user = requireAuthenticatedUser(req, res)
+    if (!user) return
+
     const isAdmin = Boolean(req.ctx?.isAdmin)
 
     if (isAdmin) {
@@ -29,6 +38,8 @@ router.get('/dashboard', async (req, res) => {
           fundsSecured: 0,
           activeProfiles: 0,
           opportunitiesFound: 0,
+          grantsTotal: 0,
+          pipelineTotal: 0,
           isRealData: true,
         })
       }
@@ -46,9 +57,8 @@ router.get('/dashboard', async (req, res) => {
         .prepare('SELECT COUNT(*) as count FROM grants')
         .get()
       
-      const activePredicate = req.db?.dialect === 'postgres' ? 'is_active = TRUE' : 'is_active = 1'
       const opportunitiesCount = await req.db
-        .prepare(`SELECT COUNT(*) as count FROM funding_opportunities WHERE ${activePredicate}`)
+        .prepare('SELECT COUNT(*) as count FROM funding_opportunities WHERE is_active = 1')
         .get()
       
       const awardedGrants = await req.db
@@ -85,12 +95,15 @@ router.get('/dashboard', async (req, res) => {
     })
   } catch (error) {
     console.error('[stats/dashboard] Error:', error)
-    return res.status(500).json({ 
+    return res.status(500).json({
       error: 'Failed to fetch dashboard stats',
       organizations: 0,
       fundsSecured: 0,
       activeProfiles: 0,
       opportunitiesFound: 0,
+      grantsTotal: 0,
+      pipelineTotal: 0,
+      isRealData: false,
     })
   }
 })

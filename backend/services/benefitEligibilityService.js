@@ -217,9 +217,7 @@ function evaluatePrograms(s) {
   // ── WIC ───────────────────────────────────────────────────────────────────
   const wicEligible =
     (p !== null ? p <= 185 : true) &&
-    (s.isPregnant ||
-      (children > 0 && age !== null && age <= 5) ||
-      s.isPregnant)
+    (s.isPregnant || children > 0)
   add(
     {
       id: 'wic',
@@ -305,9 +303,11 @@ function evaluatePrograms(s) {
       applicationUrl: 'https://www.ssa.gov/ssi/',
     },
     ssiEligible,
-    s.hasDisability
+    ssiEligible
       ? `Disability indicator present; income appears below SSI limit (~$1,971/mo in 2024)`
-      : 'SSI requires a qualifying disability or age 65+',
+      : s.hasDisability
+        ? `Disability indicator present but income (~$${(income ?? 0).toLocaleString()}/yr) may exceed SSI countable-income limit â verify deductions`
+        : 'SSI requires a qualifying disability or age 65+',
   )
 
   // ── SSDI ──────────────────────────────────────────────────────────────────
@@ -326,7 +326,13 @@ function evaluatePrograms(s) {
   )
 
   // ── EITC ──────────────────────────────────────────────────────────────────
-  const eitcIncomeCap = hs === 1 ? 18600 : hs === 2 ? 49400 : 56000 // rough 2024 thresholds
+  // EITC 2024 income limits indexed by number of qualifying children (0/1/2/3+)
+  const eitcChildren = Math.min(s.numChildren, 3)
+  // 2024 caps: index = qualifying children (0/1/2/3+); single/MFS filer.
+  // MFJ limits are ~$6 000 higher â we use the LOWER single cap so we never
+  // incorrectly exclude a joint-filer; the reason string flags this caveat.
+  const eitcIncomeCaps = [19524, 43492, 49399, 53120]
+  const eitcIncomeCap = eitcIncomeCaps[eitcChildren]
   add(
     {
       id: 'eitc',
@@ -481,6 +487,7 @@ export function screenBenefitEligibility(profileContext) {
 
   const eligible = []
   const suggestions = []
+  const alreadyReceiving = []
 
   for (const { program, eligible: isEligible, reason } of evaluated) {
     const alreadyHas = signals.receivingBenefits.some((rb) =>
@@ -488,7 +495,10 @@ export function screenBenefitEligibility(profileContext) {
       rb.includes(program.name.toLowerCase()) ||
       rb.includes(program.id.replace(/_/g, '')),
     )
-    if (alreadyHas) continue // will be captured in alreadyReceiving below
+    if (alreadyHas) {
+      alreadyReceiving.push({ ...program, reason: 'Already receiving this benefit per profile' })
+      continue
+    }
 
     if (isEligible) {
       eligible.push({ ...program, estimatedEligibility: true, reason })
@@ -496,8 +506,6 @@ export function screenBenefitEligibility(profileContext) {
       suggestions.push({ ...program, estimatedEligibility: false, reason })
     }
   }
-
-  const alreadyReceiving = signals.receivingBenefits
 
   return { eligible, alreadyReceiving, suggestions }
 }

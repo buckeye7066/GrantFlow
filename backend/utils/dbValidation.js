@@ -41,6 +41,8 @@ export function validateGrantStatus(status) {
     'awarded',
     'rejected',
     'withdrawn',
+    'pending',
+    'matched',
   ]
   const normalized = String(status || 'interested').toLowerCase().trim()
   
@@ -238,18 +240,24 @@ export function validateEmail(email) {
  * @returns {string} Normalized URL
  * @throws {Error} If URL is invalid
  */
-export function validateUrl(url) {
+export function validateUrl(url, { required = false } = {}) {
   if (!url) {
+    if (required) {
+      throw new Error('URL is required but was not provided.')
+    }
     return null
   }
 
   const normalized = String(url).trim()
 
   try {
-    new URL(normalized)
+    const parsed = new URL(normalized)
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      throw new Error(`Invalid URL protocol '${parsed.protocol}': only http and https are allowed.`)
+    }
     return normalized
-  } catch {
-    throw new Error(`Invalid URL: ${url}`)
+  } catch (err) {
+    throw new Error(`Invalid URL: ${url}. ${err.message}`)
   }
 }
 
@@ -287,8 +295,36 @@ export async function validateForeignKey(db, table, column, value) {
     return true // NULL is allowed
   }
 
+  const ALLOWED_FK_TARGETS = {
+    profiles: ['id', 'user_id'],
+    opportunities: ['id', 'opportunity_id'],
+    pipeline_entries: ['id'],
+    jobs: ['id', 'job_id'],
+    documents: ['id'],
+    users: ['id', 'user_id'],
+  }
+
+  if (!ALLOWED_FK_TARGETS[table] || !ALLOWED_FK_TARGETS[table].includes(column)) {
+    throw new Error(
+      `validateForeignKey: table '${table}' or column '${column}' is not in the allowed whitelist.`
+    )
+  }
+
+  // Re-resolve the canonical table+column from the whitelist to guarantee
+  // no caller-supplied string ever reaches the SQL template.
+  const allowedColumns = ALLOWED_FK_TARGETS[table]
+  const safeTable = Object.keys(ALLOWED_FK_TARGETS).find(k => k === table)
+  const safeColumn = allowedColumns && allowedColumns.find(c => c === column)
+
+  if (!safeTable || !safeColumn) {
+    throw new Error(
+      `validateForeignKey: table '${table}' or column '${column}' is not in the allowed whitelist.`
+    )
+  }
+
+  // Use only the whitelist-resolved literals in the SQL template
   const row = await db
-    .prepare(`SELECT ${column} FROM ${table} WHERE ${column} = ? LIMIT 1`)
+    .prepare(`SELECT ${safeColumn} FROM ${safeTable} WHERE ${safeColumn} = ? LIMIT 1`)
     .get(value)
 
   if (!row) {
@@ -311,8 +347,8 @@ export function validatePositiveInteger(value) {
 
   const num = Number(value)
 
-  if (!Number.isInteger(num) || num < 0) {
-    throw new Error(`Invalid positive integer: ${value}`)
+  if (!Number.isInteger(num) || num <= 0) {
+    throw new Error(`Invalid positive integer: ${value}. Must be a positive (non-zero) integer.`)
   }
 
   return num
@@ -331,8 +367,8 @@ export function validatePositiveNumber(value) {
 
   const num = Number(value)
 
-  if (isNaN(num) || num < 0) {
-    throw new Error(`Invalid positive number: ${value}`)
+  if (isNaN(num) || num <= 0) {
+    throw new Error(`Invalid positive number: ${value}. Must be a positive (non-zero) number.`)
   }
 
   return num
@@ -384,5 +420,5 @@ export function validateBoolean(value) {
     return lower === 'true' || lower === '1' || lower === 'yes'
   }
 
-  return Boolean(value)
+  throw new Error(`validateBoolean: unexpected value type '${typeof value}' (${JSON.stringify(value)}). Pass a boolean, number, or string.`)
 }

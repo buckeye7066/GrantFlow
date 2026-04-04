@@ -11,6 +11,7 @@ import {
   MapPin,
   RefreshCw,
   Rocket,
+  School,
   ShoppingCart,
   Sparkles,
   Target,
@@ -27,7 +28,7 @@ import { Textarea } from "@/components/ui/textarea"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Badge } from "@/components/ui/badge"
 import { ScrollArea } from "@/components/ui/scroll-area"
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Separator } from "@/components/ui/separator"
 import { format, formatDistanceToNow } from "date-fns"
 import { useToast } from "@/components/ui/use-toast"
@@ -46,7 +47,7 @@ import { cn } from "@/lib/utils"
 import { getAnyaProfileTasks, updateAnyaTask } from "@/lib/anyaClient"
 import PipelineAutomationPanel from "@/components/pipeline/PipelineAutomationPanel"
 import CrawlerProgressMeter from "@/components/automation/CrawlerProgressMeter"
-import { SECTION_CONFIG } from "@/components/profiles/ProfileSectionEditor"
+import { SECTION_METADATA } from "@/config/sectionMetadata"
 
 async function startGeoCrawl(payload) {
   return apiFetch("/api/geo-crawl/start", {
@@ -57,6 +58,7 @@ async function startGeoCrawl(payload) {
 
 const JOB_LABELS = {
   local: "Local 25-mile sweep",
+  portal_check: "Portal award check",
   scholarship: "Scholarship intelligence",
   comprehensive: "Comprehensive match",
   item_search: "Item funding search",
@@ -77,6 +79,7 @@ const STATUS_VARIANTS = {
 const METRIC_TYPE_ORDER = Object.keys(JOB_LABELS)
 
 const JOB_ICON_MAP = {
+  portal_check: School,
   local: MapPin,
   scholarship: GraduationCap,
   comprehensive: Globe2,
@@ -953,6 +956,9 @@ function JobDetailsDialog({ job, onOpenChange, onRetry, retrying, onCancel, canc
             <Sparkles className="h-5 w-5 text-blue-600" />
             Automation job details
           </DialogTitle>
+          <DialogDescription>
+            View status, parameters, and results for this automation job.
+          </DialogDescription>
         </DialogHeader>
         <div className="space-y-4 text-sm text-slate-700">
           <div className="flex justify-end gap-2">
@@ -1286,12 +1292,20 @@ function JobDetailsDialog({ job, onOpenChange, onRetry, retrying, onCancel, canc
                             <p className="text-slate-600">Match score: {entry.match_score}</p>
                           ) : null}
                           {Array.isArray(entry.match_reasons) && entry.match_reasons.length > 0 ? (
-                            <ul className="list-disc pl-4 text-slate-500 space-y-0.5">
-                              {entry.match_reasons.slice(0, 4).map((reason, reasonIndex) => (
-                                <li key={reasonIndex}>{reason}</li>
-                              ))}
-                            </ul>
-                          ) : null}
+                            <div>
+                              <p className="text-[10px] uppercase tracking-wide text-slate-400 mb-0.5">Match reasons (crawler-reported)</p>
+                              <ul className="list-disc pl-4 text-slate-500 space-y-0.5">
+                                {entry.match_reasons.slice(0, 4).map((reason, reasonIndex) => (
+                                  <li key={reasonIndex}>{reason}</li>
+                                ))}
+                                {entry.match_reasons.length > 4 ? (
+                                  <li className="text-slate-400">+{entry.match_reasons.length - 4} more reason{entry.match_reasons.length - 4 === 1 ? "" : "s"}</li>
+                                ) : null}
+                              </ul>
+                            </div>
+                          ) : (
+                            <p className="text-slate-400 text-[11px]">No match reasons recorded.</p>
+                          )}
                         </li>
                       ))}
                     </ul>
@@ -1590,9 +1604,9 @@ export default function Automation() {
 
   const sectionOptions = useMemo(
     () =>
-      Object.keys(SECTION_CONFIG).map((key) => ({
+      Object.keys(SECTION_METADATA).map((key) => ({
         key,
-        label: SECTION_CONFIG[key]?.title ?? key.replace(/_/g, " "),
+        label: SECTION_METADATA[key]?.title ?? key.replace(/_/g, " "),
       })),
     [],
   )
@@ -1661,11 +1675,16 @@ export default function Automation() {
       })
       return
     }
+    const geoCrawlProfileId = isAdmin
+      ? (selectedProfile && selectedProfile !== "none" ? selectedProfile : undefined)
+      : activeProfileId ?? undefined
+
     geoCrawlMutation.mutate({
       state,
       zip_limit: 25,
       min_sources_per_zip: 3,
       discover_local_resources: true,
+      profile_id: geoCrawlProfileId,
     })
   }
 
@@ -1948,6 +1967,14 @@ export default function Automation() {
           onClick={() => handleQueueJob("scholarship")}
           disabled={!isAdmin && !activeProfileId}
           loading={createJobMutation.isPending && createJobMutation.variables?.type === "scholarship"}
+        />
+        <QuickActionCard
+          icon={School}
+          title="Portal award check"
+          description="Proactively check financial aid and scholarship portals for new award notifications and sync them to the student's profile."
+          onClick={() => handleQueueJob("portal_check", { check_type: "manual", max_portals: 20 })}
+          disabled={!isAdmin && !activeProfileId}
+          loading={createJobMutation.isPending && createJobMutation.variables?.type === "portal_check"}
         />
         <QuickActionCard
           icon={Target}

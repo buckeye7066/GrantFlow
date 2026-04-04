@@ -57,23 +57,25 @@ export function recordClientSignInEvent({
   // Durable sink: DB audit logs (best-effort).
   if (db) {
     try {
-      logAuditEvent(db, {
-        category: AUDIT_CATEGORIES.AUTH,
-        action: 'client_sign_in',
-        severity: SEVERITY.INFO,
-        userId: event.user_id ?? null,
-        profileId: event.profile_id ?? null,
-        resourceType: 'client_sign_in',
-        resourceId: null,
-        details: {
-          identifier: event.identifier,
-          method: event.method,
-        },
-        ipAddress: event.ip ?? null,
-        userAgent: event.user_agent ?? null,
-      })
-    } catch {
-      // best-effort only
+      if (typeof logAuditEvent === 'function') {
+        logAuditEvent(db, {
+          category: AUDIT_CATEGORIES.AUTH,
+          action: 'client_sign_in',
+          severity: SEVERITY.INFO,
+          userId: event.user_id,
+          profileId: event.profile_id,
+          resourceType: 'client_sign_in',
+          resourceId: null,
+          details: {
+            identifier: event.identifier,
+            method: event.method,
+          },
+          ipAddress: event.ip,
+          userAgent: event.user_agent,
+        })
+      }
+    } catch (err) {
+      console.warn('Failed to log admin login audit event:', err.message)
     }
   }
 

@@ -9,7 +9,10 @@
  * 3. Clean orphaned crawlers — fail stuck crawler jobs older than 2 hours
  * 4. Audit profile signals — flag profiles missing state/type fields needed for matching
  * 5. Deduplicate opportunities — merge exact title+sponsor+state duplicates
+ * 6. Auto-repair scan — dry-run code quality scan (non-critical)
  */
+
+import { runAutoRepair } from './anyaAutoRepairService.js'
 
 const DEFAULT_INTERVAL_MS = 1800000 // 30 minutes
 
@@ -32,24 +35,27 @@ export async function runHealthCheck(db) {
     orphaned_crawlers: null,
     profile_signal_audit: null,
     dedup_opportunities: null,
+    auto_repair_scan: null,
     errors: [],
   }
 
   // 1. Expire stale opportunities
   try {
     const isPostgres = db?.dialect === 'postgres'
-    const inactiveVal = isPostgres ? 'FALSE' : '0'
-    const nowExpr = isPostgres ? 'CURRENT_DATE' : "date('now')"
-    const result = db
-      .prepare(
-        `UPDATE funding_opportunities
-         SET is_active = ${inactiveVal}, updated_at = CURRENT_TIMESTAMP
-         WHERE is_active = ${isPostgres ? 'TRUE' : '1'}
+    const expireSql = isPostgres
+      ? `UPDATE funding_opportunities
+         SET is_active = FALSE, updated_at = CURRENT_TIMESTAMP
+         WHERE is_active = TRUE
            AND deadline IS NOT NULL
-           AND deadline < ${nowExpr}
-           AND deadline_type NOT IN ('rolling', 'ongoing')`,
-      )
-      .run()
+           AND deadline < CURRENT_DATE
+           AND deadline_type NOT IN ('rolling', 'ongoing')`
+      : `UPDATE funding_opportunities
+         SET is_active = 0, updated_at = CURRENT_TIMESTAMP
+         WHERE is_active = 1
+           AND deadline IS NOT NULL
+           AND deadline < date('now')
+           AND deadline_type NOT IN ('rolling', 'ongoing')`
+    const result = db.prepare(expireSql).run()
     const count = result.changes ?? result.rowCount ?? 0
     status.expire_stale = { expired: count }
     if (count > 0) {
@@ -90,17 +96,16 @@ export async function runHealthCheck(db) {
   // 3. Clean orphaned crawlers — stuck jobs older than 2 hours → mark failed
   try {
     const isPostgres = db?.dialect === 'postgres'
-    const staleExpr = isPostgres
-      ? "(created_at < NOW() - INTERVAL '2 hours')"
-      : "(created_at < datetime('now', '-2 hours'))"
-    const result = db
-      .prepare(
-        `UPDATE crawler_jobs
+    const cleanOrphansSql = isPostgres
+      ? `UPDATE crawler_jobs
          SET status = 'failed', updated_at = CURRENT_TIMESTAMP
          WHERE status IN ('queued', 'running')
-           AND ${staleExpr}`,
-      )
-      .run()
+           AND (created_at < NOW() - INTERVAL '2 hours')`
+      : `UPDATE crawler_jobs
+         SET status = 'failed', updated_at = CURRENT_TIMESTAMP
+         WHERE status IN ('queued', 'running')
+           AND (created_at < datetime('now', '-2 hours'))`
+    const result = db.prepare(cleanOrphansSql).run()
     const count = result.changes ?? result.rowCount ?? 0
     status.orphaned_crawlers = { cleaned: count }
     if (count > 0) {
@@ -117,19 +122,32 @@ export async function runHealthCheck(db) {
 
   // 4. Audit profile signals — find profiles missing state or type
   try {
-    const profiles = db.prepare("SELECT id, display_name, state, type FROM profiles WHERE status = 'active'").all()
+    const profiles = db
+      .prepare(
+        "SELECT id, display_name, state, type, needs_json, military_json, education_json, health_json, housing_json, business_json FROM profiles WHERE status = 'active'",
+      )
+      .all()
     const missingState = profiles.filter((p) => !p.state)
     const missingType = profiles.filter((p) => !p.type)
+    const missingNeeds = profiles.filter((p) => !p.needs_json)
+    const missingDepthSections = profiles.filter(
+      (p) =>
+        !p.military_json && !p.education_json && !p.health_json && !p.housing_json && !p.business_json,
+    )
     status.profile_signal_audit = {
       total_active: profiles.length,
       missing_state: missingState.length,
       missing_type: missingType.length,
+      missing_needs: missingNeeds.length,
+      missing_all_depth_sections: missingDepthSections.length,
       missing_state_ids: missingState.slice(0, 10).map((p) => p.id),
       missing_type_ids: missingType.slice(0, 10).map((p) => p.id),
+      missing_needs_ids: missingNeeds.slice(0, 10).map((p) => p.id),
+      missing_depth_ids: missingDepthSections.slice(0, 10).map((p) => p.id),
     }
-    if (missingState.length > 0 || missingType.length > 0) {
+    if (missingState.length > 0 || missingType.length > 0 || missingNeeds.length > 0 || missingDepthSections.length > 0) {
       console.warn(
-        `[AnyaHealth] Profile signal gaps: ${missingState.length} missing state, ${missingType.length} missing type`,
+        `[AnyaHealth] Profile signal gaps: ${missingState.length} missing state, ${missingType.length} missing type, ${missingNeeds.length} missing needs, ${missingDepthSections.length} missing all depth sections`,
       )
     }
   } catch (err) {
@@ -155,6 +173,34 @@ export async function runHealthCheck(db) {
     let removed = 0
     for (const group of dupGroups) {
       try {
+        // Prefer the duplicate with a valid application_url; fall back to MIN(id)
+        const bestRow = db
+          .prepare(
+            `SELECT id FROM funding_opportunities
+             WHERE profile_id IS NULL
+               AND title = ?
+               AND (sponsor = ? OR (sponsor IS NULL AND ? IS NULL))
+               AND (state = ? OR (state IS NULL AND ? IS NULL))
+             ORDER BY
+               CASE WHEN application_url IS NOT NULL AND application_url != '' THEN 0 ELSE 1 END ASC,
+               id ASC
+             LIMIT 1`,
+          )
+          .get(group.title, group.sponsor, group.sponsor, group.state, group.state)
+        if (!bestRow) continue
+        const keepId = bestRow.id
+        // Collect IDs to be removed for audit log
+        const toRemove = db
+          .prepare(
+            `SELECT id FROM funding_opportunities
+             WHERE profile_id IS NULL
+               AND title = ?
+               AND (sponsor = ? OR (sponsor IS NULL AND ? IS NULL))
+               AND (state = ? OR (state IS NULL AND ? IS NULL))
+               AND id != ?`,
+          )
+          .all(group.title, group.sponsor, group.sponsor, group.state, group.state, keepId)
+        if (toRemove.length === 0) continue
         const result = db
           .prepare(
             `DELETE FROM funding_opportunities
@@ -164,8 +210,14 @@ export async function runHealthCheck(db) {
                AND (state = ? OR (state IS NULL AND ? IS NULL))
                AND id != ?`,
           )
-          .run(group.title, group.sponsor, group.sponsor, group.state, group.state, group.keep_id)
-        removed += result.changes ?? result.rowCount ?? 0
+          .run(group.title, group.sponsor, group.sponsor, group.state, group.state, keepId)
+        const delta = result.changes ?? result.rowCount ?? 0
+        removed += delta
+        if (delta > 0) {
+          console.log(
+            `[AnyaHealth] dedup: kept id=${keepId}, removed ids=${toRemove.map((r) => r.id).join(',')}, title="${group.title}"`,
+          )
+        }
       } catch (delErr) {
         // Non-fatal: log and continue
         console.error('[AnyaHealth] dedup delete error:', delErr.message)
@@ -180,6 +232,20 @@ export async function runHealthCheck(db) {
     console.error('[AnyaHealth] dedup_opportunities error:', err.message)
     status.errors.push({ task: 'dedup_opportunities', error: err.message })
     status.dedup_opportunities = { error: err.message }
+  }
+
+  // 6. Auto-repair scan — non-critical dry-run code quality check
+  try {
+    const repairReport = await runAutoRepair(db, { dryRun: true })
+    status.auto_repair_scan = {
+      scannedFiles: repairReport.scannedFiles,
+      empty_catch: repairReport.findings.empty_catch.length,
+      console_log: repairReport.findings.console_log.length,
+      profile_bleed: repairReport.findings.profile_bleed.length,
+    }
+  } catch (err) {
+    // Non-critical — never block the health check
+    status.auto_repair_scan = { error: err.message }
   }
 
   status.completed_at = new Date().toISOString()

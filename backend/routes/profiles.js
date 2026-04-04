@@ -72,6 +72,7 @@ function canAccessProfileRowFromCtx(ctx, profileRow) {
   if (!profileRow) return false
   if (canAccessProfileIdFromCtx(ctx, profileRow.id)) return true
   if (ctx?.userId && profileRow.user_id && String(ctx.userId) === String(profileRow.user_id)) return true
+  if (ctx?.userId && profileRow.created_by && String(ctx.userId) === String(profileRow.created_by)) return true
   return false
 }
 
@@ -90,8 +91,11 @@ router.param('id', async (req, res, next, id) => {
 
     // As a last resort, verify ownership by userId (covers cases where access sets are empty/unavailable).
     if (req.ctx?.userId) {
-      const row = await req.db.prepare('SELECT user_id FROM profiles WHERE id = ?').get(String(id))
+      const row = await req.db
+        .prepare('SELECT user_id, created_by FROM profiles WHERE id = ?')
+        .get(String(id))
       if (row?.user_id && String(row.user_id) === String(req.ctx.userId)) return next()
+      if (row?.created_by && String(row.created_by) === String(req.ctx.userId)) return next()
     }
 
     return res.status(403).json({ error: 'Not authorized to access this profile' })
@@ -359,11 +363,27 @@ router.get('/', listProfilesLimiter, async (req, res) => {
     // Canonical truth is req.ctx, but harden against any transient ctx-building issues
     // by falling back to a DB-backed admin check (never token-only).
     const user = req.user ?? { role: 'guest' }
-    const isAdmin = req.ctx?.isAdmin === true ? true : await isAdminUserWithDb(req.db, user)
+    let isAdmin = req.ctx?.isAdmin === true ? true : await isAdminUserWithDb(req.db, user)
     const includeSummary = req.query.summary === 'true'
     const includeDeleted = req.query.includeDeleted === 'true'
     const scopeMine = req.query.scope === 'mine' || req.query.mine === 'true'
     const userId = req.ctx?.userId ?? getAuthUserId(user) ?? null
+
+    // Resolve accessible profile IDs once. `null` from getAccessibleProfileIds means admin (all profiles).
+    // If ctx missed admin but the DB says admin, upgrade `isAdmin` before pagination so admins get limit=1000.
+    let resolvedAccessibleIds = req.ctx?.accessibleProfileIds
+    if (!isAdmin && !scopeMine) {
+      if (resolvedAccessibleIds == null) {
+        try {
+          resolvedAccessibleIds = await getAccessibleProfileIds(req.db, user)
+        } catch {
+          resolvedAccessibleIds = new Set()
+        }
+      }
+      if (resolvedAccessibleIds === null) {
+        isAdmin = true
+      }
+    }
 
     // Validate pagination parameters.
     // For admins, default to the max page size unless a limit is explicitly provided.
@@ -393,6 +413,14 @@ router.get('/', listProfilesLimiter, async (req, res) => {
         const owned = await req.db.prepare('SELECT id FROM profiles WHERE user_id = ?').all(String(userId))
         for (const row of owned || []) {
           if (row?.id) ids.add(String(row.id))
+        }
+        try {
+          const created = await req.db.prepare('SELECT id FROM profiles WHERE created_by = ?').all(String(userId))
+          for (const row of created || []) {
+            if (row?.id) ids.add(String(row.id))
+          }
+        } catch {
+          // ignore schema drift
         }
       }
 
@@ -480,18 +508,7 @@ router.get('/', listProfilesLimiter, async (req, res) => {
       // This includes ownership (profiles.user_id) AND shared access via profile_emails.
       if (!userId) return res.status(401).json({ error: 'Authentication required' })
 
-      // Prefer the canonical access set computed by requestContext.
-      // If it's missing for some reason, recompute it (still DB-backed and safe).
-      let accessibleProfileIds = req.ctx?.accessibleProfileIds
-      if (accessibleProfileIds == null) {
-        try {
-          accessibleProfileIds = await getAccessibleProfileIds(req.db, user)
-        } catch {
-          accessibleProfileIds = new Set()
-        }
-      }
-
-      const ids = accessibleProfileIds instanceof Set ? Array.from(accessibleProfileIds) : []
+      const ids = resolvedAccessibleIds instanceof Set ? Array.from(resolvedAccessibleIds) : []
 
       if (ids.length === 0) {
         return res.json([])
@@ -532,7 +549,7 @@ router.get('/', listProfilesLimiter, async (req, res) => {
     const message = String(error?.message || error)
     const schemaMissing =
       message.toLowerCase().includes('no such table') ||
-      message.toLowerCase().includes('relation') && message.toLowerCase().includes('profiles')
+      (message.toLowerCase().includes('relation') && message.toLowerCase().includes('profiles'))
 
     console.error('[profiles] list failed', {
       requestId: req.requestId || null,
@@ -754,7 +771,7 @@ router.post('/', createProfileLimiter, async (req, res) => {
       requestedBy: req.ctx?.userId ?? 'system',
     })
     // Dispatch the local job immediately (fire-and-forget)
-    const { dispatchCrawlerJob } = await import('../services/crawlerDispatcher.js')
+    // dispatchCrawlerJob is already imported at the top of this module â no re-import needed.
     const localJob = await req.db
       .prepare(
         `SELECT id FROM crawler_jobs WHERE profile_id = ? AND type = 'local' AND status = 'queued' ORDER BY created_at DESC LIMIT 1`,
@@ -819,9 +836,9 @@ router.get('/:id', async (req, res) => {
       updated_by: section.updated_by,
     }))
   } catch (error) {
-    // Never 500 just because sections are missing/migrating.
-        console.warn('[profiles] Unable to load profile sections:', id, error?.message)
-return res.status(500).json({ error: 'Failed to load profile sections', details: error?.message })
+    // Never 500 just because sections are missing/migrating â return empty array.
+    console.warn('[profiles] Unable to load profile sections:', id, error?.message)
+    sections = []
   }
 
   let billing = null
@@ -832,10 +849,56 @@ return res.status(500).json({ error: 'Failed to load profile sections', details:
     billing = null
   }
 
+  // Compute pipeline_funds_total for the detail view (same logic as enrichProfileWithSummary)
+  let pipelineTotal = 0
+  const activeStatuses = [
+    'discovery',
+    'discovered',
+    'interested',
+    'auto_applied',
+    'drafting',
+    'app_prep',
+    'application_prep',
+    'revision',
+    'portal',
+    'submitted',
+    'pending_review',
+    'under_review',
+    'follow_up',
+    'report',
+  ]
+  const pipelinePlaceholders = activeStatuses.map(() => '?').join(',')
+  try {
+    const pipelineRow = await req.db
+      .prepare(
+        `SELECT COALESCE(SUM(g.amount_requested), 0) as total FROM grants g WHERE g.profile_id = ? AND g.status IN (${pipelinePlaceholders})`,
+      )
+      .get(row.id, ...activeStatuses)
+    pipelineTotal = pipelineRow?.total ?? 0
+  } catch (error) {
+    // Fall back to organization-level total if profile_id column doesn't exist
+    const msg = error?.message || String(error)
+    if (!/profile_id/i.test(msg)) {
+      console.warn('[profiles] pipeline detail query failed; falling back to org total:', msg)
+    }
+    try {
+      const pipelineRow = await req.db
+        .prepare(
+          `SELECT COALESCE(SUM(g.amount_requested), 0) as total FROM grants g WHERE g.organization_id = ? AND g.status IN (${pipelinePlaceholders})`,
+        )
+        .get(row.organization_id, ...activeStatuses)
+      pipelineTotal = pipelineRow?.total ?? 0
+    } catch (fallbackError) {
+      console.warn('[profiles] pipeline org detail query failed:', fallbackError?.message)
+      pipelineTotal = 0
+    }
+  }
+
   return res.json({
     ...mapProfile(row),
     sections,
     billing,
+    pipeline_funds_total: pipelineTotal,
   })
 })
 
@@ -973,7 +1036,7 @@ router.delete('/:id', async (req, res) => {
   const admin = req.ctx?.isAdmin === true
   if (!admin) {
     const matchesProfileId = authProfileId === String(id)
-    const matchesUserId = authUserId && existing.user_id && authUserId === existing.user_id
+    const matchesUserId = authUserId && existing.user_id && String(authUserId) === String(existing.user_id)
     if (!matchesProfileId && !matchesUserId) {
       return denyAuth(req, res)
     }
@@ -1003,7 +1066,7 @@ router.delete('/:id', async (req, res) => {
 
     // Best-effort cleanup of rows owned by the profile. Do NOT attempt `SET profile_id = NULL`.
     try {
-      await req.db.transaction(async (tx) => {
+      await req.db.withTransaction(async (tx) => {
         try {
           await tx.prepare('DELETE FROM profile_documents WHERE profile_id = ?').run(id)
         } catch {
@@ -1143,14 +1206,14 @@ router.post('/:id/avatar/ai', async (req, res) => {
   const authProfileId = req.ctx?.activeProfileId ? String(req.ctx.activeProfileId) : null
 
   // Fail loudly if upload storage is unavailable; this job writes a file under /uploads.
-  const storage = req?.storageStatus || req?.app?.locals?.uploads?.storageStatus || null
-  if (storage && storage.writable === false) {
+  const uploadStorageStatus = req?.storageStatus || req?.app?.locals?.uploads?.storageStatus || null
+  if (uploadStorageStatus && uploadStorageStatus.writable === false) {
     return res.status(503).json({
       ok: false,
       error: 'Upload storage is unavailable',
       code: 'UPLOAD_STORAGE_UNAVAILABLE',
-      uploads_dir: storage.uploads_dir || null,
-      status: storage.status || 'degraded',
+      uploads_dir: uploadStorageStatus.uploads_dir || null,
+      status: uploadStorageStatus.status || 'degraded',
     })
   }
 
@@ -1196,11 +1259,13 @@ router.post('/:id/avatar/ai', async (req, res) => {
 
   const job = await req.db.prepare('SELECT * FROM crawler_jobs WHERE id = ?').get(jobId)
 
-  dispatchCrawlerJob({
+  Promise.resolve().then(() => dispatchCrawlerJob({
     db: req.db,
     jobId: job.id,
     uploadDir: getUploadsDir(req),
     getOpenAI,
+  })).catch((err) => {
+    console.warn('[profiles] avatar AI crawl dispatch failed:', err?.message || String(err))
   })
 
   res.status(202).json({
@@ -1417,8 +1482,8 @@ router.put('/:id/sections/:sectionKey', async (req, res) => {
       // Sync contacts emails (admin-only for security)
       if (isAdmin && Array.isArray(data?.contacts)) {
         const contactEmails = data.contacts
-          .map(contact => normalizeEmail(contact?.email))
-          .filter(email => email && isValidEmail(email))
+          .map((contact) => normalizeEmail(contact?.email))
+          .filter((contactEmail) => contactEmail && isValidEmail(contactEmail))
         
         if (contactEmails.length > 0) {
           await addProfileEmails(req.db, {

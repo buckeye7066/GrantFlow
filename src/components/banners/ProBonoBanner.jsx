@@ -5,7 +5,7 @@ import { useAuthStore } from "@/stores/authStore"
 import { apiFetch } from "@/api/client"
 
 const DISMISS_KEY = "grantflow:pro-bono-banner-dismissed"
-const PDF_URL = `${import.meta.env.BASE_URL}docs/Payment_sheet_Grantflow.pdf`
+const PDF_URL = `${(import.meta.env.BASE_URL ?? "/").replace(/\/+$/, "")}/docs/Payment_sheet_Grantflow.pdf`
 const PRO_BONO_DURATION_DAYS = 30
 
 /**

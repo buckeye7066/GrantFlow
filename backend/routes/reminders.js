@@ -62,7 +62,9 @@ function normalizeMilestone(row) {
 
 export async function fetchReminderSnapshot(db, lookaheadDays = DAYS_LOOKAHEAD, options = {}) {
   const organizationIds =
-    options && Array.isArray(options.organizationIds) ? options.organizationIds.filter(Boolean) : null
+    options && Array.isArray(options.organizationIds) 
+      ? options.organizationIds.filter(id => id != null && (typeof id === 'number' || typeof id === 'string'))
+      : null
 
   // Compute date window boundaries in JavaScript
   const now = new Date();
@@ -158,9 +160,10 @@ export async function fetchReminderSnapshot(db, lookaheadDays = DAYS_LOOKAHEAD, 
 
   if (organizationIds && organizationIds.length > 0) {
     const placeholders = organizationIds.map(() => '?').join(',')
+    const whereClause = `AND COALESCE(m.organization_id, g.organization_id) IN (${placeholders})`
     milestoneSqlWithScope = milestoneSqlWithScope.replace(
-      'ORDER BY m.due_date ASC',
-      `AND COALESCE(m.organization_id, g.organization_id) IN (${placeholders})\n          ORDER BY m.due_date ASC`,
+      'WHERE m.completed',
+      `WHERE ${whereClause} AND m.completed`
     )
     milestoneParams.push(...organizationIds)
   }
@@ -178,10 +181,7 @@ router.get('/', async (req, res) => {
     // AUTH GUARD: Require authentication
     const user = requireAuthenticatedUser(req, res)
     if (!user) {
-      return res.status(401).json({ 
-        error: 'Authentication required',
-        message: 'You must be logged in to view reminders'
-      });
+      return;
     }
     
     if (!req.db) {
@@ -195,7 +195,7 @@ router.get('/', async (req, res) => {
       if (isAdminUser(user)) return await fetchReminderSnapshot(req.db)
       const orgIds = await getAccessibleOrganizationIds(req.db, user)
       return await fetchReminderSnapshot(req.db, DAYS_LOOKAHEAD, {
-        organizationIds: Array.from(orgIds ?? []),
+        organizationIds: Array.isArray(orgIds) ? Array.from(orgIds) : [],
       })
     })()
     

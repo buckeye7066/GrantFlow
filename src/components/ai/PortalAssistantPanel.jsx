@@ -77,6 +77,18 @@ function AnswerCard({ answer, index }) {
 
 export default function PortalAssistantPanel({ open, onClose, grant }) {
   const [portalUrl, setPortalUrl] = useState(grant?.application_url || grant?.url || '');
+
+  // Reset derived state whenever the grant changes
+  const prevGrantId = React.useRef(grant?.id);
+  React.useEffect(() => {
+    if (grant?.id !== prevGrantId.current) {
+      prevGrantId.current = grant?.id;
+      setPortalUrl(grant?.application_url || grant?.url || '');
+      setCustomQuestions('');
+      setResult(null);
+      setError(null);
+    }
+  }, [grant]);
   const [customQuestions, setCustomQuestions] = useState('');
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState(null);
@@ -84,7 +96,10 @@ export default function PortalAssistantPanel({ open, onClose, grant }) {
   const { toast } = useToast();
 
   const handleAssist = useCallback(async () => {
-    if (!grant?.id) return;
+    if (!grant?.id) {
+      setError('No grant selected. Please open a specific grant before using the assistant.');
+      return;
+    }
     setLoading(true);
     setError(null);
     setResult(null);
@@ -94,18 +109,57 @@ export default function PortalAssistantPanel({ open, onClose, grant }) {
         ? customQuestions.split('\n').filter(q => q.trim())
         : undefined;
 
-      const resp = await apiFetch('/api/ai/portal-assist', {
-        method: 'POST',
-        body: JSON.stringify({
-          grant_id: grant.id,
-          portal_url: portalUrl || undefined,
-          questions,
-        }),
+      // Validate portalUrl before sending
+      let validatedPortalUrl;
+      if (portalUrl) {
+        try {
+          const parsed = new URL(portalUrl.trim());
+          if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
+            throw new Error('URL must start with http:// or https://');
+          }
+          validatedPortalUrl = parsed.href;
+        } catch (urlErr) {
+          setError(`Invalid portal URL: ${urlErr.message}`);
+          setLoading(false);
+          return;
+        }
+      }
+
+      // Warn the user if the supplied portal URL diverges from the stored application URL
+const storedUrl = grant?.application_url || grant?.url || '';
+if (validatedPortalUrl && storedUrl) {
+  try {
+    const suppliedHost = new URL(validatedPortalUrl).hostname;
+    const storedHost = new URL(storedUrl).hostname;
+    if (suppliedHost !== storedHost) {
+      toast({
+        title: 'URL mismatch',
+        description: `The URL you entered (${suppliedHost}) differs from the stored application URL (${storedHost}). The AI will use your custom URL.`,
+        variant: 'default',
       });
+    }
+  } catch (_) {
+    // one of the URLs failed to parse â ignore the comparison
+  }
+}
+
+const resp = await apiFetch('/api/ai/portal-assist', {
+  method: 'POST',
+  body: JSON.stringify({
+    grant_id: grant.id,
+    portal_url: validatedPortalUrl,
+    questions,
+  }),
+});
 
       if (!resp.ok) {
-        const err = await resp.json().catch(() => ({}));
-        throw new Error(err.error || `Request failed (${resp.status})`);
+        let errBody = {};
+        try {
+          errBody = await resp.json();
+        } catch (_parseErr) {
+          // response body was not JSON; fall through to status-based message
+        }
+        throw new Error(errBody.error || errBody.message || `Request failed (${resp.status})`);
       }
 
       const data = await resp.json();
@@ -150,13 +204,24 @@ export default function PortalAssistantPanel({ open, onClose, grant }) {
                   placeholder="https://..."
                   className="flex-1"
                 />
-                {portalUrl && (
-                  <Button variant="outline" size="icon" asChild>
-                    <a href={portalUrl} target="_blank" rel="noopener noreferrer">
-                      <ExternalLink className="w-4 h-4" />
-                    </a>
-                  </Button>
-                )}
+                {(() => {
+                  let safeLinkUrl = null;
+                  try {
+                    const parsed = new URL(portalUrl.trim());
+                    if (parsed.protocol === 'https:' || parsed.protocol === 'http:') {
+                      safeLinkUrl = parsed.href;
+                    }
+                  } catch (_) {
+                    // not a valid URL â suppress the link
+                  }
+                  return safeLinkUrl ? (
+                    <Button variant="outline" size="icon" asChild>
+                      <a href={safeLinkUrl} target="_blank" rel="noopener noreferrer">
+                        <ExternalLink className="w-4 h-4" />
+                      </a>
+                    </Button>
+                  ) : null;
+                })()}
               </div>
               <p className="text-xs text-slate-500 mt-1">
                 AI will read this page to understand what the funder is asking

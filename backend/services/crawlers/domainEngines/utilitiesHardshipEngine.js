@@ -19,8 +19,44 @@ const DIRECTORY_RESOURCES = [
 
 export async function runUtilitiesHardshipEngine(profile, options = {}) {
   try {
-    return normalizeAndFilter(DIRECTORY_RESOURCES, ENGINE_ID, { strict_no_loans: false, strict_no_matching: false })
-  } catch {
+    // Filter resources based on profile needs, location, eligibility
+    const filteredResources = DIRECTORY_RESOURCES.filter(resource => {
+      // Basic eligibility check
+      if (profile.location?.state && resource.state_specific && resource.state_specific !== profile.location.state) {
+        return false
+      }
+      // Check if utility assistance matches profile needs
+      if (profile.needs && profile.needs.length > 0) {
+        const hasUtilityNeed = profile.needs.some(need => {
+          const needStr = typeof need === 'string' ? need : (need?.category || need?.type || '');
+          const lower = needStr.toLowerCase();
+          return (
+            lower.includes('utility') ||
+            lower.includes('utilities') ||
+            lower.includes('energy') ||
+            lower.includes('heating') ||
+            lower.includes('cooling') ||
+            lower.includes('water') ||
+            lower.includes('bill') ||
+            lower.includes('hardship') ||
+            lower.includes('liheap') ||
+            lower.includes('lihwap')
+          );
+        });
+        // Only filter if we are highly confident the user has NO utility need at all.
+        // Prefer passing to normalizeAndFilter (recall > suppression per Goal 7).
+        // Do NOT return false here â let the decision engine reject non-matches.
+        if (!hasUtilityNeed) {
+          // Log the suppression so it is visible (Goal 8), but still pass through
+          // because profile.needs may be incomplete (Goal 7, Goal 10).
+          console.warn(`[${ENGINE_ID}] No explicit utility need found in profile; passing all resources to decision engine for evaluation.`);
+        }
+      }
+      return true
+    })
+    return await normalizeAndFilter(filteredResources, ENGINE_ID, { strict_no_loans: false, strict_no_matching: false })
+  } catch (error) {
+    console.error(`[${ENGINE_ID}] Engine error:`, error)
     return []
   }
 }

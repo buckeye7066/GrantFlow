@@ -38,10 +38,12 @@ export class RateLimitedFetcher {
   async fetch(url, options = {}) {
     const host = hostOf(url) ?? 'unknown'
     const state = this._state(host)
-    return new Promise((resolve) => {
-      state.queue.push({ url, options, resolve })
-      this._pump(host).catch(() => {
-        // no-op; individual task resolves to error response
+    return new Promise((resolve, reject) => {
+      state.queue.push({ url, options, resolve, reject })
+      this._pump(host).catch((err) => {
+        console.error(`[RateLimitedFetcher] Pump error for ${host}:`, err)
+        // Do NOT resolve here â the task itself carries resolve/reject.
+        // A pump-level crash that was not tied to a specific task is just logged.
       })
     })
   }
@@ -53,10 +55,24 @@ export class RateLimitedFetcher {
       state.inFlight += 1
       this._runTask(state, task)
         .then(task.resolve)
-        .catch((err) => task.resolve({ ok: false, error: err }))
+        .catch((err) => {
+          if (typeof task.reject === 'function') {
+            task.reject(err)
+          } else {
+            task.resolve({ ok: false, status: 0, error: err })
+          }
+        })
         .finally(() => {
           state.inFlight -= 1
-          this._pump(host).catch(() => {})
+          this._pump(host).catch(e => {
+            console.error('[RateLimitedFetcher] Background pump error for host ' + host + ':', e)
+            // Drain remaining queued tasks so callers are not left hanging
+            const st = this._state(host)
+            while (st.queue.length > 0) {
+              const t = st.queue.shift()
+              t.resolve({ ok: false, error: e })
+            }
+          })
         })
     }
   }
@@ -65,8 +81,10 @@ export class RateLimitedFetcher {
     const { url, options } = task
     const now = Date.now()
     const wait = Math.max(0, state.lastAt + this.perHostMinDelayMs - now)
+    // Update lastAt immediately (before awaiting) so concurrent tasks
+    // from the same host stagger themselves correctly.
+    state.lastAt = now + wait
     if (wait > 0) await sleep(wait)
-    state.lastAt = Date.now()
 
     const headers = {
       'user-agent': this.userAgent,
@@ -95,7 +113,15 @@ export class RateLimitedFetcher {
     }
 
     const err = lastError instanceof Error ? lastError : new Error(String(lastError))
-    err.code = err.code || 'FETCH_FAILED'
+    if (!err.code) {
+      if (err.name === 'AbortError') {
+        err.code = 'TIMEOUT'
+      } else if (err.message?.includes('ENOTFOUND')) {
+        err.code = 'DNS_LOOKUP_FAILED'
+      } else {
+        err.code = 'FETCH_FAILED'
+      }
+    }
     throw err
   }
 }

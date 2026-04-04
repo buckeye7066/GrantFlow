@@ -99,16 +99,21 @@ export function normalizeFromDocument({
     funding_amounts: [],
     renewal_cycle: null,
     application_method: null,
-    source_url: url,
+    source_url: (typeof url === 'string' && /^https?:\/\//i.test(url)) ? url : null,
     last_verified: new Date().toISOString(),
   }
 
   // Cheap heuristic fills (placeholder until state-by-state rule modules add precision)
   const t = extractedText.toLowerCase()
-  if (t.includes('apply') || t.includes('application')) base.application_method = 'See source URL'
-  if (t.includes('phone') || t.includes('call')) base.application_method = base.application_method || 'See source URL'
-  if (t.includes('eligib')) base.eligible_population = 'See source URL'
-  if (t.includes('covered') || t.includes('services')) base.covered_services = 'See source URL'
+  // Do NOT set application_method to a placeholder string.
+  // Leave it null so downstream gates that require a real application path
+  // (Goal 1) can correctly identify missing data.
+  // The real application URL must be extracted by a dedicated parser or
+  // supplied by the state-specific rule module before the record can be ACCEPTed.
+  // Leave eligible_population and covered_services as null when the actual
+  // values cannot be extracted. Null signals 'unknown' to the decision engine
+  // and to Anya's profile-gap advisor, which is semantically correct.
+  // State-specific rule modules must populate these fields with real data.
 
   const provider = looksProviderTrack(extractedText)
   const client = looksClientTrack(extractedText)
@@ -116,7 +121,7 @@ export function normalizeFromDocument({
   const tracks = []
   if (client) tracks.push('CLIENT')
   if (provider) tracks.push('PROVIDER')
-  if (tracks.length === 0) tracks.push(agent?.defaultTrack || 'CLIENT')
+  if (tracks.length === 0) tracks.push(agent?.defaultTrack || 'UNKNOWN')
 
   const contentHash = sha256(extractedText)
   const sourceUrlHash = sha256(url)

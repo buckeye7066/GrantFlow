@@ -10,6 +10,21 @@ import {
 
 const router = express.Router();
 
+// Apply authentication middleware to all routes
+router.use(async (req, res, next) => {
+  try {
+    const user = requireAuthenticatedUser(req, res);
+    if (!user) return; // requireAuthenticatedUser already sent 401
+    next();
+  } catch (error) {
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'Authentication check failed' });
+    } else {
+      next(error);
+    }
+  }
+});
+
 async function ensureMilestoneAccess(req, res, milestoneId) {
   const user = requireAuthenticatedUser(req, res)
   if (!user) return null
@@ -36,15 +51,16 @@ async function ensureMilestoneAccess(req, res, milestoneId) {
   if (isAdminUser(user)) return row
 
   const orgId = row.grant_organization_id ?? row.organization_id ?? null
-  if (orgId && (await ensureOrganizationAccess(req, res, String(orgId)))) {
-    return row
-  }
-
-  // ensureOrganizationAccess already sent the 403 if orgId existed.
   if (!orgId) {
     res.status(403).json({ error: 'Not authorized' })
+    return null
   }
-  return null
+  const access = await ensureOrganizationAccess(req, res, String(orgId))
+  if (!access) {
+    // ensureOrganizationAccess already sent 403
+    return null
+  }
+  return row
 }
 
 router.get('/', async (req, res) => {
@@ -66,7 +82,10 @@ router.get('/', async (req, res) => {
     } else if (!isAdminUser(user)) {
       // No grant specified: limit to accessible organizations
       const orgIds = await getAccessibleOrganizationIds(req.db, user)
-      if (!orgIds || orgIds.size === 0) return res.json([])
+      if (!orgIds || orgIds.size === 0) {
+        console.warn('[milestones] GET / - user has no accessible organizations, returning empty list', { userId: user.id });
+        return res.json([]);
+      }
       const placeholders = Array.from(orgIds)
         .map(() => '?')
         .join(',')
@@ -79,7 +98,7 @@ router.get('/', async (req, res) => {
     // Apply filter conditions
     if (completed === 'true') query += ' AND m.completed = 1'
     if (completed === 'false') {
-      query += req.db?.dialect === 'postgres' ? ' AND m.completed = FALSE' : ' AND m.completed = 0'
+      query += ' AND m.completed = 0'
     }
     if (upcoming === 'true') {
       query +=
@@ -113,6 +132,9 @@ router.post('/', async (req, res) => {
     const id = crypto.randomUUID()
     const { grant_id, title, description, due_date, type } = req.body
     if (!grant_id) return res.status(400).json({ error: 'grant_id is required' })
+    if (!title?.trim()) return res.status(400).json({ error: 'title is required' })
+    if (!due_date) return res.status(400).json({ error: 'due_date is required' })
+if (!/^\d{4}-\d{2}-\d{2}$/.test(due_date) || isNaN(Date.parse(due_date))) return res.status(400).json({ error: 'due_date must be a valid date (YYYY-MM-DD)' })
     const grant = await ensureGrantAccess(req, res, String(grant_id))
     if (!grant) return
     await req.db
@@ -130,12 +152,15 @@ router.put('/:id', async (req, res) => {
     const existing = await ensureMilestoneAccess(req, res, req.params.id)
     if (!existing) return
     const { title, description, due_date, completed, type } = req.body
+    if (!title?.trim()) return res.status(400).json({ error: 'title is required' })
+    if (!due_date) return res.status(400).json({ error: 'due_date is required' })
+if (!/^\d{4}-\d{2}-\d{2}$/.test(due_date) || isNaN(Date.parse(due_date))) return res.status(400).json({ error: 'due_date must be a valid date (YYYY-MM-DD)' })
     const completed_date = completed ? new Date().toISOString().split('T')[0] : null
     await req.db
       .prepare(
         'UPDATE milestones SET title = ?, description = ?, due_date = ?, completed = ?, completed_date = ?, type = ? WHERE id = ?'
       )
-      .run(title, description, due_date, Boolean(completed), completed_date, type, req.params.id)
+      .run(title, description, due_date, completed ? 1 : 0, completed_date, type, req.params.id)
     const milestone = await req.db.prepare('SELECT * FROM milestones WHERE id = ?').get(req.params.id)
     res.json(milestone)
   } catch (error) {
@@ -150,7 +175,7 @@ router.patch('/:id/complete', async (req, res) => {
     const completed_date = new Date().toISOString().split('T')[0]
     await req.db
       .prepare('UPDATE milestones SET completed = ?, completed_date = ? WHERE id = ?')
-      .run(true, completed_date, req.params.id)
+      .run(1, completed_date, req.params.id)
     const milestone = await req.db.prepare('SELECT * FROM milestones WHERE id = ?').get(req.params.id)
     res.json(milestone)
   } catch (error) {

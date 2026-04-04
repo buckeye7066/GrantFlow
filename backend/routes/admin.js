@@ -13,7 +13,7 @@ import { seedRealOpportunities } from '../utils/seedRealOpportunities.js';
 import { seedAssistanceDirectories } from '../utils/seedAssistanceDirectories.js';
 import { ensureDesignatedProfiles } from '../utils/ensureDesignatedProfiles.js';
 import { seedBaselineFromRepo } from '../utils/seedBaselineFromRepo.js';
-import { buildProfileSignals, calculateMatchScore } from '../services/profileHelpers.js';
+import { buildProfileSignals } from '../services/profileHelpers.js';
 import { getSystemDiagnostics } from '../services/diagnosticsService.js';
 import { getFundingSourceStatus } from '../src/config/fundingSources.js'
 import { listClientSignInEvents } from '../services/adminLoginEventStore.js'
@@ -36,6 +36,8 @@ import { resolveUploadsDir, ensureUploadsDirWritable } from '../utils/uploadsDir
 import { isDesignatedProfileId } from '../utils/ensureDesignatedProfiles.js'
 import { analyzeKnowledgeBaseDocument, processPendingKBDocuments, extractFundingOpportunitiesFromKB } from '../services/knowledgeBaseProcessor.js'
 import { runHealthCheck, getLastHealthStatus } from '../services/anyaHealthService.js'
+import { runAutoRepair } from '../services/anyaAutoRepairService.js'
+import { runRegionalPurge, getPurgeSummary, getPurgeEvents } from '../services/regionalPurgeService.js'
 
 const router = express.Router();
 
@@ -2386,16 +2388,14 @@ router.post('/geo/crawl/start', async (req, res) => {
     }
 
     // Dispatch asynchronously (don't block response).
-    try {
-      dispatchCrawlerJob({
-        db: req.db,
-        jobId: job.id,
-        uploadDir: getUploadsDir(req),
-        getOpenAI,
-      });
-    } catch (error) {
+    dispatchCrawlerJob({
+      db: req.db,
+      jobId: job.id,
+      uploadDir: getUploadsDir(req),
+      getOpenAI,
+    }).catch((error) => {
       console.warn('[admin/geo/crawl/start] Failed to dispatch job:', error?.message || error);
-    }
+    });
 
     res.status(201).json({ success: true, job, run_id: geoRunId });
   } catch (error) {
@@ -3317,7 +3317,7 @@ router.post('/seed-profile-grants', async (req, res) => {
   }
   try {
     const { excludeProfiles = [] } = req.body || {};
-    const { computeMatchDecision } = await import('../services/matchDecisionEngine.js');
+    const { computeMatchDecision } = await import('../services/matchEngine.js');
     const { saveToProfilePipeline } = await import('../services/opportunityMatcher.js');
 
     const profiles = await req.db.prepare('SELECT * FROM profiles WHERE status = ?').all('active');
@@ -3383,7 +3383,7 @@ router.post('/seed-profile-grants', async (req, res) => {
 // POST /api/admin/ingest - Trigger ingestion from all sources
 router.post('/ingest', async (req, res) => {
   try {
-    console.log('[admin/ingest] Starting manual ingestion...');
+    console.info('[admin/ingest] Starting manual ingestion...');
     
     // Import connectors dynamically
     const { fetchGrantsGov } = await import('../services/sources/grantsGov.js');
@@ -3394,7 +3394,7 @@ router.post('/ingest', async (req, res) => {
     
     // Ingest from Grants.gov
     try {
-      console.log('[admin/ingest] Fetching from Grants.gov...');
+      console.info('[admin/ingest] Fetching from Grants.gov...');
       const { opportunities: grantsGovOpps } = await fetchGrantsGov({ limit: 100, offset: 0 });
       const grantsGovResult = ingestOpportunities(req.db, grantsGovOpps, 'grants.gov');
       results.push({ source: 'grants.gov', ...grantsGovResult });
@@ -3405,7 +3405,7 @@ router.post('/ingest', async (req, res) => {
     
     // Ingest from USASpending.gov
     try {
-      console.log('[admin/ingest] Fetching from USASpending.gov...');
+      console.info('[admin/ingest] Fetching from USASpending.gov...');
       const { opportunities: usaSpendingOpps } = await fetchUSASpending({ limit: 100, page: 1 });
       const usaSpendingResult = ingestOpportunities(req.db, usaSpendingOpps, 'usaspending.gov');
       results.push({ source: 'usaspending.gov', ...usaSpendingResult });
@@ -3424,7 +3424,7 @@ router.post('/ingest', async (req, res) => {
       total_errors: results.reduce((sum, r) => sum + (r.errors || 0), 0),
     };
     
-    console.log('[admin/ingest] Ingestion completed:', summary);
+    console.info('[admin/ingest] Ingestion completed:', summary);
     
     res.json({
       success: summary.failures === 0,
@@ -4780,7 +4780,7 @@ router.post('/clear-all-pipelines', async (req, res) => {
     await safeDelete('crawl_metadata', 'DELETE FROM crawl_metadata')
     await safeDelete('crawler_jobs', 'DELETE FROM crawler_jobs')
 
-    console.log('[admin] clear-all-pipelines completed:', results)
+    console.info('[admin] clear-all-pipelines completed:', results)
     res.json({
       success: true,
       message: 'All pipelines cleared. Funding opportunities preserved for re-crawling.',
@@ -4808,8 +4808,19 @@ router.post('/backfill-matches', async (req, res) => {
     // Check that migration columns exist
     let hasDecisionColumns = false
     try {
-      const cols = db.prepare('PRAGMA table_info(grants)').all()
-      hasDecisionColumns = cols.some((c) => c.name === 'match_decision')
+      const dialect = db?.dialect || 'sqlite'
+      if (dialect === 'postgres') {
+        const row = await db
+          .prepare(
+            `SELECT 1 AS ok FROM information_schema.columns
+             WHERE table_schema = 'public' AND table_name = ? AND column_name = ? LIMIT 1`,
+          )
+          .get('grants', 'match_decision')
+        hasDecisionColumns = Boolean(row?.ok)
+      } else {
+        const cols = db.prepare('PRAGMA table_info(grants)').all()
+        hasDecisionColumns = cols.some((c) => c.name === 'match_decision')
+      }
     } catch { /* ignore */ }
 
     if (!hasDecisionColumns) {
@@ -4818,7 +4829,7 @@ router.post('/backfill-matches', async (req, res) => {
       })
     }
 
-    const { computeMatchDecision, normalizeProfile, computeProfileFingerprint, normalizeOpportunity, computeOpportunityFingerprint, MATCHER_VERSION } = await import('../services/matchDecisionEngine.js')
+    const { computeMatchDecision, normalizeProfile, computeProfileFingerprint, normalizeOpportunity, computeOpportunityFingerprint, MATCHER_VERSION } = await import('../services/matchEngine.js')
 
     // Load all pipeline entries with associated opportunity and profile data
     const grants = await db
@@ -4829,20 +4840,31 @@ router.post('/backfill-matches', async (req, res) => {
                 fo.source_url, fo.record_origin, fo.is_loan, fo.deadline,
                 fo.deadline_type, fo.funding_type, fo.opportunity_type,
                 fo.entity_types_allowed, fo.need_types_supported,
-                p.primary_type, p.tags,
-                ps.data AS sections_data
+                p.primary_type, p.tags
          FROM grants g
          LEFT JOIN funding_opportunities fo ON fo.id = g.funding_opportunity_id
          LEFT JOIN profiles p ON p.id = g.profile_id
-         LEFT JOIN (
-           SELECT profile_id, json_group_object(section_key, json(data)) AS data
-           FROM profile_sections
-           WHERE profile_id IN (SELECT DISTINCT profile_id FROM grants WHERE profile_id IS NOT NULL)
-           GROUP BY profile_id
-         ) ps ON ps.profile_id = g.profile_id
          WHERE g.profile_id IS NOT NULL`,
       )
       .all()
+
+    // Fetch profile sections separately to avoid SQLite-only json_group_object aggregate
+    const sectionRows = await db
+      .prepare(
+        `SELECT profile_id, section_key, data FROM profile_sections
+         WHERE profile_id IN (SELECT DISTINCT profile_id FROM grants WHERE profile_id IS NOT NULL)`,
+      )
+      .all()
+    const profileSectionsMap = new Map()
+    for (const r of sectionRows) {
+      if (!profileSectionsMap.has(r.profile_id)) profileSectionsMap.set(r.profile_id, {})
+      try {
+        profileSectionsMap.get(r.profile_id)[r.section_key] = JSON.parse(r.data)
+      } catch {
+        console.warn(`[admin/backfill-matches] Failed to parse section data for profile ${r.profile_id}, key ${r.section_key}`)
+        profileSectionsMap.get(r.profile_id)[r.section_key] = r.data
+      }
+    }
 
     let accepted = 0
     let reviewed = 0
@@ -4856,8 +4878,7 @@ router.post('/backfill-matches', async (req, res) => {
           primary_type: row.primary_type,
           tags: row.tags,
         }
-        let sections = null
-        try { sections = row.sections_data ? JSON.parse(row.sections_data) : null } catch { /* ignore */ }
+        let sections = profileSectionsMap.get(row.profile_id) ?? null
 
         const rawOpp = {
           id: row.funding_opportunity_id,
@@ -4928,7 +4949,7 @@ router.post('/backfill-matches', async (req, res) => {
       }
     }
 
-    console.log(`[admin/backfill-matches] Completed: accepted=${accepted}, reviewed=${reviewed}, rejected=${rejected}, errors=${errors}`)
+    console.info(`[admin/backfill-matches] Completed: accepted=${accepted}, reviewed=${reviewed}, rejected=${rejected}, errors=${errors}`)
 
     res.json({
       success: true,
@@ -4942,6 +4963,78 @@ router.post('/backfill-matches', async (req, res) => {
   } catch (error) {
     console.error('[admin/backfill-matches] error:', error)
     res.status(500).json({ error: error.message })
+  }
+})
+
+/**
+ * POST /api/admin/purge/regional/run
+ * Trigger the regional purge for discovered or specified states.
+ *
+ * Body (all optional):
+ *   dry_run                  boolean  – if true, no DB mutations (default: false)
+ *   states                   string[] – explicit states; auto-discovered if omitted
+ *   limit                    number   – max opps to check (default 500)
+ *   onlySuppressedCandidates boolean  – only re-check watch/suppressed items
+ */
+router.post('/purge/regional/run', async (req, res) => {
+  if (!(await ensureAdminRequest(req, res))) return
+  try {
+    const {
+      dry_run: dryRun = false,
+      states,
+      limit = 500,
+      onlySuppressedCandidates = false,
+    } = req.body || {}
+
+    const result = await runRegionalPurge(req.db, {
+      dryRun: Boolean(dryRun),
+      states: Array.isArray(states) && states.length > 0 ? states : undefined,
+      limit: Math.min(Number(limit) || 500, 5000),
+      onlySuppressedCandidates: Boolean(onlySuppressedCandidates),
+    })
+
+    res.json({ ok: true, dryRun: Boolean(dryRun), ...result })
+  } catch (err) {
+    console.error('[admin/purge/regional/run] Error:', err)
+    res.status(500).json({ error: err?.message || 'Purge failed' })
+  }
+})
+
+/**
+ * GET /api/admin/purge/regional/summary
+ * Returns recent suppression event totals and the 20 most recent events.
+ */
+router.get('/purge/regional/summary', async (req, res) => {
+  if (!(await ensureAdminRequest(req, res))) return
+  try {
+    const summary = getPurgeSummary(req.db)
+    res.json({ ok: true, ...summary })
+  } catch (err) {
+    console.error('[admin/purge/regional/summary] Error:', err)
+    res.status(500).json({ error: err?.message })
+  }
+})
+
+/**
+ * GET /api/admin/purge/regional/events
+ * Paginated event log.
+ *
+ * Query params:
+ *   page     number  – 1-based page number (default 1)
+ *   pageSize number  – rows per page (default 50, max 200)
+ *   state    string  – optional 2-letter state filter
+ */
+router.get('/purge/regional/events', async (req, res) => {
+  if (!(await ensureAdminRequest(req, res))) return
+  try {
+    const page = Math.max(1, Number(req.query.page) || 1)
+    const pageSize = Math.min(200, Math.max(1, Number(req.query.pageSize) || 50))
+    const state = req.query.state ? String(req.query.state).toUpperCase() : undefined
+    const result = getPurgeEvents(req.db, { page, pageSize, state })
+    res.json({ ok: true, ...result })
+  } catch (err) {
+    console.error('[admin/purge/regional/events] Error:', err)
+    res.status(500).json({ error: err?.message })
   }
 })
 
@@ -4969,6 +5062,71 @@ router.post('/anya-health/run', async (req, res) => {
     res.json(result)
   } catch (err) {
     console.error('[admin/anya-health/run] Error:', err)
+    res.status(500).json({ error: err.message })
+  }
+})
+
+/**
+ * GET /api/admin/anya-repair
+ * Dry-run scan — returns a report without modifying any files.
+ */
+router.get('/anya-repair', async (req, res) => {
+  if (!(await ensureAdminRequest(req, res))) return
+  try {
+    const report = await runAutoRepair(req.db, { dryRun: true })
+    res.json(report)
+  } catch (err) {
+    console.error('[admin/anya-repair] Error:', err)
+    res.status(500).json({ error: err.message })
+  }
+})
+
+/**
+ * POST /api/admin/anya-repair/run
+ * Apply repairs. Accepts optional `repairTypes` array in request body.
+ */
+router.post('/anya-repair/run', async (req, res) => {
+  if (!(await ensureAdminRequest(req, res))) return
+  try {
+    const { repairTypes } = req.body || {}
+    const report = await runAutoRepair(req.db, { dryRun: false, repairTypes })
+    res.json(report)
+  } catch (err) {
+    console.error('[admin/anya-repair/run] Error:', err)
+    res.status(500).json({ error: err.message })
+  }
+})
+
+/**
+ * GET /api/admin/exclusion-rules
+ * Returns all configured exclusion rules.
+ */
+router.get('/exclusion-rules', async (req, res) => {
+  try {
+    const rules = await req.db.prepare(`SELECT * FROM exclusion_rules`).all()
+    res.json({ rules })
+  } catch (err) {
+    console.error('[admin/exclusion-rules] Error:', err)
+    res.status(500).json({ error: err.message })
+  }
+})
+
+/**
+ * POST /api/admin/exclusion-rules
+ * Create or replace an exclusion rule.
+ */
+router.post('/exclusion-rules', async (req, res) => {
+  try {
+    const { rule_id, pattern, action } = req.body
+
+    await req.db.prepare(`
+      INSERT OR REPLACE INTO exclusion_rules (rule_id, pattern, action)
+      VALUES (?, ?, ?)
+    `).run(rule_id, pattern, action)
+
+    res.json({ success: true })
+  } catch (err) {
+    console.error('[admin/exclusion-rules] Error:', err)
     res.status(500).json({ error: err.message })
   }
 })

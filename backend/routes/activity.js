@@ -1,7 +1,15 @@
 import express from 'express'
 import { AUDIT_CATEGORIES, SEVERITY, logAuditEvent } from '../services/auditService.js'
+import { requireAuthenticatedUser } from '../utils/accessControl.js'
+import { standardRateLimiter } from '../middleware/rateLimiting.js'
 
 const router = express.Router()
+
+router.use(standardRateLimiter, (req, res, next) => {
+  const user = requireAuthenticatedUser(req, res)
+  if (!user) return
+  next()
+})
 
 function isAuthenticatedFromCtx(ctx) {
   return Boolean(ctx && (ctx.userId || ctx.activeProfileId || ctx.email))
@@ -34,8 +42,8 @@ router.post('/page-view', async (req, res) => {
     const title = safeString(req.body?.title, 256)
     const referrer = safeString(req.body?.referrer, 2048)
 
-    logAuditEvent(req.db, {
-      category: AUDIT_CATEGORIES.AUTH,
+    await logAuditEvent(req.db, {
+      category: AUDIT_CATEGORIES.USER_ACTIVITY,
       action: 'client_page_view',
       severity: SEVERITY.INFO,
       userId: req.ctx?.userId ?? null,

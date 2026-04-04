@@ -35,13 +35,34 @@ function recordEvent(bucket, event) {
   if (event.error) bucket.errors++
   bucket.recent.push(event)
   if (bucket.recent.length > WINDOW_SIZE) bucket.recent.shift()
+  if (event.zeroResult) bucket.lastZeroResultAt = event.ts
+  if (event.error) bucket.lastErrorAt = event.ts
 }
 
 function isZeroResult(body) {
   if (!body || typeof body !== 'object') return false
+  // Explicit numeric-zero counters
   if (body.returned === 0) return true
-  if (body.total === 0 && body.opportunities?.length === 0) return true
-  if (Array.isArray(body.opportunities) && body.opportunities.length === 0) return true
+  if (body.included === 0) return true
+  if (body.count === 0) return true
+  // Only treat body.total as a zero-result signal when no array payload
+  // contradicts it â prevents false positives from paginated/crawl responses.
+  if (body.total === 0) {
+    const arrayFields2 = ['opportunities', 'results', 'grants', 'matches', 'items']
+    const hasItems = arrayFields2.some(f => Array.isArray(body[f]) && body[f].length > 0)
+    if (!hasItems) return true
+  }
+  // Array payload shapes used across GrantFlow endpoints
+  // Only treat an empty array as zero-result when no numeric counter
+  // contradicts it (i.e. no non-zero returned/included/count present).
+  const numericCounters = [body.returned, body.included, body.count]
+  const hasNonZeroCounter = numericCounters.some(v => typeof v === 'number' && v > 0)
+  if (!hasNonZeroCounter) {
+    const arrayFields = ['opportunities', 'results', 'grants', 'matches', 'items']
+    for (const field of arrayFields) {
+      if (Array.isArray(body[field]) && body[field].length === 0) return true
+    }
+  }
   return false
 }
 
@@ -51,9 +72,9 @@ export function pipelineMonitor() {
     if (!group) return next()
 
     const start = Date.now()
-    const originalJson = res.json.bind(res)
-
+    const originalJson = res.json
     res.json = function monitoredJson(body) {
+      res.json = originalJson // restore original
       const elapsed = Date.now() - start
       const slow = elapsed > SLOW_THRESHOLD_MS
       const zeroResult = isZeroResult(body)
@@ -71,13 +92,22 @@ export function pipelineMonitor() {
       })
 
       if (zeroResult) {
-        console.warn(`[pipeline-monitor] ZERO RESULTS ${req.method} ${req.path} (${elapsed}ms)`)
+        const totalFound = body?.total_found ?? body?.total ?? body?.candidates_evaluated ?? 'unknown'
+        const included = body?.included ?? body?.returned ?? body?.count ?? 0
+        const suppressionNote =
+          (typeof totalFound === 'number' && totalFound > 0 && included === 0)
+            ? ' â  SUPPRESSION DETECTED: candidates found but none included â check relevanceFilter/matchEngine gates'
+            : ''
+        console.warn(
+          `[pipeline-monitor] ZERO RESULTS ${req.method} ${req.path} (${elapsed}ms) ` +
+          `total_found=${totalFound} included=${included} status=${res.statusCode}${suppressionNote}`
+        )
       }
       if (slow) {
         console.warn(`[pipeline-monitor] SLOW ${req.method} ${req.path} (${elapsed}ms)`)
       }
 
-      return originalJson(body)
+      return originalJson.call(this, body)
     }
 
     next()
@@ -92,9 +122,8 @@ export function getPipelineHealth() {
     const errorRate = b.total > 0 ? (b.errors / b.total * 100).toFixed(1) : '0.0'
 
     let status = 'healthy'
-    if (parseFloat(zeroRate) > 50) status = 'critical'
-    else if (parseFloat(zeroRate) > 20) status = 'degraded'
-    else if (parseFloat(errorRate) > 10) status = 'degraded'
+    if (parseFloat(zeroRate) > 50 || parseFloat(errorRate) > 50) status = 'critical'
+    else if (parseFloat(zeroRate) > 20 || parseFloat(errorRate) > 10) status = 'degraded'
 
     health[name] = {
       status,
@@ -105,6 +134,8 @@ export function getPipelineHealth() {
       slow_rate: `${slowRate}%`,
       error_count: b.errors,
       error_rate: `${errorRate}%`,
+      last_zero_result_at: b.lastZeroResultAt ?? null,
+      last_error_at: b.lastErrorAt ?? null,
       last_events: b.recent.slice(-5),
     }
   }
@@ -125,5 +156,7 @@ export function resetPipelineMetrics() {
     b.slow = 0
     b.errors = 0
     b.recent = []
+    b.lastZeroResultAt = undefined
+    b.lastErrorAt = undefined
   }
 }

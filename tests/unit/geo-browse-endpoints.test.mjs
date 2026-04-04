@@ -114,6 +114,11 @@ test('geo/scored: response shape contract with match scores', () => {
     assert.ok(item.title, 'title required')
     assert.ok(typeof item.match_score === 'number', 'match_score must be a number when profile_id provided')
     assert.ok(Array.isArray(item.match_reasons), 'match_reasons must be an array')
+assert.ok(item.match_reasons.length > 0, 'match_reasons must be non-empty â reasons must come from the decision engine')
+for (const reason of item.match_reasons) {
+  assert.equal(typeof reason, 'string', 'each match_reason must be a human-readable string')
+  assert.ok(reason.length > 0, 'match_reason string must not be empty')
+}
   }
 })
 
@@ -165,7 +170,12 @@ test('geo_zip filter: main endpoint accepts geo_zip query param', () => {
     params.push(String(queryParams.geo_zip).trim())
   }
 
-  assert.equal(conditions.length, 3, 'should have 3 conditions: active, state, geo_zip')
+  if (queryParams.compliance === 'grant_only') {
+    conditions.push("funding_type != 'loan'")
+  }
+
+  assert.equal(conditions.length, 4, 'should have 4 conditions: active, state, geo_zip, compliance')
+  assert.ok(conditions.some(c => c.includes("funding_type")), 'grant_only compliance must exclude loans (Goal 3)')
   assert.ok(conditions[2].includes('geo_zip'), 'geo_zip condition should be present')
   assert.equal(params[params.length - 1], '37311', 'geo_zip param should be the zip code')
 })

@@ -26,15 +26,19 @@ export default function ComplianceReportDetail() {
     queryKey: ['complianceReport', reportId],
     queryFn: () => client.entities.ComplianceReport.get(reportId),
     enabled: !!reportId,
-    onSuccess: (data) => {
+  });
+
+  // Sync editableData whenever the fetched report changes (replaces unreliable onSuccess)
+  React.useEffect(() => {
+    if (report) {
       setEditableData({
-        narrative: data.narrative || '',
-        activities_summary: data.activities_summary || '',
-        challenges_faced: data.challenges_faced || '',
-        next_steps: data.next_steps || '',
+        narrative: report.narrative || '',
+        activities_summary: report.activities_summary || '',
+        challenges_faced: report.challenges_faced || '',
+        next_steps: report.next_steps || '',
       });
     }
-  });
+  }, [report]);
 
   const { data: grant } = useQuery({
     queryKey: ['grant', report?.grant_id],
@@ -105,7 +109,12 @@ export default function ComplianceReportDetail() {
     return <div className="p-8 text-center">Report not found.</div>;
   }
 
-  const financialData = report.financial_data ? JSON.parse(report.financial_data) : null;
+  let financialData = null;
+  try {
+    financialData = report.financial_data ? JSON.parse(report.financial_data) : null;
+  } catch {
+    financialData = null;
+  }
   const isGenerating = generateReportMutation.isPending;
   const isDraft = report.status === 'draft' || report.status === 'scheduled';
 
@@ -124,7 +133,7 @@ export default function ComplianceReportDetail() {
             <div>
               <div className="flex items-center gap-3 mb-2">
                 <h1 className="text-3xl font-bold text-slate-900">
-                  {report.report_type.charAt(0).toUpperCase() + report.report_type.slice(1)} Report
+                  {report.report_type ? report.report_type.charAt(0).toUpperCase() + report.report_type.slice(1) : 'Compliance'} Report
                 </h1>
                 <Badge className={
                   report.status === 'submitted' ? 'bg-green-100 text-green-800' :
@@ -132,7 +141,7 @@ export default function ComplianceReportDetail() {
                   report.status === 'draft' ? 'bg-blue-100 text-blue-700' :
                   'bg-slate-100 text-slate-700'
                 }>
-                  {report.status.replace(/_/g, ' ')}
+                  {(report.status || '').replace(/_/g, ' ')}
                 </Badge>
               </div>
               <p className="text-slate-600">{grant?.title || 'Loading grant...'}</p>
@@ -184,7 +193,7 @@ export default function ComplianceReportDetail() {
               <Calendar className="w-5 h-5 text-slate-500" />
               <div>
                 <p className="text-xs text-slate-500">Due Date</p>
-                <p className="font-medium">{format(new Date(report.due_date), 'MMMM d, yyyy')}</p>
+                <p className="font-medium">{report.due_date ? format(new Date(report.due_date), 'MMMM d, yyyy') : 'No due date set'}</p>
               </div>
             </div>
             {report.report_period_start && report.report_period_end && (

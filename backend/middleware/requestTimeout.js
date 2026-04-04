@@ -7,19 +7,36 @@
 
 export function requestTimeout(ms) {
   return function timeout(req, res, next) {
-    const timer = setTimeout(() => {
-      if (!res.headersSent) {
+    let timer = setTimeout(() => {
+      if (!res.headersSent && !res.writableEnded) {
         console.error(`[timeout] ${req.method} ${req.originalUrl} exceeded ${ms}ms`)
-        res.status(504).json({
-          error: 'Request timed out',
-          error_type: 'gateway_timeout',
-          timeout_ms: ms,
-        })
+        try {
+          res.status(504).json({
+            error: 'Request timed out',
+            error_type: 'gateway_timeout',
+            timeout_ms: ms,
+          })
+        } catch (err) {
+          console.error(`[timeout] Failed to send timeout response: ${err.message}`)
+        }
       }
     }, ms)
 
-    res.on('close', () => clearTimeout(timer))
-    res.on('finish', () => clearTimeout(timer))
+    const cleanup = () => {
+      if (timer) {
+        clearTimeout(timer)
+        timer = null
+      }
+      req.removeListener('close', cleanup)
+      res.removeListener('close', cleanup)
+      res.removeListener('finish', cleanup)
+      res.removeListener('error', cleanup)
+    }
+    
+    req.on('close', cleanup)
+    res.on('close', cleanup)
+    res.on('finish', cleanup)
+    res.on('error', cleanup)
     next()
   }
 }

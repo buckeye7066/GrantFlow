@@ -35,7 +35,8 @@ function daysBetween(dateStr1, dateStr2) {
 function isExpired(deadlineStr) {
   if (!deadlineStr) return false
   try {
-    return new Date(deadlineStr) < new Date(today())
+    // Compare as strings (both YYYY-MM-DD) to avoid timezone shifts
+    return deadlineStr.slice(0, 10) < today()
   } catch {
     return false
   }
@@ -65,16 +66,16 @@ export async function archiveExpiredGrants(db) {
 
   let expiredGrants
   try {
-    expiredGrants = await db
-      .prepare(
-        `SELECT id, title, profile_id, organization_id, deadline, status
-         FROM grants
-         WHERE deadline IS NOT NULL
-           AND deadline < ?
-           AND status IN (${placeholders})`,
-      )
-      .all(cutoff, ...ARCHIVEABLE_STATUSES)
-  } catch {
+    const stmt = db.prepare(
+      `SELECT id, title, profile_id, organization_id, deadline, status
+       FROM grants
+       WHERE deadline IS NOT NULL
+         AND deadline < ?
+         AND status IN (${placeholders})`
+    )
+    expiredGrants = await stmt.all(cutoff, ...ARCHIVEABLE_STATUSES)
+  } catch (err) {
+    console.error('[pipelineLifecycle] archiveExpiredGrants query failed:', err?.message || err)
     return { archived: [] }
   }
 
@@ -83,15 +84,14 @@ export async function archiveExpiredGrants(db) {
   const archived = []
   for (const grant of expiredGrants) {
     try {
-      await db
-        .prepare(
-          `UPDATE grants
-           SET status = 'archived',
-               updated_at = CURRENT_TIMESTAMP,
-               notes = COALESCE(notes || ' | ', '') || 'Auto-archived: deadline passed (' || deadline || ')'
-           WHERE id = ?`,
-        )
-        .run(grant.id)
+      const updateStmt = db.prepare(
+        `UPDATE grants
+         SET status = 'archived',
+             updated_at = CURRENT_TIMESTAMP,
+             notes = COALESCE(notes || ' | ', '') || 'Auto-archived: deadline passed (' || deadline || ')'
+         WHERE id = ?`
+      )
+      await updateStmt.run(grant.id)
       archived.push({ ...grant, newStatus: 'archived' })
     } catch {
       // Individual update failure is non-fatal
@@ -118,16 +118,16 @@ export async function flagStaleDiscoveries(db, staleDays = 60) {
 
   let staleGrants
   try {
-    staleGrants = await db
-      .prepare(
-        `SELECT id, title, profile_id, organization_id, created_at, status
-         FROM grants
-         WHERE status = 'discovered'
-           AND created_at < ?
-           AND (notes IS NULL OR notes NOT LIKE '%stale%')`,
-      )
-      .all(cutoff)
-  } catch {
+    const staleStmt = db.prepare(
+      `SELECT id, title, profile_id, organization_id, created_at, status
+       FROM grants
+       WHERE status = 'discovered'
+         AND created_at < ?
+         AND (notes IS NULL OR notes NOT LIKE '%stale%')`
+    )
+    staleGrants = await staleStmt.all(cutoff)
+  } catch (err) {
+    console.error('[pipelineLifecycle] flagStaleDiscoveries query failed:', err?.message || err)
     return { flagged: [] }
   }
 
@@ -137,14 +137,13 @@ export async function flagStaleDiscoveries(db, staleDays = 60) {
   for (const grant of staleGrants) {
     try {
       const age = daysBetween(grant.created_at, today())
-      await db
-        .prepare(
-          `UPDATE grants
-           SET updated_at = CURRENT_TIMESTAMP,
-               notes = COALESCE(notes || ' | ', '') || 'Stale: discovered ' || ? || ' days ago with no action'
-           WHERE id = ?`,
-        )
-        .run(age, grant.id)
+      const flagStmt = db.prepare(
+        `UPDATE grants
+         SET updated_at = CURRENT_TIMESTAMP,
+             notes = COALESCE(notes || ' | ', '') || 'Stale: discovered ' || ? || ' days ago with no action'
+         WHERE id = ?`
+      )
+      await flagStmt.run(age, grant.id)
       flagged.push({ ...grant, daysStale: age })
     } catch {
       // Non-fatal
@@ -171,19 +170,19 @@ export async function detectNewCycles(db) {
 
   let candidates
   try {
-    candidates = await db
-      .prepare(
-        `SELECT id, title, profile_id, organization_id, deadline, application_url, status
-         FROM grants
-         WHERE status IN ('archived', 'closed', 'declined', 'declined_no_review')
-           AND deadline IS NOT NULL
-           AND deadline < ?
-           AND (notes IS NULL OR notes NOT LIKE '%new cycle detected%')
-         ORDER BY deadline ASC
-         LIMIT 200`,
-      )
-      .all(cycleThreshold)
-  } catch {
+    const cycleStmt = db.prepare(
+      `SELECT id, title, profile_id, organization_id, deadline, application_url, status
+       FROM grants
+       WHERE status IN ('archived', 'closed', 'declined', 'declined_no_review')
+         AND deadline IS NOT NULL
+         AND deadline < ?
+         AND (notes IS NULL OR notes NOT LIKE '%new cycle detected%')
+       ORDER BY deadline ASC
+       LIMIT 200`
+    )
+    candidates = await cycleStmt.all(cycleThreshold)
+  } catch (err) {
+    console.error('[pipelineLifecycle] detectNewCycles query failed:', err?.message || err)
     return { newCycles: [] }
   }
 
@@ -231,9 +230,8 @@ export async function detectNewCycles(db) {
 async function buildProfileReports(db, runResults) {
   let profiles
   try {
-    profiles = await db
-      .prepare('SELECT id, display_name FROM profiles ORDER BY display_name')
-      .all()
+    const profileStmt = db.prepare('SELECT id, display_name FROM profiles ORDER BY display_name')
+    profiles = await profileStmt.all()
   } catch {
     return []
   }
@@ -242,14 +240,13 @@ async function buildProfileReports(db, runResults) {
   for (const profile of profiles) {
     let breakdown
     try {
-      breakdown = await db
-        .prepare(
-          `SELECT status, COUNT(*) as count
-           FROM grants
-           WHERE profile_id = ?
-           GROUP BY status`,
-        )
-        .all(profile.id)
+      const breakdownStmt = db.prepare(
+        `SELECT status, COUNT(*) as count
+         FROM grants
+         WHERE profile_id = ?
+         GROUP BY status`
+      )
+      breakdown = await breakdownStmt.all(profile.id)
     } catch {
       breakdown = []
     }
@@ -283,11 +280,9 @@ export async function runPipelineLifecycle(db) {
     return { archived: 0, flaggedStale: 0, newCyclesDetected: 0, report: [] }
   }
 
-  const [archiveResult, staleResult, cycleResult] = await Promise.all([
-    archiveExpiredGrants(db),
-    flagStaleDiscoveries(db),
-    detectNewCycles(db),
-  ])
+  const archiveResult = await archiveExpiredGrants(db)
+  const staleResult = await flagStaleDiscoveries(db)
+  const cycleResult = await detectNewCycles(db)
 
   const runResults = {
     archived: archiveResult.archived,
@@ -314,7 +309,7 @@ if (
   process.argv[1].includes('pipelineLifecycleService')
 ) {
   // Dynamic import to avoid loading DB in non-standalone contexts
-  const { createRequire } = await import('module')
+  const { createRequire } = await import('module') // removed â createRequire is not used anywhere below; delete this line entirely
   const require = createRequire(import.meta.url)
 
   let db

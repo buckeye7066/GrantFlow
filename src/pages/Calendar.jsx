@@ -16,7 +16,7 @@ export default function Calendar() {
 
   const { data: milestones = [] } = useQuery({
     queryKey: ['milestones'],
-    queryFn: () => client.entities.Milestone.list('due_date'),
+    queryFn: () => client.entities.Milestone.list(),
   });
 
   // Helper to validate date
@@ -32,7 +32,7 @@ export default function Calendar() {
       if (!g.deadline) return false;
       if (g.deadline.toLowerCase() === 'rolling') return false;
       if (!isValidDate(g.deadline)) return false;
-      return new Date(g.deadline) >= new Date();
+      const today = new Date(); today.setHours(0, 0, 0, 0); return new Date(g.deadline) >= today;
     })
     .sort((a, b) => new Date(a.deadline) - new Date(b.deadline));
 
@@ -69,7 +69,7 @@ export default function Calendar() {
               ) : (
                 <div className="space-y-4">
                   {upcomingDeadlines.map((grant) => {
-                    const daysLeft = differenceInDays(new Date(grant.deadline), new Date());
+                    const daysLeft = Math.max(0, differenceInDays(new Date(grant.deadline), new Date()));
                     return (
                       <Link key={grant.id} to={createPageUrl("GrantDetail", { id: grant.id })}>
                         <div className="flex items-start justify-between p-4 bg-slate-50 rounded-lg hover:bg-slate-100 transition-colors cursor-pointer">

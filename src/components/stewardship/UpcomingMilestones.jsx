@@ -11,10 +11,15 @@ export default function UpcomingMilestones({ milestones }) {
         return !isNaN(date.getTime());
     };
 
-    const upcomingMilestones = milestones
-        .filter(m => !m.completed && isValidDate(m.due_date))
-        .sort((a, b) => new Date(a.due_date) - new Date(b.due_date))
-        .slice(0, 5);
+    // Separate milestones: those with valid dates (sortable) and those without (shown last)
+const validDated = milestones
+    .filter(m => !m.completed && isValidDate(m.due_date))
+    .sort((a, b) => new Date(a.due_date) - new Date(b.due_date));
+
+const undated = milestones
+    .filter(m => !m.completed && !isValidDate(m.due_date));
+
+const upcomingMilestones = [...validDated, ...undated].slice(0, 5);
 
     return (
         <Card className="shadow-lg border-0">
@@ -34,7 +39,9 @@ export default function UpcomingMilestones({ milestones }) {
                                     <div>
                                         <p className="font-medium text-slate-900">{milestone.title}</p>
                                         <p className={`text-sm ${isOverdue ? 'text-red-600' : 'text-slate-600'}`}>
-                                            {format(new Date(milestone.due_date), 'MMM dd, yyyy')}
+                                            {isValidDate(milestone.due_date)
+                                                ? format(new Date(milestone.due_date), 'MMM dd, yyyy')
+                                                : 'No due date'}
                                         </p>
                                     </div>
                                 </li>

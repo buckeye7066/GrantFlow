@@ -75,6 +75,18 @@ function clearRefreshTimer() {
 
 const AUTH_METHODS = new Set(['email', 'phone', 'social'])
 
+/** Normalize admin flags from /api/auth/me, JWT payloads, and legacy login shapes. */
+export function normalizeUserAdmin(user) {
+  if (!user || typeof user !== 'object') return false
+  return Boolean(
+    user.is_admin === true ||
+      user.is_admin === 1 ||
+      user.isAdmin === true ||
+      user.role === 'admin' ||
+      (Array.isArray(user.roles) && user.roles.includes('admin')),
+  )
+}
+
 // Vite env values are typically strings, but be defensive (some tooling can coerce to boolean).
 const IS_SMOKE_UI =
   String(import.meta?.env?.VITE_SMOKE_MODE ?? '').toLowerCase() === 'true' ||
@@ -90,11 +102,12 @@ const ENABLE_ADMIN_AUTO_CRAWL =
 
 // Helper function to trigger crawler jobs for admin
 async function triggerAdminCrawlers() {
-  try {
-    if (!ENABLE_ADMIN_AUTO_CRAWL) return
+  if (!ENABLE_ADMIN_AUTO_CRAWL) return
 
-    // If enabled, only queue crawls that do NOT require a profile context.
-    // (Profile-scoped crawlers should be run explicitly from the UI with a selected profile.)
+  // Only queue a context-free national crawl when explicitly enabled via env flag.
+  // Profile-scoped crawlers must be triggered from the UI with a selected profile
+  // so that location, needs, and applicant type are available to the crawler.
+  try {
     await apiFetch('/api/crawlers/jobs', {
       method: 'POST',
       body: JSON.stringify({
@@ -105,10 +118,11 @@ async function triggerAdminCrawlers() {
 
     toast({
       title: 'Background crawl queued',
-      description: 'A comprehensive crawl was queued in the background.',
+      description: 'A national comprehensive crawl was queued. For profile-matched results, start a crawl from the Profile page.',
     })
   } catch (error) {
-    console.error('Failed to trigger admin crawlers:', error)
+    // Log but do not re-throw â this is a non-critical background task.
+    console.error('[authStore] Failed to trigger admin crawlers:', error)
   }
 }
 
@@ -129,6 +143,12 @@ const initialState = {
   needsProfileCreation: false,
   onboardingVideoRequested: false,
   profileWizardRequested: false,
+  // Backend-persisted onboarding/tour state (from GET /api/auth/me)
+  hasCompletedOnboarding: false,
+  onboardingCompletedAt: null,
+  lastSeenManualVersion: 0,
+  lastCompletedTourVersion: 0,
+  tourDismissedAt: null,
 }
 
 function normalizeId(value) {
@@ -192,7 +212,7 @@ export const useAuthStore = create((set, get) => ({
 
   refreshProfiles: async ({ reason = 'manual', force = false } = {}) => {
     const state = get()
-    const isAdmin = Boolean(state?.user?.is_admin)
+    const isAdmin = normalizeUserAdmin(state?.user)
     const prevCount = Array.isArray(state?.profiles) ? state.profiles.length : 0
 
     if (!state?.isAuthenticated) return []
@@ -241,14 +261,29 @@ export const useAuthStore = create((set, get) => ({
     }
 
     // Canonical auth bootstrap (`GET /api/auth/me`) shape:
-    // { userId, email, isAdmin, activeProfileId, accessibleProfileCount, accessibleOrgCount }
+    // { userId, email, isAdmin, activeProfileId, accessibleProfileCount, accessibleOrgCount,
+    //   hasCompletedOnboarding, onboardingCompletedAt, lastSeenManualVersion,
+    //   lastCompletedTourVersion, tourDismissedAt }
     if (payload.userId) {
       const activeProfileId = normalizeId(payload.activeProfileId ?? null)
-      const isAdmin = Boolean(payload.isAdmin)
+      const isAdmin = normalizeUserAdmin({
+        isAdmin: payload.isAdmin,
+        is_admin: payload.isAdmin,
+        role: payload.role,
+      })
       const accessibleProfileCount = Number(payload.accessibleProfileCount ?? 0) || 0
 
+      // Use backend has_completed_onboarding as the authoritative source.
+      // Fall back to localStorage for backward-compat during rollout of migration 047.
+      // TODO: Remove localStorage fallback once all users have migrated (> 30 days post-deploy).
+      const backendCompleted = Boolean(payload.hasCompletedOnboarding)
+      const localCompleted = typeof window !== 'undefined'
+        ? localStorage.getItem('grantflow:onboarding-complete') === 'true'
+        : false
+      const hasCompletedOnboarding = backendCompleted || localCompleted
+
       const needsProfileCreation =
-        !isAdmin && accessibleProfileCount === 0 && !get().hasSeenOnboarding
+        !isAdmin && accessibleProfileCount === 0 && !hasCompletedOnboarding
 
       const user = {
         id: payload.userId,
@@ -268,6 +303,13 @@ export const useAuthStore = create((set, get) => ({
         sessionExpired: false,
         sessionMessage: null,
         needsProfileCreation,
+        // Onboarding/tour state from backend
+        hasSeenOnboarding: hasCompletedOnboarding,
+        hasCompletedOnboarding,
+        onboardingCompletedAt: payload.onboardingCompletedAt ?? null,
+        lastSeenManualVersion: Number(payload.lastSeenManualVersion ?? 0),
+        lastCompletedTourVersion: Number(payload.lastCompletedTourVersion ?? 0),
+        tourDismissedAt: payload.tourDismissedAt ?? null,
       }))
 
       // Always refresh profiles after canonical auth bootstrap.
@@ -280,7 +322,10 @@ export const useAuthStore = create((set, get) => ({
 
     // Handle standard auth response with user object
     if (payload.user) {
-      const user = payload.user
+      const user = {
+        ...payload.user,
+        is_admin: normalizeUserAdmin(payload.user),
+      }
 
       // Backend returns profiles nested under user (auth/me + auth/email/verify),
       // while some legacy callers may still provide them at the top-level.
@@ -295,7 +340,7 @@ export const useAuthStore = create((set, get) => ({
       client.setActiveProfileId?.(activeProfileId)
       
       // Check if this is an admin user
-      if (user.is_admin) {
+      if (normalizeUserAdmin(user)) {
         set({
           user,
           profiles,
@@ -309,9 +354,20 @@ export const useAuthStore = create((set, get) => ({
           hasSeenOnboarding: true, // Skip onboarding for admins
         })
 
-        // Ensure admins see all profiles (server-backed).
+        // Ensure admins see all profiles (server-backed) and reconcile activeProfileId.
         get()
           .refreshProfiles({ reason: 'admin_login', force: true })
+          .then((refreshedProfiles) => {
+            const currentActive = get().activeProfileId
+            if (
+              currentActive &&
+              !refreshedProfiles.some((p) => String(p?.id) === String(currentActive))
+            ) {
+              // Active profile from login payload no longer valid after full refresh.
+              client.setActiveProfileId?.(null)
+              set({ activeProfileId: null })
+            }
+          })
           .catch(() => {})
         
         // Trigger crawler jobs asynchronously (fire-and-forget)
@@ -323,7 +379,11 @@ export const useAuthStore = create((set, get) => ({
       }
       
       // Regular user
-      const needsProfileCreation = profiles.length === 0 && !get().hasSeenOnboarding
+      // Use backend hasCompletedOnboarding (from payload.user if available) as authoritative source,
+      // falling back to the store's current hasSeenOnboarding flag.
+      const userCompletedOnboarding =
+        Boolean(payload.user?.has_completed_onboarding) || get().hasSeenOnboarding
+      const needsProfileCreation = profiles.length === 0 && !userCompletedOnboarding
       set({
         user,
         profiles,
@@ -334,6 +394,7 @@ export const useAuthStore = create((set, get) => ({
         sessionMessage: null,
         preferredAuthMethod: get().preferredAuthMethod,
         needsProfileCreation,
+        hasSeenOnboarding: userCompletedOnboarding,
       })
 
       // If login payload looks sparse, refresh from server so profile dropdown matches reality.
@@ -507,10 +568,16 @@ export const useAuthStore = create((set, get) => ({
       if (result?.accessToken) {
         client.setToken(result.accessToken)
         set({ accessToken: result.accessToken })
+        if (typeof window !== 'undefined') {
+          localStorage.setItem('grantflow:access-token', result.accessToken)
+        }
       }
       if (result?.refreshToken) {
         client.setRefreshToken?.(result.refreshToken)
         set({ refreshToken: result.refreshToken })
+        if (typeof window !== 'undefined') {
+          localStorage.setItem('grantflow:refresh-token', result.refreshToken)
+        }
       }
       get().setAuthenticatedUser(result)
       if (result) {
@@ -531,10 +598,16 @@ export const useAuthStore = create((set, get) => ({
       if (result?.accessToken) {
         client.setToken(result.accessToken)
         set({ accessToken: result.accessToken })
+        if (typeof window !== 'undefined') {
+          localStorage.setItem('grantflow:access-token', result.accessToken)
+        }
       }
       if (result?.refreshToken) {
         client.setRefreshToken?.(result.refreshToken)
         set({ refreshToken: result.refreshToken })
+        if (typeof window !== 'undefined') {
+          localStorage.setItem('grantflow:refresh-token', result.refreshToken)
+        }
       }
       get().setAuthenticatedUser(result)
       if (result) {
@@ -555,10 +628,16 @@ export const useAuthStore = create((set, get) => ({
       if (result?.accessToken) {
         client.setToken(result.accessToken)
         set({ accessToken: result.accessToken })
+        if (typeof window !== 'undefined') {
+          localStorage.setItem('grantflow:access-token', result.accessToken)
+        }
       }
       if (result?.refreshToken) {
         client.setRefreshToken?.(result.refreshToken)
         set({ refreshToken: result.refreshToken })
+        if (typeof window !== 'undefined') {
+          localStorage.setItem('grantflow:refresh-token', result.refreshToken)
+        }
       }
       get().setAuthenticatedUser(result)
       if (result) {
@@ -600,10 +679,16 @@ export const useAuthStore = create((set, get) => ({
       if (result?.accessToken) {
         client.setToken(result.accessToken)
         set({ accessToken: result.accessToken })
+        if (typeof window !== 'undefined') {
+          localStorage.setItem('grantflow:access-token', result.accessToken)
+        }
       }
       if (result?.refreshToken) {
         client.setRefreshToken?.(result.refreshToken)
         set({ refreshToken: result.refreshToken })
+        if (typeof window !== 'undefined') {
+          localStorage.setItem('grantflow:refresh-token', result.refreshToken)
+        }
       }
       get().setAuthenticatedUser(result)
       if (result) {
@@ -631,28 +716,34 @@ export const useAuthStore = create((set, get) => ({
         refreshToken,
       })
 
-      if (accessToken) {
-        set({ accessToken })
-      }
-      if (refreshToken) {
-        set({ refreshToken })
-      }
-
-      if (expiresIn !== undefined || accessExpires !== undefined || refreshExpires !== undefined) {
-        get().scheduleSessionRefresh({ expiresIn, accessExpires, refreshExpires })
-      }
-
+      // Defer all state writes until after the full response is validated.
       if (response) {
+        if (accessToken) {
+          client.setToken(accessToken)
+          set({ accessToken })
+          if (typeof window !== 'undefined') {
+            localStorage.setItem('grantflow:access-token', accessToken)
+          }
+        }
+        if (refreshToken) {
+          client.setRefreshToken?.(refreshToken)
+          set({ refreshToken })
+          if (typeof window !== 'undefined') {
+            localStorage.setItem('grantflow:refresh-token', refreshToken)
+          }
+        }
+        if (expiresIn !== undefined || accessExpires !== undefined || refreshExpires !== undefined) {
+          get().scheduleSessionRefresh({ expiresIn, accessExpires, refreshExpires })
+        }
         get().setAuthenticatedUser(response)
+        set((state) => ({
+          ...state,
+          isAuthenticated: true,
+          sessionExpired: false,
+          sessionMessage: null,
+          error: null,
+        }))
       }
-
-      set((state) => ({
-        ...state,
-        isAuthenticated: Boolean(response),
-        sessionExpired: false,
-        sessionMessage: null,
-        error: null,
-      }))
 
       return response
     } catch (error) {
@@ -670,7 +761,11 @@ export const useAuthStore = create((set, get) => ({
       throw new Error('Missing refresh token')
     }
     try {
-      const response = await refreshSession(refreshToken)
+      // Use client.refreshTokens() so this shares the single-flight refreshPromise
+      // with handleUnauthorized(). This prevents a simultaneous timer-based refresh
+      // and a 401-triggered refresh from both hitting /api/auth/refresh at the same
+      // time (which would invalidate the rotate-on-use refresh token).
+      const response = await client.refreshTokens()
       if (response?.accessToken) {
         client.setToken(response.accessToken)
         set({ accessToken: response.accessToken })
@@ -747,7 +842,37 @@ export const useAuthStore = create((set, get) => ({
     if (typeof window !== 'undefined') {
       localStorage.setItem('grantflow:onboarding-complete', 'true')
     }
-    set({ hasSeenOnboarding: true })
+    set({ hasSeenOnboarding: true, hasCompletedOnboarding: true, onboardingCompletedAt: new Date().toISOString() })
+    // Persist to backend (fire-and-forget; localStorage is still the fallback)
+    apiFetch('/api/auth/onboarding-state', {
+      method: 'PATCH',
+      body: JSON.stringify({ has_completed_onboarding: true }),
+    }).catch((err) => console.warn('[authStore] Failed to persist onboarding state:', err))
+  },
+
+  /**
+   * Persist tour completion state to the backend.
+   * @param {number} version - The tour version that was completed.
+   */
+  markTourComplete: (version) => {
+    const now = new Date().toISOString()
+    set({ lastCompletedTourVersion: version, tourDismissedAt: now })
+    apiFetch('/api/auth/onboarding-state', {
+      method: 'PATCH',
+      body: JSON.stringify({ last_completed_tour_version: version, tour_dismissed_at: now }),
+    }).catch((err) => console.warn('[authStore] Failed to persist tour state:', err))
+  },
+
+  /**
+   * Persist manual version seen to the backend.
+   * @param {number} version - The manual version that was viewed.
+   */
+  markManualSeen: (version) => {
+    set({ lastSeenManualVersion: version })
+    apiFetch('/api/auth/onboarding-state', {
+      method: 'PATCH',
+      body: JSON.stringify({ last_seen_manual_version: version }),
+    }).catch((err) => console.warn('[authStore] Failed to persist manual version:', err))
   },
 
   setNeedsProfileCreation: (needs) => {

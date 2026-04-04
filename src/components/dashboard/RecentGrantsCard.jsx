@@ -30,7 +30,7 @@ export default function RecentGrantsCard({ grants = [] }) {
         ) : (
           <div className="space-y-3">
             {grants.slice(0, 5).map((grant) => (
-              <Link key={grant.id} to={createPageUrl("Pipeline")}>
+              <Link key={grant.id} to={createPageUrl("Pipeline") + `?id=${grant.id}`}>
                 <div className="flex items-center gap-3 p-3 bg-muted/30 rounded-lg hover:bg-muted/50 transition-colors cursor-pointer">
                   <FileText className="w-5 h-5 text-foreground" />
                   <div className="flex-1">

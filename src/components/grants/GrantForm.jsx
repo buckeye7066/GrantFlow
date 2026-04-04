@@ -29,7 +29,7 @@ export default function GrantForm({ grant, organization, onSubmit, onCancel, isS
         deadline: grant?.deadline || '', // New field
         amount_max: grant?.amount_max || '', // New field
         amount_min: grant?.amount_min || '', // New field
-        url: grant?.url || '', // New field
+        application_url: grant?.application_url || '', // Only use canonical column; grant.url is a discovery URL, not an application portal
         eligibility_summary: grant?.eligibility_summary || '',
         program_description: grant?.program_description || '',
         selection_criteria: grant?.selection_criteria || '',
@@ -49,7 +49,47 @@ export default function GrantForm({ grant, organization, onSubmit, onCancel, isS
 
     const handleSubmit = (e) => {
         e.preventDefault();
-        onSubmit(formData);
+        // Goal 1: application_url must be a real URL or explicitly absent
+        const trimmedUrl = (formData.application_url || '').trim();
+        if (trimmedUrl) {
+            try {
+                const parsed = new URL(trimmedUrl);
+                if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+                    toast({
+                        variant: 'destructive',
+                        title: 'Invalid Application URL',
+                        description: 'The URL must start with http:// or https://'
+                    });
+                    return;
+                }
+            } catch {
+                toast({
+                    variant: 'destructive',
+                    title: 'Invalid Application URL',
+                    description: 'Please enter a valid URL (e.g. https://grants.example.org/apply) or leave it blank.'
+                });
+                return;
+            }
+        }
+        // Goal 1: warn (not hard-block) when url is absent so curator is alerted,
+// and always submit the field under the canonical key 'application_url'.
+const urlExemptMethods = ['auto_fafsa', 'auto_profile', 'nomination', 'invitation', 'no_application'];
+const urlRequired = !urlExemptMethods.includes(formData.application_method);
+if (!trimmedUrl && urlRequired) {
+    toast({
+        variant: 'destructive',
+        title: 'Application URL Required',
+        description: 'An application URL is required for standard opportunities. If no URL exists, choose an application method such as "Automatic via FAFSA" or "No Application Needed".'
+    });
+    return;
+}
+if (!trimmedUrl && !urlRequired) {
+    toast({
+        title: 'No URL â method noted',
+        description: `This opportunity uses "${formData.application_method}" â no URL required. Instructions field will guide applicants.`
+    });
+}
+onSubmit({ ...formData, application_url: trimmedUrl || null });
     };
 
     const handleAutofillContact = async () => {
@@ -189,7 +229,7 @@ Return ONLY the JSON object. If you cannot find a specific piece of information,
                                     <SelectItem value="auto_fafsa">Automatic via FAFSA</SelectItem>
                                     <SelectItem value="auto_profile">Automatic Profile Match</SelectItem>
                                     <SelectItem value="nomination">Nomination Required</SelectItem>
-                                    <SelectItem value="invitation">Invitation Only</SelectItem>
+                                    <SelectItem value="invitation">Invitation Only (will be marked ineligible by default)</SelectItem>
                                     <SelectItem value="no_application">No Application Needed</SelectItem>
                                 </SelectContent>
                             </Select>
@@ -207,6 +247,18 @@ Return ONLY the JSON object. If you cannot find a specific piece of information,
                             />
                             <p className="text-xs text-slate-500">Specific instructions for how to apply for this opportunity</p>
                         </div>
+                    </div>
+                    <div className="space-y-2">
+                        <Label htmlFor="application_url">Application URL</Label>
+                        <Input
+                            id="application_url"
+                            name="application_url"
+                            type="url"
+                            placeholder="https://grants.example.org/apply"
+                            value={formData.application_url}
+                            onChange={handleChange}
+                        />
+                        <p className="text-xs text-slate-500">Direct link where applicants can apply. Required for the opportunity to be matched.</p>
                     </div>
 
                     {/* AI-Powered Contact Information Section - Retained */}

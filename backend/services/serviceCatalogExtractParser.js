@@ -34,7 +34,10 @@ function parseMoneyToCents(raw) {
     .replace(/,/g, '')
     .trim()
   const n = Number(cleaned)
-  if (!Number.isFinite(n)) return null
+  if (!Number.isFinite(n) || n <= 0) {
+    console.warn(`[serviceCatalogExtractParser] invalid_price skipped: ${raw}`)
+    return null
+  }
   return Math.round(n * 100)
 }
 
@@ -112,9 +115,11 @@ export function parsePaymentSheetExtract(markdown) {
       const label = priceMatch[1].toLowerCase()
       const amountRaw = priceMatch[2]
       const cents = parseMoneyToCents(amountRaw)
-      if (cents == null) continue
-
-      if (label === 'flat') {
+      if (cents === null) {
+        console.warn(
+          `[serviceCatalogExtractParser] skipping price tier '${label}' for '${currentService.title}' â could not parse: ${amountRaw}`
+        )
+      } else if (label === 'flat') {
         currentService.prices = {
           individual: cents,
           small: cents,
@@ -188,7 +193,10 @@ export function parsePaymentSheetExtract(markdown) {
 
 export function loadPaymentSheetExtractFromDisk() {
   const p = getCanonicalServiceCatalogExtractPath()
-  if (!fs.existsSync(p)) throw new Error(`extract_not_found:${p}`)
+  if (!fs.existsSync(p)) {
+    console.error(`Service catalog extract not found: ${p}`)
+    throw new Error(`extract_not_found:${p}`)
+  }
   return fs.readFileSync(p, 'utf8')
 }
 

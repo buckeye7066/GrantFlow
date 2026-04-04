@@ -2,6 +2,7 @@ import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { Facebook, Loader2, Globe, AlertCircle, RefreshCw } from 'lucide-react'
 import { useState, useCallback } from 'react'
+import { getAbsoluteApiRootForOAuth } from '@/config/env.js'
 
 const PROVIDERS = [
   {
@@ -32,8 +33,7 @@ function buildRedirectTo(appBase) {
 }
 
 function buildAuthStartUrl(providerId, redirectTo) {
-  const apiBase = (import.meta.env.VITE_API_URL || '').replace(/\/$/, '')
-  const base = apiBase || (typeof window !== 'undefined' ? window.location.origin : '')
+  const base = getAbsoluteApiRootForOAuth()
   return `${base}/api/auth/${providerId}/start?redirect_to=${encodeURIComponent(redirectTo)}`
 }
 
@@ -42,9 +42,8 @@ function buildAuthStartUrl(providerId, redirectTo) {
  */
 async function checkBackendHealth() {
   try {
-    const apiBase = (import.meta.env.VITE_API_URL || '').replace(/\/$/, '')
-    const base = apiBase || (typeof window !== 'undefined' ? window.location.origin : '')
-    const response = await fetch(`${base}/health`, { 
+    const base = getAbsoluteApiRootForOAuth()
+    const response = await fetch(`${base}/api/health`, {
       method: 'GET',
       signal: AbortSignal.timeout(5000) // 5 second timeout
     })
@@ -118,7 +117,25 @@ export default function SocialSignInButtons({ onComplete: _onComplete }) {
       
       const redirectTo = buildRedirectTo(APP_BASE)
       const startUrl = buildAuthStartUrl(provider.id, redirectTo)
-      
+
+      // Guard: same-origin, or explicit VITE_API_URL origin when VITE_FORCE_RAILWAY_API is set
+      const parsedStart = new URL(startUrl)
+      const forceExternal = String(import.meta.env.VITE_FORCE_RAILWAY_API || '').toLowerCase() === 'true'
+      let trustedExternal = ''
+      if (forceExternal && import.meta.env.VITE_API_URL) {
+        try {
+          trustedExternal = new URL(String(import.meta.env.VITE_API_URL).trim()).origin
+        } catch {
+          /* ignore */
+        }
+      }
+      const allowed =
+        parsedStart.origin === window.location.origin ||
+        (forceExternal && trustedExternal && parsedStart.origin === trustedExternal)
+      if (!allowed) {
+        throw new Error(`Untrusted redirect origin: ${parsedStart.origin}`)
+      }
+
       console.info(`[SocialSignIn] Redirecting to: ${startUrl}`)
       window.location.href = startUrl
     } catch (err) {
@@ -132,11 +149,24 @@ export default function SocialSignInButtons({ onComplete: _onComplete }) {
       if (isRetriable && retry < MAX_RETRIES) {
         setError(`Connection failed. Retrying... (${retry + 1}/${MAX_RETRIES})`)
         setRetryCount(retry + 1)
-        
-        // Retry after delay
+
+        // Capture the provider id at schedule time; if user clicks away the
+        // retry will find activeProvider no longer matches and bail out.
+        const scheduledProviderId = provider.id
         setTimeout(() => {
-          handleClick(provider, retry + 1)
+          // Abort stale retry if user cancelled or switched provider
+          setActiveProvider((current) => {
+            if (current !== scheduledProviderId) {
+              // Provider changed â do not retry
+              return current
+            }
+            // Schedule the retry outside the setter so we only call it when still active
+            // We use a microtask to avoid calling setState-derived logic inside a setter
+            Promise.resolve().then(() => handleClick(provider, retry + 1))
+            return current
+          })
         }, RETRY_DELAY)
+        return // prevent fall-through
       } else {
         // Show final error
         setError(getErrorMessage(err))
@@ -205,7 +235,7 @@ export default function SocialSignInButtons({ onComplete: _onComplete }) {
             <AlertCircle className="h-5 w-5 text-rose-600 flex-shrink-0 mt-0.5" />
             <div className="flex-1 space-y-2">
               <div className="text-sm text-rose-900">
-                {typeof error === 'string' ? error : error}
+                {error}
               </div>
               {!activeProvider && (
                 <Button

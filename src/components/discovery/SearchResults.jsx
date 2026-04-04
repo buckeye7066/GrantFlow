@@ -80,6 +80,15 @@ export const AddToPipelineButton = ({ opportunity, onAddToPipeline, organization
   const queryClient = useQueryClient();
   const { toast } = useToast();
   const [lastStatus, setLastStatus] = React.useState(null);
+  // Reset local status if the opportunity prop changes (e.g. new search results)
+  const opportunityRef = React.useRef(opportunity?.id ?? opportunity?.title);
+  React.useEffect(() => {
+    const currentKey = opportunity?.id ?? opportunity?.title;
+    if (opportunityRef.current !== currentKey) {
+      opportunityRef.current = currentKey;
+      setLastStatus(null);
+    }
+  }, [opportunity]);
 
   const mutation = useMutation({
     mutationFn: (opp) => onAddToPipeline(opp, { silent: true }),
@@ -159,6 +168,16 @@ export default function SearchResults({ results = [], profileId, onAddToPipeline
   const queryClient = useQueryClient();
   const { toast } = useToast();
 
+  const uniqueSources = React.useMemo(() => {
+    if (!results || results.length === 0) return [];
+    const set = new Set();
+    results.forEach((opp) => {
+      const s = opp.source || opp.crawler_type || 'catalog';
+      if (s) set.add(s);
+    });
+    return Array.from(set);
+  }, [results]);
+
   const handleToggleSelection = (opportunityKey) => {
     setSelectedOpportunities(prev => {
       const newSet = new Set(Array.from(prev)); // Create proper new Set from array
@@ -205,16 +224,24 @@ export default function SearchResults({ results = [], profileId, onAddToPipeline
     let failCount = 0;
     let duplicateCount = 0;
 
+    const failedTitles = [];
     for (let i = 0; i < selectedOpps.length; i++) {
       const opp = selectedOpps[i];
       try {
-        const result = await onAddToPipeline(opp, { silent: true });
+        const result = await onAddToPipeline(opp, { silent: false });
         if (result?.status === 'already') duplicateCount++;
         else if (result?.status === 'added') successCount++;
-        else failCount++;
+        else if (['filtered', 'rejected', 'ineligible', 'skipped'].includes(result?.status)) {
+          // Valid non-error outcomes: not added but not a pipeline error.
+          duplicateCount++;
+        } else {
+          failCount++;
+          failedTitles.push(opp?.title || 'Unknown');
+        }
       } catch (error) {
-        console.error(`Failed to add ${opp.title}:`, error);
+        console.error(`Failed to add ${opp?.title}:`, error);
         failCount++;
+        failedTitles.push(opp?.title || 'Unknown');
       }
       setProcessingProgress({ current: i + 1, total: selectedOpps.length });
     }
@@ -256,15 +283,6 @@ export default function SearchResults({ results = [], profileId, onAddToPipeline
   }
 
   const allSelected = selectedOpportunities.size === results.length && results.length > 0;
-
-  const uniqueSources = React.useMemo(() => {
-    const set = new Set();
-    results.forEach((opp) => {
-      const s = opp.source || opp.crawler_type || 'catalog';
-      if (s) set.add(s);
-    });
-    return Array.from(set);
-  }, [results]);
 
   return (
     <div data-component="SearchResults" data-results-count={results.length} data-selected-count={selectedOpportunities.size}>
@@ -363,6 +381,11 @@ export default function SearchResults({ results = [], profileId, onAddToPipeline
                 {(opp.source || opp.crawler_type) && (
                   <Badge variant="outline" className="text-xs shrink-0">
                     {formatSourceLabel(opp.source || opp.crawler_type)}
+                  </Badge>
+                )}
+                {!opp.application_url && (
+                  <Badge variant="outline" className="text-xs shrink-0 border-amber-300 text-amber-700 bg-amber-50">
+                    No apply link
                   </Badge>
                 )}
                 {(() => {

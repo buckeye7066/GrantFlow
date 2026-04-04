@@ -43,7 +43,7 @@ RUN apt-get update \
 COPY --from=builder /app/node_modules ./node_modules
 
 # Copy backend code
-COPY backend ./backend
+COPY --from=builder /app/backend ./backend
 
 # Copy seed data needed for admin maintenance operations (e.g., baseline profile seeding)
 COPY seed ./seed
@@ -58,9 +58,9 @@ COPY --from=builder /app/package-lock.json ./package-lock.json
 # Expose port (Railway will set PORT env var)
 EXPOSE 8080
 
-# Health check on /health endpoint
+# Liveness check on /healthz endpoint
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
-  CMD node -e "require('http').get('http://localhost:' + (process.env.PORT || 8080) + '/readyz', (r) => { process.exit(r.statusCode === 200 ? 0 : 1); }).on('error', () => process.exit(1));"
+  CMD node -e "require('http').get('http://localhost:' + (process.env.PORT || 8080) + '/healthz', (r) => { process.exit(r.statusCode === 200 ? 0 : 1); }).on('error', () => process.exit(1));"
 
 # Start the Express server
 CMD ["node", "backend/start.js"]

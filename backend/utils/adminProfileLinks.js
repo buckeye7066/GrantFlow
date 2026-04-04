@@ -26,7 +26,7 @@ export async function ensureAdminUser(db) {
         INSERT INTO users (id, display_name, primary_email, is_admin, created_at, updated_at)
         VALUES (?, ?, ?, TRUE, ?, ?)
       `,
-    ).run(adminId, displayName, ADMIN_EMAIL, nowISOString(), nowISOString())
+    ).run(adminId, displayName, normalizedEmail, nowISOString(), nowISOString())
 
     adminUser = await db
       .prepare(
@@ -59,7 +59,8 @@ export async function linkProfileToAdmin(db, profileId) {
   // so admin UIs can enumerate legacy profiles without violating unique profile ownership.
   try {
     await ensureProfileEmailSchema(db)
-  } catch {
+  } catch (err) {
+    console.error('[adminProfileLinks] ensureProfileEmailSchema failed in linkProfileToAdmin:', err?.message || err)
     return
   }
 
@@ -96,7 +97,8 @@ export async function linkAllProfilesToAdmin(db) {
   // Instead, attach ADMIN_EMAIL as an access email so admin UIs can enumerate all profiles.
   try {
     await ensureProfileEmailSchema(db)
-  } catch {
+  } catch (err) {
+    console.error('[adminProfileLinks] ensureProfileEmailSchema failed in linkProfileToAdmin:', err?.message || err)
     return
   }
 

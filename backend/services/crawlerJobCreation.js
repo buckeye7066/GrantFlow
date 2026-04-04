@@ -6,7 +6,7 @@
  */
 
 import crypto from 'crypto'
-import { buildProfileContext } from './profileHelpers.js'
+import { buildProfileContext, computeProfileDigest } from './profileHelpers.js'
 import { validateJobStatus, validateZipCode, validateStateCode, validateUuid } from '../utils/dbValidation.js'
 
 // Postgres migrations run asynchronously at startup (see `backend/start.js`), so during deploys
@@ -15,10 +15,12 @@ import { validateJobStatus, validateZipCode, validateStateCode, validateUuid } f
 let postgresHasProfileContextSnapshotColumnPromise = null
 
 async function postgresHasProfileContextSnapshotColumn(db) {
-  if (!db || db?.dialect !== 'postgres') return true
+  if (!db) throw new Error('[createCrawlerJob] db is required for postgresHasProfileContextSnapshotColumn probe')
+  if (db?.dialect !== 'postgres') return true
   if (postgresHasProfileContextSnapshotColumnPromise) {
     return await postgresHasProfileContextSnapshotColumnPromise
   }
+  // Only cache for confirmed Postgres connections to avoid cross-dialect cache poisoning
 
   postgresHasProfileContextSnapshotColumnPromise = (async () => {
     try {
@@ -56,15 +58,23 @@ function stableStringify(value) {
 }
 
 /**
- * Generate idempotency key for a crawler job
+ * Generate idempotency key for a crawler job.
+ *
+ * When a `profileContextDigest` is provided the key incorporates the current
+ * material profile content, so that a meaningful profile edit produces a
+ * different key — and therefore a fresh job — even if type/profileId/params
+ * are unchanged (GF-AUDIT-019).
+ *
  * @param {string} type - Job type
  * @param {string} profileId - Profile ID (optional)
  * @param {object} parameters - Job parameters
+ * @param {string} [profileContextDigest] - Short digest of material profile fields
  * @returns {string} Idempotency key (32 chars)
  */
-export function generateIdempotencyKey(type, profileId, parameters) {
-  const normalizedParams = JSON.stringify(parameters || {})
-  const input = `${type}:${profileId || 'null'}:${normalizedParams}`
+export function generateIdempotencyKey(type, profileId, parameters, profileContextDigest) {
+  const normalizedParams = stableStringify(parameters || {})
+  const digestPart = profileContextDigest ? `:${profileContextDigest}` : ''
+  const input = `${type}:${profileId || 'null'}:${normalizedParams}${digestPart}`
   return crypto.createHash('sha256').update(input).digest('hex').substring(0, 32)
 }
 
@@ -81,6 +91,7 @@ export function generateIdempotencyKey(type, profileId, parameters) {
  * @param {string} [options.status='queued'] - Initial status
  * @param {boolean} [options.buildSnapshot=true] - Whether to build profile context snapshot
  * @param {boolean} [options.skipIdempotencyCheck=false] - Skip idempotency check (dangerous!)
+ * @param {string} [options.profileContextDigest] - Pre-computed material profile digest; auto-computed when buildSnapshot && profileId
  * @returns {Promise<object>} Created or existing job { jobId, created, existing }
  */
 export async function createCrawlerJob(db, options) {
@@ -93,6 +104,7 @@ export async function createCrawlerJob(db, options) {
     status = 'queued',
     buildSnapshot = true,
     skipIdempotencyCheck = false,
+    profileContextDigest: callerProvidedDigest = null,
   } = options
 
   const createdAtIso = new Date().toISOString()
@@ -111,6 +123,7 @@ export async function createCrawlerJob(db, options) {
     'pipeline_automation',
     'profile_enrichment',
     'national_zip_scan',
+    'portal_check',
   ]
 
   if (!VALID_TYPES.includes(type)) {
@@ -125,7 +138,17 @@ export async function createCrawlerJob(db, options) {
   // IMPORTANT:
   // When callers explicitly skip idempotency (force-rerun), we must not reuse the same key,
   // otherwise the UNIQUE index on crawler_jobs.idempotency_key will throw and the job can't be created.
-  let idempotencyKey = skipIdempotencyCheck ? null : generateIdempotencyKey(type, profileId, parameters)
+  //
+  // For profile-scoped jobs we include a digest of the material profile fields so that a meaningful
+  // profile edit produces a different key (GF-AUDIT-019).  The digest is either provided by the caller
+  // or auto-computed here when we already have a profileId (and snapshot building is enabled).
+  let profileContextDigest = callerProvidedDigest
+  if (!skipIdempotencyCheck && profileId && !profileContextDigest) {
+    profileContextDigest = await computeProfileDigest(db, profileId)
+  }
+  let idempotencyKey = skipIdempotencyCheck
+    ? `force_${crypto.randomUUID().replace(/-/g, '').substring(0, 28)}`
+    : generateIdempotencyKey(type, profileId, parameters, profileContextDigest)
 
   // Check for existing job with same idempotency key (unless explicitly skipped)
   if (!skipIdempotencyCheck) {
@@ -166,8 +189,17 @@ export async function createCrawlerJob(db, options) {
   // Build profile context snapshot if requested and profileId provided
   let profileContextSnapshot = null
   if (buildSnapshot && profileId) {
-    const context = await buildProfileContext(db, profileId, { asOf: createdAtIso })
-    profileContextSnapshot = stableStringify(context)
+    try {
+      const context = await buildProfileContext(db, profileId, { asOf: createdAtIso })
+      profileContextSnapshot = stableStringify(context)
+    } catch (snapshotErr) {
+      console.warn('[createCrawlerJob] Failed to build profile context snapshot; proceeding without snapshot', {
+        profileId,
+        type,
+        error: snapshotErr?.message || String(snapshotErr),
+      })
+      profileContextSnapshot = null
+    }
   }
 
   // Create job ID
@@ -283,7 +315,15 @@ export async function createCrawlerJob(db, options) {
     jobId,
     created: true,
     existing: false,
-    job: { id: jobId, type, status, profile_id: profileId, idempotency_key: idempotencyKey },
+    job: {
+      id: jobId,
+      type,
+      status: normalizedStatus,
+      profile_id: profileId,
+      idempotency_key: idempotencyKey,
+      profile_context_digest: profileContextDigest || null,
+      has_snapshot: !!profileContextSnapshot,
+    },
   }
 }
 

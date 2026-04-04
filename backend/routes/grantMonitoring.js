@@ -3,7 +3,7 @@ import crypto from 'crypto'
 import { formatError } from '../middleware/errorHandler.js'
 
 const router = express.Router()
-function requireAdmin(req, res) {
+function isAdmin(req, res) {
   if (!req.ctx?.userId) {
     res.status(401).json({ error: 'Authentication required' })
     return false
@@ -18,14 +18,7 @@ function requireAdmin(req, res) {
 async function ensureDefaults(db) {
   // Ensure default alert configs exist for all organizations.
   const orgs = await db.prepare('SELECT id FROM organizations').all()
-  const insert = db.prepare(`
-    INSERT INTO grant_monitoring_alerts (id, organization_id, alert_type, enabled, threshold_days, notification_methods)
-    VALUES (@id, @organization_id, @alert_type, @enabled, @threshold_days, @notification_methods)
-  `)
-
-  const exists = db.prepare(
-    'SELECT 1 FROM grant_monitoring_alerts WHERE organization_id = ? AND alert_type = ? LIMIT 1',
-  )
+  // Statements are prepared inside withTransaction below to stay within the same connection/tx scope.
 
   const defaults = [
     { alert_type: 'deadline_approaching', enabled: true, threshold_days: 14 },
@@ -61,7 +54,7 @@ async function ensureDefaults(db) {
 }
 
 router.get('/alerts', async (req, res) => {
-  if (!requireAdmin(req, res)) return
+  if (!isAdmin(req, res)) return
   try {
     await ensureDefaults(req.db)
     const { organization_id } = req.query
@@ -94,7 +87,7 @@ router.get('/alerts', async (req, res) => {
 })
 
 router.get('/logs', async (req, res) => {
-  if (!requireAdmin(req, res)) return
+  if (!isAdmin(req, res)) return
   try {
     const limit = Math.min(500, Math.max(1, Number.parseInt(req.query.limit ?? 100, 10)))
     const { organization_id } = req.query
@@ -130,11 +123,15 @@ router.get('/logs', async (req, res) => {
 })
 
 router.put('/logs/:id', async (req, res) => {
-  if (!requireAdmin(req, res)) return
+  if (!isAdmin(req, res)) return
   try {
     const id = req.params.id
     const acknowledged = Boolean(req.body?.acknowledged)
-    const acknowledgedAt = req.body?.acknowledged_at ?? new Date().toISOString()
+    const rawAcknowledgedAt = req.body?.acknowledged_at
+    const parsedAt = rawAcknowledgedAt ? new Date(rawAcknowledgedAt) : null
+    const acknowledgedAt = (parsedAt && !Number.isNaN(parsedAt.getTime()))
+      ? parsedAt.toISOString()
+      : new Date().toISOString()
 
     const existing = await req.db.prepare('SELECT id FROM grant_monitoring_logs WHERE id = ?').get(id)
     if (!existing) {
@@ -160,20 +157,22 @@ router.put('/logs/:id', async (req, res) => {
 })
 
 router.post('/check', async (req, res) => {
-  if (!requireAdmin(req, res)) return
+  if (!isAdmin(req, res)) return
   try {
-    ensureDefaults(req.db)
+    await ensureDefaults(req.db)
 
     const orgId = req.body?.organization_id ?? null
     const orgFilter = orgId ? ' AND organization_id = ?' : ''
     const params = orgId ? [String(orgId)] : []
 
+    const statusPlaceholders = "('discovered','interested','drafting','app_prep','revision')"
     const grants = await req.db
       .prepare(
         `
           SELECT id, organization_id, title, status, deadline, match_score
           FROM grants
-          WHERE 1=1
+          WHERE status IN ${statusPlaceholders}
+            AND deadline IS NOT NULL
           ${orgFilter}
         `,
       )
@@ -238,22 +237,32 @@ router.post('/check', async (req, res) => {
 
         if (daysUntil <= 14) {
           const eventType = 'deadline_approaching'
-          if (await seenRecentTx.get(grant.id, eventType)) continue
-          const severity = daysUntil <= 7 ? 'critical' : 'high'
-          await insertTx.run(
-            crypto.randomUUID(),
-            grant.organization_id,
-            grant.id,
-            eventType,
-            severity,
-            JSON.stringify({
-              grant_title: grant.title,
-              deadline: grant.deadline,
-              days_until: daysUntil,
-              match_score: grant.match_score ?? null,
-            }),
-          )
-          eventsLogged += 1
+          // Respect per-org alert config: skip if the org has disabled this alert type.
+          const alertCfg = await tx
+            .prepare(
+              `SELECT enabled FROM grant_monitoring_alerts
+               WHERE organization_id = ? AND alert_type = ? LIMIT 1`,
+            )
+            .get(grant.organization_id, eventType)
+          if (alertCfg && !alertCfg.enabled) continue
+          const alreadySeen = await seenRecentTx.get(grant.id, eventType)
+          if (!alreadySeen) {
+            const severity = daysUntil <= 7 ? 'critical' : 'high'
+            await insertTx.run(
+              crypto.randomUUID(),
+              grant.organization_id,
+              grant.id,
+              eventType,
+              severity,
+              JSON.stringify({
+                grant_title: grant.title,
+                deadline: grant.deadline,
+                days_until: daysUntil,
+                match_score: grant.match_score ?? null,
+              }),
+            )
+            eventsLogged += 1
+          }
         }
       }
     })

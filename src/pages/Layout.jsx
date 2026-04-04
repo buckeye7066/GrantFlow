@@ -29,6 +29,7 @@ import {
 import AutoTimeTracker from "@/components/billing/AutoTimeTracker";
 import { useDashboardPreferences } from "@/contexts/DashboardPreferencesContext.jsx";
 import OnboardingFlow from "@/components/onboarding/OnboardingFlow";
+import AnyaGuidedTour from "@/components/onboarding/AnyaGuidedTour";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { useAuthStore } from "@/stores/authStore";
@@ -352,6 +353,9 @@ export default function Layout({ children, currentPageName }) {
 
         {/* Onboarding Flow */}
         <OnboardingFlow />
+
+        {/* Anya guided tour (versioned, non-admin only) */}
+        <AnyaGuidedTour />
 
         {/* First-run onboarding wizard (ZIP, state, intent) */}
         <FirstRunOnboardingGate

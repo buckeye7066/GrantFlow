@@ -6,13 +6,16 @@ function nowExpr(db) {
 
 let ensured = false
 let ensurePromise = null
+// NOTE: ensured is intentionally module-scoped so schema creation runs once per
+// process lifetime. If schema migrations are needed, restart the process or add
+// versioned migration logic. Do NOT add in-request ALTER TABLE calls here.
 
 async function ensureGeoCrawlSchema(db) {
   if (!db || typeof db.prepare !== 'function') return
   if (ensured) return
   if (ensurePromise) return ensurePromise
 
-  ensurePromise = (async () => {
+  const p = (async () => {
     const isPostgres = db?.dialect === 'postgres'
 
     // Runs table
@@ -99,7 +102,7 @@ async function ensureGeoCrawlSchema(db) {
         `
       : `
           CREATE TABLE IF NOT EXISTS funding_opportunity_geo_index (
-            id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+            id TEXT PRIMARY KEY,
             opportunity_id TEXT NOT NULL REFERENCES funding_opportunities(id) ON DELETE CASCADE,
             geo_run_id TEXT,
             state TEXT,
@@ -116,8 +119,10 @@ async function ensureGeoCrawlSchema(db) {
     //   Otherwise later requests will keep failing with "relation does not exist".
     try {
       // Core tables must exist for the monitor endpoints to work.
-      await db.prepare(createRuns).run()
-      await db.prepare(createEvents).run()
+      const runStmt = db.prepare(createRuns)
+      const eventStmt = db.prepare(createEvents)
+      await runStmt.run()
+      await eventStmt.run()
 
       // Optional: association index table (used for durable per-zip attribution).
       try {
@@ -163,14 +168,18 @@ async function ensureGeoCrawlSchema(db) {
       }
 
       ensured = true
+      // Clear the promise on success so the module-level reference is freed.
+      ensurePromise = null
     } catch (error) {
       // Allow future calls to retry schema creation.
-      ensurePromise = null
+      if (ensurePromise === p) ensurePromise = null
       ensured = false
+      console.error('[geoCrawlRunStore] Schema creation failed â future calls will retry:', error?.message || error)
       throw error
     }
   })()
 
+  ensurePromise = p
   return ensurePromise
 }
 
@@ -186,7 +195,7 @@ export async function createGeoCrawlRun(
     db?.dialect === 'postgres'
       ? `
           INSERT INTO geo_crawl_runs (id, created_at, created_by_user_id, status, state, crawler_job_id, last_heartbeat_at)
-          VALUES (?, CURRENT_TIMESTAMP, ?, 'queued', ?, ?, CURRENT_TIMESTAMP)
+          VALUES ($1, CURRENT_TIMESTAMP, $2, 'queued', $3, $4, CURRENT_TIMESTAMP)
         `
       : `
           INSERT INTO geo_crawl_runs (id, created_at, created_by_user_id, status, state, crawler_job_id, last_heartbeat_at)
@@ -206,7 +215,7 @@ export async function markGeoCrawlRunRunning(db, runId) {
           UPDATE geo_crawl_runs
           SET status = 'running',
               last_heartbeat_at = CURRENT_TIMESTAMP
-          WHERE id = ?
+          WHERE id = $1
         `
       : `
           UPDATE geo_crawl_runs
@@ -225,12 +234,12 @@ export async function updateGeoCrawlRunCurrent(db, runId, { state, zip, county, 
     db?.dialect === 'postgres'
       ? `
           UPDATE geo_crawl_runs
-          SET state = COALESCE(?, state),
-              current_zip = ?,
-              current_county = ?,
-              current_source = ?,
+          SET state = COALESCE($1, state),
+              current_zip = $2,
+              current_county = $3,
+              current_source = $4,
               last_heartbeat_at = CURRENT_TIMESTAMP
-          WHERE id = ?
+          WHERE id = $5
         `
       : `
           UPDATE geo_crawl_runs
@@ -251,10 +260,10 @@ export async function incrementGeoCrawlRunCounts(db, runId, { processedZipDelta 
     db?.dialect === 'postgres'
       ? `
           UPDATE geo_crawl_runs
-          SET processed_zip_count = COALESCE(processed_zip_count, 0) + ?,
-              found_opportunity_count = COALESCE(found_opportunity_count, 0) + ?,
+          SET processed_zip_count = COALESCE(processed_zip_count, 0) + $1,
+              found_opportunity_count = COALESCE(found_opportunity_count, 0) + $2,
               last_heartbeat_at = CURRENT_TIMESTAMP
-          WHERE id = ?
+          WHERE id = $3
         `
       : `
           UPDATE geo_crawl_runs
@@ -270,7 +279,7 @@ export async function completeGeoCrawlRun(db, runId, { status = 'complete', erro
   if (!runId) return
   await ensureGeoCrawlSchema(db)
   const normalized =
-    status === 'failed' || status === 'paused' || status === 'running' || status === 'queued'
+    status === 'failed' || status === 'paused'
       ? status
       : 'complete'
 
@@ -278,10 +287,10 @@ export async function completeGeoCrawlRun(db, runId, { status = 'complete', erro
     db?.dialect === 'postgres'
       ? `
           UPDATE geo_crawl_runs
-          SET status = ?,
-              last_error = ?,
+          SET status = $1,
+              last_error = $2,
               last_heartbeat_at = CURRENT_TIMESTAMP
-          WHERE id = ?
+          WHERE id = $3
         `
       : `
           UPDATE geo_crawl_runs
@@ -298,7 +307,10 @@ export async function appendGeoCrawlEvent(
   runId,
   { level = 'info', state = null, zip = null, county = null, source = null, message = '', foundCountDelta = 0 } = {},
 ) {
-  if (!runId) return null
+  if (!runId) {
+    console.warn('[geoCrawlRunStore] appendGeoCrawlEvent called without runId â event lost:', { level, state, zip, message })
+    return null
+  }
   await ensureGeoCrawlSchema(db)
   const lvl = ['info', 'warn', 'error'].includes(String(level)) ? String(level) : 'info'
   const st = state ? String(state).toUpperCase() : null
@@ -307,7 +319,7 @@ export async function appendGeoCrawlEvent(
     db?.dialect === 'postgres'
       ? `
           INSERT INTO geo_crawl_events (run_id, ts, level, state, zip, county, source, message, found_count_delta)
-          VALUES (?, CURRENT_TIMESTAMP, ?, ?, ?, ?, ?, ?, ?)
+          VALUES ($1, CURRENT_TIMESTAMP, $2, $3, $4, $5, $6, $7, $8)
           RETURNING id
         `
       : `
@@ -329,9 +341,15 @@ export async function appendGeoCrawlEvent(
 }
 
 export async function getGeoCrawlRun(db, runId) {
-  if (!runId) return null
+  if (!runId) {
+    console.warn('[geoCrawlRunStore] getGeoCrawlRun called without runId')
+    return null
+  }
   await ensureGeoCrawlSchema(db)
-  const row = await db.prepare('SELECT * FROM geo_crawl_runs WHERE id = ?').get(runId)
+  const sql = db?.dialect === 'postgres'
+    ? 'SELECT * FROM geo_crawl_runs WHERE id = $1'
+    : 'SELECT * FROM geo_crawl_runs WHERE id = ?'
+  const row = await db.prepare(sql).get(runId)
   return row ?? null
 }
 
@@ -341,24 +359,23 @@ export async function listGeoCrawlEvents(db, runId, { afterId = 0, limit = 200 }
   const lim = Math.max(1, Math.min(500, Number(limit || 200)))
   const after = Math.max(0, Number(afterId || 0))
 
-  const sql =
-    db?.dialect === 'postgres'
-      ? `
-          SELECT *
-          FROM geo_crawl_events
-          WHERE run_id = ?
-            AND id > ?
-          ORDER BY id ASC
-          LIMIT ?
-        `
-      : `
-          SELECT *
-          FROM geo_crawl_events
-          WHERE run_id = ?
-            AND id > ?
-          ORDER BY id ASC
-          LIMIT ?
-        `
+  const sql = db?.dialect === 'postgres'
+    ? `
+      SELECT *
+      FROM geo_crawl_events
+      WHERE run_id = $1
+        AND id > $2
+      ORDER BY id ASC
+      LIMIT $3
+    `
+    : `
+      SELECT *
+      FROM geo_crawl_events
+      WHERE run_id = ?
+        AND id > ?
+      ORDER BY id ASC
+      LIMIT ?
+    `
   return (await db.prepare(sql).all(runId, after, lim)) ?? []
 }
 

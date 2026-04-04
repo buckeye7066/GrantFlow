@@ -8,7 +8,7 @@ import { isAdminUserWithDb } from '../utils/accessControl.js'
  * Ensure user is authenticated
  */
 export function ensureAuth(req, res, next) {
-  const userId = req.ctx?.userId ?? req.user?.userId ?? null
+  const userId = req.user?.userId ?? null
   if (!userId) {
     return res.status(401).json({ error: 'Authentication required' });
   }
@@ -21,12 +21,11 @@ export function ensureAuth(req, res, next) {
  * This replaces fragile token-only checks with DB resolution.
  */
 export async function ensureAdmin(req, res, next) {
-  const user = req.user ?? { role: 'guest' };
-  
-  if (user.role === 'guest') {
+  if (!req.user) {
     return res.status(401).json({ error: 'Authentication required' });
   }
-  
+  const user = req.user;
+
   try {
     // Use req.ctx.isAdmin if available (canonical from requestContext middleware)
     const isAdmin = req.ctx?.isAdmin ?? (await isAdminUserWithDb(req.db, user));
@@ -46,7 +45,10 @@ export async function ensureAdmin(req, res, next) {
  */
 export function ensureProfileAccess(profileIdParam = 'id') {
   return async (req, res, next) => {
-    const user = req.user ?? { role: 'guest' };
+    if (!req.user) {
+      return res.status(401).json({ error: 'Authentication required' });
+    }
+    const user = req.user;
     const profileId = req.params[profileIdParam];
     
     if (!profileId) {
@@ -61,8 +63,10 @@ export function ensureProfileAccess(profileIdParam = 'id') {
       }
       
       // Check if profile is in user's accessible set (from req.ctx)
-      if (req.ctx?.accessibleProfileIds === null) {
-        // null means admin (all access) - already handled above
+      // NOTE: null is the admin sentinel; if we reach here, isAdmin was false,
+      // so a null accessibleProfileIds must NOT grant access â fall through to DB check.
+      // Only grant if the set explicitly contains the profileId.
+      if (req.ctx?.accessibleProfileIds != null && req.ctx.accessibleProfileIds.has(profileId)) {
         return next();
       }
       
@@ -72,14 +76,7 @@ export function ensureProfileAccess(profileIdParam = 'id') {
       
       // Check if profile belongs to user via user_id (async DB call)
       if (user.userId) {
-        const profile = await new Promise((resolve, reject) => {
-          try {
-            const result = req.db.prepare('SELECT id, user_id FROM profiles WHERE id = ?').get(profileId);
-            resolve(result);
-          } catch (err) {
-            reject(err);
-          }
-        });
+        const profile = req.db.prepare('SELECT id, user_id FROM profiles WHERE id = ?').get(profileId);
         
         if (profile && profile.user_id === user.userId) {
           return next();

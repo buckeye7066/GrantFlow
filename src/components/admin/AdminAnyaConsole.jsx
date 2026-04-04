@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react"
+import React, { useCallback, useEffect, useState } from "react"
 import { AlertCircle, Bot, Loader2, PlayCircle, RefreshCw } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -22,20 +22,20 @@ export default function AdminAnyaConsole() {
   const [status, setStatus] = useState(null)
   const [payload, setPayload] = useState('{"dryRun": false}')
 
-  const refresh = async () => {
+  const refresh = useCallback(async () => {
     try {
       const res = await getStatus("all")
       setStatus(res)
     } catch (err) {
       toast({ title: "Failed to load Anya status", description: err.message, variant: "destructive" })
     }
-  }
+  }, [toast])
 
   useEffect(() => {
     refresh()
     const id = window.setInterval(refresh, 5000)
     return () => window.clearInterval(id)
-  }, [])
+  }, [refresh])
 
   const run = async (label, path) => {
     setBusy(true)
@@ -43,8 +43,10 @@ export default function AdminAnyaConsole() {
       let parsed = {}
       try {
         parsed = JSON.parse(payload || "{}")
-      } catch {
-        parsed = {}
+      } catch (parseErr) {
+        toast({ title: "Invalid JSON payload", description: parseErr.message, variant: "destructive" })
+        setBusy(false)
+        return
       }
       const res = await post(path, parsed)
       toast({ title: label, description: "Submitted" })
@@ -124,7 +126,12 @@ export default function AdminAnyaConsole() {
                 setBusy(true)
                 try {
                   let parsed = {}
-                  try { parsed = JSON.parse(payload || "{}") } catch { parsed = {} }
+                  try {
+                    parsed = JSON.parse(payload || "{}")
+                  } catch (parseErr) {
+                    toast({ title: "Invalid JSON payload", description: parseErr.message, variant: "destructive" })
+                    return  // finally will call setBusy(false)
+                  }
                   const body = { run_all_states: true, ...parsed }
                   const res = await post("/api/geo-crawl/start", body)
                   toast({ title: "Geo Crawl All States", description: res?.message || `Job ${res?.jobId || ''} started` })

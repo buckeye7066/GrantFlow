@@ -90,6 +90,7 @@ export default function AdminServiceApplications() {
       
       await apiFetch(`/api/service-application/${id}`, {
         method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
       });
       
@@ -128,7 +129,10 @@ export default function AdminServiceApplications() {
 
   const deleteProfileForApplication = async (id) => {
     try {
-      const res = await apiFetch(`/api/service-application/${id}/delete-profile`, { method: 'POST' })
+      const res = await apiFetch(`/api/service-application/${id}/delete-profile`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      })
       toast({
         title: 'Deleted',
         description: res?.profile_id
@@ -388,7 +392,13 @@ export default function AdminServiceApplications() {
                 {selectedApp?.status !== 'converted' && (
                   <Button
                     variant="default"
-                    onClick={() => updateApplicationStatus(selectedApp.id, 'converted')}
+                    onClick={() => {
+                      const ok = window.confirm(
+                        'Convert this application to a profile?\n\nThis will mark the application as converted.',
+                      );
+                      if (!ok) return;
+                      updateApplicationStatus(selectedApp.id, 'converted');
+                    }}
                   >
                     <UserPlus className="h-4 w-4 mr-2" />
                     Convert to Profile

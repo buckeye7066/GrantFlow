@@ -1,12 +1,20 @@
 import express from 'express'
+import { requireAuth } from '../middleware/auth.js'
 import crypto from 'crypto'
 import { sendServiceApplicationEmail } from '../services/email.js'
 import { isDesignatedProfileId } from '../utils/ensureDesignatedProfiles.js'
 
 const router = express.Router()
 
-// Email recipient for service applications and contact forms
-const SERVICE_APPLICATION_EMAIL = process.env.SERVICE_APPLICATION_EMAIL || 'dr.johnwhite@axiombiolabs.org'
+// Email recipient for service applications and contact forms.
+// Must be set via SERVICE_APPLICATION_EMAIL environment variable.
+const SERVICE_APPLICATION_EMAIL = process.env.SERVICE_APPLICATION_EMAIL || null
+if (!SERVICE_APPLICATION_EMAIL) {
+  console.warn(
+    '[serviceApplication] WARNING: SERVICE_APPLICATION_EMAIL env var is not set. ' +
+    'Service application and contact form emails will not be sent.',
+  )
+}
 
 function normalizeEmail(value) {
   const v = String(value || '').trim().toLowerCase()
@@ -18,25 +26,31 @@ async function hardDeleteProfileWithFallback(db, profileId) {
   if (!id) return { ok: false, error: 'profile_id_required' }
 
   const dialect = db?.dialect || 'sqlite'
-  const nowSql = dialect === 'postgres' ? 'now()' : 'CURRENT_TIMESTAMP'
+  // nowSql removed â inline literals are used directly in both UPDATE statements below
 
   // Designated/demo profiles should never be hard-deleted (boot seeding may resurrect).
   if (isDesignatedProfileId(id)) {
-    await db
-      .prepare(`UPDATE profiles SET status = 'deleted', updated_at = ${nowSql} WHERE id = ?`)
-      .run(id)
-    return { ok: true, deleted: 'soft', reason: 'designated_profile' }
+    const updateSql = dialect === 'postgres'
+    ? 'UPDATE profiles SET status = \'deleted\', updated_at = now() WHERE id = ?'
+    : 'UPDATE profiles SET status = \'deleted\', updated_at = CURRENT_TIMESTAMP WHERE id = ?'
+  try {
+    await db.prepare(updateSql).run(id)
+  } catch (err) {
+    return { ok: false, deleted: 'none', error: err?.message || String(err) }
+  }
+  return { ok: true, deleted: 'soft', reason: 'designated_profile' }
   }
 
   try {
     await db.prepare('DELETE FROM profiles WHERE id = ?').run(id)
     return { ok: true, deleted: 'hard' }
-  } catch (error) {
+  } catch (err) {
     // If FK constraints prevent delete, fall back to a durable soft-delete.
-    await db
-      .prepare(`UPDATE profiles SET status = 'deleted', updated_at = ${nowSql} WHERE id = ?`)
-      .run(id)
-    return { ok: true, deleted: 'soft', error: error?.message || String(error) }
+    const fallbackSql = dialect === 'postgres'
+      ? 'UPDATE profiles SET status = \'deleted\', updated_at = now() WHERE id = ?'
+      : 'UPDATE profiles SET status = \'deleted\', updated_at = CURRENT_TIMESTAMP WHERE id = ?'
+    await db.prepare(fallbackSql).run(id)
+    return { ok: true, deleted: 'soft', error: err?.message || String(err) }
   }
 }
 
@@ -68,11 +82,15 @@ async function saveApplicationToDb(db, data) {
       data.message || null
     )
     
-    console.log('[serviceApplication] Saved to database:', id)
+    console.info('[serviceApplication] Saved to database:', id)
     return id
   } catch (error) {
-    // Table might not exist yet - log but don't fail
     console.warn('[serviceApplication] Could not save to DB:', error.message)
+    // Re-throw for critical errors, return null only for missing table
+    if (!error.message?.includes('no such table') && !error.message?.includes('does not exist')) {
+      throw error
+    }
+    console.error('[serviceApplication] service_applications table missing â submission NOT persisted to DB. applicationId will be null.', { type: data.type, email: data.email })
     return null
   }
 }
@@ -83,7 +101,7 @@ async function saveApplicationToDb(db, data) {
  */
 router.post('/', async (req, res) => {
   try {
-    const { type, name, email, subject, message, recipient } = req.body
+    const { type, name, email, subject, message } = req.body // recipient intentionally omitted â always use SERVICE_APPLICATION_EMAIL
 
     // Handle contact_admin type
     if (type === 'contact_admin') {
@@ -123,8 +141,12 @@ router.post('/', async (req, res) => {
         submittedAt: new Date().toISOString(),
       }
 
-      // Always send to admin email (determined server-side, not from client)
-      await sendServiceApplicationEmail(SERVICE_APPLICATION_EMAIL, emailContent)
+      // Send to admin email (determined server-side, not from client)
+      if (SERVICE_APPLICATION_EMAIL) {
+        await sendServiceApplicationEmail(SERVICE_APPLICATION_EMAIL, emailContent)
+      } else {
+        console.warn('[serviceApplication] Skipping contact email — SERVICE_APPLICATION_EMAIL not configured.')
+      }
 
       return res.json({
         success: true,
@@ -209,7 +231,11 @@ router.post('/submit', async (req, res) => {
     }
 
     // Send the email
-    await sendServiceApplicationEmail(SERVICE_APPLICATION_EMAIL, applicationData)
+    if (SERVICE_APPLICATION_EMAIL) {
+      await sendServiceApplicationEmail(SERVICE_APPLICATION_EMAIL, applicationData)
+    } else {
+      console.warn('[serviceApplication] Skipping application email — SERVICE_APPLICATION_EMAIL not configured.')
+    }
 
     res.json({
       success: true,
@@ -231,7 +257,7 @@ router.post('/submit', async (req, res) => {
  */
 router.get('/list', async (req, res) => {
   try {
-    if (!req.ctx?.isAdmin) {
+    if (!req.ctx || !req.ctx.isAdmin) {
       return res.status(403).json({
         success: false,
         message: 'Admin access required',
@@ -255,7 +281,12 @@ router.get('/list', async (req, res) => {
     let total = { count: 0 }
     try {
       applications = await req.db.prepare(query).all(...params)
-      total = await req.db.prepare('SELECT COUNT(*) as count FROM service_applications').get()
+      const countQuery = status
+        ? 'SELECT COUNT(*) as count FROM service_applications WHERE status = ?'
+        : 'SELECT COUNT(*) as count FROM service_applications'
+      total = status
+        ? await req.db.prepare(countQuery).get(status)
+        : await req.db.prepare(countQuery).get()
     } catch (dbError) {
       const msg = String(dbError?.message || dbError)
       const missingTable =
@@ -291,7 +322,7 @@ router.get('/list', async (req, res) => {
 router.patch('/:id', async (req, res) => {
   try {
     // Check admin access (canonical)
-    if (!req.ctx?.isAdmin) {
+    if (!req.ctx || !req.ctx.isAdmin) {
       return res.status(403).json({
         success: false,
         message: 'Admin access required',
@@ -303,27 +334,36 @@ router.patch('/:id', async (req, res) => {
     
     const updates = []
     const params = []
-    
+
+    const ALLOWED_STATUSES = ['new', 'reviewed', 'approved', 'rejected', 'archived']
     if (status) {
+      if (!ALLOWED_STATUSES.includes(status)) {
+        return res.status(400).json({ success: false, message: `Invalid status value. Allowed: ${ALLOWED_STATUSES.join(', ')}` })
+      }
       updates.push('status = ?')
       params.push(status)
-      
       if (status === 'reviewed') {
-        updates.push('reviewed_by = ?', 'reviewed_at = CURRENT_TIMESTAMP')
+        updates.push('reviewed_by = ?')
         params.push(req.ctx?.userId || null)
+        updates.push('reviewed_at = CURRENT_TIMESTAMP')
       }
     }
-    
+
     if (notes !== undefined) {
       updates.push('notes = ?')
       params.push(notes)
     }
-    
+
     if (profile_id) {
       updates.push('profile_id = ?')
       params.push(profile_id)
     }
-    
+
+    // Guard: require at least one meaningful field before running the UPDATE
+    if (updates.length === 0) {
+      return res.status(400).json({ success: false, message: 'No updatable fields provided' })
+    }
+
     updates.push('updated_at = CURRENT_TIMESTAMP')
     params.push(id)
     
@@ -334,11 +374,13 @@ router.patch('/:id', async (req, res) => {
     `).run(...params)
     
     const updated = await req.db.prepare('SELECT * FROM service_applications WHERE id = ?').get(id)
-    
-    res.json({
-      success: true,
-      application: updated,
-    })
+if (!updated) {
+  return res.status(404).json({ success: false, message: 'Application not found' })
+}
+res.json({
+  success: true,
+  application: updated,
+})
   } catch (error) {
     console.error('[serviceApplication] Error updating application:', error)
     res.status(500).json({
@@ -354,7 +396,7 @@ router.patch('/:id', async (req, res) => {
  */
 router.delete('/:id', async (req, res) => {
   try {
-    if (!req.ctx?.isAdmin) {
+    if (!req.ctx || !req.ctx.isAdmin) {
       return res.status(403).json({
         success: false,
         message: 'Admin access required',
@@ -392,7 +434,7 @@ router.delete('/:id', async (req, res) => {
  */
 router.post('/:id/delete-profile', async (req, res) => {
   try {
-    if (!req.ctx?.isAdmin) {
+    if (!req.ctx || !req.ctx.isAdmin) {
       return res.status(403).json({
         success: false,
         message: 'Admin access required',

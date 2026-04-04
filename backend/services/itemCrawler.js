@@ -14,6 +14,7 @@ import {
   summarizeProfileSignals,
   safeParseArrayField,
 } from './profileHelpers.js'
+import { scoreOpportunity, computeMatchDecision } from './matchEngine.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
@@ -25,64 +26,6 @@ function loadJSON(filePath) {
     console.warn(`[itemCrawler] Could not load ${filePath}:`, e.message)
     return []
   }
-}
-
-/**
- * Calculate match score between item funding source and profile/item request
- */
-function calculateItemMatch(opp, itemKeywords, profileState, signals) {
-  let score = 30
-  const matchReasons = []
-  
-  const oppText = `${opp.title} ${opp.description}`.toLowerCase()
-  const oppKeywords = new Set([
-    ...(opp.keywords || []).map(k => k.toLowerCase()),
-    ...(opp.keywords_extra || []).map(k => k.toLowerCase()),
-    ...(opp.categories || []).map(c => c.toLowerCase())
-  ])
-  
-  // Item keyword matching (most important)
-  let itemMatches = 0
-  for (const keyword of itemKeywords) {
-    const kw = keyword.toLowerCase()
-    if (oppKeywords.has(kw) || oppText.includes(kw)) {
-      itemMatches++
-      matchReasons.push(`Item match: ${keyword}`)
-    }
-  }
-  score += Math.min(40, itemMatches * 15)
-  
-  // State match
-  if (opp.states?.includes('ALL') || opp.states?.includes(profileState) || opp.state === 'nationwide') {
-    score += 10
-    if (opp.states?.includes(profileState)) {
-      matchReasons.push(`Available in ${profileState}`)
-    }
-  } else if (opp.states && !opp.states.includes('ALL') && !opp.states.includes(profileState)) {
-    // Wrong state
-    score -= 20
-  }
-  
-  // Profile signals bonus
-  if (signals.keywords) {
-    let profileMatches = 0
-    for (const keyword of signals.keywords) {
-      if (oppKeywords.has(keyword) || oppText.includes(keyword)) {
-        profileMatches++
-      }
-    }
-    score += Math.min(10, profileMatches * 3)
-  }
-  
-  // 501c3 check
-  if (opp.requires_501c3 && !signals.is_nonprofit) {
-    score -= 15
-    matchReasons.push('Note: Requires 501(c)(3) status')
-  }
-  
-  score = Math.max(0, Math.min(100, score))
-  
-  return { score, matchReasons }
 }
 
 /**
@@ -149,7 +92,8 @@ export async function processItemCrawlerJob({ db, job, dataDir, profileContext }
   ).join(' OR ')
   
   const keywordParams = itemKeywords.flatMap(k => {
-    const pattern = `%${k.toLowerCase()}%`
+    const sanitized = String(k || '').replace(/[%_\\]/g, '\\$&').toLowerCase()
+    const pattern = `%${sanitized}%`
     return [pattern, pattern, pattern]
   })
   
@@ -165,13 +109,14 @@ export async function processItemCrawlerJob({ db, job, dataDir, profileContext }
       SELECT * FROM funding_opportunities 
       WHERE ${activePredicate}
       AND ${noMatchPredicate}
-      AND ${trustedOriginClause()}
-      AND ${trustedSourceClause()}
+      AND (record_origin IN ('curated_verified', 'official_api', 'verified_scrape', 'item_funding', 'foundation_portal'))
       AND (${keywordConditions})
       LIMIT 50
     `).all(...keywordParams) || []
   } catch (err) {
     console.error('[itemCrawler] Error querying database for opportunities:', err.message)
+    // Continue with empty dbOpps array but track the error
+    dbOpps = []
   }
   
   console.log(`[itemCrawler] Found ${dbOpps.length} matching opportunities in database`)
@@ -202,10 +147,14 @@ export async function processItemCrawlerJob({ db, job, dataDir, profileContext }
   // Score opportunities
   const scoredOpps = []
   
+  let requiresMatchSkipped = 0
   for (const opp of allOpps) {
-    if (opp.requires_match) continue
+    if (opp.requires_match) {
+      requiresMatchSkipped++
+      continue
+    }
     
-    const { score, matchReasons } = calculateItemMatch(opp, itemKeywords, profileState, signals)
+    const { score, reasons: matchReasons } = scoreOpportunity(profileContext, opp)
     
     scoredOpps.push({
       ...opp,
@@ -213,17 +162,28 @@ export async function processItemCrawlerJob({ db, job, dataDir, profileContext }
       match_reasons: matchReasons
     })
   }
+  if (requiresMatchSkipped > 0) {
+    console.log(
+      `[itemCrawler] Pre-score skip: ${requiresMatchSkipped} opportunities omitted because requires_match=true (needs separate match flow).`,
+    )
+  }
   
   // Sort and filter by requested threshold only — no fallback relaxation
   scoredOpps.sort((a, b) => b.match_score - a.match_score)
-  const requestedThreshold = Number(matchThreshold) || 0
-  const filteredOpps = scoredOpps.filter((opp) => (opp.match_score ?? 0) >= requestedThreshold)
-
-  const topOpps = filteredOpps.slice(0, maxResults)
+  // Do not pre-filter by raw score; computeMatchDecision is the sole authority.
+  // maxResults caps volume only; canonical ACCEPT/REVIEW decisions are never suppressed by threshold.
+  const topOpps = scoredOpps.slice(0, maxResults)
   
   console.log(
-    `[itemCrawler] Found ${topOpps.length} matching item funding sources (threshold: ${requestedThreshold}%)`,
+    `[itemCrawler] Found ${topOpps.length} matching item funding sources (threshold: ${matchThreshold}%)`,
   )
+  if (scoredOpps.length > 0 && topOpps.length === 0) {
+    console.warn(
+      `[itemCrawler] SUPPRESSION WARNING: ${scoredOpps.length} opportunities scored but 0 passed to insertion. ` +
+      `Top raw score: ${scoredOpps[0]?.match_score ?? 'n/a'}. Threshold: ${matchThreshold}. ` +
+      `Review threshold or decision engine configuration.`
+    )
+  }
   
   // Insert into database
   let upsertedCount = 0
@@ -231,6 +191,25 @@ export async function processItemCrawlerJob({ db, job, dataDir, profileContext }
   let updatedCount = 0
   for (const opp of topOpps) {
     try {
+      // Goal 4: computeMatchDecision is the sole authority before any insertion
+      const decision = computeMatchDecision(profileContext, opp, opp.match_score, opp.match_reasons)
+
+      // Goal 3: hard-reject anything the decision engine rejects
+      if (decision.decision === 'REJECT') {
+        console.log(
+          `[itemCrawler] REJECTED "${opp.title}" â ${decision.explanation ?? 'decision engine reject'}`,
+        )
+        continue
+      }
+
+      // Goal 1: require a real application URL for ACCEPT; downgrade to REVIEW otherwise
+      const validUrl =
+        typeof opp.application_url === 'string' && opp.application_url.startsWith('http')
+          ? opp.application_url
+          : null
+      const effectiveDecision =
+        decision.decision === 'ACCEPT' && !validUrl ? 'REVIEW' : decision.decision
+
       const result = await upsertFundingOpportunity(db, {
         title: opp.title,
         sponsor: opp.sponsor,
@@ -238,7 +217,7 @@ export async function processItemCrawlerJob({ db, job, dataDir, profileContext }
         amount_min: opp.amount_min,
         amount_max: opp.amount_max,
         deadline: opp.deadline,
-        application_url: opp.application_url ?? null,
+        application_url: validUrl,
         source_url: opp.source_url ?? opp.application_url ?? null,
         categories: opp.categories,
         keywords: [...(opp.keywords || []), ...(opp.keywords_extra || [])],
@@ -249,9 +228,18 @@ export async function processItemCrawlerJob({ db, job, dataDir, profileContext }
         source: 'item_funding',
         source_id: opp.id,
         record_origin: 'curated_verified',
-        match_reasons: opp.match_reasons
+        // Goal 8: persist all canonical decision metadata
+        match_decision: effectiveDecision,
+        match_explanation: decision.explanation ?? null,
+        matched_needs: decision.matched_needs ?? [],
+        eligibility_status: decision.eligibility_status ?? null,
+        ineligibility_reasons: decision.ineligibility_reasons ?? [],
+        match_confidence: decision.confidence ?? opp.match_score,
+        match_reasons: opp.match_reasons,
+        matcher_version: decision.matcher_version ?? null,
+        evaluated_at: new Date().toISOString(),
       })
-      
+
       if (result.id) {
         upsertedCount++
       }
@@ -263,6 +251,7 @@ export async function processItemCrawlerJob({ db, job, dataDir, profileContext }
       }
     } catch (err) {
       console.error(`[itemCrawler] Error inserting ${opp.title}:`, err.message)
+      continue
     }
   }
   
@@ -274,9 +263,9 @@ export async function processItemCrawlerJob({ db, job, dataDir, profileContext }
     matched: topOpps.length,
     result_meta: {
       total_scored: scoredOpps.length,
-      match_threshold: requestedThreshold,
-      match_threshold_requested: requestedThreshold,
-      match_threshold_used: requestedThreshold,
+      match_threshold: matchThreshold,
+      match_threshold_requested: matchThreshold,
+      match_threshold_used: matchThreshold,
       match_threshold_fallback_applied: false,
     },
     opportunityLogs: topOpps.map(o => ({

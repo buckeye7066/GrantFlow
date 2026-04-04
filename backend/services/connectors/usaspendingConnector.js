@@ -98,26 +98,34 @@ export async function searchAwards(params = {}) {
     
     // Return as intelligence, NOT as opportunities
     return awards.map(award => ({
-      title: award.description || 'Grant Award',
-      sponsor: award.awarding_agency_name || '',
+      title: award['Description'] || 'Grant Award',
+      sponsor: award['Awarding Agency'] || '',
       source: 'usaspending.gov',
-      source_id: award.award_id || '',
-      source_url: `https://www.usaspending.gov/award/${award.award_id}`,
-      description: `Past award: ${award.description || 'No description'}`,
-      amount_awarded: award.Award_Amount || 0,
-      award_date: award.Start_Date,
-      recipient: award.Recipient_Name,
+      source_id: award['Award ID'] || '',
+      source_url: award['Award ID']
+        ? `https://www.usaspending.gov/award/${encodeURIComponent(award['Award ID'])}`
+        : null,
+      description: `Past award: ${award['Description'] || 'No description'}`,
+      amount_awarded: award['Award Amount'] || 0,
+      award_date: award['Start Date'],
+      recipient: award['Recipient Name'],
       // CRITICAL: Mark as DIRECTORY, not OPPORTUNITY
       // This is historical data, not an open solicitation
       type: 'DIRECTORY',
-      evidence_url: `${BASE_URL}/search/spending_by_award/`,
+      evidence_url: award['Award ID']
+        ? `https://www.usaspending.gov/award/${encodeURIComponent(award['Award ID'])}`
+        : null,
       last_verified_at: new Date().toISOString(),
       is_active: false, // Past awards are not active opportunities
       last_crawled: new Date().toISOString(),
       notes: 'Historical award data - verify if program currently accepting applications'
     }));
   } catch (error) {
-    console.error('[USAspending] Search failed:', error.message);
+    console.error('[USAspending] Search failed:', {
+      keyword: params.keyword,
+      page: params.page,
+      message: error.message
+    });
     throw error;
   }
 }
@@ -135,7 +143,7 @@ export async function getAgencySpending(agencyCode, params = {}) {
       total_obligations: data.total_obligations,
       active_programs: data.active_programs || [],
       type: 'DIRECTORY', // Agency information, not an opportunity
-      evidence_url: `${BASE_URL}/agency/${agencyCode}/`,
+      evidence_url: `https://www.usaspending.gov/agency/${agencyCode}/`,
       last_verified_at: new Date().toISOString()
     };
   } catch (error) {

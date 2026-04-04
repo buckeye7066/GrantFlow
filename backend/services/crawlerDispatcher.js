@@ -16,7 +16,8 @@ import { processProfileEnrichmentJob } from './profileEnrichment.js'
 import { processNationalJob } from './nationalJobRouter.js'
 import { logFailedJob, determineSeverity } from './deadLetterQueue.js'
 import { runCrawler as runCuratedCrawler } from './crawlers/crawlerManager.js'
-import { updateJobHeartbeat } from './crawlerConcurrencyGuard.js'
+import { updateJobHeartbeat, maybeCleanupStaleRunningJobs } from './crawlerConcurrencyGuard.js'
+import { runPortalCheck } from './portalCheckService.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
@@ -54,6 +55,31 @@ function withTimeout(promise, ms, label) {
   return Promise.race([promise, timeoutPromise]).finally(() => clearTimeout(timeoutId))
 }
 
+async function processPortalCheckJob({ db, job }) {
+  const profileId = job?.profile_id
+  if (!profileId) throw new Error('portal_check requires a profile_id')
+  const params = typeof job?.parameters === 'string' ? JSON.parse(job.parameters) : (job?.parameters || {})
+  const result = await runPortalCheck(db, profileId, {
+    checkType: params.check_type || 'scheduled',
+    maxPortals: params.max_portals ?? 20,
+  }).catch(error => {
+    throw new Error(`Portal check failed: ${error.message}`);
+  })
+  return {
+    result_count: result.awardsDetected,
+    result_meta: {
+      portals_checked: result.portalsChecked,
+      awards_detected: result.awardsDetected,
+      updates: result.updates.map((u) => ({
+        portalName: u.portalName,
+        updateType: u.updateType,
+        awardAmount: u.awardAmount,
+      })),
+    },
+  }
+}
+
+
 async function processCuratedBenefitsJob({ db, job, profileContext }) {
   const profileId = job?.profile_id || profileContext?.profile?.id;
   if (!profileId) throw new Error('curated_benefits requires a profile_id');
@@ -79,7 +105,9 @@ async function processCuratedBenefitsJob({ db, job, profileContext }) {
     maxResults: params.maxResults ?? 100,
     crawlerType,
     profileContext,
-  });
+  }).catch(error => {
+    throw new Error(`Curated crawler failed: ${error.message}`);
+  })
   return {
     result_count: result.results.length,
     result_meta: {
@@ -112,6 +140,7 @@ const HANDLERS = {
   special_needs: processCuratedBenefitsJob,
   local_funding: processCuratedBenefitsJob,
   item_matching: processCuratedBenefitsJob,
+  portal_check: processPortalCheckJob,
 }
 
 function parseJSON(value) {
@@ -217,7 +246,7 @@ export function dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }) {
         const waitMs = nextAt.getTime() - Date.now()
         if (waitMs > 250) {
           setTimeout(() => {
-            dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }).catch(() => {})
+            dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }).catch(e => console.warn('[background]', e?.message || e))
           }, Math.min(waitMs, 60_000))
           return
         }
@@ -253,7 +282,14 @@ export function dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }) {
     // If a profile-scoped job is queued while another job for that profile is already running,
     // do NOT fail the job (that pollutes diagnostics). Instead keep it queued and retry soon.
     const profileId = job.profile_id ?? null
-    const startSql = profileId
+
+    // Admin-initiated geo crawl jobs (type='comprehensive', mode='geo', profile_id=NULL) are
+    // long-running discovery jobs that must not be starved by the global concurrency cap.
+    // They run in their own "slot" — exempt from the running-count check.
+    const jobParams = parseJSON(job.parameters)
+    const isGeoCrawlJob = !profileId && job.type === 'comprehensive' && jobParams?.mode === 'geo'
+
+    const startSql = isGeoCrawlJob
       ? `
           UPDATE crawler_jobs
           SET status = 'running',
@@ -263,30 +299,43 @@ export function dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }) {
               next_dispatch_at = NULL
           WHERE id = ?
             AND status = 'queued'
-            AND (SELECT COUNT(*) FROM crawler_jobs WHERE status = 'running') < ?
-            AND NOT EXISTS (
-              SELECT 1
-              FROM crawler_jobs
-              WHERE profile_id = ?
-                AND status = 'running'
-                AND id <> ?
-            )
         `
-      : `
-          UPDATE crawler_jobs
-          SET status = 'running',
-              started_at = CURRENT_TIMESTAMP,
-              error = NULL,
-              parameters = COALESCE(parameters, '{}'),
-              next_dispatch_at = NULL
-          WHERE id = ?
-            AND status = 'queued'
-            AND (SELECT COUNT(*) FROM crawler_jobs WHERE status = 'running') < ?
-        `
+      : profileId
+        ? `
+            UPDATE crawler_jobs
+            SET status = 'running',
+                started_at = CURRENT_TIMESTAMP,
+                error = NULL,
+                parameters = COALESCE(parameters, '{}'),
+                next_dispatch_at = NULL
+            WHERE id = ?
+              AND status = 'queued'
+              AND (SELECT COUNT(*) FROM crawler_jobs WHERE status = 'running') < ?
+              AND NOT EXISTS (
+                SELECT 1
+                FROM crawler_jobs
+                WHERE profile_id = ?
+                  AND status = 'running'
+                  AND id <> ?
+              )
+          `
+        : `
+            UPDATE crawler_jobs
+            SET status = 'running',
+                started_at = CURRENT_TIMESTAMP,
+                error = NULL,
+                parameters = COALESCE(parameters, '{}'),
+                next_dispatch_at = NULL
+            WHERE id = ?
+              AND status = 'queued'
+              AND (SELECT COUNT(*) FROM crawler_jobs WHERE status = 'running') < ?
+          `
 
-    const startRes = profileId
-      ? await db.prepare(startSql).run(jobId, maxGlobalConcurrency, profileId, jobId)
-      : await db.prepare(startSql).run(jobId, maxGlobalConcurrency)
+    const startRes = isGeoCrawlJob
+      ? await db.prepare(startSql).run(jobId)
+      : profileId
+        ? await db.prepare(startSql).run(jobId, maxGlobalConcurrency, profileId, jobId)
+        : await db.prepare(startSql).run(jobId, maxGlobalConcurrency)
 
     const startedCount = Number(startRes?.changes ?? startRes?.rowCount ?? 0)
     if (startedCount === 0) {
@@ -359,7 +408,7 @@ export function dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }) {
         }
 
         setTimeout(() => {
-          dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }).catch(() => {})
+          dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }).catch(e => console.warn('[background]', e?.message || e))
         }, requeueDelayMs)
         return
       }
@@ -383,7 +432,7 @@ export function dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }) {
       }
 
       setTimeout(() => {
-        dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }).catch(() => {})
+        dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }).catch(e => console.warn('[background]', e?.message || e))
       }, delayMs)
       return
     }
@@ -392,7 +441,9 @@ export function dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }) {
     let profileContext = null
     try {
       if (job.profile_id) {
-        const { snapshotJson, repaired } = await ensureJobSnapshot(db, job)
+        const { snapshotJson, repaired } = await ensureJobSnapshot(db, job).catch(error => {
+    throw new Error(`Snapshot creation failed: ${error.message}`);
+  })
         if (snapshotJson) {
           profileContext = restoreContextFromSnapshot(parseJSON(snapshotJson))
           if (repaired) {
@@ -435,7 +486,9 @@ export function dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }) {
     // Heartbeat: set initial heartbeat immediately and then periodically so that
     // cleanupStaleCrawlers() doesn't treat this actively-running job as orphaned.
     const HEARTBEAT_INTERVAL_MS = 60_000
-    await updateJobHeartbeat(db, jobId)
+    await updateJobHeartbeat(db, jobId).catch(error => {
+    console.warn('[crawlerDispatcher] Initial heartbeat failed:', error.message);
+  })
     const heartbeatIntervalId = setInterval(() => {
       updateJobHeartbeat(db, jobId).catch((err) => {
         console.warn('[crawlerDispatcher] Heartbeat interval error:', err?.message)
@@ -569,6 +622,12 @@ export function startQueueDrainInterval(db, uploadDir, getOpenAI) {
 
   const intervalId = setInterval(async () => {
     try {
+      // Run stale-job cleanup on every tick so orphaned running jobs release
+      // their per-profile locks even when no new jobs are being queued.
+      await maybeCleanupStaleRunningJobs(db).catch(e =>
+        console.warn('[queue-drain-interval] Stale cleanup error (ignored):', e?.message || e),
+      )
+
       const isPostgres = db?.dialect === 'postgres'
       const nowIso = new Date().toISOString()
       const nowSqlite = nowIso.replace('T', ' ').replace('Z', '').replace(/\.\d+$/, '')
@@ -601,7 +660,7 @@ export function startQueueDrainInterval(db, uploadDir, getOpenAI) {
       for (let i = 0; i < ready.length; i++) {
         if (i > 0) await new Promise((r) => setTimeout(r, 1_000))
         try {
-          dispatchCrawlerJob({ db, jobId: ready[i].id, uploadDir, getOpenAI }).catch(() => {})
+          dispatchCrawlerJob({ db, jobId: ready[i].id, uploadDir, getOpenAI }).catch(e => console.warn('[background]', e?.message || e))
         } catch { /* ignore individual dispatch errors */ }
       }
     } catch (err) {

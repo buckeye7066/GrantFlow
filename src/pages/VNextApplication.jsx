@@ -42,16 +42,24 @@ export default function VNextApplication() {
 
   const transitionMutation = useMutation({
     mutationFn: async (targetState) => {
+      if (!env.shouldersVnext) {
+        throw new Error('vNext feature flag is disabled')
+      }
       setLastBlockers([])
       return await apiFetch(`/api/vnext/applications/${id}/transition`, {
         method: 'POST',
         body: JSON.stringify({ targetState }),
       })
     },
-    onError: async (err) => {
+    onError: (err) => {
       try {
-        const msg = String(err?.message || err)
-        setLastBlockers([{ code: 'REQUEST_FAILED', message: msg }])
+        const data = err?.data ?? err?.response ?? null
+        if (Array.isArray(data?.blockers) && data.blockers.length > 0) {
+          setLastBlockers(data.blockers)
+        } else {
+          const msg = String(err?.message || err)
+          setLastBlockers([{ code: 'REQUEST_FAILED', message: msg }])
+        }
       } catch {
         setLastBlockers([{ code: 'REQUEST_FAILED', message: 'Request failed' }])
       }
@@ -110,9 +118,12 @@ export default function VNextApplication() {
     )
   }
 
-  const missing = app?.missing_requirements
+  const missing = (app?.missing_requirements && typeof app.missing_requirements === 'object')
+    ? app.missing_requirements
+    : null
   const missingFields = Array.isArray(missing?.missing_fields) ? missing.missing_fields.length : null
   const missingDocs = Array.isArray(missing?.missing_docs) ? missing.missing_docs.length : null
+  const missingnessUnavailable = app != null && missing === null
 
   return (
     <div className="max-w-5xl mx-auto p-6 space-y-4">
@@ -203,17 +214,32 @@ export default function VNextApplication() {
           <CardTitle>Manual transitions</CardTitle>
         </CardHeader>
         <CardContent className="flex flex-wrap gap-2">
-          {STATE_ORDER.map((s) => (
-            <Button
-              key={s}
-              variant={s === currentState ? 'default' : 'outline'}
-              size="sm"
-              disabled={transitionMutation.isPending}
-              onClick={() => transitionMutation.mutate(s)}
-            >
-              {s}
-            </Button>
-          ))}
+          {STATE_ORDER.map((s) => {
+            const currentIdx = STATE_ORDER.indexOf(currentState)
+            const targetIdx = STATE_ORDER.indexOf(s)
+            // Only allow transitions to adjacent next state or back one step (for corrections);
+            // never allow skipping more than one state forward to protect pipeline integrity.
+            const isForwardSkip = targetIdx > currentIdx + 1
+            const isBackwardSkip = targetIdx < currentIdx - 1
+            const isDisabled = transitionMutation.isPending || isForwardSkip || isBackwardSkip
+            const disabledTitle = isForwardSkip
+              ? `Cannot skip forward from ${currentState} to ${s}`
+              : isBackwardSkip
+              ? `Cannot rewind more than one step from ${currentState} to ${s}`
+              : undefined
+            return (
+              <Button
+                key={s}
+                variant={s === currentState ? 'default' : 'outline'}
+                size="sm"
+                disabled={isDisabled}
+                title={disabledTitle}
+                onClick={() => transitionMutation.mutate(s)}
+              >
+                {s}
+              </Button>
+            )
+          })}
         </CardContent>
       </Card>
     </div>

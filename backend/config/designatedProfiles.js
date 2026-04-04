@@ -39,7 +39,7 @@ export const DESIGNATED_PROFILES = [
   // they ensure deterministic IDs exist in Postgres/SQLite so login mapping can attach,
   // while allowing admins/users to keep editing without startup wiping data.
   {
-    id: 'profile-axiom-biolabs',
+    id: 'profile-axiom-biolabs-2',
     display_name: 'Axiom BioLabs',
     primary_type: 'organization',
     status: 'active',
@@ -104,8 +104,8 @@ export const DESIGNATED_PROFILES = [
     tags: ['individual'],
   },
   {
-    id: 'profile-paul-jason-dasher',
-    display_name: 'Jason Dasher',
+    id: 'profile-paul-jason-dasher-2',
+    display_name: 'Paul Jason Dasher',
     primary_type: 'individual',
     status: 'active',
     tags: ['individual'],
@@ -529,7 +529,7 @@ export const DESIGNATED_PROFILES = [
     },
   },
   {
-    id: 'profile-paul-jason-dasher',
+    id: 'profile-paul-jason-dasher-2',
     display_name: 'Paul Jason Dasher',
     primary_type: 'individual',
     status: 'active',
@@ -652,8 +652,8 @@ export const DESIGNATED_PROFILES = [
     },
   },
   {
-    id: 'profile-axiom-biolabs',
-    display_name: 'Axiom Biolabs',
+    id: 'profile-axiom-biolabs-2',
+    display_name: 'Axiom BioLabs',
     primary_type: 'organization',
     status: 'active',
     tags: ['baseline', 'designated', 'organization'],

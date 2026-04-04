@@ -111,19 +111,21 @@ function getJobStatusMessage(job) {
     case "scholarship":
       return "Analyzing scholarship databases..."
 
-    case "item_search":
+    case "item_search": {
       const item = params.item || meta.item
       if (item) {
         return `Searching for "${item}" funding...`
       }
       return "Querying item-specific grants..."
+    }
 
-    case "profile_enrichment":
+    case "profile_enrichment": {
       const sections = params.sections || []
       if (sections.length > 0) {
         return `Enriching ${sections.length} profile section${sections.length > 1 ? "s" : ""}...`
       }
       return "Analyzing profile data..."
+    }
 
     case "pipeline_automation":
       return "Processing grant pipeline..."
@@ -182,8 +184,10 @@ export default function CrawlerProgressMeter({ jobId, onClose }) {
   const jobQuery = useQuery({
     queryKey: ["crawler-job-progress", jobId],
     queryFn: () => getCrawlerJob(jobId),
-    refetchInterval: (data) => {
-      // Stop polling if job is no longer running
+    refetchInterval: (query) => {
+      // TanStack Query v5 passes the Query object; v4 passes raw data.
+      // Normalise to raw data for both versions.
+      const data = query?.state?.data ?? query
       if (data?.status === "running") {
         return 2000 // Poll every 2 seconds when running
       }
@@ -206,8 +210,74 @@ export default function CrawlerProgressMeter({ jobId, onClose }) {
     return () => clearInterval(interval)
   }, [job])
 
+  if (jobQuery.isError) {
+    return (
+      <Card className="border-2 border-red-300 bg-red-50 shadow">
+        <CardHeader className="pb-2">
+          <CardTitle className="text-sm text-red-700 flex items-center gap-2">
+            <Activity className="h-4 w-4" />
+            Unable to load crawler status
+          </CardTitle>
+          <CardDescription className="text-xs text-red-600">
+            {jobQuery.error?.message || "Could not reach the server. The job may still be running."}
+          </CardDescription>
+        </CardHeader>
+      </Card>
+    )
+  }
+
   if (!job) {
-    return null
+    return (
+      <Card className="border-2 border-blue-300 bg-blue-50 shadow animate-pulse">
+        <CardHeader className="pb-2">
+          <CardTitle className="text-sm text-blue-700 flex items-center gap-2">
+            <Activity className="h-4 w-4 animate-spin" />
+            Starting crawler job...
+          </CardTitle>
+        </CardHeader>
+      </Card>
+    )
+  }
+
+  if (job.status === "completed" || job.status === "failed") {
+    const Icon = JOB_TYPE_ICONS[job.type] || Activity
+    const label = JOB_TYPE_LABELS[job.type] || job.type
+    const meta = job.result_meta || {}
+    const inserted = meta.inserted || 0
+    const evaluated = meta.evaluated || 0
+    const isError = job.status === "failed"
+    return (
+      <Card className={cn("border-2 shadow-lg", isError ? "border-red-400 bg-red-50" : "border-emerald-500 bg-emerald-50")}>
+        <CardHeader className="pb-3">
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex items-center gap-3">
+              <div className={cn("flex h-10 w-10 items-center justify-center rounded-full", isError ? "bg-red-500" : "bg-emerald-600")}>
+                <Icon className="h-5 w-5 text-white" />
+              </div>
+              <div>
+                <CardTitle className="text-base flex items-center gap-2">
+                  {label}
+                  <Badge className={isError ? "bg-red-500 text-white text-xs" : "bg-emerald-600 text-white text-xs"}>
+                    {isError ? "Failed" : "Complete"}
+                  </Badge>
+                </CardTitle>
+                <CardDescription className="text-xs">
+                  {isError
+                    ? (meta.error || job.error || "Job failed â check server logs for details")
+                    : `Finished: ${inserted} opportunit${inserted === 1 ? "y" : "ies"} added, ${evaluated} records evaluated`}
+                </CardDescription>
+              </div>
+            </div>
+            {onClose && (
+              <Button variant="ghost" size="sm" onClick={onClose}>
+                Dismiss
+              </Button>
+            )}
+          </div>
+          <Progress value={isError ? 100 : 100} className={cn("h-2 mt-2", isError ? "[&>div]:bg-red-500" : "[&>div]:bg-emerald-500")} />
+        </CardHeader>
+      </Card>
+    )
   }
 
   if (job.status !== "running") {
@@ -334,7 +404,9 @@ export default function CrawlerProgressMeter({ jobId, onClose }) {
           <div className="grid grid-cols-2 gap-3 text-sm">
             <div>
               <span className="text-slate-500">Job ID:</span>
-              <p className="font-mono text-xs text-slate-700">{job.id.slice(0, 16)}...</p>
+              <p className="font-mono text-xs text-slate-700">
+                {(() => { const s = String(job.id ?? ""); return s.length > 16 ? s.slice(0, 16) + "â¦" : s; })()}
+              </p>
             </div>
             <div>
               <span className="text-slate-500">Profile:</span>

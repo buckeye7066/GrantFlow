@@ -127,11 +127,25 @@ function computeNegativePenalty(program, analysis) {
 
   for (const rule of NEGATIVE_RULES) {
         const eligKey = `requires${rule.healthRequired.charAt(0).toUpperCase() + rule.healthRequired.slice(1).replace(/_([a-z])/g, (_, c) => c.toUpperCase())}`;
-        if (program.eligibility[eligKey] && !analysis.health.has(rule.healthRequired)) {
+        if (program.eligibility[eligKey] && !(analysis.health?.has(rule.healthRequired))) {
                 return rule.penalty;
         }
   }
     return 0;
+}
+
+function getNegativeGateReason(program, analysis) {
+  if (!program?.eligibility) return null;
+  const healthSignals = analysis?.health;
+  for (const rule of NEGATIVE_RULES) {
+    const eligKey = `requires${rule.healthRequired.charAt(0).toUpperCase()}${rule.healthRequired
+      .slice(1)
+      .replace(/_([a-z])/g, (_, c) => c.toUpperCase())}`;
+    if (program.eligibility[eligKey] && !(healthSignals?.has?.(rule.healthRequired))) {
+      return rule.label;
+    }
+  }
+  return null;
 }
 
 // ── Informational page filter ──
@@ -199,7 +213,7 @@ function isCopayOrPatientAssistanceIrrelevant(program, analysis) {
   if (!isCopayProgram) return false;
 
   // If the program requires a medical condition AND profile has no health signals → exclude
-  if (program.eligibility?.requiresMedicalCondition && analysis.health.size === 0) {
+  if (program.eligibility?.requiresMedicalCondition && (analysis.health?.size ?? 0) === 0) {
         return true;
   }
 
@@ -331,8 +345,9 @@ export function scoreProgram(program, analysis, strategyOpts = {}) {
           matchReasons.push('Strong intent alignment with your profile');
     } else if (program.intentMatch && program.intentMatch.length > 0) {
           score += 0;
+          matchReasons.push('No intent alignment with your profile');
     } else {
-          score += 5;
+          score += 2;
     }
 
     // ── needEmphasis bonus (up to 10 points) ──
@@ -409,7 +424,7 @@ export function scoreProgram(program, analysis, strategyOpts = {}) {
           score += 7;
     }
 
-  // ── Negative match penalty (only hard-gate on truly disqualifying negatives) ──
+  // ── Negative match penalty (hard-gate disqualifying negatives) ──
   const negPenalty = computeNegativePenalty(program, analysis);
   if (negPenalty <= -100) return null;
     score += negPenalty;
@@ -591,7 +606,9 @@ export function scoreProgram(program, analysis, strategyOpts = {}) {
   score += eligibilityPenalty;
 
   // ── Normalize to 0-100 ──
-  const normalizedScore = Math.max(0, Math.round(Math.min(100, (score / maxPossible) * 100)));
+  const normalizedScore = maxPossible > 0
+    ? Math.max(0, Math.round(Math.min(100, (score / maxPossible) * 100)))
+    : 0;
 
   // Build matched signals list
   const matchedSignals = [];
@@ -667,18 +684,51 @@ export function matchPrograms(allPrograms, analysis, options = {}) {
     if (normName) seenNames.add(normName);
 
     // Filter informational-only pages
-    if (isInformationalOnly(program)) { stats.informational++; continue; }
+    if (isInformationalOnly(program)) {
+      stats.informational++;
+      if (!stats.filteredLog) stats.filteredLog = [];
+      stats.filteredLog.push({ id: program.id, name: program.name, reason: 'informational_page' });
+      continue;
+    }
 
     // Filter copay/patient-assistance when no matching conditions
-    if (isCopayOrPatientAssistanceIrrelevant(program, analysis)) { stats.copayGated++; continue; }
+    if (isCopayOrPatientAssistanceIrrelevant(program, analysis)) {
+      stats.copayGated++;
+      if (!stats.filteredLog) stats.filteredLog = [];
+      stats.filteredLog.push({ id: program.id, name: program.name, reason: 'copay_gated_no_condition_match' });
+      continue;
+    }
 
     // Filter loans/matching funds
-    if (isExcluded(program)) { stats.excluded++; continue; }
+    if (isExcluded(program)) {
+      stats.excluded++;
+      if (!stats.filteredLog) stats.filteredLog = [];
+      stats.filteredLog.push({ id: program.id, name: program.name, reason: 'loan_or_matching_fund' });
+      continue;
+    }
 
     // Score against profile
     const scored = scoreProgram(program, analysis, strategyOpts);
-    if (!scored) { stats.nullScore++; continue; }
-    if (scored.matchScore < minScore) { stats.belowMin++; continue; }
+    if (!scored) {
+      stats.nullScore++;
+      const hardGateReason = getNegativeGateReason(program, analysis);
+      if (hardGateReason) {
+        if (!stats.filteredLog) stats.filteredLog = [];
+        stats.filteredLog.push({
+          id: program.id,
+          name: program.name,
+          reason: 'negative_health_mismatch',
+          detail: hardGateReason,
+        });
+      }
+      continue;
+    }
+    if (scored.matchScore < minScore) {
+  stats.belowMin++;
+  if (!stats.filteredLog) stats.filteredLog = [];
+  stats.filteredLog.push({ id: program.id, name: program.name, reason: 'below_min_score', score: scored.matchScore, threshold: minScore });
+  continue;
+}
 
     // Attach strategy context to match_explain
     if (scored.match_explain) {
@@ -687,7 +737,11 @@ export function matchPrograms(allPrograms, analysis, options = {}) {
       scored.match_explain.urlPolicy = {
         urlUsed: scored.url || scored.applicationUrl || null,
         isDirectory: scored.type === 'portal' || scored.type === 'referral',
-        acceptedReason: (scored.url || scored.applicationUrl) ? 'valid_url' : 'no_url',
+        acceptedReason: (() => {
+  const candidate = scored.url || scored.applicationUrl;
+  if (!candidate) return 'no_url';
+  try { new URL(candidate); return 'valid_url'; } catch { return 'invalid_url_format'; }
+})(),
       };
     }
 

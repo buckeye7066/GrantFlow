@@ -84,7 +84,8 @@ async function loadOrganizationLocation(db, organizationId) {
       .prepare('SELECT state, zip FROM organizations WHERE id = ? LIMIT 1')
       .get(String(organizationId))
     return { state: row?.state ?? null, zip: row?.zip ?? null }
-  } catch {
+  } catch (error) {
+    console.warn('[loadOrganizationLocation] Database error:', error?.message)
     return { state: null, zip: null }
   }
 }
@@ -147,6 +148,9 @@ async function invokeOpenAiOptional(prompt) {
 router.post('/crawlGrantsGov', async (req, res) => {
   const user = requireUser(req, res)
   if (!user) return
+  
+  const allowed = await requireTierCapability(req, res, user.userId, TIER_CAPABILITIES.CRAWLING)
+  if (!allowed) return
 
   const logId = createLogId()
   const startedAt = Date.now()
@@ -157,7 +161,7 @@ router.post('/crawlGrantsGov', async (req, res) => {
   })
 
   // Background execution (non-blocking).
-  setTimeout(async () => {
+  setImmediate(async () => {
     try {
       const options = req.body ?? {}
       const maxPages = Math.max(1, Math.min(Number(options.maxPages ?? 1), 10))
@@ -179,6 +183,7 @@ router.post('/crawlGrantsGov', async (req, res) => {
         metadata: { ...result, completed_at: nowIso() },
       })
     } catch (error) {
+      console.error('[crawlBenefitsGov] Background crawl failed:', error?.message || error)
       await updateCrawlLog(req.db, {
         id: logId,
         status: 'error',
@@ -188,7 +193,7 @@ router.post('/crawlGrantsGov', async (req, res) => {
         durationMs: Date.now() - startedAt,
         errorMessage: error?.message || String(error),
         metadata: { completed_at: nowIso() },
-      }).catch(() => {})
+      }).catch(e => console.warn('[crawlBenefitsGov background]', e?.message || e))
     }
   }, 0)
 
@@ -199,6 +204,9 @@ router.post('/crawlGrantsGov', async (req, res) => {
 router.post('/crawlBenefitsGov', async (req, res) => {
   const user = requireUser(req, res)
   if (!user) return
+  
+  const allowed = await requireTierCapability(req, res, user.userId, TIER_CAPABILITIES.CRAWLING)
+  if (!allowed) return
 
   const payload = req.body ?? {}
   const organizationId = payload.organization_id ?? payload.organizationId ?? null
@@ -241,7 +249,7 @@ router.post('/crawlBenefitsGov', async (req, res) => {
     metadata: { requested_at: nowIso(), user_id: user?.userId ?? null, state: resolvedState, organization_id: organizationId ?? null },
   })
 
-  setTimeout(async () => {
+  setImmediate(async () => {
     try {
       if (!resolvedState || !/^[A-Z]{2}$/.test(resolvedState)) {
         await updateCrawlLog(req.db, {
@@ -267,8 +275,8 @@ router.post('/crawlBenefitsGov', async (req, res) => {
         try {
           const title = String(p?.title || 'Benefit Program').trim()
           const sponsor = String(p?.sponsor || `${resolvedState} program`).trim()
-          const sourceUrl = p?.source_url || p?.application_url || 'https://www.benefits.gov'
-          const appUrl = p?.application_url || sourceUrl
+          const sourceUrl = p?.source_url || p?.application_url || null
+          const appUrl = p?.application_url || p?.source_url || null
           const opp = {
             id: stableId('benefits-gov', resolvedState, title),
             title,
@@ -293,6 +301,7 @@ router.post('/crawlBenefitsGov', async (req, res) => {
           if (r?.error) errors += 1
         } catch (e) {
           errors += 1
+          console.warn('[crawlBenefitsGov] upsertFundingOpportunity failed for opportunity:', p?.title ?? '(unknown)', e?.message || e)
         }
       }
 
@@ -309,6 +318,7 @@ router.post('/crawlBenefitsGov', async (req, res) => {
         metadata: { completed_at: nowIso(), state: resolvedState },
       })
     } catch (error) {
+      console.error('[crawlBenefitsGov] Background crawl failed:', error?.message || error)
       await updateCrawlLog(req.db, {
         id: logId,
         status: 'error',
@@ -318,7 +328,7 @@ router.post('/crawlBenefitsGov', async (req, res) => {
         durationMs: Date.now() - startedAt,
         errorMessage: error?.message || String(error),
         metadata: { completed_at: nowIso() },
-      }).catch(() => {})
+      }).catch(e => console.warn('[crawlBenefitsGov background]', e?.message || e))
     }
   }, 0)
 
@@ -353,19 +363,19 @@ router.post('/discoverLocalSources', async (req, res) => {
       {
         name: `${city ? `${city} ` : ''}Community Foundation`,
         source_type: 'community_foundation',
-        website_url: 'https://example.com',
+        website_url: null,
         notes: 'Seeded by local discovery. Replace with real URLs.',
       },
       {
         name: `${state ? `${state} ` : ''}Department of Development`,
         source_type: 'state_agency',
-        website_url: 'https://example.com',
+        website_url: null,
         notes: 'Seeded by local discovery. Replace with real URLs.',
       },
       {
         name: 'Regional Hospital System Grants',
         source_type: 'hospital_system',
-        website_url: 'https://example.com',
+        website_url: null,
         notes: 'Seeded by local discovery. Replace with real URLs.',
       },
     ]
@@ -421,7 +431,7 @@ router.post('/searchForSource', async (req, res) => {
     id: null,
     discovered_for_organization_id: String(organization_id),
     name,
-    website_url: 'https://example.com',
+    website_url: null,
     scholarship_page_url: '',
     city: '',
     state: '',

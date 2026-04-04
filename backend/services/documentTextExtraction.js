@@ -123,7 +123,7 @@ async function tryExtractPdfWithPdftotext({ filePath, timeoutMs }) {
       const code = error?.code
       if (code === 'ENOENT') continue
     } finally {
-      await fsp.rm(dir, { recursive: true, force: true }).catch(() => {})
+      await fsp.rm(dir, { recursive: true, force: true }).catch((err) => { console.error('Failed to cleanup temp directory:', dir, err) })
     }
   }
   return null
@@ -172,7 +172,8 @@ export async function extractTextFromFile({
         }
         return { text, method: 'pdf-parse', warnings }
       } catch (error) {
-        warnings.push(error instanceof Error ? error.message : String(error))
+        const errorMsg = error instanceof Error ? error.message : String(error)
+        warnings.push(`PDF extraction failed: ${errorMsg}, trying fallback...`)
 
         const fallback = await tryExtractPdfWithPdftotext({ filePath, timeoutMs })
         const text = clampText(fallback, maxChars)
@@ -280,7 +281,7 @@ export async function extractTextFromFile({
         return { text, method: `tesseract:${lang}`, warnings }
       } finally {
         try {
-          await worker.terminate()
+          await worker.terminate().catch((err) => { console.error('Failed to terminate OCR worker:', err) })
         } catch {
           // ignore cleanup errors
         }

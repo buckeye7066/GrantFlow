@@ -23,15 +23,23 @@ export const DOMAIN_ENGINES = [
 ]
 
 export async function runAllDomainEngines(profile, options = {}) {
+  if (!profile || typeof profile !== 'object') {
+    console.error('[domainEngines] runAllDomainEngines called without a valid profile â aborting crawl')
+    return []
+  }
   const results = []
   for (const { id, run } of DOMAIN_ENGINES) {
     try {
       const opps = await run(profile, options)
       for (const o of opps) {
+        if (!o.application_url || typeof o.application_url !== 'string' || !o.application_url.startsWith('http')) {
+          console.warn(`[domainEngines] Engine "${id}" returned record without valid application_url â skipped:`, o.title ?? '(untitled)')
+          continue
+        }
         results.push({ ...o, crawler_type: id, source: id })
       }
-    } catch {
-      // never throw
+    } catch (err) {
+      console.error(`[domainEngines] Engine "${id}" failed:`, err?.message ?? err)
     }
   }
   return results

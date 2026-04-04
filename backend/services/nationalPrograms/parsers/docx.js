@@ -10,16 +10,29 @@ function normalizeWhitespace(text) {
 }
 
 export async function parseDocxToText(buffer) {
-  const { value } = await mammoth.extractRawText({ buffer })
-  const text = normalizeWhitespace(value || '')
-  const extractedText = text.length > 200000 ? text.slice(0, 200000) : text
-  return {
-    contentType:
-      'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-    title: null,
-    h1: null,
-    extractedText,
-    links: [],
+  try {
+    const { value } = await mammoth.extractRawText({ buffer })
+    const text = normalizeWhitespace(value || '')
+    const extractedText =
+      text.length > 200000 ? text.slice(0, 200000) + '\n[CONTENT_TRUNCATED]' : text
+    return {
+      contentType:
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      title: null,
+      h1: null,
+      extractedText,
+      links: [],
+    }
+  } catch (error) {
+    console.warn('[docx parser] mammoth.extractRawText failed:', error?.message || error)
+    return {
+      contentType:
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      title: null,
+      h1: null,
+      extractedText: '',
+      links: [],
+    }
   }
 }
 

@@ -272,7 +272,7 @@ async function upsertPriceRow(
         amount_cents = excluded.amount_cents,
         active = excluded.active,
         -- Preserve existing stripe mapping unless explicitly set elsewhere.
-        stripe_price_id = COALESCE(service_prices.stripe_price_id, excluded.stripe_price_id),
+        stripe_price_id = CASE WHEN excluded.stripe_price_id IS NOT NULL THEN excluded.stripe_price_id ELSE service_prices.stripe_price_id END,
         updated_at = ${nowSqlLiteral(db)}
     `,
   ).run(id, serviceId, clientCategory, Number(amountCents), currency, String(milestonePhase ?? ''), stripePriceId, activeDb)
@@ -281,7 +281,7 @@ async function upsertPriceRow(
 export async function listServiceCatalog(db, { includeInactive = false } = {}) {
   await ensureServiceCatalogSchema(db)
 
-  const where = includeInactive ? '' : 'WHERE is_active = 1'
+  const where = includeInactive ? 'WHERE 1=1' : 'WHERE is_active = 1'
   const items = await db
     .prepare(
       `
@@ -296,7 +296,7 @@ export async function listServiceCatalog(db, { includeInactive = false } = {}) {
   const ids = items.map((i) => String(i.id))
   if (ids.length === 0) return []
 
-  const placeholders = ids.map(() => '?').join(',')
+  const placeholders = ids.map(() => '?').join(','); if(ids.length > 1000) throw new Error('Too many IDs for query')
   const prices = await db
     .prepare(
       `

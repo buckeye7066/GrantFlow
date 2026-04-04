@@ -26,6 +26,9 @@ function diffChangedFields(prev = {}, next = {}) {
   return changed
 }
 
+const ALLOWED_TRACKS = ['PROVIDER', 'CLIENT']
+const TRACK_TABLE_MAP = { PROVIDER: 'programs_provider', CLIENT: 'programs_client' }
+
 export async function upsertProgramWithVersion({
   db,
   track,
@@ -37,7 +40,8 @@ export async function upsertProgramWithVersion({
   contentType,
   fetchedAt,
 }) {
-  const table = track === 'PROVIDER' ? 'programs_provider' : 'programs_client'
+  if (!ALLOWED_TRACKS.includes(track)) throw new Error(`upsertProgramWithVersion: invalid track '${track}'`)
+  const table = TRACK_TABLE_MAP[track]
 
   const canonicalKey = buildCanonicalKey({
     fundingTrack: track,
@@ -91,7 +95,14 @@ export async function upsertProgramWithVersion({
   const deactivateDueToStatus = httpStatus === 404 || httpStatus === 410
   const wasActive = existing ? Number(existing.is_active) === 1 : true
   const isSuccessfulFetch = typeof httpStatus === 'number' ? httpStatus >= 200 && httpStatus < 400 : true
-  const shouldReactivate = existing && !wasActive && isSuccessfulFetch && !deactivateDueToStatus
+  // Only auto-reactivate if the program was deactivated solely due to a
+// prior 404/410 fetch. Programs deactivated for other reasons (manual,
+// business-logic) must NOT be silently re-activated by a crawler run.
+const wasDeactivatedByFetch =
+  existing && !wasActive && existing.last_fetch_status != null &&
+  (Number(existing.last_fetch_status) === 404 || Number(existing.last_fetch_status) === 410)
+const shouldReactivate =
+  wasDeactivatedByFetch && isSuccessfulFetch && !deactivateDueToStatus
 
   const changeType = (() => {
     if (!existing) return 'created'
@@ -122,6 +133,16 @@ export async function upsertProgramWithVersion({
   const fundingAmountsJson = JSON.stringify(nextSnapshot.funding_amounts || [])
   const changeLogJson = JSON.stringify(newLog)
   const sourceUrl = normalized.source_url
+  if (!sourceUrl || typeof sourceUrl !== 'string' || !sourceUrl.startsWith('http')) {
+    return {
+      program_id: null,
+      canonical_key: canonicalKey,
+      change_type: 'rejected_no_url',
+      changed_fields: [],
+      confidence: 0,
+      version_id: null,
+    }
+  }
 
   const nextIsActive = deactivateDueToStatus ? 0 : 1
 
@@ -330,7 +351,7 @@ export async function upsertProgramWithVersion({
         UPDATE ${table}
         SET last_seen_at = ?,
             last_fetch_status = ?,
-            last_content_hash = COALESCE(last_content_hash, ?),
+            last_content_hash = ?,
             last_verified = COALESCE(last_verified, ?)
         WHERE program_id = ?
       `,
@@ -419,6 +440,8 @@ export async function upsertProgramWithVersion({
           ? `Updated fields: ${changedFields.join(', ')}`
           : changeType === 'created'
           ? 'Created'
+          : changeType === 'updated'
+          ? `Content hash changed (extracted text or raw content differs); no normalized field changes detected`
           : 'Updated',
         confidence,
       )

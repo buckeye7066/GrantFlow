@@ -79,17 +79,24 @@ export default function OnboardingVideo({ open, onComplete, onSkip }) {
     onSkip?.()
   }
 
+  const sourceIndexRef = useRef(sourceIndex)
+  useEffect(() => {
+    sourceIndexRef.current = sourceIndex
+  }, [sourceIndex])
+
   const handleVideoError = () => {
-    const failedSrc = candidates[sourceIndex] || null
+    const currentIndex = sourceIndexRef.current
+    const failedSrc = candidates[currentIndex] || null
     console.error('[onboarding-video] Failed to load video source', {
       src: failedSrc,
       base_url: import.meta?.env?.BASE_URL,
       has_override: Boolean(String(import.meta?.env?.VITE_ONBOARDING_VIDEO_URL || '').trim()),
     })
 
-    // Try the next candidate if available (handles filename drift in deployments).
-    if (sourceIndex + 1 < candidates.length) {
-      setSourceIndex((i) => i + 1)
+    const nextIndex = currentIndex + 1
+    if (nextIndex < candidates.length) {
+      sourceIndexRef.current = nextIndex
+      setSourceIndex(nextIndex)
       return
     }
 

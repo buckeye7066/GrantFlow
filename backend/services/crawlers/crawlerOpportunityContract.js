@@ -1,5 +1,9 @@
 import { ALLOWED_RECORD_ORIGINS } from '../../utils/recordOrigins.js'
 
+if (!ALLOWED_RECORD_ORIGINS || typeof ALLOWED_RECORD_ORIGINS.has !== 'function') {
+  throw new Error('ALLOWED_RECORD_ORIGINS must be a Set with .has() method')
+}
+
 function normalizeString(value) {
   if (typeof value !== 'string') return ''
   return value.trim()
@@ -70,7 +74,9 @@ export function isLoanOrMatchingFund(opportunity) {
   const oppType = String(opportunity.opportunity_type || '').toLowerCase()
   if (['loan', 'loan_program', 'microloan'].includes(oppType)) return true
   const text = `${opportunity.title || ''} ${opportunity.description || ''} ${opportunity.eligibility || ''}`.toLowerCase()
-  const loanKeywords = ['\\bloan\\b', '\\bmicroloan\\b', '\\bfinancing\\b', '\\bapr\\b']
+  const loanKeywords = ['\\bloan\\b', '\\bmicroloan\\b', '\\bfinancing\\b']
+  // '\\bapr\\b' removed: 'APR' as a word is ambiguous with 'April' in deadline strings;
+  // loan detection via is_loan flag and explicit type field is the reliable path.
   const matchKeywords = ['matching funds', 'match required', 'cost share', '1:1 match', 'dollar for dollar']
   if (loanKeywords.some((kw) => new RegExp(kw).test(text))) return true
   if (matchKeywords.some((kw) => text.includes(kw))) return true
@@ -152,12 +158,13 @@ export function mergePlanKeywords(baseKeywords = [], queryPlan = null) {
 }
 
 export function violatesMustNot(rawOpportunity, queryPlan = null) {
+  if (!rawOpportunity || typeof rawOpportunity !== 'object') return false
   const mustNot = Array.isArray(queryPlan?.mustNotTerms) ? queryPlan.mustNotTerms : []
   if (mustNot.length === 0) return false
   const text = normalizeLower(
-    `${rawOpportunity?.title || ''} ${rawOpportunity?.description || ''} ${
-      Array.isArray(rawOpportunity?.keywords) ? rawOpportunity.keywords.join(' ') : ''
-    } ${Array.isArray(rawOpportunity?.categories) ? rawOpportunity.categories.join(' ') : ''}`,
+    `${rawOpportunity.title || ''} ${rawOpportunity.description || ''} ${
+      Array.isArray(rawOpportunity.keywords) ? rawOpportunity.keywords.join(' ') : ''
+    } ${Array.isArray(rawOpportunity.categories) ? rawOpportunity.categories.join(' ') : ''}`,
   )
   return mustNot.some((term) => {
     const needle = normalizeLower(term)
@@ -178,6 +185,8 @@ export function enforceCrawlerOpportunityContract(
 ) {
   if (!isPlainObject(rawOpportunity)) return null
   if (violatesMustNot(rawOpportunity, queryPlan)) return null
+  // Goal 3: hard-reject loans and matching-fund requirements before any further processing
+  if (isLoanOrMatchingFund(rawOpportunity)) return null
 
   const url = rawOpportunity.url || rawOpportunity.application_url || rawOpportunity.source_url || null
   if (!isValidHttpUrl(url)) return null
@@ -210,14 +219,25 @@ export function enforceCrawlerOpportunityContract(
   ])
   const opportunityType = inferOpportunityType({ rawOpportunity, crawlerType, sourceFallback })
 
+  // Strip audit/decision fields that must only be set by computeMatchDecision()
+  const DECISION_ENGINE_FIELDS = [
+    'match_decision', 'match_explanation', 'eligibility_status',
+    'ineligibility_reasons', 'matcher_version', 'evaluated_at',
+    'match_confidence', 'fingerprint', 'profile_fingerprint',
+    'opportunity_fingerprint', 'matched_needs',
+  ]
+  const safeRaw = Object.fromEntries(
+    Object.entries(rawOpportunity).filter(([k]) => !DECISION_ENGINE_FIELDS.includes(k))
+  )
+
   const normalized = {
-    ...rawOpportunity,
+    ...safeRaw,
     title,
     sponsor: rawOpportunity.sponsor ?? rawOpportunity.funder ?? sourceFallback ?? null,
     description: description || null,
     source: rawOpportunity.source ?? sourceFallback ?? crawlerType,
     source_url: rawOpportunity.source_url ?? url,
-    application_url: rawOpportunity.application_url ?? url,
+    application_url: isValidHttpUrl(rawOpportunity.application_url) ? rawOpportunity.application_url : url,
     url,
     categories,
     keywords,
@@ -236,7 +256,7 @@ export function enforceCrawlerOpportunityContract(
 // ALLOWED_RECORD_ORIGINS imported from ../../utils/recordOrigins.js
 
 export function normalizeRecordOrigin(value) {
-  if (typeof value === 'string' && ALLOWED_RECORD_ORIGINS.has(value)) return value
+  if (typeof value === 'string' && ALLOWED_RECORD_ORIGINS && typeof ALLOWED_RECORD_ORIGINS.has === 'function' && ALLOWED_RECORD_ORIGINS.has(value)) return value
   if (typeof value === 'string' && value.startsWith('directory:')) return 'directory_resource'
   return 'live_crawl'
 }

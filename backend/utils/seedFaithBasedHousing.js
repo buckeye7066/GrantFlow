@@ -57,9 +57,20 @@ export async function seedFaithBasedHousing(db) {
         requires_match: opp.requires_match === true ? 1 : 0,
         requires_501c3: opp.requires_501c3 === true ? 1 : 0,
         is_national: opp.is_national === true ? 1 : 0,
-        application_url: opp.application_url || opp.source_url,
+        application_url: (opp.application_url && opp.application_url.startsWith('http')) ? opp.application_url
+          : (opp.source_url && opp.source_url.startsWith('http')) ? opp.source_url
+          : null,
         source_url: opp.source_url,
         last_verified_at: opp.last_verified_at || new Date().toISOString(),
+        // Audit metadata required by Goals 8 & 9
+        match_decision: opp.match_decision || 'REVIEW',
+        match_explanation: opp.match_explanation || 'Seeded from curated faith-based housing dataset; requires human review',
+        matched_needs: opp.matched_needs || JSON.stringify(['housing']),
+        eligibility_status: opp.eligibility_status || 'unverified',
+        ineligibility_reasons: opp.ineligibility_reasons || JSON.stringify([]),
+        matcher_version: opp.matcher_version || 'seed-v1',
+        evaluated_at: opp.evaluated_at || new Date().toISOString(),
+        match_confidence: opp.match_confidence ?? 0,
       }
 
       const result = await upsertFundingOpportunity(db, opportunity)
@@ -165,6 +176,7 @@ async function registerGeoIndexEntries(db, opportunities) {
       }
     } catch (error) {
       // Geo index is supplementary; don't fail seed for it
+      console.warn(`[seedFaithBasedHousing] Could not register geo index for opportunity ${opp?.source_id || opp?.id}: ${error?.message}`)
     }
   }
 }

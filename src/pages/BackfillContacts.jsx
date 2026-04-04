@@ -79,9 +79,27 @@ export default function BackfillContacts() {
 
       if (newContactMethods.length > 0) {
         log(`Creating ${newContactMethods.length} new contact methods in bulk...`);
-        await client.entities.ContactMethod.bulkCreate(newContactMethods);
-        setState(prev => ({ ...prev, summary: { ...prev.summary, created: newContactMethods.length } }));
-        log('Bulk creation successful.');
+        let bulkResult;
+        let createdCount = 0;
+        let failedCount = 0;
+        try {
+          bulkResult = await client.entities.ContactMethod.bulkCreate(newContactMethods);
+          createdCount = Array.isArray(bulkResult) ? bulkResult.length : newContactMethods.length;
+          failedCount = newContactMethods.length - createdCount;
+        } catch (bulkError) {
+          log(`ERROR during bulk create: ${bulkError.message}`);
+          failedCount = newContactMethods.length;
+          createdCount = 0;
+        }
+        setState(prev => ({
+          ...prev,
+          summary: {
+            ...prev.summary,
+            created: createdCount,
+            errors: prev.summary.errors + failedCount
+          }
+        }));
+        log(`Bulk creation complete: ${createdCount} created, ${failedCount} failed.`);
       } else {
         log('No new contact methods to create.');
       }
@@ -92,7 +110,11 @@ export default function BackfillContacts() {
     } catch (error) {
       console.error("Backfill failed:", error);
       log(`ERROR: ${error.message}`);
-      setState(prev => ({ ...prev, status: 'error' }));
+      setState(prev => ({
+        ...prev,
+        status: 'error',
+        summary: { ...prev.summary, errors: prev.summary.errors + 1 }
+      }));
     }
   };
 
@@ -123,8 +145,8 @@ export default function BackfillContacts() {
                 <Progress value={progress} className="w-full" />
                 
                 <div className="p-4 bg-slate-900 text-white rounded-md font-mono text-sm h-64 overflow-y-auto">
-                  {logs.map((log, index) => (
-                    <p key={index} className={log.startsWith('ERROR') ? 'text-red-400' : ''}>{log}</p>
+                  {logs.map((entry, index) => (
+                    <p key={index} className={entry.startsWith('ERROR') ? 'text-red-400' : ''}>{entry}</p>
                   ))}
                 </div>
 

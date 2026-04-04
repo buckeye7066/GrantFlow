@@ -21,7 +21,7 @@ const SECTION_SPECS = [
     sectionKey: 'military_service',
     sectionLabel: 'Military Service',
     importance: 'high',
-    requiredFields: ['veteran', 'branch', 'discharge_status'],
+    requiredFields: ['veteran'],
     programsUnlocked: [
       'VA Benefits', 'VA Healthcare', 'VA Pension', 'HUD-VASH',
       'SSVF (Supportive Services for Veteran Families)',
@@ -36,7 +36,7 @@ const SECTION_SPECS = [
     sectionKey: 'health_medical',
     sectionLabel: 'Health & Medical',
     importance: 'high',
-    requiredFields: ['disability_type', 'chronic_illness', 'conditions'],
+    requiredFields: ['disability_type'],
     programsUnlocked: [
       'SSI (Disability)', 'SSDI', 'Medicaid Waiver Programs',
       'ABLE Accounts', 'Ryan White HIV/AIDS Program',
@@ -52,7 +52,7 @@ const SECTION_SPECS = [
     sectionKey: 'financial_information',
     sectionLabel: 'Financial Information',
     importance: 'high',
-    requiredFields: ['annual_income', 'household_income', 'employment_status'],
+    requiredFields: ['annual_income', 'household_income'],
     programsUnlocked: [
       'SNAP', 'TANF', 'LIHEAP', 'Medicaid', 'CHIP',
       'Section 8 / HCV', 'EITC', 'WIC', 'Lifeline',
@@ -203,7 +203,7 @@ function calculateCompletion(sections) {
     if (!sectionData || typeof sectionData !== 'object') continue
 
     const requiredPresent = spec.requiredFields.filter((f) => hasValue(sectionData[f])).length
-    const ratio = requiredPresent / spec.requiredFields.length
+    const ratio = spec.requiredFields?.length > 0 ? requiredPresent / spec.requiredFields.length : 0
     filledWeight += w * ratio
   }
 
@@ -234,7 +234,7 @@ export function analyzeProfileGaps(profileContext) {
     return { gaps: [], completionPercentage: 0, potentialProgramsUnlocked: 0 }
   }
 
-  const sections = profileContext.sections || {}
+  const sections = profileContext?.sections || {}
   const gaps = []
 
   for (const spec of SECTION_SPECS) {
@@ -267,7 +267,13 @@ export function analyzeProfileGaps(profileContext) {
   }
 
   const completionPercentage = calculateCompletion(sections)
-  const potentialProgramsUnlocked = gaps.reduce((sum, g) => sum + g.programsUnlocked.length, 0)
+  // Weight potential by proportion of missing fields so a 1-field gap in a 3-field section
+  // only claims 1/3 of that section's programs, keeping the number honest.
+  const potentialProgramsUnlocked = gaps.reduce((sum, g) => {
+    const totalRequired = g.missingFields.length + (SECTION_SPECS.find(s => s.sectionKey === g.sectionKey)?.requiredFields.length - g.missingFields.length)
+    const missingRatio = totalRequired > 0 ? g.missingFields.length / totalRequired : 1
+    return sum + Math.ceil(g.programsUnlocked.length * missingRatio)
+  }, 0)
 
   return { gaps, completionPercentage, potentialProgramsUnlocked }
 }
@@ -285,7 +291,7 @@ if (
     sections: {
       financial_information: { annual_income: 18000 },
       family_life: { household_size: 3 },
-      basic_information: { age: 32 },
+      demographics: { age: 32, race_ethnicity: null, gender: null },
     },
   }
   const result = analyzeProfileGaps(demoContext)

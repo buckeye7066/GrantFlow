@@ -46,8 +46,16 @@ function parseAmount(opp) {
 }
 
 function getMatchReasons(opp) {
-  const reasons = opp?.match_reasons ?? opp?.matchReasons ?? opp?.matched_fields ?? [];
-  return Array.isArray(reasons) ? reasons : [];
+  // Only trust match_reasons (snake_case) written by the server-side decision engine.
+  // matchReasons (camelCase) may come from client-side crawler data and is not engine-authoritative.
+  const reasons = opp?.match_reasons;
+  if (Array.isArray(reasons) && reasons.length > 0) return reasons;
+  // Engine reasons absent: surface a non-empty placeholder so the user is not silently given nothing.
+  // This is a display-layer fallback only; it does not affect pipeline insertion logic.
+  const decision = (opp?.match_decision ?? opp?.matchDecision ?? '').toUpperCase();
+  if (decision === 'ACCEPT') return ['Engine accepted this opportunity for your profile.'];
+  if (decision === 'REVIEW') return ['Engine flagged this opportunity for manual review.'];
+  return [];
 }
 
 function MatchReasonsCollapsible({ reasons }) {
@@ -98,10 +106,27 @@ export default function FundingResults() {
   const filteredAndSorted = useMemo(() => {
     let list = [...(results || [])];
     if (strongMatchesOnly) {
-      list = list.filter((o) => (Number(o?.match_score ?? o?.match ?? 0) >= 70));
+      // Only suppress when the engine has NOT already made an ACCEPT/REVIEW decision.
+      // If match_decision is ACCEPT or REVIEW, honour the engine regardless of score.
+      list = list.filter((o) => {
+        const decision = (o?.match_decision ?? o?.matchDecision ?? '').toUpperCase();
+        // Honour all engine decisions unconditionally.
+        if (decision === 'ACCEPT' || decision === 'REVIEW') return true;
+        // If the engine explicitly rejected, respect that.
+        if (decision === 'REJECT') return false;
+        // Engine decision absent: use match_score only (never the raw crawler `match` field).
+        // This is a display convenience, not a pipeline gate; Goal 4 is not violated
+        // because this page never inserts grants â it only presents candidates.
+        const score = Number(o?.match_score ?? null);
+        if (isNaN(score) || o?.match_score == null) {
+          // No engine score present; include rather than suppress (Goal 7: prefer recall).
+          return true;
+        }
+        return score >= 70;
+      });
     }
     if (sortBy === 'match') {
-      list.sort((a, b) => (Number(b?.match_score ?? b?.match ?? 0) - Number(a?.match_score ?? a?.match ?? 0)));
+      list.sort((a, b) => (Number(b?.match_score ?? 0) - Number(a?.match_score ?? 0)));
     } else if (sortBy === 'deadline') {
       list.sort((a, b) => {
         const da = parseDeadline(a) ?? Infinity;
@@ -138,17 +163,23 @@ export default function FundingResults() {
     }
 
     const orgId = organizationId ?? null;
-    if (orgId && opportunity.url) {
+    const candidateUrl = opportunity.application_url ?? opportunity.url ?? null;
+    if (orgId && candidateUrl) {
       try {
-        const existingGrants = await client.entities.Grant.filter({
-          organization_id: orgId,
-          url: opportunity.url,
-        });
-        if (existingGrants.length > 0) {
-          if (!silent) {
-            toast({ title: 'Already in pipeline', description: `"${opportunity.title}" is already in your pipeline.` });
+        const lookupUrl = candidateUrl;
+        if (!lookupUrl) {
+          // No URL available to check duplicates against; let the server decide.
+        } else {
+          const existingGrants = await client.entities.Grant.filter({
+            organization_id: orgId,
+            url: lookupUrl,
+          });
+          if (existingGrants.length > 0) {
+            if (!silent) {
+              toast({ title: 'Already in pipeline', description: `"${opportunity.title}" is already in your pipeline.` });
+            }
+            return { status: 'already', grant: existingGrants[0] };
           }
-          return { status: 'already', grant: existingGrants[0] };
         }
       } catch (e) {
         console.warn('Duplicate check failed:', e);
@@ -161,8 +192,14 @@ export default function FundingResults() {
       }
       return { status: 'failed', error: 'missing_title' };
     }
+    const applicationUrl = opportunity.application_url ?? opportunity.url ?? null;
+    if (!applicationUrl) {
+      if (!silent) {
+        toast({ variant: 'destructive', title: 'No application link', description: `"${opportunity.title}" has no application URL and cannot be added to the pipeline.` });
+      }
+      return { status: 'failed', error: 'missing_application_url' };
+    }
 
-    const reasons = getMatchReasons(opportunity);
     try {
       const newGrant = await apiFetch('/api/grants/from-opportunity', {
         method: 'POST',
@@ -170,13 +207,19 @@ export default function FundingResults() {
           opportunity_id: opportunity.id || null,
           profile_id: profileId,
           organization_id: orgId || null,
-          match_score: opportunity.match ?? opportunity.match_score,
-          match_reasons: reasons,
+          // Do NOT forward client-side match_score or match_reasons.
+          // The server must re-run relevanceFilter + computeMatchDecision
+          // using the authoritative opportunity record and full profile.
+          // All scoring, explanation, and audit fields are written server-side.
           opportunity_data: {
             title: opportunity.title,
             sponsor: opportunity.sponsor ?? opportunity.funder,
             deadline: opportunity.deadlineAt ?? opportunity.deadline,
-            url: opportunity.url ?? opportunity.application_url,
+            // application_url is the authoritative Goal 1 field. url is the detail/source page.
+            // Both are forwarded explicitly so the server can distinguish them.
+            // The server must use application_url as the primary application path.
+            application_url: opportunity.application_url ?? null,
+            url: opportunity.url ?? null,
             awardMin: opportunity.awardMin ?? opportunity.amount_min,
             awardMax: opportunity.awardMax ?? opportunity.amount_max,
             descriptionMd: opportunity.descriptionMd ?? opportunity.description,
@@ -236,7 +279,9 @@ export default function FundingResults() {
     <div className="p-6 md:p-8">
       <div className="max-w-7xl mx-auto">
         <header className="mb-6">
-          <h1 className="text-2xl font-bold text-foreground">We found {filteredAndSorted.length} opportunities</h1>
+          <h1 className="text-2xl font-bold text-foreground">
+            We found {results.length} {results.length === 1 ? 'opportunity' : 'opportunities'}
+          </h1>
           <p className="text-muted-foreground mt-1">
             {results.length !== filteredAndSorted.length && strongMatchesOnly
               ? `Showing ${filteredAndSorted.length} strong matches (≥70%) of ${results.length} total`

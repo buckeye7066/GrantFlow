@@ -113,7 +113,8 @@ export const PROFILE_SCHEMA = {
     description: 'Medical/health characteristics frequently used in assistance eligibility.',
     fields: {
       conditions: {
-        type: 'array<object>',
+        type: 'array',
+        items: { type: 'object' },
         default: [],
         description:
           'List of health conditions (objects). Minimum shape: { name, icd10?, stage?, diagnosed_year? }. Informational only (no medical advice).',
@@ -167,7 +168,7 @@ export const PROFILE_SCHEMA = {
     title: 'Medical Insurance',
     description:
       'Insurance coverage details used for care coordination, assistance programs, and documentation (do not invent identifiers).',
-    applies_to: ['medical_assistance', 'medical_need', 'individual_need', 'family', 'medical_assistance'],
+    applies_to: ['medical_assistance', 'medical_need', 'individual_need', 'family'],
     fields: {
       insurance_provider: {
         type: 'string',
@@ -202,7 +203,7 @@ export const PROFILE_SCHEMA = {
     title: 'Medical History & Needs',
     description:
       'Medical background needed to target condition-specific resources and support letters (avoid unnecessary PHI; keep concise).',
-    applies_to: ['medical_assistance', 'medical_need', 'individual_need', 'family', 'medical_assistance'],
+    applies_to: ['medical_assistance', 'medical_need', 'individual_need', 'family'],
     fields: {
       primary_condition: { type: 'string', default: '', description: 'Primary condition/diagnosis when explicitly stated.' },
       secondary_conditions: {
@@ -480,7 +481,10 @@ export function getFlatFieldToSectionMap() {
     const schema = PROFILE_SCHEMA[sectionKey]
     const fields = schema?.fields ?? {}
     for (const fieldName of Object.keys(fields)) {
-      if (!map.has(fieldName)) map.set(fieldName, { sectionKey, storageKey: fieldName })
+      if (map.has(fieldName)) {
+        console.warn(`Duplicate field '${fieldName}' in sections '${map.get(fieldName).sectionKey}' and '${sectionKey}'`)
+      }
+      map.set(fieldName, { sectionKey, storageKey: fieldName })
     }
   }
   // UI uses current_college; schema uses current_institution in education.

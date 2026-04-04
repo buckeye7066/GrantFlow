@@ -87,11 +87,11 @@ function OpportunityRow({ opp, showScore }) {
       </div>
       {url && (
         <a
-          href={url}
+          href={opp.application_url || opp.source_url || opp.url}
           target="_blank"
           rel="noopener noreferrer"
           className="shrink-0 text-blue-600 hover:text-blue-800 p-1"
-          title="Open application"
+          title={opp.application_url ? "Open application" : "View source (application link unavailable)"}
         >
           <ExternalLink className="w-4 h-4" />
         </a>
@@ -116,6 +116,7 @@ function ZipSection({ zip, county, count, state, profileId, defaultOpen }) {
   })
 
   const opportunities = scoredQuery.data?.data ?? []
+  const totalFound = scoredQuery.data?.total_found ?? null
   const showScore = Boolean(profileId && profileId !== "all")
 
   return (
@@ -144,9 +145,17 @@ function ZipSection({ zip, county, count, state, profileId, defaultOpen }) {
               <Loader2 className="w-4 h-4 animate-spin" />
               Loading opportunities…
             </div>
+          ) : scoredQuery.isError ? (
+            <div className="px-6 py-4 text-sm text-red-500">
+              Failed to load opportunities for this zip code. Please try again.
+            </div>
           ) : opportunities.length === 0 ? (
             <div className="px-6 py-4 text-sm text-slate-400">
-              No opportunities found for this zip code.
+              {showScore
+                ? totalFound != null && totalFound > 0
+                  ? `${totalFound} ${totalFound === 1 ? "opportunity" : "opportunities"} found but none matched your profile. Adding details like housing needs, income, military status, or disabilities to your profile often unlocks more results.`
+                  : "No matches found for your profile in this zip code. Adding details like housing needs, income, military status, or disabilities to your profile often unlocks more results."
+                : "No opportunities indexed for this zip code yet."}
             </div>
           ) : (
             <div className="ml-6 border-l border-slate-200">
@@ -165,10 +174,11 @@ function ZipSection({ zip, county, count, state, profileId, defaultOpen }) {
   )
 }
 
-function StateSection({ stateEntry, profileId }) {
+function StateSection({ stateEntry, profileId, maxOpportunityCount }) {
   const [open, setOpen] = useState(false)
   const { state, opportunity_count, zips } = stateEntry
   const stateName = STATE_NAMES[state] || state
+  const progressMax = maxOpportunityCount > 0 ? maxOpportunityCount : 50
 
   return (
     <Card className="border border-slate-200 shadow-sm overflow-hidden">
@@ -192,7 +202,7 @@ function StateSection({ stateEntry, profileId }) {
           </div>
         </div>
         <div className="shrink-0 w-20">
-          <Progress value={Math.min(100, (opportunity_count / 50) * 100)} className="h-1.5" />
+          <Progress value={Math.min(100, (opportunity_count / progressMax) * 100)} className="h-1.5" />
         </div>
       </button>
 
@@ -224,6 +234,9 @@ export default function GeoFundingView({ profileId }) {
 
   const summary = summaryQuery.data
   const states = summary?.states ?? []
+  const maxOpportunityCount = states.length > 0
+    ? Math.max(...states.map((s) => s.opportunity_count || 0), 1)
+    : 1
 
   if (summaryQuery.isLoading) {
     return (
@@ -232,6 +245,18 @@ export default function GeoFundingView({ profileId }) {
           <Skeleton key={i} className="h-16 w-full rounded-lg" />
         ))}
       </div>
+    )
+  }
+
+  if (summaryQuery.isError) {
+    return (
+      <Card className="border border-dashed border-red-300 bg-red-50">
+        <CardContent className="py-12 text-center">
+          <p className="text-sm text-red-600">
+            Unable to load geographic funding data. Please refresh or contact support.
+          </p>
+        </CardContent>
+      </Card>
     )
   }
 
@@ -268,7 +293,7 @@ export default function GeoFundingView({ profileId }) {
         )}
       </div>
       {states.map((s) => (
-        <StateSection key={s.state} stateEntry={s} profileId={profileId} />
+        <StateSection key={s.state} stateEntry={s} profileId={profileId} maxOpportunityCount={maxOpportunityCount} />
       ))}
     </div>
   )

@@ -4,15 +4,16 @@ import { resolveCountyForZip } from '../geo/zipCountyResolver.js'
 
 const require = createRequire(import.meta.url)
 const schema = require('./applicationSchema.json')
+if (!schema) throw new Error('applicationSchema.json is required for profile taxonomy')
 
-const CANONICAL_SECTION_KEYS = Array.isArray(schema?.canonical_section_keys)
+const CANONICAL_SECTION_KEYS = (schema && Array.isArray(schema.canonical_section_keys))
   ? schema.canonical_section_keys
   : []
-const FALLBACK_SECTION_KEYS = Array.isArray(schema?.fallback_section_keys)
+const FALLBACK_SECTION_KEYS = (schema && Array.isArray(schema.fallback_section_keys))
   ? schema.fallback_section_keys
   : ['comprehensive_application']
 const ALL_SCHEMA_SECTION_KEYS = new Set([...CANONICAL_SECTION_KEYS, ...FALLBACK_SECTION_KEYS])
-const FIELD_DEFINITIONS = Array.isArray(schema?.fields) ? schema.fields : []
+const FIELD_DEFINITIONS = (schema && Array.isArray(schema.fields)) ? schema.fields : []
 
 const STATE_NAME_TO_CODE = {
   alabama: 'AL',
@@ -495,8 +496,8 @@ function resolveGeo({ facets }) {
       if (!getDeep(facets, 'geo.city') && lookup?.city) {
         setDeep(facets, 'geo.city', normalizeString(lookup.city))
       }
-    } catch {
-      // no-op
+    } catch (error) {
+      console.warn('ZIP code lookup failed:', { zip, error: error.message })
     }
   }
   if (state) setDeep(facets, 'geo.state', state)
@@ -506,8 +507,8 @@ function resolveGeo({ facets }) {
     try {
       const county = resolveCountyForZip(zip, state || null)
       if (county) setDeep(facets, 'geo.county', county)
-    } catch {
-      // no-op
+    } catch (error) {
+      console.warn('ZIP code lookup failed:', { zip, error: error.message })
     }
   }
 }
@@ -729,7 +730,7 @@ function deriveIntent({ facets }) {
 }
 
 function applyPiiRules({ facets, sectionsByKey, trace }) {
-  const piiRules = schema?.pii_rules && typeof schema.pii_rules === 'object' ? schema.pii_rules : {}
+  const piiRules = (schema && schema.pii_rules && typeof schema.pii_rules === 'object') ? schema.pii_rules : {}
 
   for (const [ruleName, rule] of Object.entries(piiRules)) {
     const candidates = Array.isArray(rule?.input_candidates) ? rule.input_candidates : []

@@ -7,8 +7,16 @@
 import express from 'express'
 import zipcodes from 'zipcodes'
 import { trustedOriginClause, trustedSourceClause } from '../utils/recordOrigins.js'
+import { requireAuthenticatedUser } from '../utils/accessControl.js'
+import { standardRateLimiter } from '../middleware/rateLimiting.js'
 
 const router = express.Router()
+
+router.use(standardRateLimiter, (req, res, next) => {
+  const user = requireAuthenticatedUser(req, res)
+  if (!user) return
+  next()
+})
 
 const REQUEST_ID_HEADER = 'x-request-id'
 
@@ -61,36 +69,72 @@ router.get('/local-funding', async (req, res) => {
     let rows = []
 
     if (state) {
-      rows = db.prepare(`
-        SELECT title, source_url, application_url, sponsor, source, state
-        FROM funding_opportunities
-        WHERE is_active = ${activeVal}
-          AND (state = ? OR state = 'nationwide' OR is_national = ${activeVal})
-          AND ${trustedOriginClause()}
-          AND ${trustedSourceClause()}
-        ORDER BY updated_at DESC
-        LIMIT 50
-      `).all(state)
+      if (isPostgres) {
+        const result = await db.query(`
+          SELECT title, source_url, application_url, sponsor, source, state
+          FROM funding_opportunities
+          WHERE is_active = $1
+            AND (state = $2 OR state = 'nationwide' OR is_national = $1)
+            AND (application_url IS NOT NULL OR source_url IS NOT NULL)
+            AND ${trustedOriginClause()}
+            AND ${trustedSourceClause()}
+          ORDER BY updated_at DESC
+          LIMIT 50
+        `, [true, state]);
+        rows = result.rows;
+      } else {
+        rows = db.prepare(`
+          SELECT title, source_url, application_url, sponsor, source, state
+          FROM funding_opportunities
+          WHERE is_active = ?
+            AND (state = ? OR state = 'nationwide' OR is_national = ?)
+            AND (application_url IS NOT NULL OR source_url IS NOT NULL)
+            AND ${trustedOriginClause()}
+            AND ${trustedSourceClause()}
+          ORDER BY updated_at DESC
+          LIMIT 50
+        `).all(1, state, 1);
+      }
     } else {
-      rows = db.prepare(`
-        SELECT title, source_url, application_url, sponsor, source, state
-        FROM funding_opportunities
-        WHERE is_active = ${activeVal}
-          AND (is_national = ${activeVal} OR state = 'nationwide')
-          AND ${trustedOriginClause()}
-          AND ${trustedSourceClause()}
-        ORDER BY updated_at DESC
-        LIMIT 50
-      `).all()
+      if (isPostgres) {
+        const result = await db.query(`
+          SELECT title, source_url, application_url, sponsor, source, state
+          FROM funding_opportunities
+          WHERE is_active = $1
+            AND (is_national = $1 OR state = 'nationwide')
+            AND (application_url IS NOT NULL OR source_url IS NOT NULL)
+            AND ${trustedOriginClause()}
+            AND ${trustedSourceClause()}
+          ORDER BY updated_at DESC
+          LIMIT 50
+        `, [true]);
+        rows = result.rows;
+      } else {
+        rows = db.prepare(`
+          SELECT title, source_url, application_url, sponsor, source, state
+          FROM funding_opportunities
+          WHERE is_active = ?
+            AND (is_national = ? OR state = 'nationwide')
+            AND (application_url IS NOT NULL OR source_url IS NOT NULL)
+            AND ${trustedOriginClause()}
+            AND ${trustedSourceClause()}
+          ORDER BY updated_at DESC
+          LIMIT 50
+        `).all(1, 1);
+      }
     }
 
-    const results = rows.map((r) => ({
+    const mapped = rows.map((r) => ({
       title: r.title ?? 'Local resource',
       url: r.application_url ?? r.source_url ?? '',
       source: r.sponsor ?? r.source ?? 'Local',
-    })).filter((r) => r.url && r.url.startsWith('http'))
-
-    console.info(`[colleges/local-funding] ${requestId} zip=${zip} state=${state} results=${results.length}`)
+    }))
+    const results = mapped.filter((r) => r.url && r.url.startsWith('http'))
+    const suppressed = mapped.length - results.length
+    if (suppressed > 0) {
+      console.warn(`[colleges/local-funding] ${requestId} suppressed ${suppressed}/${mapped.length} rows: missing or non-http url`)
+    }
+    console.info(`[colleges/local-funding] ${requestId} zip=${zip} state=${state} db_rows=${rows.length} results=${results.length}`)
 
     return res.json({
       success: true,
@@ -102,7 +146,17 @@ router.get('/local-funding', async (req, res) => {
     })
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
-    console.error(`[colleges/local-funding] ${requestId} zip=${zip} error:`, msg)
+    console.error(`[colleges/local-funding] ${requestId} zip=${zip} error:`, err)
+    
+    if (err.code === 'SQLITE_ERROR' || err.code?.startsWith('42')) {
+      return res.status(500).json({
+        success: false,
+        error: 'database_error',
+        message: 'Database error while fetching funding opportunities.',
+        request_id: requestId,
+      })
+    }
+    
     return res.status(500).json({
       success: false,
       error: 'fetch_failed',

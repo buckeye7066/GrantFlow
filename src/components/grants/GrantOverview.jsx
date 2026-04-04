@@ -143,16 +143,34 @@ Return ONLY the JSON. Use null for any information you cannot verify with confid
                 }
             });
 
+            if (!response || typeof response !== 'object') {
+                throw new Error('AI returned an invalid response. Cannot update contact information.');
+            }
+
+            const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+            const PHONE_RE = /^[\d\s().+-]{7,20}$/;
+
             const updates = {
                 contact_verified: true,
                 contact_verified_date: new Date().toISOString(),
-                contact_notes: response.verification_notes || 'Re-verified via AI'
+                contact_notes: (typeof response.verification_notes === 'string' && response.verification_notes.trim())
+                    ? response.verification_notes.trim()
+                    : 'Re-verified via AI'
             };
-            
-            if (response.email) updates.funder_email = response.email;
-            if (response.phone) updates.funder_phone = response.phone;
-            if (response.fax) updates.funder_fax = response.fax;
-            if (response.address) updates.funder_address = response.address;
+
+            if (response.email && EMAIL_RE.test(response.email)) updates.funder_email = response.email;
+            if (response.phone && PHONE_RE.test(response.phone)) updates.funder_phone = response.phone;
+            if (response.fax && PHONE_RE.test(response.fax)) updates.funder_fax = response.fax;
+            if (response.address && typeof response.address === 'string' && response.address.trim().length > 5) {
+                updates.funder_address = response.address.trim();
+            }
+
+            // Do NOT auto-set contact_verified:true for AI results.
+            // Remove contact_verified and contact_verified_date from auto-updates;
+            // require explicit human confirmation via handleMarkAsVerified.
+            delete updates.contact_verified;
+            delete updates.contact_verified_date;
+            updates.contact_notes = `AI re-verification (unconfirmed): ${updates.contact_notes}`;
 
             await updateGrantMutation.mutateAsync(updates);
 
@@ -223,6 +241,18 @@ Return ONLY the JSON. Use null for any information you cannot verify with confid
                                         {activeProfile?.display_name || (activeProfileId ? String(activeProfileId) : 'Unknown')}
                                     </span>
                                 </p>
+                                {grant.match_explanation && (
+                                    <p className="text-sm opacity-90 mt-3 italic">{grant.match_explanation}</p>
+                                )}
+                                {Array.isArray(grant.matched_needs) && grant.matched_needs.length > 0 && (
+                                    <div className="mt-2 flex flex-wrap gap-1">
+                                        {grant.matched_needs.map((need, i) => (
+                                            <span key={i} className="bg-white/20 rounded-full px-2 py-0.5 text-xs font-medium">
+                                                {typeof need === 'string' ? need.replace(/_/g, ' ') : need}
+                                            </span>
+                                        ))}
+                                    </div>
+                                )}
                             </div>
                             <div className="text-center">
                                 <div className="text-6xl font-bold mb-1">{matchScore}%</div>
@@ -396,7 +426,7 @@ Return ONLY the JSON. Use null for any information you cannot verify with confid
                         </div>
                     )}
 
-                    {['portal', 'submitted', 'application_prep', 'revision'].includes(grant.status) && (grant.application_url || grant.url || grant.funder_address || grant.funder_fax) && (
+                    {(grant.status !== 'rejected' && grant.status !== 'declined' && grant.status !== 'closed') && (grant.application_url || grant.url || grant.funder_address || grant.funder_fax) && (
                         <Alert className="border-2 border-blue-200 bg-blue-50">
                             <Info className="h-4 w-4 text-blue-600" />
                             <AlertTitle className="text-blue-900">Ready to Submit</AlertTitle>
@@ -404,7 +434,13 @@ Return ONLY the JSON. Use null for any information you cannot verify with confid
                                 {(grant.application_url || grant.url) && (
                                     <div>
                                         <strong>Apply online:</strong>{' '}
-                                        <a href={grant.application_url || grant.url} target="_blank" rel="noopener noreferrer" className="underline font-semibold">{grant.application_url || grant.url}</a>
+                                        {(() => {
+  const applyUrl = grant.application_url || grant.url;
+  const isValidUrl = typeof applyUrl === 'string' && /^https?:\/\//i.test(applyUrl);
+  return isValidUrl
+    ? <a href={applyUrl} target="_blank" rel="noopener noreferrer" className="underline font-semibold">{applyUrl}</a>
+    : <span className="text-slate-500 italic">URL not available</span>;
+})()}
                                     </div>
                                 )}
                                 {grant.funder_address && (
@@ -435,10 +471,13 @@ Return ONLY the JSON. Use null for any information you cannot verify with confid
                     {(grant.application_url || grant.url) && (
                         <div className="flex items-center gap-2">
                             <span className="text-sm font-medium text-slate-600">Portal/Apply Link:</span>
-                            <a href={grant.application_url || grant.url} target="_blank" rel="noopener noreferrer"
-                               className="text-blue-600 hover:underline text-sm truncate max-w-md">
-                                {grant.application_url || grant.url}
-                            </a>
+                            {(() => {
+                              const portalUrl = grant.application_url || grant.url;
+                              const isValid = typeof portalUrl === 'string' && /^https?:\/\//i.test(portalUrl) && !['N/A', 'TBD', 'n/a', 'tbd'].includes(portalUrl.trim());
+                              return isValid
+                                ? <a href={portalUrl} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline text-sm truncate max-w-md">{portalUrl}</a>
+                                : <span className="text-slate-500 italic text-sm">No application link available</span>;
+                            })()}
                         </div>
                     )}
 

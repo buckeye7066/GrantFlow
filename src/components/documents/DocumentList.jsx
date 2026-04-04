@@ -52,7 +52,16 @@ export default function DocumentList({ profileId }) {
     const fileUri = doc.file_url ?? doc.file_uri;
     if (!fileUri) return null;
     if (fileUri.startsWith('http://') || fileUri.startsWith('https://')) {
-      return fileUri;
+      try {
+        const parsed = new URL(fileUri);
+        if (parsed.hostname) {
+          return fileUri;
+        }
+      } catch (_) {
+        // malformed URL â fall through to return null
+      }
+      console.warn(`[DocumentList] Rejected malformed URL for doc id=${doc.id}: ${fileUri}`);
+      return null;
     }
     if (fileUri.startsWith('/')) {
       return fileUri;
@@ -67,8 +76,8 @@ export default function DocumentList({ profileId }) {
       const { signed_url } =
         await client.integrations.Core.CreateFileSignedUrl({ file_uri: fileUri });
       return signed_url ?? null;
-    } catch (error) {
-      console.error(`Failed to resolve document URL for ${doc.name}:`, error);
+    } catch (resolveError) {
+      console.error(`Failed to resolve document URL for ${doc.name}:`, resolveError);
       return null;
     }
   };
@@ -86,7 +95,11 @@ export default function DocumentList({ profileId }) {
     if (!doc.extracted_text) return;
     const printable = window.open('', '_blank', 'noopener,noreferrer');
     if (!printable) return;
-    const safeTitle = (doc.name || 'Document').replace(/[<>]/g, '');
+    const safeTitle = (doc.name || 'Document')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
     const safeContent = doc.extracted_text
       .replace(/&/g, '&amp;')
       .replace(/</g, '&lt;')
@@ -113,6 +126,7 @@ export default function DocumentList({ profileId }) {
   };
 
   const handlePrintAll = async () => {
+    let skipped = 0;
     for (let i = 0; i < documents.length; i++) {
       const doc = documents[i];
       const url = await resolveDocumentUrl(doc);
@@ -121,7 +135,17 @@ export default function DocumentList({ profileId }) {
         if (i < documents.length - 1) {
           await new Promise((resolve) => setTimeout(resolve, 250));
         }
+      } else {
+        skipped += 1;
+        console.warn(`[DocumentList] Skipped document id=${doc.id} name="${doc.name}": no resolvable URL and no extracted_text.`);
       }
+    }
+    if (skipped > 0) {
+      toast({
+        title: 'Some documents could not be printed',
+        description: `${skipped} document${skipped > 1 ? 's' : ''} had no printable content or a resolvable URL and were skipped.`,
+        variant: 'destructive',
+      });
     }
   };
 
@@ -169,6 +193,7 @@ export default function DocumentList({ profileId }) {
             key={document.id}
             document={document}
             onDelete={handleDelete}
+            onResolveUrl={resolveDocumentUrl}
           />
         ))}
       </div>

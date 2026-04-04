@@ -149,7 +149,6 @@ async function main() {
       .filter((name) => name !== '_migrations' && name !== 'sqlite_sequence')
 
     for (const table of tables) {
-      // eslint-disable-next-line no-await-in-loop
       await sqliteDb.exec(`DELETE FROM "${table}";`)
     }
 

@@ -10,9 +10,9 @@
  */
 
 import express from 'express';
+import { randomUUID } from 'crypto';
 import { formatError } from '../middleware/errorHandler.js';
 import { scheduleDebouncedVehicleSync } from '../services/githubSyncVehicles.js';
-
 const router = express.Router();
 
 /**
@@ -112,6 +112,7 @@ function detectScam(data) {
  *   500  { ok: false, error }
  */
 router.post('/ingest', async (req, res) => {
+  const db = req.db;
   const { data, errors } = validateAndCoerce(req.body || {});
 
   if (errors.length > 0) {
@@ -140,17 +141,22 @@ router.post('/ingest', async (req, res) => {
     });
   }
 
-  const db = req.db;
   if (!db) {
-    console.error('[vehicles/ingest] req.db is not available');
+    console.error('[vehicles/ingest] Database is not available');
     return res.status(500).json({ ok: false, error: 'Database unavailable' });
   }
 
   try {
     // Deduplicate by link
-    const existing = await db
-      .prepare('SELECT id FROM vehicle_opportunities WHERE link = ? LIMIT 1')
-      .get(data.link);
+    let existing;
+    if (db.dialect === 'postgres') {
+      const result = await db.query('SELECT id FROM vehicle_opportunities WHERE link = $1 LIMIT 1', [data.link]);
+      existing = result.rows[0];
+    } else {
+      existing = await db
+        .prepare('SELECT id FROM vehicle_opportunities WHERE link = ? LIMIT 1')
+        .get(data.link);
+    }
 
     if (existing) {
       console.info('[vehicles/ingest] Duplicate skipped', { link: data.link, existingId: existing.id });
@@ -168,14 +174,12 @@ router.post('/ingest', async (req, res) => {
     if (isPg) {
       // PostgreSQL: gen_random_uuid() — let the DB generate the id
       // clean_title is a native boolean column in Postgres
-      const row = await db
-        .prepare(
-          `INSERT INTO vehicle_opportunities
-             (vehicle_type, title, price, mileage, year, transmission, color, location, link, vin, clean_title, source)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-           RETURNING id`,
-        )
-        .get(
+      const result = await db.query(
+        `INSERT INTO vehicle_opportunities
+           (vehicle_type, title, price, mileage, year, transmission, color, location, link, vin, clean_title, source)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+         RETURNING id`,
+        [
           data.vehicle_type,
           data.title,
           data.price,
@@ -188,11 +192,11 @@ router.post('/ingest', async (req, res) => {
           data.vin,
           data.clean_title,
           data.source,
-        );
-      id = row?.id;
+        ],
+      );
+      id = result.rows[0]?.id;
     } else {
       // SQLite: generate id manually; clean_title stored as integer (1/0)
-      const { randomUUID } = await import('crypto');
       id = randomUUID();
       await db
         .prepare(

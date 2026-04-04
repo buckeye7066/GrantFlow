@@ -111,14 +111,14 @@ export function shouldRetryJob(job, error) {
  * Schedule a job for retry with exponential backoff
  * @param {object} db - Database connection
  * @param {string} jobId - Crawler job ID
- * @param {object} deadLetterEntryId - Dead letter entry ID
+ * @param {string|number} deadLetterEntryId - Dead letter entry ID
  * @returns {Promise<Date|null>} Next retry time, or null if not scheduled
  */
-export async function scheduleJobRetry(db, jobId, deadLetterEntryId) {
+export async function scheduleJobRetry(db, jobId, deadLetterEntryId, errorContext = '') {
   try {
-    // Get current retry count
+    // Get current retry count and last error
     const job = await db
-      .prepare('SELECT id, retry_count, type FROM crawler_jobs WHERE id = ?')
+      .prepare('SELECT id, retry_count, type, error FROM crawler_jobs WHERE id = ?')
       .get(jobId)
     
     if (!job) {
@@ -131,6 +131,16 @@ export async function scheduleJobRetry(db, jobId, deadLetterEntryId) {
     // Calculate next retry time
     const delaySeconds = calculateRetryDelay(retryCount)
     const nextRetryAt = new Date(Date.now() + delaySeconds * 1000)
+    
+    // Use the provided error context, falling back to the stored job error
+    const errorForDecision = errorContext || job.error || ''
+    
+    // Check if job should be retried using actual error context
+    const shouldRetry = shouldRetryJob(job, errorForDecision);
+    if (!shouldRetry) {
+      console.warn('[backpressure] Job should not be retried', { jobId, errorForDecision });
+      return null;
+    }
     
     // Update job retry count and reset to queued
     await db
@@ -172,7 +182,7 @@ export async function scheduleJobRetry(db, jobId, deadLetterEntryId) {
  * @returns {Promise<Array>} Array of jobs ready for retry
  */
 export async function getJobsReadyForRetry(db, limit = 10) {
-  const now = new Date().toISOString()
+  const now = new Date().toISOString().replace('T', ' ').replace(/\.\d+Z$/, '')
   
   const rows = await db
     .prepare(
@@ -214,8 +224,8 @@ export async function markExhaustedJobs(db) {
           SET status = 'failed',
               completed_at = CURRENT_TIMESTAMP,
               error = 'Exceeded maximum retry attempts (' || retry_count || '/' || ? || ')'
-          WHERE status IN ('queued', 'failed')
-            AND retry_count >= ?
+          WHERE status = 'queued'
+            AND retry_count > ?
         `
       )
       .run(MAX_RETRY_ATTEMPTS, MAX_RETRY_ATTEMPTS)

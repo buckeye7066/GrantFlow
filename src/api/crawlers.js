@@ -101,20 +101,16 @@ export async function runSmartCrawler({ profileId, minMatchScore = 50 }) {
 }
 
 /**
- * Run a real crawler (local_funding, student_grants, health_resources, etc.).
- * profile_id is required - throws early if missing (developer error).
- * @param {Object} opts
- * @param {string} opts.profileId - Required. Profile ID for context/signals.
- * @param {string} opts.crawlerType
- * @param {Object} [opts.profileData]
- * @param {number} [opts.minMatchScore]
- * @param {Object} [opts.itemRequest]
- * @returns {Promise<Object>}
- */
-/**
  * Search for a specific need/item using curated data + live web search.
  * Calls POST /api/real-crawlers/specific-need which runs the full pipeline
  * plus DuckDuckGo web search and known item source catalogs.
+ * profile_id is required â throws early if missing.
+ * @param {Object} opts
+ * @param {string} opts.profileId - Required. Profile ID for context/signals.
+ * @param {string} opts.needText - Required. Human-readable need description.
+ * @param {number} [opts.minMatchScore]
+ * @param {number} [opts.maxResults]
+ * @returns {Promise<Object>}
  */
 export async function searchSpecificNeed({
   profileId,
@@ -140,6 +136,17 @@ export async function searchSpecificNeed({
   })
 }
 
+/**
+ * Run a named real crawler (local_funding, student_grants, health_resources, etc.).
+ * profile_id is required â throws early if missing (developer error).
+ * @param {Object} opts
+ * @param {string} opts.profileId - Required. Profile ID for context/signals.
+ * @param {string} opts.crawlerType - Crawler type key.
+ * @param {Object} [opts.profileData] - Optional pre-fetched profile data.
+ * @param {number} [opts.minMatchScore] - Minimum match score threshold (default 50).
+ * @param {Object|null} [opts.itemRequest] - Optional specific item request.
+ * @returns {Promise<Object>}
+ */
 export async function runRealCrawler({
   profileId,
   crawlerType,
@@ -151,7 +158,7 @@ export async function runRealCrawler({
   if (!pid) {
     throw new Error('profile_id is required to run real crawlers. Select a profile first.')
   }
-  return apiFetch('/api/real-crawlers/run', {
+  const result = await apiFetch('/api/real-crawlers/run', {
     method: 'POST',
     body: JSON.stringify({
       crawler_type: crawlerType,
@@ -161,4 +168,8 @@ export async function runRealCrawler({
       min_match_score: minMatchScore,
     }),
   })
+  if (result?.success === false) {
+    throw new Error(result?.error || 'Crawler failed')
+  }
+  return result
 }

@@ -18,7 +18,9 @@ const StudentStatusSelector = ({ value = '', onChange, required = true, disabled
 
     const handleStatusChange = (statusId) => {
           setSelectedStatus(statusId);
-          onChange(statusId);
+          if (typeof onChange === 'function') {
+            onChange(statusId);
+          }
     };
 
     const currentSelected = statusOptions.find(opt => opt.id === selectedStatus);
@@ -62,7 +64,12 @@ const StudentStatusSelector = ({ value = '', onChange, required = true, disabled
           
             {selectedStatus === 'not_student' && (
                     <div className="student-status-warning">
-                              <p>Non-student status may limit eligibility for education-focused grants.</p>
+                              <p>
+                                Non-student status means education-specific grants won’t match, but many other
+                                funding programs are available. Complete your <strong>housing</strong>,{' '}
+                                <strong>employment/business</strong>, <strong>health</strong>, and{' '}
+                                <strong>emergency</strong> profile sections to unlock relevant opportunities.
+                              </p>
                     </div>
                 )}
           </div>

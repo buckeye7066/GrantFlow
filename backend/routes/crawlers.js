@@ -5,7 +5,7 @@ import { fileURLToPath } from 'url'
 import { dirname, join } from 'path'
 import { dispatchCrawlerJob } from '../services/crawlerDispatcher.js'
 import { createCrawlerJob, validateJobParameters, generateIdempotencyKey } from '../services/crawlerJobCreation.js'
-import { buildProfileContext } from '../services/profileHelpers.js'
+import { buildProfileContext, computeProfileDigest } from '../services/profileHelpers.js'
 import { validatePagination } from '../utils/validation.js'
 import { createOpenAIClient } from '../utils/openaiClient.js'
 import { formatError } from '../middleware/errorHandler.js'
@@ -13,6 +13,15 @@ import { DEFAULT_PAGE_LIMIT, CRAWLER_JOB_TYPES, CRAWLER_JOB_STATUSES } from '../
 import { requireTierCapability, TIER_CAPABILITIES } from '../utils/tierGating.js'
 import { ensureProfileAccess } from '../utils/accessControl.js'
 import { enforceCrawlerJobTier, getCrawlerJobCapability } from '../middleware/entitlements.js'
+import { getPortalCheckStatus } from '../services/portalCheckService.js'
+import { standardRateLimiter } from '../middleware/rateLimiting.js'
+import {
+  classifyProfileChange,
+  decideRevalAction,
+  computeChangeDigest,
+  mapActionToCrawlerJob,
+  estimateCompletion
+} from '../services/profileRevalEngine.js'
 
 const router = express.Router()
 
@@ -43,6 +52,7 @@ const TYPES_REQUIRING_PROFILE = new Set([
   'avatar_lookup',
   'document_ingest',
   'profile_enrichment',
+  'portal_check',
 ])
 
 const __filename = fileURLToPath(import.meta.url)
@@ -1099,9 +1109,16 @@ router.post('/jobs', enforceCrawlerJobTier(), async (req, res) => {
       force: forceFlag,
     })
 
+    // For profile-scoped jobs, compute a material-fields digest so that meaningful
+    // profile edits produce a different idempotency key (GF-AUDIT-019).
+    let profileDigest = null
+    if (!forceFlag && targetProfileId && TYPES_REQUIRING_PROFILE.has(type)) {
+      profileDigest = await computeProfileDigest(req.db, targetProfileId)
+    }
+
     const idempotencyKey = forceFlag
       ? null
-      : generateIdempotencyKey(type, targetProfileId, validatedParameters)
+      : generateIdempotencyKey(type, targetProfileId, validatedParameters, profileDigest)
 
     let creation
     try {
@@ -1115,6 +1132,8 @@ router.post('/jobs', enforceCrawlerJobTier(), async (req, res) => {
         // Keep HTTP fast; dispatcher can rebuild snapshots when starting.
         buildSnapshot: false,
         skipIdempotencyCheck: Boolean(forceFlag),
+        // Pass pre-computed digest so createCrawlerJob doesn't re-query the DB
+        profileContextDigest: profileDigest,
       })
     } catch (createError) {
       // If two requests race, the UNIQUE(idempotency_key) constraint may throw.
@@ -1325,8 +1344,8 @@ router.post('/jobs/:id/cancel', async (req, res) => {
       if (!(await ensureProfileAccess(req, res, String(job.profile_id)))) return
     }
 
-    if (job.status !== 'queued') {
-      return res.status(400).json({ error: 'Only queued jobs can be cancelled' })
+    if (job.status !== 'queued' && job.status !== 'running') {
+      return res.status(400).json({ error: 'Only queued or running jobs can be cancelled' })
     }
 
     await req.db
@@ -1621,7 +1640,7 @@ router.post('/bulk-populate', async (req, res) => {
     const zipMap = JSON.parse(fs.readFileSync(zipFile, 'utf8'))
     const allZipCodes = Object.keys(zipMap).slice(0, max_zips)
     
-    console.log(`[bulk-populate] Starting population of ${allZipCodes.length} ZIP codes with ${limit_per_zip} opportunities each`)
+    console.info(`[bulk-populate] Starting population of ${allZipCodes.length} ZIP codes with ${limit_per_zip} opportunities each`)
     
     // Import the crawler function
     const { processComprehensiveCrawlerJob } = await import('../services/comprehensiveCrawlerOptimized.js')
@@ -1654,14 +1673,14 @@ router.post('/bulk-populate', async (req, res) => {
         totalInserted += result.inserted || 0
         totalEvaluated += result.evaluated || 0
         
-        console.log(`[bulk-populate] Batch ${Math.floor(i/batchSize) + 1}/${Math.ceil(allZipCodes.length/batchSize)}: ${result.inserted} opportunities`)
+        console.info(`[bulk-populate] Batch ${Math.floor(i/batchSize) + 1}/${Math.ceil(allZipCodes.length/batchSize)}: ${result.inserted} opportunities`)
       } catch (batchErr) {
         errors.push({ batch: i, error: batchErr.message })
         console.error(`[bulk-populate] Batch ${i} error:`, batchErr.message)
       }
     }
     
-    console.log(`[bulk-populate] Complete: ${totalInserted} opportunities inserted from ${allZipCodes.length} ZIPs`)
+    console.info(`[bulk-populate] Complete: ${totalInserted} opportunities inserted from ${allZipCodes.length} ZIPs`)
     
     res.json({
       success: true,
@@ -1686,7 +1705,7 @@ router.post('/crawl-all-counties', async (req, res) => {
   }
   
   try {
-    console.log('[crawl-all-counties] Starting county-level funding crawl...')
+    console.info('[crawl-all-counties] Starting county-level funding crawl...')
     
     const { crawlAllCounties } = await import('../services/countyFundingCrawler.js')
     const result = await crawlAllCounties(req.db)
@@ -1869,7 +1888,7 @@ router.post('/seed-state-assistance', async (req, res) => {
   }
   
   try {
-    console.log('[seed-state-assistance] Loading state assistance programs...')
+    console.info('[seed-state-assistance] Loading state assistance programs...')
     
     const fs = await import('fs')
     const path = await import('path')
@@ -1968,7 +1987,7 @@ router.post('/crawl-grants-gov', async (req, res) => {
   }
   
   try {
-    console.log('[crawl-grants-gov] Starting Grants.gov crawl...')
+    console.info('[crawl-grants-gov] Starting Grants.gov crawl...')
     
     const { crawlGrantsGov } = await import('../services/grantsDotGovCrawler.js')
     
@@ -2004,7 +2023,7 @@ router.post('/remove-loans', async (req, res) => {
   }
   
   try {
-    console.log('[remove-loans] Removing loans and matching-fund opportunities...')
+    console.info('[remove-loans] Removing loans and matching-fund opportunities...')
     
     // Delete loans
     const loansDeleted = await req.db.prepare(`
@@ -2048,7 +2067,7 @@ router.post('/seed-all-real', async (req, res) => {
   }
   
   try {
-    console.log('[seed-all-real] Starting comprehensive real funding seed...')
+    console.info('[seed-all-real] Starting comprehensive real funding seed...')
     
     const { seedAllRealFunding, getOpportunityCountsByState } = await import('../services/realLocationFundingCrawler.js')
     
@@ -2150,7 +2169,7 @@ router.post('/seed-real-opportunities', async (req, res) => {
       }
     }
     
-    console.log(`[seed-real] Complete: ${inserted} inserted, ${updated} updated`)
+    console.info(`[seed-real] Complete: ${inserted} inserted, ${updated} updated`)
     
     res.json({
       success: true,
@@ -2311,22 +2330,22 @@ router.post('/real-crawl', async (req, res) => {
     // Dynamic import of the real crawler
     const { crawlRealOpportunities, crawlAllStates } = await import('../services/realFundingCrawler.js')
     
-    console.log(`[real-crawl] Starting real opportunity crawl${state ? ` for ${state}` : all_states ? ' for all states' : ' (national)'}...`)
+    console.info(`[real-crawl] Starting real opportunity crawl${state ? ` for ${state}` : all_states ? ' for all states' : ' (national)'}...`)
     
     let result
     if (all_states) {
       result = await crawlAllStates(req.db, (progress) => {
-        console.log(`[real-crawl] Progress: ${JSON.stringify(progress)}`)
+        console.info(`[real-crawl] Progress: ${JSON.stringify(progress)}`)
       })
     } else {
       result = await crawlRealOpportunities(req.db, state, {
         onProgress: (progress) => {
-          console.log(`[real-crawl] Progress: ${JSON.stringify(progress)}`)
+          console.info(`[real-crawl] Progress: ${JSON.stringify(progress)}`)
         }
       })
     }
     
-    console.log(`[real-crawl] Complete: ${result.inserted || result.total_inserted} inserted`)
+    console.info(`[real-crawl] Complete: ${result.inserted || result.total_inserted} inserted`)
     
     res.json({
       success: true,
@@ -2335,6 +2354,120 @@ router.post('/real-crawl', async (req, res) => {
   } catch (error) {
     console.error('[real-crawl] Error:', error)
     res.status(500).json(formatError(error))
+  }
+})
+
+/**
+ * GET /api/crawlers/portal-check-results/:profileId
+ * Returns the most recent portal check result per portal URL for a student profile.
+ */
+router.get('/portal-check-results/:profileId', standardRateLimiter, async (req, res) => {
+  const ctx = ensureAuth(req, res)
+  if (!ctx) return
+
+  try {
+    const { profileId } = req.params
+
+    if (!ctx.isAdmin) {
+      if (!(await ensureProfileAccess(req, res, String(profileId)))) return
+    }
+
+    const results = await getPortalCheckStatus(req.db, profileId)
+    return res.json({ profileId, results })
+  } catch (error) {
+    console.error('[portal-check-results] Error:', error)
+    return res.status(500).json(formatError(error))
+  }
+})
+
+router.post('/profile-change', standardRateLimiter, async (req, res) => {
+  const ctx = ensureAuth(req, res)
+  if (!ctx) return
+
+  try {
+    const {
+      profile_id,
+      changed_fields,
+      timestamp,
+      estimated_fanout_pct = 0,
+      affected_items = 0,
+      estimated_cost_units = 0,
+      daily_budget = 1000,
+      manual_force_full_reval = false
+    } = req.body || {}
+
+    if (!profile_id || !Array.isArray(changed_fields)) {
+      return res.status(400).json({ error: 'Invalid input' })
+    }
+
+    if (!ctx.isAdmin) {
+      if (!(await ensureProfileAccess(req, res, String(profile_id)))) return
+    }
+
+    const trigger = classifyProfileChange(changed_fields)
+
+    const decision = decideRevalAction({
+      trigger,
+      fanout_pct: estimated_fanout_pct,
+      affected_items,
+      cost_units: estimated_cost_units,
+      daily_budget,
+      manual_force: manual_force_full_reval
+    })
+
+    const emitId = computeChangeDigest(changed_fields, timestamp)
+
+    if (decision.block) {
+      return res.status(202).json({
+        emit_id: emitId,
+        status: 'blocked',
+        reason: decision.reason,
+        action: 'human_review_required'
+      })
+    }
+
+    const crawlerType = mapActionToCrawlerJob(decision.action)
+
+    const creation = await createCrawlerJob(req.db, {
+      type: crawlerType,
+      profileId: profile_id,
+      parameters: {
+        reval_mode: decision.action,
+        trigger,
+        changed_fields,
+        emit_id: emitId
+      },
+      requestedBy: ctx.userId ?? 'system',
+      buildSnapshot: false
+    })
+
+    const job = await req.db.prepare('SELECT * FROM crawler_jobs WHERE id = ?').get(creation.jobId)
+
+    setImmediate(() => {
+      dispatchCrawlerJob({
+        db: req.db,
+        jobId: job.id,
+        uploadDir,
+        getOpenAI
+      })
+    })
+
+    res.json({
+      emit_id: emitId,
+      reval_job: {
+        job_id: job.id,
+        type: decision.action,
+        reason: decision.reason,
+        estimated_fanout_pct,
+        estimated_cost_units,
+        enqueued_at: job.created_at,
+        expected_complete_by: estimateCompletion(decision.action, job.created_at)
+      }
+    })
+
+  } catch (err) {
+    console.error('[profile-reval]', err)
+    res.status(500).json({ error: 'internal_error' })
   }
 })
 

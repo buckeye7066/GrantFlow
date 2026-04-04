@@ -261,9 +261,10 @@ export default function AdminGeoCrawl() {
   }
 
   const handleStart = async () => {
-    if (!selectedState) return
+    if (!selectedState || loading) return
     const zipList = Array.from(selectedZips)
     const countyList = Array.from(selectedCounties)
+    setLoading(true)
     try {
       const res = await startGeoCrawl({
         state: selectedState,
@@ -284,6 +285,8 @@ export default function AdminGeoCrawl() {
       }
     } catch (err) {
       toast({ title: "Failed to start geo crawl", description: err.message, variant: "destructive" })
+    } finally {
+      setLoading(false)
     }
   }
 

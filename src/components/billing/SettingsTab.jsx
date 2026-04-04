@@ -20,12 +20,13 @@ export default function SettingsTab() {
   const { data: initialSettings, isLoading } = useQuery({
     queryKey: ['billingSettings'],
     queryFn: () => client.entities.BillingSettings.list().then(res => res[0] || {}),
-    onSuccess: (data) => {
-      if (data) {
-        setSettings(data);
-      }
-    }
   });
+
+  useEffect(() => {
+    if (initialSettings && !settings) {
+      setSettings(initialSettings);
+    }
+  }, [initialSettings]);
 
   const mutation = useMutation({
     mutationFn: (updatedSettings) => {
@@ -36,12 +37,15 @@ export default function SettingsTab() {
       }
     },
     onSuccess: (savedSettings) => {
-      queryClient.setQueryData(['billingSettings'], savedSettings);
+      queryClient.invalidateQueries({ queryKey: ['billingSettings'] });
       setSettings(savedSettings);
     },
   });
 
   const handleSave = () => {
+    if (!settings || Object.keys(settings).length === 0) {
+      return;
+    }
     mutation.mutate(settings);
   };
 

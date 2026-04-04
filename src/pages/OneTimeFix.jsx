@@ -18,7 +18,7 @@ export default function OneTimeFix() {
 
   const { data: grants, isLoading: isLoadingGrants, refetch: refetchGrants } = useQuery({
     queryKey: ['grantsToFix'],
-    queryFn: () => client.entities.Grant.list(),
+    queryFn: () => client.entities.Grant.list().then(all => all.filter(g => g.match_decision !== 'REJECT' && g.eligibility_status !== 'ineligible')),
   });
 
   const { data: organizations, isLoading: isLoadingOrgs } = useQuery({
@@ -33,7 +33,7 @@ export default function OneTimeFix() {
       const allJobs = await client.entities.SearchJob.list('-created_date');
       return allJobs.filter(job => 
         job.profile_id?.startsWith('backfill_') && 
-        job.status === 'running'
+        ['running','in_progress','processing'].includes(job.status)
       );
     },
     refetchInterval: 5000, // Poll every 5 seconds for running jobs
@@ -49,7 +49,8 @@ export default function OneTimeFix() {
     },
     refetchInterval: (query) => {
       const job = query.state?.data;
-      return job?.status === 'running' ? 5000 : false;
+      if (!job) return 5000; // keep polling until first data arrives
+      return ['running','in_progress','processing'].includes(job?.status) ? 5000 : false;
     },
   });
 
@@ -70,7 +71,9 @@ export default function OneTimeFix() {
   const handleStartBackfill = async () => {
     try {
       const response = await client.functions.invoke('runGrantBackfill');
-      
+      if (!response?.data?.jobId) {
+        throw new Error(response?.data?.error || response?.error || 'Backfill did not return a job ID');
+      }
       setCurrentJobId(response.data.jobId);
       
       toast({
@@ -107,11 +110,13 @@ export default function OneTimeFix() {
     }
   }
 
-  const progressPercent = latestJob?.status === 'running' 
-    ? (latestJob.progress || 0) * 100 
-    : latestJob?.status === 'done' 
-    ? 100 
+  const DONE_STATUSES = ['done', 'completed', 'complete'];
+const rawProgress = latestJob?.status === 'running'
+    ? (latestJob.progress || 0) * 100
+    : DONE_STATUSES.includes(latestJob?.status)
+    ? 100
     : 0;
+const progressPercent = Math.min(100, Math.max(0, rawProgress));
 
   return (
     <div className="p-8">

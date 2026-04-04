@@ -38,6 +38,16 @@ const LOOKING_FOR_OPTIONS = [
   { value: 'general', label: messages.lookingForOptions.general },
 ]
 
+// Map raw looking_for values to normalised need-category tags used by the matching engine.
+const LOOKING_FOR_TAG_MAP = {
+  scholarships: 'education_scholarship',
+  emergency_help: 'emergency_financial_assistance',
+  disability: 'disability_assistance',
+  ministry_nonprofit: 'nonprofit_capacity_building',
+  medical: 'health_medical',
+  general: 'general_funding',
+}
+
 const US_STATES = [
   'AL', 'AK', 'AZ', 'AR', 'CA', 'CO', 'CT', 'DE', 'FL', 'GA', 'HI', 'ID', 'IL', 'IN', 'IA', 'KS', 'KY', 'LA', 'ME', 'MD', 'MA', 'MI', 'MN', 'MS', 'MO', 'MT', 'NE', 'NV', 'NH', 'NJ', 'NM', 'NY', 'NC', 'ND', 'OH', 'OK', 'OR', 'PA', 'RI', 'SC', 'SD', 'TN', 'TX', 'UT', 'VT', 'VA', 'WA', 'WV', 'WI', 'WY', 'DC',
 ]
@@ -84,13 +94,18 @@ export default function FirstRunOnboardingWizard({ open, onComplete, onSkip, pro
     const zip = String(formData.zip || '').trim()
     const state = String(formData.state || '').trim().toUpperCase()
     if (!zip || !state) {
-      setError('ZIP and State are required.')
-      return
-    }
-    if (state.length !== 2) {
-      setError('State must be a 2-letter abbreviation (e.g., TN).')
-      return
-    }
+  setError('ZIP and State are required.')
+  return
+}
+if (!/^\d{5}(-\d{4})?$/.test(zip)) {
+  setError('ZIP must be a valid 5-digit (or ZIP+4) US postal code.')
+  return
+}
+const VALID_STATES = new Set(['AL','AK','AZ','AR','CA','CO','CT','DE','FL','GA','HI','ID','IL','IN','IA','KS','KY','LA','ME','MD','MA','MI','MN','MS','MO','MT','NE','NV','NH','NJ','NM','NY','NC','ND','OH','OK','OR','PA','RI','SC','SD','TN','TX','UT','VT','VA','WA','WV','WI','WY','DC'])
+if (!VALID_STATES.has(state)) {
+  setError('Please select a valid US state or territory.')
+  return
+}
 
     setLoading(true)
     setError(null)
@@ -99,31 +114,56 @@ export default function FirstRunOnboardingWizard({ open, onComplete, onSkip, pro
 
       if (!profileId) {
         const name = formData.display_name?.trim() || 'My Profile'
+        // Map to canonical primary_type values recognised by the backend schema.
+// Need-specific context (disability, medical, emergency) is preserved via tags
+// and the looking_for_intent preference â not encoded in primary_type.
+const inferredType =
+  formData.looking_for === 'ministry_nonprofit' ? 'nonprofit'
+  : formData.looking_for === 'scholarships' ? 'student'
+  : 'individual'
         const created = await apiFetch('/api/profiles', {
-          method: 'POST',
-          body: JSON.stringify({
-            display_name: name,
-            primary_type: 'individual',
-            tags: formData.looking_for ? [formData.looking_for] : [],
-          }),
-        })
-        profileId = created?.id
-        if (!profileId) throw new Error('Failed to create profile')
+  method: 'POST',
+  body: JSON.stringify({
+    display_name: name,
+    primary_type: inferredType,
+    zip: zip,
+    state: state,
+    tags: [LOOKING_FOR_TAG_MAP[formData.looking_for] ?? formData.looking_for],
+  }),
+})
+profileId = created?.id
+if (!profileId) throw new Error('Failed to create profile')
       }
 
       let basicData = { zip, state }
       if (formData.display_name?.trim()) basicData.full_name = formData.display_name.trim()
-      if (activeProfile?.id) {
-        try {
-          const existing = await apiFetch(`/api/profiles/${profileId}/sections/basic_information`)
-          if (existing?.data && typeof existing.data === 'object') {
-            basicData = { ...existing.data, ...basicData }
-          }
-        } catch (_) { /* section may not exist */ }
-      }
+      // Always attempt to merge with existing section data regardless of whether
+// the profile is new or pre-existing.
+try {
+  const existing = await apiFetch(`/api/profiles/${profileId}/sections/basic_information`)
+  if (existing?.data && typeof existing.data === 'object') {
+    basicData = { ...existing.data, ...basicData }
+  }
+} catch (_) { /* section may not exist yet â safe to proceed with basicData only */ }
       await upsertProfileSection(profileId, 'basic_information', basicData, 'onboarding-wizard')
 
       const custom = (await apiFetch('/api/preferences'))?.custom_preferences ?? {}
+      // Write normalized need-category tag into the profile so the match engine and
+      // crawlers can use it. Apply for all looking_for values including 'general'.
+      if (formData.looking_for) {
+        const normalisedTag = LOOKING_FOR_TAG_MAP[formData.looking_for] ?? formData.looking_for
+        try {
+          await apiFetch(`/api/profiles/${profileId}`, {
+            method: 'PATCH',
+            body: JSON.stringify({
+              tags: [normalisedTag],
+            }),
+          })
+        } catch (_intentErr) {
+          // non-fatal: preference still recorded below
+        }
+      }
+
       await apiFetch('/api/preferences', {
         method: 'PUT',
         body: JSON.stringify({
@@ -149,7 +189,12 @@ export default function FirstRunOnboardingWizard({ open, onComplete, onSkip, pro
     }
   }
 
-  const canProceed = step === 1 || (step === 2 && formData.zip?.trim() && formData.state?.trim())
+  const ZIP_RE = /^\d{5}(-\d{4})?$/
+const canProceed =
+  step === 1 ||
+  (step === 2 &&
+    ZIP_RE.test(String(formData.zip || '').trim()) &&
+    formData.state?.trim().length === 2)
 
   return (
     <Dialog open={open} onOpenChange={() => {}}>

@@ -27,8 +27,8 @@ let pendingSyncTimer = null;
 async function fetchVehicleOpportunities(db) {
   const rows = await db
     .prepare(
-      `SELECT vehicle_type, title, price, mileage, link, created_at
-       FROM vehicle_opportunities
+      `SELECT opportunity_type, title, amount, deadline, link, created_at
+       FROM grant_opportunities
        ORDER BY created_at DESC
        LIMIT ?`,
     )
@@ -99,10 +99,10 @@ export async function syncVehicleOpportunitiesToGitHub(db) {
   }
 
   const payload = rows.map((r) => ({
-    vehicle_type: r.vehicle_type ?? '',
+    opportunity_type: r.opportunity_type ?? '',
     title: r.title ?? '',
-    price: r.price ?? 0,
-    mileage: r.mileage ?? 0,
+    amount: r.amount ?? 0,
+    deadline: r.deadline ?? '',
     link: r.link ?? '',
     created_at: r.created_at ?? '',
   }));
@@ -111,7 +111,7 @@ export async function syncVehicleOpportunitiesToGitHub(db) {
   const sha = await getFileSha(token, repo);
 
   const body = {
-    message: `chore: update vehicle_opportunities snapshot (${payload.length} records)`,
+    message: `chore: update grant_opportunities snapshot (${payload.length} records)`,
     content,
     ...(sha ? { sha } : {}),
   };

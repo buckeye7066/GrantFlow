@@ -21,7 +21,7 @@ export function createTesseractProvider() {
       // NOTE: For scanned PDFs we OCR per-page images after rasterization;
       // this provider expects images. If a caller passes PDF bytes directly, results are undefined.
       if (mime && String(mime).toLowerCase().includes('pdf')) {
-        warnings.push('tesseract provider expects rasterized page images for PDFs')
+        return { text: '', perPage: null, confidence: null, warnings: ['PDF files not supported - use rasterized images'] }
       }
 
       let worker = null
@@ -34,8 +34,8 @@ export function createTesseractProvider() {
           try {
             await worker.loadLanguage(lang)
             await worker.initialize(lang)
-          } catch {
-            // ignore
+          } catch (langErr) {
+            warnings.push(`Language init failed for '${lang}': ${langErr?.message ?? langErr} â OCR quality may be degraded`)
           }
         }
 
@@ -64,9 +64,7 @@ export function createTesseractProvider() {
 
         return {
           text,
-          perPage: Array.isArray(pages)
-            ? pages.map((_p, idx) => ({ page: idx + 1, text: '', confidence: conf }))
-            : null,
+          perPage: null,
           confidence: conf,
           warnings,
         }

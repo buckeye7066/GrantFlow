@@ -20,7 +20,7 @@
  * CRITICAL: No fabricated data. Every result must have a real URL.
  */
 import * as cheerio from 'cheerio'
-import { calculateMatchScore } from '../matchingEngine.js'
+import { scoreOpportunity as calculateMatchScore } from '../matchEngine.js'
 
 function buildSearchKeywords(profile, maxKeywords = 10) {
   const kw = new Set();
@@ -545,8 +545,8 @@ async function searchWebForItem(itemRequest, profile) {
                                                                   // Decode if needed
                                                                   try {
                                                                               actualUrl = decodeURIComponent(actualUrl)
-                                                                  } catch {
-                                                                              // keep as is
+                                                                  } catch (err) {
+                                                                              console.warn('[ItemFundingCrawler] URL decode failed:', actualUrl, err.message)
                                                                   }
 
                                                                   // Skip search engine results pages, ads, and non-useful URLs
@@ -589,6 +589,8 @@ async function searchWebForItem(itemRequest, profile) {
     for (const result of settled) {
           if (result.status === 'fulfilled' && Array.isArray(result.value)) {
                   results.push(...result.value)
+          } else if (result.status === 'rejected') {
+                  console.error('[ItemFundingCrawler] Search promise rejected:', result.reason)
           }
     }
 
@@ -691,7 +693,7 @@ export async function crawlItemFunding(profileInput, options = {}) {
   try {
         console.log(`[ItemFundingCrawler] Searching web for "${itemRequest}"...`)
         const rawWebResults = await searchWebForItem(itemRequest, profile)
-        const webResults = Array.isArray(rawWebResults) ? rawWebResults : []
+        const webResults = Array.isArray(rawWebResults) && rawWebResults !== null ? rawWebResults : []
 
       console.log(`[ItemFundingCrawler] Web search found ${webResults.length} results`)
 
@@ -781,11 +783,7 @@ function extractDomain(url) {
     }
 }
 
-function isLoan(opportunity) {
-    const loanKeywords = ['loan', 'financing', 'lease', 'payment plan', 'interest rate']
-    const text = `${opportunity.title} ${opportunity.description}`.toLowerCase()
-    return loanKeywords.some(keyword => text.includes(keyword))
-}
+// Function removed - loan filtering is handled by enforceOpportunityPolicy
 
 export { searchWebForItem, KNOWN_ITEM_SOURCES, parseItemRequest }
 export default { crawlItemFunding, searchWebForItem, KNOWN_ITEM_SOURCES, parseItemRequest }

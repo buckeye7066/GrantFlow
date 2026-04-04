@@ -13,8 +13,8 @@ function normalizeLimit(val, fallback = 200) {
 }
 
 async function ensureProfileAccess(req, res, profileId) {
-  const user = requireAuthenticatedUser(req, res)
-  if (!user) return null
+  if (!requireAuthenticatedUser(req, res)) return null
+  // user validation passed
 
   const row = await req.db
     .prepare('SELECT id, user_id, organization_id FROM profiles WHERE id = ?')
@@ -96,15 +96,26 @@ router.post('/', async (req, res) => {
     const funder = String(data.funder || '').trim()
     const method = String(data.method || '').trim()
     if (!funder) return res.status(400).json({ error: 'funder required' })
-    if (!['email', 'call', 'meeting'].includes(method)) {
-      return res.status(400).json({ error: "method must be one of: 'email', 'call', 'meeting'" })
+    if (!method) return res.status(400).json({ error: 'method required' })
+    const ALLOWED_METHODS = ['email', 'call', 'meeting', 'letter', 'portal', 'in-person', 'other']
+    if (!ALLOWED_METHODS.includes(method)) {
+      return res.status(400).json({ error: `method must be one of: ${ALLOWED_METHODS.join(', ')}` })
     }
 
     const occurredAtRaw = data.occurred_at ?? data.occurredAt ?? null
-    const occurredAt = occurredAtRaw ? String(occurredAtRaw) : null
+    let occurredAt = null
+if (occurredAtRaw) {
+  const parsed = new Date(String(occurredAtRaw))
+  if (!Number.isFinite(parsed.getTime())) {
+    return res.status(400).json({ error: 'occurred_at is not a valid ISO date string' })
+  }
+  occurredAt = parsed.toISOString()
+}
 
-    const metadata =
-      data.metadata && typeof data.metadata === 'object' ? JSON.stringify(data.metadata) : data.metadata ?? null
+    let metadata = null
+    if (data.metadata !== undefined && data.metadata !== null) {
+      metadata = typeof data.metadata === 'object' ? JSON.stringify(data.metadata) : String(data.metadata)
+    }
 
     const id = crypto.randomUUID()
     const createdBy = req.ctx?.userId ?? req.ctx?.email ?? null
@@ -123,7 +134,7 @@ router.post('/', async (req, res) => {
             notes,
             metadata,
             created_by
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb, ?)
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10)
         `
         : `
           INSERT INTO outreach_logs (
@@ -151,7 +162,7 @@ router.post('/', async (req, res) => {
         occurredAt,
         data.subject ?? null,
         data.notes ?? null,
-        metadata ?? '{}',
+        metadata,
         createdBy,
       )
 
@@ -174,8 +185,8 @@ router.post('/', async (req, res) => {
 
 router.delete('/:id', async (req, res) => {
   try {
-    const user = requireAuthenticatedUser(req, res)
-    if (!user) return
+    if (!requireAuthenticatedUser(req, res)) return
+    // user validation passed
 
     await ensureOutreachLogsTable(req.db)
 

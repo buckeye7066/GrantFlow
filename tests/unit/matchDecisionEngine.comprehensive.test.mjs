@@ -62,11 +62,11 @@ function assertDecision(result, expected, label) {
 }
 
 // ---------------------------------------------------------------------------
-// Sanity: MATCHER_VERSION is 2.0.0
+// Sanity: MATCHER_VERSION is 3.0.0
 // ---------------------------------------------------------------------------
 
-test('MATCHER_VERSION is 2.0.0', () => {
-  assert.equal(MATCHER_VERSION, '2.0.0')
+test('MATCHER_VERSION is 3.0.0', () => {
+  assert.equal(MATCHER_VERSION, '3.0.0')
 })
 
 // ---------------------------------------------------------------------------
@@ -681,28 +681,50 @@ test('unknown applicability: opportunity with no text signals → applicabilityU
   assert.deepEqual(opp.entityTypesAllowed, [], 'No entity signals should produce empty entityTypesAllowed')
 })
 
-test('unknown applicability: never produces ACCEPT even with need alignment', () => {
-  const profile = { primary_type: 'individual', state: 'OH', needs: ['housing', 'utilities'] }
+test('unknown applicability + non-individual profile: forces REVIEW/REJECT', () => {
+  // For non-individual profiles (e.g. business), unknown applicability should still be conservative
+  const profile = { primary_type: 'business', state: 'OH', needs: ['business'] }
   const opp = {
     title: 'General Support Program XYZ',
-    // Use a description with no entity type signals to ensure applicabilityUnknown=true
     description: 'Funding for program beneficiaries meeting eligibility criteria.',
     application_url: 'https://mystery.org/apply',
     is_national: 1,
-    entity_types_allowed: '[]', // explicit empty
-    categories: '["housing", "utilities"]',
+    entity_types_allowed: '[]',
+    categories: '["business"]',
     is_loan: 0,
   }
   const oppNorm = normalizeOpportunity(opp)
-  // Only run this assertion if text extraction also found no entity signals
-  // (i.e. truly unknown applicability)
   if (oppNorm.applicabilityUnknown) {
     const result = computeMatchDecision(profile, opp)
     assert.ok(
       result.decision === 'REVIEW' || result.decision === 'REJECT',
-      `Unknown applicability should force REVIEW/REJECT, got ${result.decision}: ${result.explanation}`,
+      `Unknown applicability for non-individual should force REVIEW/REJECT, got ${result.decision}: ${result.explanation}`,
     )
-    assert.notEqual(result.decision, 'ACCEPT', 'Unknown applicability must never produce ACCEPT')
+    assert.notEqual(result.decision, 'ACCEPT', 'Unknown applicability for non-individual must not produce ACCEPT')
+  }
+})
+
+test('unknown applicability + individual profile: can produce ACCEPT when well-aligned', () => {
+  // For individual/family profiles, unknown applicability is treated as a soft match.
+  // Consumer-facing programs often don't enumerate entity types but are intended for individuals.
+  const profile = { primary_type: 'individual', state: 'OH', needs: ['housing', 'utilities'] }
+  const opp = {
+    title: 'General Support Program XYZ',
+    description: 'Funding for program beneficiaries meeting eligibility criteria.',
+    application_url: 'https://mystery.org/apply',
+    is_national: 1,
+    entity_types_allowed: '[]',
+    categories: '["housing", "utilities"]',
+    is_loan: 0,
+  }
+  const oppNorm = normalizeOpportunity(opp)
+  if (oppNorm.applicabilityUnknown) {
+    const result = computeMatchDecision(profile, opp)
+    // Individual/family profile with good alignment: ACCEPT is allowed
+    assert.ok(
+      ['ACCEPT', 'REVIEW'].includes(result.decision),
+      `Individual profile with unknown applicability should allow ACCEPT/REVIEW, got ${result.decision}: ${result.explanation}`,
+    )
   }
 })
 
@@ -897,18 +919,21 @@ test('ACCEPT requires hasApplicationUrl: no URL → REVIEW even with perfect ali
 // MATCHER_VERSION in every decision
 // ---------------------------------------------------------------------------
 
-test('every decision includes MATCHER_VERSION 2.0.0', () => {
+test('every decision includes MATCHER_VERSION 3.0.0', () => {
   const profile = { primary_type: 'individual', state: 'OH', needs: ['housing'] }
   const opp = { title: 'Test', description: 'test', application_url: 'https://test.org' }
   const result = computeMatchDecision(profile, opp)
-  assert.equal(result.matcherVersion, '2.0.0', 'matcherVersion should be 2.0.0')
+  assert.equal(result.matcherVersion, MATCHER_VERSION, `matcherVersion should be ${MATCHER_VERSION}`)
 })
 
 // ---------------------------------------------------------------------------
-// Pro bono / in-kind / referral-only → REJECT for all profile pipelines
+// Pro bono / in-kind / referral-only
+// → REVIEW (not REJECT) for individual/caregiver profiles: these ARE relevant
+//    assistance types (clothing closets, computer programs, social service referrals)
+// → REJECT for nonprofit/business profiles seeking direct grant funding
 // ---------------------------------------------------------------------------
 
-test('pro bono opportunity is REJECT for any profile', () => {
+test('pro bono opportunity is REVIEW (not REJECT) for individual profile', () => {
   const profile = { primary_type: 'individual', state: 'OH', needs: ['housing'] }
   const opp = {
     title: 'Free Pro Bono Legal Help',
@@ -916,23 +941,45 @@ test('pro bono opportunity is REJECT for any profile', () => {
     application_url: 'https://legalaid.org',
   }
   const result = computeMatchDecision(profile, opp)
-  assertDecision(result, 'REJECT', 'pro bono = not direct funding')
+  assert.ok(result.decision !== 'REJECT', `individual + pro bono should not REJECT, got: ${result.explanation}`)
+})
+
+test('pro bono opportunity is REJECT for nonprofit profile', () => {
+  const profile = { primary_type: 'nonprofit', state: 'OH', needs: ['nonprofit_ministry'] }
+  const opp = {
+    title: 'Free Pro Bono Legal Help',
+    description: 'Pro bono legal assistance at no cost',
+    application_url: 'https://legalaid.org',
+  }
+  const result = computeMatchDecision(profile, opp)
+  assertDecision(result, 'REJECT', 'pro bono = not direct funding for nonprofits')
   assert.ok(result.ineligibilityReasons.some(r => r.toLowerCase().includes('pro bono')))
 })
 
-test('in-kind goods opportunity is REJECT for any profile', () => {
-  const profile = { primary_type: 'individual', state: 'TN', needs: ['housing'] }
+test('in-kind goods opportunity is REVIEW (not REJECT) for individual profile', () => {
+  const profile = { primary_type: 'individual', state: 'TN', needs: ['clothing_goods'] }
   const opp = {
     title: 'In-Kind Furniture and Household Goods',
     description: 'In-kind material support of donated household goods and furniture',
     application_url: 'https://goods.org',
   }
   const result = computeMatchDecision(profile, opp)
-  assertDecision(result, 'REJECT', 'in-kind = not direct financial assistance')
+  assert.ok(result.decision !== 'REJECT', `individual + in-kind goods should not REJECT, got: ${result.explanation}`)
+})
+
+test('in-kind goods opportunity is REJECT for business profile', () => {
+  const profile = { primary_type: 'business', state: 'TN', needs: ['business'] }
+  const opp = {
+    title: 'In-Kind Furniture and Household Goods',
+    description: 'In-kind material support of donated household goods and furniture',
+    application_url: 'https://goods.org',
+  }
+  const result = computeMatchDecision(profile, opp)
+  assertDecision(result, 'REJECT', 'in-kind = not direct financial assistance for businesses')
   assert.ok(result.ineligibilityReasons.some(r => r.toLowerCase().includes('in-kind')))
 })
 
-test('referral-only opportunity is REJECT for any profile', () => {
+test('referral-only opportunity is REVIEW (not REJECT) for individual profile', () => {
   const profile = { primary_type: 'individual', state: 'FL', needs: ['housing'] }
   const opp = {
     title: 'Social Services Referral Program',
@@ -940,8 +987,30 @@ test('referral-only opportunity is REJECT for any profile', () => {
     application_url: 'https://agency.org',
   }
   const result = computeMatchDecision(profile, opp)
-  assertDecision(result, 'REJECT', 'referral-only = not a direct application')
+  assert.ok(result.decision !== 'REJECT', `individual + referral should not REJECT, got: ${result.explanation}`)
+})
+
+test('referral-only opportunity is REJECT for nonprofit profile', () => {
+  const profile = { primary_type: 'nonprofit', state: 'FL', needs: ['nonprofit_ministry'] }
+  const opp = {
+    title: 'Social Services Referral Program',
+    description: 'Referral only — agency referral required; no direct applications accepted',
+    application_url: 'https://agency.org',
+  }
+  const result = computeMatchDecision(profile, opp)
+  assertDecision(result, 'REJECT', 'referral-only = not a direct application for nonprofits')
   assert.ok(result.ineligibilityReasons.some(r => r.toLowerCase().includes('referral')))
+})
+
+test('in-kind goods opportunity is REVIEW (not REJECT) for caregiver profile', () => {
+  const profile = { primary_type: 'caregiver', state: 'GA', needs: ['family_life'] }
+  const opp = {
+    title: 'In-Kind Household Supplies for Families',
+    description: 'In-kind household goods and material support for caregivers',
+    application_url: 'https://families.org',
+  }
+  const result = computeMatchDecision(profile, opp)
+  assert.ok(result.decision !== 'REJECT', `caregiver + in-kind should not REJECT, got: ${result.explanation}`)
 })
 
 // ---------------------------------------------------------------------------

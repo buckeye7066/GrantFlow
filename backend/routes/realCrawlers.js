@@ -2,7 +2,7 @@ import express from 'express'
 import { randomUUID } from 'crypto'
 import { ensureAuth } from '../middleware/auth.js'
 import { standardRateLimiter } from '../middleware/rateLimiting.js'
-import { runCrawler, SCHEMA } from '../services/crawlers/crawlerManager.js'
+import { runCrawler, SCHEMA } from '../services/crawlerFramework.js'
 import { ensureProfileAccess } from '../utils/accessControl.js'
 import { expandNeed, scoreNeedMatch } from '../services/crawlers/needTaxonomy.js'
 import { getStrategy, listStrategies } from '../services/crawlers/strategyRegistry.js'
@@ -11,6 +11,7 @@ import { loadProfileContext } from '../services/profileHelpers.js'
 import { buildProfileFacets } from '../services/profile/profileTaxonomy.js'
 import { trustedOriginClause, trustedSourceClause } from '../utils/recordOrigins.js'
 import { applyRelevanceFilter, extractProfileData } from '../services/relevanceFilter.js'
+import { makeDecision } from '../services/matchEngine.js'
 import { runAllDomainEngines } from '../services/crawlers/domainEngines/index.js'
 import { crawlStateWaiverBenefits, evaluateStateWaiverEligibility } from '../services/crawlers/stateWaiverBenefitsCrawler.js'
 
@@ -26,20 +27,29 @@ async function queryNearbyOpportunities(db, analysis, curatedTitles, limit = 50)
   const state = analysis?.location?.state;
   try {
     const isPg = db?.dialect === 'postgres'
-    const activeVal = isPg ? 'TRUE' : '1'
-    const rows = await db.prepare(`
-      SELECT id, title, description, sponsor, source, source_url, url, application_url,
+    // Fetch more rows than requested: curated upserts overlap with curatedTitles and
+    // will be deduplicated, so we need headroom to find genuinely new records.
+    const sqlLimit = Math.max(limit * 4, 200)
+    const query = isPg
+      ? `SELECT id, title, description, sponsor, source, source_url, application_url, apply_url,
              state, is_national, opportunity_type, type, deadline_type, amount_max,
-             contact_info, categories, keywords, match_reasons, match_score,
-             funding_type, record_origin
-      FROM funding_opportunities
-      WHERE is_active = ${activeVal}
-        AND (state = ? OR state = 'nationwide' OR is_national = ${activeVal})
-        AND ${trustedOriginClause()}
-        AND ${trustedSourceClause()}
-      ORDER BY match_score DESC NULLS LAST, last_verified_at DESC NULLS LAST
-      LIMIT ?
-    `).all(state || 'nationwide', limit);
+             contact_info, categories, keywords, match_reasons,
+             funding_type, record_origin, requires_match, match_percentage, is_loan
+         FROM funding_opportunities 
+         WHERE is_active = TRUE AND (state = $1 OR state = 'nationwide' OR is_national = TRUE) 
+         AND ${trustedOriginClause()} AND ${trustedSourceClause()} 
+         ORDER BY last_verified_at DESC NULLS LAST 
+         LIMIT $2`
+      : `SELECT id, title, description, sponsor, source, source_url, application_url, apply_url,
+             state, is_national, opportunity_type, type, deadline_type, amount_max,
+             contact_info, categories, keywords, match_reasons,
+             funding_type, record_origin, requires_match, match_percentage, is_loan
+         FROM funding_opportunities 
+         WHERE is_active = 1 AND (state = ? OR state = 'nationwide' OR is_national = 1) 
+         AND ${trustedOriginClause()} AND ${trustedSourceClause()} 
+         ORDER BY last_verified_at DESC NULLS LAST 
+         LIMIT ?`
+    const rows = await db.prepare(query).all(state || 'nationwide', sqlLimit);
 
     const normalizeTitle = (t) => String(t || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
     const seenTitles = new Set(curatedTitles.map(normalizeTitle));
@@ -51,15 +61,16 @@ async function queryNearbyOpportunities(db, analysis, curatedTitles, limit = 50)
         seenTitles.add(norm);
         return true;
       })
+      .slice(0, limit)
       .map(row => ({
         id: row.id || `fo-${row.title?.slice(0, 20)}`,
         title: row.title,
         name: row.title,
         description: row.description,
-        url: row.url || row.application_url || row.source_url || null,
-        application_url: row.application_url || row.url || null,
-        source_url: row.source_url || row.url || null,
-        match_score: row.match_score || 50,
+        url: row.application_url || row.apply_url || row.source_url || null,
+        application_url: row.application_url || row.apply_url || null,
+        source_url: row.source_url || row.application_url || null,
+        match_score: 50,
         match_reasons: safeJsonParse(row.match_reasons, []),
         categories: safeJsonParse(row.categories, []),
         opportunity_type: row.opportunity_type || row.type || 'program',
@@ -74,6 +85,9 @@ async function queryNearbyOpportunities(db, analysis, curatedTitles, limit = 50)
         is_national: Boolean(row.is_national),
         state: row.state || null,
         contact_info: row.contact_info || null,
+        requires_match: Boolean(row.requires_match),
+        match_percentage: row.match_percentage || null,
+        is_loan: Boolean(row.is_loan),
         eligibility_bullets: [],
         match_explain: { source: 'funding_opportunities_db', nearYou: true },
       }));
@@ -194,7 +208,7 @@ router.post('/run', ensureAuth, async (req, res) => {
     const db = req.db
     const startTime = Date.now()
 
-    console.log(`[RealCrawlers] Running ${crawler_type} for profile ${profile_id}`)
+    console.info(`[RealCrawlers] Running ${crawler_type} for profile ${profile_id}`)
 
     const strategy = getStrategy(crawler_type)
 
@@ -243,10 +257,14 @@ router.post('/run', ensureAuth, async (req, res) => {
 
     let filtered = allMapped
       .filter((opp) => {
-        if (typeof opp.match_score !== 'number' || opp.match_score < min_match_score) return false
+        const isDbDirectory = String(opp.source || '').startsWith('directory') ||
+          String(opp.record_origin || '').startsWith('directory')
+        if (!isDbDirectory) {
+          if (typeof opp.match_score !== 'number' || opp.match_score < min_match_score) return false
+        }
         const relevance = applyRelevanceFilter(opp, profileData)
-        if (!relevance.pass) {
-          console.log(`[RealCrawlers] Filtered out "${opp.title}" — ${relevance.reason}`)
+        if (!relevance.pass && !isDbDirectory) {
+          console.info(`[RealCrawlers] Filtered out "${opp.title}" — ${relevance.reason}`)
           return false
         }
         return true
@@ -256,22 +274,56 @@ router.post('/run', ensureAuth, async (req, res) => {
 
     let thresholdFallbackMessage = null
     if (filtered.length === 0 && allMapped.length > 0) {
-      // Threshold fallback: show best available matches that still pass relevance
-      // filtering. This ensures directory resources (food banks, United Way, etc.)
-      // are not silently suppressed by a high match-score threshold.
       filtered = allMapped
         .filter((opp) => {
+          const isDir = String(opp.source || '').startsWith('directory') ||
+            String(opp.record_origin || '').startsWith('directory')
+          if (!isDir && (typeof opp.match_score !== 'number' || opp.match_score < min_match_score)) return false
           const relevance = applyRelevanceFilter(opp, profileData)
-          return relevance.pass
+          return relevance.pass || isDir
         })
         .sort((a, b) => (b.match_score ?? 0) - (a.match_score ?? 0))
         .slice(0, 50)
-      thresholdFallbackMessage = `No results met your threshold of ${min_match_score}%. Showing best available matches.`
+      if (filtered.length > 0) {
+        thresholdFallbackMessage = `No results met initial filters. Showing best available matches above ${min_match_score}%.`
+      }
+    }
+
+    const effectiveProfile = profileContext?.profile ?? {}
+    filtered = filtered.map(opp => {
+      const { decision, explanation } = makeDecision(opp.match_score ?? 0, effectiveProfile, opp)
+      return { ...opp, match_decision: decision, decision, match_decision_explanation: explanation }
+    })
+
+    // Policy enforcement: remove loans, matching-funds, no-URL, and hard-REJECT items.
+    // Directory resources survive REJECT unless they are themselves loans/matching-funds.
+    const prePolicyCount = filtered.length
+    filtered = filtered.filter(opp => {
+      const effectiveUrl = opp.url || opp.application_url || opp.source_url || ''
+      if (!effectiveUrl.startsWith('http')) return false
+
+      const oppType = String(opp.opportunity_type || '').toLowerCase()
+      if (['loan', 'loan_program', 'microloan'].includes(oppType) || opp.is_loan) return false
+      if (opp.requires_match) return false
+
+      const isDirectoryResource = opp.is_directory_resource ||
+        String(opp.source || '').startsWith('directory') ||
+        String(opp.source || '').includes('local_directory') ||
+        String(opp.record_origin || '').startsWith('directory')
+      if (opp.match_decision === 'REJECT' && !isDirectoryResource) return false
+      if (opp.match_decision === 'REJECT' && isDirectoryResource) {
+        opp.match_decision = 'REVIEW'
+        opp.decision = 'REVIEW'
+      }
+      return true
+    })
+    if (prePolicyCount > 0 && filtered.length < prePolicyCount) {
+      console.info(`[RealCrawlers] Policy filter: ${prePolicyCount} → ${filtered.length} (removed ${prePolicyCount - filtered.length} REJECT/no-URL)`)
     }
 
     const duration = Date.now() - startTime
 
-    console.log(
+    console.info(
       `[RealCrawlers] ${crawler_type}: ${result.results.length} curated + ${nearbyOpps.length} nearby → ${filtered.length} returned (min_score=${min_match_score}) in ${duration}ms`,
     )
 
@@ -577,7 +629,7 @@ router.post('/specific-need', ensureAuth, async (req, res) => {
         webProfile = { signals: { location: {}, military: new Set(), assistance: new Set(), health: new Set() } }
       }
       const webResults = await searchWebForItem(need_text, webProfile)
-      console.log(`[specific-need] Web search for "${need_text}" found ${webResults.length} results`)
+      console.info(`[specific-need] Web search for "${need_text}" found ${webResults.length} results`)
 
       for (const wr of webResults) {
         const urlKey = (wr.url || '').toLowerCase().replace(/\/$/, '')

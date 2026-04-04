@@ -29,6 +29,16 @@ const MAX_ROWS_PER_QUERY = 25
 const SIMPLER_API_KEY = process.env.SIMPLER_GRANTS_API_KEY || ''
 const SIMPLER_API_ENABLED = SIMPLER_API_KEY.length > 0
 
+// Grants.gov legacy search2 API now requires an API key (returns 401 without one).
+// Set GRANTS_GOV_API_KEY in your environment (.env / Railway / Vercel secrets).
+const LEGACY_API_KEY = process.env.GRANTS_GOV_API_KEY || ''
+if (!LEGACY_API_KEY) {
+  console.warn(
+    '[GrantsGovClient] GRANTS_GOV_API_KEY env var is not set; ' +
+      'Grants.gov search2 requests will likely return 401 Unauthorized.',
+  )
+}
+
 // ── Normaliser (both APIs → common shape) ──────────────────────────────────────
 
 function normaliseLegacyHit(hit) {
@@ -52,11 +62,12 @@ function normaliseLegacyHit(hit) {
     'Visit Grants.gov for full eligibility details and application instructions.',
   ].filter(Boolean).join(' ')
 
-  const url = id != null
-    ? `${GRANTS_GOV_DETAIL}${id}`
-    : number
-      ? `https://www.grants.gov/search-grants?query=${encodeURIComponent(String(number))}`
-      : 'https://www.grants.gov/search-grants'
+  // Without an id OR a number we cannot form a meaningful application URL;
+// return null so the caller's .filter(Boolean) drops this record entirely.
+if (id == null && !number) return null
+const url = id != null
+  ? `${GRANTS_GOV_DETAIL}${id}`
+  : `https://www.grants.gov/search-grants?query=${encodeURIComponent(String(number))}`
 
   return {
     title,
@@ -98,11 +109,12 @@ function normaliseSimplerHit(hit) {
     'Visit Grants.gov for full eligibility details.',
   ].filter(Boolean).join(' ')
 
-  const url = id != null
-    ? `${GRANTS_GOV_DETAIL}${id}`
-    : number
-      ? `https://www.grants.gov/search-grants?query=${encodeURIComponent(String(number))}`
-      : 'https://www.grants.gov/search-grants'
+  // Without an id OR a number we cannot form a meaningful application URL;
+// return null so the caller's .filter(Boolean) drops this record entirely.
+if (id == null && !number) return null
+const url = id != null
+  ? `${GRANTS_GOV_DETAIL}${id}`
+  : `https://www.grants.gov/search-grants?query=${encodeURIComponent(String(number))}`
 
   return {
     title,
@@ -135,10 +147,14 @@ async function queryLegacyAPI(keyword, rows = MAX_ROWS_PER_QUERY) {
   }
 
   try {
+    const legacyHeaders = {
+      'Content-Type': 'application/json',
+      ...(LEGACY_API_KEY ? { 'X-API-Key': LEGACY_API_KEY } : {}),
+    }
     const response = await postWithRetry(
       LEGACY_API,
       payload,
-      { headers: { 'Content-Type': 'application/json' } },
+      { headers: legacyHeaders },
       { timeoutMs: API_TIMEOUT_MS, retries: API_RETRIES },
     )
 
@@ -295,10 +311,10 @@ export async function searchGrants(keyword, opts = {}) {
   // Skip Simpler API entirely if no API key is configured (it returns 401)
   const skipSimpler = !SIMPLER_API_ENABLED || legacyOnly
 
-  const [legacyResult, simplerResult] = await Promise.all([
+  const [legacyResult, simplerResult] = await Promise.allSettled([
     simplerOnly ? Promise.resolve({ ok: false, hits: [], error: 'skipped' }) : queryLegacyAPI(keyword, rows),
     skipSimpler ? Promise.resolve({ ok: false, hits: [], error: 'no_api_key' }) : querySimplerAPI(keyword, rows),
-  ])
+  ]).then(results => results.map(r => r.status === 'fulfilled' ? r.value : { ok: false, hits: [], error: r.reason?.message || 'unknown_error' }))
 
   diagnostics.legacy = {
     ok: legacyResult.ok, count: legacyResult.hits.length,
@@ -314,14 +330,23 @@ export async function searchGrants(keyword, opts = {}) {
   const seen = new Set()
   const merged = []
   for (const opp of [...legacyResult.hits, ...simplerResult.hits]) {
-    const key = (opp.title || '').toLowerCase().trim()
-    if (!key || seen.has(key)) continue
-    seen.add(key)
-    merged.push(opp)
+  // Prefer a stable compound key (source_id + api_source); fall back to title
+  const stableKey = opp.source_id != null
+    ? `${opp._api_source}::${opp.source_id}`
+    : (opp.title || '').toLowerCase().trim()
+  if (!stableKey) continue
+  if (seen.has(stableKey)) {
+    console.debug(
+      `[GrantsGovClient] Dedup skip: "${opp.title}" (key=${stableKey}, source=${opp._api_source})`
+    )
+    continue
   }
+  seen.add(stableKey)
+  merged.push(opp)
+}
   diagnostics.merged = merged.length
 
-  const anyOk = legacyResult.ok || simplerResult.ok
+  const anyOk = (legacyResult.ok && legacyResult.hits.length > 0) || (simplerResult.ok && simplerResult.hits.length > 0)
   if (!anyOk) {
     console.error(`[GrantsGovClient] BOTH APIs failed for "${keyword}" | legacy: ${legacyResult.error} | simpler: ${simplerResult.error}`)
   }
@@ -372,11 +397,19 @@ export async function searchGrantsBatch(strategies, opts = {}) {
       }
 
       for (const opp of result.opportunities) {
-        const key = (opp.title || '').toLowerCase().trim()
-        if (key && seenTitles.has(key)) continue
-        if (key) seenTitles.add(key)
-        allOpportunities.push({ ...opp, _discovery_strategy: strategy.label })
-      }
+  const stableKey = opp.source_id != null
+    ? `${opp._api_source}::${opp.source_id}`
+    : (opp.title || '').toLowerCase().trim()
+  if (!stableKey) continue
+  if (seenTitles.has(stableKey)) {
+    console.debug(
+      `[GrantsGovClient] Batch dedup skip: "${opp.title}" (key=${stableKey}, strategy=${strategy.label})`
+    )
+    continue
+  }
+  seenTitles.add(stableKey)
+  allOpportunities.push({ ...opp, _discovery_strategy: strategy.label })
+}
     }
 
     if (i + batchSize < strategies.length) {

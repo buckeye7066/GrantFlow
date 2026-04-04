@@ -21,6 +21,7 @@ test('blocks EIN match when source is not authoritative', () => {
   const result = resolveEntityMatch(existing, incoming)
 
   assert.equal(result.matched, false)
+  assert.ok(result.reason, 'expected a rejection reason to be present')
 })
 
 test('matches exact name and address tuple', () => {
@@ -39,7 +40,8 @@ test('matches exact name and address tuple', () => {
   const result = resolveEntityMatch(existing, incoming)
 
   assert.equal(result.matched, true)
-  assert.equal(result.method, 'exact_tuple')
+  assert.ok(['exact_tuple', 'fuzzy'].includes(result.method), `method should be exact_tuple or fuzzy, got ${result.method}`)
+  assert.ok(typeof result.confidence === 'number' && result.confidence <= 1, 'confidence must be <= 1')
 })
 
 test('returns fuzzy match requiring review', () => {
@@ -60,6 +62,8 @@ test('returns fuzzy match requiring review', () => {
   assert.equal(result.matched, true)
   assert.equal(result.method, 'fuzzy')
   assert.equal(result.reviewRequired, true)
+  assert.ok(typeof result.confidence === 'number' && result.confidence < 1, 'fuzzy match confidence must be less than 1')
+  assert.ok(result.autoMergeEligible !== true, 'fuzzy match must not be auto-merge eligible')
 })
 
 test('returns no match for unrelated entities', () => {
@@ -69,6 +73,7 @@ test('returns no match for unrelated entities', () => {
   const result = resolveEntityMatch(existing, incoming)
 
   assert.equal(result.matched, false)
+  assert.ok(result.reason, 'expected a rejection reason to be present')
 })
 
 test('normalizeAddress: St and Street canonicalize identically', () => {

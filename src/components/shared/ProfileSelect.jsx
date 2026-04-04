@@ -40,11 +40,20 @@ export default function ProfileSelect({
   const isAdmin = Boolean(user?.is_admin)
 
   // Fetch profiles from API
-  const { data: profiles = [], isLoading } = useQuery({
+  const { data: rawProfiles, isLoading } = useQuery({
     queryKey: ['profiles'],
     queryFn: () => apiFetch('/api/profiles'),
     staleTime: 60_000, // 1 minute
   })
+
+  // Normalise envelope: API may return [] directly or { data: [] } or { profiles: [] }
+  const profiles = Array.isArray(rawProfiles)
+    ? rawProfiles
+    : Array.isArray(rawProfiles?.data)
+      ? rawProfiles.data
+      : Array.isArray(rawProfiles?.profiles)
+        ? rawProfiles.profiles
+        : []
 
   // Backend already scopes /api/profiles for non-admin users; do not re-filter client-side.
   const availableProfiles = profiles
@@ -60,10 +69,12 @@ export default function ProfileSelect({
   }
 
   if (!Array.isArray(availableProfiles) || availableProfiles.length === 0) {
+    // Log so developers can spot envelope mismatch or auth issues in production.
+    console.warn('[ProfileSelect] No profiles available â rawProfiles shape:', rawProfiles)
     return (
       <Select disabled>
         <SelectTrigger className={className}>
-          <SelectValue placeholder="No profiles available" />
+          <SelectValue placeholder="No profiles available â create a profile to begin matching" />
         </SelectTrigger>
       </Select>
     )

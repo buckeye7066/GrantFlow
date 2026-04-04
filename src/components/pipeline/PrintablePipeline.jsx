@@ -27,8 +27,9 @@ const STATUSES = [
 ];
 
 const formatMoney = (amount) => {
-    if (typeof amount !== 'number') return null;
-    return '$' + amount.toLocaleString('en-US');
+    const parsed = typeof amount === 'number' ? amount : Number(amount);
+    if (!Number.isFinite(parsed)) return null;
+    return '$' + parsed.toLocaleString('en-US');
 };
 
 export default function PrintablePipeline({ grants = [], organization }) {
@@ -52,6 +53,14 @@ export default function PrintablePipeline({ grants = [], organization }) {
   const handleClose = () => {
     window.close();
   };
+
+  const knownStatusValues = React.useMemo(() => new Set(STATUSES.map((s) => s.value)), []);
+  const allStatuses = React.useMemo(() => {
+    const unknownStatuses = Object.keys(grantsByStatus)
+      .filter((k) => !knownStatusValues.has(k))
+      .map((k) => ({ value: k, label: k }));
+    return [...STATUSES, ...unknownStatuses];
+  }, [grantsByStatus, knownStatusValues]);
 
   return (
       <div className="bg-white min-h-screen">
@@ -78,10 +87,9 @@ export default function PrintablePipeline({ grants = [], organization }) {
 
           <main className="gf-print-body">
             <div className="gf-columns">
-              {STATUSES.map(col => {
+              {allStatuses.map((col) => {
                 const columnGrants = grantsByStatus[col.value] ?? [];
                 if (columnGrants.length === 0) return null;
-
                 return (
                   <section key={col.value} className="gf-column">
                     <h2 className="gf-col-title">{col.label} ({columnGrants.length})</h2>
@@ -92,7 +100,7 @@ export default function PrintablePipeline({ grants = [], organization }) {
                           {grant.program_description && <p className="gf-card-summary">{grant.program_description}</p>}
                           <ul className="gf-card-meta">
                             {grant.funder && <li>{grant.funder}</li>}
-                            {grant.deadline && !isNaN(new Date(grant.deadline)) && <li>Deadline: {format(new Date(grant.deadline), 'P')}</li>}
+                            {grant.deadline && !isNaN(Date.parse(grant.deadline)) && <li>Deadline: {format(new Date(grant.deadline), 'P')}</li>}
                             {grant.amount_max && <li>Award: {formatMoney(grant.amount_max)}</li>}
                           </ul>
                         </article>

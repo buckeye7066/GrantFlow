@@ -64,16 +64,22 @@ async function getDatabaseDiagnostics(db) {
     const dbPath = dialect === 'sqlite' ? (process.env.DB_PATH || 'data/grantflow.db') : null;
     
     // Check if database is writable by attempting a simple query (SQLite only).
-    let writable = dialect === 'sqlite';
+    let writable = null;
     if (dialect === 'sqlite') {
       try {
-        await db.prepare('SELECT COUNT(*) FROM sqlite_master').get();
-        writable = true
+        // Use db.exec for transaction control keywords, which all major
+        // SQLite wrappers (better-sqlite3, sqlite, sqlite3) support.
+        if (typeof db.exec === 'function') {
+          await Promise.resolve(db.exec('BEGIN IMMEDIATE; ROLLBACK;'));
+        } else {
+          // Fallback: attempt a harmless write to a temp table and roll back
+          await db.prepare("SAVEPOINT _diag_probe").run();
+          await db.prepare("RELEASE _diag_probe").run();
+        }
+        writable = true;
       } catch (error) {
         writable = false;
       }
-    } else {
-      writable = null
     }
     
     // Get table counts
@@ -129,7 +135,7 @@ async function getTableCount(db, tableName) {
       return 0;
     }
     
-    const result = await db.prepare(`SELECT COUNT(*) as count FROM ${tableName}`).get();
+    const result = await db.prepare(`SELECT COUNT(*) as count FROM \`${tableName}\``).get();
     return Number(result?.count || 0);
   } catch (error) {
     return 0;
@@ -199,6 +205,8 @@ async function checkFundingOpportunitiesSchema(db) {
       crawlLogsExists = false;
     }
     
+    const targetColumns = ['type', 'evidence_url', 'last_verified_at', 'title', 'sponsor', 'deadline'];
+    const missingColumns = targetColumns.filter((col) => !columnNames.includes(col));
     return {
       funding_opportunities_has_type: columnNames.includes('type'),
       funding_opportunities_has_evidence_url: columnNames.includes('evidence_url'),
@@ -207,6 +215,10 @@ async function checkFundingOpportunitiesSchema(db) {
       funding_opportunities_has_sponsor: columnNames.includes('sponsor'),
       funding_opportunities_has_deadline: columnNames.includes('deadline'),
       crawl_logs_exists: crawlLogsExists,
+      details: {
+        dialect: 'sqlite',
+        missing_columns: missingColumns,
+      },
     };
   } catch (error) {
     return {
@@ -224,22 +236,22 @@ function getEnvironmentFlags() {
   return {
     // Canonical: SAM_GOV_PUBLIC_API_KEY (keep legacy SAM_GOV_API_KEY for backward compatibility)
     SAM_GOV_PUBLIC_API_KEY_present:
-      Boolean(process.env.SAM_GOV_PUBLIC_API_KEY || process.env.SAM_GOV_API_KEY) || 'optional',
-    GRANTS_GOV_API_KEY_present: Boolean(process.env.GRANTS_GOV_API_KEY) || 'optional',
-    SIMPLER_GRANTS_API_KEY_present: Boolean(process.env.SIMPLER_GRANTS_API_KEY) || 'optional',
-    API_DATA_GOV_KEY_present: Boolean(process.env.API_DATA_GOV_KEY) || 'optional',
+      Boolean(process.env.SAM_GOV_PUBLIC_API_KEY || process.env.SAM_GOV_API_KEY),
+    GRANTS_GOV_API_KEY_present: Boolean(process.env.GRANTS_GOV_API_KEY),
+    SIMPLER_GRANTS_API_KEY_present: Boolean(process.env.SIMPLER_GRANTS_API_KEY),
+    API_DATA_GOV_KEY_present: Boolean(process.env.API_DATA_GOV_KEY),
     OPENAI_API_KEY_present: Boolean(process.env.OPENAI_API_KEY),
     ANTHROPIC_API_KEY_present: Boolean(process.env.ANTHROPIC_API_KEY),
     RESEND_API_KEY_present: Boolean(process.env.RESEND_API_KEY),
     FROM_EMAIL_set: Boolean(process.env.FROM_EMAIL),
     AUTH_NOTIFY_ON_LOGIN_enabled: String(process.env.AUTH_NOTIFY_ON_LOGIN || '').toLowerCase() === 'true',
     AUTH_NOTIFY_EMAIL_set: Boolean(process.env.AUTH_NOTIFY_EMAIL),
-    ANYA_ADMIN_TOKEN_present: Boolean(process.env.ANYA_ADMIN_TOKEN) || 'optional',
+    ANYA_ADMIN_TOKEN_present: Boolean(process.env.ANYA_ADMIN_TOKEN),
     NODE_ENV: process.env.NODE_ENV || 'development',
     DB_PATH_set: Boolean(process.env.DB_PATH),
     AUTH_PUBLIC_URL_set: Boolean(process.env.AUTH_PUBLIC_URL || process.env.PUBLIC_URL),
     AUTH_FRONTEND_URL_set: Boolean(process.env.AUTH_FRONTEND_URL || process.env.FRONTEND_BASE_URL),
-    TWILIO_configured: Boolean(process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN) || 'optional',
+    TWILIO_configured: Boolean(process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN),
   };
 }
 
@@ -415,7 +427,16 @@ export function analyzeSystemHealth(diagnostics) {
     
     // Check schema
     if (diagnostics.db.schema_checks.error) {
-      issues.push('Database schema check failed');
+      issues.push(
+        `Database schema check failed: ${diagnostics.db.schema_checks.message || diagnostics.db.schema_checks.error}`
+      );
+    } else {
+      const missing = diagnostics.db.schema_checks?.details?.missing_columns;
+      if (Array.isArray(missing) && missing.length > 0) {
+        warnings.push(`funding_opportunities missing columns: ${missing.join(', ')}`);
+      } else if (!Array.isArray(missing)) {
+        warnings.push('Schema check did not return column details â audit incomplete');
+      }
     }
   }
   

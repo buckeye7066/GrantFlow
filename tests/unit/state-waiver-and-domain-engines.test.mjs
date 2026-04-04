@@ -64,14 +64,15 @@ test('state_waiver_benefits: TN returns ECF-style results with URLs', async () =
   }
   const results = await crawlStateWaiverBenefits(profile, {})
   assert.ok(Array.isArray(results))
+  assert.ok(results.length >= 1, `TN crawl must return at least 1 ECF result, got ${results.length}`)
   for (const o of results) {
     const url = o.url || o.application_url || o.source_url
     assert.ok(url && (url.startsWith('http://') || url.startsWith('https://')), `every item must have valid URL: ${JSON.stringify(o)}`)
   }
 })
 
-async function assertEngineMinItemsAndUrls(runEngine, name) {
-  const results = await runEngine({}, {})
+async function assertEngineMinItemsAndUrls(runEngine, name, profile = {}) {
+  const results = await runEngine(profile, {})
   assert.ok(Array.isArray(results), `${name}: must return array`)
   assert.ok(
     results.length >= MIN_DIRECTORY_ITEMS,
@@ -79,7 +80,7 @@ async function assertEngineMinItemsAndUrls(runEngine, name) {
   )
   for (const o of results) {
     const url = o.url || o.application_url || o.source_url
-    assert.ok(url && (url.startsWith('http://') || url.startsWith('https://')), `${name}: every item must have URL`)
+    assert.ok(url && (url.startsWith('http://') || url.startsWith('https://')), `${name}: every item must have URL: ${JSON.stringify(o)}`)
   }
 }
 
@@ -102,13 +103,21 @@ test('runAllDomainEngines returns combined results with URLs', async () => {
   }
 })
 
-test('educationStudentEngine excludes loan/matching (strict_no_loans)', async () => {
-  const results = await runEducationStudentEngine({}, {})
+async function assertNoLoansOrMatching(runEngine, name) {
+  const results = await runEngine({}, {})
   const loanLike = ['loan', 'microloan', 'matching funds', 'cost share', 'repay']
   for (const o of results) {
     const text = [o.title, o.description, ...(o.keywords || [])].filter(Boolean).join(' ').toLowerCase()
     for (const bad of loanLike) {
-      assert.ok(!text.includes(bad.toLowerCase()) || text.includes('grant') || text.includes('scholarship'), `education engine should not surface loan/matching: ${o.title}`)
+      assert.ok(
+        !text.includes(bad.toLowerCase()) || text.includes('grant') || text.includes('scholarship'),
+        `${name}: should not surface loan/matching: ${o.title}`,
+      )
     }
   }
-})
+}
+
+test('educationStudentEngine excludes loan/matching (strict_no_loans)', () => assertNoLoansOrMatching(runEducationStudentEngine, 'educationStudent'))
+test('housingCommunityFinanceEngine excludes loan/matching (strict_no_loans)', () => assertNoLoansOrMatching(runHousingCommunityFinanceEngine, 'housingCommunityFinance'))
+test('workforceUnionEngine excludes loan/matching (strict_no_loans)', () => assertNoLoansOrMatching(runWorkforceUnionEngine, 'workforceUnion'))
+test('taxIncentiveEngine excludes loan/matching (strict_no_loans)', () => assertNoLoansOrMatching(runTaxIncentiveEngine, 'taxIncentive'))

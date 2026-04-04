@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { apiFetch } from '@/api/client';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { Database, AlertTriangle, CheckCircle2, RefreshCw, Wrench, ShieldAlert } from 'lucide-react';
+import { Database, AlertTriangle, CheckCircle2, RefreshCw, Wrench, ShieldAlert, Loader2 } from 'lucide-react';
 import { useToast } from '@/components/ui/use-toast';
 
 export default function AdminDataIntegrity() {
@@ -108,7 +108,7 @@ export default function AdminDataIntegrity() {
             </div>
             <div className="space-y-1">
               <p className="text-xs font-semibold text-slate-500 uppercase">Missing Critical Fields</p>
-              <div className="grid grid-cols-3 gap-2 mt-2">
+              <div className="grid grid-cols-2 gap-2 mt-2">
                 <div className="bg-slate-50 p-2 rounded text-center">
                   <p className="text-[10px] text-slate-500">Titles</p>
                   <p className="font-bold">{data?.opportunities?.missing_fields?.missing_title || 0}</p>
@@ -121,6 +121,22 @@ export default function AdminDataIntegrity() {
                   <p className="text-[10px] text-slate-500">Agencies</p>
                   <p className="font-bold">{data?.opportunities?.missing_fields?.missing_agency || 0}</p>
                 </div>
+                <div className={`p-2 rounded text-center ${
+                  (data?.opportunities?.missing_fields?.missing_application_url || 0) > 0
+                    ? 'bg-red-50'
+                    : 'bg-slate-50'
+                }`}>
+                  <p className={`text-[10px] font-semibold ${
+                    (data?.opportunities?.missing_fields?.missing_application_url || 0) > 0
+                      ? 'text-red-600'
+                      : 'text-slate-500'
+                  }`}>App URLs </p>
+                  <p className={`font-bold ${
+                    (data?.opportunities?.missing_fields?.missing_application_url || 0) > 0
+                      ? 'text-red-700'
+                      : ''
+                  }`}>{data?.opportunities?.missing_fields?.missing_application_url || 0}</p>
+                </div>
               </div>
             </div>
           </CardContent>
@@ -130,21 +146,4 @@ export default function AdminDataIntegrity() {
   );
 }
 
-function Loader2(props) {
-  return (
-    <svg
-      {...props}
-      xmlns="http://www.w3.org/2000/svg"
-      width="24"
-      height="24"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <path d="M21 12a9 9 0 1 1-6.219-8.56" />
-    </svg>
-  );
-}
+// Loader2 is now imported from lucide-react above â local definition removed.

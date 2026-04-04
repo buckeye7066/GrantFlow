@@ -24,7 +24,9 @@ const grantSchemaForExtraction = {
     deadline: { type: "string", format: "date", description: "The application deadline. Standardize to YYYY-MM-DD format." },
     amount_min: { type: "number" },
     amount_max: { type: "number" },
+    application_url: { type: "string", description: "The direct URL where applicants submit their application or access the application portal. Must be a full URL starting with http:// or https://." },
     eligibility_summary: { type: "string", description: "A concise summary of who is eligible to apply." },
+    applicant_types: { type: "array", items: { type: "string" }, description: "List of eligible applicant types, e.g. ['individual', 'nonprofit', 'small_business', 'veteran', 'student']." },
     program_description: { type: "string", description: "A detailed summary of the grant's purpose and goals." },
     selection_criteria: { type: "string", description: "A summary of how applications will be judged or scored." },
     funder_email: { type: "string", description: "Primary contact email for submissions" },
@@ -171,19 +173,67 @@ export default function NOFOParser() {
     setIsSavingGrant(true);
     setError(null);
 
+    const rawAppUrl = extractedData.application_url || '';
+    const validatedAppUrl =
+      rawAppUrl.startsWith('http://') || rawAppUrl.startsWith('https://')
+        ? rawAppUrl
+        : '';
+
+    if (!validatedAppUrl) {
+      log.warn('NOFOParser: no valid application_url extracted â grant will be marked ineligible (missing_application_url)', {
+        title: extractedData.title,
+        raw: rawAppUrl,
+      });
+    }
+
     const grantPayload = {
-        ...extractedData,
-        organization_id: selectedOrgId,
-        status: 'discovered',
-        opportunity_type: 'grant',
-        ai_status: 'queued',
-        url: inputMode === 'url' ? url : (extractedData.url || ''),
+      ...extractedData,
+      application_url: validatedAppUrl,
+      organization_id: selectedOrgId,
+      status: 'discovered',
+      opportunity_type: 'grant',
+      ai_status: 'queued',
+      url: inputMode === 'url' ? url : (extractedData.url || ''),
+      // Seed audit fields so the pipeline function receives a well-formed
+      // record and does not overwrite computed values with null (Goals 8, 9).
+      match_decision: null,
+      match_explanation: null,
+      matched_needs: [],
+      eligibility_status: validatedAppUrl ? 'pending' : 'INELIGIBLE',
+      ineligibility_reasons: validatedAppUrl ? [] : ['missing_application_url'],
+      fingerprints: null,
+      matcher_version: null,
+      evaluated_at: null,
+      match_confidence: null,
     };
 
     try {
-        const newGrant = await client.entities.Grant.create(grantPayload);
+        // Route through the canonical pipeline insertion function so that
+        // relevanceFilter hard-disqualification and computeMatchDecision run
+        // before any record is written to the DB (Goals 3, 4, 8).
+        const pipelineResult = await client.functions.invoke('saveToProfilePipeline', {
+          opportunity: grantPayload,
+          organizationId: selectedOrgId,
+          source: 'nofo_parser',
+        });
 
-        const analysisPayload = {
+        if (!pipelineResult?.data?.success) {
+          const reason =
+            pipelineResult?.data?.rejection_reason ||
+            pipelineResult?.data?.ineligibility_reasons?.[0] ||
+            pipelineResult?.data?.message ||
+            'Pipeline rejected this opportunity. Check eligibility criteria.';
+          log.warn('NOFOParser: pipeline rejected opportunity', {
+            title: grantPayload.title,
+            rejection_reason: reason,
+            raw_response: pipelineResult?.data,
+          });
+          throw new Error(reason);
+        }
+
+        const newGrant = pipelineResult.data.grant;
+
+        const analysisResult = await client.functions.invoke('analyzeGrant', {
             grantId: newGrant.id,
             title: newGrant.title,
             programDescription: newGrant.program_description,
@@ -191,16 +241,35 @@ export default function NOFOParser() {
             selectionCriteria: newGrant.selection_criteria,
             awardCeiling: newGrant.amount_max,
             deadline: newGrant.deadline,
-        };
-
-        await client.functions.invoke('analyzeGrant', analysisPayload);
-
-        queryClient.invalidateQueries({ queryKey: ['grants'] });
-        toast({
-            title: "Saved and Analyzing",
-            description: `Grant "${newGrant.title}" created and sent for AI analysis.`,
         });
 
+        if (!analysisResult?.data?.success) {
+            log.warn('analyzeGrant did not return success â patching record with analysis_failed status', {
+                grantId: newGrant.id,
+                response: analysisResult?.data,
+            });
+            // Patch the record so the pipeline state machine reflects the failure
+            // and operators can query for records needing retry.
+            await client.entities.Grant.update(newGrant.id, {
+                ai_status: 'analysis_failed',
+                match_explanation: 'AI analysis could not complete at time of submission. Queued for retry.',
+                evaluated_at: new Date().toISOString(),
+            }).catch((patchErr) => {
+                log.error('Failed to patch grant ai_status after analysis failure', { grantId: newGrant.id, patchErr });
+            });
+            toast({
+                variant: 'destructive',
+                title: 'Analysis Queued',
+                description: `Grant "${newGrant.title}" saved but AI analysis could not start. It will retry automatically.`,
+            });
+        } else {
+            toast({
+                title: "Saved and Analyzing",
+                description: `Grant "${newGrant.title}" created and sent for AI analysis.`,
+            });
+        }
+
+        queryClient.invalidateQueries({ queryKey: ['grants'] });
         navigate(createPageUrl("GrantDetail", { id: newGrant.id }));
     } catch (err) {
         const errorMessage = `Failed to save grant or start analysis: ${err.message}`;
@@ -375,7 +444,21 @@ export default function NOFOParser() {
                         <div className="space-y-3">
                             <p><strong>Title:</strong> {extractedData.title || 'N/A'}</p>
                             <p><strong>Funder:</strong> {extractedData.funder || 'N/A'}</p>
-                            <p><strong>Deadline:</strong> {extractedData.deadline || 'N/A'}</p>
+                            {(() => {
+  const dl = extractedData.deadline;
+  const isPast = dl && new Date(dl) < new Date();
+  return (
+    <p>
+      <strong>Deadline:</strong>{' '}
+      {dl || 'N/A'}
+      {isPast && (
+        <span className="ml-2 text-xs font-semibold text-red-600 bg-red-50 px-2 py-0.5 rounded">
+          Deadline has passed - this opportunity may be rejected by the pipeline
+        </span>
+      )}
+    </p>
+  );
+})()}
                             <p><strong>Opportunity #:</strong> {extractedData.opportunity_number || 'N/A'}</p>
                             <p><strong>Award Range:</strong> ${extractedData.amount_min?.toLocaleString() || 'N/A'} - ${extractedData.amount_max?.toLocaleString() || 'N/A'}</p>
                             {extractedData.funder_email && <p><strong>Email:</strong> {extractedData.funder_email}</p>}

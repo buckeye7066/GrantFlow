@@ -12,6 +12,7 @@ function parseRobots(text) {
 
   const rules = []
   let currentAgents = []
+  let lastKeyWasUserAgent = false
 
   for (const line of lines) {
     const idx = line.indexOf(':')
@@ -21,18 +22,30 @@ function parseRobots(text) {
 
     if (key === 'user-agent') {
       const ua = value.toLowerCase()
-      currentAgents = [ua]
+      // If the previous token was a directive (not user-agent), a new group is
+      // starting â reset currentAgents so groups don't bleed into each other.
+      if (!lastKeyWasUserAgent) {
+        currentAgents = []
+      }
+      currentAgents.push(ua)
+      lastKeyWasUserAgent = true
       continue
     }
 
+    // Any directive (allow/disallow) means the next user-agent starts a new group.
+    lastKeyWasUserAgent = false
+
     if (key === 'disallow') {
-      const path = value
-      rules.push({ agents: currentAgents.length ? currentAgents : ['*'], type: 'disallow', path })
+      // Empty Disallow means 'allow everything' â skip storing a rule.
+      if (!value) continue
+      const agentsForRule = currentAgents.length ? [...currentAgents] : ['*']
+      rules.push({ agents: agentsForRule, type: 'disallow', path: value })
     }
 
     if (key === 'allow') {
       const path = value
-      rules.push({ agents: currentAgents.length ? currentAgents : ['*'], type: 'allow', path })
+      const agentsForRule = currentAgents.length ? [...currentAgents] : ['*']
+      rules.push({ agents: agentsForRule, type: 'allow', path })
     }
   }
 
@@ -82,7 +95,8 @@ export class RobotsCache {
         const text = await res.text()
         rules = parseRobots(text)
       }
-    } catch {
+    } catch (err) {
+      console.warn(`Failed to fetch robots.txt for ${origin}:`, err.message)
       rules = []
     }
 
@@ -93,14 +107,25 @@ export class RobotsCache {
   _evaluate(rules, url, userAgent) {
     const ua = (userAgent || '*').toLowerCase()
     const p = pathOf(url)
-    const applicable = rules.filter((r) => r.agents.includes('*') || r.agents.includes(ua))
+    // RFC 9309: specific-agent rules take full precedence over wildcard rules.
+    const specificRules = rules.filter((r) => r.agents.includes(ua))
+    const applicable = specificRules.length > 0
+      ? specificRules
+      : rules.filter((r) => r.agents.includes('*'))
     if (applicable.length === 0) return true
 
     // Simplified: choose the longest matching rule (allow wins if same length)
     let best = null
     for (const rule of applicable) {
       if (!rule.path) continue
-      if (!p.startsWith(rule.path)) continue
+      // RFC 9309: '*' matches any sequence; '$' anchors to end-of-path
+      const pattern = rule.path
+        .split('*')
+        .map((seg) => seg.replace(/[$]/g, '\\$&').replace(/[.+?^{}()|[\]\\]/g, '\\$&'))
+        .join('.*')
+      const anchored = rule.path.endsWith('$') ? pattern.replace(/\\\$$/, '$') : pattern
+      const re = new RegExp('^' + anchored)
+      if (!re.test(p)) continue
       if (!best) best = rule
       else if (rule.path.length > best.path.length) best = rule
       else if (rule.path.length === best.path.length && rule.type === 'allow') best = rule

@@ -15,7 +15,7 @@ export function formatError(error) {
   return {
     // Keep `error` as a string for backwards compatibility with existing clients.
     error: isProduction ? 'Internal server error' : error.message,
-    error_type: error?.error_type || error?.code || null,
+    error_type: error?.error_type || error?.code || error?.name || 'UnknownError',
     ...(isProduction ? {} : { stack: error.stack })
   };
 }
@@ -27,7 +27,6 @@ export function errorHandler(err, req, res, next) {
   const requestId = req.requestId || req.request_id || null;
   const statusCode = err.statusCode || err.status || 500;
 
-  // Store recent errors for admin lookup by request_id (in-memory, best-effort).
   try {
     recordRequestError({
       requestId,
@@ -37,8 +36,8 @@ export function errorHandler(err, req, res, next) {
       message: err?.message,
       stack: err?.stack,
     })
-  } catch {
-    // ignore (best-effort)
+  } catch (recordError) {
+    console.warn('Failed to record error:', recordError.message);
   }
 
   // Log error for debugging

@@ -234,7 +234,8 @@ export function assertEnv({ mode } = {}) {
     if (String(mode || process.env.NODE_ENV) === 'production') {
       process.exit(1)
     }
-    return { env: null, warnings: [] }
+    // Return issues in warnings so callers can programmatically surface them
+    return { env: null, warnings: result.issues }
   }
 
   if (result.warnings.length) {
@@ -252,8 +253,16 @@ export function getJwtSecretOrThrow(env = {}) {
   if (!secret) {
     // Unit tests and local dev shouldn't require configuring secrets.
     // IMPORTANT: This must never be random; tests require deterministic behavior.
-    if (!isProd) return 'grantflow-dev-secret'
+    if (!isProd) {
+      console.warn('[env] AUTH_JWT_SECRET not set; using insecure dev-only fallback. Never deploy this secret.')
+      return 'grantflow-dev-secret'
+    }
     throw new Error('Missing AUTH_JWT_SECRET (or JWT_SECRET)')
+  }
+
+  // In non-prod, warn loudly if an unsafe placeholder is explicitly configured
+  if (!isProd && looksUnsafeJwtSecret(secret)) {
+    console.warn('[env] AUTH_JWT_SECRET/JWT_SECRET is set to a known-insecure placeholder value; replace before staging/prod.')
   }
 
   if (isProd && looksUnsafeJwtSecret(secret)) {

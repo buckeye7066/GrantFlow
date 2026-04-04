@@ -54,39 +54,13 @@ function getOpenAI() {
  * CRITICAL: Must match server.js implementation to ensure consistency.
  * Production requires a stable, secure secret - NO runtime generation.
  */
-function resolveJwtSecret() {
-  const raw = String(process.env.AUTH_JWT_SECRET || process.env.JWT_SECRET || '').trim()
-  const isProd = process.env.NODE_ENV === 'production'
-
-  if (!raw) {
-    if (isProd) {
-      // FAIL FAST in production - do not generate ephemeral secrets
-      console.error(
-        'FATAL ERROR: Missing AUTH_JWT_SECRET (or JWT_SECRET) in production.\n' +
-          'Set a strong random secret (recommended: 32+ bytes) and redeploy.\n' +
-          '  AUTH_JWT_SECRET="..."\n' +
-          'The application cannot start without a stable JWT secret.',
-      )
-      process.exit(1)
-    }
-    console.warn('[auth] AUTH_JWT_SECRET not set; using insecure development default (DO NOT use in production).')
-    return 'grantflow-dev-secret'
-  }
-
-  if (isProd && raw === 'grantflow-dev-secret') {
-    // FAIL FAST in production - do not use insecure defaults
-    console.error(
-      'FATAL ERROR: AUTH_JWT_SECRET is set to the insecure development default in production.\n' +
-        'Generate a strong random secret and redeploy.\n' +
-        'Example: openssl rand -base64 48',
-    )
-    process.exit(1)
-  }
-  // Non-prod fallback only (must never be random).
-  return String(process.env.AUTH_JWT_SECRET || process.env.JWT_SECRET || 'grantflow-dev-secret').trim()
+let JWT_SECRET
+try {
+  JWT_SECRET = getJwtSecretOrThrow(process.env)
+} catch (err) {
+  console.error(`FATAL ERROR: ${err.message}`)
+  process.exit(1)
 }
-
-const JWT_SECRET = resolveJwtSecret()
 
 function parseSeconds(value, fallback) {
   if (value === undefined || value === null) {
@@ -232,6 +206,13 @@ const phoneStartLimiter = rateLimit({
   legacyHeaders: false,
 })
 
+const passwordRateLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: Number.parseInt(process.env.AUTH_PASSWORD_RATE_LIMIT ?? '5', 10),
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+})
+
 function normalizeEmail(email = '') {
   return email.trim().toLowerCase()
 }
@@ -241,7 +222,8 @@ async function upsertProfileEmailLink(db, profileId, email, addedBy = 'auth-auto
   if (!profileId || !normalized) return
   try {
     await ensureProfileEmailSchema(db)
-  } catch {
+  } catch (schemaErr) {
+    console.warn('[auth] upsertProfileEmailLink: schema ensure failed, skipping link:', schemaErr?.message || schemaErr)
     return
   }
 
@@ -330,7 +312,7 @@ function verifyOtpToken(token) {
     const decoded = jwt.verify(token, JWT_SECRET)
     if (!decoded || typeof decoded !== 'object') return null
     if (decoded.typ !== 'otp') return null
-    if (decoded.kind !== 'email') return null
+    if (decoded.kind !== 'email' && decoded.kind !== 'phone') return null
     if (typeof decoded.identifier !== 'string' || typeof decoded.code_hash !== 'string') return null
     return decoded
   } catch {
@@ -1300,6 +1282,7 @@ async function ensureProviderUser(db, provider, profile) {
       )
       .run(userId, profile.displayName ?? 'GrantFlow User', email, profile.avatarUrl ?? null, isAdmin)
     user = await getUserById(db, userId)
+    await assignProfileToUser(db, userId, email)
     return user
   }
 
@@ -1772,7 +1755,7 @@ router.post('/email/start', emailStartLimiter, async (req, res) => {
       identifier: email,
       success: Boolean(emailSent),
       error: emailSent ? null : 'email_delivery_failed_or_unconfigured',
-    }).catch(() => {})
+    }).catch(e => console.warn('[background]', e?.message || e))
 
     console.info('[auth/email/start] Request completed successfully for:', email, 'email_sent:', emailSent, 'isProd:', isProd)
     return res.status(202).json(responseData)
@@ -1785,11 +1768,11 @@ router.post('/email/start', emailStartLimiter, async (req, res) => {
       identifier: typeof req.body?.email === 'string' ? req.body.email : 'unknown',
       success: false,
       error: error?.message || String(error),
-    }).catch(() => {})
+    }).catch(e => console.warn('[background]', e?.message || e))
     return res.status(500).json({ 
       error: 'An unexpected error occurred. Please try again.',
       error_type: 'internal_error',
-      details: process.env.NODE_ENV !== 'production' ? error.message : undefined
+      details: undefined // Never expose internal error details
     })
   }
 })
@@ -1849,11 +1832,11 @@ router.post('/email/verify', async (req, res) => {
       .get(credential.id, incomingHash)
 
     if (matchedAny?.consumed_at) {
-      sendAuthAttemptNotification({ event: 'email_verify', identifier: email, success: false, error: 'code_consumed' }).catch(() => {})
+      sendAuthAttemptNotification({ event: 'email_verify', identifier: email, success: false, error: 'code_consumed' }).catch(e => console.warn('[background]', e?.message || e))
       return res.status(400).json({ error: 'Verification code already used. Request a new code.' })
     }
     if (matchedAny?.expires_at && matchedAny.expires_at < nowISOString()) {
-      sendAuthAttemptNotification({ event: 'email_verify', identifier: email, success: false, error: 'code_expired' }).catch(() => {})
+      sendAuthAttemptNotification({ event: 'email_verify', identifier: email, success: false, error: 'code_expired' }).catch(e => console.warn('[background]', e?.message || e))
       return res.status(400).json({ error: 'Verification code expired. Request a new code.' })
     }
 
@@ -1871,7 +1854,7 @@ router.post('/email/verify', async (req, res) => {
       ?.c
 
     if (!hasAnyActive) {
-      sendAuthAttemptNotification({ event: 'email_verify', identifier: email, success: false, error: 'no_active_codes' }).catch(() => {})
+      sendAuthAttemptNotification({ event: 'email_verify', identifier: email, success: false, error: 'no_active_codes' }).catch(e => console.warn('[background]', e?.message || e))
       return res.status(400).json({ error: 'Verification code expired. Request a new code.' })
     }
 
@@ -1911,7 +1894,7 @@ router.post('/email/verify', async (req, res) => {
       )
       .run(credential.id)
 
-    sendAuthAttemptNotification({ event: 'email_verify', identifier: email, success: false, error: 'invalid_code' }).catch(() => {})
+    sendAuthAttemptNotification({ event: 'email_verify', identifier: email, success: false, error: 'invalid_code' }).catch(e => console.warn('[background]', e?.message || e))
     return res.status(400).json({ error: 'Invalid verification code' })
   }
 
@@ -2015,7 +1998,7 @@ router.post('/email/verify', async (req, res) => {
   }
 
   // Trigger Anya's autonomous scheduler for admin login if configured
-  if (user.role === 'admin' && process.env.ANYA_RUN_ON_ADMIN_LOGIN === 'true') {
+  if ((user.is_admin || user.role === 'admin') && process.env.ANYA_RUN_ON_ADMIN_LOGIN === 'true') {
     import('../services/anyaAutonomousScheduler.js')
       .then(({ runOnAdminLogin }) => {
         runOnAdminLogin(req.db, user.id).catch(err => {
@@ -2025,6 +2008,15 @@ router.post('/email/verify', async (req, res) => {
       .catch((err) => {
         console.error('[Anya] Failed to import autonomous scheduler:', err?.message || err);
       })
+  }
+
+  // CodeGuard audit on admin login — self-throttles to once per 6 hours
+  if (user.is_admin || user.role === 'admin') {
+    import('../services/anyaStartupAudit.js')
+      .then(({ triggerStartupAudit }) => {
+        triggerStartupAudit(req.db)
+      })
+      .catch(() => { /* non-critical */ })
   }
 
   // Admin notice on successful sign-in (post-verify)
@@ -2039,7 +2031,7 @@ router.post('/email/verify', async (req, res) => {
       ip: req.ip,
       userAgent: req.headers['user-agent'],
     },
-  }).catch(() => {})
+  }).catch(e => console.warn('[background]', e?.message || e))
 
   // In-app admin notification (best-effort, stored in-memory) + durable audit sink.
   // Record ALL sign-ins (admins can filter in the UI). This is required for accurate "who logged in" reporting.
@@ -2066,7 +2058,15 @@ router.post('/phone/start', phoneStartLimiter, async (req, res) => {
     return res.status(400).json({ error: 'Phone number must be in E.164 format (e.g. +1234567890)' })
   }
 
-  const { user, credential } = await ensurePhoneCredential(req.db, normalized)
+  let user, credential
+  try {
+    const result = await ensurePhoneCredential(req.db, normalized)
+    user = result.user
+    credential = result.credential
+  } catch (dbError) {
+    console.error('[auth/phone/start] Database error ensuring credential:', dbError)
+    return res.status(500).json({ error: 'Database error occurred. Please try again.', error_type: 'database_error' })
+  }
   const now = new Date()
 
   if (credential.last_sent_at) {
@@ -2103,7 +2103,7 @@ router.post('/phone/start', phoneStartLimiter, async (req, res) => {
     event: 'phone_start',
     identifier: normalized,
     success: true,
-  }).catch(() => {})
+  }).catch(e => console.warn('[background]', e?.message || e))
 
   return res.status(202).json({
     message: 'Verification code sent',
@@ -2191,7 +2191,7 @@ router.post('/phone/verify', async (req, res) => {
       identifier: normalized,
       success: false,
       error: 'invalid_code',
-    }).catch(() => {})
+    }).catch(e => console.warn('[background]', e?.message || e))
     return res.status(400).json({ error: 'Invalid verification code' })
   }
 
@@ -2302,6 +2302,15 @@ router.post('/phone/verify', async (req, res) => {
     }
   }
 
+  // CodeGuard audit on admin phone login — self-throttles to once per 6 hours
+  if (user.is_admin || user.role === 'admin') {
+    import('../services/anyaStartupAudit.js')
+      .then(({ triggerStartupAudit }) => {
+        triggerStartupAudit(req.db)
+      })
+      .catch(() => { /* non-critical */ })
+  }
+
   // Admin notice on successful sign-in (post-verify)
   sendAuthAttemptNotification({
     event: 'sign_in',
@@ -2314,7 +2323,7 @@ router.post('/phone/verify', async (req, res) => {
       ip: req.ip,
       userAgent: req.headers['user-agent'],
     },
-  }).catch(() => {})
+  }).catch(e => console.warn('[background]', e?.message || e))
 
   recordClientSignInEvent({
     db: req.db,
@@ -2411,7 +2420,7 @@ router.post('/access/check', async (req, res) => {
   }
 })
 
-router.post('/password/setup/start', async (req, res) => {
+router.post('/password/setup/start', passwordRateLimiter, async (req, res) => {
   try {
     await ensurePasswordAuthSchema(req.db)
 
@@ -2592,7 +2601,7 @@ router.post('/password/setup/start', async (req, res) => {
 })
 
 // Password reset: always send a one-time link (even if a password already exists).
-router.post('/password/reset/start', async (req, res) => {
+router.post('/password/reset/start', passwordRateLimiter, async (req, res) => {
   try {
     await ensurePasswordAuthSchema(req.db)
 
@@ -2708,7 +2717,7 @@ router.post('/password/reset/start', async (req, res) => {
   }
 })
 
-router.post('/password/setup/complete', async (req, res) => {
+router.post('/password/setup/complete', passwordRateLimiter, async (req, res) => {
   try {
     await ensurePasswordAuthSchema(req.db)
 
@@ -2737,7 +2746,7 @@ router.post('/password/setup/complete', async (req, res) => {
       return res.status(400).json({ error: 'invalid_or_expired_token', error_type: 'invalid_or_expired_token' })
     }
 
-    const passwordHash = await bcrypt.hash(passwordRaw, 12)
+    const passwordHash = await bcrypt.hash(passwordRaw, 15)
     await req.db
       .prepare('UPDATE users SET password_hash = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
       .run(passwordHash, user.id)
@@ -2795,7 +2804,7 @@ router.post('/password/setup/complete', async (req, res) => {
   }
 })
 
-router.post('/password/login', async (req, res) => {
+router.post('/password/login', passwordRateLimiter, async (req, res) => {
   try {
     await ensurePasswordAuthSchema(req.db)
 
@@ -2919,7 +2928,7 @@ router.get('/:provider/start', async (req, res) => {
     return res.status(500).json({ 
       error: 'Failed to initiate OAuth flow',
       provider,
-      details: process.env.NODE_ENV !== 'production' ? error.message : undefined
+      details: undefined // Never expose internal error details
     })
   }
 })
@@ -2996,7 +3005,7 @@ router.get('/:provider/callback', async (req, res) => {
         ip: req.ip,
         userAgent: req.headers['user-agent'],
       },
-    }).catch(() => {})
+    }).catch(e => console.warn('[background]', e?.message || e))
 
     if (!user?.is_admin) {
       recordClientSignInEvent({
@@ -3075,6 +3084,31 @@ router.get('/me', async (req, res) => {
       console.error('[auth/me] Database error fetching org count:', dbError)
     }
 
+    // Fetch durable onboarding/tour state from the users table
+    let hasCompletedOnboarding = false
+    let onboardingCompletedAt = null
+    let lastSeenManualVersion = 0
+    let lastCompletedTourVersion = 0
+    let tourDismissedAt = null
+
+    try {
+      const onboardingRow = await req.db.prepare(
+        `SELECT has_completed_onboarding, onboarding_completed_at, last_seen_manual_version,
+                last_completed_tour_version, tour_dismissed_at
+         FROM users WHERE id = ?`
+      ).get(userId)
+      if (onboardingRow) {
+        hasCompletedOnboarding = Boolean(onboardingRow.has_completed_onboarding)
+        onboardingCompletedAt = onboardingRow.onboarding_completed_at ?? null
+        lastSeenManualVersion = Number(onboardingRow.last_seen_manual_version ?? 0)
+        lastCompletedTourVersion = Number(onboardingRow.last_completed_tour_version ?? 0)
+        tourDismissedAt = onboardingRow.tour_dismissed_at ?? null
+      }
+    } catch (dbError) {
+      // Columns may not exist yet if migration hasn't run — degrade gracefully
+      console.warn('[auth/me] Could not fetch onboarding state (migration pending?):', dbError.message)
+    }
+
     return res.json({
       userId,
       email,
@@ -3082,13 +3116,99 @@ router.get('/me', async (req, res) => {
       activeProfileId,
       accessibleProfileCount,
       accessibleOrgCount,
+      hasCompletedOnboarding,
+      onboardingCompletedAt,
+      lastSeenManualVersion,
+      lastCompletedTourVersion,
+      tourDismissedAt,
     })
   } catch (error) {
     console.error('[auth/me] Unexpected error:', error)
     return res.status(500).json({ 
       error: 'An unexpected error occurred',
       error_type: 'internal_error',
-      details: process.env.NODE_ENV !== 'production' ? error.message : undefined
+      details: undefined // Never expose internal error details
+    })
+  }
+})
+
+/**
+ * PATCH /api/auth/onboarding-state
+ * Persists durable onboarding / tour state to the users table.
+ * Accepts any subset of: has_completed_onboarding, last_seen_manual_version,
+ * last_completed_tour_version, tour_dismissed_at.
+ */
+router.patch('/onboarding-state', async (req, res) => {
+  try {
+    const userId = req.ctx?.userId ?? req.user?.userId ?? req.user?.id ?? null
+    if (!userId) {
+      return res.status(401).json({ error: 'Not authenticated' })
+    }
+
+    const {
+      has_completed_onboarding,
+      last_seen_manual_version,
+      last_completed_tour_version,
+      tour_dismissed_at,
+    } = req.body ?? {}
+
+    const updates = []
+    const values = []
+
+    if (typeof has_completed_onboarding === 'boolean') {
+      updates.push('has_completed_onboarding = ?')
+      values.push(has_completed_onboarding ? 1 : 0)
+      if (has_completed_onboarding) {
+        updates.push('onboarding_completed_at = ?')
+        values.push(new Date().toISOString())
+      }
+    }
+
+    if (typeof last_seen_manual_version === 'number') {
+      updates.push('last_seen_manual_version = ?')
+      values.push(last_seen_manual_version)
+    }
+
+    if (typeof last_completed_tour_version === 'number') {
+      updates.push('last_completed_tour_version = ?')
+      values.push(last_completed_tour_version)
+    }
+
+    if (typeof tour_dismissed_at === 'string') {
+      updates.push('tour_dismissed_at = ?')
+      values.push(tour_dismissed_at)
+    }
+
+    if (updates.length === 0) {
+      return res.status(400).json({ error: 'No valid fields provided' })
+    }
+
+    // Safety note: `updates` array contains only hardcoded column-name fragments
+    // (e.g. 'has_completed_onboarding = ?'). All values go through ? placeholders.
+    // No user input enters the SQL template itself.
+    values.push(userId)
+    await req.db.prepare(`UPDATE users SET ${updates.join(', ')} WHERE id = ?`).run(...values)
+
+    // Return updated state
+    const row = await req.db.prepare(
+      `SELECT has_completed_onboarding, onboarding_completed_at, last_seen_manual_version,
+              last_completed_tour_version, tour_dismissed_at
+       FROM users WHERE id = ?`
+    ).get(userId)
+
+    return res.json({
+      hasCompletedOnboarding: Boolean(row?.has_completed_onboarding),
+      onboardingCompletedAt: row?.onboarding_completed_at ?? null,
+      lastSeenManualVersion: Number(row?.last_seen_manual_version ?? 0),
+      lastCompletedTourVersion: Number(row?.last_completed_tour_version ?? 0),
+      tourDismissedAt: row?.tour_dismissed_at ?? null,
+    })
+  } catch (error) {
+    console.error('[auth/onboarding-state] Unexpected error:', error)
+    return res.status(500).json({
+      error: 'An unexpected error occurred',
+      error_type: 'internal_error',
+      details: undefined // Never expose internal error details,
     })
   }
 })

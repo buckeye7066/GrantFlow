@@ -119,7 +119,16 @@ export async function runDomainCorpusCrawl(db, options = {}) {
         if (opp.record_origin === 'live_crawl') liveCount++
         else directoryCount++
 
-        const withMeta = attachCorpusMetadata(opp, config)
+        const withMeta = {
+  ...attachCorpusMetadata(opp, config),
+  match_decision: 'PENDING',
+  match_explanation: 'Awaiting profile match evaluation',
+  matched_needs: JSON.stringify([]),
+  eligibility_status: 'unreviewed',
+  ineligibility_reasons: JSON.stringify([]),
+  evaluated_at: null,
+  match_confidence: null,
+}
         allOpportunities.push(withMeta)
       }
 
@@ -130,7 +139,9 @@ export async function runDomainCorpusCrawl(db, options = {}) {
       stats.crawlers_run++
     } catch (err) {
       stats.crawlers_failed++
-      console.warn(`[domainCorpusCrawler] ${config.id} failed:`, err?.message || String(err))
+      console.error(`[domainCorpusCrawler] CRITICAL: ${config.id} failed:`, err?.message || String(err))
+      // Do NOT re-throw timeout errors mid-loop; log and continue so remaining crawlers run.
+      // The caller can inspect stats.crawlers_failed to decide whether to abort.
     }
   }
 
@@ -156,13 +167,21 @@ export async function runDomainCorpusCrawl(db, options = {}) {
         state: 'nationwide',
         record_origin: 'live_crawl',
         source: o.source ?? o.crawler_type,
+        match_decision: 'PENDING',
+        match_explanation: 'Awaiting profile match evaluation',
+        matched_needs: JSON.stringify([]),
+        eligibility_status: 'unreviewed',
+        ineligibility_reasons: JSON.stringify([]),
+        evaluated_at: null,
+        match_confidence: null,
       }
       allOpportunities.push(withMeta)
       stats.number_directory_resources += 1
     }
     stats.crawlers_run += DOMAIN_ENGINES.length
   } catch (err) {
-    console.warn('[domainCorpusCrawler] Domain engines phase failed:', err?.message || err)
+    console.error('[domainCorpusCrawler] CRITICAL: Domain engines phase failed:', err?.message || err)
+    throw new Error('Domain engines failure - core funding categories unavailable')
   }
 
   // Dedupe by URL
@@ -174,9 +193,22 @@ export async function runDomainCorpusCrawl(db, options = {}) {
     seen.add(key)
     return true
   })
+  stats.number_deduped = allOpportunities.length - deduped.length
+  stats.total_candidates = allOpportunities.length
+  if (stats.number_deduped > 0) {
+    console.info(
+      `[domainCorpusCrawler] Deduplication removed ${stats.number_deduped} duplicate URLs from ${allOpportunities.length} candidates.`,
+    )
+  }
 
-  const inserted = await bulkUpsertFundingOpportunities(db, deduped)
-  stats.total_inserted = inserted.length
+  let inserted
+  try {
+    inserted = await bulkUpsertFundingOpportunities(db, deduped)
+    stats.total_inserted = inserted.length
+  } catch (err) {
+    console.error('[domainCorpusCrawler] CRITICAL: Database insert failed:', err?.message)
+    throw new Error(`Failed to persist ${deduped.length} funding opportunities - data loss risk`)
+  }
 
   // URL verification: HEAD on first N new URLs
   if (!options.skipVerification && inserted.length > 0) {
@@ -196,15 +228,19 @@ export async function runDomainCorpusCrawl(db, options = {}) {
       try {
         const { ok } = await headForVerification(url, { timeoutMs: 4000 })
         if (ok) {
-          await db
-            .prepare(
-              `UPDATE funding_opportunities SET verified_url = ?, last_verified_at = ? WHERE id = ?`,
-            )
-            .run(verVal, now, row.id)
-          stats.total_verified++
+          try {
+            await db
+              .prepare(
+                `UPDATE funding_opportunities SET verified_url = ?, last_verified_at = ? WHERE id = ?`,
+              )
+              .run(verVal, now, row.id)
+            stats.total_verified++
+          } catch (dbErr) {
+            console.warn(`[domainCorpusCrawler] Failed to update verification for ${row.id}:`, dbErr?.message)
+          }
         }
-      } catch {
-        // Best-effort: do not crash
+      } catch (httpErr) {
+        console.debug(`[domainCorpusCrawler] URL verification failed for ${url}:`, httpErr?.message)
       }
     }
   }

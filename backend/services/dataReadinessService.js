@@ -55,7 +55,7 @@ export async function getDataReadiness(db) {
 
   try {
     // Count live, active opportunities in the catalog.
-    const countRow = await db
+    const countRow = db
       .prepare(
         `SELECT COUNT(*) AS c FROM funding_opportunities WHERE is_active = 1 OR is_active IS NULL`,
       )
@@ -63,7 +63,7 @@ export async function getDataReadiness(db) {
     result.opportunity_count = Number(countRow?.c ?? 0)
 
     // Most recent crawl timestamp across the catalog.
-    const crawlRow = await db
+    const crawlRow = db
       .prepare(
         `SELECT MAX(last_crawled) AS latest FROM funding_opportunities`,
       )
@@ -71,7 +71,7 @@ export async function getDataReadiness(db) {
     result.last_crawled_iso = crawlRow?.latest ?? null
 
     // Count crawler jobs that are currently running or queued.
-    const runningRow = await db
+    const runningRow = db
       .prepare(
         `SELECT
            SUM(CASE WHEN status = 'running' THEN 1 ELSE 0 END) AS running,
@@ -151,7 +151,7 @@ export async function getSystemAlerts(db) {
     const stuckThresholdMs = Math.max(timeoutMs, 5 * 60 * 1000) // at least 5 min
     const stuckCutoff = new Date(Date.now() - stuckThresholdMs).toISOString()
 
-    const stuckRow = await db
+    const stuckRow = db
       .prepare(
         `SELECT COUNT(*) AS c
          FROM crawler_jobs
@@ -181,7 +181,7 @@ export async function getSystemAlerts(db) {
     // Recent crawler failures.
     const failureWindowH = 1 // look back 1 hour
     const failureCutoff = new Date(Date.now() - failureWindowH * 60 * 60 * 1000).toISOString()
-    const failureRow = await db
+    const failureRow = db
       .prepare(
         `SELECT COUNT(*) AS c
          FROM crawler_jobs

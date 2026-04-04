@@ -121,12 +121,14 @@ test('Case 3: "I want to become certified to teach CPR and First Aid in the comm
   const hospitalProgram = NATIONAL_PROGRAMS.find(p => p.id === 'np-hospital-education-cpr')
   assert.ok(hospitalProgram, 'Hospital education CPR program should exist')
   const hospitalScore = scoreNeedMatch(hospitalProgram, expanded)
-  assert.ok(hospitalScore, 'Hospital program should score against community teaching need')
+  assert.ok(hospitalScore, 'Hospital program should produce a score object against community teaching need')
+  assert.ok(hospitalScore.score >= 20, `Hospital education CPR score should be >= 20, got ${hospitalScore.score}`)
 
   const ahaProgram = NATIONAL_PROGRAMS.find(p => p.id === 'np-aha-community-training')
   assert.ok(ahaProgram, 'AHA community training program should exist')
   const ahaScore = scoreNeedMatch(ahaProgram, expanded)
-  assert.ok(ahaScore, 'AHA should score against community CPR teaching need')
+  assert.ok(ahaScore, 'AHA should produce a score object against community CPR teaching need')
+  assert.ok(ahaScore.score >= 20, `AHA community training score should be >= 20, got ${ahaScore.score}`)
 })
 
 // ═══════════════════════════════════════════════════════════
@@ -183,7 +185,8 @@ test('Case 5: "Our ministry wants someone trained to teach CPR"', () => {
   const communityFoundation = NATIONAL_PROGRAMS.find(p => p.id === 'np-community-foundation-safety')
   assert.ok(communityFoundation, 'community foundation safety program should exist')
   const cfScore = scoreNeedMatch(communityFoundation, expanded)
-  assert.ok(cfScore, 'community foundation should score against ministry CPR need')
+  assert.ok(cfScore, 'community foundation should produce a score object against ministry CPR need')
+  assert.ok(cfScore.score >= 20, `Community foundation safety score should be >= 20, got ${cfScore.score}`)
 })
 
 // ═══════════════════════════════════════════════════════════
@@ -320,9 +323,11 @@ test('CPR need does not match AED equipment-only grants', () => {
   const score = scoreNeedMatch(aedEquipment, expanded)
   const scoreVal = score?.score || 0
   const cprProgram = NATIONAL_PROGRAMS.find(p => p.id === 'np-aha-community-training')
+  assert.ok(cprProgram, 'np-aha-community-training must exist in NATIONAL_PROGRAMS for this false-positive guard to be meaningful')
   const cprScore = scoreNeedMatch(cprProgram, expanded)
+  assert.ok(cprScore, 'AHA community training should produce a score object')
   assert.ok(
-    !cprScore || cprScore.score > scoreVal,
-    `CPR training program should score higher than AED-equipment-only grant`
+    cprScore.score > scoreVal,
+    `CPR training program (score: ${cprScore.score}) should score higher than AED-equipment-only grant (score: ${scoreVal})`
   )
 })

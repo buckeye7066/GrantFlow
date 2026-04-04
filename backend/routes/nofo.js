@@ -2,6 +2,8 @@ import express from 'express'
 import pdfParse from 'pdf-parse'
 import fetch from 'node-fetch'
 import { createOpenAIClient, summarizeOpenAIError } from '../utils/openaiClient.js'
+import { requireAuthenticatedUser } from '../utils/accessControl.js'
+import { standardRateLimiter } from '../middleware/rateLimiting.js'
 
 const router = express.Router()
 
@@ -37,19 +39,50 @@ function tryExtractFirstJson(text) {
   if (!match) return null
   try {
     return JSON.parse(match[0])
-  } catch {
+  } catch (error) {
+    console.warn('[tryExtractFirstJson] Parse failed:', error.message)
     return null
   }
 }
 
 async function fetchPdfTextFromUrl(fileUrl) {
-  const resp = await fetch(fileUrl, {
-    headers: {
-      // Grants.gov and some provider sites require a User-Agent to return the full document/page.
-      'User-Agent': 'GrantFlow NOFO Parser (+https://app.axiombiolabs.org)',
-      Accept: 'text/html,application/pdf;q=0.9,*/*;q=0.8',
-    },
-  })
+  let parsedUrl
+  try {
+    parsedUrl = new URL(fileUrl)
+  } catch {
+    const err = new Error(`Invalid URL: ${fileUrl}`)
+    err.status = 400
+    throw err
+  }
+  if (parsedUrl.protocol !== 'http:' && parsedUrl.protocol !== 'https:') {
+    const err = new Error(`Unsupported URL scheme: ${parsedUrl.protocol}`)
+    err.status = 400
+    throw err
+  }
+  const FETCH_TIMEOUT_MS = Number(process.env.NOFO_FETCH_TIMEOUT_MS || 20_000)
+  const controller = new AbortController()
+  const fetchTimer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS)
+  let resp
+  try {
+    resp = await fetch(fileUrl, {
+      signal: controller.signal,
+      headers: {
+        // Grants.gov and some provider sites require a User-Agent to return the full document/page.
+        'User-Agent': 'GrantFlow NOFO Parser (+https://app.axiombiolabs.org)',
+        Accept: 'text/html,application/pdf;q=0.9,*/*;q=0.8',
+      },
+    })
+  } catch (fetchErr) {
+    clearTimeout(fetchTimer)
+    const err = new Error(
+      fetchErr.name === 'AbortError'
+        ? `Fetch timed out after ${FETCH_TIMEOUT_MS}ms: ${fileUrl}`
+        : `Fetch error: ${fetchErr.message}`
+    )
+    err.status = 504
+    throw err
+  }
+  clearTimeout(fetchTimer)
   if (!resp.ok) {
     const err = new Error(`Failed to fetch file (HTTP ${resp.status})`)
     err.status = resp.status
@@ -64,7 +97,8 @@ async function fetchPdfTextFromUrl(fileUrl) {
   const asString = () => {
     try {
       return buf.toString('utf8')
-    } catch {
+    } catch (error) {
+      console.warn('[fetchPdfTextFromUrl] String conversion failed:', error.message)
       return ''
     }
   }
@@ -110,8 +144,10 @@ function heuristicFallback(text) {
 
 // POST /api/parseNOFO
 // Body: { file_url: string, json_schema?: object, is_url?: boolean }
-router.post('/parseNOFO', async (req, res) => {
+router.post('/parseNOFO', standardRateLimiter, async (req, res) => {
   try {
+    const user = requireAuthenticatedUser(req, res)
+    if (!user) return
     const fileUrl = typeof req.body?.file_url === 'string' ? req.body.file_url.trim() : ''
     const schema = req.body?.json_schema && typeof req.body.json_schema === 'object' ? req.body.json_schema : null
     const isUrl = req.body?.is_url === true || req.body?.is_url === 'true'
@@ -122,6 +158,7 @@ router.post('/parseNOFO', async (req, res) => {
 
     const { text, contentType } = await fetchPdfTextFromUrl(fileUrl)
     if (!text) {
+      console.warn('[parseNOFO] Empty text extracted from URL:', fileUrl, '| contentType:', contentType)
       return res.status(422).json({
         success: false,
         message: contentType.includes('pdf')
@@ -160,7 +197,7 @@ router.post('/parseNOFO', async (req, res) => {
 
         const raw = completion.choices?.[0]?.message?.content
         const parsed = raw ? tryExtractFirstJson(raw) : null
-        if (parsed && typeof parsed === 'object') {
+        if (parsed && typeof parsed === 'object' && Object.keys(parsed).length > 0) {
           return res.json({ success: true, output: parsed, ai_provider: 'openai' })
         }
       } catch (error) {
@@ -181,7 +218,7 @@ router.post('/parseNOFO', async (req, res) => {
         })
         const raw = extractAnthropicText(response)
         const parsed = raw ? tryExtractFirstJson(raw) : null
-        if (parsed && typeof parsed === 'object') {
+        if (parsed && typeof parsed === 'object' && Object.keys(parsed).length > 0) {
           return res.json({ success: true, output: parsed, ai_provider: 'anthropic' })
         }
       } catch (error) {
@@ -190,11 +227,18 @@ router.post('/parseNOFO', async (req, res) => {
     }
 
     // No provider available or both failed: return a minimal best-effort object so the UI can proceed.
-    return res.json({
-      success: true,
-      output: heuristicFallback(clipped),
+    // Both AI providers unavailable or failed. Return NO output object so callers
+    // cannot accidentally pipe an incomplete record into the pipeline (Goal 1).
+    // Include the heuristic data only under a clearly-namespaced key so the UI
+    // can display something useful without treating it as a storable grant record.
+    return res.status(503).json({
+      success: false,
+      output: null,
+      heuristic_preview: heuristicFallback(clipped),
       ai_provider: 'fallback',
-      warning: 'AI provider unavailable; returned best-effort extraction.',
+      partial: true,
+      warning:
+        'AI provider unavailable. Heuristic preview is for display only â it must not be stored or matched without full AI extraction and manual review.',
     })
   } catch (error) {
     console.error('[parseNOFO] Failed:', error)

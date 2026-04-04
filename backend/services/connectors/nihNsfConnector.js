@@ -26,6 +26,10 @@ let lastRequestTime = 0;
 /**
  * Rate-limited fetch wrapper
  */
+// rateLimitedFetch is intentionally unused in this baseline-only connector.
+// TODO: Wire rateLimitedFetch into searchNIHOpportunities and searchNSFOpportunities
+// once NIH Guide RSS and NSF funding announcement ingestion is implemented.
+// Until then, this connector returns PROGRAM-type templates only (is_active:false).
 async function rateLimitedFetch(url, options = {}) {
   const now = Date.now();
   const timeSinceLastRequest = now - lastRequestTime;
@@ -106,6 +110,11 @@ export async function searchNIHOpportunities(params = {}) {
         'Nonprofit organizations',
         'U.S. entities'
       ],
+      eligible_applicant_types: ['institution', 'small_business', 'nonprofit'],
+      // Explicitly excludes individual/family/veteran/student applicant types.
+      // relevanceFilter MUST hard-reject when profile.applicant_type is
+      // 'individual','family','veteran','student','caregiver' and
+      // eligible_applicant_types does not include that type.
       application_url: mech.url,
       is_national: true,
       categories: ['Health', 'Research', 'Biomedical'],
@@ -114,12 +123,18 @@ export async function searchNIHOpportunities(params = {}) {
       type: 'PROGRAM', // Baseline mechanism, not verified open opportunity
       evidence_url: 'https://grants.nih.gov/funding/searchguide/index.html',
       last_verified_at: null, // Not verified - baseline only
-      is_active: true,
+      is_active: false,
       last_crawled: new Date().toISOString(),
       amount_min: 100000,
       amount_max: 500000, // Typical R01 direct costs per year; modular budget cap $250K/yr
       is_loan: false,
-      requires_match: false
+      requires_match: false,
+      ineligibility_reasons: ['unverified_mechanism_template', 'no_active_foa', 'requires_verified_ingestion'],
+      // DO NOT add match_decision or match_explanation here.
+      // These fields are owned exclusively by computeMatchDecision() (Goal 4).
+      // Callers MUST check is_active === false and type === 'PROGRAM' before
+      // forwarding to saveToProfilePipeline(). The connector signals
+      // non-readiness via is_active:false + type:'PROGRAM' only.
     });
   });
   
@@ -145,12 +160,11 @@ export async function searchNSFOpportunities(params = {}) {
   const opportunities = [
     {
       title: 'NSF CAREER Award (Mechanism)',
-      description: 'Faculty Early Career Development Program',
+      description: 'Support for early-career faculty who have the potential to serve as academic role models in research and education',
       sponsor: 'National Science Foundation',
       source: 'nsf.gov',
       source_id: 'CAREER',
       source_url: 'https://www.nsf.gov/funding/pgm_summ.jsp?pims_id=503214',
-      description_full: 'Support for early-career faculty who have the potential to serve as academic role models in research and education',
       eligibility_bullets: [
         'Tenure-track faculty',
         'Within 7 years of PhD',
@@ -164,12 +178,16 @@ export async function searchNSFOpportunities(params = {}) {
       type: 'PROGRAM', // Baseline mechanism, not verified open opportunity
       evidence_url: 'https://www.nsf.gov/funding/',
       last_verified_at: null, // Not verified - baseline only
-      is_active: true,
+      is_active: false,
       last_crawled: new Date().toISOString(),
       amount_min: 400000,
       amount_max: 500000,
       is_loan: false,
-      requires_match: false
+      requires_match: false,
+      ineligibility_reasons: ['unverified_mechanism_template', 'no_active_foa', 'requires_verified_ingestion'],
+      // DO NOT add match_decision or match_explanation here.
+      // Callers MUST gate on is_active === false + type === 'PROGRAM'.
+      // computeMatchDecision() is the sole decision authority (Goal 4).
     }
   ];
   
@@ -184,17 +202,27 @@ export async function getResearchOpportunityDetails(opportunityId, agency = 'NIH
     return {
       title: `NIH ${opportunityId} (Mechanism)`,
       sponsor: 'National Institutes of Health',
-      type: 'PROGRAM', // Baseline mechanism
+      type: 'PROGRAM',
+      // application_url intentionally absent: no verified FOA exists.
+      // Callers MUST treat absence of application_url as a hard disqualifier
+      // per Goal 1. Do NOT insert this record into the pipeline.
+      application_url: null,
       evidence_url: `https://grants.nih.gov/grants/guide/${opportunityId}`,
-      last_verified_at: null // Not verified - baseline only
+      last_verified_at: null,
+      is_active: false,
+      ineligibility_reasons: ['unverified_mechanism_template', 'no_application_url']
     };
   } else if (agency === 'NSF') {
     return {
       title: `NSF ${opportunityId} (Mechanism)`,
       sponsor: 'National Science Foundation',
-      type: 'PROGRAM', // Baseline mechanism
+      type: 'PROGRAM',
+      // application_url intentionally absent: no verified FOA exists.
+      application_url: null,
       evidence_url: `https://www.nsf.gov/funding/pgm_summ.jsp?pims_id=${opportunityId}`,
-      last_verified_at: null // Not verified - baseline only
+      last_verified_at: null,
+      is_active: false,
+      ineligibility_reasons: ['unverified_mechanism_template', 'no_application_url']
     };
   }
   

@@ -18,33 +18,45 @@ router.use(async (req, _res, next) => {
     await seedServiceCatalogFromExtract(req.db)
   } catch (error) {
     console.warn('[services] failed to ensure catalog seed:', error?.message || String(error))
+    // Continue with degraded functionality - catalog operations may fail
+    req.catalogSeedFailed = true
   }
   next()
 })
 
 router.get('/catalog', async (req, res) => {
-  const includeInactive = String(req.query?.include_inactive || '').toLowerCase() === 'true'
-  const catalog = await listServiceCatalog(req.db, { includeInactive })
-  res.json({ ok: true, catalog })
+  try {
+    const includeInactive = String(req.query?.include_inactive || '').toLowerCase() === 'true'
+    const catalog = await listServiceCatalog(req.db, { includeInactive })
+    res.json({ ok: true, catalog })
+  } catch (error) {
+    console.error('[services] GET /catalog error:', error?.message || String(error))
+    res.status(500).json({ ok: false, error: 'Failed to load service catalog' })
+  }
 })
 
-router.get('/terms', async (req, res) => {
-  const terms = await getLatestServiceTerms(req.db)
-  res.json({ ok: true, terms })
+router.get('/terms', ensureAuth, async (req, res) => {
+  try {
+    const terms = await getLatestServiceTerms(req.db)
+    res.json({ ok: true, terms })
+  } catch (error) {
+    console.error('[services] GET /terms error:', error?.message || String(error))
+    res.status(500).json({ ok: false, error: 'Failed to load service terms' })
+  }
 })
 
-async function getClientCategoryForProfile(db, profileId) {
+async function getClientCategoryForProfile(db, profileId, userId) {
   const row = await db
     .prepare(
       `
         SELECT p.id, p.primary_type, o.applicant_type, o.annual_budget
         FROM profiles p
         LEFT JOIN organizations o ON o.id = p.organization_id
-        WHERE p.id = ?
+        WHERE p.id = ? AND p.user_id = ?
         LIMIT 1
       `,
     )
-    .get(String(profileId))
+    .get(String(profileId), String(userId))
   if (!row) return null
 
   const applicantType = String(row.applicant_type || row.primary_type || '').toLowerCase()
@@ -64,13 +76,16 @@ async function getClientCategoryForProfile(db, profileId) {
 router.post('/purchases', ensureAuth, async (req, res) => {
   await ensureServiceCatalogSchema(req.db)
 
+  const userId = req.ctx?.userId ?? req.user?.userId ?? null
+  if (!userId) return res.status(401).json({ ok: false, error: 'Authentication required' })
+
   const body = req.body ?? {}
   const serviceSlug = typeof body.service_slug === 'string' ? body.service_slug.trim() : ''
   const profileId = typeof body.profile_id === 'string' ? body.profile_id.trim() : (req.ctx?.activeProfileId ? String(req.ctx.activeProfileId) : '')
 
   let clientCategory = typeof body.client_category === 'string' ? body.client_category.trim() : ''
   if (!clientCategory && profileId) {
-    clientCategory = (await getClientCategoryForProfile(req.db, profileId)) || ''
+    clientCategory = (await getClientCategoryForProfile(req.db, profileId, req.ctx?.userId ?? req.user?.userId ?? null)) || ''
   }
 
   if (!serviceSlug) return res.status(400).json({ ok: false, error: 'service_slug required' })
@@ -87,33 +102,9 @@ router.post('/purchases', ensureAuth, async (req, res) => {
   const terms = await getLatestServiceTerms(req.db)
   const purchaseId = crypto.randomUUID()
 
-  await req.db.prepare(
-    `
-      INSERT INTO service_purchases (
-        id, user_id, profile_id, organization_id,
-        service_id, client_category, pricing_model,
-        status, agreed_terms_version, agreed_at,
-        created_at, updated_at
-      ) VALUES (
-        ?, ?, ?, (SELECT organization_id FROM profiles WHERE id = ?),
-        ?, ?, ?,
-        'draft', ?, CURRENT_TIMESTAMP,
-        CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
-      )
-    `,
-  ).run(
-    purchaseId,
-    req.ctx?.userId ?? req.user?.userId ?? null,
-    profileId || null,
-    profileId || null,
-    String(svc.id),
-    clientCategory,
-    String(svc.pricing_model),
-    terms?.version || null,
-  )
-
+  // Pre-validate all milestone prices before writing anything
+  let milestonePrices = []
   if (String(svc.pricing_model) === 'milestone') {
-    // Create milestone payment rows (pending) based on phase price rows
     for (const phase of MILESTONE_PHASES) {
       const price = await req.db
         .prepare(
@@ -131,17 +122,54 @@ router.post('/purchases', ensureAuth, async (req, res) => {
       if (!price) {
         return res.status(500).json({ ok: false, error: `missing milestone price for ${phase}` })
       }
-      await req.db.prepare(
-        `
-          INSERT INTO milestone_payments (
-            id, purchase_id, phase, amount_cents, currency, status, created_at, updated_at
-          ) VALUES (
-            ?, ?, ?, ?, 'usd', 'pending', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
-          )
-        `,
-      ).run(crypto.randomUUID(), purchaseId, phase, Number(price.amount_cents))
+      milestonePrices.push({ phase, amount_cents: Number(price.amount_cents) })
     }
   }
+
+  // All prices confirmed â now write atomically
+  const insertPurchase = req.db.prepare(
+    `
+      INSERT INTO service_purchases (
+        id, user_id, profile_id, organization_id,
+        service_id, client_category, pricing_model,
+        status, agreed_terms_version, agreed_at,
+        created_at, updated_at
+      ) VALUES (
+        ?, ?, ?, (SELECT organization_id FROM profiles WHERE id = ?),
+        ?, ?, ?,
+        'draft', ?, CURRENT_TIMESTAMP,
+        CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+      )
+    `,
+  )
+
+  const insertMilestone = req.db.prepare(
+    `
+      INSERT INTO milestone_payments (
+        id, purchase_id, phase, amount_cents, currency, status, created_at, updated_at
+      ) VALUES (
+        ?, ?, ?, ?, 'usd', 'pending', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+      )
+    `,
+  )
+
+  const runTransaction = req.db.transaction(() => {
+    insertPurchase.run(
+      purchaseId,
+      req.ctx?.userId ?? req.user?.userId ?? null,
+      profileId || null,
+      profileId || null,
+      String(svc.id),
+      clientCategory,
+      String(svc.pricing_model),
+      terms?.version || null,
+    )
+    for (const { phase, amount_cents } of milestonePrices) {
+      insertMilestone.run(crypto.randomUUID(), purchaseId, phase, amount_cents)
+    }
+  })
+
+  runTransaction()
 
   res.status(201).json({
     ok: true,
@@ -182,7 +210,8 @@ router.get('/purchases', ensureAuth, async (req, res) => {
       milestones = await req.db
         .prepare('SELECT * FROM milestone_payments WHERE purchase_id = ? ORDER BY phase ASC')
         .all(pid)
-    } catch {
+    } catch (error) {
+      console.error(`Failed to fetch milestones for purchase ${pid}:`, error)
       milestones = []
     }
 
@@ -191,7 +220,8 @@ router.get('/purchases', ensureAuth, async (req, res) => {
       time = await req.db
         .prepare('SELECT COALESCE(SUM(rounded_minutes), 0) AS total FROM hourly_time_entries WHERE purchase_id = ?')
         .get(pid)
-    } catch {
+    } catch (error) {
+      console.error(`Failed to fetch time entries for purchase ${pid}:`, error)
       time = { total: 0 }
     }
 
@@ -200,7 +230,8 @@ router.get('/purchases', ensureAuth, async (req, res) => {
       invoices = await req.db
         .prepare('SELECT * FROM hourly_invoices WHERE purchase_id = ? ORDER BY created_at DESC LIMIT 10')
         .all(pid)
-    } catch {
+    } catch (error) {
+      console.error(`Failed to fetch invoices for purchase ${pid}:`, error)
       invoices = []
     }
 

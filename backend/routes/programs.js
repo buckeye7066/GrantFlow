@@ -1,20 +1,38 @@
 import express from 'express'
 import { validatePagination } from '../utils/validation.js'
+import { requireAuthenticatedUser } from '../utils/accessControl.js'
 
 const router = express.Router()
+
+// Require authentication for all program routes
+router.use((req, res, next) => {
+  const user = requireAuthenticatedUser(req, res)
+  if (!user) return
+  return next()
+})
+
+// Add database middleware
+router.use((req, res, next) => {
+  if (!req.db) {
+    return res.status(500).json({ error: 'Database not available' })
+  }
+  next()
+})
 
 function normalizeTrack(track) {
   if (!track) return null
   const t = String(track).trim().toLowerCase()
   if (t === 'client' || t === 'a' || t === 'beneficiary') return 'CLIENT'
   if (t === 'provider' || t === 'b' || t === 'caregiver') return 'PROVIDER'
-  if (t === 'CLIENT') return 'CLIENT'
-  if (t === 'PROVIDER') return 'PROVIDER'
+  // Unrecognised but non-empty track: log so operators can detect bad callers
+  console.warn('[programs] normalizeTrack: unrecognised track value:', track)
   return null
 }
 
 function tableForTrack(track) {
-  return track === 'PROVIDER' ? 'programs_provider' : 'programs_client'
+  if (track === 'PROVIDER') return 'programs_provider'
+  if (track === 'CLIENT') return 'programs_client'
+  throw new Error(`tableForTrack: unexpected track value: ${track}`)
 }
 
 function buildFilters({ search, jurisdiction, state, county, isActive, dialect }) {
@@ -23,8 +41,13 @@ function buildFilters({ search, jurisdiction, state, county, isActive, dialect }
 
   if (typeof isActive === 'string') {
     const v = isActive.trim().toLowerCase()
-    if (v === 'true' || v === '1') where.push(dialect === 'postgres' ? 'is_active = TRUE' : 'is_active = 1')
-    if (v === 'false' || v === '0') where.push('is_active = 0')
+    if (v === 'true' || v === '1') {
+      where.push('is_active = ?')
+      params.push(1)
+    } else if (v === 'false' || v === '0') {
+      where.push('is_active = ?')
+      params.push(0)
+    }
   }
 
   if (jurisdiction) {
@@ -69,7 +92,7 @@ router.get('/', async (req, res) => {
 
     const fetchTrack = async (t) => {
       const table = tableForTrack(t)
-      const { clause, params } = buildFilters({ search, jurisdiction, state, county, isActive, dialect: req.db?.dialect })
+      const { clause, params } = buildFilters({ search, jurisdiction, state, county, isActive, dialect: req.db?.dialect || 'sqlite' })
       const rows = await req.db
         .prepare(
           `
@@ -82,6 +105,7 @@ router.get('/', async (req, res) => {
           `,
         )
         .all(...params, limit, offset)
+      const countParams = [...params]
       const total = (await req.db
         .prepare(
           `
@@ -90,7 +114,7 @@ router.get('/', async (req, res) => {
             ${clause}
           `,
         )
-        .get(...params))?.total
+        .get(...countParams))?.total
       return { data: rows, total: total ?? rows.length }
     }
 

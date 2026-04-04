@@ -66,12 +66,27 @@ export async function extractTextWithFallback({
     ocrUsed = true
     methodsUsed = Array.from(new Set([...methodsUsed, 'ocr']))
     warnings.push(...(Array.isArray(ocr?.warnings) ? ocr.warnings : []))
-    text = ocrText
+    if (ocrText) {
+      text = ocrText
+    } else {
+      warnings.push('OCR returned no text for image; retaining base extraction result if available.')
+      ocrUsed = false
+      ocrConfidence = null
+    }
+    if (pages !== null && pages !== 1) {
+      warnings.push(`Base extractor reported ${pages} pages for an image file; overriding to 1.`)
+    }
     pages = 1
   }
 
   // PDFs: OCR fallback when thresholds are met.
-  if (detected.source_type === 'pdf') {
+  const effectivelyPdf = detected.source_type === 'pdf' ||
+    (detected.source_type !== 'image' && (mimeType === 'application/pdf' || String(fileName || '').toLowerCase().endsWith('.pdf')))
+
+  if (effectivelyPdf) {
+    if (detected.source_type !== 'pdf') {
+      warnings.push(`File detected as '${detected.source_type}' but mimeType/fileName suggests PDF; attempting PDF OCR fallback.`)
+    }
     const shouldOcr = shouldOcrPdf({ extractedText: text, pages })
     if (shouldOcr) {
       let tmpDir = null
@@ -97,16 +112,20 @@ export async function extractTextWithFallback({
         const rasterFiles = Array.isArray(raster?.files) ? raster.files : []
         for (let i = 0; i < rasterFiles.length; i++) {
           const imgPath = rasterFiles[i]
-          const r = await provider.recognize({
-            filePath: imgPath,
-            mime: 'image/png',
-            language: ocrLanguage,
-            handwriting,
-          })
-          const pageText = normalizeText(r?.text || '')
-          if (pageText) perPageTexts.push(`\n\n--- Page ${i + 1} (OCR) ---\n${pageText}`)
-          if (typeof r?.confidence === 'number' && Number.isFinite(r.confidence)) perPageConfs.push(r.confidence)
-          if (Array.isArray(r?.warnings) && r.warnings.length) warnings.push(...r.warnings)
+          try {
+            const r = await provider.recognize({
+              filePath: imgPath,
+              mime: 'image/png',
+              language: ocrLanguage,
+              handwriting,
+            })
+            const pageText = normalizeText(r?.text || '')
+            if (pageText) perPageTexts.push(`\n\n--- Page ${i + 1} (OCR) ---\n${pageText}`)
+            if (typeof r?.confidence === 'number' && Number.isFinite(r.confidence)) perPageConfs.push(r.confidence)
+            if (Array.isArray(r?.warnings) && r.warnings.length) warnings.push(...r.warnings)
+          } catch (pageError) {
+            warnings.push(`OCR failed for page ${i + 1}: ${pageError?.message || String(pageError)}`)
+          }
         }
 
         ocrText = normalizeText(perPageTexts.join('\n').trim())
@@ -115,6 +134,15 @@ export async function extractTextWithFallback({
         if (perPageConfs.length > 0) {
           const avg = perPageConfs.reduce((a, b) => a + b, 0) / perPageConfs.length
           ocrConfidence = avg
+        } else if (ocrUsed) {
+          // OCR ran but no page returned a finite confidence score
+          ocrConfidence = -1
+          const allFailed = perPageTexts.length === 0 && rasterFiles.length > 0
+          if (allFailed) {
+            warnings.push('OCR ran but every page threw an error; ocr_confidence set to -1 as sentinel.')
+          } else {
+            warnings.push('OCR ran but no page returned a finite confidence value; ocr_confidence set to -1 as sentinel.')
+          }
         }
 
         const baseTrimmed = String(text || '').trim()
@@ -127,6 +155,9 @@ export async function extractTextWithFallback({
           pages = rasterFiles.length
         } else {
           warnings.push('OCR completed but produced little text; keeping PDF text extraction result.')
+          if (!ocrText && rasterFiles.length > 0) {
+            warnings.push(`OCR_EMPTY: processed ${rasterFiles.length} page(s) but extracted zero characters â document may be a scanned image with unrecognised content.`)
+          }
         }
       } catch (error) {
         // Do not hard-fail the entire ingestion just because OCR tooling is missing.
@@ -137,9 +168,9 @@ export async function extractTextWithFallback({
         )
       } finally {
         if (typeof raster?.cleanup === 'function') {
-          await raster.cleanup()
-        } else {
-          await cleanupPdfPages(tmpDir)
+          try { await raster.cleanup() } catch (_) { /* cleanup best-effort */ }
+        } else if (tmpDir) {
+          try { await cleanupPdfPages(tmpDir) } catch (_) { /* cleanup best-effort */ }
         }
       }
     }
@@ -149,9 +180,11 @@ export async function extractTextWithFallback({
   const charCount = finalText.length
   const wordCount = countWords(finalText)
   const avgCharsPerPage = pages && pages > 0 ? charCount / Math.max(1, pages) : null
+  const finishedAt = nowIso()
 
   const meta = {
     source_type: detected.source_type,
+    file_name: fileName ?? null,
     methods_used: methodsUsed,
     pages: pages ?? null,
     char_count: charCount,
@@ -161,12 +194,12 @@ export async function extractTextWithFallback({
     ocr_used: ocrUsed,
     ocr_confidence: ocrConfidence,
     started_at: startedAt,
-    finished_at: nowIso(),
+    finished_at: finishedAt,
     provenance: {
       extractor: 'grantflow-document-ingestion',
       version: '1',
       ocr_provider: ocrUsed ? provider.id : null,
-      timestamps: { started_at: startedAt, finished_at: nowIso() },
+      timestamps: { started_at: startedAt, finished_at: finishedAt },
     },
   }
 

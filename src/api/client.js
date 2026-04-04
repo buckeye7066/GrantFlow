@@ -1,4 +1,4 @@
-import { env } from '@/config/env.js'
+import { env, getApiBasePrefixForFetch } from '@/config/env.js'
 import { createLogger } from '@/utils/logger'
 import { toast as showToast } from '@/components/ui/use-toast'
 
@@ -7,13 +7,26 @@ import { toast as showToast } from '@/components/ui/use-toast'
 // Use relative URLs in production (proxied by Vercel) to avoid CORS issues.
 // When the app is served under a base path (e.g. /grantflow), API requests must
 // use that prefix so rewrites like /grantflow/api/:path* reach the backend.
-const API_URL = env.apiUrl || (env.appBase && env.appBase !== '/' ? env.appBase : '')
+// getApiBasePrefixForFetch() re-applies axiombiolabs same-origin rules (never Railway cross-origin).
+const API_URL = getApiBasePrefixForFetch()
 
 // Frontend startup sanity (non-fatal): warn on env drift / misconfiguration.
 if (import.meta.env.DEV) {
   const raw = import.meta.env.VITE_API_URL
   if (raw && !/^https?:\/\//i.test(String(raw))) {
     console.warn('[env] VITE_API_URL should be http(s)://...; falling back to same-origin proxy. value=', raw)
+  }
+  if (!raw && API_URL && API_URL !== '') {
+    console.warn(
+      '[env] API_URL resolved from appBase as a path prefix:',
+      API_URL,
+      'â ensure Vercel rewrites map',
+      API_URL + '/api/:path*',
+      'to the backend, otherwise all API calls will 404 silently.',
+    )
+  }
+  if (!raw && API_URL === '') {
+    console.info('[env] API_URL is empty string â using same-origin proxy (relative URLs). Ensure the proxy is configured.')
   }
 }
 
@@ -165,83 +178,79 @@ class APIClient {
       throw this.createAuthError('Session expired');
     }
     
-    // Single-flight refresh: if a refresh is already in progress, await it
-    if (this.refreshPromise) {
-      log.debug('refresh already in progress; waiting')
-      try {
-        await this.refreshPromise;
-        // After the refresh completes, retry the original request
-        log.debug('refresh complete; retrying original request')
-        return this.fetch(originalRequest.endpoint, originalRequest.options);
-      } catch (error) {
-        console.error('[APIClient] Refresh failed while waiting:', error.message);
-        throw error;
-      }
+    // Delegate to the shared single-flight refreshTokens() so all callers
+    // (handleUnauthorized, authStore timer, proactive refresh) share one promise.
+    log.debug('starting token refresh via refreshTokens()')
+    try {
+      await this.refreshTokens()
+    } catch (error) {
+      console.error('[APIClient] Token refresh failed:', error.message)
+      const authError = this.createAuthError('Your session has expired. Please sign in again.')
+      authError.isAuthError = true
+      throw authError
     }
-    
-    // Start a new refresh
-    log.debug('starting token refresh')
+
+    // Retry the original request with the new token.
+    log.debug('retrying original request after refresh')
+    return this.fetch(originalRequest.endpoint, originalRequest.options);
+  }
+
+  /**
+   * Refresh the access token using the single-flight refreshPromise.
+   * Call this instead of hitting /api/auth/refresh directly so that concurrent
+   * callers (e.g. authStore's scheduleSessionRefresh timer) share the same
+   * in-flight request and we never send two simultaneous refresh calls.
+   *
+   * @returns {Promise<{accessToken: string, refreshToken?: string}>} The new tokens.
+   */
+  async refreshTokens() {
+    const refreshToken = this.getRefreshToken()
+    if (!refreshToken) {
+      this.clearToken()
+      throw this.createAuthError('Authentication required')
+    }
+
+    // Reuse any in-flight refresh.
+    if (this.refreshPromise) {
+      log.debug('refreshTokens: reusing in-flight refresh promise')
+      return this.refreshPromise
+    }
+
+    // Start a new single-flight refresh.
+    log.debug('refreshTokens: starting new refresh')
     this.refreshPromise = (async () => {
       try {
         const response = await fetch(`${this.baseUrl}/api/auth/refresh`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          credentials: 'include', // Ensure cookies are sent with the request
+          credentials: 'include',
           body: JSON.stringify({ refreshToken }),
-        });
-        
+        })
+
         if (!response.ok) {
-          const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
-          console.error('[APIClient] Refresh request failed:', response.status, errorData);
-          
-          // Clear tokens immediately on 401 from refresh endpoint
+          const errorData = await response.json().catch(() => ({ error: 'Unknown error' }))
           if (response.status === 401) {
-            console.warn('[APIClient] Invalid refresh token, clearing auth state');
-            this.clearToken();
+            this.clearToken()
           }
-          
-          throw new Error(errorData.error || `Refresh failed with status ${response.status}`);
+          throw new Error(errorData.error || `Refresh failed with status ${response.status}`)
         }
-        
-        const data = await response.json();
-        log.debug('refresh successful; updating tokens')
-        
-        if (data?.accessToken) {
-          this.setToken(data.accessToken);
-        } else {
-          console.warn('[APIClient] No accessToken in refresh response');
-        }
-        
-        if (data?.refreshToken) {
-          this.setRefreshToken(data.refreshToken);
-        }
-        
-        return data;
+
+        const data = await response.json()
+        if (data?.accessToken) this.setToken(data.accessToken)
+        if (data?.refreshToken) this.setRefreshToken(data.refreshToken)
+        return data
       } catch (error) {
-        // Refresh failed - clear everything and notify once
-        console.error('[APIClient] Token refresh failed:', error.message);
-        this.clearToken();
-        
-        // Create a user-friendly error
-        const authError = this.createAuthError('Your session has expired. Please sign in again.');
-        authError.isAuthError = true; // Flag this as an auth error
-        
+        this.clearToken()
         if (this.onAuthFailure) {
-          this.onAuthFailure('Your session expired. Sign in again to continue.');
-        } else {
-          this.auth.redirectToLogin();
+          this.onAuthFailure('Your session expired. Sign in again to continue.')
         }
-        throw authError;
+        throw error
       } finally {
-        // Clear the promise after completion (success or failure)
-        this.refreshPromise = null;
+        this.refreshPromise = null
       }
-    })();
-    
-    await this.refreshPromise;
-    // Retry the original request with new token
-    log.debug('retrying original request after refresh')
-    return this.fetch(originalRequest.endpoint, originalRequest.options);
+    })()
+
+    return this.refreshPromise
   }
 
   // HTTP method shims.
@@ -324,9 +333,20 @@ class APIClient {
       headers['Authorization'] = `Bearer ${token}`;
     }
 
-    const activeProfileId = this.getActiveProfileId?.()
+    const activeProfileId = this.getActiveProfileId()
     if (activeProfileId) {
-      headers['X-Profile-Id'] = headers['X-Profile-Id'] || activeProfileId
+      // Always enforce the current active profile â do not allow a stale value
+      // passed in via requestOptions.headers to silently override it.
+      if (!headers['X-Profile-Id']) {
+        headers['X-Profile-Id'] = activeProfileId
+      } else if (headers['X-Profile-Id'] !== String(activeProfileId)) {
+        log.warn(
+          `[APIClient] X-Profile-Id header mismatch: passed=${headers['X-Profile-Id']} active=${activeProfileId}. Using active profile id.`
+        )
+        headers['X-Profile-Id'] = activeProfileId
+      }
+    } else if (headers['X-Profile-Id']) {
+      log.warn('[APIClient] X-Profile-Id set in headers but no active profile on client â forwarding caller value.')
     }
 
     headers['X-Request-Id'] = headers['X-Request-Id'] || requestId;
@@ -400,8 +420,10 @@ class APIClient {
           throw this.createAuthError('Authentication failed after retry');
         }
         
-        // Mark the retry and handle unauthorized
-        const retryOptions = { ...requestOptions, _isRetry: true };
+        // Mark the retry and handle unauthorized.
+        // Pass _isRetry through the original options so handleUnauthorized's
+        // re-invocation of this.fetch() still carries the guard flag.
+        const retryOptions = { ...options, _isRetry: true };
         return this.handleUnauthorized({ endpoint, options: retryOptions });
       }
 
@@ -472,6 +494,25 @@ class APIClient {
         timeoutErr.status = 504;
         timeoutErr.requestId = headers['X-Request-Id'] || null;
         throw timeoutErr;
+      }
+
+      // Browser/network transport failure (DNS/CORS/proxy/backend unreachable).
+      // fetch() throws TypeError before an HTTP response exists, so this is not a
+      // server 500 and should be surfaced distinctly to callers/UI.
+      if (error instanceof TypeError && /failed to fetch/i.test(String(error.message || ''))) {
+        const networkErr = new Error(
+          'Network request failed before the server responded. Check backend availability, API URL/proxy, and CORS.',
+        );
+        networkErr.status = 0;
+        networkErr.requestId = headers['X-Request-Id'] || null;
+        networkErr.errorCode = 'NETWORK_FETCH_FAILED';
+        networkErr.details = {
+          endpoint,
+          url,
+          method,
+          originalError: String(error.message || error),
+        };
+        throw networkErr;
       }
       
       // Re-throw other errors
@@ -559,7 +600,7 @@ class APIClient {
         if (!Array.isArray(items) || items.length === 0) {
           return [];
         }
-        return Promise.all(
+        const results = await Promise.allSettled(
           items.map((item) =>
             this.fetch(endpoint, {
               method: 'POST',
@@ -567,6 +608,14 @@ class APIClient {
             }),
           ),
         );
+        const failures = results.filter((r) => r.status === 'rejected');
+        if (failures.length > 0) {
+          log.warn(
+            `[APIClient] bulkCreate: ${failures.length}/${items.length} items failed`,
+            failures.map((f) => f.reason?.message),
+          );
+        }
+        return results.map((r) => (r.status === 'fulfilled' ? r.value : null));
       },
     };
   }
@@ -672,15 +721,25 @@ class APIClient {
 
         return await this.fetch('/api/auth/me');
       } catch (error) {
-        // If it's an auth error (401 or session expired), return null gracefully
+        // If it's an auth error (401 or 403), return null gracefully — user needs to sign in
         if (error.status === 401 || error.status === 403 || error.isAuthError) {
           log.debug('auth check failed; user needs to sign in')
           this.clearToken();
           return null;
         }
-        // For other errors, log but return null to avoid breaking the app
-        console.warn('[APIClient] Error checking auth status:', error.message);
-        return null;
+        // Network/transport failures (server unreachable, DNS, etc.): log but return null
+        // so that the app can still render without a user context.
+        if (
+          error.status === 0 ||
+          error.name === 'AbortError' ||
+          error.errorCode === 'NETWORK_FETCH_FAILED' ||
+          (error instanceof TypeError && /failed to fetch/i.test(String(error.message || '')))
+        ) {
+          console.warn('[APIClient] Network error checking auth status (server may be starting):', error.message);
+          return null;
+        }
+        // For other errors (5xx, unexpected), rethrow so callers can detect server issues.
+        throw error;
       }
     },
     
@@ -696,19 +755,19 @@ class APIClient {
     
     logout: () => {
       this.clearToken();
-      try {
-        this.fetch('/api/auth/logout', { method: 'POST' });
-      } catch {
-        // non-blocking
-      }
+      this.fetch('/api/auth/logout', { method: 'POST' }).catch(() => {
+        // Non-blocking — best-effort server notification; ignore errors.
+      });
       if (typeof window !== 'undefined') {
-        window.location.href = `${env.appBase.replace(/\/$/, '')}/login`;
+        const base = (env.appBase || '').replace(/\/$/, '');
+        window.location.href = `${base}/login`;
       }
     },
     
     redirectToLogin: () => {
       if (typeof window !== 'undefined') {
-        window.location.href = `${env.appBase.replace(/\/$/, '')}/login`;
+        const base = (env.appBase || '').replace(/\/$/, '');
+        window.location.href = `${base}/login`;
       }
     }
   };

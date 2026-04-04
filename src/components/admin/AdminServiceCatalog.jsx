@@ -102,11 +102,13 @@ export default function AdminServiceCatalog() {
                 const label = `${p.client_category}${p.milestone_phase ? ` • ${p.milestone_phase}` : ''}`
                 const needsMapping = !p.stripe_price_id
                 return (
-                  <div key={p.id} className="grid grid-cols-1 md:grid-cols-4 gap-2 items-center border rounded-md p-3">
+                  <div key={p.id} data-price-row className="grid grid-cols-1 md:grid-cols-4 gap-2 items-center border rounded-md p-3">
                     <div className="text-sm font-medium text-slate-900">{label}</div>
                     <div className="text-sm text-slate-700">{formatUsdFromCents(p.amount_cents)}</div>
                     <Input
+                      key={p.stripe_price_id ?? `unmapped-${p.id}`}
                       defaultValue={p.stripe_price_id || ''}
+                      data-price-input
                       placeholder="price_..."
                       className={needsMapping ? 'border-amber-300' : ''}
                       onBlur={(e) => {

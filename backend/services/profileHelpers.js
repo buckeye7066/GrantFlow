@@ -1,5 +1,27 @@
 import zipcodes from 'zipcodes'
 import { resolveCountyForZip } from './geo/zipCountyResolver.js'
+import crypto from 'crypto'
+
+/**
+ * Resolve the canonical applicant type from a profile object.
+ *
+ * The database column is `primary_type` but the frontend and some services
+ * use `applicant_type`.  profileTaxonomy uses `primary_profile_type` inside
+ * its facets object.  This helper normalises all three so callers never need
+ * to remember the precedence chain.
+ *
+ * @param {Object} profile - A profile row or profileContext.profile
+ * @returns {string|null}
+ */
+export function resolveApplicantType(profile) {
+  if (!profile || typeof profile !== 'object') return null
+  return (
+    profile.applicant_type ??
+    profile.primary_type ??
+    profile.primary_profile_type ??
+    null
+  )
+}
 
 function safeParseJSON(value, fallback) {
   if (!value) return fallback
@@ -22,6 +44,7 @@ function safeParseJSON(value, fallback) {
 export function safeParseArrayField(value, fallback = []) {
   if (!value) return fallback
   if (Array.isArray(value)) return value
+  if (value instanceof Set) return Array.from(value)
   if (typeof value === 'string') {
     const trimmed = value.trim()
     if (trimmed.startsWith('[')) {
@@ -1657,10 +1680,14 @@ export function buildProfileSignals({ profile, sections, asOf = null }) {
     professional_remediation_funding: ['probe','remediation','ethics course','professional boundaries','disciplinary remediation','board required education','mandated continuing education','professional compliance training'],
   }
   const needs = new Set()
+  // Check both individual tokens (keywordSet) AND full phrases (phraseSet) so multi-word
+  // triggers like 'food bank', 'mental health', 'probe ethics' are correctly matched.
   const allKws = Array.from(keywordSet)
-  for (const kw of allKws) {
+  const allPhrases = Array.from(phraseSet)
+  const allSignals = [...allKws, ...allPhrases]
+  for (const signal of allSignals) {
     for (const [need, triggers] of Object.entries(NEED_MAP)) {
-      if (triggers.some(t => kw.includes(t))) needs.add(need)
+      if (triggers.some(t => signal.includes(t))) needs.add(need)
     }
   }
   if (assistanceSet.has('medicaid') || assistanceSet.has('medicare')) needs.add('healthcare')
@@ -1681,11 +1708,42 @@ export function buildProfileSignals({ profile, sections, asOf = null }) {
   let applicantType = 'individual'
   if (applicantTypeSet.has('organization') || applicantTypeSet.has('nonprofit') || applicantTypeSet.has('501c3')) {
     applicantType = 'organization'
-  } else if (applicantTypeSet.has('student') || applicantTypeSet.has('college student') || applicantTypeSet.has('high school student') || demographicSet.has('current_student')) {
+  } else if (applicantTypeSet.has('small business') || applicantTypeSet.has('small_business') ||
+             applicantTypeSet.has('women-owned business') || applicantTypeSet.has('minority-owned business') ||
+             applicantTypeSet.has('veteran-owned business') || applicantTypeSet.has('self_employed')) {
+    applicantType = 'business'
+    needs.add('business')
+  } else if (applicantTypeSet.has('student') || applicantTypeSet.has('college student') ||
+             applicantTypeSet.has('high school student') || demographicSet.has('current_student')) {
     applicantType = 'student'
     needs.add('education'); needs.add('scholarship')
+  } else if (militarySet.has('veteran') || militarySet.has('disabled_veteran')) {
+    applicantType = 'veteran'
+  } else if (familySet.has('caregiver')) {
+    applicantType = 'caregiver'
   }
-  if (needs.size === 0) {
+  // Map education/business/employment section signals to needs before fallback
+  if (applicantTypeSet.has('student') || education.level || education.current_institution || education.school_name) {
+    needs.add('education')
+  }
+  if (applicantTypeSet.has('small business') || applicantTypeSet.has('small_business') ||
+      sections?.small_business_details?.naics_code) {
+    needs.add('business')
+  }
+  if (assistanceSet.has('unemployed') || assistanceSet.has('displaced_worker') ||
+      assistanceSet.has('underemployed')) {
+    needs.add('employment')
+  }
+  // Preserve the profile's existing needs so they survive the signal layer.
+  // Without this, a profile with needs: ['disability'] would lose that signal when
+  // sections don't produce keyword triggers for 'disability'.
+  const existingNeeds = safeParseArrayField(profile?.needs, [])
+  for (const n of existingNeeds) {
+    const key = typeof n === 'string' ? n.trim().toLowerCase().replace(/\s+/g, '_') : null
+    if (key) needs.add(key)
+  }
+  // Only inject generic fallback when the profile has truly no data at all
+  if (needs.size === 0 && keywordSet.size === 0 && applicantTypeSet.size === 0) {
     ;['utilities','housing','food','healthcare','cash_assistance'].forEach(n => needs.add(n))
   }
 
@@ -1779,7 +1837,13 @@ export function buildProfileSignals({ profile, sections, asOf = null }) {
     fields_used: keywordSet.size + phraseSet.size,
     sections_present: presentSections.length,
     sections_expected: expectedSections.length,
-    pct: presentSections.length > 0 ? 100 : 0, // 100% if any sections present
+    // Reflect actual section coverage as a fraction so crawlers can distinguish
+    // a profile with 1 section from one with 18 sections.
+    pct: expectedSections.length > 0
+      ? Math.round((presentSections.length / expectedSections.length) * 100)
+      : 0,
+    // Separate signal richness metric: non-zero only when signals were extracted
+    signal_richness: keywordSet.size > 0 ? Math.min(100, keywordSet.size) : 0,
   }
 
   return {
@@ -1813,24 +1877,164 @@ export function buildProfileSignals({ profile, sections, asOf = null }) {
   }
 }
 
-export function calculateMatchScore(profile, opportunity) {
-  // Simple match scoring algorithm
-  let score = 50 // Base score
-  
-  // Geographic match
-  if (opportunity.state === profile.state || opportunity.is_national) {
-    score += 20
+// ============================================================
+// PROFILE DIGEST — for crawler idempotency (GF-AUDIT-019)
+// ============================================================
+
+/**
+ * Return the list of section fields that are "material" for crawl purposes.
+ * Changes to these fields should produce a different idempotency key,
+ * triggering a fresh discovery run.  Cosmetic fields (notes, updated_by,
+ * updated_at, display preferences) are intentionally excluded.
+ *
+ * @returns {Object.<string, string[]>} Map of section_key → material field names
+ */
+export function getMaterialFields() {
+  return {
+    basic_information: [
+      'name', 'email', 'phone', 'address', 'zip_code', 'postal_code',
+      'city', 'state', 'country',
+    ],
+    organization_details: [
+      'organization_name', 'organization_type', 'mission', 'primary_type',
+      'is_501c3', 'ein', 'uei', 'sam_registered', 'faith_based',
+      'year_founded', 'annual_budget', 'staff_count',
+    ],
+    financial_information: [
+      'annual_income', 'household_income', 'income_level', 'assets',
+      'receiving_benefits', 'benefits_list',
+    ],
+    demographics: [
+      'race', 'ethnicity', 'age', 'gender', 'disability_status',
+      'veteran_status', 'immigration_status',
+    ],
+    narrative: [
+      'mission_statement', 'programs_description', 'target_population',
+      'geographic_focus', 'primary_focus_area',
+    ],
+    location_focus: [
+      'service_area', 'counties', 'cities', 'states', 'national',
+      'zip_codes',
+    ],
+    student_details: [
+      'school_name', 'grade_level', 'gpa', 'major', 'degree_level',
+      'enrollment_status',
+    ],
+    health_medical: [
+      'chronic_illness', 'conditions', 'disability', 'mental_health',
+      'substance_recovery',
+    ],
+    military_service: [
+      'veteran', 'branch', 'service_era', 'discharge_status',
+    ],
+    small_business_details: [
+      'naics_code', 'business_type', 'employee_count', 'annual_revenue',
+      'years_in_business',
+    ],
+    programs_services: [
+      'primary_programs', 'populations_served', 'service_types',
+    ],
+    family_life: [
+      'household_size', 'children_count', 'marital_status', 'dependents',
+    ],
   }
-  
-  // Type match
-  if (opportunity.eligibility_criteria?.includes(profile.primary_type)) {
-    score += 15
+}
+
+/**
+ * Compute a short content-based digest of the material profile fields.
+ *
+ * The digest is intentionally coarse — it is designed to change when a user
+ * edits any field that would meaningfully alter crawler search strategy, but
+ * to remain stable across cosmetic/timestamp-only saves.
+ *
+ * @param {object} db - Database connection
+ * @param {string} profileId - Profile ID
+ * @returns {Promise<string>} First 16 hex chars of SHA-256 over material fields
+ */
+export async function computeProfileDigest(db, profileId) {
+  if (!profileId) return 'no-profile'
+
+  try {
+    // Load base profile (primary_type is material; location fields live in sections)
+    const profile = await db
+      .prepare('SELECT primary_type FROM profiles WHERE id = ? LIMIT 1')
+      .get(profileId)
+
+    if (!profile) return 'profile-not-found'
+
+    // Load all profile sections
+    const sectionRows = await db
+      .prepare('SELECT section_key, data FROM profile_sections WHERE profile_id = ? ORDER BY section_key')
+      .all(profileId)
+
+    const materialMap = getMaterialFields()
+
+    // Build a stable object containing only material fields across all sections
+    const digest = {}
+
+    // Include material profile-level fields
+    digest['__profile__'] = {
+      primary_type: profile.primary_type ?? null,
+    }
+
+    for (const row of sectionRows) {
+      const sectionKey = row.section_key
+      const materialKeys = materialMap[sectionKey]
+      if (!materialKeys) continue // section not tracked — skip
+
+      let data
+      try {
+        data = JSON.parse(row.data || '{}')
+      } catch {
+        data = {}
+      }
+
+      const materialData = {}
+      for (const field of materialKeys) {
+        const val = data[field]
+        if (val !== undefined && val !== null && val !== '') {
+          materialData[field] = val
+        }
+      }
+
+      if (Object.keys(materialData).length > 0) {
+        digest[sectionKey] = materialData
+      }
+    }
+
+    // Stable stringify (sorted keys at every level) then SHA-256, first 16 chars
+    let stable
+    try {
+      function stableStr(val) {
+        if (val === null || val === undefined) return 'null'
+        if (typeof val !== 'object') return JSON.stringify(val)
+        if (Array.isArray(val)) return '[' + val.map(stableStr).join(',') + ']'
+        const sorted = Object.keys(val).sort()
+        return '{' + sorted.map(k => JSON.stringify(k) + ':' + stableStr(val[k])).join(',') + '}'
+      }
+      stable = stableStr(digest)
+    } catch (strErr) {
+      console.warn('[computeProfileDigest] stableStr failed, falling back to JSON.stringify:', strErr?.message)
+      stable = JSON.stringify(digest) || profileId
+    }
+    return crypto.createHash('sha256').update(stable).digest('hex').substring(0, 16)
+  } catch (err) {
+    console.warn('[computeProfileDigest] Failed to compute digest:', err?.message)
+    return 'digest-error'
   }
-  
-  // REMOVED: Random variation for testing - use deterministic scoring only
-  // Use matchingEngine.js for production scoring
-  
-  return Math.min(100, score)
+}
+
+/**
+ * Compare two profile digests and determine whether the change is material.
+ * A change is material when the digests differ (non-cosmetic fields changed).
+ *
+ * @param {string} oldDigest - Digest before the change
+ * @param {string} newDigest - Digest after the change
+ * @returns {boolean} true if the profile changed materially
+ */
+export function hasMaterialProfileChange(oldDigest, newDigest) {
+  if (!oldDigest || !newDigest) return false
+  return oldDigest !== newDigest
 }
 
 export function summarizeProfileSignals(signals) {

@@ -18,9 +18,10 @@ function startServer(extraEnv = {}) {
     SQLITE_DB_PATH: dbPath,
     DB_AUTO_MIGRATE: 'true',
     AUTH_JWT_SECRET: 'test-secret-prod',
-    ALLOW_SQLITE_IN_PROD: 'true', // Allow SQLite in production for testing
-    ALLOW_EPHEMERAL_SQLITE: 'true', // Allow ephemeral SQLite paths for testing
-    ALLOW_EPHEMERAL_UPLOADS: 'true', // Explicitly allow ephemeral uploads in test harness
+    ALLOW_SQLITE_IN_PROD: 'true',
+    ALLOW_EPHEMERAL_SQLITE: 'true',
+    ALLOW_EPHEMERAL_UPLOADS: 'true',
+    ADMIN_TOKEN: 'test-admin-token-ci',
   }
 
   // Remove email service configuration to simulate unconfigured email service

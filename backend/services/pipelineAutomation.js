@@ -55,16 +55,12 @@ function compareStatuses(current, next) {
 function validateAdvance(current, suggested) {
     const currentMapped = mapLegacyStatus(current)
     const suggestedMapped = mapLegacyStatus(suggested)
+    // Ensure the suggested status is a known canonical status before accepting it
+    if (!PIPELINE_ALLOWED_STATUSES.includes(suggestedMapped)) return currentMapped
     const delta = compareStatuses(currentMapped, suggestedMapped)
-    // If AI suggests moving backward or staying, keep current
-  if (delta <= 0) return currentMapped
-        // Safety net: if AI suggests an intermediate prep stage, override to 'portal'
-        const PREP_STAGES = ['drafting', 'application_prep', 'revision', 'app_prep']
-        if (PREP_STAGES.includes(suggestedMapped) && PREP_STAGES.includes(currentMapped)) {
-                    return 'portal'
-        }
-    // Allow forward movement to whatever stage the AI recommends
-  return suggestedMapped
+    // If AI suggests moving backward, keep current
+    if (delta < 0) return currentMapped
+    return suggestedMapped
 }
 
 async function createAnthropicClient() {
@@ -186,7 +182,18 @@ function buildProfileSummary(profileContext) {
         sections: {},
   }
 
-  const includeKeys = ['basic_information', 'organization_details', 'financial_information']
+  const includeKeys = [
+        'basic_information',
+        'organization_details',
+        'financial_information',
+        'military',
+        'education',
+        'family',
+        'health',
+        'emergency',
+        'business',
+        'housing',
+    ]
     includeKeys.forEach((key) => {
           if (sections && sections[key]) {
                   summary.sections[key] = sections[key]
@@ -227,7 +234,9 @@ async function recordAutomationEvent(db, payload) {
 const PROCESSABLE_STATUSES = [
     'discovery', 'discovered', 'interested', 'auto_applied',
     'drafting', 'application_prep', 'revision',
-    // Also include legacy statuses that may still exist in DB
+    // Late-stage statuses that may still need AI-assisted advancement
+    'portal', 'submitted',
+    // Legacy statuses that may still exist in DB
     'app_prep',
   ]
 
@@ -349,7 +358,10 @@ export async function processPipelineAutomationJob({ db, job, profileContext, ge
   let openai = null
     try {
           openai = typeof getOpenAI === 'function' ? getOpenAI() : null
-    } catch {
+    } catch (clientError) {
+          console.warn('[pipeline_automation] getOpenAI() threw; falling back to Anthropic', {
+                error: clientError?.message || String(clientError),
+          })
           openai = null
     }
     const anthropic = await createAnthropicClient()
@@ -394,7 +406,7 @@ export async function processPipelineAutomationJob({ db, job, profileContext, ge
               }
       } catch (error) {
               const summary = summarizeOpenAIError(error)
-              if (anthropic && (summary.isAuth || !openai)) {
+              if (anthropic) {
                         try {
                                     const response = await anthropic.messages.create({
                                                   model: process.env.ANTHROPIC_MODEL || 'claude-3-haiku-20240307',
@@ -414,13 +426,14 @@ export async function processPipelineAutomationJob({ db, job, profileContext, ge
                                                   suggestedStatus: null,
                                                   appliedStatus: grant.status,
                                                   confidence: null,
-                                                  handoffRequired: false,
-                                                  handoffReason: null,
-                                                  recommendedActions: null,
-                                                  aiSummary: `Automation failed: ${
+                                                  handoffRequired: true,
+                                                  handoffReason: 'Both OpenAI and Anthropic failed â manual review required.',
+                                                  recommendedActions: ['review_ai_failure', 'manually_advance_status'],
+                                                  aiSummary: `Automation failed (both providers): ${
                                                                   anthropicError instanceof Error ? anthropicError.message : String(anthropicError)
                                                   }`,
                                     })
+                                    handoffs += 1
                                     continue
                         }
               } else {
@@ -431,11 +444,12 @@ export async function processPipelineAutomationJob({ db, job, profileContext, ge
                                     suggestedStatus: null,
                                     appliedStatus: grant.status,
                                     confidence: null,
-                                    handoffRequired: false,
-                                    handoffReason: null,
-                                    recommendedActions: null,
-                                    aiSummary: `Automation failed: ${error instanceof Error ? error.message : String(error)}`,
+                                    handoffRequired: true,
+                                    handoffReason: 'No AI provider available â manual review required.',
+                                    recommendedActions: ['configure_ai_provider', 'manually_advance_status'],
+                                    aiSummary: `Automation failed (no provider): ${error instanceof Error ? error.message : String(error)}`,
                         })
+                        handoffs += 1
                         continue
               }
       }
@@ -443,7 +457,7 @@ export async function processPipelineAutomationJob({ db, job, profileContext, ge
       let parsed = {}
             try {
                     parsed = JSON.parse(aiResponse)
-            } catch (error) {
+            } catch (parseError) {
                     await recordAutomationEvent(db, {
                               jobId: job.id,
                               grantId: grant.id,
@@ -451,11 +465,12 @@ export async function processPipelineAutomationJob({ db, job, profileContext, ge
                               suggestedStatus: null,
                               appliedStatus: grant.status,
                               confidence: null,
-                              handoffRequired: false,
-                              handoffReason: null,
-                              recommendedActions: null,
-                              aiSummary: 'Automation response could not be parsed as JSON.',
+                              handoffRequired: true,
+                              handoffReason: 'AI response could not be parsed as JSON â manual review required.',
+                              recommendedActions: ['review_ai_response', 'manually_advance_status'],
+                              aiSummary: `Automation parse failure: ${parseError instanceof Error ? parseError.message : String(parseError)}`,
                     })
+                    handoffs += 1
                     continue
             }
 
@@ -470,13 +485,6 @@ export async function processPipelineAutomationJob({ db, job, profileContext, ge
                         : null
 
       let appliedStatus = validatedStatus
-
-      if (handoffRequired && compareStatuses(currentStatus, validatedStatus) > 0) {
-              // When handoff is required, still advance the grant to the target stage
-                // but flag it for human review. The grant should be in the correct column
-                // so the user can see what needs attention.
-                appliedStatus = validatedStatus
-      }
 
       if (handoffRequired) {
               handoffs += 1

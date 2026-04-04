@@ -13,6 +13,7 @@
  */
 
 import { RELEVANCE_RULES } from './relevanceFilterRules.js'
+import { resolveApplicantType } from './profileHelpers.js'
 
 // State name → 2-letter abbreviation (uppercase) sorted by name length descending so
 // multi-word state names ("west virginia") match before single-word names ("virginia").
@@ -34,7 +35,7 @@ const STATE_NAME_TO_ABBR_ENTRIES = [
   ['alaska', 'AK'], ['hawaii', 'HI'], ['idaho', 'ID'],
   ['maine', 'ME'], ['texas', 'TX'], ['utah', 'UT'],
   ['iowa', 'IA'], ['ohio', 'OH'],
-].sort((a, b) => b[0].length - a[0].length)
+] // entries are already ordered longest-first; no runtime sort needed
 
 /**
  * Detect a US state name embedded in an opportunity title.
@@ -131,7 +132,7 @@ export function extractProfileData(profileContext) {
 
   return {
     primary_type:
-      profile.primary_type ||
+      resolveApplicantType(profile) ||
       comprehensive.applicant_type ||
       null,
     age:
@@ -155,9 +156,13 @@ export function extractProfileData(profileContext) {
       null,
     foster_youth:
       family.foster_youth ||
+      demographics.foster_youth ||
+      comprehensive.foster_care ||
       null,
     first_responder:
-      null,
+      demographics.first_responder ||
+      employment.occupation_type === 'first_responder' ||
+      (employment.occupation || '').toLowerCase().match(/\b(firefighter|paramedic|emt|police|law enforcement|dispatcher)\b/) ? true : null,
     employment,
     education,
     state:
@@ -170,13 +175,15 @@ export function extractProfileData(profileContext) {
     tags: profile.tags || [],
     government_assistance: sections.government_assistance || {},
     insurance_provider: (sections.medical_insurance || {}).insurance_provider || null,
-    unable_to_work: (employment.notes || '').toLowerCase().includes('not able to work') || 
+    unable_to_work: !!(comprehensive.unable_to_work ||
+      health.unable_to_work ||
+      (employment.notes || '').toLowerCase().includes('not able to work') ||
       (employment.notes || '').toLowerCase().includes('unable to work') ||
-      (employment.current_status || '').toLowerCase().includes('disabled'),
+      (employment.current_status || '').toLowerCase().includes('disabled') ||
+      health.disability_status === true),
     employment_notes: employment.notes || null,
     employment_status: employment.current_status || null,
-    has_children: Number((sections.household_details || {}).household_size || 0) > 2 || 
-      (family.has_children === true) || Number(family.number_of_children || 0) > 0,
+    has_children: (family.has_children === true) || Number(family.number_of_children || 0) > 0 || Number(family.members_under_18 || 0) > 0,
     number_of_children: family.number_of_children || 0,
     household_members_under_18: family.members_under_18 || 0,
     age_group: demographics.age_group || null,

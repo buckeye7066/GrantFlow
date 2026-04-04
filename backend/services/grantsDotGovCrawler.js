@@ -4,7 +4,8 @@
  * Fetches REAL federal funding opportunities from the official Grants.gov API
  * https://www.grants.gov/web/grants/search-grants.html
  * 
- * This uses the public Grants.gov API to get actual federal grant opportunities
+ * This uses the Grants.gov API to get actual federal grant opportunities.
+ * NOTE: The search2 endpoint requires GRANTS_GOV_API_KEY (returns 401 without it).
  */
 
 import axios from 'axios';
@@ -17,6 +18,16 @@ import { upsertFundingOpportunity } from './opportunityInserter.js';
 // As of 2026, api.grants.gov/v2/ is the current base; search2 is still served at v1 path.
 const GRANTS_GOV_SEARCH2 = 'https://api.grants.gov/v2/api/search2';
 const GRANTS_GOV_VIEW = 'https://www.grants.gov/search-results-detail/';
+
+// Grants.gov API key — required since the search2 endpoint started returning 401 Unauthorized.
+// Set GRANTS_GOV_API_KEY in your environment (.env / Railway / Vercel secrets).
+const GRANTS_GOV_API_KEY = process.env.GRANTS_GOV_API_KEY || ''
+if (!GRANTS_GOV_API_KEY) {
+  console.warn(
+    '[GrantsGov] GRANTS_GOV_API_KEY env var is not set; ' +
+      'Grants.gov search2 requests will likely return 401 Unauthorized.',
+  )
+}
 
 /**
  * Fetch opportunities from Grants.gov API
@@ -52,6 +63,7 @@ async function fetchGrantsGov(params = {}) {
         headers: {
           'Content-Type': 'application/json',
           Accept: 'application/json',
+          ...(GRANTS_GOV_API_KEY ? { 'X-API-Key': GRANTS_GOV_API_KEY } : {}),
         }
       });
 
@@ -113,8 +125,8 @@ function transformGrantsGovOpportunity(opp) {
     source: 'grants.gov',
     // De-dupe by Grants.gov opportunity number (idempotent).
     source_id: oppNumber || null,
-    source_url: oppId != null ? `${GRANTS_GOV_VIEW}${oppId}` : oppNumber ? `https://www.grants.gov/search-grants?query=${encodeURIComponent(String(oppNumber))}` : null,
-    application_url: oppId != null ? `${GRANTS_GOV_VIEW}${oppId}` : oppNumber ? `https://www.grants.gov/search-grants?query=${encodeURIComponent(String(oppNumber))}` : null,
+    source_url: oppId != null ? `${GRANTS_GOV_VIEW}${oppId}` : oppNumber ? `https://www.grants.gov/search-results-detail/${encodeURIComponent(String(oppNumber))}` : null,
+    application_url: oppId != null ? `${GRANTS_GOV_VIEW}${oppId}` : oppNumber ? `https://www.grants.gov/search-results-detail/${encodeURIComponent(String(oppNumber))}` : null,
     description: opp?.synopsis || opp?.description || `Grants.gov opportunity ${oppNumber}${oppStatus ? ` (${oppStatus})` : ''}`.trim(),
     amount_min: parseAmount(opp?.awardFloor) || null,
     amount_max: parseAmount(opp?.awardCeiling) || null,
@@ -122,7 +134,13 @@ function transformGrantsGovOpportunity(opp) {
     deadline_type: closeDate ? 'fixed' : 'rolling',
     is_national: true,
     state: 'nationwide',
-    categories: [opp?.categoryOfFunding || 'federal', 'government', 'grants.gov'].filter(Boolean),
+    categories: [
+    opp?.categoryOfFunding || 'federal',
+    'government',
+    'grants.gov',
+    ...(Array.isArray(opp?.eligibilities) ? opp.eligibilities.map(e => String(e).toLowerCase()) : []),
+    ...(Array.isArray(opp?.applicantTypes) ? opp.applicantTypes.map(a => String(a).toLowerCase()) : []),
+  ].filter(Boolean),
     keywords: extractKeywords(opp),
     opportunity_type: 'grant',
     type: 'OPPORTUNITY',
@@ -141,7 +159,8 @@ function cryptoSafeId(opp) {
       hash = (hash * 31 + text.charCodeAt(i)) >>> 0;
     }
     return String(hash);
-  } catch {
+  } catch (error) {
+    console.warn('[GrantsGov] Failed to generate crypto-safe ID:', error.message);
     return String(Date.now());
   }
 }
@@ -178,6 +197,9 @@ function buildEligibility({ oppNumber, agencyName, agencyCode, openDate, closeDa
  * Crawl Grants.gov and populate database
  */
 export async function crawlGrantsGov(db, options = {}) {
+  if (!db) {
+    throw new Error('Database connection required for crawlGrantsGov');
+  }
   const { maxPages = 4, rowsPerPage = 25 } = options;
   
   console.log('[GrantsGov] Starting crawl...');
@@ -237,12 +259,18 @@ export async function crawlGrantsGov(db, options = {}) {
       
       for (const opp of data.oppHits) {
         const transformed = transformGrantsGovOpportunity(opp);
-        const result = await upsertFundingOpportunity(db, {
-          ...transformed,
-          // Ingested from a public API feed (traceable via URL + raw payload).
-          record_origin: 'funding_api',
-          evidence_url: transformed.source_url ?? transformed.application_url ?? null,
-        });
+        // Pre-filter: skip obviously closed opportunities before touching the DB
+const status = (opp?.oppStatus ?? '').toLowerCase();
+if (status === 'closed' || status === 'archived') {
+  console.log(`[GrantsGov] Skipping closed/archived opportunity ${transformed.id} (${opp?.oppStatus})`);
+  continue;
+}
+
+const result = await upsertFundingOpportunity(db, {
+  ...transformed,
+  record_origin: 'funding_api',
+  evidence_url: transformed.source_url ?? transformed.application_url ?? null,
+});
         
         if (result.inserted) totalInserted++;
         else if (result.updated) totalUpdated++;

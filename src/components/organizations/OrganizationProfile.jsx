@@ -133,7 +133,7 @@ export default function OrganizationProfile({
       const draftingGrants = grants.filter(g => g.status === 'drafting');
       log.debug('grants loaded', { total: grants.length, drafting: draftingGrants.length })
     }
-  }, [grants, orgData?.name]);
+  }, [grants, orgData]);
 
 
     // Flatten sections data into orgData so child components can read flat fields
@@ -394,7 +394,9 @@ Return a single JSON object with the key "logo_url" containing the absolute, dir
             }
           });
 
-          if (response?.logo_url && (response.logo_url.startsWith('http') || response.logo_url.startsWith('https'))) {
+          const _logoUrl = response?.logo_url ?? '';
+const _validExt = /\.(png|jpe?g|svg|webp)(\?.*)?$/i.test(_logoUrl);
+if (_logoUrl && _logoUrl.startsWith('https://') && _validExt) {
               handleUpdate({ id: orgData.id, orgData: { profile_image_url: response.logo_url } });
               toast({
                 title: "Picture Found!",

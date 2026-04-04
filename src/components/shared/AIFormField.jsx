@@ -13,6 +13,7 @@ export default function AIFormField({
   placeholder, 
   aiPrompt,
   organization,
+  onError,
   rows = 4 
 }) {
   const [isGenerating, setIsGenerating] = React.useState(false);
@@ -54,6 +55,21 @@ ${organization.intended_major ? `Major: ${organization.intended_major}` : ''}
 ${organization.city && organization.state ? `Location: ${organization.city}, ${organization.state}` : ''}
 ${organization.gpa ? `GPA: ${organization.gpa}` : ''}
 ${organization.financial_need_level ? `Need Level: ${organization.financial_need_level}` : ''}
+${organization.military_status ? `Military Status: ${organization.military_status}` : ''}
+${organization.disability_status ? `Disability Status: ${organization.disability_status}` : ''}
+${organization.veteran ? `Veteran: ${organization.veteran}` : ''}
+${organization.health_conditions ? `Health Conditions: ${organization.health_conditions}` : ''}
+${organization.family_size ? `Family Size: ${organization.family_size}` : ''}
+${organization.housing_situation ? `Housing Situation: ${organization.housing_situation}` : ''}
+${organization.emergency_context ? `Emergency Context: ${organization.emergency_context}` : ''}
+${organization.business_type ? `Business Type: ${organization.business_type}` : ''}
+${organization.years_in_operation ? `Years in Operation: ${organization.years_in_operation}` : ''}
+${organization.income_level ? `Income Level: ${organization.income_level}` : ''}
+${organization.race_ethnicity ? `Race/Ethnicity: ${organization.race_ethnicity}` : ''}
+${organization.gender ? `Gender: ${organization.gender}` : ''}
+${organization.first_generation_college ? `First-Generation College Student: ${organization.first_generation_college}` : ''}
+${organization.caregiver_status ? `Caregiver Status: ${organization.caregiver_status}` : ''}
+${organization.dependents ? `Dependents: ${organization.dependents}` : ''}
 `;
 
       const fullPrompt = `${voiceInstruction}
@@ -76,9 +92,22 @@ RESPONSE REQUIREMENTS:
 ${isIndividual ? 'REMEMBER: You are writing as ONE INDIVIDUAL PERSON. Use I, my, me.' : 'REMEMBER: You are writing as an ORGANIZATION. Use we, our, us.'}`;
 
       const response = await client.integrations.Core.InvokeLLM({ prompt: fullPrompt });
-      onChange({ target: { name, value: response } });
+      const generatedText = typeof response === 'string'
+        ? response
+        : (response?.output ?? response?.text ?? response?.content ?? null);
+      if (!generatedText || typeof generatedText !== 'string' || !generatedText.trim()) {
+        console.error('AI generation returned empty or unrecognised response:', response);
+        return;
+      }
+      onChange({ target: { name, value: generatedText.trim() } });
     } catch (error) {
       console.error('AI generation failed:', error);
+      // Do NOT overwrite the field â preserve whatever the user already typed.
+      // Surface the failure through an optional onError prop so the parent can
+      // display a plain-language toast/alert without losing field content.
+      if (typeof onError === 'function') {
+        onError('AI suggestion failed. Your existing text has been preserved.');
+      }
     } finally {
       setIsGenerating(false);
     }

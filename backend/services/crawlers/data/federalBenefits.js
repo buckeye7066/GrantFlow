@@ -22,7 +22,7 @@ export const FEDERAL_BENEFITS = [
     type: 'benefit',
     fundingType: 'direct_benefit',
     recurring: true,
-  intentMatch: ['food'],
+  intentMatch: ['food']
   },
   {
     id: 'fed-wic',
@@ -36,7 +36,7 @@ export const FEDERAL_BENEFITS = [
     fundingType: 'direct_benefit',
     recurring: true,
     demographicMatch: ['female','has_children'],
-  intentMatch: ['food', 'healthcare'],
+  intentMatch: ['food', 'healthcare']
   },
   {
     id: 'fed-tefap',
@@ -49,7 +49,7 @@ export const FEDERAL_BENEFITS = [
     type: 'assistance',
     fundingType: 'direct_benefit',
     recurring: true,
-  intentMatch: ['food'],
+  intentMatch: ['food']
   },
   {
     id: 'fed-csfp',
@@ -62,7 +62,7 @@ export const FEDERAL_BENEFITS = [
     fundingType: 'direct_benefit',
     recurring: true,
     demographicMatch: ['senior'],
-  intentMatch: ['food'],
+  intentMatch: ['food']
   },
 
   // ════════════════════════════════════════
@@ -79,7 +79,7 @@ export const FEDERAL_BENEFITS = [
     type: 'benefit',
     fundingType: 'direct_benefit',
     recurring: true, // annual
-  intentMatch: ['utilities'],
+  intentMatch: ['utilities']
   },
   {
     id: 'fed-wap',
@@ -92,7 +92,7 @@ export const FEDERAL_BENEFITS = [
     type: 'grant',
     fundingType: 'direct_service',
     recurring: false,
-  intentMatch: ['utilities', 'housing'],
+  intentMatch: ['utilities', 'housing']
   },
   {
     id: 'fed-lifeline',
@@ -105,7 +105,7 @@ export const FEDERAL_BENEFITS = [
     type: 'benefit',
     fundingType: 'direct_benefit',
     recurring: true,
-  intentMatch: ['broadband', 'utilities'],
+  intentMatch: ['broadband', 'utilities']
   },
 
   // ════════════════════════════════════════
@@ -123,7 +123,7 @@ export const FEDERAL_BENEFITS = [
     fundingType: 'direct_benefit',
     recurring: true,
     waitlistNote: 'Most areas have waiting lists. Apply as soon as lists open.',
-  intentMatch: ['housing'],
+  intentMatch: ['housing']
   },
   {
     id: 'fed-public-housing',
@@ -136,7 +136,7 @@ export const FEDERAL_BENEFITS = [
     type: 'benefit',
     fundingType: 'direct_benefit',
     recurring: true,
-  intentMatch: ['housing'],
+  intentMatch: ['housing']
   },
   {
     id: 'fed-usda-rural-repair',
@@ -151,7 +151,7 @@ export const FEDERAL_BENEFITS = [
     maxAmount: 10000,
     demographicMatch: ['senior'],
     geoMatch: ['rural'],
-  intentMatch: ['housing'],
+  intentMatch: ['housing']
   },
 
   // ════════════════════════════════════════
@@ -169,7 +169,7 @@ export const FEDERAL_BENEFITS = [
     fundingType: 'direct_benefit',
     recurring: true,
     familyMatch: ['has_children','single_parent'],
-  intentMatch: ['food', 'childcare'],
+  intentMatch: ['food', 'childcare']
   },
   {
     id: 'fed-ssi',
@@ -184,7 +184,7 @@ export const FEDERAL_BENEFITS = [
     recurring: true,
     healthMatch: ['disability','physical_disability','visual_impairment','hearing_impairment','mental_health'],
     demographicMatch: ['senior'],
-  intentMatch: ['special_needs'],
+  intentMatch: ['special_needs']
   },
   {
     id: 'fed-ssdi',
@@ -198,7 +198,7 @@ export const FEDERAL_BENEFITS = [
     fundingType: 'direct_benefit',
     recurring: true,
     healthMatch: ['disability','physical_disability','visual_impairment','hearing_impairment','chronic_illness'],
-  intentMatch: ['special_needs', 'healthcare'],
+  intentMatch: ['special_needs', 'healthcare']
   },
 
   // ════════════════════════════════════════
@@ -215,7 +215,7 @@ export const FEDERAL_BENEFITS = [
     type: 'benefit',
     fundingType: 'direct_benefit',
     recurring: true,
-  intentMatch: ['healthcare'],
+  intentMatch: ['healthcare']
   },
   {
     id: 'fed-marketplace',
@@ -227,7 +227,7 @@ export const FEDERAL_BENEFITS = [
     type: 'benefit',
     fundingType: 'direct_benefit',
     recurring: true,
-  intentMatch: ['healthcare'],
+  intentMatch: ['healthcare']
   },
   {
     id: 'fed-hill-burton',
@@ -240,7 +240,7 @@ export const FEDERAL_BENEFITS = [
     type: 'assistance',
     fundingType: 'direct_service',
     recurring: true,
-  intentMatch: ['healthcare'],
+  intentMatch: ['healthcare']
   },
   {
     id: 'fed-health-centers',
@@ -252,7 +252,7 @@ export const FEDERAL_BENEFITS = [
     type: 'assistance',
     fundingType: 'direct_service',
     recurring: true,
-  intentMatch: ['healthcare'],
+  intentMatch: ['healthcare']
   },
 
   // ════════════════════════════════════════
@@ -269,7 +269,7 @@ export const FEDERAL_BENEFITS = [
     fundingType: 'direct_benefit',
     recurring: true,
     militaryMatch: ['veteran'],
-  intentMatch: ['military'],
+  intentMatch: ['military']
   },
   {
     id: 'fed-va-healthcare',
@@ -282,7 +282,7 @@ export const FEDERAL_BENEFITS = [
     fundingType: 'direct_service',
     recurring: true,
     militaryMatch: ['veteran','disabled_veteran'],
-  intentMatch: ['military', 'healthcare'],
+  intentMatch: ['military', 'healthcare']
   },
   {
     id: 'fed-va-disability',
@@ -296,7 +296,7 @@ export const FEDERAL_BENEFITS = [
     recurring: true,
     militaryMatch: ['veteran','disabled_veteran'],
     healthMatch: ['disability'],
-  intentMatch: ['military', 'special_needs'],
+  intentMatch: ['military', 'special_needs']
   },
   {
     id: 'fed-ssvf',
@@ -309,7 +309,7 @@ export const FEDERAL_BENEFITS = [
     fundingType: 'direct_benefit',
     recurring: false,
     militaryMatch: ['veteran'],
-  intentMatch: ['military', 'housing'],
+  intentMatch: ['military', 'housing']
   },
 
   // ════════════════════════════════════════
@@ -326,7 +326,7 @@ export const FEDERAL_BENEFITS = [
     fundingType: 'direct_service',
     recurring: true,
     healthMatch: ['disability','physical_disability','visual_impairment','hearing_impairment','mental_health','developmental_disability'],
-  intentMatch: ['workforce', 'special_needs'],
+  intentMatch: ['workforce', 'special_needs']
   },
 
   // ════════════════════════════════════════
@@ -344,7 +344,7 @@ export const FEDERAL_BENEFITS = [
     fundingType: 'direct_grant',
     recurring: true,
     maxAmount: 7395,
-  intentMatch: ['education'],
+  intentMatch: ['education']
   },
   {
     id: 'fed-fseog',
@@ -357,7 +357,7 @@ export const FEDERAL_BENEFITS = [
     fundingType: 'direct_grant',
     recurring: true,
     maxAmount: 4000,
-  intentMatch: ['education'],
+  intentMatch: ['education']
   },
 
   // ════════════════════════════════════════
@@ -375,7 +375,7 @@ export const FEDERAL_BENEFITS = [
     fundingType: 'direct_benefit',
     recurring: true,
     familyMatch: ['has_children','single_parent'],
-  intentMatch: ['childcare'],
+  intentMatch: ['childcare']
   },
   {
     id: 'fed-head-start',
@@ -389,7 +389,7 @@ export const FEDERAL_BENEFITS = [
     fundingType: 'direct_service',
     recurring: true,
     familyMatch: ['has_children'],
-  intentMatch: ['childcare', 'education'],
+  intentMatch: ['childcare', 'education']
   },
 
   // ════════════════════════════════════════
@@ -405,7 +405,7 @@ export const FEDERAL_BENEFITS = [
     type: 'assistance',
     fundingType: 'direct_service',
     recurring: true,
-  intentMatch: ['legal'],
+  intentMatch: ['legal']
   },
 ];
 

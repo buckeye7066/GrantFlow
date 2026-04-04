@@ -26,10 +26,15 @@ export default function UploadApplicationForm({ onSuccess, onCancel, existingOrg
         'image/jpg',
         'image/png',
         'image/heic',
-        'image/heif'
+        'image/heif',
+        'application/octet-stream',
+        ''
       ];
-      
-      if (!validTypes.includes(selectedFile.type)) {
+      const validExtensions = ['.jpg', '.jpeg', '.png', '.heic', '.heif'];
+      const fileName = selectedFile.name.toLowerCase();
+      const hasValidExtension = validExtensions.some(ext => fileName.endsWith(ext));
+
+      if (!validTypes.includes(selectedFile.type) && !hasValidExtension) {
         toast({
           variant: 'destructive',
           title: 'Invalid File Type',
@@ -73,8 +78,13 @@ export default function UploadApplicationForm({ onSuccess, onCancel, existingOrg
         description: 'Uploading your completed application form.',
       });
 
-      const { file_url } = await client.integrations.Core.UploadFile({ file });
-      
+      const uploadResult = await client.integrations.Core.UploadFile({ file });
+      const file_url = uploadResult?.file_url;
+
+      if (!file_url || typeof file_url !== 'string' || file_url.trim() === '') {
+        throw new Error('Upload succeeded but no file URL was returned. Cannot proceed with processing.');
+      }
+
       setIsUploading(false);
       setIsProcessing(true);
 
@@ -89,7 +99,11 @@ export default function UploadApplicationForm({ onSuccess, onCancel, existingOrg
         organization_id: existingOrganizationId,
       });
 
-      log.debug('processScannedApplication response received')
+      log.debug('processScannedApplication response received');
+
+      if (!response || !response.data) {
+        throw new Error('No response received from processScannedApplication. The server may be unavailable.');
+      }
 
       if (response.data.success) {
         toast({
@@ -191,7 +205,7 @@ export default function UploadApplicationForm({ onSuccess, onCancel, existingOrg
                         <span className="font-semibold">Click to upload</span> or drag and drop
                       </p>
                       <p className="text-xs text-slate-500">
-                        JPG, PNG, or HEIC (Max 10MB)
+                        JPG, PNG, or HEIC (Max 50MB)
                       </p>
                     </>
                   )}

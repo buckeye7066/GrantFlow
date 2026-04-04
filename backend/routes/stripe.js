@@ -1,7 +1,6 @@
 import express from 'express'
 import crypto from 'node:crypto'
-import { ensureAuth } from '../middleware/auth.js'
-import { ensureAdmin } from '../middleware/auth.js'
+import { ensureAuth, ensureAdmin } from '../middleware/auth.js'
 import { ensureServiceCatalogSchema, MILESTONE_PHASES } from '../services/serviceCatalogStore.js'
 import { createCheckoutSessionForPrice, getOrCreateStripeCustomerId } from '../services/stripeService.js'
 import { roundBillableMinutes } from '../services/hourlyRounding.js'
@@ -39,7 +38,9 @@ router.post('/checkout/service', ensureAuth, async (req, res) => {
   }
   if (!purchaseId) return res.status(400).json({ ok: false, error: 'purchase_id required' })
 
-  const userId = req.ctx?.userId ?? req.user?.userId ?? null
+  const userId = req.ctx?.userId ?? req.user?.userId
+  if (!userId) return res.status(401).json({ ok: false, error: 'Authentication required' })
+
   const purchase = await req.db
     .prepare(
       `
@@ -53,7 +54,7 @@ router.post('/checkout/service', ensureAuth, async (req, res) => {
     .get(purchaseId)
 
   if (!purchase) return res.status(404).json({ ok: false, error: 'purchase not found' })
-  if (!userId || String(purchase.user_id) !== String(userId)) return res.status(403).json({ ok: false, error: 'Not authorized' })
+  if (String(purchase.user_id) !== String(userId)) return res.status(403).json({ ok: false, error: 'Not authorized' })
 
   const pricingModel = String(purchase.pricing_model)
   const clientCategory = String(purchase.client_category)
@@ -77,8 +78,10 @@ router.post('/checkout/service', ensureAuth, async (req, res) => {
     const milestones = await req.db
       .prepare('SELECT phase, status FROM milestone_payments WHERE purchase_id = ? ORDER BY phase ASC')
       .all(purchaseId)
-    const order = ['kickoff', 'draft', 'submission']
-    const firstUnpaid = order.find((p) => (milestones || []).find((m) => m.phase === p)?.status !== 'paid') || null
+    if (!milestones || milestones.length === 0) {
+      return res.status(409).json({ ok: false, error: 'milestone_payments_not_initialized', code: 'MILESTONE_NOT_SETUP' })
+    }
+    const firstUnpaid = MILESTONE_PHASES.find((p) => milestones.find((m) => m.phase === p)?.status !== 'paid') || null
     if (firstUnpaid !== phase) {
       return res.status(409).json({
         ok: false,
@@ -150,6 +153,10 @@ router.post('/checkout/service', ensureAuth, async (req, res) => {
     idempotencyKey,
   })
 
+  if (!session?.id || !session?.url) {
+    return res.status(503).json({ ok: false, error: 'stripe_session_create_failed', code: 'STRIPE_SESSION_ERROR' })
+  }
+
   // Persist checkout session id
   if (pricingModel === 'milestone') {
     await req.db
@@ -186,12 +193,14 @@ router.post('/checkout/hourly', ensureAuth, async (req, res) => {
   }
   if (!purchaseId) return res.status(400).json({ ok: false, error: 'purchase_id required' })
 
-  const userId = req.ctx?.userId ?? req.user?.userId ?? null
+  const userId = req.ctx?.userId ?? req.user?.userId
+  if (!userId) return res.status(401).json({ ok: false, error: 'Authentication required' })
+
   const purchase = await req.db
     .prepare('SELECT * FROM service_purchases WHERE id = ? LIMIT 1')
     .get(purchaseId)
   if (!purchase) return res.status(404).json({ ok: false, error: 'purchase not found' })
-  if (!userId || String(purchase.user_id) !== String(userId)) return res.status(403).json({ ok: false, error: 'Not authorized' })
+  if (String(purchase.user_id) !== String(userId)) return res.status(403).json({ ok: false, error: 'Not authorized' })
   if (String(purchase.pricing_model) !== 'hourly') return res.status(400).json({ ok: false, error: 'purchase is not hourly' })
 
   const totalRow = await req.db
@@ -225,6 +234,14 @@ router.post('/checkout/hourly', ensureAuth, async (req, res) => {
     return res.status(409).json({ ok: false, error: 'stripe_price_not_mapped', code: 'STRIPE_PRICE_MISSING' })
   }
 
+  // Deduplication: check for an existing pending invoice for this purchase to prevent duplicates.
+  const existingInvoice = await req.db
+    .prepare(`SELECT id FROM hourly_invoices WHERE purchase_id = ? AND status = 'pending' LIMIT 1`)
+    .get(purchaseId)
+  if (existingInvoice) {
+    return res.status(409).json({ ok: false, error: 'invoice_already_pending', code: 'INVOICE_DUPLICATE', invoice_id: existingInvoice.id })
+  }
+
   const invoiceId = crypto.randomUUID()
   const amountCents = Number(priceRow.amount_cents) * units
   await req.db.prepare(
@@ -246,20 +263,35 @@ router.post('/checkout/hourly', ensureAuth, async (req, res) => {
     return res.status(503).json({ ok: false, error: 'stripe_customer_unavailable', code: 'STRIPE_NOT_CONFIGURED' })
   }
 
-  const session = await createCheckoutSessionForPrice({
-    priceId: String(priceRow.stripe_price_id),
-    quantity: units,
-    customerId: String(customer.stripe_customer_id),
-    successUrl: buildSuccessUrl(purchaseId),
-    cancelUrl: buildCancelUrl(purchaseId),
-    metadata: {
-      kind: 'hourly_invoice',
-      purchase_id: String(purchaseId),
-      hourly_invoice_id: String(invoiceId),
-      units: String(units),
-    },
-    idempotencyKey: `hourly:${purchaseId}:${invoiceId}`,
-  })
+  let session
+  try {
+    session = await createCheckoutSessionForPrice({
+      priceId: String(priceRow.stripe_price_id),
+      quantity: units,
+      customerId: String(customer.stripe_customer_id),
+      successUrl: buildSuccessUrl(purchaseId),
+      cancelUrl: buildCancelUrl(purchaseId),
+      metadata: {
+        kind: 'hourly_invoice',
+        purchase_id: String(purchaseId),
+        hourly_invoice_id: String(invoiceId),
+        units: String(units),
+      },
+      idempotencyKey: `hourly:${purchaseId}:${invoiceId}`,
+    })
+  } catch (stripeErr) {
+    await req.db
+      .prepare('UPDATE hourly_invoices SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
+      .run('failed', invoiceId)
+    return res.status(503).json({ ok: false, error: 'stripe_session_create_failed', code: 'STRIPE_SESSION_ERROR' })
+  }
+
+  if (!session?.id || !session?.url) {
+    await req.db
+      .prepare('UPDATE hourly_invoices SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
+      .run('failed', invoiceId)
+    return res.status(503).json({ ok: false, error: 'stripe_session_create_failed', code: 'STRIPE_SESSION_ERROR' })
+  }
 
   await req.db
     .prepare('UPDATE hourly_invoices SET stripe_checkout_session_id = ? WHERE id = ?')

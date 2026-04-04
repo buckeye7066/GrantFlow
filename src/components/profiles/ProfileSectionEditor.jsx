@@ -21,6 +21,7 @@ import { Switch } from "@/components/ui/switch"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
 import ProfileFieldWithAI from "@/components/profiles/ProfileFieldWithAI"
+import { SECTION_METADATA } from "@/config/sectionMetadata"
 
 function isPlainObject(value) {
   if (!value || typeof value !== 'object') return false
@@ -579,6 +580,15 @@ const narrativeSchema = z.object({
   special_circumstances: z.string().optional().or(z.literal("")),
 })
 
+/**
+ * UI section configuration.
+ *
+ * Titles and descriptions are derived from the canonical {@link SECTION_METADATA} module
+ * (`src/config/sectionMetadata.js`), which is the single source of truth.
+ * UI-specific concerns (Zod schemas, React components, field props) live here.
+ *
+ * @see src/config/sectionMetadata.js
+ */
 export const SECTION_CONFIG = {
   basic_information: {
     title: "Basic Information",
@@ -1212,6 +1222,15 @@ export const SECTION_CONFIG = {
   },
 }
 
+// Enforce SECTION_METADATA as the single source of truth for titles and descriptions.
+// Any update to sectionMetadata.js automatically propagates here at module load time.
+for (const [key, meta] of Object.entries(SECTION_METADATA)) {
+  if (key in SECTION_CONFIG) {
+    SECTION_CONFIG[key].title = meta.title
+    SECTION_CONFIG[key].description = meta.description
+  }
+}
+
 export default function ProfileSectionEditor({
   open,
   sectionKey,
@@ -1249,12 +1268,18 @@ export default function ProfileSectionEditor({
 
   const handleAskAI = async () => {
     if (!config || !onAskAI) return
+    // Capture stable references before the async gap.
+    const capturedConfig = config
+    const currentValues = form.getValues()
     setAiStatus('loading')
     setAiError(null)
     try {
-      const suggestion = await onAskAI(form.getValues())
+      const suggestion = await onAskAI(currentValues)
+      // Guard: if section changed while awaiting, do nothing.
+      if (config !== capturedConfig) return
       if (suggestion && typeof suggestion === 'object') {
-        form.reset({ ...defaults, ...suggestion })
+        // Merge AI suggestion ON TOP of current user values so no existing data is erased.
+        form.reset({ ...currentValues, ...suggestion })
         setAiStatus('succeeded')
       } else {
         setAiStatus('idle')
@@ -1442,6 +1467,9 @@ export default function ProfileSectionEditor({
                                         placeholder="Contact name"
                                         disabled={isSaving || aiStatus === 'loading'}
                                       />
+                                      {form.formState.errors?.contacts?.[index]?.name && (
+                                        <p className="text-xs text-red-600 mt-1">{form.formState.errors.contacts[index].name.message}</p>
+                                      )}
                                     </div>
                                     <div>
                                       <Label htmlFor={`contact-email-${index}`} className="text-xs">Email</Label>

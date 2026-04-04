@@ -87,7 +87,17 @@ export async function analyzeKnowledgeBaseDocument({ documentId, extractedText, 
     }
 
     const analysis = JSON.parse(analysisText)
-    
+
+    // Wrap analysis with provenance metadata so re-evaluation is possible (Goals 8, 9)
+    const PROCESSOR_VERSION = '1.0.0'
+    const MODEL_USED = 'gpt-4o-mini'
+    const enrichedMetadata = {
+      ...analysis,
+      _processor_version: PROCESSOR_VERSION,
+      _model: MODEL_USED,
+      _evaluated_at: new Date().toISOString(),
+    }
+
     // Store analysis results in document metadata
     await db
       .prepare(
@@ -96,16 +106,16 @@ export async function analyzeKnowledgeBaseDocument({ documentId, extractedText, 
           SET 
             processing_status = 'analyzed',
             processing_metadata = ?,
-            updated_at = CURRENT_TIMESTAMP
+            updated_at = datetime('now')
           WHERE id = ?
         `
       )
-      .run(JSON.stringify(analysis), documentId)
+      .run(JSON.stringify(enrichedMetadata), documentId)
 
     return {
       success: true,
       document_id: documentId,
-      analysis,
+      analysis: enrichedMetadata,
     }
   } catch (error) {
     console.error('[KB Processor] Analysis failed', {
@@ -122,7 +132,7 @@ export async function analyzeKnowledgeBaseDocument({ documentId, extractedText, 
             SET 
               processing_status = 'error',
               processing_error = ?,
-              updated_at = CURRENT_TIMESTAMP
+              updated_at = datetime('now')
             WHERE id = ?
           `
         )
@@ -153,7 +163,7 @@ export async function processPendingKBDocuments(db, limit = 10) {
           SELECT id, extracted_text
           FROM documents
           WHERE type = 'knowledge'
-            AND processing_status IN ('completed', 'pending')
+            AND processing_status IN ('pending')
             AND (processing_metadata IS NULL OR processing_metadata = '')
             AND extracted_text IS NOT NULL
             AND length(extracted_text) > 50
@@ -243,16 +253,40 @@ export async function extractFundingOpportunitiesFromKB(db) {
 
         // Create opportunity records for each URL or name
         if (fundingUrls.length > 0 || opportunityNames.length > 0) {
+          // Validate that at least one URL looks like a real application path (Goal 1)
+          const validatedUrls = fundingUrls.filter(u => {
+            try { const parsed = new URL(u); return parsed.protocol === 'https:' || parsed.protocol === 'http:'; }
+            catch { return false; }
+          })
+
+          // Reject the whole record if there are URLs but none are valid (Goal 1, Goal 3)
+          if (fundingUrls.length > 0 && validatedUrls.length === 0) {
+            console.warn('[KB Processor] Skipping opportunity from doc', doc.id,
+              'â funding_urls present but none are valid URLs (Goal 1 guard)')
+            continue
+          }
+
+          // Tag the candidate so the caller is forced to route through
+          // opportunityMatcher â relevanceFilter â computeMatchDecision (Goals 3, 4)
           opportunities.push({
             source_document_id: doc.id,
             source_document_name: doc.name,
-            funding_urls: fundingUrls,
+            funding_urls: validatedUrls,
             opportunity_names: opportunityNames,
             eligibility_keywords: metadata.eligibility_keywords || [],
             funding_amounts: metadata.funding_amounts || [],
             deadlines: metadata.deadlines || [],
             contact_info: metadata.contact_info || {},
             extracted_text_preview: doc.extracted_text?.substring(0, 500) || null,
+            // Callers MUST pass this through relevanceFilter + computeMatchDecision
+            // before any pipeline insertion. Direct DB insert is forbidden (Goal 4).
+            _requires_decision_engine: true,
+            // Emit a structured warning so monitoring can detect if this record
+            // reaches the DB without a decision_engine audit trail (Goal 4, Goal 8).
+            _kb_source_warning: `KB-extracted opportunity from doc ${doc.id} â must be routed through opportunityMatcher gate before pipeline insert`,
+            // Preserve raw metadata so the decision engine can compute fingerprints
+            // and full audit fields (Goal 8, Goal 9)
+            _raw_metadata: metadata,
           })
         }
       } catch (parseError) {

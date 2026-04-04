@@ -165,8 +165,7 @@ export async function seedBaselineFromRepo(db, opts = {}) {
     profile_documents_upserted: 0,
   }
 
-  await db.withTransaction(async (tx) => {
-    // Tombstones prevent baseline seeding from resurrecting hard-deleted profiles.
+  const _doSeed = async (tx) => {
     const isPostgres = tx?.dialect === 'postgres'
     await tx.prepare(
       isPostgres
@@ -194,8 +193,9 @@ export async function seedBaselineFromRepo(db, opts = {}) {
     } catch {
       tombstoneRows = []
     }
+    const rows = Array.isArray(tombstoneRows) ? tombstoneRows : (tombstoneRows?.rows ?? [])
     const tombstonedProfileIds = new Set(
-      (tombstoneRows || []).map((r) => String(r?.profile_id || '').trim()).filter(Boolean),
+      rows.map((r) => String(r?.profile_id || '').trim()).filter(Boolean),
     )
 
     const upsertOrg = tx.prepare(`
@@ -505,7 +505,6 @@ export async function seedBaselineFromRepo(db, opts = {}) {
     async function selectExistingIds(table, ids) {
       const list = Array.from(ids || []).map(normalizeId).filter(Boolean)
       if (list.length === 0) return new Set()
-      // Safe table allowlist (prevents SQL injection).
       const allowed = new Set([
         'organizations',
         'profiles',
@@ -515,8 +514,9 @@ export async function seedBaselineFromRepo(db, opts = {}) {
       ])
       if (!allowed.has(table)) throw new Error(`[baseline-seed] invalid table lookup: ${table}`)
       const placeholders = list.map(() => '?').join(', ')
-      const rows = await tx.prepare(`SELECT id FROM ${table} WHERE id IN (${placeholders})`).all(...list)
-      return new Set((rows || []).map((r) => normalizeId(r?.id)).filter(Boolean))
+      const result = await tx.prepare(`SELECT id FROM ${table} WHERE id IN (${placeholders})`).all(...list)
+      const resultRows = Array.isArray(result) ? result : (result?.rows ?? [])
+      return new Set(resultRows.map((r) => normalizeId(r?.id)).filter(Boolean))
     }
 
     // FK-safe seeding:
@@ -759,7 +759,6 @@ export async function seedBaselineFromRepo(db, opts = {}) {
         } catch (error) {
           const msg = String(error?.message || error)
           if (msg.includes('documents_status_check')) {
-            // Retry without status. (This upsert no longer includes status.)
             await upsertDoc.run(payload)
           } else {
             throw error
@@ -792,7 +791,9 @@ export async function seedBaselineFromRepo(db, opts = {}) {
     if (hadAdjustments) {
       console.info('[seedBaselineFromRepo] FK adjustments applied', fkAdjustments)
     }
-  })
+  }
+
+  await db.withTransaction(async (tx) => { await _doSeed(tx) })
 
   const after = {
     profiles: Number((await db.prepare('SELECT COUNT(*) as count FROM profiles').get())?.count || 0),

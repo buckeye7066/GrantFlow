@@ -27,6 +27,14 @@ function getOpenAI() {
 
 const router = express.Router();
 
+// Require authentication for all document routes
+router.use((req, res, next) => {
+  if (!req.ctx?.userId) {
+    return res.status(401).json({ error: 'Not authenticated' });
+  }
+  return next();
+});
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 function getUploadsDir(req) {
@@ -122,8 +130,8 @@ function resolveDocumentFilePath({ req, doc }) {
       tried.push(legacy)
       try {
         if (fs.existsSync(legacy)) return { ok: true, path: legacy, tried }
-      } catch {
-        // ignore
+      } catch (error) {
+        console.error('File access error:', error);
       }
     }
   }
@@ -269,7 +277,15 @@ function assertRemoteUrlAllowed(rawUrl) {
 
   const hostname = (parsed.hostname || '').toLowerCase().trim();
   if (!hostname) throw new Error('Invalid URL host');
-  if (hostname === 'localhost' || hostname === '0.0.0.0' || hostname.endsWith('.local')) {
+  const BLOCKED_HOSTNAMES = new Set([
+    'localhost',
+    '0.0.0.0',
+    'metadata.google.internal',
+    'metadata.goog',
+    'instance-data',
+    'instance-metadata',
+  ]);
+  if (BLOCKED_HOSTNAMES.has(hostname) || hostname.endsWith('.local') || hostname.endsWith('.internal')) {
     throw new Error('URL host is not allowed');
   }
   if (net.isIP(hostname)) {
@@ -299,12 +315,21 @@ async function downloadRemoteFileToUploads({ url, req }) {
       throw new Error(`Unable to download file (${resp.status})`);
     }
     // If redirects occurred, validate the final URL too.
-    try {
-      if (resp.url) {
-        assertRemoteUrlAllowed(resp.url);
+    if (resp.url) {
+      try {
+        const finalUrl = new URL(resp.url);
+        // Normalise: strip trailing dot from hostname (DNS FQDN form).
+        const normalisedFinalUrl = new URL(resp.url);
+        normalisedFinalUrl.hostname = finalUrl.hostname.replace(/\.$/, '');
+        // Always validate the final URL regardless of whether hostname changed.
+        assertRemoteUrlAllowed(normalisedFinalUrl.toString());
+        // Belt-and-suspenders: also block raw IP redirects to private ranges.
+        if (net.isIP(normalisedFinalUrl.hostname) && isPrivateIpAddress(normalisedFinalUrl.hostname)) {
+          throw new Error('Redirect to private network not allowed');
+        }
+      } catch (redirectErr) {
+        throw new Error(`Final URL host is not allowed: ${redirectErr.message}`);
       }
-    } catch {
-      throw new Error('Final URL host is not allowed');
     }
     const contentType = resp.headers.get('content-type') || 'application/octet-stream';
     const contentLength = Number(resp.headers.get('content-length') || '0');
@@ -326,9 +351,24 @@ async function downloadRemoteFileToUploads({ url, req }) {
     const unique = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
     const extension = fileNameFromUrl.includes('.') ? `.${fileNameFromUrl.split('.').pop()}` : '';
     const filename = `${unique}${extension}`;
+    // Validate filename to prevent directory traversal
+    if (filename.includes('..') || filename.includes('/') || filename.includes('\\')) {
+      throw new Error('Invalid filename');
+    }
     const absPath = join(getUploadsDir(req), filename);
 
-    const buf = Buffer.from(await resp.arrayBuffer());
+    const chunks = [];
+    let totalSize = 0;
+    const maxSize = 50 * 1024 * 1024;
+    
+    for await (const chunk of resp.body) {
+      totalSize += chunk.length;
+      if (totalSize > maxSize) {
+        throw new Error('Remote file is too large (max 50MB).');
+      }
+      chunks.push(chunk);
+    }
+    const buf = Buffer.concat(chunks);
     if (buf.length > 50 * 1024 * 1024) {
       throw new Error('Remote file is too large (max 50MB).');
     }
@@ -956,11 +996,37 @@ router.post('/ingest', uploadLimiter, requireUploadsWritable, runUploadSingle('d
     try {
       await req.db.prepare(insertDocumentSql).run(...insertDocumentArgs)
     } catch (error) {
+      // Clean up uploaded file if database insert fails
+      if (file?.path) {
+        try {
+          fs.unlinkSync(file.path);
+        } catch (unlinkError) {
+          console.error('Failed to cleanup file after DB error:', unlinkError);
+        }
+      }
+      
       const msg = String(error?.message || error)
-      // Safety retry: if an old code path still attempted to set status (or the DB has a legacy constraint edge),
-      // retry the insert without status. (This statement already omits status.)
       if (msg.includes('documents_status_check')) {
-        await req.db.prepare(insertDocumentSql).run(...insertDocumentArgs)
+        // Retry without the status field â use a SQL variant that omits status entirely
+        // so the DB default applies and avoids the constraint violation.
+        // The documents_status_check constraint is on the `status` column.
+        // Our INSERT does not include `status` at all, so this constraint
+        // cannot fire from this INSERT. If it does fire, it means the schema
+        // has a trigger or default that inserts a bad status value.
+        // Retry by explicitly inserting without processing_status (let DB default apply).
+        const insertNoStatusSql = `
+          INSERT INTO documents (
+            id, organization_id, grant_id, profile_id, university_application_id, university_application_name, name, type,
+            file_url, file_path, file_size, mime_type,
+            extracted_text, notes
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `
+        // Build args without processing_status (index 13 in original insertDocumentArgs).
+        const safeArgs = [
+          ...insertDocumentArgs.slice(0, 13),
+          insertDocumentArgs[14], // notes
+        ]
+        await req.db.prepare(insertNoStatusSql).run(...safeArgs)
       } else {
         throw error
       }
@@ -1010,7 +1076,14 @@ router.post('/ingest', uploadLimiter, requireUploadsWritable, runUploadSingle('d
       (extractedTextFromHtml && addToOpportunities && profileId);
     if (shouldQueue) {
       if (!skipParsing && profileId) {
-        if (!(await requireTierCapability(req, res, profileId, TIER_CAPABILITIES.DOCUMENT_AI))) return
+        if (!(await requireTierCapability(req, res, profileId, TIER_CAPABILITIES.DOCUMENT_AI))) {
+          // Tier gate sent a response; still return 202 for the document record
+          // that was already inserted â but we cannot send two responses.
+          // Instead, return early here; the caller will not get a 202,
+          // and the document is in the DB with processing_status = 'pending'.
+          // The UI should poll /extract for status.
+          return
+        }
       }
 
       const requestedBy = context.ctx?.userId ?? context.ctx?.activeProfileId ?? 'system';
@@ -1080,8 +1153,12 @@ router.put('/:id', async (req, res) => {
     if (fields.length === 0) return res.status(400).json({ error: 'No fields provided' });
 
     const values = Object.values(req.body);
-    const setClause = fields.map(f => `${f} = ?`).join(', ');
-    await req.db.prepare(`UPDATE documents SET ${setClause}, updated_at = CURRENT_TIMESTAMP WHERE id = ?`).run(...values, req.params.id);
+    const allowedFields = ['name', 'type', 'notes', 'status', 'processing_status'];
+    const safeFields = fields.filter(f => allowedFields.includes(f));
+    if (safeFields.length === 0) return res.status(400).json({ error: 'No valid fields provided' });
+    const setClause = safeFields.map(f => `${f} = ?`).join(', ');
+    const safeValues = safeFields.map(f => req.body[f]);
+    await req.db.prepare(`UPDATE documents SET ${setClause}, updated_at = CURRENT_TIMESTAMP WHERE id = ?`).run(...safeValues, req.params.id);
     res.json(await req.db.prepare('SELECT * FROM documents WHERE id = ?').get(req.params.id));
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -1312,6 +1389,8 @@ router.post('/parse-all', async (req, res) => {
             await req.db
               .prepare('UPDATE crawler_jobs SET parameters = ? WHERE id = ?')
               .run(JSON.stringify(params), already.id)
+            // Dispatch the updated job so the worker picks up enable_ai=true.
+            jobsToDispatch.push(already.id)
             queued += 1
           }
         }

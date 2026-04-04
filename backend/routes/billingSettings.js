@@ -29,6 +29,7 @@ function mapRow(row) {
 }
 
 async function loadUserPreferencesRow(db, userId) {
+  if (!db) throw new Error('Database not available')
   return await db.prepare('SELECT * FROM user_preferences WHERE user_id = ? LIMIT 1').get(String(userId))
 }
 
@@ -40,8 +41,8 @@ router.get('/', async (req, res) => {
 
   try {
     const row = await loadUserPreferencesRow(req.db, userId)
-    if (!row) return res.json([])
-    return res.json([mapRow(row)])
+    if (!row) return res.json({})
+    return res.json(mapRow(row))
   } catch (error) {
     console.error('[billing-settings] list error:', error)
     return res.status(500).json({ error: error?.message || String(error) })
@@ -72,6 +73,7 @@ router.post('/', async (req, res) => {
   if (!userId) return res.status(401).json({ error: 'Authentication required' })
 
   try {
+    if (!req.db) throw new Error('Database not available')
     const existing = await loadUserPreferencesRow(req.db, userId)
     const incoming = req.body ?? {}
 
@@ -121,6 +123,7 @@ router.put('/:id', async (req, res) => {
   if (!userId) return res.status(401).json({ error: 'Authentication required' })
 
   try {
+    if (!req.db) throw new Error('Database not available')
     const existing = await loadUserPreferencesRow(req.db, userId)
     if (!existing) return res.status(404).json({ error: 'Not found' })
     if (String(existing.id) !== String(req.params.id)) return res.status(404).json({ error: 'Not found' })

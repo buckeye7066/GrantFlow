@@ -1,24 +1,70 @@
 const cache = new Map();
 
+// Clear expired entries periodically
+let cleanupInterval;
+function startCleanup() {
+  cleanupInterval = setInterval(() => {
+    const now = Date.now();
+    for (const [key, value] of cache.entries()) {
+      if (now - value.timestamp >= 30000) {
+        cache.delete(key);
+      }
+    }
+  }, 60000);
+}
+function stopCleanup() {
+  if (cleanupInterval) {
+    clearInterval(cleanupInterval);
+    cleanupInterval = null;
+  }
+}
+process.on('SIGTERM', stopCleanup);
+process.on('SIGINT', stopCleanup);
+startCleanup();
+
+// Expose cache invalidation so mutation routes can purge stale entries
+export function invalidateUserCache(userId) {
+  for (const key of cache.keys()) {
+    if (key.startsWith(`${userId}:`)) {
+      cache.delete(key);
+    }
+  }
+}
+
 export function responseCache(ttlMs = 30000) {
   return (req, res, next) => {
     if (req.method !== 'GET') return next();
 
     // req.originalUrl includes the path and query string, so it's a precise key
-    const key = req.originalUrl;
+    // Key must include user identity to prevent cross-user cache poisoning
+    // and must be invalidated externally on profile/opportunity mutations.
+    const userId = req.user?.id;
+if (!userId) return next(); // Never cache unauthenticated or unidentifiable requests
+    const key = `${userId}:${req.originalUrl}`;
     const cached = cache.get(key);
 
     if (cached && Date.now() - cached.timestamp < ttlMs) {
-      return res.json(cached.data);
+      res.set('X-Cache', 'HIT');
+      console.debug(`[responseCache] HIT key=${key} age=${Date.now() - cached.timestamp}ms`);
+      res.json(cached.data);
+      return;
     }
 
     const originalJson = res.json.bind(res);
-    res.json = (data) => {
-      cache.set(key, { data, timestamp: Date.now() });
-      // Prevent unbounded cache growth: evict the oldest entry when the limit is reached
-      if (cache.size > 500) {
-        cache.delete(cache.keys().next().value);
-      }
+    res.json = function cachedJson(data) {
+      res.json = originalJson; // restore immediately to prevent re-entrant patching
+      // Only cache explicitly declared safe read-only endpoints to avoid
+// serving stale pipeline/match/profile data. Check a whitelist of
+// path prefixes that are known to be read-only and non-critical.
+const CACHEABLE_PREFIXES = ['/api/help', '/api/categories', '/api/states'];
+const isCacheable = CACHEABLE_PREFIXES.some(p => req.originalUrl.startsWith(p));
+if (isCacheable && res.statusCode >= 200 && res.statusCode < 300) {
+  if (cache.size >= 500) {
+    cache.delete(cache.keys().next().value);
+  }
+  cache.set(key, { data, timestamp: Date.now() });
+  console.debug(`[responseCache] MISS+SET key=${key}`);
+}
       return originalJson(data);
     };
 

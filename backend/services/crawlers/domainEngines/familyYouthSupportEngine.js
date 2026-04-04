@@ -19,8 +19,14 @@ const DIRECTORY_RESOURCES = [
 
 export async function runFamilyYouthSupportEngine(profile, options = {}) {
   try {
-    return normalizeAndFilter(DIRECTORY_RESOURCES, ENGINE_ID, { strict_no_loans: false, strict_no_matching: false })
-  } catch {
+    return normalizeAndFilter(DIRECTORY_RESOURCES, ENGINE_ID, {
+      strict_no_loans: false,
+      strict_no_matching: false,
+      profile,
+    })
+  } catch (err) {
+    // Log suppression reason so the pipeline can diagnose empty results (Goal 8)
+    console.error(`[${ENGINE_ID}] engine error:`, err?.message || err)
     return []
   }
 }

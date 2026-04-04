@@ -4,6 +4,7 @@ node_modules
 docs
 tests
 scripts
+!scripts/ensure-build-natives.mjs
 *.md
 .env
 .env.*
@@ -30,9 +31,5 @@ seed/*.db
 .eslintrc*
 .eslintignore
 vitest.*
-vite.config.*
-tailwind.config.*
-postcss.config.*
-tsconfig*
 *.test.*
 *.spec.*

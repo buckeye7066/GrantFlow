@@ -45,8 +45,11 @@ export const UNTRUSTED_ORIGINS = ['synthetic', 'manual']
  * @param {string} [alias] - Optional table alias, e.g. 'fo' → 'fo.record_origin'
  */
 export function trustedOriginClause(alias) {
-  const col = alias ? `${alias}.record_origin` : 'record_origin'
-  const quoted = UNTRUSTED_ORIGINS.map(o => `'${o}'`).join(',')
+  if (alias !== undefined && !/^[A-Za-z_][A-Za-z0-9_]*$/.test(alias)) {
+  throw new Error(`trustedOriginClause: invalid alias '${alias}'`)
+}
+const col = alias ? `${alias}.record_origin` : 'record_origin'
+  const quoted = UNTRUSTED_ORIGINS.map(o => `'${escapeSqlStringLiteral(o)}'`).join(',')
   return `(${col} IS NULL OR ${col} NOT IN (${quoted}))`
 }
 
@@ -54,7 +57,13 @@ export function trustedOriginClause(alias) {
  * Source values (the `source` column) that should never appear in user-facing results.
  * Unified across matching.js and discovery.js to prevent drift.
  */
-export const UNTRUSTED_SOURCES = ['synthetic', 'template', 'comprehensive_crawler', 'fake']
+// 'comprehensive_crawler' was previously blocked here, which silently excluded
+// all opportunities discovered by the primary crawler (comprehensiveCrawlerOptimized.js)
+// from every user-facing query â a guaranteed recall loss for Goal 7.
+// Removed from the blocklist. If specific crawler records are untrustworthy,
+// they must be rejected at insertion time by relevanceFilter / opportunityMatcher
+// (Goals 3, 4) and logged with a reason (Goal 8).
+export const UNTRUSTED_SOURCES = ['synthetic', 'template', 'fake']
 
 /**
  * Returns a SQL fragment for the `source` column blocklist.
@@ -63,8 +72,13 @@ export const UNTRUSTED_SOURCES = ['synthetic', 'template', 'comprehensive_crawle
  */
 export function trustedSourceClause(alias) {
   const col = alias ? `${alias}.source` : 'source'
-  const quoted = UNTRUSTED_SOURCES.map(o => `'${o}'`).join(',')
+  const quoted = UNTRUSTED_SOURCES.map(o => `'${escapeSqlStringLiteral(o)}'`).join(',')
   return `(${col} IS NULL OR ${col} NOT IN (${quoted}))`
+}
+
+/** Escape a value for use inside a SQL single-quoted string literal. */
+function escapeSqlStringLiteral(s) {
+  return String(s).replace(/'/g, "''")
 }
 
 /**
@@ -72,6 +86,8 @@ export function trustedSourceClause(alias) {
  * e.g. "record_origin IN ('live_crawl','curated_verified', ...)"
  */
 export function allowedOriginCheckSQL() {
-  const quoted = [...ALLOWED_RECORD_ORIGINS].map(o => `'${o}'`).join(',')
+  const quoted = [...ALLOWED_RECORD_ORIGINS]
+    .map(o => `'${escapeSqlStringLiteral(o)}'`)
+    .join(',')
   return `record_origin IN (${quoted})`
 }

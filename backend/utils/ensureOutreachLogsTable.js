@@ -66,11 +66,11 @@ export default async function ensureOutreachLogsTable(db) {
       organization_id TEXT REFERENCES organizations(id) ON DELETE SET NULL,
 
       funder TEXT NOT NULL,
-      method TEXT NOT NULL,
+      method TEXT NOT NULL CHECK(method IN ('email', 'call', 'meeting')),
       occurred_at DATETIME,
       subject TEXT,
       notes TEXT,
-      metadata TEXT,
+      metadata TEXT DEFAULT '{}',
 
       created_by TEXT
     );

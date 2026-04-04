@@ -56,6 +56,7 @@ import {
 import { getBackgroundCodeCrawlState } from './anyaAutonomousScheduler.js'
 import { AUDIT_CATEGORIES, SEVERITY, logAuditEvent } from './auditService.js'
 import { trustedOriginClause, trustedSourceClause } from '../utils/recordOrigins.js'
+import { scoreOpportunity } from './matchEngine.js'
 
 const tools = new Map()
 
@@ -95,8 +96,6 @@ const ALLOWED_EXTENSIONS = new Set([
 const MAX_FILE_BYTES = 350_000
 const DEFAULT_GRANT_LIMIT = 5
 // Match scoring - no base score, must earn points through actual matches
-const BASE_MATCH_SCORE = 0
-
 function safeParseJSON(value, fallback) {
   if (!value) return fallback
   try {
@@ -200,63 +199,6 @@ function generateFitExplanation(opp, profile, matchReasons) {
   }
   
   return explanation
-}
-
-function calculateMatchScore(opp, profile, matchReasons) {
-  if (!profile) return 0
-  
-  let score = 0
-  
-  // Location match (up to 25 points)
-  if (opp.state && profile.state) {
-    if (opp.state.toLowerCase() === profile.state.toLowerCase()) {
-      score += 25  // Exact state match
-    } else if (opp.is_national || opp.state === 'nationwide') {
-      score += 15  // National availability
-    }
-  } else if (opp.is_national || opp.state === 'nationwide') {
-    score += 15  // National availability when no profile state
-  }
-  
-  // Category matches (up to 40 points)
-  const oppCategories = cleanList(safeParseJSON(opp.categories, []), 10)
-  const profileCategories = cleanList(safeParseJSON(profile.categories, []), 10)
-  const matchingCategories = findMatchingCategories(oppCategories, profileCategories)
-  if (matchingCategories.length > 0) {
-    // Require at least 1 category match to get points
-    score += Math.min(matchingCategories.length * 15, 40)
-  }
-  
-  // Keywords/focus alignment (up to 20 points)
-  const oppKeywords = cleanList(safeParseJSON(opp.keywords, []), 10)
-  const profileFocus = (profile.primary_goal || '') + ' ' + (profile.mission || '')
-  if (oppKeywords.length > 0 && profileFocus.length > 10) {
-    const focusLower = profileFocus.toLowerCase()
-    const keywordMatches = oppKeywords.filter(k => focusLower.includes(k.toLowerCase())).length
-    score += Math.min(keywordMatches * 10, 20)
-  }
-  
-  // Organization type match (up to 10 points)
-  const oppEligibility = cleanList(safeParseJSON(opp.eligibility_bullets, []), 10)
-  const orgType = profile.organization_type || ''
-  if (oppEligibility.length > 0 && orgType) {
-    const eligibilityText = oppEligibility.join(' ').toLowerCase()
-    if (eligibilityText.includes('501(c)(3)') || eligibilityText.includes('nonprofit')) {
-      if (orgType.toLowerCase().includes('nonprofit') || orgType.toLowerCase().includes('501')) {
-        score += 10
-      }
-    }
-    if (eligibilityText.includes('faith') || eligibilityText.includes('church')) {
-      if (orgType.toLowerCase().includes('faith') || orgType.toLowerCase().includes('church')) {
-        score += 10
-      }
-    }
-  }
-  
-  // Match reasons bonus (up to 5 points)
-  score += Math.min(matchReasons.length * 2, 5)
-  
-  return Math.min(100, Math.max(0, score))
 }
 
 function formatAmountRange(min, max, description) {
@@ -470,7 +412,7 @@ function formatGrantSummaries(opportunities, profile = null) {
     // Calculate match score
     let matchScore = null
     if (profile) {
-      matchScore = calculateMatchScore(opp, profile, matchReasons)
+      matchScore = scoreOpportunity(profile, opp).score
     }
     
     // Generate fit explanation
@@ -586,22 +528,21 @@ export async function invokeTool(name, params, context) {
 
   const tool = tools.get(name)
 
-  // Check admin access using DB-backed verification
+  // Check admin access: prefer the already-resolved ctx.isAdmin (DB-backed,
+  // canonical from requestContext middleware) before falling back to a fresh DB lookup.
   if (tool.requiresAdmin) {
+    const ctx = context?.ctx
     const user = context?.user
     const db = context?.db
-    const req = context?.req
-    
-    if (!user) {
+
+    if (!user && !ctx) {
       const error = new Error(`Tool "${name}" requires admin privileges`)
       error.status = 403
       throw error
     }
 
-    // Prefer DB-backed admin check for reliability
-    let isAdmin = false
-    if (db) {
-      // Import at function scope to avoid circular dependency
+    let isAdmin = ctx?.isAdmin === true
+    if (!isAdmin && db && user) {
       const { isAdminUserWithDb } = await import('../utils/accessControl.js')
       try {
         isAdmin = await isAdminUserWithDb(db, user)
@@ -609,8 +550,8 @@ export async function invokeTool(name, params, context) {
         console.warn('[anyaToolRegistry] DB admin check failed, falling back to token:', error?.message)
         isAdmin = user.role === 'admin' || user.is_admin === true
       }
-    } else {
-      // Fallback to token-based check if no DB available
+    }
+    if (!isAdmin && user) {
       isAdmin = user.role === 'admin' || user.is_admin === true
     }
 
@@ -637,8 +578,8 @@ export async function invokeTool(name, params, context) {
           requires_admin: true,
           params: params ?? {},
         },
-        ipAddress: req?.ip ?? req?.headers?.['x-forwarded-for'] ?? null,
-        userAgent: req?.headers?.['user-agent'] ?? null,
+        ipAddress: context?.ip ?? context?.headers?.['x-forwarded-for'] ?? null,
+        userAgent: context?.headers?.['user-agent'] ?? null,
       })
     } catch (error) {
       // Never block tool execution on audit failures.
@@ -768,7 +709,7 @@ registerTool({
 
 registerTool({
   name: 'grants.summarizeMatches',
-  description: 'Summarise the most recently matched funding opportunities for a specific profile.',
+  description: 'Summarises and explains the most recently matched funding opportunities for a specific profile, including why each one matched.',
   schema: {
     type: 'object',
     properties: {
@@ -882,7 +823,7 @@ registerTool({
 })
 registerTool({
   name: 'admin.crawler.list',
-  description: 'List all crawler jobs with their status. Admin only.',
+  description: 'Explains crawler job status to the user — lists all crawler jobs and their current state. Admin only.',
   requiresAdmin: true,
   schema: {
     type: 'object',
@@ -897,7 +838,7 @@ registerTool({
 
 registerTool({
   name: 'admin.crawler.run',
-  description: 'Trigger any crawler type with custom parameters. Admin only.',
+  description: 'Explains to the user what a crawler run does, then triggers the requested crawler type. Admin only.',
   requiresAdmin: true,
   schema: {
     type: 'object',
@@ -926,7 +867,7 @@ registerTool({
 
 registerTool({
   name: 'admin.crawler.check',
-  description: 'Validate crawler outputs and check for errors in recent jobs. Admin only.',
+  description: 'Explains crawler output quality to the user — validates crawler outputs and surfaces any errors from recent jobs. Admin only.',
   requiresAdmin: true,
   schema: {
     type: 'object',
@@ -1215,7 +1156,7 @@ registerTool({
         type: 'array',
         items: {
           type: 'string',
-          enum: ['local', 'scholarship', 'curated_benefits', 'comprehensive', 'item_search', 'profile_enrichment', 'avatar_lookup']
+          enum: ['local', 'scholarship', 'curated_benefits', 'comprehensive', 'item_search', 'profile_enrichment', 'avatar_lookup', 'portal_check']
         },
         description: 'Array of crawler types to trigger (default: all)'
       },
@@ -1277,7 +1218,7 @@ registerTool({
       profileId: { type: 'string', description: 'Profile ID to schedule crawlers for' },
       crawlerType: {
         type: 'string',
-        enum: ['local', 'scholarship', 'curated_benefits', 'comprehensive', 'item_search', 'profile_enrichment', 'avatar_lookup'],
+        enum: ['local', 'scholarship', 'curated_benefits', 'comprehensive', 'item_search', 'profile_enrichment', 'avatar_lookup', 'portal_check'],
         description: 'Type of crawler to schedule. curated_benefits runs the new profile-matched system. Use comprehensive with parameters.mode=geo for Geo Crawl.'
       },
       schedule: { type: 'string', description: 'Cron expression (e.g., "0 9 * * 1" for every Monday at 9am)' },
@@ -2007,7 +1948,7 @@ registerTool({
 
     try {
       const { dispatchCrawlerJob } = await import('./crawlerDispatcher.js')
-      dispatchCrawlerJob({ db, jobId }).catch(() => {})
+      dispatchCrawlerJob({ db, jobId }).catch(e => console.warn('[background]', e?.message || e))
     } catch { /* ignore */ }
 
     return {
@@ -2365,6 +2306,206 @@ registerTool({
       recommendation: flagged.length > 0
         ? `Found ${flagged.length} pipeline item(s) that may require medical necessity documentation. Use medical.generateLOMN with the grantId to generate documents.`
         : 'No pipeline items currently require medical necessity documentation.',
+    }
+  },
+})
+
+import { runAutoRepair } from './anyaAutoRepairService.js'
+
+registerTool({
+  name: 'admin.code.autoRepair',
+  description: 'Scan the codebase for common anti-patterns (empty catches, console.log in routes, missing profile_id isolation in SQL) and optionally repair them. profile_bleed findings are always report-only.',
+  requiresAdmin: true,
+  schema: {
+    type: 'object',
+    properties: {
+      dryRun: {
+        type: 'boolean',
+        default: true,
+        description: 'When true (default), return a report without modifying any files.',
+      },
+      repairTypes: {
+        type: 'array',
+        items: {
+          type: 'string',
+          enum: ['empty_catch', 'console_log', 'profile_bleed'],
+        },
+        description: 'Subset of repair types to run. Defaults to all three.',
+      },
+    },
+  },
+  handler: async (params, context) => {
+    const { db } = context
+    if (!db) throw new Error('Database connection unavailable')
+    const dryRun = params?.dryRun !== false
+    const repairTypes = params?.repairTypes
+    const report = await runAutoRepair(db, { dryRun, repairTypes })
+    const totalFindings =
+      report.findings.empty_catch.length +
+      report.findings.console_log.length +
+      report.findings.profile_bleed.length
+    const recommendation = dryRun
+      ? totalFindings > 0
+        ? `Found ${totalFindings} issue(s) across ${report.scannedFiles} files. Run with dryRun=false to apply repairs (profile_bleed issues require manual SQL fixes).`
+        : `No issues found across ${report.scannedFiles} files.`
+      : `Applied repairs: ${report.repaired.empty_catch} empty_catch fix(es), ${report.repaired.console_log} console_log fix(es). profile_bleed issues (${report.findings.profile_bleed.length}) require manual SQL fixes.`
+    return { ...report, recommendation }
+  },
+})
+
+import { getHelpForRoute, getHelpForField, searchHelp } from './anyaHelpKnowledge.js'
+
+registerTool({
+  name: 'app.explainFeature',
+  description: 'Explain what a GrantFlow page or feature does, who can use it, its main actions, and how it relates to other features. Provide the routeName (e.g. SmartMatcher, Pipeline, MyProfiles).',
+  schema: {
+    type: 'object',
+    properties: {
+      routeName: {
+        type: 'string',
+        description: 'The GrantFlow page routeName to explain (e.g. SmartMatcher, Pipeline, Dashboard, MyProfiles).',
+      },
+    },
+    required: ['routeName'],
+  },
+  handler: async (params, _context) => {
+    const { routeName } = params ?? {}
+    if (!routeName) throw new Error('routeName is required')
+    const entry = getHelpForRoute(routeName)
+    if (!entry) {
+      const results = searchHelp(routeName)
+      if (results.length > 0) {
+        return {
+          found: false,
+          suggestion: `No exact match for "${routeName}". Did you mean one of: ${results.slice(0, 3).map((r) => r.key).join(', ')}?`,
+          results: results.slice(0, 3),
+        }
+      }
+      return { found: false, message: `No help entry found for "${routeName}".` }
+    }
+    return { found: true, ...entry }
+  },
+})
+
+registerTool({
+  name: 'app.explainField',
+  description: 'Explain what a specific profile field does, why it matters for grant matching, and whether it affects crawlers. Provide the field key (e.g. zip, state, entity_type, health_conditions).',
+  schema: {
+    type: 'object',
+    properties: {
+      fieldKey: {
+        type: 'string',
+        description: 'The profile field key to explain (e.g. zip, state, entity_type, naics_codes, revenue, health_conditions, military_status).',
+      },
+    },
+    required: ['fieldKey'],
+  },
+  handler: async (params, _context) => {
+    const { fieldKey } = params ?? {}
+    if (!fieldKey) throw new Error('fieldKey is required')
+    const result = getHelpForField(fieldKey)
+    if (!result) {
+      return { found: false, message: `No field definition found for key "${fieldKey}". Known fields include: zip, state, entity_type, naics_codes, revenue, health_conditions, financial_details, education, military_status, government_assistance, family_composition.` }
+    }
+    return {
+      found: true,
+      field: result.field,
+      foundOnPage: result.page.key,
+      pageTitle: result.page.title,
+    }
+  },
+})
+
+// ---------------------------------------------------------------------------
+// CodeGuard audit tools — Anya's system health brain
+// ---------------------------------------------------------------------------
+
+import {
+  testEndpoints as cgTestEndpoints,
+  auditMatchQuality as cgAuditMatchQuality,
+  verifyMissionGoals as cgVerifyMissionGoals,
+  getAuditSummary as cgGetAuditSummary,
+} from './codeGuardService.js'
+
+registerTool({
+  name: 'admin.codeGuard.endpointHealth',
+  description: 'Run live health checks against all GrantFlow API endpoints. Returns pass/fail/skip counts and response times. Use when asked about system health, API status, or endpoint reliability.',
+  requiresAdmin: true,
+  schema: {
+    type: 'object',
+    properties: {
+      port: { type: 'number', description: 'Server port (defaults to process.env.PORT or 3001)' },
+    },
+  },
+  handler: async (params, context) => {
+    const db = context?.db
+    if (!db) throw new Error('Database connection required')
+    const port = params?.port || process.env.PORT || 3001
+    const baseUrl = `http://localhost:${port}`
+    const token = process.env.ADMIN_TOKEN || process.env.ANYA_ADMIN_TOKEN || null
+    return cgTestEndpoints(db, baseUrl, token)
+  },
+})
+
+registerTool({
+  name: 'admin.codeGuard.matchAudit',
+  description: 'Audit match quality across all profiles. Grades each profile A-F based on pipeline completeness (decision metadata, explanations, URLs, matched needs). Use when asked about match quality, pipeline health, or profile-level performance.',
+  requiresAdmin: true,
+  schema: { type: 'object', properties: {} },
+  handler: async (_params, context) => {
+    const db = context?.db
+    if (!db) throw new Error('Database connection required')
+    return cgAuditMatchQuality(db)
+  },
+})
+
+registerTool({
+  name: 'admin.codeGuard.missionVerify',
+  description: 'Run the 15-goal GrantFlow mission verification. Tests real funding URLs, need matching, junk rejection, decision engine usage, profile depth, applicant types, recall balance, explainability, fingerprints, crawling, Anya health, and more. Returns a scorecard with PASS/WARN/FAIL per goal.',
+  requiresAdmin: true,
+  schema: { type: 'object', properties: {} },
+  handler: async (_params, context) => {
+    const db = context?.db
+    if (!db) throw new Error('Database connection required')
+    return cgVerifyMissionGoals(db)
+  },
+})
+
+registerTool({
+  name: 'admin.codeGuard.status',
+  description: 'Get the latest CodeGuard audit summary (endpoint health, match quality grades, mission score). This data is collected automatically on admin startup and refreshed every 6 hours. Use when asked "how is the system?" or "what does CodeGuard say?"',
+  requiresAdmin: true,
+  schema: { type: 'object', properties: {} },
+  handler: async (_params, context) => {
+    const db = context?.db
+    if (!db) throw new Error('Database connection required')
+    return { summary: cgGetAuditSummary(db) }
+  },
+})
+
+registerTool({
+  name: 'admin.codeGuard.deepSweep',
+  description: 'Run a full deep sweep: endpoint health + match quality audit + mission verification, all at once. Equivalent to CodeGuard\'s Deep Sweep mode. Use when asked to do a full system check or comprehensive audit.',
+  requiresAdmin: true,
+  schema: { type: 'object', properties: {} },
+  handler: async (_params, context) => {
+    const db = context?.db
+    if (!db) throw new Error('Database connection required')
+    const port = process.env.PORT || 3001
+    const baseUrl = `http://localhost:${port}`
+    const token = process.env.ADMIN_TOKEN || process.env.ANYA_ADMIN_TOKEN || null
+
+    const [endpoints, matchQuality, mission] = await Promise.allSettled([
+      cgTestEndpoints(db, baseUrl, token),
+      cgAuditMatchQuality(db),
+      cgVerifyMissionGoals(db),
+    ])
+
+    return {
+      endpoints: endpoints.status === 'fulfilled' ? endpoints.value : { error: endpoints.reason?.message },
+      matchQuality: matchQuality.status === 'fulfilled' ? matchQuality.value : { error: matchQuality.reason?.message },
+      mission: mission.status === 'fulfilled' ? mission.value : { error: mission.reason?.message },
+      summary: cgGetAuditSummary(db),
     }
   },
 })

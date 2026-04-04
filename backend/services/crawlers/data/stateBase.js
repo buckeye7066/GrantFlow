@@ -19,7 +19,7 @@ import { STATE_REGISTRY } from './stateRegistry.js';
  */
 export function generateStatePrograms(stateCode) {
   const reg = STATE_REGISTRY[stateCode];
-  if (!reg) return { benefits: [], meta: null, countyResources: {} };
+  if (!reg) return { benefits: [], meta: { code: stateCode, name: 'Unknown State', benefitsPortal: null, benefitsPortalName: null, dhsPhone: null, is211Available: false }, countyResources: {} };
 
   const sc = stateCode.toLowerCase();
   const meta = {
@@ -78,7 +78,7 @@ export function generateStatePrograms(stateCode) {
     // ── Medicaid ──
     {
       id: `${sc}-medicaid`,
-      name: `${reg.medicaidName || reg.name + ' Medicaid'}`,
+      name: `${reg.medicaidName || (reg.name + ' Medicaid')}`,
       description: `${reg.medicaidExpanded ? 'Free or low-cost' : 'Health'} coverage for qualifying ${reg.name} residents. ${reg.medicaidExpanded ? `${reg.name} expanded Medicaid — adults up to 138% FPL qualify.` : `Coverage for children, pregnant women, elderly, and disabled. ${reg.name} has not expanded Medicaid for all adults.`} Covers medical, dental, vision, mental health, prescriptions, and more.`,
       url: reg.medicaidUrl || reg.benefitsPortal,
       categories: ['healthcare'],
@@ -151,7 +151,7 @@ export function generateStatePrograms(stateCode) {
       id: `${sc}-housing-authority`,
       name: `${reg.housingName}`,
       description: `${reg.name}'s state housing finance agency. Provides programs for affordable housing, homebuyer assistance, homelessness prevention, emergency repair, and rental assistance.`,
-      url: reg.housingUrl,
+      url: reg.housingUrl || reg.benefitsPortal || null,
       categories: ['housing'],
       eligibility: { incomeLimit: 'Varies by program' },
       type: 'portal',
@@ -164,7 +164,7 @@ export function generateStatePrograms(stateCode) {
       id: `${sc}-voc-rehab`,
       name: `${reg.name} Vocational Rehabilitation`,
       description: `Employment services for ${reg.name} residents with disabilities: job training, education, job placement, assistive technology, and support services.`,
-      url: 'https://rsa.ed.gov/about/states',
+      url: reg.vocRehabUrl && /^https?:\/\//i.test(reg.vocRehabUrl.trim()) ? reg.vocRehabUrl : null,
       categories: ['employment', 'disability', 'education'],
       eligibility: { requiresDisability: true },
       type: 'benefit',
@@ -207,6 +207,11 @@ export function generateStatePrograms(stateCode) {
   // Append state-specific enrichment programs when present
   if (Array.isArray(reg.extraPrograms)) {
     for (const ep of reg.extraPrograms) {
+      // Goal 1: skip extra programs that have no valid application URL at source
+      if (!ep.url || typeof ep.url !== 'string' || !/^https?:\/\//i.test(ep.url.trim())) {
+        console.warn(`[stateBase] ${stateCode}: extraProgram '${ep.id || ep.name}' skipped â missing or invalid URL`);
+        continue;
+      }
       benefits.push({
         ...ep,
         id: ep.id || `${sc}-extra-${benefits.length}`,
@@ -215,7 +220,24 @@ export function generateStatePrograms(stateCode) {
     }
   }
 
-  return { benefits, meta, countyResources: {} };
+  // Goal 1 + Goal 3: strip any entry whose URL is missing or non-HTTP before returning
+  const validBenefits = [];
+  const droppedBenefits = [];
+  for (const b of benefits) {
+    if (typeof b.url === 'string' && /^https?:\/\//i.test(b.url.trim())) {
+      validBenefits.push(b);
+    } else {
+      droppedBenefits.push({ id: b.id, reason: 'missing_or_invalid_url', url: b.url, categories: b.categories ?? [] });
+    }
+  }
+  if (droppedBenefits.length > 0) {
+    // Goal 8: log suppressed entries so pipeline observers know why recall was reduced
+    console.warn(
+      `[stateBase] ${stateCode}: ${droppedBenefits.length} baseline program(s) dropped â no valid application URL`,
+      droppedBenefits
+    );
+  }
+  return { benefits: validBenefits, meta, countyResources: {}, droppedCount: droppedBenefits.length };
 }
 
 /**

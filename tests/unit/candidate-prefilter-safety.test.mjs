@@ -498,9 +498,9 @@ test('prefilter-safety (9): canonical engine rejects truly irrelevant candidates
 })
 
 // ---------------------------------------------------------------------------
-// Sanity: MATCHER_VERSION is 2.0.0
+// Sanity: MATCHER_VERSION is 3.0.0
 // ---------------------------------------------------------------------------
 
-test('prefilter-safety: MATCHER_VERSION is 2.0.0', () => {
-  assert.equal(MATCHER_VERSION, '2.0.0')
+test('prefilter-safety: MATCHER_VERSION is 3.0.0', () => {
+  assert.equal(MATCHER_VERSION, '3.0.0')
 })

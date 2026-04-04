@@ -38,13 +38,33 @@ export const USER_PROFILE_MAPPINGS = {
  * @param {string} email - User's email address (case-insensitive)
  * @returns {string|null} Profile ID if mapped, null otherwise
  */
+/** Sentinel returned when the email is the admin account (all-profiles access, no single profile). */
+export const ADMIN_PROFILE_SENTINEL = '__admin__'
+
+/**
+ * Get the designated profile ID for a given email address.
+ * Returns ADMIN_PROFILE_SENTINEL for the admin account,
+ * a profile-id string for mapped users, or null for unmapped users.
+ * @param {string} email - User's email address (case-insensitive)
+ * @returns {string|null}
+ */
 export function getDesignatedProfileForEmail(email) {
   if (!email || typeof email !== 'string') {
     return null
   }
-  
+
   const normalizedEmail = email.trim().toLowerCase()
-  return USER_PROFILE_MAPPINGS[normalizedEmail] ?? null
+  const matchingKey = Object.keys(USER_PROFILE_MAPPINGS).find(
+    key => key.toLowerCase() === normalizedEmail
+  )
+
+  if (!matchingKey) {
+    return null // truly unmapped
+  }
+
+  const profileId = USER_PROFILE_MAPPINGS[matchingKey]
+  // Distinguish admin (null in map) from unmapped (key absent)
+  return profileId === null ? ADMIN_PROFILE_SENTINEL : profileId
 }
 
 /**
@@ -52,11 +72,27 @@ export function getDesignatedProfileForEmail(email) {
  * @param {string} email - User's email address
  * @returns {boolean} True if the email has a designated profile
  */
+/**
+ * Check if a user email has a designated (non-admin) profile mapping.
+ * Returns false for unmapped users AND for the admin account.
+ * Use getDesignatedProfileForEmail() === ADMIN_PROFILE_SENTINEL to detect admin.
+ * @param {string} email - User's email address
+ * @returns {boolean}
+ */
 export function hasDesignatedProfile(email) {
   if (!email || typeof email !== 'string') {
     return false
   }
-  
+
   const normalizedEmail = email.trim().toLowerCase()
-  return normalizedEmail in USER_PROFILE_MAPPINGS
+  const matchingKey = Object.keys(USER_PROFILE_MAPPINGS).find(
+    key => key.toLowerCase() === normalizedEmail
+  )
+
+  if (!matchingKey) {
+    return false
+  }
+
+  // Admin has a key but no real profile ID â not a 'designated profile' assignment
+  return USER_PROFILE_MAPPINGS[matchingKey] !== null
 }

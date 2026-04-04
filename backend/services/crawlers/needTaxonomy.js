@@ -255,7 +255,7 @@ export function expandNeed(needText) {
     return {
       canonicalNeed: best.entry.canonicalNeed,
       synonyms: best.entry.synonyms,
-      mustTerms: [best.key, ...text.split(/\s+/).filter(w => w.length > 2)],
+      mustTerms: [...new Set([best.key, ...text.split(/\s+/).filter(w => w.length > 2)])],
       programCategories: [...allCats],
       matchedKey: best.key,
     };
@@ -278,26 +278,46 @@ export function expandNeed(needText) {
     return {
       canonicalNeed: best.entry.canonicalNeed,
       synonyms: best.entry.synonyms,
-      mustTerms: [best.syn, ...text.split(/\s+/).filter(w => w.length > 2)],
+      mustTerms: [...new Set([best.syn, ...text.split(/\s+/).filter(w => w.length > 2)])],
       programCategories: [...allCats],
       matchedKey: best.syn,
     };
   }
 
-  // Fallback: treat each word as a potential need
+  // Fallback: collect ALL word-level matches and merge their categories for maximum recall
   const words = text.split(/\s+/).filter(w => w.length > 2);
+  const fallbackMatches = [];
+  // Collect ALL taxonomy keys that contain any word, then deduplicate by key name.
+  // Sort by key length descending before iterating so longer (more specific) keys win
+  // when we later pick the primary canonical need.
+  const taxonomyEntries = Object.entries(TAXONOMY).sort((a, b) => b[0].length - a[0].length);
+  const seenFallbackKeys = new Set();
   for (const word of words) {
-    for (const [key, entry] of Object.entries(TAXONOMY)) {
-      if (key.includes(word) || entry.synonyms.some(s => s.toLowerCase().includes(word))) {
-        return {
-          canonicalNeed: entry.canonicalNeed,
-          synonyms: entry.synonyms,
-          mustTerms: words,
-          programCategories: entry.programCategories,
-          matchedKey: key,
-        };
+    for (const [key, entry] of taxonomyEntries) {
+      if (!seenFallbackKeys.has(key) &&
+          (key.includes(word) || entry.synonyms.some(s => s.toLowerCase().includes(word)))) {
+        fallbackMatches.push({ key, entry });
+        seenFallbackKeys.add(key);
+        // Do NOT break â a single word may match multiple taxonomy keys;
+        // we want all of them for maximum recall (Goal 7)
       }
     }
+  }
+  if (fallbackMatches.length > 0) {
+    // Primary canonical need from the first (longest-key) match
+    fallbackMatches.sort((a, b) => b.key.length - a.key.length);
+    const primary = fallbackMatches[0];
+    const mergedCats = new Set(primary.entry.programCategories);
+    for (const fm of fallbackMatches.slice(1)) {
+      for (const c of fm.entry.programCategories) mergedCats.add(c);
+    }
+    return {
+      canonicalNeed: primary.entry.canonicalNeed,
+      synonyms: primary.entry.synonyms,
+      mustTerms: words,
+      programCategories: [...mergedCats],
+      matchedKey: primary.key,
+    };
   }
 
   return {
@@ -320,22 +340,28 @@ export function scoreNeedMatch(program, expandedNeed) {
   let score = 0;
   const matchedTerms = [];
 
-  // Category overlap
+  // Category overlap â capped at 40 pts total to prevent broad-category programs
+  // from reaching acceptance thresholds on category tags alone (Goal 3).
   const cats = new Set(program.categories || []);
+  let catScore = 0;
   for (const cat of expandedNeed.programCategories) {
     if (cats.has(cat)) {
-      score += 25;
+      catScore += 25;
       matchedTerms.push(`category:${cat}`);
     }
   }
+  score += Math.min(40, catScore);
 
-  // Must-term presence
+  // Must-term presence â cap total must-term contribution to avoid raw-word inflation
+  let mustHits = 0;
   for (const term of expandedNeed.mustTerms) {
     if (programText.includes(term.toLowerCase())) {
-      score += 15;
+      mustHits++;
       matchedTerms.push(`term:${term}`);
     }
   }
+  // Cap must-term contribution at 20 pts regardless of word count
+  score += Math.min(20, mustHits * 5);
 
   // Synonym presence
   let synHits = 0;
@@ -347,12 +373,22 @@ export function scoreNeedMatch(program, expandedNeed) {
   }
   score += Math.min(30, synHits * 10);
 
-  if (score === 0) return null;
+  // Return a low-signal result rather than null so the decision engine can still evaluate;
+  // null suppresses before computeMatchDecision() sees the record (violates Goal 7)
+  if (score === 0) {
+    return {
+      score: 0,
+      matchedTerms: [],
+      canonicalNeed: expandedNeed.canonicalNeed,
+    };
+  }
 
   return {
     score: Math.min(100, score),
     matchedTerms,
     canonicalNeed: expandedNeed.canonicalNeed,
+    matchedProgramCategories: expandedNeed.programCategories.filter(c => (program.categories || []).includes(c)),
+    mustTermHits: expandedNeed.mustTerms.filter(t => programText.includes(t.toLowerCase())),
   };
 }
 

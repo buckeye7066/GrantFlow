@@ -6,7 +6,7 @@ import { getSafeHealthSummary } from '../services/diagnosticsService.js'
 import { ensureUploadsDirWritable, isLikelyPersistentPath } from '../utils/uploadsDir.js'
 import { getDataReadiness, getSystemAlerts } from '../services/dataReadinessService.js'
 import { getPipelineHealth } from '../middleware/pipelineMonitor.js'
-import { MATCHER_VERSION } from '../services/matchDecisionEngine.js'
+import { MATCHER_VERSION } from '../services/matchEngine.js'
 import { RELEVANCE_RULES } from '../services/relevanceFilterRules.js'
 
 const router = express.Router()
@@ -18,9 +18,19 @@ const __dirname = path.dirname(__filename)
 let _cachedPkgVersion = null
 try {
   const pkgPath = path.resolve(__dirname, '../../package.json')
-  const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'))
-  _cachedPkgVersion = pkg.version || null
-} catch { /* ignore */ }
+  const rawPkg = fs.readFileSync(pkgPath, 'utf8')
+  let parsedPkg
+  try {
+    parsedPkg = JSON.parse(rawPkg)
+  } catch (parseError) {
+    console.warn('Failed to parse package.json:', parseError.message)
+    parsedPkg = {}
+  }
+  _cachedPkgVersion = parsedPkg.version || null
+} catch (error) {
+  console.warn('Failed to load package.json version:', error.message)
+  _cachedPkgVersion = 'unknown'
+}
 
 function getBuildInfo() {
   const commit =
@@ -92,7 +102,10 @@ async function checkRequiredSchema(db) {
         if (!row) return { ok: false, reason: 'missing_schema', missing: item }
       } else {
         if (!/^[a-zA-Z0-9_]+$/.test(item.table)) return { ok: false, reason: 'invalid_table_identifier', table: item.table }
-        const rows = await db.prepare(`PRAGMA table_info(${item.table})`).all()
+        if (!/^[a-zA-Z0-9_]+$/.test(item.table)) return { ok: false, reason: 'invalid_table_identifier', table: item.table }
+        if (!/^[a-zA-Z0-9_]+$/.test(item.column)) return { ok: false, reason: 'invalid_column_identifier', column: item.column }
+        const stmt = db.prepare('SELECT * FROM pragma_table_info(?)')
+        const rows = await stmt.all(item.table)
         const has = (rows || []).some((r) => String(r?.name || '') === item.column)
         if (!has) return { ok: false, reason: 'missing_schema', missing: item }
       }

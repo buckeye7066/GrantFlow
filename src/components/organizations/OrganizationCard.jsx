@@ -15,12 +15,22 @@ export default function OrganizationCard({ organization, grantCount, isSelected,
     setImgError(false);
   }, [organization.profile_image_url]);
 
-  const isOrganization = organization.applicant_type === 'organization' || !organization.applicant_type;
+  const ORGANIZATION_TYPES = ['organization', 'nonprofit', 'business', 'government'];
+const isOrganization = ORGANIZATION_TYPES.includes(organization.applicant_type);
+const isUnknownType = !organization.applicant_type || (!isOrganization && !isStudent && !isIndividual);
   const isStudent = ['high_school_student', 'college_student', 'graduate_student'].includes(organization.applicant_type);
-  const isIndividual = ['individual_need', 'medical_assistance', 'family'].includes(organization.applicant_type);
+  const isIndividual = [
+  'individual_need',
+  'medical_assistance',
+  'family',
+  'veteran',
+  'caregiver',
+  'disabled_person',
+  'emergency_affected'
+].includes(organization.applicant_type);
 
   const { data: taxonomyItems = [] } = useQuery({
-      queryKey: ['taxonomy'],
+      queryKey: ['taxonomy', organization.applicant_type],
       queryFn: () => client.entities.Taxonomy.list(),
       enabled: isIndividual && !!organization.assistance_categories,
   });
@@ -188,7 +198,7 @@ export default function OrganizationCard({ organization, grantCount, isSelected,
                 ))}
                 {(organization.assistance_categories?.length || 0) > 2 && (
                      <Badge variant="outline" className="bg-rose-50 text-rose-700 text-xs">
-                        +{(organization.assistance_categories.length || 0) - 2} more
+                        +{(organization.assistance_categories?.length || 0) - 2} more
                     </Badge>
                 )}
               </div>
@@ -241,6 +251,13 @@ export default function OrganizationCard({ organization, grantCount, isSelected,
         </div>
 
 
+        {/* Profile completeness nudge for unknown type */}
+        {isUnknownType && (
+          <div className="flex items-center gap-2 text-xs text-amber-600 bg-amber-50 rounded px-2 py-1 mb-2">
+            <User className="w-3 h-3" />
+            <span>Complete your profile type to improve grant matching.</span>
+          </div>
+        )}
         {/* Grant Count */}
         <div className="flex items-center gap-2 pt-4 mt-4 border-t border-slate-100">
           <TrendingUp className="w-4 h-4 text-emerald-600" />

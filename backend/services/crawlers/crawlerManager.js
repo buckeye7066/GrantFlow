@@ -68,6 +68,7 @@ async function ensureCrawlSchema(db) {
   } catch (err) {
     if (!String(err?.message).includes('already exists')) {
       console.error('[CrawlerManager] Schema ensure error:', err.message);
+      throw err; // Re-throw non-duplicate errors
     }
     crawlSchemaEnsured = true;
   }
@@ -84,7 +85,13 @@ async function loadStateData(stateCode) {
       countyResources: mod.COUNTY_RESOURCES || {},
       meta: mod.STATE_META || null,
     };
-  } catch { /* no dedicated file */ }
+  } catch (importErr) {
+    // Only suppress MODULE_NOT_FOUND (file genuinely absent); re-log anything else
+    const msg = importErr?.message || '';
+    if (!msg.includes('Cannot find module') && !msg.includes('ERR_MODULE_NOT_FOUND')) {
+      console.warn(`[CrawlerManager] loadStateData: unexpected error importing state file for ${stateCode}:`, msg);
+    }
+  }
 
   if (isStateInRegistry(stateCode)) {
     const generated = generateStatePrograms(stateCode);
@@ -553,15 +560,20 @@ async function storeResults(db, profileId, results, analysis, stateMeta, countyC
     `);
 
     for (const result of results) {
-      await stmt.run(
-        profileId, result.id, result.name,
-        result.url || result.applicationUrl || null,
-        result.description, result.matchScore,
-        JSON.stringify(result.matchReasons),
-        JSON.stringify(result.matchedCategories),
-        result.type, result.fundingType, result.maxAmount || null,
-        result.id?.startsWith('school-') ? 'school' : (result.stateRestriction ? 'state' : (result.id?.startsWith('fed-') ? 'federal' : 'national')),
-      );
+      try {
+        await stmt.run(
+          profileId, result.id, result.name,
+          result.url || result.applicationUrl || null,
+          result.description, result.matchScore,
+          JSON.stringify(result.matchReasons),
+          JSON.stringify(result.matchedCategories),
+          result.type, result.fundingType, result.maxAmount || null,
+          result.id?.startsWith('school-') ? 'school' : (result.stateRestriction ? 'state' : (result.id?.startsWith('fed-') ? 'federal' : 'national')),
+        );
+      } catch (err) {
+        console.error(`Failed to store result ${result.id}:`, err.message);
+        throw err;
+      }
     }
 
     const analysisJson = JSON.stringify({
@@ -609,7 +621,7 @@ async function storeResults(db, profileId, results, analysis, stateMeta, countyC
           is_national: !result.stateRestriction,
           opportunity_type: isSchoolCard ? 'school_resource' : (result.type === 'portal' ? 'directory' : result.type === 'grant' ? 'grant' : 'program'),
           type: (isSchoolCard || result.type === 'portal') ? 'DIRECTORY' : 'OPPORTUNITY',
-          deadline_type: result.recurring ? 'rolling' : 'rolling',
+          deadline_type: 'rolling',
           amount_max: result.maxAmount || null,
           contact_info: contactInfo,
           categories: JSON.stringify(result.categories || []),
@@ -623,7 +635,8 @@ async function storeResults(db, profileId, results, analysis, stateMeta, countyC
         });
         fundingUpserted++;
       } catch (e) {
-        console.warn(`[CrawlerManager] upsert failed for ${result.id}: ${e.message}`);
+        console.error(`[CrawlerManager] upsert failed for ${result.id}: ${e.message}`);
+        // Do not modify fundingUpserted â it counts successes only
       }
     }
     console.log(`[CrawlerManager] Stored ${results.length} crawl_results + ${fundingUpserted} funding_opportunities`);

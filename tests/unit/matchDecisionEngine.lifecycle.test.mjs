@@ -251,7 +251,7 @@ test('duplicate prevention (B): inserting same opportunity twice is idempotent',
 // C) reEvaluateStalePipelineEntries: stale row removal/update
 // ---------------------------------------------------------------------------
 
-test('stale re-evaluation (C): rows with old matcher_version are detected as stale', () => {
+test('stale re-evaluation (C): rows with old matcher_version are detected as stale', async () => {
   const db = buildDb()
   const raw = db._raw
 
@@ -261,7 +261,7 @@ test('stale re-evaluation (C): rows with old matcher_version are detected as sta
   raw.prepare(`INSERT OR IGNORE INTO funding_opportunities (id, title, description, application_url, is_national, categories, keywords, is_active) VALUES (?, ?, ?, ?, ?, ?, ?, 1)`).run('opp-stale', 'Old Grant', 'Old grant description', 'https://example.gov/old', 1, '["housing"]', '["housing"]')
   raw.prepare(`INSERT INTO grants (id, organization_id, profile_id, funding_opportunity_id, title, match_score, match_decision, matcher_version, profile_fingerprint, opportunity_fingerprint) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL)`).run('grant-stale-1', 'org-stale', 'profile-stale', 'opp-stale', 'Old Grant', 70, 'ACCEPT', '1.0.0')
 
-  const { reEvaluated, removed } = reEvaluateStalePipelineEntries(raw)
+  const { reEvaluated, removed } = await reEvaluateStalePipelineEntries(raw)
 
   // Should have processed the stale row (version 1.0.0 != 2.0.0)
   assert.ok(
@@ -270,7 +270,7 @@ test('stale re-evaluation (C): rows with old matcher_version are detected as sta
   )
 })
 
-test('stale re-evaluation (C): rows with null fingerprints are detected as stale', () => {
+test('stale re-evaluation (C): rows with null fingerprints are detected as stale', async () => {
   const db = buildDb()
   const raw = db._raw
 
@@ -280,7 +280,7 @@ test('stale re-evaluation (C): rows with null fingerprints are detected as stale
   raw.prepare(`INSERT OR IGNORE INTO funding_opportunities (id, title, description, application_url, is_national, categories, keywords, is_active) VALUES (?, ?, ?, ?, ?, ?, ?, 1)`).run('opp-nullfp', 'Housing Assistance', 'Provides rent assistance', 'https://hud.gov/rent', 1, '["housing"]', '["housing", "rent"]')
   raw.prepare(`INSERT INTO grants (id, organization_id, profile_id, funding_opportunity_id, title, match_score, match_decision, matcher_version, profile_fingerprint, opportunity_fingerprint) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL)`).run('grant-nullfp-1', 'org-nullfp', 'profile-nullfp', 'opp-nullfp', 'Housing Assistance', 70, 'ACCEPT', MATCHER_VERSION)
 
-  const { reEvaluated, removed } = reEvaluateStalePipelineEntries(raw)
+  const { reEvaluated, removed } = await reEvaluateStalePipelineEntries(raw)
 
   // Null fingerprints means "never evaluated by v2.0.0 engine" — should be re-evaluated
   assert.ok(
@@ -293,7 +293,7 @@ test('stale re-evaluation (C): rows with null fingerprints are detected as stale
 // D) REJECT rows are removed during re-evaluation
 // ---------------------------------------------------------------------------
 
-test('stale re-evaluation (D): REJECT decisions remove rows from pipeline', () => {
+test('stale re-evaluation (D): REJECT decisions remove rows from pipeline', async () => {
   const db = buildDb()
   const raw = db._raw
 
@@ -319,7 +319,7 @@ test('stale re-evaluation (D): REJECT decisions remove rows from pipeline', () =
   ).get().c
   assert.equal(beforeCount, 1, 'should start with 1 stale grant')
 
-  const { removed } = reEvaluateStalePipelineEntries(raw)
+  const { removed } = await reEvaluateStalePipelineEntries(raw)
 
   const afterCount = raw.prepare(
     "SELECT COUNT(*) as c FROM grants WHERE profile_id = 'profile-reject'",

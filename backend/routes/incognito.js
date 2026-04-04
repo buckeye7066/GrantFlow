@@ -3,13 +3,21 @@ import ensureUserPreferencesTable from '../utils/ensureUserPreferencesTable.js'
 
 const router = express.Router()
 
-// Simple health endpoint to verify Incognito module is enabled for the user.
-router.get('/health', async (req, res) => {
-  const userId = req.ctx?.userId ?? null
-  if (!userId) {
+// Apply authentication middleware to all routes
+router.use((req, res, next) => {
+  if (!req.ctx?.userId) {
     return res.status(401).json({ error: 'Authentication required' })
   }
+  next()
+})
+
+// Simple health endpoint to verify Incognito module is enabled for the user.
+router.get('/health', async (req, res) => {
+  const userId = req.ctx.userId
   try {
+    if (!req.db) {
+      throw new Error('Database connection not available')
+    }
     await ensureUserPreferencesTable(req.db)
     const row = await req.db
       .prepare('SELECT custom_preferences FROM user_preferences WHERE user_id = ?')
@@ -18,7 +26,8 @@ router.get('/health', async (req, res) => {
     if (typeof custom === 'string') {
       try {
         custom = JSON.parse(custom)
-      } catch {
+      } catch (parseError) {
+        console.warn('[incognito] Invalid JSON in custom_preferences:', parseError)
         custom = {}
       }
     }

@@ -97,7 +97,11 @@ export function ingestOpportunities(db, opportunities, sourceName) {
     for (const opp of opportunities) {
       try {
         // Check if exists before upsert to track insert vs update
-        const existing = checkExists.get(opp.source, opp.source_id);
+        // Validate input parameters before SQL execution
+if (!opp.source || !opp.source_id) {
+  throw new Error('Invalid opportunity: missing source or source_id');
+}
+const existing = checkExists.get(opp.source, opp.source_id);
 
         if (existing) {
           updateStmt.run(
@@ -199,6 +203,10 @@ export function ingestOpportunities(db, opportunities, sourceName) {
       error_messages: errorMessages,
     };
   } catch (error) {
+    // Rollback transaction if possible
+    // better-sqlite3 rolls back automatically when the transaction function throws.
+// No manual rollback call is needed or available.
+    
     // Update ingestion run as failed
     const failRun = db.prepare(`
       UPDATE ingestion_runs
@@ -232,7 +240,11 @@ export function ingestOpportunities(db, opportunities, sourceName) {
  * @returns {object} Status by source
  */
 export function getIngestionStatus(db) {
-  const sources = ['grants.gov', 'usaspending.gov'];
+  // Derive the source list dynamically from what is actually in the DB
+const sourceRows = db.prepare(
+  `SELECT DISTINCT source FROM ingestion_runs ORDER BY source`
+).all();
+const sources = sourceRows.map(r => r.source);
   const status = {};
   
   for (const source of sources) {

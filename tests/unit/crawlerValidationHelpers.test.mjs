@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import path from 'node:path'
 
 const __filename = fileURLToPath(import.meta.url)
@@ -14,7 +14,8 @@ const contractPath = path.join(
   'crawlers',
   'crawlerOpportunityContract.js',
 )
-const { isValidHttpUrl, isLoanOrMatchingFund } = await import(contractPath)
+const contractUrl = pathToFileURL(contractPath).href
+const { isValidHttpUrl, isLoanOrMatchingFund } = await import(contractUrl)
 
 // ─── isValidHttpUrl ─────────────────────────────────────────────
 

@@ -1,5 +1,5 @@
-import React, { useMemo, useState, useCallback, useEffect } from "react"
-import { Sparkles, Search, Filter, SlidersHorizontal, Star, TrendingUp, Award, Plus, X, CheckSquare } from "lucide-react"
+import React, { useMemo, useState, useCallback, useEffect, useRef } from "react"
+import { Sparkles, Search, Filter, SlidersHorizontal, Star, TrendingUp, Award, Plus, X, CheckSquare, Target, Loader2, MapPin, User, Zap } from "lucide-react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -7,8 +7,12 @@ import { Label } from "@/components/ui/label"
 import { Badge } from "@/components/ui/badge"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Checkbox } from "@/components/ui/checkbox"
-import { useQuery } from "@tanstack/react-query"
+import { Alert, AlertDescription } from "@/components/ui/alert"
+import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query"
 import { apiFetch } from "@/api/client"
+import { getItemSuggestions } from "@/api/items"
+import { getProfile } from "@/api/profiles"
+import { runSmartCrawler } from "@/api/crawlers"
 import ProfileSelect from "@/components/shared/ProfileSelect"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { useToast } from "@/components/ui/use-toast"
@@ -17,6 +21,33 @@ import { useToast } from "@/components/ui/use-toast"
 // Persistent checklist helpers – stored in localStorage keyed per profile
 // ---------------------------------------------------------------------------
 const CHECKLIST_STORAGE_PREFIX = "grantflow:matcher-checklist:"
+
+// ---------------------------------------------------------------------------
+// Persistent needs helpers – stored in localStorage keyed per profile
+// ---------------------------------------------------------------------------
+const NEEDS_STORAGE_PREFIX = "grantflow:matcher-needs:"
+
+function loadNeeds(profileId) {
+    if (!profileId) return { checked: {}, customItems: [] }
+    try {
+        const raw = localStorage.getItem(NEEDS_STORAGE_PREFIX + profileId)
+        if (!raw) return { checked: {}, customItems: [] }
+        const parsed = JSON.parse(raw)
+        return {
+            checked: parsed.checked && typeof parsed.checked === "object" ? parsed.checked : {},
+            customItems: Array.isArray(parsed.customItems) ? parsed.customItems : [],
+        }
+    } catch {
+        return { checked: {}, customItems: [] }
+    }
+}
+
+function saveNeeds(profileId, state) {
+    if (!profileId) return
+    try {
+        localStorage.setItem(NEEDS_STORAGE_PREFIX + profileId, JSON.stringify(state))
+    } catch { /* ignore quota errors */ }
+}
 
 function loadChecklist(profileId) {
     if (!profileId) return { checked: {}, customItems: [] }
@@ -57,6 +88,10 @@ export default function SmartMatcher() {
     const [minScore, setMinScore] = useState(50)
     const [selectedOpp, setSelectedOpp] = useState(null)
     const { toast } = useToast()
+    const queryClient = useQueryClient()
+    const [isSearchingNeeds, setIsSearchingNeeds] = useState(false)
+    // Tracks which profile we already auto-populated keywords for (avoids re-populating on re-render)
+    const autoPopulatedProfileRef = useRef(null)
 
   // -- Persistent checklist state per profile --
   const [checklistState, setChecklistState] = useState({ checked: {}, customItems: [] })
@@ -71,6 +106,29 @@ export default function SmartMatcher() {
   useEffect(() => {
         saveChecklist(selectedProfileId, checklistState)
   }, [selectedProfileId, checklistState])
+
+  // -- Persistent needs state per profile --
+  const [needsState, setNeedsState] = useState({ checked: {}, customItems: [] })
+  const [newNeedText, setNewNeedText] = useState("")
+
+  // Load needs when profile changes
+  useEffect(() => {
+        setNeedsState(loadNeeds(selectedProfileId))
+  }, [selectedProfileId])
+
+  // Persist needs whenever they change
+  useEffect(() => {
+        saveNeeds(selectedProfileId, needsState)
+  }, [selectedProfileId, needsState])
+
+  // -- Reset all search state when profile switches --
+  useEffect(() => {
+        setSearchQuery("")
+        setSelectedOpp(null)
+        setIsSearchingNeeds(false)
+        autoPopulatedProfileRef.current = null
+        queryClient.invalidateQueries({ queryKey: ["smart-matcher"] })
+  }, [selectedProfileId, queryClient])
 
   const toggleChecklistItem = useCallback((itemId) => {
         setChecklistState((prev) => ({
@@ -108,6 +166,117 @@ export default function SmartMatcher() {
         [allChecklistItems, checklistState.checked],
       )
 
+  // -- Needs handlers --
+  const toggleNeed = useCallback((needId) => {
+        setNeedsState((prev) => ({
+                ...prev,
+                checked: { ...prev.checked, [needId]: !prev.checked[needId] },
+        }))
+  }, [])
+
+  const addCustomNeed = useCallback(() => {
+        const text = newNeedText.trim()
+        if (!text) return
+        const id = "need_custom_" + Date.now()
+        setNeedsState((prev) => ({
+                ...prev,
+                customItems: [...prev.customItems, { id, name: text, category: "custom" }],
+        }))
+        setNewNeedText("")
+  }, [newNeedText])
+
+  const removeCustomNeed = useCallback((needId) => {
+        setNeedsState((prev) => ({
+                ...prev,
+                customItems: prev.customItems.filter((i) => i.id !== needId),
+                checked: (() => { const c = { ...prev.checked }; delete c[needId]; return c })(),
+        }))
+  }, [])
+
+  // -- Item suggestions (inferred needs) --
+  const { data: suggestionsResponse, isLoading: isSuggestionsLoading } = useQuery({
+        queryKey: ['item-suggestions', selectedProfileId],
+        queryFn: () => getItemSuggestions({ profileId: selectedProfileId }),
+        enabled: Boolean(selectedProfileId) && selectedProfileId !== 'all',
+        staleTime: 300_000,
+  })
+
+  const inferredNeeds = useMemo(() => {
+        const payload = suggestionsResponse?.data ?? suggestionsResponse ?? {}
+        const suggestions = payload?.suggestions ?? []
+        return Array.isArray(suggestions) ? suggestions : []
+  }, [suggestionsResponse])
+
+  // -- Auto-populate search keywords from inferred needs on first profile load --
+  // Only runs once per profile selection; skips if the user has already typed a query.
+  useEffect(() => {
+        if (!selectedProfileId || selectedProfileId === 'all') return
+        if (isSuggestionsLoading) return
+        if (inferredNeeds.length === 0) return
+        if (autoPopulatedProfileRef.current === selectedProfileId) return
+        // Don't overwrite a query the user typed manually
+        if (searchQuery.trim()) {
+                autoPopulatedProfileRef.current = selectedProfileId
+                return
+        }
+        autoPopulatedProfileRef.current = selectedProfileId
+        const keywords = inferredNeeds.slice(0, 5).map((n) => n.name).join(" ")
+        setSearchQuery(keywords)
+  }, [selectedProfileId, inferredNeeds, isSuggestionsLoading, searchQuery])
+
+  // -- Fetch selected profile data --
+  const { data: selectedProfile } = useQuery({
+        queryKey: ['profile', selectedProfileId],
+        queryFn: () => getProfile(selectedProfileId),
+        enabled: Boolean(selectedProfileId) && selectedProfileId !== 'all',
+        staleTime: 300_000,
+  })
+
+  // -- Smart crawler mutation --
+  const crawlMutation = useMutation({
+        mutationFn: () => runSmartCrawler({
+        profileId: selectedProfileId,
+        minMatchScore: minScore,
+        state: selectedProfile?.state ?? undefined,
+        city: selectedProfile?.city ?? undefined,
+        applicantType: selectedProfile?.primary_type ?? selectedProfile?.applicant_type ?? undefined,
+}),
+        onSuccess: (data) => {
+                queryClient.invalidateQueries({ queryKey: ['smart-matcher'] })
+                const count = data?.count ?? 0
+                toast({
+                        title: `Found ${count} new opportunit${count === 1 ? 'y' : 'ies'}`,
+                        description: data?.sources_used?.length
+                                ? `Sources: ${data.sources_used.join(', ')}`
+                                : 'Matching results refreshed.',
+                })
+        },
+        onError: (err) => {
+                toast({ title: 'Crawl failed', description: err?.message ?? 'Unknown error', variant: 'destructive' })
+        },
+  })
+
+  const handleSearchNeeds = useCallback(() => {
+        const checkedInferred = inferredNeeds
+                .filter((s) => needsState.checked[s.name])
+                .map((s) => s.name)
+        const checkedCustom = needsState.customItems
+                .filter((i) => needsState.checked[i.id])
+                .map((i) => i.name)
+        const allChecked = [...checkedInferred, ...checkedCustom]
+        if (allChecked.length === 0) return
+
+        const query = allChecked.join(" ")
+        setSearchQuery(query)
+        setIsSearchingNeeds(true)
+
+        // Force refetch even if keywords haven't changed
+        queryClient.invalidateQueries({ queryKey: ["smart-matcher"] })
+
+        // Toast feedback
+        toast({ title: `Searching ${allChecked.length} selected need${allChecked.length === 1 ? "" : "s"}...` })
+  }, [inferredNeeds, needsState, setSearchQuery, queryClient, toast])
+
   // -- Matching data --
   const { data: scoredResponse, isLoading: isScoring } = useQuery({
         queryKey: ['smart-matcher', selectedProfileId, minScore, searchQuery],
@@ -126,6 +295,13 @@ export default function SmartMatcher() {
         staleTime: 60_000,
   })
 
+  useEffect(() => {
+        if (!isScoring && isSearchingNeeds) {
+                setIsSearchingNeeds(false)
+                document.getElementById("match-results")?.scrollIntoView({ behavior: "smooth" })
+        }
+  }, [isScoring, isSearchingNeeds])
+
   const scoredOpportunities = useMemo(() => {
         const payload = scoredResponse?.data ?? scoredResponse ?? {}
               const rows = payload?.opportunities ?? []
@@ -136,7 +312,7 @@ export default function SmartMatcher() {
         return [...scoredOpportunities].sort((a, b) => (b.match_score ?? 0) - (a.match_score ?? 0))
   }, [scoredOpportunities])
 
-  const topMatches = filteredOpportunities.slice(0, 10)
+  const topMatches = filteredOpportunities.filter(o => (o.match_score ?? 0) >= 85)
     const goodMatches = filteredOpportunities.filter(o => (o.match_score ?? 0) >= 70 && (o.match_score ?? 0) < 85)
     const allQualified = filteredOpportunities
 
@@ -146,6 +322,17 @@ export default function SmartMatcher() {
         const url = selectedOpp?.application_url ?? selectedOpp?.source_url ?? selectedOpp?.url ?? null
         if (!url || typeof url !== 'string') {
                 toast({ title: 'No application link available', description: 'This opportunity does not include a valid URL yet.', variant: 'destructive' })
+                return
+        }
+        let parsedUrl
+        try {
+                parsedUrl = new URL(url)
+        } catch {
+                toast({ title: 'Invalid application URL', description: 'The stored URL is malformed and cannot be opened.', variant: 'destructive' })
+                return
+        }
+        if (parsedUrl.protocol !== 'https:' && parsedUrl.protocol !== 'http:') {
+                toast({ title: 'Unsafe application URL', description: 'Only http and https links can be opened.', variant: 'destructive' })
                 return
         }
         window.open(url, '_blank', 'noopener,noreferrer')
@@ -177,6 +364,26 @@ export default function SmartMatcher() {
                                                                             placeholder="Select a profile to match..."
                                                                           />
                                             </div>
+                                            {/* Profile summary card */}
+                                            {selectedProfile && selectedProfileId && selectedProfileId !== 'all' && (
+                                              <Alert className="bg-blue-50 border-blue-200">
+                                                <User className="h-4 w-4 text-blue-600" />
+                                                <AlertDescription className="text-blue-800">
+                                                  <span className="font-semibold">{selectedProfile.display_name || selectedProfile.name || 'Unnamed profile'}</span>
+                                                  {(selectedProfile.primary_type || selectedProfile.applicant_type) && (
+                                                    <Badge variant="outline" className="ml-2 text-xs border-blue-300 text-blue-700">
+                                                      {(selectedProfile.primary_type || selectedProfile.applicant_type).replace(/_/g, ' ')}
+                                                    </Badge>
+                                                  )}
+                                                  {selectedProfile.state && (
+                                                    <span className="ml-2 inline-flex items-center gap-1 text-xs text-blue-600">
+                                                      <MapPin className="w-3 h-3" />
+                                                      {[selectedProfile.city, selectedProfile.state].filter(Boolean).join(', ')}
+                                                    </span>
+                                                  )}
+                                                </AlertDescription>
+                                              </Alert>
+                                            )}
                                             <div className="grid md:grid-cols-2 gap-4">
                                                           <div>
                                                                           <Label>Search Keywords</Label>
@@ -205,13 +412,139 @@ export default function SmartMatcher() {
                                                           </div>
                                             </div>
                                   {selectedProfileId && selectedProfileId !== 'all' && (
-                        <div className="text-xs text-slate-600">
-                          {isScoring ? 'Scoring opportunities using full profile data\u2026' : `Showing ${filteredOpportunities.length} matches (server-scored)`}
+                        <div className="flex items-center justify-between gap-4">
+                          <div className="text-xs text-slate-600">
+                            {isScoring ? 'Scoring opportunities using full profile data\u2026' : `Showing ${filteredOpportunities.length} matches (server-scored)`}
+                          </div>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => crawlMutation.mutate()}
+                            disabled={crawlMutation.isPending}
+                            className="shrink-0 border-emerald-300 text-emerald-700 hover:bg-emerald-50"
+                          >
+                            {crawlMutation.isPending ? (
+                              <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                            ) : (
+                              <Zap className="w-4 h-4 mr-2" />
+                            )}
+                            {crawlMutation.isPending ? 'Finding funding…' : 'Find New Funding'}
+                          </Button>
                         </div>
                                             )}
                                 </CardContent>
                       </Card>
               
+                {/* ----------------------------------------------------------------- */}
+                {/* Search by Profile Needs – inferred needs checklist              */}
+                {/* ----------------------------------------------------------------- */}
+                {selectedProfileId && selectedProfileId !== 'all' && (
+                    <Card>
+                                <CardHeader className="pb-3">
+                                              <CardTitle className="flex items-center gap-2 text-lg">
+                                                              <Target className="w-5 h-5 text-blue-600" />
+                                                              Search by Profile Needs
+                                              </CardTitle>
+                                              <CardDescription>
+                                                              Select inferred needs to build a search query, or add your own.
+                                              </CardDescription>
+                                </CardHeader>
+                                <CardContent className="space-y-3">
+                                  {isSuggestionsLoading ? (
+                                      <div className="space-y-2">
+                                          {[1, 2, 3].map((n) => (
+                                              <div key={n} className="h-6 bg-slate-100 rounded animate-pulse" />
+                                          ))}
+                                      </div>
+                                  ) : inferredNeeds.length === 0 && needsState.customItems.length === 0 ? (
+                                      <p className="text-sm text-slate-500 italic">No inferred needs for this profile.</p>
+                                  ) : (
+                                      <>
+                                          {inferredNeeds.map((suggestion) => (
+                                              <div key={suggestion.name} className="flex items-center gap-3">
+                                                  <Checkbox
+                                                      id={`need-${suggestion.name}`}
+                                                      checked={!!needsState.checked[suggestion.name]}
+                                                      onCheckedChange={() => toggleNeed(suggestion.name)}
+                                                  />
+                                                  <label
+                                                      htmlFor={`need-${suggestion.name}`}
+                                                      className={`flex-1 text-sm cursor-pointer select-none ${needsState.checked[suggestion.name] ? "line-through text-slate-400" : "text-slate-700"}`}
+                                                  >
+                                                      {suggestion.name}
+                                                  </label>
+                                                  {suggestion.category && (
+                                                      <Badge variant="outline" className="text-xs capitalize">
+                                                          {suggestion.category.replace(/_/g, " ")}
+                                                      </Badge>
+                                                  )}
+                                              </div>
+                                          ))}
+                                          {needsState.customItems.map((item) => (
+                                              <div key={item.id} className="flex items-center gap-3 group">
+                                                  <Checkbox
+                                                      id={`need-${item.id}`}
+                                                      checked={!!needsState.checked[item.id]}
+                                                      onCheckedChange={() => toggleNeed(item.id)}
+                                                  />
+                                                  <label
+                                                      htmlFor={`need-${item.id}`}
+                                                      className={`flex-1 text-sm cursor-pointer select-none ${needsState.checked[item.id] ? "line-through text-slate-400" : "text-slate-700"}`}
+                                                  >
+                                                      {item.name}
+                                                  </label>
+                                                  <button
+                                                      type="button"
+                                                      onClick={() => removeCustomNeed(item.id)}
+                                                      className="opacity-0 group-hover:opacity-100 transition-opacity text-slate-400 hover:text-red-500"
+                                                      title="Remove custom need"
+                                                  >
+                                                      <X className="w-4 h-4" />
+                                                  </button>
+                                              </div>
+                                          ))}
+                                      </>
+                                  )}
+
+                                  {/* Add custom need */}
+                                  <div className="flex items-center gap-2 pt-2 border-t border-slate-100">
+                                      <Plus className="w-4 h-4 text-slate-400 shrink-0" />
+                                      <Input
+                                          placeholder="Add a custom need…"
+                                          value={newNeedText}
+                                          onChange={(e) => setNewNeedText(e.target.value)}
+                                          onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addCustomNeed() } }}
+                                          className="h-8 text-sm"
+                                      />
+                                      <Button size="sm" variant="outline" onClick={addCustomNeed} disabled={!newNeedText.trim()}>
+                                          Add
+                                      </Button>
+                                  </div>
+
+                                  {/* Search button */}
+                                  <div className="pt-2">
+                                      <Button
+                                          type="button"
+                                          className="w-full"
+                                          onClick={handleSearchNeeds}
+                                          disabled={
+                                              isSearchingNeeds ||
+                                              ![...inferredNeeds.map((s) => s.name), ...needsState.customItems.map((i) => i.id)]
+                                                  .some((id) => needsState.checked[id])
+                                          }
+                                      >
+                                          {isSearchingNeeds ? (
+                                              <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                                          ) : (
+                                              <Search className="w-4 h-4 mr-2" />
+                                          )}
+                                          Search Selected Needs
+                                      </Button>
+                                  </div>
+                                </CardContent>
+                    </Card>
+                )}
+
                 {/* ----------------------------------------------------------------- */}
                 {/* Profile Matching Checklist – persistent per profile               */}
                 {/* ----------------------------------------------------------------- */}
@@ -287,7 +620,7 @@ export default function SmartMatcher() {
                     </Card>
                   ) : (
                     <>
-                                <div className="grid md:grid-cols-3 gap-4">
+                                <div id="match-results" className="grid md:grid-cols-3 gap-4">
                                               <Card>
                                                               <CardHeader className="pb-2">
                                                                                 <CardTitle className="text-sm font-medium text-slate-600 flex items-center gap-2">
@@ -402,7 +735,17 @@ export default function SmartMatcher() {
                                       ) : (
                                         <Card>
                                                             <CardContent className="p-12 text-center">
-                                                                                  <p className="text-slate-600">No matches found. Try lowering the minimum score or adjusting keywords.</p>
+                                                                                  <div className="space-y-3">
+  <p className="text-slate-600">No matches found. Try lowering the minimum score or adjusting keywords.</p>
+  {checkedCount < allChecklistItems.length && (
+    <Alert className="bg-amber-50 border-amber-200">
+      <AlertDescription className="text-amber-800 text-sm">
+        <span className="font-semibold">Profile tip:</span> You have completed {checkedCount} of {allChecklistItems.length} profile checklist items.
+        Completing more items (especially state/ZIP, profile type, and primary goal) significantly improves match quality.
+      </AlertDescription>
+    </Alert>
+  )}
+</div>
                                                             </CardContent>
                                         </Card>
                                                               )}

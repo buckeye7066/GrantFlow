@@ -318,7 +318,7 @@ export default function UniversityApplicationForm({
 
     const normalisedAcceptance =
       typeof acceptanceRate === "number" && Number.isFinite(acceptanceRate)
-        ? acceptanceRate > 1 && acceptanceRate <= 100
+        ? acceptanceRate >= 1
           ? acceptanceRate
           : acceptanceRate * 100
         : null
@@ -420,9 +420,7 @@ export default function UniversityApplicationForm({
       // Preserve per-school offerings catalog when editing via the form.
       activity_catalog: Array.isArray(values.activity_catalog)
         ? values.activity_catalog
-        : Array.isArray(initialValues?.activity_catalog)
-          ? initialValues.activity_catalog
-          : [],
+        : [],
       actions: {
         apply_url: values.actions?.apply_url?.trim() ?? "",
         pay_fee_url: values.actions?.pay_fee_url?.trim() ?? "",
@@ -855,7 +853,7 @@ export default function UniversityApplicationForm({
                             <SelectValue placeholder="Select a plan (optional)" />
                           </SelectTrigger>
                           <SelectContent>
-                            <SelectItem value="">None</SelectItem>
+                            <SelectItem value="none">None</SelectItem>
                             {mealPlansArray.fields.map((plan) => (
                               <SelectItem key={plan.id} value={plan.id}>
                                 {String(plan.name || "Meal plan").trim() || "Meal plan"}
@@ -955,7 +953,7 @@ export default function UniversityApplicationForm({
                       variant="ghost"
                       size="icon"
                       onClick={() => pipelineArray.remove(index)}
-                      disabled={pipelineArray.fields.length <= 1}
+                      disabled={false}
                     >
                       <Trash2 className="w-4 h-4" />
                     </Button>

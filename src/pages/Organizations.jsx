@@ -28,6 +28,17 @@ function mapProfileToOrganization(profile) {
     profile_image_url: profile.avatar_url ?? null,
     mission: profile.mission,
     tags: profile.tags ?? [],
+    // Preserve deep profile sections so downstream components and search
+    // can inspect sub-type detail without a second fetch (Goals 5, 6).
+    location: profile.location ?? null,
+    needs: profile.needs ?? [],
+    military: profile.military ?? null,
+    education: profile.education ?? null,
+    family: profile.family ?? null,
+    health: profile.health ?? null,
+    emergency: profile.emergency ?? null,
+    business: profile.business ?? null,
+    housing: profile.housing ?? null,
   }
 }
 
@@ -66,9 +77,13 @@ export default function Organizations() {
 
   const filteredOrgs = useMemo(() => {
     return organizations.filter((org) => {
-      const matchesSearch =
-        org.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        org.applicant_type?.toLowerCase().includes(searchTerm.toLowerCase())
+      const lowerSearch = searchTerm.toLowerCase()
+const matchesSearch =
+        org.name.toLowerCase().includes(lowerSearch) ||
+        (org.applicant_type?.toLowerCase().includes(lowerSearch) ?? false) ||
+        (org.mission?.toLowerCase().includes(lowerSearch) ?? false) ||
+        (Array.isArray(org.tags) && org.tags.some((t) => t.toLowerCase().includes(lowerSearch))) ||
+        (Array.isArray(org.needs) && org.needs.some((n) => n.toLowerCase().includes(lowerSearch)))
 
       const matchesType = typeFilter === "all" || org.applicant_type === typeFilter
 
@@ -147,12 +162,12 @@ export default function Organizations() {
   const handleQuickAdd = async (formData) => {
     try {
       // Create profile first
+      // Spread all collected form fields so the profile retains location,
+      // needs, and sub-type detail required for full-depth matching (Goals 5, 6).
+      const { avatarFile: _avatarFile, ...profileFields } = formData
       const result = await apiFetch('/api/profiles', {
         method: 'POST',
-        body: JSON.stringify({
-          display_name: formData.display_name,
-          primary_type: formData.primary_type,
-        }),
+        body: JSON.stringify(profileFields),
       })
       
       // Validate that we got a profile ID back
@@ -165,13 +180,22 @@ export default function Organizations() {
         const avatarFormData = new FormData()
         avatarFormData.append('avatar', formData.avatarFile)
         
-        await fetch(`/api/profiles/${result.id}/avatar`, {
+        const avatarResponse = await fetch(`/api/profiles/${result.id}/avatar`, {
           method: 'POST',
           body: avatarFormData,
           headers: {
             'Authorization': `Bearer ${localStorage.getItem('grantflow:access-token')}`,
           },
         })
+        if (!avatarResponse.ok) {
+          // Non-fatal: profile was created; log and surface a warning but do not throw.
+          log.warn('Avatar upload failed', { profileId: result.id, status: avatarResponse.status })
+          toast({
+            title: 'Profile created',
+            description: 'Profile was saved but the avatar could not be uploaded. You can add it later from the profile page.',
+            variant: 'default',
+          })
+        }
       }
       
       queryClient.invalidateQueries({ queryKey: ['profiles'] })
@@ -219,6 +243,7 @@ export default function Organizations() {
       
       // Validate that we got a profile ID back
       if (!result || !result.profile_id) {
+        log.error('Document upload succeeded but no profile_id returned', { result })
         throw new Error('Document upload succeeded but no profile ID was returned')
       }
       

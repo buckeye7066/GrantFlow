@@ -18,7 +18,11 @@ export default function ComplianceFeed({ reports }) {
             if (!isValidDate(r.due_date)) return false;
             return true;
         })
-        .sort((a, b) => new Date(a.due_date) - new Date(b.due_date));
+        .sort((a, b) => {
+    const da = isValidDate(a.due_date) ? new Date(a.due_date).getTime() : Infinity;
+    const db = isValidDate(b.due_date) ? new Date(b.due_date).getTime() : Infinity;
+    return da - db;
+});
 
     return (
         <Card className="shadow-lg border-0">
@@ -39,7 +43,7 @@ export default function ComplianceFeed({ reports }) {
                                         <div>
                                             <p className="font-medium text-slate-900">{report.report_type} Report</p>
                                             <p className={`text-sm ${isOverdue ? 'text-red-600' : 'text-slate-600'}`}>
-                                                Due: {format(new Date(report.due_date), 'MMM dd, yyyy')}
+                                                Due: {isValidDate(report.due_date) ? format(new Date(report.due_date), 'MMM dd, yyyy') : 'Date unknown'}
                                             </p>
                                         </div>
                                     </div>

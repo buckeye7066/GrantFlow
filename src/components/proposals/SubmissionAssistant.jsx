@@ -62,10 +62,17 @@ export default function SubmissionAssistant({ open, onClose, grant, organization
     onSuccess: (result) => {
       const url = result?.artifact?.download_url
       if (url) {
-        downloadAuthenticatedUrl(url, { fallbackFileName: `application_${applicationId || 'export'}.docx` }).catch(() => {
-          // errors are surfaced via the browser + backend; keep UI stable
+        downloadAuthenticatedUrl(url, { fallbackFileName: `application_${applicationId || 'export'}.docx` }).catch((err) => {
+          console.error('[SubmissionAssistant] export download failed', err)
+          // NOTE: surface this to the user via a toast/alert in a follow-up;
+          // at minimum we log so the failure is observable.
         })
+      } else {
+        console.warn('[SubmissionAssistant] exportPackage returned no download_url', result)
       }
+    },
+    onError: (err) => {
+      console.error('[SubmissionAssistant] exportPackage API call failed', err)
     },
   })
 
@@ -76,6 +83,9 @@ export default function SubmissionAssistant({ open, onClose, grant, organization
       queryClient.invalidateQueries({ queryKey: ['grants'] })
       queryClient.invalidateQueries({ queryKey: ['application', applicationId] })
       onClose?.()
+    },
+    onError: (err) => {
+      console.error('[SubmissionAssistant] submit failed', err)
     },
   })
 
@@ -110,7 +120,13 @@ export default function SubmissionAssistant({ open, onClose, grant, organization
   const canSubmit =
     Boolean(applicationId) &&
     Boolean(submissionMethod) &&
-    (submissionMethod === 'download' || recipientEmail || recipientFax || recipientAddress || notes)
+    (() => {
+      if (submissionMethod === 'download' || submissionMethod === 'portal') return true
+      if (submissionMethod === 'email') return Boolean(recipientEmail)
+      if (submissionMethod === 'fax') return Boolean(recipientFax)
+      if (submissionMethod === 'mail') return Boolean(recipientAddress)
+      return false
+    })()
 
   const busy = validateMutation.isPending || exportMutation.isPending || submitMutation.isPending || autoPopulateMutation.isPending
 

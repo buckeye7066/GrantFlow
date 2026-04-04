@@ -9,7 +9,7 @@
 import { describe, it, expect } from 'vitest'
 import { buildProfileSignals } from '../services/profileHelpers.js'
 import { buildProfileFacets, buildIntentTokens } from '../services/profile/profileTaxonomy.js'
-import { calculateMatchScore } from '../services/matchingEngine.js'
+import { scoreOpportunity as calculateMatchScore } from '../services/matchEngine.js'
 
 // ── GOLDEN PROFILES ──
 

@@ -19,8 +19,26 @@ const DIRECTORY_RESOURCES = [
 
 export async function runEducationStudentEngine(profile, options = {}) {
   try {
-    return normalizeAndFilter(DIRECTORY_RESOURCES, ENGINE_ID, { strict_no_loans: true, strict_no_matching: false })
-  } catch {
+    const filteredResources = DIRECTORY_RESOURCES.filter(resource => {
+      if (!profile) return true;
+      
+      // Filter by education level/type if specified in profile
+      // Do NOT filter directory resources by education_level here.
+      // Pre-engine filtering causes silent suppression before the decision engine runs.
+      // Profile education_level is used downstream by the decision engine for scoring.
+      
+      // Filter by military status for military-specific grants
+      // Do NOT filter out military-tagged resources when military_affiliation is absent.
+      // A resource like the Iraq/Afghanistan Service Grant targets dependents, not just veterans.
+      // Profile completeness gaps should surface as Goal 10 guidance, not silent exclusion.
+      // The decision engine evaluates military eligibility with full profile context.
+      
+      return true;
+    });
+    
+    return normalizeAndFilter(filteredResources, ENGINE_ID, { strict_no_loans: true, strict_no_matching: false });
+  } catch (err) {
+    console.error(`[${ENGINE_ID}] runEducationStudentEngine failed:`, err)
     return []
   }
 }

@@ -40,8 +40,9 @@ export default function SendInvoiceModal({ invoice, organization, onClose }) {
     let emailBody = billingSettings?.default_email_template || `Hi ${organization.name},\n\nPlease find attached invoice #${invoice.invoice_number} for your review.\n\nThank you!`;
     emailBody = emailBody.replace('{{clientName}}', organization.name);
     emailBody = emailBody.replace('{{invoiceNumber}}', invoice.invoice_number);
-    emailBody = emailBody.replace('{{invoiceAmount}}', invoice.balance_due.toLocaleString());
-    emailBody = emailBody.replace('{{dueDate}}', new Date(invoice.due_date).toLocaleDateString());
+    emailBody = emailBody.replace('{{invoiceAmount}}', invoice.balance_due != null ? Number(invoice.balance_due).toLocaleString() : '');
+    const dueDateStr = invoice.due_date ? new Date(invoice.due_date).toLocaleDateString() : 'N/A';
+emailBody = emailBody.replace('{{dueDate}}', dueDateStr);
     setBody(emailBody);
 
   }, [invoice, organization, billingSettings]);
@@ -80,7 +81,7 @@ export default function SendInvoiceModal({ invoice, organization, onClose }) {
                 </SelectTrigger>
                 <SelectContent>
                   {(Array.isArray(organization.email) ? organization.email : []).map((e, index) => <SelectItem key={`${e}-${index}`} value={e}>{e} (Org Primary)</SelectItem>)}
-                  {contacts.map(c => <SelectItem key={c.id} value={c.email}>{c.full_name} ({c.email})</SelectItem>)}
+                  {contacts.filter(c => !!c.email).map(c => <SelectItem key={c.id} value={c.email}>{c.full_name} ({c.email})</SelectItem>)}
                 </SelectContent>
               </Select>
             </div>

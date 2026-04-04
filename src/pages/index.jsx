@@ -205,15 +205,16 @@ function LayoutRoutes() {
         user: state.user,
     }));
 
-    if (!isAuthenticated && !sessionExpired) {
-        return <Navigate to="/login" state={{ from: location }} replace />;
+    if (!isAuthenticated) {
+        return <Navigate to="/login" state={{ from: location, sessionExpired }} replace />;
     }
 
     // Block dashboard access if user needs profile creation (unless admin)
     const isAdmin = user?.is_admin
     if (isAuthenticated && !isAdmin && needsProfileCreation && profiles.length === 0) {
-        // Only allow access to Organizations page for profile creation
-        if (!location.pathname.includes('/Organizations') && !location.pathname.includes('/MyProfiles')) {
+        const ALLOWED_DURING_ONBOARDING = ['/Organizations', '/MyProfiles', '/Help', '/Settings', '/Pricing', '/Services'];
+        const isAllowed = ALLOWED_DURING_ONBOARDING.some(p => location.pathname.startsWith(p));
+        if (!isAllowed) {
             return <Navigate to="/Organizations" replace />;
         }
     }

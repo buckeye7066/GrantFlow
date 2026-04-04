@@ -21,6 +21,8 @@ const EnvSchema = z.object({
   VITE_SHOULDERS_VNEXT: z.string().optional(),
   VITE_ANYA_COPILOT_ENABLED: z.string().optional(),
   VITE_ANYA_SCREENSHOT_ENABLED: z.string().optional(),
+  /** Set true to keep calling VITE_API_URL (e.g. Railway) from axiombiolabs production (not recommended). */
+  VITE_FORCE_RAILWAY_API: z.string().optional(),
 })
 
 export const env = (() => {
@@ -35,6 +37,7 @@ export const env = (() => {
     VITE_SHOULDERS_VNEXT: import.meta.env.VITE_SHOULDERS_VNEXT,
     VITE_ANYA_COPILOT_ENABLED: import.meta.env.VITE_ANYA_COPILOT_ENABLED,
     VITE_ANYA_SCREENSHOT_ENABLED: import.meta.env.VITE_ANYA_SCREENSHOT_ENABLED,
+    VITE_FORCE_RAILWAY_API: import.meta.env.VITE_FORCE_RAILWAY_API,
   }
 
   const parsed = EnvSchema.safeParse(raw)
@@ -47,7 +50,28 @@ export const env = (() => {
   const canonicalStrict = String(raw.VITE_CANONICAL_HOST_STRICT || '').toLowerCase() === 'true'
 
   const apiUrlRaw = String(raw.VITE_API_URL || '').trim()
-  const apiUrl = apiUrlRaw ? apiUrlRaw : ''
+  let apiUrl = apiUrlRaw ? apiUrlRaw : ''
+
+  // On axiombiolabs hosts: never use an absolute API URL that points at a different origin than the page.
+  // Vercel rewrites `/grantflow/api/*` → backend; cross-origin fetches get misleading "CORS" on 502s.
+  if (typeof window !== 'undefined') {
+    const forceExternal = String(raw.VITE_FORCE_RAILWAY_API || '').toLowerCase() === 'true'
+    const host = String(window.location.hostname || '')
+    if (
+      !forceExternal &&
+      apiUrl &&
+      /^https?:\/\//i.test(apiUrl) &&
+      /axiombiolabs\.org$/i.test(host)
+    ) {
+      try {
+        if (new URL(apiUrl).origin !== window.location.origin) {
+          apiUrl = ''
+        }
+      } catch {
+        apiUrl = ''
+      }
+    }
+  }
 
   const shouldersVnext =
     String(raw.VITE_SHOULDERS_VNEXT || '').trim().toLowerCase() === 'true'
@@ -70,3 +94,41 @@ export const env = (() => {
     anyaScreenshotEnabled: anyaScreenshotEnv,
   }
 })()
+
+/**
+ * Prefix used before `/api/...` in fetch (e.g. `/grantflow` or absolute backend URL).
+ * Re-applies axiombiolabs same-origin guard so APIClient cannot point at Railway when the env object is stale.
+ */
+export function getApiBasePrefixForFetch() {
+  let apiUrl = String(env.apiUrl || '').trim()
+  const appBase = env.appBase && env.appBase !== '/' ? env.appBase : ''
+  if (typeof window !== 'undefined' && apiUrl && /^https?:\/\//i.test(apiUrl)) {
+    const forceExternal = String(import.meta.env.VITE_FORCE_RAILWAY_API || '').toLowerCase() === 'true'
+    const host = String(window.location.hostname || '')
+    if (
+      !forceExternal &&
+      /axiombiolabs\.org$/i.test(host)
+    ) {
+      try {
+        if (new URL(apiUrl).origin !== window.location.origin) {
+          apiUrl = ''
+        }
+      } catch {
+        apiUrl = ''
+      }
+    }
+  }
+  if (apiUrl) return apiUrl.replace(/\/$/, '')
+  return appBase || ''
+}
+
+/** Full URL for OAuth/health helpers when API is same-origin under a path (e.g. /grantflow/api). */
+export function getAbsoluteApiRootForOAuth() {
+  const prefix = getApiBasePrefixForFetch()
+  if (prefix.startsWith('http')) return prefix.replace(/\/$/, '')
+  if (typeof window !== 'undefined') {
+    const path = prefix.startsWith('/') ? prefix : `/${prefix || ''}`
+    return `${window.location.origin}${path}`.replace(/\/$/, '')
+  }
+  return ''
+}

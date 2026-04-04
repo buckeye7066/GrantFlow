@@ -18,8 +18,41 @@ const DIRECTORY_RESOURCES = [
 
 export async function runTaxIncentiveEngine(profile, options = {}) {
   try {
-    return normalizeAndFilter(DIRECTORY_RESOURCES, ENGINE_ID, { strict_no_loans: false, strict_no_matching: false })
-  } catch {
+    // Build an inclusive set: start with base resources, then UNION in profile-relevant resources
+    const profileMatched = new Set()
+
+    if (profile.income && profile.income < 30000) {
+      DIRECTORY_RESOURCES.forEach(r => {
+        if (r.keywords.includes('EITC') || r.title.includes('Low Income') || r.categories.includes('tax')) {
+          profileMatched.add(r)
+        }
+      })
+    }
+
+    if (profile.hasChildren) {
+      DIRECTORY_RESOURCES.forEach(r => {
+        if (r.keywords.some(k => k === 'child') || r.categories.includes('family')) {
+          profileMatched.add(r)
+        }
+      })
+    }
+
+    if (profile.businessType === 'small_business') {
+      DIRECTORY_RESOURCES.forEach(r => {
+        if (r.keywords.includes('small business') || r.categories.includes('business')) {
+          profileMatched.add(r)
+        }
+      })
+    }
+
+    // If no profile signals matched, pass full directory to preserve recall
+    const relevantResources = profileMatched.size > 0
+      ? Array.from(profileMatched)
+      : DIRECTORY_RESOURCES
+    
+    return normalizeAndFilter(relevantResources, ENGINE_ID, { strict_no_loans: false, strict_no_matching: false })
+  } catch (error) {
+    console.error(`Tax incentive engine error: ${error.message}`);
     return []
   }
 }

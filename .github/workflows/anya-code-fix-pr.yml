@@ -7,6 +7,10 @@ on:
         required: true
         type: string
 
+permissions:
+  contents: write
+  pull-requests: write
+
 jobs:
   apply_patch:
     runs-on: ubuntu-latest
@@ -16,13 +20,71 @@ jobs:
 
       - name: Apply patch
         shell: bash
+        env:
+          PATCH_CONTENT: ${{ inputs.patch_content }}
         run: |
           set -euo pipefail
-          cat > /tmp/patch.diff << 'PATCH'
-          ${{ inputs.patch_content }}
-          PATCH
-          git apply /tmp/patch.diff
+          git config --global core.autocrlf false
+          git config --global core.eol lf
+          printf '%s' "$PATCH_CONTENT" > /tmp/patch.diff
+
+          if git apply --check /tmp/patch.diff; then
+            git apply /tmp/patch.diff
+            echo "Patch applied successfully."
+          elif git apply --reverse --check /tmp/patch.diff; then
+            echo "Patch already present. Continuing without failure."
+          else
+            echo "Patch cannot be applied cleanly and is not already present."
+            exit 1
+          fi
 
       - name: Show status
         run: |
           git status --porcelain
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install deps
+        run: npm ci --include=optional || npm install --include=optional
+
+      - name: Corruption hotspot guard
+        run: node scripts/guard-corruption-hotspots.mjs
+
+      - name: Code quality gate
+        run: node scripts/code-quality-gate.mjs
+
+      - name: Preflight gates
+        run: npm run release:gates
+
+      - name: Create branch, commit, push, and open PR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          BRANCH_NAME="anya-fix/$(date -u +%Y%m%d-%H%M%S)"
+
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git checkout -b "$BRANCH_NAME"
+          git add -A
+          git commit -m "$(cat <<'EOF'
+fix: apply Anya code fix patch
+
+Apply the generated patch only after corruption, quality, and release gates pass.
+
+Made-with: Cursor
+EOF
+)"
+          git push origin "$BRANCH_NAME"
+
+          gh pr create \
+            --base main \
+            --head "$BRANCH_NAME" \
+            --title "Anya Code Fix: apply patch" \
+            --body "This PR was automatically created by the Anya Code Fix PR workflow after applying the provided patch."

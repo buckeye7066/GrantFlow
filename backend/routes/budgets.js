@@ -1,9 +1,9 @@
 import express from 'express'
 import crypto from 'crypto'
-import { requireAuthenticatedUser, ensureGrantAccess, getAccessibleOrganizationIds } from '../utils/accessControl.js'
-import { ensureProfileAccess } from '../utils/accessControl.js'
+import { requireAuthenticatedUser, ensureGrantAccess, getAccessibleOrganizationIds, ensureProfileAccess } from '../utils/accessControl.js'
 
 const router = express.Router()
+router.use(requireAuthenticatedUser)
 
 function safeJsonParse(value, fallback) {
   try {
@@ -50,7 +50,7 @@ router.get('/', async (req, res) => {
   if (!user) return
 
   try {
-    const limit = normalizeLimit(req.query.limit, 500)
+    const limit = normalizeLimit(req.query.limit, 200)
     const grantId = req.query.grant_id ? String(req.query.grant_id) : null
     const id = req.query.id ? String(req.query.id) : null
 
@@ -66,7 +66,14 @@ router.get('/', async (req, res) => {
       params.push(grantId)
     }
 
-    if (!req.ctx?.isAdmin) {
+    if (req.ctx?.isAdmin) {
+      // Admins are scoped to organisations they can access
+      const orgIds = await getAccessibleOrganizationIds(req)
+      if (orgIds && orgIds.length > 0) {
+        clauses.push(`g.organization_id IN (${orgIds.map(() => '?').join(',')})`)
+        params.push(...orgIds)
+      }
+    } else {
       // Profile-scoped access: Only show budgets for grants in the active profile
       const profileId = req.ctx?.activeProfileId
       if (!profileId) {
@@ -80,7 +87,6 @@ router.get('/', async (req, res) => {
       }
 
       // Filter by profile_id: only grants belonging to the active profile
-      // The JOIN on grants ensures we get the correct profile_id from the grant
       clauses.push('g.profile_id = ?')
       params.push(String(profileId))
     }
@@ -91,7 +97,7 @@ router.get('/', async (req, res) => {
         `
           SELECT b.*
           FROM budgets b
-          LEFT JOIN grants g ON g.id = b.grant_id
+          INNER JOIN grants g ON g.id = b.grant_id
           ${where}
           ORDER BY b.updated_at DESC
           LIMIT ?
@@ -140,7 +146,13 @@ router.post('/', async (req, res) => {
 
     const quantity = Number(data.quantity ?? 1) || 0
     const unitCost = Number(data.unit_cost ?? 0) || 0
-    const total = Number(data.total ?? quantity * unitCost) || 0
+    const total = data.total !== undefined ? Number(data.total) : quantity * unitCost
+    // Warn in logs when client-supplied total contradicts line-item arithmetic
+    if (data.total !== undefined && Number.isFinite(quantity * unitCost) && quantity * unitCost !== 0 && Math.abs(Number(data.total) - quantity * unitCost) > 0.01) {
+      console.warn(`[budgets] POST: client total ${data.total} differs from quantity*unitCost ${quantity * unitCost} for grant ${grantId}`)
+    }
+if (!Number.isFinite(total)) return res.status(400).json({ error: 'Budget total must be a valid number' })
+if (total < 0) return res.status(400).json({ error: 'Budget total cannot be negative' })
     const justification = data.justification ?? null
 
     const lineItemsJson = JSON.stringify({
@@ -190,7 +202,10 @@ router.put('/:id', async (req, res) => {
     const lineItem = data.line_item !== undefined ? String(data.line_item || '').trim() : String(current.line_item || existing.name || '')
     const quantity = data.quantity !== undefined ? Number(data.quantity) || 0 : Number(current.quantity ?? 1) || 0
     const unitCost = data.unit_cost !== undefined ? Number(data.unit_cost) || 0 : Number(current.unit_cost ?? 0) || 0
-    const total = data.total !== undefined ? Number(data.total) || 0 : Number(current.total ?? existing.total_amount ?? quantity * unitCost) || 0
+    const rawTotal = data.total !== undefined ? Number(data.total) : (current.total ?? existing.total_amount ?? quantity * unitCost)
+const total = Number(rawTotal)
+if (!Number.isFinite(total)) return res.status(400).json({ error: 'Budget total must be a valid number' })
+if (total < 0) return res.status(400).json({ error: 'Budget total cannot be negative' })
     const justification = data.justification !== undefined ? data.justification : current.justification ?? null
     const status = data.status ?? existing.status ?? 'draft'
 

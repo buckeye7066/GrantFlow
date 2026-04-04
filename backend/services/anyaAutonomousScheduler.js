@@ -3,6 +3,7 @@ import { runAutonomousCrawlers } from './anyaAutonomousFunctionRunner.js'
 import { runAutonomousFunctionTests } from './anyaAutonomousFunctionTesting.js'
 import { repairFailingTests } from './anyaTestRepair.js'
 import { discoverNewCatalogItems } from './itemCatalogService.js'
+import { runPortalCheck } from './portalCheckService.js'
 import { promises as fs } from 'fs'
 import path from 'path'
 import { AUDIT_CATEGORIES, SEVERITY, logAuditEvent } from './auditService.js'
@@ -20,7 +21,7 @@ function isProdEnv() {
  */
 const AUTONOMOUS_CONFIG = {
   // Enable/disable autonomous operations
-  enabled: process.env.ANYA_AUTONOMOUS_ENABLED === 'true',
+  enabled: process.env.ANYA_AUTONOMOUS_ENABLED !== 'false',
   
   // When to run operations
   runOnStartup: process.env.ANYA_RUN_ON_STARTUP === 'true',
@@ -33,6 +34,7 @@ const AUTONOMOUS_CONFIG = {
     functionTests: process.env.ANYA_FUNCTION_TESTS !== 'false', 
     crawlers: process.env.ANYA_CRAWLERS !== 'false',
     itemDiscovery: process.env.ANYA_ITEM_DISCOVERY !== 'false',
+    portalChecks: process.env.ANYA_PORTAL_CHECKS !== 'false',
   },
   
   // Schedule (cron-like format)
@@ -47,7 +49,10 @@ const AUTONOMOUS_CONFIG = {
       dryRun: process.env.ANYA_DRY_RUN === 'true',
     },
     crawlers: {
-      matchThreshold: parseInt(process.env.ANYA_MATCH_THRESHOLD) || 80,
+      // matchThreshold is intentionally removed from the scheduler config.
+      // Pre-filtering by score before computeMatchDecision() runs violates
+      // Goal 4 (single decision authority) and Goal 7 (recall over suppression).
+      // The canonical decision engine in matchEngine.js is the sole gating authority.
       saveAllToGlobal: process.env.ANYA_SAVE_GLOBAL !== 'false',
       waitForCompletion: process.env.ANYA_WAIT_COMPLETION === 'true',
     },
@@ -102,8 +107,8 @@ async function logOperation(operation, status, details = {}, context = null) {
       await fs.mkdir(logDir, { recursive: true })
       const logFile = path.join(logDir, 'autonomous-scheduler.log')
       await fs.appendFile(logFile, JSON.stringify(logEntry) + '\n', 'utf8')
-    } catch {
-      // best-effort
+    } catch (error) {
+      console.warn('[anyaAutonomousScheduler] Failed to write dev audit log:', error?.message)
     }
   }
 }
@@ -207,10 +212,27 @@ export async function runAllAutonomousOperations(context, trigger = 'manual') {
     if (AUTONOMOUS_CONFIG.operations.crawlers) {
       console.log('[Anya Scheduler] Phase 3: Running crawlers...')
       try {
-        const result = await runAutonomousCrawlers(
-          AUTONOMOUS_CONFIG.params.crawlers,
-          context
-        )
+        const crawlerProfileId = context?.profileId ?? context?.profile_id ?? null
+const crawlerLocation = context?.profile?.location ?? null
+const crawlerNeeds = context?.profile?.needs ?? null
+const crawlerApplicantType = context?.profile?.primary_type ?? null
+
+if (!crawlerProfileId || !crawlerLocation) {
+  console.warn(
+    '[Anya Scheduler] Phase 3: crawler context is missing profileId or location â ' +
+    'results will not be profile-scoped (Goals 11, 5). profileId=' + crawlerProfileId +
+    ' location=' + String(crawlerLocation)
+  )
+}
+
+const crawlerParams = {
+  ...AUTONOMOUS_CONFIG.params.crawlers,
+  profileId: crawlerProfileId,
+  location: crawlerLocation,
+  needs: crawlerNeeds,
+  applicantType: crawlerApplicantType,
+}
+const result = await runAutonomousCrawlers(crawlerParams, context)
         report.operations.crawlers = {
           status: 'completed',
           profiles_processed: result.profiles_processed,
@@ -239,6 +261,46 @@ export async function runAllAutonomousOperations(context, trigger = 'manual') {
       } catch (error) {
         report.errors.push({ phase: 'itemDiscovery', error: error.message })
         report.operations.itemDiscovery = { status: 'failed', error: error.message }
+      }
+    }
+
+    // Phase 5: Portal check-in for student profiles
+    if (AUTONOMOUS_CONFIG.operations.portalChecks && context.db) {
+      console.log('[Anya Scheduler] Phase 5: Running portal checks for student profiles...')
+      try {
+        // Student primary_type values — mirrors the list used in autoDiscoveryCrawlers.js
+        // and grants.js. No shared constant exists; keep in sync if new student types are added.
+        // Portal checks apply to all active profiles, not only students.
+        // Restricting to student types violates Goal 6 (serve all applicant types).
+        const eligibleProfiles = await context.db
+          .prepare(
+            `SELECT id FROM profiles WHERE status = 'active'`,
+          )
+          .all()
+
+        let portalChecksTotal = 0
+        let portalAwardsTotal = 0
+
+        for (const profile of eligibleProfiles) {
+          try {
+            const result = await runPortalCheck(context.db, profile.id, { checkType: 'scheduled' })
+            portalChecksTotal += result.portalsChecked ?? 0
+            portalAwardsTotal += result.awardsDetected ?? 0
+          } catch (profileErr) {
+            console.warn(`[Anya Scheduler] Portal check failed for profile ${profile.id}:`, profileErr?.message)
+          }
+        }
+
+        report.operations.portalChecks = {
+          status: 'completed',
+          profiles_checked: eligibleProfiles.length,
+          portals_checked: portalChecksTotal,
+          awards_detected: portalAwardsTotal,
+        }
+        console.log(`[Anya Scheduler] Portal checks complete: ${portalAwardsTotal} awards detected across ${portalChecksTotal} portals for ${eligibleProfiles.length} profiles`)
+      } catch (error) {
+        report.errors.push({ phase: 'portalChecks', error: error.message })
+        report.operations.portalChecks = { status: 'failed', error: error.message }
       }
     }
     
@@ -457,12 +519,41 @@ export function getAutonomousConfig() {
 /**
  * Update configuration at runtime (admin only)
  */
+const BLOCKED_CONFIG_KEYS = new Set(['matchThreshold'])
+
 export function updateAutonomousConfig(updates) {
   Object.keys(updates).forEach(key => {
     if (key in AUTONOMOUS_CONFIG) {
+      if (BLOCKED_CONFIG_KEYS.has(key)) {
+        console.warn(
+          `[anyaAutonomousScheduler] updateAutonomousConfig: refusing blocked key "${key}" ` +
+          'â pre-filter thresholds must not override computeMatchDecision() (Goals 4, 7)'
+        )
+        return
+      }
+      // Only allow shallow merges on the nested objects (params, operations)
+      // to prevent full replacement of sub-trees.
+      if (
+        key === 'params' || key === 'operations'
+      ) {
+        if (updates[key] !== null && typeof updates[key] === 'object' && !Array.isArray(updates[key])) {
+          Object.keys(updates[key]).forEach(subKey => {
+            if (key === 'params' && subKey in AUTONOMOUS_CONFIG.params) {
+              if (AUTONOMOUS_CONFIG.params[subKey] !== null && typeof AUTONOMOUS_CONFIG.params[subKey] === 'object') {
+                Object.assign(AUTONOMOUS_CONFIG.params[subKey], updates[key][subKey])
+              } else {
+                AUTONOMOUS_CONFIG.params[subKey] = updates[key][subKey]
+              }
+            } else if (key === 'operations' && subKey in AUTONOMOUS_CONFIG.operations) {
+              AUTONOMOUS_CONFIG.operations[subKey] = updates[key][subKey]
+            }
+          })
+        }
+        return
+      }
       AUTONOMOUS_CONFIG[key] = updates[key]
     }
   })
-  
+
   return AUTONOMOUS_CONFIG
 }

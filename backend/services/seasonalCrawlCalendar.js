@@ -60,7 +60,7 @@ const SEASONAL_PROGRAMS = [
     id: 'tennessee_promise',
     programName: 'Tennessee Promise Scholarship',
     openMonth: 9,
-    closeMonth: 11,
+    closeMonth: 10,  // Deadline typically early November, safer to show as closed by November
     description:
       'Tennessee Promise applications open in September for high school seniors. Scholarship covers last-dollar tuition at TN community colleges.',
     states: ['tn'],
@@ -457,7 +457,13 @@ export function getSeasonalCrawlBoosts(profileContext, month) {
       const programStates = Array.isArray(program.states)
         ? program.states.map((s) => s.toLowerCase())
         : []
-      if (profileState && !programStates.includes(profileState)) return false
+      // If profileState is unknown, exclude state-specific programs to avoid wrong-state junk
+      if (!profileState) {
+  // State unknown â skipping state-specific program to avoid wrong-state matches
+  // (Goal 10: caller should prompt user to complete state field)
+  return false;
+}
+if (!programStates.includes(profileState)) return false
     }
 
     // Profile type filter — if profileTypes list is restrictive, skip non-matching profiles

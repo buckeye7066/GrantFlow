@@ -65,14 +65,24 @@ export async function fetchWithRetry(url, options = {}) {
       const isLastAttempt = attempt === maxRetries;
       
       // Don't retry on client errors (4xx)
-      if (error.response && error.response.status >= 400 && error.response.status < 500) {
-        console.error(`[httpClient] Client error ${error.response.status}, not retrying`);
-        throw error;
+      if (error.response?.status >= 400 && error.response?.status < 500) {
+        const status = error.response.status;
+        if (status === 401 || status === 403) {
+          console.error(`[httpClient] Auth error ${status} for ${url} â credentials may need rotation, not retrying`);
+        } else if (status === 404 || status === 410) {
+          console.warn(`[httpClient] Resource not found (${status}) for ${url} â URL may be stale or dead`);
+        } else {
+          console.error(`[httpClient] Client error ${status} for ${url}, not retrying`);
+        }
+        const clientErr = new Error(`HTTP ${status} for ${url}: ${error.message}`);
+        clientErr.httpStatus = status;
+        clientErr.url = url;
+        throw clientErr;
       }
       
       if (!isLastAttempt) {
         // Calculate exponential backoff delay
-        const backoffMs = DEFAULT_BACKOFF_MS * Math.pow(2, attempt);
+        const backoffMs = Math.min(DEFAULT_BACKOFF_MS * Math.pow(2, attempt), 30000);
         console.warn(`[httpClient] Request failed, retrying in ${backoffMs}ms...`);
         await sleep(backoffMs);
       }
@@ -80,7 +90,11 @@ export async function fetchWithRetry(url, options = {}) {
   }
   
   console.error(`[httpClient] All retry attempts failed for ${url}`);
-  throw lastError;
+  const finalErr = new Error(`HTTP request failed after ${maxRetries + 1} attempts for ${url}: ${lastError.message}`);
+finalErr.url = url;
+finalErr.httpStatus = lastError.response?.status ?? null;
+finalErr.cause = lastError;
+throw finalErr;
 }
 
 /**

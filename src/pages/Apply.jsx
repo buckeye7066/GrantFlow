@@ -48,7 +48,7 @@ export default function Apply() {
     )
   }
 
-  if (isLoadingGrant || isLoadingOrg) {
+  if (isLoadingGrant || (orgId && isLoadingOrg)) {
     return (
       <div className="flex min-h-[50vh] items-center justify-center">
         <Loader2 className="w-6 h-6 animate-spin" />
@@ -87,7 +87,7 @@ export default function Apply() {
         </Link>
       </div>
 
-      <ProposalEditor grant={grant} organization={organization ?? { id: orgId, name: 'Organization' }} />
+      <ProposalEditor grant={grant} organization={organization ?? (orgId ? { id: orgId, name: 'Organization' } : null)} />
     </div>
   )
 }

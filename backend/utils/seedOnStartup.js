@@ -10,7 +10,7 @@ import { fileURLToPath } from 'url';
 import crypto from 'crypto';
 import { applyRelevanceFilter } from '../services/relevanceFilter.js';
 import { buildProfileSignals } from '../services/profileHelpers.js';
-import { computeMatchDecision, MATCHER_VERSION, normalizeProfile, normalizeOpportunity, computeProfileFingerprint, computeOpportunityFingerprint } from '../services/matchDecisionEngine.js';
+import { computeMatchDecision, MATCHER_VERSION, normalizeProfile, normalizeOpportunity, computeProfileFingerprint, computeOpportunityFingerprint } from '../services/matchEngine.js';
 import { PIPELINE_ALLOWED_SOURCES } from '../config/pipelineAllowedSources.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -285,7 +285,7 @@ export function seedProfileGrants(db) {
       const filterResult = applyRelevanceFilter(oppForFilter, profileData);
       if (!filterResult.pass) continue;
 
-      // v2.0.0 canonical decision engine: skip hard ineligibles (REJECT)
+      // Canonical decision engine: skip hard ineligibles (REJECT)
       const decision = computeMatchDecision(profile, opp, { profileSections: sectionsObj });
       if (decision.decision === 'REJECT') continue;
 
@@ -375,7 +375,7 @@ export function cleanupIrrelevantGrants(db) {
     SELECT g.id, g.title, g.funder, g.match_score,
            g.profile_id, g.funding_opportunity_id,
            fo.description, fo.keywords, fo.categories, fo.state, fo.is_national,
-           fo.sponsor, fo.eligibility_bullets
+           fo.sponsor, fo.eligibility_bullets, fo.source AS opportunity_source
     FROM grants g
     LEFT JOIN funding_opportunities fo ON g.funding_opportunity_id = fo.id
     WHERE g.profile_id IS NOT NULL
@@ -432,6 +432,8 @@ export function cleanupIrrelevantGrants(db) {
 
   let removed = 0;
   for (const grant of grants) {
+    if (!grant.funding_opportunity_id) continue;
+    if (grant.opportunity_source && PIPELINE_ALLOWED_SOURCES.includes(grant.opportunity_source)) continue;
     const profileData = getProfileData(grant.profile_id);
     if (!profileData) continue;
 
@@ -496,8 +498,11 @@ export function seedOnStartup(db) {
   
   console.log('[seedOnStartup] Database seeding complete');
 
-  // Re-evaluate stale pipeline entries: fingerprint or matcher_version changed
-  reEvaluateStalePipelineEntries(db);
+  // Re-evaluate stale pipeline entries: fingerprint or matcher_version changed.
+  // Fire-and-forget: startup should not block on potentially long re-evaluation.
+  reEvaluateStalePipelineEntries(db).catch(err => {
+    console.error('[seedOnStartup] reEvaluateStalePipelineEntries failed:', err)
+  })
 }
 
 /**
@@ -511,7 +516,7 @@ export function seedOnStartup(db) {
  * This runs on every non-production startup to keep the pipeline consistent
  * after profile changes, opportunity updates, or engine upgrades.
  */
-export function reEvaluateStalePipelineEntries(db) {
+export async function reEvaluateStalePipelineEntries(db) {
   if (isSeedingBlocked()) {
     console.info('[seedOnStartup] reEvaluateStalePipelineEntries: blocked (production or DISABLE_SEEDING)')
     return { reEvaluated: 0, removed: 0 }
@@ -520,8 +525,19 @@ export function reEvaluateStalePipelineEntries(db) {
   // Check whether decision columns exist (pre-migration DBs may not have them)
   let hasDecisionColumns = false
   try {
-    const cols = db.prepare('PRAGMA table_info(grants)').all()
-    hasDecisionColumns = cols.some(c => c.name === 'matcher_version')
+    const dialect = db?.dialect || 'sqlite'
+    if (dialect === 'postgres') {
+      const row = await db
+        .prepare(
+          `SELECT 1 AS ok FROM information_schema.columns
+           WHERE table_schema = 'public' AND table_name = ? AND column_name = ? LIMIT 1`,
+        )
+        .get('grants', 'matcher_version')
+      hasDecisionColumns = Boolean(row?.ok)
+    } else {
+      const cols = db.prepare('PRAGMA table_info(grants)').all()
+      hasDecisionColumns = cols.some(c => c.name === 'matcher_version')
+    }
   } catch { /* ignore */ }
 
   if (!hasDecisionColumns) {
@@ -532,7 +548,7 @@ export function reEvaluateStalePipelineEntries(db) {
   console.log('[seedOnStartup] Re-evaluating stale profile pipeline entries...')
 
   // Find all profile-scoped grants where matcher_version differs from the current version
-  // OR where profile_fingerprint / opportunity_fingerprint is null (never evaluated by v2.0.0)
+  // OR where profile_fingerprint / opportunity_fingerprint is null (never evaluated by current engine)
   const staleGrants = db.prepare(`
     SELECT g.id AS grant_id, g.profile_id, g.funding_opportunity_id, g.title,
            g.matcher_version, g.profile_fingerprint, g.opportunity_fingerprint,

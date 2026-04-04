@@ -36,8 +36,18 @@ export default function ProfileMatcher() {
     setError(null);
     
     try {
-      const response = await matchProfileToGrants(selectedProfileId)
-      setMatches(Array.isArray(response) ? response : [])
+      const response = await matchProfileToGrants(selectedProfileId);
+      if (Array.isArray(response)) {
+        setMatches(response);
+      } else if (response && Array.isArray(response.matches)) {
+        setMatches(response.matches);
+      } else if (response && Array.isArray(response.results)) {
+        setMatches(response.results);
+      } else {
+        console.warn('[ProfileMatcher] matchProfileToGrants returned unexpected shape:', response);
+        setMatches([]);
+        setError('Match service returned an unexpected response format. Please try again or contact support.');
+      }
     } catch (err) {
       console.error('Matching failed:', err);
       setError(err.message || 'An error occurred while matching grants');
@@ -186,9 +196,9 @@ export default function ProfileMatcher() {
                     <div className="flex items-start gap-6">
                       {/* Match Score Circle */}
                       <div className="flex-shrink-0">
-                        <div className={`relative w-24 h-24 rounded-full border-4 flex items-center justify-center ${getMatchColor(match.match_score)}`}>
+                        <div className={`relative w-24 h-24 rounded-full border-4 flex items-center justify-center ${match.match_score != null ? getMatchColor(match.match_score) : 'text-slate-400 bg-slate-50 border-slate-200'}`}>
                           <div className="text-center">
-                            <div className="text-2xl font-bold">{match.match_score}</div>
+                            <div className="text-2xl font-bold">{match.match_score != null ? match.match_score : 'â'}</div>
                             <div className="text-xs font-medium">MATCH</div>
                           </div>
                         </div>
@@ -270,7 +280,13 @@ export default function ProfileMatcher() {
                           {match.deadline && (
                             <div className="flex items-center gap-2 text-sm text-slate-600">
                               <Calendar className="w-4 h-4" />
-                              <span>Due: {format(new Date(match.deadline), 'MMM d, yyyy')}</span>
+                              <span>Due: {(() => { const d = new Date(match.deadline); return isNaN(d.getTime()) ? 'Unknown' : format(d, 'MMM d, yyyy'); })()}</span>
+                            </div>
+                          )}
+                          {match.amount && (
+                            <div className="flex items-center gap-2 text-sm text-slate-600">
+                              <DollarSign className="w-4 h-4" />
+                              <span>{typeof match.amount === 'number' ? match.amount.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }) : match.amount}</span>
                             </div>
                           )}
                           <Link to={createPageUrl("GrantDetail", { id: match.grant_id })}>
@@ -278,6 +294,23 @@ export default function ProfileMatcher() {
                               View Details
                             </Button>
                           </Link>
+                          {match.application_url && (
+                            <a
+                              href={match.application_url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="inline-flex items-center gap-1 text-sm font-medium text-emerald-700 hover:text-emerald-900 underline"
+                            >
+                              <ExternalLink className="w-4 h-4" />
+                              Apply Now
+                            </a>
+                          )}
+                          {!match.application_url && match.match_decision === 'ACCEPT' && (
+                            <span className="text-xs text-amber-600 flex items-center gap-1">
+                              <AlertTriangle className="w-3 h-3" />
+                              No application URL on file
+                            </span>
+                          )}
                         </div>
                       </div>
                     </div>

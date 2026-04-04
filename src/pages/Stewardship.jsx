@@ -48,7 +48,7 @@ export default function Stewardship() {
     }, [data, selectedGrantId]);
     
     // Set the first grant as selected by default
-    useState(() => {
+    useEffect(() => {
       if (data?.grants?.length > 0 && !selectedGrantId) {
         setSelectedGrantId(data.grants[0].id);
       }
@@ -104,8 +104,8 @@ export default function Stewardship() {
                     <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
                         <KPIWidget icon={DollarSign} title="Award Amount" value={`$${(selectedGrant.amount_max || 0).toLocaleString()}`} />
                         <KPIWidget icon={CalendarCheck} title="Days Left in Period" value={selectedGrant.end_date ? `${Math.max(0, new Date(selectedGrant.end_date).getTime() - new Date().getTime()) / (1000 * 3600 * 24).toFixed(0)}` : 'N/A'} />
-                        <KPIWidget icon={BarChart3} title="Burn Rate" value={`${( (filteredData.expenses.reduce((s,e) => s+e.amount, 0) / filteredData.budgets.reduce((s,b) => s+b.total, 0) * 100) || 0).toFixed(1)}%`} />
-                        <KPIWidget icon={ShieldCheck} title="Next Report Due" value={filteredData.reports.length > 0 ? new Date(filteredData.reports[0].due_date).toLocaleDateString() : 'None'} />
+                        <KPIWidget icon={BarChart3} title="Burn Rate" value={(() => { const totalBudget = filteredData.budgets.reduce((s, b) => s + (b.total || 0), 0); const totalExpenses = filteredData.expenses.reduce((s, e) => s + (e.amount || 0), 0); const pct = totalBudget > 0 ? ((totalExpenses / totalBudget) * 100).toFixed(1) : '0.0'; return `${pct}%`; })()} />
+                        <KPIWidget icon={ShieldCheck} title="Next Report Due" value={(() => { const upcoming = filteredData.reports.filter(r => r.due_date && new Date(r.due_date) >= new Date()).sort((a, b) => new Date(a.due_date) - new Date(b.due_date)); return upcoming.length > 0 ? new Date(upcoming[0].due_date).toLocaleDateString() : 'None'; })()} />
                     </div>
 
                     <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">

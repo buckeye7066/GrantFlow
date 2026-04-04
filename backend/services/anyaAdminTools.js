@@ -374,7 +374,11 @@ export async function adminCodeAnalyze({ filePath }, context) {
     throw new Error('filePath is required')
   }
 
-  const resolvedPath = path.resolve(REPO_ROOT, filePath)
+  const resolvedPath = path.resolve(REPO_ROOT, filePath);
+const repoRootWithSep = REPO_ROOT.endsWith(path.sep) ? REPO_ROOT : REPO_ROOT + path.sep;
+if (resolvedPath !== REPO_ROOT && !resolvedPath.startsWith(repoRootWithSep)) {
+  throw new Error('Path outside repository root not allowed');
+}
   const relativePath = path.relative(REPO_ROOT, resolvedPath)
 
   try {
@@ -461,7 +465,11 @@ export async function adminCodeEdit({ filePath, changes, save = false }, context
     }
   }
 
-  const resolvedPath = path.resolve(REPO_ROOT, filePath)
+  const resolvedPath = path.resolve(REPO_ROOT, filePath);
+const repoRootWithSep = REPO_ROOT.endsWith(path.sep) ? REPO_ROOT : REPO_ROOT + path.sep;
+if (resolvedPath !== REPO_ROOT && !resolvedPath.startsWith(repoRootWithSep)) {
+  throw new Error('Path outside repository root not allowed');
+}
   const relativePath = path.relative(REPO_ROOT, resolvedPath)
 
   // Ensure file is within allowed directories for safety
@@ -524,7 +532,7 @@ export async function adminCodeEdit({ filePath, changes, save = false }, context
         backupDir,
         `${path.basename(filePath)}.${timestamp}.backup`
       )
-      await fs.writeFile(backupPath, content, 'utf8')
+      try { await fs.writeFile(backupPath, content, 'utf8') } catch (err) { throw new Error(`Backup failed: ${err.message}`) }
 
       // Apply changes
       const modifiedLines = [...lines]
@@ -540,7 +548,7 @@ export async function adminCodeEdit({ filePath, changes, save = false }, context
       })
 
       const newContent = modifiedLines.join('\n')
-      await fs.writeFile(resolvedPath, newContent, 'utf8')
+      try { await fs.writeFile(resolvedPath, newContent, 'utf8') } catch (err) { throw new Error(`File write failed: ${err.message}`) }
 
       return {
         file: relativePath,
@@ -897,8 +905,22 @@ export async function adminDbQuery({ sql, limit = 100 }, context) {
     throw new Error('Only SELECT queries are allowed')
   }
 
+  // Block semicolons to prevent multi-statement injection
+  if (trimmedSql.includes(';')) {
+    throw new Error('Query contains forbidden characters')
+  }
+
+  // Block subqueries by detecting more than one SELECT keyword
+  const selectMatches = trimmedSql.match(/\bselect\b/g)
+  if (selectMatches && selectMatches.length > 1) {
+    throw new Error('Subqueries are not allowed')
+  }
+
   // Block dangerous keywords
-  const dangerousKeywords = ['drop', 'delete', 'update', 'insert', 'alter', 'create', 'truncate']
+  const dangerousKeywords = [
+    'drop', 'delete', 'update', 'insert', 'alter', 'create', 'truncate',
+    'union', 'into', 'exec', 'execute', 'grant', 'revoke',
+  ]
   if (dangerousKeywords.some((keyword) => trimmedSql.includes(keyword))) {
     throw new Error('Query contains forbidden keywords')
   }
@@ -906,13 +928,16 @@ export async function adminDbQuery({ sql, limit = 100 }, context) {
   try {
     const safeLimit = Math.max(1, Math.min(Number(limit) || 100, 500))
     
-    // Append LIMIT clause to the query if not already present
-    let finalSql = sql.trim()
-    if (!finalSql.toLowerCase().includes('limit')) {
-      finalSql += ` LIMIT ${safeLimit}`
-    }
-    
-    const results = db.prepare(finalSql).all()
+    // Append LIMIT clause to the query if not already present.
+    // Build finalSql from trimmedSql (already lowercased/sanitized) to prevent case-bypass attacks.
+    // Security checks use trimmedSql (lowercased). Execution uses the original, case-preserved sql.
+const originalTrimmed = sql.trim();
+let finalSql = originalTrimmed;
+if (!trimmedSql.includes('limit')) {
+  finalSql += ` LIMIT ${safeLimit}`;
+}
+
+const results = db.prepare(finalSql).all()
 
     return {
       query: sql,
@@ -935,24 +960,28 @@ export async function adminDbStats(_params, context) {
   }
 
   try {
-    // Get table counts
-    const tables = db
-      .prepare(
-        `
-      SELECT name
-      FROM sqlite_master
-      WHERE type = 'table' AND name NOT LIKE 'sqlite_%'
-      ORDER BY name
-    `,
-      )
-      .all()
+    // Get table counts — query differs between SQLite and Postgres
+    let tables
+    if (db?.dialect === 'postgres') {
+      tables = await db
+        .prepare(
+          `SELECT table_name AS name FROM information_schema.tables WHERE table_schema = 'public' AND table_type = 'BASE TABLE' ORDER BY table_name`,
+        )
+        .all()
+    } else {
+      tables = db
+        .prepare(
+          `SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name`,
+        )
+        .all()
+    }
 
     const tableCounts = {}
     tables.forEach((table) => {
       try {
         // Validate table name - only allow alphanumeric, underscores, and dashes
         // This protects against SQL injection via table name
-        if (!/^[a-zA-Z0-9_-]+$/.test(table.name)) {
+        if (!/^[a-zA-Z0-9_]+$/.test(table.name)) {
           tableCounts[table.name] = 'Error: Invalid table name'
           return
         }
@@ -964,34 +993,20 @@ export async function adminDbStats(_params, context) {
     })
 
     // Recent activity
-    const since24hPredicate =
-      db?.dialect === 'postgres'
-        ? `created_at >= (NOW() - INTERVAL '24 hours')`
-        : `created_at >= datetime('now', '-24 hours')`
+    const isPostgres = db?.dialect === 'postgres'
+    const recentCrawlersSql = isPostgres
+      ? `SELECT status, COUNT(*) as count FROM crawler_jobs WHERE created_at >= (NOW() - INTERVAL '24 hours') GROUP BY status`
+      : `SELECT status, COUNT(*) as count FROM crawler_jobs WHERE created_at >= datetime('now', '-24 hours') GROUP BY status`
+    const recentSessionsSql = isPostgres
+      ? `SELECT COUNT(*) as count FROM anya_sessions WHERE created_at >= (NOW() - INTERVAL '24 hours')`
+      : `SELECT COUNT(*) as count FROM anya_sessions WHERE created_at >= datetime('now', '-24 hours')`
 
-    const recentCrawlers = await db
-      .prepare(
-        `
-          SELECT status, COUNT(*) as count
-          FROM crawler_jobs
-          WHERE ${since24hPredicate}
-          GROUP BY status
-        `,
-      )
-      .all()
+    const recentCrawlers = await db.prepare(recentCrawlersSql).all()
 
-    const recentSessions = await db
-      .prepare(
-        `
-          SELECT COUNT(*) as count
-          FROM anya_sessions
-          WHERE ${since24hPredicate}
-        `,
-      )
-      .get()
+    const recentSessions = await db.prepare(recentSessionsSql).get()
 
     return {
-      database: 'SQLite',
+      database: db?.dialect === 'postgres' ? 'PostgreSQL' : 'SQLite',
       tables: tables.length,
       table_counts: tableCounts,
       recent_activity: {

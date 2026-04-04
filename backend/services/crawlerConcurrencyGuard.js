@@ -5,12 +5,19 @@
  * Uses database-backed locking to ensure reliable concurrency control.
  */
 
+import crypto from 'crypto'
 import { logFailedJob } from './deadLetterQueue.js'
 
 /**
  * Maximum concurrent crawlers globally (prevent system overload)
  */
 const MAX_GLOBAL_CONCURRENT_CRAWLERS = parseInt(process.env.MAX_CONCURRENT_CRAWLERS || '10', 10)
+
+/**
+ * Maximum number of automatic retries for orphaned jobs.
+ * Set to 0 to disable auto-retry.
+ */
+const MAX_ORPHAN_AUTO_RETRIES = parseInt(process.env.MAX_ORPHAN_AUTO_RETRIES || '2', 10)
 
 /**
  * Stale running-job cleanup
@@ -27,7 +34,7 @@ const STALE_RUNNING_MS = parseInt(process.env.CRAWLER_STALE_RUNNING_MS || String
 const STALE_CLEANUP_INTERVAL_MS = parseInt(process.env.CRAWLER_STALE_CLEANUP_INTERVAL_MS || String(5 * 60 * 1000), 10)
 let lastStaleCleanupAtMs = 0
 
-async function maybeCleanupStaleRunningJobs(db) {
+export async function maybeCleanupStaleRunningJobs(db) {
   // Throttle cleanup to keep dispatch cheap.
   const now = Date.now()
   if (STALE_CLEANUP_INTERVAL_MS > 0 && now - lastStaleCleanupAtMs < STALE_CLEANUP_INTERVAL_MS) return 0
@@ -223,7 +230,8 @@ export async function cleanupStaleCrawlers(db, staleThresholdMs = 30 * 60 * 1000
       .prepare(
         isPostgres
           ? `
-              SELECT id, type, profile_id, started_at, created_at, last_heartbeat_at
+              SELECT id, type, profile_id, organization_id, parameters, retry_count,
+                     started_at, created_at, last_heartbeat_at
               FROM crawler_jobs
               WHERE status = 'running'
                 AND (
@@ -236,7 +244,8 @@ export async function cleanupStaleCrawlers(db, staleThresholdMs = 30 * 60 * 1000
                 )
             `
           : `
-              SELECT id, type, profile_id, started_at, created_at, last_heartbeat_at
+              SELECT id, type, profile_id, organization_id, parameters, retry_count,
+                     started_at, created_at, last_heartbeat_at
               FROM crawler_jobs
               WHERE status = 'running'
                 AND (
@@ -254,20 +263,25 @@ export async function cleanupStaleCrawlers(db, staleThresholdMs = 30 * 60 * 1000
     let cleaned = 0
     for (const job of staleJobs) {
       const errorMessage = `Job orphaned - no heartbeat for ${staleThresholdMs}ms`
-      
-      // Mark job as failed
+
+      // retry_count is now included in the SELECT, no extra DB roundtrip needed.
+      const currentRetryCount = typeof job.retry_count === 'number' ? job.retry_count : 0
+
+      // Mark job as failed and increment retry counter.
       await db
         .prepare(
           `
             UPDATE crawler_jobs
             SET status = 'failed',
                 completed_at = CURRENT_TIMESTAMP,
-                error = ?
+                error = ?,
+                retry_count = COALESCE(retry_count, 0) + 1,
+                last_retry_at = CURRENT_TIMESTAMP
             WHERE id = ?
           `
         )
         .run(errorMessage, job.id)
-      
+
       // Log to dead letter queue
       await logFailedJob(db, {
         jobId: job.id,
@@ -278,7 +292,7 @@ export async function cleanupStaleCrawlers(db, staleThresholdMs = 30 * 60 * 1000
       }).catch(err => {
         console.warn('[crawler-concurrency] Failed to create dead letter entry:', err?.message)
       })
-      
+
       cleaned++
       console.warn('[crawler-concurrency] Cleaned stale crawler job', {
         jobId: job.id,
@@ -287,6 +301,63 @@ export async function cleanupStaleCrawlers(db, staleThresholdMs = 30 * 60 * 1000
         startedAt: job.started_at,
         createdAt: job.created_at,
       })
+
+      // Auto-retry if below the configured threshold.
+      if (MAX_ORPHAN_AUTO_RETRIES > 0 && currentRetryCount < MAX_ORPHAN_AUTO_RETRIES) {
+        try {
+          // parameters is already in the SELECT result — no extra query needed.
+          let originalParameters = {}
+          try {
+            originalParameters = job.parameters ? JSON.parse(job.parameters) : {}
+          } catch {
+            originalParameters = {}
+          }
+
+          const retryParameters = {
+            ...(originalParameters && typeof originalParameters === 'object' ? originalParameters : {}),
+            retried_from_job_id: job.id,
+          }
+
+          // Include attempt number in hash so each retry gets a unique idempotency key
+          // while still being deterministic for the same (job id, attempt).
+          const idempotencyKey = crypto
+            .createHash('sha256')
+            .update(JSON.stringify({ type: job.type, profile_id: job.profile_id, original_job_id: job.id, retry_attempt: currentRetryCount + 1 }))
+            .digest('hex')
+            .substring(0, 32)
+
+          const newJobId = crypto.randomUUID()
+          await db
+            .prepare(
+              `
+                INSERT INTO crawler_jobs (
+                  id, type, status, profile_id, organization_id,
+                  parameters, idempotency_key, requested_by
+                ) VALUES (?, ?, 'queued', ?, ?, ?, ?, ?)
+              `,
+            )
+            .run(
+              newJobId,
+              job.type,
+              job.profile_id ?? null,
+              job.organization_id ?? null,
+              JSON.stringify(retryParameters),
+              idempotencyKey,
+              'system:orphan-retry',
+            )
+
+          console.warn('[crawler-concurrency] Auto-requeued orphaned job', {
+            originalJobId: job.id,
+            newJobId,
+            type: job.type,
+            profileId: job.profile_id,
+            retryAttempt: currentRetryCount + 1,
+            maxRetries: MAX_ORPHAN_AUTO_RETRIES,
+          })
+        } catch (retryErr) {
+          console.warn('[crawler-concurrency] Failed to auto-requeue orphaned job:', retryErr?.message)
+        }
+      }
     }
     
     return cleaned

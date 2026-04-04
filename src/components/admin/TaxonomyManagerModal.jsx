@@ -10,12 +10,17 @@ import { Label } from '@/components/ui/label';
 import { GripVertical, Plus, Trash2, Loader2 } from 'lucide-react';
 import { toast } from "sonner";
 
-const toKebabCase = (str) =>
-  str &&
-  str
-    .match(/[A-Z]{2,}(?=[A-Z][a-z]+[0-9]*|\b)|[A-Z]?[a-z]+[0-9]*|[A-Z]|[0-9]+/g)
-    .map((x) => x.toLowerCase())
-    .join('-');
+const toKebabCase = (str) => {
+  if (!str) return '';
+  const tokens = str.match(
+    /[A-Z]{2,}(?=[A-Z][a-z]+[0-9]*|\b)|[A-Z]?[a-z]+[0-9]*|[A-Z]|[0-9]+/g
+  );
+  if (!tokens || tokens.length === 0) {
+    // Fallback: strip non-alphanumeric, lowercase, collapse spaces to hyphens
+    return str.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  }
+  return tokens.map((x) => x.toLowerCase()).join('-');
+};
 
 export default function TaxonomyManagerModal({ group, open, onClose, onSave }) {
   const queryClient = useQueryClient();
@@ -27,6 +32,12 @@ export default function TaxonomyManagerModal({ group, open, onClose, onSave }) {
     queryFn: () => client.entities.Taxonomy.filter({ group }, 'sort_order'),
     enabled: !!group && open,
   });
+
+  useEffect(() => {
+    // Reset local state immediately when group changes so stale items
+    // from a previous group cannot be accidentally saved to the new group.
+    setItems([]);
+  }, [group]);
 
   useEffect(() => {
     if (taxonomyItems) {
@@ -63,11 +74,19 @@ export default function TaxonomyManagerModal({ group, open, onClose, onSave }) {
 
   const handleAddItem = () => {
     if (!newItem.trim()) return;
+    const candidateSlug = toKebabCase(newItem.trim());
+    const isDuplicate = items.some(
+      (item) => item.slug === candidateSlug || item.label.trim().toLowerCase() === newItem.trim().toLowerCase()
+    );
+    if (isDuplicate) {
+      toast.error(`An option with the name "${newItem.trim()}" already exists in this group.`);
+      return;
+    }
     const maxSortOrder = items.reduce((max, item) => Math.max(max, item.sort_order), -1);
     createItemMutation.mutate({
       group,
       label: newItem.trim(),
-      slug: toKebabCase(newItem.trim()),
+      slug: candidateSlug,
       active: true,
       sort_order: maxSortOrder + 1,
     });
@@ -82,13 +101,48 @@ export default function TaxonomyManagerModal({ group, open, onClose, onSave }) {
   };
 
   const handleSave = () => {
-    const updates = items.map(item => ({ id: item.id, data: { sort_order: item.sort_order, active: item.active, label: item.label } }));
+    const slugs = items.map((item) => item.slug);
+    const uniqueSlugs = new Set(slugs);
+    if (uniqueSlugs.size !== slugs.length) {
+      const seen = new Set();
+      const dupes = slugs.filter((s) => {
+        if (seen.has(s)) return true;
+        seen.add(s);
+        return false;
+      });
+      toast.error(
+        `Cannot save: duplicate slugs detected (${[...new Set(dupes)].join(', ')}). Rename conflicting options before saving.`
+      );
+      return;
+    }
+    const updates = items.map((item) => ({
+      id: item.id,
+      data: {
+        sort_order: item.sort_order,
+        active: item.active,
+        label: item.label,
+        slug: item.slug,
+      },
+    }));
     bulkUpdateMutation.mutate(updates);
   };
 
   const handleLabelChange = (id, newLabel) => {
-    setItems(items.map(item => item.id === id ? { ...item, label: newLabel } : item));
-  }
+    const candidateSlug = toKebabCase(newLabel);
+    const collision = items.some(
+      (item) => item.id !== id && item.slug === candidateSlug
+    );
+    if (collision) {
+      toast.warning(`Another option already uses the slug "${candidateSlug}". Choose a more specific label to avoid conflicts.`);
+    }
+    setItems(
+      items.map(item =>
+        item.id === id
+          ? { ...item, label: newLabel, slug: candidateSlug }
+          : item
+      )
+    );
+  };
   
   const handleActiveChange = (id, checked) => {
     setItems(items.map(item => item.id === id ? { ...item, active: checked } : item));
@@ -113,7 +167,7 @@ export default function TaxonomyManagerModal({ group, open, onClose, onSave }) {
                 {(provided) => (
                   <div {...provided.droppableProps} ref={provided.innerRef} className="space-y-2">
                     {items.map((item, index) => (
-                      <Draggable key={item.id} draggableId={item.id} index={index}>
+                      <Draggable key={String(item.id)} draggableId={String(item.id)} index={index}>
                         {(provided) => (
                           <div
                             ref={provided.innerRef}

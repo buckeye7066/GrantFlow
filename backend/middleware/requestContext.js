@@ -39,7 +39,7 @@ async function upsertBasicInformationEmail(db, { profileId, email, actorUserId }
 
   const existing = await db
     .prepare(`SELECT id, data FROM profile_sections WHERE profile_id = ? AND section_key = 'basic_information' LIMIT 1`)
-    .get(String(profileId))
+    .get(profileId)
 
   let data = {}
   if (existing?.data) {
@@ -68,12 +68,13 @@ async function upsertBasicInformationEmail(db, { profileId, email, actorUserId }
           updated_by = excluded.updated_by
       `,
     )
-    .run(String(id), String(profileId), JSON.stringify(next), actorUserId ? String(actorUserId) : null)
+    .run(id, profileId, JSON.stringify(next), actorUserId || null)
 
   return { updated: true }
 }
 
-async function adminSelfHealOrgProfileEmails(db, { actorUserId } = {}) {
+async function adminSelfHealOrgProfileEmails(db, { actorUserId, isAdmin = false } = {}) {
+  if (!isAdmin) return { ran: false, error: 'Unauthorized' }
   // Throttle (avoid heavy work on every request)
   const now = Date.now()
   if (now - lastAdminSelfHealAtMs < ADMIN_SELF_HEAL_INTERVAL_MS) return { ran: false }
@@ -108,7 +109,7 @@ async function adminSelfHealOrgProfileEmails(db, { actorUserId } = {}) {
   for (const row of rows || []) {
     const email = normalizeEmail(row?.org_email)
     if (!email) continue
-    const profileId = String(row.profile_id)
+    const profileId = row.profile_id
 
     try {
       const exists = await db
@@ -175,14 +176,14 @@ export async function buildRequestContext(db, user) {
     if (!ctx.userId && ctx.activeProfileId) {
       const profileRow = await db
         .prepare('SELECT user_id FROM profiles WHERE id = ?')
-        .get(ctx.activeProfileId)
+        .get(String(ctx.activeProfileId))
       if (profileRow?.user_id) ctx.userId = profileRow.user_id
     }
 
     if (ctx.userId) {
       const row = await db
         .prepare('SELECT is_admin, primary_email FROM users WHERE id = ?')
-        .get(ctx.userId)
+        .get(String(ctx.userId))
       if (row) {
         ctx.isAdmin = Boolean(row.is_admin === true || row.is_admin === 1)
         if (row.primary_email && !ctx.email) ctx.email = row.primary_email
@@ -201,14 +202,14 @@ export async function buildRequestContext(db, user) {
           }
         }
       } else {
-        ctx.isAdmin = Boolean(emailIsConfiguredAdmin)
+        ctx.isAdmin = Boolean(user.is_admin || user.role === 'admin')
       }
     } else {
-      ctx.isAdmin = Boolean(emailIsConfiguredAdmin)
+      ctx.isAdmin = Boolean(user.is_admin || user.role === 'admin')
     }
   } catch (error) {
     console.warn('[requestContext] Failed to resolve admin status from DB:', error?.message)
-    ctx.isAdmin = false
+    ctx.isAdmin = Boolean(user.is_admin || user.role === 'admin')
   }
 
   // Step 5: Compute accessible profiles and orgs
@@ -220,7 +221,7 @@ export async function buildRequestContext(db, user) {
     // Admin-only self-healing: ensure org profiles are shareable via organizations.email.
     // Best-effort and throttled.
     try {
-      await adminSelfHealOrgProfileEmails(db, { actorUserId: ctx.userId ?? null })
+      await adminSelfHealOrgProfileEmails(db, { actorUserId: ctx.userId ?? null, isAdmin: ctx.isAdmin })
     } catch {
       // ignore (best-effort)
     }

@@ -36,8 +36,9 @@ export async function getOrCreateStripeCustomerId(db, { userId, email, name } = 
   let row = null
   try {
     row = await db.prepare('SELECT stripe_customer_id FROM stripe_customers WHERE user_id = ? LIMIT 1').get(uid)
-  } catch {
-    row = null
+  } catch (error) {
+    console.error('Database error checking existing stripe customer:', error)
+    return { ok: false, error: 'database_error' }
   }
   if (row?.stripe_customer_id) {
     return { ok: true, stripe_customer_id: String(row.stripe_customer_id) }
@@ -49,21 +50,37 @@ export async function getOrCreateStripeCustomerId(db, { userId, email, name } = 
   // In tests we allow a deterministic fake customer without making network calls.
   if (isTruthy(process.env.STRIPE_MOCK)) {
     const customerId = `cus_mock_${safeHash(uid).slice(0, 10)}`
-    await db
-      .prepare('INSERT INTO stripe_customers (user_id, stripe_customer_id) VALUES (?, ?)')
-      .run(uid, customerId)
+    try {
+      await db
+        .prepare('INSERT INTO stripe_customers (user_id, stripe_customer_id) VALUES (?, ?)')
+        .run(uid, customerId)
+    } catch (error) {
+      console.error('Failed to insert stripe customer:', error)
+      return { ok: false, error: 'database_insert_failed' }
+    }
     return { ok: true, stripe_customer_id: customerId, mocked: true }
   }
 
-  const customer = await stripe.customers.create({
-    email: email || undefined,
-    name: name || undefined,
-    metadata: { user_id: uid },
-  })
+  let customer
+  try {
+    customer = await stripe.customers.create({
+      email: email || undefined,
+      name: name || undefined,
+      metadata: { user_id: uid },
+    })
+  } catch (error) {
+    console.error('Stripe customer creation failed:', error.message)
+    return { ok: false, error: 'stripe_customer_creation_failed' }
+  }
 
-  await db
-    .prepare('INSERT INTO stripe_customers (user_id, stripe_customer_id) VALUES (?, ?)')
-    .run(uid, customer.id)
+  try {
+    await db
+      .prepare('INSERT INTO stripe_customers (user_id, stripe_customer_id) VALUES (?, ?)')
+      .run(uid, customer.id)
+  } catch (error) {
+    console.error('Failed to save stripe customer to database:', error)
+    return { ok: false, error: 'database_save_failed' }
+  }
 
   return { ok: true, stripe_customer_id: customer.id }
 }
@@ -97,17 +114,23 @@ export async function createCheckoutSessionForPrice({
     }
   }
 
-  const session = await stripe.checkout.sessions.create(
-    {
-      mode: 'payment',
-      customer: customerId || undefined,
-      line_items: [{ price: priceId, quantity: qty }],
-      success_url: successUrl,
-      cancel_url: cancelUrl,
-      metadata,
-    },
-    idem ? { idempotencyKey: idem } : undefined,
-  )
+  let session
+  try {
+    session = await stripe.checkout.sessions.create(
+      {
+        mode: 'payment',
+        customer: customerId || undefined,
+        line_items: [{ price: priceId, quantity: qty }],
+        success_url: successUrl,
+        cancel_url: cancelUrl,
+        metadata,
+      },
+      idem ? { idempotencyKey: idem } : undefined,
+    )
+  } catch (error) {
+    console.error('Stripe checkout session creation failed:', error.message)
+    throw new Error('Failed to create payment session')
+  }
   return session
 }
 

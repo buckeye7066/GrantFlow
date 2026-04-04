@@ -10,7 +10,7 @@ export default function createGeoCrawlRouter({ uploadDir, getOpenAI } = {}) {
   async function requireAdmin(req, res) {
     const user = requireAuthenticatedUser(req, res)
     if (!user) return null
-    const isAdmin = await isAdminUserWithDb(req.db, req.ctx ?? req.user ?? user)
+    const isAdmin = await isAdminUserWithDb(req.db, req.ctx ?? req.user ?? user).catch(() => false)
     if (!isAdmin) {
       res.status(403).json({ error: 'Admin access required' })
       return null
@@ -20,8 +20,8 @@ export default function createGeoCrawlRouter({ uploadDir, getOpenAI } = {}) {
 
   router.post('/start', async (req, res) => {
     try {
-      const user = await requireAdmin(req, res)
-      if (!user) return
+      const isAuthorized = await requireAdmin(req, res)
+      if (!isAuthorized) return
 
       const incoming = req.body && typeof req.body === 'object' ? req.body : {}
       const state = incoming.state ? String(incoming.state).toUpperCase() : null
@@ -38,7 +38,6 @@ export default function createGeoCrawlRouter({ uploadDir, getOpenAI } = {}) {
       const geoRunId = crypto.randomUUID()
 
       const parameters = {
-        ...incoming,
         mode: 'geo',
         geo_run_id: geoRunId,
         state: state ?? undefined,
@@ -51,24 +50,27 @@ export default function createGeoCrawlRouter({ uploadDir, getOpenAI } = {}) {
             : incoming.max_zips ?? incoming.maxZips ?? incoming.zip_limit ?? incoming.zipLimit ?? undefined,
         // Feature toggles (crawler reads these)
         discover_local_resources: incoming.discover_local_resources ?? incoming.discoverLocalResources ?? true,
-        // Default offline_only=false so each ZIP gets Grants.gov + Overpass (no cap on max sources per zip; min 3).
+        // Default offline_only=false so each ZIP gets Grants.gov + Overpass.
         offline_only: incoming.offline_only ?? incoming.offlineOnly ?? false,
       }
-      delete parameters.zips
 
       const jobId = crypto.randomUUID()
+      const callerProfileId =
+        typeof incoming.profile_id === 'string'
+          ? incoming.profile_id
+          : (typeof incoming.profileId === 'string' ? incoming.profileId : null)
 
       await req.db
         .prepare(
           `
             INSERT INTO crawler_jobs (id, type, status, profile_id, organization_id, parameters, requested_by)
-            VALUES (?, 'comprehensive', 'queued', NULL, NULL, ?, 'admin')
+            VALUES (?, 'comprehensive', 'queued', ?, NULL, ?, 'admin')
           `,
         )
-        .run(jobId, JSON.stringify(parameters))
+        .run(jobId, callerProfileId, JSON.stringify(parameters))
 
       // Durable run row for monitor (DB-backed, survives refresh)
-      const createdByUserId = getAuthUserId(req.ctx ?? req.user ?? user) ?? null
+      const createdByUserId = getAuthUserId(req.ctx ?? req.user ?? isAuthorized) ?? null
       await createGeoCrawlRun(req.db, {
         id: geoRunId,
         state: runAllStates ? null : state,
@@ -76,17 +78,16 @@ export default function createGeoCrawlRouter({ uploadDir, getOpenAI } = {}) {
         crawlerJobId: jobId,
       })
 
-      // Dispatch asynchronously (don't block response)
-      try {
-        dispatchCrawlerJob({
-          db: req.db,
-          jobId,
-          uploadDir,
-          getOpenAI,
-        })
-      } catch (error) {
+      // Dispatch asynchronously (don't block response).
+      // Use .catch() instead of try/catch so async Promise rejections are also captured.
+      dispatchCrawlerJob({
+        db: req.db,
+        jobId,
+        uploadDir,
+        getOpenAI,
+      }).catch((error) => {
         console.warn('[geo-crawl/start] Failed to dispatch job:', error?.message || error)
-      }
+      })
 
       const job = await req.db
         .prepare('SELECT id, type, status, created_at, started_at, completed_at, result_count, error FROM crawler_jobs WHERE id = ?')
@@ -101,8 +102,8 @@ export default function createGeoCrawlRouter({ uploadDir, getOpenAI } = {}) {
 
   router.get('/runs/:runId', async (req, res) => {
     try {
-      const user = await requireAdmin(req, res)
-      if (!user) return
+      const isAuthorized = await requireAdmin(req, res)
+      if (!isAuthorized) return
 
       const runId = String(req.params.runId || '').trim()
       if (!runId) return res.status(400).json({ error: 'runId is required' })
@@ -119,14 +120,14 @@ export default function createGeoCrawlRouter({ uploadDir, getOpenAI } = {}) {
 
   router.get('/runs/:runId/events', async (req, res) => {
     try {
-      const user = await requireAdmin(req, res)
-      if (!user) return
+      const isAuthorized = await requireAdmin(req, res)
+      if (!isAuthorized) return
 
       const runId = String(req.params.runId || '').trim()
       if (!runId) return res.status(400).json({ error: 'runId is required' })
 
-      const afterId = req.query?.after_id ?? req.query?.afterId ?? 0
-      const limit = req.query?.limit ?? 200
+      const afterId = Number(req.query?.after_id ?? req.query?.afterId ?? 0) || 0
+      const limit = Math.min(Number(req.query?.limit ?? 200) || 200, 1000)
 
       const events = await listGeoCrawlEvents(req.db, runId, { afterId, limit })
       const lastEventId = events.length ? events[events.length - 1].id : Number(afterId || 0)

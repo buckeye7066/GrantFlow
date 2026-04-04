@@ -1,12 +1,32 @@
-import React from "react"
-import { ExternalLink } from "lucide-react"
+import React, { useState } from "react"
+import { useQuery, useQueryClient } from "@tanstack/react-query"
+import { ExternalLink, RefreshCw, Clock, Award, CheckCircle2, X } from "lucide-react"
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
+import { Badge } from "@/components/ui/badge"
+import { createCrawlerJob } from "@/api/crawlers"
+import { apiFetch } from "@/api/client"
+import { useToast } from "@/components/ui/use-toast"
+import { formatDistanceToNow } from "date-fns"
+
+// Delay before refreshing portal check results after queuing a new job,
+// to give the server time to process and store initial results.
+const PORTAL_CHECK_REFRESH_DELAY_MS = 3000
 
 function normalizeState(value) {
   const v = String(value || "").trim().toUpperCase()
   return v.length === 2 ? v : ""
+}
+
+function extractAwardAmount(resultsJson) {
+  if (!resultsJson) return ""
+  try {
+    const parsed = JSON.parse(resultsJson)
+    return parsed.awardAmountRaw ? ` \u2014 ${parsed.awardAmountRaw}` : ""
+  } catch {
+    return ""
+  }
 }
 
 function PortalButton({ href, label }) {
@@ -35,8 +55,133 @@ function PortalSection({ title, items }) {
   )
 }
 
-export default function StudentPortalsCard({ state }) {
+function DetectedAwardCard({ result, onConfirm }) {
+  const [dismissed, setDismissed] = useState(false)
+  if (dismissed) return null
+  return (
+    <div className="flex items-start gap-2 rounded-md border border-emerald-200 bg-emerald-50 p-3">
+      <Award className="mt-0.5 h-4 w-4 flex-shrink-0 text-emerald-600" />
+      <div className="min-w-0 flex-1">
+        <p className="text-sm font-medium text-emerald-900 truncate">{result.portal_name}</p>
+        {result.awards_detected > 0 && (
+          <p className="text-xs text-emerald-700">
+            Award signal detected{extractAwardAmount(result.results_json)}
+          </p>
+        )}
+        <p className="text-xs text-emerald-600">
+          {result.checked_at
+            ? formatDistanceToNow(new Date(result.checked_at), { addSuffix: true })
+            : ""}
+        </p>
+      </div>
+      <div className="flex items-center gap-1 flex-shrink-0">
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-6 w-6 p-0 text-emerald-700 hover:bg-emerald-100"
+          title="Confirm award"
+          onClick={() => {
+            onConfirm(result)
+            setDismissed(true)
+          }}
+        >
+          <CheckCircle2 className="h-3.5 w-3.5" />
+        </Button>
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-6 w-6 p-0 text-slate-500 hover:bg-slate-100"
+          title="Dismiss"
+          onClick={() => setDismissed(true)}
+        >
+          <X className="h-3.5 w-3.5" />
+        </Button>
+      </div>
+    </div>
+  )
+}
+
+export default function StudentPortalsCard({ state, profileId }) {
   const st = normalizeState(state)
+  const { toast } = useToast()
+  const queryClient = useQueryClient()
+  const [checking, setChecking] = useState(false)
+
+  const { data: portalStatus } = useQuery({
+    queryKey: ["portal-check-status", profileId],
+    queryFn: () =>
+      apiFetch(`/api/crawlers/portal-check-results/${profileId}`).then((r) => r.results ?? []),
+    enabled: Boolean(profileId),
+    staleTime: 60_000,
+  })
+
+  const lastChecked =
+    portalStatus && portalStatus.length > 0
+      ? new Date(
+          portalStatus.reduce((latest, r) =>
+            r.checked_at > (latest?.checked_at ?? "") ? r : latest,
+          ).checked_at,
+        )
+      : null
+
+  const detectedAwards = (portalStatus ?? []).filter((r) => r.awards_detected > 0)
+
+  const handleCheckNow = async () => {
+    if (!profileId || checking) return
+    setChecking(true)
+    try {
+      await createCrawlerJob({
+        type: "portal_check",
+        profile_id: profileId,
+        parameters: { check_type: "manual", max_portals: 20 },
+      })
+      toast({
+        title: "Portal check queued",
+        description: "Checking financial aid portals for new award updates\u2026",
+      })
+      // Invalidate once at 3 s, then again at 10 s as a fallback for slow jobs
+      setTimeout(() => {
+        queryClient.invalidateQueries({ queryKey: ["portal-check-status", profileId] })
+      }, PORTAL_CHECK_REFRESH_DELAY_MS)
+      setTimeout(() => {
+        queryClient.invalidateQueries({ queryKey: ["portal-check-status", profileId] })
+      }, 10_000)
+    } catch (err) {
+      toast({
+        title: "Portal check failed",
+        description: err?.message || "Unable to start portal check.",
+        variant: "destructive",
+      })
+    } finally {
+      setChecking(false)
+    }
+  }
+
+  const handleConfirmAward = async (result) => {
+    try {
+      await apiFetch(`/api/profiles/${profileId}/pipeline`, {
+        method: "POST",
+        body: JSON.stringify({
+          source: "portal_check",
+          portal_name: result.portal_name,
+          portal_url: result.portal_url ?? null,
+          results_json: result.results_json ?? null,
+          confirmed_at: new Date().toISOString(),
+        }),
+      })
+      queryClient.invalidateQueries({ queryKey: ["portal-check-status", profileId] })
+      toast({
+        title: "Award confirmed",
+        description: `${result.portal_name} award added to your profile pipeline.`,
+      })
+    } catch (err) {
+      toast({
+        title: "Confirm failed",
+        description: err?.message || "Unable to save award to pipeline.",
+        variant: "destructive",
+      })
+    }
+  }
 
   const admissionsAndAid = [
     { label: "FAFSA (Federal Student Aid)", href: "https://studentaid.gov/h/apply-for-aid/fafsa" },
@@ -78,20 +223,62 @@ export default function StudentPortalsCard({ state }) {
   return (
     <Card>
       <CardHeader className="pb-3">
-        <CardTitle className="text-base">Student portals</CardTitle>
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <CardTitle className="text-base">Student portals</CardTitle>
+            {detectedAwards.length > 0 && (
+              <Badge variant="secondary" className="bg-emerald-100 text-emerald-800 text-xs">
+                {detectedAwards.length} award{detectedAwards.length !== 1 ? "s" : ""} detected
+              </Badge>
+            )}
+          </div>
+          {profileId ? (
+            <div className="flex items-center gap-2">
+              {lastChecked && (
+                <span className="flex items-center gap-1 text-xs text-slate-500">
+                  <Clock className="h-3.5 w-3.5" />
+                  {formatDistanceToNow(lastChecked, { addSuffix: true })}
+                </span>
+              )}
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleCheckNow}
+                disabled={checking}
+                className="h-7 gap-1 px-2 text-xs"
+              >
+                <RefreshCw className={`h-3.5 w-3.5 ${checking ? "animate-spin" : ""}`} />
+                {checking ? "Checking\u2026" : "Check Now"}
+              </Button>
+            </div>
+          ) : null}
+        </div>
       </CardHeader>
       <CardContent>
+        {detectedAwards.length > 0 && (
+          <div className="mb-4 space-y-2">
+            <p className="text-xs font-semibold uppercase tracking-wide text-emerald-700">
+              Detected awards
+            </p>
+            {detectedAwards.map((result) => (
+              <DetectedAwardCard
+                key={result.portal_url ?? result.portal_name}
+                result={result}
+                onConfirm={handleConfirmAward}
+              />
+            ))}
+          </div>
+        )}
         <div className="space-y-5">
           <PortalSection title="Admissions + financial aid" items={admissionsAndAid} />
           <PortalSection title="Standardized testing" items={standardizedTesting} />
           <PortalSection title="Licensure + certification" items={licensureAndCertification} />
         </div>
         <p className="mt-3 text-xs text-slate-500">
-          Tip: keep these logins handy. Add each university’s direct application, portal, and fee/payment links inside the
+          Tip: keep these logins handy. Add each university&apos;s direct application, portal, and fee/payment links inside the
           university cards below.
         </p>
       </CardContent>
     </Card>
   )
 }
-
