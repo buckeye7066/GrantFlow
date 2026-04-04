@@ -4,7 +4,10 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate } from 'react-router-dom';
 import { createPageUrl } from '@/utils';
 import { Button } from '@/components/ui/button';
-import { Loader2, ArrowLeft, Edit, Trash2, Star, CheckSquare, Sparkles, DollarSign, ArrowRightSquare, Shield, Brain, Clock, FileText } from 'lucide-react';
+import { Loader2, ArrowLeft, Edit, Trash2, Star, CheckSquare, Sparkles, DollarSign, ArrowRightSquare, Shield, Brain, Clock, FileText, Target, Link2Off, AlertTriangle, CalendarClock } from 'lucide-react';
+import { Badge } from '@/components/ui/badge';
+import { differenceInCalendarDays, format as formatDate } from 'date-fns';
+import HelpTip from '@/components/help/HelpTip';
 import GrantOverview from '../components/grants/GrantOverview';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import Checklist from '../components/workflow/Checklist';
@@ -35,6 +38,152 @@ import { createLogger } from '@/utils/logger';
 import client, { apiFetch } from '@/api/client'
 
 const toMessage = (e) => (e instanceof Error ? e.message : String(e ?? ''));
+
+function MatchIntelligenceBanner({ grant }) {
+  if (!grant) return null
+
+  const matchScore = grant.match_score || grant.match || 0
+  const matchReasons = Array.isArray(grant.match_reasons)
+    ? grant.match_reasons
+    : (() => { try { return JSON.parse(grant.match_reasons || '[]') } catch { return [] } })()
+  const linkStatus = grant.link_status ?? null
+  const deadlineDate = grant.deadline ? new Date(grant.deadline) : null
+  const isDeadlineValid = deadlineDate && !isNaN(deadlineDate.getTime())
+  const daysUntil = isDeadlineValid ? differenceInCalendarDays(deadlineDate, new Date()) : null
+  const isPast = daysUntil !== null && daysUntil < 0
+
+  const getScoreStyle = (s) => {
+    if (s >= 80) return { bg: 'bg-emerald-500', label: 'Excellent Match' }
+    if (s >= 65) return { bg: 'bg-green-500', label: 'Good Match' }
+    if (s >= 50) return { bg: 'bg-blue-500', label: 'Fair Match' }
+    if (s >= 35) return { bg: 'bg-amber-500', label: 'Potential Match' }
+    return { bg: 'bg-slate-400', label: 'Low Match' }
+  }
+
+  const hasAnything = matchScore > 0 || matchReasons.length > 0 || linkStatus === 'broken' || (daysUntil !== null && daysUntil <= 14)
+  if (!hasAnything) return null
+
+  const style = getScoreStyle(matchScore)
+
+  return (
+    <div className="max-w-7xl mx-auto px-4 md:px-6 pt-4">
+      <div className="rounded-lg border border-slate-200 bg-white p-4 flex flex-wrap items-center gap-4">
+        {/* Match Score */}
+        {matchScore > 0 && (
+          <div className="flex items-center gap-2">
+            <div className={`${style.bg} text-white text-sm font-bold px-3 py-1 rounded-full flex items-center gap-1.5`}>
+              <Target className="w-3.5 h-3.5" />
+              {Math.round(matchScore)}%
+            </div>
+            <span className="text-sm font-medium text-slate-700">{style.label}</span>
+          </div>
+        )}
+
+        {/* Match Reasons */}
+        {matchReasons.length > 0 && (
+          <div className="flex flex-wrap gap-1.5">
+            {matchReasons.slice(0, 5).map((reason, i) => (
+              <Badge key={i} variant="outline" className="text-xs bg-blue-50 text-blue-700 border-blue-200">
+                {reason}
+              </Badge>
+            ))}
+          </div>
+        )}
+
+        {/* Deadline Urgency */}
+        {daysUntil !== null && daysUntil <= 14 && !isPast && (
+          <HelpTip text={`Deadline: ${formatDate(deadlineDate, 'MMM d, yyyy')} — ${daysUntil} day${daysUntil !== 1 ? 's' : ''} remaining`}>
+            <Badge
+              variant="outline"
+              className={`text-xs cursor-help ${
+                daysUntil <= 3 ? 'bg-red-50 text-red-700 border-red-300' :
+                daysUntil <= 7 ? 'bg-orange-50 text-orange-700 border-orange-300' :
+                'bg-amber-50 text-amber-700 border-amber-300'
+              }`}
+            >
+              <CalendarClock className="w-3 h-3 mr-1" />
+              {daysUntil === 0 ? 'Due today' : daysUntil === 1 ? 'Due tomorrow' : `${daysUntil} days left`}
+            </Badge>
+          </HelpTip>
+        )}
+        {isPast && (
+          <Badge variant="destructive" className="text-xs">
+            <AlertTriangle className="w-3 h-3 mr-1" /> Deadline passed
+          </Badge>
+        )}
+
+        {/* Link Status */}
+        {linkStatus === 'broken' && (
+          <HelpTip text="Our last check found the application link may be broken. Try the URL, and if it doesn't work, contact the funder directly.">
+            <Badge variant="outline" className="text-xs bg-red-50 text-red-700 border-red-300 cursor-help">
+              <Link2Off className="w-3 h-3 mr-1" />
+              Link Issue
+            </Badge>
+          </HelpTip>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function SimilarGrants({ grantId }) {
+  const { data, isLoading } = useQuery({
+    queryKey: ['similar-grants', grantId],
+    queryFn: () => apiFetch(`/api/opportunities/${grantId}/similar`).then(r => r.similar ?? []),
+    enabled: !!grantId,
+    staleTime: 5 * 60 * 1000,
+  })
+
+  if (isLoading || !data?.length) return null
+
+  const fmtAmount = (min, max) => {
+    const f = (n) => n >= 1000000 ? `$${(n/1000000).toFixed(1)}M` : n >= 1000 ? `$${(n/1000).toFixed(0)}K` : `$${n}`
+    if (max && min) return `${f(min)}–${f(max)}`
+    if (max) return `Up to ${f(max)}`
+    if (min) return `From ${f(min)}`
+    return null
+  }
+
+  return (
+    <div className="max-w-7xl mx-auto px-4 md:px-6 pb-8">
+      <h3 className="text-lg font-semibold text-slate-800 mb-3 flex items-center gap-2">
+        <Sparkles className="w-4 h-4 text-blue-500" />
+        Similar Opportunities
+      </h3>
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+        {data.map(opp => (
+          <Link
+            key={opp.id}
+            to={`/GrantDetail?id=${opp.id}`}
+            className="block rounded-lg border border-slate-200 bg-white p-4 hover:border-blue-300 hover:shadow-sm transition-all"
+          >
+            <p className="font-medium text-sm text-slate-900 line-clamp-2 mb-1">{opp.title}</p>
+            {opp.sponsor && <p className="text-xs text-slate-500 mb-2">{opp.sponsor}</p>}
+            <div className="flex flex-wrap gap-1.5">
+              {fmtAmount(opp.amount_min, opp.amount_max) && (
+                <Badge variant="outline" className="text-xs">
+                  <DollarSign className="w-3 h-3 mr-0.5" />
+                  {fmtAmount(opp.amount_min, opp.amount_max)}
+                </Badge>
+              )}
+              {opp.deadline && (
+                <Badge variant="outline" className="text-xs">
+                  <Clock className="w-3 h-3 mr-0.5" />
+                  {formatDate(new Date(opp.deadline), 'MMM d')}
+                </Badge>
+              )}
+              {opp.link_status === 'broken' && (
+                <Badge variant="outline" className="text-xs bg-red-50 text-red-700 border-red-300">
+                  <Link2Off className="w-3 h-3 mr-0.5" /> Link Issue
+                </Badge>
+              )}
+            </div>
+          </Link>
+        ))}
+      </div>
+    </div>
+  )
+}
 
 const FIELD_NAME_MAP = {
   mission: "Mission Statement",
@@ -400,6 +549,9 @@ export default function GrantDetail() {
         </div>
       </header>
 
+      {/* Match Intelligence Banner */}
+      <MatchIntelligenceBanner grant={grant} />
+
       <main className="max-w-7xl mx-auto p-4 md:p-6 grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2 space-y-6">
           <GrantOverview grant={grant} organization={organization} onOpenPrintApp={() => setIsPrintableAppOpen(true)} />
@@ -472,6 +624,8 @@ export default function GrantDetail() {
         </div>
         <div className="lg:col-span-1 space-y-6"></div>
       </main>
+
+      <SimilarGrants grantId={grant.id} />
 
       <AlertDialog open={isDeleting} onOpenChange={setIsDeleting}>
         <AlertDialogContent>

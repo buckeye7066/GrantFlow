@@ -40,6 +40,10 @@ import StartHereCard from "@/components/dashboard/StartHereCard"
 import AnyaChat from "@/components/anya/AnyaChat"
 import OnboardingVideo from "@/components/onboarding/OnboardingVideo"
 import { cn } from "@/lib/utils"
+import { useSavedGrantsStore } from "@/stores/savedGrantsStore"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Star, User, CheckCircle2, ArrowRight } from "lucide-react"
+import { Progress } from "@/components/ui/progress"
 
 /** Resolves last-visited page from preferences (source of truth) or localStorage (fallback). */
 function DashboardContinueOrStart({ profilesLength, urgentDeadlines, activeGrants, hasGrants }) {
@@ -72,6 +76,105 @@ function DashboardContinueOrStart({ profilesLength, urgentDeadlines, activeGrant
       hasGrants={hasGrants}
     />
   );
+}
+
+function EngagementRow({ profileDetail, activeGrants, urgentDeadlines }) {
+  const { savedIds, sync, synced } = useSavedGrantsStore()
+
+  React.useEffect(() => {
+    if (!synced) sync()
+  }, [synced, sync])
+
+  // Profile completion
+  const sections = profileDetail?.sections
+  let filledCount = 0
+  let totalCount = 0
+  if (Array.isArray(sections)) {
+    totalCount = sections.length
+    for (const s of sections) {
+      if (!s?.data || typeof s.data !== 'object') continue
+      const hasValue = Object.values(s.data).some((v) =>
+        v !== null && v !== undefined && v !== '' && v !== false && !(Array.isArray(v) && v.length === 0)
+      )
+      if (hasValue) filledCount++
+    }
+  }
+  const completionPct = totalCount > 0 ? Math.round((filledCount / totalCount) * 100) : 0
+
+  // Determine next action
+  let nextAction = null
+  if (completionPct < 40) {
+    nextAction = { label: 'Complete your profile for better matches', url: createPageUrl('MyProfiles'), icon: User }
+  } else if (savedIds.length === 0 && activeGrants.length === 0) {
+    nextAction = { label: 'Discover grants matched to your profile', url: createPageUrl('DiscoverGrants'), icon: Target }
+  } else if (urgentDeadlines.length > 0) {
+    nextAction = { label: `${urgentDeadlines.length} deadline${urgentDeadlines.length > 1 ? 's' : ''} approaching — review now`, url: createPageUrl('Pipeline'), icon: CalendarIcon }
+  } else if (savedIds.length > 0 && activeGrants.length === 0) {
+    nextAction = { label: 'Move saved grants into your pipeline', url: createPageUrl('SavedGrants'), icon: Star }
+  }
+
+  return (
+    <div className="grid gap-4 md:grid-cols-3">
+      {/* Profile Completion */}
+      <Card>
+        <CardHeader className="pb-2">
+          <CardTitle className="text-sm font-medium text-slate-600 flex items-center gap-2">
+            <User className="w-4 h-4" /> Profile
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-2">
+          <div className="flex items-center justify-between text-sm">
+            <span className="font-semibold text-lg">{completionPct}%</span>
+            {completionPct === 100 && <CheckCircle2 className="w-4 h-4 text-emerald-500" />}
+          </div>
+          <Progress value={completionPct} className="h-2" />
+          <p className="text-xs text-slate-500">
+            {completionPct < 100 ? `${filledCount} of ${totalCount} sections filled` : 'Profile complete'}
+          </p>
+        </CardContent>
+      </Card>
+
+      {/* Saved Grants */}
+      <Card>
+        <CardHeader className="pb-2">
+          <CardTitle className="text-sm font-medium text-slate-600 flex items-center gap-2">
+            <Star className="w-4 h-4" /> Saved Grants
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <p className="text-lg font-semibold">{savedIds.length}</p>
+          <p className="text-xs text-slate-500 mt-1">
+            {savedIds.length === 0 ? 'Star grants in Discovery to save them' : 'Bookmarked for later'}
+          </p>
+          {savedIds.length > 0 && (
+            <Link to={createPageUrl('SavedGrants')} className="text-xs text-blue-600 hover:underline mt-2 inline-flex items-center gap-1">
+              View saved <ArrowRight className="w-3 h-3" />
+            </Link>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Next Action */}
+      <Card className={nextAction ? 'border-blue-200 bg-blue-50/50' : ''}>
+        <CardHeader className="pb-2">
+          <CardTitle className="text-sm font-medium text-slate-600 flex items-center gap-2">
+            <Sparkles className="w-4 h-4" /> Next Step
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          {nextAction ? (
+            <Link to={nextAction.url} className="group flex items-center gap-2">
+              <nextAction.icon className="w-4 h-4 text-blue-600 shrink-0" />
+              <span className="text-sm text-blue-800 group-hover:underline">{nextAction.label}</span>
+              <ArrowRight className="w-3.5 h-3.5 text-blue-500 shrink-0" />
+            </Link>
+          ) : (
+            <p className="text-sm text-emerald-700">You're on track! Keep monitoring your pipeline.</p>
+          )}
+        </CardContent>
+      </Card>
+    </div>
+  )
 }
 
 // LJWMonogram component - defined outside Dashboard to maintain stable reference
@@ -502,6 +605,13 @@ export default function Dashboard() {
             <StatCard key={stat.title} {...stat} />
           ))}
         </div>
+
+        {/* Engagement Row */}
+        <EngagementRow
+          profileDetail={profileDetail}
+          activeGrants={activeGrants}
+          urgentDeadlines={urgentDeadlines}
+        />
 
         <div className="grid gap-6 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
           <div className="grid gap-6">

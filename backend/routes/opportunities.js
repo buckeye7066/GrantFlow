@@ -1570,4 +1570,69 @@ router.delete('/:id([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-
   }
 });
 
+// GET /api/opportunities/:id/similar
+// Returns up to 5 active opportunities sharing categories or sponsor with the given one
+router.get('/:id/similar', async (req, res) => {
+  try {
+    const { id } = req.params
+    const opp = await req.db.prepare('SELECT * FROM funding_opportunities WHERE id = ?').get(String(id))
+    if (!opp) return res.status(404).json({ error: 'Opportunity not found' })
+
+    const categories = safeParseJSON(opp.categories, [])
+    const keywords = safeParseJSON(opp.keywords, [])
+    const sponsor = (opp.sponsor || '').trim()
+
+    const isPostgres = req.db?.dialect === 'postgres'
+    const activeVal = isPostgres ? 'TRUE' : '1'
+
+    // Fetch candidates: active, not self, same state or national
+    const candidateRows = await req.db.prepare(
+      `SELECT id, title, sponsor, categories, keywords, amount_min, amount_max,
+              deadline, application_url, state, is_national, link_status
+       FROM funding_opportunities
+       WHERE id != ? AND is_active = ${activeVal}
+       ORDER BY updated_at DESC
+       LIMIT 200`
+    ).all(String(id))
+
+    // Score each candidate by overlap
+    const scored = candidateRows.map(row => {
+      let score = 0
+      const rowCats = safeParseJSON(row.categories, []).map(c => c?.toLowerCase?.())
+      const rowKws = safeParseJSON(row.keywords, []).map(k => k?.toLowerCase?.())
+      const rowSponsor = (row.sponsor || '').trim().toLowerCase()
+
+      // Category overlap: +3 per match
+      for (const cat of categories) {
+        if (cat && rowCats.includes(cat.toLowerCase())) score += 3
+      }
+
+      // Keyword overlap: +1 per match
+      for (const kw of keywords) {
+        if (kw && rowKws.includes(kw.toLowerCase())) score += 1
+      }
+
+      // Same sponsor: +5
+      if (sponsor && rowSponsor && rowSponsor === sponsor.toLowerCase()) score += 5
+
+      // Same state bonus: +2
+      if (opp.state && row.state && opp.state === row.state) score += 2
+
+      return { ...row, _score: score }
+    })
+
+    // Return top 5 with score > 0
+    const similar = scored
+      .filter(r => r._score > 0)
+      .sort((a, b) => b._score - a._score)
+      .slice(0, 5)
+      .map(({ _score, ...rest }) => rest)
+
+    res.json({ similar })
+  } catch (err) {
+    console.error('Similar grants error:', err)
+    res.status(500).json({ error: 'Failed to find similar grants' })
+  }
+})
+
 export default router;
