@@ -35,6 +35,8 @@ import StudentPortalsCard from "@/components/profiles/StudentPortalsCard.jsx"
 import HealthResourcesCard from "@/components/profiles/HealthResourcesCard.jsx"
 import { SECTION_METADATA } from "@/config/sectionMetadata"
 
+const CORE_SECTION_KEYS = Object.keys(SECTION_METADATA).slice(0, 8)
+
 export default function ProfileDetail() {
   const [searchParams] = useSearchParams()
   const navigate = useNavigate()
@@ -334,6 +336,139 @@ export default function ProfileDetail() {
   const hasSyncedTargetColleges = useRef(false)
   const lastSyncedProfileId = useRef(null)
 
+  // Derived state — computed here (before early returns) using optional chaining so they are
+  // safe when `profile` is still undefined (loading / error states).
+  const canDocumentAI = isAdmin || Boolean(profile?.billing?.tier?.enable_document_ai)
+
+  const primaryType = String(profile?.primary_type || "").toLowerCase()
+  const basicInfo =
+    profile?.sections?.find((section) => section.section_key === "basic_information")?.data ?? {}
+  const profileTypeLabel = String(basicInfo?.profile_type || "").toLowerCase()
+
+  const eduSection = profile?.sections?.find((s) => s.section_key === "education")?.data
+  const highestLevel = String(eduSection?.highest_level || "").toLowerCase()
+  const targetColleges = eduSection?.target_colleges
+  const hasTargetColleges = Array.isArray(targetColleges)
+    ? targetColleges.length > 0
+    : typeof targetColleges === "string" && targetColleges.trim().length > 0
+
+  const isStudentProfile =
+    ["high_school_student", "college_student", "graduate_student"].includes(primaryType) ||
+    profileTypeLabel.includes("student") ||
+    highestLevel.includes("student") ||
+    hasTargetColleges
+
+  const healthMedical =
+    profile?.sections?.find((section) => section.section_key === "health_medical")?.data ?? {}
+
+  const hasHealthSignals =
+    Boolean(healthMedical?.chronic_illness) ||
+    Boolean(healthMedical?.dialysis_patient) ||
+    Boolean(healthMedical?.organ_transplant) ||
+    Boolean(healthMedical?.hiv_aids) ||
+    Boolean(healthMedical?.tbi_survivor) ||
+    Boolean(healthMedical?.amputee) ||
+    Boolean(healthMedical?.neurodivergent) ||
+    Boolean(healthMedical?.mental_health_condition) ||
+    Boolean(healthMedical?.wheelchair_user) ||
+    Boolean(healthMedical?.visual_impairment) ||
+    Boolean(healthMedical?.hearing_impairment) ||
+    (Array.isArray(healthMedical?.disability_type) && healthMedical.disability_type.length > 0) ||
+    (Array.isArray(healthMedical?.support_needs) && healthMedical.support_needs.length > 0) ||
+    (Array.isArray(healthMedical?.conditions) && healthMedical.conditions.length > 0) ||
+    Boolean(String(healthMedical?.notes || "").trim())
+
+  const isHealthProfile =
+    primaryType.includes("health") ||
+    primaryType.includes("patient") ||
+    profileTypeLabel.includes("health") ||
+    profileTypeLabel.includes("medical") ||
+    hasHealthSignals
+
+  const studentState =
+    basicInfo?.address?.state ??
+    basicInfo?.state ??
+    profile?.state ??
+    ""
+
+  const studentGender =
+    basicInfo?.gender ??
+    basicInfo?.sex ??
+    profile?.gender ??
+    ""
+
+  const universitySectionData =
+    profile?.sections?.find((section) => section.section_key === "university_applications")?.data ?? {}
+  const universityApplications = Array.isArray(universitySectionData?.applications)
+    ? universitySectionData.applications
+    : []
+
+  const handleSaveUniversityApplications = React.useCallback(
+    async (nextApplications) => {
+      try {
+        setSavingSectionKey("university_applications")
+        await upsertSectionMutation.mutateAsync({
+          sectionKey: "university_applications",
+          values: { applications: nextApplications },
+        })
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Unable to save university applications."
+        toast({
+          title: "Save failed",
+          description: message,
+          variant: "destructive",
+        })
+      } finally {
+        setSavingSectionKey(null)
+      }
+    },
+    [upsertSectionMutation, toast],
+  )
+
+  const handleAskUniversityApplications = React.useCallback(
+    async () => {
+      setAiLoadingKey("university_applications")
+      try {
+        return await aiSuggestionMutation.mutateAsync("university_applications")
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Unable to fetch AI suggestion."
+        toast({
+          title: "AI request failed",
+          description: message,
+          variant: "destructive",
+        })
+        return null
+      } finally {
+        setAiLoadingKey(null)
+      }
+    },
+    [aiSuggestionMutation, toast],
+  )
+
+  const filledSectionKeys = React.useMemo(() => {
+    if (!profile?.sections) return []
+    const sectionDataMap = Object.fromEntries(
+      (Array.isArray(profile.sections) ? profile.sections : [])
+        .map((s) => [s?.section_key, s?.data])
+        .filter(([k]) => Boolean(k))
+    )
+    return CORE_SECTION_KEYS.filter((key) => {
+      const data = sectionDataMap[key]
+      if (!data || typeof data !== 'object') return false
+      return Object.values(data).some((v) => {
+        if (v === null || v === undefined || v === '' || v === false) return false
+        if (Array.isArray(v)) return v.length > 0
+        return true
+      })
+    })
+  }, [profile])
+
+  const totalSections = CORE_SECTION_KEYS.length
+  const completedSections = filledSectionKeys.length
+  const completionPct = totalSections > 0 ? Math.round((completedSections / totalSections) * 100) : 0
+  const nextEmptySection = CORE_SECTION_KEYS.find((k) => !filledSectionKeys.includes(k))
+  const nextEmptySectionTitle = nextEmptySection ? (SECTION_METADATA[nextEmptySection]?.title ?? nextEmptySection) : null
+
   // One-time sync: target_colleges -> university_applications (avoids duplicates, no infinite loop)
   useEffect(() => {
     if (!profileId || !profile) return
@@ -420,139 +555,6 @@ export default function ProfileDetail() {
       </div>
     )
   }
-
-  const canDocumentAI = isAdmin || Boolean(profile?.billing?.tier?.enable_document_ai)
-
-  const primaryType = String(profile.primary_type || "").toLowerCase()
-  const basicInfo =
-    profile.sections?.find((section) => section.section_key === "basic_information")?.data ?? {}
-  const profileTypeLabel = String(basicInfo?.profile_type || "").toLowerCase()
-
-  const eduSection = profile.sections?.find((s) => s.section_key === "education")?.data
-  const highestLevel = String(eduSection?.highest_level || "").toLowerCase()
-  const targetColleges = eduSection?.target_colleges
-  const hasTargetColleges = Array.isArray(targetColleges)
-    ? targetColleges.length > 0
-    : typeof targetColleges === "string" && targetColleges.trim().length > 0
-
-  const isStudentProfile =
-    ["high_school_student", "college_student", "graduate_student"].includes(primaryType) ||
-    profileTypeLabel.includes("student") ||
-    highestLevel.includes("student") ||
-    hasTargetColleges
-
-  const healthMedical =
-    profile.sections?.find((section) => section.section_key === "health_medical")?.data ?? {}
-
-  const hasHealthSignals =
-    Boolean(healthMedical?.chronic_illness) ||
-    Boolean(healthMedical?.dialysis_patient) ||
-    Boolean(healthMedical?.organ_transplant) ||
-    Boolean(healthMedical?.hiv_aids) ||
-    Boolean(healthMedical?.tbi_survivor) ||
-    Boolean(healthMedical?.amputee) ||
-    Boolean(healthMedical?.neurodivergent) ||
-    Boolean(healthMedical?.mental_health_condition) ||
-    Boolean(healthMedical?.wheelchair_user) ||
-    Boolean(healthMedical?.visual_impairment) ||
-    Boolean(healthMedical?.hearing_impairment) ||
-    (Array.isArray(healthMedical?.disability_type) && healthMedical.disability_type.length > 0) ||
-    (Array.isArray(healthMedical?.support_needs) && healthMedical.support_needs.length > 0) ||
-    (Array.isArray(healthMedical?.conditions) && healthMedical.conditions.length > 0) ||
-    Boolean(String(healthMedical?.notes || "").trim())
-
-  const isHealthProfile =
-    primaryType.includes("health") ||
-    primaryType.includes("patient") ||
-    profileTypeLabel.includes("health") ||
-    profileTypeLabel.includes("medical") ||
-    hasHealthSignals
-
-  const studentState =
-    basicInfo?.address?.state ??
-    basicInfo?.state ??
-    profile?.state ??
-    ""
-
-  const studentGender =
-    basicInfo?.gender ??
-    basicInfo?.sex ??
-    profile?.gender ??
-    ""
-
-  const universitySectionData =
-    profile.sections?.find((section) => section.section_key === "university_applications")?.data ?? {}
-  const universityApplications = Array.isArray(universitySectionData?.applications)
-    ? universitySectionData.applications
-    : []
-
-
-  const handleSaveUniversityApplications = React.useCallback(
-    async (nextApplications) => {
-      try {
-        setSavingSectionKey("university_applications")
-        await upsertSectionMutation.mutateAsync({
-          sectionKey: "university_applications",
-          values: { applications: nextApplications },
-        })
-      } catch (err) {
-        const message = err instanceof Error ? err.message : "Unable to save university applications."
-        toast({
-          title: "Save failed",
-          description: message,
-          variant: "destructive",
-        })
-      } finally {
-        setSavingSectionKey(null)
-      }
-    },
-    [upsertSectionMutation, toast],
-  )
-
-  const handleAskUniversityApplications = React.useCallback(
-    async () => {
-      setAiLoadingKey("university_applications")
-      try {
-        return await aiSuggestionMutation.mutateAsync("university_applications")
-      } catch (err) {
-        const message = err instanceof Error ? err.message : "Unable to fetch AI suggestion."
-        toast({
-          title: "AI request failed",
-          description: message,
-          variant: "destructive",
-        })
-        return null
-      } finally {
-        setAiLoadingKey(null)
-      }
-    },
-    [aiSuggestionMutation, toast],
-  )
-
-  const CORE_SECTION_KEYS = Object.keys(SECTION_METADATA).slice(0, 8)
-  const filledSectionKeys = React.useMemo(() => {
-    if (!profile?.sections) return []
-    const sectionDataMap = Object.fromEntries(
-      (Array.isArray(profile.sections) ? profile.sections : [])
-        .map((s) => [s?.section_key, s?.data])
-        .filter(([k]) => Boolean(k))
-    )
-    return CORE_SECTION_KEYS.filter((key) => {
-      const data = sectionDataMap[key]
-      if (!data || typeof data !== 'object') return false
-      return Object.values(data).some((v) => {
-        if (v === null || v === undefined || v === '' || v === false) return false
-        if (Array.isArray(v)) return v.length > 0
-        return true
-      })
-    })
-  }, [profile])
-
-  const totalSections = CORE_SECTION_KEYS.length
-  const completedSections = filledSectionKeys.length
-  const completionPct = totalSections > 0 ? Math.round((completedSections / totalSections) * 100) : 0
-  const nextEmptySection = CORE_SECTION_KEYS.find((k) => !filledSectionKeys.includes(k))
-  const nextEmptySectionTitle = nextEmptySection ? (SECTION_METADATA[nextEmptySection]?.title ?? nextEmptySection) : null
 
   return (
     <div className="p-6 md:p-10">
