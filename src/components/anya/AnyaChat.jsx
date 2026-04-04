@@ -382,7 +382,6 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, pref
         isSendingRef.current = false
         setIsSending(false)
       })
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [prefillMessage, sessionId])
 
   const { anyaCopilotEnabled: copilotEnabled, anyaScreenshotEnabled: screenshotEnabled } = useFeatureFlags()

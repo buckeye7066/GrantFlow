@@ -18,7 +18,7 @@ import { Label } from '@/components/ui/label';
 import { useAuthStore } from '@/stores/authStore';
 import { createLogger } from '@/utils/logger'
 import { getProfileContextIncompleteHint } from '@/components/discovery/profileContextIncompleteUi'
-import { openAnyaPanel } from '@/components/anya/AnyaFloatingButton'
+import { openAnyaPanel } from '@/lib/anyaPanel'
 import { buildZeroResultDescription } from '@/components/discovery/discoveryToasts'
 
 /**
