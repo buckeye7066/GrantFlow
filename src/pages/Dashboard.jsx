@@ -372,6 +372,8 @@ export default function Dashboard() {
     queryFn: () => apiFetch('/api/stats/dashboard'),
     enabled: Boolean(currentUser),
     staleTime: 60_000,
+    retry: 2,
+    retryDelay: 3000,
   })
 
   const totalFundsSecured = useMemo(

@@ -200,6 +200,7 @@ export const ROUTE_LABELS = {
   Admin: "Admin",
   Incognito: "Incognito",
   Help: "Help Center",
+  HelpCenter: "Help Center",
 };
 
 /** Grant lifecycle for header phase indicator. */
@@ -229,6 +230,17 @@ export function getBreadcrumbSegments(pathname, search = "") {
   const groupLabel = group?.label ?? "App";
   const groupPath = group?.items?.[0]?.url ?? createPageUrl("Dashboard");
   const currentPath = pathname + (search ? `?${search}` : "");
+
+  // Skip group breadcrumb segment when the group has only one item (e.g. Help Center)
+  // to avoid redundant "Home > Help > Help Center" — show "Home > Help Center" instead.
+  const isSingleItemGroup = group?.items?.length === 1;
+  if (isSingleItemGroup) {
+    return [
+      home,
+      { path: currentPath, label: pageLabel, isCurrent: true },
+    ];
+  }
+
   return [
     home,
     { path: groupPath, label: groupLabel },

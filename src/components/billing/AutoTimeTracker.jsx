@@ -60,13 +60,6 @@ export default function AutoTimeTracker({ organizationId, organizationName }) {
     });
   }, []);
 
-  // Auto-start timer for non-admin users
-  useEffect(() => {
-    if (currentUser && !currentUser.is_admin && !isTracking) {
-      handleStart();
-    }
-  }, [currentUser]);
-
   // Get billing settings
   const [settings, setSettings] = useState(null);
   useEffect(() => {
@@ -78,6 +71,14 @@ export default function AutoTimeTracker({ organizationId, organizationName }) {
       console.error('[AutoTimeTracker] Failed to fetch billing settings:', error)
     });
   }, []);
+
+  // Auto-start timer for non-admin users — wait for ALL required data
+  useEffect(() => {
+    if (currentUser && !currentUser.is_admin && !isTracking && organizationId && organizationName && settings) {
+      handleStart();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentUser, organizationId, organizationName, settings]);
 
   const saveTimeMutation = useMutation({
     mutationFn: async (timeData) => {
@@ -168,6 +169,7 @@ export default function AutoTimeTracker({ organizationId, organizationName }) {
         toast({
           title: "Timer Paused",
           description: "No activity detected for 5 minutes. Timer has been paused.",
+          duration: 5000,
         });
       }
 
@@ -209,6 +211,8 @@ export default function AutoTimeTracker({ organizationId, organizationName }) {
   }, [isTracking, isPaused]);
 
   const handleStart = () => {
+    if (!organizationName || !organizationId) return;
+
     setIsTracking(true);
     setIsPaused(false);
     startTimeRef.current = Date.now();
@@ -219,6 +223,7 @@ export default function AutoTimeTracker({ organizationId, organizationName }) {
     toast({
       title: "Timer Started",
       description: `Tracking time for ${organizationName}`,
+      duration: 4000,
     });
   };
 
@@ -318,6 +323,7 @@ export default function AutoTimeTracker({ organizationId, organizationName }) {
     toast({
       title: "Time Discarded",
       description: "Timer has been reset without saving.",
+      duration: 5000,
     });
   };
 

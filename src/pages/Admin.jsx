@@ -1,6 +1,6 @@
-import React from 'react';
+import React, { Suspense } from 'react';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Shield, Activity, AlertCircle, Bot, DollarSign, Wrench, Workflow, Users, Bell } from 'lucide-react';
+import { Shield, Activity, AlertCircle, Bot, DollarSign, Wrench, Workflow, Users, Bell, Loader2 } from 'lucide-react';
 import AdminDocumentUpload from '@/components/admin/AdminDocumentUpload';
 import AdminDiagnostics from '@/components/admin/AdminDiagnostics';
 import AdminGeoCrawl from '@/components/admin/AdminGeoCrawl';
@@ -13,8 +13,8 @@ import AdminProfileIntegrity from '@/components/admin/AdminProfileIntegrity.jsx'
 import AdminKnowledgeBase from '@/components/admin/AdminKnowledgeBase.jsx'
 import AdminServiceCatalog from '@/components/admin/AdminServiceCatalog.jsx'
 import AdminExclusionRules from '@/components/admin/AdminExclusionRules'
-import Billing from '@/pages/Billing';
-import Automation from '@/pages/Automation';
+const Billing = React.lazy(() => import('@/pages/Billing'));
+const Automation = React.lazy(() => import('@/pages/Automation'));
 import { useAuthStore } from '@/stores/authStore';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 
@@ -127,7 +127,9 @@ export default function Admin() {
           </TabsContent>
 
           <TabsContent value="automation" className="mt-6">
-            <Automation />
+            <Suspense fallback={<div className="flex justify-center p-12"><Loader2 className="animate-spin h-8 w-8 text-blue-600" /></div>}>
+              <Automation />
+            </Suspense>
           </TabsContent>
 
           <TabsContent value="anya" className="mt-6">
@@ -135,7 +137,9 @@ export default function Admin() {
           </TabsContent>
 
           <TabsContent value="billing" className="mt-6">
-            <Billing />
+            <Suspense fallback={<div className="flex justify-center p-12"><Loader2 className="animate-spin h-8 w-8 text-blue-600" /></div>}>
+              <Billing />
+            </Suspense>
           </TabsContent>
 
           <TabsContent value="services" className="mt-6">
