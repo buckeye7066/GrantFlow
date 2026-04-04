@@ -725,6 +725,269 @@ registerTool({
   },
 })
 
+registerTool({
+  name: 'grants.explainMatch',
+  description: "Explains why a specific funding opportunity matched (or didn't fully match) the user's profile. Returns a breakdown of matching signals like applicant type, location, keywords, and financial need.",
+  schema: {
+    type: 'object',
+    properties: {
+      opportunityId: { type: 'string', description: 'The ID of the funding opportunity to explain.' },
+      profileId: { type: 'string', description: 'The profile ID to explain the match for.' },
+    },
+    required: ['opportunityId', 'profileId'],
+  },
+  handler: async (params, context) => {
+    if (!context?.db) {
+      throw new Error('Database connection unavailable')
+    }
+    const db = context.db
+    const ctx = context?.ctx
+
+    const opportunityId = String(params?.opportunityId || '').trim()
+    const profileId = String(params?.profileId || '').trim()
+
+    if (!opportunityId) throw new Error('opportunityId is required')
+    if (!profileId) throw new Error('profileId is required')
+
+    if (!ensureProfileAccess(ctx, profileId)) {
+      const error = new Error('Not authorized to view this profile')
+      error.status = 403
+      throw error
+    }
+
+    const opp = db.prepare('SELECT * FROM funding_opportunities WHERE id = ?').get(opportunityId)
+    if (!opp) {
+      const error = new Error('Opportunity not found')
+      error.status = 404
+      throw error
+    }
+
+    const profile = db.prepare('SELECT * FROM profiles WHERE id = ?').get(profileId)
+    if (!profile) {
+      const error = new Error('Profile not found')
+      error.status = 404
+      throw error
+    }
+
+    let sectionRows = []
+    try {
+      sectionRows = db.prepare('SELECT section_key, data FROM profile_sections WHERE profile_id = ?').all(profileId)
+    } catch (_e) { /* sections may not exist */ }
+    const sections = sectionRows.reduce((acc, row) => {
+      try { acc[row.section_key] = row.data ? JSON.parse(row.data) : {} } catch { acc[row.section_key] = {} }
+      return acc
+    }, {})
+
+    // Helper to safely parse arrays
+    const parseArr = (v) => {
+      if (!v) return []
+      if (Array.isArray(v)) return v
+      try { const p = JSON.parse(v); return Array.isArray(p) ? p : [] } catch { return [] }
+    }
+
+    const matches = []
+    const misses = []
+    const neutral = []
+    const basic = sections.basic_information ?? {}
+
+    // Applicant type
+    const profileType = profile.primary_type || basic.profile_category || null
+    const oppTypes = parseArr(opp.applicant_types || opp.eligible_applicants)
+    if (profileType && oppTypes.length > 0) {
+      const typeMatch = oppTypes.some(t =>
+        t?.toLowerCase().includes(profileType?.toLowerCase()) ||
+        profileType?.toLowerCase().includes(t?.toLowerCase())
+      )
+      if (typeMatch) {
+        matches.push({ signal: 'Applicant Type', detail: `Your profile type "${profileType}" matches eligible applicants: ${oppTypes.join(', ')}` })
+      } else {
+        misses.push({ signal: 'Applicant Type', detail: `Your profile type "${profileType}" may not match eligible applicants: ${oppTypes.join(', ')}. Check the opportunity details.` })
+      }
+    } else if (oppTypes.length === 0) {
+      neutral.push({ signal: 'Applicant Type', detail: 'This opportunity does not specify applicant type restrictions.' })
+    }
+
+    // Location
+    const profileState = basic.state || profile.state || null
+    const oppState = opp.state || opp.location || null
+    const oppScope = opp.geographic_scope || opp.scope || 'national'
+    if (oppScope === 'national' || oppScope === 'federal') {
+      matches.push({ signal: 'Location', detail: 'This is a national program available in all states.' })
+    } else if (profileState && oppState) {
+      if (oppState.toLowerCase().includes(profileState.toLowerCase()) || profileState.toLowerCase().includes(oppState.toLowerCase())) {
+        matches.push({ signal: 'Location', detail: `Your state (${profileState}) matches this opportunity's location (${oppState}).` })
+      } else {
+        misses.push({ signal: 'Location', detail: `Your state (${profileState}) may not match this opportunity's location (${oppState}).` })
+      }
+    } else if (!profileState) {
+      misses.push({ signal: 'Location', detail: 'Your profile does not have a state set. Adding your state may improve match accuracy.' })
+    }
+
+    // Keywords / categories
+    const oppCategories = parseArr(opp.categories || opp.focus_areas)
+    const profileKeywords = parseArr(profile.keywords || profile.interests)
+    const profileFocusAreas = parseArr(sections.programs_services?.focus_areas)
+    const allProfileTerms = [...profileKeywords, ...profileFocusAreas].map(t => t?.toLowerCase()).filter(Boolean)
+    const oppTerms = oppCategories.map(t => t?.toLowerCase()).filter(Boolean)
+    const matchedTerms = allProfileTerms.filter(pt => oppTerms.some(ot => ot.includes(pt) || pt.includes(ot)))
+    if (matchedTerms.length > 0) {
+      matches.push({ signal: 'Focus Areas / Keywords', detail: `Matched on: ${matchedTerms.join(', ')}` })
+    } else if (oppCategories.length > 0 && allProfileTerms.length > 0) {
+      neutral.push({ signal: 'Focus Areas / Keywords', detail: `Opportunity covers: ${oppCategories.join(', ')}. Your profile covers: ${allProfileTerms.slice(0, 5).join(', ')}. No direct keyword overlap.` })
+    }
+
+    // Financial need
+    const belowPoverty = profile.below_poverty_line || sections.financial?.below_poverty_line
+    if (opp.needs_based || oppCategories.some(c => ['financial_assistance', 'low_income'].includes(c))) {
+      if (belowPoverty) {
+        matches.push({ signal: 'Financial Need', detail: 'Your profile indicates financial need, which this needs-based program prioritizes.' })
+      } else {
+        neutral.push({ signal: 'Financial Need', detail: 'This program may prioritize financial need. Adding income information could improve match accuracy.' })
+      }
+    }
+
+    const matchScore = opp.match_score ?? opp.score ?? null
+    const scoreContext = matchScore !== null
+      ? matchScore >= 70 ? 'Strong match' : matchScore >= 40 ? 'Moderate match' : 'Weak match'
+      : null
+
+    return {
+      opportunityId: opp.id,
+      opportunityName: opp.name || opp.title,
+      matchScore,
+      scoreContext,
+      matches,
+      misses,
+      neutral,
+      summary: matches.length > 0
+        ? `This opportunity matched your profile on ${matches.length} signal(s): ${matches.map(m => m.signal).join(', ')}.`
+        : 'No strong match signals found. Review the opportunity details to determine eligibility manually.',
+    }
+  },
+})
+
+registerTool({
+  name: 'grants.profileSectionImpact',
+  description: 'Explains which profile sections are filled in, which are empty, and what kinds of funding opportunities completing each empty section would unlock.',
+  schema: {
+    type: 'object',
+    properties: {
+      profileId: { type: 'string', description: 'The profile ID to analyze.' },
+    },
+    required: ['profileId'],
+  },
+  handler: async (params, context) => {
+    if (!context?.db) {
+      throw new Error('Database connection unavailable')
+    }
+    const db = context.db
+    const ctx = context?.ctx
+
+    const profileId = String(params?.profileId || '').trim()
+    if (!profileId) throw new Error('profileId is required')
+
+    if (!ensureProfileAccess(ctx, profileId)) {
+      const error = new Error('Not authorized to view this profile')
+      error.status = 403
+      throw error
+    }
+
+    const profile = db.prepare('SELECT * FROM profiles WHERE id = ?').get(profileId)
+    if (!profile) {
+      const error = new Error('Profile not found')
+      error.status = 404
+      throw error
+    }
+
+    let sectionRows = []
+    try {
+      sectionRows = db.prepare('SELECT section_key, data FROM profile_sections WHERE profile_id = ?').all(profileId)
+    } catch (_e) { /* sections may not exist */ }
+    const sections = sectionRows.reduce((acc, row) => {
+      try { acc[row.section_key] = row.data ? JSON.parse(row.data) : {} } catch { acc[row.section_key] = {} }
+      return acc
+    }, {})
+
+    const filled = []
+    const missing = []
+
+    // Applicant type
+    const profileType = profile.primary_type || sections.basic_information?.profile_category || null
+    if (profileType) {
+      filled.push({ section: 'Applicant Type', value: profileType })
+    } else {
+      missing.push({
+        section: 'Applicant Type',
+        field: 'primary_type / basic_information.profile_category',
+        impact: 'Setting your profile type is required for most matching. Without it, many eligibility filters cannot apply.',
+      })
+    }
+
+    // Location / state
+    const profileState = sections.basic_information?.state || profile.state || null
+    const profileZip = sections.basic_information?.zip_code || profile.postal_code || profile.zip_code || null
+    if (profileState || profileZip) {
+      filled.push({ section: 'Location', value: [profileState, profileZip].filter(Boolean).join(', ') })
+    } else {
+      missing.push({
+        section: 'Location',
+        field: 'basic_information.state / basic_information.zip_code',
+        impact: 'Adding your state or ZIP code unlocks state-specific and regional programs that may not appear in your results.',
+      })
+    }
+
+    // Focus areas / programs
+    const focusAreas = sections.programs_services?.focus_areas
+    const hasFocusAreas = Array.isArray(focusAreas) ? focusAreas.length > 0 : Boolean(focusAreas)
+    if (hasFocusAreas) {
+      filled.push({ section: 'Programs & Focus Areas', value: Array.isArray(focusAreas) ? focusAreas.slice(0, 3).join(', ') : String(focusAreas) })
+    } else {
+      missing.push({
+        section: 'Programs & Focus Areas',
+        field: 'programs_services.focus_areas',
+        impact: 'Adding focus areas helps match you to thematic grants (e.g., education, housing, health) and improves keyword overlap scoring.',
+      })
+    }
+
+    // Narrative / primary goal
+    const primaryGoal = sections.narrative?.primary_goal || null
+    if (primaryGoal) {
+      filled.push({ section: 'Primary Goal / Mission', value: String(primaryGoal).slice(0, 80) })
+    } else {
+      missing.push({
+        section: 'Primary Goal / Mission',
+        field: 'narrative.primary_goal',
+        impact: "Adding your goals helps Anya recommend more targeted opportunities and generate stronger proposal drafts.",
+      })
+    }
+
+    // Financial information
+    const hasFinancial = sections.financial && Object.keys(sections.financial).length > 0
+    if (hasFinancial) {
+      filled.push({ section: 'Financial Information', value: 'Provided' })
+    } else {
+      missing.push({
+        section: 'Financial Information',
+        field: 'financial (income, below_poverty_line, etc.)',
+        impact: 'Adding income information unlocks needs-based programs and financial assistance grants that filter by income eligibility.',
+      })
+    }
+
+    const completionPct = Math.round((filled.length / (filled.length + missing.length)) * 100)
+
+    return {
+      profileId,
+      profileName: profile.display_name || profile.name || null,
+      completionPercent: completionPct,
+      filledSections: filled,
+      missingSections: missing,
+      summary: missing.length === 0
+        ? 'Your profile is fully filled out. All matching signals are active.'
+        : `Your profile is ${completionPct}% complete. Completing ${missing.length} section(s) would improve match accuracy: ${missing.map(m => m.section).join(', ')}.`,
+    }
+  },
+})
+
 // ============================================================================
 // Admin-only tools
 // ============================================================================

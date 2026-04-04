@@ -187,6 +187,50 @@ const STRATEGIES = {
     categoryFilter: ['equipment', 'certification_assistance', 'volunteer_training_support',
       'cpr_first_aid_training', 'employment', 'community_development'],
   },
+
+  church: {
+    id: 'church',
+    label: 'Church / Faith-Based Organization',
+    profileTypes: ['church', 'faith_based', 'ministry'],
+    candidateSources: ['faith_based', 'federal', 'national', 'state'],
+    hardGates: [],
+    needEmphasis: ['community_services', 'facility_improvement', 'food_pantry', 'capacity_building', 'social_services'],
+    intentBoost: { church: 25, faith_based: 20, ministry: 20, community: 10, nonprofit: 5 },
+    urlPolicy: 'standard',
+    maxResults: 80,
+    minScore: 20,
+    categoryFilter: ['community', 'rural_development', 'facility_improvement', 'social_services',
+      'capacity_building', 'food_assistance', 'emergency', 'shelter', 'housing',
+      'health', 'mental_health', 'substance_abuse', 'victim_services', 'volunteer',
+      'historic_preservation', 'arts', 'culture', 'technology', 'education',
+      'environment', 'business'],
+  },
+
+  family: {
+    id: 'family',
+    label: 'Family',
+    profileTypes: ['family', 'individual'],
+    candidateSources: ['family', 'federal', 'state', 'national'],
+    hardGates: [],
+    needEmphasis: ['childcare', 'food_assistance', 'family_support', 'health', 'financial_assistance'],
+    intentBoost: { family: 25, children: 20, single_parent: 20, childcare: 15, parenting: 10 },
+    urlPolicy: 'standard',
+    maxResults: 80,
+    minScore: 15,
+  },
+
+  school: {
+    id: 'school',
+    label: 'K-12 School / Education Institution',
+    profileTypes: ['school', 'k12', 'charter_school', 'private_school'],
+    candidateSources: ['school', 'federal', 'state', 'national'],
+    hardGates: [],
+    needEmphasis: ['academic_support', 'technology', 'professional_development', 'special_education', 'food_service'],
+    intentBoost: { school: 25, k12: 20, education: 20, teacher: 15, student: 10 },
+    urlPolicy: 'standard',
+    maxResults: 80,
+    minScore: 20,
+  },
 };
 
 /**

@@ -1421,6 +1421,138 @@ router.put('/:id([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-
   }
 });
 
+// GET /api/opportunities/:id/explain?profileId=xxx
+// Returns structured match explanation: why this opportunity matched (or didn't) for the given profile
+router.get('/:id/explain', async (req, res) => {
+  try {
+    const { id } = req.params
+    const { profileId } = req.query
+
+    if (!profileId) {
+      return res.status(400).json({ error: 'profileId query param is required' })
+    }
+
+    const opp = await req.db.prepare('SELECT * FROM funding_opportunities WHERE id = ?').get(String(id))
+    if (!opp) {
+      return res.status(404).json({ error: 'Opportunity not found' })
+    }
+
+    // Load the profile
+    const profile = await req.db.prepare('SELECT * FROM profiles WHERE id = ?').get(String(profileId))
+    if (!profile) {
+      return res.status(404).json({ error: 'Profile not found' })
+    }
+
+    // Load profile sections
+    let sectionRows = []
+    try {
+      sectionRows = await req.db.prepare('SELECT section_key, data FROM profile_sections WHERE profile_id = ?').all(String(profileId))
+    } catch (_e) { /* profile_sections may not exist yet */ }
+    const sections = sectionRows.reduce((acc, row) => {
+      try { acc[row.section_key] = row.data ? JSON.parse(row.data) : {} } catch { acc[row.section_key] = {} }
+      return acc
+    }, {})
+
+    // Build explanation
+    const explanation = buildMatchExplanation(profile, sections, opp)
+    res.json(explanation)
+  } catch (err) {
+    console.error('Explain endpoint error:', err)
+    res.status(500).json({ error: 'Failed to generate explanation' })
+  }
+})
+
+function buildMatchExplanation(profile, sections, opp) {
+  const matches = []
+  const misses = []
+  const neutral = []
+
+  // Helper to safely parse arrays
+  const parseArr = (v) => {
+    if (!v) return []
+    if (Array.isArray(v)) return v
+    try { const p = JSON.parse(v); return Array.isArray(p) ? p : [] } catch { return [] }
+  }
+
+  const basic = sections.basic_information ?? {}
+  const narrative = sections.narrative ?? {}
+
+  // 1. Applicant type match
+  const profileType = profile.primary_type || basic.profile_category || null
+  const oppTypes = parseArr(opp.applicant_types || opp.eligible_applicants)
+  if (profileType && oppTypes.length > 0) {
+    const typeMatch = oppTypes.some(t =>
+      t?.toLowerCase().includes(profileType?.toLowerCase()) ||
+      profileType?.toLowerCase().includes(t?.toLowerCase())
+    )
+    if (typeMatch) {
+      matches.push({ signal: 'Applicant Type', detail: `Your profile type "${profileType}" matches this opportunity's eligible applicants: ${oppTypes.join(', ')}` })
+    } else {
+      misses.push({ signal: 'Applicant Type', detail: `Your profile type "${profileType}" may not match eligible applicants: ${oppTypes.join(', ')}. You may still be eligible — check the opportunity details.` })
+    }
+  } else if (oppTypes.length === 0) {
+    neutral.push({ signal: 'Applicant Type', detail: 'This opportunity does not specify applicant type restrictions.' })
+  }
+
+  // 2. Location match
+  const profileState = basic.state || profile.state || null
+  const oppState = opp.state || opp.location || null
+  const oppScope = opp.geographic_scope || opp.scope || 'national'
+  if (oppScope === 'national' || oppScope === 'federal') {
+    matches.push({ signal: 'Location', detail: 'This is a national program available in all states.' })
+  } else if (profileState && oppState) {
+    if (oppState.toLowerCase().includes(profileState.toLowerCase()) || profileState.toLowerCase().includes(oppState.toLowerCase())) {
+      matches.push({ signal: 'Location', detail: `Your state (${profileState}) matches this opportunity's location (${oppState}).` })
+    } else {
+      misses.push({ signal: 'Location', detail: `Your state (${profileState}) may not match this opportunity's location (${oppState}).` })
+    }
+  } else if (!profileState) {
+    misses.push({ signal: 'Location', detail: 'Your profile does not have a state set. Adding your state may improve match accuracy.' })
+  }
+
+  // 3. Category / keyword match
+  const oppCategories = parseArr(opp.categories || opp.focus_areas)
+  const profileKeywords = parseArr(profile.keywords || profile.interests)
+  const profileFocusAreas = parseArr(sections.programs_services?.focus_areas)
+  const allProfileTerms = [...profileKeywords, ...profileFocusAreas].map(t => t?.toLowerCase()).filter(Boolean)
+  const oppTerms = oppCategories.map(t => t?.toLowerCase()).filter(Boolean)
+  const matchedTerms = allProfileTerms.filter(pt => oppTerms.some(ot => ot.includes(pt) || pt.includes(ot)))
+  if (matchedTerms.length > 0) {
+    matches.push({ signal: 'Focus Areas / Keywords', detail: `Matched on: ${matchedTerms.join(', ')}` })
+  } else if (oppCategories.length > 0 && allProfileTerms.length > 0) {
+    neutral.push({ signal: 'Focus Areas / Keywords', detail: `Opportunity covers: ${oppCategories.join(', ')}. Your profile covers: ${allProfileTerms.slice(0, 5).join(', ')}. No direct keyword overlap — this match may be based on broader criteria.` })
+  }
+
+  // 4. Financial need signal
+  const belowPoverty = profile.below_poverty_line || sections.financial?.below_poverty_line
+  if (opp.needs_based || oppCategories.some(c => ['financial_assistance', 'low_income'].includes(c))) {
+    if (belowPoverty) {
+      matches.push({ signal: 'Financial Need', detail: 'Your profile indicates financial need, which this needs-based program prioritizes.' })
+    } else {
+      neutral.push({ signal: 'Financial Need', detail: 'This program may prioritize financial need. Adding income information to your profile could improve match accuracy.' })
+    }
+  }
+
+  // 5. Score context
+  const matchScore = opp.match_score ?? opp.score ?? null
+  const scoreContext = matchScore !== null
+    ? matchScore >= 70 ? 'Strong match' : matchScore >= 40 ? 'Moderate match' : 'Weak match'
+    : null
+
+  return {
+    opportunityId: opp.id,
+    opportunityName: opp.name || opp.title,
+    matchScore,
+    scoreContext,
+    matches,
+    misses,
+    neutral,
+    summary: matches.length > 0
+      ? `This opportunity matched your profile on ${matches.length} signal(s): ${matches.map(m => m.signal).join(', ')}.`
+      : 'No strong match signals found. Review the opportunity details to determine eligibility manually.',
+  }
+}
+
 // Delete opportunity (soft delete)
 router.delete('/:id([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})', async (req, res) => {
   try {

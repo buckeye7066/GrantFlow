@@ -23,6 +23,9 @@ import { PRESCRIPTION_ASSISTANCE_PROGRAMS } from './data/prescriptionAssistance.
 import { SENIOR_PROGRAMS } from './data/seniorPrograms.js';
 import { PROPERTY_TAX_RELIEF_PROGRAMS } from './data/propertyTaxRelief.js';
 import { UTILITY_ASSISTANCE_PROGRAMS } from './data/utilityAssistance.js';
+import { FAITH_BASED_PROGRAMS } from './data/faithBasedPrograms.js';
+import { FAMILY_PROGRAMS } from './data/familyPrograms.js';
+import { SCHOOL_PROGRAMS } from './data/schoolPrograms.js';
 import { generateStatePrograms, isStateInRegistry } from './data/stateBase.js';
 import { upsertFundingOpportunity } from '../opportunityInserter.js';
 
@@ -111,12 +114,15 @@ const SOURCE_LABELS = {
   state: 'State Programs',
   national: 'National Programs',
   business: 'Business Programs',
+  faith_based: 'Faith-Based Programs',
   scholarships: 'Scholarships',
   schoolCards: 'School Cards',
   prescription: 'Prescription Assistance',
   senior: 'Senior Programs',
   property_tax: 'Property Tax Relief',
   utility_assistance: 'Utility Assistance Programs',
+  family: 'Family Programs',
+  school: 'K-12 School Programs',
 };
 
 // ── Candidate loader: builds program array per strategy ──
@@ -129,6 +135,11 @@ function loadCandidates(strategy, stateData, analysis, intents) {
   if (sources.has('federal')) {
     programs.push(...FEDERAL_BENEFITS);
     candidateCounts.federal = FEDERAL_BENEFITS.length;
+  }
+
+  if (sources.has('faith_based')) {
+    programs.push(...FAITH_BASED_PROGRAMS);
+    candidateCounts.faith_based = FAITH_BASED_PROGRAMS.length;
   }
 
   if (sources.has('state')) {
@@ -199,6 +210,16 @@ function loadCandidates(strategy, stateData, analysis, intents) {
       : UTILITY_ASSISTANCE_PROGRAMS;
     programs.push(...filtered);
     candidateCounts.utility_assistance = filtered.length;
+  }
+
+  if (sources.has('family')) {
+    programs.push(...FAMILY_PROGRAMS);
+    candidateCounts.family = FAMILY_PROGRAMS.length;
+  }
+
+  if (sources.has('school')) {
+    programs.push(...SCHOOL_PROGRAMS);
+    candidateCounts.school = SCHOOL_PROGRAMS.length;
   }
 
   return { programs, candidateCounts };

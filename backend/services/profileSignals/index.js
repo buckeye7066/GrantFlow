@@ -88,6 +88,48 @@ function deriveIntents(analysis) {
     intents.add('substance_recovery');
   }
 
+  // Church / faith-based organization
+  const orgType = (analysis.organization?.type || '').toLowerCase()
+  const primaryType = (analysis.applicantType || '').toLowerCase()
+  if (primaryType === 'church' || primaryType === 'ministry' || primaryType === 'faith_based' ||
+      orgType.includes('church') || orgType.includes('faith') || orgType.includes('ministry') ||
+      (analysis.keywords || []).some(k => /church|parish|congregation|ministry|faith.?based|dioces|synagogue|mosque|temple/i.test(k))) {
+    intents.add('faith_based');
+    intents.add('church');
+  }
+
+  // K-12 school / education institution
+  if (primaryType === 'school' || primaryType === 'k12' || primaryType === 'charter_school' ||
+      orgType.includes('school') || orgType.includes('district') ||
+      (analysis.keywords || []).some(k => /\bschool\b|k.?12|charter|elementary|middle school|high school|classroom|educator|teacher/i.test(k))) {
+    intents.add('school');
+    intents.add('education');
+  }
+
+  // Family / household context
+  const familySet = analysis.family instanceof Set ? analysis.family : new Set(Array.isArray(analysis.family) ? analysis.family : [])
+  if (primaryType === 'family' ||
+      familySet.has('has_children') || familySet.has('single_parent') || familySet.has('foster_parent') ||
+      familySet.has('expectant_parent') || familySet.has('kinship_caregiver') ||
+      needs.has('childcare') || needs.has('family_support')) {
+    intents.add('family');
+  }
+
+  // Nonprofit organization (general)
+  if (primaryType === 'nonprofit' || primaryType === 'nonprofit_org' ||
+      orgType.includes('nonprofit') || orgType.includes('501c3') ||
+      (analysis.keywords || []).some(k => /nonprofit|non.?profit|501.?c.?3|charitable organization/i.test(k))) {
+    intents.add('nonprofit');
+  }
+
+  // Volunteer fire department / EMS
+  if (primaryType === 'volunteer_fire' || primaryType === 'vfd' ||
+      orgType.includes('fire') || orgType.includes('ems') || orgType.includes('rescue') ||
+      (analysis.keywords || []).some(k => /volunteer fire|vfd|fire department|ems|rescue squad|fire company/i.test(k))) {
+    intents.add('volunteer_fire');
+    intents.add('emergency_services');
+  }
+
   if (needs.has('certification_assistance') || needs.has('cpr_first_aid_training') ||
       (analysis.keywords || []).some(k =>
         /cpr|first\s*aid|aed|bls|heartsaver|instructor\s*cert|safety\s*train|certification\s*class/i.test(k))) {

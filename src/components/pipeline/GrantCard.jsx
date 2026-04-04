@@ -8,7 +8,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import { MoreVertical, Star, Edit, Trash2, Calendar, DollarSign, Building2, Target, CheckSquare, Sparkles, ExternalLink, AlertCircle, Clock } from 'lucide-react';
+import { MoreVertical, Star, Edit, Trash2, Calendar, DollarSign, Building2, Target, CheckSquare, Sparkles, ExternalLink, AlertCircle, Clock, Info, CalendarClock, CheckCircle2 } from 'lucide-react';
 import { format, isPast } from 'date-fns';
 import { Link, useNavigate } from 'react-router-dom';
 import { createPageUrl } from '@/utils';
@@ -51,8 +51,9 @@ function isValidExternalUrl(url) {
   return url.startsWith('http://') || url.startsWith('https://');
 }
 
-export default function GrantCard({ grant, organization, organizationName, onStatusChange, onStarToggle, onDelete, isDragging, checklistProgress, showSummary = false }) {
+export default function GrantCard({ grant, organization, organizationName, onStatusChange, onStarToggle, onDelete, isDragging, checklistProgress, showSummary = false, isInPipeline = false, onAddToPipeline = null }) {
   const [showMenu, setShowMenu] = useState(false);
+  const [showMatchBreakdown, setShowMatchBreakdown] = useState(false);
   const cardRef = useRef(null);
   const navigate = useNavigate();
 
@@ -123,13 +124,37 @@ export default function GrantCard({ grant, organization, organizationName, onSta
           )}
           {/* Match Score Badge - PROMINENT */}
           {hasMatchScore && (
+            <div className="flex items-center gap-1">
               <HelpTip text={"Match Score: " + Math.round(matchScore) + "%. This shows how well this opportunity fits your profile based on location, demographics, interests, and eligibility criteria. 80%+ = Excellent, 65%+ = Good, 50%+ = Fair."}>
                 <Badge className={"text-xs font-bold " + matchColor.bg + " " + matchColor.text + " cursor-help"}>
                   <Target className="w-3 h-3 mr-1" />
                   {Math.round(matchScore)}% Match
                 </Badge>
               </HelpTip>
+              {/* Info toggle for match breakdown — only show when there are reasons to display */}
+              {(() => {
+                const reasons = Array.isArray(grant.match_reasons) ? grant.match_reasons : (Array.isArray(grant.matchReasons) ? grant.matchReasons : []);
+                return reasons.length > 0 ? (
+                  <button
+                    type="button"
+                    onClick={(e) => { e.preventDefault(); e.stopPropagation(); setShowMatchBreakdown(v => !v); }}
+                    className="text-slate-400 hover:text-slate-600 transition-colors"
+                    title={showMatchBreakdown ? 'Hide match details' : 'Why this matched'}
+                    aria-label="Toggle match breakdown"
+                  >
+                    <Info className="w-3.5 h-3.5" />
+                  </button>
+                ) : null;
+              })()}
+            </div>
             )}
+          {/* In-Pipeline indicator */}
+          {isInPipeline && (
+            <Badge variant="outline" className="text-xs bg-emerald-50 text-emerald-700 border-emerald-300 gap-1">
+              <CheckCircle2 className="w-3 h-3" />
+              In Pipeline
+            </Badge>
+          )}
           {/* Freshness Badge — only shown for stale or unverified opportunities */}
           {freshness === 'stale' && (
             <HelpTip text="Last verified 90+ days ago — verify this is still active before applying.">
@@ -212,7 +237,7 @@ export default function GrantCard({ grant, organization, organizationName, onSta
           <p className="text-xs text-slate-600 truncate">{grant.funder || grant.sponsor}</p>
           
           {/* Match Reasons (if available) - support both match_reasons (API) and matchReasons (legacy) */}
-          {showSummary && (() => {
+          {(showSummary || showMatchBreakdown) && (() => {
             const reasons = Array.isArray(grant.match_reasons) ? grant.match_reasons : (Array.isArray(grant.matchReasons) ? grant.matchReasons : []);
             return reasons.length > 0 ? (
             <div className="bg-emerald-50 border border-emerald-200 rounded-md p-2 space-y-1">
@@ -377,6 +402,53 @@ export default function GrantCard({ grant, organization, organizationName, onSta
               <ExternalLink className="w-3 h-3" />
               <span>View full details</span>
             </button>
+          )}
+
+          {/* Action buttons for discovery cards */}
+          {(onAddToPipeline || (!isExpired && isDeadlineValid)) && (
+            <div className="flex flex-wrap gap-2 pt-1 border-t border-slate-100 mt-1" onClick={(e) => { e.preventDefault(); e.stopPropagation(); }}>
+              {/* Add to Pipeline / In Pipeline button */}
+              {onAddToPipeline && (
+                isInPipeline ? (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    disabled
+                    className="flex-1 text-xs bg-emerald-50 text-emerald-700 border-emerald-200 cursor-default"
+                  >
+                    <CheckCircle2 className="w-3.5 h-3.5 mr-1" />
+                    In Pipeline
+                  </Button>
+                ) : (
+                  <Button
+                    type="button"
+                    size="sm"
+                    className="flex-1 text-xs"
+                    onClick={() => onAddToPipeline(grant)}
+                  >
+                    + Add to Pipeline
+                  </Button>
+                )
+              )}
+              {/* Set Deadline Reminder */}
+              {!isExpired && isDeadlineValid && (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  className="text-xs shrink-0"
+                  title="Set a reminder for this deadline"
+                  onClick={() => {
+                    const msg = `Set a reminder for: ${grant.title} deadline: ${grant.deadline}`;
+                    window.dispatchEvent(new CustomEvent('anya:open', { detail: { prefillMessage: msg } }));
+                  }}
+                >
+                  <CalendarClock className="w-3.5 h-3.5 mr-1" />
+                  Remind Me
+                </Button>
+              )}
+            </div>
           )}
         </div>
       </Link>

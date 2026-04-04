@@ -98,6 +98,13 @@ async function processCuratedBenefitsJob({ db, job, profileContext }) {
     item_matching: 'item_matching',
     nonprofit_org: 'nonprofit_org',
     volunteer_fire: 'volunteer_fire',
+    church: 'church',
+    faith_based: 'church',
+    ministry: 'church',
+    family: 'family',
+    school: 'school',
+    k12: 'school',
+    charter_school: 'school',
   };
   const crawlerType = JOB_TYPE_TO_STRATEGY[job?.type] || 'comprehensive';
   const result = await runCuratedCrawler(db, profileId, {
@@ -141,6 +148,13 @@ const HANDLERS = {
   local_funding: processCuratedBenefitsJob,
   item_matching: processCuratedBenefitsJob,
   portal_check: processPortalCheckJob,
+  church: processCuratedBenefitsJob,
+  faith_based: processCuratedBenefitsJob,
+  ministry: processCuratedBenefitsJob,
+  family: processCuratedBenefitsJob,
+  school: processCuratedBenefitsJob,
+  k12: processCuratedBenefitsJob,
+  charter_school: processCuratedBenefitsJob,
 }
 
 function parseJSON(value) {

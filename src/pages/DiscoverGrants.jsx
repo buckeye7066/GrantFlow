@@ -108,6 +108,17 @@ function sectionsMap(profileDetail) {
   return typeof raw === 'object' && raw !== null ? raw : {}
 }
 
+const NEED_CATEGORIES = [
+  { label: 'Housing & Rent', icon: '🏠', query: 'housing rent eviction' },
+  { label: 'Food Assistance', icon: '🥗', query: 'food snap nutrition' },
+  { label: 'Healthcare', icon: '💊', query: 'healthcare medicaid health insurance' },
+  { label: 'Education & Scholarships', icon: '🎓', query: 'education scholarship college' },
+  { label: 'Small Business', icon: '💼', query: 'small business grant loan' },
+  { label: 'Energy & Utilities', icon: '⚡', query: 'utility energy liheap heating' },
+  { label: 'Job Training', icon: '🛠️', query: 'job training workforce employment' },
+  { label: 'Veterans Benefits', icon: '🎖️', query: 'veteran military benefits' },
+]
+
 export default function DiscoverGrants() {
   const [searchParams] = useSearchParams()
   const navigate = useNavigate()
@@ -117,6 +128,7 @@ export default function DiscoverGrants() {
   const [isSearching, setIsSearching] = useState(false);
   const [hasSearched, setHasSearched] = useState(false);
   const [profileCompletionHint, setProfileCompletionHint] = useState(null)
+  const [categoryQuery, setCategoryQuery] = useState(null)
   const profileSelectorRef = React.useRef(null)
   const searchActionsRef = React.useRef(null)
   const resultsRef = React.useRef(null)
@@ -328,7 +340,7 @@ export default function DiscoverGrants() {
     }
   }, [selectedProfile, profileDetail, profileForSearch, selectedOrg])
 
-  const handleFindFunding = async () => {
+  const handleFindFunding = async (overrideCategoryQuery) => {
     const profileIdToUse = effectiveProfileId ?? selectedProfileId
     const pid = (typeof profileIdToUse === 'string' ? profileIdToUse.trim() : null) || null
     if (!pid) {
@@ -342,15 +354,24 @@ export default function DiscoverGrants() {
     }
     setIsSearching(true)
     setProfileCompletionHint(null)
+    const activeCategoryQuery = overrideCategoryQuery !== undefined ? overrideCategoryQuery : categoryQuery
+    const baseInterests = profileForSearch?.signals?.interests
+      ? Array.from(profileForSearch.signals.interests).slice(0, 10)
+      : (profileForSearch?.tags || []).slice(0, 10)
+    // Merge category query keywords into interests when browsing by need category
+    const mergedInterests = activeCategoryQuery
+      ? [...new Set([...activeCategoryQuery.split(/\s+/).filter(Boolean), ...baseInterests])].slice(0, 15)
+      : baseInterests
     const itemRequest = profileForSearch ? {
       location: {
         state: profileForSearch?.signals?.location?.state || profileForSearch?.state || null,
         city: profileForSearch?.signals?.location?.city || profileForSearch?.city || null,
         zip: profileForSearch?.signals?.location?.zip || profileForSearch?.zip_code || null,
       },
-      interests: profileForSearch?.signals?.interests ? Array.from(profileForSearch.signals.interests).slice(0, 10) : (profileForSearch?.tags || []).slice(0, 10),
+      interests: mergedInterests,
       demographics: profileForSearch?.signals?.demographics ? Array.from(profileForSearch.signals.demographics).slice(0, 10) : [],
       career_goals: profileForSearch?.sections?.career_goals?.primary_goal || profileForSearch?.career_goal || null,
+      category_query: activeCategoryQuery || undefined,
     } : null
     try {
       const data = await runRealCrawler({
@@ -1008,6 +1029,27 @@ export default function DiscoverGrants() {
                       Tip: Add interests, focus areas, or describe your situation in your profile for better matches.
                     </p>
                   )}
+                  {/* Browse by Need categories */}
+                  <div className="pt-2">
+                    <p className="text-sm font-medium text-amber-900 mb-2">Not finding what you need? Browse by category:</p>
+                    <div className="flex flex-wrap gap-2">
+                      {NEED_CATEGORIES.map((cat) => (
+                        <button
+                          key={cat.label}
+                          type="button"
+                          onClick={async () => {
+                            setCategoryQuery(cat.query)
+                            await handleFindFunding(cat.query)
+                          }}
+                          disabled={isSearching || !selectedProfile}
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium bg-white border border-amber-300 text-amber-900 hover:bg-amber-100 hover:border-amber-400 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                        >
+                          <span>{cat.icon}</span>
+                          {cat.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
                 </div>
                 <div className="flex flex-col gap-2 sm:items-end">
                   {selectedProfile?.id && (
