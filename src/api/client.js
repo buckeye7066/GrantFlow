@@ -184,7 +184,7 @@ class APIClient {
     try {
       await this.refreshTokens()
     } catch (error) {
-      console.error('[APIClient] Token refresh failed:', error.message)
+      console.warn('[APIClient] Token refresh failed:', error.message)
       const authError = this.createAuthError('Your session has expired. Please sign in again.')
       authError.isAuthError = true
       throw authError
@@ -412,7 +412,7 @@ class APIClient {
 
         // Prevent infinite retry loops - only retry once
         if (isRetry) {
-          console.error('[APIClient] Still getting 401 after refresh, giving up');
+          console.warn('[APIClient] Still getting 401 after refresh, giving up');
           this.clearToken();
           if (this.onAuthFailure) {
             this.onAuthFailure('Your session expired. Sign in again to continue.');

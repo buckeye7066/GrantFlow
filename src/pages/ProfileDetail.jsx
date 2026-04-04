@@ -807,7 +807,7 @@ export default function ProfileDetail() {
                           type="button"
                           onClick={() => updatePreference("accent_color", color.name)}
                           className={`h-11 rounded-lg border-2 transition-transform hover:scale-[1.02] ${
-                            preferences.accent_color === color.name
+                            preferences?.accent_color === color.name
                               ? "border-slate-900 ring-2 ring-slate-900"
                               : "border-slate-200"
                           }`}
@@ -821,7 +821,7 @@ export default function ProfileDetail() {
                   <div className="space-y-2">
                     <Label>Font size</Label>
                     <Select
-                      value={preferences.font_size}
+                      value={preferences?.font_size}
                       onValueChange={(value) => updatePreference("font_size", value)}
                     >
                       <SelectTrigger className="w-48">
@@ -846,7 +846,7 @@ export default function ProfileDetail() {
                   <div className="space-y-2">
                     <Label>Card density</Label>
                     <Select
-                      value={preferences.card_density}
+                      value={preferences?.card_density}
                       onValueChange={(value) => updatePreference("card_density", value)}
                     >
                       <SelectTrigger className="w-56">
@@ -865,7 +865,7 @@ export default function ProfileDetail() {
                       <p className="text-sm text-slate-500">Less animation and movement.</p>
                     </div>
                     <Switch
-                      checked={Boolean(preferences.reduce_motion)}
+                      checked={Boolean(preferences?.reduce_motion)}
                       onCheckedChange={(checked) => updatePreference("reduce_motion", checked)}
                     />
                   </div>
@@ -876,7 +876,7 @@ export default function ProfileDetail() {
                       <p className="text-sm text-slate-500">Sharper contrast for readability.</p>
                     </div>
                     <Switch
-                      checked={Boolean(preferences.high_contrast)}
+                      checked={Boolean(preferences?.high_contrast)}
                       onCheckedChange={(checked) => updatePreference("high_contrast", checked)}
                     />
                   </div>

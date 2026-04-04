@@ -127,14 +127,15 @@ function MatchIntelligenceBanner({ grant }) {
 }
 
 function SimilarGrants({ grantId }) {
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, isError } = useQuery({
     queryKey: ['similar-grants', grantId],
     queryFn: () => apiFetch(`/api/opportunities/${grantId}/similar`).then(r => r.similar ?? []),
     enabled: !!grantId,
     staleTime: 5 * 60 * 1000,
+    retry: false,
   })
 
-  if (isLoading || !data?.length) return null
+  if (isLoading || isError || !data?.length) return null
 
   const fmtAmount = (min, max) => {
     const f = (n) => n >= 1000000 ? `$${(n/1000000).toFixed(1)}M` : n >= 1000 ? `$${(n/1000).toFixed(0)}K` : `$${n}`

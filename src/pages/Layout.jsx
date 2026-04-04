@@ -260,7 +260,17 @@ export default function Layout({ children, currentPageName }) {
                 <LogOut className="w-4 h-4 text-muted-foreground" />
               </button>
             </div>
-            {profiles?.length > 0 ? (
+            {isAdmin ? (
+              <div>
+                <div className="w-full rounded-md border border-input bg-muted/50 px-3 py-2 text-sm text-sidebar-foreground">
+                  {displayName} (Admin View)
+                </div>
+                <p className="mt-2 text-[11px] text-muted-foreground">
+                  Workspace shows data for{' '}
+                  <span className="font-medium text-sidebar-foreground">all profiles (admin)</span>
+                </p>
+              </div>
+            ) : profiles?.length > 0 ? (
               <div>
                 <Select value={selectedProfileId} onValueChange={handleProfileChange}>
                   <SelectTrigger className="w-full">
@@ -272,19 +282,14 @@ export default function Layout({ children, currentPageName }) {
                         {profile.display_name ?? profile.id}
                       </SelectItem>
                     ))}
-                                  {user?.is_admin && (
-                                                    <SelectItem key="__admin__" value="__admin__">
-                                                                        buckeye7066 (Admin View)
-                                                                                        </SelectItem>
-                                  )}
                   </SelectContent>
                 </Select>
                 <p className="mt-2 text-[11px] text-muted-foreground">
                   Workspace shows data for{' '}
                   <span className="font-medium text-sidebar-foreground">
-                                    {activeProfileId === '__admin__' ? 'buckeye7066 (Admin)' : (profiles.find((p) => p.id === activeProfileId)?.display_name ??
-                                                      profiles[0]?.display_name ??
-                                                                        'your organization')}
+                    {profiles.find((p) => p.id === activeProfileId)?.display_name ??
+                      profiles[0]?.display_name ??
+                      'your organization'}
                   </span>
                 </p>
               </div>
