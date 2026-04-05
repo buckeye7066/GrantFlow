@@ -36,6 +36,8 @@ jobs:
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
+          allowed_bots: "Copilot,copilot-swe-agent[bot]"
+          allowed_non_write_users: "Copilot,copilot-swe-agent[bot]"
           prompt: |
             Please review this pull request. Look for:
             - Bugs, logic errors, or security issues
