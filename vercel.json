@@ -2,60 +2,19 @@
   "trailingSlash": false,
   "redirects": [
     {
-      "source": "/",
-      "destination": "/grantflow",
-      "permanent": false
-    },
-    {
-      "source": "/grantflow/",
-      "destination": "/grantflow",
-      "permanent": false
-    },
-    {
-      "source": "/grantlfow",
-      "destination": "/grantflow",
+      "source": "/grantflow/:path*",
+      "destination": "/:path*",
       "permanent": true
     },
     {
       "source": "/grantlfow/:path*",
-      "destination": "/grantflow/:path*",
-      "permanent": true
-    },
-    {
-      "source": "/:path*",
-      "has": [
-        {
-          "type": "host",
-          "value": "axiombiolabs.org"
-        }
-      ],
-      "destination": "https://www.axiombiolabs.org/:path*",
+      "destination": "/:path*",
       "permanent": true
     }
   ],
   "rewrites": [
     {
-      "source": "/grantflow/Grant%20Flow_%20Get%20Started.mp4",
-      "destination": "/Grant Flow_ Get Started.mp4"
-    },
-    {
-      "source": "/grantflow/Grant%20Flow_%20Get%20Started.%20mp4",
-      "destination": "/Grant Flow_ Get Started.mp4"
-    },
-    {
-      "source": "/grantflow/Grant Flow_ Get Started.mp4",
-      "destination": "/Grant Flow_ Get Started.mp4"
-    },
-    {
-      "source": "/grantflow/Grant Flow_ Get Started. mp4",
-      "destination": "/Grant Flow_ Get Started.mp4"
-    },
-    {
       "source": "/api/:path*",
-      "destination": "https://grantflow-production.up.railway.app/api/:path*"
-    },
-    {
-      "source": "/grantflow/api/:path*",
       "destination": "https://grantflow-production.up.railway.app/api/:path*"
     },
     {
@@ -63,31 +22,7 @@
       "destination": "https://grantflow-production.up.railway.app/uploads/:path*"
     },
     {
-      "source": "/grantflow/uploads/:path*",
-      "destination": "https://grantflow-production.up.railway.app/uploads/:path*"
-    },
-    {
-      "source": "/grantflow/assets/:path*",
-      "destination": "/assets/:path*"
-    },
-    {
-      "source": "/grantflow/favicon.ico",
-      "destination": "/favicon.ico"
-    },
-    {
-      "source": "/grantflow/docs/:path*",
-      "destination": "/docs/:path*"
-    },
-    {
-      "source": "/grantflow",
-      "destination": "/index.html"
-    },
-    {
-      "source": "/grantflow/",
-      "destination": "/index.html"
-    },
-    {
-      "source": "/grantflow/:path*",
+      "source": "/:path*",
       "destination": "/index.html"
     }
   ]

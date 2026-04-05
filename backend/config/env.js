@@ -209,7 +209,7 @@ export function loadEnv({ mode = process.env.NODE_ENV } = {}) {
     }
   }
   const appBase =
-    (env.AUTH_FRONTEND_APP_BASE || env.VITE_APP_BASE || '/grantflow').replace(/\/+$/, '') || '/grantflow'
+    (env.AUTH_FRONTEND_APP_BASE || env.VITE_APP_BASE || '/').replace(/\/+$/, '') || '/'
 
   return {
     ok: true,

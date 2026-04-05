@@ -77,7 +77,6 @@ export default function AutoTimeTracker({ organizationId, organizationName }) {
     if (currentUser && !currentUser.is_admin && !isTracking && organizationId && organizationName && settings) {
       handleStart();
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentUser, organizationId, organizationName, settings]);
 
   const saveTimeMutation = useMutation({

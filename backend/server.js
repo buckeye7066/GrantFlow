@@ -251,7 +251,6 @@ app.use(
 const defaultCorsOrigins = [
   'http://localhost:5173',
   'http://localhost:3000',
-  'https://grant-flow-three.vercel.app',
   'https://app.axiombiolabs.org',
   'https://www.axiombiolabs.org',
   'https://grantflow-production.up.railway.app',
@@ -492,7 +491,7 @@ app.use(express.static(distPath, {
   },
 }))
 // Serve the SPA under the configured base path so production builds (base=/grantflow) work locally.
-const APP_BASE_PATH = ENV?.appBase || process.env.AUTH_FRONTEND_APP_BASE || process.env.VITE_APP_BASE || '/grantflow';
+const APP_BASE_PATH = ENV?.appBase || process.env.AUTH_FRONTEND_APP_BASE || process.env.VITE_APP_BASE || '/';
 if (APP_BASE_PATH && APP_BASE_PATH !== '/') {
   const normalizedBase = String(APP_BASE_PATH).replace(/\/+$/, '');
   // Expose uploads under the same base path (common when reverse proxies only route /grantflow/*).

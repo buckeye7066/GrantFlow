@@ -15,7 +15,7 @@ export default defineConfig(({ mode }) => {
     return b.endsWith('/') ? b : (b + '/')
   }
 
-  const assetBaseRaw = env.VITE_ASSET_BASE || (mode === 'production' ? '/grantflow/' : '/')
+  const assetBaseRaw = env.VITE_ASSET_BASE || '/'
   const assetBase = normalizeViteBase(assetBaseRaw)
 
   return {

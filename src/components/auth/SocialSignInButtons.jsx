@@ -22,7 +22,7 @@ const PROVIDERS = [
   },
 ]
 
-const APP_BASE = import.meta.env.VITE_APP_BASE ?? '/grantflow'
+const APP_BASE = import.meta.env.VITE_APP_BASE ?? '/'
 const MAX_RETRIES = 2
 const RETRY_DELAY = 2000 // 2 seconds
 

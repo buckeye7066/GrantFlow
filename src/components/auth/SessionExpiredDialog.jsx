@@ -7,7 +7,7 @@ import { AlertCircle } from 'lucide-react'
 const AUTH_TABS = new Set(['email', 'phone', 'social'])
 
 export default function SessionExpiredDialog() {
-  const appBase = useMemo(() => import.meta.env.VITE_APP_BASE ?? '/grantflow', [])
+  const appBase = useMemo(() => import.meta.env.VITE_APP_BASE ?? '/', [])
   const {
     sessionExpired,
     sessionMessage,

@@ -150,7 +150,7 @@ const TWILIO_FROM_NUMBER = process.env.TWILIO_FROM_NUMBER || null
 const AUTH_PUBLIC_URL = process.env.AUTH_PUBLIC_URL || process.env.PUBLIC_URL || null
 const FRONTEND_BASE_URL = process.env.AUTH_FRONTEND_URL || process.env.FRONTEND_BASE_URL || null
 const FRONTEND_APP_BASE =
-  process.env.AUTH_FRONTEND_APP_BASE || process.env.APP_BASE_PATH || process.env.VITE_APP_BASE || '/grantflow'
+  process.env.AUTH_FRONTEND_APP_BASE || process.env.APP_BASE_PATH || process.env.VITE_APP_BASE || '/'
 
 const OAUTH_PROVIDERS = {
   google: {
