@@ -4,6 +4,17 @@ import path from 'node:path'
 import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 
+// Prevent unhandled promise rejections from crashing the server process.
+// Background tasks (crawlers, cron jobs, health checks) may fire DB queries that reject
+// when the database is temporarily unavailable. Crashing on these creates a perpetual 502
+// and blocks recovery via admin endpoints. Log the error and keep the process alive.
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('[process] Unhandled promise rejection (server staying alive):', reason?.message || reason)
+  if (reason?.stack) {
+    console.error('[process] Stack:', reason.stack)
+  }
+})
+
 function isTruthy(value) {
   const v = String(value || '').trim().toLowerCase()
   return v === '1' || v === 'true' || v === 'yes' || v === 'y' || v === 'on'

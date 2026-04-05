@@ -855,14 +855,22 @@ const IS_SMOKE_MODE = explicitSmoke || inferredSmoke
 
 // Restore baseline data (profiles + sections, plus other seed tables if DB appears empty).
 // This makes the app self-heal after an ephemeral DB reset, so "real profiles" reappear on next login.
-if (IS_SMOKE_MODE) {
+// IMPORTANT: If DB is unavailable (degraded mode), skip all startup DB operations so the process
+// stays alive and health/admin endpoints remain reachable for diagnosis.
+if (app.locals.db_startup_error) {
+  console.warn('[startup] Skipping all startup DB operations (database unavailable):', app.locals.db_startup_error)
+} else if (IS_SMOKE_MODE) {
   // Contract/unit tests start the backend in "smoke" mode and only need a fast, deterministic boot.
   // Heavy boot tasks (baseline seeding, network-dependent backfills, large DB scans) must not block PORT binding.
   console.info('[startup] SMOKE_MODE enabled; skipping baseline seed + heavy startup tasks')
   // Still ensure core fixtures exist so auth/access tests have profiles to attach to.
-  await ensureDesignatedProfiles(db)
-  await linkAllProfilesToAdmin(db)
-  await ensureUserPreferencesTable(db)
+  try {
+    await ensureDesignatedProfiles(db)
+    await linkAllProfilesToAdmin(db)
+    await ensureUserPreferencesTable(db)
+  } catch (error) {
+    console.warn('[startup] Smoke mode fixture setup failed:', error?.message || error)
+  }
 } else {
   try {
     const mode = String(process.env.BASELINE_SEED_MODE || '').trim().toLowerCase() || 'auto'
@@ -884,11 +892,19 @@ if (IS_SMOKE_MODE) {
     console.error('[startup] Failed to seed baseline from repo. Falling back to designated profiles.', {
       error: error?.message || String(error),
     })
-    await ensureDesignatedProfiles(db)
+    try {
+      await ensureDesignatedProfiles(db)
+    } catch (fallbackError) {
+      console.warn('[startup] Designated profiles fallback also failed:', fallbackError?.message || fallbackError)
+    }
   }
   // Always ensure designated profiles exist (idempotent); baseline seed may not include newer fixtures.
-  await ensureDesignatedProfiles(db)
-  await linkAllProfilesToAdmin(db)
+  try {
+    await ensureDesignatedProfiles(db)
+    await linkAllProfilesToAdmin(db)
+  } catch (error) {
+    console.warn('[startup] Failed to ensure designated profiles / admin links:', error?.message || error)
+  }
   // Prevent "orphaned profiles" by ensuring every active profile has an organization_id.
   // Bounded + idempotent so production startups stay safe.
   try {
@@ -900,9 +916,13 @@ if (IS_SMOKE_MODE) {
   } catch (error) {
     console.warn('[startup] Failed to ensure profile organization links:', error?.message || error)
   }
-  await ensureUserPreferencesTable(db)
-  await repairInvalidDocumentStatuses(db)
-  await repairMissingUploadAvatars({ db, uploadsDir })
+  try {
+    await ensureUserPreferencesTable(db)
+    await repairInvalidDocumentStatuses(db)
+    await repairMissingUploadAvatars({ db, uploadsDir })
+  } catch (error) {
+    console.warn('[startup] Failed to run post-seed repairs:', error?.message || error)
+  }
 }
 
 // Ensure the Payment Sheet service catalog + terms exist (fast + idempotent).
@@ -1051,16 +1071,17 @@ try {
 }
 
 try {
-  const faithCount = db
+  const faithRow = await db
     .prepare("SELECT COUNT(*) as count FROM funding_opportunities WHERE source = 'faith_based_assistance' AND state = 'OH' AND is_active = 1")
-    .get()?.count ?? 0
+    .get()
+  const faithCount = faithRow?.count ?? 0
   if (faithCount < 6) {
     console.info('[startup] Seeding faith-based housing assistance (Lorain County OH)...')
     const result = await seedFaithBasedHousing(db)
-    const afterCount = db
+    const afterRow = await db
       .prepare("SELECT COUNT(*) as count FROM funding_opportunities WHERE source = 'faith_based_assistance' AND state = 'OH' AND is_active = 1")
-      .get()?.count
-    console.info('[startup] Seeded faith-based housing', { ...result, after: afterCount })
+      .get()
+    console.info('[startup] Seeded faith-based housing', { ...result, after: afterRow?.count })
   } else {
     console.info('[startup] Faith-based housing already seeded', { count: faithCount })
   }
@@ -2322,7 +2343,7 @@ if (process.env.NODE_ENV !== 'test') {
       try {
         const { trustedOriginClause, trustedSourceClause } = await import('./utils/recordOrigins.js')
         const activeVal = db.dialect === 'postgres' ? 'TRUE' : '1'
-        const count = db.prepare(`
+        const count = await db.prepare(`
           SELECT COUNT(*) AS n FROM funding_opportunities
           WHERE is_active = ${activeVal} AND ${trustedOriginClause()} AND ${trustedSourceClause()}
         `).get()
@@ -2375,20 +2396,18 @@ if (process.env.NODE_ENV !== 'test') {
   }, 20_000)
   
   // Log server startup event
-  try {
-    logAuditEvent(db, {
-      category: AUDIT_CATEGORIES.SYSTEM,
-      action: 'server_startup',
-      severity: SEVERITY.INFO,
-      details: {
-        port: actualPort,
-        environment: process.env.NODE_ENV || 'development',
-        corsOrigins: loggedCorsOrigins,
-      },
-    });
-  } catch (err) {
+  logAuditEvent(db, {
+    category: AUDIT_CATEGORIES.SYSTEM,
+    action: 'server_startup',
+    severity: SEVERITY.INFO,
+    details: {
+      port: actualPort,
+      environment: process.env.NODE_ENV || 'development',
+      corsOrigins: loggedCorsOrigins,
+    },
+  }).catch(() => {
     // Non-critical - don't fail server startup
-  }
+  });
   
   // Start Anya autonomous operations 5 seconds after server is ready.
   if (process.env.ANYA_AUTONOMOUS_ENABLED === 'true') {
