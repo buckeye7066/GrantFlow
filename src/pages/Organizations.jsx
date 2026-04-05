@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react"
+import React, { Suspense, useMemo, useState } from "react"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { useNavigate } from "react-router-dom"
 import { Alert, AlertDescription } from "@/components/ui/alert"
@@ -8,11 +8,11 @@ import OrganizationCard from "@/components/organizations/OrganizationCard"
 import OrganizationFilters from "@/components/organizations/OrganizationFilters"
 import OrganizationActions from "@/components/organizations/OrganizationActions"
 import OrganizationEmptyState from "@/components/organizations/OrganizationEmptyState"
-import ComprehensiveApplicationForm from "@/components/organizations/ComprehensiveApplicationForm"
-import UploadApplicationForm from "@/components/organizations/UploadApplicationForm"
-import OrganizationForm from "@/components/organizations/OrganizationForm"
-import QuickAddDialog from "@/components/organizations/QuickAddDialog"
-import UploadFormDialog from "@/components/organizations/UploadFormDialog"
+const ComprehensiveApplicationForm = React.lazy(() => import("@/components/organizations/ComprehensiveApplicationForm"))
+const UploadApplicationForm = React.lazy(() => import("@/components/organizations/UploadApplicationForm"))
+const OrganizationForm = React.lazy(() => import("@/components/organizations/OrganizationForm"))
+const QuickAddDialog = React.lazy(() => import("@/components/organizations/QuickAddDialog"))
+const UploadFormDialog = React.lazy(() => import("@/components/organizations/UploadFormDialog"))
 import { useToast } from "@/components/ui/use-toast"
 import { listProfiles } from "@/api/profiles"
 import { createPageUrl } from "@/utils"
@@ -354,30 +354,32 @@ const matchesSearch =
         )}
       </div>
 
-      <QuickAddDialog
-        open={quickAddOpen}
-        onOpenChange={setQuickAddOpen}
-        onSubmit={handleQuickAdd}
-      />
+      <Suspense fallback={null}>
+        <QuickAddDialog
+          open={quickAddOpen}
+          onOpenChange={setQuickAddOpen}
+          onSubmit={handleQuickAdd}
+        />
 
-      <UploadFormDialog
-        open={uploadFormOpen}
-        onOpenChange={setUploadFormOpen}
-        onUpload={handleUploadForm}
-      />
+        <UploadFormDialog
+          open={uploadFormOpen}
+          onOpenChange={setUploadFormOpen}
+          onUpload={handleUploadForm}
+        />
 
-      <Dialog open={comprehensiveOpen} onOpenChange={setComprehensiveOpen}>
-        <DialogContent className="max-w-5xl w-[95vw] max-h-[90vh] overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle>New Comprehensive Application</DialogTitle>
-          </DialogHeader>
-          <ComprehensiveApplicationForm
-            onSubmit={handleComprehensiveSubmit}
-            onCancel={() => setComprehensiveOpen(false)}
-            isSubmitting={comprehensiveSubmitting}
-          />
-        </DialogContent>
-      </Dialog>
+        <Dialog open={comprehensiveOpen} onOpenChange={setComprehensiveOpen}>
+          <DialogContent className="max-w-5xl w-[95vw] max-h-[90vh] overflow-y-auto">
+            <DialogHeader>
+              <DialogTitle>New Comprehensive Application</DialogTitle>
+            </DialogHeader>
+            <ComprehensiveApplicationForm
+              onSubmit={handleComprehensiveSubmit}
+              onCancel={() => setComprehensiveOpen(false)}
+              isSubmitting={comprehensiveSubmitting}
+            />
+          </DialogContent>
+        </Dialog>
+      </Suspense>
     </section>
   )
 }

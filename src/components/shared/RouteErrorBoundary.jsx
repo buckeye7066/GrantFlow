@@ -5,10 +5,12 @@ import { Button } from "@/components/ui/button"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { createPageUrl } from "@/utils"
 
+const MAX_RETRIES = 3
+
 export default class RouteErrorBoundary extends React.Component {
   constructor(props) {
     super(props)
-    this.state = { hasError: false, error: null }
+    this.state = { hasError: false, error: null, errorCount: 0 }
   }
 
   static getDerivedStateFromError(error) {
@@ -16,14 +18,23 @@ export default class RouteErrorBoundary extends React.Component {
   }
 
   componentDidCatch(error, info) {
-    // Keep this log — it’s the primary breadcrumb when users report “blank screen”.
+    const newCount = (this.state.errorCount || 0) + 1
+    this.setState({ errorCount: newCount })
+
+    // Keep this log — it's the primary breadcrumb when users report "blank screen".
     console.error("[RouteErrorBoundary] route crash", {
       route: this.props.routeName ?? null,
       message: error?.message,
+      errorCount: newCount,
       requestId: error?.requestId ?? error?.request_id ?? null,
       stack: error?.stack,
       componentStack: info?.componentStack,
     })
+  }
+
+  handleRetry = () => {
+    if (this.state.errorCount >= MAX_RETRIES) return
+    this.setState({ hasError: false, error: null })
   }
 
   render() {
@@ -31,12 +42,16 @@ export default class RouteErrorBoundary extends React.Component {
 
     const routeLabel = this.props.routeName ? ` on ${this.props.routeName}` : ""
     const requestId = this.state.error?.requestId ?? this.state.error?.request_id ?? null
+    const exhaustedRetries = this.state.errorCount >= MAX_RETRIES
 
     return (
       <div className="p-6 md:p-10">
         <Alert variant="destructive">
           <AlertDescription>
-            Something went wrong{routeLabel}. You can reload the page or return to your dashboard.
+            Something went wrong{routeLabel}.
+            {exhaustedRetries
+              ? " This page crashed multiple times. Please try clearing your browser cache or contact support."
+              : " You can reload the page or return to your dashboard."}
             {requestId ? (
               <span className="mt-2 block text-xs text-slate-100">
                 Request ID: <span className="font-mono">{requestId}</span>
@@ -45,7 +60,12 @@ export default class RouteErrorBoundary extends React.Component {
           </AlertDescription>
         </Alert>
         <div className="mt-4 flex flex-wrap gap-3">
-          <Button onClick={() => window.location.reload()}>Reload</Button>
+          {!exhaustedRetries && (
+            <Button onClick={this.handleRetry}>Try Again</Button>
+          )}
+          <Button onClick={() => window.location.reload()}>
+            {exhaustedRetries ? "Force Reload" : "Reload"}
+          </Button>
           <Button asChild variant="outline">
             <Link to={createPageUrl("Dashboard")}>Back to Dashboard</Link>
           </Button>
@@ -54,4 +74,3 @@ export default class RouteErrorBoundary extends React.Component {
     )
   }
 }
-
