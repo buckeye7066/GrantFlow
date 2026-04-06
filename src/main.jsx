@@ -5,6 +5,7 @@ import App from '@/App.jsx'
 import '@/index.css'
 import { DashboardPreferencesProvider } from '@/contexts/DashboardPreferencesContext.jsx'
 import { enforceCanonicalHost } from '@/utils/enforceCanonicalHost.js'
+import { enforceBasename } from '@/utils/enforceBasename.js'
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -19,6 +20,7 @@ const queryClient = new QueryClient({
 })
 
 enforceCanonicalHost()
+enforceBasename()
 
 ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>

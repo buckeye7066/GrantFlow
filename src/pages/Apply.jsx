@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button'
 import { Loader2, ArrowLeft } from 'lucide-react'
 import { apiFetch } from '@/api/client'
 import ProposalEditor from '@/components/proposals/ProposalEditor'
+import { createPageUrl } from '@/utils'
 
 function getQueryParam(name) {
   try {
@@ -36,7 +37,7 @@ export default function Apply() {
     return (
       <div className="max-w-4xl mx-auto p-6">
         <div className="mb-4">
-          <Link to="/DiscoverGrants">
+          <Link to={createPageUrl('DiscoverGrants')}>
             <Button variant="outline">
               <ArrowLeft className="w-4 h-4 mr-2" />
               Back
@@ -60,7 +61,7 @@ export default function Apply() {
     return (
       <div className="max-w-4xl mx-auto p-6">
         <div className="mb-4">
-          <Link to={`/GrantDetail?id=${encodeURIComponent(grantId)}`}>
+          <Link to={createPageUrl('GrantDetail', { id: grantId })}>
             <Button variant="outline">
               <ArrowLeft className="w-4 h-4 mr-2" />
               Back to grant
@@ -79,7 +80,7 @@ export default function Apply() {
           <h1 className="text-2xl font-bold text-slate-900">Apply / Submission Engine</h1>
           <p className="text-sm text-slate-600">{grant.title}</p>
         </div>
-        <Link to={`/GrantDetail?id=${encodeURIComponent(grantId)}`}>
+        <Link to={createPageUrl('GrantDetail', { id: grantId })}>
           <Button variant="outline">
             <ArrowLeft className="w-4 h-4 mr-2" />
             Back to grant

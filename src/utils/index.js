@@ -1,3 +1,5 @@
+import { env } from '@/config/env.js'
+
 export function createPageUrl(pageName, params) {
   const basePath = `/${pageName.replace(/\s+/g, '')}`
 
@@ -14,6 +16,17 @@ export function createPageUrl(pageName, params) {
 
   const queryString = searchParams.toString()
   return queryString ? `${basePath}?${queryString}` : basePath
+}
+
+/**
+ * Like createPageUrl, but prepends the app basename (VITE_APP_BASE).
+ * Use this when setting window.location.href directly — React Router's
+ * <Link> and navigate() already prepend the basename automatically, so
+ * createPageUrl (without the base) is correct for those APIs.
+ */
+export function createFullPageUrl(pageName, params) {
+  const base = env.appBase && env.appBase !== '/' ? env.appBase : ''
+  return `${base}${createPageUrl(pageName, params)}`
 }
 
 /**
