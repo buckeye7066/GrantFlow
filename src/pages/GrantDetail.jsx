@@ -500,7 +500,7 @@ export default function GrantDetail() {
       });
       return;
     }
-    navigate(createPageUrl('Apply', { id: encodeURIComponent(String(grantId)) }));
+    navigate(createPageUrl('Apply', { id: grantId }));
   };
   
   if (isEditing) {
