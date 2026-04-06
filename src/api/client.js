@@ -706,12 +706,13 @@ class APIClient {
                 if (data?.accessToken) this.setToken(data.accessToken)
                 if (data?.refreshToken) this.setRefreshToken(data.refreshToken)
               } else {
-                // Refresh token is dead — clear it so handleUnauthorized won't retry
-                log.debug('proactive refresh failed; clearing refresh token')
-                this.refreshToken = null
-                if (typeof window !== 'undefined') {
-                  localStorage.removeItem('grantflow:refresh-token')
-                }
+                // Refresh token is dead — clear ALL tokens and return null immediately.
+                // Do NOT fall through to this.fetch('/api/auth/me') because that would
+                // trigger handleUnauthorized → onAuthFailure → markSessionExpired and
+                // cause a state-thrashing loop on the login page.
+                log.debug('proactive refresh failed; clearing tokens and returning null cleanly')
+                this.clearToken()
+                return null
               }
             }
           }
