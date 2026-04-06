@@ -157,13 +157,15 @@ class APIClient {
   async handleUnauthorized(originalRequest) {
     const refreshToken = this.getRefreshToken();
     
-    // CRITICAL: Don't attempt refresh if no token exists
+    // CRITICAL: Don't attempt refresh if no token exists.
+    // Do NOT call onAuthFailure here — this path fires during bootstrap when a
+    // stale access token exists but the refresh token is already cleared. The
+    // bootstrap in App.jsx already calls clearState() on failure, so calling
+    // onAuthFailure here would set sessionExpired: true unnecessarily and cause
+    // the Login page flash/oscillation loop.
     if (!refreshToken) {
       console.warn('[APIClient] No refresh token available, clearing auth state');
       this.clearToken();
-      if (this.onAuthFailure) {
-        this.onAuthFailure('Your session expired. Sign in again to continue.');
-      }
       // Don't redirect automatically - let the app handle it
       throw this.createAuthError('Authentication required');
     }
@@ -172,7 +174,7 @@ class APIClient {
     if (originalRequest?.endpoint?.includes('/auth/refresh')) {
       console.warn('[APIClient] Refresh endpoint failed, clearing auth state');
       this.clearToken();
-      if (this.onAuthFailure) {
+      if (this.onAuthFailure && !this._suppressAuthFailure) {
         this.onAuthFailure('Your session is no longer valid. Please sign in again.');
       }
       throw this.createAuthError('Session expired');
@@ -241,9 +243,10 @@ class APIClient {
         return data
       } catch (error) {
         this.clearToken()
-        if (this.onAuthFailure) {
-          this.onAuthFailure('Your session expired. Sign in again to continue.')
-        }
+        // Do NOT call onAuthFailure here — callers (handleUnauthorized) already
+        // call it when appropriate. Having refreshTokens() also call it would
+        // fire it twice and trigger a markSessionExpired() state thrash during
+        // bootstrap, causing the Login page flash loop.
         throw error
       } finally {
         this.refreshPromise = null
@@ -414,7 +417,7 @@ class APIClient {
         if (isRetry) {
           console.warn('[APIClient] Still getting 401 after refresh, giving up');
           this.clearToken();
-          if (this.onAuthFailure) {
+          if (this.onAuthFailure && !this._suppressAuthFailure) {
             this.onAuthFailure('Your session expired. Sign in again to continue.');
           }
           throw this.createAuthError('Authentication failed after retry');
@@ -720,7 +723,16 @@ class APIClient {
           // Network/parse error — best-effort, fall through to /api/auth/me
         }
 
-        return await this.fetch('/api/auth/me');
+        // Set _suppressAuthFailure so that any onAuthFailure callbacks triggered
+        // deep in the fetch/handleUnauthorized call stack (e.g. by a 401 on the
+        // /api/auth/me request itself) do not fire markSessionExpired() during
+        // bootstrap. The caller (App.jsx) already handles failure via clearState().
+        this._suppressAuthFailure = true
+        try {
+          return await this.fetch('/api/auth/me');
+        } finally {
+          this._suppressAuthFailure = false
+        }
       } catch (error) {
         // If it's an auth error (401 or 403), return null gracefully — user needs to sign in
         if (error.status === 401 || error.status === 403 || error.isAuthError) {

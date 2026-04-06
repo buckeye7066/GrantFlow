@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useLocation, useNavigate, Link } from 'react-router-dom'
 import AuthShell from '@/components/auth/AuthShell'
 import AuthMethodTabs from '@/components/auth/AuthMethodTabs'
@@ -19,7 +19,6 @@ export default function Login() {
   // every Zustand state change, causing infinite re-renders because Zustand's
   // default equality check (Object.is) always sees a new object.
   const isAuthenticated = useAuthStore((state) => state.isAuthenticated)
-    const sessionExpired = useAuthStore((state) => state.sessionExpired)
     const closeSessionExpired = useAuthStore((state) => state.closeSessionExpired)
     const loginWithTokens = useAuthStore((state) => state.loginWithTokens)
 
@@ -29,21 +28,14 @@ export default function Login() {
         return host === 'localhost' || host === '127.0.0.1'
   }, [])
 
-  // FIX: Use a ref guard so the session-expired cleanup runs at most once.
-  // Without this, closeSessionExpired() mutates the store, which can trigger
-  // a re-render, which re-runs this effect, creating a tight loop.
-  const sessionExpiredHandled = useRef(false)
-    useEffect(() => {
-          if (sessionExpired && !sessionExpiredHandled.current) {
-                  sessionExpiredHandled.current = true
-                  closeSessionExpired()
-          }
-          // Reset the guard when sessionExpired becomes false so future expirations
-                  // are still handled.
-                  if (!sessionExpired) {
-                          sessionExpiredHandled.current = false
-                  }
-    }, [sessionExpired, closeSessionExpired])
+  // Clear any stale sessionExpired state on mount only.
+  // We do this once at mount (not reactively) to avoid the state oscillation
+  // that causes the login-page flash: a reactive dep on sessionExpired triggers
+  // closeSessionExpired() → sets it false → re-render → repeat.
+  useEffect(() => {
+    closeSessionExpired()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const redirectTarget = useMemo(() => {
         const fallback = '/Dashboard'
