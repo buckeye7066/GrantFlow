@@ -448,7 +448,7 @@ export default function GrantCard({ grant, organization, organizationName, onSta
                   variant="outline"
                   className="text-xs shrink-0 border-blue-300 text-blue-700 hover:bg-blue-50"
                   title="Start a proposal for this grant"
-                  onClick={() => navigate(`/Apply?id=${grant.id}`)}
+                  onClick={() => navigate(createPageUrl('Apply', { id: grant.id }))}
                 >
                   <FileEdit className="w-3.5 h-3.5 mr-1" />
                   Start Proposal

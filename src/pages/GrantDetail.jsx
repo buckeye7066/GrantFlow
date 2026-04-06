@@ -155,7 +155,7 @@ function SimilarGrants({ grantId }) {
         {data.map(opp => (
           <Link
             key={opp.id}
-            to={`/GrantDetail?id=${opp.id}`}
+            to={createPageUrl('GrantDetail', { id: opp.id })}
             className="block rounded-lg border border-slate-200 bg-white p-4 hover:border-blue-300 hover:shadow-sm transition-all"
           >
             <p className="font-medium text-sm text-slate-900 line-clamp-2 mb-1">{opp.title}</p>
@@ -500,7 +500,7 @@ export default function GrantDetail() {
       });
       return;
     }
-    navigate(`/Apply?id=${encodeURIComponent(String(grantId))}`);
+    navigate(createPageUrl('Apply', { id: encodeURIComponent(String(grantId)) }));
   };
   
   if (isEditing) {
