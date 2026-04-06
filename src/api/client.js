@@ -40,6 +40,11 @@ class APIClient {
     this.activeProfileId = null;
     this.refreshPromise = null; // Single-flight refresh promise
     this.onAuthFailure = null;
+    // Counter tracking how many concurrent auth.me() calls are in flight.
+    // When > 0, onAuthFailure callbacks are suppressed to prevent markSessionExpired()
+    // from firing during bootstrap. Using a counter (not a boolean) makes this safe
+    // for concurrent invocations — the flag is only cleared when all callers finish.
+    this._suppressAuthFailureCount = 0;
     this.entityResourceMap = {
       Organization: 'organizations',
       Grant: 'grants',
@@ -174,7 +179,7 @@ class APIClient {
     if (originalRequest?.endpoint?.includes('/auth/refresh')) {
       console.warn('[APIClient] Refresh endpoint failed, clearing auth state');
       this.clearToken();
-      if (this.onAuthFailure && !this._suppressAuthFailure) {
+      if (this.onAuthFailure && !this._suppressAuthFailureCount) {
         this.onAuthFailure('Your session is no longer valid. Please sign in again.');
       }
       throw this.createAuthError('Session expired');
@@ -417,7 +422,7 @@ class APIClient {
         if (isRetry) {
           console.warn('[APIClient] Still getting 401 after refresh, giving up');
           this.clearToken();
-          if (this.onAuthFailure && !this._suppressAuthFailure) {
+          if (this.onAuthFailure && !this._suppressAuthFailureCount) {
             this.onAuthFailure('Your session expired. Sign in again to continue.');
           }
           throw this.createAuthError('Authentication failed after retry');
@@ -723,15 +728,16 @@ class APIClient {
           // Network/parse error — best-effort, fall through to /api/auth/me
         }
 
-        // Set _suppressAuthFailure so that any onAuthFailure callbacks triggered
+        // Increment _suppressAuthFailureCount so that any onAuthFailure callbacks triggered
         // deep in the fetch/handleUnauthorized call stack (e.g. by a 401 on the
         // /api/auth/me request itself) do not fire markSessionExpired() during
         // bootstrap. The caller (App.jsx) already handles failure via clearState().
-        this._suppressAuthFailure = true
+        // A counter (not boolean) handles concurrent auth.me() calls correctly.
+        this._suppressAuthFailureCount++
         try {
           return await this.fetch('/api/auth/me');
         } finally {
-          this._suppressAuthFailure = false
+          this._suppressAuthFailureCount--
         }
       } catch (error) {
         // If it's an auth error (401 or 403), return null gracefully — user needs to sign in
