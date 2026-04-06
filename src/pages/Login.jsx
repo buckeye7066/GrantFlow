@@ -96,17 +96,17 @@ export default function Login() {
                                               >
                                               New user? Apply for grant writing services
                                               <ArrowRight className="h-4 w-4" />
-                                  </Link>Link>
+                                  </Link>
                           {showDevAdminShortcut ? (
                                       <div className="mt-4 flex justify-center">
                                                     <Button variant="outline" onClick={handleDevAdminLogin} disabled={devLoading}>
                                                       {devLoading ? 'Logging in…' : 'Dev: Login as Admin'}
-                                                    </Button>Button>
-                                      </div>div>
+                                                    </Button>
+                                      </div>
                                     ) : null}
-                        </div>div>
-                </AuthShell>AuthShell>
-        </AuthErrorBoundary>AuthErrorBoundary>
+                        </div>
+                </AuthShell>
+        </AuthErrorBoundary>
       )
 }
 
@@ -115,6 +115,6 @@ function AuthMethodExpiryNotice() {
           <div className="mb-6 rounded-lg border border-blue-100 bg-blue-50/70 p-3 text-sm text-slate-700">
                 First-time sign-in uses a one-time email link to set your password.
                 Returning users can sign in with email + password.
-          </div>div>
+          </div>
         )
-}</AuthShell>
+}
