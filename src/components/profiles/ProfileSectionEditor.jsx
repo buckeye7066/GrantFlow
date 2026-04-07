@@ -130,6 +130,43 @@ const basicInfoSchema = z.object({
     addedDate: z.string().optional(),
   })).optional().default([]),
 })
+const toBoolean = (value) => {
+  if (value === undefined || value === null || value === '') return false
+  if (typeof value === 'boolean') return value
+  if (typeof value === 'number') return value !== 0
+  const normalized = String(value).toLowerCase().trim()
+  return ['true', 'yes', 'y', '1'].includes(normalized)
+}
+
+const booleanField = z
+  .union([z.boolean(), z.string(), z.number()])
+  .optional()
+  .transform((value) => toBoolean(value))
+
+const toStringList = (value) => {
+  if (Array.isArray(value)) return value.map((v) => String(v).trim()).filter(Boolean)
+  if (typeof value === 'string') {
+    const raw = value.trim()
+    if (!raw) return []
+    // Allow JSON array input
+    if (raw.startsWith('[')) {
+      try {
+        const parsed = JSON.parse(raw)
+        if (Array.isArray(parsed)) return parsed.map((v) => String(v).trim()).filter(Boolean)
+      } catch {
+        // Ignore invalid JSON input; fall back to comma-separated parsing.
+      }
+    }
+    return raw.split(',').map((entry) => entry.trim()).filter(Boolean)
+  }
+  return []
+}
+
+const stringListField = z
+  .union([z.array(z.string()), z.string()])
+  .optional()
+  .transform((value) => toStringList(value))
+
 
 const organizationDetailsSchema = z.object({
   organization_type: z.string().optional().or(z.literal("")),
@@ -200,42 +237,6 @@ const organizationDetailsSchema = z.object({
   is_cooperative: booleanField,
 })
 
-const toBoolean = (value) => {
-  if (value === undefined || value === null || value === '') return false
-  if (typeof value === 'boolean') return value
-  if (typeof value === 'number') return value !== 0
-  const normalized = String(value).toLowerCase().trim()
-  return ['true', 'yes', 'y', '1'].includes(normalized)
-}
-
-const booleanField = z
-  .union([z.boolean(), z.string(), z.number()])
-  .optional()
-  .transform((value) => toBoolean(value))
-
-const toStringList = (value) => {
-  if (Array.isArray(value)) return value.map((v) => String(v).trim()).filter(Boolean)
-  if (typeof value === 'string') {
-    const raw = value.trim()
-    if (!raw) return []
-    // Allow JSON array input
-    if (raw.startsWith('[')) {
-      try {
-        const parsed = JSON.parse(raw)
-        if (Array.isArray(parsed)) return parsed.map((v) => String(v).trim()).filter(Boolean)
-      } catch {
-        // Ignore invalid JSON input; fall back to comma-separated parsing.
-      }
-    }
-    return raw.split(',').map((entry) => entry.trim()).filter(Boolean)
-  }
-  return []
-}
-
-const stringListField = z
-  .union([z.array(z.string()), z.string()])
-  .optional()
-  .transform((value) => toStringList(value))
 
 const financialInformationSchema = z.object({
   annual_income: z
