@@ -55,8 +55,9 @@ export default function ProfileSelect({
         ? rawProfiles.profiles
         : []
 
-  // Backend already scopes /api/profiles for non-admin users; do not re-filter client-side.
-  const availableProfiles = profiles
+  // Defence-in-depth: strip deleted profiles client-side so stale
+  // React-Query cache entries never leak deleted accounts into the selector.
+  const availableProfiles = profiles.filter((p) => p?.status !== 'deleted')
 
   if (isLoading) {
     return (

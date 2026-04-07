@@ -807,6 +807,11 @@ router.get('/:id', async (req, res) => {
     return res.status(404).json({ error: 'Profile not found' })
   }
 
+    // Treat soft-deleted profiles as if they don't exist.
+    if (row.status === 'deleted') {
+          return res.status(404).json({ error: 'Profile not found' })
+            }
+
   // Check access permissions
   if (!isAdmin) {
     // Enduser: can only access profiles where user_id matches
@@ -933,6 +938,11 @@ router.put('/:id', async (req, res) => {
   if (!existing) {
     return res.status(404).json({ error: 'Profile not found' })
   }
+
+    // Reject mutations on soft-deleted profiles so they stay invisible.
+    if (existing.status === 'deleted') {
+          return res.status(404).json({ error: 'Profile not found' })
+            }
 
   // Allow: admins (including admin-email allowlist), profile-scoped tokens for the profile, or session owners (userId match)
   const userIsAdmin = Boolean(isAdmin)

@@ -222,7 +222,8 @@ export const useAuthStore = create((set, get) => ({
       // Admins should see all profiles; backend will scope automatically for non-admins.
       const url = isAdmin ? '/api/profiles?limit=1000' : '/api/profiles'
       const data = await apiFetch(url)
-      const profiles = Array.isArray(data) ? data : []
+          // Defence-in-depth: strip deleted profiles so stale cache entries are never visible.
+              const profiles = (Array.isArray(data) ? data : []).filter((p) => p?.status !==
 
       set({ profiles })
 
