@@ -125,6 +125,7 @@ export function createAuthMeRouter({ db, adminName, adminEmail }) {
                 `
                   SELECT id, display_name, organization_id, status
                   FROM profiles
+                  WHERE status IS NULL OR status <> 'deleted'
                   ORDER BY created_at DESC
                   LIMIT 1000
                 `,
@@ -164,8 +165,9 @@ export function createAuthMeRouter({ db, adminName, adminEmail }) {
                     SELECT DISTINCT p.id, p.display_name, p.organization_id, p.status
                     FROM profiles p
                     LEFT JOIN profile_emails pe ON pe.profile_id = p.id
-                    WHERE p.user_id = ?
-                       OR lower(pe.email) IN (${placeholders})
+                    WHERE (p.user_id = ?
+                       OR lower(pe.email) IN (${placeholders}))
+                      AND (p.status IS NULL OR p.status <> 'deleted')
                     ORDER BY p.id ASC
                   `,
                 )
@@ -177,6 +179,7 @@ export function createAuthMeRouter({ db, adminName, adminEmail }) {
                     SELECT id, display_name, organization_id, status
                     FROM profiles
                     WHERE user_id = ?
+                      AND (status IS NULL OR status <> 'deleted')
                     ORDER BY id ASC
                   `,
                 )
