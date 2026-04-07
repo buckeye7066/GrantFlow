@@ -234,8 +234,9 @@ export default function FundingResults() {
         return { status: 'already', grant: newGrant };
       }
       if (newGrant.organization_id && newGrant.organization_id !== orgId) {
-        queryClient.invalidateQueries({ queryKey: ['profiles'] });
+        queryClient.invalidateQueries({ queryKey: ['profiles'], refetchType: 'all' });
         queryClient.invalidateQueries({ queryKey: ['organizations'] });
+        useAuthStore.getState().refreshProfiles({ reason: 'new-org-from-funding', force: true });
       }
       if (!silent) {
         queryClient.invalidateQueries({ queryKey: ['grants'] });

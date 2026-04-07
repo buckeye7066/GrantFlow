@@ -76,7 +76,8 @@ export default function MyProfiles() {
         title: "Profile deleted",
         description: "The profile has been successfully removed.",
       });
-      queryClient.invalidateQueries({ queryKey: ['profiles'] });
+      queryClient.invalidateQueries({ queryKey: ['profiles'], refetchType: 'all' });
+      useAuthStore.getState().refreshProfiles({ reason: 'profile-deleted', force: true });
       setProfileToDelete(null);
     },
     onError: (error) => {
@@ -95,8 +96,9 @@ export default function MyProfiles() {
         title: "Profile hard-deleted",
         description: "The profile was permanently removed and tombstoned so it cannot return.",
       });
-      queryClient.invalidateQueries({ queryKey: ['profiles'] });
+      queryClient.invalidateQueries({ queryKey: ['profiles'], refetchType: 'all' });
       if (vars?.id) queryClient.invalidateQueries({ queryKey: ['profile', vars.id] });
+      useAuthStore.getState().refreshProfiles({ reason: 'profile-hard-deleted', force: true });
       setProfileToHardDelete(null);
       setHardDeleteConfirmText("");
       setHardDeleteReason("orphan_cleanup");
@@ -119,7 +121,8 @@ export default function MyProfiles() {
         title: "Profile restored",
         description: "The profile was restored and should now appear in the main list.",
       })
-      queryClient.invalidateQueries({ queryKey: ['profiles'] })
+      queryClient.invalidateQueries({ queryKey: ['profiles'], refetchType: 'all' });
+      useAuthStore.getState().refreshProfiles({ reason: 'profile-restored', force: true });
     },
     onError: (error) => {
       toast({

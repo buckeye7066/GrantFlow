@@ -1,6 +1,7 @@
 import React from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
+import { createPageUrl } from '@/utils'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
@@ -85,7 +86,7 @@ export default function VNextFinishPacket() {
           <p className="text-sm text-slate-600">Application: {data.application?.id}</p>
         </div>
         <div className="flex items-center gap-2">
-          <Link to={`/VNextApplication?id=${encodeURIComponent(id)}`}>
+          <Link to={createPageUrl("VNextApplication", { id })}>
             <Button variant="outline">
               <ArrowLeft className="w-4 h-4 mr-2" />
               Back

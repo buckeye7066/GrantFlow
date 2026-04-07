@@ -380,7 +380,8 @@ const latestDuration = describeDuration(latestEnrichmentJob)
       (status === "completed" || status === "failed" || status === "cancelled")
     ) {
       queryClient.invalidateQueries({ queryKey: ['documents', selectedProfileId] })
-      queryClient.invalidateQueries({ queryKey: ['profiles'] })
+      queryClient.invalidateQueries({ queryKey: ['profiles'], refetchType: 'all' })
+      useAuthStore.getState().refreshProfiles({ reason: 'enrichment-complete', force: true })
     }
 
     previousStatusRef.current = status

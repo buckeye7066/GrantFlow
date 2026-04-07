@@ -4,6 +4,7 @@
  * Persists to backend; Skip still requires profile selection before search.
  */
 import React, { useState } from 'react'
+import { useAuthStore } from '@/stores/authStore'
 import {
   Dialog,
   DialogContent,
@@ -175,8 +176,9 @@ try {
         }),
       })
 
-      queryClient.invalidateQueries({ queryKey: ['profiles'] })
+      queryClient.invalidateQueries({ queryKey: ['profiles'], refetchType: 'all' })
       queryClient.invalidateQueries({ queryKey: ['profile', profileId] })
+      useAuthStore.getState().refreshProfiles({ reason: 'onboarding-complete', force: true })
       queryClient.invalidateQueries({ queryKey: ['userPreferences'] })
       queryClient.invalidateQueries({ queryKey: ['preferences'] })
 

@@ -43,7 +43,7 @@ export default function ProfileSelect({
   const { data: rawProfiles, isLoading } = useQuery({
     queryKey: ['profiles'],
     queryFn: () => apiFetch('/api/profiles'),
-    staleTime: 60_000, // 1 minute
+    staleTime: 5_000, // 5 seconds — profiles change often
   })
 
   // Normalise envelope: API may return [] directly or { data: [] } or { profiles: [] }

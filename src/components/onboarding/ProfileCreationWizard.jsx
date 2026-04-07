@@ -1,5 +1,6 @@
 import React, { useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { useAuthStore } from '@/stores/authStore'
 import {
   Dialog,
   DialogContent,
@@ -76,7 +77,8 @@ export default function ProfileCreationWizard({ open, onComplete, onSkip }) {
       return profile
     },
     onSuccess: (data) => {
-      queryClient.invalidateQueries({ queryKey: ['profiles'] })
+      queryClient.invalidateQueries({ queryKey: ['profiles'], refetchType: 'all' })
+      useAuthStore.getState().refreshProfiles({ reason: 'profile-created-wizard', force: true })
       toast({
         title: 'Profile Created',
         description: 'Your profile has been created successfully!',

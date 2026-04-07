@@ -584,8 +584,9 @@ export default function DiscoverGrants() {
       
       // If a new org was created, refresh profile data
       if (newGrant.organization_id && newGrant.organization_id !== orgId) {
-        queryClient.invalidateQueries({ queryKey: ['profiles'] });
+        queryClient.invalidateQueries({ queryKey: ['profiles'], refetchType: 'all' });
         queryClient.invalidateQueries({ queryKey: ['organizations'] });
+        useAuthStore.getState().refreshProfiles({ reason: 'new-org-from-grant', force: true });
       }
       
       if (!silent) {
@@ -1034,7 +1035,7 @@ export default function DiscoverGrants() {
                       <li className="flex items-start gap-2 text-sm text-amber-800">
                         <span className="mt-0.5 text-amber-500">&#x25CB;</span>
                         <Link
-                          to={`/ProfileDetail?id=${selectedProfile.id}&section=basic_information`}
+                          to={createPageUrl("ProfileDetail", { id: selectedProfile.id, section: "basic_information" })}
                           className="underline hover:text-amber-900 font-medium"
                         >
                           Add your location (state or ZIP code)
@@ -1046,7 +1047,7 @@ export default function DiscoverGrants() {
                       <li className="flex items-start gap-2 text-sm text-amber-800">
                         <span className="mt-0.5 text-amber-500">&#x25CB;</span>
                         <Link
-                          to={`/ProfileDetail?id=${selectedProfile.id}&section=basic_information`}
+                          to={createPageUrl("ProfileDetail", { id: selectedProfile.id, section: "basic_information" })}
                           className="underline hover:text-amber-900 font-medium"
                         >
                           Set your profile type
@@ -1058,7 +1059,7 @@ export default function DiscoverGrants() {
                       <li className="flex items-start gap-2 text-sm text-amber-800">
                         <span className="mt-0.5 text-amber-500">&#x25CB;</span>
                         <Link
-                          to={`/ProfileDetail?id=${selectedProfile.id}&section=financial_information`}
+                          to={createPageUrl("ProfileDetail", { id: selectedProfile.id, section: "financial_information" })}
                           className="underline hover:text-amber-900 font-medium"
                         >
                           Add interests or focus areas

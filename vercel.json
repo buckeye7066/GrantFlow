@@ -1,25 +1,25 @@
 {
   "trailingSlash": false,
-  "redirects": [
-    {
-      "source": "/grantflow/:path*",
-      "destination": "/:path*",
-      "permanent": true
-    },
-    {
-      "source": "/grantlfow/:path*",
-      "destination": "/:path*",
-      "permanent": true
-    }
-  ],
   "rewrites": [
+    {
+      "source": "/grantflow/api/:path*",
+      "destination": "https://grantflow-production.up.railway.app/api/:path*"
+    },
     {
       "source": "/api/:path*",
       "destination": "https://grantflow-production.up.railway.app/api/:path*"
     },
     {
+      "source": "/grantflow/uploads/:path*",
+      "destination": "https://grantflow-production.up.railway.app/uploads/:path*"
+    },
+    {
       "source": "/uploads/:path*",
       "destination": "https://grantflow-production.up.railway.app/uploads/:path*"
+    },
+    {
+      "source": "/grantflow/:path*",
+      "destination": "/index.html"
     },
     {
       "source": "/:path*",

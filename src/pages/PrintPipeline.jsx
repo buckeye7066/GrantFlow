@@ -6,7 +6,7 @@ import client from '@/api/client';
 import PrintablePipeline from '@/components/pipeline/PrintablePipeline';
 import { Loader2, AlertTriangle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { createPageUrl, createFullPageUrl } from '@/utils';
+import { createPageUrl, createAbsolutePageUrl } from '@/utils';
 
 // Helper components for different states as per the prompt
 const PageLoading = ({ label = 'Loading…' }) => (
@@ -70,7 +70,7 @@ export default function PrintPipelinePage() {
         if (window.history.length > 1) {
           window.history.back();
         } else {
-          window.location.href = createFullPageUrl('Organizations');
+          window.location.href = createAbsolutePageUrl('Organizations');
         }
     };
 
