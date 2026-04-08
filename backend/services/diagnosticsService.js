@@ -134,9 +134,16 @@ async function getTableCount(db, tableName) {
     if (!allowedTables.includes(tableName)) {
       return 0;
     }
-    
-    const result = await db.prepare(`SELECT COUNT(*) as count FROM \`${tableName}\``).get();
-    return Number(result?.count || 0);
+
+    // Postgres does not accept MySQL-style backticks; bare identifiers are safe here because
+    // tableName is whitelisted above.
+    const countSql =
+      db?.dialect === 'postgres'
+        ? `SELECT COUNT(*)::bigint AS count FROM ${tableName}`
+        : `SELECT COUNT(*) AS count FROM ${tableName}`;
+    const result = await db.prepare(countSql).get();
+    const raw = result?.count ?? result?.COUNT;
+    return Number(raw ?? 0);
   } catch (error) {
     return 0;
   }
