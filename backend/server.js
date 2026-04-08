@@ -650,6 +650,19 @@ if (db.dialect === 'sqlite') {
   });
 } else {
   console.info('[database] Skipping legacy column auto-migrations (dialect != sqlite)');
+  // Idempotent self-heal: list/delete routes filter on organizations.deleted_at (migration 0047).
+  // Background migrate in start.js may still be running; avoid transient 500s on /api/organizations.
+  try {
+    await db.exec('ALTER TABLE organizations ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ')
+    await db.exec(
+      'CREATE INDEX IF NOT EXISTS idx_organizations_deleted_at ON organizations(deleted_at)',
+    )
+  } catch (e) {
+    console.warn(
+      '[database] organizations.deleted_at startup ensure failed (run npm run migrate):',
+      e?.message || e,
+    )
+  }
 }
 
 // Production hardening (SQLite): if the DB was created before profiles existed (or after an ephemeral reset),
