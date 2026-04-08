@@ -65,6 +65,12 @@ function formatSourceLabel(source) {
   return SOURCE_LABELS[key] || source.replace(/_/g, ' ');
 }
 
+function truncateLabel(s, max = 52) {
+  const t = typeof s === 'string' ? s.trim() : ''
+  if (!t) return ''
+  return t.length <= max ? t : `${t.slice(0, max - 1)}…`
+}
+
 function getOpportunityKey(opp, idx) {
   const raw =
     opp?.id ??
@@ -170,6 +176,7 @@ export default function SearchResults({ results = [], profileId, onAddToPipeline
   const { toast } = useToast();
   const { savedIds, toggleGrant, isSaved } = useSavedGrantsStore();
 
+  /** Distinct crawler / catalog pipeline keys (often one per run, e.g. "national" or a directory name). */
   const uniqueSources = React.useMemo(() => {
     if (!results || results.length === 0) return [];
     const set = new Set();
@@ -179,6 +186,24 @@ export default function SearchResults({ results = [], profileId, onAddToPipeline
     });
     return Array.from(set);
   }, [results]);
+
+  /** Distinct funders / program owners — better reflects "how many different programs" users expect. */
+  const distinctFunders = React.useMemo(() => {
+    if (!results || results.length === 0) return [];
+    const set = new Set();
+    results.forEach((opp) => {
+      const sp = (opp.sponsor || opp.funder || '').trim();
+      if (sp) set.add(sp);
+    });
+    return Array.from(set);
+  }, [results]);
+
+  /** Badges: show per-funder labels when one pipeline returned many programs; otherwise pipeline keys. */
+  const summaryBadges = React.useMemo(() => {
+    if (!results?.length) return [];
+    if (uniqueSources.length === 1 && distinctFunders.length > 1) return distinctFunders;
+    return uniqueSources;
+  }, [results?.length, uniqueSources, distinctFunders]);
 
   const handleToggleSelection = (opportunityKey) => {
     setSelectedOpportunities(prev => {
@@ -288,20 +313,40 @@ export default function SearchResults({ results = [], profileId, onAddToPipeline
 
   return (
     <div data-component="SearchResults" data-results-count={results.length} data-selected-count={selectedOpportunities.size}>
-      {/* Multiple funding sources summary */}
+      {/* Search pipeline vs program diversity: `source` is often identical per run; sponsors differ per card. */}
       {uniqueSources.length > 0 && (
-        <div className="mb-4 flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
-          <Database className="w-4 h-4 shrink-0" />
-          <span>
-            From {uniqueSources.length} funding source{uniqueSources.length !== 1 ? 's' : ''}:
-          </span>
-          {uniqueSources.slice(0, 8).map((src) => (
-            <Badge key={src} variant="secondary" className="font-normal">
-              {formatSourceLabel(src)}
-            </Badge>
-          ))}
-          {uniqueSources.length > 8 && (
-            <Badge variant="outline">+{uniqueSources.length - 8} more</Badge>
+        <div className="mb-4 flex flex-col gap-1.5 text-sm text-muted-foreground">
+          <div className="flex flex-wrap items-center gap-2">
+            <Database className="w-4 h-4 shrink-0" />
+            <span>
+              {uniqueSources.length === 1 && distinctFunders.length > 1
+                ? `1 search pipeline · ${distinctFunders.length} different funders or programs in these results`
+                : `From ${uniqueSources.length} search pipeline${uniqueSources.length !== 1 ? 's' : ''}`}
+              {uniqueSources.length > 1 && distinctFunders.length > 0
+                ? ` · ${distinctFunders.length} distinct funder${distinctFunders.length !== 1 ? 's' : ''}`
+                : null}
+              :
+            </span>
+            {summaryBadges.slice(0, 8).map((src, idx) => (
+              <Badge
+                key={`${idx}-${String(src).slice(0, 48)}`}
+                variant="secondary"
+                className="font-normal max-w-[min(100%,24rem)] truncate"
+              >
+                {uniqueSources.length === 1 && distinctFunders.length > 1
+                  ? truncateLabel(src, 56)
+                  : formatSourceLabel(src)}
+              </Badge>
+            ))}
+            {summaryBadges.length > 8 && (
+              <Badge variant="outline">+{summaryBadges.length - 8} more</Badge>
+            )}
+          </div>
+          {uniqueSources.length === 1 && results.length > 1 && (
+            <p className="text-xs text-slate-500 pl-6 max-w-3xl">
+              The number above is the data pipeline (how results were gathered). Each card is still a separate opportunity
+              {distinctFunders.length > 1 ? ', often from different funders or portals.' : '.'}
+            </p>
           )}
         </div>
       )}
