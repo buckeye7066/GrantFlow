@@ -223,7 +223,7 @@ export const useAuthStore = create((set, get) => ({
       const url = isAdmin ? '/api/profiles?limit=1000' : '/api/profiles'
       const data = await apiFetch(url)
           // Defence-in-depth: strip deleted profiles so stale cache entries are never visible.
-              const profiles = (Array.isArray(data) ? data : []).filter((p) => p?.status !==
+              const profiles = (Array.isArray(data) ? data : []).filter((p) => p?.status !== 'deleted')
 
       set({ profiles })
 
