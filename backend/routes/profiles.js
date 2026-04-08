@@ -92,8 +92,12 @@ router.param('id', async (req, res, next, id) => {
     // As a last resort, verify ownership by userId (covers cases where access sets are empty/unavailable).
     if (req.ctx?.userId) {
       const row = await req.db
-        .prepare('SELECT user_id, created_by FROM profiles WHERE id = ?')
+        .prepare('SELECT user_id, created_by, status FROM profiles WHERE id = ?')
         .get(String(id))
+        // Soft-deleted profiles must appear as non-existent across all sub-routes.
+              if (row?.status === 'deleted') {
+                      return res.status(404).json({ error: 'Profile not found' })
+                            }
       if (row?.user_id && String(row.user_id) === String(req.ctx.userId)) return next()
       if (row?.created_by && String(row.created_by) === String(req.ctx.userId)) return next()
     }

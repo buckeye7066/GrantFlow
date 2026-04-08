@@ -289,6 +289,20 @@ export async function getAccessibleProfileIds(db, user) {
     ids.add(tokenProfileId)
   }
 
+  // Strip soft-deleted profiles so they never appear in the accessible set.
+  if (ids.size > 0) {
+    try {
+      const placeholders = [...ids].map(() => '?').join(', ')
+      const deletedRows = await db
+        .prepare(`SELECT id FROM profiles WHERE id IN (${placeholders}) AND status = 'deleted'`)
+        .all(...ids)
+      for (const r of deletedRows) {
+        if (r?.id) ids.delete(r.id)
+      }
+    } catch {
+      // Schema may lack status column in older deployments; keep set unchanged.
+    }
+  }
   return ids
 }
 
