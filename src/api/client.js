@@ -171,7 +171,12 @@ class APIClient {
     if (!refreshToken) {
       console.warn('[APIClient] No refresh token available, clearing auth state');
       this.clearToken();
-      // Don't redirect automatically - let the app handle it
+      // Notify auth store so it clears isAuthenticated and redirects to login.
+      // Without this, the Zustand store still shows the user as authenticated
+      // while the actual tokens are gone, causing 'Authentication required' errors.
+      if (this.onAuthFailure && !this._suppressAuthFailureCount) {
+        this.onAuthFailure('Your session has expired. Please sign in again.');
+      }
       throw this.createAuthError('Authentication required');
     }
     
