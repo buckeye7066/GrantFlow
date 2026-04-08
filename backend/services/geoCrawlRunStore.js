@@ -353,6 +353,124 @@ export async function getGeoCrawlRun(db, runId) {
   return row ?? null
 }
 
+/**
+ * Locate the comprehensive crawler job that owns this geo_run_id (parameters JSON).
+ */
+export async function findCrawlerJobByGeoRunId(db, geoRunId) {
+  if (!geoRunId) return null
+  const id = String(geoRunId).trim()
+  if (!id) return null
+
+  if (db?.dialect === 'postgres') {
+    try {
+      const row = await db
+        .prepare(
+          `
+            SELECT id, type, status, parameters, created_at, started_at, completed_at, result_count, error
+            FROM crawler_jobs
+            WHERE type = 'comprehensive'
+              AND parameters::jsonb->>'geo_run_id' = $1
+            ORDER BY created_at DESC
+            LIMIT 1
+          `,
+        )
+        .get(id)
+      if (row) return row
+    } catch (e) {
+      console.warn('[geoCrawlRunStore] Postgres jsonb geo_run_id lookup failed:', e?.message || e)
+    }
+    const likePat = `%"geo_run_id":"${id}"%`
+    try {
+      return await db
+        .prepare(
+          `
+            SELECT id, type, status, parameters, created_at, started_at, completed_at, result_count, error
+            FROM crawler_jobs
+            WHERE type = 'comprehensive'
+              AND parameters LIKE $1
+            ORDER BY created_at DESC
+            LIMIT 1
+          `,
+        )
+        .get(likePat)
+    } catch (e2) {
+      console.warn('[geoCrawlRunStore] LIKE fallback for geo_run_id failed:', e2?.message || e2)
+      return null
+    }
+  }
+
+  try {
+    return await db
+      .prepare(
+        `
+          SELECT id, type, status, parameters, created_at, started_at, completed_at, result_count, error
+          FROM crawler_jobs
+          WHERE type = 'comprehensive'
+            AND json_extract(parameters, '$.geo_run_id') = ?
+          ORDER BY created_at DESC
+          LIMIT 1
+        `,
+      )
+      .get(id)
+  } catch (e) {
+    console.warn('[geoCrawlRunStore] SQLite geo_run_id lookup failed:', e?.message || e)
+    return null
+  }
+}
+
+async function syncGeoRunRowFromJob(db, runId, job) {
+  const st = String(job?.status || '').toLowerCase()
+  if (st === 'complete' || st === 'completed') {
+    await completeGeoCrawlRun(db, runId, { status: 'complete' })
+  } else if (st === 'failed') {
+    await completeGeoCrawlRun(db, runId, { status: 'failed', error: job.error ?? null })
+  } else if (st === 'running') {
+    await markGeoCrawlRunRunning(db, runId)
+  }
+}
+
+/**
+ * If geo_crawl_runs row is missing but a crawler job references this geo_run_id, insert the row
+ * and align status with the job. Fixes Admin monitor 404 when createGeoCrawlRun failed silently.
+ */
+export async function backfillGeoCrawlRunFromJob(db, runId, job) {
+  if (!runId || !job?.id) return false
+  await ensureGeoCrawlSchema(db)
+
+  let params = {}
+  try {
+    params = JSON.parse(job.parameters || '{}')
+  } catch {
+    params = {}
+  }
+  const state = params.run_all_states ? null : (params.state ? String(params.state).toUpperCase() : null)
+
+  const isPg = db?.dialect === 'postgres'
+  const insertSql = isPg
+    ? `
+        INSERT INTO geo_crawl_runs (id, created_at, created_by_user_id, status, state, crawler_job_id, last_heartbeat_at)
+        VALUES ($1, CURRENT_TIMESTAMP, NULL, 'queued', $2, $3, CURRENT_TIMESTAMP)
+        ON CONFLICT (id) DO NOTHING
+      `
+    : `
+        INSERT OR IGNORE INTO geo_crawl_runs (id, created_at, created_by_user_id, status, state, crawler_job_id, last_heartbeat_at)
+        VALUES (?, datetime('now'), NULL, 'queued', ?, ?, datetime('now'))
+      `
+
+  await db.prepare(insertSql).run(runId, state, job.id)
+  await syncGeoRunRowFromJob(db, runId, job)
+  return true
+}
+
+export async function getGeoCrawlRunWithBackfill(db, runId) {
+  let row = await getGeoCrawlRun(db, runId)
+  if (row) return row
+  const job = await findCrawlerJobByGeoRunId(db, runId)
+  if (!job) return null
+  await backfillGeoCrawlRunFromJob(db, runId, job)
+  return getGeoCrawlRun(db, runId)
+}
+
 export async function listGeoCrawlEvents(db, runId, { afterId = 0, limit = 200 } = {}) {
   if (!runId) return []
   await ensureGeoCrawlSchema(db)

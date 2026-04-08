@@ -1,7 +1,7 @@
 import express from 'express'
 import crypto from 'crypto'
 import { requireAuthenticatedUser, isAdminUserWithDb, getAuthUserId } from '../utils/accessControl.js'
-import { createGeoCrawlRun, getGeoCrawlRun, listGeoCrawlEvents } from '../services/geoCrawlRunStore.js'
+import { createGeoCrawlRun, getGeoCrawlRunWithBackfill, listGeoCrawlEvents } from '../services/geoCrawlRunStore.js'
 import { dispatchCrawlerJob } from '../services/crawlerDispatcher.js'
 
 export default function createGeoCrawlRouter({ uploadDir, getOpenAI } = {}) {
@@ -108,7 +108,7 @@ export default function createGeoCrawlRouter({ uploadDir, getOpenAI } = {}) {
       const runId = String(req.params.runId || '').trim()
       if (!runId) return res.status(400).json({ error: 'runId is required' })
 
-      const run = await getGeoCrawlRun(req.db, runId)
+      const run = await getGeoCrawlRunWithBackfill(req.db, runId)
       if (!run) return res.status(404).json({ error: 'Geo crawl run not found' })
 
       res.json({ ok: true, run })
@@ -128,6 +128,9 @@ export default function createGeoCrawlRouter({ uploadDir, getOpenAI } = {}) {
 
       const afterId = Number(req.query?.after_id ?? req.query?.afterId ?? 0) || 0
       const limit = Math.min(Number(req.query?.limit ?? 200) || 200, 1000)
+
+      // Same backfill as GET /runs so parallel monitor requests still see a consistent run row.
+      await getGeoCrawlRunWithBackfill(req.db, runId)
 
       const events = await listGeoCrawlEvents(req.db, runId, { afterId, limit })
       const lastEventId = events.length ? events[events.length - 1].id : Number(afterId || 0)

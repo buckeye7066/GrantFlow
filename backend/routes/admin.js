@@ -31,7 +31,7 @@ import { ensureAuth, ensureAdmin } from '../middleware/auth.js'
 import { repairProfileOwnership } from '../utils/profileOwnershipRepair.js'
 import zipcodes from 'zipcodes';
 import { resolveCountyForZip } from '../services/geo/zipCountyResolver.js';
-import { createGeoCrawlRun } from '../services/geoCrawlRunStore.js'
+import { createGeoCrawlRun, backfillGeoCrawlRunFromJob } from '../services/geoCrawlRunStore.js'
 import { resolveUploadsDir, ensureUploadsDirWritable } from '../utils/uploadsDir.js'
 import { isDesignatedProfileId } from '../utils/ensureDesignatedProfiles.js'
 import { analyzeKnowledgeBaseDocument, processPendingKBDocuments, extractFundingOpportunitiesFromKB } from '../services/knowledgeBaseProcessor.js'
@@ -2372,10 +2372,11 @@ router.post('/geo/crawl/start', async (req, res) => {
       .run(jobId, JSON.stringify(parameters));
 
     const job = await req.db
-      .prepare('SELECT id, type, status, created_at, started_at, completed_at, result_count, error FROM crawler_jobs WHERE id = ?')
+      .prepare('SELECT id, type, status, created_at, started_at, completed_at, result_count, error, parameters FROM crawler_jobs WHERE id = ?')
       .get(jobId);
 
-    // Best-effort: create a durable run row for live monitoring (schema may lag on some deployments).
+    // Durable run row for GeoCrawl Monitor (/api/geo-crawl/runs/:id). If insert fails, backfill from job
+    // so the UI never gets a run_id without a DB row (avoids permanent 404 on the monitor).
     try {
       await createGeoCrawlRun(req.db, {
         id: geoRunId,
@@ -2383,8 +2384,13 @@ router.post('/geo/crawl/start', async (req, res) => {
         createdByUserId: req.ctx?.userId ?? null,
         crawlerJobId: jobId,
       })
-    } catch {
-      // ignore
+    } catch (err) {
+      console.error('[admin/geo/crawl/start] createGeoCrawlRun failed, backfilling from job:', err?.message || err)
+      try {
+        await backfillGeoCrawlRunFromJob(req.db, geoRunId, job)
+      } catch (e2) {
+        console.error('[admin/geo/crawl/start] backfillGeoCrawlRunFromJob also failed:', e2?.message || e2)
+      }
     }
 
     // Dispatch asynchronously (don't block response).
