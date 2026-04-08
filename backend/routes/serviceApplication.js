@@ -1,5 +1,4 @@
 import express from 'express'
-import { requireAuth } from '../middleware/auth.js'
 import crypto from 'crypto'
 import { sendServiceApplicationEmail } from '../services/email.js'
 import { isDesignatedProfileId } from '../utils/ensureDesignatedProfiles.js'
@@ -335,7 +334,7 @@ router.patch('/:id', async (req, res) => {
     const updates = []
     const params = []
 
-    const ALLOWED_STATUSES = ['new', 'reviewed', 'approved', 'rejected', 'archived']
+    const ALLOWED_STATUSES = ['new', 'reviewed', 'contacted', 'converted', 'approved', 'rejected', 'archived']
     if (status) {
       if (!ALLOWED_STATUSES.includes(status)) {
         return res.status(400).json({ success: false, message: `Invalid status value. Allowed: ${ALLOWED_STATUSES.join(', ')}` })

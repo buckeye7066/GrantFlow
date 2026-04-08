@@ -149,7 +149,7 @@ export function createAuthMeRouter({ db, adminName, adminEmail }) {
 
             // Ensure schema exists (idempotent). If it fails, fall back to user_id only.
             try {
-              ensureProfileEmailSchema(db)
+              await ensureProfileEmailSchema(db)
             } catch (schemaErr) {
               console.warn('[/api/auth/me] ensureProfileEmailSchema failed â falling back to user_id-only profile query', {
                 error: schemaErr?.message || String(schemaErr),

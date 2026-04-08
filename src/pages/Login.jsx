@@ -34,7 +34,7 @@ export default function Login() {
   // closeSessionExpired() → sets it false → re-render → repeat.
   useEffect(() => {
     closeSessionExpired()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+
   }, [])
 
   const redirectTarget = useMemo(() => {

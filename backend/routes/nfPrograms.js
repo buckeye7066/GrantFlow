@@ -1,10 +1,10 @@
 import express from 'express'
 
-import { authMiddleware } from '../middleware/auth.js';
+import { ensureAuth } from '../middleware/auth.js';
 
 const router = express.Router();
 
-router.use(authMiddleware);
+router.use(ensureAuth);
 
 function normalizeTrack(track) {
   if (!track) return null
