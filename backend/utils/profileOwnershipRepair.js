@@ -142,6 +142,33 @@ async function maybeAssignOwner(db, profileId, email, { apply }) {
 }
 
 /**
+ * After designated profile seeding: link profile_emails + user_id when config provides owner_email.
+ */
+export async function attachDesignatedProfileOwner(db, profileId, rawEmail) {
+  const email = normalizeEmail(rawEmail)
+  if (!email || !isValidEmail(email)) {
+    return { ok: false, reason: 'bad_email' }
+  }
+  if (isAdminEmail(email)) {
+    return { ok: false, reason: 'admin_email' }
+  }
+
+  await ensureProfileEmailSchema(db)
+  try {
+    await addProfileEmails(db, {
+      profileId: String(profileId),
+      emails: [email],
+      addedBy: 'designated-profile-owner',
+    })
+  } catch (e) {
+    console.warn('[attachDesignatedProfileOwner] addProfileEmails failed:', e?.message || e)
+  }
+
+  const assigned = await maybeAssignOwner(db, profileId, email, { apply: true })
+  return { ok: true, assigned }
+}
+
+/**
  * Repairs profile ownership + email access mappings to match product rules:
  * - Admin email (ADMIN_EMAIL) can enumerate ALL profiles via profile_emails.
  * - A profile’s basic_information.email is linked (profile_emails), and ownership is assigned when safe.

@@ -3,6 +3,7 @@ import fs from 'fs'
 import path from 'path'
 import { DESIGNATED_PROFILES } from '../config/designatedProfiles.js'
 import { safeParseJSON } from './safeJson.js'
+import { attachDesignatedProfileOwner } from './profileOwnershipRepair.js'
 
 export const DESIGNATED_PROFILE_IDS = new Set(
   (Array.isArray(DESIGNATED_PROFILES) ? DESIGNATED_PROFILES : [])
@@ -162,6 +163,17 @@ export async function ensureDesignatedProfiles(db) {
     db.withTransaction((tx) => {
       _seedProfilesSync(tx)
     })
+  }
+
+  for (const profile of DESIGNATED_PROFILES) {
+    const profileId = String(profile?.id || '').trim()
+    const ownerEmail = profile?.owner_email
+    if (!profileId || !ownerEmail) continue
+    try {
+      await attachDesignatedProfileOwner(db, profileId, ownerEmail)
+    } catch (e) {
+      console.warn('[ensureDesignatedProfiles] attachDesignatedProfileOwner failed', profileId, e?.message || e)
+    }
   }
 }
 

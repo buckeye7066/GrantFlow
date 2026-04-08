@@ -31,6 +31,10 @@ export const USER_PROFILE_MAPPINGS = {
   'pjandcrdasher@att.net': 'profile-paul-jason-dasher',
   // Liubov
   'anyawhite@rocketmail.com': 'profile-luibov-samoylenko',
+
+  // Melissa Justus + William — add owner primary_email here once confirmed (enables login → profile attachment):
+  // 'owner.email@example.com': 'profile-melissa-justus',
+  // 'william.owner@example.com': 'profile-william',
 }
 
 /**

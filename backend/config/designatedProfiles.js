@@ -1,7 +1,7 @@
 export const DESIGNATED_PROFILES = [
   // Required roster (release-hardening checklist):
   // John, Robert, Anastasia, Luibov, Focus Forward, Axiom Biolabs, Brian, Hollie,
-  // Olivia, Avanell, Angelika, Rachel, Josh, Jason, Kathy.
+  // Olivia, Avanell, Angelika, Rachel, Josh, Jason, Kathy, Melissa Justus, William.
   //
   // Demo/test fixture profile for onboarding + smoke checks:
   // John Doe should always exist so admins can validate flows quickly.
@@ -678,6 +678,40 @@ export const DESIGNATED_PROFILES = [
         email: 'joshua.dasher@gmail.com',
         phone: '',
         address: '',
+      },
+    },
+  },
+  {
+    id: 'profile-melissa-justus',
+    display_name: 'Melissa Justus',
+    primary_type: 'individual',
+    status: 'active',
+    tags: ['baseline', 'designated', 'individual'],
+    sections: {
+      basic_information: {
+        full_name: 'Melissa Justus',
+        email: '',
+        phone: '',
+        address: '',
+        notes:
+          'Designated roster profile. Add the owner login email here and in userProfileMappings.js (and optional owner_email on this entry) so the account attaches on deploy.',
+      },
+    },
+  },
+  {
+    id: 'profile-william',
+    display_name: 'William',
+    primary_type: 'individual',
+    status: 'active',
+    tags: ['baseline', 'designated', 'individual'],
+    sections: {
+      basic_information: {
+        full_name: 'William',
+        email: '',
+        phone: '',
+        address: '',
+        notes:
+          'Designated roster profile. Add the owner login email here and in userProfileMappings.js when known.',
       },
     },
   },

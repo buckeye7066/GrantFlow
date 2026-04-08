@@ -2443,6 +2443,59 @@ router.get('/db-stats', async (req, res) => {
 });
 
 /**
+ * GET /api/admin/profiles/search?q=melissa&limit=50
+ *
+ * Admin-only: find profiles by display_name or id substring (locate duplicates / legacy UUID rows).
+ */
+router.get('/profiles/search', async (req, res) => {
+  if (!(await ensureAdminRequest(req, res))) return
+
+  const q = String(req.query?.q || '').trim()
+  if (q.length < 2) {
+    return res.status(400).json({ ok: false, error: 'Query q must be at least 2 characters' })
+  }
+  const lim = Math.max(1, Math.min(Number(req.query?.limit) || 50, 200))
+  const esc = q.replace(/\\/g, '\\\\').replace(/%/g, '\\%').replace(/_/g, '\\_')
+  const like = `%${esc}%`
+
+  try {
+    let rows
+    if (req.db?.dialect === 'postgres') {
+      rows = await req.db
+        .prepare(
+          `
+            SELECT id, display_name, user_id, created_by, status, primary_type, updated_at
+            FROM profiles
+            WHERE (display_name ILIKE $1 ESCAPE '\\' OR id ILIKE $1 ESCAPE '\\')
+              AND (status IS NULL OR lower(status) <> 'deleted')
+            ORDER BY updated_at DESC NULLS LAST
+            LIMIT $2
+          `,
+        )
+        .all(like, lim)
+    } else {
+      rows = await req.db
+        .prepare(
+          `
+            SELECT id, display_name, user_id, created_by, status, primary_type, updated_at
+            FROM profiles
+            WHERE (display_name LIKE ? ESCAPE '\\' OR id LIKE ? ESCAPE '\\')
+              AND (status IS NULL OR lower(status) <> 'deleted')
+            ORDER BY updated_at DESC
+            LIMIT ?
+          `,
+        )
+        .all(like, like, lim)
+    }
+
+    res.json({ ok: true, q, limit: lim, count: rows?.length ?? 0, profiles: rows || [] })
+  } catch (error) {
+    console.error('[admin/profiles/search]', error)
+    res.status(500).json({ ok: false, error: error?.message || String(error) })
+  }
+})
+
+/**
  * GET /api/admin/profiles/integrity
  *
  * Admin-only: consolidated profile integrity report.
