@@ -108,7 +108,8 @@ CREATE TABLE IF NOT EXISTS organizations (
   funding_amount_needed TEXT,
   
   -- Misc
-  notes TEXT
+  notes TEXT,
+  deleted_at TIMESTAMPTZ
 );
 
 -- Funding Opportunities (master list of available grants)

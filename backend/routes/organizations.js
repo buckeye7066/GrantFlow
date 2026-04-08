@@ -24,6 +24,19 @@ const ALLOWED_ORGANIZATION_COLUMNS = new Set([
   'veteran', 'disabled', 'first_generation', 'snap_recipient', 'ssi_recipient', 'tanf_recipient'
 ]);
 
+/** GET / query ?sort=&order= — must be SQL identifiers only (whitelist). */
+const ORG_LIST_SORTABLE = new Set([
+  'name', 'created_at', 'updated_at', 'email', 'state', 'city', 'zip', 'applicant_type',
+])
+
+function resolveOrgListSort(query) {
+  const raw = String(query?.sort || 'created_at').trim()
+  const sortCol = ORG_LIST_SORTABLE.has(raw) ? raw : 'created_at'
+  const orderRaw = String(query?.order || 'desc').toLowerCase()
+  const orderDir = orderRaw === 'asc' ? 'ASC' : 'DESC'
+  return { sortCol, orderDir }
+}
+
 async function ensureProfileForOrganization(db, { organizationId, displayName, primaryType, userId, createdBy }) {
   const existing = await db
     .prepare(
@@ -105,7 +118,7 @@ async function ensureCanonicalSections(db, profileId, updatedBy = 'org-sync') {
   for (const sectionKey of canonicalSectionKeys) {
     try {
       const defaults = CANONICAL_SECTION_DEFAULTS[sectionKey] ?? {}
-      insert.run(profileId, sectionKey, JSON.stringify(defaults), updatedBy)
+      await insert.run(profileId, sectionKey, JSON.stringify(defaults), updatedBy)
     } catch (error) {
       console.error(`Failed to insert profile section ${sectionKey}:`, error)
       throw error
@@ -265,7 +278,7 @@ async function syncOrganizationToProfileSections(db, { organizationId, orgRow, p
   )
 
   try {
-    db
+    await db
       .prepare('UPDATE profiles SET updated_at = CURRENT_TIMESTAMP WHERE id = ?')
       .run(profileId)
   } catch (error) {
@@ -284,7 +297,8 @@ router.get('/', ensureAuth, async (req, res) => {
 
     const { search, state, type } = req.query;
     const { limit, offset } = validatePagination(req.query);
-    
+    const { sortCol, orderDir } = resolveOrgListSort(req.query)
+
     let query = 'SELECT * FROM organizations WHERE deleted_at IS NULL';
     const params = [];
 
@@ -292,7 +306,7 @@ router.get('/', ensureAuth, async (req, res) => {
     if (!isAdminUser(user)) {
       const orgIds = await getAccessibleOrganizationIds(req.db, user)
       if (!orgIds || orgIds.size === 0) {
-        console.info('[organizations] GET / â user %s has no accessible org IDs; returning empty list', user?.id ?? 'unknown')
+        console.info('[organizations] GET / - user %s has no accessible org IDs; returning empty list', user?.id ?? 'unknown')
         return res.json([])
       }
       const placeholders = Array.from(orgIds).map(() => '?').join(', ')
@@ -301,7 +315,8 @@ router.get('/', ensureAuth, async (req, res) => {
     }
     
     if (search) {
-      query += ' AND (name LIKE ? OR email LIKE ? OR city LIKE ?)';
+      const op = req.db?.dialect === 'postgres' ? 'ILIKE' : 'LIKE'
+      query += ` AND (name ${op} ? OR email ${op} ? OR city ${op} ?)`;
       const searchTerm = `%${search}%`;
       params.push(searchTerm, searchTerm, searchTerm);
     }
@@ -316,19 +331,20 @@ router.get('/', ensureAuth, async (req, res) => {
       params.push(type);
     }
     
-    query += ' ORDER BY created_at DESC LIMIT ? OFFSET ?';
+    query += ` ORDER BY ${sortCol} ${orderDir} LIMIT ? OFFSET ?`;
     params.push(limit, offset);
     
     let orgs;
     try {
-      orgs = req.db.prepare(query).all(...params);
+      orgs = await req.db.prepare(query).all(...params);
     } catch (error) {
       console.error('Database query failed:', error);
       throw error;
     }
     
     // Parse JSON fields safely
-    const parsed = orgs.map(org => ({
+    const rows = Array.isArray(orgs) ? orgs : []
+    const parsed = rows.map(org => ({
       ...org,
       keywords: safeParseJSON(org.keywords, []),
       focus_areas: safeParseJSON(org.focus_areas, []),
@@ -438,7 +454,7 @@ async function mergeProfileSectionsIntoOrg(db, orgId, base) {
 router.get('/:id', ensureAuth, async (req, res) => {
   try {
     if (!(await ensureOrganizationAccess(req, res, req.params.id))) return
-    const org = req.db.prepare('SELECT * FROM organizations WHERE id = ?').get(req.params.id);
+    const org = await req.db.prepare('SELECT * FROM organizations WHERE id = ?').get(req.params.id);
     
     if (!org) {
       return res.status(404).json({ error: 'Organization not found' });
@@ -554,13 +570,13 @@ router.put('/:id', ensureAuth, mutationRateLimiter, async (req, res) => {
     const setClause = Object.keys(sanitizedData).map(key => `${key} = ?`).join(', ');
     const values = [...Object.values(sanitizedData), req.params.id];
     
-    req.db.prepare(`
+    await req.db.prepare(`
       UPDATE organizations 
       SET ${setClause}, updated_at = CURRENT_TIMESTAMP 
       WHERE id = ?
     `).run(...values);
     
-    const org = req.db.prepare('SELECT * FROM organizations WHERE id = ?').get(req.params.id);
+    const org = await req.db.prepare('SELECT * FROM organizations WHERE id = ?').get(req.params.id);
 
     // Keep profile_sections (and matching/crawlers) in sync with comprehensive application data.
     let profileId = null
@@ -587,16 +603,16 @@ router.delete('/:id', ensureAuth, mutationRateLimiter, async (req, res) => {
   try {
     if (!(await ensureOrganizationAccess(req, res, req.params.id))) return
     // Check if organization exists
-    const org = req.db.prepare('SELECT id FROM organizations WHERE id = ?').get(req.params.id);
+    const org = await req.db.prepare('SELECT id FROM organizations WHERE id = ?').get(req.params.id);
     if (!org) {
       return res.status(404).json({ error: 'Organization not found' });
     }
     
     // Soft delete by setting deleted_at (schema-managed; do not attempt runtime ALTER in Postgres)
-    req.db.prepare('UPDATE organizations SET deleted_at = CURRENT_TIMESTAMP WHERE id = ?').run(req.params.id);
+    await req.db.prepare('UPDATE organizations SET deleted_at = CURRENT_TIMESTAMP WHERE id = ?').run(req.params.id);
 
     // Propagate soft-delete to linked profile so the matcher and Anya skip it
-    req.db
+    await req.db
       .prepare(`UPDATE profiles SET status = 'deleted', updated_at = CURRENT_TIMESTAMP WHERE organization_id = ?`)
       .run(req.params.id);
     
@@ -611,7 +627,7 @@ router.delete('/:id', ensureAuth, mutationRateLimiter, async (req, res) => {
 router.get('/:id/grants', ensureAuth, async (req, res) => {
   try {
     if (!(await ensureOrganizationAccess(req, res, req.params.id))) return
-    const grants = req.db.prepare(`
+    const grants = await req.db.prepare(`
       SELECT g.* FROM grants g
       JOIN organizations o ON o.id = g.organization_id
       WHERE g.organization_id = ?
@@ -630,7 +646,7 @@ router.get('/:id/grants', ensureAuth, async (req, res) => {
 router.get('/:id/documents', ensureAuth, async (req, res) => {
   try {
     if (!(await ensureOrganizationAccess(req, res, req.params.id))) return
-    const documents = req.db.prepare(`
+    const documents = await req.db.prepare(`
       SELECT d.* FROM documents d
       JOIN organizations o ON o.id = d.organization_id
       WHERE d.organization_id = ?
