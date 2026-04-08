@@ -109,21 +109,28 @@ export async function createCrawlerJob(db, options) {
 
   const createdAtIso = new Date().toISOString()
 
-  // Validate job type
+  // Validate job type — must match crawlerDispatcher HANDLERS and DB CHECK (postgres migrations).
   const VALID_TYPES = [
-    'local',
-    'scholarship',
-    'health_resources',
-    'comprehensive',
-    'national',
-    'item_search',
-    'item_gift_search',
     'avatar_lookup',
+    'comprehensive',
+    'curated_benefits',
     'document_ingest',
-    'pipeline_automation',
-    'profile_enrichment',
+    'ecf_benefits',
+    'government_funding',
+    'health_resources',
+    'item_gift_search',
+    'item_matching',
+    'item_search',
+    'local',
+    'local_funding',
+    'national',
     'national_zip_scan',
+    'pipeline_automation',
     'portal_check',
+    'profile_enrichment',
+    'scholarship',
+    'special_needs',
+    'student_grants',
   ]
 
   if (!VALID_TYPES.includes(type)) {

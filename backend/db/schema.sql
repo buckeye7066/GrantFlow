@@ -1006,6 +1006,7 @@ CREATE TABLE IF NOT EXISTS crawler_jobs (
   type TEXT NOT NULL CHECK(type IN (
     'local',
     'scholarship',
+    'curated_benefits',
     'health_resources',
     'comprehensive',
     'national',
@@ -1015,7 +1016,14 @@ CREATE TABLE IF NOT EXISTS crawler_jobs (
     'document_ingest',
     'pipeline_automation',
     'profile_enrichment',
-    'national_zip_scan'
+    'national_zip_scan',
+    'portal_check',
+    'government_funding',
+    'student_grants',
+    'ecf_benefits',
+    'special_needs',
+    'local_funding',
+    'item_matching'
   )),
   status TEXT NOT NULL DEFAULT 'queued' CHECK(status IN (
     'queued',
