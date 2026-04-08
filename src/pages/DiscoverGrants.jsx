@@ -20,6 +20,7 @@ import { createLogger } from '@/utils/logger'
 import { getProfileContextIncompleteHint } from '@/components/discovery/profileContextIncompleteUi'
 import { openAnyaPanel } from '@/lib/anyaPanel'
 import { buildZeroResultDescription } from '@/components/discovery/discoveryToasts'
+import { inferUsStateZipFromText } from '@/utils/inferLocationFromAddress'
 
 /**
  * Client-side relevance check mirroring the backend hard disqualification rules.
@@ -288,12 +289,22 @@ export default function DiscoverGrants() {
     const sections = sectionsMap(profileDetail)
     const basic = sections.basic_information || {}
     const locationFocus = sections.location_focus || {}
+    const addressBlob = [
+      basic.address,
+      basic.street_address,
+      basic.street,
+      selectedOrg?.address,
+    ]
+      .filter((x) => typeof x === 'string' && x.trim())
+      .join(' ')
+    const inferred = inferUsStateZipFromText(addressBlob)
     const missing = []
     const hasState =
       basic.state ||
       locationFocus.state ||
       profileForSearch?.state ||
-      selectedOrg?.state
+      selectedOrg?.state ||
+      inferred.state
     const hasZip =
       basic.zip ||
       basic.zip_code ||
@@ -301,7 +312,8 @@ export default function DiscoverGrants() {
       locationFocus.zip_code ||
       profileForSearch?.zip_code ||
       profileForSearch?.zip ||
-      profileForSearch?.postal_code
+      profileForSearch?.postal_code ||
+      inferred.zip
     if (!hasState && !hasZip) {
       missing.push('location (state or ZIP code)')
     }
@@ -318,6 +330,15 @@ export default function DiscoverGrants() {
     const sections = sectionsMap(profileDetail)
     const basic = sections.basic_information || {}
     const locationFocus = sections.location_focus || {}
+    const addressBlob = [
+      basic.address,
+      basic.street_address,
+      basic.street,
+      selectedOrg?.address,
+    ]
+      .filter((x) => typeof x === 'string' && x.trim())
+      .join(' ')
+    const inferred = inferUsStateZipFromText(addressBlob)
     const hasLocation =
       basic.state ||
       locationFocus.state ||
@@ -328,7 +349,9 @@ export default function DiscoverGrants() {
       locationFocus.zip ||
       locationFocus.zip_code ||
       profileForSearch?.zip_code ||
-      profileForSearch?.zip
+      profileForSearch?.zip ||
+      inferred.state ||
+      inferred.zip
     const hasEntityType = Boolean(selectedProfile.primary_type || profileForSearch?.primary_type)
     const interests = profileForSearch?.signals?.interests
     const tags = profileForSearch?.tags

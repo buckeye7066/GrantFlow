@@ -1,6 +1,7 @@
 import zipcodes from 'zipcodes'
 import { resolveCountyForZip } from './geo/zipCountyResolver.js'
 import crypto from 'crypto'
+import { inferUsStateZipFromText } from '../utils/inferLocationFromAddress.js'
 
 /**
  * Resolve the canonical applicant type from a profile object.
@@ -295,6 +296,17 @@ export async function buildProfileContext(db, profileId, options = {}) {
   }
 }
 
+function freeformAddressTextForInference(sections) {
+  const bi = sections?.basic_information ?? {}
+  const ca = sections?.comprehensive_application ?? {}
+  const parts = []
+  if (typeof bi.address === 'string' && bi.address.trim()) parts.push(bi.address.trim())
+  if (typeof bi.street_address === 'string' && bi.street_address.trim()) parts.push(bi.street_address.trim())
+  if (typeof bi.street === 'string' && bi.street.trim()) parts.push(bi.street.trim())
+  if (typeof ca.address === 'string' && ca.address.trim()) parts.push(ca.address.trim())
+  return parts.join(' ')
+}
+
 export function extractZipFromContext({ profile, sections, jobParameters = {} }) {
   const addr = sections?.basic_information?.address
   const compAddr = sections?.comprehensive_application?.address
@@ -331,7 +343,9 @@ export function extractZipFromContext({ profile, sections, jobParameters = {} })
     (value) => typeof value === 'string' && /^\d{5}/.test(value.trim()),
   )
 
-  return zip ? zip.trim().slice(0, 5) : null
+  if (zip) return zip.trim().slice(0, 5)
+  const inferred = inferUsStateZipFromText(freeformAddressTextForInference(sections))
+  return inferred.zip || null
 }
 
 export function extractStateFromContext({ profile, sections, jobParameters = {} }) {
@@ -360,7 +374,9 @@ export function extractStateFromContext({ profile, sections, jobParameters = {} 
     )
     .find(Boolean)
 
-  return state ?? null
+  if (state) return state
+  const inferred = inferUsStateZipFromText(freeformAddressTextForInference(sections))
+  return inferred.state ?? null
 }
 
 export function extractStudentCampusZip({ sections, jobParameters = {} }) {

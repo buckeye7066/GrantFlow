@@ -1,0 +1,31 @@
+/**
+ * Heuristic extraction of US state + ZIP from a freeform address line when
+ * structured basic_information.state / .zip are empty (common when users paste
+ * "Street, City, ST 12345" into a single address field).
+ *
+ * @param {unknown} text
+ * @returns {{ state: string|null, zip: string|null }}
+ */
+export function inferUsStateZipFromText(text) {
+  if (text == null || typeof text !== 'string') return { state: null, zip: null }
+  const s = text.replace(/\s+/g, ' ').trim()
+  if (!s) return { state: null, zip: null }
+
+  // "... City, ST 12345" or "... ST 12345-6789"
+  let m = s.match(/,?\s*([A-Za-z]{2})\s+(\d{5})(?:-\d{4})?\s*$/i)
+  if (m) return { state: m[1].toUpperCase(), zip: m[2] }
+
+  // Any 5-digit ZIP (use last occurrence — usually the mailing ZIP)
+  const zips = s.match(/\b(\d{5})(?:-\d{4})?\b/g)
+  if (zips && zips.length > 0) {
+    const raw = zips[zips.length - 1]
+    const zip = raw.length >= 5 ? raw.slice(0, 5) : raw
+    const idx = s.lastIndexOf(raw)
+    const before = idx > 0 ? s.slice(0, idx) : s
+    const sm = before.match(/(?:^|[,\s])([A-Za-z]{2})\s*,?\s*$/i)
+    if (sm) return { state: sm[1].toUpperCase(), zip }
+    return { state: null, zip }
+  }
+
+  return { state: null, zip: null }
+}
