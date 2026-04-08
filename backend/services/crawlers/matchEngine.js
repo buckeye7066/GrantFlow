@@ -1,3 +1,5 @@
+import { toSignalSet } from '../profileSignals/index.js';
+
 /**
  * matchEngine.js
  *
@@ -18,11 +20,11 @@
 
 function detectProfileIntents(analysis) {
     const intents = new Set();
-    const occ = analysis.occupation || new Set();
-    const needs = analysis.needs || new Set();
-    const health = analysis.health || new Set();
-    const military = analysis.military || new Set();
-    const family = analysis.family || new Set();
+    const occ = toSignalSet(analysis.occupation);
+    const needs = toSignalSet(analysis.needs);
+    const health = toSignalSet(analysis.health);
+    const military = toSignalSet(analysis.military);
+    const family = toSignalSet(analysis.family);
 
   if (occ.has?.('small_business_owner') ||
             occ.has?.('minority_owned_business') ||
@@ -284,7 +286,7 @@ export function scoreProgram(program, analysis, strategyOpts = {}) {
 
   // ── Category match (most important — 40 points max) ──
   const programCats = new Set(program.categories || []);
-    const profileNeeds = analysis.needs;
+    const profileNeeds = toSignalSet(analysis.needs);
 
   let categoryHits = 0;
     for (const need of profileNeeds) {
