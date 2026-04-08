@@ -26,11 +26,11 @@ const MAX_ORPHAN_AUTO_RETRIES = parseInt(process.env.MAX_ORPHAN_AUTO_RETRIES || 
  * This prevents permanent per-profile locks.
  *
  * Defaults:
- * - stale threshold: 2h (2× the 30-min job timeout configured by CRAWLER_JOB_TIMEOUT_MS in crawlerDispatcher.js;
- *   a job running this long is certainly orphaned)
+ * - stale threshold: 8h (must exceed longest crawler wall time, e.g. comprehensive geo via
+ *   COMPREHENSIVE_GEO_JOB_TIMEOUT_MS in crawlerDispatcher.js; otherwise real jobs get reset mid-run)
  * - cleanup interval: 5 minutes (best-effort; throttled per process)
  */
-const STALE_RUNNING_MS = parseInt(process.env.CRAWLER_STALE_RUNNING_MS || String(2 * 60 * 60 * 1000), 10)
+const STALE_RUNNING_MS = parseInt(process.env.CRAWLER_STALE_RUNNING_MS || String(8 * 60 * 60 * 1000), 10)
 const STALE_CLEANUP_INTERVAL_MS = parseInt(process.env.CRAWLER_STALE_CLEANUP_INTERVAL_MS || String(5 * 60 * 1000), 10)
 let lastStaleCleanupAtMs = 0
 

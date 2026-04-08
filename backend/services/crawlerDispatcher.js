@@ -38,8 +38,37 @@ const JOB_TIMEOUT_MS = parseInt(process.env.CRAWLER_JOB_TIMEOUT_MS || String(30 
  */
 const PIPELINE_JOB_TIMEOUT_MS = parseInt(process.env.PIPELINE_JOB_TIMEOUT_MS || String(45 * 60 * 1000), 10)
 
-function getJobTimeoutMs(jobType) {
+/**
+ * Comprehensive crawler (ZIP/domain phases, DB matching) often exceeds 30m in production.
+ * Default 2h; override via COMPREHENSIVE_JOB_TIMEOUT_MS.
+ */
+const COMPREHENSIVE_JOB_TIMEOUT_MS = parseInt(
+  process.env.COMPREHENSIVE_JOB_TIMEOUT_MS || String(120 * 60 * 1000),
+  10,
+)
+
+/**
+ * Admin geo comprehensive jobs (profile_id NULL, parameters.mode === 'geo') iterate states/zips.
+ * Default 4h; override via COMPREHENSIVE_GEO_JOB_TIMEOUT_MS.
+ */
+const COMPREHENSIVE_GEO_JOB_TIMEOUT_MS = parseInt(
+  process.env.COMPREHENSIVE_GEO_JOB_TIMEOUT_MS || String(4 * 60 * 60 * 1000),
+  10,
+)
+
+/**
+ * @param {string} jobType
+ * @param {object} job - raw row (may have string parameters)
+ * @param {object} parameters - parsed job.parameters
+ */
+function getJobTimeoutMs(jobType, job, parameters) {
   if (jobType === 'pipeline_automation') return PIPELINE_JOB_TIMEOUT_MS
+  if (jobType === 'comprehensive') {
+    const params = parameters && typeof parameters === 'object' ? parameters : {}
+    const noProfile = !job?.profile_id
+    if (noProfile && params.mode === 'geo') return COMPREHENSIVE_GEO_JOB_TIMEOUT_MS
+    return COMPREHENSIVE_JOB_TIMEOUT_MS
+  }
   return JOB_TIMEOUT_MS
 }
 
@@ -520,9 +549,19 @@ export function dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }) {
         getOpenAI,
       }
 
+      const timeoutMs = getJobTimeoutMs(job.type, job, parameters)
+      if (job.type === 'comprehensive') {
+        console.info('[crawlerDispatcher] Comprehensive job timeout (ms)', {
+          jobId,
+          timeoutMs,
+          profile_id: job.profile_id ?? null,
+          mode: parameters?.mode ?? null,
+        })
+      }
+
       result = await withTimeout(
         handler(context),
-        getJobTimeoutMs(job.type),
+        timeoutMs,
         `Job ${jobId} (${job.type})`,
       )
 
