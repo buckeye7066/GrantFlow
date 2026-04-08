@@ -11,6 +11,26 @@
 import { loadProfileContext } from '../profileHelpers.js';
 
 /**
+ * Normalize Set-like profile signals after JSON snapshot round-trip or legacy shapes.
+ * Plain objects (e.g. { scholarship: true }) and arrays become a Set; null/undefined → empty Set.
+ */
+export function toSignalSet(value) {
+  if (value == null) return new Set();
+  if (value instanceof Set) return value;
+  if (Array.isArray(value)) {
+    return new Set(value.map((v) => String(v).trim()).filter(Boolean));
+  }
+  if (typeof value === 'object') {
+    return new Set(
+      Object.entries(value)
+        .filter(([, v]) => v !== false && v != null && v !== '' && v !== 0)
+        .map(([k]) => k),
+    );
+  }
+  return new Set();
+}
+
+/**
  * Detect high-level intents from analyzed signals.
  * Used by strategy registry to select/weight data sources.
  */
@@ -188,30 +208,30 @@ function toAnalysisShape(profileContext) {
     profileName: profileContext.profile?.display_name || profileContext.profile?.name || null,
     location: s.location || {},
     applicantType: s.applicantType || 'individual',
-    needs: s.needs || new Set(),
-    demographics: s.demographics || new Set(),
-    health: s.health || new Set(),
-    family: s.family || new Set(),
-    military: s.military || new Set(),
-    occupation: s.occupation || new Set(),
-    immigration: s.immigration || new Set(),
-    geographic: s.geographic || new Set(),
-    emergency: s.emergency || new Set(),
+    needs: toSignalSet(s.needs),
+    demographics: toSignalSet(s.demographics),
+    health: toSignalSet(s.health),
+    family: toSignalSet(s.family),
+    military: toSignalSet(s.military),
+    occupation: toSignalSet(s.occupation),
+    immigration: toSignalSet(s.immigration),
+    geographic: toSignalSet(s.geographic),
+    emergency: toSignalSet(s.emergency),
     income: s.financial || {},
     education: s.education || {},
-    interests: s.interests || new Set(),
-    sports: s.sports || new Set(),
+    interests: toSignalSet(s.interests),
+    sports: toSignalSet(s.sports),
     schools: s.schools || [],
     organization: s.organization || {},
     keywords: s.keywords || [],
-    keywordSet: s.keywordSet || new Set(),
-    phrases: s.phrases || new Set(),
-    intentPhrases: s.intentPhrases || new Set(),
-    applicantTypes: s.applicantTypes || new Set(),
-    assistance: s.assistance || new Set(),
-    genders: s.genders || new Set(),
+    keywordSet: toSignalSet(s.keywordSet),
+    phrases: toSignalSet(s.phrases),
+    intentPhrases: toSignalSet(s.intentPhrases),
+    applicantTypes: toSignalSet(s.applicantTypes),
+    assistance: toSignalSet(s.assistance),
+    genders: toSignalSet(s.genders),
     academics: s.academics || {},
-    proBonoTerms: s.proBonoTerms || new Set(),
+    proBonoTerms: toSignalSet(s.proBonoTerms),
     coverage: s.coverage || {},
     rawSections: s.rawSections || {},
   }
@@ -300,4 +320,4 @@ export function buildSignalsFromContext(profileContext) {
   return { signals, intents, assistancePrograms, rawInputs, profileContext }
 }
 
-export default { loadProfileSignals, buildSignalsFromContext };
+export default { loadProfileSignals, buildSignalsFromContext, toSignalSet };
