@@ -75,13 +75,14 @@ function saveChecklist(profileId, state) {
 
 // Default checklist items that every profile should consider
 const DEFAULT_CHECKLIST_ITEMS = [
-  { id: "profile_type", label: "Profile type is set" },
-  { id: "state_zip", label: "State / ZIP code added" },
-  { id: "primary_goal", label: "Primary goal or need category defined" },
-  { id: "demographics", label: "Demographics section completed" },
-  { id: "org_details", label: "Organization details filled in (if applicable)" },
-  { id: "budget_range", label: "Budget range or funding amount specified" },
-  { id: "documents", label: "Supporting documents uploaded" },
+  { id: "profile_type", label: "Profile type is set", description: "Tells the matcher whether you're an individual, business, nonprofit, church, etc. — different types unlock different funding pools." },
+  { id: "state_zip", label: "State / ZIP code added", description: "Many grants are location-specific. Without this, you'll miss state, county, and regional opportunities." },
+  { id: "primary_goal", label: "Primary goal or need category defined", description: "What you're trying to accomplish (e.g. start a food truck, repair a roof). This drives the entire needs inference engine." },
+  { id: "demographics", label: "Demographics section completed", description: "Details like veteran status, minority-owned, or disability unlock targeted funding that generic profiles miss." },
+  { id: "org_details", label: "Organization details filled in (if applicable)", description: "For orgs: EIN, founding year, staff count, and budget help match you to grants with specific eligibility thresholds." },
+  { id: "budget_range", label: "Budget range or funding amount specified", description: "Funders filter by award size. Specifying your budget range avoids matches that are too small or too large." },
+  { id: "documents", label: "Supporting documents uploaded", description: "Letters of support, 501(c)(3) determination, or financial statements strengthen your profile and improve proposal readiness." },
+  { id: "story_narrative", label: "Story or narrative section written", description: "Your story is parsed for keywords that trigger need detection — the more detail you provide, the better the matcher works." },
   ]
 
 export default function SmartMatcher() {
@@ -561,16 +562,20 @@ export default function SmartMatcher() {
                                       <p className="text-sm text-slate-500 italic">No inferred needs for this profile.</p>
                                   ) : (
                                       <>
-                                          {inferredNeeds.map((suggestion) => (
-                                              <div key={suggestion.name} className="flex items-center gap-3">
+                                          {inferredNeeds.map((suggestion) => {
+                                              const isNeedChecked = !!needsState.checked[suggestion.name]
+                                              const reason = Array.isArray(suggestion.reasons) ? suggestion.reasons[0] : null
+                                              return (
+                                              <div key={suggestion.name}>
+                                                <div className="flex items-center gap-3">
                                                   <Checkbox
                                                       id={`need-${suggestion.name}`}
-                                                      checked={!!needsState.checked[suggestion.name]}
+                                                      checked={isNeedChecked}
                                                       onCheckedChange={() => toggleNeed(suggestion.name)}
                                                   />
                                                   <label
                                                       htmlFor={`need-${suggestion.name}`}
-                                                      className={`flex-1 text-sm cursor-pointer select-none ${needsState.checked[suggestion.name] ? "line-through text-slate-400" : "text-slate-700"}`}
+                                                      className={`flex-1 text-sm cursor-pointer select-none ${isNeedChecked ? "line-through text-slate-400" : "text-slate-700"}`}
                                                   >
                                                       {suggestion.name}
                                                   </label>
@@ -579,8 +584,13 @@ export default function SmartMatcher() {
                                                           {suggestion.category.replace(/_/g, " ")}
                                                       </Badge>
                                                   )}
+                                                </div>
+                                                {reason && !isNeedChecked && (
+                                                  <p className="ml-10 mt-0.5 text-xs text-slate-500 leading-snug">{reason}</p>
+                                                )}
                                               </div>
-                                          ))}
+                                              )
+                                          })}
                                           {needsState.customItems.map((item) => (
                                               <div key={item.id} className="flex items-center gap-3 group">
                                                   <Checkbox
@@ -666,16 +676,18 @@ export default function SmartMatcher() {
                                 <CardContent className="space-y-3">
                                   {allChecklistItems.map((item) => {
                                       const isCustom = item.id.startsWith("custom_")
+                                      const isChecked = !!checklistState.checked[item.id]
                                                         return (
-                                                                            <div key={item.id} className="flex items-center gap-3 group">
+                                                                            <div key={item.id} className="group">
+                                                                              <div className="flex items-center gap-3">
                                                                                                 <Checkbox
                                                                                                                         id={`cl-${item.id}`}
-                                                                                                                        checked={!!checklistState.checked[item.id]}
+                                                                                                                        checked={isChecked}
                                                                                                                         onCheckedChange={() => toggleChecklistItem(item.id)}
                                                                                                                       />
                                                                                                 <label
                                                                                                                         htmlFor={`cl-${item.id}`}
-                                                                                                                        className={`flex-1 text-sm cursor-pointer select-none ${checklistState.checked[item.id] ? "line-through text-slate-400" : "text-slate-700"}`}
+                                                                                                                        className={`flex-1 text-sm cursor-pointer select-none ${isChecked ? "line-through text-slate-400" : "text-slate-700"}`}
                                                                                                                       >
                                                                                                   {item.label}
                                                                                                   </label>
@@ -689,6 +701,10 @@ export default function SmartMatcher() {
                                                                                                                             <X className="w-4 h-4" />
                                                                                                       </button>
                                                                                                 )}
+                                                                              </div>
+                                                                              {item.description && !isChecked && (
+                                                                                <p className="ml-10 mt-0.5 text-xs text-slate-500 leading-snug">{item.description}</p>
+                                                                              )}
                                                                             </div>
                                                                           )
                                   })}
