@@ -4,6 +4,7 @@ import { runAutonomousFunctionTests } from './anyaAutonomousFunctionTesting.js'
 import { repairFailingTests } from './anyaTestRepair.js'
 import { discoverNewCatalogItems } from './itemCatalogService.js'
 import { runPortalCheck } from './portalCheckService.js'
+import { scheduleAdminGeoCrawlOnLogin } from './adminGeoCrawlOnLogin.js'
 import { promises as fs } from 'fs'
 import path from 'path'
 import { AUDIT_CATEGORIES, SEVERITY, logAuditEvent } from './auditService.js'
@@ -31,10 +32,11 @@ const AUTONOMOUS_CONFIG = {
   // What operations to run
   operations: {
     codeCrawl: process.env.ANYA_CODE_CRAWL !== 'false',
-    functionTests: process.env.ANYA_FUNCTION_TESTS !== 'false', 
+    functionTests: process.env.ANYA_FUNCTION_TESTS !== 'false',
     crawlers: process.env.ANYA_CRAWLERS !== 'false',
     itemDiscovery: process.env.ANYA_ITEM_DISCOVERY !== 'false',
     portalChecks: process.env.ANYA_PORTAL_CHECKS !== 'false',
+    geoCrawl: process.env.ANYA_GEO_CRAWL !== 'false',
   },
   
   // Schedule (cron-like format)
@@ -303,7 +305,31 @@ const result = await runAutonomousCrawlers(crawlerParams, context)
         report.operations.portalChecks = { status: 'failed', error: error.message }
       }
     }
-    
+
+    // Phase 6: Geo crawl — progressively discover funding sources across all US ZIP codes.
+    // Each run resumes from the last checkpoint, so over successive daily runs all ~43k ZIPs
+    // get covered without any single run needing to process them all.
+    if (AUTONOMOUS_CONFIG.operations.geoCrawl && context.db) {
+      console.log('[Anya Scheduler] Phase 6: Scheduling resumable geo crawl...')
+      try {
+        const result = await scheduleAdminGeoCrawlOnLogin(
+          context.db,
+          { role: 'admin', is_admin: true, id: context.user?.id ?? 'anya_scheduler' },
+          {},
+        )
+        report.operations.geoCrawl = {
+          status: result.scheduled ? 'scheduled' : 'skipped',
+          reason: result.reason ?? null,
+          job_id: result.job_id ?? null,
+          run_id: result.run_id ?? null,
+        }
+        console.log(`[Anya Scheduler] Geo crawl: ${result.scheduled ? 'scheduled job=' + result.job_id : 'skipped (' + result.reason + ')'}`)
+      } catch (error) {
+        report.errors.push({ phase: 'geoCrawl', error: error.message })
+        report.operations.geoCrawl = { status: 'failed', error: error.message }
+      }
+    }
+
     report.completed_at = new Date().toISOString()
     report.status = report.errors.length > 0 ? 'completed_with_errors' : 'success'
     
