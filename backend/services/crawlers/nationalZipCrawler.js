@@ -21,8 +21,25 @@ import axios from 'axios'
 import crypto from 'crypto'
 import fs from 'fs'
 import path from 'path'
-import Database from 'better-sqlite3'
 import zipcodes from 'zipcodes'
+
+// Lazy-import better-sqlite3 only when actually needed (local script mode).
+// In production (Railway/Postgres), the app passes the shared db wrapper,
+// so better-sqlite3 is never required — and may not even be installable.
+let _Database = null
+async function getSQLiteDatabase() {
+  if (!_Database) {
+    try {
+      const mod = await import('better-sqlite3')
+      _Database = mod.default ?? mod
+    } catch {
+      throw new Error(
+        'better-sqlite3 is not available. Pass a db wrapper instead of a file path.',
+      )
+    }
+  }
+  return _Database
+}
 import {
   appendGeoCrawlEvent,
   completeGeoCrawlRun,
@@ -1394,7 +1411,7 @@ export async function runNationalZipCrawl(dbPath, options = {}) {
   // Prefer the shared DB wrapper when invoked from the app (Postgres-safe),
   // keep sqlite file-path mode for local/script usage.
   const ownsDb = typeof dbPath === 'string'
-  const db = ownsDb ? new Database(dbPath) : dbPath
+  const db = ownsDb ? new (await getSQLiteDatabase())(dbPath) : dbPath
 
   const zipList = await resolveZipList({
     zip_list: options.zip_list,
