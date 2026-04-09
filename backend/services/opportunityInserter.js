@@ -107,6 +107,7 @@ export async function upsertFundingOpportunity(db, opportunity) {
     opportunity.id ??
     stableSourceIdFromOpportunity(source, opportunity)
 
+  try {
   // Check if record exists and if it's verified
   const existing = await db
     .prepare(
@@ -506,6 +507,10 @@ export async function upsertFundingOpportunity(db, opportunity) {
   })
 
   return { id, inserted: true, skipped: false }
+  } catch (err) {
+    console.error(`[opportunityInserter] upsert failed for "${opportunity?.title || '(unknown)'}":`, err.message)
+    return { id: null, inserted: false, skipped: false, error: err.message }
+  }
 }
 
 /**

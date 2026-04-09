@@ -314,6 +314,9 @@ const result = await runAutonomousCrawlers(crawlerParams, context)
     console.log(`[Anya Scheduler] Trigger: ${trigger}`)
     console.log(`[Anya Scheduler] Status: ${report.status}`)
     console.log(`[Anya Scheduler] Errors: ${report.errors.length}`)
+    for (const err of report.errors) {
+      console.warn(`[Anya Scheduler]   → ${err.phase}: ${err.error}`)
+    }
     console.log('[Anya Scheduler] ========================================')
     
     return report
