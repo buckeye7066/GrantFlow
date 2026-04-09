@@ -170,7 +170,10 @@ export async function getOpportunityDetails(opportunityId) {
   try {
     // Use the Simpler Grants API v1 for individual opportunity detail lookups.
     // Falls back to the search-results-detail web page URL if the API returns no data.
-    const data = await rateLimitedFetch(`${SIMPLER_OPPORTUNITY_URL}/${opportunityId}`);
+    const simplerApiKey = process.env.SIMPLER_GRANTS_API_KEY || ''
+    const data = await rateLimitedFetch(`${SIMPLER_OPPORTUNITY_URL}/${opportunityId}`, {
+      ...(simplerApiKey ? { headers: { 'X-API-Key': simplerApiKey } } : {}),
+    });
 
     const opp = data;
 

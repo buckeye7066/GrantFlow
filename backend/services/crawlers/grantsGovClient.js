@@ -92,15 +92,16 @@ const url = id != null
 
 function normaliseSimplerHit(hit) {
   if (!hit) return null
+  const summary = hit.summary || {}
   const title = hit.opportunity_title ?? hit.title ?? null
   if (!title) return null
 
   const id = hit.opportunity_id ?? hit.id ?? null
   const number = hit.opportunity_number ?? hit.number ?? null
-  const agency = hit.agency_name ?? hit.agency ?? null
-  const closeDate = hit.close_date ?? hit.post_date ?? null
-  const openDate = hit.open_date ?? hit.post_date ?? null
-  const synopsis = hit.summary?.summary_description ?? hit.description ?? hit.synopsis ?? null
+  const agency = hit.agency_name ?? hit.top_level_agency_name ?? hit.agency ?? null
+  const closeDate = summary.close_date ?? hit.close_date ?? hit.post_date ?? null
+  const openDate = summary.post_date ?? hit.open_date ?? hit.post_date ?? null
+  const synopsis = summary.summary_description ?? hit.description ?? hit.synopsis ?? null
 
   const description = synopsis || [
     `Federal grant opportunity: ${title}.`,
@@ -232,16 +233,14 @@ async function querySimplerAPI(keyword, rows = MAX_ROWS_PER_QUERY) {
     pagination: {
       page_size: Math.min(rows, MAX_ROWS_PER_QUERY),
       page_offset: 1,
-      order_by: 'relevancy',
-      sort_direction: 'descending',
+      sort_order: [{ order_by: 'relevancy', sort_direction: 'descending' }],
     },
   }
 
   try {
     const headers = { 'Content-Type': 'application/json' }
     if (SIMPLER_API_KEY) {
-      headers['X-Auth'] = SIMPLER_API_KEY
-      headers['Authorization'] = `Bearer ${SIMPLER_API_KEY}`
+      headers['X-API-Key'] = SIMPLER_API_KEY
     }
 
     const response = await postWithRetry(

@@ -168,9 +168,9 @@ test('funding clients: normalize responses (no real network)', async () => {
         GRANTS_GOV_API_KEY: null,
       },
       async () => {
-        const simpler = await fetchSimpler({ query: 'health', pageOffset: 1, pageSize: 1 })
-        assert.equal(simpler[0].source, 'simpler.grants.gov')
-        assert.equal(simpler[0].source_id, 'simp-1')
+        const simplerResult = await fetchSimpler({ query: 'health', pageOffset: 1, pageSize: 1 })
+        assert.equal(simplerResult.opportunities[0].source, 'simpler.grants.gov')
+        assert.equal(simplerResult.opportunities[0].source_id, 'simp-1')
 
         const sam = await fetchSam({ keyword: 'research', limit: 1, offset: 0 })
         assert.equal(sam[0].source, 'sam.gov')

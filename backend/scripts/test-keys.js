@@ -74,8 +74,8 @@ async function main() {
   // Simpler.Grants.gov: requires key
   results.push(
     await runCheck('Simpler.Grants.gov (opportunity search)', async () => {
-      const rows = await fetchSimpler({ query: 'health', pageOffset: 1, pageSize: 1 })
-      if (!Array.isArray(rows)) throw new Error('Unexpected response shape (not an array)')
+      const result = await fetchSimpler({ query: 'health', pageOffset: 1, pageSize: 1 })
+      if (!Array.isArray(result?.opportunities)) throw new Error('Unexpected response shape (missing opportunities array)')
     }),
   )
 
