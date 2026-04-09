@@ -122,6 +122,14 @@ export const PIPELINE_ALLOWED_SOURCES = [
   'ecf_choices',
   'ecf_benefits',
   'state_waiver',
+
+  // Discovery crawler generic source tags (from mapResultToFrontendShape)
+  'federal',
+  'national',
+  'state',
+  'scholarship',
+  'school',
+  'curated_program',
 ];
 
 export const PIPELINE_ALLOWED_SOURCES_SET = new Set(PIPELINE_ALLOWED_SOURCES);
