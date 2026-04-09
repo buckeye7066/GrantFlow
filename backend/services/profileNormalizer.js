@@ -845,6 +845,57 @@ export function normalizeProfile(rawProfile, sections = null, signals = null) {
       if (ga.snap_recipient || ga.snap) enrolledPrograms.push('snap')
       if (ga.tanf_recipient || ga.tanf) enrolledPrograms.push('tanf')
       if (ga.section8_housing || ga.section_8) enrolledPrograms.push('section8')
+      // Medicaid waiver / ECF CHOICES signals
+      if (ga.medicaid_waiver_program && typeof ga.medicaid_waiver_program === 'string') {
+        enrolledPrograms.push('medicaid_waiver')
+        if (/ecf|choices/i.test(ga.medicaid_waiver_program)) enrolledPrograms.push('ecf_choices')
+      }
+      if (ga.ecf_choices_role && typeof ga.ecf_choices_role === 'string' && !enrolledPrograms.includes('ecf_choices')) {
+        enrolledPrograms.push('ecf_choices')
+      }
+    }
+  }
+
+  // -- Medicaid waiver / ECF --
+  let medicaidWaiverProgram = null
+  let ecfChoicesRole = null
+  if (govSection) {
+    const ga = govSection.answers ?? govSection
+    if (ga && typeof ga === 'object') {
+      medicaidWaiverProgram = ga.medicaid_waiver_program ?? null
+      ecfChoicesRole = ga.ecf_choices_role ?? null
+    }
+  }
+
+  // -- Citizenship signal --
+  let isCitizen = false
+  if (demographicsSection) {
+    const da = demographicsSection.answers ?? demographicsSection
+    if (da && typeof da === 'object') {
+      isCitizen =
+        Boolean(da.us_citizen) ||
+        /^us|united\s*states|american/i.test(String(da.citizenship ?? '')) ||
+        da.immigrant_status === 'us_citizen'
+    }
+  }
+
+  // -- Heritage signal --
+  let heritage = null
+  if (demographicsSection) {
+    const da = demographicsSection.answers ?? demographicsSection
+    if (da && typeof da === 'object') {
+      heritage = da.heritage ?? null
+    }
+  }
+
+  // -- Languages signal --
+  let languages = []
+  if (demographicsSection) {
+    const da = demographicsSection.answers ?? demographicsSection
+    if (da && typeof da === 'object' && da.languages) {
+      languages = typeof da.languages === 'string'
+        ? da.languages.split(/[,;\n]+/).map(s => s.trim()).filter(Boolean)
+        : Array.isArray(da.languages) ? da.languages : []
     }
   }
 
@@ -912,6 +963,11 @@ export function normalizeProfile(rawProfile, sections = null, signals = null) {
     householdHasChildren,
     householdSize,
     isRefugee,
+    isCitizen,
+    heritage,
+    languages,
+    medicaidWaiverProgram,
+    ecfChoicesRole,
     displayName: profile.display_name ?? profile.name ?? null,
   }
 
@@ -942,9 +998,12 @@ export function computeProfileFingerprint(normalizedProfile) {
     hasEmploymentNeed: normalizedProfile.hasEmploymentNeed,
     hasBusinessNeed: normalizedProfile.hasBusinessNeed,
     isRefugee: normalizedProfile.isRefugee,
+    isCitizen: normalizedProfile.isCitizen,
     householdHasChildren: normalizedProfile.householdHasChildren,
     ageGroup: normalizedProfile.ageGroup,
     enrolledPrograms: (normalizedProfile.enrolledPrograms ?? []).slice().sort(),
+    medicaidWaiverProgram: normalizedProfile.medicaidWaiverProgram,
+    ecfChoicesRole: normalizedProfile.ecfChoicesRole,
   }
   return createHash('sha256')
     .update(JSON.stringify(relevant))
