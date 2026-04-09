@@ -235,7 +235,7 @@ export async function initializeAnyaOnLogin(db, user, profileId = null, { upload
         ? ` focused on your needs (${String(profileContext.needs).split(',').slice(0, 3).join(', ')})`
         : ''
       const welcomeMessage = admin
-        ? `Welcome back! I've automatically started background tasks: Local, Scholarship, Comprehensive, Profile Enrichment, Government Funding, Special Needs & ECF/HCBS, and Student Grants. Ask me about crawler status anytime.`
+        ? `Welcome back! I've automatically started background tasks: Local, Scholarship, Comprehensive, Profile Enrichment, Government Funding, Special Needs & ECF/HCBS, and Student Grants. A nationwide geo ZIP discovery sweep (all states, paced state-by-state) also queues in the background when due — check Automation or ask me about geo crawl status.`
         : `Welcome! I'm searching for local opportunities${locationHint}${needsHint}, plus scholarships and nationwide matches. Results will be ready shortly.`
 
       addAnyaMessage(db, sessionId, 'assistant', welcomeMessage).catch(err =>

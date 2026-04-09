@@ -243,17 +243,25 @@ export async function runComprehensiveCrawler(contextOrDb, profileContextArg = {
 
       const jobId = contextOrDb?.job?.id ?? null
 
+      const skipDomainCorpus =
+        params.skip_domain_corpus === true ||
+        String(params.skip_domain_corpus || '').toLowerCase() === 'true'
+
       // Phase 0: Domain corpus build - run all domain crawlers from registry, persist directory resources.
-      // National Funding Aggregator: enriches catalog with 60+ domain types before ZIP discovery.
+      // Skipped when skip_domain_corpus=true (e.g. Anya admin-login geo sweep) to reduce load.
       let domainCorpusStats = null
-      try {
-        domainCorpusStats = await runDomainCorpusCrawl(db, {
-          skipVerification: params.skip_url_verification ?? false,
-          geoRunId: params.geo_run_id ?? params.geoRunId ?? null,
-        })
-        console.log('[comprehensiveCrawler] Domain corpus phase complete:', domainCorpusStats)
-      } catch (domainErr) {
-        console.warn('[comprehensiveCrawler] Domain corpus phase failed (continuing with ZIP crawl):', domainErr?.message || domainErr)
+      if (!skipDomainCorpus) {
+        try {
+          domainCorpusStats = await runDomainCorpusCrawl(db, {
+            skipVerification: params.skip_url_verification ?? false,
+            geoRunId: params.geo_run_id ?? params.geoRunId ?? null,
+          })
+          console.log('[comprehensiveCrawler] Domain corpus phase complete:', domainCorpusStats)
+        } catch (domainErr) {
+          console.warn('[comprehensiveCrawler] Domain corpus phase failed (continuing with ZIP crawl):', domainErr?.message || domainErr)
+        }
+      } else {
+        console.info('[comprehensiveCrawler] GEO mode: skipping domain corpus phase (skip_domain_corpus)')
       }
 
       const runOnce = async (stateArg) => {
@@ -289,7 +297,16 @@ export async function runComprehensiveCrawler(contextOrDb, profileContextArg = {
               'SD','TN','TX','UT','VT','VA','WA','WV','WI','WY','DC',
             ]
 
-        console.log('[comprehensiveCrawler] GEO mode starting: all states', { states: statesToRun.length, maxZips, batchSize })
+        const statePacingMs = Number(params.state_pacing_ms ?? params.statePacingMs ?? 0)
+        const pacing =
+          Number.isFinite(statePacingMs) && statePacingMs > 0 ? Math.min(statePacingMs, 120_000) : 0
+
+        console.log('[comprehensiveCrawler] GEO mode starting: all states', {
+          states: statesToRun.length,
+          maxZips,
+          batchSize,
+          state_pacing_ms: pacing || 0,
+        })
 
         let totalProcessed = 0
         let totalSources = 0
@@ -298,7 +315,11 @@ export async function runComprehensiveCrawler(contextOrDb, profileContextArg = {
         /** @type {Array<any>} */
         const perState = []
 
-        for (const st of statesToRun) {
+        for (let i = 0; i < statesToRun.length; i++) {
+          const st = statesToRun[i]
+          if (pacing > 0 && i > 0) {
+            await new Promise((resolve) => setTimeout(resolve, pacing))
+          }
           const r = await runOnce(st)
           totalProcessed += Number(r?.processed ?? 0)
           totalSources += Number(r?.sources ?? 0)

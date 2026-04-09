@@ -6,6 +6,7 @@ import twilio from 'twilio'
 import { fileURLToPath } from 'url'
 import { dirname, join } from 'path'
 import { initializeAnyaOnLogin } from '../services/anyaLoginTrigger.js'
+import { scheduleAdminGeoCrawlOnLogin } from '../services/adminGeoCrawlOnLogin.js'
 import { recordClientSignInEvent } from '../services/adminLoginEventStore.js'
 import { getOpenAIOptional } from '../utils/aiProviders.js'
 import { loadEnv, getJwtSecretOrThrow } from '../config/env.js'
@@ -1972,6 +1973,14 @@ router.post('/email/verify', async (req, res) => {
     console.error('[auth] Failed to initialize Anya:', error)
   }
 
+  if (user.is_admin || user.role === 'admin') {
+    scheduleAdminGeoCrawlOnLogin(req.db, user, {
+      uploadDir,
+      getOpenAI,
+      userId: user.id,
+    }).catch((err) => console.error('[auth/email] admin geo crawl scheduler:', err))
+  }
+
   // Auto-trigger discovery crawlers on email login (fire and forget)
   if (activeProfileId) {
     triggerAutoDiscoveryCrawlers(req.db, activeProfileId, { uploadDir, getOpenAI }).catch(err => {
@@ -2274,6 +2283,14 @@ router.post('/phone/verify', async (req, res) => {
     anyaInfo = await initializeAnyaOnLogin(req.db, user, activeProfileId, { uploadDir, getOpenAI })
   } catch (error) {
     console.error('[auth] Failed to initialize Anya:', error)
+  }
+
+  if (user.is_admin || user.role === 'admin') {
+    scheduleAdminGeoCrawlOnLogin(req.db, user, {
+      uploadDir,
+      getOpenAI,
+      userId: user.id,
+    }).catch((err) => console.error('[auth/phone] admin geo crawl scheduler:', err))
   }
 
   // Auto-trigger discovery crawlers on phone login (fire and forget)
@@ -2866,6 +2883,14 @@ router.post('/password/login', passwordRateLimiter, async (req, res) => {
       ipAddress: req.ip,
     })
 
+    if (user.is_admin || user.role === 'admin') {
+      scheduleAdminGeoCrawlOnLogin(req.db, user, {
+        uploadDir,
+        getOpenAI,
+        userId: user.id,
+      }).catch((err) => console.error('[auth/password/login] admin geo crawl scheduler:', err))
+    }
+
     return res.json({
       accessToken: session.accessToken,
       refreshToken: session.refreshToken,
@@ -2992,6 +3017,14 @@ router.get('/:provider/callback', async (req, res) => {
       userAgent: req.headers['user-agent'],
       ipAddress: req.ip,
     })
+
+    if (user.is_admin || user.role === 'admin') {
+      scheduleAdminGeoCrawlOnLogin(req.db, user, {
+        uploadDir,
+        getOpenAI,
+        userId: user.id,
+      }).catch((err) => console.error(`[auth/oauth/${provider}] admin geo crawl scheduler:`, err))
+    }
 
     // Admin notice on successful sign-in (OAuth)
     sendAuthAttemptNotification({
