@@ -331,7 +331,8 @@ export function scoreProgram(program, analysis, strategyOpts = {}) {
     maxPossible += 40;
 
   // ── Intent alignment (up to 25 points) ──
-  maxPossible += 25;
+  // Only count toward maxPossible when the program defines intentMatch —
+  // otherwise the denominator inflates and suppresses scores for general programs.
     let intentBonus = computeIntentBonus(program, intents);
 
     // Apply strategy-level intentBoost when the program matches a boosted intent
@@ -342,15 +343,17 @@ export function scoreProgram(program, analysis, strategyOpts = {}) {
       }
     }
 
-    if (intentBonus > 0) {
-          score += intentBonus;
-          matchReasons.push('Strong intent alignment with your profile');
-    } else if (program.intentMatch && program.intentMatch.length > 0) {
-          score += 0;
-          matchReasons.push('No intent alignment with your profile');
-    } else {
-          score += 2;
+    if (program.intentMatch && program.intentMatch.length > 0) {
+      maxPossible += 25;
+      if (intentBonus > 0) {
+            score += intentBonus;
+            matchReasons.push('Strong intent alignment with your profile');
+      } else {
+            score += 0;
+            matchReasons.push('No intent alignment with your profile');
+      }
     }
+    // Programs without intentMatch: no impact on score or denominator
 
     // ── needEmphasis bonus (up to 10 points) ──
     const needEmphasis = strategyOpts.needEmphasis || [];
@@ -394,8 +397,9 @@ export function scoreProgram(program, analysis, strategyOpts = {}) {
     }
 
   // ── Demographic match (10 points) ──
-  maxPossible += 10;
+  // Only count toward maxPossible when the program targets specific demographics.
     if (program.demographicMatch && program.demographicMatch.length > 0) {
+          maxPossible += 10;
           const demoHits = program.demographicMatch.filter(d => analysis.demographics.has(d));
           if (demoHits.length > 0) {
                   score += 10;
@@ -403,13 +407,12 @@ export function scoreProgram(program, analysis, strategyOpts = {}) {
           } else {
                   score += 2;
           }
-    } else {
-          score += 7;
     }
 
   // ── Health condition match (10 points) ──
-  maxPossible += 10;
+  // Only count toward maxPossible when the program targets specific health conditions.
     if (program.healthMatch && program.healthMatch.length > 0) {
+          maxPossible += 10;
           const healthHits = program.healthMatch.filter(h => analysis.health.has(h));
           if (healthHits.length > 0) {
                   score += 10;
@@ -420,10 +423,8 @@ export function scoreProgram(program, analysis, strategyOpts = {}) {
                   eligibilityPenalty -= 30;
                   matchReasons.push('Requires specific medical condition (not in profile)');
           } else {
-                  score += 1; // Reduced from 2 — healthcare programs with no health match deserve less
+                  score += 1;
           }
-    } else {
-          score += 7;
     }
 
   // ── Negative match penalty (hard-gate disqualifying negatives) ──
@@ -432,8 +433,9 @@ export function scoreProgram(program, analysis, strategyOpts = {}) {
     score += negPenalty;
 
   // ── Military match (5 points) ──
-  maxPossible += 5;
+  // Only count toward maxPossible when the program targets military/veteran status.
     if (program.militaryMatch && program.militaryMatch.length > 0) {
+          maxPossible += 5;
           const milHits = program.militaryMatch.filter(m => analysis.military.has(m));
           if (milHits.length > 0) {
                   score += 5;
@@ -444,13 +446,12 @@ export function scoreProgram(program, analysis, strategyOpts = {}) {
           } else {
                   score += 1;
           }
-    } else {
-          score += 3;
     }
 
   // ── Family match (5 points) ──
-  maxPossible += 5;
+  // Only count toward maxPossible when the program targets specific family situations.
     if (program.familyMatch && program.familyMatch.length > 0) {
+          maxPossible += 5;
           const famHits = program.familyMatch.filter(f => analysis.family.has(f));
           if (famHits.length > 0) {
                   score += 5;
@@ -459,8 +460,6 @@ export function scoreProgram(program, analysis, strategyOpts = {}) {
                   eligibilityPenalty -= 20;
                   matchReasons.push('Requires children/dependents (not in profile)');
           }
-    } else {
-          score += 3;
     }
 
   // ── Student/education match (10 points — only for scholarship-type programs) ──
