@@ -233,4 +233,22 @@ router.get('/calendar/deadlines', async (req, res) => {
   }
 })
 
+// ── Reverse-Lookup: "Find Funders Like You" ─────────────────────────────────
+router.post('/reverse-lookup', requireAuthenticatedUser, async (req, res) => {
+  try {
+    const { profile_id } = req.body ?? {}
+    if (!profile_id) return res.status(400).json({ error: 'profile_id required' })
+
+    const { findSimilarOrgsFunders } = await import('../services/reverseLookupService.js')
+    const result = await findSimilarOrgsFunders(req.db, profile_id, {
+      maxResults: Number(req.body.max_results) || 20,
+    })
+
+    res.json(result)
+  } catch (error) {
+    console.error('[foundations/reverse-lookup] error', error?.message)
+    res.status(500).json(formatError(error))
+  }
+})
+
 export default router

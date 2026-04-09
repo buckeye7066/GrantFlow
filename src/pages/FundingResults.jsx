@@ -20,6 +20,7 @@ const SORT_OPTIONS = [
   { value: 'match', label: 'Match score' },
   { value: 'deadline', label: 'Deadline' },
   { value: 'amount', label: 'Amount' },
+  { value: 'recently_added', label: 'Recently Added' },
 ];
 
 function getOpportunityKey(opp, idx) {
@@ -135,6 +136,8 @@ export default function FundingResults() {
       });
     } else if (sortBy === 'amount') {
       list.sort((a, b) => parseAmount(b) - parseAmount(a));
+    } else if (sortBy === 'recently_added') {
+      list.sort((a, b) => new Date(b?.created_at ?? 0) - new Date(a?.created_at ?? 0));
     }
     return list;
   }, [results, sortBy, strongMatchesOnly]);

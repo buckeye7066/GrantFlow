@@ -180,12 +180,97 @@ export const NEED_ALIAS_MAP = {
   legal_aid: 'legal',
   legal_help: 'legal',
 
-  // Substance recovery (maps to health_medical)
-  substance_recovery: 'health_medical',
-  substance_abuse: 'health_medical',
-  addiction: 'health_medical',
-  rehab: 'health_medical',
-  recovery: 'health_medical',
+  // Substance recovery — own canonical bucket so it can be filtered independently
+  substance_recovery: 'substance_recovery',
+  substance_abuse: 'substance_recovery',
+  addiction: 'substance_recovery',
+  rehab: 'substance_recovery',
+  recovery: 'substance_recovery',
+
+  // Mental health — split from health_medical for finer matching
+  mental_health: 'mental_health',
+  behavioral_health: 'mental_health',
+  counseling: 'mental_health',
+  therapy: 'mental_health',
+
+  // Seniors / aging
+  senior: 'senior',
+  seniors: 'senior',
+  elderly: 'senior',
+  aging: 'senior',
+  older_adult: 'senior',
+
+  // Children / youth
+  youth: 'children_youth',
+  children_youth: 'children_youth',
+  at_risk_youth: 'children_youth',
+  juvenile: 'children_youth',
+  young_people: 'children_youth',
+
+  // Women
+  women: 'women',
+  female: 'women',
+  women_owned: 'women',
+  domestic_violence: 'women',
+
+  // BIPOC / minority
+  minority: 'minority',
+  bipoc: 'minority',
+  african_american: 'minority',
+  hispanic: 'minority',
+  latino: 'minority',
+  underrepresented: 'minority',
+
+  // Immigrant / refugee
+  immigrant: 'immigrant_refugee',
+  refugee: 'immigrant_refugee',
+  immigrant_refugee: 'immigrant_refugee',
+  resettlement: 'immigrant_refugee',
+  asylum: 'immigrant_refugee',
+  asylee: 'immigrant_refugee',
+
+  // Tribal / native
+  tribal: 'tribal',
+  native_american: 'tribal',
+  indigenous: 'tribal',
+  indian_nation: 'tribal',
+
+  // Fire / EMS / public safety
+  fire_department: 'public_safety',
+  volunteer_fire: 'public_safety',
+  ems: 'public_safety',
+  first_responder: 'public_safety',
+  public_safety: 'public_safety',
+
+  // Municipality / government
+  municipality: 'municipality',
+  county_government: 'municipality',
+  city_government: 'municipality',
+  local_government: 'municipality',
+
+  // Environment / conservation
+  environment: 'environment',
+  conservation: 'environment',
+  climate: 'environment',
+  sustainability: 'environment',
+
+  // Agriculture / farming
+  agriculture: 'agriculture',
+  farming: 'agriculture',
+  ranch: 'agriculture',
+  usda: 'agriculture',
+
+  // Community development
+  community_development: 'community_development',
+  economic_development: 'community_development',
+  revitalization: 'community_development',
+  neighborhood: 'community_development',
+
+  // Rural communities
+  rural: 'rural',
+  appalachian: 'rural',
+  small_town: 'rural',
+  underserved: 'rural',
 }
 
 // ---------------------------------------------------------------------------

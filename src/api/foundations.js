@@ -43,6 +43,15 @@ export async function searchFederalPrograms({ keyword, assistanceType, applicant
   return apiFetch(`/api/foundations/federal/search?${params}`)
 }
 
+/** Reverse-lookup: find similar orgs and their funders */
+export async function reverseLookup(profileId, { maxResults = 20 } = {}) {
+  return apiFetch('/api/foundations/reverse-lookup', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ profile_id: profileId, max_results: maxResults }),
+  })
+}
+
 /** Get calendar events (grant deadlines) */
 export async function getCalendarDeadlines({ profileId, month } = {}) {
   const params = new URLSearchParams()

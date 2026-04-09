@@ -18,6 +18,21 @@ function normalizeNonEmptyString(value) {
   return text.length > 0 ? text : null
 }
 
+/**
+ * Derive funding_source_type from record_origin and source when not explicitly set.
+ */
+function deriveFundingSourceType(recordOrigin, source) {
+  if (recordOrigin === 'grants_gov' || ['grants.gov', 'grants_gov', 'usa_spending', 'usaspending'].includes(source)) return 'federal'
+  if (['state_portal', 'state_grants_portal', 'state_waiver'].includes(source)) return 'state'
+  if (['local_foundation', 'community_foundation', 'cof_foundation_locator', 'candid_directory', 'propublica.990'].includes(source)) return 'foundation'
+  if (source === 'corporate_giving') return 'corporate'
+  if (['scholarship_crawler', 'scholarship_database', 'school_portal'].includes(source)) return 'university'
+  if (['health_resources_crawler', 'charity_care'].includes(source)) return 'medical'
+  if (source?.startsWith('local_directory_') || source === 'osm_overpass') return 'community'
+  if (['curated_benefits', 'curated_verified', 'verified_real', 'curated_program'].includes(recordOrigin)) return 'federal'
+  return 'other'
+}
+
 function normalizeUrl(value) {
   const text = normalizeNonEmptyString(value)
   if (!text) return null
@@ -380,7 +395,8 @@ export async function upsertFundingOpportunity(db, opportunity) {
       certifications_required,
       geo_eligibility,
       signal_tags,
-      crawler_version
+      crawler_version,
+      funding_source_type
     ) VALUES (
       @id,
       @title,
@@ -422,7 +438,8 @@ export async function upsertFundingOpportunity(db, opportunity) {
       @certifications_required,
       @geo_eligibility,
       @signal_tags,
-      @crawler_version
+      @crawler_version,
+      @funding_source_type
     )
     ${conflictClause}
       title = COALESCE(excluded.title, funding_opportunities.title),
@@ -456,6 +473,7 @@ export async function upsertFundingOpportunity(db, opportunity) {
       certifications_required = COALESCE(excluded.certifications_required, funding_opportunities.certifications_required),
       geo_eligibility = COALESCE(excluded.geo_eligibility, funding_opportunities.geo_eligibility),
       crawler_version = COALESCE(excluded.crawler_version, funding_opportunities.crawler_version),
+      funding_source_type = COALESCE(excluded.funding_source_type, funding_opportunities.funding_source_type),
       record_origin = COALESCE(excluded.record_origin, funding_opportunities.record_origin),
       last_verified_at = COALESCE(excluded.last_verified_at, funding_opportunities.last_verified_at),
       match_reasons = COALESCE(excluded.match_reasons, funding_opportunities.match_reasons),
@@ -504,6 +522,7 @@ export async function upsertFundingOpportunity(db, opportunity) {
     geo_eligibility: record.geo_eligibility,
     signal_tags: record.signal_tags,
     crawler_version: record.crawler_version,
+    funding_source_type: record.funding_source_type ?? deriveFundingSourceType(record.record_origin, source),
   })
 
   return { id, inserted: true, skipped: false }

@@ -2491,4 +2491,43 @@ router.post('/profile-change', standardRateLimiter, async (req, res) => {
   }
 })
 
+// ── Foundation 990 Batch Ingestion ───────────────────────────────────────────
+router.post('/foundation-990/batch', async (req, res) => {
+  try {
+    const {
+      states = ['nationwide'],
+      ntee_codes = ['T'],
+      min_grant_amount = 10000,
+      max_pages = 20,
+    } = req.body ?? {}
+
+    const creation = await createCrawlerJob(req.db, {
+      type: 'foundation_990',
+      parameters: { states, ntee_codes, min_grant_amount, max_pages },
+      requestedBy: req.userId ?? 'admin',
+      buildSnapshot: false,
+    })
+
+    const job = await req.db.prepare('SELECT * FROM crawler_jobs WHERE id = ?').get(creation.jobId)
+
+    setImmediate(() => {
+      dispatchCrawlerJob({
+        db: req.db,
+        jobId: job.id,
+        uploadDir,
+        getOpenAI,
+      })
+    })
+
+    res.json({
+      success: true,
+      job_id: job.id,
+      message: `Foundation 990 batch job queued: ${states.length} states, ${ntee_codes.length} NTEE codes`,
+    })
+  } catch (err) {
+    console.error('[foundation-990/batch]', err)
+    res.status(500).json({ error: err.message })
+  }
+})
+
 export default router

@@ -261,6 +261,7 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
         req.query.allow_relax === '0' ||
         String(req.query.relax ?? '1') === '0'
       const limit = Math.min(Math.max(Number.parseInt(req.query.limit ?? '2000', 10) || 2000, 1), 5000)
+      const sortBy = req.query.sort_by ?? 'match_score' // match_score | deadline | amount | recently_added
       const searchTerms = collectSearchTermsFromQuery(req)
 
       const baseContext = await loadProfileContext(req.db, profileId)
@@ -384,7 +385,20 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
                      })
                      .filter((opp) => opp !== null)
 
-      allScored.sort((a, b) => (b.match_score ?? 0) - (a.match_score ?? 0))
+      // Sort by user-requested criteria
+      if (sortBy === 'recently_added') {
+        allScored.sort((a, b) => new Date(b.created_at ?? 0) - new Date(a.created_at ?? 0))
+      } else if (sortBy === 'deadline') {
+        allScored.sort((a, b) => {
+          const da = a.deadline ? new Date(a.deadline) : new Date('2099-12-31')
+          const db = b.deadline ? new Date(b.deadline) : new Date('2099-12-31')
+          return da - db
+        })
+      } else if (sortBy === 'amount') {
+        allScored.sort((a, b) => (b.amount_max ?? b.amount_min ?? 0) - (a.amount_max ?? a.amount_min ?? 0))
+      } else {
+        allScored.sort((a, b) => (b.match_score ?? 0) - (a.match_score ?? 0))
+      }
 
       let scored = Number.isFinite(minScore)
         ? allScored.filter((opp) => (opp.match_score ?? 0) >= minScore)

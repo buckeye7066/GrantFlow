@@ -181,6 +181,7 @@ export function orgToFundingOpportunity(org) {
     type: 'DIRECTORY',
     last_verified_at: null,
     record_origin: 'funding_api',
+    funding_source_type: 'foundation',
     requires_501c3: false,
     requires_match: false,
   }

@@ -108,6 +108,9 @@ export const PIPELINE_ALLOWED_SOURCES = [
   // Corporate / Other
   'corporate_giving',
 
+  // Foundation 990 data
+  'propublica.990',
+
   // Local Directories
   'local_directory_united_way',
   'local_directory_feeding_america',

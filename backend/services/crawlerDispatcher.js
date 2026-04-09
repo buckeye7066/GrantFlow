@@ -13,6 +13,7 @@ import { processPipelineAutomationJob } from './pipelineAutomation.js'
 import { buildProfileContext } from './profileHelpers.js'
 import { prepareContextForSnapshot, restoreContextFromSnapshot } from './snapshotSerialization.js'
 import { processProfileEnrichmentJob } from './profileEnrichment.js'
+import { processFoundation990Job } from './crawlers/foundation990Crawler.js'
 import { processNationalJob } from './nationalJobRouter.js'
 import { logFailedJob, determineSeverity } from './deadLetterQueue.js'
 import { runCrawler as runCuratedCrawler } from './crawlers/crawlerManager.js'
@@ -176,6 +177,7 @@ const HANDLERS = {
   special_needs: processCuratedBenefitsJob,
   local_funding: processCuratedBenefitsJob,
   item_matching: processCuratedBenefitsJob,
+  foundation_990: processFoundation990Job,
   portal_check: processPortalCheckJob,
   church: processCuratedBenefitsJob,
   faith_based: processCuratedBenefitsJob,
