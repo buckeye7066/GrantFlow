@@ -269,7 +269,7 @@ export default function AdminServiceApplications() {
 
         {/* Detail Dialog */}
         <Dialog open={!!selectedApp} onOpenChange={() => setSelectedApp(null)}>
-          <DialogContent className="max-w-2xl">
+          <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
             <DialogHeader>
               <DialogTitle>{selectedApp?.full_name}</DialogTitle>
               <DialogDescription>

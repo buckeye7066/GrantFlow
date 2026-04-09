@@ -950,7 +950,7 @@ function JobDetailsDialog({ job, onOpenChange, onRetry, retrying, onCancel, canc
 
   return (
     <Dialog open={Boolean(job)} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-3xl">
+      <DialogContent className="max-w-3xl max-h-[85vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2 text-lg">
             <Sparkles className="h-5 w-5 text-blue-600" />

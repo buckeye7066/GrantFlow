@@ -1,5 +1,5 @@
 import React, { useMemo, useState, useCallback, useEffect, useRef } from "react"
-import { Sparkles, Search, Filter, SlidersHorizontal, Star, TrendingUp, Award, Plus, X, CheckSquare, Target, Loader2, MapPin, User, Zap } from "lucide-react"
+import { Sparkles, Search, Filter, SlidersHorizontal, Star, TrendingUp, Award, Plus, X, CheckSquare, Target, Loader2, MapPin, User, Zap, ArrowRight, CheckCircle2, AlertTriangle, Lightbulb, ExternalLink } from "lucide-react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -14,19 +14,17 @@ import { apiFetch } from "@/api/client"
 import { getItemSuggestions } from "@/api/items"
 import { getProfile } from "@/api/profiles"
 import { runSmartCrawler } from "@/api/crawlers"
-import { interpretMatcherIntent } from "@/api/matching"
+import { interpretMatcherIntent, getMatchingGaps } from "@/api/matching"
 import ProfileSelect from "@/components/shared/ProfileSelect"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { useToast } from "@/components/ui/use-toast"
-
-// ---------------------------------------------------------------------------
-// Persistent checklist helpers – stored in localStorage keyed per profile
-// ---------------------------------------------------------------------------
-const CHECKLIST_STORAGE_PREFIX = "grantflow:matcher-checklist:"
+import { Link } from "react-router-dom"
+import { createPageUrl } from "@/utils"
 
 // ---------------------------------------------------------------------------
 // Persistent needs helpers – stored in localStorage keyed per profile
 // ---------------------------------------------------------------------------
+
 const NEEDS_STORAGE_PREFIX = "grantflow:matcher-needs:"
 
 function loadNeeds(profileId) {
@@ -51,39 +49,12 @@ function saveNeeds(profileId, state) {
     } catch { /* ignore quota errors */ }
 }
 
-function loadChecklist(profileId) {
-    if (!profileId) return { checked: {}, customItems: [] }
-        try {
-              const raw = localStorage.getItem(CHECKLIST_STORAGE_PREFIX + profileId)
-              if (!raw) return { checked: {}, customItems: [] }
-                    const parsed = JSON.parse(raw)
-              return {
-                      checked: parsed.checked && typeof parsed.checked === "object" ? parsed.checked : {},
-                      customItems: Array.isArray(parsed.customItems) ? parsed.customItems : [],
-              }
-        } catch {
-              return { checked: {}, customItems: [] }
-        }
+// Impact badge colors for profile gaps
+const IMPACT_COLORS = {
+  critical: "bg-red-100 text-red-700 border-red-200",
+  high: "bg-amber-100 text-amber-700 border-amber-200",
+  medium: "bg-blue-100 text-blue-700 border-blue-200",
 }
-
-function saveChecklist(profileId, state) {
-    if (!profileId) return
-    try {
-          localStorage.setItem(CHECKLIST_STORAGE_PREFIX + profileId, JSON.stringify(state))
-    } catch { /* ignore quota errors */ }
-}
-
-// Default checklist items that every profile should consider
-const DEFAULT_CHECKLIST_ITEMS = [
-  { id: "profile_type", label: "Profile type is set", description: "Tells the matcher whether you're an individual, business, nonprofit, church, etc. — different types unlock different funding pools." },
-  { id: "state_zip", label: "State / ZIP code added", description: "Many grants are location-specific. Without this, you'll miss state, county, and regional opportunities." },
-  { id: "primary_goal", label: "Primary goal or need category defined", description: "What you're trying to accomplish (e.g. start a food truck, repair a roof). This drives the entire needs inference engine." },
-  { id: "demographics", label: "Demographics section completed", description: "Details like veteran status, minority-owned, or disability unlock targeted funding that generic profiles miss." },
-  { id: "org_details", label: "Organization details filled in (if applicable)", description: "For orgs: EIN, founding year, staff count, and budget help match you to grants with specific eligibility thresholds." },
-  { id: "budget_range", label: "Budget range or funding amount specified", description: "Funders filter by award size. Specifying your budget range avoids matches that are too small or too large." },
-  { id: "documents", label: "Supporting documents uploaded", description: "Letters of support, 501(c)(3) determination, or financial statements strengthen your profile and improve proposal readiness." },
-  { id: "story_narrative", label: "Story or narrative section written", description: "Your story is parsed for keywords that trigger need detection — the more detail you provide, the better the matcher works." },
-  ]
 
 export default function SmartMatcher() {
     const [selectedProfileId, setSelectedProfileId] = useState("")
@@ -100,19 +71,13 @@ export default function SmartMatcher() {
     // Tracks which profile we already auto-populated keywords for (avoids re-populating on re-render)
     const autoPopulatedProfileRef = useRef(null)
 
-  // -- Persistent checklist state per profile --
-  const [checklistState, setChecklistState] = useState({ checked: {}, customItems: [] })
-    const [newItemText, setNewItemText] = useState("")
-
-  // Load checklist when profile changes
-  useEffect(() => {
-        setChecklistState(loadChecklist(selectedProfileId))
-  }, [selectedProfileId])
-
-  // Persist checklist whenever it changes
-  useEffect(() => {
-        saveChecklist(selectedProfileId, checklistState)
-  }, [selectedProfileId, checklistState])
+  // -- Matching gaps: live profile completeness check --
+  const { data: matchingGapsResponse, isLoading: isGapsLoading } = useQuery({
+    queryKey: ['matching-gaps', selectedProfileId],
+    queryFn: () => getMatchingGaps(selectedProfileId),
+    enabled: Boolean(selectedProfileId) && selectedProfileId !== 'all',
+    staleTime: 60_000,
+  })
 
   // -- Persistent needs state per profile --
   const [needsState, setNeedsState] = useState({ checked: {}, customItems: [] })
@@ -140,41 +105,15 @@ export default function SmartMatcher() {
         queryClient.invalidateQueries({ queryKey: ["smart-matcher"] })
   }, [selectedProfileId, queryClient])
 
-  const toggleChecklistItem = useCallback((itemId) => {
-        setChecklistState((prev) => ({
-                ...prev,
-                checked: { ...prev.checked, [itemId]: !prev.checked[itemId] },
-        }))
-  }, [])
-
-  const addCustomItem = useCallback(() => {
-        const text = newItemText.trim()
-        if (!text) return
-        const id = "custom_" + Date.now()
-        setChecklistState((prev) => ({
-                ...prev,
-                customItems: [...prev.customItems, { id, label: text }],
-        }))
-        setNewItemText("")
-  }, [newItemText])
-
-  const removeCustomItem = useCallback((itemId) => {
-        setChecklistState((prev) => ({
-                ...prev,
-                customItems: prev.customItems.filter((i) => i.id !== itemId),
-                checked: (() => { const c = { ...prev.checked }; delete c[itemId]; return c })(),
-        }))
-  }, [])
-
-  const allChecklistItems = useMemo(
-        () => [...DEFAULT_CHECKLIST_ITEMS, ...checklistState.customItems],
-        [checklistState.customItems],
-      )
-
-  const checkedCount = useMemo(
-        () => allChecklistItems.filter((i) => checklistState.checked[i.id]).length,
-        [allChecklistItems, checklistState.checked],
-      )
+  const matchingGaps = useMemo(() => {
+    const payload = matchingGapsResponse?.data ?? matchingGapsResponse ?? {}
+    return {
+      gaps: Array.isArray(payload.gaps) ? payload.gaps : [],
+      completed: payload.completed ?? 0,
+      total_items: payload.total_items ?? 8,
+      success_steps: Array.isArray(payload.success_steps) ? payload.success_steps : [],
+    }
+  }, [matchingGapsResponse])
 
   // -- Needs handlers --
   const toggleNeed = useCallback((needId) => {
@@ -872,7 +811,7 @@ export default function SmartMatcher() {
                   )}
               
                       <Dialog open={Boolean(selectedOpp)} onOpenChange={(open) => !open && setSelectedOpp(null)}>
-                                <DialogContent className="max-w-2xl">
+                                <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
                                             <DialogHeader>
                                                           <DialogTitle>{selectedOpp?.title ?? 'Opportunity'}</DialogTitle>
                                                           <DialogDescription>

@@ -152,7 +152,7 @@ export default function TaxonomyManagerModal({ group, open, onClose, onSave }) {
 
   return (
     <Dialog open={open} onOpenChange={onClose}>
-      <DialogContent className="max-w-2xl">
+      <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>Manage Options for "{groupTitle}"</DialogTitle>
         </DialogHeader>
