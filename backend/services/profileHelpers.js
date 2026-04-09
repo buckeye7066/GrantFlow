@@ -3,6 +3,21 @@ import { resolveCountyForZip } from './geo/zipCountyResolver.js'
 import crypto from 'crypto'
 import { inferUsStateZipFromText, collectAddressTextForInference } from '../utils/inferLocationFromAddress.js'
 
+// Full state name → 2-letter abbreviation for extractStateFromContext fallback
+const STATE_NAME_TO_ABBR = {
+  'alabama': 'AL', 'alaska': 'AK', 'arizona': 'AZ', 'arkansas': 'AR', 'california': 'CA',
+  'colorado': 'CO', 'connecticut': 'CT', 'delaware': 'DE', 'florida': 'FL', 'georgia': 'GA',
+  'hawaii': 'HI', 'idaho': 'ID', 'illinois': 'IL', 'indiana': 'IN', 'iowa': 'IA',
+  'kansas': 'KS', 'kentucky': 'KY', 'louisiana': 'LA', 'maine': 'ME', 'maryland': 'MD',
+  'massachusetts': 'MA', 'michigan': 'MI', 'minnesota': 'MN', 'mississippi': 'MS', 'missouri': 'MO',
+  'montana': 'MT', 'nebraska': 'NE', 'nevada': 'NV', 'new hampshire': 'NH', 'new jersey': 'NJ',
+  'new mexico': 'NM', 'new york': 'NY', 'north carolina': 'NC', 'north dakota': 'ND', 'ohio': 'OH',
+  'oklahoma': 'OK', 'oregon': 'OR', 'pennsylvania': 'PA', 'rhode island': 'RI', 'south carolina': 'SC',
+  'south dakota': 'SD', 'tennessee': 'TN', 'texas': 'TX', 'utah': 'UT', 'vermont': 'VT',
+  'virginia': 'VA', 'washington': 'WA', 'west virginia': 'WV', 'wisconsin': 'WI', 'wyoming': 'WY',
+  'district of columbia': 'DC', 'puerto rico': 'PR', 'guam': 'GU', 'us virgin islands': 'VI',
+}
+
 /**
  * Resolve the canonical applicant type from a profile object.
  *
@@ -106,13 +121,22 @@ export async function loadProfileContext(db, profileId) {
     tags,
     interests,
     // Provide fallbacks for location extraction
-    postal_code: profile.postal_code || organization?.zip || organization?.postal_code || null,
+    // The profiles table column is "zip" but extraction functions check postal_code/zip_code — normalize here.
+    postal_code: profile.postal_code || profile.zip_code || profile.zip || organization?.zip || organization?.postal_code || null,
+    zip_code: profile.zip_code || profile.zip || profile.postal_code || null,
     state: profile.state || organization?.state || null,
     city: profile.city || organization?.city || null,
   }
   
-  let signals = buildProfileSignals({ 
-    profile: mergedProfile, 
+  const sectionKeys = Object.keys(sections)
+  console.info(
+    `[loadProfileContext] profile=${profileId} zip=${mergedProfile.postal_code || mergedProfile.zip_code || '?'} ` +
+    `state=${mergedProfile.state || '?'} city=${mergedProfile.city || '?'} ` +
+    `sections=[${sectionKeys.join(',')}] org=${profile.organization_id || 'none'}`,
+  )
+
+  let signals = buildProfileSignals({
+    profile: mergedProfile,
     sections,
     asOf: mergedProfile.updated_at || mergedProfile.created_at || null,
   })
@@ -123,7 +147,7 @@ export async function loadProfileContext(db, profileId) {
   }
   if (!signals.location || typeof signals.location !== 'object') {
     signals.location = {
-      zip: mergedProfile.postal_code || mergedProfile.zip_code || null,
+      zip: mergedProfile.postal_code || mergedProfile.zip_code || mergedProfile.zip || null,
       state: mergedProfile.state || null,
       city: mergedProfile.city || null,
       county: null,
@@ -335,6 +359,7 @@ export function extractZipFromContext({ profile, sections, jobParameters = {} })
     sections?.demographics?.zip,
     profile?.postal_code,
     profile?.zip_code,
+    profile?.zip,
   ]
 
   const zip = candidates.find(
@@ -365,11 +390,13 @@ export function extractStateFromContext({ profile, sections, jobParameters = {} 
   ]
 
   const state = candidates
-    .map((value) =>
-      typeof value === 'string' && value.trim().length === 2
-        ? value.trim().toUpperCase()
-        : null,
-    )
+    .map((value) => {
+      if (typeof value !== 'string' || !value.trim()) return null
+      const trimmed = value.trim()
+      if (trimmed.length === 2) return trimmed.toUpperCase()
+      // Handle full state names (e.g. "Ohio" → "OH", "West Virginia" → "WV")
+      return STATE_NAME_TO_ABBR[trimmed.toLowerCase()] || null
+    })
     .find(Boolean)
 
   if (state) return state
