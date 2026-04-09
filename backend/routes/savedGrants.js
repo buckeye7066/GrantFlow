@@ -20,7 +20,7 @@ router.get('/', async (req, res) => {
     const userId = user.userId
     if (!userId) return res.status(401).json({ error: 'Authentication required' })
 
-    const userRows = req.db.prepare(`
+    const userRows = await req.db.prepare(`
       SELECT sg.opportunity_id, sg.saved_at, sg.notes,
              fo.title, fo.sponsor, fo.deadline, fo.amount_min, fo.amount_max,
              fo.application_url, fo.link_status, fo.source
@@ -49,7 +49,7 @@ router.post('/', async (req, res) => {
     if (!opportunity_id) return res.status(400).json({ error: 'opportunity_id required' })
 
     const id = crypto.randomUUID()
-    req.db.prepare(`
+    await req.db.prepare(`
       INSERT INTO saved_grants (id, user_id, opportunity_id, notes)
       VALUES (?, ?, ?, ?)
       ON CONFLICT(user_id, opportunity_id) DO UPDATE SET
@@ -73,7 +73,7 @@ router.patch('/:opportunityId/notes', async (req, res) => {
     const { notes } = req.body ?? {}
     if (typeof notes !== 'string') return res.status(400).json({ error: 'notes must be a string' })
 
-    const result = req.db.prepare(`
+    const result = await req.db.prepare(`
       UPDATE saved_grants SET notes = ? WHERE user_id = ? AND opportunity_id = ?
     `).run(notes, userId, req.params.opportunityId)
 
@@ -92,7 +92,7 @@ router.delete('/:opportunityId', async (req, res) => {
     const userId = user.userId
     if (!userId) return res.status(401).json({ error: 'Authentication required' })
 
-    req.db.prepare(`
+    await req.db.prepare(`
       DELETE FROM saved_grants WHERE user_id = ? AND opportunity_id = ?
     `).run(userId, req.params.opportunityId)
 
