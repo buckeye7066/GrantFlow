@@ -1,0 +1,50 @@
+name: Apply GoDaddy DNS for Vercel
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: "Type YES to apply DNS changes"
+        required: true
+        default: ""
+
+jobs:
+  apply-dns:
+    if: github.event.inputs.confirm == 'YES'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set A record for apex → Vercel
+        run: |
+          curl -sf -X PUT \
+            "https://api.godaddy.com/v1/domains/axiombiolabs.org/records/A/@" \
+            -H "Authorization: sso-key ${{ secrets.GODADDY_API_KEY }}:${{ secrets.GODADDY_API_SECRET }}" \
+            -H "Content-Type: application/json" \
+            -d '[{"data":"76.76.21.21","ttl":600}]'
+          echo "✓ A @ → 76.76.21.21"
+
+      - name: Set CNAME for www → Vercel
+        run: |
+          curl -sf -X PUT \
+            "https://api.godaddy.com/v1/domains/axiombiolabs.org/records/CNAME/www" \
+            -H "Authorization: sso-key ${{ secrets.GODADDY_API_KEY }}:${{ secrets.GODADDY_API_SECRET }}" \
+            -H "Content-Type: application/json" \
+            -d '[{"data":"cname.vercel-dns.com","ttl":600}]'
+          echo "✓ CNAME www → cname.vercel-dns.com"
+
+      - name: Verify records were applied
+        run: |
+          echo "--- Current A records ---"
+          curl -sf \
+            "https://api.godaddy.com/v1/domains/axiombiolabs.org/records/A/@" \
+            -H "Authorization: sso-key ${{ secrets.GODADDY_API_KEY }}:${{ secrets.GODADDY_API_SECRET }}" | jq .
+          echo ""
+          echo "--- Current CNAME records ---"
+          curl -sf \
+            "https://api.godaddy.com/v1/domains/axiombiolabs.org/records/CNAME/www" \
+            -H "Authorization: sso-key ${{ secrets.GODADDY_API_KEY }}:${{ secrets.GODADDY_API_SECRET }}" | jq .
+
+      - name: DNS propagation check (best-effort)
+        run: |
+          echo "Checking DNS resolution (may take minutes to propagate)..."
+          dig +short axiombiolabs.org A || echo "(not yet propagated)"
+          dig +short www.axiombiolabs.org CNAME || echo "(not yet propagated)"
