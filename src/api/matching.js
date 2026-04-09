@@ -5,6 +5,12 @@ export async function matchProfileToGrants(profileId) {
   return apiFetch(`/api/matching/profile/${profileId}/grants`)
 }
 
+export async function matchProfileToOpportunities(profileId, { minScore = 50, limit = 200 } = {}) {
+  if (!profileId) throw new Error('profileId is required')
+  const params = new URLSearchParams({ min_score: minScore, limit, skip_readiness_check: '1' })
+  return apiFetch(`/api/matching/profile/${profileId}/opportunities?${params}`)
+}
+
 /**
  * Turn free-text funding needs into search terms for the matcher catalog.
  * @param {string} text
