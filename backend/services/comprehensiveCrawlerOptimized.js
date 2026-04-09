@@ -598,21 +598,25 @@ export async function runComprehensiveCrawler(contextOrDb, profileContextArg = {
     }
   }
   
-  // Save high matches to profile pipeline if profileId provided
+  // Save matches to profile pipeline if profileId provided.
+  // Let saveToProfilePipeline handle threshold logic (default 55%, ACCEPT/REVIEW bypass)
+  // instead of pre-filtering at 80% which blocked all individual-profile results.
   let savedToProfile = 0
   if (profileId) {
-    for (const opp of topOpps.filter(o => o.match_score >= 80)) {
+    for (const opp of topOpps) {
       try {
         // Find the inserted opportunity ID
         const insertedOpp = await db.prepare(`
-          SELECT id FROM funding_opportunities 
+          SELECT id FROM funding_opportunities
           WHERE source = 'verified_real' AND source_id = ?
           LIMIT 1
         `).get(opp.id || opp.source_id)
-        
+
         if (insertedOpp) {
           const oppWithId = { ...opp, id: insertedOpp.id, source: opp.source || 'verified_real' }
-          const result = await saveToProfilePipeline(db, oppWithId, profileId, profileContext, opp.match_score)
+          // Do NOT pass pre-computed score — let saveToProfilePipeline run
+          // computeMatchDecision() as the single canonical authority (Goal 4).
+          const result = await saveToProfilePipeline(db, oppWithId, profileId, profileContext)
           if (result.saved) {
             savedToProfile++
           }
@@ -623,8 +627,8 @@ export async function runComprehensiveCrawler(contextOrDb, profileContextArg = {
       }
     }
   }
-  
-  console.log(`[comprehensiveCrawler] Saved ${savedToProfile} opportunities to profile pipeline (≥80% match)`)
+
+  console.log(`[comprehensiveCrawler] Saved ${savedToProfile} opportunities to profile pipeline`)
   
   return {
     success: true,

@@ -429,6 +429,12 @@ export function computeMatchDecision(rawProfile, rawOpportunity, opts = {}) {
   if (profileNorm.entityType === 'individual' && oppNorm.entityTypesAllowed?.includes('individual')) {
     matchedProfileTraits.push('individual_eligible')
   }
+  // When opportunity applicability is unknown (no entity types detected in text),
+  // individual profiles get a partial bonus. Most assistance programs accept individuals;
+  // giving 0 here was the #1 cause of empty match results for individual profiles.
+  if (profileNorm.entityType === 'individual' && oppNorm.applicabilityUnknown) {
+    matchedProfileTraits.push('individual_presumed')
+  }
   // Geographic match trait
   const geo = oppNorm.geography ?? {}
   if (geo.isNational && profileNorm.state) matchedProfileTraits.push('national_eligible')
@@ -436,7 +442,11 @@ export function computeMatchDecision(rawProfile, rawOpportunity, opts = {}) {
 
   // Step 5: Composite score
   // Weights: need alignment 45%, source trust 25%, entity type match 20%, geo bonus 10%
-  const entityTypeBonus = matchedProfileTraits.some(t => ['veteran', 'student', 'nonprofit', 'business', 'individual_eligible'].includes(t)) ? 20 : 0
+  // individual_presumed gets a partial bonus (12) vs full match (20) — avoids false-ACCEPTs
+  // while preventing the 20-pt penalty that was zeroing out individual profiles.
+  const entityTypeBonus = matchedProfileTraits.some(t => ['veteran', 'student', 'nonprofit', 'business', 'individual_eligible'].includes(t))
+    ? 20
+    : matchedProfileTraits.includes('individual_presumed') ? 12 : 0
   const geoBonus = matchedProfileTraits.some(t => ['national_eligible', 'state_match'].includes(t)) ? 10 : 0
   const profileStrength = estimateProfileStrengthForScoring(profileNorm)
   // Complete profiles meeting basic signals deserve a bounded lift so 80% thresholds return real rows.
