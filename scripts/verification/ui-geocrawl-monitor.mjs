@@ -38,7 +38,7 @@ async function run() {
     // Ensure the AdminGeoCrawl component picks up the run id on mount.
     await page.addInitScript((rid) => {
       try {
-        window.localStorage.setItem('gf_geo_crawl_last_run_id', rid)
+        window.localStorage.setItem('gf_geo_crawl_last_run_id_v2', rid)
       } catch {
         // ignore
       }

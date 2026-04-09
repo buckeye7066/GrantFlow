@@ -1638,7 +1638,7 @@ export default function Automation() {
       const runId = res?.run_id ? String(res.run_id) : null
       if (runId) {
         try {
-          window.localStorage.setItem("gf_geo_crawl_last_run_id", runId)
+          window.localStorage.setItem("gf_geo_crawl_last_run_id_v2", runId)
         } catch {
           // ignore
         }

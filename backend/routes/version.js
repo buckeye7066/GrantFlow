@@ -71,7 +71,13 @@ function getVersionInfo() {
 router.get('/', (req, res) => {
   try {
     const version = getVersionInfo()
-    res.json(version)
+    // Lets operators confirm Railway/Vercel picked up a build without reading 404s in the browser.
+    res.json({
+      ...version,
+      contracts: {
+        geo_crawl_unknown_run: '200_missing_payload',
+      },
+    })
   } catch (error) {
     console.error('[version] Failed to get version info:', error)
     res.status(500).json({

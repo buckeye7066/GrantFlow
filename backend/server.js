@@ -1659,14 +1659,14 @@ app.use('/api/preferences', preferencesRouter);
 // Incognito module endpoints (gated by user custom preferences)
 app.use('/api/incognito', incognitoRouter);
 app.use('/api/version', versionRouter);
+// Geo Crawl (admin-only) — register BEFORE generic `app.use('/api', …)` routers so it is never shadowed.
+app.use('/api/geo-crawl', lazyRouter('./routes/geoCrawl.js', (mod) => mod.default({ uploadDir: uploadsDir, getOpenAI: null })));
 // Function-style endpoints (used by NOFO Parser + Diagnostics)
 app.use('/api', lazyRouter('./routes/nofo.js'));
 // Legacy function-style endpoints (legacy UI flows: DataSources/SourceDirectory)
 app.use('/api', lazyRouter('./routes/legacyFunctions.js'));
 // Legacy entity endpoints
 app.use('/api/crawl-logs', crawlLogsRouter);
-// Geo Crawl monitor + start endpoints (admin-only)
-app.use('/api/geo-crawl', lazyRouter('./routes/geoCrawl.js', (mod) => mod.default({ uploadDir: uploadsDir, getOpenAI: null })));
 app.use('/api/colleges', collegesRouter);
 app.use('/api/notifications', notificationsRouter);
 app.use('/api/saved-grants', savedGrantsRouter);

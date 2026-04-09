@@ -8,7 +8,8 @@ import { apiFetch } from "@/api/client"
 import { createPageUrl } from "@/utils"
 import { Link } from "react-router-dom"
 
-const LS_LAST_RUN_ID = "gf_geo_crawl_last_run_id"
+// v2: ignore legacy key so stale run UUIDs from old DBs stop hitting the API after one deploy.
+const LS_LAST_RUN_ID = "gf_geo_crawl_last_run_id_v2"
 
 const STALE_RUN_MESSAGE =
   "This run is no longer in the database (for example after a reset, different environment, or an old saved link). Start a new geo crawl or dismiss the monitor."

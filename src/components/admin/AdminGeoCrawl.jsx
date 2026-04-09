@@ -10,7 +10,7 @@ import { useToast } from "@/components/ui/use-toast"
 import { apiFetch } from "@/api/client"
 import GeoCrawlMonitor from "@/components/admin/GeoCrawlMonitor.jsx"
 
-const LS_LAST_RUN_ID = "gf_geo_crawl_last_run_id"
+const LS_LAST_RUN_ID = "gf_geo_crawl_last_run_id_v2"
 
 async function fetchStates() {
   return apiFetch("/api/admin/geo/states")
