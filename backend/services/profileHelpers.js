@@ -1820,8 +1820,12 @@ export function buildProfileSignals({ profile, sections, asOf = null }) {
     const key = typeof n === 'string' ? n.trim().toLowerCase().replace(/\s+/g, '_') : null
     if (key) needs.add(key)
   }
-  // Only inject generic fallback when the profile has truly no data at all
-  if (needs.size === 0 && keywordSet.size === 0 && applicantTypeSet.size === 0) {
+  // Inject generic needs when no needs could be derived from profile sections,
+  // assistance programs, health signals, or existing profile.needs.
+  // Previously this also required keywordSet.size === 0, but display-name-derived
+  // keywords (e.g. "melissa", "justus") are not meaningful needs signals and were
+  // preventing the fallback from firing for sparse individual profiles.
+  if (needs.size === 0) {
     ;['utilities','housing','food','healthcare','cash_assistance'].forEach(n => needs.add(n))
   }
 

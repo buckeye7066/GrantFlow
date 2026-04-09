@@ -423,7 +423,15 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
           console.log(`[matching] All thresholds exhausted; returning top ${scored.length} of ${allScored.length}`)
         }
       } else if (strictMin && scored.length === 0 && allScored.length > 0) {
-        console.info(`[matching] strict min_score=${minScore} — no relax; returning 0 of ${allScored.length} scored`)
+        const rawScores = allScored
+          .map(o => typeof o.match_score === 'number' ? o.match_score : 0)
+          .sort((a, b) => b - a)
+        const bestScore = rawScores[0] || 0
+        const sugIdx = Math.min(4, rawScores.length - 1)
+        const suggestedThreshold = Math.max(5, Math.floor(rawScores[sugIdx] / 5) * 5)
+        const countAtSuggested = rawScores.filter(s => s >= suggestedThreshold).length
+        allScored._scoreHint = { bestScore, suggestedThreshold, countAtSuggested, totalScored: rawScores.length }
+        console.info(`[matching] strict min_score=${minScore} — no relax; returning 0 of ${allScored.length} scored (best=${bestScore}, suggest=${suggestedThreshold})`)
       }
 
       const MAX_RESPONSE = 500
@@ -435,6 +443,7 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
               total_scored: candidates.length,
               returned: capped.length,
               opportunities: capped,
+              score_hint: allScored._scoreHint || null,
               threshold_relaxed: effectiveMinScore !== minScore ? true : undefined,
               truncated: scored.length > MAX_RESPONSE ? true : undefined,
       })

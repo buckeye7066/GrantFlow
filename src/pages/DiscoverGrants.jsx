@@ -127,6 +127,7 @@ export default function DiscoverGrants() {
   const [hasSearched, setHasSearched] = useState(false);
   const [profileCompletionHint, setProfileCompletionHint] = useState(null)
   const [categoryQuery, setCategoryQuery] = useState(null)
+  const [scoreHint, setScoreHint] = useState(null)
   const profileSelectorRef = React.useRef(null)
   const searchActionsRef = React.useRef(null)
   const resultsRef = React.useRef(null)
@@ -375,6 +376,7 @@ export default function DiscoverGrants() {
     }
     setIsSearching(true)
     setProfileCompletionHint(null)
+    setScoreHint(null)
     const rawCategory =
       overrideCategoryQuery !== undefined ? overrideCategoryQuery : categoryQuery
     // Never treat React events / non-strings as a category (onClick={fn} passes the click event).
@@ -431,6 +433,7 @@ export default function DiscoverGrants() {
       }
       const opportunities = data?.opportunities ?? []
       setProfileCompletionHint(null)
+      setScoreHint(data?.score_hint || null)
       await handleCrawlerResults(opportunities)
     } catch (error) {
       console.error('[DiscoverGrants] Search error:', error)
@@ -1060,6 +1063,24 @@ export default function DiscoverGrants() {
                   <p className="text-sm text-amber-800 mt-1">{buildZeroResultDescription(profileGaps)}</p>
                 </div>
               </div>
+
+              {/* Score threshold suggestion — when matches exist below the slider */}
+              {scoreHint && scoreHint.bestScore > 0 && (
+                <div className="flex items-center gap-3 rounded-md bg-blue-50 border border-blue-200 p-3">
+                  <span className="text-blue-600 text-lg">&#x1F50D;</span>
+                  <div className="flex-1 text-sm text-blue-900">
+                    <strong>{scoreHint.totalScored}</strong> opportunities were found but scored below your <strong>{minMatchScore}%</strong> threshold (best match: <strong>{scoreHint.bestScore}%</strong>).
+                    {' '}
+                    <button
+                      className="underline font-medium hover:text-blue-700"
+                      onClick={() => { setMinMatchScore(scoreHint.suggestedThreshold); }}
+                    >
+                      Lower to {scoreHint.suggestedThreshold}% to see ~{scoreHint.countAtSuggested} results
+                    </button>
+                    {' '}then re-run the search.
+                  </div>
+                </div>
+              )}
 
               {/* Profile gap checklist with direct links */}
               {selectedProfile?.id && (profileGaps.missingLocation || profileGaps.missingEntityType || profileGaps.missingKeywords) && (
