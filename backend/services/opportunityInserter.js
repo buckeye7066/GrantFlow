@@ -331,6 +331,12 @@ export async function upsertFundingOpportunity(db, opportunity) {
     crawler_version: opportunity.crawler_version ?? null,
   }
 
+  // Postgres partial unique index requires the WHERE predicate in ON CONFLICT
+  // so the planner can infer the correct index. SQLite doesn't support this syntax.
+  const conflictClause = db.dialect === 'postgres'
+    ? 'ON CONFLICT(source, source_id) WHERE source IS NOT NULL AND source_id IS NOT NULL DO UPDATE SET'
+    : 'ON CONFLICT(source, source_id) DO UPDATE SET'
+
   const insert = db.prepare(`
     INSERT INTO funding_opportunities (
       id,
@@ -417,7 +423,7 @@ export async function upsertFundingOpportunity(db, opportunity) {
       @signal_tags,
       @crawler_version
     )
-    ON CONFLICT(source, source_id) DO UPDATE SET
+    ${conflictClause}
       title = COALESCE(excluded.title, funding_opportunities.title),
       sponsor = COALESCE(excluded.sponsor, funding_opportunities.sponsor),
       description = COALESCE(excluded.description, funding_opportunities.description),
