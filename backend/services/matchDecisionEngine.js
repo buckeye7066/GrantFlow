@@ -311,6 +311,19 @@ export function evaluateEligibility(profileNorm, oppNorm) {
  * @param {Object} oppNorm     - From normalizeOpportunity()
  * @returns {{ score: 0..100, matchedNeeds: string[] }}
  */
+/**
+ * How complete the profile is for scoring (location + entity + need breadth).
+ * Used to lift match % for catalog rows that lack structured need types.
+ */
+function estimateProfileStrengthForScoring(profileNorm) {
+  if (!profileNorm) return 0
+  const needs = profileNorm.needCategories ?? []
+  const n = needs.length
+  const hasLoc = Boolean(profileNorm.state || profileNorm.zip)
+  const hasEntity = Boolean(profileNorm.entityType)
+  return Math.min(100, n * 18 + (hasLoc ? 14 : 0) + (hasEntity ? 10 : 0))
+}
+
 export function calculateNeedAlignment(profileNorm, oppNorm) {
   const profileNeeds = profileNorm?.needCategories ?? []
   const oppNeeds = oppNorm?.needTypesSupported ?? []
@@ -321,16 +334,23 @@ export function calculateNeedAlignment(profileNorm, oppNorm) {
     return { score: 0, matchedNeeds: [] }
   }
 
-  // Opportunity declares no specific need types (general-purpose funding) →
-  // neutral baseline so entity-type + geography can carry a decision to ACCEPT.
+  // Opportunity declares no specific need types (common for legacy / directory catalog rows).
+  // Scale with profile strength so a fully filled profile can reach high match tiers (70–90+)
+  // when paired with credible sources — flat "30" made 80% min_score impossible.
   if (oppNeeds.length === 0) {
-    return { score: 30, matchedNeeds: [] }
+    const richness = estimateProfileStrengthForScoring(profileNorm)
+    const score = Math.min(92, Math.round(34 + richness * 0.55))
+    return { score, matchedNeeds: [] }
   }
 
   const matchedNeeds = profileNeeds.filter((n) => oppNeeds.includes(n))
 
   // Exact matches get full credit; partial overlap scales down
-  const score = Math.round((matchedNeeds.length / Math.max(profileNeeds.length, 1)) * 100)
+  let score = Math.round((matchedNeeds.length / Math.max(profileNeeds.length, 1)) * 100)
+  // Multi-need overlap: slight lift when several needs align (mission: profile fields increase score)
+  if (matchedNeeds.length >= 2) {
+    score = Math.min(100, Math.round(score * 1.06 + matchedNeeds.length * 2))
+  }
 
   return { score: Math.min(100, score), matchedNeeds }
 }
@@ -410,7 +430,14 @@ export function computeMatchDecision(rawProfile, rawOpportunity, opts = {}) {
   // Weights: need alignment 45%, source trust 25%, entity type match 20%, geo bonus 10%
   const entityTypeBonus = matchedProfileTraits.some(t => ['veteran', 'student', 'nonprofit', 'business'].includes(t)) ? 20 : 0
   const geoBonus = matchedProfileTraits.some(t => ['national_eligible', 'state_match'].includes(t)) ? 10 : 0
-  const rawScore = (needAlignmentScore * 0.45) + (sourceTrust * 0.25) + entityTypeBonus + geoBonus
+  const profileStrength = estimateProfileStrengthForScoring(profileNorm)
+  // Complete profiles meeting basic signals deserve a bounded lift so 80% thresholds return real rows.
+  const strengthBonus =
+    profileStrength >= 62 && needAlignmentScore >= 40
+      ? Math.min(20, Math.round((profileStrength - 50) * 0.32))
+      : 0
+  const rawScore =
+    (needAlignmentScore * 0.45) + (sourceTrust * 0.25) + entityTypeBonus + geoBonus + strengthBonus
   const score = Math.min(100, Math.round(rawScore))
 
   // Step 6: Confidence

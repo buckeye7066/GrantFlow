@@ -180,6 +180,7 @@ router.post('/run', ensureAuth, async (req, res) => {
     crawler_type,
     profile_id,
     min_match_score: bodyMinScore,
+    strict_min_score: bodyStrictMin,
   } = req.body
 
   let min_match_score = 50
@@ -203,6 +204,12 @@ router.post('/run', ensureAuth, async (req, res) => {
   }
 
   if (!(await ensureProfileAccess(req, res, String(profile_id)))) return
+
+  const strictMinScore =
+    bodyStrictMin === true ||
+    bodyStrictMin === 'true' ||
+    bodyStrictMin === 1 ||
+    bodyStrictMin === '1'
 
   try {
     const db = req.db
@@ -273,7 +280,7 @@ router.post('/run', ensureAuth, async (req, res) => {
       .slice(0, (strategy.maxResults || 100) + nearbyOpps.length)
 
     let thresholdFallbackMessage = null
-    if (filtered.length === 0 && allMapped.length > 0) {
+    if (!strictMinScore && filtered.length === 0 && allMapped.length > 0) {
       filtered = allMapped
         .filter((opp) => {
           const isDir = String(opp.source || '').startsWith('directory') ||
@@ -287,6 +294,10 @@ router.post('/run', ensureAuth, async (req, res) => {
       if (filtered.length > 0) {
         thresholdFallbackMessage = `No results met initial filters. Showing best available matches above ${min_match_score}%.`
       }
+    } else if (strictMinScore && filtered.length === 0 && allMapped.length > 0) {
+      console.info(
+        `[RealCrawlers] strict min_match_score=${min_match_score} — skipping threshold fallback (${allMapped.length} raw)`,
+      )
     }
 
     const effectiveProfile = profileContext?.profile ?? {}

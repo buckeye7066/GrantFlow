@@ -257,11 +257,14 @@ export default function DiscoverGrants() {
 
   // Catalog match: real funding opportunities from DB, scored by profile needs (relatable grants, not only directory links)
   const { data: catalogMatchResponse } = useQuery({
-    queryKey: ['discover-catalog', effectiveProfileId],
+    queryKey: ['discover-catalog', effectiveProfileId, minMatchScore],
     queryFn: async () => {
       if (!effectiveProfileId) return { opportunities: [] }
-      // Bypass readiness gates so Discover always shows catalog matches when backend has opportunities
-      return apiFetch(`/api/matching/profile/${effectiveProfileId}/opportunities?min_score=30&limit=200&skip_readiness_check=1`)
+      // Honor Discover slider: strict=1 disables server-side threshold relaxation (no 15% when you asked for 80%).
+      const ms = Math.min(100, Math.max(0, Number(minMatchScore) || 0))
+      return apiFetch(
+        `/api/matching/profile/${effectiveProfileId}/opportunities?min_score=${ms}&limit=200&skip_readiness_check=1&strict=1`,
+      )
     },
     enabled: authReady && Boolean(effectiveProfileId),
     staleTime: 0,
@@ -412,6 +415,7 @@ export default function DiscoverGrants() {
         crawlerType: 'comprehensive',
         profileData: profileForSearch,
         minMatchScore,
+        strictMinScore: true,
         itemRequest,
       })
       if (data && data.success === false) {

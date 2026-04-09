@@ -463,6 +463,30 @@ test('calculateNeedAlignment: partial overlap returns proportional score', () =>
   assert.ok(matchedNeeds.includes('food'), `Expected food in matched needs`)
 })
 
+test('computeMatchDecision: rich profile + catalog row without need types can score ≥80 (Discover slider)', () => {
+  const profile = normalizeProfile({
+    primary_type: 'individual',
+    state: 'OH',
+    postal_code: '44022',
+    needs: ['housing', 'food', 'medical', 'employment', 'utilities'],
+  })
+  const opp = {
+    title: 'National resource directory',
+    description: 'Find funding sources in your area.',
+    application_url: 'https://example.org/funding',
+    is_national: 1,
+    state: 'nationwide',
+    record_origin: 'curated_program',
+    categories: '[]',
+    keywords: '[]',
+  }
+  const decision = computeMatchDecision(profile, opp)
+  assert.ok(
+    decision.score >= 80,
+    `Expected score ≥80 for full profile + broad curated row, got ${decision.score}`,
+  )
+})
+
 // ---------------------------------------------------------------------------
 // 5. Source trust scoring
 // ---------------------------------------------------------------------------

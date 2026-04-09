@@ -144,6 +144,7 @@ export async function searchSpecificNeed({
  * @param {string} opts.crawlerType - Crawler type key.
  * @param {Object} [opts.profileData] - Optional pre-fetched profile data.
  * @param {number} [opts.minMatchScore] - Minimum match score threshold (default 50).
+ * @param {boolean} [opts.strictMinScore] - When true, do not relax threshold if nothing meets min (Discover).
  * @param {Object|null} [opts.itemRequest] - Optional specific item request.
  * @returns {Promise<Object>}
  */
@@ -152,6 +153,7 @@ export async function runRealCrawler({
   crawlerType,
   profileData,
   minMatchScore = 50,
+  strictMinScore = false,
   itemRequest = null,
 }) {
   const pid = typeof profileId === 'string' ? profileId.trim() : null
@@ -166,6 +168,7 @@ export async function runRealCrawler({
       profile_data: profileData ?? undefined,
       item_request: itemRequest ?? null,
       min_match_score: minMatchScore,
+      ...(strictMinScore ? { strict_min_score: true } : {}),
     }),
   })
   if (result?.success === false) {

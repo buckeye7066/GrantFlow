@@ -198,7 +198,12 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
       }
 
       const minScore = Number.parseInt(req.query.min_score ?? '50', 10)
-                   const limit = Math.min(Math.max(Number.parseInt(req.query.limit ?? '2000', 10) || 2000, 1), 5000)
+      // When strict=1 (Discover slider), do not relax threshold — honor the user's minimum match %.
+      const strictMin =
+        req.query.strict === '1' ||
+        req.query.allow_relax === '0' ||
+        String(req.query.relax ?? '1') === '0'
+      const limit = Math.min(Math.max(Number.parseInt(req.query.limit ?? '2000', 10) || 2000, 1), 5000)
                    const q = typeof req.query.q === 'string' ? req.query.q.trim().toLowerCase() : ''
 
       const baseContext = await loadProfileContext(req.db, profileId)
@@ -321,8 +326,9 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
         : allScored
 
       // Zero-results fallback: progressively lower threshold so users always see results.
+      // Skipped when strict=1 (Discover page) so the UI min-match slider is honored.
       let effectiveMinScore = minScore
-      if (scored.length === 0 && allScored.length > 0) {
+      if (!strictMin && scored.length === 0 && allScored.length > 0) {
         const fallbackThresholds = [30, 15, 0]
         for (const threshold of fallbackThresholds) {
           scored = allScored.filter((opp) => (opp.match_score ?? 0) >= threshold)
@@ -337,6 +343,8 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
           effectiveMinScore = 0
           console.log(`[matching] All thresholds exhausted; returning top ${scored.length} of ${allScored.length}`)
         }
+      } else if (strictMin && scored.length === 0 && allScored.length > 0) {
+        console.info(`[matching] strict min_score=${minScore} — no relax; returning 0 of ${allScored.length} scored`)
       }
 
       const MAX_RESPONSE = 500
