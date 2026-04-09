@@ -22,6 +22,7 @@ import crypto from 'crypto'
 import fs from 'fs'
 import path from 'path'
 import zipcodes from 'zipcodes'
+import { searchGrants } from './grantsGovClient.js'
 
 // Lazy-import better-sqlite3 only when actually needed (local script mode).
 // In production (Railway/Postgres), the app passes the shared db wrapper,
@@ -441,54 +442,38 @@ function generateUSZipCodes() {
 }
 
 /**
- * Search Grants.gov API for a specific ZIP code
+ * Search Grants.gov API for a specific ZIP code.
+ * Uses the resilient grantsGovClient (API key, User-Agent, retries) rather than
+ * raw axios — see grantsGovClient.js header comment.
  */
 async function searchGrantsGovByZip(zip, coords) {
-  const opportunities = []
-  
   try {
-    // Grants.gov "search2" public API — v2 is the current version (2026).
-    // Docs: https://api.grants.gov/v2/api/search2
-    const body = {
-      rows: 10,
-      startRecordNum: 0,
-      keyword: '',
-      oppStatuses: 'posted',
-      sortBy: 'openDate|desc',
-    }
+    const { ok, opportunities: hits } = await searchGrants('', { rows: 10 })
+    if (!ok || !Array.isArray(hits) || hits.length === 0) return []
 
-    const response = await axios.post('https://api.grants.gov/v2/api/search2', body, {
-      headers: { 'Content-Type': 'application/json' },
-      timeout: DEFAULT_CONFIG.timeout_ms,
-    })
-
-    const hits = response?.data?.data?.oppHits
-    if (Array.isArray(hits)) {
-      for (const [idx, hit] of hits.entries()) {
-        const sourceIdRaw = hit?.id || hit?.number || hit?.oppNumber || null
-        opportunities.push({
-          title: hit?.title || hit?.number || 'Grant opportunity',
-          sponsor: hit?.agency || hit?.agencyCode || 'Grants.gov',
-          description: '',
-          url: hit?.id ? `https://www.grants.gov/search-results-detail/${hit.id}` : 'https://www.grants.gov',
-          opportunity_number: hit?.number || null,
-          deadline: hit?.closeDate || null,
-          source: 'grants.gov',
-          source_id: sourceIdRaw ? String(sourceIdRaw) : `grantsgov:${zip}:${idx}`,
-          zip: zip,
-          // Grants.gov is national. Do not stamp it with the ZIP's state (it causes bad grouping).
-          // The ZIP/state association is tracked separately via funding_opportunity_geo_index.
-          state: null,
-          is_national: true,
-          type: 'OPPORTUNITY',
-        })
+    return hits.map((hit, idx) => {
+      const sourceIdRaw = hit.source_id || hit.id || hit.number || null
+      return {
+        title: hit.title || hit.number || 'Grant opportunity',
+        sponsor: hit.sponsor || hit.agency || 'Grants.gov',
+        description: hit.description || '',
+        url: hit.url || (hit.id ? `https://www.grants.gov/search-results-detail/${hit.id}` : 'https://www.grants.gov'),
+        opportunity_number: hit.number || hit.opportunity_number || null,
+        deadline: hit.deadline || hit.closeDate || null,
+        source: 'grants.gov',
+        source_id: sourceIdRaw ? String(sourceIdRaw) : `grantsgov:${zip}:${idx}`,
+        zip,
+        // Grants.gov is national. Do not stamp it with the ZIP's state (it causes bad grouping).
+        // The ZIP/state association is tracked separately via funding_opportunity_geo_index.
+        state: null,
+        is_national: true,
+        type: 'OPPORTUNITY',
       }
-    }
+    })
   } catch (error) {
     console.error(`[GeoCrawl] Grants.gov error for ZIP ${zip}:`, error.message)
+    return []
   }
-  
-  return opportunities
 }
 
 async function upsertGeoAssociation(db, { opportunityId, geoRunId, state, zip, county, source } = {}) {
@@ -617,25 +602,39 @@ async function searchOverpassLocalResources(zip, coords, config) {
     maxResults: config.overpass_max_results ?? 60,
   })
 
-  try {
-    const resp = await axios.post(
-      'https://overpass-api.de/api/interpreter',
-      new URLSearchParams({ data: query }).toString(),
-      {
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        timeout: Math.max(8000, Number(config.timeout_ms) || 10000),
-      },
-    )
+  // Overpass public API is frequently overloaded (504). Retry once with backoff.
+  const maxAttempts = 2
+  const timeoutMs = Math.max(30000, Number(config.timeout_ms) || 30000)
 
-    const elements = resp?.data?.elements
-    if (!Array.isArray(elements)) return opportunities
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      const resp = await axios.post(
+        'https://overpass-api.de/api/interpreter',
+        new URLSearchParams({ data: query }).toString(),
+        {
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          timeout: timeoutMs,
+        },
+      )
 
-    for (const el of elements) {
-      const mapped = mapOsmElementToOpportunity({ element: el, zip, coords })
-      if (mapped) opportunities.push(mapped)
+      const elements = resp?.data?.elements
+      if (!Array.isArray(elements)) return opportunities
+
+      for (const el of elements) {
+        const mapped = mapOsmElementToOpportunity({ element: el, zip, coords })
+        if (mapped) opportunities.push(mapped)
+      }
+      return opportunities
+    } catch (error) {
+      const status = error?.response?.status
+      if (attempt < maxAttempts && (status === 504 || status === 429 || status === 503)) {
+        const delay = 2000 * attempt
+        console.warn(`[GeoCrawl] Overpass ${status} for ZIP ${zip}, retrying in ${delay}ms...`)
+        await new Promise(r => setTimeout(r, delay))
+        continue
+      }
+      console.warn(`[GeoCrawl] Overpass error for ZIP ${zip}:`, error?.message || error)
     }
-  } catch (error) {
-    console.warn(`[GeoCrawl] Overpass error for ZIP ${zip}:`, error?.message || error)
   }
 
   return opportunities
@@ -1371,13 +1370,15 @@ async function updateZipProgress(db, zip, status, sources_found, error = null) {
  * Get last processed ZIP for resumability
  */
 async function getLastProcessedZip(db) {
+  // Only resume from ZIPs completed within the last 2 hours to avoid stale checkpoints.
   const row = await db.prepare(`
-    SELECT zip FROM national_zip_progress 
+    SELECT zip FROM national_zip_progress
     WHERE status = 'completed'
-    ORDER BY updated_at DESC 
+      AND updated_at > datetime('now', '-2 hours')
+    ORDER BY updated_at DESC
     LIMIT 1
   `).get()
-  
+
   return row?.zip || null
 }
 
@@ -1385,6 +1386,8 @@ async function getLastProcessedZipForList(db, zipList) {
   if (!Array.isArray(zipList) || zipList.length === 0) return null
   if (zipList.length > 2000) return null
 
+  // Only resume from ZIPs completed within the last 2 hours.
+  // Stale checkpoints from previous runs should not cause the crawl to skip everything.
   const placeholders = zipList.map(() => '?').join(', ')
   const row = await db
     .prepare(
@@ -1393,6 +1396,7 @@ async function getLastProcessedZipForList(db, zipList) {
         FROM national_zip_progress
         WHERE status = 'completed'
           AND zip IN (${placeholders})
+          AND updated_at > datetime('now', '-2 hours')
         ORDER BY updated_at DESC
         LIMIT 1
       `,
