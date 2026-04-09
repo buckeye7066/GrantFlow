@@ -109,9 +109,18 @@ export default function createGeoCrawlRouter({ uploadDir, getOpenAI } = {}) {
       if (!runId) return res.status(400).json({ error: 'runId is required' })
 
       const run = await getGeoCrawlRunWithBackfill(req.db, runId)
-      if (!run) return res.status(404).json({ error: 'Geo crawl run not found' })
+      // 200 + missing:true (not 404) so browsers do not log "failed to load resource" for a normal
+      // stale-id case; the monitor treats this as "gone" and stops polling.
+      if (!run) {
+        return res.status(200).json({
+          ok: true,
+          run: null,
+          missing: true,
+          message: 'Geo crawl run not found (unknown id, expired job, or different database).',
+        })
+      }
 
-      res.json({ ok: true, run })
+      res.json({ ok: true, run, missing: false })
     } catch (error) {
       console.error('[geo-crawl/runs/:runId] Error:', error)
       res.status(500).json({ error: error?.message || String(error) })
@@ -130,12 +139,17 @@ export default function createGeoCrawlRouter({ uploadDir, getOpenAI } = {}) {
       const limit = Math.min(Number(req.query?.limit ?? 200) || 200, 1000)
 
       // Same backfill as GET /runs so parallel monitor requests still see a consistent run row.
-      await getGeoCrawlRunWithBackfill(req.db, runId)
+      const run = await getGeoCrawlRunWithBackfill(req.db, runId)
 
       const events = await listGeoCrawlEvents(req.db, runId, { afterId, limit })
       const lastEventId = events.length ? events[events.length - 1].id : Number(afterId || 0)
 
-      res.json({ ok: true, events, last_event_id: lastEventId })
+      res.json({
+        ok: true,
+        events,
+        last_event_id: lastEventId,
+        missing: !run,
+      })
     } catch (error) {
       console.error('[geo-crawl/events] Error:', error)
       res.status(500).json({ error: error?.message || String(error) })

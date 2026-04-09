@@ -10,6 +10,9 @@ import { Link } from "react-router-dom"
 
 const LS_LAST_RUN_ID = "gf_geo_crawl_last_run_id"
 
+const STALE_RUN_MESSAGE =
+  "This run is no longer in the database (for example after a reset, different environment, or an old saved link). Start a new geo crawl or dismiss the monitor."
+
 async function fetchRun(runId) {
   return apiFetch(`/api/geo-crawl/runs/${encodeURIComponent(runId)}`)
 }
@@ -36,6 +39,11 @@ function isNotFoundError(err) {
   if (err.status === 404) return true
   const msg = String(err.message || err.details?.message || "")
   return /not\s+found|404/i.test(msg)
+}
+
+/** Server returns 200 + missing:true for unknown run ids (avoids browser console 404 noise). */
+function isGonePayload(runRes, evRes) {
+  return Boolean(runRes?.missing) || Boolean(evRes?.missing)
 }
 
 export default function GeoCrawlMonitor({ runId: runIdProp, onStaleRun }) {
@@ -78,6 +86,13 @@ export default function GeoCrawlMonitor({ runId: runIdProp, onStaleRun }) {
     Promise.all([fetchRun(runId), fetchEvents(runId, 0)])
       .then(([runRes, evRes]) => {
         if (!mounted) return
+        if (isGonePayload(runRes, evRes)) {
+          setSuspendPolling(true)
+          setError(STALE_RUN_MESSAGE)
+          setRun(null)
+          setEvents([])
+          return
+        }
         setRun(runRes?.run ?? null)
         const nextEvents = Array.isArray(evRes?.events) ? evRes.events : []
         setEvents(nextEvents.slice(-200))
@@ -87,9 +102,7 @@ export default function GeoCrawlMonitor({ runId: runIdProp, onStaleRun }) {
         if (!mounted) return
         if (isNotFoundError(err)) {
           setSuspendPolling(true)
-          setError(
-            "This run is no longer in the database (for example after a reset, different environment, or an old saved link). Start a new geo crawl or dismiss the monitor.",
-          )
+          setError(STALE_RUN_MESSAGE)
           return
         }
         setError(err?.message || "Unable to load geo crawl run.")
@@ -107,6 +120,12 @@ export default function GeoCrawlMonitor({ runId: runIdProp, onStaleRun }) {
       try {
         const [runRes, evRes] = await Promise.all([fetchRun(runId), fetchEvents(runId, lastEventId)])
         if (!mounted) return
+        if (isGonePayload(runRes, evRes)) {
+          setSuspendPolling(true)
+          setError(STALE_RUN_MESSAGE)
+          setRun(null)
+          return
+        }
         const nextRun = runRes?.run ?? null
         setRun(nextRun)
         const nextEvents = Array.isArray(evRes?.events) ? evRes.events : []
@@ -122,9 +141,7 @@ export default function GeoCrawlMonitor({ runId: runIdProp, onStaleRun }) {
         if (!mounted) return
         if (isNotFoundError(err)) {
           setSuspendPolling(true)
-          setError(
-            "This run is no longer in the database (for example after a reset, different environment, or an old saved link). Start a new geo crawl or dismiss the monitor.",
-          )
+          setError(STALE_RUN_MESSAGE)
         }
       }
     }, 1500)
