@@ -582,7 +582,19 @@ export default function AdminGeoCrawl() {
         </CardContent>
       </Card>
 
-      {activeRunId ? <GeoCrawlMonitor runId={activeRunId} /> : null}
+      {activeRunId ? (
+        <GeoCrawlMonitor
+          runId={activeRunId}
+          onStaleRun={() => {
+            setActiveRunId("")
+            try {
+              window.localStorage.removeItem(LS_LAST_RUN_ID)
+            } catch {
+              // ignore
+            }
+          }}
+        />
+      ) : null}
     </div>
   )
 }

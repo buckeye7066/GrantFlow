@@ -80,7 +80,7 @@ const FAQ_ITEMS = [
   },
   {
     q: "What does Smart Matcher do?",
-    a: "Smart Matcher analyses your saved profile â including location, needs, applicant type, and eligibility details â and runs them through GrantFlow's matching engine to surface grants you are likely to qualify for. The more complete your profile, the better the matches.",
+    a: "Smart Matcher analyses your saved profile, including location, needs, applicant type, and eligibility details, and runs them through GrantFlow's matching engine to surface grants you are likely to qualify for. You can also describe a specific need in your own words on that page and use Understand & search to turn it into catalog keywords. The more complete your profile, the better the matches.",
   },
   {
     q: "Where do my uploaded documents go?",

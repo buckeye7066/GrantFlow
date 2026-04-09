@@ -31,19 +31,30 @@ function statusBadge(status) {
   return "bg-slate-100 text-slate-700"
 }
 
-export default function GeoCrawlMonitor({ runId: runIdProp }) {
+function isNotFoundError(err) {
+  if (!err) return false
+  if (err.status === 404) return true
+  const msg = String(err.message || err.details?.message || "")
+  return /not\s+found|404/i.test(msg)
+}
+
+export default function GeoCrawlMonitor({ runId: runIdProp, onStaleRun }) {
   const [runId, setRunId] = useState(runIdProp || "")
   const [loading, setLoading] = useState(false)
   const [run, setRun] = useState(null)
   const [events, setEvents] = useState([])
   const [lastEventId, setLastEventId] = useState(0)
   const [error, setError] = useState("")
+  /** When true, run/events are missing server-side — stop polling to avoid 404 spam. */
+  const [suspendPolling, setSuspendPolling] = useState(false)
 
   const tailRef = useRef(null)
 
   useEffect(() => {
     if (runIdProp) {
       setRunId(runIdProp)
+      setSuspendPolling(false)
+      setError("")
       try {
         window.localStorage.setItem(LS_LAST_RUN_ID, runIdProp)
       } catch {
@@ -74,6 +85,13 @@ export default function GeoCrawlMonitor({ runId: runIdProp }) {
       })
       .catch((err) => {
         if (!mounted) return
+        if (isNotFoundError(err)) {
+          setSuspendPolling(true)
+          setError(
+            "This run is no longer in the database (for example after a reset, different environment, or an old saved link). Start a new geo crawl or dismiss the monitor.",
+          )
+          return
+        }
         setError(err?.message || "Unable to load geo crawl run.")
       })
       .finally(() => mounted && setLoading(false))
@@ -83,7 +101,7 @@ export default function GeoCrawlMonitor({ runId: runIdProp }) {
   }, [runId])
 
   useEffect(() => {
-    if (!runId) return
+    if (!runId || suspendPolling) return
     let mounted = true
     const id = window.setInterval(async () => {
       try {
@@ -100,15 +118,21 @@ export default function GeoCrawlMonitor({ runId: runIdProp }) {
             tailRef.current?.scrollIntoView({ behavior: "smooth", block: "end" })
           }, 0)
         }
-      } catch {
-        // keep polling resilient
+      } catch (err) {
+        if (!mounted) return
+        if (isNotFoundError(err)) {
+          setSuspendPolling(true)
+          setError(
+            "This run is no longer in the database (for example after a reset, different environment, or an old saved link). Start a new geo crawl or dismiss the monitor.",
+          )
+        }
       }
     }, 1500)
     return () => {
       mounted = false
       window.clearInterval(id)
     }
-  }, [runId, lastEventId])
+  }, [runId, lastEventId, suspendPolling])
 
   const header = useMemo(() => {
     if (!run) return null
@@ -174,9 +198,29 @@ export default function GeoCrawlMonitor({ runId: runIdProp }) {
         </div>
 
         {error ? (
-          <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 flex items-start gap-2">
-            <AlertCircle className="h-4 w-4 mt-0.5" />
-            <span>{error}</span>
+          <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+            <div className="flex items-start gap-2 min-w-0">
+              <AlertCircle className="h-4 w-4 mt-0.5 shrink-0" />
+              <span>{error}</span>
+            </div>
+            {suspendPolling ? (
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                className="shrink-0 border-red-300 text-red-800 hover:bg-red-100"
+                onClick={() => {
+                  try {
+                    window.localStorage.removeItem(LS_LAST_RUN_ID)
+                  } catch {
+                    // ignore
+                  }
+                  onStaleRun?.()
+                }}
+              >
+                Dismiss monitor
+              </Button>
+            ) : null}
           </div>
         ) : null}
 

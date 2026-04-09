@@ -9,9 +9,14 @@ function read(relPath) {
 }
 
 test('admin geo crawl: monitor persists last run id across refresh', () => {
-  const src = read('src/components/admin/AdminGeoCrawl.jsx')
-  assert.ok(src.includes('gf_geo_crawl_last_run_id'), 'localStorage key missing')
-  assert.ok(src.includes('localStorage.getItem'), 'should restore last run id on mount')
-  assert.ok(src.includes('localStorage.setItem'), 'should persist last run id when starting crawl')
+  const admin = read('src/components/admin/AdminGeoCrawl.jsx')
+  assert.ok(admin.includes('gf_geo_crawl_last_run_id'), 'localStorage key missing')
+  assert.ok(admin.includes('localStorage.getItem'), 'should restore last run id on mount')
+  assert.ok(admin.includes('localStorage.setItem'), 'should persist last run id when starting crawl')
+  assert.ok(admin.includes('onStaleRun'), 'should clear stale run id when monitor dismisses after 404')
+
+  const monitor = read('src/components/admin/GeoCrawlMonitor.jsx')
+  assert.ok(monitor.includes('suspendPolling'), 'should stop polling when run is missing (404)')
+  assert.ok(monitor.includes('Dismiss monitor'), 'should offer dismiss when run is gone')
 })
 

@@ -273,10 +273,17 @@ export const HELP_REGISTRY = [
     route: '/SmartMatcher',
     navGroup: 'find',
     title: 'Smart Matcher',
-    description: 'AI-powered matching: find grants that fit your profile automatically.',
-    purpose: 'Uses your complete profile data to run intelligent matching across all known funding sources. The more complete your profile, the better the matches.',
+    description:
+      'AI-powered matching: find grants that fit your profile. Describe what you need in plain language or use keywords.',
+    purpose:
+      'Uses your complete profile data to run intelligent matching across all known funding sources. The Describe what you need box plus Understand & search turns a sentence (for example bereavement travel or a passenger van) into catalog search terms; several terms are searched together so related programs are easier to find. The more complete your profile, the better the matches.',
     whoCanUse: 'all',
-    mainActions: ['Run Smart Match for active profile', 'View match scores and explanations', 'Add top matches to pipeline'],
+    mainActions: [
+      'Describe your need in plain language (Understand & search)',
+      'Run Smart Match for active profile',
+      'View match scores and explanations',
+      'Add top matches to pipeline',
+    ],
     relatedFeatures: ['ProfileMatcher', 'FundingResults', 'MyProfiles'],
     affectsMatching: true,
     fields: [],

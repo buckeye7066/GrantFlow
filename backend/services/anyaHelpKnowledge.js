@@ -234,10 +234,17 @@ export const HELP_REGISTRY = [
     route: '/SmartMatcher',
     navGroup: 'find',
     title: 'Smart Matcher',
-    description: 'Find grants that fit your profile automatically, with plain-language explanations for every result.',
-    purpose: 'GrantFlow uses a single matching engine (matchEngine.js v3.0.0) that scores each opportunity 0-100 based on: geographic match (state/county/city/ZIP), applicant type match, keyword overlap, category alignment, and eligibility checks. Every result includes a reasons[] array explaining why it matched. The canonical decision engine assigns ACCEPT (score ≥ 60), REVIEW (30-59), or REJECT (< 30 or hard ineligible). The more complete your profile, the better the matches.', // Keep version in sync with MATCHER_VERSION in matchEngine.js
+    description:
+      'Find grants that fit your profile automatically, with plain-language explanations for every result. You can also type what you need in your own words and use Understand & search.',
+    purpose:
+      'GrantFlow uses a single matching engine (matchEngine.js v3.0.0) that scores each opportunity 0-100 based on: geographic match (state/county/city/ZIP), applicant type match, keyword overlap, category alignment, and eligibility checks. Every result includes a reasons[] array explaining why it matched. The canonical decision engine assigns ACCEPT (score ≥ 60), REVIEW (30-59), or REJECT (< 30 or hard ineligible). The Describe what you need area plus Understand & search expands plain language into several catalog search terms (OR-style) so related programs are not missed. The more complete your profile, the better the matches.', // Keep version in sync with MATCHER_VERSION in matchEngine.js
     whoCanUse: 'all',
-    mainActions: ['Run Smart Match for active profile', 'View match scores and explanations', 'Add top matches to pipeline'],
+    mainActions: [
+      'Describe your need in plain language (Understand & search)',
+      'Run Smart Match for active profile',
+      'View match scores and explanations',
+      'Add top matches to pipeline',
+    ],
     relatedFeatures: ['ProfileMatcher', 'FundingResults', 'MyProfiles'],
     affectsMatching: true,
     fields: [],

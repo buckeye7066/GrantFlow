@@ -8,8 +8,34 @@ import { getDataReadiness } from '../services/dataReadinessService.js'
 import { checkProfileReadiness } from '../services/profileReadinessService.js'
 import { trustedOriginClause, trustedSourceClause } from '../utils/recordOrigins.js'
 import { isJunkOpportunity } from '../services/contentFilter.js'
+import { interpretFundingIntent, sanitizeSearchTerm } from '../services/smartMatcherIntent.js'
+import { createOpenAIClient } from '../utils/openaiClient.js'
 
 const router = express.Router()
+
+/** @param {import('express').Request} req */
+function collectSearchTermsFromQuery(req) {
+  const terms = []
+  const q = typeof req.query.q === 'string' ? sanitizeSearchTerm(req.query.q) : ''
+  if (q) terms.push(q)
+
+  const raw = req.query.q_terms
+  const arr = raw === undefined ? [] : Array.isArray(raw) ? raw : [raw]
+  for (const t of arr) {
+    const s = sanitizeSearchTerm(String(t))
+    if (s) terms.push(s)
+  }
+
+  const out = []
+  const seen = new Set()
+  for (const t of terms) {
+    if (!t || seen.has(t)) continue
+    seen.add(t)
+    out.push(t)
+    if (out.length >= 16) break
+  }
+  return out
+}
 
 /**
    * Junk origins (synthetic, manual) are excluded via a shared blocklist
@@ -33,6 +59,36 @@ async function requireProfileAccess(req, res, profileId) {
     if (!ok) return null
     return ctx
 }
+
+/**
+ * POST /api/matching/interpret-intent
+ * Parse free-text funding needs into catalog search terms (rules + optional OpenAI).
+ */
+router.post('/interpret-intent', async (req, res) => {
+  const ctx = requireAuth(req, res)
+  if (!ctx) return
+  try {
+    const text = typeof req.body?.text === 'string' ? req.body.text : ''
+    if (!String(text).trim()) {
+      return res.status(400).json({
+        error: 'text_required',
+        message: 'Describe what you are looking for in the text field.',
+      })
+    }
+    let openai = null
+    try {
+      const r = createOpenAIClient({ allowMissing: true })
+      openai = r?.openai ?? null
+    } catch {
+      openai = null
+    }
+    const result = await interpretFundingIntent(text, { openai })
+    res.json({ ok: true, ...result })
+  } catch (error) {
+    console.error('[matching/interpret-intent]', error)
+    res.status(500).json(formatError(error))
+  }
+})
 
 /**
  * Match a profile to grants in its organization pipeline.
@@ -204,7 +260,7 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
         req.query.allow_relax === '0' ||
         String(req.query.relax ?? '1') === '0'
       const limit = Math.min(Math.max(Number.parseInt(req.query.limit ?? '2000', 10) || 2000, 1), 5000)
-                   const q = typeof req.query.q === 'string' ? req.query.q.trim().toLowerCase() : ''
+      const searchTerms = collectSearchTermsFromQuery(req)
 
       const baseContext = await loadProfileContext(req.db, profileId)
                    const profileContext = buildProfileFacets(baseContext)
@@ -249,12 +305,19 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
               })`,
             )
 
-      if (q) {
-              conditions.push(
-                        '(LOWER(title) LIKE ? OR LOWER(description) LIKE ? OR LOWER(keywords) LIKE ? OR LOWER(categories) LIKE ?)',
-                      )
-              const pattern = `%${q}%`
-              params.push(pattern, pattern, pattern, pattern)
+      if (searchTerms.length > 0) {
+        const orParts = searchTerms.map(
+          () =>
+            '(LOWER(title) LIKE ? OR LOWER(description) LIKE ? OR LOWER(keywords) LIKE ? OR LOWER(categories) LIKE ?)',
+        )
+        conditions.push(`(${orParts.join(' OR ')})`)
+        for (const t of searchTerms) {
+          const pattern = `%${t}%`
+          params.push(pattern, pattern, pattern, pattern)
+        }
+        if (searchTerms.length > 1) {
+          console.info(`[matching] catalog filter: ${searchTerms.length} OR search terms (smart matcher / multi-keyword)`)
+        }
       }
 
       // (profile isolation already applied above; no duplicate needed)

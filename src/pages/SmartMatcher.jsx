@@ -3,6 +3,7 @@ import { Sparkles, Search, Filter, SlidersHorizontal, Star, TrendingUp, Award, P
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import { Textarea } from "@/components/ui/textarea"
 import { Label } from "@/components/ui/label"
 import { Badge } from "@/components/ui/badge"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
@@ -13,6 +14,7 @@ import { apiFetch } from "@/api/client"
 import { getItemSuggestions } from "@/api/items"
 import { getProfile } from "@/api/profiles"
 import { runSmartCrawler } from "@/api/crawlers"
+import { interpretMatcherIntent } from "@/api/matching"
 import ProfileSelect from "@/components/shared/ProfileSelect"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { useToast } from "@/components/ui/use-toast"
@@ -85,6 +87,10 @@ const DEFAULT_CHECKLIST_ITEMS = [
 export default function SmartMatcher() {
     const [selectedProfileId, setSelectedProfileId] = useState("")
     const [searchQuery, setSearchQuery] = useState("")
+    /** When set, catalog query uses OR across these terms (from “Understand & search”). */
+    const [parsedSearchTerms, setParsedSearchTerms] = useState(null)
+    const [intentSummary, setIntentSummary] = useState("")
+    const [freeTextNeed, setFreeTextNeed] = useState("")
     const [minScore, setMinScore] = useState(50)
     const [selectedOpp, setSelectedOpp] = useState(null)
     const { toast } = useToast()
@@ -124,6 +130,9 @@ export default function SmartMatcher() {
   // -- Reset all search state when profile switches --
   useEffect(() => {
         setSearchQuery("")
+        setParsedSearchTerms(null)
+        setIntentSummary("")
+        setFreeTextNeed("")
         setSelectedOpp(null)
         setIsSearchingNeeds(false)
         autoPopulatedProfileRef.current = null
@@ -222,6 +231,8 @@ export default function SmartMatcher() {
         autoPopulatedProfileRef.current = selectedProfileId
         const keywords = inferredNeeds.slice(0, 5).map((n) => n.name).join(" ")
         setSearchQuery(keywords)
+        setParsedSearchTerms(null)
+        setIntentSummary("")
   }, [selectedProfileId, inferredNeeds, isSuggestionsLoading, searchQuery])
 
   // -- Fetch selected profile data --
@@ -233,6 +244,37 @@ export default function SmartMatcher() {
   })
 
   // -- Smart crawler mutation --
+  const interpretMutation = useMutation({
+    mutationFn: () => interpretMatcherIntent(freeTextNeed),
+    onSuccess: (raw) => {
+      const payload = raw?.data ?? raw ?? {}
+      const terms = Array.isArray(payload.search_terms) ? payload.search_terms.filter(Boolean) : []
+      if (terms.length === 0) {
+        toast({
+          title: "Could not extract search terms",
+          description: "Try rephrasing with what you need (for example travel, vehicle, rent, medical).",
+          variant: "destructive",
+        })
+        return
+      }
+      setParsedSearchTerms(terms.map((t) => String(t).toLowerCase().trim()).filter(Boolean))
+      setIntentSummary(typeof payload.summary === "string" ? payload.summary : "")
+      setSearchQuery(terms.join(", "))
+      queryClient.invalidateQueries({ queryKey: ["smart-matcher"] })
+      toast({
+        title: "Search updated from your description",
+        description: payload.summary || `Using ${terms.length} focus terms for the catalog.`,
+      })
+    },
+    onError: (err) => {
+      toast({
+        title: "Could not interpret request",
+        description: err?.message ?? "Try again or use keywords below.",
+        variant: "destructive",
+      })
+    },
+  })
+
   const crawlMutation = useMutation({
         mutationFn: () => runSmartCrawler({
         profileId: selectedProfileId,
@@ -268,6 +310,10 @@ export default function SmartMatcher() {
 
         const query = allChecked.join(" ")
         setSearchQuery(query)
+        setParsedSearchTerms(
+          allChecked.map((t) => String(t).toLowerCase().trim()).filter(Boolean),
+        )
+        setIntentSummary("")
         setIsSearchingNeeds(true)
 
         // Force refetch even if keywords haven't changed
@@ -279,7 +325,7 @@ export default function SmartMatcher() {
 
   // -- Matching data --
   const { data: scoredResponse, isLoading: isScoring } = useQuery({
-        queryKey: ['smart-matcher', selectedProfileId, minScore, searchQuery],
+        queryKey: ['smart-matcher', selectedProfileId, minScore, searchQuery, parsedSearchTerms],
         queryFn: async () => {
                 if (!selectedProfileId || selectedProfileId === 'all') {
                           return { opportunities: [], total_scored: 0, returned: 0 }
@@ -288,7 +334,19 @@ export default function SmartMatcher() {
                 qs.set('min_score', String(minScore))
                 qs.set('limit', '500')
                 qs.set('skip_readiness_check', '1')
-                if (searchQuery?.trim()) qs.set('q', searchQuery.trim())
+                const fromIntent =
+                  Array.isArray(parsedSearchTerms) && parsedSearchTerms.length > 0
+                    ? parsedSearchTerms.map((t) => String(t).toLowerCase().trim()).filter(Boolean)
+                    : null
+                const manual = searchQuery?.trim() ? [searchQuery.trim().toLowerCase()] : []
+                const terms = fromIntent && fromIntent.length > 0 ? fromIntent : manual
+                if (terms.length === 1) {
+                  qs.set('q', terms[0])
+                } else if (terms.length > 1) {
+                  for (const t of terms) {
+                    qs.append('q_terms', t)
+                  }
+                }
                 return await apiFetch(`/api/matching/profile/${selectedProfileId}/opportunities?${qs.toString()}`)
         },
         enabled: Boolean(selectedProfileId) && selectedProfileId !== 'all',
@@ -356,6 +414,38 @@ export default function SmartMatcher() {
                                             <CardDescription>Select a profile and adjust matching criteria</CardDescription>
                                 </CardHeader>
                                 <CardContent className="space-y-4">
+                                            <div className="space-y-2 rounded-lg border border-slate-200 bg-slate-50/80 p-4">
+                                              <Label className="text-slate-800">Describe what you need (free text)</Label>
+                                              <p className="text-xs text-slate-600">
+                                                Plain language is fine — for example bereavement travel, a passenger van, rent help, or medical equipment.
+                                                We turn this into search terms and match against your profile (recall over strict keyword overlap).
+                                              </p>
+                                              <Textarea
+                                                placeholder='e.g. "Help me find funding for an airplane ticket for bereavement" or "I need a 15 passenger van for our nonprofit"'
+                                                value={freeTextNeed}
+                                                onChange={(e) => setFreeTextNeed(e.target.value)}
+                                                rows={3}
+                                                className="resize-y bg-white"
+                                              />
+                                              <div className="flex flex-wrap items-center gap-2">
+                                                <Button
+                                                  type="button"
+                                                  size="sm"
+                                                  onClick={() => interpretMutation.mutate()}
+                                                  disabled={interpretMutation.isPending || !freeTextNeed.trim() || !selectedProfileId || selectedProfileId === "all"}
+                                                >
+                                                  {interpretMutation.isPending ? (
+                                                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                                                  ) : (
+                                                    <Sparkles className="w-4 h-4 mr-2" />
+                                                  )}
+                                                  Understand &amp; search
+                                                </Button>
+                                                {intentSummary ? (
+                                                  <span className="text-xs text-slate-600 max-w-xl">{intentSummary}</span>
+                                                ) : null}
+                                              </div>
+                                            </div>
                                             <div>
                                                           <Label>Profile</Label>
                                                           <ProfileSelect
@@ -386,16 +476,27 @@ export default function SmartMatcher() {
                                             )}
                                             <div className="grid md:grid-cols-2 gap-4">
                                                           <div>
-                                                                          <Label>Search Keywords</Label>
+                                                                          <Label>Search keywords (optional override)</Label>
                                                                           <div className="relative">
                                                                                             <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-slate-400" />
                                                                                             <Input
-                                                                                                                  placeholder="Filter by keyword..."
+                                                                                                                  placeholder="Single phrase filter, or edit after “Understand & search”…"
                                                                                                                   value={searchQuery}
-                                                                                                                  onChange={(e) => setSearchQuery(e.target.value)}
+                                                                                                                  onChange={(e) => {
+                                                                                                                    setSearchQuery(e.target.value)
+                                                                                                                    setParsedSearchTerms(null)
+                                                                                                                    setIntentSummary("")
+                                                                                                                  }}
                                                                                                                   className="pl-10"
                                                                                                                 />
                                                                           </div>
+                                                                          {parsedSearchTerms && parsedSearchTerms.length > 1 ? (
+                                                                            <p className="text-xs text-slate-500 mt-1">
+                                                                              Matching opportunities that mention any of:{" "}
+                                                                              {parsedSearchTerms.slice(0, 8).join(" · ")}
+                                                                              {parsedSearchTerms.length > 8 ? " …" : ""}
+                                                                            </p>
+                                                                          ) : null}
                                                           </div>
                                                           <div>
                                                                           <Label>Minimum Match Score</Label>

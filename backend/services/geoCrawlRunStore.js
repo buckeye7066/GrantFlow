@@ -362,6 +362,25 @@ export async function findCrawlerJobByGeoRunId(db, geoRunId) {
   if (!id) return null
 
   if (db?.dialect === 'postgres') {
+    // parameters is TEXT; LIKE on the raw JSON is the most reliable path (avoids ::jsonb cast quirks).
+    const likePat = `%"geo_run_id":"${id}"%`
+    try {
+      const row = await db
+        .prepare(
+          `
+            SELECT id, type, status, parameters, created_at, started_at, completed_at, result_count, error
+            FROM crawler_jobs
+            WHERE type = 'comprehensive'
+              AND parameters LIKE $1
+            ORDER BY created_at DESC
+            LIMIT 1
+          `,
+        )
+        .get(likePat)
+      if (row) return row
+    } catch (e) {
+      console.warn('[geoCrawlRunStore] Postgres LIKE geo_run_id lookup failed:', e?.message || e)
+    }
     try {
       const row = await db
         .prepare(
@@ -376,31 +395,14 @@ export async function findCrawlerJobByGeoRunId(db, geoRunId) {
         )
         .get(id)
       if (row) return row
-    } catch (e) {
-      console.warn('[geoCrawlRunStore] Postgres jsonb geo_run_id lookup failed:', e?.message || e)
-    }
-    const likePat = `%"geo_run_id":"${id}"%`
-    try {
-      return await db
-        .prepare(
-          `
-            SELECT id, type, status, parameters, created_at, started_at, completed_at, result_count, error
-            FROM crawler_jobs
-            WHERE type = 'comprehensive'
-              AND parameters LIKE $1
-            ORDER BY created_at DESC
-            LIMIT 1
-          `,
-        )
-        .get(likePat)
     } catch (e2) {
-      console.warn('[geoCrawlRunStore] LIKE fallback for geo_run_id failed:', e2?.message || e2)
-      return null
+      console.warn('[geoCrawlRunStore] Postgres jsonb geo_run_id lookup failed:', e2?.message || e2)
     }
+    return null
   }
 
   try {
-    return await db
+    const row = await db
       .prepare(
         `
           SELECT id, type, status, parameters, created_at, started_at, completed_at, result_count, error
@@ -412,8 +414,27 @@ export async function findCrawlerJobByGeoRunId(db, geoRunId) {
         `,
       )
       .get(id)
+    if (row) return row
   } catch (e) {
-    console.warn('[geoCrawlRunStore] SQLite geo_run_id lookup failed:', e?.message || e)
+    console.warn('[geoCrawlRunStore] SQLite json_extract geo_run_id lookup failed:', e?.message || e)
+  }
+
+  const likePat = `%"geo_run_id":"${id}"%`
+  try {
+    return await db
+      .prepare(
+        `
+          SELECT id, type, status, parameters, created_at, started_at, completed_at, result_count, error
+          FROM crawler_jobs
+          WHERE type = 'comprehensive'
+            AND parameters LIKE ?
+          ORDER BY created_at DESC
+          LIMIT 1
+        `,
+      )
+      .get(likePat)
+  } catch (e2) {
+    console.warn('[geoCrawlRunStore] SQLite LIKE geo_run_id lookup failed:', e2?.message || e2)
     return null
   }
 }
