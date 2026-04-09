@@ -338,7 +338,7 @@ export async function runOnStartup(db) {
   }
   
   console.log('[Anya Scheduler] Running startup operations...')
-  return runAllAutonomousOperations({ db }, 'startup')
+  return runAllAutonomousOperations({ db, user: { id: 'system', role: 'admin', is_admin: true } }, 'startup')
 }
 
 let _adminLoginRunInProgress = false
@@ -391,7 +391,7 @@ export async function checkSchedule(db) {
 
   console.log('[Anya Scheduler] Running scheduled operations...')
   try {
-    const result = await runAllAutonomousOperations({ db }, 'schedule')
+    const result = await runAllAutonomousOperations({ db, user: { id: 'system', role: 'admin', is_admin: true } }, 'schedule')
     _lastScheduledRunDate = today
     return result
   } catch (err) {
