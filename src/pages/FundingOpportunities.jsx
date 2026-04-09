@@ -1,12 +1,16 @@
-import React, { useMemo, useState } from "react"
+import React, { useMemo, useState, useCallback } from "react"
 import { useQuery } from "@tanstack/react-query"
 import { Link, useNavigate, useSearchParams } from "react-router-dom"
 import {
   AlertTriangle,
+  Bookmark,
   Building,
   CalendarDays,
   CheckCircle2,
   DollarSign,
+  Download,
+  Eye,
+  EyeOff,
   ExternalLink,
   FileText,
   Filter,
@@ -15,11 +19,14 @@ import {
   Loader2,
   MapPin,
   Printer,
+  Save,
   Shield,
   ShieldAlert,
   ShieldCheck,
   Sparkles,
   Target,
+  Trash2,
+  X,
 } from "lucide-react"
 import { format, formatDistanceToNowStrict } from "date-fns"
 import { Card, CardContent, CardFooter, CardHeader } from "@/components/ui/card"
@@ -46,6 +53,7 @@ import { cn } from "@/lib/utils"
 import { formatAddress, createPageUrl } from "@/utils"
 import { env } from "@/config/env.js"
 import GeoFundingView from "@/components/funding/GeoFundingView"
+import { useSavedSearches, useViewHistory, useHiddenGrants, exportGrantAsPDF, parseBooleanQuery } from "@/hooks/useGrantTools"
 
 const NOT_AVAILABLE = 'N/A'
 
@@ -308,6 +316,10 @@ function OpportunityCard({
   profiles = [],
   selectedProfileId,
   onSelectProfileId,
+  viewed = false,
+  onHide,
+  onUnhide,
+  isGrantHidden = false,
 }) {
   const matchScore = match?.score ?? 0
   const complianceStatus = opportunity.compliance_status ?? "unknown"
@@ -404,9 +416,35 @@ function OpportunityCard({
             <Badge className={cn("text-xs border", complianceBadgeClass)}>{complianceBadgeText}</Badge>
           </div>
         </div>
-        <h3 className="text-lg font-semibold text-slate-900 line-clamp-2 group-hover:text-blue-700 transition-colors">
-          {opportunity.title}
-        </h3>
+        <div className="flex items-start justify-between gap-2">
+          <h3 className="text-lg font-semibold text-slate-900 line-clamp-2 group-hover:text-blue-700 transition-colors flex-1">
+            {opportunity.title}
+          </h3>
+          <div className="flex items-center gap-1 shrink-0">
+            {viewed && (
+              <span className="inline-flex items-center gap-1 text-[10px] text-slate-400" title="Previously viewed">
+                <Eye className="w-3 h-3" />
+              </span>
+            )}
+            {isGrantHidden ? (
+              <button
+                className="p-1 rounded hover:bg-slate-100 text-slate-400 hover:text-blue-600"
+                title="Unhide this grant"
+                onClick={(e) => { e.stopPropagation(); onUnhide?.(opportunity.id) }}
+              >
+                <Eye className="w-3.5 h-3.5" />
+              </button>
+            ) : (
+              <button
+                className="p-1 rounded hover:bg-slate-100 text-slate-400 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity"
+                title="Hide this grant"
+                onClick={(e) => { e.stopPropagation(); onHide?.(opportunity.id) }}
+              >
+                <EyeOff className="w-3.5 h-3.5" />
+              </button>
+            )}
+          </div>
+        </div>
         {/* Trust indicator */}
         {opportunity.last_verified_at ? (
           <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-emerald-100 text-emerald-800 border border-emerald-200">
@@ -930,6 +968,14 @@ function OpportunityDetail({
               Print summary
             </Button>
             <Button
+              variant="outline"
+              size="sm"
+              onClick={() => exportGrantAsPDF(opportunity)}
+            >
+              <Download className="w-4 h-4 mr-2" />
+              Export PDF
+            </Button>
+            <Button
               variant="secondary"
               size="sm"
               onClick={() => onSaveDocument?.(opportunity)}
@@ -995,7 +1041,14 @@ export default function FundingOpportunities() {
   const [creatingVNextOpportunityId, setCreatingVNextOpportunityId] = useState(null)
   const [currentPage, setCurrentPage] = useState(1)
   const [viewMode, setViewMode] = useState("list") // "list" | "geo"
+  const [showHidden, setShowHidden] = useState(false)
+  const [showSavedSearches, setShowSavedSearches] = useState(false)
   const ITEMS_PER_PAGE = 50
+
+  // GrantWatch-beating tools
+  const { savedSearches, saveSearch, deleteSearch } = useSavedSearches()
+  const { viewHistory, recordView, isViewed } = useViewHistory()
+  const { hiddenCount, hideGrant, unhideGrant, unhideAll, isHidden } = useHiddenGrants()
 
   React.useEffect(() => {
     // Keep filter in sync with URL (so monitor->opportunities deep-links work).
@@ -1188,7 +1241,21 @@ export default function FundingOpportunities() {
 
   // Pagination calculations (Server-side)
   const totalPages = Math.ceil(totalResults / ITEMS_PER_PAGE)
-  const paginatedOpportunities = opportunitiesWithMatch // Already limited by server query
+
+  // Apply client-side filters: hide dismissed grants + boolean search
+  const booleanFilter = useMemo(() => parseBooleanQuery(filters.search), [filters.search])
+  const paginatedOpportunities = useMemo(() => {
+    return opportunitiesWithMatch.filter(({ opportunity }) => {
+      // Hidden grants filter
+      if (!showHidden && isHidden(opportunity.id)) return false
+      // Boolean search (client-side refinement on top of server search)
+      if (/\b(AND|OR|NOT)\b/.test(filters.search)) {
+        const text = [opportunity.title, opportunity.description, opportunity.sponsor].filter(Boolean).join(" ")
+        if (!booleanFilter(text)) return false
+      }
+      return true
+    })
+  }, [opportunitiesWithMatch, showHidden, isHidden, filters.search, booleanFilter])
 
   const handleAddToPipeline = async (opportunity) => {
     if (!selectedProfile || !filters.profileId || filters.profileId === "all") {
@@ -1426,8 +1493,13 @@ export default function FundingOpportunities() {
     }
   }
 
+  const handleSelectOpportunity = useCallback((opp) => {
+    setSelectedOpportunity(opp)
+    if (opp) recordView(opp)
+  }, [recordView])
+
   const isLoading = opportunitiesQuery.isLoading || profilesQuery.isLoading
-  const hasResults = opportunitiesWithMatch.length > 0
+  const hasResults = paginatedOpportunities.length > 0
 
   return (
     <div className="p-6 md:p-8 space-y-8">
@@ -1499,10 +1571,13 @@ export default function FundingOpportunities() {
                 </Label>
                 <Input
                   id="search"
-                  placeholder="Search by title, sponsor, description"
+                  placeholder="Search (supports AND / OR / NOT)"
                   value={filters.search}
                   onChange={(event) => setFilters((prev) => ({ ...prev, search: event.target.value }))}
                 />
+                {/\b(AND|OR|NOT)\b/.test(filters.search) && (
+                  <p className="text-[10px] text-blue-600 mt-1">Boolean mode active</p>
+                )}
               </div>
 
               <div className="space-y-2">
@@ -1640,6 +1715,39 @@ export default function FundingOpportunities() {
                 >
                   Reset filters
                 </Button>
+                <div className="border-l border-slate-200 h-5 mx-1" />
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    const name = prompt("Name this search filter:")
+                    if (name?.trim()) {
+                      saveSearch(name.trim(), filters)
+                      toast({ title: "Search saved", description: `"${name.trim()}" saved to your search library.` })
+                    }
+                  }}
+                >
+                  <Save className="w-3.5 h-3.5 mr-1" />
+                  Save Search
+                </Button>
+                <Button
+                  variant={showSavedSearches ? "default" : "outline"}
+                  size="sm"
+                  onClick={() => setShowSavedSearches((v) => !v)}
+                >
+                  <Bookmark className="w-3.5 h-3.5 mr-1" />
+                  Saved ({savedSearches.length})
+                </Button>
+                {hiddenCount > 0 && (
+                  <Button
+                    variant={showHidden ? "default" : "outline"}
+                    size="sm"
+                    onClick={() => setShowHidden((v) => !v)}
+                  >
+                    <EyeOff className="w-3.5 h-3.5 mr-1" />
+                    Hidden ({hiddenCount})
+                  </Button>
+                )}
               </div>
               <p className="text-[12px] text-slate-500">
                 Showing {Number(totalResults || 0).toLocaleString()} opportunity
@@ -1648,6 +1756,49 @@ export default function FundingOpportunities() {
             </div>
           </CardContent>
         </Card>
+
+        {/* Saved Searches Panel */}
+        {showSavedSearches && (
+          <Card className="border border-blue-200 bg-blue-50/50">
+            <CardContent className="pt-4 pb-3">
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="text-sm font-semibold text-slate-900 flex items-center gap-2">
+                  <Bookmark className="w-4 h-4 text-blue-600" />
+                  Saved Searches
+                </h3>
+                <Button variant="ghost" size="sm" onClick={() => setShowSavedSearches(false)}>
+                  <X className="w-4 h-4" />
+                </Button>
+              </div>
+              {savedSearches.length === 0 ? (
+                <p className="text-xs text-slate-500 italic py-2">No saved searches yet. Use "Save Search" to bookmark your current filters.</p>
+              ) : (
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+                  {savedSearches.map((ss) => (
+                    <div key={ss.id} className="flex items-center justify-between gap-2 rounded-lg border border-slate-200 bg-white p-2">
+                      <button
+                        className="flex-1 text-left text-sm text-slate-800 hover:text-blue-700 font-medium truncate"
+                        onClick={() => {
+                          setFilters(ss.filters)
+                          setShowSavedSearches(false)
+                          toast({ title: "Search loaded", description: `Loaded "${ss.name}"` })
+                        }}
+                      >
+                        {ss.name}
+                      </button>
+                      <span className="text-[10px] text-slate-400 shrink-0">
+                        {new Date(ss.savedAt).toLocaleDateString()}
+                      </span>
+                      <Button variant="ghost" size="sm" className="h-6 w-6 p-0 text-slate-400 hover:text-red-600" onClick={() => deleteSearch(ss.id)}>
+                        <Trash2 className="w-3 h-3" />
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        )}
       </header>
 
       {viewMode === "geo" ? (
@@ -1708,7 +1859,7 @@ export default function FundingOpportunities() {
               <OpportunityCard
                 key={opportunity.id}
                 opportunity={opportunity}
-                onSelect={setSelectedOpportunity}
+                onSelect={handleSelectOpportunity}
                 match={match}
                 onAddToPipeline={handleAddToPipeline}
                 isAddingToPipeline={addingOpportunityId === opportunity.id}
@@ -1717,6 +1868,10 @@ export default function FundingOpportunities() {
                   filters.profileId &&
                   filters.profileId !== "all"
                 )}
+                viewed={isViewed(opportunity.id)}
+                onHide={hideGrant}
+                onUnhide={unhideGrant}
+                isGrantHidden={isHidden(opportunity.id)}
                 profiles={profiles}
                 selectedProfileId={filters.profileId}
                 onSelectProfileId={(value) => setFilters((prev) => ({ ...prev, profileId: value }))}
@@ -1825,7 +1980,7 @@ export default function FundingOpportunities() {
       <OpportunityDetail
         opportunity={selectedOpportunity}
         open={Boolean(selectedOpportunity)}
-        onClose={() => setSelectedOpportunity(null)}
+        onClose={() => handleSelectOpportunity(null)}
         match={
           selectedOpportunity && filters.profileId
             ? scoreOpportunity(selectedOpportunity, selectedProfile)
