@@ -1,0 +1,40 @@
+# Point axiombiolabs.org apex + www at Vercel (fixes E-001 when DNS was still on GoDaddy).
+# Repo secrets required: GODADDY_API_KEY, GODADDY_API_SECRET
+# Actions → Apply GoDaddy DNS for Vercel → confirm = YES
+name: Apply GoDaddy DNS for Vercel
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type YES to apply DNS changes'
+        required: true
+        default: 'NO'
+
+jobs:
+  dns:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate confirmation
+        if: github.event.inputs.confirm != 'YES'
+        run: |
+          echo "Aborted: set confirm to YES to apply. No DNS changes."
+          exit 0
+
+      - name: Apply DNS via GoDaddy API
+        if: github.event.inputs.confirm == 'YES'
+        env:
+          GODADDY_DOMAIN: axiombiolabs.org
+          GODADDY_API_KEY: ${{ secrets.GODADDY_API_KEY }}
+          GODADDY_API_SECRET: ${{ secrets.GODADDY_API_SECRET }}
+          CONFIRM: 'YES'
+        run: node scripts/godaddy-set-vercel-dns.mjs
+
+      - name: Post-apply notes
+        if: github.event.inputs.confirm == 'YES'
+        run: |
+          echo "Propagation: minutes to 48h."
+          echo "Verify health on www and apex after TTL."
+          echo "Railway: add to CORS_ORIGIN if needed: https://www.axiombiolabs.org,https://axiombiolabs.org"
