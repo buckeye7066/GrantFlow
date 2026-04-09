@@ -107,10 +107,11 @@ router.get('/profile/:profileId/grants', async (req, res) => {
       const baseContext = await loadProfileContext(req.db, profileId)
                    const profileContext = buildProfileFacets(baseContext)
 
-      // Pre-normalize profile once for the v2.0.0 decision engine
+      // Pre-normalize profile once for the v2.0.0 decision engine.
+      // CRITICAL: pass signals so needCategories are populated from buildProfileSignals().
       const rawProfileForGrants = profileContext?.profile ?? profileContext
       const profileSectionsForGrants = profileContext?.sections ?? null
-      const profileNormForDecision = normalizeProfile(rawProfileForGrants, profileSectionsForGrants)
+      const profileNormForDecision = normalizeProfile(rawProfileForGrants, profileSectionsForGrants, profileContext?.signals ?? null)
 
       // Query grants by organization_id if set, otherwise fall back to profile_id-scoped grants.
       let rows
@@ -358,10 +359,11 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
               needsTransport: kws.has('transportation') || kws.has('ride assistance'),
       }
 
-      // Pre-normalize profile once for the v2.0.0 REJECT filter (avoids re-running per opportunity)
+      // Pre-normalize profile once for the v2.0.0 REJECT filter (avoids re-running per opportunity).
+      // CRITICAL: pass signals so needCategories are populated from buildProfileSignals().
       const rawProfileForDecision = profileContext?.profile ?? profileContext
       const profileSectionsForDecision = profileContext?.sections ?? null
-      const profileNormForDecision = normalizeProfile(rawProfileForDecision, profileSectionsForDecision)
+      const profileNormForDecision = normalizeProfile(rawProfileForDecision, profileSectionsForDecision, profileContext?.signals ?? null)
 
       const allScored = candidates
                      .map((opp) => {
