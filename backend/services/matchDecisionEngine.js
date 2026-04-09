@@ -424,6 +424,11 @@ export function computeMatchDecision(rawProfile, rawOpportunity, opts = {}) {
   if (profileNorm.isBusiness && oppNorm.entityTypesAllowed?.includes('business')) {
     matchedProfileTraits.push('business')
   }
+  // Individual entity match — the most common profile type was missing the bonus entirely,
+  // capping individual scores ~20 pts below veterans/students/nonprofits at the same alignment.
+  if (profileNorm.entityType === 'individual' && oppNorm.entityTypesAllowed?.includes('individual')) {
+    matchedProfileTraits.push('individual_eligible')
+  }
   // Geographic match trait
   const geo = oppNorm.geography ?? {}
   if (geo.isNational && profileNorm.state) matchedProfileTraits.push('national_eligible')
@@ -431,7 +436,7 @@ export function computeMatchDecision(rawProfile, rawOpportunity, opts = {}) {
 
   // Step 5: Composite score
   // Weights: need alignment 45%, source trust 25%, entity type match 20%, geo bonus 10%
-  const entityTypeBonus = matchedProfileTraits.some(t => ['veteran', 'student', 'nonprofit', 'business'].includes(t)) ? 20 : 0
+  const entityTypeBonus = matchedProfileTraits.some(t => ['veteran', 'student', 'nonprofit', 'business', 'individual_eligible'].includes(t)) ? 20 : 0
   const geoBonus = matchedProfileTraits.some(t => ['national_eligible', 'state_match'].includes(t)) ? 10 : 0
   const profileStrength = estimateProfileStrengthForScoring(profileNorm)
   // Complete profiles meeting basic signals deserve a bounded lift so 80% thresholds return real rows.
