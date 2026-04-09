@@ -21,3 +21,12 @@ export async function interpretMatcherIntent(text) {
     body: JSON.stringify({ text: String(text || '').trim() }),
   })
 }
+
+/**
+ * Fetch matching-specific profile gaps (items that affect match scoring)
+ * plus real-world success steps based on the profile's goals.
+ */
+export async function getMatchingGaps(profileId) {
+  if (!profileId) throw new Error('profileId is required')
+  return apiFetch(`/api/matching/profile/${profileId}/matching-gaps`)
+}

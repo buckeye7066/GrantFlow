@@ -453,4 +453,306 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
              }
 })
 
+/**
+ * GET /api/matching/profile/:profileId/matching-gaps
+ *
+ * Returns only the profile data gaps that actually affect match scoring.
+ * Each gap includes: id, label, description, section_key (for deep-link),
+ * and impact (how much fixing it improves matches).
+ *
+ * Also returns "success_steps" — real-world items the person needs based
+ * on their stated goals/narrative (e.g., vendor's license, food truck).
+ */
+router.get('/profile/:profileId/matching-gaps', async (req, res) => {
+  const profileId = req.params.profileId
+  const auth = await requireProfileAccess(req, res, profileId)
+  if (!auth) return
+
+  try {
+    const profileRow = await req.db.prepare('SELECT * FROM profiles WHERE id = ?').get(profileId)
+    if (!profileRow) {
+      return res.status(404).json({ error: 'Profile not found' })
+    }
+
+    let sectionRows = []
+    try {
+      sectionRows = await req.db
+        .prepare('SELECT section_key, data FROM profile_sections WHERE profile_id = ?')
+        .all(String(profileId))
+    } catch { /* sections table may not exist */ }
+
+    const sections = sectionRows.reduce((acc, row) => {
+      try { acc[row.section_key] = row.data ? JSON.parse(row.data) : {} }
+      catch { acc[row.section_key] = {} }
+      return acc
+    }, {})
+
+    const basic = sections.basic_information ?? {}
+    const orgDetails = sections.organization_details ?? {}
+    const demographics = sections.demographics ?? {}
+    const financial = sections.financial_information ?? {}
+    const narrative = sections.narrative ?? {}
+    const programsServices = sections.programs_services ?? {}
+    const health = sections.health_medical ?? {}
+    const familyLife = sections.family_life ?? {}
+    const military = sections.military_service ?? {}
+
+    const applicantType =
+      profileRow.applicant_type ?? profileRow.primary_type ?? profileRow.primary_profile_type ?? basic.profile_category ?? null
+
+    const state = basic.state || profileRow.state || null
+    const zip = basic.zip_code || profileRow.postal_code || profileRow.zip || profileRow.zip_code || null
+
+    const hasGoal = Boolean(
+      narrative.primary_goal || narrative.mission || narrative.target_population ||
+      programsServices.focus_areas?.length || programsServices.keywords?.length ||
+      programsServices.interests?.length ||
+      profileRow.keywords?.length || profileRow.interests?.length || profileRow.tags?.length
+    )
+
+    const hasDemographics = Boolean(
+      demographics.veteran_status || demographics.minority_owned || demographics.disability ||
+      demographics.lgbtq || demographics.immigrant_status ||
+      health.disability_type || health.chronic_illness || health.mental_health_condition ||
+      military.veteran || military.active_duty ||
+      familyLife.single_parent || familyLife.foster_youth || familyLife.caregiver
+    )
+
+    const isOrgType = ['nonprofit', 'small_business', 'organization', 'government', 'church', 'school']
+      .includes((applicantType || '').toLowerCase().replace(/\s+/g, '_'))
+
+    const hasOrgDetails = !isOrgType || Boolean(
+      orgDetails.ein || orgDetails.organization_type || orgDetails.mission || orgDetails.annual_budget
+    )
+
+    const hasBudget = Boolean(
+      financial.household_income || financial.annual_revenue || financial.funding_amount_needed ||
+      narrative.funding_amount_needed || orgDetails.annual_budget
+    )
+
+    // Check for uploaded documents
+    let docCount = 0
+    try {
+      const docRow = await req.db.prepare(
+        'SELECT COUNT(*) as cnt FROM documents WHERE profile_id = ?'
+      ).get(String(profileId))
+      docCount = docRow?.cnt ?? 0
+    } catch { /* documents table may not exist */ }
+
+    const hasStory = Boolean(
+      narrative.story || narrative.background || narrative.barriers_faced || narrative.primary_goal
+    )
+
+    // Build the gaps array — only items that are genuinely missing
+    const gaps = []
+
+    if (!applicantType) {
+      gaps.push({
+        id: 'profile_type',
+        label: 'Set your profile type',
+        description: 'Tells the matcher whether you\'re an individual, business, nonprofit, church, etc. — different types unlock different funding pools.',
+        section_key: 'basic_information',
+        impact: 'critical',
+      })
+    }
+
+    if (!state && !zip) {
+      gaps.push({
+        id: 'state_zip',
+        label: 'Add your state or ZIP code',
+        description: 'Many grants are location-specific. Without this, you\'ll miss state, county, and regional opportunities.',
+        section_key: 'basic_information',
+        impact: 'critical',
+      })
+    }
+
+    if (!hasGoal) {
+      gaps.push({
+        id: 'primary_goal',
+        label: 'Define your primary goal or need',
+        description: 'What you\'re trying to accomplish (e.g., start a food truck, repair a roof). This drives the entire matching engine.',
+        section_key: 'narrative',
+        impact: 'critical',
+      })
+    }
+
+    if (!hasDemographics) {
+      gaps.push({
+        id: 'demographics',
+        label: 'Complete your demographics',
+        description: 'Details like veteran status, minority-owned, or disability unlock targeted funding that generic profiles miss.',
+        section_key: 'demographics',
+        impact: 'high',
+      })
+    }
+
+    if (isOrgType && !hasOrgDetails) {
+      gaps.push({
+        id: 'org_details',
+        label: 'Fill in organization details',
+        description: 'EIN, founding year, staff count, and budget help match you to grants with specific eligibility thresholds.',
+        section_key: 'organization_details',
+        impact: 'high',
+      })
+    }
+
+    if (!hasBudget) {
+      gaps.push({
+        id: 'budget_range',
+        label: 'Specify a budget or funding amount',
+        description: 'Funders filter by award size. Specifying your budget range avoids matches that are too small or too large.',
+        section_key: 'financial_information',
+        impact: 'medium',
+      })
+    }
+
+    if (docCount === 0) {
+      gaps.push({
+        id: 'documents',
+        label: 'Upload supporting documents',
+        description: 'Letters of support, 501(c)(3) determination, or financial statements strengthen your profile and improve proposal readiness.',
+        section_key: null, // handled via Documents tab, not a section
+        impact: 'medium',
+      })
+    }
+
+    if (!hasStory) {
+      gaps.push({
+        id: 'story_narrative',
+        label: 'Write your story or narrative',
+        description: 'Your story is parsed for keywords that trigger need detection — the more detail you provide, the better the matcher works.',
+        section_key: 'narrative',
+        impact: 'high',
+      })
+    }
+
+    // ── Success steps: real-world items needed based on goals/narrative ──
+    const successSteps = buildSuccessSteps(profileRow, sections, applicantType)
+
+    res.json({
+      profile_id: profileId,
+      gaps,
+      total_gaps: gaps.length,
+      completed: 8 - gaps.length,
+      total_items: 8,
+      success_steps: successSteps,
+    })
+  } catch (error) {
+    console.error('[matching/matching-gaps]', error)
+    res.status(500).json(formatError(error))
+  }
+})
+
+/**
+ * Analyze profile goals/narrative and surface real-world next steps.
+ * For example, a food truck business needs: vendor's license, health permit, truck, etc.
+ */
+function buildSuccessSteps(profile, sections, applicantType) {
+  const narrative = sections.narrative ?? {}
+  const orgDetails = sections.organization_details ?? {}
+  const basic = sections.basic_information ?? {}
+  const financial = sections.financial_information ?? {}
+
+  const goal = (
+    narrative.primary_goal || narrative.mission || orgDetails.mission ||
+    profile.display_name || ''
+  ).toLowerCase()
+
+  const story = (narrative.story || narrative.background || narrative.barriers_faced || '').toLowerCase()
+  const allText = `${goal} ${story} ${(profile.tags || []).join(' ')} ${(profile.keywords || []).join(' ')}`.toLowerCase()
+
+  const steps = []
+  const type = (applicantType || '').toLowerCase()
+
+  // ── Business-related ──
+  if (type.includes('business') || type.includes('entrepreneur') || allText.includes('business') || allText.includes('startup')) {
+    if (!allText.includes('ein') && !orgDetails.ein) {
+      steps.push({ label: 'Obtain an EIN (Employer Identification Number)', category: 'legal', why: 'Required for most business grants and bank accounts' })
+    }
+    if (!allText.includes('license') && !allText.includes('permit')) {
+      steps.push({ label: 'Get a business license / vendor permit', category: 'legal', why: 'Required before operating in most jurisdictions' })
+    }
+    if (!allText.includes('business plan')) {
+      steps.push({ label: 'Write a business plan', category: 'planning', why: 'Most business grants require a formal plan with budget projections' })
+    }
+  }
+
+  // ── Food truck / restaurant ──
+  if (allText.includes('food truck') || allText.includes('food business') || allText.includes('catering') || allText.includes('restaurant')) {
+    steps.push({ label: 'Obtain a food handler\'s / health department permit', category: 'legal', why: 'Required before serving food to the public' })
+    if (allText.includes('food truck') && !allText.includes('truck')) {
+      steps.push({ label: 'Secure a food truck or commercial vehicle', category: 'equipment', why: 'Your primary asset — many grants cover vehicle acquisition' })
+    }
+    steps.push({ label: 'Get a mobile vendor\'s license', category: 'legal', why: 'Required in most cities for mobile food operations' })
+    if (!allText.includes('insurance')) {
+      steps.push({ label: 'Obtain commercial liability insurance', category: 'insurance', why: 'Required by most commissary kitchens and event venues' })
+    }
+  }
+
+  // ── Nonprofit / church ──
+  if (type.includes('nonprofit') || type.includes('church') || type.includes('ministry')) {
+    if (!orgDetails.ein) {
+      steps.push({ label: 'File for 501(c)(3) tax-exempt status', category: 'legal', why: 'Most foundation and government grants require 501(c)(3) determination' })
+    }
+    if (!orgDetails.sam_gov_registered) {
+      steps.push({ label: 'Register on SAM.gov', category: 'compliance', why: 'Required for all federal grant applications' })
+    }
+    if (!orgDetails.grants_gov_account) {
+      steps.push({ label: 'Create a Grants.gov account', category: 'compliance', why: 'Federal grant applications are submitted through Grants.gov' })
+    }
+  }
+
+  // ── Transportation / vehicle ──
+  if (allText.includes('van') || allText.includes('vehicle') || allText.includes('transportation') || allText.includes('bus')) {
+    if (!allText.includes('insurance')) {
+      steps.push({ label: 'Get commercial vehicle insurance', category: 'insurance', why: 'Required before operating passenger or commercial vehicles' })
+    }
+    if (allText.includes('passenger') || allText.includes('transport')) {
+      steps.push({ label: 'Obtain passenger transport license/permit', category: 'legal', why: 'Required for transporting passengers commercially' })
+    }
+  }
+
+  // ── Housing / rent ──
+  if (allText.includes('housing') || allText.includes('rent') || allText.includes('mortgage') || allText.includes('home repair')) {
+    if (!allText.includes('lease') && (allText.includes('rent') || allText.includes('housing'))) {
+      steps.push({ label: 'Gather lease or mortgage documentation', category: 'documentation', why: 'Housing assistance programs require proof of your housing situation' })
+    }
+    if (allText.includes('repair') || allText.includes('renovation')) {
+      steps.push({ label: 'Get repair estimates from licensed contractors', category: 'planning', why: 'Grant applications require detailed cost estimates for repairs' })
+    }
+  }
+
+  // ── Education / student ──
+  if (type.includes('student') || allText.includes('tuition') || allText.includes('scholarship') || allText.includes('college')) {
+    if (!allText.includes('fafsa')) {
+      steps.push({ label: 'Complete the FAFSA application', category: 'financial_aid', why: 'Required for most federal and institutional financial aid' })
+    }
+    if (!allText.includes('transcript')) {
+      steps.push({ label: 'Request official transcripts', category: 'documentation', why: 'Most scholarship applications require academic records' })
+    }
+  }
+
+  // ── Medical / disability ──
+  if (allText.includes('medical') || allText.includes('disability') || allText.includes('equipment') || allText.includes('wheelchair')) {
+    if (!allText.includes('prescription') && !allText.includes('doctor')) {
+      steps.push({ label: 'Get a physician\'s letter documenting medical need', category: 'documentation', why: 'Medical equipment and disability grants require documented need' })
+    }
+  }
+
+  // ── General financial need ──
+  if (allText.includes('income') || allText.includes('poverty') || allText.includes('financial need') || allText.includes('low income')) {
+    if (!financial.household_income) {
+      steps.push({ label: 'Document household income (pay stubs, tax returns)', category: 'documentation', why: 'Need-based programs require income verification' })
+    }
+  }
+
+  // Deduplicate by label
+  const seen = new Set()
+  return steps.filter(s => {
+    if (seen.has(s.label)) return false
+    seen.add(s.label)
+    return true
+  })
+}
+
 export default router
