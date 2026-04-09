@@ -26,6 +26,10 @@ jobs:
         # For chore(deps) PRs: if lock file is out of sync with package.json, fall back to npm install.
         run: npm ci --include=optional || npm install --include=optional
 
+      # Same command Vercel runs — fail in minutes instead of after full unit + release gates.
+      - name: Vite production build (Vercel parity)
+        run: npm run build
+
       - name: Auto-fix lint issues
         # Attempt to auto-fix common lint issues before the strict check.
         # This helps recover from CodeGuard/AI code fixers that leave behind
