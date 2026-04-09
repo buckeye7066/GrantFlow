@@ -11,8 +11,7 @@ export function safeParseJSON(value, fallback = null) {
   
   try {
     return JSON.parse(value);
-  } catch (error) {
-    console.warn('Failed to parse JSON:', error.message);
+  } catch {
     return fallback;
   }
 }

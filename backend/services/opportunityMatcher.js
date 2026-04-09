@@ -239,6 +239,12 @@ export async function saveToProfilePipeline(
     const grantId = crypto.randomUUID()
     const contactInfo = parseContactInfo(opportunity)
 
+    // Validate FK: funding_opportunity_id must exist in funding_opportunities or be NULL.
+    // Crawled opportunities may carry an id that hasn't been upserted yet.
+    const fkOpportunityId = opportunity.id
+      ? ((await db.prepare('SELECT id FROM funding_opportunities WHERE id = ? LIMIT 1').get(opportunity.id))?.id ?? null)
+      : null
+
     // Detect which columns exist in the grants table (handles DBs without migration applied)
     const hasDecisionColumns = await hasGrantsDecisionColumns(db)
 
@@ -283,7 +289,7 @@ export async function saveToProfilePipeline(
           grantId,
           profile.organization_id ?? null,
           profileId,
-          opportunity.id,
+          fkOpportunityId,
           opportunity.title,
           opportunity.sponsor,
           'discovered',
@@ -355,7 +361,7 @@ export async function saveToProfilePipeline(
           grantId,
           profile.organization_id ?? null,
           profileId,
-          opportunity.id,
+          fkOpportunityId,
           opportunity.title,
           opportunity.sponsor,
           'discovered',
@@ -397,14 +403,19 @@ export async function saveToProfilePipeline(
       decision: decision?.decision ?? null,
     }
   } catch (error) {
-    console.error('[opportunityMatcher] Error saving to pipeline:', error)
-    // If we raced another insert (unique constraint), treat as idempotent success=false.
-    const msg = String(error?.message || '')
-    if (msg.toLowerCase().includes('unique') || msg.toLowerCase().includes('duplicate')) {
+    const msg = String(error?.message || '').toLowerCase()
+    // Race-condition duplicate — treat as idempotent, not an error
+    if (msg.includes('unique') || msg.includes('duplicate')) {
       const thresholdNum = Number(minMatchThreshold)
       const threshold = Number.isFinite(thresholdNum) ? Math.max(0, Math.min(100, thresholdNum)) : 55
       return { saved: false, reason: 'Already in pipeline', matchPercentage, threshold }
     }
+    // FK violation — the funding_opportunity was deleted or never upserted
+    if (msg.includes('foreign key') || msg.includes('fkey')) {
+      console.warn(`[opportunityMatcher] FK miss for "${opportunity.title}" — funding_opportunity_id not found, skipping`)
+      return { saved: false, reason: 'Funding opportunity not yet in database', matchPercentage }
+    }
+    console.error('[opportunityMatcher] Error saving to pipeline:', error)
     return {
       saved: false,
       reason: error.message

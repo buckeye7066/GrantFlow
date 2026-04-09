@@ -19,6 +19,15 @@
 import { NEEDS_TAXONOMY } from './needsTaxonomy.js'
 import { isValidHttpUrl } from '../crawlers/crawlerOpportunityContract.js'
 
+/** Parse a DB field that may be a JSON array, CSV string, or already an array. */
+function parseArrayField(value) {
+  if (Array.isArray(value)) return value
+  if (!value || typeof value !== 'string') return []
+  const trimmed = value.trim()
+  if (trimmed.startsWith('[')) { try { const a = JSON.parse(trimmed); if (Array.isArray(a)) return a } catch { /* fall through */ } }
+  return trimmed.split(',').map(s => s.trim()).filter(Boolean)
+}
+
 // ---------------------------------------------------------------------------
 // Entity type groups for eligibility matching
 // ---------------------------------------------------------------------------
@@ -85,13 +94,7 @@ function extractOppEntityTypes(opportunity) {
   // Fall back to opportunity_type / categories
   if (types.length === 0) {
     const oppType = String(opportunity.opportunity_type || '').toLowerCase()
-    const cats = (() => {
-      try {
-        return Array.isArray(opportunity.categories)
-          ? opportunity.categories
-          : JSON.parse(opportunity.categories || '[]')
-      } catch { return [] }
-    })()
+    const cats = parseArrayField(opportunity.categories)
 
     if (oppType.includes('nonprofit') || cats.some(c => /nonprofit/i.test(c))) types.push('nonprofit')
     if (oppType.includes('individual') || cats.some(c => /individual/i.test(c))) types.push('individual')
@@ -123,16 +126,8 @@ function extractOppNeedCodes(opportunity) {
   const textToSearch = [
     opportunity.title || '',
     opportunity.description || '',
-    ...((() => {
-      try { return Array.isArray(opportunity.categories)
-        ? opportunity.categories
-        : JSON.parse(opportunity.categories || '[]') } catch { return [] }
-    })()),
-    ...((() => {
-      try { return Array.isArray(opportunity.keywords)
-        ? opportunity.keywords
-        : JSON.parse(opportunity.keywords || '[]') } catch { return [] }
-    })()),
+    ...parseArrayField(opportunity.categories),
+    ...parseArrayField(opportunity.keywords),
   ].join(' ').toLowerCase()
 
   // Map text to need codes via taxonomy synonyms (word-boundary match to avoid substring noise)
