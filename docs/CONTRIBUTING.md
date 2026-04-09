@@ -22,6 +22,12 @@ Thank you for helping improve GrantFlow! This guide covers everything you need t
    ```
    This starts both the Vite frontend (default port 5173) and the Express backend (default port 3000) concurrently.
 
+### Before you push or open a PR
+
+- Run **`npm run check:prepush`** — lint, TypeScript check, and **`vite build`** (the same production bundle Vercel builds). This catches missing exports and Rollup errors in minutes.
+- Run **`npm test`** before large changes when you can spare the time (includes unit tests and release-style checks via `npm run release:gates` in CI).
+- When editing **`src/api/*.js`** or other shared modules: **extend** the file; do not replace it wholesale. Search imports (`grep`) and keep every existing export callers rely on.
+
 ---
 
 ## Code Style
