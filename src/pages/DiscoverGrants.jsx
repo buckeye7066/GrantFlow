@@ -20,7 +20,11 @@ import { createLogger } from '@/utils/logger'
 import { getProfileContextIncompleteHint } from '@/components/discovery/profileContextIncompleteUi'
 import { openAnyaPanel } from '@/lib/anyaPanel'
 import { buildZeroResultDescription } from '@/components/discovery/discoveryToasts'
-import { inferUsStateZipFromText } from '@/utils/inferLocationFromAddress'
+import {
+  inferUsStateZipFromText,
+  getExplicitStateZip,
+  collectAddressTextForInference,
+} from '@/utils/inferLocationFromAddress'
 
 /**
  * Client-side relevance check mirroring the backend hard disqualification rules.
@@ -210,12 +214,20 @@ export default function DiscoverGrants() {
   }, [effectiveProfileId, queryClient]);
 
 
-  const { data: profileDetail } = useQuery({
+  const { data: profileDetail, isPending: isProfileDetailPending } = useQuery({
     queryKey: ['discover-profile', effectiveProfileId ?? selectedProfileId],
     queryFn: () => getProfile(effectiveProfileId || selectedProfileId),
     enabled: authReady && Boolean(effectiveProfileId || selectedProfileId),
     refetchOnMount: 'always',
   });
+
+  /** Ignore stale profile payloads when the selected id changes until the matching fetch completes. */
+  const profileDetailForUi = useMemo(() => {
+    const id = effectiveProfileId || selectedProfileId
+    if (!profileDetail || !id) return null
+    if (String(profileDetail.id) !== String(id)) return null
+    return profileDetail
+  }, [profileDetail, effectiveProfileId, selectedProfileId])
 
   // Also fetch organizations to get detailed org data for selected profile
   const { data: organizations = [] } = useQuery({
@@ -240,9 +252,8 @@ export default function DiscoverGrants() {
   // Guard against stale profileDetail from a previously-selected profile.
   // effectiveProfileId is the authoritative identifier; selectedProfileId is the fallback
   // when effectiveProfileId hasn't resolved yet (e.g., URL param not set).
-  const profileDetailMatchesCurrent = profileDetail &&
-    (profileDetail.id === effectiveProfileId || profileDetail.id === selectedProfileId);
-  const profileForSearch = (profileDetailMatchesCurrent ? profileDetail : null) ?? selectedOrg ?? selectedProfile;
+  const profileDetailMatchesCurrent = Boolean(profileDetailForUi);
+  const profileForSearch = profileDetailForUi ?? selectedOrg ?? selectedProfile;
 
   // Catalog match: real funding opportunities from DB, scored by profile needs (relatable grants, not only directory links)
   const { data: catalogMatchResponse } = useQuery({
@@ -286,30 +297,23 @@ export default function DiscoverGrants() {
   // Detect required profile attributes that are missing and would reduce match quality.
   const profileMissingFields = useMemo(() => {
     if (!selectedProfile) return []
-    const sections = sectionsMap(profileDetail)
+    const pid = effectiveProfileId || selectedProfileId
+    if (pid && !profileDetailForUi && isProfileDetailPending) return []
+
+    const sections = sectionsMap(profileDetailForUi)
     const basic = sections.basic_information || {}
     const locationFocus = sections.location_focus || {}
-    const addressBlob = [
-      basic.address,
-      basic.street_address,
-      basic.street,
-      selectedOrg?.address,
-    ]
-      .filter((x) => typeof x === 'string' && x.trim())
-      .join(' ')
+    const comp = sections.comprehensive_application || {}
+    const explicit = getExplicitStateZip(basic, locationFocus, selectedOrg)
+    const addressBlob = collectAddressTextForInference(basic, locationFocus, selectedOrg, comp)
     const inferred = inferUsStateZipFromText(addressBlob)
     const missing = []
     const hasState =
-      basic.state ||
-      locationFocus.state ||
+      explicit.state ||
       profileForSearch?.state ||
-      selectedOrg?.state ||
       inferred.state
     const hasZip =
-      basic.zip ||
-      basic.zip_code ||
-      locationFocus.zip ||
-      locationFocus.zip_code ||
+      explicit.zip ||
       profileForSearch?.zip_code ||
       profileForSearch?.zip ||
       profileForSearch?.postal_code ||
@@ -322,32 +326,30 @@ export default function DiscoverGrants() {
       missing.push('profile type')
     }
     return missing
-  }, [selectedProfile, profileDetail, profileForSearch, selectedOrg])
+  }, [
+    selectedProfile,
+    profileDetailForUi,
+    profileForSearch,
+    selectedOrg,
+    effectiveProfileId,
+    selectedProfileId,
+    isProfileDetailPending,
+  ])
 
   // Structured profile gap flags for profile-aware zero-result guidance
   const profileGaps = useMemo(() => {
     if (!selectedProfile) return {}
-    const sections = sectionsMap(profileDetail)
+    const sections = sectionsMap(profileDetailForUi)
     const basic = sections.basic_information || {}
     const locationFocus = sections.location_focus || {}
-    const addressBlob = [
-      basic.address,
-      basic.street_address,
-      basic.street,
-      selectedOrg?.address,
-    ]
-      .filter((x) => typeof x === 'string' && x.trim())
-      .join(' ')
+    const comp = sections.comprehensive_application || {}
+    const explicit = getExplicitStateZip(basic, locationFocus, selectedOrg)
+    const addressBlob = collectAddressTextForInference(basic, locationFocus, selectedOrg, comp)
     const inferred = inferUsStateZipFromText(addressBlob)
     const hasLocation =
-      basic.state ||
-      locationFocus.state ||
+      explicit.state ||
+      explicit.zip ||
       profileForSearch?.state ||
-      selectedOrg?.state ||
-      basic.zip ||
-      basic.zip_code ||
-      locationFocus.zip ||
-      locationFocus.zip_code ||
       profileForSearch?.zip_code ||
       profileForSearch?.zip ||
       inferred.state ||
@@ -361,7 +363,7 @@ export default function DiscoverGrants() {
       missingEntityType: !hasEntityType,
       missingKeywords: !hasKeywords,
     }
-  }, [selectedProfile, profileDetail, profileForSearch, selectedOrg])
+  }, [selectedProfile, profileDetailForUi, profileForSearch, selectedOrg])
 
   const handleFindFunding = async (overrideCategoryQuery) => {
     const profileIdToUse = effectiveProfileId ?? selectedProfileId
@@ -679,13 +681,18 @@ export default function DiscoverGrants() {
       items.push({ id: 'select-profile', icon: User, text: 'Select a profile to get started', detail: 'Choose a profile from the dropdown above so we can match funding opportunities to your needs.' });
       return items;
     }
-    const sections = sectionsMap(profileDetail);
+    const sections = sectionsMap(profileDetailForUi);
     const sectionKeys = Object.keys(sections);
     if (sectionKeys.length < 3) {
       items.push({ id: 'complete-profile', icon: User, text: 'Complete your profile for better matches', detail: 'Adding more details (location, interests, goals) helps us find more relevant funding.' });
     }
     const basic = sections.basic_information || {};
-    if (!basic.state && !basic.zip && !basic.zip_code) {
+    const lf = sections.location_focus || {};
+    const comp = sections.comprehensive_application || {};
+    const explicit = getExplicitStateZip(basic, lf, selectedOrg);
+    const blob = collectAddressTextForInference(basic, lf, selectedOrg, comp);
+    const inferred = inferUsStateZipFromText(blob);
+    if (!explicit.state && !explicit.zip && !inferred.state && !inferred.zip) {
       items.push({ id: 'add-location', icon: Lightbulb, text: 'Add your location (state/ZIP) to your profile', detail: 'Location data is critical for finding local funding and community resources near you.' });
     }
     if (searchResults.length === 0) {
@@ -699,7 +706,7 @@ export default function DiscoverGrants() {
       items.push({ id: 'add-pipeline', icon: ArrowRight, text: 'Add promising grants to your pipeline', detail: 'Use the checkboxes to select opportunities, then click Add to Pipeline to track and manage them.' });
     }
     return items.filter(s => !dismissedSuggestions.includes(s.id));
-  }, [selectedProfile, profileDetail, searchResults, dismissedSuggestions]);
+  }, [selectedProfile, profileDetailForUi, selectedOrg, searchResults, dismissedSuggestions]);
 
   const dismissSuggestion = (id) => {
     setDismissedSuggestions(prev => {

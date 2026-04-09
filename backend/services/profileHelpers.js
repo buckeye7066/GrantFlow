@@ -1,7 +1,7 @@
 import zipcodes from 'zipcodes'
 import { resolveCountyForZip } from './geo/zipCountyResolver.js'
 import crypto from 'crypto'
-import { inferUsStateZipFromText } from '../utils/inferLocationFromAddress.js'
+import { inferUsStateZipFromText, collectAddressTextForInference } from '../utils/inferLocationFromAddress.js'
 
 /**
  * Resolve the canonical applicant type from a profile object.
@@ -297,14 +297,12 @@ export async function buildProfileContext(db, profileId, options = {}) {
 }
 
 function freeformAddressTextForInference(sections) {
-  const bi = sections?.basic_information ?? {}
-  const ca = sections?.comprehensive_application ?? {}
-  const parts = []
-  if (typeof bi.address === 'string' && bi.address.trim()) parts.push(bi.address.trim())
-  if (typeof bi.street_address === 'string' && bi.street_address.trim()) parts.push(bi.street_address.trim())
-  if (typeof bi.street === 'string' && bi.street.trim()) parts.push(bi.street.trim())
-  if (typeof ca.address === 'string' && ca.address.trim()) parts.push(ca.address.trim())
-  return parts.join(' ')
+  return collectAddressTextForInference(
+    sections?.basic_information ?? {},
+    sections?.location_focus ?? {},
+    null,
+    sections?.comprehensive_application ?? null,
+  )
 }
 
 export function extractZipFromContext({ profile, sections, jobParameters = {} }) {

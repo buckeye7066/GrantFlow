@@ -14,7 +14,11 @@
  */
 
 import { safeParseArrayField, resolveApplicantType } from './profileHelpers.js'
-import { inferUsStateZipFromText } from '../utils/inferLocationFromAddress.js'
+import {
+  inferUsStateZipFromText,
+  getExplicitStateZip,
+  collectAddressTextForInference,
+} from '../utils/inferLocationFromAddress.js'
 
 /**
  * @param {object} db
@@ -104,20 +108,21 @@ export async function checkProfileReadiness(db, profileId) {
   }
 
   // ── 4. Check geographic signal ────────────────────────────────────────────
-  const addressBlob = [basic.address, basic.street_address, basic.street]
-    .filter((x) => typeof x === 'string' && x.trim())
-    .join(' ')
+  const addressBlob = collectAddressTextForInference(
+    basic,
+    locationFocus,
+    null,
+    sections?.comprehensive_application ?? {},
+  )
   const inferred = inferUsStateZipFromText(addressBlob)
+  const explicit = getExplicitStateZip(basic, locationFocus, null)
   const stateSignal =
-    basic.state ||
+    explicit.state ||
     profile.state ||
-    locationFocus.primary_state ||
-    locationFocus.state ||
     inferred.state ||
     null
   const zipSignal =
-    basic.zip ||
-    basic.zip_code ||
+    explicit.zip ||
     profile.postal_code ||
     profile.zip ||
     inferred.zip ||
