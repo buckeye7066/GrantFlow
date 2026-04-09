@@ -379,10 +379,18 @@ export default function DiscoverGrants() {
     }
     setIsSearching(true)
     setProfileCompletionHint(null)
-    const activeCategoryQuery = overrideCategoryQuery !== undefined ? overrideCategoryQuery : categoryQuery
+    const rawCategory =
+      overrideCategoryQuery !== undefined ? overrideCategoryQuery : categoryQuery
+    // Never treat React events / non-strings as a category (onClick={fn} passes the click event).
+    const activeCategoryQuery =
+      typeof rawCategory === 'string' && rawCategory.trim()
+        ? rawCategory.trim()
+        : null
     const baseInterests = profileForSearch?.signals?.interests
       ? Array.from(profileForSearch.signals.interests).slice(0, 10)
-      : (profileForSearch?.tags || []).slice(0, 10)
+      : Array.isArray(profileForSearch?.tags)
+        ? profileForSearch.tags.slice(0, 10)
+        : []
     // Merge category query keywords into interests when browsing by need category
     const mergedInterests = activeCategoryQuery
       ? [...new Set([...activeCategoryQuery.split(/\s+/).filter(Boolean), ...baseInterests])].slice(0, 15)
@@ -396,7 +404,7 @@ export default function DiscoverGrants() {
       interests: mergedInterests,
       demographics: profileForSearch?.signals?.demographics ? Array.from(profileForSearch.signals.demographics).slice(0, 10) : [],
       career_goals: profileForSearch?.sections?.career_goals?.primary_goal || profileForSearch?.career_goal || null,
-      category_query: activeCategoryQuery || undefined,
+      category_query: activeCategoryQuery ?? undefined,
     } : null
     try {
       const data = await runRealCrawler({
@@ -1026,7 +1034,7 @@ export default function DiscoverGrants() {
                 />
               </div>
               <Button
-                onClick={handleFindFunding}
+                onClick={() => void handleFindFunding()}
                 disabled={!selectedProfile || isSearching}
                 size="lg"
                 className="min-w-[240px]"

@@ -103,7 +103,10 @@ export async function runComprehensiveMatch(selectedOrg, searchFilters) {
     awardMax: opp.amount_max,
     amount_description: opp.amount_description,
     descriptionMd: opp.description,
-    eligibilityBullets: opp.eligibility_summary ? opp.eligibility_summary.split('; ').filter(Boolean) : [],
+    eligibilityBullets:
+      typeof opp.eligibility_summary === 'string'
+        ? opp.eligibility_summary.split('; ').filter(Boolean)
+        : [],
     match: opp.fit_score || 0,
     match_score: opp.fit_score || 0,
     source: 'comprehensive_match',
