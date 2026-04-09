@@ -27,6 +27,25 @@ const dataDir = process.env.CRAWLER_DATA_DIR
   : join(__dirname, '..', 'data', 'crawlers')
 
 /**
+ * Errors that should NOT be auto-retried because they are permanent failures.
+ * FK violations, missing profiles, and similar structural errors will never
+ * succeed on retry — retrying them just wastes resources and creates noise.
+ */
+const NON_RETRYABLE_PATTERNS = [
+  /no longer exists/i,
+  /foreign key constraint/i,
+  /violates foreign key/i,
+  /FOREIGN KEY constraint failed/i,
+  /profile .* not found/i,
+  /profile_id .* does not exist/i,
+]
+
+function isNonRetryableError(errorMsg) {
+  if (!errorMsg) return false
+  return NON_RETRYABLE_PATTERNS.some(pattern => pattern.test(errorMsg))
+}
+
+/**
  * Maximum wall-clock time a single crawler handler may run before being aborted.
  * Default 30 minutes; override via CRAWLER_JOB_TIMEOUT_MS.
  * This prevents jobs from hanging silently and blocking the per-profile lock forever.
@@ -504,14 +523,17 @@ export function dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }) {
       }
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : String(error)
+      const notRetryable = isNonRetryableError(errorMsg)
+      const metaJson = notRetryable ? JSON.stringify({ non_retryable: true }) : null
       await db.prepare(`
         UPDATE crawler_jobs
         SET status = 'failed',
             completed_at = CURRENT_TIMESTAMP,
-            error = ?
+            error = ?,
+            result_meta = COALESCE(?, result_meta)
         WHERE id = ?
-      `).run(errorMsg, jobId)
-      
+      `).run(errorMsg, metaJson, jobId)
+
       // Log to dead letter queue
       await logFailedJob(db, {
         jobId,
@@ -623,6 +645,10 @@ export function dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }) {
       }
 
       const errorMsg = error instanceof Error ? error.message : String(error)
+      const notRetryable = isNonRetryableError(errorMsg)
+      if (notRetryable) {
+        finalResultMeta.non_retryable = true
+      }
       await db.prepare(`
         UPDATE crawler_jobs
         SET status = 'failed',
@@ -631,7 +657,7 @@ export function dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }) {
             result_meta = COALESCE(?, result_meta)
         WHERE id = ?
       `).run(errorMsg, JSON.stringify(finalResultMeta), jobId)
-      
+
       // Log to dead letter queue for durable failure tracking
       await logFailedJob(db, {
         jobId,

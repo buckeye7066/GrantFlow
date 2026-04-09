@@ -231,7 +231,7 @@ export async function cleanupStaleCrawlers(db, staleThresholdMs = 30 * 60 * 1000
         isPostgres
           ? `
               SELECT id, type, profile_id, organization_id, parameters, retry_count,
-                     started_at, created_at, last_heartbeat_at
+                     started_at, created_at, last_heartbeat_at, error, result_meta
               FROM crawler_jobs
               WHERE status = 'running'
                 AND (
@@ -245,7 +245,7 @@ export async function cleanupStaleCrawlers(db, staleThresholdMs = 30 * 60 * 1000
             `
           : `
               SELECT id, type, profile_id, organization_id, parameters, retry_count,
-                     started_at, created_at, last_heartbeat_at
+                     started_at, created_at, last_heartbeat_at, error, result_meta
               FROM crawler_jobs
               WHERE status = 'running'
                 AND (
@@ -302,8 +302,25 @@ export async function cleanupStaleCrawlers(db, staleThresholdMs = 30 * 60 * 1000
         createdAt: job.created_at,
       })
 
-      // Auto-retry if below the configured threshold.
-      if (MAX_ORPHAN_AUTO_RETRIES > 0 && currentRetryCount < MAX_ORPHAN_AUTO_RETRIES) {
+      // Skip auto-retry for non-retryable errors (FK violations, missing profiles, etc.)
+      let isNonRetryable = false
+      try {
+        const meta = job.result_meta ? JSON.parse(job.result_meta) : null
+        if (meta?.non_retryable) isNonRetryable = true
+      } catch { /* ignore parse errors */ }
+      if (!isNonRetryable && job.error) {
+        const nonRetryablePatterns = [/no longer exists/i, /foreign key/i, /violates foreign key/i, /profile.*not found/i]
+        isNonRetryable = nonRetryablePatterns.some(p => p.test(job.error))
+      }
+
+      if (isNonRetryable) {
+        console.warn('[crawler-concurrency] Skipping auto-retry for non-retryable error', {
+          jobId: job.id, type: job.type, profileId: job.profile_id,
+        })
+      }
+
+      // Auto-retry if below the configured threshold and the error is retryable.
+      if (!isNonRetryable && MAX_ORPHAN_AUTO_RETRIES > 0 && currentRetryCount < MAX_ORPHAN_AUTO_RETRIES) {
         try {
           // parameters is already in the SELECT result — no extra query needed.
           let originalParameters = {}

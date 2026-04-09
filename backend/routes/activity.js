@@ -61,7 +61,9 @@ router.post('/page-view', async (req, res) => {
 
     return res.status(204).send()
   } catch (error) {
-    return res.status(500).json({ ok: false, error: error?.message || String(error) })
+    // Page-view tracking is best-effort analytics — never fail the client request.
+    console.warn('[activity] page-view tracking error (ignored):', error?.message || error)
+    return res.status(204).send()
   }
 })
 
