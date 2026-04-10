@@ -1371,10 +1371,13 @@ async function updateZipProgress(db, zip, status, sources_found, error = null) {
  */
 async function getLastProcessedZip(db) {
   // Only resume from ZIPs completed within the last 2 hours to avoid stale checkpoints.
+  const since2h = db?.dialect === 'postgres'
+    ? "updated_at > (NOW() - INTERVAL '2 hours')"
+    : "updated_at > datetime('now', '-2 hours')"
   const row = await db.prepare(`
     SELECT zip FROM national_zip_progress
     WHERE status = 'completed'
-      AND updated_at > datetime('now', '-2 hours')
+      AND ${since2h}
     ORDER BY updated_at DESC
     LIMIT 1
   `).get()
@@ -1389,6 +1392,9 @@ async function getLastProcessedZipForList(db, zipList) {
   // Only resume from ZIPs completed within the last 2 hours.
   // Stale checkpoints from previous runs should not cause the crawl to skip everything.
   const placeholders = zipList.map(() => '?').join(', ')
+  const since2h = db?.dialect === 'postgres'
+    ? "updated_at > (NOW() - INTERVAL '2 hours')"
+    : "updated_at > datetime('now', '-2 hours')"
   const row = await db
     .prepare(
       `
@@ -1396,7 +1402,7 @@ async function getLastProcessedZipForList(db, zipList) {
         FROM national_zip_progress
         WHERE status = 'completed'
           AND zip IN (${placeholders})
-          AND updated_at > datetime('now', '-2 hours')
+          AND ${since2h}
         ORDER BY updated_at DESC
         LIMIT 1
       `,
