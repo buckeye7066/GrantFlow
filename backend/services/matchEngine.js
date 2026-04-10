@@ -899,8 +899,12 @@ export function scoreOpportunity(profile, opportunity) {
     reasons.push('Cross-category penalty: FEMA/disaster program for non-disaster profile (-30)')
   }
 
+  const militarySignals = effectiveSignals?.military
+  const hasVetSignal = militarySignals instanceof Set
+    ? (militarySignals.has('veteran') || militarySignals.has('disabled_veteran'))
+    : false
   const hasVetFacet = effectiveFacets?.military?.veteran === true || effectiveFacets?.military?.disabled_veteran === true
-  if (!hasVetFacet && RE_VETERAN_SPECIFIC.test(oppText)) {
+  if (!hasVetFacet && !hasVetSignal && RE_VETERAN_SPECIFIC.test(oppText)) {
     score -= 15
     reasons.push('Cross-category penalty: veteran-focused program for non-veteran profile (-15)')
   }
@@ -928,7 +932,8 @@ export function scoreOpportunity(profile, opportunity) {
   }
 
   // ── Need-to-opportunity alignment (up to 20 pts) ──
-  const rawNeeds = safeParseArrayField(effectiveProfile?.needs, [])
+  // Prefer enriched signals.needs (extracted from all profile sections) over raw profile.needs
+  const rawNeeds = safeParseArrayField(effectiveSignals?.needs ?? effectiveProfile?.needs, [])
   const oppKws = safeParseArrayField(opportunity.keywords, [])
   const oppCats = safeParseArrayField(opportunity.categories, [])
   const allOppSignals = [...oppKws, ...oppCats].map((t) => String(t).toLowerCase())
@@ -950,7 +955,8 @@ export function scoreOpportunity(profile, opportunity) {
   }
 
   // ── Amount eligibility (10 pts) ──
-  if (amountInRange(effectiveProfile?.funding_amount_needed, opportunity)) {
+  const fundingAmount = effectiveProfile?.funding_amount_needed ?? effectiveSignals?.financial?.fundingAmountNeeded ?? null
+  if (amountInRange(fundingAmount, opportunity)) {
     score += 10
     reasons.push('Amount eligibility')
   }
@@ -1076,7 +1082,7 @@ export function scoreOpportunity(profile, opportunity) {
       keyword: keywordScore,
       category: categoryScore,
       facet: facetAdjustments.points,
-      amount: amountInRange(effectiveProfile?.funding_amount_needed, opportunity) ? 10 : 0,
+      amount: amountInRange(fundingAmount, opportunity) ? 10 : 0,
       deadline: deadlineScore,
       total: finalScore,
     },
