@@ -244,6 +244,7 @@ export async function runComprehensiveCrawler(contextOrDb, profileContextArg = {
       const jobId = contextOrDb?.job?.id ?? null
       const deadlineMs = contextOrDb?.deadlineMs ?? null
       const heartbeatFn = contextOrDb?.heartbeat ?? null
+      const signal = contextOrDb?.signal ?? null
 
       const skipDomainCorpus =
         params.skip_domain_corpus === true ||
@@ -355,6 +356,14 @@ export async function runComprehensiveCrawler(contextOrDb, profileContextArg = {
         const perState = []
 
         for (let i = 0; i < statesToRun.length; i++) {
+          // Abort signal check: stop immediately if the dispatcher timed out or cancelled us.
+          if (signal?.aborted) {
+            console.warn(
+              `[comprehensiveCrawler] Abort signal received after ${i}/${statesToRun.length} states — stopping`,
+            )
+            break
+          }
+
           // Time-budget check: stop gracefully before the hard timeout kills us as a failure.
           if (deadlineMs && Date.now() + DEADLINE_BUFFER_MS >= deadlineMs) {
             console.warn(

@@ -26,11 +26,11 @@ const MAX_ORPHAN_AUTO_RETRIES = parseInt(process.env.MAX_ORPHAN_AUTO_RETRIES || 
  * This prevents permanent per-profile locks.
  *
  * Defaults:
- * - stale threshold: 8h (must exceed longest crawler wall time, e.g. comprehensive geo via
- *   COMPREHENSIVE_GEO_JOB_TIMEOUT_MS in crawlerDispatcher.js; otherwise real jobs get reset mid-run)
+ * - stale threshold: 7h (must exceed longest crawler wall time — COMPREHENSIVE_GEO_JOB_TIMEOUT_MS
+ *   defaults to 6h in crawlerDispatcher.js — plus a 1h buffer for cleanup/flush overhead)
  * - cleanup interval: 5 minutes (best-effort; throttled per process)
  */
-const STALE_RUNNING_MS = parseInt(process.env.CRAWLER_STALE_RUNNING_MS || String(8 * 60 * 60 * 1000), 10)
+const STALE_RUNNING_MS = parseInt(process.env.CRAWLER_STALE_RUNNING_MS || String(7 * 60 * 60 * 1000), 10)
 const STALE_CLEANUP_INTERVAL_MS = parseInt(process.env.CRAWLER_STALE_CLEANUP_INTERVAL_MS || String(5 * 60 * 1000), 10)
 let lastStaleCleanupAtMs = 0
 
@@ -309,7 +309,7 @@ export async function cleanupStaleCrawlers(db, staleThresholdMs = 30 * 60 * 1000
         if (meta?.non_retryable) isNonRetryable = true
       } catch { /* ignore parse errors */ }
       if (!isNonRetryable && job.error) {
-        const nonRetryablePatterns = [/no longer exists/i, /foreign key/i, /violates foreign key/i, /profile.*not found/i]
+        const nonRetryablePatterns = [/no longer exists/i, /foreign key/i, /violates foreign key/i, /profile.*not found/i, /timed out after \d+s/i]
         isNonRetryable = nonRetryablePatterns.some(p => p.test(job.error))
       }
 

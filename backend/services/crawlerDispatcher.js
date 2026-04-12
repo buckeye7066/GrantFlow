@@ -38,6 +38,7 @@ const NON_RETRYABLE_PATTERNS = [
   /FOREIGN KEY constraint failed/i,
   /profile .* not found/i,
   /profile_id .* does not exist/i,
+  /timed out after \d+s/i,
 ]
 
 function isNonRetryableError(errorMsg) {
@@ -93,12 +94,13 @@ function getJobTimeoutMs(jobType, job, parameters) {
   return JOB_TIMEOUT_MS
 }
 
-function withTimeout(promise, ms, label) {
+function withTimeout(promise, ms, label, abortController) {
   let timeoutId
   const timeoutPromise = new Promise((_, reject) => {
     timeoutId = setTimeout(() => {
       const err = new Error(`${label} timed out after ${Math.round(ms / 1000)}s`)
       err.code = 'JOB_TIMEOUT'
+      if (abortController) abortController.abort(err.message)
       reject(err)
     }, ms)
   })
@@ -563,6 +565,8 @@ export function dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }) {
       })
     }, HEARTBEAT_INTERVAL_MS)
 
+    const abortController = new AbortController()
+
     try {
       const parameters = parseJSON(job.parameters)
       const context = {
@@ -572,6 +576,7 @@ export function dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }) {
         dataDir,
         uploadDir,
         getOpenAI,
+        signal: abortController.signal,
       }
 
       const timeoutMs = getJobTimeoutMs(job.type, job, parameters)
@@ -593,6 +598,7 @@ export function dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }) {
         handler(context),
         timeoutMs,
         `Job ${jobId} (${job.type})`,
+        abortController,
       )
 
       if (job.type === 'avatar_lookup' && result?.avatarUrl && profileContext?.profile) {
