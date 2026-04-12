@@ -242,6 +242,8 @@ export async function runComprehensiveCrawler(contextOrDb, profileContextArg = {
       const effectiveZipList = runAllStates ? undefined : zipList || undefined
 
       const jobId = contextOrDb?.job?.id ?? null
+      const deadlineMs = contextOrDb?.deadlineMs ?? null
+      const heartbeatFn = contextOrDb?.heartbeat ?? null
 
       const skipDomainCorpus =
         params.skip_domain_corpus === true ||
@@ -281,14 +283,15 @@ export async function runComprehensiveCrawler(contextOrDb, profileContextArg = {
           job_id: jobId,
           geo_run_id: params.geo_run_id ?? params.geoRunId ?? null,
           fixtures_dir: process.env.GEO_CRAWL_FIXTURES_DIR || undefined,
+          heartbeat: heartbeatFn,
         })
       }
 
       if (runAllStates) {
         // When running all states without an explicit max_zips, apply a sane default
-        // to prevent the crawl from attempting all ~43k US ZIPs (which can never
-        // complete within the 4-hour GEO timeout). 25 ZIPs/state ≈ 1,275 total ZIPs.
-        const ALL_STATES_DEFAULT_MAX_ZIPS = 25
+        // to prevent the crawl from attempting all ~43k US ZIPs.
+        // 15 ZIPs/state × 51 = 765 total ZIPs — fits within 6h timeout with margin.
+        const ALL_STATES_DEFAULT_MAX_ZIPS = 15
         if (!maxZips) {
           console.info(
             `[comprehensiveCrawler] GEO all-states: no max_zips specified, defaulting to ${ALL_STATES_DEFAULT_MAX_ZIPS} per state`,
@@ -337,8 +340,12 @@ export async function runComprehensiveCrawler(contextOrDb, profileContextArg = {
             job_id: jobId,
             geo_run_id: params.geo_run_id ?? params.geoRunId ?? null,
             fixtures_dir: process.env.GEO_CRAWL_FIXTURES_DIR || undefined,
+            heartbeat: heartbeatFn,
           })
         }
+
+        // Reserve 5 minutes for final DB writes and cleanup
+        const DEADLINE_BUFFER_MS = 5 * 60 * 1000
 
         let totalProcessed = 0
         let totalSources = 0
@@ -348,10 +355,24 @@ export async function runComprehensiveCrawler(contextOrDb, profileContextArg = {
         const perState = []
 
         for (let i = 0; i < statesToRun.length; i++) {
+          // Time-budget check: stop gracefully before the hard timeout kills us as a failure.
+          if (deadlineMs && Date.now() + DEADLINE_BUFFER_MS >= deadlineMs) {
+            console.warn(
+              `[comprehensiveCrawler] Time budget exhausted after ${i}/${statesToRun.length} states — stopping gracefully`,
+            )
+            break
+          }
+
           const st = statesToRun[i]
           if (pacing > 0 && i > 0) {
             await new Promise((resolve) => setTimeout(resolve, pacing))
           }
+
+          // Pump heartbeat between states
+          if (heartbeatFn) {
+            try { await heartbeatFn() } catch { /* non-fatal */ }
+          }
+
           const r = await runOnceWithCap(st)
           totalProcessed += Number(r?.processed ?? 0)
           totalSources += Number(r?.sources ?? 0)

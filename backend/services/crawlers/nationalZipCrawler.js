@@ -63,6 +63,7 @@ const DEFAULT_CONFIG = {
   rate_limit_ms: 1000, // 1 second between ZIP requests
   checkpoint_every: 50, // Checkpoint after every 50 ZIPs
   timeout_ms: 10000,
+  per_zip_timeout_ms: 45_000, // Hard wall-clock limit per ZIP (prevents hung API calls from blocking job)
   // Geo Crawl discovery defaults (enabled via options.discover_local_resources)
   overpass_radius_km: 12,
   overpass_max_results: 60,
@@ -1530,15 +1531,33 @@ export async function runNationalZipCrawl(dbPath, options = {}) {
       console.log(`Processing batch ${Math.floor(i / config.batch_size) + 1}: ZIPs ${i} - ${batchEnd}`)
       
       for (const zip of batch) {
-        const result = await processZip(zip, db, config)
-        
+        // Per-ZIP wall-clock timeout: prevents a single hung API call from blocking the entire job.
+        const perZipMs = Number(config.per_zip_timeout_ms) || 45_000
+        let result
+        try {
+          result = await Promise.race([
+            processZip(zip, db, config),
+            new Promise((_, reject) =>
+              setTimeout(() => reject(new Error(`ZIP ${zip} timed out after ${perZipMs}ms`)), perZipMs),
+            ),
+          ])
+        } catch (zipErr) {
+          console.warn(`[GeoCrawl] Skipping ZIP ${zip}: ${zipErr.message}`)
+          result = { zip, status: 'failed', sources_found: 0, inserted_new: 0, associations_new: 0, error: zipErr.message, duration: perZipMs }
+        }
+
         // Update progress in database
         await updateZipProgress(db, result.zip, result.status, result.sources_found, result.error)
-        
+
         processedCount++
         totalSources += result.sources_found
         if (result.status === 'failed') failedCount += 1
         if (result.status === 'skipped') skippedCount += 1
+
+        // Pump heartbeat if callback provided (keeps dispatcher from marking job as orphaned)
+        if (typeof config.heartbeat === 'function') {
+          try { await config.heartbeat() } catch { /* non-fatal */ }
+        }
 
         if (geoRunId) {
           try {

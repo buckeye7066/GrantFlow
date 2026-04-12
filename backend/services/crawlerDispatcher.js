@@ -69,10 +69,11 @@ const COMPREHENSIVE_JOB_TIMEOUT_MS = parseInt(
 
 /**
  * Admin geo comprehensive jobs (profile_id NULL, parameters.mode === 'geo') iterate states/zips.
- * Default 4h; override via COMPREHENSIVE_GEO_JOB_TIMEOUT_MS.
+ * Default 6h; override via COMPREHENSIVE_GEO_JOB_TIMEOUT_MS.
+ * The handler uses context.deadlineMs to stop gracefully ~5min before this limit.
  */
 const COMPREHENSIVE_GEO_JOB_TIMEOUT_MS = parseInt(
-  process.env.COMPREHENSIVE_GEO_JOB_TIMEOUT_MS || String(4 * 60 * 60 * 1000),
+  process.env.COMPREHENSIVE_GEO_JOB_TIMEOUT_MS || String(6 * 60 * 60 * 1000),
   10,
 )
 
@@ -310,7 +311,7 @@ export function dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }) {
         const waitMs = nextAt.getTime() - Date.now()
         if (waitMs > 250) {
           setTimeout(() => {
-            dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }).catch(e => console.warn('[background]', e?.message || e))
+            dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }).catch(e => console.warn('[crawlerDispatcher] Deferred dispatch error for job', jobId, e?.message || e))
           }, Math.min(waitMs, 60_000))
           return
         }
@@ -472,7 +473,7 @@ export function dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }) {
         }
 
         setTimeout(() => {
-          dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }).catch(e => console.warn('[background]', e?.message || e))
+          dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }).catch(e => console.warn('[crawlerDispatcher] Re-queue dispatch error for job', jobId, e?.message || e))
         }, requeueDelayMs)
         return
       }
@@ -496,7 +497,7 @@ export function dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }) {
       }
 
       setTimeout(() => {
-        dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }).catch(e => console.warn('[background]', e?.message || e))
+        dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }).catch(e => console.warn('[crawlerDispatcher] Backoff dispatch error for job', jobId, e?.message || e))
       }, delayMs)
       return
     }
@@ -582,6 +583,11 @@ export function dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }) {
           mode: parameters?.mode ?? null,
         })
       }
+
+      // Pass deadline + heartbeat into context so the handler can stop gracefully
+      // before the hard timeout kills it as a failure.
+      context.deadlineMs = Date.now() + timeoutMs
+      context.heartbeat = () => updateJobHeartbeat(db, jobId)
 
       result = await withTimeout(
         handler(context),
@@ -741,8 +747,8 @@ export function startQueueDrainInterval(db, uploadDir, getOpenAI) {
       for (let i = 0; i < ready.length; i++) {
         if (i > 0) await new Promise((r) => setTimeout(r, 1_000))
         try {
-          dispatchCrawlerJob({ db, jobId: ready[i].id, uploadDir, getOpenAI }).catch(e => console.warn('[background]', e?.message || e))
-        } catch { /* ignore individual dispatch errors */ }
+          dispatchCrawlerJob({ db, jobId: ready[i].id, uploadDir, getOpenAI }).catch(e => console.warn('[queue-drain] Dispatch error for job', ready[i].id, e?.message || e))
+        } catch (err) { console.warn('[queue-drain] Sync dispatch error for job', ready[i].id, err?.message || err) }
       }
     } catch (err) {
       console.warn('[queue-drain-interval] Poll error (ignored):', err?.message || err)
