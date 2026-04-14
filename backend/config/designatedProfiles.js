@@ -1,7 +1,8 @@
 export const DESIGNATED_PROFILES = [
   // Required roster (release-hardening checklist):
-  // John, Robert, Anastasia, Luibov, Focus Forward, Axiom Biolabs, Brian, Hollie,
-  // Olivia, Avanell, Angelika, Rachel, Josh, Jason, Kathy, Melissa Justus, William.
+  // John Doe (demo), Axiom BioLabs, Olivia, Avanell, Gilbert (Allen), Hollie, Brian,
+  // Focus Forward, John White, Paul Jason Dasher, Angelika, Rachel, Anastasia,
+  // Kathy, Kimberly, Luibov, Robert White, Josh, Melissa Justus, William.
   //
   // Demo/test fixture profile for onboarding + smoke checks:
   // John Doe should always exist so admins can validate flows quickly.
@@ -34,10 +35,6 @@ export const DESIGNATED_PROFILES = [
       },
     },
   },
-  //
-  // NOTE: Some profiles below are minimal stubs (no sections yet). That's intentional:
-  // they ensure deterministic IDs exist in Postgres/SQLite so login mapping can attach,
-  // while allowing admins/users to keep editing without startup wiping data.
   {
     id: 'profile-axiom-biolabs-2',
     display_name: 'Axiom BioLabs',
@@ -57,65 +54,6 @@ export const DESIGNATED_PROFILES = [
         mission: '',
       },
     },
-  },
-  {
-    id: 'profile-robert',
-    display_name: 'Robert',
-    primary_type: 'individual',
-    status: 'active',
-    tags: ['individual'],
-  },
-  {
-    id: 'profile-anastasia',
-    display_name: 'Anastasia Nicole White',
-    primary_type: 'high_school_student',
-    status: 'active',
-    tags: ['individual', 'student'],
-    // Keep canonical profile data as data (not hardcoded in this file).
-    // `ensureDesignatedProfiles` will seed these sections only if missing.
-    data_file: 'backend/config/profile-anastasia.json',
-  },
-  {
-    id: 'profile-luibov',
-    display_name: 'Luibov',
-    primary_type: 'individual',
-    status: 'active',
-    tags: ['individual'],
-  },
-  {
-    id: 'profile-angelika-ptak',
-    display_name: 'Angelika Ptak',
-    primary_type: 'individual',
-    status: 'active',
-    tags: ['individual'],
-  },
-  {
-    id: 'profile-rachel-miller',
-    display_name: 'Rachel Miller',
-    primary_type: 'individual',
-    status: 'active',
-    tags: ['individual'],
-  },
-  {
-    id: 'profile-josh-dasher',
-    display_name: 'Josh Dasher',
-    primary_type: 'individual',
-    status: 'active',
-    tags: ['individual'],
-  },
-  {
-    id: 'profile-paul-jason-dasher-2',
-    display_name: 'Paul Jason Dasher',
-    primary_type: 'individual',
-    status: 'active',
-    tags: ['individual'],
-  },
-  {
-    id: 'profile-kathy',
-    display_name: 'Kathy',
-    primary_type: 'individual',
-    status: 'active',
-    tags: ['individual'],
   },
   {
     id: 'profile-olivia-beltran',
@@ -193,6 +131,12 @@ export const DESIGNATED_PROFILES = [
       family_life: {
         caregiver: true,
         notes: '',
+      },
+      demographics: {
+        ethnicity: 'White/Caucasian',
+        age_group: 'Senior 62+',
+        disability_status: 'Has disability',
+        citizenship: 'US Citizen',
       },
       narrative: {
         mission: '',
@@ -284,8 +228,12 @@ export const DESIGNATED_PROFILES = [
           'Limited mobility due to clawing effect in hands, financial constraints, and need for accessible healthcare and rehabilitation resources.',
         special_circumstances:
           'Living with epilepsy since age two; complications from a neck surgery caused lasting mobility challenges requiring specialized equipment.',
+        personal_statement:
+          'My name is Gilbert Allen McCosh, and I have been navigating life with epilepsy since I was just 2 years old. Living with an anoxic brain injury has shaped my journey in profound ways, particularly after a botched neck surgery left me with a clawing effect in my hands. I spent many years in a group home, allowing me to develop my independence and resilience. Currently, I reside in a CLS-FM home, where I continue to advocate for better epilepsy support and brain injury assistance. My experiences have underscored the importance of accessing healthcare resources, mental health services, and rehabilitation programs. I am passionate about neurodiversity advocacy and am committed to ensuring that individuals like myself receive the disability funding and assistive technology needed to thrive. I believe in the power of community and seek to connect with others who face similar challenges, all while promoting disability rights and accessibility. My goal is to secure chronic illness grants that can help me acquire mobility aids and enhance my daily living skills. Through sharing my story, I hope to inspire others to embrace their uniqueness and strive for inclusion in every facet of life.',
       },
       demographics: {
+        ethnicity: 'White/Caucasian',
+        disability_status: 'Has disability',
         notes: 'White / Caucasian; details captured from Base44 export.',
       },
     },
@@ -320,6 +268,7 @@ export const DESIGNATED_PROFILES = [
       demographics: {
         white_caucasian: true,
         us_citizen: true,
+        ethnicity: 'White/Caucasian',
       },
       family_life: {
         single_parent: true,
@@ -380,7 +329,10 @@ export const DESIGNATED_PROFILES = [
       demographics: {
         us_citizen: true,
         white_caucasian: true,
+        ethnicity: 'White/Caucasian',
         religious_affiliation: 'Anglican',
+        veteran_status: 'Veteran',
+        disability_status: 'Has disability',
         notes: 'Grew up in poverty; first-generation service member and college graduate.',
       },
       family_life: {
@@ -479,6 +431,11 @@ export const DESIGNATED_PROFILES = [
           'Empower community leadership through training, resource-sharing networks, and diversified funding via grants, donations, and fundraisers.',
         barriers_faced:
           'Systemic poverty, limited infrastructure, cultural isolation, and historic distrust complicate outreach execution.',
+        personal_statement:
+          'Focus Forward Ministries exists to bring the love of Christ to underserved communities through compassionate service, discipleship, and sustainable outreach. We seek to restore hope, strengthen families, and empower individuals by meeting both spiritual and practical needs. Through partnership, prayer, and presence, we aim to move lives forward—one relationship, one act of faith, and one community at a time.',
+      },
+      demographics: {
+        disability_status: 'Has disability',
       },
     },
   },
@@ -525,11 +482,17 @@ export const DESIGNATED_PROFILES = [
           'Food pantries, faith-based coalitions, healthcare providers, and educational institutions across East Tennessee.',
         special_circumstances:
           'Documented in Base44 export; requires sensitive handling of personal credentials and licensure data.',
+        personal_statement:
+          'I am Dr. John White, a molecular geneticist, registered nurse, and devoted educator. My journey has always been about serving others and bridging the gap between scientific knowledge and community needs. With a PhD in Molecular Genetics and extensive experience as a cardiac nurse and biology instructor, I take pride in translating complex medical concepts into practical solutions that empower vulnerable communities. This commitment to service is reflected in my family, as my wife Anya and our children, Robert and Anastasia, embody the same spirit of helping others. As a cancer survivor, I live with the daily challenges of chronic chemotherapy-induced peripheral neuropathy, which has deepened my understanding and empathy for individuals facing health challenges. My experiences fuel my dedication to supporting those who often go unseen, particularly through my work with the Church of God of Prophecy and Focus Forward Ministries, where I focus on developing programs that uplift underserved populations. I am passionate about promoting health equity, mental health awareness, and educational access, striving to create initiatives that inspire hope and improve outcomes. My life, skills, and testimony are dedicated to fostering community engagement and sustainable development—helping to build a brighter future for all.',
+      },
+      demographics: {
+        ethnicity: 'White/Caucasian',
+        disability_status: 'Has disability',
       },
     },
   },
   {
-    id: 'profile-paul-jason-dasher-2',
+    id: 'profile-paul-jason-dasher',
     display_name: 'Paul Jason Dasher',
     primary_type: 'individual',
     status: 'active',
@@ -876,21 +839,6 @@ export const DESIGNATED_PROFILES = [
           'Financial constraints for paramedicine education; language barriers in healthcare delivery for immigrant communities.',
         special_circumstances:
           'Dedicated to improving healthcare accessibility for multilingual communities through EMS career.',
-      },
-    },
-  },
-  {
-    id: 'profile-axiom-biolabs-2',
-    display_name: 'Axiom BioLabs',
-    primary_type: 'organization',
-    status: 'active',
-    tags: ['baseline', 'designated', 'organization'],
-    sections: {
-      basic_information: {
-        full_name: 'Axiom Biolabs',
-        email: '',
-        phone: '',
-        address: '',
       },
     },
   },
