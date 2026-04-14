@@ -646,7 +646,7 @@
     {
       "profile_id": "63f57a93-9e28-4f86-adb5-c07753e7cbf0",
       "section_key": "basic_information",
-      "data": "{\"full_name\":\"Kimberly Botts\",\"email\":\"email@example.com\",\"phone\":\"4235047778\",\"address\":{\"street\":\"3940 Eveningside Dr. NE\",\"full\":\"Cleveland, TN 37312\",\"city\":\"Cleveland\",\"state\":\"TN\",\"zip_code\":\"37312\"}}"
+      "data": "{\"full_name\":\"Kimberly Botts\",\"email\":\"\",\"phone\":\"4235047778\",\"address\":{\"street\":\"3940 Eveningside Dr. NE\",\"full\":\"Cleveland, TN 37312\",\"city\":\"Cleveland\",\"state\":\"TN\",\"zip_code\":\"37312\"}}"
     },
     {
       "profile_id": "63f57a93-9e28-4f86-adb5-c07753e7cbf0",
@@ -656,7 +656,7 @@
     {
       "profile_id": "6c04325f-4747-407a-a833-369763ed7efb",
       "section_key": "basic_information",
-      "data": "{\"full_name\":\"Luibov S Samoylenko\",\"gender\":\"Female\",\"nationality\":\"Ukrainian\",\"date_of_birth\":\"1985-05-15\"}"
+      "data": "{\"full_name\":\"Luibov S Samoylenko\",\"gender\":\"Female\",\"nationality\":\"Ukrainian\",\"date_of_birth\":\"1952-08-29\"}"
     },
     {
       "profile_id": "6c04325f-4747-407a-a833-369763ed7efb",

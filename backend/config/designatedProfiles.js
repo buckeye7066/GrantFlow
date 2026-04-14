@@ -1,7 +1,8 @@
 export const DESIGNATED_PROFILES = [
   // Required roster (release-hardening checklist):
-  // John, Robert, Anastasia, Luibov, Focus Forward, Axiom Biolabs, Brian, Hollie,
-  // Olivia, Avanell, Angelika, Rachel, Josh, Jason, Kathy, Melissa Justus, William.
+  // John Doe (demo), Axiom BioLabs, Olivia, Avanell, Gilbert (Allen), Hollie, Brian,
+  // Focus Forward, John White, Paul Jason Dasher, Angelika, Rachel, Anastasia,
+  // Kathy, Kimberly, Luibov, Robert White, Josh, Melissa Justus, William.
   //
   // Demo/test fixture profile for onboarding + smoke checks:
   // John Doe should always exist so admins can validate flows quickly.
@@ -34,10 +35,6 @@ export const DESIGNATED_PROFILES = [
       },
     },
   },
-  //
-  // NOTE: Some profiles below are minimal stubs (no sections yet). That's intentional:
-  // they ensure deterministic IDs exist in Postgres/SQLite so login mapping can attach,
-  // while allowing admins/users to keep editing without startup wiping data.
   {
     id: 'profile-axiom-biolabs-2',
     display_name: 'Axiom BioLabs',
@@ -57,65 +54,6 @@ export const DESIGNATED_PROFILES = [
         mission: '',
       },
     },
-  },
-  {
-    id: 'profile-robert',
-    display_name: 'Robert',
-    primary_type: 'individual',
-    status: 'active',
-    tags: ['individual'],
-  },
-  {
-    id: 'profile-anastasia',
-    display_name: 'Anastasia Nicole White',
-    primary_type: 'high_school_student',
-    status: 'active',
-    tags: ['individual', 'student'],
-    // Keep canonical profile data as data (not hardcoded in this file).
-    // `ensureDesignatedProfiles` will seed these sections only if missing.
-    data_file: 'backend/config/profile-anastasia.json',
-  },
-  {
-    id: 'profile-luibov',
-    display_name: 'Luibov',
-    primary_type: 'individual',
-    status: 'active',
-    tags: ['individual'],
-  },
-  {
-    id: 'profile-angelika-ptak',
-    display_name: 'Angelika Ptak',
-    primary_type: 'individual',
-    status: 'active',
-    tags: ['individual'],
-  },
-  {
-    id: 'profile-rachel-miller',
-    display_name: 'Rachel Miller',
-    primary_type: 'individual',
-    status: 'active',
-    tags: ['individual'],
-  },
-  {
-    id: 'profile-josh-dasher',
-    display_name: 'Josh Dasher',
-    primary_type: 'individual',
-    status: 'active',
-    tags: ['individual'],
-  },
-  {
-    id: 'profile-paul-jason-dasher-2',
-    display_name: 'Paul Jason Dasher',
-    primary_type: 'individual',
-    status: 'active',
-    tags: ['individual'],
-  },
-  {
-    id: 'profile-kathy',
-    display_name: 'Kathy',
-    primary_type: 'individual',
-    status: 'active',
-    tags: ['individual'],
   },
   {
     id: 'profile-olivia-beltran',
@@ -193,6 +131,12 @@ export const DESIGNATED_PROFILES = [
       family_life: {
         caregiver: true,
         notes: '',
+      },
+      demographics: {
+        ethnicity: 'White/Caucasian',
+        age_group: 'Senior 62+',
+        disability_status: 'Has disability',
+        citizenship: 'US Citizen',
       },
       narrative: {
         mission: '',
@@ -284,8 +228,12 @@ export const DESIGNATED_PROFILES = [
           'Limited mobility due to clawing effect in hands, financial constraints, and need for accessible healthcare and rehabilitation resources.',
         special_circumstances:
           'Living with epilepsy since age two; complications from a neck surgery caused lasting mobility challenges requiring specialized equipment.',
+        personal_statement:
+          'My name is Gilbert Allen McCosh, and I have been navigating life with epilepsy since I was just 2 years old. Living with an anoxic brain injury has shaped my journey in profound ways, particularly after a botched neck surgery left me with a clawing effect in my hands. I spent many years in a group home, allowing me to develop my independence and resilience. Currently, I reside in a CLS-FM home, where I continue to advocate for better epilepsy support and brain injury assistance. My experiences have underscored the importance of accessing healthcare resources, mental health services, and rehabilitation programs. I am passionate about neurodiversity advocacy and am committed to ensuring that individuals like myself receive the disability funding and assistive technology needed to thrive. I believe in the power of community and seek to connect with others who face similar challenges, all while promoting disability rights and accessibility. My goal is to secure chronic illness grants that can help me acquire mobility aids and enhance my daily living skills. Through sharing my story, I hope to inspire others to embrace their uniqueness and strive for inclusion in every facet of life.',
       },
       demographics: {
+        ethnicity: 'White/Caucasian',
+        disability_status: 'Has disability',
         notes: 'White / Caucasian; details captured from Base44 export.',
       },
     },
@@ -320,6 +268,7 @@ export const DESIGNATED_PROFILES = [
       demographics: {
         white_caucasian: true,
         us_citizen: true,
+        ethnicity: 'White/Caucasian',
       },
       family_life: {
         single_parent: true,
@@ -380,7 +329,10 @@ export const DESIGNATED_PROFILES = [
       demographics: {
         us_citizen: true,
         white_caucasian: true,
+        ethnicity: 'White/Caucasian',
         religious_affiliation: 'Anglican',
+        veteran_status: 'Veteran',
+        disability_status: 'Has disability',
         notes: 'Grew up in poverty; first-generation service member and college graduate.',
       },
       family_life: {
@@ -479,6 +431,11 @@ export const DESIGNATED_PROFILES = [
           'Empower community leadership through training, resource-sharing networks, and diversified funding via grants, donations, and fundraisers.',
         barriers_faced:
           'Systemic poverty, limited infrastructure, cultural isolation, and historic distrust complicate outreach execution.',
+        personal_statement:
+          'Focus Forward Ministries exists to bring the love of Christ to underserved communities through compassionate service, discipleship, and sustainable outreach. We seek to restore hope, strengthen families, and empower individuals by meeting both spiritual and practical needs. Through partnership, prayer, and presence, we aim to move lives forward—one relationship, one act of faith, and one community at a time.',
+      },
+      demographics: {
+        disability_status: 'Has disability',
       },
     },
   },
@@ -525,11 +482,17 @@ export const DESIGNATED_PROFILES = [
           'Food pantries, faith-based coalitions, healthcare providers, and educational institutions across East Tennessee.',
         special_circumstances:
           'Documented in Base44 export; requires sensitive handling of personal credentials and licensure data.',
+        personal_statement:
+          'I am Dr. John White, a molecular geneticist, registered nurse, and devoted educator. My journey has always been about serving others and bridging the gap between scientific knowledge and community needs. With a PhD in Molecular Genetics and extensive experience as a cardiac nurse and biology instructor, I take pride in translating complex medical concepts into practical solutions that empower vulnerable communities. This commitment to service is reflected in my family, as my wife Anya and our children, Robert and Anastasia, embody the same spirit of helping others. As a cancer survivor, I live with the daily challenges of chronic chemotherapy-induced peripheral neuropathy, which has deepened my understanding and empathy for individuals facing health challenges. My experiences fuel my dedication to supporting those who often go unseen, particularly through my work with the Church of God of Prophecy and Focus Forward Ministries, where I focus on developing programs that uplift underserved populations. I am passionate about promoting health equity, mental health awareness, and educational access, striving to create initiatives that inspire hope and improve outcomes. My life, skills, and testimony are dedicated to fostering community engagement and sustainable development—helping to build a brighter future for all.',
+      },
+      demographics: {
+        ethnicity: 'White/Caucasian',
+        disability_status: 'Has disability',
       },
     },
   },
   {
-    id: 'profile-paul-jason-dasher-2',
+    id: 'profile-paul-jason-dasher',
     display_name: 'Paul Jason Dasher',
     primary_type: 'individual',
     status: 'active',
@@ -578,15 +541,94 @@ export const DESIGNATED_PROFILES = [
     display_name: 'Anastasia Nicole White',
     primary_type: 'high_school_student',
     status: 'active',
-    tags: ['baseline', 'designated', 'student'],
+    tags: ['baseline', 'designated', 'student', 'forensic science', 'STEM'],
     sections: {
       basic_information: {
         full_name: 'Anastasia Nicole White',
         email: 'Tishka1201@icloud.com',
         phone: '',
-        address: 'Cleveland, TN',
+        address: 'Cleveland, Tennessee (Bradley County)',
         notes:
-          'Currently in high school and taking college-level classes at Cleveland State Community College.',
+          'High school student taking college-level classes at Cleveland State Community College.',
+      },
+      demographics: {
+        immigrant_status: 'Second-generation immigrant',
+        notes:
+          'White / Caucasian; Polish heritage. Languages: English, Russian. Gender: Female.',
+      },
+      education: {
+        highest_level: 'High School Senior (with college courses)',
+        current_institution: 'Cleveland State Community College',
+        gpa: '3.84',
+        act_score: '28',
+        intended_major: 'Forensic Science',
+        target_colleges: [
+          'Middle Tennessee State University',
+          'University of Central Florida',
+          'University of New Haven',
+          'Penn State University',
+          'Trevecca Nazarene University',
+          'Austin Peay State University',
+          'Carson-Newman',
+          'Centre College',
+          'Christian Brothers University',
+          'Oberlin College',
+          'Seton Hall University',
+          'Ohio State University',
+          'University of Alabama',
+          'University of Tennessee Chattanooga',
+          'University of Tennessee Knoxville',
+          'University of Michigan',
+          'Florida International University',
+          'Harvard University',
+          'Lee University',
+        ],
+        interests: [
+          'Forensic Science',
+          'Criminal Justice',
+          'STEM',
+          'DNA Analysis',
+          'Crime Scene Investigation',
+        ],
+      },
+      location_focus: {
+        rural_resident: true,
+        appalachian_region: true,
+        geographic_focus: 'Cleveland, Tennessee (Bradley County)',
+        notes: 'Rural/Appalachian qualifiers noted in intake.',
+      },
+      financial_information: {
+        household_income: 56000,
+        household_size: 7,
+        financial_need_level: 'moderate',
+        notes: 'Receives SSDI as the minor child of a parent who gets SSDI.',
+      },
+      government_assistance: {
+        ssdi_recipient: true,
+        other_programs: 'SSDI (dependent child of SSDI recipient)',
+      },
+      family_life: {
+        caregiver: true,
+        notes:
+          'Lives with grandparents who do not speak English; acts as translator and advocate.',
+      },
+      narrative: {
+        mission:
+          'Pursue forensic science while advocating for educational equity for second-generation immigrants and underserved students in STEM.',
+        primary_goal:
+          'Secure financial assistance for higher education and complete a college path toward forensic science.',
+        target_population:
+          'Second-generation immigrant and multilingual students pursuing STEM and forensic science pathways.',
+        funding_amount_needed: '',
+        timeline:
+          'Apply to colleges and scholarships during senior year; begin undergraduate studies after graduation.',
+        past_experience:
+          'Balancing rigorous high school coursework with college-level classes at Cleveland State Community College.',
+        unique_qualities:
+          'Multilingual (English/Russian) and serves as translator/advocate for family while maintaining academic excellence (3.84 GPA, 28 ACT).',
+        barriers_faced:
+          'Time constraints from rigorous coursework and family translation responsibilities; language barriers in household.',
+        special_circumstances: 'Large household; SSDI dependent.',
       },
     },
   },
@@ -610,13 +652,54 @@ export const DESIGNATED_PROFILES = [
     display_name: 'Kimberly Botts',
     primary_type: 'individual',
     status: 'active',
-    tags: ['baseline', 'designated'],
+    tags: ['baseline', 'designated', 'entrepreneur'],
     sections: {
       basic_information: {
         full_name: 'Kimberly Botts',
         email: '',
-        phone: '',
-        address: 'Cleveland, TN',
+        phone: '4235047778',
+        address: '3940 Eveningside Dr. NE\nCleveland, TN 37312',
+        notes: 'Date of birth: 10/11/1964. Profile imported from Base44 export (Kim profile.pdf).',
+      },
+      demographics: {
+        white_caucasian: true,
+        notes: 'White / Caucasian. Religious affiliation: Southern Baptist.',
+      },
+      government_assistance: {
+        medicaid_enrolled: true,
+        other_programs: 'Medicaid Waiver Program, ECF CHOICES (TN) - Employment & Community First.',
+      },
+      health_medical: {
+        chronic_illness: true,
+        disability_type: ['Mentally challenged', 'Diabetic'],
+        support_needs_level: 'Substantial',
+        notes:
+          'Dental need, assistive tech need, HCBS waiver eligible, clinical trial ready, telehealth capable.',
+      },
+      location_focus: {
+        geographic_focus: 'Cleveland, Tennessee',
+      },
+      narrative: {
+        mission:
+          'Support underrepresented founders, especially women and youth, by providing comprehensive resources and funding opportunities. Champion small business grants and innovation funding to transform ideas into reality.',
+        primary_goal:
+          'Support at least 50 underrepresented entrepreneurs over the next year; facilitate four annual community workshops; direct $100,000 toward small business grants within 18 months.',
+        target_population:
+          'Underrepresented founders, specifically women and youth entrepreneurs in Cleveland, TN who face barriers to funding, mentorship, and networking.',
+        funding_amount_needed:
+          '$250,000 total: $100,000 for a grant program, $75,000 for resource workshops, and $75,000 for a mentorship program.',
+        timeline:
+          'Establish resource platform by March; first community workshop by June; three additional workshops through the year; begin directing grant funds by end of third quarter. 18-month overall timeline.',
+        past_experience:
+          'Founded a mentorship program connecting underrepresented founders with seasoned entrepreneurs (75% increase in business sustainability). Directed over $200,000 toward grants supporting women and youth entrepreneurs. Orchestrated workshops for 300+ participants.',
+        unique_qualities:
+          'Commitment to empowering underrepresented founders; proactive approach designing tailored community workshops and mentorship opportunities; connections to innovative tech startups and sustainable business practices.',
+        collaboration_partners:
+          'Small Business Development Center, SCORE, local universities and colleges, seasoned entrepreneurs in the Cleveland, TN ecosystem.',
+        sustainability_plan:
+          'Build strategic partnerships with local businesses, educational institutions, and community organizations. Establish sliding scale model for services. Cultivate alumni network for referral system and community contribution.',
+        barriers_faced:
+          'Lack of access to funding for aspiring entrepreneurs; difficulty finding qualified mentors willing to engage with underrepresented groups; challenges scaling reach while maintaining quality of support.',
       },
     },
   },
@@ -625,14 +708,69 @@ export const DESIGNATED_PROFILES = [
     display_name: 'Luibov S Samoylenko',
     primary_type: 'individual',
     status: 'active',
-    tags: ['baseline', 'designated'],
+    tags: ['baseline', 'designated', 'medical assistance', 'senior'],
     sections: {
       basic_information: {
         full_name: 'Luibov S Samoylenko',
         email: '',
         phone: '',
-        address: 'Cleveland, TN',
-        notes: 'Baseline profile imported from Base44 export.',
+        address: '3531 Buchanan Rd.\nCleveland, TN 37323',
+        notes:
+          'Date of birth: 08/29/1952. Profile imported from Base44 export (Luba profile.pdf). Profile type: Medical Assistance.',
+      },
+      demographics: {
+        immigration_status: 'Permanent resident',
+        notes: 'Senior citizen.',
+      },
+      financial_information: {
+        financial_need_level: 'High',
+        low_income: true,
+        unemployed: true,
+        notes:
+          'Living on a fixed income without medical insurance. Has medical debt. Seeking $25,000 for critical hip replacement surgery and rehabilitation.',
+      },
+      government_assistance: {
+        snap_recipient: true,
+      },
+      health_medical: {
+        chronic_illness: true,
+        chronic_illness_type: 'Hip replacement needed',
+        notes:
+          'Critical need for hip replacement surgery. Limited mobility restricts daily activities and access to services.',
+      },
+      family_life: {
+        widow_widower: true,
+        household_size: 1,
+        notes: 'Senior citizen living alone in rural area.',
+      },
+      location_focus: {
+        rural_resident: true,
+        appalachian_region: true,
+        geographic_focus: 'Cleveland, Tennessee',
+        notes:
+          'Rural Appalachian community with limited access to healthcare resources for seniors.',
+      },
+      narrative: {
+        mission:
+          'Restore mobility and independence through critical hip replacement surgery, and advocate for healthcare access for senior citizens in rural Tennessee.',
+        primary_goal:
+          'Secure $25,000 funding for hip replacement surgery and rehabilitation to regain mobility and independence.',
+        target_population:
+          'Senior citizens in rural Tennessee without adequate medical insurance who face barriers to healthcare access.',
+        funding_amount_needed: '$25,000 for hip replacement surgery and rehabilitation.',
+        timeline:
+          'Urgent need — surgery required as soon as possible to prevent further complications and longer recovery.',
+        past_experience:
+          'Active community engagement; volunteered at local organizations assisting fellow seniors navigating challenges of aging.',
+        unique_qualities:
+          'Resilient senior citizen with deep community connections; determined to reclaim independence and advocate for improved healthcare access for peers.',
+        collaboration_partners:
+          'Friends and neighbors in Cleveland, TN; trusted mentors; local community support networks.',
+        sustainability_plan: '',
+        barriers_faced:
+          'Financial hardship on fixed income, lack of medical insurance, limited mobility, inability to drive, restricted access to medical appointments and essential services, isolation.',
+        special_circumstances:
+          'Senior citizen living alone in a rural area with limited mobility; hip replacement is medically necessary for independence; no medical insurance and living on a fixed income.',
       },
     },
   },
@@ -641,28 +779,66 @@ export const DESIGNATED_PROFILES = [
     display_name: 'Robert White',
     primary_type: 'college_student',
     status: 'active',
-    tags: ['baseline', 'designated', 'student'],
+    tags: ['baseline', 'designated', 'student', 'paramedic', 'multilingual'],
     sections: {
       basic_information: {
         full_name: 'Robert White',
         email: '',
         phone: '',
-        address: 'Cleveland, TN 37312',
+        address: '3940 Eveningside Dr. NE\nCleveland, TN 37312',
+        notes: 'Date of birth: 12/27/2001. Profile imported from Base44 export (Robert-White-Profile-R1.pdf).',
       },
-    },
-  },
-  {
-    id: 'profile-axiom-biolabs-2',
-    display_name: 'Axiom BioLabs',
-    primary_type: 'organization',
-    status: 'active',
-    tags: ['baseline', 'designated', 'organization'],
-    sections: {
-      basic_information: {
-        full_name: 'Axiom Biolabs',
-        email: '',
-        phone: '',
-        address: '',
+      demographics: {
+        white_caucasian: true,
+        us_citizen: true,
+        notes: 'Trilingual: English, Spanish, and a third language.',
+      },
+      education: {
+        highest_level: 'College Student - Currently in undergraduate program',
+        current_institution: 'Cleveland State Community College',
+        gpa: '3.75',
+        high_school_gpa: '4.0',
+        valedictorian: true,
+        intended_major: 'Paramedic',
+        community_service_hours: '400+',
+        target_colleges: [
+          'Cleveland State Community College',
+          'Chattanooga State Community College',
+          'Northeast State Community College',
+          'Roane State Community College',
+          'Volunteer State Community College',
+          'Columbia State Community College',
+          'Motlow State Community College',
+          'Lee University',
+        ],
+        leadership_roles: ['Spanish Club', 'Chess Club'],
+      },
+      financial_information: {
+        household_income: 310000,
+        notes:
+          'Household income $310,000, but education costs and family obligations limit available resources for paramedicine training. Seeking $50,000 per year for textbooks, equipment, training materials, and summer internship.',
+      },
+      location_focus: {
+        geographic_focus: 'Cleveland, TN and Chattanooga, TN',
+        notes:
+          'Focus on multilingual immigrant communities in Cleveland and Chattanooga.',
+      },
+      narrative: {
+        mission:
+          'Bridge the gap between healthcare and multilingual immigrant communities by becoming a fully qualified Paramedic and implementing outreach initiatives for non-native English speakers.',
+        primary_goal:
+          'Become a fully qualified Paramedic; implement outreach initiatives for multilingual immigrant communities; partner with local healthcare providers for cultural competence training.',
+        target_population:
+          'Multilingual immigrant communities in Cleveland and Chattanooga, TN.',
+        funding_amount_needed: '$50,000 per year for paramedicine education, textbooks, equipment, training materials, and internship.',
+        past_experience:
+          'Over 400 hours in skilled nursing facilities focused on delivering care while overcoming language barriers; Valedictorian with 4.0 GPA.',
+        unique_qualities:
+          'Trilingual, Valedictorian with 4.0 GPA, 400+ hours community service in skilled nursing facilities, leadership in Spanish Club and Chess Club.',
+        barriers_faced:
+          'Financial constraints for paramedicine education; language barriers in healthcare delivery for immigrant communities.',
+        special_circumstances:
+          'Dedicated to improving healthcare accessibility for multilingual communities through EMS career.',
       },
     },
   },

@@ -62,11 +62,11 @@ function assertDecision(result, expected, label) {
 }
 
 // ---------------------------------------------------------------------------
-// Sanity: MATCHER_VERSION is 3.0.0
+// Sanity: MATCHER_VERSION is 3.1.0
 // ---------------------------------------------------------------------------
 
 test('MATCHER_VERSION is 3.0.0', () => {
-  assert.equal(MATCHER_VERSION, '3.0.0')
+  assert.equal(MATCHER_VERSION, '3.1.0')
 })
 
 // ---------------------------------------------------------------------------
