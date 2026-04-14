@@ -489,6 +489,9 @@ export function computeMatchDecision(rawProfile, rawOpportunity, opts = {}) {
   } else if (confidence < 50) {
     // Insufficient confidence → REVIEW
     decision = 'REVIEW'
+  } else if (oppNorm.applicabilityUnknown && profileNorm.entityType !== 'individual') {
+        // Unknown applicability for non-individual profiles must not produce ACCEPT
+            decision = 'REVIEW'
   } else {
     decision = 'ACCEPT'
   }

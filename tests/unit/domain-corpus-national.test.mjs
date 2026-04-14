@@ -88,7 +88,8 @@ function createTestDb() {
       geo_eligibility TEXT,
       signal_tags TEXT DEFAULT '[]',
       verified_url INTEGER DEFAULT 0,
-      crawler_version TEXT
+      crawler_version TEXT,
+              funding_source_type TEXT
     );
     CREATE UNIQUE INDEX IF NOT EXISTS ux_fo_source_id ON funding_opportunities(source, source_id);
   `)
