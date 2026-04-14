@@ -489,6 +489,11 @@ export function computeMatchDecision(rawProfile, rawOpportunity, opts = {}) {
   } else if (confidence < 50) {
     // Insufficient confidence → REVIEW
     decision = 'REVIEW'
+  } else if (oppNorm.applicabilityUnknown && profileNorm.entityType !== 'individual') {
+    // Unknown applicability forces REVIEW for non-individual profiles (conservative: don't
+    // false-ACCEPT ambiguous opportunities for business/nonprofit/veteran/etc.).
+    // Individual profiles are exempted because most assistance programs implicitly accept individuals.
+    decision = 'REVIEW'
   } else {
     decision = 'ACCEPT'
   }
