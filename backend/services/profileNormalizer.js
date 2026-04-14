@@ -42,8 +42,6 @@ export const NEED_ALIAS_MAP = {
   healthcare: 'health_medical',
   medical_bills: 'health_medical',
   prescription: 'health_medical',
-  mental_health: 'health_medical',
-  behavioral_health: 'health_medical',
   dental: 'health_medical',
   vision: 'health_medical',
 
