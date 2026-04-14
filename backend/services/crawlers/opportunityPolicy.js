@@ -185,11 +185,35 @@ export function pickRealUrl(opp) {
 
 // ─── POLICY ORCHESTRATOR ──────────────────────────────────────────────────────
 
+// ─── EXPIRATION DETECTION ────────────────────────────────────────────────────
+
+/**
+ * Returns true if the opportunity has a fixed deadline that has passed.
+ * Rolling deadlines and opportunities without deadlines are NOT considered expired.
+ */
+export function isExpired(opp) {
+  if (!opp || typeof opp !== 'object') return false
+  // Rolling deadlines never expire by date
+  if (opp.deadline_type === 'rolling') return false
+  // No deadline set — assume still active
+  if (!opp.deadline) return false
+  try {
+    const deadlineDate = new Date(opp.deadline)
+    if (isNaN(deadlineDate.getTime())) return false
+    // Add 1 day grace period (deadline day itself is still valid)
+    const cutoff = new Date()
+    cutoff.setHours(0, 0, 0, 0)
+    return deadlineDate < cutoff
+  } catch {
+    return false
+  }
+}
+
 /**
  * Check all compliance rules for a single opportunity.
  *
  * @param {object} opp
- * @param {{ rejectionCounts?: Record<string, number> }} [opts] - Optional per-request counts (avoids shared state).
+ * @param {{ rejectionCounts?: Record<string, number>, allowExpired?: boolean }} [opts] - Optional per-request counts (avoids shared state).
  * @returns {{ ok: boolean, reason: string|null }}
  */
 export function enforceOpportunityPolicy(opp, opts = {}) {
@@ -217,6 +241,12 @@ export function enforceOpportunityPolicy(opp, opts = {}) {
   if (isMatchingFunds(opp)) {
     bumpCount('matching_funds', rejectionCounts)
     return { ok: false, reason: 'matching_funds' }
+  }
+
+  // v4: Check expiration — reject opportunities past their fixed deadline
+  if (!opts.allowExpired && isExpired(opp)) {
+    bumpCount('expired_deadline', rejectionCounts)
+    return { ok: false, reason: 'expired_deadline' }
   }
 
   return { ok: true, reason: null }
