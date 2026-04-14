@@ -853,7 +853,7 @@ export const DESIGNATED_PROFILES = [
       financial_information: {
         household_income: 310000,
         notes:
-          'Seeking $50,000 per year to support education in paramedicine — textbooks, equipment, training materials, and summer internship. Family has limited resources despite income.',
+          'Household income $310,000, but education costs and family obligations limit available resources for paramedicine training. Seeking $50,000 per year for textbooks, equipment, training materials, and summer internship.',
       },
       location_focus: {
         geographic_focus: 'Cleveland, TN and Chattanooga, TN',
@@ -875,7 +875,7 @@ export const DESIGNATED_PROFILES = [
         barriers_faced:
           'Financial constraints for paramedicine education; language barriers in healthcare delivery for immigrant communities.',
         special_circumstances:
-          'First-generation college student dedicated to improving healthcare accessibility for multilingual communities through EMS career.',
+          'Dedicated to improving healthcare accessibility for multilingual communities through EMS career.',
       },
     },
   },
