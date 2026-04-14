@@ -52,7 +52,8 @@ function createDb() {
       geo_eligibility TEXT,
       signal_tags TEXT DEFAULT '[]',
       verified_url INTEGER DEFAULT 0,
-      crawler_version TEXT
+      crawler_version TEXT,
+      funding_source_type TEXT
     );
 
     CREATE UNIQUE INDEX funding_opportunities_source_source_id_uniq
