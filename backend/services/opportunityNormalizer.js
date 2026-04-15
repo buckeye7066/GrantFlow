@@ -301,9 +301,13 @@ export function normalizeOpportunity(rawOpp) {
   }
 
   // -- Is loan? --
+  // Exempts loan forgiveness, repayment assistance, and similar non-loan programs
+  // that mention "loan" in context of helping borrowers, not lending.
+  const titleLower = String(rawOpp.title ?? '').toLowerCase()
+  const loanAssistanceExempt = /loan (forgiveness|repayment|discharge|cancellation|redemption)|repay.*loan|pslf|income.driven repayment/i.test(titleLower)
   const isLoan = Boolean(rawOpp.is_loan) ||
     fundingType === 'loan' ||
-    String(rawOpp.title ?? '').toLowerCase().includes('loan')
+    (!loanAssistanceExempt && titleLower.includes('loan'))
 
   // -- Pro bono / in-kind / referral-only flags --
   const isProBono = Boolean(rawOpp.is_pro_bono) ||
@@ -367,6 +371,23 @@ export function normalizeOpportunity(rawOpp) {
     rawOpp.url
   )
 
+  // -- Directory-like detection --
+  const rawType = String(rawOpp.type || '').trim().toUpperCase()
+  const rawOppType = String(rawOpp.opportunity_type || '').trim().toLowerCase()
+  const rawOrigin = String(rawOpp.record_origin || '').trim().toLowerCase()
+  const isDirectory = rawType === 'DIRECTORY' ||
+    rawOrigin.includes('directory') ||
+    rawOppType.includes('directory')
+
+  // -- Placeholder detection --
+  const PLACEHOLDER_TEXT_RX = [
+    /\blorem\b/i, /\bipsum\b/i, /\bcoming\s+soon\b/i, /\bplaceholder\b/i,
+    /\btbd\b/i, /\btest opportunity\b/i, /\bsample opportunity\b/i,
+    /\bfoo bar\b/i, /^test$/i, /\bstub\b/i,
+  ]
+  const titleDesc = `${rawOpp.title || ''} ${rawOpp.description || ''}`
+  const isPlaceholder = PLACEHOLDER_TEXT_RX.some(rx => rx.test(titleDesc))
+
   // -- Source trust score (computed separately, but store raw source info) --
   const sourceType = rawOpp.official_source_type ?? rawOpp.source_category ?? null
   const source = rawOpp.source ?? null
@@ -395,10 +416,89 @@ export function normalizeOpportunity(rawOpp) {
     requiresNonprofit,
     requiresBusiness,
     hasApplicationUrl,
+    isDirectory,
+    isPlaceholder,
     sourceType,
     source,
     isNational,
   }
+}
+
+// ---------------------------------------------------------------------------
+// Infer housing classification for an opportunity that lacks explicit fields.
+// This is used as a fallback when funding_category / usable_for_housing are not
+// persisted (e.g. legacy rows or opportunities from other crawlers).
+// ---------------------------------------------------------------------------
+
+const REFUND_ELIGIBLE_PATTERNS = [
+  /\brefund\b/i, /\bexcess\b.{0,30}\baid\b/i, /\bcost.of.attendance\b/i,
+  /\bcoa\b/i, /\bstipend\b/i, /\bdisburs/i, /\bover.?award\b/i,
+]
+const STIPEND_PATTERNS = [
+  /\bstipend\b/i, /\bpaid\s+directly\s+to\s+(the\s+)?student\b/i,
+  /\bmonthly\s+payment\b/i, /\bweekly\s+allowance\b/i,
+  /\bunrestricted\s+(cash|award|payment)\b/i,
+  /\bno\s+restrictions\s+on\s+(its\s+)?use\b/i,
+]
+const HOUSING_DIRECT_PATTERNS = [
+  /\bfree\s+(campus\s+)?housing\b/i, /\bhousing\s+stipend\b/i,
+  /\bra\s+program\b/i, /\bresident\s+assist/i, /\broom\s+(and\s+board|&\s+board)\b/i,
+  /\bcampus\s+housing\b.{0,30}\bfree\b/i,
+]
+const FAITH_BASED_PATTERNS = [
+  /\bchurch\b/i, /\bfaith.based\b/i, /\bdenomination\b/i, /\bchristian\b/i,
+  /\bcatholic\b/i, /\bbaptist\b/i, /\bmethodist\b/i, /\bpresbyterian\b/i,
+  /\bluthera\b/i, /\bevangelical\b/i, /\bdiocese\b/i, /\bministry\b/i,
+  /\bcongregat/i, /\bseminary\b/i,
+]
+const TALENT_BASED_PATTERNS = [
+  /\bmusic\b/i, /\bperforming arts\b/i, /\borchestra\b/i, /\bchoir\b/i,
+  /\bband\s+scholarship\b/i, /\btalent.based\b/i, /\barts?\s+scholarship\b/i,
+  /\bathletic\s+scholarship\b/i, /\bcompetition\s+award\b/i,
+]
+const COA_ADJUSTMENT_PATTERNS = [
+  /\bcost\s+of\s+attendance\b/i, /\bcoa\s+adjust/i,
+  /\bprofessional\s+judgment\b/i, /\bfinancial\s+aid\s+appeal\b/i,
+]
+
+/**
+ * Infer funding_category and housing usability from opportunity text.
+ * Returns: { fundingCategory: string|null, usableForHousing: boolean, refundPotential: boolean }
+ */
+export function inferHousingClassification(rawOpp) {
+  const text = `${rawOpp?.title || ''} ${rawOpp?.description || ''} ${rawOpp?.keywords || ''}`.toLowerCase()
+
+  // Explicit database fields take precedence
+  if (rawOpp?.funding_category) {
+    const cat = rawOpp.funding_category
+    const usable = ['refund_eligible', 'stipend', 'housing_direct', 'faith_based', 'talent_based', 'coa_adjustment'].includes(cat)
+    return {
+      fundingCategory: cat,
+      usableForHousing: Boolean(rawOpp.usable_for_housing) || usable,
+      refundPotential: Boolean(rawOpp.refund_potential) || cat === 'refund_eligible',
+    }
+  }
+
+  if (HOUSING_DIRECT_PATTERNS.some((p) => p.test(text))) {
+    return { fundingCategory: 'housing_direct', usableForHousing: true, refundPotential: false }
+  }
+  if (STIPEND_PATTERNS.some((p) => p.test(text))) {
+    return { fundingCategory: 'stipend', usableForHousing: true, refundPotential: false }
+  }
+  if (REFUND_ELIGIBLE_PATTERNS.some((p) => p.test(text))) {
+    return { fundingCategory: 'refund_eligible', usableForHousing: true, refundPotential: true }
+  }
+  if (COA_ADJUSTMENT_PATTERNS.some((p) => p.test(text))) {
+    return { fundingCategory: 'coa_adjustment', usableForHousing: true, refundPotential: false }
+  }
+  if (FAITH_BASED_PATTERNS.some((p) => p.test(text))) {
+    return { fundingCategory: 'faith_based', usableForHousing: false, refundPotential: false }
+  }
+  if (TALENT_BASED_PATTERNS.some((p) => p.test(text))) {
+    return { fundingCategory: 'talent_based', usableForHousing: false, refundPotential: false }
+  }
+
+  return { fundingCategory: null, usableForHousing: false, refundPotential: false }
 }
 
 // ---------------------------------------------------------------------------

@@ -5,10 +5,11 @@ import { createPageUrl } from '@/utils';
 import GrantCard from '../pipeline/GrantCard';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { Loader2, Plus, Check, CheckSquare, Square, Search, Database, Star } from 'lucide-react';
+import { Loader2, Plus, Check, CheckSquare, Square, Search, Database, Star, Home, Info } from 'lucide-react';
 import { useToast } from "@/components/ui/use-toast";
 import { Progress } from "@/components/ui/progress";
 import { Checkbox } from '@/components/ui/checkbox';
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { useSavedGrantsStore } from '@/stores/savedGrantsStore';
 
 const SOURCE_LABELS = {
@@ -57,6 +58,37 @@ function getOpportunityTypeBadge(opp) {
   const fundingLabel = FUNDING_TYPE_LABELS[fundingType] || null;
   const isProBono = ['pro_bono', 'in_kind', 'charity_care', 'training_paid', 'legal_aid', 'clinic_service', 'equipment_donation'].includes(oppType);
   return { label, fundingLabel, isProBono };
+}
+
+/**
+ * Returns housing usability info for an opportunity.
+ * Checks: usable_for_housing flag, refund_potential flag, and funding_category.
+ */
+function getHousingInfo(opp) {
+  const isUsable =
+    Boolean(opp?.usable_for_housing) ||
+    Boolean(opp?.refund_potential) ||
+    ['refund_eligible', 'stipend', 'housing_direct', 'faith_based', 'talent_based', 'coa_adjustment']
+      .includes(opp?.funding_category)
+
+  if (!isUsable) return null
+
+  const category = opp?.funding_category || null
+  const explanations = {
+    refund_eligible: 'This scholarship may generate a refund check paid directly to you — use it for rent, utilities, and groceries after tuition is covered.',
+    stipend: 'This program pays you a stipend directly, with no restrictions on use. You can apply it to off-campus rent, food, and utilities.',
+    housing_direct: 'This program pays housing costs directly or provides free/reduced campus housing — freeing your cash for other expenses.',
+    faith_based: 'This faith-based scholarship is often paid directly to you as a stipend, usable for housing and living costs.',
+    talent_based: 'This talent-based award is typically a cash stipend with no restrictions — it can cover off-campus rent and utilities.',
+    coa_adjustment: 'A successful Cost of Attendance (COA) appeal may increase your financial aid eligibility, unlocking more grant funds for housing.',
+  }
+
+  const explanation = explanations[category] ||
+    (opp?.refund_potential
+      ? 'This award may generate a refund after tuition — use it toward off-campus rent, utilities, or food.'
+      : 'This funding can be applied toward off-campus living expenses.')
+
+  return { explanation, category }
 }
 
 function formatSourceLabel(source) {
@@ -172,9 +204,21 @@ export default function SearchResults({ results = [], profileId, onAddToPipeline
   const [selectedOpportunities, setSelectedOpportunities] = React.useState(new Set());
   const [isProcessing, setIsProcessing] = React.useState(false);
   const [processingProgress, setProcessingProgress] = React.useState({ current: 0, total: 0 });
+  const [filterHousingOnly, setFilterHousingOnly] = React.useState(false);
   const queryClient = useQueryClient();
   const { toast } = useToast();
   const { savedIds, toggleGrant, isSaved } = useSavedGrantsStore();
+
+  // Apply housing filter
+  const displayResults = React.useMemo(() => {
+    if (!filterHousingOnly) return results;
+    return results.filter((opp) => Boolean(getHousingInfo(opp)));
+  }, [results, filterHousingOnly]);
+
+  const housingUsableCount = React.useMemo(
+    () => results.filter((opp) => Boolean(getHousingInfo(opp))).length,
+    [results]
+  );
 
   /** Distinct crawler / catalog pipeline keys (often one per run, e.g. "national" or a directory name). */
   const uniqueSources = React.useMemo(() => {
@@ -218,10 +262,10 @@ export default function SearchResults({ results = [], profileId, onAddToPipeline
   };
 
   const handleSelectAll = () => {
-    if (selectedOpportunities.size === results.length && results.length > 0) {
+    if (selectedOpportunities.size === displayResults.length && displayResults.length > 0) {
       setSelectedOpportunities(new Set());
     } else {
-      const allKeys = results.map((opp, idx) => getOpportunityKey(opp, idx));
+      const allKeys = displayResults.map((opp, idx) => getOpportunityKey(opp, idx));
       setSelectedOpportunities(new Set(allKeys));
     }
   };
@@ -309,7 +353,7 @@ export default function SearchResults({ results = [], profileId, onAddToPipeline
     );
   }
 
-  const allSelected = selectedOpportunities.size === results.length && results.length > 0;
+  const allSelected = selectedOpportunities.size === displayResults.length && displayResults.length > 0;
 
   return (
     <div data-component="SearchResults" data-results-count={results.length} data-selected-count={selectedOpportunities.size}>
@@ -370,8 +414,46 @@ export default function SearchResults({ results = [], profileId, onAddToPipeline
         </div>
       )}
 
+      {/* Housing filter bar */}
+      {housingUsableCount > 0 && (
+        <div className="mb-4 p-3 rounded-lg border border-teal-200 bg-teal-50 flex items-center gap-3 flex-wrap">
+          <Home className="w-4 h-4 text-teal-600 shrink-0" />
+          <label
+            htmlFor="filter-housing"
+            className="flex items-center gap-2 cursor-pointer text-sm text-teal-800 font-medium select-none"
+          >
+            <Checkbox
+              id="filter-housing"
+              checked={filterHousingOnly}
+              onCheckedChange={(v) => setFilterHousingOnly(Boolean(v))}
+              className="border-teal-400 data-[state=checked]:bg-teal-600 data-[state=checked]:border-teal-600"
+            />
+            Show funding usable for housing only
+          </label>
+          <span className="text-xs text-teal-700 ml-auto">
+            {housingUsableCount} of {results.length} result{results.length !== 1 ? 's' : ''} can help with off-campus living
+          </span>
+          <TooltipProvider delayDuration={200}>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span className="cursor-help">
+                  <Info className="w-4 h-4 text-teal-500" />
+                </span>
+              </TooltipTrigger>
+              <TooltipContent side="right" className="max-w-xs text-xs bg-teal-900 text-white border-teal-700">
+                <p>
+                  These are funding sources whose awards can be applied to rent, utilities, and food —
+                  either because the payment is refunded to you after tuition, paid as a direct stipend,
+                  or because a COA (Cost of Attendance) adjustment increases your eligible aid.
+                </p>
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
+        </div>
+      )}
+
       {/* Bulk Action Bar */}
-      {results.length > 0 && (
+      {displayResults.length > 0 && (
         <div className="bulk-action-bar-debug mb-6 p-4 bg-white rounded-lg border shadow-sm">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
@@ -402,7 +484,7 @@ export default function SearchResults({ results = [], profileId, onAddToPipeline
       )}
 
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
-        {results.map((opp, idx) => {
+        {displayResults.map((opp, idx) => {
           const oppKey = getOpportunityKey(opp, idx);
           const isSelected = selectedOpportunities.has(oppKey);
           
@@ -464,6 +546,37 @@ export default function SearchResults({ results = [], profileId, onAddToPipeline
                       )}
                     </>
                   ) : null;
+                })()}
+                {/* Housing-usable badge with tooltip */}
+                {(() => {
+                  const housingInfo = getHousingInfo(opp);
+                  if (!housingInfo) return null;
+                  return (
+                    <TooltipProvider delayDuration={200}>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Badge
+                            variant="outline"
+                            className="text-xs shrink-0 border-teal-300 text-teal-700 bg-teal-50 flex items-center gap-1 cursor-help"
+                          >
+                            <Home className="w-3 h-3" />
+                            Can be used for housing
+                          </Badge>
+                        </TooltipTrigger>
+                        <TooltipContent
+                          side="bottom"
+                          className="max-w-xs text-xs leading-relaxed bg-teal-900 text-white border-teal-700"
+                        >
+                          <p>{housingInfo.explanation}</p>
+                          {opp.funding_category && (
+                            <p className="mt-1 opacity-75">
+                              Category: {opp.funding_category.replace(/_/g, ' ')}
+                            </p>
+                          )}
+                        </TooltipContent>
+                      </Tooltip>
+                    </TooltipProvider>
+                  );
                 })()}
               </div>
               <div className="flex-grow">

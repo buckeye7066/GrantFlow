@@ -1,6 +1,8 @@
 import crypto from 'crypto'
 import { isValidRealUrl, isLoanLike, isMatchingFunds, enforceOpportunityPolicy } from './crawlers/opportunityPolicy.js'
 import { ALLOWED_RECORD_ORIGINS } from '../utils/recordOrigins.js'
+import { validateOpportunity, deduplicateByUrl } from './opportunityValidator.js'
+import { normalizeUrlForDedupe } from '../routes/opportunityHelpers.js'
 
 // Backward-compat alias
 const isValidHttpUrl = isValidRealUrl
@@ -63,7 +65,32 @@ function normalizeDateLikeOrNull(value) {
   return value
 }
 
-export async function upsertFundingOpportunity(db, opportunity) {
+export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
+  // Full policy enforcement on every path (not just bulk).
+  const policyResult = enforceOpportunityPolicy(opportunity)
+  if (!policyResult.ok) {
+    return {
+      id: null,
+      inserted: false,
+      skipped: true,
+      reason: `policy:${policyResult.reason}`,
+    }
+  }
+
+  // Comprehensive validation (required fields, categorization, directory/expiration detection).
+  const validation = validateOpportunity(opportunity, {
+    allowLoans: opts.allowLoans ?? false,
+    allowDirectories: opts.allowDirectories ?? true,
+  })
+  if (!validation.valid) {
+    return {
+      id: null,
+      inserted: false,
+      skipped: true,
+      reason: `validation:${validation.errors.join(',')}`,
+    }
+  }
+
   const source = opportunity.source ?? 'crawler'
   const title = normalizeNonEmptyString(opportunity?.title)
   if (!title) {
@@ -80,7 +107,6 @@ export async function upsertFundingOpportunity(db, opportunity) {
   const applicationUrl = normalizeUrl(opportunity.application_url)
   const evidenceUrl = normalizeUrl(opportunity.evidence_url ?? sourceUrl ?? applicationUrl)
 
-  // All opportunities must have at least one concrete valid http/https URL (no placeholders).
   const candidateUrl = sourceUrl ?? applicationUrl ?? evidenceUrl ?? null
   if (!candidateUrl || !isValidHttpUrl(candidateUrl)) {
     return {
@@ -91,7 +117,6 @@ export async function upsertFundingOpportunity(db, opportunity) {
     }
   }
 
-  // Exclude loans, microloans, financing, and matching-fund/cost-share opportunities.
   if (isLoanOrMatchingFund(opportunity)) {
     return {
       id: null,
@@ -99,6 +124,11 @@ export async function upsertFundingOpportunity(db, opportunity) {
       skipped: true,
       reason: 'excluded: loan or matching-fund opportunity',
     }
+  }
+
+  // Apply inferred opportunity_type from validator if not already set.
+  if (validation.opportunityType && !opportunity.opportunity_type) {
+    opportunity.opportunity_type = validation.opportunityType
   }
 
   const sourceId =
@@ -273,6 +303,31 @@ export async function upsertFundingOpportunity(db, opportunity) {
     return { id: existing.id, inserted: false, updated: true, skipped: false }
   }
 
+  // URL-based cross-source deduplication: if another active opportunity has the same
+  // normalized URL from a different source, treat it as a duplicate (skip insert).
+  const normalizedCandidateUrl = normalizeUrlForDedupe(candidateUrl)
+  if (normalizedCandidateUrl && !opts.skipUrlDedup) {
+    try {
+      const urlDupe = await db
+        .prepare(
+          `SELECT id, source, source_id FROM funding_opportunities
+           WHERE source_url = ? OR application_url = ?
+           LIMIT 1`,
+        )
+        .get(candidateUrl, candidateUrl)
+      if (urlDupe && urlDupe.source !== source) {
+        return {
+          id: urlDupe.id,
+          inserted: false,
+          skipped: true,
+          reason: `url_duplicate:${urlDupe.source}/${urlDupe.source_id}`,
+        }
+      }
+    } catch (err) {
+      console.warn('[opportunityInserter] URL dedup query failed (allowing insert):', err?.message)
+    }
+  }
+
   // IMPORTANT:
   // `funding_opportunities.id` is the DB primary key. Never reuse dataset IDs here because
   // different sources can collide (e.g. "nat-snap") which triggers UNIQUE constraint failures.
@@ -329,6 +384,14 @@ export async function upsertFundingOpportunity(db, opportunity) {
     geo_eligibility: opportunity.geo_eligibility != null ? JSON.stringify(opportunity.geo_eligibility) : null,
     signal_tags: JSON.stringify(ensureArray(opportunity.signal_tags)),
     crawler_version: opportunity.crawler_version ?? null,
+    // Housing classification fields (migration 054)
+    funding_category: opportunity.funding_category ?? null,
+    usable_for_housing: toDbBoolean(db, opportunity.usable_for_housing),
+    refund_potential: toDbBoolean(db, opportunity.refund_potential),
+    eligibility_signals: typeof opportunity.eligibility_signals === 'string'
+      ? opportunity.eligibility_signals
+      : (opportunity.eligibility_signals != null ? JSON.stringify(opportunity.eligibility_signals) : '{}'),
+    verification_status: opportunity.verification_status ?? 'needs_review',
   }
 
   const insert = db.prepare(`
@@ -373,7 +436,12 @@ export async function upsertFundingOpportunity(db, opportunity) {
       certifications_required,
       geo_eligibility,
       signal_tags,
-      crawler_version
+      crawler_version,
+      funding_category,
+      usable_for_housing,
+      refund_potential,
+      eligibility_signals,
+      verification_status
     ) VALUES (
       @id,
       @title,
@@ -415,7 +483,12 @@ export async function upsertFundingOpportunity(db, opportunity) {
       @certifications_required,
       @geo_eligibility,
       @signal_tags,
-      @crawler_version
+      @crawler_version,
+      @funding_category,
+      @usable_for_housing,
+      @refund_potential,
+      @eligibility_signals,
+      @verification_status
     )
     ON CONFLICT(source, source_id) DO UPDATE SET
       title = COALESCE(excluded.title, funding_opportunities.title),
@@ -452,6 +525,11 @@ export async function upsertFundingOpportunity(db, opportunity) {
       record_origin = COALESCE(excluded.record_origin, funding_opportunities.record_origin),
       last_verified_at = COALESCE(excluded.last_verified_at, funding_opportunities.last_verified_at),
       match_reasons = COALESCE(excluded.match_reasons, funding_opportunities.match_reasons),
+      funding_category = COALESCE(excluded.funding_category, funding_opportunities.funding_category),
+      usable_for_housing = COALESCE(excluded.usable_for_housing, funding_opportunities.usable_for_housing),
+      refund_potential = COALESCE(excluded.refund_potential, funding_opportunities.refund_potential),
+      eligibility_signals = COALESCE(excluded.eligibility_signals, funding_opportunities.eligibility_signals),
+      verification_status = COALESCE(excluded.verification_status, funding_opportunities.verification_status),
       updated_at = CURRENT_TIMESTAMP,
       last_crawled = CURRENT_TIMESTAMP
   `)
@@ -497,6 +575,11 @@ export async function upsertFundingOpportunity(db, opportunity) {
     geo_eligibility: record.geo_eligibility,
     signal_tags: record.signal_tags,
     crawler_version: record.crawler_version,
+    funding_category: record.funding_category,
+    usable_for_housing: record.usable_for_housing,
+    refund_potential: record.refund_potential,
+    eligibility_signals: record.eligibility_signals,
+    verification_status: record.verification_status,
   })
 
   return { id, inserted: true, skipped: false }
@@ -506,21 +589,26 @@ export async function upsertFundingOpportunity(db, opportunity) {
  * Persist only policy-compliant opportunities. Non-negotiable: loans, matching funds,
  * placeholders, and invalid/missing URLs are never written to the database.
  * Batched in transactions of 50 for performance.
+ * Pre-deduplicates by normalized URL before batch processing.
  */
-export async function bulkUpsertFundingOpportunities(db, opportunities = []) {
+export async function bulkUpsertFundingOpportunities(db, opportunities = [], opts = {}) {
+  // Pre-deduplicate by normalized URL within the batch itself.
+  const { unique: deduped, duplicateCount } = deduplicateByUrl(opportunities)
+  if (duplicateCount > 0) {
+    console.log(`[bulkUpsert] Removed ${duplicateCount} intra-batch URL duplicates`)
+  }
+
   const BATCH_SIZE = 50
   const inserted = []
-  for (let i = 0; i < opportunities.length; i += BATCH_SIZE) {
-    const batch = opportunities.slice(i, i + BATCH_SIZE)
+  for (let i = 0; i < deduped.length; i += BATCH_SIZE) {
+    const batch = deduped.slice(i, i + BATCH_SIZE)
     try {
       await db.withTransaction(async (tx) => {
         for (const opportunity of batch) {
-          const policy = enforceOpportunityPolicy(opportunity)
-          if (!policy.ok) {
-            console.warn('[bulkUpsert] Policy rejection:', policy.reason ?? 'unknown', '|', opportunity?.title ?? 'untitled', '|', opportunity?.source_url ?? '')
-            continue
+          const result = await upsertFundingOpportunity(tx, opportunity, opts)
+          if (result?.skipped && result?.reason) {
+            console.warn('[bulkUpsert] Rejected:', result.reason, '|', opportunity?.title ?? 'untitled')
           }
-          const result = await upsertFundingOpportunity(tx, opportunity)
           if (result?.inserted) inserted.push(result.id)
         }
       })
@@ -528,12 +616,10 @@ export async function bulkUpsertFundingOpportunities(db, opportunities = []) {
       console.error(`[bulkUpsert] Batch ${i}-${i + batch.length} failed, falling back to individual:`, err.message)
       for (const opportunity of batch) {
         try {
-          const policy = enforceOpportunityPolicy(opportunity)
-          if (!policy.ok) {
-            console.warn('[bulkUpsert] Policy rejection:', policy.reason ?? 'unknown', '|', opportunity?.title ?? 'untitled', '|', opportunity?.source_url ?? '')
-            continue
+          const result = await upsertFundingOpportunity(db, opportunity, opts)
+          if (result?.skipped && result?.reason) {
+            console.warn('[bulkUpsert] Rejected:', result.reason, '|', opportunity?.title ?? 'untitled')
           }
-          const result = await upsertFundingOpportunity(db, opportunity)
           if (result?.inserted) inserted.push(result.id)
         } catch (indivErr) { console.error('[bulkUpsert] Individual insert failed:', indivErr.message, opportunity?.title) }
       }

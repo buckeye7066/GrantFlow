@@ -34,7 +34,8 @@ async function queryNearbyOpportunities(db, analysis, curatedTitles, limit = 50)
       ? `SELECT id, title, description, sponsor, source, source_url, application_url, apply_url,
              state, is_national, opportunity_type, type, deadline_type, amount_max,
              contact_info, categories, keywords, match_reasons,
-             funding_type, record_origin, requires_match, match_percentage, is_loan
+             funding_type, record_origin, requires_match, match_percentage, is_loan,
+             funding_category, usable_for_housing, refund_potential, eligibility_signals, verification_status
          FROM funding_opportunities 
          WHERE is_active = TRUE AND (state = $1 OR state = 'nationwide' OR is_national = TRUE) 
          AND ${trustedOriginClause()} AND ${trustedSourceClause()} 
@@ -43,7 +44,8 @@ async function queryNearbyOpportunities(db, analysis, curatedTitles, limit = 50)
       : `SELECT id, title, description, sponsor, source, source_url, application_url, apply_url,
              state, is_national, opportunity_type, type, deadline_type, amount_max,
              contact_info, categories, keywords, match_reasons,
-             funding_type, record_origin, requires_match, match_percentage, is_loan
+             funding_type, record_origin, requires_match, match_percentage, is_loan,
+             funding_category, usable_for_housing, refund_potential, eligibility_signals, verification_status
          FROM funding_opportunities 
          WHERE is_active = 1 AND (state = ? OR state = 'nationwide' OR is_national = 1) 
          AND ${trustedOriginClause()} AND ${trustedSourceClause()} 
@@ -874,6 +876,33 @@ router.post('/run-smart', ensureAuth, standardRateLimiter, async (req, res) => {
       error: err?.message || 'Smart search failed',
       opportunities: [],
     })
+  }
+})
+
+// ---------------------------------------------------------------------------
+// POST /api/real-crawlers/run-housing
+// Seed housing-usable funding opportunities (Tennessee, faith-based, talent, stipend, COA).
+// Admin or authenticated user. URL validation optional (validateUrls=false skips HEAD checks).
+// ---------------------------------------------------------------------------
+router.post('/run-housing', ensureAuth, async (req, res) => {
+  try {
+    const { getDb } = await import('../db/index.js')
+    const db = getDb()
+    const { runHousingScholarshipCrawler } = await import('../services/housingScholarshipCrawler.js')
+
+    const validateUrls = req.body?.validateUrls !== false
+    const onProgress = null
+
+    const summary = await runHousingScholarshipCrawler(db, { validateUrls, onProgress })
+
+    return res.json({
+      success: true,
+      message: `Housing scholarship crawler complete: ${summary.inserted} inserted, ${summary.skipped} skipped, ${summary.errors} errors`,
+      ...summary,
+    })
+  } catch (err) {
+    console.error('[run-housing] Error:', err?.message || String(err))
+    return res.status(500).json({ error: err?.message || 'Housing crawler failed' })
   }
 })
 
