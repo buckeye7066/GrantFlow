@@ -97,6 +97,7 @@ export async function scheduleAdminGeoCrawlOnLogin(db, user, ctx = {}) {
     const parameters = {
       mode: 'geo',
       run_all_states: true,
+      resume: true,
       [marker]: true,
       geo_run_id: geoRunId,
       skip_domain_corpus: envEnabled('ANYA_ADMIN_GEO_SKIP_DOMAIN_CORPUS', true),

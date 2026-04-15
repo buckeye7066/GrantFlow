@@ -13,6 +13,7 @@ import { processPipelineAutomationJob } from './pipelineAutomation.js'
 import { buildProfileContext } from './profileHelpers.js'
 import { prepareContextForSnapshot, restoreContextFromSnapshot } from './snapshotSerialization.js'
 import { processProfileEnrichmentJob } from './profileEnrichment.js'
+import { processFoundation990Job } from './crawlers/foundation990Crawler.js'
 import { processNationalJob } from './nationalJobRouter.js'
 import { logFailedJob, determineSeverity } from './deadLetterQueue.js'
 import { runCrawler as runCuratedCrawler } from './crawlers/crawlerManager.js'
@@ -24,6 +25,26 @@ const __dirname = dirname(__filename)
 const dataDir = process.env.CRAWLER_DATA_DIR
   ? resolve(String(process.env.CRAWLER_DATA_DIR))
   : join(__dirname, '..', 'data', 'crawlers')
+
+/**
+ * Errors that should NOT be auto-retried because they are permanent failures.
+ * FK violations, missing profiles, and similar structural errors will never
+ * succeed on retry — retrying them just wastes resources and creates noise.
+ */
+const NON_RETRYABLE_PATTERNS = [
+  /no longer exists/i,
+  /foreign key constraint/i,
+  /violates foreign key/i,
+  /FOREIGN KEY constraint failed/i,
+  /profile .* not found/i,
+  /profile_id .* does not exist/i,
+  /timed out after \d+s/i,
+]
+
+function isNonRetryableError(errorMsg) {
+  if (!errorMsg) return false
+  return NON_RETRYABLE_PATTERNS.some(pattern => pattern.test(errorMsg))
+}
 
 /**
  * Maximum wall-clock time a single crawler handler may run before being aborted.
@@ -49,10 +70,11 @@ const COMPREHENSIVE_JOB_TIMEOUT_MS = parseInt(
 
 /**
  * Admin geo comprehensive jobs (profile_id NULL, parameters.mode === 'geo') iterate states/zips.
- * Default 4h; override via COMPREHENSIVE_GEO_JOB_TIMEOUT_MS.
+ * Default 6h; override via COMPREHENSIVE_GEO_JOB_TIMEOUT_MS.
+ * The handler uses context.deadlineMs to stop gracefully ~5min before this limit.
  */
 const COMPREHENSIVE_GEO_JOB_TIMEOUT_MS = parseInt(
-  process.env.COMPREHENSIVE_GEO_JOB_TIMEOUT_MS || String(4 * 60 * 60 * 1000),
+  process.env.COMPREHENSIVE_GEO_JOB_TIMEOUT_MS || String(6 * 60 * 60 * 1000),
   10,
 )
 
@@ -72,12 +94,13 @@ function getJobTimeoutMs(jobType, job, parameters) {
   return JOB_TIMEOUT_MS
 }
 
-function withTimeout(promise, ms, label) {
+function withTimeout(promise, ms, label, abortController) {
   let timeoutId
   const timeoutPromise = new Promise((_, reject) => {
     timeoutId = setTimeout(() => {
       const err = new Error(`${label} timed out after ${Math.round(ms / 1000)}s`)
       err.code = 'JOB_TIMEOUT'
+      if (abortController) abortController.abort(err.message)
       reject(err)
     }, ms)
   })
@@ -176,6 +199,7 @@ const HANDLERS = {
   special_needs: processCuratedBenefitsJob,
   local_funding: processCuratedBenefitsJob,
   item_matching: processCuratedBenefitsJob,
+  foundation_990: processFoundation990Job,
   portal_check: processPortalCheckJob,
   church: processCuratedBenefitsJob,
   faith_based: processCuratedBenefitsJob,
@@ -289,7 +313,7 @@ export function dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }) {
         const waitMs = nextAt.getTime() - Date.now()
         if (waitMs > 250) {
           setTimeout(() => {
-            dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }).catch(e => console.warn('[background]', e?.message || e))
+            dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }).catch(e => console.warn('[crawlerDispatcher] Deferred dispatch error for job', jobId, e?.message || e))
           }, Math.min(waitMs, 60_000))
           return
         }
@@ -451,7 +475,7 @@ export function dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }) {
         }
 
         setTimeout(() => {
-          dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }).catch(e => console.warn('[background]', e?.message || e))
+          dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }).catch(e => console.warn('[crawlerDispatcher] Re-queue dispatch error for job', jobId, e?.message || e))
         }, requeueDelayMs)
         return
       }
@@ -475,7 +499,7 @@ export function dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }) {
       }
 
       setTimeout(() => {
-        dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }).catch(e => console.warn('[background]', e?.message || e))
+        dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }).catch(e => console.warn('[crawlerDispatcher] Backoff dispatch error for job', jobId, e?.message || e))
       }, delayMs)
       return
     }
@@ -502,14 +526,17 @@ export function dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }) {
       }
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : String(error)
+      const notRetryable = isNonRetryableError(errorMsg)
+      const metaJson = notRetryable ? JSON.stringify({ non_retryable: true }) : null
       await db.prepare(`
         UPDATE crawler_jobs
         SET status = 'failed',
             completed_at = CURRENT_TIMESTAMP,
-            error = ?
+            error = ?,
+            result_meta = COALESCE(?, result_meta)
         WHERE id = ?
-      `).run(errorMsg, jobId)
-      
+      `).run(errorMsg, metaJson, jobId)
+
       // Log to dead letter queue
       await logFailedJob(db, {
         jobId,
@@ -538,6 +565,8 @@ export function dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }) {
       })
     }, HEARTBEAT_INTERVAL_MS)
 
+    const abortController = new AbortController()
+
     try {
       const parameters = parseJSON(job.parameters)
       const context = {
@@ -547,6 +576,7 @@ export function dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }) {
         dataDir,
         uploadDir,
         getOpenAI,
+        signal: abortController.signal,
       }
 
       const timeoutMs = getJobTimeoutMs(job.type, job, parameters)
@@ -559,10 +589,16 @@ export function dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }) {
         })
       }
 
+      // Pass deadline + heartbeat into context so the handler can stop gracefully
+      // before the hard timeout kills it as a failure.
+      context.deadlineMs = Date.now() + timeoutMs
+      context.heartbeat = () => updateJobHeartbeat(db, jobId)
+
       result = await withTimeout(
         handler(context),
         timeoutMs,
         `Job ${jobId} (${job.type})`,
+        abortController,
       )
 
       if (job.type === 'avatar_lookup' && result?.avatarUrl && profileContext?.profile) {
@@ -621,6 +657,10 @@ export function dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }) {
       }
 
       const errorMsg = error instanceof Error ? error.message : String(error)
+      const notRetryable = isNonRetryableError(errorMsg)
+      if (notRetryable) {
+        finalResultMeta.non_retryable = true
+      }
       await db.prepare(`
         UPDATE crawler_jobs
         SET status = 'failed',
@@ -629,7 +669,7 @@ export function dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }) {
             result_meta = COALESCE(?, result_meta)
         WHERE id = ?
       `).run(errorMsg, JSON.stringify(finalResultMeta), jobId)
-      
+
       // Log to dead letter queue for durable failure tracking
       await logFailedJob(db, {
         jobId,
@@ -713,8 +753,8 @@ export function startQueueDrainInterval(db, uploadDir, getOpenAI) {
       for (let i = 0; i < ready.length; i++) {
         if (i > 0) await new Promise((r) => setTimeout(r, 1_000))
         try {
-          dispatchCrawlerJob({ db, jobId: ready[i].id, uploadDir, getOpenAI }).catch(e => console.warn('[background]', e?.message || e))
-        } catch { /* ignore individual dispatch errors */ }
+          dispatchCrawlerJob({ db, jobId: ready[i].id, uploadDir, getOpenAI }).catch(e => console.warn('[queue-drain] Dispatch error for job', ready[i].id, e?.message || e))
+        } catch (err) { console.warn('[queue-drain] Sync dispatch error for job', ready[i].id, err?.message || err) }
       }
     } catch (err) {
       console.warn('[queue-drain-interval] Poll error (ignored):', err?.message || err)

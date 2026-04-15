@@ -124,6 +124,26 @@ function formatDuration(seconds) {
   return `${hours}h ${remainingMins}m`
 }
 
+function deriveZipFromProfile(profileDetail) {
+  const sections = Array.isArray(profileDetail?.sections) ? profileDetail.sections : []
+  const basic = sections.find((s) => s?.section_key === "basic_information")?.data ?? null
+  const housing = sections.find((s) => s?.section_key === "housing")?.data ?? null
+  const location = sections.find((s) => s?.section_key === "location_focus")?.data ?? null
+
+  const candidates = [
+    basic?.zip, basic?.zip_code, basic?.postal_code,
+    housing?.zip, housing?.zip_code,
+    location?.zip, location?.zip_code,
+  ]
+
+  for (const v of candidates) {
+    if (typeof v !== "string") continue
+    const m = v.trim().match(/\b(\d{5})\b/)
+    if (m) return m[1]
+  }
+  return null
+}
+
 function deriveStateFromProfile(profileDetail) {
   const sections = Array.isArray(profileDetail?.sections) ? profileDetail.sections : []
   const basic = sections.find((s) => s?.section_key === "basic_information")?.data ?? null
@@ -950,7 +970,7 @@ function JobDetailsDialog({ job, onOpenChange, onRetry, retrying, onCancel, canc
 
   return (
     <Dialog open={Boolean(job)} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-3xl">
+      <DialogContent className="max-w-3xl max-h-[85vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2 text-lg">
             <Sparkles className="h-5 w-5 text-blue-600" />
@@ -1499,13 +1519,13 @@ export default function Automation() {
   const isAdmin = Boolean(user?.is_admin) || user?.role === "admin" || user?.id === "admin"
   const [jobTypeFilter, setJobTypeFilter] = useState("all")
   const [jobStatusFilter, setJobStatusFilter] = useState("all")
-  const [profileFilter, setProfileFilter] = useState(isAdmin ? "all" : activeProfileId ?? "all")
+  const [profileFilter, setProfileFilter] = useState(isAdmin ? "all" : activeProfileId || "all")
   const [selectedProfile, setSelectedProfile] = useState(() => {
     try {
       const stored = localStorage.getItem('grantflow:automation-selected-profile')
       if (stored && stored !== 'none') return stored
     } catch { /* ignore */ }
-    return activeProfileId ?? "none"
+    return activeProfileId || "none"
   })
   const [selectedJob, setSelectedJob] = useState(null)
   const [itemQuery, setItemQuery] = useState("15 passenger van")
@@ -1676,8 +1696,8 @@ export default function Automation() {
       return
     }
     const geoCrawlProfileId = isAdmin
-      ? (selectedProfile && selectedProfile !== "none" ? selectedProfile : undefined)
-      : activeProfileId ?? undefined
+      ? (selectedProfile && selectedProfile !== "none" ? selectedProfile : null)
+      : activeProfileId || null
 
     geoCrawlMutation.mutate({
       state,
@@ -1821,9 +1841,19 @@ export default function Automation() {
       return
     }
 
+    // Local sweep requires a ZIP code to define the search radius
+    if (type === "local" && !deriveZipFromProfile(profileDetailQuery.data)) {
+      toast({
+        variant: "destructive",
+        title: "Missing ZIP code",
+        description: "This profile needs a ZIP code (in Basic Information or Housing) to run a local sweep.",
+      })
+      return
+    }
+
     createJobMutation.mutate({
       type,
-      profile_id: profileId ?? undefined,
+      profile_id: profileId || null,
       parameters: params,
     })
   }

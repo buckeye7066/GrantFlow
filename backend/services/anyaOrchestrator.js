@@ -1013,12 +1013,60 @@ export async function generateAssistantResponse(db, user, sessionId, { content, 
     conversationMessages.push({ role: 'user', content: trimmed })
   }
 
+  // v4: Pre-load active profile summary so Anya has context for the FIRST response
+  // without requiring a tool invocation. This eliminates generic advice on initial messages.
+  let profileContextSection = ''
+  try {
+    const activeProfileId = user?.activeProfileId || user?.profile_id
+    if (activeProfileId && db) {
+      const profile = db.prepare(
+        'SELECT id, display_name, primary_type, state, organization_type, categories FROM profiles WHERE id = ?'
+      ).get(activeProfileId)
+      if (profile) {
+        const sections = db.prepare(
+          'SELECT section_key, data FROM profile_sections WHERE profile_id = ?'
+        ).all(activeProfileId)
+        const filledSections = []
+        const emptySections = []
+        for (const s of sections) {
+          try {
+            const d = JSON.parse(s.data || '{}')
+            const hasValue = Object.values(d).some(v =>
+              v !== null && v !== undefined && v !== '' && v !== false && !(Array.isArray(v) && v.length === 0)
+            )
+            ;(hasValue ? filledSections : emptySections).push(s.section_key)
+          } catch { emptySections.push(s.section_key) }
+        }
+        const matchCount = (() => {
+          try {
+            const row = db.prepare('SELECT total_matches FROM crawl_metadata WHERE profile_id = ?').get(activeProfileId)
+            return row?.total_matches ?? 0
+          } catch { return 0 }
+        })()
+        profileContextSection = [
+          '',
+          '## Active Profile Summary',
+          `Profile: ${profile.display_name || 'Unnamed'} (${profile.primary_type || 'individual'})`,
+          profile.state ? `State: ${profile.state}` : 'State: Not set (important for matching!)',
+          profile.organization_type ? `Organization: ${profile.organization_type}` : '',
+          `Filled sections: ${filledSections.join(', ') || 'none'}`,
+          emptySections.length > 0 ? `Empty sections needing data: ${emptySections.slice(0, 5).join(', ')}` : '',
+          `Current matches: ${matchCount} opportunities`,
+          matchCount === 0 ? 'NOTE: No matches yet — suggest running Discovery or filling more profile sections.' : '',
+          '',
+        ].filter(Boolean).join('\n')
+      }
+    }
+  } catch (profileLoadErr) {
+    console.warn('[anya] Could not pre-load profile context:', profileLoadErr?.message)
+  }
+
   // Build personalized system prompt — only the user-specific header is dynamic;
   // the large role/capability sections are pre-built static strings.
-  const firstName = (!userName || userName === 'there') 
-    ? 'the user' 
+  const firstName = (!userName || userName === 'there')
+    ? 'the user'
     : (typeof userName === 'string' ? userName.split(' ')[0] : userName)
-  
+
   const dynamicHeader = [
     'You are Anya, the GrantFlow AI assistant. You are helpful, warm, and personable.',
     '',
@@ -1064,7 +1112,7 @@ export async function generateAssistantResponse(db, user, sessionId, { content, 
     '',
   ].join('\n')
 
-  const systemPrompt = dynamicHeader + pageContextSection + _STATIC_PROMPT_BASE + (isAdmin ? adminSection : _STATIC_PROMPT_USER_SECTION)
+  const systemPrompt = dynamicHeader + profileContextSection + pageContextSection + _STATIC_PROMPT_BASE + (isAdmin ? adminSection : _STATIC_PROMPT_USER_SECTION)
 
   // 1) Try OpenAI first (if configured)
   if (openai) {

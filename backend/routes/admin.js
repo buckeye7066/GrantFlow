@@ -408,7 +408,12 @@ function loadCountiesByState() {
     countiesByStateCache = {};
     return countiesByStateCache;
   }
-  countiesByStateCache = JSON.parse(fs.readFileSync(countiesByStatePath, 'utf8'));
+  try {
+    countiesByStateCache = JSON.parse(fs.readFileSync(countiesByStatePath, 'utf8'));
+  } catch (err) {
+    console.warn('[admin] Failed to parse counties data:', err.message);
+    countiesByStateCache = {};
+  }
   return countiesByStateCache;
 }
 
@@ -5203,6 +5208,28 @@ router.post('/verify-links', async (req, res) => {
     res.json({ success: true, stats })
   } catch (err) {
     console.error('[admin/verify-links] Error:', err)
+    res.status(500).json({ success: false, error: err.message })
+  }
+})
+
+/**
+ * POST /api/admin/crawler-jobs/resolve-failures
+ * Deletes historical failed crawler_jobs older than 1 hour so they stop polluting health metrics.
+ * Safe to call after root causes are fixed — these records are diagnostic, not referential.
+ */
+router.post('/crawler-jobs/resolve-failures', async (req, res) => {
+  try {
+    if (!(await ensureAdminRequest(req, res))) return
+    const sql = req.db.dialect === 'postgres'
+      ? `DELETE FROM crawler_jobs WHERE status = 'failed' AND created_at < (NOW() - INTERVAL '1 hour')`
+      : `DELETE FROM crawler_jobs WHERE status = 'failed' AND created_at < datetime('now', '-1 hour')`
+
+    const result = await req.db.prepare(sql).run()
+    const deleted = result?.rowCount ?? result?.changes ?? 0
+    console.log(`[admin] Deleted ${deleted} stale failed crawler job(s)`)
+    res.json({ success: true, deleted })
+  } catch (err) {
+    console.error('[admin/resolve-failures] Error:', err)
     res.status(500).json({ success: false, error: err.message })
   }
 })

@@ -27,6 +27,15 @@
 
 import { filterEligibility } from './eligibilityFilter.js'
 import { NEEDS_TAXONOMY } from './needsTaxonomy.js'
+
+/** Parse a DB field that may be a JSON array, CSV string, or already an array. */
+function parseArrayField(value) {
+  if (Array.isArray(value)) return value
+  if (!value || typeof value !== 'string') return []
+  const trimmed = value.trim()
+  if (trimmed.startsWith('[')) { try { const a = JSON.parse(trimmed); if (Array.isArray(a)) return a } catch { /* fall through */ } }
+  return trimmed.split(',').map(s => s.trim()).filter(Boolean)
+}
 import { applyRelevanceFilter } from '../relevanceFilter.js'
 
 // ---------------------------------------------------------------------------
@@ -112,23 +121,8 @@ function scoreNeedFit(intel, opportunity) {
     String(opportunity.description || ''),
   ].join(' ').toLowerCase()
 
-  const oppCategories = (() => {
-    try {
-      const cats = Array.isArray(opportunity.categories)
-        ? opportunity.categories
-        : JSON.parse(opportunity.categories || '[]')
-      return cats.map(c => String(c).toLowerCase()).join(' ')
-    } catch { return '' }
-  })()
-
-  const oppKeywords = (() => {
-    try {
-      const kws = Array.isArray(opportunity.keywords)
-        ? opportunity.keywords
-        : JSON.parse(opportunity.keywords || '[]')
-      return kws.map(k => String(k).toLowerCase()).join(' ')
-    } catch { return '' }
-  })()
+  const oppCategories = parseArrayField(opportunity.categories).map(c => String(c).toLowerCase()).join(' ')
+  const oppKeywords = parseArrayField(opportunity.keywords).map(k => String(k).toLowerCase()).join(' ')
 
   const fullText = `${oppText} ${oppCategories} ${oppKeywords}`
 
@@ -527,22 +521,8 @@ export function scoreOpportunity(intel, opportunity) {
       String(opportunity.title || ''),
       String(opportunity.description || ''),
     ].join(' ').toLowerCase()
-    const oppCategories = (() => {
-      try {
-        const cats = Array.isArray(opportunity.categories)
-          ? opportunity.categories
-          : JSON.parse(opportunity.categories || '[]')
-        return cats.map(c => String(c).toLowerCase()).join(' ')
-      } catch { return '' }
-    })()
-    const oppKeywords = (() => {
-      try {
-        const kws = Array.isArray(opportunity.keywords)
-          ? opportunity.keywords
-          : JSON.parse(opportunity.keywords || '[]')
-        return kws.map(k => String(k).toLowerCase()).join(' ')
-      } catch { return '' }
-    })()
+    const oppCategories = parseArrayField(opportunity.categories).map(c => String(c).toLowerCase()).join(' ')
+    const oppKeywords = parseArrayField(opportunity.keywords).map(k => String(k).toLowerCase()).join(' ')
     const fullText = `${oppText} ${oppCategories} ${oppKeywords}`
     if (intel.inferredNeeds) {
       for (const need of intel.inferredNeeds) {

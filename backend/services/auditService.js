@@ -16,6 +16,7 @@ export const AUDIT_CATEGORIES = {
   ADMIN: 'admin',
   SYSTEM: 'system',
   ANYA: 'anya',
+  USER_ACTIVITY: 'user_activity',
 }
 
 // Audit severity levels

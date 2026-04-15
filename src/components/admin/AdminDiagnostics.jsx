@@ -1244,7 +1244,7 @@ export default function AdminDiagnostics() {
       )}
 
       <Dialog open={inspectOpen} onOpenChange={setInspectOpen}>
-        <DialogContent className="max-w-3xl">
+        <DialogContent className="max-w-3xl max-h-[85vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>{inspectMeta.title}</DialogTitle>
             {inspectMeta.description ? (

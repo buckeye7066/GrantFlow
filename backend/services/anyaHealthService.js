@@ -55,7 +55,7 @@ export async function runHealthCheck(db) {
            AND deadline IS NOT NULL
            AND deadline < date('now')
            AND deadline_type NOT IN ('rolling', 'ongoing')`
-    const result = db.prepare(expireSql).run()
+    const result = await db.prepare(expireSql).run()
     const count = result.changes ?? result.rowCount ?? 0
     status.expire_stale = { expired: count }
     if (count > 0) {
@@ -69,7 +69,7 @@ export async function runHealthCheck(db) {
 
   // 2. Detect profile bleed — global catalog entries that are exact duplicates of profile-scoped records
   try {
-    const bleedRows = db
+    const bleedRows = await db
       .prepare(
         `SELECT g.id, g.title, g.sponsor
          FROM funding_opportunities g
@@ -98,14 +98,14 @@ export async function runHealthCheck(db) {
     const isPostgres = db?.dialect === 'postgres'
     const cleanOrphansSql = isPostgres
       ? `UPDATE crawler_jobs
-         SET status = 'failed', updated_at = CURRENT_TIMESTAMP
+         SET status = 'failed'
          WHERE status IN ('queued', 'running')
            AND (created_at < NOW() - INTERVAL '2 hours')`
       : `UPDATE crawler_jobs
-         SET status = 'failed', updated_at = CURRENT_TIMESTAMP
+         SET status = 'failed'
          WHERE status IN ('queued', 'running')
            AND (created_at < datetime('now', '-2 hours'))`
-    const result = db.prepare(cleanOrphansSql).run()
+    const result = await db.prepare(cleanOrphansSql).run()
     const count = result.changes ?? result.rowCount ?? 0
     status.orphaned_crawlers = { cleaned: count }
     if (count > 0) {
@@ -120,34 +120,45 @@ export async function runHealthCheck(db) {
     status.orphaned_crawlers = { error: err.message }
   }
 
-  // 4. Audit profile signals — find profiles missing state or type
+  // 4. Audit profile signals — find profiles missing key section data
   try {
-    const profiles = db
+    // Query actual schema: profiles table + profile_sections for depth data
+    const profiles = await db
       .prepare(
-        "SELECT id, display_name, state, type, needs_json, military_json, education_json, health_json, housing_json, business_json FROM profiles WHERE status = 'active'",
+        "SELECT id, display_name, primary_type FROM profiles WHERE deleted_at IS NULL",
       )
       .all()
-    const missingState = profiles.filter((p) => !p.state)
-    const missingType = profiles.filter((p) => !p.type)
-    const missingNeeds = profiles.filter((p) => !p.needs_json)
+    const sectionCounts = await db
+      .prepare(
+        "SELECT profile_id, section_key FROM profile_sections",
+      )
+      .all()
+    const sectionsByProfile = {}
+    for (const row of sectionCounts) {
+      if (!sectionsByProfile[row.profile_id]) sectionsByProfile[row.profile_id] = new Set()
+      sectionsByProfile[row.profile_id].add(row.section_key)
+    }
+    const missingType = profiles.filter((p) => !p.primary_type)
+    const missingBasic = profiles.filter((p) => !sectionsByProfile[p.id]?.has('basic_information'))
+    const missingFinancial = profiles.filter((p) => !sectionsByProfile[p.id]?.has('financial_information'))
     const missingDepthSections = profiles.filter(
-      (p) =>
-        !p.military_json && !p.education_json && !p.health_json && !p.housing_json && !p.business_json,
+      (p) => {
+        const s = sectionsByProfile[p.id]
+        return !s || (!s.has('health_medical') && !s.has('demographics') && !s.has('financial_information'))
+      },
     )
     status.profile_signal_audit = {
       total_active: profiles.length,
-      missing_state: missingState.length,
       missing_type: missingType.length,
-      missing_needs: missingNeeds.length,
+      missing_basic: missingBasic.length,
+      missing_financial: missingFinancial.length,
       missing_all_depth_sections: missingDepthSections.length,
-      missing_state_ids: missingState.slice(0, 10).map((p) => p.id),
       missing_type_ids: missingType.slice(0, 10).map((p) => p.id),
-      missing_needs_ids: missingNeeds.slice(0, 10).map((p) => p.id),
-      missing_depth_ids: missingDepthSections.slice(0, 10).map((p) => p.id),
+      missing_basic_ids: missingBasic.slice(0, 10).map((p) => p.id),
     }
-    if (missingState.length > 0 || missingType.length > 0 || missingNeeds.length > 0 || missingDepthSections.length > 0) {
+    if (missingType.length > 0 || missingBasic.length > 0 || missingDepthSections.length > 0) {
       console.warn(
-        `[AnyaHealth] Profile signal gaps: ${missingState.length} missing state, ${missingType.length} missing type, ${missingNeeds.length} missing needs, ${missingDepthSections.length} missing all depth sections`,
+        `[AnyaHealth] Profile signal gaps: ${missingType.length} missing type, ${missingBasic.length} missing basic info, ${missingDepthSections.length} missing all depth sections`,
       )
     }
   } catch (err) {
@@ -159,7 +170,7 @@ export async function runHealthCheck(db) {
   // 5. Deduplicate global catalog — merge exact title+sponsor+state duplicates
   try {
     // Find duplicate groups (profile_id IS NULL only — never touch profile-scoped records)
-    const dupGroups = db
+    const dupGroups = await db
       .prepare(
         `SELECT title, sponsor, state, COUNT(*) as cnt, MIN(id) as keep_id
          FROM funding_opportunities
@@ -174,7 +185,7 @@ export async function runHealthCheck(db) {
     for (const group of dupGroups) {
       try {
         // Prefer the duplicate with a valid application_url; fall back to MIN(id)
-        const bestRow = db
+        const bestRow = await db
           .prepare(
             `SELECT id FROM funding_opportunities
              WHERE profile_id IS NULL
@@ -190,7 +201,7 @@ export async function runHealthCheck(db) {
         if (!bestRow) continue
         const keepId = bestRow.id
         // Collect IDs to be removed for audit log
-        const toRemove = db
+        const toRemove = await db
           .prepare(
             `SELECT id FROM funding_opportunities
              WHERE profile_id IS NULL
@@ -201,7 +212,7 @@ export async function runHealthCheck(db) {
           )
           .all(group.title, group.sponsor, group.sponsor, group.state, group.state, keepId)
         if (toRemove.length === 0) continue
-        const result = db
+        const result = await db
           .prepare(
             `DELETE FROM funding_opportunities
              WHERE profile_id IS NULL

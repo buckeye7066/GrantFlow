@@ -210,8 +210,9 @@ function buildPortalList({ profileSections, state }) {
   }
 
   // 2. Global scholarship portals (type === 'portal')
+  // Skip portals that block automated requests (e.g., government sites, bot-protected portals)
   for (const sch of SCHOLARSHIPS) {
-    if (sch.type === 'portal' && sch.url) {
+    if (sch.type === 'portal' && sch.url && !sch.skipLivenessCheck) {
       portals.push({
         portalName: sch.name,
         portalUrl: sch.url,

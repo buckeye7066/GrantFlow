@@ -37,12 +37,23 @@ function App() {
       return
     }
 
-    // Token exists, validate it with the server
+    // Token exists, validate it with the server.
+    // auth.me() handles proactive token refresh via the single-flight
+    // refreshTokens() path, so any concurrent refresh timer from
+    // hydrateFromStorage's scheduleSessionRefresh shares the same promise.
     client.auth
       .me()
       .then((response) => {
         if (response) {
           setAuthenticatedUser(response)
+          // Reschedule the session refresh timer based on the validated/refreshed
+          // token expiry. This cancels any stale timer that hydrateFromStorage may
+          // have scheduled with an outdated expiry, preventing a redundant refresh
+          // call that could race with future API requests.
+          const { scheduleSessionRefresh } = useAuthStore.getState()
+          if (response.expiresIn || response.accessExpires || response.refreshExpires) {
+            scheduleSessionRefresh(response)
+          }
         } else {
           clearState()
         }
@@ -56,13 +67,16 @@ function App() {
       })
   }, []) // Empty dep array — bootstrap runs exactly once on mount
 
-  // Load persisted UI preferences once the user is authenticated so personalization
-  // (accent color, font size, etc.) applies across the app—not only on the Settings page.
+  // Load persisted UI preferences once auth bootstrap is complete and the user is
+  // authenticated. Gating on `bootstrapped` prevents a race where hydrateFromStorage
+  // briefly sets tokens (making isAuthenticated true in a future render) before
+  // auth.me() finishes validating — firing fetchPreferences with a stale access token.
   useEffect(() => {
+    if (!bootstrapped) return
     if (!isAuthenticated) return
     if (isPreferencesInitialized) return
     fetchPreferences()
-  }, [isAuthenticated, isPreferencesInitialized, fetchPreferences])
+  }, [bootstrapped, isAuthenticated, isPreferencesInitialized, fetchPreferences])
 
   if (!bootstrapped) {
     return (

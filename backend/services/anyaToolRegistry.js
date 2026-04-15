@@ -56,7 +56,9 @@ import {
 import { getBackgroundCodeCrawlState } from './anyaAutonomousScheduler.js'
 import { AUDIT_CATEGORIES, SEVERITY, logAuditEvent } from './auditService.js'
 import { trustedOriginClause, trustedSourceClause } from '../utils/recordOrigins.js'
+import { normalizeState, statesMatch } from '../utils/stateNormalization.js'
 import { scoreOpportunity } from './matchEngine.js'
+import { syncProfileFieldsFromSection } from '../utils/profileSectionSync.js'
 
 const tools = new Map()
 
@@ -117,22 +119,35 @@ function findMatchingCategories(oppCategories, profileCategories) {
   if (!oppCategories || oppCategories.length === 0 || !profileCategories || profileCategories.length === 0) {
     return []
   }
-  
-  return oppCategories.filter(c => 
-    profileCategories.some(pc => 
-      c.toLowerCase().includes(pc.toLowerCase()) || 
-      pc.toLowerCase().includes(c.toLowerCase())
-    )
-  )
+
+  // v4: Use word-boundary-aware matching to prevent false positives.
+  // Previously "care" would match "healthcare" and "cat" would match "education".
+  // Now we require either exact match or that the substring is a complete word boundary.
+  return oppCategories.filter(c => {
+    const cLower = c.toLowerCase().trim()
+    return profileCategories.some(pc => {
+      const pcLower = pc.toLowerCase().trim()
+      if (cLower === pcLower) return true
+      // Only allow substring match if the shorter string is at least 4 chars
+      // and appears as a word boundary in the longer string
+      if (pcLower.length >= 4 && cLower.length >= 4) {
+        const shorter = cLower.length <= pcLower.length ? cLower : pcLower
+        const longer = cLower.length <= pcLower.length ? pcLower : cLower
+        const rx = new RegExp(`\\b${shorter.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i')
+        return rx.test(longer)
+      }
+      return false
+    })
+  })
 }
 
 function generateMatchReasons(opp, profile) {
   const reasons = []
-  
-  // Location match
+
+  // Location match — v4: use normalizeState for robust comparison
   if (opp.state && profile?.state) {
-    if (opp.state.toLowerCase() === profile.state.toLowerCase()) {
-      reasons.push(`Location match: Both in ${opp.state}`)
+    if (statesMatch(opp.state, profile.state)) {
+      reasons.push(`Location match: Both in ${normalizeState(opp.state) || opp.state}`)
     }
   } else if (opp.is_national || opp.state === 'nationwide') {
     reasons.push('Available nationwide')
@@ -368,22 +383,54 @@ function collectGrantMatches(db, profileId, limit) {
   const seen = new Set(primary.map((opp) => opp.id))
   const remaining = limit - primary.length
 
-  const fallback = db
-    .prepare(
-      `
-        SELECT id, title, sponsor, deadline, amount_min, amount_max, amount_description,
-               application_url, state, opportunity_type, requires_match, match_percentage,
-               eligibility_bullets, categories, source, source_url, updated_at, match_reasons,
-               description, regions, keywords, link_status
-        FROM funding_opportunities
-        WHERE ${activePredicate}
-          AND ${trustedOriginClause()}
-          AND ${trustedSourceClause()}
-        ORDER BY updated_at DESC
-        LIMIT ?
-      `,
-    )
-    .all(remaining * 3 || remaining) // fetch a few extra rows to account for duplicates
+  // v4 FIX: Fallback query now filters by profile state or national opportunities.
+  // Previously this query had NO profile_id filter, causing "profile bleed" where
+  // unrelated global opportunities would be shown to users.
+  let profileState = null
+  try {
+    const profileRow = db.prepare('SELECT state FROM profiles WHERE id = ?').get(profileId)
+    profileState = normalizeState(profileRow?.state)
+  } catch { /* profiles table may not have state column */ }
+
+  let fallback
+  if (profileState) {
+    fallback = db
+      .prepare(
+        `
+          SELECT id, title, sponsor, deadline, amount_min, amount_max, amount_description,
+                 application_url, state, opportunity_type, requires_match, match_percentage,
+                 eligibility_bullets, categories, source, source_url, updated_at, match_reasons,
+                 description, regions, keywords, link_status
+          FROM funding_opportunities
+          WHERE ${activePredicate}
+            AND (state = ? OR state = 'nationwide' OR is_national = ${db?.dialect === 'postgres' ? 'TRUE' : '1'})
+            AND ${trustedOriginClause()}
+            AND ${trustedSourceClause()}
+          ORDER BY updated_at DESC
+          LIMIT ?
+        `,
+      )
+      .all(profileState, (remaining * 3) || remaining)
+  } else {
+    // No state known — only return national opportunities as fallback
+    fallback = db
+      .prepare(
+        `
+          SELECT id, title, sponsor, deadline, amount_min, amount_max, amount_description,
+                 application_url, state, opportunity_type, requires_match, match_percentage,
+                 eligibility_bullets, categories, source, source_url, updated_at, match_reasons,
+                 description, regions, keywords, link_status
+          FROM funding_opportunities
+          WHERE ${activePredicate}
+            AND (state = 'nationwide' OR is_national = ${db?.dialect === 'postgres' ? 'TRUE' : '1'})
+            AND ${trustedOriginClause()}
+            AND ${trustedSourceClause()}
+          ORDER BY updated_at DESC
+          LIMIT ?
+        `,
+      )
+      .all((remaining * 3) || remaining)
+  }
 
   const merged = [...primary]
   fallback.forEach((opp) => {
@@ -1057,6 +1104,13 @@ registerTool({
         updated_by = excluded.updated_by,
         updated_at = CURRENT_TIMESTAMP
     `).run(profileId, sectionKey, JSON.stringify(merged), updatedBy)
+
+    // v4: Sync key fields (state, veteran, disability) to profiles table
+    try {
+      syncProfileFieldsFromSection(db, profileId, sectionKey, merged)
+    } catch (syncErr) {
+      console.warn(`[anya] Section sync failed for ${profileId}/${sectionKey}:`, syncErr?.message)
+    }
 
     // Count total filled sections for progress
     const allSections = db.prepare('SELECT section_key, data FROM profile_sections WHERE profile_id = ?').all(profileId)

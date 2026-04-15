@@ -214,7 +214,7 @@ const testUser = stmt.get('test@grantflow.com');
     
     if (!testUser) {
       // Create test user
-      const stmt = db.prepare(`INSERT INTO profiles (email, name, role, created_at) VALUES (?, ?, ?, datetime('now'))`);
+      const stmt = db.prepare(`INSERT INTO profiles (email, name, role, created_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP)`);
 stmt.run('test@grantflow.com', 'Test User', 'user');
       
       return {

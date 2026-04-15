@@ -1,10 +1,17 @@
 import { toSignalSet } from '../profileSignals/index.js';
+import { normalizeState, statesMatch } from '../../utils/stateNormalization.js';
 
 /**
  * matchEngine.js
  *
  * Scores each program against a profile's needs assessment.
  * Returns ranked results with relevance scores.
+ *
+ * v4 — Improvements over v3:
+ *   - State normalization: "TN" / "Tennessee" / "tn" all match correctly
+ *   - Reduced state mismatch penalty from -30 to -15 to prevent over-filtering
+ *   - Minimum score floor: partial matches always score >= 5 (never zero-out)
+ *   - Geographic expansion: profiles with sparse results still surface relevant matches
  *
  * v3 — Improvements:
  *   - Intent alignment scoring (business profile → business grants score high)
@@ -331,7 +338,8 @@ export function scoreProgram(program, analysis, strategyOpts = {}) {
     maxPossible += 40;
 
   // ── Intent alignment (up to 25 points) ──
-  maxPossible += 25;
+  // Only count toward maxPossible when the program defines intentMatch —
+  // otherwise the denominator inflates and suppresses scores for general programs.
     let intentBonus = computeIntentBonus(program, intents);
 
     // Apply strategy-level intentBoost when the program matches a boosted intent
@@ -342,15 +350,17 @@ export function scoreProgram(program, analysis, strategyOpts = {}) {
       }
     }
 
-    if (intentBonus > 0) {
-          score += intentBonus;
-          matchReasons.push('Strong intent alignment with your profile');
-    } else if (program.intentMatch && program.intentMatch.length > 0) {
-          score += 0;
-          matchReasons.push('No intent alignment with your profile');
-    } else {
-          score += 2;
+    if (program.intentMatch && program.intentMatch.length > 0) {
+      maxPossible += 25;
+      if (intentBonus > 0) {
+            score += intentBonus;
+            matchReasons.push('Strong intent alignment with your profile');
+      } else {
+            score += 0;
+            matchReasons.push('No intent alignment with your profile');
+      }
     }
+    // Programs without intentMatch: no impact on score or denominator
 
     // ── needEmphasis bonus (up to 10 points) ──
     const needEmphasis = strategyOpts.needEmphasis || [];
@@ -368,20 +378,25 @@ export function scoreProgram(program, analysis, strategyOpts = {}) {
     }
 
   // ── State match (20 points) ──
+  // v4: Use normalizeState for robust comparison ("TN" == "Tennessee" == "tn")
   maxPossible += 20;
-    const profileState = analysis.location?.state;
-    if (!program.stateRestriction) {
+    const profileState = normalizeState(analysis.location?.state);
+    const programState = normalizeState(program.stateRestriction);
+    if (!program.stateRestriction || program.stateRestriction === 'nationwide') {
           score += 15;
           matchReasons.push('Available nationwide');
-    } else if (profileState && program.stateRestriction === profileState) {
+    } else if (profileState && programState && profileState === programState) {
           score += 20;
           matchReasons.push(`Available in ${profileState}`);
     } else if (!profileState) {
           score += 5;
           matchReasons.push(`State-specific program (${program.stateRestriction}) — your state not set`);
     } else {
-          eligibilityPenalty -= 30;
-          matchReasons.push(`State mismatch: ${program.stateRestriction} vs ${profileState} (penalty)`);
+          // v4: Reduced from -30 to -15. State mismatch is a soft signal, not a disqualifier.
+          // A housing program in CA still has value for someone in TN (they might be relocating,
+          // or the program might have national components).
+          eligibilityPenalty -= 15;
+          matchReasons.push(`State mismatch: ${program.stateRestriction} vs ${profileState} (reduced penalty)`);
     }
 
   // ── Applicant type match (10 points) ──
@@ -394,8 +409,9 @@ export function scoreProgram(program, analysis, strategyOpts = {}) {
     }
 
   // ── Demographic match (10 points) ──
-  maxPossible += 10;
+  // Only count toward maxPossible when the program targets specific demographics.
     if (program.demographicMatch && program.demographicMatch.length > 0) {
+          maxPossible += 10;
           const demoHits = program.demographicMatch.filter(d => analysis.demographics.has(d));
           if (demoHits.length > 0) {
                   score += 10;
@@ -403,13 +419,12 @@ export function scoreProgram(program, analysis, strategyOpts = {}) {
           } else {
                   score += 2;
           }
-    } else {
-          score += 7;
     }
 
   // ── Health condition match (10 points) ──
-  maxPossible += 10;
+  // Only count toward maxPossible when the program targets specific health conditions.
     if (program.healthMatch && program.healthMatch.length > 0) {
+          maxPossible += 10;
           const healthHits = program.healthMatch.filter(h => analysis.health.has(h));
           if (healthHits.length > 0) {
                   score += 10;
@@ -420,10 +435,8 @@ export function scoreProgram(program, analysis, strategyOpts = {}) {
                   eligibilityPenalty -= 30;
                   matchReasons.push('Requires specific medical condition (not in profile)');
           } else {
-                  score += 1; // Reduced from 2 — healthcare programs with no health match deserve less
+                  score += 1;
           }
-    } else {
-          score += 7;
     }
 
   // ── Negative match penalty (hard-gate disqualifying negatives) ──
@@ -432,8 +445,9 @@ export function scoreProgram(program, analysis, strategyOpts = {}) {
     score += negPenalty;
 
   // ── Military match (5 points) ──
-  maxPossible += 5;
+  // Only count toward maxPossible when the program targets military/veteran status.
     if (program.militaryMatch && program.militaryMatch.length > 0) {
+          maxPossible += 5;
           const milHits = program.militaryMatch.filter(m => analysis.military.has(m));
           if (milHits.length > 0) {
                   score += 5;
@@ -444,13 +458,12 @@ export function scoreProgram(program, analysis, strategyOpts = {}) {
           } else {
                   score += 1;
           }
-    } else {
-          score += 3;
     }
 
   // ── Family match (5 points) ──
-  maxPossible += 5;
+  // Only count toward maxPossible when the program targets specific family situations.
     if (program.familyMatch && program.familyMatch.length > 0) {
+          maxPossible += 5;
           const famHits = program.familyMatch.filter(f => analysis.family.has(f));
           if (famHits.length > 0) {
                   score += 5;
@@ -459,8 +472,6 @@ export function scoreProgram(program, analysis, strategyOpts = {}) {
                   eligibilityPenalty -= 20;
                   matchReasons.push('Requires children/dependents (not in profile)');
           }
-    } else {
-          score += 3;
     }
 
   // ── Student/education match (10 points — only for scholarship-type programs) ──
@@ -608,9 +619,13 @@ export function scoreProgram(program, analysis, strategyOpts = {}) {
   score += eligibilityPenalty;
 
   // ── Normalize to 0-100 ──
-  const normalizedScore = maxPossible > 0
-    ? Math.max(0, Math.round(Math.min(100, (score / maxPossible) * 100)))
+  // v4: Apply a minimum floor of 5 for any program that wasn't hard-gated.
+  // This ensures partial matches (e.g. demographic-only or family-only) still
+  // appear in results rather than being silently dropped at minScore threshold.
+  const rawNormalized = maxPossible > 0
+    ? Math.round(Math.min(100, (score / maxPossible) * 100))
     : 0;
+  const normalizedScore = Math.max(5, rawNormalized);
 
   // Build matched signals list
   const matchedSignals = [];
@@ -637,7 +652,7 @@ export function scoreProgram(program, analysis, strategyOpts = {}) {
       scoreBreakdown: {
         category: Math.round(categoryScore),
         intent: intentBonus,
-        locality: (profileState && program.stateRestriction === profileState) ? 20 : (!program.stateRestriction ? 15 : (!profileState ? 5 : 0)),
+        locality: (profileState && programState && profileState === programState) ? 20 : (!program.stateRestriction || program.stateRestriction === 'nationwide' ? 15 : (!profileState ? 5 : 0)),
         eligibility: score - categoryScore - intentBonus - ((profileState && program.stateRestriction === profileState) ? 20 : (!program.stateRestriction ? 15 : 5)),
         trust: (program.type === 'portal' || program.type === 'referral') ? 5 : 0,
         penalties: negPenalty,

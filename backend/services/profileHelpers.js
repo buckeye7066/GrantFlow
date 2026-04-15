@@ -3,6 +3,21 @@ import { resolveCountyForZip } from './geo/zipCountyResolver.js'
 import crypto from 'crypto'
 import { inferUsStateZipFromText, collectAddressTextForInference } from '../utils/inferLocationFromAddress.js'
 
+// Full state name → 2-letter abbreviation for extractStateFromContext fallback
+const STATE_NAME_TO_ABBR = {
+  'alabama': 'AL', 'alaska': 'AK', 'arizona': 'AZ', 'arkansas': 'AR', 'california': 'CA',
+  'colorado': 'CO', 'connecticut': 'CT', 'delaware': 'DE', 'florida': 'FL', 'georgia': 'GA',
+  'hawaii': 'HI', 'idaho': 'ID', 'illinois': 'IL', 'indiana': 'IN', 'iowa': 'IA',
+  'kansas': 'KS', 'kentucky': 'KY', 'louisiana': 'LA', 'maine': 'ME', 'maryland': 'MD',
+  'massachusetts': 'MA', 'michigan': 'MI', 'minnesota': 'MN', 'mississippi': 'MS', 'missouri': 'MO',
+  'montana': 'MT', 'nebraska': 'NE', 'nevada': 'NV', 'new hampshire': 'NH', 'new jersey': 'NJ',
+  'new mexico': 'NM', 'new york': 'NY', 'north carolina': 'NC', 'north dakota': 'ND', 'ohio': 'OH',
+  'oklahoma': 'OK', 'oregon': 'OR', 'pennsylvania': 'PA', 'rhode island': 'RI', 'south carolina': 'SC',
+  'south dakota': 'SD', 'tennessee': 'TN', 'texas': 'TX', 'utah': 'UT', 'vermont': 'VT',
+  'virginia': 'VA', 'washington': 'WA', 'west virginia': 'WV', 'wisconsin': 'WI', 'wyoming': 'WY',
+  'district of columbia': 'DC', 'puerto rico': 'PR', 'guam': 'GU', 'us virgin islands': 'VI',
+}
+
 /**
  * Resolve the canonical applicant type from a profile object.
  *
@@ -106,13 +121,22 @@ export async function loadProfileContext(db, profileId) {
     tags,
     interests,
     // Provide fallbacks for location extraction
-    postal_code: profile.postal_code || organization?.zip || organization?.postal_code || null,
+    // The profiles table column is "zip" but extraction functions check postal_code/zip_code — normalize here.
+    postal_code: profile.postal_code || profile.zip_code || profile.zip || organization?.zip || organization?.postal_code || null,
+    zip_code: profile.zip_code || profile.zip || profile.postal_code || null,
     state: profile.state || organization?.state || null,
     city: profile.city || organization?.city || null,
   }
   
-  let signals = buildProfileSignals({ 
-    profile: mergedProfile, 
+  const sectionKeys = Object.keys(sections)
+  console.info(
+    `[loadProfileContext] profile=${profileId} zip=${mergedProfile.postal_code || mergedProfile.zip_code || '?'} ` +
+    `state=${mergedProfile.state || '?'} city=${mergedProfile.city || '?'} ` +
+    `sections=[${sectionKeys.join(',')}] org=${profile.organization_id || 'none'}`,
+  )
+
+  let signals = buildProfileSignals({
+    profile: mergedProfile,
     sections,
     asOf: mergedProfile.updated_at || mergedProfile.created_at || null,
   })
@@ -123,7 +147,7 @@ export async function loadProfileContext(db, profileId) {
   }
   if (!signals.location || typeof signals.location !== 'object') {
     signals.location = {
-      zip: mergedProfile.postal_code || mergedProfile.zip_code || null,
+      zip: mergedProfile.postal_code || mergedProfile.zip_code || mergedProfile.zip || null,
       state: mergedProfile.state || null,
       city: mergedProfile.city || null,
       county: null,
@@ -335,6 +359,7 @@ export function extractZipFromContext({ profile, sections, jobParameters = {} })
     sections?.demographics?.zip,
     profile?.postal_code,
     profile?.zip_code,
+    profile?.zip,
   ]
 
   const zip = candidates.find(
@@ -365,11 +390,13 @@ export function extractStateFromContext({ profile, sections, jobParameters = {} 
   ]
 
   const state = candidates
-    .map((value) =>
-      typeof value === 'string' && value.trim().length === 2
-        ? value.trim().toUpperCase()
-        : null,
-    )
+    .map((value) => {
+      if (typeof value !== 'string' || !value.trim()) return null
+      const trimmed = value.trim()
+      if (trimmed.length === 2) return trimmed.toUpperCase()
+      // Handle full state names (e.g. "Ohio" → "OH", "West Virginia" → "WV")
+      return STATE_NAME_TO_ABBR[trimmed.toLowerCase()] || null
+    })
     .find(Boolean)
 
   if (state) return state
@@ -530,6 +557,14 @@ function collectNarrativeKeywords(section = {}, register) {
     'collaboration_partners',
     'sustainability_plan',
     'special_circumstances',
+    'mission',
+    'barriers_faced',
+    'timeline',
+    'past_experience',
+    'funding_needs',
+    'funding_purpose',
+    'assistance_notes',
+    'notes',
   ]
   fields.forEach((field) => {
     const value = section[field]
@@ -600,6 +635,7 @@ export function buildProfileSignals({ profile, sections, asOf = null }) {
   const healthSet = new Set()
   const familySet = new Set()
   const occupationSet = new Set()
+  const needs = new Set()
 
   // Extract location from multiple sources including address strings
   const basic = sections?.basic_information ?? {}
@@ -782,6 +818,17 @@ export function buildProfileSignals({ profile, sections, asOf = null }) {
     const domainName = domain.split('.')[0]
     if (domainName && domainName.length > 3) registerKeyword(domainName)
   }
+  // Nationality — immigration/citizenship context
+  if (basic.nationality && typeof basic.nationality === 'string') {
+    registerKeyword(basic.nationality)
+    if (/^us|united\s*states|american/i.test(basic.nationality)) {
+      demographicSet.add('us_citizen')
+    }
+  }
+  // Freeform notes — intake context that may mention needs
+  if (basic.notes && typeof basic.notes === 'string') {
+    collectNarrativeKeywords({ notes: basic.notes }, registerKeyword)
+  }
 
   // ============ FINANCIAL INFORMATION ============
   const financialSection = sections?.financial_information ?? {}
@@ -858,6 +905,75 @@ export function buildProfileSignals({ profile, sections, asOf = null }) {
   if (financialSection.first_time_homebuyer) { assistanceSet.add('first_time_homebuyer'); registerKeyword('first_time_homebuyer'); registerKeyword('down_payment_assistance') }
   if (financialSection.underemployed) { assistanceSet.add('underemployed'); registerKeyword('underemployed'); registerKeyword('workforce'); registerKeyword('job_training') }
 
+  // --- Funding needs / purpose: what the applicant needs money for ---
+  if (financialSection.funding_needs && typeof financialSection.funding_needs === 'string') {
+    collectNarrativeKeywords({ funding_needs: financialSection.funding_needs }, registerKeyword)
+    const fnLower = financialSection.funding_needs.toLowerCase()
+    // Map explicit funding needs to canonical need categories
+    const fundingNeedKeywords = {
+      housing: ['rent', 'housing', 'mortgage', 'eviction', 'home repair'],
+      food: ['food', 'groceries', 'nutrition'],
+      utilities: ['utility', 'utilities', 'electric', 'gas', 'water', 'heating'],
+      healthcare: ['medical', 'health', 'prescription', 'treatment', 'therapy', 'copay'],
+      education: ['tuition', 'school', 'college', 'education', 'textbook'],
+      transportation: ['transportation', 'vehicle', 'car', 'bus', 'gas money'],
+      childcare: ['childcare', 'daycare', 'child care', 'after school'],
+      disability: ['disability', 'wheelchair', 'adaptive', 'assistive'],
+      business: ['business', 'startup', 'equipment', 'inventory'],
+      legal: ['legal', 'attorney', 'court'],
+    }
+    for (const [need, triggers] of Object.entries(fundingNeedKeywords)) {
+      if (triggers.some(t => fnLower.includes(t))) needs.add(need)
+    }
+  }
+  if (financialSection.funding_purpose && typeof financialSection.funding_purpose === 'string') {
+    collectNarrativeKeywords({ funding_purpose: financialSection.funding_purpose }, registerKeyword)
+  }
+
+  // --- Receives assistance: current benefits/programs ---
+  if (financialSection.receives_assistance) {
+    const assistList = typeof financialSection.receives_assistance === 'string'
+      ? financialSection.receives_assistance.split(/[,;\n]+/).map(s => s.trim()).filter(Boolean)
+      : Array.isArray(financialSection.receives_assistance)
+        ? financialSection.receives_assistance
+        : []
+    for (const prog of assistList) {
+      const norm = normalizeString(prog)
+      if (!norm) continue
+      registerKeyword(norm)
+      // Map common program names to assistance flags
+      if (/snap|food.?stamp/i.test(norm)) { assistanceSet.add('snap_recipient'); needs.add('food') }
+      if (/tanf/i.test(norm)) { assistanceSet.add('tanf_recipient'); needs.add('cash_assistance') }
+      if (/medicaid/i.test(norm)) { assistanceSet.add('medicaid') }
+      if (/medicare/i.test(norm)) { assistanceSet.add('medicare') }
+      if (/ssi(?!d)/i.test(norm)) { assistanceSet.add('ssi_recipient'); needs.add('disability') }
+      if (/ssdi/i.test(norm)) { assistanceSet.add('ssdi_recipient'); needs.add('disability') }
+      if (/section.?8|housing.?voucher/i.test(norm)) { assistanceSet.add('section8_housing'); needs.add('housing') }
+      if (/wic/i.test(norm)) { assistanceSet.add('wic'); needs.add('food') }
+      if (/liheap|energy.?assist/i.test(norm)) { assistanceSet.add('liheap'); needs.add('utilities') }
+    }
+  }
+  if (financialSection.assistance_notes && typeof financialSection.assistance_notes === 'string') {
+    collectNarrativeKeywords({ assistance_notes: financialSection.assistance_notes }, registerKeyword)
+  }
+
+  // --- Annual income (individual): supplement household income for poverty detection ---
+  if (financialSection.annual_income && !financial.householdIncome) {
+    const annualIncome = parseNumber(financialSection.annual_income)
+    if (annualIncome !== null) {
+      // Use annual_income as proxy when household_income is missing
+      financial.householdIncome = annualIncome
+      if (annualIncome < 50000) {
+        assistanceSet.add('low_income')
+        ASSISTANCE_SYNONYMS.low_income.forEach((label) => registerKeyword(label))
+      }
+      if (annualIncome < 25000) {
+        registerKeyword('poverty')
+        registerKeyword('extremely low income')
+      }
+    }
+  }
+
   // ============ GOVERNMENT ASSISTANCE ============
   const government = sections?.government_assistance ?? {}
   Object.entries(ASSISTANCE_SYNONYMS).forEach(([flag, labels]) => {
@@ -882,6 +998,39 @@ export function buildProfileSignals({ profile, sections, asOf = null }) {
     // Also register the whole thing as a keyword if short
     if (government.other_programs.length < 100) {
       registerKeyword(government.other_programs)
+    }
+  }
+  // Medicaid waiver program — e.g., "ecf_choices", "HCBS", "Katie Beckett"
+  if (government.medicaid_waiver_program && typeof government.medicaid_waiver_program === 'string') {
+    const waiver = normalizeString(government.medicaid_waiver_program)
+    if (waiver) {
+      registerKeyword(waiver)
+      registerKeyword('medicaid waiver')
+      assistanceSet.add('medicaid_waiver')
+      if (/ecf|choices/i.test(waiver)) {
+        registerKeyword('ecf choices')
+        registerKeyword('ecf_choices')
+        assistanceSet.add('ecf_choices')
+        needs.add('healthcare')
+        needs.add('disability')
+      }
+      if (/hcbs/i.test(waiver)) {
+        registerKeyword('hcbs')
+        registerKeyword('home community based services')
+      }
+    }
+  }
+  // ECF CHOICES role — participant, caregiver, or provider
+  if (government.ecf_choices_role && typeof government.ecf_choices_role === 'string') {
+    const role = normalizeString(government.ecf_choices_role)
+    if (role) {
+      registerKeyword('ecf choices ' + role)
+      registerKeyword('ecf_choices')
+      assistanceSet.add('ecf_choices')
+      if (role === 'caregiver') {
+        familySet.add('caregiver')
+        registerKeyword('caregiver')
+      }
     }
   }
 
@@ -1005,6 +1154,65 @@ export function buildProfileSignals({ profile, sections, asOf = null }) {
   }
   if (demographicsSection.lgbtq) { registerKeyword('lgbtq'); registerKeyword('lgbtq_scholarship'); registerKeyword('queer') }
   if (demographicsSection.good_credit_score) { registerKeyword('good_credit'); registerKeyword('financial_literacy') }
+  // General heritage field (free text)
+  if (demographicsSection.heritage && typeof demographicsSection.heritage === 'string') {
+    registerKeyword(demographicsSection.heritage)
+  }
+  // Citizenship / US citizen — programs requiring citizenship
+  if (demographicsSection.citizenship && typeof demographicsSection.citizenship === 'string') {
+    registerKeyword(demographicsSection.citizenship)
+    if (/^us|united\s*states|american/i.test(demographicsSection.citizenship)) {
+      demographicSet.add('us_citizen')
+    }
+  }
+  if (demographicsSection.us_citizen) {
+    demographicSet.add('us_citizen')
+  }
+  // Disability status (high-level descriptor) — supplements health_medical section
+  if (demographicsSection.disability_status && typeof demographicsSection.disability_status === 'string') {
+    const ds = normalizeString(demographicsSection.disability_status)
+    if (ds && ds !== 'none' && ds !== 'unknown') {
+      healthSet.add('disability')
+      registerKeyword(ds)
+      registerKeyword('disability')
+      needs.add('disability')
+    }
+  }
+  // Veteran status (high-level descriptor) — supplements military_service section
+  if (demographicsSection.veteran_status && typeof demographicsSection.veteran_status === 'string') {
+    const vs = normalizeString(demographicsSection.veteran_status)
+    if (vs && vs !== 'none' && vs !== 'unknown' && vs !== 'not a veteran') {
+      militarySet.add('veteran')
+      registerKeyword('veteran')
+    }
+  }
+  // Languages — language-specific programs and services
+  if (demographicsSection.languages) {
+    const langs = typeof demographicsSection.languages === 'string'
+      ? demographicsSection.languages.split(/[,;\n]+/).map(s => s.trim()).filter(Boolean)
+      : Array.isArray(demographicsSection.languages) ? demographicsSection.languages : []
+    for (const lang of langs) {
+      const norm = normalizeString(lang)
+      if (norm && norm !== 'english') {
+        registerKeyword(norm)
+        demographicSet.add('non_english_speaker')
+        registerKeyword('bilingual')
+        registerKeyword('esl')
+      }
+    }
+  }
+  // Religious affiliation — faith-based programs
+  if (demographicsSection.religious_affiliation && typeof demographicsSection.religious_affiliation === 'string') {
+    const affil = normalizeString(demographicsSection.religious_affiliation)
+    if (affil) {
+      registerKeyword(affil)
+      registerKeyword('faith_based')
+    }
+  }
+  // White/Caucasian demographic flag
+  if (demographicsSection.white_caucasian) {
+    demographicSet.add('white_caucasian')
+  }
 
   // ============ FAMILY LIFE ============
   const family = sections?.family_life ?? {}
@@ -1110,6 +1318,10 @@ export function buildProfileSignals({ profile, sections, asOf = null }) {
     if (key === 'industry' && typeof value === 'string') {
       occupationSet.add(normalizeString(value))
       registerKeyword(value)
+      return
+    }
+    if (key === 'notes' && typeof value === 'string') {
+      collectNarrativeKeywords({ notes: value }, registerKeyword)
       return
     }
     if (value === true) {
@@ -1473,6 +1685,29 @@ export function buildProfileSignals({ profile, sections, asOf = null }) {
   if (education.honor_societies) { registerKeyword('honor_society'); registerKeyword('academic_achievement') }
   if (education.first_generation_college_student) { registerKeyword('first_generation'); registerKeyword('first_gen_college') }
   if (education.dual_enrollment) { registerKeyword('dual_enrollment'); registerKeyword('early_college') }
+  // EFC/SAI band — Expected Family Contribution for financial aid matching
+  if (education.efc_sai_band && typeof education.efc_sai_band === 'string') {
+    const efc = normalizeString(education.efc_sai_band)
+    if (efc) {
+      registerKeyword('efc ' + efc)
+      registerKeyword('student aid index')
+      // Low EFC = high financial need
+      if (/zero|0|low|very.?low/i.test(efc)) {
+        registerKeyword('high_financial_need')
+        registerKeyword('need_based_aid')
+        assistanceSet.add('low_efc')
+      }
+    }
+  }
+  // Intended major — scholarship targeting by field
+  if (education.intended_major && typeof education.intended_major === 'string') {
+    registerKeyword(education.intended_major)
+    interestSet.add(normalizeString(education.intended_major))
+  }
+  // Education notes — additional context keywords
+  if (education.notes && typeof education.notes === 'string') {
+    collectNarrativeKeywords({ notes: education.notes }, registerKeyword)
+  }
 
   // ============ MEDICAL INSURANCE ============
   // Insurance plan type unlocks assistance program matching (Medicaid/Medicare → benefits crawlers)
@@ -1650,6 +1885,19 @@ export function buildProfileSignals({ profile, sections, asOf = null }) {
   if (housing.notes) {
     collectNarrativeKeywords({ notes: housing.notes }, registerKeyword)
   }
+  // Housing address — backup location data when primary location is missing
+  if (housing.address && typeof housing.address === 'string' && !location.state) {
+    const housingState = extractStateFromAddress(housing.address)
+    if (housingState) location.state = housingState
+    if (!location.zip) {
+      const housingZip = extractZipFromAddress(housing.address)
+      if (housingZip) location.zip = housingZip
+    }
+    if (!location.city) {
+      const housingCity = extractCityFromAddress(housing.address)
+      if (housingCity) location.city = housingCity
+    }
+  }
 
   // ============ FAMILY (HOUSEHOLD DETAILS) ============
   // Distinct from family_life: structured household info (size, responsibilities, support)
@@ -1752,7 +2000,6 @@ export function buildProfileSignals({ profile, sections, asOf = null }) {
     nursing_reentry_support: ['nurse reentry','nurse re-entry','return to nursing','return to practice','nursing refresher','nursing re-entry','healthcare return to work','nursing workforce'],
     professional_remediation_funding: ['probe','remediation','ethics course','professional boundaries','disciplinary remediation','board required education','mandated continuing education','professional compliance training'],
   }
-  const needs = new Set()
   // Check both individual tokens (keywordSet) AND full phrases (phraseSet) so multi-word
   // triggers like 'food bank', 'mental health', 'probe ethics' are correctly matched.
   const allKws = Array.from(keywordSet)
@@ -1820,8 +2067,12 @@ export function buildProfileSignals({ profile, sections, asOf = null }) {
     const key = typeof n === 'string' ? n.trim().toLowerCase().replace(/\s+/g, '_') : null
     if (key) needs.add(key)
   }
-  // Only inject generic fallback when the profile has truly no data at all
-  if (needs.size === 0 && keywordSet.size === 0 && applicantTypeSet.size === 0) {
+  // Inject generic needs when no needs could be derived from profile sections,
+  // assistance programs, health signals, or existing profile.needs.
+  // Previously this also required keywordSet.size === 0, but display-name-derived
+  // keywords (e.g. "melissa", "justus") are not meaningful needs signals and were
+  // preventing the fallback from firing for sparse individual profiles.
+  if (needs.size === 0) {
     ;['utilities','housing','food','healthcare','cash_assistance'].forEach(n => needs.add(n))
   }
 

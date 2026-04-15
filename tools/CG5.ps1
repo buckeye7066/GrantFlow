@@ -369,6 +369,8 @@ function Read-GH([string]$P){
   if(!$r){return $null}
   $bytes=[System.Convert]::FromBase64String($r.content)
   $text=[System.Text.Encoding]::UTF8.GetString($bytes)
+  # Normalize newlines to LF — prevents CRLF/LF mismatch in all downstream comparisons
+  $text = $text -replace '\r\n',"`n" -replace '\r',"`n"
   return @{c=$text;sha=$r.sha;p=$P}
 }
 function Test-JSSyntax([string]$Content,[string]$FilePath){
@@ -376,8 +378,10 @@ function Test-JSSyntax([string]$Content,[string]$FilePath){
   $patterns=@(
     @{Name='duplicate const/let in same block';Pat='(?m)^(\s*)(const|let)\s+(\w+)\b.*\n(?:\s*(?:\/\/[^\n]*)?\n)*\s*\2\s+\3\b'},
     @{Name='continue outside loop';Pat='\.forEach\s*\([^)]*\)\s*\{[^}]*\bcontinue\b'},
-    @{Name='try without catch/finally';Pat='(?s)\btry\s*\{[^{}]*\}(?!\s*(?:catch|finally))'},
-    @{Name='await in non-async function';Pat='(?m)^\s*(?:export\s+)?function\s+\w+\s*\([^)]*\)\s*\{[^}]*\bawait\b'},
+    # Fixed: allow 1 level of nested braces inside try (handles object literals, if/for blocks)
+    @{Name='try without catch/finally';Pat='(?m)^\s*\btry\s*\{(?:[^{}]|\{[^{}]*\})*\}(?!\s*(?:catch|finally))'},
+    # Only flag: non-async function declaration followed within ~200 chars by bare await (not in nested function/arrow)
+    @{Name='await in non-async function';Pat='(?m)^\s*(?:export\s+)?function\s+\w+\s*\([^)]*\)\s*\{[^}]{0,200}\bawait\b'},
     @{Name='static import inside block';Pat='(?m)^(?:\s{2,}|\t+)import\s+\{[^}]+\}\s+from\s+'}
   )
   $issues=@()
@@ -400,11 +404,8 @@ function Test-DriftGuard([string]$OldContent,[string]$NewContent,[string]$FilePa
 
   # Guard common AI drift: navigate() call added without declaring navigate.
   if($NewContent -match '(?<!\.)\bnavigate\s*\('){
-    $hasNavigateDecl = $NewContent -match '\bconst\s+navigate\s*=' -or
-      $NewContent -match '\blet\s+navigate\s*=' -or
-      $NewContent -match '\bvar\s+navigate\s*=' -or
-      $NewContent -match '\bfunction\s+navigate\s*\(' -or
-      $NewContent -match '\bnavigate\s*:\s*\('
+    # Single regex with alternation is safer than chained -or across lines
+    $hasNavigateDecl = $NewContent -match '\b(const|let|var)\s+navigate\s*=|\bfunction\s+navigate\s*\(|\bnavigate\s*:\s*\(|\buseNavigate\s*\('
     if(-not $hasNavigateDecl){
       $issues += "navigate() used without local declaration/import wiring"
     }
@@ -942,27 +943,101 @@ function Invoke-CJ([string]$Sys,[string]$Usr,[int]$Mx=4096){
 #  SAFE REPLACEMENT - Logs mismatches instead of silently failing
 # ===================================================================
 function Invoke-SafeReplace([string]$Content,[string]$Original,[string]$Replacement,[string]$FilePath){
-  # Exact match — best case
+  # Normalize newlines in both sides (GitHub uses LF, Claude may return CRLF)
+  $Content  = $Content  -replace '\r\n',"`n" -replace '\r',"`n"
+  $Original = $Original -replace '\r\n',"`n" -replace '\r',"`n"
+  $Replacement = $Replacement -replace '\r\n',"`n" -replace '\r',"`n"
+
+  # Safety: reject original_code that is too short (high risk of wrong-site match)
+  if($Original.Trim().Length -lt 15){
+    Write-Log "  MATCH-SKIP ${FilePath}: original_code too short ($($Original.Trim().Length) chars) — risky match" 'WARN'
+    return @{Content=$Content;Matched=$false;Method='too-short'}
+  }
+
+  # Layer 1: Exact match — best case
   if($Content.Contains($Original)){
-    return @{Content=$Content.Replace($Original,$Replacement);Matched=$true;Method='exact'}
-  }
-  # Whitespace-normalized fallback: collapse runs of whitespace for matching
-  $normOrig = $Original -replace '\s+',' '
-  $normContent = $Content -replace '\s+',' '
-  if($normContent.Contains($normOrig)){
-    # Find the actual region by locating a unique non-whitespace anchor
-    $anchor = ($Original -replace '\s+',' ').Substring(0, [math]::Min(60, $normOrig.Length))
-    # Try trimmed version (Claude often adds/removes leading whitespace)
-    $trimOrig = $Original.Trim()
-    if($Content.Contains($trimOrig)){
-      return @{Content=$Content.Replace($trimOrig,$Replacement.Trim());Matched=$true;Method='trim'}
+    $matchCount = ([regex]::Matches([regex]::Escape($Original), [regex]::Escape($Original))).Count
+    # Verify the original_code appears exactly once (prevents wrong-site edits)
+    $occurrences = 0; $idx = -1
+    $searchFrom = 0
+    while(($idx = $Content.IndexOf($Original, $searchFrom)) -ge 0){
+      $occurrences++; $searchFrom = $idx + 1
+      if($occurrences -gt 1){break}
     }
-    Write-Log "  MATCH-MISS (whitespace-near) ${FilePath}: anchor='$($anchor.Substring(0,[math]::Min(40,$anchor.Length)))...'" 'WARN'
-    return @{Content=$Content;Matched=$false;Method='whitespace-near-miss'}
+    if($occurrences -eq 1){
+      return @{Content=$Content.Replace($Original,$Replacement);Matched=$true;Method='exact'}
+    }
+    # Multiple matches — use first occurrence only with index-based replace
+    Write-Log "  MATCH-WARN ${FilePath}: original_code matches $occurrences locations, using first" 'WARN'
+    $firstIdx = $Content.IndexOf($Original)
+    $result = $Content.Substring(0,$firstIdx) + $Replacement + $Content.Substring($firstIdx + $Original.Length)
+    return @{Content=$result;Matched=$true;Method='exact-first'}
   }
+
+  # Layer 2: Trimmed match (Claude often adds/removes leading/trailing whitespace)
+  $trimOrig = $Original.Trim()
+  if($trimOrig.Length -ge 15 -and $Content.Contains($trimOrig)){
+    return @{Content=$Content.Replace($trimOrig,$Replacement.Trim());Matched=$true;Method='trim'}
+  }
+
+  # Layer 3: Indent-normalized match (Claude may use different indent width)
+  # Normalize each line's leading whitespace: tabs→2spaces, then collapse
+  $normLines = { param($t) ($t -split "`n" | ForEach-Object { ($_ -replace '^\t+',{' ' * ($_.Value.Length * 2)}) -replace '^( {2,})',{ $m = $args[0].Value; ' ' * [math]::Floor($m.Length / 2) * 2 } }) -join "`n" }
+  $normContent = & $normLines $Content
+  $normOriginal = & $normLines $Original
+  if($normContent.Contains($normOriginal)){
+    # Find where in the original content this maps to by line-matching
+    $origLines = $Content -split "`n"
+    $searchLines = $Original -split "`n"
+    $firstSearchLine = $searchLines[0].Trim()
+    $lastSearchLine = $searchLines[-1].Trim()
+    for($li=0; $li -lt $origLines.Count; $li++){
+      if($origLines[$li].Trim() -eq $firstSearchLine){
+        $endLi = $li + $searchLines.Count - 1
+        if($endLi -lt $origLines.Count -and $origLines[$endLi].Trim() -eq $lastSearchLine){
+          # Extract the actual text from content and replace
+          $actualBlock = ($origLines[$li..$endLi]) -join "`n"
+          if($Content.Contains($actualBlock)){
+            return @{Content=$Content.Replace($actualBlock,$Replacement);Matched=$true;Method='indent-norm'}
+          }
+        }
+      }
+    }
+    Write-Log "  MATCH-NEAR ${FilePath}: indent-normalized match found but line extraction failed" 'WARN'
+  }
+
+  # Layer 4: Line-anchor match — find the block by matching first+last non-empty lines
+  $searchLines = ($Original -split "`n") | Where-Object { $_.Trim().Length -gt 0 }
+  if($searchLines.Count -ge 2){
+    $firstLine = $searchLines[0].Trim()
+    $lastLine = $searchLines[-1].Trim()
+    $contentLines = $Content -split "`n"
+    for($li=0; $li -lt $contentLines.Count; $li++){
+      if($contentLines[$li].Trim() -eq $firstLine){
+        # Search forward for the last line within a reasonable range
+        $maxRange = [math]::Min($searchLines.Count + 5, $contentLines.Count - $li)
+        for($ei=$li+1; $ei -lt ($li + $maxRange); $ei++){
+          if($ei -lt $contentLines.Count -and $contentLines[$ei].Trim() -eq $lastLine){
+            $actualBlock = ($contentLines[$li..$ei]) -join "`n"
+            # Verify similarity: at least 70% of non-empty lines must match
+            $actualNonEmpty = ($actualBlock -split "`n") | Where-Object { $_.Trim().Length -gt 0 }
+            $matchedLines = 0
+            foreach($sl in $searchLines){
+              if($actualNonEmpty | Where-Object { $_.Trim() -eq $sl.Trim() }){$matchedLines++}
+            }
+            $similarity = if($searchLines.Count -gt 0){$matchedLines / $searchLines.Count}else{0}
+            if($similarity -ge 0.7){
+              return @{Content=$Content.Replace($actualBlock,$Replacement);Matched=$true;Method="line-anchor(sim:$([math]::Round($similarity,2)))"}
+            }
+          }
+        }
+      }
+    }
+  }
+
   # Total miss — log for debugging
-  $snippet = $Original.Substring(0, [math]::Min(60, $Original.Length)) -replace '[\r\n]+',' '
-  Write-Log "  MATCH-MISS ${FilePath}: Claude original_code not found: '$snippet...'" 'WARN'
+  $snippet = $Original.Substring(0, [math]::Min(80, $Original.Length)) -replace '[\r\n]+',' '
+  Write-Log "  MATCH-MISS ${FilePath}: original_code not found (4 layers tried): '$snippet...'" 'WARN'
   return @{Content=$Content;Matched=$false;Method='no-match'}
 }
 
@@ -993,6 +1068,93 @@ function Sort-ByRisk([string[]]$Files){
     # Combined: tier * 1000 minus risk score so risky files bubble up
     ($tier * 1000) - $risk
   }
+}
+
+# ===================================================================
+#  SCAN HELPERS - Shared prompt builder and fix-application logic
+# ===================================================================
+
+# Build the scan analysis prompt for one or more files
+function Build-ScanPrompt([array]$FileDataArray){
+  $promptParts = foreach($af in $FileDataArray){ "FILE: $($af.p)`n$($af.c)" }
+  return @"
+Analyze for bugs that break GrantFlow's mission goals (see system context). For each error, state which goal(s) it violates. For each fix, state which goal(s) it serves and confirm it does not break other goals.
+
+CRITICAL RULES FOR original_code AND fixed_code:
+- original_code MUST be copied VERBATIM from the file — exact characters, exact whitespace, exact indentation. Do NOT paraphrase, truncate, reformat, or summarize.
+- Include at least 3-5 complete lines of context so the snippet is UNIQUE in the file. A 1-line snippet that appears multiple times will be REJECTED.
+- Never use "..." or "// ..." to abbreviate code in original_code or fixed_code. Include the FULL block.
+- fixed_code must be a drop-in replacement that preserves the surrounding code's indentation and structure.
+- If you cannot provide a safe, precise fix, set can_auto_fix:false. Do NOT guess.
+
+Return ONLY JSON:
+{"results":[{"file":"PATH","errors":[{"line":null,"severity":"CRITICAL","type":"category","goals_violated":[4,7],"description":"problem — violates Goal X because...","original_code":"VERBATIM exact buggy code from the file","fixed_code":"corrected code (drop-in replacement)","goals_served":[4,7],"fix_rationale":"why this fix aligns with Goals X,Y without breaking Goal Z","can_auto_fix":true}],"summary":"one line"}]}
+No errors: omit the file or give empty errors array.
+
+$($promptParts -join "`n`n---`n`n")
+"@
+}
+
+# Apply fixes from Claude analysis results to files and commit. Returns number of fixes applied.
+function Invoke-ScanFixes([array]$Results,[array]$FileDataArray,[string]$SysCtx,[System.Collections.ArrayList]$Report,[System.Collections.ArrayList]$FixLog){
+  $maxFixesPerFile = 8  # Safety limit to prevent file mangling
+  $totalApplied = 0
+
+  foreach($result in $Results){
+    if(!$result.errors -or $result.errors.Count -eq 0){continue}
+    $script:S.Errs += $result.errors.Count
+    Write-Log "  $($result.file): $($result.errors.Count) issue(s)" 'WARN'
+
+    Learn-FileRisk $result.file $result.errors.Count
+    foreach($e in $result.errors){Learn-BugPattern $e.type $result.file}
+
+    [void]$Report.Add("## $($result.file)")
+    [void]$Report.Add("$($result.summary)")
+    foreach($e in $result.errors){
+      $goalRef=if($e.goals_violated){"[Goals $($e.goals_violated -join ',')]"}else{''}
+      [void]$Report.Add("- [$($e.severity)] $($e.type) $goalRef`: $($e.description)")
+    }
+    [void]$Report.Add("")
+
+    $fixable=$result.errors|Where-Object{$_.can_auto_fix -and $_.original_code -and $_.fixed_code}
+    if($fixable.Count -gt $maxFixesPerFile){
+      Write-Log "  SAFETY: Capping fixes for $($result.file) at $maxFixesPerFile (Claude proposed $($fixable.Count))" 'WARN'
+      $fixable = $fixable | Select-Object -First $maxFixesPerFile
+    }
+
+    if($fixable.Count -gt 0){
+      $targetFd=$FileDataArray|Where-Object{$_.p -eq $result.file}|Select-Object -First 1
+      if($targetFd){
+        $content=$targetFd.c; $applied=0; $skipped=0
+        foreach($fx in $fixable){
+          $orig=[string]$fx.original_code; $repl=[string]$fx.fixed_code
+          if($orig){
+            $sr=Invoke-SafeReplace $content $orig $repl $result.file
+            if($sr.Matched){
+              $content=$sr.Content; $applied++
+              $goalServed=if($fx.goals_served){"(Goals $($fx.goals_served -join ','))"}else{''}
+              [void]$FixLog.Add("$($result.file): $($fx.description) $goalServed [match:$($sr.Method)]")
+            } else {
+              $skipped++
+              [void]$Report.Add("- [SKIP] Fix not applied ($($sr.Method)): $($fx.description)")
+            }
+          }
+        }
+        if($applied -gt 0 -and $content -ne $targetFd.c){
+          # Verify the final content passes all pre-commit checks before committing
+          $commitGoals=($fixable|Where-Object{$_.goals_served}|ForEach-Object{$_.goals_served}|Sort-Object -Unique) -join ','
+          $commitMsg=if($commitGoals){"Fix $applied issue(s) [Goals $commitGoals]"}else{"Fix $applied issue(s)"}
+          if($skipped -gt 0){$commitMsg += " ($skipped skipped)"}
+          if(Write-GH $result.file $content $targetFd.sha $commitMsg $targetFd.c){
+            $totalApplied += $applied
+            $script:S.Fixes += $applied
+          }
+          Start-Sleep 1
+        }
+      }
+    }
+  }
+  return $totalApplied
 }
 
 # ===================================================================
@@ -1047,121 +1209,23 @@ function Start-ScanAndFix{
       if($batch.Count -lt 3){continue}
     }
 
-    # If the current file is large (>=4000) and there's a pending batch, flush the batch
-    # first, then queue the large file for its own analysis pass.
+    # If the current file is large (>=4000) and there's a pending batch, flush the batch first
     if($batch.Count -gt 0 -and $fd.c.Length -ge 4000){
       $filesToAnalyze=$batch.ToArray()
-      $promptParts=foreach($af in $filesToAnalyze){"FILE: $($af.p)`n$($af.c)"}
-      $prompt=@"
-Analyze for bugs that break GrantFlow's mission goals (see system context). For each error, state which goal(s) it violates. For each fix, state which goal(s) it serves and confirm it does not break other goals. Return ONLY JSON:
-{"results":[{"file":"PATH","errors":[{"line":null,"severity":"CRITICAL","type":"category","goals_violated":[4,7],"description":"problem — violates Goal X because...","original_code":"exact buggy code","fixed_code":"corrected code","goals_served":[4,7],"fix_rationale":"why this fix aligns with Goals X,Y without breaking Goal Z","can_auto_fix":true}],"summary":"one line"}]}
-No errors: omit the file or give empty errors array.
-
-$($promptParts -join "`n`n---`n`n")
-"@
+      $prompt=Build-ScanPrompt $filesToAnalyze
       $batchResult=Invoke-CJ $sysCtx $prompt
       if($batchResult -and $batchResult.results){
-        foreach($result in $batchResult.results){
-          if(!$result.errors -or $result.errors.Count -eq 0){continue}
-          $script:S.Errs += $result.errors.Count
-          Write-Log "  $($result.file): $($result.errors.Count) issue(s)" 'WARN'
-          Learn-FileRisk $result.file $result.errors.Count
-          foreach($e in $result.errors){Learn-BugPattern $e.type $result.file}
-          [void]$rpt.Add("## $($result.file)")
-          [void]$rpt.Add("$($result.summary)")
-          foreach($e in $result.errors){
-            $goalRef=if($e.goals_violated){"[Goals $($e.goals_violated -join ',')]"}else{''}
-            [void]$rpt.Add("- [$($e.severity)] $($e.type) $goalRef`: $($e.description)")
-          }
-          [void]$rpt.Add("")
-          $fixable=$result.errors|Where-Object{$_.can_auto_fix -and $_.original_code -and $_.fixed_code}
-          if($fixable.Count -gt 0){
-            $targetFd=$filesToAnalyze|Where-Object{$_.p -eq $result.file}|Select-Object -First 1
-            if($targetFd){
-              $content=$targetFd.c;$applied=0
-              foreach($fx in $fixable){
-                $orig=[string]$fx.original_code;$repl=[string]$fx.fixed_code
-                if($orig){
-                  $sr=Invoke-SafeReplace $content $orig $repl $result.file
-                  if($sr.Matched){
-                    $content=$sr.Content;$applied++
-                    $goalServed=if($fx.goals_served){"(Goals $($fx.goals_served -join ','))"}else{''}
-                    [void]$fixes.Add("$($result.file): $($fx.description) $goalServed [match:$($sr.Method)]")
-                  } else {
-                    [void]$rpt.Add("- [SKIP] Fix not applied (code mismatch): $($fx.description)")
-                  }
-                }
-              }
-              if($applied -gt 0 -and $content -ne $targetFd.c){
-                $commitGoals=($fixable|Where-Object{$_.goals_served}|ForEach-Object{$_.goals_served}|Sort-Object -Unique) -join ','
-                $commitMsg=if($commitGoals){"Fix $applied issue(s) [Goals $commitGoals]"}else{"Fix $applied issue(s)"}
-                if(Write-GH $result.file $content $targetFd.sha $commitMsg $targetFd.c){$script:S.Fixes+=$applied}
-                Start-Sleep 1
-              }
-            }
-          }
-        }
+        Invoke-ScanFixes $batchResult.results $filesToAnalyze $sysCtx $rpt $fixes | Out-Null
       }
       $batch.Clear();$batchSize=0
       if($n % 8 -eq 0){Start-Sleep -Milliseconds 400}
     }
     # Now analyze the current file (large files solo, small files from batch)
     $filesToAnalyze=if($batch.Count -gt 0){$batch.ToArray()}else{@($fd)}
-
-    $promptParts=foreach($af in $filesToAnalyze){"FILE: $($af.p)`n$($af.c)"}
-    $prompt=@"
-Analyze for bugs that break GrantFlow's mission goals (see system context). For each error, state which goal(s) it violates. For each fix, state which goal(s) it serves and confirm it does not break other goals. Return ONLY JSON:
-{"results":[{"file":"PATH","errors":[{"line":null,"severity":"CRITICAL","type":"category","goals_violated":[4,7],"description":"problem — violates Goal X because...","original_code":"exact buggy code","fixed_code":"corrected code","goals_served":[4,7],"fix_rationale":"why this fix aligns with Goals X,Y without breaking Goal Z","can_auto_fix":true}],"summary":"one line"}]}
-No errors: omit the file or give empty errors array.
-
-$($promptParts -join "`n`n---`n`n")
-"@
+    $prompt=Build-ScanPrompt $filesToAnalyze
     $a=Invoke-CJ $sysCtx $prompt
     if($a -and $a.results){
-      foreach($result in $a.results){
-        if(!$result.errors -or $result.errors.Count -eq 0){continue}
-        $script:S.Errs += $result.errors.Count
-        Write-Log "  $($result.file): $($result.errors.Count) issue(s)" 'WARN'
-
-        # LEARN from findings
-        Learn-FileRisk $result.file $result.errors.Count
-        foreach($e in $result.errors){Learn-BugPattern $e.type $result.file}
-
-        [void]$rpt.Add("## $($result.file)")
-        [void]$rpt.Add("$($result.summary)")
-        foreach($e in $result.errors){
-          $goalRef=if($e.goals_violated){"[Goals $($e.goals_violated -join ',')]"}else{''}
-          [void]$rpt.Add("- [$($e.severity)] $($e.type) $goalRef`: $($e.description)")
-        }
-        [void]$rpt.Add("")
-
-        $fixable=$result.errors|Where-Object{$_.can_auto_fix -and $_.original_code -and $_.fixed_code}
-        if($fixable.Count -gt 0){
-          $targetFd=$filesToAnalyze|Where-Object{$_.p -eq $result.file}|Select-Object -First 1
-          if($targetFd){
-            $content=$targetFd.c;$applied=0
-            foreach($fx in $fixable){
-              $orig=[string]$fx.original_code;$repl=[string]$fx.fixed_code
-              if($orig){
-                $sr=Invoke-SafeReplace $content $orig $repl $result.file
-                if($sr.Matched){
-                  $content=$sr.Content;$applied++
-                  $goalServed=if($fx.goals_served){"(Goals $($fx.goals_served -join ','))"}else{''}
-                  [void]$fixes.Add("$($result.file): $($fx.description) $goalServed [match:$($sr.Method)]")
-                } else {
-                  [void]$rpt.Add("- [SKIP] Fix not applied (code mismatch): $($fx.description)")
-                }
-              }
-            }
-            if($applied -gt 0 -and $content -ne $targetFd.c){
-              $commitGoals=($fixable|Where-Object{$_.goals_served}|ForEach-Object{$_.goals_served}|Sort-Object -Unique) -join ','
-              $commitMsg=if($commitGoals){"Fix $applied issue(s) [Goals $commitGoals]"}else{"Fix $applied issue(s)"}
-              if(Write-GH $result.file $content $targetFd.sha $commitMsg $targetFd.c){$script:S.Fixes+=$applied}
-              Start-Sleep 1
-            }
-          }
-        }
-      }
+      Invoke-ScanFixes $a.results $filesToAnalyze $sysCtx $rpt $fixes | Out-Null
     }
     $batch.Clear();$batchSize=0
     if($n % 8 -eq 0){Start-Sleep -Milliseconds 400}
@@ -1170,46 +1234,10 @@ $($promptParts -join "`n`n---`n`n")
   # Flush remaining batch
   if($batch.Count -gt 0){
     $filesToAnalyze=$batch.ToArray()
-    $promptParts=foreach($af in $filesToAnalyze){"FILE: $($af.p)`n$($af.c)"}
-    $a=Invoke-CJ $sysCtx "Analyze for bugs that break GrantFlow's mission goals (see system context). For each error state which goals_violated. For each fix state goals_served and fix_rationale. Return ONLY JSON: {`"results`":[{`"file`":`"PATH`",`"errors`":[{`"line`":null,`"severity`":`"CRITICAL`",`"type`":`"category`",`"goals_violated`":[],`"description`":`"problem`",`"original_code`":`"`",`"fixed_code`":`"`",`"goals_served`":[],`"fix_rationale`":`"`",`"can_auto_fix`":true}],`"summary`":`"`"}]}`n$($promptParts -join "`n---`n")"
+    $prompt=Build-ScanPrompt $filesToAnalyze
+    $a=Invoke-CJ $sysCtx $prompt
     if($a -and $a.results){
-      foreach($result in $a.results){
-        if($result.errors -and $result.errors.Count -gt 0){
-          $script:S.Errs += $result.errors.Count
-          Learn-FileRisk $result.file $result.errors.Count
-          foreach($e in $result.errors){Learn-BugPattern $e.type $result.file}
-          Write-Log "  $($result.file): $($result.errors.Count) issue(s)" 'WARN'
-          [void]$rpt.Add("## $($result.file)")
-          foreach($e in $result.errors){[void]$rpt.Add("- [$($e.severity)] $($e.type): $($e.description)")}
-          [void]$rpt.Add("")
-          $fixable=$result.errors|Where-Object{$_.can_auto_fix -and $_.original_code -and $_.fixed_code}
-          if($fixable.Count -gt 0){
-            $targetFd=$filesToAnalyze|Where-Object{$_.p -eq $result.file}|Select-Object -First 1
-            if($targetFd){
-              $content=$targetFd.c;$applied=0
-              foreach($fx in $fixable){
-                $orig=[string]$fx.original_code;$repl=[string]$fx.fixed_code
-                if($orig){
-                  $sr=Invoke-SafeReplace $content $orig $repl $result.file
-                  if($sr.Matched){
-                    $content=$sr.Content;$applied++
-                    $goalServed=if($fx.goals_served){"(Goals $($fx.goals_served -join ','))"}else{''}
-                    [void]$fixes.Add("$($result.file): $($fx.description) $goalServed [match:$($sr.Method)]")
-                  } else {
-                    [void]$rpt.Add("- [SKIP] Fix not applied (code mismatch): $($fx.description)")
-                  }
-                }
-              }
-              if($applied -gt 0 -and $content -ne $targetFd.c){
-                $commitGoals=($fixable|Where-Object{$_.goals_served}|ForEach-Object{$_.goals_served}|Sort-Object -Unique) -join ','
-                $commitMsg=if($commitGoals){"Fix $applied issue(s) [Goals $commitGoals]"}else{"Fix $applied issue(s)"}
-                if(Write-GH $result.file $content $targetFd.sha $commitMsg $targetFd.c){$script:S.Fixes+=$applied}
-                Start-Sleep 1
-              }
-            }
-          }
-        }
-      }
+      Invoke-ScanFixes $a.results $filesToAnalyze $sysCtx $rpt $fixes | Out-Null
     }
   }
 
@@ -1671,8 +1699,9 @@ Suggested fix: $($cb.fix_description)
 Goals violated: $goalTag
 
 Apply the fix to this file. Return ONLY JSON:
-{"fixed":true,"original_code":"exact code to replace","fixed_code":"corrected code","commit_message":"short message","goals_served":[list of goal numbers]}
+{"fixed":true,"original_code":"VERBATIM exact code copied from the file (3-5+ lines for unique matching, no truncation)","fixed_code":"corrected code (drop-in replacement, same indentation)","commit_message":"short message","goals_served":[list of goal numbers]}
 If no code change is needed in THIS specific file, return {"fixed":false}.
+CRITICAL: original_code must be copied VERBATIM — exact whitespace, exact indentation, no paraphrasing. Include enough lines (3-5+) that the snippet is unique in the file. If unsure, return {"fixed":false}.
 
 FILE: $targetFile
 $($fd.c)

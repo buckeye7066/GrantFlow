@@ -305,7 +305,7 @@ export default function AdminKnowledgeBase() {
       )}
 
       <Dialog open={viewOpen} onOpenChange={setViewOpen}>
-        <DialogContent className="max-w-3xl">
+        <DialogContent className="max-w-3xl max-h-[85vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Knowledge Document</DialogTitle>
           </DialogHeader>

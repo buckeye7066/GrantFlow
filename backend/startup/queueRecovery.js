@@ -21,35 +21,35 @@ export function runQueueRecovery({ db, uploadsDir }) {
   // ── 1. Reset stuck running jobs ────────────────────────────────────────────
   ;(async () => {
     try {
-      if (db.dialect === 'postgres') {
-        const r = await db.query(
-            `
-              UPDATE crawler_jobs
-              SET status = 'failed',
-                  error = 'Auto-reset: stuck after server restart',
-                  completed_at = NOW()
-              WHERE status = 'running'
-                AND started_at < (NOW() - INTERVAL '30 minutes')
-            `
-          );
-        if (r?.changes > 0)
-          console.log(`[startup] Reset ${r.changes} stuck crawler job(s)`);
-      } else {
-        const r = db
-          .prepare(
-            `
-              UPDATE crawler_jobs
-              SET status = 'failed',
-                  error = 'Auto-reset: stuck after server restart',
-                  completed_at = datetime('now')
-              WHERE status = 'running'
-                AND started_at < datetime('now', '-30 minutes')
-            `,
-          )
-          .run();
-        if (r?.changes > 0)
-          console.log(`[startup] Reset ${r.changes} stuck crawler job(s)`);
-      }
+      const isPostgres = db?.dialect === 'postgres';
+      // Use a longer threshold for comprehensive/geo jobs (4h) vs regular jobs (30m)
+      // to avoid prematurely killing long-running geo crawls on restart.
+      const r = await db
+        .prepare(
+          isPostgres
+            ? `
+                UPDATE crawler_jobs
+                SET status = 'failed',
+                    error = 'Auto-reset: stuck after server restart',
+                    completed_at = NOW()
+                WHERE status = 'running'
+                  AND started_at < (NOW() - INTERVAL '30 minutes')
+                  AND NOT (type = 'comprehensive' AND started_at > (NOW() - INTERVAL '4 hours'))
+              `
+            : `
+                UPDATE crawler_jobs
+                SET status = 'failed',
+                    error = 'Auto-reset: stuck after server restart',
+                    completed_at = datetime('now')
+                WHERE status = 'running'
+                  AND started_at < datetime('now', '-30 minutes')
+                  AND NOT (type = 'comprehensive' AND started_at > datetime('now', '-4 hours'))
+              `,
+        )
+        .run();
+      const count = Number(r?.changes ?? r?.rowCount ?? 0);
+      if (count > 0)
+        console.log(`[startup] Reset ${count} stuck crawler job(s)`);
     } catch (err) {
       console.error('[startup] Failed to reset stuck jobs:', err?.message || err);
     }
@@ -58,7 +58,7 @@ export function runQueueRecovery({ db, uploadsDir }) {
   // ── 2. Re-queue concurrency-exhausted jobs ─────────────────────────────────
   ;(async () => {
     try {
-      const r = db
+      const r = await db
         .prepare(
           `
             UPDATE crawler_jobs
@@ -147,7 +147,7 @@ export function runQueueRecovery({ db, uploadsDir }) {
           );
         }
 
-        const queued = db
+        const queued = await db
           .prepare(
             `
               SELECT id FROM crawler_jobs
@@ -216,7 +216,7 @@ async function _drainQueuedJobsGradually(dbRef, uploadsDirRef) {
 
   let queued;
   try {
-    queued = dbRef
+    queued = await dbRef
       .prepare(
         `
           SELECT id FROM crawler_jobs

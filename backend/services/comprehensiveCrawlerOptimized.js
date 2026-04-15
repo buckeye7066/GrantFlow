@@ -242,6 +242,9 @@ export async function runComprehensiveCrawler(contextOrDb, profileContextArg = {
       const effectiveZipList = runAllStates ? undefined : zipList || undefined
 
       const jobId = contextOrDb?.job?.id ?? null
+      const deadlineMs = contextOrDb?.deadlineMs ?? null
+      const heartbeatFn = contextOrDb?.heartbeat ?? null
+      const signal = contextOrDb?.signal ?? null
 
       const skipDomainCorpus =
         params.skip_domain_corpus === true ||
@@ -281,10 +284,22 @@ export async function runComprehensiveCrawler(contextOrDb, profileContextArg = {
           job_id: jobId,
           geo_run_id: params.geo_run_id ?? params.geoRunId ?? null,
           fixtures_dir: process.env.GEO_CRAWL_FIXTURES_DIR || undefined,
+          heartbeat: heartbeatFn,
         })
       }
 
       if (runAllStates) {
+        // When running all states without an explicit max_zips, apply a sane default
+        // to prevent the crawl from attempting all ~43k US ZIPs.
+        // 15 ZIPs/state × 51 = 765 total ZIPs — fits within 6h timeout with margin.
+        const ALL_STATES_DEFAULT_MAX_ZIPS = 15
+        if (!maxZips) {
+          console.info(
+            `[comprehensiveCrawler] GEO all-states: no max_zips specified, defaulting to ${ALL_STATES_DEFAULT_MAX_ZIPS} per state`,
+          )
+        }
+        const effectiveMaxZips = maxZips || ALL_STATES_DEFAULT_MAX_ZIPS
+
         const stateList = Array.isArray(params.states) ? params.states : null
         const normalizedStates = (stateList || []).map((s) => String(s || '').toUpperCase()).filter((s) => /^[A-Z]{2}$/.test(s))
         const statesToRun = normalizedStates.length > 0
@@ -303,10 +318,35 @@ export async function runComprehensiveCrawler(contextOrDb, profileContextArg = {
 
         console.log('[comprehensiveCrawler] GEO mode starting: all states', {
           states: statesToRun.length,
-          maxZips,
+          maxZips: effectiveMaxZips,
           batchSize,
           state_pacing_ms: pacing || 0,
         })
+
+        // Override maxZips in runOnce so the per-state crawl respects the cap.
+        const runOnceWithCap = async (stateArg) => {
+          return await runNationalZipCrawl(db, {
+            state: stateArg && /^[A-Z]{2}$/.test(stateArg) ? stateArg : undefined,
+            zip_list: effectiveZipList,
+            max_zips: effectiveMaxZips,
+            batch_size: Number.isFinite(batchSize) ? batchSize : 25,
+            rate_limit_ms: Number.isFinite(rateLimitMs) ? rateLimitMs : (offlineOnly ? 0 : 250),
+            min_sources_per_zip: Number.isFinite(minSources) ? minSources : 1,
+            counties,
+            offline_only: offlineOnly,
+            discover_local_resources: Boolean(discoverLocal),
+            overpass_radius_km: Number.isFinite(overpassRadiusKm) ? overpassRadiusKm : 12,
+            overpass_max_results: Number.isFinite(overpassMaxResults) ? overpassMaxResults : 60,
+            resume,
+            job_id: jobId,
+            geo_run_id: params.geo_run_id ?? params.geoRunId ?? null,
+            fixtures_dir: process.env.GEO_CRAWL_FIXTURES_DIR || undefined,
+            heartbeat: heartbeatFn,
+          })
+        }
+
+        // Reserve 5 minutes for final DB writes and cleanup
+        const DEADLINE_BUFFER_MS = 5 * 60 * 1000
 
         let totalProcessed = 0
         let totalSources = 0
@@ -316,11 +356,33 @@ export async function runComprehensiveCrawler(contextOrDb, profileContextArg = {
         const perState = []
 
         for (let i = 0; i < statesToRun.length; i++) {
+          // Abort signal check: stop immediately if the dispatcher timed out or cancelled us.
+          if (signal?.aborted) {
+            console.warn(
+              `[comprehensiveCrawler] Abort signal received after ${i}/${statesToRun.length} states — stopping`,
+            )
+            break
+          }
+
+          // Time-budget check: stop gracefully before the hard timeout kills us as a failure.
+          if (deadlineMs && Date.now() + DEADLINE_BUFFER_MS >= deadlineMs) {
+            console.warn(
+              `[comprehensiveCrawler] Time budget exhausted after ${i}/${statesToRun.length} states — stopping gracefully`,
+            )
+            break
+          }
+
           const st = statesToRun[i]
           if (pacing > 0 && i > 0) {
             await new Promise((resolve) => setTimeout(resolve, pacing))
           }
-          const r = await runOnce(st)
+
+          // Pump heartbeat between states
+          if (heartbeatFn) {
+            try { await heartbeatFn() } catch { /* non-fatal */ }
+          }
+
+          const r = await runOnceWithCap(st)
           totalProcessed += Number(r?.processed ?? 0)
           totalSources += Number(r?.sources ?? 0)
           totalFailed += Number(r?.failed ?? 0)
@@ -333,6 +395,31 @@ export async function runComprehensiveCrawler(contextOrDb, profileContextArg = {
             failed: Number(r?.failed ?? 0),
             skipped: Number(r?.skipped ?? 0),
           })
+
+          // Flush intermediate progress to crawler_jobs so timeouts still capture partial results.
+          if (jobId) {
+            try {
+              const intermediateMeta = JSON.stringify({
+                mode: 'geo',
+                run_all_states: true,
+                states_completed: i + 1,
+                states_total: statesToRun.length,
+                processed: totalProcessed,
+                sources: totalSources,
+                failed: totalFailed,
+                skipped: totalSkipped,
+              })
+              await db.prepare(`
+                UPDATE crawler_jobs
+                SET result_count = ?,
+                    result_meta = ?
+                WHERE id = ?
+                  AND status = 'running'
+              `).run(totalSources, intermediateMeta, jobId)
+            } catch (flushErr) {
+              console.warn('[comprehensiveCrawler] Failed to flush intermediate progress:', flushErr?.message)
+            }
+          }
         }
 
         return {
@@ -541,21 +628,25 @@ export async function runComprehensiveCrawler(contextOrDb, profileContextArg = {
     }
   }
   
-  // Save high matches to profile pipeline if profileId provided
+  // Save matches to profile pipeline if profileId provided.
+  // Let saveToProfilePipeline handle threshold logic (default 55%, ACCEPT/REVIEW bypass)
+  // instead of pre-filtering at 80% which blocked all individual-profile results.
   let savedToProfile = 0
   if (profileId) {
-    for (const opp of topOpps.filter(o => o.match_score >= 80)) {
+    for (const opp of topOpps) {
       try {
         // Find the inserted opportunity ID
         const insertedOpp = await db.prepare(`
-          SELECT id FROM funding_opportunities 
+          SELECT id FROM funding_opportunities
           WHERE source = 'verified_real' AND source_id = ?
           LIMIT 1
         `).get(opp.id || opp.source_id)
-        
+
         if (insertedOpp) {
           const oppWithId = { ...opp, id: insertedOpp.id, source: opp.source || 'verified_real' }
-          const result = await saveToProfilePipeline(db, oppWithId, profileId, profileContext, opp.match_score)
+          // Do NOT pass pre-computed score — let saveToProfilePipeline run
+          // computeMatchDecision() as the single canonical authority (Goal 4).
+          const result = await saveToProfilePipeline(db, oppWithId, profileId, profileContext)
           if (result.saved) {
             savedToProfile++
           }
@@ -566,8 +657,8 @@ export async function runComprehensiveCrawler(contextOrDb, profileContextArg = {
       }
     }
   }
-  
-  console.log(`[comprehensiveCrawler] Saved ${savedToProfile} opportunities to profile pipeline (≥80% match)`)
+
+  console.log(`[comprehensiveCrawler] Saved ${savedToProfile} opportunities to profile pipeline`)
   
   return {
     success: true,

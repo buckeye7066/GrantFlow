@@ -32,7 +32,7 @@ export { normalizeOpportunity, computeOpportunityFingerprint } from './opportuni
 import { normalizeProfile, computeProfileFingerprint } from './profileNormalizer.js'
 import { normalizeOpportunity, computeOpportunityFingerprint } from './opportunityNormalizer.js'
 
-export const MATCHER_VERSION = '3.0.0'
+export const MATCHER_VERSION = '3.1.0'
 
 // ---------------------------------------------------------------------------
 // Source trust scoring
@@ -345,8 +345,11 @@ export function calculateNeedAlignment(profileNorm, oppNorm) {
 
   const matchedNeeds = profileNeeds.filter((n) => oppNeeds.includes(n))
 
-  // Exact matches get full credit; partial overlap scales down
-  let score = Math.round((matchedNeeds.length / Math.max(profileNeeds.length, 1)) * 100)
+  // Use the smaller set as denominator so comprehensive profiles are not penalized.
+  // A profile with 8 needs matching 2 of an opportunity's 2 supported needs = 100%,
+  // not 25%. This serves Goal 7: recall over suppression.
+  const denominator = Math.min(profileNeeds.length, oppNeeds.length)
+  let score = Math.round((matchedNeeds.length / Math.max(denominator, 1)) * 100)
   // Multi-need overlap: slight lift when several needs align (mission: profile fields increase score)
   if (matchedNeeds.length >= 2) {
     score = Math.min(100, Math.round(score * 1.06 + matchedNeeds.length * 2))
@@ -421,6 +424,17 @@ export function computeMatchDecision(rawProfile, rawOpportunity, opts = {}) {
   if (profileNorm.isBusiness && oppNorm.entityTypesAllowed?.includes('business')) {
     matchedProfileTraits.push('business')
   }
+  // Individual entity match — the most common profile type was missing the bonus entirely,
+  // capping individual scores ~20 pts below veterans/students/nonprofits at the same alignment.
+  if (profileNorm.entityType === 'individual' && oppNorm.entityTypesAllowed?.includes('individual')) {
+    matchedProfileTraits.push('individual_eligible')
+  }
+  // When opportunity applicability is unknown (no entity types detected in text),
+  // individual profiles get a partial bonus. Most assistance programs accept individuals;
+  // giving 0 here was the #1 cause of empty match results for individual profiles.
+  if (profileNorm.entityType === 'individual' && oppNorm.applicabilityUnknown) {
+    matchedProfileTraits.push('individual_presumed')
+  }
   // Geographic match trait
   const geo = oppNorm.geography ?? {}
   if (geo.isNational && profileNorm.state) matchedProfileTraits.push('national_eligible')
@@ -428,12 +442,17 @@ export function computeMatchDecision(rawProfile, rawOpportunity, opts = {}) {
 
   // Step 5: Composite score
   // Weights: need alignment 45%, source trust 25%, entity type match 20%, geo bonus 10%
-  const entityTypeBonus = matchedProfileTraits.some(t => ['veteran', 'student', 'nonprofit', 'business'].includes(t)) ? 20 : 0
+  // individual_presumed gets a partial bonus (12) vs full match (20) — avoids false-ACCEPTs
+  // while preventing the 20-pt penalty that was zeroing out individual profiles.
+  const entityTypeBonus = matchedProfileTraits.some(t => ['veteran', 'student', 'nonprofit', 'business', 'individual_eligible'].includes(t))
+    ? 20
+    : matchedProfileTraits.includes('individual_presumed') ? 12 : 0
   const geoBonus = matchedProfileTraits.some(t => ['national_eligible', 'state_match'].includes(t)) ? 10 : 0
   const profileStrength = estimateProfileStrengthForScoring(profileNorm)
   // Complete profiles meeting basic signals deserve a bounded lift so 80% thresholds return real rows.
+  // Gate lowered from 40→15 so partial need overlap still earns the completeness bonus (Goal 7).
   const strengthBonus =
-    profileStrength >= 62 && needAlignmentScore >= 40
+    profileStrength >= 62 && needAlignmentScore >= 15
       ? Math.min(20, Math.round((profileStrength - 50) * 0.32))
       : 0
   const rawScore =
@@ -447,6 +466,7 @@ export function computeMatchDecision(rawProfile, rawOpportunity, opts = {}) {
   if (matchedNeeds.length > 0) confidence += Math.min(15, matchedNeeds.length * 5)
   if (missingFields.length > 0) confidence -= missingFields.length * 5
   if (sourceTrust >= 80) confidence += 5
+  if (oppNorm.applicabilityUnknown) confidence -= 8
   confidence = Math.max(0, Math.min(100, confidence))
 
   // Step 7: Decision
@@ -458,8 +478,7 @@ export function computeMatchDecision(rawProfile, rawOpportunity, opts = {}) {
     decision = 'REJECT'
   } else if (
     eligible === 'maybe' ||
-    missingFields.length > 2 ||
-    oppNorm.applicabilityUnknown
+    missingFields.length > 2
   ) {
     decision = 'REVIEW'
   } else if (score < 40 || needAlignmentScore === 0) {
@@ -469,6 +488,11 @@ export function computeMatchDecision(rawProfile, rawOpportunity, opts = {}) {
     decision = 'REVIEW'
   } else if (confidence < 50) {
     // Insufficient confidence → REVIEW
+    decision = 'REVIEW'
+  } else if (oppNorm.applicabilityUnknown && profileNorm.entityType !== 'individual') {
+    // Unknown applicability forces REVIEW for non-individual profiles (conservative: don't
+    // false-ACCEPT ambiguous opportunities for business/nonprofit/veteran/etc.).
+    // Individual profiles are exempted because most assistance programs implicitly accept individuals.
     decision = 'REVIEW'
   } else {
     decision = 'ACCEPT'

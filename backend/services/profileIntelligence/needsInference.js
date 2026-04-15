@@ -328,9 +328,10 @@ function inferIndividualHardshipNeeds(intel, resultMap) {
       ['active_unmet_need'])
   }
 
-  // Food insecurity
+  // Food insecurity (exclude business-context food terms like "food truck", "food business")
   if ((hardshipFlags ?? new Set()).has('food_insecurity') ||
-    storyKeywords.some(k => /food|hunger|snap|wic|grocery/i.test(k))) {
+    storyKeywords.some(k => /hunger|snap|wic|grocery/i.test(k) ||
+      (/food/i.test(k) && !/food truck|food cart|food business|food service|food vendor/i.test(k)))) {
     mergeNeed(resultMap, 'food_programs', CONF_HIGH_MEDIUM,
       ['food insecurity signal'],
       ['financial_situation', 'story'],
@@ -376,8 +377,8 @@ function inferIndividualHardshipNeeds(intel, resultMap) {
       ['active_unmet_need'])
   }
 
-  // Transportation
-  if (storyKeywords.some(k => /transportation|car repair|bus|transit|rideshare/i.test(k))) {
+  // Transportation (use word boundary on "bus" to avoid matching "business")
+  if (storyKeywords.some(k => /transportation|car repair|\bbus\b|transit|rideshare/i.test(k))) {
     mergeNeed(resultMap, 'transportation_support', CONF_MEDIUM,
       ['transportation keyword in story'],
       ['story'],
@@ -520,6 +521,107 @@ function inferNonprofitNeeds(intel, resultMap) {
   }
 }
 
+function inferBusinessNeeds(intel, resultMap) {
+  const { entityType, storyKeywords, financialFlags, organizationFlags, demographicFlags } = intel
+
+  // Trigger for explicit business entity type OR entrepreneurial intent in story
+  const isBusinessEntity = entityType === ET.BUSINESS
+  const hasBusinessIntent = storyKeywords.some(k =>
+    /business|entrepreneur|startup|start.?up|small business|food truck|bakery|salon|barber|restaurant|catering|retail|shop|store|franchise|freelance|self.?employ|LLC|sole proprietor/i.test(k))
+
+  if (!isBusinessEntity && !hasBusinessIntent) return
+
+  // Core need: startup capital / seed funding
+  mergeNeed(resultMap, 'business_startup', isBusinessEntity ? CONF_HIGH : CONF_MEDIUM_HIGH,
+    [isBusinessEntity ? 'entity_type=business' : 'business/startup intent in story'],
+    ['primary_type', 'story', 'goals'],
+    ['aspirational_goal'])
+
+  // Licensing & permits (always needed for a new business)
+  mergeNeed(resultMap, 'business_licensing', isBusinessEntity ? CONF_HIGH_MEDIUM : CONF_MEDIUM,
+    ['new business ventures require licenses and permits'],
+    ['primary_type', 'story'],
+    ['active_unmet_need'])
+
+  // Equipment is a universal business need
+  mergeNeed(resultMap, 'equipment', CONF_MEDIUM,
+    ['business operations require equipment'],
+    ['primary_type'],
+    ['current_state'])
+
+  // Training / professional development
+  mergeNeed(resultMap, 'training', CONF_MEDIUM_LOW,
+    ['business owners benefit from training programs (SCORE, SBA, SBDC)'],
+    ['primary_type'],
+    ['aspirational_goal'])
+
+  // Insurance
+  mergeNeed(resultMap, 'business_insurance', CONF_MEDIUM_LOW,
+    ['commercial operations require insurance coverage'],
+    ['primary_type'],
+    ['active_unmet_need'])
+
+  // Food service keywords → specialized needs
+  if (storyKeywords.some(k => /food truck|food cart|catering|restaurant|bakery|food business|commercial kitchen|commissary|food service/i.test(k))) {
+    mergeNeed(resultMap, 'business_licensing', CONF_HIGH,
+      ['food service business requires health permit, food handler cert'],
+      ['story', 'goals'],
+      ['active_unmet_need'])
+    mergeNeed(resultMap, 'equipment', CONF_HIGH_MEDIUM,
+      ['food service requires commercial cooking/refrigeration equipment'],
+      ['story', 'goals'],
+      ['active_unmet_need'])
+    mergeNeed(resultMap, 'vehicles', CONF_MEDIUM_HIGH,
+      ['mobile food business requires commercial vehicle'],
+      ['story', 'goals'],
+      ['active_unmet_need'])
+  }
+
+  // Retail / storefront keywords → facility needs
+  if (storyKeywords.some(k => /storefront|retail|shop|store|salon|barber|office space/i.test(k))) {
+    mergeNeed(resultMap, 'facilities_repair', CONF_MEDIUM,
+      ['retail/storefront business may need build-out or renovation'],
+      ['story'],
+      ['aspirational_goal'])
+  }
+
+  // Financial hardship on a business profile
+  if (financialFlags.has('low_budget') || financialFlags.has('financial_hardship')) {
+    mergeNeed(resultMap, 'business_startup', CONF_HIGH,
+      ['financial hardship on business profile — startup capital is critical'],
+      ['financial_situation'],
+      ['active_unmet_need'])
+  }
+
+  // Workforce / hiring intent
+  if (storyKeywords.some(k => /hire|hiring|employees|staff|payroll|workforce/i.test(k))) {
+    mergeNeed(resultMap, 'staffing_salary', CONF_MEDIUM,
+      ['business hiring/staffing intent in story'],
+      ['story'],
+      ['aspirational_goal'])
+    mergeNeed(resultMap, 'workforce_development', CONF_MEDIUM_LOW,
+      ['business with hiring needs may qualify for workforce programs'],
+      ['story'],
+      ['aspirational_goal'])
+  }
+
+  // Technology / digital business
+  if (storyKeywords.some(k => /website|ecommerce|e-commerce|online|app|software|point of sale|POS|tech startup/i.test(k))) {
+    mergeNeed(resultMap, 'technology', CONF_MEDIUM_HIGH,
+      ['digital/tech business needs in story'],
+      ['story'],
+      ['active_unmet_need'])
+  }
+
+  // Research / innovation (SBIR/STTR)
+  if (storyKeywords.some(k => /sbir|sttr|r&d|research|innovation|patent|prototype/i.test(k))) {
+    mergeNeed(resultMap, 'research_funding', CONF_HIGH_MEDIUM,
+      ['SBIR/STTR/R&D keywords — business qualifies for innovation funding'],
+      ['story'],
+      ['aspirational_goal'])
+  }
+}
+
 function inferFromExplicitKeywords(intel, resultMap) {
   const { storyKeywords, explicitRequestedNeeds } = intel
 
@@ -620,6 +722,7 @@ export function inferNeeds(intel) {
   inferStudentNeeds(intel, resultMap)
   inferVeteranNeeds(intel, resultMap)
   inferNonprofitNeeds(intel, resultMap)
+  inferBusinessNeeds(intel, resultMap)
   inferFromExplicitKeywords(intel, resultMap)
   inferDisasterContext(intel, resultMap)
   inferEnergyEfficiency(intel, resultMap)

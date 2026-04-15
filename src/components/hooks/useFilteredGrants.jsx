@@ -51,11 +51,12 @@ export function useFilteredGrants(grants, filters, selectedOrgId) {
       );
     }
 
-    // Funder type filter
+    // Funder type filter — checks both frontend funder_type and DB-backed funding_source_type
     if (filters.funderTypes && filters.funderTypes.length > 0) {
-      filtered = filtered.filter(grant =>
-        grant.funder_type && filters.funderTypes.includes(grant.funder_type)
-      );
+      filtered = filtered.filter(grant => {
+        const ft = grant.funder_type ?? grant.funding_source_type
+        return ft && filters.funderTypes.includes(ft)
+      });
     }
 
     // Application method filter

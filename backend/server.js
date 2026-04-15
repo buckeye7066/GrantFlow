@@ -91,9 +91,11 @@ import collegesRouter from './routes/colleges.js'
 import { allowedOriginCheckSQL } from './utils/recordOrigins.js'
 import notificationsRouter from './routes/notifications.js'
 import savedGrantsRouter from './routes/savedGrants.js'
+import foundationsRouter from './routes/foundations.js'
 import { expirePassedDeadlines } from './services/deadlineExpiryService.js'
 import { generateDeadlineNotifications } from './services/deadlineNotificationService.js'
 import { runLinkVerification } from './services/linkVerificationService.js'
+import { validateCriticalImports } from './startup/validateImports.js'
 
 /**
  * Lazy-loading route helper — caches the imported router after first load.
@@ -1670,6 +1672,7 @@ app.use('/api/crawl-logs', crawlLogsRouter);
 app.use('/api/colleges', collegesRouter);
 app.use('/api/notifications', notificationsRouter);
 app.use('/api/saved-grants', savedGrantsRouter);
+app.use('/api/foundations', foundationsRouter);
 
 function resolveBuildSha() {
   return (
@@ -2572,6 +2575,13 @@ if (process.env.NODE_ENV !== 'test') {
   } catch (err) {
     console.error('[AnyaHealth] Failed to start health service:', err?.message || err)
   }
+
+  // Validate critical module imports (non-blocking).
+  // Runs after the server is listening so it doesn't delay startup.
+  // Results are available at GET /api/health/imports for admin diagnostics.
+  validateCriticalImports().catch((err) => {
+    console.error('[startup] Import validation failed unexpectedly:', err?.message || err)
+  })
   });
 } else {
   console.info('[server] NODE_ENV=test; HTTP listener disabled')

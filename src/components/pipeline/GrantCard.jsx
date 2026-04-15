@@ -155,7 +155,15 @@ export default function GrantCard({ grant, organization, organizationName, onSta
               In Pipeline
             </Badge>
           )}
-          {/* Freshness Badge — only shown for stale or unverified opportunities */}
+          {/* Freshness Badges */}
+          {freshness === 'fresh' && (
+            <HelpTip text="Added or verified within the last 30 days.">
+              <Badge variant="outline" className="text-xs bg-green-50 text-green-700 border-green-300 cursor-help">
+                <Sparkles className="w-3 h-3 mr-1" />
+                New
+              </Badge>
+            </HelpTip>
+          )}
           {freshness === 'stale' && (
             <HelpTip text="Last verified 90+ days ago — verify this is still active before applying.">
               <Badge variant="outline" className="text-xs bg-amber-50 text-amber-700 border-amber-300 cursor-help">

@@ -736,6 +736,66 @@ export const NEEDS_TAXONOMY = {
     is_operational: false,
   },
 
+  business_startup: {
+    code: 'business_startup',
+    label: 'Business Startup / Seed Capital',
+    description: 'Startup funding, microloans, seed capital, and small business grants for new ventures',
+    synonyms: [
+      'startup funding', 'seed capital', 'microloan', 'small business grant',
+      'SBA loan', 'business start', 'new business', 'entrepreneurship',
+      'small business', 'venture capital', 'business plan', 'startup grant',
+    ],
+    related_entity_types: [ENTITY_TYPE.BUSINESS, ENTITY_TYPE.INDIVIDUAL, ENTITY_TYPE.NONPROFIT],
+    disallowed_entity_types: [],
+    funding_categories: [FUNDING_CATEGORY.GRANT, FUNDING_CATEGORY.LOAN],
+    example_search_terms: [
+      'small business startup grant', 'SBA microloan', 'entrepreneur grant',
+      'minority business grant', 'women business grant',
+    ],
+    scoring_hint: 'requires_business_intent',
+    is_capital: true,
+    is_operational: false,
+  },
+
+  business_licensing: {
+    code: 'business_licensing',
+    label: 'Licenses, Permits & Certifications',
+    description: 'Business licenses, health permits, food handler certs, professional certifications needed to operate',
+    synonyms: [
+      'business license', 'health permit', 'food handler', 'food handler certification',
+      'professional license', 'occupational license', 'permit fees',
+      'zoning permit', 'fire inspection', 'commercial permit',
+    ],
+    related_entity_types: [ENTITY_TYPE.BUSINESS, ENTITY_TYPE.INDIVIDUAL, ENTITY_TYPE.NONPROFIT],
+    disallowed_entity_types: [],
+    funding_categories: [FUNDING_CATEGORY.OFTEN_NOT_FUNDABLE, FUNDING_CATEGORY.GRANT],
+    example_search_terms: [
+      'small business license assistance', 'permit fee grant', 'business certification help',
+    ],
+    scoring_hint: 'low_funding_availability',
+    is_capital: false,
+    is_operational: true,
+  },
+
+  business_insurance: {
+    code: 'business_insurance',
+    label: 'Business Insurance',
+    description: 'Liability insurance, commercial auto, workers comp, and other business coverage',
+    synonyms: [
+      'liability insurance', 'commercial insurance', 'business insurance',
+      'workers compensation', 'commercial auto insurance', 'general liability',
+    ],
+    related_entity_types: [ENTITY_TYPE.BUSINESS, ENTITY_TYPE.NONPROFIT],
+    disallowed_entity_types: [ENTITY_TYPE.INDIVIDUAL],
+    funding_categories: [FUNDING_CATEGORY.OFTEN_NOT_FUNDABLE],
+    example_search_terms: [
+      'small business insurance assistance', 'nonprofit insurance grant',
+    ],
+    scoring_hint: 'low_funding_availability',
+    is_capital: false,
+    is_operational: true,
+  },
+
   stem_education: {
     code: 'stem_education',
     label: 'STEM / Computer Science Education',

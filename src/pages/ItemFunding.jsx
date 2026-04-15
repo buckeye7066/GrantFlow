@@ -217,7 +217,7 @@ function ItemResultDetail({ opportunity, match, open, onClose }) {
       : []
   return (
     <Dialog open={open} onOpenChange={(next) => !next && onClose()}>
-      <DialogContent className="max-w-3xl">
+      <DialogContent className="max-w-3xl max-h-[85vh] overflow-y-auto">
         <DialogHeader className="space-y-2">
           <DialogTitle className="text-2xl font-semibold text-slate-900">{opportunity.title}</DialogTitle>
           <div className="flex items-center gap-2 text-sm text-slate-500">

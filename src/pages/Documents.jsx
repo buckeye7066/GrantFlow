@@ -755,7 +755,7 @@ const latestDuration = describeDuration(latestEnrichmentJob)
       </AlertDialog>
 
       <Dialog open={Boolean(selectedJob)} onOpenChange={(open) => !open && setSelectedJob(null)}>
-        <DialogContent className="max-w-3xl">
+        <DialogContent className="max-w-3xl max-h-[85vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="flex flex-col gap-1">
               <span>Enrichment job details</span>

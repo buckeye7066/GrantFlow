@@ -17,6 +17,8 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Label } from '@/components/ui/label';
 import { useAuthStore } from '@/stores/authStore';
 import { createLogger } from '@/utils/logger'
+import { CANONICAL_NEED_CATEGORIES, NEED_CATEGORY_GROUPS } from '@/constants/needCategories'
+import ReverseLookup from '@/components/discovery/ReverseLookup'
 import { getProfileContextIncompleteHint } from '@/components/discovery/profileContextIncompleteUi'
 import { openAnyaPanel } from '@/lib/anyaPanel'
 import { buildZeroResultDescription } from '@/components/discovery/discoveryToasts'
@@ -113,16 +115,7 @@ function sectionsMap(profileDetail) {
   return typeof raw === 'object' && raw !== null ? raw : {}
 }
 
-const NEED_CATEGORIES = [
-  { label: 'Housing & Rent', icon: '🏠', query: 'housing rent eviction' },
-  { label: 'Food Assistance', icon: '🥗', query: 'food snap nutrition' },
-  { label: 'Healthcare', icon: '💊', query: 'healthcare medicaid health insurance' },
-  { label: 'Education & Scholarships', icon: '🎓', query: 'education scholarship college' },
-  { label: 'Small Business', icon: '💼', query: 'small business grant loan' },
-  { label: 'Energy & Utilities', icon: '⚡', query: 'utility energy liheap heating' },
-  { label: 'Job Training', icon: '🛠️', query: 'job training workforce employment' },
-  { label: 'Veterans Benefits', icon: '🎖️', query: 'veteran military benefits' },
-]
+// Category taxonomy imported from @/constants/needCategories
 
 export default function DiscoverGrants() {
   const [searchParams] = useSearchParams()
@@ -134,6 +127,7 @@ export default function DiscoverGrants() {
   const [hasSearched, setHasSearched] = useState(false);
   const [profileCompletionHint, setProfileCompletionHint] = useState(null)
   const [categoryQuery, setCategoryQuery] = useState(null)
+  const [scoreHint, setScoreHint] = useState(null)
   const profileSelectorRef = React.useRef(null)
   const searchActionsRef = React.useRef(null)
   const resultsRef = React.useRef(null)
@@ -382,6 +376,7 @@ export default function DiscoverGrants() {
     }
     setIsSearching(true)
     setProfileCompletionHint(null)
+    setScoreHint(null)
     const rawCategory =
       overrideCategoryQuery !== undefined ? overrideCategoryQuery : categoryQuery
     // Never treat React events / non-strings as a category (onClick={fn} passes the click event).
@@ -438,6 +433,7 @@ export default function DiscoverGrants() {
       }
       const opportunities = data?.opportunities ?? []
       setProfileCompletionHint(null)
+      setScoreHint(data?.score_hint || null)
       await handleCrawlerResults(opportunities)
     } catch (error) {
       console.error('[DiscoverGrants] Search error:', error)
@@ -1068,6 +1064,24 @@ export default function DiscoverGrants() {
                 </div>
               </div>
 
+              {/* Score threshold suggestion — when matches exist below the slider */}
+              {scoreHint && scoreHint.bestScore > 0 && (
+                <div className="flex items-center gap-3 rounded-md bg-blue-50 border border-blue-200 p-3">
+                  <span className="text-blue-600 text-lg">&#x1F50D;</span>
+                  <div className="flex-1 text-sm text-blue-900">
+                    <strong>{scoreHint.totalScored}</strong> opportunities were found but scored below your <strong>{minMatchScore}%</strong> threshold (best match: <strong>{scoreHint.bestScore}%</strong>).
+                    {' '}
+                    <button
+                      className="underline font-medium hover:text-blue-700"
+                      onClick={() => { setMinMatchScore(scoreHint.suggestedThreshold); }}
+                    >
+                      Lower to {scoreHint.suggestedThreshold}% to see ~{scoreHint.countAtSuggested} results
+                    </button>
+                    {' '}then re-run the search.
+                  </div>
+                </div>
+              )}
+
               {/* Profile gap checklist with direct links */}
               {selectedProfile?.id && (profileGaps.missingLocation || profileGaps.missingEntityType || profileGaps.missingKeywords) && (
                 <div className="space-y-2">
@@ -1113,27 +1127,46 @@ export default function DiscoverGrants() {
                 </div>
               )}
 
-              {/* Browse by Need categories */}
+              {/* Browse by Need categories — grouped */}
               <div>
-                <p className="text-sm font-medium text-amber-900 mb-2">Not finding what you need? Browse by category:</p>
-                <div className="flex flex-wrap gap-2">
-                  {NEED_CATEGORIES.map((cat) => (
-                    <button
-                      key={cat.label}
-                      type="button"
-                      onClick={async () => {
-                        setCategoryQuery(cat.query)
-                        await handleFindFunding(cat.query)
-                      }}
-                      disabled={isSearching || !selectedProfile}
-                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium bg-white border border-amber-300 text-amber-900 hover:bg-amber-100 hover:border-amber-400 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                    >
-                      <span>{cat.icon}</span>
-                      {cat.label}
-                    </button>
-                  ))}
+                <p className="text-sm font-medium text-amber-900 mb-3">Not finding what you need? Browse by category:</p>
+                <div className="space-y-3">
+                  {NEED_CATEGORY_GROUPS.map((group) => {
+                    const cats = CANONICAL_NEED_CATEGORIES.filter((c) => c.group === group.key)
+                    if (cats.length === 0) return null
+                    return (
+                      <div key={group.key}>
+                        <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1.5">{group.label}</p>
+                        <div className="flex flex-wrap gap-1.5">
+                          {cats.map((cat) => (
+                            <button
+                              key={cat.id}
+                              type="button"
+                              onClick={async () => {
+                                setCategoryQuery(cat.query)
+                                await handleFindFunding(cat.query)
+                              }}
+                              disabled={isSearching || !selectedProfile}
+                              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium bg-white border border-amber-300 text-amber-900 hover:bg-amber-100 hover:border-amber-400 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                            >
+                              <span>{cat.icon}</span>
+                              {cat.label}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )
+                  })}
                 </div>
               </div>
+
+              {/* Reverse-Lookup: Find Funders Like You (for nonprofits, churches, orgs) */}
+              {selectedProfile?.id && (
+                <ReverseLookup
+                  profileId={selectedProfile.id}
+                  profileName={selectedProfile.display_name ?? selectedProfile.name}
+                />
+              )}
 
               <div className="flex flex-wrap gap-2 pt-1">
                 <Button

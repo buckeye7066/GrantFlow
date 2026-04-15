@@ -26,6 +26,7 @@ import {
 } from '../utils/accessControl.js'
 import { isDesignatedProfileId } from '../utils/ensureDesignatedProfiles.js'
 import { resolveUploadsDir } from '../utils/uploadsDir.js'
+import { syncProfileFieldsFromSection } from '../utils/profileSectionSync.js'
 
 const router = express.Router()
 
@@ -1465,6 +1466,14 @@ router.put('/:id/sections/:sectionKey', async (req, res) => {
   )
 
   await upsert.run(id, sectionKey, JSON.stringify(data), updated_by ?? null)
+
+  // v4: Sync key section fields (state, zip, veteran, disability) to profiles table
+  // so shallow reads in matching and Anya work correctly.
+  try {
+    syncProfileFieldsFromSection(req.db, id, sectionKey, data)
+  } catch (syncErr) {
+    console.warn(`[profiles] Section sync failed for ${id}/${sectionKey}:`, syncErr?.message)
+  }
 
   // Keep profile_emails in sync with the profile's own email (basic_information.email) and contacts.
   // Product requirement: the email on the profile implies access for that user.

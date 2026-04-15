@@ -79,6 +79,15 @@ export async function processProfileEnrichmentJob({ db, job, profileContext, get
     throw new Error('Invalid job object')
   }
 
+  // Verify the profile still exists before writing to profile_sections.
+  // The snapshot may reference a profile that was deleted after job creation.
+  const profileExists = await db
+    .prepare('SELECT id FROM profiles WHERE id = ? LIMIT 1')
+    .get(profile.id)
+  if (!profileExists) {
+    throw new Error(`Profile ${profile.id} no longer exists — cannot enrich`)
+  }
+
   const parameters = job.parameters ?? {}
   const sectionsParam = parameters.sections
   const sectionsToEnrich = Array.isArray(sectionsParam) && sectionsParam.length > 0 ? sectionsParam : ['basic_information']
@@ -148,7 +157,7 @@ export async function processProfileEnrichmentJob({ db, job, profileContext, get
       sections_attempted: sectionsToEnrich,
       reason: result.error ?? 'AI provider unavailable',
     }
-    db.prepare(
+    await db.prepare(
       `
         UPDATE crawler_jobs
         SET status = 'completed',

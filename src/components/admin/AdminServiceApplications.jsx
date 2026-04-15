@@ -68,12 +68,18 @@ export default function AdminServiceApplications() {
       const apps = response?.applications ?? response?.data?.applications ?? response;
       setApplications(Array.isArray(apps) ? apps : []);
     } catch (error) {
-      console.error('Failed to fetch applications:', error);
-      toast({
-        variant: 'destructive',
-        title: 'Error',
-        description: 'Failed to load service applications',
-      });
+      // Auth/permission errors (401/403) are expected during bootstrap or for
+      // non-admin users — don't show a scary toast, just log quietly.
+      if (error?.status === 401 || error?.status === 403) {
+        console.warn('[AdminServiceApplications] Auth/permission error fetching applications:', error.status);
+      } else {
+        console.error('Failed to fetch applications:', error);
+        toast({
+          variant: 'destructive',
+          title: 'Error',
+          description: 'Failed to load service applications',
+        });
+      }
     } finally {
       setLoading(false);
     }
@@ -269,7 +275,7 @@ export default function AdminServiceApplications() {
 
         {/* Detail Dialog */}
         <Dialog open={!!selectedApp} onOpenChange={() => setSelectedApp(null)}>
-          <DialogContent className="max-w-2xl">
+          <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
             <DialogHeader>
               <DialogTitle>{selectedApp?.full_name}</DialogTitle>
               <DialogDescription>

@@ -3,6 +3,7 @@ import fs from 'fs'
 import path from 'path'
 import { fileURLToPath } from 'url'
 import { getSafeHealthSummary } from '../services/diagnosticsService.js'
+import { getImportValidationResult } from '../startup/validateImports.js'
 import { ensureUploadsDirWritable, isLikelyPersistentPath } from '../utils/uploadsDir.js'
 import { getDataReadiness, getSystemAlerts } from '../services/dataReadinessService.js'
 import { getPipelineHealth } from '../middleware/pipelineMonitor.js'
@@ -320,6 +321,24 @@ router.get('/api/health/deployment', (_req, res) => {
     nodeVersion: process.version,
     matcherVersion: MATCHER_VERSION,
     relevanceFilterRuleCount: RELEVANCE_RULES.length,
+    timestamp: new Date().toISOString(),
+  })
+})
+
+// Import validation: surfaces modules that failed to load at startup
+router.get('/api/health/imports', (_req, res) => {
+  const result = getImportValidationResult()
+  if (!result) {
+    return res.status(503).json({
+      ok: false,
+      status: 'pending',
+      message: 'Import validation has not run yet',
+      timestamp: new Date().toISOString(),
+    })
+  }
+  const statusCode = result.ok ? 200 : 503
+  return res.status(statusCode).json({
+    ...result,
     timestamp: new Date().toISOString(),
   })
 })

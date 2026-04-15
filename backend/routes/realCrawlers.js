@@ -297,8 +297,20 @@ router.post('/run', ensureAuth, async (req, res) => {
         thresholdFallbackMessage = `No results met initial filters. Showing best available matches above ${min_match_score}%.`
       }
     } else if (strictMinScore && filtered.length === 0 && allMapped.length > 0) {
+      // Compute score distribution so frontend can suggest a better threshold
+      const rawScores = allMapped
+        .map(o => typeof o.match_score === 'number' ? o.match_score : 0)
+        .sort((a, b) => b - a)
+      const bestScore = rawScores[0] || 0
+      // Suggest a threshold that would return at least 5 results (rounded down to nearest 5)
+      const suggestedIdx = Math.min(4, rawScores.length - 1)
+      const suggestedThreshold = Math.max(5, Math.floor(rawScores[suggestedIdx] / 5) * 5)
+      const countAtSuggested = rawScores.filter(s => s >= suggestedThreshold).length
+      thresholdFallbackMessage = null // ensure no stale message
+      // Attach to response via closure variable
+      allMapped._scoreHint = { bestScore, suggestedThreshold, countAtSuggested, totalScored: rawScores.length }
       console.info(
-        `[RealCrawlers] strict min_match_score=${min_match_score} — skipping threshold fallback (${allMapped.length} raw)`,
+        `[RealCrawlers] strict min_match_score=${min_match_score} — skipping threshold fallback (${allMapped.length} raw, best=${bestScore}, suggest=${suggestedThreshold})`,
       )
     }
 
@@ -349,6 +361,8 @@ router.post('/run', ensureAuth, async (req, res) => {
       min_match_score,
       duration,
       opportunities: filtered,
+      score_hint: allMapped._scoreHint || null,
+      threshold_fallback_message: thresholdFallbackMessage || null,
       used_live: false,
       used_db_fallback: false,
       used_curated: true,

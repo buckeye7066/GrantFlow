@@ -1,5 +1,14 @@
 import { loadProfileContext } from '../services/profileHelpers.js'
 import { clamp01, jaccard, tokenize, safeJsonParse, jsonForDb, sqlNowLiteral } from './vnextUtils.js'
+
+/** Parse a DB field that may be a JSON array, CSV string, or already an array. */
+function parseArrayField(value) {
+  if (Array.isArray(value)) return value
+  if (!value || typeof value !== 'string') return []
+  const trimmed = value.trim()
+  if (trimmed.startsWith('[')) { try { const a = JSON.parse(trimmed); if (Array.isArray(a)) return a } catch { /* fall through */ } }
+  return trimmed.split(',').map(s => s.trim()).filter(Boolean)
+}
 import { writeAuditEvent } from './auditEventsService.js'
 
 function pickAmountExpected(opp) {
@@ -29,18 +38,8 @@ function fitScore(profileCtx, opp) {
   const oppTokens = []
   oppTokens.push(...tokenize(opp?.title))
   oppTokens.push(...tokenize(opp?.description))
-  try {
-    const keywords = typeof opp?.keywords === 'string' ? JSON.parse(opp.keywords) : opp?.keywords
-    if (Array.isArray(keywords)) oppTokens.push(...keywords.map(String))
-  } catch {
-    // ignore JSON parse errors (best-effort)
-  }
-  try {
-    const cats = typeof opp?.categories === 'string' ? JSON.parse(opp.categories) : opp?.categories
-    if (Array.isArray(cats)) oppTokens.push(...cats.map(String))
-  } catch {
-    // ignore JSON parse errors (best-effort)
-  }
+  oppTokens.push(...parseArrayField(opp?.keywords).map(String))
+  oppTokens.push(...parseArrayField(opp?.categories).map(String))
 
   return clamp01(0.15 + 0.85 * jaccard(profileTokens, oppTokens))
 }

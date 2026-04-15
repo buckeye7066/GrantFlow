@@ -1637,7 +1637,12 @@ router.post('/bulk-populate', async (req, res) => {
       return res.status(500).json({ error: 'ZIP coordinates file not found' })
     }
     
-    const zipMap = JSON.parse(fs.readFileSync(zipFile, 'utf8'))
+    let zipMap
+    try {
+      zipMap = JSON.parse(fs.readFileSync(zipFile, 'utf8'))
+    } catch (err) {
+      return res.status(500).json({ error: 'Failed to parse ZIP coordinates file: ' + err.message })
+    }
     const allZipCodes = Object.keys(zipMap).slice(0, max_zips)
     
     console.info(`[bulk-populate] Starting population of ${allZipCodes.length} ZIP codes with ${limit_per_zip} opportunities each`)
@@ -1800,11 +1805,16 @@ router.post('/seed-local-networks', async (req, res) => {
     const __filename = fileURLToPath(import.meta.url)
     const __dirname = path.dirname(__filename)
     const dataPath = path.join(__dirname, '..', 'data', 'local_assistance_networks.json')
-    
-    const data = JSON.parse(fs.readFileSync(dataPath, 'utf-8'))
-    
+
+    let data
+    try {
+      data = JSON.parse(fs.readFileSync(dataPath, 'utf-8'))
+    } catch (err) {
+      return res.status(500).json({ error: 'Failed to parse local assistance networks file: ' + err.message })
+    }
+
     let inserted = 0, updated = 0, errors = 0
-    
+
     for (const net of data.networks) {
       try {
         const existing = await req.db.prepare('SELECT id FROM funding_opportunities WHERE id = ?').get(net.id)
@@ -1897,11 +1907,16 @@ router.post('/seed-state-assistance', async (req, res) => {
     const __filename = fileURLToPath(import.meta.url)
     const __dirname = path.dirname(__filename)
     const dataPath = path.join(__dirname, '..', 'data', 'state_assistance_programs.json')
-    
-    const data = JSON.parse(fs.readFileSync(dataPath, 'utf-8'))
-    
+
+    let data
+    try {
+      data = JSON.parse(fs.readFileSync(dataPath, 'utf-8'))
+    } catch (err) {
+      return res.status(500).json({ error: 'Failed to parse state assistance programs file: ' + err.message })
+    }
+
     let inserted = 0, updated = 0, errors = 0
-    
+
     for (const prog of data.programs) {
       try {
         const existing = await req.db.prepare('SELECT id FROM funding_opportunities WHERE id = ?').get(prog.id)
@@ -2111,9 +2126,14 @@ router.post('/seed-real-opportunities', async (req, res) => {
       return res.status(404).json({ error: 'Real opportunities data file not found' })
     }
     
-    const data = JSON.parse(fs.readFileSync(dataPath, 'utf8'))
+    let data
+    try {
+      data = JSON.parse(fs.readFileSync(dataPath, 'utf8'))
+    } catch (err) {
+      return res.status(500).json({ error: 'Failed to parse real opportunities file: ' + err.message })
+    }
     const opportunities = data.opportunities || []
-    
+
     let inserted = 0
     let updated = 0
     const errors = []
@@ -2468,6 +2488,45 @@ router.post('/profile-change', standardRateLimiter, async (req, res) => {
   } catch (err) {
     console.error('[profile-reval]', err)
     res.status(500).json({ error: 'internal_error' })
+  }
+})
+
+// ── Foundation 990 Batch Ingestion ───────────────────────────────────────────
+router.post('/foundation-990/batch', async (req, res) => {
+  try {
+    const {
+      states = ['nationwide'],
+      ntee_codes = ['T'],
+      min_grant_amount = 10000,
+      max_pages = 20,
+    } = req.body ?? {}
+
+    const creation = await createCrawlerJob(req.db, {
+      type: 'foundation_990',
+      parameters: { states, ntee_codes, min_grant_amount, max_pages },
+      requestedBy: req.userId ?? 'admin',
+      buildSnapshot: false,
+    })
+
+    const job = await req.db.prepare('SELECT * FROM crawler_jobs WHERE id = ?').get(creation.jobId)
+
+    setImmediate(() => {
+      dispatchCrawlerJob({
+        db: req.db,
+        jobId: job.id,
+        uploadDir,
+        getOpenAI,
+      })
+    })
+
+    res.json({
+      success: true,
+      job_id: job.id,
+      message: `Foundation 990 batch job queued: ${states.length} states, ${ntee_codes.length} NTEE codes`,
+    })
+  } catch (err) {
+    console.error('[foundation-990/batch]', err)
+    res.status(500).json({ error: err.message })
   }
 })
 
