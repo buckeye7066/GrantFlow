@@ -10,12 +10,10 @@
  */
 
 import fetch from 'node-fetch';
-
-// Public, unauthenticated endpoint (no API keys, no auth headers).
-// v2 is the current Grants.gov API version (2026).
-const SEARCH2_URL = 'https://api.grants.gov/v2/api/search2';
-// Simpler Grants API (newer, JSON-first, paginated):
-const SIMPLER_OPPORTUNITY_URL = 'https://api.simpler.grants.gov/v1/opportunities';
+import {
+  GRANTS_GOV_SEARCH2_URL as SEARCH2_URL,
+  SIMPLER_GRANTS_OPPORTUNITY_URL as SIMPLER_OPPORTUNITY_URL,
+} from '../../config/grantsGovEndpoints.js';
 const RATE_LIMIT_MS = 1000; // 1 second between requests
 
 let lastRequestTime = 0;

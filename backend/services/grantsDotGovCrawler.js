@@ -5,29 +5,18 @@
  * https://www.grants.gov/web/grants/search-grants.html
  * 
  * This uses the Grants.gov API to get actual federal grant opportunities.
- * NOTE: The search2 endpoint requires GRANTS_GOV_API_KEY (returns 401 without it).
+ * NOTE: search2 works without GRANTS_GOV_API_KEY; when set, X-API-Key is sent.
  */
 
 import axios from 'axios';
 import { upsertFundingOpportunity } from './opportunityInserter.js';
+import {
+  GRANTS_GOV_SEARCH2_URL as GRANTS_GOV_SEARCH2,
+  GRANTS_GOV_DETAIL_URL as GRANTS_GOV_VIEW,
+} from '../config/grantsGovEndpoints.js';
 
-// Grants.gov API endpoints
-// NOTE: The legacy `grantsws/rest/opportunities/search/` endpoint does not accept GET (405).
-// Use the public REST API `search2` endpoint (POST JSON).
-// IMPORTANT: Use v2 when available; fall back to v1 for backward compatibility.
-// As of 2026, api.grants.gov/v2/ is the current base; search2 is still served at v1 path.
-const GRANTS_GOV_SEARCH2 = 'https://api.grants.gov/v2/api/search2';
-const GRANTS_GOV_VIEW = 'https://www.grants.gov/search-results-detail/';
-
-// Grants.gov API key — required since the search2 endpoint started returning 401 Unauthorized.
-// Set GRANTS_GOV_API_KEY in your environment (.env / Railway / Vercel secrets).
+// Optional: when GRANTS_GOV_API_KEY is set, search2 requests include X-API-Key.
 const GRANTS_GOV_API_KEY = process.env.GRANTS_GOV_API_KEY || ''
-if (!GRANTS_GOV_API_KEY) {
-  console.warn(
-    '[GrantsGov] GRANTS_GOV_API_KEY env var is not set; ' +
-      'Grants.gov search2 requests will likely return 401 Unauthorized.',
-  )
-}
 
 /**
  * Fetch opportunities from Grants.gov API

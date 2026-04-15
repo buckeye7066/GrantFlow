@@ -242,12 +242,28 @@ export default function ComprehensiveApplicationForm({ onSubmit, onCancel, isSub
     keywords: [],
     focus_areas: [],
     ...(initialData && typeof initialData === "object" ? initialData : {}),
+    // Ensure Select-bound fields are never null from initialData
+    financial_need_level: (initialData?.financial_need_level) ?? "",
+    medicaid_waiver_program: (initialData?.medicaid_waiver_program) ?? "none",
+    immigration_status: (initialData?.immigration_status) ?? "us_citizen",
+    political_party: (initialData?.political_party) ?? "",
+    state: (initialData?.state) ?? "",
   }));
 
   useEffect(() => {
     if (appliedInitialDataRef.current) return;
     if (!initialData || typeof initialData !== "object") return;
-    setFormData((prev) => ({ ...prev, ...initialData }));
+    // Strip null/undefined from fields bound to Select components so they stay
+    // controlled (empty string) rather than flipping to uncontrolled.
+    const SELECT_FIELDS = [
+      'financial_need_level', 'medicaid_waiver_program', 'immigration_status',
+      'political_party', 'state',
+    ];
+    const sanitized = { ...initialData };
+    SELECT_FIELDS.forEach((f) => {
+      if (sanitized[f] == null) sanitized[f] = '';
+    });
+    setFormData((prev) => ({ ...prev, ...sanitized }));
     appliedInitialDataRef.current = true;
   }, [initialData]);
 

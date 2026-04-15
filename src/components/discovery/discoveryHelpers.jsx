@@ -1,5 +1,6 @@
 import client from '@/api/client';
 import { createLogger } from "@/utils/logger";
+import { isRenderableUrl } from '@/lib/matchDisplayThresholds';
 
 /**
  * Helper functions for discovery operations
@@ -78,22 +79,18 @@ export async function runComprehensiveMatch(selectedOrg, searchFilters) {
     source_id: opp.source_id,
     title: opp.program_name,
     sponsor: opp.sponsor,
-    // Only use URL if it's valid (not a placeholder)
     url: (() => {
       const raw = opp.url;
-      if (!raw) return null;
-      if (raw.includes('example.org') || raw.includes('example.com')) {
-        log.warn('placeholder URL rejected', { id: opp.id, title: opp.program_name, url: raw });
+      if (!isRenderableUrl(raw)) {
+        if (raw) log.warn('placeholder URL rejected', { id: opp.id, title: opp.program_name, url: raw });
         return null;
       }
       return raw;
     })(),
     application_url: (() => {
-      // Prefer the dedicated application_url field if the backend provides it
       const appUrl = opp.application_url || opp.url;
-      if (!appUrl) return null;
-      if (appUrl.includes('example.org') || appUrl.includes('example.com')) {
-        log.warn('placeholder application_url rejected', { id: opp.id, title: opp.program_name, application_url: appUrl });
+      if (!isRenderableUrl(appUrl)) {
+        if (appUrl) log.warn('placeholder application_url rejected', { id: opp.id, title: opp.program_name, application_url: appUrl });
         return null;
       }
       return appUrl;

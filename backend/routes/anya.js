@@ -216,6 +216,9 @@ router.post('/sessions/:sessionId/messages', async (req, res) => {
     const currentPage = (typeof req.body?.current_page === 'string' && req.body.current_page.trim())
       ? req.body.current_page.trim()
       : null
+    const pageContext = (req.body?.page_context && typeof req.body.page_context === 'object')
+      ? req.body.page_context
+      : null
     if (mode === 'admin_ops' && !req.ctx?.isAdmin) {
       return res.status(403).json({ error: 'Admin privileges required' })
     }
@@ -242,6 +245,7 @@ router.post('/sessions/:sessionId/messages', async (req, res) => {
       assistantText = await generateAssistantResponse(req.db, req.ctx, req.params.sessionId, {
         content,
         currentPage,
+        pageContext,
       })
     } catch (assistantError) {
       console.error('[anya] Unable to generate assistant reply:', assistantError)

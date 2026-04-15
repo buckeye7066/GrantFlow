@@ -32,8 +32,9 @@ export const USER_PROFILE_MAPPINGS = {
   // Liubov
   'anyawhite@rocketmail.com': 'profile-luibov-samoylenko',
 
-  // Melissa Justus + William — add owner primary_email here once confirmed (enables login → profile attachment):
-  // 'owner.email@example.com': 'profile-melissa-justus',
+  // Melissa Justus — swap to the real owner email when known (must match designatedProfiles owner_email).
+  'melissa.justus@example.com': 'profile-melissa-justus',
+  // William — add owner primary_email when known:
   // 'william.owner@example.com': 'profile-william',
 }
 

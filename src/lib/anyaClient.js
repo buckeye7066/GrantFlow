@@ -53,12 +53,13 @@ export async function getAnyaMessages(sessionId, { limit, direction } = {}) {
   })
 }
 
-export async function postAnyaMessage(sessionId, message, { currentPage } = {}) {
+export async function postAnyaMessage(sessionId, message, { currentPage, pageContext } = {}) {
   if (!sessionId) {
     throw new Error("Session id required")
   }
   const payload = { message }
   if (currentPage) payload.current_page = currentPage
+  if (pageContext && typeof pageContext === 'object') payload.page_context = pageContext
   return apiFetch(`/api/anya/sessions/${sessionId}/messages`, {
     method: "POST",
     body: JSON.stringify(payload),

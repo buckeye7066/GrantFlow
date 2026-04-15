@@ -1,25 +1,18 @@
 import { requestJson } from './httpClient.js'
 import { toNumberOrNull, toTrimmedStringOrNull } from './types.js'
-
-// Grants.gov search2 endpoint — now requires an API key (returns 401 without one).
-// Set GRANTS_GOV_API_KEY in your environment (.env / Railway / Vercel secrets).
-const GRANTS_GOV_SEARCH_URL = 'https://api.grants.gov/v1/api/search2'
-const GRANTS_GOV_VIEW_URL = 'https://www.grants.gov/search-results-detail/'
+import {
+  GRANTS_GOV_SEARCH2_URL as GRANTS_GOV_SEARCH_URL,
+  GRANTS_GOV_DETAIL_URL as GRANTS_GOV_VIEW_URL,
+} from '../../config/grantsGovEndpoints.js'
 
 const GRANTS_GOV_API_KEY = process.env.GRANTS_GOV_API_KEY || ''
-if (!GRANTS_GOV_API_KEY) {
-  console.warn(
-    '[grants.gov] GRANTS_GOV_API_KEY env var is not set; ' +
-      'Grants.gov search2 requests will likely return 401 Unauthorized.',
-  )
-}
 
 /**
  * Grants.gov (grantsws) opportunity search.
  *
  * Notes:
- * - The search2 endpoint requires an `X-API-Key` header since 2026 (returns 401 without it).
- * - Obtain a key via the Grants.gov Help Desk: https://www.grants.gov/api/api-guide
+ * - Search2 does not require a key; we send `X-API-Key` only when `GRANTS_GOV_API_KEY` is set.
+ * - For Help Desk–issued keys or future keyed behavior, see https://www.grants.gov/api/api-guide
  *
  * @param {Object=} query
  * @param {string=} query.keyword

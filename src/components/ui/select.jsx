@@ -6,7 +6,16 @@ import { Check, ChevronDown, ChevronUp } from "lucide-react"
 
 import { cn } from "@/lib/utils"
 
-const Select = SelectPrimitive.Root
+// Normalize null/undefined value props to '' so Radix never flips
+// from uncontrolled → controlled. Only applies when a `value` prop is
+// explicitly passed; Select components with no value prop remain uncontrolled.
+const Select = (allProps) => {
+  const hasValueProp = 'value' in allProps
+  const { value, ...rest } = allProps
+  if (!hasValueProp) return <SelectPrimitive.Root {...rest} />
+  return <SelectPrimitive.Root value={value ?? ''} {...rest} />
+}
+Select.displayName = SelectPrimitive.Root.displayName
 
 const SelectGroup = SelectPrimitive.Group
 

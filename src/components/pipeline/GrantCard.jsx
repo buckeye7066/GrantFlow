@@ -13,42 +13,34 @@ import { format, isPast } from 'date-fns';
 import { Link, useNavigate } from 'react-router-dom';
 import { createPageUrl } from '@/utils';
 import HelpTip from '@/components/help/HelpTip';
+import { isRenderableUrl } from '@/lib/matchDisplayThresholds';
 
-// Helper to get a valid grant detail URL
 function getGrantDetailUrl(grant, isDiscoveryResult = false) {
-  // If grant has an ID, always go to internal detail page
   if (grant.id) {
     return createPageUrl("GrantDetail", { id: grant.id });
   }
-  
-  // For discovery results without ID, go to opportunities page
+
   if (isDiscoveryResult) {
     if (grant.title) {
       return createPageUrl("FundingOpportunities") + `?search=${encodeURIComponent(grant.title)}`;
     }
     return createPageUrl("FundingOpportunities");
   }
-  
-  // Check if URL is valid and not a placeholder
+
   const url = grant.url || grant.application_url || grant.source_url;
-  if (url && !url.includes('example.org') && !url.includes('placeholder') && !url.includes('example.com')) {
-    // External URL - will be handled by the Link component
+  if (isRenderableUrl(url)) {
     return url;
   }
-  
-  // No valid URL - go to opportunities page with search
+
   if (grant.title) {
     return createPageUrl("FundingOpportunities") + `?search=${encodeURIComponent(grant.title)}`;
   }
-  
+
   return createPageUrl("FundingOpportunities");
 }
 
-// Check if a URL is a valid external link (not a placeholder)
 function isValidExternalUrl(url) {
-  if (!url) return false;
-  if (url.includes('example.org') || url.includes('example.com') || url.includes('placeholder')) return false;
-  return url.startsWith('http://') || url.startsWith('https://');
+  return isRenderableUrl(url);
 }
 
 export default function GrantCard({ grant, organization, organizationName, onStatusChange, onStarToggle, onDelete, isDragging, checklistProgress, showSummary = false, isInPipeline = false, onAddToPipeline = null }) {

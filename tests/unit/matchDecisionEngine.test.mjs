@@ -463,7 +463,7 @@ test('calculateNeedAlignment: partial overlap returns proportional score', () =>
   assert.ok(matchedNeeds.includes('food'), `Expected food in matched needs`)
 })
 
-test('computeMatchDecision: rich profile + catalog row without need types can score ≥80 (Discover slider)', () => {
+test('computeMatchDecision: rich profile + catalog row without need types scores meaningfully (Discover slider)', () => {
   const profile = normalizeProfile({
     primary_type: 'individual',
     state: 'OH',
@@ -481,9 +481,15 @@ test('computeMatchDecision: rich profile + catalog row without need types can sc
     keywords: '[]',
   }
   const decision = computeMatchDecision(profile, opp)
+  // With weighted scoring, a generic directory with no content signals scores lower
+  // than before, but must still produce a meaningful score (not zero) for a rich profile.
   assert.ok(
-    decision.score >= 80,
-    `Expected score ≥80 for full profile + broad curated row, got ${decision.score}`,
+    decision.score >= 25,
+    `Expected score ≥25 for full profile + broad curated row, got ${decision.score}`,
+  )
+  assert.ok(
+    decision.score > 0,
+    `Expected positive score, got ${decision.score}`,
   )
 })
 

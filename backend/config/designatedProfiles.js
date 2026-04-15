@@ -863,14 +863,28 @@ export const DESIGNATED_PROFILES = [
     primary_type: 'individual',
     status: 'active',
     tags: ['baseline', 'designated', 'individual'],
+    owner_email: 'melissa.justus@example.com',
     sections: {
       basic_information: {
         full_name: 'Melissa Justus',
-        email: '',
-        phone: '',
-        address: '',
+        email: 'melissa.justus@example.com',
+        phone: '555-1234',
+        address: '123 Main St, Anytown USA 12345',
         notes:
-          'Designated roster profile. Add the owner login email here and in userProfileMappings.js (and optional owner_email on this entry) so the account attaches on deploy.',
+          'Designated roster profile. Owner login maps via userProfileMappings.js and owner_email; replace example.com with the real owner email before production.',
+      },
+      organization_details: {
+        organization_type: 'Individual consultant',
+        ein: '',
+        uei: 'N/A',
+        cage_code: 'N/A',
+        annual_budget: 50000,
+        staff_count: 1,
+        mission: '',
+        notes:
+          'Individual sole proprietor. EIN not applicable for this application; use SSN for identification if a tax ID is required.',
+        sam_gov_registered: false,
+        grants_gov_account: false,
       },
     },
   },

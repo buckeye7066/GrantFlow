@@ -27,25 +27,24 @@ function makeOpp(overrides = {}) {
 }
 
 describe('content_procurement_contract rule', () => {
-  it('rejects a request for proposals title', () => {
-    const opp = makeOpp({ title: 'Request for Proposals for IT Services' })
+  it('rejects a contract opportunity for individual profiles', () => {
+    const opp = makeOpp({ title: 'Contract Opportunity for IT Vendor Services' })
     const result = applyRelevanceFilter(opp, BASE_PROFILE)
     expect(result.pass).toBe(false)
     expect(result.ruleId).toBe('content_procurement_contract')
   })
 
-  it('rejects an RFP in description', () => {
-    const opp = makeOpp({ description: 'Submit your RFP by end of month' })
+  it('passes RFP/solicitation for individual profiles (narrowed pattern)', () => {
+    const opp = makeOpp({ title: 'Request for Proposals for Community Services' })
     const result = applyRelevanceFilter(opp, BASE_PROFILE)
-    expect(result.pass).toBe(false)
-    expect(result.ruleId).toBe('content_procurement_contract')
+    expect(result.pass).toBe(true)
   })
 
-  it('rejects a solicitation title', () => {
-    const opp = makeOpp({ title: 'Solicitation for Technology Vendor Services' })
-    const result = applyRelevanceFilter(opp, BASE_PROFILE)
-    expect(result.pass).toBe(false)
-    expect(result.ruleId).toBe('content_procurement_contract')
+  it('passes a contract opportunity for organization profiles', () => {
+    const orgProfile = { ...BASE_PROFILE, primary_type: 'organization' }
+    const opp = makeOpp({ title: 'Contract Opportunity for IT Vendor Services' })
+    const result = applyRelevanceFilter(opp, orgProfile)
+    expect(result.pass).toBe(true)
   })
 
   it('passes a normal grant opportunity', () => {
@@ -91,17 +90,7 @@ describe('content_fundraising_crowdfunding rule', () => {
 })
 
 describe('content_pi_institution_restricted rule', () => {
-  it('rejects an institutions of higher education eligibility statement', () => {
-    const opp = makeOpp({
-      title: 'Research Grant',
-      description: 'Eligible Applicants: Institutions of Higher Education',
-    })
-    const result = applyRelevanceFilter(opp, BASE_PROFILE)
-    expect(result.pass).toBe(false)
-    expect(result.ruleId).toBe('content_pi_institution_restricted')
-  })
-
-  it('rejects a principal investigator requirement', () => {
+  it('rejects a principal investigator requirement for individual profiles', () => {
     const opp = makeOpp({
       description: 'Applicants must have a principal investigator on file',
     })
@@ -110,7 +99,7 @@ describe('content_pi_institution_restricted rule', () => {
     expect(result.ruleId).toBe('content_pi_institution_restricted')
   })
 
-  it('rejects a faculty member requirement', () => {
+  it('rejects a faculty member requirement for individual profiles', () => {
     const opp = makeOpp({
       description: 'Open to any faculty member at an accredited university',
     })
@@ -119,11 +108,29 @@ describe('content_pi_institution_restricted rule', () => {
     expect(result.ruleId).toBe('content_pi_institution_restricted')
   })
 
-  it('rejects doctoral dissertation research', () => {
+  it('rejects doctoral dissertation research for individual profiles', () => {
     const opp = makeOpp({ title: 'Doctoral Dissertation Research Fellowship' })
     const result = applyRelevanceFilter(opp, BASE_PROFILE)
     expect(result.pass).toBe(false)
     expect(result.ruleId).toBe('content_pi_institution_restricted')
+  })
+
+  it('passes PI/institution opportunities for nonprofit profiles', () => {
+    const nonprofitProfile = { ...BASE_PROFILE, primary_type: 'nonprofit' }
+    const opp = makeOpp({
+      description: 'Applicants must have a principal investigator on file',
+    })
+    const result = applyRelevanceFilter(opp, nonprofitProfile)
+    expect(result.pass).toBe(true)
+  })
+
+  it('passes PI/institution opportunities for student profiles', () => {
+    const studentProfile = { ...BASE_PROFILE, primary_type: 'student' }
+    const opp = makeOpp({
+      description: 'Applicants must have a principal investigator on file',
+    })
+    const result = applyRelevanceFilter(opp, studentProfile)
+    expect(result.pass).toBe(true)
   })
 
   it('passes a normal scholarship that does not contain PI/institution-only language', () => {
@@ -136,8 +143,8 @@ describe('content_pi_institution_restricted rule', () => {
   })
 })
 
-describe('content_rolling_no_clear_deadline rule', () => {
-  it('rejects a rolling-basis opportunity with no deadline fields', () => {
+describe('rolling programs (rule 19 removed)', () => {
+  it('passes a rolling-basis opportunity — rolling programs are legitimate funding', () => {
     const opp = makeOpp({
       title: 'Community Support Fund',
       description: 'Applications accepted on a rolling basis',
@@ -148,43 +155,23 @@ describe('content_rolling_no_clear_deadline rule', () => {
       application_deadline: null,
     })
     const result = applyRelevanceFilter(opp, BASE_PROFILE)
-    expect(result.pass).toBe(false)
-    expect(result.ruleId).toBe('content_rolling_no_clear_deadline')
+    expect(result.pass).toBe(true)
   })
 
-  it('rejects open-until-filled with no deadline', () => {
+  it('passes open-until-filled opportunities', () => {
     const opp = makeOpp({
       description: 'This position is open until filled',
       deadline: undefined,
       close_date: undefined,
     })
     const result = applyRelevanceFilter(opp, BASE_PROFILE)
-    expect(result.pass).toBe(false)
-    expect(result.ruleId).toBe('content_rolling_no_clear_deadline')
+    expect(result.pass).toBe(true)
   })
 
-  it('passes a rolling opportunity that has a concrete deadline', () => {
+  it('passes a rolling opportunity with a concrete deadline', () => {
     const opp = makeOpp({
       description: 'Applications accepted on a rolling basis',
       deadline: '2025-12-31',
-    })
-    const result = applyRelevanceFilter(opp, BASE_PROFILE)
-    expect(result.pass).toBe(true)
-  })
-
-  it('passes a rolling opportunity that has a closing_date', () => {
-    const opp = makeOpp({
-      description: 'Open until filled, rolling basis',
-      closing_date: '2025-06-30',
-    })
-    const result = applyRelevanceFilter(opp, BASE_PROFILE)
-    expect(result.pass).toBe(true)
-  })
-
-  it('passes a normal grant with no rolling language', () => {
-    const opp = makeOpp({
-      title: 'Community Resilience Fund',
-      description: 'Apply by the posted deadline for this funding opportunity',
     })
     const result = applyRelevanceFilter(opp, BASE_PROFILE)
     expect(result.pass).toBe(true)
