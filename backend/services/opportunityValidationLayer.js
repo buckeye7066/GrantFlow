@@ -395,6 +395,7 @@ export function validateMultiProfileMatching(opportunities) {
 
 export default {
   validateUrlFormat,
+    filterActionableOpportunities,
   validateRequiredFields,
   checkDuplicate,
   validateOpportunityStrict,
