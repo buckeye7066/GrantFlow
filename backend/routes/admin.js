@@ -3452,7 +3452,7 @@ router.post('/ingest', async (req, res) => {
     console.info('[admin/ingest] Starting manual ingestion...');
     
     // Import connectors dynamically
-    const { fetchGrantsGov } = await import('../services/sources/grantsGov.js');
+    const { fetchSamGov: fetchGrantsGov } = await import('../services/sources/samGov.js');
     const { fetchUSASpending } = await import('../services/sources/usaSpending.js');
     const { ingestOpportunities } = await import('../services/sources/ingestionService.js');
     
