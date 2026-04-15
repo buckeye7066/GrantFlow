@@ -537,14 +537,6 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
     geo_eligibility: opportunity.geo_eligibility != null ? JSON.stringify(opportunity.geo_eligibility) : null,
     signal_tags: JSON.stringify(ensureArray(opportunity.signal_tags)),
     crawler_version: opportunity.crawler_version ?? null,
-    // Housing classification fields (migration 054)
-    funding_category: opportunity.funding_category ?? null,
-    usable_for_housing: toDbBoolean(db, opportunity.usable_for_housing),
-    refund_potential: toDbBoolean(db, opportunity.refund_potential),
-    eligibility_signals: typeof opportunity.eligibility_signals === 'string'
-      ? opportunity.eligibility_signals
-      : (opportunity.eligibility_signals != null ? JSON.stringify(opportunity.eligibility_signals) : '{}'),
-    verification_status: opportunity.verification_status ?? 'needs_review',
   }
 
   const insert = db.prepare(`
