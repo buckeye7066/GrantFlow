@@ -97,14 +97,12 @@ export default function ComprehensiveApplicationForm({ onSubmit, onCancel, isSub
     // Financial
     household_income: null,
     household_size: null,
-    financial_need_level: "",
     low_income: false,
     unemployed: false,
     displaced_worker: false,
     
     // Government Assistance
     medicaid_enrolled: false,
-    medicaid_waiver_program: "none",
     medicare_recipient: false,
     ssi_recipient: false,
     ssdi_recipient: false,
@@ -114,7 +112,6 @@ export default function ComprehensiveApplicationForm({ onSubmit, onCancel, isSub
     tenncare_id: "",
     
     // Immigration & Citizenship
-    immigration_status: "us_citizen",
     permanent_resident: false,
     refugee: false,
     new_immigrant: false,
@@ -219,7 +216,6 @@ export default function ComprehensiveApplicationForm({ onSubmit, onCancel, isSub
     
     // Political / Civic Engagement
     registered_voter: false,
-    political_party: "",
     politically_active: false,
     community_organizer: false,
     advocacy_work: false,
