@@ -277,7 +277,6 @@ export async function runNationalCrawlerV2({
             if (url.startsWith('mock://')) {
               // Mock sources are not allowed — fabricated funding data must never reach users.
               console.error(`[nationalCrawlerV2] Rejecting mock:// URL for source ${source.source_id}. Mock sources have been disabled.`)
-              sourceResults.push({ url, skipped: true, reason: 'mock_source_rejected' })
               continue
             } else if (url.startsWith('file://')) {
               fetchResult = await fetchFileUrl(url)
