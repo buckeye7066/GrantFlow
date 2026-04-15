@@ -10,6 +10,7 @@ import { searchWebForItem, KNOWN_ITEM_SOURCES, parseItemRequest } from '../servi
 import { loadProfileContext } from '../services/profileHelpers.js'
 import { buildProfileFacets } from '../services/profile/profileTaxonomy.js'
 import { trustedOriginClause, trustedSourceClause } from '../utils/recordOrigins.js'
+import { filterActionableOpportunities } from '../services/opportunityValidationLayer.js'
 import { applyRelevanceFilter, extractProfileData } from '../services/relevanceFilter.js'
 import { makeDecision } from '../services/matchEngine.js'
 import { runAllDomainEngines } from '../services/crawlers/domainEngines/index.js'
