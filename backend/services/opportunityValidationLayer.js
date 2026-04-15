@@ -388,48 +388,49 @@ export function validateMultiProfileMatching(opportunities) {
     } catch (e) {
       failed.push({ type, error: e.message })
     }
-
-    /**
-     * Filter opportunities to ensure only actionable ones reach the UI.
-      * Removes entries with no URL, placeholder titles, and generic directories.
-       * Use at the API response layer before sending results to the frontend.
-        */
-    export function filterActionableOpportunities(opportunities) {
-        if (!Array.isArray(opportunities)) return []
-        const GENERIC_TITLES = new Set([
-              'local housing finance agencies',
-              'community action agencies',
-              'workforce development boards',
-              'state vocational rehabilitation agencies',
-              'department of labor odep',
-              'housing development grants',
-              'disability employment grants',
-              'foster youth grants',
-            ])
-        const PLACEHOLDER_PATTERNS = [
-              /^(test|sample|example|placeholder|todo|tbd|n\/a)/i,
-              /^funding opportunity$/i,
-              /^grant program$/i,
-              /^untitled/i,
-            ]
-        return opportunities.filter(opp => {
-              const url = opp.application_url || opp.source_url || opp.url
-              if (!url || typeof url !== 'string' || !url.startsWith('http')) return false
-              const title = (opp.title || '').trim()
-              if (title.length < 10) return false
-              if (PLACEHOLDER_PATTERNS.some(p => p.test(title))) return false
-              if (GENERIC_TITLES.has(title.toLowerCase())) return false
-              return true
-        })
-    }
   }
 
   return { passed, failed }
 }
 
+
+/**
+ * Filter opportunities to ensure only actionable ones reach the UI.
+ * Removes entries with no URL, placeholder titles, and generic directories.
+ * Use at the API response layer before sending results to the frontend.
+ */
+export function filterActionableOpportunities(opportunities) {
+  if (!Array.isArray(opportunities)) return []
+  const GENERIC_TITLES = new Set([
+    'local housing finance agencies',
+    'community action agencies',
+    'workforce development boards',
+    'state vocational rehabilitation agencies',
+    'department of labor odep',
+    'housing development grants',
+    'disability employment grants',
+    'foster youth grants',
+  ])
+  const PLACEHOLDER_PATTERNS = [
+    /^(test|sample|example|placeholder|todo|tbd|n\/a)/i,
+    /^funding opportunity$/i,
+    /^grant program$/i,
+    /^untitled/i,
+  ]
+  return opportunities.filter(opp => {
+    const url = opp.application_url || opp.source_url || opp.url
+    if (!url || typeof url !== 'string' || !url.startsWith('http')) return false
+    const title = (opp.title || '').trim()
+    if (title.length < 10) return false
+    if (PLACEHOLDER_PATTERNS.some(p => p.test(title))) return false
+    if (GENERIC_TITLES.has(title.toLowerCase())) return false
+    return true
+  })
+}
+
 export default {
   validateUrlFormat,
-    filterActionableOpportunities,
+  filterActionableOpportunities,
   validateRequiredFields,
   checkDuplicate,
   validateOpportunityStrict,
