@@ -803,14 +803,14 @@ registerTool({
       throw error
     }
 
-    const opp = db.prepare('SELECT * FROM funding_opportunities WHERE id = ?').get(opportunityId)
+    const opp = await db.prepare('SELECT * FROM funding_opportunities WHERE id = ?').get(opportunityId)
     if (!opp) {
       const error = new Error('Opportunity not found')
       error.status = 404
       throw error
     }
 
-    const profile = db.prepare('SELECT * FROM profiles WHERE id = ?').get(profileId)
+    const profile = await db.prepare('SELECT * FROM profiles WHERE id = ?').get(profileId)
     if (!profile) {
       const error = new Error('Profile not found')
       error.status = 404
@@ -819,7 +819,7 @@ registerTool({
 
     let sectionRows = []
     try {
-      sectionRows = db.prepare('SELECT section_key, data FROM profile_sections WHERE profile_id = ?').all(profileId)
+      sectionRows = await db.prepare('SELECT section_key, data FROM profile_sections WHERE profile_id = ?').all(profileId)
     } catch (_e) { /* sections may not exist */ }
     const sections = sectionRows.reduce((acc, row) => {
       try { acc[row.section_key] = row.data ? JSON.parse(row.data) : {} } catch { acc[row.section_key] = {} }
@@ -940,7 +940,7 @@ registerTool({
       throw error
     }
 
-    const profile = db.prepare('SELECT * FROM profiles WHERE id = ?').get(profileId)
+    const profile = await db.prepare('SELECT * FROM profiles WHERE id = ?').get(profileId)
     if (!profile) {
       const error = new Error('Profile not found')
       error.status = 404
@@ -949,7 +949,7 @@ registerTool({
 
     let sectionRows = []
     try {
-      sectionRows = db.prepare('SELECT section_key, data FROM profile_sections WHERE profile_id = ?').all(profileId)
+      sectionRows = await db.prepare('SELECT section_key, data FROM profile_sections WHERE profile_id = ?').all(profileId)
     } catch (_e) { /* sections may not exist */ }
     const sections = sectionRows.reduce((acc, row) => {
       try { acc[row.section_key] = row.data ? JSON.parse(row.data) : {} } catch { acc[row.section_key] = {} }
@@ -1079,7 +1079,7 @@ registerTool({
       throw error
     }
 
-    const profile = db.prepare('SELECT id FROM profiles WHERE id = ?').get(profileId)
+    const profile = await db.prepare('SELECT id FROM profiles WHERE id = ?').get(profileId)
     if (!profile) {
       const error = new Error('Profile not found')
       error.status = 404
@@ -1089,14 +1089,14 @@ registerTool({
     // Read existing section data and merge
     let existingData = {}
     try {
-      const row = db.prepare('SELECT data FROM profile_sections WHERE profile_id = ? AND section_key = ?').get(profileId, sectionKey)
+      const row = await db.prepare('SELECT data FROM profile_sections WHERE profile_id = ? AND section_key = ?').get(profileId, sectionKey)
       if (row?.data) existingData = JSON.parse(row.data)
     } catch { /* section may not exist yet */ }
 
     const merged = { ...existingData, ...fields }
 
     const updatedBy = ctx?.email || ctx?.userId || 'anya-guided'
-    db.prepare(`
+    await db.prepare(`
       INSERT INTO profile_sections (profile_id, section_key, data, updated_by)
       VALUES (?, ?, ?, ?)
       ON CONFLICT(profile_id, section_key) DO UPDATE SET
@@ -1113,7 +1113,7 @@ registerTool({
     }
 
     // Count total filled sections for progress
-    const allSections = db.prepare('SELECT section_key, data FROM profile_sections WHERE profile_id = ?').all(profileId)
+    const allSections = await db.prepare('SELECT section_key, data FROM profile_sections WHERE profile_id = ?').all(profileId)
     let filledCount = 0
     for (const s of allSections) {
       try {
@@ -1161,10 +1161,10 @@ registerTool({
       throw error
     }
 
-    const profile = db.prepare('SELECT primary_type FROM profiles WHERE id = ?').get(profileId)
+    const profile = await db.prepare('SELECT primary_type FROM profiles WHERE id = ?').get(profileId)
     if (!profile) throw new Error('Profile not found')
 
-    const rows = db.prepare('SELECT section_key, data FROM profile_sections WHERE profile_id = ?').all(profileId)
+    const rows = await db.prepare('SELECT section_key, data FROM profile_sections WHERE profile_id = ?').all(profileId)
     const filled = []
     const empty = []
 
@@ -2263,7 +2263,7 @@ registerTool({
       scopeId = user.profileId
     }
     
-    const memories = getMemories(db, { scope, scopeId, memoryType, limit })
+    const memories = await getMemories(db, { scope, scopeId, memoryType, limit })
     
     return {
       count: memories.length,

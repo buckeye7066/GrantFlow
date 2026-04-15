@@ -7,7 +7,7 @@ export async function matchProfileToGrants(profileId) {
 
 export async function matchProfileToOpportunities(profileId, { minScore = 50, limit = 200 } = {}) {
   if (!profileId) throw new Error('profileId is required')
-  const params = new URLSearchParams({ min_score: minScore, limit, skip_readiness_check: '1' })
+  const params = new URLSearchParams({ min_score: minScore, limit })
   return apiFetch(`/api/matching/profile/${profileId}/opportunities?${params}`)
 }
 

@@ -404,23 +404,27 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
         ? allScored.filter((opp) => (opp.match_score ?? 0) >= minScore)
         : allScored
 
-      // Zero-results fallback: progressively lower threshold so users always see results.
+      // Zero-results fallback: progressively lower threshold so users see something.
       // Skipped when strict=1 (Discover page) so the UI min-match slider is honored.
+      // When relaxation occurs, include guidance so the UI can prompt profile improvement.
       let effectiveMinScore = minScore
+      let relaxedReason = null
       if (!strictMin && scored.length === 0 && allScored.length > 0) {
-        const fallbackThresholds = [30, 15, 0]
+        const fallbackThresholds = [30, 15]
         for (const threshold of fallbackThresholds) {
           scored = allScored.filter((opp) => (opp.match_score ?? 0) >= threshold)
           if (scored.length > 0) {
             effectiveMinScore = threshold
+            relaxedReason = 'No strong matches found. These results are lower-confidence. Complete your profile (location, needs, organization type) to improve match quality.'
             console.log(`[matching] Zero results at min_score=${minScore}; relaxed to ${threshold} (${scored.length} results)`)
             break
           }
         }
         if (scored.length === 0) {
-          scored = allScored.slice(0, 20)
-          effectiveMinScore = 0
-          console.log(`[matching] All thresholds exhausted; returning top ${scored.length} of ${allScored.length}`)
+          // Instead of showing score-0 junk, return empty with guidance
+          relaxedReason = 'No matching funding found at any threshold. Please complete your profile with location, specific needs, and organization type to find relevant opportunities.'
+          effectiveMinScore = minScore
+          console.log(`[matching] All thresholds exhausted; returning 0 results with profile guidance (${allScored.length} scored candidates all below min threshold)`)
         }
       } else if (strictMin && scored.length === 0 && allScored.length > 0) {
         const rawScores = allScored
@@ -445,6 +449,7 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
               opportunities: capped,
               score_hint: allScored._scoreHint || null,
               threshold_relaxed: effectiveMinScore !== minScore ? true : undefined,
+              threshold_relaxed_reason: relaxedReason || undefined,
               truncated: scored.length > MAX_RESPONSE ? true : undefined,
       })
              } catch (error) {

@@ -120,6 +120,28 @@ const _STATIC_PROMPT_BASE = [
   '- If it\'s a portal, walk them through the portal step by step',
   '- Help advance pipeline items: discovered → interested → drafting → application_prep → portal/submitted',
   '',
+  'Housing & Living Expense Funding Knowledge:',
+  '- Many students and individuals need help with off-campus living expenses (rent, utilities, food) but don\'t realize some funding can be used for this.',
+  '- Funding categories that can help with housing:',
+  '  • refund_eligible: Scholarships/grants that exceed tuition produce a refund check disbursed to the student for living expenses.',
+  '  • stipend: Programs that provide monthly stipends or living allowances.',
+  '  • housing_direct: RA positions, housing grants, room and board scholarships.',
+  '  • coa_adjustment: Students can request a Cost of Attendance increase from their financial aid office (Professional Judgment) to reflect actual rent/utilities, unlocking more aid.',
+  '  • faith_based: Church and denominational scholarships — often overlooked, can be used for any educational expense including housing.',
+  '  • talent_based: Music, art, athletic scholarships — many disburse to student accounts and excess is refunded.',
+  '- When explaining funding to users, ALWAYS explain HOW the funding can be used for housing when usable_for_housing is true.',
+  '- Example explanations:',
+  '  "This scholarship can generate a refund that can be used toward rent and utilities."',
+  '  "You can request a Cost of Attendance adjustment to include your actual rent — this may increase your financial aid eligibility."',
+  '  "This stipend covers living expenses directly — you can use it for rent, food, and utilities."',
+  '- Actionable suggestions to prioritize:',
+  '  • "Request a COA adjustment from your financial aid office"',
+  '  • "Apply for an RA position for free housing"',
+  '  • "Stack HOPE with Pell Grant to maximize your refund"',
+  '  • "Apply for church scholarships — they\'re less competitive and can cover housing"',
+  '  • "Your music talent qualifies you for scholarships that refund excess to you"',
+  '- When showing funding results, highlight ones with usable_for_housing = true and explain the housing angle.',
+  '',
   'Link Verification Awareness:',
   '- Opportunities have a link_status field: "ok", "broken", "redirect", "unverified", or "skipped".',
   '- When presenting an opportunity with link_status "broken", warn the user: "Note: our last check found the application link may be broken. Try the URL, and if it doesn\'t work, contact the funder directly."',
@@ -465,6 +487,19 @@ export async function createSession(db, user, { profileId, title, metadata } = {
   }
 
   return await getSession(db, user, id)
+}
+
+export async function deleteSession(db, user, sessionId) {
+  assertAuthenticated(user)
+  const session = await db
+    .prepare('SELECT * FROM anya_sessions WHERE id = ?')
+    .get(sessionId)
+  assertSessionAccess(user, session)
+
+  // Hard delete — FK cascades handle anya_messages, anya_tasks, anya_context.
+  // anya_runs and anya_tool_usage use ON DELETE SET NULL, preserving the audit trail.
+  await db.prepare('DELETE FROM anya_sessions WHERE id = ?').run(sessionId)
+  return { deleted: true, id: sessionId }
 }
 
 export async function getSession(db, user, sessionId) {

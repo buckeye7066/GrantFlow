@@ -12,7 +12,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { Switch } from '@/components/ui/switch';
 import { Label } from '@/components/ui/label';
-import { Search, ChevronRight } from 'lucide-react';
+import { Search, ChevronRight, Home, Info } from 'lucide-react';
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { useToast } from '@/components/ui/use-toast';
 import { createLogger } from '@/utils/logger';
 
@@ -94,6 +95,7 @@ export default function FundingResults() {
 
   const [sortBy, setSortBy] = useState('match');
   const [strongMatchesOnly, setStrongMatchesOnly] = useState(false);
+  const [showHousingOnly, setShowHousingOnly] = useState(false);
 
   const tokenAvailable = useMemo(() => {
     try {
@@ -106,6 +108,9 @@ export default function FundingResults() {
 
   const filteredAndSorted = useMemo(() => {
     let list = [...(results || [])];
+    if (showHousingOnly) {
+      list = list.filter((o) => o.usable_for_housing === true || o.usable_for_housing === 1);
+    }
     if (strongMatchesOnly) {
       // Only suppress when the engine has NOT already made an ACCEPT/REVIEW decision.
       // If match_decision is ACCEPT or REVIEW, honour the engine regardless of score.
@@ -140,7 +145,7 @@ export default function FundingResults() {
       list.sort((a, b) => new Date(b?.created_at ?? 0) - new Date(a?.created_at ?? 0));
     }
     return list;
-  }, [results, sortBy, strongMatchesOnly]);
+  }, [results, sortBy, strongMatchesOnly, showHousingOnly]);
 
   const handleAddToPipeline = async (opportunity, { silent = false } = {}) => {
     log.debug('add to pipeline requested');
@@ -287,8 +292,8 @@ export default function FundingResults() {
             We found {results.length} {results.length === 1 ? 'opportunity' : 'opportunities'}
           </h1>
           <p className="text-muted-foreground mt-1">
-            {results.length !== filteredAndSorted.length && strongMatchesOnly
-              ? `Showing ${filteredAndSorted.length} strong matches (≥70%) of ${results.length} total`
+            {results.length !== filteredAndSorted.length
+              ? `Showing ${filteredAndSorted.length} of ${results.length} total${strongMatchesOnly ? ' (strong matches ≥70%)' : ''}${showHousingOnly ? ' (housing-usable)' : ''}`
               : 'Review and add opportunities to your pipeline'}
           </p>
         </header>
@@ -314,6 +319,10 @@ export default function FundingResults() {
               <Switch id="strong-only" checked={strongMatchesOnly} onCheckedChange={setStrongMatchesOnly} />
               <Label htmlFor="strong-only" className="text-sm cursor-pointer">Only strong matches (≥70%)</Label>
             </div>
+            <div className="flex items-center gap-2">
+              <Switch id="housing-only" checked={showHousingOnly} onCheckedChange={setShowHousingOnly} />
+              <Label htmlFor="housing-only" className="text-sm cursor-pointer">Show funding usable for housing</Label>
+            </div>
           </div>
         </div>
 
@@ -328,6 +337,31 @@ export default function FundingResults() {
                 <div className="flex-grow">
                   <GrantCard grant={oppForCard} organizationName={organizationName} showSummary={true} />
                 </div>
+
+                {(opp.usable_for_housing === true || opp.usable_for_housing === 1) && (
+                  <div className="px-4 pt-2">
+                    <TooltipProvider>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 border border-emerald-200 px-3 py-1 text-xs font-medium text-emerald-700 cursor-help">
+                            <Home className="h-3.5 w-3.5" />
+                            Can be used for housing
+                            <Info className="h-3 w-3 text-emerald-500" />
+                          </span>
+                        </TooltipTrigger>
+                        <TooltipContent side="top" className="max-w-xs text-sm">
+                          <p>Funds exceeding tuition may be refunded to cover living expenses such as rent, utilities, and food.</p>
+                          {opp.funding_category && (
+                            <p className="mt-1 text-xs text-muted-foreground">
+                              Category: {opp.funding_category.replace(/_/g, ' ')}
+                              {(opp.refund_potential === true || opp.refund_potential === 1) && ' · Refund eligible'}
+                            </p>
+                          )}
+                        </TooltipContent>
+                      </Tooltip>
+                    </TooltipProvider>
+                  </div>
+                )}
 
                 {matchReasons.length > 0 && (
                   <div className="px-4 pb-2">

@@ -231,6 +231,20 @@ const STRATEGIES = {
     maxResults: 80,
     minScore: 20,
   },
+
+  housing_funding: {
+    id: 'housing_funding',
+    label: 'Housing & Living Expense Funding',
+    profileTypes: ['student', 'college_student', 'high_school_student', 'individual', 'family'],
+    candidateSources: ['federal', 'state', 'national', 'scholarships', 'faith_based'],
+    hardGates: [],
+    needEmphasis: ['housing', 'education', 'scholarship', 'living_expenses', 'utilities', 'food'],
+    intentBoost: { housing: 25, education: 20, scholarship: 20, living_expenses: 20, faith: 10, music: 10, talent: 10 },
+    urlPolicy: 'standard',
+    maxResults: 80,
+    minScore: 15,
+    categoryFilter: ['housing', 'education', 'scholarship', 'financial_aid', 'faith_based', 'talent', 'arts', 'music'],
+  },
 };
 
 /**

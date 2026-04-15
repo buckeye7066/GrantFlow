@@ -16,19 +16,7 @@ import fs from 'fs'
 import path from 'path'
 import { fileURLToPath } from 'url'
 import { upsertFundingOpportunity } from './opportunityInserter.js'
-// import { scoreOpportunity } from './matchEngine.js' // TODO: Implement scoreOpportunity in matchEngine.js
-function scoreOpportunity(profileContext, opportunity) {
-  // Fallback scoring until matchEngine.js implements this function
-  const baseScore = 50
-  const keywords = opportunity.keywords || []
-  const description = opportunity.description || ''
-  
-  if (profileContext?.profile) {
-    // Basic keyword matching if profile exists
-    return { score: Math.min(100, baseScore + keywords.length * 2) }
-  }
-  return { score: baseScore }
-}
+import { scoreOpportunity } from './matchEngine.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)

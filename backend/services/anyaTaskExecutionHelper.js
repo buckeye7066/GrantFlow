@@ -118,7 +118,7 @@ export async function listExecutableTasks(db, { profileId = null, limit = 50 } =
     query += ' ORDER BY t.priority DESC, t.due_date ASC, t.created_at ASC LIMIT ?'
     params.push(limit)
 
-    const tasks = db.prepare(query).all(...params)
+    const tasks = await db.prepare(query).all(...params)
 
     return tasks.map((task) => ({
       ...task,
@@ -162,7 +162,7 @@ export async function logTaskExecution({ db, runId, taskId, success, message }) 
  */
 export async function getTaskExecutionHistory(db, taskId) {
   try {
-    const task = db.prepare('SELECT metadata FROM anya_tasks WHERE id = ?').get(taskId)
+    const task = await db.prepare('SELECT metadata FROM anya_tasks WHERE id = ?').get(taskId)
 
     if (!task) {
       return { found: false, executions: [] }

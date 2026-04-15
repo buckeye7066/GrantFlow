@@ -166,9 +166,9 @@ export function runQueueRecovery({ db, uploadsDir }) {
               jobId: job.id,
               uploadDir: uploadsDir,
               getOpenAI: null,
-            }).catch((e) => console.warn('[background]', e?.message || e));
-          } catch {
-            // ignore individual dispatch errors
+            }).catch((e) => console.warn('[queue-poller] Dispatch error for job', job.id, e?.message || e));
+          } catch (err) {
+            console.warn('[queue-poller] Sync dispatch error for job', job.id, err?.message || err);
           }
         }
         if (queued.length > 0) {
@@ -244,9 +244,9 @@ async function _drainQueuedJobsGradually(dbRef, uploadsDirRef) {
         jobId: queued[i].id,
         uploadDir: uploadsDirRef,
         getOpenAI: null,
-      }).catch((e) => console.warn('[background]', e?.message || e));
-    } catch {
-      // ignore individual dispatch errors
+      }).catch((e) => console.warn('[startup-drain] Dispatch error for job', queued[i].id, e?.message || e));
+    } catch (err) {
+      console.warn('[startup-drain] Sync dispatch error for job', queued[i].id, err?.message || err);
     }
   }
 }

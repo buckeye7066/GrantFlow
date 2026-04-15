@@ -116,6 +116,7 @@ const CRAWLER_TYPES = [
   'state_waiver_benefits',
   'item_matching',
   'special_needs',
+  'housing_funding',
 ]
 
 /**

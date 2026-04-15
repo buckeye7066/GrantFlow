@@ -3,6 +3,7 @@ import crypto from 'crypto'
 import {
   addMessage,
   createSession,
+  deleteSession,
   generateAssistantResponse,
   getMessages,
   getSession,
@@ -182,6 +183,15 @@ router.post('/sessions', async (req, res) => {
       metadata: req.body?.metadata,
     })
     res.status(201).json(session)
+  } catch (error) {
+    handleError(res, error)
+  }
+})
+
+router.delete('/sessions/:sessionId', async (req, res) => {
+  try {
+    const result = await deleteSession(req.db, req.ctx, req.params.sessionId)
+    res.json(result)
   } catch (error) {
     handleError(res, error)
   }

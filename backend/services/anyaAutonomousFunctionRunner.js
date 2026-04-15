@@ -427,7 +427,7 @@ async function saveHighMatchesToProfile(options, context) {
     const threshold = Number.isFinite(thresholdNum) ? Math.max(0, Math.min(100, thresholdNum)) : 55
 
     // Get the crawler job
-    const job = db.prepare('SELECT * FROM crawler_jobs WHERE id = ?').get(jobId)
+    const job = await db.prepare('SELECT * FROM crawler_jobs WHERE id = ?').get(jobId)
     if (!job || job.status !== 'completed') {
       return { job_id: jobId, profile_id: profileId, message: 'Job not completed or not found' }
     }
@@ -576,8 +576,8 @@ export async function saveCrawlerResultsToGlobal(options, context) {
 
   try {
     // Get the crawler job
-    const job = db.prepare('SELECT * FROM crawler_jobs WHERE id = ?').get(jobId)
-    
+    const job = await db.prepare('SELECT * FROM crawler_jobs WHERE id = ?').get(jobId)
+
     if (!job) {
       throw new Error('Job not found')
     }

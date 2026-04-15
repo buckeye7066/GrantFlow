@@ -471,7 +471,15 @@ export function dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }) {
             `,
           ).run(nextAtIso, updatedMeta, jobId)
         } catch (error) {
-          console.warn('[crawlerDispatcher] Failed to persist re-queue metadata', error)
+          // If we can't persist the incremented requeue_cycles, dead-letter the job
+          // to prevent an infinite requeue loop.
+          console.error('[crawlerDispatcher] Failed to persist re-queue metadata — dead-lettering job to prevent infinite loop', { jobId, error: error?.message })
+          try {
+            await db.prepare(
+              `UPDATE crawler_jobs SET status = 'failed', completed_at = CURRENT_TIMESTAMP, error = ? WHERE id = ?`,
+            ).run('Re-queue metadata persistence failed; dead-lettered to prevent infinite loop', jobId)
+          } catch { /* best effort */ }
+          return
         }
 
         setTimeout(() => {
@@ -556,12 +564,19 @@ export function dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }) {
     // Heartbeat: set initial heartbeat immediately and then periodically so that
     // cleanupStaleCrawlers() doesn't treat this actively-running job as orphaned.
     const HEARTBEAT_INTERVAL_MS = 60_000
+    let heartbeatFailures = 0
+    const MAX_HEARTBEAT_FAILURES = 3
     await updateJobHeartbeat(db, jobId).catch(error => {
-    console.warn('[crawlerDispatcher] Initial heartbeat failed:', error.message);
-  })
+      console.warn('[crawlerDispatcher] Initial heartbeat failed:', error.message)
+      heartbeatFailures++
+    })
     const heartbeatIntervalId = setInterval(() => {
       updateJobHeartbeat(db, jobId).catch((err) => {
-        console.warn('[crawlerDispatcher] Heartbeat interval error:', err?.message)
+        heartbeatFailures++
+        console.warn('[crawlerDispatcher] Heartbeat interval error:', err?.message, { failures: heartbeatFailures })
+        if (heartbeatFailures >= MAX_HEARTBEAT_FAILURES) {
+          console.error('[crawlerDispatcher] Heartbeat failed too many times — job may be orphaned', { jobId })
+        }
       })
     }, HEARTBEAT_INTERVAL_MS)
 

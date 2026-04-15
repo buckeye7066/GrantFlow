@@ -20,6 +20,152 @@ function normalizeNonEmptyString(value) {
   return text.length > 0 ? text : null
 }
 
+/**
+ * Derive funding_source_type from record_origin and source when not explicitly set.
+ */
+/**
+ * Classify a funding opportunity's category for housing usability.
+ * Categories: tuition_only, refund_eligible, stipend, housing_direct, faith_based, talent_based, coa_adjustment
+ */
+function classifyFundingCategory(opportunity) {
+  const text = `${opportunity.title || ''} ${opportunity.description || ''} ${(opportunity.eligibility_bullets || []).join(' ')}`.toLowerCase()
+
+  // Housing direct: RA programs, housing grants, room and board coverage
+  if (/\b(resident\s*a(dvisor|ssistant)|ra\s+position|housing\s+(grant|assistance|scholarship|stipend)|room\s+and\s+board|dormitor|on-campus\s+housing)\b/.test(text)) {
+    return 'housing_direct'
+  }
+  // Stipend: monthly stipend, living allowance, fellowship stipend
+  if (/\b(stipend|living\s+(allowance|expense)|monthly\s+(payment|allowance)|fellowship.*stipend|research\s+assistantship)\b/.test(text)) {
+    return 'stipend'
+  }
+  // COA adjustment: cost of attendance appeals, professional judgment
+  if (/\b(cost\s+of\s+attendance|coa\s+(adjustment|appeal)|professional\s+judgment|financial\s+aid\s+appeal|special\s+circumstances?\s+appeal)\b/.test(text)) {
+    return 'coa_adjustment'
+  }
+  // Faith-based
+  if (/\b(faith[- ]based|church\s+scholarship|christian\s+(scholarship|grant)|ministry\s+(grant|scholarship)|religious\s+(scholarship|grant)|denominational|baptist|methodist|presbyterian|catholic\s+scholarship|lutheran)\b/.test(text)) {
+    return 'faith_based'
+  }
+  // Talent-based
+  if (/\b(music\s+scholarship|talent[- ]based|athletic\s+scholarship|art\s+scholarship|perform(ance|ing)\s+(arts?\s+)?(scholarship|grant)|band\s+scholarship|choir\s+scholarship|instrument|audition[- ]based)\b/.test(text)) {
+    return 'talent_based'
+  }
+  // Refund eligible: scholarships that pay to student or exceed tuition
+  if (opportunity.opportunity_type === 'scholarship' || /\bscholarship\b/.test(text)) {
+    if (/\b(refund|excess|remaining\s+balance|disbursed?\s+to\s+student|direct\s+to\s+student|overage|credit\s+balance)\b/.test(text)) {
+      return 'refund_eligible'
+    }
+    // Large scholarships likely produce refunds
+    if (opportunity.amount_max && opportunity.amount_max > 10000) {
+      return 'refund_eligible'
+    }
+  }
+  // Tuition only
+  if (/\b(tuition[- ]only|applied\s+directly\s+to\s+tuition|pays\s+tuition|tuition\s+waiver|tuition\s+remission)\b/.test(text)) {
+    return 'tuition_only'
+  }
+  return null
+}
+
+/**
+ * Determine if a funding opportunity can be used for housing/living expenses.
+ */
+function deriveUsableForHousing(opportunity, fundingCategory) {
+  if (['refund_eligible', 'stipend', 'housing_direct', 'coa_adjustment'].includes(fundingCategory)) {
+    return true
+  }
+  const text = `${opportunity.title || ''} ${opportunity.description || ''}`.toLowerCase()
+  if (/\b(living\s+expenses?|off[- ]campus|rent|utilit(y|ies)|food|room\s+and\s+board|housing)\b/.test(text)) {
+    return true
+  }
+  return false
+}
+
+/**
+ * Determine refund potential for a funding opportunity.
+ */
+function deriveRefundPotential(opportunity, fundingCategory) {
+  if (fundingCategory === 'refund_eligible') return true
+  if (fundingCategory === 'stipend') return true
+  const text = `${opportunity.title || ''} ${opportunity.description || ''}`.toLowerCase()
+  if (/\b(refund|excess\s+funds?|credit\s+balance|disbursed?\s+to\s+student|remaining\s+balance)\b/.test(text)) {
+    return true
+  }
+  return false
+}
+
+/**
+ * Extract structured eligibility signals from opportunity data.
+ */
+function extractEligibilitySignals(opportunity) {
+  const text = `${opportunity.title || ''} ${opportunity.description || ''} ${(opportunity.eligibility_bullets || []).join(' ')}`.toLowerCase()
+  const signals = {}
+
+  // GPA requirement
+  const gpaMatch = text.match(/\b(\d\.\d{1,2})\s*(?:gpa|grade\s+point|cumulative)\b/) ||
+    text.match(/\bgpa\s*(?:of\s+)?(\d\.\d{1,2})\b/)
+  if (gpaMatch) signals.gpa_min = parseFloat(gpaMatch[1])
+
+  // Faith affiliation
+  if (/\b(faith|christian|church|ministry|religious|baptist|methodist|presbyterian|catholic|lutheran|evangelical|protestant|jewish|muslim|interfaith)\b/.test(text)) {
+    signals.faith_affiliation = true
+  }
+
+  // Talent type
+  const talentPatterns = [
+    { pattern: /\b(music|instrument|band|choir|orchestra|flute|piano|violin|vocal)\b/, type: 'music' },
+    { pattern: /\b(athlet|sport|basketball|football|soccer|track|swimming|tennis|golf|baseball)\b/, type: 'athletics' },
+    { pattern: /\b(art|visual\s+art|painting|sculpture|drawing|design|photography)\b/, type: 'visual_arts' },
+    { pattern: /\b(theater|theatre|drama|acting|perform(ance|ing)\s+arts?|dance)\b/, type: 'performing_arts' },
+    { pattern: /\b(leadership|community\s+service|volunteer|civic)\b/, type: 'leadership' },
+    { pattern: /\b(debate|speech|forensic|public\s+speaking|model\s+un)\b/, type: 'speech_debate' },
+    { pattern: /\b(stem|science|math|engineer|computer|coding|robotics)\b/, type: 'stem' },
+    { pattern: /\b(writ(e|ing)|essay|journal|poet|literary|creative\s+writing)\b/, type: 'writing' },
+  ]
+  const talents = []
+  for (const { pattern, type } of talentPatterns) {
+    if (pattern.test(text)) talents.push(type)
+  }
+  if (talents.length > 0) signals.talent_type = talents
+
+  // State
+  if (opportunity.state && opportunity.state !== 'nationwide') {
+    signals.state = opportunity.state
+  }
+
+  // Field of study
+  const fieldPatterns = [
+    { pattern: /\b(forensic\s+science|criminalistics|crime\s+lab)\b/, field: 'forensic_science' },
+    { pattern: /\b(nursing|pre[- ]?nursing|bsn|rn\b)\b/, field: 'nursing' },
+    { pattern: /\b(engineering|mechanical|electrical|civil|chemical)\b/, field: 'engineering' },
+    { pattern: /\b(computer\s+science|software|information\s+technology|cybersecurity)\b/, field: 'computer_science' },
+    { pattern: /\b(business|accounting|finance|marketing|mba)\b/, field: 'business' },
+    { pattern: /\b(education|teaching|pedagogy)\b/, field: 'education' },
+    { pattern: /\b(medicine|pre[- ]?med|medical\s+school)\b/, field: 'medicine' },
+    { pattern: /\b(biology|biochemistry|biomedical)\b/, field: 'biology' },
+  ]
+  for (const { pattern, field } of fieldPatterns) {
+    if (pattern.test(text)) {
+      signals.field_of_study = field
+      break
+    }
+  }
+
+  return Object.keys(signals).length > 0 ? signals : null
+}
+
+function deriveFundingSourceType(recordOrigin, source) {
+  if (recordOrigin === 'grants_gov' || ['grants.gov', 'grants_gov', 'usa_spending', 'usaspending'].includes(source)) return 'federal'
+  if (['state_portal', 'state_grants_portal', 'state_waiver'].includes(source)) return 'state'
+  if (['local_foundation', 'community_foundation', 'cof_foundation_locator', 'candid_directory', 'propublica.990'].includes(source)) return 'foundation'
+  if (source === 'corporate_giving') return 'corporate'
+  if (['scholarship_crawler', 'scholarship_database', 'school_portal'].includes(source)) return 'university'
+  if (['health_resources_crawler', 'charity_care'].includes(source)) return 'medical'
+  if (source?.startsWith('local_directory_') || source === 'osm_overpass') return 'community'
+  if (['curated_benefits', 'curated_verified', 'verified_real', 'curated_program'].includes(recordOrigin)) return 'federal'
+  return 'other'
+}
+
 function normalizeUrl(value) {
   const text = normalizeNonEmptyString(value)
   if (!text) return null
@@ -376,6 +522,13 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
         : null,
     notes: opportunity.notes ?? null,
     record_origin: recordOrigin,
+    funding_category: opportunity.funding_category ?? classifyFundingCategory(opportunity),
+    usable_for_housing: toDbBoolean(db, opportunity.usable_for_housing ?? deriveUsableForHousing(opportunity, opportunity.funding_category ?? classifyFundingCategory(opportunity))),
+    refund_potential: toDbBoolean(db, opportunity.refund_potential ?? deriveRefundPotential(opportunity, opportunity.funding_category ?? classifyFundingCategory(opportunity))),
+    eligibility_signals: opportunity.eligibility_signals != null
+      ? (typeof opportunity.eligibility_signals === 'string' ? opportunity.eligibility_signals : JSON.stringify(opportunity.eligibility_signals))
+      : JSON.stringify(extractEligibilitySignals(opportunity)),
+    verification_status: opportunity.verification_status ?? 'needs_review',
     funding_domain: opportunity.funding_domain ?? null,
     funding_subdomain: opportunity.funding_subdomain ?? null,
     source_category: opportunity.source_category ?? null,
@@ -437,6 +590,7 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
       geo_eligibility,
       signal_tags,
       crawler_version,
+      funding_source_type,
       funding_category,
       usable_for_housing,
       refund_potential,
@@ -484,6 +638,7 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
       @geo_eligibility,
       @signal_tags,
       @crawler_version,
+      @funding_source_type,
       @funding_category,
       @usable_for_housing,
       @refund_potential,
@@ -522,14 +677,15 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
       certifications_required = COALESCE(excluded.certifications_required, funding_opportunities.certifications_required),
       geo_eligibility = COALESCE(excluded.geo_eligibility, funding_opportunities.geo_eligibility),
       crawler_version = COALESCE(excluded.crawler_version, funding_opportunities.crawler_version),
-      record_origin = COALESCE(excluded.record_origin, funding_opportunities.record_origin),
-      last_verified_at = COALESCE(excluded.last_verified_at, funding_opportunities.last_verified_at),
-      match_reasons = COALESCE(excluded.match_reasons, funding_opportunities.match_reasons),
+      funding_source_type = COALESCE(excluded.funding_source_type, funding_opportunities.funding_source_type),
       funding_category = COALESCE(excluded.funding_category, funding_opportunities.funding_category),
       usable_for_housing = COALESCE(excluded.usable_for_housing, funding_opportunities.usable_for_housing),
       refund_potential = COALESCE(excluded.refund_potential, funding_opportunities.refund_potential),
       eligibility_signals = COALESCE(excluded.eligibility_signals, funding_opportunities.eligibility_signals),
       verification_status = COALESCE(excluded.verification_status, funding_opportunities.verification_status),
+      record_origin = COALESCE(excluded.record_origin, funding_opportunities.record_origin),
+      last_verified_at = COALESCE(excluded.last_verified_at, funding_opportunities.last_verified_at),
+      match_reasons = COALESCE(excluded.match_reasons, funding_opportunities.match_reasons),
       updated_at = CURRENT_TIMESTAMP,
       last_crawled = CURRENT_TIMESTAMP
   `)
@@ -575,6 +731,7 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
     geo_eligibility: record.geo_eligibility,
     signal_tags: record.signal_tags,
     crawler_version: record.crawler_version,
+    funding_source_type: record.funding_source_type ?? deriveFundingSourceType(record.record_origin, source),
     funding_category: record.funding_category,
     usable_for_housing: record.usable_for_housing,
     refund_potential: record.refund_potential,

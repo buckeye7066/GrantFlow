@@ -100,7 +100,7 @@ export function getMemory(db, { scope = SCOPES.GLOBAL, scopeId = null, memoryKey
 /**
  * Retrieve all memories for a scope
  */
-export function getMemories(db, { scope = SCOPES.GLOBAL, scopeId = null, memoryType = null, limit = 100 }) {
+export async function getMemories(db, { scope = SCOPES.GLOBAL, scopeId = null, memoryType = null, limit = 100 }) {
   let query = `
     SELECT *
     FROM anya_brain_memory
@@ -117,7 +117,7 @@ export function getMemories(db, { scope = SCOPES.GLOBAL, scopeId = null, memoryT
   query += ` ORDER BY access_count DESC, updated_at DESC LIMIT ?`
   params.push(limit)
   
-  const rows = db.prepare(query).all(...params)
+  const rows = await db.prepare(query).all(...params)
   
   return rows.map(row => ({
     ...row,

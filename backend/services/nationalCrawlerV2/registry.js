@@ -192,32 +192,8 @@ export function buildRegistry({ useLive = false, fixtureBaseUrl = null } = {}) {
         agency: 'Cherokee Nation',
       },
     },
-    {
-      source_id: 'mco-mock-portal',
-      name: 'MCO Contractor Portal (mock)',
-      jurisdiction: 'mco',
-      state: null,
-      county: null,
-      source_family: SOURCE_FAMILIES.MOCK,
-      base_url: null,
-      seed_urls: mcoUrl ? [mcoUrl] : [],
-      enabled: mcoUrl ? 1 : 0,
-      tags: ['smoke', 'mco', 'national'],
-      configuration: {
-        track_hints: ['TRACK_B'],
-        agency: 'Example MCO',
-        mock_payload: {
-          program_name: 'Provider Workforce Retention Stipend',
-          program_type: 'grant',
-          eligible_population: ['Direct support professionals', 'Provider agencies'],
-          covered_services: ['Workforce retention', 'Training reimbursement'],
-          provider_requirements: { notes: 'Must be an enrolled provider' },
-          application_method: 'Online portal',
-          application_url: 'mock://mco-portal-example/apply',
-          source_url: 'mock://mco-portal-example',
-        },
-      },
-    },
+    // MCO mock source removed — fabricated funding data must never reach real users.
+    // When a real MCO portal integration is ready, add it with SOURCE_FAMILIES.AGENCY_HTML.
   ]
 }
 

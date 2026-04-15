@@ -285,6 +285,9 @@ export default function DiscoverGrants() {
       matched_fields: opp.match_reasons ?? [],
       matchReasons: opp.match_reasons ?? [],
       source: opp.source || 'catalog',
+      usable_for_housing: opp.usable_for_housing ?? false,
+      refund_potential: opp.refund_potential ?? false,
+      funding_category: opp.funding_category ?? null,
     }))
   }, [catalogMatchResponse])
 
