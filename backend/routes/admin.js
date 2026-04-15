@@ -38,6 +38,7 @@ import { analyzeKnowledgeBaseDocument, processPendingKBDocuments, extractFunding
 import { runHealthCheck, getLastHealthStatus } from '../services/anyaHealthService.js'
 import { runAutoRepair } from '../services/anyaAutoRepairService.js'
 import { runRegionalPurge, getPurgeSummary, getPurgeEvents } from '../services/regionalPurgeService.js'
+import { restoreProfileSectionsFromLinkedOrganizations } from '../services/profileOrganizationSync.js'
 
 const router = express.Router();
 
@@ -3383,6 +3384,7 @@ router.post('/seed-profile-grants', async (req, res) => {
     const { excludeProfiles = [] } = req.body || {};
     const { computeMatchDecision } = await import('../services/matchEngine.js');
     const { saveToProfilePipeline } = await import('../services/opportunityMatcher.js');
+    const { ADMIN_SEED_MIN_SCORE } = await import('../config/matchThresholds.js');
 
     const profiles = await req.db.prepare('SELECT * FROM profiles WHERE status = ?').all('active');
     const opportunities = await req.db.prepare(`
@@ -3418,7 +3420,7 @@ router.post('/seed-profile-grants', async (req, res) => {
           const decision = computeMatchDecision(profile, opp, { profileSections: sections });
           return { opp, decision };
         })
-        .filter(({ decision }) => decision.decision !== 'REJECT' && decision.score >= 45)
+        .filter(({ decision }) => decision.decision !== 'REJECT' && decision.score >= ADMIN_SEED_MIN_SCORE)
         .sort((a, b) => b.decision.score - a.decision.score)
         .slice(0, 50);
 
@@ -3450,7 +3452,7 @@ router.post('/ingest', async (req, res) => {
     console.info('[admin/ingest] Starting manual ingestion...');
     
     // Import connectors dynamically
-    const { fetchGrantsGov } = await import('../services/sources/grantsGov.js');
+    const { fetchSamGov: fetchGrantsGov } = await import('../services/sources/samGov.js');
     const { fetchUSASpending } = await import('../services/sources/usaSpending.js');
     const { ingestOpportunities } = await import('../services/sources/ingestionService.js');
     
@@ -4517,6 +4519,28 @@ router.post('/profiles/:id/restore-access', async (req, res) => {
       basic_email_updated: basicUpdated,
     },
   })
+})
+
+/**
+ * POST /api/admin/profiles/restore-sections-from-orgs
+ * Fills empty profile_sections from linked organizations rows (does not wipe user edits).
+ *
+ * Body: { dryRun?: boolean, limit?: number, organizationIds?: string[], profileIds?: string[] }
+ */
+router.post('/profiles/restore-sections-from-orgs', async (req, res) => {
+  try {
+    const body = req.body ?? {}
+    const result = await restoreProfileSectionsFromLinkedOrganizations(req.db, {
+      dryRun: body.dryRun === true,
+      limit: body.limit,
+      organizationIds: Array.isArray(body.organizationIds) ? body.organizationIds : undefined,
+      profileIds: Array.isArray(body.profileIds) ? body.profileIds : undefined,
+    })
+    return res.json(result)
+  } catch (error) {
+    console.error('[admin/profiles/restore-sections-from-orgs]', error)
+    return res.status(500).json({ ok: false, error: error?.message || String(error) })
+  }
 })
 
 /**

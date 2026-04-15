@@ -1,9 +1,12 @@
 /**
  * Ingestion Service
- * Handles ingestion of opportunities from various sources into the database
+ * Handles ingestion of opportunities from various sources into the database.
+ * Pre-filters through opportunity policy before DB writes.
  */
 
 import crypto from 'crypto';
+import { enforceOpportunityPolicy } from '../crawlers/opportunityPolicy.js';
+import { validateOpportunity } from '../opportunityValidator.js';
 
 /**
  * Ingest opportunities into the database
@@ -12,7 +15,7 @@ import crypto from 'crypto';
  * @param {string} sourceName - Source name for tracking
  * @returns {object} Ingestion results
  */
-export function ingestOpportunities(db, opportunities, sourceName) {
+export async function ingestOpportunities(db, opportunities, sourceName) {
   const runId = crypto.randomUUID();
   const startedAt = new Date().toISOString();
   
@@ -24,7 +27,7 @@ export function ingestOpportunities(db, opportunities, sourceName) {
     VALUES (?, ?, ?, 'running', ?)
   `);
   
-  createRun.run(runId, sourceName, startedAt, opportunities.length);
+  await createRun.run(runId, sourceName, startedAt, opportunities.length);
   
   let inserted = 0;
   let updated = 0;
@@ -92,9 +95,31 @@ export function ingestOpportunities(db, opportunities, sourceName) {
     'SELECT id FROM funding_opportunities WHERE source = ? AND source_id = ?'
   );
   
+  // Pre-filter through policy and validation before touching DB.
+  let policySkipped = 0;
+  const validated = [];
+  for (const opp of opportunities) {
+    const policy = enforceOpportunityPolicy(opp);
+    if (!policy.ok) {
+      policySkipped++;
+      console.warn(`[ingestion] Policy rejection: ${policy.reason} | ${opp?.title ?? 'untitled'}`);
+      continue;
+    }
+    const v = validateOpportunity(opp, { allowDirectories: true });
+    if (!v.valid) {
+      policySkipped++;
+      console.warn(`[ingestion] Validation rejection: ${v.errors.join(',')} | ${opp?.title ?? 'untitled'}`);
+      continue;
+    }
+    validated.push(opp);
+  }
+  if (policySkipped > 0) {
+    console.log(`[ingestion] Pre-filtered ${policySkipped} opportunities by policy/validation`);
+  }
+
   // Process in a transaction for performance
   const ingest = db.transaction(() => {
-    for (const opp of opportunities) {
+    for (const opp of validated) {
       try {
         // Check if exists before upsert to track insert vs update
         // Validate input parameters before SQL execution

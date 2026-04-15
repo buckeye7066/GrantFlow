@@ -64,6 +64,7 @@ import { startHealthService } from './services/anyaHealthService.js';
 import ensureMinimumNationalOpportunities from './utils/ensureMinimumNationalOpportunities.js';
 import seedAssistanceDirectories from './utils/seedAssistanceDirectories.js';
 import seedFaithBasedHousing from './utils/seedFaithBasedHousing.js';
+import seedHousingFundingOpportunities from './utils/seedHousingFunding.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import { attachRequestContext } from './middleware/requestContext.js';
 import { pipelineMonitor, getPipelineHealth } from './middleware/pipelineMonitor.js';
@@ -1101,6 +1102,23 @@ try {
   }
 } catch (error) {
   console.warn('[startup] Failed to seed faith-based housing:', error?.message || error)
+}
+
+// ── Housing Funding Opportunities ──
+try {
+  const housingRow = await db
+    .prepare("SELECT COUNT(*) as count FROM funding_opportunities WHERE funding_category IS NOT NULL AND usable_for_housing = 1 AND is_active = 1")
+    .get()
+  const housingCount = housingRow?.count ?? 0
+  if (housingCount < 5) {
+    console.info('[startup] Seeding housing-eligible funding opportunities...')
+    const result = await seedHousingFundingOpportunities(db)
+    console.info('[startup] Seeded housing funding', result)
+  } else {
+    console.info('[startup] Housing funding already seeded', { count: housingCount })
+  }
+} catch (error) {
+  console.warn('[startup] Failed to seed housing funding:', error?.message || error)
 }
 
 function resolveJwtSecret() {

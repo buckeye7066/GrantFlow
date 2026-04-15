@@ -637,42 +637,148 @@ export const RELEVANCE_RULES = [
   },
 
   // ── 16. Content type: Procurement / contract solicitations ────────────────
+  // Only reject for individual/family profiles. Organizations, nonprofits, and
+  // businesses legitimately respond to RFPs and solicitations.
   {
     id: 'content_procurement_contract',
     category: 'content_type',
-    description: 'Procurement and contract solicitations are not grant opportunities',
-    oppPattern: /\b(request for proposals|rfp|solicit(?:ation|e)|contract opportunity|statement of work|bidder|vendor)\b/i,
-    profileCheck: () => true,
-    reason: 'Content type mismatch: procurement/contract solicitation, not a grant opportunity',
+    description: 'Procurement and contract solicitations are not grant opportunities for individuals',
+    oppPattern: /\b(contract opportunity|statement of work|bidder|vendor)\b/i,
+    profileCheck: (pd) => {
+      const t = (pd.primary_type || '').toLowerCase()
+      return ['individual', 'individual_need', 'family', 'student', 'college_student', 'high_school_student', 'medical_assistance', 'caregiver'].includes(t)
+    },
+    reason: 'Content type mismatch: procurement/contract solicitation, not a grant opportunity for individuals',
   },
 
   // ── 17. Content type: Fundraising / crowdfunding asks ─────────────────────
+  // These are "give money" pages, not "receive funding" opportunities.
+  // Reject for all profile types since they are not award applications.
   {
     id: 'content_fundraising_crowdfunding',
     category: 'content_type',
     description: 'Crowdfunding and fundraising asks are not award opportunities',
-    oppPattern: /\b(donate to|crowdfund|gofundme|kickstarter|indiegogo|fundraiser)\b/i,
+    oppPattern: /\b(donate to|gofundme|kickstarter|indiegogo)\b/i,
     profileCheck: () => true,
     reason: 'Content type mismatch: fundraising/crowdfunding ask, not an award opportunity',
   },
 
   // ── 18. Content type: PI / institution-restricted academic calls ───────────
+  // Only reject for individual/family profiles. Organizations, nonprofits, schools,
+  // and researchers legitimately apply for institutional academic calls.
   {
     id: 'content_pi_institution_restricted',
     category: 'content_type',
-    description: 'PI/institution-only academic calls not open to general profiles',
-    oppPattern: /\b(institutions? of higher education|principal investigator|faculty member|doctoral dissertation research)\b/i,
-    profileCheck: () => true,
-    reason: 'Content type mismatch: PI/institution-restricted academic call',
+    description: 'PI/institution-only academic calls not open to individual profiles',
+    oppPattern: /\b(principal investigator|faculty member|doctoral dissertation research)\b/i,
+    profileCheck: (pd) => {
+      const t = (pd.primary_type || '').toLowerCase()
+      return !_isNonprofitProfile(pd) && !_isBusinessProfile(pd) && !_isStudentProfile(pd) &&
+        t !== 'researcher' && t !== 'school'
+    },
+
+      // — 19. No actionable URL — reject opportunities with no application_url AND no source_url
+      // These are unfundable placeholders: users cannot apply or even visit the source.
+    {
+        id: 'no_actionable_url',
+        category: 'data_quality',
+        description: 'Opportunity has no application URL and no source URL — not actionable',
+        oppPattern: null,
+        profileCheck: (pd, oppText, opp) => {
+                const url = opp?.application_url || opp?.source_url || opp?.url || ''
+                return !url || typeof url !== 'string' || !url.startsWith('http')
+        },
+        reason: 'Data quality: no actionable URL — cannot apply or visit this opportunity',
   },
 
-  // ── 19. Content type: Rolling / open-until-filled with no clear deadline ──
+    // — 20. Generic directory page — reject opportunities that are just org homepages
+    // without specific funding program information.
   {
-    id: 'content_rolling_no_clear_deadline',
-    category: 'content_type',
-    description: 'Rolling/open-until-filled listings without a concrete deadline window',
-    oppPattern: /\b(rolling basis|open until filled|applications accepted on a rolling basis)\b/i,
-    profileCheck: (_pd, _oppText, opportunity) => !_hasConcreteDeadline(opportunity),
-    reason: 'Content type mismatch: rolling/open-until-filled listing with no clear deadline window',
+        id: 'generic_directory_page',
+        category: 'content_type',
+        description: 'Generic organizational directory or homepage, not a specific funding program',
+        oppPattern: /\b(resource directory|service directory|agency listing|department homepage|find your local)\b/i,
+        profileCheck: (pd, oppText, opp) => {
+                const title = (opp?.title || '').toLowerCase()
+                const desc = (opp?.description || '').toLowerCase()
+                // Reject if title looks like a generic directory AND description is vague
+                const directoryTitles = [
+                          'local housing finance agencies',
+                          'department of labor',
+                          'community action agencies',
+                          'state vocational rehabilitation',
+                          'workforce development boards',
+                        ]
+                const isDirectoryTitle = directoryTitles.some(d => title.includes(d))
+                const hasNoSpecificProgram = desc.length < 80 || /\b(directory|listing|find your|locate)\b/i.test(desc)
+                return isDirectoryTitle && hasNoSpecificProgram
+        },
+        reason: 'Content type mismatch: generic directory/agency listing, not a specific funding program',
   },
+
+    // — 21. Disability-specific programs for non-disability profiles ——————
+    // Programs like "Ticket to Work", "ODEP", disability employment grants
+    // should only match profiles that indicate a disability need.
+  {
+        id: 'disability_program_mismatch',
+        category: 'demographic',
+        description: 'Disability-specific employment/funding program shown to profile without disability indicators',
+        oppPattern: /\b(disability employment|ticket to work|ODEP|vocational rehabilitation|disability grants|SSI|SSDI)\b/i,
+        profileCheck: (pd) => {
+                const needs = (pd.needs || []).map(n => (n || '').toLowerCase())
+                const text = [
+                          pd.primary_type, pd.description, pd.situation,
+                          ...(pd.challenges || []), ...(pd.special_circumstances || []),
+                        ].filter(Boolean).join(' ').toLowerCase()
+                const hasDisabilityNeed = needs.some(n => /disab|special.?need|impair|handicap|ssi|ssdi/.test(n))
+                const hasDisabilityText = /disab|special.?need|impair|handicap|ssi|ssdi|wheelchair|blind|deaf/.test(text)
+                return !hasDisabilityNeed && !hasDisabilityText
+        },
+        reason: 'Demographic mismatch: disability-specific program for profile without disability indicators',
+  },
+
+    // — 22. Foster/adoption programs for non-foster profiles ——————
+  {
+        id: 'foster_program_mismatch',
+        category: 'demographic',
+        description: 'Foster/adoption-specific program shown to non-foster profile',
+        oppPattern: /\b(foster youth|foster care|foster parent|aging out of foster|former foster)\b/i,
+        profileCheck: (pd) => {
+                const needs = (pd.needs || []).map(n => (n || '').toLowerCase())
+                const text = [
+                          pd.primary_type, pd.description, pd.situation,
+                          ...(pd.challenges || []), ...(pd.special_circumstances || []),
+                        ].filter(Boolean).join(' ').toLowerCase()
+                const hasFosterNeed = needs.some(n => /foster|adopt|aging.?out/.test(n))
+                const hasFosterText = /foster|adopt|aging.?out|child.?welfare|dcs|dcfs/.test(text)
+                return !hasFosterNeed && !hasFosterText
+        },
+        reason: 'Demographic mismatch: foster/adoption program for non-foster profile',
+  },
+
+    // — 23. Homeless-specific programs for non-homeless profiles ——————
+  {
+        id: 'homeless_program_mismatch',
+        category: 'demographic',
+        description: 'Homeless-specific program shown to profile without housing instability',
+        oppPattern: /\b(homeless assistance|homeless shelter|HUD continuum of care|emergency shelter grant|homeless veterans)\b/i,
+        profileCheck: (pd) => {
+                const needs = (pd.needs || []).map(n => (n || '').toLowerCase())
+                const text = [
+                          pd.primary_type, pd.description, pd.situation,
+                          ...(pd.challenges || []), ...(pd.special_circumstances || []),
+                        ].filter(Boolean).join(' ').toLowerCase()
+                const hasHousingNeed = needs.some(n => /hous|home|shelter|homeless|evict|rent/.test(n))
+                const hasHousingText = /homeless|housing.?instab|evict|shelter|unsheltered|couch.?surf/.test(text)
+                return !hasHousingNeed && !hasHousingText
+        },
+        reason: 'Demographic mismatch: homeless-specific program for profile without housing instability',
+  },
+    reason: 'Content type mismatch: PI/institution-restricted academic call for non-institutional profile',
+  },
+
+  // Rule 19 REMOVED: Rolling / open-until-filled programs are legitimate funding
+  // sources (Goal 8: avoid zero results; Goal 5: evolve with new needs).
+  // Many real assistance programs, benefits, and directory resources operate
+  // on a rolling basis and do not have concrete deadlines.
 ]

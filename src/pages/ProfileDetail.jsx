@@ -821,7 +821,7 @@ export default function ProfileDetail() {
                   <div className="space-y-2">
                     <Label>Font size</Label>
                     <Select
-                      value={preferences?.font_size}
+                      value={preferences?.font_size ?? ''}
                       onValueChange={(value) => updatePreference("font_size", value)}
                     >
                       <SelectTrigger className="w-48">
@@ -846,7 +846,7 @@ export default function ProfileDetail() {
                   <div className="space-y-2">
                     <Label>Card density</Label>
                     <Select
-                      value={preferences?.card_density}
+                      value={preferences?.card_density ?? ''}
                       onValueChange={(value) => updatePreference("card_density", value)}
                     >
                       <SelectTrigger className="w-56">

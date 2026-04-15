@@ -42,6 +42,8 @@ export const NEED_ALIAS_MAP = {
   healthcare: 'health_medical',
   medical_bills: 'health_medical',
   prescription: 'health_medical',
+  mental_health: 'health_medical',
+  behavioral_health: 'health_medical',
   dental: 'health_medical',
   vision: 'health_medical',
 
@@ -178,97 +180,12 @@ export const NEED_ALIAS_MAP = {
   legal_aid: 'legal',
   legal_help: 'legal',
 
-  // Substance recovery — own canonical bucket so it can be filtered independently
-  substance_recovery: 'substance_recovery',
-  substance_abuse: 'substance_recovery',
-  addiction: 'substance_recovery',
-  rehab: 'substance_recovery',
-  recovery: 'substance_recovery',
-
-  // Mental health — split from health_medical for finer matching
-  mental_health: 'mental_health',
-  behavioral_health: 'mental_health',
-  counseling: 'mental_health',
-  therapy: 'mental_health',
-
-  // Seniors / aging
-  senior: 'senior',
-  seniors: 'senior',
-  elderly: 'senior',
-  aging: 'senior',
-  older_adult: 'senior',
-
-  // Children / youth
-  youth: 'children_youth',
-  children_youth: 'children_youth',
-  at_risk_youth: 'children_youth',
-  juvenile: 'children_youth',
-  young_people: 'children_youth',
-
-  // Women
-  women: 'women',
-  female: 'women',
-  women_owned: 'women',
-  domestic_violence: 'women',
-
-  // BIPOC / minority
-  minority: 'minority',
-  bipoc: 'minority',
-  african_american: 'minority',
-  hispanic: 'minority',
-  latino: 'minority',
-  underrepresented: 'minority',
-
-  // Immigrant / refugee
-  immigrant: 'immigrant_refugee',
-  refugee: 'immigrant_refugee',
-  immigrant_refugee: 'immigrant_refugee',
-  resettlement: 'immigrant_refugee',
-  asylum: 'immigrant_refugee',
-  asylee: 'immigrant_refugee',
-
-  // Tribal / native
-  tribal: 'tribal',
-  native_american: 'tribal',
-  indigenous: 'tribal',
-  indian_nation: 'tribal',
-
-  // Fire / EMS / public safety
-  fire_department: 'public_safety',
-  volunteer_fire: 'public_safety',
-  ems: 'public_safety',
-  first_responder: 'public_safety',
-  public_safety: 'public_safety',
-
-  // Municipality / government
-  municipality: 'municipality',
-  county_government: 'municipality',
-  city_government: 'municipality',
-  local_government: 'municipality',
-
-  // Environment / conservation
-  environment: 'environment',
-  conservation: 'environment',
-  climate: 'environment',
-  sustainability: 'environment',
-
-  // Agriculture / farming
-  agriculture: 'agriculture',
-  farming: 'agriculture',
-  ranch: 'agriculture',
-  usda: 'agriculture',
-
-  // Community development
-  community_development: 'community_development',
-  economic_development: 'community_development',
-  revitalization: 'community_development',
-  neighborhood: 'community_development',
-
-  // Rural communities
-  rural: 'rural',
-  appalachian: 'rural',
-  small_town: 'rural',
-  underserved: 'rural',
+  // Substance recovery (maps to health_medical)
+  substance_recovery: 'health_medical',
+  substance_abuse: 'health_medical',
+  addiction: 'health_medical',
+  rehab: 'health_medical',
+  recovery: 'health_medical',
 }
 
 // ---------------------------------------------------------------------------
@@ -843,57 +760,6 @@ export function normalizeProfile(rawProfile, sections = null, signals = null) {
       if (ga.snap_recipient || ga.snap) enrolledPrograms.push('snap')
       if (ga.tanf_recipient || ga.tanf) enrolledPrograms.push('tanf')
       if (ga.section8_housing || ga.section_8) enrolledPrograms.push('section8')
-      // Medicaid waiver / ECF CHOICES signals
-      if (ga.medicaid_waiver_program && typeof ga.medicaid_waiver_program === 'string') {
-        enrolledPrograms.push('medicaid_waiver')
-        if (/ecf|choices/i.test(ga.medicaid_waiver_program)) enrolledPrograms.push('ecf_choices')
-      }
-      if (ga.ecf_choices_role && typeof ga.ecf_choices_role === 'string' && !enrolledPrograms.includes('ecf_choices')) {
-        enrolledPrograms.push('ecf_choices')
-      }
-    }
-  }
-
-  // -- Medicaid waiver / ECF --
-  let medicaidWaiverProgram = null
-  let ecfChoicesRole = null
-  if (govSection) {
-    const ga = govSection.answers ?? govSection
-    if (ga && typeof ga === 'object') {
-      medicaidWaiverProgram = ga.medicaid_waiver_program ?? null
-      ecfChoicesRole = ga.ecf_choices_role ?? null
-    }
-  }
-
-  // -- Citizenship signal --
-  let isCitizen = false
-  if (demographicsSection) {
-    const da = demographicsSection.answers ?? demographicsSection
-    if (da && typeof da === 'object') {
-      isCitizen =
-        Boolean(da.us_citizen) ||
-        /^us|united\s*states|american/i.test(String(da.citizenship ?? '')) ||
-        da.immigrant_status === 'us_citizen'
-    }
-  }
-
-  // -- Heritage signal --
-  let heritage = null
-  if (demographicsSection) {
-    const da = demographicsSection.answers ?? demographicsSection
-    if (da && typeof da === 'object') {
-      heritage = da.heritage ?? null
-    }
-  }
-
-  // -- Languages signal --
-  let languages = []
-  if (demographicsSection) {
-    const da = demographicsSection.answers ?? demographicsSection
-    if (da && typeof da === 'object' && da.languages) {
-      languages = typeof da.languages === 'string'
-        ? da.languages.split(/[,;\n]+/).map(s => s.trim()).filter(Boolean)
-        : Array.isArray(da.languages) ? da.languages : []
     }
   }
 
@@ -933,6 +799,331 @@ export function normalizeProfile(rawProfile, sections = null, signals = null) {
     }
   }
 
+  // ---------------------------------------------------------------------------
+  // Demographics: traits from demographics section
+  // ---------------------------------------------------------------------------
+  const demographics = []
+  if (demographicsSection) {
+    const da = demographicsSection.answers ?? demographicsSection
+    if (da && typeof da === 'object') {
+      if (da.african_american || da.black) demographics.push('african_american')
+      if (da.hispanic_latino || da.hispanic || da.latino) demographics.push('hispanic_latino')
+      if (da.asian_american || da.asian) demographics.push('asian_american')
+      if (da.native_american || da.indigenous) demographics.push('native_american')
+      if (da.lgbtq) demographics.push('lgbtq')
+      if (da.first_generation) demographics.push('first_generation')
+      if (da.tribal_affiliation) demographics.push('tribal_affiliation')
+      if (da.immigrant_status && da.immigrant_status !== 'unknown' && da.immigrant_status !== 'us_citizen') {
+        demographics.push('immigrant')
+      }
+    }
+  }
+  // Age-derived demographics — only when age is explicitly provided
+  if (age !== null && age !== undefined) {
+    const numericAge = Number(age)
+    if (Number.isFinite(numericAge) && numericAge > 0) {
+      if (numericAge < 18) demographics.push('youth')
+      if (numericAge >= 18 && numericAge <= 24) demographics.push('young_adult')
+      if (numericAge >= 55) demographics.push('senior')
+    }
+  }
+  if (isStudent && !demographics.includes('first_generation')) {
+    const ea = (educationSection?.answers ?? educationSection)
+    if (ea?.first_generation || ea?.first_generation_college_student) demographics.push('first_generation')
+  }
+
+  // ---------------------------------------------------------------------------
+  // Gender
+  // ---------------------------------------------------------------------------
+  const basicInfo = profileSections?.basic_information
+  let gender = null
+  if (basicInfo) {
+    const ba = basicInfo.answers ?? basicInfo
+    if (ba?.gender && typeof ba.gender === 'string') gender = ba.gender.toLowerCase()
+  }
+  if (!gender && demographicsSection) {
+    const da = demographicsSection.answers ?? demographicsSection
+    if (da?.gender && typeof da.gender === 'string') gender = da.gender.toLowerCase()
+  }
+
+  // ---------------------------------------------------------------------------
+  // Affiliations: church, school, tribal, first_responder, veteran org, etc.
+  // ---------------------------------------------------------------------------
+  const affiliations = []
+  if (rawTypeLower.includes('church') || rawTypeLower.includes('ministry') || rawTypeLower.includes('faith')) {
+    affiliations.push('church', 'faith_based')
+  }
+  if (rawTypeLower.includes('school') || rawTypeLower.includes('education') || rawTypeLower.includes('k12')) {
+    affiliations.push('school')
+  }
+  if (rawTypeLower.includes('fire') || rawTypeLower.includes('ems') || rawTypeLower.includes('rescue')) {
+    affiliations.push('first_responder')
+  }
+  if (rawTypeLower.includes('tribal') || rawTypeLower.includes('indigenous')) {
+    affiliations.push('tribal')
+  }
+  if (isVeteran) affiliations.push('veteran')
+  if (isNonprofit && affiliations.length === 0) affiliations.push('nonprofit')
+  // Organization section may declare faith_based, is_rural_serving, etc.
+  const orgDetailsForAffil = profileSections?.organization_details
+  if (orgDetailsForAffil) {
+    const od = orgDetailsForAffil.answers ?? orgDetailsForAffil
+    if (od?.is_faith_based || od?.faith_based) {
+      if (!affiliations.includes('faith_based')) affiliations.push('faith_based')
+      if (!affiliations.includes('church')) affiliations.push('church')
+    }
+    if (od?.is_tribal_government) {
+      if (!affiliations.includes('tribal')) affiliations.push('tribal')
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Geographic qualifiers: rural, appalachian, tribal, urban_underserved, frontier
+  // ---------------------------------------------------------------------------
+  const geographicQualifiers = []
+  const locFocus = profileSections?.location_focus
+  if (locFocus) {
+    const lfa = locFocus.answers ?? locFocus
+    if (lfa && typeof lfa === 'object') {
+      if (lfa.rural_resident || lfa.rural) geographicQualifiers.push('rural')
+      if (lfa.appalachian_region || lfa.appalachian) geographicQualifiers.push('appalachian')
+      if (lfa.tribal_land) geographicQualifiers.push('tribal')
+      if (lfa.urban_underserved) geographicQualifiers.push('urban_underserved')
+      if (lfa.frontier_community) geographicQualifiers.push('frontier')
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Academics: GPA, ACT, SAT from education section
+  // ---------------------------------------------------------------------------
+  const academics = { gpa: null, act: null, sat: null }
+  if (educationSection) {
+    const ea = educationSection.answers ?? educationSection
+    if (ea && typeof ea === 'object') {
+      const gpaVal = Number(ea.gpa)
+      if (Number.isFinite(gpaVal) && gpaVal > 0) academics.gpa = gpaVal
+      const actVal = Number(ea.act_score ?? ea.act)
+      if (Number.isFinite(actVal) && actVal > 0) academics.act = actVal
+      const satVal = Number(ea.sat_score ?? ea.sat)
+      if (Number.isFinite(satVal) && satVal > 0) academics.sat = satVal
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Talent & extracurricular signals (music, athletics, leadership, arts)
+  // Used to boost talent-based scholarship scoring.
+  // Sources: education section extracurriculars, profile-level keywords/tags,
+  //          and a dedicated activities/extracurriculars section if present.
+  // ---------------------------------------------------------------------------
+  const MUSIC_KEYWORDS = ['music', 'band', 'orchestra', 'choir', 'chorus', 'flute', 'violin', 'piano',
+    'guitar', 'trumpet', 'percussion', 'clarinet', 'saxophone', 'voice', 'singing', 'vocal',
+    'musical', 'instrument', 'marching band', 'concert band', 'jazz', 'symphony']
+  const ATHLETIC_KEYWORDS = ['sport', 'athlete', 'athletics', 'basketball', 'football', 'soccer',
+    'tennis', 'volleyball', 'swimming', 'track', 'cross country', 'baseball', 'softball',
+    'wrestling', 'cheerleading', 'dance', 'gymnastic']
+  const ART_KEYWORDS = ['art', 'painting', 'drawing', 'sculpture', 'theater', 'drama', 'debate',
+    'speech', 'creative writing', 'photography', 'film', 'design']
+  const LEADERSHIP_KEYWORDS = ['student council', 'president', 'vice president', 'captain', 'leader',
+    'club president', 'treasurer', 'secretary', 'class officer', 'key club', 'nhs', 'honor society']
+
+  function _matchesKeywords(text, keywords) {
+    if (!text || typeof text !== 'string') return false
+    const lower = text.toLowerCase()
+    return keywords.some((k) => lower.includes(k))
+  }
+
+  const talentSignals = { music: false, athletics: false, arts: false, leadership: false, raw: [] }
+
+  // Gather raw extracurricular/activity text from multiple section candidates
+  const activitySections = [
+    educationSection,
+    profileSections?.activities,
+    profileSections?.extracurriculars,
+    profileSections?.extracurricular_activities,
+    profileSections?.talents,
+  ].filter(Boolean)
+
+  for (const sec of activitySections) {
+    const sa = sec.answers ?? sec
+    if (!sa || typeof sa !== 'object') continue
+    // Array field: extracurriculars: ["flute", "marching band"]
+    const rawActivities = [
+      ...safeParseArray(sa.extracurriculars),
+      ...safeParseArray(sa.activities),
+      ...safeParseArray(sa.leadership_roles),
+      ...safeParseArray(sa.clubs),
+      ...safeParseArray(sa.sports),
+      ...safeParseArray(sa.instruments),
+      ...safeParseArray(sa.talents),
+    ].map((v) => String(v || '').toLowerCase()).filter(Boolean)
+
+    talentSignals.raw.push(...rawActivities)
+
+    // Also check free-text fields
+    for (const fld of ['extracurricular_text', 'activities_text', 'talent_description', 'special_skills']) {
+      if (typeof sa[fld] === 'string' && sa[fld].trim()) {
+        talentSignals.raw.push(sa[fld].toLowerCase())
+      }
+    }
+  }
+
+  // Check profile-level tags and keywords for talent signals
+  const profileTagText = [
+    ...safeParseArray(profile.tags),
+    ...safeParseArray(profile.keywords),
+  ].map((v) => String(v || '').toLowerCase()).join(' ')
+  if (profileTagText) talentSignals.raw.push(profileTagText)
+
+  for (const item of talentSignals.raw) {
+    if (_matchesKeywords(item, MUSIC_KEYWORDS)) talentSignals.music = true
+    if (_matchesKeywords(item, ATHLETIC_KEYWORDS)) talentSignals.athletics = true
+    if (_matchesKeywords(item, ART_KEYWORDS)) talentSignals.arts = true
+    if (_matchesKeywords(item, LEADERSHIP_KEYWORDS)) talentSignals.leadership = true
+  }
+
+  // ---------------------------------------------------------------------------
+  // Individual faith signals (for non-org profiles: church attendance, religious affiliation)
+  // These are distinct from the org-level faith_based affiliation.
+  // ---------------------------------------------------------------------------
+  let hasFaithIndicator = false
+  const faithSectionCandidates = [
+    profileSections?.faith,
+    profileSections?.religion,
+    profileSections?.religious_affiliation,
+    profileSections?.church_membership,
+    profileSections?.basic_information,
+    profileSections?.personal_information,
+    profileSections?.lifestyle,
+  ].filter(Boolean)
+
+  for (const sec of faithSectionCandidates) {
+    const fa = sec.answers ?? sec
+    if (!fa || typeof fa !== 'object') continue
+    if (
+      Boolean(fa.church_member) || Boolean(fa.faith_affiliation) ||
+      Boolean(fa.religious_affiliation) || Boolean(fa.is_christian) ||
+      Boolean(fa.is_religious) || Boolean(fa.attends_church) ||
+      (typeof fa.religion === 'string' && fa.religion.trim().length > 0 && fa.religion.toLowerCase() !== 'none') ||
+      (typeof fa.denomination === 'string' && fa.denomination.trim().length > 0) ||
+      (typeof fa.faith === 'string' && fa.faith.trim().length > 0 && fa.faith.toLowerCase() !== 'none')
+    ) {
+      hasFaithIndicator = true
+    }
+  }
+  // Org-level faith affiliations also count for individual faith indicator
+  if (affiliations.includes('faith_based') || affiliations.includes('church')) hasFaithIndicator = true
+  // Check profile tags for faith keywords
+  const faithKeywords = ['christian', 'catholic', 'protestant', 'baptist', 'methodist', 'lutheran',
+    'presbyterian', 'evangelical', 'pentecostal', 'church', 'faith', 'religious', 'mosque', 'synagogue']
+  for (const tag of safeParseArray(profile.tags).concat(safeParseArray(profile.keywords))) {
+    if (faithKeywords.some((k) => String(tag || '').toLowerCase().includes(k))) hasFaithIndicator = true
+  }
+
+  // ---------------------------------------------------------------------------
+  // Financial: income, poverty, need level
+  // ---------------------------------------------------------------------------
+  const financial = { householdIncome: null, belowPovertyLine: false, needLevel: null }
+  if (financialSection) {
+    const fa = financialSection.answers ?? financialSection
+    if (fa && typeof fa === 'object') {
+      const monthlyIncome = Number(fa.monthly_income ?? fa.income ?? 0)
+      const annualIncome = Number(fa.annual_income ?? fa.household_income ?? 0)
+      if (annualIncome > 0) financial.householdIncome = annualIncome
+      else if (monthlyIncome > 0) financial.householdIncome = monthlyIncome * 12
+      financial.needLevel = fa.financial_need_level ?? null
+      financial.belowPovertyLine = Boolean(
+        fa.is_low_income || fa.financial_hardship || fa.receives_benefits ||
+        fa.below_poverty_line === true || fa.below_poverty_line === 'yes' ||
+        (financial.householdIncome > 0 && financial.householdIncome < 24000)
+      )
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Occupation signals
+  // ---------------------------------------------------------------------------
+  const occupation = []
+  const occSection = profileSections?.occupation
+  if (occSection) {
+    const oc = occSection.answers ?? occSection
+    if (oc && typeof oc === 'object') {
+      if (oc.job_title) occupation.push(String(oc.job_title).toLowerCase())
+      if (oc.industry) occupation.push(String(oc.industry).toLowerCase())
+      if (oc.healthcare_worker_type) occupation.push(String(oc.healthcare_worker_type).toLowerCase())
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Assistance flags: enrolled programs + additional assistance indicators
+  // ---------------------------------------------------------------------------
+  const assistanceFlags = [...enrolledPrograms]
+  if (financial.belowPovertyLine && !assistanceFlags.includes('low_income')) assistanceFlags.push('low_income')
+  if (hasEmploymentNeed && !assistanceFlags.includes('unemployed')) {
+    const empa = (employmentSection?.answers ?? employmentSection)
+    if (empa?.unemployed || String(empa?.employment_status ?? '').toLowerCase().includes('unemployed')) {
+      assistanceFlags.push('unemployed')
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Immigration status (enriched beyond isRefugee)
+  // ---------------------------------------------------------------------------
+  let immigrationStatus = null
+  if (immigrationSection) {
+    const ia = immigrationSection.answers ?? immigrationSection
+    if (ia && typeof ia === 'object') {
+      immigrationStatus = ia.immigrant_status ?? ia.immigration_status ?? null
+    }
+  }
+  if (!immigrationStatus && demographicsSection) {
+    const da = demographicsSection.answers ?? demographicsSection
+    if (da?.immigrant_status && da.immigrant_status !== 'unknown') {
+      immigrationStatus = da.immigrant_status
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Soft inference: ensure no profile produces empty needCategories
+  // ---------------------------------------------------------------------------
+  if (needCategories.length === 0) {
+    // Infer from boolean flags first
+    if (isVeteran) needCategories.push('veteran')
+    if (isStudent) needCategories.push('education')
+    if (isBusiness) needCategories.push('business')
+    if (isNonprofit) needCategories.push('nonprofit_ministry')
+    if (isCaregiver) needCategories.push('family_life')
+    if (hasDisabilityNeed) needCategories.push('disability')
+    if (hasEmergencyNeed) needCategories.push('emergency')
+    if (hasHousingNeed) needCategories.push('housing')
+    if (hasEmploymentNeed) needCategories.push('employment')
+    if (isRefugee) needCategories.push('emergency')
+    if (financial.belowPovertyLine) {
+      if (!needCategories.includes('food')) needCategories.push('food')
+      if (!needCategories.includes('utilities')) needCategories.push('utilities')
+    }
+  }
+  // If STILL empty after flag inference, derive from entity type alone
+  if (needCategories.length === 0) {
+    const typeInference = {
+      individual: ['cash_assistance', 'housing', 'food'],
+      student: ['education'],
+      veteran: ['veteran'],
+      nonprofit: ['nonprofit_ministry'],
+      business: ['business'],
+      caregiver: ['family_life'],
+      researcher: ['research_arts'],
+      artist: ['research_arts'],
+      organization: ['nonprofit_ministry'],
+    }
+    const inferred = typeInference[entityType]
+    if (inferred) {
+      needCategories.push(...inferred)
+    } else {
+      // Absolute fallback: every profile gets baseline needs
+      needCategories.push('cash_assistance')
+    }
+  }
+
   const normalized = {
     id: profile.id,
     entityType,
@@ -941,6 +1132,7 @@ export function normalizeProfile(rawProfile, sections = null, signals = null) {
     county,
     city,
     needCategories,
+    // Boolean status flags
     isVeteran,
     isStudent,
     isNonprofit,
@@ -953,19 +1145,31 @@ export function normalizeProfile(rawProfile, sections = null, signals = null) {
     hasHousingNeed,
     hasEmploymentNeed,
     hasBusinessNeed,
+    isUnableToWork,
+    isRefugee,
+    // Demographics & identity
     age,
     ageGroup: resolvedAgeGroup,
-    isUnableToWork,
-    enrolledPrograms,
+    gender,
     ethnicity,
+    demographics,
+    immigrationStatus,
+    // Affiliations & qualifiers
+    affiliations,
+    geographicQualifiers,
+    // Structured signal groups
+    academics,
+    financial,
+    occupation,
+    // Assistance & household
+    enrolledPrograms,
+    assistanceFlags,
     householdHasChildren,
     householdSize,
-    isRefugee,
-    isCitizen,
-    heritage,
-    languages,
-    medicaidWaiverProgram,
-    ecfChoicesRole,
+    // Talent & faith signals (housing/scholarship matching)
+    talentSignals,
+    hasFaithIndicator,
+    // Display
     displayName: profile.display_name ?? profile.name ?? null,
   }
 
@@ -996,12 +1200,15 @@ export function computeProfileFingerprint(normalizedProfile) {
     hasEmploymentNeed: normalizedProfile.hasEmploymentNeed,
     hasBusinessNeed: normalizedProfile.hasBusinessNeed,
     isRefugee: normalizedProfile.isRefugee,
-    isCitizen: normalizedProfile.isCitizen,
     householdHasChildren: normalizedProfile.householdHasChildren,
     ageGroup: normalizedProfile.ageGroup,
     enrolledPrograms: (normalizedProfile.enrolledPrograms ?? []).slice().sort(),
-    medicaidWaiverProgram: normalizedProfile.medicaidWaiverProgram,
-    ecfChoicesRole: normalizedProfile.ecfChoicesRole,
+    demographics: (normalizedProfile.demographics ?? []).slice().sort(),
+    gender: normalizedProfile.gender ?? null,
+    affiliations: (normalizedProfile.affiliations ?? []).slice().sort(),
+    geographicQualifiers: (normalizedProfile.geographicQualifiers ?? []).slice().sort(),
+    assistanceFlags: (normalizedProfile.assistanceFlags ?? []).slice().sort(),
+    immigrationStatus: normalizedProfile.immigrationStatus ?? null,
   }
   return createHash('sha256')
     .update(JSON.stringify(relevant))

@@ -326,6 +326,10 @@ function LayoutRoutes() {
 
                 <Route path="/Admin" element={withBoundary(<Admin />, "Admin")} />
 
+                <Route path="/Pricing" element={withBoundary(<Pricing />, "Pricing")} />
+                <Route path="/Services" element={withBoundary(<Services />, "Services")} />
+                <Route path="/SmartMatcher" element={withBoundary(<SmartMatcher />, "SmartMatcher")} />
+
                 <Route path="/SavedGrants" element={withBoundary(<SavedGrants />, "SavedGrants")} />
                 <Route path="/FoundationSearch" element={withBoundary(<FoundationSearch />, "FoundationSearch")} />
 

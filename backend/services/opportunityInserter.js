@@ -1,6 +1,8 @@
 import crypto from 'crypto'
 import { isValidRealUrl, isLoanLike, isMatchingFunds, enforceOpportunityPolicy } from './crawlers/opportunityPolicy.js'
 import { ALLOWED_RECORD_ORIGINS } from '../utils/recordOrigins.js'
+import { validateOpportunity, deduplicateByUrl } from './opportunityValidator.js'
+import { normalizeUrlForDedupe } from '../routes/opportunityHelpers.js'
 
 // Backward-compat alias
 const isValidHttpUrl = isValidRealUrl
@@ -21,6 +23,137 @@ function normalizeNonEmptyString(value) {
 /**
  * Derive funding_source_type from record_origin and source when not explicitly set.
  */
+/**
+ * Classify a funding opportunity's category for housing usability.
+ * Categories: tuition_only, refund_eligible, stipend, housing_direct, faith_based, talent_based, coa_adjustment
+ */
+function classifyFundingCategory(opportunity) {
+  const text = `${opportunity.title || ''} ${opportunity.description || ''} ${(opportunity.eligibility_bullets || []).join(' ')}`.toLowerCase()
+
+  // Housing direct: RA programs, housing grants, room and board coverage
+  if (/\b(resident\s*a(dvisor|ssistant)|ra\s+position|housing\s+(grant|assistance|scholarship|stipend)|room\s+and\s+board|dormitor|on-campus\s+housing)\b/.test(text)) {
+    return 'housing_direct'
+  }
+  // Stipend: monthly stipend, living allowance, fellowship stipend
+  if (/\b(stipend|living\s+(allowance|expense)|monthly\s+(payment|allowance)|fellowship.*stipend|research\s+assistantship)\b/.test(text)) {
+    return 'stipend'
+  }
+  // COA adjustment: cost of attendance appeals, professional judgment
+  if (/\b(cost\s+of\s+attendance|coa\s+(adjustment|appeal)|professional\s+judgment|financial\s+aid\s+appeal|special\s+circumstances?\s+appeal)\b/.test(text)) {
+    return 'coa_adjustment'
+  }
+  // Faith-based
+  if (/\b(faith[- ]based|church\s+scholarship|christian\s+(scholarship|grant)|ministry\s+(grant|scholarship)|religious\s+(scholarship|grant)|denominational|baptist|methodist|presbyterian|catholic\s+scholarship|lutheran)\b/.test(text)) {
+    return 'faith_based'
+  }
+  // Talent-based
+  if (/\b(music\s+scholarship|talent[- ]based|athletic\s+scholarship|art\s+scholarship|perform(ance|ing)\s+(arts?\s+)?(scholarship|grant)|band\s+scholarship|choir\s+scholarship|instrument|audition[- ]based)\b/.test(text)) {
+    return 'talent_based'
+  }
+  // Refund eligible: scholarships that pay to student or exceed tuition
+  if (opportunity.opportunity_type === 'scholarship' || /\bscholarship\b/.test(text)) {
+    if (/\b(refund|excess|remaining\s+balance|disbursed?\s+to\s+student|direct\s+to\s+student|overage|credit\s+balance)\b/.test(text)) {
+      return 'refund_eligible'
+    }
+    // Large scholarships likely produce refunds
+    if (opportunity.amount_max && opportunity.amount_max > 10000) {
+      return 'refund_eligible'
+    }
+  }
+  // Tuition only
+  if (/\b(tuition[- ]only|applied\s+directly\s+to\s+tuition|pays\s+tuition|tuition\s+waiver|tuition\s+remission)\b/.test(text)) {
+    return 'tuition_only'
+  }
+  return null
+}
+
+/**
+ * Determine if a funding opportunity can be used for housing/living expenses.
+ */
+function deriveUsableForHousing(opportunity, fundingCategory) {
+  if (['refund_eligible', 'stipend', 'housing_direct', 'coa_adjustment'].includes(fundingCategory)) {
+    return true
+  }
+  const text = `${opportunity.title || ''} ${opportunity.description || ''}`.toLowerCase()
+  if (/\b(living\s+expenses?|off[- ]campus|rent|utilit(y|ies)|food|room\s+and\s+board|housing)\b/.test(text)) {
+    return true
+  }
+  return false
+}
+
+/**
+ * Determine refund potential for a funding opportunity.
+ */
+function deriveRefundPotential(opportunity, fundingCategory) {
+  if (fundingCategory === 'refund_eligible') return true
+  if (fundingCategory === 'stipend') return true
+  const text = `${opportunity.title || ''} ${opportunity.description || ''}`.toLowerCase()
+  if (/\b(refund|excess\s+funds?|credit\s+balance|disbursed?\s+to\s+student|remaining\s+balance)\b/.test(text)) {
+    return true
+  }
+  return false
+}
+
+/**
+ * Extract structured eligibility signals from opportunity data.
+ */
+function extractEligibilitySignals(opportunity) {
+  const text = `${opportunity.title || ''} ${opportunity.description || ''} ${(opportunity.eligibility_bullets || []).join(' ')}`.toLowerCase()
+  const signals = {}
+
+  // GPA requirement
+  const gpaMatch = text.match(/\b(\d\.\d{1,2})\s*(?:gpa|grade\s+point|cumulative)\b/) ||
+    text.match(/\bgpa\s*(?:of\s+)?(\d\.\d{1,2})\b/)
+  if (gpaMatch) signals.gpa_min = parseFloat(gpaMatch[1])
+
+  // Faith affiliation
+  if (/\b(faith|christian|church|ministry|religious|baptist|methodist|presbyterian|catholic|lutheran|evangelical|protestant|jewish|muslim|interfaith)\b/.test(text)) {
+    signals.faith_affiliation = true
+  }
+
+  // Talent type
+  const talentPatterns = [
+    { pattern: /\b(music|instrument|band|choir|orchestra|flute|piano|violin|vocal)\b/, type: 'music' },
+    { pattern: /\b(athlet|sport|basketball|football|soccer|track|swimming|tennis|golf|baseball)\b/, type: 'athletics' },
+    { pattern: /\b(art|visual\s+art|painting|sculpture|drawing|design|photography)\b/, type: 'visual_arts' },
+    { pattern: /\b(theater|theatre|drama|acting|perform(ance|ing)\s+arts?|dance)\b/, type: 'performing_arts' },
+    { pattern: /\b(leadership|community\s+service|volunteer|civic)\b/, type: 'leadership' },
+    { pattern: /\b(debate|speech|forensic|public\s+speaking|model\s+un)\b/, type: 'speech_debate' },
+    { pattern: /\b(stem|science|math|engineer|computer|coding|robotics)\b/, type: 'stem' },
+    { pattern: /\b(writ(e|ing)|essay|journal|poet|literary|creative\s+writing)\b/, type: 'writing' },
+  ]
+  const talents = []
+  for (const { pattern, type } of talentPatterns) {
+    if (pattern.test(text)) talents.push(type)
+  }
+  if (talents.length > 0) signals.talent_type = talents
+
+  // State
+  if (opportunity.state && opportunity.state !== 'nationwide') {
+    signals.state = opportunity.state
+  }
+
+  // Field of study
+  const fieldPatterns = [
+    { pattern: /\b(forensic\s+science|criminalistics|crime\s+lab)\b/, field: 'forensic_science' },
+    { pattern: /\b(nursing|pre[- ]?nursing|bsn|rn\b)\b/, field: 'nursing' },
+    { pattern: /\b(engineering|mechanical|electrical|civil|chemical)\b/, field: 'engineering' },
+    { pattern: /\b(computer\s+science|software|information\s+technology|cybersecurity)\b/, field: 'computer_science' },
+    { pattern: /\b(business|accounting|finance|marketing|mba)\b/, field: 'business' },
+    { pattern: /\b(education|teaching|pedagogy)\b/, field: 'education' },
+    { pattern: /\b(medicine|pre[- ]?med|medical\s+school)\b/, field: 'medicine' },
+    { pattern: /\b(biology|biochemistry|biomedical)\b/, field: 'biology' },
+  ]
+  for (const { pattern, field } of fieldPatterns) {
+    if (pattern.test(text)) {
+      signals.field_of_study = field
+      break
+    }
+  }
+
+  return Object.keys(signals).length > 0 ? signals : null
+}
+
 function deriveFundingSourceType(recordOrigin, source) {
   if (recordOrigin === 'grants_gov' || ['grants.gov', 'grants_gov', 'usa_spending', 'usaspending'].includes(source)) return 'federal'
   if (['state_portal', 'state_grants_portal', 'state_waiver'].includes(source)) return 'state'
@@ -78,7 +211,32 @@ function normalizeDateLikeOrNull(value) {
   return value
 }
 
-export async function upsertFundingOpportunity(db, opportunity) {
+export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
+  // Full policy enforcement on every path (not just bulk).
+  const policyResult = enforceOpportunityPolicy(opportunity)
+  if (!policyResult.ok) {
+    return {
+      id: null,
+      inserted: false,
+      skipped: true,
+      reason: `policy:${policyResult.reason}`,
+    }
+  }
+
+  // Comprehensive validation (required fields, categorization, directory/expiration detection).
+  const validation = validateOpportunity(opportunity, {
+    allowLoans: opts.allowLoans ?? false,
+    allowDirectories: opts.allowDirectories ?? true,
+  })
+  if (!validation.valid) {
+    return {
+      id: null,
+      inserted: false,
+      skipped: true,
+      reason: `validation:${validation.errors.join(',')}`,
+    }
+  }
+
   const source = opportunity.source ?? 'crawler'
   const title = normalizeNonEmptyString(opportunity?.title)
   if (!title) {
@@ -95,7 +253,6 @@ export async function upsertFundingOpportunity(db, opportunity) {
   const applicationUrl = normalizeUrl(opportunity.application_url)
   const evidenceUrl = normalizeUrl(opportunity.evidence_url ?? sourceUrl ?? applicationUrl)
 
-  // All opportunities must have at least one concrete valid http/https URL (no placeholders).
   const candidateUrl = sourceUrl ?? applicationUrl ?? evidenceUrl ?? null
   if (!candidateUrl || !isValidHttpUrl(candidateUrl)) {
     return {
@@ -106,7 +263,6 @@ export async function upsertFundingOpportunity(db, opportunity) {
     }
   }
 
-  // Exclude loans, microloans, financing, and matching-fund/cost-share opportunities.
   if (isLoanOrMatchingFund(opportunity)) {
     return {
       id: null,
@@ -116,13 +272,17 @@ export async function upsertFundingOpportunity(db, opportunity) {
     }
   }
 
+  // Apply inferred opportunity_type from validator if not already set.
+  if (validation.opportunityType && !opportunity.opportunity_type) {
+    opportunity.opportunity_type = validation.opportunityType
+  }
+
   const sourceId =
     opportunity.source_id ??
     // Many crawler datasets ship a stable `id` field; treat that as the source_id when present.
     opportunity.id ??
     stableSourceIdFromOpportunity(source, opportunity)
 
-  try {
   // Check if record exists and if it's verified
   const existing = await db
     .prepare(
@@ -289,6 +449,31 @@ export async function upsertFundingOpportunity(db, opportunity) {
     return { id: existing.id, inserted: false, updated: true, skipped: false }
   }
 
+  // URL-based cross-source deduplication: if another active opportunity has the same
+  // normalized URL from a different source, treat it as a duplicate (skip insert).
+  const normalizedCandidateUrl = normalizeUrlForDedupe(candidateUrl)
+  if (normalizedCandidateUrl && !opts.skipUrlDedup) {
+    try {
+      const urlDupe = await db
+        .prepare(
+          `SELECT id, source, source_id FROM funding_opportunities
+           WHERE source_url = ? OR application_url = ?
+           LIMIT 1`,
+        )
+        .get(candidateUrl, candidateUrl)
+      if (urlDupe && urlDupe.source !== source) {
+        return {
+          id: urlDupe.id,
+          inserted: false,
+          skipped: true,
+          reason: `url_duplicate:${urlDupe.source}/${urlDupe.source_id}`,
+        }
+      }
+    } catch (err) {
+      console.warn('[opportunityInserter] URL dedup query failed (allowing insert):', err?.message)
+    }
+  }
+
   // IMPORTANT:
   // `funding_opportunities.id` is the DB primary key. Never reuse dataset IDs here because
   // different sources can collide (e.g. "nat-snap") which triggers UNIQUE constraint failures.
@@ -337,6 +522,13 @@ export async function upsertFundingOpportunity(db, opportunity) {
         : null,
     notes: opportunity.notes ?? null,
     record_origin: recordOrigin,
+    funding_category: opportunity.funding_category ?? classifyFundingCategory(opportunity),
+    usable_for_housing: toDbBoolean(db, opportunity.usable_for_housing ?? deriveUsableForHousing(opportunity, opportunity.funding_category ?? classifyFundingCategory(opportunity))),
+    refund_potential: toDbBoolean(db, opportunity.refund_potential ?? deriveRefundPotential(opportunity, opportunity.funding_category ?? classifyFundingCategory(opportunity))),
+    eligibility_signals: opportunity.eligibility_signals != null
+      ? (typeof opportunity.eligibility_signals === 'string' ? opportunity.eligibility_signals : JSON.stringify(opportunity.eligibility_signals))
+      : JSON.stringify(extractEligibilitySignals(opportunity)),
+    verification_status: opportunity.verification_status ?? 'needs_review',
     funding_domain: opportunity.funding_domain ?? null,
     funding_subdomain: opportunity.funding_subdomain ?? null,
     source_category: opportunity.source_category ?? null,
@@ -346,12 +538,6 @@ export async function upsertFundingOpportunity(db, opportunity) {
     signal_tags: JSON.stringify(ensureArray(opportunity.signal_tags)),
     crawler_version: opportunity.crawler_version ?? null,
   }
-
-  // Postgres partial unique index requires the WHERE predicate in ON CONFLICT
-  // so the planner can infer the correct index. SQLite doesn't support this syntax.
-  const conflictClause = db.dialect === 'postgres'
-    ? 'ON CONFLICT(source, source_id) WHERE source IS NOT NULL AND source_id IS NOT NULL DO UPDATE SET'
-    : 'ON CONFLICT(source, source_id) DO UPDATE SET'
 
   const insert = db.prepare(`
     INSERT INTO funding_opportunities (
@@ -396,7 +582,12 @@ export async function upsertFundingOpportunity(db, opportunity) {
       geo_eligibility,
       signal_tags,
       crawler_version,
-      funding_source_type
+      funding_source_type,
+      funding_category,
+      usable_for_housing,
+      refund_potential,
+      eligibility_signals,
+      verification_status
     ) VALUES (
       @id,
       @title,
@@ -439,9 +630,14 @@ export async function upsertFundingOpportunity(db, opportunity) {
       @geo_eligibility,
       @signal_tags,
       @crawler_version,
-      @funding_source_type
+      @funding_source_type,
+      @funding_category,
+      @usable_for_housing,
+      @refund_potential,
+      @eligibility_signals,
+      @verification_status
     )
-    ${conflictClause}
+    ON CONFLICT(source, source_id) DO UPDATE SET
       title = COALESCE(excluded.title, funding_opportunities.title),
       sponsor = COALESCE(excluded.sponsor, funding_opportunities.sponsor),
       description = COALESCE(excluded.description, funding_opportunities.description),
@@ -474,6 +670,11 @@ export async function upsertFundingOpportunity(db, opportunity) {
       geo_eligibility = COALESCE(excluded.geo_eligibility, funding_opportunities.geo_eligibility),
       crawler_version = COALESCE(excluded.crawler_version, funding_opportunities.crawler_version),
       funding_source_type = COALESCE(excluded.funding_source_type, funding_opportunities.funding_source_type),
+      funding_category = COALESCE(excluded.funding_category, funding_opportunities.funding_category),
+      usable_for_housing = COALESCE(excluded.usable_for_housing, funding_opportunities.usable_for_housing),
+      refund_potential = COALESCE(excluded.refund_potential, funding_opportunities.refund_potential),
+      eligibility_signals = COALESCE(excluded.eligibility_signals, funding_opportunities.eligibility_signals),
+      verification_status = COALESCE(excluded.verification_status, funding_opportunities.verification_status),
       record_origin = COALESCE(excluded.record_origin, funding_opportunities.record_origin),
       last_verified_at = COALESCE(excluded.last_verified_at, funding_opportunities.last_verified_at),
       match_reasons = COALESCE(excluded.match_reasons, funding_opportunities.match_reasons),
@@ -523,34 +724,40 @@ export async function upsertFundingOpportunity(db, opportunity) {
     signal_tags: record.signal_tags,
     crawler_version: record.crawler_version,
     funding_source_type: record.funding_source_type ?? deriveFundingSourceType(record.record_origin, source),
+    funding_category: record.funding_category,
+    usable_for_housing: record.usable_for_housing,
+    refund_potential: record.refund_potential,
+    eligibility_signals: record.eligibility_signals,
+    verification_status: record.verification_status,
   })
 
   return { id, inserted: true, skipped: false }
-  } catch (err) {
-    console.error(`[opportunityInserter] upsert failed for "${opportunity?.title || '(unknown)'}":`, err.message)
-    return { id: null, inserted: false, skipped: false, error: err.message }
-  }
 }
 
 /**
  * Persist only policy-compliant opportunities. Non-negotiable: loans, matching funds,
  * placeholders, and invalid/missing URLs are never written to the database.
  * Batched in transactions of 50 for performance.
+ * Pre-deduplicates by normalized URL before batch processing.
  */
-export async function bulkUpsertFundingOpportunities(db, opportunities = []) {
+export async function bulkUpsertFundingOpportunities(db, opportunities = [], opts = {}) {
+  // Pre-deduplicate by normalized URL within the batch itself.
+  const { unique: deduped, duplicateCount } = deduplicateByUrl(opportunities)
+  if (duplicateCount > 0) {
+    console.log(`[bulkUpsert] Removed ${duplicateCount} intra-batch URL duplicates`)
+  }
+
   const BATCH_SIZE = 50
   const inserted = []
-  for (let i = 0; i < opportunities.length; i += BATCH_SIZE) {
-    const batch = opportunities.slice(i, i + BATCH_SIZE)
+  for (let i = 0; i < deduped.length; i += BATCH_SIZE) {
+    const batch = deduped.slice(i, i + BATCH_SIZE)
     try {
       await db.withTransaction(async (tx) => {
         for (const opportunity of batch) {
-          const policy = enforceOpportunityPolicy(opportunity)
-          if (!policy.ok) {
-            console.warn('[bulkUpsert] Policy rejection:', policy.reason ?? 'unknown', '|', opportunity?.title ?? 'untitled', '|', opportunity?.source_url ?? '')
-            continue
+          const result = await upsertFundingOpportunity(tx, opportunity, opts)
+          if (result?.skipped && result?.reason) {
+            console.warn('[bulkUpsert] Rejected:', result.reason, '|', opportunity?.title ?? 'untitled')
           }
-          const result = await upsertFundingOpportunity(tx, opportunity)
           if (result?.inserted) inserted.push(result.id)
         }
       })
@@ -558,12 +765,10 @@ export async function bulkUpsertFundingOpportunities(db, opportunities = []) {
       console.error(`[bulkUpsert] Batch ${i}-${i + batch.length} failed, falling back to individual:`, err.message)
       for (const opportunity of batch) {
         try {
-          const policy = enforceOpportunityPolicy(opportunity)
-          if (!policy.ok) {
-            console.warn('[bulkUpsert] Policy rejection:', policy.reason ?? 'unknown', '|', opportunity?.title ?? 'untitled', '|', opportunity?.source_url ?? '')
-            continue
+          const result = await upsertFundingOpportunity(db, opportunity, opts)
+          if (result?.skipped && result?.reason) {
+            console.warn('[bulkUpsert] Rejected:', result.reason, '|', opportunity?.title ?? 'untitled')
           }
-          const result = await upsertFundingOpportunity(db, opportunity)
           if (result?.inserted) inserted.push(result.id)
         } catch (indivErr) { console.error('[bulkUpsert] Individual insert failed:', indivErr.message, opportunity?.title) }
       }

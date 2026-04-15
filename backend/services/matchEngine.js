@@ -1,9 +1,20 @@
 /**
- * matchEngine.js — Canonical Matching Engine (v3.0.0)
+ * matchEngine.js — Canonical Matching Engine (v4.0.0)
  *
  * Single source of truth for matching profiles to funding opportunities.
- * Combines deterministic score computation (from matchingEngine.js) with
- * eligibility-based decision logic (from matchDecisionEngine.js).
+ * Uses a weighted component model where each dimension produces a 0-100
+ * subscale, then combines them with explicit weights:
+ *
+ *   Need alignment:      35%  (primary)
+ *   Eligibility match:   25%
+ *   Geographic relevance: 20%
+ *   Category relevance:  20%
+ *
+ * Design principles:
+ *   - Missing data → neutral baseline, never zero
+ *   - No single penalty can eliminate a match
+ *   - Profile depth rewards richer profiles
+ *   - Floor guarantee: any validated opportunity scores ≥ 5
  *
  * Public API:
  *   scoreOpportunity(profile, opportunity)           → { score, reasons, match_explain }
@@ -16,14 +27,26 @@
  *   normalizeOpportunity from ./opportunityNormalizer.js
  */
 
+import zipcodes from 'zipcodes'
 import { safeParseArrayField, resolveApplicantType, buildProfileSignals } from './profileHelpers.js'
 import { normalizeProfile } from './profileNormalizer.js'
-import { normalizeOpportunity } from './opportunityNormalizer.js'
+import { normalizeOpportunity, inferHousingClassification } from './opportunityNormalizer.js'
+import { haversineDistanceMiles } from './sharedGeo.js'
+import {
+  SCORE_FLOOR,
+  W_NEED, W_ELIGIBILITY, W_GEO, W_CATEGORY,
+  DEFAULT_MIN_SCORE, RELAX_THRESHOLDS, FALLBACK_TOP_N,
+  ACCEPT_SCORE, REVIEW_SCORE,
+  DECISION_ACCEPT_MIN, DECISION_CONFIDENCE_MIN,
+} from '../config/matchThresholds.js'
 
 export { normalizeProfile, computeProfileFingerprint } from './profileNormalizer.js'
 export { normalizeOpportunity, computeOpportunityFingerprint } from './opportunityNormalizer.js'
 
-export const MATCHER_VERSION = '3.0.0'
+export const MATCHER_VERSION = '4.0.0'
+
+// Re-export thresholds so consumers don't need to know about the config file
+export { SCORE_FLOOR, DEFAULT_MIN_SCORE, RELAX_THRESHOLDS, FALLBACK_TOP_N }
 
 // ---------------------------------------------------------------------------
 // Source trust scoring
@@ -172,6 +195,23 @@ export function evaluateEligibility(profileNorm, oppNorm) {
     missingFields.push('disability_or_medical_need_for_equipment')
   }
 
+  // Affiliation-aware eligibility: faith-based opportunities should prefer
+  // profiles with church/faith affiliations but NOT hard-reject others
+  const profAffiliations = profileNorm.affiliations ?? []
+  if (oppNorm.title) {
+    const titleLower = (oppNorm.title || '').toLowerCase()
+    const isFaithBased = /\b(faith[- ]based|church|ministry|congregation)\b/i.test(titleLower)
+    if (isFaithBased && !profAffiliations.includes('faith_based') && !profAffiliations.includes('church')) {
+      missingFields.push('faith_based_affiliation')
+    }
+    const isTribal = /\b(tribal|indigenous|native american)\b/i.test(titleLower)
+    if (isTribal && !profAffiliations.includes('tribal') &&
+        !(profileNorm.demographics ?? []).includes('native_american') &&
+        !(profileNorm.demographics ?? []).includes('tribal_affiliation')) {
+      missingFields.push('tribal_affiliation')
+    }
+  }
+
   const allowedTypes = oppNorm.entityTypesAllowed ?? []
   if (allowedTypes.length > 0 && !allowedTypes.includes('individual')) {
     const profileType = profileNorm.entityType
@@ -224,13 +264,41 @@ export function evaluateEligibility(profileNorm, oppNorm) {
 export function calculateNeedAlignment(profileNorm, oppNorm) {
   const profileNeeds = profileNorm?.needCategories ?? []
   const oppNeeds = oppNorm?.needTypesSupported ?? []
-  if (profileNeeds.length === 0) return { score: 0, matchedNeeds: [] }
-  if (oppNeeds.length === 0) return { score: 25, matchedNeeds: [] }
+
+  // Soft baseline: even when profile has no declared needs, having location/entity/flags
+  // means we can provide a non-zero baseline so scoring isn't zeroed out.
+  if (profileNeeds.length === 0) {
+    const hasLoc = Boolean(profileNorm?.state || profileNorm?.zip)
+    const hasEntity = Boolean(profileNorm?.entityType)
+    const hasFlags = Boolean(
+      profileNorm?.isVeteran || profileNorm?.isStudent || profileNorm?.isNonprofit ||
+      profileNorm?.isBusiness || profileNorm?.isCaregiver || profileNorm?.hasDisabilityNeed
+    )
+    if (hasLoc || hasEntity || hasFlags) {
+      const richness = (hasLoc ? 14 : 0) + (hasEntity ? 10 : 0) + (hasFlags ? 12 : 0)
+      return { score: Math.min(40, Math.round(15 + richness * 0.5)), matchedNeeds: [] }
+    }
+    return { score: 0, matchedNeeds: [] }
+  }
+
+  // When opp declares no specific need types (common for legacy/directory catalog rows),
+  // scale with profile strength so well-filled profiles can reach meaningful match tiers.
+  if (oppNeeds.length === 0) {
+    const hasLoc = Boolean(profileNorm?.state || profileNorm?.zip)
+    const hasEntity = Boolean(profileNorm?.entityType)
+    const richness = Math.min(100, profileNeeds.length * 18 + (hasLoc ? 14 : 0) + (hasEntity ? 10 : 0))
+    const score = Math.min(92, Math.round(34 + richness * 0.55))
+    return { score, matchedNeeds: [] }
+  }
+
   const matchedNeeds = profileNeeds.filter((n) => oppNeeds.includes(n))
   const profileCoverage = matchedNeeds.length / profileNeeds.length
   const oppCoverage = matchedNeeds.length / Math.max(oppNeeds.length, 1)
-  const score = Math.min(100, Math.round(((profileCoverage + oppCoverage) / 2) * 100))
-  return { score, matchedNeeds }
+  let score = Math.min(100, Math.round(((profileCoverage + oppCoverage) / 2) * 100))
+  if (matchedNeeds.length >= 2) {
+    score = Math.min(100, Math.round(score * 1.06 + matchedNeeds.length * 2))
+  }
+  return { score: Math.min(100, score), matchedNeeds }
 }
 
 // ---------------------------------------------------------------------------
@@ -297,7 +365,7 @@ const RE_BUSINESS_SBA = /\b(sba\b|small business (administration|development|inn
 const RE_NONPROFIT_ONLY = /\b(for nonprofits|philanthropy for nonprofits|grants? for nonprofits)\b/i
 const RE_INSTITUTIONAL_ONLY = /\b(research institution|institutional grant|universities only|colleges only)\b/i
 const RE_VETERAN_ONLY = /\bveterans?\s+only\b|\bfor\s+veterans?\s+only\b/i
-const RE_STUDENT_ONLY = /\bstudents?\s+only\b|\bfor\s+students?\s+only\b/i
+const RE_STUDENT_ONLY = /\bstudents?\s+only\b|\bfor\s+students?\s+only\b|\bfor\s+enrolled\s+students?\b|\benrolled\s+students?\s+(?:at|in|of)\b/i
 const RE_NONPROFIT_REQUIRED = /\b(for nonprofits only|nonprofits only|501\(c\)\(3\) required|exclusively\s+(?:for|to)\s+501\(c\)\(3\)|501\(c\)\(3\) organizations)\b/i
 const RE_DISASTER_SIGNAL = /disaster|fema|emergency|flood|fire|tornado|hurricane|storm/i
 
@@ -752,33 +820,49 @@ function calculateFacetAdjustments({ facets, opportunity, oppText }) {
 }
 
 // ---------------------------------------------------------------------------
-// scoreOpportunity — deterministic scoring
+// Profile depth — measures how much data the profile provides (0-100)
+// ---------------------------------------------------------------------------
+
+function measureProfileDepth(effectiveProfile, effectiveSignals, profileNorm) {
+  let depth = 0
+  const hasLocation = Boolean(
+    effectiveSignals?.location?.state || effectiveSignals?.location?.zip ||
+    effectiveProfile?.state || effectiveProfile?.zip_code,
+  )
+  const hasType = Boolean(resolveApplicantType(effectiveProfile))
+  const hasNeeds = (safeParseArrayField(effectiveProfile?.needs, []).length > 0) ||
+    (profileNorm?.needCategories?.length > 0)
+  const hasKeywords = Boolean(effectiveSignals?.keywordSet?.size > 0)
+  const hasDemographics = Boolean(effectiveSignals?.demographics?.size > 0) ||
+    (profileNorm?.demographics?.length > 0)
+  const hasAffiliations = (profileNorm?.affiliations?.length > 0)
+  const hasFinancial = Boolean(effectiveSignals?.financial || effectiveProfile?.funding_amount_needed)
+  const hasFlags = Boolean(
+    profileNorm?.isVeteran || profileNorm?.isStudent || profileNorm?.isNonprofit ||
+    profileNorm?.isBusiness || profileNorm?.isCaregiver || profileNorm?.hasDisabilityNeed,
+  )
+
+  if (hasLocation) depth += 18
+  if (hasType) depth += 16
+  if (hasNeeds) depth += 20
+  if (hasKeywords) depth += 14
+  if (hasDemographics) depth += 10
+  if (hasAffiliations) depth += 8
+  if (hasFinancial) depth += 7
+  if (hasFlags) depth += 7
+  return Math.min(100, depth)
+}
+
+// ---------------------------------------------------------------------------
+// Component scorers — each returns 0-100 on its own subscale
 // ---------------------------------------------------------------------------
 
 /**
- * Score a single opportunity against a profile.
- *
- * @param {Object} profile      - Raw profile OR profileContext { profile, sections, signals, facets }
- * @param {Object} opportunity  - Raw opportunity object
- * @returns {{ score: number, reasons: string[], match_explain: object }}
+ * Geographic relevance (0-100 subscale).
+ * Missing profile location → 35 (neutral baseline, not penalty).
+ * State mismatch → 10 (reduced, never zero).
  */
-export function scoreOpportunity(profile, opportunity) {
-  // Resolve profileContext vs plain profile
-  const profileContext =
-    profile && typeof profile === 'object' && profile.profile && profile.sections ? profile : null
-  const effectiveProfile = profileContext?.profile ?? profile
-  const effectiveSignals =
-    profileContext?.signals ??
-    (profileContext?.sections
-      ? buildProfileSignals({ profile: effectiveProfile, sections: profileContext.sections })
-      : null)
-  const effectiveFacets = profileContext?.facets ?? null
-
-  const reasons = []
-  let score = 0
-  const oppText = `${opportunity?.title || ''} ${opportunity?.description || ''} ${opportunity?.sponsor || ''}`.toLowerCase()
-
-  // ── Geographic match (expand outward: ZIP → county → city → state → national) ──
+function scoreGeoComponent(effectiveProfile, effectiveSignals, opportunity) {
   const profileLocation = effectiveSignals?.location || {}
   const profileZip = profileLocation?.zip ?? effectiveProfile?.postal_code ?? effectiveProfile?.zip_code ?? null
   const profileCounty = profileLocation?.county ?? null
@@ -792,94 +876,234 @@ export function scoreOpportunity(profile, opportunity) {
     Boolean(opportunity?.is_national) ||
     String(oppState || '').toLowerCase() === 'nationwide'
 
-  let geoTier = null
-  let geoPoints = 0
+  let tier = 'none'
+  let subscale = 35
 
   if (!profileZip && !profileCounty && !profileCity && !profileState) {
-    geoTier = 'unknown'
-    geoPoints = -5
+    tier = 'unknown'
+    subscale = 35
   } else if (profileZip && oppZip && String(profileZip).trim() === String(oppZip).trim()) {
-    geoTier = 'zip'
-    geoPoints = 25
+    tier = 'zip'
+    subscale = 100
+  } else if (profileZip && oppZip) {
+    // Distance-aware proximity scoring for non-exact ZIP matches.
+    // Uses haversine to compute actual distance and assigns proportional score:
+    //   ≤ 25mi → 95-85 (local), ≤ 50mi → 84-75 (expanded), > 50mi → falls through
+    const dist = _zipDistanceMiles(profileZip, oppZip)
+    if (dist !== null && dist <= 25) {
+      tier = 'nearby_local'
+      subscale = Math.round(95 - (dist / 25) * 10)
+    } else if (dist !== null && dist <= 50) {
+      tier = 'nearby_expanded'
+      subscale = Math.round(84 - ((dist - 25) / 25) * 9)
+    } else if (profileCounty && oppCounty && normalizeCounty(oppCounty) === normalizeCounty(profileCounty)) {
+      tier = 'county'
+      subscale = 92
+    } else if (
+      profileCity && typeof profileCity === 'string' &&
+      typeof opportunity?.description === 'string' &&
+      normalizeString(opportunity.description).includes(normalizeString(profileCity))
+    ) {
+      tier = 'city'
+      subscale = 85
+    } else if (profileState && oppState && normalizeState(oppState) === normalizeState(profileState)) {
+      tier = 'state'
+      subscale = 75
+    } else if (oppIsNational) {
+      tier = 'national'
+      subscale = 55
+    } else if (profileState && oppState && normalizeState(oppState) !== normalizeState(profileState)) {
+      tier = 'mismatch'
+      subscale = 10
+    } else {
+      tier = 'soft_mismatch'
+      subscale = 30
+    }
   } else if (profileCounty && oppCounty && normalizeCounty(oppCounty) === normalizeCounty(profileCounty)) {
-    geoTier = 'county'
-    geoPoints = 22
+    tier = 'county'
+    subscale = 92
   } else if (
-    profileCity &&
-    typeof profileCity === 'string' &&
+    profileCity && typeof profileCity === 'string' &&
     typeof opportunity?.description === 'string' &&
     normalizeString(opportunity.description).includes(normalizeString(profileCity))
   ) {
-    geoTier = 'city'
-    geoPoints = 20
+    tier = 'city'
+    subscale = 85
   } else if (profileState && oppState && normalizeState(oppState) === normalizeState(profileState)) {
-    geoTier = 'state'
-    geoPoints = 18
+    tier = 'state'
+    subscale = 75
   } else if (oppIsNational) {
-    geoTier = 'national'
-    geoPoints = 8
+    tier = 'national'
+    subscale = 55
   } else if (profileState && oppState && normalizeState(oppState) !== normalizeState(profileState)) {
-    geoTier = 'mismatch'
-    geoPoints = -20
+    tier = 'mismatch'
+    subscale = 10
   } else {
-    geoTier = 'mismatch'
-    geoPoints = -2
+    tier = 'soft_mismatch'
+    subscale = 30
   }
 
-  score += geoPoints
-  if (geoTier === 'zip') reasons.push('Geography: ZIP match')
-  else if (geoTier === 'county') reasons.push('Geography: County match')
-  else if (geoTier === 'city') reasons.push('Geography: City match (text)')
-  else if (geoTier === 'state') reasons.push('Geography: State match')
-  else if (geoTier === 'national') reasons.push('National eligibility')
-  else if (geoTier === 'unknown') reasons.push('Location unknown — cannot verify geographic eligibility')
-  else if (geoTier === 'mismatch') reasons.push('Geography mismatch (soft penalty)')
+  // State-name-in-title mismatch: reduce but don't zero out
+  if (profileState && !oppIsNational && tier !== 'mismatch') {
+    const titleStateAbbr = _extractStateNameFromTitle(opportunity?.title || '')
+    if (titleStateAbbr) {
+      const profileStateNorm = normalizeState(profileState).toUpperCase()
+      if (profileStateNorm !== titleStateAbbr.toUpperCase()) {
+        subscale = Math.max(10, Math.round(subscale * 0.35))
+        tier = 'title_state_mismatch'
+      }
+    }
+  }
 
-  // ── Applicant type match (25 pts) ──
+  return { subscale, tier, profileState, oppIsNational }
+}
+
+// ── ZIP distance helper (cached) ──
+const _zipDistCache = new Map()
+function _zipDistanceMiles(zip1, zip2) {
+  const key = `${zip1}:${zip2}`
+  if (_zipDistCache.has(key)) return _zipDistCache.get(key)
+  try {
+    const a = zipcodes.lookup(String(zip1).trim())
+    const b = zipcodes.lookup(String(zip2).trim())
+    if (!a || !b) return null
+    const lat1 = parseFloat(a.latitude)
+    const lon1 = parseFloat(a.longitude)
+    const lat2 = parseFloat(b.latitude)
+    const lon2 = parseFloat(b.longitude)
+    if (!Number.isFinite(lat1) || !Number.isFinite(lon1) || !Number.isFinite(lat2) || !Number.isFinite(lon2)) return null
+    const dist = haversineDistanceMiles(lat1, lon1, lat2, lon2)
+    _zipDistCache.set(key, dist)
+    return dist
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Need alignment component (0-100 subscale).
+ * Uses keyword overlap, intent phrases, NEED_SYNONYMS, and category matching.
+ * Missing needs → baseline from profile depth. Never returns 0 for partial data.
+ */
+function scoreNeedComponent(effectiveProfile, effectiveSignals, effectiveFacets, opportunity, profileNorm) {
+  const oppText = `${opportunity?.title || ''} ${opportunity?.description || ''} ${opportunity?.sponsor || ''}`.toLowerCase()
+  const reasons = []
+  let subscale = 0
+
+  // 1. Need-synonym matching (0-45 of subscale)
+  const rawNeeds = safeParseArrayField(effectiveProfile?.needs, [])
+  const oppKws = safeParseArrayField(opportunity?.keywords, [])
+  const oppCats = safeParseArrayField(opportunity?.categories, [])
+  const allOppSignals = [...oppKws, ...oppCats].map((t) => String(t).toLowerCase())
+  let needHits = 0
+  let needTotal = rawNeeds.length
+
+  if (rawNeeds.length > 0) {
+    for (const n of rawNeeds) {
+      const nLower = String(n).toLowerCase()
+      const synonyms = NEED_SYNONYMS[nLower] || [nLower]
+      const matched =
+        allOppSignals.some((s) => synonyms.some((syn) => s.includes(syn) || syn.includes(s))) ||
+        synonyms.some((syn) => oppText.includes(syn))
+      if (matched) needHits++
+    }
+    if (needHits > 0) {
+      const needPct = needHits / needTotal
+      subscale += Math.round(needPct * 45)
+      reasons.push(`Need alignment: ${needHits}/${needTotal}`)
+    }
+  } else {
+    // No explicit needs — give partial credit based on profile flags
+    const hasLoc = Boolean(profileNorm?.state || profileNorm?.zip)
+    const hasEntity = Boolean(profileNorm?.entityType)
+    subscale += (hasLoc ? 8 : 0) + (hasEntity ? 8 : 0)
+    if (subscale > 0) reasons.push('Inferred need baseline')
+  }
+
+  // 2. Keyword overlap (0-30 of subscale)
+  const keywordRaw = calculateKeywordOverlap(effectiveSignals ?? effectiveProfile, opportunity)
+  const keywordNorm = Math.round(((Math.max(0, keywordRaw) / 25) * 30))
+  subscale += keywordNorm
+  if (keywordRaw > 0) reasons.push(`Keyword: ${keywordRaw} raw`)
+
+  // 3. Facet intent alignment (0-15 of subscale)
+  const facetAdj = calculateFacetAdjustments({ facets: effectiveFacets, opportunity, oppText })
+  const facetNorm = Math.round(Math.max(0, (facetAdj.points + 35) / 70 * 15))
+  subscale += facetNorm
+  if (facetAdj.points !== 0) reasons.push(`Facet: ${facetAdj.points}`)
+
+  // 4. Intent match from opportunity.intentMatch (0-10 of subscale)
+  if (Array.isArray(opportunity?.intentMatch) && opportunity.intentMatch.length > 0) {
+    const profileKeywords = effectiveSignals?.keywordSet instanceof Set
+      ? effectiveSignals.keywordSet
+      : new Set(Array.isArray(effectiveSignals?.keywords) ? effectiveSignals.keywords.map(k => String(k).toLowerCase()) : [])
+    const intentOverlap = opportunity.intentMatch.filter(intent =>
+      profileKeywords.has(String(intent).toLowerCase()),
+    )
+    if (intentOverlap.length > 0) {
+      subscale += Math.min(10, intentOverlap.length * 4)
+      reasons.push(`Intent: ${intentOverlap.join(', ')}`)
+    }
+  }
+
+  // 5. Pro bono / service need alignment (0-12 of subscale)
+  // When profile has proBonoTerms (inferred from needs), boost need score
+  // if the opportunity text matches those terms.
+  const proBonoTerms = effectiveSignals?.proBonoTerms ?? new Set()
+  if (proBonoTerms.size > 0) {
+    let proBonoHits = 0
+    for (const term of proBonoTerms) {
+      if (oppText.includes(normalizeString(term))) proBonoHits++
+    }
+    if (proBonoHits > 0) {
+      subscale += Math.min(12, proBonoHits * 4)
+      reasons.push(`Pro bono need match: ${proBonoHits}`)
+    }
+  }
+
+  return { subscale: Math.min(100, Math.max(0, subscale)), reasons, facetDetail: facetAdj, keywordRaw }
+}
+
+/**
+ * Eligibility match component (0-100 subscale).
+ * Checks applicant type match, demographic alignment, requirements compatibility.
+ * Missing type → 45 baseline (neutral). Penalties are proportional, never zero.
+ */
+function scoreEligibilityComponent(effectiveProfile, effectiveSignals, effectiveFacets, opportunity, profileNorm) {
+  const oppText = `${opportunity?.title || ''} ${opportunity?.description || ''} ${opportunity?.sponsor || ''}`.toLowerCase()
+  const reasons = []
+  let subscale = 45
+
   const applicantTypesSet =
     effectiveSignals?.applicantTypes && typeof effectiveSignals.applicantTypes[Symbol.iterator] === 'function'
       ? new Set(Array.from(effectiveSignals.applicantTypes).map((v) => String(v).toLowerCase()))
       : null
   const profileType = resolveApplicantType(effectiveProfile)
   const hasApplicantTypeSignals = Boolean(profileType) || Boolean(applicantTypesSet?.size)
+  const profileTypeNorm = normalizeString(profileType || '')
 
+  // Applicant type match (+35)
   if (hasApplicantTypeSignals && eligibilityMatchesApplicantType(opportunity, effectiveSignals ?? effectiveProfile)) {
-    score += 25
+    subscale += 35
     reasons.push('Applicant type match')
   } else if (!hasApplicantTypeSignals) {
-    reasons.push('Applicant type unknown (no penalty)')
+    reasons.push('Type unknown (neutral)')
+  } else {
+    subscale -= 10
+    reasons.push('Type mismatch (soft)')
   }
 
-  // ── Keyword overlap (up to 25 pts) ──
-  const keywordScore = calculateKeywordOverlap(effectiveSignals ?? effectiveProfile, opportunity)
-  score += keywordScore
-  if (keywordScore > 0) reasons.push(`Keyword match (${keywordScore} pts)`)
-
-  // ── Category match (up to 20 pts) ──
-  const categoryScore = calculateCategoryMatch(effectiveSignals ?? effectiveProfile, opportunity)
-  score += categoryScore
-  if (categoryScore > 0) reasons.push(`Category match (${categoryScore} pts)`)
-
-  // ── Facet alignment ──
-  const facetAdjustments = calculateFacetAdjustments({ facets: effectiveFacets, opportunity, oppText })
-  score += facetAdjustments.points
-  reasons.push(...facetAdjustments.reasons)
-
-  // ── Cross-category mismatch penalties ──
-  const profileTypeNorm = normalizeString(profileType || '')
+  // Cross-category penalties — proportional, capped
   const isStudentType = ['student', 'high_school_student', 'college_student'].includes(profileTypeNorm)
   const isBusinessType = ['small_business'].includes(profileTypeNorm)
   const isOrgType = ['organization', 'nonprofit'].includes(profileTypeNorm)
   const isIndividualFamilyType = ['individual', 'individual_need', 'family', 'medical_assistance'].includes(profileTypeNorm)
 
   if (!isStudentType && RE_UNIVERSITY_PROGRAM.test(oppText)) {
-    score -= 40
-    reasons.push('Cross-category penalty: university/college program for non-student profile (-40)')
+    subscale -= 25
+    reasons.push('University program penalty')
   }
 
-  // Check disaster profile from both profile tags (effectiveProfile) and signals/facets.
-  // -40 applies when profile-level tags clearly exclude disaster context;
-  // -30 applies when signal/facet tags are also absent (belt-and-suspenders).
   const isDisasterProfile =
     (Array.isArray(effectiveProfile?.tags) && effectiveProfile.tags.some((t) => RE_DISASTER_SIGNAL.test(String(t)))) ||
     profileTypeNorm === 'disaster_survivor'
@@ -890,200 +1114,368 @@ export function scoreOpportunity(profile, opportunity) {
     (effectiveProfile?.primary_type || '').toLowerCase() === 'disaster_survivor'
 
   if (!hasDisasterSignal && RE_FEMA_DISASTER.test(oppText)) {
-    // Stronger penalty when neither profile nor any signal layer indicates disaster context
-    score -= 40
-    reasons.push('Cross-category penalty: FEMA/disaster program for non-disaster profile (-40)')
+    subscale -= 25
+    reasons.push('FEMA/disaster penalty')
   } else if (!isDisasterProfile && hasDisasterSignal && RE_FEMA_DISASTER_STRICT.test(oppText)) {
-    // Softer penalty when signals are ambiguous (partial disaster indicators only)
-    score -= 30
-    reasons.push('Cross-category penalty: FEMA/disaster program for non-disaster profile (-30)')
+    subscale -= 18
+    reasons.push('FEMA/disaster penalty (partial)')
   }
 
-  const militarySignals = effectiveSignals?.military
-  const hasVetSignal = militarySignals instanceof Set
-    ? (militarySignals.has('veteran') || militarySignals.has('disabled_veteran'))
-    : false
   const hasVetFacet = effectiveFacets?.military?.veteran === true || effectiveFacets?.military?.disabled_veteran === true
-  if (!hasVetFacet && !hasVetSignal && RE_VETERAN_SPECIFIC.test(oppText)) {
-    score -= 15
-    reasons.push('Cross-category penalty: veteran-focused program for non-veteran profile (-15)')
+  if (!hasVetFacet && RE_VETERAN_SPECIFIC.test(oppText)) {
+    subscale -= 12
+    reasons.push('Veteran program penalty')
   }
 
   if (!isBusinessType && !isOrgType && RE_BUSINESS_SBA.test(oppText)) {
-    score -= 15
-    reasons.push('Cross-category penalty: business/SBA program for non-business profile (-15)')
+    subscale -= 12
+    reasons.push('Business/SBA penalty')
   }
 
   if (isIndividualFamilyType && RE_NONPROFIT_ONLY.test(oppText)) {
-    score -= 10
-    reasons.push('Cross-category penalty: nonprofit-specific program for individual/family profile (-10)')
+    subscale -= 10
+    reasons.push('Nonprofit-only penalty')
   }
 
-  // State-name-in-title mismatch penalty
-  if (profileState && !oppIsNational) {
-    const titleStateAbbr = _extractStateNameFromTitle(opportunity.title || '')
-    if (titleStateAbbr) {
-      const profileStateNorm = normalizeState(profileState).toUpperCase()
-      if (profileStateNorm !== titleStateAbbr.toUpperCase()) {
-        score -= 25
-        reasons.push(`Cross-category penalty: opportunity title names ${titleStateAbbr}, profile is in ${profileStateNorm} (-25)`)
-      }
+  // Demographic/affiliation alignment bonus (+0-15)
+  const profDemographics = profileNorm?.demographics ?? []
+  const profAffiliations = profileNorm?.affiliations ?? []
+  const profGeoQualifiers = profileNorm?.geographicQualifiers ?? []
+  let demoBonus = 0
+
+  if (profDemographics.length > 0 || profAffiliations.length > 0 || profGeoQualifiers.length > 0) {
+    const demoTokens = {
+      african_american: ['african american', 'black', 'minority'],
+      hispanic_latino: ['hispanic', 'latino', 'latina', 'latinx'],
+      native_american: ['native american', 'indigenous', 'tribal'],
+      first_generation: ['first generation', 'first gen'],
+      lgbtq: ['lgbtq', 'queer', 'pride'],
+      senior: ['senior', 'elderly', 'aging', 'older adult'],
+      youth: ['youth', 'young'], young_adult: ['young adult'],
+      immigrant: ['immigrant', 'refugee', 'new american'],
+      tribal_affiliation: ['tribal', 'indigenous', 'native'],
     }
-  }
-
-  // ── Need-to-opportunity alignment (up to 20 pts) ──
-  // Prefer enriched signals.needs (extracted from all profile sections) over raw profile.needs
-  const rawNeeds = safeParseArrayField(effectiveSignals?.needs ?? effectiveProfile?.needs, [])
-  const oppKws = safeParseArrayField(opportunity.keywords, [])
-  const oppCats = safeParseArrayField(opportunity.categories, [])
-  const allOppSignals = [...oppKws, ...oppCats].map((t) => String(t).toLowerCase())
-  if (rawNeeds.length > 0) {
-    let needHits = 0
-    for (const n of rawNeeds) {
-      const nLower = String(n).toLowerCase()
-      const synonyms = NEED_SYNONYMS[nLower] || [nLower]
-      const matched =
-        allOppSignals.some((s) => synonyms.some((syn) => s.includes(syn) || syn.includes(s))) ||
-        synonyms.some((syn) => oppText.includes(syn))
-      if (matched) needHits++
+    for (const trait of profDemographics) {
+      const tokens = demoTokens[trait] || [trait.replace(/_/g, ' ')]
+      if (tokens.some((t) => oppText.includes(t))) demoBonus += 4
     }
-    if (needHits > 0) {
-      const needPts = Math.min(20, Math.round((needHits / rawNeeds.length) * 20))
-      score += needPts
-      reasons.push(`Need alignment (${needPts} pts for ${needHits}/${rawNeeds.length} needs)`)
+    const affilTokens = {
+      church: ['church', 'faith', 'congregation', 'ministry', 'religious'],
+      faith_based: ['faith-based', 'faith based'],
+      school: ['school', 'education', 'k-12', 'k12'],
+      first_responder: ['fire department', 'ems', 'first responder', 'rescue'],
+      tribal: ['tribal', 'indigenous', 'native'],
+      veteran: ['veteran', 'military', 'va '],
     }
+    for (const affil of profAffiliations) {
+      const tokens = affilTokens[affil] || [affil.replace(/_/g, ' ')]
+      if (tokens.some((t) => oppText.includes(t))) demoBonus += 4
+    }
+    const geoTokens = {
+      rural: ['rural'], appalachian: ['appalachian', 'appalachia'],
+      tribal: ['tribal'], urban_underserved: ['urban', 'underserved'],
+      frontier: ['frontier', 'remote'],
+    }
+    for (const gq of profGeoQualifiers) {
+      const tokens = geoTokens[gq] || [gq.replace(/_/g, ' ')]
+      if (tokens.some((t) => oppText.includes(t))) demoBonus += 3
+    }
+    demoBonus = Math.min(15, demoBonus)
+    subscale += demoBonus
+    if (demoBonus > 0) reasons.push(`Demo/affil +${demoBonus}`)
   }
 
-  // ── Amount eligibility (10 pts) ──
-  const fundingAmount = effectiveProfile?.funding_amount_needed ?? effectiveSignals?.financial?.fundingAmountNeeded ?? null
-  if (amountInRange(fundingAmount, opportunity)) {
-    score += 10
-    reasons.push('Amount eligibility')
-  }
-
-  // ── Deadline urgency bonus (up to 5 pts) ──
-  const deadlineScore = calculateDeadlineUrgency(opportunity)
-  score += deadlineScore
-  if (deadlineScore > 0) reasons.push(`Deadline urgency (${deadlineScore} pts)`)
-
-  // ── Requirements penalties ──
-  const ein = effectiveProfile?.ein ?? effectiveProfile?.uei ?? null
-  const applicantTypeNormalized = String(profileType || '').toLowerCase()
-  const isOrgLike =
-    applicantTypeSetHas(applicantTypesSet, ['organization', 'nonprofit', 'small_business', 'government']) ||
-    ['organization', 'nonprofit', 'small_business', 'government'].includes(applicantTypeNormalized)
-
-  if (opportunity.requires_501c3 && isOrgLike && !ein) {
-    score -= 15
-    reasons.push('Requires 501(c)(3) status (EIN/UEI missing)')
-  } else if (opportunity.requires_501c3 && !isOrgLike) {
-    reasons.push('501(c)(3) requirement not applicable to profile type')
-  }
-
-  if (opportunity.requires_match) {
-    score -= 10
-    reasons.push(`Requires matching funds (${opportunity.match_percentage || '?'}%)`)
-  }
-
-  // Loan / credit-repair penalties
+  // Requirements penalties (proportional)
   const opportunityType = String(opportunity?.opportunity_type || opportunity?.type || '').toLowerCase()
   if (['loan', 'loan_program', 'microloan'].includes(opportunityType) || /\bloan\b/.test(oppText)) {
-    score -= 30
-    reasons.push('Loan program penalty (grants prioritized)')
+    subscale -= 20
+    reasons.push('Loan penalty')
   }
   if (/\bcredit repair\b|\bcredit counseling\b|\bdebt consolidation\b/.test(oppText)) {
-    score -= 25
-    reasons.push('Credit repair/counseling penalty')
+    subscale -= 18
+    reasons.push('Credit repair penalty')
   }
 
-  // ── Pro bono / in-kind scoring ──
+  const ein = effectiveProfile?.ein ?? effectiveProfile?.uei ?? null
+  const isOrgLike = applicantTypeSetHas(applicantTypesSet, ['organization', 'nonprofit', 'small_business', 'government']) ||
+    ['organization', 'nonprofit', 'small_business', 'government'].includes(profileTypeNorm)
+  if (opportunity?.requires_501c3 && isOrgLike && !ein) {
+    subscale -= 10
+    reasons.push('501c3 missing')
+  }
+  if (opportunity?.requires_match) {
+    subscale -= 8
+    reasons.push('Matching funds required')
+  }
+
+  // Pro bono / in-kind scoring
   const isProBono = PRO_BONO_OPPORTUNITY_TYPES.has(opportunityType)
   const fundingType = normalizeString(opportunity?.funding_type || '')
   const isServiceType = SERVICE_FUNDING_TYPES.has(fundingType)
-  const matchedNeeds = []
-  const matchedSignals = []
-
   if (isProBono || isServiceType) {
-    if (opportunity.amount_min == null && opportunity.amount_max == null) {
-      score += 5
-      reasons.push('Pro bono/in-kind: service value (no cash amount required)')
+    if (opportunity?.amount_min == null && opportunity?.amount_max == null) {
+      subscale += 5
     }
-
     const appUrl = normalizeString(opportunity?.application_url || '')
     const srcUrl = normalizeString(opportunity?.source_url || '')
     const hasDirectIntake = /apply|intake|enroll|request|sign.?up|register/i.test(appUrl) || /apply|intake|enroll/i.test(srcUrl)
-    const isDirectory = /directory|finder|find-|search|lookup|look-up/i.test(appUrl) || /directory|finder/i.test(srcUrl)
+    if (hasDirectIntake) subscale += 5
+  }
 
-    if (hasDirectIntake) {
-      score += 5
-      reasons.push('Service specificity: direct intake/application URL (+5)')
-    } else if (!isDirectory) {
-      score += 2
-      reasons.push('Service specificity: program-specific URL (+2)')
-    } else {
-      score -= 3
-      reasons.push('Service specificity: directory page only (-3)')
-    }
+  // Amount in range bonus
+  if (amountInRange(effectiveProfile?.funding_amount_needed, opportunity)) {
+    subscale += 8
+    reasons.push('Amount eligible')
+  }
 
-    const proBonoTermsOnProfile = effectiveSignals?.proBonoTerms ?? new Set()
-    if (proBonoTermsOnProfile.size > 0) {
-      let proBonoHits = 0
-      for (const term of proBonoTermsOnProfile) {
-        if (oppText.includes(normalizeString(term))) {
-          proBonoHits++
-          matchedNeeds.push(term)
-        }
-      }
-      if (proBonoHits > 0) {
-        const boost = Math.min(15, proBonoHits * 5)
-        score += boost
-        reasons.push(`Pro bono need alignment (${proBonoHits} needs matched, +${boost})`)
-      }
-    }
+  return {
+    subscale: Math.min(100, Math.max(5, subscale)),
+    reasons,
+    applicantTypeMatch: hasApplicantTypeSignals && eligibilityMatchesApplicantType(opportunity, effectiveSignals ?? effectiveProfile),
+    hasApplicantTypeSignals,
+    profileTypeNorm,
+    demoBonus,
+  }
+}
 
-    const proBonoMismatchTokens = {
-      pro_bono: ['legal', 'attorney', 'court', 'eviction', 'tenant'],
-      charity_care: ['medical', 'patient', 'copay', 'clinic', 'hospital', 'health'],
-      clinic_service: ['clinic', 'health center', 'primary care'],
-      training_paid: ['training', 'wioa', 'workforce', 'vocational', 'certification'],
-      equipment_donation: ['equipment', 'computer', 'assistive', 'technology'],
+/**
+ * Category relevance (0-100 subscale).
+ * Empty categories → 30 baseline (neutral).
+ */
+function scoreCategoryComponent(effectiveProfile, effectiveSignals, opportunity) {
+  const reasons = []
+  const categoryRaw = calculateCategoryMatch(effectiveSignals ?? effectiveProfile, opportunity)
+  let subscale = 30
+
+  if (categoryRaw > 0) {
+    subscale = 30 + Math.round((categoryRaw / 20) * 60)
+    reasons.push(`Category: ${categoryRaw} raw`)
+  }
+
+  // Deadline urgency bonus (+0-8)
+  const deadlineScore = calculateDeadlineUrgency(opportunity)
+  if (deadlineScore > 0) {
+    subscale += Math.round(deadlineScore * 1.6)
+    reasons.push(`Deadline urgency +${deadlineScore}`)
+  } else if (deadlineScore < 0) {
+    subscale -= 5
+    reasons.push('Expired deadline')
+  }
+
+  return { subscale: Math.min(100, Math.max(10, subscale)), reasons, categoryRaw, deadlineScore }
+}
+
+// ---------------------------------------------------------------------------
+// scoreOpportunity — weighted component scoring (v4)
+// ---------------------------------------------------------------------------
+
+/**
+ * Score a single opportunity against a profile using a weighted component model.
+ *
+ * @param {Object} profile      - Raw profile OR profileContext { profile, sections, signals, facets }
+ * @param {Object} opportunity  - Raw opportunity object
+ * @returns {{ score: number, reasons: string[], match_explain: object }}
+ */
+export function scoreOpportunity(profile, opportunity) {
+  const profileContext =
+    profile && typeof profile === 'object' && profile.profile && profile.sections ? profile : null
+  const effectiveProfile = profileContext?.profile ?? profile
+  const effectiveSignals =
+    profileContext?.signals ??
+    (profileContext?.sections
+      ? buildProfileSignals({ profile: effectiveProfile, sections: profileContext.sections })
+      : null)
+  const effectiveFacets = profileContext?.facets ?? null
+
+  if (profileContext && !profileContext.profileNorm && profileContext.sections) {
+    profileContext.profileNorm = normalizeProfile(effectiveProfile, profileContext.sections, effectiveSignals)
+  }
+  const profileNorm = profileContext?.profileNorm ?? null
+
+  const reasons = []
+  const oppText = `${opportunity?.title || ''} ${opportunity?.description || ''} ${opportunity?.sponsor || ''}`.toLowerCase()
+
+  // ── Score each component (0-100 subscale) ──
+  const geo = scoreGeoComponent(effectiveProfile, effectiveSignals, opportunity)
+  const need = scoreNeedComponent(effectiveProfile, effectiveSignals, effectiveFacets, opportunity, profileNorm)
+  const elig = scoreEligibilityComponent(effectiveProfile, effectiveSignals, effectiveFacets, opportunity, profileNorm)
+  const cat = scoreCategoryComponent(effectiveProfile, effectiveSignals, opportunity)
+
+  // ── Weighted combination ──
+  let rawScore = Math.round(
+    need.subscale * W_NEED +
+    elig.subscale * W_ELIGIBILITY +
+    geo.subscale * W_GEO +
+    cat.subscale * W_CATEGORY,
+  )
+
+  // ── Profile depth bonus: richer profiles get up to 10% boost ──
+  const depth = measureProfileDepth(effectiveProfile, effectiveSignals, profileNorm)
+  const depthMultiplier = 1.0 + Math.min(0.10, depth / 1000)
+  rawScore = Math.round(rawScore * depthMultiplier)
+
+  // ── Housing-aware signal bonuses ──
+  // These apply AFTER the weighted combination so they can push a strong match over thresholds
+  // without distorting the base component model.
+  const housingBonusReasons = []
+
+  // Dynamically infer housing classification for legacy opportunities without explicit columns
+  const housingClass = inferHousingClassification(opportunity)
+  const effectiveOpp = (housingClass.fundingCategory && !opportunity.funding_category)
+    ? { ...opportunity, funding_category: housingClass.fundingCategory,
+        usable_for_housing: housingClass.usableForHousing ? 1 : 0,
+        refund_potential: housingClass.refundPotential ? 1 : 0 }
+    : opportunity
+
+  // GPA merit boost: if profile has GPA ≥ 3.0 and opportunity is merit/scholarship, boost
+  const profileGpa = profileNorm?.academics?.gpa ?? null
+  if (profileGpa !== null && profileGpa >= 3.0) {
+    const schKeywords = ['scholarship', 'merit', 'academic achievement', 'honor', 'gpa', 'grade']
+    if (schKeywords.some((k) => oppText.includes(k))) {
+      const gpaBoost = profileGpa >= 3.75 ? 12 : profileGpa >= 3.5 ? 8 : profileGpa >= 3.0 ? 5 : 0
+      rawScore = Math.min(100, rawScore + gpaBoost)
+      if (gpaBoost > 0) housingBonusReasons.push(`GPA ${profileGpa} merit boost (+${gpaBoost})`)
     }
-    const mismatchTokens = proBonoMismatchTokens[opportunityType] || []
-    if (mismatchTokens.length > 0 && proBonoTermsOnProfile.size === 0) {
-      const oppHasSpecificFocus = mismatchTokens.some((t) => oppText.includes(t))
-      const profileHasMatchingSignals = mismatchTokens.some((t) => {
-        const kws = effectiveSignals?.keywordSet ?? new Set()
-        return kws.has(t)
-      })
-      if (oppHasSpecificFocus && !profileHasMatchingSignals) {
-        score -= 8
-        reasons.push('Pro bono mismatch: service focus does not match profile signals (-8)')
-      }
+    // Boost HOPE scholarship specifically
+    if (/\bhope\b|\btenessee\s+hope\b/i.test(oppText)) {
+      rawScore = Math.min(100, rawScore + 15)
+      housingBonusReasons.push('Tennessee HOPE scholarship GPA match (+15)')
     }
   }
 
-  // Collect matched signals for match_explain
-  if (geoTier && geoTier !== 'mismatch' && geoTier !== 'unknown') matchedSignals.push(`geo:${geoTier}`)
-  if (hasApplicantTypeSignals && eligibilityMatchesApplicantType(opportunity, effectiveSignals ?? effectiveProfile))
-    matchedSignals.push('applicant_type')
-  if (keywordScore > 0) matchedSignals.push('keywords')
-  if (categoryScore > 0) matchedSignals.push('category')
-  if (isProBono) matchedSignals.push(`opportunity_type:${opportunityType}`)
-  if (isServiceType) matchedSignals.push(`funding_type:${fundingType}`)
+  // Faith boost: profile has faith indicator + opportunity is faith-based
+  const profileHasFaith = profileNorm?.hasFaithIndicator ??
+    (profileNorm?.affiliations ?? []).includes('faith_based') ?? false
+  if (profileHasFaith) {
+    const faithOppKeywords = ['faith', 'church', 'religious', 'christian', 'catholic', 'denomination',
+      'congregation', 'ministry', 'theological', 'seminary', 'bible', 'baptist', 'methodist',
+      'lutheran', 'presbyterian', 'evangelical', 'diocese']
+    if (faithOppKeywords.some((k) => oppText.includes(k))) {
+      rawScore = Math.min(100, rawScore + 10)
+      housingBonusReasons.push('Faith affiliation match (+10)')
+    }
+    // Opportunity has funding_category = faith_based
+    if (effectiveOpp?.funding_category === 'faith_based') {
+      rawScore = Math.min(100, rawScore + 8)
+      housingBonusReasons.push('Faith-based funding category (+8)')
+    }
+  }
 
-  const finalScore = Math.max(0, Math.min(100, score))
+  // Talent/music boost: profile has music signals + opportunity is talent-based
+  const profileTalent = profileNorm?.talentSignals ?? null
+  if (profileTalent?.music) {
+    const musicOppKeywords = ['music', 'band', 'orchestra', 'choir', 'instrument', 'musical',
+      'performing arts', 'arts scholarship', 'talent', 'performance', 'conservatory']
+    if (musicOppKeywords.some((k) => oppText.includes(k))) {
+      rawScore = Math.min(100, rawScore + 12)
+      housingBonusReasons.push('Music/talent signal match (+12)')
+    }
+    if (effectiveOpp?.funding_category === 'talent_based') {
+      rawScore = Math.min(100, rawScore + 8)
+      housingBonusReasons.push('Talent-based funding category (+8)')
+    }
+  }
+  if (profileTalent?.leadership) {
+    if (/\bleadership\b|\bservice\b|\bcommunity\b/i.test(oppText)) {
+      rawScore = Math.min(100, rawScore + 5)
+      housingBonusReasons.push('Leadership signal match (+5)')
+    }
+  }
+
+  // Tennessee location boost: profile is in TN + opportunity is TN-specific
+  const profileState = profileNorm?.state ?? effectiveProfile?.state ?? null
+  if (profileState && normalizeState(profileState) === 'TN') {
+    const tnKeywords = ['tennessee', 'tn ', 'hope scholarship', 'tennessee student assistance',
+      'tsac', 'nashville', 'knoxville', 'memphis', 'chattanooga', 'jackson', 'clarksville']
+    if (tnKeywords.some((k) => oppText.includes(k))) {
+      rawScore = Math.min(100, rawScore + 8)
+      housingBonusReasons.push('Tennessee geographic signal match (+8)')
+    }
+  }
+
+  // Refund-eligible / stipend boost for student profiles needing housing
+  if (profileNorm?.isStudent && (profileNorm?.hasHousingNeed || profileNorm?.needCategories?.includes('housing'))) {
+    if (
+      effectiveOpp?.usable_for_housing ||
+      effectiveOpp?.refund_potential ||
+      ['refund_eligible', 'stipend', 'housing_direct'].includes(effectiveOpp?.funding_category)
+    ) {
+      rawScore = Math.min(100, rawScore + 10)
+      housingBonusReasons.push('Housing-usable funding matched student housing need (+10)')
+    }
+  }
+
+  // ── Floor guarantee: validated opportunities always score ≥ SCORE_FLOOR ──
+  const finalScore = Math.max(SCORE_FLOOR, Math.min(100, rawScore))
+
+  // Build human-readable reasons
+  if (geo.tier === 'zip') reasons.push('Geography: ZIP match')
+  else if (geo.tier === 'county') reasons.push('Geography: County match')
+  else if (geo.tier === 'city') reasons.push('Geography: City match (text)')
+  else if (geo.tier === 'state') reasons.push('Geography: State match')
+  else if (geo.tier === 'national') reasons.push('National eligibility')
+  else if (geo.tier === 'unknown') reasons.push('Location unknown — cannot verify geographic eligibility')
+  else if (geo.tier === 'mismatch' || geo.tier === 'title_state_mismatch') reasons.push('Geography mismatch (soft penalty)')
+
+  if (elig.applicantTypeMatch) reasons.push('Applicant type match')
+  else if (!elig.hasApplicantTypeSignals) reasons.push('Applicant type unknown (no penalty)')
+
+  if (need.keywordRaw > 0) reasons.push(`Keyword match (${need.keywordRaw} pts)`)
+  if (cat.categoryRaw > 0) reasons.push(`Category match (${cat.categoryRaw} pts)`)
+
+  need.facetDetail.reasons.forEach((r) => reasons.push(r))
+  if (elig.demoBonus > 0) reasons.push(`Demographic/affiliation alignment (${elig.demoBonus} pts)`)
+
+  for (const r of need.reasons) {
+    if (r.startsWith('Need alignment') || r.startsWith('Intent:')) reasons.push(r)
+  }
+
+  if (amountInRange(effectiveProfile?.funding_amount_needed, opportunity)) reasons.push('Amount eligibility')
+  if (cat.deadlineScore > 0) reasons.push(`Deadline urgency (${cat.deadlineScore} pts)`)
+
+  for (const r of elig.reasons) {
+    if (r.includes('penalty') || r.includes('Loan') || r.includes('missing') || r.includes('funds')) reasons.push(r)
+  }
+
+  // Housing-aware signal reasons
+  for (const r of housingBonusReasons) reasons.push(r)
+
+  // Collect matched signals for match_explain
+  const matchedSignals = []
+  const matchedNeeds = []
+  if (geo.tier && geo.tier !== 'mismatch' && geo.tier !== 'unknown' && geo.tier !== 'soft_mismatch' && geo.tier !== 'title_state_mismatch')
+    matchedSignals.push(`geo:${geo.tier}`)
+  if (elig.applicantTypeMatch) matchedSignals.push('applicant_type')
+  if (need.keywordRaw > 0) matchedSignals.push('keywords')
+  if (cat.categoryRaw > 0) matchedSignals.push('category')
+
+  const opportunityType = String(opportunity?.opportunity_type || opportunity?.type || '').toLowerCase()
+  const fundingType = normalizeString(opportunity?.funding_type || '')
+  if (PRO_BONO_OPPORTUNITY_TYPES.has(opportunityType)) matchedSignals.push(`opportunity_type:${opportunityType}`)
+  if (SERVICE_FUNDING_TYPES.has(fundingType)) matchedSignals.push(`funding_type:${fundingType}`)
 
   const match_explain = {
     matchedNeeds: matchedNeeds.length > 0 ? matchedNeeds : undefined,
     matchedSignals,
+    housingSignals: housingBonusReasons.length > 0 ? housingBonusReasons : undefined,
+    usableForHousing: Boolean(effectiveOpp?.usable_for_housing || effectiveOpp?.refund_potential ||
+      ['refund_eligible', 'stipend', 'housing_direct'].includes(effectiveOpp?.funding_category)),
+    fundingCategory: effectiveOpp?.funding_category ?? null,
     scoreBreakdown: {
-      geo: geoPoints,
-      applicant_type: hasApplicantTypeSignals && eligibilityMatchesApplicantType(opportunity, effectiveSignals ?? effectiveProfile) ? 25 : 0,
-      keyword: keywordScore,
-      category: categoryScore,
-      facet: facetAdjustments.points,
-      amount: amountInRange(fundingAmount, opportunity) ? 10 : 0,
-      deadline: deadlineScore,
+      need_component: need.subscale,
+      eligibility_component: elig.subscale,
+      geo_component: geo.subscale,
+      category_component: cat.subscale,
+      profile_depth: depth,
+      geo: geo.subscale,
+      applicant_type: elig.applicantTypeMatch ? 25 : 0,
+      keyword: need.keywordRaw,
+      category: cat.categoryRaw,
+      facet: need.facetDetail.points,
+      demographic_affiliation: elig.demoBonus,
+      amount: amountInRange(effectiveProfile?.funding_amount_needed, opportunity) ? 10 : 0,
+      deadline: cat.deadlineScore,
+      housing_signal_bonus: housingBonusReasons.length > 0 ? rawScore - (rawScore - housingBonusReasons.reduce(() => 0, 0)) : 0,
       total: finalScore,
     },
     reasons: reasons.length > 0 ? reasons : ['No specific matches found'],
@@ -1121,7 +1513,7 @@ export function matchOpportunities(profile, opportunities, opts = {}) {
   scored.sort((a, b) => b.score - a.score)
 
   const requestedMin = typeof opts.minScore === 'number' ? opts.minScore : 0
-  const RELAX_THRESHOLDS = [50, 30, 15, 0]
+  const relaxSteps = [DEFAULT_MIN_SCORE, ...RELAX_THRESHOLDS]
 
   const passesMin = (results, threshold) => results.filter((r) => r.score >= threshold)
 
@@ -1129,7 +1521,7 @@ export function matchOpportunities(profile, opportunities, opts = {}) {
   let relaxed = null
 
   if (results.length === 0 && requestedMin > 0) {
-    for (const threshold of RELAX_THRESHOLDS) {
+    for (const threshold of relaxSteps) {
       if (threshold >= requestedMin) continue
       results = passesMin(scored, threshold)
       if (results.length > 0) {
@@ -1137,7 +1529,7 @@ export function matchOpportunities(profile, opportunities, opts = {}) {
         break
       }
     }
-    if (results.length === 0) results = scored
+    if (results.length === 0) results = scored.slice(0, FALLBACK_TOP_N)
   }
 
   if (relaxed) results._relaxed = relaxed
@@ -1165,26 +1557,31 @@ export function matchOpportunities(profile, opportunities, opts = {}) {
  * @param {Object} opportunity - Raw opportunity object
  * @returns {{ decision: string, explanation: string, reasons: string[] }}
  */
-export function makeDecision(score, profile, opportunity) {
+export function makeDecision(score, profile, opportunity, normalizedProfile = null) {
   const reasons = []
   const opp = opportunity || {}
   const prof = profile || {}
 
   const oppText = `${opp.title || ''} ${opp.description || ''}`.toLowerCase()
   const opportunityType = String(opp.opportunity_type || opp.type || '').toLowerCase()
-  const profileType = String(
+
+  // Prefer normalized profile flags (section-derived) over raw field checks.
+  // This ensures veteran status from military_service section, student status
+  // from education section, etc. are correctly detected.
+  const np = normalizedProfile
+  const profileType = np?.entityType ?? String(
     prof.profile_type || prof.primary_type || prof.applicant_type || '',
   ).toLowerCase()
 
-  const isStudentProfile = ['student', 'high_school_student', 'college_student'].includes(profileType)
-  const isVeteran = Boolean(prof.is_veteran || prof.veteran || prof.military_veteran)
-  const isNonprofit = Boolean(prof.is_nonprofit || prof.ein || prof.uei || ['nonprofit', 'organization'].includes(profileType))
-  const isBusiness = ['small_business', 'business'].includes(profileType) || Boolean(prof.is_business)
+  const isStudentProfile = np?.isStudent ?? ['student', 'high_school_student', 'college_student'].includes(profileType)
+  const isVeteran = np?.isVeteran ?? Boolean(prof.is_veteran || prof.veteran || prof.military_veteran)
+  const isNonprofit = np?.isNonprofit ?? Boolean(prof.is_nonprofit || prof.ein || prof.uei || ['nonprofit', 'organization'].includes(profileType))
+  const isBusiness = np?.isBusiness ?? (['small_business', 'business'].includes(profileType) || Boolean(prof.is_business))
   const isIndividual = ['individual', 'individual_need', 'family', 'medical_assistance'].includes(profileType)
 
-  const isIndividualOrCaregiver = isIndividual || profileType === 'caregiver'
+  const isIndividualOrCaregiver = isIndividual || profileType === 'caregiver' || np?.isCaregiver
   const isResearcher = profileType === 'researcher'
-  const profNeeds = safeParseArrayField(prof.needs, []).map((n) => String(n).toLowerCase())
+  const profNeeds = np?.needCategories ?? safeParseArrayField(prof.needs, []).map((n) => String(n).toLowerCase())
 
   // Hard REJECT conditions — explicit boolean flags take priority over regex
   if (['loan', 'loan_program', 'microloan'].includes(opportunityType) || opp.is_loan || /\bloan\b/.test(oppText)) {
@@ -1261,18 +1658,17 @@ export function makeDecision(score, profile, opportunity) {
     }
   }
 
-  // Score-based decision
-  if (score >= 60) {
-    reasons.push(`Score ${score} ≥ 60 — strong match`)
+  if (score >= ACCEPT_SCORE) {
+    reasons.push(`Score ${score} ≥ ${ACCEPT_SCORE} — strong match`)
     return { decision: 'ACCEPT', explanation: `Score ${score}/100 indicates a strong match.`, reasons }
   }
 
-  if (score >= 30) {
-    reasons.push(`Score ${score} ≥ 30 — possible match`)
+  if (score >= REVIEW_SCORE) {
+    reasons.push(`Score ${score} ≥ ${REVIEW_SCORE} — possible match`)
     return { decision: 'REVIEW', explanation: `Score ${score}/100 warrants review; moderate match signals.`, reasons }
   }
 
-  reasons.push(`Score ${score} < 30 — insufficient match`)
+  reasons.push(`Score ${score} < ${REVIEW_SCORE} — insufficient match`)
   return { decision: 'REJECT', explanation: `Score ${score}/100 indicates insufficient match.`, reasons }
 }
 
@@ -1307,10 +1703,18 @@ export function computeMatchDecision(rawProfile, rawOpportunity, opts = {}) {
     }
   }
 
-  // Normalize for eligibility checks
+  // Build signals when sections are available so normalizeProfile gets the full
+  // set of inferred needs from buildProfileSignals (healthcare, employment, etc.)
+  let signals = opts.signals ?? null
+  if (!signals && opts.profileSections) {
+    const effectiveProfile = rawProfile?.profile ?? rawProfile
+    signals = buildProfileSignals({ profile: effectiveProfile, sections: opts.profileSections })
+  }
+
+  // Normalize for eligibility checks — pass signals so inferred needs are merged
   const profileNorm = rawProfile?.entityType !== undefined
     ? rawProfile
-    : normalizeProfile(rawProfile, opts.profileSections)
+    : normalizeProfile(rawProfile, opts.profileSections, signals)
   const oppNorm = rawOpportunity?.entityTypesAllowed !== undefined
     ? rawOpportunity
     : normalizeOpportunity(rawOpportunity)
@@ -1321,41 +1725,29 @@ export function computeMatchDecision(rawProfile, rawOpportunity, opts = {}) {
     : rawProfile
   const { score, reasons, match_explain } = scoreOpportunity(profileForScoring, rawOpportunity)
 
-  // Decision via makeDecision
-  let { decision, explanation, reasons: decisionReasons } = makeDecision(score, rawProfile, rawOpportunity)
+  // Decision via makeDecision — pass normalizedProfile so section-derived flags are used
+  let { decision, explanation, reasons: decisionReasons } = makeDecision(score, rawProfile, rawOpportunity, profileNorm)
 
-  // Need alignment from normalised objects
-  let needAlignment = 0
-  let matchedNeeds = []
-  if (profileNorm && oppNorm) {
-    const profileNeeds = profileNorm?.needCategories ?? []
-    const oppNeeds = oppNorm?.needTypesSupported ?? []
-    if (profileNeeds.length === 0) {
-      needAlignment = 0
-    } else if (oppNeeds.length === 0) {
-      needAlignment = 25
-    } else {
-      const matched = profileNeeds.filter((n) => oppNeeds.includes(n))
-      matchedNeeds = matched
-      const profileCoverage = matched.length / profileNeeds.length
-      const oppCoverage = matched.length / Math.max(oppNeeds.length, 1)
-      needAlignment = Math.min(100, Math.round(((profileCoverage + oppCoverage) / 2) * 100))
-    }
-  }
+  // Need alignment from normalised objects (uses calculateNeedAlignment for consistency)
+  const { score: needAlignment, matchedNeeds } = calculateNeedAlignment(profileNorm, oppNorm)
 
   // Post-decision guards
   const hasUrl = Boolean(rawOpportunity?.application_url || rawOpportunity?.url)
-  const profileHasNeeds = (profileNorm?.needCategories?.length ?? 0) > 0
 
   if (decision === 'ACCEPT' && !hasUrl) {
     decision = 'REVIEW'
     explanation = 'Downgraded from ACCEPT — missing application URL.'
     decisionReasons = [...decisionReasons, 'Missing application URL']
   }
-  if (decision === 'ACCEPT' && needAlignment === 0 && !profileHasNeeds) {
+  // With soft inference, needCategories is never truly empty (normalizeProfile guarantees at
+  // least one inferred need). Only downgrade when needAlignment is 0 AND the profile has no
+  // entity type, location, or flags — i.e., a genuinely blank profile.
+  const profileIsGenuinelyBlank = (profileNorm?.needCategories?.length ?? 0) === 0 &&
+    !profileNorm?.entityType && !profileNorm?.state && !profileNorm?.zip
+  if (decision === 'ACCEPT' && needAlignment === 0 && profileIsGenuinelyBlank) {
     decision = 'REVIEW'
-    explanation = 'Downgraded from ACCEPT — no profile needs to align with.'
-    decisionReasons = [...decisionReasons, 'Zero need alignment with empty profile needs']
+    explanation = 'Downgraded from ACCEPT — no profile data to align with.'
+    decisionReasons = [...decisionReasons, 'Zero need alignment with blank profile']
   }
 
   // Eligibility

@@ -13,6 +13,8 @@
  */
 
 import { randomUUID } from 'crypto';
+import { upsertFundingOpportunity } from './opportunityInserter.js';
+import { GRANTS_GOV_SEARCH2_URL } from '../config/grantsGovEndpoints.js';
 
 // Use native fetch (Node 18+) or fall back to node-fetch
 const fetchImpl = globalThis.fetch || (async () => { const nodeFetch = await import('node-fetch'); return nodeFetch.default; })();
@@ -20,15 +22,8 @@ const fetchImpl = globalThis.fetch || (async () => { const nodeFetch = await imp
 // Rate limiting helper
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
-// Grants.gov API key — required since the search2 endpoint started returning 401 Unauthorized.
-// Set GRANTS_GOV_API_KEY in your environment (.env / Railway / Vercel secrets).
+// Legacy search2: optional GRANTS_GOV_API_KEY — we attach X-API-Key only when set.
 const GRANTS_GOV_API_KEY = process.env.GRANTS_GOV_API_KEY || ''
-if (!GRANTS_GOV_API_KEY) {
-  console.warn(
-    '[RealCrawler] GRANTS_GOV_API_KEY env var is not set; ' +
-      'Grants.gov search2 requests will likely return 401 Unauthorized.',
-  )
-}
 
 // State abbreviation to full name mapping
 const STATE_NAMES = {
@@ -88,9 +83,9 @@ async function crawlGrantsGov(state = null, keywords = []) {
   const opportunities = [];
   
   try {
-    // Use the public search2 POST endpoint (the legacy GET endpoint returns HTTP 405)
-    // NOTE: v2 is the current Grants.gov API version (2026).
-    const searchUrl = 'https://api.grants.gov/v2/api/search2';
+    // Use the public search2 POST endpoint (the legacy GET endpoint returns HTTP 405).
+    // v1/search2 is the working route; v2/search2 returns 403 from API Gateway.
+    const searchUrl = GRANTS_GOV_SEARCH2_URL;
     
     const payload = {
       oppStatuses: 'forecasted|posted',
@@ -1042,73 +1037,22 @@ export async function crawlRealOpportunities(db, state = null, options = {}) {
     console.error('[RealCrawler] Pro bono/in-kind crawl failed:', error.message);
   }
   
-  // Loan/matching detection - skip before upsert (consistent with crawlerHelpers)
-  function isLoanOrMatchingFund(opp) {
-    const title = String(opp?.title || '').toLowerCase();
-    const desc = String(opp?.description || '').toLowerCase();
-    const text = `${title} ${desc}`;
-    if (opp?.requires_match === true) return true;
-    if (/\bloan\b|\bmicroloan\b|\bfinancing\b|\bapr\b/.test(text)) return true;
-    if (/\bmatching\b|\bcost share\b|\bmatch required\b|\b1:1\b|\bdollar for dollar\b/.test(text)) return true;
-    if (opp?.is_loan === true) return true;
-    return false;
-  }
-
-  const toUpsert = allOpportunities.filter((opp) => !isLoanOrMatchingFund(opp));
-  const skipped = allOpportunities.length - toUpsert.length;
-  if (skipped > 0) {
-    console.log(`[RealCrawler] Skipped ${skipped} loan/matching opportunities`);
-  }
-
+  // All policy, validation, loan/matching, and dedup checks are now handled by
+  // the canonical upsertFundingOpportunity — no duplicate detection logic here.
   let inserted = 0;
   let updated = 0;
+  let skipped = 0;
 
-  for (const opp of toUpsert) {
+  for (const opp of allOpportunities) {
     try {
-      // Check if exists by source_id
-      const existing = db.prepare(
-        'SELECT id FROM funding_opportunities WHERE source = ? AND source_id = ?'
-      ).get(opp.source, opp.source_id);
-      
-      if (existing) {
-        // Update existing
-        db.prepare(`
-          UPDATE funding_opportunities SET
-            title = ?, sponsor = ?, description = ?, amount_min = ?, amount_max = ?,
-            deadline = ?, deadline_type = ?, application_url = ?, source_url = ?,
-            is_national = ?, state = ?, categories = ?, keywords = ?,
-            eligibility_bullets = ?, requires_match = ?, is_loan = ?, updated_at = CURRENT_TIMESTAMP
-          WHERE id = ?
-        `).run(
-          opp.title, opp.sponsor, opp.description, opp.amount_min, opp.amount_max,
-          opp.deadline, opp.deadline_type, opp.application_url, opp.source_url,
-          opp.is_national ? 1 : 0, opp.state, JSON.stringify(opp.categories || []),
-          JSON.stringify(opp.keywords || []), JSON.stringify(opp.eligibility_bullets || []),
-          opp.requires_match ? 1 : 0, opp.is_loan ? 1 : 0,
-          existing.id
-        );
-        updated++;
-      } else {
-        // Insert new
-        const insertStmt = db.prepare(`
-          INSERT OR IGNORE INTO funding_opportunities (
-            id, title, sponsor, source, source_id, source_url, description,
-            amount_min, amount_max, deadline, deadline_type, application_url,
-            is_national, state, categories, keywords, eligibility_bullets,
-            opportunity_type, requires_501c3, requires_match, is_loan, is_active,
-            created_at, updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-        `);
-        const result = insertStmt.run(
-          // Never use dataset IDs as the DB primary key (can collide across sources/runs).
-          randomUUID(), opp.title, opp.sponsor, opp.source, opp.source_id, opp.source_url,
-          opp.description, opp.amount_min, opp.amount_max, opp.deadline, opp.deadline_type,
-          opp.application_url, opp.is_national ? 1 : 0, opp.state,
-          JSON.stringify(opp.categories || []), JSON.stringify(opp.keywords || []),
-          JSON.stringify(opp.eligibility_bullets || []), opp.opportunity_type || 'grant',
-          opp.requires_501c3 ? 1 : 0, opp.requires_match ? 1 : 0, opp.is_loan ? 1 : 0
-        );
-        inserted++;
+      const result = await upsertFundingOpportunity(db, opp, { allowDirectories: true });
+      if (result?.inserted) inserted++;
+      else if (result?.updated) updated++;
+      else if (result?.skipped) {
+        skipped++;
+        if (result.reason) {
+          console.log(`[RealCrawler] Skipped: ${result.reason} | ${opp.title}`);
+        }
       }
     } catch (dbError) {
       errors.push({ source: opp.source, id: opp.source_id, error: dbError.message });

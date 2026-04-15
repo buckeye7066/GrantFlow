@@ -5,7 +5,7 @@ import crypto from 'crypto'
 import { scrubPII } from '../../utils/piiScrubber.js'
 import { buildRegistry, getSmokeSafeSources } from './registry.js'
 import { RobotsCache } from './robots.js'
-import { createFetcher, fetchToBuffer, fetchFileUrl, fetchMockUrl } from './fetchers.js'
+import { createFetcher, fetchToBuffer, fetchFileUrl } from './fetchers.js'
 import { parseContent } from './parsers.js'
 import { normalizeProgram } from './normalize.js'
 import { upsertNormalizedProgram } from './store.js'
@@ -275,11 +275,9 @@ export async function runNationalCrawlerV2({
 
           try {
             if (url.startsWith('mock://')) {
-              fetchResult = await fetchMockUrl(source.configuration)
-              httpStatus = fetchResult.status
-              contentType = fetchResult.contentType
-              buffer = fetchResult.buffer
-              contentHash = fetchResult.contentHash
+              // Mock sources are not allowed — fabricated funding data must never reach users.
+              console.error(`[nationalCrawlerV2] Rejecting mock:// URL for source ${source.source_id}. Mock sources have been disabled.`)
+              continue
             } else if (url.startsWith('file://')) {
               fetchResult = await fetchFileUrl(url)
               httpStatus = fetchResult.status

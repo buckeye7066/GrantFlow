@@ -205,6 +205,9 @@ function ApplicationForm({ initialValues, profiles, onSave, onCancel, isSaving }
     ...EMPTY_FORM,
     ...(initialValues || {}),
     amount_requested: initialValues?.amount_requested != null ? String(initialValues.amount_requested) : '',
+    // Ensure Select-bound fields are always strings (DB may return null)
+    profile_id: initialValues?.profile_id ?? '',
+    status: initialValues?.status ?? 'draft',
   }))
 
   function set(field, value) {

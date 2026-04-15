@@ -67,6 +67,12 @@ async function main() {
   // Gate 7: Matching pipeline integration — profiles must always find real results
   await run('npx', ['vitest', 'run', 'backend/tests/matching-pipeline.test.js', '--reporter=verbose'], { label: 'matching-pipeline' })
 
+  // Gate 8: Validation layer — URL format, required fields, duplicate detection
+  await run('node', ['--test', 'tests/unit/opportunity-validation-layer.test.mjs'], { label: 'validation-layer' })
+
+  // Gate 9: Multi-profile matching — individual/student/nonprofit/business must return results
+  await run('node', ['--test', 'tests/unit/multi-profile-matching.test.mjs', 'tests/unit/validation-gate.test.mjs'], { label: 'multi-profile-matching' })
+
   console.log('[gate] all release gates passed')
 }
 

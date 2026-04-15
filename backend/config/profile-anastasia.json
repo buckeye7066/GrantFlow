@@ -106,6 +106,14 @@
       "truck_driver": false,
       "notes": "Student focused on academics."
     },
+    "education": {
+      "highest_level": "High School Senior (with college courses)",
+      "current_institution": "Cleveland State Community College",
+      "gpa": "3.84",
+      "act_score": "28",
+      "intended_major": "Forensic Science",
+      "interests": ["Forensic Science", "Criminal Justice", "STEM", "DNA Analysis", "Crime Scene Investigation"]
+    },
     "university_applications": {
       "applications": [
         { "name": "Middle Tennessee State University", "status": "planning" },

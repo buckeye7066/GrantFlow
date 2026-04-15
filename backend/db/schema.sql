@@ -220,7 +220,17 @@ CREATE TABLE IF NOT EXISTS funding_opportunities (
   geo_eligibility TEXT,
   signal_tags TEXT DEFAULT '[]',
   verified_url INTEGER DEFAULT 0,
-  crawler_version TEXT
+  crawler_version TEXT,
+
+  -- Housing-aware classification (migration 054)
+  -- funding_category values: tuition_only | refund_eligible | stipend | housing_direct | faith_based | talent_based | coa_adjustment
+  funding_category TEXT,
+  usable_for_housing INTEGER DEFAULT 0,
+  refund_potential INTEGER DEFAULT 0,
+  -- eligibility_signals: JSON object { gpa_min, faith_affiliation, talent_type, state, field_of_study }
+  eligibility_signals TEXT DEFAULT '{}',
+  -- verification_status: verified_live_url | suspected_dead | needs_review
+  verification_status TEXT DEFAULT 'needs_review'
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS ux_funding_opportunities_fingerprint
@@ -296,6 +306,24 @@ CREATE UNIQUE INDEX IF NOT EXISTS uniq_fo_geo_index
 
 CREATE INDEX IF NOT EXISTS idx_fo_geo_index_run_id
   ON funding_opportunity_geo_index(geo_run_id);
+
+CREATE INDEX IF NOT EXISTS idx_fo_geo_index_zip
+  ON funding_opportunity_geo_index(zip);
+
+-- Geographic coverage cache: precomputed nearby-ZIP relationships per profile ZIP.
+-- Used by geoCoverageService for radius-based progressive expansion.
+CREATE TABLE IF NOT EXISTS geo_zip_coverage (
+  center_zip TEXT NOT NULL,
+  nearby_zip TEXT NOT NULL,
+  distance_miles REAL NOT NULL,
+  tier TEXT NOT NULL CHECK(tier IN ('local','expanded')),
+  state TEXT,
+  PRIMARY KEY (center_zip, nearby_zip)
+);
+
+CREATE INDEX IF NOT EXISTS idx_gzc_center ON geo_zip_coverage(center_zip);
+CREATE INDEX IF NOT EXISTS idx_gzc_nearby ON geo_zip_coverage(nearby_zip);
+CREATE INDEX IF NOT EXISTS idx_gzc_tier ON geo_zip_coverage(center_zip, tier);
 
 -- Grants (opportunities being actively tracked/pursued)
 CREATE TABLE IF NOT EXISTS grants (
@@ -983,6 +1011,9 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_fo_source_source_id ON funding_opportuniti
 CREATE INDEX IF NOT EXISTS idx_fo_is_loan ON funding_opportunities(is_loan);
 CREATE INDEX IF NOT EXISTS idx_fo_state_active_deadline ON funding_opportunities(state, is_active, deadline);
 CREATE INDEX IF NOT EXISTS idx_fo_profile_id ON funding_opportunities(profile_id);
+CREATE INDEX IF NOT EXISTS idx_fo_funding_category ON funding_opportunities(funding_category);
+CREATE INDEX IF NOT EXISTS idx_fo_usable_for_housing ON funding_opportunities(usable_for_housing);
+CREATE INDEX IF NOT EXISTS idx_fo_verification_status ON funding_opportunities(verification_status);
 CREATE INDEX IF NOT EXISTS idx_milestones_due_date ON milestones(due_date);
 CREATE INDEX IF NOT EXISTS idx_milestones_grant_id ON milestones(grant_id);
 CREATE INDEX IF NOT EXISTS idx_documents_organization_id ON documents(organization_id);

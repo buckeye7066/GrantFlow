@@ -1,10 +1,17 @@
 import { toSignalSet } from '../profileSignals/index.js';
+import { normalizeState, statesMatch } from '../../utils/stateNormalization.js';
 
 /**
  * matchEngine.js
  *
  * Scores each program against a profile's needs assessment.
  * Returns ranked results with relevance scores.
+ *
+ * v4 — Improvements over v3:
+ *   - State normalization: "TN" / "Tennessee" / "tn" all match correctly
+ *   - Reduced state mismatch penalty from -30 to -15 to prevent over-filtering
+ *   - Minimum score floor: partial matches always score >= 5 (never zero-out)
+ *   - Geographic expansion: profiles with sparse results still surface relevant matches
  *
  * v3 — Improvements:
  *   - Intent alignment scoring (business profile → business grants score high)
@@ -371,20 +378,25 @@ export function scoreProgram(program, analysis, strategyOpts = {}) {
     }
 
   // ── State match (20 points) ──
+  // v4: Use normalizeState for robust comparison ("TN" == "Tennessee" == "tn")
   maxPossible += 20;
-    const profileState = analysis.location?.state;
-    if (!program.stateRestriction) {
+    const profileState = normalizeState(analysis.location?.state);
+    const programState = normalizeState(program.stateRestriction);
+    if (!program.stateRestriction || program.stateRestriction === 'nationwide') {
           score += 15;
           matchReasons.push('Available nationwide');
-    } else if (profileState && program.stateRestriction === profileState) {
+    } else if (profileState && programState && profileState === programState) {
           score += 20;
           matchReasons.push(`Available in ${profileState}`);
     } else if (!profileState) {
           score += 5;
           matchReasons.push(`State-specific program (${program.stateRestriction}) — your state not set`);
     } else {
-          eligibilityPenalty -= 30;
-          matchReasons.push(`State mismatch: ${program.stateRestriction} vs ${profileState} (penalty)`);
+          // v4: Reduced from -30 to -15. State mismatch is a soft signal, not a disqualifier.
+          // A housing program in CA still has value for someone in TN (they might be relocating,
+          // or the program might have national components).
+          eligibilityPenalty -= 15;
+          matchReasons.push(`State mismatch: ${program.stateRestriction} vs ${profileState} (reduced penalty)`);
     }
 
   // ── Applicant type match (10 points) ──
@@ -607,9 +619,13 @@ export function scoreProgram(program, analysis, strategyOpts = {}) {
   score += eligibilityPenalty;
 
   // ── Normalize to 0-100 ──
-  const normalizedScore = maxPossible > 0
-    ? Math.max(0, Math.round(Math.min(100, (score / maxPossible) * 100)))
+  // v4: Apply a minimum floor of 5 for any program that wasn't hard-gated.
+  // This ensures partial matches (e.g. demographic-only or family-only) still
+  // appear in results rather than being silently dropped at minScore threshold.
+  const rawNormalized = maxPossible > 0
+    ? Math.round(Math.min(100, (score / maxPossible) * 100))
     : 0;
+  const normalizedScore = Math.max(5, rawNormalized);
 
   // Build matched signals list
   const matchedSignals = [];
@@ -636,7 +652,7 @@ export function scoreProgram(program, analysis, strategyOpts = {}) {
       scoreBreakdown: {
         category: Math.round(categoryScore),
         intent: intentBonus,
-        locality: (profileState && program.stateRestriction === profileState) ? 20 : (!program.stateRestriction ? 15 : (!profileState ? 5 : 0)),
+        locality: (profileState && programState && profileState === programState) ? 20 : (!program.stateRestriction || program.stateRestriction === 'nationwide' ? 15 : (!profileState ? 5 : 0)),
         eligibility: score - categoryScore - intentBonus - ((profileState && program.stateRestriction === profileState) ? 20 : (!program.stateRestriction ? 15 : 5)),
         trust: (program.type === 'portal' || program.type === 'referral') ? 5 : 0,
         penalties: negPenalty,

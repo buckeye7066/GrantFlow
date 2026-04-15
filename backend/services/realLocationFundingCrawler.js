@@ -1412,66 +1412,40 @@ const STATE_PROGRAMS = {
 };
 
 /**
- * Insert or update a funding opportunity
+ * Insert or update a funding opportunity via the canonical inserter.
+ * All validation, policy, loan/matching, and dedup checks are handled centrally.
  */
-function upsertOpportunity(db, opp, state = 'nationwide') {
+async function upsertOpportunity(db, opp, state = 'nationwide') {
+  const enriched = {
+    ...opp,
+    source: opp.source ?? 'verified_real',
+    source_id: opp.source_id ?? opp.id,
+    state: state,
+    is_national: opp.is_national !== false,
+    eligibility_bullets: opp.eligibility ?? opp.eligibility_bullets ?? [],
+    record_origin: 'curated_verified',
+    last_verified_at: new Date().toISOString(),
+  }
+
   try {
-    const existing = db.prepare(
-      'SELECT id FROM funding_opportunities WHERE id = ?'
-    ).get(opp.id);
-    
-    const categories = Array.isArray(opp.categories) ? JSON.stringify(opp.categories) : '[]';
-    const keywords = Array.isArray(opp.keywords) ? JSON.stringify(opp.keywords) : '[]';
-    const eligibility = Array.isArray(opp.eligibility) ? JSON.stringify(opp.eligibility) : '[]';
-    
-    if (existing) {
-      db.prepare(`
-        UPDATE funding_opportunities SET
-          title = ?, sponsor = ?, description = ?, amount_min = ?, amount_max = ?,
-          deadline = ?, deadline_type = ?, application_url = ?, source_url = ?,
-          is_national = ?, state = ?, categories = ?, keywords = ?,
-          eligibility_bullets = ?, opportunity_type = ?, requires_501c3 = ?,
-          requires_match = ?, updated_at = CURRENT_TIMESTAMP
-        WHERE id = ?
-      `).run(
-        opp.title, opp.sponsor, opp.description, opp.amount_min || null, opp.amount_max || null,
-        opp.deadline || null, opp.deadline_type || 'rolling', opp.application_url, opp.source_url,
-        opp.is_national !== false ? 1 : 0, state,
-        categories, keywords, eligibility,
-        opp.opportunity_type || 'grant', opp.requires_501c3 ? 1 : 0, opp.requires_match ? 1 : 0,
-        opp.id
-      );
-      return { updated: true };
-    } else {
-      db.prepare(`
-        INSERT INTO funding_opportunities (
-          id, title, sponsor, source, source_id, source_url, description,
-          amount_min, amount_max, deadline, deadline_type, application_url,
-          is_national, state, categories, keywords, eligibility_bullets,
-          opportunity_type, requires_501c3, requires_match, is_active,
-          created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-      `).run(
-        opp.id, opp.title, opp.sponsor, 'verified_real', opp.id,
-        opp.source_url, opp.description,
-        opp.amount_min || null, opp.amount_max || null,
-        opp.deadline || null, opp.deadline_type || 'rolling', opp.application_url,
-        opp.is_national !== false ? 1 : 0, state,
-        categories, keywords, eligibility,
-        opp.opportunity_type || 'grant', opp.requires_501c3 ? 1 : 0, opp.requires_match ? 1 : 0
-      );
-      return { inserted: true };
+    const result = await upsertFundingOpportunity(db, enriched, { allowDirectories: true })
+    if (result?.inserted) return { inserted: true }
+    if (result?.updated) return { updated: true }
+    if (result?.skipped) {
+      console.log(`[RealFunding] Skipped ${opp.id}: ${result.reason}`)
+      return { skipped: true }
     }
+    return { updated: true }
   } catch (error) {
-    console.error(`[RealFunding] Error upserting ${opp.id}:`, error.message);
-    throw error;
+    console.error(`[RealFunding] Error upserting ${opp.id}:`, error.message)
+    throw error
   }
 }
 
 /**
  * Seed all real national programs
  */
-export function seedNationalPrograms(db) {
+export async function seedNationalPrograms(db) {
   console.log('[RealFunding] Seeding national programs...');
   let inserted = 0, updated = 0, errors = 0;
   
@@ -1480,10 +1454,15 @@ export function seedNationalPrograms(db) {
       console.warn(`[RealFunding] Skipping invalid program:`, program.id);
       continue;
     }
-    const result = upsertOpportunity(db, { ...program, is_national: true }, 'nationwide');
-    if (result.inserted) inserted++;
-    else if (result.updated) updated++;
-    else errors++;
+    try {
+      const result = await upsertOpportunity(db, { ...program, is_national: true }, 'nationwide');
+      if (result.inserted) inserted++;
+      else if (result.updated) updated++;
+      else errors++;
+    } catch (err) {
+      errors++;
+      console.error(`[RealFunding] seedNationalPrograms error for ${program.id}:`, err?.message ?? err);
+    }
   }
   
   console.log(`[RealFunding] National: ${inserted} inserted, ${updated} updated, ${errors} errors`);
@@ -1493,17 +1472,22 @@ export function seedNationalPrograms(db) {
 /**
  * Seed state-specific programs for a given state
  */
-export function seedStatePrograms(db, state) {
+export async function seedStatePrograms(db, state) {
   const programs = STATE_PROGRAMS[state] || [];
   if (programs.length === 0) return { inserted: 0, updated: 0, errors: 0 };
   
   let inserted = 0, updated = 0, errors = 0;
   
   for (const program of programs) {
-    const result = upsertOpportunity(db, { ...program, is_national: false }, state);
-    if (result.inserted) inserted++;
-    else if (result.updated) updated++;
-    else errors++;
+    try {
+      const result = await upsertOpportunity(db, { ...program, is_national: false }, state);
+      if (result.inserted) inserted++;
+      else if (result.updated) updated++;
+      else errors++;
+    } catch (err) {
+      errors++;
+      console.error(`[RealFunding] seedStatePrograms error for ${program.id} (${state}):`, err?.message ?? err);
+    }
   }
   
   return { inserted, updated, errors };
@@ -1512,12 +1496,12 @@ export function seedStatePrograms(db, state) {
 /**
  * Seed programs for all states
  */
-export function seedAllStatePrograms(db) {
+export async function seedAllStatePrograms(db) {
   console.log('[RealFunding] Seeding state programs...');
   let totalInserted = 0, totalUpdated = 0, totalErrors = 0;
   
   for (const state of Object.keys(STATE_NAMES)) {
-    const result = seedStatePrograms(db, state);
+    const result = await seedStatePrograms(db, state);
     totalInserted += result.inserted;
     totalUpdated += result.updated;
     totalErrors += result.errors;
@@ -1530,20 +1514,22 @@ export function seedAllStatePrograms(db) {
 /**
  * Get count of real opportunities per state
  */
-export function getOpportunityCountsByState(db) {
+export async function getOpportunityCountsByState(db) {
   const counts = {};
-  
-  // National opportunities apply to all states
-  const nationalCount = db.prepare(
-    'SELECT COUNT(*) as count FROM funding_opportunities WHERE is_national = 1 AND is_active = 1'
-  ).get().count;
+  const isPostgres = db?.dialect === 'postgres'
+  const activeVal = isPostgres ? 'TRUE' : '1'
+
+  const nationalRow = await db.prepare(
+    `SELECT COUNT(*) as count FROM funding_opportunities WHERE is_national = ${activeVal} AND is_active = ${activeVal}`
+  ).get();
+  const nationalCount = Number(nationalRow?.count ?? 0);
   
   for (const state of Object.keys(STATE_NAMES)) {
-    const stateCount = db.prepare(
-      'SELECT COUNT(*) as count FROM funding_opportunities WHERE state = ? AND is_active = 1'
-    ).get(state).count;
+    const stateRow = await db.prepare(
+      `SELECT COUNT(*) as count FROM funding_opportunities WHERE state = ? AND is_active = ${activeVal}`
+    ).get(state);
     
-    counts[state] = nationalCount + stateCount;
+    counts[state] = nationalCount + Number(stateRow?.count ?? 0);
   }
   
   counts.nationwide = nationalCount;
@@ -1557,13 +1543,13 @@ export async function seedAllRealFunding(db) {
   console.log('[RealFunding] Starting comprehensive real funding seed...');
   
   // Seed national programs
-  const nationalResult = seedNationalPrograms(db);
+  const nationalResult = await seedNationalPrograms(db);
   
   // Seed state programs
-  const stateResult = seedAllStatePrograms(db);
+  const stateResult = await seedAllStatePrograms(db);
   
   // Get counts
-  const counts = getOpportunityCountsByState(db);
+  const counts = await getOpportunityCountsByState(db);
   
   const totalRow = await (db?.dialect === 'postgres' 
       ? db.prepare('SELECT COUNT(*) as count FROM funding_opportunities WHERE is_active = TRUE').get()

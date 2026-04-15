@@ -38,7 +38,7 @@ async function hasGrantsDecisionColumns(db) {
         .get('grants', 'match_decision')
       result = Boolean(row?.ok)
     } else {
-      const cols = db.prepare('PRAGMA table_info(grants)').all()
+      const cols = await db.prepare('PRAGMA table_info(grants)').all()
       result = cols.some((c) => c.name === 'match_decision')
     }
   } catch { /* ignore */ }

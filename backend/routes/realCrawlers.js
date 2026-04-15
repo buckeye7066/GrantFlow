@@ -10,8 +10,9 @@ import { searchWebForItem, KNOWN_ITEM_SOURCES, parseItemRequest } from '../servi
 import { loadProfileContext } from '../services/profileHelpers.js'
 import { buildProfileFacets } from '../services/profile/profileTaxonomy.js'
 import { trustedOriginClause, trustedSourceClause } from '../utils/recordOrigins.js'
+import { filterActionableOpportunities } from '../services/opportunityValidationLayer.js'
 import { applyRelevanceFilter, extractProfileData } from '../services/relevanceFilter.js'
-import { makeDecision } from '../services/matchEngine.js'
+import { scoreOpportunity, makeDecision } from '../services/matchEngine.js'
 import { runAllDomainEngines } from '../services/crawlers/domainEngines/index.js'
 import { crawlStateWaiverBenefits, evaluateStateWaiverEligibility } from '../services/crawlers/stateWaiverBenefitsCrawler.js'
 
@@ -22,7 +23,7 @@ const router = express.Router()
  * Returns results mapped to the same frontend shape as curated results.
  * Deduplicates against curated results by title normalization.
  */
-async function queryNearbyOpportunities(db, analysis, curatedTitles, limit = 50) {
+async function queryNearbyOpportunities(db, analysis, curatedTitles, profileContext, limit = 50) {
   if (!db || typeof db.prepare !== 'function') return [];
   const state = analysis?.location?.state;
   try {
@@ -34,7 +35,8 @@ async function queryNearbyOpportunities(db, analysis, curatedTitles, limit = 50)
       ? `SELECT id, title, description, sponsor, source, source_url, application_url, apply_url,
              state, is_national, opportunity_type, type, deadline_type, amount_max,
              contact_info, categories, keywords, match_reasons,
-             funding_type, record_origin, requires_match, match_percentage, is_loan
+             funding_type, record_origin, requires_match, match_percentage, is_loan,
+             funding_category, usable_for_housing, refund_potential, eligibility_signals, verification_status
          FROM funding_opportunities 
          WHERE is_active = TRUE AND (state = $1 OR state = 'nationwide' OR is_national = TRUE) 
          AND ${trustedOriginClause()} AND ${trustedSourceClause()} 
@@ -43,7 +45,8 @@ async function queryNearbyOpportunities(db, analysis, curatedTitles, limit = 50)
       : `SELECT id, title, description, sponsor, source, source_url, application_url, apply_url,
              state, is_national, opportunity_type, type, deadline_type, amount_max,
              contact_info, categories, keywords, match_reasons,
-             funding_type, record_origin, requires_match, match_percentage, is_loan
+             funding_type, record_origin, requires_match, match_percentage, is_loan,
+             funding_category, usable_for_housing, refund_potential, eligibility_signals, verification_status
          FROM funding_opportunities 
          WHERE is_active = 1 AND (state = ? OR state = 'nationwide' OR is_national = 1) 
          AND ${trustedOriginClause()} AND ${trustedSourceClause()} 
@@ -70,7 +73,7 @@ async function queryNearbyOpportunities(db, analysis, curatedTitles, limit = 50)
         url: row.application_url || row.apply_url || row.source_url || null,
         application_url: row.application_url || row.apply_url || null,
         source_url: row.source_url || row.application_url || null,
-        match_score: 50,
+        match_score: profileContext ? (scoreOpportunity(profileContext, row)?.score ?? 50) : 50,
         match_reasons: safeJsonParse(row.match_reasons, []),
         categories: safeJsonParse(row.categories, []),
         opportunity_type: row.opportunity_type || row.type || 'program',
@@ -114,6 +117,7 @@ const CRAWLER_TYPES = [
   'state_waiver_benefits',
   'item_matching',
   'special_needs',
+  'housing_funding',
 ]
 
 /**
@@ -259,8 +263,8 @@ router.post('/run', ensureAuth, async (req, res) => {
 
     // Merge "near you" opportunities from funding_opportunities table
     const curatedTitles = mapped.map(o => o.title || o.name || '');
-    const nearbyOpps = await queryNearbyOpportunities(db, result.analysis, curatedTitles, 30);
-    const allMapped = [...mapped, ...nearbyOpps];
+    const nearbyOpps = await queryNearbyOpportunities(db, result.analysis, curatedTitles, profileContext, 30);
+    const allMapped = filterActionableOpportunities(filterActionableOpportunities([...mapped, ...nearbyOpps]));
 
     let filtered = allMapped
       .filter((opp) => {
@@ -867,7 +871,7 @@ router.post('/run-smart', ensureAuth, standardRateLimiter, async (req, res) => {
       console.warn('[run-smart] State waiver crawl failed (continuing):', waiverErr?.message)
     }
 
-    const filtered = allOpportunities
+    const filtered = filterActionableOpportunities(allOpportunities)
       .filter((opp) => { const rel = applyRelevanceFilter(opp, smartProfileData); return rel.pass; })
       .filter((opp) => typeof opp.match_score !== 'number' || opp.match_score >= minScore || opp.is_directory_resource)
       .sort((a, b) => (b.match_score ?? 0) - (a.match_score ?? 0))
@@ -888,6 +892,33 @@ router.post('/run-smart', ensureAuth, standardRateLimiter, async (req, res) => {
       error: err?.message || 'Smart search failed',
       opportunities: [],
     })
+  }
+})
+
+// ---------------------------------------------------------------------------
+// POST /api/real-crawlers/run-housing
+// Seed housing-usable funding opportunities (Tennessee, faith-based, talent, stipend, COA).
+// Admin or authenticated user. URL validation optional (validateUrls=false skips HEAD checks).
+// ---------------------------------------------------------------------------
+router.post('/run-housing', ensureAuth, async (req, res) => {
+  try {
+    const { getDb } = await import('../db/index.js')
+    const db = getDb()
+    const { runHousingScholarshipCrawler } = await import('../services/housingScholarshipCrawler.js')
+
+    const validateUrls = req.body?.validateUrls !== false
+    const onProgress = null
+
+    const summary = await runHousingScholarshipCrawler(db, { validateUrls, onProgress })
+
+    return res.json({
+      success: true,
+      message: `Housing scholarship crawler complete: ${summary.inserted} inserted, ${summary.skipped} skipped, ${summary.errors} errors`,
+      ...summary,
+    })
+  } catch (err) {
+    console.error('[run-housing] Error:', err?.message || String(err))
+    return res.status(500).json({ error: err?.message || 'Housing crawler failed' })
   }
 })
 

@@ -186,7 +186,7 @@ export function normalizeProgram({
     if (track === 'TRACK_A') {
       row.provider_requirements = null
     } else {
-      row.provider_requirements = source.configuration?.mock_payload?.provider_requirements || { notes: 'See source URL' }
+      row.provider_requirements = null
     }
 
     // reuse existing confidence helper by mapping keys

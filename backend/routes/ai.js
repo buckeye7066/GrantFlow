@@ -10,6 +10,7 @@ import { DEFAULT_OPENAI_MODEL, OPENAI_TIMEOUT_MS, MAX_PROMPT_LENGTH } from '../c
 // This route does NOT insert into the grants pipeline.
 import { calculateMatchScore } from '../services/matchingEngine.js';
 import { trustedOriginClause, trustedSourceClause } from '../utils/recordOrigins.js';
+import { DEFAULT_MIN_SCORE, RELAX_THRESHOLDS, FALLBACK_TOP_N } from '../config/matchThresholds.js';
 import { createOpenAIClient, summarizeOpenAIError } from '../utils/openaiClient.js';
 import { enforceTierCapability } from '../middleware/entitlements.js'
 import { TIER_CAPABILITIES } from '../utils/tierGating.js'
@@ -161,10 +162,10 @@ router.post('/comprehensive-match', async (req, res) => {
 
     // Zero-result fallback: progressively lower threshold so users never see empty results
     // when relevant funding likely exists.
-    let matchThreshold = 50
+    let matchThreshold = DEFAULT_MIN_SCORE
     let matched = scoredOpps.filter(o => o.fit_score >= matchThreshold)
     if (matched.length === 0 && scoredOpps.length > 0) {
-      for (const fallback of [30, 15, 0]) {
+      for (const fallback of RELAX_THRESHOLDS) {
         matched = scoredOpps.filter(o => o.fit_score >= fallback)
         if (matched.length > 0) {
           matchThreshold = fallback
@@ -172,7 +173,7 @@ router.post('/comprehensive-match', async (req, res) => {
         }
       }
       if (matched.length === 0) {
-        matched = scoredOpps.slice(0, 20)
+        matched = scoredOpps.slice(0, FALLBACK_TOP_N)
         matchThreshold = 0
       }
     }
@@ -182,7 +183,7 @@ router.post('/comprehensive-match', async (req, res) => {
       opportunities: matched,
       total: scoredOpps.length,
       threshold_used: matchThreshold,
-      threshold_relaxed: matchThreshold < 50 ? true : undefined,
+      threshold_relaxed: matchThreshold < DEFAULT_MIN_SCORE ? true : undefined,
       profile
     })
   } catch (error) {

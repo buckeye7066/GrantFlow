@@ -12,8 +12,8 @@
  */
 
 import { setTimeout as sleep } from 'node:timers/promises'
+import { LINK_VERIFICATION_SKIP_DOMAINS, isPlaceholderUrl } from '../config/urlRules.js'
 
-const SKIP_DOMAINS = ['example.com', 'example.org', 'placeholder.com', 'localhost']
 const REQUEST_TIMEOUT_MS = 10_000
 const BATCH_SIZE = 10
 const BATCH_DELAY_MS = 2_000
@@ -21,9 +21,10 @@ const REVERIFY_AFTER_DAYS = 30
 
 function shouldSkipUrl(url) {
   if (!url || typeof url !== 'string') return true
+  if (isPlaceholderUrl(url)) return true
   try {
     const parsed = new URL(url)
-    return SKIP_DOMAINS.some(d => parsed.hostname.includes(d))
+    return LINK_VERIFICATION_SKIP_DOMAINS.some(d => parsed.hostname.includes(d))
   } catch {
     return true
   }

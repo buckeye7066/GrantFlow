@@ -13,8 +13,8 @@ This document explains **exactly how to manually obtain API keys** for official 
 
 | Provider | What it offers | API key required? | Env var name (paste key here) | Official docs |
 | --- | --- | --- | --- | --- |
-| **Grants.gov REST APIs** | Federal grant opportunities (grantsws REST) | **Sometimes** (some endpoints require Help Desk ticket + encrypted key) | `GRANTS_GOV_API_KEY` | `https://www.grants.gov/api/api-guide` and `https://www.grants.gov/api` |
-| **Simpler.Grants.gov API** | Applicant-friendly opportunities search API | **Yes** (key created in Developer UI after Login.gov) | `SIMPLER_GRANTS_API_KEY` | `https://wiki.simpler.grants.gov/product/api` and `https://simpler.grants.gov/developer` |
+| **Grants.gov REST APIs** | Federal grant opportunities (grantsws REST) | **No** for `search2` (works without a key; optional `X-API-Key` via Help Desk for some endpoints / prioritization) | `GRANTS_GOV_API_KEY` | `https://www.grants.gov/api/api-guide` and `https://www.grants.gov/support` |
+| **Simpler.Grants.gov API** | Applicant-friendly opportunities search API | **Yes** (Login.gov → **Manage API Keys** at the developer portal) | `SIMPLER_GRANTS_API_KEY` | `https://wiki.simpler.grants.gov/product/api` and `https://simpler.grants.gov/developers` |
 | **SAM.gov Entity Management API** | Entity lookups (UEI registrations, etc.) | **Yes** (Public API Key from SAM.gov profile) | `SAM_GOV_PUBLIC_API_KEY` | `https://open.gsa.gov/api/entity-api/` |
 | **SAM.gov Get Opportunities Public API** | Contract/procurement opportunity notices | **Yes** (Public API Key from SAM.gov account details) | `SAM_GOV_PUBLIC_API_KEY` | `https://open.gsa.gov/api/get-opportunities-public-api/` |
 | **api.data.gov** | Shared API key for participating agencies using api.data.gov | **Yes** (for most endpoints) | `API_DATA_GOV_KEY` | `https://api.data.gov/docs/developer-manual/` |
@@ -51,23 +51,32 @@ This document explains **exactly how to manually obtain API keys** for official 
 
 **Is an API key required?**
 
-- **Yes.** As of 2026, the `search2` endpoint (`https://api.grants.gov/v1/api/search2`) requires an `X-API-Key` header and returns `401 Unauthorized` without one. Obtain a key via the **Grants.gov Help Desk** (see the API guide linked above) and set it as `GRANTS_GOV_API_KEY`.
+- **No** for the legacy **`search2`** integration GrantFlow uses: requests succeed without `X-API-Key`. If you set `GRANTS_GOV_API_KEY`, GrantFlow sends that header (useful if Grants.gov gives you a key for rate-limit prioritization or for endpoints that require one). For Help Desk–issued keys, see **`https://www.grants.gov/support`** and the API guide.
 
 **How to obtain (manual)**
 
-1. Review the API portal and API guide:
+1. You can **leave `GRANTS_GOV_API_KEY` unset** for normal `search2` usage.
+2. If you later need a Grants.gov–issued key, follow the **Help Desk** instructions in the API guide:
    - `https://www.grants.gov/api`
    - `https://www.grants.gov/api/api-guide`
-2. If you need an endpoint that requires a key, follow the **Help Desk / registration instructions** in the Grants.gov documentation and request an API key.
-3. Once issued, store it securely in your secrets manager.
+3. Once issued, store it as `GRANTS_GOV_API_KEY` in your secrets manager.
 
 **Where to paste the key**
 
-- `GRANTS_GOV_API_KEY`
+- `GRANTS_GOV_API_KEY` (optional)
 
 **Test command**
 
-- With API key (`X-API-Key` header required since 2026):
+- Without an API key (typical):
+
+```bash
+curl -X POST "https://api.grants.gov/v1/api/search2" \
+  -H "Accept: application/json" \
+  -H "Content-Type: application/json" \
+  -d '{"keyword":"health","oppStatuses":"posted","rows":1,"startRecordNum":0}'
+```
+
+- With an optional `X-API-Key` (if you have one from the Help Desk):
 
 ```bash
 curl -X POST "https://api.grants.gov/v1/api/search2" \
@@ -99,10 +108,10 @@ curl -X POST "https://api.grants.gov/v1/api/search2" \
 
 **How to obtain (manual)**
 
-1. Go to the developer portal: `https://simpler.grants.gov/developer`
-2. Sign in using **Login.gov**.
-3. Create a new API key in the Developer UI (name it so you can rotate it later).
-4. Copy the API key value.
+1. Open **`https://simpler.grants.gov/developers`** (developer portal).
+2. Click **Sign in** (top nav) → **Sign in with Login.gov** (create or reuse a Login.gov account).
+3. After sign-in, open **Manage API Keys** and create a new key (name it so you can rotate it later).
+4. Copy the API key value into `SIMPLER_GRANTS_API_KEY`.
 
 **Where to paste the key**
 

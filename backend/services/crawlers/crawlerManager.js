@@ -15,6 +15,7 @@
 import { loadProfileSignals, buildSignalsFromContext } from '../profileSignals/index.js';
 import { matchPrograms } from './matchEngine.js';
 import { getStrategy, checkGates } from './strategyRegistry.js';
+import { normalizeState, statesMatch } from '../../utils/stateNormalization.js';
 import { FEDERAL_BENEFITS } from './data/federalBenefits.js';
 import { NATIONAL_PROGRAMS } from './data/nationalPrograms.js';
 import { BUSINESS_PROGRAMS } from './data/businessPrograms.js';
@@ -206,9 +207,10 @@ function loadCandidates(strategy, stateData, analysis, intents) {
 
   if (sources.has('utility_assistance')) {
     // Filter by state restriction when a state is known, or include all if no state available
-    const userState = analysis.location?.state;
+    // v4: Use statesMatch for robust comparison
+    const userState = normalizeState(analysis.location?.state);
     const filtered = userState
-      ? UTILITY_ASSISTANCE_PROGRAMS.filter(p => !p.stateRestriction || p.stateRestriction === userState)
+      ? UTILITY_ASSISTANCE_PROGRAMS.filter(p => !p.stateRestriction || statesMatch(p.stateRestriction, userState))
       : UTILITY_ASSISTANCE_PROGRAMS;
     programs.push(...filtered);
     candidateCounts.utility_assistance = filtered.length;

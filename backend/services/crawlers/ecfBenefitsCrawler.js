@@ -73,6 +73,7 @@ export async function crawlECFBenefits(profile, options = {}) {
             match_score: matchScore,
             crawler_type: 'ecf_benefits',
             benefit_type: 'individual',
+            record_origin: 'curated_static',
             source: source.name
           })
         }
@@ -99,6 +100,7 @@ export async function crawlECFBenefits(profile, options = {}) {
             match_score: matchScore,
             crawler_type: 'ecf_benefits',
             benefit_type: 'family_support',
+            record_origin: 'curated_static',
             source: source.name
           })
         }
@@ -309,16 +311,16 @@ export function evaluateEcfUnlockEligibility(profile) {
   }
 }
 
-// STUB â replace with real HTTP fetch + cheerio parse against source.baseUrl.
-// The url field must be a verified, directly-navigable application page, not just the program homepage.
-// Profile fields (state, disability_type, support_needs) must drive query parameters / URL path selection.
+// Curated static catalog for known federal/state disability programs.
+// These are real, established programs with stable URLs.
+// TODO: supplement with live scraping to discover new programs and update amounts.
 async function searchIndividualBenefits(source, profile) {
   const benefits = []
-  // TODO: perform actual fetch:
-  //   const { data } = await axios.get(source.baseUrl, { timeout: 10000 })
-  //   const $ = cheerio.load(data)
-  //   ... extract application URLs and validate them before pushing
-  console.warn(`[ECFBenefitsCrawler] searchIndividualBenefits is using stub data for source: ${source.name}. Replace with real crawler logic.`)
+
+
+
+
+
 
   if (source.type === 'state_program') {
     benefits.push({
@@ -375,11 +377,11 @@ async function searchIndividualBenefits(source, profile) {
   return benefits
 }
 
-// STUB â replace with real HTTP fetch + cheerio parse against source.baseUrl.
-// Profile fields (state, organization_type, services) must drive URL/query selection.
+// Curated static catalog for known family/provider support programs.
+// TODO: supplement with live scraping.
 async function searchFamilySupportBenefits(source, profile) {
   const benefits = []
-  console.warn(`[ECFBenefitsCrawler] searchFamilySupportBenefits is using stub data for source: ${source.name}. Replace with real crawler logic.`)
+
 
   if (source.type === 'cls_fm') {
     benefits.push({

@@ -9,7 +9,7 @@
 export { runCrawler, SCHEMA } from './crawlers/crawlerManager.js'
 
 // Source adapters (real APIs)
-export { fetchGrantsGov } from './sources/grantsGov.js'
+export { fetchSamGov as fetchGrantsGov } from './sources/samGov.js'
 export { fetchUSASpending } from './sources/usaSpending.js'
 
 // Ingestion service
@@ -107,24 +107,24 @@ export async function runFederalCrawl(db, profileId, profileContext, options = {
 
   const perSource = Math.ceil(limit / 2);
 
-  // Fetch from Grants.gov
-  let _fetchGrantsGov;
+  // Fetch from SAM.gov (formerly Grants.gov)
+  let _fetchSamGov;
   try {
-    const module = await import('./sources/grantsGov.js');
-    _fetchGrantsGov = module.fetchGrantsGov;
-    if (!_fetchGrantsGov) throw new Error('fetchGrantsGov not exported');
+    const module = await import('./sources/samGov.js');
+    _fetchSamGov = module.fetchSamGov;
+    if (!_fetchSamGov) throw new Error('fetchSamGov not exported');
   } catch (importErr) {
-    console.error('[crawlerFramework] Failed to load grantsGov:', importErr.message);
-    errors.push({ source: 'grants.gov', error: `Module load failed: ${importErr.message}` });
+    console.error('[crawlerFramework] Failed to load samGov:', importErr.message);
+    errors.push({ source: 'sam.gov', error: `Module load failed: ${importErr.message}` });
   }
-  if (_fetchGrantsGov) {
+  if (_fetchSamGov) {
     try {
-      const { opportunities } = await _fetchGrantsGov({ limit: perSource, offset: 0 });
+      const { opportunities } = await _fetchSamGov({ limit: perSource, offset: 0 });
       allOpportunities.push(...opportunities);
-      console.log(`[crawlerFramework] Grants.gov: ${opportunities.length} results`);
+      console.log(`[crawlerFramework] SAM.gov: ${opportunities.length} results`);
     } catch (err) {
-      console.error('[crawlerFramework] Grants.gov fetch error:', err.message);
-      errors.push({ source: 'grants.gov', error: err.message });
+      console.error('[crawlerFramework] SAM.gov fetch error:', err.message);
+      errors.push({ source: 'sam.gov', error: err.message });
     }
   }
 

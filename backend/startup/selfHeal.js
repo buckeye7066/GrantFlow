@@ -28,6 +28,7 @@ import { seedBaselineFromRepo } from '../utils/seedBaselineFromRepo.js';
 import ensureMinimumNationalOpportunities from '../utils/ensureMinimumNationalOpportunities.js';
 import seedAssistanceDirectories from '../utils/seedAssistanceDirectories.js';
 import seedFaithBasedHousing from '../utils/seedFaithBasedHousing.js';
+import seedHousingFundingOpportunities from '../utils/seedHousingFunding.js';
 import { seedServiceCatalogFromExtract } from '../services/serviceCatalogStore.js';
 
 export async function runSelfHeal({ db, uploadsDir, IS_SMOKE_MODE, baseDir }) {
@@ -340,6 +341,25 @@ export async function runSelfHeal({ db, uploadsDir, IS_SMOKE_MODE, baseDir }) {
       '[startup] Failed to seed faith-based housing:',
       error?.message || error,
     );
+  }
+
+  // ── Housing funding opportunities (TN HOPE, faith-based, talent-based, COA) ──
+  try {
+    const housingCount = db
+      .prepare(
+        "SELECT COUNT(*) as count FROM funding_opportunities WHERE funding_category IS NOT NULL AND usable_for_housing = 1 AND is_active = 1",
+      )
+      .get()?.count ?? 0;
+
+    if (housingCount < 5) {
+      console.info('[startup] Seeding housing-eligible funding opportunities...');
+      const result = await seedHousingFundingOpportunities(db);
+      console.info('[startup] Seeded housing funding', result);
+    } else {
+      console.info('[startup] Housing funding already seeded', { count: housingCount });
+    }
+  } catch (error) {
+    console.warn('[startup] Failed to seed housing funding:', error?.message || error);
   }
 }
 

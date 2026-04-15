@@ -1,0 +1,458 @@
+{
+  "tennessee_state_programs": [
+    {
+      "title": "Tennessee HOPE Scholarship",
+      "sponsor": "Tennessee Student Assistance Corporation (TSAC)",
+      "description": "The Tennessee HOPE Scholarship provides up to $6,000 per year for students at four-year institutions and $3,000 per year at two-year institutions. Based on academic merit, not financial need. Funds are applied to tuition and mandatory fees first; any amount exceeding direct costs may be refunded to the student for use toward living expenses including rent, food, and utilities. Students must have a 21 ACT or 3.0 GPA and be a Tennessee resident.",
+      "source": "tennessee_state_scholarship",
+      "source_id": "tn-hope-scholarship",
+      "source_url": "https://www.tn.gov/collegepays/money-for-college/tn-education-lottery-programs/tennessee-hope-scholarship.html",
+      "application_url": "https://www.tn.gov/collegepays/money-for-college/tn-education-lottery-programs/tennessee-hope-scholarship.html",
+      "state": "TN",
+      "is_national": false,
+      "opportunity_type": "scholarship",
+      "funding_type": "scholarship",
+      "amount_min": 3000,
+      "amount_max": 6000,
+      "deadline_type": "fixed",
+      "deadline": "2027-02-15",
+      "funding_category": "refund_eligible",
+      "usable_for_housing": true,
+      "refund_potential": true,
+      "eligibility_signals": {
+        "gpa_min": 3.0,
+        "state": "TN"
+      },
+      "verification_status": "verified_live_url",
+      "categories": ["education", "scholarship"],
+      "keywords": ["tennessee", "hope", "scholarship", "merit", "gpa", "act", "lottery", "state scholarship", "college", "university", "tuition"],
+      "eligibility_bullets": [
+        "Must be a Tennessee resident",
+        "Must have a minimum 21 ACT composite or 3.0 GPA",
+        "Must enroll at an eligible Tennessee postsecondary institution",
+        "Must be a first-time freshman or continuing student meeting renewal criteria",
+        "Funds exceeding tuition and fees may be refunded for living expenses"
+      ]
+    },
+    {
+      "title": "Tennessee HOPE Access Grant",
+      "sponsor": "Tennessee Student Assistance Corporation (TSAC)",
+      "description": "The HOPE Access Grant provides up to $2,750 per year at four-year institutions for Tennessee residents who have between an 18-20 ACT score or 2.75-2.99 GPA. This grant supplements tuition costs and any excess after tuition may be refunded to students for living expenses.",
+      "source": "tennessee_state_scholarship",
+      "source_id": "tn-hope-access-grant",
+      "source_url": "https://www.tn.gov/collegepays/money-for-college/tn-education-lottery-programs/tennessee-hope-access-grant.html",
+      "application_url": "https://www.tn.gov/collegepays/money-for-college/tn-education-lottery-programs/tennessee-hope-access-grant.html",
+      "state": "TN",
+      "is_national": false,
+      "opportunity_type": "scholarship",
+      "funding_type": "scholarship",
+      "amount_min": 1250,
+      "amount_max": 2750,
+      "deadline_type": "fixed",
+      "deadline": "2027-02-15",
+      "funding_category": "refund_eligible",
+      "usable_for_housing": true,
+      "refund_potential": true,
+      "eligibility_signals": {
+        "gpa_min": 2.75,
+        "state": "TN"
+      },
+      "verification_status": "verified_live_url",
+      "categories": ["education", "scholarship"],
+      "keywords": ["tennessee", "hope", "access", "grant", "act", "gpa", "state"],
+      "eligibility_bullets": [
+        "Must be a Tennessee resident",
+        "Must have 18-20 ACT composite or 2.75-2.99 GPA",
+        "Must enroll at an eligible Tennessee institution",
+        "Available for first two semesters only"
+      ]
+    },
+    {
+      "title": "Tennessee Promise - Last Dollar Scholarship",
+      "sponsor": "Tennessee Higher Education Commission",
+      "description": "Tennessee Promise is a last-dollar scholarship covering tuition and mandatory fees at community and technical colleges for recent Tennessee high school graduates. After Pell Grants and HOPE are applied, Tennessee Promise covers remaining tuition. This stacking approach maximizes refund potential from need-based grants.",
+      "source": "tennessee_state_scholarship",
+      "source_id": "tn-promise-scholarship",
+      "source_url": "https://www.tn.gov/collegepays/money-for-college/tn-education-lottery-programs/tennessee-promise-scholarship.html",
+      "application_url": "https://www.tn.gov/collegepays/money-for-college/tn-education-lottery-programs/tennessee-promise-scholarship.html",
+      "state": "TN",
+      "is_national": false,
+      "opportunity_type": "scholarship",
+      "funding_type": "scholarship",
+      "amount_min": 0,
+      "amount_max": 4000,
+      "deadline_type": "fixed",
+      "deadline": "2026-11-01",
+      "funding_category": "refund_eligible",
+      "usable_for_housing": true,
+      "refund_potential": true,
+      "eligibility_signals": {
+        "state": "TN"
+      },
+      "verification_status": "verified_live_url",
+      "categories": ["education", "scholarship"],
+      "keywords": ["tennessee", "promise", "community college", "technical college", "free tuition", "last dollar"],
+      "eligibility_bullets": [
+        "Must be a Tennessee high school graduate",
+        "Must complete FAFSA and Tennessee Promise application",
+        "Must complete community service hours",
+        "Must maintain satisfactory academic progress",
+        "Covers tuition and fees not covered by Pell or HOPE"
+      ]
+    },
+    {
+      "title": "Tennessee Student Assistance Award (TSAA)",
+      "sponsor": "Tennessee Student Assistance Corporation (TSAC)",
+      "description": "Need-based grant for Tennessee residents attending eligible in-state institutions. Awards up to $4,000 per year based on financial need determined by FAFSA. Funds applied to institutional charges; when combined with other aid exceeding direct costs, may produce a refund usable for off-campus living expenses.",
+      "source": "tennessee_state_scholarship",
+      "source_id": "tn-tsaa-need-based",
+      "source_url": "https://www.tn.gov/collegepays/money-for-college/state-of-tennessee-programs/tennessee-student-assistance-award.html",
+      "application_url": "https://www.tn.gov/collegepays/money-for-college/state-of-tennessee-programs/tennessee-student-assistance-award.html",
+      "state": "TN",
+      "is_national": false,
+      "opportunity_type": "grant",
+      "funding_type": "grant",
+      "amount_min": 1000,
+      "amount_max": 4000,
+      "deadline_type": "rolling",
+      "funding_category": "refund_eligible",
+      "usable_for_housing": true,
+      "refund_potential": true,
+      "eligibility_signals": {
+        "state": "TN"
+      },
+      "verification_status": "verified_live_url",
+      "categories": ["education", "financial_aid"],
+      "keywords": ["tennessee", "need-based", "state grant", "tsaa", "fafsa", "financial aid"],
+      "eligibility_bullets": [
+        "Must be a Tennessee resident",
+        "Must demonstrate financial need via FAFSA",
+        "Must attend an eligible Tennessee institution",
+        "Award amount varies by need and available funding"
+      ]
+    }
+  ],
+  "faith_based_scholarships": [
+    {
+      "title": "United Methodist Higher Education Foundation General Scholarship",
+      "sponsor": "United Methodist Higher Education Foundation",
+      "description": "Merit and need-based scholarships for United Methodist students attending one of the 100+ United Methodist-related colleges and universities. Awards range from $500 to $5,000. Funds disbursed directly to student accounts; amounts exceeding tuition are refunded for living expenses.",
+      "source": "faith_scholarship_directory",
+      "source_id": "umhef-general-scholarship",
+      "source_url": "https://www.umhef.org/scholarships",
+      "application_url": "https://www.umhef.org/scholarships",
+      "state": "nationwide",
+      "is_national": true,
+      "opportunity_type": "scholarship",
+      "funding_type": "scholarship",
+      "amount_min": 500,
+      "amount_max": 5000,
+      "deadline_type": "fixed",
+      "deadline": "2027-03-01",
+      "funding_category": "faith_based",
+      "usable_for_housing": true,
+      "refund_potential": true,
+      "eligibility_signals": {
+        "faith_affiliation": true,
+        "gpa_min": 2.5
+      },
+      "verification_status": "verified_live_url",
+      "categories": ["education", "scholarship", "faith_based"],
+      "keywords": ["methodist", "united methodist", "faith", "christian", "church", "denomination", "religious"],
+      "eligibility_bullets": [
+        "Must be an active member of the United Methodist Church",
+        "Must attend a United Methodist-related institution",
+        "Must maintain at least a 2.5 GPA",
+        "Both merit and need-based criteria considered"
+      ]
+    },
+    {
+      "title": "Presbyterian Church (USA) Student Opportunity Scholarship",
+      "sponsor": "Presbyterian Church (USA)",
+      "description": "Financial assistance for Presbyterian students attending Presbyterian-related colleges or other accredited institutions. Awards up to $3,000 based on financial need and church involvement. Scholarship funds may be used for tuition, room, board, and other educational expenses.",
+      "source": "faith_scholarship_directory",
+      "source_id": "pcusa-student-opportunity",
+      "source_url": "https://www.presbyterianmission.org/ministries/theology-formation-and-evangelism/financialaid/undergraduate-702/",
+      "application_url": "https://www.presbyterianmission.org/ministries/theology-formation-and-evangelism/financialaid/undergraduate-702/",
+      "state": "nationwide",
+      "is_national": true,
+      "opportunity_type": "scholarship",
+      "funding_type": "scholarship",
+      "amount_min": 500,
+      "amount_max": 3000,
+      "deadline_type": "fixed",
+      "deadline": "2027-05-15",
+      "funding_category": "faith_based",
+      "usable_for_housing": true,
+      "refund_potential": true,
+      "eligibility_signals": {
+        "faith_affiliation": true
+      },
+      "verification_status": "verified_live_url",
+      "categories": ["education", "scholarship", "faith_based"],
+      "keywords": ["presbyterian", "pcusa", "faith", "christian", "church", "religious"],
+      "eligibility_bullets": [
+        "Must be an active member of the Presbyterian Church (USA)",
+        "Must demonstrate financial need",
+        "Must be enrolled as an undergraduate student",
+        "Church involvement verification required"
+      ]
+    },
+    {
+      "title": "Scholarships for Lutheran Students",
+      "sponsor": "Evangelical Lutheran Church in America (ELCA)",
+      "description": "ELCA Fund for Leaders provides scholarships to Lutheran students preparing for ministry or enrolled at ELCA-affiliated colleges. Awards up to $5,000 per year for undergraduate students. Funds can be applied to any educational cost including off-campus living.",
+      "source": "faith_scholarship_directory",
+      "source_id": "elca-fund-for-leaders",
+      "source_url": "https://www.elca.org/Our-Work/Congregations-and-Synods/Candidacy/Financial-Resources",
+      "application_url": "https://www.elca.org/Our-Work/Congregations-and-Synods/Candidacy/Financial-Resources",
+      "state": "nationwide",
+      "is_national": true,
+      "opportunity_type": "scholarship",
+      "funding_type": "scholarship",
+      "amount_min": 1000,
+      "amount_max": 5000,
+      "deadline_type": "fixed",
+      "deadline": "2027-02-01",
+      "funding_category": "faith_based",
+      "usable_for_housing": true,
+      "refund_potential": true,
+      "eligibility_signals": {
+        "faith_affiliation": true
+      },
+      "verification_status": "verified_live_url",
+      "categories": ["education", "scholarship", "faith_based"],
+      "keywords": ["lutheran", "elca", "faith", "christian", "church", "ministry"],
+      "eligibility_bullets": [
+        "Must be an active member of an ELCA congregation",
+        "Must be enrolled or planning to enroll at an accredited institution",
+        "Both ministry-track and general scholarships available",
+        "Financial need and academic merit considered"
+      ]
+    }
+  ],
+  "talent_based_scholarships": [
+    {
+      "title": "National YoungArts Foundation Award",
+      "sponsor": "National YoungArts Foundation",
+      "description": "Awards for talented young artists ages 15-18 or in grades 10-12 in visual, literary, design, and performing arts including music. Cash awards from $250 to $10,000 based on artistic merit. Music applicants may audition on any instrument including flute, piano, violin, voice, and more. Awards disbursed directly to students.",
+      "source": "talent_scholarship_directory",
+      "source_id": "youngarts-award",
+      "source_url": "https://www.youngarts.org/apply",
+      "application_url": "https://www.youngarts.org/apply",
+      "state": "nationwide",
+      "is_national": true,
+      "opportunity_type": "scholarship",
+      "funding_type": "scholarship",
+      "amount_min": 250,
+      "amount_max": 10000,
+      "deadline_type": "fixed",
+      "deadline": "2026-10-11",
+      "funding_category": "talent_based",
+      "usable_for_housing": true,
+      "refund_potential": true,
+      "eligibility_signals": {
+        "talent_type": ["music", "visual_arts", "performing_arts", "writing"]
+      },
+      "verification_status": "verified_live_url",
+      "categories": ["education", "scholarship", "arts", "talent"],
+      "keywords": ["music", "art", "performing arts", "flute", "piano", "violin", "talent", "young artist", "creative"],
+      "eligibility_bullets": [
+        "Must be 15-18 years old or in grades 10-12",
+        "Must be a US citizen or permanent resident",
+        "Applicants submit work in one of 10 artistic disciplines",
+        "Music applicants may audition on any orchestral instrument, piano, voice, or composition"
+      ]
+    },
+    {
+      "title": "Mu Phi Epsilon Music Scholarship",
+      "sponsor": "Mu Phi Epsilon International Music Fraternity",
+      "description": "Scholarships for music students who demonstrate outstanding musical ability. Awards range from $1,000 to $5,000 for undergraduate and graduate students. Open to all instrumentalists, vocalists, and composers. Flutists, pianists, and other instrumentalists are encouraged to apply. Funds disbursed to student for educational and living expenses.",
+      "source": "talent_scholarship_directory",
+      "source_id": "mu-phi-epsilon-scholarship",
+      "source_url": "https://www.muphiepsilon.org/scholarships",
+      "application_url": "https://www.muphiepsilon.org/scholarships",
+      "state": "nationwide",
+      "is_national": true,
+      "opportunity_type": "scholarship",
+      "funding_type": "scholarship",
+      "amount_min": 1000,
+      "amount_max": 5000,
+      "deadline_type": "fixed",
+      "deadline": "2027-04-01",
+      "funding_category": "talent_based",
+      "usable_for_housing": true,
+      "refund_potential": true,
+      "eligibility_signals": {
+        "talent_type": ["music"]
+      },
+      "verification_status": "verified_live_url",
+      "categories": ["education", "scholarship", "music", "talent"],
+      "keywords": ["music", "flute", "piano", "voice", "instrument", "musician", "band", "orchestra", "talent"],
+      "eligibility_bullets": [
+        "Must be enrolled in a music program at an accredited institution",
+        "Must demonstrate outstanding musical ability",
+        "Open to all instrument types and vocalists",
+        "Membership in Mu Phi Epsilon not required"
+      ]
+    },
+    {
+      "title": "Flute Society of Greater Washington Young Artist Competition",
+      "sponsor": "Flute Society of Greater Washington",
+      "description": "Annual competition scholarship for young flutists providing cash awards of $500-$2,500. Open to flutists ages 16-27. Awards can be used for any educational purpose including tuition, lessons, living expenses, and instrument purchases.",
+      "source": "talent_scholarship_directory",
+      "source_id": "fsgw-young-artist-competition",
+      "source_url": "https://www.dcflute.org/young-artist-competition.html",
+      "application_url": "https://www.dcflute.org/young-artist-competition.html",
+      "state": "nationwide",
+      "is_national": true,
+      "opportunity_type": "scholarship",
+      "funding_type": "scholarship",
+      "amount_min": 500,
+      "amount_max": 2500,
+      "deadline_type": "fixed",
+      "deadline": "2027-01-15",
+      "funding_category": "talent_based",
+      "usable_for_housing": true,
+      "refund_potential": true,
+      "eligibility_signals": {
+        "talent_type": ["music"]
+      },
+      "verification_status": "verified_live_url",
+      "categories": ["education", "scholarship", "music", "talent", "flute"],
+      "keywords": ["flute", "flutist", "music", "competition", "young artist", "instrument"],
+      "eligibility_bullets": [
+        "Must be a flutist ages 16-27",
+        "Open to US and international students",
+        "Audition-based selection process",
+        "Awards may be used for any educational purpose"
+      ]
+    },
+    {
+      "title": "National Federation of Music Clubs Music Scholarships",
+      "sponsor": "National Federation of Music Clubs",
+      "description": "Multiple scholarship programs for young musicians including instrumental, vocal, and composition categories. Awards from $500 to $10,000. Available to student musicians at all levels who demonstrate musical talent. All instrument types including flute, brass, strings, and keyboard are eligible.",
+      "source": "talent_scholarship_directory",
+      "source_id": "nfmc-music-scholarships",
+      "source_url": "https://www.nfmc-music.org/competitions-awards/",
+      "application_url": "https://www.nfmc-music.org/competitions-awards/",
+      "state": "nationwide",
+      "is_national": true,
+      "opportunity_type": "scholarship",
+      "funding_type": "scholarship",
+      "amount_min": 500,
+      "amount_max": 10000,
+      "deadline_type": "fixed",
+      "deadline": "2027-03-01",
+      "funding_category": "talent_based",
+      "usable_for_housing": true,
+      "refund_potential": true,
+      "eligibility_signals": {
+        "talent_type": ["music"]
+      },
+      "verification_status": "verified_live_url",
+      "categories": ["education", "scholarship", "music", "talent"],
+      "keywords": ["music", "instrument", "flute", "piano", "voice", "composition", "musician", "talent"],
+      "eligibility_bullets": [
+        "Must be a US citizen",
+        "Must demonstrate musical talent through audition or application",
+        "Multiple competition categories at state and national levels",
+        "Both junior and senior divisions available"
+      ]
+    }
+  ],
+  "housing_support_programs": [
+    {
+      "title": "Federal Pell Grant",
+      "sponsor": "U.S. Department of Education",
+      "description": "Need-based federal grant providing up to $7,395 per year for undergraduate students. When combined with institutional scholarships and other aid that exceed the cost of tuition and fees, the excess is refunded to the student and can be used for off-campus housing, food, transportation, and other living expenses. Pell Grants are the foundation of many students' financial aid packages.",
+      "source": "federal_student_aid",
+      "source_id": "fed-pell-grant",
+      "source_url": "https://studentaid.gov/understand-aid/types/grants/pell",
+      "application_url": "https://studentaid.gov/h/apply-for-aid/fafsa",
+      "state": "nationwide",
+      "is_national": true,
+      "opportunity_type": "grant",
+      "funding_type": "grant",
+      "amount_min": 750,
+      "amount_max": 7395,
+      "deadline_type": "fixed",
+      "deadline": "2027-06-30",
+      "funding_category": "refund_eligible",
+      "usable_for_housing": true,
+      "refund_potential": true,
+      "eligibility_signals": {},
+      "verification_status": "verified_live_url",
+      "categories": ["education", "financial_aid", "housing"],
+      "keywords": ["pell grant", "federal", "fafsa", "need-based", "financial aid", "student", "undergraduate", "living expenses", "refund"],
+      "eligibility_bullets": [
+        "Must demonstrate financial need via FAFSA",
+        "Must be an undergraduate student",
+        "Must be enrolled at an eligible institution",
+        "Cannot have a bachelor's degree already",
+        "Excess funds after tuition are refunded for living expenses"
+      ]
+    },
+    {
+      "title": "Federal Supplemental Educational Opportunity Grant (FSEOG)",
+      "sponsor": "U.S. Department of Education",
+      "description": "Campus-based need grant for undergraduates with exceptional financial need. Awards from $100 to $4,000 per year. Priority given to Pell Grant recipients. Funds applied to educational costs; when combined with other aid exceeding direct costs, produces refund for off-campus living expenses.",
+      "source": "federal_student_aid",
+      "source_id": "fed-fseog-grant",
+      "source_url": "https://studentaid.gov/understand-aid/types/grants/fseog",
+      "application_url": "https://studentaid.gov/h/apply-for-aid/fafsa",
+      "state": "nationwide",
+      "is_national": true,
+      "opportunity_type": "grant",
+      "funding_type": "grant",
+      "amount_min": 100,
+      "amount_max": 4000,
+      "deadline_type": "rolling",
+      "funding_category": "refund_eligible",
+      "usable_for_housing": true,
+      "refund_potential": true,
+      "eligibility_signals": {},
+      "verification_status": "verified_live_url",
+      "categories": ["education", "financial_aid"],
+      "keywords": ["fseog", "federal", "supplemental", "need-based", "pell", "financial aid"],
+      "eligibility_bullets": [
+        "Must demonstrate exceptional financial need",
+        "Must be an undergraduate student",
+        "Priority given to Pell Grant recipients",
+        "Award depends on institutional funding availability"
+      ]
+    }
+  ],
+  "coa_adjustment_resources": [
+    {
+      "title": "Cost of Attendance Appeal Process (Professional Judgment)",
+      "sponsor": "U.S. Department of Education / Individual Institutions",
+      "description": "Federal regulations allow financial aid administrators to use Professional Judgment to adjust a student's Cost of Attendance (COA) to reflect actual living expenses. Students living off-campus can request a COA increase to include actual rent, utilities, and food costs. A higher COA means more financial aid eligibility, potentially producing larger refunds that can be used for housing.",
+      "source": "financial_aid_knowledge",
+      "source_id": "coa-appeal-professional-judgment",
+      "source_url": "https://studentaid.gov/help-center/answers/article/how-is-cost-of-attendance-determined",
+      "application_url": "https://studentaid.gov/help-center/answers/article/how-is-cost-of-attendance-determined",
+      "state": "nationwide",
+      "is_national": true,
+      "opportunity_type": "grant",
+      "funding_type": "benefit",
+      "amount_min": 0,
+      "amount_max": 0,
+      "deadline_type": "rolling",
+      "funding_category": "coa_adjustment",
+      "usable_for_housing": true,
+      "refund_potential": true,
+      "eligibility_signals": {},
+      "verification_status": "verified_live_url",
+      "categories": ["education", "financial_aid", "housing"],
+      "keywords": ["cost of attendance", "coa", "professional judgment", "appeal", "financial aid adjustment", "off-campus", "living expenses", "housing"],
+      "eligibility_bullets": [
+        "Available to all students receiving federal financial aid",
+        "Must document actual off-campus living expenses",
+        "Requires contacting your school's financial aid office",
+        "Schools have discretion in adjusting COA",
+        "Can result in additional grant or loan eligibility"
+      ]
+    }
+  ]
+}

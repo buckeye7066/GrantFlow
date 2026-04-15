@@ -8,16 +8,19 @@
  * This module is the SINGLE source for all grants.gov network calls —
  * crawlers should use `searchGrants()` instead of calling postWithRetry
  * directly against the grants.gov endpoints.
+ *
+ * Env: GRANTS_GOV_API_KEY (optional). Search2 works without it; when set, we send X-API-Key
+ *      (e.g. rate-limit prioritization). For key issues or future keyed endpoints, use grants.gov/support.
+ *      SIMPLER_GRANTS_API_KEY — required to call Simpler Grants; get a key at simpler.grants.gov/developers
+ *      (Login.gov sign-in → Manage API Keys). Omit to skip that API; legacy search2 still runs.
  */
 
 import { getWithRetry, postWithRetry } from './httpClient.js'
-
-// ── Endpoints ──────────────────────────────────────────────────────────────────
-// NOTE: api.grants.gov/v2/ is the current Grants.gov API version (2026).
-const LEGACY_API = 'https://api.grants.gov/v2/api/search2'
-// Simpler.Grants.gov is a separately maintained newer API requiring an API key.
-const SIMPLER_API = 'https://api.simpler.grants.gov/v1/opportunities/search'
-const GRANTS_GOV_DETAIL = 'https://www.grants.gov/search-results-detail/'
+import {
+  GRANTS_GOV_SEARCH2_URL as LEGACY_API,
+  SIMPLER_GRANTS_SEARCH_URL as SIMPLER_API,
+  GRANTS_GOV_DETAIL_URL as GRANTS_GOV_DETAIL,
+} from '../../config/grantsGovEndpoints.js'
 
 // ── Timeouts & limits ─────────────────────────────────────────────────────────
 const API_TIMEOUT_MS = 20_000
@@ -29,15 +32,8 @@ const MAX_ROWS_PER_QUERY = 25
 const SIMPLER_API_KEY = process.env.SIMPLER_GRANTS_API_KEY || ''
 const SIMPLER_API_ENABLED = SIMPLER_API_KEY.length > 0
 
-// Grants.gov legacy search2 API now requires an API key (returns 401 without one).
-// Set GRANTS_GOV_API_KEY in your environment (.env / Railway / Vercel secrets).
+// Legacy search2: no key required. If GRANTS_GOV_API_KEY is set, we attach X-API-Key; otherwise we omit it.
 const LEGACY_API_KEY = process.env.GRANTS_GOV_API_KEY || ''
-if (!LEGACY_API_KEY) {
-  console.warn(
-    '[GrantsGovClient] GRANTS_GOV_API_KEY env var is not set; ' +
-      'Grants.gov search2 requests will likely return 401 Unauthorized.',
-  )
-}
 
 // ── Normaliser (both APIs → common shape) ──────────────────────────────────────
 

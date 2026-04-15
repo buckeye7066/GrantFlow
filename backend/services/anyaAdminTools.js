@@ -72,14 +72,14 @@ export function requireAdmin(user) {
  * @param {Object} db - Database connection
  * @returns {boolean} True if user can access profile
  */
-export function canAccessProfile(user, profileId, db) {
+export async function canAccessProfile(user, profileId, db) {
   // Admin can access all profiles
   if (isAdmin(user)) {
     return true;
   }
   
   // Check if profile belongs to user
-  const profile = db.prepare('SELECT user_id FROM profiles WHERE id = ?').get(profileId);
+  const profile = await db.prepare('SELECT user_id FROM profiles WHERE id = ?').get(profileId);
   
   if (!profile) {
     return false;
@@ -663,7 +663,7 @@ export async function adminCrawlerRun({ type, profileId, parameters = {} }, cont
   `,
   ).run(jobId, type, profileId ?? null, parametersJson)
 
-  const job = db.prepare('SELECT * FROM crawler_jobs WHERE id = ?').get(jobId)
+  const job = await db.prepare('SELECT * FROM crawler_jobs WHERE id = ?').get(jobId)
 
   return {
     job: {
@@ -686,12 +686,12 @@ export async function adminCrawlerCheck({ jobId, lastN = 10 }, context) {
   let jobs = []
 
   if (jobId) {
-    const job = db.prepare('SELECT * FROM crawler_jobs WHERE id = ?').get(jobId)
+    const job = await db.prepare('SELECT * FROM crawler_jobs WHERE id = ?').get(jobId)
     if (job) {
       jobs = [job]
     }
   } else {
-    jobs = db
+    jobs = await db
       .prepare(
         `
       SELECT *
@@ -788,7 +788,7 @@ export async function adminCrawlerRetry({ jobId }, context) {
   `,
   ).run(jobId)
 
-  const newJob = db.prepare('SELECT * FROM crawler_jobs WHERE id = ?').get(newJobId)
+  const newJob = await db.prepare('SELECT * FROM crawler_jobs WHERE id = ?').get(newJobId)
 
   return {
     original_job_id: jobId,
@@ -813,7 +813,7 @@ export async function adminCrawlerCancel({ jobId, reason }, context) {
     throw new Error('jobId is required')
   }
 
-  const job = db.prepare('SELECT * FROM crawler_jobs WHERE id = ?').get(jobId)
+  const job = await db.prepare('SELECT * FROM crawler_jobs WHERE id = ?').get(jobId)
 
   if (!job) {
     throw new Error('Job not found')
@@ -977,20 +977,20 @@ export async function adminDbStats(_params, context) {
     }
 
     const tableCounts = {}
-    tables.forEach((table) => {
+    for (const table of tables) {
       try {
         // Validate table name - only allow alphanumeric, underscores, and dashes
         // This protects against SQL injection via table name
         if (!/^[a-zA-Z0-9_]+$/.test(table.name)) {
           tableCounts[table.name] = 'Error: Invalid table name'
-          return
+          continue
         }
-        const count = db.prepare(`SELECT COUNT(*) as count FROM ${table.name}`).get()
+        const count = await db.prepare(`SELECT COUNT(*) as count FROM ${table.name}`).get()
         tableCounts[table.name] = count.count
       } catch (error) {
         tableCounts[table.name] = `Error: ${error.message}`
       }
-    })
+    }
 
     // Recent activity
     const isPostgres = db?.dialect === 'postgres'

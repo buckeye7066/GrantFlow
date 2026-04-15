@@ -524,7 +524,15 @@ function buildUserPayload(userRow, profiles, activeProfileId) {
 
 /**
  * Find a profile by email address.
- * Checks (in order): users.primary_email, profile_emails, profile_sections.basic_information.
+ * Checks (in order): users.primary_email, profile_sections.basic_information (richest profile wins),
+ * then profile_emails.
+ *
+ * basic_information is resolved before profile_emails so a fully filled intake profile wins over a
+ * designated-roster stub that only has profile_emails / owner_email linkage for the same address.
+ *
+ * When multiple profiles list the same email in basic_information, prefer the profile with more
+ * section rows (fuller data), then the most recently updated profile.
+ *
  * Works with both Postgres and SQLite.
  * @param {Object} db - Database instance
  * @param {string} normalizedEmail - Normalized email address (lowercase)
@@ -540,7 +548,15 @@ async function findProfileRowForEmail(db, normalizedEmail) {
       .get(normalizedEmail)
     if (userRow?.id) {
       const profileRow = await db
-        .prepare('SELECT id, user_id FROM profiles WHERE user_id = ? LIMIT 1')
+        .prepare(
+          `
+            SELECT id, user_id
+            FROM profiles
+            WHERE user_id = ?
+            ORDER BY created_at ASC NULLS LAST, id ASC
+            LIMIT 1
+          `,
+        )
         .get(userRow.id)
       if (profileRow?.id) return profileRow
     }
@@ -548,7 +564,86 @@ async function findProfileRowForEmail(db, normalizedEmail) {
     // ignore
   }
 
-  // 2) profile_emails: explicit access mapping (board members, alternates, etc.)
+  // 2) profile_sections.basic_information.data.email (before profile_emails — see JSDoc)
+  // Postgres: JSON ->> extraction is safe and fast.
+  if (db?.dialect === 'postgres') {
+    try {
+      const pgRow = await db
+        .prepare(
+          `
+            SELECT p.id, p.user_id
+            FROM profiles p
+            JOIN profile_sections ps ON ps.profile_id = p.id
+            WHERE ps.section_key = 'basic_information'
+              AND LOWER((ps.data::jsonb ->> 'email')) = ?
+            ORDER BY (
+              SELECT COUNT(*)::int FROM profile_sections ps2 WHERE ps2.profile_id = p.id
+            ) DESC,
+            COALESCE(p.updated_at, p.created_at) DESC NULLS LAST,
+            p.id ASC
+            LIMIT 1
+          `,
+        )
+        .get(normalizedEmail)
+      if (pgRow?.id) return pgRow
+    } catch {
+      // ignore
+    }
+  } else {
+    // SQLite: prefer json_extract when available.
+    try {
+      const row = await db
+        .prepare(
+          `
+            SELECT p.id, p.user_id
+            FROM profiles p
+            JOIN profile_sections ps ON ps.profile_id = p.id
+            WHERE ps.section_key = 'basic_information'
+              AND LOWER(json_extract(ps.data, '$.email')) = ?
+            ORDER BY (
+              SELECT COUNT(*) FROM profile_sections ps2 WHERE ps2.profile_id = p.id
+            ) DESC,
+            COALESCE(p.updated_at, p.created_at) DESC NULLS LAST,
+            p.id ASC
+            LIMIT 1
+          `,
+        )
+        .get(normalizedEmail)
+      if (row?.id) return row
+    } catch {
+      // ignore and fall back to LIKE matching
+    }
+
+    // Fallback: match in JSON string (works even if json1 isn't enabled).
+    const escapedEmail = normalizedEmail
+      .replace(/\\/g, '\\\\')
+      .replace(/"/g, '\\"')
+    const needle = `"email":"${escapedEmail.toLowerCase()}"`
+    try {
+      const likeRow = await db
+        .prepare(
+          `
+            SELECT p.id, p.user_id
+            FROM profiles p
+            JOIN profile_sections ps ON ps.profile_id = p.id
+            WHERE ps.section_key = 'basic_information'
+              AND LOWER(ps.data) LIKE ?
+            ORDER BY (
+              SELECT COUNT(*) FROM profile_sections ps2 WHERE ps2.profile_id = p.id
+            ) DESC,
+            COALESCE(p.updated_at, p.created_at) DESC NULLS LAST,
+            p.id ASC
+            LIMIT 1
+          `,
+        )
+        .get(`%${needle}%`)
+      if (likeRow?.id) return likeRow
+    } catch {
+      // ignore
+    }
+  }
+
+  // 3) profile_emails: explicit access mapping (board members, alternates, designated stubs, etc.)
   try {
     await ensureProfileEmailSchema(db)
     const peRow = await db
@@ -566,72 +661,7 @@ async function findProfileRowForEmail(db, normalizedEmail) {
     // ignore
   }
 
-  // 3) profile_sections.basic_information.data.email
-  // Postgres: JSON ->> extraction is safe and fast.
-  if (db?.dialect === 'postgres') {
-    try {
-      return (
-        (await db
-          .prepare(
-            `
-              SELECT p.id, p.user_id
-              FROM profiles p
-              JOIN profile_sections ps ON ps.profile_id = p.id
-              WHERE ps.section_key = 'basic_information'
-                AND LOWER((ps.data::jsonb ->> 'email')) = ?
-              LIMIT 1
-            `,
-          )
-          .get(normalizedEmail)) ?? null
-      )
-    } catch {
-      return null
-    }
-  }
-
-  // SQLite: prefer json_extract when available.
-  try {
-    const row = await db
-      .prepare(
-        `
-          SELECT p.id, p.user_id
-          FROM profiles p
-          JOIN profile_sections ps ON ps.profile_id = p.id
-          WHERE ps.section_key = 'basic_information'
-            AND LOWER(json_extract(ps.data, '$.email')) = ?
-          LIMIT 1
-        `,
-      )
-      .get(normalizedEmail)
-    if (row?.id) return row
-  } catch {
-    // ignore and fall back to LIKE matching
-  }
-
-  // Fallback: match in JSON string (works even if json1 isn't enabled).
-  // Properly escape the email for safe JSON string matching
-  const escapedEmail = normalizedEmail
-    .replace(/\\/g, '\\\\')  // Escape backslashes first
-    .replace(/"/g, '\\"')     // Escape quotes
-  const needle = `"email":"${escapedEmail.toLowerCase()}"`
-  try {
-    return (
-      (await db
-        .prepare(
-          `
-            SELECT p.id, p.user_id
-            FROM profiles p
-            JOIN profile_sections ps ON ps.profile_id = p.id
-            WHERE ps.section_key = 'basic_information'
-              AND LOWER(ps.data) LIKE ?
-            LIMIT 1
-          `,
-        )
-        .get(`%${needle}%`)) ?? null
-    )
-  } catch {
-    return null
-  }
+  return null
 }
 
 async function assignProfileToUser(db, userId, email) {

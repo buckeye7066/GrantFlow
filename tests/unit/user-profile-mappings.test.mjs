@@ -11,6 +11,7 @@ test('userProfileMappings: known user emails map to expected profile ids', () =>
   assert.equal(getDesignatedProfileForEmail('angelikaps.rn@gmail.com'), 'profile-angelika-ptak')
   assert.equal(getDesignatedProfileForEmail('pjandcrdasher@att.net'), 'profile-paul-jason-dasher')
   assert.equal(getDesignatedProfileForEmail('rdashermiller@gmail.com'), 'profile-rachel-miller')
+  assert.equal(getDesignatedProfileForEmail('melissa.justus@example.com'), 'profile-melissa-justus')
 })
 
 test('userProfileMappings: mapping is case-insensitive and trims whitespace', () => {

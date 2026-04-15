@@ -3,6 +3,7 @@ import crypto from 'crypto';
 import { isAdminUser, requireAuthenticatedUser } from '../utils/accessControl.js'
 import { trustedOriginClause, trustedSourceClause } from '../utils/recordOrigins.js'
 import { isExpiredOpportunity, isDirectoryLike } from './opportunityHelpers.js'
+import { filterActionableOpportunities } from '../services/opportunityValidationLayer.js'
 
 const router = express.Router();
 
@@ -774,7 +775,7 @@ router.get('/', async (req, res) => {
           for (const row of fbDec) { const key = dedupeKeyFromRow(row) || (row?.id ? `id:${row.id}` : null); if (key && fbSeen.has(key)) continue; if (key) fbSeen.add(key); fbOut.push(row); }
           const fbFinal = fbOut.filter((r) => !isExpiredOpportunity(r, { now }));
           if (fbFinal.length > 0) {
-            return res.json({ data: fbFinal, total: Math.max(0, Number(fbResult.total ?? fbFinal.length)), total_found: Math.max(0, Number(fbResult.total ?? fbFinal.length)), included: fbFinal.length, limit: parsedLimit, offset: parsedOffset, compliance_requested: normalizedCompliance, compliance_effective: normalizedCompliance, fallback_applied: true, fallback_reason: 'phrase_search_returned_0_retried_with_token_and', removed_expired: 0 });
+            return res.json({ data: filterActionableOpportunities(fbFinal), total: Math.max(0, Number(fbResult.total ?? fbFinal.length)), total_found: Math.max(0, Number(fbResult.total ?? fbFinal.length)), included: fbFinal.length, limit: parsedLimit, offset: parsedOffset, compliance_requested: normalizedCompliance, compliance_effective: normalizedCompliance, fallback_applied: true, fallback_reason: 'phrase_search_returned_0_retried_with_token_and', removed_expired: 0 });
           }
         } catch (fbErr) { console.warn('[opportunities] search fallback failed:', fbErr?.message || String(fbErr)); }
       }
@@ -851,7 +852,7 @@ router.get('/', async (req, res) => {
           }
 
           return res.json({
-            data: fallbackParsed,
+            data: filterActionableOpportunities(fallbackParsed),
             total: distinctTotalFound,
             total_found: distinctTotalFound,
             included: fallbackParsed.length,
@@ -870,7 +871,7 @@ router.get('/', async (req, res) => {
     }
 
     res.json({
-      data: withoutExpired,
+      data: filterActionableOpportunities(withoutExpired),
       total: Math.max(0, filteredTotal),
       total_found: Math.max(0, filteredTotal),
       included: withoutExpired.length,

@@ -120,6 +120,28 @@ const _STATIC_PROMPT_BASE = [
   '- If it\'s a portal, walk them through the portal step by step',
   '- Help advance pipeline items: discovered → interested → drafting → application_prep → portal/submitted',
   '',
+  'Housing & Living Expense Funding Knowledge:',
+  '- Many students and individuals need help with off-campus living expenses (rent, utilities, food) but don\'t realize some funding can be used for this.',
+  '- Funding categories that can help with housing:',
+  '  • refund_eligible: Scholarships/grants that exceed tuition produce a refund check disbursed to the student for living expenses.',
+  '  • stipend: Programs that provide monthly stipends or living allowances.',
+  '  • housing_direct: RA positions, housing grants, room and board scholarships.',
+  '  • coa_adjustment: Students can request a Cost of Attendance increase from their financial aid office (Professional Judgment) to reflect actual rent/utilities, unlocking more aid.',
+  '  • faith_based: Church and denominational scholarships — often overlooked, can be used for any educational expense including housing.',
+  '  • talent_based: Music, art, athletic scholarships — many disburse to student accounts and excess is refunded.',
+  '- When explaining funding to users, ALWAYS explain HOW the funding can be used for housing when usable_for_housing is true.',
+  '- Example explanations:',
+  '  "This scholarship can generate a refund that can be used toward rent and utilities."',
+  '  "You can request a Cost of Attendance adjustment to include your actual rent — this may increase your financial aid eligibility."',
+  '  "This stipend covers living expenses directly — you can use it for rent, food, and utilities."',
+  '- Actionable suggestions to prioritize:',
+  '  • "Request a COA adjustment from your financial aid office"',
+  '  • "Apply for an RA position for free housing"',
+  '  • "Stack HOPE with Pell Grant to maximize your refund"',
+  '  • "Apply for church scholarships — they\'re less competitive and can cover housing"',
+  '  • "Your music talent qualifies you for scholarships that refund excess to you"',
+  '- When showing funding results, highlight ones with usable_for_housing = true and explain the housing angle.',
+  '',
   'Link Verification Awareness:',
   '- Opportunities have a link_status field: "ok", "broken", "redirect", "unverified", or "skipped".',
   '- When presenting an opportunity with link_status "broken", warn the user: "Note: our last check found the application link may be broken. Try the URL, and if it doesn\'t work, contact the funder directly."',
@@ -465,6 +487,19 @@ export async function createSession(db, user, { profileId, title, metadata } = {
   }
 
   return await getSession(db, user, id)
+}
+
+export async function deleteSession(db, user, sessionId) {
+  assertAuthenticated(user)
+  const session = await db
+    .prepare('SELECT * FROM anya_sessions WHERE id = ?')
+    .get(sessionId)
+  assertSessionAccess(user, session)
+
+  // Hard delete — FK cascades handle anya_messages, anya_tasks, anya_context.
+  // anya_runs and anya_tool_usage use ON DELETE SET NULL, preserving the audit trail.
+  await db.prepare('DELETE FROM anya_sessions WHERE id = ?').run(sessionId)
+  return { deleted: true, id: sessionId }
 }
 
 export async function getSession(db, user, sessionId) {
@@ -1013,12 +1048,60 @@ export async function generateAssistantResponse(db, user, sessionId, { content, 
     conversationMessages.push({ role: 'user', content: trimmed })
   }
 
+  // v4: Pre-load active profile summary so Anya has context for the FIRST response
+  // without requiring a tool invocation. This eliminates generic advice on initial messages.
+  let profileContextSection = ''
+  try {
+    const activeProfileId = user?.activeProfileId || user?.profile_id
+    if (activeProfileId && db) {
+      const profile = db.prepare(
+        'SELECT id, display_name, primary_type, state, organization_type, categories FROM profiles WHERE id = ?'
+      ).get(activeProfileId)
+      if (profile) {
+        const sections = db.prepare(
+          'SELECT section_key, data FROM profile_sections WHERE profile_id = ?'
+        ).all(activeProfileId)
+        const filledSections = []
+        const emptySections = []
+        for (const s of sections) {
+          try {
+            const d = JSON.parse(s.data || '{}')
+            const hasValue = Object.values(d).some(v =>
+              v !== null && v !== undefined && v !== '' && v !== false && !(Array.isArray(v) && v.length === 0)
+            )
+            ;(hasValue ? filledSections : emptySections).push(s.section_key)
+          } catch { emptySections.push(s.section_key) }
+        }
+        const matchCount = (() => {
+          try {
+            const row = db.prepare('SELECT total_matches FROM crawl_metadata WHERE profile_id = ?').get(activeProfileId)
+            return row?.total_matches ?? 0
+          } catch { return 0 }
+        })()
+        profileContextSection = [
+          '',
+          '## Active Profile Summary',
+          `Profile: ${profile.display_name || 'Unnamed'} (${profile.primary_type || 'individual'})`,
+          profile.state ? `State: ${profile.state}` : 'State: Not set (important for matching!)',
+          profile.organization_type ? `Organization: ${profile.organization_type}` : '',
+          `Filled sections: ${filledSections.join(', ') || 'none'}`,
+          emptySections.length > 0 ? `Empty sections needing data: ${emptySections.slice(0, 5).join(', ')}` : '',
+          `Current matches: ${matchCount} opportunities`,
+          matchCount === 0 ? 'NOTE: No matches yet — suggest running Discovery or filling more profile sections.' : '',
+          '',
+        ].filter(Boolean).join('\n')
+      }
+    }
+  } catch (profileLoadErr) {
+    console.warn('[anya] Could not pre-load profile context:', profileLoadErr?.message)
+  }
+
   // Build personalized system prompt — only the user-specific header is dynamic;
   // the large role/capability sections are pre-built static strings.
-  const firstName = (!userName || userName === 'there') 
-    ? 'the user' 
+  const firstName = (!userName || userName === 'there')
+    ? 'the user'
     : (typeof userName === 'string' ? userName.split(' ')[0] : userName)
-  
+
   const dynamicHeader = [
     'You are Anya, the GrantFlow AI assistant. You are helpful, warm, and personable.',
     '',
@@ -1064,7 +1147,7 @@ export async function generateAssistantResponse(db, user, sessionId, { content, 
     '',
   ].join('\n')
 
-  const systemPrompt = dynamicHeader + pageContextSection + _STATIC_PROMPT_BASE + (isAdmin ? adminSection : _STATIC_PROMPT_USER_SECTION)
+  const systemPrompt = dynamicHeader + profileContextSection + pageContextSection + _STATIC_PROMPT_BASE + (isAdmin ? adminSection : _STATIC_PROMPT_USER_SECTION)
 
   // 1) Try OpenAI first (if configured)
   if (openai) {

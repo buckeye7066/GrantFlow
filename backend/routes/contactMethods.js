@@ -96,7 +96,7 @@ router.post('/', async (req, res) => {
     if (!orgId) return res.status(400).json({ error: 'organization_id required' })
     if (!(await ensureOrganizationAccess(req, res, orgId))) return
 
-    const validTypes = ['email', 'phone', 'address', 'website', 'fax']
+    const validTypes = ['email', 'phone']
     const type = String(data.type || '').trim()
     if (!validTypes.includes(type)) return res.status(400).json({ error: 'Invalid contact type' })
     const value = String(data.value || '').trim()

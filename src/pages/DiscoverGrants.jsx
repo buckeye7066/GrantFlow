@@ -27,6 +27,8 @@ import {
   getExplicitStateZip,
   collectAddressTextForInference,
 } from '@/utils/inferLocationFromAddress'
+import { useFundingResultsStore } from '@/stores/fundingResultsStore'
+import { AUTO_ADD_SCORE, GOOD_MATCH_SCORE } from '@/lib/matchDisplayThresholds'
 
 /**
  * Client-side relevance check mirroring the backend hard disqualification rules.
@@ -140,6 +142,7 @@ export default function DiscoverGrants() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const log = React.useMemo(() => createLogger('DiscoverGrantsPage'), [])
+  const setFundingResults = useFundingResultsStore((s) => s.setResults)
   const { isAuthenticated, accessToken, sessionExpired } = useAuthStore((state) => ({
     isAuthenticated: state.isAuthenticated,
     accessToken: state.accessToken,
@@ -254,10 +257,9 @@ export default function DiscoverGrants() {
     queryKey: ['discover-catalog', effectiveProfileId, minMatchScore],
     queryFn: async () => {
       if (!effectiveProfileId) return { opportunities: [] }
-      // Honor Discover slider: strict=1 disables server-side threshold relaxation (no 15% when you asked for 80%).
       const ms = Math.min(100, Math.max(0, Number(minMatchScore) || 0))
       return apiFetch(
-        `/api/matching/profile/${effectiveProfileId}/opportunities?min_score=${ms}&limit=200&skip_readiness_check=1&strict=1`,
+        `/api/matching/profile/${effectiveProfileId}/opportunities?min_score=${ms}&limit=2000&skip_readiness_check=1&allow_relax=1`,
       )
     },
     enabled: authReady && Boolean(effectiveProfileId),
@@ -283,8 +285,35 @@ export default function DiscoverGrants() {
       matched_fields: opp.match_reasons ?? [],
       matchReasons: opp.match_reasons ?? [],
       source: opp.source || 'catalog',
+      usable_for_housing: opp.usable_for_housing ?? false,
+      refund_potential: opp.refund_potential ?? false,
+      funding_category: opp.funding_category ?? null,
     }))
   }, [catalogMatchResponse])
+
+  // Keep FundingResults store in sync with the combined view so /FundingResults
+  // always displays whatever the user last saw on DiscoverGrants.
+  useEffect(() => {
+    if (catalogOpportunities.length === 0 && searchResults.length === 0) return
+    const seen = new Set()
+    const merged = []
+    for (const opp of catalogOpportunities) {
+      const key = opp.id ?? `${opp.title}|${opp.sponsor ?? ''}`
+      if (!seen.has(key)) { seen.add(key); merged.push(opp) }
+    }
+    for (const opp of searchResults) {
+      const key = opp.id ?? opp.url ?? `${opp.title}|${opp.sponsor ?? ''}`
+      if (!seen.has(key)) { seen.add(key); merged.push(opp) }
+    }
+    merged.sort((a, b) => (b.match_score ?? b.match ?? 0) - (a.match_score ?? a.match ?? 0))
+    const profileIdForStore = effectiveProfileId ?? selectedProfileId
+    setFundingResults({
+      results: merged,
+      profileId: profileIdForStore,
+      organizationName: selectedProfile?.display_name ?? null,
+      organizationId: selectedProfile?.organization_id ?? null,
+    })
+  }, [catalogOpportunities, searchResults, effectiveProfileId, selectedProfileId, selectedProfile, setFundingResults])
 
   const isECFProfile =
     (profileForSearch?.medicaid_enrolled || selectedOrg?.medicaid_enrolled) &&
@@ -480,7 +509,7 @@ export default function DiscoverGrants() {
 
     for (const opp of opportunities) {
       const score = Number(opp.match_score ?? opp.match ?? 0);
-      if (Number.isFinite(score) && score >= 70 && passesClientRelevanceCheck(opp, profileForSearch)) {
+      if (Number.isFinite(score) && score >= AUTO_ADD_SCORE && passesClientRelevanceCheck(opp, profileForSearch)) {
         attempted += 1
         try {
           const result = await handleAddToPipeline(opp, { silent: true })
@@ -512,6 +541,15 @@ export default function DiscoverGrants() {
     // Update search results to show crawler results
     setHasSearched(true)
     setSearchResults(opportunities);
+
+    // Populate the FundingResults store so /FundingResults page displays results after navigation
+    const profileIdForStore = effectiveProfileId ?? selectedProfileId
+    setFundingResults({
+      results: opportunities,
+      profileId: profileIdForStore,
+      organizationName: selectedProfile?.display_name ?? null,
+      organizationId: selectedProfile?.organization_id ?? null,
+    })
   };
 
   const handleAddToPipeline = async (opportunity, { silent = false } = {}) => {
@@ -707,7 +745,7 @@ export default function DiscoverGrants() {
       items.push({ id: 'run-crawlers', icon: Search, text: 'Run a search to discover funding opportunities', detail: 'Click "Find Funding Opportunities" to search all sources matched to your profile.' });
     }
     if (searchResults.length > 0) {
-      const highMatches = searchResults.filter(r => (r.match_score || r.match || 0) >= 80);
+      const highMatches = searchResults.filter(r => (r.match_score || r.match || 0) >= GOOD_MATCH_SCORE);
       if (highMatches.length > 0) {
         items.push({ id: 'review-top', icon: CheckCircle2, text: 'Review your top ' + highMatches.length + ' high-match opportunities', detail: 'These opportunities scored 80%+ match with your profile. Consider adding them to your pipeline.' });
       }

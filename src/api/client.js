@@ -700,7 +700,11 @@ class APIClient {
         // Proactive refresh:
         // If we have a refresh token and the stored access expiry is near/over due,
         // refresh before calling `/api/auth/me` so we avoid noisy 401s.
-        // Uses raw fetch() to avoid triggering the wrapper's own 401 → handleUnauthorized loop.
+        // IMPORTANT: Uses this.refreshTokens() (single-flight) so that concurrent
+        // callers (e.g. authStore's scheduleSessionRefresh timer that may fire during
+        // bootstrap) share the same in-flight request. Without this, two parallel
+        // /api/auth/refresh calls with the same token cause one to fail because the
+        // server rotates refresh_token_hash on every use.
         try {
           if (typeof window !== 'undefined') {
             const refreshToken = this.getRefreshToken?.()
@@ -708,17 +712,9 @@ class APIClient {
             const expiryMs = expiryRaw ? Number(expiryRaw) : NaN
             const leewayMs = 60 * 1000
             if (refreshToken && (!Number.isFinite(expiryMs) || expiryMs <= Date.now() + leewayMs)) {
-              const resp = await fetch(`${this.baseUrl}/api/auth/refresh`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                credentials: 'include',
-                body: JSON.stringify({ refreshToken }),
-              })
-              if (resp.ok) {
-                const data = await resp.json()
-                if (data?.accessToken) this.setToken(data.accessToken)
-                if (data?.refreshToken) this.setRefreshToken(data.refreshToken)
-              } else {
+              try {
+                await this.refreshTokens()
+              } catch {
                 // Refresh token is dead — clear ALL tokens and return null immediately.
                 // Do NOT fall through to this.fetch('/api/auth/me') because that would
                 // trigger handleUnauthorized → onAuthFailure → markSessionExpired and

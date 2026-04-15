@@ -779,7 +779,7 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, pref
       ...prev,
       { id: optimisticId, session_id: sessionId, created_at: new Date().toISOString(), role: "user", content: trimmed },
     ])
-    postAnyaMessage(sessionId, trimmed, { currentPage })
+    postAnyaMessage(sessionId, trimmed, { currentPage, pageContext: pageContextPayload })
       .then((response) => {
         if (Array.isArray(response?.messages) && response.messages.length > 0) {
           setMessages((prev) => {
@@ -802,6 +802,16 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, pref
 
   const { anyaCopilotEnabled: copilotEnabled, anyaScreenshotEnabled: screenshotEnabled } = useFeatureFlags()
   const anyaContext = useAnyaContext()
+  const pageContextPayload = useMemo(() => {
+    const adapter = anyaContext?.adapter
+    if (!adapter) return undefined
+    const ctx = {}
+    if (adapter.completion?.resultCount != null) ctx.resultCount = adapter.completion.resultCount
+    if (adapter.completion?.pipelineCount != null) ctx.pipelineCount = adapter.completion.pipelineCount
+    if (adapter.primaryEntityId) ctx.selectedGrant = adapter.primaryEntityId
+    if (adapter.pageType) ctx.pageType = adapter.pageType
+    return Object.keys(ctx).length > 0 ? ctx : undefined
+  }, [anyaContext?.adapter])
   const navigate = useNavigate()
   const onboardingActions = useMemo(() => [
     { type: "navigate", label: "Create or select a profile", payload: { path: createPageUrl("MyProfiles") } },
@@ -948,7 +958,7 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, pref
       setMessages((prev) => [...prev, optimisticMessage])
       setInput("")
 
-      const response = await postAnyaMessage(sessionId, trimmed, { currentPage })
+      const response = await postAnyaMessage(sessionId, trimmed, { currentPage, pageContext: pageContextPayload })
       if (Array.isArray(response?.messages) && response.messages.length > 0) {
         setMessages((prev) => {
           const withoutOptimistic = prev.filter((m) => m.id !== optimisticId)
@@ -1478,7 +1488,7 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, pref
                       const optimisticId = uuid()
                       setMessages([{ id: optimisticId, session_id: sessionId, created_at: new Date().toISOString(), role: "user", content: trimmed }])
                       setInput("")
-                      postAnyaMessage(sessionId, trimmed, { currentPage })
+                      postAnyaMessage(sessionId, trimmed, { currentPage, pageContext: pageContextPayload })
                         .then((response) => {
                           if (Array.isArray(response?.messages) && response.messages.length > 0) {
                             setMessages((prev) => {

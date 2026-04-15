@@ -55,7 +55,7 @@ export async function getDataReadiness(db) {
 
   try {
     // Count live, active opportunities in the catalog.
-    const countRow = db
+    const countRow = await db
       .prepare(
         `SELECT COUNT(*) AS c FROM funding_opportunities WHERE is_active = 1 OR is_active IS NULL`,
       )
@@ -63,7 +63,7 @@ export async function getDataReadiness(db) {
     result.opportunity_count = Number(countRow?.c ?? 0)
 
     // Most recent crawl timestamp across the catalog.
-    const crawlRow = db
+    const crawlRow = await db
       .prepare(
         `SELECT MAX(last_crawled) AS latest FROM funding_opportunities`,
       )
@@ -71,7 +71,7 @@ export async function getDataReadiness(db) {
     result.last_crawled_iso = crawlRow?.latest ?? null
 
     // Count crawler jobs that are currently running or queued.
-    const runningRow = db
+    const runningRow = await db
       .prepare(
         `SELECT
            SUM(CASE WHEN status = 'running' THEN 1 ELSE 0 END) AS running,
@@ -145,13 +145,16 @@ export async function getSystemAlerts(db) {
       })
     }
 
-    // Detect jobs stuck in 'running' state longer than the job timeout.
-    // Uses CRAWLER_JOB_TIMEOUT_MS (default 30 min) as the threshold.
-    const timeoutMs = Number.parseInt(process.env.CRAWLER_JOB_TIMEOUT_MS || String(30 * 60 * 1000), 10)
-    const stuckThresholdMs = Math.max(timeoutMs, 5 * 60 * 1000) // at least 5 min
+    // Detect jobs stuck in 'running' state longer than the longest job timeout.
+    // Use COMPREHENSIVE_GEO_JOB_TIMEOUT_MS (default 4h) to avoid false positives
+    // on long-running comprehensive/geo crawl jobs that are still healthy.
+    const maxTimeoutMs = Number.parseInt(
+      process.env.COMPREHENSIVE_GEO_JOB_TIMEOUT_MS || String(4 * 60 * 60 * 1000), 10
+    )
+    const stuckThresholdMs = Math.max(maxTimeoutMs, 30 * 60 * 1000) // at least 30 min
     const stuckCutoff = new Date(Date.now() - stuckThresholdMs).toISOString()
 
-    const stuckRow = db
+    const stuckRow = await db
       .prepare(
         `SELECT COUNT(*) AS c
          FROM crawler_jobs
@@ -181,7 +184,7 @@ export async function getSystemAlerts(db) {
     // Recent crawler failures.
     const failureWindowH = 1 // look back 1 hour
     const failureCutoff = new Date(Date.now() - failureWindowH * 60 * 60 * 1000).toISOString()
-    const failureRow = db
+    const failureRow = await db
       .prepare(
         `SELECT COUNT(*) AS c
          FROM crawler_jobs

@@ -97,14 +97,12 @@ export default function ComprehensiveApplicationForm({ onSubmit, onCancel, isSub
     // Financial
     household_income: null,
     household_size: null,
-    financial_need_level: "",
     low_income: false,
     unemployed: false,
     displaced_worker: false,
     
     // Government Assistance
     medicaid_enrolled: false,
-    medicaid_waiver_program: "none",
     medicare_recipient: false,
     ssi_recipient: false,
     ssdi_recipient: false,
@@ -114,7 +112,6 @@ export default function ComprehensiveApplicationForm({ onSubmit, onCancel, isSub
     tenncare_id: "",
     
     // Immigration & Citizenship
-    immigration_status: "us_citizen",
     permanent_resident: false,
     refugee: false,
     new_immigrant: false,
@@ -219,7 +216,6 @@ export default function ComprehensiveApplicationForm({ onSubmit, onCancel, isSub
     
     // Political / Civic Engagement
     registered_voter: false,
-    political_party: "",
     politically_active: false,
     community_organizer: false,
     advocacy_work: false,
@@ -242,12 +238,28 @@ export default function ComprehensiveApplicationForm({ onSubmit, onCancel, isSub
     keywords: [],
     focus_areas: [],
     ...(initialData && typeof initialData === "object" ? initialData : {}),
+    // Ensure Select-bound fields are never null from initialData
+    financial_need_level: (initialData?.financial_need_level) ?? "",
+    medicaid_waiver_program: (initialData?.medicaid_waiver_program) ?? "none",
+    immigration_status: (initialData?.immigration_status) ?? "us_citizen",
+    political_party: (initialData?.political_party) ?? "",
+    state: (initialData?.state) ?? "",
   }));
 
   useEffect(() => {
     if (appliedInitialDataRef.current) return;
     if (!initialData || typeof initialData !== "object") return;
-    setFormData((prev) => ({ ...prev, ...initialData }));
+    // Strip null/undefined from fields bound to Select components so they stay
+    // controlled (empty string) rather than flipping to uncontrolled.
+    const SELECT_FIELDS = [
+      'financial_need_level', 'medicaid_waiver_program', 'immigration_status',
+      'political_party', 'state',
+    ];
+    const sanitized = { ...initialData };
+    SELECT_FIELDS.forEach((f) => {
+      if (sanitized[f] == null) sanitized[f] = '';
+    });
+    setFormData((prev) => ({ ...prev, ...sanitized }));
     appliedInitialDataRef.current = true;
   }, [initialData]);
 

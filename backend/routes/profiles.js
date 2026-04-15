@@ -26,6 +26,7 @@ import {
 } from '../utils/accessControl.js'
 import { isDesignatedProfileId } from '../utils/ensureDesignatedProfiles.js'
 import { resolveUploadsDir } from '../utils/uploadsDir.js'
+import { syncProfileFieldsFromSection } from '../utils/profileSectionSync.js'
 
 const router = express.Router()
 
@@ -201,6 +202,14 @@ const profileSelect = `
   FROM profiles p
   LEFT JOIN organizations o ON o.id = p.organization_id
 `
+
+/** DB `.all()` should return an array; normalize `{ rows }` shapes so `.map` never throws (empty sections). */
+function coerceDbRows(result) {
+  if (result == null) return []
+  if (Array.isArray(result)) return result
+  if (Array.isArray(result.rows)) return result.rows
+  return []
+}
 
 function mapProfile(row) {
   if (!row) return null
@@ -829,7 +838,7 @@ router.get('/:id', async (req, res) => {
 
   let sections = []
   try {
-    sections = (await req.db
+    const rawRows = await req.db
       .prepare(
         `
         SELECT section_key, data, updated_at, updated_by
@@ -838,7 +847,8 @@ router.get('/:id', async (req, res) => {
         ORDER BY section_key
       `,
       )
-      .all(id)).map((section) => ({
+      .all(id)
+    sections = coerceDbRows(rawRows).map((section) => ({
       section_key: section.section_key,
       data: safeParseJSON(section.data, {}),
       updated_at: section.updated_at,
@@ -1382,7 +1392,7 @@ router.get('/:id/sections', async (req, res) => {
     return denyAuth(req, res)
   }
 
-  const sections = (await req.db
+  const rawRows = await req.db
     .prepare(
       `
       SELECT section_key, data, updated_at, updated_by
@@ -1391,13 +1401,13 @@ router.get('/:id/sections', async (req, res) => {
       ORDER BY section_key
     `,
     )
-    .all(id))
-    .map((section) => ({
-      section_key: section.section_key,
-      data: safeParseJSON(section.data, {}),
-      updated_at: section.updated_at,
-      updated_by: section.updated_by,
-    }))
+    .all(id)
+  const sections = coerceDbRows(rawRows).map((section) => ({
+    section_key: section.section_key,
+    data: safeParseJSON(section.data, {}),
+    updated_at: section.updated_at,
+    updated_by: section.updated_by,
+  }))
 
   res.json(sections)
 })
@@ -1465,6 +1475,14 @@ router.put('/:id/sections/:sectionKey', async (req, res) => {
   )
 
   await upsert.run(id, sectionKey, JSON.stringify(data), updated_by ?? null)
+
+  // v4: Sync key section fields (state, zip, veteran, disability) to profiles table
+  // so shallow reads in matching and Anya work correctly.
+  try {
+    syncProfileFieldsFromSection(req.db, id, sectionKey, data)
+  } catch (syncErr) {
+    console.warn(`[profiles] Section sync failed for ${id}/${sectionKey}:`, syncErr?.message)
+  }
 
   // Keep profile_emails in sync with the profile's own email (basic_information.email) and contacts.
   // Product requirement: the email on the profile implies access for that user.

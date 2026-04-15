@@ -26,7 +26,7 @@ export async function runStartupOperations(db) {
   try {
     // Phase 1: Get all active profiles
     console.log('[Anya Startup] Phase 1: Loading active profiles...')
-    const profiles = db.prepare("SELECT id, display_name FROM profiles WHERE status = 'active'").all()
+    const profiles = await db.prepare("SELECT id, display_name FROM profiles WHERE status = 'active'").all()
     report.profiles_processed = profiles.length
     console.log(`[Anya Startup] Found ${profiles.length} active profiles`)
 
