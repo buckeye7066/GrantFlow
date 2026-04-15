@@ -53,7 +53,12 @@ function createDb() {
       signal_tags TEXT DEFAULT '[]',
       verified_url INTEGER DEFAULT 0,
       crawler_version TEXT,
-      funding_source_type TEXT
+      funding_source_type TEXT,
+      funding_category TEXT,
+      usable_for_housing INTEGER DEFAULT 0,
+      refund_potential INTEGER DEFAULT 0,
+      eligibility_signals TEXT DEFAULT '[]',
+      verification_status TEXT
     );
 
     CREATE UNIQUE INDEX funding_opportunities_source_source_id_uniq

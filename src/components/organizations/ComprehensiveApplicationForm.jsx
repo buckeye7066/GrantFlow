@@ -44,7 +44,6 @@ export default function ComprehensiveApplicationForm({ onSubmit, onCancel, isSub
     phone: [],
     address: "",
     city: "",
-    state: "",
     zip: "",
     age: null, // Added age field
 
