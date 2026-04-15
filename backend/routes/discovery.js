@@ -9,6 +9,7 @@ import { loadProfileContext } from '../services/profileHelpers.js'
 import { buildProfileFacets } from '../services/profile/profileTaxonomy.js'
 import { deduplicateOpportunities, decorateOpportunityFreshness } from '../services/opportunityMatcher.js'
 import { resolveGeoCoverage, buildGeoCoverageClause } from '../services/geo/geoCoverageService.js'
+import { filterActionableOpportunities } from '../services/opportunityValidationLayer.js'
 
 const router = express.Router();
 
@@ -292,10 +293,12 @@ router.post('/comprehensiveMatch', async (req, res) => {
       }
     }
 
-    res.json({
+    const actionableResults = filterActionableOpportunities(highScoring);
+
+        res.json({
       success: true,
-      opportunities: highScoring,
-      total: highScoring.length,
+      opportunities: actionableResults,
+      total: actionableResults.length,
       page,
       threshold_used: matchThreshold,
       threshold_relaxed: matchThreshold < DEFAULT_MIN_SCORE ? true : undefined,
