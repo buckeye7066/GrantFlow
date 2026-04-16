@@ -16,12 +16,9 @@ import { useToast } from "@/components/ui/use-toast";
 const PartnerForm = ({ partner, onSave, onCancel }) => {
   const [formData, setFormData] = useState({
     name: '',
-    org_type: 'foundation',
     api_base_url: '',
-    auth_type: 'none',
     auth_secret_name: '',
     contact_email: '',
-    status: 'inactive',
     ...(partner || {}),
     // Ensure Select-bound fields are always strings, never null/undefined from DB
     org_type: partner?.org_type ?? 'foundation',

@@ -65,7 +65,7 @@ function assertDecision(result, expected, label) {
 // Sanity: MATCHER_VERSION is 3.1.0
 // ---------------------------------------------------------------------------
 
-test('MATCHER_VERSION is 3.0.0', () => {
+test('MATCHER_VERSION is 3.1.0', () => {
   assert.equal(MATCHER_VERSION, '3.1.0')
 })
 
@@ -759,21 +759,21 @@ test('known applicability (individual): can produce ACCEPT when aligned', () => 
 // ---------------------------------------------------------------------------
 
 test('ACCEPT requires needAlignment > 0', () => {
-  const profile = { primary_type: 'individual', state: 'OH', needs: [] } // no needs
+  const profile = { primary_type: 'individual', state: 'OH', needs: [] } // no explicit needs
   const opp = {
-    title: 'Ohio Housing Grant',
-    description: 'For low-income Ohio residents needing housing assistance.',
-    application_url: 'https://ohio.gov/housing',
-    is_national: 0,
-    state: 'OH',
-    entity_types_allowed: '["individual"]',
-    categories: '["housing"]',
+    title: 'Tech Innovation Grant',
+    description: 'Funding for technology research and innovation projects.',
+    application_url: 'https://techfund.org/apply',
+    is_national: 1,
+    entity_types_allowed: '["individual","nonprofit"]',
+    categories: '["research_arts","business"]', // no match with inferred individual needs
     is_loan: 0,
   }
   const result = computeMatchDecision(profile, opp)
-  // Profile has no needs → needAlignment = 0 → must not ACCEPT
+  // Inferred individual needs (cash_assistance, housing, food) don't match research_arts/business
+  // → needAlignment = 0 → must not ACCEPT
   assert.notEqual(result.decision, 'ACCEPT', 'Zero need alignment must not produce ACCEPT')
-  assert.equal(result.needAlignment, 0, 'needAlignment should be 0 with empty profile needs')
+  assert.equal(result.needAlignment, 0, 'needAlignment should be 0 when needs do not match')
 })
 
 // ---------------------------------------------------------------------------
@@ -919,7 +919,7 @@ test('ACCEPT requires hasApplicationUrl: no URL → REVIEW even with perfect ali
 // MATCHER_VERSION in every decision
 // ---------------------------------------------------------------------------
 
-test('every decision includes MATCHER_VERSION 3.0.0', () => {
+test('every decision includes MATCHER_VERSION 3.1.0', () => {
   const profile = { primary_type: 'individual', state: 'OH', needs: ['housing'] }
   const opp = { title: 'Test', description: 'test', application_url: 'https://test.org' }
   const result = computeMatchDecision(profile, opp)

@@ -676,10 +676,11 @@ export const RELEVANCE_RULES = [
       return !_isNonprofitProfile(pd) && !_isBusinessProfile(pd) && !_isStudentProfile(pd) &&
         t !== 'researcher' && t !== 'school'
     },
+  },
 
-      // — 19. No actionable URL — reject opportunities with no application_url AND no source_url
-      // These are unfundable placeholders: users cannot apply or even visit the source.
-    {
+  // — 19. No actionable URL — reject opportunities with no application_url AND no source_url
+  // These are unfundable placeholders: users cannot apply or even visit the source.
+  {
         id: 'no_actionable_url',
         category: 'data_quality',
         description: 'Opportunity has no application URL and no source URL — not actionable',
@@ -773,8 +774,6 @@ export const RELEVANCE_RULES = [
                 return !hasHousingNeed && !hasHousingText
         },
         reason: 'Demographic mismatch: homeless-specific program for profile without housing instability',
-  },
-    reason: 'Content type mismatch: PI/institution-restricted academic call for non-institutional profile',
   },
 
   // Rule 19 REMOVED: Rolling / open-until-filled programs are legitimate funding
