@@ -66,6 +66,32 @@ function pickWebsiteImageCandidate(html, baseUrl) {
     if (resolved) return { url: resolved, method: 'website_cover' }
   }
 
+  // Fallback: large body images (logos, hero images, profile photos)
+  // Look for <img> elements with explicit size hints that suggest a meaningful image.
+  const bodyImages = []
+  $('img[src]').each((_, el) => {
+    const src = $(el).attr('src')
+    if (!src) return
+    const w = parseInt($(el).attr('width') || '0', 10)
+    const h = parseInt($(el).attr('height') || '0', 10)
+    const alt = String($(el).attr('alt') || '').toLowerCase()
+    const cls = String($(el).attr('class') || '').toLowerCase()
+    // Prefer images that look like logos, headshots, or hero images
+    const isLikelyAvatar = /logo|brand|header|hero|portrait|headshot|photo|avatar|profile/i.test(alt + ' ' + cls + ' ' + src)
+    // Skip tiny tracking pixels and spacer images
+    if (w > 0 && w < 48 && h > 0 && h < 48) return
+    const resolved = resolveUrl(baseUrl, src)
+    if (resolved) bodyImages.push({ url: resolved, isLikelyAvatar, w, h })
+  })
+  // Sort: prefer likely avatars first, then by size (larger is better)
+  bodyImages.sort((a, b) => {
+    if (a.isLikelyAvatar !== b.isLikelyAvatar) return a.isLikelyAvatar ? -1 : 1
+    return (b.w * b.h) - (a.w * a.h)
+  })
+  if (bodyImages.length > 0) {
+    return { url: bodyImages[0].url, method: 'website_body_image' }
+  }
+
   // Fallback: icon links (logos / favicons)
   const iconCandidates = [
     $('link[rel="apple-touch-icon"]').attr('href'),
@@ -96,6 +122,53 @@ function extensionFromContentType(contentType) {
   if (ct.includes('image/jpeg') || ct.includes('image/jpg')) return 'jpg'
   if (ct.includes('image/gif')) return 'gif'
   return 'jpg'
+}
+
+async function tryDownloadDirectUrl(imageUrl, uploadDir) {
+  const url = normalizeHttpUrl(imageUrl)
+  if (!url) return { ok: false, reason: 'invalid_url' }
+
+  const host = new URL(url).hostname
+  if (isPrivateHostname(host)) return { ok: false, reason: 'blocked_private_host' }
+
+  if (!fetchImpl) return { ok: false, reason: 'fetch_unavailable' }
+
+  const controller = new AbortController()
+  const timeoutId = setTimeout(() => controller.abort(), 12_000)
+  let res = null
+  try {
+    res = await fetchImpl(url, {
+      method: 'GET',
+      redirect: 'follow',
+      signal: controller.signal,
+      headers: {
+        'User-Agent': 'GrantFlow Avatar Lookup/1.0',
+        Accept: 'image/*,*/*;q=0.8',
+      },
+    })
+  } finally {
+    clearTimeout(timeoutId)
+  }
+
+  if (!res || !res.ok) return { ok: false, reason: 'fetch_failed' }
+
+  const contentType = String(res.headers.get('content-type') || '').toLowerCase()
+  if (!contentType.startsWith('image/')) return { ok: false, reason: 'not_image' }
+
+  const buf = Buffer.from(await res.arrayBuffer())
+  if (buf.length > 10 * 1024 * 1024) return { ok: false, reason: 'too_large' }
+  if (buf.length < 100) return { ok: false, reason: 'too_small' }
+
+  const ext = extensionFromContentType(contentType)
+  const filename = `${Date.now()}-${randomUUID()}.${ext}`
+  const filePath = join(uploadDir, filename)
+  fs.writeFileSync(filePath, buf)
+
+  return {
+    ok: true,
+    avatarFilename: filename,
+    avatarUrl: `/uploads/${filename}`,
+  }
 }
 
 async function tryUseWebsiteCoverPhoto({ profileContext, uploadDir }) {
@@ -224,7 +297,30 @@ export async function processAvatarLookupJob({ profileContext, uploadDir, getOpe
     }
   }
 
-  // Preferred behavior: use website cover image if available.
+  // Step 1: If the profile already has an external avatar URL (not a local /uploads/ path),
+  // try to download it directly. This handles OAuth profile photos, manually entered URLs, etc.
+  try {
+    const existingUrl = profile.avatar_url ? String(profile.avatar_url).trim() : ''
+    if (existingUrl && /^https?:\/\//i.test(existingUrl) && !existingUrl.includes('/uploads/')) {
+      const directResult = await tryDownloadDirectUrl(existingUrl, uploadDir)
+      if (directResult?.ok && directResult.avatarUrl) {
+        return {
+          inserted: 1,
+          avatarFilename: directResult.avatarFilename,
+          avatarUrl: directResult.avatarUrl,
+          result_meta: {
+            ok: true,
+            method: 'direct_url_download',
+            image_url_used: existingUrl,
+          },
+        }
+      }
+    }
+  } catch (error) {
+    console.warn('[avatarCrawler] Direct URL download failed; trying website', error?.message || String(error))
+  }
+
+  // Step 2: Use website cover image if available.
   // This makes the UI button deterministic and matches user intent.
   try {
     const websiteResult = await tryUseWebsiteCoverPhoto({ profileContext, uploadDir })

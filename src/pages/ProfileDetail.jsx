@@ -26,6 +26,7 @@ import { useSettingsStore } from "@/stores/settingsStore"
 import { useAuthStore } from "@/stores/authStore"
 import ProfileFilesPanel from "@/components/profiles/ProfileFilesPanel.jsx"
 import ProfileAppliedFundingPrint from "@/components/profiles/ProfileAppliedFundingPrint.jsx"
+import ProfileInfoPrint from "@/components/profiles/ProfileInfoPrint.jsx"
 import PrintableProfileTodo from "@/components/profiles/PrintableProfileTodo.jsx"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
@@ -734,6 +735,7 @@ export default function ProfileDetail() {
                 canDocumentAI={canDocumentAI}
                 canDeleteDocuments={canDeleteDocuments}
               />
+              <ProfileInfoPrint profile={profile} />
               <ProfileAppliedFundingPrint organizationId={profile.organization_id} profileName={profile.display_name} />
             </div>
           </TabsContent>

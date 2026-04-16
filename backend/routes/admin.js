@@ -1839,8 +1839,8 @@ router.get('/login-events', async (req, res) => {
           user_agent: row.user_agent ?? null,
         })
       }
-    } catch {
-      // ignore and fall back
+    } catch (auditErr) {
+      console.warn('[admin/login-events] audit_logs query failed:', auditErr?.message || auditErr)
     }
 
     // 2) Backfill: sessions table (helps recover events from before audit logging existed)
@@ -1862,8 +1862,7 @@ router.get('/login-events', async (req, res) => {
                     u.is_admin
                   FROM user_sessions s
                   LEFT JOIN users u ON u.id = s.user_id
-                  WHERE (u.is_admin IS NULL OR u.is_admin = 0)
-                    AND COALESCE(s.issued_at, s.created_at) > ?
+                  WHERE COALESCE(s.issued_at, s.created_at) > ?
                   ORDER BY COALESCE(s.issued_at, s.created_at) DESC
                   LIMIT ?
                 `,
@@ -1883,7 +1882,6 @@ router.get('/login-events', async (req, res) => {
                     u.is_admin
                   FROM user_sessions s
                   LEFT JOIN users u ON u.id = s.user_id
-                  WHERE (u.is_admin IS NULL OR u.is_admin = 0)
                   ORDER BY COALESCE(s.issued_at, s.created_at) DESC
                   LIMIT ?
                 `,
@@ -1904,8 +1902,8 @@ router.get('/login-events', async (req, res) => {
           })
         }
       }
-    } catch {
-      // ignore and fall back
+    } catch (sessionErr) {
+      console.warn('[admin/login-events] session backfill failed:', sessionErr?.message || sessionErr)
     }
 
     // 3) Final fallback: in-memory ring buffer (dev only / best-effort)
@@ -5206,15 +5204,44 @@ router.get('/exclusion-rules', async (req, res) => {
 router.post('/exclusion-rules', async (req, res) => {
   try {
     const { rule_id, pattern, action } = req.body
+    if (!pattern) {
+      return res.status(400).json({ error: 'pattern is required' })
+    }
+    const id = rule_id || `rule_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
+    const act = action || 'hide'
 
     await req.db.prepare(`
       INSERT OR REPLACE INTO exclusion_rules (rule_id, pattern, action)
       VALUES (?, ?, ?)
-    `).run(rule_id, pattern, action)
+    `).run(id, pattern, act)
 
-    res.json({ success: true })
+    res.json({ success: true, rule_id: id })
   } catch (err) {
     console.error('[admin/exclusion-rules] Error:', err)
+    res.status(500).json({ error: err.message })
+  }
+})
+
+/**
+ * DELETE /api/admin/exclusion-rules/:ruleId
+ * Remove an exclusion rule by its ID.
+ */
+router.delete('/exclusion-rules/:ruleId', async (req, res) => {
+  try {
+    const { ruleId } = req.params
+    if (!ruleId) {
+      return res.status(400).json({ error: 'ruleId is required' })
+    }
+    const result = await req.db.prepare(
+      `DELETE FROM exclusion_rules WHERE rule_id = ?`
+    ).run(ruleId)
+    const deleted = result?.changes ?? result?.rowCount ?? 0
+    if (deleted === 0) {
+      return res.status(404).json({ error: 'Rule not found' })
+    }
+    res.json({ success: true, deleted })
+  } catch (err) {
+    console.error('[admin/exclusion-rules] Delete error:', err)
     res.status(500).json({ error: err.message })
   }
 })

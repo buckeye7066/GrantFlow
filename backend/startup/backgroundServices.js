@@ -23,6 +23,7 @@ import { logAuditEvent, AUDIT_CATEGORIES, SEVERITY } from '../services/auditServ
 import { runStartupOperations } from '../services/anyaStartupOperations.js';
 import { allowedOriginCheckSQL } from '../utils/recordOrigins.js';
 import { dispatchCrawlerJob } from '../services/crawlerDispatcher.js';
+import { scheduleAdminGeoCrawlOnLogin } from '../services/adminGeoCrawlOnLogin.js';
 import {
   findDuplicateProfileGroups,
   mergeProfiles,
@@ -211,6 +212,27 @@ export function startBackgroundServices({ db, uploadsDir, actualPort, loggedCors
         });
       });
   }, 5000);
+
+  // ── 8b. Auto-trigger geo crawl on startup ─────────────────────────────────
+  // Ensures geo crawl runs on every deploy, not just on admin login.
+  // Respects the existing cooldown logic inside scheduleAdminGeoCrawlOnLogin.
+  setTimeout(() => {
+    scheduleAdminGeoCrawlOnLogin(
+      db,
+      { role: 'admin', is_admin: true, id: 'startup_auto' },
+      {},
+    )
+      .then((result) => {
+        if (result.scheduled) {
+          console.log(`[startup] Auto geo crawl scheduled: job=${result.job_id}`);
+        } else {
+          console.log(`[startup] Auto geo crawl skipped: ${result.reason}`);
+        }
+      })
+      .catch((err) => {
+        console.warn('[startup] Auto geo crawl failed:', err?.message || err);
+      });
+  }, 15000);
 
   // ── 9. Anya background health service (single call) ───────────────────────
   try {

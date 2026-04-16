@@ -28,7 +28,7 @@ function safeUuid() {
   return `evt_${Math.random().toString(36).slice(2, 10)}_${Date.now().toString(36)}`
 }
 
-export function recordClientSignInEvent({
+export async function recordClientSignInEvent({
   db = null,
   identifier,
   method,
@@ -54,11 +54,11 @@ export function recordClientSignInEvent({
     events.length = MAX_EVENTS
   }
 
-  // Durable sink: DB audit logs (best-effort).
+  // Durable sink: DB audit logs — await the write so it actually persists.
   if (db) {
     try {
       if (typeof logAuditEvent === 'function') {
-        logAuditEvent(db, {
+        await logAuditEvent(db, {
           category: AUDIT_CATEGORIES.AUTH,
           action: 'client_sign_in',
           severity: SEVERITY.INFO,
@@ -75,7 +75,7 @@ export function recordClientSignInEvent({
         })
       }
     } catch (err) {
-      console.warn('Failed to log admin login audit event:', err.message)
+      console.warn('[adminLoginEventStore] Failed to write audit log:', err?.message || err)
     }
   }
 
