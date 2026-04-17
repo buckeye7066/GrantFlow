@@ -33,11 +33,15 @@ describe('reviewerAgent.reviewOpportunity', () => {
     expect(res.reason).toBe('reviewer:missing_opportunity')
   })
 
-  it('rejects placeholder titles', () => {
+  it('rejects placeholder titles (only exact-token placeholders or filler phrasing)', () => {
+    // Must be rejected: exact-token placeholders and obvious filler phrasing.
+    // "Test Grant" / "Sample Opportunity" / "Example Program" are intentionally
+    // NOT in this list — the canonical placeholder filter in
+    // backend/services/crawlers/opportunityPolicy.js (runs before the reviewer)
+    // decides on substring-based rejections, and the inserter-level contract
+    // in tests/unit/opportunityInserter.test.mjs requires titles like
+    // "Example Opportunity" to continue to flow through.
     for (const title of [
-      'Test Grant',
-      'Sample Opportunity',
-      'Example Program',
       'Placeholder',
       'Lorem ipsum dolor',
       'Untitled',
@@ -49,6 +53,16 @@ describe('reviewerAgent.reviewOpportunity', () => {
       const res = reviewOpportunity(baseOpp({ title }))
       expect(res.ok, `title="${title}" should be rejected`).toBe(false)
       expect(res.reason).toBe('reviewer:placeholder_title')
+    }
+  })
+
+  it('does NOT reject titles that merely start with "example/test/sample"', () => {
+    // Regression guard: a loose prefix rule here breaks the contract that
+    // opportunityInserter accepts generic-sounding program titles. Substring
+    // rejection belongs to opportunityPolicy, not the reviewer.
+    for (const title of ['Example Opportunity', 'Test Grant', 'Sample Opportunity', 'Example Program']) {
+      const res = reviewOpportunity(baseOpp({ title }))
+      expect(res.ok, `title="${title}" must pass the reviewer`).toBe(true)
     }
   })
 

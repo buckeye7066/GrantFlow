@@ -28,13 +28,25 @@
  */
 
 // ── Placeholder / hallucination patterns ────────────────────────────────────
+// Deliberately NARROWER than a naive prefix match. The canonical placeholder
+// filter already lives in backend/services/crawlers/opportunityPolicy.js
+// (`PLACEHOLDER_TEXT_PATTERNS` / `isPlaceholderOpportunity`) and runs BEFORE
+// the reviewer. Duplicating a loose `^(test|sample|example)\b` match here
+// broke the long-standing contract that legitimate titles like
+// "Example Opportunity" flow through the inserter (see
+// tests/unit/opportunityInserter.test.mjs). The reviewer's job is only to
+// reject titles that are *entirely* a placeholder token or obvious LLM
+// scaffolding — everything else is policy's or the validator's concern.
 const PLACEHOLDER_TITLE_PATTERNS = [
-  /^(test|sample|example|placeholder|lorem ipsum|untitled|n\/?a|unknown)\b/i,
+  // Whole-title exact-token placeholders (case-insensitive, whitespace-tolerant).
+  /^\s*(test|sample|example|placeholder|untitled|n\/?a|unknown|tbd|todo)\s*$/i,
+  // Classic filler phrases that should never appear in a real program title.
+  /\blorem ipsum\b/i,
   /\bthis is a (placeholder|sample|test|example)\b/i,
-  /^tbd$/i,
-  /^todo$/i,
-  /^\[.*?\]$/, // entirely bracketed like "[needs title]"
-  /^\.{2,}$/, // "...", "…"
+  // Bracket-only or ellipsis-only titles ("[needs title]", "...", "…").
+  /^\s*\[[^\]]*\]\s*$/,
+  /^\s*\.{2,}\s*$/,
+  /^\s*…+\s*$/,
 ]
 
 const HALLUCINATION_MARKERS = [
