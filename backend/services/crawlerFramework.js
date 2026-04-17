@@ -11,9 +11,44 @@ export { runCrawler, SCHEMA } from './crawlers/crawlerManager.js'
 // Source adapters (real APIs)
 export { fetchSamGov as fetchGrantsGov } from './sources/samGov.js'
 export { fetchUSASpending } from './sources/usaSpending.js'
+// NIH RePORTER — real v2 Projects Search API (no key required).
+// Adapted from Grant_Guide/nih_interface.py pattern: POST criteria, normalize
+// to the canonical FundingOpportunity shape used by upsertFundingOpportunity.
+export { fetchOpportunities as fetchNihReporter } from '../src/integrations/nihReporter.js'
 
 // Ingestion service
 export { ingestOpportunities } from './sources/ingestionService.js'
+
+/**
+ * Build an NIH RePORTER text_search query from the profile context's signals.
+ * Returns '' when we can't derive anything useful; nihReporter.js treats '' as
+ * an unconstrained broad search (still returns real award rows).
+ *
+ * Profile-driven per mission goal 3 ("use the full profile"), but never
+ * narrows to zero results — it's additive only.
+ *
+ * @param {Object=} profileContext - { profile, signals, sections }
+ * @returns {string}
+ */
+export function deriveNihSearchText(profileContext) {
+  if (!profileContext || typeof profileContext !== 'object') return ''
+  const sig = profileContext.signals ?? profileContext.profile?.signals ?? null
+  const terms = new Set()
+  if (sig && typeof sig === 'object') {
+    for (const key of ['primary_keywords', 'needs', 'focus_areas', 'research_topics']) {
+      const arr = Array.isArray(sig[key]) ? sig[key] : []
+      for (const t of arr) {
+        const s = typeof t === 'string' ? t.trim() : ''
+        if (s && s.length <= 60) terms.add(s.toLowerCase())
+      }
+    }
+  }
+  // Cap to 3 terms to keep the API happy; RePORTER uses text_search as
+  // free text with implicit AND, so too many terms → zero results.
+  // Join with ", " to preserve multi-word phrases intact (NIH treats the
+  // whole string as free text).
+  return Array.from(terms).slice(0, 3).join(', ')
+}
 
 /**
  * Deduplicate opportunities by source+source_id, keeping the latest.
@@ -105,7 +140,11 @@ export async function runFederalCrawl(db, profileId, profileContext, options = {
   const allOpportunities = [];
   const errors = [];
 
-  const perSource = Math.ceil(limit / 2);
+  // Three federal sources now: SAM.gov (active solicitations),
+  // USASpending (historical awards), NIH RePORTER (NIH-funded projects).
+  // NIH RePORTER returns program-style award records; relying on the
+  // reviewer + validator layers keeps hallucinated rows out of the DB.
+  const perSource = Math.max(1, Math.ceil(limit / 3));
 
   // Fetch from SAM.gov (formerly Grants.gov)
   let _fetchSamGov;
@@ -137,6 +176,24 @@ export async function runFederalCrawl(db, profileId, profileContext, options = {
   } catch (err) {
     console.error('[crawlerFramework] USASpending fetch error:', err.message);
     errors.push({ source: 'usaspending.gov', error: err.message });
+  }
+
+  // Fetch from NIH RePORTER (v2 Projects Search — no API key required).
+  // Profile-driven text query when signals are present; otherwise broad fetch.
+  try {
+    const { fetchOpportunities: _fetchNih } = await import(
+      '../src/integrations/nihReporter.js'
+    );
+    const text = deriveNihSearchText(profileContext);
+    const results = await _fetchNih({ text, limit: perSource, offset: 0 });
+    // NIH RePORTER adapter already returns canonical FundingOpportunity shape.
+    allOpportunities.push(...results);
+    console.log(
+      `[crawlerFramework] NIH RePORTER: ${results.length} results (text="${text || '<none>'}")`,
+    );
+  } catch (err) {
+    console.error('[crawlerFramework] NIH RePORTER fetch error:', err.message);
+    errors.push({ source: 'nih.reporter', error: err.message });
   }
 
   const deduplicated = deduplicateOpportunities(allOpportunities);

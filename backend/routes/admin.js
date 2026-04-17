@@ -3448,36 +3448,50 @@ router.post('/seed-profile-grants', async (req, res) => {
 router.post('/ingest', async (req, res) => {
   try {
     console.info('[admin/ingest] Starting manual ingestion...');
-    
+
     // Import connectors dynamically
     const { fetchSamGov: fetchGrantsGov } = await import('../services/sources/samGov.js');
     const { fetchUSASpending } = await import('../services/sources/usaSpending.js');
+    const { fetchOpportunities: fetchNihReporter } = await import(
+      '../src/integrations/nihReporter.js'
+    );
     const { ingestOpportunities } = await import('../services/sources/ingestionService.js');
-    
+
     const results = [];
-    
-    // Ingest from Grants.gov
+
+    // Ingest from Grants.gov (SAM.gov under the hood)
     try {
       console.info('[admin/ingest] Fetching from Grants.gov...');
       const { opportunities: grantsGovOpps } = await fetchGrantsGov({ limit: 100, offset: 0 });
-      const grantsGovResult = ingestOpportunities(req.db, grantsGovOpps, 'grants.gov');
+      const grantsGovResult = await ingestOpportunities(req.db, grantsGovOpps, 'grants.gov');
       results.push({ source: 'grants.gov', ...grantsGovResult });
     } catch (error) {
       console.error('[admin/ingest] Grants.gov error:', error.message);
       results.push({ source: 'grants.gov', success: false, error: error.message });
     }
-    
+
     // Ingest from USASpending.gov
     try {
       console.info('[admin/ingest] Fetching from USASpending.gov...');
       const { opportunities: usaSpendingOpps } = await fetchUSASpending({ limit: 100, page: 1 });
-      const usaSpendingResult = ingestOpportunities(req.db, usaSpendingOpps, 'usaspending.gov');
+      const usaSpendingResult = await ingestOpportunities(req.db, usaSpendingOpps, 'usaspending.gov');
       results.push({ source: 'usaspending.gov', ...usaSpendingResult });
     } catch (error) {
       console.error('[admin/ingest] USASpending.gov error:', error.message);
       results.push({ source: 'usaspending.gov', success: false, error: error.message });
     }
-    
+
+    // Ingest from NIH RePORTER (real API, no key required)
+    try {
+      console.info('[admin/ingest] Fetching from NIH RePORTER...');
+      const nihOpps = await fetchNihReporter({ limit: 100, offset: 0 });
+      const nihResult = await ingestOpportunities(req.db, nihOpps, 'nih.reporter');
+      results.push({ source: 'nih.reporter', ...nihResult });
+    } catch (error) {
+      console.error('[admin/ingest] NIH RePORTER error:', error.message);
+      results.push({ source: 'nih.reporter', success: false, error: error.message });
+    }
+
     // Calculate totals
     const summary = {
       sources_processed: results.length,
@@ -3485,6 +3499,8 @@ router.post('/ingest', async (req, res) => {
       failures: results.filter(r => !r.success).length,
       total_inserted: results.reduce((sum, r) => sum + (r.records_inserted || 0), 0),
       total_updated: results.reduce((sum, r) => sum + (r.records_updated || 0), 0),
+      total_rejected_policy: results.reduce((sum, r) => sum + (r.records_rejected_policy || 0), 0),
+      total_rejected_reviewer: results.reduce((sum, r) => sum + (r.records_rejected_reviewer || 0), 0),
       total_errors: results.reduce((sum, r) => sum + (r.errors || 0), 0),
     };
     

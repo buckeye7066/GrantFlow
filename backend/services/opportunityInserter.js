@@ -2,6 +2,7 @@ import crypto from 'crypto'
 import { isValidRealUrl, isLoanLike, isMatchingFunds, enforceOpportunityPolicy } from './crawlers/opportunityPolicy.js'
 import { ALLOWED_RECORD_ORIGINS } from '../utils/recordOrigins.js'
 import { validateOpportunity, deduplicateByUrl } from './opportunityValidator.js'
+import { reviewOpportunity } from './reviewerAgent.js'
 import { normalizeUrlForDedupe } from '../routes/opportunityHelpers.js'
 
 // Backward-compat alias
@@ -234,6 +235,20 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
       inserted: false,
       skipped: true,
       reason: `validation:${validation.errors.join(',')}`,
+    }
+  }
+
+  // Reviewer Agent — final deterministic quality gate before DB write.
+  // Rejects hallucinated / placeholder / firm-deadline-past / impossible-amount
+  // records that slipped past policy + validator. Never rejects for missing
+  // optional fields (see reviewerAgent.js for the full contract).
+  const review = reviewOpportunity(opportunity)
+  if (!review.ok) {
+    return {
+      id: null,
+      inserted: false,
+      skipped: true,
+      reason: review.reason,
     }
   }
 

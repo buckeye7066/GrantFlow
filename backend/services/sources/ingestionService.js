@@ -7,6 +7,7 @@
 import crypto from 'crypto';
 import { enforceOpportunityPolicy } from '../crawlers/opportunityPolicy.js';
 import { validateOpportunity } from '../opportunityValidator.js';
+import { reviewOpportunity } from '../reviewerAgent.js';
 
 /**
  * Ingest opportunities into the database
@@ -95,8 +96,9 @@ export async function ingestOpportunities(db, opportunities, sourceName) {
     'SELECT id FROM funding_opportunities WHERE source = ? AND source_id = ?'
   );
   
-  // Pre-filter through policy and validation before touching DB.
+  // Pre-filter through policy, validation, and the reviewer agent before touching DB.
   let policySkipped = 0;
+  let reviewerSkipped = 0;
   const validated = [];
   for (const opp of opportunities) {
     const policy = enforceOpportunityPolicy(opp);
@@ -111,10 +113,31 @@ export async function ingestOpportunities(db, opportunities, sourceName) {
       console.warn(`[ingestion] Validation rejection: ${v.errors.join(',')} | ${opp?.title ?? 'untitled'}`);
       continue;
     }
+    const review = reviewOpportunity(opp);
+    if (!review.ok) {
+      reviewerSkipped++;
+      console.warn(`[ingestion] Reviewer rejection: ${review.reason} | ${opp?.title ?? 'untitled'}`);
+      continue;
+    }
+    // Normalize required DB fields that upstream adapters sometimes omit
+    // (NIH RePORTER, older connectors). funding_opportunities.id is a
+    // non-null primary key so we generate a stable UUID here when missing.
+    if (!opp.id) {
+      opp.id = crypto.randomUUID();
+    }
+    if (opp.last_crawled == null) {
+      opp.last_crawled = new Date().toISOString();
+    }
+    if (opp.is_active == null) {
+      opp.is_active = 1;
+    }
     validated.push(opp);
   }
   if (policySkipped > 0) {
     console.log(`[ingestion] Pre-filtered ${policySkipped} opportunities by policy/validation`);
+  }
+  if (reviewerSkipped > 0) {
+    console.log(`[ingestion] Pre-filtered ${reviewerSkipped} opportunities by reviewer agent`);
   }
 
   // Process in a transaction for performance
@@ -224,6 +247,8 @@ const existing = checkExists.get(opp.source, opp.source_id);
       records_fetched: opportunities.length,
       records_inserted: inserted,
       records_updated: updated,
+      records_rejected_policy: policySkipped,
+      records_rejected_reviewer: reviewerSkipped,
       errors,
       error_messages: errorMessages,
     };
