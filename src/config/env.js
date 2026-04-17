@@ -54,6 +54,7 @@ export const env = (() => {
 
   // On axiombiolabs hosts: never use an absolute API URL that points at a different origin than the page.
   // Vercel rewrites `/grantflow/api/*` → backend; cross-origin fetches get misleading "CORS" on 502s.
+  // Production runs on both app.axiombiolabs.com and axiombiolabs.org — match both TLDs.
   if (typeof window !== 'undefined') {
     const forceExternal = String(raw.VITE_FORCE_RAILWAY_API || '').toLowerCase() === 'true'
     const host = String(window.location.hostname || '')
@@ -61,7 +62,7 @@ export const env = (() => {
       !forceExternal &&
       apiUrl &&
       /^https?:\/\//i.test(apiUrl) &&
-      /axiombiolabs\.org$/i.test(host)
+      /axiombiolabs\.(com|org)$/i.test(host)
     ) {
       try {
         if (new URL(apiUrl).origin !== window.location.origin) {
@@ -107,7 +108,7 @@ export function getApiBasePrefixForFetch() {
     const host = String(window.location.hostname || '')
     if (
       !forceExternal &&
-      /axiombiolabs\.org$/i.test(host)
+      /axiombiolabs\.(com|org)$/i.test(host)
     ) {
       try {
         if (new URL(apiUrl).origin !== window.location.origin) {

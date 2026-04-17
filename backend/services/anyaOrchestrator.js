@@ -405,10 +405,14 @@ function normalizeDate(value) {
 
 export async function createSession(db, user, { profileId, title, metadata } = {}) {
   assertAuthenticated(user)
-  const normalizedProfileId = coerceProfileId(profileId ?? user.activeProfileId ?? null)
+  let normalizedProfileId = coerceProfileId(profileId ?? user.activeProfileId ?? null)
   assertProfileAccess(user, normalizedProfileId)
 
   // Validate profile existence up-front to avoid FK explosions.
+  // A stale `activeProfileId` (deleted profile, fresh login, admin tools)
+  // is common; hard-404'ing here forces every UI to implement a retry and
+  // pollutes the browser console. Instead, gracefully degrade to a
+  // profile-less session so the copilot still opens on the first attempt.
   if (normalizedProfileId) {
     const exists = await db
       .prepare(
@@ -421,9 +425,11 @@ export async function createSession(db, user, { profileId, title, metadata } = {
       )
       .get(normalizedProfileId)
     if (!exists?.id) {
-      const error = new Error('Profile not found')
-      error.status = 404
-      throw error
+      console.warn(
+        '[anya] createSession: supplied profile_id not found; creating profile-less session',
+        { supplied: normalizedProfileId, userId: user?.userId ?? null },
+      )
+      normalizedProfileId = null
     }
   }
 
