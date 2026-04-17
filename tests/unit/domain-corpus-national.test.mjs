@@ -23,23 +23,20 @@ function createTestDb() {
   const dbPath = path.join(tmp, 'test.db')
   const db = new Database(dbPath)
 
-  // Add withTransaction method to match the wrapped DB interface used by opportunityInserter
-  db.withTransaction = function withTransaction(fn) {
-    // better-sqlite3 is synchronous; wrap with its own transaction() for
-    // true atomicity. opportunityInserter must call withTransaction with a
-    // synchronous inner function, which matches the real production wrapper.
-    return new Promise((resolve, reject) => {
-      const txFn = this.transaction((txDb) => {
-        // fn must be synchronous in better-sqlite3 context
-        return fn(txDb)
-      })
-      try {
-        const result = txFn(this)
-        resolve(result)
-      } catch (err) {
-        reject(err)
-      }
-    })
+  // Match the production SqliteDb.withTransaction semantics: accept an async
+  // callback and wrap with manual BEGIN/COMMIT/ROLLBACK. better-sqlite3's
+  // native .transaction() wrapper rejects async callbacks, and callers like
+  // bulkUpsertFundingOpportunities() await an async inner function.
+  db.withTransaction = async function withTransaction(fn) {
+    this.exec('BEGIN IMMEDIATE')
+    try {
+      const result = await fn(this)
+      this.exec('COMMIT')
+      return result
+    } catch (err) {
+      try { this.exec('ROLLBACK') } catch { /* ignore rollback errors */ }
+      throw err
+    }
   }
 
   // Create minimal funding_opportunities table matching opportunityInserter INSERT columns

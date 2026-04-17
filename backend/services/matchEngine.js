@@ -1278,7 +1278,9 @@ function scoreCategoryComponent(effectiveProfile, effectiveSignals, opportunity)
  */
 export function scoreOpportunity(profile, opportunity) {
   const profileContext =
-    profile && typeof profile === 'object' && profile.profile && profile.sections ? profile : null
+    profile && typeof profile === 'object' && profile.profile && (profile.sections || profile.signals)
+      ? profile
+      : null
   const effectiveProfile = profileContext?.profile ?? profile
   const effectiveSignals =
     profileContext?.signals ??
@@ -1719,9 +1721,14 @@ export function computeMatchDecision(rawProfile, rawOpportunity, opts = {}) {
     ? rawOpportunity
     : normalizeOpportunity(rawOpportunity)
 
-  // Pass sections to scoreOpportunity so it can build signals (geo, keywords, etc.)
-  const profileForScoring = opts.profileSections
-    ? { profile: rawProfile, sections: opts.profileSections }
+  // Pass sections/signals to scoreOpportunity so it can build keyword + facet
+  // signals (geo, keywords, etc.). Without this, already-normalized profiles
+  // short-circuit the scoring context and every opportunity gets the same score.
+  const effectiveProfileForScoring = rawProfile?.profile ?? rawProfile
+  const sectionsForScoring = opts.profileSections ?? rawProfile?.sections ?? null
+  const signalsForScoring = signals ?? rawProfile?.signals ?? null
+  const profileForScoring = (sectionsForScoring || signalsForScoring)
+    ? { profile: effectiveProfileForScoring, sections: sectionsForScoring, signals: signalsForScoring }
     : rawProfile
   const { score, reasons, match_explain } = scoreOpportunity(profileForScoring, rawOpportunity)
 

@@ -370,8 +370,13 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
                      .map((opp) => {
                                   if (isJunkOpportunity(opp, filterHints)) return null
 
-                                  // Run v2.0.0 engine: filter hard ineligibles (REJECT) before surfacing
-                                  const decision = computeMatchDecision(profileNormForDecision, opp)
+                                  // Run v2.0.0 engine: filter hard ineligibles (REJECT) before surfacing.
+                                  // Pass sections + signals so scoreOpportunity can build keyword/facet
+                                  // signals — otherwise keyword-matching opps score identically to generic ones.
+                                  const decision = computeMatchDecision(profileNormForDecision, opp, {
+                                    profileSections: profileSectionsForDecision,
+                                    signals: profileContext?.signals ?? null,
+                                  })
                                   if (decision.decision === 'REJECT') return null
 
                                return {

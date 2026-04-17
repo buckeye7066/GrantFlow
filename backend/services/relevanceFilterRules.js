@@ -676,6 +676,7 @@ export const RELEVANCE_RULES = [
       return !_isNonprofitProfile(pd) && !_isBusinessProfile(pd) && !_isStudentProfile(pd) &&
         t !== 'researcher' && t !== 'school'
     },
+    reason: 'Content type mismatch: PI/institution-only academic call, not open to individual profiles',
   },
 
   // — 19. No actionable URL — reject opportunities with no application_url AND no source_url

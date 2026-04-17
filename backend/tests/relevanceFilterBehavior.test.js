@@ -22,6 +22,10 @@ function makeOpp(overrides = {}) {
     keywords: '',
     state: 'TN',
     is_national: true,
+    // Provide a minimally-valid application URL so the `no_actionable_url`
+    // data-quality rule (rule 19) does not short-circuit behavior tests that
+    // are focused on specific content/demographic rules.
+    application_url: 'https://example.org/apply',
     ...overrides,
   }
 }

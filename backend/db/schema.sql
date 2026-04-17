@@ -230,7 +230,12 @@ CREATE TABLE IF NOT EXISTS funding_opportunities (
   -- eligibility_signals: JSON object { gpa_min, faith_affiliation, talent_type, state, field_of_study }
   eligibility_signals TEXT DEFAULT '{}',
   -- verification_status: verified_live_url | suspected_dead | needs_review
-  verification_status TEXT DEFAULT 'needs_review'
+  verification_status TEXT DEFAULT 'needs_review',
+  -- Source classification (migration 055 folded into schema for fresh-boot DBs)
+  -- funding_source_type values: federal | state | foundation | corporate | university | medical | community | other
+  funding_source_type TEXT,
+  -- Raw payload captured from upstream source (ingestion pipeline)
+  raw_source_payload TEXT
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS ux_funding_opportunities_fingerprint
@@ -1012,6 +1017,7 @@ CREATE INDEX IF NOT EXISTS idx_fo_is_loan ON funding_opportunities(is_loan);
 CREATE INDEX IF NOT EXISTS idx_fo_state_active_deadline ON funding_opportunities(state, is_active, deadline);
 CREATE INDEX IF NOT EXISTS idx_fo_profile_id ON funding_opportunities(profile_id);
 CREATE INDEX IF NOT EXISTS idx_fo_funding_category ON funding_opportunities(funding_category);
+CREATE INDEX IF NOT EXISTS idx_fo_funding_source_type ON funding_opportunities(funding_source_type);
 CREATE INDEX IF NOT EXISTS idx_fo_usable_for_housing ON funding_opportunities(usable_for_housing);
 CREATE INDEX IF NOT EXISTS idx_fo_verification_status ON funding_opportunities(verification_status);
 CREATE INDEX IF NOT EXISTS idx_milestones_due_date ON milestones(due_date);

@@ -17,12 +17,17 @@ describe("opportunities", () => {
   })
 
   it("lists opportunities with a total that matches storage", async () => {
+    // NOTE: titles must not match the placeholder pattern in
+    // filterActionableOpportunities (/^(test|sample|example|...)/i) and must
+    // supply an application_url, otherwise the response layer strips them.
     const create1 = await request(app).post("/api/opportunities").set(TEST_ADMIN_AUTH_HEADER).send({
-      title: "Test Opportunity A",
+      title: "Community Emergency Assistance Grant A",
       sponsor: "Example Foundation",
       source: "test",
       source_id: "a",
-      description: "A test opportunity.",
+      description: "A real-looking opportunity used by the opportunities API integration test.",
+      application_url: "https://example.org/apply-a",
+      source_url: "https://example.org/program-a",
       is_national: true,
       opportunity_type: "grant",
       requires_match: false,
@@ -30,11 +35,13 @@ describe("opportunities", () => {
     expect(create1.status).toBe(201)
 
     const create2 = await request(app).post("/api/opportunities").set(TEST_ADMIN_AUTH_HEADER).send({
-      title: "Test Opportunity B",
+      title: "Community Emergency Assistance Grant B",
       sponsor: "Example Foundation",
       source: "test",
       source_id: "b",
-      description: "Another test opportunity.",
+      description: "A second real-looking opportunity used by the opportunities API integration test.",
+      application_url: "https://example.org/apply-b",
+      source_url: "https://example.org/program-b",
       is_national: false,
       state: "OH",
       opportunity_type: "grant",
