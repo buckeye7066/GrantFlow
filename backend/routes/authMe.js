@@ -113,10 +113,17 @@ export function createAuthMeRouter({ db, adminName, adminEmail }) {
           }
         }
 
-        try {
-          const isAdminUser =
-            Boolean(dbUser?.is_admin) || user.role === 'admin' || user.is_admin === true
+        // Canonical admin resolution: prefer req.ctx.isAdmin (DB-backed, self-heals
+        // configured-admin-email users). Fall back to dbUser/token flags only if
+        // requestContext middleware didn't run or couldn't resolve.
+        // Hoisted out of the try block so the response can mirror the same answer.
+        const isAdminUser =
+          req.ctx?.isAdmin === true ||
+          Boolean(dbUser?.is_admin) ||
+          user.role === 'admin' ||
+          user.is_admin === true
 
+        try {
           if (isAdminUser) {
             // Admin UX expects cross-org profile selection.
             // Return a large (but bounded) list to avoid "missing profiles" in the UI.
@@ -204,7 +211,9 @@ export function createAuthMeRouter({ db, adminName, adminEmail }) {
             primary_email: dbUser.primary_email,
             primary_phone: dbUser.primary_phone,
             avatar_url: dbUser.avatar_url,
-            is_admin: Boolean(dbUser.is_admin),
+            // Mirror the canonical resolution used above so the client never sees
+            // a stale is_admin that contradicts req.ctx (e.g. after a role promotion).
+            is_admin: isAdminUser,
           },
           profiles: Array.isArray(profiles) ? profiles : [],
           active_profile_id: safeActiveProfileId,

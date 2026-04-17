@@ -522,13 +522,6 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
         : null,
     notes: opportunity.notes ?? null,
     record_origin: recordOrigin,
-    funding_category: opportunity.funding_category ?? classifyFundingCategory(opportunity),
-    usable_for_housing: toDbBoolean(db, opportunity.usable_for_housing ?? deriveUsableForHousing(opportunity, opportunity.funding_category ?? classifyFundingCategory(opportunity))),
-    refund_potential: toDbBoolean(db, opportunity.refund_potential ?? deriveRefundPotential(opportunity, opportunity.funding_category ?? classifyFundingCategory(opportunity))),
-    eligibility_signals: opportunity.eligibility_signals != null
-      ? (typeof opportunity.eligibility_signals === 'string' ? opportunity.eligibility_signals : JSON.stringify(opportunity.eligibility_signals))
-      : JSON.stringify(extractEligibilitySignals(opportunity)),
-    verification_status: opportunity.verification_status ?? 'needs_review',
     funding_domain: opportunity.funding_domain ?? null,
     funding_subdomain: opportunity.funding_subdomain ?? null,
     source_category: opportunity.source_category ?? null,
