@@ -9,7 +9,7 @@ import { Badge } from "@/components/ui/badge"
 import { cn } from "@/lib/utils"
 import { formatDistanceToNow } from "date-fns"
 import { toast } from "@/components/ui/use-toast"
-import { useAuthStore } from "@/stores/authStore"
+import { useAuthStore, normalizeUserAdmin } from "@/stores/authStore"
 import { createLogger } from "@/utils/logger"
 import {
   getAnyaSessions,
@@ -381,7 +381,12 @@ function resolvePageName(pathname) {
 export default function AnyaChat({ profileId, currentPage: currentPageProp, prefillMessage, onPrefillConsumed }) {
   const user = useAuthStore((state) => state.user)
   const profiles = useAuthStore((state) => state.profiles)
-  const isAdmin = Boolean(user?.is_admin)
+  // Accept every admin shape the auth store normalizes (is_admin snake_case,
+  // isAdmin camelCase from JWT payloads, role === 'admin', roles array).
+  // Previously we hard-coded `user.is_admin`, which greyed out admin-only
+  // quick actions when the user object carried the camelCase flag from a
+  // fresh `/api/auth/me` bootstrap — violating Anya goals 4 and 8.
+  const isAdmin = normalizeUserAdmin(user)
   const effectiveProfileId = profileId ?? null
   const [isUnavailable, setIsUnavailable] = useState(false)
   const queryClient = useQueryClient()
@@ -395,11 +400,18 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, pref
   const isFirstRun = useMemo(() => {
     if (typeof window === "undefined") return false
     if (localStorage.getItem(ONBOARDING_LS_KEY)) return false
+    // Admins are never treated as first-run users. `profiles` for admins
+    // contains every profile in the system, so `profiles[0]` (used below)
+    // belongs to some arbitrary other user — reading its sections_complete
+    // would push admins into the non-admin onboarding wizard and hide the
+    // Admin Tools / Grant insights quick actions behind a pre-bootstrap
+    // disabled state. Short-circuit here so admins always see the live chat.
+    if (isAdmin) return false
     if (!profiles || profiles.length === 0) return true
     const activeProfile = profiles.find((p) => String(p.id) === String(effectiveProfileId)) ?? profiles[0]
     const sectionsComplete = Number(activeProfile?.sections_complete ?? 0)
     return sectionsComplete <= 1
-  }, [profiles, effectiveProfileId])
+  }, [profiles, effectiveProfileId, isAdmin])
 
   // onboardingStep: null = not in onboarding; 0-4 = step index
   const [onboardingStep, setOnboardingStep] = useState(null)
@@ -1091,23 +1103,54 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, pref
     }
   }
 
+  // Lazily create/return a session id. The bootstrap effect normally pre-fills
+  // `sessionId` on mount, but quick-action buttons (Admin Tools, Code search,
+  // Grant insights) used to hard-bail when `sessionId` was null — even though
+  // a session is cheap to create on demand. That produced a greyed-out
+  // Admin Tools button for admins (Anya goals 4 & 8). `ensureSession` keeps
+  // the UI responsive: the first click that actually needs a backend session
+  // creates one and reuses it for the rest of the interaction.
+  const ensureSession = useCallback(async () => {
+    if (sessionId) return sessionId
+    try {
+      const session = await createAnyaSession({
+        profileId: effectiveProfileId ?? undefined,
+      })
+      const newId = session?.id ?? null
+      if (newId) setSessionId(newId)
+      return newId
+    } catch (error) {
+      const status = error?.status ?? null
+      const message = String(error?.message || "")
+      const isProfileMissing = status === 404 || /profile not found/i.test(message)
+      if (!isProfileMissing) throw error
+      // Fall back to a profile-less session so admin-scoped tools always run.
+      const fallback = await createAnyaSession({ profileId: undefined })
+      const fallbackId = fallback?.id ?? null
+      if (fallbackId) setSessionId(fallbackId)
+      return fallbackId
+    }
+  }, [sessionId, effectiveProfileId])
+
   const handleGrantInsights = async () => {
-    if (!sessionId || !effectiveProfileId) return
+    if (!effectiveProfileId) return
     setIsFetchingInsights(true)
     try {
+      const activeId = await ensureSession()
+      if (!activeId) throw new Error("Could not start Anya session")
       await invokeAnyaTool(
         "grants.summarizeMatches",
         {
           profile_id: effectiveProfileId,
           limit: 5,
         },
-        { sessionId },
+        { sessionId: activeId },
       )
       toast({
         title: "Grant insights ready",
         description: "Anya summarised the latest matches in the chat thread.",
       })
-      await refreshMessages(sessionId)
+      await refreshMessages(activeId)
     } catch (error) {
       console.error("[AnyaChat] grant summary failed", error)
       toast({
@@ -1121,15 +1164,21 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, pref
   }
 
   const handleRunAdminTool = async (tool) => {
-    if (!sessionId || !tool?.name) return
+    if (!tool?.name) return
     setInvokingAdminTool(tool.name)
     try {
-      await invokeAnyaTool(tool.name, { profile_id: effectiveProfileId }, { sessionId })
+      const activeId = await ensureSession()
+      if (!activeId) throw new Error("Could not start Anya session")
+      await invokeAnyaTool(
+        tool.name,
+        { profile_id: effectiveProfileId },
+        { sessionId: activeId },
+      )
       toast({
         title: `${tool.name} completed`,
         description: "Results have been posted to the chat thread.",
       })
-      await refreshMessages(sessionId)
+      await refreshMessages(activeId)
     } catch (error) {
       console.error(`[AnyaChat] admin tool ${tool.name} failed`, error)
       toast({
@@ -1142,10 +1191,15 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, pref
     }
   }
 
+  // Quick-action buttons deliberately do NOT require `sessionId` — the
+  // session is created lazily on click via `ensureSession()`. Gating the
+  // buttons on `sessionId` previously caused them to grey out for admins
+  // during the brief window before bootstrap completed, and permanently if
+  // bootstrap never fired (e.g. because isFirstRun was incorrectly true).
   const isCodeSearchDisabled =
-    !hasCodeSearchTool || !sessionId || isLoading || isInvokingTool || isLoadingTools
+    !hasCodeSearchTool || isLoading || isInvokingTool || isLoadingTools
   const isGrantInsightsDisabled =
-    !hasGrantTool || !sessionId || !profileId || isLoading || isFetchingInsights || isLoadingTools
+    !hasGrantTool || !profileId || isLoading || isFetchingInsights || isLoadingTools
   const isTaskFormDisabled = !sessionId || isLoading || isSavingTask
 
   return (
@@ -1289,7 +1343,9 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, pref
                     size="sm"
                     className="gap-2 border-purple-300 bg-purple-50 hover:bg-purple-100"
                     onClick={() => setIsAdminToolsOpen(true)}
-                    disabled={!sessionId || isLoading}
+                    // Button only opens a local dialog; session gets created
+                    // lazily when a tool inside the dialog is actually run.
+                    disabled={isLoading || isLoadingTools}
                   >
                     <Wrench className="h-4 w-4" />
                     Admin Tools
@@ -1688,7 +1744,7 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, pref
                         size="sm"
                         variant="outline"
                         className="shrink-0 gap-1.5 border-purple-300 text-purple-700 hover:bg-purple-50"
-                        disabled={!sessionId || invokingAdminTool === tool.name}
+                        disabled={invokingAdminTool === tool.name}
                         onClick={() => handleRunAdminTool(tool)}
                       >
                         {invokingAdminTool === tool.name ? (
@@ -1724,7 +1780,7 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, pref
                         size="sm"
                         variant="outline"
                         className="shrink-0 gap-1.5"
-                        disabled={!sessionId || invokingAdminTool === tool.name}
+                        disabled={invokingAdminTool === tool.name}
                         onClick={() => handleRunAdminTool(tool)}
                       >
                         {invokingAdminTool === tool.name ? (
@@ -1760,7 +1816,7 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, pref
                         size="sm"
                         variant="outline"
                         className="shrink-0 gap-1.5"
-                        disabled={!sessionId || invokingAdminTool === tool.name}
+                        disabled={invokingAdminTool === tool.name}
                         onClick={() => handleRunAdminTool(tool)}
                       >
                         {invokingAdminTool === tool.name ? (
@@ -1796,7 +1852,7 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, pref
                         size="sm"
                         variant="outline"
                         className="shrink-0 gap-1.5"
-                        disabled={!sessionId || invokingAdminTool === tool.name}
+                        disabled={invokingAdminTool === tool.name}
                         onClick={() => handleRunAdminTool(tool)}
                       >
                         {invokingAdminTool === tool.name ? (
@@ -1832,7 +1888,7 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, pref
                         size="sm"
                         variant="outline"
                         className="shrink-0 gap-1.5"
-                        disabled={!sessionId || invokingAdminTool === tool.name}
+                        disabled={invokingAdminTool === tool.name}
                         onClick={() => handleRunAdminTool(tool)}
                       >
                         {invokingAdminTool === tool.name ? (
@@ -1868,7 +1924,7 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, pref
                         size="sm"
                         variant="outline"
                         className="shrink-0 gap-1.5"
-                        disabled={!sessionId || invokingAdminTool === tool.name}
+                        disabled={invokingAdminTool === tool.name}
                         onClick={() => handleRunAdminTool(tool)}
                       >
                         {invokingAdminTool === tool.name ? (
@@ -1904,7 +1960,7 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, pref
                         size="sm"
                         variant="outline"
                         className="shrink-0 gap-1.5"
-                        disabled={!sessionId || invokingAdminTool === tool.name}
+                        disabled={invokingAdminTool === tool.name}
                         onClick={() => handleRunAdminTool(tool)}
                       >
                         {invokingAdminTool === tool.name ? (
@@ -1940,7 +1996,7 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, pref
                         size="sm"
                         variant="outline"
                         className="shrink-0 gap-1.5"
-                        disabled={!sessionId || invokingAdminTool === tool.name}
+                        disabled={invokingAdminTool === tool.name}
                         onClick={() => handleRunAdminTool(tool)}
                       >
                         {invokingAdminTool === tool.name ? (
@@ -1976,7 +2032,7 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, pref
                         size="sm"
                         variant="outline"
                         className="shrink-0 gap-1.5"
-                        disabled={!sessionId || invokingAdminTool === tool.name}
+                        disabled={invokingAdminTool === tool.name}
                         onClick={() => handleRunAdminTool(tool)}
                       >
                         {invokingAdminTool === tool.name ? (
