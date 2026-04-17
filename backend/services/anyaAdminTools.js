@@ -38,27 +38,53 @@ async function collectFiles(dir) {
 
 /**
  * Check if user is admin (DB-backed)
- * CRITICAL: This should match the logic in requestContext.js and accessControl.js
- * @param {Object} user - User object with is_admin flag
+ * CRITICAL: This must match the logic in requestContext.js and accessControl.js.
+ *
+ * Canonical source of truth: `req.ctx.isAdmin` (camelCase) set by
+ * backend/middleware/requestContext.js from the `users.is_admin` column.
+ * Legacy call sites also pass a raw user row where the flag is `is_admin`
+ * (snake_case) or a JWT payload with `role === 'admin'`; all three shapes
+ * are accepted so the helper works from any admin-gated code path.
+ *
+ * @param {Object} user - req.ctx, user row, or JWT payload
  * @returns {boolean} True if user is admin
  */
 export function isAdmin(user) {
-  if (!user) {
+  if (!user || typeof user !== 'object') {
     return false;
   }
-  
-  // Use DB-backed admin flag (set by auth middleware from database)
-  // No email substring checks - DB is the source of truth
-  return Boolean(user.role === 'admin' || user.is_admin === true || user.is_admin === 1);
+
+  // Canonical: req.ctx.isAdmin, hydrated from DB by requestContext middleware.
+  if (user.isAdmin === true) {
+    return true;
+  }
+
+  // Legacy shapes (raw user row / JWT payload / tool context).
+  return Boolean(
+    user.role === 'admin' ||
+      user.is_admin === true ||
+      user.is_admin === 1,
+  );
 }
 
 /**
- * Require admin access - throws if user is not admin
- * @param {Object} user - User object to check
+ * Require admin access - throws if user is not admin.
+ *
+ * Accepts either the ctx object directly, or an options bag containing
+ * `{ user, ctx, db }` so callers that only have a tool `context` can pass
+ * it through without losing the canonical `ctx.isAdmin` flag.
+ *
+ * @param {Object} userOrContext - ctx | user row | { user, ctx, db }
  * @throws {Error} If user is not admin
  */
-export function requireAdmin(user) {
-  if (!isAdmin(user)) {
+export function requireAdmin(userOrContext) {
+  // Unwrap {user, ctx, db}-style tool contexts if passed accidentally.
+  const candidate =
+    userOrContext && typeof userOrContext === 'object' && 'user' in userOrContext && !('isAdmin' in userOrContext) && !('is_admin' in userOrContext) && !('role' in userOrContext)
+      ? userOrContext.ctx ?? userOrContext.user
+      : userOrContext;
+
+  if (!isAdmin(candidate)) {
     throw new Error('Admin access required. Admin privileges are managed via database.');
   }
 }
