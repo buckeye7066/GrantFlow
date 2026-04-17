@@ -1,0 +1,85 @@
+---
+description: Every applied fix must be committed and pushed to buckeye7066/GrantFlow main
+alwaysApply: true
+---
+
+# Auto-Push Fixes to buckeye7066/GrantFlow main
+
+Whenever the agent applies a code change that fixes a bug, resolves an error,
+corrects a regression, or otherwise repairs broken behavior in this repo, the
+change MUST be committed and pushed to the `main` branch of the public
+GitHub repository `buckeye7066/GrantFlow` in the same turn that the fix is
+applied — not left staged, not deferred to a later message, not gated on
+explicit user approval.
+
+This rule overrides the usual "only commit when the user asks" guidance for
+fixes in this repository, because the user has granted standing permission
+for all fixes to be pushed to `main`.
+
+## When this rule applies
+
+Applies to any change the agent considers a **fix**, including but not limited to:
+
+- Bug fixes (runtime errors, wrong results, broken UI)
+- Error / 404 / 500 / CORS / auth regressions
+- Crawler, matching, scoring, or ingestion pipeline repairs
+- Schema / migration / data-integrity fixes
+- Test failures, lint failures, typecheck failures
+- Build / deploy / CI failures
+- Documentation fixes that correct incorrect information
+
+Does **not** apply to:
+
+- Net-new features the user explicitly asked the agent to draft but not ship
+- Experimental spikes the user asked to keep local
+- Changes the user has explicitly told the agent not to commit in the current
+  turn (explicit opt-out wins for that turn only)
+
+## Required workflow for every fix
+
+1. Apply the fix across all affected files (follow the existing
+   `mission-goals.mdc` rules — no placeholders, no local-only patches).
+2. Run relevant verification that is available in this environment
+   (e.g. `npm run -s unit`, `npm run check:prepush`, or the targeted vitest
+   suite that covers the changed code). If verification fails, fix the
+   failure before committing — never push a red build.
+3. Stage only the files that belong to the fix.
+4. Commit with a conventional-style message that explains the fix
+   (`fix(scope): …`, `chore(scope): …`, etc.) and, when useful, a short body
+   describing root cause / why the fix works. On Windows / PowerShell the
+   agent must write the commit body to a temp file and use
+   `git commit -F <file>` (PowerShell does not support `&&` chaining or
+   bash heredocs).
+5. Push to `origin main`:
+
+   ```powershell
+   git push origin main
+   ```
+
+6. Confirm the push succeeded (non-zero exit or rejected push must be
+   surfaced and retried after resolving the cause — rebase on remote, fix
+   hook failures, etc.). Never force-push `main`.
+7. Report the resulting commit SHA (or PR URL, if the repo transitions to a
+   PR-based workflow) to the user as part of the summary.
+
+## Safety rails (must still hold)
+
+- Do **not** modify git config.
+- Do **not** skip hooks (`--no-verify`, `--no-gpg-sign`) unless the user
+  explicitly requests it in the current turn.
+- Do **not** amend or rewrite history once pushed.
+- Do **not** commit secrets (`.env`, credential files, API keys). If a fix
+  appears to require one, stop and warn the user.
+- If the current branch is not `main`, push the fix branch and open a PR
+  against `main` instead of pushing directly — but the default branch in
+  this repo is `main`, and committing on `main` and pushing is the
+  expected path.
+
+## Summary format after each fix
+
+After pushing, the agent's short summary to the user should include:
+
+- What was broken
+- Why it failed
+- Why this fix works
+- Commit SHA pushed to `buckeye7066/GrantFlow@main`

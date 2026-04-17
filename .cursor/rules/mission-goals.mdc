@@ -1,0 +1,75 @@
+---
+description: GrantFlow and Anya mission goals — every code change must align with these
+globs:
+  - "backend/**"
+  - "src/**"
+  - "scripts/**"
+  - "tests/**"
+alwaysApply: true
+---
+
+# GrantFlow Mission Goals
+
+Every code change, feature addition, bug fix, and architectural decision in this
+repository must work toward these goals. If a change conflicts with a goal,
+the change must be reworked — not the goal.
+
+The canonical source of truth is `backend/config/missionGoals.js`. These rules
+are a readable summary for AI agents working in this codebase.
+
+## What GrantFlow Does
+
+GrantFlow helps users find real funding sources that truly match their actual
+needs. It uses profile information to understand who the person, family, student,
+business, ministry, nonprofit, school, church, or organization is, what they
+need, where they are located, and what kinds of help they may qualify for.
+
+**In plain terms:** GrantFlow should understand the profile, search
+intelligently, find real relevant funding sources, and help the user pursue them.
+
+## GrantFlow Goals (10)
+
+1. **Real funding only** — Find real funding opportunities, not placeholders, not dead links, and not generic junk.
+2. **Match to actual needs** — Match opportunities to the specific needs of the profile in a meaningful way.
+3. **Use the full profile** — Use the full profile, not just a few fields, when deciding what to search for and what to recommend.
+4. **Support all user types** — Support individuals, families, students, churches, nonprofits, schools, volunteer fire departments, businesses, ministries, and others.
+5. **Evolve with new needs** — Let the system evolve as new profile types, needs, and funding categories appear.
+6. **Intelligent crawling** — Use crawlers and matching logic to bring in useful opportunities from local, state, national, and relevant directory sources.
+7. **Clear discovery UI** — Show opportunities clearly so users can discover, review, and act on them.
+8. **Avoid zero results** — Avoid zero-result experiences when relevant funding likely exists. Recall over suppression.
+9. **Explainable and testable** — Keep the system explainable, reliable, and testable so users can trust why a result appeared.
+10. **Discovery to action** — Help users move from discovery to action by tracking opportunities, applications, deadlines, progress, and documents.
+
+## What Anya Does
+
+Anya helps users understand, navigate, and make use of GrantFlow. She guides
+users through the program, explains what they are seeing, helps them understand
+their profiles, helps them know what to do next, and makes the system easier
+to use.
+
+**In plain terms:** Anya's goal is to help people understand GrantFlow, use it
+wisely, and know what to do next.
+
+## Anya Goals (8)
+
+1. **Explain GrantFlow** — Help users understand how GrantFlow works.
+2. **Plain language** — Explain every part of the app in plain language, no jargon.
+3. **Guide through workflows** — Walk users through profiles, funding results, documents, steps, and workflows.
+4. **Next right action** — Every response should leave the user knowing what to do next.
+5. **Accessible to everyone** — Never assume technical literacy.
+6. **Grounded in real data** — Guidance must be based on what is actually in the program, not generic AI responses.
+7. **Onboarding support** — Support new users and orient returning users.
+8. **Improve confidence** — Users should feel more capable after interacting with Anya, not more confused.
+
+## Rules for Code Changes
+
+- **Ship path / credit discipline:** Before pushing or merging to `main`, run `npm run check:prepush` (lint + typecheck + `vite build`, same bundle step as Vercel). Do not replace or truncate shared modules (e.g. `src/api/*.js`) without `grep` for every import and preserving existing exports.
+- **Zero results is a failure state.** If total_found > 0 and included === 0, log why, relax constraints, re-score.
+- **Profile fields increase score, not eliminate results.** Missing/null fields default to neutral, not exclusionary.
+- **Geographic matching expands outward:** city → county → state → national.
+- **Hard boolean filters (AND logic) are forbidden** unless the funding source is explicitly exclusive.
+- **Directory-style resources must always survive filtering** unless explicitly excluded.
+- **Every INSERT into a table with a unique constraint must use ON CONFLICT.**
+- **Every database query result on Postgres must handle the { rows } wrapper.**
+- **Every pool client must be released exactly once.**
+- **All PostgresTx operations must be awaited** — synchronous-looking calls on PostgresTx return Promises.

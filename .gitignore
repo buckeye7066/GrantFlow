@@ -35,6 +35,13 @@ Desktop.ini
 .vscode/
 .idea/
 .cursor/
+# Keep shared Cursor rules in-repo so agent behavior (mission goals,
+# auto-push-fixes, etc.) persists across clones and contributors.
+!.cursor/
+!.cursor/rules/
+!.cursor/rules/*.mdc
+.cursor/*
+!.cursor/rules/
 *.suo
 *.user
 
