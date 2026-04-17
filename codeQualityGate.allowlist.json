@@ -3,7 +3,6 @@
     "backend/server.js",
     "backend/start.js",
 
-    "backend/middleware/audit.js",
     "backend/middleware/auth.js",
     "backend/middleware/entitlements.js",
     "backend/middleware/errorHandler.js",
@@ -93,7 +92,6 @@
     "backend/services/realFundingCrawler.js",
     "backend/services/realLocationFundingCrawler.js",
 
-    "backend/services/sources/grantsGov.js",
     "backend/services/sources/httpClient.js",
     "backend/services/sources/ingestionService.js",
     "backend/services/sources/usaSpending.js"

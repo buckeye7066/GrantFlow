@@ -24,13 +24,16 @@ test('grant_only does not exclude matching-funds grants (but still excludes loan
     const base = `http://127.0.0.1:${port}`
 
     // 1) Create a match-required grant (should remain visible in grant_only).
+    // Title must not match placeholder patterns (/^(test|sample|...)/i) and
+    // application_url is required, otherwise filterActionableOpportunities strips it.
     const matchOpp = await apiFetch(`${base}/api/opportunities`, {
       method: 'POST',
       token: adminToken,
       body: {
-        title: 'Test Match Required Grant',
+        title: 'Community Resilience Matching Grant Program',
         sponsor: 'Unit Test Sponsor',
         source: 'unit_test',
+        application_url: 'https://example.test/match-grant',
         opportunity_type: 'grant',
         requires_match: true,
         match_percentage: 25,
@@ -50,9 +53,10 @@ test('grant_only does not exclude matching-funds grants (but still excludes loan
       method: 'POST',
       token: adminToken,
       body: {
-        title: 'Test Loan Program',
+        title: 'Small Business Revolving Loan Program',
         sponsor: 'Unit Test Sponsor',
         source: 'unit_test',
+        application_url: 'https://example.test/loan-program',
         opportunity_type: 'loan',
         is_active: true,
         is_national: true,
