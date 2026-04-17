@@ -387,7 +387,13 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, pref
   // quick actions when the user object carried the camelCase flag from a
   // fresh `/api/auth/me` bootstrap — violating Anya goals 4 and 8.
   const isAdmin = normalizeUserAdmin(user)
-  const effectiveProfileId = profileId ?? null
+  // Filter out the UI-only admin sentinel ('__admin__') — it is NOT a real
+  // profile UUID. Leaking it into the Anya bootstrap causes createSession to
+  // fall back to a profile-less session while `findExisting` below keeps
+  // looking for `profile_id === '__admin__'`, which never matches → infinite
+  // createSession loop → `isLoading` stays true → the Admin Tools button
+  // stays disabled (Anya goals 4, 6, 8).
+  const effectiveProfileId = profileId && profileId !== '__admin__' ? profileId : null
   const [isUnavailable, setIsUnavailable] = useState(false)
   const queryClient = useQueryClient()
   const log = useMemo(() => createLogger("AnyaChat"), [])
@@ -752,7 +758,14 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, pref
     return () => {
       isMounted = false
     }
-  }, [effectiveProfileId, isAdmin, refreshMessages, refreshTasks])
+    // NOTE: `refreshMessages` / `refreshTasks` are intentionally excluded from
+    // the dependency list. Both are useCallbacks that depend on `sessionId`;
+    // including them would cause a feedback loop — bootstrap creates a session
+    // → `sessionId` changes → callbacks get new identity → bootstrap re-fires
+    // → creates another session → `isLoading` stays true → the Admin Tools
+    // button stays disabled forever (Anya goals 4, 6, 8). Bootstrap only needs
+    // to run when the profile identity or admin-ness changes.
+  }, [effectiveProfileId, isAdmin])
 
   useEffect(() => {
     let isMounted = true
