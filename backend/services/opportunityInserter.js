@@ -630,7 +630,7 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
       @eligibility_signals,
       @verification_status
     )
-    ON CONFLICT(source, source_id) DO UPDATE SET
+    ON CONFLICT (source, source_id) WHERE source IS NOT NULL AND source_id IS NOT NULL DO UPDATE SET
       title = COALESCE(excluded.title, funding_opportunities.title),
       sponsor = COALESCE(excluded.sponsor, funding_opportunities.sponsor),
       description = COALESCE(excluded.description, funding_opportunities.description),

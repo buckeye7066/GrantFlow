@@ -220,6 +220,29 @@ export async function runHealthCheck(db) {
             ? [group.title, group.sponsor, group.state, keepId]
             : [group.title, group.sponsor, group.sponsor, group.state, group.state, keepId]))
         if (toRemove.length === 0) continue
+
+        // Reassign dependent grants to the kept opportunity BEFORE deleting dupes,
+        // otherwise the FK grants_funding_opportunity_id_fkey blocks the DELETE.
+        // Guarded by IN (...) so we only touch rows pointing at ids we're about to remove.
+        const removeIds = toRemove.map((r) => r.id)
+        const placeholders = removeIds.map(() => '?').join(', ')
+        try {
+          await db
+            .prepare(
+              `UPDATE grants SET funding_opportunity_id = ?
+               WHERE funding_opportunity_id IN (${placeholders})`,
+            )
+            .run(keepId, ...removeIds)
+        } catch (reassignErr) {
+          // If reassignment itself fails, skip the delete for this group rather
+          // than attempt a DELETE that will surely fail on the same FK.
+          console.warn('[AnyaHealth] dedup reassign grants failed; skipping group', {
+            title: group.title,
+            error: reassignErr?.message,
+          })
+          continue
+        }
+
         const result = await db
           .prepare(
             `DELETE FROM funding_opportunities
