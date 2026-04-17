@@ -3449,8 +3449,19 @@ router.post('/ingest', async (req, res) => {
   try {
     console.info('[admin/ingest] Starting manual ingestion...');
 
-    // Import connectors dynamically
-    const { fetchSamGov: fetchGrantsGov } = await import('../services/sources/samGov.js');
+    // Import connectors dynamically.
+    //
+    // HISTORICAL BUG: this block used to import `fetchSamGov` from
+    // services/sources/samGov.js and alias it as `fetchGrantsGov`. That
+    // means "grants.gov" in the admin ingest UI was actually hitting SAM.gov,
+    // which requires SAM_GOV_API_KEY and silently returned 0 rows whenever
+    // the key was missing. The canonical grants.gov v2/search2 client at
+    // backend/services/connectors/grantsGovConnector.js needs no key and
+    // returns real posted opportunities. Wire that in instead and keep
+    // SAM.gov as its own optional source.
+    const { searchOpportunities: fetchGrantsGov } = await import(
+      '../services/connectors/grantsGovConnector.js'
+    );
     const { fetchUSASpending } = await import('../services/sources/usaSpending.js');
     const { fetchOpportunities: fetchNihReporter } = await import(
       '../src/integrations/nihReporter.js'
@@ -3459,10 +3470,10 @@ router.post('/ingest', async (req, res) => {
 
     const results = [];
 
-    // Ingest from Grants.gov (SAM.gov under the hood)
+    // Ingest from Grants.gov (real public v2/search2 endpoint — no key required).
     try {
       console.info('[admin/ingest] Fetching from Grants.gov...');
-      const { opportunities: grantsGovOpps } = await fetchGrantsGov({ limit: 100, offset: 0 });
+      const grantsGovOpps = await fetchGrantsGov({ rows: 100 });
       const grantsGovResult = await ingestOpportunities(req.db, grantsGovOpps, 'grants.gov');
       results.push({ source: 'grants.gov', ...grantsGovResult });
     } catch (error) {
