@@ -366,9 +366,22 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
       const profileSectionsForDecision = profileContext?.sections ?? null
       const profileNormForDecision = normalizeProfile(rawProfileForDecision, profileSectionsForDecision, profileContext?.signals ?? null)
 
+      // Directory-style / general funding resources must always survive
+      // filtering unless explicitly excluded (project rule).
+      const isDirectoryRecord = (opp) => Boolean(
+        opp?.is_directory_resource ||
+        String(opp?.source || '').startsWith('directory') ||
+        String(opp?.source || '').includes('local_directory') ||
+        String(opp?.record_origin || '').startsWith('directory') ||
+        String(opp?.type || '').toUpperCase() === 'DIRECTORY' ||
+        String(opp?.opportunity_type || '').toUpperCase() === 'DIRECTORY',
+      )
+
+      const rejectStats = { junk: 0, reject: 0, rejectDirectoryPreserved: 0 }
       const allScored = candidates
                      .map((opp) => {
-                                  if (isJunkOpportunity(opp, filterHints)) return null
+                                  const isDirectory = isDirectoryRecord(opp)
+                                  if (isJunkOpportunity(opp, filterHints) && !isDirectory) { rejectStats.junk++; return null }
 
                                   // Run v2.0.0 engine: filter hard ineligibles (REJECT) before surfacing.
                                   // Pass sections + signals so scoreOpportunity can build keyword/facet
@@ -377,7 +390,13 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
                                     profileSections: profileSectionsForDecision,
                                     signals: profileContext?.signals ?? null,
                                   })
-                                  if (decision.decision === 'REJECT') return null
+                                  if (decision.decision === 'REJECT') {
+                                    if (!isDirectory) { rejectStats.reject++; return null }
+                                    rejectStats.rejectDirectoryPreserved++
+                                    // Downgrade directory to REVIEW so it still surfaces.
+                                    decision.decision = 'REVIEW'
+                                    decision.explanation = (decision.explanation || '') + ' (directory preserved as REVIEW)'
+                                  }
 
                                return {
                                            ...opp,
@@ -389,6 +408,9 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
                                }
                      })
                      .filter((opp) => opp !== null)
+      if (rejectStats.junk || rejectStats.reject || rejectStats.rejectDirectoryPreserved) {
+        console.info(`[matching] candidates=${candidates.length} scored=${allScored.length} drops=${JSON.stringify(rejectStats)}`)
+      }
 
       // Sort by user-requested criteria
       if (sortBy === 'recently_added') {
@@ -415,21 +437,28 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
       let effectiveMinScore = minScore
       let relaxedReason = null
       if (!strictMin && scored.length === 0 && allScored.length > 0) {
-        const fallbackThresholds = [30, 15]
+        const fallbackThresholds = [30, 15, 0]
         for (const threshold of fallbackThresholds) {
           scored = allScored.filter((opp) => (opp.match_score ?? 0) >= threshold)
           if (scored.length > 0) {
             effectiveMinScore = threshold
-            relaxedReason = 'No strong matches found. These results are lower-confidence. Complete your profile (location, needs, organization type) to improve match quality.'
+            relaxedReason = threshold > 0
+              ? 'No strong matches found. These results are lower-confidence. Complete your profile (location, needs, organization type) to improve match quality.'
+              : 'Showing best-available matches (all scored below default thresholds). Complete your profile for better matches.'
             console.log(`[matching] Zero results at min_score=${minScore}; relaxed to ${threshold} (${scored.length} results)`)
             break
           }
         }
         if (scored.length === 0) {
-          // Instead of showing score-0 junk, return empty with guidance
-          relaxedReason = 'No matching funding found at any threshold. Please complete your profile with location, specific needs, and organization type to find relevant opportunities.'
-          effectiveMinScore = minScore
-          console.log(`[matching] All thresholds exhausted; returning 0 results with profile guidance (${allScored.length} scored candidates all below min threshold)`)
+          // LAST RESORT: still take the top-N by score — zero results is a
+          // failure state, not an acceptable outcome (project rule).
+          scored = allScored
+            .slice()
+            .sort((a, b) => (b.match_score ?? 0) - (a.match_score ?? 0))
+            .slice(0, Math.min(20, allScored.length))
+          effectiveMinScore = 0
+          relaxedReason = 'Showing best-available funding sources. Complete your profile with location, specific needs, and organization type to improve match quality.'
+          console.log(`[matching] LAST-RESORT fallback: returning top ${scored.length} of ${allScored.length} scored candidates`)
         }
       } else if (strictMin && scored.length === 0 && allScored.length > 0) {
         const rawScores = allScored

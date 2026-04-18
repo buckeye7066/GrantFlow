@@ -1647,7 +1647,11 @@ export function makeDecision(score, profile, opportunity, normalizedProfile = nu
     return { decision: 'REJECT', explanation: `${label} opportunity is not direct financial assistance for ${profileLabel}.`, reasons }
   }
 
-  // Geographic hard mismatch — state-specific opportunity for a profile in a different state
+  // Geographic state mismatch — per project rules, geography must EXPAND OUTWARD
+  // (city → county → state → national) and must NOT hard-eliminate opportunities.
+  // Only hard-REJECT when the opportunity EXPLICITLY declares state exclusivity
+  // (e.g. "Ohio residents only"). Otherwise, downgrade to REVIEW so the user sees
+  // the opportunity with a clear explanation.
   const profState = String(prof.state || '').trim()
   const oppStateRaw = String(opp.state || '').trim()
   const oppIsNational = Boolean(opp.is_national) || oppStateRaw.toLowerCase() === 'nationwide'
@@ -1655,8 +1659,14 @@ export function makeDecision(score, profile, opportunity, normalizedProfile = nu
     const pNorm = normalizeState(profState)
     const oNorm = normalizeState(oppStateRaw)
     if (pNorm && oNorm && pNorm !== oNorm) {
-      reasons.push(`Geographic mismatch — opportunity is in ${oppStateRaw}, profile is in ${profState}`)
-      return { decision: 'REJECT', explanation: `Geographic mismatch: opportunity is restricted to ${oppStateRaw}.`, reasons }
+      const RE_STATE_EXCLUSIVE = /\b(residents?\s+only|must\s+be\s+a?\s*resident|must\s+reside\s+in|limited\s+to\s+residents)\b/i
+      const isExplicitlyExclusive = RE_STATE_EXCLUSIVE.test(oppText) || opp.state_residents_only === true
+      if (isExplicitlyExclusive) {
+        reasons.push(`Geographic mismatch — ${oppStateRaw} residents only`)
+        return { decision: 'REJECT', explanation: `Geographic mismatch: opportunity is restricted to ${oppStateRaw} residents only.`, reasons }
+      }
+      reasons.push(`Geographic note — opportunity is in ${oppStateRaw}, profile is in ${profState} (may still be accessible)`)
+      return { decision: 'REVIEW', explanation: `Opportunity is based in ${oppStateRaw} but may be accessible from ${profState}. Confirm eligibility on the program page.`, reasons }
     }
   }
 

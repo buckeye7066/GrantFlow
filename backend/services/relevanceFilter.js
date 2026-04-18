@@ -74,22 +74,57 @@ function buildOppText(opportunity) {
  * Apply hard disqualification rules to a single opportunity.
  * Rules are defined in relevanceFilterRules.js — add new rules there.
  *
- * @param {object} opportunity  - Opportunity row (title, description, keywords, state, sponsor, …)
- * @param {object} profileData  - Extracted profile fields (see extractProfileData helper below)
- * @returns {{ pass: boolean, reason?: string, ruleId?: string }}
+ * Per project rules ("Population / eligibility mismatches must reduce score,
+ * not discard results" and "Hard boolean filters must be avoided unless the
+ * funding source is explicitly exclusive"):
+ *   - Rules flagged `hard: true` still return { pass: false } and REJECT.
+ *   - Soft rules (default) return { pass: true, softFail: true, penalty }
+ *     so callers can reduce the score instead of discarding the opportunity.
+ *   - Directory / general funding resources ALWAYS pass (they must survive
+ *     filtering unless explicitly excluded).
+ *
+ * The optional `opts.mode` lets legacy callers keep strict behavior:
+ *   - 'strict' (default): soft rules still fail (backward-compatible)
+ *   - 'soft': only truly exclusive (hard:true) rules fail
+ *
+ * @param {object} opportunity  - Opportunity row
+ * @param {object} profileData  - Extracted profile fields
+ * @param {object} [opts]
+ * @param {'strict'|'soft'} [opts.mode='strict']
+ * @returns {{ pass: boolean, reason?: string, ruleId?: string, softFail?: boolean, penalty?: number }}
  */
-export function applyRelevanceFilter(opportunity, profileData) {
+export function applyRelevanceFilter(opportunity, profileData, opts = {}) {
   if (!opportunity || !profileData) return { pass: true }
 
+  const mode = opts.mode || 'strict'
   const oppText = buildOppText(opportunity)
+
+  // Directory-style / general funding resources always survive — the project
+  // explicitly requires this. Callers can still apply URL validation.
+  const isDirectoryResource = Boolean(
+    opportunity.is_directory_resource ||
+    String(opportunity.source || '').startsWith('directory') ||
+    String(opportunity.source || '').includes('local_directory') ||
+    String(opportunity.record_origin || '').startsWith('directory') ||
+    String(opportunity.type || '').toUpperCase() === 'DIRECTORY',
+  )
+  if (isDirectoryResource) return { pass: true, directory: true }
 
   for (const rule of RELEVANCE_RULES) {
     const patternMatches = rule.oppPattern == null || rule.oppPattern.test(oppText)
-    if (patternMatches && rule.profileCheck(profileData, oppText, opportunity)) {
-      const reason =
-        typeof rule.reason === 'function' ? rule.reason(profileData, opportunity) : rule.reason
+    if (!(patternMatches && rule.profileCheck(profileData, oppText, opportunity))) continue
+
+    const reason =
+      typeof rule.reason === 'function' ? rule.reason(profileData, opportunity) : rule.reason
+
+    // Rules explicitly marked hard:true, or legacy strict mode, reject
+    if (rule.hard === true || mode === 'strict') {
       return { pass: false, reason, ruleId: rule.id }
     }
+
+    // Soft mode: allow through but signal a penalty so the caller can
+    // adjust the match score rather than discarding the opportunity.
+    return { pass: true, softFail: true, reason, ruleId: rule.id, penalty: rule.penalty ?? 25 }
   }
 
   return { pass: true }

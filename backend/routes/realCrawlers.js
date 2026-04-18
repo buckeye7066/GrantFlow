@@ -266,15 +266,29 @@ router.post('/run', ensureAuth, async (req, res) => {
     const nearbyOpps = await queryNearbyOpportunities(db, result.analysis, curatedTitles, profileContext, 30);
     const allMapped = filterActionableOpportunities(filterActionableOpportunities([...mapped, ...nearbyOpps]));
 
+    const _isDirectoryOpp = (opp) => (
+      Boolean(opp.is_directory_resource) ||
+      String(opp.source || '').startsWith('directory') ||
+      String(opp.source || '').includes('local_directory') ||
+      String(opp.record_origin || '').startsWith('directory')
+    )
+
+    const dropCounts = { belowMinScore: 0, relevance: 0, relevanceByRule: {} }
+
     let filtered = allMapped
       .filter((opp) => {
-        const isDbDirectory = String(opp.source || '').startsWith('directory') ||
-          String(opp.record_origin || '').startsWith('directory')
+        const isDbDirectory = _isDirectoryOpp(opp)
         if (!isDbDirectory) {
-          if (typeof opp.match_score !== 'number' || opp.match_score < min_match_score) return false
+          if (typeof opp.match_score !== 'number' || opp.match_score < min_match_score) {
+            dropCounts.belowMinScore++
+            return false
+          }
         }
         const relevance = applyRelevanceFilter(opp, profileData)
         if (!relevance.pass && !isDbDirectory) {
+          dropCounts.relevance++
+          dropCounts.relevanceByRule[relevance.ruleId || 'unknown'] =
+            (dropCounts.relevanceByRule[relevance.ruleId || 'unknown'] || 0) + 1
           console.info(`[RealCrawlers] Filtered out "${opp.title}" — ${relevance.reason}`)
           return false
         }
@@ -285,18 +299,36 @@ router.post('/run', ensureAuth, async (req, res) => {
 
     let thresholdFallbackMessage = null
     if (!strictMinScore && filtered.length === 0 && allMapped.length > 0) {
-      filtered = allMapped
+      // STAGE 1: relax min_match_score AND soften non-hard relevance rules
+      // (per project rule: "Population / eligibility mismatches must reduce
+      // score, not discard results"). Only hard-exclusive rules (women-only,
+      // entity-exclusive, crowdfunding, bad URL) still reject in soft mode.
+      let relaxed = allMapped
         .filter((opp) => {
-          const isDir = String(opp.source || '').startsWith('directory') ||
-            String(opp.record_origin || '').startsWith('directory')
-          if (!isDir && (typeof opp.match_score !== 'number' || opp.match_score < min_match_score)) return false
-          const relevance = applyRelevanceFilter(opp, profileData)
+          const isDir = _isDirectoryOpp(opp)
+          const relevance = applyRelevanceFilter(opp, profileData, { mode: 'soft' })
           return relevance.pass || isDir
         })
         .sort((a, b) => (b.match_score ?? 0) - (a.match_score ?? 0))
         .slice(0, 50)
-      if (filtered.length > 0) {
-        thresholdFallbackMessage = `No results met initial filters. Showing best available matches above ${min_match_score}%.`
+
+      if (relaxed.length > 0) {
+        filtered = relaxed
+        thresholdFallbackMessage = `No results met initial filters. Showing best available matches (relaxed below ${min_match_score}%).`
+      } else {
+        // STAGE 2: last-resort — drop relevance filter entirely, keep only URL-actionable items.
+        // Directories / general funding resources must always survive (user rule).
+        filtered = allMapped
+          .filter((opp) => {
+            const url = opp.url || opp.application_url || opp.source_url || ''
+            return typeof url === 'string' && url.startsWith('http')
+          })
+          .sort((a, b) => (b.match_score ?? 0) - (a.match_score ?? 0))
+          .slice(0, 25)
+        if (filtered.length > 0) {
+          thresholdFallbackMessage = `Showing best-available funding sources. Your profile did not match a strict filter — complete more profile fields to improve matches.`
+          console.info(`[RealCrawlers] STAGE-2 relax: ${allMapped.length} candidates → ${filtered.length} returned (dropped relevance rules: ${JSON.stringify(dropCounts.relevanceByRule)})`)
+        }
       }
     } else if (strictMinScore && filtered.length === 0 && allMapped.length > 0) {
       // Compute score distribution so frontend can suggest a better threshold
@@ -325,19 +357,17 @@ router.post('/run', ensureAuth, async (req, res) => {
     // Policy enforcement: remove loans, matching-funds, no-URL, and hard-REJECT items.
     // Directory resources survive REJECT unless they are themselves loans/matching-funds.
     const prePolicyCount = filtered.length
+    let policyDrops = { noUrl: 0, loan: 0, requiresMatch: 0, reject: 0 }
     filtered = filtered.filter(opp => {
       const effectiveUrl = opp.url || opp.application_url || opp.source_url || ''
-      if (!effectiveUrl.startsWith('http')) return false
+      if (!effectiveUrl.startsWith('http')) { policyDrops.noUrl++; return false }
 
       const oppType = String(opp.opportunity_type || '').toLowerCase()
-      if (['loan', 'loan_program', 'microloan'].includes(oppType) || opp.is_loan) return false
-      if (opp.requires_match) return false
+      if (['loan', 'loan_program', 'microloan'].includes(oppType) || opp.is_loan) { policyDrops.loan++; return false }
+      if (opp.requires_match) { policyDrops.requiresMatch++; return false }
 
-      const isDirectoryResource = opp.is_directory_resource ||
-        String(opp.source || '').startsWith('directory') ||
-        String(opp.source || '').includes('local_directory') ||
-        String(opp.record_origin || '').startsWith('directory')
-      if (opp.match_decision === 'REJECT' && !isDirectoryResource) return false
+      const isDirectoryResource = _isDirectoryOpp(opp)
+      if (opp.match_decision === 'REJECT' && !isDirectoryResource) { policyDrops.reject++; return false }
       if (opp.match_decision === 'REJECT' && isDirectoryResource) {
         opp.match_decision = 'REVIEW'
         opp.decision = 'REVIEW'
@@ -345,21 +375,51 @@ router.post('/run', ensureAuth, async (req, res) => {
       return true
     })
     if (prePolicyCount > 0 && filtered.length < prePolicyCount) {
-      console.info(`[RealCrawlers] Policy filter: ${prePolicyCount} → ${filtered.length} (removed ${prePolicyCount - filtered.length} REJECT/no-URL)`)
+      console.info(`[RealCrawlers] Policy filter: ${prePolicyCount} → ${filtered.length} (drops=${JSON.stringify(policyDrops)})`)
+    }
+
+    // GUARANTEE: if UI will show "Found N", backend must return >= 1 included item
+    // whenever allMapped > 0 (user rule). Only empty when truly 0 candidates exist
+    // or min_match_score is set with strict mode.
+    if (filtered.length === 0 && allMapped.length > 0 && !strictMinScore) {
+      const lastResort = allMapped
+        .filter((opp) => {
+          const url = opp.url || opp.application_url || opp.source_url || ''
+          if (!(typeof url === 'string' && url.startsWith('http'))) return false
+          const oppType = String(opp.opportunity_type || '').toLowerCase()
+          if (['loan', 'loan_program', 'microloan'].includes(oppType) || opp.is_loan) return false
+          if (opp.requires_match) return false
+          return true
+        })
+        .sort((a, b) => (b.match_score ?? 0) - (a.match_score ?? 0))
+        .slice(0, 15)
+        .map(opp => ({ ...opp, match_decision: 'REVIEW', decision: 'REVIEW', match_decision_explanation: 'Best-effort match (all strict filters relaxed).' }))
+      if (lastResort.length > 0) {
+        filtered = lastResort
+        thresholdFallbackMessage = thresholdFallbackMessage ||
+          `Showing best-available funding sources (strict matching relaxed).`
+        console.warn(`[RealCrawlers] LAST-RESORT fallback engaged: ${allMapped.length} candidates → ${filtered.length} returned. Drops=${JSON.stringify({...dropCounts, policy: policyDrops})}`)
+      }
     }
 
     const duration = Date.now() - startTime
 
     console.info(
-      `[RealCrawlers] ${crawler_type}: ${result.results.length} curated + ${nearbyOpps.length} nearby → ${filtered.length} returned (min_score=${min_match_score}) in ${duration}ms`,
+      `[RealCrawlers] ${crawler_type}: curated=${result.results.length} nearby=${nearbyOpps.length} allMapped=${allMapped.length} → returned=${filtered.length} (min_score=${min_match_score}, strict=${strictMinScore}) in ${duration}ms`,
     )
 
     res.json({
       success: true,
       crawler_type,
       count: filtered.length,
-      total_found: result.results.length,
+      // total_found reflects candidates entering the filter pipeline (post-map+merge)
+      // so the 1:1 invariant holds: total_found === allMapped.length, and
+      // count is what passed filters. Legacy `curated_count` preserves old value.
+      total_found: allMapped.length,
+      curated_count: result.results.length,
+      nearby_count: nearbyOpps.length,
       filtered_count: filtered.length,
+      drop_counts: dropCounts,
       min_match_score,
       duration,
       opportunities: filtered,

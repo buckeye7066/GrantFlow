@@ -266,6 +266,7 @@ export const RELEVANCE_RULES = [
     id: 'entity_org_individual_only',
     category: 'entity_type',
     description: 'Individual-benefit programs that organizations cannot apply for',
+    hard: true, // legally exclusive: organizations literally cannot apply for SNAP/SSI/etc.
     oppPattern: /\b(snap|food stamps|tanf|wic|ssdi|ssi\b|medicaid enrollment|personal food bank|section 8|housing voucher|individual disability benefits?|individual benefit)\b/i,
     profileCheck: (pd) => (pd.primary_type || '').toLowerCase() === 'organization',
     reason: 'Entity type mismatch: individual-only program for organization profile',
@@ -276,6 +277,7 @@ export const RELEVANCE_RULES = [
     id: 'entity_individual_org_only',
     category: 'entity_type',
     description: 'Organization-only programs that individuals cannot apply for',
+    hard: true, // legally exclusive: individuals cannot provide 501c3 / EIN
     oppPattern: /\b(501\(c\)\(3\)|501c3|ein required|duns number|uei required|organizational capacity|nonprofit only|must be a nonprofit|must have an ein)\b/i,
     profileCheck: (pd) => (pd.primary_type || '').toLowerCase() === 'individual',
     reason: 'Entity type mismatch: organization-only program for individual profile',
@@ -286,6 +288,7 @@ export const RELEVANCE_RULES = [
     id: 'demographic_women_only',
     category: 'demographic',
     description: 'Women-only grant programs',
+    hard: true, // explicit exclusivity
     oppPattern: /\b(women only|for women|amber grant for women|female entrepreneurs only|women.{0,10}only)\b/i,
     profileCheck: (pd) => {
       const g = (pd.gender || '').toLowerCase()
@@ -658,6 +661,7 @@ export const RELEVANCE_RULES = [
     id: 'content_fundraising_crowdfunding',
     category: 'content_type',
     description: 'Crowdfunding and fundraising asks are not award opportunities',
+    hard: true, // content type exclusivity
     oppPattern: /\b(donate to|gofundme|kickstarter|indiegogo)\b/i,
     profileCheck: () => true,
     reason: 'Content type mismatch: fundraising/crowdfunding ask, not an award opportunity',
@@ -685,6 +689,7 @@ export const RELEVANCE_RULES = [
         id: 'no_actionable_url',
         category: 'data_quality',
         description: 'Opportunity has no application URL and no source URL — not actionable',
+        hard: true, // data quality — always reject
         oppPattern: null,
         profileCheck: (pd, oppText, opp) => {
                 const url = opp?.application_url || opp?.source_url || opp?.url || ''
