@@ -546,6 +546,13 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
     signal_tags: JSON.stringify(ensureArray(opportunity.signal_tags)),
     crawler_version: opportunity.crawler_version ?? null,
   }
+  const fundingCategory = classifyFundingCategory(opportunity)
+  record.funding_category = fundingCategory ?? null
+  record.usable_for_housing = toDbBoolean(db, deriveUsableForHousing(opportunity, fundingCategory))
+  record.refund_potential = toDbBoolean(db, deriveRefundPotential(opportunity, fundingCategory))
+  const eligibilitySignals = extractEligibilitySignals(opportunity)
+  record.eligibility_signals = eligibilitySignals ? JSON.stringify(eligibilitySignals) : null
+  record.verification_status = opportunity.verification_status ?? null
 
   const insert = db.prepare(`
     INSERT INTO funding_opportunities (
@@ -732,11 +739,11 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
     signal_tags: record.signal_tags,
     crawler_version: record.crawler_version,
     funding_source_type: record.funding_source_type ?? deriveFundingSourceType(record.record_origin, source),
-    funding_category: record.funding_category,
-    usable_for_housing: record.usable_for_housing,
-    refund_potential: record.refund_potential,
-    eligibility_signals: record.eligibility_signals,
-    verification_status: record.verification_status,
+    funding_category: record.funding_category ?? null,
+    usable_for_housing: record.usable_for_housing ?? null,
+    refund_potential: record.refund_potential ?? null,
+    eligibility_signals: record.eligibility_signals ?? null,
+    verification_status: record.verification_status ?? null,
   })
 
   return { id, inserted: true, skipped: false }
