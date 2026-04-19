@@ -39,6 +39,7 @@ import { runHealthCheck, getLastHealthStatus } from '../services/anyaHealthServi
 import { runAutoRepair } from '../services/anyaAutoRepairService.js'
 import { runRegionalPurge, getPurgeSummary, getPurgeEvents } from '../services/regionalPurgeService.js'
 import { restoreProfileSectionsFromLinkedOrganizations } from '../services/profileOrganizationSync.js'
+import { runAutonomousCodeCrawl } from '../services/anyaAutonomousCrawler.js'
 
 const router = express.Router();
 
@@ -5309,6 +5310,70 @@ router.post('/crawler-jobs/resolve-failures', async (req, res) => {
   } catch (err) {
     console.error('[admin/resolve-failures] Error:', err)
     res.status(500).json({ success: false, error: err.message })
+  }
+})
+
+/**
+ * POST /api/admin/anya/runAutonomous
+ *
+ * Direct admin entrypoint for the autonomous code audit engine. Equivalent to
+ * POST /api/anya/autonomous/code, but returns the {id, tool, output} envelope
+ * shape used by the Anya tool adapter. Protected by the router-level
+ * ensureAuth + ensureAdmin guards above.
+ *
+ * Body (all optional):
+ *   { directory, pattern, dry_run, max_iterations, max_file_changes,
+ *     fixConsoleLog, fixEmptyCatch, fixTodos }
+ *
+ * Writes require BOTH dry_run === false AND env ANYA_AUTONOMOUS_WRITE_CHANGES
+ * === 'true' (enforced inside runAutonomousCodeCrawl).
+ */
+router.post('/anya/runAutonomous', async (req, res) => {
+  const {
+    directory = '',
+    pattern = null,
+    dry_run = true,
+    max_iterations,
+    max_file_changes,
+    fixConsoleLog,
+    fixEmptyCatch,
+    fixTodos,
+  } = req.body || {}
+
+  const options = {
+    directory,
+    pattern,
+    dryRun: Boolean(dry_run),
+    maxIterations: Number.isFinite(Number(max_iterations)) ? Number(max_iterations) : undefined,
+    maxFileChanges: Number.isFinite(Number(max_file_changes)) ? Number(max_file_changes) : undefined,
+  }
+  if (typeof fixConsoleLog === 'boolean') options.fixConsoleLog = fixConsoleLog
+  if (typeof fixEmptyCatch === 'boolean') options.fixEmptyCatch = fixEmptyCatch
+  if (typeof fixTodos === 'boolean') options.fixTodos = fixTodos
+
+  const context = {
+    db: req.db,
+    user: req.ctx?.user ?? req.user ?? null,
+    req,
+  }
+
+  try {
+    const output = await runAutonomousCodeCrawl(options, context)
+    return res.status(200).json({
+      id: crypto.randomUUID(),
+      tool: 'admin.anya.runAutonomous',
+      output,
+    })
+  } catch (err) {
+    console.error('[admin/anya/runAutonomous] Error:', err)
+    return res.status(500).json({
+      id: crypto.randomUUID(),
+      tool: 'admin.anya.runAutonomous',
+      output: {
+        success: false,
+        error: err?.message || String(err),
+      },
+    })
   }
 })
 
