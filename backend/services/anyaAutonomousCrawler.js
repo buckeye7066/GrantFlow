@@ -10,6 +10,43 @@ const REPO_ROOT = path.resolve(process.cwd())
 // Self-contained audit engine
 // No fabricated metrics: every counter below is tied to a real file-system
 // action or a real regex match.  Never returns "dry run" without explanation.
+//
+// Metric contract (honest, non-overlapping meanings):
+//   files_discovered    = # file *entries* walk() encountered (pre-filter)
+//   files_scanned       = # files that matched the text-file filter and were
+//                         read + byte-scanned into memory
+//   files_analyzed      = # files whose content was handed to
+//                         analyzeFileContent() (equal to files_scanned here
+//                         unless a read failed)
+//   files_with_findings = # analyzed files that produced >= 1 issue
+//   findings_found      = sum(fileIssues.length) across analyzed files
+//                         -- THIS IS THE CANONICAL ISSUE COUNT
+//   files_modified      = # files that received at least one applied fix
+//                         (including dry-run planned fixes)
+//   issues_fixed        = sum(modification.changes_count) across modifications
+//
+//   dry_run_requested     = boolean from the caller's options (pre-gate)
+//   writes_explicitly_enabled = env ANYA_AUTONOMOUS_WRITE_CHANGES === 'true'
+//   dry_run_effective     = what actually happened (final)
+//   dry_run_forced_by_env = true iff the caller asked for writes but the env
+//                           gate vetoed them
+//
+// Legacy back-compat (kept so scheduler + older dashboards don't break):
+//   dry_run               = dry_run_effective (same value)
+//   issues_found          = findings_found (same value)
+//
+// NOTE on adminCodeCrawl (services/anyaAdminTools.js): the OLD implementation
+// proxied to adminCodeCrawl and did files_scanned = findings_count, which was
+// the root of the "6014 issues found" inflation (findings are per-line
+// pattern matches, not files). adminCodeCrawl returns:
+//   { findings: [{ file, line, severity, description, preview, fix? }, ...],
+//     findings_count: number }
+// If anyone ever re-integrates adminCodeCrawl, the CORRECT mapping is:
+//   findings_found      <= adminCodeCrawl.findings_count
+//   files_with_findings <= unique(adminCodeCrawl.findings[].file).length
+//   files_scanned       <= a separate walk count; NEVER findings_count
+// This module does not depend on adminCodeCrawl to avoid that whole class of
+// count-confusion.
 // ---------------------------------------------------------------------------
 
 const TEXT_FILE_EXTENSIONS = new Set([
@@ -44,7 +81,14 @@ function isProbablyTextFile(filePath) {
 }
 
 async function listFilesRecursive(rootDir) {
-  const out = []
+  // Returns { files, discoveredCount, skippedNonText, skippedIgnoredDirs }
+  // so the caller can distinguish between "what we saw on disk" (discovered)
+  // and "what we actually scanned" (post text-file filter).
+  const files = []
+  let discoveredCount = 0
+  let skippedNonText = 0
+  let skippedIgnoredDirs = 0
+
   async function walk(current) {
     let entries
     try {
@@ -55,17 +99,24 @@ async function listFilesRecursive(rootDir) {
     for (const entry of entries) {
       const fullPath = path.join(current, entry.name)
       if (entry.isDirectory()) {
-        if (IGNORE_DIRS.has(entry.name)) continue
+        if (IGNORE_DIRS.has(entry.name)) {
+          skippedIgnoredDirs++
+          continue
+        }
         await walk(fullPath)
         continue
       }
       if (!entry.isFile()) continue
-      if (!isProbablyTextFile(fullPath)) continue
-      out.push(fullPath)
+      discoveredCount++
+      if (!isProbablyTextFile(fullPath)) {
+        skippedNonText++
+        continue
+      }
+      files.push(fullPath)
     }
   }
   await walk(rootDir)
-  return out
+  return { files, discoveredCount, skippedNonText, skippedIgnoredDirs }
 }
 
 function relativeTo(rootDir, filePath) {
@@ -372,8 +423,12 @@ export async function runAutonomousCodeCrawl(options, context) {
     fixTodos = false,
   } = options || {}
 
+  const dryRunRequested = Boolean(dryRun)
   const writesExplicitlyEnabled = String(process.env.ANYA_AUTONOMOUS_WRITE_CHANGES || '').toLowerCase() === 'true'
-  const effectiveDryRun = Boolean(dryRun || !writesExplicitlyEnabled)
+  const effectiveDryRun = dryRunRequested || !writesExplicitlyEnabled
+  // dry_run_forced_by_env: caller asked for writes (dryRunRequested=false) but
+  // the env safety gate vetoed them, so we're running effectively dry.
+  const dryRunForcedByEnv = !dryRunRequested && !writesExplicitlyEnabled
 
   // Resolve per call so tests that chdir() into a temp dir work, and so that
   // absolute directory arguments are honored as-is.
@@ -387,8 +442,10 @@ export async function runAutonomousCodeCrawl(options, context) {
 
   await auditLog({
     action: 'autonomous_crawl_start',
-    options: { directory, pattern, maxIterations, maxFileChanges, dryRun, fixConsoleLog, fixEmptyCatch, fixTodos },
-    dry_run: effectiveDryRun,
+    options: { directory, pattern, maxIterations, maxFileChanges, dryRun: dryRunRequested, fixConsoleLog, fixEmptyCatch, fixTodos },
+    dry_run_requested: dryRunRequested,
+    dry_run_effective: effectiveDryRun,
+    dry_run_forced_by_env: dryRunForcedByEnv,
     writes_explicitly_enabled: writesExplicitlyEnabled,
   }, context)
 
@@ -398,16 +455,18 @@ export async function runAutonomousCodeCrawl(options, context) {
   let iterations = 0
   let filesAnalyzed = 0
   let filesModified = 0
-  let issuesFound = 0
+  let findingsFound = 0
   let issuesFixed = 0
 
   try {
-    const files = await listFilesRecursive(rootDir)
-    const filesScanned = files.length
+    const walk = await listFilesRecursive(rootDir)
+    const allFiles = walk.files
+    const filesDiscovered = walk.discoveredCount
 
     const filteredFiles = pattern
-      ? files.filter((f) => relativeTo(rootDir, f).includes(pattern))
-      : files
+      ? allFiles.filter((f) => relativeTo(rootDir, f).includes(pattern))
+      : allFiles
+    const filesScanned = filteredFiles.length
 
     for (const filePath of filteredFiles) {
       if (iterations >= maxIterations) {
@@ -430,13 +489,14 @@ export async function runAutonomousCodeCrawl(options, context) {
       const fileIssues = analyzeFileContent(content)
       if (fileIssues.length === 0) continue
 
-      issuesFound += fileIssues.length
+      findingsFound += fileIssues.length
       allIssues.push({
         file: relFile,
         lineCount: countLines(content),
         issueCount: fileIssues.length,
         issues: fileIssues,
       })
+      // files_with_findings is derived from allIssues.length at report time
 
       if (fixTodos) {
         for (const issue of fileIssues) {
@@ -461,6 +521,9 @@ export async function runAutonomousCodeCrawl(options, context) {
         if (!changed || newText === content) continue
 
         const diff = buildUnifiedDiff(content, newText, relFile)
+        const diffPreview = diff
+          ? diff.split('\n').slice(0, 40).join('\n') + (diff.split('\n').length > 40 ? '\n... [diff truncated]' : '')
+          : null
         const beforeHash = sha1(content)
         const afterHash = sha1(newText)
 
@@ -507,8 +570,11 @@ export async function runAutonomousCodeCrawl(options, context) {
           changes_count: fixesApplied.length,
           backup: backup ? relativeTo(rootDir, backup) : null,
           dry_run: effectiveDryRun,
+          dry_run_requested: dryRunRequested,
+          dry_run_forced_by_env: dryRunForcedByEnv,
           fixes_applied: fixesApplied,
           diff,
+          diff_preview: diffPreview,
           before_sha1: beforeHash,
           after_sha1: afterHash,
         })
@@ -528,19 +594,31 @@ export async function runAutonomousCodeCrawl(options, context) {
     const completedAtIso = new Date().toISOString()
     const durationMs = Date.now() - startTime
 
+    const filesWithFindings = allIssues.length
+
     const report = {
       started_at: startedAtIso,
       directory: directory ? `${directory}${pattern ? ` (pattern="${pattern}")` : ''}` : 'entire repository',
       pattern,
-      dry_run: effectiveDryRun,
+
+      // Dry-run provenance (canonical)
+      dry_run_requested: dryRunRequested,
+      dry_run_effective: effectiveDryRun,
+      dry_run_forced_by_env: dryRunForcedByEnv,
       writes_explicitly_enabled: writesExplicitlyEnabled,
+
       max_iterations: maxIterations,
       max_file_changes: maxFileChanges,
+
+      // Honest metrics (canonical names)
+      files_discovered: filesDiscovered,
       files_scanned: filesScanned,
       files_analyzed: filesAnalyzed,
+      files_with_findings: filesWithFindings,
+      findings_found: findingsFound,
       files_modified: filesModified,
-      issues_found: issuesFound,
       issues_fixed: issuesFixed,
+
       errors,
       modifications,
       issue_summary_by_type: summarizeIssuesByType(allIssues),
@@ -549,6 +627,16 @@ export async function runAutonomousCodeCrawl(options, context) {
         .slice(0, 50),
       completed_at: completedAtIso,
       duration_ms: durationMs,
+
+      // Backward-compatibility aliases (retained so the scheduler + any older
+      // dashboards keep working). These mirror the canonical fields above.
+      // Prefer the canonical names. Do not compute anything from these.
+      dry_run: effectiveDryRun,
+      issues_found: findingsFound,
+      _deprecated_fields: {
+        dry_run: 'use dry_run_effective + dry_run_requested + dry_run_forced_by_env',
+        issues_found: 'use findings_found',
+      },
     }
 
     // Persist a full JSON report on disk for auditability.
