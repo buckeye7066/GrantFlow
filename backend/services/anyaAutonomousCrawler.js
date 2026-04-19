@@ -1,10 +1,269 @@
 import path from 'path'
 import { promises as fs } from 'fs'
 import { spawn } from 'node:child_process'
-import { adminCodeCrawl, adminCodeAnalyze, adminCodeEdit } from './anyaAdminTools.js'
+import crypto from 'node:crypto'
 import { AUDIT_CATEGORIES, SEVERITY, logAuditEvent } from './auditService.js'
 
 const REPO_ROOT = path.resolve(process.cwd())
+
+// ---------------------------------------------------------------------------
+// Self-contained audit engine
+// No fabricated metrics: every counter below is tied to a real file-system
+// action or a real regex match.  Never returns "dry run" without explanation.
+// ---------------------------------------------------------------------------
+
+const TEXT_FILE_EXTENSIONS = new Set([
+  '.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs',
+  '.json', '.md', '.css', '.scss', '.html',
+  '.yml', '.yaml', '.env', '.sh', '.sql',
+])
+
+const IGNORE_DIRS = new Set([
+  '.git', 'node_modules', 'dist', 'build', '.next', '.turbo',
+  'coverage', '.cache', '.idea', '.vscode', '.vercel', '.railway',
+  'audit-reports',
+])
+
+const ISSUE_TYPES = {
+  PLACEHOLDER_LOGIC: 'placeholder_logic',
+  MOCK_DATA: 'mock_data',
+  DRY_RUN_STUB: 'dry_run_stub',
+  TODO_FIXME: 'todo_fixme',
+  SILENT_CATCH: 'silent_catch',
+  CONSOLE_NOISE: 'console_noise',
+  EMPTY_CATCH: 'empty_catch',
+}
+
+function isProbablyTextFile(filePath) {
+  const ext = path.extname(filePath).toLowerCase()
+  if (TEXT_FILE_EXTENSIONS.has(ext)) return true
+  const base = path.basename(filePath).toLowerCase()
+  if (base === 'dockerfile') return true
+  if (base.startsWith('.env')) return true
+  return false
+}
+
+async function listFilesRecursive(rootDir) {
+  const out = []
+  async function walk(current) {
+    let entries
+    try {
+      entries = await fs.readdir(current, { withFileTypes: true })
+    } catch {
+      return
+    }
+    for (const entry of entries) {
+      const fullPath = path.join(current, entry.name)
+      if (entry.isDirectory()) {
+        if (IGNORE_DIRS.has(entry.name)) continue
+        await walk(fullPath)
+        continue
+      }
+      if (!entry.isFile()) continue
+      if (!isProbablyTextFile(fullPath)) continue
+      out.push(fullPath)
+    }
+  }
+  await walk(rootDir)
+  return out
+}
+
+function relativeTo(rootDir, filePath) {
+  return path.relative(rootDir, filePath).replace(/\\/g, '/')
+}
+
+function sha1(input) {
+  return crypto.createHash('sha1').update(input).digest('hex')
+}
+
+function countLines(text) {
+  if (!text) return 0
+  return text.split(/\r?\n/).length
+}
+
+function buildUnifiedDiff(oldText, newText, fileRelPath) {
+  if (oldText === newText) return null
+  const oldLines = oldText.split(/\r?\n/)
+  const newLines = newText.split(/\r?\n/)
+
+  const maxContext = 2
+  let start = 0
+  while (start < oldLines.length && start < newLines.length && oldLines[start] === newLines[start]) start++
+
+  let oldEnd = oldLines.length - 1
+  let newEnd = newLines.length - 1
+  while (oldEnd >= start && newEnd >= start && oldLines[oldEnd] === newLines[newEnd]) {
+    oldEnd--
+    newEnd--
+  }
+
+  const oldStart = Math.max(0, start - maxContext)
+  const newStart = Math.max(0, start - maxContext)
+  const oldChunk = oldLines.slice(oldStart, oldEnd + 1 + maxContext)
+  const newChunk = newLines.slice(newStart, newEnd + 1 + maxContext)
+
+  const diffLines = [
+    `--- a/${fileRelPath}`,
+    `+++ b/${fileRelPath}`,
+    `@@ -${oldStart + 1},${oldChunk.length} +${newStart + 1},${newChunk.length} @@`,
+  ]
+  const maxLen = Math.max(oldChunk.length, newChunk.length)
+  for (let i = 0; i < maxLen; i++) {
+    const o = oldChunk[i]
+    const n = newChunk[i]
+    if (o === n && o !== undefined) diffLines.push(` ${o}`)
+    else {
+      if (o !== undefined) diffLines.push(`-${o}`)
+      if (n !== undefined) diffLines.push(`+${n}`)
+    }
+  }
+  return diffLines.join('\n')
+}
+
+const AUDIT_PATTERNS = [
+  {
+    type: ISSUE_TYPES.TODO_FIXME,
+    regex: /\b(TODO|FIXME|HACK|XXX)\b/,
+    message: 'Unresolved engineering marker.',
+    severity: 'medium',
+    fixable: false,
+  },
+  {
+    type: ISSUE_TYPES.PLACEHOLDER_LOGIC,
+    regex: /\b(placeholder|stubbed|mock response|fake data|dummy data)\b/i,
+    message: 'Possible placeholder or incomplete production logic.',
+    severity: 'high',
+    fixable: false,
+  },
+  {
+    type: ISSUE_TYPES.MOCK_DATA,
+    regex: /\b(mockData|fakeData|sampleData|demoData)\b/,
+    message: 'Possible mock/demo data leaking into production code.',
+    severity: 'high',
+    fixable: false,
+  },
+  {
+    type: ISSUE_TYPES.DRY_RUN_STUB,
+    regex: /\b(files_scanned\s*:\s*.+issues_found\s*:|issues_found\s*=\s*files_scanned)\b/i,
+    message: 'Suspicious metric relationship; may be placeholder telemetry.',
+    severity: 'high',
+    fixable: false,
+  },
+  {
+    type: ISSUE_TYPES.SILENT_CATCH,
+    regex: /^\s*catch\s*\((.*?)\)\s*\{\s*\}\s*$/,
+    message: 'Silent catch block hides failures.',
+    severity: 'high',
+    fixable: true,
+  },
+  {
+    type: ISSUE_TYPES.EMPTY_CATCH,
+    regex: /^\s*catch\s*\{\s*\}\s*$/,
+    message: 'Empty catch block (no error binding).',
+    severity: 'high',
+    fixable: true,
+  },
+  {
+    type: ISSUE_TYPES.CONSOLE_NOISE,
+    regex: /\bconsole\.(log|debug)\(/,
+    message: 'Console logging detected in likely application code.',
+    severity: 'low',
+    fixable: false,
+  },
+]
+
+function analyzeFileContent(content) {
+  const issues = []
+  const lines = content.split(/\r?\n/)
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]
+    for (const pattern of AUDIT_PATTERNS) {
+      if (pattern.regex.test(line)) {
+        issues.push({
+          line: i + 1,
+          type: pattern.type,
+          severity: pattern.severity,
+          message: pattern.message,
+          excerpt: line.trim().slice(0, 220),
+          fixable: pattern.fixable,
+        })
+      }
+    }
+  }
+  return issues
+}
+
+function applySafeFixes(oldText, { fixEmptyCatch = true, fixConsoleLog = false } = {}) {
+  let newText = oldText
+  const fixesApplied = []
+  let changed = false
+
+  if (fixEmptyCatch) {
+    const silentCatchRegex = /^(\s*)catch\s*\(([^)]*?)\)\s*\{\s*\}\s*$/gm
+    newText = newText.replace(silentCatchRegex, (match, indent, errVar) => {
+      const e = (errVar || '').trim() || 'err'
+      changed = true
+      fixesApplied.push({
+        kind: 'replace_silent_catch',
+        message: 'Replaced silent catch block with explicit logging + rethrow.',
+      })
+      return `${indent}catch (${e}) {\n${indent}  console.error('[AnyaAudit] Suppressed error made explicit:', ${e});\n${indent}  throw ${e};\n${indent}}`
+    })
+
+    const bareCatchRegex = /^(\s*)catch\s*\{\s*\}\s*$/gm
+    newText = newText.replace(bareCatchRegex, (match, indent) => {
+      changed = true
+      fixesApplied.push({
+        kind: 'replace_bare_catch',
+        message: 'Replaced bare empty catch with explicit logging + rethrow.',
+      })
+      return `${indent}catch (err) {\n${indent}  console.error('[AnyaAudit] Suppressed error made explicit:', err);\n${indent}  throw err;\n${indent}}`
+    })
+  }
+
+  if (fixConsoleLog) {
+    const consoleLogRegex = /^(\s*)(console\.(log|debug)\([^\n]*\);?)$/gm
+    newText = newText.replace(consoleLogRegex, (match, indent, call) => {
+      changed = true
+      fixesApplied.push({
+        kind: 'comment_out_console',
+        message: 'Commented out console.log/debug statement.',
+      })
+      return `${indent}// [AnyaAudit] ${call}`
+    })
+  }
+
+  return { changed, newText, fixesApplied }
+}
+
+async function writeAuditReport(rootDir, report) {
+  const auditDir = path.join(rootDir, 'audit-reports')
+  await fs.mkdir(auditDir, { recursive: true })
+  const filename = `anya-audit-${Date.now()}.json`
+  const fullPath = path.join(auditDir, filename)
+  await fs.writeFile(fullPath, JSON.stringify(report, null, 2), 'utf8')
+  return relativeTo(rootDir, fullPath)
+}
+
+async function backupFile(filePath, content) {
+  const backupPath = `${filePath}.bak.${Date.now()}`
+  await fs.writeFile(backupPath, content, 'utf8')
+  return backupPath
+}
+
+function summarizeIssuesByType(allIssues) {
+  const map = new Map()
+  for (const fileRecord of allIssues) {
+    for (const issue of fileRecord.issues) {
+      const key = issue.type
+      const current = map.get(key) || { type: key, count: 0, severityCounts: {} }
+      current.count++
+      current.severityCounts[issue.severity] = (current.severityCounts[issue.severity] || 0) + 1
+      map.set(key, current)
+    }
+  }
+  return Array.from(map.values()).sort((a, b) => b.count - a.count)
+}
 
 function runNodeSyntaxCheck(absolutePath) {
   return new Promise((resolve) => {
@@ -108,247 +367,203 @@ export async function runAutonomousCodeCrawl(options, context) {
     maxIterations = 50,
     maxFileChanges = 20,
     dryRun = false,
-    fixConsoleLog = true,
-    fixEmptyCatch = false,
+    fixConsoleLog = false,
+    fixEmptyCatch = true,
     fixTodos = false,
-  } = options
+  } = options || {}
+
   const writesExplicitlyEnabled = String(process.env.ANYA_AUTONOMOUS_WRITE_CHANGES || '').toLowerCase() === 'true'
   const effectiveDryRun = Boolean(dryRun || !writesExplicitlyEnabled)
 
+  // Resolve per call so tests that chdir() into a temp dir work, and so that
+  // absolute directory arguments are honored as-is.
+  const cwd = process.cwd()
+  const rootDir = directory
+    ? (path.isAbsolute(directory) ? directory : path.resolve(cwd, directory))
+    : cwd
+
+  const startedAtIso = new Date().toISOString()
   const startTime = Date.now()
-  const report = {
-    started_at: new Date().toISOString(),
-    directory: directory || 'entire repository',
-    pattern,
-    dry_run: effectiveDryRun,
-    max_iterations: maxIterations,
-    max_file_changes: maxFileChanges,
-    files_scanned: 0,
-    files_analyzed: 0,
-    files_modified: 0,
-    issues_found: 0,
-    issues_fixed: 0,
-    errors: [],
-    modifications: [],
-  }
 
   await auditLog({
     action: 'autonomous_crawl_start',
-    options,
+    options: { directory, pattern, maxIterations, maxFileChanges, dryRun, fixConsoleLog, fixEmptyCatch, fixTodos },
     dry_run: effectiveDryRun,
     writes_explicitly_enabled: writesExplicitlyEnabled,
   }, context)
 
+  const allIssues = []
+  const modifications = []
+  const errors = []
+  let iterations = 0
+  let filesAnalyzed = 0
+  let filesModified = 0
+  let issuesFound = 0
+  let issuesFixed = 0
+
   try {
-    // Step 1: Crawl codebase for issues
-    const crawlResult = await adminCodeCrawl(
-      {
-        pattern,
-        directory,
-        includeTests: false,
-      },
-      context
-    )
+    const files = await listFilesRecursive(rootDir)
+    const filesScanned = files.length
 
-    report.files_scanned = crawlResult.findings_count || 0
-    report.issues_found = crawlResult.findings_count || 0
+    const filteredFiles = pattern
+      ? files.filter((f) => relativeTo(rootDir, f).includes(pattern))
+      : files
 
-    // Group findings by file
-    const fileIssues = {}
-    const findings = Array.isArray(crawlResult?.findings) ? crawlResult.findings : []
-    for (const finding of findings) {
-      if (!fileIssues[finding.file]) {
-        fileIssues[finding.file] = []
-      }
-      fileIssues[finding.file].push(finding)
-    }
-
-    const filesToProcess = Object.keys(fileIssues).slice(0, maxIterations)
-
-    // Step 2: Process each file with issues
-    for (const filePath of filesToProcess) {
-      if (report.files_modified >= maxFileChanges) {
-        report.errors.push({
-          type: 'limit_reached',
-          message: `Maximum file changes limit (${maxFileChanges}) reached`,
-        })
+    for (const filePath of filteredFiles) {
+      if (iterations >= maxIterations) {
+        errors.push({ type: 'limit_reached', stage: 'iterate', message: `maxIterations (${maxIterations}) reached` })
         break
       }
+      iterations++
 
-      const issues = fileIssues[filePath]
-      report.files_analyzed++
-
-      // Analyze file for detailed issues
+      const relFile = relativeTo(rootDir, filePath)
+      let content
       try {
-        await adminCodeAnalyze({ filePath }, context)
-      } catch (error) {
-        report.errors.push({
-          file: filePath,
-          type: 'analysis_error',
-          message: error.message,
-        })
+        content = await fs.readFile(filePath, 'utf8')
+      } catch (readErr) {
+        errors.push({ file: relFile, stage: 'read', message: readErr?.message || String(readErr) })
         continue
       }
 
-      // Read file content once per file, before processing issues
-      let fileContent = ''
-      let fileLines = []
-      try {
-        fileContent = await fs.readFile(path.resolve(REPO_ROOT, filePath), 'utf8')
-        fileLines = fileContent.split('\n')
-      } catch (readError) {
-        report.errors.push({
-          file: filePath,
-          type: 'read_error',
-          message: readError.message,
-        })
-        continue
-      }
+      filesAnalyzed++
 
-      // Determine what fixes to apply
-      const changes = []
-      const changedLines = new Set()
-      const pushUniqueChange = (change) => {
-        if (changedLines.has(change.line)) return false
-        changedLines.add(change.line)
-        changes.push(change)
-        return true
-      }
+      const fileIssues = analyzeFileContent(content)
+      if (fileIssues.length === 0) continue
 
-      for (const issue of issues) {
-        // Fix console.log statements
-        if (fixConsoleLog && issue.description === 'console.log statement found') {
-          const actualLine = fileLines[issue.line - 1]
+      issuesFound += fileIssues.length
+      allIssues.push({
+        file: relFile,
+        lineCount: countLines(content),
+        issueCount: fileIssues.length,
+        issues: fileIssues,
+      })
 
-          if (actualLine && actualLine.includes('console.log')) {
-            pushUniqueChange({
+      if (fixTodos) {
+        for (const issue of fileIssues) {
+          if (issue.type === ISSUE_TYPES.TODO_FIXME) {
+            await auditLog({
+              action: 'todo_found',
+              file: relFile,
               line: issue.line,
-              oldText: actualLine.trim(),
-              // Comment-out rather than delete so the original content is preserved in the diff/backup
-              newText: `// [autonomous-crawler] removed console.log: ${actualLine.trim()}`,
-            })
+              content: issue.excerpt,
+              tracked: true,
+            }, context)
           }
-        }
-
-        // Fix empty catch blocks  
-        if (fixEmptyCatch && issue.description.includes('Empty catch block')) {
-          const variations = [
-            { old: 'catch (error) {}', new: 'catch (error) { console.error("Error:", error) }' },
-            { old: 'catch (e) {}', new: 'catch (e) { console.error("Error:", e) }' },
-            { old: 'catch (err) {}', new: 'catch (err) { console.error("Error:", err) }' },
-            { old: 'catch {}', new: 'catch (error) { console.error("Error:", error) }' },
-          ]
-
-          for (const variant of variations) {
-            const normalizedPreview = String(issue?.preview || '').replace(/\s+/g, ' ').trim()
-            const normalizedOld = variant.old.replace(/\s+/g, ' ').trim()
-            if (normalizedPreview.includes(normalizedOld)) {
-              pushUniqueChange({
-                line: issue.line,
-                oldText: variant.old,
-                newText: variant.new,
-              })
-              break
-            }
-          }
-        }
-        
-        // Convert TODOs to tracked issues (if enabled)
-        if (fixTodos && issue.description === 'TODO/FIXME comment') {
-          // Log TODO for tracking but don't modify the code
-          await auditLog({
-            action: 'todo_found',
-            file: filePath,
-            line: issue.line,
-            content: issue.preview,
-            tracked: true,
-          }, context)
         }
       }
 
-      // Apply changes if any
-      if (changes.length > 0) {
-        try {
-          const editResult = await adminCodeEdit(
-            {
-              filePath,
-              changes,
-              save: !effectiveDryRun,
-            },
-            context
-          )
+      if (filesModified >= maxFileChanges) continue
+      const hasFixable = fileIssues.some((i) => i.fixable)
+      if (!hasFixable) continue
 
-          if (editResult.saved && !effectiveDryRun) {
-            const absoluteFilePath = path.resolve(REPO_ROOT, filePath)
-            const syntaxCheck = await runNodeSyntaxCheck(absoluteFilePath)
+      try {
+        const { changed, newText, fixesApplied } = applySafeFixes(content, { fixEmptyCatch, fixConsoleLog })
+        if (!changed || newText === content) continue
+
+        const diff = buildUnifiedDiff(content, newText, relFile)
+        const beforeHash = sha1(content)
+        const afterHash = sha1(newText)
+
+        let backup = null
+        if (!effectiveDryRun) {
+          backup = await backupFile(filePath, content)
+          await fs.writeFile(filePath, newText, 'utf8')
+
+          // Safety net: if the edit breaks Node syntax, restore immediately.
+          const ext = path.extname(filePath).toLowerCase()
+          if (['.js', '.mjs', '.cjs'].includes(ext)) {
+            const syntaxCheck = await runNodeSyntaxCheck(filePath)
             if (!syntaxCheck.ok) {
-              const restoreOutcome = await restoreFromBackup({
-                filePath,
-                backupRelativePath: editResult.backup_created || null,
-              })
-              const restoreNote = restoreOutcome.restored
-                ? `File restored from backup ${restoreOutcome.backupPath}`
-                : 'Failed to restore from backup'
-              report.errors.push({
-                file: filePath,
-                type: 'post_edit_validation_failed',
-                message: `Rejected invalid edit: ${syntaxCheck.error}. ${restoreNote}`,
+              let restored = false
+              try {
+                await fs.writeFile(filePath, content, 'utf8')
+                restored = true
+              } catch {
+                restored = false
+              }
+              errors.push({
+                file: relFile,
+                stage: 'post_edit_validation_failed',
+                message: `Rejected invalid edit: ${syntaxCheck.error}. ${restored ? 'Restored original content' : 'Restore failed'}`,
               })
               await auditLog({
                 action: 'file_edit_reverted',
-                file: filePath,
+                file: relFile,
                 reason: 'post_edit_validation_failed',
                 validation_error: syntaxCheck.error,
-                backup: editResult.backup_created || null,
-                restored: restoreOutcome.restored,
+                backup: relativeTo(rootDir, backup),
+                restored,
               }, context)
               continue
             }
           }
-
-          if (editResult.saved || effectiveDryRun) {
-            report.files_modified++
-            report.issues_fixed += changes.length
-            report.modifications.push({
-              file: filePath,
-              changes_count: changes.length,
-              backup: editResult.backup_created || null,
-              dry_run: effectiveDryRun,
-            })
-
-            await auditLog({
-              action: 'file_modified',
-              file: filePath,
-              changes_count: changes.length,
-              backup: editResult.backup_created,
-              dry_run: effectiveDryRun,
-            }, context)
-          }
-        } catch (error) {
-          report.errors.push({
-            file: filePath,
-            type: 'edit_error',
-            message: error.message,
-          })
         }
+
+        filesModified++
+        issuesFixed += fixesApplied.length
+
+        modifications.push({
+          file: relFile,
+          changes_count: fixesApplied.length,
+          backup: backup ? relativeTo(rootDir, backup) : null,
+          dry_run: effectiveDryRun,
+          fixes_applied: fixesApplied,
+          diff,
+          before_sha1: beforeHash,
+          after_sha1: afterHash,
+        })
+
+        await auditLog({
+          action: 'file_modified',
+          file: relFile,
+          changes_count: fixesApplied.length,
+          backup: backup ? relativeTo(rootDir, backup) : null,
+          dry_run: effectiveDryRun,
+        }, context)
+      } catch (fixErr) {
+        errors.push({ file: relFile, stage: 'fix', message: fixErr?.message || String(fixErr) })
       }
     }
 
-    const duration = Date.now() - startTime
-    report.completed_at = new Date().toISOString()
-    report.duration_ms = duration
+    const completedAtIso = new Date().toISOString()
+    const durationMs = Date.now() - startTime
 
-    await auditLog({
-      action: 'autonomous_crawl_complete',
-      report,
-    }, context)
+    const report = {
+      started_at: startedAtIso,
+      directory: directory ? `${directory}${pattern ? ` (pattern="${pattern}")` : ''}` : 'entire repository',
+      pattern,
+      dry_run: effectiveDryRun,
+      writes_explicitly_enabled: writesExplicitlyEnabled,
+      max_iterations: maxIterations,
+      max_file_changes: maxFileChanges,
+      files_scanned: filesScanned,
+      files_analyzed: filesAnalyzed,
+      files_modified: filesModified,
+      issues_found: issuesFound,
+      issues_fixed: issuesFixed,
+      errors,
+      modifications,
+      issue_summary_by_type: summarizeIssuesByType(allIssues),
+      issue_summary_by_file: allIssues
+        .sort((a, b) => b.issueCount - a.issueCount)
+        .slice(0, 50),
+      completed_at: completedAtIso,
+      duration_ms: durationMs,
+    }
 
+    // Persist a full JSON report on disk for auditability.
+    try {
+      const reportPath = await writeAuditReport(rootDir, report)
+      report.report_path = reportPath
+    } catch (writeErr) {
+      report.report_path = null
+      report.errors.push({ stage: 'write_report', message: writeErr?.message || String(writeErr) })
+    }
+
+    await auditLog({ action: 'autonomous_crawl_complete', report }, context)
     return report
   } catch (error) {
-    await auditLog({
-      action: 'autonomous_crawl_error',
-      error: error.message,
-    }, context)
+    await auditLog({ action: 'autonomous_crawl_error', error: error?.message || String(error) }, context)
     throw error
   }
 }
