@@ -318,3 +318,228 @@ describe('anyaAutonomousCrawler: honest-metrics contract', () => {
     }
   })
 })
+
+// ---------------------------------------------------------------------------
+// Extended contract: new counters, pagination, separated analyzers, AST,
+// domain audits, surfaced read/dir errors.
+// ---------------------------------------------------------------------------
+describe('anyaAutonomousCrawler: extended honest-metrics contract', () => {
+  let tmp3
+  let originalCwd3
+
+  async function seedExtendedFixture() {
+    // Full reset: remove and recreate
+    try { await fs.rm(tmp3, { recursive: true, force: true }) } catch { /* first call */ }
+    await fs.mkdir(tmp3, { recursive: true })
+
+    await fs.mkdir(path.join(tmp3, 'src'), { recursive: true })
+    await fs.mkdir(path.join(tmp3, 'assets'), { recursive: true })
+    await fs.mkdir(path.join(tmp3, 'node_modules', 'pkg'), { recursive: true })
+    await fs.mkdir(path.join(tmp3, 'backend', 'services'), { recursive: true })
+    await fs.mkdir(path.join(tmp3, 'backend', 'routes'), { recursive: true })
+
+    await fs.writeFile(path.join(tmp3, 'src/a.js'), 'export const a = 1\n', 'utf8')
+    // b.js: mix of literal / regex / heuristic / AST-precise findings
+    await fs.writeFile(
+      path.join(tmp3, 'src/b.js'),
+      [
+        'function q() {',
+        '  try { f() }',
+        '  catch (err) {}',            // heuristic + AST
+        '}',
+        '// TODO: drop this',          // literal
+        '// FIXME: and this',          // literal
+        'const mockData = [1]',        // regex
+        'const sampleData = [2]',      // regex
+        "console.log('noise')",        // AST (precise) + regex (fragile)
+        '',
+      ].join('\n'),
+      'utf8',
+    )
+    // c.js: regex fires a false positive inside a string; AST MUST NOT
+    await fs.writeFile(
+      path.join(tmp3, 'src/c.js'),
+      'const x = "console.log(this is a string, not a call)"\n',
+      'utf8',
+    )
+    // Binary file: counted as skipped, not scanned
+    await fs.writeFile(path.join(tmp3, 'assets/logo.png'), Buffer.from([0x89, 0x50, 0x4e, 0x47]))
+    // Ignored directory
+    await fs.writeFile(path.join(tmp3, 'node_modules/pkg/index.js'), 'module.exports = {}\n', 'utf8')
+    // Minimal matching sources so domain audits have something to inspect
+    await fs.writeFile(
+      path.join(tmp3, 'backend/services/matchEngine.js'),
+      'export function match(profile) { return profile.state && profile.industry }\n',
+      'utf8',
+    )
+    await fs.writeFile(
+      path.join(tmp3, 'backend/services/matching.js'),
+      'export async function runMatching() { /* total_found > 0 relaxation fallback */ }\n',
+      'utf8',
+    )
+    // Good route: total_found + matches => no UI consistency finding
+    await fs.writeFile(
+      path.join(tmp3, 'backend/routes/grants.js'),
+      'export default function() { const total_found = 5; return { total_found, matches: [] } }\n',
+      'utf8',
+    )
+    // Bad route: total_found, no results array => UI consistency finding
+    await fs.writeFile(
+      path.join(tmp3, 'backend/routes/bad.js'),
+      'export default function() { return { total_found: 5, nothing: true } }\n',
+      'utf8',
+    )
+  }
+
+  beforeAll(async () => {
+    originalCwd3 = process.cwd()
+    tmp3 = await fs.mkdtemp(path.join(os.tmpdir(), 'anya-extended-'))
+    process.chdir(tmp3)
+  })
+
+  beforeEach(async () => {
+    await seedExtendedFixture()
+    delete process.env.ANYA_AUTONOMOUS_WRITE_CHANGES
+  })
+
+  afterAll(async () => {
+    process.chdir(originalCwd3)
+    try { await fs.rm(tmp3, { recursive: true, force: true }) } catch { /* cleanup best-effort */ }
+  })
+
+  it('honest counters include files_skipped and scan_errors', async () => {
+    const r = await runAutonomousCodeCrawl({ dryRun: true, includeDomainAudits: false }, mockContext)
+    expect(typeof r.files_discovered).toBe('number')
+    expect(typeof r.files_scanned).toBe('number')
+    expect(typeof r.files_with_findings).toBe('number')
+    expect(typeof r.findings_found).toBe('number')
+    expect(typeof r.files_skipped).toBe('number')
+    expect(typeof r.scan_errors).toBe('number')
+    expect(Array.isArray(r.scan_errors_detail)).toBe(true)
+    // Binary asset (logo.png) was discovered but NOT scanned => counted as skipped
+    expect(r.files_skipped).toBeGreaterThanOrEqual(1)
+    expect(r.files_discovered).toBeGreaterThan(r.files_scanned)
+  })
+
+  it('findings include a search_kind and a breakdown is reported', async () => {
+    const r = await runAutonomousCodeCrawl({ dryRun: true, includeDomainAudits: false }, mockContext)
+    expect(typeof r.search_kind_breakdown).toBe('object')
+    // Each technique produced at least one finding in the fixture
+    expect(r.search_kind_breakdown.literal).toBeGreaterThanOrEqual(2) // TODO + FIXME
+    expect(r.search_kind_breakdown.regex).toBeGreaterThanOrEqual(1) // mockData
+    expect(r.search_kind_breakdown.heuristic + r.search_kind_breakdown.ast).toBeGreaterThanOrEqual(1) // silent catch
+    // Every returned finding has a search_kind label
+    for (const f of r.findings) {
+      expect(['literal', 'regex', 'heuristic', 'ast', 'domain_audit']).toContain(f.search_kind)
+    }
+  })
+
+  it('literal analyzer is token-based (no regex) and tags each finding with the token', async () => {
+    const r = await runAutonomousCodeCrawl({ dryRun: true, includeDomainAudits: false }, mockContext)
+    const literals = r.findings.filter((f) => f.search_kind === 'literal')
+    expect(literals.length).toBeGreaterThanOrEqual(2)
+    for (const l of literals) {
+      expect(typeof l.token).toBe('string')
+      expect(['TODO', 'FIXME', 'HACK', 'XXX']).toContain(l.token)
+      expect(l.excerpt).toContain(l.token)
+    }
+  })
+
+  it('AST analysis is available and more precise than regex for string-literal false positives', async () => {
+    const r = await runAutonomousCodeCrawl({ dryRun: true, includeDomainAudits: false }, mockContext)
+    expect(r.ast_available).toBe(true)
+    expect(r.ast_files_attempted).toBeGreaterThanOrEqual(3) // a.js, b.js, c.js
+    expect(r.ast_files_failed).toBe(0)
+    // AST ignores console.log inside a string literal in c.js
+    const astInC = r.findings.filter((f) => f.search_kind === 'ast' && f.file === 'src/c.js')
+    expect(astInC.length).toBe(0)
+    // But regex fires on c.js (proving AST's value)
+    const regexInC = r.findings.filter((f) => f.search_kind === 'regex' && f.file === 'src/c.js')
+    expect(regexInC.length).toBeGreaterThan(0)
+    // AST correctly flags the empty catch in b.js
+    const astInBCatch = r.findings.filter(
+      (f) => f.search_kind === 'ast' && f.file === 'src/b.js' && (f.type === 'silent_catch' || f.type === 'empty_catch'),
+    )
+    expect(astInBCatch.length).toBe(1)
+  })
+
+  it('skipAst option disables AST but other analyzers still run', async () => {
+    const r = await runAutonomousCodeCrawl({ dryRun: true, includeDomainAudits: false, skipAst: true }, mockContext)
+    expect(r.ast_files_attempted).toBe(0)
+    expect(r.search_kind_breakdown.ast).toBe(0)
+    expect(r.search_kind_breakdown.literal + r.search_kind_breakdown.regex).toBeGreaterThan(0)
+  })
+
+  it('returns ALL findings by default (nothing is silently truncated)', async () => {
+    const r = await runAutonomousCodeCrawl({ dryRun: true, includeDomainAudits: false }, mockContext)
+    expect(r.findings_total).toBeGreaterThan(0)
+    expect(r.findings.length).toBe(r.findings_total)
+    expect(r.findings_truncated).toBe(false)
+    expect(r.findings_offset).toBe(0)
+    expect(r.findings_limit).toBe(r.findings_total)
+    // issue_summary_by_file is also NOT silently capped
+    expect(typeof r.issue_summary_by_file_count).toBe('number')
+    expect(r.issue_summary_by_file.length).toBe(r.issue_summary_by_file_count)
+  })
+
+  it('supports explicit pagination via findingsLimit/findingsOffset', async () => {
+    const full = await runAutonomousCodeCrawl({ dryRun: true, includeDomainAudits: false }, mockContext)
+    const total = full.findings_total
+    expect(total).toBeGreaterThanOrEqual(3)
+
+    const page1 = await runAutonomousCodeCrawl({ dryRun: true, includeDomainAudits: false, findingsLimit: 2 }, mockContext)
+    expect(page1.findings.length).toBe(2)
+    expect(page1.findings_total).toBe(total)
+    expect(page1.findings_truncated).toBe(true)
+
+    const page2 = await runAutonomousCodeCrawl({ dryRun: true, includeDomainAudits: false, findingsLimit: 2, findingsOffset: 2 }, mockContext)
+    expect(page2.findings.length).toBe(2)
+    expect(page2.findings_offset).toBe(2)
+    expect(page2.findings[0]).not.toEqual(page1.findings[0])
+  })
+
+  it('surfaces readdir errors (e.g. missing directory) instead of swallowing them', async () => {
+    const r = await runAutonomousCodeCrawl(
+      { directory: path.join(tmp3, '__nope__'), dryRun: true, includeDomainAudits: false },
+      mockContext,
+    )
+    expect(r.scan_errors).toBeGreaterThanOrEqual(1)
+    expect(r.scan_errors_detail.some((e) => e.stage === 'readdir')).toBe(true)
+    // Errors must also appear in the unified errors array
+    expect(r.errors.some((e) => e.stage === 'readdir')).toBe(true)
+  })
+
+  it('runs GrantFlow domain audits and returns a summary + individual findings', async () => {
+    const r = await runAutonomousCodeCrawl({ dryRun: true, includeDomainAudits: true }, mockContext)
+    expect(r.domain_audit_summary).toBeTruthy()
+    expect(r.domain_audit_summary.audits_run).toEqual(
+      expect.arrayContaining([
+        'opportunity_url_validity',
+        'matching_coverage',
+        'fallback_logic',
+        'ui_backend_consistency',
+        'anya_grounding',
+      ]),
+    )
+    // matching_coverage should emit a finding since our fixture only touches 2 profile fields
+    const matchingFinding = r.findings.find((f) => f.audit === 'matching_coverage')
+    expect(matchingFinding).toBeTruthy()
+    expect(Array.isArray(matchingFinding.evidence.missing_fields)).toBe(true)
+    expect(matchingFinding.evidence.missing_fields.length).toBeGreaterThan(0)
+
+    // ui_backend_consistency flags routes/bad.js but NOT routes/grants.js
+    const uiFindings = r.findings.filter((f) => f.audit === 'ui_backend_consistency')
+    expect(uiFindings.some((f) => String(f.file || '').includes('bad.js'))).toBe(true)
+    expect(uiFindings.some((f) => String(f.file || '').includes('grants.js'))).toBe(false)
+
+    // db-dependent audits surface a db_unavailable error, not a silent skip
+    expect(r.errors.some((e) => /domain_audit:opportunity_url_validity/.test(e.stage || ''))).toBe(true)
+    expect(r.errors.some((e) => /domain_audit:anya_grounding/.test(e.stage || ''))).toBe(true)
+  })
+
+  it('includeDomainAudits: false disables domain audits entirely', async () => {
+    const r = await runAutonomousCodeCrawl({ dryRun: true, includeDomainAudits: false }, mockContext)
+    expect(r.domain_audit_summary).toBeNull()
+    expect(r.findings.some((f) => f.search_kind === 'domain_audit')).toBe(false)
+  })
+})

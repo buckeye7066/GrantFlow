@@ -2,9 +2,36 @@ import path from 'path'
 import { promises as fs } from 'fs'
 import { spawn } from 'node:child_process'
 import crypto from 'node:crypto'
+import { createRequire } from 'node:module'
 import { AUDIT_CATEGORIES, SEVERITY, logAuditEvent } from './auditService.js'
+import { runGrantFlowDomainAudits } from './anyaGrantFlowAudits.js'
 
 const REPO_ROOT = path.resolve(process.cwd())
+
+// Lazy-loaded acorn parser. We go through createRequire so the project works
+// whether acorn ships as CJS or ESM, and degrade gracefully (regex-only) if
+// acorn is unavailable in a given environment.
+const requireCjs = createRequire(import.meta.url)
+let _acorn = null
+function getAcorn() {
+  if (_acorn !== null) return _acorn
+  try {
+    _acorn = requireCjs('acorn')
+  } catch {
+    _acorn = { parse: null, _unavailable: true }
+  }
+  return _acorn
+}
+
+// search_kind classifies each finding by the analysis technique that produced
+// it, so consumers can filter / weight results appropriately.
+export const SEARCH_KIND = Object.freeze({
+  LITERAL: 'literal',
+  REGEX: 'regex',
+  HEURISTIC: 'heuristic',
+  AST: 'ast',
+  DOMAIN: 'domain_audit',
+})
 
 // ---------------------------------------------------------------------------
 // Self-contained audit engine
@@ -81,10 +108,15 @@ function isProbablyTextFile(filePath) {
 }
 
 async function listFilesRecursive(rootDir) {
-  // Returns { files, discoveredCount, skippedNonText, skippedIgnoredDirs }
-  // so the caller can distinguish between "what we saw on disk" (discovered)
-  // and "what we actually scanned" (post text-file filter).
+  // Returns {
+  //   files, discoveredCount, skippedNonText, skippedIgnoredDirs,
+  //   dirErrors: [{ dir, message }]
+  // }
+  // so the caller can distinguish between "what we saw on disk" (discovered),
+  // "what we actually scanned" (post text-file filter), and "what we couldn't
+  // enumerate" (permission denied / vanishing dirs) instead of swallowing it.
   const files = []
+  const dirErrors = []
   let discoveredCount = 0
   let skippedNonText = 0
   let skippedIgnoredDirs = 0
@@ -93,7 +125,12 @@ async function listFilesRecursive(rootDir) {
     let entries
     try {
       entries = await fs.readdir(current, { withFileTypes: true })
-    } catch {
+    } catch (err) {
+      dirErrors.push({
+        dir: path.relative(rootDir, current).replace(/\\/g, '/') || '.',
+        message: err?.message || String(err),
+        code: err?.code || null,
+      })
       return
     }
     for (const entry of entries) {
@@ -116,7 +153,7 @@ async function listFilesRecursive(rootDir) {
     }
   }
   await walk(rootDir)
-  return { files, discoveredCount, skippedNonText, skippedIgnoredDirs }
+  return { files, discoveredCount, skippedNonText, skippedIgnoredDirs, dirErrors }
 }
 
 function relativeTo(rootDir, filePath) {
@@ -171,14 +208,26 @@ function buildUnifiedDiff(oldText, newText, fileRelPath) {
   return diffLines.join('\n')
 }
 
-const AUDIT_PATTERNS = [
-  {
-    type: ISSUE_TYPES.TODO_FIXME,
-    regex: /\b(TODO|FIXME|HACK|XXX)\b/,
-    message: 'Unresolved engineering marker.',
-    severity: 'medium',
-    fixable: false,
-  },
+// ---------------------------------------------------------------------------
+// Analyzers are deliberately split by *technique*. Each finding is tagged
+// with its `search_kind` so downstream consumers (and humans reading audit
+// reports) know exactly what evidence produced the finding.
+//   LITERAL   : case-sensitive substring match (fast path, deterministic)
+//   REGEX     : regular-expression match on a single line
+//   HEURISTIC : regex + light context sniffing (e.g. silent catch)
+//   AST       : parsed JS/TS AST walk via acorn (most precise)
+// ---------------------------------------------------------------------------
+
+// Literal substring tokens: exact matches, no regex engine involved.
+const LITERAL_TEXT_PATTERNS = [
+  { type: ISSUE_TYPES.TODO_FIXME, token: 'TODO', message: 'Unresolved engineering marker (TODO).', severity: 'medium', fixable: false },
+  { type: ISSUE_TYPES.TODO_FIXME, token: 'FIXME', message: 'Unresolved engineering marker (FIXME).', severity: 'medium', fixable: false },
+  { type: ISSUE_TYPES.TODO_FIXME, token: 'HACK', message: 'Unresolved engineering marker (HACK).', severity: 'medium', fixable: false },
+  { type: ISSUE_TYPES.TODO_FIXME, token: 'XXX', message: 'Unresolved engineering marker (XXX).', severity: 'medium', fixable: false },
+]
+
+// Regex patterns: broader phrase matches, not token-aware.
+const REGEX_PATTERNS = [
   {
     type: ISSUE_TYPES.PLACEHOLDER_LOGIC,
     regex: /\b(placeholder|stubbed|mock response|fake data|dummy data)\b/i,
@@ -201,6 +250,18 @@ const AUDIT_PATTERNS = [
     fixable: false,
   },
   {
+    type: ISSUE_TYPES.CONSOLE_NOISE,
+    regex: /\bconsole\.(log|debug)\(/,
+    message: 'Console logging detected in likely application code.',
+    severity: 'low',
+    fixable: false,
+  },
+]
+
+// Heuristic patterns: regex + line-shape constraints (e.g. lines that are
+// effectively silent catch blocks).
+const HEURISTIC_PATTERNS = [
+  {
     type: ISSUE_TYPES.SILENT_CATCH,
     regex: /^\s*catch\s*\((.*?)\)\s*\{\s*\}\s*$/,
     message: 'Silent catch block hides failures.',
@@ -214,21 +275,40 @@ const AUDIT_PATTERNS = [
     severity: 'high',
     fixable: true,
   },
-  {
-    type: ISSUE_TYPES.CONSOLE_NOISE,
-    regex: /\bconsole\.(log|debug)\(/,
-    message: 'Console logging detected in likely application code.',
-    severity: 'low',
-    fixable: false,
-  },
 ]
 
-function analyzeFileContent(content) {
+// Retained for tests and external consumers that imported the old name. Equal
+// to the union of all regex + heuristic patterns (literal patterns use tokens
+// instead of regexes and therefore are NOT included here).
+export const AUDIT_PATTERNS = [...REGEX_PATTERNS, ...HEURISTIC_PATTERNS]
+
+function runLiteralAnalysis(lines) {
   const issues = []
-  const lines = content.split(/\r?\n/)
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]
-    for (const pattern of AUDIT_PATTERNS) {
+    for (const pattern of LITERAL_TEXT_PATTERNS) {
+      if (line.includes(pattern.token)) {
+        issues.push({
+          line: i + 1,
+          type: pattern.type,
+          severity: pattern.severity,
+          message: pattern.message,
+          excerpt: line.trim().slice(0, 220),
+          fixable: pattern.fixable,
+          search_kind: SEARCH_KIND.LITERAL,
+          token: pattern.token,
+        })
+      }
+    }
+  }
+  return issues
+}
+
+function runRegexAnalysis(lines) {
+  const issues = []
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]
+    for (const pattern of REGEX_PATTERNS) {
       if (pattern.regex.test(line)) {
         issues.push({
           line: i + 1,
@@ -237,11 +317,184 @@ function analyzeFileContent(content) {
           message: pattern.message,
           excerpt: line.trim().slice(0, 220),
           fixable: pattern.fixable,
+          search_kind: SEARCH_KIND.REGEX,
         })
       }
     }
   }
   return issues
+}
+
+function runHeuristicAnalysis(lines) {
+  const issues = []
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]
+    for (const pattern of HEURISTIC_PATTERNS) {
+      if (pattern.regex.test(line)) {
+        issues.push({
+          line: i + 1,
+          type: pattern.type,
+          severity: pattern.severity,
+          message: pattern.message,
+          excerpt: line.trim().slice(0, 220),
+          fixable: pattern.fixable,
+          search_kind: SEARCH_KIND.HEURISTIC,
+        })
+      }
+    }
+  }
+  return issues
+}
+
+// AST analysis for JS/MJS/CJS. TS/JSX/TSX are skipped unless the file happens
+// to parse as plain JS under acorn.
+function runAstAnalysis(content, filePath) {
+  const acorn = getAcorn()
+  if (!acorn.parse) return { issues: [], ast_available: false, parse_error: null }
+
+  const ext = path.extname(filePath).toLowerCase()
+  const isJs = ['.js', '.mjs', '.cjs'].includes(ext)
+  if (!isJs) return { issues: [], ast_available: false, parse_error: 'not_js' }
+
+  const sourceType = ext === '.cjs' ? 'script' : 'module'
+
+  let ast
+  try {
+    ast = acorn.parse(content, {
+      ecmaVersion: 'latest',
+      sourceType,
+      allowReturnOutsideFunction: true,
+      allowAwaitOutsideFunction: true,
+      allowImportExportEverywhere: true,
+      locations: true,
+    })
+  } catch (err) {
+    return {
+      issues: [],
+      ast_available: true,
+      parse_error: err?.message || String(err),
+    }
+  }
+
+  const issues = []
+
+  function visit(node) {
+    if (!node || typeof node !== 'object') return
+    if (Array.isArray(node)) {
+      for (const child of node) visit(child)
+      return
+    }
+
+    // CatchClause with empty body => silent catch (AST-precise, no false
+    // positives from string literals or comments that the regex matches).
+    if (node.type === 'CatchClause' && node.body && node.body.type === 'BlockStatement' && node.body.body.length === 0) {
+      const loc = node.loc?.start || { line: 0 }
+      issues.push({
+        line: loc.line,
+        type: node.param ? ISSUE_TYPES.SILENT_CATCH : ISSUE_TYPES.EMPTY_CATCH,
+        severity: 'high',
+        message: node.param
+          ? 'AST: silent catch block hides failures.'
+          : 'AST: empty catch block (no error binding).',
+        excerpt: '',
+        fixable: true,
+        search_kind: SEARCH_KIND.AST,
+      })
+    }
+
+    // CallExpression console.log / console.debug (AST-precise: ignores string
+    // literals containing "console.log(").
+    if (
+      node.type === 'CallExpression' &&
+      node.callee &&
+      node.callee.type === 'MemberExpression' &&
+      node.callee.object &&
+      node.callee.object.type === 'Identifier' &&
+      node.callee.object.name === 'console' &&
+      node.callee.property &&
+      node.callee.property.type === 'Identifier' &&
+      ['log', 'debug'].includes(node.callee.property.name)
+    ) {
+      const loc = node.loc?.start || { line: 0 }
+      issues.push({
+        line: loc.line,
+        type: ISSUE_TYPES.CONSOLE_NOISE,
+        severity: 'low',
+        message: `AST: console.${node.callee.property.name}() call in application code.`,
+        excerpt: '',
+        fixable: false,
+        search_kind: SEARCH_KIND.AST,
+      })
+    }
+
+    for (const key of Object.keys(node)) {
+      if (key === 'loc' || key === 'start' || key === 'end' || key === 'range') continue
+      visit(node[key])
+    }
+  }
+
+  try {
+    visit(ast)
+  } catch (err) {
+    return {
+      issues,
+      ast_available: true,
+      parse_error: `walk_failed: ${err?.message || String(err)}`,
+    }
+  }
+
+  return { issues, ast_available: true, parse_error: null }
+}
+
+// Dedupe (line, type, search_kind) so AST results don't double-count with
+// regex/heuristic results on the same line.
+function dedupeIssues(issues) {
+  const seen = new Set()
+  const out = []
+  for (const issue of issues) {
+    const key = `${issue.line}|${issue.type}`
+    // Prefer AST over heuristic/regex/literal when both fire on the same
+    // (line,type): insert order puts AST last in our pipeline, so we replace.
+    const existingIdx = out.findIndex((x) => `${x.line}|${x.type}` === key)
+    if (existingIdx === -1) {
+      out.push(issue)
+      seen.add(key)
+    } else {
+      const existing = out[existingIdx]
+      const rank = { literal: 1, regex: 2, heuristic: 3, ast: 4 }
+      if ((rank[issue.search_kind] || 0) > (rank[existing.search_kind] || 0)) {
+        out[existingIdx] = issue
+      }
+    }
+  }
+  return out
+}
+
+function analyzeFileContent(content, filePath = '') {
+  const lines = content.split(/\r?\n/)
+  const literalIssues = runLiteralAnalysis(lines)
+  const regexIssues = runRegexAnalysis(lines)
+  const heuristicIssues = runHeuristicAnalysis(lines)
+  const astResult = filePath ? runAstAnalysis(content, filePath) : { issues: [], ast_available: false, parse_error: null }
+
+  const combined = [
+    ...literalIssues,
+    ...regexIssues,
+    ...heuristicIssues,
+    ...astResult.issues,
+  ]
+
+  return {
+    issues: dedupeIssues(combined),
+    breakdown: {
+      literal: literalIssues.length,
+      regex: regexIssues.length,
+      heuristic: heuristicIssues.length,
+      ast: astResult.issues.length,
+      ast_available: astResult.ast_available,
+      parse_error: astResult.parse_error,
+    },
+  }
 }
 
 function applySafeFixes(oldText, { fixEmptyCatch = true, fixConsoleLog = false } = {}) {
@@ -421,6 +674,18 @@ export async function runAutonomousCodeCrawl(options, context) {
     fixConsoleLog = false,
     fixEmptyCatch = true,
     fixTodos = false,
+    // Findings pagination. Default: return ALL findings (no silent truncation)
+    // plus a capped summary. Caller can set findingsLimit to paginate.
+    findingsLimit = null,      // number | null (null => no limit)
+    findingsOffset = 0,        // number
+    // Domain audits (GrantFlow-specific): opportunity URLs, matching coverage,
+    // fallback logic, UI/backend consistency, Anya grounding. Default on; a
+    // DB connection is needed for most of them and missing DB is surfaced as
+    // an audit-scoped error rather than swallowed.
+    includeDomainAudits = true,
+    // Skip AST analysis entirely (mostly for unit tests that don't want acorn
+    // loaded).
+    skipAst = false,
   } = options || {}
 
   const dryRunRequested = Boolean(dryRun)
@@ -452,16 +717,28 @@ export async function runAutonomousCodeCrawl(options, context) {
   const allIssues = []
   const modifications = []
   const errors = []
+  const scanErrorsDetail = []  // read/dir/parse errors, surfaced not swallowed
+  const searchKindBreakdown = { literal: 0, regex: 0, heuristic: 0, ast: 0, domain_audit: 0 }
   let iterations = 0
   let filesAnalyzed = 0
   let filesModified = 0
   let findingsFound = 0
   let issuesFixed = 0
+  let filesSkipped = 0 // binary-filtered + read-failed + oversized + too-deep
+  let astFilesAttempted = 0
+  let astFilesFailed = 0
 
   try {
     const walk = await listFilesRecursive(rootDir)
     const allFiles = walk.files
     const filesDiscovered = walk.discoveredCount
+    // Dir-enumeration errors are real scan errors -- surface them.
+    for (const de of walk.dirErrors) {
+      errors.push({ stage: 'readdir', dir: de.dir, code: de.code, message: de.message })
+      scanErrorsDetail.push({ stage: 'readdir', dir: de.dir, code: de.code, message: de.message })
+    }
+    // Non-text and ignored-dir skips are discovered-but-skipped.
+    filesSkipped += walk.skippedNonText
 
     const filteredFiles = pattern
       ? allFiles.filter((f) => relativeTo(rootDir, f).includes(pattern))
@@ -480,13 +757,31 @@ export async function runAutonomousCodeCrawl(options, context) {
       try {
         content = await fs.readFile(filePath, 'utf8')
       } catch (readErr) {
-        errors.push({ file: relFile, stage: 'read', message: readErr?.message || String(readErr) })
+        filesSkipped++
+        const entry = { file: relFile, stage: 'read', message: readErr?.message || String(readErr), code: readErr?.code || null }
+        errors.push(entry)
+        scanErrorsDetail.push(entry)
         continue
       }
 
       filesAnalyzed++
 
-      const fileIssues = analyzeFileContent(content)
+      const ext = path.extname(filePath).toLowerCase()
+      if (!skipAst && ['.js', '.mjs', '.cjs'].includes(ext)) astFilesAttempted++
+
+      const analysis = analyzeFileContent(content, skipAst ? '' : filePath)
+      const fileIssues = analysis.issues
+      searchKindBreakdown.literal += analysis.breakdown.literal
+      searchKindBreakdown.regex += analysis.breakdown.regex
+      searchKindBreakdown.heuristic += analysis.breakdown.heuristic
+      searchKindBreakdown.ast += analysis.breakdown.ast
+      if (analysis.breakdown.parse_error && analysis.breakdown.parse_error !== 'not_js') {
+        astFilesFailed++
+        const entry = { file: relFile, stage: 'ast_parse', message: analysis.breakdown.parse_error }
+        errors.push(entry)
+        scanErrorsDetail.push(entry)
+      }
+
       if (fileIssues.length === 0) continue
 
       findingsFound += fileIssues.length
@@ -591,10 +886,88 @@ export async function runAutonomousCodeCrawl(options, context) {
       }
     }
 
+    // Domain audits (GrantFlow-specific). Run AFTER code scan so that
+    // domain findings can reference the scanned codebase (e.g. matching
+    // coverage inspects which profile fields are read in matchEngine.js).
+    let domainAudit = null
+    if (includeDomainAudits) {
+      try {
+        domainAudit = await runGrantFlowDomainAudits({
+          rootDir,
+          db: context?.db ?? null,
+          scannedFiles: filteredFiles.map((f) => relativeTo(rootDir, f)),
+        })
+        for (const finding of domainAudit.findings) {
+          allIssues.push({
+            file: finding.file || '(domain)',
+            lineCount: 0,
+            issueCount: 1,
+            issues: [{
+              line: finding.line || 0,
+              type: finding.type,
+              severity: finding.severity,
+              message: finding.message,
+              excerpt: finding.excerpt || '',
+              fixable: false,
+              search_kind: SEARCH_KIND.DOMAIN,
+              audit: finding.audit,
+              evidence: finding.evidence || null,
+            }],
+          })
+          findingsFound++
+          searchKindBreakdown.domain_audit++
+        }
+        for (const auditErr of domainAudit.errors || []) {
+          const entry = { stage: `domain_audit:${auditErr.audit || 'unknown'}`, message: auditErr.message }
+          errors.push(entry)
+          scanErrorsDetail.push(entry)
+        }
+      } catch (domainErr) {
+        const entry = { stage: 'domain_audit', message: domainErr?.message || String(domainErr) }
+        errors.push(entry)
+        scanErrorsDetail.push(entry)
+      }
+    }
+
     const completedAtIso = new Date().toISOString()
     const durationMs = Date.now() - startTime
 
     const filesWithFindings = allIssues.length
+
+    // Build the flat findings list explicitly. NEVER silently truncate.
+    // Caller can set findingsLimit to paginate; in that case we always expose
+    // findings_total + findings_truncated so nothing is hidden.
+    const flatFindings = []
+    for (const rec of allIssues) {
+      for (const issue of rec.issues) {
+        flatFindings.push({
+          file: rec.file,
+          line: issue.line,
+          type: issue.type,
+          severity: issue.severity,
+          message: issue.message,
+          excerpt: issue.excerpt,
+          fixable: issue.fixable,
+          search_kind: issue.search_kind,
+          ...(issue.token ? { token: issue.token } : {}),
+          ...(issue.audit ? { audit: issue.audit } : {}),
+          ...(issue.evidence ? { evidence: issue.evidence } : {}),
+        })
+      }
+    }
+
+    const findingsTotal = flatFindings.length
+    const effectiveLimit = (findingsLimit != null && Number.isFinite(findingsLimit) && findingsLimit >= 0)
+      ? Math.min(findingsLimit, findingsTotal)
+      : findingsTotal
+    const effectiveOffset = Math.max(0, Number(findingsOffset) || 0)
+    const findingsPage = flatFindings.slice(effectiveOffset, effectiveOffset + effectiveLimit)
+    const findingsTruncated = findingsPage.length < findingsTotal
+
+    // issue_summary_by_file: return ALL, NOT a silent slice. If callers need
+    // a shorter view they can slice themselves. We surface the total length
+    // explicitly so this is never hidden.
+    const issueSummaryByFileAll = allIssues.slice().sort((a, b) => b.issueCount - a.issueCount)
 
     const report = {
       started_at: startedAtIso,
@@ -618,13 +991,31 @@ export async function runAutonomousCodeCrawl(options, context) {
       findings_found: findingsFound,
       files_modified: filesModified,
       issues_fixed: issuesFixed,
+      files_skipped: filesSkipped,
+      scan_errors: scanErrorsDetail.length,
+
+      // Analyzer breakdown: how many findings came from each technique.
+      search_kind_breakdown: searchKindBreakdown,
+      ast_files_attempted: astFilesAttempted,
+      ast_files_failed: astFilesFailed,
+      ast_available: !getAcorn()._unavailable,
+
+      // Findings (flat). Paginated if findingsLimit set; otherwise complete.
+      findings: findingsPage,
+      findings_total: findingsTotal,
+      findings_truncated: findingsTruncated,
+      findings_offset: effectiveOffset,
+      findings_limit: effectiveLimit,
+
+      // Domain audit summary (null if disabled).
+      domain_audit_summary: domainAudit ? domainAudit.summary : null,
 
       errors,
+      scan_errors_detail: scanErrorsDetail,
       modifications,
       issue_summary_by_type: summarizeIssuesByType(allIssues),
-      issue_summary_by_file: allIssues
-        .sort((a, b) => b.issueCount - a.issueCount)
-        .slice(0, 50),
+      issue_summary_by_file: issueSummaryByFileAll,
+      issue_summary_by_file_count: issueSummaryByFileAll.length,
       completed_at: completedAtIso,
       duration_ms: durationMs,
 
