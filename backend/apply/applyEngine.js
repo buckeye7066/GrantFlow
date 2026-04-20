@@ -3,6 +3,51 @@ import JSZip from 'jszip'
 import { writeApplicationArtifact } from './storageAdapter.js'
 import { createOpenAIClient } from '../utils/openaiClient.js'
 import { requiresMedicalNecessity, generateMedicalNecessityDocument, DOCUMENT_TYPES } from '../services/medicalNecessity.js'
+import { assertAllowedKeySet, buildEqualityWhereClause } from '../utils/safeSql.js'
+
+// Hardcoded allowlist of tables + acceptable composite unique key sets used by
+// the apply engine. Any dynamic table/identifier interpolation in this file
+// must be validated through this map. See backend/utils/safeSql.js.
+const APPLY_ENGINE_TABLES = Object.freeze({
+  applications: {
+    table: 'applications',
+    allowedUniqueKeys: [
+      ['grant_id', 'organization_id'],
+      ['id'],
+    ],
+  },
+  application_sections: {
+    table: 'application_sections',
+    allowedUniqueKeys: [
+      ['application_id', 'section_key'],
+      ['id'],
+    ],
+  },
+  application_checklist_items: {
+    table: 'application_checklist_items',
+    allowedUniqueKeys: [
+      ['application_id', 'key'],
+      ['id'],
+    ],
+  },
+  application_artifacts: {
+    table: 'application_artifacts',
+    allowedUniqueKeys: [
+      ['application_id', 'format'],
+      ['id'],
+    ],
+  },
+})
+
+function assertApplyEngineTable(table) {
+  const entry = APPLY_ENGINE_TABLES[table]
+  if (!entry) {
+    const error = new Error(`Unsafe apply engine table: ${table}`)
+    error.status = 400
+    throw error
+  }
+  return entry
+}
 
 function nowSqlLiteral(db) {
   return db?.dialect === 'postgres' ? 'now()' : 'CURRENT_TIMESTAMP'
@@ -292,17 +337,53 @@ async function getApplicationOr404(db, applicationId) {
   return row
 }
 
-async function upsertByUniqueKey({ db, table, uniqueWhereSql, uniqueParams, insertSql, insertParams, updateSql, updateParams }) {
-  const existing = await db.prepare(`SELECT id FROM ${table} WHERE ${uniqueWhereSql} LIMIT 1`).get(...uniqueParams)
+/**
+ * Upsert into an apply-engine table using a hardcoded identifier allowlist.
+ *
+ * Identifier safety: both the table name and the column names used for the
+ * WHERE clause must come from APPLY_ENGINE_TABLES. Values are always passed
+ * as bind parameters; only identifiers are interpolated.
+ *
+ * @param {object} args
+ * @param {object} args.db                        - DB facade (prepare/run/get)
+ * @param {string} args.table                     - Table name (must be in allowlist)
+ * @param {string[]} args.uniqueKeys              - Column names forming the uniqueness constraint
+ * @param {Array} args.uniqueValues               - Values matching uniqueKeys, in the same order
+ * @param {string} args.insertSql                 - INSERT SQL. First bind param must be the row id.
+ * @param {Array} args.insertParams               - INSERT bind params after the generated id
+ * @param {string} args.updateSql                 - UPDATE SQL. Last bind param must be the row id.
+ * @param {Array} args.updateParams               - UPDATE bind params before the row id
+ */
+async function upsertByUniqueKey({
+  db,
+  table,
+  uniqueKeys,
+  uniqueValues,
+  insertSql,
+  insertParams,
+  updateSql,
+  updateParams,
+}) {
+  const tableEntry = assertApplyEngineTable(table)
+  assertAllowedKeySet(uniqueKeys, tableEntry.allowedUniqueKeys, `${table} unique key set`)
+
+  const safeTable = tableEntry.table
+  const uniqueWhereSql = buildEqualityWhereClause(uniqueKeys)
+
+  const existing = await db
+    .prepare(`SELECT id FROM ${safeTable} WHERE ${uniqueWhereSql} LIMIT 1`)
+    .get(...uniqueValues)
+
   if (existing?.id) {
     await db.prepare(updateSql).run(...updateParams, existing.id)
-    const updated = await db.prepare(`SELECT * FROM ${table} WHERE id = ?`).get(existing.id)
-    return { row: updated, created: false }
+    const updated = await db.prepare(`SELECT * FROM ${safeTable} WHERE id = ?`).get(existing.id)
+    return { row: updated, created: false, mode: 'updated' }
   }
+
   const id = crypto.randomUUID()
   await db.prepare(insertSql).run(id, ...insertParams)
-  const createdRow = await db.prepare(`SELECT * FROM ${table} WHERE id = ?`).get(id)
-  return { row: createdRow, created: true }
+  const createdRow = await db.prepare(`SELECT * FROM ${safeTable} WHERE id = ?`).get(id)
+  return { row: createdRow, created: true, mode: 'created' }
 }
 
 export async function prepareApplication({ db, grantId, organizationId, userId }) {
@@ -398,8 +479,8 @@ export async function upsertSection({ db, applicationId, sectionKey, title, cont
   const result = await upsertByUniqueKey({
     db,
     table: 'application_sections',
-    uniqueWhereSql: 'application_id = ? AND section_key = ?',
-    uniqueParams: [String(applicationId), key],
+    uniqueKeys: ['application_id', 'section_key'],
+    uniqueValues: [String(applicationId), key],
     insertSql: `
       INSERT INTO application_sections (id, application_id, section_key, title, content, created_at, updated_at)
       VALUES (?, ?, ?, ?, ?, ${nowSqlLiteral(db)}, ${nowSqlLiteral(db)})
@@ -444,8 +525,8 @@ export async function setChecklistItem({ db, applicationId, key, label, status }
   const result = await upsertByUniqueKey({
     db,
     table: 'application_checklist_items',
-    uniqueWhereSql: 'application_id = ? AND key = ?',
-    uniqueParams: [String(applicationId), k],
+    uniqueKeys: ['application_id', 'key'],
+    uniqueValues: [String(applicationId), k],
     insertSql: `
       INSERT INTO application_checklist_items (id, application_id, key, label, status, created_at, updated_at)
       VALUES (?, ?, ?, ?, ?, ${nowSqlLiteral(db)}, ${nowSqlLiteral(db)})

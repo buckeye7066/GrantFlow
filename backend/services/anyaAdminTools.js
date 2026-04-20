@@ -135,6 +135,121 @@ export function getAccessibleProfiles(user, db) {
 }
 
 // ============================================================================
+// Audit classifiers (identifier- and mission-aware)
+// ============================================================================
+
+/**
+ * Identifier-aware classifier for dynamic SQL lines.
+ *
+ * Replaces the old "template literal present == critical" heuristic with
+ * three-tier reasoning:
+ *   - critical:  user-controlled data interpolated into the SQL string
+ *   - warning:   dynamic SQL without a visible identifier allowlist / guard
+ *   - info:      dynamic SQL whose interpolations look identifier-guarded
+ *
+ * Returns `null` when the line is not dynamic SQL.
+ *
+ * @param {string} line
+ * @returns {{severity: 'critical'|'warning'|'info', description: string, fix: string} | null}
+ */
+function classifyDynamicSqlLine(line) {
+  const trimmed = String(line || '').trim()
+  if (!/db\.(prepare|run|get|all)\s*\(\s*`/.test(trimmed)) return null
+  if (!trimmed.includes('${')) return null
+
+  const hasTrustedIdentifierGuard =
+    /allowedTable|ALLOWED_TABLE|SAFE_TABLE|assertAllowed|validateIdentifier|assertSafeIdentifier|safeSqlIdentifier|APPLY_ENGINE_TABLES/.test(trimmed)
+
+  const interpolations = [...trimmed.matchAll(/\$\{([^}]+)\}/g)].map((m) => m[1].trim())
+
+  const dangerousInterpolation = interpolations.some((expr) => {
+    if (!expr) return true
+    if (/req\.|params\.|body\.|query\.|userInput|prompt|message|content/i.test(expr)) return true
+    if (/where|sql|clause|orderBy|groupBy|having|raw/i.test(expr) && !/allowed|safe|validated/i.test(expr)) return true
+    return false
+  })
+
+  if (dangerousInterpolation) {
+    return {
+      severity: 'critical',
+      description: 'Dynamic SQL contains potentially untrusted interpolation',
+      fix: 'Allowlist identifiers and parameterize values only',
+    }
+  }
+
+  if (!hasTrustedIdentifierGuard) {
+    return {
+      severity: 'warning',
+      description: 'Dynamic SQL uses interpolation; verify identifiers are allowlisted',
+      fix: 'Route all table/column interpolation through a shared identifier validator',
+    }
+  }
+
+  return {
+    severity: 'info',
+    description: 'Dynamic SQL appears identifier-guarded',
+    fix: 'No action needed if identifiers are allowlisted and values are parameterized',
+  }
+}
+
+/**
+ * Mission-aware risk detector. Flags patterns that threaten GrantFlow's
+ * core guarantees: trustworthy opportunities, profile isolation, real URLs,
+ * and explainable matches. These are much higher signal than generic
+ * optional-chaining / await-without-try smells.
+ *
+ * @param {string} line
+ * @param {string} relativePath
+ * @returns {Array<{severity: 'warning'|'info', description: string, fix: string}>}
+ */
+function detectMissionRisks(line, relativePath) {
+  const risks = []
+  const text = String(line || '')
+
+  if (
+    /SELECT\b[\s\S]*\bFROM\s+funding_opportunities/i.test(text) &&
+    !/profile_id|is_national|\bstate\b|trustedOriginClause|trustedSourceClause/i.test(text)
+  ) {
+    risks.push({
+      severity: 'warning',
+      description: 'Opportunity query may be missing profile/location/source trust constraints',
+      fix: 'Review query for profile isolation, trust filtering, and recall-safe fallback behavior',
+    })
+  }
+
+  if (
+    /INSERT\s+INTO\s+funding_opportunities/i.test(text) &&
+    !/application_url|source_url|link_status/i.test(text)
+  ) {
+    risks.push({
+      severity: 'warning',
+      description: 'Opportunity persistence may omit URL/link integrity fields',
+      fix: 'Ensure persisted opportunities include real URL and link verification metadata',
+    })
+  }
+
+  // Matching code that never references the explainability fields is worth a
+  // soft nudge, but only in files plausibly related to matching.
+  if (
+    /funding_opportunities|grants|matchEngine|matchingService/i.test(relativePath) &&
+    /score|rank|match/i.test(text) &&
+    !/match_score|match_reasons|fit_explanation/i.test(text)
+  ) {
+    // Intentionally light-touch: info-only, and we only add it for obvious
+    // scoring/matching lines to avoid noise.
+    if (/\bscore\s*[:=]|\brank\s*[:=]/.test(text)) {
+      risks.push({
+        severity: 'info',
+        description: 'Matching code without visible explainability fields',
+        fix: 'Consider surfacing match_score / match_reasons / fit_explanation for the UI',
+      })
+    }
+  }
+
+  return risks
+}
+
+// ============================================================================
 // Code Analysis & Auto-Fix Tools
 // ============================================================================
 
@@ -253,33 +368,6 @@ export async function adminCodeCrawl({ pattern, directory, includeTests = false 
                   })
                 }
                 
-                // Potential null/undefined access
-                if (line.match(/(\w+)\.(\w+)\.(\w+)/) && !line.includes('?.')) {
-                  const match = line.match(/(\w+)\.(\w+)\.(\w+)/)
-                  if (match && !['console', 'process', 'window', 'document', 'Math', 'JSON', 'Date'].includes(match[1])) {
-                    findings.push({
-                      file: relativePath,
-                      line: idx + 1,
-                      severity: 'info',
-                      description: 'Deep property access without optional chaining',
-                      preview: trimmedLine.slice(0, 100),
-                      fix: 'Consider using optional chaining (?.) for safety',
-                    })
-                  }
-                }
-                
-                // Missing error handling in async functions
-                if (line.includes('await ') && !lines.slice(Math.max(0, idx - 5), idx + 5).some(l => l.includes('try'))) {
-                  findings.push({
-                    file: relativePath,
-                    line: idx + 1,
-                    severity: 'info',
-                    description: 'Await without try-catch block',
-                    preview: trimmedLine.slice(0, 100),
-                    fix: 'Consider wrapping in try-catch for error handling',
-                  })
-                }
-                
                 // Hardcoded API keys or secrets
                 if (line.match(/(api[_-]?key|secret|token|password)\s*=\s*["'][^"']+["']/i)) {
                   findings.push({
@@ -291,18 +379,36 @@ export async function adminCodeCrawl({ pattern, directory, includeTests = false 
                     fix: 'Move to environment variables',
                   })
                 }
-                
-                // SQL injection risk
-                if (line.match(/db\.(prepare|run|get|all)\([`"'].*\$\{/)) {
+
+                // Identifier-aware dynamic SQL classification.
+                // Skips noise-level `info` so only actionable findings surface.
+                const sqlAssessment = classifyDynamicSqlLine(line)
+                if (sqlAssessment && sqlAssessment.severity !== 'info') {
                   findings.push({
                     file: relativePath,
                     line: idx + 1,
-                    severity: 'critical',
-                    description: 'Potential SQL injection - using template literals in query',
-                    preview: trimmedLine.slice(0, 100),
-                    fix: 'Use parameterized queries instead',
+                    severity: sqlAssessment.severity,
+                    description: sqlAssessment.description,
+                    preview: trimmedLine.slice(0, 140),
+                    fix: sqlAssessment.fix,
                   })
                 }
+
+                // GrantFlow-specific mission risks (profile isolation, URL
+                // integrity, explainability). Replaces the low-signal
+                // optional-chaining / await-without-try rules that were
+                // drowning the real findings.
+                const missionRisks = detectMissionRisks(line, relativePath)
+                missionRisks.forEach((risk) => {
+                  findings.push({
+                    file: relativePath,
+                    line: idx + 1,
+                    severity: risk.severity,
+                    description: risk.description,
+                    preview: trimmedLine.slice(0, 140),
+                    fix: risk.fix,
+                  })
+                })
               })
             } catch (error) {
               // Skip files that can't be read
@@ -879,32 +985,144 @@ export async function adminCrawlerCancel({ jobId, reason }, context) {
 // ============================================================================
 
 /**
- * Execute a backend endpoint/function and capture results
+ * Resolve the base URL for the running backend so admin tooling can call
+ * real HTTP endpoints in-process instead of returning simulated responses.
+ */
+function resolveAdminBaseUrl() {
+  const explicit = process.env.ADMIN_SELF_BASE_URL || process.env.INTERNAL_API_URL
+  if (explicit && /^https?:\/\//i.test(explicit)) return explicit.replace(/\/+$/, '')
+  const port = Number(process.env.PORT) || Number(process.env.BACKEND_PORT) || 3001
+  return `http://127.0.0.1:${port}`
+}
+
+/**
+ * Execute a backend endpoint/function and capture the real HTTP result.
+ * This replaces the previous simulated stub. The implementation is
+ * intentionally small and safe: admin-only, self-hosted base URL only,
+ * bounded body size, and best-effort JSON parsing.
  */
 export async function adminFunctionsTest({ route, method = 'GET', body = {} }, context) {
-  // Note: This is a simplified version. In production, you'd use supertest or similar
+  requireAdmin(context?.user)
+
+  if (!route || typeof route !== 'string') {
+    throw new Error('route is required')
+  }
+
+  const normalizedMethod = String(method || 'GET').toUpperCase()
+  if (!['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'].includes(normalizedMethod)) {
+    throw new Error(`Unsupported method: ${method}`)
+  }
+
+  const baseUrl = resolveAdminBaseUrl()
+  const url = new URL(route, baseUrl + '/')
+
+  // Only allow calls back to this process. Prevents this admin tool from
+  // being abused as an SSRF vector targeting arbitrary internal hosts.
+  const baseHost = new URL(baseUrl).host
+  if (url.host !== baseHost) {
+    const err = new Error(`Refusing to call non-self host: ${url.host}`)
+    err.status = 400
+    throw err
+  }
+
+  const headers = { 'content-type': 'application/json' }
+  const adminToken = process.env.ADMIN_TOKEN || process.env.ANYA_ADMIN_TOKEN
+  if (adminToken) headers.authorization = `Bearer ${adminToken}`
+
+  const hasBody = !['GET', 'HEAD'].includes(normalizedMethod)
+  const started = Date.now()
+
+  let response
+  let fetchError = null
+  try {
+    response = await fetch(url, {
+      method: normalizedMethod,
+      headers,
+      body: hasBody ? JSON.stringify(body || {}) : undefined,
+    })
+  } catch (err) {
+    fetchError = err
+  }
+
+  const duration_ms = Date.now() - started
+
+  if (fetchError) {
+    return {
+      route,
+      method: normalizedMethod,
+      url: url.toString(),
+      ok: false,
+      status: 0,
+      duration_ms,
+      error: fetchError.message,
+    }
+  }
+
+  const text = await response.text()
+  let parsed = text
+  try {
+    parsed = JSON.parse(text)
+  } catch {
+    // leave parsed as text for non-JSON responses
+  }
+
   return {
     route,
-    method,
-    body,
-    status: 'simulated',
-    note: 'Function testing would require integration with Express test framework',
-    recommendation: 'Use proper API testing tools for production',
+    method: normalizedMethod,
+    url: url.toString(),
+    status: response.status,
+    ok: response.ok,
+    duration_ms,
+    content_type: response.headers.get('content-type') || null,
+    body: parsed,
   }
 }
 
 /**
- * Run a function with detailed error tracing
+ * Run a function with detailed error tracing. Wraps adminFunctionsTest with
+ * richer metadata (timing buckets, error classification) so admins can
+ * quickly distinguish network/auth/app-layer failures.
  */
 export async function adminFunctionsDiagnose({ route, method = 'GET', body = {} }, context) {
+  requireAdmin(context?.user)
+
+  const trace = []
+  const pushTrace = (stage, details) => {
+    trace.push({ stage, at: new Date().toISOString(), ...details })
+  }
+
+  pushTrace('start', { route, method })
+
+  let result
+  try {
+    result = await adminFunctionsTest({ route, method, body }, context)
+    pushTrace('response', { status: result.status, ok: result.ok, duration_ms: result.duration_ms })
+  } catch (err) {
+    pushTrace('error', { message: err.message, status: err.status ?? null })
+    return {
+      route,
+      method,
+      ok: false,
+      error: err.message,
+      trace,
+    }
+  }
+
+  let classification = 'ok'
+  if (!result.ok) {
+    if (result.status === 0) classification = 'network_error'
+    else if (result.status === 401 || result.status === 403) classification = 'auth_error'
+    else if (result.status >= 500) classification = 'server_error'
+    else if (result.status >= 400) classification = 'client_error'
+    else classification = 'non_2xx'
+  }
+
+  pushTrace('classified', { classification })
+
   return {
-    route,
-    method,
-    body,
-    status: 'simulated',
-    trace: [],
-    note: 'Function diagnostics would require integration with debugging tools',
-    recommendation: 'Use proper debugging and tracing tools for production',
+    ...result,
+    classification,
+    trace,
   }
 }
 
