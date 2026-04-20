@@ -170,7 +170,7 @@ export async function runMissionAudit() {
 
       // Tool registration drift -- count registrations per tool name so we can
       // report duplicates that silently override each other.
-      const regMatch = trimmed.match(/name:\s*['"]([a-z0-9_.\-]+)['"]/i)
+      const regMatch = trimmed.match(/name:\s*['"]([a-z0-9_.-]+)['"]/i)
       if (regMatch) {
         // Only count lines that look like they're inside a registerTool call.
         // Cheap heuristic: same line contains registerTool OR previous
