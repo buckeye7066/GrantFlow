@@ -41,7 +41,12 @@ async function hasGrantsDecisionColumns(db) {
       const cols = await db.prepare('PRAGMA table_info(grants)').all()
       result = cols.some((c) => c.name === 'match_decision')
     }
-  } catch { /* ignore */ }
+  } catch (err) {
+    // Treat a missing grants table or probe failure as "no decision columns" —
+    // surface it so ops can see schema drift instead of swallowing silently.
+    console.warn('[opportunityMatcher] hasGrantsDecisionColumns probe failed:', err?.message || err)
+    result = false
+  }
   _decisionColumnCache.set(db, result)
   return result
 }
@@ -58,8 +63,13 @@ function calculateMatchPercentage(opportunity, profileContext) {
     const sections = profileContext?.sections ?? null
     const decision = computeMatchDecision(profile, opportunity, { profileSections: sections })
     return decision.score
-  } catch {
-    // If the decision engine fails entirely (e.g. null inputs), return 0 — never save.
+  } catch (err) {
+    // Decision engine failure must never save a mystery score — log it so we
+    // can find crashing inputs, then return 0 to gate downstream persistence.
+    console.warn(
+      `[opportunityMatcher] calculateMatchPercentage failed for opp=${opportunity?.id || 'unknown'}:`,
+      err?.message || err,
+    )
     return 0
   }
 }

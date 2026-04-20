@@ -10,6 +10,7 @@ import { trustedOriginClause, trustedSourceClause } from '../utils/recordOrigins
 import { isJunkOpportunity } from '../services/contentFilter.js'
 import { interpretFundingIntent, sanitizeSearchTerm } from '../services/smartMatcherIntent.js'
 import { createOpenAIClient } from '../utils/openaiClient.js'
+import { assessOpportunityTrust } from '../services/opportunityTrust.js'
 
 const router = express.Router()
 
@@ -377,11 +378,28 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
         String(opp?.opportunity_type || '').toUpperCase() === 'DIRECTORY',
       )
 
-      const rejectStats = { junk: 0, reject: 0, rejectDirectoryPreserved: 0 }
+      const rejectStats = { junk: 0, reject: 0, rejectDirectoryPreserved: 0, trust: 0 }
+      const trustDropReasons = {}
       const allScored = candidates
                      .map((opp) => {
                                   const isDirectory = isDirectoryRecord(opp)
                                   if (isJunkOpportunity(opp, filterHints) && !isDirectory) { rejectStats.junk++; return null }
+
+                                  // Canonical consumer-side trust check. Mirrors discovery.js so
+                                  // both surfaces hide the same placeholder/loan/expired/untrusted
+                                  // rows. Directory rows stay (allowDirectory=true) to respect the
+                                  // "directory-style resources must always survive" mission rule.
+                                  const trust = assessOpportunityTrust(opp, {
+                                    allowDirectory: true,
+                                    allowExpired: false,
+                                  })
+                                  if (!trust.display) {
+                                    rejectStats.trust++
+                                    for (const r of trust.reasons) {
+                                      trustDropReasons[r] = (trustDropReasons[r] || 0) + 1
+                                    }
+                                    return null
+                                  }
 
                                   // Run v2.0.0 engine: filter hard ineligibles (REJECT) before surfacing.
                                   // Pass sections + signals so scoreOpportunity can build keyword/facet
@@ -393,23 +411,30 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
                                   if (decision.decision === 'REJECT') {
                                     if (!isDirectory) { rejectStats.reject++; return null }
                                     rejectStats.rejectDirectoryPreserved++
-                                    // Downgrade directory to REVIEW so it still surfaces.
                                     decision.decision = 'REVIEW'
                                     decision.explanation = (decision.explanation || '') + ' (directory preserved as REVIEW)'
                                   }
 
+                                  // Soft downgrade for stale/non-official rows.
+                                  const adjustedScore = trust.downgrade
+                                    ? Math.max(0, (decision.score ?? 0) - 5)
+                                    : decision.score
+
                                return {
                                            ...opp,
-                                           match_score: decision.score,
+                                           match_score: adjustedScore,
                                            match_reasons: decision.matchedNeeds ?? [],
                                            match_decision: decision.decision,
                                            match_explanation: decision.explanation,
-                                           url: opp.application_url ?? opp.source_url ?? null,
+                                           trust_tier: trust.trustTier,
+                                           source_trust: trust.sourceTrust,
+                                           trust_flags: trust.flags,
+                                           url: trust.primaryUrl ?? opp.application_url ?? opp.source_url ?? null,
                                }
                      })
                      .filter((opp) => opp !== null)
-      if (rejectStats.junk || rejectStats.reject || rejectStats.rejectDirectoryPreserved) {
-        console.info(`[matching] candidates=${candidates.length} scored=${allScored.length} drops=${JSON.stringify(rejectStats)}`)
+      if (rejectStats.junk || rejectStats.reject || rejectStats.rejectDirectoryPreserved || rejectStats.trust) {
+        console.info(`[matching] candidates=${candidates.length} scored=${allScored.length} drops=${JSON.stringify(rejectStats)} trust_reasons=${JSON.stringify(trustDropReasons)}`)
       }
 
       // Sort by user-requested criteria
@@ -518,11 +543,21 @@ router.get('/profile/:profileId/matching-gaps', async (req, res) => {
       sectionRows = await req.db
         .prepare('SELECT section_key, data FROM profile_sections WHERE profile_id = ?')
         .all(String(profileId))
-    } catch { /* sections table may not exist */ }
+    } catch (err) {
+      console.warn(`[matching] profile_sections load failed for profile=${profileId}:`, err?.message || err)
+      sectionRows = []
+    }
 
     const sections = sectionRows.reduce((acc, row) => {
-      try { acc[row.section_key] = row.data ? JSON.parse(row.data) : {} }
-      catch { acc[row.section_key] = {} }
+      try {
+        acc[row.section_key] = row.data ? JSON.parse(row.data) : {}
+      } catch (err) {
+        console.warn(
+          `[matching] profile_sections JSON parse failed profile=${profileId} section=${row.section_key}:`,
+          err?.message || err,
+        )
+        acc[row.section_key] = {}
+      }
       return acc
     }, {})
 
@@ -576,7 +611,10 @@ router.get('/profile/:profileId/matching-gaps', async (req, res) => {
         'SELECT COUNT(*) as cnt FROM documents WHERE profile_id = ?'
       ).get(String(profileId))
       docCount = docRow?.cnt ?? 0
-    } catch { /* documents table may not exist */ }
+    } catch (err) {
+      console.warn(`[matching] documents count failed for profile=${profileId}:`, err?.message || err)
+      docCount = 0
+    }
 
     const hasStory = Boolean(
       narrative.story || narrative.background || narrative.barriers_faced || narrative.primary_goal

@@ -4,12 +4,11 @@ import { trustedOriginClause, trustedSourceClause } from '../utils/recordOrigins
 import { isJunkOpportunity } from '../services/contentFilter.js'
 import { scoreOpportunity } from '../services/matchEngine.js'
 import { DEFAULT_MIN_SCORE, RELAX_THRESHOLDS, FALLBACK_TOP_N } from '../config/matchThresholds.js'
-import { isPlaceholderUrl } from '../config/urlRules.js'
 import { loadProfileContext } from '../services/profileHelpers.js'
 import { buildProfileFacets } from '../services/profile/profileTaxonomy.js'
 import { deduplicateOpportunities, decorateOpportunityFreshness } from '../services/opportunityMatcher.js'
 import { resolveGeoCoverage, buildGeoCoverageClause } from '../services/geo/geoCoverageService.js'
-import { filterActionableOpportunities } from '../services/opportunityValidationLayer.js'
+import { assessOpportunityTrust } from '../services/opportunityTrust.js'
 
 const router = express.Router();
 
@@ -207,13 +206,37 @@ router.post('/comprehensiveMatch', async (req, res) => {
     const hasBizIntent = kws.has('small business') || kws.has('startup') || kws.has('entrepreneur') || kws.has('sba');
     console.log(`[comprehensiveMatch] Filtered ${opportunities.length - filteredOpportunities.length} irrelevant opportunities, ${filteredOpportunities.length} remaining. Business intent: ${hasBizIntent}`);
 
-    const scoredOpportunities = filteredOpportunities.map(opp => {
-      const computed = scoreOpportunity(profileContext, opp);
-
-      let url = opp.url || opp.application_url;
-      if (url && isPlaceholderUrl(url)) {
-        url = null;
+    // Canonical consumer-side trust assessment. This is the single layer
+    // that decides whether a row is shown to the user, consistent with
+    // matching.js. It handles: placeholder URLs, loans leaking past SQL
+    // filters, matching-funds, expired deadlines, broken links, untrusted
+    // origins, social-only URLs, and source tier classification.
+    // Directory rows are kept (they are legitimate help) but flagged.
+    const trustDroppedReasons = {}
+    const trustKept = []
+    for (const opp of filteredOpportunities) {
+      const trust = assessOpportunityTrust(opp, {
+        allowDirectory: true,
+        allowExpired: false,
+      })
+      if (!trust.display) {
+        for (const reason of trust.reasons) {
+          trustDroppedReasons[reason] = (trustDroppedReasons[reason] || 0) + 1
+        }
+        continue
       }
+      trustKept.push({ opp, trust })
+    }
+    const trustDroppedTotal = filteredOpportunities.length - trustKept.length
+    if (trustDroppedTotal > 0) {
+      console.log(
+        `[comprehensiveMatch] Trust layer dropped ${trustDroppedTotal}:`,
+        trustDroppedReasons,
+      )
+    }
+
+    const scoredOpportunities = trustKept.map(({ opp, trust }) => {
+      const computed = scoreOpportunity(profileContext, opp);
 
       let eligSummary = ''
       try {
@@ -222,6 +245,12 @@ router.post('/comprehensiveMatch', async (req, res) => {
       } catch { eligSummary = opp.eligibility_bullets || '' }
 
       const freshness = decorateOpportunityFreshness(opp)
+      // Soft downgrade for stale/non-official sources: keep them in results
+      // but pull them behind higher-trust options of equal score.
+      const adjustedScore = trust.downgrade
+        ? Math.max(0, computed.score - 5)
+        : computed.score
+
       return {
         id: opp.id,
         source_id: opp.source_id,
@@ -229,17 +258,20 @@ router.post('/comprehensiveMatch', async (req, res) => {
         title: opp.title || opp.program_name,
         program_name: opp.title || opp.program_name,
         sponsor: opp.sponsor || opp.funder,
-        url,
+        url: trust.primaryUrl || null,
         deadline: opp.deadline,
         state: opp.state ?? null,
         amount_min: opp.amount_min ?? null,
         amount_max: opp.amount_max ?? null,
         description: opp.description || opp.summary,
         eligibility_summary: eligSummary,
-        fit_score: computed.score,
-        match_score: computed.score,
+        fit_score: adjustedScore,
+        match_score: adjustedScore,
         match_reasons: computed.reasons,
         matched_fields: computed.reasons.slice(0, 10),
+        trust_tier: trust.trustTier,
+        source_trust: trust.sourceTrust,
+        trust_flags: trust.flags,
         updated_at: opp.updated_at ?? null,
         created_at: opp.created_at ?? null,
         funding_source_type: opp.funding_source_type ?? null,
@@ -296,17 +328,20 @@ router.post('/comprehensiveMatch', async (req, res) => {
       }
     }
 
-    const actionableResults = filterActionableOpportunities(highScoring);
-
-        res.json({
+    // Trust layer already filtered placeholder/loan/expired/etc. before
+    // scoring, so `highScoring` is the final actionable list. No secondary
+    // filterActionableOpportunities pass is needed.
+    res.json({
       success: true,
-      opportunities: actionableResults,
-      total: actionableResults.length,
+      opportunities: highScoring,
+      total: highScoring.length,
       page,
       threshold_used: matchThreshold,
       threshold_relaxed: matchThreshold < DEFAULT_MIN_SCORE ? true : undefined,
       total_evaluated: scoredOpportunities.length,
       total_after_dedupe: dedupedOpportunities.length,
+      trust_dropped: trustDroppedTotal,
+      trust_drop_reasons: trustDroppedReasons,
     });
     
   } catch (error) {
@@ -416,34 +451,39 @@ router.post('/searchOpportunities', async (req, res) => {
     const countRow = await req.db.prepare(countQuery).get(...countParams);
     const total = Number(countRow?.total ?? 0) || 0;
     
-    // Format results with freshness decoration
-    const rawResults = (opportunities || []).map(opp => {
-      let url = opp.url || opp.application_url || null
-      if (url && isPlaceholderUrl(url)) {
-        url = null;
-      }
-      const freshness = decorateOpportunityFreshness(opp)
-      return {
-        id: opp.id,
-        source_id: opp.source_id ?? null,
-        title: opp.title || opp.program_name,
-        sponsor: opp.sponsor || opp.funder,
-        url: url,
-        deadline: opp.deadline,
-        award_min: opp.amount_min ?? null,
-        award_max: opp.amount_max ?? null,
-        description: opp.description || opp.summary,
-        state: opp.state,
-        source: opp.source || 'database',
-        eligibility: opp.eligibility_bullets,
-        updated_at: opp.updated_at ?? null,
-        created_at: opp.created_at ?? null,
-        funding_source_type: opp.funding_source_type ?? null,
-        freshness: freshness.freshness,
-        days_since_verified: freshness.days_since_verified,
-        freshness_warning: freshness.freshness_warning,
-      };
-    });
+    // Format results with trust assessment + freshness decoration.
+    // Canonical trust layer unifies URL/loan/expired/placeholder/source checks
+    // with matching.js and /comprehensiveMatch.
+    const rawResults = (opportunities || [])
+      .map(opp => {
+        const trust = assessOpportunityTrust(opp, { allowDirectory: true })
+        if (!trust.display) return null
+        const url = trust.primaryUrl
+        const freshness = decorateOpportunityFreshness(opp)
+        return {
+          id: opp.id,
+          source_id: opp.source_id ?? null,
+          title: opp.title || opp.program_name,
+          sponsor: opp.sponsor || opp.funder,
+          url,
+          deadline: opp.deadline,
+          award_min: opp.amount_min ?? null,
+          award_max: opp.amount_max ?? null,
+          description: opp.description || opp.summary,
+          state: opp.state,
+          source: opp.source || 'database',
+          trust_tier: trust.trustTier,
+          source_trust: trust.sourceTrust,
+          eligibility: opp.eligibility_bullets,
+          updated_at: opp.updated_at ?? null,
+          created_at: opp.created_at ?? null,
+          funding_source_type: opp.funding_source_type ?? null,
+          freshness: freshness.freshness,
+          days_since_verified: freshness.days_since_verified,
+          freshness_warning: freshness.freshness_warning,
+        };
+      })
+      .filter(Boolean);
     // Deduplicate before returning (display-only; no DB records are changed)
     const results = deduplicateOpportunities(rawResults);
     

@@ -13,7 +13,8 @@
  */
 
 import { RELEVANCE_RULES } from './relevanceFilterRules.js'
-import { resolveApplicantType } from './profileHelpers.js'
+import { buildFlatProfileData, buildCanonicalProfileView } from './canonicalProfileView.js'
+import { normalizeProfile } from './profileNormalizer.js'
 
 // State name → 2-letter abbreviation (uppercase) sorted by name length descending so
 // multi-word state names ("west virginia") match before single-word names ("virginia").
@@ -131,99 +132,40 @@ export function applyRelevanceFilter(opportunity, profileData, opts = {}) {
 }
 
 /**
- * Extract a 2-letter state abbreviation from an address value that may be a
- * plain string ("123 Main St, Nashville, TN 37201") or an object ({ state: 'TN' }).
- */
-function extractStateFromAddress(addr) {
-  if (!addr) return null
-  if (typeof addr === 'object') return addr.state || null
-  if (typeof addr === 'string') {
-    const m = addr.match(/\b([A-Z]{2})\s*,?\s*\d{5}/)
-    return m ? m[1] : null
-  }
-  return null
-}
-
-/**
- * Extract a flat profileData object from a profileContext (as used by
- * comprehensiveCrawler, opportunityMatcher, realCrawlers).
+ * Extract a flat profileData object from a profileContext for use by the
+ * rule-driven relevance filter.
  *
- * All fields default to safe values so the filter is no-op when data is missing.
+ * NOTE: This used to build its own narrow shape. It now delegates to the
+ * canonical profile view so the filter sees the same fields (needs,
+ * description, situation, challenges, special_circumstances, ethnicity,
+ * affiliations, geographic qualifiers, derived age/ageGroup, etc.) that
+ * the matcher sees. Before this change several rules that checked
+ * pd.needs / pd.description / pd.situation / pd.challenges never fired
+ * because the extractor did not populate them.
+ *
+ * Accepts either a full profileContext ({ profile, sections, signals }) or a
+ * pre-flattened profileData object (old call sites). Passing a flat object
+ * through re-derives the canonical-derived fields it was missing.
  */
 export function extractProfileData(profileContext) {
   if (!profileContext) return {}
-  const profile = profileContext.profile || {}
-  const sections = profileContext.sections || {}
 
-  const basic = sections.basic_information || {}
-  const demographics = sections.demographics || {}
-  const military = sections.military_service || {}
-  const health = sections.health_medical || {}
-  const employment = sections.employment || {}
-  const education = sections.education || {}
-  const comprehensive = sections.comprehensive_application || {}
-
-  const family = sections.family_life || {}
-
-  return {
-    primary_type:
-      resolveApplicantType(profile) ||
-      comprehensive.applicant_type ||
-      null,
-    age:
-      basic.age ||
-      demographics.age ||
-      null,
-    gender:
-      basic.gender ||
-      demographics.gender ||
-      null,
-    veteran_status:
-      demographics.veteran_status ||
-      military.veteran ||
-      null,
-    disability_status:
-      demographics.disability_status ||
-      health.disability_type ||
-      null,
-    immigrant_status:
-      demographics.immigrant_status ||
-      null,
-    foster_youth:
-      family.foster_youth ||
-      demographics.foster_youth ||
-      comprehensive.foster_care ||
-      null,
-    first_responder:
-      demographics.first_responder ||
-      employment.occupation_type === 'first_responder' ||
-      (employment.occupation || '').toLowerCase().match(/\b(firefighter|paramedic|emt|police|law enforcement|dispatcher)\b/) ? true : null,
-    employment,
-    education,
-    state:
-      profile.state ||
-      basic.state ||
-      sections.location_focus?.state ||
-      extractStateFromAddress(basic.address) ||
-      extractStateFromAddress((sections.comprehensive_application || {}).address) ||
-      null,
-    tags: profile.tags || [],
-    government_assistance: sections.government_assistance || {},
-    insurance_provider: (sections.medical_insurance || {}).insurance_provider || null,
-    unable_to_work: !!(comprehensive.unable_to_work ||
-      health.unable_to_work ||
-      (employment.notes || '').toLowerCase().includes('not able to work') ||
-      (employment.notes || '').toLowerCase().includes('unable to work') ||
-      (employment.current_status || '').toLowerCase().includes('disabled') ||
-      health.disability_status === true),
-    employment_notes: employment.notes || null,
-    employment_status: employment.current_status || null,
-    has_children: (family.has_children === true) || Number(family.number_of_children || 0) > 0 || Number(family.members_under_18 || 0) > 0,
-    number_of_children: family.number_of_children || 0,
-    household_members_under_18: family.members_under_18 || 0,
-    age_group: demographics.age_group || null,
-    ethnicity: demographics.ethnicity || null,
-    city: basic.city || (typeof basic.address === 'object' ? basic.address.city : null) || null,
-
+  // Already a flat profile-data object (has no "sections" key and no "profile"
+  // key but has things like primary_type/state): hydrate missing canonical
+  // fields without losing any caller-provided overrides.
+  if (
+    typeof profileContext === 'object' &&
+    !profileContext.profile &&
+    !profileContext.sections &&
+    (profileContext.primary_type !== undefined ||
+      profileContext.state !== undefined ||
+      profileContext.veteran_status !== undefined)
+  ) {
+    const normalized = normalizeProfile(profileContext, {}, null)
+    const hydrated = buildFlatProfileData({ profile: profileContext, sections: {} }, normalized)
+    return { ...hydrated, ...profileContext }
   }
+
+  const view = buildCanonicalProfileView(profileContext)
+  return view.flat
 }

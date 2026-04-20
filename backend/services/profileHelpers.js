@@ -111,7 +111,13 @@ export async function loadProfileContext(db, profileId) {
       organization = await db
         .prepare('SELECT * FROM organizations WHERE id = ? LIMIT 1')
         .get(profile.organization_id)
-    } catch {
+    } catch (err) {
+      // Surface org-load failure so matching doesn't silently lose org-level
+      // signals (state/city/zip/mission). Matching continues without the org.
+      console.warn(
+        `[loadProfileContext] organization lookup failed for profile=${profileId} org=${profile.organization_id}:`,
+        err?.message || err,
+      )
       organization = null
     }
   }
