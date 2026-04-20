@@ -6,9 +6,12 @@ import { safeParseJSON } from '../utils/safeJson.js';
 import { formatError } from '../middleware/errorHandler.js';
 import { validatePagination } from '../utils/validation.js';
 import { DEFAULT_OPENAI_MODEL, OPENAI_TIMEOUT_MS, MAX_PROMPT_LENGTH } from '../config/constants.js';
-// NOTE: calculateMatchScore is used here for display-only scoring in AI chat context.
-// This route does NOT insert into the grants pipeline.
-import { calculateMatchScore } from '../services/matchingEngine.js';
+// Non-authoritative scoring helper. Used ONLY for display-only ranking in the
+// AI chat context; this route does NOT insert into the grants pipeline and
+// does NOT make accept/reject decisions. computeMatchDecision() remains the
+// sole acceptance authority. We alias scoreOpportunity to keep the call sites
+// compatible while moving off the legacy matchingEngine.js shim.
+import { scoreOpportunity as calculateMatchScore } from '../services/matchEngine.js';
 import { trustedOriginClause, trustedSourceClause } from '../utils/recordOrigins.js';
 import { DEFAULT_MIN_SCORE, RELAX_THRESHOLDS, FALLBACK_TOP_N } from '../config/matchThresholds.js';
 import { createOpenAIClient, summarizeOpenAIError } from '../utils/openaiClient.js';

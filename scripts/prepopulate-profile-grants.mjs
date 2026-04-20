@@ -1,23 +1,44 @@
 #!/usr/bin/env node
 /**
  * Prepopulate Profiles with Grant Matches
- * 
- * This script:
- * 1. Fetches all profiles from the database
- * 2. Finds funding opportunities matching at ≥80%
- * 3. Adds top 50 matches per profile to their grants pipeline
+ *
+ * Dev-only helper. For every profile, find funding opportunities that the
+ * canonical decision engine ACCEPTs (or REVIEWs) and insert the top N into
+ * the grants pipeline.
+ *
+ * Architectural contract:
+ *   - `scoreOpportunity()` (from matchEngine.js, re-exported via
+ *     matchDecisionEngine.js) is used ONLY for ranking/prefiltering.
+ *   - `computeMatchDecision()` is the SOLE acceptance authority. A score of
+ *     ≥ TARGET_MATCH_SCORE is never sufficient on its own.
  */
 
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import Database from 'better-sqlite3'
-import { calculateMatchScore } from '../backend/services/matchingEngine.js'
+import {
+  computeMatchDecision,
+  scoreOpportunity,
+  MATCHER_VERSION,
+} from '../backend/services/matchDecisionEngine.js'
+
+// Non-authoritative pre-score used only for ranking.
+const calculateMatchScore = scoreOpportunity
+
+// Safety guard: never run in production or when seeding is explicitly disabled.
+const _nodeEnv = String(process.env.NODE_ENV || '').trim().toLowerCase()
+const _disableSeeding = String(process.env.DISABLE_SEEDING || '').trim().toLowerCase()
+if (_nodeEnv === 'production' || _disableSeeding === 'true' || _disableSeeding === '1') {
+  console.error('[prepopulate] Seeding disabled in production.')
+  process.exit(1)
+}
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 const projectRoot = path.resolve(__dirname, '..')
 
+// Pre-filter threshold used purely for ranking, NOT for acceptance.
 const TARGET_MATCH_SCORE = 80
 const TARGET_GRANTS_PER_PROFILE = 50
 
@@ -82,20 +103,40 @@ function main() {
         'SELECT * FROM profile_sections WHERE profile_id = ?'
       ).all(profile.id)
 
-      // Calculate match scores for all opportunities using canonical engine
+      // Step 1: rank opportunities with the non-authoritative score. This is
+      // just a helper to pick reasonable candidates; it is NOT the accept/reject
+      // gate. The final gate is computeMatchDecision() below.
       const profileContext = { profile, sections }
-      const matchedOpportunities = opportunities
+      const scoredCandidates = opportunities
         .map(opp => {
           const { score: matchScore, reasons: matchReasons } = calculateMatchScore(profileContext, opp)
-          return {
-            ...opp,
-            matchScore,
-            matchReasons: matchReasons || [],
-          }
+          return { ...opp, matchScore, matchReasons: matchReasons || [] }
         })
         .filter(opp => opp.matchScore >= TARGET_MATCH_SCORE)
         .sort((a, b) => b.matchScore - a.matchScore)
-        .slice(0, TARGET_GRANTS_PER_PROFILE)
+        .slice(0, TARGET_GRANTS_PER_PROFILE * 2) // generous top-N before canonical gate
+
+      // Step 2: canonical decision is the sole acceptance authority. Reject
+      // means: do NOT insert, regardless of raw score. ACCEPT / REVIEW pass.
+      const matchedOpportunities = []
+      for (const opp of scoredCandidates) {
+        const decision = computeMatchDecision(profile, opp, { profileSections: sections })
+        if (decision.decision === 'REJECT') continue
+        matchedOpportunities.push({
+          ...opp,
+          matchScore: decision.score ?? opp.matchScore,
+          matchReasons: decision.reasons ?? opp.matchReasons ?? [],
+          match_decision: decision.decision,
+          match_explanation: decision.explanation ?? null,
+          matched_needs: decision.matchedNeeds ?? [],
+          eligibility_status: decision.eligible ?? null,
+          ineligibility_reasons: decision.ineligibilityReasons ?? [],
+          match_confidence: decision.confidence ?? null,
+          matcher_version: decision.matcherVersion ?? MATCHER_VERSION,
+          evaluated_at: decision.evaluatedAt ?? new Date().toISOString(),
+        })
+        if (matchedOpportunities.length >= TARGET_GRANTS_PER_PROFILE) break
+      }
 
       if (profileIndex === 0) {
         const scores = opportunities.map(o => calculateMatchScore(profileContext, o).score)

@@ -16,6 +16,39 @@ import {
 } from './profileHelpers.js'
 import { scoreOpportunity, computeMatchDecision } from './matchEngine.js'
 
+/**
+ * Explicit mapper from the canonical camelCase decision object returned by
+ * computeMatchDecision() to the snake_case column names persisted by
+ * upsertFundingOpportunity(). Exported so tests can verify that no field is
+ * silently dropped when the canonical engine changes shape.
+ *
+ * Accepts either the current camelCase names or (defensively) pre-mapped
+ * snake_case names so future callers can hand us either.
+ *
+ * @param {Object} decision - output of computeMatchDecision
+ * @param {Object} [opts]
+ * @param {string} [opts.effectiveDecision] - final ACCEPT/REVIEW/REJECT after URL guard
+ * @param {number|null} [opts.fallbackScore] - pre-computed score to fall back on
+ * @returns {Object} snake_case persistence fields
+ */
+export function mapDecisionToPersistedFields(decision, opts = {}) {
+  const { effectiveDecision, fallbackScore = null } = opts
+  return {
+    match_decision: effectiveDecision ?? decision?.decision ?? null,
+    match_explanation: decision?.explanation ?? null,
+    matched_needs: decision?.matchedNeeds ?? decision?.matched_needs ?? [],
+    eligibility_status:
+      decision?.eligible ?? decision?.eligibility_status ?? null,
+    ineligibility_reasons:
+      decision?.ineligibilityReasons ?? decision?.ineligibility_reasons ?? [],
+    match_confidence: decision?.confidence ?? fallbackScore ?? null,
+    matcher_version:
+      decision?.matcherVersion ?? decision?.matcher_version ?? null,
+    evaluated_at:
+      decision?.evaluatedAt ?? decision?.evaluated_at ?? new Date().toISOString(),
+  }
+}
+
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
 
@@ -191,13 +224,18 @@ export async function processItemCrawlerJob({ db, job, dataDir, profileContext }
   let updatedCount = 0
   for (const opp of topOpps) {
     try {
-      // Goal 4: computeMatchDecision is the sole authority before any insertion
-      const decision = computeMatchDecision(profileContext, opp, opp.match_score, opp.match_reasons)
+      // Goal 4: computeMatchDecision is the sole acceptance authority
+      // before any insertion. Canonical signature is (rawProfile, rawOpportunity, opts),
+      // NOT (profile, opp, score, reasons) -- the old extra args were silently
+      // ignored, and that shape wrongly suggested the caller's score/reasons
+      // were authoritative inputs. scoreOpportunity is invoked inside
+      // computeMatchDecision, so passing pre-computed score/reasons has no effect.
+      const decision = computeMatchDecision(profileContext, opp)
 
       // Goal 3: hard-reject anything the decision engine rejects
       if (decision.decision === 'REJECT') {
         console.log(
-          `[itemCrawler] REJECTED "${opp.title}" â ${decision.explanation ?? 'decision engine reject'}`,
+          `[itemCrawler] REJECTED "${opp.title}" - ${decision.explanation ?? 'decision engine reject'}`,
         )
         continue
       }
@@ -209,6 +247,18 @@ export async function processItemCrawlerJob({ db, job, dataDir, profileContext }
           : null
       const effectiveDecision =
         decision.decision === 'ACCEPT' && !validUrl ? 'REVIEW' : decision.decision
+
+      // computeMatchDecision returns camelCase fields (matchedNeeds,
+      // ineligibilityReasons, matcherVersion, eligible). upsertFundingOpportunity
+      // persists snake_case columns, so without an explicit mapping layer every
+      // row was being written with matched_needs=[], ineligibility_reasons=[],
+      // eligibility_status=null, and matcher_version=null regardless of what
+      // the decision engine actually returned. mapDecisionToPersistedFields
+      // does the explicit camelCase->snake_case mapping and is unit-tested.
+      const decisionMeta = mapDecisionToPersistedFields(decision, {
+        effectiveDecision,
+        fallbackScore: opp.match_score ?? null,
+      })
 
       const result = await upsertFundingOpportunity(db, {
         title: opp.title,
@@ -228,16 +278,10 @@ export async function processItemCrawlerJob({ db, job, dataDir, profileContext }
         source: 'item_funding',
         source_id: opp.id,
         record_origin: 'curated_verified',
-        // Goal 8: persist all canonical decision metadata
-        match_decision: effectiveDecision,
-        match_explanation: decision.explanation ?? null,
-        matched_needs: decision.matched_needs ?? [],
-        eligibility_status: decision.eligibility_status ?? null,
-        ineligibility_reasons: decision.ineligibility_reasons ?? [],
-        match_confidence: decision.confidence ?? opp.match_score,
+        // Goal 8: persist all canonical decision metadata (mapped above so
+        // camelCase -> snake_case never silently drops fields).
+        ...decisionMeta,
         match_reasons: opp.match_reasons,
-        matcher_version: decision.matcher_version ?? null,
-        evaluated_at: new Date().toISOString(),
       })
 
       if (result.id) {

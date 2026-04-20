@@ -6,13 +6,26 @@ GrantFlow's matching system determines which funding opportunities are appropria
 
 ## Decision Engine Pipeline
 
-All matching is routed through a single shared engine:
+All matching is routed through a single canonical engine:
 
 ```
-backend/services/matchDecisionEngine.js
+backend/services/matchEngine.js          # canonical implementation
+backend/services/matchDecisionEngine.js  # compatibility re-export shim
+backend/services/matchingEngine.js       # legacy shim (calculateMatchScore → scoreOpportunity)
 ```
 
-**MATCHER_VERSION: 2.0.0** — Legacy `calculateMatchScore` fallback removed. `computeMatchDecision()` is the sole authority.
+Callers should import directly from `matchEngine.js`. `matchDecisionEngine.js`
+is a thin `export { ... } from './matchEngine.js'` file preserved so older
+callers continue to compile against the v2 names; it adds no behavior of its
+own. `matchingEngine.js` is a tiny wrapper that exposes the legacy
+`calculateMatchScore(profile, opp)` entry point, which is just
+`scoreOpportunity(profile, opp)` — a scoring helper only, NEVER an acceptance
+authority.
+
+**MATCHER_VERSION: 4.0.0** — `computeMatchDecision()` is the sole
+acceptance/rejection authority. `scoreOpportunity()` /
+`calculateMatchScore()` return a raw score only and are used solely for
+lightweight ranking and junk pre-filtering.
 
 ### Exported Functions
 
@@ -23,7 +36,17 @@ backend/services/matchDecisionEngine.js
 | `evaluateEligibility(profileNorm, oppNorm)` | Hard eligibility checks (loan, closed deadline, geo, entity type, disease-specific, institutional, disaster) |
 | `calculateNeedAlignment(profileNorm, oppNorm)` | Need-to-funding-type mapping score |
 | `calculateSourceTrust(opportunity)` | Source quality/trust score |
-| `computeMatchDecision(rawProfile, rawOpp, opts?)` | Full structured decision |
+| `scoreOpportunity(profile, opp)` | Raw score + reasons (non-authoritative) |
+| `matchOpportunities(profile, opps[], opts?)` | Ranked list via `scoreOpportunity` |
+| `makeDecision(score, profile, opp, profileNorm?)` | Decision step used internally by `computeMatchDecision` |
+| `computeMatchDecision(rawProfile, rawOpp, opts?)` | Full structured decision — **sole acceptance authority** |
+
+> Note on `computeMatchDecision` signature: it takes exactly
+> `(rawProfile, rawOpportunity, opts?)`. It is NOT
+> `(profile, opp, precomputedScore, precomputedReasons)` — there is no caller
+> contract that accepts a pre-computed score; `scoreOpportunity` is invoked
+> internally. Callers that passed extra args historically (e.g. a stale
+> `itemCrawler` path) were silently ignoring those arguments.
 
 ### `computeMatchDecision()` return value
 
@@ -39,7 +62,7 @@ backend/services/matchDecisionEngine.js
   matchedProfileTraits: string[],   // Which profile traits matched
   missingEligibilityFields: string[], // Fields needed but missing
   explanation: string,              // Human-readable summary
-  matcherVersion: "2.0.0",
+  matcherVersion: "4.0.0",
   evaluatedAt: ISO timestamp
 }
 ```
@@ -201,11 +224,17 @@ Pipeline entries (grants table) include the `matcher_version`, `profile_fingerpr
 
 ## Matcher Versioning
 
-Current version: **2.0.0** (defined as `MATCHER_VERSION` in `matchDecisionEngine.js`)
+Current version: **4.0.0** (defined as `MATCHER_VERSION` in
+`backend/services/matchEngine.js`; re-exported by
+`backend/services/matchDecisionEngine.js`)
 
-**Breaking changes in v2.0.0:**
-- Legacy `calculateMatchScore` fallback removed from `opportunityMatcher.js`
-- `computeMatchDecision()` is the sole authority for all pipeline decisions
+**Changes from v2.0.0 → v4.0.0 relevant to callers:**
+- `matchEngine.js` is the single implementation; `matchDecisionEngine.js` is a
+  thin re-export, `matchingEngine.js` is a legacy scoring-only shim.
+- `computeMatchDecision(rawProfile, rawOpportunity, opts?)` — no stale
+  `(profile, opp, score, reasons)` shape; extra args in legacy callers are
+  silently ignored and have been removed.
+- `computeMatchDecision()` remains the sole authority for all pipeline decisions.
 - Unknown opportunity applicability no longer defaults to `['individual']`; forces REVIEW instead
 - ACCEPT now requires: `hasApplicationUrl`, `confidence ≥ 50`, `needAlignment > 0`, `applicabilityUnknown = false`
 - New hard-reject classes: institutional/research-only, disease-specific, disaster/FEMA context required
@@ -236,7 +265,7 @@ Re-evaluates all existing pipeline entries using the current decision engine:
   "reviewed": 123,
   "rejected": 221,
   "errors": 0,
-  "matcherVersion": "2.0.0"
+  "matcherVersion": "4.0.0"
 }
 ```
 
@@ -257,23 +286,27 @@ All insertion paths go through `saveToProfilePipeline()` in `opportunityMatcher.
 
 **Hard REJECT gate**: If `decision.decision === 'REJECT'`, the entry is NOT saved regardless of the raw score.
 
-**Legacy fallback removed (v2.0.0)**: `opportunityMatcher.js` no longer imports or calls `calculateMatchScore` from `matchingEngine.js`. `computeMatchDecision()` is the sole scoring authority.
+**Legacy fallback removed**: `opportunityMatcher.js` no longer calls
+`calculateMatchScore` as an acceptance authority. `computeMatchDecision()` is
+the sole decision authority; `calculateMatchScore` / `scoreOpportunity` are
+used only as non-authoritative ranking helpers.
 
-### Path audit (v2.0.0)
+### Path audit (v4.0.0)
 
 | Path | Status | Notes |
 |---|---|---|
 | `backend/services/opportunityMatcher.js:saveToProfilePipeline` | ✅ canonical | Production pipeline insertion — sole INSERT authority |
+| `backend/services/itemCrawler.js` | ✅ canonical (v4.0.0) | Uses `computeMatchDecision(profile, opp)` with explicit camelCase→snake_case mapping into `upsertFundingOpportunity` |
 | `backend/services/localCrawler.js` | ✅ canonical | Calls `saveToProfilePipeline` |
 | `backend/services/comprehensiveCrawlerOptimized.js` | ✅ canonical | Calls `saveToProfilePipeline` |
 | `backend/services/anyaAutonomousFunctionRunner.js` | ✅ canonical | Calls `saveToProfilePipeline` |
 | `backend/scripts/backfill-profile-pipeline-from-opportunities.mjs` | ✅ canonical | Calls `saveToProfilePipeline` |
 | `backend/routes/admin.js POST /api/admin/backfill-matches` | ✅ canonical | Re-evaluates using `computeMatchDecision` |
 | `backend/utils/seedOnStartup.js` | ✅ canonical | Inserts into `funding_opportunities`, not grants pipeline |
-| `backend/scripts/seed-profile-grants.mjs` | ✅ canonical (v2.0.0) | Dev-only; guarded by NODE_ENV/DISABLE_SEEDING; uses `computeMatchDecision` |
-| `scripts/seed-profile-grants.mjs` | ✅ canonical (v2.0.0) | Dev-only; guarded by NODE_ENV/DISABLE_SEEDING; uses `computeMatchDecision` |
-| `scripts/seed-matched-grants.mjs` | ✅ canonical (v2.0.0) | Dev-only; guarded by NODE_ENV/DISABLE_SEEDING; uses `computeMatchDecision` |
-| `backend/scripts/create-orgs-and-grants.mjs` | ⚠️ deprecated | Test scaffold only; marked deprecated; uses random placeholder data |
+| `backend/scripts/seed-profile-grants.mjs` | ✅ canonical | Dev-only; guarded by NODE_ENV/DISABLE_SEEDING; uses `computeMatchDecision` |
+| `scripts/seed-profile-grants.mjs` | ✅ canonical (v4.0.0) | Dev-only; guarded by NODE_ENV/DISABLE_SEEDING; heuristic pre-score via canonical `scoreOpportunity`; `computeMatchDecision` is sole acceptance authority |
+| `scripts/seed-matched-grants.mjs` | ✅ canonical | Dev-only; guarded by NODE_ENV/DISABLE_SEEDING; uses `computeMatchDecision` |
+| `backend/scripts/create-orgs-and-grants.mjs` | ❌ hard-disabled | Throws on load; previous body inserted random placeholder data, bypassing `computeMatchDecision` |
 
 ## Relevance Filter
 
@@ -364,10 +397,18 @@ Tests are in:
 - `tests/unit/matchDecisionEngine.comprehensive.test.mjs` (v2 regression harness — 63 tests)
 - `tests/unit/matchDecisionEngine.lifecycle.test.mjs` (lifecycle / pipeline tests — 16 tests)
 - `tests/unit/candidate-prefilter-safety.test.mjs` (pre-filter safety regression — 8 tests)
+- `tests/unit/canonical-authority-sweep.test.mjs` (enforces `matchEngine.js`
+  as the sole acceptance authority; `matchingEngine.js` is strictly a
+  scoring-only legacy shim)
+- `tests/unit/architecture-drift-audit.test.mjs` (prefilter-conservatism
+  invariants, shared `opportunityPolicy` primitives, stale-doc prevention,
+  Anya domain audits)
+- `tests/unit/crawler-policy-proof.test.mjs` (executable version of the
+  guarantees documented in `docs/CRAWLER_POLICY_PROOF.md`)
 
-### Comprehensive Test Coverage (v2)
+### Comprehensive Test Coverage
 
-1. **MATCHER_VERSION** is `2.0.0`
+1. **MATCHER_VERSION** is `4.0.0`
 2. **Profile classes** (ACCEPT/REVIEW/REJECT for each):
    - Caregiver/family profile
    - Student profile (including non-student REJECT for student-only)
@@ -387,7 +428,7 @@ Tests are in:
 10. **Fingerprint v2** includes `applicabilityUnknown`, `isCaregiver`, `hasChronicIllness`
 11. **New opportunity flags** (`isProBono`, `isInKind`, `isInstitutionalOnly`, `requiresDisasterContext`, `isDmeOrEquipment`, `diseaseSpecific`)
 
-### Lifecycle / Pipeline Tests (v2.0.0)
+### Lifecycle / Pipeline Tests
 
 `tests/unit/matchDecisionEngine.lifecycle.test.mjs` covers:
 
@@ -395,7 +436,7 @@ Tests are in:
 2. **Cross-profile isolation**: pipeline of profile A does not leak into profile B
 3. **Duplicate prevention**: inserting the same opportunity twice is idempotent
 4. **Stale re-evaluation**: rows with old `matcher_version` are detected and re-evaluated
-5. **Null fingerprint detection**: rows without fingerprints are detected as never evaluated by v2.0.0
+5. **Null fingerprint detection**: rows without fingerprints are detected as never evaluated by the current matcher version
 6. **REJECT removal**: stale rows that now produce REJECT (e.g. loan) are deleted from pipeline
 7. **Profile fingerprint determinism**: same profile → same fingerprint; different state/needs → different fingerprint
 8. **Opportunity fingerprint determinism**: same opportunity → same fingerprint; `is_loan` change → different fingerprint

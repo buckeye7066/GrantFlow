@@ -22,7 +22,10 @@ router.use((req, res, next) => {
 
 // Scoring and profile signal extraction handled by shared modules:
 // - loadProfileContext + buildProfileFacets → profile context
-// - scoreOpportunity (matchingEngine.js) → scoring
+// - scoreOpportunity (backend/services/matchEngine.js) → non-authoritative
+//   ranking score; matchingEngine.js is a legacy compatibility shim.
+// - computeMatchDecision (backend/services/matchEngine.js) → SOLE
+//   acceptance/rejection authority; use this before any pipeline INSERT.
 // - isJunkOpportunity (contentFilter.js) → content filtering
 
 /**

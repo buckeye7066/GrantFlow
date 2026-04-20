@@ -188,9 +188,19 @@ router.post('/run', ensureAuth, async (req, res) => {
   } = req.body
 
   let min_match_score = 50
-  if (typeof bodyMinScore === 'number' && bodyMinScore >= 0 && bodyMinScore <= 100) min_match_score = bodyMinScore
-  else if (typeof bodyMinScore === 'string' && /^\d+$/.test(bodyMinScore))
+  // Track whether the caller explicitly specified a score floor. When they did,
+  // it must survive fallback relaxation as a hard floor (tests:
+  // real-crawlers-policy.test.mjs "min_match_score threshold enforced"). When
+  // they didn't, fallback may relax freely per user rule "zero results is a
+  // failure state".
+  let scoreFloorExplicit = false
+  if (typeof bodyMinScore === 'number' && bodyMinScore >= 0 && bodyMinScore <= 100) {
+    min_match_score = bodyMinScore
+    scoreFloorExplicit = true
+  } else if (typeof bodyMinScore === 'string' && /^\d+$/.test(bodyMinScore)) {
     min_match_score = Math.min(100, Math.max(0, parseInt(bodyMinScore, 10)))
+    scoreFloorExplicit = true
+  }
 
   if (!crawler_type || !CRAWLER_TYPES.includes(crawler_type)) {
     return res.status(400).json({
@@ -275,10 +285,18 @@ router.post('/run', ensureAuth, async (req, res) => {
 
     const dropCounts = { belowMinScore: 0, relevance: 0, relevanceByRule: {} }
 
+    // Directories are exempt from the numeric threshold only in the
+    // directory-centric crawler type (local_funding) where the caller is
+    // explicitly asking for directory resources. In any other crawler type,
+    // an explicit min_match_score applies to every item so that competitive
+    // threshold requests are honoured (real-crawlers-policy.test.mjs
+    // "min_match_score threshold enforced").
+    const directoryScoreFloorExempt = crawler_type === 'local_funding'
     let filtered = allMapped
       .filter((opp) => {
         const isDbDirectory = _isDirectoryOpp(opp)
-        if (!isDbDirectory) {
+        const exemptFromScoreFloor = isDbDirectory && directoryScoreFloorExempt
+        if (!exemptFromScoreFloor) {
           if (typeof opp.match_score !== 'number' || opp.match_score < min_match_score) {
             dropCounts.belowMinScore++
             return false
@@ -298,30 +316,47 @@ router.post('/run', ensureAuth, async (req, res) => {
       .slice(0, (strategy.maxResults || 100) + nearbyOpps.length)
 
     let thresholdFallbackMessage = null
+    // When the caller explicitly set min_match_score, the score floor survives
+    // every relaxation stage (explicit threshold === explicit user intent).
+    // Only relevance rules may be softened in that case.
+    const scoreFloorForFallback = scoreFloorExplicit ? min_match_score : 0
     if (!strictMinScore && filtered.length === 0 && allMapped.length > 0) {
-      // STAGE 1: relax min_match_score AND soften non-hard relevance rules
-      // (per project rule: "Population / eligibility mismatches must reduce
-      // score, not discard results"). Only hard-exclusive rules (women-only,
-      // entity-exclusive, crowdfunding, bad URL) still reject in soft mode.
+      // STAGE 1: relax relevance rules (per project rule: "Population /
+      // eligibility mismatches must reduce score, not discard results"). If
+      // the caller did not explicitly request a score floor, relax scores too.
       let relaxed = allMapped
         .filter((opp) => {
           const isDir = _isDirectoryOpp(opp)
           const relevance = applyRelevanceFilter(opp, profileData, { mode: 'soft' })
-          return relevance.pass || isDir
+          const scoreOk =
+            typeof opp.match_score === 'number' && opp.match_score >= scoreFloorForFallback
+          // Directories get the same score-floor treatment as the main filter:
+          // exempt only for the directory-centric local_funding crawler.
+          const isDirExempt = isDir && directoryScoreFloorExempt
+          return (relevance.pass || isDir) && (scoreOk || isDirExempt)
         })
         .sort((a, b) => (b.match_score ?? 0) - (a.match_score ?? 0))
         .slice(0, 50)
 
       if (relaxed.length > 0) {
         filtered = relaxed
-        thresholdFallbackMessage = `No results met initial filters. Showing best available matches (relaxed below ${min_match_score}%).`
+        thresholdFallbackMessage = scoreFloorExplicit
+          ? `Applied explicit score floor ${min_match_score}; relaxed relevance rules.`
+          : `No results met initial filters. Showing best available matches (relaxed below ${min_match_score}%).`
       } else {
         // STAGE 2: last-resort — drop relevance filter entirely, keep only URL-actionable items.
         // Directories / general funding resources must always survive (user rule).
+        // Explicit score floors still apply.
         filtered = allMapped
           .filter((opp) => {
             const url = opp.url || opp.application_url || opp.source_url || ''
-            return typeof url === 'string' && url.startsWith('http')
+            if (!(typeof url === 'string' && url.startsWith('http'))) return false
+            if (scoreFloorExplicit) {
+              return (
+                typeof opp.match_score === 'number' && opp.match_score >= scoreFloorForFallback
+              )
+            }
+            return true
           })
           .sort((a, b) => (b.match_score ?? 0) - (a.match_score ?? 0))
           .slice(0, 25)
@@ -379,8 +414,9 @@ router.post('/run', ensureAuth, async (req, res) => {
     }
 
     // GUARANTEE: if UI will show "Found N", backend must return >= 1 included item
-    // whenever allMapped > 0 (user rule). Only empty when truly 0 candidates exist
-    // or min_match_score is set with strict mode.
+    // whenever allMapped > 0 (user rule). Only empty when truly 0 candidates exist,
+    // strict_min_score mode is set, or the caller specified an explicit
+    // min_match_score floor that no candidate meets.
     if (filtered.length === 0 && allMapped.length > 0 && !strictMinScore) {
       const lastResort = allMapped
         .filter((opp) => {
@@ -389,6 +425,11 @@ router.post('/run', ensureAuth, async (req, res) => {
           const oppType = String(opp.opportunity_type || '').toLowerCase()
           if (['loan', 'loan_program', 'microloan'].includes(oppType) || opp.is_loan) return false
           if (opp.requires_match) return false
+          if (scoreFloorExplicit) {
+            return (
+              typeof opp.match_score === 'number' && opp.match_score >= scoreFloorForFallback
+            )
+          }
           return true
         })
         .sort((a, b) => (b.match_score ?? 0) - (a.match_score ?? 0))

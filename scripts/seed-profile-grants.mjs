@@ -33,13 +33,23 @@ import { fileURLToPath } from 'url';
 import { applyRelevanceFilter } from '../backend/services/relevanceFilter.js';
 import {
   computeMatchDecision,
+  scoreOpportunity,
   normalizeProfile,
   normalizeOpportunity,
   computeProfileFingerprint,
   computeOpportunityFingerprint,
   MATCHER_VERSION,
 } from '../backend/services/matchDecisionEngine.js';
-import { calculateMatchScore } from '../backend/services/matchingEngine.js';
+import {
+  FAKE_OPPORTUNITY_SOURCES,
+  getPlaceholderUrlSqlPatterns,
+} from '../backend/services/crawlers/opportunityPolicy.js';
+
+// Non-authoritative heuristic pre-score. Used ONLY as a junk filter and a
+// bounded ranking tool before the canonical engine runs. computeMatchDecision
+// is the sole acceptance/rejection authority below. Kept as a local alias so
+// the intent is unmistakable at each call site.
+const prefilterScoreOpportunity = scoreOpportunity;
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -125,24 +135,28 @@ console.log('\n2. Getting all profiles...');
 const profiles = db.prepare('SELECT * FROM profiles WHERE id IS NOT NULL').all();
 console.log(`   Found ${profiles.length} profiles`);
 
-// First, clean up any fake grants from profiles
+// First, clean up any fake grants from profiles using the canonical
+// policy lists (backend/services/crawlers/opportunityPolicy.js). This is the
+// SAME source of truth production paths use -- no script-local drift.
 console.log('\n3. Removing fake grants from all profiles...');
+const _fakeSourcePlaceholders = FAKE_OPPORTUNITY_SOURCES.map(() => '?').join(', ');
 const fakeGrantsRemoved = db.prepare(`
-  DELETE FROM grants 
+  DELETE FROM grants
   WHERE funding_opportunity_id IN (
-    SELECT id FROM funding_opportunities 
-    WHERE source IN ('comprehensive_crawler', 'synthetic', 'template', 'fake')
+    SELECT id FROM funding_opportunities
+    WHERE source IN (${_fakeSourcePlaceholders})
   )
-`).run();
-console.log(`   Removed ${fakeGrantsRemoved.changes} fake grants`);
+`).run(...FAKE_OPPORTUNITY_SOURCES);
+console.log(`   Removed ${fakeGrantsRemoved.changes} fake grants (canonical sources: ${FAKE_OPPORTUNITY_SOURCES.join(', ')})`);
 
-// Also remove grants with placeholder URLs
-const placeholderGrantsRemoved = db.prepare(`
-  DELETE FROM grants 
-  WHERE application_url LIKE '%example.org%' 
-  OR application_url LIKE '%example.com%'
-`).run();
-console.log(`   Removed ${placeholderGrantsRemoved.changes} placeholder grants`);
+// Remove grants whose application_url matches a canonical placeholder host.
+const _placeholderUrlPatterns = getPlaceholderUrlSqlPatterns();
+let _placeholderGrantsTotal = 0;
+for (const _pat of _placeholderUrlPatterns) {
+  const r = db.prepare(`DELETE FROM grants WHERE application_url LIKE ?`).run(_pat);
+  _placeholderGrantsTotal += r.changes;
+}
+console.log(`   Removed ${_placeholderGrantsTotal} placeholder grants (patterns: ${_placeholderUrlPatterns.join(', ')})`);
 
 // Prepare insert statement — detect whether decision columns are present
 const _grantCols = db.prepare('PRAGMA table_info(grants)').all().map(c => c.name);
@@ -253,8 +267,11 @@ for (const profile of profiles) {
     // Skip if requires matching funds
     if (opp.requires_match) continue;
     
-    const { score, reasons: matchReasons } = calculateMatchScore(profileContext, opp);
-    
+    // Non-authoritative heuristic pre-score (matchEngine.scoreOpportunity via
+    // the compat re-export). Used ONLY to strip garbage and to rank candidates;
+    // computeMatchDecision below is the sole acceptance authority.
+    const { score, reasons: matchReasons } = prefilterScoreOpportunity(profileContext, opp);
+
     // Stage 1 (junk filter): only skip obviously irrelevant candidates (score < 5).
     // The canonical decision engine (computeMatchDecision) is the final acceptance
     // authority — this heuristic must NOT exclude plausible canonical matches.
@@ -391,13 +408,14 @@ for (const row of grantsByProfile) {
   console.log(`     - ${row.display_name || 'Unknown'}: ${row.grant_count} grants`);
 }
 
-// Verify no fake grants remain
-const fakeCheck = db.prepare(`
-  SELECT COUNT(*) as count FROM grants 
-  WHERE application_url LIKE '%example.org%' 
-  OR application_url LIKE '%example.com%'
-`).get();
-console.log(`\n   Fake grants remaining: ${fakeCheck.count}`);
+// Verify no fake grants remain (canonical placeholder host list)
+const _verifyPatterns = getPlaceholderUrlSqlPatterns();
+let _fakeCount = 0;
+for (const _pat of _verifyPatterns) {
+  const r = db.prepare(`SELECT COUNT(*) AS count FROM grants WHERE application_url LIKE ?`).get(_pat);
+  _fakeCount += Number(r?.count || 0);
+}
+console.log(`\n   Fake grants remaining: ${_fakeCount}`);
 
 db.close();
 console.log('\n✅ Done! Each profile now has real grants evaluated by the canonical decision engine.');

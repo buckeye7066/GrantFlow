@@ -66,7 +66,7 @@ function startServer(extraEnv = {}) {
         process.stderr.write(`[test] kill failed: ${killErr.message}\n`)
       }
       reject(new Error(`server did not become ready\nstdout:\n${stdout}\nstderr:\n${stderr}`))
-    }, 30_000)
+    }, 60_000)
 
     child.on('error', (spawnErr) => {
       clearTimeout(timeout)

@@ -30,6 +30,13 @@
 
 import path from 'path'
 import { promises as fs } from 'fs'
+import {
+  isValidRealUrl,
+  isLoanLike,
+  isExpired,
+  isPlaceholderOpportunity,
+  getPlaceholderHostnames,
+} from './crawlers/opportunityPolicy.js'
 
 /**
  * @typedef {Object} AuditFinding
@@ -61,6 +68,20 @@ const CANONICAL_PROFILE_FIELDS = [
   'organization_type',
   'population_served',
   'mission_focus',
+]
+
+// Canonical top-level profile *sections* (JSON payload keys). If matching code
+// never references any of these, it is almost certainly ignoring that whole
+// section of user-supplied profile data.
+const CANONICAL_PROFILE_SECTIONS = [
+  'basic_information',
+  'organization_details',
+  'location_focus',
+  'programs_services',
+  'funding_needs',
+  'financial_information',
+  'demographics',
+  'comprehensive_application',
 ]
 
 async function readFileSafe(filePath) {
@@ -96,16 +117,27 @@ async function auditOpportunityUrls({ db }) {
     return { findings, errors, checked: 0 }
   }
 
+  const placeholderHosts = getPlaceholderHostnames()
   for (const row of rows) {
     const url = String(row.application_url || '').trim()
     let valid = false
     let reason = 'unparseable'
+    let type = 'invalid_opportunity_url'
     try {
       const u = new URL(url)
-      if (u.protocol === 'http:' || u.protocol === 'https:') {
-        valid = true
-      } else {
+      if (u.protocol !== 'http:' && u.protocol !== 'https:') {
         reason = `non_http_protocol:${u.protocol}`
+      } else if (
+        placeholderHosts.includes(u.hostname.toLowerCase()) ||
+        placeholderHosts.some((ph) => u.hostname.toLowerCase().endsWith('.' + ph))
+      ) {
+        reason = `placeholder_host:${u.hostname}`
+        type = 'placeholder_opportunity_url'
+      } else if (!isValidRealUrl(url)) {
+        reason = 'rejected_by_policy'
+        type = 'placeholder_opportunity_url'
+      } else {
+        valid = true
       }
     } catch (err) {
       reason = `invalid_url:${err?.message || 'parse_error'}`
@@ -113,7 +145,7 @@ async function auditOpportunityUrls({ db }) {
     if (!valid) {
       findings.push({
         audit: 'opportunity_url_validity',
-        type: 'invalid_opportunity_url',
+        type,
         severity: 'high',
         message: `Opportunity #${row.id} has invalid application_url (${reason}).`,
         evidence: { id: row.id, title: row.title, url, reason },
@@ -122,6 +154,213 @@ async function auditOpportunityUrls({ db }) {
   }
 
   return { findings, errors, checked: rows.length }
+}
+
+// ---------------------------------------------------------------------------
+// 6. Expired opportunity labeling
+//    Opportunities whose deadline has passed but which are still is_active=true
+//    are a visible source of user distrust. Flag each one.
+// ---------------------------------------------------------------------------
+async function auditExpiredOpportunityLabeling({ db }) {
+  const findings = []
+  const errors = []
+  if (!db) {
+    errors.push({ audit: 'expired_opportunity_labeling', message: 'db_unavailable: skipped' })
+    return { findings, errors, checked: 0 }
+  }
+
+  let rows = []
+  try {
+    const result = await db.query(
+      `SELECT id, title, deadline, deadline_type, is_active
+         FROM funding_opportunities
+        WHERE is_active = true
+          AND deadline IS NOT NULL
+          AND deadline <> ''
+          AND COALESCE(deadline_type, '') <> 'rolling'
+        LIMIT 5000`,
+    )
+    rows = result?.rows || []
+  } catch (err) {
+    errors.push({
+      audit: 'expired_opportunity_labeling',
+      message: `query_failed: ${err?.message || String(err)}`,
+    })
+    return { findings, errors, checked: 0 }
+  }
+
+  let expiredCount = 0
+  for (const row of rows) {
+    if (isExpired(row)) {
+      expiredCount += 1
+      findings.push({
+        audit: 'expired_opportunity_labeling',
+        type: 'expired_but_active',
+        severity: 'high',
+        message: `Opportunity #${row.id} deadline has passed (${row.deadline}) but is_active=true.`,
+        evidence: { id: row.id, title: row.title, deadline: row.deadline },
+      })
+    }
+  }
+  return { findings, errors, checked: rows.length, expired: expiredCount }
+}
+
+// ---------------------------------------------------------------------------
+// 7. Loan visibility vs. canonical policy
+//    The canonical policy rejects loan-like products. If any opportunity is
+//    still active and matches isLoanLike(), it will be surfaced to users who
+//    have disallowed loans and must be flagged for cleanup.
+// ---------------------------------------------------------------------------
+async function auditLoanVisibility({ db }) {
+  const findings = []
+  const errors = []
+  if (!db) {
+    errors.push({ audit: 'loan_visibility_vs_policy', message: 'db_unavailable: skipped' })
+    return { findings, errors, checked: 0 }
+  }
+
+  let rows = []
+  try {
+    const result = await db.query(
+      `SELECT id, title, description, opportunity_type, eligibility, eligibility_criteria, is_loan
+         FROM funding_opportunities
+        WHERE is_active = true
+        LIMIT 5000`,
+    )
+    rows = result?.rows || []
+  } catch (err) {
+    errors.push({
+      audit: 'loan_visibility_vs_policy',
+      message: `query_failed: ${err?.message || String(err)}`,
+    })
+    return { findings, errors, checked: 0 }
+  }
+
+  let loanLikeCount = 0
+  for (const row of rows) {
+    if (isLoanLike(row)) {
+      loanLikeCount += 1
+      findings.push({
+        audit: 'loan_visibility_vs_policy',
+        type: 'active_loan_like_opportunity',
+        severity: 'high',
+        message: `Opportunity #${row.id} is loan-like per policy but is still active (disallowed for loan-averse profiles).`,
+        evidence: { id: row.id, title: row.title, opportunity_type: row.opportunity_type },
+      })
+    }
+    if (isPlaceholderOpportunity(row)) {
+      findings.push({
+        audit: 'loan_visibility_vs_policy',
+        type: 'active_placeholder_opportunity',
+        severity: 'medium',
+        message: `Opportunity #${row.id} looks like placeholder/stub content but is active.`,
+        evidence: { id: row.id, title: row.title },
+      })
+    }
+  }
+
+  return { findings, errors, checked: rows.length, loan_like: loanLikeCount }
+}
+
+// ---------------------------------------------------------------------------
+// 8. Ignored profile sections
+//    Extends matching_coverage to the high-level JSON sections of the profile
+//    payload. A section that is never referenced in matching code means every
+//    answer inside it is silently discarded.
+// ---------------------------------------------------------------------------
+async function auditIgnoredProfileSections({ rootDir }) {
+  const findings = []
+  const errors = []
+
+  const candidates = [
+    path.join(rootDir, 'backend', 'services', 'matchEngine.js'),
+    path.join(rootDir, 'backend', 'services', 'matching.js'),
+    path.join(rootDir, 'backend', 'services', 'relevanceFilter.js'),
+    path.join(rootDir, 'backend', 'services', 'relevanceFilterRules.js'),
+    path.join(rootDir, 'backend', 'services', 'matchDecisionEngine.js'),
+  ]
+
+  const sources = []
+  for (const candidate of candidates) {
+    const text = await readFileSafe(candidate)
+    if (text != null) sources.push({ file: candidate, text })
+  }
+  if (sources.length === 0) {
+    errors.push({ audit: 'ignored_profile_sections', message: 'no_matching_sources_found' })
+    return { findings, errors, checked: 0 }
+  }
+
+  const combinedText = sources.map((s) => s.text).join('\n')
+  const missingSections = []
+  for (const section of CANONICAL_PROFILE_SECTIONS) {
+    const variants = [
+      new RegExp(`\\b${section}\\b`, 'i'),
+      new RegExp(`['"\`]${section}['"\`]`, 'i'),
+    ]
+    if (!variants.some((rx) => rx.test(combinedText))) {
+      missingSections.push(section)
+    }
+  }
+
+  if (missingSections.length > 0) {
+    findings.push({
+      audit: 'ignored_profile_sections',
+      type: 'profile_section_ignored_by_matcher',
+      severity: 'high',
+      message: `Matching engine never references ${missingSections.length} canonical profile section(s).`,
+      file: 'backend/services/matchEngine.js',
+      evidence: {
+        missing_sections: missingSections,
+        sources_scanned: sources.map((s) => s.file),
+      },
+    })
+  }
+
+  return {
+    findings,
+    errors,
+    checked: CANONICAL_PROFILE_SECTIONS.length,
+    missing_sections: missingSections,
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 9. Zero-result fallback presence in route handlers
+//    Extends fallback_logic to static-scan every route that returns
+//    total_found for an explicit "if total_found > 0 and included === 0,
+//    relax/fallback" guard. The user rule explicitly forbids silent zero.
+// ---------------------------------------------------------------------------
+async function auditZeroResultFallbackInRoutes({ rootDir }) {
+  const findings = []
+  const errors = []
+  const routesDir = path.join(rootDir, 'backend', 'routes')
+
+  let routeFiles = []
+  try {
+    routeFiles = (await fs.readdir(routesDir)).filter((f) => f.endsWith('.js'))
+  } catch (err) {
+    errors.push({ audit: 'zero_result_fallback_routes', message: `routes_dir_unreadable:${err?.message}` })
+    return { findings, errors }
+  }
+
+  const guardRx = /(relax|fallback|widen|expand|broaden|guaranteed|neighboring|nearby|national|included\s*===?\s*0|no[_\s-]?results)/i
+
+  for (const rel of routeFiles) {
+    const full = path.join(routesDir, rel)
+    const text = await readFileSafe(full)
+    if (text == null) continue
+    if (!/\btotal_found\b/.test(text)) continue
+    if (guardRx.test(text)) continue
+    findings.push({
+      audit: 'zero_result_fallback_routes',
+      type: 'route_without_zero_result_fallback',
+      severity: 'medium',
+      message: `Route ${rel} emits total_found without any visible fallback/relaxation branch.`,
+      file: `backend/routes/${rel}`,
+    })
+  }
+
+  return { findings, errors, checked: routeFiles.length }
 }
 
 // ---------------------------------------------------------------------------
@@ -328,11 +567,25 @@ export async function runGrantFlowDomainAudits({ rootDir, db = null, scannedFile
   const fallbackResult = await runOne('fallback_logic', () => auditFallbackLogic({ rootDir }))
   const uiResult = await runOne('ui_backend_consistency', () => auditUiBackendConsistency({ rootDir }))
   const groundingResult = await runOne('anya_grounding', () => auditAnyaGrounding({ db }))
+  const expiredResult = await runOne('expired_opportunity_labeling', () =>
+    auditExpiredOpportunityLabeling({ db }),
+  )
+  const loanResult = await runOne('loan_visibility_vs_policy', () => auditLoanVisibility({ db }))
+  const sectionResult = await runOne('ignored_profile_sections', () =>
+    auditIgnoredProfileSections({ rootDir }),
+  )
+  const routeFallbackResult = await runOne('zero_result_fallback_routes', () =>
+    auditZeroResultFallbackInRoutes({ rootDir }),
+  )
 
   summary.opportunity_urls_checked = opportunityResult?.checked ?? 0
   summary.matching_fields_checked = matchingResult?.checked ?? 0
   summary.matching_missing_fields = matchingResult?.missing ?? []
   summary.anya_recent_events_30d = groundingResult?.recent_events_30d ?? 0
+  summary.expired_opportunities_flagged = expiredResult?.expired ?? 0
+  summary.active_loan_like_opportunities = loanResult?.loan_like ?? 0
+  summary.profile_sections_missing = sectionResult?.missing_sections ?? []
+  summary.routes_scanned_for_fallback = routeFallbackResult?.checked ?? 0
   summary.findings_total = allFindings.length
   summary.errors_total = allErrors.length
   void fallbackResult
@@ -347,5 +600,10 @@ export const _internal_for_tests = {
   auditFallbackLogic,
   auditUiBackendConsistency,
   auditAnyaGrounding,
+  auditExpiredOpportunityLabeling,
+  auditLoanVisibility,
+  auditIgnoredProfileSections,
+  auditZeroResultFallbackInRoutes,
   CANONICAL_PROFILE_FIELDS,
+  CANONICAL_PROFILE_SECTIONS,
 }

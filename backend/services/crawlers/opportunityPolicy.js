@@ -50,6 +50,35 @@ const PLACEHOLDER_HOSTNAMES = new Set([
   '0.0.0.0',
 ])
 
+/**
+ * Canonical list of opportunity source slugs that are always treated as
+ * fake/synthetic/template content. Scripts and production cleanup paths MUST
+ * pull from here instead of hard-coding their own lists, so adding a new
+ * fake-source category only needs one edit.
+ */
+export const FAKE_OPPORTUNITY_SOURCES = Object.freeze([
+  'comprehensive_crawler',
+  'synthetic',
+  'template',
+  'fake',
+  'example',
+])
+
+/**
+ * Returns SQL LIKE patterns (wrapped in %) for every known placeholder host,
+ * so DB cleanup scripts can purge placeholder URLs without hard-coding.
+ *
+ * Example:  ["%example.com%", "%example.org%", ...]
+ */
+export function getPlaceholderUrlSqlPatterns() {
+  return [...PLACEHOLDER_HOSTNAMES].map((host) => `%${host}%`)
+}
+
+/** Expose the canonical placeholder host set as a frozen array for callers. */
+export function getPlaceholderHostnames() {
+  return [...PLACEHOLDER_HOSTNAMES]
+}
+
 /** Returns true if the URL resolves to a known placeholder/test domain. */
 function isPlaceholderHostname(url) {
   if (typeof url !== 'string' || !url.trim()) return false

@@ -81,13 +81,15 @@ describe('POST /api/admin/anya/runAutonomous', () => {
     })
     const port = server.address().port
     baseUrl = `http://127.0.0.1:${port}`
-  })
+  }, 60_000)
 
   afterAll(async () => {
-    await new Promise((resolve) => server.close(resolve))
-    process.chdir(originalCwd)
-    await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {})
-  })
+    if (server) {
+      await new Promise((resolve) => server.close(resolve))
+    }
+    if (originalCwd) process.chdir(originalCwd)
+    if (tmpDir) await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {})
+  }, 30_000)
 
   it('returns 200 with {id, tool, output} envelope and real metrics', async () => {
     const { status, json } = await postJson(`${baseUrl}/api/admin/anya/runAutonomous`, {

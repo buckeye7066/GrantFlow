@@ -2,6 +2,14 @@
 
 This document describes how GrantFlow enforces non-negotiable business rules across all real crawlers (everything except GeoCrawler) so that only **real, relatable** funding sources with valid URLs are returned, and loans, matching-funds, and placeholders never appear.
 
+> **Executable proof:** every guarantee below is locked down by
+> `tests/unit/crawler-policy-proof.test.mjs`. If the prose and the tests
+> disagree, trust the tests. Run them with:
+>
+> ```bash
+> node --test tests/unit/crawler-policy-proof.test.mjs
+> ```
+
 ## What Changed
 
 1. **Centralised policy** — `backend/services/crawlers/opportunityPolicy.js` is the single source of truth:
@@ -52,6 +60,9 @@ This document describes how GrantFlow enforces non-negotiable business rules acr
 ## How to Run the Tests
 
 ```bash
+# Executable guarantees for THIS document — one test per prose bullet
+node --test tests/unit/crawler-policy-proof.test.mjs
+
 # Unit tests for opportunityPolicy (rejects loans, matching funds, placeholders, requires valid http(s))
 node --test tests/unit/opportunityPolicy.test.mjs
 

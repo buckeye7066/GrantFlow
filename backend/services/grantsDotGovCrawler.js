@@ -19,9 +19,13 @@ import {
 const GRANTS_GOV_API_KEY = process.env.GRANTS_GOV_API_KEY || ''
 
 /**
- * Fetch opportunities from Grants.gov API
+ * Fetch opportunities from Grants.gov API.
+ *
+ * Named-exported so legacy ingest paths (see
+ * `backend/services/sources/grantsGov.js` compat shim) can reuse the same
+ * canonical implementation instead of reimplementing request handling.
  */
-async function fetchGrantsGov(params = {}) {
+export async function fetchGrantsGov(params = {}) {
   const {
     keyword = '',
     oppStatus = 'forecasted|posted', // posted|forecasted (public search2)
@@ -96,7 +100,7 @@ async function fetchGrantsGov(params = {}) {
 /**
  * Transform Grants.gov opportunity to our format
  */
-function transformGrantsGovOpportunity(opp) {
+export function transformGrantsGovOpportunity(opp) {
   const oppId = opp?.id ?? opp?.oppId ?? null
   const oppNumber = opp?.number || opp?.oppNum || opp?.oppNumber || opp?.opportunityNumber || '';
   const id = `grants-gov-${oppNumber || oppId || cryptoSafeId(opp)}`;
@@ -289,4 +293,4 @@ const result = await upsertFundingOpportunity(db, {
   };
 }
 
-export default { crawlGrantsGov, fetchGrantsGov };
+export default { crawlGrantsGov, fetchGrantsGov, transformGrantsGovOpportunity };

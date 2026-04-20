@@ -1,17 +1,77 @@
-Add canonical mission goals for GrantFlow and Anya
+feat(anya): AST analysis, domain audits, paginated findings, scan-error surfacing
 
-Created backend/config/missionGoals.js as the single source of truth
-for all mission goals. 10 GrantFlow goals (find real funding, match to
-needs, use full profile, support all user types, evolve, intelligent
-crawling, clear UI, avoid zero results, explainable, discovery to action)
-and 8 Anya goals (explain, plain language, guide workflows, next action,
-accessible, grounded in data, onboarding, improve confidence).
+What was broken
+  - The autonomous crawler silently truncated findings to the first 50 files
+    (issue_summary_by_file.slice(0, 50)), hiding real signal from Anya.
+  - listFilesRecursive swallowed readdir errors (try/readdir/catch{}) and the
+    per-file readFile failures were logged but not counted -- so a missing
+    directory or permission-denied subtree would produce "scan_errors: 0".
+  - All analyzers were fused into a single regex sweep over AUDIT_PATTERNS,
+    so "console.log" inside a string literal was a false positive, and
+    consumers couldn't tell regex matches from heuristic matches from
+    token-literal matches from AST-confirmed matches.
+  - There were no GrantFlow-specific audits at all: opportunity URL
+    validity, matching coverage across profile fields, fallback-on-zero
+    guard, UI/backend count consistency, and Anya grounding to real system
+    state were never checked.
 
-Updated codeGuardService.js to import from the canonical source instead
-of maintaining its own copy.
+Why it failed
+  - Metrics and reporting were optimised for brevity (truncation, silent
+    catches) instead of truth. That violates the rule "if total_found > 0
+    and included === 0, you must log why items were removed" and made it
+    impossible to trust "found X issues" output.
+  - The regex-only analyzer could not reason about syntactic context, so
+    any string literal containing "console.log(" triggered a finding.
+  - Without domain audits, the crawler never verified that the code it was
+    scanning actually fulfilled GrantFlow's product contracts.
 
-Updated anyaOrchestrator.js to inject both goal sets into Anya's system
-prompt so her responses are governed by these missions.
+Why this fix works
+  - New honest counters on every report:
+      files_discovered, files_scanned, files_with_findings, findings_found,
+      files_skipped, scan_errors, plus ast_files_attempted /
+      ast_files_failed / ast_available and a search_kind_breakdown.
+  - Three separated analyzers, each tagging its findings with search_kind:
+      LITERAL   : substring tokens (TODO/FIXME/HACK/XXX), token recorded
+      REGEX     : prior pattern matches (phrase-level)
+      HEURISTIC : regex + line-shape (silent / bare catch)
+      AST       : acorn-based walk over .js/.mjs/.cjs for empty catches and
+                  real console.log/debug calls -- ignores string literals.
+    Dedupe keeps the most-precise analyzer's version of a duplicate hit.
+  - Flat findings list is returned IN FULL by default; findingsLimit /
+    findingsOffset provide explicit pagination with findings_total +
+    findings_truncated flags so nothing is ever hidden silently.
+  - issue_summary_by_file no longer slice(0,50); the full list is returned
+    along with issue_summary_by_file_count so consumers can page client-side.
+  - listFilesRecursive now returns dir-enumeration errors; readFile
+    failures increment files_skipped and land in scan_errors_detail, and
+    AST parse failures produce an 'ast_parse' scan-error entry.
+  - New services/anyaGrantFlowAudits.js runs domain audits in-process and
+    returns findings + errors + summary. Each audit surfaces its own
+    db_unavailable / query_failed errors instead of swallowing them:
+      1. opportunity_url_validity   (format-level)
+      2. matching_coverage          (vs canonical profile schema)
+      3. fallback_logic             (static scan of matching.js)
+      4. ui_backend_consistency     (total_found without results array)
+      5. anya_grounding             (audit_log usage in last 30 days)
+  - The option includeDomainAudits (default true) controls the run; the
+    option skipAst lets unit tests disable AST without removing acorn.
+  - acorn added as a direct dependency for deterministic resolution.
 
-Added .cursor/rules/mission-goals.mdc (local only, gitignored) so every
-future Cursor session has these goals in context when editing code.
+Tests
+  - backend/tests/anyaAutonomousCrawler.real.test.js extended with an
+    'extended honest-metrics contract' suite covering:
+      * files_skipped / scan_errors are real numbers
+      * search_kind_breakdown reported and every finding carries search_kind
+      * literal analyzer is token-based and records the token
+      * AST is available, ignores string-literal false positives, and
+        catches the empty catch in b.js
+      * skipAst disables AST but keeps other analyzers alive
+      * no-limit call returns ALL findings (nothing silently truncated)
+      * explicit findingsLimit / findingsOffset pagination with
+        findings_total + findings_truncated
+      * readdir errors on a missing directory surface in scan_errors and
+        scan_errors_detail + errors[]
+      * domain audits run, produce matching_coverage + ui_backend_consistency
+        findings against a controlled fixture, and surface db_unavailable
+        errors rather than swallowing them
+      * includeDomainAudits=false genuinely disables the domain pass

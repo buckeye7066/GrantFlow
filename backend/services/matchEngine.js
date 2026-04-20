@@ -1648,10 +1648,15 @@ export function makeDecision(score, profile, opportunity, normalizedProfile = nu
   }
 
   // Geographic state mismatch — per project rules, geography must EXPAND OUTWARD
-  // (city → county → state → national) and must NOT hard-eliminate opportunities.
-  // Only hard-REJECT when the opportunity EXPLICITLY declares state exclusivity
-  // (e.g. "Ohio residents only"). Otherwise, downgrade to REVIEW so the user sees
-  // the opportunity with a clear explanation.
+  // (city → county → state → national) and must NOT hard-eliminate opportunities
+  // UNLESS the opportunity is explicitly state-exclusive.
+  //
+  // We hard-REJECT only when the opportunity text contains a resident/residency
+  // signal (e.g. "residents only", "for California residents", "exclusively for
+  // Texas residents"), or when the caller has pre-tagged state_residents_only.
+  // A bare `state: 'XX'` + `is_national: 0` is NOT sufficient to hard-REJECT
+  // because many non-national opportunities still accept cross-state applicants
+  // (per backend/tests/makeDecision.geography.test.js regression coverage).
   const profState = String(prof.state || '').trim()
   const oppStateRaw = String(opp.state || '').trim()
   const oppIsNational = Boolean(opp.is_national) || oppStateRaw.toLowerCase() === 'nationwide'
@@ -1659,11 +1664,20 @@ export function makeDecision(score, profile, opportunity, normalizedProfile = nu
     const pNorm = normalizeState(profState)
     const oNorm = normalizeState(oppStateRaw)
     if (pNorm && oNorm && pNorm !== oNorm) {
-      const RE_STATE_EXCLUSIVE = /\b(residents?\s+only|must\s+be\s+a?\s*resident|must\s+reside\s+in|limited\s+to\s+residents)\b/i
-      const isExplicitlyExclusive = RE_STATE_EXCLUSIVE.test(oppText) || opp.state_residents_only === true
+      // Residency-scope signals: any phrase tying "residents" to a qualifier is
+      // treated as an explicit state-scope declaration.
+      //   • "residents only" / "must be a resident" / "must reside in"
+      //   • "limited to residents"
+      //   • "for <X> residents" (e.g. "for Texas residents")
+      //   • "<X> residents (only|facing|who|experiencing|...)"
+      //   • "exclusively for <X> residents"
+      const RE_STATE_EXCLUSIVE = /\b(residents?\s+only|must\s+be\s+a?\s*resident|must\s+reside\s+in|limited\s+to\s+residents|for\s+\w+(?:\s+\w+)?\s+residents?|\w+\s+residents?\s+(?:only|facing|who|experiencing|must)|exclusively\s+for\s+\w+(?:\s+\w+)?\s+residents?)\b/i
+      const isExplicitlyExclusive =
+        RE_STATE_EXCLUSIVE.test(oppText) || opp.state_residents_only === true
       if (isExplicitlyExclusive) {
-        reasons.push(`Geographic mismatch — ${oppStateRaw} residents only`)
-        return { decision: 'REJECT', explanation: `Geographic mismatch: opportunity is restricted to ${oppStateRaw} residents only.`, reasons }
+        const reasonText = `Geographic mismatch: opportunity is for ${oppStateRaw}, profile is in ${profState}`
+        reasons.push(reasonText)
+        return { decision: 'REJECT', explanation: `${reasonText}.`, reasons }
       }
       reasons.push(`Geographic note — opportunity is in ${oppStateRaw}, profile is in ${profState} (may still be accessible)`)
       return { decision: 'REVIEW', explanation: `Opportunity is based in ${oppStateRaw} but may be accessible from ${profState}. Confirm eligibility on the program page.`, reasons }

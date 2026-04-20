@@ -27,6 +27,14 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
+# Runtime test / server logs produced by local runs; keep out of the repo.
+e2e-backend.log
+e2e-backend.err.log
+test-runner.log
+test-via-npm.log
+
+# Runtime audit output from Anya / background services.
+audit-reports/
 
 # OS / editor
 .DS_Store

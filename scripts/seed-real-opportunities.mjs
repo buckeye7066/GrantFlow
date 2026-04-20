@@ -11,6 +11,10 @@ import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 import { fileURLToPath } from 'url';
+import {
+  FAKE_OPPORTUNITY_SOURCES,
+  getPlaceholderUrlSqlPatterns,
+} from '../backend/services/crawlers/opportunityPolicy.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -42,17 +46,19 @@ if (!realOppsPath) {
 const realOpps = JSON.parse(fs.readFileSync(realOppsPath, 'utf-8'));
 console.log('[seed:demo] Using seed file:', realOppsPath);
 
-// Step 1: Remove fake/synthetic opportunities
+// Step 1: Remove fake/synthetic opportunities.
+//
+// Rules sourced from the canonical opportunity policy module so production
+// crawlers and seed scripts use the same definitions of "fake". Do NOT add
+// new patterns here -- add them to backend/services/crawlers/opportunityPolicy.js.
 console.log('\n1. Removing fake opportunities...');
 
-const fakeSources = [
-  'comprehensive_crawler',
-  'synthetic',
-  'template',
-  'fake',
-  'example'
-];
+const fakeSources = FAKE_OPPORTUNITY_SOURCES;
 
+// Script-local synthetic-title patterns remain here because they are
+// historical artifacts from older seeds and are not part of the canonical
+// opportunity-origin policy. If any of these recur in production data,
+// promote them to opportunityPolicy.js.
 const fakeTitlePatterns = [
   '%Community Anchor Impact Grant%',
   '%Resilience Boost Opportunity%',
@@ -65,24 +71,32 @@ const fakeTitlePatterns = [
   '%(ZIP %'
 ];
 
-// Delete by source
 let deleteCount = 0;
 for (const source of fakeSources) {
   const result = db.prepare('DELETE FROM funding_opportunities WHERE source = ?').run(source);
   deleteCount += result.changes;
 }
 
-// Delete by title pattern (ZIP-based fake grants)
 for (const pattern of fakeTitlePatterns) {
   const result = db.prepare('DELETE FROM funding_opportunities WHERE title LIKE ?').run(pattern);
   deleteCount += result.changes;
 }
 
-// Delete opportunities with example.org URLs
-const exampleResult = db.prepare("DELETE FROM funding_opportunities WHERE application_url LIKE '%example.org%' OR application_url LIKE '%example.com%'").run();
-deleteCount += exampleResult.changes;
+// Delete opportunities whose URLs hit any canonical placeholder host.
+const _placeholderPatterns = getPlaceholderUrlSqlPatterns();
+for (const pattern of _placeholderPatterns) {
+  const r = db
+    .prepare(
+      `DELETE FROM funding_opportunities
+       WHERE application_url LIKE ?
+          OR url LIKE ?
+          OR source_url LIKE ?`,
+    )
+    .run(pattern, pattern, pattern);
+  deleteCount += r.changes;
+}
 
-console.log(`   Removed ${deleteCount} fake opportunities`);
+console.log(`   Removed ${deleteCount} fake opportunities (sources=${fakeSources.join(',')}; placeholder_patterns=${_placeholderPatterns.join(',')})`);
 
 // Also clean up grants that reference deleted opportunities
 const orphanedGrants = db.prepare(`

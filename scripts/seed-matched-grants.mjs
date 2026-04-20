@@ -10,13 +10,18 @@ import crypto from 'crypto'
 import { applyRelevanceFilter } from '../backend/services/relevanceFilter.js'
 import {
   computeMatchDecision,
+  scoreOpportunity,
   normalizeProfile,
   normalizeOpportunity,
   computeProfileFingerprint,
   computeOpportunityFingerprint,
   MATCHER_VERSION,
 } from '../backend/services/matchDecisionEngine.js'
-import { calculateMatchScore } from '../backend/services/matchingEngine.js'
+
+// Non-authoritative heuristic pre-score. Used ONLY as a junk filter; the final
+// accept/reject decision is made by computeMatchDecision() below. Aliased as
+// calculateMatchScore to keep existing call sites readable.
+const calculateMatchScore = scoreOpportunity
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
