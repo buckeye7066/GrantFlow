@@ -328,9 +328,16 @@ describe('anyaAutonomousCrawler: extended honest-metrics contract', () => {
   let originalCwd3
 
   async function seedExtendedFixture() {
-    // Full reset: remove and recreate
-    try { await fs.rm(tmp3, { recursive: true, force: true }) } catch { /* first call */ }
-    await fs.mkdir(tmp3, { recursive: true })
+    // Full reset: remove ONLY the seeded child directories, never tmp3 itself.
+    // On Linux, rm'ing the current working directory leaves process.cwd()
+    // pointing at a dead inode -> ENOENT on any subsequent process.cwd()
+    // call (as runAutonomousCodeCrawl does). Preserving tmp3 as the cwd
+    // avoids that entirely while still giving each test a clean slate.
+    for (const child of ['src', 'assets', 'node_modules', 'backend']) {
+      await fs
+        .rm(path.join(tmp3, child), { recursive: true, force: true })
+        .catch(() => {})
+    }
 
     await fs.mkdir(path.join(tmp3, 'src'), { recursive: true })
     await fs.mkdir(path.join(tmp3, 'assets'), { recursive: true })
