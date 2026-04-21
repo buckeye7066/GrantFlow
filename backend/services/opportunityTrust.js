@@ -250,13 +250,25 @@ export function assessOpportunityTrust(opp, opts = {}) {
     flags.directory = true
   }
 
-  // 6. Expiration — try both evaluators so rolling/ongoing deadlines,
-  // ambiguous date strings, and directory types are all handled consistently.
-  const expiredPolicy = isExpiredPolicy(opp)
-  const expiredRoute = isExpiredOpportunity(opp)
-  if (expiredPolicy || expiredRoute) {
-    flags.expired = true
-    reasons.push('expired_deadline')
+  // 6. Expiration.
+  //
+  // Policy lockdown (project rule: "Directory-style or general funding
+  // resources must always survive filtering unless explicitly excluded"):
+  //   - Directory-like rows are NEVER treated as expired by date, because
+  //     they represent ongoing pointers to agencies/portals, not a single
+  //     award cycle. The upstream `isExpiredPolicy` helper in
+  //     crawlers/opportunityPolicy.js does not know about directories and
+  //     would otherwise drop them as soon as any associated date passes.
+  //   - Non-directory rows are checked with BOTH the policy and route
+  //     expiration helpers so rolling/ongoing markers and ambiguous date
+  //     strings are handled consistently.
+  if (!directory) {
+    const expiredPolicy = isExpiredPolicy(opp)
+    const expiredRoute = isExpiredOpportunity(opp)
+    if (expiredPolicy || expiredRoute) {
+      flags.expired = true
+      reasons.push('expired_deadline')
+    }
   }
 
   // 7. Stale flag — crawlers mark link_status='broken' or is_broken=1 when a
@@ -349,7 +361,100 @@ export function filterTrustedOpportunities(opportunities, opts = {}) {
   return { kept, droppedReasons }
 }
 
+/**
+ * Pull the public-safe subset of a trust assessment, suitable for spreading
+ * into API responses and saved pipeline rows. Keeps the shape stable so the
+ * UI / Anya / tests can all key off the same fields on every surface.
+ */
+export function buildTrustMetadata(trust) {
+  if (!trust || typeof trust !== 'object') return null
+  return {
+    trust_tier: trust.trustTier,
+    source_trust: trust.sourceTrust,
+    trust_flags: trust.flags,
+    trust_reasons: Array.isArray(trust.reasons) ? trust.reasons.slice(0, 10) : [],
+    trust_downgrade: Boolean(trust.downgrade),
+    trust_downgrade_reason: trust.downgrade
+      ? (Array.isArray(trust.reasons) ? trust.reasons : []).find((r) =>
+          r === 'link_marked_broken' ||
+          r === 'non_actionable_primary_url' ||
+          String(r).startsWith('untrusted_origin'),
+        ) || 'lower_trust_source'
+      : null,
+    actionable_url: trust.primaryUrl ?? null,
+  }
+}
+
+/**
+ * Merge trust metadata onto an opportunity response row so every surface
+ * exposes the same `trust_*` fields. Non-destructive — does not overwrite
+ * existing values the caller may have already set.
+ */
+export function decorateOpportunityWithTrust(opp, opts = {}) {
+  if (!opp || typeof opp !== 'object') return opp
+  const trust = assessOpportunityTrust(opp, opts)
+  const meta = buildTrustMetadata(trust) || {}
+  return {
+    ...opp,
+    trust_tier: opp.trust_tier ?? meta.trust_tier,
+    source_trust: opp.source_trust ?? meta.source_trust,
+    trust_flags: opp.trust_flags ?? meta.trust_flags,
+    trust_reasons: opp.trust_reasons ?? meta.trust_reasons,
+    trust_downgrade: opp.trust_downgrade ?? meta.trust_downgrade,
+    trust_downgrade_reason: opp.trust_downgrade_reason ?? meta.trust_downgrade_reason,
+    actionable_url: opp.actionable_url ?? meta.actionable_url,
+    _trust: trust,
+  }
+}
+
+/**
+ * Stricter gate used by write paths (e.g. saving an opportunity into a
+ * user's pipeline). Display surfaces should use assessOpportunityTrust;
+ * save surfaces should call this so loans / placeholder URLs / untrusted
+ * origins don't silently enter someone's pipeline.
+ *
+ * Caller can opt in with allowLoans / allowMatchingFunds / allowDirectory
+ * flags. Returns { allowed, reason, trust }.
+ */
+export function gateOpportunityForPipeline(opp, opts = {}) {
+  const {
+    allowLoans = false,
+    allowMatchingFunds = false,
+    allowDirectory = true,
+    allowExpired = false,
+  } = opts
+  const trust = assessOpportunityTrust(opp, {
+    allowLoans,
+    allowMatchingFunds,
+    allowDirectory,
+    allowExpired,
+  })
+  if (trust.display) {
+    return { allowed: true, trust, reason: null }
+  }
+  // Map the strongest reason so API callers can render an actionable error.
+  const reasonPriority = [
+    'no_real_url',
+    'placeholder_content',
+    'untrusted_origin',
+    'loan_like',
+    'matching_funds_required',
+    'expired_deadline',
+  ]
+  const firstReason = reasonPriority
+    .map((key) => trust.reasons.find((r) => r === key || r.startsWith(`${key}:`)))
+    .find(Boolean)
+  return {
+    allowed: false,
+    trust,
+    reason: firstReason || trust.reasons[0] || 'untrusted_opportunity',
+  }
+}
+
 export default {
   assessOpportunityTrust,
   filterTrustedOpportunities,
+  buildTrustMetadata,
+  decorateOpportunityWithTrust,
+  gateOpportunityForPipeline,
 }

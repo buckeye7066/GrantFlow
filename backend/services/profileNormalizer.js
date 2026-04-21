@@ -864,16 +864,40 @@ export function normalizeProfile(rawProfile, sections = null, signals = null) {
   }
   if (isVeteran) affiliations.push('veteran')
   if (isNonprofit && affiliations.length === 0) affiliations.push('nonprofit')
-  // Organization section may declare faith_based, is_rural_serving, etc.
+  // Organization section may declare faith_based, first_responder, tribal, etc.
+  // Also consider organization_type inside the section — callers often set
+  // `primary_type: 'nonprofit'` and then specialize via organization_details.
   const orgDetailsForAffil = profileSections?.organization_details
   if (orgDetailsForAffil) {
     const od = orgDetailsForAffil.answers ?? orgDetailsForAffil
+    const orgTypeLower = String(od?.organization_type || '').toLowerCase()
     if (od?.is_faith_based || od?.faith_based) {
       if (!affiliations.includes('faith_based')) affiliations.push('faith_based')
       if (!affiliations.includes('church')) affiliations.push('church')
     }
     if (od?.is_tribal_government) {
       if (!affiliations.includes('tribal')) affiliations.push('tribal')
+    }
+    // First-responder-style orgs: VFDs, EMS, rescue squads, police depts,
+    // whether declared via organization_type or an explicit boolean flag.
+    if (
+      od?.first_responder ||
+      od?.is_first_responder ||
+      orgTypeLower.includes('fire') ||
+      orgTypeLower.includes('ems') ||
+      orgTypeLower.includes('rescue') ||
+      orgTypeLower.includes('police') ||
+      orgTypeLower.includes('law_enforcement') ||
+      orgTypeLower.includes('emergency')
+    ) {
+      if (!affiliations.includes('first_responder')) affiliations.push('first_responder')
+    }
+    if (orgTypeLower.includes('school') || orgTypeLower.includes('k12') || orgTypeLower.includes('education')) {
+      if (!affiliations.includes('school')) affiliations.push('school')
+    }
+    if (orgTypeLower.includes('church') || orgTypeLower.includes('ministry') || orgTypeLower.includes('faith')) {
+      if (!affiliations.includes('church')) affiliations.push('church')
+      if (!affiliations.includes('faith_based')) affiliations.push('faith_based')
     }
   }
 

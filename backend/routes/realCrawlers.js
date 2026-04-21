@@ -12,6 +12,10 @@ import { buildProfileFacets } from '../services/profile/profileTaxonomy.js'
 import { trustedOriginClause, trustedSourceClause } from '../utils/recordOrigins.js'
 import { filterActionableOpportunities } from '../services/opportunityValidationLayer.js'
 import { applyRelevanceFilter, extractProfileData } from '../services/relevanceFilter.js'
+import {
+  assessOpportunityTrust,
+  buildTrustMetadata,
+} from '../services/opportunityTrust.js'
 import { scoreOpportunity, makeDecision } from '../services/matchEngine.js'
 import { runAllDomainEngines } from '../services/crawlers/domainEngines/index.js'
 import { crawlStateWaiverBenefits, evaluateStateWaiverEligibility } from '../services/crawlers/stateWaiverBenefitsCrawler.js'
@@ -445,6 +449,33 @@ router.post('/run', ensureAuth, async (req, res) => {
 
     const duration = Date.now() - startTime
 
+    // Canonical trust decoration — every returned opportunity carries the same
+    // trust_* fields as /api/opportunities and /api/discovery so the frontend
+    // and Anya can explain results with one vocabulary.
+    const trustDropCounts = {}
+    const decorated = filtered.map((opp) => {
+      const trust = assessOpportunityTrust(opp, {
+        allowDirectory: true,
+        allowExpired: false,
+      })
+      if (!trust.display) {
+        for (const r of trust.reasons || []) {
+          trustDropCounts[r] = (trustDropCounts[r] || 0) + 1
+        }
+      }
+      const meta = buildTrustMetadata(trust) || {}
+      return {
+        ...opp,
+        trust_tier: opp.trust_tier ?? meta.trust_tier,
+        source_trust: opp.source_trust ?? meta.source_trust,
+        trust_flags: opp.trust_flags ?? meta.trust_flags,
+        trust_reasons: opp.trust_reasons ?? meta.trust_reasons,
+        trust_downgrade: opp.trust_downgrade ?? meta.trust_downgrade,
+        trust_downgrade_reason: opp.trust_downgrade_reason ?? meta.trust_downgrade_reason,
+        actionable_url: opp.actionable_url ?? meta.actionable_url,
+      }
+    })
+
     console.info(
       `[RealCrawlers] ${crawler_type}: curated=${result.results.length} nearby=${nearbyOpps.length} allMapped=${allMapped.length} → returned=${filtered.length} (min_score=${min_match_score}, strict=${strictMinScore}) in ${duration}ms`,
     )
@@ -452,18 +483,19 @@ router.post('/run', ensureAuth, async (req, res) => {
     res.json({
       success: true,
       crawler_type,
-      count: filtered.length,
+      count: decorated.length,
       // total_found reflects candidates entering the filter pipeline (post-map+merge)
       // so the 1:1 invariant holds: total_found === allMapped.length, and
       // count is what passed filters. Legacy `curated_count` preserves old value.
       total_found: allMapped.length,
       curated_count: result.results.length,
       nearby_count: nearbyOpps.length,
-      filtered_count: filtered.length,
+      filtered_count: decorated.length,
       drop_counts: dropCounts,
+      trust_drop_counts: trustDropCounts,
       min_match_score,
       duration,
-      opportunities: filtered,
+      opportunities: decorated,
       score_hint: allMapped._scoreHint || null,
       threshold_fallback_message: thresholdFallbackMessage || null,
       used_live: false,
@@ -978,12 +1010,28 @@ router.post('/run-smart', ensureAuth, standardRateLimiter, async (req, res) => {
       .sort((a, b) => (b.match_score ?? 0) - (a.match_score ?? 0))
       .slice(0, 100)
 
+    // Canonical trust decoration — same vocabulary everywhere.
+    const decoratedSmart = filtered.map((opp) => {
+      const trust = assessOpportunityTrust(opp, { allowDirectory: true, allowExpired: false })
+      const meta = buildTrustMetadata(trust) || {}
+      return {
+        ...opp,
+        trust_tier: opp.trust_tier ?? meta.trust_tier,
+        source_trust: opp.source_trust ?? meta.source_trust,
+        trust_flags: opp.trust_flags ?? meta.trust_flags,
+        trust_reasons: opp.trust_reasons ?? meta.trust_reasons,
+        trust_downgrade: opp.trust_downgrade ?? meta.trust_downgrade,
+        trust_downgrade_reason: opp.trust_downgrade_reason ?? meta.trust_downgrade_reason,
+        actionable_url: opp.actionable_url ?? meta.actionable_url,
+      }
+    })
+
     return res.json({
       success: true,
-      count: filtered.length,
+      count: decoratedSmart.length,
       total_found: allOpportunities.length,
       min_match_score: minScore,
-      opportunities: filtered,
+      opportunities: decoratedSmart,
       sources_used: ['local_funding', 'government_funding', 'domain_engines', 'state_waiver_benefits'],
     })
   } catch (err) {

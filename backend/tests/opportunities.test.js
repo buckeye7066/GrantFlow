@@ -17,17 +17,19 @@ describe("opportunities", () => {
   })
 
   it("lists opportunities with a total that matches storage", async () => {
-    // NOTE: titles must not match the placeholder pattern in
-    // filterActionableOpportunities (/^(test|sample|example|...)/i) and must
-    // supply an application_url, otherwise the response layer strips them.
+    // NOTE: titles must not match the placeholder pattern in the API's
+    // response decorator and URLs must not be on the canonical placeholder
+    // host list (example.org / example.com). The canonical trust layer in
+    // backend/services/opportunityTrust.js rejects those hosts so display=0.
+    // Use distinct .org hosts that are not on the placeholder list.
     const create1 = await request(app).post("/api/opportunities").set(TEST_ADMIN_AUTH_HEADER).send({
       title: "Community Emergency Assistance Grant A",
       sponsor: "Example Foundation",
       source: "test",
       source_id: "a",
       description: "A real-looking opportunity used by the opportunities API integration test.",
-      application_url: "https://example.org/apply-a",
-      source_url: "https://example.org/program-a",
+      application_url: "https://foundation-a.org/apply",
+      source_url: "https://foundation-a.org/program",
       is_national: true,
       opportunity_type: "grant",
       requires_match: false,
@@ -40,8 +42,8 @@ describe("opportunities", () => {
       source: "test",
       source_id: "b",
       description: "A second real-looking opportunity used by the opportunities API integration test.",
-      application_url: "https://example.org/apply-b",
-      source_url: "https://example.org/program-b",
+      application_url: "https://foundation-b.org/apply",
+      source_url: "https://foundation-b.org/program",
       is_national: false,
       state: "OH",
       opportunity_type: "grant",

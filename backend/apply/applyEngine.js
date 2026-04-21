@@ -807,6 +807,29 @@ export async function markSubmitted({ db, applicationId, method, metadata }) {
     }
   })
 
+  // Persist warnings onto the submission snapshot so Anya / admin UIs can
+  // surface partial-failure context for past submissions, not just the
+  // response of this request.
+  if (submissionWarnings.length > 0) {
+    try {
+      const withWarnings = {
+        ...nextSnapshot,
+        submitted: {
+          ...(nextSnapshot.submitted || {}),
+          warnings: submissionWarnings,
+        },
+      }
+      await db
+        .prepare('UPDATE applications SET snapshot_json = ? WHERE id = ?')
+        .run(safeJsonStringify(withWarnings), String(applicationId))
+    } catch (persistErr) {
+      console.warn(
+        `[applyEngine.markSubmitted] failed to persist submission warnings to snapshot for application ${applicationId}:`,
+        persistErr?.message,
+      )
+    }
+  }
+
   const finalRow = await db
     .prepare('SELECT * FROM applications WHERE id = ?')
     .get(String(applicationId))

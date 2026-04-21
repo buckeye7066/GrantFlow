@@ -13,6 +13,7 @@ import { loadProfileContext, buildProfileSignals } from './profileHelpers.js'
 import { buildProfileFacets } from './profile/profileTaxonomy.js'
 import { scoreOpportunity } from './matchEngine.js'
 import { trustedOriginClause, trustedSourceClause } from '../utils/recordOrigins.js'
+import { assessOpportunityTrust } from './opportunityTrust.js'
 
 // Section labels aligned with canonical keys from backend/config/profileSchema.js
 const SECTION_LABELS = {
@@ -90,6 +91,10 @@ export async function buildAnyaContext(db, user, opts = {}) {
   // ── 3. Pipeline status ──
   const pipelineBlock = await buildPipelineSnapshot(db, profileId)
   if (pipelineBlock) sections.push(pipelineBlock)
+
+  // ── 3b. Recent submission warnings (partial-failure surfacing) ──
+  const submissionWarningsBlock = await buildSubmissionWarningsSnapshot(db, profileId)
+  if (submissionWarningsBlock) sections.push(submissionWarningsBlock)
 
   // ── 4. Page-specific context ──
   const pageBlock = buildPageContext(currentPage, pageContext)
@@ -221,19 +226,30 @@ async function buildResultsSnapshot(db, profileContext) {
       ].join('\n')
     }
 
-    // Score the top candidates
+    // Score the top candidates and attach canonical trust assessments so
+    // Anya can explain *why* a result is lower-trust or directory-only.
     const scored = rows.map((opp) => {
       const result = scoreOpportunity(profileContext, opp)
-      return { opp, ...result }
+      const trust = assessOpportunityTrust(opp, { allowDirectory: true, allowExpired: false })
+      return { opp, trust, ...result }
     })
-    scored.sort((a, b) => b.score - a.score)
+    // Drop items that the canonical trust layer would never display so Anya
+    // does not reference dead/placeholder opportunities.
+    const displayable = scored.filter((s) => s.trust?.display !== false)
+    displayable.sort((a, b) => b.score - a.score)
 
-    const top5 = scored.slice(0, 5)
-    const totalAbove50 = scored.filter((s) => s.score >= 50).length
-    const totalAbove30 = scored.filter((s) => s.score >= 30).length
+    const top5 = displayable.slice(0, 5)
+    const totalAbove50 = displayable.filter((s) => s.score >= 50).length
+    const totalAbove30 = displayable.filter((s) => s.score >= 30).length
+    const droppedByTrust = scored.length - displayable.length
 
     const lines = ['### Available Results (from real matching)']
-    lines.push(`- **${rows.length}** opportunities evaluated, **${totalAbove50}** strong matches (≥50), **${totalAbove30}** moderate+ (≥30)`)
+    lines.push(
+      `- **${displayable.length}** displayable of **${rows.length}** opportunities evaluated ` +
+      `(**${totalAbove50}** strong ≥50, **${totalAbove30}** moderate+ ≥30` +
+      (droppedByTrust > 0 ? `, **${droppedByTrust}** dropped by trust layer` : '') +
+      `)`,
+    )
     lines.push('')
     lines.push('**Top 5 matches (explain these to the user when asked about results):**')
 
@@ -242,7 +258,14 @@ async function buildResultsSnapshot(db, profileContext) {
       const title = (opp.title || opp.program_name || '').substring(0, 60)
       const reasons = (item.reasons || []).slice(0, 3).join('; ')
       const state = opp.state || (opp.is_national ? 'National' : 'Unknown')
-      lines.push(`  ${item.score}pts — "${title}" (${state}) — ${reasons}`)
+      const tt = item.trust?.trustTier || 'unknown'
+      const flags = []
+      if (item.trust?.flags?.directory) flags.push('directory')
+      if (item.trust?.flags?.expired) flags.push('expired')
+      if (item.trust?.flags?.loan) flags.push('loan')
+      if (item.trust?.downgrade) flags.push('downgraded')
+      const flagStr = flags.length ? ` [${flags.join(',')}]` : ''
+      lines.push(`  ${item.score}pts — "${title}" (${state}) [trust:${tt}]${flagStr} — ${reasons}`)
     }
 
     // Why these results appear
@@ -255,6 +278,15 @@ async function buildResultsSnapshot(db, profileContext) {
     if (kws.length > 0) lines.push(`  - Profile keywords: ${kws.join(', ')}`)
 
     lines.push('')
+    lines.push('**Trust vocabulary (use these exact meanings when the user asks "is this legit?"):**')
+    lines.push('- `trust:primary` = official/government/foundation source with real URL — highest confidence.')
+    lines.push('- `trust:verified` = reputable private source, passed validation.')
+    lines.push('- `trust:community` = known community source, usually OK but caveat accordingly.')
+    lines.push('- `trust:low` = lower-trust or partially unverified — tell the user to double-check before applying.')
+    lines.push('- `[directory]` = this is a directory/referral resource, not a direct funder. Suggest the user browse it to find specific programs.')
+    lines.push('- `[loan]` = this is a loan, not a grant. Mention that repayment is required.')
+    lines.push('- `[expired]` = the posted deadline has passed. Suggest watching for the next cycle.')
+    lines.push('- `[downgraded]` = the source tier was lowered at runtime (e.g., link marked broken). Suggest verifying before applying.')
     return lines.join('\n')
   } catch (e) {
     console.warn('[AnyaContext] Results snapshot failed:', e?.message)
@@ -337,6 +369,71 @@ async function buildPipelineSnapshot(db, profileId) {
     lines.push('')
     return lines.join('\n')
   } catch {
+    return null
+  }
+}
+
+/**
+ * Pull the most recent submission-related warnings off applications.snapshot_json
+ * (see applyEngine.markSubmitted). Surfaces partial-failure context so Anya
+ * can tell the user, in plain language, what actually happened after submit.
+ */
+async function buildSubmissionWarningsSnapshot(db, profileId) {
+  if (!db || !profileId) return null
+  try {
+    const rows = await db
+      .prepare(
+        `SELECT a.id, a.status, a.submission_method, a.submitted_at, a.snapshot_json, g.title
+         FROM applications a
+         LEFT JOIN grants g ON g.id = a.grant_id
+         WHERE a.status = 'submitted' AND g.profile_id = ?
+         ORDER BY a.submitted_at DESC
+         LIMIT 10`,
+      )
+      .all(String(profileId))
+    if (!rows || rows.length === 0) return null
+
+    const items = []
+    for (const row of rows) {
+      let parsed = null
+      try {
+        parsed = row.snapshot_json ? JSON.parse(row.snapshot_json) : null
+      } catch {
+        parsed = null
+      }
+      const warnings = parsed?.submitted?.warnings
+      if (Array.isArray(warnings) && warnings.length > 0) {
+        items.push({
+          id: row.id,
+          title: row.title || '(unknown grant)',
+          submitted_at: row.submitted_at,
+          method: row.submission_method,
+          warnings,
+        })
+      }
+    }
+    if (items.length === 0) return null
+
+    const lines = ['### Recent Submission Warnings']
+    lines.push(
+      `- **${items.length}** recent submission(s) recorded non-fatal issues. ` +
+      'Anya MUST mention these if the user asks "did my submission go through?" or similar.',
+    )
+    lines.push('')
+    for (const it of items.slice(0, 5)) {
+      lines.push(`- **"${String(it.title).slice(0, 60)}"** (submitted ${it.submitted_at || 'recently'} via ${it.method || 'unknown'}):`)
+      for (const w of it.warnings.slice(0, 3)) {
+        const step = w?.step || 'unknown_step'
+        const errMsg = w?.error ? ` — ${String(w.error).slice(0, 120)}` : ''
+        lines.push(`  - partial failure at ${step}${errMsg}`)
+      }
+    }
+    lines.push('')
+    lines.push('When explaining: the application *was* submitted, but a side-effect (status mirror, milestone, etc.) did not succeed. Suggest the user re-check the pipeline status or retry the affected step.')
+    lines.push('')
+    return lines.join('\n')
+  } catch (e) {
+    console.warn('[AnyaContext] Submission warnings snapshot failed:', e?.message)
     return null
   }
 }

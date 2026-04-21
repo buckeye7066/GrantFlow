@@ -10,6 +10,10 @@
 import { Router } from 'express'
 import crypto from 'node:crypto'
 import { requireAuthenticatedUser } from '../utils/accessControl.js'
+import {
+  assessOpportunityTrust,
+  buildTrustMetadata,
+} from '../services/opportunityTrust.js'
 
 const router = Router()
 
@@ -23,7 +27,9 @@ router.get('/', async (req, res) => {
     const userRows = await req.db.prepare(`
       SELECT sg.opportunity_id, sg.saved_at, sg.notes,
              fo.title, fo.sponsor, fo.deadline, fo.amount_min, fo.amount_max,
-             fo.application_url, fo.link_status, fo.source
+             fo.application_url, fo.link_status, fo.source,
+             fo.source_category, fo.is_loan, fo.requires_matching_funds,
+             fo.description, fo.categories
       FROM saved_grants sg
       LEFT JOIN funding_opportunities fo ON fo.id = sg.opportunity_id
       WHERE sg.user_id = ?
@@ -31,7 +37,27 @@ router.get('/', async (req, res) => {
       LIMIT 500
     `).all(userId)
 
-    res.json({ saved: userRows, ids: userRows.map(r => r.opportunity_id) })
+    // Attach canonical trust metadata so saved-grants UI and Anya can explain
+    // lower-trust / directory / expired items consistently with discovery.
+    const saved = userRows.map((row) => {
+      const trust = assessOpportunityTrust(row, {
+        allowDirectory: true,
+        allowExpired: true, // saved items are always shown; mark status instead
+      })
+      const meta = buildTrustMetadata(trust) || {}
+      return {
+        ...row,
+        trust_tier: meta.trust_tier ?? null,
+        source_trust: meta.source_trust ?? null,
+        trust_flags: meta.trust_flags ?? null,
+        trust_reasons: meta.trust_reasons ?? [],
+        trust_downgrade: Boolean(meta.trust_downgrade),
+        trust_downgrade_reason: meta.trust_downgrade_reason ?? null,
+        actionable_url: meta.actionable_url ?? row.application_url ?? null,
+      }
+    })
+
+    res.json({ saved, ids: saved.map((r) => r.opportunity_id) })
   } catch (err) {
     console.error('[saved-grants] GET error:', err)
     res.status(500).json({ error: err.message })

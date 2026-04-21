@@ -18,6 +18,10 @@ import { scheduleGrantApplicationApproach } from '../services/grantApplicationAp
 import { isPipelineSourceAllowed } from '../config/pipelineAllowedSources.js'
 import { mergeOpportunitySignals } from '../services/profileHelpers.js'
 import { decorateOpportunityFreshness } from '../services/opportunityMatcher.js'
+import {
+  gateOpportunityForPipeline,
+  buildTrustMetadata,
+} from '../services/opportunityTrust.js'
 
 const router = express.Router();
 
@@ -1220,6 +1224,53 @@ router.post('/from-opportunity', async (req, res, next) => {
       return res.status(404).json({ error: 'Opportunity not found and no opportunity_data provided' });
     }
 
+    // Canonical trust gate: refuse to silently accept placeholder URLs, known
+    // junk origins, or loans (unless explicitly opted in) into a user's
+    // pipeline. This mirrors what discovery/matching already filter on the
+    // display side, so the display/save contract is the same.
+    const {
+      allow_loans: allowLoansBody = false,
+      allow_matching_funds: allowMatchingFundsBody = false,
+      allow_expired: allowExpiredBody = false,
+    } = req.body || {}
+    const pipelineGate = gateOpportunityForPipeline(opportunity, {
+      allowLoans: Boolean(allowLoansBody),
+      allowMatchingFunds: Boolean(allowMatchingFundsBody),
+      allowExpired: Boolean(allowExpiredBody),
+      allowDirectory: true,
+    })
+    if (!pipelineGate.allowed) {
+      console.info('[grants/from-opportunity] blocked by trust gate', {
+        requestId,
+        profile_id: normalizedProfileId,
+        organization_id: normalizedOrgId,
+        opportunity_id: resolvedOpportunityId,
+        reason: pipelineGate.reason,
+        trust_flags: pipelineGate.trust?.flags,
+        trust_reasons: pipelineGate.trust?.reasons,
+      })
+      return res.status(400).json({
+        error: 'opportunity_not_trustworthy',
+        message:
+          pipelineGate.reason === 'no_real_url'
+            ? 'This opportunity has no working URL and cannot be added to your pipeline.'
+            : pipelineGate.reason === 'placeholder_content'
+              ? 'This opportunity looks like placeholder/test data and cannot be saved.'
+              : pipelineGate.reason === 'loan_like'
+                ? 'This entry is a loan, which is not added to your grant pipeline by default. Retry with allow_loans=true to override.'
+                : pipelineGate.reason === 'matching_funds_required'
+                  ? 'This program requires matching funds. Retry with allow_matching_funds=true to save it anyway.'
+                  : pipelineGate.reason && String(pipelineGate.reason).startsWith('untrusted_origin')
+                    ? 'This opportunity comes from an origin that is not trusted for pipeline saves.'
+                    : 'This opportunity cannot be added to your pipeline because it failed the trust check.',
+        reason: pipelineGate.reason,
+        trust_flags: pipelineGate.trust?.flags ?? null,
+        requestId,
+      })
+    }
+    // Remember so we can serialize a trust summary into match_reasons below.
+    const pipelineTrustMeta = buildTrustMetadata(pipelineGate.trust)
+
     // Guardrail: block pipeline inserts from non-approved sources.
     // This mirrors the same gate in opportunityMatcher.js and prevents irrelevant
     // funding sources from entering individual profile pipelines via the frontend.
@@ -1501,7 +1552,25 @@ router.post('/from-opportunity', async (req, res, next) => {
 
       const insertDeadline = normalizeDateForDb(opportunity.deadline ?? null)
       const insertMatchScore = normalizeMatchScore(match_score ?? null)
-      const insertMatchReasons = JSON.stringify(coerceArray(match_reasons))
+      // Fold canonical trust reasons into the persisted match_reasons so the
+      // UI and Anya can explain why a saved grant is lower-trust / directory /
+      // etc. without re-deriving from the raw opportunity row.
+      const baseReasons = coerceArray(match_reasons)
+      const trustReasonLines = []
+      if (pipelineTrustMeta) {
+        if (pipelineTrustMeta.trust_downgrade && pipelineTrustMeta.trust_downgrade_reason) {
+          trustReasonLines.push(`trust:${pipelineTrustMeta.trust_downgrade_reason}`)
+        }
+        if (pipelineTrustMeta.trust_flags?.directory) {
+          trustReasonLines.push('trust:directory_only')
+        }
+        if (pipelineTrustMeta.source_trust) {
+          trustReasonLines.push(`source_trust:${pipelineTrustMeta.source_trust}`)
+        }
+      }
+      const insertMatchReasons = JSON.stringify(
+        [...baseReasons, ...trustReasonLines.filter((r) => !baseReasons.includes(r))],
+      )
       const amountRequested = normalizeMoney(opportunity.amount_max ?? opportunity.amount_min ?? null)
       const notes = coerceString(opportunity.description, { maxLen: 500 })
       

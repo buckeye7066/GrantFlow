@@ -3,7 +3,10 @@ import crypto from 'crypto';
 import { isAdminUser, requireAuthenticatedUser } from '../utils/accessControl.js'
 import { trustedOriginClause, trustedSourceClause } from '../utils/recordOrigins.js'
 import { isExpiredOpportunity, isDirectoryLike } from './opportunityHelpers.js'
-import { filterActionableOpportunities } from '../services/opportunityValidationLayer.js'
+import {
+  assessOpportunityTrust,
+  buildTrustMetadata,
+} from '../services/opportunityTrust.js'
 
 const router = express.Router();
 
@@ -166,7 +169,66 @@ function decorateOpportunity(row) {
   parsed.compliance_status = compliance.status;
   parsed.compliance_reasons = compliance.reasons;
 
+  // Canonical consumer-side trust assessment. Every user-facing surface
+  // (discovery, matching, opportunities, savedGrants, realCrawlers) surfaces
+  // the same trust_* fields so UI and Anya can explain decisions uniformly.
+  const trust = assessOpportunityTrust(parsed, {
+    allowDirectory: true,
+    allowExpired: false,
+  });
+  const meta = buildTrustMetadata(trust);
+  if (meta) {
+    parsed.trust_tier = meta.trust_tier;
+    parsed.source_trust = meta.source_trust;
+    parsed.trust_flags = meta.trust_flags;
+    parsed.trust_reasons = meta.trust_reasons;
+    parsed.trust_downgrade = meta.trust_downgrade;
+    parsed.trust_downgrade_reason = meta.trust_downgrade_reason;
+    if (meta.actionable_url && !parsed.application_url) {
+      parsed.application_url = meta.actionable_url;
+    }
+  }
+  // Non-enumerable trust decision trail for debugging / tests.
+  Object.defineProperty(parsed, '_trust', {
+    value: trust,
+    enumerable: false,
+    configurable: true,
+    writable: true,
+  });
+
   return parsed;
+}
+
+/**
+ * Unified trust/actionable post-filter for the list responses. Replaces the
+ * old `filterActionableOpportunities` step so this route aligns with
+ * discovery.js and matching.js. Directory-like rows survive (legitimate help
+ * category); placeholder / no-URL / untrusted / loans drop out.
+ */
+function filterByTrust(rows, { allowLoans = false, allowMatchingFunds = false } = {}) {
+  if (!Array.isArray(rows)) return { kept: [], dropped: 0, droppedReasons: {} };
+  const kept = [];
+  const droppedReasons = {};
+  let dropped = 0;
+  for (const row of rows) {
+    // decorateOpportunity may have stashed the decision on `_trust` already.
+    const trust = row?._trust
+      || assessOpportunityTrust(row, {
+        allowDirectory: true,
+        allowExpired: false,
+        allowLoans,
+        allowMatchingFunds,
+      });
+    if (!trust.display) {
+      dropped += 1;
+      for (const r of trust.reasons || []) {
+        droppedReasons[r] = (droppedReasons[r] || 0) + 1;
+      }
+      continue;
+    }
+    kept.push(row);
+  }
+  return { kept, dropped, droppedReasons };
 }
 
 function applyComplianceFilters(compliance, conditions, params, options = {}) {
@@ -775,7 +837,22 @@ router.get('/', async (req, res) => {
           for (const row of fbDec) { const key = dedupeKeyFromRow(row) || (row?.id ? `id:${row.id}` : null); if (key && fbSeen.has(key)) continue; if (key) fbSeen.add(key); fbOut.push(row); }
           const fbFinal = fbOut.filter((r) => !isExpiredOpportunity(r, { now }));
           if (fbFinal.length > 0) {
-            return res.json({ data: filterActionableOpportunities(fbFinal), total: Math.max(0, Number(fbResult.total ?? fbFinal.length)), total_found: Math.max(0, Number(fbResult.total ?? fbFinal.length)), included: fbFinal.length, limit: parsedLimit, offset: parsedOffset, compliance_requested: normalizedCompliance, compliance_effective: normalizedCompliance, fallback_applied: true, fallback_reason: 'phrase_search_returned_0_retried_with_token_and', removed_expired: 0 });
+            const fbTrust = filterByTrust(fbFinal);
+            return res.json({
+              data: fbTrust.kept,
+              total: Math.max(0, Number(fbResult.total ?? fbTrust.kept.length)),
+              total_found: Math.max(0, Number(fbResult.total ?? fbTrust.kept.length)),
+              included: fbTrust.kept.length,
+              trust_dropped: fbTrust.dropped,
+              trust_dropped_reasons: fbTrust.droppedReasons,
+              limit: parsedLimit,
+              offset: parsedOffset,
+              compliance_requested: normalizedCompliance,
+              compliance_effective: normalizedCompliance,
+              fallback_applied: true,
+              fallback_reason: 'phrase_search_returned_0_retried_with_token_and',
+              removed_expired: 0,
+            });
           }
         } catch (fbErr) { console.warn('[opportunities] search fallback failed:', fbErr?.message || String(fbErr)); }
       }
@@ -851,11 +928,14 @@ router.get('/', async (req, res) => {
             // ignore (best-effort)
           }
 
+          const fallbackTrust = filterByTrust(fallbackParsed);
           return res.json({
-            data: filterActionableOpportunities(fallbackParsed),
+            data: fallbackTrust.kept,
             total: distinctTotalFound,
             total_found: distinctTotalFound,
-            included: fallbackParsed.length,
+            included: fallbackTrust.kept.length,
+            trust_dropped: fallbackTrust.dropped,
+            trust_dropped_reasons: fallbackTrust.droppedReasons,
             limit: parsedLimit,
             offset: parsedOffset,
             compliance_requested: normalizedCompliance,
@@ -870,11 +950,14 @@ router.get('/', async (req, res) => {
       }
     }
 
+    const mainTrust = filterByTrust(withoutExpired);
     res.json({
-      data: filterActionableOpportunities(withoutExpired),
+      data: mainTrust.kept,
       total: Math.max(0, filteredTotal),
       total_found: Math.max(0, filteredTotal),
-      included: withoutExpired.length,
+      included: mainTrust.kept.length,
+      trust_dropped: mainTrust.dropped,
+      trust_dropped_reasons: mainTrust.droppedReasons,
       limit: parsedLimit,
       offset: parsedOffset,
       compliance_requested: normalizedCompliance,

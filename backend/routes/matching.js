@@ -429,6 +429,16 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
                                            trust_tier: trust.trustTier,
                                            source_trust: trust.sourceTrust,
                                            trust_flags: trust.flags,
+                                           trust_reasons: Array.isArray(trust.reasons) ? trust.reasons.slice(0, 10) : [],
+                                           trust_downgrade: Boolean(trust.downgrade),
+                                           trust_downgrade_reason: trust.downgrade
+                                             ? (Array.isArray(trust.reasons) ? trust.reasons : []).find((r) =>
+                                                 r === 'link_marked_broken' ||
+                                                 r === 'non_actionable_primary_url' ||
+                                                 String(r).startsWith('untrusted_origin'),
+                                               ) || 'lower_trust_source'
+                                             : null,
+                                           actionable_url: trust.primaryUrl ?? null,
                                            url: trust.primaryUrl ?? opp.application_url ?? opp.source_url ?? null,
                                }
                      })
