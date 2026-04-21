@@ -88,6 +88,7 @@ import stripeRouter from './routes/stripe.js'
 import stripeWebhookRouter from './routes/stripeWebhook.js'
 import { seedServiceCatalogFromExtract } from './services/serviceCatalogStore.js'
 import adminServiceCatalogRouter from './routes/adminServiceCatalog.js'
+import adminQueueOpsRouter from './routes/adminQueueOps.js'
 import collegesRouter from './routes/colleges.js'
 import { allowedOriginCheckSQL } from './utils/recordOrigins.js'
 import notificationsRouter from './routes/notifications.js'
@@ -1647,6 +1648,7 @@ app.use('/api/stats', responseCache(60_000), statsRouter);
 app.use('/api/services', servicesRouter);
 app.use('/api/stripe', stripeRouter);
 app.use('/api/admin/service-catalog', adminServiceCatalogRouter)
+app.use('/api/admin/queue', adminQueueOpsRouter)
 app.use('/api/organizations', organizationsRouter);
 app.use('/api/grants', grantsRouter);
 app.use('/api/opportunities', opportunitiesRouter);

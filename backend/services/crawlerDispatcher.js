@@ -19,6 +19,13 @@ import { logFailedJob, determineSeverity } from './deadLetterQueue.js'
 import { runCrawler as runCuratedCrawler } from './crawlers/crawlerManager.js'
 import { updateJobHeartbeat, maybeCleanupStaleRunningJobs } from './crawlerConcurrencyGuard.js'
 import { runPortalCheck } from './portalCheckService.js'
+import {
+  WORKER_ID,
+  claimJob as claimJobState,
+  completeJob as completeJobState,
+  failJob as failJobState,
+  logJobEvent,
+} from './crawlerJobState.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
@@ -303,6 +310,12 @@ export function dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }) {
     }
 
     if (job.status && job.status !== 'queued') {
+      // Grep-friendly so we can see why the dispatcher bailed out.
+      logJobEvent('claim_skipped', 'job not in queued state', {
+        jobId,
+        status: job.status,
+        worker_id_current: job.worker_id,
+      })
       return
     }
     
@@ -356,55 +369,27 @@ export function dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }) {
     const jobParams = parseJSON(job.parameters)
     const isGeoCrawlJob = !profileId && job.type === 'comprehensive' && jobParams?.mode === 'geo'
 
-    const startSql = isGeoCrawlJob
-      ? `
-          UPDATE crawler_jobs
-          SET status = 'running',
-              started_at = CURRENT_TIMESTAMP,
-              error = NULL,
-              parameters = COALESCE(parameters, '{}'),
-              next_dispatch_at = NULL
-          WHERE id = ?
-            AND status = 'queued'
-        `
-      : profileId
-        ? `
-            UPDATE crawler_jobs
-            SET status = 'running',
-                started_at = CURRENT_TIMESTAMP,
-                error = NULL,
-                parameters = COALESCE(parameters, '{}'),
-                next_dispatch_at = NULL
-            WHERE id = ?
-              AND status = 'queued'
-              AND (SELECT COUNT(*) FROM crawler_jobs WHERE status = 'running') < ?
-              AND NOT EXISTS (
-                SELECT 1
-                FROM crawler_jobs
-                WHERE profile_id = ?
-                  AND status = 'running'
-                  AND id <> ?
-              )
-          `
-        : `
-            UPDATE crawler_jobs
-            SET status = 'running',
-                started_at = CURRENT_TIMESTAMP,
-                error = NULL,
-                parameters = COALESCE(parameters, '{}'),
-                next_dispatch_at = NULL
-            WHERE id = ?
-              AND status = 'queued'
-              AND (SELECT COUNT(*) FROM crawler_jobs WHERE status = 'running') < ?
-          `
+    // All transitions route through crawlerJobState.claimJob so the atomic
+    // claim, worker_id assignment, attempt_count increment, and heartbeat
+    // stamp are applied consistently. Per-profile and global concurrency
+    // guards are passed as extra WHERE clauses so the DB row remains the lock.
+    let extraWhereSql = null
+    let extraWhereParams = []
+    if (!isGeoCrawlJob && profileId) {
+      extraWhereSql =
+        `(SELECT COUNT(*) FROM crawler_jobs WHERE status = 'running') < ? ` +
+        `AND NOT EXISTS (SELECT 1 FROM crawler_jobs WHERE profile_id = ? AND status = 'running' AND id <> ?)`
+      extraWhereParams = [maxGlobalConcurrency, profileId, jobId]
+    } else if (!isGeoCrawlJob) {
+      extraWhereSql = `(SELECT COUNT(*) FROM crawler_jobs WHERE status = 'running') < ?`
+      extraWhereParams = [maxGlobalConcurrency]
+    }
 
-    const startRes = isGeoCrawlJob
-      ? await db.prepare(startSql).run(jobId)
-      : profileId
-        ? await db.prepare(startSql).run(jobId, maxGlobalConcurrency, profileId, jobId)
-        : await db.prepare(startSql).run(jobId, maxGlobalConcurrency)
-
-    const startedCount = Number(startRes?.changes ?? startRes?.rowCount ?? 0)
+    const claimResult = await claimJobState(db, jobId, {
+      extraWhereSql,
+      extraWhereParams,
+    })
+    const startedCount = claimResult.claimed ? 1 : 0
     if (startedCount === 0) {
       // Another job is already running for this profile, or we hit the global concurrency cap.
       // Apply bounded backoff and eventually re-queue with extended delay to prevent permanent loss.
@@ -649,41 +634,30 @@ export function dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }) {
         ...(result?.result_meta ?? {}),
         duration_seconds: durationSeconds,
       }
-      const resultMetaJson = JSON.stringify(finalResultMeta)
 
-      await db.prepare(`
-        UPDATE crawler_jobs
-        SET status = 'completed',
-            completed_at = CURRENT_TIMESTAMP,
-            -- IMPORTANT (Postgres): avoid untyped NULL params in "CASE WHEN $1 IS NULL".
-            -- COALESCE(?, result_count) keeps the existing value when the handler doesn't return a count.
-            result_count = COALESCE(?, result_count),
-            result_meta = COALESCE(?, result_meta),
-            error = NULL
-        WHERE id = ?
-      `).run(resultCountValue, resultMetaJson, jobId)
+      await completeJobState(db, jobId, {
+        resultCount: resultCountValue,
+        resultMeta: finalResultMeta,
+      })
       clearInterval(heartbeatIntervalId)
     } catch (error) {
       clearInterval(heartbeatIntervalId)
       const durationSeconds = Math.max(0, Math.round((Date.now() - startedAt) / 1000))
-      const finalResultMeta = {
-        duration_seconds: durationSeconds,
-        error: error instanceof Error ? error.message : String(error),
-      }
-
       const errorMsg = error instanceof Error ? error.message : String(error)
       const notRetryable = isNonRetryableError(errorMsg)
-      if (notRetryable) {
-        finalResultMeta.non_retryable = true
+
+      const finalResultMeta = {
+        duration_seconds: durationSeconds,
+        error: errorMsg,
       }
-      await db.prepare(`
-        UPDATE crawler_jobs
-        SET status = 'failed',
-            completed_at = CURRENT_TIMESTAMP,
-            error = ?,
-            result_meta = COALESCE(?, result_meta)
-        WHERE id = ?
-      `).run(errorMsg, JSON.stringify(finalResultMeta), jobId)
+      if (notRetryable) finalResultMeta.non_retryable = true
+
+      // Force=true because an orphan-recovery sweep may have just reclaimed
+      // this job onto another worker. We still want the real error surfaced.
+      await failJobState(db, jobId, errorMsg, {
+        resultMeta: finalResultMeta,
+        force: true,
+      })
 
       // Log to dead letter queue for durable failure tracking
       await logFailedJob(db, {

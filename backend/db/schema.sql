@@ -1089,13 +1089,24 @@ CREATE TABLE IF NOT EXISTS crawler_jobs (
   last_retry_at DATETIME,
   -- Heartbeat timestamp updated periodically by long-running jobs to prove liveness.
   -- cleanupStaleCrawlers skips jobs with a recent heartbeat even if started_at is old.
-  last_heartbeat_at DATETIME
+  last_heartbeat_at DATETIME,
+  -- Worker identity: which process/instance atomically claimed the running job.
+  -- Populated by claimJob() when the queued -> running transition is applied.
+  worker_id TEXT,
+  -- Persistent attempt counter: incremented every time a worker claims this
+  -- job. Distinct from dispatch_attempts (which resets on re-queue) and
+  -- retry_count (which only ticks on stale orphan cleanup).
+  attempt_count INTEGER DEFAULT 0,
+  -- Timestamp of the atomic queued -> running transition.
+  claimed_at DATETIME
 );
 
 CREATE INDEX IF NOT EXISTS idx_crawler_jobs_status ON crawler_jobs(status);
 CREATE INDEX IF NOT EXISTS idx_crawler_jobs_profile ON crawler_jobs(profile_id);
 CREATE INDEX IF NOT EXISTS idx_crawler_jobs_type ON crawler_jobs(type);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_crawler_jobs_idempotency ON crawler_jobs(idempotency_key) WHERE idempotency_key IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_crawler_jobs_worker_id ON crawler_jobs(worker_id);
+CREATE INDEX IF NOT EXISTS idx_crawler_jobs_status_heartbeat ON crawler_jobs(status, last_heartbeat_at);
 
 -- Dead Letter Queue for persistent failure tracking and recovery
 CREATE TABLE IF NOT EXISTS dead_letter_queue (
