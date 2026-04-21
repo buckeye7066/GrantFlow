@@ -1124,6 +1124,218 @@ export function normalizeProfile(rawProfile, sections = null, signals = null) {
     }
   }
 
+  // ---------------------------------------------------------------------------
+  // Structured business / ownership / organization / population / mission data.
+  //
+  // These fields are what actually determines eligibility for the bulk of
+  // business, nonprofit, church, school, and volunteer-fire funding
+  // opportunities (SBA set-asides, WOSB, SDVOSB, CDFI, HBCU, USDA rural, NIH
+  // for nonprofits, NEA for arts, population-served mandates, etc.). They
+  // were previously only available as loose keywords on profileSignals and
+  // therefore invisible to matchEngine's hard-eligibility + scoring paths.
+  // Every downstream consumer (matchEngine, relevanceFilter, Anya) reads
+  // these through the normalized profile.
+  // ---------------------------------------------------------------------------
+  const _asBoolNullable = (v) => {
+    if (v === true) return true
+    if (v === false) return false
+    if (v === 1 || v === '1') return true
+    if (v === 0 || v === '0') return false
+    if (typeof v === 'string') {
+      const s = v.trim().toLowerCase()
+      if (['yes', 'true', 'y', 't'].includes(s)) return true
+      if (['no', 'false', 'n', 'f'].includes(s)) return false
+    }
+    return null
+  }
+  const _parseNumber = (v) => {
+    if (v === null || v === undefined || v === '') return null
+    const n = typeof v === 'number' ? v : Number(String(v).replace(/[^0-9.+-]/g, ''))
+    return Number.isFinite(n) ? n : null
+  }
+  const _str = (v) =>
+    typeof v === 'string' && v.trim() ? v.trim() : null
+
+  const _orgDetailsSection =
+    profileSections?.organization_details?.answers ??
+    profileSections?.organization_details ??
+    {}
+  const _programsSection =
+    profileSections?.programs_services?.answers ??
+    profileSections?.programs_services ??
+    {}
+  const _businessSection =
+    profileSections?.small_business_details?.answers ??
+    profileSections?.small_business_details ??
+    profileSections?.business?.answers ??
+    profileSections?.business ??
+    {}
+  const _locationSection =
+    profileSections?.location_focus?.answers ??
+    profileSections?.location_focus ??
+    {}
+  const _narrativeSection =
+    profileSections?.narrative?.answers ??
+    profileSections?.narrative ??
+    {}
+
+  const _certsRaw = Array.isArray(_businessSection.certifications)
+    ? _businessSection.certifications.map((c) => String(c).toLowerCase().trim()).filter(Boolean)
+    : []
+  const _certSet = new Set(_certsRaw)
+
+  const ownership = {
+    isVeteranOwned:
+      Boolean(_orgDetailsSection.cert_sdvosb) ||
+      _certSet.has('sdvosb') ||
+      _certSet.has('service-disabled veteran') ||
+      _certSet.has('vosb') ||
+      _certSet.has('veteran-owned') ||
+      _asBoolNullable(_businessSection.veteran_owned) === true ||
+      _asBoolNullable(_orgDetailsSection.veteran_owned) === true,
+    isServiceDisabledVeteranOwned:
+      Boolean(_orgDetailsSection.cert_sdvosb) ||
+      _certSet.has('sdvosb') ||
+      _certSet.has('service-disabled veteran'),
+    isWomanOwned:
+      Boolean(_orgDetailsSection.cert_wbe) ||
+      _certSet.has('wbe') ||
+      _certSet.has('wosb') ||
+      _certSet.has('women-owned') ||
+      _asBoolNullable(_businessSection.woman_owned) === true ||
+      _asBoolNullable(_orgDetailsSection.woman_owned) === true,
+    isMinorityOwned:
+      Boolean(_orgDetailsSection.cert_mbe) ||
+      _certSet.has('mbe') ||
+      _certSet.has('minority-owned') ||
+      _asBoolNullable(_businessSection.minority_owned) === true ||
+      _asBoolNullable(_orgDetailsSection.minority_owned) === true,
+    isDisabledOwned:
+      _asBoolNullable(_businessSection.disabled_owned) === true ||
+      _asBoolNullable(_orgDetailsSection.disabled_owned) === true ||
+      Boolean(_orgDetailsSection.cert_sdvosb),
+    isLGBTQOwned:
+      _asBoolNullable(_businessSection.lgbtq_owned) === true ||
+      _asBoolNullable(_orgDetailsSection.lgbtq_owned) === true,
+    is8aCertified:
+      Boolean(_orgDetailsSection.cert_8a) ||
+      _certSet.has('8a') ||
+      _certSet.has('8(a)'),
+    isHUBZoneCertified:
+      Boolean(_orgDetailsSection.cert_hubzone) ||
+      _certSet.has('hubzone'),
+    isCDFI: Boolean(_orgDetailsSection.is_cdfi),
+    isHBCU: Boolean(_orgDetailsSection.is_msi_hbcu),
+    isTribalGovernment: Boolean(_orgDetailsSection.is_tribal_government),
+    isHousingAuthority: Boolean(_orgDetailsSection.is_housing_authority),
+    isCommunityActionAgency: Boolean(_orgDetailsSection.is_community_action_agency),
+    isCooperative: Boolean(_orgDetailsSection.is_cooperative),
+    isFaithBased: Boolean(_orgDetailsSection.is_faith_based) || affiliations.includes('faith_based'),
+    isRuralServing: Boolean(_orgDetailsSection.is_rural_serving),
+    isMinorityServing: Boolean(_orgDetailsSection.is_minority_serving),
+    samGovRegistered: Boolean(_orgDetailsSection.sam_gov_registered),
+    grantsGovAccount: Boolean(_orgDetailsSection.grants_gov_account),
+    nicraRate: _parseNumber(_orgDetailsSection.nicra_rate),
+  }
+
+  const business = {
+    industry:
+      _str(_businessSection.industry) ??
+      _str(_orgDetailsSection.industry) ??
+      null,
+    naicsCode:
+      _str(_businessSection.naics_code) ??
+      _str(_orgDetailsSection.naics_code) ??
+      null,
+    businessType:
+      _str(_businessSection.business_type) ??
+      _str(_orgDetailsSection.organization_type) ??
+      null,
+    employeeCount:
+      _parseNumber(_businessSection.employee_count) ??
+      _parseNumber(_orgDetailsSection.employee_count) ??
+      _parseNumber(_orgDetailsSection.staff_count) ??
+      null,
+    annualRevenue:
+      _parseNumber(_businessSection.annual_revenue) ??
+      _parseNumber(_orgDetailsSection.annual_revenue) ??
+      _parseNumber(_orgDetailsSection.annual_budget) ??
+      null,
+    yearsInOperation:
+      _parseNumber(_businessSection.years_in_business) ??
+      _parseNumber(_businessSection.years_in_operation) ??
+      _parseNumber(_orgDetailsSection.years_in_operation) ??
+      _parseNumber(_orgDetailsSection.years_operating) ??
+      null,
+    einPresent: Boolean(_str(_orgDetailsSection.ein) || _str(_businessSection.ein)),
+    ueiPresent: Boolean(_str(_orgDetailsSection.uei) || _str(_businessSection.uei)),
+    fiscalSponsor: _str(_orgDetailsSection.fiscal_sponsor),
+  }
+
+  // "startup" is a widely-used soft signal for funder programs; exposed as a
+  // structured flag so matchEngine can boost startup-friendly opportunities
+  // without relying on noisy keyword matching.
+  business.isStartup =
+    business.yearsInOperation !== null && business.yearsInOperation < 3
+
+  business.isMicroEnterprise =
+    business.employeeCount !== null && business.employeeCount <= 10
+
+  business.isLowRevenue =
+    business.annualRevenue !== null && business.annualRevenue < 250000
+
+  const organization = {
+    organizationType:
+      _str(_orgDetailsSection.organization_type) ??
+      _str(_orgDetailsSection.org_type) ??
+      (isNonprofit ? 'nonprofit' : null),
+    mission:
+      _str(_orgDetailsSection.mission) ??
+      _str(_narrativeSection.mission) ??
+      null,
+    populationServed: (() => {
+      const raw =
+        _orgDetailsSection.population_served ??
+        _orgDetailsSection.target_population ??
+        _programsSection.target_population ??
+        _narrativeSection.target_population ??
+        null
+      if (!raw) return []
+      if (Array.isArray(raw)) return raw.map(String).filter(Boolean)
+      if (typeof raw === 'string') {
+        return raw
+          .split(/[,;|]+/)
+          .map((s) => s.trim())
+          .filter(Boolean)
+      }
+      return []
+    })(),
+    missionFocus: (() => {
+      const focus =
+        _orgDetailsSection.mission_focus ??
+        _programsSection.focus_areas ??
+        _programsSection.mission_focus ??
+        null
+      if (!focus) return []
+      if (Array.isArray(focus)) return focus.map(String).filter(Boolean)
+      if (typeof focus === 'string') {
+        return focus
+          .split(/[,;|]+/)
+          .map((s) => s.trim())
+          .filter(Boolean)
+      }
+      return []
+    })(),
+    nteeCode: _str(_orgDetailsSection.ntee_code),
+    isFaithBased: ownership.isFaithBased,
+  }
+
+  const country =
+    _str(profile.country) ??
+    _str(_locationSection.country) ??
+    _str(_orgDetailsSection.country) ??
+    'US'
+
   const normalized = {
     id: profile.id,
     entityType,
@@ -1169,6 +1381,25 @@ export function normalizeProfile(rawProfile, sections = null, signals = null) {
     // Talent & faith signals (housing/scholarship matching)
     talentSignals,
     hasFaithIndicator,
+    // Structured business / ownership / organization (full-profile coverage)
+    country,
+    business,
+    ownership,
+    organization,
+    // Convenient top-level mirrors used throughout matchEngine + Anya
+    isVeteranOwned: ownership.isVeteranOwned,
+    isWomanOwned: ownership.isWomanOwned,
+    isMinorityOwned: ownership.isMinorityOwned,
+    isFaithBased: ownership.isFaithBased,
+    isTribal: ownership.isTribalGovernment || affiliations.includes('tribal'),
+    populationServed: organization.populationServed,
+    missionFocus: organization.missionFocus,
+    organizationType: organization.organizationType,
+    industry: business.industry,
+    naicsCode: business.naicsCode,
+    employeeCount: business.employeeCount,
+    annualRevenue: business.annualRevenue,
+    yearsInOperation: business.yearsInOperation,
     // Display
     displayName: profile.display_name ?? profile.name ?? null,
   }

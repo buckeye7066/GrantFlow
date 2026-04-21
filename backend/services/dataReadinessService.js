@@ -145,29 +145,39 @@ export async function getSystemAlerts(db) {
       })
     }
 
-    // Detect jobs stuck in 'running' state longer than the longest job timeout.
-    // Use COMPREHENSIVE_GEO_JOB_TIMEOUT_MS (default 4h) to avoid false positives
-    // on long-running comprehensive/geo crawl jobs that are still healthy.
-    const maxTimeoutMs = Number.parseInt(
+    // Detect jobs stuck in 'running' state.
+    //
+    // Use per-type thresholds so that comprehensive/geo crawls (which are
+    // legitimately long-running) do not trigger false alerts, while ordinary
+    // crawls that hang for 30+ minutes ARE surfaced. Previously the logic used
+    // a single 4-hour global threshold, which hid real outages for users
+    // waiting on discovery results.
+    const comprehensiveTimeoutMs = Number.parseInt(
       process.env.COMPREHENSIVE_GEO_JOB_TIMEOUT_MS || String(4 * 60 * 60 * 1000), 10
     )
-    const stuckThresholdMs = Math.max(maxTimeoutMs, 30 * 60 * 1000) // at least 30 min
-    const stuckCutoff = new Date(Date.now() - stuckThresholdMs).toISOString()
+    const defaultStuckMs = Number.parseInt(
+      process.env.CRAWLER_JOB_STUCK_THRESHOLD_MS || String(30 * 60 * 1000), 10
+    )
+    const longRunningCutoff = new Date(Date.now() - comprehensiveTimeoutMs).toISOString()
+    const defaultCutoff = new Date(Date.now() - defaultStuckMs).toISOString()
 
     const stuckRow = await db
       .prepare(
         `SELECT COUNT(*) AS c
          FROM crawler_jobs
          WHERE status = 'running'
-           AND started_at < ?`,
+           AND (
+             (type IN ('comprehensive', 'geo', 'geographic') AND started_at < ?)
+             OR (type NOT IN ('comprehensive', 'geo', 'geographic') AND started_at < ?)
+           )`,
       )
-      .get(stuckCutoff)
+      .get(longRunningCutoff, defaultCutoff)
     const stuckCount = Number(stuckRow?.c ?? 0)
     if (stuckCount > 0) {
       alerts.push({
         code: 'jobs_stuck',
         severity: 'warning',
-        message: `${stuckCount} crawler job(s) have been running for more than ${Math.round(stuckThresholdMs / 60000)} minutes.`,
+        message: `${stuckCount} crawler job(s) have been running longer than their expected timeout (default ${Math.round(defaultStuckMs / 60000)}m, long-running ${Math.round(comprehensiveTimeoutMs / 60000)}m).`,
       })
     }
 

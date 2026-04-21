@@ -1185,6 +1185,95 @@ function scoreEligibilityComponent(effectiveProfile, effectiveSignals, effective
     if (demoBonus > 0) reasons.push(`Demo/affil +${demoBonus}`)
   }
 
+  // Ownership / certification / business-profile alignment bonus (+0..18).
+  //
+  // These signals are what actually qualify a profile for specific set-aside
+  // and ownership-designated grants. Keep this as a soft *boost* so sparse
+  // profiles still match general-purpose opportunities without being gated
+  // out.
+  const ownership = profileNorm?.ownership || {}
+  const businessProfile = profileNorm?.business || {}
+  const organizationProfile = profileNorm?.organization || {}
+  let ownershipBonus = 0
+  const ownershipHits = []
+
+  const ownershipTokens = [
+    { flag: ownership.isVeteranOwned, tokens: ['veteran-owned', 'veteran owned', 'vosb', 'sdvosb', 'service-disabled veteran'], label: 'veteran-owned' },
+    { flag: ownership.isWomanOwned, tokens: ['woman-owned', 'women-owned', 'women owned', 'wbe', 'wosb'], label: 'woman-owned' },
+    { flag: ownership.isMinorityOwned, tokens: ['minority-owned', 'minority owned', 'mbe', 'disadvantaged business', '8(a)', ' 8a '], label: 'minority-owned' },
+    { flag: ownership.is8aCertified, tokens: ['8(a)', ' 8a ', 'sba 8(a)'], label: '8(a)' },
+    { flag: ownership.isHUBZoneCertified, tokens: ['hubzone', 'hub zone', 'historically underutilized'], label: 'HUBZone' },
+    { flag: ownership.isCDFI, tokens: ['cdfi', 'community development financial'], label: 'CDFI' },
+    { flag: ownership.isHBCU, tokens: ['hbcu', 'minority-serving institution', 'msi'], label: 'HBCU/MSI' },
+    { flag: ownership.isTribalGovernment, tokens: ['tribal', 'indian tribe', 'federally recognized'], label: 'tribal' },
+    { flag: ownership.isHousingAuthority, tokens: ['housing authority', 'public housing', 'pha'], label: 'housing authority' },
+    { flag: ownership.isCommunityActionAgency, tokens: ['community action', 'csbg', 'caa '], label: 'CAA' },
+    { flag: ownership.isCooperative, tokens: ['cooperative', 'co-op', 'co op'], label: 'cooperative' },
+    { flag: ownership.isRuralServing, tokens: ['rural', 'rural-serving'], label: 'rural-serving' },
+    { flag: ownership.isMinorityServing, tokens: ['minority-serving', 'minority serving'], label: 'minority-serving' },
+  ]
+  for (const { flag, tokens, label } of ownershipTokens) {
+    if (!flag) continue
+    if (tokens.some((t) => oppText.includes(t))) {
+      ownershipBonus += 5
+      ownershipHits.push(label)
+    }
+  }
+
+  // Business maturity / industry soft matching
+  if (businessProfile.isStartup && /(startup|early[- ]stage|seed|pre[- ]seed|emerging)/i.test(oppText)) {
+    ownershipBonus += 3
+    ownershipHits.push('startup')
+  }
+  if (businessProfile.isMicroEnterprise && /(microenterprise|micro-enterprise|micro business|microloan)/i.test(oppText)) {
+    ownershipBonus += 3
+    ownershipHits.push('micro-enterprise')
+  }
+  if (businessProfile.industry && typeof businessProfile.industry === 'string') {
+    const ind = businessProfile.industry.toLowerCase()
+    if (ind.length >= 3 && oppText.includes(ind)) {
+      ownershipBonus += 3
+      ownershipHits.push(`industry:${ind}`)
+    }
+  }
+  if (businessProfile.naicsCode && typeof businessProfile.naicsCode === 'string') {
+    if (oppText.includes(businessProfile.naicsCode)) {
+      ownershipBonus += 4
+      ownershipHits.push(`NAICS:${businessProfile.naicsCode}`)
+    }
+  }
+
+  // Population served / mission focus alignment -- critical for nonprofits,
+  // churches, schools, ministries, and service organizations.
+  const populationServed = Array.isArray(organizationProfile.populationServed)
+    ? organizationProfile.populationServed
+    : []
+  for (const pop of populationServed) {
+    const token = String(pop).toLowerCase().trim()
+    if (token && token.length >= 3 && oppText.includes(token)) {
+      ownershipBonus += 2
+      ownershipHits.push(`serves:${token}`)
+      if (ownershipBonus >= 18) break
+    }
+  }
+  const missionFocus = Array.isArray(organizationProfile.missionFocus)
+    ? organizationProfile.missionFocus
+    : []
+  for (const focus of missionFocus) {
+    const token = String(focus).toLowerCase().trim()
+    if (token && token.length >= 3 && oppText.includes(token)) {
+      ownershipBonus += 2
+      ownershipHits.push(`mission:${token}`)
+      if (ownershipBonus >= 18) break
+    }
+  }
+
+  ownershipBonus = Math.min(18, ownershipBonus)
+  if (ownershipBonus > 0) {
+    subscale += ownershipBonus
+    reasons.push(`Ownership/mission +${ownershipBonus} (${ownershipHits.slice(0, 4).join(', ')})`)
+  }
+
   // Requirements penalties (proportional)
   const opportunityType = String(opportunity?.opportunity_type || opportunity?.type || '').toLowerCase()
   if (['loan', 'loan_program', 'microloan'].includes(opportunityType) || /\bloan\b/.test(oppText)) {

@@ -283,6 +283,32 @@ export function buildFlatProfileData(profileContext, normalized) {
     geographic_qualifiers: Array.isArray(normalized?.geographicQualifiers)
       ? [...normalized.geographicQualifiers]
       : EMPTY_ARRAY,
+    // Structured full-profile coverage for business/ownership/organization
+    // rules (woman-owned, veteran-owned, CDFI, HBCU, startup, population
+    // served, mission focus, etc.). These mirror normalizeProfile's output
+    // so relevance rules and Anya can read them from a single consistent
+    // shape.
+    country: normalized?.country || 'US',
+    organization_type: normalized?.organizationType || null,
+    industry: normalized?.industry || null,
+    naics_code: normalized?.naicsCode || null,
+    employee_count: normalized?.employeeCount ?? null,
+    annual_revenue: normalized?.annualRevenue ?? null,
+    years_in_operation: normalized?.yearsInOperation ?? null,
+    population_served: Array.isArray(normalized?.populationServed)
+      ? [...normalized.populationServed]
+      : EMPTY_ARRAY,
+    mission_focus: Array.isArray(normalized?.missionFocus)
+      ? [...normalized.missionFocus]
+      : EMPTY_ARRAY,
+    is_veteran_owned: !!normalized?.isVeteranOwned,
+    is_woman_owned: !!normalized?.isWomanOwned,
+    is_minority_owned: !!normalized?.isMinorityOwned,
+    is_faith_based: !!normalized?.isFaithBased,
+    is_tribal: !!normalized?.isTribal,
+    ownership: normalized?.ownership || null,
+    business: normalized?.business || null,
+    organization_details: normalized?.organization || null,
   }
 }
 

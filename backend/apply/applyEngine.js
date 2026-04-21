@@ -428,7 +428,11 @@ export async function patchApplication({ db, applicationId, patch = {} }) {
           let prev = null
           try {
             prev = existing.snapshot_json ? JSON.parse(existing.snapshot_json) : null
-          } catch {
+          } catch (parseErr) {
+            console.warn(
+              `[applyEngine.updateApplication] snapshot_json parse failed for application ${existing.id}; replacing instead of merging:`,
+              parseErr?.message,
+            )
             prev = null
           }
           const next = snapshot && typeof snapshot === 'object' ? snapshot : null
@@ -703,11 +707,20 @@ export async function markSubmitted({ db, applicationId, method, metadata }) {
     throw err
   }
 
+  // Non-fatal issues encountered during the submission side-effects. Surfaced
+  // on the returned application row as `__submission_warnings` so callers (and
+  // the UI / Anya) can tell the user what succeeded partially.
+  const submissionWarnings = []
+
   // Merge snapshot for auditability.
   let prev = null
   try {
     prev = app.snapshot_json ? JSON.parse(app.snapshot_json) : null
-  } catch {
+  } catch (parseErr) {
+    console.warn(
+      `[applyEngine.markSubmitted] snapshot_json parse failed for application ${applicationId}; starting fresh submission snapshot:`,
+      parseErr?.message,
+    )
     prev = null
   }
   const nextSnapshot = {
@@ -735,6 +748,8 @@ export async function markSubmitted({ db, applicationId, method, metadata }) {
       .run(m, safeJsonStringify(nextSnapshot), String(applicationId))
 
     // Keep grants pipeline consistent: mark the grant itself as submitted.
+    // Failure here is non-fatal (the application was still recorded as
+    // submitted) but MUST be visible so we can investigate pipeline drift.
     try {
       await tx
         .prepare(
@@ -746,11 +761,19 @@ export async function markSubmitted({ db, applicationId, method, metadata }) {
           `,
         )
         .run(String(app.grant_id))
-    } catch {
-      // best-effort only (some environments may not have grants.status constraints aligned)
+    } catch (err) {
+      console.warn(
+        `[applyEngine.markSubmitted] failed to mirror submitted status onto grants.id=${app.grant_id}:`,
+        err?.message,
+      )
+      submissionWarnings.push({
+        step: 'grants.status_mirror',
+        grant_id: app.grant_id,
+        error: err?.message,
+      })
     }
 
-    // Record a milestone for the submission event (best-effort, non-fatal).
+    // Record a milestone for the submission event. Non-fatal but surfaced.
     try {
       const milestoneId = crypto.randomUUID()
       const dueDate = new Date().toISOString().slice(0, 10)
@@ -771,12 +794,26 @@ export async function markSubmitted({ db, applicationId, method, metadata }) {
           db?.dialect === 'postgres' ? true : 1,
           dueDate,
         )
-    } catch {
-      // ignore
+    } catch (err) {
+      console.warn(
+        `[applyEngine.markSubmitted] failed to record submission milestone for grant_id=${app.grant_id}:`,
+        err?.message,
+      )
+      submissionWarnings.push({
+        step: 'milestone.insert',
+        grant_id: app.grant_id,
+        error: err?.message,
+      })
     }
   })
 
-  return db.prepare('SELECT * FROM applications WHERE id = ?').get(String(applicationId))
+  const finalRow = await db
+    .prepare('SELECT * FROM applications WHERE id = ?')
+    .get(String(applicationId))
+  if (finalRow && submissionWarnings.length > 0) {
+    finalRow.__submission_warnings = submissionWarnings
+  }
+  return finalRow
 }
 
 export async function autoPopulate({ db, applicationId }) {
@@ -872,7 +909,14 @@ async function gatherProfileForApplication(db, grant) {
   const sections = await db.prepare('SELECT section_key, data FROM profile_sections WHERE profile_id = ?').all(grant.profile_id)
   const parsed = {}
   for (const s of (sections || [])) {
-    try { parsed[s.section_key] = typeof s.data === 'string' ? JSON.parse(s.data) : s.data } catch { /* skip */ }
+    try {
+      parsed[s.section_key] = typeof s.data === 'string' ? JSON.parse(s.data) : s.data
+    } catch (parseErr) {
+      console.warn(
+        `[applyEngine.loadProfileWithSections] profile_sections.data parse failed for profile=${grant.profile_id} section=${s?.section_key}:`,
+        parseErr?.message,
+      )
+    }
   }
   return { ...profile, sections: parsed }
 }
@@ -880,7 +924,14 @@ async function gatherProfileForApplication(db, grant) {
 async function generateApplicationSections(db, grant, opportunity, profile, sectionDefs) {
   const result = {}
   let openai = null
-  try { openai = createOpenAIClient({ allowMissing: true }).openai } catch { /* no key */ }
+  try {
+    openai = createOpenAIClient({ allowMissing: true }).openai
+  } catch (openaiErr) {
+    console.warn(
+      '[applyEngine.generateApplicationSections] OpenAI client unavailable; falling back to template content:',
+      openaiErr?.message,
+    )
+  }
   if (!openai) {
     console.log('[autoPopulate] No OpenAI key; generating template-based content only')
     return generateTemplateSections(db, grant, opportunity, profile, sectionDefs)
@@ -925,7 +976,11 @@ async function generateTemplateSections(db, grant, opportunity, profile, section
           opportunityId: opportunity?.id, grantId: grant?.id,
         })
         result[s.section_key] = medDoc?.content || '[Medical necessity documentation will be generated when health data is available in the profile.]'
-      } catch {
+      } catch (medErr) {
+        console.warn(
+          `[applyEngine.generateTemplateSections] medical necessity generation failed for profile=${grant?.profile_id}:`,
+          medErr?.message,
+        )
         result[s.section_key] = '[Medical necessity documentation requires health information in the profile. Please update the health_medical section.]'
       }
     } else if (s.section_key === 'cover_letter') {
