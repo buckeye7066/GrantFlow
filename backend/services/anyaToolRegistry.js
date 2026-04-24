@@ -713,7 +713,7 @@ export async function invokeTool(name, params, context) {
       }
     } catch (persistErr) {
       // Never block tool execution on usage-log failures; warn once.
-      // eslint-disable-next-line no-console
+       
       console.warn('[anyaToolRegistry] failed to log anya_tool_usage:', persistErr?.message || persistErr)
     }
   }
