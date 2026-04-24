@@ -12,7 +12,7 @@
  * value, or the fallback if nothing sensible can be produced.
  */
 export function safeParseJSON(value, fallback = null) {
-  if (value == null || value === '') return fallback
+  if ((value === null || value === undefined) || value === '') return fallback
 
   // Already-parsed (pg json/jsonb): arrays and plain objects pass through.
   if (typeof value === 'object' && !(value instanceof Buffer)) {
@@ -44,7 +44,7 @@ export function safeParseJSON(value, fallback = null) {
 }
 
 export function safeStringifyJSON(value, fallback = '{}') {
-  if (value == null) return fallback
+  if ((value === null || value === undefined)) return fallback
   try {
     return JSON.stringify(value)
   } catch (error) {

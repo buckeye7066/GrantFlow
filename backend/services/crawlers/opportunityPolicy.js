@@ -16,6 +16,13 @@
  */
 
 import { isValidHttpUrl } from './crawlerOpportunityContract.js'
+import {
+  PLACEHOLDER_HOSTNAMES as CANONICAL_PLACEHOLDER_HOSTNAMES,
+  PLACEHOLDER_TEXT_PATTERNS as CANONICAL_PLACEHOLDER_TEXT_PATTERNS,
+  isPlaceholderUrl as canonicalIsPlaceholderUrl,
+  pickRealUrl as canonicalPickRealUrl,
+  extractHostname,
+} from '../../config/urlRules.js'
 
 // ─── Module-level rejection counters ────────────────────────────────────────
 
@@ -32,22 +39,21 @@ export function resetPolicyRejectionCounts() {
 
 /** Bump a rejection reason into target or module-level counts. */
 function bumpCount(reason, targetCounts = null) {
-  const dest = targetCounts != null ? targetCounts : _rejectionCounts
+  const dest = (targetCounts !== null && targetCounts !== undefined) ? targetCounts : _rejectionCounts
   dest[reason] = (dest[reason] ?? 0) + 1
 }
 
 // ─── PLACEHOLDER DOMAINS ─────────────────────────────────────────────────────
-
+//
+// Canonical source: backend/config/urlRules.js. We import the set here and
+// add a handful of policy-specific aliases that only show up in ingest/
+// crawler content (bare "placeholder", "example.gov") — keeping them here
+// means the *consumer-facing* list in urlRules.js stays focused on real user
+// URLs while crawler ingest can reject a few extra historical aliases.
 const PLACEHOLDER_HOSTNAMES = new Set([
-  'example.com',
-  'example.org',
-  'example.gov',
-  'example.net',
-  'placeholder.com',
+  ...CANONICAL_PLACEHOLDER_HOSTNAMES,
   'placeholder',
-  'localhost',
-  '127.0.0.1',
-  '0.0.0.0',
+  'example.gov',
 ])
 
 /**
@@ -82,15 +88,15 @@ export function getPlaceholderHostnames() {
 /** Returns true if the URL resolves to a known placeholder/test domain. */
 function isPlaceholderHostname(url) {
   if (typeof url !== 'string' || !url.trim()) return false
-  try {
-    const host = new URL(url).hostname.toLowerCase()
-    return (
-      PLACEHOLDER_HOSTNAMES.has(host) ||
-      [...PLACEHOLDER_HOSTNAMES].some((ph) => host.endsWith('.' + ph))
-    )
-  } catch {
-    return false
-  }
+  // Canonical placeholder check (covers hostnames + INVALID_URL_PATTERNS).
+  if (canonicalIsPlaceholderUrl(url)) return true
+  // Extra crawler-ingest aliases.
+  const host = extractHostname(url)
+  if (!host) return false
+  return (
+    PLACEHOLDER_HOSTNAMES.has(host) ||
+    [...PLACEHOLDER_HOSTNAMES].some((ph) => host.endsWith('.' + ph))
+  )
 }
 
 // ─── LOAN-LIKE DETECTION ─────────────────────────────────────────────────────
@@ -159,13 +165,14 @@ export function isMatchingFunds(opp) {
 }
 
 // ─── PLACEHOLDER TEXT DETECTION ──────────────────────────────────────────────
-
+//
+// Canonical base patterns come from backend/config/urlRules.js. We extend
+// with crawler-ingest-only patterns ("foo bar", "stub", bare "example.com"
+// in description text) that only show up in scraped content, not user-
+// facing URLs.
 const PLACEHOLDER_TEXT_PATTERNS = [
-  /\blorem\b/i,
+  ...CANONICAL_PLACEHOLDER_TEXT_PATTERNS,
   /\bipsum\b/i,
-  /\bcoming\s+soon\b/i,
-  /\bplaceholder\b/i,
-  /\btbd\b/i,
   /\btest opportunity\b/i,
   /\bsample opportunity\b/i,
   /\bfoo bar\b/i,
@@ -204,11 +211,15 @@ export function isValidRealUrl(url) {
 
 /**
  * Returns the first real URL from an opportunity object, or null.
+ *
+ * Delegates to the canonical urlRules.pickRealUrl so every caller — crawler
+ * ingest, match engine, UI — uses the same field precedence and the same
+ * placeholder validator. We intentionally do NOT re-implement the field
+ * walk here anymore (prior version drifted on `apply_url`).
  */
 export function pickRealUrl(opp) {
-  for (const field of ['url', 'application_url', 'source_url', 'evidence_url']) {
-    if (isValidRealUrl(opp?.[field])) return opp[field]
-  }
+  const picked = canonicalPickRealUrl(opp)
+  if (picked && isValidHttpUrl(picked) && !isPlaceholderHostname(picked)) return picked
   return null
 }
 

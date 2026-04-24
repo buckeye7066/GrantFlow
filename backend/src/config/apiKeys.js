@@ -9,7 +9,7 @@
 
 function readEnv(name) {
   const raw = process.env[name]
-  if (raw == null) return null
+  if ((raw === null || raw === undefined)) return null
   const v = String(raw).trim()
   return v ? v : null
 }

@@ -1,7 +1,7 @@
 import crypto from 'node:crypto'
 
 function jsonOrNull(value) {
-  if (value == null) return null
+  if ((value === null || value === undefined)) return null
   try {
     return JSON.stringify(value)
   } catch {
@@ -153,7 +153,7 @@ export async function saveDocumentExtractResult(db, documentId, result) {
 
   const charCount = Number(meta.char_count ?? 0) || 0
   const wordCount = Number(meta.word_count ?? 0) || 0
-  const pages = meta.pages == null ? null : Number(meta.pages)
+  const pages = (meta.pages === null || meta.pages === undefined) ? null : Number(meta.pages)
   const confidence = typeof result?.confidence === 'number' && Number.isFinite(result.confidence) ? result.confidence : 0.0
   const ocrUsed = Boolean(meta.ocr_used)
 
@@ -309,7 +309,7 @@ export async function tryReuseExtractByHash(db, { fileHash, documentId } = {}) {
       existing.ocr_text ?? null,
       typeof existing.warnings === 'string' ? existing.warnings : JSON.stringify(existing.warnings ?? []),
       existing.confidence ?? 0,
-      existing.provenance == null ? null : (typeof existing.provenance === 'string' ? existing.provenance : JSON.stringify(existing.provenance)),
+      (existing.provenance === null || existing.provenance === undefined) ? null : (typeof existing.provenance === 'string' ? existing.provenance : JSON.stringify(existing.provenance)),
       Boolean(existing.ocr_used),
       documentId,
     )
@@ -344,7 +344,7 @@ export async function tryReuseExtractByHash(db, { fileHash, documentId } = {}) {
       existing.ocr_text ?? null,
       typeof existing.warnings === 'string' ? existing.warnings : JSON.stringify(existing.warnings ?? []),
       existing.confidence ?? 0,
-      existing.provenance == null ? null : (typeof existing.provenance === 'string' ? existing.provenance : JSON.stringify(existing.provenance)),
+      (existing.provenance === null || existing.provenance === undefined) ? null : (typeof existing.provenance === 'string' ? existing.provenance : JSON.stringify(existing.provenance)),
       existing.ocr_used ? 1 : 0,
       documentId,
     )

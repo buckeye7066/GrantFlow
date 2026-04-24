@@ -283,7 +283,7 @@ async function auditIgnoredProfileSections({ rootDir }) {
   const sources = []
   for (const candidate of candidates) {
     const text = await readFileSafe(candidate)
-    if (text != null) sources.push({ file: candidate, text })
+    if ((text !== null && text !== undefined)) sources.push({ file: candidate, text })
   }
   if (sources.length === 0) {
     errors.push({ audit: 'ignored_profile_sections', message: 'no_matching_sources_found' })
@@ -348,7 +348,7 @@ async function auditZeroResultFallbackInRoutes({ rootDir }) {
   for (const rel of routeFiles) {
     const full = path.join(routesDir, rel)
     const text = await readFileSafe(full)
-    if (text == null) continue
+    if ((text === null || text === undefined)) continue
     if (!/\btotal_found\b/.test(text)) continue
     if (guardRx.test(text)) continue
     findings.push({
@@ -379,7 +379,7 @@ async function auditMatchingCoverage({ rootDir }) {
   const sources = []
   for (const candidate of candidates) {
     const text = await readFileSafe(candidate)
-    if (text != null) sources.push({ file: candidate, text })
+    if ((text !== null && text !== undefined)) sources.push({ file: candidate, text })
   }
 
   if (sources.length === 0) {
@@ -422,7 +422,7 @@ async function auditFallbackLogic({ rootDir }) {
   const errors = []
   const matchingFile = path.join(rootDir, 'backend', 'services', 'matching.js')
   const text = await readFileSafe(matchingFile)
-  if (text == null) {
+  if ((text === null || text === undefined)) {
     errors.push({ audit: 'fallback_logic', message: `missing_file:${matchingFile}` })
     return { findings, errors }
   }
@@ -464,7 +464,7 @@ async function auditUiBackendConsistency({ rootDir }) {
   for (const rel of routeFiles) {
     const full = path.join(routesDir, rel)
     const text = await readFileSafe(full)
-    if (text == null) continue
+    if ((text === null || text === undefined)) continue
     // Heuristic: if a route reports total_found, it should also return a
     // matches/results/opportunities/included array. Otherwise the user rule
     // "Counts displayed in the UI must map 1:1 to backend response fields"

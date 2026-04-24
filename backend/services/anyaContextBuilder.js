@@ -489,13 +489,13 @@ function buildPageContext(currentPage, pageContext) {
 
   // Include frontend-pushed page context if available
   if (pageContext) {
-    if (pageContext.resultCount != null) {
+    if ((pageContext.resultCount !== null && pageContext.resultCount !== undefined)) {
       lines.push(`- **Results visible on screen:** ${pageContext.resultCount}`)
     }
     if (pageContext.selectedGrant) {
       lines.push(`- **Selected grant:** ${pageContext.selectedGrant}`)
     }
-    if (pageContext.pipelineCount != null) {
+    if ((pageContext.pipelineCount !== null && pageContext.pipelineCount !== undefined)) {
       lines.push(`- **Pipeline items:** ${pageContext.pipelineCount}`)
     }
   }

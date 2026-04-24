@@ -72,7 +72,7 @@ export function createAwsTextractProvider() {
       // Rough confidence heuristic: average LINE confidence if provided.
       const confs = lines
         .map((l) => (typeof l?.Confidence === 'number' && Number.isFinite(l.Confidence) ? l.Confidence : null))
-        .filter((v) => v != null)
+        .filter((v) => (v !== null && v !== undefined))
       const avgConf =
         confs.length > 0 ? Math.max(0, Math.min(1, confs.reduce((a, b) => a + b, 0) / confs.length / 100)) : null
 

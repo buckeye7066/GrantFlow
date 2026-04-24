@@ -68,12 +68,12 @@ export function createOpenAIClient({
   }
 
   const effectiveTimeoutMs =
-    timeoutMs != null
+    (timeoutMs !== null && timeoutMs !== undefined)
       ? Number(timeoutMs)
       : Number(process.env.OPENAI_TIMEOUT_MS || process.env.ANYA_OPENAI_TIMEOUT_MS || 30_000)
 
   const effectiveMaxRetries =
-    maxRetries != null
+    (maxRetries !== null && maxRetries !== undefined)
       ? Number(maxRetries)
       : Number(process.env.OPENAI_MAX_RETRIES || process.env.ANYA_OPENAI_MAX_RETRIES || 2)
 

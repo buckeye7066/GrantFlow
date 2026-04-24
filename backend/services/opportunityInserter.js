@@ -16,7 +16,7 @@ function ensureArray(value) {
 }
 
 function normalizeNonEmptyString(value) {
-  if (value == null) return null
+  if ((value === null || value === undefined)) return null
   const text = String(value).trim()
   return text.length > 0 ? text : null
 }
@@ -207,7 +207,7 @@ function deriveRecordOrigin(opportunity) {
 }
 
 function normalizeDateLikeOrNull(value) {
-  if (value == null) return null
+  if ((value === null || value === undefined)) return null
   if (typeof value === 'string' && value.trim() === '') return null
   return value
 }
@@ -306,8 +306,8 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
     .get(source, sourceId)
 
   // Treat live crawl records as verified even if caller omits last_verified_at.
-  const incomingIsBaseline = recordOrigin !== 'live_crawl' && opportunity.last_verified_at == null
-  const existingIsVerified = existing?.last_verified_at != null
+  const incomingIsBaseline = recordOrigin !== 'live_crawl' && (opportunity.last_verified_at === null || opportunity.last_verified_at === undefined)
+  const existingIsVerified = (existing?.last_verified_at !== null && existing?.last_verified_at !== undefined)
 
   // Only block baseline/unverified incoming data from downgrading verified existing records
   if (existing?.id && existingIsVerified && incomingIsBaseline) {
@@ -542,7 +542,7 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
     source_category: opportunity.source_category ?? null,
     compliance_required: JSON.stringify(ensureArray(opportunity.compliance_required)),
     certifications_required: JSON.stringify(ensureArray(opportunity.certifications_required)),
-    geo_eligibility: opportunity.geo_eligibility != null ? JSON.stringify(opportunity.geo_eligibility) : null,
+    geo_eligibility: (opportunity.geo_eligibility !== null && opportunity.geo_eligibility !== undefined) ? JSON.stringify(opportunity.geo_eligibility) : null,
     signal_tags: JSON.stringify(ensureArray(opportunity.signal_tags)),
     crawler_version: opportunity.crawler_version ?? null,
   }

@@ -109,7 +109,7 @@ function normalizeNsfAward(row) {
     description: descParts.join('\n') || null,
     amount_min: null,
     amount_max: totalAmt ?? obligatedAmt,
-    amount_description: totalAmt != null ? `Estimated total: $${totalAmt.toLocaleString()}` : null,
+    amount_description: (totalAmt !== null && totalAmt !== undefined) ? `Estimated total: $${totalAmt.toLocaleString()}` : null,
     deadline: endDate || null,
     deadline_type: null,
     is_national: true,

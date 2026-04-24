@@ -99,7 +99,7 @@ export async function upsertProgramWithVersion({
 // prior 404/410 fetch. Programs deactivated for other reasons (manual,
 // business-logic) must NOT be silently re-activated by a crawler run.
 const wasDeactivatedByFetch =
-  existing && !wasActive && existing.last_fetch_status != null &&
+  existing && !wasActive && (existing.last_fetch_status !== null && existing.last_fetch_status !== undefined) &&
   (Number(existing.last_fetch_status) === 404 || Number(existing.last_fetch_status) === 410)
 const shouldReactivate =
   wasDeactivatedByFetch && isSuccessfulFetch && !deactivateDueToStatus

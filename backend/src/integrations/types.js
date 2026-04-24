@@ -38,7 +38,7 @@
  * @returns {string|null}
  */
 export function toTrimmedStringOrNull(value) {
-  const v = typeof value === 'string' ? value.trim() : value == null ? '' : String(value).trim()
+  const v = typeof value === 'string' ? value.trim() : (value === null || value === undefined) ? '' : String(value).trim()
   return v ? v : null
 }
 
@@ -47,7 +47,7 @@ export function toTrimmedStringOrNull(value) {
  * @returns {number|null}
  */
 export function toNumberOrNull(value) {
-  if (value == null || value === '') return null
+  if ((value === null || value === undefined) || value === '') return null
   const n = typeof value === 'number' ? value : Number(String(value).replace(/[^0-9.+-]/g, ''))
   return Number.isFinite(n) ? n : null
 }

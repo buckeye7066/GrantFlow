@@ -207,7 +207,7 @@ export async function seedServiceCatalogFromExtract(db) {
     // Base prices from extract (one_time and milestone totals)
     for (const category of CLIENT_CATEGORIES) {
       const cents = svc.prices?.[category] ?? null
-      if (cents == null) continue
+      if ((cents === null || cents === undefined)) continue
 
       if (effectiveModel === 'hourly') {
         // Store price rows as 6-minute units (quantity = rounded_minutes / 6)

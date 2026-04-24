@@ -13,7 +13,14 @@ function looksLikePostgresUrl(value) {
 }
 
 function normalizeMaybeSecret(value) {
-  const raw = typeof value === 'string' ? value : value == null ? '' : String(value)
+  // `value === null || value === undefined` makes the null-ish check explicit
+  // and satisfies eqeqeq.
+  const raw =
+    typeof value === 'string'
+      ? value
+      : value === null || value === undefined
+        ? ''
+        : String(value)
   const trimmed = raw.trim()
   return trimmed || null
 }

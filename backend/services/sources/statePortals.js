@@ -212,7 +212,7 @@ function normalizeStateRecord(record, stateCode, portalName, sourceUrl) {
 }
 
 function parseAmount(val) {
-  if (val == null) return null;
+  if ((val === null || val === undefined)) return null;
   if (typeof val === 'number') return Math.round(val);
   const cleaned = String(val).replace(/[^0-9.]/g, '');
   const parsed = parseFloat(cleaned);

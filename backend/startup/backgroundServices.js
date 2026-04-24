@@ -312,7 +312,7 @@ function _resolveBuildSha() {
 }
 
 function _parseBoolEnv(value) {
-  if (value == null) return null;
+  if ((value === null || value === undefined)) return null;
   const v = String(value).trim().toLowerCase();
   if (['1', 'true', 'yes', 'y', 'on'].includes(v)) return true;
   if (['0', 'false', 'no', 'n', 'off'].includes(v)) return false;

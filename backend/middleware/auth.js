@@ -66,7 +66,12 @@ export function ensureProfileAccess(profileIdParam = 'id') {
       // NOTE: null is the admin sentinel; if we reach here, isAdmin was false,
       // so a null accessibleProfileIds must NOT grant access â fall through to DB check.
       // Only grant if the set explicitly contains the profileId.
-      if (req.ctx?.accessibleProfileIds != null && req.ctx.accessibleProfileIds.has(profileId)) {
+      // eqeqeq-clean: `!== null && !== undefined` spells out the admin sentinel check.
+      if (
+        req.ctx?.accessibleProfileIds !== null &&
+        req.ctx?.accessibleProfileIds !== undefined &&
+        req.ctx.accessibleProfileIds.has(profileId)
+      ) {
         return next();
       }
       

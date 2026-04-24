@@ -66,7 +66,7 @@ export async function fetchOpportunities(query = {}) {
 
   // Attach only non-empty filter objects
   const filterEntries = Object.entries(filters).filter(
-    ([, v]) => v != null && Object.keys(v).length > 0,
+    ([, v]) => (v !== null && v !== undefined) && Object.keys(v).length > 0,
   )
   if (filterEntries.length > 0) {
     body.filters = Object.fromEntries(filterEntries)

@@ -839,9 +839,9 @@ async function processZip(zip, db, config) {
 
       for (const opp of sources) {
         if (!opp) continue
-        if (opp.state == null && inferredState) opp.state = inferredState
-        if (opp.is_national == null && inferredState) opp.is_national = false
-        if (opp.keywords == null && inferredState) {
+        if ((opp.state === null || opp.state === undefined) && inferredState) opp.state = inferredState
+        if ((opp.is_national === null || opp.is_national === undefined) && inferredState) opp.is_national = false
+        if ((opp.keywords === null || opp.keywords === undefined) && inferredState) {
           opp.keywords = [zip, inferredState].filter(Boolean)
         }
         if (isLoanOrMatchingFund(opp)) continue
@@ -1477,7 +1477,7 @@ export async function runNationalZipCrawl(dbPath, options = {}) {
   // - Full crawl is resumable by default (resume=true)
   // - State-scoped and explicit-list crawls default to resume=false to avoid surprising skips.
   const inferredResumeDefault = !options.state && !options.zip_list
-  const allowResume = options.resume != null ? Boolean(options.resume) : inferredResumeDefault
+  const allowResume = (options.resume !== null && options.resume !== undefined) ? Boolean(options.resume) : inferredResumeDefault
   let lastProcessedZip = allowResume
     ? (await getLastProcessedZipForList(db, zipList)) ?? (await getLastProcessedZip(db))
     : null

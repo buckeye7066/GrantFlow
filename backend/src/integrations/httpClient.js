@@ -69,7 +69,10 @@ function parseRetryAfterMs(retryAfterHeader) {
  * @returns {{ status: number|null, code: string|null, message: string }}
  */
 function summarizeAxiosError(err) {
-  const status = err?.response?.status != null ? Number(err.response.status) : null
+  const status =
+    err?.response?.status !== null && err?.response?.status !== undefined
+      ? Number(err.response.status)
+      : null
   const code = typeof err?.code === 'string' ? err.code : null
   const message = typeof err?.message === 'string' ? err.message : String(err)
   return { status, code, message }
@@ -163,7 +166,7 @@ export async function requestJson(options) {
 
       // axios timeout / network errors
       const isTimeout = code === 'ECONNABORTED'
-      const isNetwork = status == null
+      const isNetwork = (status === null || status === undefined)
 
       if (isLast) break
 
@@ -179,7 +182,7 @@ export async function requestJson(options) {
   }
 
   const { status, code, message } = summarizeAxiosError(lastErr)
-  const suffix = status != null ? ` status=${status}` : code ? ` code=${code}` : ''
+  const suffix = (status !== null && status !== undefined) ? ` status=${status}` : code ? ` code=${code}` : ''
   throw new Error(`[${provider}] request failed${suffix}: ${message}`)
 }
 

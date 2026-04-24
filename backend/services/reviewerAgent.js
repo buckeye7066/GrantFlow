@@ -78,7 +78,7 @@ const MAX_PLAUSIBLE_AMOUNT_USD = 100_000_000_000 // $100B — anything higher is
 const FIRM_DEADLINE_TYPES = new Set(['fixed', 'firm', 'deadline', 'due_date'])
 
 function normStr(v) {
-  return typeof v === 'string' ? v.trim() : v == null ? '' : String(v).trim()
+  return typeof v === 'string' ? v.trim() : (v === null || v === undefined) ? '' : String(v).trim()
 }
 
 function isDirectoryLike(opportunity) {
@@ -165,16 +165,16 @@ export function reviewOpportunity(opportunity) {
   // 5. Amount realism
   const amountMin = typeof opportunity.amount_min === 'number' ? opportunity.amount_min : null
   const amountMax = typeof opportunity.amount_max === 'number' ? opportunity.amount_max : null
-  if (amountMin != null && amountMin < 0) {
+  if ((amountMin !== null && amountMin !== undefined) && amountMin < 0) {
     return { ok: false, reason: 'reviewer:negative_amount_min', warnings }
   }
-  if (amountMax != null && amountMax < 0) {
+  if ((amountMax !== null && amountMax !== undefined) && amountMax < 0) {
     return { ok: false, reason: 'reviewer:negative_amount_max', warnings }
   }
-  if (amountMax != null && amountMax > MAX_PLAUSIBLE_AMOUNT_USD) {
+  if ((amountMax !== null && amountMax !== undefined) && amountMax > MAX_PLAUSIBLE_AMOUNT_USD) {
     return { ok: false, reason: 'reviewer:implausible_amount_max', warnings }
   }
-  if (amountMin != null && amountMax != null && amountMin > amountMax) {
+  if ((amountMin !== null && amountMin !== undefined) && (amountMax !== null && amountMax !== undefined) && amountMin > amountMax) {
     // Swap is plausible (upstream bug); warn but accept so we don't lose recall.
     warnings.push('amount_min_gt_max')
   }
@@ -185,7 +185,7 @@ export function reviewOpportunity(opportunity) {
     const deadlineType = normStr(opportunity.deadline_type).toLowerCase()
     if (FIRM_DEADLINE_TYPES.has(deadlineType)) {
       const deadlineMs = parseDateMs(opportunity.deadline)
-      if (deadlineMs != null) {
+      if ((deadlineMs !== null && deadlineMs !== undefined)) {
         const nowMs = Date.now()
         // Allow a 24-hour grace window for same-day deadlines and TZ drift.
         if (deadlineMs + 24 * 60 * 60 * 1000 < nowMs) {
