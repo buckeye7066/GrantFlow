@@ -5,6 +5,7 @@ import pg from 'pg';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
+import { assertProfileScopedSql } from './scopedQuery.js';
 
 // Validate critical environment on startup
 if (process.env.NODE_ENV === 'production') {
@@ -416,6 +417,7 @@ class SqliteDb {
   }
 
   prepare(sql) {
+    assertProfileScopedSql(sql);
     const stmt = this._db.prepare(sql);
     return {
       get: (...args) => stmt.get(...normalizeSqliteArgs(args)),
@@ -472,6 +474,7 @@ class PostgresTx {
   }
 
   prepare(sql) {
+    assertProfileScopedSql(sql);
         sql = fixBooleanIntegers(sql);
     const hasNamed = /@[_A-Za-z][_A-Za-z0-9]*/.test(sql);
     const converted = hasNamed ? atNameToDollarPlaceholders(sql) : qmarkToDollarPlaceholders(sql);
@@ -565,6 +568,7 @@ class PostgresDb {
   }
 
   prepare(sql) {
+    assertProfileScopedSql(sql);
         sql = fixBooleanIntegers(sql);
     const hasNamed = /@[_A-Za-z][_A-Za-z0-9]*/.test(sql);
     const converted = hasNamed ? atNameToDollarPlaceholders(sql) : qmarkToDollarPlaceholders(sql);

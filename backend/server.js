@@ -69,6 +69,7 @@ import seedAssistanceDirectories from './utils/seedAssistanceDirectories.js';
 import seedFaithBasedHousing from './utils/seedFaithBasedHousing.js';
 import seedHousingFundingOpportunities from './utils/seedHousingFunding.js';
 import { errorHandler } from './middleware/errorHandler.js';
+import { profileContextMiddleware } from './middleware/profileContext.js';
 import { attachRequestContext } from './middleware/requestContext.js';
 import { pipelineMonitor, getPipelineHealth } from './middleware/pipelineMonitor.js';
 import { requestTimeout } from './middleware/requestTimeout.js';
@@ -366,6 +367,10 @@ app.use((req, res, next) => {
 app.use('/api/stripe/webhook', express.raw({ type: 'application/json' }), stripeWebhookRouter)
 
 app.use(express.json({ limit: MAX_JSON_BODY_SIZE }));
+
+// Wrap every request in an AsyncLocalStorage profile context so the SQL
+// layer (backend/db/scopedQuery.js) can enforce tenant isolation automatically.
+app.use(profileContextMiddleware());
 
 // Mount health check routes EARLY to ensure they're always available
 // req.db is already attached above.
