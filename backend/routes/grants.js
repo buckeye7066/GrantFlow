@@ -27,6 +27,7 @@ import {
   chooseGrantUrl,
   GRANT_FINGERPRINT_VERSION,
 } from '../utils/grantFingerprint.js'
+import { assertSafeIdentifier } from '../utils/safeSql.js'
 
 import { createLogger } from '../utils/logger.js'
 const routeLogger = createLogger('route:grants')
@@ -191,7 +192,11 @@ async function ensureGrantAiColumns(db) {
     const existing = new Set((info || []).map((r) => String(r?.name || '').toLowerCase()))
     for (const c of cols) {
       if (existing.has(String(c.name).toLowerCase())) continue
-      await db.prepare(`ALTER TABLE grants ADD COLUMN ${c.name} ${c.sqlite};`).run()
+      // audit:allow dynamic-sql — c is from a hardcoded module-local constant list
+      const colName = assertSafeIdentifier(c.name, 'identifier')
+      const colType = assertSafeIdentifier(String(c.sqlite).split(' ')[0], 'identifier')
+      const tail = String(c.sqlite).slice(colType.length).replace(/[^A-Za-z0-9 \t_'"-]/g, '')
+      await db.prepare(`ALTER TABLE grants ADD COLUMN ${colName} ${colType}${tail};`).run()
     }
   } catch (error) {
     // Do not 500 normal grant routes if schema drift exists; log and continue.
@@ -491,7 +496,17 @@ router.get('/', async (req, res) => {
       params.push(urlFilter)
     }
     
-    query += ` ORDER BY ${sortCol} ${sortOrder} LIMIT ? OFFSET ?`;
+    // sortCol already comes from normalizeSortColumn() with a hardcoded
+    // allowlist. Re-validate through assertSafeIdentifier so the auditor
+    // can see an explicit validator at the call site, and so a future
+    // refactor of normalizeSortColumn can't accidentally return an
+    // unvetted column name. sortOrder is ASC|DESC only (normalized above).
+    const safeSortCol = (() => {
+      const col = String(sortCol).startsWith('g.') ? String(sortCol).slice(2) : String(sortCol)
+      return `g.${assertSafeIdentifier(col, 'column')}`
+    })()
+    const safeSortOrder = sortOrder === 'ASC' ? 'ASC' : 'DESC'
+    query += ` ORDER BY ${safeSortCol} ${safeSortOrder} LIMIT ? OFFSET ?`; // audit:allow dynamic-sql
     params.push(limit, offset);
     
     const grants = await req.db.prepare(query).all(...params);
@@ -958,14 +973,18 @@ router.post('/', mutationRateLimiter, async (req, res) => {
       sanitizedData.matched_needs = '[]'
     }
 
-    const columns = ['id', ...Object.keys(sanitizedData)];
-    const placeholders = columns.map(() => '?').join(', ');
-    const values = [id, ...Object.values(sanitizedData)];
+    const columns = ['id', ...Object.keys(sanitizedData)]
+    // sanitizeColumns() already filters to ALLOWED_GRANT_COLUMNS; belt-and-
+    // suspenders validation via assertSafeIdentifier at the call site so a
+    // future refactor of sanitizeColumns can't regress SQL safety.
+    const safeColumns = columns.map((c) => assertSafeIdentifier(c, 'identifier'))
+    const placeholders = safeColumns.map(() => '?').join(', ')
+    const values = [id, ...Object.values(sanitizedData)]
 
     await req.db.prepare(`
-      INSERT INTO grants (${columns.join(', ')})
+      INSERT INTO grants (${safeColumns.join(', ')})
       VALUES (${placeholders})
-    `).run(...values);
+    `).run(...values) // audit:allow dynamic-sql
     
     const grant = await req.db.prepare('SELECT * FROM grants WHERE id = ?').get(id);
     res.status(201).json(grant);
@@ -996,12 +1015,14 @@ router.put('/:id', mutationRateLimiter, async (req, res) => {
       sanitizedData.match_reasons = JSON.stringify(sanitizedData.match_reasons);
     }
     
-    const setClause = Object.keys(sanitizedData).map(key => `${key} = ?`).join(', ');
+    const safeSetClause = Object.keys(sanitizedData)
+      .map((key) => `${assertSafeIdentifier(key, 'identifier')} = ?`)
+      .join(', ')
     const values = [...Object.values(sanitizedData), req.params.id];
-    
+
     await req.db.prepare(`
       UPDATE grants 
-      SET ${setClause}, updated_at = CURRENT_TIMESTAMP 
+      SET ${safeSetClause}, updated_at = CURRENT_TIMESTAMP 
       WHERE id = ?
     `).run(...values);
     

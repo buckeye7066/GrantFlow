@@ -37,6 +37,8 @@
     "ingest:usaspending": "node scripts/ingest-usaspending.mjs",
     "migrate": "node backend/db/migrate.js",
     "db:check": "node scripts/db-check.mjs",
+    "safe-sql:check": "node scripts/codemod/safe-sql.mjs",
+    "profile-scope:check": "node scripts/codemod/no-unscoped-profile-query.mjs",
     "lint:ci": "eslint --max-warnings 0 \"src/**/*.{js,jsx}\" \"backend/**/*.js\"",
     "scan:secrets": "node scripts/scan-secrets.mjs",
     "seed:deterministic": "node backend/scripts/seed-deterministic.mjs",

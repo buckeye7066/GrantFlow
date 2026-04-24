@@ -364,3 +364,101 @@ function normalizeOperator(op) {
   }
   return raw
 }
+
+// ───────────────────────────────────────────────────────────────────────
+//  Narrow, per-call-site helpers for sites that previously interpolated
+//  user-influenced identifiers with a bespoke regex. These enforce an
+//  explicit allowlist at the call site and throw IdentifierError for
+//  anything unrecognised.
+// ───────────────────────────────────────────────────────────────────────
+
+export class IdentifierError extends Error {
+  constructor(message) {
+    super(message)
+    this.name = 'IdentifierError'
+    this.status = 400
+  }
+}
+
+/**
+ * ident(name, allowlist) — validates `name` against a call-site allowlist
+ * and returns a safely quoted Postgres identifier. `allowlist` is a
+ * Set<string> or string[] of known-good column names relevant to this
+ * specific query; NEVER accept a full-table column dump, always pass the
+ * minimal set the query actually uses.
+ *
+ *   const col = ident(req.query.sort, new Set(['created_at', 'title']))
+ *   db.prepare(`SELECT * FROM opp ORDER BY ${col} DESC`).all()
+ *
+ * In sqlite we return the identifier bare (no double-quoting) because
+ * better-sqlite3 accepts bare identifiers and double-quoted identifiers
+ * are treated as string literals in some contexts. The validation already
+ * ensures [A-Za-z_][A-Za-z0-9_]*, so the bare form is injection-safe.
+ */
+export function ident(name, allowlist) {
+  const v = String(name ?? '').trim()
+  if (!v || !_IDENTIFIER_RX.test(v)) {
+    throw new IdentifierError(`Unsafe SQL identifier: ${String(name)}`)
+  }
+  const set = Array.isArray(allowlist) ? new Set(allowlist) : allowlist
+  if (!(set && typeof set.has === 'function' && set.has(v))) {
+    throw new IdentifierError(`SQL identifier not in allowlist: ${v}`)
+  }
+  return v
+}
+
+/**
+ * orderBy(input, allowlistMap) — accepts a column name OR
+ * "column direction" string and returns a safe ORDER BY fragment
+ * (without the ORDER BY keyword). `allowlistMap` is either a Set<string>
+ * of allowed columns or a plain object { public_name: actual_column }
+ * so UI-facing sort keys can map to canonical column names without
+ * exposing them.
+ *
+ *   const order = orderBy(req.query.sort, { newest: 'created_at', title: 'title' })
+ *   db.prepare(`SELECT * FROM grants ORDER BY ${order}`).all()
+ *
+ * Direction defaults to ASC; only ASC/DESC are permitted and the
+ * comparison is case-insensitive.
+ */
+export function orderBy(input, allowlistMap) {
+  const raw = String(input ?? '').trim()
+  if (!raw) {
+    throw new IdentifierError('orderBy: empty input')
+  }
+  const [colRaw, dirRaw = 'ASC'] = raw.split(/\s+/, 2)
+  const dir = String(dirRaw).trim().toUpperCase()
+  if (dir !== 'ASC' && dir !== 'DESC') {
+    throw new IdentifierError(`orderBy: bad direction "${dirRaw}"`)
+  }
+  let column = colRaw
+  if (allowlistMap && !Array.isArray(allowlistMap) && typeof allowlistMap.has !== 'function') {
+    // Object form: { public: actual }
+    if (!Object.prototype.hasOwnProperty.call(allowlistMap, colRaw)) {
+      throw new IdentifierError(`orderBy: column not in allowlist: ${colRaw}`)
+    }
+    column = allowlistMap[colRaw]
+    if (!_IDENTIFIER_RX.test(String(column))) {
+      throw new IdentifierError(`orderBy: mapped column invalid: ${column}`)
+    }
+    return `${column} ${dir}`
+  }
+  // Set<string> | string[] form
+  const col = ident(colRaw, allowlistMap)
+  return `${col} ${dir}`
+}
+
+/**
+ * limit(n, max=500) — clamps + validates a LIMIT value. Returns the
+ * numeric limit as a bind-ready integer (not a SQL fragment) so callers
+ * can pass it through a prepared-statement parameter. Throws when the
+ * input is not a finite positive integer.
+ */
+export function limit(n, max = 500) {
+  const parsed = Number(n)
+  if (!Number.isFinite(parsed) || parsed <= 0 || Math.floor(parsed) !== parsed) {
+    throw new IdentifierError(`Unsafe SQL limit: ${String(n)}`)
+  }
+  const ceiling = Number.isFinite(max) && max > 0 ? Math.floor(max) : 500
+  return Math.min(Math.floor(parsed), ceiling)
+}
