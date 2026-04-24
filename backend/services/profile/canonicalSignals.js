@@ -104,7 +104,7 @@ function toArray(collection) {
   const result = []
   const seen = new Set()
   for (const item of iterable) {
-    if (item == null || item === '') continue
+    if ((item === null || item === undefined) || item === '') continue
     const s = String(item)
     if (!seen.has(s)) {
       seen.add(s)

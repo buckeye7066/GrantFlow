@@ -15,7 +15,7 @@ import { loadProfileContext } from '../profileHelpers.js';
  * Plain objects (e.g. { scholarship: true }) and arrays become a Set; null/undefined → empty Set.
  */
 export function toSignalSet(value) {
-  if (value == null) return new Set();
+  if ((value === null || value === undefined)) return new Set();
   if (value instanceof Set) return value;
   if (Array.isArray(value)) {
     return new Set(value.map((v) => String(v).trim()).filter(Boolean));
@@ -23,7 +23,7 @@ export function toSignalSet(value) {
   if (typeof value === 'object') {
     return new Set(
       Object.entries(value)
-        .filter(([, v]) => v !== false && v != null && v !== '' && v !== 0)
+        .filter(([, v]) => v !== false && (v !== null && v !== undefined) && v !== '' && v !== 0)
         .map(([k]) => k),
     );
   }

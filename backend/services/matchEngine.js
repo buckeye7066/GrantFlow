@@ -32,6 +32,7 @@ import { safeParseArrayField, resolveApplicantType, buildProfileSignals } from '
 import { normalizeProfile } from './profileNormalizer.js'
 import { normalizeOpportunity, inferHousingClassification } from './opportunityNormalizer.js'
 import { haversineDistanceMiles } from './sharedGeo.js'
+import { listPresentProfileSignals } from './profileCoverage.js'
 import {
   SCORE_FLOOR,
   W_NEED, W_ELIGIBILITY, W_GEO, W_CATEGORY,
@@ -1274,6 +1275,89 @@ function scoreEligibilityComponent(effectiveProfile, effectiveSignals, effective
     reasons.push(`Ownership/mission +${ownershipBonus} (${ownershipHits.slice(0, 4).join(', ')})`)
   }
 
+  // Organization type / capacity-fit alignment (+0..12).
+  //
+  // Closes the domain-audit gap where `organization_type`, `employee_count`,
+  // `annual_revenue`, and `years_in_operation` were collected on the profile
+  // but never surfaced in match scoring. These are *soft* bonuses — never
+  // exclusions — so a sparse profile still matches general-purpose funding.
+  let capacityBonus = 0
+  const capacityHits = []
+
+  const orgTypeRaw = String(profileNorm?.organizationType || '').toLowerCase().trim()
+  if (orgTypeRaw && orgTypeRaw.length >= 3) {
+    const tokens = orgTypeRaw.split(/[\s_/-]+/).filter((t) => t.length >= 3)
+    if (tokens.some((t) => oppText.includes(t))) {
+      capacityBonus += 4
+      capacityHits.push(`org-type:${orgTypeRaw}`)
+    } else if (orgTypeRaw.includes('nonprofit') && /\bnonprofit|\b501\(?c\)?3\b/i.test(oppText)) {
+      capacityBonus += 4
+      capacityHits.push('org-type:nonprofit')
+    } else if (orgTypeRaw.includes('church') && /(church|faith|ministry|religious)/i.test(oppText)) {
+      capacityBonus += 4
+      capacityHits.push('org-type:faith')
+    } else if (/business|llc|corp|sole/.test(orgTypeRaw) && /small business|smb|entrepreneur/i.test(oppText)) {
+      capacityBonus += 3
+      capacityHits.push('org-type:business')
+    }
+  }
+
+  const empCount = Number.isFinite(profileNorm?.employeeCount) ? profileNorm.employeeCount : null
+  if (empCount !== null) {
+    const smallBusinessOpp = /small business|fewer than|under\s+\d+\s+employees|microenterprise|sole proprietor/i.test(
+      oppText
+    )
+    if (smallBusinessOpp && empCount > 0 && empCount <= 500) {
+      capacityBonus += 3
+      capacityHits.push(`employees:${empCount}`)
+    } else if (empCount === 0 && /(sole proprietor|solopreneur|individual)/i.test(oppText)) {
+      capacityBonus += 2
+      capacityHits.push('solopreneur')
+    }
+  }
+
+  const annualRev = Number.isFinite(profileNorm?.annualRevenue) ? profileNorm.annualRevenue : null
+  if (annualRev !== null) {
+    if (annualRev < 500000 && /(microenterprise|micro[- ]business|startup|early[- ]stage|emerging|under\s*\$?\d+[km])/i.test(oppText)) {
+      capacityBonus += 3
+      capacityHits.push('revenue:small')
+    } else if (annualRev >= 500000 && /(growth[- ]stage|scale[- ]up|established|expansion)/i.test(oppText)) {
+      capacityBonus += 2
+      capacityHits.push('revenue:growth')
+    }
+  }
+
+  const yearsOp = Number.isFinite(profileNorm?.yearsInOperation) ? profileNorm.yearsInOperation : null
+  if (yearsOp !== null) {
+    if (yearsOp < 3 && /(startup|early[- ]stage|pre[- ]seed|seed|new business|emerging)/i.test(oppText)) {
+      capacityBonus += 2
+      capacityHits.push(`years:${yearsOp}`)
+    } else if (yearsOp >= 3 && yearsOp < 10 && /(established|growth[- ]stage|expansion)/i.test(oppText)) {
+      capacityBonus += 2
+      capacityHits.push(`years:${yearsOp}`)
+    } else if (yearsOp >= 10 && /(legacy|mature|long[- ]established|anniversary)/i.test(oppText)) {
+      capacityBonus += 1
+      capacityHits.push(`years:${yearsOp}`)
+    }
+  }
+
+  // Country: when an explicit country is set on the profile and the
+  // opportunity description mentions it, give a small relevance bump.
+  // Geographic eligibility gating already lives in geography scoring;
+  // this is purely the "did the profile's country signal contribute?"
+  // surface for explainability.
+  const profileCountry = String(profileNorm?.country || '').toLowerCase().trim()
+  if (profileCountry && profileCountry.length >= 2 && oppText.includes(profileCountry)) {
+    capacityBonus += 1
+    capacityHits.push(`country:${profileCountry}`)
+  }
+
+  capacityBonus = Math.min(12, capacityBonus)
+  if (capacityBonus > 0) {
+    subscale += capacityBonus
+    reasons.push(`Capacity/org-type +${capacityBonus} (${capacityHits.slice(0, 4).join(', ')})`)
+  }
+
   // Requirements penalties (proportional)
   const opportunityType = String(opportunity?.opportunity_type || opportunity?.type || '').toLowerCase()
   if (['loan', 'loan_program', 'microloan'].includes(opportunityType) || /\bloan\b/.test(oppText)) {
@@ -1302,7 +1386,10 @@ function scoreEligibilityComponent(effectiveProfile, effectiveSignals, effective
   const fundingType = normalizeString(opportunity?.funding_type || '')
   const isServiceType = SERVICE_FUNDING_TYPES.has(fundingType)
   if (isProBono || isServiceType) {
-    if (opportunity?.amount_min == null && opportunity?.amount_max == null) {
+    if (
+      (opportunity?.amount_min === null || opportunity?.amount_min === undefined) &&
+      (opportunity?.amount_max === null || opportunity?.amount_max === undefined)
+    ) {
       subscale += 5
     }
     const appUrl = normalizeString(opportunity?.application_url || '')
@@ -1545,9 +1632,40 @@ export function scoreOpportunity(profile, opportunity) {
   if (PRO_BONO_OPPORTUNITY_TYPES.has(opportunityType)) matchedSignals.push(`opportunity_type:${opportunityType}`)
   if (SERVICE_FUNDING_TYPES.has(fundingType)) matchedSignals.push(`funding_type:${fundingType}`)
 
+  // ── Explicit profile signal contributions (mission-audit requirement) ──
+  // Every field the audit called out (country, employee_count, annual_revenue,
+  // years_in_operation, veteran_owned, woman_owned, minority_owned,
+  // organization_type, population_served, mission_focus) flows into the
+  // existing component scores via profileNorm/effectiveFacets. Surfacing them
+  // here lets Anya explain *which* profile facts produced the match in plain
+  // language without having to re-run normalization.
+  const profileSignalsUsed = profileNorm ? listPresentProfileSignals(profileNorm) : []
+  const profileReasonLines = []
+  if (profileNorm) {
+    if (profileNorm.country) profileReasonLines.push(`Country: ${profileNorm.country}`)
+    if (profileNorm.organizationType)
+      profileReasonLines.push(`Organization type: ${profileNorm.organizationType}`)
+    if (profileNorm.populationServed && String(profileNorm.populationServed).length > 0)
+      profileReasonLines.push(`Population served: ${profileNorm.populationServed}`)
+    if (profileNorm.missionFocus && String(profileNorm.missionFocus).length > 0)
+      profileReasonLines.push(`Mission focus: ${profileNorm.missionFocus}`)
+    if (profileNorm.isVeteranOwned) profileReasonLines.push('Veteran-owned status considered')
+    if (profileNorm.isWomanOwned) profileReasonLines.push('Woman-owned status considered')
+    if (profileNorm.isMinorityOwned) profileReasonLines.push('Minority-owned status considered')
+    if (Number.isFinite(profileNorm.employeeCount))
+      profileReasonLines.push(`Employee count: ${profileNorm.employeeCount}`)
+    if (Number.isFinite(profileNorm.annualRevenue))
+      profileReasonLines.push(`Annual revenue tier considered`)
+    if (Number.isFinite(profileNorm.yearsInOperation))
+      profileReasonLines.push(`Years in operation: ${profileNorm.yearsInOperation}`)
+  }
+  for (const line of profileReasonLines) reasons.push(line)
+
   const match_explain = {
     matchedNeeds: matchedNeeds.length > 0 ? matchedNeeds : undefined,
     matchedSignals,
+    profileSignalsUsed,
+    profileReasonLines,
     housingSignals: housingBonusReasons.length > 0 ? housingBonusReasons : undefined,
     usableForHousing: Boolean(effectiveOpp?.usable_for_housing || effectiveOpp?.refund_potential ||
       ['refund_eligible', 'stipend', 'housing_direct'].includes(effectiveOpp?.funding_category)),

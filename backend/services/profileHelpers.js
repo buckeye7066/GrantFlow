@@ -1508,15 +1508,15 @@ export function buildProfileSignals({ profile, sections, asOf = null }) {
   if (smallBusiness.business_name && typeof smallBusiness.business_name === 'string') {
     registerKeyword(smallBusiness.business_name)
   }
-  if (smallBusiness.years_in_business != null) {
+  if ((smallBusiness.years_in_business !== null && smallBusiness.years_in_business !== undefined)) {
     const years = parseNumber(smallBusiness.years_in_business)
     if (years !== null && years < 3) registerKeyword('startup')
   }
-  if (smallBusiness.employee_count != null) {
+  if ((smallBusiness.employee_count !== null && smallBusiness.employee_count !== undefined)) {
     const emp = parseNumber(smallBusiness.employee_count)
     if (emp !== null && emp <= 10) registerKeyword('micro-enterprise')
   }
-  if (smallBusiness.annual_revenue != null) {
+  if ((smallBusiness.annual_revenue !== null && smallBusiness.annual_revenue !== undefined)) {
     const rev = parseNumber(smallBusiness.annual_revenue)
     if (rev !== null && rev < 250000) registerKeyword('low revenue small business')
   }
