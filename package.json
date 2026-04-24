@@ -26,7 +26,7 @@
     "doctor": "node scripts/doctor.mjs",
     "dns:godaddy:vercel": "node ./scripts/godaddy-set-vercel-dns.mjs",
     "smoke:apply-engine": "node backend/scripts/smoke-apply-engine.mjs",
-    "test": "npm run lint && npm run typecheck && npm run build && npm run unit",
+    "test": "npm run lint:ci && npm run typecheck && npm run build && npm run unit",
     "test:all": "npm run test && npm run smoke:install && npm run smoke && npm run e2e",
     "preview": "vite preview",
     "backend": "node backend/start.js",
