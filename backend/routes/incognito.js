@@ -1,6 +1,9 @@
 import express from 'express'
 import ensureUserPreferencesTable from '../utils/ensureUserPreferencesTable.js'
 
+import { createLogger } from '../utils/logger.js'
+const routeLogger = createLogger('route:incognito')
+
 const router = express.Router()
 
 // Apply authentication middleware to all routes

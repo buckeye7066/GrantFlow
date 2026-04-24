@@ -35,6 +35,9 @@ import { ensureProfileEmailSchema } from '../utils/accessControl.js'
 import { triggerAutoDiscoveryCrawlers } from '../services/autoDiscoveryCrawlers.js'
 import bcrypt from 'bcryptjs'
 
+import { createLogger } from '../utils/logger.js'
+const routeLogger = createLogger('route:auth')
+
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
 const uploadDir = join(__dirname, '..', 'uploads')
@@ -132,7 +135,7 @@ const PHONE_RESEND_COOLDOWN = parseSeconds(process.env.AUTH_PHONE_RESEND_SECONDS
 const OAUTH_STATE_TTL = parseSeconds(process.env.AUTH_OAUTH_STATE_TTL, 600) // seconds
 const PASSWORD_SETUP_TTL = parseSeconds(process.env.AUTH_PASSWORD_SETUP_TTL, 30 * 60) // seconds (default: 30 minutes)
 
-console.info('[auth] TTL configuration (seconds):', {
+routeLogger.info('[auth] TTL configuration (seconds):', {
   ACCESS_TOKEN_TTL,
   REFRESH_TOKEN_TTL,
   EMAIL_CODE_TTL,
@@ -1643,7 +1646,7 @@ router.post('/email/start', emailStartLimiter, async (req, res) => {
       })
     }
 
-    console.info('[auth/email/start] Processing email authentication request for:', email)
+    routeLogger.info('[auth/email/start] Processing email authentication request for:', email)
 
     // Use centralized production detection helper
     const isProd = isProductionEnvironment()
@@ -1661,7 +1664,7 @@ router.post('/email/start', emailStartLimiter, async (req, res) => {
       })
     }
     if (isProd) {
-      console.info('[auth/email/start] Email authorized in production for:', email, 'profile_id:', profileMatch?.id ?? null)
+      routeLogger.info('[auth/email/start] Email authorized in production for:', email, 'profile_id:', profileMatch?.id ?? null)
     }
 
     // Database operations with error handling
@@ -1670,7 +1673,7 @@ router.post('/email/start', emailStartLimiter, async (req, res) => {
       const result = await ensureEmailCredential(req.db, email)
       user = result.user
       credential = result.credential
-      console.info('[auth/email/start] User credential ensured for:', email, 'user_id:', user?.id)
+      routeLogger.info('[auth/email/start] User credential ensured for:', email, 'user_id:', user?.id)
     } catch (dbError) {
       console.error('[auth/email/start] Database error ensuring credential:', dbError)
       return res.status(500).json({ 
@@ -1720,7 +1723,7 @@ router.post('/email/start', emailStartLimiter, async (req, res) => {
           `,
         )
         .run(codeHash, nowISOString(), credential.id)
-      console.info('[auth/email/start] Verification code stored in database for:', email)
+      routeLogger.info('[auth/email/start] Verification code stored in database for:', email)
     } catch (dbError) {
       console.error('[auth/email/start] Database error storing verification code:', dbError)
       return res.status(500).json({ 
@@ -1731,7 +1734,7 @@ router.post('/email/start', emailStartLimiter, async (req, res) => {
     }
 
     // Attempt to send email with timeout (optional, not required for login)
-    console.info('[auth/email/start] Attempting to send verification email to:', email)
+    routeLogger.info('[auth/email/start] Attempting to send verification email to:', email)
     let emailSent = false
     try {
       // Add timeout to email sending to prevent hanging
@@ -1743,7 +1746,7 @@ router.post('/email/start', emailStartLimiter, async (req, res) => {
       emailSent = await Promise.race([emailPromise, timeoutPromise])
       
       if (emailSent === true) {
-        console.info('[auth/email/start] Verification email sent successfully to:', email)
+        routeLogger.info('[auth/email/start] Verification email sent successfully to:', email)
       } else {
         console.warn('[auth/email/start] Email service unavailable, timed out, or failed for:', email)
       }
@@ -1788,7 +1791,7 @@ router.post('/email/start', emailStartLimiter, async (req, res) => {
       error: emailSent ? null : 'email_delivery_failed_or_unconfigured',
     }).catch(e => console.warn('[background]', e?.message || e))
 
-    console.info('[auth/email/start] Request completed successfully for:', email, 'email_sent:', emailSent, 'isProd:', isProd)
+    routeLogger.info('[auth/email/start] Request completed successfully for:', email, 'email_sent:', emailSent, 'isProd:', isProd)
     return res.status(202).json(responseData)
     
   } catch (error) {
@@ -2542,7 +2545,7 @@ router.post('/password/setup/start', passwordRateLimiter, async (req, res) => {
         .run(id, user.id, tokenHash, expiresAt, req.ip ?? null, req.headers['user-agent'] ?? null)
       
       // Structured logging (success) - DO NOT log the token itself
-      console.info('[auth/password/setup/start] Token created:', {
+      routeLogger.info('[auth/password/setup/start] Token created:', {
         user_id: user.id,
         email: email,
         token_id: id,
@@ -2565,7 +2568,7 @@ router.post('/password/setup/start', passwordRateLimiter, async (req, res) => {
           .run(id, user.id, tokenHash, expiresAt, req.ip ?? null, req.headers['user-agent'] ?? null)
         
         // Structured logging (success after retry) - DO NOT log the token itself
-        console.info('[auth/password/setup/start] Token created (after retry):', {
+        routeLogger.info('[auth/password/setup/start] Token created (after retry):', {
           user_id: user.id,
           email: email,
           token_id: id,
@@ -2939,7 +2942,7 @@ router.post('/password/login', passwordRateLimiter, async (req, res) => {
 router.get('/:provider/start', async (req, res) => {
   const provider = (req.params?.provider || '').toLowerCase()
   
-  console.info(`[auth] OAuth start requested for provider: ${provider}`)
+  routeLogger.info(`[auth] OAuth start requested for provider: ${provider}`)
   
   if (!OAUTH_PROVIDERS[provider]) {
     console.warn(`[auth] Unsupported OAuth provider requested: ${provider}`)
@@ -2976,7 +2979,7 @@ router.get('/:provider/start', async (req, res) => {
       codeVerifier,
     })
     
-    console.info(`[auth] Redirecting to ${provider} OAuth authorization page`)
+    routeLogger.info(`[auth] Redirecting to ${provider} OAuth authorization page`)
     return res.redirect(authorizeUrl)
   } catch (error) {
     console.error(`[auth] Error starting OAuth flow for ${provider}:`, error)

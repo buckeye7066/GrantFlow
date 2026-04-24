@@ -380,7 +380,7 @@ function normalizeTaskPriority(priority) {
 }
 
 function normalizeDate(value) {
-  if (value == null || value === '') return null
+  if ((value === null || value === undefined) || value === '') return null
   if (typeof value === 'string') {
     const trimmed = value.trim()
     if (!trimmed) return null
@@ -1172,7 +1172,7 @@ export async function generateAssistantResponse(db, user, sessionId, { content, 
             const summary = summarizeOpenAIError(err)
             if (summary.isAuth || summary.isRateLimit) return true
             const status = summary.status
-            return status == null || status >= 500
+            return (status === null || status === undefined) || status >= 500
           },
         },
       )

@@ -44,12 +44,37 @@ export function createAuthIdentityMiddleware({ adminToken, adminName, adminEmail
     const authHeader = req.headers.authorization || ''
     const xAdminToken = req.headers['x-admin-token']
     const xAnyaToken = req.headers['x-anya-token']
+    const xHealthToken = req.headers['x-admin-health-token']
     let user = { role: 'guest', profileId: null }
     let handled = false
 
     const expectedAdminToken = adminToken
     const expectedBulkKey = process.env.BULK_POPULATE_KEY || null
     const anyaApiKey = process.env.ANYA_API_KEY || null
+    const healthToken = process.env.ADMIN_HEALTH_TOKEN || null
+
+    // 0. Health-check service token — READ-ONLY scope.
+    // Accepted only on GET/HEAD/OPTIONS so a stolen token cannot mutate data.
+    // Admitted as a synthetic read-only admin so admin-gated diagnostics routes pass.
+    if (
+      !handled &&
+      healthToken &&
+      xHealthToken &&
+      xHealthToken === healthToken &&
+      ['GET', 'HEAD', 'OPTIONS'].includes(String(req.method || '').toUpperCase())
+    ) {
+      user = {
+        role: 'health_check',
+        is_admin: true,
+        readonly: true,
+        scope: 'health_check',
+        userId: 'system_health_token',
+        profileId: null,
+        full_name: 'Health Checker',
+        email: 'health@grantflow.app',
+      }
+      handled = true
+    }
 
     // 1. Check X-Admin-Token
     if (

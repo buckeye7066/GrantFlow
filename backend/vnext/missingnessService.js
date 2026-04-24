@@ -5,20 +5,21 @@ import { insertIgnore } from './vnextUtils.js'
 import { VNEXT_TASK_TYPES } from './constants.js'
 import { writeAuditEvent } from './auditEventsService.js'
 import crypto from 'crypto'
+import { getScopedOpportunityForVnextApplication } from '../utils/scopedOpportunity.js'
 
 function getPath(obj, path) {
   if (!obj || !path) return undefined
   const parts = String(path).split('.').filter(Boolean)
   let cur = obj
   for (const p of parts) {
-    if (cur == null) return undefined
+    if ((cur === null || cur === undefined)) return undefined
     cur = cur[p]
   }
   return cur
 }
 
 function coerceValue(value) {
-  if (value == null) return null
+  if ((value === null || value === undefined)) return null
   if (typeof value === 'string') {
     const trimmed = value.trim()
     return trimmed ? trimmed : null
@@ -44,7 +45,7 @@ function computeMappedFields({ schemaFields, profileContext, documentStructured 
       if (p.startsWith('profile.')) {
         const v = getPath(profileContext, p.replace(/^profile\./, ''))
         const coerced = coerceValue(v)
-        if (coerced != null) {
+        if ((coerced !== null && coerced !== undefined)) {
           best = { value: coerced, confidence: 0.85, sourcePath: p }
           break
         }
@@ -52,18 +53,18 @@ function computeMappedFields({ schemaFields, profileContext, documentStructured 
     }
 
     // Best-effort: document structured extraction can also satisfy fields
-    if (best.value == null && Array.isArray(documentStructured) && documentStructured.length > 0) {
+    if ((best.value === null || best.value === undefined) && Array.isArray(documentStructured) && documentStructured.length > 0) {
       for (const doc of documentStructured) {
         const v = doc?.[key]
         const coerced = coerceValue(v)
-        if (coerced != null) {
+        if ((coerced !== null && coerced !== undefined)) {
           best = { value: coerced, confidence: 0.65, sourcePath: `document.extracted_structured.${key}` }
           break
         }
       }
     }
 
-    if (best.value != null) {
+    if ((best.value !== null && best.value !== undefined)) {
       mapped.push({
         key,
         value: best.value,
@@ -86,7 +87,7 @@ function buildMissing({ schemaFields, schemaRules, mappedFields }) {
     if (!required) continue
 
     const got = mappedByKey.get(key)
-    const ok = got && got.value != null && (typeof got.value !== 'string' || isTruthyText(got.value))
+    const ok = got && (got.value !== null && got.value !== undefined) && (typeof got.value !== 'string' || isTruthyText(got.value))
     if (!ok) {
       missing_fields.push({
         key,
@@ -137,13 +138,22 @@ async function listDocumentStructuredForProfile(db, profileId) {
 }
 
 export async function computeMissingRequirements(db, { applicationId, actor = null } = {}) {
-  const app = await db.prepare('SELECT * FROM vnext_applications WHERE id = ?').get(String(applicationId))
+  // Scoped through vnext_applications so the opportunity must be linked to
+  // this application (no cross-profile bleed via tampered ids).
+  const scoped = await getScopedOpportunityForVnextApplication(db, applicationId)
+  const app = scoped.application
   if (!app) {
     return { ok: false, error: { code: 'NOT_FOUND', message: 'Application not found' } }
   }
-  const opportunity = await db.prepare('SELECT * FROM funding_opportunities WHERE id = ?').get(String(app.opportunity_id))
+  const opportunity = scoped.opportunity
   if (!opportunity) {
-    return { ok: false, error: { code: 'OPPORTUNITY_NOT_FOUND', message: 'Opportunity not found' } }
+    return {
+      ok: false,
+      error: {
+        code: scoped.reason === 'OPPORTUNITY_NOT_LINKED' ? 'OPPORTUNITY_NOT_LINKED' : 'OPPORTUNITY_NOT_FOUND',
+        message: 'Opportunity not found or not linked to application',
+      },
+    }
   }
 
   const schemaId = opportunity.schema_id ? String(opportunity.schema_id) : null

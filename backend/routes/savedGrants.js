@@ -15,6 +15,9 @@ import {
   buildTrustMetadata,
 } from '../services/opportunityTrust.js'
 
+import { createLogger } from '../utils/logger.js'
+const routeLogger = createLogger('route:savedGrants')
+
 const router = Router()
 
 router.get('/', async (req, res) => {

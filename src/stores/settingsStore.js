@@ -82,7 +82,7 @@ function relativeLuminanceFromHex(hex) {
 
 function pickReadableForegroundHex(backgroundHex, { highContrast = false } = {}) {
   const lum = relativeLuminanceFromHex(backgroundHex)
-  if (lum == null) return '#ffffff'
+  if (lum === null) return '#ffffff'
 
   // Prefer strict black/white in high-contrast mode.
   if (highContrast) {

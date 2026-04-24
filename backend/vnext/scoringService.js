@@ -1,5 +1,6 @@
 import { loadProfileContext } from '../services/profileHelpers.js'
 import { clamp01, jaccard, tokenize, safeJsonParse, jsonForDb, sqlNowLiteral } from './vnextUtils.js'
+import { getScopedOpportunityForVnextApplication } from '../utils/scopedOpportunity.js'
 
 /** Parse a DB field that may be a JSON array, CSV string, or already an array. */
 function parseArrayField(value) {
@@ -87,14 +88,22 @@ function pWin({ fit, effort_hours, compliance_hours, time_risk, amount_expected 
 }
 
 export async function scoreApplication(db, { applicationId, actor = null, hourly_value = 50, nowMs = null } = {}) {
-  const app = await db.prepare('SELECT * FROM vnext_applications WHERE id = ?').get(String(applicationId))
+  // Scoped lookup through vnext_applications.opportunity_id so a tampered or
+  // stale opportunity id can never be resolved to another profile's data.
+  const scoped = await getScopedOpportunityForVnextApplication(db, applicationId)
+  const app = scoped.application
   if (!app) {
     return { ok: false, error: { code: 'NOT_FOUND', message: 'Application not found' } }
   }
-
-  const opportunity = await db.prepare('SELECT * FROM funding_opportunities WHERE id = ?').get(String(app.opportunity_id))
+  const opportunity = scoped.opportunity
   if (!opportunity) {
-    return { ok: false, error: { code: 'OPPORTUNITY_NOT_FOUND', message: 'Opportunity not found' } }
+    return {
+      ok: false,
+      error: {
+        code: scoped.reason === 'OPPORTUNITY_NOT_LINKED' ? 'OPPORTUNITY_NOT_LINKED' : 'OPPORTUNITY_NOT_FOUND',
+        message: 'Opportunity not found or not linked to application',
+      },
+    }
   }
 
   const profileCtx = await loadProfileContext(db, String(app.profile_id))

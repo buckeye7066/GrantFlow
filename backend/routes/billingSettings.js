@@ -2,6 +2,9 @@ import express from 'express'
 import crypto from 'crypto'
 import { requireAuthenticatedUser, getAuthUserId } from '../utils/accessControl.js'
 
+import { createLogger } from '../utils/logger.js'
+const routeLogger = createLogger('route:billingSettings')
+
 const router = express.Router()
 
 function safeJsonParse(value, fallback) {

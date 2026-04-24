@@ -25,6 +25,9 @@ import {
   cleanupStaleQueuedJobs,
 } from '../services/crawlerConcurrencyGuard.js'
 
+import { createLogger } from '../utils/logger.js'
+const routeLogger = createLogger('route:adminQueueOps')
+
 const router = express.Router()
 
 function requireAdmin(req, res) {

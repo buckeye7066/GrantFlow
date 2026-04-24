@@ -83,8 +83,11 @@ export async function pdfToPngPages({
       .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))
       .map((f) => path.join(dir, f))
     if (files.length === 0) {
-      // Cleanup on failure before throwing
-      await fsp.rm(dir, { recursive: true, force: true }).catch(() => {})
+      // Cleanup on failure before throwing. Temp dir removal is best-effort;
+      // we rethrow the primary error regardless.
+      await fsp.rm(dir, { recursive: true, force: true }).catch(() => {
+        /* intentionally ignored: temp-dir cleanup failure must not mask the primary pdftoppm error */
+      })
       throw new Error('pdftoppm produced no images')
     }
     return { dir, files }

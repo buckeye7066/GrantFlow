@@ -117,7 +117,7 @@ function normalizeNihReporterRow(row) {
       : 'NIH-funded research award (historical).',
     amount_min: null,
     amount_max: awardAmount,
-    amount_description: awardAmount != null ? 'Total award amount (reported)' : null,
+    amount_description: (awardAmount !== null && awardAmount !== undefined) ? 'Total award amount (reported)' : null,
     deadline: end || null,
     deadline_type: 'rolling', // Historical awards — never treat as a firm deadline.
     is_national: true,

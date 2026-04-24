@@ -2,6 +2,9 @@ import express from 'express'
 import crypto from 'crypto'
 import { requireAuthenticatedUser, ensureGrantAccess, getAccessibleOrganizationIds } from '../utils/accessControl.js'
 
+import { createLogger } from '../utils/logger.js'
+const routeLogger = createLogger('route:applicationDrafts')
+
 const router = express.Router()
 
 function normalizeLimit(val, fallback = 200) {

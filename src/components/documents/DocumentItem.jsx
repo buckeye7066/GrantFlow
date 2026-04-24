@@ -11,7 +11,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { downloadAuthenticatedUrl, openAuthenticatedUrlForPrint } from '@/utils/authenticatedDownload'
 
 function escapeHtml(value) {
-  if (value == null) return '';
+  if (value === null) return '';
   return String(value)
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')

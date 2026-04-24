@@ -62,7 +62,7 @@ function normalizeTextValue(fieldName, value) {
       // health_medical.conditions is an array of objects; present it as a simple list for editing.
       return value
         .map((entry) => {
-          if (entry == null) return ''
+          if (entry === null) return ''
           if (typeof entry === 'string') return entry
           if (typeof entry === 'object' && typeof entry.name === 'string') return entry.name
           return ''

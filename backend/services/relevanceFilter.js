@@ -112,7 +112,7 @@ export function applyRelevanceFilter(opportunity, profileData, opts = {}) {
   if (isDirectoryResource) return { pass: true, directory: true }
 
   for (const rule of RELEVANCE_RULES) {
-    const patternMatches = rule.oppPattern == null || rule.oppPattern.test(oppText)
+    const patternMatches = (rule.oppPattern === null || rule.oppPattern === undefined) || rule.oppPattern.test(oppText)
     if (!(patternMatches && rule.profileCheck(profileData, oppText, opportunity))) continue
 
     const reason =

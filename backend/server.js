@@ -6,6 +6,9 @@ import helmet from 'helmet';
 import compression from 'compression';
 import { fileURLToPath } from 'url';
 import { dirname, join, resolve } from 'path';
+import { createLogger, setAuditLogSink } from './utils/logger.js';
+
+const serverLogger = createLogger('server');
 import fs from 'fs';
 import rateLimit from 'express-rate-limit';
 import crypto from 'crypto';
@@ -66,6 +69,7 @@ import seedAssistanceDirectories from './utils/seedAssistanceDirectories.js';
 import seedFaithBasedHousing from './utils/seedFaithBasedHousing.js';
 import seedHousingFundingOpportunities from './utils/seedHousingFunding.js';
 import { errorHandler } from './middleware/errorHandler.js';
+import { profileContextMiddleware } from './middleware/profileContext.js';
 import { attachRequestContext } from './middleware/requestContext.js';
 import { pipelineMonitor, getPipelineHealth } from './middleware/pipelineMonitor.js';
 import { requestTimeout } from './middleware/requestTimeout.js';
@@ -364,6 +368,10 @@ app.use('/api/stripe/webhook', express.raw({ type: 'application/json' }), stripe
 
 app.use(express.json({ limit: MAX_JSON_BODY_SIZE }));
 
+// Wrap every request in an AsyncLocalStorage profile context so the SQL
+// layer (backend/db/scopedQuery.js) can enforce tenant isolation automatically.
+app.use(profileContextMiddleware());
+
 // Mount health check routes EARLY to ensure they're always available
 // req.db is already attached above.
 app.use(healthRouter);
@@ -636,6 +644,20 @@ if (shouldAutoMigrate) {
   }
 }
 
+// MIGRATE_ON_BOOT: apply any pending SQL migrations from backend/db/(postgres/)migrations
+// and emit a single `schema check: OK|DRIFT` line. This is the canonical way to keep
+// production in sync with new migrations — operators set MIGRATE_ON_BOOT=1 once,
+// pending migrations run on deploy, and any residual drift is visible in the startup log.
+const shouldMigrateOnBoot = /^(1|true|yes|on)$/i.test(String(process.env.MIGRATE_ON_BOOT || '').trim())
+if (shouldMigrateOnBoot && !app.locals.db_startup_error) {
+  try {
+    const { runPendingMigrationsOnBoot } = await import('./db/migrate.js')
+    await runPendingMigrationsOnBoot({ logger: console })
+  } catch (bootMigrateErr) {
+    console.error('[migrate:boot] failed:', bootMigrateErr?.message || bootMigrateErr)
+  }
+}
+
 // Then add columns that may be missing (schema.sql may not include every migration column).
 // This legacy auto-migration is SQLite-only. Postgres must be migrated deterministically via SQL migrations.
 if (db.dialect === 'sqlite') {
@@ -653,7 +675,7 @@ if (db.dialect === 'sqlite') {
     }
   });
 } else {
-  console.info('[database] Skipping legacy column auto-migrations (dialect != sqlite)');
+  console.info('[database] Skipping legacy column auto-migrations (dialect !== sqlite)');
   // Idempotent self-heal: list/delete routes filter on organizations.deleted_at (migration 0047).
   // Background migrate in start.js may still be running; avoid transient 500s on /api/organizations.
   try {
@@ -973,7 +995,7 @@ if (!IS_SMOKE_MODE && db.dialect === 'sqlite') {
 }
 
 function parseBoolEnv(value) {
-  if (value == null) return null
+  if ((value === null || value === undefined)) return null
   const v = String(value).trim().toLowerCase()
   if (['1', 'true', 'yes', 'y', 'on'].includes(v)) return true
   if (['0', 'false', 'no', 'n', 'off'].includes(v)) return false
@@ -1055,7 +1077,7 @@ try {
     console.info('[startup] Skipping assistance directory seeding (SMOKE_MODE)')
   } else if (db.dialect !== 'sqlite') {
     // This helper is SQLite-only today (sync calls + local JSON files). Skip on Postgres until refactored.
-    console.info('[startup] Skipping assistance directory seeding (dialect != sqlite)')
+    console.info('[startup] Skipping assistance directory seeding (dialect !== sqlite)')
   } else {
     const existing = db
       .prepare("SELECT COUNT(*) as count FROM funding_opportunities WHERE source IN ('state_211','assistance_network')")
@@ -1802,10 +1824,12 @@ async function scheduleCrawlerSmokeJobs({ db, uploadsDir }) {
         'system-smoke',
       )
 
-    // Fire-and-forget dispatch (non-blocking).
-    dispatchCrawlerJob({ db, jobId: comprehensiveJobId, uploadDir: uploadsDir, getOpenAI: null }).catch(() => {})
-    dispatchCrawlerJob({ db, jobId: scholarshipJobId, uploadDir: uploadsDir, getOpenAI: null }).catch(() => {})
-    dispatchCrawlerJob({ db, jobId: documentIngestJobId, uploadDir: uploadsDir, getOpenAI: null }).catch(() => {})
+    // Fire-and-forget dispatch (non-blocking). We log, not swallow.
+    const logDispatchFail = (label) => (err) =>
+      serverLogger.warn('smoke.dispatch_failed', { job: label, error: err?.message || String(err) })
+    dispatchCrawlerJob({ db, jobId: comprehensiveJobId, uploadDir: uploadsDir, getOpenAI: null }).catch(logDispatchFail('comprehensive'))
+    dispatchCrawlerJob({ db, jobId: scholarshipJobId, uploadDir: uploadsDir, getOpenAI: null }).catch(logDispatchFail('scholarship'))
+    dispatchCrawlerJob({ db, jobId: documentIngestJobId, uploadDir: uploadsDir, getOpenAI: null }).catch(logDispatchFail('documentIngest'))
   } catch (error) {
     console.warn('[smoke] Failed to schedule crawler smoke jobs:', error?.message || String(error))
   }
@@ -2309,8 +2333,13 @@ if (process.env.NODE_ENV !== 'test') {
       for (let i = 0; i < queued.length; i++) {
         if (i > 0) await new Promise((r) => setTimeout(r, STAGGER_DELAY_MS))
         try {
-          dispatchCrawlerJob({ db: dbRef, jobId: queued[i].id, uploadDir: uploadsDirRef, getOpenAI: null }).catch(() => {})
-        } catch { /* ignore individual dispatch errors */ }
+          dispatchCrawlerJob({ db: dbRef, jobId: queued[i].id, uploadDir: uploadsDirRef, getOpenAI: null }).catch((err) =>
+            serverLogger.warn('startup_drain.dispatch_failed', { jobId: queued[i].id, error: err?.message })
+          )
+        } catch (err) {
+          /* intentionally non-fatal: individual dispatch errors must not abort the drain loop */
+          serverLogger.debug('startup_drain.dispatch_threw', { jobId: queued[i].id, error: err?.message })
+        }
       }
     }
 
@@ -2349,8 +2378,13 @@ if (process.env.NODE_ENV !== 'test') {
 
           for (const job of queued) {
             try {
-              dispatchCrawlerJob({ db, jobId: job.id, uploadDir: uploadsDir, getOpenAI: null }).catch(() => {})
-            } catch { /* ignore individual dispatch errors */ }
+              dispatchCrawlerJob({ db, jobId: job.id, uploadDir: uploadsDir, getOpenAI: null }).catch((err) =>
+                serverLogger.warn('queue_poller.dispatch_failed', { jobId: job.id, error: err?.message })
+              )
+            } catch (err) {
+              /* intentionally non-fatal: individual dispatch errors must not break the poll cycle */
+              serverLogger.debug('queue_poller.dispatch_threw', { jobId: job.id, error: err?.message })
+            }
           }
           if (queued.length > 0) {
             console.log(`[queue-poller] Dispatched ${queued.length} orphaned queued job(s)`)
@@ -2414,7 +2448,9 @@ if (process.env.NODE_ENV !== 'test') {
   const startupSmokeEnabled = parseBoolEnv(process.env.STARTUP_SMOKE_CRAWL_ENABLED) === true
   if (startupSmokeEnabled) {
     setTimeout(() => {
-      scheduleCrawlerSmokeJobs({ db, uploadsDir }).catch(() => {})
+      scheduleCrawlerSmokeJobs({ db, uploadsDir }).catch((err) =>
+        serverLogger.warn('smoke.schedule_failed', { error: err?.message || String(err) }),
+      )
     }, 10_000)
     console.info('[startup] Startup smoke crawlers enabled (STARTUP_SMOKE_CRAWL_ENABLED=true)')
   } else {
@@ -2440,8 +2476,9 @@ if (process.env.NODE_ENV !== 'test') {
       environment: process.env.NODE_ENV || 'development',
       corsOrigins: loggedCorsOrigins,
     },
-  }).catch(() => {
-    // Non-critical - don't fail server startup
+  }).catch((err) => {
+    /* intentionally non-fatal: startup audit log must not block server boot */
+    serverLogger.debug('audit.server_startup_log_failed', { error: err?.message || String(err) })
   });
   
   // Start Anya autonomous operations 5 seconds after server is ready.
@@ -2476,7 +2513,10 @@ if (process.env.NODE_ENV !== 'test') {
               console.error('[Anya] Scheduled check failed:', err?.message || err);
             });
           })
-          .catch(() => {});
+          .catch((err) => {
+            /* intentionally non-fatal: scheduler import failure must not crash the interval */
+            serverLogger.debug('anya.scheduler_import_failed', { error: err?.message || String(err) })
+          });
       }, SCHEDULE_CHECK_MS);
       console.log('[Anya] Scheduled runner enabled (checking every 30 min)');
     }
@@ -2555,6 +2595,60 @@ if (process.env.NODE_ENV !== 'test') {
 
   // Start the background health service (runs every 30 min, configurable via ANYA_HEALTH_INTERVAL_MS)
   startHealthService(db);
+
+  // Daily Anya brain/tool-usage cleanup (keeps the memory + audit tables bounded).
+  import('./jobs/anyaBrainCleanup.js')
+    .then(({ startAnyaBrainCleanupCron }) => startAnyaBrainCleanupCron({ db }))
+    .catch((err) => console.warn('[anyaBrainCleanup] failed to start:', err?.message || err));
+
+  // Group 7: persist warn/error logs to audit_logs so admin.health.logs
+  // survives process restarts. The logger ring buffer stays in-memory; this
+  // sink writes durably in the background. We drop records silently on
+  // failure to avoid crashing request handlers.
+  try {
+    setAuditLogSink((rec) => {
+      const severity = rec.level === 'error' ? 'error' : 'warn'
+      // Don't block the emit site; fire-and-forget.
+      setImmediate(async () => {
+        try {
+          const id = (await import('crypto')).randomUUID()
+          await db
+            .prepare(
+              `INSERT INTO audit_logs (id, category, action, severity, details)
+                 VALUES (?, ?, ?, ?, ?)`,
+            )
+            .run(
+              id,
+              'logger',
+              String(rec.namespace || 'app') + ':' + String(rec.event || 'log'),
+              severity,
+              String(rec.message || '').slice(0, 4000),
+            )
+        } catch {
+          // swallow; a logging path must never crash the server
+        }
+      })
+    })
+  } catch (err) {
+    console.warn('[logger] setAuditLogSink failed:', err?.message || err)
+  }
+
+  // Group 5: Verify the Anya tool registry is collision-free at boot. Duplicate
+  // tool ids used to silently override each other; now we fail loudly during
+  // startup so the server never ships with an ambiguous registry.
+  import('./services/anyaToolRegistry.js')
+    .then(({ assertNoDuplicateToolIds }) => {
+      try {
+        const n = assertNoDuplicateToolIds()
+        console.log(`[anyaToolRegistry] boot verify: ${n} tools registered, no duplicates.`)
+      } catch (err) {
+        console.error('[anyaToolRegistry] boot verify FAILED:', err?.message || err)
+        if (process.env.NODE_ENV === 'production') {
+          process.exit(1)
+        }
+      }
+    })
+    .catch((err) => console.warn('[anyaToolRegistry] verify import failed:', err?.message || err));
 
   // Optional: continuous national programs crawler (Track A/B programs)
   if (process.env.NATIONAL_PROGRAMS_CRAWLER_ENABLED === 'true') {

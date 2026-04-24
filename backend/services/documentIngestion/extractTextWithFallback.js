@@ -18,7 +18,7 @@ function shouldOcrPdf({ extractedText, pages }) {
   // - OR if pdf pages > 0 AND avg chars/page < 100 -> OCR
   // - OR if pdf extraction yields mostly whitespace -> OCR
   if (charCount < 500) return true
-  if (pages && pages > 0 && avgCharsPerPage != null && avgCharsPerPage < 100) return true
+  if (pages && pages > 0 && (avgCharsPerPage !== null && avgCharsPerPage !== undefined) && avgCharsPerPage < 100) return true
   if (mostlyWs) return true
   return false
 }

@@ -4,6 +4,9 @@ import { requireAuthenticatedUser } from '../utils/accessControl.js'
 import { formatError } from '../middleware/errorHandler.js'
 import ensureOutreachLogsTable from '../utils/ensureOutreachLogsTable.js'
 
+import { createLogger } from '../utils/logger.js'
+const routeLogger = createLogger('route:outreachLogs')
+
 const router = express.Router()
 
 function normalizeLimit(val, fallback = 200) {
@@ -168,7 +171,7 @@ if (occurredAtRaw) {
 
     const row = await req.db.prepare('SELECT * FROM outreach_logs WHERE id = ?').get(id)
 
-    console.info('[outreach-logs] created', {
+    routeLogger.info('[outreach-logs] created', {
       profile_id: profileId,
       organization_id: profileRow.organization_id ?? null,
       funder,

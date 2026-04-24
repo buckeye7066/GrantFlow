@@ -13,6 +13,9 @@
  */
 
 import fetch from 'node-fetch';
+import { createLogger } from '../../utils/logger.js';
+
+const log = createLogger('nihNsfConnector');
 
 const NIH_BASE_URL = 'https://api.reporter.nih.gov/v2';
 // NOTE: research.gov/awardapi-service/v1/ is a deprecated path.
@@ -20,40 +23,83 @@ const NIH_BASE_URL = 'https://api.reporter.nih.gov/v2';
 const NSF_BASE_URL = 'https://api.nsf.gov/services/v1/awards.json';
 
 const RATE_LIMIT_MS = 600; // ~100 requests per minute for NIH
+const DEFAULT_VERIFY_TIMEOUT_MS = 5000;
 
 let lastRequestTime = 0;
 
 /**
- * Rate-limited fetch wrapper
+ * Rate-limited fetch wrapper.
+ *
+ * Supports three response modes:
+ *   - parse: 'json'     -> returns parsed JSON body (default; used for API reads)
+ *   - parse: 'text'     -> returns response text
+ *   - parse: 'none'     -> returns { ok, status, statusText } only (used for
+ *                          lightweight HEAD verification of mechanism URLs)
+ *
+ * Timeouts are enforced via AbortController so a hung server can't block
+ * crawler runs for minutes. On non-2xx responses we throw in 'json'/'text'
+ * modes (keeping legacy behaviour) but simply return the status envelope in
+ * 'none' mode so callers can make verify/no-verify decisions on their own.
  */
-// rateLimitedFetch is intentionally unused in this baseline-only connector.
-// TODO: Wire rateLimitedFetch into searchNIHOpportunities and searchNSFOpportunities
-// once NIH Guide RSS and NSF funding announcement ingestion is implemented.
-// Until then, this connector returns PROGRAM-type templates only (is_active:false).
 async function rateLimitedFetch(url, options = {}) {
   const now = Date.now();
   const timeSinceLastRequest = now - lastRequestTime;
-  
+
   if (timeSinceLastRequest < RATE_LIMIT_MS) {
     await new Promise(resolve => setTimeout(resolve, RATE_LIMIT_MS - timeSinceLastRequest));
   }
-  
+
   lastRequestTime = Date.now();
-  
-  const response = await fetch(url, {
-    ...options,
-    headers: {
-      'Content-Type': 'application/json',
-      'User-Agent': 'GrantFlow/1.0 (grant management system)',
-      ...options.headers
+
+  const parse = options.parse || 'json';
+  const timeoutMs = Number.isFinite(options.timeoutMs) ? options.timeoutMs : DEFAULT_VERIFY_TIMEOUT_MS;
+  const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+  const timer = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
+
+  try {
+    const response = await fetch(url, {
+      ...options,
+      signal: controller?.signal,
+      headers: {
+        'User-Agent': 'GrantFlow/1.0 (grant management system)',
+        ...(parse === 'json' ? { 'Content-Type': 'application/json' } : {}),
+        ...options.headers,
+      },
+    });
+
+    if (parse === 'none') {
+      return { ok: response.ok, status: response.status, statusText: response.statusText };
     }
-  });
-  
-  if (!response.ok) {
-    throw new Error(`API error: ${response.status} ${response.statusText}`);
+
+    if (!response.ok) {
+      throw new Error(`API error: ${response.status} ${response.statusText}`);
+    }
+
+    return parse === 'text' ? response.text() : response.json();
+  } finally {
+    if (timer) clearTimeout(timer);
   }
-  
-  return response.json();
+}
+
+/**
+ * Verify a URL is reachable with a cheap HEAD request. Returns true on a 2xx
+ * response, false otherwise (including aborts/timeouts). Never throws — this
+ * is used opportunistically to mark baseline mechanism templates as 'active'
+ * without blocking ingestion when the remote service is flaky.
+ */
+async function verifyUrlReachable(url, options = {}) {
+  try {
+    const res = await rateLimitedFetch(url, {
+      ...options,
+      method: 'HEAD',
+      parse: 'none',
+      timeoutMs: options.timeoutMs || DEFAULT_VERIFY_TIMEOUT_MS,
+    });
+    return Boolean(res?.ok);
+  } catch (err) {
+    log.debug('verify.failed', { url, error: err?.message || String(err) });
+    return false;
+  }
 }
 
 /**
@@ -65,15 +111,22 @@ async function rateLimitedFetch(url, options = {}) {
  * Real FOA ingestion requires parsing NIH Guide RSS feeds.
  */
 export async function searchNIHOpportunities(params = {}) {
-  console.log('[NIH] Fetching baseline funding mechanisms');
-  
+  log.info('fetch.baseline_mechanisms', { agency: 'NIH', verify: Boolean(params.verify) });
+
   // In production, real FOA ingestion would:
   // 1. Parse NIH Guide RSS feeds: https://grants.nih.gov/funding/searchguide/index.html
   // 2. Use NIH RePORTER API to identify active programs
   // 3. Cross-reference with specific open FOAs with real deadlines
-  
+  //
+  // In the meantime, when `params.verify === true` we perform a lightweight
+  // HEAD check against each mechanism URL through rateLimitedFetch. If the URL
+  // responds 2xx we stamp `last_verified_at` and flip `is_active` so match
+  // ranking can prefer mechanisms that actually resolve. We never flip to
+  // is_active: true on failure — verification is opportunistic and never
+  // manufactures a false signal.
+  const verify = Boolean(params.verify);
   const opportunities = [];
-  
+
   // Common NIH funding mechanisms (baseline templates, not verified opportunities)
   const nihMechanisms = [
     {
@@ -96,7 +149,11 @@ export async function searchNIHOpportunities(params = {}) {
     }
   ];
   
-  nihMechanisms.forEach(mech => {
+  for (const mech of nihMechanisms) {
+    const verifiedAt = verify && (await verifyUrlReachable(mech.url))
+      ? new Date().toISOString()
+      : null;
+
     opportunities.push({
       title: mech.title,
       sponsor: 'National Institutes of Health',
@@ -122,22 +179,24 @@ export async function searchNIHOpportunities(params = {}) {
       opportunity_type: 'grant',
       type: 'PROGRAM', // Baseline mechanism, not verified open opportunity
       evidence_url: 'https://grants.nih.gov/funding/searchguide/index.html',
-      last_verified_at: null, // Not verified - baseline only
-      is_active: false,
+      last_verified_at: verifiedAt,
+      is_active: Boolean(verifiedAt),
       last_crawled: new Date().toISOString(),
       amount_min: 100000,
       amount_max: 500000, // Typical R01 direct costs per year; modular budget cap $250K/yr
       is_loan: false,
       requires_match: false,
-      ineligibility_reasons: ['unverified_mechanism_template', 'no_active_foa', 'requires_verified_ingestion'],
+      ineligibility_reasons: verifiedAt
+        ? []
+        : ['unverified_mechanism_template', 'no_active_foa', 'requires_verified_ingestion'],
       // DO NOT add match_decision or match_explanation here.
       // These fields are owned exclusively by computeMatchDecision() (Goal 4).
       // Callers MUST check is_active === false and type === 'PROGRAM' before
       // forwarding to saveToProfilePipeline(). The connector signals
       // non-readiness via is_active:false + type:'PROGRAM' only.
     });
-  });
-  
+  }
+
   return opportunities;
 }
 
@@ -150,47 +209,69 @@ export async function searchNIHOpportunities(params = {}) {
  * Real FOA ingestion requires parsing NSF funding announcements.
  */
 export async function searchNSFOpportunities(params = {}) {
-  console.log('[NSF] Fetching baseline funding mechanisms');
-  
+  log.info('fetch.baseline_mechanisms', { agency: 'NSF', verify: Boolean(params.verify) });
+
   // In production, real FOA ingestion would:
   // 1. Parse NSF funding opportunities: https://www.nsf.gov/funding/
   // 2. Use NSF Awards API to identify active programs
   // 3. Track specific deadlines from program announcements
-  
-  const opportunities = [
+  //
+  // Verification pass (opt-in via params.verify) uses rateLimitedFetch to
+  // probe each mechanism URL and stamp last_verified_at / is_active only on
+  // a successful response. See searchNIHOpportunities for the same pattern.
+  const verify = Boolean(params.verify);
+
+  const nsfMechanisms = [
     {
       title: 'NSF CAREER Award (Mechanism)',
       description: 'Support for early-career faculty who have the potential to serve as academic role models in research and education',
+      source_id: 'CAREER',
+      url: 'https://www.nsf.gov/funding/pgm_summ.jsp?pims_id=503214',
+      amount_min: 400000,
+      amount_max: 500000,
+      categories: ['Research', 'Education', 'STEM'],
+      keywords: ['NSF', 'CAREER', 'research', 'faculty'],
+    },
+  ];
+
+  const opportunities = [];
+  for (const mech of nsfMechanisms) {
+    const verifiedAt = verify && (await verifyUrlReachable(mech.url))
+      ? new Date().toISOString()
+      : null;
+
+    opportunities.push({
+      title: mech.title,
+      description: mech.description,
       sponsor: 'National Science Foundation',
       source: 'nsf.gov',
-      source_id: 'CAREER',
-      source_url: 'https://www.nsf.gov/funding/pgm_summ.jsp?pims_id=503214',
+      source_id: mech.source_id,
+      source_url: mech.url,
       eligibility_bullets: [
         'Tenure-track faculty',
         'Within 7 years of PhD',
         'U.S. institutions'
       ],
-      application_url: 'https://www.nsf.gov/funding/pgm_summ.jsp?pims_id=503214',
+      application_url: mech.url,
       is_national: true,
-      categories: ['Research', 'Education', 'STEM'],
-      keywords: ['NSF', 'CAREER', 'research', 'faculty'],
+      categories: mech.categories,
+      keywords: mech.keywords,
       opportunity_type: 'grant',
-      type: 'PROGRAM', // Baseline mechanism, not verified open opportunity
+      type: 'PROGRAM',
       evidence_url: 'https://www.nsf.gov/funding/',
-      last_verified_at: null, // Not verified - baseline only
-      is_active: false,
+      last_verified_at: verifiedAt,
+      is_active: Boolean(verifiedAt),
       last_crawled: new Date().toISOString(),
-      amount_min: 400000,
-      amount_max: 500000,
+      amount_min: mech.amount_min,
+      amount_max: mech.amount_max,
       is_loan: false,
       requires_match: false,
-      ineligibility_reasons: ['unverified_mechanism_template', 'no_active_foa', 'requires_verified_ingestion'],
-      // DO NOT add match_decision or match_explanation here.
-      // Callers MUST gate on is_active === false + type === 'PROGRAM'.
-      // computeMatchDecision() is the sole decision authority (Goal 4).
-    }
-  ];
-  
+      ineligibility_reasons: verifiedAt
+        ? []
+        : ['unverified_mechanism_template', 'no_active_foa', 'requires_verified_ingestion'],
+    });
+  }
+
   return opportunities;
 }
 

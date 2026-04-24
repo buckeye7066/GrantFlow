@@ -22,6 +22,15 @@ import {
   gateOpportunityForPipeline,
   buildTrustMetadata,
 } from '../services/opportunityTrust.js'
+import {
+  grantFingerprintFromOpportunity,
+  chooseGrantUrl,
+  GRANT_FINGERPRINT_VERSION,
+} from '../utils/grantFingerprint.js'
+import { assertSafeIdentifier } from '../utils/safeSql.js'
+
+import { createLogger } from '../utils/logger.js'
+const routeLogger = createLogger('route:grants')
 
 const router = express.Router();
 
@@ -86,6 +95,23 @@ const ALLOWED_GRANT_COLUMNS = new Set([
 
   // optional back-compat fields used by some UIs
   'portal_url',
+
+  // Canonical URL + fingerprint + match-decision metadata (migration 058).
+  // These are permitted so the UI / crawlers can round-trip the exact value
+  // that matchEngine persists without stripping it at the route boundary.
+  'url',
+  'fingerprint',
+  'fingerprint_version',
+  'match_decision',
+  'match_explanation',
+  'matched_needs',
+  'eligibility_status',
+  'ineligibility_reasons',
+  'profile_fingerprint',
+  'opportunity_fingerprint',
+  'matcher_version',
+  'evaluated_at',
+  'match_confidence',
 ]);
 
 // NOTE: Access control is centralized in `backend/utils/accessControl.js`
@@ -166,7 +192,11 @@ async function ensureGrantAiColumns(db) {
     const existing = new Set((info || []).map((r) => String(r?.name || '').toLowerCase()))
     for (const c of cols) {
       if (existing.has(String(c.name).toLowerCase())) continue
-      await db.prepare(`ALTER TABLE grants ADD COLUMN ${c.name} ${c.sqlite};`).run()
+      // audit:allow dynamic-sql — c is from a hardcoded module-local constant list
+      const colName = assertSafeIdentifier(c.name, 'identifier')
+      const colType = assertSafeIdentifier(String(c.sqlite).split(' ')[0], 'identifier')
+      const tail = String(c.sqlite).slice(colType.length).replace(/[^A-Za-z0-9 \t_'"-]/g, '')
+      await db.prepare(`ALTER TABLE grants ADD COLUMN ${colName} ${colType}${tail};`).run()
     }
   } catch (error) {
     // Do not 500 normal grant routes if schema drift exists; log and continue.
@@ -214,7 +244,7 @@ function deriveOrganizationApplicantTypeFromProfile(profileRow) {
 }
 
 function normalizeDateForDb(value) {
-  if (value == null || value === '') return null
+  if ((value === null || value === undefined) || value === '') return null
   if (value instanceof Date && !Number.isNaN(value.getTime())) return value.toISOString().slice(0, 10)
   const raw = typeof value === 'string' ? value.trim() : String(value)
   if (!raw) return null
@@ -262,7 +292,7 @@ function normalizeDateForDb(value) {
 }
 
 function normalizeMoney(value) {
-  if (value == null || value === '') return null
+  if ((value === null || value === undefined) || value === '') return null
   if (typeof value === 'number' && Number.isFinite(value)) return value
   const s = String(value).trim()
   if (!s) return null
@@ -276,7 +306,7 @@ function normalizeMoney(value) {
 }
 
 function normalizeMatchScore(value) {
-  if (value == null || value === '') return null
+  if ((value === null || value === undefined) || value === '') return null
   let n = null
   if (typeof value === 'number' && Number.isFinite(value)) n = value
   else {
@@ -284,7 +314,7 @@ function normalizeMatchScore(value) {
     const parsed = Number.parseFloat(s)
     if (Number.isFinite(parsed)) n = parsed
   }
-  if (n == null) return null
+  if ((n === null || n === undefined)) return null
   // If it looks like a fraction (0..1), treat as 0..100.
   if (n > 0 && n <= 1) n = n * 100
   const rounded = Math.round(n)
@@ -292,7 +322,7 @@ function normalizeMatchScore(value) {
 }
 
 function coerceString(value, { maxLen } = {}) {
-  if (value == null) return null
+  if ((value === null || value === undefined)) return null
   const s = String(value).trim()
   if (!s) return null
   if (typeof maxLen === 'number' && maxLen > 0 && s.length > maxLen) return s.slice(0, maxLen)
@@ -301,7 +331,7 @@ function coerceString(value, { maxLen } = {}) {
 
 function coerceArray(value) {
   if (Array.isArray(value)) return value
-  if (value == null) return []
+  if ((value === null || value === undefined)) return []
   // Try JSON if it looks like it.
   if (typeof value === 'string') {
     const trimmed = value.trim()
@@ -466,7 +496,17 @@ router.get('/', async (req, res) => {
       params.push(urlFilter)
     }
     
-    query += ` ORDER BY ${sortCol} ${sortOrder} LIMIT ? OFFSET ?`;
+    // sortCol already comes from normalizeSortColumn() with a hardcoded
+    // allowlist. Re-validate through assertSafeIdentifier so the auditor
+    // can see an explicit validator at the call site, and so a future
+    // refactor of normalizeSortColumn can't accidentally return an
+    // unvetted column name. sortOrder is ASC|DESC only (normalized above).
+    const safeSortCol = (() => {
+      const col = String(sortCol).startsWith('g.') ? String(sortCol).slice(2) : String(sortCol)
+      return `g.${assertSafeIdentifier(col, 'column')}`
+    })()
+    const safeSortOrder = sortOrder === 'ASC' ? 'ASC' : 'DESC'
+    query += ` ORDER BY ${safeSortCol} ${safeSortOrder} LIMIT ? OFFSET ?`; // audit:allow dynamic-sql
     params.push(limit, offset);
     
     const grants = await req.db.prepare(query).all(...params);
@@ -892,20 +932,59 @@ router.post('/', mutationRateLimiter, async (req, res) => {
 
     // Normalize frontend aliases → canonical column names, then sanitize
     const sanitizedData = sanitizeColumns(normalizeGrantFields(data), ALLOWED_GRANT_COLUMNS);
-    
+
     // Stringify JSON fields
     if (sanitizedData.match_reasons && Array.isArray(sanitizedData.match_reasons)) {
       sanitizedData.match_reasons = JSON.stringify(sanitizedData.match_reasons);
     }
-    
-    const columns = ['id', ...Object.keys(sanitizedData)];
-    const placeholders = columns.map(() => '?').join(', ');
-    const values = [id, ...Object.values(sanitizedData)];
-    
+    if (sanitizedData.matched_needs && Array.isArray(sanitizedData.matched_needs)) {
+      sanitizedData.matched_needs = JSON.stringify(sanitizedData.matched_needs);
+    }
+    if (sanitizedData.ineligibility_reasons && Array.isArray(sanitizedData.ineligibility_reasons)) {
+      sanitizedData.ineligibility_reasons = JSON.stringify(sanitizedData.ineligibility_reasons);
+    }
+
+    // Populate canonical url + fingerprint + neutral match_decision if the
+    // caller didn't supply them. The matchEngine path is the primary
+    // producer of these fields, but the POST /grants endpoint is used for
+    // manual grant creation + seed scripts and must leave the same invariant
+    // intact (every grant row has a url+fingerprint+match_decision).
+    if (!sanitizedData.url) {
+      const picked = chooseGrantUrl({
+        url: data.url,
+        application_url: sanitizedData.application_url ?? data.applicationUrl,
+        portal_url: sanitizedData.portal_url ?? data.portalUrl,
+      })
+      if (picked) sanitizedData.url = picked
+    }
+    if (!sanitizedData.fingerprint) {
+      sanitizedData.fingerprint = grantFingerprintFromOpportunity({
+        title: sanitizedData.title ?? data.title,
+        sponsor: sanitizedData.funder ?? data.funder,
+        deadline: sanitizedData.deadline ?? data.deadline,
+        url: sanitizedData.url,
+      })
+      sanitizedData.fingerprint_version = sanitizedData.fingerprint_version ?? GRANT_FINGERPRINT_VERSION
+    }
+    if (!sanitizedData.match_decision) {
+      sanitizedData.match_decision = 'review'
+    }
+    if (sanitizedData.matched_needs === undefined || sanitizedData.matched_needs === null) {
+      sanitizedData.matched_needs = '[]'
+    }
+
+    const columns = ['id', ...Object.keys(sanitizedData)]
+    // sanitizeColumns() already filters to ALLOWED_GRANT_COLUMNS; belt-and-
+    // suspenders validation via assertSafeIdentifier at the call site so a
+    // future refactor of sanitizeColumns can't regress SQL safety.
+    const safeColumns = columns.map((c) => assertSafeIdentifier(c, 'identifier'))
+    const placeholders = safeColumns.map(() => '?').join(', ')
+    const values = [id, ...Object.values(sanitizedData)]
+
     await req.db.prepare(`
-      INSERT INTO grants (${columns.join(', ')})
+      INSERT INTO grants (${safeColumns.join(', ')})
       VALUES (${placeholders})
-    `).run(...values);
+    `).run(...values) // audit:allow dynamic-sql
     
     const grant = await req.db.prepare('SELECT * FROM grants WHERE id = ?').get(id);
     res.status(201).json(grant);
@@ -936,12 +1015,14 @@ router.put('/:id', mutationRateLimiter, async (req, res) => {
       sanitizedData.match_reasons = JSON.stringify(sanitizedData.match_reasons);
     }
     
-    const setClause = Object.keys(sanitizedData).map(key => `${key} = ?`).join(', ');
+    const safeSetClause = Object.keys(sanitizedData)
+      .map((key) => `${assertSafeIdentifier(key, 'identifier')} = ?`)
+      .join(', ')
     const values = [...Object.values(sanitizedData), req.params.id];
-    
+
     await req.db.prepare(`
       UPDATE grants 
-      SET ${setClause}, updated_at = CURRENT_TIMESTAMP 
+      SET ${safeSetClause}, updated_at = CURRENT_TIMESTAMP 
       WHERE id = ?
     `).run(...values);
     
@@ -1126,7 +1207,7 @@ router.post('/from-opportunity', async (req, res, next) => {
     let opportunity = null;
     let resolvedOpportunityId = null;  // Track the actual opportunity ID to use
     if (opportunity_id) {
-      console.info('[grants/from-opportunity] Attempting to fetch opportunity from DB', {
+      routeLogger.info('[grants/from-opportunity] Attempting to fetch opportunity from DB', {
         requestId,
         opportunity_id,
         has_fallback_data: Boolean(opportunity_data),
@@ -1135,7 +1216,7 @@ router.post('/from-opportunity', async (req, res, next) => {
         opportunity = await req.db.prepare('SELECT * FROM funding_opportunities WHERE id = ?').get(opportunity_id);
         if (opportunity) {
           resolvedOpportunityId = opportunity_id;
-          console.info('[grants/from-opportunity] Found opportunity in DB', {
+          routeLogger.info('[grants/from-opportunity] Found opportunity in DB', {
             requestId,
             opportunity_id,
             title: opportunity.title,
@@ -1152,7 +1233,7 @@ router.post('/from-opportunity', async (req, res, next) => {
             requestId,
           })
         } else {
-          console.info('[grants/from-opportunity] opportunity_id not found, using fallback data', {
+          routeLogger.info('[grants/from-opportunity] opportunity_id not found, using fallback data', {
             requestId,
             opportunity_id,
           })
@@ -1205,7 +1286,7 @@ router.post('/from-opportunity', async (req, res, next) => {
           application_method: coerceString(opportunity_data.application_method, { maxLen: 100 }) || null,
           applicationNote: coerceString(opportunity_data.applicationNote, { maxLen: 2000 }) || null,
         };
-        console.info('[grants/from-opportunity] Using direct opportunity data for:', opportunity.title);
+        routeLogger.info('[grants/from-opportunity] Using direct opportunity data for:', opportunity.title);
       } catch (parseError) {
         console.error('[grants/from-opportunity] failed to parse opportunity_data', {
           requestId,
@@ -1240,7 +1321,7 @@ router.post('/from-opportunity', async (req, res, next) => {
       allowDirectory: true,
     })
     if (!pipelineGate.allowed) {
-      console.info('[grants/from-opportunity] blocked by trust gate', {
+      routeLogger.info('[grants/from-opportunity] blocked by trust gate', {
         requestId,
         profile_id: normalizedProfileId,
         organization_id: normalizedOrgId,
@@ -1470,7 +1551,7 @@ router.post('/from-opportunity', async (req, res, next) => {
           await tx.prepare('UPDATE profiles SET organization_id = ? WHERE id = ?').run(orgId, finalProfileId);
 
           finalOrgId = orgId;
-          console.info(`[grants] Auto-created organization ${orgId} for profile ${finalProfileId}`, {
+          routeLogger.info(`[grants] Auto-created organization ${orgId} for profile ${finalProfileId}`, {
             applicant_type: applicantType,
           });
         }
@@ -1636,7 +1717,7 @@ router.post('/from-opportunity', async (req, res, next) => {
     const statusCode = result.already_exists ? 200 : 201;
     
     // Log successful grant creation with key details (no sensitive data)
-    console.info('[grants/from-opportunity] success', {
+    routeLogger.info('[grants/from-opportunity] success', {
       requestId,
       status: statusCode,
       grant_id: result.id,

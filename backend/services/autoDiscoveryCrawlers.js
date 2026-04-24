@@ -40,7 +40,7 @@ function checkStudentIndicators(profile) {
 }
 
 function safeParseJson(value, fallback) {
-  if (value == null) return fallback
+  if ((value === null || value === undefined)) return fallback
   if (typeof value === 'object') return value
   if (typeof value !== 'string') return fallback
   const trimmed = value.trim()

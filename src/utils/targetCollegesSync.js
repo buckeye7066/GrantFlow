@@ -14,7 +14,7 @@
 export function normalizeTargetColleges(value) {
   let arr = []
   if (Array.isArray(value)) {
-    arr = value.map((v) => (v != null ? String(v).trim() : "")).filter(Boolean)
+    arr = value.map((v) => (v !== null ? String(v).trim() : "")).filter(Boolean)
   } else if (typeof value === "string") {
     const raw = value.trim()
     if (!raw) return []
@@ -22,7 +22,7 @@ export function normalizeTargetColleges(value) {
       try {
         const parsed = JSON.parse(raw)
         if (Array.isArray(parsed)) {
-          arr = parsed.map((v) => (v != null ? String(v).trim() : "")).filter(Boolean)
+          arr = parsed.map((v) => (v !== null ? String(v).trim() : "")).filter(Boolean)
         } else {
           arr = raw.split(",").map((s) => s.trim()).filter(Boolean)
         }

@@ -131,6 +131,83 @@ function safeArr(val) {
   return []
 }
 
+/**
+ * Group 11 matcher coverage: build a normalized `demographics` object from
+ * raw profile + section answers. Every field is optional; missing values are
+ * represented as null or empty arrays so downstream scoring can treat them
+ * neutrally (per user rule: missing fields must NOT disqualify a funding
+ * source by default).
+ */
+function buildDemographicProfile(profile, sections) {
+  const p = profile || {}
+  const orgDetails = readSection(sections, 'organization_details') || {}
+  const smallBiz = readSection(sections, 'small_business_details') || {}
+  const financial = readSection(sections, 'financial_information') || {}
+  const occupation = readSection(sections, 'occupation') || {}
+  const narrative = readSection(sections, 'narrative') || {}
+  const programs = readSection(sections, 'programs_services') || {}
+  const fundingNeeds = readSection(sections, 'funding_needs') || {}
+  const basic = readSection(sections, 'basic_information') || {}
+  const location = readSection(sections, 'location_focus') || {}
+
+  const num = (v) => {
+    if (v === null || v === '') return null
+    const n = Number(v)
+    return Number.isFinite(n) ? n : null
+  }
+  const arr = (v) => {
+    if (Array.isArray(v)) return v.map((s) => safeStr(s)).filter(Boolean)
+    if (typeof v === 'string') return v.split(/[,;\n]/).map((s) => s.trim()).filter(Boolean)
+    return []
+  }
+
+  return {
+    country: safeStr(p.country || basic.country || location.country || '') || null,
+    employee_count:
+      num(p.employee_count)
+      ?? num(orgDetails.employee_count)
+      ?? num(smallBiz.employee_count ?? smallBiz.employees)
+      ?? num(occupation.employee_count),
+    annual_revenue:
+      num(p.annual_revenue)
+      ?? num(financial.annual_revenue ?? financial.revenue)
+      ?? num(orgDetails.annual_revenue)
+      ?? num(smallBiz.annual_revenue),
+    years_in_operation:
+      num(p.years_in_operation)
+      ?? num(orgDetails.years_in_operation)
+      ?? num(smallBiz.years_in_operation),
+    veteran_owned: safeBool(
+      p.veteran_owned
+      ?? occupation.veteran_owned
+      ?? occupation.veteran_owned_business
+      ?? smallBiz.veteran_owned
+      ?? orgDetails.veteran_owned,
+    ),
+    woman_owned: safeBool(
+      p.woman_owned
+      ?? p.women_owned
+      ?? occupation.woman_owned
+      ?? occupation.women_owned_business
+      ?? smallBiz.woman_owned
+      ?? orgDetails.woman_owned,
+    ),
+    minority_owned: safeBool(
+      p.minority_owned
+      ?? occupation.minority_owned
+      ?? occupation.minority_owned_business
+      ?? smallBiz.minority_owned
+      ?? orgDetails.minority_owned,
+    ),
+    organization_type:
+      safeStr(p.organization_type || orgDetails.organization_type || smallBiz.organization_type || '') || null,
+    population_served:
+      arr(p.population_served ?? programs.population_served ?? orgDetails.population_served ?? fundingNeeds.population_served),
+    mission_focus:
+      arr(p.mission_focus ?? p.mission ?? orgDetails.mission_focus ?? orgDetails.mission ?? narrative.mission_focus),
+  }
+}
+
 function safeObj(val) {
   if (val && typeof val === 'object' && !Array.isArray(val)) return val
   if (typeof val === 'string') {
@@ -723,6 +800,10 @@ export function buildProfileIntelligence(profile, profileSections) {
     isSchool,
     isGovernment,
     displayName: safeStr(profile.display_name || profile.name || ''),
+    // Group 11 matcher coverage: surface the 10 demographic/operational fields
+    // flagged by admin.code.missionAudit as "missing matcher inputs". Reads
+    // stay best-effort (null when absent) so existing profiles don't regress.
+    demographics: buildDemographicProfile(profile, sections),
     financialFlags: new Set(hardshipFlags),  // shallow copy â prevents mutation aliasing
   }
 

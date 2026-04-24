@@ -21,6 +21,30 @@ This repository contains the core application code.
 
 For documentation, see **`docs/README.md`** (index). Key: **`docs/CRAWLERS.md`** (crawlers), **`docs/ENVIRONMENT.md`** (env vars), **`docs/VERCEL_RAILWAY_DEPLOYMENT.md`** (deploy).
 
+### Anya autonomous crawler — write gating
+
+The `admin.anya.runAutonomous` tool and the `scripts/anya-autonomous.mjs` CLI
+are **safe by default**. They can scan the repo, surface findings, and return
+a diff preview without ever writing a file.
+
+To actually modify files, BOTH of the following must be true:
+
+1. Environment: `ANYA_AUTONOMOUS_WRITES=1` (or legacy `ANYA_AUTONOMOUS_WRITE_CHANGES=true`)
+2. Per-invocation intent: either `--write` on the CLI, or `dry_run: false` on
+   the HTTP endpoint
+
+If either is missing, the run is forced to dry run and the report sets
+`dry_run_forced_by_env: true`. This is intentional — it blocks accidental or
+remotely-triggered writes. Never enable these by default in production.
+
+```bash
+# Safe dry run (default)
+node scripts/anya-autonomous.mjs
+
+# Actually apply fixes — BOTH gates required
+ANYA_AUTONOMOUS_WRITES=1 node scripts/anya-autonomous.mjs --write --fix-empty-catch
+```
+
 ## Getting started
 
 The backend service requires **Node.js 20+** and **PostgreSQL**.  See `docs/ENVIRONMENT.md` for environment variables and `docs/VERCEL_RAILWAY_DEPLOYMENT.md` or `docs/DEPLOYMENT_DO.md` for deployment options.

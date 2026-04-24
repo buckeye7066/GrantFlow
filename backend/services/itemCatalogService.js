@@ -9,7 +9,7 @@ const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 
 function safeJsonParse(value, fallback) {
-  if (value == null) return fallback
+  if ((value === null || value === undefined)) return fallback
   if (typeof value === 'object') return value
   try {
     return JSON.parse(String(value))

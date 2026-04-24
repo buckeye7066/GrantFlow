@@ -170,7 +170,7 @@ function buildOpportunitySummary(opportunity, profile, match) {
   } else if (opportunity.deadline_type) {
     lines.push(`Deadline type: ${opportunity.deadline_type}`)
   }
-  if (match?.score != null) {
+  if (match?.score !== null) {
     lines.push(`Match score: ${match.score}%`)
   }
   if (Array.isArray(match?.reasons) && match.reasons.length) {

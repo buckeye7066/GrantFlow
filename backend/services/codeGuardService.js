@@ -72,17 +72,28 @@ export async function testEndpoints(db, baseUrl, adminToken = null) {
   const results = []
   let passed = 0, failed = 0, skipped = 0
 
+  // Service-auth precedence for the health probe:
+  //   1. ADMIN_HEALTH_TOKEN (preferred — read-only scope)
+  //   2. Explicit adminToken param
+  //   3. ADMIN_TOKEN / ANYA_ADMIN_TOKEN env
+  const healthToken = process.env.ADMIN_HEALTH_TOKEN || null
+  const fallbackAdmin = adminToken || process.env.ADMIN_TOKEN || process.env.ANYA_ADMIN_TOKEN || null
+  const canAuth = Boolean(healthToken || fallbackAdmin)
+
   for (const ep of ENDPOINTS) {
-    if (ep.auth && !adminToken) {
+    if (ep.auth && !canAuth) {
       results.push({ ...ep, status: 'SKIP', code: null, ms: null, reason: 'No auth token' })
       skipped++
       continue
     }
 
     const headers = {}
-    if (ep.auth && adminToken) {
-      headers['Authorization'] = `Bearer ${adminToken}`
-      headers['X-Admin-Token'] = adminToken
+    if (ep.auth) {
+      if (healthToken) headers['X-Admin-Health-Token'] = healthToken
+      if (fallbackAdmin) {
+        headers['Authorization'] = `Bearer ${fallbackAdmin}`
+        headers['X-Admin-Token'] = fallbackAdmin
+      }
     }
 
     const start = Date.now()

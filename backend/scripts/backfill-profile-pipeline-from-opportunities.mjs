@@ -74,7 +74,7 @@ async function main() {
       checked += 1
       const res = await saveToProfilePipeline(db, opp, profileId, profileContext, null, threshold)
       const pct = typeof res?.matchPercentage === 'number' ? res.matchPercentage : null
-      if (pct != null && pct >= threshold) eligible += 1
+      if (pct !== null && pct >= threshold) eligible += 1
       if (res?.saved) saved += 1
     }
 

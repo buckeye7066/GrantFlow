@@ -378,7 +378,7 @@ export function scoreProgram(program, analysis, strategyOpts = {}) {
     }
 
   // ── State match (20 points) ──
-  // v4: Use normalizeState for robust comparison ("TN" == "Tennessee" == "tn")
+  // v4: Use normalizeState for robust comparison ("TN" === "Tennessee" === "tn")
   maxPossible += 20;
     const profileState = normalizeState(analysis.location?.state);
     const programState = normalizeState(program.stateRestriction);

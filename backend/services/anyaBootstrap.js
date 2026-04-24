@@ -65,7 +65,7 @@ export async function bootstrapAnya(db) {
         report.autonomous_startup = { error: err?.message || String(err) }
       }
     } else {
-      console.log('[AnyaBootstrap] Autonomous startup skipped (ANYA_RUN_ON_STARTUP != "true")')
+      console.log('[AnyaBootstrap] Autonomous startup skipped (ANYA_RUN_ON_STARTUP !== "true")')
       report.autonomous_startup = { skipped: true }
     }
 
@@ -112,7 +112,7 @@ _scheduleIntervalId = setInterval(() => {
       report.schedule_runner = { started: true, interval_ms: SCHEDULE_CHECK_MS }
       console.log('[AnyaBootstrap] Schedule runner enabled (checking every 30 min)')
     } else {
-      console.log('[AnyaBootstrap] Schedule runner skipped (ANYA_RUN_ON_SCHEDULE != "true")')
+      console.log('[AnyaBootstrap] Schedule runner skipped (ANYA_RUN_ON_SCHEDULE !== "true")')
       report.schedule_runner = { skipped: true }
     }
 

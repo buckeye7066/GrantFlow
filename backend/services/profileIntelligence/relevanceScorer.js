@@ -42,15 +42,16 @@ import { applyRelevanceFilter } from '../relevanceFilter.js'
 // Dimension weights (must sum to 1.0)
 // ---------------------------------------------------------------------------
 const DIMENSION_WEIGHTS = {
-  eligibility: 0.28,      // Hard eligibility is most important
-  need_fit: 0.23,          // How well needs align
-  entity_fit: 0.14,        // Entity type match
-  geography_fit: 0.10,     // Location alignment
-  compliance_fit: 0.05,    // Credentials/registration
-  priority_fit: 0.05,      // Hardship/priority boosts
-  practicality: 0.05,      // Ease of application
-  source_quality: 0.05,    // Source trustworthiness
-  keyword_relevance: 0.05, // Story keyword overlap
+  eligibility: 0.26,        // Hard eligibility is most important
+  need_fit: 0.22,           // How well needs align
+  entity_fit: 0.13,         // Entity type match
+  geography_fit: 0.10,      // Location alignment
+  compliance_fit: 0.05,     // Credentials/registration
+  priority_fit: 0.05,       // Hardship/priority boosts
+  practicality: 0.05,       // Ease of application
+  source_quality: 0.04,     // Source trustworthiness
+  keyword_relevance: 0.04,  // Story keyword overlap
+  demographic_fit: 0.06,    // Group 11: org-operational demographic inputs
 }
 
 // Verify weights sum to ~1.0
@@ -234,6 +235,75 @@ function scoreGeographyFit(intel, opportunity) {
 // ---------------------------------------------------------------------------
 // Compliance fit scoring
 // ---------------------------------------------------------------------------
+/**
+ * Group 11 demographic fit: score the 10 org/operational fields the mission
+ * audit called out as missing from the matcher. Per user rule, null/missing
+ * values MUST NOT disqualify — they stay neutral (score ~50) so sparse
+ * profiles still see opportunities.
+ */
+function scoreDemographicFit(intel, opportunity) {
+  const demo = intel?.demographics
+  if (!demo) return 50
+  const oppText = [
+    String(opportunity.title || ''),
+    String(opportunity.description || ''),
+    String(opportunity.eligibility_criteria || ''),
+  ].join(' ').toLowerCase()
+
+  let score = 60  // neutral-positive baseline
+  let signals = 0
+
+  // Set-asides: boolean flags boost the score when the opp mentions them.
+  const setAsides = [
+    { flag: demo.veteran_owned, re: /veteran[- ]owned|sdvosb|vosb/ },
+    { flag: demo.woman_owned, re: /women[- ]owned|wosb|female[- ]led/ },
+    { flag: demo.minority_owned, re: /minority[- ]owned|mbe|bipoc|disadvantaged business/ },
+  ]
+  for (const { flag, re } of setAsides) {
+    if (flag && re.test(oppText)) { score += 12; signals++ }
+  }
+
+  // Population served / mission focus alignment: count matches in opp text.
+  const bag = [
+    ...(Array.isArray(demo.population_served) ? demo.population_served : []),
+    ...(Array.isArray(demo.mission_focus) ? demo.mission_focus : []),
+  ].map((s) => String(s || '').toLowerCase()).filter(Boolean)
+  for (const term of bag) {
+    if (term.length < 4) continue
+    if (oppText.includes(term)) { score += 4; signals++ }
+  }
+
+  // Organization type should match opportunity target when both exist.
+  if (demo.organization_type && /nonprofit|501c3|church|school|business|government|tribal/.test(oppText)) {
+    const t = String(demo.organization_type).toLowerCase()
+    if (oppText.includes(t)) { score += 6; signals++ }
+  }
+
+  // Country: only apply when the opp explicitly names a country.
+  if (demo.country) {
+    const c = String(demo.country).toLowerCase()
+    if (oppText.includes(c)) { score += 4; signals++ }
+  }
+
+  // Scale-appropriate flags: employee_count / annual_revenue / years_in_operation
+  // are expressed as size bands.
+  if (typeof demo.employee_count === 'number') {
+    if (demo.employee_count < 50 && /small (business|nonprofit|organization)/.test(oppText)) { score += 5; signals++ }
+    if (demo.employee_count >= 500 && /large (employer|organization|nonprofit)/.test(oppText)) { score += 3; signals++ }
+  }
+  if (typeof demo.annual_revenue === 'number') {
+    if (demo.annual_revenue < 1_000_000 && /small organization|emerging/.test(oppText)) { score += 3; signals++ }
+  }
+  if (typeof demo.years_in_operation === 'number') {
+    if (demo.years_in_operation >= 3 && /established|multi[- ]year track record|operational history/.test(oppText)) { score += 3; signals++ }
+    if (demo.years_in_operation < 3 && /startup|new (nonprofit|organization)|recently founded/.test(oppText)) { score += 3; signals++ }
+  }
+
+  // Never let signal-heavy profiles push past 100 or crash to 0.
+  if (signals === 0) return 50
+  return Math.max(40, Math.min(100, Math.round(score)))
+}
+
 function scoreComplianceFit(intel, opportunity) {
   let score = 80  // Default: assume compliance unless known issues
 
@@ -556,6 +626,7 @@ export function scoreOpportunity(intel, opportunity) {
     practicality: scorePracticality(opportunity),
     source_quality: scoreSourceQuality(opportunity),
     keyword_relevance: scoreKeywordRelevance(intel, opportunity),
+    demographic_fit: scoreDemographicFit(intel, opportunity),
   }
 
   // Weighted total

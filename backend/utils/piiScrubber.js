@@ -21,7 +21,7 @@ function makeRegexes() {
 }
 
 export function scrubPII(value) {
-  if (value == null) return value
+  if ((value === null || value === undefined)) return value
   const text = typeof value === 'string' ? value : JSON.stringify(value)
   const { EMAIL_RE, PHONE_RE, SSN_RE, LONG_DIGITS_RE } = makeRegexes()
   return text

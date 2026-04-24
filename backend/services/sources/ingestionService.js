@@ -125,10 +125,10 @@ export async function ingestOpportunities(db, opportunities, sourceName) {
     if (!opp.id) {
       opp.id = crypto.randomUUID();
     }
-    if (opp.last_crawled == null) {
+    if ((opp.last_crawled === null || opp.last_crawled === undefined)) {
       opp.last_crawled = new Date().toISOString();
     }
-    if (opp.is_active == null) {
+    if ((opp.is_active === null || opp.is_active === undefined)) {
       opp.is_active = 1;
     }
     validated.push(opp);

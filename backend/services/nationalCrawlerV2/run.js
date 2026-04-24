@@ -342,7 +342,7 @@ export async function runNationalCrawlerV2({
 
             for (const normalized of normalizedByTrack) {
               // Enforce Track A/B separation invariant
-              if (normalized.funding_track === 'TRACK_A' && normalized.provider_requirements != null) {
+              if (normalized.funding_track === 'TRACK_A' && (normalized.provider_requirements !== null && normalized.provider_requirements !== undefined)) {
                 await logs.normalize(`[run=${runId}] warning: TRACK_A record has provider_requirements, cleaning up`)
                 normalized.provider_requirements = null
               }
@@ -362,7 +362,7 @@ export async function runNationalCrawlerV2({
                 await logs.normalize(`[run=${runId}] upsert_error ${source.source_id}: ${upsertError.message}`)
                 counts.failures.push({ url, failure_type: 'database_error', message: upsertError.message, stack: upsertError.stack, parser_name: parser_name, retry_count: 0, source_id: source.source_id })
               }
-              if (upsert != null) {
+              if ((upsert !== null && upsert !== undefined)) {
                 counts.programs_normalized += 1
                 counts.programs_upserted += 1
                 counts.versions_created += upsert.versions_created

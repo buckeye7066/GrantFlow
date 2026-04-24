@@ -5,9 +5,9 @@
     "description": "Community impact funding for organizations serving California residents.",
     "source": "fixture_geo",
     "source_id": "fixture-geo-ca-94105-1",
-    "source_url": "https://example.org/ca/94105/impact",
-    "application_url": "https://example.org/ca/94105/impact/apply",
-    "evidence_url": "https://example.org/ca/94105/impact",
+    "source_url": "https://fixture.test/ca/94105/impact",
+    "application_url": "https://fixture.test/ca/94105/impact/apply",
+    "evidence_url": "https://fixture.test/ca/94105/impact",
     "state": "CA",
     "is_national": false,
     "categories": ["community", "local"],
@@ -17,4 +17,3 @@
     "match_percentage": 0
   }
 ]
-

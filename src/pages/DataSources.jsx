@@ -144,7 +144,7 @@ function OpportunityDrawer({ crawlerType, result, onClose }) {
                     <p className="font-medium text-slate-900 truncate">{opp.title}</p>
                     <p className="text-xs text-slate-500 mt-0.5">{opp.sponsor || 'Unknown sponsor'}</p>
                   </div>
-                  {opp.match_score != null && (
+                  {opp.match_score !== null && (
                     <Badge variant="outline" className={`shrink-0 ${opp.match_score >= 70 ? 'bg-green-50 text-green-700' : 'bg-amber-50 text-amber-700'}`}>
                       {opp.match_score}%
                     </Badge>

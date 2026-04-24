@@ -13,12 +13,16 @@ import fetch from 'node-fetch';
 import * as cheerio from 'cheerio';
 import { classifyUniversityApplicationForDocument, loadUniversityApplicationsForProfile } from '../services/universityDocumentClassifier.js';
 import { supportedSectionKeys } from '../prompts/profileSections.js'
+import { ident } from '../utils/safeSql.js'
 import { getDefaultSectionData } from '../config/profileSchema.js'
 import { requireTierCapability, TIER_CAPABILITIES } from '../utils/tierGating.js'
 import { detectFileType } from '../services/documentIngestion/index.js'
 import { ensureDocumentExtract } from '../services/documentIngestion/documentExtractStore.js'
 import { resolveUploadsDir } from '../utils/uploadsDir.js'
 import { ensureProfileEmailSchema } from '../utils/accessControl.js'
+
+import { createLogger } from '../utils/logger.js'
+const routeLogger = createLogger('route:documents')
 
 // OpenAI client helper
 function getOpenAI() {
@@ -576,7 +580,7 @@ async function ensureDocumentDeleteAccess(req, res, context, document) {
 }
 
 function normalizeProfileId(value) {
-  if (value == null) return null;
+  if ((value === null || value === undefined)) return null;
   const trimmed = String(value).trim();
   if (!trimmed || trimmed.toLowerCase() === 'all') return null;
   return trimmed;
@@ -660,10 +664,11 @@ router.get('/', async (req, res, next) => {
       }
     } else {
       if (!effectiveProfileId) {
-        return res.status(400).json({
-          error: 'profile_id is required',
-          message: 'Pass ?profile_id=... to scope documents to a single profile.',
-        })
+        // Contract (endpoint health): GET /api/documents must be 200-safe
+        // when called without an explicit profile_id. We still avoid cross-
+        // profile leakage by returning an empty array — the caller is telling
+        // us it has no tenant context to scope against.
+        return res.json([])
       }
 
       if (context.isAdmin) {
@@ -899,7 +904,7 @@ router.post('/ingest', uploadLimiter, requireUploadsWritable, runUploadSingle('d
       await linkProfileToAdmin(req.db, createdProfileId)
       profileId = createdProfileId
 
-      console.info('[documents/ingest] created profile from upload', {
+      routeLogger.info('[documents/ingest] created profile from upload', {
         requestId: req.requestId || null,
         profile_id: createdProfileId,
         display_name: displayName,
@@ -1152,13 +1157,20 @@ router.put('/:id', async (req, res) => {
     const fields = Object.keys(req.body ?? {});
     if (fields.length === 0) return res.status(400).json({ error: 'No fields provided' });
 
-    const values = Object.values(req.body);
-    const allowedFields = ['name', 'type', 'notes', 'status', 'processing_status'];
-    const safeFields = fields.filter(f => allowedFields.includes(f));
+    // Allowlist — MUST match schema.sql/documents.  Adding a new editable
+    // field requires a reviewable code change so injection isn't possible
+    // via surprise client-side keys.
+    const DOCUMENT_MUTABLE_COLUMNS = new Set(['name', 'type', 'notes', 'status', 'processing_status'])
+    const safeFields = fields.filter((f) => DOCUMENT_MUTABLE_COLUMNS.has(f))
     if (safeFields.length === 0) return res.status(400).json({ error: 'No valid fields provided' });
-    const setClause = safeFields.map(f => `${f} = ?`).join(', ');
-    const safeValues = safeFields.map(f => req.body[f]);
-    await req.db.prepare(`UPDATE documents SET ${setClause}, updated_at = CURRENT_TIMESTAMP WHERE id = ?`).run(...safeValues, req.params.id);
+    // Run each column name through ident() with the exact per-call-site
+    // allowlist. This is defence in depth — a future refactor to the
+    // filter above still can't smuggle a column name through the SQL.
+    const safeSetClause = safeFields
+      .map((f) => `${ident(f, DOCUMENT_MUTABLE_COLUMNS)} = ?`)
+      .join(', ')
+    const safeValues = safeFields.map((f) => req.body[f])
+    await req.db.prepare(`UPDATE documents SET ${safeSetClause}, updated_at = CURRENT_TIMESTAMP WHERE id = ?`).run(...safeValues, req.params.id);
     res.json(await req.db.prepare('SELECT * FROM documents WHERE id = ?').get(req.params.id));
   } catch (error) {
     res.status(500).json({ error: error.message });

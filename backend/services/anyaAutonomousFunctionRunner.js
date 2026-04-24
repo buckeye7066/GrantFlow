@@ -516,13 +516,13 @@ async function saveHighMatchesToProfile(options, context) {
       try {
         const result = await saveToProfilePipeline(db, opp, profileId, profileContext, null, threshold)
         const matchPct = typeof result?.matchPercentage === 'number' ? result.matchPercentage : null
-        if (matchPct != null && matchPct >= threshold) eligible += 1
+        if ((matchPct !== null && matchPct !== undefined) && matchPct >= threshold) eligible += 1
 
         if (result?.saved) {
           saved += 1
         } else if (String(result?.reason || '').toLowerCase().includes('already in pipeline')) {
           already += 1
-        } else if (matchPct != null && matchPct < threshold) {
+        } else if ((matchPct !== null && matchPct !== undefined) && matchPct < threshold) {
           below += 1
         }
       } catch (e) {

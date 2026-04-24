@@ -13,6 +13,9 @@ import express from 'express';
 import { randomUUID } from 'crypto';
 import { formatError } from '../middleware/errorHandler.js';
 import { scheduleDebouncedVehicleSync } from '../services/githubSyncVehicles.js';
+import { createLogger } from '../utils/logger.js'
+const routeLogger = createLogger('route:vehicles')
+
 const router = express.Router();
 
 /**
@@ -159,7 +162,7 @@ router.post('/ingest', async (req, res) => {
     }
 
     if (existing) {
-      console.info('[vehicles/ingest] Duplicate skipped', { link: data.link, existingId: existing.id });
+      routeLogger.info('[vehicles/ingest] Duplicate skipped', { link: data.link, existingId: existing.id });
       return res.status(200).json({
         ok: true,
         inserted: false,
@@ -221,7 +224,7 @@ router.post('/ingest', async (req, res) => {
         );
     }
 
-    console.info('[vehicles/ingest] Inserted vehicle opportunity', {
+    routeLogger.info('[vehicles/ingest] Inserted vehicle opportunity', {
       id,
       title: data.title,
       link: data.link,
@@ -253,7 +256,7 @@ router.post('/ingest', async (req, res) => {
       (err?.code === '23505'); // PostgreSQL unique_violation
 
     if (isUniqueViolation) {
-      console.info('[vehicles/ingest] Duplicate (race) skipped', { link: data.link });
+      routeLogger.info('[vehicles/ingest] Duplicate (race) skipped', { link: data.link });
       return res.status(200).json({
         ok: true,
         inserted: false,

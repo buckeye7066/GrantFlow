@@ -1,6 +1,9 @@
 import express from 'express'
 import { requireAuthenticatedUser } from '../utils/accessControl.js'
 
+import { createLogger } from '../utils/logger.js'
+const routeLogger = createLogger('route:crawlLogs')
+
 const router = express.Router()
 
 function mapStatus(status) {

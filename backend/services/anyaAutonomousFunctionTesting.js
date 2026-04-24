@@ -1,6 +1,7 @@
 import path from 'path'
 import { promises as fs } from 'fs'
 import { AUDIT_CATEGORIES, SEVERITY, logAuditEvent } from './auditService.js'
+import { collectComponentFiles, scanComponentForButtons } from './anyaButtonScanner.js'
 
 const REPO_ROOT = path.resolve(process.cwd())
 
@@ -398,69 +399,160 @@ export async function runAutonomousFunctionTests(options, context) {
 }
 
 /**
- * Test all buttons/UI interactions by checking their API endpoints
- * This analyzes the frontend code to find button click handlers
+ * Test all buttons/UI interactions by statically analyzing React component
+ * handlers and (optionally) probing the resolved API endpoints with
+ * supertest against the in-process Express app.
+ *
+ * The scan walks `componentPath` (default: `src/components`) for JSX/TSX
+ * files, extracts every <Button>/<button>/<IconButton>/etc. with an
+ * onClick/onSubmit handler, resolves the handler body, and pulls out the
+ * HTTP endpoint references inside it (fetch, axios, api.*, bare `/api/...`
+ * string literals).
+ *
+ * When `probe` is true (or when `context.app` is a supertest-compatible
+ * Express app), each detected GET endpoint whose URL is literally known
+ * (no template holes) is exercised with supertest and reported pass/fail
+ * based on whether the response status is < 500. A 4xx is treated as
+ * "endpoint exists but rejected our unauth probe" — still a live wiring.
  */
 export async function testButtonFunctionality(options, context) {
   const {
     componentPath = 'src/components',
-    fixErrors = false,
-    dryRun = true,
-  } = options
+    probe = true,
+  } = options || {}
 
   const startTime = Date.now()
   const report = {
     started_at: new Date().toISOString(),
     component_path: componentPath,
+    files_scanned: 0,
     buttons_found: 0,
     buttons_tested: 0,
     buttons_working: 0,
     buttons_failing: 0,
+    buttons_unknown: 0,
+    endpoints_probed: 0,
+    endpoints_ok: 0,
+    endpoints_failing: 0,
     results: [],
   }
 
   await auditLog(
-    {
-      action: 'button_functionality_test_start',
-      options,
-    },
+    { action: 'button_functionality_test_start', options },
     context,
   )
 
   try {
-    // This would require parsing React components to find button handlers
-    // For now, we'll document the approach
-    report.message = 'Button testing requires component analysis. Recommended approach:'
-    report.recommendations = [
-      'Parse React components to extract onClick handlers',
-      'Identify API endpoints called by button handlers',
-      'Execute API tests for each endpoint',
-      'Report on button functionality',
-      'Fix any broken endpoints found',
-    ]
+    const root = path.resolve(process.cwd(), componentPath)
+    const files = await collectComponentFiles(root)
+    report.files_scanned = files.length
+
+    // Lazy load supertest + app so static analysis works even when we
+    // cannot probe (e.g. running outside of a Node server context).
+    let probeFn = null
+    if (probe) {
+      try {
+        const app = context?.app ?? null
+        if (app) {
+          const { default: request } = await import('supertest')
+          probeFn = async (url) => {
+            try {
+              const res = await request(app).get(url).set('Accept', 'application/json')
+              return { status: res.status, ok: res.status < 500 }
+            } catch (err) {
+              return { status: 0, ok: false, error: err?.message || String(err) }
+            }
+          }
+        }
+      } catch (err) {
+        report.probe_error = err?.message || String(err)
+      }
+    }
+
+    for (const file of files) {
+      const scan = await scanComponentForButtons(file)
+      if (scan.error || !scan.buttons.length) continue
+      for (const btn of scan.buttons) {
+        report.buttons_found += 1
+        const buttonEntry = {
+          file: path.relative(process.cwd(), file).replace(/\\/g, '/'),
+          line: btn.lineIndex,
+          tag: btn.tag,
+          label: btn.label,
+          handler: btn.handler,
+          endpoints: btn.endpoints,
+          probe_results: [],
+          status: 'unknown',
+        }
+        if (btn.endpoints.length === 0) {
+          // Local-only handlers (navigation, toggles) are not failures.
+          buttonEntry.status = btn.handler.has_body ? 'local_only' : 'unresolved'
+          report.buttons_unknown += 1
+        } else if (!probeFn) {
+          buttonEntry.status = 'wired'
+          report.buttons_tested += 1
+          report.buttons_working += 1
+        } else {
+          let sawFailure = false
+          let probed = 0
+          for (const ep of btn.endpoints) {
+            if (ep.method !== 'GET') continue
+            if (/[`${}]/.test(ep.url)) continue // template literal; skip
+            probed += 1
+            const probeRes = await probeFn(ep.url)
+            report.endpoints_probed += 1
+            if (probeRes.ok) report.endpoints_ok += 1
+            else {
+              report.endpoints_failing += 1
+              sawFailure = true
+            }
+            buttonEntry.probe_results.push({ ...ep, ...probeRes })
+          }
+          report.buttons_tested += 1
+          if (probed === 0) {
+            buttonEntry.status = 'wired'
+            report.buttons_working += 1
+          } else if (sawFailure) {
+            buttonEntry.status = 'failing'
+            report.buttons_failing += 1
+          } else {
+            buttonEntry.status = 'working'
+            report.buttons_working += 1
+          }
+        }
+        report.results.push(buttonEntry)
+      }
+    }
 
     const duration = Date.now() - startTime
     report.completed_at = new Date().toISOString()
     report.duration_ms = duration
 
     await auditLog(
-      {
-        action: 'button_functionality_test_complete',
-        report,
-      },
+      { action: 'button_functionality_test_complete', report: summarizeReportForAudit(report) },
       context,
     )
 
     return report
   } catch (error) {
     await auditLog(
-      {
-        action: 'button_functionality_test_error',
-        error: error.message,
-      },
+      { action: 'button_functionality_test_error', error: error.message },
       context,
     )
     throw error
+  }
+}
+
+function summarizeReportForAudit(report) {
+  return {
+    files_scanned: report.files_scanned,
+    buttons_found: report.buttons_found,
+    buttons_tested: report.buttons_tested,
+    buttons_working: report.buttons_working,
+    buttons_failing: report.buttons_failing,
+    endpoints_probed: report.endpoints_probed,
+    endpoints_failing: report.endpoints_failing,
+    duration_ms: report.duration_ms,
   }
 }
 

@@ -17,6 +17,9 @@ import {
 } from '../services/anyaOrchestrator.js'
 import { createAnyaRun, appendAnyaRunLog, completeAnyaRun } from '../services/anyaRuns.js'
 
+import { createLogger } from '../utils/logger.js'
+const routeLogger = createLogger('route:anya')
+
 const router = express.Router()
 
 const resolveAdminToken = () => process.env.ADMIN_TOKEN || process.env.ANYA_ADMIN_TOKEN || null
@@ -72,6 +75,42 @@ function handleError(res, error) {
   const status = error?.status || 500
   return res.status(status).json({ error: error.message || 'Unexpected error' })
 }
+
+// Public Anya health probe — used by endpointHealth + external uptime checks.
+// Returns counters so a single GET is enough to see whether Anya is grounded.
+router.get('/health', async (req, res) => {
+  const db = req.db
+  async function safeCount(sql, params = []) {
+    try {
+      const row = await db.prepare(sql).get(...params)
+      if (!row) return 0
+      const v = row.count ?? row.c ?? row.n ?? Object.values(row)[0]
+      return Number(v) || 0
+    } catch {
+      return 0
+    }
+  }
+  const now = new Date()
+  const dayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString()
+
+  const [brain_memories, tool_usage_24h, sessions_24h, tool_registry] = await Promise.all([
+    safeCount('SELECT COUNT(*) AS count FROM anya_brain_memory'),
+    safeCount('SELECT COUNT(*) AS count FROM anya_tool_usage WHERE ts >= ?', [dayAgo]),
+    safeCount("SELECT COUNT(*) AS count FROM anya_sessions WHERE created_at >= ?", [dayAgo]),
+    safeCount('SELECT COUNT(*) AS count FROM anya_tool_registry_snapshot'),
+  ])
+
+  res.json({
+    ok: true,
+    service: 'anya',
+    version: process.env.RAILWAY_DEPLOYMENT_ID || process.env.npm_package_version || 'dev',
+    checked_at: now.toISOString(),
+    brain_memories,
+    tool_usage_24h,
+    sessions_24h,
+    tool_registry,
+  })
+})
 
 router.get('/status', adminAuth, async (_req, res) => {
   const shouldTest = String(_req.query?.test || '').toLowerCase() === 'true'

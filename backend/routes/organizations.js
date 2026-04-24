@@ -13,6 +13,9 @@ import {
 } from '../services/profileOrganizationSync.js'
 import { getAccessibleOrganizationIds, isAdminUser, ensureOrganizationAccess, requireAuthenticatedUser } from '../utils/accessControl.js'
 
+import { createLogger } from '../utils/logger.js'
+const routeLogger = createLogger('route:organizations')
+
 const router = express.Router();
 router.use(ensureAuth); // Apply auth to all routes
 
@@ -55,7 +58,7 @@ router.get('/', ensureAuth, async (req, res) => {
     if (!isAdminUser(user)) {
       const orgIds = await getAccessibleOrganizationIds(req.db, user)
       if (!orgIds || orgIds.size === 0) {
-        console.info('[organizations] GET / - user %s has no accessible org IDs; returning empty list', user?.id ?? 'unknown')
+        routeLogger.info('[organizations] GET / - user %s has no accessible org IDs; returning empty list', user?.id ?? 'unknown')
         return res.json([])
       }
       const placeholders = Array.from(orgIds).map(() => '?').join(', ')
@@ -132,7 +135,7 @@ async function mergeProfileSectionsIntoOrg(db, orgId, base) {
   const orgDetails = sections.organization_details ?? {}
   const comprehensive = sections.comprehensive_application ?? {}
 
-  const mergeValue = (a, b) => (b != null && b !== '' && (Array.isArray(b) ? b.length > 0 : true) ? b : a)
+  const mergeValue = (a, b) => ((b !== null && b !== undefined) && b !== '' && (Array.isArray(b) ? b.length > 0 : true) ? b : a)
 
   return {
     ...base,

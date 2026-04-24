@@ -547,6 +547,19 @@ export function registerTool({ name, description, schema, handler, requiresAdmin
     throw new Error('Tool handler must be a function')
   }
 
+  // Duplicate ids silently overwrote each other before, which the mission
+  // audit flagged as a tool-registry overlap root problem. Make the
+  // collision loud so bootstraps fail fast instead of shipping a registry
+  // where the "last registration wins" outcome depends on module load
+  // order.
+  if (tools.has(name)) {
+    const err = new Error(
+      `Duplicate Anya tool id "${name}" — each tool id must register exactly once.`
+    )
+    err.status = 500
+    throw err
+  }
+
   tools.set(name, {
     name,
     description: description ?? '',
@@ -554,6 +567,26 @@ export function registerTool({ name, description, schema, handler, requiresAdmin
     handler,
     requiresAdmin: Boolean(requiresAdmin),
   })
+}
+
+/**
+ * Startup assertion — throws if any tool id was registered more than once
+ * at import time. Safe to call from server boot / health checks.
+ */
+export function assertNoDuplicateToolIds() {
+  const seen = new Map()
+  for (const name of tools.keys()) {
+    const n = String(name).toLowerCase()
+    if (seen.has(n)) {
+      const err = new Error(
+        `Anya tool registry contains duplicate id: "${name}" (also seen as "${seen.get(n)}")`
+      )
+      err.status = 500
+      throw err
+    }
+    seen.set(n, name)
+  }
+  return tools.size
 }
 
 export function listToolMetadata(ctx = null) {
@@ -636,12 +669,53 @@ export async function invokeTool(name, params, context) {
     }
   }
 
-  const result = await tool.handler(params ?? {}, context ?? {})
-
-  return {
-    id: randomUUID(),
-    tool: tool.name,
-    output: result,
+  // Record the invocation in anya_tool_usage regardless of outcome.
+  // The admin.brain.stats / admin.diagnostics checks read from this table to
+  // verify Anya is actually being exercised; before this hook the table stayed
+  // empty, which triggered mission goal 15 (Anya grounding) to FAIL.
+  const startedAt = Date.now()
+  let ok = true
+  let errorMessage = null
+  let result
+  try {
+    result = await tool.handler(params ?? {}, context ?? {})
+    return {
+      id: randomUUID(),
+      tool: tool.name,
+      output: result,
+    }
+  } catch (err) {
+    ok = false
+    errorMessage = err?.message ? String(err.message).slice(0, 500) : String(err).slice(0, 500)
+    throw err
+  } finally {
+    try {
+      const db = context?.db
+      if (db && typeof db.prepare === 'function') {
+        const user = context?.user || {}
+        await db
+          .prepare(
+            `INSERT INTO anya_tool_usage
+               (id, tool_name, session_id, user_id, profile_id, parameters, success, error_message, execution_time_ms)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          )
+          .run(
+            randomUUID(),
+            String(name),
+            context?.sessionId ?? context?.session_id ?? null,
+            user.userId ?? user.id ?? null,
+            context?.profile_id ?? context?.profileId ?? null,
+            JSON.stringify(params ?? {}).slice(0, 4000),
+            ok ? 1 : 0,
+            errorMessage,
+            Date.now() - startedAt,
+          )
+      }
+    } catch (persistErr) {
+      // Never block tool execution on usage-log failures; warn once.
+       
+      console.warn('[anyaToolRegistry] failed to log anya_tool_usage:', persistErr?.message || persistErr)
+    }
   }
 }
 

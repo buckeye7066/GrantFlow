@@ -116,14 +116,14 @@ export async function logAuditEvent(db, {
 }
 
 function coerceCount(value) {
-  if (value == null) return 0
+  if ((value === null || value === undefined)) return 0
   if (typeof value === 'number') return value
   const n = Number(value)
   return Number.isFinite(n) ? n : 0
 }
 
 function parseDetailsValue(raw) {
-  if (raw == null) return null
+  if ((raw === null || raw === undefined)) return null
   if (typeof raw === 'object') return raw
   if (typeof raw !== 'string') return null
   try {

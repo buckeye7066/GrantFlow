@@ -120,6 +120,7 @@ export async function ensureProfileOrgLinks(db, opts = {}) {
     `INSERT INTO organizations (id, name, email, applicant_type, created_at, updated_at)
      VALUES (?, ?, ?, ?, ${nowSql}, ${nowSql})`
   )
+  // audit:allow dynamic-sql — nowSql is a dialect-safe SQL literal ("NOW()" or "CURRENT_TIMESTAMP")
   const stmtUpdateProfile = db.prepare(`UPDATE profiles SET organization_id = ?, updated_at = ${nowSql} WHERE id = ?`)
 
   const _linkProfilesSync = (tx) => {

@@ -60,8 +60,8 @@ function normaliseLegacyHit(hit) {
 
   // Without an id OR a number we cannot form a meaningful application URL;
 // return null so the caller's .filter(Boolean) drops this record entirely.
-if (id == null && !number) return null
-const url = id != null
+if ((id === null || id === undefined) && !number) return null
+const url = (id !== null && id !== undefined)
   ? `${GRANTS_GOV_DETAIL}${id}`
   : `https://www.grants.gov/search-grants?query=${encodeURIComponent(String(number))}`
 
@@ -108,8 +108,8 @@ function normaliseSimplerHit(hit) {
 
   // Without an id OR a number we cannot form a meaningful application URL;
 // return null so the caller's .filter(Boolean) drops this record entirely.
-if (id == null && !number) return null
-const url = id != null
+if ((id === null || id === undefined) && !number) return null
+const url = (id !== null && id !== undefined)
   ? `${GRANTS_GOV_DETAIL}${id}`
   : `https://www.grants.gov/search-grants?query=${encodeURIComponent(String(number))}`
 
@@ -326,7 +326,7 @@ export async function searchGrants(keyword, opts = {}) {
   const merged = []
   for (const opp of [...legacyResult.hits, ...simplerResult.hits]) {
   // Prefer a stable compound key (source_id + api_source); fall back to title
-  const stableKey = opp.source_id != null
+  const stableKey = (opp.source_id !== null && opp.source_id !== undefined)
     ? `${opp._api_source}::${opp.source_id}`
     : (opp.title || '').toLowerCase().trim()
   if (!stableKey) continue
@@ -384,15 +384,27 @@ export async function searchGrantsBatch(strategies, opts = {}) {
         simpler_count: result.diagnostics?.simpler?.count ?? 0,
       }
 
-      if (result.diagnostics?.legacy?.ok != null) {
-        legacyReachable = legacyReachable === null ? result.diagnostics.legacy.ok : (legacyReachable || result.diagnostics.legacy.ok)
+      if (
+        result.diagnostics?.legacy?.ok !== null &&
+        result.diagnostics?.legacy?.ok !== undefined
+      ) {
+        legacyReachable =
+          legacyReachable === null
+            ? result.diagnostics.legacy.ok
+            : legacyReachable || result.diagnostics.legacy.ok
       }
-      if (result.diagnostics?.simpler?.ok != null) {
-        simplerReachable = simplerReachable === null ? result.diagnostics.simpler.ok : (simplerReachable || result.diagnostics.simpler.ok)
+      if (
+        result.diagnostics?.simpler?.ok !== null &&
+        result.diagnostics?.simpler?.ok !== undefined
+      ) {
+        simplerReachable =
+          simplerReachable === null
+            ? result.diagnostics.simpler.ok
+            : simplerReachable || result.diagnostics.simpler.ok
       }
 
       for (const opp of result.opportunities) {
-  const stableKey = opp.source_id != null
+  const stableKey = (opp.source_id !== null && opp.source_id !== undefined)
     ? `${opp._api_source}::${opp.source_id}`
     : (opp.title || '').toLowerCase().trim()
   if (!stableKey) continue

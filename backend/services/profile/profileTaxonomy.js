@@ -458,6 +458,7 @@ export const SECTION_MAPPERS = Object.freeze({
   housing: passthrough,
   family: passthrough,
   programs_services: mapProgramsServices,
+  funding_needs: passthrough,
   comprehensive_application: passthrough,
 })
 

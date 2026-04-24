@@ -2,6 +2,9 @@ import express from 'express'
 import crypto from 'crypto'
 import { formatError } from '../middleware/errorHandler.js'
 
+import { createLogger } from '../utils/logger.js'
+const routeLogger = createLogger('route:grantMonitoring')
+
 const router = express.Router()
 function isAdmin(req, res) {
   if (!req.ctx?.userId) {

@@ -38,7 +38,7 @@ function scoreBadgeColor(score) {
 }
 
 function ScoreBadge({ score }) {
-  if (score == null) return null
+  if (score === null) return null
   return (
     <span className={cn(
       "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-semibold tabular-nums",
@@ -152,7 +152,7 @@ function ZipSection({ zip, county, count, state, profileId, defaultOpen }) {
           ) : opportunities.length === 0 ? (
             <div className="px-6 py-4 text-sm text-slate-400">
               {showScore
-                ? totalFound != null && totalFound > 0
+                ? totalFound !== null && totalFound > 0
                   ? `${totalFound} ${totalFound === 1 ? "opportunity" : "opportunities"} found but none matched your profile. Adding details like housing needs, income, military status, or disabilities to your profile often unlocks more results.`
                   : "No matches found for your profile in this zip code. Adding details like housing needs, income, military status, or disabilities to your profile often unlocks more results."
                 : "No opportunities indexed for this zip code yet."}

@@ -44,6 +44,32 @@ export default [
       'react-hooks/exhaustive-deps': 'off',
       'react-hooks/set-state-in-effect': 'off',
       'no-case-declarations': 'off',
+      // Enforce strict equality across the entire repo. Audit flagged
+      // `== null` / `!= null` patterns as latent bug surfaces (implicit
+      // coercion of user input, DB column values, etc.). Callers that
+      // truly mean "null or undefined" must spell it out explicitly.
+      eqeqeq: ['error', 'always'],
+    },
+  },
+  {
+    // No-console guard: production route/service code must route through
+    // backend/utils/logger.js. Test files, scripts, and CLI tooling are
+    // still allowed to use console.* directly.
+    files: ['backend/routes/**/*.js'],
+    rules: {
+      // Routes must log through backend/utils/logger.js. console.warn and
+      // console.error remain allowed for hard failures during request
+      // handling where structured logging is not yet wired.
+      'no-console': ['error', { allow: ['warn', 'error'] }],
+    },
+  },
+  {
+    files: ['backend/services/**/*.js'],
+    rules: {
+      // Services are encouraged to log through backend/utils/logger.js;
+      // keep this at 'warn' during the ongoing migration so the CI lint
+      // step surfaces drift without failing the build on every change.
+      'no-console': ['warn', { allow: ['warn', 'error'] }],
     },
   },
 ]

@@ -2,6 +2,9 @@ import express from 'express'
 
 import { ensureAuth } from '../middleware/auth.js';
 
+import { createLogger } from '../utils/logger.js'
+const routeLogger = createLogger('route:nfPrograms')
+
 const router = express.Router();
 
 router.use(ensureAuth);

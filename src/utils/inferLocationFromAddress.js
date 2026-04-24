@@ -6,7 +6,7 @@
  * @returns {{ state: string|null, zip: string|null }}
  */
 export function inferUsStateZipFromText(text) {
-  if (text == null || typeof text !== 'string') return { state: null, zip: null }
+  if (text === null || typeof text !== 'string') return { state: null, zip: null }
   const s = text.replace(/\s+/g, ' ').trim()
   if (!s) return { state: null, zip: null }
 
@@ -28,14 +28,14 @@ export function inferUsStateZipFromText(text) {
 }
 
 function normState(v) {
-  if (v == null) return null
+  if (v === null) return null
   const t = String(v).trim()
   if (t.length === 2) return t.toUpperCase()
   return null
 }
 
 function normZip(v) {
-  if (v == null) return null
+  if (v === null) return null
   const d = String(v).replace(/\D/g, '')
   return d.length >= 5 ? d.slice(0, 5) : null
 }
@@ -75,7 +75,7 @@ export function collectAddressTextForInference(
 ) {
   const parts = []
   const push = (v) => {
-    if (v == null) return
+    if (v === null) return
     if (typeof v === 'string' && v.trim()) parts.push(v.trim())
   }
 
@@ -91,7 +91,7 @@ export function collectAddressTextForInference(
       if (typeof a[k] === 'string') push(a[k])
     })
     const cityLine = [a.city, a.state || a.region, a.zip || a.postal_code || a.postal || a.zip_code]
-      .filter((x) => x != null && String(x).trim())
+      .filter((x) => x !== null && String(x).trim())
       .join(' ')
     push(cityLine)
   }
@@ -99,7 +99,7 @@ export function collectAddressTextForInference(
   push(locationFocus?.full_address)
   if (org && typeof org === 'object') {
     if (typeof org.address === 'string') push(org.address)
-    push([org.city, org.state, org.zip].filter((x) => x != null && String(x).trim()).join(' '))
+    push([org.city, org.state, org.zip].filter((x) => x !== null && String(x).trim()).join(' '))
   }
 
   if (comprehensive && typeof comprehensive === 'object' && typeof comprehensive.address === 'string') {

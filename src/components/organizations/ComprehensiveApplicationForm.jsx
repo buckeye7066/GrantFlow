@@ -256,7 +256,7 @@ export default function ComprehensiveApplicationForm({ onSubmit, onCancel, isSub
     ];
     const sanitized = { ...initialData };
     SELECT_FIELDS.forEach((f) => {
-      if (sanitized[f] == null) sanitized[f] = '';
+      if (sanitized[f] === null) sanitized[f] = '';
     });
     setFormData((prev) => ({ ...prev, ...sanitized }));
     appliedInitialDataRef.current = true;

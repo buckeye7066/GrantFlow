@@ -7,6 +7,9 @@ import {
   getAccessibleOrganizationIds,
 } from '../utils/accessControl.js'
 
+import { createLogger } from '../utils/logger.js'
+const routeLogger = createLogger('route:contacts')
+
 const router = express.Router()
 
 let contactsHasProfileIdColumnCache = null
@@ -57,7 +60,7 @@ router.get('/', async (req, res) => {
     // SECURITY: Contacts are org-scoped by default. When `contacts.profile_id` is set, contacts become
     // profile-scoped. We log access under active profile context to make intent explicit.
     if (!req.ctx?.isAdmin && req.ctx?.activeProfileId) {
-      console.info('[contacts] list accessed by profile', {
+      routeLogger.info('[contacts] list accessed by profile', {
         userId: req.ctx.userId,
         profileId: req.ctx.activeProfileId,
         orgId,

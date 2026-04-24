@@ -2,6 +2,9 @@ import express from 'express'
 import { requireAuthenticatedUser } from '../utils/accessControl.js'
 import { standardRateLimiter } from '../middleware/rateLimiting.js'
 
+import { createLogger } from '../utils/logger.js'
+const routeLogger = createLogger('route:stats')
+
 const router = express.Router()
 
 // Marketing stats for non-admin users

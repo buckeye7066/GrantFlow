@@ -118,8 +118,8 @@ export function transformGrantsGovOpportunity(opp) {
     source: 'grants.gov',
     // De-dupe by Grants.gov opportunity number (idempotent).
     source_id: oppNumber || null,
-    source_url: oppId != null ? `${GRANTS_GOV_VIEW}${oppId}` : oppNumber ? `https://www.grants.gov/search-results-detail/${encodeURIComponent(String(oppNumber))}` : null,
-    application_url: oppId != null ? `${GRANTS_GOV_VIEW}${oppId}` : oppNumber ? `https://www.grants.gov/search-results-detail/${encodeURIComponent(String(oppNumber))}` : null,
+    source_url: (oppId !== null && oppId !== undefined) ? `${GRANTS_GOV_VIEW}${oppId}` : oppNumber ? `https://www.grants.gov/search-results-detail/${encodeURIComponent(String(oppNumber))}` : null,
+    application_url: (oppId !== null && oppId !== undefined) ? `${GRANTS_GOV_VIEW}${oppId}` : oppNumber ? `https://www.grants.gov/search-results-detail/${encodeURIComponent(String(oppNumber))}` : null,
     description: opp?.synopsis || opp?.description || `Grants.gov opportunity ${oppNumber}${oppStatus ? ` (${oppStatus})` : ''}`.trim(),
     amount_min: parseAmount(opp?.awardFloor) || null,
     amount_max: parseAmount(opp?.awardCeiling) || null,

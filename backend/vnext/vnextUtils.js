@@ -1,5 +1,5 @@
 export function safeJsonParse(value, fallback = null) {
-  if (value == null) return fallback
+  if ((value === null || value === undefined)) return fallback
   if (typeof value === 'object') return value
   if (typeof value !== 'string') return fallback
   const trimmed = value.trim()
@@ -12,7 +12,7 @@ export function safeJsonParse(value, fallback = null) {
 }
 
 export function jsonForDb(db, value) {
-  if (value == null) return null
+  if ((value === null || value === undefined)) return null
   if (db?.dialect === 'postgres') return value
   try {
     return JSON.stringify(value)

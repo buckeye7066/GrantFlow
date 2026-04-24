@@ -73,7 +73,7 @@ function daysUntilDeadline(deadlineDateStr) {
 }
 
 function formatCurrency(amount) {
-  if (amount == null) return null
+  if (amount === null) return null
   return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(amount)
 }
 
@@ -89,8 +89,8 @@ function StatusBadge({ status }) {
 // ── Application Card ─────────────────────────────────────────────────────────
 function ApplicationCard({ app, onEdit, onDelete, onSubmit, onOutcome, onMoveForward }) {
   const days = daysUntilDeadline(app.deadline_date)
-  const deadlineUrgent = days != null && days >= 0 && days < 7
-  const deadlinePast = days != null && days < 0
+  const deadlineUrgent = days !== null && days >= 0 && days < 7
+  const deadlinePast = days !== null && days < 0
 
   return (
     <Card className="mb-3 shadow-sm hover:shadow-md transition-shadow">
@@ -101,16 +101,16 @@ function ApplicationCard({ app, onEdit, onDelete, onSubmit, onOutcome, onMoveFor
         {app.funder_name && (
           <p className="text-xs text-slate-500 mb-1">{app.funder_name}</p>
         )}
-        {app.amount_requested != null && (
+        {app.amount_requested !== null && (
           <p className="text-xs text-slate-600 mb-1">Requested: <span className="font-medium">{formatCurrency(app.amount_requested)}</span></p>
         )}
-        {app.status === 'awarded' && app.amount_awarded != null && (
+        {app.status === 'awarded' && app.amount_awarded !== null && (
           <p className="text-xs text-green-700 mb-1">Awarded: <span className="font-medium">{formatCurrency(app.amount_awarded)}</span></p>
         )}
         {app.deadline_date && (
           <p className={`text-xs mb-2 ${deadlinePast ? 'text-slate-400 line-through' : deadlineUrgent ? 'text-red-600 font-semibold' : 'text-slate-500'}`}>
             Deadline: {app.deadline_date}
-            {days != null && !deadlinePast && (
+            {days !== null && !deadlinePast && (
               <span className={`ml-1 ${deadlineUrgent ? 'text-red-600' : 'text-slate-400'}`}>
                 ({days === 0 ? 'today' : `${days}d`})
               </span>
@@ -204,7 +204,7 @@ function ApplicationForm({ initialValues, profiles, onSave, onCancel, isSaving }
   const [form, setForm] = useState(() => ({
     ...EMPTY_FORM,
     ...(initialValues || {}),
-    amount_requested: initialValues?.amount_requested != null ? String(initialValues.amount_requested) : '',
+    amount_requested: initialValues?.amount_requested !== null ? String(initialValues.amount_requested) : '',
     // Ensure Select-bound fields are always strings (DB may return null)
     profile_id: initialValues?.profile_id ?? '',
     status: initialValues?.status ?? 'draft',

@@ -489,7 +489,7 @@ export default function Pipeline() {
                       <span className="font-medium">{a.state}</span>
                       <span className="text-slate-500"> — EV: </span>
                       <span className="text-slate-700">
-                        {a.expected_value != null ? Number(a.expected_value).toFixed(2) : "—"}
+                        {a.expected_value !== null ? Number(a.expected_value).toFixed(2) : "—"}
                       </span>
                     </div>
                     <Button

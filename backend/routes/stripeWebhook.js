@@ -2,6 +2,9 @@ import express from 'express'
 import { verifyAndConstructStripeEvent, recordStripeEventIfNew } from '../services/stripeService.js'
 import { ensureServiceCatalogSchema } from '../services/serviceCatalogStore.js'
 
+import { createLogger } from '../utils/logger.js'
+const routeLogger = createLogger('route:stripeWebhook')
+
 const router = express.Router()
 
 // Stripe requires the *raw* request body for signature verification.

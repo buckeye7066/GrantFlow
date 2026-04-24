@@ -5,6 +5,9 @@ import {
   ensureProfileAccess,
 } from '../utils/accessControl.js'
 
+import { createLogger } from '../utils/logger.js'
+const routeLogger = createLogger('route:grantApplications')
+
 const router = express.Router()
 
 const VALID_STATUSES = new Set([
@@ -142,7 +145,7 @@ router.post('/', async (req, res) => {
         data.title ? String(data.title).trim() : null,
         grantName,
         data.funder_name ? String(data.funder_name).trim() : null,
-        data.amount_requested != null ? Number(data.amount_requested) : null,
+        (data.amount_requested !== null && data.amount_requested !== undefined) ? Number(data.amount_requested) : null,
         data.deadline_date ? String(data.deadline_date) : null,
         data.response_expected_date ? String(data.response_expected_date) : null,
         data.notes ? String(data.notes) : null,
@@ -207,12 +210,12 @@ router.put('/:id', async (req, res) => {
     const data = req.body ?? {}
 
     // Validate status if provided
-    if (data.status != null && !VALID_STATUSES.has(String(data.status))) {
+    if ((data.status !== null && data.status !== undefined) && !VALID_STATUSES.has(String(data.status))) {
       return res.status(400).json({ error: `Invalid status. Valid values: ${[...VALID_STATUSES].join(', ')}` })
     }
 
     const now = new Date().toISOString()
-    const newStatus = data.status != null ? String(data.status) : row.status
+    const newStatus = (data.status !== null && data.status !== undefined) ? String(data.status) : row.status
 
     await req.db
       .prepare(
@@ -237,8 +240,8 @@ router.put('/:id', async (req, res) => {
         data.title !== undefined ? (data.title ? String(data.title).trim() : null) : row.title,
         data.grant_name !== undefined ? String(data.grant_name).trim() : row.grant_name,
         data.funder_name !== undefined ? (data.funder_name ? String(data.funder_name).trim() : null) : row.funder_name,
-        data.amount_requested !== undefined ? (data.amount_requested != null ? Number(data.amount_requested) : null) : row.amount_requested,
-        data.amount_awarded !== undefined ? (data.amount_awarded != null ? Number(data.amount_awarded) : null) : row.amount_awarded,
+        data.amount_requested !== undefined ? ((data.amount_requested !== null && data.amount_requested !== undefined) ? Number(data.amount_requested) : null) : row.amount_requested,
+        data.amount_awarded !== undefined ? ((data.amount_awarded !== null && data.amount_awarded !== undefined) ? Number(data.amount_awarded) : null) : row.amount_awarded,
         data.deadline_date !== undefined ? (data.deadline_date ? String(data.deadline_date) : null) : row.deadline_date,
         data.response_expected_date !== undefined ? (data.response_expected_date ? String(data.response_expected_date) : null) : row.response_expected_date,
         data.response_received_at !== undefined ? (data.response_received_at ? String(data.response_received_at) : null) : row.response_received_at,
@@ -364,7 +367,7 @@ router.post('/:id/outcome', async (req, res) => {
       )
       .run(
         outcome,
-        data.amount_awarded != null ? Number(data.amount_awarded) : row.amount_awarded,
+        (data.amount_awarded !== null && data.amount_awarded !== undefined) ? Number(data.amount_awarded) : row.amount_awarded,
         data.notes !== undefined ? (data.notes ? String(data.notes) : null) : row.notes,
         now,
         now,

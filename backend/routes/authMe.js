@@ -15,6 +15,9 @@ import express from 'express'
 import rateLimit from 'express-rate-limit'
 import { ensureProfileEmailSchema } from '../utils/accessControl.js'
 
+import { createLogger } from '../utils/logger.js'
+const routeLogger = createLogger('route:authMe')
+
 // ---------------------------------------------------------------------------
 // Rate limiter: 100 requests per 5 minutes per IP
 // ---------------------------------------------------------------------------

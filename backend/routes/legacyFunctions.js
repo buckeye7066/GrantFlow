@@ -15,6 +15,9 @@ import { safeParseJSON } from '../utils/safeJson.js'
 import { requireTierCapability, TIER_CAPABILITIES } from '../utils/tierGating.js'
 import { extractStateFromContext, loadProfileContext } from '../services/profileHelpers.js'
 
+import { createLogger } from '../utils/logger.js'
+const routeLogger = createLogger('route:legacyFunctions')
+
 const router = express.Router()
 
 function nowIso() {

@@ -2,6 +2,9 @@ import express from 'express'
 import crypto from 'crypto'
 import ensureUserPreferencesTable from '../utils/ensureUserPreferencesTable.js'
 
+import { createLogger } from '../utils/logger.js'
+const routeLogger = createLogger('route:preferences')
+
 const router = express.Router()
 
 const DEFAULT_PREFERENCES = {

@@ -88,7 +88,9 @@ describe('POST /api/admin/anya/runAutonomous', () => {
       await new Promise((resolve) => server.close(resolve))
     }
     if (originalCwd) process.chdir(originalCwd)
-    if (tmpDir) await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {})
+    if (tmpDir) await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {
+      /* intentionally ignored: test tmpdir cleanup is best-effort */
+    })
   }, 30_000)
 
   it('returns 200 with {id, tool, output} envelope and real metrics', async () => {

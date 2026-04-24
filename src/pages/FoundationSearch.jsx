@@ -23,7 +23,7 @@ const US_STATES = [
 ]
 
 function formatCurrency(n) {
-  if (n == null || !Number.isFinite(n)) return "N/A"
+  if (n === null || !Number.isFinite(n)) return "N/A"
   if (n >= 1_000_000_000) return `$${(n / 1_000_000_000).toFixed(1)}B`
   if (n >= 1_000_000) return `$${(n / 1_000_000).toFixed(1)}M`
   if (n >= 1_000) return `$${(n / 1_000).toFixed(0)}K`
@@ -195,13 +195,13 @@ export default function FoundationSearch() {
                             {org.city && org.state && (
                               <span className="flex items-center gap-1"><MapPin className="w-3 h-3" /> {org.city}, {org.state}</span>
                             )}
-                            {org.income_amount != null && (
+                            {org.income_amount !== null && (
                               <span className="flex items-center gap-1"><TrendingUp className="w-3 h-3" /> Income: {formatCurrency(org.income_amount)}</span>
                             )}
-                            {org.asset_amount != null && (
+                            {org.asset_amount !== null && (
                               <span className="flex items-center gap-1"><DollarSign className="w-3 h-3" /> Assets: {formatCurrency(org.asset_amount)}</span>
                             )}
-                            {org.grant_amount != null && org.grant_amount > 0 && (
+                            {org.grant_amount !== null && org.grant_amount > 0 && (
                               <span className="flex items-center gap-1 font-medium text-emerald-700"><DollarSign className="w-3 h-3" /> Grants Paid: {formatCurrency(org.grant_amount)}</span>
                             )}
                           </div>
@@ -288,7 +288,7 @@ export default function FoundationSearch() {
                             <p className="text-sm text-slate-500 line-clamp-2">{opp.description}</p>
                           )}
                           <div className="flex flex-wrap gap-3 text-xs text-slate-500 mt-2">
-                            {opp.amount_max != null && (
+                            {opp.amount_max !== null && (
                               <span className="font-medium text-emerald-700">{formatCurrency(opp.amount_max)}</span>
                             )}
                             {opp.state && opp.state !== "nationwide" && (
@@ -368,7 +368,7 @@ export default function FoundationSearch() {
                             {opp.categories?.map((c) => (
                               <Badge key={c} variant="outline" className="text-xs capitalize">{c}</Badge>
                             ))}
-                            {opp.amount_max != null && (
+                            {opp.amount_max !== null && (
                               <Badge variant="secondary" className="text-xs">{formatCurrency(opp.amount_max)}</Badge>
                             )}
                           </div>

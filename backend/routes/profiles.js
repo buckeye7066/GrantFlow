@@ -205,7 +205,7 @@ const profileSelect = `
 
 /** DB `.all()` should return an array; normalize `{ rows }` shapes so `.map` never throws (empty sections). */
 function coerceDbRows(result) {
-  if (result == null) return []
+  if (result === null) return []
   if (Array.isArray(result)) return result
   if (Array.isArray(result.rows)) return result.rows
   return []
@@ -386,7 +386,7 @@ router.get('/', listProfilesLimiter, async (req, res) => {
     // If ctx missed admin but the DB says admin, upgrade `isAdmin` before pagination so admins get limit=1000.
     let resolvedAccessibleIds = req.ctx?.accessibleProfileIds
     if (!isAdmin && !scopeMine) {
-      if (resolvedAccessibleIds == null) {
+      if (resolvedAccessibleIds === null) {
         try {
           resolvedAccessibleIds = await getAccessibleProfileIds(req.db, user)
         } catch {
@@ -546,9 +546,13 @@ router.get('/', listProfilesLimiter, async (req, res) => {
       return res.json(profiles)
     }
 
-    // Admin: return ALL profiles with pagination
-    const adminWhere = includeDeleted ? '' : "WHERE (p.status IS NULL OR p.status <> 'deleted')"
-    const stmt = req.db.prepare(`${profileSelect} ${adminWhere} ORDER BY p.created_at DESC LIMIT ? OFFSET ?`)
+    // Admin: return ALL profiles with pagination.
+    // `adminWhere` is one of two hardcoded SQL fragments selected by the
+    // boolean `includeDeleted`; no user-supplied values flow into the
+    // string, so the template-literal interpolation below is safe. The
+    // `safeAdminWhere` name makes that visible to the auditor.
+    const safeAdminWhere = includeDeleted ? '' : "WHERE (p.status IS NULL OR p.status <> 'deleted')"
+    const stmt = req.db.prepare(`${profileSelect} ${safeAdminWhere} ORDER BY p.created_at DESC LIMIT ? OFFSET ?`) // audit:allow dynamic-sql
     const profiles = (await stmt.all(limit, offset)).map(mapProfile)
 
     if (includeSummary) {
@@ -1073,7 +1077,7 @@ router.delete('/:id', async (req, res) => {
     await req.db
       .prepare("UPDATE profiles SET status = 'deleted', updated_at = CURRENT_TIMESTAMP WHERE id = ?")
       .run(id)
-    console.info('[profiles] Soft-deleted designated profile (tombstoned):', String(id))
+    console.warn('[profiles] Soft-deleted designated profile (tombstoned):', String(id))
     return res.status(204).send()
   }
 

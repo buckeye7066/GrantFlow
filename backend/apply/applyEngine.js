@@ -3,7 +3,11 @@ import JSZip from 'jszip'
 import { writeApplicationArtifact } from './storageAdapter.js'
 import { createOpenAIClient } from '../utils/openaiClient.js'
 import { requiresMedicalNecessity, generateMedicalNecessityDocument, DOCUMENT_TYPES } from '../services/medicalNecessity.js'
-import { assertAllowedKeySet, buildEqualityWhereClause } from '../utils/safeSql.js'
+import { assertAllowedKeySet, buildEqualityWhereClause, assertSafeIdentifier } from '../utils/safeSql.js'
+import { getScopedOpportunityForApplication } from '../utils/scopedOpportunity.js'
+import { createLogger } from '../utils/logger.js'
+
+const applyLog = createLogger('applyEngine')
 
 // Hardcoded allowlist of tables + acceptable composite unique key sets used by
 // the apply engine. Any dynamic table/identifier interpolation in this file
@@ -367,7 +371,10 @@ async function upsertByUniqueKey({
   const tableEntry = assertApplyEngineTable(table)
   assertAllowedKeySet(uniqueKeys, tableEntry.allowedUniqueKeys, `${table} unique key set`)
 
-  const safeTable = tableEntry.table
+  // Double-validate: tableEntry.table must also satisfy the global identifier
+  // allowlist so any drift between APPLY_ENGINE_TABLES and safeSql's list is
+  // caught at the throw site instead of leaking an injection surface.
+  const safeTable = assertSafeIdentifier(tableEntry.table, 'table')
   const uniqueWhereSql = buildEqualityWhereClause(uniqueKeys)
 
   const existing = await db
@@ -477,8 +484,10 @@ export async function upsertSection({ db, applicationId, sectionKey, title, cont
   await getApplicationOr404(db, applicationId)
 
   const key = String(sectionKey)
-  const t = title !== undefined ? (title == null ? null : String(title)) : null
-  const c = content !== undefined ? (content == null ? null : String(content)) : null
+  // `=== null` is safe here because the outer ternary already handled
+  // `undefined`. eqeqeq-clean.
+  const t = title !== undefined ? (title === null ? null : String(title)) : null
+  const c = content !== undefined ? (content === null ? null : String(content)) : null
 
   const result = await upsertByUniqueKey({
     db,
@@ -523,7 +532,7 @@ export async function setChecklistItem({ db, applicationId, key, label, status }
   await getApplicationOr404(db, applicationId)
 
   const k = String(key)
-  const l = label !== undefined ? (label == null ? null : String(label)) : null
+  const l = label !== undefined ? (label === null ? null : String(label)) : null
   const s = normalizeChecklistStatus(status)
 
   const result = await upsertByUniqueKey({
@@ -854,9 +863,12 @@ export async function autoPopulate({ db, applicationId }) {
 
   // Gather profile data for AI content generation
   const profileData = await gatherProfileForApplication(db, grant)
-  const opportunity = grant?.funding_opportunity_id
-    ? await db.prepare('SELECT * FROM funding_opportunities WHERE id = ?').get(grant.funding_opportunity_id)
-    : null
+  // Scoped lookup: resolve opportunity *through* the application→grant chain
+  // rather than trusting a raw opportunity id. If the chain is intact the
+  // opportunity is returned; otherwise we continue without it so auto-populate
+  // still works for free-form grants that were entered manually.
+  const scoped = await getScopedOpportunityForApplication(db, applicationId)
+  const opportunity = scoped.opportunity
 
   const medNecCheck = requiresMedicalNecessity(opportunity || {})
 

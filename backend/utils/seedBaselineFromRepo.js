@@ -71,7 +71,7 @@ function normalizeRecordOrigin(raw) {
 }
 
 function normalizeDocumentStatus(raw) {
-  if (raw == null) return null
+  if ((raw === null || raw === undefined)) return null
   const v = String(raw ?? '').trim()
   if (!v) return null
   // Canonical statuses (SQLite + Postgres schemas)

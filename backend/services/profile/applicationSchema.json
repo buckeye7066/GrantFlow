@@ -21,7 +21,8 @@
     "employment",
     "housing",
     "family",
-    "programs_services"
+    "programs_services",
+    "funding_needs"
   ],
   "fallback_section_keys": [
     "comprehensive_application"

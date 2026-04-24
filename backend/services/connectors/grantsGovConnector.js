@@ -107,7 +107,7 @@ export async function searchOpportunities(params = {}) {
       const costSharing = hit?.costSharingOrMatchingRequirement ?? hit?.costSharing ?? ''
 
       const url =
-        id != null
+        (id !== null && id !== undefined)
           ? `https://www.grants.gov/search-results-detail/${id}`
           : number
             ? `https://www.grants.gov/search-grants?query=${encodeURIComponent(String(number))}`

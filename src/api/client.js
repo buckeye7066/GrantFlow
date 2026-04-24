@@ -278,19 +278,19 @@ class APIClient {
 
   post(endpoint, body, options = {}) {
     const payload =
-      body instanceof FormData || typeof body === 'string' || body == null ? body : JSON.stringify(body)
+      body instanceof FormData || typeof body === 'string' || body === null ? body : JSON.stringify(body)
     return this.fetch(endpoint, { ...options, method: 'POST', body: payload })
   }
 
   put(endpoint, body, options = {}) {
     const payload =
-      body instanceof FormData || typeof body === 'string' || body == null ? body : JSON.stringify(body)
+      body instanceof FormData || typeof body === 'string' || body === null ? body : JSON.stringify(body)
     return this.fetch(endpoint, { ...options, method: 'PUT', body: payload })
   }
 
   patch(endpoint, body, options = {}) {
     const payload =
-      body instanceof FormData || typeof body === 'string' || body == null ? body : JSON.stringify(body)
+      body instanceof FormData || typeof body === 'string' || body === null ? body : JSON.stringify(body)
     return this.fetch(endpoint, { ...options, method: 'PATCH', body: payload })
   }
 

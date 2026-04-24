@@ -152,7 +152,7 @@ const generateEmailBody = async () => {
                 : '',
             organization.website ? `Website: ${organization.website}` : '',
             organization.mission ? `\nMission: ${organization.mission}` : '',
-            organization.annual_budget != null
+            organization.annual_budget !== null
                 ? `Annual Budget: $${Number(organization.annual_budget).toLocaleString()}`
                 : '',
             organization.staff_count ? `Staff Count: ${organization.staff_count}` : '',
@@ -191,7 +191,7 @@ const generateEmailBody = async () => {
                     `  Funder: ${grant.funder}`,
                     `  Status: ${statusLabels[grant.status] || grant.status}`,
                     deadlineText ? `  ${deadlineText}` : '',
-                    grant.amount_max != null
+                    grant.amount_max !== null
                         ? `  Award Amount: Up to $${Number(grant.amount_max).toLocaleString()}`
                         : '',
                 ].filter(Boolean).join('\n');

@@ -17,7 +17,7 @@ export function countWords(text) {
 }
 
 export function normalizeText(text) {
-  if (text == null) return ''
+  if ((text === null || text === undefined)) return ''
   const withoutNulls = String(text).split('\u0000').join('')
   const s = withoutNulls
     .replace(/\r\n/g, '\n')

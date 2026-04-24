@@ -19,6 +19,11 @@ import { applyRelevanceFilter, extractProfileData } from './relevanceFilter.js'
 import { computeMatchDecision, normalizeProfile, computeProfileFingerprint, normalizeOpportunity, computeOpportunityFingerprint } from './matchEngine.js'
 import { isPipelineSourceAllowed } from '../config/pipelineAllowedSources.js'
 import { evaluateExclusion } from './exclusionEngine.js'
+import {
+  grantFingerprintFromOpportunity,
+  chooseGrantUrl,
+  GRANT_FINGERPRINT_VERSION,
+} from '../utils/grantFingerprint.js'
 
 // Cache the result of the decision-columns PRAGMA check per DB instance to avoid
 // running PRAGMA table_info(grants) on every saveToProfilePipeline call.
@@ -26,26 +31,36 @@ const _decisionColumnCache = new WeakMap()
 
 async function hasGrantsDecisionColumns(db) {
   if (_decisionColumnCache.has(db)) return _decisionColumnCache.get(db)
-  let result = false
+  let result = { decision: false, url: false, fingerprint: false }
   try {
     const dialect = db?.dialect || 'sqlite'
     if (dialect === 'postgres') {
-      const row = await db
+      const rows = await db
         .prepare(
-          `SELECT 1 AS ok FROM information_schema.columns
-           WHERE table_schema = 'public' AND table_name = ? AND column_name = ? LIMIT 1`,
+          `SELECT column_name FROM information_schema.columns
+           WHERE table_schema = 'public' AND table_name = 'grants'`,
         )
-        .get('grants', 'match_decision')
-      result = Boolean(row?.ok)
+        .all()
+      const names = new Set((rows || []).map((r) => String(r.column_name)))
+      result = {
+        decision: names.has('match_decision'),
+        url: names.has('url'),
+        fingerprint: names.has('fingerprint'),
+      }
     } else {
       const cols = await db.prepare('PRAGMA table_info(grants)').all()
-      result = cols.some((c) => c.name === 'match_decision')
+      const names = new Set(cols.map((c) => c.name))
+      result = {
+        decision: names.has('match_decision'),
+        url: names.has('url'),
+        fingerprint: names.has('fingerprint'),
+      }
     }
   } catch (err) {
     // Treat a missing grants table or probe failure as "no decision columns" —
     // surface it so ops can see schema drift instead of swallowing silently.
     console.warn('[opportunityMatcher] hasGrantsDecisionColumns probe failed:', err?.message || err)
-    result = false
+    result = { decision: false, url: false, fingerprint: false }
   }
   _decisionColumnCache.set(db, result)
   return result
@@ -256,151 +271,140 @@ export async function saveToProfilePipeline(
       : null
 
     // Detect which columns exist in the grants table (handles DBs without migration applied)
-    const hasDecisionColumns = await hasGrantsDecisionColumns(db)
+    const grantCols = await hasGrantsDecisionColumns(db)
 
-    if (hasDecisionColumns) {
+    // Canonical grant URL + content fingerprint. Populated regardless of
+    // whether the decision columns are present — these are the minimum
+    // fields the dedup/drift check relies on.
+    const canonicalUrl = chooseGrantUrl(opportunity)
+    const canonicalFingerprint = grantFingerprintFromOpportunity(opportunity)
+
+    if (grantCols.decision) {
+      const cols = [
+        'id',
+        'organization_id',
+        'profile_id',
+        'funding_opportunity_id',
+        'title',
+        'funder',
+        'status',
+        'deadline',
+        'match_score',
+        'match_reasons',
+        'notes',
+        'application_url',
+        'application_method',
+        'contact_name',
+        'contact_email',
+        'contact_phone',
+        'amount_requested',
+        'amount_min',
+        'amount_max',
+        'match_decision',
+        'match_explanation',
+        'matched_needs',
+        'eligibility_status',
+        'ineligibility_reasons',
+        'profile_fingerprint',
+        'opportunity_fingerprint',
+        'matcher_version',
+        'evaluated_at',
+        'match_confidence',
+      ]
+      const vals = [
+        grantId,
+        profile.organization_id ?? null,
+        profileId,
+        fkOpportunityId,
+        opportunity.title,
+        opportunity.sponsor,
+        'discovered',
+        opportunity.deadline ?? null,
+        matchPercentage,
+        JSON.stringify(canonicalReasons),
+        `Auto-added: ${matchPercentage}% match for profile ${profileId} (decision: ${decision?.decision ?? 'N/A'})`,
+        canonicalUrl,
+        opportunity.application_method || opportunity.submission_method || guessMethodFromOpportunity(opportunity) || null,
+        contactInfo.name,
+        contactInfo.email,
+        contactInfo.phone,
+        opportunity.amount_requested || opportunity.requestedAmount || null,
+        opportunity.amount_min || opportunity.amountMin || null,
+        opportunity.amount_max || opportunity.amountMax || null,
+        decision?.decision ?? 'review',
+        decision?.explanation ?? null,
+        JSON.stringify(decision?.matchedNeeds ?? []),
+        decision ? String(decision.eligible) : null,
+        JSON.stringify(decision?.ineligibilityReasons ?? []),
+        profileFingerprint ?? null,
+        opportunityFingerprint ?? null,
+        decision?.matcherVersion ?? null,
+        decision?.evaluatedAt ?? null,
+        decision?.confidence ?? null,
+      ]
+      if (grantCols.url) { cols.push('url'); vals.push(canonicalUrl) }
+      if (grantCols.fingerprint) {
+        cols.push('fingerprint', 'fingerprint_version')
+        vals.push(canonicalFingerprint, GRANT_FINGERPRINT_VERSION)
+      }
+      const placeholders = cols.map(() => '?').join(', ')
       await db
-        .prepare(
-          `
-            INSERT INTO grants (
-              id,
-              organization_id,
-              profile_id,
-              funding_opportunity_id,
-              title,
-              funder,
-              status,
-              deadline,
-              match_score,
-              match_reasons,
-              notes,
-              application_url,
-              application_method,
-              contact_name,
-              contact_email,
-              contact_phone,
-              amount_requested,
-              amount_min,
-              amount_max,
-              match_decision,
-              match_explanation,
-              matched_needs,
-              eligibility_status,
-              ineligibility_reasons,
-              profile_fingerprint,
-              opportunity_fingerprint,
-              matcher_version,
-              evaluated_at,
-              match_confidence
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-          `,
-        )
-        .run(
-          grantId,
-          profile.organization_id ?? null,
-          profileId,
-          fkOpportunityId,
-          opportunity.title,
-          opportunity.sponsor,
-          'discovered',
-          opportunity.deadline ?? null,
-          matchPercentage,
-          JSON.stringify(canonicalReasons),
-          `Auto-added: ${matchPercentage}% match for profile ${profileId} (decision: ${decision?.decision ?? 'N/A'})`,
-          (() => {
-            const candidates = [
-              opportunity.application_url,
-              opportunity.applicationUrl,
-              opportunity.url,
-            ]
-            for (const u of candidates) {
-              if (u && typeof u === 'string') {
-                const trimmed = u.trim()
-                if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) return trimmed
-              }
-            }
-            return null
-          })(),
-          opportunity.application_method || opportunity.submission_method || guessMethodFromOpportunity(opportunity) || null,
-          contactInfo.name,
-          contactInfo.email,
-          contactInfo.phone,
-          opportunity.amount_requested || opportunity.requestedAmount || null,
-          opportunity.amount_min || opportunity.amountMin || null,
-          opportunity.amount_max || opportunity.amountMax || null,
-          decision?.decision ?? null,
-          decision?.explanation ?? null,
-          JSON.stringify(decision?.matchedNeeds ?? []),
-          decision ? String(decision.eligible) : null,
-          JSON.stringify(decision?.ineligibilityReasons ?? []),
-          profileFingerprint ?? null,
-          opportunityFingerprint ?? null,
-          decision?.matcherVersion ?? null,
-          decision?.evaluatedAt ?? null,
-          decision?.confidence ?? null,
-        )
+        .prepare(`INSERT INTO grants (${cols.join(', ')}) VALUES (${placeholders})`)
+        .run(...vals)
     } else {
-      // Legacy insert without decision columns (pre-migration DBs)
+      // Legacy insert without decision columns (pre-migration DBs).
+      // Still populate url/fingerprint when those columns landed separately.
+      const cols = [
+        'id',
+        'organization_id',
+        'profile_id',
+        'funding_opportunity_id',
+        'title',
+        'funder',
+        'status',
+        'deadline',
+        'match_score',
+        'match_reasons',
+        'notes',
+        'application_url',
+        'application_method',
+        'contact_name',
+        'contact_email',
+        'contact_phone',
+        'amount_requested',
+        'amount_min',
+        'amount_max',
+      ]
+      const vals = [
+        grantId,
+        profile.organization_id ?? null,
+        profileId,
+        fkOpportunityId,
+        opportunity.title,
+        opportunity.sponsor,
+        'discovered',
+        opportunity.deadline ?? null,
+        matchPercentage,
+        JSON.stringify(canonicalReasons),
+        `Auto-added: ${matchPercentage}% match for profile ${profileId} (decision: ${decision?.decision ?? 'N/A'})`,
+        canonicalUrl,
+        opportunity.application_method || opportunity.submission_method || guessMethodFromOpportunity(opportunity) || null,
+        contactInfo.name,
+        contactInfo.email,
+        contactInfo.phone,
+        opportunity.amount_requested || opportunity.requestedAmount || null,
+        opportunity.amount_min || opportunity.amountMin || null,
+        opportunity.amount_max || opportunity.amountMax || null,
+      ]
+      if (grantCols.url) { cols.push('url'); vals.push(canonicalUrl) }
+      if (grantCols.fingerprint) {
+        cols.push('fingerprint', 'fingerprint_version')
+        vals.push(canonicalFingerprint, GRANT_FINGERPRINT_VERSION)
+      }
+      const placeholders = cols.map(() => '?').join(', ')
       await db
-        .prepare(
-          `
-            INSERT INTO grants (
-              id,
-              organization_id,
-              profile_id,
-              funding_opportunity_id,
-              title,
-              funder,
-              status,
-              deadline,
-              match_score,
-              match_reasons,
-              notes,
-              application_url,
-              application_method,
-              contact_name,
-              contact_email,
-              contact_phone,
-              amount_requested,
-              amount_min,
-              amount_max
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-          `,
-        )
-        .run(
-          grantId,
-          profile.organization_id ?? null,
-          profileId,
-          fkOpportunityId,
-          opportunity.title,
-          opportunity.sponsor,
-          'discovered',
-          opportunity.deadline ?? null,
-          matchPercentage,
-          JSON.stringify(canonicalReasons),
-          `Auto-added: ${matchPercentage}% match for profile ${profileId} (decision: ${decision?.decision ?? 'N/A'})`,
-          (() => {
-            const candidates = [
-              opportunity.application_url,
-              opportunity.applicationUrl,
-              opportunity.url,
-            ]
-            for (const u of candidates) {
-              if (u && typeof u === 'string') {
-                const trimmed = u.trim()
-                if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) return trimmed
-              }
-            }
-            return null
-          })(),
-          opportunity.application_method || opportunity.submission_method || guessMethodFromOpportunity(opportunity) || null,
-          contactInfo.name,
-          contactInfo.email,
-          contactInfo.phone,
-          opportunity.amount_requested || opportunity.requestedAmount || null,
-          opportunity.amount_min || opportunity.amountMin || null,
-          opportunity.amount_max || opportunity.amountMax || null,
-        )
+        .prepare(`INSERT INTO grants (${cols.join(', ')}) VALUES (${placeholders})`)
+        .run(...vals)
     }
     
     console.log(`[opportunityMatcher] Added to pipeline: ${opportunity.title} (${matchPercentage}% match for profile ${profileId}, decision: ${decision?.decision ?? 'N/A'})`)
@@ -439,22 +443,34 @@ export async function saveToProfilePipeline(
  */
 export async function trackGlobalOpportunity(db, opportunity) {
   try {
-    // Log that this opportunity was saved globally
+    // Log that this opportunity was saved globally.
+    // level + status are both populated so admin.health.logs (which groups
+    // by level) and legacy crawler dashboards (which group by status) both
+    // see the row. payload carries the structured context for offline audit.
     const trackingQuery = db.prepare(`
       INSERT INTO crawler_logs (
         crawler_type,
         profile_id,
+        level,
         status,
         message,
+        payload,
         created_at
-      ) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+      ) VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
     `)
-    
+
     trackingQuery.run(
       opportunity.source || 'unknown',
       null, // Global, not profile-specific
+      'info',
       'success',
-      `Saved opportunity globally: ${opportunity.title}`
+      `Saved opportunity globally: ${opportunity.title}`,
+      JSON.stringify({
+        title: opportunity.title,
+        sponsor: opportunity.sponsor || opportunity.funder || null,
+        source: opportunity.source || null,
+        source_url: opportunity.source_url || opportunity.url || null,
+      }),
     )
     
     return { tracked: true }

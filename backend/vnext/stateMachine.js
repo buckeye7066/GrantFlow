@@ -6,6 +6,10 @@ import { getFormSchema, ensureInferredSchemaForOpportunity } from './schemaServi
 import { writeAuditEvent } from './auditEventsService.js'
 import crypto from 'crypto'
 import { insertIgnore } from './vnextUtils.js'
+import { getScopedOpportunityForVnextApplication } from '../utils/scopedOpportunity.js'
+import { createLogger } from '../utils/logger.js'
+
+const log = createLogger('vnext.stateMachine')
 
 function asState(stageOrState) {
   return normalizeVNextState(stageOrState) || VNEXT_STATES.DISCOVERED
@@ -63,11 +67,31 @@ export async function attemptTransition(db, applicationId, targetStateRaw, actor
     return { ok: false, blockers: [{ code: 'INVALID_TARGET_STATE', message: 'Invalid targetState' }] }
   }
 
-  const app = await db.prepare('SELECT * FROM vnext_applications WHERE id = ?').get(String(applicationId))
-  if (!app) return { ok: false, blockers: [{ code: 'NOT_FOUND', message: 'Application not found' }] }
-
-  const opportunity = await db.prepare('SELECT * FROM funding_opportunities WHERE id = ?').get(String(app.opportunity_id))
-  if (!opportunity) return { ok: false, blockers: [{ code: 'OPPORTUNITY_NOT_FOUND', message: 'Opportunity not found' }] }
+  // Scoped lookup: the opportunity is resolved *through* the application row
+  // so we never trust an arbitrary opportunity id. See
+  // backend/utils/scopedOpportunity.js for rationale.
+  const scoped = await getScopedOpportunityForVnextApplication(db, applicationId)
+  const app = scoped.application
+  if (!app) {
+    log.warn('transition.application_missing', { applicationId })
+    return { ok: false, blockers: [{ code: 'NOT_FOUND', message: 'Application not found' }] }
+  }
+  const opportunity = scoped.opportunity
+  if (!opportunity) {
+    log.warn('transition.opportunity_not_scoped', {
+      applicationId,
+      reason: scoped.reason,
+    })
+    return {
+      ok: false,
+      blockers: [
+        {
+          code: scoped.reason === 'OPPORTUNITY_NOT_LINKED' ? 'OPPORTUNITY_NOT_LINKED' : 'OPPORTUNITY_NOT_FOUND',
+          message: 'Opportunity not found or not linked to application',
+        },
+      ],
+    }
+  }
 
   const current = asState(app.state || app.stage)
   const currentIdx = VNEXT_STATE_ORDER.indexOf(current)
@@ -112,7 +136,10 @@ export async function attemptTransition(db, applicationId, targetStateRaw, actor
       }
     }
 
-    const schemaIdAfter = (await db.prepare('SELECT schema_id FROM funding_opportunities WHERE id = ?').get(String(opportunity.id)))?.schema_id
+    // Re-resolve schema_id through the same scoped join so we don't trust the
+    // in-memory `opportunity.id` if another process mutated it underneath.
+    const rescoped = await getScopedOpportunityForVnextApplication(db, applicationId)
+    const schemaIdAfter = rescoped.opportunity?.schema_id ?? opportunity.schema_id ?? null
     const schema = await getFormSchema(db, schemaIdAfter ? String(schemaIdAfter) : null)
     if (!schema) {
       blockers.push({
