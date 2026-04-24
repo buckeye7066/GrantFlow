@@ -6,6 +6,9 @@ import helmet from 'helmet';
 import compression from 'compression';
 import { fileURLToPath } from 'url';
 import { dirname, join, resolve } from 'path';
+import { createLogger } from './utils/logger.js';
+
+const serverLogger = createLogger('server');
 import fs from 'fs';
 import rateLimit from 'express-rate-limit';
 import crypto from 'crypto';
@@ -973,7 +976,7 @@ if (!IS_SMOKE_MODE && db.dialect === 'sqlite') {
 }
 
 function parseBoolEnv(value) {
-  if (value == null) return null
+  if ((value === null || value === undefined)) return null
   const v = String(value).trim().toLowerCase()
   if (['1', 'true', 'yes', 'y', 'on'].includes(v)) return true
   if (['0', 'false', 'no', 'n', 'off'].includes(v)) return false
@@ -1802,10 +1805,12 @@ async function scheduleCrawlerSmokeJobs({ db, uploadsDir }) {
         'system-smoke',
       )
 
-    // Fire-and-forget dispatch (non-blocking).
-    dispatchCrawlerJob({ db, jobId: comprehensiveJobId, uploadDir: uploadsDir, getOpenAI: null }).catch(() => {})
-    dispatchCrawlerJob({ db, jobId: scholarshipJobId, uploadDir: uploadsDir, getOpenAI: null }).catch(() => {})
-    dispatchCrawlerJob({ db, jobId: documentIngestJobId, uploadDir: uploadsDir, getOpenAI: null }).catch(() => {})
+    // Fire-and-forget dispatch (non-blocking). We log, not swallow.
+    const logDispatchFail = (label) => (err) =>
+      serverLogger.warn('smoke.dispatch_failed', { job: label, error: err?.message || String(err) })
+    dispatchCrawlerJob({ db, jobId: comprehensiveJobId, uploadDir: uploadsDir, getOpenAI: null }).catch(logDispatchFail('comprehensive'))
+    dispatchCrawlerJob({ db, jobId: scholarshipJobId, uploadDir: uploadsDir, getOpenAI: null }).catch(logDispatchFail('scholarship'))
+    dispatchCrawlerJob({ db, jobId: documentIngestJobId, uploadDir: uploadsDir, getOpenAI: null }).catch(logDispatchFail('documentIngest'))
   } catch (error) {
     console.warn('[smoke] Failed to schedule crawler smoke jobs:', error?.message || String(error))
   }
@@ -2309,8 +2314,13 @@ if (process.env.NODE_ENV !== 'test') {
       for (let i = 0; i < queued.length; i++) {
         if (i > 0) await new Promise((r) => setTimeout(r, STAGGER_DELAY_MS))
         try {
-          dispatchCrawlerJob({ db: dbRef, jobId: queued[i].id, uploadDir: uploadsDirRef, getOpenAI: null }).catch(() => {})
-        } catch { /* ignore individual dispatch errors */ }
+          dispatchCrawlerJob({ db: dbRef, jobId: queued[i].id, uploadDir: uploadsDirRef, getOpenAI: null }).catch((err) =>
+            serverLogger.warn('startup_drain.dispatch_failed', { jobId: queued[i].id, error: err?.message })
+          )
+        } catch (err) {
+          /* intentionally non-fatal: individual dispatch errors must not abort the drain loop */
+          serverLogger.debug('startup_drain.dispatch_threw', { jobId: queued[i].id, error: err?.message })
+        }
       }
     }
 
@@ -2349,8 +2359,13 @@ if (process.env.NODE_ENV !== 'test') {
 
           for (const job of queued) {
             try {
-              dispatchCrawlerJob({ db, jobId: job.id, uploadDir: uploadsDir, getOpenAI: null }).catch(() => {})
-            } catch { /* ignore individual dispatch errors */ }
+              dispatchCrawlerJob({ db, jobId: job.id, uploadDir: uploadsDir, getOpenAI: null }).catch((err) =>
+                serverLogger.warn('queue_poller.dispatch_failed', { jobId: job.id, error: err?.message })
+              )
+            } catch (err) {
+              /* intentionally non-fatal: individual dispatch errors must not break the poll cycle */
+              serverLogger.debug('queue_poller.dispatch_threw', { jobId: job.id, error: err?.message })
+            }
           }
           if (queued.length > 0) {
             console.log(`[queue-poller] Dispatched ${queued.length} orphaned queued job(s)`)
@@ -2414,7 +2429,9 @@ if (process.env.NODE_ENV !== 'test') {
   const startupSmokeEnabled = parseBoolEnv(process.env.STARTUP_SMOKE_CRAWL_ENABLED) === true
   if (startupSmokeEnabled) {
     setTimeout(() => {
-      scheduleCrawlerSmokeJobs({ db, uploadsDir }).catch(() => {})
+      scheduleCrawlerSmokeJobs({ db, uploadsDir }).catch((err) =>
+        serverLogger.warn('smoke.schedule_failed', { error: err?.message || String(err) }),
+      )
     }, 10_000)
     console.info('[startup] Startup smoke crawlers enabled (STARTUP_SMOKE_CRAWL_ENABLED=true)')
   } else {
@@ -2440,8 +2457,9 @@ if (process.env.NODE_ENV !== 'test') {
       environment: process.env.NODE_ENV || 'development',
       corsOrigins: loggedCorsOrigins,
     },
-  }).catch(() => {
-    // Non-critical - don't fail server startup
+  }).catch((err) => {
+    /* intentionally non-fatal: startup audit log must not block server boot */
+    serverLogger.debug('audit.server_startup_log_failed', { error: err?.message || String(err) })
   });
   
   // Start Anya autonomous operations 5 seconds after server is ready.
@@ -2476,7 +2494,10 @@ if (process.env.NODE_ENV !== 'test') {
               console.error('[Anya] Scheduled check failed:', err?.message || err);
             });
           })
-          .catch(() => {});
+          .catch((err) => {
+            /* intentionally non-fatal: scheduler import failure must not crash the interval */
+            serverLogger.debug('anya.scheduler_import_failed', { error: err?.message || String(err) })
+          });
       }, SCHEDULE_CHECK_MS);
       console.log('[Anya] Scheduled runner enabled (checking every 30 min)');
     }
