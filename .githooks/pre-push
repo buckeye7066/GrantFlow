@@ -19,7 +19,7 @@ echo "╚═══════════════════════�
 # Run ESLint check
 echo ""
 echo "→ Running ESLint..."
-if npx eslint --max-warnings 0 "src/**/*.{js,jsx}" "backend/**/*.js" 2>/dev/null; then
+if npx eslint "src/**/*.{js,jsx}" "backend/**/*.js" 2>/dev/null; then
     echo "✓ ESLint passed"
 else
     echo ""

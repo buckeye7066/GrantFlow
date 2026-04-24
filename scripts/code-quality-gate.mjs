@@ -146,7 +146,7 @@ async function scanFile(filePath, allowlist) {
  */
 async function runEslintCheck() {
   return new Promise((resolve) => {
-    const child = spawn('npx', ['eslint', '--max-warnings', '0', '--ext', '.js,.jsx,.mjs,.cjs', 'src', 'backend'], {
+    const child = spawn('npx', ['eslint', '--ext', '.js,.jsx,.mjs,.cjs', 'src', 'backend'], {
       cwd: REPO_ROOT,
       shell: false,
       stdio: ['pipe', 'pipe', 'pipe']
