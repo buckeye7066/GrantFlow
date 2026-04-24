@@ -5,9 +5,9 @@
     "description": "Small grant funding for community resilience planning in Ohio.",
     "source": "fixture_geo",
     "source_id": "fixture-geo-oh-43004-1",
-    "source_url": "https://example.org/oh/43004/resilience",
-    "application_url": "https://example.org/oh/43004/resilience/apply",
-    "evidence_url": "https://example.org/oh/43004/resilience",
+    "source_url": "https://fixture.test/oh/43004/resilience",
+    "application_url": "https://fixture.test/oh/43004/resilience/apply",
+    "evidence_url": "https://fixture.test/oh/43004/resilience",
     "state": "OH",
     "is_national": false,
     "categories": ["community", "resilience"],
@@ -17,4 +17,3 @@
     "match_percentage": 0
   }
 ]
-

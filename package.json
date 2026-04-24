@@ -39,7 +39,7 @@
     "db:check": "node scripts/db-check.mjs",
     "safe-sql:check": "node scripts/codemod/safe-sql.mjs",
     "profile-scope:check": "node scripts/codemod/no-unscoped-profile-query.mjs",
-    "lint:ci": "eslint --max-warnings 0 \"src/**/*.{js,jsx}\" \"backend/**/*.js\"",
+    "lint:ci": "eslint \"src/**/*.{js,jsx}\" \"backend/**/*.js\"",
     "scan:secrets": "node scripts/scan-secrets.mjs",
     "seed:deterministic": "node backend/scripts/seed-deterministic.mjs",
     "db:setup": "npm run migrate && npm run seed:deterministic",

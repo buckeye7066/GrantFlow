@@ -225,7 +225,7 @@ export async function extractFundingOpportunitiesFromKB(db) {
           WHERE type = 'knowledge'
             AND processing_status = 'analyzed'
             AND processing_metadata IS NOT NULL
-            AND processing_metadata !== ''
+            AND processing_metadata != ''
           ORDER BY created_at DESC
         `
       )

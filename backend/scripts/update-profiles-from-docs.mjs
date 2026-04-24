@@ -220,7 +220,7 @@ async function main() {
   const allProfiles = db.prepare(`
     SELECT p.id, p.display_name,
       (SELECT COUNT(*) FROM documents WHERE profile_id = p.id) as docs,
-      (SELECT COUNT(*) FROM profile_sections WHERE profile_id = p.id AND data !== '{}') as filled_sections
+      (SELECT COUNT(*) FROM profile_sections WHERE profile_id = p.id AND data != '{}') as filled_sections
     FROM profiles p
     ORDER BY p.display_name
   `).all();

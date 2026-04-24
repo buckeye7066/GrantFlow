@@ -132,7 +132,7 @@ console.log('\n\n=== FINAL PROFILE STATUS ===\n');
 const allProfiles = db.prepare(`
   SELECT p.id, p.display_name, p.primary_type,
     (SELECT COUNT(*) FROM documents WHERE profile_id = p.id) as docs,
-    (SELECT COUNT(*) FROM profile_sections WHERE profile_id = p.id AND data !== '{}') as sections
+    (SELECT COUNT(*) FROM profile_sections WHERE profile_id = p.id AND data != '{}') as sections
   FROM profiles p
   ORDER BY p.display_name
 `).all();

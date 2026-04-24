@@ -175,9 +175,18 @@ function decorateOpportunity(row) {
   // Canonical consumer-side trust assessment. Every user-facing surface
   // (discovery, matching, opportunities, savedGrants, realCrawlers) surfaces
   // the same trust_* fields so UI and Anya can explain decisions uniformly.
+  // NOTE: We ALLOW loans/matching-funds at the trust layer. Compliance gating
+  // for those is handled by applyComplianceFilters() at the SQL level, so the
+  // trust layer only needs to decide URL/placeholder/untrusted/expired
+  // displayability. The flags stay on trust.flags so the UI can still badge
+  // matching-funds rows; they just don't drop display=false here (which would
+  // otherwise collide with the project rule "Matching funds are not an
+  // exclusive eligibility gate").
   const trust = assessOpportunityTrust(parsed, {
     allowDirectory: true,
     allowExpired: false,
+    allowLoans: true,
+    allowMatchingFunds: true,
   });
   const meta = buildTrustMetadata(trust);
   if (meta) {
@@ -208,7 +217,12 @@ function decorateOpportunity(row) {
  * discovery.js and matching.js. Directory-like rows survive (legitimate help
  * category); placeholder / no-URL / untrusted / loans drop out.
  */
-function filterByTrust(rows, { allowLoans = false, allowMatchingFunds = false } = {}) {
+// Trust layer only gates URL/placeholder/expired/untrusted. Loans and
+// matching-funds are already gated by the SQL compliance filter (see
+// applyComplianceFilters), so defaulting those to `true` here avoids
+// double-filtering and honors the project rule that matching funds are
+// not an exclusive eligibility gate.
+function filterByTrust(rows, { allowLoans = true, allowMatchingFunds = true } = {}) {
   if (!Array.isArray(rows)) return { kept: [], dropped: 0, droppedReasons: {} };
   const kept = [];
   const droppedReasons = {};
@@ -1141,7 +1155,7 @@ router.get('/geo/summary', async (req, res) => {
         WHERE is_active = ${dialect === 'sqlite' ? '1' : 'true'}
           AND ${trustedOriginClause()} AND ${trustedSourceClause()}
           AND geo_zip IS NOT NULL
-          AND geo_zip !== ''
+          AND geo_zip != ''
         GROUP BY state, geo_zip, geo_county
         ORDER BY state ASC, geo_zip ASC
       `).all();
@@ -1681,7 +1695,7 @@ router.get('/:id/similar', async (req, res) => {
       `SELECT id, title, sponsor, categories, keywords, amount_min, amount_max,
               deadline, application_url, state, is_national, link_status
        FROM funding_opportunities
-       WHERE id !== ? AND is_active = ${activeVal}
+       WHERE id != ? AND is_active = ${activeVal}
        ORDER BY updated_at DESC
        LIMIT 200`
     ).all(String(id))

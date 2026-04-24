@@ -197,7 +197,7 @@ export async function runHealthCheck(db) {
                AND ${nullSafeSponsor}
                AND ${nullSafeState}
              ORDER BY
-               CASE WHEN application_url IS NOT NULL AND application_url !== '' THEN 0 ELSE 1 END ASC,
+               CASE WHEN application_url IS NOT NULL AND application_url != '' THEN 0 ELSE 1 END ASC,
                id ASC
              LIMIT 1`,
           )
@@ -214,7 +214,7 @@ export async function runHealthCheck(db) {
                AND title = ?
                AND ${nullSafeSponsor}
                AND ${nullSafeState}
-               AND id !== ?`,
+               AND id != ?`,
           )
           .all(...(isPostgresDup
             ? [group.title, group.sponsor, group.state, keepId]
@@ -250,7 +250,7 @@ export async function runHealthCheck(db) {
                AND title = ?
                AND ${nullSafeSponsor}
                AND ${nullSafeState}
-               AND id !== ?`,
+               AND id != ?`,
           )
           .run(...(isPostgresDup
             ? [group.title, group.sponsor, group.state, keepId]
