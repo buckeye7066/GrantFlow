@@ -1,0 +1,51 @@
+# .gitleaks.toml — repository secret-scan policy for GrantFlow.
+# Keep in sync with scripts/scan-secrets.mjs.
+
+title = "GrantFlow gitleaks config"
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "openai-project"
+description = "OpenAI project key"
+regex = '''sk-proj-[A-Za-z0-9_-]{20,}'''
+tags = ["key", "openai"]
+
+[[rules]]
+id = "railway-env"
+description = "Railway token"
+regex = '''(?i)railway[_-]?(api)?[_-]?token["'=:\s]{1,5}[A-Za-z0-9]{32,}'''
+tags = ["key", "railway"]
+
+[allowlist]
+description = "Paths and patterns that never contain real secrets"
+paths = [
+  '''(?i)(^|/)docs?/''',
+  '''(?i)(^|/)fixtures?/''',
+  '''(?i)\.test\.(js|mjs|ts)$''',
+  '''(?i)(^|/)terminals/''',
+  '''(?i)(^|/)agent-transcripts/''',
+  '''(?i)(^|/)node_modules/''',
+  '''(?i)(^|/)\.cursor/''',
+  '''(?i)(^|/)\.claude/''',
+  '''(?i)(^|/)package-lock\.json$''',
+  '''(?i)(^|/)pnpm-lock\.ya?ml$''',
+  '''(?i)\.(png|jpe?g|gif|webp|pdf|zip|ttf|woff2?)$''',
+]
+regexes = [
+  # Placeholders used in docs / UI copy.
+  '''sk-\.\.\.''',
+  '''sk-xxx''',
+  '''sk-REPLACE''',
+  '''sk-<.*>''',
+  # The comment "// scan:allow" opts a line out.
+  '''scan:allow''',
+]
+
+[[rules.allowlist]]
+description = "Lines that only reference env keys, not values"
+regexes = [
+  '''process\.env\.[A-Z_]+''',
+  '''OPENAI_API_KEY=\$''',
+]
