@@ -686,10 +686,26 @@ export async function runAutonomousCodeCrawl(options, context) {
     // Skip AST analysis entirely (mostly for unit tests that don't want acorn
     // loaded).
     skipAst = false,
+    // Explicit opt-in from a CLI harness (--write) or test. The crawler
+    // requires BOTH this flag AND the env gate to be true before writes
+    // are allowed. Defaults to false so API routes cannot silently enable
+    // writes by toggling a request option.
+    writeFlag = false,
   } = options || {}
 
   const dryRunRequested = Boolean(dryRun)
-  const writesExplicitlyEnabled = String(process.env.ANYA_AUTONOMOUS_WRITE_CHANGES || '').toLowerCase() === 'true'
+  // Accept two env names:
+  //   - ANYA_AUTONOMOUS_WRITES=1       (canonical, documented in README)
+  //   - ANYA_AUTONOMOUS_WRITE_CHANGES  (legacy; kept for back-compat)
+  // A truthy value ('1', 'true', 'yes', 'on') on either unlocks writes.
+  const envValue =
+    process.env.ANYA_AUTONOMOUS_WRITES ?? process.env.ANYA_AUTONOMOUS_WRITE_CHANGES ?? ''
+  const writesEnvEnabled = /^(1|true|yes|on)$/i.test(String(envValue).trim())
+  const writeFlagEnabled = Boolean(writeFlag)
+  // Writes require BOTH gates to be lit — the env flag (operator opt-in on
+  // the host) AND the caller-provided flag (explicit intent at invocation
+  // time, e.g. `--write` on the CLI). Either missing → dry run.
+  const writesExplicitlyEnabled = writesEnvEnabled && writeFlagEnabled
   const effectiveDryRun = dryRunRequested || !writesExplicitlyEnabled
   // dry_run_forced_by_env: caller asked for writes (dryRunRequested=false) but
   // the env safety gate vetoed them, so we're running effectively dry.
@@ -712,6 +728,8 @@ export async function runAutonomousCodeCrawl(options, context) {
     dry_run_effective: effectiveDryRun,
     dry_run_forced_by_env: dryRunForcedByEnv,
     writes_explicitly_enabled: writesExplicitlyEnabled,
+    writes_env_enabled: writesEnvEnabled,
+    write_flag_enabled: writeFlagEnabled,
   }, context)
 
   const allIssues = []
@@ -957,7 +975,7 @@ export async function runAutonomousCodeCrawl(options, context) {
     }
 
     const findingsTotal = flatFindings.length
-    const effectiveLimit = (findingsLimit != null && Number.isFinite(findingsLimit) && findingsLimit >= 0)
+    const effectiveLimit = ((findingsLimit !== null && findingsLimit !== undefined) && Number.isFinite(findingsLimit) && findingsLimit >= 0)
       ? Math.min(findingsLimit, findingsTotal)
       : findingsTotal
     const effectiveOffset = Math.max(0, Number(findingsOffset) || 0)
@@ -979,6 +997,8 @@ export async function runAutonomousCodeCrawl(options, context) {
       dry_run_effective: effectiveDryRun,
       dry_run_forced_by_env: dryRunForcedByEnv,
       writes_explicitly_enabled: writesExplicitlyEnabled,
+      writes_env_enabled: writesEnvEnabled,
+      write_flag_enabled: writeFlagEnabled,
 
       max_iterations: maxIterations,
       max_file_changes: maxFileChanges,

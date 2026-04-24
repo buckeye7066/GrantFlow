@@ -57,7 +57,7 @@ describe('anyaAutonomousCrawler: real metrics, no hallucinated counts', () => {
 
   afterAll(async () => {
     process.chdir(originalCwd)
-    await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {})
+    await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => { /* intentionally ignored: test tmpdir cleanup is best-effort */ })
   })
 
   it('files_scanned counts only walked files (not fabricated)', async () => {
@@ -122,7 +122,7 @@ describe('anyaAutonomousCrawler: real metrics, no hallucinated counts', () => {
       expect(before).toMatch(/catch \(err\) \{\}/)
 
       const report = await runAutonomousCodeCrawl(
-        { dryRun: false, fixEmptyCatch: true, maxIterations: 100 },
+        { dryRun: false, writeFlag: true, fixEmptyCatch: true, maxIterations: 100 },
         mockContext,
       )
       expect(report.dry_run).toBe(false)
@@ -148,9 +148,9 @@ describe('anyaAutonomousCrawler: honest-metrics contract', () => {
   // Re-seed every file before each test so tests that actually apply writes
   // don't leak state into subsequent tests.
   async function seedFixture() {
-    await fs.rm(path.join(tmp2, 'src'), { recursive: true, force: true }).catch(() => {})
-    await fs.rm(path.join(tmp2, 'assets'), { recursive: true, force: true }).catch(() => {})
-    await fs.rm(path.join(tmp2, 'node_modules'), { recursive: true, force: true }).catch(() => {})
+    await fs.rm(path.join(tmp2, 'src'), { recursive: true, force: true }).catch(() => { /* intentionally ignored: test tmpdir cleanup is best-effort */ })
+    await fs.rm(path.join(tmp2, 'assets'), { recursive: true, force: true }).catch(() => { /* intentionally ignored: test tmpdir cleanup is best-effort */ })
+    await fs.rm(path.join(tmp2, 'node_modules'), { recursive: true, force: true }).catch(() => { /* intentionally ignored: test tmpdir cleanup is best-effort */ })
     await fs.mkdir(path.join(tmp2, 'src'), { recursive: true })
     await fs.mkdir(path.join(tmp2, 'assets'), { recursive: true })
     await fs.mkdir(path.join(tmp2, 'node_modules', 'pkg'), { recursive: true })
@@ -191,7 +191,7 @@ describe('anyaAutonomousCrawler: honest-metrics contract', () => {
 
   afterAll(async () => {
     process.chdir(cwd2)
-    await fs.rm(tmp2, { recursive: true, force: true }).catch(() => {})
+    await fs.rm(tmp2, { recursive: true, force: true }).catch(() => { /* intentionally ignored: test tmpdir cleanup is best-effort */ })
   })
 
   it('files_scanned is NOT equal to findings_found (the old inflation bug)', async () => {
@@ -246,10 +246,10 @@ describe('anyaAutonomousCrawler: honest-metrics contract', () => {
     expect(r2.dry_run_forced_by_env).toBe(true)
     expect(r2.writes_explicitly_enabled).toBe(false)
 
-    // Case 3: caller requests writes AND env gate opens
+    // Case 3: caller requests writes AND env gate opens AND writeFlag is set
     process.env.ANYA_AUTONOMOUS_WRITE_CHANGES = 'true'
     try {
-      const r3 = await runAutonomousCodeCrawl({ dryRun: false }, mockContext)
+      const r3 = await runAutonomousCodeCrawl({ dryRun: false, writeFlag: true }, mockContext)
       expect(r3.dry_run_requested).toBe(false)
       expect(r3.dry_run_effective).toBe(false)
       expect(r3.dry_run_forced_by_env).toBe(false)
@@ -336,7 +336,7 @@ describe('anyaAutonomousCrawler: extended honest-metrics contract', () => {
     for (const child of ['src', 'assets', 'node_modules', 'backend']) {
       await fs
         .rm(path.join(tmp3, child), { recursive: true, force: true })
-        .catch(() => {})
+        .catch(() => { /* intentionally ignored: test tmpdir cleanup is best-effort */ })
     }
 
     await fs.mkdir(path.join(tmp3, 'src'), { recursive: true })
