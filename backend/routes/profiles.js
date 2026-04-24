@@ -15,6 +15,7 @@ import { linkProfileToAdmin } from '../utils/adminProfileLinks.js'
 import { safeParseJSON } from '../utils/safeJson.js'
 import { validatePagination } from '../utils/validation.js'
 import { formatError } from '../middleware/errorHandler.js'
+import { createLogger } from '../utils/logger.js'
 import { requireTierCapability, TIER_CAPABILITIES } from '../utils/tierGating.js'
 import {
   listProfileEmails,
@@ -29,6 +30,7 @@ import { resolveUploadsDir } from '../utils/uploadsDir.js'
 import { syncProfileFieldsFromSection } from '../utils/profileSectionSync.js'
 
 const router = express.Router()
+const profileLogger = createLogger('route:profiles')
 
 // Rate limit the profile listing endpoint (defense-in-depth).
 // This is a read-heavy query that can touch multiple tables (and can be abused).
@@ -209,6 +211,24 @@ function coerceDbRows(result) {
   if (Array.isArray(result)) return result
   if (Array.isArray(result.rows)) return result.rows
   return []
+}
+
+async function optionalRows(db, label, sql, params = []) {
+  try {
+    return coerceDbRows(await db.prepare(sql).all(...params))
+  } catch (error) {
+    const message = error?.message || String(error)
+    if (
+      message.includes('no such table') ||
+      message.includes('does not exist') ||
+      message.includes('no such column') ||
+      (message.includes('column') && message.includes('does not exist'))
+    ) {
+      console.warn(`[profiles] Skipping optional ${label} application lookup: ${message}`)
+      return []
+    }
+    throw error
+  }
 }
 
 function mapProfile(row) {
@@ -805,6 +825,161 @@ router.post('/', createProfileLimiter, async (req, res) => {
   }
 
   res.status(201).json(mapProfile(refreshed))
+})
+
+// Back-compat for older deployed clients:
+// GET /api/profiles/:id/applications/all
+// Returns every application workflow row linked to this profile without failing
+// when a newer/older deployment does not have one of the optional tables yet.
+router.get('/:id/applications/all', async (req, res) => {
+  const { id } = req.params
+
+  try {
+    const profile = await req.db
+      .prepare('SELECT id, organization_id, status FROM profiles WHERE id = ?')
+      .get(String(id))
+
+    if (!profile || profile.status === 'deleted') {
+      return res.status(404).json({ error: 'Profile not found' })
+    }
+
+    const grantApplications = await optionalRows(
+      req.db,
+      'grant_applications',
+      `
+        SELECT
+          id,
+          profile_id,
+          opportunity_id,
+          pipeline_grant_id,
+          user_id,
+          status,
+          title,
+          grant_name,
+          funder_name,
+          amount_requested,
+          amount_awarded,
+          deadline_date,
+          submitted_at,
+          response_expected_date,
+          response_received_at,
+          notes,
+          contact_name,
+          contact_email,
+          created_at,
+          updated_at,
+          'grant_applications' AS source_table
+        FROM grant_applications
+        WHERE profile_id = ?
+        ORDER BY updated_at DESC
+        LIMIT 500
+      `,
+      [String(id)],
+    )
+
+    const vnextApplications = await optionalRows(
+      req.db,
+      'vnext_applications',
+      `
+        SELECT
+          id,
+          profile_id,
+          opportunity_id,
+          NULL AS pipeline_grant_id,
+          NULL AS user_id,
+          state AS status,
+          NULL AS title,
+          NULL AS grant_name,
+          NULL AS funder_name,
+          NULL AS amount_requested,
+          NULL AS amount_awarded,
+          NULL AS deadline_date,
+          NULL AS submitted_at,
+          NULL AS response_expected_date,
+          NULL AS response_received_at,
+          NULL AS notes,
+          NULL AS contact_name,
+          NULL AS contact_email,
+          created_at,
+          updated_at,
+          'vnext_applications' AS source_table
+        FROM vnext_applications
+        WHERE profile_id = ?
+        ORDER BY updated_at DESC
+        LIMIT 500
+      `,
+      [String(id)],
+    )
+
+    const applyEngineApplications = profile.organization_id
+      ? await optionalRows(
+          req.db,
+          'applications',
+          `
+            SELECT
+              a.id,
+              ? AS profile_id,
+              g.funding_opportunity_id AS opportunity_id,
+              a.grant_id AS pipeline_grant_id,
+              NULL AS user_id,
+              a.status,
+              g.title,
+              g.title AS grant_name,
+              g.funder AS funder_name,
+              NULL AS amount_requested,
+              NULL AS amount_awarded,
+              g.deadline AS deadline_date,
+              a.submitted_at,
+              NULL AS response_expected_date,
+              NULL AS response_received_at,
+              NULL AS notes,
+              NULL AS contact_name,
+              NULL AS contact_email,
+              a.created_at,
+              a.updated_at,
+              'applications' AS source_table
+            FROM applications a
+            LEFT JOIN grants g ON g.id = a.grant_id
+            WHERE a.organization_id = ?
+            ORDER BY a.updated_at DESC
+            LIMIT 500
+          `,
+          [String(id), String(profile.organization_id)],
+        )
+      : []
+
+    const applications = [
+      ...grantApplications,
+      ...vnextApplications,
+      ...applyEngineApplications,
+    ]
+
+    profileLogger.info('[profiles] applications/all response', {
+      profileId: String(id),
+      grant_applications: grantApplications.length,
+      vnext_applications: vnextApplications.length,
+      applications: applyEngineApplications.length,
+      total: applications.length,
+    })
+
+    return res.json({
+      success: true,
+      profile_id: String(id),
+      applications,
+      items: applications,
+      grant_applications: grantApplications,
+      vnext_applications: vnextApplications,
+      apply_engine_applications: applyEngineApplications,
+      count: applications.length,
+      total: applications.length,
+    })
+  } catch (error) {
+    console.error('[profiles] applications/all failed:', {
+      profileId: String(id),
+      error: error?.message || String(error),
+    })
+    return res.status(500).json(formatError(error))
+  }
 })
 
 router.get('/:id', async (req, res) => {
