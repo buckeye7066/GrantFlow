@@ -43,30 +43,33 @@ export const NON_ACTIONABLE_DOMAINS = new Set([
 ])
 
 // ── URL regex patterns that indicate placeholder/invalid URLs ───────────
+// Each literal below is an *intentional* validator denylist entry. Admin
+// auditor scanners must treat these as allowed-placeholders, not findings.
 
 export const INVALID_URL_PATTERNS = [
-  /example\.(com|org|net|gov)/i,
-  /localhost(:\d+)?/i,
-  /127\.0\.0\.1/,
-  /0\.0\.0\.0/,
-  /placeholder/i,
-  /^javascript:/i,
-  /^data:/i,
-  /^file:/i,
-  /^mailto:/i,
+  /example\.(com|org|net|gov)/i, // audit:allow placeholder
+  /localhost(:\d+)?/i, // audit:allow placeholder
+  /127\.0\.0\.1/, // audit:allow placeholder
+  /0\.0\.0\.0/, // audit:allow placeholder
+  /placeholder/i, // audit:allow placeholder
+  /^javascript:/i, // audit:allow placeholder
+  /^data:/i, // audit:allow placeholder
+  /^file:/i, // audit:allow placeholder
+  /^mailto:/i, // audit:allow placeholder
 ]
 
 // ── Placeholder text patterns (used in title/description validation) ────
+// Same convention: each pattern is an intentional validator literal.
 
 export const PLACEHOLDER_TEXT_PATTERNS = [
-  /lorem\s+ipsum/i,
-  /\bplaceholder\b/i,
-  /\bcoming\s+soon\b/i,
-  /\btbd\b/i,
-  /\bto\s+be\s+determined\b/i,
-  /\btest\s+(opportunity|grant|program)\b/i,
-  /\bn\/?a\b/i,
-  /\bsample\s+(opportunity|grant|program)\b/i,
+  /lorem\s+ipsum/i, // audit:allow placeholder
+  /\bplaceholder\b/i, // audit:allow placeholder
+  /\bcoming\s+soon\b/i, // audit:allow placeholder
+  /\btbd\b/i, // audit:allow placeholder
+  /\bto\s+be\s+determined\b/i, // audit:allow placeholder
+  /\btest\s+(opportunity|grant|program)\b/i, // audit:allow placeholder
+  /\bn\/?a\b/i, // audit:allow placeholder
+  /\bsample\s+(opportunity|grant|program)\b/i, // audit:allow placeholder
 ]
 
 // ── SSRF protection (for document/proxy fetches, NOT funding URLs) ──────

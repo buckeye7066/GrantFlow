@@ -547,6 +547,19 @@ export function registerTool({ name, description, schema, handler, requiresAdmin
     throw new Error('Tool handler must be a function')
   }
 
+  // Duplicate ids silently overwrote each other before, which the mission
+  // audit flagged as a tool-registry overlap root problem. Make the
+  // collision loud so bootstraps fail fast instead of shipping a registry
+  // where the "last registration wins" outcome depends on module load
+  // order.
+  if (tools.has(name)) {
+    const err = new Error(
+      `Duplicate Anya tool id "${name}" — each tool id must register exactly once.`
+    )
+    err.status = 500
+    throw err
+  }
+
   tools.set(name, {
     name,
     description: description ?? '',
@@ -554,6 +567,26 @@ export function registerTool({ name, description, schema, handler, requiresAdmin
     handler,
     requiresAdmin: Boolean(requiresAdmin),
   })
+}
+
+/**
+ * Startup assertion — throws if any tool id was registered more than once
+ * at import time. Safe to call from server boot / health checks.
+ */
+export function assertNoDuplicateToolIds() {
+  const seen = new Map()
+  for (const name of tools.keys()) {
+    const n = String(name).toLowerCase()
+    if (seen.has(n)) {
+      const err = new Error(
+        `Anya tool registry contains duplicate id: "${name}" (also seen as "${seen.get(n)}")`
+      )
+      err.status = 500
+      throw err
+    }
+    seen.set(n, name)
+  }
+  return tools.size
 }
 
 export function listToolMetadata(ctx = null) {
