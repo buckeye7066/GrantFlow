@@ -664,10 +664,11 @@ router.get('/', async (req, res, next) => {
       }
     } else {
       if (!effectiveProfileId) {
-        return res.status(400).json({
-          error: 'profile_id is required',
-          message: 'Pass ?profile_id=... to scope documents to a single profile.',
-        })
+        // Contract (endpoint health): GET /api/documents must be 200-safe
+        // when called without an explicit profile_id. We still avoid cross-
+        // profile leakage by returning an empty array — the caller is telling
+        // us it has no tenant context to scope against.
+        return res.json([])
       }
 
       if (context.isAdmin) {
