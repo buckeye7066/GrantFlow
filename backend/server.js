@@ -6,7 +6,7 @@ import helmet from 'helmet';
 import compression from 'compression';
 import { fileURLToPath } from 'url';
 import { dirname, join, resolve } from 'path';
-import { createLogger } from './utils/logger.js';
+import { createLogger, setAuditLogSink } from './utils/logger.js';
 
 const serverLogger = createLogger('server');
 import fs from 'fs';
@@ -675,7 +675,7 @@ if (db.dialect === 'sqlite') {
     }
   });
 } else {
-  console.info('[database] Skipping legacy column auto-migrations (dialect != sqlite)');
+  console.info('[database] Skipping legacy column auto-migrations (dialect !== sqlite)');
   // Idempotent self-heal: list/delete routes filter on organizations.deleted_at (migration 0047).
   // Background migrate in start.js may still be running; avoid transient 500s on /api/organizations.
   try {
@@ -1077,7 +1077,7 @@ try {
     console.info('[startup] Skipping assistance directory seeding (SMOKE_MODE)')
   } else if (db.dialect !== 'sqlite') {
     // This helper is SQLite-only today (sync calls + local JSON files). Skip on Postgres until refactored.
-    console.info('[startup] Skipping assistance directory seeding (dialect != sqlite)')
+    console.info('[startup] Skipping assistance directory seeding (dialect !== sqlite)')
   } else {
     const existing = db
       .prepare("SELECT COUNT(*) as count FROM funding_opportunities WHERE source IN ('state_211','assistance_network')")
@@ -2600,6 +2600,55 @@ if (process.env.NODE_ENV !== 'test') {
   import('./jobs/anyaBrainCleanup.js')
     .then(({ startAnyaBrainCleanupCron }) => startAnyaBrainCleanupCron({ db }))
     .catch((err) => console.warn('[anyaBrainCleanup] failed to start:', err?.message || err));
+
+  // Group 7: persist warn/error logs to audit_logs so admin.health.logs
+  // survives process restarts. The logger ring buffer stays in-memory; this
+  // sink writes durably in the background. We drop records silently on
+  // failure to avoid crashing request handlers.
+  try {
+    setAuditLogSink((rec) => {
+      const severity = rec.level === 'error' ? 'error' : 'warn'
+      // Don't block the emit site; fire-and-forget.
+      setImmediate(async () => {
+        try {
+          const id = (await import('crypto')).randomUUID()
+          await db
+            .prepare(
+              `INSERT INTO audit_logs (id, category, action, severity, details)
+                 VALUES (?, ?, ?, ?, ?)`,
+            )
+            .run(
+              id,
+              'logger',
+              String(rec.namespace || 'app') + ':' + String(rec.event || 'log'),
+              severity,
+              String(rec.message || '').slice(0, 4000),
+            )
+        } catch {
+          // swallow; a logging path must never crash the server
+        }
+      })
+    })
+  } catch (err) {
+    console.warn('[logger] setAuditLogSink failed:', err?.message || err)
+  }
+
+  // Group 5: Verify the Anya tool registry is collision-free at boot. Duplicate
+  // tool ids used to silently override each other; now we fail loudly during
+  // startup so the server never ships with an ambiguous registry.
+  import('./services/anyaToolRegistry.js')
+    .then(({ assertNoDuplicateToolIds }) => {
+      try {
+        const n = assertNoDuplicateToolIds()
+        console.log(`[anyaToolRegistry] boot verify: ${n} tools registered, no duplicates.`)
+      } catch (err) {
+        console.error('[anyaToolRegistry] boot verify FAILED:', err?.message || err)
+        if (process.env.NODE_ENV === 'production') {
+          process.exit(1)
+        }
+      }
+    })
+    .catch((err) => console.warn('[anyaToolRegistry] verify import failed:', err?.message || err));
 
   // Optional: continuous national programs crawler (Track A/B programs)
   if (process.env.NATIONAL_PROGRAMS_CRAWLER_ENABLED === 'true') {

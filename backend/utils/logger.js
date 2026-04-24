@@ -56,6 +56,24 @@ function pushRecord(rec) {
   if (_records.length > MAX_RECORDS) {
     _records.splice(0, _records.length - MAX_RECORDS)
   }
+  // Group 7: fan out warn/error records to the audit_logs sink if wired.
+  // The server registers an async sink via setAuditLogSink(). Never throw
+  // from here — logging must not crash the caller.
+  if (_auditSink && (rec.level === 'warn' || rec.level === 'error')) {
+    try {
+      _auditSink(rec)
+    } catch {
+      // swallow; sink errors are logged by the sink itself
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// External audit_logs sink. Registered once at boot by server.js.
+// ---------------------------------------------------------------------------
+let _auditSink = null
+export function setAuditLogSink(fn) {
+  _auditSink = typeof fn === 'function' ? fn : null
 }
 
 export function getRecentLogs({ level, source, limit = 50 } = {}) {

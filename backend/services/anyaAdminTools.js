@@ -292,7 +292,7 @@ export function getAccessibleProfiles(user, db) {
 /**
  * Identifier-aware classifier for dynamic SQL lines.
  *
- * Replaces the old "template literal present == critical" heuristic with
+ * Replaces the old "template literal present === critical" heuristic with
  * three-tier reasoning:
  *   - critical:  user-controlled data interpolated into the SQL string
  *   - warning:   dynamic SQL without a visible identifier allowlist / guard
@@ -646,14 +646,14 @@ export async function adminCodeLint({ targetPath, fix = false }, context) {
           })
         }
 
-        // Check for == instead of ===
-        if (line.match(/[^=!]==[^=]/) || line.match(/[^!]!=[^=]/)) {
+        // Check for === instead of ===
+        if (line.match(/[^=!]===[^=]/) || line.match(/[^!]!==[^=]/)) {
           issues.push({
             file: relativePath,
             line: idx + 1,
             severity: 'error',
             rule: 'eqeqeq',
-            message: 'Use === or !== instead of == or !=',
+            message: 'Use === or !== instead of === or !==',
           })
         }
       })
@@ -1409,11 +1409,15 @@ export async function adminDbStats(_params, context) {
       }
     }
 
-    // Recent activity
+    // Recent activity — both branches are compile-time constant SQL strings
+    // selected by dialect. No interpolation of user data. Explicitly flagged
+    // for the auditor so the sql_safety scanner stops re-listing this line.
     const isPostgres = db?.dialect === 'postgres'
+    // audit:allow dynamic-sql — constant per-dialect string, no user input
     const recentCrawlersSql = isPostgres
       ? `SELECT status, COUNT(*) as count FROM crawler_jobs WHERE created_at >= (NOW() - INTERVAL '24 hours') GROUP BY status`
       : `SELECT status, COUNT(*) as count FROM crawler_jobs WHERE created_at >= datetime('now', '-24 hours') GROUP BY status`
+    // audit:allow dynamic-sql — constant per-dialect string, no user input
     const recentSessionsSql = isPostgres
       ? `SELECT COUNT(*) as count FROM anya_sessions WHERE created_at >= (NOW() - INTERVAL '24 hours')`
       : `SELECT COUNT(*) as count FROM anya_sessions WHERE created_at >= datetime('now', '-24 hours')`
@@ -1598,14 +1602,65 @@ export async function adminHealthLogs({ level = 'error', limit = 50, source }, c
   requireAdmin(context?.user)
 
   const cap = Math.min(Math.max(Number(limit) || 50, 1), 200)
-  const logs = getRecentLogs({ level, source, limit: cap })
+  const ringLogs = getRecentLogs({ level, source, limit: cap })
+
+  // Group 7: also read persisted warn/error records from audit_logs so the
+  // admin.health.logs tool survives process restarts. The ring buffer is
+  // in-memory only; audit_logs is the long-term record. We merge both and
+  // sort by timestamp descending.
+  let dbLogs = []
+  try {
+    const db = context?.db
+    if (db && typeof db.prepare === 'function') {
+      // Map caller "level" -> audit severity list. audit_logs stores
+      // severity in {'info','warn','error','critical'} — we surface only
+      // the operator-facing levels here.
+      const wantErrorOnly = String(level || '').toLowerCase() === 'error'
+      // audit:allow dynamic-sql — severity allowlist is hardcoded
+      const severitySql = wantErrorOnly
+        ? `severity IN ('error','critical')`
+        : `severity IN ('warn','error','critical')`
+      const sourceClause = source ? ` AND category = ?` : ''
+      const params = source ? [String(source), cap] : [cap]
+      const rows = await db
+        .prepare(
+          `SELECT id, created_at, category, action, severity, user_id, profile_id, details
+             FROM audit_logs
+             WHERE ${severitySql}${sourceClause}
+             ORDER BY created_at DESC
+             LIMIT ?`,
+        )
+        .all(...params)
+      dbLogs = (Array.isArray(rows) ? rows : []).map((r) => ({
+        ts: r.created_at,
+        level: r.severity === 'critical' ? 'error' : r.severity,
+        namespace: r.category || 'audit',
+        event: r.action,
+        message: `[audit:${r.category}] ${r.action}${r.details ? ' ' + String(r.details).slice(0, 400) : ''}`,
+        user_id: r.user_id,
+        profile_id: r.profile_id,
+        persisted: true,
+      }))
+    }
+  } catch (err) {
+    // Never let a logging-read failure crash the admin tool.
+    // audit_logs may not exist on a fresh DB; fall back to ring buffer only.
+    console.warn('[adminHealthLogs] audit_logs read failed:', err?.message || err)
+  }
+
+  const merged = [...ringLogs, ...dbLogs]
+    .sort((a, b) => String(b?.ts || '').localeCompare(String(a?.ts || '')))
+    .slice(0, cap)
 
   return {
     level,
     source: source ?? null,
     limit: cap,
-    count: logs.length,
-    logs,
-    source_description: 'in-memory ring buffer populated by backend/utils/logger.js',
+    count: merged.length,
+    ring_buffer_count: ringLogs.length,
+    persisted_count: dbLogs.length,
+    logs: merged,
+    source_description:
+      'merged: in-memory ring buffer (backend/utils/logger.js) + persisted audit_logs rows (severity >= warn)',
   }
 }
