@@ -669,12 +669,53 @@ export async function invokeTool(name, params, context) {
     }
   }
 
-  const result = await tool.handler(params ?? {}, context ?? {})
-
-  return {
-    id: randomUUID(),
-    tool: tool.name,
-    output: result,
+  // Record the invocation in anya_tool_usage regardless of outcome.
+  // The admin.brain.stats / admin.diagnostics checks read from this table to
+  // verify Anya is actually being exercised; before this hook the table stayed
+  // empty, which triggered mission goal 15 (Anya grounding) to FAIL.
+  const startedAt = Date.now()
+  let ok = true
+  let errorMessage = null
+  let result
+  try {
+    result = await tool.handler(params ?? {}, context ?? {})
+    return {
+      id: randomUUID(),
+      tool: tool.name,
+      output: result,
+    }
+  } catch (err) {
+    ok = false
+    errorMessage = err?.message ? String(err.message).slice(0, 500) : String(err).slice(0, 500)
+    throw err
+  } finally {
+    try {
+      const db = context?.db
+      if (db && typeof db.prepare === 'function') {
+        const user = context?.user || {}
+        await db
+          .prepare(
+            `INSERT INTO anya_tool_usage
+               (id, tool_name, session_id, user_id, profile_id, parameters, success, error_message, execution_time_ms)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          )
+          .run(
+            randomUUID(),
+            String(name),
+            context?.sessionId ?? context?.session_id ?? null,
+            user.userId ?? user.id ?? null,
+            context?.profile_id ?? context?.profileId ?? null,
+            JSON.stringify(params ?? {}).slice(0, 4000),
+            ok ? 1 : 0,
+            errorMessage,
+            Date.now() - startedAt,
+          )
+      }
+    } catch (persistErr) {
+      // Never block tool execution on usage-log failures; warn once.
+      // eslint-disable-next-line no-console
+      console.warn('[anyaToolRegistry] failed to log anya_tool_usage:', persistErr?.message || persistErr)
+    }
   }
 }
 

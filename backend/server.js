@@ -2596,6 +2596,11 @@ if (process.env.NODE_ENV !== 'test') {
   // Start the background health service (runs every 30 min, configurable via ANYA_HEALTH_INTERVAL_MS)
   startHealthService(db);
 
+  // Daily Anya brain/tool-usage cleanup (keeps the memory + audit tables bounded).
+  import('./jobs/anyaBrainCleanup.js')
+    .then(({ startAnyaBrainCleanupCron }) => startAnyaBrainCleanupCron({ db }))
+    .catch((err) => console.warn('[anyaBrainCleanup] failed to start:', err?.message || err));
+
   // Optional: continuous national programs crawler (Track A/B programs)
   if (process.env.NATIONAL_PROGRAMS_CRAWLER_ENABLED === 'true') {
     const intervalMinutes = Number.parseInt(
