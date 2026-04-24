@@ -639,6 +639,20 @@ if (shouldAutoMigrate) {
   }
 }
 
+// MIGRATE_ON_BOOT: apply any pending SQL migrations from backend/db/(postgres/)migrations
+// and emit a single `schema check: OK|DRIFT` line. This is the canonical way to keep
+// production in sync with new migrations — operators set MIGRATE_ON_BOOT=1 once,
+// pending migrations run on deploy, and any residual drift is visible in the startup log.
+const shouldMigrateOnBoot = /^(1|true|yes|on)$/i.test(String(process.env.MIGRATE_ON_BOOT || '').trim())
+if (shouldMigrateOnBoot && !app.locals.db_startup_error) {
+  try {
+    const { runPendingMigrationsOnBoot } = await import('./db/migrate.js')
+    await runPendingMigrationsOnBoot({ logger: console })
+  } catch (bootMigrateErr) {
+    console.error('[migrate:boot] failed:', bootMigrateErr?.message || bootMigrateErr)
+  }
+}
+
 // Then add columns that may be missing (schema.sql may not include every migration column).
 // This legacy auto-migration is SQLite-only. Postgres must be migrated deterministically via SQL migrations.
 if (db.dialect === 'sqlite') {

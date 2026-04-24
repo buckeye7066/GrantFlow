@@ -392,10 +392,41 @@ CREATE TABLE IF NOT EXISTS grants (
   evaluated_at DATETIME,
   match_confidence INTEGER,
 
+  -- Canonical URL + content fingerprint (migration 058).
+  -- url stores the authoritative actionable URL chosen for this grant
+  -- (distinct from application_url/portal_url fallbacks). fingerprint is
+  -- sha256(title|sponsor|deadline|source_url) for dedup + drift detection.
+  url TEXT,
+  fingerprint TEXT,
+  fingerprint_version INTEGER DEFAULT 1,
+
   -- Tracking
   assigned_to TEXT,
   priority TEXT CHECK(priority IN ('low', 'medium', 'high', 'urgent'))
 );
+
+CREATE INDEX IF NOT EXISTS idx_grants_fingerprint ON grants(fingerprint);
+CREATE INDEX IF NOT EXISTS idx_grants_url         ON grants(url);
+
+-- crawler_logs: audit trail for both profile-scoped and global crawl runs.
+-- opportunityMatcher.trackGlobalOpportunity and codeGuard goal 11 both
+-- require this table; its absence was breaking silent inserts and the
+-- mission verifier.
+CREATE TABLE IF NOT EXISTS crawler_logs (
+  id           TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+  job_id       TEXT REFERENCES crawler_jobs(id) ON DELETE CASCADE,
+  profile_id   TEXT REFERENCES profiles(id) ON DELETE SET NULL,
+  crawler_type TEXT,
+  level        TEXT,
+  status       TEXT,
+  message      TEXT,
+  payload      TEXT,
+  created_at   DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_crawler_logs_job        ON crawler_logs(job_id);
+CREATE INDEX IF NOT EXISTS idx_crawler_logs_profile    ON crawler_logs(profile_id);
+CREATE INDEX IF NOT EXISTS idx_crawler_logs_created_at ON crawler_logs(created_at);
 
 -- Milestones
 CREATE TABLE IF NOT EXISTS milestones (

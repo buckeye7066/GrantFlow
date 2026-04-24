@@ -112,7 +112,11 @@ async function applyMigration(filename) {
       await tx.prepare('INSERT INTO _migrations (name) VALUES (?)').run(filename);
     });
   } else {
-    db.withTransaction((tx) => {
+    // IMPORTANT: must await — the sqlite withTransaction is async (manual
+    // BEGIN/COMMIT) and without awaiting we'd return before COMMIT, which
+    // previously caused the caller to log "Success" while the INSERT into
+    // _migrations never landed, looping the same migration every boot.
+    await db.withTransaction((tx) => {
       tx.exec(sql);
       tx.prepare('INSERT INTO _migrations (name) VALUES (?)').run(filename);
     });
@@ -126,6 +130,11 @@ function isIdempotentAlreadyAppliedError(err) {
   if (msg.includes('duplicate column name')) return true;
   if (msg.includes('already exists')) return true; // table/index already exists
   if (msg.includes('duplicate index')) return true;
+
+  // sqlite < 3.35 does not support `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`;
+  // the legacy schema-apply path already materialized the column in practice,
+  // so treat this specific parser error as an "already applied" signal.
+  if (msg.includes('near "exists"') && msg.includes('syntax error')) return true;
 
   return false;
 }
@@ -205,5 +214,66 @@ async function main() {
     process.exit(0);
 }
 
-main();
+/**
+ * Idempotent boot-time migrate + schema-check entry point.
+ *
+ * Called from backend/server.js when MIGRATE_ON_BOOT=1 is set. Applies
+ * pending migrations using the same logic as `npm run migrate`, then emits
+ * exactly one line of the form `schema check: OK` or
+ * `schema check: DRIFT: <cols>` so operators can grep the startup log for
+ * drift without reading the full admin.diagnostics output.
+ *
+ * Safe to call multiple times; _migrations is the idempotency table.
+ */
+export async function runPendingMigrationsOnBoot({ logger = console } = {}) {
+  if (!ensureDirExists(migrationsDir)) return { ran: 0, drift: null }
+  await ensureSqliteBaseSchema()
+  await ensureMigrationsTable()
+  const applied = await getAppliedSet()
+  const files = listSqlMigrations(migrationsDir)
+  const pending = files.filter((f) => !applied.has(f))
+  let ran = 0
+  for (const filename of pending) {
+    try {
+      await applyMigration(filename)
+      ran += 1
+    } catch (error) {
+      if (db.dialect !== 'postgres' && isIdempotentAlreadyAppliedError(error)) {
+        await recordAsApplied(filename, 'idempotent DDL')
+        ran += 1
+        continue
+      }
+      logger.error?.(`[migrate:boot] Failed on ${filename}: ${error?.message || error}`)
+      throw error
+    }
+  }
+
+  let driftLine = 'schema check: UNAVAILABLE'
+  try {
+    const { getSystemDiagnostics } = await import('../services/diagnosticsService.js')
+    const diag = await getSystemDiagnostics(db)
+    const sc = diag?.db?.schema_checks
+    const missingCols = sc?.details?.missing_columns || []
+    const missingTables = sc?.details?.missing_tables || []
+    if (missingCols.length === 0 && missingTables.length === 0) {
+      driftLine = 'schema check: OK'
+    } else {
+      const parts = []
+      if (missingCols.length) parts.push(`cols=${missingCols.join(',')}`)
+      if (missingTables.length) parts.push(`tables=${missingTables.join(',')}`)
+      driftLine = `schema check: DRIFT: ${parts.join('; ')}`
+    }
+  } catch (err) {
+    driftLine = `schema check: UNAVAILABLE (${err?.message || err})`
+  }
+  logger.log?.(`[migrate:boot] ran=${ran} ${driftLine}`)
+  return { ran, drift: driftLine }
+}
+
+// Only run the CLI entry point when invoked directly, so importers
+// (e.g. backend/server.js boot hook) don't trigger process.exit.
+const isDirectInvocation = process.argv[1] && process.argv[1].replace(/\\/g, '/').endsWith('backend/db/migrate.js')
+if (isDirectInvocation) {
+  main();
+}
 

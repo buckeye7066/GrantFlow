@@ -150,11 +150,71 @@ async function getTableCount(db, tableName) {
 }
 
 /**
- * Check funding_opportunities table schema for required columns
- * @param {Object} db - Database connection
- * @returns {Object} Schema check results
+ * Return the set of columns present on a table and the required columns that
+ * are absent. Works for both sqlite (PRAGMA) and postgres
+ * (information_schema). Returns empty sets if the table itself is missing;
+ * the caller decides whether to flag the table separately via
+ * checkTableExists().
+ */
+async function checkTableColumns(db, tableName, required = []) {
+  try {
+    if (db?.dialect === 'postgres') {
+      const rows = await db
+        .prepare(
+          `
+            SELECT column_name
+            FROM information_schema.columns
+            WHERE table_schema = current_schema()
+              AND table_name = $1
+          `,
+        )
+        .all(tableName)
+      const has = new Set((rows || []).map((r) => String(r.column_name)))
+      return { has, missing: required.filter((c) => !has.has(c)) }
+    }
+    const rows = await db.prepare(`PRAGMA table_info(${tableName})`).all()
+    const has = new Set((rows || []).map((r) => r.name))
+    return { has, missing: required.filter((c) => !has.has(c)) }
+  } catch {
+    /* intentionally ignored: table missing or unreadable — caller flags via checkTableExists */
+    return { has: new Set(), missing: required.slice() }
+  }
+}
+
+async function checkTableExists(db, tableName) {
+  try {
+    if (db?.dialect === 'postgres') {
+      const row = await db
+        .prepare(`SELECT to_regclass(current_schema() || '.' || $1) AS regclass`)
+        .get(tableName)
+      return Boolean(row?.regclass)
+    }
+    const row = await db
+      .prepare(
+        `SELECT name FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1`,
+      )
+      .get(tableName)
+    return Boolean(row?.name)
+  } catch {
+    /* intentionally ignored: absence is the signal callers want */
+    return false
+  }
+}
+
+/**
+ * Check schema drift across funding_opportunities + grants + crawler_logs.
+ *
+ * This is the canonical drift detector used by admin.diagnostics,
+ * `npm run db:check`, and the boot-time schema-check log line in
+ * backend/db/migrate.js. It MUST return `details.missing_columns` as an
+ * empty array when the schema is up to date — CI relies on that to block
+ * releases from landing with a drifted schema.
  */
 async function checkFundingOpportunitiesSchema(db) {
+  const grantsRequired = ['url', 'matched_needs', 'match_decision', 'fingerprint', 'fingerprint_version']
+  const grantsCheck = await checkTableColumns(db, 'grants', grantsRequired)
+  const crawlerLogsExists = await checkTableExists(db, 'crawler_logs')
+
   if (db?.dialect === 'postgres') {
     try {
       const targetColumns = ['type', 'evidence_url', 'last_verified_at', 'title', 'sponsor', 'deadline']
@@ -177,6 +237,14 @@ async function checkFundingOpportunitiesSchema(db) {
         .get()
       const crawlLogsExists = Boolean(crawlLogsExistsRow?.regclass)
 
+      const fundingMissing = targetColumns.filter((col) => !columnNames.has(col))
+      const missingColumns = [
+        ...fundingMissing.map((c) => `funding_opportunities.${c}`),
+        ...grantsCheck.missing.map((c) => `grants.${c}`),
+      ]
+      const missingTables = []
+      if (!crawlerLogsExists) missingTables.push('crawler_logs')
+
       return {
         funding_opportunities_has_type: columnNames.has('type'),
         funding_opportunities_has_evidence_url: columnNames.has('evidence_url'),
@@ -184,10 +252,16 @@ async function checkFundingOpportunitiesSchema(db) {
         funding_opportunities_has_title: columnNames.has('title'),
         funding_opportunities_has_sponsor: columnNames.has('sponsor'),
         funding_opportunities_has_deadline: columnNames.has('deadline'),
+        grants_has_url: grantsCheck.has.has('url'),
+        grants_has_fingerprint: grantsCheck.has.has('fingerprint'),
+        grants_has_match_decision: grantsCheck.has.has('match_decision'),
+        grants_has_matched_needs: grantsCheck.has.has('matched_needs'),
         crawl_logs_exists: crawlLogsExists,
+        crawler_logs_exists: crawlerLogsExists,
         details: {
           dialect: 'postgres',
-          missing_columns: targetColumns.filter((col) => !columnNames.has(col)),
+          missing_columns: missingColumns,
+          missing_tables: missingTables,
         },
       }
     } catch (error) {
@@ -213,7 +287,13 @@ async function checkFundingOpportunitiesSchema(db) {
     }
     
     const targetColumns = ['type', 'evidence_url', 'last_verified_at', 'title', 'sponsor', 'deadline'];
-    const missingColumns = targetColumns.filter((col) => !columnNames.includes(col));
+    const fundingMissing = targetColumns.filter((col) => !columnNames.includes(col));
+    const missingColumns = [
+      ...fundingMissing.map((c) => `funding_opportunities.${c}`),
+      ...grantsCheck.missing.map((c) => `grants.${c}`),
+    ];
+    const missingTables = [];
+    if (!crawlerLogsExists) missingTables.push('crawler_logs');
     return {
       funding_opportunities_has_type: columnNames.includes('type'),
       funding_opportunities_has_evidence_url: columnNames.includes('evidence_url'),
@@ -221,10 +301,16 @@ async function checkFundingOpportunitiesSchema(db) {
       funding_opportunities_has_title: columnNames.includes('title'),
       funding_opportunities_has_sponsor: columnNames.includes('sponsor'),
       funding_opportunities_has_deadline: columnNames.includes('deadline'),
+      grants_has_url: grantsCheck.has.has('url'),
+      grants_has_fingerprint: grantsCheck.has.has('fingerprint'),
+      grants_has_match_decision: grantsCheck.has.has('match_decision'),
+      grants_has_matched_needs: grantsCheck.has.has('matched_needs'),
       crawl_logs_exists: crawlLogsExists,
+      crawler_logs_exists: crawlerLogsExists,
       details: {
         dialect: 'sqlite',
         missing_columns: missingColumns,
+        missing_tables: missingTables,
       },
     };
   } catch (error) {

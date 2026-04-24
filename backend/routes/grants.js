@@ -22,6 +22,11 @@ import {
   gateOpportunityForPipeline,
   buildTrustMetadata,
 } from '../services/opportunityTrust.js'
+import {
+  grantFingerprintFromOpportunity,
+  chooseGrantUrl,
+  GRANT_FINGERPRINT_VERSION,
+} from '../utils/grantFingerprint.js'
 
 import { createLogger } from '../utils/logger.js'
 const routeLogger = createLogger('route:grants')
@@ -89,6 +94,23 @@ const ALLOWED_GRANT_COLUMNS = new Set([
 
   // optional back-compat fields used by some UIs
   'portal_url',
+
+  // Canonical URL + fingerprint + match-decision metadata (migration 058).
+  // These are permitted so the UI / crawlers can round-trip the exact value
+  // that matchEngine persists without stripping it at the route boundary.
+  'url',
+  'fingerprint',
+  'fingerprint_version',
+  'match_decision',
+  'match_explanation',
+  'matched_needs',
+  'eligibility_status',
+  'ineligibility_reasons',
+  'profile_fingerprint',
+  'opportunity_fingerprint',
+  'matcher_version',
+  'evaluated_at',
+  'match_confidence',
 ]);
 
 // NOTE: Access control is centralized in `backend/utils/accessControl.js`
@@ -895,16 +917,51 @@ router.post('/', mutationRateLimiter, async (req, res) => {
 
     // Normalize frontend aliases → canonical column names, then sanitize
     const sanitizedData = sanitizeColumns(normalizeGrantFields(data), ALLOWED_GRANT_COLUMNS);
-    
+
     // Stringify JSON fields
     if (sanitizedData.match_reasons && Array.isArray(sanitizedData.match_reasons)) {
       sanitizedData.match_reasons = JSON.stringify(sanitizedData.match_reasons);
     }
-    
+    if (sanitizedData.matched_needs && Array.isArray(sanitizedData.matched_needs)) {
+      sanitizedData.matched_needs = JSON.stringify(sanitizedData.matched_needs);
+    }
+    if (sanitizedData.ineligibility_reasons && Array.isArray(sanitizedData.ineligibility_reasons)) {
+      sanitizedData.ineligibility_reasons = JSON.stringify(sanitizedData.ineligibility_reasons);
+    }
+
+    // Populate canonical url + fingerprint + neutral match_decision if the
+    // caller didn't supply them. The matchEngine path is the primary
+    // producer of these fields, but the POST /grants endpoint is used for
+    // manual grant creation + seed scripts and must leave the same invariant
+    // intact (every grant row has a url+fingerprint+match_decision).
+    if (!sanitizedData.url) {
+      const picked = chooseGrantUrl({
+        url: data.url,
+        application_url: sanitizedData.application_url ?? data.applicationUrl,
+        portal_url: sanitizedData.portal_url ?? data.portalUrl,
+      })
+      if (picked) sanitizedData.url = picked
+    }
+    if (!sanitizedData.fingerprint) {
+      sanitizedData.fingerprint = grantFingerprintFromOpportunity({
+        title: sanitizedData.title ?? data.title,
+        sponsor: sanitizedData.funder ?? data.funder,
+        deadline: sanitizedData.deadline ?? data.deadline,
+        url: sanitizedData.url,
+      })
+      sanitizedData.fingerprint_version = sanitizedData.fingerprint_version ?? GRANT_FINGERPRINT_VERSION
+    }
+    if (!sanitizedData.match_decision) {
+      sanitizedData.match_decision = 'review'
+    }
+    if (sanitizedData.matched_needs === undefined || sanitizedData.matched_needs === null) {
+      sanitizedData.matched_needs = '[]'
+    }
+
     const columns = ['id', ...Object.keys(sanitizedData)];
     const placeholders = columns.map(() => '?').join(', ');
     const values = [id, ...Object.values(sanitizedData)];
-    
+
     await req.db.prepare(`
       INSERT INTO grants (${columns.join(', ')})
       VALUES (${placeholders})
