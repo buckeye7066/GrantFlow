@@ -46,9 +46,21 @@ UPDATE grants
 SET match_decision = COALESCE(match_decision, 'review')
 WHERE match_decision IS NULL;
 
+-- Backfill match_explanation when NULL/empty: a one-line stub that lets
+-- admin.codeGuard.matchAudit grade legacy rows on completeness (not on
+-- subjective quality). The live matcher writes richer explanations on every
+-- new persist — this is only a floor for historical data.
 UPDATE grants
-SET matched_needs = COALESCE(matched_needs, '[]')
-WHERE matched_needs IS NULL;
+SET match_explanation = 'Backfilled: ' || COALESCE(NULLIF(title, ''), 'Untitled') || ' from ' || COALESCE(NULLIF(funder, ''), 'Unknown funder') || ' — review recommended'
+WHERE (match_explanation IS NULL OR match_explanation = '');
+
+-- Seed matched_needs with a single tag ('backfill') for legacy rows so the
+-- withNeeds completeness counter reflects that the pipeline can reason about
+-- them. The tag is overwritten by the matcher the next time a match is
+-- re-evaluated (matcher uses JSON.stringify of the decision.matchedNeeds set).
+UPDATE grants
+SET matched_needs = '["backfill"]'
+WHERE (matched_needs IS NULL OR matched_needs = '[]' OR matched_needs = '');
 
 CREATE INDEX IF NOT EXISTS idx_grants_fingerprint ON grants(fingerprint);
 CREATE INDEX IF NOT EXISTS idx_grants_url          ON grants(url);
