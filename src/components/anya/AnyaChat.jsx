@@ -831,8 +831,8 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, pref
     const adapter = anyaContext?.adapter
     if (!adapter) return undefined
     const ctx = {}
-    if (adapter.completion?.resultCount != null) ctx.resultCount = adapter.completion.resultCount
-    if (adapter.completion?.pipelineCount != null) ctx.pipelineCount = adapter.completion.pipelineCount
+    if (adapter.completion?.resultCount !== null) ctx.resultCount = adapter.completion.resultCount
+    if (adapter.completion?.pipelineCount !== null) ctx.pipelineCount = adapter.completion.pipelineCount
     if (adapter.primaryEntityId) ctx.selectedGrant = adapter.primaryEntityId
     if (adapter.pageType) ctx.pageType = adapter.pageType
     return Object.keys(ctx).length > 0 ? ctx : undefined

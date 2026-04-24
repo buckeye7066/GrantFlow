@@ -1141,7 +1141,7 @@ router.get('/geo/summary', async (req, res) => {
         WHERE is_active = ${dialect === 'sqlite' ? '1' : 'true'}
           AND ${trustedOriginClause()} AND ${trustedSourceClause()}
           AND geo_zip IS NOT NULL
-          AND geo_zip != ''
+          AND geo_zip !== ''
         GROUP BY state, geo_zip, geo_county
         ORDER BY state ASC, geo_zip ASC
       `).all();
@@ -1681,7 +1681,7 @@ router.get('/:id/similar', async (req, res) => {
       `SELECT id, title, sponsor, categories, keywords, amount_min, amount_max,
               deadline, application_url, state, is_national, link_status
        FROM funding_opportunities
-       WHERE id != ? AND is_active = ${activeVal}
+       WHERE id !== ? AND is_active = ${activeVal}
        ORDER BY updated_at DESC
        LIMIT 200`
     ).all(String(id))

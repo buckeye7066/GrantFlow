@@ -22,7 +22,7 @@ export default function EditableTagList({
 
   // Sanitize tags: filter out null, undefined, and empty strings, ensure all are strings
   const sanitizedTags = (tags || []).filter(
-    (tag) => tag != null && typeof tag === 'string' && tag.trim() !== ''
+    (tag) => tag !== null && typeof tag === 'string' && tag.trim() !== ''
   );
 
   // Safely get lowercase title with fallback
@@ -39,7 +39,7 @@ export default function EditableTagList({
     if (trimmedTag && handleTagsUpdate) {
       // Filter existing tags to remove any invalid values, then add the new tag
       const validExistingTags = (tags || []).filter(
-        (tag) => tag != null && typeof tag === 'string' && tag.trim() !== ''
+        (tag) => tag !== null && typeof tag === 'string' && tag.trim() !== ''
       );
       const updatedTags = [...new Set([...validExistingTags, trimmedTag])];
       handleTagsUpdate(updatedTags);
@@ -48,11 +48,11 @@ export default function EditableTagList({
   };
 
   const handleRemoveTag = (tagToRemove) => {
-    if (tagToRemove == null || !handleTagsUpdate) return;
+    if (tagToRemove === null || !handleTagsUpdate) return;
     
     // Filter out the tag to remove and any invalid values
     const updatedTags = (tags || []).filter(
-      (tag) => tag != null && typeof tag === 'string' && tag.trim() !== '' && tag !== tagToRemove
+      (tag) => tag !== null && typeof tag === 'string' && tag.trim() !== '' && tag !== tagToRemove
     );
     handleTagsUpdate(updatedTags);
   };

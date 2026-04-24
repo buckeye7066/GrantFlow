@@ -689,7 +689,7 @@ export default function ProfileOverview({
     headerMetrics.push({
       label: "Billing Tier",
       value:
-        rateCents != null
+        rateCents !== null
           ? `${tierName} · ${rateCents === 0 ? "included" : new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(rateCents / 100)}/mo`
           : tierName,
       icon: HandCoins,

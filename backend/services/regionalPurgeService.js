@@ -79,7 +79,7 @@ export function discoverActiveProfileStates(db) {
     const rows = db.prepare(`
       SELECT DISTINCT state
       FROM profiles
-      WHERE state IS NOT NULL AND state != ''
+      WHERE state IS NOT NULL AND state !== ''
     `).all()
     for (const r of rows) addState(states, r.state)
   } catch {
@@ -92,7 +92,7 @@ export function discoverActiveProfileStates(db) {
       SELECT data
       FROM profile_sections
       WHERE section_key = 'basic_information'
-        AND data IS NOT NULL AND data != ''
+        AND data IS NOT NULL AND data !== ''
     `).all()
     for (const r of rows) {
       try {
@@ -114,7 +114,7 @@ export function discoverActiveProfileStates(db) {
       SELECT DISTINCT o.state
       FROM organizations o
       JOIN profiles p ON p.organization_id = o.id
-      WHERE o.state IS NOT NULL AND o.state != ''
+      WHERE o.state IS NOT NULL AND o.state !== ''
     `).all()
     for (const r of rows) addState(states, r.state)
   } catch {

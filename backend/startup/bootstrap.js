@@ -301,7 +301,7 @@ export async function runBootstrap({ db, uploadsDir, legacyUploadsDir, baseDir }
       }
     });
   } else {
-    console.info('[database] Skipping legacy column auto-migrations (dialect != sqlite)');
+    console.info('[database] Skipping legacy column auto-migrations (dialect !== sqlite)');
   }
 
   // ── 5. Core-table self-heal (SQLite) ──────────────────────────────────────

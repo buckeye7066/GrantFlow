@@ -123,7 +123,7 @@ export default function VNextApplication() {
     : null
   const missingFields = Array.isArray(missing?.missing_fields) ? missing.missing_fields.length : null
   const missingDocs = Array.isArray(missing?.missing_docs) ? missing.missing_docs.length : null
-  const missingnessUnavailable = app != null && missing === null
+  const missingnessUnavailable = app !== null && missing === null
 
   return (
     <div className="max-w-5xl mx-auto p-6 space-y-4">
@@ -172,11 +172,11 @@ export default function VNextApplication() {
           <CardContent className="space-y-2 text-sm">
             <div>
               <span className="font-medium">Expected value:</span>{' '}
-              {app.expected_value != null ? Number(app.expected_value).toFixed(2) : '—'}
+              {app.expected_value !== null ? Number(app.expected_value).toFixed(2) : '—'}
             </div>
             <div>
               <span className="font-medium">Risk score:</span>{' '}
-              {app.risk_score != null ? Number(app.risk_score).toFixed(2) : '—'}
+              {app.risk_score !== null ? Number(app.risk_score).toFixed(2) : '—'}
             </div>
           </CardContent>
         </Card>

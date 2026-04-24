@@ -61,7 +61,7 @@ function countRealNational(db) {
         WHERE is_active = ${activeVal}
           AND is_national = ${activeVal}
           AND source_url IS NOT NULL
-          AND source_url != ''
+          AND source_url !== ''
           AND ${trustedOriginClause()}
           AND ${trustedSourceClause()}
       `
@@ -71,7 +71,7 @@ function countRealNational(db) {
         WHERE is_active = ${activeVal}
           AND is_national = ${activeVal}
           AND source_url IS NOT NULL
-          AND source_url != ''
+          AND source_url !== ''
       `
   const row = db.prepare(sql).get()
   return Number(row?.count ?? 0)
@@ -97,7 +97,7 @@ export async function ensureMinimumNationalOpportunities(db, minimum = 3) {
         SET source_url = COALESCE(source_url, application_url)
         WHERE (source_url IS NULL OR source_url = '')
           AND application_url IS NOT NULL
-          AND application_url != ''
+          AND application_url !== ''
       `,
     ).run()
   } catch {

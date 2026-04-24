@@ -58,7 +58,7 @@ function relativeLuminanceFromHex(hex) {
 
 function pickReadableForegroundHex(backgroundHex) {
   const lum = relativeLuminanceFromHex(backgroundHex)
-  if (lum == null) return '#ffffff'
+  if (lum === null) return '#ffffff'
   return lum > 0.55 ? '#0a0a0a' : '#ffffff'
 }
 

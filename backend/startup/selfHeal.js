@@ -261,7 +261,7 @@ export async function runSelfHeal({ db, uploadsDir, IS_SMOKE_MODE, baseDir }) {
       console.info('[startup] Skipping assistance directory seeding (SMOKE_MODE)');
     } else if (db.dialect !== 'sqlite') {
       console.info(
-        '[startup] Skipping assistance directory seeding (dialect != sqlite)',
+        '[startup] Skipping assistance directory seeding (dialect !== sqlite)',
       );
     } else {
       const existing = db

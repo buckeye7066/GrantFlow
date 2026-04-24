@@ -75,7 +75,7 @@ const Diagnostics = () => {
             'match_explanation',
             'match_confidence',
             'matcher_version',
-          ].filter(f => body?.analysis?.[f] == null);
+          ].filter(f => body?.analysis?.[f] === null);
           testResult = {
             title: grant.title,
             status: missingAuditFields.length > 0 ? 'warn' : 'ok',

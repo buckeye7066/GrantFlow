@@ -328,7 +328,7 @@ export function buildWhere(parts) {
     const col = assertSafeIdentifier(column, 'column')
     const operator = normalizeOperator(op)
     if (value === null) {
-      fragments.push(`${col} IS ${operator === '!=' ? 'NOT NULL' : 'NULL'}`)
+      fragments.push(`${col} IS ${operator === '!==' ? 'NOT NULL' : 'NULL'}`)
       continue
     }
     if (Array.isArray(value)) {
@@ -339,7 +339,7 @@ export function buildWhere(parts) {
         continue
       }
       const placeholders = value.map(() => '?').join(', ')
-      fragments.push(`${col} ${operator === '!=' ? 'NOT IN' : 'IN'} (${placeholders})`)
+      fragments.push(`${col} ${operator === '!==' ? 'NOT IN' : 'IN'} (${placeholders})`)
       params.push(...value)
       continue
     }
@@ -356,7 +356,7 @@ export function buildWhere(parts) {
 
 function normalizeOperator(op) {
   const raw = String(op || '=').trim()
-  const allowed = new Set(['=', '!=', '<', '<=', '>', '>=', 'LIKE', 'NOT LIKE'])
+  const allowed = new Set(['=', '!==', '<', '<=', '>', '>=', 'LIKE', 'NOT LIKE'])
   if (!allowed.has(raw.toUpperCase()) && !allowed.has(raw)) {
     const err = new Error(`Unsafe SQL operator: ${op}`)
     err.status = 400

@@ -11,7 +11,7 @@ import { useAuthStore } from '@/stores/authStore'
 import { checkAccess } from '@/api/auth'
 
 function normalizeEmail(value) {
-  if (value == null) return ''
+  if (value === null) return ''
   return String(value).trim().toLowerCase()
 }
 

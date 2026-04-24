@@ -113,7 +113,7 @@ export default function ReminderCenterCard({
   }
 
   const planGeneratedLabel =
-    planGeneratedAt != null
+    planGeneratedAt !== null
       ? `Generated ${formatDistanceToNow(new Date(planGeneratedAt), { addSuffix: true })}`
       : null
 

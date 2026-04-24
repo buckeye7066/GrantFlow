@@ -15,8 +15,8 @@ const HOURLY_RATES = {
 }
 
 function firstScalar(value) {
-  if (Array.isArray(value)) return value.find((v) => v != null && String(v).trim() !== '') ?? null
-  if (value == null) return null
+  if (Array.isArray(value)) return value.find((v) => v !== null && String(v).trim() !== '') ?? null
+  if (value === null) return null
   const s = String(value).trim()
   return s ? s : null
 }

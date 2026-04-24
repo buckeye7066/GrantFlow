@@ -241,7 +241,7 @@ export default function AdminGeoCrawl() {
       const res = await indexCounties(selectedState)
       toast({
         title: "Counties indexed",
-        description: res?.counties != null ? `${res.counties} counties available for ${selectedState}.` : "Done.",
+        description: res?.counties !== null ? `${res.counties} counties available for ${selectedState}.` : "Done.",
       })
 
       // Refresh county list immediately so the UI updates.

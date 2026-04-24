@@ -82,8 +82,8 @@ export default function AIInvoiceGenerator({ organizationId, projectId, onApprov
         setProposedItems(lineItems.map(item => ({
   ...item,
   rate: item.rate ?? 0,
-  rateIsEstimated: item.rate == null,
-  isEditing: item.rate == null, // auto-open edit mode when rate is missing so user must confirm
+  rateIsEstimated: item.rate === null,
+  isEditing: item.rate === null, // auto-open edit mode when rate is missing so user must confirm
 })));
       }
     } catch (err) {

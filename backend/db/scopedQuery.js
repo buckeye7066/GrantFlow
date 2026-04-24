@@ -188,7 +188,7 @@ export function assertProfileScopedSql(sql, opts = {}) {
 
   try {
     // Soft emit so the existing audit log pipeline sees it.
-    // eslint-disable-next-line no-console
+     
     console.warn('[profile_bleed] unscoped SQL', JSON.stringify(detail))
   } catch {
     /* noop */

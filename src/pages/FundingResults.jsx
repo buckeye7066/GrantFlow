@@ -124,7 +124,7 @@ export default function FundingResults() {
         // This is a display convenience, not a pipeline gate; Goal 4 is not violated
         // because this page never inserts grants â it only presents candidates.
         const score = Number(o?.match_score ?? null);
-        if (isNaN(score) || o?.match_score == null) {
+        if (isNaN(score) || o?.match_score === null) {
           // No engine score present; include rather than suppress (Goal 7: prefer recall).
           return true;
         }

@@ -342,7 +342,7 @@ export default function ProfileMatcher() {
 
                         {/* Match Score */}
                         <div className="flex-shrink-0">
-                          <div className={`relative w-16 h-16 rounded-full border-[3px] flex items-center justify-center ${opp.match_score != null ? getMatchColor(opp.match_score) : 'text-slate-400 bg-slate-50 border-slate-200'}`}>
+                          <div className={`relative w-16 h-16 rounded-full border-[3px] flex items-center justify-center ${opp.match_score !== null ? getMatchColor(opp.match_score) : 'text-slate-400 bg-slate-50 border-slate-200'}`}>
                             <div className="text-center">
                               <div className="text-lg font-bold">{opp.match_score ?? '-'}</div>
                               <div className="text-[9px] font-medium uppercase">Match</div>

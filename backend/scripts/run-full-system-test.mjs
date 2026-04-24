@@ -111,7 +111,7 @@ async function saveJobHighMatchesToPipeline({ jobId, profileId, threshold = 50 }
   for (const opp of opps || []) {
     const res = await saveToProfilePipeline(db, opp, profileId, profileContext, null, threshold)
     const pct = typeof res?.matchPercentage === 'number' ? res.matchPercentage : null
-    if (pct != null && pct >= threshold) eligible += 1
+    if (pct !== null && pct >= threshold) eligible += 1
     if (res?.saved) saved += 1
     else skipped += 1
   }

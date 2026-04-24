@@ -4,7 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { FileDown } from "lucide-react"
 
 function escapeHtml(value) {
-  if (value == null) return ""
+  if (value === null) return ""
   return String(value)
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")

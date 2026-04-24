@@ -270,7 +270,7 @@ router.get('/:id/finish-packet', standardRateLimiter, async (req, res) => {
         SELECT *
         FROM vnext_application_tasks
         WHERE application_id = ?
-          AND status != 'done'
+          AND status !== 'done'
         ORDER BY created_at ASC
       `,
     )
