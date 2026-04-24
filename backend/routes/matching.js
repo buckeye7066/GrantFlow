@@ -12,6 +12,9 @@ import { interpretFundingIntent, sanitizeSearchTerm } from '../services/smartMat
 import { createOpenAIClient } from '../utils/openaiClient.js'
 import { assessOpportunityTrust } from '../services/opportunityTrust.js'
 
+import { createLogger } from '../utils/logger.js'
+const routeLogger = createLogger('route:matching')
+
 const router = express.Router()
 
 /** @param {import('express').Request} req */
@@ -319,7 +322,7 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
           params.push(pattern, pattern, pattern, pattern)
         }
         if (searchTerms.length > 1) {
-          console.info(`[matching] catalog filter: ${searchTerms.length} OR search terms (smart matcher / multi-keyword)`)
+          routeLogger.info(`[matching] catalog filter: ${searchTerms.length} OR search terms (smart matcher / multi-keyword)`)
         }
       }
 
@@ -444,7 +447,7 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
                      })
                      .filter((opp) => opp !== null)
       if (rejectStats.junk || rejectStats.reject || rejectStats.rejectDirectoryPreserved || rejectStats.trust) {
-        console.info(`[matching] candidates=${candidates.length} scored=${allScored.length} drops=${JSON.stringify(rejectStats)} trust_reasons=${JSON.stringify(trustDropReasons)}`)
+        routeLogger.info(`[matching] candidates=${candidates.length} scored=${allScored.length} drops=${JSON.stringify(rejectStats)} trust_reasons=${JSON.stringify(trustDropReasons)}`)
       }
 
       // Sort by user-requested criteria
@@ -480,7 +483,7 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
             relaxedReason = threshold > 0
               ? 'No strong matches found. These results are lower-confidence. Complete your profile (location, needs, organization type) to improve match quality.'
               : 'Showing best-available matches (all scored below default thresholds). Complete your profile for better matches.'
-            console.log(`[matching] Zero results at min_score=${minScore}; relaxed to ${threshold} (${scored.length} results)`)
+            routeLogger.info(`[matching] Zero results at min_score=${minScore}; relaxed to ${threshold} (${scored.length} results)`)
             break
           }
         }
@@ -493,7 +496,7 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
             .slice(0, Math.min(20, allScored.length))
           effectiveMinScore = 0
           relaxedReason = 'Showing best-available funding sources. Complete your profile with location, specific needs, and organization type to improve match quality.'
-          console.log(`[matching] LAST-RESORT fallback: returning top ${scored.length} of ${allScored.length} scored candidates`)
+          routeLogger.info(`[matching] LAST-RESORT fallback: returning top ${scored.length} of ${allScored.length} scored candidates`)
         }
       } else if (strictMin && scored.length === 0 && allScored.length > 0) {
         const rawScores = allScored
@@ -504,7 +507,7 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
         const suggestedThreshold = Math.max(5, Math.floor(rawScores[sugIdx] / 5) * 5)
         const countAtSuggested = rawScores.filter(s => s >= suggestedThreshold).length
         allScored._scoreHint = { bestScore, suggestedThreshold, countAtSuggested, totalScored: rawScores.length }
-        console.info(`[matching] strict min_score=${minScore} — no relax; returning 0 of ${allScored.length} scored (best=${bestScore}, suggest=${suggestedThreshold})`)
+        routeLogger.info(`[matching] strict min_score=${minScore} — no relax; returning 0 of ${allScored.length} scored (best=${bestScore}, suggest=${suggestedThreshold})`)
       }
 
       const MAX_RESPONSE = 500

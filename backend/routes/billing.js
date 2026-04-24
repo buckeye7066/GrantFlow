@@ -11,6 +11,9 @@ import {
 import { formatError } from '../middleware/errorHandler.js'
 import { ensureProfileAccess as ensureProfileAccessByEmail } from '../utils/accessControl.js'
 
+import { createLogger } from '../utils/logger.js'
+const routeLogger = createLogger('route:billing')
+
 const router = express.Router()
 
 function toDbBool(db, value) {

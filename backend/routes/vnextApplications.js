@@ -15,6 +15,9 @@ import { scoreApplication } from '../vnext/scoringService.js'
 import { writeAuditEvent } from '../vnext/auditEventsService.js'
 import { standardRateLimiter, mutationRateLimiter } from '../middleware/rateLimiting.js'
 
+import { createLogger } from '../utils/logger.js'
+const routeLogger = createLogger('route:vnextApplications')
+
 const router = express.Router()
 
 function vnextEnabled(req) {

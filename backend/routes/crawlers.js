@@ -23,6 +23,9 @@ import {
   estimateCompletion
 } from '../services/profileRevalEngine.js'
 
+import { createLogger } from '../utils/logger.js'
+const routeLogger = createLogger('route:crawlers')
+
 const router = express.Router()
 
 const ALLOWED_TYPES = new Set(CRAWLER_JOB_TYPES)
@@ -286,7 +289,7 @@ function buildRecentDays(dayCount = 7) {
 }
 
 function normalizeErrorMessage(message) {
-  if (message == null) return null
+  if ((message === null || message === undefined)) return null
   const text = typeof message === 'string' ? message : String(message)
   const trimmed = text.trim()
   if (!trimmed) return null
@@ -1095,7 +1098,7 @@ router.post('/jobs', enforceCrawlerJobTier(), async (req, res) => {
       })
     }
 
-    console.info('[crawlers/jobs] create', {
+    routeLogger.info('[crawlers/jobs] create', {
       request_id: requestId,
       user_id: ctx.userId ?? null,
       is_admin: Boolean(ctx.isAdmin),
@@ -1143,7 +1146,7 @@ router.post('/jobs', enforceCrawlerJobTier(), async (req, res) => {
           .prepare('SELECT * FROM crawler_jobs WHERE idempotency_key = ? AND status IN (?, ?) LIMIT 1')
           .get(idempotencyKey, 'queued', 'running')
         if (existing?.id) {
-          console.info('[crawlers/jobs] idempotency race recovered', {
+          routeLogger.info('[crawlers/jobs] idempotency race recovered', {
             request_id: requestId,
             job_id: existing.id,
             type,
@@ -1645,7 +1648,7 @@ router.post('/bulk-populate', async (req, res) => {
     }
     const allZipCodes = Object.keys(zipMap).slice(0, max_zips)
     
-    console.info(`[bulk-populate] Starting population of ${allZipCodes.length} ZIP codes with ${limit_per_zip} opportunities each`)
+    routeLogger.info(`[bulk-populate] Starting population of ${allZipCodes.length} ZIP codes with ${limit_per_zip} opportunities each`)
     
     // Import the crawler function
     const { processComprehensiveCrawlerJob } = await import('../services/comprehensiveCrawlerOptimized.js')
@@ -1678,14 +1681,14 @@ router.post('/bulk-populate', async (req, res) => {
         totalInserted += result.inserted || 0
         totalEvaluated += result.evaluated || 0
         
-        console.info(`[bulk-populate] Batch ${Math.floor(i/batchSize) + 1}/${Math.ceil(allZipCodes.length/batchSize)}: ${result.inserted} opportunities`)
+        routeLogger.info(`[bulk-populate] Batch ${Math.floor(i/batchSize) + 1}/${Math.ceil(allZipCodes.length/batchSize)}: ${result.inserted} opportunities`)
       } catch (batchErr) {
         errors.push({ batch: i, error: batchErr.message })
         console.error(`[bulk-populate] Batch ${i} error:`, batchErr.message)
       }
     }
     
-    console.info(`[bulk-populate] Complete: ${totalInserted} opportunities inserted from ${allZipCodes.length} ZIPs`)
+    routeLogger.info(`[bulk-populate] Complete: ${totalInserted} opportunities inserted from ${allZipCodes.length} ZIPs`)
     
     res.json({
       success: true,
@@ -1710,7 +1713,7 @@ router.post('/crawl-all-counties', async (req, res) => {
   }
   
   try {
-    console.info('[crawl-all-counties] Starting county-level funding crawl...')
+    routeLogger.info('[crawl-all-counties] Starting county-level funding crawl...')
     
     const { crawlAllCounties } = await import('../services/countyFundingCrawler.js')
     const result = await crawlAllCounties(req.db)
@@ -1898,7 +1901,7 @@ router.post('/seed-state-assistance', async (req, res) => {
   }
   
   try {
-    console.info('[seed-state-assistance] Loading state assistance programs...')
+    routeLogger.info('[seed-state-assistance] Loading state assistance programs...')
     
     const fs = await import('fs')
     const path = await import('path')
@@ -2002,7 +2005,7 @@ router.post('/crawl-grants-gov', async (req, res) => {
   }
   
   try {
-    console.info('[crawl-grants-gov] Starting Grants.gov crawl...')
+    routeLogger.info('[crawl-grants-gov] Starting Grants.gov crawl...')
     
     const { crawlGrantsGov } = await import('../services/grantsDotGovCrawler.js')
     
@@ -2038,7 +2041,7 @@ router.post('/remove-loans', async (req, res) => {
   }
   
   try {
-    console.info('[remove-loans] Removing loans and matching-fund opportunities...')
+    routeLogger.info('[remove-loans] Removing loans and matching-fund opportunities...')
     
     // Delete loans
     const loansDeleted = await req.db.prepare(`
@@ -2082,7 +2085,7 @@ router.post('/seed-all-real', async (req, res) => {
   }
   
   try {
-    console.info('[seed-all-real] Starting comprehensive real funding seed...')
+    routeLogger.info('[seed-all-real] Starting comprehensive real funding seed...')
     
     const { seedAllRealFunding, getOpportunityCountsByState } = await import('../services/realLocationFundingCrawler.js')
     
@@ -2189,7 +2192,7 @@ router.post('/seed-real-opportunities', async (req, res) => {
       }
     }
     
-    console.info(`[seed-real] Complete: ${inserted} inserted, ${updated} updated`)
+    routeLogger.info(`[seed-real] Complete: ${inserted} inserted, ${updated} updated`)
     
     res.json({
       success: true,
@@ -2350,22 +2353,22 @@ router.post('/real-crawl', async (req, res) => {
     // Dynamic import of the real crawler
     const { crawlRealOpportunities, crawlAllStates } = await import('../services/realFundingCrawler.js')
     
-    console.info(`[real-crawl] Starting real opportunity crawl${state ? ` for ${state}` : all_states ? ' for all states' : ' (national)'}...`)
+    routeLogger.info(`[real-crawl] Starting real opportunity crawl${state ? ` for ${state}` : all_states ? ' for all states' : ' (national)'}...`)
     
     let result
     if (all_states) {
       result = await crawlAllStates(req.db, (progress) => {
-        console.info(`[real-crawl] Progress: ${JSON.stringify(progress)}`)
+        routeLogger.info(`[real-crawl] Progress: ${JSON.stringify(progress)}`)
       })
     } else {
       result = await crawlRealOpportunities(req.db, state, {
         onProgress: (progress) => {
-          console.info(`[real-crawl] Progress: ${JSON.stringify(progress)}`)
+          routeLogger.info(`[real-crawl] Progress: ${JSON.stringify(progress)}`)
         }
       })
     }
     
-    console.info(`[real-crawl] Complete: ${result.inserted || result.total_inserted} inserted`)
+    routeLogger.info(`[real-crawl] Complete: ${result.inserted || result.total_inserted} inserted`)
     
     res.json({
       success: true,

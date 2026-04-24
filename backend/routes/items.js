@@ -3,6 +3,9 @@ import { requireAuthenticatedUser, ensureProfileAccess } from '../utils/accessCo
 import { suggestItemsForProfile, discoverNewCatalogItems, ensureItemCatalogSeeded } from '../services/itemCatalogService.js'
 import { formatError } from '../middleware/errorHandler.js'
 
+import { createLogger } from '../utils/logger.js'
+const routeLogger = createLogger('route:items')
+
 const router = express.Router()
 
 router.get('/suggestions', async (req, res) => {

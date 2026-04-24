@@ -28,6 +28,9 @@ import { isDesignatedProfileId } from '../utils/ensureDesignatedProfiles.js'
 import { resolveUploadsDir } from '../utils/uploadsDir.js'
 import { syncProfileFieldsFromSection } from '../utils/profileSectionSync.js'
 
+import { createLogger } from '../utils/logger.js'
+const routeLogger = createLogger('route:profiles')
+
 const router = express.Router()
 
 // Rate limit the profile listing endpoint (defense-in-depth).
@@ -205,7 +208,7 @@ const profileSelect = `
 
 /** DB `.all()` should return an array; normalize `{ rows }` shapes so `.map` never throws (empty sections). */
 function coerceDbRows(result) {
-  if (result == null) return []
+  if ((result === null || result === undefined)) return []
   if (Array.isArray(result)) return result
   if (Array.isArray(result.rows)) return result.rows
   return []
@@ -386,7 +389,7 @@ router.get('/', listProfilesLimiter, async (req, res) => {
     // If ctx missed admin but the DB says admin, upgrade `isAdmin` before pagination so admins get limit=1000.
     let resolvedAccessibleIds = req.ctx?.accessibleProfileIds
     if (!isAdmin && !scopeMine) {
-      if (resolvedAccessibleIds == null) {
+      if ((resolvedAccessibleIds === null || resolvedAccessibleIds === undefined)) {
         try {
           resolvedAccessibleIds = await getAccessibleProfileIds(req.db, user)
         } catch {
@@ -1073,7 +1076,7 @@ router.delete('/:id', async (req, res) => {
     await req.db
       .prepare("UPDATE profiles SET status = 'deleted', updated_at = CURRENT_TIMESTAMP WHERE id = ?")
       .run(id)
-    console.info('[profiles] Soft-deleted designated profile (tombstoned):', String(id))
+    routeLogger.info('[profiles] Soft-deleted designated profile (tombstoned):', String(id))
     return res.status(204).send()
   }
 

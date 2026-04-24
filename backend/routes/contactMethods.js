@@ -2,6 +2,9 @@ import express from 'express'
 import crypto from 'crypto'
 import { requireAuthenticatedUser, ensureOrganizationAccess, getAccessibleOrganizationIds } from '../utils/accessControl.js'
 
+import { createLogger } from '../utils/logger.js'
+const routeLogger = createLogger('route:contactMethods')
+
 const router = express.Router()
 router.use(requireAuthenticatedUser)
 

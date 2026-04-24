@@ -5,6 +5,9 @@ import { ensureServiceCatalogSchema, MILESTONE_PHASES } from '../services/servic
 import { createCheckoutSessionForPrice, getOrCreateStripeCustomerId } from '../services/stripeService.js'
 import { roundBillableMinutes } from '../services/hourlyRounding.js'
 
+import { createLogger } from '../utils/logger.js'
+const routeLogger = createLogger('route:stripe')
+
 const router = express.Router()
 
 function getPublicAppUrl() {
@@ -30,7 +33,7 @@ router.post('/checkout/service', ensureAuth, async (req, res) => {
 
   const body = req.body ?? {}
   const purchaseId = typeof body.purchase_id === 'string' ? body.purchase_id.trim() : ''
-  const phase = body.milestone_phase != null ? String(body.milestone_phase).trim() : null
+  const phase = (body.milestone_phase !== null && body.milestone_phase !== undefined) ? String(body.milestone_phase).trim() : null
   const agree = body.agree === true
 
   if (!agree) {

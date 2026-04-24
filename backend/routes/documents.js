@@ -20,6 +20,9 @@ import { ensureDocumentExtract } from '../services/documentIngestion/documentExt
 import { resolveUploadsDir } from '../utils/uploadsDir.js'
 import { ensureProfileEmailSchema } from '../utils/accessControl.js'
 
+import { createLogger } from '../utils/logger.js'
+const routeLogger = createLogger('route:documents')
+
 // OpenAI client helper
 function getOpenAI() {
   return createOpenAIClient().openai;
@@ -576,7 +579,7 @@ async function ensureDocumentDeleteAccess(req, res, context, document) {
 }
 
 function normalizeProfileId(value) {
-  if (value == null) return null;
+  if ((value === null || value === undefined)) return null;
   const trimmed = String(value).trim();
   if (!trimmed || trimmed.toLowerCase() === 'all') return null;
   return trimmed;
@@ -899,7 +902,7 @@ router.post('/ingest', uploadLimiter, requireUploadsWritable, runUploadSingle('d
       await linkProfileToAdmin(req.db, createdProfileId)
       profileId = createdProfileId
 
-      console.info('[documents/ingest] created profile from upload', {
+      routeLogger.info('[documents/ingest] created profile from upload', {
         requestId: req.requestId || null,
         profile_id: createdProfileId,
         display_name: displayName,

@@ -10,6 +10,9 @@ import { getPipelineHealth } from '../middleware/pipelineMonitor.js'
 import { MATCHER_VERSION } from '../services/matchEngine.js'
 import { RELEVANCE_RULES } from '../services/relevanceFilterRules.js'
 
+import { createLogger } from '../utils/logger.js'
+const routeLogger = createLogger('route:health')
+
 const router = express.Router()
 
 const __filename = fileURLToPath(import.meta.url)

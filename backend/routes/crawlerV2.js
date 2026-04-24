@@ -1,5 +1,8 @@
 import express from 'express'
 
+import { createLogger } from '../utils/logger.js'
+const routeLogger = createLogger('route:crawlerV2')
+
 const router = express.Router()
 
 function requireAdminOrToken(req, res) {

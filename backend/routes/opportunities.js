@@ -8,6 +8,9 @@ import {
   buildTrustMetadata,
 } from '../services/opportunityTrust.js'
 
+import { createLogger } from '../utils/logger.js'
+const routeLogger = createLogger('route:opportunities')
+
 const router = express.Router();
 
 const LOAN_TYPES = ['loan', 'loan_program', 'microloan'];
@@ -313,7 +316,7 @@ function dedupeKeyFromRow(row) {
   })();
   // Primary: collapse cross-source duplicates via stable URLs first.
   if (url) return `url:${url}`;
-  const sourceId = row.source_id != null ? String(row.source_id).trim().toLowerCase() : '';
+  const sourceId = (row.source_id !== null && row.source_id !== undefined) ? String(row.source_id).trim().toLowerCase() : '';
   if (sourceId) return `sid:${sourceId}`;
   // Fallback: collapse cross-source duplicates (even when URLs/IDs differ).
   if (title && sponsor) return `tsd:${title}::${sponsor}::${deadlineIso}`;
@@ -778,7 +781,7 @@ router.get('/', async (req, res) => {
       parsed.push(row);
     }
     if (removed > 0) {
-      console.info('[opportunities] de-duped duplicate rows', { removed, hasGeoRun, source: source ?? null });
+      routeLogger.info('[opportunities] de-duped duplicate rows', { removed, hasGeoRun, source: source ?? null });
     }
 
     // Second guardrail: drop expired opportunities that slip through due to non-ISO dates.
@@ -794,7 +797,7 @@ router.get('/', async (req, res) => {
       withoutExpired.push(row);
     }
     if (removedExpired > 0) {
-      console.info('[opportunities] removed expired opportunities', {
+      routeLogger.info('[opportunities] removed expired opportunities', {
         removed: removedExpired,
         request_id: req.requestId || null,
         hasGeoRun,
@@ -810,7 +813,7 @@ router.get('/', async (req, res) => {
     if (search && withoutExpired.length === 0 && filteredTotal <= 0) {
       const fallbackTokens = search.trim().split(/\s+/).filter(Boolean);
       if (fallbackTokens.length >= 2) {
-        console.info('[opportunities] primary search returned 0, trying token-AND fallback', { search });
+        routeLogger.info('[opportunities] primary search returned 0, trying token-AND fallback', { search });
         const likeOp = likeOperatorForDb(req.db);
         const fbConds = [`${prefix}is_active = ?`];
         const fbParams = [sqlBool(true)];
@@ -876,7 +879,7 @@ router.get('/', async (req, res) => {
         const totalFound = Number(baseCountRow?.total ?? 0);
 
         if (totalFound > 0) {
-          console.info('[opportunities] compliance fallback applied', {
+          routeLogger.info('[opportunities] compliance fallback applied', {
             request_id: req.requestId || null,
             compliance_requested: normalizedCompliance,
             geo_run_id: geoRunId ? String(geoRunId) : null,
@@ -1086,7 +1089,7 @@ router.get('/meta/export', async (req, res) => {
       if (rows.length < batchLimit) break;
     }
     res.end();
-    console.info('[opportunities/export] exported', { exported, state: state || null, source: source || null });
+    routeLogger.info('[opportunities/export] exported', { exported, state: state || null, source: source || null });
   } catch (error) {
     console.error('Error exporting opportunities:', error);
     if (!res.headersSent) { res.status(500).json({ error: error.message }); } else { res.end(); }

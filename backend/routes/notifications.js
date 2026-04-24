@@ -9,6 +9,9 @@
 import { Router } from 'express'
 import { requireAuthenticatedUser } from '../utils/accessControl.js'
 
+import { createLogger } from '../utils/logger.js'
+const routeLogger = createLogger('route:notifications')
+
 const router = Router()
 
 /**

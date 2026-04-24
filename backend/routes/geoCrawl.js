@@ -4,6 +4,9 @@ import { requireAuthenticatedUser, isAdminUserWithDb, getAuthUserId } from '../u
 import { createGeoCrawlRun, getGeoCrawlRunWithBackfill, listGeoCrawlEvents } from '../services/geoCrawlRunStore.js'
 import { dispatchCrawlerJob } from '../services/crawlerDispatcher.js'
 
+import { createLogger } from '../utils/logger.js'
+const routeLogger = createLogger('route:geoCrawl')
+
 export default function createGeoCrawlRouter({ uploadDir, getOpenAI } = {}) {
   const router = express.Router()
 

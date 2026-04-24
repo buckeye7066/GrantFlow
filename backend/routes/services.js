@@ -10,6 +10,9 @@ import {
 } from '../services/serviceCatalogStore.js'
 import { roundBillableMinutes } from '../services/hourlyRounding.js'
 
+import { createLogger } from '../utils/logger.js'
+const routeLogger = createLogger('route:services')
+
 const router = express.Router()
 
 // Ensure catalog exists (fast + idempotent). This keeps fresh deploys usable.

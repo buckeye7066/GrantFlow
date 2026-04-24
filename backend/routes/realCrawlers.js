@@ -20,6 +20,9 @@ import { scoreOpportunity, makeDecision } from '../services/matchEngine.js'
 import { runAllDomainEngines } from '../services/crawlers/domainEngines/index.js'
 import { crawlStateWaiverBenefits, evaluateStateWaiverEligibility } from '../services/crawlers/stateWaiverBenefitsCrawler.js'
 
+import { createLogger } from '../utils/logger.js'
+const routeLogger = createLogger('route:realCrawlers')
+
 const router = express.Router()
 
 /**
@@ -233,7 +236,7 @@ router.post('/run', ensureAuth, async (req, res) => {
     const db = req.db
     const startTime = Date.now()
 
-    console.info(`[RealCrawlers] Running ${crawler_type} for profile ${profile_id}`)
+    routeLogger.info(`[RealCrawlers] Running ${crawler_type} for profile ${profile_id}`)
 
     const strategy = getStrategy(crawler_type)
 
@@ -311,7 +314,7 @@ router.post('/run', ensureAuth, async (req, res) => {
           dropCounts.relevance++
           dropCounts.relevanceByRule[relevance.ruleId || 'unknown'] =
             (dropCounts.relevanceByRule[relevance.ruleId || 'unknown'] || 0) + 1
-          console.info(`[RealCrawlers] Filtered out "${opp.title}" — ${relevance.reason}`)
+          routeLogger.info(`[RealCrawlers] Filtered out "${opp.title}" — ${relevance.reason}`)
           return false
         }
         return true
@@ -366,7 +369,7 @@ router.post('/run', ensureAuth, async (req, res) => {
           .slice(0, 25)
         if (filtered.length > 0) {
           thresholdFallbackMessage = `Showing best-available funding sources. Your profile did not match a strict filter — complete more profile fields to improve matches.`
-          console.info(`[RealCrawlers] STAGE-2 relax: ${allMapped.length} candidates → ${filtered.length} returned (dropped relevance rules: ${JSON.stringify(dropCounts.relevanceByRule)})`)
+          routeLogger.info(`[RealCrawlers] STAGE-2 relax: ${allMapped.length} candidates → ${filtered.length} returned (dropped relevance rules: ${JSON.stringify(dropCounts.relevanceByRule)})`)
         }
       }
     } else if (strictMinScore && filtered.length === 0 && allMapped.length > 0) {
@@ -382,7 +385,7 @@ router.post('/run', ensureAuth, async (req, res) => {
       thresholdFallbackMessage = null // ensure no stale message
       // Attach to response via closure variable
       allMapped._scoreHint = { bestScore, suggestedThreshold, countAtSuggested, totalScored: rawScores.length }
-      console.info(
+      routeLogger.info(
         `[RealCrawlers] strict min_match_score=${min_match_score} — skipping threshold fallback (${allMapped.length} raw, best=${bestScore}, suggest=${suggestedThreshold})`,
       )
     }
@@ -414,7 +417,7 @@ router.post('/run', ensureAuth, async (req, res) => {
       return true
     })
     if (prePolicyCount > 0 && filtered.length < prePolicyCount) {
-      console.info(`[RealCrawlers] Policy filter: ${prePolicyCount} → ${filtered.length} (drops=${JSON.stringify(policyDrops)})`)
+      routeLogger.info(`[RealCrawlers] Policy filter: ${prePolicyCount} → ${filtered.length} (drops=${JSON.stringify(policyDrops)})`)
     }
 
     // GUARANTEE: if UI will show "Found N", backend must return >= 1 included item
@@ -476,7 +479,7 @@ router.post('/run', ensureAuth, async (req, res) => {
       }
     })
 
-    console.info(
+    routeLogger.info(
       `[RealCrawlers] ${crawler_type}: curated=${result.results.length} nearby=${nearbyOpps.length} allMapped=${allMapped.length} → returned=${filtered.length} (min_score=${min_match_score}, strict=${strictMinScore}) in ${duration}ms`,
     )
 
@@ -791,7 +794,7 @@ router.post('/specific-need', ensureAuth, async (req, res) => {
         webProfile = { signals: { location: {}, military: new Set(), assistance: new Set(), health: new Set() } }
       }
       const webResults = await searchWebForItem(need_text, webProfile)
-      console.info(`[specific-need] Web search for "${need_text}" found ${webResults.length} results`)
+      routeLogger.info(`[specific-need] Web search for "${need_text}" found ${webResults.length} results`)
 
       for (const wr of webResults) {
         const urlKey = (wr.url || '').toLowerCase().replace(/\/$/, '')

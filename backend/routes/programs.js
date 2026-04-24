@@ -2,6 +2,9 @@ import express from 'express'
 import { validatePagination } from '../utils/validation.js'
 import { requireAuthenticatedUser } from '../utils/accessControl.js'
 
+import { createLogger } from '../utils/logger.js'
+const routeLogger = createLogger('route:programs')
+
 const router = express.Router()
 
 // Require authentication for all program routes

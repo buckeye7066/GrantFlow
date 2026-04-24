@@ -1,6 +1,9 @@
 import { Router } from 'express';
 import { getAccessibleOrganizationIds, isAdminUser, requireAuthenticatedUser } from '../utils/accessControl.js'
 
+import { createLogger } from '../utils/logger.js'
+const routeLogger = createLogger('route:reminders')
+
 const router = Router();
 
 export const DAYS_LOOKAHEAD = 30;
@@ -63,7 +66,7 @@ function normalizeMilestone(row) {
 export async function fetchReminderSnapshot(db, lookaheadDays = DAYS_LOOKAHEAD, options = {}) {
   const organizationIds =
     options && Array.isArray(options.organizationIds) 
-      ? options.organizationIds.filter(id => id != null && (typeof id === 'number' || typeof id === 'string'))
+      ? options.organizationIds.filter(id => (id !== null && id !== undefined) && (typeof id === 'number' || typeof id === 'string'))
       : null
 
   // Compute date window boundaries in JavaScript

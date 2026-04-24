@@ -17,6 +17,9 @@ import {
 } from '../services/anyaOrchestrator.js'
 import { createAnyaRun, appendAnyaRunLog, completeAnyaRun } from '../services/anyaRuns.js'
 
+import { createLogger } from '../utils/logger.js'
+const routeLogger = createLogger('route:anya')
+
 const router = express.Router()
 
 const resolveAdminToken = () => process.env.ADMIN_TOKEN || process.env.ANYA_ADMIN_TOKEN || null

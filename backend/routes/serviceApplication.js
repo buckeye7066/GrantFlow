@@ -3,6 +3,9 @@ import crypto from 'crypto'
 import { sendServiceApplicationEmail } from '../services/email.js'
 import { isDesignatedProfileId } from '../utils/ensureDesignatedProfiles.js'
 
+import { createLogger } from '../utils/logger.js'
+const routeLogger = createLogger('route:serviceApplication')
+
 const router = express.Router()
 
 // Email recipient for service applications and contact forms.
@@ -81,7 +84,7 @@ async function saveApplicationToDb(db, data) {
       data.message || null
     )
     
-    console.info('[serviceApplication] Saved to database:', id)
+    routeLogger.info('[serviceApplication] Saved to database:', id)
     return id
   } catch (error) {
     console.warn('[serviceApplication] Could not save to DB:', error.message)

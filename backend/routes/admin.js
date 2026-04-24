@@ -41,6 +41,9 @@ import { runRegionalPurge, getPurgeSummary, getPurgeEvents } from '../services/r
 import { restoreProfileSectionsFromLinkedOrganizations } from '../services/profileOrganizationSync.js'
 import { runAutonomousCodeCrawl } from '../services/anyaAutonomousCrawler.js'
 
+import { createLogger } from '../utils/logger.js'
+const routeLogger = createLogger('route:admin')
+
 const router = express.Router();
 
 // Router-level admin guard: all routes in this file require authentication and admin privileges.
@@ -901,7 +904,7 @@ router.post('/env/apply', async (req, res) => {
 
   const key = typeof req.body?.key === 'string' ? req.body.key.trim() : '';
   const valueRaw = req.body?.value;
-  const value = valueRaw == null ? '' : String(valueRaw);
+  const value = (valueRaw === null || valueRaw === undefined) ? '' : String(valueRaw);
   const persist = Boolean(req.body?.persist);
 
   if (!key || !/^[A-Z0-9_]+$/.test(key)) {
@@ -1008,7 +1011,7 @@ function clampInt(value, { min, max, fallback }) {
 }
 
 function safeTrim(value) {
-  const s = value == null ? '' : String(value)
+  const s = (value === null || value === undefined) ? '' : String(value)
   const t = s.trim()
   return t ? t : ''
 }
@@ -3448,7 +3451,7 @@ router.post('/seed-profile-grants', async (req, res) => {
 // POST /api/admin/ingest - Trigger ingestion from all sources
 router.post('/ingest', async (req, res) => {
   try {
-    console.info('[admin/ingest] Starting manual ingestion...');
+    routeLogger.info('[admin/ingest] Starting manual ingestion...');
 
     // Import connectors dynamically.
     //
@@ -3473,7 +3476,7 @@ router.post('/ingest', async (req, res) => {
 
     // Ingest from Grants.gov (real public v2/search2 endpoint — no key required).
     try {
-      console.info('[admin/ingest] Fetching from Grants.gov...');
+      routeLogger.info('[admin/ingest] Fetching from Grants.gov...');
       const grantsGovOpps = await fetchGrantsGov({ rows: 100 });
       const grantsGovResult = await ingestOpportunities(req.db, grantsGovOpps, 'grants.gov');
       results.push({ source: 'grants.gov', ...grantsGovResult });
@@ -3484,7 +3487,7 @@ router.post('/ingest', async (req, res) => {
 
     // Ingest from USASpending.gov
     try {
-      console.info('[admin/ingest] Fetching from USASpending.gov...');
+      routeLogger.info('[admin/ingest] Fetching from USASpending.gov...');
       const { opportunities: usaSpendingOpps } = await fetchUSASpending({ limit: 100, page: 1 });
       const usaSpendingResult = await ingestOpportunities(req.db, usaSpendingOpps, 'usaspending.gov');
       results.push({ source: 'usaspending.gov', ...usaSpendingResult });
@@ -3495,7 +3498,7 @@ router.post('/ingest', async (req, res) => {
 
     // Ingest from NIH RePORTER (real API, no key required)
     try {
-      console.info('[admin/ingest] Fetching from NIH RePORTER...');
+      routeLogger.info('[admin/ingest] Fetching from NIH RePORTER...');
       const nihOpps = await fetchNihReporter({ limit: 100, offset: 0 });
       const nihResult = await ingestOpportunities(req.db, nihOpps, 'nih.reporter');
       results.push({ source: 'nih.reporter', ...nihResult });
@@ -3516,7 +3519,7 @@ router.post('/ingest', async (req, res) => {
       total_errors: results.reduce((sum, r) => sum + (r.errors || 0), 0),
     };
     
-    console.info('[admin/ingest] Ingestion completed:', summary);
+    routeLogger.info('[admin/ingest] Ingestion completed:', summary);
     
     res.json({
       success: summary.failures === 0,
@@ -4894,7 +4897,7 @@ router.post('/clear-all-pipelines', async (req, res) => {
     await safeDelete('crawl_metadata', 'DELETE FROM crawl_metadata')
     await safeDelete('crawler_jobs', 'DELETE FROM crawler_jobs')
 
-    console.info('[admin] clear-all-pipelines completed:', results)
+    routeLogger.info('[admin] clear-all-pipelines completed:', results)
     res.json({
       success: true,
       message: 'All pipelines cleared. Funding opportunities preserved for re-crawling.',
@@ -5063,7 +5066,7 @@ router.post('/backfill-matches', async (req, res) => {
       }
     }
 
-    console.info(`[admin/backfill-matches] Completed: accepted=${accepted}, reviewed=${reviewed}, rejected=${rejected}, errors=${errors}`)
+    routeLogger.info(`[admin/backfill-matches] Completed: accepted=${accepted}, reviewed=${reviewed}, rejected=${rejected}, errors=${errors}`)
 
     res.json({
       success: true,
@@ -5305,7 +5308,7 @@ router.post('/crawler-jobs/resolve-failures', async (req, res) => {
 
     const result = await req.db.prepare(sql).run()
     const deleted = result?.rowCount ?? result?.changes ?? 0
-    console.log(`[admin] Deleted ${deleted} stale failed crawler job(s)`)
+    routeLogger.info(`[admin] Deleted ${deleted} stale failed crawler job(s)`)
     res.json({ success: true, deleted })
   } catch (err) {
     console.error('[admin/resolve-failures] Error:', err)
@@ -5344,6 +5347,8 @@ router.post('/anya/runAutonomous', async (req, res) => {
     directory,
     pattern,
     dryRun: Boolean(dry_run),
+    // dry_run=false in HTTP is the per-invocation --write signal; env gate still enforced.
+    writeFlag: dry_run === false,
     maxIterations: Number.isFinite(Number(max_iterations)) ? Number(max_iterations) : undefined,
     maxFileChanges: Number.isFinite(Number(max_file_changes)) ? Number(max_file_changes) : undefined,
   }

@@ -23,6 +23,9 @@ import {
 } from '../apply/applyEngine.js'
 import { assertArtifactPathIsSafe } from '../apply/storageAdapter.js'
 
+import { createLogger } from '../utils/logger.js'
+const routeLogger = createLogger('route:applications')
+
 const router = express.Router()
 router.use(requireAuthenticatedUser)
 

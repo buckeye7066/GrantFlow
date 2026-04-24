@@ -1,3 +1,6 @@
+
+import { createLogger } from '../utils/logger.js'
+const routeLogger = createLogger('route:opportunityHelpers')
 /**
  * Pure helper functions for the opportunities route.
  * Extracted to enable unit testing without Express/DB dependencies.
@@ -122,7 +125,7 @@ export function dedupeKeyFromRow(row) {
   })();
   const rowUrl = normalizeUrlForDedupe(row.url);
   if (rowUrl) return `rowurl:${rowUrl}`;
-  const sourceId = row.source_id != null ? String(row.source_id).trim().toLowerCase() : '';
+  const sourceId = (row.source_id !== null && row.source_id !== undefined) ? String(row.source_id).trim().toLowerCase() : '';
   if (sourceId) return `sid:${sourceId}`;
   if (title && sponsor) return `tsd:${title}::${sponsor}::${deadlineIso}`;
   if (title && deadlineIso) return `td:${title}::${deadlineIso}`;

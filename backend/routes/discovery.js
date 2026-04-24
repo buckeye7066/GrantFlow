@@ -10,6 +10,9 @@ import { deduplicateOpportunities, decorateOpportunityFreshness } from '../servi
 import { resolveGeoCoverage, buildGeoCoverageClause } from '../services/geo/geoCoverageService.js'
 import { assessOpportunityTrust } from '../services/opportunityTrust.js'
 
+import { createLogger } from '../utils/logger.js'
+const routeLogger = createLogger('route:discovery')
+
 const router = express.Router();
 
 // Discovery endpoints can reference stored profiles; require auth globally.
@@ -180,14 +183,14 @@ router.post('/comprehensiveMatch', async (req, res) => {
     );
     
     const tierLabel = geoCoverage ? `tier=${geoCoverage.tier}` : 'fallback=state'
-    console.log(`[comprehensiveMatch] Query found ${opportunities.length} opportunities (${tierLabel}, zip=${profileZip || 'none'})`);
+    routeLogger.info(`[comprehensiveMatch] Query found ${opportunities.length} opportunities (${tierLabel}, zip=${profileZip || 'none'})`);
 
     const healthSet = profileContext?.signals?.health
     const healthFacets = profileContext?.facets?.health ?? {}
     const kws = profileContext?.signals?.keywordSet ?? new Set()
 
     if (kws.size > 0 || (healthSet instanceof Set && healthSet.size > 0)) {
-      console.log(`[comprehensiveMatch] Profile signals:`, JSON.stringify({
+      routeLogger.info(`[comprehensiveMatch] Profile signals:`, JSON.stringify({
         keywords: [...kws].slice(0, 15),
         health: healthSet instanceof Set ? [...healthSet] : [],
       }));
@@ -204,7 +207,7 @@ router.post('/comprehensiveMatch', async (req, res) => {
     };
     const filteredOpportunities = opportunities.filter(opp => !isJunkOpportunity(opp, filterHints));
     const hasBizIntent = kws.has('small business') || kws.has('startup') || kws.has('entrepreneur') || kws.has('sba');
-    console.log(`[comprehensiveMatch] Filtered ${opportunities.length - filteredOpportunities.length} irrelevant opportunities, ${filteredOpportunities.length} remaining. Business intent: ${hasBizIntent}`);
+    routeLogger.info(`[comprehensiveMatch] Filtered ${opportunities.length - filteredOpportunities.length} irrelevant opportunities, ${filteredOpportunities.length} remaining. Business intent: ${hasBizIntent}`);
 
     // Canonical consumer-side trust assessment. This is the single layer
     // that decides whether a row is shown to the user, consistent with
@@ -229,7 +232,7 @@ router.post('/comprehensiveMatch', async (req, res) => {
     }
     const trustDroppedTotal = filteredOpportunities.length - trustKept.length
     if (trustDroppedTotal > 0) {
-      console.log(
+      routeLogger.info(
         `[comprehensiveMatch] Trust layer dropped ${trustDroppedTotal}:`,
         trustDroppedReasons,
       )
@@ -297,14 +300,14 @@ router.post('/comprehensiveMatch', async (req, res) => {
       acc[bucket] = (acc[bucket] || 0) + 1;
       return acc;
     }, {});
-    console.log(`[comprehensiveMatch] Score distribution:`, scoreSummary);
+    routeLogger.info(`[comprehensiveMatch] Score distribution:`, scoreSummary);
     
     if (scoredOpportunities.length > 0) {
       const topScores = scoredOpportunities
         .sort((a, b) => b.fit_score - a.fit_score)
         .slice(0, 5)
         .map(o => ({ title: o.program_name?.substring(0, 30), score: o.fit_score, matched: o.matched_fields }));
-      console.log(`[comprehensiveMatch] Top 5 scores:`, JSON.stringify(topScores));
+      routeLogger.info(`[comprehensiveMatch] Top 5 scores:`, JSON.stringify(topScores));
     }
     
     // Deduplicate before threshold filtering — keeps highest-trust record when same grant
@@ -312,7 +315,7 @@ router.post('/comprehensiveMatch', async (req, res) => {
     const dedupedOpportunities = deduplicateOpportunities(scoredOpportunities)
     const dedupedCount = scoredOpportunities.length - dedupedOpportunities.length
     if (dedupedCount > 0) {
-      console.log(`[comprehensiveMatch] Deduplication removed ${dedupedCount} duplicate opportunities`)
+      routeLogger.info(`[comprehensiveMatch] Deduplication removed ${dedupedCount} duplicate opportunities`)
     }
 
     let matchThreshold = DEFAULT_MIN_SCORE;
@@ -327,14 +330,14 @@ router.post('/comprehensiveMatch', async (req, res) => {
           .sort((a, b) => b.fit_score - a.fit_score);
         if (highScoring.length > 0) {
           matchThreshold = fallback;
-          console.log(`[comprehensiveMatch] Zero results at ${DEFAULT_MIN_SCORE}; relaxed to ${fallback} (${highScoring.length} results)`);
+          routeLogger.info(`[comprehensiveMatch] Zero results at ${DEFAULT_MIN_SCORE}; relaxed to ${fallback} (${highScoring.length} results)`);
           break;
         }
       }
       if (highScoring.length === 0) {
         highScoring = dedupedOpportunities.sort((a, b) => b.fit_score - a.fit_score).slice(0, FALLBACK_TOP_N);
         matchThreshold = 0;
-        console.log(`[comprehensiveMatch] All thresholds exhausted; returning top ${highScoring.length}`);
+        routeLogger.info(`[comprehensiveMatch] All thresholds exhausted; returning top ${highScoring.length}`);
       }
     }
 

@@ -2,6 +2,9 @@ import express from 'express'
 import { ensureAdmin, ensureAuth } from '../middleware/auth.js'
 import { ensureServiceCatalogSchema, listServiceCatalog, seedServiceCatalogFromExtract } from '../services/serviceCatalogStore.js'
 
+import { createLogger } from '../utils/logger.js'
+const routeLogger = createLogger('route:adminServiceCatalog')
+
 const router = express.Router()
 router.use(ensureAuth)
 router.use(ensureAdmin)

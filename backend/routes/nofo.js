@@ -5,6 +5,9 @@ import { createOpenAIClient, summarizeOpenAIError } from '../utils/openaiClient.
 import { requireAuthenticatedUser } from '../utils/accessControl.js'
 import { standardRateLimiter } from '../middleware/rateLimiting.js'
 
+import { createLogger } from '../utils/logger.js'
+const routeLogger = createLogger('route:nofo')
+
 const router = express.Router()
 
 const MAX_TEXT_CHARS = Number(process.env.NOFO_PARSE_MAX_TEXT_CHARS || 14_000)

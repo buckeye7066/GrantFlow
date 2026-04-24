@@ -12,6 +12,9 @@ import * as nsf from '../src/integrations/nsfAwards.js'
 import * as samAL from '../src/integrations/samAssistanceListings.js'
 import { formatError } from '../middleware/errorHandler.js'
 
+import { createLogger } from '../utils/logger.js'
+const routeLogger = createLogger('route:foundations')
+
 const router = express.Router()
 
 // ── Foundation / 990 Search ───────────────────────────────────────────────────

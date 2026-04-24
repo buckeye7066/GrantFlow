@@ -4,6 +4,9 @@ import fs from 'fs'
 import path from 'path'
 import { fileURLToPath } from 'url'
 
+import { createLogger } from '../utils/logger.js'
+const routeLogger = createLogger('route:version')
+
 const router = express.Router()
 
 const __filename = fileURLToPath(import.meta.url)

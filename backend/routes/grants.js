@@ -23,6 +23,9 @@ import {
   buildTrustMetadata,
 } from '../services/opportunityTrust.js'
 
+import { createLogger } from '../utils/logger.js'
+const routeLogger = createLogger('route:grants')
+
 const router = express.Router();
 
 function parseOpportunityContact(opportunity) {
@@ -214,7 +217,7 @@ function deriveOrganizationApplicantTypeFromProfile(profileRow) {
 }
 
 function normalizeDateForDb(value) {
-  if (value == null || value === '') return null
+  if ((value === null || value === undefined) || value === '') return null
   if (value instanceof Date && !Number.isNaN(value.getTime())) return value.toISOString().slice(0, 10)
   const raw = typeof value === 'string' ? value.trim() : String(value)
   if (!raw) return null
@@ -262,7 +265,7 @@ function normalizeDateForDb(value) {
 }
 
 function normalizeMoney(value) {
-  if (value == null || value === '') return null
+  if ((value === null || value === undefined) || value === '') return null
   if (typeof value === 'number' && Number.isFinite(value)) return value
   const s = String(value).trim()
   if (!s) return null
@@ -276,7 +279,7 @@ function normalizeMoney(value) {
 }
 
 function normalizeMatchScore(value) {
-  if (value == null || value === '') return null
+  if ((value === null || value === undefined) || value === '') return null
   let n = null
   if (typeof value === 'number' && Number.isFinite(value)) n = value
   else {
@@ -284,7 +287,7 @@ function normalizeMatchScore(value) {
     const parsed = Number.parseFloat(s)
     if (Number.isFinite(parsed)) n = parsed
   }
-  if (n == null) return null
+  if ((n === null || n === undefined)) return null
   // If it looks like a fraction (0..1), treat as 0..100.
   if (n > 0 && n <= 1) n = n * 100
   const rounded = Math.round(n)
@@ -292,7 +295,7 @@ function normalizeMatchScore(value) {
 }
 
 function coerceString(value, { maxLen } = {}) {
-  if (value == null) return null
+  if ((value === null || value === undefined)) return null
   const s = String(value).trim()
   if (!s) return null
   if (typeof maxLen === 'number' && maxLen > 0 && s.length > maxLen) return s.slice(0, maxLen)
@@ -301,7 +304,7 @@ function coerceString(value, { maxLen } = {}) {
 
 function coerceArray(value) {
   if (Array.isArray(value)) return value
-  if (value == null) return []
+  if ((value === null || value === undefined)) return []
   // Try JSON if it looks like it.
   if (typeof value === 'string') {
     const trimmed = value.trim()
@@ -1126,7 +1129,7 @@ router.post('/from-opportunity', async (req, res, next) => {
     let opportunity = null;
     let resolvedOpportunityId = null;  // Track the actual opportunity ID to use
     if (opportunity_id) {
-      console.info('[grants/from-opportunity] Attempting to fetch opportunity from DB', {
+      routeLogger.info('[grants/from-opportunity] Attempting to fetch opportunity from DB', {
         requestId,
         opportunity_id,
         has_fallback_data: Boolean(opportunity_data),
@@ -1135,7 +1138,7 @@ router.post('/from-opportunity', async (req, res, next) => {
         opportunity = await req.db.prepare('SELECT * FROM funding_opportunities WHERE id = ?').get(opportunity_id);
         if (opportunity) {
           resolvedOpportunityId = opportunity_id;
-          console.info('[grants/from-opportunity] Found opportunity in DB', {
+          routeLogger.info('[grants/from-opportunity] Found opportunity in DB', {
             requestId,
             opportunity_id,
             title: opportunity.title,
@@ -1152,7 +1155,7 @@ router.post('/from-opportunity', async (req, res, next) => {
             requestId,
           })
         } else {
-          console.info('[grants/from-opportunity] opportunity_id not found, using fallback data', {
+          routeLogger.info('[grants/from-opportunity] opportunity_id not found, using fallback data', {
             requestId,
             opportunity_id,
           })
@@ -1205,7 +1208,7 @@ router.post('/from-opportunity', async (req, res, next) => {
           application_method: coerceString(opportunity_data.application_method, { maxLen: 100 }) || null,
           applicationNote: coerceString(opportunity_data.applicationNote, { maxLen: 2000 }) || null,
         };
-        console.info('[grants/from-opportunity] Using direct opportunity data for:', opportunity.title);
+        routeLogger.info('[grants/from-opportunity] Using direct opportunity data for:', opportunity.title);
       } catch (parseError) {
         console.error('[grants/from-opportunity] failed to parse opportunity_data', {
           requestId,
@@ -1240,7 +1243,7 @@ router.post('/from-opportunity', async (req, res, next) => {
       allowDirectory: true,
     })
     if (!pipelineGate.allowed) {
-      console.info('[grants/from-opportunity] blocked by trust gate', {
+      routeLogger.info('[grants/from-opportunity] blocked by trust gate', {
         requestId,
         profile_id: normalizedProfileId,
         organization_id: normalizedOrgId,
@@ -1470,7 +1473,7 @@ router.post('/from-opportunity', async (req, res, next) => {
           await tx.prepare('UPDATE profiles SET organization_id = ? WHERE id = ?').run(orgId, finalProfileId);
 
           finalOrgId = orgId;
-          console.info(`[grants] Auto-created organization ${orgId} for profile ${finalProfileId}`, {
+          routeLogger.info(`[grants] Auto-created organization ${orgId} for profile ${finalProfileId}`, {
             applicant_type: applicantType,
           });
         }
@@ -1636,7 +1639,7 @@ router.post('/from-opportunity', async (req, res, next) => {
     const statusCode = result.already_exists ? 200 : 201;
     
     // Log successful grant creation with key details (no sensitive data)
-    console.info('[grants/from-opportunity] success', {
+    routeLogger.info('[grants/from-opportunity] success', {
       requestId,
       status: statusCode,
       grant_id: result.id,

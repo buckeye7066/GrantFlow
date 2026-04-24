@@ -10,6 +10,9 @@ import { trustedOriginClause, trustedSourceClause } from '../utils/recordOrigins
 import { requireAuthenticatedUser } from '../utils/accessControl.js'
 import { standardRateLimiter } from '../middleware/rateLimiting.js'
 
+import { createLogger } from '../utils/logger.js'
+const routeLogger = createLogger('route:colleges')
+
 const router = express.Router()
 
 router.use(standardRateLimiter, (req, res, next) => {
@@ -21,7 +24,7 @@ router.use(standardRateLimiter, (req, res, next) => {
 const REQUEST_ID_HEADER = 'x-request-id'
 
 function normalizeZip(value) {
-  if (value == null) return null
+  if ((value === null || value === undefined)) return null
   const s = String(value).trim()
   const match = s.match(/\b(\d{5})(?:-\d{4})?\b/)
   return match ? match[1] : null
@@ -134,7 +137,7 @@ router.get('/local-funding', async (req, res) => {
     if (suppressed > 0) {
       console.warn(`[colleges/local-funding] ${requestId} suppressed ${suppressed}/${mapped.length} rows: missing or non-http url`)
     }
-    console.info(`[colleges/local-funding] ${requestId} zip=${zip} state=${state} db_rows=${rows.length} results=${results.length}`)
+    routeLogger.info(`[colleges/local-funding] ${requestId} zip=${zip} state=${state} db_rows=${rows.length} results=${results.length}`)
 
     return res.json({
       success: true,
