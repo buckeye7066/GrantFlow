@@ -5,6 +5,7 @@ import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import {
   adminCrawlerList,
+  adminCrawlerCheck,
   adminCrawlerRun,
   adminCrawlerRetry,
   adminCodeEdit,
@@ -14,8 +15,9 @@ import {
 } from '../services/anyaAdminTools.js'
 import { cleanupBrain } from '../services/anyaBrainService.js'
 import { invokeTool } from '../services/anyaToolRegistry.js'
-import { getAuditSummary } from '../services/codeGuardService.js'
+import { formatAuditSummary, getAuditSummary } from '../services/codeGuardService.js'
 import { runGrantFlowDomainAudits } from '../services/anyaGrantFlowAudits.js'
+import { testButtonFunctionality } from '../services/anyaAutonomousFunctionTesting.js'
 
 function makeDb() {
   const db = new Database(':memory:')
@@ -75,7 +77,31 @@ describe('admin crawler tools', () => {
 
     const result = await adminCrawlerRetry({ jobId: 'failed-1' }, { db })
     expect(result.original_job_id).toBe('failed-1')
+    expect(result.new_job_id).toBe(result.new_job.id)
+    expect(result.new_job.job_id).toBe(result.new_job.id)
     expect(result.new_job.parameters.retried_from_job_id).toBe('failed-1')
+  })
+
+  it('checks crawler jobs with since/status filters without backfilling defaults', async () => {
+    const db = makeDb()
+    db.prepare('INSERT INTO crawler_jobs (id, type, status, created_at) VALUES (?, ?, ?, ?)').run('old-1', 'local', 'queued', '2020-01-01T00:00:00.000Z')
+    db.prepare('INSERT INTO crawler_jobs (id, type, status, created_at) VALUES (?, ?, ?, ?)').run('recent-ok', 'local', 'completed', '2026-04-24T12:00:00.000Z')
+    db.prepare('INSERT INTO crawler_jobs (id, type, status, created_at) VALUES (?, ?, ?, ?)').run('recent-failed', 'local', 'failed', '2026-04-24T13:00:00.000Z')
+
+    const result = await adminCrawlerCheck({ since: '2026-04-24T00:00:00.000Z', status: 'failed', limit: 10 }, { db })
+    expect(result.checked).toBe(1)
+    expect(result.summary.failed).toBe(1)
+    expect(result.errors[0].job_id).toBe('recent-failed')
+  })
+
+  it('returns standard HTTP 400 validation errors for profile-scoped crawler tools', async () => {
+    await expect(
+      invokeTool('admin.crawler.triggerAll', {}, { db: makeDb(), ctx: { isAdmin: true }, user: { role: 'admin' } }),
+    ).rejects.toMatchObject({ status: 400, message: 'Missing required parameter: profileId' })
+
+    await expect(
+      invokeTool('admin.crawler.schedule', {}, { db: makeDb(), ctx: { isAdmin: true }, user: { role: 'admin' } }),
+    ).rejects.toMatchObject({ status: 400, message: 'Missing required parameter: profileId' })
   })
 })
 
@@ -121,10 +147,10 @@ describe('admin code and health tools', () => {
             return {
               rows: [{
                 id: 'log-1',
-                created_at: '2026-04-25T00:00:00.000Z',
+                created_at: new Date().toISOString(),
                 category: 'test',
                 action: 'warned',
-                severity: 'warn',
+                severity: 30,
                 details: '{}',
               }],
             }
@@ -135,6 +161,11 @@ describe('admin code and health tools', () => {
     const result = await adminHealthLogs({ level: 'warn' }, { user: { isAdmin: true }, db })
     expect(result.persisted_count).toBe(1)
     expect(result.count).toBeGreaterThanOrEqual(1)
+  })
+
+  it('finds component files from the default button-test search roots', async () => {
+    const result = await testButtonFunctionality({ probe: false }, { user: { isAdmin: true } })
+    expect(result.files_scanned).toBeGreaterThan(0)
   })
 })
 
@@ -196,6 +227,20 @@ describe('admin brain cleanup and CodeGuard summary', () => {
 
     expect(getAuditSummary(db)).not.toContain('undefined')
   })
+
+  it('formats inline CodeGuard status from fresh sub-tool results', () => {
+    const summary = formatAuditSummary({
+      endpoints: { passed: 24, failed: 0, skipped: 0, total: 24, timestamp: '2026-04-25T00:00:00.000Z' },
+      matchQuality: { totalProfiles: 23, grades: { A: 0, B: 0, C: 0, D: 21, F: 2 }, timestamp: '2026-04-25T00:00:00.000Z' },
+      mission: { score: 92, pass: 14, warn: 1, fail: 0, total: 15, timestamp: '2026-04-25T00:00:00.000Z' },
+    })
+
+    expect(summary).toContain('24 pass')
+    expect(summary).toContain('23 profiles')
+    expect(summary).toContain('Mission Score (2026-04-25T00:00:00.000Z): 92%')
+    expect(summary).not.toContain('(unknown)')
+    expect(summary).not.toContain('0 pass, 0 fail')
+  })
 })
 
 describe('admin schema migration and domain audits', () => {
@@ -223,10 +268,21 @@ describe('admin schema migration and domain audits', () => {
     expect(sql).toContain('CREATE TABLE IF NOT EXISTS crawler_logs')
   })
 
+  it('force schema repair migration repeats admin grants/crawler_logs fixes', () => {
+    const sql = readFileSync(path.join(process.cwd(), 'backend/db/migrations/063_force_admin_schema_repair.sql'), 'utf8')
+    expect(sql).toContain('ALTER TABLE grants ADD COLUMN url TEXT')
+    expect(sql).toContain('matched_needs JSONB')
+    expect(sql).toContain('FROM funding_opportunities fo')
+    expect(sql).toContain('CREATE TABLE IF NOT EXISTS crawler_logs')
+    expect(sql).toContain('INSERT INTO crawler_logs')
+  })
+
   it('Postgres crawler_logs migrations match TEXT crawler/profile IDs', () => {
     for (const filename of [
       'backend/db/postgres/migrations/0051_grants_url_fingerprint_crawler_logs.sql',
       'backend/db/postgres/migrations/0052_admin_tool_schema_backfill.sql',
+      'backend/db/postgres/migrations/0055_grants_joined_url_backfill.sql',
+      'backend/db/postgres/migrations/0056_force_admin_schema_repair.sql',
     ]) {
       const sql = readFileSync(path.join(process.cwd(), filename), 'utf8')
       expect(sql).toMatch(/\bid\s+TEXT PRIMARY KEY DEFAULT gen_random_uuid\(\)::text/)
@@ -235,6 +291,14 @@ describe('admin schema migration and domain audits', () => {
       expect(sql).not.toMatch(/\bjob_id\s+UUID REFERENCES crawler_jobs\(id\)/)
       expect(sql).not.toMatch(/\bprofile_id\s+UUID REFERENCES profiles\(id\)/)
     }
+  })
+
+  it('admin tools dialog renders schema-driven profile and textarea inputs', () => {
+    const source = readFileSync(path.join(process.cwd(), 'src/components/anya/AnyaChat.jsx'), 'utf8')
+    expect(source).toContain('isProfileSchemaField')
+    expect(source).toContain('Select profile...')
+    expect(source).toContain('name.toLowerCase().includes("sql")')
+    expect(source).toContain('<Textarea')
   })
 
   it('domain audits use prepare-compatible DB clients instead of db.query-only calls', async () => {

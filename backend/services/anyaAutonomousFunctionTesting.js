@@ -1,11 +1,50 @@
 import path from 'path'
 import { promises as fs } from 'fs'
 import jwt from 'jsonwebtoken'
+import { fileURLToPath } from 'url'
 import { AUDIT_CATEGORIES, SEVERITY, logAuditEvent } from './auditService.js'
 import { collectComponentFiles, scanComponentForButtons } from './anyaButtonScanner.js'
 import { getJwtSecretOrThrow } from '../config/env.js'
 
 const REPO_ROOT = path.resolve(process.cwd())
+const __dirname = path.dirname(fileURLToPath(import.meta.url))
+
+function uniquePaths(paths) {
+  const seen = new Set()
+  return paths.filter((entry) => {
+    if (!entry) return false
+    const resolved = path.resolve(entry)
+    if (seen.has(resolved)) return false
+    seen.add(resolved)
+    return true
+  })
+}
+
+function defaultComponentSearchPaths() {
+  const anchors = [
+    REPO_ROOT,
+    path.resolve(REPO_ROOT, '..'),
+    path.resolve(__dirname, '..', '..'),
+    path.resolve(__dirname, '..', '..', '..'),
+  ]
+  const relativeCandidates = [
+    'src/components',
+    'frontend/src/components',
+    'client/src/components',
+    'app/src/components',
+    'dist/assets',
+    'build/assets',
+    'public/assets',
+  ]
+  const configured = String(process.env.FRONTEND_COMPONENTS_PATH || '')
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+  return uniquePaths([
+    ...configured.map((entry) => path.isAbsolute(entry) ? entry : path.resolve(REPO_ROOT, entry)),
+    ...anchors.flatMap((anchor) => relativeCandidates.map((relative) => path.resolve(anchor, relative))),
+  ])
+}
 
 function isProdEnv() {
   const nodeEnv = String(process.env.NODE_ENV || '').toLowerCase()
@@ -452,7 +491,7 @@ export async function runAutonomousFunctionTests(options, context) {
  */
 export async function testButtonFunctionality(options, context) {
   const {
-    componentPath = 'frontend/src/components,src/components',
+    componentPath = null,
     componentPaths = null,
     probe = true,
   } = options || {}
@@ -481,15 +520,17 @@ export async function testButtonFunctionality(options, context) {
   try {
     const requestedPaths = Array.isArray(componentPaths)
       ? componentPaths
-      : String(componentPath || 'frontend/src/components,src/components')
+      : String(componentPath || '')
         .split(',')
         .map((entry) => entry.trim())
         .filter(Boolean)
-    const candidatePaths = requestedPaths.length > 0 ? requestedPaths : ['frontend/src/components', 'src/components']
+    const candidatePaths = requestedPaths.length > 0
+      ? requestedPaths.map((entry) => path.isAbsolute(entry) ? entry : path.resolve(REPO_ROOT, entry))
+      : defaultComponentSearchPaths()
     const looked = []
     const filesByPath = new Map()
     for (const entry of candidatePaths) {
-      const root = path.resolve(process.cwd(), entry)
+      const root = path.resolve(entry)
       looked.push(root)
       const found = await collectComponentFiles(root)
       for (const file of found) filesByPath.set(file, true)

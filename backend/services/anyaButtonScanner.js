@@ -24,7 +24,7 @@ import { promises as fs } from 'fs'
 
 const DEFAULT_ROOT = path.resolve(process.cwd(), 'src', 'components')
 
-const EXTS = new Set(['.jsx', '.tsx'])
+const EXTS = new Set(['.jsx', '.tsx', '.js', '.mjs'])
 
 const BUTTON_TAGS = new Set([
   'button',

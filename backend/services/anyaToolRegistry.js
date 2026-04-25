@@ -1736,15 +1736,14 @@ registerTool({
         description: 'Array of crawler types to trigger (default: all)'
       },
     },
+    required: ['profileId'],
   },
   handler: async (params, context) => {
     const { profileId, crawlerTypes } = params
     const { db } = context
     
     const types = crawlerTypes || ['local', 'scholarship', 'comprehensive', 'profile_enrichment']
-    const profiles = profileId
-      ? [{ id: profileId }]
-      : db.prepare(`SELECT id FROM profiles WHERE status IS NULL OR status <> 'deleted' ORDER BY created_at DESC`).all()
+    const profiles = [{ id: profileId }]
     
     const jobIds = []
     for (const profile of profiles) {
@@ -1804,14 +1803,13 @@ registerTool({
       schedule: { type: 'string', description: 'Cron expression (e.g., "0 9 * * 1" for every Monday at 9am)' },
       enabled: { type: 'boolean', description: 'Whether schedule is enabled (default: true)' },
     },
+    required: ['profileId'],
   },
   handler: async (params, context) => {
     const { profileId, crawlerType = 'local', schedule = '0 9 * * 1', enabled = true } = params
     const { db } = context
     
-    const profiles = profileId
-      ? [{ id: profileId }]
-      : db.prepare(`SELECT id FROM profiles WHERE status IS NULL OR status <> 'deleted' ORDER BY created_at DESC`).all()
+    const profiles = [{ id: profileId }]
     const schedules = []
     
     const stmt = db.prepare(`
@@ -2923,6 +2921,7 @@ import {
   auditMatchQuality as cgAuditMatchQuality,
   verifyMissionGoals as cgVerifyMissionGoals,
   getAuditSummary as cgGetAuditSummary,
+  formatAuditSummary as cgFormatAuditSummary,
 } from './codeGuardService.js'
 
 registerTool({
@@ -2979,12 +2978,18 @@ registerTool({
     if (!db) throw new Error('Database connection required')
     const baseUrl = context?.internalBaseUrl || (process.env.PORT ? `http://localhost:${process.env.PORT}` : null)
     const token = process.env.ADMIN_TOKEN || process.env.ANYA_ADMIN_TOKEN || null
-    await Promise.allSettled([
+    const [endpointResult, matchResult, missionResult] = await Promise.allSettled([
       baseUrl ? cgTestEndpoints(db, baseUrl, token) : Promise.resolve(null),
       cgAuditMatchQuality(db),
       cgVerifyMissionGoals(db),
     ])
-    return { summary: cgGetAuditSummary(db) }
+    const inlineSummary = cgFormatAuditSummary({
+      endpoints: endpointResult.status === 'fulfilled' ? endpointResult.value : null,
+      matchQuality: matchResult.status === 'fulfilled' ? matchResult.value : null,
+      mission: missionResult.status === 'fulfilled' ? missionResult.value : null,
+    })
+    const hasInlineData = !inlineSummary.includes('No audit data yet')
+    return { summary: hasInlineData ? inlineSummary : cgGetAuditSummary(db) }
   },
 })
 

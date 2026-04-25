@@ -1066,7 +1066,7 @@ export async function adminCrawlerRun({ crawlerType, type, profileId, parameters
 /**
  * Validate crawler outputs and check for errors in recent jobs
  */
-export async function adminCrawlerCheck({ jobId, lastN = 10, limit, since, status }, context) {
+export async function adminCrawlerCheck({ jobId, lastN, limit, since, status }, context) {
   const { db } = context
   if (!db) {
     throw new Error('Database connection unavailable')
@@ -1109,22 +1109,7 @@ export async function adminCrawlerCheck({ jobId, lastN = 10, limit, since, statu
       )
       .all(...params, safeLimit))
 
-    if (recentRows.length < safeLimit) {
-      const seen = new Set(recentRows.map((job) => job.id))
-      const fillRows = rowsFromResult(await db
-        .prepare(
-          `
-            SELECT *
-            FROM crawler_jobs
-            ORDER BY created_at DESC
-            LIMIT ?
-          `,
-        )
-        .all(safeLimit))
-      jobs = [...recentRows, ...fillRows.filter((job) => !seen.has(job.id))].slice(0, safeLimit)
-    } else {
-      jobs = recentRows
-    }
+    jobs = recentRows
   }
 
   const validation = {
@@ -1225,8 +1210,11 @@ export async function adminCrawlerRetry({ jobId }, context) {
 
   return {
     original_job_id: jobId,
+    new_job_id: newJob?.id ?? newJobId,
     new_job: {
       ...newJob,
+      id: newJob?.id ?? newJobId,
+      job_id: newJob?.id ?? newJobId,
       parameters: safeJson(newJob?.parameters, {}),
     },
     message: 'Job retried successfully',
@@ -1735,6 +1723,18 @@ export async function adminHealthLogs({ level = 'warning', limit = 50, source },
   const cap = Math.min(Math.max(Number(limit) || 50, 1), 200)
   const normalizedLevel = String(level || 'warning').toLowerCase() === 'warning' ? 'warn' : String(level || 'warning').toLowerCase()
   const ringLogs = getRecentLogs({ level: normalizedLevel, source, limit: cap })
+  const severityRank = (value) => {
+    if (typeof value === 'number') return value
+    const text = String(value || '').toLowerCase()
+    if (/^\d+$/.test(text)) return Number(text)
+    if (text === 'critical') return 50
+    if (text === 'error') return 40
+    if (text === 'warn' || text === 'warning') return 30
+    if (text === 'info') return 20
+    if (text === 'debug') return 10
+    return 0
+  }
+  const minimumSeverity = normalizedLevel === 'error' ? 40 : normalizedLevel === 'critical' ? 50 : 30
 
   // Group 7: also read persisted warn/error records from audit_logs so the
   // admin.health.logs tool survives process restarts. The ring buffer is
@@ -1744,35 +1744,34 @@ export async function adminHealthLogs({ level = 'warning', limit = 50, source },
   try {
     const db = context?.db
     if (db && typeof db.prepare === 'function') {
-      // Map caller "level" -> audit severity list. audit_logs stores
-      // severity in {'info','warn','error','critical'} — we surface only
-      // the operator-facing levels here.
-      const wantErrorOnly = normalizedLevel === 'error'
-      // audit:allow dynamic-sql — severity allowlist is hardcoded
-      const severitySql = wantErrorOnly
-        ? `severity IN ('error','critical')`
-        : `severity IN ('warn','error','critical')`
+      const recentClause = db?.dialect === 'postgres'
+        ? "created_at >= (NOW() - INTERVAL '1 hour')"
+        : "created_at >= datetime('now', '-1 hour')"
       const sourceClause = source ? ` AND category = ?` : ''
-      const params = source ? [String(source), cap] : [cap]
+      const fetchLimit = Math.min(Math.max(cap * 20, 500), 5000)
+      const params = source ? [String(source), fetchLimit] : [fetchLimit]
       const rows = await db
         .prepare(
           `SELECT id, created_at, category, action, severity, user_id, profile_id, details
              FROM audit_logs
-             WHERE ${severitySql}${sourceClause}
+             WHERE ${recentClause}${sourceClause}
              ORDER BY created_at DESC
              LIMIT ?`,
         )
         .all(...params)
-      dbLogs = rowsFromResult(rows).map((r) => ({
-        ts: r.created_at,
-        level: r.severity === 'critical' ? 'error' : r.severity,
-        namespace: r.category || 'audit',
-        event: r.action,
-        message: `[audit:${r.category}] ${r.action}${r.details ? ' ' + String(r.details).slice(0, 400) : ''}`,
-        user_id: r.user_id,
-        profile_id: r.profile_id,
-        persisted: true,
-      }))
+      dbLogs = rowsFromResult(rows)
+        .filter((r) => severityRank(r.severity) >= minimumSeverity)
+        .slice(0, cap)
+        .map((r) => ({
+          ts: r.created_at,
+          level: severityRank(r.severity) >= 40 ? 'error' : 'warn',
+          namespace: r.category || 'audit',
+          event: r.action,
+          message: `[audit:${r.category}] ${r.action}${r.details ? ' ' + String(r.details).slice(0, 400) : ''}`,
+          user_id: r.user_id,
+          profile_id: r.profile_id,
+          persisted: true,
+        }))
     }
   } catch (err) {
     // Never let a logging-read failure crash the admin tool.

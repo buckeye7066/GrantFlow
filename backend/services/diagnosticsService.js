@@ -6,6 +6,12 @@ import { dirname } from 'path';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
+function rowsFromResult(result) {
+  if (Array.isArray(result)) return result;
+  if (Array.isArray(result?.rows)) return result.rows;
+  return [];
+}
+
 /**
  * Get comprehensive system diagnostics
  * @param {Object} db - Database connection
@@ -169,7 +175,7 @@ async function checkTableColumns(db, tableName, required = []) {
           `,
         )
         .all(tableName)
-      const has = new Set((rows || []).map((r) => String(r.column_name)))
+      const has = new Set(rowsFromResult(rows).map((r) => String(r.column_name)))
       return { has, missing: required.filter((c) => !has.has(c)) }
     }
     const rows = await db.prepare(`PRAGMA table_info(${tableName})`).all()
@@ -230,7 +236,7 @@ async function checkFundingOpportunitiesSchema(db) {
         )
         .all()
 
-      const columnNames = new Set((rows || []).map((r) => String(r.column_name)))
+      const columnNames = new Set(rowsFromResult(rows).map((r) => String(r.column_name)))
 
       const crawlLogsExistsRow = await db
         .prepare(`SELECT to_regclass(current_schema() || '.crawl_logs') AS regclass`)

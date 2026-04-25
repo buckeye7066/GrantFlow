@@ -1181,6 +1181,11 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, pref
     return value === undefined || value === null ? "" : value
   }
 
+  const isProfileSchemaField = (fieldName) => {
+    const normalized = String(fieldName || "").toLowerCase()
+    return normalized === "profileid" || normalized === "profile_id"
+  }
+
   const setToolFieldValue = (toolName, fieldName, value) => {
     setAdminToolForm((prev) => ({
       ...prev,
@@ -1196,7 +1201,7 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, pref
     const form = adminToolForm?.[tool.name] || {}
     const parameters = { profile_id: effectiveProfileId }
     for (const [name, schema] of Object.entries(properties)) {
-      const raw = form[name]
+      const raw = form[name] ?? (isProfileSchemaField(name) ? effectiveProfileId : undefined)
       if (raw === undefined || raw === null || raw === "") continue
       if (schema?.type === "boolean") {
         parameters[name] = raw === true || raw === "true"
@@ -1218,7 +1223,7 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, pref
   const missingRequiredFields = (tool) => {
     const required = Array.isArray(tool?.schema?.required) ? tool.schema.required : []
     return required.filter((name) => {
-      const value = getToolFieldValue(tool.name, name)
+      const value = getToolFieldValue(tool.name, name) || (isProfileSchemaField(name) ? effectiveProfileId : "")
       return value === "" || value === null || value === undefined
     })
   }
@@ -1260,8 +1265,28 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, pref
       <div className="mt-3 grid gap-2 sm:grid-cols-2">
         {entries.map(([name, schema]) => {
           const id = `admin-tool-${tool.name}-${name}`
-          const value = getToolFieldValue(tool.name, name)
+          const value = getToolFieldValue(tool.name, name) || (isProfileSchemaField(name) ? effectiveProfileId : "")
           const label = `${name}${required.has(name) ? " *" : ""}`
+          if (isProfileSchemaField(name)) {
+            return (
+              <label key={name} htmlFor={id} className="space-y-1 text-xs text-slate-600">
+                <span>{label}</span>
+                <select
+                  id={id}
+                  value={value}
+                  onChange={(event) => setToolFieldValue(tool.name, name, event.target.value)}
+                  className="w-full rounded-md border border-slate-200 bg-white px-2 py-1.5 text-xs text-slate-800"
+                >
+                  <option value="">Select profile...</option>
+                  {(profiles || []).map((profile) => (
+                    <option key={profile.id} value={profile.id}>
+                      {profile.display_name || profile.name || profile.id}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )
+          }
           if (schema?.type === "boolean") {
             return (
               <label key={name} htmlFor={id} className="flex items-center gap-2 rounded border border-slate-200 bg-white px-2 py-1.5 text-xs">
@@ -1289,6 +1314,24 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, pref
                     <option key={option} value={option}>{option}</option>
                   ))}
                 </select>
+              </label>
+            )
+          }
+          if (
+            name.toLowerCase().includes("sql") ||
+            schema?.type === "object" ||
+            schema?.type === "array"
+          ) {
+            return (
+              <label key={name} htmlFor={id} className="space-y-1 text-xs text-slate-600 sm:col-span-2">
+                <span>{label}</span>
+                <Textarea
+                  id={id}
+                  value={value}
+                  onChange={(event) => setToolFieldValue(tool.name, name, event.target.value)}
+                  placeholder={name.toLowerCase().includes("sql") ? "SELECT ..." : "JSON value"}
+                  className="min-h-20 text-xs"
+                />
               </label>
             )
           }

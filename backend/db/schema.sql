@@ -382,8 +382,8 @@ CREATE TABLE IF NOT EXISTS grants (
 
   -- Match decision metadata (canonical from matchEngine.js)
   match_decision TEXT,
-  match_explanation TEXT,
-  matched_needs TEXT DEFAULT '[]',
+  match_explanation JSONB,
+  matched_needs JSONB DEFAULT '[]',
   eligibility_status TEXT,
   ineligibility_reasons TEXT DEFAULT '[]',
   profile_fingerprint TEXT,

@@ -517,6 +517,33 @@ export function getAuditSummary(db) {
   return 'CodeGuard System Audit:\n' + lines.join('\n')
 }
 
+export function formatAuditSummary({ endpoints = null, matchQuality = null, mission = null } = {}) {
+  const lines = []
+
+  if (endpoints) {
+    const h = endpoints.endpoints ?? endpoints
+    lines.push(`Endpoint Health (${h.timestamp ?? new Date().toISOString()}): ${h.passed ?? 0} pass, ${h.failed ?? 0} fail, ${h.skipped ?? 0} skip of ${h.total ?? 0}`)
+    const failures = (h.results || []).filter(r => r.status === 'FAIL')
+    if (failures.length > 0) {
+      lines.push(`  Failing: ${failures.map(f => `${f.name} (${f.code ?? f.reason})`).join(', ')}`)
+    }
+  }
+
+  if (matchQuality) {
+    const m = matchQuality.matchQuality ?? matchQuality
+    const g = m.grades || {}
+    lines.push(`Match Quality (${m.timestamp ?? new Date().toISOString()}): ${m.totalProfiles ?? 0} profiles — A:${g.A ?? 0} B:${g.B ?? 0} C:${g.C ?? 0} D:${g.D ?? 0} F:${g.F ?? 0}`)
+  }
+
+  if (mission) {
+    const mv = mission.mission ?? mission
+    lines.push(`Mission Score (${mv.timestamp ?? new Date().toISOString()}): ${mv.score ?? 0}% — ${mv.pass ?? 0} pass, ${mv.warn ?? 0} warn, ${mv.fail ?? 0} fail of ${mv.total ?? 0}`)
+  }
+
+  if (lines.length === 0) return 'CodeGuard: No audit data yet. Run CodeGuard audits to populate status.'
+  return 'CodeGuard System Audit:\n' + lines.join('\n')
+}
+
 /**
  * Check whether enough time has passed since the last audit.
  * @param {Object} db
