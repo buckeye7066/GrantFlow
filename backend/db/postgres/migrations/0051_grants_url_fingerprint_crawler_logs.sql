@@ -63,9 +63,9 @@ CREATE INDEX IF NOT EXISTS idx_grants_fingerprint ON grants(fingerprint);
 CREATE INDEX IF NOT EXISTS idx_grants_url          ON grants(url);
 
 CREATE TABLE IF NOT EXISTS crawler_logs (
-  id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  job_id         UUID REFERENCES crawler_jobs(id) ON DELETE CASCADE,
-  profile_id     UUID REFERENCES profiles(id) ON DELETE SET NULL,
+  id             TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  job_id         TEXT REFERENCES crawler_jobs(id) ON DELETE CASCADE,
+  profile_id     TEXT REFERENCES profiles(id) ON DELETE SET NULL,
   crawler_type   TEXT,
   level          TEXT,
   status         TEXT,

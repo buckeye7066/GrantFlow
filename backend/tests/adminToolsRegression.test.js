@@ -138,6 +138,20 @@ describe('admin schema migration and domain audits', () => {
     expect(sql).toContain('profile_id IS NOT NULL')
   })
 
+  it('Postgres crawler_logs migrations match TEXT crawler/profile IDs', () => {
+    for (const filename of [
+      'backend/db/postgres/migrations/0051_grants_url_fingerprint_crawler_logs.sql',
+      'backend/db/postgres/migrations/0052_admin_tool_schema_backfill.sql',
+    ]) {
+      const sql = readFileSync(path.join(process.cwd(), filename), 'utf8')
+      expect(sql).toMatch(/\bid\s+TEXT PRIMARY KEY DEFAULT gen_random_uuid\(\)::text/)
+      expect(sql).toMatch(/\bjob_id\s+TEXT REFERENCES crawler_jobs\(id\) ON DELETE CASCADE/)
+      expect(sql).toMatch(/\bprofile_id\s+TEXT REFERENCES profiles\(id\) ON DELETE SET NULL/)
+      expect(sql).not.toMatch(/\bjob_id\s+UUID REFERENCES crawler_jobs\(id\)/)
+      expect(sql).not.toMatch(/\bprofile_id\s+UUID REFERENCES profiles\(id\)/)
+    }
+  })
+
   it('domain audits use prepare-compatible DB clients instead of db.query-only calls', async () => {
     const db = makeDb()
     db.exec(`
