@@ -601,6 +601,23 @@ export function listToolMetadata(ctx = null) {
     }))
 }
 
+function validateToolParams(tool, params) {
+  const schema = tool?.schema
+  const required = Array.isArray(schema?.required) ? schema.required : []
+  for (const key of required) {
+    const value = params?.[key]
+    const missing =
+      value === undefined ||
+      value === null ||
+      (typeof value === 'string' && value.trim() === '')
+    if (missing) {
+      const error = new Error(`Missing required parameter: ${key}`)
+      error.status = 400
+      throw error
+    }
+  }
+}
+
 export async function invokeTool(name, params, context) {
   if (!tools.has(name)) {
     const error = new Error(`Unknown tool "${name}"`)
@@ -609,6 +626,7 @@ export async function invokeTool(name, params, context) {
   }
 
   const tool = tools.get(name)
+  validateToolParams(tool, params ?? {})
 
   // Check admin access: prefer the already-resolved ctx.isAdmin (DB-backed,
   // canonical from requestContext middleware) before falling back to a fresh DB lookup.
@@ -1395,7 +1413,7 @@ registerTool({
   schema: {
     type: 'object',
     properties: {
-      type: {
+      crawlerType: {
         type: 'string',
         enum: [
           'local',
@@ -1409,10 +1427,11 @@ registerTool({
           'profile_enrichment',
         ],
       },
+      type: { type: 'string', description: 'Deprecated alias for crawlerType' },
       profileId: { type: 'string', description: 'Profile ID to run crawler for' },
       parameters: { type: 'object', description: 'Additional crawler parameters' },
     },
-    required: ['type'],
+    required: ['crawlerType'],
   },
   handler: adminCrawlerRun,
 })
@@ -1425,7 +1444,10 @@ registerTool({
     type: 'object',
     properties: {
       jobId: { type: 'string', description: 'Specific job ID to check' },
-      lastN: { type: 'integer', minimum: 1, maximum: 50, description: 'Check last N jobs' },
+      lastN: { type: 'integer', minimum: 1, maximum: 1000, description: 'Deprecated alias for limit' },
+      limit: { type: 'integer', minimum: 1, maximum: 1000, description: 'Max jobs to inspect' },
+      since: { type: 'string', description: 'ISO timestamp lower bound for created_at' },
+      status: { type: 'string', enum: ['queued', 'running', 'completed', 'failed', 'cancelled'] },
     },
   },
   handler: adminCrawlerCheck,
@@ -1923,7 +1945,7 @@ registerTool({
     properties: {
       directory: { type: 'string', description: 'Directory to scan (relative to repo root, default: entire repo)' },
       pattern: { type: 'string', description: 'Optional regex pattern to search for' },
-      maxIterations: { type: 'integer', description: 'Maximum number of files to process (default: 50)', minimum: 1, maximum: 200 },
+      maxIterations: { type: 'integer', description: 'Maximum number of files to process (default: 500)', minimum: 1, maximum: 5000 },
       maxFileChanges: { type: 'integer', description: 'Maximum number of files to modify (default: 20)', minimum: 1, maximum: 100 },
       dryRun: { type: 'boolean', description: 'If true, dont save changes (default: false)' },
       fixConsoleLog: { type: 'boolean', description: 'Fix debug console.log statements (default: true)' },
@@ -2018,7 +2040,12 @@ registerTool({
   schema: {
     type: 'object',
     properties: {
-      componentPath: { type: 'string', description: 'Path to components directory (default: src/components)' },
+      componentPath: { type: 'string', description: 'Path or comma-separated paths to component directories (default: src/components)' },
+      componentPaths: {
+        type: 'array',
+        items: { type: 'string' },
+        description: 'Component directories to scan',
+      },
       fixErrors: { type: 'boolean', description: 'Attempt to fix errors found (default: false)' },
       dryRun: { type: 'boolean', description: 'Dont save fixes (default: true)' },
     },
@@ -2263,13 +2290,15 @@ registerTool({
   requiresAdmin: true,
   schema: {
     type: 'object',
-    properties: {},
+    properties: {
+      dryRun: { type: 'boolean', description: 'Return cleanup counts without deleting rows' },
+    },
   },
-  handler: async (_params, context) => {
+  handler: async (params, context) => {
     const { db } = context
     if (!db) throw new Error('Database connection unavailable')
     
-    return cleanupBrain(db)
+    return cleanupBrain(db, { dryRun: params?.dryRun === true })
   },
 })
 
@@ -2287,9 +2316,52 @@ registerTool({
   handler: async (params, context) => {
     const { db } = context
     if (!db) throw new Error('Database connection unavailable')
-    
+
+    const brainTables = [
+      'anya_brain_memory',
+      'anya_context',
+      'anya_messages',
+      'anya_runs',
+      'anya_run_logs',
+      'anya_sessions',
+      'anya_tasks',
+      'anya_tool_usage',
+    ]
+    const tables = {}
+    for (const tableName of brainTables) {
+      try {
+        const countRow = await db.prepare(`SELECT COUNT(*) AS count FROM ${tableName}`).get()
+        let lastActivity = null
+        for (const column of ['updated_at', 'created_at', 'ts']) {
+          try {
+            const row = await db.prepare(`SELECT MAX(${column}) AS last_activity FROM ${tableName}`).get()
+            if (row?.last_activity) {
+              lastActivity = row.last_activity
+              break
+            }
+          } catch {
+            // Try the next known timestamp column.
+          }
+        }
+        tables[tableName] = {
+          count: Number(countRow?.count || 0),
+          last_activity: lastActivity,
+        }
+      } catch (error) {
+        tables[tableName] = {
+          count: 0,
+          last_activity: null,
+          error: error?.message || String(error),
+        }
+      }
+    }
+
     const { toolName, limit = 50 } = params
-    return getToolUsageStats(db, { toolName, limit })
+    return {
+      generated_at: new Date().toISOString(),
+      tables,
+      tool_usage: getToolUsageStats(db, { toolName, limit }),
+    }
   },
 })
 

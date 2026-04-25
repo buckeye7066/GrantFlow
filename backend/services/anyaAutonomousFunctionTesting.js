@@ -1,7 +1,9 @@
 import path from 'path'
 import { promises as fs } from 'fs'
+import jwt from 'jsonwebtoken'
 import { AUDIT_CATEGORIES, SEVERITY, logAuditEvent } from './auditService.js'
 import { collectComponentFiles, scanComponentForButtons } from './anyaButtonScanner.js'
+import { getJwtSecretOrThrow } from '../config/env.js'
 
 const REPO_ROOT = path.resolve(process.cwd())
 
@@ -146,7 +148,10 @@ const API_TEST_SUITES = {
   },
 }
 
-function resolveInternalBaseUrl() {
+function resolveInternalBaseUrl(context = {}) {
+  const contextUrl = String(context?.internalBaseUrl || context?.baseUrl || '').trim()
+  if (contextUrl) return contextUrl.replace(/\/+$/, '')
+
   const explicit = String(process.env.ANYA_SELF_BASE_URL || '').trim()
   if (explicit) return explicit.replace(/\/+$/, '')
 
@@ -175,6 +180,35 @@ function resolveAdminToken() {
   return token
 }
 
+function resolveInternalAdminToken(context) {
+  const configuredToken = resolveAdminToken()
+  if (configuredToken) return configuredToken
+
+  const user = context?.user || {}
+  const isAdmin = context?.ctx?.isAdmin === true || user.is_admin === true || user.isAdmin === true || user.role === 'admin'
+  if (!isAdmin) return null
+
+  try {
+    const secret = getJwtSecretOrThrow(process.env)
+    return jwt.sign(
+      {
+        sub: user.userId ?? user.id ?? 'system_admin_token',
+        userId: user.userId ?? user.id ?? 'system_admin_token',
+        role: 'admin',
+        roles: ['admin'],
+        is_admin: true,
+        email: user.email ?? 'admin@grantflow.app',
+        typ: 'service',
+      },
+      secret,
+      { expiresIn: '10m' },
+    )
+  } catch (error) {
+    console.warn('[anyaAutonomousFunctionTesting] failed to mint internal admin JWT:', error?.message || error)
+    return null
+  }
+}
+
 async function fetchWithTimeout(url, init, timeoutMs = 20_000) {
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), timeoutMs)
@@ -190,7 +224,7 @@ async function fetchWithTimeout(url, init, timeoutMs = 20_000) {
  * Execute a single API test
  */
 async function executeApiTest(test, context) {
-  const baseUrl = resolveInternalBaseUrl()
+  const baseUrl = resolveInternalBaseUrl(context)
   const result = {
     test_name: test.name,
     method: test.method,
@@ -212,10 +246,10 @@ async function executeApiTest(test, context) {
     const headers = { 'content-type': 'application/json' }
 
     if (test.requiresAuth || test.requiresAdmin) {
-      const token = resolveAdminToken()
+      const token = resolveInternalAdminToken(context)
       if (!token) {
-        result.status = 'skipped'
-        result.message = 'Admin token not configured (set ADMIN_TOKEN or ANYA_ADMIN_TOKEN)'
+        result.status = 'failed'
+        result.message = 'Unable to obtain internal admin token for authenticated probe'
         return result
       }
       headers.Authorization = `Bearer ${token}`
@@ -418,13 +452,14 @@ export async function runAutonomousFunctionTests(options, context) {
 export async function testButtonFunctionality(options, context) {
   const {
     componentPath = 'src/components',
+    componentPaths = null,
     probe = true,
   } = options || {}
 
   const startTime = Date.now()
   const report = {
     started_at: new Date().toISOString(),
-    component_path: componentPath,
+    component_path: componentPaths ?? componentPath,
     files_scanned: 0,
     buttons_found: 0,
     buttons_tested: 0,
@@ -443,8 +478,30 @@ export async function testButtonFunctionality(options, context) {
   )
 
   try {
-    const root = path.resolve(process.cwd(), componentPath)
-    const files = await collectComponentFiles(root)
+    const requestedPaths = Array.isArray(componentPaths)
+      ? componentPaths
+      : String(componentPath || 'src/components')
+        .split(',')
+        .map((entry) => entry.trim())
+        .filter(Boolean)
+    const candidatePaths = requestedPaths.length > 0 ? requestedPaths : ['src/components']
+    const filesByPath = new Map()
+    for (const entry of candidatePaths) {
+      const root = path.resolve(process.cwd(), entry)
+      const found = await collectComponentFiles(root)
+      for (const file of found) filesByPath.set(file, true)
+    }
+    if (filesByPath.size === 0 && candidatePaths.includes('src/components')) {
+      const root = path.resolve(process.cwd(), 'src', 'components')
+      const found = await collectComponentFiles(root)
+      for (const file of found) filesByPath.set(file, true)
+    }
+    const files = Array.from(filesByPath.keys())
+    if (files.length === 0) {
+      const err = new Error(`No component files found under: ${candidatePaths.join(', ')}`)
+      err.status = 400
+      throw err
+    }
     report.files_scanned = files.length
 
     // Lazy load supertest + app so static analysis works even when we

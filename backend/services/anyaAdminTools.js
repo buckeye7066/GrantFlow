@@ -9,6 +9,22 @@ const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
 const REPO_ROOT = path.resolve(process.cwd())
 
+function rowsFromResult(result) {
+  if (Array.isArray(result)) return result
+  if (Array.isArray(result?.rows)) return result.rows
+  return []
+}
+
+function safeJson(value, fallback = {}) {
+  if (value === null || value === undefined || value === '') return fallback
+  if (typeof value === 'object') return value
+  try {
+    return JSON.parse(String(value))
+  } catch {
+    return fallback
+  }
+}
+
 /**
  * Recursively collect JS/JSX files from a directory (excludes node_modules, .git, hidden dirs).
  * @param {string} dir - Root directory to scan
@@ -646,14 +662,14 @@ export async function adminCodeLint({ targetPath, fix = false }, context) {
           })
         }
 
-        // Check for === instead of ===
-        if (line.match(/[^=!]===[^=]/) || line.match(/[^!]!==[^=]/)) {
+        // Check for loose equality only; strict === / !== are valid.
+        if (/(^|[^=!])==($|[^=])/.test(line) || /(^|[^!])!=($|[^=])/.test(line)) {
           issues.push({
             file: relativePath,
             line: idx + 1,
             severity: 'error',
             rule: 'eqeqeq',
-            message: 'Use === or !== instead of === or !==',
+            message: 'Use === or !== instead of == or !=',
           })
         }
       })
@@ -906,7 +922,7 @@ export async function adminCrawlerList({ status, limit = 50, type }, context) {
   const whereClause = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : ''
   const safeLimit = Math.max(1, Math.min(Number(limit) || 50, 200))
 
-  const jobs = db
+  const jobsResult = await db
     .prepare(
       `
       SELECT *
@@ -917,6 +933,7 @@ export async function adminCrawlerList({ status, limit = 50, type }, context) {
     `,
     )
     .all(...params, safeLimit)
+  const jobs = rowsFromResult(jobsResult)
 
   return {
     count: jobs.length,
@@ -924,8 +941,8 @@ export async function adminCrawlerList({ status, limit = 50, type }, context) {
     filters: { status: status ?? null, type: type ?? null },
     jobs: jobs.map((job) => ({
       ...job,
-      parameters: job.parameters ? JSON.parse(job.parameters) : {},
-      result_meta: job.result_meta ? JSON.parse(job.result_meta) : null,
+      parameters: safeJson(job.parameters, {}),
+      result_meta: safeJson(job.result_meta, null),
     })),
   }
 }
@@ -933,19 +950,21 @@ export async function adminCrawlerList({ status, limit = 50, type }, context) {
 /**
  * Trigger any crawler type with custom parameters
  */
-export async function adminCrawlerRun({ type, profileId, parameters = {} }, context) {
+export async function adminCrawlerRun({ crawlerType, type, profileId, parameters = {} }, context) {
   const { db } = context
   if (!db) {
     throw new Error('Database connection unavailable')
   }
 
-  if (!type) {
+  const selectedType = crawlerType ?? type
+  if (!selectedType) {
     throw new Error('Crawler type is required')
   }
 
   const allowedTypes = [
     'local',
     'scholarship',
+    'curated_benefits',
     'comprehensive',
     'item_search',
     'avatar_lookup',
@@ -954,7 +973,7 @@ export async function adminCrawlerRun({ type, profileId, parameters = {} }, cont
     'profile_enrichment',
   ]
 
-  if (!allowedTypes.includes(type)) {
+  if (!allowedTypes.includes(selectedType)) {
     throw new Error(`Invalid crawler type. Allowed: ${allowedTypes.join(', ')}`)
   }
 
@@ -966,14 +985,15 @@ export async function adminCrawlerRun({ type, profileId, parameters = {} }, cont
     INSERT INTO crawler_jobs (id, type, profile_id, status, parameters, created_at)
     VALUES (?, ?, ?, 'queued', ?, CURRENT_TIMESTAMP)
   `,
-  ).run(jobId, type, profileId ?? null, parametersJson)
+  ).run(jobId, selectedType, profileId ?? null, parametersJson)
 
   const job = await db.prepare('SELECT * FROM crawler_jobs WHERE id = ?').get(jobId)
 
   return {
     job: {
       ...job,
-      parameters: job.parameters ? JSON.parse(job.parameters) : {},
+      crawlerType: job?.type ?? selectedType,
+      parameters: safeJson(job?.parameters, {}),
     },
     message: `Crawler job ${jobId} queued successfully`,
   }
@@ -982,13 +1002,16 @@ export async function adminCrawlerRun({ type, profileId, parameters = {} }, cont
 /**
  * Validate crawler outputs and check for errors in recent jobs
  */
-export async function adminCrawlerCheck({ jobId, lastN = 10 }, context) {
+export async function adminCrawlerCheck({ jobId, lastN = 10, limit, since, status }, context) {
   const { db } = context
   if (!db) {
     throw new Error('Database connection unavailable')
   }
 
   let jobs = []
+  let totalJobs = 0
+  const totalRow = await db.prepare('SELECT COUNT(*) AS count FROM crawler_jobs').get()
+  totalJobs = Number(totalRow?.count || 0)
 
   if (jobId) {
     const job = await db.prepare('SELECT * FROM crawler_jobs WHERE id = ?').get(jobId)
@@ -996,16 +1019,48 @@ export async function adminCrawlerCheck({ jobId, lastN = 10 }, context) {
       jobs = [job]
     }
   } else {
-    jobs = await db
+    const safeLimit = Math.max(1, Math.min(Number(limit ?? lastN) || 200, 1000))
+    const clauses = []
+    const params = []
+    if (since) {
+      clauses.push('created_at >= ?')
+      params.push(String(since))
+    } else {
+      clauses.push(db?.dialect === 'postgres' ? "created_at >= (NOW() - INTERVAL '24 hours')" : "created_at >= datetime('now', '-24 hours')")
+    }
+    if (status) {
+      clauses.push('status = ?')
+      params.push(String(status))
+    }
+    const whereClause = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : ''
+    const recentRows = rowsFromResult(await db
       .prepare(
         `
       SELECT *
       FROM crawler_jobs
+      ${whereClause}
       ORDER BY created_at DESC
       LIMIT ?
     `,
       )
-      .all(Math.min(Number(lastN) || 10, 50))
+      .all(...params, safeLimit))
+
+    if (recentRows.length < safeLimit) {
+      const seen = new Set(recentRows.map((job) => job.id))
+      const fillRows = rowsFromResult(await db
+        .prepare(
+          `
+            SELECT *
+            FROM crawler_jobs
+            ORDER BY created_at DESC
+            LIMIT ?
+          `,
+        )
+        .all(safeLimit))
+      jobs = [...recentRows, ...fillRows.filter((job) => !seen.has(job.id))].slice(0, safeLimit)
+    } else {
+      jobs = recentRows
+    }
   }
 
   const validation = {
@@ -1013,6 +1068,15 @@ export async function adminCrawlerCheck({ jobId, lastN = 10 }, context) {
     errors: [],
     warnings: [],
     summary: {},
+    total_jobs: totalJobs,
+    sample_fraction: totalJobs > 0 ? jobs.length / totalJobs : 1,
+  }
+
+  if (totalJobs > 0 && jobs.length / totalJobs < 0.01) {
+    validation.warnings.push({
+      type: 'small_sample',
+      message: `Sample covers ${jobs.length} of ${totalJobs} crawler jobs (<1%). Increase limit or provide since/status filters for a deeper audit.`,
+    })
   }
 
   jobs.forEach((job) => {
@@ -1068,7 +1132,7 @@ export async function adminCrawlerRetry({ jobId }, context) {
   }
 
   const newJobId = randomUUID()
-  const parameters = originalJob.parameters ? JSON.parse(originalJob.parameters) : {}
+  const parameters = safeJson(originalJob.parameters ?? originalJob.params ?? originalJob.payload, {})
   parameters.retried_from_job_id = jobId
 
   db.prepare(
@@ -1099,7 +1163,7 @@ export async function adminCrawlerRetry({ jobId }, context) {
     original_job_id: jobId,
     new_job: {
       ...newJob,
-      parameters: newJob.parameters ? JSON.parse(newJob.parameters) : {},
+      parameters: safeJson(newJob?.parameters, {}),
     },
     message: 'Job retried successfully',
   }
@@ -1354,7 +1418,7 @@ if (!trimmedSql.includes('limit')) {
   finalSql += ` LIMIT ${safeLimit}`;
 }
 
-const results = db.prepare(finalSql).all()
+const results = rowsFromResult(await db.prepare(finalSql).all())
 
     return {
       query: sql,
@@ -1598,11 +1662,12 @@ export async function adminCodeScan({ directory = '.', filePattern = '*.js', iss
  * "recent errors" panel reflects real production behavior rather than an
  * empty stub.
  */
-export async function adminHealthLogs({ level = 'error', limit = 50, source }, context) {
+export async function adminHealthLogs({ level = 'warning', limit = 50, source }, context) {
   requireAdmin(context?.user)
 
   const cap = Math.min(Math.max(Number(limit) || 50, 1), 200)
-  const ringLogs = getRecentLogs({ level, source, limit: cap })
+  const normalizedLevel = String(level || 'warning').toLowerCase() === 'warning' ? 'warn' : String(level || 'warning').toLowerCase()
+  const ringLogs = getRecentLogs({ level: normalizedLevel, source, limit: cap })
 
   // Group 7: also read persisted warn/error records from audit_logs so the
   // admin.health.logs tool survives process restarts. The ring buffer is
@@ -1615,7 +1680,7 @@ export async function adminHealthLogs({ level = 'error', limit = 50, source }, c
       // Map caller "level" -> audit severity list. audit_logs stores
       // severity in {'info','warn','error','critical'} — we surface only
       // the operator-facing levels here.
-      const wantErrorOnly = String(level || '').toLowerCase() === 'error'
+      const wantErrorOnly = normalizedLevel === 'error'
       // audit:allow dynamic-sql — severity allowlist is hardcoded
       const severitySql = wantErrorOnly
         ? `severity IN ('error','critical')`

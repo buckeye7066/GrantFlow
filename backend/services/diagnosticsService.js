@@ -211,7 +211,7 @@ async function checkTableExists(db, tableName) {
  * releases from landing with a drifted schema.
  */
 async function checkFundingOpportunitiesSchema(db) {
-  const grantsRequired = ['url', 'matched_needs', 'match_decision', 'fingerprint', 'fingerprint_version']
+  const grantsRequired = ['url', 'matched_needs', 'match_decision', 'match_explanation', 'fingerprint', 'fingerprint_version']
   const grantsCheck = await checkTableColumns(db, 'grants', grantsRequired)
   const crawlerLogsExists = await checkTableExists(db, 'crawler_logs')
 
@@ -255,6 +255,7 @@ async function checkFundingOpportunitiesSchema(db) {
         grants_has_url: grantsCheck.has.has('url'),
         grants_has_fingerprint: grantsCheck.has.has('fingerprint'),
         grants_has_match_decision: grantsCheck.has.has('match_decision'),
+        grants_has_match_explanation: grantsCheck.has.has('match_explanation'),
         grants_has_matched_needs: grantsCheck.has.has('matched_needs'),
         crawl_logs_exists: crawlLogsExists,
         crawler_logs_exists: crawlerLogsExists,
@@ -304,6 +305,7 @@ async function checkFundingOpportunitiesSchema(db) {
       grants_has_url: grantsCheck.has.has('url'),
       grants_has_fingerprint: grantsCheck.has.has('fingerprint'),
       grants_has_match_decision: grantsCheck.has.has('match_decision'),
+      grants_has_match_explanation: grantsCheck.has.has('match_explanation'),
       grants_has_matched_needs: grantsCheck.has.has('matched_needs'),
       crawl_logs_exists: crawlLogsExists,
       crawler_logs_exists: crawlerLogsExists,

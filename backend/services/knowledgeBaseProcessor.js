@@ -56,6 +56,14 @@ export async function analyzeKnowledgeBaseDocument({ documentId, extractedText, 
   }
 
   try {
+    if (!db || typeof db.prepare !== 'function') {
+      throw new Error('Database connection unavailable')
+    }
+    // Fail fast before spending time/tokens on AI if the result cannot be
+    // persisted. This keeps admin diagnostics and tests from hanging on a
+    // broken DB handle.
+    db.prepare('SELECT 1')
+
     const { openai } = createOpenAIClient()
     
     // Truncate very long documents to manage token usage

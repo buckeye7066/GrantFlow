@@ -531,6 +531,15 @@ router.post('/run', ensureAuth, async (req, res) => {
   }
 })
 
+router.get('/', (_req, res) => {
+  res.json({
+    ok: true,
+    service: 'real-crawlers',
+    status: 'healthy',
+    endpoints: ['/api/real-crawlers/list', '/api/real-crawlers/health-check'],
+  })
+})
+
 /**
  * Get all available crawlers
  * GET /api/real-crawlers/list

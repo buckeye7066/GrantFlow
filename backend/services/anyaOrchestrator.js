@@ -1290,7 +1290,7 @@ export function listTools(user) {
   return _toolListCache[cacheKey]
 }
 
-export async function invokeTool(db, user, toolName, params, { sessionId } = {}) {
+export async function invokeTool(db, user, toolName, params, { sessionId, internalBaseUrl } = {}) {
   assertAuthenticated(user)
   // Provide runtime context that some tools (crawlers, documents, avatars) expect.
   const uploadDir =
@@ -1315,6 +1315,7 @@ export async function invokeTool(db, user, toolName, params, { sessionId } = {})
     user,
     db,
     sessionId,
+    internalBaseUrl,
     profileId: user?.activeProfileId ?? user?.profile_id ?? null,
     uploadDir,
     getOpenAI,

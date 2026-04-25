@@ -111,6 +111,25 @@ async function applyMigration(filename) {
       await tx.exec(sql);
       await tx.prepare('INSERT INTO _migrations (name) VALUES (?)').run(filename);
     });
+  } else if (sql.includes('@sqlite-continue-on-idempotent-errors')) {
+    await db.withTransaction((tx) => {
+      const statements = sql
+        .split('\n')
+        .filter((line) => !line.trimStart().startsWith('--'))
+        .join('\n')
+        .split(';')
+        .map((stmt) => stmt.trim())
+        .filter(Boolean)
+      for (const statement of statements) {
+        try {
+          tx.exec(`${statement};`)
+        } catch (err) {
+          if (!isIdempotentAlreadyAppliedError(err)) throw err
+          console.log(`  ↪ Skipped already-applied statement (${err?.message || err})`)
+        }
+      }
+      tx.prepare('INSERT INTO _migrations (name) VALUES (?)').run(filename);
+    });
   } else {
     // IMPORTANT: must await — the sqlite withTransaction is async (manual
     // BEGIN/COMMIT) and without awaiting we'd return before COMMIT, which

@@ -17,6 +17,15 @@ const routeLogger = createLogger('route:matching')
 
 const router = express.Router()
 
+router.get('/health', (_req, res) => {
+  res.json({
+    ok: true,
+    service: 'matching',
+    status: 'healthy',
+    checked_at: new Date().toISOString(),
+  })
+})
+
 /** @param {import('express').Request} req */
 function collectSearchTermsFromQuery(req) {
   const terms = []

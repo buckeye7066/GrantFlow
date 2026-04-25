@@ -407,6 +407,15 @@ function deriveJobSummary(type, job) {
   }
 }
 
+router.get('/', (_req, res) => {
+  res.json({
+    ok: true,
+    service: 'crawlers',
+    status: 'healthy',
+    endpoints: ['/api/crawlers/jobs', '/api/crawlers/health'],
+  })
+})
+
 router.get('/jobs', async (req, res) => {
   const ctx = ensureAuth(req, res)
   if (!ctx) return

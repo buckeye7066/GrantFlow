@@ -668,7 +668,7 @@ export async function runAutonomousCodeCrawl(options, context) {
   const {
     directory = '',
     pattern = null,
-    maxIterations = 50,
+    maxIterations = 500,
     maxFileChanges = 20,
     dryRun = false,
     fixConsoleLog = false,
@@ -765,7 +765,7 @@ export async function runAutonomousCodeCrawl(options, context) {
 
     for (const filePath of filteredFiles) {
       if (iterations >= maxIterations) {
-        errors.push({ type: 'limit_reached', stage: 'iterate', message: `maxIterations (${maxIterations}) reached` })
+        errors.push({ type: 'limit_reached', status: 'ran_out_of_iterations', stage: 'iterate', message: `Ran out of iterations after ${maxIterations} files. Increase maxIterations to continue the crawl.` })
         break
       }
       iterations++
@@ -988,6 +988,7 @@ export async function runAutonomousCodeCrawl(options, context) {
     const issueSummaryByFileAll = allIssues.slice().sort((a, b) => b.issueCount - a.issueCount)
 
     const report = {
+      status: errors.some((error) => error?.status === 'ran_out_of_iterations') ? 'ran_out_of_iterations' : 'completed',
       started_at: startedAtIso,
       directory: directory ? `${directory}${pattern ? ` (pattern="${pattern}")` : ''}` : 'entire repository',
       pattern,

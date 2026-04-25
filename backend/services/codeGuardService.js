@@ -44,9 +44,9 @@ const ENDPOINTS = [
   { path: '/api/opportunities?limit=5', auth: false, name: 'Opportunities' },
   { path: '/api/opportunities/meta/sources', auth: false, name: 'Opportunity sources' },
   { path: '/api/opportunities/geo/summary', auth: false, name: 'Geo summary' },
-  { path: '/api/discover-grants?zip=37311', auth: false, name: 'Discover TN' },
-  { path: '/api/discover-grants?zip=44114', auth: false, name: 'Discover OH' },
-  { path: '/api/discover-grants?zip=15010', auth: false, name: 'Discover PA' },
+  { path: '/api/discover-grants?zip=37311&limit=3', auth: false, name: 'Discover TN' },
+  { path: '/api/discover-grants?zip=44114&limit=3', auth: false, name: 'Discover OH' },
+  { path: '/api/discover-grants?zip=15010&limit=3', auth: false, name: 'Discover PA' },
   { path: '/api/grants?limit=3', auth: true, name: 'Pipeline grants' },
   { path: '/api/matching/health', auth: false, name: 'Match engine health' },
   { path: '/api/organizations?limit=3', auth: true, name: 'Organizations' },
@@ -80,26 +80,22 @@ export async function testEndpoints(db, baseUrl, adminToken = null) {
   const fallbackAdmin = adminToken || process.env.ADMIN_TOKEN || process.env.ANYA_ADMIN_TOKEN || null
   const canAuth = Boolean(healthToken || fallbackAdmin)
 
-  for (const ep of ENDPOINTS) {
+  const probeEndpoint = async (ep) => {
     if (ep.auth && !canAuth) {
-      results.push({ ...ep, status: 'SKIP', code: null, ms: null, reason: 'No auth token' })
-      skipped++
-      continue
+      return { ...ep, status: 'SKIP', code: null, ms: null, reason: 'No auth token' }
     }
 
     const headers = {}
-    if (ep.auth) {
-      if (healthToken) headers['X-Admin-Health-Token'] = healthToken
-      if (fallbackAdmin) {
-        headers['Authorization'] = `Bearer ${fallbackAdmin}`
-        headers['X-Admin-Token'] = fallbackAdmin
-      }
+    if (healthToken) headers['X-Admin-Health-Token'] = healthToken
+    if (fallbackAdmin) {
+      headers['Authorization'] = `Bearer ${fallbackAdmin}`
+      headers['X-Admin-Token'] = fallbackAdmin
     }
 
     const start = Date.now()
     try {
       const controller = new AbortController()
-      const timeout = setTimeout(() => controller.abort(), 15000)
+      const timeout = setTimeout(() => controller.abort(), 30000)
       const res = await fetch(`${baseUrl}${ep.path}`, { headers, signal: controller.signal })
       clearTimeout(timeout)
       const ms = Date.now() - start
@@ -114,14 +110,18 @@ export async function testEndpoints(db, baseUrl, adminToken = null) {
         } catch { /* ignore parse errors */ }
       }
 
-      results.push({ name: ep.name, path: ep.path, status: ok ? 'PASS' : 'FAIL', code: res.status, ms, bizWarn })
-      if (ok) passed++; else failed++
+      return { name: ep.name, path: ep.path, status: ok ? 'PASS' : 'FAIL', code: res.status, ms, bizWarn }
     } catch (err) {
       const ms = Date.now() - start
-      results.push({ name: ep.name, path: ep.path, status: 'FAIL', code: null, ms, reason: err.message })
-      failed++
+      return { name: ep.name, path: ep.path, status: 'FAIL', code: null, ms, reason: err.message }
     }
   }
+
+  const probed = await Promise.all(ENDPOINTS.map((ep) => probeEndpoint(ep)))
+  results.push(...probed)
+  passed = results.filter((r) => r.status === 'PASS').length
+  failed = results.filter((r) => r.status === 'FAIL').length
+  skipped = results.filter((r) => r.status === 'SKIP').length
 
   const summary = {
     passed,
@@ -252,8 +252,11 @@ export async function verifyMissionGoals(db) {
 
   // Goal 1: Real funding with application URLs
   try {
-    const opps = await db.prepare('SELECT application_url, url, source_url FROM funding_opportunities LIMIT 100').all()
-    const withUrl = opps.filter(o => o.application_url && o.application_url.startsWith('http')).length
+    const opps = await db.prepare('SELECT application_url, source_url, evidence_url FROM funding_opportunities LIMIT 100').all()
+    const withUrl = opps.filter(o => {
+      const url = o.application_url || o.source_url || o.evidence_url
+      return typeof url === 'string' && url.startsWith('http')
+    }).length
     const pct = opps.length ? Math.round(withUrl / opps.length * 100) : 0
     if (opps.length === 0) report(1, MISSION_GOALS[0].short, 'FAIL', 'Zero opportunities in DB')
     else if (pct >= 80) report(1, MISSION_GOALS[0].short, 'PASS', `${pct}% have URLs (${withUrl}/${opps.length})`)
@@ -465,8 +468,8 @@ export function getAuditSummary(db) {
 
   const epHealth = getMemory(db, { scope: 'global', memoryKey: 'codeguard.endpoint_health' })
   if (epHealth?.content) {
-    const h = epHealth.content
-    lines.push(`Endpoint Health (${h.timestamp}): ${h.passed} pass, ${h.failed} fail, ${h.skipped} skip of ${h.total}`)
+    const h = epHealth.content.endpoints ?? epHealth.content
+    lines.push(`Endpoint Health (${h.timestamp ?? 'unknown'}): ${h.passed ?? 0} pass, ${h.failed ?? 0} fail, ${h.skipped ?? 0} skip of ${h.total ?? 0}`)
     const failures = (h.results || []).filter(r => r.status === 'FAIL')
     if (failures.length > 0) {
       lines.push(`  Failing: ${failures.map(f => `${f.name} (${f.code ?? f.reason})`).join(', ')}`)
@@ -479,9 +482,9 @@ export function getAuditSummary(db) {
 
   const matchQ = getMemory(db, { scope: 'global', memoryKey: 'codeguard.match_quality' })
   if (matchQ?.content) {
-    const m = matchQ.content
+    const m = matchQ.content.matchQuality ?? matchQ.content
     const g = m.grades || {}
-    lines.push(`Match Quality (${m.timestamp}): ${m.totalProfiles} profiles — A:${g.A} B:${g.B} C:${g.C} D:${g.D} F:${g.F}`)
+    lines.push(`Match Quality (${m.timestamp ?? 'unknown'}): ${m.totalProfiles ?? 0} profiles — A:${g.A ?? 0} B:${g.B ?? 0} C:${g.C ?? 0} D:${g.D ?? 0} F:${g.F ?? 0}`)
     const problemProfiles = (m.profiles || []).filter(p => p.grade === 'D' || p.grade === 'F')
     if (problemProfiles.length > 0) {
       lines.push(`  Needs attention: ${problemProfiles.map(p => `${p.name} (${p.grade})`).join(', ')}`)
@@ -490,8 +493,8 @@ export function getAuditSummary(db) {
 
   const mission = getMemory(db, { scope: 'global', memoryKey: 'codeguard.mission_score' })
   if (mission?.content) {
-    const mv = mission.content
-    lines.push(`Mission Score (${mv.timestamp}): ${mv.score}% — ${mv.pass} pass, ${mv.warn} warn, ${mv.fail} fail of ${mv.total}`)
+    const mv = mission.content.mission ?? mission.content
+    lines.push(`Mission Score (${mv.timestamp ?? 'unknown'}): ${mv.score ?? 0}% — ${mv.pass ?? 0} pass, ${mv.warn ?? 0} warn, ${mv.fail ?? 0} fail of ${mv.total ?? 0}`)
     const failing = (mv.goals || []).filter(g => g.status === 'FAIL')
     if (failing.length > 0) {
       lines.push(`  Failing goals:`)

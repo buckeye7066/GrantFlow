@@ -1176,6 +1176,53 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, pref
     }
   }
 
+  const getToolFieldValue = (toolName, fieldName) => {
+    const value = adminToolForm?.[toolName]?.[fieldName]
+    return value === undefined || value === null ? "" : value
+  }
+
+  const setToolFieldValue = (toolName, fieldName, value) => {
+    setAdminToolForm((prev) => ({
+      ...prev,
+      [toolName]: {
+        ...(prev[toolName] || {}),
+        [fieldName]: value,
+      },
+    }))
+  }
+
+  const buildAdminToolParameters = (tool) => {
+    const properties = tool?.schema?.properties || {}
+    const form = adminToolForm?.[tool.name] || {}
+    const parameters = { profile_id: effectiveProfileId }
+    for (const [name, schema] of Object.entries(properties)) {
+      const raw = form[name]
+      if (raw === undefined || raw === null || raw === "") continue
+      if (schema?.type === "boolean") {
+        parameters[name] = raw === true || raw === "true"
+      } else if (schema?.type === "integer" || schema?.type === "number") {
+        parameters[name] = Number(raw)
+      } else if (schema?.type === "object" || schema?.type === "array") {
+        try {
+          parameters[name] = typeof raw === "string" ? JSON.parse(raw) : raw
+        } catch {
+          parameters[name] = raw
+        }
+      } else {
+        parameters[name] = raw
+      }
+    }
+    return parameters
+  }
+
+  const missingRequiredFields = (tool) => {
+    const required = Array.isArray(tool?.schema?.required) ? tool.schema.required : []
+    return required.filter((name) => {
+      const value = getToolFieldValue(tool.name, name)
+      return value === "" || value === null || value === undefined
+    })
+  }
+
   const handleRunAdminTool = async (tool) => {
     if (!tool?.name) return
     setInvokingAdminTool(tool.name)
@@ -1184,7 +1231,7 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, pref
       if (!activeId) throw new Error("Could not start Anya session")
       await invokeAnyaTool(
         tool.name,
-        { profile_id: effectiveProfileId },
+        buildAdminToolParameters(tool),
         { sessionId: activeId },
       )
       toast({
@@ -1202,6 +1249,65 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, pref
     } finally {
       setInvokingAdminTool(null)
     }
+  }
+
+  const renderAdminToolFields = (tool) => {
+    const properties = tool?.schema?.properties || {}
+    const entries = Object.entries(properties).filter(([name]) => name !== "profile_id")
+    if (entries.length === 0) return null
+    const required = new Set(Array.isArray(tool?.schema?.required) ? tool.schema.required : [])
+    return (
+      <div className="mt-3 grid gap-2 sm:grid-cols-2">
+        {entries.map(([name, schema]) => {
+          const id = `admin-tool-${tool.name}-${name}`
+          const value = getToolFieldValue(tool.name, name)
+          const label = `${name}${required.has(name) ? " *" : ""}`
+          if (schema?.type === "boolean") {
+            return (
+              <label key={name} htmlFor={id} className="flex items-center gap-2 rounded border border-slate-200 bg-white px-2 py-1.5 text-xs">
+                <Checkbox
+                  id={id}
+                  checked={value === true || value === "true"}
+                  onCheckedChange={(checked) => setToolFieldValue(tool.name, name, checked === true)}
+                />
+                <span>{label}</span>
+              </label>
+            )
+          }
+          if (Array.isArray(schema?.enum) && schema.enum.length > 0) {
+            return (
+              <label key={name} htmlFor={id} className="space-y-1 text-xs text-slate-600">
+                <span>{label}</span>
+                <select
+                  id={id}
+                  value={value}
+                  onChange={(event) => setToolFieldValue(tool.name, name, event.target.value)}
+                  className="w-full rounded-md border border-slate-200 bg-white px-2 py-1.5 text-xs text-slate-800"
+                >
+                  <option value="">Select...</option>
+                  {schema.enum.map((option) => (
+                    <option key={option} value={option}>{option}</option>
+                  ))}
+                </select>
+              </label>
+            )
+          }
+          return (
+            <label key={name} htmlFor={id} className="space-y-1 text-xs text-slate-600">
+              <span>{label}</span>
+              <Input
+                id={id}
+                type={schema?.type === "integer" || schema?.type === "number" ? "number" : "text"}
+                value={value}
+                onChange={(event) => setToolFieldValue(tool.name, name, event.target.value)}
+                placeholder={schema?.type === "object" || schema?.type === "array" ? "JSON value" : schema?.description || name}
+                className="h-8 text-xs"
+              />
+            </label>
+          )
+        })}
+      </div>
+    )
   }
 
   // Quick-action buttons deliberately do NOT require `sessionId` — the
@@ -1752,12 +1858,18 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, pref
                       <div className="flex-1 min-w-0 mr-3">
                         <div className="font-mono text-xs text-purple-700 font-medium">{tool.name}</div>
                         <div className="text-xs text-slate-700 mt-1">{tool.description}</div>
+                        {renderAdminToolFields(tool)}
+                        {missingRequiredFields(tool).length > 0 ? (
+                          <div className="mt-2 text-xs font-medium text-amber-700">
+                            Missing required parameter: {missingRequiredFields(tool).join(", ")}
+                          </div>
+                        ) : null}
                       </div>
                       <Button
                         size="sm"
                         variant="outline"
                         className="shrink-0 gap-1.5 border-purple-300 text-purple-700 hover:bg-purple-50"
-                        disabled={invokingAdminTool === tool.name}
+                        disabled={invokingAdminTool === tool.name || missingRequiredFields(tool).length > 0}
                         onClick={() => handleRunAdminTool(tool)}
                       >
                         {invokingAdminTool === tool.name ? (
@@ -1788,12 +1900,18 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, pref
                       <div className="flex-1 min-w-0 mr-3">
                         <div className="font-mono text-xs text-purple-700 font-medium">{tool.name}</div>
                         <div className="text-xs text-slate-700 mt-1">{tool.description}</div>
+                        {renderAdminToolFields(tool)}
+                        {missingRequiredFields(tool).length > 0 ? (
+                          <div className="mt-2 text-xs font-medium text-amber-700">
+                            Missing required parameter: {missingRequiredFields(tool).join(", ")}
+                          </div>
+                        ) : null}
                       </div>
                       <Button
                         size="sm"
                         variant="outline"
                         className="shrink-0 gap-1.5"
-                        disabled={invokingAdminTool === tool.name}
+                        disabled={invokingAdminTool === tool.name || missingRequiredFields(tool).length > 0}
                         onClick={() => handleRunAdminTool(tool)}
                       >
                         {invokingAdminTool === tool.name ? (
@@ -1824,12 +1942,18 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, pref
                       <div className="flex-1 min-w-0 mr-3">
                         <div className="font-mono text-xs text-purple-700 font-medium">{tool.name}</div>
                         <div className="text-xs text-slate-700 mt-1">{tool.description}</div>
+                        {renderAdminToolFields(tool)}
+                        {missingRequiredFields(tool).length > 0 ? (
+                          <div className="mt-2 text-xs font-medium text-amber-700">
+                            Missing required parameter: {missingRequiredFields(tool).join(", ")}
+                          </div>
+                        ) : null}
                       </div>
                       <Button
                         size="sm"
                         variant="outline"
                         className="shrink-0 gap-1.5"
-                        disabled={invokingAdminTool === tool.name}
+                        disabled={invokingAdminTool === tool.name || missingRequiredFields(tool).length > 0}
                         onClick={() => handleRunAdminTool(tool)}
                       >
                         {invokingAdminTool === tool.name ? (
@@ -1860,12 +1984,18 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, pref
                       <div className="flex-1 min-w-0 mr-3">
                         <div className="font-mono text-xs text-purple-700 font-medium">{tool.name}</div>
                         <div className="text-xs text-slate-700 mt-1">{tool.description}</div>
+                        {renderAdminToolFields(tool)}
+                        {missingRequiredFields(tool).length > 0 ? (
+                          <div className="mt-2 text-xs font-medium text-amber-700">
+                            Missing required parameter: {missingRequiredFields(tool).join(", ")}
+                          </div>
+                        ) : null}
                       </div>
                       <Button
                         size="sm"
                         variant="outline"
                         className="shrink-0 gap-1.5"
-                        disabled={invokingAdminTool === tool.name}
+                        disabled={invokingAdminTool === tool.name || missingRequiredFields(tool).length > 0}
                         onClick={() => handleRunAdminTool(tool)}
                       >
                         {invokingAdminTool === tool.name ? (
@@ -1896,12 +2026,18 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, pref
                       <div className="flex-1 min-w-0 mr-3">
                         <div className="font-mono text-xs text-purple-700 font-medium">{tool.name}</div>
                         <div className="text-xs text-slate-700 mt-1">{tool.description}</div>
+                        {renderAdminToolFields(tool)}
+                        {missingRequiredFields(tool).length > 0 ? (
+                          <div className="mt-2 text-xs font-medium text-amber-700">
+                            Missing required parameter: {missingRequiredFields(tool).join(", ")}
+                          </div>
+                        ) : null}
                       </div>
                       <Button
                         size="sm"
                         variant="outline"
                         className="shrink-0 gap-1.5"
-                        disabled={invokingAdminTool === tool.name}
+                        disabled={invokingAdminTool === tool.name || missingRequiredFields(tool).length > 0}
                         onClick={() => handleRunAdminTool(tool)}
                       >
                         {invokingAdminTool === tool.name ? (
@@ -1932,12 +2068,18 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, pref
                       <div className="flex-1 min-w-0 mr-3">
                         <div className="font-mono text-xs text-purple-700 font-medium">{tool.name}</div>
                         <div className="text-xs text-slate-700 mt-1">{tool.description}</div>
+                        {renderAdminToolFields(tool)}
+                        {missingRequiredFields(tool).length > 0 ? (
+                          <div className="mt-2 text-xs font-medium text-amber-700">
+                            Missing required parameter: {missingRequiredFields(tool).join(", ")}
+                          </div>
+                        ) : null}
                       </div>
                       <Button
                         size="sm"
                         variant="outline"
                         className="shrink-0 gap-1.5"
-                        disabled={invokingAdminTool === tool.name}
+                        disabled={invokingAdminTool === tool.name || missingRequiredFields(tool).length > 0}
                         onClick={() => handleRunAdminTool(tool)}
                       >
                         {invokingAdminTool === tool.name ? (
@@ -1968,12 +2110,18 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, pref
                       <div className="flex-1 min-w-0 mr-3">
                         <div className="font-mono text-xs text-purple-700 font-medium">{tool.name}</div>
                         <div className="text-xs text-slate-700 mt-1">{tool.description}</div>
+                        {renderAdminToolFields(tool)}
+                        {missingRequiredFields(tool).length > 0 ? (
+                          <div className="mt-2 text-xs font-medium text-amber-700">
+                            Missing required parameter: {missingRequiredFields(tool).join(", ")}
+                          </div>
+                        ) : null}
                       </div>
                       <Button
                         size="sm"
                         variant="outline"
                         className="shrink-0 gap-1.5"
-                        disabled={invokingAdminTool === tool.name}
+                        disabled={invokingAdminTool === tool.name || missingRequiredFields(tool).length > 0}
                         onClick={() => handleRunAdminTool(tool)}
                       >
                         {invokingAdminTool === tool.name ? (
@@ -2004,12 +2152,18 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, pref
                       <div className="flex-1 min-w-0 mr-3">
                         <div className="font-mono text-xs text-purple-700 font-medium">{tool.name}</div>
                         <div className="text-xs text-slate-700 mt-1">{tool.description}</div>
+                        {renderAdminToolFields(tool)}
+                        {missingRequiredFields(tool).length > 0 ? (
+                          <div className="mt-2 text-xs font-medium text-amber-700">
+                            Missing required parameter: {missingRequiredFields(tool).join(", ")}
+                          </div>
+                        ) : null}
                       </div>
                       <Button
                         size="sm"
                         variant="outline"
                         className="shrink-0 gap-1.5"
-                        disabled={invokingAdminTool === tool.name}
+                        disabled={invokingAdminTool === tool.name || missingRequiredFields(tool).length > 0}
                         onClick={() => handleRunAdminTool(tool)}
                       >
                         {invokingAdminTool === tool.name ? (
@@ -2040,12 +2194,18 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, pref
                       <div className="flex-1 min-w-0 mr-3">
                         <div className="font-mono text-xs text-purple-700 font-medium">{tool.name}</div>
                         <div className="text-xs text-slate-700 mt-1">{tool.description}</div>
+                        {renderAdminToolFields(tool)}
+                        {missingRequiredFields(tool).length > 0 ? (
+                          <div className="mt-2 text-xs font-medium text-amber-700">
+                            Missing required parameter: {missingRequiredFields(tool).join(", ")}
+                          </div>
+                        ) : null}
                       </div>
                       <Button
                         size="sm"
                         variant="outline"
                         className="shrink-0 gap-1.5"
-                        disabled={invokingAdminTool === tool.name}
+                        disabled={invokingAdminTool === tool.name || missingRequiredFields(tool).length > 0}
                         onClick={() => handleRunAdminTool(tool)}
                       >
                         {invokingAdminTool === tool.name ? (

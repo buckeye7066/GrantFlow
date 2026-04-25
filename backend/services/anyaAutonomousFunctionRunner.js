@@ -583,11 +583,15 @@ export async function saveCrawlerResultsToGlobal(options, context) {
     }
 
     if (job.status !== 'completed') {
-      return { message: 'Job not completed, skipping global save' }
+      const err = new Error(`Job ${jobId} exists but is not saveable yet (status: ${job.status || 'unknown'})`)
+      err.status = 400
+      err.details = { job_id: jobId, status: job.status || null }
+      throw err
     }
 
     // Get all opportunities created or updated for this profile during this job
-    const opportunities = db
+    const startedAt = job.started_at || job.created_at || '1970-01-01T00:00:00.000Z'
+    const opportunities = await db
       .prepare(
         `
         SELECT * FROM funding_opportunities
@@ -596,7 +600,7 @@ export async function saveCrawlerResultsToGlobal(options, context) {
         ORDER BY updated_at DESC
         `
       )
-      .all(job.profile_id, job.started_at, job.started_at)
+      .all(job.profile_id, startedAt, startedAt)
 
     let savedToGlobal = 0
 
@@ -624,10 +628,10 @@ export async function saveCrawlerResultsToGlobal(options, context) {
           INSERT INTO funding_opportunities (
             id, title, sponsor, deadline, amount_min, amount_max, amount_description,
             application_url, state, opportunity_type, requires_match, match_percentage,
-            eligibility_bullets, categories, source, source_url, is_active,
+            eligibility_bullets, categories, source, source_url, evidence_url, is_active,
             created_at, updated_at
           )
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
           `
         ).run(
           globalId,
@@ -645,7 +649,8 @@ export async function saveCrawlerResultsToGlobal(options, context) {
           opp.eligibility_bullets,
           opp.categories,
           opp.source,
-          opp.source_url
+          opp.source_url,
+          opp.evidence_url || opp.source_url || opp.application_url
         )
 
         savedToGlobal++
@@ -660,7 +665,10 @@ export async function saveCrawlerResultsToGlobal(options, context) {
       message: `Saved ${savedToGlobal} new opportunities to global pool`,
     }
   } catch (error) {
-    throw new Error(`Failed to save to global opportunities: ${error.message}`)
+    const wrapped = new Error(`Failed to save to global opportunities: ${error.message}`)
+    if (error?.status) wrapped.status = error.status
+    if (error?.details) wrapped.details = error.details
+    throw wrapped
   }
 }
 

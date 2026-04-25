@@ -29,6 +29,16 @@ let _statusTestCache = null
 let _statusTestCacheExpiry = 0
 const STATUS_TEST_CACHE_TTL_MS = 5 * 60 * 1000
 
+function getInternalBaseUrl(req) {
+  const configured = String(process.env.ANYA_SELF_BASE_URL || '').trim()
+  if (configured) return configured.replace(/\/+$/, '')
+
+  const host = req.get('host')
+  if (!host) return null
+  const protocol = req.protocol || 'http'
+  return `${protocol}://${host}`
+}
+
 /**
  * Admin authentication middleware for Anya routes.
  * Uses req.ctx.isAdmin (DB-backed) as the canonical source of truth.
@@ -73,7 +83,7 @@ function adminAuth(req, res, next) {
 
 function handleError(res, error) {
   const status = error?.status || 500
-  return res.status(status).json({ error: error.message || 'Unexpected error' })
+  return res.status(status).json({ ok: false, error: error.message || 'Unexpected error' })
 }
 
 // Public Anya health probe — used by endpointHealth + external uptime checks.
@@ -496,6 +506,7 @@ router.post('/tools/:toolName/invoke', async (req, res) => {
 
     const result = await invokeTool(req.db, req.ctx, req.params.toolName, params, {
       sessionId,
+      internalBaseUrl: getInternalBaseUrl(req),
     })
 
     await completeAnyaRun(req.db, runId, { status: 'completed', response: result })

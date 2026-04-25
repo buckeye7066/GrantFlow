@@ -92,6 +92,22 @@ async function readFileSafe(filePath) {
   }
 }
 
+async function dbAll(db, sql, params = []) {
+  if (typeof db?.query === 'function') {
+    const result = await db.query(sql, params)
+    return Array.isArray(result) ? result : (result?.rows || [])
+  }
+  if (typeof db?.prepare === 'function') {
+    const sqliteSql = sql
+      .replace(/COUNT\(\*\)::int/gi, 'COUNT(*)')
+      .replace(/\bis_active\s*=\s*true\b/gi, 'is_active = 1')
+      .replace(/NOW\(\)\s*-\s*INTERVAL\s*'30 days'/gi, "datetime('now', '-30 days')")
+    const result = await db.prepare(sqliteSql).all(...params)
+    return Array.isArray(result) ? result : (result?.rows || [])
+  }
+  throw new Error('Unsupported DB client: expected query() or prepare()')
+}
+
 // ---------------------------------------------------------------------------
 // 1. Opportunity URL validity
 // ---------------------------------------------------------------------------
@@ -105,13 +121,13 @@ async function auditOpportunityUrls({ db }) {
 
   let rows = []
   try {
-    const result = await db.query(
+    rows = await dbAll(
+      db,
       `SELECT id, title, application_url
-         FROM opportunities
+         FROM funding_opportunities
         WHERE application_url IS NOT NULL AND application_url <> ''
         LIMIT 2000`,
     )
-    rows = result?.rows || []
   } catch (err) {
     errors.push({ audit: 'opportunity_url_validity', message: `query_failed: ${err?.message || String(err)}` })
     return { findings, errors, checked: 0 }
@@ -171,7 +187,8 @@ async function auditExpiredOpportunityLabeling({ db }) {
 
   let rows = []
   try {
-    const result = await db.query(
+    rows = await dbAll(
+      db,
       `SELECT id, title, deadline, deadline_type, is_active
          FROM funding_opportunities
         WHERE is_active = true
@@ -180,7 +197,6 @@ async function auditExpiredOpportunityLabeling({ db }) {
           AND COALESCE(deadline_type, '') <> 'rolling'
         LIMIT 5000`,
     )
-    rows = result?.rows || []
   } catch (err) {
     errors.push({
       audit: 'expired_opportunity_labeling',
@@ -221,13 +237,13 @@ async function auditLoanVisibility({ db }) {
 
   let rows = []
   try {
-    const result = await db.query(
+    rows = await dbAll(
+      db,
       `SELECT id, title, description, opportunity_type, eligibility, eligibility_criteria, is_loan
          FROM funding_opportunities
         WHERE is_active = true
         LIMIT 5000`,
     )
-    rows = result?.rows || []
   } catch (err) {
     errors.push({
       audit: 'loan_visibility_vs_policy',
@@ -420,10 +436,23 @@ async function auditMatchingCoverage({ rootDir }) {
 async function auditFallbackLogic({ rootDir }) {
   const findings = []
   const errors = []
-  const matchingFile = path.join(rootDir, 'backend', 'services', 'matching.js')
-  const text = await readFileSafe(matchingFile)
+  const candidates = [
+    path.join(rootDir, 'backend', 'services', 'matchEngine.js'),
+    path.join(rootDir, 'backend', 'matching'),
+    path.join(rootDir, 'backend', 'services', 'relevanceFilter.js'),
+  ]
+  let text = null
+  let selectedFile = null
+  for (const candidate of candidates) {
+    const statText = await readFileSafe(candidate)
+    if (statText !== null && statText !== undefined) {
+      text = statText
+      selectedFile = candidate
+      break
+    }
+  }
   if ((text === null || text === undefined)) {
-    errors.push({ audit: 'fallback_logic', message: `missing_file:${matchingFile}` })
+    errors.push({ audit: 'fallback_logic', message: `missing_file:${candidates.map((f) => path.relative(rootDir, f)).join('|')}` })
     return { findings, errors }
   }
 
@@ -437,8 +466,8 @@ async function auditFallbackLogic({ rootDir }) {
       audit: 'fallback_logic',
       type: 'missing_zero_result_fallback',
       severity: 'high',
-      message: 'matching.js does not appear to implement a zero-result relaxation fallback.',
-      file: 'backend/services/matching.js',
+      message: `${path.relative(rootDir, selectedFile)} does not appear to implement a zero-result relaxation fallback.`,
+      file: path.relative(rootDir, selectedFile).replace(/\\/g, '/'),
     })
   }
 
@@ -499,14 +528,15 @@ async function auditAnyaGrounding({ db }) {
 
   let row
   try {
-    const result = await db.query(
+    const rows = await dbAll(
+      db,
       `SELECT COUNT(*)::int AS n
-         FROM audit_log
+         FROM audit_logs
         WHERE category = 'anya'
           AND action LIKE 'autonomous.%'
           AND created_at > NOW() - INTERVAL '30 days'`,
     )
-    row = result?.rows?.[0]
+    row = rows?.[0]
   } catch (err) {
     errors.push({ audit: 'anya_grounding', message: `query_failed:${err?.message || String(err)}` })
     return { findings, errors }
@@ -518,7 +548,7 @@ async function auditAnyaGrounding({ db }) {
       audit: 'anya_grounding',
       type: 'anya_has_no_grounded_events',
       severity: 'medium',
-      message: 'No Anya autonomous events recorded in audit_log in the last 30 days -- Anya outputs may not be grounded in real system state.',
+      message: 'No Anya autonomous events recorded in audit_logs in the last 30 days -- Anya outputs may not be grounded in real system state.',
       evidence: { recent_events_30d: 0 },
     })
   }

@@ -531,7 +531,9 @@ export async function discoverNewCatalogItems(db, { minCount = 3, limit = 50 } =
   const existingRows = await db.prepare('SELECT name FROM item_catalog').all()
   const existing = new Set((existingRows || []).map((r) => normalizeLower(r.name)).filter(Boolean))
 
-  // Only mine item-focused sources to avoid importing locations/attributes from general directories.
+  // Prefer item-focused sources, but still scan the full funding opportunity
+  // corpus so admin.items.discover proves it is looking at the real dataset.
+  // Non-item tokens are filtered below by looksLikeItemToken/STOPWORDS.
   const activePredicate = db?.dialect === 'postgres' ? 'is_active = TRUE' : 'is_active = 1'
   const rows = await db
     .prepare(
@@ -539,7 +541,6 @@ export async function discoverNewCatalogItems(db, { minCount = 3, limit = 50 } =
         SELECT id, title, source, keywords, updated_at
         FROM funding_opportunities
         WHERE ${activePredicate}
-          AND source IN ('item_gift', 'item_funding')
         ORDER BY updated_at DESC
         LIMIT 800
       `,

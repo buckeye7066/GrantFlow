@@ -22,6 +22,44 @@ router.use((req, res, next) => {
   return next()
 })
 
+// GET /api/discover-grants
+// Lightweight Discover Grants compatibility endpoint used by Admin CodeGuard.
+// It returns real active opportunities from the same funding_opportunities
+// table that powers the Discover UI, never placeholders.
+router.get('/discover-grants', async (req, res) => {
+  try {
+    const limit = Math.max(1, Math.min(Number(req.query?.limit) || 10, 50))
+    const state = String(req.query?.state || '').trim().toUpperCase()
+    const clauses = [req.db?.dialect === 'postgres' ? 'is_active = TRUE' : 'is_active = 1']
+    const params = []
+    if (/^[A-Z]{2}$/.test(state)) {
+      clauses.push('(UPPER(state) = ? OR state IS NULL OR TRIM(state) = ?)')
+      params.push(state, '')
+    }
+    const where = clauses.join(' AND ')
+    const rows = await req.db
+      .prepare(
+        `
+          SELECT id, title, sponsor, application_url, source_url, evidence_url, state, deadline
+          FROM funding_opportunities
+          WHERE ${where}
+          ORDER BY updated_at DESC
+          LIMIT ?
+        `,
+      )
+      .all(...params, limit)
+    return res.json({
+      ok: true,
+      total_found: rows.length,
+      included: rows.length,
+      results: rows,
+    })
+  } catch (error) {
+    routeLogger.error('discover_grants.failed', error)
+    return res.status(500).json({ ok: false, error: error?.message || String(error) })
+  }
+})
+
 // Scoring and profile signal extraction handled by shared modules:
 // - loadProfileContext + buildProfileFacets → profile context
 // - scoreOpportunity (backend/services/matchEngine.js) → non-authoritative

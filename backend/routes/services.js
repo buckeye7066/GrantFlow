@@ -27,6 +27,15 @@ router.use(async (req, _res, next) => {
   next()
 })
 
+router.get('/', (_req, res) => {
+  res.json({
+    ok: true,
+    service: 'services',
+    status: 'healthy',
+    endpoints: ['/api/services/catalog', '/api/services/terms'],
+  })
+})
+
 router.get('/catalog', async (req, res) => {
   try {
     const includeInactive = String(req.query?.include_inactive || '').toLowerCase() === 'true'
