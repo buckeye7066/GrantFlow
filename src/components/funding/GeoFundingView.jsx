@@ -116,7 +116,7 @@ function ZipSection({ zip, county, count, state, profileId, defaultOpen }) {
   })
 
   const opportunities = scoredQuery.data?.data ?? []
-  const totalFound = scoredQuery.data?.total_found ?? null
+  const totalFound = scoredQuery.data?.total ?? scoredQuery.data?.total_found ?? null
   const showScore = Boolean(profileId && profileId !== "all")
 
   return (

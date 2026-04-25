@@ -47,7 +47,8 @@ export default function ProfileMatcher() {
 
     try {
       const response = await matchProfileToOpportunities(selectedProfileId);
-      const opps = response?.opportunities ?? response?.results ?? [];
+      const payload = response?.data ?? response ?? {};
+      const opps = payload?.opportunities ?? payload?.results ?? [];
       if (Array.isArray(opps)) {
         setMatches(opps);
       } else {
@@ -101,13 +102,12 @@ export default function ProfileMatcher() {
             opportunity_id: opp.id || null,
             profile_id: selectedProfile.id,
             organization_id: selectedProfile.organization_id || null,
-            match_score: Number.isFinite(opp.match_score) ? opp.match_score : null,
-            match_reasons: Array.isArray(opp.match_reasons) ? opp.match_reasons : [],
             opportunity_data: {
               title: opp.title,
               sponsor: opp.sponsor || opp.funder,
               deadline: opp.deadline,
-              url: opp.url || opp.application_url || opp.source_url,
+              application_url: opp.application_url || null,
+              url: opp.url || opp.source_url || null,
               awardMin: opp.amount_min,
               awardMax: opp.amount_max,
               descriptionMd: opp.description,

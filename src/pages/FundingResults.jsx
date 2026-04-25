@@ -86,7 +86,17 @@ export default function FundingResults() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const log = useMemo(() => createLogger('FundingResults'), []);
-  const { results, profileId, organizationName, organizationId } = useFundingResultsStore();
+  const {
+    results,
+    profileId,
+    organizationName,
+    organizationId,
+    returned,
+    totalFound,
+    totalScored,
+    truncated,
+    thresholdFallbackMessage,
+  } = useFundingResultsStore();
   const { isAuthenticated, accessToken, sessionExpired } = useAuthStore((s) => ({
     isAuthenticated: s.isAuthenticated,
     accessToken: s.accessToken,
@@ -105,6 +115,8 @@ export default function FundingResults() {
     }
   }, [accessToken]);
   const authReady = !sessionExpired && (isAuthenticated || tokenAvailable);
+  const displayedReturned = Number.isFinite(Number(returned)) ? Number(returned) : results.length;
+  const displayedTotalFound = Number.isFinite(Number(totalFound)) ? Number(totalFound) : displayedReturned;
 
   const filteredAndSorted = useMemo(() => {
     let list = [...(results || [])];
@@ -289,13 +301,22 @@ export default function FundingResults() {
       <div className="max-w-7xl mx-auto">
         <header className="mb-6">
           <h1 className="text-2xl font-bold text-foreground">
-            We found {results.length} {results.length === 1 ? 'opportunity' : 'opportunities'}
+            We found {displayedReturned} {displayedReturned === 1 ? 'opportunity' : 'opportunities'}
           </h1>
           <p className="text-muted-foreground mt-1">
             {results.length !== filteredAndSorted.length
-              ? `Showing ${filteredAndSorted.length} of ${results.length} total${strongMatchesOnly ? ' (strong matches ≥70%)' : ''}${showHousingOnly ? ' (housing-usable)' : ''}`
+              ? `Showing ${filteredAndSorted.length} of ${displayedReturned} returned${strongMatchesOnly ? ' (strong matches ≥70%)' : ''}${showHousingOnly ? ' (housing-usable)' : ''}`
               : 'Review and add opportunities to your pipeline'}
           </p>
+          {(totalScored !== null || displayedTotalFound > displayedReturned || truncated || thresholdFallbackMessage) && (
+            <p className="text-xs text-muted-foreground mt-2">
+              {thresholdFallbackMessage || [
+                totalScored !== null ? `${totalScored} scored` : null,
+                displayedTotalFound > displayedReturned ? `${displayedTotalFound} candidates found` : null,
+                truncated ? 'results truncated' : null,
+              ].filter(Boolean).join(' · ')}
+            </p>
+          )}
         </header>
 
         {/* Filters */}

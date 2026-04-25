@@ -288,7 +288,7 @@ export default function DataSources() {
   }, [selectedProfileId, runningCrawlers, crawlMutation, toast]);
 
   const selectedProfile = profiles.find((p) => p.id === selectedProfileId);
-  const totalFound = Object.values(crawlerResults).reduce((sum, r) => sum + (r?.count ?? 0), 0);
+  const totalFound = Object.values(crawlerResults).reduce((sum, r) => sum + (r?.total_found ?? r?.count ?? 0), 0);
   const completedCount = Object.values(crawlerResults).filter((r) => r && !r.error).length;
   const errorCount = Object.values(crawlerResults).filter((r) => r?.error).length;
 

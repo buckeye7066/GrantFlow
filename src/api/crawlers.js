@@ -89,14 +89,23 @@ export async function listRealCrawlers() {
  * @param {Object} opts
  * @param {string} opts.profileId - Required.
  * @param {number} [opts.minMatchScore]
+ * @param {string} [opts.state]
+ * @param {string} [opts.city]
+ * @param {string} [opts.applicantType]
  * @returns {Promise<{ success, count, opportunities, sources_used }>}
  */
-export async function runSmartCrawler({ profileId, minMatchScore = 50 }) {
+export async function runSmartCrawler({ profileId, minMatchScore = 50, state, city, applicantType }) {
   const pid = typeof profileId === 'string' ? profileId.trim() : null
   if (!pid) throw new Error('profile_id is required. Select a profile first.')
   return apiFetch('/api/real-crawlers/run-smart', {
     method: 'POST',
-    body: JSON.stringify({ profile_id: pid, min_match_score: minMatchScore }),
+    body: JSON.stringify({
+      profile_id: pid,
+      min_match_score: minMatchScore,
+      state: state || undefined,
+      city: city || undefined,
+      applicant_type: applicantType || undefined,
+    }),
   })
 }
 

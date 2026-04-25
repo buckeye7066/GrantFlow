@@ -436,7 +436,7 @@ router.post('/run', ensureAuth, async (req, res) => {
     // trust_* fields as /api/opportunities and /api/discovery so the frontend
     // and Anya can explain results with one vocabulary.
     const trustDropCounts = {}
-    const decorated = filtered.map((opp) => {
+    const decorated = filtered.flatMap((opp) => {
       const trust = assessOpportunityTrust(opp, {
         allowDirectory: true,
         allowExpired: false,
@@ -445,9 +445,10 @@ router.post('/run', ensureAuth, async (req, res) => {
         for (const r of trust.reasons || []) {
           trustDropCounts[r] = (trustDropCounts[r] || 0) + 1
         }
+        return []
       }
       const meta = buildTrustMetadata(trust) || {}
-      return {
+      return [{
         ...opp,
         trust_tier: opp.trust_tier ?? meta.trust_tier,
         source_trust: opp.source_trust ?? meta.source_trust,
@@ -456,11 +457,14 @@ router.post('/run', ensureAuth, async (req, res) => {
         trust_downgrade: opp.trust_downgrade ?? meta.trust_downgrade,
         trust_downgrade_reason: opp.trust_downgrade_reason ?? meta.trust_downgrade_reason,
         actionable_url: opp.actionable_url ?? meta.actionable_url,
-      }
+      }]
     })
+    if (filtered.length > 0 && decorated.length < filtered.length) {
+      routeLogger.info(`[RealCrawlers] Trust filter: ${filtered.length} → ${decorated.length} (drops=${JSON.stringify(trustDropCounts)})`)
+    }
 
     routeLogger.info(
-      `[RealCrawlers] ${crawler_type}: curated=${result.results.length} nearby=${nearbyOpps.length} allMapped=${allMapped.length} → returned=${filtered.length} (min_score=${min_match_score}, strict=${strictMinScore}) in ${duration}ms`,
+      `[RealCrawlers] ${crawler_type}: curated=${result.results.length} nearby=${nearbyOpps.length} allMapped=${allMapped.length} → returned=${decorated.length} (min_score=${min_match_score}, strict=${strictMinScore}) in ${duration}ms`,
     )
 
     res.json({
@@ -603,19 +607,44 @@ router.post('/run-multiple', ensureAuth, async (req, res) => {
           profileContext,
         })
 
-        const mapped = result.results.map(mapResultToFrontendShape)
-        const filtered = mapped
-        .filter((opp) => { const rel = applyRelevanceFilter(opp, profileData); return rel.pass; })
-          .filter((opp) => typeof opp.match_score === 'number' && opp.match_score >= Number(min_match_score))
+        const mapped = filterActionableOpportunities(result.results.map(mapResultToFrontendShape))
+        const isDirectory = (opp) => (
+          Boolean(opp.is_directory_resource) ||
+          String(opp.source || '').startsWith('directory') ||
+          String(opp.record_origin || '').startsWith('directory')
+        )
+        let filtered = mapped
+          .filter((opp) => {
+            const rel = applyRelevanceFilter(opp, profileData)
+            return rel.pass || isDirectory(opp)
+          })
+          .filter((opp) => typeof opp.match_score === 'number' && (opp.match_score >= Number(min_match_score) || isDirectory(opp)))
           .sort((a, b) => (b.match_score ?? 0) - (a.match_score ?? 0))
           .slice(0, 50)
 
-        totalFound += result.results.length
+        if (filtered.length === 0 && mapped.length > 0) {
+          filtered = mapped
+            .filter((opp) => {
+              const rel = applyRelevanceFilter(opp, profileData, { mode: 'soft' })
+              return rel.pass || isDirectory(opp)
+            })
+            .sort((a, b) => (b.match_score ?? 0) - (a.match_score ?? 0))
+            .slice(0, 50)
+        }
+
+        filtered = filtered.flatMap((opp) => {
+          const trust = assessOpportunityTrust(opp, { allowDirectory: true, allowExpired: false })
+          if (!trust.display) return []
+          const meta = buildTrustMetadata(trust) || {}
+          return [{ ...opp, ...meta }]
+        })
+
+        totalFound += mapped.length
         totalInserted += filtered.length
 
         succeeded.push({
           crawler: crawlerType,
-          found: result.results.length,
+          found: mapped.length,
           inserted: filtered.length,
           duration_ms: Date.now() - startAt,
           used_curated: true,
@@ -855,15 +884,37 @@ router.get('/strategies', ensureAuth, (_req, res) => {
  * Health check (simplified — no external API dependencies).
  * GET /api/real-crawlers/health-check
  */
-router.get('/health-check', async (_req, res) => {
+router.get('/health-check', async (req, res) => {
+  let activeOpportunityCount = 0
+  let trustedOpportunityCount = 0
+  try {
+    const db = req.db
+    if (db && typeof db.prepare === 'function') {
+      const activeRow = await db.prepare(
+        db.dialect === 'postgres'
+          ? 'SELECT COUNT(*)::int AS count FROM funding_opportunities WHERE is_active = TRUE'
+          : 'SELECT COUNT(*) AS count FROM funding_opportunities WHERE is_active = 1',
+      ).get()
+      activeOpportunityCount = Number(activeRow?.count ?? 0)
+
+      const trustedRow = await db.prepare(
+        db.dialect === 'postgres'
+          ? `SELECT COUNT(*)::int AS count FROM funding_opportunities WHERE is_active = TRUE AND ${trustedOriginClause()} AND ${trustedSourceClause()}`
+          : `SELECT COUNT(*) AS count FROM funding_opportunities WHERE is_active = 1 AND ${trustedOriginClause()} AND ${trustedSourceClause()}`,
+      ).get()
+      trustedOpportunityCount = Number(trustedRow?.count ?? 0)
+    }
+  } catch (err) {
+    routeLogger.warn(`[RealCrawlers] health-check count failed: ${err?.message || String(err)}`)
+  }
+
   res.json({
     ok: true,
     system: 'strategy_router_v4',
     checks: [
-      { source: 'Federal Benefits DB', reachable: true, program_count: 26 },
-      { source: 'National Programs DB', reachable: true, program_count: 43 },
-      { source: 'Business Programs DB', reachable: true, program_count: 25 },
-      { source: 'Scholarships DB', reachable: true, program_count: 40 },
+      { source: 'Funding Opportunities Catalog', reachable: true, program_count: activeOpportunityCount },
+      { source: 'Trusted Displayable Catalog', reachable: true, program_count: trustedOpportunityCount },
+      { source: 'Crawler Strategies', reachable: true, program_count: listStrategies().length },
       { source: 'State Programs', reachable: true, note: 'Dynamic per-state loading' },
     ],
   })

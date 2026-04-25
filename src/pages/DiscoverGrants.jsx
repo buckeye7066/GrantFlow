@@ -55,6 +55,25 @@ function sectionsMap(profileDetail) {
   return typeof raw === 'object' && raw !== null ? raw : {}
 }
 
+function normalizeResultMetadata(payload, results) {
+  const listLength = Array.isArray(results) ? results.length : 0
+  return {
+    returned: Number.isFinite(Number(payload?.returned))
+      ? Number(payload.returned)
+      : Number.isFinite(Number(payload?.count))
+        ? Number(payload.count)
+        : listLength,
+    totalFound: Number.isFinite(Number(payload?.total_found))
+      ? Number(payload.total_found)
+      : Number.isFinite(Number(payload?.total_scored))
+        ? Number(payload.total_scored)
+        : listLength,
+    totalScored: Number.isFinite(Number(payload?.total_scored)) ? Number(payload.total_scored) : null,
+    truncated: Boolean(payload?.truncated),
+    thresholdFallbackMessage: payload?.threshold_fallback_message ?? null,
+  }
+}
+
 // Category taxonomy imported from @/constants/needCategories
 
 export default function DiscoverGrants() {
@@ -68,6 +87,7 @@ export default function DiscoverGrants() {
   const [profileCompletionHint, setProfileCompletionHint] = useState(null)
   const [categoryQuery, setCategoryQuery] = useState(null)
   const [scoreHint, setScoreHint] = useState(null)
+  const [crawlerResultMeta, setCrawlerResultMeta] = useState(null)
   const profileSelectorRef = React.useRef(null)
   const searchActionsRef = React.useRef(null)
   const resultsRef = React.useRef(null)
@@ -142,6 +162,7 @@ export default function DiscoverGrants() {
   // Clear stale results and invalidate caches whenever the effective profile changes
   useEffect(() => {
     setSearchResults([]);
+    setCrawlerResultMeta(null);
     setHasSearched(false);
     setProfileCompletionHint(null);
     queryClient.invalidateQueries({ queryKey: ['discover-catalog'] });
@@ -229,6 +250,11 @@ export default function DiscoverGrants() {
     }))
   }, [catalogMatchResponse])
 
+  const catalogResultMeta = useMemo(() => {
+    const payload = catalogMatchResponse?.data ?? catalogMatchResponse ?? {}
+    return normalizeResultMetadata(payload, catalogOpportunities)
+  }, [catalogMatchResponse, catalogOpportunities])
+
   // Keep FundingResults store in sync with the combined view so /FundingResults
   // always displays whatever the user last saw on DiscoverGrants.
   useEffect(() => {
@@ -250,8 +276,16 @@ export default function DiscoverGrants() {
       profileId: profileIdForStore,
       organizationName: selectedProfile?.display_name ?? null,
       organizationId: selectedProfile?.organization_id ?? null,
+      returned: merged.length,
+      totalFound: Math.max(
+        merged.length,
+        (catalogResultMeta?.totalFound ?? 0) + (crawlerResultMeta?.totalFound ?? 0),
+      ),
+      totalScored: catalogResultMeta?.totalScored ?? null,
+      truncated: Boolean(catalogResultMeta?.truncated || crawlerResultMeta?.truncated),
+      thresholdFallbackMessage: crawlerResultMeta?.thresholdFallbackMessage ?? null,
     })
-  }, [catalogOpportunities, searchResults, effectiveProfileId, selectedProfileId, selectedProfile, setFundingResults])
+  }, [catalogOpportunities, catalogResultMeta, searchResults, crawlerResultMeta, effectiveProfileId, selectedProfileId, selectedProfile, setFundingResults])
 
   const isECFProfile =
     (profileForSearch?.medicaid_enrolled || selectedOrg?.medicaid_enrolled) &&
@@ -400,7 +434,7 @@ export default function DiscoverGrants() {
       const opportunities = data?.opportunities ?? []
       setProfileCompletionHint(null)
       setScoreHint(data?.score_hint || null)
-      await handleCrawlerResults(opportunities)
+      await handleCrawlerResults(opportunities, data)
     } catch (error) {
       console.error('[DiscoverGrants] Search error:', error)
       const profileHint = getProfileContextIncompleteHint(error)
@@ -435,10 +469,12 @@ export default function DiscoverGrants() {
     handleFindFunding()
   }, [effectiveProfileId, searchParams, isSearching, hasSearched])
 
-  const handleCrawlerResults = async (opportunities) => {
+  const handleCrawlerResults = async (opportunities, responsePayload = null) => {
     log.debug('processing crawler results', { count: opportunities.length })
+    const resultMeta = normalizeResultMetadata(responsePayload, opportunities)
+    setCrawlerResultMeta(resultMeta)
     
-    // Auto-add high-confidence matches (≥70%) that pass client-side relevance check
+    // Auto-add high-confidence matches (≥70%).
     let addedCount = 0
     let alreadyCount = 0
     let failedCount = 0
@@ -486,6 +522,7 @@ export default function DiscoverGrants() {
       profileId: profileIdForStore,
       organizationName: selectedProfile?.display_name ?? null,
       organizationId: selectedProfile?.organization_id ?? null,
+      ...resultMeta,
     })
   };
 
@@ -517,11 +554,12 @@ export default function DiscoverGrants() {
     const orgId = selectedProfile?.organization_id;
     
     // Check for duplicates if we have an org
-    if (orgId && opportunity.url) {
+    const duplicateUrl = opportunity.application_url ?? opportunity.url ?? null
+    if (orgId && duplicateUrl) {
       try {
         const existingGrants = await client.entities.Grant.filter({
           organization_id: orgId,
-          url: opportunity.url
+          url: duplicateUrl,
         });
         
         if (existingGrants.length > 0) {
@@ -559,14 +597,14 @@ export default function DiscoverGrants() {
           opportunity_id: opportunity.id || null,
           profile_id: profileIdForAdd,
           organization_id: orgId || null,
-          match_score: opportunity.match || opportunity.match_score,
-          match_reasons: opportunity.match_reasons || opportunity.matchReasons || opportunity.matched_fields || [],
-          // Include full opportunity data for synthetic opportunities
+          // The server re-scores the authoritative profile/opportunity before
+          // pipeline insert, so client-side match fields are intentionally omitted.
           opportunity_data: {
             title: opportunity.title,
             sponsor: opportunity.sponsor,
             deadline: opportunity.deadlineAt || opportunity.deadline,
-            url: opportunity.url || opportunity.application_url,
+            application_url: opportunity.application_url ?? null,
+            url: opportunity.url ?? null,
             awardMin: opportunity.awardMin || opportunity.amount_min,
             awardMax: opportunity.awardMax || opportunity.amount_max,
             descriptionMd: opportunity.descriptionMd || opportunity.description,
