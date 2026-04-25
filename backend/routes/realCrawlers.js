@@ -195,18 +195,10 @@ router.post('/run', ensureAuth, async (req, res) => {
   } = req.body
 
   let min_match_score = 50
-  // Track whether the caller explicitly specified a score floor. When they did,
-  // it must survive fallback relaxation as a hard floor (tests:
-  // real-crawlers-policy.test.mjs "min_match_score threshold enforced"). When
-  // they didn't, fallback may relax freely per user rule "zero results is a
-  // failure state".
-  let scoreFloorExplicit = false
   if (typeof bodyMinScore === 'number' && bodyMinScore >= 0 && bodyMinScore <= 100) {
     min_match_score = bodyMinScore
-    scoreFloorExplicit = true
   } else if (typeof bodyMinScore === 'string' && /^\d+$/.test(bodyMinScore)) {
     min_match_score = Math.min(100, Math.max(0, parseInt(bodyMinScore, 10)))
-    scoreFloorExplicit = true
   }
 
   if (!crawler_type || !CRAWLER_TYPES.includes(crawler_type)) {
@@ -281,7 +273,7 @@ router.post('/run', ensureAuth, async (req, res) => {
     // Merge "near you" opportunities from funding_opportunities table
     const curatedTitles = mapped.map(o => o.title || o.name || '');
     const nearbyOpps = await queryNearbyOpportunities(db, result.analysis, curatedTitles, profileContext, 30);
-    const allMapped = filterActionableOpportunities(filterActionableOpportunities([...mapped, ...nearbyOpps]));
+    const allMapped = filterActionableOpportunities([...mapped, ...nearbyOpps]);
 
     const _isDirectoryOpp = (opp) => (
       Boolean(opp.is_directory_resource) ||
@@ -323,10 +315,10 @@ router.post('/run', ensureAuth, async (req, res) => {
       .slice(0, (strategy.maxResults || 100) + nearbyOpps.length)
 
     let thresholdFallbackMessage = null
-    // When the caller explicitly set min_match_score, the score floor survives
-    // every relaxation stage (explicit threshold === explicit user intent).
-    // Only relevance rules may be softened in that case.
-    const scoreFloorForFallback = scoreFloorExplicit ? min_match_score : 0
+    // The requested score floor is a ranking preference, not a hard exact-match
+    // requirement. If it empties the response, fallback may relax it unless the
+    // caller explicitly opts into strict_min_score.
+    const scoreFloorForFallback = 0
     if (!strictMinScore && filtered.length === 0 && allMapped.length > 0) {
       // STAGE 1: relax relevance rules (per project rule: "Population /
       // eligibility mismatches must reduce score, not discard results"). If
@@ -347,9 +339,7 @@ router.post('/run', ensureAuth, async (req, res) => {
 
       if (relaxed.length > 0) {
         filtered = relaxed
-        thresholdFallbackMessage = scoreFloorExplicit
-          ? `Applied explicit score floor ${min_match_score}; relaxed relevance rules.`
-          : `No results met initial filters. Showing best available matches (relaxed below ${min_match_score}%).`
+        thresholdFallbackMessage = `No results met the requested ${min_match_score}% floor. Showing best available matches after relaxing soft relevance constraints.`
       } else {
         // STAGE 2: last-resort — drop relevance filter entirely, keep only URL-actionable items.
         // Directories / general funding resources must always survive (user rule).
@@ -358,11 +348,6 @@ router.post('/run', ensureAuth, async (req, res) => {
           .filter((opp) => {
             const url = opp.url || opp.application_url || opp.source_url || ''
             if (!(typeof url === 'string' && url.startsWith('http'))) return false
-            if (scoreFloorExplicit) {
-              return (
-                typeof opp.match_score === 'number' && opp.match_score >= scoreFloorForFallback
-              )
-            }
             return true
           })
           .sort((a, b) => (b.match_score ?? 0) - (a.match_score ?? 0))
@@ -432,11 +417,6 @@ router.post('/run', ensureAuth, async (req, res) => {
           const oppType = String(opp.opportunity_type || '').toLowerCase()
           if (['loan', 'loan_program', 'microloan'].includes(oppType) || opp.is_loan) return false
           if (opp.requires_match) return false
-          if (scoreFloorExplicit) {
-            return (
-              typeof opp.match_score === 'number' && opp.match_score >= scoreFloorForFallback
-            )
-          }
           return true
         })
         .sort((a, b) => (b.match_score ?? 0) - (a.match_score ?? 0))

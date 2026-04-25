@@ -31,68 +31,6 @@ import { useFundingResultsStore } from '@/stores/fundingResultsStore'
 import { AUTO_ADD_SCORE, GOOD_MATCH_SCORE } from '@/lib/matchDisplayThresholds'
 
 /**
- * Client-side relevance check mirroring the backend hard disqualification rules.
- * Returns false only when there is a clear mismatch; passes when data is missing.
- */
-function passesClientRelevanceCheck(opportunity, profile) {
-  if (!opportunity || !profile) return true
-
-  const oppText = `${opportunity.title || ''} ${opportunity.description || ''} ${opportunity.sponsor || ''}`.toLowerCase()
-  const profileType = (profile.primary_type || '').toLowerCase()
-  const sections = profile.sections
-    ? (Array.isArray(profile.sections)
-        ? Object.fromEntries(profile.sections.map((s) => [s?.section_key, s?.data]).filter(([k]) => Boolean(k)))
-        : profile.sections)
-    : {}
-  const basic = sections.basic_information || {}
-  const demographics = sections.demographics || {}
-  const employment = sections.employment || {}
-  const education = sections.education || {}
-
-  const profileGender = String(
-    profile.gender ||
-    basic.gender ||
-    demographics.gender ||
-    ''
-  ).toLowerCase()
-
-  const profileAge = Number(
-    profile.age ||
-    basic.age ||
-    demographics.age ||
-    0
-  )
-
-  // Entity type mismatch
-  const individualOnlyPrograms = /\b(snap|tanf|wic|ssdi|ssi\b|food stamps|section 8|housing voucher|personal.*benefit)\b/i
-  if (profileType === 'organization' && individualOnlyPrograms.test(oppText)) return false
-
-  const orgOnlyPrograms = /\b(501\(c\)\(3\)|501c3|ein required|duns|uei required|organizational capacity|nonprofit only)\b/i
-  if (profileType === 'individual' && orgOnlyPrograms.test(oppText)) return false
-
-  // Gender mismatch
-  const womenOnly = /\b(women only|for women|amber grant for women|female entrepreneurs only)\b/i
-  if (womenOnly.test(oppText) && profileGender && profileGender !== 'female') return false
-
-  // Age mismatch — children programs
-  const childrenOnly = /\b(children only|youth under 18|katie beckett|coverkids|cover kids|minor children)\b/i
-  if (childrenOnly.test(oppText) && profileAge > 18) return false
-
-  // Age mismatch — senior programs
-  const seniorOnly = /\b(seniors? only|age 55\+|age 60\+|age 65\+|aaad|area agency on aging)\b/i
-  if (seniorOnly.test(oppText) && profileAge > 0 && profileAge < 55) return false
-
-  // Nursing license mismatch
-  const nursingPrograms = /\b(nursing license (reinstatement|recovery)|nurse re.?entry|rn license recovery|lpn license recovery)\b/i
-  const employmentText = JSON.stringify(employment).toLowerCase()
-  const educationText = JSON.stringify(education).toLowerCase()
-  const profileHasNursing = employmentText.includes('nurs') || educationText.includes('nurs')
-  if (nursingPrograms.test(oppText) && !profileHasNursing) return false
-
-  return true
-}
-
-/**
  * Resolve profile_id: 1) explicit UI selection, 2) URL ?profile_id=, 3) null.
  * Does NOT auto-select first profile (product blocks add-to-pipeline without explicit choice).
  */
@@ -439,7 +377,6 @@ export default function DiscoverGrants() {
         crawlerType: 'comprehensive',
         profileData: profileForSearch,
         minMatchScore,
-        strictMinScore: true,
         itemRequest,
       })
       if (data && data.success === false) {
@@ -509,7 +446,7 @@ export default function DiscoverGrants() {
 
     for (const opp of opportunities) {
       const score = Number(opp.match_score ?? opp.match ?? 0);
-      if (Number.isFinite(score) && score >= AUTO_ADD_SCORE && passesClientRelevanceCheck(opp, profileForSearch)) {
+      if (Number.isFinite(score) && score >= AUTO_ADD_SCORE) {
         attempted += 1
         try {
           const result = await handleAddToPipeline(opp, { silent: true })

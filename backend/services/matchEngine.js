@@ -1901,8 +1901,12 @@ export function makeDecision(score, profile, opportunity, normalizedProfile = nu
     return { decision: 'REVIEW', explanation: `Score ${score}/100 warrants review; moderate match signals.`, reasons }
   }
 
-  reasons.push(`Score ${score} < ${REVIEW_SCORE} — insufficient match`)
-  return { decision: 'REJECT', explanation: `Score ${score}/100 indicates insufficient match.`, reasons }
+  reasons.push(`Score ${score} < ${REVIEW_SCORE} — weak match; keep for review instead of discarding`)
+  return {
+    decision: 'REVIEW',
+    explanation: `Score ${score}/100 is weak, but the opportunity remains reviewable because low score alone is not hard ineligibility.`,
+    reasons,
+  }
 }
 
 // ---------------------------------------------------------------------------
