@@ -1447,7 +1447,7 @@ registerTool({
       jobId: { type: 'string', description: 'Specific job ID to check' },
       lastN: { type: 'integer', minimum: 1, maximum: 1000, description: 'Deprecated alias for limit' },
       limit: { type: 'integer', minimum: 1, maximum: 1000, description: 'Max jobs to inspect' },
-      since: { type: 'string', description: 'ISO timestamp lower bound for created_at' },
+      since: { type: 'string', description: 'ISO-8601 timestamp lower bound for created_at, e.g. 2026-04-25T00:00:00Z' },
       status: { type: 'string', enum: ['queued', 'running', 'completed', 'failed', 'cancelled'] },
     },
   },

@@ -38,13 +38,15 @@ describe('anyaButtonScanner — extractButtons', () => {
     expect(buttons[0].handlerRef.expr).toContain('onSubmit(formData)')
   })
 
-  it('ignores non-button elements', () => {
+  it('finds non-button elements with click handlers', () => {
     const src = `
       <div onClick={handleClick}>not a button</div>
       <span>plain text</span>
     `
     const buttons = extractButtons(src)
-    expect(buttons).toHaveLength(0)
+    expect(buttons).toHaveLength(1)
+    expect(buttons[0].tag).toBe('div')
+    expect(buttons[0].handlerRef.expr).toBe('handleClick')
   })
 })
 

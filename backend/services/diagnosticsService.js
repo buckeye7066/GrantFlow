@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
+import { ensureAdminSchemaRepair } from './adminSchemaRepair.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -64,6 +65,7 @@ async function getDatabaseDiagnostics(db) {
   try {
     // Test database connectivity
     await db.prepare('SELECT 1').get();
+    await ensureAdminSchemaRepair(db);
  
     // For Postgres, `DB_PATH` is irrelevant; the "path" field is only meaningful for SQLite.
     const dialect = db?.dialect || 'unknown'

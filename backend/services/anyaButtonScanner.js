@@ -72,16 +72,20 @@ export function extractButtons(source) {
   // (e.g. `onClick={() => foo}`). A simple `[^>]*?>` pattern would be
   // truncated by those. Walk the source manually and use brace balance
   // to find the real end of each opening tag.
-  const tagStartRx = /<([A-Za-z][A-Za-z0-9]*)\b/g
+  const tagStartRx = /<([A-Za-z][A-Za-z0-9_.:-]*)\b/g
   let m
   while ((m = tagStartRx.exec(source))) {
     const tag = m[1]
-    if (!BUTTON_TAGS.has(tag)) continue
     const attrsStart = m.index + m[0].length
     const endIdx = findTagEnd(source, attrsStart)
     if (endIdx === -1) continue
     const attrs = source.slice(attrsStart, endIdx)
     const handler = extractHandlerRef(attrs, ['onClick', 'onPress', 'onSubmit'])
+    const isButtonLike =
+      BUTTON_TAGS.has(tag.split('.').pop()) ||
+      /\brole\s*=\s*(?:"button"|'button'|\{\s*["']button["']\s*\})/i.test(attrs) ||
+      /\btype\s*=\s*(?:"button"|'button'|\{\s*["']button["']\s*\})/i.test(attrs)
+    if (!handler && !isButtonLike) continue
     if (!handler) continue
     const label = extractLabel(source, endIdx)
     results.push({

@@ -1087,10 +1087,14 @@ export async function adminCrawlerCheck({ jobId, lastN, limit, since, status }, 
     const clauses = []
     const params = []
     if (since) {
-      clauses.push('created_at >= ?')
-      params.push(String(since))
-    } else {
-      clauses.push(db?.dialect === 'postgres' ? "created_at >= (NOW() - INTERVAL '24 hours')" : "created_at >= datetime('now', '-24 hours')")
+      const sinceDate = new Date(String(since))
+      if (Number.isNaN(sinceDate.getTime())) {
+        const error = new Error('since must be an ISO-8601 timestamp, e.g. 2026-04-25T00:00:00Z')
+        error.status = 400
+        throw error
+      }
+      clauses.push(db?.dialect === 'postgres' ? 'created_at >= ?' : 'datetime(created_at) >= datetime(?)')
+      params.push(sinceDate.toISOString())
     }
     if (status) {
       clauses.push('status = ?')
@@ -1724,9 +1728,16 @@ export async function adminHealthLogs({ level = 'warning', limit = 50, source },
   const normalizedLevel = String(level || 'warning').toLowerCase() === 'warning' ? 'warn' : String(level || 'warning').toLowerCase()
   const ringLogs = getRecentLogs({ level: normalizedLevel, source, limit: cap })
   const severityRank = (value) => {
-    if (typeof value === 'number') return value
+    if (typeof value === 'number') {
+      if (value <= 3) return ({ 0: 40, 1: 30, 2: 20, 3: 10 })[value] ?? 0
+      return value
+    }
     const text = String(value || '').toLowerCase()
-    if (/^\d+$/.test(text)) return Number(text)
+    if (/^\d+$/.test(text)) {
+      const n = Number(text)
+      if (n <= 3) return ({ 0: 40, 1: 30, 2: 20, 3: 10 })[n] ?? 0
+      return n
+    }
     if (text === 'critical') return 50
     if (text === 'error') return 40
     if (text === 'warn' || text === 'warning') return 30
@@ -1744,27 +1755,46 @@ export async function adminHealthLogs({ level = 'warning', limit = 50, source },
   try {
     const db = context?.db
     if (db && typeof db.prepare === 'function') {
-      const recentClause = db?.dialect === 'postgres'
-        ? "created_at >= (NOW() - INTERVAL '1 hour')"
-        : "created_at >= datetime('now', '-1 hour')"
-      const sourceClause = source ? ` AND category = ?` : ''
-      const fetchLimit = Math.min(Math.max(cap * 20, 500), 5000)
+      let auditColumns = []
+      try {
+        if (db?.dialect === 'postgres') {
+          auditColumns = rowsFromResult(await db.prepare(`
+            SELECT column_name AS name
+            FROM information_schema.columns
+            WHERE table_schema = current_schema()
+              AND table_name = 'audit_logs'
+          `).all()).map((row) => String(row.name))
+        } else {
+          auditColumns = rowsFromResult(await db.prepare('PRAGMA table_info(audit_logs)').all()).map((row) => String(row.name))
+        }
+      } catch {
+        auditColumns = []
+      }
+
+      const hasSeverity = auditColumns.includes('severity')
+      const hasSeverityLevel = auditColumns.includes('severity_level')
+      const severitySelect = [
+        hasSeverity ? 'severity' : 'NULL AS severity',
+        hasSeverityLevel ? 'severity_level' : 'NULL AS severity_level',
+      ].join(', ')
+      const sourceClause = source ? 'WHERE category = ?' : ''
+      const fetchLimit = Math.min(Math.max(cap * 100, 5000), 50000)
       const params = source ? [String(source), fetchLimit] : [fetchLimit]
       const rows = await db
         .prepare(
-          `SELECT id, created_at, category, action, severity, user_id, profile_id, details
+          `SELECT id, created_at, category, action, ${severitySelect}, user_id, profile_id, details
              FROM audit_logs
-             WHERE ${recentClause}${sourceClause}
+             ${sourceClause}
              ORDER BY created_at DESC
              LIMIT ?`,
         )
         .all(...params)
       dbLogs = rowsFromResult(rows)
-        .filter((r) => severityRank(r.severity) >= minimumSeverity)
+        .filter((r) => Math.max(severityRank(r.severity_level), severityRank(r.severity)) >= minimumSeverity)
         .slice(0, cap)
         .map((r) => ({
           ts: r.created_at,
-          level: severityRank(r.severity) >= 40 ? 'error' : 'warn',
+          level: Math.max(severityRank(r.severity_level), severityRank(r.severity)) >= 40 ? 'error' : 'warn',
           namespace: r.category || 'audit',
           event: r.action,
           message: `[audit:${r.category}] ${r.action}${r.details ? ' ' + String(r.details).slice(0, 400) : ''}`,

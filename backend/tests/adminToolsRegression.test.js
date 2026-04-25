@@ -18,6 +18,8 @@ import { invokeTool } from '../services/anyaToolRegistry.js'
 import { formatAuditSummary, getAuditSummary } from '../services/codeGuardService.js'
 import { runGrantFlowDomainAudits } from '../services/anyaGrantFlowAudits.js'
 import { testButtonFunctionality } from '../services/anyaAutonomousFunctionTesting.js'
+import { extractButtons } from '../services/anyaButtonScanner.js'
+import { ensureAdminSchemaRepair } from '../services/adminSchemaRepair.js'
 
 function makeDb() {
   const db = new Database(':memory:')
@@ -47,6 +49,7 @@ function makeDb() {
     );
     CREATE TABLE anya_context (id TEXT PRIMARY KEY, created_at TEXT);
     CREATE TABLE anya_tool_usage (id TEXT PRIMARY KEY, created_at TEXT);
+    CREATE TABLE profiles (id TEXT PRIMARY KEY, display_name TEXT, primary_type TEXT, tags TEXT);
   `)
   db.dialect = 'sqlite'
   return db
@@ -92,6 +95,17 @@ describe('admin crawler tools', () => {
     expect(result.checked).toBe(1)
     expect(result.summary.failed).toBe(1)
     expect(result.errors[0].job_id).toBe('recent-failed')
+  })
+
+  it('honors since by returning fewer rows than an unbounded check', async () => {
+    const db = makeDb()
+    db.prepare('INSERT INTO crawler_jobs (id, type, status, created_at) VALUES (?, ?, ?, ?)').run('old-1', 'local', 'queued', '2020-01-01T00:00:00.000Z')
+    db.prepare('INSERT INTO crawler_jobs (id, type, status, created_at) VALUES (?, ?, ?, ?)').run('new-1', 'local', 'queued', '2026-04-25T12:00:00.000Z')
+
+    const unbounded = await adminCrawlerCheck({ limit: 10 }, { db })
+    const bounded = await adminCrawlerCheck({ since: '2026-04-25T00:00:00Z', limit: 10 }, { db })
+    expect(unbounded.checked).toBe(2)
+    expect(bounded.checked).toBe(1)
   })
 
   it('returns standard HTTP 400 validation errors for profile-scoped crawler tools', async () => {
@@ -163,9 +177,48 @@ describe('admin code and health tools', () => {
     expect(result.count).toBeGreaterThanOrEqual(1)
   })
 
+  it('reads persisted warn logs from audit_logs with numeric severity levels', async () => {
+    const db = makeDb()
+    db.exec(`
+      CREATE TABLE audit_logs (
+        id TEXT PRIMARY KEY,
+        created_at TEXT,
+        category TEXT,
+        action TEXT,
+        severity TEXT,
+        severity_level INTEGER,
+        user_id TEXT,
+        profile_id TEXT,
+        details TEXT
+      );
+    `)
+    db.prepare('INSERT INTO audit_logs (id, created_at, category, action, severity_level, details) VALUES (?, ?, ?, ?, ?, ?)').run(
+      'log-warn',
+      new Date().toISOString(),
+      'test',
+      'warn_inserted',
+      1,
+      '{}',
+    )
+
+    const result = await adminHealthLogs({ level: 'warn', limit: 10 }, { user: { isAdmin: true }, db })
+    expect(result.persisted_count).toBe(1)
+    expect(result.count).toBeGreaterThan(0)
+  })
+
   it('finds component files from the default button-test search roots', async () => {
     const result = await testButtonFunctionality({ probe: false }, { user: { isAdmin: true } })
     expect(result.files_scanned).toBeGreaterThan(0)
+    expect(result.component_path).toBeTruthy()
+  }, 15000)
+
+  it('extracts shadcn buttons plus role/onClick non-button controls', () => {
+    const buttons = extractButtons(`
+      <Button onClick={handleSave}>Save</Button>
+      <div role="button" onClick={() => runThing()}>Run</div>
+      <span onClick={handleSpan}>Clickable text</span>
+    `)
+    expect(buttons).toHaveLength(3)
   })
 })
 
@@ -244,6 +297,58 @@ describe('admin brain cleanup and CodeGuard summary', () => {
 })
 
 describe('admin schema migration and domain audits', () => {
+  it('runtime schema repair applies grants columns, crawler_logs, and URL backfill', async () => {
+    const db = makeDb()
+    db.exec(`
+      DROP TABLE crawler_jobs;
+      CREATE TABLE crawler_jobs (
+        id TEXT PRIMARY KEY,
+        type TEXT,
+        profile_id TEXT,
+        status TEXT,
+        parameters TEXT,
+        result_meta TEXT,
+        error TEXT,
+        retry_count INTEGER DEFAULT 0,
+        last_retry_at TEXT,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP
+      );
+      CREATE TABLE grants (
+        id TEXT PRIMARY KEY,
+        profile_id TEXT,
+        funding_opportunity_id TEXT,
+        title TEXT,
+        application_url TEXT,
+        portal_url TEXT
+      );
+      CREATE TABLE funding_opportunities (
+        id TEXT PRIMARY KEY,
+        application_url TEXT,
+        apply_url TEXT,
+        source_url TEXT,
+        evidence_url TEXT
+      );
+    `)
+    db.prepare('INSERT INTO profiles (id, display_name) VALUES (?, ?)').run('profile-1', 'Profile 1')
+    db.prepare('INSERT INTO funding_opportunities (id, application_url) VALUES (?, ?)').run('opp-1', 'https://example.test/apply')
+    db.prepare('INSERT INTO grants (id, profile_id, funding_opportunity_id, title) VALUES (?, ?, ?, ?)').run('grant-1', 'profile-1', 'opp-1', 'Grant')
+    db.prepare('INSERT INTO crawler_jobs (id, type, profile_id, status) VALUES (?, ?, ?, ?)').run('job-1', 'local', 'profile-1', 'completed')
+
+    const repair = await ensureAdminSchemaRepair(db)
+    expect(repair.applied).toBe(true)
+    const columns = db.prepare('PRAGMA table_info(grants)').all().map((row) => row.name)
+    for (const column of ['url', 'matched_needs', 'match_decision', 'match_explanation', 'fingerprint', 'fingerprint_version']) {
+      expect(columns).toContain(column)
+    }
+    expect(db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'crawler_logs'").get()).toBeTruthy()
+    expect(db.prepare('SELECT url, matched_needs, match_decision FROM grants WHERE id = ?').get('grant-1')).toMatchObject({
+      url: 'https://example.test/apply',
+      matched_needs: '["general funding support"]',
+      match_decision: 'review',
+    })
+    expect(db.prepare('SELECT COUNT(*) AS count FROM crawler_logs WHERE profile_id = ?').get('profile-1').count).toBeGreaterThan(0)
+  })
+
   it('migration includes all grants columns and crawler_logs repair', () => {
     const sql = readFileSync(path.join(process.cwd(), 'backend/db/migrations/059_admin_tool_schema_backfill.sql'), 'utf8')
     for (const column of ['url', 'matched_needs', 'match_decision', 'match_explanation', 'fingerprint', 'fingerprint_version']) {
@@ -277,12 +382,24 @@ describe('admin schema migration and domain audits', () => {
     expect(sql).toContain('INSERT INTO crawler_logs')
   })
 
+  it('runtime schema repair migration repeats admin grants/crawler_logs fixes', () => {
+    const sqliteSql = readFileSync(path.join(process.cwd(), 'backend/db/migrations/064_runtime_admin_schema_repair.sql'), 'utf8')
+    const pgSql = readFileSync(path.join(process.cwd(), 'backend/db/postgres/migrations/0057_runtime_admin_schema_repair.sql'), 'utf8')
+    for (const sql of [sqliteSql, pgSql]) {
+      expect(sql).toContain('ALTER TABLE grants ADD COLUMN')
+      expect(sql).toContain('CREATE TABLE IF NOT EXISTS crawler_logs')
+      expect(sql).toContain('FROM funding_opportunities fo')
+      expect(sql).toContain('INSERT INTO crawler_logs')
+    }
+  })
+
   it('Postgres crawler_logs migrations match TEXT crawler/profile IDs', () => {
     for (const filename of [
       'backend/db/postgres/migrations/0051_grants_url_fingerprint_crawler_logs.sql',
       'backend/db/postgres/migrations/0052_admin_tool_schema_backfill.sql',
       'backend/db/postgres/migrations/0055_grants_joined_url_backfill.sql',
       'backend/db/postgres/migrations/0056_force_admin_schema_repair.sql',
+      'backend/db/postgres/migrations/0057_runtime_admin_schema_repair.sql',
     ]) {
       const sql = readFileSync(path.join(process.cwd(), filename), 'utf8')
       expect(sql).toMatch(/\bid\s+TEXT PRIMARY KEY DEFAULT gen_random_uuid\(\)::text/)

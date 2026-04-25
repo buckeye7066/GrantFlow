@@ -12,6 +12,7 @@
 
 import { storeMemory, getMemory } from './anyaBrainService.js'
 import { MISSION_GOALS } from '../config/missionGoals.js'
+import { ensureAdminSchemaRepair } from './adminSchemaRepair.js'
 
 export { MISSION_GOALS }
 
@@ -185,6 +186,7 @@ function gradeProfile(grants) {
  * @returns {Object} { profiles: [...], summary, timestamp }
  */
 export async function auditMatchQuality(db) {
+  await ensureAdminSchemaRepair(db, { backfill: false })
   const profiles = await db.prepare('SELECT id, display_name, primary_type, tags FROM profiles LIMIT 50').all()
   const profileResults = []
 
@@ -247,6 +249,7 @@ export async function auditMatchQuality(db) {
  * @returns {Object} { goals: [...], score, timestamp }
  */
 export async function verifyMissionGoals(db) {
+  await ensureAdminSchemaRepair(db)
   const goals = []
   const report = (id, name, status, detail) => goals.push({ id, name, status, detail })
 

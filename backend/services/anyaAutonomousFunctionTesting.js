@@ -528,6 +528,8 @@ export async function testButtonFunctionality(options, context) {
       ? requestedPaths.map((entry) => path.isAbsolute(entry) ? entry : path.resolve(REPO_ROOT, entry))
       : defaultComponentSearchPaths()
     const looked = []
+    report.component_path = candidatePaths.join(',')
+    report.component_paths = candidatePaths
     const filesByPath = new Map()
     for (const entry of candidatePaths) {
       const root = path.resolve(entry)
