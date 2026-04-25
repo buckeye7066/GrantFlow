@@ -206,6 +206,50 @@ describe('admin code and health tools', () => {
     expect(result.count).toBeGreaterThan(0)
   })
 
+  it('filters string audit_log severities at warn by default and includes info when requested', async () => {
+    const db = makeDb()
+    db.exec(`
+      CREATE TABLE audit_logs (
+        id TEXT PRIMARY KEY,
+        created_at TEXT,
+        category TEXT,
+        action TEXT,
+        severity TEXT,
+        user_id TEXT,
+        profile_id TEXT,
+        resource_type TEXT,
+        resource_id TEXT,
+        details TEXT,
+        ip_address TEXT,
+        user_agent TEXT
+      );
+    `)
+    db.prepare('INSERT INTO audit_logs (id, created_at, category, action, severity, details) VALUES (?, ?, ?, ?, ?, ?)').run(
+      'log-info',
+      '2026-04-25T18:00:00.000Z',
+      'test',
+      'info_inserted',
+      'info',
+      '{}',
+    )
+    db.prepare('INSERT INTO audit_logs (id, created_at, category, action, severity, details) VALUES (?, ?, ?, ?, ?, ?)').run(
+      'log-warn',
+      '2026-04-25T18:01:00.000Z',
+      'test',
+      'warn_inserted',
+      'warn',
+      '{}',
+    )
+
+    const warnResult = await adminHealthLogs({}, { user: { isAdmin: true }, db })
+    expect(warnResult.persisted_count).toBe(1)
+    expect(warnResult.logs.map((log) => log.event)).toEqual(['warn_inserted'])
+
+    const infoResult = await adminHealthLogs({ level: 'info', limit: 10 }, { user: { isAdmin: true }, db })
+    expect(infoResult.persisted_count).toBe(2)
+    expect(infoResult.logs.map((log) => log.event)).toEqual(['warn_inserted', 'info_inserted'])
+  })
+
   it('finds component files from the default button-test search roots', async () => {
     const result = await testButtonFunctionality({ probe: false }, { user: { isAdmin: true } })
     expect(result.files_scanned).toBeGreaterThan(0)
@@ -219,6 +263,17 @@ describe('admin code and health tools', () => {
       <span onClick={handleSpan}>Clickable text</span>
     `)
     expect(buttons).toHaveLength(3)
+  })
+
+  it('counts each supported JSX button pattern from a fixture', () => {
+    const buttons = extractButtons(`
+      <button onClick={nativeClick}>Native</button>
+      <Button onClick={() => wrappedClick()}>Wrapped</Button>
+      <DropdownMenuItem onClick={menuClick}>Menu</DropdownMenuItem>
+      <div role="button" onClick={roleClick}>Role</div>
+      <span onClick={spanClick}>Span</span>
+    `)
+    expect(buttons).toHaveLength(5)
   })
 })
 

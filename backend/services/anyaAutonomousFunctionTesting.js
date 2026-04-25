@@ -528,13 +528,14 @@ export async function testButtonFunctionality(options, context) {
       ? requestedPaths.map((entry) => path.isAbsolute(entry) ? entry : path.resolve(REPO_ROOT, entry))
       : defaultComponentSearchPaths()
     const looked = []
-    report.component_path = candidatePaths.join(',')
+    const rootsWithFiles = []
     report.component_paths = candidatePaths
     const filesByPath = new Map()
     for (const entry of candidatePaths) {
       const root = path.resolve(entry)
       looked.push(root)
       const found = await collectComponentFiles(root)
+      if (found.length > 0) rootsWithFiles.push(root)
       for (const file of found) filesByPath.set(file, true)
     }
     const files = Array.from(filesByPath.keys())
@@ -543,6 +544,8 @@ export async function testButtonFunctionality(options, context) {
       err.status = 400
       throw err
     }
+    report.component_path = rootsWithFiles[0] || path.dirname(files[0])
+    report.resolved_component_paths = rootsWithFiles
     report.files_scanned = files.length
 
     // Lazy load supertest + app so static analysis works even when we

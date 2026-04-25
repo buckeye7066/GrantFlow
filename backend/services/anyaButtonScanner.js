@@ -12,15 +12,15 @@
  *   5. Returns a structured report of buttons, their handlers, and detected
  *      endpoints that downstream code can probe with supertest.
  *
- * The parser is intentionally regex-based. A full Babel AST is overkill for
- * the auditor use-case: we only need a best-effort mapping of UI actions to
- * API endpoints so operators can answer "which buttons are wired to dead
- * endpoints?" without installing a transpiler. Unparseable files fall
- * through as inconclusive rather than throwing.
+ * Extraction is JSX-aware via @babel/parser so modern shadcn/Tailwind
+ * formatting, multiline attributes, and non-button click targets do not get
+ * missed by brittle tag regexes. Unparseable files fall through as
+ * inconclusive rather than throwing.
  */
 
 import path from 'path'
 import { promises as fs } from 'fs'
+import { parse } from '@babel/parser'
 
 const DEFAULT_ROOT = path.resolve(process.cwd(), 'src', 'components')
 
@@ -29,12 +29,16 @@ const EXTS = new Set(['.jsx', '.tsx', '.js', '.mjs'])
 const BUTTON_TAGS = new Set([
   'button',
   'Button',
+  'ButtonPrimitive',
   'IconButton',
   'MenuButton',
   'SubmitButton',
   'LinkButton',
   'CommandButton',
   'ToggleButton',
+  'DropdownMenuItem',
+  'CommandItem',
+  'TabsTrigger',
 ])
 
 export async function collectComponentFiles(root) {
@@ -68,62 +72,117 @@ export async function collectComponentFiles(root) {
  */
 export function extractButtons(source) {
   const results = []
-  // JSX attributes can contain arrow functions with `>` characters
-  // (e.g. `onClick={() => foo}`). A simple `[^>]*?>` pattern would be
-  // truncated by those. Walk the source manually and use brace balance
-  // to find the real end of each opening tag.
-  const tagStartRx = /<([A-Za-z][A-Za-z0-9_.:-]*)\b/g
-  let m
-  while ((m = tagStartRx.exec(source))) {
-    const tag = m[1]
-    const attrsStart = m.index + m[0].length
-    const endIdx = findTagEnd(source, attrsStart)
-    if (endIdx === -1) continue
-    const attrs = source.slice(attrsStart, endIdx)
-    const handler = extractHandlerRef(attrs, ['onClick', 'onPress', 'onSubmit'])
-    const isButtonLike =
-      BUTTON_TAGS.has(tag.split('.').pop()) ||
-      /\brole\s*=\s*(?:"button"|'button'|\{\s*["']button["']\s*\})/i.test(attrs) ||
-      /\btype\s*=\s*(?:"button"|'button'|\{\s*["']button["']\s*\})/i.test(attrs)
-    if (!handler && !isButtonLike) continue
-    if (!handler) continue
-    const label = extractLabel(source, endIdx)
-    results.push({
-      tag,
-      handlerRef: handler,
-      label,
-      lineIndex: source.slice(0, m.index).split('\n').length,
-    })
+  const parseOptions = {
+      sourceType: 'module',
+      errorRecovery: true,
+      plugins: ['jsx', 'typescript', 'classProperties', 'objectRestSpread', 'optionalChaining'],
   }
+  let ast
+  let parseSource = source
+  try {
+    ast = parse(parseSource, parseOptions)
+  } catch {
+    try {
+      parseSource = `<>${source}</>`
+      ast = parse(parseSource, parseOptions)
+    } catch {
+      return results
+    }
+  }
+
+  const visit = (node) => {
+    if (!node || typeof node !== 'object') return
+    if (node.type === 'JSXElement') collectJsxElement(node, parseSource, results)
+
+    for (const [key, value] of Object.entries(node)) {
+      if (key === 'loc' || key === 'start' || key === 'end') continue
+      if (Array.isArray(value)) {
+        for (const child of value) visit(child)
+      } else if (value && typeof value === 'object') {
+        visit(value)
+      }
+    }
+  }
+
+  visit(ast)
   return results
 }
 
-function findTagEnd(source, from) {
-  let depth = 0
-  let inString = null
-  for (let i = from; i < source.length; i += 1) {
-    const ch = source[i]
-    if (inString) {
-      if (ch === '\\') { i += 1; continue }
-      if (ch === inString) inString = null
-      continue
-    }
-    if (ch === '"' || ch === "'" || ch === '`') { inString = ch; continue }
-    if (ch === '{') depth += 1
-    else if (ch === '}') depth -= 1
-    else if (ch === '>' && depth === 0) return i
-  }
-  return -1
+function collectJsxElement(node, source, results) {
+  const opening = node.openingElement
+  if (!opening) return
+
+  const tag = jsxNameToString(opening.name)
+  const localTag = tag.split('.').pop()
+  const attrs = opening.attributes || []
+  const handler = extractJsxHandler(attrs, source, ['onClick', 'onPress', 'onSubmit'])
+  const role = extractJsxAttributeValue(attrs, source, 'role')
+  const type = extractJsxAttributeValue(attrs, source, 'type')
+  const isButtonLike =
+    BUTTON_TAGS.has(localTag) ||
+    role === 'button' ||
+    type === 'button' ||
+    Boolean(handler)
+
+  if (!isButtonLike || !handler) return
+
+  results.push({
+    tag,
+    handlerRef: handler,
+    label: extractJsxLabel(node, source),
+    lineIndex: opening.loc?.start?.line ?? 1,
+  })
 }
 
-function extractHandlerRef(attrs, attrNames) {
+function jsxNameToString(name) {
+  if (!name) return ''
+  if (name.type === 'JSXIdentifier') return name.name
+  if (name.type === 'JSXMemberExpression') {
+    return `${jsxNameToString(name.object)}.${jsxNameToString(name.property)}`
+  }
+  if (name.type === 'JSXNamespacedName') {
+    return `${jsxNameToString(name.namespace)}:${jsxNameToString(name.name)}`
+  }
+  return ''
+}
+
+function extractJsxHandler(attrs, source, attrNames) {
   for (const name of attrNames) {
-    const rx = new RegExp(`${name}\\s*=\\s*\\{`, 'g')
-    const hit = rx.exec(attrs)
-    if (!hit) continue
-    const start = hit.index + hit[0].length
-    const expr = readBalanced(attrs, start - 1) // include opening {
+    const attr = attrs.find((candidate) =>
+      candidate?.type === 'JSXAttribute' &&
+      candidate.name?.type === 'JSXIdentifier' &&
+      candidate.name.name === name
+    )
+    if (!attr) continue
+    const expr = jsxAttributeExpression(attr, source)
     if (expr) return { attr: name, expr: expr.trim() }
+  }
+  return null
+}
+
+function extractJsxAttributeValue(attrs, source, name) {
+  const attr = attrs.find((candidate) =>
+    candidate?.type === 'JSXAttribute' &&
+    candidate.name?.type === 'JSXIdentifier' &&
+    candidate.name.name === name
+  )
+  if (!attr) return null
+  const value = attr.value
+  if (!value) return true
+  if (value.type === 'StringLiteral') return String(value.value || '').toLowerCase()
+  if (value.type === 'JSXExpressionContainer') {
+    const expr = jsxAttributeExpression(attr, source)
+    return String(expr || '').replace(/^['"`]|['"`]$/g, '').toLowerCase()
+  }
+  return null
+}
+
+function jsxAttributeExpression(attr, source) {
+  const value = attr.value
+  if (!value) return null
+  if (value.type === 'StringLiteral') return value.value
+  if (value.type === 'JSXExpressionContainer' && value.expression) {
+    return source.slice(value.expression.start, value.expression.end)
   }
   return null
 }
@@ -142,13 +201,22 @@ function readBalanced(text, openIdx) {
   return null
 }
 
-function extractLabel(source, tagEnd) {
-  // tagEnd is the index of the closing `>` of the opening tag.
-  const end = source.indexOf('<', tagEnd + 1)
-  if (end === -1) return null
-  const raw = source.slice(tagEnd + 1, end).trim()
-  if (!raw) return null
-  return raw.replace(/\s+/g, ' ').slice(0, 80)
+function extractJsxLabel(node, source) {
+  const parts = []
+  for (const child of node.children || []) {
+    if (child.type === 'JSXText') {
+      const text = child.value.replace(/\s+/g, ' ').trim()
+      if (text) parts.push(text)
+    } else if (child.type === 'JSXExpressionContainer' && child.expression) {
+      const expr = source.slice(child.expression.start, child.expression.end).replace(/\s+/g, ' ').trim()
+      if (expr) parts.push(`{${expr}}`)
+    } else if (child.type === 'JSXElement') {
+      const tag = jsxNameToString(child.openingElement?.name)
+      if (tag) parts.push(`<${tag}>`)
+    }
+  }
+  const label = parts.join(' ').trim()
+  return label ? label.slice(0, 80) : null
 }
 
 /**

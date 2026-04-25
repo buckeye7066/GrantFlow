@@ -1745,7 +1745,15 @@ export async function adminHealthLogs({ level = 'warning', limit = 50, source },
     if (text === 'debug') return 10
     return 0
   }
-  const minimumSeverity = normalizedLevel === 'error' ? 40 : normalizedLevel === 'critical' ? 50 : 30
+  const severityName = (rank) => {
+    if (rank >= 50) return 'fatal'
+    if (rank >= 40) return 'error'
+    if (rank >= 30) return 'warn'
+    if (rank >= 20) return 'info'
+    if (rank >= 10) return 'debug'
+    return 'unknown'
+  }
+  const minimumSeverity = severityRank(normalizedLevel || 'warn') || 30
 
   // Group 7: also read persisted warn/error records from audit_logs so the
   // admin.health.logs tool survives process restarts. The ring buffer is
@@ -1777,14 +1785,43 @@ export async function adminHealthLogs({ level = 'warning', limit = 50, source },
         hasSeverity ? 'severity' : 'NULL AS severity',
         hasSeverityLevel ? 'severity_level' : 'NULL AS severity_level',
       ].join(', ')
-      const sourceClause = source ? 'WHERE category = ?' : ''
+      const severityRankParts = [
+        hasSeverityLevel
+          ? `CASE
+              WHEN severity_level IS NULL THEN 0
+              WHEN severity_level <= 3 THEN CASE severity_level WHEN 0 THEN 40 WHEN 1 THEN 30 WHEN 2 THEN 20 WHEN 3 THEN 10 ELSE 0 END
+              ELSE severity_level
+            END`
+          : '0',
+        hasSeverity
+          ? `CASE lower(severity)
+              WHEN 'debug' THEN 10
+              WHEN 'info' THEN 20
+              WHEN 'warn' THEN 30
+              WHEN 'warning' THEN 30
+              WHEN 'error' THEN 40
+              WHEN 'critical' THEN 50
+              WHEN 'fatal' THEN 50
+              ELSE 0
+            END`
+          : '0',
+      ].join(', ')
+      const severityRankSql = db?.dialect === 'postgres'
+        ? `GREATEST(${severityRankParts})`
+        : `MAX(${severityRankParts})`
+      const whereClauses = [`${severityRankSql} >= ?`]
+      const params = [minimumSeverity]
+      if (source) {
+        whereClauses.push('category = ?')
+        params.push(String(source))
+      }
       const fetchLimit = Math.min(Math.max(cap * 100, 5000), 50000)
-      const params = source ? [String(source), fetchLimit] : [fetchLimit]
+      params.push(fetchLimit)
       const rows = await db
         .prepare(
           `SELECT id, created_at, category, action, ${severitySelect}, user_id, profile_id, details
              FROM audit_logs
-             ${sourceClause}
+             WHERE ${whereClauses.join(' AND ')}
              ORDER BY created_at DESC
              LIMIT ?`,
         )
@@ -1794,7 +1831,7 @@ export async function adminHealthLogs({ level = 'warning', limit = 50, source },
         .slice(0, cap)
         .map((r) => ({
           ts: r.created_at,
-          level: Math.max(severityRank(r.severity_level), severityRank(r.severity)) >= 40 ? 'error' : 'warn',
+          level: severityName(Math.max(severityRank(r.severity_level), severityRank(r.severity))),
           namespace: r.category || 'audit',
           event: r.action,
           message: `[audit:${r.category}] ${r.action}${r.details ? ' ' + String(r.details).slice(0, 400) : ''}`,
@@ -1822,6 +1859,6 @@ export async function adminHealthLogs({ level = 'warning', limit = 50, source },
     persisted_count: dbLogs.length,
     logs: merged,
     source_description:
-      'merged: in-memory ring buffer (backend/utils/logger.js) + persisted audit_logs rows (severity >= warn)',
+      `merged: in-memory ring buffer (backend/utils/logger.js) + persisted audit_logs rows (severity >= ${normalizedLevel})`,
   }
 }
