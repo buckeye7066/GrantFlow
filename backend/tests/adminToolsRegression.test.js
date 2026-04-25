@@ -7,7 +7,10 @@ import {
   adminCrawlerList,
   adminCrawlerRun,
   adminCrawlerRetry,
+  adminCodeEdit,
+  adminCodeScan,
   adminDbQuery,
+  adminHealthLogs,
 } from '../services/anyaAdminTools.js'
 import { cleanupBrain } from '../services/anyaBrainService.js'
 import { invokeTool } from '../services/anyaToolRegistry.js'
@@ -60,6 +63,8 @@ describe('admin crawler tools', () => {
   it('standardizes crawler run on crawlerType', async () => {
     const db = makeDb()
     const result = await adminCrawlerRun({ crawlerType: 'local', parameters: { zip: '37311' } }, { db })
+    expect(result.job_id).toBe(result.job.id)
+    expect(result.job.job_id).toBe(result.job.id)
     expect(result.job.crawlerType).toBe('local')
     expect(result.job.parameters).toEqual({ zip: '37311' })
   })
@@ -89,6 +94,50 @@ describe('admin db/query and validation', () => {
   })
 })
 
+describe('admin code and health tools', () => {
+  it('ignores debugger mentions inside comments', async () => {
+    const result = await adminCodeScan(
+      { directory: 'backend/services', filePattern: '*.js', issueTypes: ['debugger'] },
+      { user: { isAdmin: true } },
+    )
+    expect(result.findings.debugger_statements).toEqual([])
+  })
+
+  it('treats empty dry-run code edits as a no-op metadata request', async () => {
+    const result = await adminCodeEdit({
+      filePath: 'backend/services/anyaAdminTools.js',
+      changes: [],
+      dryRun: true,
+    }, {})
+    expect(result.no_op).toBe(true)
+    expect(result.lines).toBeGreaterThan(0)
+  })
+
+  it('reads persisted warn logs when DB drivers return wrapped rows', async () => {
+    const db = {
+      prepare() {
+        return {
+          all() {
+            return {
+              rows: [{
+                id: 'log-1',
+                created_at: '2026-04-25T00:00:00.000Z',
+                category: 'test',
+                action: 'warned',
+                severity: 'warn',
+                details: '{}',
+              }],
+            }
+          },
+        }
+      },
+    }
+    const result = await adminHealthLogs({ level: 'warn' }, { user: { isAdmin: true }, db })
+    expect(result.persisted_count).toBe(1)
+    expect(result.count).toBeGreaterThanOrEqual(1)
+  })
+})
+
 describe('admin brain cleanup and CodeGuard summary', () => {
   it('supports dryRun and reports cleanup counts plus ids', () => {
     const db = makeDb()
@@ -105,6 +154,35 @@ describe('admin brain cleanup and CodeGuard summary', () => {
     expect(dry.expiredMemories).toBe(1)
     expect(dry.removed_ids.expiredMemories).toContain(id)
     expect(db.prepare('SELECT COUNT(*) AS count FROM anya_brain_memory').get().count).toBe(1)
+  })
+
+  it('coerces wrapped rows during brain cleanup dry runs', () => {
+    const statements = {
+      anya_brain_memory: { rows: [{ id: 'mem-1' }] },
+      anya_context: { rows: [{ id: 'ctx-1' }] },
+      anya_tool_usage: { rows: [{ id: 'tool-1' }] },
+    }
+    const db = {
+      dialect: 'postgres',
+      prepare(sql) {
+        return {
+          all() {
+            if (sql.includes('anya_brain_memory')) return statements.anya_brain_memory
+            if (sql.includes('anya_context')) return statements.anya_context
+            if (sql.includes('anya_tool_usage')) return statements.anya_tool_usage
+            return { rows: [] }
+          },
+          run() {
+            throw new Error('dryRun should not delete')
+          },
+        }
+      },
+    }
+    const result = cleanupBrain(db, { dryRun: true })
+    expect(result.expiredMemories).toBe(1)
+    expect(result.oldContext).toBe(1)
+    expect(result.oldToolUsage).toBe(1)
+    expect(result.removed_ids.expiredMemories).toEqual(['mem-1'])
   })
 
   it('formats stored audit shapes without undefined', () => {
@@ -136,6 +214,13 @@ describe('admin schema migration and domain audits', () => {
     }
     expect(sql).toContain('INSERT INTO crawler_logs')
     expect(sql).toContain('profile_id IS NOT NULL')
+  })
+
+  it('joined URL backfill migration repairs grants from funding_opportunities', () => {
+    const sql = readFileSync(path.join(process.cwd(), 'backend/db/migrations/062_grants_joined_url_backfill.sql'), 'utf8')
+    expect(sql).toContain('FROM funding_opportunities fo')
+    expect(sql).toContain('fo.id = grants.funding_opportunity_id')
+    expect(sql).toContain('CREATE TABLE IF NOT EXISTS crawler_logs')
   })
 
   it('Postgres crawler_logs migrations match TEXT crawler/profile IDs', () => {

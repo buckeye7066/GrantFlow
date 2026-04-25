@@ -75,12 +75,26 @@ export function storeMemory(db, {
  * Retrieve a specific memory by key
  */
 export function getMemory(db, { scope = SCOPES.GLOBAL, scopeId = null, memoryKey }) {
-  const row = db.prepare(`
-    SELECT *
-    FROM anya_brain_memory
-    WHERE scope = ? AND (scope_id = ? OR (scope_id IS NULL AND ? IS NULL)) AND memory_key = ?
-      AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)
-  `).get(scope, scopeId, scopeId, memoryKey)
+  let row
+  try {
+    row = db.prepare(`
+      SELECT *
+      FROM anya_brain_memory
+      WHERE scope = ? AND (scope_id = ? OR (scope_id IS NULL AND ? IS NULL)) AND memory_key = ?
+        AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)
+      ORDER BY updated_at DESC, created_at DESC
+      LIMIT 1
+    `).get(scope, scopeId, scopeId, memoryKey)
+  } catch (error) {
+    if (!/no such column: (updated_at|created_at)/i.test(error?.message || '')) throw error
+    row = db.prepare(`
+      SELECT *
+      FROM anya_brain_memory
+      WHERE scope = ? AND (scope_id = ? OR (scope_id IS NULL AND ? IS NULL)) AND memory_key = ?
+        AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)
+      LIMIT 1
+    `).get(scope, scopeId, scopeId, memoryKey)
+  }
   
   if (!row) return null
   
@@ -313,6 +327,7 @@ export function recordToolFeedback(db, { toolUsageId, rating, feedback }) {
  * Cleanup expired memories and old context
  */
 export function cleanupBrain(db, { dryRun = false } = {}) {
+  const rowsFromResult = (result) => Array.isArray(result) ? result : (result?.rows ?? [])
   const results = {
     dryRun: Boolean(dryRun),
     expiredMemories: 0,
@@ -326,10 +341,10 @@ export function cleanupBrain(db, { dryRun = false } = {}) {
   }
   
   // Delete expired memories
-  const expiredMemoryRows = db.prepare(`
+  const expiredMemoryRows = rowsFromResult(db.prepare(`
     SELECT id FROM anya_brain_memory
     WHERE expires_at IS NOT NULL AND expires_at < CURRENT_TIMESTAMP
-  `).all()
+  `).all())
   results.expiredMemories = expiredMemoryRows.length
   results.removed_ids.expiredMemories = expiredMemoryRows.map((row) => row.id)
   if (!dryRun && expiredMemoryRows.length > 0) {
@@ -344,10 +359,10 @@ export function cleanupBrain(db, { dryRun = false } = {}) {
   const since30d = isPg ? "(NOW() - INTERVAL '30 days')" : "datetime('now', '-30 days')"
   const since90d = isPg ? "(NOW() - INTERVAL '90 days')" : "datetime('now', '-90 days')"
 
-  const oldContextRows = db.prepare(`
+  const oldContextRows = rowsFromResult(db.prepare(`
     SELECT id FROM anya_context
     WHERE created_at < ${since30d}
-  `).all()
+  `).all())
   results.oldContext = oldContextRows.length
   results.removed_ids.oldContext = oldContextRows.map((row) => row.id)
   if (!dryRun && oldContextRows.length > 0) {
@@ -358,10 +373,10 @@ export function cleanupBrain(db, { dryRun = false } = {}) {
   }
 
   // Delete old tool usage (older than 90 days)
-  const oldToolRows = db.prepare(`
+  const oldToolRows = rowsFromResult(db.prepare(`
     SELECT id FROM anya_tool_usage
     WHERE created_at < ${since90d}
-  `).all()
+  `).all())
   results.oldToolUsage = oldToolRows.length
   results.removed_ids.oldToolUsage = oldToolRows.map((row) => row.id)
   if (!dryRun && oldToolRows.length > 0) {

@@ -4456,12 +4456,21 @@ router.post('/profiles/:id/restore-access', async (req, res) => {
   if (Object.keys(changes).length > 0) {
     const setCols = []
     const params = []
+    const allowedProfileRepairColumns = {
+      status: 'status',
+      user_id: 'user_id',
+    }
     for (const [k, v] of Object.entries(changes)) {
-      setCols.push(`${k} = ?`)
+      const safeColumn = allowedProfileRepairColumns[k]
+      if (!safeColumn) {
+        return res.status(400).json({ ok: false, error: `Unsupported profile repair column: ${k}` })
+      }
+      setCols.push(`${safeColumn} = ?`)
       params.push(v)
     }
     setCols.push('updated_at = CURRENT_TIMESTAMP')
-    await req.db.prepare(`UPDATE profiles SET ${setCols.join(', ')} WHERE id = ?`).run(...params, profileId)
+    const safeSetClause = setCols.join(', ')
+    await req.db.prepare(`UPDATE profiles SET ${safeSetClause} WHERE id = ?`).run(...params, profileId)
   }
 
   let addedCount = 0

@@ -668,7 +668,7 @@ export async function runAutonomousCodeCrawl(options, context) {
   const {
     directory = '',
     pattern = null,
-    maxIterations = 500,
+    maxIterations = 2000,
     maxFileChanges = 20,
     dryRun = false,
     fixConsoleLog = false,

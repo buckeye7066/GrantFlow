@@ -1836,7 +1836,7 @@ router.post('/seed-local-networks', async (req, res) => {
         if (existing) {
           await req.db.prepare(`
             UPDATE funding_opportunities SET
-              title = ?, sponsor = ?, description = ?, application_url = ?, source_url = ?,
+              title = ?, sponsor = ?, description = ?, application_url = ?, source_url = ?, evidence_url = ?,
               is_national = ?, state = ?, categories = ?, keywords = ?,
               updated_at = CURRENT_TIMESTAMP
             WHERE id = ?
@@ -1844,6 +1844,7 @@ router.post('/seed-local-networks', async (req, res) => {
             net.title,
             net.sponsor,
             net.description,
+            net.url,
             net.url,
             net.url,
             Boolean(net.is_national),
@@ -1857,9 +1858,9 @@ router.post('/seed-local-networks', async (req, res) => {
           await req.db.prepare(`
             INSERT INTO funding_opportunities (
               id, title, sponsor, source, source_id, source_url, description,
-              application_url, is_national, state, categories, keywords,
+              application_url, evidence_url, is_national, state, categories, keywords,
               opportunity_type, is_active, created_at, updated_at
-            ) VALUES (?, ?, ?, 'verified_real', ?, ?, ?, ?, ?, ?, ?, ?, 'program', ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            ) VALUES (?, ?, ?, 'verified_real', ?, ?, ?, ?, ?, ?, ?, ?, ?, 'program', ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
           `).run(
             net.id,
             net.title,
@@ -1867,6 +1868,7 @@ router.post('/seed-local-networks', async (req, res) => {
             net.id,
             net.url,
             net.description,
+            net.url,
             net.url,
             Boolean(net.is_national),
             net.state || 'nationwide',

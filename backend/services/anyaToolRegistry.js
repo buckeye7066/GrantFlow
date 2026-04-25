@@ -1367,6 +1367,7 @@ registerTool({
         },
       },
       save: { type: 'boolean', description: 'If true, apply changes and save file (creates backup first). Default: false' },
+      dryRun: { type: 'boolean', description: 'If true, validate without writing. Empty changes returns file metadata.' },
     },
     required: ['filePath', 'changes'],
   },
@@ -1735,47 +1736,52 @@ registerTool({
         description: 'Array of crawler types to trigger (default: all)'
       },
     },
-    required: ['profileId'],
   },
   handler: async (params, context) => {
     const { profileId, crawlerTypes } = params
     const { db } = context
     
-    const types = crawlerTypes || ['local', 'scholarship', 'curated_benefits', 'comprehensive', 'profile_enrichment']
+    const types = crawlerTypes || ['local', 'scholarship', 'comprehensive', 'profile_enrichment']
+    const profiles = profileId
+      ? [{ id: profileId }]
+      : db.prepare(`SELECT id FROM profiles WHERE status IS NULL OR status <> 'deleted' ORDER BY created_at DESC`).all()
     
     const jobIds = []
-    for (const crawlerType of types) {
-      const jobId = randomUUID()
+    for (const profile of profiles) {
+      for (const crawlerType of types) {
+        const jobId = randomUUID()
       
-      const stmt = db.prepare(`
-        INSERT INTO crawler_jobs (id, type, profile_id, status, parameters)
-        VALUES (?, ?, ?, ?, ?)
-      `)
+        const stmt = db.prepare(`
+          INSERT INTO crawler_jobs (id, type, profile_id, status, parameters)
+          VALUES (?, ?, ?, ?, ?)
+        `)
       
-      const defaultParams = {
-        local: { radius_miles: 25, max_results: 100 },
-        scholarship: { max_results: 50 },
-        curated_benefits: { maxResults: 100 },
-        comprehensive: { max_results: 200 },
-        profile_enrichment: {},
-        avatar_lookup: {},
-        item_search: { max_results: 50 },
+        const defaultParams = {
+          local: { radius_miles: 25, max_results: 100 },
+          scholarship: { max_results: 50 },
+          curated_benefits: { maxResults: 100 },
+          comprehensive: { max_results: 200 },
+          profile_enrichment: {},
+          avatar_lookup: {},
+          item_search: { max_results: 50 },
+        }
+      
+        stmt.run(
+          jobId,
+          crawlerType,
+          profile.id,
+          'queued',
+          JSON.stringify(defaultParams[crawlerType] || {})
+        )
+      
+        jobIds.push({ type: crawlerType, profileId: profile.id, jobId })
       }
-      
-      stmt.run(
-        jobId,
-        crawlerType,
-        profileId,
-        'queued',
-        JSON.stringify(defaultParams[crawlerType] || {})
-      )
-      
-      jobIds.push({ type: crawlerType, jobId })
     }
     
     return {
       success: true,
-      profileId,
+      profileId: profileId ?? null,
+      profilesTriggered: profiles.length,
       jobsCreated: jobIds.length,
       jobs: jobIds,
     }
@@ -1798,29 +1804,37 @@ registerTool({
       schedule: { type: 'string', description: 'Cron expression (e.g., "0 9 * * 1" for every Monday at 9am)' },
       enabled: { type: 'boolean', description: 'Whether schedule is enabled (default: true)' },
     },
-    required: ['profileId', 'crawlerType', 'schedule'],
   },
   handler: async (params, context) => {
-    const { profileId, crawlerType, schedule, enabled = true } = params
+    const { profileId, crawlerType = 'local', schedule = '0 9 * * 1', enabled = true } = params
     const { db } = context
     
-    const scheduleId = randomUUID()
+    const profiles = profileId
+      ? [{ id: profileId }]
+      : db.prepare(`SELECT id FROM profiles WHERE status IS NULL OR status <> 'deleted' ORDER BY created_at DESC`).all()
+    const schedules = []
     
     const stmt = db.prepare(`
       INSERT INTO crawler_schedules (id, profile_id, crawler_type, schedule_cron, enabled)
       VALUES (?, ?, ?, ?, ?)
     `)
     
-    stmt.run(scheduleId, profileId, crawlerType, schedule, enabled ? 1 : 0)
+    for (const profile of profiles) {
+      const scheduleId = randomUUID()
+      stmt.run(scheduleId, profile.id, crawlerType, schedule, enabled ? 1 : 0)
+      schedules.push({ scheduleId, profileId: profile.id })
+    }
     
     return {
       success: true,
-      scheduleId,
-      profileId,
+      scheduleId: schedules[0]?.scheduleId ?? null,
+      profileId: profileId ?? null,
+      profilesScheduled: profiles.length,
+      schedules,
       crawlerType,
       schedule,
       enabled,
-      message: `Scheduled ${crawlerType} crawler for profile ${profileId} with cron: ${schedule}`,
+      message: `Scheduled ${crawlerType} crawler for ${profiles.length} profile(s) with cron: ${schedule}`,
     }
   },
 })
@@ -1945,7 +1959,7 @@ registerTool({
     properties: {
       directory: { type: 'string', description: 'Directory to scan (relative to repo root, default: entire repo)' },
       pattern: { type: 'string', description: 'Optional regex pattern to search for' },
-      maxIterations: { type: 'integer', description: 'Maximum number of files to process (default: 500)', minimum: 1, maximum: 5000 },
+      maxIterations: { type: 'integer', description: 'Maximum number of files to process (default: 2000)', minimum: 1, maximum: 5000 },
       maxFileChanges: { type: 'integer', description: 'Maximum number of files to modify (default: 20)', minimum: 1, maximum: 100 },
       dryRun: { type: 'boolean', description: 'If true, dont save changes (default: false)' },
       fixConsoleLog: { type: 'boolean', description: 'Fix debug console.log statements (default: true)' },
@@ -2040,7 +2054,7 @@ registerTool({
   schema: {
     type: 'object',
     properties: {
-      componentPath: { type: 'string', description: 'Path or comma-separated paths to component directories (default: src/components)' },
+      componentPath: { type: 'string', description: 'Path or comma-separated paths to component directories (default: frontend/src/components,src/components)' },
       componentPaths: {
         type: 'array',
         items: { type: 'string' },
@@ -2963,6 +2977,13 @@ registerTool({
   handler: async (_params, context) => {
     const db = context?.db
     if (!db) throw new Error('Database connection required')
+    const baseUrl = context?.internalBaseUrl || (process.env.PORT ? `http://localhost:${process.env.PORT}` : null)
+    const token = process.env.ADMIN_TOKEN || process.env.ANYA_ADMIN_TOKEN || null
+    await Promise.allSettled([
+      baseUrl ? cgTestEndpoints(db, baseUrl, token) : Promise.resolve(null),
+      cgAuditMatchQuality(db),
+      cgVerifyMissionGoals(db),
+    ])
     return { summary: cgGetAuditSummary(db) }
   },
 })

@@ -98,11 +98,13 @@ async function dbAll(db, sql, params = []) {
     return Array.isArray(result) ? result : (result?.rows || [])
   }
   if (typeof db?.prepare === 'function') {
-    const sqliteSql = sql
-      .replace(/COUNT\(\*\)::int/gi, 'COUNT(*)')
-      .replace(/\bis_active\s*=\s*true\b/gi, 'is_active = 1')
-      .replace(/NOW\(\)\s*-\s*INTERVAL\s*'30 days'/gi, "datetime('now', '-30 days')")
-    const result = await db.prepare(sqliteSql).all(...params)
+    const preparedSql = db?.dialect === 'postgres'
+      ? sql
+      : sql
+        .replace(/COUNT\(\*\)::int/gi, 'COUNT(*)')
+        .replace(/\bis_active\s*=\s*true\b/gi, 'is_active = 1')
+        .replace(/NOW\(\)\s*-\s*INTERVAL\s*'30 days'/gi, "datetime('now', '-30 days')")
+    const result = await db.prepare(preparedSql).all(...params)
     return Array.isArray(result) ? result : (result?.rows || [])
   }
   throw new Error('Unsupported DB client: expected query() or prepare()')
@@ -187,13 +189,14 @@ async function auditExpiredOpportunityLabeling({ db }) {
 
   let rows = []
   try {
+    const deadlineNotEmptyClause = db?.dialect === 'postgres' ? '' : "AND deadline <> ''"
     rows = await dbAll(
       db,
       `SELECT id, title, deadline, deadline_type, is_active
          FROM funding_opportunities
         WHERE is_active = true
           AND deadline IS NOT NULL
-          AND deadline <> ''
+          ${deadlineNotEmptyClause}
           AND COALESCE(deadline_type, '') <> 'rolling'
         LIMIT 5000`,
     )
@@ -239,7 +242,10 @@ async function auditLoanVisibility({ db }) {
   try {
     rows = await dbAll(
       db,
-      `SELECT id, title, description, opportunity_type, eligibility, eligibility_criteria, is_loan
+      `SELECT id, title, description, opportunity_type,
+              eligibility_bullets AS eligibility,
+              geo_eligibility AS eligibility_criteria,
+              is_loan
          FROM funding_opportunities
         WHERE is_active = true
         LIMIT 5000`,

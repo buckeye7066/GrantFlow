@@ -2056,9 +2056,13 @@ router.post('/email/verify', async (req, res) => {
   if (user.is_admin || user.role === 'admin') {
     import('../services/anyaStartupAudit.js')
       .then(({ triggerStartupAudit }) => {
-        triggerStartupAudit(req.db)
+        triggerStartupAudit(req.db).catch((err) => {
+          console.error('[Anya] Failed to trigger startup audit:', err?.message || err)
+        })
       })
-      .catch(() => { /* non-critical */ })
+      .catch((err) => {
+        console.error('[Anya] Failed to import startup audit:', err?.message || err)
+      })
   }
 
   // Admin notice on successful sign-in (post-verify)

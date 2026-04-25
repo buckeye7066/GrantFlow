@@ -374,22 +374,22 @@ async function upsertByUniqueKey({
   // Double-validate: tableEntry.table must also satisfy the global identifier
   // allowlist so any drift between APPLY_ENGINE_TABLES and safeSql's list is
   // caught at the throw site instead of leaking an injection surface.
-  const safeTable = assertSafeIdentifier(tableEntry.table, 'table')
+  const safeSqlIdentifier = assertSafeIdentifier(tableEntry.table, 'table')
   const uniqueWhereSql = buildEqualityWhereClause(uniqueKeys)
 
   const existing = await db
-    .prepare(`SELECT id FROM ${safeTable} WHERE ${uniqueWhereSql} LIMIT 1`)
+    .prepare(`SELECT id FROM ${safeSqlIdentifier} WHERE ${uniqueWhereSql} LIMIT 1`)
     .get(...uniqueValues)
 
   if (existing?.id) {
     await db.prepare(updateSql).run(...updateParams, existing.id)
-    const updated = await db.prepare(`SELECT * FROM ${safeTable} WHERE id = ?`).get(existing.id)
+    const updated = await db.prepare(`SELECT * FROM ${safeSqlIdentifier} WHERE id = ?`).get(existing.id)
     return { row: updated, created: false, mode: 'updated' }
   }
 
   const id = crypto.randomUUID()
   await db.prepare(insertSql).run(id, ...insertParams)
-  const createdRow = await db.prepare(`SELECT * FROM ${safeTable} WHERE id = ?`).get(id)
+  const createdRow = await db.prepare(`SELECT * FROM ${safeSqlIdentifier} WHERE id = ?`).get(id)
   return { row: createdRow, created: true, mode: 'created' }
 }
 

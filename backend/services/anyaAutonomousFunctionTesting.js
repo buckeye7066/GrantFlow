@@ -437,7 +437,8 @@ export async function runAutonomousFunctionTests(options, context) {
  * handlers and (optionally) probing the resolved API endpoints with
  * supertest against the in-process Express app.
  *
- * The scan walks `componentPath` (default: `src/components`) for JSX/TSX
+ * The scan walks `componentPath` (default: frontend/src/components with
+ * src/components fallback) for JSX/TSX
  * files, extracts every <Button>/<button>/<IconButton>/etc. with an
  * onClick/onSubmit handler, resolves the handler body, and pulls out the
  * HTTP endpoint references inside it (fetch, axios, api.*, bare `/api/...`
@@ -451,7 +452,7 @@ export async function runAutonomousFunctionTests(options, context) {
  */
 export async function testButtonFunctionality(options, context) {
   const {
-    componentPath = 'src/components',
+    componentPath = 'frontend/src/components,src/components',
     componentPaths = null,
     probe = true,
   } = options || {}
@@ -480,25 +481,22 @@ export async function testButtonFunctionality(options, context) {
   try {
     const requestedPaths = Array.isArray(componentPaths)
       ? componentPaths
-      : String(componentPath || 'src/components')
+      : String(componentPath || 'frontend/src/components,src/components')
         .split(',')
         .map((entry) => entry.trim())
         .filter(Boolean)
-    const candidatePaths = requestedPaths.length > 0 ? requestedPaths : ['src/components']
+    const candidatePaths = requestedPaths.length > 0 ? requestedPaths : ['frontend/src/components', 'src/components']
+    const looked = []
     const filesByPath = new Map()
     for (const entry of candidatePaths) {
       const root = path.resolve(process.cwd(), entry)
-      const found = await collectComponentFiles(root)
-      for (const file of found) filesByPath.set(file, true)
-    }
-    if (filesByPath.size === 0 && candidatePaths.includes('src/components')) {
-      const root = path.resolve(process.cwd(), 'src', 'components')
+      looked.push(root)
       const found = await collectComponentFiles(root)
       for (const file of found) filesByPath.set(file, true)
     }
     const files = Array.from(filesByPath.keys())
     if (files.length === 0) {
-      const err = new Error(`No component files found under: ${candidatePaths.join(', ')}`)
+      const err = new Error(`No component files found. Looked in: ${looked.join(', ')}`)
       err.status = 400
       throw err
     }
