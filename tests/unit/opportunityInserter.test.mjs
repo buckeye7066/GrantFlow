@@ -206,3 +206,51 @@ test('opportunityInserter: deduplicates referral lookup permutations at ingest',
   assert.equal(rows[0].application_url, 'https://communityactionpartnership.com/find-a-cap/')
 })
 
+test('opportunityInserter: normalizes state values at ingest and drops invalid country placeholders', async () => {
+  const db = createDb()
+
+  await upsertFundingOpportunity(db, {
+    title: 'Pennsylvania Equipment Grant',
+    sponsor: 'Agency',
+    source: 'unit_test_state',
+    source_id: 'pa-state',
+    source_url: 'https://www.grants.gov/pa-state',
+    application_url: 'https://www.grants.gov/pa-state',
+    record_origin: 'live_crawl',
+    state: 'Pennsylvania',
+    description: 'Grant for Pennsylvania organizations.',
+  })
+  await upsertFundingOpportunity(db, {
+    title: 'Invalid Country State Grant',
+    sponsor: 'Agency',
+    source: 'unit_test_state',
+    source_id: 'usa-state',
+    source_url: 'https://www.grants.gov/usa-state',
+    application_url: 'https://www.grants.gov/usa-state',
+    record_origin: 'live_crawl',
+    state: 'USA',
+    description: 'Grant with invalid state placeholder.',
+  })
+  await upsertFundingOpportunity(db, {
+    title: 'Invalid Nation Wide Grant',
+    sponsor: 'Agency',
+    source: 'unit_test_state',
+    source_id: 'nation-wide-state',
+    source_url: 'https://www.grants.gov/nation-wide-state',
+    application_url: 'https://www.grants.gov/nation-wide-state',
+    record_origin: 'live_crawl',
+    state: 'nation-wide',
+    description: 'Grant with invalid nationwide variant.',
+  })
+
+  const rows = db
+    .prepare('SELECT source_id, state FROM funding_opportunities ORDER BY source_id')
+    .all()
+
+  assert.equal(rows.some((row) => row.state === 'USA' || row.state === 'United States' || row.state === 'nation-wide'), false)
+  assert.deepEqual(rows.filter((row) => row.source_id !== 'usa-state'), [
+    { source_id: 'nation-wide-state', state: null },
+    { source_id: 'pa-state', state: 'PA' },
+  ])
+})
+

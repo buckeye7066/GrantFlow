@@ -5,6 +5,7 @@ import { ALLOWED_RECORD_ORIGINS } from '../utils/recordOrigins.js'
 import { validateOpportunity, deduplicateByUrl } from './opportunityValidator.js'
 import { reviewOpportunity } from './reviewerAgent.js'
 import { normalizeUrlForDedupe } from '../routes/opportunityHelpers.js'
+import { normalizeOpportunityState } from '../utils/stateNormalization.js'
 
 // Backward-compat alias
 const isValidHttpUrl = isValidRealUrl
@@ -184,10 +185,11 @@ function stableSourceIdFromOpportunity(source, opportunity) {
 }
 
 function deriveIsNational(opportunity) {
+  const normalizedState = normalizeOpportunityState(opportunity?.state)
   return (
     opportunity?.is_national === true ||
     opportunity?.is_national === 1 ||
-    opportunity?.state === 'nationwide'
+    normalizedState === 'nationwide'
   )
 }
 
@@ -337,6 +339,7 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
   // Otherwise allow updates (including verified→verified ingestion refresh)
   if (existing?.id) {
     const isNational = deriveIsNational(opportunity)
+    const normalizedState = normalizeOpportunityState(opportunity.state)
 
     const record = {
       title,
@@ -355,7 +358,7 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
       deadline_type: opportunity.deadline_type ?? null,
       application_url: applicationUrl,
       is_national: toDbBoolean(db, isNational),
-      state: opportunity.state ?? (isNational ? 'nationwide' : null),
+      state: normalizedState ?? (isNational ? 'nationwide' : null),
       categories: JSON.stringify(ensureArray(opportunity.categories)),
       keywords: JSON.stringify(ensureArray(opportunity.keywords)),
       opportunity_type: opportunity.opportunity_type ?? 'grant',
@@ -510,6 +513,7 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
   // Stability/deduplication is achieved via (source, source_id), not the primary key.
   const id = crypto.randomUUID()
   const isNational = deriveIsNational(opportunity)
+  const normalizedState = normalizeOpportunityState(opportunity.state)
   const record = {
     title,
     sponsor: normalizeNonEmptyString(opportunity.sponsor),
@@ -535,7 +539,7 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
     deadline_type: opportunity.deadline_type ?? null,
     application_url: applicationUrl,
     is_national: toDbBoolean(db, isNational),
-    state: opportunity.state ?? (isNational ? 'nationwide' : null),
+    state: normalizedState ?? (isNational ? 'nationwide' : null),
     categories: JSON.stringify(ensureArray(opportunity.categories)),
     keywords: JSON.stringify(ensureArray(opportunity.keywords)),
     opportunity_type: opportunity.opportunity_type ?? 'grant',

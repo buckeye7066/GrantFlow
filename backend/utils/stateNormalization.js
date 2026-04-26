@@ -80,6 +80,21 @@ export function normalizeState(input) {
   return STATE_MAP[cleaned] || null;
 }
 
+export function normalizeStateFromText(input) {
+  if (!input || typeof input !== 'string') return null;
+  const text = input.trim();
+  if (!text) return null;
+
+  for (const [abbr, name] of Object.entries(ABBR_TO_NAME)) {
+    const escapedName = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    if (new RegExp(`\\b${escapedName}\\b`, 'i').test(text)) return abbr;
+  }
+
+  const codeMatch = text.match(/\b([A-Z]{2})\b/i);
+  if (codeMatch) return normalizeState(codeMatch[1]);
+  return normalizeState(text);
+}
+
 /**
  * Compare two state values for equality after normalization.
  * Returns true if both resolve to the same 2-letter code.
@@ -119,9 +134,25 @@ const ABBR_TO_NAME = {
   'AS': 'American Samoa', 'MP': 'Northern Mariana Islands',
 };
 
+const STATE_CODES = new Set(Object.keys(ABBR_TO_NAME));
+const NATIONWIDE_TOKEN = 'nationwide';
+
 export function stateFullName(abbr) {
   if (!abbr || typeof abbr !== 'string') return null;
   return ABBR_TO_NAME[abbr.trim().toUpperCase()] || null;
+}
+
+export function normalizeOpportunityState(input) {
+  if (input === null || input === undefined) return null;
+  const raw = String(input).trim();
+  if (!raw) return null;
+  if (raw.toLowerCase() === NATIONWIDE_TOKEN) return NATIONWIDE_TOKEN;
+  return normalizeState(raw);
+}
+
+export function isSpecificState(input) {
+  const normalized = normalizeOpportunityState(input);
+  return Boolean(normalized && STATE_CODES.has(normalized));
 }
 
 /**
@@ -131,4 +162,4 @@ export function isValidState(input) {
   return normalizeState(input) !== null;
 }
 
-export default { normalizeState, statesMatch, stateFullName, isValidState };
+export default { normalizeState, normalizeStateFromText, normalizeOpportunityState, isSpecificState, statesMatch, stateFullName, isValidState };

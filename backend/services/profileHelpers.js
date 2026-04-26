@@ -2,6 +2,7 @@ import zipcodes from 'zipcodes'
 import { resolveCountyForZip } from './geo/zipCountyResolver.js'
 import crypto from 'crypto'
 import { inferUsStateZipFromText, collectAddressTextForInference } from '../utils/inferLocationFromAddress.js'
+import { normalizeState, normalizeStateFromText } from '../utils/stateNormalization.js'
 
 // Full state name → 2-letter abbreviation for extractStateFromContext fallback
 const STATE_NAME_TO_ABBR = {
@@ -399,13 +400,20 @@ export function extractStateFromContext({ profile, sections, jobParameters = {} 
     .map((value) => {
       if (typeof value !== 'string' || !value.trim()) return null
       const trimmed = value.trim()
-      if (trimmed.length === 2) return trimmed.toUpperCase()
+      if (trimmed.length === 2) return normalizeState(trimmed)
       // Handle full state names (e.g. "Ohio" → "OH", "West Virginia" → "WV")
-      return STATE_NAME_TO_ABBR[trimmed.toLowerCase()] || null
+      return normalizeState(trimmed) || STATE_NAME_TO_ABBR[trimmed.toLowerCase()] || normalizeStateFromText(trimmed)
     })
     .find(Boolean)
 
   if (state) return state
+  const freeformState = normalizeStateFromText([
+    sections?.location_focus?.geographic_focus,
+    sections?.location_focus?.service_area,
+    sections?.comprehensive_application?.geographic_focus,
+    sections?.narrative?.geographic_focus,
+  ].filter(Boolean).join(' '))
+  if (freeformState) return freeformState
   const inferred = inferUsStateZipFromText(freeformAddressTextForInference(sections))
   return inferred.state ?? null
 }

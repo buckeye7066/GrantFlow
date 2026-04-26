@@ -16,6 +16,7 @@ import {
   evaluateFundableOpportunity,
 } from '../services/matching/qualityGate.js'
 import { deriveMatchReasonCodes } from '../services/matching/reasons.js'
+import { normalizeOpportunityState, normalizeState } from '../utils/stateNormalization.js'
 
 import { createLogger } from '../utils/logger.js'
 const routeLogger = createLogger('route:matching')
@@ -312,12 +313,18 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
       conditions.push('(profile_id IS NULL OR profile_id = ?)')
       params.push(profileId)
 
-      // Geographic pre-filter: only load opps in the profile's state, national, or unspecified.
-      const profileState = profileContext?.signals?.location?.state || profileContext?.profile?.state
+      // Geographic pre-filter: only load opps in the profile's normalized state,
+      // national opportunities, or unspecified rows. If the profile has no real
+      // state, do not show specific-state rows unless explicitly requested.
+      const profileState = normalizeState(profileContext?.signals?.location?.state || profileContext?.profile?.state)
+      const includeOtherStates = req.query.include_other_states === '1'
       if (profileState) {
         const natVal = isPostgres ? 'TRUE' : '1'
-        conditions.push(`(state = ? OR state = 'nationwide' OR state IS NULL OR is_national = ${natVal})`)
+        conditions.push(`(UPPER(state) = ? OR LOWER(state) = 'nationwide' OR state IS NULL OR is_national = ${natVal})`)
         params.push(profileState)
+      } else if (!includeOtherStates) {
+        const natVal = isPostgres ? 'TRUE' : '1'
+        conditions.push(`(LOWER(state) = 'nationwide' OR state IS NULL OR is_national = ${natVal})`)
       }
 
       // Keep results current
@@ -367,7 +374,7 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
                              )
                      .all(...params, limit)
 
-      const rejectStats = { quality: 0, junk: 0, reject: 0, rejectDirectoryPreserved: 0, trust: 0, noReason: 0 }
+      const rejectStats = { quality: 0, wrongState: 0, junk: 0, reject: 0, rejectDirectoryPreserved: 0, trust: 0, noReason: 0 }
       const qualityDropReasons = {}
       const referralTemplates = new Map()
       const candidates = []
@@ -379,6 +386,12 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
           continue
         }
         const normalized = applyFundableOpportunityNormalization(rawCandidate, quality)
+        const candidateState = normalizeOpportunityState(normalized.state)
+        if (!includeOtherStates && candidateState && candidateState !== 'nationwide' && candidateState !== profileState) {
+          rejectStats.wrongState++
+          continue
+        }
+        normalized.state = candidateState
         if (quality.kind === 'referral_template') {
           if (!referralTemplates.has(quality.referralKey)) {
             referralTemplates.set(quality.referralKey, {
@@ -495,7 +508,7 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
                                }
                      })
                      .filter((opp) => opp !== null)
-      if (rejectStats.quality || rejectStats.junk || rejectStats.reject || rejectStats.rejectDirectoryPreserved || rejectStats.trust || rejectStats.noReason) {
+      if (rejectStats.quality || rejectStats.wrongState || rejectStats.junk || rejectStats.reject || rejectStats.rejectDirectoryPreserved || rejectStats.trust || rejectStats.noReason) {
         routeLogger.info(`[matching] candidates=${rawCandidates.length} quality_candidates=${candidates.length} scored=${allScored.length} referrals=${referralTemplates.size} drops=${JSON.stringify(rejectStats)} quality_reasons=${JSON.stringify(qualityDropReasons)} trust_reasons=${JSON.stringify(trustDropReasons)}`)
       }
 
@@ -571,6 +584,7 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
               referrals: Array.from(referralTemplates.values()),
               diagnostics: {
                 dropped_for_no_reason: rejectStats.noReason,
+                dropped_for_wrong_state: rejectStats.wrongState,
               },
               score_hint: allScored._scoreHint || null,
               threshold_relaxed: effectiveMinScore !== minScore ? true : undefined,
