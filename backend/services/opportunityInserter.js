@@ -1,5 +1,6 @@
 import crypto from 'crypto'
 import { isValidRealUrl, isLoanLike, isMatchingFunds, enforceOpportunityPolicy } from './crawlers/opportunityPolicy.js'
+import { applyFundableOpportunityNormalization, evaluateFundableOpportunity } from './matching/qualityGate.js'
 import { ALLOWED_RECORD_ORIGINS } from '../utils/recordOrigins.js'
 import { validateOpportunity, deduplicateByUrl } from './opportunityValidator.js'
 import { reviewOpportunity } from './reviewerAgent.js'
@@ -213,6 +214,20 @@ function normalizeDateLikeOrNull(value) {
 }
 
 export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
+  const qualityGate = evaluateFundableOpportunity(opportunity)
+  if (!qualityGate.ok) {
+    return {
+      id: null,
+      inserted: false,
+      skipped: true,
+      reason: `quality:${qualityGate.reason}`,
+    }
+  }
+  opportunity = applyFundableOpportunityNormalization(opportunity, qualityGate)
+  if (qualityGate.kind === 'referral_template' && qualityGate.referralKey && !opportunity.source_id) {
+    opportunity.source_id = qualityGate.referralKey
+  }
+
   // Full policy enforcement on every path (not just bulk).
   const policyResult = enforceOpportunityPolicy(opportunity)
   if (!policyResult.ok) {

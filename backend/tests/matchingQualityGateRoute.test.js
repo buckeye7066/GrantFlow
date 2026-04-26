@@ -1,0 +1,148 @@
+import express from 'express'
+import request from 'supertest'
+import { describe, expect, it } from 'vitest'
+import Database from 'better-sqlite3'
+import matchingRouter from '../routes/matching.js'
+
+function createDb() {
+  const db = new Database(':memory:')
+  db.exec(`
+    CREATE TABLE profiles (
+      id TEXT PRIMARY KEY,
+      primary_type TEXT,
+      applicant_type TEXT,
+      state TEXT,
+      zip TEXT,
+      tags TEXT,
+      interests TEXT,
+      created_at TEXT,
+      updated_at TEXT
+    );
+    CREATE TABLE profile_sections (
+      profile_id TEXT,
+      section_key TEXT,
+      data TEXT
+    );
+    CREATE TABLE funding_opportunities (
+      id TEXT PRIMARY KEY,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      title TEXT NOT NULL,
+      sponsor TEXT,
+      source TEXT,
+      source_id TEXT,
+      source_url TEXT,
+      record_origin TEXT,
+      description TEXT,
+      eligibility_bullets TEXT DEFAULT '[]',
+      amount_min REAL,
+      amount_max REAL,
+      deadline TEXT,
+      deadline_type TEXT,
+      application_url TEXT,
+      is_national INTEGER DEFAULT 0,
+      state TEXT,
+      categories TEXT DEFAULT '[]',
+      keywords TEXT DEFAULT '[]',
+      opportunity_type TEXT,
+      type TEXT DEFAULT 'OPPORTUNITY',
+      requires_501c3 INTEGER DEFAULT 0,
+      requires_match INTEGER DEFAULT 0,
+      match_percentage REAL,
+      match_reasons TEXT DEFAULT '[]',
+      is_loan INTEGER DEFAULT 0,
+      is_active INTEGER DEFAULT 1,
+      profile_id TEXT,
+      source_category TEXT,
+      link_status TEXT DEFAULT 'unknown'
+    );
+    INSERT INTO profiles (id, primary_type, applicant_type, state, zip, tags, interests, created_at, updated_at)
+    VALUES ('profile-focus-forward-ministries', 'church', 'church', 'OH', '43215', '["ministry","community"]', '["housing","transportation"]', '2026-04-26', '2026-04-26');
+    INSERT INTO profile_sections (profile_id, section_key, data)
+    VALUES ('profile-focus-forward-ministries', 'basic_information', '{"state":"OH","zip_code":"43215","profile_category":"church"}');
+    INSERT INTO funding_opportunities (
+      id, title, sponsor, source, source_id, source_url, record_origin, description,
+      amount_min, amount_max, deadline_type, application_url, is_national, state,
+      categories, keywords, opportunity_type, type, is_active, source_category
+    ) VALUES
+      (
+        'real-grant-1', 'Community Ministry Grant', 'Real Foundation', 'grants.gov', 'real-1',
+        'https://www.grants.gov/search-results-detail/123', 'verified_real',
+        'Grant funding for churches and ministries serving community needs.',
+        1000, 5000, 'rolling', 'https://www.grants.gov/search-results-detail/123',
+        1, 'nationwide', '["grant","ministry"]', '["ministry","community","housing"]', 'grant', 'OPPORTUNITY', 1, 'grant'
+      ),
+      (
+        'article-1', 'Benevolence Fund Basics', 'Church Law & Tax', 'crawler', 'article-1',
+        'https://www.churchlawandtax.com/web/2021/september/benevolence-fund-basics.html', 'verified_real',
+        'Article about benevolence funds.',
+        NULL, NULL, 'rolling', 'https://www.churchlawandtax.com/web/2021/september/benevolence-fund-basics.html',
+        1, 'nationwide', '["grant"]', '["church","benevolence"]', 'grant', 'OPPORTUNITY', 1, 'grant'
+      ),
+      (
+        'cap-43215', 'Find Your Local Community Action Agency', 'Community Action Partnership', 'crawler', 'cap-43215',
+        'https://communityactionpartnership.com/find-a-cap/?zip=43215', 'verified_real',
+        'Lookup local community action agency by ZIP.',
+        NULL, NULL, 'rolling', 'https://communityactionpartnership.com/find-a-cap/?zip=43215',
+        1, 'nationwide', '["benefit"]', '["community"]', 'grant', 'OPPORTUNITY', 1, 'grant'
+      ),
+      (
+        'cap-44101', 'Find Your Local Community Action Agency', 'Community Action Partnership', 'crawler', 'cap-44101',
+        'https://communityactionpartnership.com/find-a-cap/?zip=44101', 'verified_real',
+        'Lookup local community action agency by ZIP.',
+        NULL, NULL, 'rolling', 'https://communityactionpartnership.com/find-a-cap/?zip=44101',
+        1, 'nationwide', '["benefit"]', '["community"]', 'grant', 'OPPORTUNITY', 1, 'grant'
+      ),
+      (
+        'locator-oh', 'Foundation Locator', 'Council on Foundations', 'crawler', 'locator-oh',
+        'https://example.org/foundation-locator?state=OH', 'verified_real',
+        'Lookup foundations by state.',
+        NULL, NULL, 'rolling', 'https://example.org/foundation-locator?state=OH',
+        1, 'nationwide', '["directory"]', '["foundation"]', 'grant', 'OPPORTUNITY', 1, 'grant'
+      ),
+      (
+        'locator-mi', 'Foundation Locator', 'Council on Foundations', 'crawler', 'locator-mi',
+        'https://example.org/foundation-locator?state=MI', 'verified_real',
+        'Lookup foundations by state.',
+        NULL, NULL, 'rolling', 'https://example.org/foundation-locator?state=MI',
+        1, 'nationwide', '["directory"]', '["foundation"]', 'grant', 'OPPORTUNITY', 1, 'grant'
+      );
+  `)
+  return db
+}
+
+function createApp(db) {
+  const app = express()
+  app.use(express.json())
+  app.use((req, _res, next) => {
+    req.ctx = { userId: 'admin-1', isAdmin: true }
+    req.db = db
+    next()
+  })
+  app.use('/api/matching', matchingRouter)
+  return app
+}
+
+describe('matching quality gate route', () => {
+  it('excludes articles from matches and collapses query-template referral permutations', async () => {
+    const db = createDb()
+    try {
+      const response = await request(createApp(db))
+        .get('/api/matching/profile/profile-focus-forward-ministries/opportunities')
+        .query({ min_score: 0, limit: 2000, skip_readiness_check: 1, allow_relax: 1 })
+
+      expect(response.status).toBe(200)
+      const urls = response.body.opportunities.map((opp) => opp.application_url || opp.url || '')
+      expect(urls.some((url) => url.includes('churchlawandtax.com'))).toBe(false)
+      expect(urls.some((url) => url.includes('find-a-cap/?zip='))).toBe(false)
+      expect(urls.some((url) => url.includes('foundation-locator?state='))).toBe(false)
+      expect(response.body.referrals).toHaveLength(2)
+      expect(response.body.referrals.map((ref) => ref.referral_key).sort()).toEqual([
+        'communityactionpartnership.com/find-a-cap',
+        'example.org/foundation-locator',
+      ])
+    } finally {
+      db.close()
+    }
+  })
+})

@@ -11,6 +11,10 @@ import { isJunkOpportunity } from '../services/contentFilter.js'
 import { interpretFundingIntent, sanitizeSearchTerm } from '../services/smartMatcherIntent.js'
 import { createOpenAIClient } from '../utils/openaiClient.js'
 import { assessOpportunityTrust } from '../services/opportunityTrust.js'
+import {
+  applyFundableOpportunityNormalization,
+  evaluateFundableOpportunity,
+} from '../services/matching/qualityGate.js'
 
 import { createLogger } from '../utils/logger.js'
 const routeLogger = createLogger('route:matching')
@@ -346,7 +350,7 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
                      ? "(is_national = TRUE OR state = 'nationwide')"
                            : "(is_national = 1 OR state = 'nationwide')"
 
-      const candidates = await req.db
+      const rawCandidates = await req.db
                      .prepare(
                                `
                                        SELECT * FROM funding_opportunities
@@ -359,6 +363,35 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
                                                                                                      `,
                              )
                      .all(...params, limit)
+
+      const rejectStats = { quality: 0, junk: 0, reject: 0, rejectDirectoryPreserved: 0, trust: 0 }
+      const qualityDropReasons = {}
+      const referralTemplates = new Map()
+      const candidates = []
+      for (const rawCandidate of rawCandidates) {
+        const quality = evaluateFundableOpportunity(rawCandidate)
+        if (!quality.ok) {
+          rejectStats.quality++
+          qualityDropReasons[quality.reason] = (qualityDropReasons[quality.reason] || 0) + 1
+          continue
+        }
+        const normalized = applyFundableOpportunityNormalization(rawCandidate, quality)
+        if (quality.kind === 'referral_template') {
+          if (!referralTemplates.has(quality.referralKey)) {
+            referralTemplates.set(quality.referralKey, {
+              ...normalized,
+              type: 'referral',
+              opportunity_type: 'referral',
+              referral_key: quality.referralKey,
+              excluded_from_grant_scoring: true,
+              actionable_url: normalized.application_url ?? normalized.source_url ?? rawCandidate.application_url ?? null,
+              url: normalized.application_url ?? normalized.source_url ?? rawCandidate.application_url ?? null,
+            })
+          }
+          continue
+        }
+        candidates.push(normalized)
+      }
 
       const healthSet = profileContext?.signals?.health
       const healthFacets = profileContext?.facets?.health ?? {}
@@ -390,7 +423,6 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
         String(opp?.opportunity_type || '').toUpperCase() === 'DIRECTORY',
       )
 
-      const rejectStats = { junk: 0, reject: 0, rejectDirectoryPreserved: 0, trust: 0 }
       const trustDropReasons = {}
       const allScored = candidates
                      .map((opp) => {
@@ -455,8 +487,8 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
                                }
                      })
                      .filter((opp) => opp !== null)
-      if (rejectStats.junk || rejectStats.reject || rejectStats.rejectDirectoryPreserved || rejectStats.trust) {
-        routeLogger.info(`[matching] candidates=${candidates.length} scored=${allScored.length} drops=${JSON.stringify(rejectStats)} trust_reasons=${JSON.stringify(trustDropReasons)}`)
+      if (rejectStats.quality || rejectStats.junk || rejectStats.reject || rejectStats.rejectDirectoryPreserved || rejectStats.trust) {
+        routeLogger.info(`[matching] candidates=${rawCandidates.length} quality_candidates=${candidates.length} scored=${allScored.length} referrals=${referralTemplates.size} drops=${JSON.stringify(rejectStats)} quality_reasons=${JSON.stringify(qualityDropReasons)} trust_reasons=${JSON.stringify(trustDropReasons)}`)
       }
 
       // Sort by user-requested criteria
@@ -525,9 +557,10 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
       res.json({
               profile_id: profileId,
               min_score: Number.isFinite(effectiveMinScore) ? effectiveMinScore : null,
-              total_scored: candidates.length,
+              total_scored: rawCandidates.length,
               returned: capped.length,
               opportunities: capped,
+              referrals: Array.from(referralTemplates.values()),
               score_hint: allScored._scoreHint || null,
               threshold_relaxed: effectiveMinScore !== minScore ? true : undefined,
               threshold_relaxed_reason: relaxedReason || undefined,

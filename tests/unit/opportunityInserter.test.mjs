@@ -157,3 +157,52 @@ test('opportunityInserter: baseline cannot downgrade verified record', async () 
   assert.equal(row.sponsor, 'Agency')
 })
 
+test('opportunityInserter: rejects article URLs before storing funding opportunities', async () => {
+  const db = createDb()
+
+  const result = await upsertFundingOpportunity(db, {
+    title: 'Benevolence Fund Basics',
+    sponsor: 'Church Law & Tax',
+    source: 'unit_test',
+    source_id: 'article-1',
+    application_url: 'https://www.churchlawandtax.com/web/2021/september/benevolence-fund-basics.html',
+    record_origin: 'live_crawl',
+    description: 'Article about benevolence funds.',
+  })
+
+  assert.equal(result.skipped, true)
+  assert.equal(result.reason, 'quality:article_or_informational_url')
+  const count = db.prepare('SELECT COUNT(*) as c FROM funding_opportunities').get().c
+  assert.equal(Number(count), 0)
+})
+
+test('opportunityInserter: deduplicates referral lookup permutations at ingest', async () => {
+  const db = createDb()
+
+  const first = await upsertFundingOpportunity(db, {
+    title: 'Find Your Local Community Action Agency',
+    sponsor: 'Community Action Partnership',
+    source: 'unit_test_referral',
+    application_url: 'https://communityactionpartnership.com/find-a-cap/?zip=43215',
+    record_origin: 'live_crawl',
+    description: 'Find local assistance by ZIP code.',
+  })
+  const second = await upsertFundingOpportunity(db, {
+    title: 'Find Your Local Community Action Agency',
+    sponsor: 'Community Action Partnership',
+    source: 'unit_test_referral',
+    application_url: 'https://communityactionpartnership.com/find-a-cap/?zip=44101',
+    record_origin: 'live_crawl',
+    description: 'Find local assistance by ZIP code.',
+  })
+
+  assert.equal(first.inserted, true)
+  assert.equal(second.updated, true)
+  const rows = db.prepare('SELECT source_id, opportunity_type, type, application_url FROM funding_opportunities').all()
+  assert.equal(rows.length, 1)
+  assert.equal(rows[0].source_id, 'communityactionpartnership.com/find-a-cap')
+  assert.equal(rows[0].opportunity_type, 'referral')
+  assert.equal(rows[0].type, 'DIRECTORY')
+  assert.equal(rows[0].application_url, 'https://communityactionpartnership.com/find-a-cap/')
+})
+
