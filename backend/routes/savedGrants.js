@@ -14,6 +14,7 @@ import {
   assessOpportunityTrust,
   buildTrustMetadata,
 } from '../services/opportunityTrust.js'
+import { ensureSavedGrantsSchema } from '../services/savedGrantsSchema.js'
 
 import { createLogger } from '../utils/logger.js'
 const routeLogger = createLogger('route:savedGrants')
@@ -26,6 +27,7 @@ router.get('/', async (req, res) => {
     if (!user) return
     const userId = user.userId
     if (!userId) return res.status(401).json({ error: 'Authentication required' })
+    await ensureSavedGrantsSchema(req.db)
 
     const userRows = await req.db.prepare(`
       SELECT sg.opportunity_id, sg.saved_at, sg.notes,
@@ -73,6 +75,7 @@ router.post('/', async (req, res) => {
     if (!user) return
     const userId = user.userId
     if (!userId) return res.status(401).json({ error: 'Authentication required' })
+    await ensureSavedGrantsSchema(req.db)
 
     const { opportunity_id, notes } = req.body ?? {}
     if (!opportunity_id) return res.status(400).json({ error: 'opportunity_id required' })
@@ -98,6 +101,7 @@ router.patch('/:opportunityId/notes', async (req, res) => {
     if (!user) return
     const userId = user.userId
     if (!userId) return res.status(401).json({ error: 'Authentication required' })
+    await ensureSavedGrantsSchema(req.db)
 
     const { notes } = req.body ?? {}
     if (typeof notes !== 'string') return res.status(400).json({ error: 'notes must be a string' })
@@ -120,6 +124,7 @@ router.delete('/:opportunityId', async (req, res) => {
     if (!user) return
     const userId = user.userId
     if (!userId) return res.status(401).json({ error: 'Authentication required' })
+    await ensureSavedGrantsSchema(req.db)
 
     await req.db.prepare(`
       DELETE FROM saved_grants WHERE user_id = ? AND opportunity_id = ?
