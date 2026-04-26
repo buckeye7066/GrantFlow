@@ -187,6 +187,7 @@ CREATE TABLE IF NOT EXISTS funding_opportunities (
   type TEXT DEFAULT 'OPPORTUNITY' CHECK(type IN ('OPPORTUNITY', 'PROGRAM', 'DIRECTORY')),
   evidence_url TEXT, -- URL used to verify this opportunity
   last_verified_at DATETIME, -- Last time this was verified as real
+  link_status TEXT DEFAULT 'unknown',
   
   -- Requirements
   requires_501c3 BOOLEAN DEFAULT FALSE,
