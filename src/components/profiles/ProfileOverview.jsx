@@ -34,6 +34,7 @@ import { SECTION_METADATA } from "@/config/sectionMetadata"
 import { useDashboardPreferences } from "@/contexts/DashboardPreferencesContext.jsx"
 import EditableField from "@/components/shared/EditableField.jsx"
 import { useAuthenticatedAvatar } from "@/hooks/useAuthenticatedAvatar"
+import { calculateProfileCompletion, isProfileSectionApplicable, normalizeProfileSections } from "@/utils/profileCompletion"
 
 const SECTION_ICONS = {
   basic_information: UserCircle,
@@ -54,17 +55,6 @@ const SECTION_ICONS = {
   student_details: GraduationCap,
   firearms: ShieldCheck,
   political_civic: Users,
-}
-
-function isSectionApplicable(sectionKey, config, profile) {
-  if (!config) return true
-  // Optional, forward-compatible: allow SECTION_METADATA entries to specify applies_to types.
-  const appliesTo = config.applies_to ?? config.appliesTo ?? null
-  if (!Array.isArray(appliesTo) || appliesTo.length === 0) return true
-  const primaryType = profile?.primary_type ?? profile?.primaryType ?? null
-  // If a profile doesn't have a primary type yet, do not hide sections.
-  if (!primaryType) return true
-  return appliesTo.includes(primaryType)
 }
 
 function titleCase(value = "") {
@@ -561,15 +551,10 @@ export default function ProfileOverview({
   const gapClass = dashboardPrefs.layoutStyle === "compact" ? "gap-4" : "gap-6"
   const allSectionKeys = useMemo(() => Object.keys(SECTION_METADATA), [])
   const applicableSectionKeys = useMemo(() => {
-    return allSectionKeys.filter((key) => isSectionApplicable(key, SECTION_METADATA[key], profile))
+    return allSectionKeys.filter((key) => isProfileSectionApplicable(key, profile))
   }, [allSectionKeys, profile])
-  const totalSections = allSectionKeys.length
   const sectionsMap = useMemo(() => {
-    const map = new Map()
-    ;(profile.sections ?? []).forEach((section) => {
-      map.set(section.section_key, section)
-    })
-    return map
+    return normalizeProfileSections(profile.sections)
   }, [profile.sections])
 
   const fileInputRef = useRef(null)
@@ -641,12 +626,9 @@ export default function ProfileOverview({
     }
   }
 
-  const completedSections = useMemo(() => {
-    return Array.from(sectionsMap.values()).filter((section) => {
-      const entries = Object.entries(section?.data ?? {}).map(normalizeEntry).filter(Boolean)
-      return entries.length > 0
-    }).length
-  }, [sectionsMap])
+  const profileCompletion = useMemo(() => calculateProfileCompletion(profile), [profile])
+  const totalSections = profileCompletion.totalSections
+  const completedSections = profileCompletion.completedSections
 
   const lastUpdated = profile.updated_at ? format(new Date(profile.updated_at), "PPP p") : "Not recorded"
   const relativeUpdated = profile.updated_at

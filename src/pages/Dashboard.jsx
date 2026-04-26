@@ -44,6 +44,7 @@ import { useSavedGrantsStore } from "@/stores/savedGrantsStore"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Star, User, CheckCircle2, ArrowRight } from "lucide-react"
 import { Progress } from "@/components/ui/progress"
+import { calculateProfileCompletion } from "@/utils/profileCompletion"
 
 /** Resolves last-visited page from preferences (source of truth) or localStorage (fallback). */
 function DashboardContinueOrStart({ profilesLength, urgentDeadlines, activeGrants, hasGrants }) {
@@ -85,21 +86,10 @@ function EngagementRow({ profileDetail, activeGrants, urgentDeadlines }) {
     if (!synced) sync()
   }, [synced, sync])
 
-  // Profile completion
-  const sections = profileDetail?.sections
-  let filledCount = 0
-  let totalCount = 0
-  if (Array.isArray(sections)) {
-    totalCount = sections.length
-    for (const s of sections) {
-      if (!s?.data || typeof s.data !== 'object') continue
-      const hasValue = Object.values(s.data).some((v) =>
-        v !== null && v !== undefined && v !== '' && v !== false && !(Array.isArray(v) && v.length === 0)
-      )
-      if (hasValue) filledCount++
-    }
-  }
-  const completionPct = totalCount > 0 ? Math.round((filledCount / totalCount) * 100) : 0
+  const profileCompletion = useMemo(() => calculateProfileCompletion(profileDetail), [profileDetail])
+  const filledCount = profileCompletion.completedSections
+  const totalCount = profileCompletion.totalSections
+  const completionPct = profileCompletion.completionPct
 
   // Determine next action
   let nextAction = null
