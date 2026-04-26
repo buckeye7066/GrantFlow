@@ -16,18 +16,18 @@ export default function OrganizationCard({ organization, grantCount, isSelected,
   }, [organization.profile_image_url]);
 
   const ORGANIZATION_TYPES = ['organization', 'nonprofit', 'business', 'government'];
-const isOrganization = ORGANIZATION_TYPES.includes(organization.applicant_type);
-const isUnknownType = !organization.applicant_type || (!isOrganization && !isStudent && !isIndividual);
+  const isOrganization = ORGANIZATION_TYPES.includes(organization.applicant_type);
   const isStudent = ['high_school_student', 'college_student', 'graduate_student'].includes(organization.applicant_type);
   const isIndividual = [
-  'individual_need',
-  'medical_assistance',
-  'family',
-  'veteran',
-  'caregiver',
-  'disabled_person',
-  'emergency_affected'
-].includes(organization.applicant_type);
+    'individual_need',
+    'medical_assistance',
+    'family',
+    'veteran',
+    'caregiver',
+    'disabled_person',
+    'emergency_affected'
+  ].includes(organization.applicant_type);
+  const isUnknownType = !organization.applicant_type || (!isOrganization && !isStudent && !isIndividual);
 
   const { data: taxonomyItems = [] } = useQuery({
       queryKey: ['taxonomy', organization.applicant_type],
