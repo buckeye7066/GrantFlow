@@ -1,12 +1,12 @@
 import React from "react"
 import { useMutation } from "@tanstack/react-query"
 import { Bell, BellRing, CalendarClock, FileSearch, Sparkles, Loader2 } from "lucide-react"
-import { format, formatDistanceToNow } from "date-fns"
+import { format } from "date-fns"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Skeleton } from "@/components/ui/skeleton"
-import { parseDateSafe } from "@/components/shared/dateUtils"
+import { formatDistanceToNowSafe, parseDateSafe } from "@/components/shared/dateUtils"
 import { cn } from "@/lib/utils"
 import { generateReminderPlan } from "@/api/dashboard"
 
@@ -112,10 +112,8 @@ export default function ReminderCenterCard({
     })
   }
 
-  const planGeneratedLabel =
-    planGeneratedAt !== null
-      ? `Generated ${formatDistanceToNow(new Date(planGeneratedAt), { addSuffix: true })}`
-      : null
+  const planGeneratedDistance = formatDistanceToNowSafe(planGeneratedAt, { addSuffix: true })
+  const planGeneratedLabel = planGeneratedDistance ? `Generated ${planGeneratedDistance}` : null
 
   const enrichDeadline = (deadline) => {
     const parsed = parseDateSafe(deadline.deadline)

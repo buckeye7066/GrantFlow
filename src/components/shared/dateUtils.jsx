@@ -1,3 +1,5 @@
+import { formatDistanceToNow } from "date-fns";
+
 /**
  * Safely parse a date string and return a Date object or null
  * @param {string | Date | null | undefined} dateInput - The date to parse
@@ -30,4 +32,17 @@ export function parseDateSafe(dateInput) {
  */
 export function isValidDate(dateInput) {
   return parseDateSafe(dateInput) !== null;
+}
+
+/**
+ * Safely format relative time. date-fns throws RangeError for Invalid Date;
+ * callers should get null and skip the label instead of crashing a route.
+ * @param {string | Date | null | undefined} dateInput
+ * @param {object} options
+ * @returns {string | null}
+ */
+export function formatDistanceToNowSafe(dateInput, options) {
+  const date = parseDateSafe(dateInput);
+  if (!date) return null;
+  return formatDistanceToNow(date, options);
 }
