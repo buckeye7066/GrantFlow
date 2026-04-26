@@ -1,12 +1,12 @@
 import express from 'express'
 import crypto from 'crypto'
-import { requireAuthenticatedUser, ensureGrantAccess, getAccessibleOrganizationIds, ensureProfileAccess } from '../utils/accessControl.js'
+import { requireAuthenticatedUser, requireAuthenticatedUserMiddleware, ensureGrantAccess, getAccessibleOrganizationIds, ensureProfileAccess } from '../utils/accessControl.js'
 
 import { createLogger } from '../utils/logger.js'
 const routeLogger = createLogger('route:budgets')
 
 const router = express.Router()
-router.use(requireAuthenticatedUser)
+router.use(requireAuthenticatedUserMiddleware)
 
 function safeJsonParse(value, fallback) {
   try {

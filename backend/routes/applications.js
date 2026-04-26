@@ -5,6 +5,7 @@ import {
   ensureGrantAccess,
   ensureOrganizationAccess,
   requireAuthenticatedUser,
+  requireAuthenticatedUserMiddleware,
   getAuthUserId,
 } from '../utils/accessControl.js'
 import {
@@ -27,7 +28,7 @@ import { createLogger } from '../utils/logger.js'
 const routeLogger = createLogger('route:applications')
 
 const router = express.Router()
-router.use(requireAuthenticatedUser)
+router.use(requireAuthenticatedUserMiddleware)
 
 async function ensureApplicationAccess(req, res, applicationId) {
   const userId = getAuthUserId(req?.user ?? req?.ctx)

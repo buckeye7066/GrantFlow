@@ -1,6 +1,6 @@
 import express from 'express'
 import { AUDIT_CATEGORIES, SEVERITY, logAuditEvent } from '../services/auditService.js'
-import { requireAuthenticatedUser } from '../utils/accessControl.js'
+import { requireAuthenticatedUserMiddleware } from '../utils/accessControl.js'
 import { standardRateLimiter } from '../middleware/rateLimiting.js'
 
 import { createLogger } from '../utils/logger.js'
@@ -8,11 +8,7 @@ const routeLogger = createLogger('route:activity')
 
 const router = express.Router()
 
-router.use(standardRateLimiter, (req, res, next) => {
-  const user = requireAuthenticatedUser(req, res)
-  if (!user) return
-  next()
-})
+router.use(standardRateLimiter, requireAuthenticatedUserMiddleware)
 
 function isAuthenticatedFromCtx(ctx) {
   return Boolean(ctx && (ctx.userId || ctx.activeProfileId || ctx.email))

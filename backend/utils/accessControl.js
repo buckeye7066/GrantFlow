@@ -155,6 +155,13 @@ export function requireAuthenticatedUser(req, res) {
   return user
 }
 
+export function requireAuthenticatedUserMiddleware(req, res, next) {
+  const user = requireAuthenticatedUser(req, res)
+  if (!user) return
+  req.user = req.user ?? user
+  return next()
+}
+
 export function getAuthUserId(user) {
   return user?.userId ?? user?.id ?? user?.user_id ?? null
 }

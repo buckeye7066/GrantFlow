@@ -6,7 +6,7 @@
  */
 
 import express from 'express'
-import { requireAuthenticatedUser } from '../utils/accessControl.js'
+import { requireAuthenticatedUser, requireAuthenticatedUserMiddleware } from '../utils/accessControl.js'
 import * as propublica from '../src/integrations/propublica990.js'
 import * as nsf from '../src/integrations/nsfAwards.js'
 import * as samAL from '../src/integrations/samAssistanceListings.js'
@@ -237,7 +237,7 @@ router.get('/calendar/deadlines', async (req, res) => {
 })
 
 // ── Reverse-Lookup: "Find Funders Like You" ─────────────────────────────────
-router.post('/reverse-lookup', requireAuthenticatedUser, async (req, res) => {
+router.post('/reverse-lookup', requireAuthenticatedUserMiddleware, async (req, res) => {
   try {
     const { profile_id } = req.body ?? {}
     if (!profile_id) return res.status(400).json({ error: 'profile_id required' })

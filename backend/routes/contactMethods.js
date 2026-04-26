@@ -1,12 +1,12 @@
 import express from 'express'
 import crypto from 'crypto'
-import { requireAuthenticatedUser, ensureOrganizationAccess, getAccessibleOrganizationIds } from '../utils/accessControl.js'
+import { requireAuthenticatedUser, requireAuthenticatedUserMiddleware, ensureOrganizationAccess, getAccessibleOrganizationIds } from '../utils/accessControl.js'
 
 import { createLogger } from '../utils/logger.js'
 const routeLogger = createLogger('route:contactMethods')
 
 const router = express.Router()
-router.use(requireAuthenticatedUser)
+router.use(requireAuthenticatedUserMiddleware)
 
 function normalizeLimit(val, fallback = 200) {
   const n = Number.parseInt(String(val ?? ''), 10)
