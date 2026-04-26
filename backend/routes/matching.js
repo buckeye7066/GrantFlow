@@ -15,6 +15,7 @@ import {
   applyFundableOpportunityNormalization,
   evaluateFundableOpportunity,
 } from '../services/matching/qualityGate.js'
+import { deriveMatchReasonCodes } from '../services/matching/reasons.js'
 
 import { createLogger } from '../utils/logger.js'
 const routeLogger = createLogger('route:matching')
@@ -194,6 +195,8 @@ router.get('/profile/:profileId/grants', async (req, res) => {
                                      const decision = computeMatchDecision(profileNormForDecision, candidate)
                                      // Don't surface hard REJECTS in the grants view either
                                      if (decision.decision === 'REJECT') return null
+                                     const matchReasons = deriveMatchReasonCodes(decision, candidate)
+                                     if (matchReasons.length === 0) return null
               return {
                         grant_id: row.grant_id,
                         title: row.grant_title,
@@ -202,7 +205,7 @@ router.get('/profile/:profileId/grants', async (req, res) => {
                         deadline: row.grant_deadline,
                         funding_opportunity_id: row.funding_opportunity_id ?? null,
                         match_score: decision.score,
-                        match_reasons: decision.matchedNeeds ?? [],
+                        match_reasons: matchReasons,
                         match_decision: decision.decision,
                         match_explanation: decision.explanation,
               }
@@ -364,7 +367,7 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
                              )
                      .all(...params, limit)
 
-      const rejectStats = { quality: 0, junk: 0, reject: 0, rejectDirectoryPreserved: 0, trust: 0 }
+      const rejectStats = { quality: 0, junk: 0, reject: 0, rejectDirectoryPreserved: 0, trust: 0, noReason: 0 }
       const qualityDropReasons = {}
       const referralTemplates = new Map()
       const candidates = []
@@ -458,6 +461,11 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
                                     decision.decision = 'REVIEW'
                                     decision.explanation = (decision.explanation || '') + ' (directory preserved as REVIEW)'
                                   }
+                                  const matchReasons = deriveMatchReasonCodes(decision, opp, trust)
+                                  if (matchReasons.length === 0) {
+                                    rejectStats.noReason++
+                                    return null
+                                  }
 
                                   // Soft downgrade for stale/non-official rows.
                                   const adjustedScore = trust.downgrade
@@ -467,7 +475,7 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
                                return {
                                            ...opp,
                                            match_score: adjustedScore,
-                                           match_reasons: decision.matchedNeeds ?? [],
+                                           match_reasons: matchReasons,
                                            match_decision: decision.decision,
                                            match_explanation: decision.explanation,
                                            trust_tier: trust.trustTier,
@@ -487,7 +495,7 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
                                }
                      })
                      .filter((opp) => opp !== null)
-      if (rejectStats.quality || rejectStats.junk || rejectStats.reject || rejectStats.rejectDirectoryPreserved || rejectStats.trust) {
+      if (rejectStats.quality || rejectStats.junk || rejectStats.reject || rejectStats.rejectDirectoryPreserved || rejectStats.trust || rejectStats.noReason) {
         routeLogger.info(`[matching] candidates=${rawCandidates.length} quality_candidates=${candidates.length} scored=${allScored.length} referrals=${referralTemplates.size} drops=${JSON.stringify(rejectStats)} quality_reasons=${JSON.stringify(qualityDropReasons)} trust_reasons=${JSON.stringify(trustDropReasons)}`)
       }
 
@@ -561,6 +569,9 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
               returned: capped.length,
               opportunities: capped,
               referrals: Array.from(referralTemplates.values()),
+              diagnostics: {
+                dropped_for_no_reason: rejectStats.noReason,
+              },
               score_hint: allScored._scoreHint || null,
               threshold_relaxed: effectiveMinScore !== minScore ? true : undefined,
               threshold_relaxed_reason: relaxedReason || undefined,

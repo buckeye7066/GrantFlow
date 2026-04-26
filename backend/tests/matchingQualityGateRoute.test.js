@@ -141,6 +141,9 @@ describe('matching quality gate route', () => {
         'communityactionpartnership.com/find-a-cap',
         'example.org/foundation-locator',
       ])
+      expect(response.body.diagnostics.dropped_for_no_reason).toBe(0)
+      expect(response.body.opportunities.length).toBeGreaterThan(0)
+      expect(response.body.opportunities.every((opp) => Array.isArray(opp.match_reasons) && opp.match_reasons.length > 0)).toBe(true)
     } finally {
       db.close()
     }
