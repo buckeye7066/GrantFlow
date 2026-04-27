@@ -32,7 +32,7 @@ describe("ProfileOverview display rendering", () => {
     const { container } = render(<div>{renderValue("schools", [{ name: "Central High" }], "education")}</div>)
 
     expect(container.textContent).not.toContain("[object Object]")
-    expect(container.textContent).toContain("Item 1 Name")
+    expect(container.textContent).toContain("name: Central High")
     expect(container.textContent).toContain("Central High")
   })
 

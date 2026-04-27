@@ -144,11 +144,12 @@ function coerceBooleanTri(value) {
   if (value === null || value === undefined || value === '') return null
   if (typeof value === 'boolean') return value
   if (typeof value === 'number') return value === 1 ? true : value === 0 ? false : null
+  if (typeof value === 'object') return undefined
   const normalized = String(value).trim().toLowerCase()
   if (['true', 'yes', 'y', '1'].includes(normalized)) return true
   if (['false', 'no', 'n', '0'].includes(normalized)) return false
   if (['unknown', 'n/a', 'none', 'null', 'undefined'].includes(normalized)) return null
-  return null
+  return undefined
 }
 
 function reject(rejected, key, reason, extra = {}) {
@@ -160,6 +161,46 @@ export function deriveEmploymentStatusForSave(sectionKey, values, profile, secti
   if (values?.current_status && values.current_status !== 'unknown') return values
   if (isHighSchoolProfile(profile, sections)) return { ...values, current_status: 'student' }
   return values
+}
+
+function coerceFieldValue(value, field) {
+  const format = field?.format ?? 'string'
+  if (value === null || value === undefined || value === '') return { ok: true, value: value === '' ? '' : value }
+  if (format === 'boolean_tri') {
+    const coerced = coerceBooleanTri(value)
+    return coerced === undefined ? { ok: false } : { ok: true, value: coerced }
+  }
+  if (format === 'currency_usd' || format === 'currency_cents_usd' || format === 'percent') {
+    if (typeof value === 'number' && Number.isFinite(value)) return { ok: true, value }
+    if (typeof value === 'string' && value.trim() && Number.isFinite(Number(value.replace(/[$,%]/g, '')))) {
+      return { ok: true, value: Number(value.replace(/[$,%]/g, '')) }
+    }
+    return { ok: false }
+  }
+  if (format === 'string_array') {
+    if (Array.isArray(value)) return { ok: true, value: value.map((entry) => String(entry)).filter(Boolean) }
+    if (typeof value === 'string') return { ok: true, value: value.split(',').map((entry) => entry.trim()).filter(Boolean) }
+    return { ok: false }
+  }
+  if (format === 'json') {
+    if (typeof value === 'object') return { ok: true, value }
+    if (typeof value === 'string') {
+      const trimmed = value.trim()
+      if (!trimmed) return { ok: true, value: '' }
+      try {
+        return { ok: true, value: JSON.parse(trimmed) }
+      } catch {
+        return { ok: true, value }
+      }
+    }
+    return { ok: false }
+  }
+  if (['text', 'long_text', 'url', 'email', 'phone', 'enum', 'date', 'datetime', 'string'].includes(format)) {
+    if (typeof value === 'string') return { ok: true, value }
+    return { ok: false }
+  }
+  if (typeof value === 'string') return { ok: true, value }
+  return { ok: false }
 }
 
 export function guardProfileSectionPayload(data, { profile, sections = {}, sectionKey, existing = {}, metadata = SECTION_METADATA } = {}) {
@@ -176,12 +217,24 @@ export function guardProfileSectionPayload(data, { profile, sections = {}, secti
     const key = selfTargetFor(rawKey)
     const field = fieldMap?.get(key)
     if (fieldMap && !field) {
-      reject(rejected, rawKey, 'unknown_key', { evidence: evidenceFor(payload, rawKey) })
+      reject(rejected, rawKey, 'unknown_field', { evidence: evidenceFor(payload, rawKey) })
       continue
     }
 
-    let value = rawValue
-    if (field?.format === 'boolean_tri') value = coerceBooleanTri(value)
+    const coerced = coerceFieldValue(rawValue, field)
+    if (!coerced.ok) {
+      reject(rejected, key, 'format_mismatch', { expected: field?.format ?? 'string', evidence: evidenceFor(payload, rawKey) })
+      continue
+    }
+    let value = coerced.value
+
+    if (field?.applies_to_field) {
+      const dependencyValue = payload[field.applies_to_field] ?? guarded[field.applies_to_field] ?? sections?.[sectionKey]?.[field.applies_to_field]
+      if (dependencyValue !== true) {
+        reject(rejected, key, 'field_not_applicable', { depends_on: field.applies_to_field })
+        continue
+      }
+    }
 
     if (field?.format === 'enum' && Array.isArray(field.options) && typeof value === 'string' && value) {
       if (!field.options.includes(value)) {

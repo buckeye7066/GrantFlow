@@ -41,6 +41,7 @@ import {
 } from "@/utils/profileCompletion"
 import {
   formatFieldLabel,
+  formatFieldValue,
   formatStatusLabel,
   getFieldFormat,
   isSentinelDisplayValue,
@@ -199,7 +200,7 @@ export function flattenObjectEntries(obj, { maxDepth = 2, depth = 0, prefix = ""
   const entries = []
   for (const [key, inner] of Object.entries(obj)) {
     if (!hasMeaningfulProfileValue(inner)) continue
-    const label = formatFieldLabel(key, sectionKey)
+    const label = String(key).replace(/[_-]+/g, " ")
     const nextKey = prefix ? `${prefix}.${label}` : label
     const inline = formatInlinePreviewValue(inner)
     if (inline !== null) {
@@ -316,94 +317,25 @@ function renderScalarValue(value, className = "text-sm text-slate-900") {
 }
 
 export function renderValue(fieldKey, value, sectionKey) {
+  const formatted = formatFieldValue(sectionKey, fieldKey, value)
   const formatHint = getFieldFormat(sectionKey, fieldKey)
-  if (formatHint === "boolean_tri" || typeof value === "boolean") {
-    return renderBooleanTri(value)
-  }
-
-  if (formatHint === "currency_usd" || formatHint === "currency_cents_usd") {
-    const formatted = formatCurrency(value, { cents: formatHint === "currency_cents_usd" })
-    return formatted ? <span className="text-sm font-medium text-slate-900">{formatted}</span> : renderScalarValue(value)
-  }
-
-  if (formatHint === "percent") {
-    const amount = Number(value)
-    return Number.isFinite(amount) ? <span className="text-sm text-slate-900">{`${amount}%`}</span> : renderScalarValue(value)
-  }
-
-  if (formatHint === "date" || formatHint === "datetime") {
-    const formatted = formatDateValue(value, { includeTime: formatHint === "datetime" })
-    return formatted ? <span className="text-sm text-slate-900">{formatted}</span> : <span className="text-sm text-slate-500">—</span>
-  }
-
-  if (["url", "email", "phone", "enum"].includes(formatHint)) {
-    const normalized = normalizeDisplayString(value)
-    if (!normalized) return <span className="text-sm text-slate-500">—</span>
-    const label = formatHint === "enum" ? formatStatusLabel(normalized) : normalized
-    if (formatHint === "url") {
-      return (
-        <a href={normalized} className="text-sm text-blue-700 underline break-all" onClick={(event) => event.stopPropagation()}>
-          {label}
-        </a>
-      )
-    }
-    if (formatHint === "email") {
-      return (
-        <a href={`mailto:${normalized}`} className="text-sm text-blue-700 underline" onClick={(event) => event.stopPropagation()}>
-          {label}
-        </a>
-      )
-    }
-    return <span className="text-sm text-slate-900">{label}</span>
-  }
-
-  if (Array.isArray(value)) {
-    const hasComplexItems = value.some((item) => item && typeof item === "object")
-    if (hasComplexItems) {
-      const flattened = value.flatMap((item, index) => {
-        if (!item || typeof item !== "object") {
-          const inline = formatInlinePreviewValue(item)
-          return inline === null ? [] : [[`Item ${index + 1}`, inline]]
-        }
-        return flattenObjectEntries(item, { maxDepth: 2, prefix: `Item ${index + 1}`, sectionKey })
-      })
-      return renderFlattenedPreview(flattened)
-    }
-
-    const values = value.map(normalizeDisplayString).filter(Boolean)
-    if (values.length === 0) return <span className="text-sm text-slate-500">—</span>
+  if (formatHint === "boolean_tri") return renderBooleanTri(value)
+  if (formatted === "—") return <span className="text-sm text-slate-500">—</span>
+  if (formatHint === "url") {
     return (
-      <div className="flex flex-wrap justify-end gap-1">
-        {values.map((item, index) => (
-          <Badge key={`${item}-${index}`} variant="secondary" className="text-xs">
-            {item}
-          </Badge>
-        ))}
-      </div>
+      <a href={formatted} className="text-sm text-blue-700 underline break-all" onClick={(event) => event.stopPropagation()}>
+        {formatted}
+      </a>
     )
   }
-
-  if (typeof value === "object") {
-    if (looksLikeAddressObject(value)) {
-      const formatted = formatAddressObject(value)
-      if (formatted) {
-        return (
-          <div className="max-w-[280px] rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-left text-xs text-slate-700 whitespace-pre-line">
-            {formatted}
-          </div>
-        )
-      }
-    }
-
-    const flattened = flattenObjectEntries(value, { maxDepth: 2, sectionKey })
-    return renderFlattenedPreview(flattened)
+  if (formatHint === "email") {
+    return (
+      <a href={`mailto:${formatted}`} className="text-sm text-blue-700 underline" onClick={(event) => event.stopPropagation()}>
+        {formatted}
+      </a>
+    )
   }
-
-  if (String(value).includes("[object Object]")) {
-    console.warn("[ProfileOverview] Refusing to render object string", { sectionKey, fieldKey, value })
-  }
-
-  return renderScalarValue(value)
+  return <span className={formatHint === "currency_usd" || formatHint === "currency_cents_usd" ? "text-sm font-medium text-slate-900" : "text-sm text-slate-900"}>{formatted}</span>
 }
 
 function formatCurrencyFromCents(cents) {
@@ -528,7 +460,7 @@ function SectionPreview({
                 <SectionIcon className="w-4 h-4" />
               </span>
               <CardTitle className="text-base font-semibold text-slate-900">
-                {config?.title ?? formatFieldLabel(sectionKey)}
+                {config?.title ?? sectionKey}
               </CardTitle>
             </div>
             {config?.description ? (
@@ -549,7 +481,7 @@ function SectionPreview({
               </div>
             ) : null}
             {dataEntries.slice(0, 8).map(([key, value]) => {
-              const label = formatFieldLabel(key, sectionKey)
+              const label = formatFieldLabel(sectionKey, key)
               const formatHint = getFieldFormat(sectionKey, key)
               const isTriState = formatHint === "boolean_tri"
               const isBoolean = typeof value === "boolean" || isTriState

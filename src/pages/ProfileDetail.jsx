@@ -100,7 +100,7 @@ export default function ProfileDetail() {
           rejected.length > 0
             ? rejected
                 .slice(0, 3)
-                .map((item) => `Skipped ${formatFieldLabel(item.key, variables?.sectionKey)}: ${item.reason.replace(/_/g, " ")}`)
+                .map((item) => `Skipped ${formatFieldLabel(variables?.sectionKey, item.key)}: ${item.reason.replace(/_/g, " ")}`)
                 .join("; ")
             : "Your updates are synced with the comprehensive application schema.",
       })
@@ -247,7 +247,7 @@ export default function ProfileDetail() {
             title: "Skipped unsupported fields",
             description: guarded.rejected
               .slice(0, 3)
-              .map((item) => `Skipped ${formatFieldLabel(item.key, key)}: ${item.reason.replace(/_/g, " ")}`)
+              .map((item) => `Skipped ${formatFieldLabel(key, item.key)}: ${item.reason.replace(/_/g, " ")}`)
               .join("; "),
           })
         }
@@ -323,7 +323,7 @@ export default function ProfileDetail() {
           title: "Skipped unsupported AI fields",
           description: guarded.rejected
             .slice(0, 3)
-            .map((item) => `Skipped ${formatFieldLabel(item.key, editingSection.key)}: ${item.reason.replace(/_/g, " ")}`)
+            .map((item) => `Skipped ${formatFieldLabel(editingSection.key, item.key)}: ${item.reason.replace(/_/g, " ")}`)
             .join("; "),
         })
       }

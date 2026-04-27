@@ -72,4 +72,18 @@ export default [
       'no-console': ['warn', { allow: ['warn', 'error'] }],
     },
   },
+  {
+    files: ['src/**/*.{js,jsx}', 'backend/**/*.js', 'shared/**/*.js'],
+    ignores: ['src/utils/fieldDisplay.js'],
+    rules: {
+      'no-restricted-syntax': [
+        'error',
+        {
+          selector:
+            "FunctionDeclaration[id.name=/^(titleCase|toTitleCase)$/], VariableDeclarator[id.name=/^(titleCase|toTitleCase)$/]",
+          message: 'Profile field labels must come from SECTION_METADATA via src/utils/fieldDisplay.js.',
+        },
+      ],
+    },
+  },
 ]

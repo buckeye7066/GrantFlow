@@ -93,7 +93,8 @@ function normalizeInitialData(config, initialData) {
   if (!config) return {}
   if (!initialData || typeof initialData !== 'object') return {}
 
-  const out = { ...initialData }
+  const allowed = new Set((config.fields ?? []).map((field) => field.name))
+  const out = Object.fromEntries(Object.entries(initialData).filter(([key]) => allowed.has(key)))
 
   for (const field of config.fields ?? []) {
     if (!field?.name) continue
@@ -1407,12 +1408,38 @@ export const SECTION_CONFIG = {
   },
 }
 
-// Enforce SECTION_METADATA as the single source of truth for titles and descriptions.
-// Any update to sectionMetadata.js automatically propagates here at module load time.
+function buildMetadataSchema(meta) {
+  return z.object(Object.fromEntries((meta?.fields ?? []).map((field) => [field.name, z.any().optional()])))
+}
+
+function fieldConfigFromMetadata(field, existingField) {
+  const format = field.format ?? "text"
+  const component = existingField?.component ?? (format === "long_text" || format === "json" ? Textarea : Input)
+  const props = existingField?.props ?? (format === "long_text" || format === "json" ? { rows: 3 } : {})
+  return {
+    ...existingField,
+    name: field.name,
+    label: field.label,
+    description: field.help,
+    component,
+    props,
+    type: existingField?.type ?? (format === "boolean_tri" ? "boolean" : format === "json" ? "json" : undefined),
+    format,
+  }
+}
+
+// Enforce SECTION_METADATA as the single source of truth for titles, descriptions, schemas, and fields.
 for (const [key, meta] of Object.entries(SECTION_METADATA)) {
-  if (key in SECTION_CONFIG) {
-    SECTION_CONFIG[key].title = meta.title
-    SECTION_CONFIG[key].description = meta.description
+  const existing = SECTION_CONFIG[key] ?? {}
+  const existingFields = new Map((existing.fields ?? []).map((field) => [field.name, field]))
+  const metadataFields = (meta.fields ?? []).map((field) => fieldConfigFromMetadata(field, existingFields.get(field.name)))
+  SECTION_CONFIG[key] = {
+    ...existing,
+    title: meta.title,
+    description: meta.description,
+    schema: buildMetadataSchema(meta),
+    defaults: Object.fromEntries(metadataFields.map((field) => [field.name, existing.defaults?.[field.name] ?? ""])),
+    fields: metadataFields,
   }
 }
 
@@ -1431,6 +1458,9 @@ export default function ProfileSectionEditor({
   const normalizedData = config ? normalizeInitialData(config, initialData) : {}
   const initialValues = config ? { ...defaults, ...(normalizedData ?? {}) } : {}
   const hiddenFields = Array.isArray(config?.hidden_fields) ? config.hidden_fields : []
+  const metadataFieldNames = new Set((config?.fields ?? []).map((field) => field.name))
+  const legacyEntries = Object.entries(initialData ?? {}).filter(([key]) => !metadataFieldNames.has(key))
+  const [dropLegacyOnSave, setDropLegacyOnSave] = useState(true)
   const [aiStatus, setAiStatus] = useState('idle')
   const [aiError, setAiError] = useState(null)
 
@@ -1442,13 +1472,15 @@ export default function ProfileSectionEditor({
   useEffect(() => {
     if (config) {
       form.reset({ ...defaults, ...(normalizeInitialData(config, initialData) ?? {}) })
+      setDropLegacyOnSave(true)
       setAiStatus('idle')
       setAiError(null)
     }
   }, [config, defaults, initialData, form])
 
   const handleSubmit = form.handleSubmit((values) => {
-    onSave(values)
+    const legacyValues = dropLegacyOnSave ? {} : Object.fromEntries(legacyEntries)
+    onSave({ ...legacyValues, ...values })
   })
 
   const handleAskAI = async () => {
@@ -1565,6 +1597,24 @@ export default function ProfileSectionEditor({
                   )}
                 />
               ))}
+
+              {legacyEntries.length > 0 ? (
+                <details className="rounded-lg border border-amber-200 bg-amber-50/60 p-3">
+                  <summary className="cursor-pointer text-sm font-medium text-amber-900">Legacy fields</summary>
+                  <div className="mt-3 space-y-3 text-sm text-amber-900">
+                    <p>These saved keys are not declared in SECTION_METADATA and will not be shown as editable inputs.</p>
+                    <div className="flex items-center justify-between gap-3 rounded-md bg-white/70 p-2">
+                      <Label htmlFor="drop-legacy-fields">Drop on save</Label>
+                      <Switch id="drop-legacy-fields" checked={dropLegacyOnSave} onCheckedChange={setDropLegacyOnSave} />
+                    </div>
+                    <ul className="list-disc space-y-1 pl-5">
+                      {legacyEntries.map(([key]) => (
+                        <li key={key}>{key}</li>
+                      ))}
+                    </ul>
+                  </div>
+                </details>
+              ) : null}
 
               {config.fields.map((field) => {
                 if (field.type === 'boolean') {

@@ -68,7 +68,30 @@ describe("backend profileSuggestionGuards", () => {
     )
 
     expect(result.data.missionary_evangelist).toBeUndefined()
-    expect(result.rejected).toContainEqual(expect.objectContaining({ key: "missionary_evangelist", reason: "unknown_key" }))
+    expect(result.rejected).toContainEqual(expect.objectContaining({ key: "missionary_evangelist", reason: "unknown_field" }))
+  })
+
+  it("rejects format mismatches and accepts declared string fields", () => {
+    expect(
+      guardProfileSectionPayload(
+        { foo_bar: 1 },
+        { sectionKey: "narrative", profile: { primary_type: "individual" } },
+      ).rejected,
+    ).toContainEqual(expect.objectContaining({ key: "foo_bar", reason: "unknown_field" }))
+
+    expect(
+      guardProfileSectionPayload(
+        { primary_goal: "x" },
+        { sectionKey: "narrative", profile: { primary_type: "individual" } },
+      ).data.primary_goal,
+    ).toBe("x")
+
+    expect(
+      guardProfileSectionPayload(
+        { primary_goal: 42 },
+        { sectionKey: "narrative", profile: { primary_type: "individual" } },
+      ).rejected,
+    ).toContainEqual(expect.objectContaining({ key: "primary_goal", reason: "format_mismatch" }))
   })
 
   it("keeps frontend and backend wrappers identical", () => {
