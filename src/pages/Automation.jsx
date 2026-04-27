@@ -48,6 +48,7 @@ import { getAnyaProfileTasks, updateAnyaTask } from "@/lib/anyaClient"
 import PipelineAutomationPanel from "@/components/pipeline/PipelineAutomationPanel"
 import CrawlerProgressMeter from "@/components/automation/CrawlerProgressMeter"
 import { SECTION_METADATA } from "@/config/sectionMetadata"
+import { getApplicableSectionKeys } from "@/utils/profileCompletion"
 
 async function startGeoCrawl(payload) {
   return apiFetch("/api/geo-crawl/start", {
@@ -1624,11 +1625,11 @@ export default function Automation() {
 
   const sectionOptions = useMemo(
     () =>
-      Object.keys(SECTION_METADATA).map((key) => ({
+      getApplicableSectionKeys(profileDetailQuery.data).map((key) => ({
         key,
         label: SECTION_METADATA[key]?.title ?? key.replace(/_/g, " "),
       })),
-    [],
+    [profileDetailQuery.data],
   )
 
   const createJobMutation = useMutation({

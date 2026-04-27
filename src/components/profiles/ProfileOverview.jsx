@@ -34,7 +34,11 @@ import { SECTION_METADATA } from "@/config/sectionMetadata"
 import { useDashboardPreferences } from "@/contexts/DashboardPreferencesContext.jsx"
 import EditableField from "@/components/shared/EditableField.jsx"
 import { useAuthenticatedAvatar } from "@/hooks/useAuthenticatedAvatar"
-import { calculateProfileCompletion, isProfileSectionApplicable, normalizeProfileSections } from "@/utils/profileCompletion"
+import {
+  calculateProfileCompletion,
+  hasMeaningfulProfileValue,
+  normalizeProfileSections,
+} from "@/utils/profileCompletion"
 
 const SECTION_ICONS = {
   basic_information: UserCircle,
@@ -116,13 +120,7 @@ function toEditableStringForField(fieldKey, value) {
 }
 
 function normalizeEntry([key, value]) {
-  if (value === "" || value === null || value === undefined) {
-    return null
-  }
-  if (Array.isArray(value) && value.length === 0) {
-    return null
-  }
-  return [key, value]
+  return hasMeaningfulProfileValue(value) ? [key, value] : null
 }
 
 function isPlainObject(value) {
@@ -375,7 +373,7 @@ function SectionPreview({
   const dataEntries = Object.entries(section?.data ?? {})
     .map(normalizeEntry)
     .filter(Boolean)
-  const hasData = dataEntries.length > 0
+  const hasData = Object.values(section?.data ?? {}).some(hasMeaningfulProfileValue)
 
   const isInteractive = Boolean(onEdit) && !isSaving && !isAIProcessing
   const canInlineEdit = Boolean(onSaveField) && !isSaving && !isAIProcessing
@@ -523,7 +521,7 @@ function SectionPreview({
         <div className="flex items-center justify-between gap-3 text-xs text-slate-400">
           <span className="flex items-center gap-2">
             <CalendarClock className="w-3.5 h-3.5" />
-            {section?.updated_at
+            {hasData && section?.updated_at
               ? `Updated ${formatDistanceToNow(new Date(section.updated_at), { addSuffix: true })}`
               : "Not updated yet"}
           </span>
@@ -580,7 +578,6 @@ export default function ProfileOverview({
   isUploadingDocument,
   fundsTotal = 0,
   billing = null,
-  showAllSections = false,
   onNavigateToUniversities,
 }) {
   const { state: dashboardPrefs } = useDashboardPreferences()
@@ -592,10 +589,8 @@ export default function ProfileOverview({
   }
   const gridColumnsClass = columnMap[dashboardPrefs.layoutColumns] ?? "md:grid-cols-2"
   const gapClass = dashboardPrefs.layoutStyle === "compact" ? "gap-4" : "gap-6"
-  const allSectionKeys = useMemo(() => Object.keys(SECTION_METADATA), [])
-  const applicableSectionKeys = useMemo(() => {
-    return allSectionKeys.filter((key) => isProfileSectionApplicable(key, profile))
-  }, [allSectionKeys, profile])
+  const profileCompletion = useMemo(() => calculateProfileCompletion(profile), [profile])
+  const applicableSectionKeys = profileCompletion.applicableSectionKeys
   const sectionsMap = useMemo(() => {
     return normalizeProfileSections(profile.sections)
   }, [profile.sections])
@@ -669,7 +664,6 @@ export default function ProfileOverview({
     }
   }
 
-  const profileCompletion = useMemo(() => calculateProfileCompletion(profile), [profile])
   const totalSections = profileCompletion.totalSections
   const completedSections = profileCompletion.completedSections
 
@@ -725,17 +719,7 @@ export default function ProfileOverview({
     })
   }
 
-  const orderedSectionKeys = useMemo(() => {
-    // Default UX: only show sections relevant to the profile type to avoid redundant questions.
-    // Admins can opt into seeing everything via `showAllSections`.
-    if (!showAllSections) {
-      return applicableSectionKeys
-    }
-    const applicable = new Set(applicableSectionKeys)
-    const applicableFirst = allSectionKeys.filter((key) => applicable.has(key))
-    const rest = allSectionKeys.filter((key) => !applicable.has(key))
-    return [...applicableFirst, ...rest]
-  }, [allSectionKeys, applicableSectionKeys, showAllSections])
+  const orderedSectionKeys = applicableSectionKeys
 
   return (
     <div className="space-y-10">

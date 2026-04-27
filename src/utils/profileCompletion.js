@@ -6,18 +6,25 @@ export function isProfileSectionApplicable(sectionKey, profile, metadata = SECTI
   const appliesTo = config.applies_to ?? config.appliesTo ?? null
   if (!Array.isArray(appliesTo) || appliesTo.length === 0) return true
 
-  const primaryType = profile?.primary_type ?? profile?.primaryType ?? null
-  if (!primaryType) return true
+  const primaryType = String(profile?.primary_type ?? profile?.primaryType ?? "").trim()
+  if (!primaryType) return false
   return appliesTo.includes(primaryType)
 }
 
 export function hasMeaningfulProfileValue(value) {
-  if (value === null || value === undefined || value === "" || value === false) return false
+  if (value === null || value === undefined || value === false) return false
+  if (typeof value === "string") return value.trim().length > 0
   if (Array.isArray(value)) return value.length > 0
   if (typeof value === "object") {
     return Object.values(value).some(hasMeaningfulProfileValue)
   }
   return true
+}
+
+export function getApplicableSectionKeys(profile, metadata = SECTION_METADATA) {
+  return Object.keys(metadata || {}).filter((sectionKey) =>
+    isProfileSectionApplicable(sectionKey, profile, metadata),
+  )
 }
 
 export function normalizeProfileSections(sections) {
@@ -43,9 +50,7 @@ export function normalizeProfileSections(sections) {
 
 export function calculateProfileCompletion(profile, metadata = SECTION_METADATA) {
   const sectionMap = normalizeProfileSections(profile?.sections)
-  const applicableSectionKeys = Object.keys(metadata || {}).filter((sectionKey) =>
-    isProfileSectionApplicable(sectionKey, profile, metadata),
-  )
+  const applicableSectionKeys = getApplicableSectionKeys(profile, metadata)
 
   const completedSectionKeys = applicableSectionKeys.filter((sectionKey) => {
     const section = sectionMap.get(sectionKey)
