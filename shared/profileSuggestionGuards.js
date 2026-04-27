@@ -1,0 +1,236 @@
+import { SECTION_METADATA } from '../src/config/sectionMetadata.js'
+
+const LONG_TEXT_FIELDS = new Set(['notes', 'personal_statement', 'goals', 'mission', 'needs_description'])
+const HOUSEHOLD_EVIDENCE = /\b(dependent child|household (?:member )?receives|parent gets|parent receives|child of|spouse receives)\b/i
+const BENEFIT_BASES = ['medicaid', 'medicare', 'ssi', 'ssdi', 'snap', 'tanf', 'section8']
+const OCCUPATION_FLAGS = new Set([
+  'healthcare_worker',
+  'ems_worker',
+  'educator',
+  'firefighter',
+  'law_enforcement',
+  'public_servant',
+  'clergy',
+  'missionary',
+  'nonprofit_employee',
+  'small_business_owner',
+  'minority_owned_business',
+  'women_owned_business',
+  'union_member',
+  'farmer',
+  'truck_driver',
+  'veteran',
+  'active_duty',
+  'active_duty_military',
+  'reservist',
+  'national_guard',
+  'first_responder',
+])
+
+function normalizeSentence(value) {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/[^\w\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function splitSentences(value) {
+  return String(value || '')
+    .split(/(?<=[.!?])\s+|\n+/)
+    .map((sentence) => sentence.trim())
+    .filter(Boolean)
+}
+
+function jaccard(a, b) {
+  const aTokens = new Set(normalizeSentence(a).split(' ').filter(Boolean))
+  const bTokens = new Set(normalizeSentence(b).split(' ').filter(Boolean))
+  if (aTokens.size === 0 || bTokens.size === 0) return 0
+  const intersection = [...aTokens].filter((token) => bTokens.has(token)).length
+  const union = new Set([...aTokens, ...bTokens]).size
+  return intersection / union
+}
+
+export function dedupeLongText(existingValue, suggestionValue, threshold = 0.85) {
+  const existingSentences = splitSentences(existingValue)
+  const nextSentences = splitSentences(suggestionValue)
+  const additions = nextSentences.filter((candidate) =>
+    existingSentences.every((existing) => jaccard(existing, candidate) < threshold),
+  )
+  return [...existingSentences, ...additions].join(' ').trim()
+}
+
+function evidenceFor(payload, key) {
+  const evidence = payload?.evidence
+  if (evidence && typeof evidence === 'object' && evidence[key]) return String(evidence[key])
+  return String(payload?.[`${key}_evidence`] ?? payload?.supporting_evidence ?? payload?.evidence_text ?? '')
+}
+
+function evidenceText(payload) {
+  const parts = []
+  for (const [key, value] of Object.entries(payload ?? {})) {
+    if (key === 'evidence_text' || key === 'supporting_evidence' || key.endsWith('_evidence')) parts.push(String(value))
+  }
+  if (payload?.evidence && typeof payload.evidence === 'object') {
+    parts.push(...Object.values(payload.evidence).map((value) => String(value)))
+  } else if (typeof payload?.evidence === 'string') {
+    parts.push(payload.evidence)
+  }
+  return parts.join(' ')
+}
+
+function householdTargetFor(key) {
+  for (const base of BENEFIT_BASES) {
+    if (key === `${base}_recipient_self` || key === `${base}_recipient`) return `${base}_recipient_household`
+    if (base === 'medicaid' && key === 'medicaid_enrolled') return 'medicaid_recipient_household'
+    if (base === 'section8' && key === 'section8_housing') return 'section8_recipient_household'
+  }
+  return null
+}
+
+function selfTargetFor(key) {
+  if (key === 'medicaid_enrolled') return 'medicaid_recipient_self'
+  if (key === 'section8_housing') return 'section8_recipient_self'
+  if (key.endsWith('_recipient')) return `${key}_self`
+  return key
+}
+
+export function isHighSchoolProfile(profile, sections = {}) {
+  const primaryType = String(profile?.primary_type || profile?.primaryType || '').toLowerCase()
+  const education = Array.isArray(profile?.sections)
+    ? profile.sections.find((section) => section.section_key === 'education')?.data
+    : sections?.education ?? profile?.sections?.education
+  const highestLevel = String(education?.highest_level || '').toLowerCase()
+  return primaryType === 'high_school_student' || highestLevel.includes('high_school') || highestLevel.includes('high school')
+}
+
+export function hasEmployerEvidence(payload, key) {
+  const evidence = `${evidenceFor(payload, key)} ${evidenceText(payload)}`
+  return /\b(employer|works at|hired by|employed by|job at|start(?:ed)? date|since \d{4}|\d{4}-\d{2}(?:-\d{2})?)\b/i.test(evidence)
+}
+
+function hasAnyEmployerEvidence(payload) {
+  return /\b(employer|works at|hired by|employed by|job at|start(?:ed)? date|since \d{4}|\d{4}-\d{2}(?:-\d{2})?)\b/i.test(
+    evidenceText(payload),
+  )
+}
+
+function hasEmploymentRecord(profile, sections = {}, payload = {}) {
+  const employment = Array.isArray(profile?.sections)
+    ? profile.sections.find((section) => section.section_key === 'employment')?.data
+    : sections?.employment ?? profile?.sections?.employment ?? {}
+  const candidates = [employment, payload].filter(Boolean)
+  return candidates.some((source) =>
+    Boolean(
+      (String(source.current_status || '').trim() && String(source.current_status || '').trim() !== 'unknown') ||
+        String(source.employer_name || source.employer || source.company || '').trim() ||
+        String(source.start_date || source.employment_start_date || '').trim(),
+    ),
+  )
+}
+
+function hasStudentContradiction(payload) {
+  const notes = String(payload?.notes ?? payload?.occupational_notes ?? '')
+  return /\b(student|academics)\b/i.test(notes) && !hasAnyEmployerEvidence(payload)
+}
+
+function sectionFieldMap(sectionKey, metadata = SECTION_METADATA) {
+  const fields = metadata?.[sectionKey]?.fields
+  if (!Array.isArray(fields)) return null
+  return new Map(fields.map((field) => [field.name, field]))
+}
+
+function coerceBooleanTri(value) {
+  if (value === null || value === undefined || value === '') return null
+  if (typeof value === 'boolean') return value
+  if (typeof value === 'number') return value === 1 ? true : value === 0 ? false : null
+  const normalized = String(value).trim().toLowerCase()
+  if (['true', 'yes', 'y', '1'].includes(normalized)) return true
+  if (['false', 'no', 'n', '0'].includes(normalized)) return false
+  if (['unknown', 'n/a', 'none', 'null', 'undefined'].includes(normalized)) return null
+  return null
+}
+
+function reject(rejected, key, reason, extra = {}) {
+  rejected.push({ key, reason, ...extra })
+}
+
+export function deriveEmploymentStatusForSave(sectionKey, values, profile, sections = {}) {
+  if (sectionKey !== 'employment') return values
+  if (values?.current_status && values.current_status !== 'unknown') return values
+  if (isHighSchoolProfile(profile, sections)) return { ...values, current_status: 'student' }
+  return values
+}
+
+export function guardProfileSectionPayload(data, { profile, sections = {}, sectionKey, existing = {}, metadata = SECTION_METADATA } = {}) {
+  const fieldMap = sectionFieldMap(sectionKey, metadata)
+  const guarded = {}
+  const rejected = []
+  const payload = data ?? {}
+  const requiresOccupationEvidence =
+    sectionKey === 'occupation' &&
+    (isHighSchoolProfile(profile, sections) || !hasEmploymentRecord(profile, sections, payload) || hasStudentContradiction(payload))
+
+  for (const [rawKey, rawValue] of Object.entries(payload)) {
+    if (rawKey === 'evidence' || rawKey.endsWith('_evidence') || rawKey === 'supporting_evidence' || rawKey === 'evidence_text') continue
+    const key = selfTargetFor(rawKey)
+    const field = fieldMap?.get(key)
+    if (fieldMap && !field) {
+      reject(rejected, rawKey, 'unknown_key', { evidence: evidenceFor(payload, rawKey) })
+      continue
+    }
+
+    let value = rawValue
+    if (field?.format === 'boolean_tri') value = coerceBooleanTri(value)
+
+    if (field?.format === 'enum' && Array.isArray(field.options) && typeof value === 'string' && value) {
+      if (!field.options.includes(value)) {
+        reject(rejected, key, 'invalid_enum', { value })
+        continue
+      }
+    }
+
+    if (value === true) {
+      const householdTarget = householdTargetFor(rawKey)
+      if (householdTarget && HOUSEHOLD_EVIDENCE.test(evidenceFor(payload, rawKey))) {
+        guarded[householdTarget] = true
+        reject(rejected, rawKey, 'household_evidence', { routedTo: householdTarget, evidence: evidenceFor(payload, rawKey) })
+        continue
+      }
+    }
+
+    if (sectionKey === 'occupation' && value === true && OCCUPATION_FLAGS.has(key) && requiresOccupationEvidence) {
+      if (!hasEmployerEvidence(payload, key)) {
+        reject(rejected, key, 'missing_employer_evidence', { evidence: evidenceFor(payload, key) })
+        continue
+      }
+    }
+
+    if (LONG_TEXT_FIELDS.has(key) && typeof value === 'string') {
+      value = dedupeLongText(existing?.[key], value)
+    }
+
+    guarded[key] = value
+  }
+
+  return {
+    data: deriveEmploymentStatusForSave(sectionKey, guarded, profile, sections),
+    rejected,
+  }
+}
+
+export function guardProfileSectionSuggestion(existing, suggestion, { sectionKey, profile, sections = {}, metadata = SECTION_METADATA } = {}) {
+  const guarded = guardProfileSectionPayload(suggestion, {
+    sectionKey,
+    profile,
+    sections,
+    existing,
+    metadata,
+  })
+  return {
+    data: { ...(existing ?? {}), ...guarded.data },
+    rejected: guarded.rejected,
+  }
+}
+
+export { OCCUPATION_FLAGS }

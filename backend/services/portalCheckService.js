@@ -22,6 +22,7 @@ import { URL } from 'url'
 import { SCHOLARSHIPS } from './crawlers/data/scholarships.js'
 import { STATE_REGISTRY } from './crawlers/data/stateRegistry.js'
 import ensurePortalCheckResultsTable from '../utils/ensurePortalCheckResultsTable.js'
+import { guardProfileSectionForWrite } from '../utils/guardedProfileSectionWrite.js'
 
 // ---------------------------------------------------------------------------
 // Helpers — re-implemented locally so this service has no circular dependency
@@ -377,8 +378,9 @@ async function syncAwardToProfile(db, profileId, update) {
          data = excluded.data,
          updated_at = CURRENT_TIMESTAMP,
          updated_by = excluded.updated_by`)
-      const result = stmt.run(profileId, JSON.stringify(nextPayload))
-      resolve(result)
+      guardProfileSectionForWrite(db, profileId, 'university_applications', nextPayload)
+        .then((guarded) => resolve(stmt.run(profileId, JSON.stringify(guarded.data))))
+        .catch(reject)
     } catch (err) {
       reject(err)
     }

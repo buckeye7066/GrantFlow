@@ -5,6 +5,7 @@ import {
   CANONICAL_SECTION_DEFAULTS,
 } from '../prompts/profileSections.js'
 import { safeParseJSON } from '../utils/safeJson.js'
+import { guardProfileSectionForWrite } from '../utils/guardedProfileSectionWrite.js'
 
 const insertSectionStmt = (db) => {
   const sql =
@@ -93,7 +94,8 @@ export async function repairProfileSections(db, profileId, updatedBy = 'system-r
   for (const row of rows) {
     const parsed = safeParseJSON(row.data, {})
     const normalized = normalizeSectionData(parsed, row.section_key)
-    const normalizedStr = JSON.stringify(normalized)
+    const guarded = await guardProfileSectionForWrite(db, profileId, row.section_key, normalized)
+    const normalizedStr = JSON.stringify(guarded.data)
     if (normalizedStr !== row.data) {
       if (db?.dialect === 'postgres') {
         await updateStmt.run([normalizedStr, updatedBy, row.id])

@@ -33,6 +33,24 @@ import { guardProfileSectionPayload } from '../utils/profileSuggestionGuards.js'
 const router = express.Router()
 const profileLogger = createLogger('route:profiles')
 
+function evidenceHash(value) {
+  const raw = String(value || '')
+  if (!raw) return null
+  return crypto.createHash('sha256').update(raw).digest('hex').slice(0, 16)
+}
+
+function logProfileSectionRejections(profileId, sectionKey, rejected = []) {
+  for (const item of rejected) {
+    profileLogger.warn('[profiles] profile section guard rejected field', {
+      profile_id: profileId,
+      section_key: sectionKey,
+      key: item.key,
+      reason: item.reason,
+      evidence_hash: evidenceHash(item.evidence),
+    })
+  }
+}
+
 // Rate limit the profile listing endpoint (defense-in-depth).
 // This is a read-heavy query that can touch multiple tables (and can be abused).
 const listProfilesLimiter = rateLimit({
@@ -1214,11 +1232,24 @@ router.put('/:id', async (req, res) => {
          updated_at = CURRENT_TIMESTAMP`
     )
     const updatedBy = req.ctx?.userId ?? req.ctx?.email ?? 'profile-put'
+    const sectionRows = await req.db
+      .prepare('SELECT section_key, data FROM profile_sections WHERE profile_id = ?')
+      .all(id)
+    const existingSections = Object.fromEntries(
+      sectionRows.map((row) => [row.section_key, safeParseJSON(row.data, {})]),
+    )
     for (const [sectionKey, patch] of sectionUpdatesByKey) {
       const row = selectSection.get(id, sectionKey)
       const existingData = row?.data ? safeParseJSON(row.data, {}) : {}
       const merged = { ...existingData, ...patch }
-      upsertSection.run(id, sectionKey, JSON.stringify(merged), updatedBy)
+      const guarded = guardProfileSectionPayload(merged, {
+        profile: existing,
+        sections: { ...existingSections, [sectionKey]: merged },
+        sectionKey,
+        existing: existingData,
+      })
+      logProfileSectionRejections(id, sectionKey, guarded.rejected)
+      upsertSection.run(id, sectionKey, JSON.stringify(guarded.data), updatedBy)
     }
   }
 
@@ -1655,6 +1686,7 @@ router.put('/:id/sections/:sectionKey', async (req, res) => {
     sectionKey,
   })
   const guardedData = guardedPayload.data
+  logProfileSectionRejections(id, sectionKey, guardedPayload.rejected)
 
   const upsert = req.db.prepare(
     `
@@ -1736,6 +1768,8 @@ router.put('/:id/sections/:sectionKey', async (req, res) => {
   res.json({
     section_key: section.section_key,
     data: safeParseJSON(section.data, {}),
+    saved: safeParseJSON(section.data, {}),
+    rejected: guardedPayload.rejected,
     updated_at: section.updated_at,
     updated_by: section.updated_by,
   })
@@ -1843,6 +1877,7 @@ async function handleProfileSectionAi(req, res) {
         sections,
         sectionKey,
       })
+      logProfileSectionRejections(id, sectionKey, guardedSuggestion.rejected)
 
       return res.json({
         section_key: sectionKey,
@@ -1880,6 +1915,7 @@ async function handleProfileSectionAi(req, res) {
           sections,
           sectionKey,
         })
+        logProfileSectionRejections(id, sectionKey, guardedSuggestion.rejected)
 
         return res.json({
           section_key: sectionKey,
@@ -2067,7 +2103,7 @@ router.get('/:id/completeness', async (req, res) => {
   if (!canAccessProfileIdFromCtx(req.ctx, id)) return denyAuth(req, res)
 
   try {
-    const profile = await req.db.prepare('SELECT id, display_name FROM profiles WHERE id = ?').get(id)
+    const profile = await req.db.prepare('SELECT id, display_name, primary_type FROM profiles WHERE id = ?').get(id)
     if (!profile) {
       return res.status(404).json({ error: 'Profile not found' })
     }
@@ -2076,7 +2112,6 @@ router.get('/:id/completeness', async (req, res) => {
     const existingSectionRows = await req.db
       .prepare('SELECT section_key, data FROM profile_sections WHERE profile_id = ?')
       .all(id)
-    
     const existingSectionMap = new Map(
       existingSectionRows.map(s => [s.section_key, safeParseJSON(s.data, {})])
     )
@@ -2202,6 +2237,9 @@ router.post('/:id/repair', async (req, res) => {
     const existingSectionRows = await req.db
       .prepare('SELECT section_key, data FROM profile_sections WHERE profile_id = ?')
       .all(id)
+    const repairSections = Object.fromEntries(
+      existingSectionRows.map((row) => [row.section_key, safeParseJSON(row.data, {})]),
+    )
 
     const updateStmt = req.db.prepare(`
       UPDATE profile_sections
@@ -2227,7 +2265,14 @@ router.post('/:id/repair', async (req, res) => {
 
       if (repairedKeys.length > 0) {
         repairedKeysBySection[sectionKey] = repairedKeys
-        await updateStmt.run(JSON.stringify(current), id, sectionKey)
+        const guarded = guardProfileSectionPayload(current, {
+          profile,
+          sections: { ...repairSections, [sectionKey]: current },
+          sectionKey,
+          existing: repairSections[sectionKey] ?? {},
+        })
+        logProfileSectionRejections(id, sectionKey, guarded.rejected)
+        await updateStmt.run(JSON.stringify(guarded.data), id, sectionKey)
       }
     }
 
@@ -2314,13 +2359,14 @@ router.post('/:id/import', async (req, res) => {
       return res.status(400).json({ error: 'sections object required in request body' })
     }
 
-    const profile = await req.db.prepare('SELECT id, display_name FROM profiles WHERE id = ?').get(id)
+    const profile = await req.db.prepare('SELECT id, display_name, primary_type FROM profiles WHERE id = ?').get(id)
     if (!profile) {
       return res.status(404).json({ error: 'Profile not found' })
     }
 
     const importedSections = []
 
+    const rejected = []
     await req.db.withTransaction(async (tx) => {
       const upsert = tx.prepare(`
         INSERT INTO profile_sections (profile_id, section_key, data, updated_by)
@@ -2351,10 +2397,25 @@ router.post('/:id/import', async (req, res) => {
           
           const existingData = existing ? safeParseJSON(existing.data, {}) : {}
           const mergedData = { ...existingData, ...data }
-          await upsert.run(id, sectionKey, JSON.stringify(mergedData))
+          const guarded = guardProfileSectionPayload(mergedData, {
+            profile,
+            sections: { [sectionKey]: mergedData },
+            sectionKey,
+            existing: existingData,
+          })
+          rejected.push(...guarded.rejected.map((item) => ({ section_key: sectionKey, ...item })))
+          logProfileSectionRejections(id, sectionKey, guarded.rejected)
+          await upsert.run(id, sectionKey, JSON.stringify(guarded.data))
         } else {
           // Replace existing data
-          await upsert.run(id, sectionKey, JSON.stringify(data))
+          const guarded = guardProfileSectionPayload(data, {
+            profile,
+            sections: { [sectionKey]: data },
+            sectionKey,
+          })
+          rejected.push(...guarded.rejected.map((item) => ({ section_key: sectionKey, ...item })))
+          logProfileSectionRejections(id, sectionKey, guarded.rejected)
+          await upsert.run(id, sectionKey, JSON.stringify(guarded.data))
         }
 
         importedSections.push(sectionKey)
@@ -2366,6 +2427,7 @@ router.post('/:id/import', async (req, res) => {
       profile_id: id,
       display_name: profile.display_name,
       sections_imported: importedSections,
+      rejected,
       merge_mode: merge,
       message: `Imported ${importedSections.length} section(s)`
     })

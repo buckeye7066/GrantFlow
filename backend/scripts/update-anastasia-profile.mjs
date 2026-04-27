@@ -1,6 +1,7 @@
 import Database from 'better-sqlite3';
 import fs from 'fs';
 import path from 'path';
+import { guardProfileSectionForWrite } from '../utils/guardedProfileSectionWrite.js';
 
 const db = new Database('./data/grantflow.db');
 
@@ -35,6 +36,7 @@ console.log(`✓ Updated display name to: ${displayName}`);
 
 // Update each section
 for (const [sectionKey, sectionData] of Object.entries(profileData)) {
+  const guarded = await guardProfileSectionForWrite(db, profile.id, sectionKey, sectionData);
   db.prepare(`
     INSERT INTO profile_sections (profile_id, section_key, data, updated_by)
     VALUES (?, ?, ?, 'ocr-extraction')
@@ -42,7 +44,7 @@ for (const [sectionKey, sectionData] of Object.entries(profileData)) {
       data = excluded.data,
       updated_at = CURRENT_TIMESTAMP,
       updated_by = excluded.updated_by
-  `).run(profile.id, sectionKey, JSON.stringify(sectionData));
+  `).run(profile.id, sectionKey, JSON.stringify(guarded.data));
   
   const fieldCount = Object.keys(sectionData).length;
   console.log(`✓ ${sectionKey}: ${fieldCount} fields`);

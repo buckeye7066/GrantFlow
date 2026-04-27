@@ -3,6 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 import pdfParse from 'pdf-parse';
+import { guardProfileSectionForWrite } from '../utils/guardedProfileSectionWrite.js';
 
 const db = new Database('./data/grantflow.db');
 const docsFolder = 'G:\\Apps\\grantflow\\GrantFlowb44';
@@ -85,13 +86,14 @@ for (const doc of profileDocs) {
   
   const insertSection = db.prepare(`
     INSERT OR IGNORE INTO profile_sections (profile_id, section_key, data, updated_by)
-    VALUES (?, ?, '{}', 'system-setup')
+    VALUES (?, ?, ?, 'system-setup')
   `);
   
   let sectionsAdded = 0;
   for (const key of SECTION_KEYS) {
     if (!existingKeys.includes(key)) {
-      insertSection.run(profile.id, key);
+      const guarded = await guardProfileSectionForWrite(db, profile.id, key, {});
+      insertSection.run(profile.id, key, JSON.stringify(guarded.data));
       sectionsAdded++;
     }
   }

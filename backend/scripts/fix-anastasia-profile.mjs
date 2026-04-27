@@ -1,6 +1,7 @@
 import Database from 'better-sqlite3';
 import fs from 'fs';
 import path from 'path';
+import { guardProfileSectionForWrite } from '../utils/guardedProfileSectionWrite.js';
 import crypto from 'crypto';
 import pdfParse from 'pdf-parse';
 import OpenAI from 'openai';
@@ -214,7 +215,8 @@ async function main() {
       
       for (const sectionKey of sections) {
         const sectionData = extracted[sectionKey] || {};
-        insertSection.run(profileId, sectionKey, JSON.stringify(sectionData));
+        const guarded = await guardProfileSectionForWrite(db, profileId, sectionKey, sectionData);
+        insertSection.run(profileId, sectionKey, JSON.stringify(guarded.data));
         const hasData = Object.values(sectionData).some(v => v && v !== '' && (!Array.isArray(v) || v.length > 0));
         console.log(`  - ${sectionKey}: ${hasData ? 'HAS DATA' : 'empty'}`);
       }

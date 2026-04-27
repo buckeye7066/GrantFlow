@@ -37,6 +37,7 @@ import HealthResourcesCard from "@/components/profiles/HealthResourcesCard.jsx"
 import { SECTION_METADATA } from "@/config/sectionMetadata"
 import { calculateProfileCompletion } from "@/utils/profileCompletion"
 import { deriveEmploymentStatusForSave, guardProfileSectionSuggestion } from "@/utils/profileSuggestionGuards"
+import { formatFieldLabel } from "@/utils/fieldDisplay"
 
 export default function ProfileDetail() {
   const [searchParams] = useSearchParams()
@@ -90,11 +91,18 @@ export default function ProfileDetail() {
 
   const upsertSectionMutation = useMutation({
     mutationFn: ({ sectionKey, values }) => upsertProfileSection(profileId, sectionKey, values),
-    onSuccess: () => {
+    onSuccess: (response, variables) => {
       queryClient.invalidateQueries({ queryKey: ["profile", profileId] })
+      const rejected = Array.isArray(response?.rejected) ? response.rejected : []
       toast({
-        title: "Section saved",
-        description: "Your updates are synced with the comprehensive application schema.",
+        title: rejected.length > 0 ? "Section saved with skipped fields" : "Section saved",
+        description:
+          rejected.length > 0
+            ? rejected
+                .slice(0, 3)
+                .map((item) => `Skipped ${formatFieldLabel(item.key, variables?.sectionKey)}: ${item.reason.replace(/_/g, " ")}`)
+                .join("; ")
+            : "Your updates are synced with the comprehensive application schema.",
       })
     },
     onError: (err) => {
@@ -232,7 +240,17 @@ export default function ProfileDetail() {
       const { key } = editingSection
       try {
         setSavingSectionKey(key)
-        const guardedValues = deriveEmploymentStatusForSave(key, values, profile)
+        const guarded = guardProfileSectionSuggestion(editingSection.data ?? {}, values, { sectionKey: key, profile })
+        const guardedValues = deriveEmploymentStatusForSave(key, guarded.data, profile)
+        if (guarded.rejected.length > 0) {
+          toast({
+            title: "Skipped unsupported fields",
+            description: guarded.rejected
+              .slice(0, 3)
+              .map((item) => `Skipped ${formatFieldLabel(item.key, key)}: ${item.reason.replace(/_/g, " ")}`)
+              .join("; "),
+          })
+        }
         await upsertSectionMutation.mutateAsync({ sectionKey: key, values: guardedValues })
         setEditingSection(null)
       } catch (err) {
@@ -290,16 +308,31 @@ export default function ProfileDetail() {
     [profile, aiSuggestionMutation, toast],
   )
 
-  const handleAskFromEditor = React.useCallback(async () => {
+  const handleAskFromEditor = React.useCallback(async (currentValues = {}) => {
     if (!editingSection) return null
     try {
       const response = await aiSuggestionMutation.mutateAsync(editingSection.key)
-      return response?.suggestion ?? null
+      const suggestion = response?.suggestion ?? null
+      if (!suggestion || typeof suggestion !== "object") return null
+      const guarded = guardProfileSectionSuggestion(currentValues, suggestion, {
+        sectionKey: editingSection.key,
+        profile,
+      })
+      if (guarded.rejected.length > 0) {
+        toast({
+          title: "Skipped unsupported AI fields",
+          description: guarded.rejected
+            .slice(0, 3)
+            .map((item) => `Skipped ${formatFieldLabel(item.key, editingSection.key)}: ${item.reason.replace(/_/g, " ")}`)
+            .join("; "),
+        })
+      }
+      return guarded.data
     } catch (err) {
       const message = err instanceof Error ? err.message : "Could not fetch an AI suggestion."
       throw new Error(message)
     }
-  }, [editingSection, aiSuggestionMutation])
+  }, [editingSection, aiSuggestionMutation, profile, toast])
 
   const handleInlineSaveField = React.useCallback(
     async (sectionKey, fieldKey, nextValue) => {

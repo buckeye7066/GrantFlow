@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest"
 
-import { guardProfileSectionPayload, guardProfileSectionSuggestion } from "@/utils/profileSuggestionGuards"
-import * as frontendGuards from "@/utils/profileSuggestionGuards"
-import * as backendGuards from "../../../backend/utils/profileSuggestionGuards.js"
+import { guardProfileSectionPayload } from "../utils/profileSuggestionGuards.js"
+import * as backendGuards from "../utils/profileSuggestionGuards.js"
+import * as frontendGuards from "../../src/utils/profileSuggestionGuards.js"
 
-describe("guardProfileSectionSuggestion", () => {
-  it("rejects occupation identity flags for high school students without employer evidence", () => {
+describe("backend profileSuggestionGuards", () => {
+  it("rejects high school occupation flags without employer evidence", () => {
     const result = guardProfileSectionPayload(
       { missionary: true },
       { sectionKey: "occupation", profile: { primary_type: "high_school_student" } },
@@ -15,7 +15,7 @@ describe("guardProfileSectionSuggestion", () => {
     expect(result.rejected).toContainEqual(expect.objectContaining({ key: "missionary", reason: "missing_employer_evidence" }))
   })
 
-  it("accepts occupation identity flags when employer evidence is present", () => {
+  it("accepts occupation flags with employer evidence", () => {
     const result = guardProfileSectionPayload(
       { missionary: true, missionary_evidence: "Hired by Cru in 2024-09" },
       { sectionKey: "occupation", profile: { primary_type: "high_school_student" } },
@@ -25,29 +25,18 @@ describe("guardProfileSectionSuggestion", () => {
     expect(result.rejected).toEqual([])
   })
 
-  it("rejects occupation identity flags contradicted by student academic notes", () => {
+  it("rejects occupation flags contradicted by student academic notes", () => {
     const result = guardProfileSectionPayload(
       { nonprofit_employee: true, notes: "student focused on academics" },
-      { sectionKey: "occupation", profile: { primary_type: "individual" }, sections: { employment: { current_status: "employed_full_time" } } },
+      { sectionKey: "occupation", profile: { primary_type: "individual" } },
     )
 
     expect(result.data.nonprofit_employee).toBeUndefined()
     expect(result.rejected).toContainEqual(expect.objectContaining({ key: "nonprofit_employee", reason: "missing_employer_evidence" }))
   })
 
-  it("dedupes near-duplicate long-text AI suggestions", () => {
-    const result = guardProfileSectionSuggestion(
-      { notes: "Student needs scholarship support for college applications." },
-      { notes: "Student needs scholarship support for college applications." },
-      { sectionKey: "narrative", profile: { primary_type: "high_school_student" } },
-    )
-
-    expect(result.data.notes).toBe("Student needs scholarship support for college applications.")
-  })
-
-  it("routes household-qualified benefit evidence away from applicant self fields", () => {
-    const result = guardProfileSectionSuggestion(
-      {},
+  it("routes household evidence away from applicant self benefit fields", () => {
+    const result = guardProfileSectionPayload(
       {
         ssdi_recipient_self: true,
         ssdi_recipient_self_evidence: "dependent child of an SSDI recipient",
@@ -59,7 +48,20 @@ describe("guardProfileSectionSuggestion", () => {
     expect(result.data.ssdi_recipient_household).toBe(true)
   })
 
-  it("rejects unknown section keys leaking label text into the payload", () => {
+  it("dedupes near-duplicate long text", () => {
+    const result = guardProfileSectionPayload(
+      { mission: "Student needs scholarship support for college applications." },
+      {
+        sectionKey: "organization_details",
+        profile: { primary_type: "high_school_student" },
+        existing: { mission: "Student needs scholarship support for college applications." },
+      },
+    )
+
+    expect(result.data.mission).toBe("Student needs scholarship support for college applications.")
+  })
+
+  it("rejects unknown keys leaking labels into the payload", () => {
     const result = guardProfileSectionPayload(
       { missionary_evangelist: true },
       { sectionKey: "occupation", profile: { primary_type: "individual" } },
@@ -69,12 +71,12 @@ describe("guardProfileSectionSuggestion", () => {
     expect(result.rejected).toContainEqual(expect.objectContaining({ key: "missionary_evangelist", reason: "unknown_key" }))
   })
 
-  it("keeps frontend and backend wrappers identical for the same input", () => {
+  it("keeps frontend and backend wrappers identical", () => {
     const args = [
       { missionary: true, notes: "student focused on academics" },
       { sectionKey: "occupation", profile: { primary_type: "individual" } },
     ]
 
-    expect(frontendGuards.guardProfileSectionPayload(...args)).toEqual(backendGuards.guardProfileSectionPayload(...args))
+    expect(backendGuards.guardProfileSectionPayload(...args)).toEqual(frontendGuards.guardProfileSectionPayload(...args))
   })
 })

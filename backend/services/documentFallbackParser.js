@@ -1,3 +1,5 @@
+import { guardProfileSectionForWrite } from '../utils/guardedProfileSectionWrite.js'
+
 function normalizeText(value) {
   return String(value || '')
     .toLowerCase()
@@ -168,6 +170,7 @@ export async function applyFallbackUniversityUpdates({ db, profileId, document, 
   nextApps.splice(idx, 1, app)
   const nextPayload = { ...(parsed || {}), applications: nextApps }
 
+  const guarded = await guardProfileSectionForWrite(db, profileId, 'university_applications', nextPayload)
   await db
     .prepare(
       `
@@ -179,7 +182,7 @@ export async function applyFallbackUniversityUpdates({ db, profileId, document, 
         updated_by = excluded.updated_by
     `,
     )
-    .run(profileId, JSON.stringify(nextPayload), `document:${document?.id ?? 'unknown'}`)
+    .run(profileId, JSON.stringify(guarded.data), `document:${document?.id ?? 'unknown'}`)
 
   return { updated: true, updated_fields: Array.from(updatedFields) }
 }

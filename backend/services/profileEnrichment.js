@@ -1,6 +1,7 @@
 import { buildProfileSignals, summarizeProfileSignals } from './profileHelpers.js'
 import { safeParseJSON } from '../utils/safeJson.js'
 import { invokeJsonWithFallback } from '../utils/aiProviders.js'
+import { guardProfileSectionForWrite } from '../utils/guardedProfileSectionWrite.js'
 
 function mergeValues(existingValue, incomingValue) {
   if (incomingValue === undefined || incomingValue === null) {
@@ -55,7 +56,8 @@ function mergeSection(existingSection = {}, incomingSection = {}) {
   return merged
 }
 
-async function upsertEnrichedSection(db, profileId, sectionKey, data) {
+async function upsertEnrichedSection(db, profileId, sectionKey, data, context) {
+  const guarded = await guardProfileSectionForWrite(db, profileId, sectionKey, data, context)
   await db.prepare(
     `
       INSERT INTO profile_sections (profile_id, section_key, data, updated_by)
@@ -65,7 +67,8 @@ async function upsertEnrichedSection(db, profileId, sectionKey, data) {
         updated_at = CURRENT_TIMESTAMP,
         updated_by = excluded.updated_by
     `,
-  ).run(profileId, sectionKey, JSON.stringify(data), 'profile_enrichment_crawler')
+  ).run(profileId, sectionKey, JSON.stringify(guarded.data), 'profile_enrichment_crawler')
+  return guarded
 }
 
 export async function processProfileEnrichmentJob({ db, job, profileContext, getOpenAI }) {
@@ -221,8 +224,11 @@ export async function processProfileEnrichmentJob({ db, job, profileContext, get
       continue
     }
     const merged = mergeSection(existingSections[sectionKey], safeData)
-    await upsertEnrichedSection(db, profile.id, sectionKey, merged)
-    existingSections[sectionKey] = merged
+    const guarded = await upsertEnrichedSection(db, profile.id, sectionKey, merged, {
+      profile,
+      sections: existingSections,
+    })
+    existingSections[sectionKey] = guarded.data
     updatedSections.push(sectionKey)
     enrichmentLog.push({
       section_key: sectionKey,

@@ -60,6 +60,7 @@ import { trustedOriginClause, trustedSourceClause } from '../utils/recordOrigins
 import { normalizeState, statesMatch } from '../utils/stateNormalization.js'
 import { scoreOpportunity } from './matchEngine.js'
 import { syncProfileFieldsFromSection } from '../utils/profileSectionSync.js'
+import { guardProfileSectionForWrite } from '../utils/guardedProfileSectionWrite.js'
 
 const tools = new Map()
 
@@ -1187,6 +1188,7 @@ registerTool({
     } catch { /* section may not exist yet */ }
 
     const merged = { ...existingData, ...fields }
+    const guarded = await guardProfileSectionForWrite(db, profileId, sectionKey, merged)
 
     const updatedBy = ctx?.email || ctx?.userId || 'anya-guided'
     await db.prepare(`
@@ -1196,11 +1198,11 @@ registerTool({
         data = excluded.data,
         updated_by = excluded.updated_by,
         updated_at = CURRENT_TIMESTAMP
-    `).run(profileId, sectionKey, JSON.stringify(merged), updatedBy)
+    `).run(profileId, sectionKey, JSON.stringify(guarded.data), updatedBy)
 
     // v4: Sync key fields (state, veteran, disability) to profiles table
     try {
-      syncProfileFieldsFromSection(db, profileId, sectionKey, merged)
+      syncProfileFieldsFromSection(db, profileId, sectionKey, guarded.data)
     } catch (syncErr) {
       console.warn(`[anya] Section sync failed for ${profileId}/${sectionKey}:`, syncErr?.message)
     }

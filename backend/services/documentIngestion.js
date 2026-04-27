@@ -5,6 +5,7 @@ import { buildFallbackDocumentSummary, applyFallbackUniversityUpdates } from './
 import { classifyUniversityApplicationForDocument, loadUniversityApplicationsForProfile } from './universityDocumentClassifier.js'
 import { extractAndUpsertOpportunitiesFromText } from './extractOpportunitiesFromDocumentText.js'
 import { countWords, detectFileType, extractTextWithFallback, normalizeText, scoreExtraction, sha256File } from './documentIngestion/index.js'
+import { guardProfileSectionForWrite } from '../utils/guardedProfileSectionWrite.js'
 import {
   ensureDocumentExtract,
   getDocumentExtract,
@@ -313,6 +314,7 @@ function extractMedicalInsuranceHeuristics(text) {
 }
 
 async function upsertProfileSection(db, profileId, sectionKey, data, documentId) {
+  const guarded = await guardProfileSectionForWrite(db, profileId, sectionKey, data)
   await db.prepare(
     `
       INSERT INTO profile_sections (profile_id, section_key, data, updated_by)
@@ -322,7 +324,8 @@ async function upsertProfileSection(db, profileId, sectionKey, data, documentId)
         updated_at = CURRENT_TIMESTAMP,
         updated_by = excluded.updated_by
     `,
-  ).run(profileId, sectionKey, JSON.stringify(data), `document:${documentId}`)
+  ).run(profileId, sectionKey, JSON.stringify(guarded.data), `document:${documentId}`)
+  return guarded
 }
 
 export async function processDocumentIngestionJob({

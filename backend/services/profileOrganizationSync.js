@@ -6,6 +6,7 @@
  */
 import crypto from 'crypto'
 import { safeParseJSON } from '../utils/safeJson.js'
+import { guardProfileSectionForWrite } from '../utils/guardedProfileSectionWrite.js'
 import { CANONICAL_SECTION_DEFAULTS, canonicalSectionKeys } from '../prompts/profileSections.js'
 import { COMPREHENSIVE_APPLICATION_DEFAULTS } from '../config/comprehensiveApplicationSchema.js'
 
@@ -150,6 +151,7 @@ async function ensureCanonicalSections(db, profileId, updatedBy = 'org-sync') {
 }
 
 export async function upsertProfileSection(db, profileId, sectionKey, data, updatedBy = 'org-sync') {
+  const guarded = await guardProfileSectionForWrite(db, profileId, sectionKey, data)
   const sql =
     db?.dialect === 'postgres'
       ? `
@@ -168,7 +170,8 @@ export async function upsertProfileSection(db, profileId, sectionKey, data, upda
             updated_by = excluded.updated_by,
             updated_at = CURRENT_TIMESTAMP
         `
-  await db.prepare(sql).run(profileId, sectionKey, JSON.stringify(data ?? {}), updatedBy)
+  await db.prepare(sql).run(profileId, sectionKey, JSON.stringify(guarded.data ?? {}), updatedBy)
+  return guarded
 }
 
 /**

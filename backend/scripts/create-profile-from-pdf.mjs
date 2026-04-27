@@ -4,6 +4,7 @@ import pdfParse from 'pdf-parse';
 import crypto from 'crypto';
 import Database from 'better-sqlite3';
 import OpenAI from 'openai';
+import { guardProfileSectionForWrite } from '../utils/guardedProfileSectionWrite.js';
 
 const pdfPath = process.argv[2] || 'G:\\Apps\\grantflow\\GrantFlowb44\\Anastasia profile.pdf';
 const dbPath = process.argv[3] || './data/grantflow.db';
@@ -144,19 +145,22 @@ async function main() {
       address: extractedData.address ? 
         `${extractedData.address.street || ''}, ${extractedData.address.city || ''}, ${extractedData.address.state || ''} ${extractedData.address.zip || ''}`.trim().replace(/^,\s*/, '') : '',
     };
-    sectionInsert.run(profileId, 'basic_information', JSON.stringify(basicInfo));
+    const guarded = await guardProfileSectionForWrite(db, profileId, 'basic_information', basicInfo);
+    sectionInsert.run(profileId, 'basic_information', JSON.stringify(guarded.data));
     console.log('Added section: basic_information');
   }
   
   // Demographics section
   if (extractedData.demographics) {
-    sectionInsert.run(profileId, 'demographics', JSON.stringify(extractedData.demographics));
+    const guarded = await guardProfileSectionForWrite(db, profileId, 'demographics', extractedData.demographics);
+    sectionInsert.run(profileId, 'demographics', JSON.stringify(guarded.data));
     console.log('Added section: demographics');
   }
   
   // Financial section
   if (extractedData.financial_info) {
-    sectionInsert.run(profileId, 'financial_information', JSON.stringify(extractedData.financial_info));
+    const guarded = await guardProfileSectionForWrite(db, profileId, 'financial_information', extractedData.financial_info);
+    sectionInsert.run(profileId, 'financial_information', JSON.stringify(guarded.data));
     console.log('Added section: financial_information');
   }
   
@@ -166,7 +170,8 @@ async function main() {
       ...extractedData.education,
       ...extractedData.employment,
     };
-    sectionInsert.run(profileId, 'occupation', JSON.stringify(occupation));
+    const guarded = await guardProfileSectionForWrite(db, profileId, 'occupation', occupation);
+    sectionInsert.run(profileId, 'occupation', JSON.stringify(guarded.data));
     console.log('Added section: occupation');
   }
   
@@ -177,7 +182,8 @@ async function main() {
       goals: extractedData.goals || [],
       additional_details: extractedData.additional_details || '',
     };
-    sectionInsert.run(profileId, 'narrative', JSON.stringify(narrative));
+    const guarded = await guardProfileSectionForWrite(db, profileId, 'narrative', narrative);
+    sectionInsert.run(profileId, 'narrative', JSON.stringify(guarded.data));
     console.log('Added section: narrative');
   }
   
