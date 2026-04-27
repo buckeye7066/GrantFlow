@@ -1854,39 +1854,44 @@ async function handleProfileSectionAi(req, res) {
 
     // Provider order: OpenAI -> Anthropic -> deterministic empty fallback (never hard-fail the UI).
     if (openai) {
-      const completion = await openai.chat.completions.create({
-        model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
-        messages: [{ role: 'user', content: promptPayload.prompt }],
-        temperature: 0.2,
-        max_tokens: 1200,
-      })
-
-      const raw = extractCompletionText(completion)
-      const jsonMatch = raw.match(/\{[\s\S]*\}/)
-      const suggestion = safeParseJSON(jsonMatch ? jsonMatch[0] : raw, null)
-
-      if (!suggestion || typeof suggestion !== 'object') {
-        return res.status(502).json({
-          error: 'AI response could not be parsed',
-          raw_response: raw,
+      try {
+        const completion = await openai.chat.completions.create({
+          model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+          messages: [{ role: 'user', content: promptPayload.prompt }],
+          temperature: 0.2,
+          max_tokens: 1200,
         })
+
+        const raw = extractCompletionText(completion)
+        const jsonMatch = raw.match(/\{[\s\S]*\}/)
+        const suggestion = safeParseJSON(jsonMatch ? jsonMatch[0] : raw, null)
+
+        if (!suggestion || typeof suggestion !== 'object') {
+          return res.status(502).json({
+            error: 'AI response could not be parsed',
+            raw_response: raw,
+          })
+        }
+
+        const guardedSuggestion = guardProfileSectionPayload(suggestion, {
+          profile: profileRow,
+          sections,
+          sectionKey,
+        })
+        logProfileSectionRejections(id, sectionKey, guardedSuggestion.rejected)
+
+        return res.json({
+          section_key: sectionKey,
+          suggestion: guardedSuggestion.data,
+          rejected: guardedSuggestion.rejected,
+          usage: completion.usage ?? null,
+          raw_response: raw,
+          ai_provider: 'openai',
+        })
+      } catch (openaiError) {
+        const summary = summarizeOpenAIError(openaiError)
+        console.warn('[profiles/sections/ai] OpenAI failed, will try Anthropic:', summary?.message || openaiError?.message || openaiError)
       }
-
-      const guardedSuggestion = guardProfileSectionPayload(suggestion, {
-        profile: profileRow,
-        sections,
-        sectionKey,
-      })
-      logProfileSectionRejections(id, sectionKey, guardedSuggestion.rejected)
-
-      return res.json({
-        section_key: sectionKey,
-        suggestion: guardedSuggestion.data,
-        rejected: guardedSuggestion.rejected,
-        usage: completion.usage ?? null,
-        raw_response: raw,
-        ai_provider: 'openai',
-      })
     }
 
     const anthropic = await createAnthropicClient()
@@ -1930,10 +1935,15 @@ async function handleProfileSectionAi(req, res) {
       }
     }
 
-    return res.status(503).json({
-      error: 'ai_unavailable',
-      message: 'No AI provider configured (OPENAI_API_KEY/ANTHROPIC_API_KEY missing) or provider failed to initialize.',
+    return res.json({
       section_key: sectionKey,
+      suggestion: {},
+      rejected: [],
+      usage: null,
+      raw_response: '',
+      ai_provider: 'fallback',
+      warning: 'No AI provider configured (OPENAI_API_KEY/ANTHROPIC_API_KEY missing) or provider error.',
+      message: 'AI suggestion is unavailable right now, but the section can still be edited and saved manually.',
     })
   } catch (error) {
     console.error('Error generating profile section suggestion:', error)
