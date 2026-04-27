@@ -24,4 +24,16 @@ describe("SECTION_METADATA completeness", () => {
     collect(anastasia, failures)
     expect(failures.sort()).toEqual([])
   })
+
+  it("declares live legacy/profile-intake fields with renderable formats", () => {
+    const field = (sectionKey, fieldKey) =>
+      SECTION_METADATA[sectionKey].fields.find((entry) => entry.name === fieldKey)
+
+    expect(field("basic_information", "profile_type")).toMatchObject({ label: "Profile type", format: "enum" })
+    expect(field("basic_information", "current_school")).toMatchObject({ label: "Current school", format: "text" })
+    expect(field("basic_information", "location")).toMatchObject({ label: "Location", format: "json" })
+    expect(field("demographics", "gender")).toMatchObject({ label: "Gender", format: "text" })
+    expect(field("demographics", "geographic_qualifiers")).toMatchObject({ label: "Geographic qualifiers", format: "string_array" })
+    expect(field("demographics", "languages")).toMatchObject({ label: "Languages", format: "string_array" })
+  })
 })

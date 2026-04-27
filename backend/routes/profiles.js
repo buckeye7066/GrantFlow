@@ -1680,11 +1680,26 @@ router.put('/:id/sections/:sectionKey', async (req, res) => {
   const existingSections = Object.fromEntries(
     sectionRows.map((row) => [row.section_key, safeParseJSON(row.data, {})]),
   )
-  const guardedPayload = guardProfileSectionPayload(data, {
-    profile,
-    sections: { ...existingSections, [sectionKey]: data },
-    sectionKey,
-  })
+  let guardedPayload
+  try {
+    guardedPayload = guardProfileSectionPayload(data, {
+      profile,
+      sections: { ...existingSections, [sectionKey]: data },
+      sectionKey,
+    })
+  } catch (guardError) {
+    profileLogger.warn('[profiles] profile section guard failed', {
+      profile_id: id,
+      section_key: sectionKey,
+      error: guardError?.message || String(guardError),
+    })
+    return res.status(422).json({
+      ok: false,
+      error: 'profile_section_validation_failed',
+      message: guardError?.message || 'Profile section payload could not be validated.',
+      rejected: [],
+    })
+  }
   const guardedData = guardedPayload.data
   logProfileSectionRejections(id, sectionKey, guardedPayload.rejected)
 
@@ -1766,6 +1781,7 @@ router.put('/:id/sections/:sectionKey', async (req, res) => {
     .get(id, sectionKey)
 
   res.json({
+    ok: true,
     section_key: section.section_key,
     data: safeParseJSON(section.data, {}),
     saved: safeParseJSON(section.data, {}),

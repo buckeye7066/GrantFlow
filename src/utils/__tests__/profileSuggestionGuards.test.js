@@ -92,6 +92,21 @@ describe("guardProfileSectionSuggestion", () => {
     ).toContainEqual(expect.objectContaining({ key: "primary_goal", reason: "format_mismatch" }))
   })
 
+  it("normalizes known aliases and structured string arrays", () => {
+    const education = guardProfileSectionPayload(
+      { current_school: "Central High" },
+      { sectionKey: "education", profile: { primary_type: "high_school_student" } },
+    )
+    expect(education.data.current_institution).toBe("Central High")
+    expect(education.rejected).toContainEqual(expect.objectContaining({ key: "current_school", reason: "normalized_alias", routedTo: "current_institution" }))
+
+    const demographics = guardProfileSectionPayload(
+      { languages: { primary: "English", other: ["Russian"] } },
+      { sectionKey: "demographics", profile: { primary_type: "individual" } },
+    )
+    expect(demographics.data.languages).toEqual(["English", "Russian"])
+  })
+
   it("keeps frontend and backend wrappers identical for the same input", () => {
     const args = [
       { missionary: true, notes: "student focused on academics" },

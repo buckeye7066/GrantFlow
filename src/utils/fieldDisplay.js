@@ -9,7 +9,7 @@ function warnMissingMetadata(sectionKey, fieldKey, detail) {
   if (warnedFields.has(key)) return
   warnedFields.add(key)
   const message = `[fieldDisplay] Missing or invalid SECTION_METADATA for profile field ${sectionKey}.${fieldKey}: ${detail}`
-  if (import.meta.env?.DEV) throw new Error(message)
+  if (import.meta.env?.VITE_STRICT_PROFILE_METADATA === "true") throw new Error(message)
   console.warn(message, { sectionKey, fieldKey })
 }
 
@@ -78,6 +78,16 @@ function formatBooleanTri(value) {
   return value ? "Yes" : "No"
 }
 
+function normalizeStringArrayEntry(value) {
+  if (value === null || value === undefined) return []
+  if (Array.isArray(value)) return value.flatMap((entry) => normalizeStringArrayEntry(entry))
+  if (typeof value === "object") {
+    return Object.values(value).flatMap((entry) => normalizeStringArrayEntry(entry))
+  }
+  const normalized = normalizeDisplayString(value)
+  return normalized ? [normalized] : []
+}
+
 export function formatFieldValue(sectionKey, fieldKey, value, metadata = SECTION_METADATA) {
   const field = getFieldMetadata(sectionKey, fieldKey, metadata)
   if (!field) {
@@ -109,10 +119,10 @@ export function formatFieldValue(sectionKey, fieldKey, value, metadata = SECTION
   }
   if (format === "string_array") {
     if (Array.isArray(value)) {
-      return value.map(normalizeDisplayString).filter(Boolean).join(", ") || "—"
+      return value.flatMap((entry) => normalizeStringArrayEntry(entry)).filter(Boolean).join(", ") || "—"
     }
     if (typeof value === "string") return normalizeDisplayString(value) ?? "—"
-    warnMissingMetadata(sectionKey, fieldKey, "string_array value is not an array")
+    if (typeof value === "object") return normalizeStringArrayEntry(value).join(", ") || "—"
     return "—"
   }
   if (format === "json") {

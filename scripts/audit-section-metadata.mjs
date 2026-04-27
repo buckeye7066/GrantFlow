@@ -5,6 +5,25 @@ import { pathToFileURL } from 'node:url'
 
 import { SECTION_METADATA } from '../src/config/sectionMetadata.js'
 import { DESIGNATED_PROFILES } from '../backend/config/designatedProfiles.js'
+import { PROFILE_FIELD_ALIASES } from '../shared/profileSuggestionGuards.js'
+
+const SUPPORTED_FORMATS = new Set([
+  'string',
+  'text',
+  'long_text',
+  'string_array',
+  'json',
+  'currency_usd',
+  'currency_cents_usd',
+  'percent',
+  'date',
+  'datetime',
+  'url',
+  'email',
+  'phone',
+  'boolean_tri',
+  'enum',
+])
 
 function collectFromProfile(profile, out) {
   for (const [sectionKey, data] of Object.entries(profile?.sections ?? {})) {
@@ -44,10 +63,43 @@ async function main() {
   }
 
   const failures = []
+  for (const [sectionKey, section] of Object.entries(SECTION_METADATA)) {
+    const seen = new Set()
+    for (const field of section.fields ?? []) {
+      const prefix = `${sectionKey}.${field?.name ?? '<missing-name>'}`
+      if (!field?.name) failures.push(`${prefix}: missing name`)
+      if (field?.name && seen.has(field.name)) failures.push(`${prefix}: duplicate field`)
+      if (field?.name) seen.add(field.name)
+      if (!field?.label) failures.push(`${prefix}: missing label`)
+      if (!field?.format) failures.push(`${prefix}: missing format`)
+      if (!field?.help) failures.push(`${prefix}: missing help`)
+      if (field?.format && !SUPPORTED_FORMATS.has(field.format)) failures.push(`${prefix}: unsupported format ${field.format}`)
+      if (field?.format === 'enum' && (!Array.isArray(field.options) || field.options.length === 0)) {
+        failures.push(`${prefix}: enum missing options`)
+      }
+    }
+  }
+
   for (const [sectionKey, keys] of observed) {
-    const declared = new Set((SECTION_METADATA[sectionKey]?.fields ?? []).map((field) => field.name))
+    const declaredFields = SECTION_METADATA[sectionKey]?.fields ?? []
+    const declared = new Set(declaredFields.map((field) => field.name))
+    const formats = new Map(declaredFields.map((field) => [field.name, field.format]))
     for (const key of keys) {
       if (!declared.has(key)) failures.push(`${sectionKey}.${key}`)
+      if (formats.get(key) === 'text') {
+        // Fixtures should not force text renderers to handle objects/arrays.
+        for (const profile of DESIGNATED_PROFILES) {
+          const value = profile?.sections?.[sectionKey]?.[key]
+          if (value && typeof value === 'object') failures.push(`${sectionKey}.${key}: text field has structured fixture value`)
+        }
+      }
+    }
+  }
+
+  for (const [sectionKey, aliases] of Object.entries(PROFILE_FIELD_ALIASES)) {
+    const declared = new Set((SECTION_METADATA[sectionKey]?.fields ?? []).map((field) => field.name))
+    for (const [from, to] of Object.entries(aliases)) {
+      if (!declared.has(to)) failures.push(`${sectionKey}.${from}: alias target ${to} missing from metadata`)
     }
   }
 

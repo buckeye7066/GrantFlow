@@ -37,4 +37,30 @@ describe("profile section AI fallback", () => {
       ai_provider: "fallback",
     })
   })
+
+  it("returns structured rejections instead of 500 for unsupported section fields", async () => {
+    const profileId = "00000000-0000-0000-0000-00000000a501"
+    db.prepare(`
+      INSERT INTO profiles (id, display_name, primary_type, status, tags)
+      VALUES (?, 'Validation Profile', 'individual', 'active', '[]')
+    `).run(profileId)
+
+    const res = await request(app)
+      .put(`/api/profiles/${profileId}/sections/basic_information`)
+      .set(TEST_ADMIN_AUTH_HEADER)
+      .send({
+        data: {
+          full_name: "Validation Profile",
+          unsupported_ai_key: "should be skipped",
+        },
+      })
+
+    expect(res.status).toBe(200)
+    expect(res.body.ok).toBe(true)
+    expect(res.body.saved.full_name).toBe("Validation Profile")
+    expect(res.body.saved.unsupported_ai_key).toBeUndefined()
+    expect(res.body.rejected).toContainEqual(
+      expect.objectContaining({ key: "unsupported_ai_key", reason: "unknown_field" }),
+    )
+  })
 })

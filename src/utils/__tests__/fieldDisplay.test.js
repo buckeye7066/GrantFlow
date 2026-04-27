@@ -18,4 +18,19 @@ describe("formatFieldLabel", () => {
     expect(formatFieldValue("financial_information", "household_income", 56000)).toBe("$56,000")
     expect(formatFieldValue("education", "schools", [{ name: "Central High" }])).not.toContain("[object Object]")
   })
+
+  it("renders live language and geographic qualifier shapes cleanly", () => {
+    expect(formatFieldLabel("basic_information", "profile_type")).toBe("Profile type")
+    expect(formatFieldLabel("basic_information", "current_school")).toBe("Current school")
+    expect(formatFieldLabel("basic_information", "location")).toBe("Location")
+    expect(formatFieldLabel("demographics", "gender")).toBe("Gender")
+    expect(formatFieldLabel("demographics", "geographic_qualifiers")).toBe("Geographic qualifiers")
+
+    expect(formatFieldValue("demographics", "languages", "English")).toBe("English")
+    expect(formatFieldValue("demographics", "languages", ["English", "Russian"])).toBe("English, Russian")
+    expect(formatFieldValue("demographics", "languages", { primary: "English", secondary: ["Russian"] })).toBe("English, Russian")
+    expect(formatFieldValue("demographics", "geographic_qualifiers", ["rural", "Appalachian"])).toBe("rural, Appalachian")
+    expect(formatFieldValue("demographics", "geographic_qualifiers", { region: "Appalachian" })).toBe("Appalachian")
+    expect(formatFieldValue("demographics", "geographic_qualifiers", "rural")).toBe("rural")
+  })
 })

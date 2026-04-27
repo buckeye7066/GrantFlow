@@ -375,6 +375,7 @@ export default function ProfileDetail() {
   const [activeTab, setActiveTab] = React.useState("profile")
   const hasSyncedTargetColleges = useRef(false)
   const lastSyncedProfileId = useRef(null)
+  const failedTargetCollegeSyncProfiles = useRef(new Set())
 
   // Derived state — computed here (before early returns) using optional chaining so they are
   // safe when `profile` is still undefined (loading / error states).
@@ -495,6 +496,7 @@ export default function ProfileDetail() {
   // One-time sync: target_colleges -> university_applications (avoids duplicates, no infinite loop)
   useEffect(() => {
     if (!profileId || !profile) return
+    if (failedTargetCollegeSyncProfiles.current.has(profileId)) return
     const pt = String(profile.primary_type || "").toLowerCase()
     const bi = profile.sections?.find((s) => s.section_key === "basic_information")?.data ?? {}
     const ptl = String(bi?.profile_type || "").toLowerCase()
@@ -524,7 +526,7 @@ export default function ProfileDetail() {
         values: { applications },
       })
       .catch((err) => {
-        hasSyncedTargetColleges.current = false
+        failedTargetCollegeSyncProfiles.current.add(profileId)
         const msg = err instanceof Error ? err.message : "Sync failed"
         console.error("[ProfileDetail] target_colleges sync save failed:", msg)
         toast({

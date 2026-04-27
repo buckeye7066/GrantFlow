@@ -1,5 +1,5 @@
 /**
- * Canonical section metadata � single source of truth for profile section and field meaning.
+ * Canonical section metadata - single source of truth for profile section and field meaning.
  *
  * Labels use sentence case. Every persisted profile section key must be declared
  * here with a label, format, and help text before it can be rendered or saved.
@@ -104,6 +104,39 @@ export const SECTION_METADATA = {
         "label": "Profile contacts",
         "format": "json",
         "help": "Additional contacts who have access to this profile."
+      },
+      {
+        "name": "profile_type",
+        "label": "Profile type",
+        "format": "enum",
+        "options": [
+          "individual",
+          "family",
+          "student",
+          "high_school_student",
+          "college_student",
+          "graduate_student",
+          "organization",
+          "nonprofit",
+          "small_business",
+          "government",
+          "medical_assistance",
+          "medical_need",
+          "individual_need"
+        ],
+        "help": "Profile type used to drive profile-specific matching, section applicability, crawler planning, and eligibility context."
+      },
+      {
+        "name": "current_school",
+        "label": "Current school",
+        "format": "text",
+        "help": "Quick-intake school name when captured before the education section is completed; education.current_institution remains the canonical education field."
+      },
+      {
+        "name": "location",
+        "label": "Location",
+        "format": "json",
+        "help": "Legacy or quick-intake location value. Prefer city, state, ZIP, county, address, and Location focus > Geographic focus when structured data is available."
       }
     ]
   },
@@ -391,7 +424,14 @@ export const SECTION_METADATA = {
         "name": "financial_need_level",
         "label": "Financial need level",
         "format": "enum",
-        "help": "Short descriptor of need (e.g., high, moderate, unknown)."
+        "help": "Short descriptor of need (e.g., high, moderate, unknown).",
+        "options": [
+          "low",
+          "moderate",
+          "high",
+          "urgent",
+          "unknown"
+        ]
       },
       {
         "name": "low_income",
@@ -423,13 +463,13 @@ export const SECTION_METADATA = {
       {
         "name": "funding_needs",
         "label": "Funding needs",
-        "format": "enum",
+        "format": "text",
         "help": "What the applicant needs funding for."
       },
       {
         "name": "funding_purpose",
         "label": "Funding purpose",
-        "format": "enum",
+        "format": "text",
         "help": "How funds will be used."
       },
       {
@@ -508,7 +548,13 @@ export const SECTION_METADATA = {
         "name": "ecf_choices_role",
         "label": "ECF choices role",
         "format": "enum",
-        "help": "ECF CHOICES role for unlocking the crawler: participant, caregiver, or provider."
+        "help": "ECF CHOICES role for unlocking the crawler: participant, caregiver, or provider.",
+        "options": [
+          "participant",
+          "caregiver",
+          "provider",
+          "unknown"
+        ]
       },
       {
         "name": "medicare_recipient_self",
@@ -657,7 +703,7 @@ export const SECTION_METADATA = {
       {
         "name": "disability_type",
         "label": "Disability types",
-        "format": "text",
+        "format": "string_array",
         "help": "List of disability types when explicitly stated."
       },
       {
@@ -784,7 +830,16 @@ export const SECTION_METADATA = {
         "name": "plan_type",
         "label": "Plan type",
         "format": "enum",
-        "help": "Plan type (e.g., HMO, PPO, Medicaid, Medicare, Marketplace)."
+        "help": "Plan type (e.g., HMO, PPO, Medicaid, Medicare, Marketplace).",
+        "options": [
+          "HMO",
+          "PPO",
+          "Medicaid",
+          "Medicare",
+          "Marketplace",
+          "other",
+          "unknown"
+        ]
       },
       {
         "name": "member_id",
@@ -1025,7 +1080,15 @@ export const SECTION_METADATA = {
         "name": "immigrant_status",
         "label": "Immigration status",
         "format": "enum",
-        "help": "One of: us_citizen, permanent_resident, refugee, undocumented, other, unknown."
+        "help": "One of: us_citizen, permanent_resident, refugee, undocumented, other, unknown.",
+        "options": [
+          "us_citizen",
+          "permanent_resident",
+          "refugee",
+          "undocumented",
+          "other",
+          "unknown"
+        ]
       },
       {
         "name": "ethnicity",
@@ -1041,9 +1104,9 @@ export const SECTION_METADATA = {
       },
       {
         "name": "languages",
-        "label": "Languages (list)",
-        "format": "text",
-        "help": "Languages spoken (comma-separated)."
+        "label": "Languages",
+        "format": "string_array",
+        "help": "Languages spoken or language-access needs. Accepts string, array, or structured imported language values normalized for matching."
       },
       {
         "name": "religious_affiliation",
@@ -1054,7 +1117,7 @@ export const SECTION_METADATA = {
       {
         "name": "citizenship",
         "label": "Citizenship",
-        "format": "enum",
+        "format": "text",
         "help": "Citizenship status or country."
       },
       {
@@ -1145,7 +1208,27 @@ export const SECTION_METADATA = {
         "name": "immigration_status",
         "label": "Immigration status",
         "format": "enum",
-        "help": "Immigration status when explicitly provided."
+        "help": "Immigration status when explicitly provided.",
+        "options": [
+          "us_citizen",
+          "permanent_resident",
+          "refugee",
+          "undocumented",
+          "other",
+          "unknown"
+        ]
+      },
+      {
+        "name": "gender",
+        "label": "Gender",
+        "format": "text",
+        "help": "High-level demographic gender value when live or imported data stores it in demographics; Basic information > Gender remains supported for contact/intake display."
+      },
+      {
+        "name": "geographic_qualifiers",
+        "label": "Geographic qualifiers",
+        "format": "string_array",
+        "help": "Geographic eligibility qualifiers such as rural, Appalachian, underserved, disaster area, or other location-based funding signals."
       }
     ]
   },
@@ -1480,7 +1563,7 @@ export const SECTION_METADATA = {
       {
         "name": "highest_level",
         "label": "Highest level completed",
-        "format": "enum",
+        "format": "text",
         "help": "Highest education level attained (freeform string)."
       },
       {
@@ -1492,7 +1575,7 @@ export const SECTION_METADATA = {
       {
         "name": "target_colleges",
         "label": "Target colleges (list)",
-        "format": "text",
+        "format": "string_array",
         "help": "Target colleges or universities (comma-separated)."
       },
       {
@@ -1534,7 +1617,7 @@ export const SECTION_METADATA = {
       {
         "name": "leadership_roles",
         "label": "Leadership roles (list)",
-        "format": "text",
+        "format": "string_array",
         "help": "Leadership roles (comma-separated)."
       },
       {
@@ -1658,13 +1741,28 @@ export const SECTION_METADATA = {
         "name": "status",
         "label": "Housing status",
         "format": "enum",
-        "help": "Housing status (e.g., stable, at-risk, homeless, unknown)."
+        "help": "Housing status (e.g., stable, at-risk, homeless, unknown).",
+        "options": [
+          "stable",
+          "at_risk",
+          "homeless",
+          "temporary",
+          "unknown"
+        ]
       },
       {
         "name": "type",
         "label": "Housing type",
         "format": "enum",
-        "help": "Housing type (rent, own, shelter, transitional, etc.)."
+        "help": "Housing type (rent, own, shelter, transitional, etc.).",
+        "options": [
+          "rent",
+          "own",
+          "shelter",
+          "transitional",
+          "temporary",
+          "unknown"
+        ]
       },
       {
         "name": "address",

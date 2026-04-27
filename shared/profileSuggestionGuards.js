@@ -27,6 +27,17 @@ const OCCUPATION_FLAGS = new Set([
   'first_responder',
 ])
 
+export const PROFILE_FIELD_ALIASES = Object.freeze({
+  education: {
+    // Older imports used current_school inside education; keep the education section canonical.
+    current_school: 'current_institution',
+  },
+  location_focus: {
+    // Conversational tools sometimes say "location"; matching uses geographic_focus.
+    location: 'geographic_focus',
+  },
+})
+
 function normalizeSentence(value) {
   return String(value || '')
     .toLowerCase()
@@ -93,6 +104,20 @@ function selfTargetFor(key) {
   if (key === 'section8_housing') return 'section8_recipient_self'
   if (key.endsWith('_recipient')) return `${key}_self`
   return key
+}
+
+function normalizeProfileSectionAliases(data, sectionKey) {
+  const aliases = PROFILE_FIELD_ALIASES[sectionKey] ?? {}
+  const normalized = {}
+  const aliasRejections = []
+  for (const [rawKey, value] of Object.entries(data ?? {})) {
+    const key = aliases[rawKey] ?? rawKey
+    if (key !== rawKey) {
+      aliasRejections.push({ key: rawKey, reason: 'normalized_alias', routedTo: key })
+    }
+    normalized[key] = value
+  }
+  return { data: normalized, rejected: aliasRejections }
 }
 
 export function isHighSchoolProfile(profile, sections = {}) {
@@ -180,6 +205,15 @@ function coerceFieldValue(value, field) {
   if (format === 'string_array') {
     if (Array.isArray(value)) return { ok: true, value: value.map((entry) => String(entry)).filter(Boolean) }
     if (typeof value === 'string') return { ok: true, value: value.split(',').map((entry) => entry.trim()).filter(Boolean) }
+    if (typeof value === 'object') {
+      return {
+        ok: true,
+        value: Object.values(value)
+          .flatMap((entry) => Array.isArray(entry) ? entry : [entry])
+          .map((entry) => String(entry).trim())
+          .filter(Boolean),
+      }
+    }
     return { ok: false }
   }
   if (format === 'json') {
@@ -206,8 +240,9 @@ function coerceFieldValue(value, field) {
 export function guardProfileSectionPayload(data, { profile, sections = {}, sectionKey, existing = {}, metadata = SECTION_METADATA } = {}) {
   const fieldMap = sectionFieldMap(sectionKey, metadata)
   const guarded = {}
-  const rejected = []
-  const payload = data ?? {}
+  const normalizedPayload = normalizeProfileSectionAliases(data ?? {}, sectionKey)
+  const rejected = [...normalizedPayload.rejected]
+  const payload = normalizedPayload.data
   const requiresOccupationEvidence =
     sectionKey === 'occupation' &&
     (isHighSchoolProfile(profile, sections) || !hasEmploymentRecord(profile, sections, payload) || hasStudentContradiction(payload))
