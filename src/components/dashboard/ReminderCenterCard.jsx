@@ -9,6 +9,7 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { formatDistanceToNowSafe, parseDateSafe } from "@/components/shared/dateUtils"
 import { cn } from "@/lib/utils"
 import { generateReminderPlan } from "@/api/dashboard"
+import { formatStatusLabel } from "@/utils/fieldDisplay"
 
 const STATUS_LABELS = {
   discovered: "Discovery",
@@ -19,13 +20,6 @@ const STATUS_LABELS = {
   submitted: "Submitted",
   awarded: "Awarded",
   rejected: "Closed",
-}
-
-function toTitleCase(value) {
-  if (!value) return value
-  return value
-    .replace(/[_-]+/g, " ")
-    .replace(/\b\w/g, (char) => char.toUpperCase())
 }
 
 function ReminderItem({
@@ -117,7 +111,7 @@ export default function ReminderCenterCard({
 
   const enrichDeadline = (deadline) => {
     const parsed = parseDateSafe(deadline.deadline)
-    const label = STATUS_LABELS[deadline.status] ?? toTitleCase(deadline.status)
+    const label = STATUS_LABELS[deadline.status] ?? formatStatusLabel(deadline.status)
     const contextParts = [deadline.organizationName, deadline.funder].filter(Boolean)
 
     return {
@@ -144,7 +138,7 @@ export default function ReminderCenterCard({
       context: contextParts.length > 0 ? contextParts.join(" • ") : undefined,
       date: parsed,
       daysRemaining: milestone.daysRemaining ?? null,
-      statusLabel: milestone.type ? toTitleCase(milestone.type) : undefined,
+      statusLabel: milestone.type ? formatStatusLabel(milestone.type) : undefined,
       icon: CalendarClock,
       accent: "bg-emerald-500/15 text-emerald-800 dark:text-emerald-200",
     }

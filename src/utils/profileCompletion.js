@@ -1,4 +1,5 @@
 import { SECTION_METADATA } from "@/config/sectionMetadata"
+import { isSentinelDisplayValue } from "@/utils/fieldDisplay"
 
 export function isProfileSectionApplicable(sectionKey, profile, metadata = SECTION_METADATA) {
   const config = metadata?.[sectionKey]
@@ -13,8 +14,8 @@ export function isProfileSectionApplicable(sectionKey, profile, metadata = SECTI
 
 export function hasMeaningfulProfileValue(value) {
   if (value === null || value === undefined || value === false) return false
-  if (typeof value === "string") return value.trim().length > 0
-  if (Array.isArray(value)) return value.length > 0
+  if (typeof value === "string") return !isSentinelDisplayValue(value)
+  if (Array.isArray(value)) return value.some(hasMeaningfulProfileValue)
   if (typeof value === "object") {
     return Object.values(value).some(hasMeaningfulProfileValue)
   }

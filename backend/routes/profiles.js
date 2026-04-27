@@ -28,6 +28,7 @@ import {
 import { isDesignatedProfileId } from '../utils/ensureDesignatedProfiles.js'
 import { resolveUploadsDir } from '../utils/uploadsDir.js'
 import { syncProfileFieldsFromSection } from '../utils/profileSectionSync.js'
+import { guardProfileSectionPayload } from '../utils/profileSuggestionGuards.js'
 
 const router = express.Router()
 const profileLogger = createLogger('route:profiles')
@@ -1642,6 +1643,19 @@ router.put('/:id/sections/:sectionKey', async (req, res) => {
     return res.status(400).json({ error: 'data payload must be an object' })
   }
 
+  const sectionRows = await req.db
+    .prepare('SELECT section_key, data FROM profile_sections WHERE profile_id = ?')
+    .all(id)
+  const existingSections = Object.fromEntries(
+    sectionRows.map((row) => [row.section_key, safeParseJSON(row.data, {})]),
+  )
+  const guardedPayload = guardProfileSectionPayload(data, {
+    profile,
+    sections: { ...existingSections, [sectionKey]: data },
+    sectionKey,
+  })
+  const guardedData = guardedPayload.data
+
   const upsert = req.db.prepare(
     `
     INSERT INTO profile_sections (profile_id, section_key, data, updated_by)
@@ -1653,12 +1667,12 @@ router.put('/:id/sections/:sectionKey', async (req, res) => {
   `,
   )
 
-  await upsert.run(id, sectionKey, JSON.stringify(data), updated_by ?? null)
+  await upsert.run(id, sectionKey, JSON.stringify(guardedData), updated_by ?? null)
 
   // v4: Sync key section fields (state, zip, veteran, disability) to profiles table
   // so shallow reads in matching and Anya work correctly.
   try {
-    syncProfileFieldsFromSection(req.db, id, sectionKey, data)
+    syncProfileFieldsFromSection(req.db, id, sectionKey, guardedData)
   } catch (syncErr) {
     console.warn(`[profiles] Section sync failed for ${id}/${sectionKey}:`, syncErr?.message)
   }
@@ -1677,7 +1691,7 @@ router.put('/:id/sections/:sectionKey', async (req, res) => {
       const secondary = normalizeEmail(user?.email)
       
       // Sync the main email field
-      const email = normalizeEmail(data?.email)
+      const email = normalizeEmail(guardedData?.email)
       if (email && isValidEmail(email)) {
         const canAutoLink = isAdmin || email === primary || email === secondary
 
@@ -1691,8 +1705,8 @@ router.put('/:id/sections/:sectionKey', async (req, res) => {
       }
       
       // Sync contacts emails (admin-only for security)
-      if (isAdmin && Array.isArray(data?.contacts)) {
-        const contactEmails = data.contacts
+      if (isAdmin && Array.isArray(guardedData?.contacts)) {
+        const contactEmails = guardedData.contacts
           .map((contact) => normalizeEmail(contact?.email))
           .filter((contactEmail) => contactEmail && isValidEmail(contactEmail))
         
@@ -1824,9 +1838,16 @@ async function handleProfileSectionAi(req, res) {
         })
       }
 
+      const guardedSuggestion = guardProfileSectionPayload(suggestion, {
+        profile: profileRow,
+        sections,
+        sectionKey,
+      })
+
       return res.json({
         section_key: sectionKey,
-        suggestion,
+        suggestion: guardedSuggestion.data,
+        rejected: guardedSuggestion.rejected,
         usage: completion.usage ?? null,
         raw_response: raw,
         ai_provider: 'openai',
@@ -1854,9 +1875,16 @@ async function handleProfileSectionAi(req, res) {
           })
         }
 
+        const guardedSuggestion = guardProfileSectionPayload(suggestion, {
+          profile: profileRow,
+          sections,
+          sectionKey,
+        })
+
         return res.json({
           section_key: sectionKey,
-          suggestion,
+          suggestion: guardedSuggestion.data,
+          rejected: guardedSuggestion.rejected,
           usage: null,
           raw_response: raw,
           ai_provider: 'anthropic',

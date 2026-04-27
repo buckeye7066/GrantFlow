@@ -39,6 +39,13 @@ import {
   hasMeaningfulProfileValue,
   normalizeProfileSections,
 } from "@/utils/profileCompletion"
+import {
+  formatFieldLabel,
+  formatStatusLabel,
+  getFieldFormat,
+  isSentinelDisplayValue,
+  normalizeDisplayString,
+} from "@/utils/fieldDisplay"
 
 const SECTION_ICONS = {
   basic_information: UserCircle,
@@ -61,13 +68,15 @@ const SECTION_ICONS = {
   political_civic: Users,
 }
 
-function titleCase(value = "") {
-  return value
-    .replace(/_/g, " ")
-    .replace(/\s+/g, " ")
-    .trim()
-    .replace(/\w\S*/g, (word) => word.charAt(0).toUpperCase() + word.slice(1))
-}
+const LEGACY_BENEFIT_FIELDS = [
+  "medicaid_enrolled",
+  "medicare_recipient",
+  "ssi_recipient",
+  "ssdi_recipient",
+  "snap_recipient",
+  "tanf_recipient",
+  "section8_housing",
+]
 
 function toEditableString(value) {
   if (value === null || value === undefined) return ""
@@ -167,32 +176,38 @@ function looksLikeAddressObject(value) {
   )
 }
 
-function formatInlinePreviewValue(inner) {
+export function formatInlinePreviewValue(inner) {
   if (inner === null || inner === undefined) return null
   if (typeof inner === "boolean") return inner ? "Yes" : "No"
   if (typeof inner === "number") return String(inner)
-  if (typeof inner === "string") return inner
+  if (typeof inner === "string") return normalizeDisplayString(inner)
   if (Array.isArray(inner)) {
     const allPrimitive = inner.every(
       (item) => item === null || item === undefined || ["string", "number", "boolean"].includes(typeof item),
     )
-    return allPrimitive ? inner.map((item) => (item === null || item === undefined ? "" : String(item))).join(", ") : null
+    if (!allPrimitive) return null
+    const values = inner
+      .map((item) => (item === null || item === undefined ? null : normalizeDisplayString(item)))
+      .filter(Boolean)
+    return values.length > 0 ? values.join(", ") : null
   }
   return null
 }
 
-function flattenObjectEntries(obj, { maxDepth = 2, depth = 0, prefix = "" } = {}) {
+export function flattenObjectEntries(obj, { maxDepth = 2, depth = 0, prefix = "", sectionKey = null } = {}) {
   if (!obj || typeof obj !== "object" || Array.isArray(obj)) return []
   const entries = []
   for (const [key, inner] of Object.entries(obj)) {
-    const nextKey = prefix ? `${prefix}.${key}` : key
+    if (!hasMeaningfulProfileValue(inner)) continue
+    const label = formatFieldLabel(key, sectionKey)
+    const nextKey = prefix ? `${prefix}.${label}` : label
     const inline = formatInlinePreviewValue(inner)
     if (inline !== null) {
       entries.push([nextKey, inline])
       continue
     }
     if (depth < maxDepth && inner && typeof inner === "object" && !Array.isArray(inner)) {
-      entries.push(...flattenObjectEntries(inner, { maxDepth, depth: depth + 1, prefix: nextKey }))
+      entries.push(...flattenObjectEntries(inner, { maxDepth, depth: depth + 1, prefix: nextKey, sectionKey }))
     }
   }
   return entries
@@ -210,7 +225,7 @@ function renderFlattenedPreview(flattened) {
       {preview.map(([key, inline]) => (
         <div key={key} className="flex items-start justify-end gap-2">
           <span className="shrink-0 text-[10px] font-semibold uppercase tracking-wide text-slate-400">
-            {titleCase(String(key).replace(/\./g, " "))}
+            {String(key).replace(/\./g, " ")}
           </span>
           <span className="min-w-0 text-xs text-slate-900 whitespace-pre-wrap break-words">{inline}</span>
         </div>
@@ -261,13 +276,85 @@ const THEME_PRESETS = {
   },
 }
 
-function renderValue(fieldKey, value) {
-  if (typeof value === "boolean") {
-    return (
-      <Badge className={value ? "bg-emerald-50 text-emerald-700 border-emerald-200" : "bg-slate-100 text-slate-600"}>
-        {value ? "Yes" : "No"}
-      </Badge>
-    )
+function formatCurrency(value, { cents = false } = {}) {
+  const amount = Number(value)
+  if (!Number.isFinite(amount)) return null
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+    maximumFractionDigits: cents || amount % 1 !== 0 ? 2 : 0,
+  }).format(cents ? amount / 100 : amount)
+}
+
+function formatDateValue(value, { includeTime = false } = {}) {
+  const normalized = normalizeDisplayString(value)
+  if (!normalized) return null
+  const date = new Date(normalized)
+  if (Number.isNaN(date.getTime())) return normalized
+  return includeTime ? format(date, "PP p") : format(date, "PP")
+}
+
+function renderBooleanTri(value) {
+  const isUnknown = value === null || value === undefined || isSentinelDisplayValue(value)
+  if (isUnknown) {
+    return <Badge className="bg-amber-50 text-amber-700 border-amber-200">Unknown</Badge>
+  }
+  const normalized =
+    typeof value === "string"
+      ? ["true", "yes", "y", "1"].includes(value.trim().toLowerCase())
+      : Boolean(value)
+  return (
+    <Badge className={normalized ? "bg-emerald-50 text-emerald-700 border-emerald-200" : "bg-slate-100 text-slate-600"}>
+      {normalized ? "Yes" : "No"}
+    </Badge>
+  )
+}
+
+function renderScalarValue(value, className = "text-sm text-slate-900") {
+  const normalized = normalizeDisplayString(value)
+  return normalized ? <span className={className}>{normalized}</span> : <span className="text-sm text-slate-500">—</span>
+}
+
+export function renderValue(fieldKey, value, sectionKey) {
+  const formatHint = getFieldFormat(sectionKey, fieldKey)
+  if (formatHint === "boolean_tri" || typeof value === "boolean") {
+    return renderBooleanTri(value)
+  }
+
+  if (formatHint === "currency_usd" || formatHint === "currency_cents_usd") {
+    const formatted = formatCurrency(value, { cents: formatHint === "currency_cents_usd" })
+    return formatted ? <span className="text-sm font-medium text-slate-900">{formatted}</span> : renderScalarValue(value)
+  }
+
+  if (formatHint === "percent") {
+    const amount = Number(value)
+    return Number.isFinite(amount) ? <span className="text-sm text-slate-900">{`${amount}%`}</span> : renderScalarValue(value)
+  }
+
+  if (formatHint === "date" || formatHint === "datetime") {
+    const formatted = formatDateValue(value, { includeTime: formatHint === "datetime" })
+    return formatted ? <span className="text-sm text-slate-900">{formatted}</span> : <span className="text-sm text-slate-500">—</span>
+  }
+
+  if (["url", "email", "phone", "enum"].includes(formatHint)) {
+    const normalized = normalizeDisplayString(value)
+    if (!normalized) return <span className="text-sm text-slate-500">—</span>
+    const label = formatHint === "enum" ? formatStatusLabel(normalized) : normalized
+    if (formatHint === "url") {
+      return (
+        <a href={normalized} className="text-sm text-blue-700 underline break-all" onClick={(event) => event.stopPropagation()}>
+          {label}
+        </a>
+      )
+    }
+    if (formatHint === "email") {
+      return (
+        <a href={`mailto:${normalized}`} className="text-sm text-blue-700 underline" onClick={(event) => event.stopPropagation()}>
+          {label}
+        </a>
+      )
+    }
+    return <span className="text-sm text-slate-900">{label}</span>
   }
 
   if (Array.isArray(value)) {
@@ -278,16 +365,18 @@ function renderValue(fieldKey, value) {
           const inline = formatInlinePreviewValue(item)
           return inline === null ? [] : [[`Item ${index + 1}`, inline]]
         }
-        return flattenObjectEntries(item, { maxDepth: 2, prefix: `Item ${index + 1}` })
+        return flattenObjectEntries(item, { maxDepth: 2, prefix: `Item ${index + 1}`, sectionKey })
       })
       return renderFlattenedPreview(flattened)
     }
 
+    const values = value.map(normalizeDisplayString).filter(Boolean)
+    if (values.length === 0) return <span className="text-sm text-slate-500">—</span>
     return (
       <div className="flex flex-wrap justify-end gap-1">
-        {value.map((item, index) => (
+        {values.map((item, index) => (
           <Badge key={`${item}-${index}`} variant="secondary" className="text-xs">
-            {String(item)}
+            {item}
           </Badge>
         ))}
       </div>
@@ -306,11 +395,15 @@ function renderValue(fieldKey, value) {
       }
     }
 
-    const flattened = flattenObjectEntries(value, { maxDepth: 2 })
+    const flattened = flattenObjectEntries(value, { maxDepth: 2, sectionKey })
     return renderFlattenedPreview(flattened)
   }
 
-  return <span className="text-sm text-slate-900">{String(value)}</span>
+  if (String(value).includes("[object Object]")) {
+    console.warn("[ProfileOverview] Refusing to render object string", { sectionKey, fieldKey, value })
+  }
+
+  return renderScalarValue(value)
 }
 
 function formatCurrencyFromCents(cents) {
@@ -358,6 +451,29 @@ function TargetCollegesCards({ colleges, onViewInUniversities }) {
   )
 }
 
+function TriStateField({ label, value, disabled, onChange }) {
+  const state = value === true ? "yes" : value === false ? "no" : "unknown"
+  const nextValue = state === "unknown" ? true : state === "yes" ? false : null
+  const tone =
+    state === "yes"
+      ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+      : state === "no"
+      ? "border-slate-200 bg-slate-50 text-slate-600"
+      : "border-amber-200 bg-amber-50/60 text-amber-700 opacity-80"
+
+  return (
+    <button
+      type="button"
+      disabled={disabled}
+      className={`rounded-full border px-3 py-1 text-xs font-semibold transition ${tone}`}
+      onClick={() => onChange?.(nextValue)}
+      aria-label={`${label}: ${state}. Click to change.`}
+    >
+      {state === "yes" ? "Yes" : state === "no" ? "No" : "Unknown"}
+    </button>
+  )
+}
+
 function SectionPreview({
   sectionKey,
   section,
@@ -374,6 +490,9 @@ function SectionPreview({
     .map(normalizeEntry)
     .filter(Boolean)
   const hasData = Object.values(section?.data ?? {}).some(hasMeaningfulProfileValue)
+  const hasLegacyBenefitFlags =
+    sectionKey === "government_assistance" &&
+    LEGACY_BENEFIT_FIELDS.some((fieldKey) => Object.prototype.hasOwnProperty.call(section?.data ?? {}, fieldKey))
 
   const isInteractive = Boolean(onEdit) && !isSaving && !isAIProcessing
   const canInlineEdit = Boolean(onSaveField) && !isSaving && !isAIProcessing
@@ -408,7 +527,9 @@ function SectionPreview({
               <span className="p-2 rounded-lg bg-blue-50 text-blue-600">
                 <SectionIcon className="w-4 h-4" />
               </span>
-              <CardTitle className="text-base font-semibold text-slate-900">{config?.title ?? titleCase(sectionKey)}</CardTitle>
+              <CardTitle className="text-base font-semibold text-slate-900">
+                {config?.title ?? formatFieldLabel(sectionKey)}
+              </CardTitle>
             </div>
             {config?.description ? (
               <p className="text-xs text-slate-500 leading-snug">{config.description}</p>
@@ -422,12 +543,19 @@ function SectionPreview({
       <CardContent className="space-y-4">
         {hasData ? (
           <div className="space-y-3">
+            {hasLegacyBenefitFlags ? (
+              <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-left text-xs text-amber-800">
+                Review benefit answers once: older recipient fields were mapped to applicant-level benefit flags.
+              </div>
+            ) : null}
             {dataEntries.slice(0, 8).map(([key, value]) => {
-              const label = titleCase(key)
-              const isBoolean = typeof value === "boolean"
+              const label = formatFieldLabel(key, sectionKey)
+              const formatHint = getFieldFormat(sectionKey, key)
+              const isTriState = formatHint === "boolean_tri"
+              const isBoolean = typeof value === "boolean" || isTriState
               const isComplexValue =
                 (Array.isArray(value) && value.some((v) => v && typeof v === "object")) ||
-                (value && typeof value === "object" && !Array.isArray(value) && !looksLikeAddressObject(value))
+                (value && typeof value === "object" && !Array.isArray(value))
 
               if (sectionKey === "education" && key === "target_colleges") {
                 const colleges = normalizeTargetColleges(value)
@@ -444,7 +572,7 @@ function SectionPreview({
                 return (
                   <div key={key} className="flex items-start justify-between gap-4">
                     <dt className="text-xs font-medium text-slate-500 uppercase tracking-wide">{label}</dt>
-                    <dd className="flex-1 text-right">{renderValue(key, value)}</dd>
+                    <dd className="flex-1 text-right">{renderValue(key, value, sectionKey)}</dd>
                   </div>
                 )
               }
@@ -453,7 +581,7 @@ function SectionPreview({
                 return (
                   <div key={key} className="flex items-start justify-between gap-4">
                     <dt className="text-xs font-medium text-slate-500 uppercase tracking-wide">{label}</dt>
-                    <dd className="flex-1 text-right">{renderValue(key, value)}</dd>
+                    <dd className="flex-1 text-right">{renderValue(key, value, sectionKey)}</dd>
                   </div>
                 )
               }
@@ -462,7 +590,7 @@ function SectionPreview({
                 return (
                   <div key={key} className="flex items-start justify-between gap-4">
                     <dt className="text-xs font-medium text-slate-500 uppercase tracking-wide">{label}</dt>
-                    <dd className="flex-1 text-right">{renderValue(key, value)}</dd>
+                    <dd className="flex-1 text-right">{renderValue(key, value, sectionKey)}</dd>
                   </div>
                 )
               }
@@ -476,11 +604,20 @@ function SectionPreview({
                     onKeyDown={(event) => event.stopPropagation()}
                   >
                     <span className="text-xs font-medium text-slate-500 uppercase tracking-wide">{label}</span>
-                    <Switch
-                      checked={Boolean(value)}
-                      disabled={!canInlineEdit}
-                      onCheckedChange={(checked) => onSaveField?.(sectionKey, key, checked)}
-                    />
+                    {isTriState ? (
+                      <TriStateField
+                        label={label}
+                        value={value}
+                        disabled={!canInlineEdit}
+                        onChange={(nextValue) => onSaveField?.(sectionKey, key, nextValue)}
+                      />
+                    ) : (
+                      <Switch
+                        checked={Boolean(value)}
+                        disabled={!canInlineEdit}
+                        onCheckedChange={(checked) => onSaveField?.(sectionKey, key, checked)}
+                      />
+                    )}
                   </div>
                 )
               }
@@ -749,7 +886,7 @@ export default function ProfileOverview({
                 ) : null}
               </div>
               <p className="text-slate-600 text-sm md:text-base">
-                {profile.primary_type ? titleCase(profile.primary_type) : "Profile"}{" "}
+                {profile.primary_type ? formatStatusLabel(profile.primary_type) : "Profile"}{" "}
                 {profile.organization_name ? (
                   <span className="text-slate-500">• Linked organization: {profile.organization_name}</span>
                 ) : null}

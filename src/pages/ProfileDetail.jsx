@@ -36,6 +36,7 @@ import StudentPortalsCard from "@/components/profiles/StudentPortalsCard.jsx"
 import HealthResourcesCard from "@/components/profiles/HealthResourcesCard.jsx"
 import { SECTION_METADATA } from "@/config/sectionMetadata"
 import { calculateProfileCompletion } from "@/utils/profileCompletion"
+import { deriveEmploymentStatusForSave, guardProfileSectionSuggestion } from "@/utils/profileSuggestionGuards"
 
 export default function ProfileDetail() {
   const [searchParams] = useSearchParams()
@@ -231,7 +232,8 @@ export default function ProfileDetail() {
       const { key } = editingSection
       try {
         setSavingSectionKey(key)
-        await upsertSectionMutation.mutateAsync({ sectionKey: key, values })
+        const guardedValues = deriveEmploymentStatusForSave(key, values, profile)
+        await upsertSectionMutation.mutateAsync({ sectionKey: key, values: guardedValues })
         setEditingSection(null)
       } catch (err) {
         // Error toast handled in mutation onError
@@ -239,7 +241,7 @@ export default function ProfileDetail() {
         setSavingSectionKey(null)
       }
     },
-    [editingSection, upsertSectionMutation],
+    [editingSection, profile, upsertSectionMutation],
   )
 
   const handleAskSection = React.useCallback(
@@ -261,13 +263,18 @@ export default function ProfileDetail() {
           return
         }
 
+        const guarded = guardProfileSectionSuggestion(existing, suggestion, { sectionKey, profile })
+
         setEditingSection({
           key: sectionKey,
-          data: { ...existing, ...suggestion },
+          data: guarded.data,
         })
         toast({
           title: "AI suggestion ready",
-          description: "Review the proposed updates and save any changes you approve.",
+          description:
+            guarded.rejected.length > 0
+              ? "Review the proposed updates. Some AI toggles were held back or routed because the evidence was household-level."
+              : "Review the proposed updates and save any changes you approve.",
         })
       } catch (err) {
         const message = err instanceof Error ? err.message : "Unable to fetch AI suggestion."
@@ -303,10 +310,10 @@ export default function ProfileDetail() {
       const existing =
         profile.sections?.find((section) => section.section_key === sectionKey)?.data ?? {}
 
-      const nextData = {
+      const nextData = deriveEmploymentStatusForSave(sectionKey, {
         ...(existing ?? {}),
         [fieldKey]: nextValue,
-      }
+      }, profile)
 
       try {
         setSavingSectionKey(sectionKey)

@@ -55,12 +55,17 @@ Rules:
   government_assistance: {
     title: PROFILE_SCHEMA.government_assistance.title,
     instructions: `
-Determine which public benefits the applicant receives.
-Return JSON with boolean flags for: medicaid_enrolled, medicare_recipient, ssi_recipient, ssdi_recipient, snap_recipient, tanf_recipient, section8_housing, other_programs (string).
+Determine which public benefits the applicant or household receives.
+Return tri-state JSON flags (true | false | null) for each self/household field:
+medicaid_recipient_self, medicaid_recipient_household, medicare_recipient_self, medicare_recipient_household,
+ssi_recipient_self, ssi_recipient_household, ssdi_recipient_self, ssdi_recipient_household,
+snap_recipient_self, snap_recipient_household, tanf_recipient_self, tanf_recipient_household,
+section8_recipient_self, section8_recipient_household, other_programs (string).
 
 Rules:
 - Use the source documents to confirm enrollment when possible.
-- When unsure, leave flags false and mention ambiguous evidence in other_programs.
+- When unsure, use null and mention ambiguous evidence in other_programs.
+- Do not set *_recipient_self=true when the text only says "dependent child of", "household member receives", "household receives", or "parent gets/receives"; use the matching *_recipient_household field instead.
 - other_programs should be a short comma-separated list or an empty string.
     `.trim(),
     keys: Object.keys(PROFILE_SCHEMA.government_assistance.fields),
