@@ -332,19 +332,30 @@ export function buildProfileSectionPrompt(sectionKey, { profile, sections, docum
   const config = SECTION_PROMPTS[sectionKey]
   if (!config) return null
 
-  const currentSection = sections[sectionKey] ?? {}
+  const safeSections = sections && typeof sections === 'object' ? sections : {}
+  const currentSection = safeSections[sectionKey] ?? {}
   const relatedSections = Object.fromEntries(
-    Object.entries(sections)
+    Object.entries(safeSections)
       .filter(([key]) => key !== sectionKey)
       .map(([key, value]) => [key, value]),
   )
 
-  const documentSummaries = documents.slice(0, 8).map((doc) => ({
-    id: doc.id,
-    name: doc.name,
-    type: doc.type,
-    status: doc.status,
-    notes: doc.notes ?? '',
+  // Defensively coerce documents to an array. Callers occasionally pass
+  // unawaited PostgresTx results (Promises) or `null` when document loads fail;
+  // the AI endpoint must keep working without document context rather than
+  // 500 the entire profile section AI flow.
+  const documentList = Array.isArray(documents)
+    ? documents
+    : Array.isArray(documents?.rows)
+      ? documents.rows
+      : []
+
+  const documentSummaries = documentList.slice(0, 8).map((doc) => ({
+    id: doc?.id,
+    name: doc?.name,
+    type: doc?.type,
+    status: doc?.status,
+    notes: doc?.notes ?? '',
   }))
 
   const context = {

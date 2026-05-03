@@ -1243,7 +1243,11 @@ router.put('/:id', async (req, res) => {
       sectionRows.map((row) => [row.section_key, safeParseJSON(row.data, {})]),
     )
     for (const [sectionKey, patch] of sectionUpdatesByKey) {
-      const row = selectSection.get(id, sectionKey)
+      // PostgresTx prepared-statement methods return Promises — must be awaited.
+      // Previously these were fire-and-forget on Postgres, which meant section
+      // patches submitted via PUT /api/profiles/:id silently dropped on the
+      // floor instead of persisting.
+      const row = await selectSection.get(id, sectionKey)
       const existingData = row?.data ? safeParseJSON(row.data, {}) : {}
       const merged = { ...existingData, ...patch }
       const guarded = guardProfileSectionPayload(merged, {
@@ -1253,7 +1257,7 @@ router.put('/:id', async (req, res) => {
         existing: existingData,
       })
       logProfileSectionRejections(id, sectionKey, guarded.rejected)
-      upsertSection.run(id, sectionKey, JSON.stringify(guarded.data), updatedBy)
+      await upsertSection.run(id, sectionKey, JSON.stringify(guarded.data), updatedBy)
     }
   }
 
@@ -1848,17 +1852,30 @@ async function handleProfileSectionAi(req, res) {
       sectionRows.map((row) => [row.section_key, safeParseJSON(row.data, {})]),
     )
 
-    const docs = req.db
-      .prepare(
-        `
-        SELECT d.id, d.name, d.type, d.status, d.notes
-        FROM documents d
-        JOIN profile_documents pd ON pd.document_id = d.id
-        WHERE pd.profile_id = ?
-        ORDER BY d.created_at DESC
-      `,
-      )
-      .all(id)
+    // PostgresTx returns a Promise from `.all(...)` — must be awaited or the prompt
+    // builder receives a Promise and `documents.slice(...)` throws "slice is not a
+    // function", surfacing as a 500 on every section's Ask AI button. This was the
+    // exact failure mode reported on /ProfileDetail. We also defensively coerce to
+    // an array so a future shape mismatch never blocks the AI provider call.
+    let docs = []
+    try {
+      const rawDocs = await req.db
+        .prepare(
+          `
+          SELECT d.id, d.name, d.type, d.status, d.notes
+          FROM documents d
+          JOIN profile_documents pd ON pd.document_id = d.id
+          WHERE pd.profile_id = ?
+          ORDER BY d.created_at DESC
+        `,
+        )
+        .all(id)
+      docs = Array.isArray(rawDocs) ? rawDocs : (rawDocs?.rows ?? [])
+    } catch (docsError) {
+      // Documents are optional context for the AI prompt — never block the request.
+      console.warn('[profiles/sections/ai] document load failed; continuing without docs:', docsError?.message || docsError)
+      docs = []
+    }
 
     const promptPayload = buildProfileSectionPrompt(sectionKey, {
       profile: mapProfile(profileRow),
