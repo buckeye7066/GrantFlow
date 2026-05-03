@@ -1,15 +1,19 @@
-import { SECTION_METADATA } from "@/config/sectionMetadata"
+import { SECTION_METADATA } from "../config/sectionMetadata.js"
 
 export const SENTINEL_VALUES = new Set(["", "unknown", "n/a", "none", "null", "undefined"])
 
 const warnedFields = new Set()
 
-function warnMissingMetadata(sectionKey, fieldKey, detail) {
+function warnMissingMetadata(sectionKey, fieldKey, detail, { strictBypass = false } = {}) {
   const key = `${sectionKey || "unknown"}:${fieldKey || "unknown"}:${detail}`
   if (warnedFields.has(key)) return
   warnedFields.add(key)
   const message = `[fieldDisplay] Missing or invalid SECTION_METADATA for profile field ${sectionKey}.${fieldKey}: ${detail}`
-  if (import.meta.env?.VITE_STRICT_PROFILE_METADATA === "true") throw new Error(message)
+  // Strict mode normally throws so misconfigurations are caught in CI / E2E.
+  // strictBypass=true is reserved for cases where the renderer recovered gracefully
+  // (e.g. coerced an array/object to a comma-separated list); we still log a soft
+  // notice but do not throw, so legitimate list-shaped data never white-screens.
+  if (import.meta.env?.VITE_STRICT_PROFILE_METADATA === "true" && !strictBypass) throw new Error(message)
   console.warn(message, { sectionKey, fieldKey })
 }
 
@@ -111,11 +115,23 @@ export function formatFieldValue(sectionKey, fieldKey, value, metadata = SECTION
   if (format === "boolean_tri") return formatBooleanTri(value)
   if (format === "enum") return normalizeDisplayString(value) ?? "—"
   if (["url", "email", "phone", "long_text", "text", "string"].includes(format)) {
-    if (typeof value !== "string" && typeof value !== "number" && typeof value !== "boolean") {
-      warnMissingMetadata(sectionKey, fieldKey, `format ${format} cannot render ${typeof value}`)
-      return "—"
+    if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+      return normalizeDisplayString(value) ?? "—"
     }
-    return normalizeDisplayString(value) ?? "—"
+    // Graceful coercion for legacy list/object data still stored under text-formatted fields.
+    // We never want this branch to log "cannot render object Object" or to throw in strict mode
+    // when the underlying value is a perfectly displayable list or key/value bag.
+    if (Array.isArray(value)) {
+      const joined = value.flatMap((entry) => normalizeStringArrayEntry(entry)).filter(Boolean).join(", ")
+      return joined || "—"
+    }
+    if (value && typeof value === "object") {
+      const joined = normalizeStringArrayEntry(value).join(", ")
+      return joined || "—"
+    }
+    // Truly unsupported (functions, symbols, etc.) — warn but don't crash.
+    warnMissingMetadata(sectionKey, fieldKey, `format ${format} cannot render ${typeof value}`)
+    return "—"
   }
   if (format === "string_array") {
     if (Array.isArray(value)) {

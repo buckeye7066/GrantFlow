@@ -29,6 +29,7 @@ import { isDesignatedProfileId } from '../utils/ensureDesignatedProfiles.js'
 import { resolveUploadsDir } from '../utils/uploadsDir.js'
 import { syncProfileFieldsFromSection } from '../utils/profileSectionSync.js'
 import { guardProfileSectionPayload } from '../utils/profileSuggestionGuards.js'
+import { normalizeProfileSectionData } from '../services/profileHelpers.js'
 
 const router = express.Router()
 const profileLogger = createLogger('route:profiles')
@@ -1048,7 +1049,10 @@ router.get('/:id', async (req, res) => {
       .all(id)
     sections = coerceDbRows(rawRows).map((section) => ({
       section_key: section.section_key,
-      data: safeParseJSON(section.data, {}),
+      // Read-time normalizer: idempotent, no destructive writes — just guarantees
+      // known list fields (housing.geographic_designation, programs_services.*) reach
+      // the client as string[] so fieldDisplay never sees a legacy string/object shape.
+      data: normalizeProfileSectionData(section.section_key, safeParseJSON(section.data, {})),
       updated_at: section.updated_at,
       updated_by: section.updated_by,
     }))
@@ -1615,7 +1619,7 @@ router.get('/:id/sections', async (req, res) => {
     .all(id)
   const sections = coerceDbRows(rawRows).map((section) => ({
     section_key: section.section_key,
-    data: safeParseJSON(section.data, {}),
+    data: normalizeProfileSectionData(section.section_key, safeParseJSON(section.data, {})),
     updated_at: section.updated_at,
     updated_by: section.updated_by,
   }))
@@ -1651,7 +1655,7 @@ router.get('/:id/sections/:sectionKey', async (req, res) => {
 
   res.json({
     section_key: section.section_key,
-    data: safeParseJSON(section.data, {}),
+    data: normalizeProfileSectionData(section.section_key, safeParseJSON(section.data, {})),
     updated_at: section.updated_at,
     updated_by: section.updated_by,
   })

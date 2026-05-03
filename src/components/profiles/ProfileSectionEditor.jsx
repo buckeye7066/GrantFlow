@@ -146,6 +146,12 @@ const booleanField = z
 
 const toStringList = (value) => {
   if (Array.isArray(value)) return value.map((v) => String(v).trim()).filter(Boolean)
+  if (value && typeof value === 'object') {
+    return Object.values(value)
+      .flatMap((entry) => (Array.isArray(entry) ? entry : [entry]))
+      .map((entry) => String(entry).trim())
+      .filter(Boolean)
+  }
   if (typeof value === 'string') {
     const raw = value.trim()
     if (!raw) return []
@@ -155,10 +161,11 @@ const toStringList = (value) => {
         const parsed = JSON.parse(raw)
         if (Array.isArray(parsed)) return parsed.map((v) => String(v).trim()).filter(Boolean)
       } catch {
-        // Ignore invalid JSON input; fall back to comma-separated parsing.
+        // Ignore invalid JSON input; fall back to comma/newline-separated parsing.
       }
     }
-    return raw.split(',').map((entry) => entry.trim()).filter(Boolean)
+    // Split on commas OR newlines so users can use either delimiter.
+    return raw.split(/[,\n]+/).map((entry) => entry.trim()).filter(Boolean)
   }
   return []
 }
@@ -403,9 +410,15 @@ const medicalInsuranceSchema = z.object({
 })
 
 const toStringArray = (value) => {
-  if (Array.isArray(value)) return value.map((v) => String(v)).filter(Boolean)
+  if (Array.isArray(value)) return value.map((v) => String(v).trim()).filter(Boolean)
+  if (value && typeof value === "object") {
+    return Object.values(value)
+      .flatMap((entry) => (Array.isArray(entry) ? entry : [entry]))
+      .map((entry) => String(entry).trim())
+      .filter(Boolean)
+  }
   if (typeof value === "string" && value.trim() !== "") {
-    return value.split(",").map((entry) => entry.trim()).filter(Boolean)
+    return value.split(/[,\n]+/).map((entry) => entry.trim()).filter(Boolean)
   }
   return []
 }
@@ -990,9 +1003,9 @@ export const SECTION_CONFIG = {
     },
     fields: [
       { name: "primary_condition", label: "Primary condition", component: Input },
-      { name: "secondary_conditions", label: "Secondary conditions", component: Textarea, props: { rows: 3, placeholder: "Comma-separated" } },
+      { name: "secondary_conditions", label: "Secondary conditions", component: Textarea, props: { rows: 3, placeholder: "Enter items separated by commas or new lines" } },
       { name: "mobility_needs", label: "Mobility needs", component: Textarea, props: { rows: 2 } },
-      { name: "dme_needed", label: "DME needed", component: Textarea, props: { rows: 3, placeholder: "Comma-separated (e.g., shower chair, walker)" } },
+      { name: "dme_needed", label: "DME needed", component: Textarea, props: { rows: 3, placeholder: "Enter items separated by commas or new lines (e.g., shower chair, walker)" } },
       { name: "doctor_name", label: "Doctor / clinician", component: Input },
       { name: "clinic_name", label: "Clinic / hospital", component: Input },
       { name: "letter_support_needed", label: "Support letter needed", type: "boolean" },
@@ -1041,7 +1054,7 @@ export const SECTION_CONFIG = {
       { name: "years_in_business", label: "Years in business", component: Input, props: { type: "number", min: 0 } },
       { name: "employee_count", label: "Employee count", component: Input, props: { type: "number", min: 0 } },
       { name: "annual_revenue", label: "Annual revenue (USD)", component: Input, props: { type: "number", min: 0 } },
-      { name: "certifications", label: "Certifications", component: Textarea, props: { rows: 2, placeholder: "Comma-separated (e.g., WOSB, HUBZone)" } },
+      { name: "certifications", label: "Certifications", component: Textarea, props: { rows: 2, placeholder: "Enter items separated by commas or new lines (e.g., WOSB, HUBZone)" } },
       { name: "notes", label: "Notes", component: Textarea, props: { rows: 3 } },
     ],
   },
@@ -1188,7 +1201,7 @@ export const SECTION_CONFIG = {
       type: "",
       address: "",
       broadband_speed: "",
-      geographic_designation: "",
+      geographic_designation: [],
       notes: "",
     },
     fields: [
@@ -1196,7 +1209,7 @@ export const SECTION_CONFIG = {
       { name: "type", label: "Housing type", component: Input, props: { placeholder: "rent, own, shelter, etc." } },
       { name: "address", label: "Housing address (if different)", component: Textarea, props: { rows: 3 } },
       { name: "broadband_speed", label: "Broadband speed", component: Input, props: { placeholder: "e.g. 25/3 Mbps" } },
-      { name: "geographic_designation", label: "Geographic designation (list)", component: Textarea, props: { rows: 2, placeholder: "Separate with commas (rural, urban, frontier...)" } },
+      { name: "geographic_designation", label: "Geographic designation (list)", component: Textarea, props: { rows: 2, placeholder: "Enter items separated by commas or new lines (e.g. rural, urban, frontier)" } },
       { name: "notes", label: "Housing notes", component: Textarea, props: { rows: 2 } },
     ],
   },
@@ -1232,15 +1245,15 @@ export const SECTION_CONFIG = {
       "Focus areas, services, and keywords used to match funding opportunities (high-signal for crawlers).",
     schema: programsServicesSchema,
     defaults: {
-      focus_areas: "",
-      interests: "",
-      keywords: "",
+      focus_areas: [],
+      interests: [],
+      keywords: [],
       notes: "",
     },
     fields: [
-      { name: "focus_areas", label: "Focus areas (list)", component: Textarea, props: { rows: 2, placeholder: "Separate with commas" } },
-      { name: "interests", label: "Interests (list)", component: Textarea, props: { rows: 2, placeholder: "Separate with commas" } },
-      { name: "keywords", label: "Keywords (list)", component: Textarea, props: { rows: 2, placeholder: "Separate with commas" } },
+      { name: "focus_areas", label: "Focus areas (list)", component: Textarea, props: { rows: 2, placeholder: "Enter items separated by commas or new lines" } },
+      { name: "interests", label: "Interests (list)", component: Textarea, props: { rows: 2, placeholder: "Enter items separated by commas or new lines" } },
+      { name: "keywords", label: "Keywords (list)", component: Textarea, props: { rows: 2, placeholder: "Enter items separated by commas or new lines" } },
       { name: "notes", label: "Programs/services notes", component: Textarea, props: { rows: 3 } },
     ],
   },

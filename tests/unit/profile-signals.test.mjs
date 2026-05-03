@@ -151,6 +151,43 @@ test('profile signals: housing section feeds assistance and demographic signals'
   assert.ok(kws.has('broadband access') || kws.has('digital divide'), 'no broadband should register digital divide keywords')
 })
 
+test('profile signals: legacy STRING geographic_designation is recovered (not silently dropped)', () => {
+  // Historical profiles stored "rural, frontier" as a string instead of an array.
+  // The toStringArray normalizer must coerce that into a string[] so rural+frontier
+  // still flow into demographics — otherwise matching silently loses signal for
+  // these profiles even though the form clearly shows the value.
+  const signals = buildProfileSignals({
+    profile: { id: 'legacy-string', primary_type: 'individual_need', display_name: 'Legacy String' },
+    sections: {
+      housing: { geographic_designation: 'rural, frontier' },
+    },
+  })
+  assert.ok(signals.demographics.has('rural'), 'string-shaped rural must be recovered into demographics')
+  assert.ok(signals.demographics.has('frontier'), 'string-shaped frontier must be recovered into demographics')
+})
+
+test('profile signals: legacy STRING programs_services.{interests,keywords,focus_areas} is recovered', () => {
+  // Same defense for the three programs_services list fields. The matcher used
+  // to call Array.isArray(...) and silently skip these when stored as strings.
+  const signals = buildProfileSignals({
+    profile: { id: 'legacy-string-ps', primary_type: 'individual_need', display_name: 'Legacy PS' },
+    sections: {
+      programs_services: {
+        focus_areas: 'workforce, health',
+        interests: 'youth services',
+        keywords: 'rural development, broadband',
+      },
+    },
+  })
+  const kws = new Set(signals.keywords)
+  assert.ok(kws.has('workforce') || kws.has('health'), 'string focus_areas must register keywords')
+  assert.ok(kws.has('youth services') || kws.has('youth') || kws.has('services'), 'string interests must register keywords')
+  assert.ok(
+    kws.has('rural development') || kws.has('broadband') || kws.has('rural') || kws.has('development'),
+    'string keywords must register keywords',
+  )
+})
+
 test('profile signals: family (household) section feeds financial and family signals', () => {
   const signals = buildProfileSignals({
     profile: { id: 'test', primary_type: 'individual_need', display_name: 'Test' },

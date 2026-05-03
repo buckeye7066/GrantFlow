@@ -6,6 +6,7 @@ import { pathToFileURL } from 'node:url'
 import { SECTION_METADATA } from '../src/config/sectionMetadata.js'
 import { DESIGNATED_PROFILES } from '../backend/config/designatedProfiles.js'
 import { PROFILE_FIELD_ALIASES } from '../shared/profileSuggestionGuards.js'
+import { PROFILE_SCHEMA } from '../backend/config/profileSchema.js'
 
 const SUPPORTED_FORMATS = new Set([
   'string',
@@ -100,6 +101,31 @@ async function main() {
     const declared = new Set((SECTION_METADATA[sectionKey]?.fields ?? []).map((field) => field.name))
     for (const [from, to] of Object.entries(aliases)) {
       if (!declared.has(to)) failures.push(`${sectionKey}.${from}: alias target ${to} missing from metadata`)
+    }
+  }
+
+  // ── Cross-check metadata `format` vs PROFILE_SCHEMA `type` ─────────────────
+  //
+  // Backed by the goal-aligned rule: "the metadata format must never lie about
+  // the shape." A field declared text/long_text/string in SECTION_METADATA but
+  // typed as an array in PROFILE_SCHEMA was the root cause of the recurring
+  // [fieldDisplay] "cannot render object Object" warnings on /ProfileDetail.
+  // Surfacing every mismatch here prevents the same regression from coming
+  // back the way it did across multiple prior fix attempts.
+  const SCALAR_FORMATS = new Set(['text', 'long_text', 'string', 'url', 'email', 'phone'])
+  for (const [sectionKey, section] of Object.entries(SECTION_METADATA)) {
+    const schemaFields = PROFILE_SCHEMA[sectionKey]?.fields
+    if (!schemaFields) continue
+    for (const field of section.fields ?? []) {
+      const schemaField = schemaFields[field.name]
+      if (!schemaField) continue
+      const schemaType = String(schemaField.type ?? '').toLowerCase()
+      const isArrayType = schemaType.startsWith('array')
+      if (isArrayType && SCALAR_FORMATS.has(field.format)) {
+        failures.push(
+          `${sectionKey}.${field.name}: SECTION_METADATA format="${field.format}" but PROFILE_SCHEMA type="${schemaField.type}" — change format to "string_array"`,
+        )
+      }
     }
   }
 

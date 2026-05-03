@@ -709,8 +709,8 @@ export const SECTION_METADATA = {
       {
         "name": "support_needs",
         "label": "Support needs (list)",
-        "format": "text",
-        "help": "Support needs (e.g., transportation, copay_assistance, lodging, caregiver_support)."
+        "format": "string_array",
+        "help": "Support needs (e.g., transportation, copay_assistance, lodging, caregiver_support). Enter items separated by commas or new lines."
       },
       {
         "name": "support_needs_level",
@@ -898,8 +898,8 @@ export const SECTION_METADATA = {
       {
         "name": "secondary_conditions",
         "label": "Secondary conditions",
-        "format": "text",
-        "help": "Other conditions or diagnoses explicitly stated."
+        "format": "string_array",
+        "help": "Other conditions or diagnoses explicitly stated. Enter items separated by commas or new lines."
       },
       {
         "name": "mobility_needs",
@@ -909,9 +909,9 @@ export const SECTION_METADATA = {
       },
       {
         "name": "dme_needed",
-        "label": "Dme needed",
-        "format": "text",
-        "help": "Durable medical equipment needed (e.g., shower chair) when explicitly stated."
+        "label": "Durable medical equipment needed",
+        "format": "string_array",
+        "help": "Durable medical equipment needed (e.g., shower chair). Enter items separated by commas or new lines."
       },
       {
         "name": "doctor_name",
@@ -1025,8 +1025,8 @@ export const SECTION_METADATA = {
       {
         "name": "certifications",
         "label": "Certifications",
-        "format": "text",
-        "help": "Certifications (e.g., WOSB, HUBZone, MBE) when explicitly stated."
+        "format": "string_array",
+        "help": "Certifications (e.g., WOSB, HUBZone, MBE) when explicitly stated. Enter items separated by commas or new lines."
       },
       {
         "name": "notes",
@@ -1779,8 +1779,8 @@ export const SECTION_METADATA = {
       {
         "name": "geographic_designation",
         "label": "Geographic designation (list)",
-        "format": "text",
-        "help": "Geographic designations (e.g., rural, urban, frontier)."
+        "format": "string_array",
+        "help": "Geographic designations (e.g., rural, urban, frontier). Enter items separated by commas or new lines."
       },
       {
         "name": "notes",
@@ -1827,20 +1827,20 @@ export const SECTION_METADATA = {
       {
         "name": "focus_areas",
         "label": "Focus areas (list)",
-        "format": "text",
-        "help": "Focus areas (comma-separated)."
+        "format": "string_array",
+        "help": "Focus areas the profile cares about. Enter items separated by commas or new lines."
       },
       {
         "name": "interests",
         "label": "Interests (list)",
-        "format": "text",
-        "help": "Interests (comma-separated)."
+        "format": "string_array",
+        "help": "Interests that help match opportunities. Enter items separated by commas or new lines."
       },
       {
         "name": "keywords",
         "label": "Keywords (list)",
-        "format": "text",
-        "help": "Keywords or tags (comma-separated)."
+        "format": "string_array",
+        "help": "Keywords or tags used by funding matchers. Enter items separated by commas or new lines."
       },
       {
         "name": "notes",

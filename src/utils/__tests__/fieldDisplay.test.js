@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 
 import { formatFieldLabel, formatFieldValue } from "@/utils/fieldDisplay"
 
@@ -32,5 +32,30 @@ describe("formatFieldLabel", () => {
     expect(formatFieldValue("demographics", "geographic_qualifiers", ["rural", "Appalachian"])).toBe("rural, Appalachian")
     expect(formatFieldValue("demographics", "geographic_qualifiers", { region: "Appalachian" })).toBe("Appalachian")
     expect(formatFieldValue("demographics", "geographic_qualifiers", "rural")).toBe("rural")
+  })
+
+  it("renders the previously-noisy housing/programs_services list fields without warnings", () => {
+    // Regression guard for the [fieldDisplay] Missing or invalid SECTION_METADATA
+    // ... format text cannot render object Object warnings on /ProfileDetail.
+    // sectionMetadata declares these as string_array AND fieldDisplay's text
+    // branch coerces gracefully; both must hold for the warnings to stay gone.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
+
+    expect(formatFieldValue("housing", "geographic_designation", ["rural", "frontier"])).toBe("rural, frontier")
+    expect(formatFieldValue("housing", "geographic_designation", "rural, urban")).toBe("rural, urban")
+    expect(formatFieldValue("housing", "geographic_designation", { 0: "rural", 1: "urban" })).toBe("rural, urban")
+    expect(formatFieldValue("housing", "geographic_designation", [])).toBe("—")
+
+    expect(formatFieldValue("programs_services", "focus_areas", ["health", "youth"])).toBe("health, youth")
+    expect(formatFieldValue("programs_services", "interests", ["youth services"])).toBe("youth services")
+    expect(formatFieldValue("programs_services", "keywords", ["rural", "broadband"])).toBe("rural, broadband")
+    expect(formatFieldValue("programs_services", "keywords", { 0: "rural", 1: "broadband" })).toBe("rural, broadband")
+    expect(formatFieldValue("programs_services", "interests", "mental health, food access")).toBe("mental health, food access")
+
+    const offenders = warn.mock.calls
+      .map((call) => (typeof call[0] === "string" ? call[0] : ""))
+      .filter((message) => message.startsWith("[fieldDisplay] Missing or invalid SECTION_METADATA"))
+    expect(offenders).toEqual([])
+    warn.mockRestore()
   })
 })

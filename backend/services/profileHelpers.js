@@ -78,6 +78,86 @@ export function safeParseArrayField(value, fallback = []) {
   return fallback
 }
 
+/**
+ * Normalize *any* value to a string[] in a forgiving, non-destructive way.
+ *
+ * Handles every shape we have ever seen for profile list fields
+ * (geographic_designation, programs_services.{focus_areas,interests,keywords},
+ * etc.) so callers like buildProfileSignals never have to branch on shape:
+ *   - undefined / null      -> []
+ *   - string ""             -> []
+ *   - string "rural, urban" -> ["rural", "urban"]   (split on commas/newlines)
+ *   - string "[\"a\",\"b\"]"-> ["a", "b"]            (JSON arrays)
+ *   - array of mixed values -> flatten + stringify + drop empties
+ *   - plain object {0:"a"}  -> Object.values(...) recursively
+ *   - Set                   -> Array.from(...)
+ *
+ * Lower-cases entries so downstream keyword/demographic sets match.
+ */
+export function toStringArray(value) {
+  if (value === null || value === undefined) return []
+  if (Array.isArray(value)) {
+    return value
+      .flatMap((entry) => toStringArray(entry))
+      .map((entry) => String(entry).trim().toLowerCase())
+      .filter(Boolean)
+  }
+  if (value instanceof Set) return toStringArray(Array.from(value))
+  if (typeof value === 'string') {
+    const trimmed = value.trim()
+    if (!trimmed) return []
+    if (trimmed.startsWith('[')) {
+      try {
+        const parsed = JSON.parse(trimmed)
+        if (Array.isArray(parsed)) return toStringArray(parsed)
+      } catch {
+        // fall through
+      }
+    }
+    return trimmed
+      .split(/[,\n]+/)
+      .map((entry) => entry.trim().toLowerCase())
+      .filter(Boolean)
+  }
+  if (typeof value === 'object') {
+    return toStringArray(Object.values(value))
+  }
+  if (typeof value === 'number' || typeof value === 'boolean') {
+    return [String(value).toLowerCase()]
+  }
+  return []
+}
+
+/**
+ * Section keys + field names whose values must always be string[] before they
+ * reach the renderer or the matching pipeline. Centralised so the read-time
+ * normalizer (in profile load endpoints) and signal extraction stay in sync.
+ */
+export const PROFILE_LIST_FIELDS = Object.freeze({
+  housing: ['geographic_designation'],
+  programs_services: ['focus_areas', 'interests', 'keywords'],
+})
+
+/**
+ * Idempotent normalizer for a single profile_sections.data payload.
+ * Coerces known list fields to string[] *without* mutating the input.
+ * Safe to call repeatedly; safe on missing/extra keys.
+ */
+export function normalizeProfileSectionData(sectionKey, data) {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return data
+  const listFields = PROFILE_LIST_FIELDS[sectionKey]
+  if (!listFields) return data
+  let out = data
+  for (const field of listFields) {
+    if (!(field in out)) continue
+    const current = out[field]
+    if (Array.isArray(current) && current.every((entry) => typeof entry === 'string')) continue
+    if (out === data) out = { ...data }
+    out[field] = toStringArray(current)
+  }
+  return out
+}
+
 export async function loadProfileContext(db, profileId) {
   const profile = await db
     .prepare('SELECT * FROM profiles WHERE id = ? LIMIT 1')
@@ -1458,16 +1538,25 @@ export function buildProfileSignals({ profile, sections, asOf = null }) {
   if (organizationDetails.is_cooperative) { registerKeyword('cooperative'); registerKeyword('co_op'); registerKeyword('usda_rural') }
 
   // ============ PROGRAMS & SERVICES (profile's stated needs → match to relatable funding) ============
-  const programsServices = sections?.programs_services ?? {}
-  if (Array.isArray(programsServices.keywords) && programsServices.keywords.length > 0) {
+  // Coerce all three list fields up-front so legacy string/object shapes still feed
+  // matching (avoids the silent quality bug where a string value was dropped because
+  // Array.isArray(...) was false).
+  const programsServicesRaw = sections?.programs_services ?? {}
+  const programsServices = {
+    ...programsServicesRaw,
+    focus_areas: toStringArray(programsServicesRaw.focus_areas),
+    interests: toStringArray(programsServicesRaw.interests),
+    keywords: toStringArray(programsServicesRaw.keywords),
+  }
+  if (programsServices.keywords.length > 0) {
     registerKeywords(programsServices.keywords)
     programsServices.keywords.forEach((k) => interestSet.add(normalizeString(k)))
   }
-  if (Array.isArray(programsServices.focus_areas) && programsServices.focus_areas.length > 0) {
+  if (programsServices.focus_areas.length > 0) {
     registerKeywords(programsServices.focus_areas)
     programsServices.focus_areas.forEach((f) => interestSet.add(normalizeString(f)))
   }
-  if (Array.isArray(programsServices.interests) && programsServices.interests.length > 0) {
+  if (programsServices.interests.length > 0) {
     registerKeywords(programsServices.interests)
     programsServices.interests.forEach((i) => interestSet.add(normalizeString(i)))
   }
@@ -1476,7 +1565,7 @@ export function buildProfileSignals({ profile, sections, asOf = null }) {
   }
 
       // Extract multi-word focus areas / keywords / interests as intent phrases for matching
-          ;[...(programsServices.focus_areas || []), ...(programsServices.keywords || []), ...(programsServices.interests || [])]
+          ;[...programsServices.focus_areas, ...programsServices.keywords, ...programsServices.interests]
                 .forEach((val) => {
                         const norm = normalizeString(val)
                                 if (norm.length >= 6 && norm.includes(' ')) intentPhraseSet.add(norm)
@@ -1887,8 +1976,12 @@ export function buildProfileSignals({ profile, sections, asOf = null }) {
       registerKeyword('broadband access')
     }
   }
-  if (Array.isArray(housing.geographic_designation)) {
-    housing.geographic_designation.forEach((desig) => {
+  // Housing geographic designations may legacy-arrive as a string ("rural, frontier"),
+  // an object, or an array; toStringArray normalises every shape so rural/urban/frontier
+  // signals are never silently dropped from matching.
+  const geographicDesignations = toStringArray(housing.geographic_designation)
+  if (geographicDesignations.length > 0) {
+    geographicDesignations.forEach((desig) => {
       const norm = normalizeString(desig)
       if (norm) {
         registerKeyword(norm)
