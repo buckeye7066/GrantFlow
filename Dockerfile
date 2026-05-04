@@ -45,6 +45,18 @@ COPY --from=builder /app/node_modules ./node_modules
 # Copy backend code
 COPY --from=builder /app/backend ./backend
 
+# Copy `shared/` — backend re-exports from it (e.g.
+# `backend/utils/profileSuggestionGuards.js` -> `shared/profileSuggestionGuards.js`).
+# Without this, the container crashes at boot with ERR_MODULE_NOT_FOUND and
+# Railway silently keeps serving the previous deployment.
+COPY --from=builder /app/shared ./shared
+
+# Copy `src/config/` — `shared/` transitively imports `src/config/sectionMetadata.js`
+# (and other config modules) at runtime. We deliberately copy only `src/config/`
+# (not the entire frontend `src/`) to keep the runtime image small while still
+# satisfying every transitive backend import.
+COPY --from=builder /app/src/config ./src/config
+
 # Copy seed data needed for admin maintenance operations (e.g., baseline profile seeding)
 COPY seed ./seed
 

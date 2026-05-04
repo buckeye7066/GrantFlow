@@ -43,6 +43,12 @@ async function main() {
   await run('node', ['scripts/ensure-rollup-native.mjs'], { label: 'rollup-native' })
   await run('node', ['scripts/guard-corruption-hotspots.mjs'], { label: 'corruption-hotspots' })
 
+  // Gate 0a: production-deploy guard — every backend import must resolve inside the
+  // Dockerfile runtime image. Catches the "Railway built fine but the container
+  // crashes on boot with ERR_MODULE_NOT_FOUND, so prod silently keeps serving the
+  // previous deployment" failure mode that masked profile section AI fixes for days.
+  await run('node', ['scripts/check-runtime-imports.mjs'], { label: 'runtime-imports' })
+
   // Gate 1: baseline quality + build
   await run(npmBin(), ['test'], { label: 'quality+build' })
 

@@ -1,0 +1,175 @@
+#!/usr/bin/env node
+/**
+ * check-runtime-imports.mjs
+ *
+ * Production-deploy regression guard.
+ *
+ * The Railway runtime image is built by Dockerfile and starts via
+ * `node backend/start.js`. Anything `backend/**` imports — directly OR
+ * transitively — must be present in the runtime image. We have been bitten
+ * (more than once) by `backend/utils/*.js` re-exporting from `shared/**`
+ * which then transitively imports `src/config/**`, while the Dockerfile only
+ * copied `backend/`. The container crashes at boot with
+ * `ERR_MODULE_NOT_FOUND`, healthcheck fails, and Railway silently keeps
+ * serving the previous deployment — so the "fix" the user just shipped is
+ * invisible in production for days at a time.
+ *
+ * This script statically walks the import graph rooted at `backend/start.js`
+ * and asserts that every resolved file lives under one of the directories
+ * the Dockerfile actually copies into the runtime image. If a backend import
+ * resolves to a file outside that whitelist, we fail CI loudly with a
+ * pointer to which Dockerfile COPY line is missing.
+ *
+ * Read-only. No side effects. Runs in seconds.
+ */
+
+import fs from 'node:fs'
+import path from 'node:path'
+import { fileURLToPath, pathToFileURL } from 'node:url'
+
+const __filename = fileURLToPath(import.meta.url)
+const repoRoot = path.resolve(path.dirname(__filename), '..')
+
+// Directories the Dockerfile actually COPYs into the runtime image.
+// Keep this list in sync with `Dockerfile` — anything imported from outside
+// these directories will fail at boot in production.
+const RUNTIME_COPIED_DIRS = [
+  'backend',
+  'shared',
+  'src/config',
+  'seed',
+  'dist',
+  'node_modules',
+]
+
+const ENTRY_POINTS = [
+  'backend/start.js',
+  'backend/server.js',
+]
+
+const visited = new Set()
+const violations = []
+
+const IMPORT_RE = /(?:^|\s|;|\()\s*(?:import|export)\s+(?:[\s\S]*?\bfrom\s+)?['"]([^'"]+)['"]/g
+const DYNAMIC_IMPORT_RE = /\bimport\s*\(\s*['"]([^'"]+)['"]\s*\)/g
+
+function isInsideRuntimeCopy(absPath) {
+  const rel = path.relative(repoRoot, absPath).replace(/\\/g, '/')
+  if (rel.startsWith('..')) return false
+  return RUNTIME_COPIED_DIRS.some(
+    (dir) => rel === dir || rel.startsWith(`${dir}/`),
+  )
+}
+
+function tryResolveFile(candidate) {
+  if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) {
+    return candidate
+  }
+  for (const ext of ['.js', '.mjs', '.cjs', '.json']) {
+    const withExt = `${candidate}${ext}`
+    if (fs.existsSync(withExt) && fs.statSync(withExt).isFile()) return withExt
+  }
+  if (fs.existsSync(candidate) && fs.statSync(candidate).isDirectory()) {
+    for (const idx of ['index.js', 'index.mjs', 'index.cjs']) {
+      const idxPath = path.join(candidate, idx)
+      if (fs.existsSync(idxPath)) return idxPath
+    }
+  }
+  return null
+}
+
+function resolveSpecifier(specifier, fromFile) {
+  // Bare specifier (npm package or node: builtin) — node_modules is copied
+  // wholesale into the runtime image, so we don't need to walk it.
+  if (specifier.startsWith('node:')) return null
+  if (!specifier.startsWith('.') && !specifier.startsWith('/')) return null
+
+  const baseDir = path.dirname(fromFile)
+  const absolute = path.isAbsolute(specifier)
+    ? specifier
+    : path.resolve(baseDir, specifier)
+  return tryResolveFile(absolute)
+}
+
+function readSourceSafe(filePath) {
+  try {
+    return fs.readFileSync(filePath, 'utf8')
+  } catch {
+    return ''
+  }
+}
+
+function walk(filePath) {
+  if (visited.has(filePath)) return
+  visited.add(filePath)
+
+  if (!isInsideRuntimeCopy(filePath)) {
+    violations.push({
+      file: filePath,
+      reason:
+        'imported by backend at runtime but lives outside Dockerfile COPY whitelist',
+    })
+    return
+  }
+
+  // Don't descend into node_modules — it's copied wholesale and walking it
+  // would be both slow and unnecessary for this safety net.
+  const rel = path.relative(repoRoot, filePath).replace(/\\/g, '/')
+  if (rel.startsWith('node_modules/')) return
+
+  const source = readSourceSafe(filePath)
+  const specifiers = new Set()
+  let match
+  IMPORT_RE.lastIndex = 0
+  while ((match = IMPORT_RE.exec(source)) !== null) {
+    specifiers.add(match[1])
+  }
+  DYNAMIC_IMPORT_RE.lastIndex = 0
+  while ((match = DYNAMIC_IMPORT_RE.exec(source)) !== null) {
+    specifiers.add(match[1])
+  }
+
+  for (const specifier of specifiers) {
+    const resolved = resolveSpecifier(specifier, filePath)
+    if (!resolved) continue
+    walk(resolved)
+  }
+}
+
+for (const entry of ENTRY_POINTS) {
+  const abs = path.resolve(repoRoot, entry)
+  if (!fs.existsSync(abs)) {
+    console.error(`[check-runtime-imports] entry point missing: ${entry}`)
+    process.exit(2)
+  }
+  walk(abs)
+}
+
+if (violations.length > 0) {
+  console.error('')
+  console.error(
+    '[check-runtime-imports] FAIL — backend imports escape the Dockerfile runtime image:',
+  )
+  for (const v of violations) {
+    const rel = path.relative(repoRoot, v.file).replace(/\\/g, '/')
+    console.error(`  - ${rel}`)
+    console.error(`    ${v.reason}`)
+  }
+  console.error('')
+  console.error(
+    '[check-runtime-imports] Fix: add the file (or its parent directory) to the COPY list in Dockerfile,',
+  )
+  console.error(
+    '[check-runtime-imports] OR move the dependency under backend/ / shared/ so it ships with the backend.',
+  )
+  console.error('')
+  process.exit(1)
+}
+
+const totalFiles = visited.size
+console.log(
+  `[check-runtime-imports] ok — ${totalFiles} backend-reachable files all live inside the Dockerfile runtime image`,
+)
+
+// Silence unused-import warning under strict mode without changing the API.
+void pathToFileURL
