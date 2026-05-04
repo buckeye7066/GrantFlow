@@ -21,6 +21,64 @@ const routeLogger = createLogger('route:savedGrants')
 
 const router = Router()
 
+// Columns we want to project off `funding_opportunities` when listing saved
+// grants. Kept in sync with `backend/db/schema.sql` (`CREATE TABLE
+// funding_opportunities`) and the column set consumed by
+// `assessOpportunityTrust`. If any one of these columns is missing in the
+// live database (e.g. a deploy hits a Postgres instance that hasn't been
+// migrated yet), we fall back to the safe-subset query below — that's a
+// recall-over-suppression decision: the user has clearly saved the grant,
+// so we must always show *something* rather than 500'ing the whole list.
+const FO_PROJECTION_FULL = `
+  fo.title,
+  fo.sponsor,
+  fo.deadline,
+  fo.amount_min,
+  fo.amount_max,
+  fo.application_url,
+  fo.apply_url,
+  fo.source_url,
+  fo.url,
+  fo.link_status,
+  fo.source,
+  fo.source_category,
+  fo.record_origin,
+  fo.opportunity_type,
+  fo.type,
+  fo.is_loan,
+  fo.requires_match,
+  fo.description,
+  fo.categories
+`
+
+// Minimal projection used when the full projection fails (e.g. column drift
+// on an old Postgres instance). Only columns that have existed since the
+// table was first created — this query must succeed even on the oldest
+// production schema.
+const FO_PROJECTION_MIN = `
+  fo.title,
+  fo.sponsor,
+  fo.deadline,
+  fo.amount_min,
+  fo.amount_max,
+  fo.application_url,
+  fo.source,
+  fo.description,
+  fo.categories
+`
+
+function buildSavedGrantsListSql(projection) {
+  return `
+    SELECT sg.opportunity_id, sg.saved_at, sg.notes,
+           ${projection}
+    FROM saved_grants sg
+    LEFT JOIN funding_opportunities fo ON fo.id = sg.opportunity_id
+    WHERE sg.user_id = ?
+    ORDER BY sg.saved_at DESC
+    LIMIT 500
+  `
+}
+
 router.get('/', async (req, res) => {
   try {
     const user = requireAuthenticatedUser(req, res)
@@ -29,22 +87,28 @@ router.get('/', async (req, res) => {
     if (!userId) return res.status(401).json({ error: 'Authentication required' })
     await ensureSavedGrantsSchema(req.db)
 
-    const userRows = await req.db.prepare(`
-      SELECT sg.opportunity_id, sg.saved_at, sg.notes,
-             fo.title, fo.sponsor, fo.deadline, fo.amount_min, fo.amount_max,
-             fo.application_url, fo.link_status, fo.source,
-             fo.source_category, fo.is_loan, fo.requires_matching_funds,
-             fo.description, fo.categories
-      FROM saved_grants sg
-      LEFT JOIN funding_opportunities fo ON fo.id = sg.opportunity_id
-      WHERE sg.user_id = ?
-      ORDER BY sg.saved_at DESC
-      LIMIT 500
-    `).all(userId)
+    let userRows
+    try {
+      userRows = await req.db.prepare(buildSavedGrantsListSql(FO_PROJECTION_FULL)).all(userId)
+    } catch (selectErr) {
+      // Schema drift recovery: a missing column on funding_opportunities (e.g.
+      // a Postgres instance that hasn't received a recent migration) must NOT
+      // turn a "list my saved grants" call into a 500. Retry once with the
+      // minimal projection and log the drift so we can repair it offline.
+      const message = String(selectErr?.message || '')
+      const isMissingColumn =
+        /column .* does not exist/i.test(message) || /no such column/i.test(message)
+      if (!isMissingColumn) throw selectErr
+      routeLogger.warn(
+        '[saved-grants] funding_opportunities column drift detected — falling back to minimal projection',
+        { error: message, userId },
+      )
+      userRows = await req.db.prepare(buildSavedGrantsListSql(FO_PROJECTION_MIN)).all(userId)
+    }
 
     // Attach canonical trust metadata so saved-grants UI and Anya can explain
     // lower-trust / directory / expired items consistently with discovery.
-    const saved = userRows.map((row) => {
+    const saved = (Array.isArray(userRows) ? userRows : []).map((row) => {
       const trust = assessOpportunityTrust(row, {
         allowDirectory: true,
         allowExpired: true, // saved items are always shown; mark status instead
@@ -64,7 +128,11 @@ router.get('/', async (req, res) => {
 
     res.json({ saved, ids: saved.map((r) => r.opportunity_id) })
   } catch (err) {
-    console.error('[saved-grants] GET error:', err)
+    routeLogger.error('[saved-grants] GET error', {
+      message: err?.message,
+      code: err?.code,
+      stack: err?.stack,
+    })
     res.status(500).json({ error: err.message })
   }
 })
