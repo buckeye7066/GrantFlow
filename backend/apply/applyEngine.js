@@ -956,16 +956,41 @@ async function gatherProfileForApplication(db, grant) {
   return { ...profile, sections: parsed }
 }
 
-async function generateApplicationSections(db, grant, opportunity, profile, sectionDefs) {
+// Per-section OpenAI call budget for the auto-populate path. Tight on purpose:
+// the route is invoked from a button click and Railway/Vercel kill HTTP requests
+// at ~60s, so a sequential loop of 7-8 calls @ default 30s each would 504 every
+// time. We parallelize the calls (gpt-4o-mini RPM/TPM are far above this fan-out)
+// and bound each call to AUTO_POPULATE_PER_SECTION_TIMEOUT_MS, with a hard
+// wall-clock ceiling of AUTO_POPULATE_TOTAL_BUDGET_MS for the whole batch. Any
+// section that doesn't return in time gets an empty string and we proceed —
+// auto-populate is a "seed the draft" feature, never a hard-fail surface.
+const AUTO_POPULATE_PER_SECTION_TIMEOUT_MS = Number(
+  process.env.AUTO_POPULATE_PER_SECTION_TIMEOUT_MS || 25_000,
+)
+const AUTO_POPULATE_TOTAL_BUDGET_MS = Number(
+  process.env.AUTO_POPULATE_TOTAL_BUDGET_MS || 45_000,
+)
+
+export async function generateApplicationSections(db, grant, opportunity, profile, sectionDefs, options = {}) {
   const result = {}
-  let openai = null
-  try {
-    openai = createOpenAIClient({ allowMissing: true }).openai
-  } catch (openaiErr) {
-    console.warn(
-      '[applyEngine.generateApplicationSections] OpenAI client unavailable; falling back to template content:',
-      openaiErr?.message,
-    )
+  let openai = options.openaiOverride ?? null
+  if (!openai) {
+    try {
+      // Drop retries to 0 in the auto-populate fan-out. The SDK default is 2
+      // retries × 30s timeout per attempt (= up to 90s per call), which alone
+      // already breaches the proxy budget. A retry on the next button click is
+      // strictly safer than a 504.
+      openai = createOpenAIClient({
+        allowMissing: true,
+        timeoutMs: AUTO_POPULATE_PER_SECTION_TIMEOUT_MS,
+        maxRetries: 0,
+      }).openai
+    } catch (openaiErr) {
+      console.warn(
+        '[applyEngine.generateApplicationSections] OpenAI client unavailable; falling back to template content:',
+        openaiErr?.message,
+      )
+    }
   }
   if (!openai) {
     console.log('[autoPopulate] No OpenAI key; generating template-based content only')
@@ -974,25 +999,66 @@ async function generateApplicationSections(db, grant, opportunity, profile, sect
 
   const grantContext = buildGrantContext(grant, opportunity)
   const profileContext = buildProfileContext(profile)
+  const startedAt = Date.now()
+  const wallBudgetMs = Number(options.totalBudgetMs ?? AUTO_POPULATE_TOTAL_BUDGET_MS)
+  const wallController = new AbortController()
+  const wallTimer = setTimeout(() => wallController.abort(), wallBudgetMs)
 
-  for (const section of sectionDefs) {
+  const tasks = sectionDefs.map(async (section) => {
+    const sectionStartedAt = Date.now()
     try {
       const prompt = buildSectionPrompt(section.section_key, section.title, grantContext, profileContext, grant)
-      const completion = await openai.chat.completions.create({
-        model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
-        messages: [
-          { role: 'system', content: GRANT_WRITER_SYSTEM_PROMPT },
-          { role: 'user', content: prompt },
-        ],
-        temperature: 0.7,
-        max_tokens: 2000,
-      })
-      result[section.section_key] = completion.choices?.[0]?.message?.content?.trim() || ''
+      const completion = await openai.chat.completions.create(
+        {
+          model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+          messages: [
+            { role: 'system', content: GRANT_WRITER_SYSTEM_PROMPT },
+            { role: 'user', content: prompt },
+          ],
+          temperature: 0.7,
+          max_tokens: 1200,
+        },
+        {
+          signal: wallController.signal,
+          timeout: AUTO_POPULATE_PER_SECTION_TIMEOUT_MS,
+        },
+      )
+      const text = completion?.choices?.[0]?.message?.content?.trim() || ''
+      result[section.section_key] = text
+      return {
+        section_key: section.section_key,
+        ok: true,
+        duration_ms: Date.now() - sectionStartedAt,
+        chars: text.length,
+      }
     } catch (err) {
-      console.warn(`[autoPopulate] AI generation failed for ${section.section_key}:`, err.message)
       result[section.section_key] = ''
+      const aborted =
+        err?.name === 'AbortError' || err?.code === 'ERR_CANCELED' || /aborted|abort/i.test(String(err?.message || ''))
+      const reason = aborted ? 'wall_clock_or_per_call_timeout' : 'provider_error'
+      console.warn(
+        `[autoPopulate] AI generation failed for ${section.section_key} (${reason}):`,
+        err?.message || err,
+      )
+      return {
+        section_key: section.section_key,
+        ok: false,
+        duration_ms: Date.now() - sectionStartedAt,
+        reason,
+      }
     }
-  }
+  })
+
+  const settled = await Promise.allSettled(tasks)
+  clearTimeout(wallTimer)
+
+  const summary = settled.map((s) => (s.status === 'fulfilled' ? s.value : { ok: false }))
+  const okCount = summary.filter((s) => s.ok).length
+  const totalMs = Date.now() - startedAt
+  console.log(
+    `[autoPopulate] AI fan-out complete: ${okCount}/${sectionDefs.length} sections in ${totalMs}ms (per-section ${AUTO_POPULATE_PER_SECTION_TIMEOUT_MS}ms, wall ${wallBudgetMs}ms)`,
+  )
+
   return result
 }
 
