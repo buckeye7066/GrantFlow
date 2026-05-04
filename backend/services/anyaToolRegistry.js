@@ -2808,11 +2808,21 @@ registerTool({
   },
 })
 
-import { runAutoRepair } from './anyaAutoRepairService.js'
+import { runAutoRepair, AUTO_REPAIR_TYPES } from './anyaAutoRepairService.js'
 
 registerTool({
   name: 'admin.code.autoRepair',
-  description: 'Scan the codebase for common anti-patterns (empty catches, console.log in routes, missing profile_id isolation in SQL) and optionally repair them. profile_bleed findings are always report-only.',
+  description:
+    "Scan the codebase for known production-incident anti-patterns and optionally repair them. " +
+    "Patterns covered: " +
+    "empty_catch (silent .catch(() => {})), " +
+    "console_log (route handlers), " +
+    "profile_bleed (SQL on funding_opportunities missing profile_id; report-only), " +
+    "missing_db_await (db.prepare(...).all/get/run not awaited; cause of multiple recent /api/profiles/:id/sections/:key/ai 500s), " +
+    "column_typo (known-typo column names like requires_matching_funds; cause of GET /api/saved-grants 500), " +
+    "unstructured_500 (route catch using console.error before res.status(500); auto-fixed when routeLogger is available), " +
+    "react_object_render (JSX rendering match_reasons / trust_reasons items without coercion; cause of React error #31 route crashes; report-only), " +
+    "dockerfile_drift (backend imports living outside the Dockerfile COPY whitelist; cause of Railway boot crashes; report-only).",
   requiresAdmin: true,
   schema: {
     type: 'object',
@@ -2826,9 +2836,9 @@ registerTool({
         type: 'array',
         items: {
           type: 'string',
-          enum: ['empty_catch', 'console_log', 'profile_bleed'],
+          enum: [...AUTO_REPAIR_TYPES],
         },
-        description: 'Subset of repair types to run. Defaults to all three.',
+        description: `Subset of repair types to run. Defaults to all of: ${AUTO_REPAIR_TYPES.join(', ')}.`,
       },
     },
   },
@@ -2838,15 +2848,19 @@ registerTool({
     const dryRun = params?.dryRun !== false
     const repairTypes = params?.repairTypes
     const report = await runAutoRepair(db, { dryRun, repairTypes })
-    const totalFindings =
-      report.findings.empty_catch.length +
-      report.findings.console_log.length +
-      report.findings.profile_bleed.length
+    const totalFindings = Object.entries(report.findings)
+      .filter(([k]) => k !== 'repairs' && k !== '_repairs')
+      .reduce((sum, [, list]) => sum + (Array.isArray(list) ? list.length : 0), 0)
+    const totalRepaired = Object.values(report.repaired || {}).reduce(
+      (sum, n) => sum + (Number(n) || 0),
+      0,
+    )
+    const reportOnlyTypes = ['profile_bleed', 'react_object_render', 'dockerfile_drift']
     const recommendation = dryRun
       ? totalFindings > 0
-        ? `Found ${totalFindings} issue(s) across ${report.scannedFiles} files. Run with dryRun=false to apply repairs (profile_bleed issues require manual SQL fixes).`
+        ? `Found ${totalFindings} issue(s) across ${report.scannedFiles} files. Run with dryRun=false to apply repairs. The following issue types are always report-only and require human review: ${reportOnlyTypes.join(', ')}.`
         : `No issues found across ${report.scannedFiles} files.`
-      : `Applied repairs: ${report.repaired.empty_catch} empty_catch fix(es), ${report.repaired.console_log} console_log fix(es). profile_bleed issues (${report.findings.profile_bleed.length}) require manual SQL fixes.`
+      : `Applied ${totalRepaired} repair(s) across ${report.scannedFiles} files. Report-only types still require human review: ${reportOnlyTypes.join(', ')}.`
     return { ...report, recommendation }
   },
 })
