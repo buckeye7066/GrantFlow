@@ -38,6 +38,7 @@ import { createCrawlerJob, searchSpecificNeed } from "@/api/crawlers"
 import { cn } from "@/lib/utils"
 import { useAuthStore } from "@/stores/authStore"
 import { canUseFeature } from "@/utils/tier"
+import { formatReasonText } from "@/utils/reasonText"
 
 function safeArray(value) {
   if (!value) return []
@@ -262,7 +263,10 @@ function ItemResultDetail({ opportunity, match, open, onClose }) {
               <Progress value={match.score} className="h-2" />
               <ul className="list-disc list-inside text-xs text-blue-900 space-y-1">
                 {detailReasons.length > 0 ? (
-                  detailReasons.map((reason, index) => <li key={`${reason}-${index}`}>{reason}</li>)
+                  detailReasons.map((reason, index) => {
+                    const text = formatReasonText(reason)
+                    return text ? <li key={`${text}-${index}`}>{text}</li> : null
+                  })
                 ) : (
                   <li>No explicit match reasons provided.</li>
                 )}

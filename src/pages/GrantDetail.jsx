@@ -3,6 +3,7 @@ import React, { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate } from 'react-router-dom';
 import { createPageUrl } from '@/utils';
+import { formatReasonText } from '@/utils/reasonText';
 import { Button } from '@/components/ui/button';
 import { Loader2, ArrowLeft, Edit, Trash2, Star, CheckSquare, Sparkles, DollarSign, ArrowRightSquare, Shield, Brain, Clock, FileText, Target, Link2Off, AlertTriangle, CalendarClock } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
@@ -82,11 +83,14 @@ function MatchIntelligenceBanner({ grant }) {
         {/* Match Reasons */}
         {matchReasons.length > 0 && (
           <div className="flex flex-wrap gap-1.5">
-            {matchReasons.slice(0, 5).map((reason, i) => (
-              <Badge key={i} variant="outline" className="text-xs bg-blue-50 text-blue-700 border-blue-200">
-                {reason}
-              </Badge>
-            ))}
+            {matchReasons.slice(0, 5).map((reason, i) => {
+              const text = formatReasonText(reason)
+              return text ? (
+                <Badge key={i} variant="outline" className="text-xs bg-blue-50 text-blue-700 border-blue-200">
+                  {text}
+                </Badge>
+              ) : null
+            })}
           </div>
         )}
 

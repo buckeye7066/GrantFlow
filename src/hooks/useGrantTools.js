@@ -8,6 +8,7 @@
  */
 
 import { useState, useCallback, useMemo } from "react"
+import { formatReasonText } from "@/utils/reasonText"
 
 // ── Storage Keys ──────────────────────────────────────────────────────────────
 
@@ -191,7 +192,10 @@ export function exportGrantAsPDF(grant) {
       ${grant.match_reasons?.length > 0 ? `
         <div class="section">
           <h2>Match Reasons</h2>
-          <ul>${(Array.isArray(grant.match_reasons) ? grant.match_reasons : []).map(r => `<li>${escapeHtml(r)}</li>`).join("")}</ul>
+          <ul>${(Array.isArray(grant.match_reasons) ? grant.match_reasons : []).map(r => {
+            const text = formatReasonText(r)
+            return text ? `<li>${escapeHtml(text)}</li>` : ""
+          }).join("")}</ul>
         </div>
       ` : ""}
 

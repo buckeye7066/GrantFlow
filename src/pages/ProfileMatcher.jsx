@@ -12,6 +12,7 @@ import { format } from 'date-fns';
 import { listProfiles } from '@/api/profiles';
 import { matchProfileToOpportunities } from '@/api/matching';
 import { apiFetch } from '@/api/client';
+import { formatReasonText } from '@/utils/reasonText';
 
 export default function ProfileMatcher() {
   const [selectedProfileId, setSelectedProfileId] = useState('');
@@ -379,13 +380,16 @@ export default function ProfileMatcher() {
                                 <span className="text-xs font-semibold text-slate-600">Why This Matches:</span>
                               </div>
                               <ul className="flex flex-wrap gap-1.5">
-                                {opp.match_reasons.slice(0, 5).map((reason, idx) => (
-                                  <li key={idx}>
-                                    <Badge variant="outline" className="text-xs font-normal bg-emerald-50 text-emerald-800 border-emerald-200">
-                                      {reason}
-                                    </Badge>
-                                  </li>
-                                ))}
+                                {opp.match_reasons.slice(0, 5).map((reason, idx) => {
+                                  const text = formatReasonText(reason)
+                                  return text ? (
+                                    <li key={idx}>
+                                      <Badge variant="outline" className="text-xs font-normal bg-emerald-50 text-emerald-800 border-emerald-200">
+                                        {text}
+                                      </Badge>
+                                    </li>
+                                  ) : null
+                                })}
                                 {opp.match_reasons.length > 5 && (
                                   <li>
                                     <Badge variant="outline" className="text-xs text-slate-500">

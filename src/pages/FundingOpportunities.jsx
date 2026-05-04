@@ -51,6 +51,7 @@ import { createDocument } from "@/api/documents"
 import { apiFetch } from "@/api/client"
 import { cn } from "@/lib/utils"
 import { formatAddress, createPageUrl } from "@/utils"
+import { formatReasonText } from "@/utils/reasonText"
 import { env } from "@/config/env.js"
 import GeoFundingView from "@/components/funding/GeoFundingView"
 import { useSavedSearches, useViewHistory, useHiddenGrants, exportGrantAsPDF, parseBooleanQuery } from "@/hooks/useGrantTools"
@@ -177,7 +178,8 @@ function buildOpportunitySummary(opportunity, profile, match) {
     lines.push("")
     lines.push("Top match reasons:")
     match.reasons.slice(0, 5).forEach((reason, index) => {
-      lines.push(`  ${index + 1}. ${reason}`)
+      const text = formatReasonText(reason)
+      if (text) lines.push(`  ${index + 1}. ${text}`)
     })
   }
   if (opportunity.description) {
@@ -527,12 +529,15 @@ function OpportunityCard({
                 <div className="space-y-2">
                   <p className="font-semibold text-sm">Match Reasons:</p>
                   <ul className="text-xs space-y-1">
-                    {match.reasons && match.reasons.map((reason, idx) => (
-                      <li key={idx} className="flex items-start gap-2">
-                        <CheckCircle2 className="w-3 h-3 mt-0.5 flex-shrink-0 text-green-600" />
-                        <span>{reason}</span>
-                      </li>
-                    ))}
+                    {match.reasons && match.reasons.map((reason, idx) => {
+                      const text = formatReasonText(reason)
+                      return text ? (
+                        <li key={idx} className="flex items-start gap-2">
+                          <CheckCircle2 className="w-3 h-3 mt-0.5 flex-shrink-0 text-green-600" />
+                          <span>{text}</span>
+                        </li>
+                      ) : null
+                    })}
                   </ul>
                 </div>
               </TooltipContent>
@@ -764,9 +769,10 @@ function OpportunityDetail({
                   <>
                     <p className="text-sm text-rose-700">Review the following before proceeding:</p>
                     <ul className="list-disc list-inside space-y-1 text-xs text-rose-700">
-                      {reviewReasons.map((reason, index) => (
-                        <li key={`${reason}-${index}`}>{reason}</li>
-                      ))}
+                      {reviewReasons.map((reason, index) => {
+                        const text = formatReasonText(reason)
+                        return text ? <li key={`${text}-${index}`}>{text}</li> : null
+                      })}
                     </ul>
                     <Badge variant="destructive" className="w-fit">
                       Requires review
@@ -882,7 +888,10 @@ function OpportunityDetail({
                 {matchScore !== null ? <Progress value={matchScore} className="h-2" /> : null}
                 <ul className="list-disc list-inside text-xs text-blue-800 space-y-1">
                   {reasonList.length > 0 ? (
-                    reasonList.map((reason, index) => <li key={`${reason}-${index}`}>{reason}</li>)
+                    reasonList.map((reason, index) => {
+                      const text = formatReasonText(reason)
+                      return text ? <li key={`${text}-${index}`}>{text}</li> : null
+                    })
                   ) : (
                     <li>No explicit match reasons provided.</li>
                   )}

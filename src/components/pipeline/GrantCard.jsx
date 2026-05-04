@@ -14,6 +14,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { createPageUrl } from '@/utils';
 import HelpTip from '@/components/help/HelpTip';
 import { isRenderableUrl } from '@/lib/matchDisplayThresholds';
+import { formatReasonText } from '@/utils/reasonText';
 
 function getGrantDetailUrl(grant, isDiscoveryResult = false) {
   if (grant.id) {
@@ -251,11 +252,14 @@ export default function GrantCard({ grant, organization, organizationName, onSta
             return reasons.length > 0 ? (
             <div className="bg-emerald-50 border border-emerald-200 rounded-md p-2 space-y-1">
               <p className="text-xs font-semibold text-emerald-900">Why this matches:</p>
-              {reasons.slice(0, 5).map((reason, idx) => (
-                <p key={idx} className="text-xs text-emerald-700 leading-tight">
-                  {typeof reason === 'string' ? reason : String(reason)}
-                </p>
-              ))}
+              {reasons.slice(0, 5).map((reason, idx) => {
+                const text = formatReasonText(reason)
+                return text ? (
+                  <p key={idx} className="text-xs text-emerald-700 leading-tight">
+                    {text}
+                  </p>
+                ) : null
+              })}
             </div>
             ) : null;
           })()}

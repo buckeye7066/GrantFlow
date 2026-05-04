@@ -20,6 +20,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { useToast } from "@/components/ui/use-toast"
 import { Link } from "react-router-dom"
 import { createPageUrl } from "@/utils"
+import { formatReasonText } from "@/utils/reasonText"
 
 // ---------------------------------------------------------------------------
 // Persistent needs helpers – stored in localStorage keyed per profile
@@ -503,7 +504,9 @@ export default function SmartMatcher() {
                                       <>
                                           {inferredNeeds.map((suggestion) => {
                                               const isNeedChecked = !!needsState.checked[suggestion.name]
-                                              const reason = Array.isArray(suggestion.reasons) ? suggestion.reasons[0] : null
+                                              const reasonText = Array.isArray(suggestion.reasons)
+                                                  ? formatReasonText(suggestion.reasons[0])
+                                                  : ''
                                               return (
                                               <div key={suggestion.name}>
                                                 <div className="flex items-center gap-3">
@@ -524,8 +527,8 @@ export default function SmartMatcher() {
                                                       </Badge>
                                                   )}
                                                 </div>
-                                                {reason && !isNeedChecked && (
-                                                  <p className="ml-10 mt-0.5 text-xs text-slate-500 leading-snug">{reason}</p>
+                                                {reasonText && !isNeedChecked && (
+                                                  <p className="ml-10 mt-0.5 text-xs text-slate-500 leading-snug">{reasonText}</p>
                                                 )}
                                               </div>
                                               )
@@ -788,9 +791,12 @@ export default function SmartMatcher() {
                                         </div>
                                         {opp.match_reasons && opp.match_reasons.length > 0 && (
                                           <div className="mt-2 flex flex-wrap gap-1">
-                                            {opp.match_reasons.slice(0, 6).map((reason, i) => (
-                                              <Badge key={i} variant="secondary" className="text-xs">{reason}</Badge>
-                                            ))}
+                                            {opp.match_reasons.slice(0, 6).map((reason, i) => {
+                                              const text = formatReasonText(reason)
+                                              return text ? (
+                                                <Badge key={i} variant="secondary" className="text-xs">{text}</Badge>
+                                              ) : null
+                                            })}
                                           </div>
                                         )}
                                       </div>
@@ -880,9 +886,12 @@ export default function SmartMatcher() {
                         <div className="space-y-2">
                           <div className="text-sm font-semibold text-slate-900">Why this matched</div>
                           <div className="flex flex-wrap gap-1">
-                            {selectedOpp.match_reasons.map((reason, idx) => (
-                              <Badge key={idx} variant="secondary" className="text-xs">{reason}</Badge>
-                            ))}
+                            {selectedOpp.match_reasons.map((reason, idx) => {
+                              const text = formatReasonText(reason)
+                              return text ? (
+                                <Badge key={idx} variant="secondary" className="text-xs">{text}</Badge>
+                              ) : null
+                            })}
                           </div>
                         </div>
                       )}

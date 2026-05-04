@@ -49,6 +49,7 @@ import PipelineAutomationPanel from "@/components/pipeline/PipelineAutomationPan
 import CrawlerProgressMeter from "@/components/automation/CrawlerProgressMeter"
 import { SECTION_METADATA } from "@/config/sectionMetadata"
 import { getApplicableSectionKeys } from "@/utils/profileCompletion"
+import { formatReasonText } from "@/utils/reasonText"
 
 async function startGeoCrawl(payload) {
   return apiFetch("/api/geo-crawl/start", {
@@ -1316,9 +1317,10 @@ function JobDetailsDialog({ job, onOpenChange, onRetry, retrying, onCancel, canc
                             <div>
                               <p className="text-[10px] uppercase tracking-wide text-slate-400 mb-0.5">Match reasons (crawler-reported)</p>
                               <ul className="list-disc pl-4 text-slate-500 space-y-0.5">
-                                {entry.match_reasons.slice(0, 4).map((reason, reasonIndex) => (
-                                  <li key={reasonIndex}>{reason}</li>
-                                ))}
+                                {entry.match_reasons.slice(0, 4).map((reason, reasonIndex) => {
+                                  const text = formatReasonText(reason)
+                                  return text ? <li key={reasonIndex}>{text}</li> : null
+                                })}
                                 {entry.match_reasons.length > 4 ? (
                                   <li className="text-slate-400">+{entry.match_reasons.length - 4} more reason{entry.match_reasons.length - 4 === 1 ? "" : "s"}</li>
                                 ) : null}

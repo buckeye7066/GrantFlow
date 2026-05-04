@@ -16,6 +16,7 @@ import { Search, ChevronRight, Home, Info } from 'lucide-react';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { useToast } from '@/components/ui/use-toast';
 import { createLogger } from '@/utils/logger';
+import { formatReasonText } from '@/utils/reasonText';
 
 const SORT_OPTIONS = [
   { value: 'match', label: 'Match score' },
@@ -72,9 +73,10 @@ function MatchReasonsCollapsible({ reasons }) {
       </CollapsibleTrigger>
       <CollapsibleContent>
         <ul className="list-disc list-inside text-xs text-muted-foreground space-y-1 pl-2 pb-2">
-          {reasons.map((r, i) => (
-            <li key={i}>{typeof r === 'string' ? r : JSON.stringify(r)}</li>
-          ))}
+          {reasons.map((r, i) => {
+            const text = formatReasonText(r)
+            return text ? <li key={i}>{text}</li> : null
+          })}
         </ul>
       </CollapsibleContent>
     </Collapsible>

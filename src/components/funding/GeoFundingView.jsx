@@ -15,6 +15,7 @@ import { Progress } from "@/components/ui/progress"
 import { Skeleton } from "@/components/ui/skeleton"
 import { cn } from "@/lib/utils"
 import { getGeoSummary, getGeoScored } from "@/api/opportunities"
+import { formatReasonList } from "@/utils/reasonText"
 
 const STATE_NAMES = {
   AL:"Alabama",AK:"Alaska",AZ:"Arizona",AR:"Arkansas",CA:"California",
@@ -79,11 +80,14 @@ function OpportunityRow({ opp, showScore }) {
             </Badge>
           )}
         </div>
-        {opp.match_reasons?.length > 0 && showScore && (
-          <div className="mt-1 text-[11px] text-slate-400 truncate max-w-lg">
-            {opp.match_reasons.slice(0, 3).join(" · ")}
-          </div>
-        )}
+        {opp.match_reasons?.length > 0 && showScore && (() => {
+          const lines = formatReasonList(opp.match_reasons).slice(0, 3)
+          return lines.length > 0 ? (
+            <div className="mt-1 text-[11px] text-slate-400 truncate max-w-lg">
+              {lines.join(" · ")}
+            </div>
+          ) : null
+        })()}
       </div>
       {url && (
         <a
