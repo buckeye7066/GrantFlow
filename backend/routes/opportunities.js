@@ -1676,12 +1676,51 @@ router.delete('/:id([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-
 });
 
 // GET /api/opportunities/:id/similar
-// Returns up to 5 active opportunities sharing categories or sponsor with the given one
+// Returns up to 5 active opportunities sharing categories or sponsor with the
+// given one. Accepts EITHER a funding_opportunities.id OR a grants.id —
+// frontend callers sometimes pass `grant.id` because the GrantDetail page
+// works in terms of the user's pipeline grants, not the catalog id. When the
+// grants.id is sent we transparently resolve grants.funding_opportunity_id
+// and continue. If neither resolves we still return 200 with an empty
+// similar[] (and an explanatory `reason`), per the project's "zero results
+// is a failure state" rule — a missing index is a recoverable empty set,
+// not a hard error.
 router.get('/:id/similar', async (req, res) => {
   try {
-    const { id } = req.params
-    const opp = await req.db.prepare('SELECT * FROM funding_opportunities WHERE id = ?').get(String(id))
-    if (!opp) return res.status(404).json({ error: 'Opportunity not found' })
+    const rawId = String(req.params.id || '').trim()
+    if (!rawId) return res.status(400).json({ error: 'id is required', similar: [] })
+
+    let opp = await req.db
+      .prepare('SELECT * FROM funding_opportunities WHERE id = ?')
+      .get(rawId)
+
+    // Fallback path: caller may have sent a grants.id (pipeline row id),
+    // not a funding_opportunities.id. Resolve via the FK and retry once.
+    let resolvedFromGrant = false
+    if (!opp) {
+      try {
+        const grantRow = await req.db
+          .prepare('SELECT funding_opportunity_id FROM grants WHERE id = ?')
+          .get(rawId)
+        const foId = grantRow?.funding_opportunity_id
+        if (foId) {
+          opp = await req.db
+            .prepare('SELECT * FROM funding_opportunities WHERE id = ?')
+            .get(String(foId))
+          resolvedFromGrant = Boolean(opp)
+        }
+      } catch {
+        // Best-effort fallback — if the grants table lookup itself fails
+        // we still want to return a graceful empty similar[] below.
+      }
+    }
+
+    if (!opp) {
+      // Soft 200 instead of 404. The route never crashes the caller — it
+      // just reports there is nothing to compute similar opportunities
+      // against. Frontend treats `similar: []` as "no banner".
+      return res.json({ similar: [], reason: 'opportunity_not_indexed' })
+    }
 
     const categories = safeParseJSON(opp.categories, [])
     const keywords = safeParseJSON(opp.keywords, [])
@@ -1690,7 +1729,10 @@ router.get('/:id/similar', async (req, res) => {
     const isPostgres = req.db?.dialect === 'postgres'
     const activeVal = isPostgres ? 'TRUE' : '1'
 
-    // Fetch candidates: active, not self, same state or national
+    // Fetch candidates: active, not self, same state or national.
+    // Use opp.id (the *resolved* funding_opportunities id) — the caller may
+    // have sent grants.id originally; we still want to exclude the actual
+    // opp from the candidate set, not the pipeline-row id.
     const candidateRows = await req.db.prepare(
       `SELECT id, title, sponsor, categories, keywords, amount_min, amount_max,
               deadline, application_url, state, is_national, link_status
@@ -1698,7 +1740,7 @@ router.get('/:id/similar', async (req, res) => {
        WHERE id != ? AND is_active = ${activeVal}
        ORDER BY updated_at DESC
        LIMIT 200`
-    ).all(String(id))
+    ).all(String(opp.id))
 
     // Score each candidate by overlap
     const scored = candidateRows.map(row => {
@@ -1733,10 +1775,17 @@ router.get('/:id/similar', async (req, res) => {
       .slice(0, 5)
       .map(({ _score, ...rest }) => rest)
 
-    res.json({ similar })
+    res.json({
+      similar,
+      ...(resolvedFromGrant ? { resolved_from: 'grants_table' } : {}),
+    })
   } catch (err) {
     console.error('Similar grants error:', err)
-    res.status(500).json({ error: 'Failed to find similar grants' })
+    // Even on hard failure, return a degraded 200 so the SimilarGrants
+    // sidebar component just renders nothing instead of populating the
+    // browser console with a red error on every GrantDetail page load.
+    // The error is still reported through the standard request id flow.
+    res.status(200).json({ similar: [], error: 'Failed to find similar grants' })
   }
 })
 

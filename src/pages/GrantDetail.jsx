@@ -130,11 +130,23 @@ function MatchIntelligenceBanner({ grant }) {
   )
 }
 
-function SimilarGrants({ grantId }) {
+function SimilarGrants({ grant }) {
+  // Prefer the funding_opportunities catalog id when available — that's
+  // what the /similar route indexes. Fall back to grants.id (the route now
+  // accepts both transparently and resolves the FK), and finally to legacy
+  // shapes like opportunity_id we have shipped in the past. This keeps the
+  // sidebar working for every grant shape we have seen in production
+  // without requiring the backend to crash on legacy callers.
+  const lookupId =
+    grant?.funding_opportunity_id ??
+    grant?.opportunity_id ??
+    grant?.id ??
+    null
+
   const { data, isLoading, isError } = useQuery({
-    queryKey: ['similar-grants', grantId],
-    queryFn: () => apiFetch(`/api/opportunities/${grantId}/similar`).then(r => r.similar ?? []),
-    enabled: !!grantId,
+    queryKey: ['similar-grants', lookupId],
+    queryFn: () => apiFetch(`/api/opportunities/${lookupId}/similar`).then(r => r.similar ?? []),
+    enabled: !!lookupId,
     staleTime: 5 * 60 * 1000,
     retry: false,
   })
@@ -630,7 +642,7 @@ export default function GrantDetail() {
         <div className="lg:col-span-1 space-y-6"></div>
       </main>
 
-      <SimilarGrants grantId={grant.id} />
+      <SimilarGrants grant={grant} />
 
       <AlertDialog open={isDeleting} onOpenChange={setIsDeleting}>
         <AlertDialogContent>
