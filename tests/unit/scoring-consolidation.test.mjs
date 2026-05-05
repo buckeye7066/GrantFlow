@@ -241,31 +241,24 @@ test('eligibilityFilter hasSourceUrl accepts valid https URL', async () => {
 })
 
 // ──────────────────────────────────────────────────────────────────────────────
-// D-018: mockAI throws in production (check is at call site, not import time)
+// D-018: mockAI was removed entirely — the file was orphaned (no importers)
+// and mock fallbacks are a known anti-pattern in production paths. Asserting
+// the file *does not exist* is the new invariant: if anyone reintroduces it
+// without explicit review, this test catches it.
 // ──────────────────────────────────────────────────────────────────────────────
-test('mockAI throws immediately if NODE_ENV is production', async () => {
-  // The guard was moved from module-level into each exported function so the
-  // module can be imported in production without crashing routes that reference
-  // it. The functions must still throw when NODE_ENV=production.
-  const original = process.env.NODE_ENV
+test('mockAI module must not exist (mocks have been fully removed)', async () => {
+  const fs = await import('node:fs/promises')
+  const path = await import('node:path')
+  const { fileURLToPath } = await import('node:url')
+  const here = path.dirname(fileURLToPath(import.meta.url))
+  const mockPath = path.resolve(here, '../../backend/services/mockAI.js')
+  let exists = true
   try {
-    process.env.NODE_ENV = 'production'
-    const { getMockFieldSuggestion, getMockSectionSuggestion } = await import(
-      '../../backend/services/mockAI.js'
-    )
-    assert.throws(
-      () => getMockFieldSuggestion('f', 'F'),
-      (err) => /production/i.test(err?.message ?? ''),
-      'getMockFieldSuggestion must throw when NODE_ENV=production'
-    )
-    assert.throws(
-      () => getMockSectionSuggestion('s'),
-      (err) => /production/i.test(err?.message ?? ''),
-      'getMockSectionSuggestion must throw when NODE_ENV=production'
-    )
-  } finally {
-    process.env.NODE_ENV = original
+    await fs.access(mockPath)
+  } catch {
+    exists = false
   }
+  assert.equal(exists, false, 'backend/services/mockAI.js must not be reintroduced; real AI clients only.')
 })
 
 // ──────────────────────────────────────────────────────────────────────────────

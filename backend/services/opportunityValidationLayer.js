@@ -186,8 +186,13 @@ export function validateOpportunityStrict(opp) {
     }
   }
 
-  // 3. Full validator (loans, placeholders, matching funds, type)
-  const full = validateOpportunity(opp, { allowLoans: false, allowDirectories: true })
+  // 3. Full validator (loans, placeholders, matching funds, type).
+  // NOTE: strict mode is the audit/format-check used at display and CI-gate
+  // time. Expired deadlines are kept as warnings here so existing records
+  // remain auditable; the hard reject for new expired records lives in the
+  // insert path (opportunityInserter.upsertFundingOpportunity), which calls
+  // validateOpportunity directly with allowExpired=false (the default).
+  const full = validateOpportunity(opp, { allowLoans: false, allowDirectories: true, allowExpired: true })
   for (const err of full.errors) {
     if (!errors.includes(err)) errors.push(err)
   }

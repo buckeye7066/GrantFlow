@@ -6,6 +6,7 @@ import { validateOpportunity, deduplicateByUrl } from './opportunityValidator.js
 import { reviewOpportunity } from './reviewerAgent.js'
 import { normalizeUrlForDedupe } from '../routes/opportunityHelpers.js'
 import { normalizeOpportunityState } from '../utils/stateNormalization.js'
+import { checkUrl as verifyUrlLiveness } from './linkVerificationService.js'
 
 // Backward-compat alias
 const isValidHttpUrl = isValidRealUrl
@@ -242,9 +243,12 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
   }
 
   // Comprehensive validation (required fields, categorization, directory/expiration detection).
+  // Expired opportunities are rejected by default; backfill / catalog import paths
+  // can opt-in via opts.allowExpired = true.
   const validation = validateOpportunity(opportunity, {
     allowLoans: opts.allowLoans ?? false,
     allowDirectories: opts.allowDirectories ?? true,
+    allowExpired: opts.allowExpired ?? false,
   })
   if (!validation.valid) {
     return {
@@ -292,6 +296,32 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
       inserted: false,
       skipped: true,
       reason: !candidateUrl ? 'missing evidence/source/application URL' : 'invalid or placeholder URL',
+    }
+  }
+
+  // Optional pre-insert URL liveness gate.
+  // Default-off to keep seeds/tests/baseline fast. Two ways to enable:
+  //   1. Per-call: pass `verifyUrl: true` from a live crawler
+  //   2. Globally: set OPPORTUNITY_INSERT_VERIFY_URL=true (operators flip in prod)
+  // A 'broken' status is a hard reject; 'redirect' and 'skipped' pass through
+  // and the existing background sweep continues to monitor health afterwards.
+  const envVerify = String(process.env.OPPORTUNITY_INSERT_VERIFY_URL || '').toLowerCase() === 'true'
+  const shouldVerify = opts.verifyUrl ?? envVerify
+  if (shouldVerify) {
+    const liveness = await verifyUrlLiveness(candidateUrl, { timeoutMs: opts.urlTimeoutMs ?? 8000 })
+    if (liveness.status === 'broken') {
+      return {
+        id: null,
+        inserted: false,
+        skipped: true,
+        reason: `dead_link:${liveness.code ?? 'no_response'}`,
+      }
+    }
+    // Stamp verification metadata so the background sweep doesn't re-check immediately.
+    if (liveness.status === 'ok' || liveness.status === 'redirect') {
+      opportunity.last_verified_at = opportunity.last_verified_at ?? new Date().toISOString()
+      opportunity.link_status = liveness.status
+      opportunity.link_status_code = liveness.code
     }
   }
 
@@ -503,7 +533,10 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
         }
       }
     } catch (err) {
-      console.warn('[opportunityInserter] URL dedup query failed (allowing insert):', err?.message)
+      // URL cross-source dedup is a data-integrity check — never silent.
+      // We allow the insert to proceed (degraded mode) but log loudly so
+      // operators can investigate persistent DB issues.
+      console.error('[opportunityInserter] URL dedup query failed (allowing insert; investigate):', err?.message || err)
     }
   }
 

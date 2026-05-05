@@ -93,10 +93,11 @@ const NON_ACTIONABLE_URL_PATTERNS = [
  * @param {boolean} [opts.allowLoans=false] - If true, loans are accepted with a warning
  * @param {boolean} [opts.allowDirectories=true] - If true, directories with actionable URLs pass
  * @param {boolean} [opts.requireDescription=false] - If true, description is required (not just sponsor)
+ * @param {boolean} [opts.allowExpired=false] - If true, expired deadlines downgrade to warning instead of error
  * @returns {ValidationResult}
  */
 export function validateOpportunity(opp, opts = {}) {
-  const { allowLoans = false, allowDirectories = true, requireDescription = false } = opts
+  const { allowLoans = false, allowDirectories = true, requireDescription = false, allowExpired = false } = opts
   const errors = []
   const warnings = []
 
@@ -161,9 +162,16 @@ export function validateOpportunity(opp, opts = {}) {
   }
 
   // ── 7. Expiration detection ──
+  // Expired opportunities are rejected by default. Callers handling legacy
+  // catalog backfills (which need to keep historical records labeled) can
+  // pass `allowExpired: true` to downgrade to a warning instead.
   const isExpired = isExpiredOpportunity(opp)
   if (isExpired) {
-    warnings.push('deadline_passed')
+    if (allowExpired) {
+      warnings.push('deadline_passed')
+    } else {
+      errors.push('deadline_passed')
+    }
   }
 
   // ── 8. Generic directory detection ──
@@ -269,8 +277,10 @@ export async function checkUrlDuplicate(db, normalizedUrl, excludeId = null) {
         return { isDuplicate: true, existingId: r.id }
       }
     }
-  } catch {
-    // URL dedup is best-effort; don't block insertion on query failures
+  } catch (err) {
+    // URL dedup is best-effort; we don't block insertion on query failures,
+    // but a silent catch hides real DB issues. Log loudly so operators see it.
+    console.error('[opportunityValidator] checkUrlDuplicate query failed:', err?.message || err)
   }
 
   return { isDuplicate: false, existingId: null }

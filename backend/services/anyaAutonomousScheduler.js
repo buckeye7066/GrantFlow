@@ -18,25 +18,30 @@ function isProdEnv() {
 }
 
 /**
- * Configuration for autonomous operations
+ * Configuration for autonomous operations.
+ *
+ * SAFETY: All autonomous operations default to OFF. Operators must explicitly
+ * opt in via env vars. Anya is a guide for users, not an autonomous operator;
+ * giving her the ability to mutate code, run crawlers, and write to the DB
+ * without explicit consent violates that contract.
  */
 const AUTONOMOUS_CONFIG = {
-  // Enable/disable autonomous operations
-  enabled: process.env.ANYA_AUTONOMOUS_ENABLED !== 'false',
-  
-  // When to run operations
+  // Enable/disable autonomous operations (default: disabled)
+  enabled: process.env.ANYA_AUTONOMOUS_ENABLED === 'true',
+
+  // When to run operations (all default: disabled)
   runOnStartup: process.env.ANYA_RUN_ON_STARTUP === 'true',
   runOnAdminLogin: process.env.ANYA_RUN_ON_ADMIN_LOGIN === 'true',
   runOnSchedule: process.env.ANYA_RUN_ON_SCHEDULE === 'true',
-  
-  // What operations to run
+
+  // What operations to run (each must be explicitly enabled)
   operations: {
-    codeCrawl: process.env.ANYA_CODE_CRAWL !== 'false',
-    functionTests: process.env.ANYA_FUNCTION_TESTS !== 'false',
-    crawlers: process.env.ANYA_CRAWLERS !== 'false',
-    itemDiscovery: process.env.ANYA_ITEM_DISCOVERY !== 'false',
-    portalChecks: process.env.ANYA_PORTAL_CHECKS !== 'false',
-    geoCrawl: process.env.ANYA_GEO_CRAWL !== 'false',
+    codeCrawl: process.env.ANYA_CODE_CRAWL === 'true',
+    functionTests: process.env.ANYA_FUNCTION_TESTS === 'true',
+    crawlers: process.env.ANYA_CRAWLERS === 'true',
+    itemDiscovery: process.env.ANYA_ITEM_DISCOVERY === 'true',
+    portalChecks: process.env.ANYA_PORTAL_CHECKS === 'true',
+    geoCrawl: process.env.ANYA_GEO_CRAWL === 'true',
   },
   
   // Schedule (cron-like format)

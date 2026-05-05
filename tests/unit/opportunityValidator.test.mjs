@@ -83,10 +83,19 @@ describe('validateOpportunity', () => {
     assert.equal(result.opportunityType, 'scholarship')
   })
 
-  it('detects expired deadline', () => {
+  it('rejects expired deadline by default', () => {
     const opp = { ...VALID_OPP, deadline: '2020-01-01', deadline_type: 'fixed' }
     const result = validateOpportunity(opp)
-    assert.ok(result.valid)
+    assert.ok(!result.valid, 'expired opportunity must fail validation by default')
+    assert.ok(result.isExpired)
+    assert.ok(result.errors.includes('deadline_passed'),
+      `expected errors to include 'deadline_passed', got: ${JSON.stringify(result.errors)}`)
+  })
+
+  it('accepts expired deadline when allowExpired=true (warning only)', () => {
+    const opp = { ...VALID_OPP, deadline: '2020-01-01', deadline_type: 'fixed' }
+    const result = validateOpportunity(opp, { allowExpired: true })
+    assert.ok(result.valid, `expected valid with allowExpired:true, got errors: ${JSON.stringify(result.errors)}`)
     assert.ok(result.isExpired)
     assert.ok(result.warnings.includes('deadline_passed'))
   })

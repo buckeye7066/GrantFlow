@@ -58,7 +58,6 @@
     "backend/services/anyaToolRegistry.js",
     "backend/services/auditService.js",
     "backend/services/autoDiscoveryCrawlers.js",
-    "backend/services/comprehensiveCrawler.js",
     "backend/services/comprehensiveCrawlerOptimized.js",
     "backend/services/connectors/benefitsGovConnector.js",
     "backend/services/connectors/grantsGovConnector.js",

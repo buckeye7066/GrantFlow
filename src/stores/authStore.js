@@ -13,6 +13,7 @@ import {
 } from '@/api/auth'
 import client, { apiFetch } from '@/api/client'
 import { toast } from '@/components/ui/use-toast'
+import { useFundingResultsStore } from '@/stores/fundingResultsStore'
 
 const ACCESS_EXPIRY_STORAGE_KEY = 'grantflow:access-expiry'
 const REFRESH_LEEWAY_MS = 60 * 1000
@@ -207,6 +208,12 @@ export const useAuthStore = create((set, get) => ({
     clearAccessExpiry()
     client.clearToken()
     client.setActiveProfileId?.(null)
+    // Funding-results store is persisted to localStorage; if we don't clear it
+    // on logout / session-expired, the next user (or the same user with a
+    // different active profile) sees stale results from the previous session.
+    try { useFundingResultsStore.getState().clear() } catch (err) {
+      console.warn('[authStore] failed to clear funding results store:', err?.message || err)
+    }
     set({ ...initialState, preferredAuthMethod })
   },
 
@@ -829,8 +836,16 @@ export const useAuthStore = create((set, get) => ({
 
   setActiveProfileId: (profileId) => {
     const normalized = normalizeId(profileId)
+    const prev = get().activeProfileId
     client.setActiveProfileId?.(normalized)
     set({ activeProfileId: normalized })
+    // If the active profile actually changed, clear any cached funding results
+    // so the new profile doesn't see the previous profile's matches.
+    if (prev && normalized && String(prev) !== String(normalized)) {
+      try { useFundingResultsStore.getState().clear() } catch (err) {
+        console.warn('[authStore] failed to clear funding results on profile switch:', err?.message || err)
+      }
+    }
   },
 
   setPreferredAuthMethod: (method) => {

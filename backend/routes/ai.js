@@ -74,7 +74,28 @@ function fallbackProposalTemplate({ grant, section }) {
   const funder = grant?.funder || 'Funder'
   const title = grant?.title || 'Grant Opportunity'
   const focus = section || 'project narrative'
-  return `Draft ${focus} (non-AI fallback)\n\nApplicant: ${applicant}\nGrant: ${title}\nFunder: ${funder}\n\n1) Need / Problem\n- [Describe the specific community need and who is impacted.]\n\n2) Project Overview\n- [What you will do, where, and for whom.]\n\n3) Activities & Timeline\n- [List 3-6 key activities with target dates.]\n\n4) Outcomes & Measurement\n- [List measurable outcomes and how you will track them.]\n\n5) Budget & Sustainability\n- [How funds will be used and how the work continues after funding.]\n`
+  // Honest fallback: explicitly tell the user the AI generation failed and
+  // give them a checklist of what they need to write themselves, rather than
+  // bracket-placeholders that look like a half-complete proposal.
+  return [
+    `AI generation unavailable — manual draft required for ${focus}.`,
+    '',
+    `Applicant: ${applicant}`,
+    `Grant: ${title}`,
+    `Funder: ${funder}`,
+    '',
+    'The AI service is currently unavailable, so this draft could not be generated.',
+    'Please write each section yourself using your real profile information:',
+    '',
+    '  1) Need / Problem — the specific community need and who is impacted',
+    '  2) Project Overview — what you will do, where, and for whom',
+    '  3) Activities & Timeline — 3–6 key activities with target dates',
+    '  4) Outcomes & Measurement — measurable outcomes and how you will track them',
+    '  5) Budget & Sustainability — how funds will be used and how work continues after funding',
+    '',
+    'Try again in a few minutes, or contact support if the issue persists.',
+    '',
+  ].join('\n')
 }
 
 function tryExtractFirstJson(text) {

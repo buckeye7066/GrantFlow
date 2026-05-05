@@ -30,10 +30,21 @@ function shouldSkipUrl(url) {
   }
 }
 
-async function checkUrl(url) {
+/**
+ * HEAD-check a single URL. Exported so the insert path (opportunityInserter)
+ * can gate persistence on URL liveness, instead of waiting for the 30-day
+ * background re-verification to flag dead links after they're already in the DB.
+ *
+ * @param {string} url
+ * @param {Object} [opts]
+ * @param {number} [opts.timeoutMs] - per-request timeout (default 10s)
+ * @returns {Promise<{ status: 'ok'|'redirect'|'broken'|'skipped', code: number|null }>}
+ */
+export async function checkUrl(url, opts = {}) {
   if (shouldSkipUrl(url)) return { status: 'skipped', code: null }
+  const timeoutMs = Number.isFinite(opts.timeoutMs) ? opts.timeoutMs : REQUEST_TIMEOUT_MS
   const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
   try {
     const res = await fetch(url, {
       method: 'HEAD',
