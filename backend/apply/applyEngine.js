@@ -872,16 +872,18 @@ export async function autoPopulate({ db, applicationId }) {
 
   const medNecCheck = requiresMedicalNecessity(opportunity || {})
 
-  const defaultSections = [
-    { section_key: 'cover_letter', title: 'Cover Letter' },
-    { section_key: 'needs_statement', title: 'Statement of Need' },
-    { section_key: 'project_narrative', title: 'Project Narrative' },
-    { section_key: 'budget_justification', title: 'Budget Justification' },
-    { section_key: 'organization_background', title: 'Applicant Background' },
-    { section_key: 'evaluation_plan', title: 'Evaluation Plan' },
-    ...(medNecCheck.required ? [{ section_key: 'medical_necessity', title: 'Medical Necessity Documentation' }] : []),
-    { section_key: 'submission_instructions', title: 'Submission Instructions' },
-  ]
+  // Classify the application style. Different opportunity types use radically
+  // different submission processes — a FAFSA-driven university financial aid
+  // award accepts no "Budget Justification", and an invitation-only program
+  // accepts no application at all. Generating a 7-section grant proposal for
+  // those is worse than generating nothing: it misleads the user and the AI
+  // hallucinates dollar lines that the funder will never read. We branch on
+  // the classifier so each style ships with the sections that actually map
+  // 1:1 to what the user has to do in the real world.
+  const applicationStyle = classifyApplicationStyle(grant, opportunity)
+  const defaultSections = buildDefaultSectionsForStyle(applicationStyle, {
+    medNecRequired: medNecCheck.required,
+  })
 
   const defaultChecklist = [
     { key: 'confirm_deadline', label: `Confirm deadline${grant?.deadline ? ': ' + grant.deadline : ' and timezone'}`, status: 'pending' },
@@ -927,6 +929,129 @@ function mapMethodToSubmission(method) {
   const map = { portal: 'portal', print_and_mail: 'mail', fax: 'fax', email_contact: 'email', phone_contact: null }
   return map[method] || method || null
 }
+
+// ---------------------------------------------------------------------------
+// Application-style classifier
+// ---------------------------------------------------------------------------
+// The auto-populate engine used to ship the same 7 sections (cover letter,
+// statement of need, narrative, budget justification, background, evaluation,
+// submission) regardless of the opportunity. That produced confidently-wrong
+// output for non-discretionary aid: the AI would invent a "$10,000 budget
+// justification" for a FAFSA-driven university financial aid program that
+// accepts neither budgets nor narratives. The classifier below maps every
+// known submission shape to a *workable* set of sections; everything else
+// falls back to the standard discretionary-grant proposal structure.
+//
+// Heuristics intentionally err on the side of "no fabricated narrative":
+//   * an explicit application_method always wins;
+//   * an absent application_method triggers a funder/title scan for
+//     university financial aid patterns (sponsor: "<X> University" /
+//     "<X> College", title contains "financial aid" / "tuition" /
+//     "scholarship" + university match) — those are FAFSA-driven by
+//     default in the U.S. landscape.
+//
+// Returns one of: 'auto_fafsa' | 'auto_profile' | 'nomination' |
+// 'invitation' | 'no_application' | 'standard'.
+export function classifyApplicationStyle(grant, opportunity) {
+  const explicit = String(grant?.application_method || opportunity?.application_method || '')
+    .trim()
+    .toLowerCase()
+  if (
+    explicit === 'auto_fafsa' ||
+    explicit === 'auto_profile' ||
+    explicit === 'nomination' ||
+    explicit === 'invitation' ||
+    explicit === 'no_application'
+  ) {
+    return explicit
+  }
+
+  const sponsor = String(grant?.funder || opportunity?.sponsor || '').toLowerCase()
+  const title = String(grant?.title || opportunity?.title || '').toLowerCase()
+  const description = String(
+    grant?.program_description || opportunity?.description || '',
+  ).toLowerCase()
+
+  const looksLikeUniversity =
+    /\b(university|college|institute of technology|community college|polytechnic)\b/.test(sponsor) ||
+    /\b(university|college)\b/.test(title)
+  const looksLikeStudentAidProgram =
+    /\b(financial aid|tuition assistance|tuition support|student aid|need-based aid|institutional aid|grant-in-aid|federal student aid|fafsa)\b/.test(
+      title,
+    ) ||
+    /\b(fafsa|federal student aid|institutional aid|need-based)\b/.test(description)
+
+  if (looksLikeUniversity && looksLikeStudentAidProgram) {
+    return 'auto_fafsa'
+  }
+  return 'standard'
+}
+
+export function buildDefaultSectionsForStyle(style, opts = {}) {
+  const medNec = Boolean(opts.medNecRequired)
+  switch (style) {
+    case 'auto_fafsa':
+      // FAFSA-driven institutional aid. The user's job is to file FAFSA,
+      // confirm the school received the SAR, and complete any school-
+      // specific verification forms — NOT to write a budget justification
+      // the financial aid office will never read.
+      return [
+        { section_key: 'fafsa_steps', title: 'FAFSA Steps' },
+        { section_key: 'school_aid_office', title: 'School Aid Office Contact' },
+        { section_key: 'document_checklist', title: 'Document Checklist' },
+        { section_key: 'submission_instructions', title: 'Submission Instructions' },
+      ]
+    case 'auto_profile':
+      // Profile-based auto-match (e.g. some scholarships, certain federal
+      // benefits). The user just verifies that the right profile data is
+      // on file with the funder — there is no narrative to write.
+      return [
+        { section_key: 'auto_match_steps', title: 'Auto-Match Steps' },
+        { section_key: 'profile_verification', title: 'Profile Verification' },
+        { section_key: 'submission_instructions', title: 'Submission Instructions' },
+      ]
+    case 'nomination':
+      // Nomination-only programs accept no direct applications. The user
+      // needs to identify a qualifying nominator.
+      return [
+        { section_key: 'nomination_path', title: 'Nomination Path' },
+        { section_key: 'nominator_outreach', title: 'Nominator Outreach' },
+        { section_key: 'submission_instructions', title: 'Submission Instructions' },
+      ]
+    case 'invitation':
+      return [
+        { section_key: 'invitation_status', title: 'Invitation Status' },
+        { section_key: 'submission_instructions', title: 'Submission Instructions' },
+      ]
+    case 'no_application':
+      return [{ section_key: 'no_application_required', title: 'No Application Required' }]
+    case 'standard':
+    default:
+      return [
+        { section_key: 'cover_letter', title: 'Cover Letter' },
+        { section_key: 'needs_statement', title: 'Statement of Need' },
+        { section_key: 'project_narrative', title: 'Project Narrative' },
+        { section_key: 'budget_justification', title: 'Budget Justification' },
+        { section_key: 'organization_background', title: 'Applicant Background' },
+        { section_key: 'evaluation_plan', title: 'Evaluation Plan' },
+        ...(medNec ? [{ section_key: 'medical_necessity', title: 'Medical Necessity Documentation' }] : []),
+        { section_key: 'submission_instructions', title: 'Submission Instructions' },
+      ]
+  }
+}
+
+const NON_LLM_SECTION_KEYS = new Set([
+  'fafsa_steps',
+  'school_aid_office',
+  'document_checklist',
+  'auto_match_steps',
+  'profile_verification',
+  'nomination_path',
+  'nominator_outreach',
+  'invitation_status',
+  'no_application_required',
+  'submission_instructions',
+])
 
 function buildSubmissionChecklistLabel(grant) {
   const method = grant?.application_method || ''
@@ -1006,6 +1131,35 @@ export async function generateApplicationSections(db, grant, opportunity, profil
 
   const tasks = sectionDefs.map(async (section) => {
     const sectionStartedAt = Date.now()
+    // Deterministic factual-guidance sections (FAFSA steps, school aid
+    // office contact, nomination path, submission instructions, etc.)
+    // never go to the LLM. They are built directly from grant + profile
+    // data so the user sees real next steps, not hallucinated prose.
+    if (NON_LLM_SECTION_KEYS.has(section.section_key)) {
+      try {
+        const text = buildFactualGuidanceSection(section.section_key, grant, opportunity, profile)
+        result[section.section_key] = text
+        return {
+          section_key: section.section_key,
+          ok: true,
+          duration_ms: Date.now() - sectionStartedAt,
+          chars: text.length,
+          source: 'deterministic',
+        }
+      } catch (err) {
+        result[section.section_key] = ''
+        applyLog.warn('[autoPopulate] deterministic section build failed', {
+          section_key: section.section_key,
+          error: err?.message,
+        })
+        return {
+          section_key: section.section_key,
+          ok: false,
+          duration_ms: Date.now() - sectionStartedAt,
+          reason: 'deterministic_error',
+        }
+      }
+    }
     try {
       const prompt = buildSectionPrompt(section.section_key, section.title, grantContext, profileContext, grant)
       const completion = await openai.chat.completions.create(
@@ -1069,9 +1223,21 @@ async function generateTemplateSections(db, grant, opportunity, profile, section
   const funder = grant?.funder || opportunity?.sponsor || 'the funding organization'
 
   for (const s of sectionDefs) {
-    if (s.section_key === 'submission_instructions') {
-      result[s.section_key] = buildSubmissionInstructions(grant, opportunity)
-    } else if (s.section_key === 'medical_necessity') {
+    if (NON_LLM_SECTION_KEYS.has(s.section_key)) {
+      // Deterministic factual sections work the same whether or not the
+      // OpenAI key is present — they don't need it.
+      try {
+        result[s.section_key] = buildFactualGuidanceSection(s.section_key, grant, opportunity, profile)
+      } catch (err) {
+        applyLog.warn('[autoPopulate] template factual section build failed', {
+          section_key: s.section_key,
+          error: err?.message,
+        })
+        result[s.section_key] = ''
+      }
+      continue
+    }
+    if (s.section_key === 'medical_necessity') {
       try {
         const medDoc = await generateMedicalNecessityDocument(db, grant?.profile_id, {
           opportunityId: opportunity?.id, grantId: grant?.id,
@@ -1086,11 +1252,241 @@ async function generateTemplateSections(db, grant, opportunity, profile, section
       }
     } else if (s.section_key === 'cover_letter') {
       result[s.section_key] = `Dear ${funder} Review Committee,\n\nI am writing to express my interest in ${title}. ${name} meets the eligibility criteria for this opportunity and respectfully requests consideration for funding.\n\n[This section will be enhanced with AI when available. Please review and customize.]\n\nSincerely,\n${name}`
+    } else if (s.section_key === 'budget_justification') {
+      // Without an LLM key we still must not invent dollar lines. Emit a
+      // neutral placeholder that prompts the user to fill it in instead of
+      // shipping fabricated amounts.
+      result[s.section_key] =
+        `[Budget justification will be enhanced with AI when available. ` +
+        `For now, list each requested line item with its amount and a one-sentence justification grounded in the funder's eligibility criteria.]`
     } else {
       result[s.section_key] = ''
     }
   }
   return result
+}
+
+// ---------------------------------------------------------------------------
+// Deterministic, fact-only section builders
+// ---------------------------------------------------------------------------
+// These sections must NEVER call an LLM. Their job is to surface real next
+// steps with real data so the user can act on them today. If a field isn't
+// known, we say "not on file" — we do not hallucinate. Every line is
+// traceable to either grant.* or profile.* data, satisfying mission goals
+// #1 (no placeholders), #6 (real data), #9 (explainable / reliable).
+
+function safeName(profile) {
+  return profile?.display_name || profile?.name || 'the applicant'
+}
+
+function safeUniversityFromGrant(grant, opportunity) {
+  return grant?.funder || opportunity?.sponsor || 'the funding organization'
+}
+
+function lineIfPresent(label, value) {
+  if (!value && value !== 0) return null
+  const str = String(value).trim()
+  if (!str) return null
+  return `- **${label}:** ${str}`
+}
+
+function buildFafsaSteps(grant, opportunity, profile) {
+  const school = safeUniversityFromGrant(grant, opportunity)
+  const name = safeName(profile)
+  const lines = [
+    `## Filing the FAFSA for ${school}`,
+    ``,
+    `${school} financial aid does **not** accept a custom application or budget justification. ` +
+      `Funding is determined by the FAFSA (Free Application for Federal Student Aid) plus any ` +
+      `${school}-specific verification forms. Below is what ${name} actually has to do, in order:`,
+    ``,
+    `1. **Create or sign in to a Federal Student Aid (FSA) account** at https://studentaid.gov.`,
+    `2. **Complete the FAFSA** for the appropriate award year. List ${school} as a school to receive results.`,
+    `3. **Watch for the Student Aid Report (SAR)** — it confirms FAFSA was processed.`,
+    `4. **Check the ${school} financial aid portal** for any school-specific verification or scholarship forms.`,
+    `5. **Respond to verification requests** within the deadline shown on the school portal — missing this step delays the award.`,
+    `6. **Review the financial aid offer** the school issues; accept / decline each component (grants, work-study, loans).`,
+  ]
+  if (grant?.deadline) {
+    lines.push(``, `**Posted deadline on file:** ${grant.deadline}`)
+  }
+  return lines.join('\n')
+}
+
+function buildSchoolAidOffice(grant, opportunity) {
+  const school = safeUniversityFromGrant(grant, opportunity)
+  const lines = [`## ${school} Financial Aid Office`, ``]
+  const contactLines = [
+    lineIfPresent('Address', grant?.funder_address),
+    lineIfPresent('Email', grant?.funder_email || grant?.contact_email),
+    lineIfPresent('Phone', grant?.funder_phone || grant?.contact_phone),
+    lineIfPresent('Fax', grant?.funder_fax),
+    lineIfPresent('Aid portal', grant?.application_url || grant?.url),
+  ].filter(Boolean)
+  if (contactLines.length === 0) {
+    lines.push(
+      `No verified contact information for the ${school} financial aid office is currently on file. ` +
+        `Search "${school} financial aid contact" and confirm the listing on the official .edu domain ` +
+        `before submitting any documents.`,
+    )
+  } else {
+    lines.push(...contactLines)
+  }
+  return lines.join('\n')
+}
+
+function buildDocumentChecklist(grant, opportunity, profile) {
+  const lines = [
+    `## Document Checklist`,
+    ``,
+    `Have these ready before logging into the school's aid portal — most schools require them for FAFSA verification:`,
+    ``,
+    `- Most recent **federal tax return** (1040) for the household`,
+    `- **W-2s and 1099s** for the same tax year`,
+    `- **Social Security number** for the student${profile ? '' : ' (and dependent parent if applicable)'}`,
+    `- **Driver's license / state ID**`,
+    `- **High school transcript** or GED, plus any prior college transcripts`,
+    `- **Selective Service registration** (males 18-25 born after 1959)`,
+    `- **Records of untaxed income** (child support, veterans benefits, etc.)`,
+  ]
+  if (profile?.sections?.financial_information?.household_size) {
+    lines.push(
+      ``,
+      `Household size on profile: **${profile.sections.financial_information.household_size}**. ` +
+        `Make sure this matches what is reported on the FAFSA.`,
+    )
+  }
+  return lines.join('\n')
+}
+
+function buildAutoMatchSteps(grant, opportunity, profile) {
+  const program = grant?.title || opportunity?.title || 'this program'
+  const funder = safeUniversityFromGrant(grant, opportunity)
+  const name = safeName(profile)
+  return [
+    `## Auto-match Steps for ${program}`,
+    ``,
+    `${funder} matches ${name} to ${program} **automatically** based on profile data the funder ` +
+      `already has on file. There is no narrative or budget to write. The user-side actions are:`,
+    ``,
+    `1. **Verify enrollment / eligibility status** is current with the funder.`,
+    `2. **Confirm the contact information on file** (email + mailing address) so the funder can reach the recipient.`,
+    `3. **Review the criteria** — if the profile changes (income, household size, enrollment), notify the funder so the match stays accurate.`,
+    `4. **Watch the funder's portal / inbox** for the award notice. No further submission is required.`,
+  ].join('\n')
+}
+
+function buildProfileVerification(grant, opportunity, profile) {
+  if (!profile) {
+    return `## Profile Verification\n\nNo applicant profile is currently linked to this application. Open the profile and confirm the eligibility-relevant fields are filled before continuing.`
+  }
+  const lines = [`## Profile Verification`, ``, `Confirm each of these fields matches what the funder expects:`, ``]
+  const fields = [
+    ['Display name', profile.display_name || profile.name],
+    ['State', profile.state],
+    ['Profile type', profile.primary_type],
+    ['Household income', profile.sections?.financial_information?.annual_income],
+    ['Household size', profile.sections?.financial_information?.household_size],
+  ]
+  for (const [label, value] of fields) {
+    lines.push(`- **${label}:** ${value === undefined || value === null || value === '' ? 'not on file' : value}`)
+  }
+  return lines.join('\n')
+}
+
+function buildNominationPath(grant, opportunity) {
+  const program = grant?.title || opportunity?.title || 'this opportunity'
+  const funder = safeUniversityFromGrant(grant, opportunity)
+  return [
+    `## Nomination Path for ${program}`,
+    ``,
+    `${funder} accepts **nomination only** for ${program}. The applicant cannot self-submit; an eligible ` +
+      `nominator (typically a teacher, employer, community leader, or program officer) must initiate the nomination.`,
+    ``,
+    `Action plan:`,
+    `1. **Identify 2-3 potential nominators** who meet the funder's eligibility (read the funder page first).`,
+    `2. **Draft a one-page bio + ask** the applicant can hand to a nominator.`,
+    `3. **Reach out** with the bio + a clear deadline.`,
+    `4. **Track replies** in the application checklist below.`,
+  ].join('\n')
+}
+
+function buildNominatorOutreach(grant, opportunity, profile) {
+  const program = grant?.title || opportunity?.title || 'this opportunity'
+  const name = safeName(profile)
+  return [
+    `## Nominator Outreach Template`,
+    ``,
+    `Use this as a starting draft for the request — replace the brackets with specifics:`,
+    ``,
+    `> Dear [Nominator],`,
+    `>`,
+    `> I am applying to ${program} and the program accepts nominations only — applicants cannot self-submit.`,
+    `> Would you be willing to write a brief nomination on my behalf? The funder's portal asks the nominator ` +
+      `to confirm [eligibility criteria from the funder page] and submit by [deadline].`,
+    `>`,
+    `> Attached is a one-page summary of my background to make the nomination easier to write.`,
+    `>`,
+    `> Thank you for considering this — and either way, I appreciate your time.`,
+    `>`,
+    `> ${name}`,
+  ].join('\n')
+}
+
+function buildInvitationStatus(grant, opportunity) {
+  const program = grant?.title || opportunity?.title || 'this opportunity'
+  return [
+    `## Invitation Status for ${program}`,
+    ``,
+    `${program} is **invitation only**. There is no public application path. Do not submit any documents until ` +
+      `an invitation is received directly from the funder.`,
+    ``,
+    `Recommended posture:`,
+    `- **Do not contact the funder** to request an invitation unless a published path exists.`,
+    `- **Track related funders** that share program officers / advisory boards — invitations often follow visibility in adjacent programs.`,
+    `- **If contacted by the funder**, capture the invitation in this application immediately so the deadline tracker can fire.`,
+  ].join('\n')
+}
+
+function buildNoApplicationRequired(grant, opportunity) {
+  const program = grant?.title || opportunity?.title || 'this opportunity'
+  return [
+    `## No Application Required`,
+    ``,
+    `${program} **does not accept an application**. The funder either disburses the benefit automatically based ` +
+      `on existing eligibility records, or the program is currently closed to new applicants. There is nothing for ` +
+      `the user to submit.`,
+    ``,
+    `If the funder's website later reopens an application path, update the opportunity record's ` +
+      `\`application_method\` field — the auto-populate engine will then ship the correct sections.`,
+  ].join('\n')
+}
+
+function buildFactualGuidanceSection(sectionKey, grant, opportunity, profile) {
+  switch (sectionKey) {
+    case 'fafsa_steps':
+      return buildFafsaSteps(grant, opportunity, profile)
+    case 'school_aid_office':
+      return buildSchoolAidOffice(grant, opportunity)
+    case 'document_checklist':
+      return buildDocumentChecklist(grant, opportunity, profile)
+    case 'auto_match_steps':
+      return buildAutoMatchSteps(grant, opportunity, profile)
+    case 'profile_verification':
+      return buildProfileVerification(grant, opportunity, profile)
+    case 'nomination_path':
+      return buildNominationPath(grant, opportunity)
+    case 'nominator_outreach':
+      return buildNominatorOutreach(grant, opportunity, profile)
+    case 'invitation_status':
+      return buildInvitationStatus(grant, opportunity)
+    case 'no_application_required':
+      return buildNoApplicationRequired(grant, opportunity)
+    case 'submission_instructions':
+      return buildSubmissionInstructions(grant, opportunity)
+    default:
+      return ''
+  }
 }
 
 function buildSubmissionInstructions(grant, opportunity) {
@@ -1174,8 +1570,37 @@ function buildSectionPrompt(sectionKey, title, grantContext, profileContext, gra
       return base + 'Write a compelling statement of need that grounds every claim in the applicant\'s real data. Use demographics, health conditions, financial circumstances, and geographic factors. Reference relevant statistics for the area. 300-500 words.'
     case 'project_narrative':
       return base + 'Write a detailed project narrative explaining what the funding will be used for, with measurable objectives, a realistic timeline, and expected outcomes. Tie back to the funder\'s mission.'
-    case 'budget_justification':
-      return base + `Write a budget justification showing how the requested funds (${grant?.amount_requested || grant?.amount_max || 'requested amount'}) will be allocated. Include line items with amounts and clear justifications for each.`
+    case 'budget_justification': {
+      // Anti-hallucination: when no real amount is on file, refuse to invent
+      // a "$10,000 budget" the funder will never read. Explicit instruction
+      // wins over the model's bias to fill the section regardless.
+      const requested = grant?.amount_requested
+      const max = grant?.amount_max
+      const knownAmount =
+        requested !== undefined && requested !== null && requested !== ''
+          ? requested
+          : max !== undefined && max !== null && max !== ''
+            ? max
+            : null
+      if (!knownAmount) {
+        return (
+          base +
+          `IMPORTANT: There is no requested amount or known maximum award on file for this opportunity. ` +
+          `Do NOT invent dollar amounts or line items. Output a single short paragraph explaining that the budget ` +
+          `cannot be drafted until a requested amount is captured on the grant record, and list the data points the ` +
+          `user needs to add (requested amount, line-item categories, any match requirement). Do not produce ` +
+          `tuition / fees / books / transportation lines without verified data.`
+        )
+      }
+      return (
+        base +
+        `Write a budget justification showing how the requested funds ($${knownAmount}) will be allocated. ` +
+        `Use ONLY line items that are directly supported by the grant context above and the applicant profile. ` +
+        `If a category (e.g. tuition, equipment, transportation) cannot be backed by a real fact in the context, ` +
+        `omit it. Each line must include the dollar amount and a one-sentence justification tied to a real ` +
+        `applicant data point.`
+      )
+    }
     case 'organization_background':
       return base + 'Write an applicant background section highlighting relevant qualifications, history, and capacity. For individuals, focus on personal circumstances, education, employment, and community involvement.'
     case 'evaluation_plan':
@@ -1199,5 +1624,7 @@ RULES:
 - Be specific about amounts, dates, locations, and measurable outcomes
 - Write as if this application must compete against hundreds of others — it must stand out
 - Every section should demonstrate alignment between the applicant's needs and the funder's mission
-- For submission instructions, provide exact URLs, addresses, fax numbers, and step-by-step guidance`
+- For submission instructions, provide exact URLs, addresses, fax numbers, and step-by-step guidance
+- ANTI-FABRICATION: never invent dollar amounts, line items, deadlines, addresses, contacts, fax numbers, URLs, or program details that aren't in the user-provided context. If a fact isn't in context, write "not on file" or omit the line — do not guess.
+- ANTI-MISMATCH: if the application context indicates a non-discretionary process (FAFSA-driven institutional aid, automatic profile match, nomination-only, invitation-only, or "no application"), do NOT produce a budget justification, project narrative, or evaluation plan. Return a single short note that the section does not apply to this submission style.`
 
