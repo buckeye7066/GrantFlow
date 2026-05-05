@@ -27,13 +27,25 @@ import { listCrawlerJobs, triggerProfileEnrichment } from "@/api/crawlers";
 import { useAuthStore } from "@/stores/authStore";
 import { canUseFeature } from "@/utils/tier";
 
+// Sentinel used by the auth store / Layout to represent the admin "view all"
+// pseudo-profile. It is NOT a real row in the profiles table — every
+// frontend page that turns an active profile id into an API URL must skip
+// this sentinel, otherwise we hit `/api/profiles/__admin__` → 404.
+const ADMIN_SENTINEL = '__admin__';
+
+const isRealProfileId = (id) => Boolean(id) && id !== ADMIN_SENTINEL;
+
 export default function Documents() {
   const { user, activeProfileId } = useAuthStore((state) => ({
     user: state.user,
     activeProfileId: state.activeProfileId,
   }));
   const isAdmin = Boolean(user?.is_admin || user?.id === "admin");
-  const [selectedProfileId, setSelectedProfileId] = useState(activeProfileId ?? null);
+  // Initial selection must never be the admin sentinel — useEffect below will
+  // pick the first real profile once the list loads.
+  const [selectedProfileId, setSelectedProfileId] = useState(
+    isRealProfileId(activeProfileId) ? activeProfileId : null
+  );
   const [deletingDoc, setDeletingDoc] = useState(null);
   const [uploadFile, setUploadFile] = useState(null);
   const [uploadError, setUploadError] = useState(null);
@@ -54,10 +66,19 @@ export default function Documents() {
 
   useEffect(() => {
     if (!profiles.length) return;
-    if (selectedProfileId && profiles.some((profile) => profile.id === selectedProfileId)) {
+    // Never accept the '__admin__' sentinel as a usable selection — it is
+    // not a real profile id and any subsequent /api/profiles/<id> fetch
+    // returns 404, which the user reported as a Documents-page error.
+    if (
+      isRealProfileId(selectedProfileId) &&
+      profiles.some((profile) => profile.id === selectedProfileId)
+    ) {
       return;
     }
-    if (activeProfileId && profiles.some((profile) => profile.id === activeProfileId)) {
+    if (
+      isRealProfileId(activeProfileId) &&
+      profiles.some((profile) => profile.id === activeProfileId)
+    ) {
       setSelectedProfileId(activeProfileId);
       return;
     }
@@ -78,7 +99,7 @@ export default function Documents() {
   const profileDetailQuery = useQuery({
     queryKey: ["documents-profile-detail", selectedProfileId],
     queryFn: () => getProfile(selectedProfileId),
-    enabled: Boolean(selectedProfileId),
+    enabled: isRealProfileId(selectedProfileId),
   });
 
   const tier = profileDetailQuery.data?.billing?.tier ?? null;
@@ -87,7 +108,7 @@ export default function Documents() {
   const { data: documents = [], isLoading: isLoadingDocuments } = useQuery({
     queryKey: ['documents', selectedProfileId],
     queryFn: () => listDocuments({ profile_id: selectedProfileId }),
-    enabled: !!selectedProfileId,
+    enabled: isRealProfileId(selectedProfileId),
   });
 
   const deleteMutation = useMutation({
@@ -214,7 +235,7 @@ export default function Documents() {
   const enrichmentJobsQuery = useQuery({
     queryKey: ['profile-enrichment-jobs', selectedProfileId],
     queryFn: () => listCrawlerJobs({ type: 'profile_enrichment', profile_id: selectedProfileId, limit: 5 }),
-    enabled: !!selectedProfileId,
+    enabled: isRealProfileId(selectedProfileId),
     refetchInterval: (query) => {
       const job = query.state.data?.[0]
       return job && job.status === 'running' ? 5000 : false

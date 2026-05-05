@@ -193,19 +193,37 @@ const UNSTRUCTURED_500_RE =
   /console\.error\(([^\n]*?)\)\s*\n([\s\S]{0,300}?)res\.status\(500\)/g
 
 /**
- * JSX maps over an array whose name signals "reasons" (match_reasons,
- * trust_reasons, reasons, matchReasons, reviewReasons, etc.) and renders
- * the iteration variable directly as `{reason}` without coercion. This is
- * the React #31 ("Objects are not valid as a React child") shape that
- * crashed multiple routes in production.
+ * JSX maps over an array whose name signals "structured backend record"
+ * (match_reasons, trust_reasons, matched_needs, matched_fields,
+ * matchReasons, reviewReasons, etc.) and renders the iteration variable
+ * directly as `{var}` without coercion. This is the React #31 ("Objects
+ * are not valid as a React child") shape that crashed multiple routes in
+ * production — first GrantDetail/Dashboard via match_reasons (commit
+ * 973cfcac), then GrantDetail again via matched_needs.
  *
  * Detection only — repair would also need to insert an import for
- * `formatReasonText` from `@/utils/reasonText`, which is too invasive for
- * a regex-driven applier. We surface every site so a human can wrap it.
+ * `formatReasonText` from `@/utils/reasonText`, which is too invasive
+ * for a regex-driven applier. We surface every site so a human can
+ * wrap it.
  */
-const REASON_LIKE_VAR_RE = /\b\w*[Rr]easons?\b/
+const REASON_LIKE_VAR_RE = /\b\w*(?:[Rr]easons?|matched_needs|matched_fields|matchedNeeds|matchedFields)\b/
 const REASON_MAP_RENDER_RE =
-  /\b(\w*[Rr]easons?)\b\s*(?:\.slice\([^)]*\))?\s*\.map\s*\(\s*\(?\s*(\w+)\b[^)]*\)\s*=>\s*\(?\s*<[^>]+>\s*\{\2\}\s*</g
+  /\b(\w*(?:[Rr]easons?|matched_needs|matched_fields|matchedNeeds|matchedFields))\b\s*(?:\.slice\([^)]*\))?\s*\.map\s*\(\s*\(?\s*(\w+)\b[^)]*\)\s*=>\s*\(?\s*<[^>]+>\s*\{\2\}\s*</g
+
+/**
+ * Direct-route fetch of /api/profiles/<id> from a frontend file when the
+ * id can be the UI-only __admin__ sentinel. We detect any string or
+ * template literal that interpolates an id segment after /api/profiles/
+ * inside src/ when the file does not import the boundary guard
+ * assertRealProfileId from @/api/profileIdGuards (or a relative path
+ * equivalent). The Documents page reproduced this in production
+ * (admin login -> /api/profiles/__admin__ 404).
+ *
+ * Report-only; auto-fix would need to wire up an import + a runtime
+ * guard, which is too invasive for a regex applier.
+ */
+const PROFILE_FETCH_TEMPLATE_RE = /['"`]\/api\/profiles\/(?:\$\{|\$\()/g
+const PROFILE_GUARD_IMPORT_RE = /from\s+['"][^'"]*profileIdGuards['"]/
 
 // ---------------------------------------------------------------------------
 // File-system helpers
@@ -394,10 +412,11 @@ function scanUnstructured500(filePath, content) {
 }
 
 /**
- * Scan for JSX renders of `*reasons*` map variables without coercion. This
- * is the React #31 fingerprint. Report-only — auto-fix would also need to
- * insert/verify `import { formatReasonText } from '@/utils/reasonText'`,
- * which is unsafe for a regex-driven applier.
+ * Scan for JSX renders of `*reasons*` / `matched_needs` / `matched_fields`
+ * map variables without coercion. This is the React #31 fingerprint.
+ * Report-only — auto-fix would also need to insert/verify
+ * `import { formatReasonText } from '@/utils/reasonText'`, which is
+ * unsafe for a regex-driven applier.
  */
 function scanReasonObjectRender(filePath, content) {
   if (!/\.(jsx|tsx)$/.test(filePath)) return { issues: [] }
@@ -412,6 +431,44 @@ function scanReasonObjectRender(filePath, content) {
     const lineNum = content.slice(0, offset).split('\n').length
     const lineStart = content.lastIndexOf('\n', offset) + 1
     const lineEnd = content.indexOf('\n', offset)
+    const line = content.slice(lineStart, lineEnd === -1 ? undefined : lineEnd).trim()
+    issues.push({ line: lineNum, snippet: line.slice(0, 160) })
+  }
+  return { issues }
+}
+
+/**
+ * Scan frontend files for direct `/api/profiles/${id}` HTTP calls that
+ * skip the `assertRealProfileId` boundary guard. The Documents page
+ * shipped this regression after admin login, where `id` could be the
+ * UI-only `__admin__` sentinel and produced `404 Not Found`. We treat
+ * any raw call as a finding when:
+ *   1. the file lives under `src/`,
+ *   2. it contains a `/api/profiles/${...}` template literal, AND
+ *   3. it does NOT import `profileIdGuards` (so the boundary guard is
+ *      not applied somewhere upstream).
+ * Files that route through `getProfile` / `updateProfile` / etc. inside
+ * `src/api/profiles.js` are safe because the helper applies the guard.
+ *
+ * Report-only — repair requires inserting an import and a guard, which
+ * is too invasive for regex-driven autofix.
+ */
+function scanProfileAdminSentinel(filePath, content) {
+  // Accept relative ("src/...") and absolute ("/.../src/...") paths.
+  if (!/(?:^|[\\/])src[\\/]/.test(filePath)) return { issues: [] }
+  if (!/\.(jsx?|tsx?|mjs)$/.test(filePath)) return { issues: [] }
+  // The boundary itself + the helpers it gates are safe by construction.
+  if (/(?:^|[\\/])src[\\/]api[\\/]profiles?(IdGuards)?\.js$/.test(filePath)) return { issues: [] }
+  if (PROFILE_GUARD_IMPORT_RE.test(content)) return { issues: [] }
+  // Use the comment-stripped view so a docstring that documents the
+  // sentinel doesn't masquerade as a call site.
+  const view = stripCommentsPreservingLayout(content)
+  const issues = []
+  for (const m of view.matchAll(PROFILE_FETCH_TEMPLATE_RE)) {
+    const offset = m.index ?? 0
+    const lineNum = view.slice(0, offset).split('\n').length
+    const lineStart = view.lastIndexOf('\n', offset) + 1
+    const lineEnd = view.indexOf('\n', offset)
     const line = content.slice(lineStart, lineEnd === -1 ? undefined : lineEnd).trim()
     issues.push({ line: lineNum, snippet: line.slice(0, 160) })
   }
@@ -583,6 +640,7 @@ const ALL_REPAIR_TYPES = [
   'unstructured_500',
   'react_object_render',
   'dockerfile_drift',
+  'profile_admin_sentinel',
 ]
 
 /**
@@ -617,6 +675,7 @@ export async function runAutoRepair(db, { dryRun = true, repairTypes } = {}) {
       unstructured_500: [],
       react_object_render: [],
       dockerfile_drift: [],
+      profile_admin_sentinel: [],
       repairs: [],
     },
     repaired: {
@@ -754,6 +813,14 @@ export async function runAutoRepair(db, { dryRun = true, repairTypes } = {}) {
       }
     }
 
+    // --- profile_admin_sentinel (always report-only) ---
+    if (types.includes('profile_admin_sentinel')) {
+      const { issues } = scanProfileAdminSentinel(filePath, newContent)
+      if (issues.length > 0) {
+        report.findings.profile_admin_sentinel.push({ file: rel, issues })
+      }
+    }
+
     // Write backup + apply changes
     if (modified) {
       try {
@@ -800,6 +867,7 @@ export async function runAutoRepair(db, { dryRun = true, repairTypes } = {}) {
         unstructured500Findings: report.findings.unstructured_500.length,
         reactObjectRenderFindings: report.findings.react_object_render.length,
         dockerfileDriftFindings: report.findings.dockerfile_drift.length,
+        profileAdminSentinelFindings: report.findings.profile_admin_sentinel.length,
         repairedEmptyCatch: report.repaired.empty_catch,
         repairedConsoleLog: report.repaired.console_log,
         repairedMissingDbAwait: report.repaired.missing_db_await,
@@ -831,6 +899,7 @@ export const __testHelpers = {
   scanColumnTypos,
   scanUnstructured500,
   scanReasonObjectRender,
+  scanProfileAdminSentinel,
   applyEmptyCatch,
   applyConsoleLog,
   applyMissingDbAwait,

@@ -1,4 +1,5 @@
 import client, { apiFetch, getProfileSectionsClient } from './client'
+import { assertRealProfileId } from './profileIdGuards'
 
 export async function listProfiles(params = {}) {
   // React Query passes a "query function context" object into queryFn by default.
@@ -23,10 +24,12 @@ export async function listProfiles(params = {}) {
 }
 
 export async function getProfile(id) {
+  assertRealProfileId(id, 'getProfile')
   return apiFetch(`/api/profiles/${id}`)
 }
 
 export async function updateProfile(id, payload) {
+  assertRealProfileId(id, 'updateProfile')
   return apiFetch(`/api/profiles/${id}`, {
     method: 'PUT',
     body: JSON.stringify(payload),
@@ -57,12 +60,14 @@ export async function listProfileSections(profileId) {
 }
 
 export async function deleteProfile(id) {
+  assertRealProfileId(id, 'deleteProfile')
   return apiFetch(`/api/profiles/${id}`, {
     method: 'DELETE',
   })
 }
 
 export async function requestProfileSectionAI(profileId, sectionKey) {
+  assertRealProfileId(profileId, 'requestProfileSectionAI')
   return apiFetch(`/api/profiles/${profileId}/sections/${sectionKey}/ai`, {
     method: 'POST',
   })
@@ -70,6 +75,7 @@ export async function requestProfileSectionAI(profileId, sectionKey) {
 
 export async function requestProfileFieldAI(context) {
   const { profileId, sectionKey, fieldName } = context
+  assertRealProfileId(profileId, 'requestProfileFieldAI')
   return apiFetch(`/api/profiles/${profileId}/fields/ai`, {
     method: 'POST',
     body: JSON.stringify(context),

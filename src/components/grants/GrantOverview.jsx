@@ -11,6 +11,7 @@ import client from '@/api/client';
 import { useToast } from '@/components/ui/use-toast';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useAuthStore } from '@/stores/authStore';
+import { formatReasonText } from '@/utils/reasonText';
 
 const StatCard = ({ icon: Icon, label, value, color }) => (
     <div className="flex flex-col p-4 rounded-lg bg-slate-50 border border-slate-200">
@@ -241,16 +242,30 @@ Return ONLY the JSON. Use null for any information you cannot verify with confid
                                         {activeProfile?.display_name || (activeProfileId ? String(activeProfileId) : 'Unknown')}
                                     </span>
                                 </p>
-                                {grant.match_explanation && (
-                                    <p className="text-sm opacity-90 mt-3 italic">{grant.match_explanation}</p>
-                                )}
+                                {(() => {
+                                    // Coerce defensively — `match_explanation` may arrive
+                                    // from the matcher as an object (e.g. `{reason, source}`)
+                                    // depending on which producer wrote the row. Rendering
+                                    // an object directly here is exactly the React error
+                                    // #31 fingerprint that crashed the GrantDetail route.
+                                    const explanationText = formatReasonText(grant.match_explanation)
+                                    return explanationText ? (
+                                        <p className="text-sm opacity-90 mt-3 italic">{explanationText}</p>
+                                    ) : null
+                                })()}
                                 {Array.isArray(grant.matched_needs) && grant.matched_needs.length > 0 && (
                                     <div className="mt-2 flex flex-wrap gap-1">
-                                        {grant.matched_needs.map((need, i) => (
-                                            <span key={i} className="bg-white/20 rounded-full px-2 py-0.5 text-xs font-medium">
-                                                {typeof need === 'string' ? need.replace(/_/g, ' ') : need}
-                                            </span>
-                                        ))}
+                                        {grant.matched_needs.map((need, i) => {
+                                            // `need` can be either a snake_case slug or an
+                                            // object — coerce via formatReasonText, then
+                                            // pretty-print snake_case after coercion.
+                                            const text = formatReasonText(need).replace(/_/g, ' ')
+                                            return text ? (
+                                                <span key={i} className="bg-white/20 rounded-full px-2 py-0.5 text-xs font-medium">
+                                                    {text}
+                                                </span>
+                                            ) : null
+                                        })}
                                     </div>
                                 )}
                             </div>

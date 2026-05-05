@@ -23,6 +23,7 @@ const {
   scanColumnTypos,
   scanUnstructured500,
   scanReasonObjectRender,
+  scanProfileAdminSentinel,
   applyMissingDbAwait,
   applyColumnTypos,
   applyUnstructured500,
@@ -45,6 +46,7 @@ describe('AUTO_REPAIR_TYPES surface', () => {
       'unstructured_500',
       'react_object_render',
       'dockerfile_drift',
+      'profile_admin_sentinel',
     ]) {
       expect(AUTO_REPAIR_TYPES).toContain(t)
     }
@@ -259,6 +261,22 @@ describe('react_object_render pattern (reproduces React error #31)', () => {
     expect(issues.length).toBeGreaterThan(0)
   })
 
+  it('flags matched_needs.map((need) => <span>{need}</span>) — the GrantDetail crash site', () => {
+    const fixture = `
+      export default function GrantOverview({ grant }) {
+        return (
+          <div>
+            {grant.matched_needs.map((need, i) => (
+              <span key={i}>{need}</span>
+            ))}
+          </div>
+        )
+      }
+    `
+    const { issues } = scanReasonObjectRender(COMPONENT_FILE, fixture)
+    expect(issues.length).toBeGreaterThan(0)
+  })
+
   it('does NOT flag files that already use formatReasonText', () => {
     const fixture = `
       import { formatReasonText } from '@/utils/reasonText'
@@ -278,6 +296,63 @@ describe('react_object_render pattern (reproduces React error #31)', () => {
       reasons.map((reason, i) => console.log(reason))
     `
     const { issues } = scanReasonObjectRender(SERVICE_FILE, fixture)
+    expect(issues.length).toBe(0)
+  })
+})
+
+describe('profile_admin_sentinel pattern (reproduces /api/profiles/__admin__ 404)', () => {
+  const FRONTEND_FILE = 'src/pages/SomePage.jsx'
+  const API_FILE = 'src/api/profiles.js'
+
+  it('flags template-literal /api/profiles/${id} fetches that skip the boundary guard', () => {
+    const fixture = `
+      import { apiFetch } from '@/api/client'
+      export async function loadProfile(id) {
+        return apiFetch(\`/api/profiles/\${id}\`)
+      }
+    `
+    const { issues } = scanProfileAdminSentinel(FRONTEND_FILE, fixture)
+    expect(issues.length).toBeGreaterThan(0)
+  })
+
+  it('does NOT flag files that import the boundary guard', () => {
+    const fixture = `
+      import { apiFetch } from '@/api/client'
+      import { assertRealProfileId } from '@/api/profileIdGuards'
+      export async function loadProfile(id) {
+        assertRealProfileId(id, 'loadProfile')
+        return apiFetch(\`/api/profiles/\${id}\`)
+      }
+    `
+    const { issues } = scanProfileAdminSentinel(FRONTEND_FILE, fixture)
+    expect(issues.length).toBe(0)
+  })
+
+  it('does NOT flag the boundary helper itself (src/api/profiles.js)', () => {
+    const fixture = `
+      export async function getProfile(id) {
+        return apiFetch(\`/api/profiles/\${id}\`)
+      }
+    `
+    const { issues } = scanProfileAdminSentinel(API_FILE, fixture)
+    expect(issues.length).toBe(0)
+  })
+
+  it('does NOT flag backend files (only src/** is in scope)', () => {
+    const fixture = `
+      const url = \`/api/profiles/\${id}\`
+    `
+    const { issues } = scanProfileAdminSentinel('backend/services/example.js', fixture)
+    expect(issues.length).toBe(0)
+  })
+
+  it('does NOT flag mentions inside JSDoc / comments', () => {
+    const fixture = `
+      // Documentation: GET /api/profiles/\${id} returns the profile row.
+      /* Another mention: /api/profiles/\${id} */
+      export const x = 1
+    `
+    const { issues } = scanProfileAdminSentinel(FRONTEND_FILE, fixture)
     expect(issues.length).toBe(0)
   })
 })

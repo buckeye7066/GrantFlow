@@ -2821,8 +2821,9 @@ registerTool({
     "missing_db_await (db.prepare(...).all/get/run not awaited; cause of multiple recent /api/profiles/:id/sections/:key/ai 500s), " +
     "column_typo (known-typo column names like requires_matching_funds; cause of GET /api/saved-grants 500), " +
     "unstructured_500 (route catch using console.error before res.status(500); auto-fixed when routeLogger is available), " +
-    "react_object_render (JSX rendering match_reasons / trust_reasons items without coercion; cause of React error #31 route crashes; report-only), " +
-    "dockerfile_drift (backend imports living outside the Dockerfile COPY whitelist; cause of Railway boot crashes; report-only).",
+    "react_object_render (JSX rendering match_reasons / trust_reasons / matched_needs items without coercion; cause of React error #31 route crashes; report-only), " +
+    "dockerfile_drift (backend imports living outside the Dockerfile COPY whitelist; cause of Railway boot crashes; report-only), " +
+    "profile_admin_sentinel (frontend file fetches /api/profiles/${id} without going through assertRealProfileId from @/api/profileIdGuards; cause of GET /api/profiles/__admin__ 404 after admin login; report-only).",
   requiresAdmin: true,
   schema: {
     type: 'object',
@@ -2855,7 +2856,12 @@ registerTool({
       (sum, n) => sum + (Number(n) || 0),
       0,
     )
-    const reportOnlyTypes = ['profile_bleed', 'react_object_render', 'dockerfile_drift']
+    const reportOnlyTypes = [
+      'profile_bleed',
+      'react_object_render',
+      'dockerfile_drift',
+      'profile_admin_sentinel',
+    ]
     const recommendation = dryRun
       ? totalFindings > 0
         ? `Found ${totalFindings} issue(s) across ${report.scannedFiles} files. Run with dryRun=false to apply repairs. The following issue types are always report-only and require human review: ${reportOnlyTypes.join(', ')}.`
