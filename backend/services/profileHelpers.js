@@ -2473,6 +2473,69 @@ export function hasMaterialProfileChange(oldDigest, newDigest) {
   return oldDigest !== newDigest
 }
 
+/**
+ * buildProfileSignalAudit — single canonical helper for "what facts did the
+ * matcher actually use about this profile?" (Phase 3 mission rule).
+ *
+ * Every match output (matching route, discovery route, Anya summary, pipeline
+ * save) MUST attach the result of this function so users and tests can
+ * answer "what facts from my profile caused this to appear?".
+ *
+ * Pure / synchronous: takes a profileContext-like object (the same shape
+ * loadProfileContext / buildProfileContext produces) and returns a small,
+ * stable JSON payload. Never throws.
+ */
+export function buildProfileSignalAudit(profileContext = {}) {
+  const profile = profileContext?.profile ?? profileContext ?? {}
+  const sections = profileContext?.sections ?? {}
+  const signals = profileContext?.signals ?? {}
+  const documents = Array.isArray(profileContext?.documents) ? profileContext.documents : []
+
+  const setOrArrayToArray = (v) => {
+    if (!v) return []
+    if (Array.isArray(v)) return v
+    if (typeof v?.values === 'function') return Array.from(v).slice(0, 12)
+    if (typeof v === 'object') return Object.keys(v)
+    return [String(v)]
+  }
+
+  const location_used = []
+  if (profile?.zip || profile?.zip_code || profile?.postal_code) location_used.push('zip')
+  if (profile?.city) location_used.push('city')
+  if (profile?.county) location_used.push('county')
+  if (profile?.state) location_used.push('state')
+
+  const high_value_fields = [
+    'state',
+    'zip',
+    'organization_type',
+    'primary_type',
+    'applicant_type',
+  ]
+  const missing_high_value_fields = high_value_fields.filter((f) => {
+    const v = profile?.[f] ?? sections?.basic_information?.[f]
+    return v === null || v === undefined || v === ''
+  })
+
+  return {
+    profile_type:
+      profile?.primary_type ?? profile?.applicant_type ?? profile?.organization_type ?? null,
+    location_used,
+    needs_used: setOrArrayToArray(signals?.needs).slice(0, 12),
+    interests_used: setOrArrayToArray(signals?.interests).slice(0, 12),
+    health_used: setOrArrayToArray(signals?.health).slice(0, 8),
+    military_used: setOrArrayToArray(signals?.military).slice(0, 4),
+    family_used: setOrArrayToArray(signals?.family).slice(0, 6),
+    organization_used: profile?.organization_type ? [profile.organization_type] : [],
+    documents_used: documents
+      .map((d) => d?.title || d?.filename || d?.name)
+      .filter(Boolean)
+      .slice(0, 5),
+    sections_seen: Object.keys(sections),
+    missing_high_value_fields,
+  }
+}
+
 export function summarizeProfileSignals(signals) {
   const parts = []
   if (signals.demographics?.size) {

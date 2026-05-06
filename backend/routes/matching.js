@@ -1,7 +1,7 @@
 import express from 'express'
 import { formatError } from '../middleware/errorHandler.js'
 import { computeMatchDecision, normalizeProfile } from '../services/matchDecisionEngine.js'
-import { loadProfileContext } from '../services/profileHelpers.js'
+import { loadProfileContext, buildProfileSignalAudit } from '../services/profileHelpers.js'
 import { buildProfileFacets } from '../services/profile/profileTaxonomy.js'
 import { ensureProfileAccess } from '../utils/accessControl.js'
 import { getDataReadiness } from '../services/dataReadinessService.js'
@@ -15,7 +15,7 @@ import {
   applyFundableOpportunityNormalization,
   evaluateFundableOpportunity,
 } from '../services/matching/qualityGate.js'
-import { deriveMatchReasonCodes } from '../services/matching/reasons.js'
+import { deriveMatchReasonCodes, MATCH_REASON_CODES } from '../services/matching/reasons.js'
 import { normalizeOpportunityState, normalizeState } from '../utils/stateNormalization.js'
 
 import { createLogger } from '../utils/logger.js'
@@ -474,10 +474,22 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
                                     decision.decision = 'REVIEW'
                                     decision.explanation = (decision.explanation || '') + ' (directory preserved as REVIEW)'
                                   }
-                                  const matchReasons = deriveMatchReasonCodes(decision, opp, trust)
+                                  // Derive reason codes for explainability. If the decision passed
+                                  // (not REJECT) but no specific signal codes fired, that is a fact
+                                  // about EXPLAINABILITY, not a fact about FIT — Goal #2 (match,
+                                  // don't eliminate) and Goal #8 (avoid zero-result UX) require us
+                                  // to keep the row, attribute it to the decision shape, and let
+                                  // scoring rank it. Previously this branch silently dropped
+                                  // every "passes scoring but no labelled signals" candidate, which
+                                  // contributed directly to the 0-included-of-N problem on
+                                  // sparse-profile users.
+                                  let matchReasons = deriveMatchReasonCodes(decision, opp, trust)
                                   if (matchReasons.length === 0) {
                                     rejectStats.noReason++
-                                    return null
+                                    matchReasons =
+                                      decision?.decision === 'ACCEPT'
+                                        ? [MATCH_REASON_CODES.STRONG_SCORE]
+                                        : [MATCH_REASON_CODES.REVIEW_SCORE]
                                   }
 
                                   // Soft downgrade for stale/non-official rows.
@@ -575,6 +587,16 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
       const MAX_RESPONSE = 500
       const capped = scored.length > MAX_RESPONSE ? scored.slice(0, MAX_RESPONSE) : scored
 
+      // Mission rule (Phase 3): every match output must carry a
+      // profile_signal_audit so users/Anya/tests can answer "what facts from
+      // my profile did the matcher actually use?".
+      let signalAudit = null
+      try {
+        signalAudit = buildProfileSignalAudit(profileContext)
+      } catch (auditErr) {
+        signalAudit = { error: auditErr?.message ?? String(auditErr) }
+      }
+
       res.json({
               profile_id: profileId,
               min_score: Number.isFinite(effectiveMinScore) ? effectiveMinScore : null,
@@ -586,6 +608,7 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
                 dropped_for_no_reason: rejectStats.noReason,
                 dropped_for_wrong_state: rejectStats.wrongState,
               },
+              profile_signal_audit: signalAudit,
               score_hint: allScored._scoreHint || null,
               threshold_relaxed: effectiveMinScore !== minScore ? true : undefined,
               threshold_relaxed_reason: relaxedReason || undefined,

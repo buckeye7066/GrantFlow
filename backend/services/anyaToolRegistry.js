@@ -58,7 +58,8 @@ import { runMissionAudit } from './missionAuditService.js'
 import { AUDIT_CATEGORIES, SEVERITY, logAuditEvent } from './auditService.js'
 import { trustedOriginClause, trustedSourceClause } from '../utils/recordOrigins.js'
 import { normalizeState, statesMatch } from '../utils/stateNormalization.js'
-import { scoreOpportunity } from './matchEngine.js'
+import { scoreOpportunity, computeMatchDecision } from './matchEngine.js'
+import { loadProfileContext } from './profileHelpers.js'
 import { syncProfileFieldsFromSection } from '../utils/profileSectionSync.js'
 import { guardProfileSectionForWrite } from '../utils/guardedProfileSectionWrite.js'
 
@@ -494,7 +495,7 @@ function formatGrantSummaries(opportunities, profile = null) {
   })
 }
 
-function summarizeGrants(db, params, context) {
+async function summarizeGrants(db, params, context) {
   const ctx = context?.ctx
   const profileId =
     (params?.profile_id && String(params.profile_id).trim()) ||
@@ -509,24 +510,71 @@ function summarizeGrants(db, params, context) {
     throw error
   }
 
-  const profile = db
-    .prepare(
-      `
-        SELECT id, display_name, status, state, organization_type, 
-               categories, serves_veterans, serves_disabled
-        FROM profiles
-        WHERE id = ?
-      `,
-    )
-    .get(profileId)
-
-  if (!profile) {
-    throw new Error('Profile not found')
+  // Mission rule (Phase 3): Anya tools must use the FULL profile context, not
+  // a thin DB row, so explanations are grounded in the same view the canonical
+  // matcher sees. loadProfileContext returns { profile, sections, signals,
+  // organization, documents } so the per-result explanations match what the
+  // canonical decision engine produced.
+  let context_profile
+  try {
+    context_profile = await loadProfileContext(db, profileId)
+  } catch (err) {
+    throw new Error(`Profile not found or unreadable: ${err?.message ?? err}`)
   }
+  const profile = context_profile.profile
 
   const limit = Math.max(1, Math.min(Number(params?.limit) || DEFAULT_GRANT_LIMIT, 10))
   const opportunities = collectGrantMatches(db, profileId, limit)
   const formatted = formatGrantSummaries(opportunities, profile)
+
+  // Re-run the canonical decision engine for each opportunity so the returned
+  // explanation lines up with what matching/discovery would show. We attach
+  // the matched_profile_facts payload so the UI/Anya can display "what facts
+  // from your profile caused this" without re-deriving anything.
+  for (let i = 0; i < formatted.length; i++) {
+    try {
+      const opp = opportunities[i]
+      if (!opp) continue
+      const decision = computeMatchDecision(
+        context_profile.profile,
+        opp,
+        { profileSections: context_profile.sections, signals: context_profile.signals },
+      )
+      formatted[i].canonical_match = {
+        score: decision.score,
+        decision: decision.decision,
+        confidence: decision.confidence,
+        matched_profile_facts: decision.matched_profile_facts ?? [],
+        ineligibility_reasons: decision.ineligibilityReasons ?? [],
+        matcher_version: decision.matcherVersion,
+      }
+    } catch (decisionErr) {
+      // Never fail the whole summary on a single bad row.
+      formatted[i].canonical_match = { error: decisionErr?.message ?? String(decisionErr) }
+    }
+  }
+
+  // profile_signal_audit lets the UI / Anya / tests answer "what did the
+  // matcher actually use about this profile?". Mission rule (Phase 3).
+  const signals = context_profile.signals ?? {}
+  const profile_signal_audit = {
+    profile_type: profile?.primary_type ?? profile?.applicant_type ?? null,
+    location_used: [
+      profile?.zip ? 'zip' : null,
+      profile?.county ? 'county' : null,
+      profile?.state ? 'state' : null,
+    ].filter(Boolean),
+    needs_used: Array.isArray(signals?.needs)
+      ? signals.needs.slice(0, 12)
+      : Array.from(signals?.needs ?? []).slice(0, 12),
+    organization_used: profile?.organization_type
+      ? [profile.organization_type]
+      : [],
+    documents_used: Array.isArray(context_profile?.documents)
+      ? context_profile.documents.map((d) => d?.title || d?.filename).filter(Boolean).slice(0, 5)
+      : [],
+    sections_seen: Object.keys(context_profile?.sections ?? {}),
+  }
 
   return {
     profile: {
@@ -537,6 +585,7 @@ function summarizeGrants(db, params, context) {
     count: formatted.length,
     limit,
     opportunities: formatted,
+    profile_signal_audit,
   }
 }
 

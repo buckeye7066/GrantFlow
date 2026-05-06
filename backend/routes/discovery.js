@@ -4,7 +4,7 @@ import { trustedOriginClause, trustedSourceClause } from '../utils/recordOrigins
 import { isJunkOpportunity } from '../services/contentFilter.js'
 import { scoreOpportunity } from '../services/matchEngine.js'
 import { DEFAULT_MIN_SCORE, RELAX_THRESHOLDS, FALLBACK_TOP_N } from '../config/matchThresholds.js'
-import { loadProfileContext } from '../services/profileHelpers.js'
+import { loadProfileContext, buildProfileSignalAudit } from '../services/profileHelpers.js'
 import { buildProfileFacets } from '../services/profile/profileTaxonomy.js'
 import { deduplicateOpportunities, decorateOpportunityFreshness } from '../services/opportunityMatcher.js'
 import { resolveGeoCoverage, buildGeoCoverageClause } from '../services/geo/geoCoverageService.js'
@@ -382,6 +382,13 @@ router.post('/comprehensiveMatch', async (req, res) => {
     // Trust layer already filtered placeholder/loan/expired/etc. before
     // scoring, so `highScoring` is the final actionable list. No secondary
     // filterActionableOpportunities pass is needed.
+    let signalAudit = null
+    try {
+      signalAudit = buildProfileSignalAudit(profileContext)
+    } catch (auditErr) {
+      signalAudit = { error: auditErr?.message ?? String(auditErr) }
+    }
+
     res.json({
       success: true,
       opportunities: highScoring,
@@ -393,6 +400,7 @@ router.post('/comprehensiveMatch', async (req, res) => {
       total_after_dedupe: dedupedOpportunities.length,
       trust_dropped: trustDroppedTotal,
       trust_drop_reasons: trustDroppedReasons,
+      profile_signal_audit: signalAudit,
     });
     
   } catch (error) {
