@@ -278,6 +278,31 @@ function MissionHealthPanel({ mission }) {
           </div>
         ) : null}
 
+        {mission.integration && (
+          <div className="mt-4">
+            <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">
+              Mission service integration
+            </p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+              {Object.entries(mission.integration).map(([key, info]) => {
+                const ok = info?.consumed
+                return (
+                  <div
+                    key={key}
+                    className={`text-xs rounded border px-2 py-1.5 ${
+                      ok
+                        ? 'border-emerald-200 bg-emerald-50/50 text-emerald-900'
+                        : 'border-amber-300 bg-amber-50 text-amber-900'
+                    }`}
+                  >
+                    <div className="font-medium capitalize">{key.replace(/_/g, ' ')}</div>
+                    <div className="text-[11px] opacity-80">{ok ? 'wired into all expected routes/pages' : 'NOT yet integrated everywhere'}</div>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        )}
         {Array.isArray(mission.coverage_by_source) && mission.coverage_by_source.length > 0 ? (
           <div className="mt-4">
             <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">

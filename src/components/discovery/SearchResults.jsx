@@ -2,7 +2,6 @@ import React from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { createPageUrl } from '@/utils';
-import GrantCard from '../pipeline/GrantCard';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Loader2, Plus, Check, CheckSquare, Square, Search, Database, Star, Home, Info } from 'lucide-react';
@@ -11,6 +10,8 @@ import { Progress } from "@/components/ui/progress";
 import { Checkbox } from '@/components/ui/checkbox';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { useSavedGrantsStore } from '@/stores/savedGrantsStore';
+import FundingResultCard from '@/components/funding/FundingResultCard';
+import { toCanonicalResult } from '@/components/funding/toCanonicalResult';
 
 const SOURCE_LABELS = {
   local_funding: 'Local funding',
@@ -579,13 +580,12 @@ export default function SearchResults({ results = [], profileId, onAddToPipeline
                   );
                 })()}
               </div>
-              <div className="flex-grow">
-                 <GrantCard
-                   grant={{ ...opp, starred: !!(opp.id || opp.source_id) && isSaved(opp.id ?? opp.source_id) }}
-                   organizationName={organizationName}
-                   showSummary={true}
-                   onStarToggle={(opp.id || opp.source_id) ? () => toggleGrant(opp.id ?? opp.source_id) : undefined}
-                 />
+              <div className="flex-grow p-2">
+                <FundingResultCard
+                  result={toCanonicalResult(opp)}
+                  className="border-0 shadow-none"
+                  onSecondaryAction={(opp.id || opp.source_id) ? () => toggleGrant(opp.id ?? opp.source_id) : undefined}
+                />
               </div>
               <div className="p-4 bg-slate-50 border-t">
                 <AddToPipelineButton 

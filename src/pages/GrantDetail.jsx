@@ -12,6 +12,7 @@ import HelpTip from '@/components/help/HelpTip';
 import GrantOverview from '../components/grants/GrantOverview';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import Checklist from '../components/workflow/Checklist';
+import ApplicationWorkflowPanel from '../components/workflow/ApplicationWorkflowPanel';
 import TimeTrackingTab from '../components/billing/TimeTrackingTab';
 import BudgetTab from '../components/budgets/BudgetTab';
 import ComplianceTab from '../components/grants/ComplianceTab';
@@ -585,6 +586,7 @@ export default function GrantDetail() {
   className="inline-flex items-center justify-center whitespace-nowrap rounded-sm px-3 py-1.5 text-sm font-medium"
   onClick={() => setIsPrintableAppOpen(true)}
 ><FileText className="w-4 h-4 mr-2"/>Print Application</Button>
+                <TabsTrigger value="workflow"><Target className="w-4 h-4 mr-2"/>Workflow</TabsTrigger>
                 <TabsTrigger value="checklist"><CheckSquare className="w-4 h-4 mr-2"/>Checklist</TabsTrigger>
                 <TabsTrigger value="budget"><DollarSign className="w-4 h-4 mr-2"/>Budget</TabsTrigger>
                 <TabsTrigger value="timelogs"><Clock className="w-4 h-4 mr-2"/>Time Logs</TabsTrigger>
@@ -614,6 +616,22 @@ export default function GrantDetail() {
                         }}
                     />
                 </ErrorBoundary>
+            </TabsContent>
+            <TabsContent value="workflow" className="p-4">
+              <ErrorBoundary>
+                <ApplicationWorkflowPanel
+                  opportunity={{
+                    id: grant.opportunity_id || grant.id,
+                    title: grant.title || grant.grant_name,
+                    sponsor: grant.funder_name || grant.sponsor,
+                    application_url: grant.application_url || grant.url,
+                    deadline: grant.deadline,
+                    kind: grant.opportunity_kind || 'direct',
+                  }}
+                  profileId={grant.profile_id}
+                  applicationId={grant.application_id || null}
+                />
+              </ErrorBoundary>
             </TabsContent>
             <TabsContent value="checklist" className="p-4">
               <ErrorBoundary>

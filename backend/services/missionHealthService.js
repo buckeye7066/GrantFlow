@@ -28,6 +28,8 @@
  * Failures map to alerts so dashboards / CI can alarm on them.
  */
 
+import { promises as fsPromises } from 'fs'
+import path from 'path'
 import { MATCHER_VERSION } from './matchEngine.js'
 
 const TARGETS = Object.freeze({
@@ -55,6 +57,73 @@ async function safeAll(db, sql, params = []) {
 function pct(num, denom) {
   if (!denom || !Number.isFinite(denom) || denom <= 0) return 0
   return Math.round((Number(num) / Number(denom)) * 1000) / 10
+}
+
+/**
+ * Lightweight, dependency-free integration check.
+ *
+ * Given a mission "service" file (e.g. zeroResultLadder.js) and a list
+ * of "consumer" files that should import it, return whether each consumer
+ * actually references the service module by basename.
+ *
+ * Pure file-scan (no AST), so it is safe to call from a request handler:
+ *   - Reads each consumer once with fs.readFile
+ *   - Looks for `<basename>.js` or `<basename>'` (import statement)
+ *   - Caches results in-process for 5 minutes (REPO_INTEGRATION_CACHE)
+ *
+ * Reports `{ consumed: bool, consumers: { path: bool, ... } }`.
+ *
+ * Mission rule: until a service is actually consumed, the mission goal
+ * it serves can't clear 0.90, so this surface is intentionally noisy
+ * when integration is missing.
+ */
+const REPO_ROOT = process.env.GRANTFLOW_REPO_ROOT
+  ? path.resolve(process.env.GRANTFLOW_REPO_ROOT)
+  : path.resolve(process.cwd())
+const REPO_INTEGRATION_CACHE = new Map()
+const REPO_INTEGRATION_TTL_MS = 5 * 60 * 1000
+
+export async function detectModuleUsage(serviceFiles = [], consumerFiles = []) {
+  const cacheKey = JSON.stringify({ serviceFiles, consumerFiles })
+  const now = Date.now()
+  const hit = REPO_INTEGRATION_CACHE.get(cacheKey)
+  if (hit && now - hit.cachedAt < REPO_INTEGRATION_TTL_MS) return hit.value
+
+  const basenames = serviceFiles.map((f) => path.basename(String(f)))
+  const consumers = {}
+  for (const consumer of consumerFiles) {
+    const consumerFile = typeof consumer === 'string' ? consumer : consumer?.file
+    const explicitMatch = typeof consumer === 'object' ? consumer?.match : null
+    if (!consumerFile) continue
+    try {
+      const filePath = path.resolve(REPO_ROOT, consumerFile)
+      const text = await fsPromises.readFile(filePath, 'utf8')
+      let consumed
+      if (explicitMatch) {
+        consumed = text.includes(String(explicitMatch))
+      } else {
+        consumed = basenames.some((b) => {
+          const stem = b.replace(/\.[a-z]+$/i, '')
+          return text.includes(`/${stem}.`) ||
+            text.includes(`/${stem}'`) ||
+            text.includes(`/${stem}"`) ||
+            text.includes(`'${stem}'`) ||
+            text.includes(b)
+        })
+      }
+      consumers[consumerFile] = consumed
+    } catch {
+      consumers[typeof consumer === 'string' ? consumer : consumer?.file ?? 'unknown'] = false
+    }
+  }
+  const allConsumed = Object.values(consumers).length > 0 && Object.values(consumers).every(Boolean)
+  const value = {
+    service_files: serviceFiles,
+    consumed: allConsumed,
+    consumers,
+  }
+  REPO_INTEGRATION_CACHE.set(cacheKey, { cachedAt: now, value })
+  return value
 }
 
 /**
@@ -133,6 +202,58 @@ export async function buildMissionHealth(db) {
   const brokenPct = pct(brokenDirect, totalDirect)
 
   const alerts = []
+  // ── Phase 10 integration metrics ────────────────────────────────────
+  // Surface boolean integration flags so the dashboard can show
+  // "service exists ✓ + integrated ✓" at a glance, and the audit can
+  // tell at a glance whether each mission service is globally consumed.
+  // Each entry checks that the named mission service is consumed by every
+  // expected consumer file. UI consumers are matched by either the
+  // imported component name (e.g. `FundingResultCard`) or the API path
+  // they call (e.g. `/api/application-workflow/`).
+  const integration = {
+    canonical_card: await detectModuleUsage(
+      ['src/components/funding/FundingResultCard.jsx'],
+      [
+        { file: 'src/pages/FundingResults.jsx', match: 'FundingResultCard' },
+        { file: 'src/pages/SavedGrants.jsx', match: 'FundingResultCard' },
+        { file: 'src/components/discovery/SearchResults.jsx', match: 'FundingResultCard' },
+      ],
+    ),
+    zero_result_ladder: await detectModuleUsage(
+      ['backend/services/zeroResultLadder.js'],
+      ['backend/routes/matching.js', 'backend/routes/discovery.js'],
+    ),
+    coverage_planning: await detectModuleUsage(
+      ['backend/services/sourceRegistry.js'],
+      ['backend/routes/realCrawlers.js'],
+    ),
+    application_workflow: await detectModuleUsage(
+      ['backend/services/applicationWorkflow.js'],
+      [
+        'backend/routes/applicationWorkflow.js',
+        { file: 'src/components/workflow/ApplicationWorkflowPanel.jsx', match: '/api/application-workflow/' },
+        { file: 'src/pages/GrantDetail.jsx', match: 'ApplicationWorkflowPanel' },
+      ],
+    ),
+    anya_grounding: await detectModuleUsage(
+      ['backend/services/anyaToolRegistry.js'],
+      [
+        'backend/services/anyaOrchestrator.js',
+        { file: 'backend/routes/anya.js', match: 'page_context' },
+        { file: 'src/components/anya/AnyaChat.jsx', match: 'pageContextPayload' },
+        { file: 'src/lib/anyaClient.js', match: 'page_context' },
+      ],
+    ),
+  }
+  const integrationsOk = Object.values(integration).every((v) => v?.consumed)
+  if (!integrationsOk) {
+    alerts.push({
+      level: 'warn',
+      code: 'mission_service_not_globally_integrated',
+      detail: 'One or more mission services are not yet consumed by their target routes/pages. Run repo audit and wire them in.',
+    })
+  }
+
   if (totalDirect > 0 && verifiedPct < TARGETS.verified_pct_min) {
     alerts.push({
       level: 'warn',
@@ -174,6 +295,7 @@ export async function buildMissionHealth(db) {
     },
     coverage_by_source: coverage,
     application_funnel: funnel,
+    integration,
     alerts,
   }
 }

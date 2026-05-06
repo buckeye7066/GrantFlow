@@ -27,6 +27,7 @@ import { useAnyaContext, serializeAnyaContext } from "@/contexts/AnyaContext"
 import { createPageUrl } from "@/utils"
 import { useFeatureFlags } from "@/lib/featureFlags"
 import { apiFetch } from "@/api/client"
+import { isRealProfileId } from "@/api/profileIdGuards"
 import { useQueryClient } from "@tanstack/react-query"
 import {
   Dialog,
@@ -484,8 +485,9 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, pref
       const primaryType = PROFILE_TYPE_MAP[obProfileType] || "individual"
 
       let profileId = activeProfile?.id
-      if (!profileId) {
-        // No profile yet — create one with collected type
+      if (!isRealProfileId(profileId)) {
+        // No real profile yet (or admin sentinel) — create one with collected type.
+        // The admin sentinel is never a routable id, so we always promote to "create".
         const created = await apiFetch("/api/profiles", {
           method: "POST",
           body: JSON.stringify({
@@ -500,6 +502,12 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, pref
           method: "PUT",
           body: JSON.stringify({ primary_type: primaryType }),
         })
+      }
+
+      if (!isRealProfileId(profileId)) {
+        // Defensive: createProfile must return a real id; if it didn't, abort
+        // before touching `/api/profiles/${id}/...` endpoints with junk.
+        throw new Error('[onboarding] profile create did not return a routable id')
       }
 
       // Persist state → basic_information section
@@ -828,15 +836,36 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, pref
   const { anyaCopilotEnabled: copilotEnabled, anyaScreenshotEnabled: screenshotEnabled } = useFeatureFlags()
   const anyaContext = useAnyaContext()
   const pageContextPayload = useMemo(() => {
+    // Phase 8/9 mission rule: every Anya request must carry the live page
+    // context so anya.nextBestAction and other tools can ground answers in
+    // what the user is actually looking at — current page, selected
+    // profile, selected opportunity, selected application/step. The keys
+    // here MUST match what the backend tool registry reads
+    // (selectedOpportunityId, selectedApplicationId).
     const adapter = anyaContext?.adapter
-    if (!adapter) return undefined
-    const ctx = {}
-    if (adapter.completion?.resultCount !== null) ctx.resultCount = adapter.completion.resultCount
-    if (adapter.completion?.pipelineCount !== null) ctx.pipelineCount = adapter.completion.pipelineCount
-    if (adapter.primaryEntityId) ctx.selectedGrant = adapter.primaryEntityId
-    if (adapter.pageType) ctx.pageType = adapter.pageType
-    return Object.keys(ctx).length > 0 ? ctx : undefined
-  }, [anyaContext?.adapter])
+    const ctx = {
+      currentPage: currentPage ?? null,
+      currentPath: location?.pathname ?? null,
+      profileId: effectiveProfileId ?? null,
+    }
+    if (adapter) {
+      if (adapter.pageType) ctx.pageType = adapter.pageType
+      if (adapter.completion?.resultCount !== null) ctx.resultCount = adapter.completion.resultCount
+      if (adapter.completion?.pipelineCount !== null) ctx.pipelineCount = adapter.completion.pipelineCount
+      const primary = adapter.primaryEntityId ?? null
+      if (primary) {
+        if (adapter.pageType === 'grant_detail' || adapter.pageType === 'grant') {
+          ctx.selectedApplicationId = String(primary)
+          ctx.selectedGrantId = String(primary)
+        } else if (adapter.pageType === 'opportunity' || adapter.pageType === 'discover_grants') {
+          ctx.selectedOpportunityId = String(primary)
+        } else {
+          ctx.selectedEntityId = String(primary)
+        }
+      }
+    }
+    return ctx
+  }, [anyaContext?.adapter, currentPage, location?.pathname, effectiveProfileId])
   const navigate = useNavigate()
   const onboardingActions = useMemo(() => [
     { type: "navigate", label: "Create or select a profile", payload: { path: createPageUrl("MyProfiles") } },
@@ -859,7 +888,7 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, pref
       }
       if (action.type === "invokeTool" && action.payload?.toolName && sessionId) {
         const params = { ...(action.payload.parameters || {}), profile_id: effectiveProfileId }
-        await invokeAnyaTool(action.payload.toolName, params, { sessionId })
+        await invokeAnyaTool(action.payload.toolName, params, { sessionId, pageContext: pageContextPayload })
         toast({ title: "Done", description: action.label })
         await refreshMessages(sessionId)
         return

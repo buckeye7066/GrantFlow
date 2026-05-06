@@ -19,6 +19,7 @@ import {
 import { scoreOpportunity, makeDecision } from '../services/matchEngine.js'
 import { runAllDomainEngines } from '../services/crawlers/domainEngines/index.js'
 import { crawlStateWaiverBenefits, evaluateStateWaiverEligibility } from '../services/crawlers/stateWaiverBenefitsCrawler.js'
+import { planCoverage, buildCoverageReport, buildGrantsGovQueryTerms } from '../services/sourceRegistry.js'
 
 import { createLogger } from '../utils/logger.js'
 const routeLogger = createLogger('route:realCrawlers')
@@ -243,11 +244,38 @@ router.post('/run', ensureAuth, async (req, res) => {
       console.warn(`[RealCrawlers] Could not load profile context for relevance filter — filtering will be skipped: ${ctxErr?.message}`)
     }
 
+    // Mission rule (Phase 4): every crawler run must derive a profile-aware
+    // source coverage plan from the canonical SourceRegistry. The plan is
+    // attached to the response so the dashboard / Anya can answer "what
+    // sources were actually queried for this profile?". Failures are logged
+    // but never block the crawl itself (recall over suppression).
+    let coveragePlan = null
+    let coverageReport = null
+    try {
+      coveragePlan = planCoverage(profileContext)
+      coverageReport = buildCoverageReport(profileContext, coveragePlan)
+      routeLogger.info(
+        `[RealCrawlers] coverage plan: ${coveragePlan?.sources_planned?.length ?? 0} sources for profile_type=${coverageReport?.profile_type ?? 'unknown'}`,
+      )
+    } catch (planErr) {
+      routeLogger.warn(`[RealCrawlers] coverage planning failed: ${planErr?.message ?? planErr}`)
+    }
+
+    // Derive non-empty Grants.gov search terms from the profile so the
+    // crawler doesn't fall back to the historic empty-keyword query
+    // (mission rule, Phase 4).
+    let derivedSearchTerms = []
+    try {
+      derivedSearchTerms = buildGrantsGovQueryTerms(profileContext)
+    } catch { /* best-effort */ }
+
     const result = await runCrawler(db, profile_id, {
       minScore: Math.max(1, Math.floor(min_match_score * 0.25)),
       maxResults: strategy.maxResults || 100,
       crawlerType: crawler_type,
       profileContext,
+      coveragePlan,
+      searchTerms: derivedSearchTerms,
     })
 
     // If strategy was gated, return early with reason
@@ -436,8 +464,25 @@ router.post('/run', ensureAuth, async (req, res) => {
     // trust_* fields as /api/opportunities and /api/discovery so the frontend
     // and Anya can explain results with one vocabulary.
     const trustDropCounts = {}
-    const decorated = filtered.flatMap((opp) => {
-      const trust = assessOpportunityTrust(opp, {
+    const decorateWithTrust = (opp, trustOpts) => {
+      const trust = assessOpportunityTrust(opp, trustOpts)
+      const meta = buildTrustMetadata(trust) || {}
+      return {
+        opp: {
+          ...opp,
+          trust_tier: opp.trust_tier ?? meta.trust_tier,
+          source_trust: opp.source_trust ?? meta.source_trust,
+          trust_flags: opp.trust_flags ?? meta.trust_flags,
+          trust_reasons: opp.trust_reasons ?? meta.trust_reasons,
+          trust_downgrade: opp.trust_downgrade ?? meta.trust_downgrade,
+          trust_downgrade_reason: opp.trust_downgrade_reason ?? meta.trust_downgrade_reason,
+          actionable_url: opp.actionable_url ?? meta.actionable_url,
+        },
+        trust,
+      }
+    }
+    let decorated = filtered.flatMap((opp) => {
+      const { opp: decoratedOpp, trust } = decorateWithTrust(opp, {
         allowDirectory: true,
         allowExpired: false,
       })
@@ -447,19 +492,30 @@ router.post('/run', ensureAuth, async (req, res) => {
         }
         return []
       }
-      const meta = buildTrustMetadata(trust) || {}
-      return [{
-        ...opp,
-        trust_tier: opp.trust_tier ?? meta.trust_tier,
-        source_trust: opp.source_trust ?? meta.source_trust,
-        trust_flags: opp.trust_flags ?? meta.trust_flags,
-        trust_reasons: opp.trust_reasons ?? meta.trust_reasons,
-        trust_downgrade: opp.trust_downgrade ?? meta.trust_downgrade,
-        trust_downgrade_reason: opp.trust_downgrade_reason ?? meta.trust_downgrade_reason,
-        actionable_url: opp.actionable_url ?? meta.actionable_url,
-      }]
+      return [decoratedOpp]
     })
-    if (filtered.length > 0 && decorated.length < filtered.length) {
+    let trustRelaxed = false
+    // Project rule: zero-results is a failure state. If a non-empty candidate
+    // pool collapses to zero AFTER trust filtering, relax once (allow expired,
+    // accept directories, accept lower trust) so the user always sees something
+    // when something exists. Logged for explainability.
+    if (decorated.length === 0 && filtered.length > 0 && !strictMinScore) {
+      decorated = filtered.flatMap((opp) => {
+        const { opp: decoratedOpp, trust } = decorateWithTrust(opp, {
+          allowDirectory: true,
+          allowExpired: true,
+        })
+        if (!trust.display && trust.trustTier === 'low') return []
+        return [{ ...decoratedOpp, trust_relaxed: true }]
+      })
+      trustRelaxed = decorated.length > 0
+      if (trustRelaxed) {
+        routeLogger.info(
+          `[RealCrawlers] Trust relax fallback: ${filtered.length} → ${decorated.length} after allowing expired/directory (orig drops=${JSON.stringify(trustDropCounts)})`,
+        )
+      }
+    }
+    if (filtered.length > 0 && decorated.length < filtered.length && !trustRelaxed) {
       routeLogger.info(`[RealCrawlers] Trust filter: ${filtered.length} → ${decorated.length} (drops=${JSON.stringify(trustDropCounts)})`)
     }
 
@@ -488,6 +544,11 @@ router.post('/run', ensureAuth, async (req, res) => {
       used_live: false,
       used_db_fallback: false,
       used_curated: true,
+      // Phase 4 mission rule: every crawler run reports its profile-aware
+      // source plan so admins / Anya / CI can answer "did we even query a
+      // relevant source for this profile?".
+      coverage_plan: coveragePlan,
+      coverage_report: coverageReport,
       debug: {
         strategy: result.debug?.strategy || crawler_type,
         intents: result.debug?.intents || [],
@@ -519,7 +580,7 @@ router.post('/run', ensureAuth, async (req, res) => {
       ...(thresholdFallbackMessage ? { threshold_fallback_message: thresholdFallbackMessage } : {}),
     })
   } catch (error) {
-    console.error(`[RealCrawlers] Error in ${crawler_type}:`, error)
+    routeLogger.error(`[RealCrawlers] Error in ${crawler_type}:`, error)
     res.status(500).json({
       success: false,
       error: 'Crawler execution failed',
@@ -871,7 +932,7 @@ router.post('/specific-need', ensureAuth, async (req, res) => {
       opportunities: final,
     })
   } catch (error) {
-    console.error('[RealCrawlers] Error in specific-need:', error)
+    routeLogger.error('[RealCrawlers] Error in specific-need:', error)
     res.status(500).json({
       success: false,
       error: 'Specific need search failed',
@@ -1078,7 +1139,7 @@ router.post('/run-smart', ensureAuth, standardRateLimiter, async (req, res) => {
       sources_used: ['local_funding', 'government_funding', 'domain_engines', 'state_waiver_benefits'],
     })
   } catch (err) {
-    console.error('[RealCrawlers] run-smart error:', err)
+    routeLogger.error('[RealCrawlers] run-smart error:', err)
     return res.status(500).json({
       success: false,
       error: err?.message || 'Smart search failed',
@@ -1109,7 +1170,7 @@ router.post('/run-housing', ensureAuth, async (req, res) => {
       ...summary,
     })
   } catch (err) {
-    console.error('[run-housing] Error:', err?.message || String(err))
+    routeLogger.error('[run-housing] Error:', err?.message || String(err))
     return res.status(500).json({ error: err?.message || 'Housing crawler failed' })
   }
 })

@@ -7,7 +7,8 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Textarea } from '@/components/ui/textarea'
 import { Loader2, Star, Trash2, StickyNote, Check } from 'lucide-react'
-import GrantCard from '@/components/pipeline/GrantCard'
+import FundingResultCard from '@/components/funding/FundingResultCard'
+import { toCanonicalResult } from '@/components/funding/toCanonicalResult'
 
 function NoteEditor({ grantId }) {
   const { getNote, updateNote } = useSavedGrantsStore()
@@ -120,9 +121,9 @@ export default function SavedGrants() {
                 <div key={id} className="flex flex-col">
                   {grant ? (
                     <>
-                      <GrantCard
-                        grant={{ ...grant, starred: true }}
-                        onStarToggle={() => removeGrant(id)}
+                      <FundingResultCard
+                        result={toCanonicalResult(grant)}
+                        onSecondaryAction={() => removeGrant(id)}
                       />
                       <div className="mt-2 flex items-center justify-between gap-2">
                         <NoteEditor grantId={id} />

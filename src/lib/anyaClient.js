@@ -79,15 +79,20 @@ export async function listAnyaTools({ includeAdmin = false } = {}) {
   return tools
 }
 
-export async function invokeAnyaTool(toolName, parameters = {}, { sessionId } = {}) {
+export async function invokeAnyaTool(toolName, parameters = {}, { sessionId, pageContext } = {}) {
   if (!toolName) {
     throw new Error("Tool name required")
   }
+  // Phase 8/9 mission rule: every Anya tool invocation forwards the live
+  // page context so handlers (anya.nextBestAction, profile.updateSection,
+  // application.createFromOpportunity, …) can ground their answers in
+  // what the user is actually looking at.
   return apiFetch(`/api/anya/tools/${encodeURIComponent(toolName)}/invoke`, {
     method: "POST",
     body: JSON.stringify({
       session_id: sessionId ?? undefined,
       parameters,
+      page_context: pageContext ?? undefined,
     }),
   })
 }

@@ -9,6 +9,7 @@ import { buildProfileFacets } from '../services/profile/profileTaxonomy.js'
 import { deduplicateOpportunities, decorateOpportunityFreshness } from '../services/opportunityMatcher.js'
 import { resolveGeoCoverage, buildGeoCoverageClause } from '../services/geo/geoCoverageService.js'
 import { assessOpportunityTrust } from '../services/opportunityTrust.js'
+import { assembleFundingResults } from '../services/zeroResultLadder.js'
 
 import { createLogger } from '../utils/logger.js'
 const routeLogger = createLogger('route:discovery')
@@ -394,19 +395,57 @@ router.post('/comprehensiveMatch', async (req, res) => {
       ? `No matches at default threshold ${DEFAULT_MIN_SCORE}; relaxed to ${matchThreshold} so you still see options. Complete your profile (location, needs, organization type) to improve match quality.`
       : undefined
 
+    // Mission rule (Phase 6): run the canonical zero-result ladder so
+    // the discovery envelope carries the same diagnostics as matching.js
+    // and the FundingResultCard renders honest threshold/relaxed banners.
+    const ladderProfileGaps = []
+    try {
+      const sig = profileContext?.signals ?? {}
+      if (!sig?.location?.state && !sig?.location?.zip) ladderProfileGaps.push('location')
+      if (!sig?.entityType && !profileContext?.profile?.primary_type) ladderProfileGaps.push('profile_type')
+      if (!sig?.interests?.size && !sig?.demographics?.size) ladderProfileGaps.push('interests')
+    } catch { /* best-effort */ }
+
+    const ladderInput = dedupedOpportunities.map((o) => ({
+      ...o,
+      match_score: o.match_score ?? o.fit_score,
+    }))
+    const ladder = assembleFundingResults(ladderInput, {
+      minScore: DEFAULT_MIN_SCORE,
+      maxResults: Math.max(highScoring.length, 100),
+      profileGaps: ladderProfileGaps,
+    })
+
+    let finalOpportunities = highScoring
+    if (highScoring.length === 0 && Array.isArray(ladder.opportunities) && ladder.opportunities.length > 0) {
+      finalOpportunities = ladder.opportunities
+    } else if (ladder.threshold_relaxed) {
+      finalOpportunities = highScoring.map((o) => ({
+        ...o,
+        threshold_relaxed: true,
+        relaxed_reason: o.relaxed_reason || ladder.threshold_relaxed_reason,
+      }))
+    }
+
     res.json({
       success: true,
-      opportunities: highScoring,
-      total: highScoring.length,
+      opportunities: finalOpportunities,
+      total: finalOpportunities.length,
       page,
       threshold_used: matchThreshold,
-      threshold_relaxed: wasRelaxed ? true : undefined,
-      threshold_relaxed_reason: relaxedReason,
+      threshold_relaxed: wasRelaxed || ladder.threshold_relaxed ? true : undefined,
+      threshold_relaxed_reason: relaxedReason || ladder.threshold_relaxed_reason,
       total_evaluated: scoredOpportunities.length,
       total_after_dedupe: dedupedOpportunities.length,
       trust_dropped: trustDroppedTotal,
       trust_drop_reasons: trustDroppedReasons,
       profile_signal_audit: signalAudit,
+      result_tier: ladder.tier,
+      directory_only: ladder.directory_only || undefined,
+      geo_expanded: ladder.geo_expanded || undefined,
+      profile_gaps: ladder.profile_gaps?.length ? ladder.profile_gaps : undefined,
+      tier_attempts: ladder.tier_attempts,
+      tier_explanation: ladder.explanation,
     });
     
   } catch (error) {

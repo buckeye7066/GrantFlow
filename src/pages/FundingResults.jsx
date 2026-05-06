@@ -5,8 +5,9 @@ import client, { apiFetch } from '@/api/client';
 import { useFundingResultsStore } from '@/stores/fundingResultsStore';
 import { useAuthStore } from '@/stores/authStore';
 import { createPageUrl } from '@/utils';
-import GrantCard from '@/components/pipeline/GrantCard';
 import { AddToPipelineButton } from '@/components/discovery/SearchResults';
+import FundingResultCard from '@/components/funding/FundingResultCard';
+import { toCanonicalResult } from '@/components/funding/toCanonicalResult';
 import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
@@ -353,12 +354,18 @@ export default function FundingResults() {
           {filteredAndSorted.map((opp, idx) => {
             const oppKey = getOpportunityKey(opp, idx);
             const matchReasons = getMatchReasons(opp);
-            const oppForCard = { ...opp, matchReasons: matchReasons };
+            const canonical = toCanonicalResult({
+              ...opp,
+              matched_profile_facts: opp.matched_profile_facts ?? matchReasons,
+            });
 
             return (
               <div key={oppKey} className="flex flex-col bg-white rounded-xl shadow-sm border overflow-hidden">
-                <div className="flex-grow">
-                  <GrantCard grant={oppForCard} organizationName={organizationName} showSummary={true} />
+                <div className="flex-grow p-2">
+                  <FundingResultCard
+                    result={canonical}
+                    className="border-0 shadow-none"
+                  />
                 </div>
 
                 {(opp.usable_for_housing === true || opp.usable_for_housing === 1) && (
@@ -386,7 +393,10 @@ export default function FundingResults() {
                   </div>
                 )}
 
-                {matchReasons.length > 0 && (
+                {/* Why-it-matched is rendered by FundingResultCard above; keep
+                    legacy collapsible only when the canonical card couldn't
+                    surface facts (defensive — should not trigger in practice). */}
+                {matchReasons.length > 0 && !canonical?.matched_profile_facts?.length && (
                   <div className="px-4 pb-2">
                     <MatchReasonsCollapsible reasons={matchReasons} />
                   </div>

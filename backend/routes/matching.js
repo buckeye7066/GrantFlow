@@ -17,6 +17,7 @@ import {
 } from '../services/matching/qualityGate.js'
 import { deriveMatchReasonCodes, MATCH_REASON_CODES } from '../services/matching/reasons.js'
 import { normalizeOpportunityState, normalizeState } from '../utils/stateNormalization.js'
+import { assembleFundingResults, TIERS as ZERO_RESULT_TIERS } from '../services/zeroResultLadder.js'
 
 import { createLogger } from '../utils/logger.js'
 const routeLogger = createLogger('route:matching')
@@ -585,7 +586,44 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
       }
 
       const MAX_RESPONSE = 500
-      const capped = scored.length > MAX_RESPONSE ? scored.slice(0, MAX_RESPONSE) : scored
+      let capped = scored.length > MAX_RESPONSE ? scored.slice(0, MAX_RESPONSE) : scored
+
+      // Mission rule (Phase 6): run the canonical zero-result fallback
+      // ladder so every funding-result envelope carries the same
+      // diagnostics (tier, tier_attempts, directory_only, geo_expanded,
+      // profile_gaps) AND so per-card threshold_relaxed/relaxed_reason
+      // flags reach the canonical FundingResultCard.
+      const ladderProfileGaps = []
+      try {
+        const sig = profileContext?.signals ?? {}
+        if (!sig?.location?.state && !sig?.location?.zip) ladderProfileGaps.push('location')
+        if (!sig?.entityType && !profileContext?.profile?.primary_type) ladderProfileGaps.push('profile_type')
+        if (!sig?.interests?.size && !sig?.demographics?.size) ladderProfileGaps.push('interests')
+      } catch { /* ignore — best-effort gap signal */ }
+
+      const ladder = assembleFundingResults(allScored, {
+        minScore: Number.isFinite(minScore) ? minScore : 50,
+        maxResults: MAX_RESPONSE,
+        profileGaps: ladderProfileGaps,
+      })
+
+      // If the existing pipeline produced no items but the ladder found
+      // a usable tier (RELAXED_DIRECT, DIRECTORY, GEO_EXPAND), surface
+      // the ladder's items so the user never sees a blank page.
+      if (capped.length === 0 && Array.isArray(ladder.opportunities) && ladder.opportunities.length > 0) {
+        capped = ladder.opportunities
+        if (ladder.threshold_relaxed_reason) {
+          relaxedReason = relaxedReason || ladder.threshold_relaxed_reason
+        }
+      } else if (ladder.threshold_relaxed) {
+        // Annotate every shown item with the per-card relaxed flags so
+        // FundingResultCard renders the honest "lower-confidence" banner.
+        capped = capped.map((o) => ({
+          ...o,
+          threshold_relaxed: true,
+          relaxed_reason: o.relaxed_reason || ladder.threshold_relaxed_reason,
+        }))
+      }
 
       // Mission rule (Phase 3): every match output must carry a
       // profile_signal_audit so users/Anya/tests can answer "what facts from
@@ -610,8 +648,14 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
               },
               profile_signal_audit: signalAudit,
               score_hint: allScored._scoreHint || null,
-              threshold_relaxed: effectiveMinScore !== minScore ? true : undefined,
-              threshold_relaxed_reason: relaxedReason || undefined,
+              threshold_relaxed: effectiveMinScore !== minScore || ladder.threshold_relaxed ? true : undefined,
+              threshold_relaxed_reason: relaxedReason || ladder.threshold_relaxed_reason || undefined,
+              result_tier: ladder.tier,
+              directory_only: ladder.directory_only || undefined,
+              geo_expanded: ladder.geo_expanded || undefined,
+              profile_gaps: ladder.profile_gaps?.length ? ladder.profile_gaps : undefined,
+              tier_attempts: ladder.tier_attempts,
+              tier_explanation: ladder.explanation,
               truncated: scored.length > MAX_RESPONSE ? true : undefined,
       })
              } catch (error) {
