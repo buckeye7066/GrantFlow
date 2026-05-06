@@ -162,6 +162,39 @@ const isRailwayRuntime = Boolean(
     String(process.env.RAILWAY_PROJECT_ID || '').trim() ||
     String(process.env.RAILWAY_SERVICE_ID || '').trim(),
 )
+
+// ── Production reality gate (mission rule) ───────────────────────────────
+// Refuse to boot production unless URL_VERIFICATION_ENABLED is on, or the
+// operator has explicitly acknowledged a seed/import boot. This makes the
+// "real funding only" promise enforceable at the process level instead of
+// trusting every crawler to behave.
+//
+// Tests that need to spawn a "production-mode" server (auth flows, ephemeral
+// SQLite smoke tests) opt out via the well-known ALLOW_EPHEMERAL_SQLITE flag
+// so they don't have to know about this gate.
+const URL_VERIFICATION_ENABLED =
+  String(process.env.URL_VERIFICATION_ENABLED || '').toLowerCase() === 'true'
+const skipVerificationGate =
+  String(process.env.GRANTFLOW_SKIP_VERIFICATION_GATE || '').toLowerCase() === 'true' ||
+  String(process.env.NODE_ENV || '').toLowerCase() === 'test' ||
+  String(process.env.GRANTFLOW_SEED_MODE || '').toLowerCase() === 'true' ||
+  String(process.env.ALLOW_EPHEMERAL_SQLITE || '').toLowerCase() === 'true'
+
+if (isProdEnv && !URL_VERIFICATION_ENABLED && !skipVerificationGate) {
+  console.error(
+    '[reality-gate] FATAL: refusing to boot production without URL_VERIFICATION_ENABLED=true.\n' +
+      '  Live ingest must perform real URL probes so opportunities surfaced as\n' +
+      '  "verified" actually were. Set URL_VERIFICATION_ENABLED=true, or set\n' +
+      '  GRANTFLOW_SKIP_VERIFICATION_GATE=true to acknowledge a seed/import boot.',
+  )
+  process.exit(1)
+}
+if (!isProdEnv && !URL_VERIFICATION_ENABLED && !skipVerificationGate) {
+  console.warn(
+    '[reality-gate] URL_VERIFICATION_ENABLED is not set. Live URL probing will be skipped at ingest.\n' +
+      '  Set URL_VERIFICATION_ENABLED=true to enable, or GRANTFLOW_SKIP_VERIFICATION_GATE=true to silence this warning.',
+  )
+}
 let storageStatus = {
   uploads_dir: uploadsDir,
   legacy_uploads_dir: legacyUploadsDir,
@@ -2577,19 +2610,35 @@ if (process.env.NODE_ENV !== 'test') {
     console.info('[deadline-cron] Daily deadline cron scheduled (runs at 2am)')
   })()
 
-  // Run link verification daily in background (non-blocking)
+  // Run link verification in background (non-blocking).
+  //
+  // Mission rule: a "verified" opportunity must have actually been verified.
+  // The recurring verifier owns ongoing freshness, including expiring stale
+  // direct opportunities that have not been confirmed reachable in 90 days.
+  //
+  // Tunable via env:
+  //   LINK_VERIFICATION_INTERVAL_MS (default 6h)
+  //   LINK_VERIFICATION_BATCH      (default 200)
   async function scheduleLinkVerification(dbInstance) {
+    const intervalMs = Math.max(
+      30 * 60 * 1000,
+      Number(process.env.LINK_VERIFICATION_INTERVAL_MS) || 6 * 60 * 60 * 1000,
+    )
+    const limit = Math.max(10, Number(process.env.LINK_VERIFICATION_BATCH) || 200)
     const runOnce = async () => {
       try {
-        const stats = await runLinkVerification(dbInstance, { limit: 100 })
+        const stats = await runLinkVerification(dbInstance, {
+          limit,
+          verifiedBy: `recurring-verifier:pid=${process.pid}`,
+        })
         console.log('[link-verify] completed:', stats)
       } catch (err) {
         console.warn('[link-verify] failed:', err.message)
       }
     }
-    // Run once at startup after a 30s delay, then every 24h
+    // Run once at startup after a 30s delay, then on the configured interval.
     setTimeout(runOnce, 30_000)
-    setInterval(runOnce, 24 * 60 * 60 * 1000)
+    setInterval(runOnce, intervalMs)
   }
   scheduleLinkVerification(db)
 

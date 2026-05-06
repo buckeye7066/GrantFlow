@@ -2122,6 +2122,17 @@ registerTool({
 // Anya Brain Tools (Persistent State Management)
 // ============================================================================
 
+function resolveBrainScopeId(scope, context) {
+  const user = context?.user ?? null
+  if (scope === 'user') {
+    return user?.userId ?? user?.id ?? null
+  }
+  if (scope === 'profile') {
+    return user?.profileId ?? context?.profileId ?? null
+  }
+  return null
+}
+
 registerTool({
   name: 'brain.remember',
   description: 'Store a memory in Anya\'s persistent brain. Use for facts, preferences, and learned patterns.',
@@ -2137,25 +2148,17 @@ registerTool({
     required: ['key', 'content'],
   },
   handler: async (params, context) => {
-    const { db, user } = context
+    const { db } = context
     if (!db) throw new Error('Database connection unavailable')
-    
+
     const { key, content, scope, memoryType = 'fact', expiresInDays } = params
-    
-    // Determine scope and scopeId based on context
-    let finalScope = scope || 'global'
-    let scopeId = null
-    
-    if (finalScope === 'user' && user?.userId) {
-      scopeId = user.userId
-    } else if (finalScope === 'profile' && user?.profileId) {
-      scopeId = user.profileId
-    }
-    
-    const expiresAt = expiresInDays 
+    const finalScope = scope || 'global'
+    const scopeId = resolveBrainScopeId(finalScope, context)
+
+    const expiresAt = expiresInDays
       ? new Date(Date.now() + expiresInDays * 24 * 60 * 60 * 1000).toISOString()
       : null
-    
+
     return storeMemory(db, {
       scope: finalScope,
       scopeId,
@@ -2180,18 +2183,11 @@ registerTool({
     required: ['key'],
   },
   handler: async (params, context) => {
-    const { db, user } = context
+    const { db } = context
     if (!db) throw new Error('Database connection unavailable')
-    
+
     const { key, scope = 'global' } = params
-    
-    let scopeId = null
-    if (scope === 'user' && user?.userId) {
-      scopeId = user.userId
-    } else if (scope === 'profile' && user?.profileId) {
-      scopeId = user.profileId
-    }
-    
+    const scopeId = resolveBrainScopeId(scope, context)
     const memory = getMemory(db, { scope, scopeId, memoryKey: key })
     
     if (!memory) {
@@ -2223,18 +2219,11 @@ registerTool({
     },
   },
   handler: async (params, context) => {
-    const { db, user } = context
+    const { db } = context
     if (!db) throw new Error('Database connection unavailable')
-    
+
     const { scope = 'global', memoryType, limit = 20 } = params
-    
-    let scopeId = null
-    if (scope === 'user' && user?.userId) {
-      scopeId = user.userId
-    } else if (scope === 'profile' && user?.profileId) {
-      scopeId = user.profileId
-    }
-    
+    const scopeId = resolveBrainScopeId(scope, context)
     const memories = await getMemories(db, { scope, scopeId, memoryType, limit })
     
     return {

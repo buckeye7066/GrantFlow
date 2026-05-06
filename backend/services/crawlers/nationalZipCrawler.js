@@ -383,7 +383,7 @@ function buildBaselineDirectorySources({ zip, meta }) {
       keywords: ['united way', 'emergency assistance', 'community', ...keywords].filter(Boolean),
       source: 'local_directory_united_way',
       source_id: `united_way:${zip}`,
-      last_verified_at: new Date().toISOString(),
+      discovered_at: new Date().toISOString(),
     },
     {
       title: city && state ? `Food Bank resources near ${city}, ${state}` : 'Food Bank Locator (Feeding America)',
@@ -403,7 +403,7 @@ function buildBaselineDirectorySources({ zip, meta }) {
       keywords: ['food bank', 'food assistance', 'snap', ...keywords].filter(Boolean),
       source: 'local_directory_feeding_america',
       source_id: `feeding_america:${zip}`,
-      last_verified_at: new Date().toISOString(),
+      discovered_at: new Date().toISOString(),
     },
     {
       title:
@@ -425,7 +425,7 @@ function buildBaselineDirectorySources({ zip, meta }) {
       keywords: ['community action', 'utilities assistance', 'rent assistance', ...keywords].filter(Boolean),
       source: 'local_directory_cap',
       source_id: `cap:${zip}`,
-      last_verified_at: new Date().toISOString(),
+      discovered_at: new Date().toISOString(),
     },
   ]
 }
@@ -498,7 +498,7 @@ async function upsertGeoAssociation(db, { opportunityId, geoRunId, state, zip, c
     return Number(res?.changes ?? res?.rowCount ?? 0)
   }
 
-  const res = db
+  const res = await db
     .prepare(
       `
         INSERT OR IGNORE INTO funding_opportunity_geo_index (id, opportunity_id, geo_run_id, state, zip, county, source, created_at)
@@ -588,7 +588,7 @@ function mapOsmElementToOpportunity({ element, zip, coords }) {
     keywords,
     source: 'osm_overpass',
     source_id: `${element.type}:${element.id}`,
-    last_verified_at: new Date().toISOString(),
+    discovered_at: new Date().toISOString(),
   }
 }
 
@@ -699,7 +699,7 @@ async function searchStateGrantsByZip(zip, coords) {
         .map((v) => String(v).toLowerCase()),
       source: 'state_grants_portal',
       source_id: `${state}-portal`,
-      last_verified_at: new Date().toISOString(),
+      discovered_at: new Date().toISOString(),
     })
   } catch (error) {
     console.error(`[GeoCrawl] State portal error for ZIP ${zip}:`, error?.message || error)
@@ -749,7 +749,7 @@ async function searchFoundationLocator(zip, coords) {
           .map((v) => String(v).toLowerCase()),
         source: 'cof_foundation_locator',
         source_id: `cof:${zip}`,
-        last_verified_at: new Date().toISOString(),
+        discovered_at: new Date().toISOString(),
       },
       {
         title: 'Candid — Find Us / Nonprofit resources',
@@ -772,7 +772,7 @@ async function searchFoundationLocator(zip, coords) {
           .map((v) => String(v).toLowerCase()),
         source: 'candid_directory',
         source_id: `candid:${zip}`,
-        last_verified_at: new Date().toISOString(),
+        discovered_at: new Date().toISOString(),
       },
     )
   } catch (error) {
@@ -1097,7 +1097,7 @@ async function saveOpportunity(db, opp) {
             categories, keywords,
             opportunity_type, type,
             requires_match, match_percentage,
-            last_verified_at,
+            discovered_at, last_verified_at, link_status,
             created_at, updated_at
           )
           SELECT
@@ -1109,7 +1109,7 @@ async function saveOpportunity(db, opp) {
             ?, ?,
             ?, ?,
             ?, ?,
-            ?,
+            ?, ?, ?,
             CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
           WHERE NOT EXISTS (
             SELECT 1
@@ -1128,7 +1128,7 @@ async function saveOpportunity(db, opp) {
             categories, keywords,
             opportunity_type, type,
             requires_match, match_percentage,
-            last_verified_at,
+            discovered_at, last_verified_at, link_status,
             created_at, updated_at
           )
           SELECT
@@ -1140,7 +1140,7 @@ async function saveOpportunity(db, opp) {
             ?, ?,
             ?, ?,
             ?, ?,
-            ?,
+            ?, ?, ?,
             datetime('now'), datetime('now')
           WHERE NOT EXISTS (
             SELECT 1
@@ -1157,7 +1157,15 @@ async function saveOpportunity(db, opp) {
   const isNational = Boolean(opp.is_national)
   const requiresMatch = Boolean(opp.requires_match)
   const matchPct = typeof opp.match_percentage === 'number' ? opp.match_percentage : 0
-  const lastVerifiedAt = opp.last_verified_at ? String(opp.last_verified_at) : new Date().toISOString()
+  // Discovery vs verification: stamp discovered_at to "now" for new rows. Only
+  // pass through last_verified_at when the caller actually verified the URL
+  // (link_status / verification_method present). Otherwise leave it null so
+  // the recurring linkVerificationService treats this row as needing a check.
+  const discoveredAt = opp.discovered_at ? String(opp.discovered_at) : new Date().toISOString()
+  const callerVerified =
+    !!opp.link_status && opp.link_status !== 'unverified' && opp.link_status !== 'unknown'
+  const lastVerifiedAt = callerVerified && opp.last_verified_at ? String(opp.last_verified_at) : null
+  const linkStatus = callerVerified ? String(opp.link_status) : 'unverified'
   
   if (db?.dialect === 'postgres') {
     const result = await stmt.run(
@@ -1178,7 +1186,9 @@ async function saveOpportunity(db, opp) {
       opp.type || 'OPPORTUNITY',
       requiresMatch,
       matchPct,
+      discoveredAt,
       lastVerifiedAt,
+      linkStatus,
       // De-dupe keys (no unique index required)
       String(opp.source),
       String(opp.source_id),
@@ -1271,7 +1281,9 @@ async function saveOpportunity(db, opp) {
       opp.type || 'OPPORTUNITY',
       requiresMatch ? 1 : 0,
       matchPct,
+      discoveredAt,
       lastVerifiedAt,
+      linkStatus,
       // De-dupe keys (no unique index required)
       String(opp.source),
       String(opp.source_id),
@@ -1281,7 +1293,7 @@ async function saveOpportunity(db, opp) {
     let finalId = id
     if (!inserted) {
       try {
-        const existing = db
+        const existing = await db
           .prepare('SELECT id FROM funding_opportunities WHERE source = ? AND source_id = ? LIMIT 1')
           .get(String(opp.source), String(opp.source_id))
         if (existing?.id) finalId = existing.id
@@ -1295,7 +1307,7 @@ async function saveOpportunity(db, opp) {
       (opp.geo_run_id || opp.geo_zip || opp.geo_county || opp.geo_source || opp.geo_scope)
     ) {
       try {
-        db.prepare(
+        await db.prepare(
           `
             UPDATE funding_opportunities
             SET geo_run_id = ?,
@@ -1323,7 +1335,7 @@ async function saveOpportunity(db, opp) {
 
     if (String(opp.source) === 'grants.gov' && isNational === true) {
       try {
-        db.prepare(
+        await db.prepare(
           `
             UPDATE funding_opportunities
             SET is_national = 1,

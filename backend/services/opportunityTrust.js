@@ -94,7 +94,7 @@ const VERIFIED_ORIGINS = new Set([
 
 const DIRECTORY_ORIGIN_PREFIX = 'directory'
 
-function isTruthyFlag(v) {
+export function isTruthyFlag(v) {
   if (v === true) return true
   if (v === 1 || v === '1') return true
   if (typeof v === 'string') {
@@ -272,14 +272,21 @@ export function assessOpportunityTrust(opp, opts = {}) {
   }
 
   // 7. Stale flag — crawlers mark link_status='broken' or is_broken=1 when a
-  // previously-good URL went 404. Surface it but don't hard-block (link
-  // checkers are probabilistic).
-  if (
-    String(opp.link_status || '').toLowerCase() === 'broken' ||
-    isTruthyFlag(opp.is_broken)
-  ) {
+  // previously-good URL went 404. Direct opportunities with broken links are
+  // hidden by default (mission rule: "real funding only"). Directories may
+  // remain visible because they are entry-point pointers; the UI is expected
+  // to render a clear "may be out of date" label using trust_downgrade_reason.
+  const linkStatus = String(opp.link_status || '').toLowerCase()
+  const linkBroken = linkStatus === 'broken' || isTruthyFlag(opp.is_broken)
+  if (linkBroken) {
     flags.stale_flag = true
     reasons.push('link_marked_broken')
+  }
+  // Track an explicitly "never verified" state so the trust tier can reflect
+  // it. We do NOT hard-block on this — the recurring verifier owns freshness.
+  const linkUnverified = linkStatus === 'unverified'
+  if (linkUnverified) {
+    reasons.push('link_unverified')
   }
 
   // 8. Source trust tier
@@ -307,9 +314,18 @@ export function assessOpportunityTrust(opp, opts = {}) {
   if (flags.expired && !allowExpired) display = false
   if (flags.directory && !allowDirectory) display = false
 
+  // Direct (non-directory) broken links are hidden by default.
+  // Directories may remain visible — they are pointers, not awards — and the
+  // UI surfaces them with a "may be out of date" label via trust_downgrade.
+  if (linkBroken && !flags.directory) {
+    display = false
+    reasons.push('hidden_broken_direct_link')
+  }
+
   // Soft penalties — still display but mark as lower priority.
   if (display && flags.non_actionable_url) downgrade = true
   if (display && flags.stale_flag) downgrade = true
+  if (display && linkUnverified) downgrade = true
   if (display && trustTier === 'low') downgrade = true
 
   const actionable = !!usableUrl && !flags.placeholder
@@ -377,6 +393,7 @@ export function buildTrustMetadata(trust) {
     trust_downgrade_reason: trust.downgrade
       ? (Array.isArray(trust.reasons) ? trust.reasons : []).find((r) =>
           r === 'link_marked_broken' ||
+          r === 'link_unverified' ||
           r === 'non_actionable_primary_url' ||
           String(r).startsWith('untrusted_origin'),
         ) || 'lower_trust_source'

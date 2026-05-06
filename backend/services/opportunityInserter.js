@@ -7,6 +7,56 @@ import { reviewOpportunity } from './reviewerAgent.js'
 import { normalizeUrlForDedupe } from '../routes/opportunityHelpers.js'
 import { normalizeOpportunityState } from '../utils/stateNormalization.js'
 import { checkUrl as verifyUrlLiveness } from './linkVerificationService.js'
+import { headForVerification } from './crawlers/httpClient.js'
+
+/**
+ * Production reality gate.
+ *
+ * Crawlers are NOT allowed to stamp last_verified_at without a real network
+ * probe. This function strips any caller-supplied last_verified_at unless the
+ * caller also provides verification metadata that proves a check happened
+ * (verification_method or link_status).
+ *
+ * `discovered_at` carries the "when did we first see this row" timestamp that
+ * was previously being stuffed into last_verified_at.
+ */
+function applyVerificationGate(opportunity) {
+  const now = new Date().toISOString()
+  const out = { ...opportunity }
+
+  if (!out.discovered_at) {
+    out.discovered_at = now
+  }
+
+  const hasRealVerification =
+    typeof out.verification_method === 'string' && out.verification_method.length > 0
+  const hasLinkStatus =
+    typeof out.link_status === 'string' && out.link_status.length > 0 &&
+    out.link_status !== 'unverified' && out.link_status !== 'unknown'
+
+  if (!hasRealVerification && !hasLinkStatus) {
+    // No proof of verification — clear any stamped timestamp the caller put on
+    // the row and mark it explicitly unverified so the recurring verifier
+    // (and the consumer-side trust gate) treat it correctly.
+    out.last_verified_at = null
+    out.link_status = out.link_status || 'unverified'
+    out.verification_method = null
+    out.verified_by = out.verified_by ?? null
+    out.verification_error = null
+  }
+
+  return out
+}
+
+/**
+ * Should this insert path attempt a live HEAD probe?
+ * Controlled by URL_VERIFICATION_ENABLED to keep tests/seeds fast and offline.
+ */
+function shouldProbeUrls(opts) {
+  if (opts?.skipVerification === true) return false
+  if (opts?.verifyUrls === true) return true
+  return String(process.env.URL_VERIFICATION_ENABLED || '').toLowerCase() === 'true'
+}
 
 // Backward-compat alias
 const isValidHttpUrl = isValidRealUrl
@@ -217,6 +267,11 @@ function normalizeDateLikeOrNull(value) {
 }
 
 export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
+  // Apply the verification gate before any other processing — this strips any
+  // hallucinated last_verified_at the caller may have provided. Crawlers can
+  // still opt-in by supplying verification_method/link_status with proof.
+  opportunity = applyVerificationGate(opportunity)
+
   const qualityGate = evaluateFundableOpportunity(opportunity)
   if (!qualityGate.ok) {
     return {
@@ -317,11 +372,16 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
         reason: `dead_link:${liveness.code ?? 'no_response'}`,
       }
     }
-    // Stamp verification metadata so the background sweep doesn't re-check immediately.
+    // Stamp verification metadata so the background sweep doesn't re-check
+    // immediately. We persist verification_method so applyVerificationGate
+    // recognises this as proven (otherwise the gate would strip the stamp).
     if (liveness.status === 'ok' || liveness.status === 'redirect') {
       opportunity.last_verified_at = opportunity.last_verified_at ?? new Date().toISOString()
       opportunity.link_status = liveness.status
-      opportunity.link_status_code = liveness.code
+      opportunity.link_status_code = liveness.code ?? null
+      opportunity.verification_method = liveness.method ?? 'http_head'
+      opportunity.verified_by = opportunity.verified_by ?? 'opportunity_inserter'
+      opportunity.verification_error = null
     }
   }
 
@@ -394,8 +454,17 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
       opportunity_type: opportunity.opportunity_type ?? 'grant',
       funding_type: opportunity.funding_type ?? null,
       type: opportunity.type ?? 'OPPORTUNITY',
-      last_verified_at:
-        opportunity.last_verified_at ?? (recordOrigin === 'live_crawl' ? new Date().toISOString() : null),
+      // Only carry forward an honest verification timestamp. The verification
+      // gate above guarantees this is null unless the caller produced proof
+      // (link_status/verification_method) of a real check. The recurring
+      // verifier owns updates from this point onward.
+      last_verified_at: opportunity.last_verified_at ?? null,
+      link_status: opportunity.link_status ?? null,
+      link_status_code: opportunity.link_status_code ?? null,
+      verification_method: opportunity.verification_method ?? null,
+      verified_by: opportunity.verified_by ?? null,
+      verification_error: opportunity.verification_error ?? null,
+      discovered_at: opportunity.discovered_at ?? null,
       profile_id: opportunity.profile_id ?? null,
       requires_501c3: toDbBoolean(db, opportunity.requires_501c3),
       requires_match: toDbBoolean(db, opportunity.requires_match),
@@ -432,6 +501,12 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
         opportunity_type = COALESCE(?, opportunity_type),
         type = COALESCE(?, type),
         last_verified_at = COALESCE(?, last_verified_at),
+        link_status = COALESCE(?, link_status),
+        link_status_code = COALESCE(?, link_status_code),
+        verification_method = COALESCE(?, verification_method),
+        verified_by = COALESCE(?, verified_by),
+        verification_error = COALESCE(?, verification_error),
+        discovered_at = COALESCE(discovered_at, ?),
         profile_id = COALESCE(?, profile_id),
         requires_501c3 = COALESCE(?, requires_501c3),
         requires_match = COALESCE(?, requires_match),
@@ -466,6 +541,12 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
         opportunity_type = COALESCE(?, opportunity_type),
         type = COALESCE(?, type),
         last_verified_at = COALESCE(?, last_verified_at),
+        link_status = COALESCE(?, link_status),
+        link_status_code = COALESCE(?, link_status_code),
+        verification_method = COALESCE(?, verification_method),
+        verified_by = COALESCE(?, verified_by),
+        verification_error = COALESCE(?, verification_error),
+        discovered_at = COALESCE(discovered_at, ?),
         profile_id = COALESCE(?, profile_id),
         requires_501c3 = COALESCE(?, requires_501c3),
         requires_match = COALESCE(?, requires_match),
@@ -500,6 +581,12 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
       record.opportunity_type,
       record.type,
       record.last_verified_at,
+      record.link_status,
+      record.link_status_code,
+      record.verification_method,
+      record.verified_by,
+      record.verification_error,
+      record.discovered_at ?? new Date().toISOString(),
       record.profile_id,
       record.requires_501c3,
       record.requires_match,
@@ -578,8 +665,15 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
     opportunity_type: opportunity.opportunity_type ?? 'grant',
     funding_type: opportunity.funding_type ?? null,
     type: opportunity.type ?? 'OPPORTUNITY',
-    last_verified_at:
-      opportunity.last_verified_at ?? (recordOrigin === 'live_crawl' ? new Date().toISOString() : null),
+    // Honest verification only — applyVerificationGate() ensures these are
+    // null unless the caller produced real proof of a probe.
+    last_verified_at: opportunity.last_verified_at ?? null,
+    link_status: opportunity.link_status ?? 'unverified',
+    link_status_code: opportunity.link_status_code ?? null,
+    verification_method: opportunity.verification_method ?? null,
+    verified_by: opportunity.verified_by ?? null,
+    verification_error: opportunity.verification_error ?? null,
+    discovered_at: opportunity.discovered_at ?? new Date().toISOString(),
     profile_id: opportunity.profile_id ?? null,
     requires_501c3: toDbBoolean(db, opportunity.requires_501c3),
     requires_match: toDbBoolean(db, opportunity.requires_match),
@@ -633,6 +727,12 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
       funding_type,
       type,
       last_verified_at,
+      link_status,
+      link_status_code,
+      verification_method,
+      verified_by,
+      verification_error,
+      discovered_at,
       profile_id,
       requires_501c3,
       requires_match,
@@ -681,6 +781,12 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
       @funding_type,
       @type,
       @last_verified_at,
+      @link_status,
+      @link_status_code,
+      @verification_method,
+      @verified_by,
+      @verification_error,
+      @discovered_at,
       @profile_id,
       @requires_501c3,
       @requires_match,
@@ -744,6 +850,12 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
       verification_status = COALESCE(excluded.verification_status, funding_opportunities.verification_status),
       record_origin = COALESCE(excluded.record_origin, funding_opportunities.record_origin),
       last_verified_at = COALESCE(excluded.last_verified_at, funding_opportunities.last_verified_at),
+      link_status = COALESCE(excluded.link_status, funding_opportunities.link_status),
+      link_status_code = COALESCE(excluded.link_status_code, funding_opportunities.link_status_code),
+      verification_method = COALESCE(excluded.verification_method, funding_opportunities.verification_method),
+      verified_by = COALESCE(excluded.verified_by, funding_opportunities.verified_by),
+      verification_error = COALESCE(excluded.verification_error, funding_opportunities.verification_error),
+      discovered_at = COALESCE(funding_opportunities.discovered_at, excluded.discovered_at),
       match_reasons = COALESCE(excluded.match_reasons, funding_opportunities.match_reasons),
       updated_at = CURRENT_TIMESTAMP,
       last_crawled = CURRENT_TIMESTAMP
@@ -775,6 +887,12 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
     funding_type: record.funding_type,
     type: record.type,
     last_verified_at: record.last_verified_at,
+    link_status: record.link_status ?? 'unverified',
+    link_status_code: record.link_status_code ?? null,
+    verification_method: record.verification_method ?? null,
+    verified_by: record.verified_by ?? null,
+    verification_error: record.verification_error ?? null,
+    discovered_at: record.discovered_at ?? new Date().toISOString(),
     profile_id: record.profile_id,
     requires_501c3: record.requires_501c3,
     requires_match: record.requires_match,
@@ -802,10 +920,81 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
 }
 
 /**
+ * Live URL verification helper used by bulk inserts. Probes one opportunity,
+ * returns the same shape applyVerificationGate expects so the caller can pass
+ * proof of verification through the normal insert path.
+ *
+ * Concurrency-limited so a 500-row crawler dump cannot fan out 500 sockets.
+ */
+async function verifyOpportunityUrl(opportunity, opts = {}) {
+  const url =
+    opportunity?.application_url ||
+    opportunity?.source_url ||
+    opportunity?.url ||
+    opportunity?.evidence_url ||
+    null
+  if (!url || typeof url !== 'string' || !url.startsWith('http')) {
+    return null
+  }
+
+  const verifiedBy = opts?.verifiedBy || `bulk:${opportunity?.source ?? 'unknown'}`
+  try {
+    const probe = await headForVerification(url, { timeoutMs: opts?.timeoutMs ?? 5000 })
+    if (probe.ok) {
+      return {
+        last_verified_at: new Date().toISOString(),
+        link_status: probe.status >= 300 && probe.status < 400 ? 'redirect' : 'ok',
+        link_status_code: probe.status,
+        verification_method: 'head',
+        verified_by: verifiedBy,
+        verification_error: null,
+      }
+    }
+    return {
+      last_verified_at: new Date().toISOString(),
+      link_status: 'broken',
+      link_status_code: probe.status ?? null,
+      verification_method: 'head',
+      verified_by: verifiedBy,
+      verification_error: probe.error || `HTTP ${probe.status ?? 'no_response'}`,
+    }
+  } catch (err) {
+    return {
+      last_verified_at: new Date().toISOString(),
+      link_status: 'broken',
+      link_status_code: null,
+      verification_method: 'head',
+      verified_by: verifiedBy,
+      verification_error: err?.message || String(err),
+    }
+  }
+}
+
+async function runLimitedConcurrent(items, limit, worker) {
+  const results = new Array(items.length)
+  let cursor = 0
+  const runners = Array.from({ length: Math.max(1, limit) }, async () => {
+    while (cursor < items.length) {
+      const idx = cursor++
+      results[idx] = await worker(items[idx], idx)
+    }
+  })
+  await Promise.all(runners)
+  return results
+}
+
+/**
  * Persist only policy-compliant opportunities. Non-negotiable: loans, matching funds,
  * placeholders, and invalid/missing URLs are never written to the database.
  * Batched in transactions of 50 for performance.
  * Pre-deduplicates by normalized URL before batch processing.
+ *
+ * URL verification: when shouldProbeUrls(opts) returns true, every row is
+ * HEAD-probed before insert (with bounded concurrency). The probe outcome is
+ * passed through the verification gate so last_verified_at, link_status, and
+ * verification_method reflect a real network check. When probing is disabled
+ * (tests/seeds), rows are inserted as link_status='unverified' and the
+ * recurring linkVerificationService picks them up later.
  */
 export async function bulkUpsertFundingOpportunities(db, opportunities = [], opts = {}) {
   // Pre-deduplicate by normalized URL within the batch itself.
@@ -814,10 +1003,30 @@ export async function bulkUpsertFundingOpportunities(db, opportunities = [], opt
     console.log(`[bulkUpsert] Removed ${duplicateCount} intra-batch URL duplicates`)
   }
 
+  // Live URL verification, when enabled. Done outside the DB transaction so a
+  // slow upstream cannot lock the funding_opportunities table.
+  let probed = deduped
+  if (shouldProbeUrls(opts) && deduped.length > 0) {
+    const concurrency = Math.max(1, Math.min(Number(opts?.concurrency ?? 8), 16))
+    const verificationStats = { ok: 0, broken: 0, redirect: 0, none: 0 }
+    probed = await runLimitedConcurrent(deduped, concurrency, async (opp) => {
+      const proof = await verifyOpportunityUrl(opp, opts)
+      if (!proof) {
+        verificationStats.none++
+        return opp
+      }
+      if (proof.link_status === 'ok') verificationStats.ok++
+      else if (proof.link_status === 'redirect') verificationStats.redirect++
+      else if (proof.link_status === 'broken') verificationStats.broken++
+      return { ...opp, ...proof }
+    })
+    console.log('[bulkUpsert] URL verification:', verificationStats)
+  }
+
   const BATCH_SIZE = 50
   const inserted = []
-  for (let i = 0; i < deduped.length; i += BATCH_SIZE) {
-    const batch = deduped.slice(i, i + BATCH_SIZE)
+  for (let i = 0; i < probed.length; i += BATCH_SIZE) {
+    const batch = probed.slice(i, i + BATCH_SIZE)
     try {
       await db.withTransaction(async (tx) => {
         for (const opportunity of batch) {

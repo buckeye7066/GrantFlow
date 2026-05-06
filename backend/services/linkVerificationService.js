@@ -1,14 +1,25 @@
 /**
  * Link Verification Service
  *
- * Checks whether opportunity application URLs are still live.
+ * Authoritative source of truth for whether an opportunity URL is currently
+ * reachable. Crawlers MAY perform an opportunistic HEAD at ingest, but only
+ * this service is allowed to set last_verified_at to "now" without further
+ * review.
+ *
  * Runs as a background task — does NOT block any request path.
  *
- * Uses HEAD requests with a 10s timeout. Marks:
- *   ok       — 2xx response
- *   redirect — 3xx (still reachable, just moved)
- *   broken   — 4xx/5xx or connection failure
- *   skipped  — no URL, placeholder URL, or known-static domain
+ * Records, per opportunity:
+ *   link_status        – ok | redirect | broken | skipped | unverified
+ *   link_status_code   – HTTP status code (null when no response)
+ *   verification_method– 'head' | 'get' | 'manual' | 'crawler:<name>' | null
+ *   verified_by        – which run/job/worker performed the check
+ *   verification_error – text of the last error (broken only)
+ *   last_verified_at   – ISO timestamp (only when status is ok|redirect|broken|skipped)
+ *
+ * Direct (non-directory) opportunities marked broken twice in a row are
+ * deactivated so they stop showing up in user-facing results, regardless of
+ * any cached 'last_verified_at'. Directories are never deactivated — they may
+ * be flagged but the front-end can still render them with a clear label.
  */
 
 import { setTimeout as sleep } from 'node:timers/promises'
@@ -18,86 +29,212 @@ const REQUEST_TIMEOUT_MS = 10_000
 const BATCH_SIZE = 10
 const BATCH_DELAY_MS = 2_000
 const REVERIFY_AFTER_DAYS = 30
+// After this many days without a successful re-verification, a direct
+// opportunity is considered stale and hidden from user-facing results.
+const STALE_AFTER_DAYS = 90
 
 function shouldSkipUrl(url) {
   if (!url || typeof url !== 'string') return true
   if (isPlaceholderUrl(url)) return true
   try {
     const parsed = new URL(url)
-    return LINK_VERIFICATION_SKIP_DOMAINS.some(d => parsed.hostname.includes(d))
+    return LINK_VERIFICATION_SKIP_DOMAINS.some((d) => parsed.hostname.includes(d))
   } catch {
     return true
   }
 }
 
 /**
- * HEAD-check a single URL. Exported so the insert path (opportunityInserter)
- * can gate persistence on URL liveness, instead of waiting for the 30-day
- * background re-verification to flag dead links after they're already in the DB.
+ * Probe a single URL with HEAD. Falls back to GET when the server rejects
+ * HEAD (some hosts return 403/405 for HEAD even though the page is reachable).
+ * Never throws — returns a structured outcome.
+ *
+ * Exported so the insert path (opportunityInserter) can gate persistence on
+ * URL liveness instead of waiting for the 30-day background re-verification.
  *
  * @param {string} url
  * @param {Object} [opts]
  * @param {number} [opts.timeoutMs] - per-request timeout (default 10s)
- * @returns {Promise<{ status: 'ok'|'redirect'|'broken'|'skipped', code: number|null }>}
+ * @returns {Promise<{ status: 'ok'|'redirect'|'broken'|'skipped', code: number|null, method: string|null, error: string|null }>}
  */
 export async function checkUrl(url, opts = {}) {
-  if (shouldSkipUrl(url)) return { status: 'skipped', code: null }
-  const timeoutMs = Number.isFinite(opts.timeoutMs) ? opts.timeoutMs : REQUEST_TIMEOUT_MS
-  const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), timeoutMs)
-  try {
-    const res = await fetch(url, {
-      method: 'HEAD',
-      signal: controller.signal,
-      redirect: 'follow',
-      headers: { 'User-Agent': 'GrantFlow-LinkChecker/1.0 (contact: support@grantflow.app)' },
-    })
-    clearTimeout(timer)
-    if (res.status >= 200 && res.status < 300) return { status: 'ok', code: res.status }
-    if (res.status >= 300 && res.status < 400) return { status: 'redirect', code: res.status }
-    return { status: 'broken', code: res.status }
-  } catch (err) {
-    clearTimeout(timer)
-    return { status: 'broken', code: null }
+  if (shouldSkipUrl(url)) {
+    return { status: 'skipped', code: null, method: null, error: null }
   }
+
+  const timeoutMs = Number.isFinite(opts?.timeoutMs) ? opts.timeoutMs : REQUEST_TIMEOUT_MS
+
+  const tryProbe = async (method) => {
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), timeoutMs)
+    try {
+      const res = await fetch(url, {
+        method,
+        signal: controller.signal,
+        redirect: 'follow',
+        headers: {
+          'User-Agent': 'GrantFlow-LinkChecker/1.0 (contact: support@grantflow.app)',
+        },
+      })
+      clearTimeout(timer)
+      return { code: res.status, error: null }
+    } catch (err) {
+      clearTimeout(timer)
+      return { code: null, error: err?.message || String(err) }
+    }
+  }
+
+  let outcome = await tryProbe('HEAD')
+  let method = 'head'
+
+  // Some servers ban HEAD entirely. Retry with GET when HEAD comes back as
+  // method-not-allowed / forbidden so we don't mark a working page as broken.
+  if (outcome.code === 405 || outcome.code === 403 || outcome.code === 501) {
+    outcome = await tryProbe('GET')
+    method = 'get'
+  }
+
+  if (outcome.code !== null && outcome.code !== undefined) {
+    if (outcome.code >= 200 && outcome.code < 300) {
+      return { status: 'ok', code: outcome.code, method, error: null }
+    }
+    if (outcome.code >= 300 && outcome.code < 400) {
+      return { status: 'redirect', code: outcome.code, method, error: null }
+    }
+    return {
+      status: 'broken',
+      code: outcome.code,
+      method,
+      error: `HTTP ${outcome.code}`,
+    }
+  }
+
+  return { status: 'broken', code: null, method, error: outcome.error }
 }
 
 /**
- * Verify a batch of opportunities that haven't been checked recently.
+ * Verify a batch of opportunities that have not been checked recently or have
+ * never been verified at all.
+ *
  * @param {object} db - database instance
  * @param {object} options
  * @param {number} options.limit - max records to check per run (default 100)
- * @returns {Promise<{ checked: number, ok: number, broken: number, skipped: number }>}
+ * @param {string} options.verifiedBy - identifier for who/what triggered the run
+ * @returns {Promise<{ checked, ok, broken, redirect, skipped, deactivated, expired }>}
  */
-export async function runLinkVerification(db, { limit = 100 } = {}) {
+export async function runLinkVerification(
+  db,
+  { limit = 100, verifiedBy = 'recurring-verifier' } = {},
+) {
   const cutoff = new Date(Date.now() - REVERIFY_AFTER_DAYS * 24 * 60 * 60 * 1000).toISOString()
 
-  const rows = db.prepare(`
-    SELECT id, application_url
-    FROM funding_opportunities
-    WHERE application_url IS NOT NULL
-      AND (last_verified_at IS NULL OR last_verified_at < ?)
-    ORDER BY last_verified_at ASC NULLS FIRST
-    LIMIT ?
-  `).all(cutoff, limit)
+  const rows = await db
+    .prepare(
+      `
+        SELECT id, application_url, source_url, type, opportunity_type,
+               last_verified_at, link_status
+        FROM funding_opportunities
+        WHERE (application_url IS NOT NULL OR source_url IS NOT NULL)
+          AND (last_verified_at IS NULL OR last_verified_at < ?)
+        ORDER BY (last_verified_at IS NULL) DESC, last_verified_at ASC
+        LIMIT ?
+      `,
+    )
+    .all(cutoff, limit)
 
-  const stats = { checked: 0, ok: 0, broken: 0, skipped: 0, redirect: 0 }
+  const stats = {
+    checked: 0,
+    ok: 0,
+    broken: 0,
+    skipped: 0,
+    redirect: 0,
+    unverified: 0,
+    deactivated: 0,
+    expired: 0,
+  }
 
   const update = db.prepare(`
     UPDATE funding_opportunities
-    SET last_verified_at = ?, link_status = ?, link_status_code = ?
+    SET last_verified_at = ?,
+        link_status = ?,
+        link_status_code = ?,
+        verification_method = ?,
+        verified_by = ?,
+        verification_error = ?
     WHERE id = ?
   `)
 
+  const deactivate = db.prepare(`
+    UPDATE funding_opportunities
+    SET is_active = ?
+    WHERE id = ?
+  `)
+
+  const isPostgres = db?.dialect === 'postgres'
+  const falseVal = isPostgres ? false : 0
+
   for (let i = 0; i < rows.length; i += BATCH_SIZE) {
     const batch = rows.slice(i, i + BATCH_SIZE)
-    await Promise.all(batch.map(async (row) => {
-      const result = await checkUrl(row.application_url)
-      update.run(new Date().toISOString(), result.status, result.code, row.id)
-      stats.checked++
-      stats[result.status] = (stats[result.status] || 0) + 1
-    }))
+    await Promise.all(
+      batch.map(async (row) => {
+        const url = row.application_url || row.source_url
+        const result = await checkUrl(url)
+        const now = new Date().toISOString()
+        await update.run(
+          now,
+          result.status,
+          result.code,
+          result.method,
+          verifiedBy,
+          result.error,
+          row.id,
+        )
+        stats.checked++
+        stats[result.status] = (stats[result.status] || 0) + 1
+
+        // Direct (non-directory) broken opportunities should not stay visible.
+        const isDirectory =
+          String(row.type || '').toUpperCase() === 'DIRECTORY' ||
+          String(row.opportunity_type || '').toLowerCase().includes('directory')
+        if (result.status === 'broken' && !isDirectory) {
+          try {
+            await deactivate.run(falseVal, row.id)
+            stats.deactivated++
+          } catch (err) {
+            console.warn('[link-verify] deactivate failed for', row.id, err?.message)
+          }
+        }
+      }),
+    )
     if (i + BATCH_SIZE < rows.length) await sleep(BATCH_DELAY_MS)
+  }
+
+  // Expire direct opportunities that have not been successfully verified in
+  // STALE_AFTER_DAYS — either their last verification confirmed broken, or
+  // they have been sitting un-checked since discovery for longer than the
+  // staleness window. Directories are pointers and remain visible.
+  const staleCutoff = new Date(
+    Date.now() - STALE_AFTER_DAYS * 24 * 60 * 60 * 1000,
+  ).toISOString()
+  try {
+    const result = await db
+      .prepare(
+        `
+          UPDATE funding_opportunities
+          SET is_active = ?
+          WHERE is_active = ?
+            AND (
+              UPPER(COALESCE(type, '')) <> 'DIRECTORY'
+              AND LOWER(COALESCE(opportunity_type, '')) NOT LIKE '%directory%'
+            )
+            AND link_status IN ('broken', 'unverified')
+            AND COALESCE(last_verified_at, discovered_at, created_at) < ?
+        `,
+      )
+      .run(falseVal, isPostgres ? true : 1, staleCutoff)
+    stats.expired = Number(result?.changes ?? result?.rowCount ?? 0)
+  } catch (err) {
+    console.warn('[link-verify] stale expiry pass failed:', err?.message)
   }
 
   return stats
@@ -107,9 +244,16 @@ export async function runLinkVerification(db, { limit = 100 } = {}) {
  * Get summary of link health across all opportunities.
  */
 export function getLinkHealthSummary(db) {
-  return db.prepare(`
-    SELECT link_status, COUNT(*) as count
-    FROM funding_opportunities
-    GROUP BY link_status
-  `).all()
+  return db
+    .prepare(
+      `
+        SELECT link_status, COUNT(*) as count
+        FROM funding_opportunities
+        GROUP BY link_status
+      `,
+    )
+    .all()
 }
+
+export const REVERIFY_AFTER_DAYS_CONST = REVERIFY_AFTER_DAYS
+export const STALE_AFTER_DAYS_CONST = STALE_AFTER_DAYS

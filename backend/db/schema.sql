@@ -186,8 +186,20 @@ CREATE TABLE IF NOT EXISTS funding_opportunities (
   funding_type TEXT,
   type TEXT DEFAULT 'OPPORTUNITY' CHECK(type IN ('OPPORTUNITY', 'PROGRAM', 'DIRECTORY')),
   evidence_url TEXT, -- URL used to verify this opportunity
-  last_verified_at DATETIME, -- Last time this was verified as real
-  link_status TEXT DEFAULT 'unknown',
+  -- Discovery vs verification are tracked separately.
+  -- discovered_at = first time GrantFlow ingested this row.
+  -- last_verified_at = last time the URL was actually probed by linkVerificationService
+  --                    or a crawler that performed a real HEAD/GET. Crawlers are NOT
+  --                    allowed to stamp this without a network check.
+  discovered_at DATETIME,
+  last_verified_at DATETIME,
+  -- 'unverified' (never checked) | 'ok' | 'redirect' | 'broken' | 'skipped' | 'unknown'
+  link_status TEXT DEFAULT 'unverified',
+  link_status_code INTEGER,
+  -- 'head' | 'get' | 'manual' | 'crawler:<name>' | NULL when never verified
+  verification_method TEXT,
+  verified_by TEXT,
+  verification_error TEXT,
   
   -- Requirements
   requires_501c3 BOOLEAN DEFAULT FALSE,

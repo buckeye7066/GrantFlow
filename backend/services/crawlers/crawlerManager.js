@@ -660,7 +660,11 @@ async function storeResults(db, profileId, results, analysis, stateMeta, countyC
           match_score: result.matchScore,
           funding_type: result.fundingType,
           record_origin: 'curated_verified',
-          last_verified_at: new Date().toISOString(),
+          // Discovered now; the recurring linkVerificationService owns the
+          // honest `last_verified_at`. Curated rows may be re-confirmed by the
+          // verifier (or by URL_VERIFICATION_ENABLED at bulk insert time) and
+          // their last_verified_at will be set then — not here.
+          discovered_at: new Date().toISOString(),
           profile_id: isSchoolCard ? profileId : null,
         });
         fundingUpserted++;

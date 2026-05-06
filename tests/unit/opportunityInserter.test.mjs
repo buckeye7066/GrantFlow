@@ -33,7 +33,14 @@ function createDb() {
       opportunity_type TEXT,
       funding_type TEXT,
       type TEXT DEFAULT 'OPPORTUNITY',
+      -- Production reality gate: discovery vs verification are separate.
+      discovered_at DATETIME,
       last_verified_at DATETIME,
+      link_status TEXT DEFAULT 'unverified',
+      link_status_code INTEGER,
+      verification_method TEXT,
+      verified_by TEXT,
+      verification_error TEXT,
       profile_id TEXT,
       requires_501c3 INTEGER DEFAULT 0,
       requires_match INTEGER DEFAULT 0,
@@ -99,14 +106,22 @@ test('opportunityInserter: inserts live crawl and updates existing row', async (
 
   const row1 = db
     .prepare(
-      `SELECT description, evidence_url, last_verified_at
+      `SELECT description, evidence_url, last_verified_at, discovered_at, link_status
        FROM funding_opportunities
        WHERE source = ? AND source_id = ?`,
     )
     .get('unit_test', 'opp-1')
   assert.equal(row1.description, 'v1')
   assert.ok(row1.evidence_url)
-  assert.ok(row1.last_verified_at)
+  // Production reality gate: last_verified_at MUST be null when no real check
+  // happened. discovered_at is the honest "first ingested" timestamp instead.
+  assert.equal(
+    row1.last_verified_at,
+    null,
+    'last_verified_at must be null without proof of verification',
+  )
+  assert.ok(row1.discovered_at, 'discovered_at must be set on insert')
+  assert.equal(row1.link_status, 'unverified')
 
   const updated = await upsertFundingOpportunity(db, {
     title: 'Example Opportunity',
@@ -128,7 +143,7 @@ test('opportunityInserter: inserts live crawl and updates existing row', async (
 test('opportunityInserter: baseline cannot downgrade verified record', async () => {
   const db = createDb()
 
-  // Create a verified record (live_crawl will auto-set last_verified_at)
+  // Create a verified record by passing real verification proof.
   await upsertFundingOpportunity(db, {
     title: 'Verified Opp',
     sponsor: 'Agency',
@@ -136,6 +151,11 @@ test('opportunityInserter: baseline cannot downgrade verified record', async () 
     source_id: 'verified-1',
     source_url: 'https://www.grants.gov/',
     record_origin: 'live_crawl',
+    last_verified_at: new Date().toISOString(),
+    link_status: 'ok',
+    link_status_code: 200,
+    verification_method: 'head',
+    verified_by: 'unit-test',
   })
 
   // Baseline/unverified incoming should not overwrite
@@ -155,6 +175,72 @@ test('opportunityInserter: baseline cannot downgrade verified record', async () 
     .get('unit_test', 'verified-1')
   assert.equal(row.title, 'Verified Opp')
   assert.equal(row.sponsor, 'Agency')
+})
+
+test('opportunityInserter: caller-supplied last_verified_at is stripped without verification proof', async () => {
+  const db = createDb()
+
+  const fakeVerifiedAt = '2026-01-01T00:00:00Z'
+  await upsertFundingOpportunity(db, {
+    title: 'Hallucinated Verification Opp',
+    sponsor: 'Agency',
+    source: 'unit_test',
+    source_id: 'hallucinated-1',
+    source_url: 'https://www.grants.gov/',
+    application_url: 'https://www.grants.gov/',
+    record_origin: 'live_crawl',
+    description: 'Caller claims it was verified but supplies no proof.',
+    last_verified_at: fakeVerifiedAt,
+    // Intentionally omitting link_status / verification_method.
+  })
+
+  const row = db
+    .prepare(
+      `SELECT last_verified_at, discovered_at, link_status, verification_method
+       FROM funding_opportunities WHERE source = ? AND source_id = ?`,
+    )
+    .get('unit_test', 'hallucinated-1')
+  assert.equal(
+    row.last_verified_at,
+    null,
+    'gate must strip caller-supplied last_verified_at without proof',
+  )
+  assert.equal(row.link_status, 'unverified')
+  assert.equal(row.verification_method, null)
+  assert.ok(row.discovered_at, 'discovered_at fallback must be present')
+})
+
+test('opportunityInserter: caller-supplied verification proof is honored', async () => {
+  const db = createDb()
+
+  const verifiedAt = '2026-04-15T12:34:56Z'
+  await upsertFundingOpportunity(db, {
+    title: 'Truly Verified Opp',
+    sponsor: 'Agency',
+    source: 'unit_test',
+    source_id: 'verified-2',
+    source_url: 'https://www.grants.gov/',
+    application_url: 'https://www.grants.gov/',
+    record_origin: 'live_crawl',
+    description: 'A live HEAD probe succeeded just before insert.',
+    last_verified_at: verifiedAt,
+    link_status: 'ok',
+    link_status_code: 200,
+    verification_method: 'head',
+    verified_by: 'crawler:unit-test',
+  })
+
+  const row = db
+    .prepare(
+      `SELECT last_verified_at, link_status, link_status_code, verification_method, verified_by
+       FROM funding_opportunities WHERE source = ? AND source_id = ?`,
+    )
+    .get('unit_test', 'verified-2')
+  assert.equal(row.last_verified_at, verifiedAt)
+  assert.equal(row.link_status, 'ok')
+  assert.equal(row.link_status_code, 200)
+  assert.equal(row.verification_method, 'head')
+  assert.equal(row.verified_by, 'crawler:unit-test')
 })
 
 test('opportunityInserter: rejects article URLs before storing funding opportunities', async () => {

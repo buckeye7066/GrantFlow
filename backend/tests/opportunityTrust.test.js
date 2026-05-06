@@ -220,3 +220,37 @@ describe('filterTrustedOpportunities', () => {
     expect(Object.keys(kept[0])).not.toContain('_trust')
   })
 })
+
+// Production reality gate: link_status='broken' on a direct (non-directory)
+// opportunity must not be displayed. Directories with broken links are still
+// shown (with a "may be out of date" downgrade) because they are pointers,
+// not awards. See linkVerificationService for how link_status gets set.
+describe('assessOpportunityTrust — broken link handling (reality gate)', () => {
+  it('hides direct opportunities whose link_status is broken', () => {
+    const trust = assessOpportunityTrust(baseOpp({ link_status: 'broken' }))
+    expect(trust.display).toBe(false)
+    expect(trust.flags.stale_flag).toBe(true)
+    expect(trust.reasons).toContain('hidden_broken_direct_link')
+  })
+
+  it('keeps directories visible even when link_status is broken (downgrade only)', () => {
+    const trust = assessOpportunityTrust(
+      baseOpp({
+        opportunity_type: 'directory',
+        record_origin: 'directory:health_resources',
+        link_status: 'broken',
+      }),
+    )
+    expect(trust.display).toBe(true)
+    expect(trust.downgrade).toBe(true)
+    expect(trust.flags.directory).toBe(true)
+    expect(trust.flags.stale_flag).toBe(true)
+  })
+
+  it('treats unverified link_status as a soft downgrade, not a hard block', () => {
+    const trust = assessOpportunityTrust(baseOpp({ link_status: 'unverified' }))
+    expect(trust.display).toBe(true)
+    expect(trust.downgrade).toBe(true)
+    expect(trust.reasons).toContain('link_unverified')
+  })
+})

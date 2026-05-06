@@ -210,33 +210,73 @@ export async function runDomainCorpusCrawl(db, options = {}) {
     throw new Error(`Failed to persist ${deduped.length} funding opportunities - data loss risk`)
   }
 
-  // URL verification: HEAD on first N new URLs
+  // URL verification: HEAD on first N new URLs.
+  //
+  // We record honest verification metadata (link_status / link_status_code /
+  // verification_method / verified_by / last_verified_at) — not just a
+  // verified_url=1 boolean — so the recurring linkVerificationService and the
+  // consumer-side trust gate have the data they need to hide broken direct
+  // opportunities and re-check stale ones.
   if (!options.skipVerification && inserted.length > 0) {
     const idsToVerify = inserted.slice(0, VERIFY_URL_LIMIT)
     const placeholders = idsToVerify.map(() => '?').join(',')
     const rows = await db
       .prepare(
-        `SELECT id, source_url, application_url FROM funding_opportunities WHERE id IN (${placeholders})`,
+        `SELECT id, source_url, application_url, type, opportunity_type FROM funding_opportunities WHERE id IN (${placeholders})`,
       )
       .all(...idsToVerify)
 
-    const now = new Date().toISOString()
     const verVal = db?.dialect === 'postgres' ? true : 1
+    const falseVal = db?.dialect === 'postgres' ? false : 0
+    const update = db.prepare(`
+      UPDATE funding_opportunities
+      SET verified_url = ?,
+          last_verified_at = ?,
+          link_status = ?,
+          link_status_code = ?,
+          verification_method = ?,
+          verified_by = ?,
+          verification_error = ?
+      WHERE id = ?
+    `)
+    const deactivate = db.prepare(`
+      UPDATE funding_opportunities SET is_active = ? WHERE id = ?
+    `)
     for (const row of rows) {
-      const url = row.source_url || row.application_url
+      const url = row.application_url || row.source_url
       if (!url || !String(url).startsWith('http')) continue
+      const now = new Date().toISOString()
       try {
-        const { ok } = await headForVerification(url, { timeoutMs: 4000 })
-        if (ok) {
-          try {
-            await db
-              .prepare(
-                `UPDATE funding_opportunities SET verified_url = ?, last_verified_at = ? WHERE id = ?`,
-              )
-              .run(verVal, now, row.id)
-            stats.total_verified++
-          } catch (dbErr) {
-            console.warn(`[domainCorpusCrawler] Failed to update verification for ${row.id}:`, dbErr?.message)
+        const probe = await headForVerification(url, { timeoutMs: 4000 })
+        if (probe.ok) {
+          await update.run(
+            verVal,
+            now,
+            probe.status >= 300 && probe.status < 400 ? 'redirect' : 'ok',
+            probe.status,
+            'head',
+            'crawler:domainCorpus',
+            null,
+            row.id,
+          )
+          stats.total_verified++
+        } else {
+          await update.run(
+            falseVal,
+            now,
+            'broken',
+            probe.status ?? null,
+            'head',
+            'crawler:domainCorpus',
+            probe.error || `HTTP ${probe.status ?? 'no_response'}`,
+            row.id,
+          )
+          // Direct (non-directory) broken rows should not be shown.
+          const isDirectory =
+            String(row.type || '').toUpperCase() === 'DIRECTORY' ||
+            String(row.opportunity_type || '').toLowerCase().includes('directory')
+          if (!isDirectory) {
+            try { await deactivate.run(falseVal, row.id) } catch { /* best effort */ }
           }
         }
       } catch (httpErr) {
