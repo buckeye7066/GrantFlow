@@ -182,14 +182,15 @@ const _STATIC_PROMPT_ADMIN_SECTION = [
   '- admin.crawler.triggerAll can re-run all crawlers after profile updates',
   '',
   'Code Interpretation (GitHub Access):',
-  '- admin.code.search: Search the GrantFlow codebase by keyword or regex pattern',
+  '- code.search: Search the GrantFlow codebase by keyword or regex pattern (available to all users)',
+  '- code.suggestPatch: Generate a diff/patch for a suggested fix (available to all users)',
+  '- admin.code.crawl: Crawl a directory tree to understand project structure',
   '- admin.code.analyze: Analyze specific files for bugs, patterns, or improvement opportunities',
   '- admin.code.lint: Run linting on specific files to check for issues',
   '- admin.code.edit: Suggest code changes (read-only analysis; not production writes)',
   '- admin.code.scan: Scan for security issues, deprecated patterns, or code smells',
-  '- admin.code.crawl: Crawl a directory tree to understand project structure',
-  '- code.search: Quick keyword search (available to non-admin too)',
-  '- code.suggestPatch: Generate a diff/patch for a suggested fix',
+  '- admin.code.missionAudit: Audit code against mission goals',
+  '- admin.code.autoRepair: Auto-repair common anti-patterns (admin only)',
   '- Use these tools when asked how something works, why something broke, or how to fix code',
   '- When analyzing bugs, trace the full call chain: route → service → DB query → response',
   '',
@@ -880,7 +881,7 @@ export async function updateTask(
   return mapTask(updated)
 }
 
-export async function generateAssistantResponse(db, user, sessionId, { content, currentPage }) {
+export async function generateAssistantResponse(db, user, sessionId, { content, currentPage, pageContext } = {}) {
   const trimmed = (content ?? '').trim()
   if (!trimmed) {
     return "I'm here and ready to help—just let me know what you'd like to work on."
@@ -924,7 +925,15 @@ export async function generateAssistantResponse(db, user, sessionId, { content, 
   try {
     const { invokeTool: invokeRegisteredTool } = await import('./anyaToolRegistry.js')
     console.log('[Anya] Health query detected, invoking system.health tool')
-    const healthData = await invokeRegisteredTool('system.health', {}, { db, user })
+    // The tool authorizes via context.ctx.isAdmin -- if we forget to forward the
+    // ctx the registered handler treats us as a non-admin user and Anya
+    // returns the redacted "safe" health summary even for real admins,
+    // breaking Goal #6 (truthful, grounded answers).
+    const healthData = await invokeRegisteredTool(
+      'system.health',
+      {},
+      { db, user, ctx: user, profileId: user?.activeProfileId ?? user?.profile_id ?? null },
+    )
 
     // Format the health data into a human-readable response.
     // IMPORTANT: system.health may return different shapes depending on auth level or internal errors.
@@ -1145,12 +1154,38 @@ export async function generateAssistantResponse(db, user, sessionId, { content, 
   }
   const resolvedPage = currentPage || 'Unknown'
   const pageGuidance = pageGuidanceMap[resolvedPage] || 'Give general GrantFlow guidance.'
+  // Live page context arrives from the client when the user clicks "Use current
+  // screen" or sends a message from a route adapter. Earlier this argument was
+  // accepted by the route but never injected into the system prompt, so Anya
+  // could not "see" what the user was looking at -- a Goal #6 (grounded answers)
+  // and Goal #4 (next-action) regression. Truncate to keep the prompt bounded.
+  let liveContextSection = ''
+  if (pageContext && typeof pageContext === 'object') {
+    try {
+      const serialized = JSON.stringify(pageContext)
+      const MAX = 4000
+      const trimmedCtx = serialized.length > MAX
+        ? `${serialized.slice(0, MAX)}…[truncated for size]`
+        : serialized
+      liveContextSection = [
+        '## Live Page Context (what the user can see right now)',
+        'Use this JSON snapshot to ground your reply in concrete data the user is currently looking at. Prefer specific names, ids, deadlines, statuses, and counts from this snapshot over generic advice.',
+        '```json',
+        trimmedCtx,
+        '```',
+        '',
+      ].join('\n')
+    } catch {
+      liveContextSection = ''
+    }
+  }
   const pageContextSection = [
     '## Current Page Context',
     `The user is currently on: ${resolvedPage}`,
     '',
     `Page-specific guidance: ${pageGuidance}`,
     '',
+    liveContextSection,
   ].join('\n')
 
   const systemPrompt = dynamicHeader + profileContextSection + pageContextSection + _STATIC_PROMPT_BASE + (isAdmin ? adminSection : _STATIC_PROMPT_USER_SECTION)
@@ -1290,7 +1325,7 @@ export function listTools(user) {
   return _toolListCache[cacheKey]
 }
 
-export async function invokeTool(db, user, toolName, params, { sessionId, internalBaseUrl } = {}) {
+export async function invokeTool(db, user, toolName, params, { sessionId, internalBaseUrl, pageContext, currentPage } = {}) {
   assertAuthenticated(user)
   // Provide runtime context that some tools (crawlers, documents, avatars) expect.
   const uploadDir =
@@ -1310,6 +1345,9 @@ export async function invokeTool(db, user, toolName, params, { sessionId, intern
     }
   }
 
+  // Phase 8 mission rule: Anya tools must be page-aware. Forward the live
+  // page snapshot + current page name so anya.nextBestAction and any future
+  // tool can ground its response in what the user is actually looking at.
   const result = await invokeRegisteredTool(toolName, params, {
     ctx: user,
     user,
@@ -1319,6 +1357,8 @@ export async function invokeTool(db, user, toolName, params, { sessionId, intern
     profileId: user?.activeProfileId ?? user?.profile_id ?? null,
     uploadDir,
     getOpenAI,
+    pageContext: pageContext ?? null,
+    currentPage: currentPage ?? null,
   })
 
   if (sessionId) {

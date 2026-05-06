@@ -1185,7 +1185,7 @@ registerTool({
 
 registerTool({
   name: 'profile.updateSection',
-  description: 'Update a specific profile section with data gathered from conversation. Use this when the user provides information about themselves (location, finances, health, employment, etc.) and you want to save it to their profile. Merge-safe: only provided fields are updated; existing data is preserved.',
+  description: 'Update a specific profile section with data gathered from conversation. Use this when the user provides information about themselves (location, finances, health, employment, etc.) and you want to save it to their profile. Merge-safe: only provided fields are updated; existing data is preserved. Pass confirmed:true ONLY after the user has explicitly approved the change; otherwise the call returns a confirmation request.',
   schema: {
     type: 'object',
     properties: {
@@ -1198,6 +1198,10 @@ registerTool({
         type: 'object',
         description: 'Key-value pairs to save into the section. Only provided fields are updated; existing fields are preserved.',
       },
+      confirmed: {
+        type: 'boolean',
+        description: 'Set to true ONLY after the user has explicitly approved the update. Default: false (returns confirmation_required:true and does not write).',
+      },
     },
     required: ['profileId', 'sectionKey', 'fields'],
   },
@@ -1209,6 +1213,7 @@ registerTool({
     const profileId = String(params?.profileId || '').trim()
     const sectionKey = String(params?.sectionKey || '').trim()
     const fields = params?.fields
+    const confirmed = params?.confirmed === true
 
     if (!profileId) throw new Error('profileId is required')
     if (!sectionKey) throw new Error('sectionKey is required')
@@ -1220,6 +1225,23 @@ registerTool({
       const error = new Error('Not authorized to update this profile')
       error.status = 403
       throw error
+    }
+
+    // Phase 8 mission rule: require user confirmation before Anya writes
+    // sensitive profile changes. When the caller has not set confirmed:true,
+    // return a structured confirmation_required payload instead of writing.
+    if (!confirmed) {
+      return {
+        confirmation_required: true,
+        profileId,
+        sectionKey,
+        fields,
+        message: `I'm about to save these changes to your "${sectionKey}" section. Confirm to proceed.`,
+        next_call: {
+          tool: 'profile.updateSection',
+          params: { profileId, sectionKey, fields, confirmed: true },
+        },
+      }
     }
 
     const profile = await db.prepare('SELECT id FROM profiles WHERE id = ?').get(profileId)
@@ -1342,6 +1364,157 @@ registerTool({
       guidance: suggestedNext.length > 0
         ? `Ask the user about: ${suggestedNext.join(', ')}. These have the most impact on matching.`
         : 'Profile is well-filled. Suggest running Discovery.',
+    }
+  },
+})
+
+// ============================================================================
+// Phase 8: Anya as in-app guide — page-aware "what should I do next?" tool
+// ============================================================================
+
+registerTool({
+  name: 'anya.nextBestAction',
+  description: "Returns the recommended next action for the active profile, grounded in the current page, the active opportunity (if any), profile gaps, and the application workflow state. Use this when the user asks 'what should I do next?', 'where do I start?', or after they save an opportunity. Returns: actions[] (each with title, why, and optional tool_call), reasons[], confidence.",
+  schema: {
+    type: 'object',
+    properties: {
+      profileId: { type: 'string', description: "Profile ID. Defaults to the user's active profile." },
+      pageContext: {
+        type: 'object',
+        description: 'Optional page snapshot (currentPage, selectedOpportunityId, selectedApplicationId, selectedStepId). When omitted, the orchestrator-supplied pageContext is used.',
+      },
+    },
+  },
+  handler: async (params, context) => {
+    const db = context?.db
+    if (!db) throw new Error('Database connection unavailable')
+    const ctx = context?.ctx
+    const profileId =
+      (params?.profileId && String(params.profileId).trim()) ||
+      (ctx?.activeProfileId ? String(ctx.activeProfileId).trim() : null)
+
+    if (!profileId) {
+      return {
+        actions: [
+          {
+            title: 'Pick or create a profile',
+            why: 'GrantFlow needs a profile to ground all matching, document checklists, and Anya guidance.',
+          },
+        ],
+        reasons: ['no_active_profile'],
+        confidence: 100,
+      }
+    }
+    if (!ensureProfileAccess(ctx, profileId)) {
+      const error = new Error('Not authorized to view this profile')
+      error.status = 403
+      throw error
+    }
+
+    let profileContext
+    try {
+      profileContext = await loadProfileContext(db, profileId)
+    } catch (err) {
+      throw new Error(`Profile not found or unreadable: ${err?.message ?? err}`)
+    }
+    const profile = profileContext.profile
+
+    // Page context can come from the orchestrator (forwarded from the
+    // frontend "current screen") or from the explicit param. The param wins.
+    const liveCtx = params?.pageContext ?? context?.pageContext ?? null
+    const currentPage = String(liveCtx?.currentPage ?? context?.currentPage ?? '').trim() || null
+    const selectedOpportunityId = liveCtx?.selectedOpportunityId
+      ? String(liveCtx.selectedOpportunityId)
+      : null
+    const selectedApplicationId = liveCtx?.selectedApplicationId
+      ? String(liveCtx.selectedApplicationId)
+      : null
+
+    const actions = []
+    const reasons = []
+
+    // 1) Profile-completeness gap (mission rule: every result must answer
+    //    "what facts caused this?", which means filling in the basics first).
+    const missingHighValue = []
+    if (!profile?.state) missingHighValue.push('state')
+    if (!profile?.zip && !profile?.zip_code && !profile?.postal_code) missingHighValue.push('zip')
+    if (!profile?.organization_type && !profile?.applicant_type && !profile?.primary_type) {
+      missingHighValue.push('applicant_type')
+    }
+    if (missingHighValue.length > 0) {
+      actions.push({
+        title: `Fill in your profile: ${missingHighValue.join(', ')}`,
+        why: 'These fields directly drive geographic and category matching. Without them GrantFlow falls back to broad coverage.',
+        tool_call: {
+          tool: 'profile.updateSection',
+          params: { profileId, sectionKey: 'basic_information', fields: {}, confirmed: false },
+        },
+      })
+      reasons.push('missing_high_value_profile_fields')
+    }
+
+    // 2) Active application — surface next pending step if we know one.
+    if (selectedApplicationId) {
+      try {
+        const step = await db
+          .prepare(
+            `SELECT id, title, status FROM application_steps
+             WHERE application_id = ? AND status = 'pending'
+             ORDER BY step_order ASC LIMIT 1`,
+          )
+          .get(selectedApplicationId)
+        if (step) {
+          actions.push({
+            title: `Next step in this application: "${step.title}"`,
+            why: 'This is the first remaining checklist item for the application you have open.',
+            tool_call: {
+              tool: 'application.completeStep',
+              params: { stepId: step.id, applicationId: selectedApplicationId },
+            },
+          })
+          reasons.push('pending_application_step')
+        }
+      } catch { /* table may not exist in some envs */ }
+    }
+
+    // 3) Selected opportunity — offer to save it as an application.
+    if (selectedOpportunityId && !selectedApplicationId) {
+      actions.push({
+        title: 'Save this opportunity to your pipeline and start an application plan',
+        why: 'Saving turns this opportunity into an application with a document checklist and deadline reminders.',
+        tool_call: {
+          tool: 'application.createFromOpportunity',
+          params: { profileId, opportunityId: selectedOpportunityId },
+        },
+      })
+      reasons.push('selected_opportunity_unsaved')
+    }
+
+    // 4) Page-specific defaults.
+    if (currentPage === 'DiscoverGrants' && actions.length === 0) {
+      actions.push({
+        title: 'Run a search and review the top matches',
+        why: 'You are on the discovery page — the highest-leverage next move is to scan the current results and save the ones that look like a fit.',
+      })
+      reasons.push('on_discover_page')
+    }
+
+    if (actions.length === 0) {
+      actions.push({
+        title: 'Open Discover Grants and review your latest matches',
+        why: 'This is the default starting point when nothing else is currently in progress.',
+      })
+      reasons.push('default_action')
+    }
+
+    return {
+      profileId,
+      currentPage,
+      selectedOpportunityId,
+      selectedApplicationId,
+      actions,
+      reasons,
+      confidence: actions.length > 0 ? 80 : 40,
     }
   },
 })
