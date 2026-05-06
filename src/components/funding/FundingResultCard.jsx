@@ -58,7 +58,7 @@ const NEXT_ACTION_LABEL = {
 
 function formatAmount(min, max, description) {
   if (description) return description
-  const n = (v) => (v == null ? null : Number(v))
+  const n = (v) => (v === null || v === undefined ? null : Number(v))
   const lo = n(min)
   const hi = n(max)
   if (lo && hi && lo !== hi) return `$${lo.toLocaleString()} – $${hi.toLocaleString()}`

@@ -3,12 +3,13 @@ import { apiFetch } from '@/api/client';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Activity, Clock, Server, RefreshCw, CheckCircle2, AlertCircle, HardDrive } from 'lucide-react';
+import { Activity, Clock, Server, RefreshCw, CheckCircle2, AlertCircle, HardDrive, ShieldCheck, Target } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 
 export default function AdminSystemHealth() {
   const [health, setHealth] = useState(null);
   const [storage, setStorage] = useState(null);
+  const [mission, setMission] = useState(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [fetchError, setFetchError] = useState(null);
@@ -17,12 +18,14 @@ export default function AdminSystemHealth() {
     try {
       setRefreshing(true);
       setFetchError(null);
-      const [healthData, storageData] = await Promise.all([
+      const [healthData, storageData, missionData] = await Promise.all([
         apiFetch('/api/admin/system-health'),
         apiFetch('/api/health/storage').catch((err) => ({ ok: false, status: 'error', error: err?.message || String(err) })),
+        apiFetch('/api/health/mission').catch((err) => ({ ok: false, error: err?.message || String(err) })),
       ]);
       setHealth(healthData);
       setStorage(storageData);
+      setMission(missionData);
     } catch (err) {
       console.error('Failed to fetch system health', err);
       setFetchError(err?.message || String(err));
@@ -80,6 +83,8 @@ export default function AdminSystemHealth() {
           </div>
         </div>
       ) : null}
+
+      <MissionHealthPanel mission={mission} />
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
         <Card>
@@ -165,6 +170,147 @@ export default function AdminSystemHealth() {
           </div>
         </CardContent>
       </Card>
+    </div>
+  );
+}
+
+function MissionHealthPanel({ mission }) {
+  if (!mission) {
+    return (
+      <Card>
+        <CardHeader className="pb-2">
+          <CardTitle className="text-base flex items-center gap-2">
+            <Target className="w-5 h-5" /> Mission Health
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <p className="text-sm text-slate-500">Loading mission metrics…</p>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  if (mission.error) {
+    return (
+      <Card>
+        <CardHeader className="pb-2">
+          <CardTitle className="text-base flex items-center gap-2">
+            <Target className="w-5 h-5" /> Mission Health
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <p className="text-sm text-rose-600">Failed to load mission metrics: {String(mission.error)}</p>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  const counts = mission.counts || {};
+  const rates = mission.rates || {};
+  const targets = mission.targets || {};
+  const alerts = mission.alerts || [];
+  const verifiedPct = Number(rates.verified_pct ?? 0);
+  const brokenPct = Number(rates.broken_pct ?? 0);
+  const placeholders = Number(counts.placeholder_opportunities ?? 0);
+  const verifiedHealthy = verifiedPct >= (targets.verified_pct_min ?? 95);
+  const brokenHealthy = brokenPct <= (targets.broken_pct_max ?? 5);
+  const placeholderHealthy = placeholders <= (targets.placeholder_max ?? 0);
+
+  return (
+    <Card className={mission.ok === false ? 'border-rose-300' : 'border-emerald-200'}>
+      <CardHeader className="pb-2">
+        <CardTitle className="text-base flex items-center justify-between gap-2">
+          <span className="flex items-center gap-2">
+            <Target className="w-5 h-5" /> Mission Health
+          </span>
+          <Badge variant={mission.ok === false ? 'destructive' : 'outline'} className={mission.ok === false ? '' : 'bg-emerald-50 text-emerald-700 border-emerald-200'}>
+            {mission.ok === false ? 'Action required' : 'On target'}
+          </Badge>
+        </CardTitle>
+      </CardHeader>
+      <CardContent>
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          <MissionStat
+            label="Verified direct opps"
+            value={`${verifiedPct}%`}
+            sub={`${counts.direct_opportunities_verified ?? 0} of ${counts.direct_opportunities_total ?? 0} (target ≥ ${targets.verified_pct_min ?? 95}%)`}
+            healthy={verifiedHealthy}
+            icon={<ShieldCheck className="w-4 h-4" />}
+          />
+          <MissionStat
+            label="Broken direct links"
+            value={`${brokenPct}%`}
+            sub={`${counts.direct_opportunities_broken ?? 0} broken (target ≤ ${targets.broken_pct_max ?? 5}%)`}
+            healthy={brokenHealthy}
+            icon={<AlertCircle className="w-4 h-4" />}
+          />
+          <MissionStat
+            label="Placeholder rows"
+            value={String(placeholders)}
+            sub={`Mission rule: must equal ${targets.placeholder_max ?? 0}`}
+            healthy={placeholderHealthy}
+            icon={<AlertCircle className="w-4 h-4" />}
+          />
+          <MissionStat
+            label="Directories tracked"
+            value={String(counts.directory_opportunities_total ?? 0)}
+            sub="Always-on fallback supply"
+            healthy={true}
+            icon={<Activity className="w-4 h-4" />}
+          />
+        </div>
+
+        {alerts.length > 0 ? (
+          <div className="mt-4 space-y-2">
+            {alerts.map((a) => (
+              <div
+                key={a.code}
+                className={`text-xs rounded border px-3 py-2 ${
+                  a.level === 'error'
+                    ? 'border-rose-300 bg-rose-50 text-rose-900'
+                    : 'border-amber-300 bg-amber-50 text-amber-900'
+                }`}
+              >
+                <span className="font-semibold uppercase mr-2">{a.level}</span>
+                {a.detail}
+              </div>
+            ))}
+          </div>
+        ) : null}
+
+        {Array.isArray(mission.coverage_by_source) && mission.coverage_by_source.length > 0 ? (
+          <div className="mt-4">
+            <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">
+              Coverage by source (top {mission.coverage_by_source.length})
+            </p>
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2">
+              {mission.coverage_by_source.map((s) => (
+                <div key={s.source} className="text-xs bg-slate-50 border border-slate-100 rounded px-2 py-1.5">
+                  <div className="font-medium text-slate-800 truncate" title={s.source}>{s.source}</div>
+                  <div className="text-slate-500">{s.n}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : null}
+
+        <p className="mt-4 text-[10px] text-slate-400">
+          Matcher v{mission.matcher_version || 'unknown'} • Generated {mission.generated_at ? new Date(mission.generated_at).toLocaleString() : 'just now'}
+        </p>
+      </CardContent>
+    </Card>
+  );
+}
+
+function MissionStat({ label, value, sub, healthy, icon }) {
+  return (
+    <div className={`p-4 rounded-xl border ${healthy ? 'border-emerald-200 bg-emerald-50/50' : 'border-rose-200 bg-rose-50/50'}`}>
+      <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider flex items-center gap-1">
+        {icon}
+        {label}
+      </p>
+      <p className={`text-2xl font-bold mt-1 ${healthy ? 'text-emerald-800' : 'text-rose-800'}`}>{value}</p>
+      <p className="text-xs text-slate-500 mt-1">{sub}</p>
     </div>
   );
 }

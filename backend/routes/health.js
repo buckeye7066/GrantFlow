@@ -9,6 +9,7 @@ import { getDataReadiness, getSystemAlerts } from '../services/dataReadinessServ
 import { getPipelineHealth } from '../middleware/pipelineMonitor.js'
 import { MATCHER_VERSION } from '../services/matchEngine.js'
 import { RELEVANCE_RULES } from '../services/relevanceFilterRules.js'
+import { buildMissionHealth } from '../services/missionHealthService.js'
 
 import { createLogger } from '../utils/logger.js'
 const routeLogger = createLogger('route:health')
@@ -326,6 +327,27 @@ router.get('/api/health/deployment', (_req, res) => {
     relevanceFilterRuleCount: RELEVANCE_RULES.length,
     timestamp: new Date().toISOString(),
   })
+})
+
+// Mission-level production health dashboard (Phase 10).
+// Exposes the metrics that map directly to the mission goals: verified
+// opportunity count + percentage, broken links, directories, placeholder
+// rows, verification events in the last 24h, coverage by source, and the
+// application funnel by status. Returns 503 when ok=false (mission rule:
+// CI fails if placeholders inserted, etc.).
+router.get('/api/health/mission', async (req, res) => {
+  try {
+    const payload = await buildMissionHealth(req.db)
+    const code = payload?.ok === false ? 503 : 200
+    return res.status(code).json(payload)
+  } catch (err) {
+    routeLogger.error('mission health failed', { err: err?.message })
+    return res.status(500).json({
+      ok: false,
+      error: err?.message ?? String(err),
+      generated_at: new Date().toISOString(),
+    })
+  }
 })
 
 // Import validation: surfaces modules that failed to load at startup
