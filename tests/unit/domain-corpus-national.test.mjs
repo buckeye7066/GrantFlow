@@ -76,6 +76,8 @@ function createTestDb() {
       verification_method TEXT,
       verified_by TEXT,
       verification_error TEXT,
+      opportunity_kind TEXT,
+      source_trust_tier TEXT,
       profile_id TEXT,
       requires_501c3 INTEGER DEFAULT 0,
       requires_match INTEGER DEFAULT 0,

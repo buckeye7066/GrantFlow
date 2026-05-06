@@ -67,6 +67,11 @@ import {
   normalizeUrlForDedupe,
 } from '../routes/opportunityHelpers.js'
 import { UNTRUSTED_ORIGINS } from '../utils/recordOrigins.js'
+import {
+  classifyOpportunityKind,
+  classifySourceTrustTier,
+  OPPORTUNITY_KINDS,
+} from './opportunityRealityGate.js'
 
 const OFFICIAL_HOST_SUFFIXES = [
   '.gov',
@@ -193,6 +198,8 @@ export function assessOpportunityTrust(opp, opts = {}) {
       normalizedUrl: null,
       actionable: false,
       sourceTrust: 'unknown',
+      kind: OPPORTUNITY_KINDS.DIRECT,
+      sourceTrustTier: 'open_web',
     }
   }
 
@@ -242,8 +249,14 @@ export function assessOpportunityTrust(opp, opts = {}) {
     reasons.push('matching_funds_required')
   }
 
-  // 5. Directory classification (not a disqualifier by default)
+  // 5. Directory / kind classification (not a disqualifier by default).
+  //
+  // Prefer the persisted opportunity_kind set by opportunityRealityGate at
+  // ingest time. Fall back to the legacy heuristic for rows ingested before
+  // migration 068.
+  const opportunityKind = classifyOpportunityKind(opp)
   const directory =
+    opportunityKind === OPPORTUNITY_KINDS.DIRECTORY ||
     isDirectoryLike(opp) ||
     String(opp.opportunity_type || opp.type || '').toLowerCase().includes('directory')
   if (directory) {
@@ -329,6 +342,9 @@ export function assessOpportunityTrust(opp, opts = {}) {
   if (display && trustTier === 'low') downgrade = true
 
   const actionable = !!usableUrl && !flags.placeholder
+  // Reality-gate classification — surface to consumers so the UI can render
+  // "Direct grant" / "Directory" / "School portal" badges from the same field.
+  const sourceTrustTier = classifySourceTrustTier(opp)
 
   return {
     display,
@@ -340,6 +356,8 @@ export function assessOpportunityTrust(opp, opts = {}) {
     actionable,
     sourceTrust,
     primaryUrl: usableUrl,
+    kind: opportunityKind,
+    sourceTrustTier,
   }
 }
 

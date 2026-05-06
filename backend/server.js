@@ -164,31 +164,56 @@ const isRailwayRuntime = Boolean(
 )
 
 // ── Production reality gate (mission rule) ───────────────────────────────
-// Refuse to boot production unless URL_VERIFICATION_ENABLED is on, or the
-// operator has explicitly acknowledged a seed/import boot. This makes the
-// "real funding only" promise enforceable at the process level instead of
-// trusting every crawler to behave.
+// "Real funding only" is enforced at the process level instead of trusting
+// every crawler to behave. The contract:
 //
-// Tests that need to spawn a "production-mode" server (auth flows, ephemeral
-// SQLite smoke tests) opt out via the well-known ALLOW_EPHEMERAL_SQLITE flag
-// so they don't have to know about this gate.
-const URL_VERIFICATION_ENABLED =
-  String(process.env.URL_VERIFICATION_ENABLED || '').toLowerCase() === 'true'
+//   * In production, URL verification is DEFAULT-ON. If
+//     URL_VERIFICATION_ENABLED is unset, we treat it as 'true' and propagate
+//     it back to the env so every downstream consumer (opportunityInserter's
+//     bulk verifier, schedulers, crawlers) sees it on without separate
+//     configuration.
+//
+//   * The only way to boot production with verification disabled is to
+//     EXPLICITLY set URL_VERIFICATION_ENABLED=false AND set
+//     GRANTFLOW_SKIP_VERIFICATION_GATE=true. The combination forces the
+//     operator to acknowledge that they are knowingly running a seed /
+//     import / migration boot.
+//
+//   * Tests that spawn a "production-mode" server (auth flows, ephemeral
+//     SQLite smoke tests) opt out via the well-known ALLOW_EPHEMERAL_SQLITE
+//     flag so they don't need to learn about this gate.
+const verificationEnvRaw = String(process.env.URL_VERIFICATION_ENABLED || '').toLowerCase()
+const verificationExplicitlyDisabled = verificationEnvRaw === 'false' || verificationEnvRaw === '0' || verificationEnvRaw === 'no'
+const verificationExplicitlyEnabled = verificationEnvRaw === 'true' || verificationEnvRaw === '1' || verificationEnvRaw === 'yes'
 const skipVerificationGate =
   String(process.env.GRANTFLOW_SKIP_VERIFICATION_GATE || '').toLowerCase() === 'true' ||
   String(process.env.NODE_ENV || '').toLowerCase() === 'test' ||
   String(process.env.GRANTFLOW_SEED_MODE || '').toLowerCase() === 'true' ||
   String(process.env.ALLOW_EPHEMERAL_SQLITE || '').toLowerCase() === 'true'
 
-if (isProdEnv && !URL_VERIFICATION_ENABLED && !skipVerificationGate) {
+if (isProdEnv && verificationExplicitlyDisabled && !skipVerificationGate) {
   console.error(
-    '[reality-gate] FATAL: refusing to boot production without URL_VERIFICATION_ENABLED=true.\n' +
+    '[reality-gate] FATAL: URL_VERIFICATION_ENABLED is explicitly false in production.\n' +
       '  Live ingest must perform real URL probes so opportunities surfaced as\n' +
-      '  "verified" actually were. Set URL_VERIFICATION_ENABLED=true, or set\n' +
-      '  GRANTFLOW_SKIP_VERIFICATION_GATE=true to acknowledge a seed/import boot.',
+      '  "verified" actually were. Either remove URL_VERIFICATION_ENABLED=false\n' +
+      '  or set GRANTFLOW_SKIP_VERIFICATION_GATE=true to acknowledge a seed/import boot.',
   )
   process.exit(1)
 }
+
+// Default-on in production: if the operator never set the var, behave as if
+// they had set it to true. This is the mission-aligned default and removes the
+// silent "verification was off because nobody flipped the flag" failure mode.
+if (isProdEnv && !verificationExplicitlyEnabled && !verificationExplicitlyDisabled) {
+  process.env.URL_VERIFICATION_ENABLED = 'true'
+  console.info(
+    '[reality-gate] URL_VERIFICATION_ENABLED defaulted to true (production mission rule).',
+  )
+}
+
+const URL_VERIFICATION_ENABLED =
+  String(process.env.URL_VERIFICATION_ENABLED || '').toLowerCase() === 'true'
+
 if (!isProdEnv && !URL_VERIFICATION_ENABLED && !skipVerificationGate) {
   console.warn(
     '[reality-gate] URL_VERIFICATION_ENABLED is not set. Live URL probing will be skipped at ingest.\n' +

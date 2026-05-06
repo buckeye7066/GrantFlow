@@ -200,6 +200,12 @@ CREATE TABLE IF NOT EXISTS funding_opportunities (
   verification_method TEXT,
   verified_by TEXT,
   verification_error TEXT,
+  -- Reality gate classification (migration 068).
+  --   opportunity_kind: 'direct' | 'benefit' | 'directory' | 'referral' | 'school_portal'
+  --   source_trust_tier: 'official_api' | 'official_portal' | 'verified_directory' |
+  --                      'community_directory' | 'open_web' | 'manual_curated'
+  opportunity_kind TEXT,
+  source_trust_tier TEXT,
   
   -- Requirements
   requires_501c3 BOOLEAN DEFAULT FALSE,
@@ -257,6 +263,34 @@ CREATE UNIQUE INDEX IF NOT EXISTS ux_funding_opportunities_fingerprint
 CREATE INDEX IF NOT EXISTS idx_funding_opportunities_funder_id ON funding_opportunities(funder_id);
 CREATE INDEX IF NOT EXISTS idx_funding_opportunities_schema_id ON funding_opportunities(schema_id);
 CREATE INDEX IF NOT EXISTS idx_funding_opportunities_status ON funding_opportunities(status);
+CREATE INDEX IF NOT EXISTS idx_funding_opportunities_opportunity_kind
+  ON funding_opportunities(opportunity_kind);
+CREATE INDEX IF NOT EXISTS idx_funding_opportunities_source_trust_tier
+  ON funding_opportunities(source_trust_tier);
+
+-- Append-only audit log of every URL verification probe (migration 069).
+-- Lets the mission dashboard answer "when was this opportunity actually
+-- probed?" and "what's the broken-link rate per source?" without scraping
+-- application logs. We never UPDATE this table; we only INSERT.
+CREATE TABLE IF NOT EXISTS verification_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  opportunity_id TEXT,
+  source TEXT,
+  url TEXT,
+  link_status TEXT,
+  link_status_code INTEGER,
+  verification_method TEXT,
+  verified_by TEXT,
+  verification_error TEXT,
+  duration_ms INTEGER,
+  ts DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_verification_events_opportunity_id
+  ON verification_events(opportunity_id);
+CREATE INDEX IF NOT EXISTS idx_verification_events_ts
+  ON verification_events(ts);
+CREATE INDEX IF NOT EXISTS idx_verification_events_status
+  ON verification_events(link_status);
 
 -- Item catalog (AI + deterministic suggestions)
 -- A durable list of "things people request" (devices, equipment, adaptive items, etc.)

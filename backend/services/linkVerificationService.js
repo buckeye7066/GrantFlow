@@ -45,6 +45,47 @@ function shouldSkipUrl(url) {
 }
 
 /**
+ * Append-only audit row for the verification_events table. Used by:
+ *   * runLinkVerification (recurring job)
+ *   * opportunityInserter bulk + single insert paths
+ *
+ * The table is best-effort: if the schema migration has not yet run (in-memory
+ * test DBs that build their own schema), silently no-op. Verification itself
+ * remains correct regardless of whether the audit row got persisted.
+ */
+export async function recordVerificationEvent(db, event = {}) {
+  if (!db || typeof db.prepare !== 'function') return
+  try {
+    const stmt = db.prepare(`
+      INSERT INTO verification_events
+        (opportunity_id, source, url, link_status, link_status_code,
+         verification_method, verified_by, verification_error, duration_ms)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `)
+    await stmt.run(
+      event.opportunity_id ?? null,
+      event.source ?? null,
+      event.url ?? null,
+      event.link_status ?? null,
+      event.link_status_code ?? null,
+      event.verification_method ?? null,
+      event.verified_by ?? null,
+      event.verification_error ?? null,
+      event.duration_ms ?? null,
+    )
+  } catch (err) {
+    const msg = String(err?.message || err)
+    // Table missing in test DBs — never blow up the verification path on
+    // audit-log failures. Log loudly enough that a real schema regression in
+    // production still gets noticed.
+    if (msg.includes('no such table') || msg.includes('does not exist')) {
+      return
+    }
+    console.warn('[verification-events] insert failed:', msg)
+  }
+}
+
+/**
  * Probe a single URL with HEAD. Falls back to GET when the server rejects
  * HEAD (some hosts return 403/405 for HEAD even though the page is reachable).
  * Never throws — returns a structured outcome.
@@ -178,7 +219,9 @@ export async function runLinkVerification(
     await Promise.all(
       batch.map(async (row) => {
         const url = row.application_url || row.source_url
+        const startMs = Date.now()
         const result = await checkUrl(url)
+        const durationMs = Date.now() - startMs
         const now = new Date().toISOString()
         await update.run(
           now,
@@ -191,6 +234,18 @@ export async function runLinkVerification(
         )
         stats.checked++
         stats[result.status] = (stats[result.status] || 0) + 1
+
+        // Append-only audit log of every probe (mission dashboard input).
+        await recordVerificationEvent(db, {
+          opportunity_id: row.id,
+          url,
+          link_status: result.status,
+          link_status_code: result.code,
+          verification_method: result.method,
+          verified_by: verifiedBy,
+          verification_error: result.error,
+          duration_ms: durationMs,
+        })
 
         // Direct (non-directory) broken opportunities should not stay visible.
         const isDirectory =

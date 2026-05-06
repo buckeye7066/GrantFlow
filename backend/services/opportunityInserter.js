@@ -6,8 +6,9 @@ import { validateOpportunity, deduplicateByUrl } from './opportunityValidator.js
 import { reviewOpportunity } from './reviewerAgent.js'
 import { normalizeUrlForDedupe } from '../routes/opportunityHelpers.js'
 import { normalizeOpportunityState } from '../utils/stateNormalization.js'
-import { checkUrl as verifyUrlLiveness } from './linkVerificationService.js'
+import { checkUrl as verifyUrlLiveness, recordVerificationEvent } from './linkVerificationService.js'
 import { headForVerification } from './crawlers/httpClient.js'
+import { assessReality } from './opportunityRealityGate.js'
 
 /**
  * Production reality gate.
@@ -354,6 +355,47 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
     }
   }
 
+  // ── MANDATORY reality gate (mission rule #1) ────────────────────────────
+  // Run BEFORE the URL liveness probe so we don't waste sockets on rows the
+  // gate would reject anyway (loans, expired, social-only, placeholder).
+  // We tag the row with kind + trust tier even on accept so the consumer
+  // layer doesn't have to re-derive them at every render.
+  const reality = assessReality(
+    {
+      ...opportunity,
+      source_url: sourceUrl,
+      application_url: applicationUrl,
+      evidence_url: evidenceUrl,
+    },
+    {
+      allowExpired: opts.allowExpired === true,
+      allowLoans: opts.allowLoans === true,
+      allowMatchingFunds: opts.allowMatchingFunds === true,
+      allowSocialDirect: opts.allowSocialDirect === true,
+      allowBrokenDirect: opts.allowBrokenDirect === true,
+    },
+  )
+  if (!reality.allowed) {
+    return {
+      id: null,
+      inserted: false,
+      skipped: true,
+      reason: `reality_gate:${reality.reasons[0] ?? 'unknown'}`,
+    }
+  }
+  opportunity.opportunity_kind = reality.kind
+  opportunity.source_trust_tier = reality.trustTier
+  // Direct grants never legitimately point to a social URL as the primary
+  // application path. The gate already rejected those above; here we only
+  // need to make sure the reality_gate's downgrade reasons surface to the
+  // consumer-side trust layer via _reality_gate.
+  opportunity._reality_gate = {
+    kind: reality.kind,
+    trust_tier: reality.trustTier,
+    downgrade: reality.downgrade,
+    reasons: reality.reasons,
+  }
+
   // Optional pre-insert URL liveness gate.
   // Default-off to keep seeds/tests/baseline fast. Two ways to enable:
   //   1. Per-call: pass `verifyUrl: true` from a live crawler
@@ -363,7 +405,27 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
   const envVerify = String(process.env.OPPORTUNITY_INSERT_VERIFY_URL || '').toLowerCase() === 'true'
   const shouldVerify = opts.verifyUrl ?? envVerify
   if (shouldVerify) {
+    const startMs = Date.now()
     const liveness = await verifyUrlLiveness(candidateUrl, { timeoutMs: opts.urlTimeoutMs ?? 8000 })
+    const durationMs = Date.now() - startMs
+
+    // Append-only audit row, regardless of outcome.
+    try {
+      await recordVerificationEvent(db, {
+        opportunity_id: opportunity.id ?? null,
+        source: opportunity.source ?? null,
+        url: candidateUrl,
+        link_status: liveness.status ?? null,
+        link_status_code: liveness.code ?? null,
+        verification_method: liveness.method ?? 'head',
+        verified_by: opts?.verifiedBy ?? 'opportunity_inserter',
+        verification_error: liveness.error ?? null,
+        duration_ms: durationMs,
+      })
+    } catch {
+      /* recordVerificationEvent already handles missing-table cases */
+    }
+
     if (liveness.status === 'broken') {
       return {
         id: null,
@@ -465,6 +527,10 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
       verified_by: opportunity.verified_by ?? null,
       verification_error: opportunity.verification_error ?? null,
       discovered_at: opportunity.discovered_at ?? null,
+      // Reality-gate classification — tagged on every accepted row so the
+      // consumer/UI layer never has to re-derive "what kind of result is this".
+      opportunity_kind: opportunity.opportunity_kind ?? null,
+      source_trust_tier: opportunity.source_trust_tier ?? null,
       profile_id: opportunity.profile_id ?? null,
       requires_501c3: toDbBoolean(db, opportunity.requires_501c3),
       requires_match: toDbBoolean(db, opportunity.requires_match),
@@ -507,6 +573,8 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
         verified_by = COALESCE(?, verified_by),
         verification_error = COALESCE(?, verification_error),
         discovered_at = COALESCE(discovered_at, ?),
+        opportunity_kind = COALESCE(?, opportunity_kind),
+        source_trust_tier = COALESCE(?, source_trust_tier),
         profile_id = COALESCE(?, profile_id),
         requires_501c3 = COALESCE(?, requires_501c3),
         requires_match = COALESCE(?, requires_match),
@@ -547,6 +615,8 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
         verified_by = COALESCE(?, verified_by),
         verification_error = COALESCE(?, verification_error),
         discovered_at = COALESCE(discovered_at, ?),
+        opportunity_kind = COALESCE(?, opportunity_kind),
+        source_trust_tier = COALESCE(?, source_trust_tier),
         profile_id = COALESCE(?, profile_id),
         requires_501c3 = COALESCE(?, requires_501c3),
         requires_match = COALESCE(?, requires_match),
@@ -587,6 +657,8 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
       record.verified_by,
       record.verification_error,
       record.discovered_at ?? new Date().toISOString(),
+      record.opportunity_kind,
+      record.source_trust_tier,
       record.profile_id,
       record.requires_501c3,
       record.requires_match,
@@ -674,6 +746,9 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
     verified_by: opportunity.verified_by ?? null,
     verification_error: opportunity.verification_error ?? null,
     discovered_at: opportunity.discovered_at ?? new Date().toISOString(),
+    // Reality-gate classification — set by assessReality() above.
+    opportunity_kind: opportunity.opportunity_kind ?? null,
+    source_trust_tier: opportunity.source_trust_tier ?? null,
     profile_id: opportunity.profile_id ?? null,
     requires_501c3: toDbBoolean(db, opportunity.requires_501c3),
     requires_match: toDbBoolean(db, opportunity.requires_match),
@@ -733,6 +808,8 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
       verified_by,
       verification_error,
       discovered_at,
+      opportunity_kind,
+      source_trust_tier,
       profile_id,
       requires_501c3,
       requires_match,
@@ -787,6 +864,8 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
       @verified_by,
       @verification_error,
       @discovered_at,
+      @opportunity_kind,
+      @source_trust_tier,
       @profile_id,
       @requires_501c3,
       @requires_match,
@@ -856,6 +935,8 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
       verified_by = COALESCE(excluded.verified_by, funding_opportunities.verified_by),
       verification_error = COALESCE(excluded.verification_error, funding_opportunities.verification_error),
       discovered_at = COALESCE(funding_opportunities.discovered_at, excluded.discovered_at),
+      opportunity_kind = COALESCE(excluded.opportunity_kind, funding_opportunities.opportunity_kind),
+      source_trust_tier = COALESCE(excluded.source_trust_tier, funding_opportunities.source_trust_tier),
       match_reasons = COALESCE(excluded.match_reasons, funding_opportunities.match_reasons),
       updated_at = CURRENT_TIMESTAMP,
       last_crawled = CURRENT_TIMESTAMP
@@ -893,6 +974,8 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
     verified_by: record.verified_by ?? null,
     verification_error: record.verification_error ?? null,
     discovered_at: record.discovered_at ?? new Date().toISOString(),
+    opportunity_kind: record.opportunity_kind ?? null,
+    source_trust_tier: record.source_trust_tier ?? null,
     profile_id: record.profile_id,
     requires_501c3: record.requires_501c3,
     requires_match: record.requires_match,
@@ -938,10 +1021,13 @@ async function verifyOpportunityUrl(opportunity, opts = {}) {
   }
 
   const verifiedBy = opts?.verifiedBy || `bulk:${opportunity?.source ?? 'unknown'}`
+  const db = opts?.db ?? null
+  const startMs = Date.now()
+  let proof
   try {
     const probe = await headForVerification(url, { timeoutMs: opts?.timeoutMs ?? 5000 })
     if (probe.ok) {
-      return {
+      proof = {
         last_verified_at: new Date().toISOString(),
         link_status: probe.status >= 300 && probe.status < 400 ? 'redirect' : 'ok',
         link_status_code: probe.status,
@@ -949,17 +1035,18 @@ async function verifyOpportunityUrl(opportunity, opts = {}) {
         verified_by: verifiedBy,
         verification_error: null,
       }
-    }
-    return {
-      last_verified_at: new Date().toISOString(),
-      link_status: 'broken',
-      link_status_code: probe.status ?? null,
-      verification_method: 'head',
-      verified_by: verifiedBy,
-      verification_error: probe.error || `HTTP ${probe.status ?? 'no_response'}`,
+    } else {
+      proof = {
+        last_verified_at: new Date().toISOString(),
+        link_status: 'broken',
+        link_status_code: probe.status ?? null,
+        verification_method: 'head',
+        verified_by: verifiedBy,
+        verification_error: probe.error || `HTTP ${probe.status ?? 'no_response'}`,
+      }
     }
   } catch (err) {
-    return {
+    proof = {
       last_verified_at: new Date().toISOString(),
       link_status: 'broken',
       link_status_code: null,
@@ -968,6 +1055,28 @@ async function verifyOpportunityUrl(opportunity, opts = {}) {
       verification_error: err?.message || String(err),
     }
   }
+
+  // Append-only audit log — fire-and-forget. Best-effort; never throws.
+  if (db) {
+    try {
+      await recordVerificationEvent(db, {
+        opportunity_id: opportunity?.id ?? null,
+        source: opportunity?.source ?? null,
+        url,
+        link_status: proof.link_status,
+        link_status_code: proof.link_status_code,
+        verification_method: proof.verification_method,
+        verified_by: proof.verified_by,
+        verification_error: proof.verification_error,
+        duration_ms: Date.now() - startMs,
+      })
+    } catch {
+      // recordVerificationEvent already swallows missing-table errors; this
+      // outer try is just belt-and-suspenders for unexpected failures.
+    }
+  }
+
+  return proof
 }
 
 async function runLimitedConcurrent(items, limit, worker) {
@@ -1010,7 +1119,7 @@ export async function bulkUpsertFundingOpportunities(db, opportunities = [], opt
     const concurrency = Math.max(1, Math.min(Number(opts?.concurrency ?? 8), 16))
     const verificationStats = { ok: 0, broken: 0, redirect: 0, none: 0 }
     probed = await runLimitedConcurrent(deduped, concurrency, async (opp) => {
-      const proof = await verifyOpportunityUrl(opp, opts)
+      const proof = await verifyOpportunityUrl(opp, { ...opts, db })
       if (!proof) {
         verificationStats.none++
         return opp

@@ -221,6 +221,11 @@ export async function runBootstrap({ db, uploadsDir, legacyUploadsDir, baseDir }
     { table: 'funding_opportunities', column: 'verified_by', type: 'TEXT' },
     { table: 'funding_opportunities', column: 'verification_error', type: 'TEXT' },
     { table: 'funding_opportunities', column: 'link_status_code', type: 'INTEGER' },
+    // Reality gate phase 1.2: per-row classification + source trust tier
+    // (migration 068). Lets the consumer/UI layer label results consistently
+    // ("direct grant" vs "directory" vs "school portal") without re-deriving.
+    { table: 'funding_opportunities', column: 'opportunity_kind', type: 'TEXT' },
+    { table: 'funding_opportunities', column: 'source_trust_tier', type: 'TEXT' },
     // Link documents to per-school university applications (student profiles)
     { table: 'documents', column: 'university_application_id', type: 'TEXT' },
     { table: 'documents', column: 'university_application_name', type: 'TEXT' },
@@ -379,35 +384,44 @@ export async function runBootstrap({ db, uploadsDir, legacyUploadsDir, baseDir }
   // ── 8. Opportunity reality gate (production) ─────────────────────────────
   //
   // Mission rule: a "verified" opportunity must have actually been verified.
-  // Outside production, the gate is informational. In production we refuse to
-  // boot if URL verification was not opted into AND no explicit override was
-  // provided. Tests/seeds should set GRANTFLOW_SKIP_VERIFICATION_GATE=true.
-  //
-  // Two env knobs control this:
-  //   URL_VERIFICATION_ENABLED=true     – ingest paths perform live HEAD checks
-  //                                       and stamp last_verified_at honestly.
-  //                                       The recurring verifier remains
-  //                                       authoritative for ongoing freshness.
-  //   GRANTFLOW_SKIP_VERIFICATION_GATE=true – explicit acknowledgement that
-  //                                       this boot is a seed/import/dev/test
-  //                                       and may insert un-probed rows.
-  const urlVerifEnabled =
-    String(process.env.URL_VERIFICATION_ENABLED || '').toLowerCase() === 'true';
+  // Contract:
+  //   * In production, URL verification is DEFAULT-ON. If
+  //     URL_VERIFICATION_ENABLED is unset we set it to 'true' on
+  //     `process.env` so every downstream consumer sees it on.
+  //   * The only way to boot production with verification disabled is to
+  //     EXPLICITLY set URL_VERIFICATION_ENABLED=false AND set
+  //     GRANTFLOW_SKIP_VERIFICATION_GATE=true (or NODE_ENV=test, etc.).
+  //   * Tests/seeds opt out via NODE_ENV=test, GRANTFLOW_SEED_MODE=true, or
+  //     ALLOW_EPHEMERAL_SQLITE=true.
+  const verifEnvRaw = String(process.env.URL_VERIFICATION_ENABLED || '').toLowerCase();
+  const verifExplicitlyDisabled = verifEnvRaw === 'false' || verifEnvRaw === '0' || verifEnvRaw === 'no';
+  const verifExplicitlyEnabled = verifEnvRaw === 'true' || verifEnvRaw === '1' || verifEnvRaw === 'yes';
   const skipGate =
     String(process.env.GRANTFLOW_SKIP_VERIFICATION_GATE || '').toLowerCase() === 'true' ||
     String(process.env.NODE_ENV || '').toLowerCase() === 'test' ||
     String(process.env.GRANTFLOW_SEED_MODE || '').toLowerCase() === 'true' ||
     String(process.env.ALLOW_EPHEMERAL_SQLITE || '').toLowerCase() === 'true';
 
-  if (isProdEnv && !urlVerifEnabled && !skipGate) {
+  if (isProdEnv && verifExplicitlyDisabled && !skipGate) {
     console.error(
-      '[reality-gate] FATAL: refusing to boot production without URL_VERIFICATION_ENABLED=true.\n' +
-        '  Set URL_VERIFICATION_ENABLED=true for live crawls, or set\n' +
+      '[reality-gate] FATAL: URL_VERIFICATION_ENABLED is explicitly false in production.\n' +
+        '  Either remove URL_VERIFICATION_ENABLED=false or set\n' +
         '  GRANTFLOW_SKIP_VERIFICATION_GATE=true to acknowledge a seed/import boot.\n' +
         '  Mission rule: opportunities must be verified before being shown as real funding.'
     );
     throw new Error('URL verification gate failed in production');
   }
+
+  if (isProdEnv && !verifExplicitlyEnabled && !verifExplicitlyDisabled) {
+    process.env.URL_VERIFICATION_ENABLED = 'true';
+    console.info(
+      '[reality-gate] URL_VERIFICATION_ENABLED defaulted to true (production mission rule).'
+    );
+  }
+
+  const urlVerifEnabled =
+    String(process.env.URL_VERIFICATION_ENABLED || '').toLowerCase() === 'true';
+
   if (!isProdEnv && !urlVerifEnabled && !skipGate) {
     console.warn(
       '[reality-gate] URL_VERIFICATION_ENABLED is not set. Live URL probing will be skipped at ingest.\n' +
