@@ -389,13 +389,19 @@ router.post('/comprehensiveMatch', async (req, res) => {
       signalAudit = { error: auditErr?.message ?? String(auditErr) }
     }
 
+    const wasRelaxed = matchThreshold < DEFAULT_MIN_SCORE
+    const relaxedReason = wasRelaxed
+      ? `No matches at default threshold ${DEFAULT_MIN_SCORE}; relaxed to ${matchThreshold} so you still see options. Complete your profile (location, needs, organization type) to improve match quality.`
+      : undefined
+
     res.json({
       success: true,
       opportunities: highScoring,
       total: highScoring.length,
       page,
       threshold_used: matchThreshold,
-      threshold_relaxed: matchThreshold < DEFAULT_MIN_SCORE ? true : undefined,
+      threshold_relaxed: wasRelaxed ? true : undefined,
+      threshold_relaxed_reason: relaxedReason,
       total_evaluated: scoredOpportunities.length,
       total_after_dedupe: dedupedOpportunities.length,
       trust_dropped: trustDroppedTotal,
