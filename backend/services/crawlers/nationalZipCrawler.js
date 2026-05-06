@@ -443,16 +443,48 @@ function generateUSZipCodes() {
 }
 
 /**
- * Search Grants.gov API for a specific ZIP code.
- * Uses the resilient grantsGovClient (API key, User-Agent, retries) rather than
- * raw axios — see grantsGovClient.js header comment.
+ * Search Grants.gov API for a specific ZIP code using a SET of broad-but-
+ * meaningful queries. Grants.gov has no ZIP filter, so the legacy "empty
+ * keyword" call surfaced random federal grants and tagged them to the ZIP
+ * — that's the broad blank ZIP search Phase 4 mission rule explicitly
+ * forbids ("do not call broad blank search as 'ZIP match.'").
+ *
+ * When called without a profile context, we use a small rotation of broad
+ * assistance categories that cover what most ZIP-driven lookups need
+ * (community development, rural, public safety, workforce). When called
+ * with a profile context, the dispatcher should pass profile-derived
+ * terms (see sourceRegistry.buildGrantsGovQueryTerms).
+ *
+ * Uses the resilient grantsGovClient (API key, User-Agent, retries) rather
+ * than raw axios — see grantsGovClient.js header comment.
  */
-async function searchGrantsGovByZip(zip, coords) {
-  try {
-    const { ok, opportunities: hits } = await searchGrants('', { rows: 10 })
-    if (!ok || !Array.isArray(hits) || hits.length === 0) return []
+async function searchGrantsGovByZip(zip, coords, opts = {}) {
+  const terms = Array.isArray(opts.searchTerms) && opts.searchTerms.length > 0
+    ? opts.searchTerms.filter((t) => typeof t === 'string' && t.trim().length > 0)
+    : ['community development', 'rural development', 'public safety', 'workforce development']
 
-    return hits.map((hit, idx) => {
+  try {
+    const allHits = []
+    const seenIds = new Set()
+    for (const term of terms.slice(0, 6)) {
+      try {
+        const { ok, opportunities: hits } = await searchGrants(term, { rows: 5 })
+        if (!ok || !Array.isArray(hits)) continue
+        for (const hit of hits) {
+          const id = hit.source_id || hit.id || hit.number || hit.title
+          const key = String(id || '').trim()
+          if (!key || seenIds.has(key)) continue
+          seenIds.add(key)
+          allHits.push(hit)
+        }
+      } catch (innerErr) {
+        console.warn(`[GeoCrawl] Grants.gov term="${term}" failed:`, innerErr?.message || innerErr)
+      }
+    }
+
+    if (allHits.length === 0) return []
+
+    return allHits.map((hit, idx) => {
       const sourceIdRaw = hit.source_id || hit.id || hit.number || null
       return {
         title: hit.title || hit.number || 'Grant opportunity',
