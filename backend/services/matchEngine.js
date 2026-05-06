@@ -2012,6 +2012,26 @@ export function computeMatchDecision(rawProfile, rawOpportunity, opts = {}) {
   const matchedProfileTraits = match_explain?.matchedSignals ?? []
   const missingEligibilityFields = []
 
+  // matched_profile_facts: a plain-language list of what specifically about
+  // the profile caused this opportunity to surface. Used by Anya, the result
+  // card, and the parity test as the canonical "why this matched" payload.
+  // Mission rule: "every displayed match should be able to answer 'what facts
+  // from my profile caused this to appear?'".
+  const matchedProfileFacts = []
+  if (Array.isArray(matchedNeeds)) {
+    for (const need of matchedNeeds) {
+      if (need) matchedProfileFacts.push(`Need: ${need}`)
+    }
+  }
+  if (Array.isArray(matchedProfileTraits)) {
+    for (const sig of matchedProfileTraits) {
+      if (sig) matchedProfileFacts.push(`Profile signal: ${sig}`)
+    }
+  }
+  if (profileNorm?.state) matchedProfileFacts.push(`Profile state: ${profileNorm.state}`)
+  if (profileNorm?.zip) matchedProfileFacts.push(`Profile ZIP: ${profileNorm.zip}`)
+  if (profileNorm?.entityType) matchedProfileFacts.push(`Applicant type: ${profileNorm.entityType}`)
+
   return {
     score,
     reasons,
@@ -2022,6 +2042,7 @@ export function computeMatchDecision(rawProfile, rawOpportunity, opts = {}) {
     ineligibilityReasons,
     matchedNeeds,
     matchedProfileTraits,
+    matched_profile_facts: matchedProfileFacts,
     missingEligibilityFields,
     needAlignment,
     confidence,

@@ -2,10 +2,24 @@ import { toSignalSet } from '../profileSignals/index.js';
 import { normalizeState, statesMatch } from '../../utils/stateNormalization.js';
 
 /**
- * matchEngine.js
+ * crawlers/matchEngine.js — CANDIDATE PREFILTER (NOT the match authority).
  *
- * Scores each program against a profile's needs assessment.
- * Returns ranked results with relevance scores.
+ * Mission rule: `computeMatchDecision()` from
+ * `backend/services/matchEngine.js` is the SOLE final scoring/decision
+ * authority for every user-facing result. This file produces a coarse
+ * "candidate prefilter" ranking that the crawler dispatcher uses to:
+ *
+ *   - decide which programs to keep in a strategy run
+ *   - sort retrieval batches before insertion
+ *   - drop obvious junk (informational pages, duplicates, intent mismatches)
+ *
+ * Its scores MUST NOT be persisted as the final match score for a user.
+ * Pipeline insertion (`saveToProfilePipeline`) re-runs `computeMatchDecision`
+ * and overwrites any score it sees.
+ *
+ * Importers/readers: do not promote `score`/`matchScore` from this engine
+ * into a saved grant or a displayed result. Use it only for retrieval-time
+ * ranking and dedupe.
  *
  * v4 — Improvements over v3:
  *   - State normalization: "TN" / "Tennessee" / "tn" all match correctly
@@ -781,4 +795,12 @@ export function matchPrograms(allPrograms, analysis, options = {}) {
   return sliced;
 }
 
-export default { scoreProgram, matchPrograms };
+/**
+ * Self-identifying role tag. Pipeline code that sees this tag knows the
+ * upstream scorer was a prefilter, not the final match authority. Used by
+ * tests/mission/mission-match-parity.test.mjs to assert that nothing
+ * persists a prefilter score as the final user-facing decision.
+ */
+export const PREFILTER_ROLE = 'CANDIDATE_PREFILTER'
+
+export default { scoreProgram, matchPrograms, PREFILTER_ROLE };

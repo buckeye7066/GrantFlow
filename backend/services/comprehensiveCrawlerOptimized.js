@@ -98,7 +98,14 @@ function normalizeState(state) {
 }
 
 /**
- * Calculate match score between opportunity and profile signals
+ * Calculate a prefilter match score between opportunity and profile signals.
+ *
+ * IMPORTANT — this is a CANDIDATE PREFILTER, NOT the match authority.
+ * `computeMatchDecision()` in `backend/services/matchEngine.js` is the SOLE
+ * scoring/decision authority. The score this function returns is used only
+ * to rank/keep candidate opportunities before insertion; the pipeline saver
+ * (`saveToProfilePipeline`) re-runs `computeMatchDecision` and overwrites
+ * any score it sees here.
  */
 function calculateOpportunityMatch(opp, signals, profileState) {
   let score = 0
