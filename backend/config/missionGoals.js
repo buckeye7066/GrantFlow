@@ -65,6 +65,12 @@ export const GRANTFLOW_GOALS = [
     short: 'Discovery to action',
     rule: 'Help users move from discovery to action by tracking opportunities, applications, deadlines, progress, and related documents. Full lifecycle: discovery → pipeline → proposals → documents → deadlines → monitoring.',
   },
+  {
+    id: 11,
+    short: 'Field-to-Funding accountability',
+    rule:
+      'Every profile field GrantFlow requests must earn its place. Each requested field must have a machine-readable usage contract showing how it improves source planning, crawler queries, eligibility scoring, match explanations, application workflows, document checklists, or Anya guidance. Sensitive identifiers (SSN, Green Card, Medicaid ID, raw immigration document numbers, detailed medical identifiers) are NEVER sent to crawlers or external search systems — they may only be used locally for application readiness or user-approved workflows. Any field without a tested usage contract must be removed, hidden until needed, or implemented before release.',
+  },
 ]
 
 // ─── Anya Mission Goals ──────────────────────────────────────────────────────

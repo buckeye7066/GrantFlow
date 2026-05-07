@@ -1124,6 +1124,44 @@ export function buildCoverageReport(plan, outcomes = []) {
 }
 
 /**
+ * Mission Goal 11 — Field-to-Funding Accountability.
+ *
+ * Returns true when a candidate query term looks like a private
+ * identifier (SSN, Medicaid ID, Green Card number, driver license,
+ * MRN) and must NEVER be sent to an external crawler. This is the
+ * last-line defense between the profile and grants.gov / SAM.gov / state
+ * portal HTTP requests; even if a caller smuggles a PII value into
+ * `signals.needs` or `signals.interests`, the patterns below filter it
+ * out before any HTTP request is built.
+ *
+ * Patterns rejected:
+ *   - SSN shapes (123-45-6789, 123456789 with dashes/spaces)
+ *   - long numeric runs (≥ 6 consecutive digits — covers Medicaid IDs,
+ *     account numbers, MRNs)
+ *   - Green-card-style A123456789 / I551 / EAD shapes
+ *   - anything containing the literal field-name tokens (ssn,
+ *     medicaid_id, green_card, mrn) regardless of value
+ *   - terms shorter than 2 characters or longer than 80 characters
+ */
+export function looksLikePiiTerm(term) {
+  const t = String(term ?? '').trim()
+  if (!t) return true
+  if (t.length < 2 || t.length > 80) return true
+  const lower = t.toLowerCase()
+  // Reject anything mentioning a known PII field name as a plain token.
+  if (/\b(ssn|social[\s_-]*security|medicaid[\s_-]*id|tenncare[\s_-]*id|green[\s_-]*card|mrn|medical[\s_-]*record|i[\s_-]*551|drivers?[\s_-]*license|passport[\s_-]*number)\b/.test(lower)) {
+    return true
+  }
+  // SSN shape: 9 digits with optional dashes/spaces.
+  if (/\b\d{3}[\s-]?\d{2}[\s-]?\d{4}\b/.test(t)) return true
+  // Long numeric run (Medicaid ID, account number, MRN).
+  if (/\d{6,}/.test(t)) return true
+  // USCIS A-number / EAD pattern.
+  if (/\b[A-Z]\d{8,}\b/.test(t)) return true
+  return false
+}
+
+/**
  * Build a sanitized list of grants.gov-friendly query terms from a profile
  * context. This replaces the legacy "search with empty keyword" call that
  * Phase 4 mission rule explicitly forbids ("do not call broad blank search
@@ -1132,6 +1170,10 @@ export function buildCoverageReport(plan, outcomes = []) {
  * Returns at most `limit` non-blank, non-pii terms. Falls back to a small
  * set of broadly useful federal-grant categories when the profile is empty
  * — this preserves recall without sending an empty query.
+ *
+ * Goal 11: every candidate term is run through looksLikePiiTerm() before
+ * being added to the output set, so even if a caller injects a PII value
+ * via signals.needs or signals.interests, it never reaches the crawler.
  */
 export function buildGrantsGovQueryTerms(profileContext = {}, opts = {}) {
   const limit = Math.max(1, Math.min(Number(opts.limit) || 8, 16))
@@ -1152,13 +1194,14 @@ export function buildGrantsGovQueryTerms(profileContext = {}, opts = {}) {
   for (const need of setOrArrayToArray(signals?.needs)) candidates.push(String(need).replace(/_/g, ' '))
   for (const interest of setOrArrayToArray(signals?.interests)) candidates.push(String(interest).replace(/_/g, ' '))
 
-  // De-dupe + drop empties + cap
+  // De-dupe + drop empties + drop PII-looking terms + cap
   const seen = new Set()
   const out = []
   for (const t of candidates) {
     const v = String(t).trim().toLowerCase()
     if (!v) continue
     if (seen.has(v)) continue
+    if (looksLikePiiTerm(v)) continue
     seen.add(v)
     out.push(v)
     if (out.length >= limit) break
@@ -1191,4 +1234,5 @@ export default {
   planCoverage,
   buildCoverageReport,
   buildGrantsGovQueryTerms,
+  looksLikePiiTerm,
 }

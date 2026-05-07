@@ -31,6 +31,8 @@
 import { promises as fsPromises } from 'fs'
 import path from 'path'
 import { MATCHER_VERSION } from './matchEngine.js'
+import { buildFieldUsageReport } from './profileFieldUsageRegistry.js'
+import { listProfileTypes, recommendedSourcesFor, recommendStrategyFor } from './profileTypeRegistry.js'
 
 const TARGETS = Object.freeze({
   verified_pct_min: 95,
@@ -276,6 +278,51 @@ export async function buildMissionHealth(db) {
     })
   }
 
+  // ── Goal 11: field-to-funding accountability ────────────────────────
+  // Surface field-usage coverage and per-profile-type source coverage so
+  // the dashboard can show "Field usage coverage: 100% / Unused
+  // requested fields: 0 / PII query violations: 0 / Profile source
+  // coverage: 100%" the way the audit asked for.
+  const fieldUsage = buildFieldUsageReport()
+  if (fieldUsage.unmapped_fields > 0) {
+    alerts.push({
+      level: 'warn',
+      code: 'unmapped_profile_fields',
+      detail: `${fieldUsage.unmapped_fields} profile fields are missing usage contracts (Goal 11).`,
+    })
+  }
+  if (fieldUsage.pii_external_query_violations > 0) {
+    alerts.push({
+      level: 'error',
+      code: 'pii_external_query_violation',
+      detail: `${fieldUsage.pii_external_query_violations} PII fields are configured for external/crawler use (Goal 11 forbids this).`,
+    })
+  }
+  if (fieldUsage.unknown_source_categories.length > 0) {
+    alerts.push({
+      level: 'warn',
+      code: 'field_usage_references_unknown_source',
+      detail: `Field-usage registry references ${fieldUsage.unknown_source_categories.length} source ids that are not in sourceRegistry: ${fieldUsage.unknown_source_categories.join(', ')}`,
+    })
+  }
+
+  const profileTypesBelowMin = []
+  let profileTypesWithPlan = 0
+  for (const pt of listProfileTypes()) {
+    const sources = recommendedSourcesFor(pt.id)
+    const hasStrategy = !!recommendStrategyFor(pt.id)
+    const hasMin = sources.length >= 3
+    if (hasStrategy && hasMin) profileTypesWithPlan += 1
+    if (!hasMin) profileTypesBelowMin.push({ id: pt.id, recommended_sources: sources.length })
+  }
+  if (profileTypesBelowMin.length > 0) {
+    alerts.push({
+      level: 'warn',
+      code: 'profile_types_below_source_minimum',
+      detail: `${profileTypesBelowMin.length} profile types have fewer than 3 recommended sources (Goal 11).`,
+    })
+  }
+
   return {
     ok: alerts.every((a) => a.level !== 'error'),
     generated_at: generatedAt,
@@ -296,6 +343,12 @@ export async function buildMissionHealth(db) {
     coverage_by_source: coverage,
     application_funnel: funnel,
     integration,
+    field_usage: {
+      ...fieldUsage,
+      profile_types_with_source_plan: profileTypesWithPlan,
+      profile_types_total: listProfileTypes().length,
+      profile_types_below_source_minimum: profileTypesBelowMin,
+    },
     alerts,
   }
 }

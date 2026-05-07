@@ -167,7 +167,12 @@ export const PROFILE_TYPES = Object.freeze({
     parentTypes: [],
     defaultNeeds: ['business', 'startup'],
     requiredProfileFields: ['state'],
-    recommendedSources: [SOURCE_IDS.SBA_GRANTS, SOURCE_IDS.GRANTS_GOV],
+    recommendedSources: [
+      SOURCE_IDS.SBA_GRANTS,
+      SOURCE_IDS.GRANTS_GOV,
+      SOURCE_IDS.STATE_PORTAL,
+      SOURCE_IDS.EDA_ECONOMIC_DEVELOPMENT,
+    ],
     recommendedStrategy: 'comprehensive',
     anyaLabel: 'Small business',
     summary: 'Small business looking for grants and startup capital.',
