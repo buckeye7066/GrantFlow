@@ -1749,6 +1749,8 @@ app.use('/api/billing-settings', billingSettingsRouter);
 app.use('/api/contact-methods', contactMethodsRouter);
 app.use('/api/source-directory', sourceDirectoryRouter);
 app.use('/api/items', itemsRouter);
+// Mission Goal 11 — expose the canonical field-usage registry to the UI/Anya.
+app.use('/api/field-usage', lazyRouter('./routes/fieldUsage.js'));
 const PIPELINE_TIMEOUT = Number(process.env.PIPELINE_TIMEOUT_MS || 30000)
 app.use('/api/ai', requestTimeout(PIPELINE_TIMEOUT), aiRouter);
 app.use('/api/anya', anyaRouter);

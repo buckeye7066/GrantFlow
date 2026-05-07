@@ -62,6 +62,12 @@ import { scoreOpportunity, computeMatchDecision } from './matchEngine.js'
 import { loadProfileContext } from './profileHelpers.js'
 import { syncProfileFieldsFromSection } from '../utils/profileSectionSync.js'
 import { guardProfileSectionForWrite } from '../utils/guardedProfileSectionWrite.js'
+import {
+  getFieldUsage,
+  listFieldUsages,
+  buildFieldUsageReport,
+  forSection,
+} from './profileFieldUsageRegistry.js'
 
 const tools = new Map()
 
@@ -3223,6 +3229,115 @@ registerTool({
     })
     const hasInlineData = !inlineSummary.includes('No audit data yet')
     return { summary: hasInlineData ? inlineSummary : cgGetAuditSummary(db) }
+  },
+})
+
+// ──────────────────────────────────────────────────────────────────────
+// Goal 11 — Field-to-Funding accountability tools
+//
+// Anya users frequently ask "why are you asking for this?" or "what does
+// this field do for me?". Surfacing the canonical usage contract from
+// profileFieldUsageRegistry as Anya tools means Anya never has to
+// improvise an answer — she returns the same machine-readable contract
+// the UI tooltip and the mission-health dashboard see.
+// ──────────────────────────────────────────────────────────────────────
+
+registerTool({
+  name: 'fieldUsage.explain',
+  description:
+    'Explain why GrantFlow asks for a specific profile field. Returns the canonical why_we_ask copy, usage modes, source categories, PII status, and match-reason from the Goal 11 profileFieldUsageRegistry. Use whenever the user asks "why do you need X?" or wants to understand a profile field.',
+  schema: {
+    type: 'object',
+    properties: {
+      field_id: {
+        type: 'string',
+        description:
+          'Canonical field id (e.g. "organization.uei", "pii.ssn", "narrative.story"). Must exist in profileFieldUsageRegistry.',
+      },
+    },
+    required: ['field_id'],
+  },
+  handler: async ({ field_id }) => {
+    const id = String(field_id || '').trim()
+    if (!id) {
+      const error = new Error('field_id is required')
+      error.status = 400
+      throw error
+    }
+    const entry = getFieldUsage(id)
+    if (!entry) {
+      const error = new Error(
+        `Unknown field id "${id}". Field must be registered in profileFieldUsageRegistry (Goal 11).`,
+      )
+      error.status = 404
+      throw error
+    }
+    return {
+      field_id: id,
+      label: entry.label,
+      section: entry.section,
+      pii: entry.pii,
+      raw_external_use_allowed: entry.raw_external_use_allowed,
+      usage_modes: entry.usage_modes,
+      source_categories: entry.source_categories,
+      query_use: entry.query_use,
+      match_reason: entry.match_reason,
+      why_we_ask: entry.why_we_ask,
+      applies_to_profile_types: entry.applies_to_profile_types,
+    }
+  },
+})
+
+registerTool({
+  name: 'fieldUsage.listForSection',
+  description:
+    'List all profile fields registered in the Goal 11 profileFieldUsageRegistry for a given section (e.g. "organization_details", "pii", "financial_information"). Useful when a user is on a specific profile page and asks "what does this whole section do?".',
+  schema: {
+    type: 'object',
+    properties: {
+      section: {
+        type: 'string',
+        description: 'Section slug from the registry.',
+      },
+    },
+    required: ['section'],
+  },
+  handler: async ({ section }) => {
+    const slug = String(section || '').trim()
+    if (!slug) {
+      const error = new Error('section is required')
+      error.status = 400
+      throw error
+    }
+    const entries = forSection(slug)
+    return {
+      section: slug,
+      count: entries.length,
+      entries: entries.map((entry) => ({
+        field_id: entry.id,
+        label: entry.label,
+        pii: entry.pii,
+        usage_modes: entry.usage_modes,
+        why_we_ask: entry.why_we_ask,
+      })),
+    }
+  },
+})
+
+registerTool({
+  name: 'fieldUsage.coverageReport',
+  description:
+    'Return the Goal 11 field-usage coverage report — total fields, mapped fields, PII fields, PII-external-query violations, unmapped sections. Use when a user (or admin) asks "how complete is the field-usage registry?" or "are we leaking any PII?".',
+  schema: { type: 'object', properties: {} },
+  handler: async () => {
+    const report = buildFieldUsageReport()
+    const total = listFieldUsages().length
+    return {
+      // total_fields is preserved as an alias for older callers; the
+      // canonical name from the registry is total_profile_fields.
+      total_fields: total,
+      ...report,
+    }
   },
 })
 

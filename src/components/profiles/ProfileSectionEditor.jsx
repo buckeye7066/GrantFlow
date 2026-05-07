@@ -22,6 +22,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
 import ProfileFieldWithAI from "@/components/profiles/ProfileFieldWithAI"
 import { SECTION_METADATA } from "@/config/sectionMetadata"
+import FieldHelpTip from "@/components/help/FieldHelpTip"
 
 function isPlainObject(value) {
   if (!value || typeof value !== 'object') return false
@@ -1637,7 +1638,12 @@ export default function ProfileSectionEditor({
                       key={field.name}
                     >
                       <div className="space-y-1">
-                        <Label htmlFor={field.name}>{field.label}</Label>
+                        <Label htmlFor={field.name} className="flex items-center gap-1">
+                          <span>{field.label}</span>
+                          {/* Goal 11 — surface "why we ask" from profileFieldUsageRegistry.
+                              Unknown ids degrade silently inside FieldHelpTip. */}
+                          <FieldHelpTip id={`${sectionKey}.${field.name}`} />
+                        </Label>
                         {field.description && <p className="text-xs text-slate-500">{field.description}</p>}
                       </div>
                       <Controller

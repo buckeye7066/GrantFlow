@@ -19,7 +19,7 @@ import {
 import { scoreOpportunity, makeDecision } from '../services/matchEngine.js'
 import { runAllDomainEngines } from '../services/crawlers/domainEngines/index.js'
 import { crawlStateWaiverBenefits, evaluateStateWaiverEligibility } from '../services/crawlers/stateWaiverBenefitsCrawler.js'
-import { planCoverage, buildCoverageReport, buildGrantsGovQueryTerms } from '../services/sourceRegistry.js'
+import { planCoverage, buildCoverageReport, buildGrantsGovQueryTerms, getSource } from '../services/sourceRegistry.js'
 
 import { createLogger } from '../utils/logger.js'
 const routeLogger = createLogger('route:realCrawlers')
@@ -253,7 +253,13 @@ router.post('/run', ensureAuth, async (req, res) => {
     let coverageReport = null
     try {
       coveragePlan = planCoverage(profileContext)
-      coverageReport = buildCoverageReport(profileContext, coveragePlan)
+      // Bug fix: buildCoverageReport(plan, outcomes) — earlier code passed
+      // (profileContext, coveragePlan) which made `plan` undefined-shaped
+      // and `outcomes` non-iterable, so the report was silently empty.
+      // We don't have per-source crawl outcomes at plan-time so we pass
+      // an empty outcomes array; the report still surfaces the planned
+      // sources, profile type, and gaps the UI / Anya consume.
+      coverageReport = buildCoverageReport(coveragePlan, [])
       routeLogger.info(
         `[RealCrawlers] coverage plan: ${coveragePlan?.sources_planned?.length ?? 0} sources for profile_type=${coverageReport?.profile_type ?? 'unknown'}`,
       )
@@ -546,9 +552,25 @@ router.post('/run', ensureAuth, async (req, res) => {
       used_curated: true,
       // Phase 4 mission rule: every crawler run reports its profile-aware
       // source plan so admins / Anya / CI can answer "did we even query a
-      // relevant source for this profile?".
+      // relevant source for this profile?". The flat `source_labels` map
+      // lets the UI render human names (Goal 7 — clear discovery UI) without
+      // round-tripping the registry.
       coverage_plan: coveragePlan,
       coverage_report: coverageReport,
+      source_labels: (() => {
+        const ids = new Set([
+          ...(coveragePlan?.sources_planned ?? []),
+          ...(coverageReport?.sources_required ?? []),
+          ...(coverageReport?.sources_queried ?? []),
+          ...(coverageReport?.coverage_gaps ?? []),
+        ])
+        const out = {}
+        for (const id of ids) {
+          const src = getSource(id)
+          if (src) out[id] = { label: src.label, directory: !!src.directory, trust: src.trust ?? null }
+        }
+        return out
+      })(),
       debug: {
         strategy: result.debug?.strategy || crawler_type,
         intents: result.debug?.intents || [],

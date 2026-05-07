@@ -11,6 +11,7 @@ import { Button } from '@/components/ui/button';
 import { Loader2, Search, User, Lightbulb, ArrowRight, CheckCircle2, AlertTriangle, MessageCircle } from 'lucide-react';
 import HelpTip from '@/components/help/HelpTip';
 import SearchResults from '@/components/discovery/SearchResults';
+import SearchCoveragePanel from '@/components/discovery/SearchCoveragePanel';
 import { Badge } from '@/components/ui/badge';
 import { useToast } from '@/components/ui/use-toast';
 import { Alert, AlertDescription } from '@/components/ui/alert';
@@ -88,6 +89,9 @@ export default function DiscoverGrants() {
   const [categoryQuery, setCategoryQuery] = useState(null)
   const [scoreHint, setScoreHint] = useState(null)
   const [crawlerResultMeta, setCrawlerResultMeta] = useState(null)
+  // Mission Goal 7: capture coverage data from the API so the user can see
+  // which source families GrantFlow planned, queried, and missed.
+  const [coverageInfo, setCoverageInfo] = useState(null)
   const profileSelectorRef = React.useRef(null)
   const searchActionsRef = React.useRef(null)
   const resultsRef = React.useRef(null)
@@ -163,6 +167,7 @@ export default function DiscoverGrants() {
   useEffect(() => {
     setSearchResults([]);
     setCrawlerResultMeta(null);
+    setCoverageInfo(null);
     setHasSearched(false);
     setProfileCompletionHint(null);
     queryClient.invalidateQueries({ queryKey: ['discover-catalog'] });
@@ -473,6 +478,14 @@ export default function DiscoverGrants() {
     log.debug('processing crawler results', { count: opportunities.length })
     const resultMeta = normalizeResultMetadata(responsePayload, opportunities)
     setCrawlerResultMeta(resultMeta)
+    if (responsePayload && (responsePayload.coverage_plan || responsePayload.coverage_report)) {
+      setCoverageInfo({
+        plan: responsePayload.coverage_plan ?? null,
+        report: responsePayload.coverage_report ?? null,
+        labels: responsePayload.source_labels ?? null,
+        crawlerType: responsePayload.crawler_type ?? null,
+      })
+    }
     
     // Auto-add high-confidence matches (≥70%).
     let addedCount = 0
@@ -1229,6 +1242,18 @@ export default function DiscoverGrants() {
             </CardContent>
           </Card>
         )}
+
+        {/* Mission Goal 7 — Search coverage panel: which source families GrantFlow
+            planned, queried, and missed for this profile + strategy. Renders above
+            the results so users can trust why they see what they see. */}
+        {coverageInfo && (coverageInfo.plan || coverageInfo.report) ? (
+          <SearchCoveragePanel
+            coveragePlan={coverageInfo.plan}
+            coverageReport={coverageInfo.report}
+            sourceLabels={coverageInfo.labels}
+            crawlerType={coverageInfo.crawlerType}
+          />
+        ) : null}
 
         {/* Results Display: catalog matches (real grants from DB) + crawler results (directories/live crawl), deduped */}
         {((catalogOpportunities.length > 0) || searchResults.length > 0) && (

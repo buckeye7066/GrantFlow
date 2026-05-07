@@ -13,6 +13,7 @@ import MultiSelectCombobox from "../shared/MultiSelectCombobox";
 import AIFormField from "../shared/AIFormField";
 import { useToast } from '@/components/ui/use-toast';
 import { listBillingTiers } from "@/api/billing";
+import FieldHelpTip from "@/components/help/FieldHelpTip";
 
 const US_STATES = ["AL","AK","AZ","AR","CA","CO","CT","DE","FL","GA","HI","ID","IL","IN","IA","KS","KY","LA","ME","MD","MA","MI","MN","MS","MO","MT","NE","NV","NH","NJ","NM","NY","NC","ND","OH","OK","OR","PA","RI","SC","SD","TN","TX","UT","VT","VA","WA","WV","WI","WY"];
 
@@ -1396,11 +1397,17 @@ Focus areas should be:
               <h3 className="text-lg font-semibold text-slate-800">Organization Details</h3>
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <div>
-                  <Label htmlFor="ein">EIN</Label>
+                  <Label htmlFor="ein" className="flex items-center gap-1">
+                    EIN
+                    <FieldHelpTip id="organization.ein" />
+                  </Label>
                   <Input id="ein" name="ein" value={formData.ein} onChange={handleChange} />
                 </div>
                 <div>
-                  <Label htmlFor="uei">UEI Number</Label>
+                  <Label htmlFor="uei" className="flex items-center gap-1">
+                    UEI Number
+                    <FieldHelpTip id="organization.uei" />
+                  </Label>
                   <Input id="uei" name="uei" value={formData.uei} onChange={handleChange} />
                 </div>
                 <div>
@@ -2579,17 +2586,26 @@ DRAFT for "special circumstances":`}
               </div>
             </div>
             <div className="space-y-2">
-              <Label htmlFor="uei">UEI (Unique Entity Identifier)</Label>
+              <Label htmlFor="uei" className="flex items-center gap-1">
+                UEI (Unique Entity Identifier)
+                <FieldHelpTip id="organization.uei" />
+              </Label>
               <Input id="uei" name="uei" value={formData.uei} onChange={handleChange} placeholder="SAM.gov UEI" />
             </div>
             <div className="flex flex-wrap gap-4">
               <div className="flex items-center space-x-2">
                 <Checkbox id="sam_registered" name="sam_registered" checked={formData.sam_registered} onCheckedChange={(checked) => handleChange({ target: { name: 'sam_registered', type: 'checkbox', checked } })} />
-                <Label htmlFor="sam_registered">SAM.gov Registered</Label>
+                <Label htmlFor="sam_registered" className="flex items-center gap-1">
+                  SAM.gov Registered
+                  <FieldHelpTip id="organization.sam_registered" />
+                </Label>
               </div>
               <div className="flex items-center space-x-2">
                 <Checkbox id="faith_based" name="faith_based" checked={formData.faith_based} onCheckedChange={(checked) => handleChange({ target: { name: 'faith_based', type: 'checkbox', checked } })} />
-                <Label htmlFor="faith_based">Faith-Based</Label>
+                <Label htmlFor="faith_based" className="flex items-center gap-1">
+                  Faith-Based
+                  <FieldHelpTip id="organization.faith_based" />
+                </Label>
               </div>
               <div className="flex items-center space-x-2">
                 <Checkbox id="rural" name="rural" checked={formData.rural} onCheckedChange={(checked) => handleChange({ target: { name: 'rural', type: 'checkbox', checked } })} />
