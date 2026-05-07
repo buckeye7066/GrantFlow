@@ -272,7 +272,7 @@ export default function Layout({ children, currentPageName }) {
               </div>
             ) : profiles?.length > 0 ? (
               <div>
-                <Select value={selectedProfileId} onValueChange={handleProfileChange}>
+                <Select value={selectedProfileId || undefined} onValueChange={handleProfileChange}>
                   <SelectTrigger className="w-full">
                     <SelectValue placeholder="Switch profile" />
                   </SelectTrigger>

@@ -900,7 +900,14 @@ export default function DiscoverGrants() {
             {/* Profile Selector */}
             <div className="mb-6" ref={profileSelectorRef}>
               <Label className="text-base font-semibold mb-3 block">Select Profile</Label>
-              <Select value={selectedProfileId} onValueChange={setSelectedProfileId}>
+              {/* Radix Select treats `value=""` as a special "uncontrolled"
+                  sentinel and warns when the prop later becomes a real id —
+                  pass undefined when nothing is selected so the placeholder
+                  renders without flipping controlled/uncontrolled. */}
+              <Select
+                value={selectedProfileId || undefined}
+                onValueChange={(v) => setSelectedProfileId(v ?? '')}
+              >
                 <SelectTrigger className="h-12">
                   <SelectValue placeholder="Choose a profile..." />
                 </SelectTrigger>

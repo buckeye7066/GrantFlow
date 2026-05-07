@@ -311,7 +311,7 @@ export default function AdminGeoCrawl() {
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div className="space-y-2">
               <Label>State</Label>
-              <Select value={selectedState} onValueChange={setSelectedState}>
+              <Select value={selectedState || undefined} onValueChange={(v) => setSelectedState(v ?? '')}>
                 <SelectTrigger className="bg-white text-slate-900 border-slate-300 placeholder:text-slate-400 focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 focus-visible:ring-offset-white">
                   <SelectValue placeholder={loading ? "Loading..." : "Select a state"} />
                 </SelectTrigger>

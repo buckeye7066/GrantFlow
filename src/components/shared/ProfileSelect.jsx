@@ -82,7 +82,13 @@ export default function ProfileSelect({
   }
 
   return (
-    <Select value={value} onValueChange={onValueChange} disabled={disabled}>
+    <Select
+      // Pass undefined when empty to satisfy Radix's controlled-vs-
+      // uncontrolled invariant — `value=""` is its forbidden sentinel.
+      value={value || undefined}
+      onValueChange={(v) => onValueChange?.(v ?? '')}
+      disabled={disabled}
+    >
       <SelectTrigger className={className}>
         <SelectValue placeholder={placeholder} />
       </SelectTrigger>

@@ -182,8 +182,8 @@ export default function ProfileMatcher() {
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <div className="md:col-span-2">
                 <Select
-                  value={selectedProfileId}
-                  onValueChange={setSelectedProfileId}
+                  value={selectedProfileId || undefined}
+                  onValueChange={(v) => setSelectedProfileId(v ?? '')}
                   disabled={isLoadingProfiles || isMatching}
                 >
                   <SelectTrigger className="h-12">
