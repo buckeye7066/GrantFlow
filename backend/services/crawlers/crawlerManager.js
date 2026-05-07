@@ -29,6 +29,7 @@ import { FAMILY_PROGRAMS } from './data/familyPrograms.js';
 import { SCHOOL_PROGRAMS } from './data/schoolPrograms.js';
 import { VOLUNTEER_FIRE_PROGRAMS } from './data/volunteerFirePrograms.js';
 import { generateStatePrograms, isStateInRegistry } from './data/stateBase.js';
+import { enrichSchool } from './data/knownSchools.js';
 import { upsertFundingOpportunity } from '../opportunityInserter.js';
 
 // ── Schema bootstrap ──
@@ -236,17 +237,22 @@ function loadCandidates(strategy, stateData, analysis, intents) {
 
 // ── School cards generator ──
 
-function generateSchoolCards(analysis) {
+export function generateSchoolCards(analysis) {
   const schools = analysis.schools || [];
   if (schools.length === 0) return [];
   const cards = [];
   const gender = analysis.demographics?.has?.('female') ? 'female' : (analysis.demographics?.has?.('male') ? 'male' : null);
 
-  for (const school of schools) {
+  for (const rawSchool of schools) {
+    // Enrich with knownSchools registry — fills in real institutional URLs
+    // (financial aid, housing, off-campus, scholarships, admissions) for any
+    // school the user typed by name. Falls through unchanged when unknown.
+    const school = enrichSchool(rawSchool) || rawSchool;
     const prefix = school.name;
     const slug = (school.id || school.name).replace(/\s+/g, '-').toLowerCase();
     const baseScore = 85;
     const hasPortal = !!school.portals?.financialAid;
+    const matchedRegistry = !!school.knownSchoolMatched;
     const searchUrl = `https://www.google.com/search?q=${encodeURIComponent(school.name + ' financial aid office')}`;
     const finaidUrl = school.portals?.financialAid || school.website || searchUrl;
 
@@ -259,7 +265,10 @@ function generateSchoolCards(analysis) {
       type: 'school_portal',
       fundingType: 'institutional_aid',
       matchScore: hasPortal ? baseScore + 5 : baseScore - 5,
-      matchReasons: [`Target school: ${prefix}`, hasPortal ? 'Financial aid portal linked' : 'Portal URL not yet added'],
+      matchReasons: [
+        `Target school: ${prefix}`,
+        hasPortal ? 'Financial aid portal linked' : 'Portal URL not yet added',
+      ],
       contact: extractPrimaryContact(school.contacts, 'Financial Aid'),
       schoolName: prefix,
     });
@@ -280,20 +289,56 @@ function generateSchoolCards(analysis) {
       });
     }
 
-    // Housing / off-campus resources card
-    const housingUrl = school.portals?.housing || `https://www.google.com/search?q=${encodeURIComponent(school.name + ' off-campus housing scholarships student housing')}`;
+    // On-campus housing & residence life card — links to the school's housing
+    // office when known, otherwise a Google search.
+    const housingUrl =
+      school.portals?.housing
+      || `https://www.google.com/search?q=${encodeURIComponent(school.name + ' housing residence life')}`;
+    const housingHasReal = !!school.portals?.housing;
     cards.push({
       id: `school-housing-${slug}`,
-      name: `${prefix} — Housing & Off-Campus Resources`,
-      description: `Search for housing scholarships, off-campus assistance, and student housing resources at ${prefix}. Many schools offer emergency housing funds and cost-of-attendance adjustments that cover off-campus rent.`,
+      name: `${prefix} — Housing & Residence Life`,
+      description: `Apply for on-campus housing, learn about residence hall scholarships, and review the cost of attendance for housing at ${prefix}. Many schools offer emergency housing funds and cost-of-attendance adjustments that can be applied toward room and board.`,
       url: housingUrl,
       categories: ['education', 'housing', 'scholarship'],
       type: 'school_portal',
       fundingType: 'institutional_aid',
-      matchScore: baseScore,
-      matchReasons: [`Housing resources for target school: ${prefix}`],
+      matchScore: housingHasReal ? baseScore + 3 : baseScore,
+      matchReasons: [
+        `Housing resources for target school: ${prefix}`,
+        housingHasReal ? 'On-campus housing portal linked' : 'Portal URL not yet added',
+      ],
       contact: extractPrimaryContact(school.contacts, 'Housing') || extractPrimaryContact(school.contacts, 'Financial Aid'),
       schoolName: prefix,
+    });
+
+    // Off-campus housing card — only emitted as a separate, distinct card
+    // when we have a verified off-campus URL for the school. This is the
+    // exact card a student looking for "off-campus housing scholarships /
+    // grants for MTSU" expects. When unknown, fall back to a generic
+    // off-campus search card so the user still gets *something* actionable.
+    const offCampusHasReal = !!school.portals?.offCampusHousing;
+    const offCampusUrl =
+      school.portals?.offCampusHousing
+      || `https://www.google.com/search?q=${encodeURIComponent(school.name + ' off-campus housing student rent assistance')}`;
+    cards.push({
+      id: `school-offcampus-${slug}`,
+      name: `${prefix} — Off-Campus Housing & Rent Assistance`,
+      description: `Find off-campus apartments, roommate boards, and rent-assistance resources affiliated with ${prefix}. Federal Pell Grants, Federal Work-Study, and TN HOPE refunds can all be applied to off-campus rent and utilities — talk to ${prefix}'s financial aid office about a Cost-of-Attendance (COA) appeal if your actual rent exceeds the standard COA budget.`,
+      url: offCampusUrl,
+      categories: ['education', 'housing', 'scholarship'],
+      type: 'school_portal',
+      fundingType: 'institutional_aid',
+      matchScore: offCampusHasReal ? baseScore + 4 : baseScore - 2,
+      matchReasons: [
+        `Off-campus housing resources for target school: ${prefix}`,
+        offCampusHasReal
+          ? 'Verified off-campus housing portal linked'
+          : 'Portal URL not yet added — using public search fallback',
+      ],
+      contact: extractPrimaryContact(school.contacts, 'Housing') || extractPrimaryContact(school.contacts, 'Financial Aid'),
+      schoolName: prefix,
+      knownSchoolMatched: matchedRegistry,
     });
 
     // Scholarship search card specific to this school
