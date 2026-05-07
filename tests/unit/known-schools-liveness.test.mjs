@@ -43,6 +43,19 @@ function hostnameOf(u) {
   try { return new URL(u).hostname } catch { return '' }
 }
 
+// HTTP status codes that prove the server is alive even when the bot is
+// being refused. A 403 from CloudFront or a 429 from a rate-limiter is NOT
+// the same as a 404: the URL is real, the page is reachable for human
+// visitors, but the GitHub-Actions IP / `node-fetch`-style UA is blocked.
+// Treating these as "dead" caused 5 university off-campus housing /
+// scholarship portals (UCF, PSU LivingOffCampus, Seton Hall, OSU SFA,
+// Harvard Off-Campus Housing) to flap red on every CI run after they
+// started bot-blocking AWS IPs in May 2026, even though every URL is
+// confirmed-live in a browser.
+const ALIVE_BUT_BLOCKED_STATUSES = new Set([401, 403, 405, 407, 429, 451])
+// Status codes that prove the URL is dead.
+const DEFINITELY_DEAD_STATUSES = new Set([404, 410])
+
 async function probe(url) {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS)
@@ -58,6 +71,15 @@ async function probe(url) {
         'Accept-Encoding': 'gzip, deflate, br',
       },
     })
+    if (DEFINITELY_DEAD_STATUSES.has(res.status)) {
+      return { ok: false, status: res.status, looksDead: false, blocked: false }
+    }
+    if (ALIVE_BUT_BLOCKED_STATUSES.has(res.status)) {
+      // Server is up; bot is being refused. Don't read the body — many
+      // WAFs return marketing HTML on 403 and the dead-page text matcher
+      // would false-positive.
+      return { ok: true, status: res.status, looksDead: false, blocked: true }
+    }
     const text = await res.text().catch(() => '')
     const lowered = text.toLowerCase()
     const looksDead =
@@ -65,7 +87,7 @@ async function probe(url) {
       /<title[^>]*>[^<]*page not found[^<]*<\/title>/.test(lowered) ||
       /<title[^>]*>\s*404[^<]*<\/title>/.test(lowered) ||
       /<title[^>]*>\s*not found[^<]*<\/title>/.test(lowered)
-    return { ok: res.ok && !looksDead, status: res.status, looksDead }
+    return { ok: res.ok && !looksDead, status: res.status, looksDead, blocked: false }
   } catch (e) {
     return { ok: false, status: 0, error: String(e?.message ?? e) }
   } finally {
