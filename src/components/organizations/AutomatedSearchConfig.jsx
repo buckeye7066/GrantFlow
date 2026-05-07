@@ -163,7 +163,7 @@ export default function AutomatedSearchConfig({ organization, open, onClose }) {
             </div>
 
             <div className="space-y-3">
-              <Label>Minimum Match Score: {config.min_match_score}%</Label>
+              <Label>Minimum match score: {config.min_match_score}%</Label>
               <Slider
                 value={[config.min_match_score]}
                 onValueChange={(values) => setConfig({ ...config, min_match_score: values[0] })}

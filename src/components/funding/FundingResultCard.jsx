@@ -153,11 +153,25 @@ export default function FundingResultCard({ result, onPrimaryAction, onSecondary
     >
       <header className="flex items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
+          {/* Three small chips that map 1:1 to the onboarding script's
+              "opportunity type / source trust / link status" wording.
+              Visible label prefixes keep narration aligned with what the
+              viewer sees on screen. */}
           <div className="flex flex-wrap items-center gap-2 text-xs uppercase tracking-wide">
-            <span className="rounded bg-slate-100 px-2 py-0.5 text-slate-700">
+            <span
+              className="rounded bg-slate-100 px-2 py-0.5 text-slate-700"
+              title="Opportunity type — direct grant, directory, school portal, or referral resource"
+            >
+              <span className="text-slate-500 normal-case">Type: </span>
               {KIND_LABEL[kind] ?? 'Opportunity'}
             </span>
-            <span className="text-slate-500">{TIER_LABEL[tier] ?? tier}</span>
+            <span
+              className="text-slate-600"
+              title="Source trust tier — how authoritative the funder is (official API, official portal, verified directory, …)"
+            >
+              <span className="normal-case text-slate-500">Source trust: </span>
+              {TIER_LABEL[tier] ?? tier}
+            </span>
             <span
               className={
                 isBroken
@@ -166,7 +180,9 @@ export default function FundingResultCard({ result, onPrimaryAction, onSecondary
                     ? 'text-emerald-600'
                     : 'text-amber-600'
               }
+              title="Link status — whether GrantFlow has verified the application URL is live"
             >
+              <span className="normal-case text-slate-500">Link status: </span>
               {LINK_STATUS_LABEL[linkStatus] ?? linkStatus}
             </span>
           </div>

@@ -440,7 +440,7 @@ export default function SmartMatcher() {
                                                                           ) : null}
                                                           </div>
                                                           <div>
-                                                                          <Label>Minimum Match Score</Label>
+                                                                          <Label>Minimum match score</Label>
                                                                           <div className="flex items-center gap-2">
                                                                                             <SlidersHorizontal className="w-4 h-4 text-slate-400" />
                                                                                             <input
