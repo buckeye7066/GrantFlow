@@ -137,6 +137,24 @@ export const SECTION_METADATA = {
         "label": "Location",
         "format": "json",
         "help": "Legacy or quick-intake location value. Prefer city, state, ZIP, county, address, and Location focus > Geographic focus when structured data is available."
+      },
+      {
+        "name": "keywords",
+        "label": "Keywords (intake)",
+        "format": "string_array",
+        "help": "Keyword tags lifted from quick intake or onboarding text. Canonical keywords live in programs_services.keywords; this is the legacy/intake mirror so older profiles still render cleanly."
+      },
+      {
+        "name": "interests",
+        "label": "Interests (intake)",
+        "format": "string_array",
+        "help": "Interest tags lifted from quick intake or onboarding text. Canonical interests live in programs_services.interests; this is the legacy/intake mirror."
+      },
+      {
+        "name": "tags",
+        "label": "Tags",
+        "format": "string_array",
+        "help": "Free-form tags applied to this profile during intake."
       }
     ]
   },

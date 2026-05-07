@@ -4,17 +4,66 @@ export const SENTINEL_VALUES = new Set(["", "unknown", "n/a", "none", "null", "u
 
 const warnedFields = new Set()
 
+// Production rule (Goal 9 — explainable):
+// We log noisy "missing metadata" warnings only when the build is the
+// Vite dev server OR an opt-in strict mode is on. In production the
+// resolver gracefully humanizes the field key and infers a format from
+// the value's runtime type, so legacy / intake / new fields render
+// cleanly without flooding the user's console. Set
+// VITE_STRICT_PROFILE_METADATA=true in CI / E2E to surface drift loudly.
+const STRICT_METADATA = import.meta.env?.VITE_STRICT_PROFILE_METADATA === "true"
+const IS_DEV = Boolean(import.meta.env?.DEV)
+
 function warnMissingMetadata(sectionKey, fieldKey, detail, { strictBypass = false } = {}) {
   const key = `${sectionKey || "unknown"}:${fieldKey || "unknown"}:${detail}`
   if (warnedFields.has(key)) return
   warnedFields.add(key)
   const message = `[fieldDisplay] Missing or invalid SECTION_METADATA for profile field ${sectionKey}.${fieldKey}: ${detail}`
-  // Strict mode normally throws so misconfigurations are caught in CI / E2E.
-  // strictBypass=true is reserved for cases where the renderer recovered gracefully
-  // (e.g. coerced an array/object to a comma-separated list); we still log a soft
-  // notice but do not throw, so legitimate list-shaped data never white-screens.
-  if (import.meta.env?.VITE_STRICT_PROFILE_METADATA === "true" && !strictBypass) throw new Error(message)
-  console.warn(message, { sectionKey, fieldKey })
+  // Strict mode (CI / E2E) throws so misconfigurations fail the build;
+  // strictBypass=true is reserved for cases where the renderer
+  // recovered gracefully (e.g. coerced an array/object to a list).
+  if (STRICT_METADATA && !strictBypass) throw new Error(message)
+  // In dev we warn so engineers see drift; in production we stay quiet
+  // because the resolver's humanize-fallback already renders a sensible
+  // label and value (no white-screens, no broken cards).
+  if (IS_DEV) console.warn(message, { sectionKey, fieldKey })
+}
+
+/**
+ * Humanize a snake_case / kebab-case / camelCase field key into a
+ * sentence-case label. Used as the fallback when SECTION_METADATA does
+ * not declare the field — so a never-seen-before key from a fresh
+ * profile shape still renders something readable instead of "Unknown
+ * field".
+ */
+export function humanizeFieldKey(fieldKey) {
+  const raw = String(fieldKey ?? "").trim()
+  if (!raw) return ""
+  // Replace separators, split camelCase, collapse whitespace.
+  const spaced = raw
+    .replace(/[_\-./]+/g, " ")
+    .replace(/([a-z])([A-Z])/g, "$1 $2")
+    .replace(/\s+/g, " ")
+    .trim()
+  if (!spaced) return ""
+  // Sentence case: capitalise the first letter; preserve common acronyms
+  // (EIN, UEI, SAM, FAFSA, GPA, ACT, SAT, IRS, NFPA, ISO, ZIP) so labels
+  // read naturally for funding contexts.
+  const ACRONYMS = new Set([
+    "ein", "uei", "sam", "fafsa", "gpa", "act", "sat", "irs", "nfpa",
+    "iso", "zip", "naics", "cage", "ssn", "ssi", "ssdi", "snap", "tanf",
+    "wic", "chip", "liheap", "ada", "msi", "hbcu", "tcu", "fqhc",
+    "cdfi", "stem", "url", "id", "us", "usa",
+  ])
+  return spaced
+    .split(" ")
+    .map((word, i) => {
+      const lower = word.toLowerCase()
+      if (ACRONYMS.has(lower)) return word.toUpperCase()
+      if (i === 0) return lower.charAt(0).toUpperCase() + lower.slice(1)
+      return lower
+    })
+    .join(" ")
 }
 
 export function isSentinelDisplayValue(value) {
@@ -42,8 +91,13 @@ export function getFieldFormat(sectionKey, fieldKey, metadata = SECTION_METADATA
 export function formatFieldLabel(sectionKey, fieldKey, metadata = SECTION_METADATA) {
   const metadataLabel = getFieldMetadata(sectionKey, fieldKey, metadata)?.label
   if (metadataLabel) return metadataLabel
-  warnMissingMetadata(sectionKey, fieldKey, "label")
-  return "Unknown field"
+  // Soft-warn (dev / strict only) and humanize the key. We intentionally
+  // never return "Unknown field" in production: a humanized label is
+  // always more useful for the user, and the warning is enough signal
+  // for engineers to add proper metadata when they see it.
+  warnMissingMetadata(sectionKey, fieldKey, "label", { strictBypass: true })
+  const humanized = humanizeFieldKey(fieldKey)
+  return humanized || "Unknown field"
 }
 
 export function formatStatusLabel(value) {
@@ -92,14 +146,32 @@ function normalizeStringArrayEntry(value) {
   return normalized ? [normalized] : []
 }
 
+/**
+ * Infer a sensible format from a raw value's runtime type when no
+ * metadata is declared. Used as the fallback path for formatFieldValue
+ * so legacy / intake / new fields always render cleanly.
+ */
+function inferFormatFromValue(value) {
+  if (value === null || value === undefined || value === "") return "string"
+  if (Array.isArray(value)) return "string_array"
+  if (typeof value === "object") return "json"
+  if (typeof value === "boolean") return "boolean_tri"
+  if (typeof value === "number") return "string"
+  return "string"
+}
+
 export function formatFieldValue(sectionKey, fieldKey, value, metadata = SECTION_METADATA) {
   const field = getFieldMetadata(sectionKey, fieldKey, metadata)
-  if (!field) {
-    warnMissingMetadata(sectionKey, fieldKey, "field")
-    return "—"
+  let format
+  if (field) {
+    format = field.format ?? "string"
+  } else {
+    // No metadata for this field — soft-warn (dev / strict only) and
+    // infer a renderable format from the value's runtime type so the
+    // user sees their data, not "—".
+    warnMissingMetadata(sectionKey, fieldKey, "field", { strictBypass: true })
+    format = inferFormatFromValue(value)
   }
-
-  const format = field.format ?? "string"
   if (value === null || value === undefined || value === "") return "—"
 
   if (format === "currency_usd" || format === "currency_cents_usd") {

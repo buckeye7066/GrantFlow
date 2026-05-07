@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest"
 
-import { formatFieldLabel, formatFieldValue } from "@/utils/fieldDisplay"
+import { formatFieldLabel, formatFieldValue, humanizeFieldKey } from "@/utils/fieldDisplay"
 
 describe("formatFieldLabel", () => {
   it("reads labels from SECTION_METADATA only", () => {
@@ -57,5 +57,45 @@ describe("formatFieldLabel", () => {
       .filter((message) => message.startsWith("[fieldDisplay] Missing or invalid SECTION_METADATA"))
     expect(offenders).toEqual([])
     warn.mockRestore()
+  })
+
+  it("renders basic_information.keywords cleanly (regression: legacy intake mirror)", () => {
+    // Real production profiles store keywords lifted from intake under
+    // basic_information as well as the canonical programs_services
+    // section. ProfileOverview iterates whichever section's data was
+    // saved, so both paths must render without warnings.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
+
+    expect(formatFieldLabel("basic_information", "keywords")).toBe("Keywords (intake)")
+    expect(formatFieldValue("basic_information", "keywords", ["rural", "broadband"])).toBe("rural, broadband")
+    expect(formatFieldValue("basic_information", "keywords", "rural, broadband")).toBe("rural, broadband")
+    expect(formatFieldLabel("basic_information", "interests")).toBe("Interests (intake)")
+    expect(formatFieldLabel("basic_information", "tags")).toBe("Tags")
+
+    const offenders = warn.mock.calls
+      .map((call) => (typeof call[0] === "string" ? call[0] : ""))
+      .filter((message) => message.startsWith("[fieldDisplay] Missing or invalid SECTION_METADATA"))
+    expect(offenders).toEqual([])
+    warn.mockRestore()
+  })
+
+  it("humanizes unknown field keys instead of emitting Unknown field (permanent drift guard)", () => {
+    // Profile shapes evolve faster than metadata declarations. The
+    // resolver MUST always render something readable so the user sees
+    // their own data — never "Unknown field" and never "—" when the
+    // value is non-empty.
+    expect(humanizeFieldKey("created_at")).toBe("Created at")
+    expect(humanizeFieldKey("ein_number")).toBe("EIN number")
+    expect(humanizeFieldKey("uei")).toBe("UEI")
+    expect(humanizeFieldKey("cdfiCertified")).toBe("CDFI certified")
+    expect(humanizeFieldKey("zip-code")).toBe("ZIP code")
+    expect(humanizeFieldKey("")).toBe("")
+
+    expect(formatFieldLabel("brand_new_section", "some_new_field")).toBe("Some new field")
+    expect(formatFieldValue("brand_new_section", "some_new_field", "hello")).toBe("hello")
+    expect(formatFieldValue("brand_new_section", "some_new_field", ["a", "b"])).toBe("a, b")
+    expect(formatFieldValue("brand_new_section", "some_new_field", { a: "x", b: "y" })).toBe("a: x, b: y")
+    expect(formatFieldValue("brand_new_section", "some_new_field", true)).toBe("Yes")
+    expect(formatFieldValue("brand_new_section", "some_new_field", null)).toBe("—")
   })
 })

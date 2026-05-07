@@ -16,7 +16,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import { formatFieldValue } from '../../src/utils/fieldDisplay.js'
+import { formatFieldValue, formatFieldLabel, humanizeFieldKey } from '../../src/utils/fieldDisplay.js'
 
 function captureWarnings(fn) {
   const original = console.warn
@@ -106,6 +106,41 @@ for (const fieldKey of ['focus_areas', 'interests', 'keywords']) {
     )
   })
 }
+
+test('basic_information.keywords (legacy intake mirror) renders cleanly without warnings', () => {
+  // Production profiles still hold a `keywords` array under
+  // basic_information from older intake flows. The renderer must treat
+  // it as a real field — not "Unknown field" and not a metadata warning.
+  const { result, warnings } = captureWarnings(() =>
+    formatFieldValue('basic_information', 'keywords', ['rural', 'broadband']),
+  )
+  assert.equal(result, 'rural, broadband')
+  assert.equal(
+    warnings.filter((w) => w.startsWith('[fieldDisplay] Missing or invalid SECTION_METADATA')).length,
+    0,
+    'basic_information.keywords must be declared in SECTION_METADATA',
+  )
+  assert.equal(formatFieldLabel('basic_information', 'keywords'), 'Keywords (intake)')
+})
+
+test('humanize fallback: unknown sections / fields render as humanized labels and inferred values', () => {
+  // Permanent drift guard: when a profile shape evolves before metadata
+  // catches up, the resolver MUST still render something the user can
+  // read. Never "Unknown field", never an empty cell when a value
+  // exists.
+  assert.equal(humanizeFieldKey('created_at'), 'Created at')
+  assert.equal(humanizeFieldKey('ein_number'), 'EIN number')
+  assert.equal(humanizeFieldKey('uei'), 'UEI')
+  assert.equal(humanizeFieldKey('cdfiCertified'), 'CDFI certified')
+  assert.equal(humanizeFieldKey('zip-code'), 'ZIP code')
+
+  assert.equal(formatFieldLabel('brand_new_section', 'some_new_field'), 'Some new field')
+  assert.equal(formatFieldValue('brand_new_section', 'some_new_field', 'hello'), 'hello')
+  assert.equal(formatFieldValue('brand_new_section', 'some_new_field', ['a', 'b']), 'a, b')
+  assert.equal(formatFieldValue('brand_new_section', 'some_new_field', { a: 'x', b: 'y' }), 'a: x, b: y')
+  assert.equal(formatFieldValue('brand_new_section', 'some_new_field', true), 'Yes')
+  assert.equal(formatFieldValue('brand_new_section', 'some_new_field', null), '—')
+})
 
 test('smoke: rendering a fully populated profile fixture produces zero metadata warnings', async () => {
   // Mirror a "real-shaped" profile-section payload similar to what
