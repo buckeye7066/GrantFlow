@@ -36,6 +36,25 @@ const FIXTURES = [
   { name: 'volunteer_fire', profile: { id: 'p7', primary_type: 'volunteer_fire', state: 'KY' }, expectMin: 3 },
   { name: 'business', profile: { id: 'p8', primary_type: 'business', state: 'IL' }, expectMin: 3 },
   { name: 'ministry', profile: { id: 'p9', primary_type: 'ministry', state: 'AL' }, expectMin: 3 },
+
+  // Phase 4 expansion fixtures — each must hit the same ≥ 3 source-category
+  // mission rule. Together they assert the gaps the user identified are
+  // closed by the new sourceRegistry entries (county/local government,
+  // teacher/classroom, library/parks, tribal, public-health, and
+  // specialized nonprofits).
+  { name: 'county_government', profile: { id: 'p10', primary_type: 'county_government', state: 'TN' }, expectMin: 3 },
+  { name: 'municipality', profile: { id: 'p11', primary_type: 'municipality', state: 'OH' }, expectMin: 3 },
+  { name: 'tribal_government', profile: { id: 'p12', primary_type: 'tribal_government', state: 'OK' }, expectMin: 3 },
+  { name: 'public_school', profile: { id: 'p13', primary_type: 'public_school', state: 'TN' }, expectMin: 3 },
+  { name: 'school_district', profile: { id: 'p14', primary_type: 'school_district', state: 'OH' }, expectMin: 3 },
+  { name: 'teacher', profile: { id: 'p15', primary_type: 'teacher', state: 'TN' }, expectMin: 3 },
+  { name: 'classroom_teacher', profile: { id: 'p16', primary_type: 'classroom_teacher', state: 'CA' }, expectMin: 3 },
+  { name: 'library', profile: { id: 'p17', primary_type: 'library', state: 'TN' }, expectMin: 3 },
+  { name: 'parks_department', profile: { id: 'p18', primary_type: 'parks_department', state: 'TN' }, expectMin: 3 },
+  { name: 'public_health_department', profile: { id: 'p19', primary_type: 'public_health_department', state: 'TN' }, expectMin: 3 },
+  { name: 'animal_rescue', profile: { id: 'p20', primary_type: 'animal_rescue', state: 'TN' }, expectMin: 3 },
+  { name: 'food_pantry', profile: { id: 'p21', primary_type: 'food_pantry', state: 'TN' }, expectMin: 3 },
+  { name: 'homeless_shelter', profile: { id: 'p22', primary_type: 'homeless_shelter', state: 'TN' }, expectMin: 3 },
 ]
 
 test('source-registry: every entry declares the required contract fields', () => {

@@ -150,6 +150,207 @@ function deriveIntents(analysis) {
     intents.add('emergency_services');
   }
 
+  // ---------------------------------------------------------------------
+  // Local government / county / municipal / public agency (Phase 4)
+  // ---------------------------------------------------------------------
+  const KW = analysis.keywords || []
+  const kwHit = (re) => KW.some((k) => re.test(String(k)))
+  if (primaryType === 'county_government' || primaryType === 'county_official' ||
+      primaryType === 'county' || orgType.includes('county') ||
+      kwHit(/\bcounty\s+(government|official|administration|commission|exec|mayor|department)\b/i)) {
+    intents.add('local_government');
+    intents.add('county_government');
+    intents.add('public_safety');
+    intents.add('infrastructure');
+    intents.add('emergency_management');
+  }
+  if (primaryType === 'municipality' || primaryType === 'city' ||
+      primaryType === 'town' || primaryType === 'township' || primaryType === 'village' ||
+      orgType.includes('municipal') || orgType.includes('city of') || orgType.includes('town of') ||
+      kwHit(/\b(city|town|village|township|borough)\s+(government|hall|administration|of\s+\w+)/i)) {
+    intents.add('local_government');
+    intents.add('municipality');
+    intents.add('infrastructure');
+    intents.add('parks_recreation');
+    intents.add('community_facilities');
+  }
+  if (primaryType === 'local_government' || primaryType === 'public_agency' ||
+      primaryType === 'special_district' || orgType.includes('public agency') ||
+      orgType.includes('government agency')) {
+    intents.add('local_government');
+    intents.add('public_agency');
+  }
+  if (primaryType === 'regional_planning_agency' || primaryType === 'mpo' ||
+      primaryType === 'cog' || orgType.includes('planning organization') ||
+      orgType.includes('council of governments')) {
+    intents.add('local_government');
+    intents.add('regional_planning');
+    intents.add('infrastructure');
+    intents.add('roads_transportation');
+    intents.add('economic_development');
+  }
+  if (primaryType === 'economic_development_agency' || orgType.includes('economic development')) {
+    intents.add('economic_development');
+    intents.add('infrastructure');
+  }
+
+  // Tribal government — explicit (not just any "tribal" keyword)
+  if (primaryType === 'tribal_government' || primaryType === 'tribe' ||
+      primaryType === 'tribal_nation' || primaryType === 'indian_tribe' ||
+      orgType.includes('tribal') || orgType.includes('tribe') ||
+      kwHit(/\b(tribal\s+(government|nation|council)|indian\s+tribe|native\s+american\s+(tribe|nation|government))\b/i)) {
+    intents.add('tribal_government');
+    intents.add('tribal');
+    intents.add('community_facilities');
+  }
+
+  // ---------------------------------------------------------------------
+  // Teacher / classroom / school department (Phase 4)
+  // ---------------------------------------------------------------------
+  if (primaryType === 'teacher' || primaryType === 'classroom_teacher' ||
+      primaryType === 'educator' || (occ && occ.has && occ.has('teacher')) ||
+      kwHit(/\b(classroom\s+teacher|public.?school\s+teacher|k.?12\s+teacher|grade\s+\d|elementary\s+teacher|middle\s+school\s+teacher|high\s+school\s+teacher|stem\s+teacher|art\s+teacher|music\s+teacher|special\s+education\s+teacher)\b/i)) {
+    intents.add('teacher');
+    intents.add('classroom');
+    intents.add('education');
+    intents.add('classroom_supplies');
+    intents.add('professional_development');
+  }
+  if (primaryType === 'school_district' || primaryType === 'lea' ||
+      orgType.includes('school district') || orgType.includes('local education agency')) {
+    intents.add('school');
+    intents.add('school_district');
+    intents.add('education');
+  }
+  if (primaryType === 'public_school' || orgType.includes('public school') ||
+      kwHit(/\bpublic\s+(elementary|middle|high)\s+school\b/i)) {
+    intents.add('school');
+    intents.add('public_school');
+    intents.add('education');
+  }
+  if (primaryType === 'special_education_program' || (needs && needs.has && needs.has('special_education')) ||
+      kwHit(/\bspecial\s+education|sped|idea\s+(part\s+b|part\s+c)\b/i)) {
+    intents.add('special_education');
+  }
+  if (primaryType === 'school_food_service' || orgType.includes('food service') ||
+      kwHit(/\bschool\s+(food\s+service|nutrition|lunch\s+program)\b/i)) {
+    intents.add('school_nutrition');
+    intents.add('food');
+  }
+  if (primaryType === 'school_transportation' || orgType.includes('school bus') ||
+      kwHit(/\b(school\s+bus|student\s+transportation|school\s+transportation)\b/i)) {
+    intents.add('school_transportation');
+    intents.add('roads_transportation');
+  }
+  if (primaryType === 'pta_pto' || primaryType === 'pta' || primaryType === 'pto' ||
+      orgType.includes('pta') || orgType.includes('pto') ||
+      orgType.includes('parent teacher')) {
+    intents.add('teacher');
+    intents.add('classroom');
+    intents.add('education');
+  }
+
+  // ---------------------------------------------------------------------
+  // Public institutions (Phase 4)
+  // ---------------------------------------------------------------------
+  if (primaryType === 'library' || primaryType === 'public_library' ||
+      primaryType === 'library_media_center' || orgType.includes('library')) {
+    intents.add('library');
+    intents.add('library_media');
+    intents.add('community_facilities');
+    intents.add('education');
+  }
+  if (primaryType === 'museum' || orgType.includes('museum') ||
+      orgType.includes('historical society')) {
+    intents.add('museum');
+    intents.add('arts_education');
+    intents.add('community_facilities');
+  }
+  if (primaryType === 'parks_department' || orgType.includes('parks') ||
+      orgType.includes('recreation department') ||
+      kwHit(/\bparks?\s+(and|&)\s+(recreation|rec)\b/i)) {
+    intents.add('parks_recreation');
+    intents.add('community_facilities');
+  }
+  if (primaryType === 'community_center' || orgType.includes('community center') ||
+      orgType.includes('neighborhood center') || orgType.includes('civic center')) {
+    intents.add('community_facilities');
+    intents.add('community');
+  }
+  if (primaryType === 'public_health_department' || primaryType === 'health_department' ||
+      primaryType === 'doh' || primaryType === 'county_health_department' ||
+      orgType.includes('health department') || orgType.includes('public health')) {
+    intents.add('public_health');
+    intents.add('health');
+    intents.add('community');
+    intents.add('public_agency');
+  }
+  if (primaryType === 'local_housing_authority' || primaryType === 'housing_authority' ||
+      orgType.includes('housing authority')) {
+    intents.add('housing');
+    intents.add('housing_development');
+    intents.add('public_agency');
+  }
+
+  // ---------------------------------------------------------------------
+  // Specialized nonprofit verticals (Phase 4)
+  // ---------------------------------------------------------------------
+  if (primaryType === 'animal_rescue' || primaryType === 'animal_shelter' ||
+      primaryType === 'animal_welfare' || primaryType === 'humane_society' ||
+      orgType.includes('animal') || orgType.includes('humane society') ||
+      kwHit(/\b(animal\s+(rescue|shelter|welfare)|humane\s+society|spay\s*\/?\s*neuter)\b/i)) {
+    intents.add('animal_welfare');
+    intents.add('nonprofit');
+  }
+  if (primaryType === 'food_pantry' || primaryType === 'food_bank' ||
+      primaryType === 'food_shelf' || primaryType === 'soup_kitchen' ||
+      orgType.includes('food pantry') || orgType.includes('food bank') ||
+      orgType.includes('soup kitchen') ||
+      kwHit(/\b(food\s+(pantry|bank|shelf)|soup\s+kitchen|hunger\s+relief)\b/i)) {
+    intents.add('food');
+    intents.add('community');
+    intents.add('nonprofit');
+  }
+  if (primaryType === 'homeless_shelter' || primaryType === 'shelter' ||
+      primaryType === 'transitional_housing' || orgType.includes('shelter') ||
+      orgType.includes('transitional housing') ||
+      kwHit(/\b(homeless\s+(shelter|services)|transitional\s+housing|emergency\s+shelter)\b/i)) {
+    intents.add('housing');
+    intents.add('homeless');
+    intents.add('community');
+    intents.add('nonprofit');
+  }
+  if (primaryType === 'domestic_violence_shelter' || primaryType === 'dv_shelter' ||
+      orgType.includes('domestic violence') ||
+      kwHit(/\b(domestic\s+violence|family\s+violence|dv\s+shelter|intimate\s+partner)\b/i)) {
+    intents.add('housing');
+    intents.add('mental_health');
+    intents.add('public_safety');
+    intents.add('nonprofit');
+  }
+  if (primaryType === 'reentry_program' || primaryType === 'second_chance_program' ||
+      orgType.includes('reentry') || orgType.includes('second chance') ||
+      kwHit(/\b(re.?entry|reintegration|second\s+chance|justice.?involved|formerly\s+incarcerated)\b/i)) {
+    intents.add('workforce');
+    intents.add('employment');
+    intents.add('housing');
+    intents.add('nonprofit');
+  }
+  if (primaryType === 'substance_recovery_org' || primaryType === 'recovery_program' ||
+      orgType.includes('recovery') || orgType.includes('substance') ||
+      kwHit(/\b(substance\s+(use|abuse|recovery)|sud\s+treatment|addiction\s+(recovery|treatment))\b/i)) {
+    intents.add('substance_recovery');
+    intents.add('mental_health');
+    intents.add('health');
+    intents.add('nonprofit');
+  }
+  if (primaryType === 'mental_health_nonprofit' || primaryType === 'behavioral_health_nonprofit' ||
+      orgType.includes('mental health') || orgType.includes('behavioral health')) {
+    intents.add('mental_health');
+    intents.add('health');
+    intents.add('nonprofit');
+  }
+
   if (needs.has('certification_assistance') || needs.has('cpr_first_aid_training') ||
       (analysis.keywords || []).some(k =>
         /cpr|first\s*aid|aed|bls|heartsaver|instructor\s*cert|safety\s*train|certification\s*class/i.test(k))) {

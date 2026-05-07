@@ -164,6 +164,60 @@ async function processCuratedBenefitsJob({ db, job, profileContext }) {
     school: 'school',
     k12: 'school',
     charter_school: 'school',
+
+    // Phase 4 expansion: local-government / education / public-institution
+    // / specialized-nonprofit verticals. Aliases route to the same
+    // canonical strategy so legacy job names keep working.
+    county_government: 'county_government',
+    county: 'county_government',
+    county_official: 'county_government',
+    local_government: 'county_government',
+    municipality: 'municipality',
+    city: 'municipality',
+    town: 'municipality',
+    public_agency: 'public_agency',
+    regional_planning_agency: 'county_government',
+    economic_development_agency: 'county_government',
+    tribal_government: 'tribal_government',
+    tribal: 'tribal_government',
+
+    teacher: 'teacher_classroom',
+    classroom_teacher: 'teacher_classroom',
+    educator: 'teacher_classroom',
+    teacher_classroom: 'teacher_classroom',
+    pta_pto: 'teacher_classroom',
+
+    school_district: 'school_district_department',
+    public_school: 'school_district_department',
+    special_education_program: 'school_district_department',
+    school_food_service: 'school_district_department',
+    school_transportation: 'school_district_department',
+    library_media_center: 'school_district_department',
+
+    library: 'library',
+    public_library: 'library',
+    museum: 'library',
+
+    parks_department: 'parks_recreation',
+    parks_recreation: 'parks_recreation',
+    community_center: 'parks_recreation',
+
+    public_health_department: 'public_health_department',
+    health_department: 'public_health_department',
+
+    animal_rescue: 'animal_rescue',
+    animal_shelter: 'animal_rescue',
+    humane_society: 'animal_rescue',
+
+    food_pantry: 'food_pantry',
+    food_bank: 'food_pantry',
+    soup_kitchen: 'food_pantry',
+
+    homeless_shelter: 'homeless_services',
+    homeless_services: 'homeless_services',
+    transitional_housing: 'homeless_services',
+    domestic_violence_shelter: 'homeless_services',
+    reentry_program: 'homeless_services',
   };
   const crawlerType = JOB_TYPE_TO_STRATEGY[job?.type] || 'comprehensive';
   const result = await runCuratedCrawler(db, profileId, {
