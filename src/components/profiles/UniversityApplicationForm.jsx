@@ -30,6 +30,7 @@ const STATUS_OPTIONS = [
   "in_progress",
   "submitted",
   "accepted",
+  "committed",
   "deferred",
   "waitlisted",
   "denied",

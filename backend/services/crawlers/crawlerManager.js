@@ -237,9 +237,35 @@ function loadCandidates(strategy, stateData, analysis, intents) {
 
 // ── School cards generator ──
 
+// Status values that mean "this is the school the student has chosen to
+// attend". Once any school in the profile carries one of these statuses,
+// generateSchoolCards narrows its output to JUST that school — the other
+// applications stay on the profile for the user's reference but they no
+// longer produce school-specific funding cards (no more UCF / Alabama
+// scholarship / housing / off-campus cards once the student commits to
+// MTSU). User rule: "I also need a way for student profiles to be updated
+// once they have chosen a university to where the others fall off".
+export const COMMITTED_SCHOOL_STATUSES = Object.freeze(
+  new Set(['committed', 'enrolled', 'attending'])
+)
+
+export function isCommittedSchool(school) {
+  if (!school || typeof school !== 'object') return false
+  const status = String(school.status || '').trim().toLowerCase()
+  return COMMITTED_SCHOOL_STATUSES.has(status)
+}
+
 export function generateSchoolCards(analysis) {
-  const schools = analysis.schools || [];
-  if (schools.length === 0) return [];
+  const allSchools = analysis.schools || [];
+  if (allSchools.length === 0) return [];
+
+  // Narrow to committed school(s) when at least one school is marked as
+  // "committed" / "enrolled" / "attending". This is the "others fall off"
+  // behavior — the user has chosen, so we stop pestering them with
+  // institutional cards for the schools they're no longer pursuing.
+  const committed = allSchools.filter(isCommittedSchool)
+  const schools = committed.length > 0 ? committed : allSchools
+
   const cards = [];
   const gender = analysis.demographics?.has?.('female') ? 'female' : (analysis.demographics?.has?.('male') ? 'male' : null);
 

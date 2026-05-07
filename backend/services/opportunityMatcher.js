@@ -24,6 +24,7 @@ import {
   chooseGrantUrl,
   GRANT_FINGERPRINT_VERSION,
 } from '../utils/grantFingerprint.js'
+import { isDismissed as isPipelineDismissed } from './pipelineDismissals.js'
 
 // Cache the result of the decision-columns PRAGMA check per DB instance to avoid
 // running PRAGMA table_info(grants) on every saveToProfilePipeline call.
@@ -117,6 +118,39 @@ export async function saveToProfilePipeline(
         gate: 'SOURCE_ALLOWLIST',
         matchPercentage: null,
         threshold,
+      }
+    }
+
+    // Gate 1.5: Pipeline dismissals (sticky deletes). The user's explicit
+    // decision to remove an opportunity from this profile's pipeline overrides
+    // every downstream matching/eligibility/relevance gate. We run this BEFORE
+    // the decision engine so the response correctly reports DISMISSED rather
+    // than being absorbed by RELEVANCE_FILTER / DECISION_ENGINE / etc., and
+    // so we don't pay the cost of running the matcher for a row we'll reject
+    // anyway. Manual re-add via POST /api/grants/from-opportunity clears the
+    // tombstone.
+    if (profileId) {
+      try {
+        const dismissed = await isPipelineDismissed(db, profileId, opportunity)
+        if (dismissed) {
+          console.log(
+            `[opportunityMatcher] Gate:DISMISSED suppressed "${opportunity?.title}" — profile ${profileId} previously removed this opportunity`,
+          )
+          return {
+            saved: false,
+            reason: 'Previously dismissed by user — re-add manually to bring it back',
+            gate: 'DISMISSED',
+            matchPercentage: null,
+            threshold,
+          }
+        }
+      } catch (dismissErr) {
+        // Tombstone lookup failure must never block a save — recall over
+        // suppression. Log it and proceed.
+        console.warn(
+          `[opportunityMatcher] Gate:DISMISSED check failed for profile ${profileId}, opp "${opportunity?.title}":`,
+          dismissErr?.message || dismissErr,
+        )
       }
     }
 

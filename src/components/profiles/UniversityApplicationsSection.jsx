@@ -45,10 +45,19 @@ const STATUS_STYLES = {
   in_progress: { label: "In Progress", className: "bg-blue-100 text-blue-700 border-blue-200" },
   submitted: { label: "Submitted", className: "bg-indigo-100 text-indigo-700 border-indigo-200" },
   accepted: { label: "Accepted", className: "bg-emerald-100 text-emerald-700 border-emerald-200" },
+  committed: { label: "Committed", className: "bg-emerald-200 text-emerald-900 border-emerald-300 font-bold" },
   deferred: { label: "Deferred", className: "bg-purple-100 text-purple-700 border-purple-200" },
   waitlisted: { label: "Waitlisted", className: "bg-orange-100 text-orange-700 border-orange-200" },
   denied: { label: "Denied", className: "bg-rose-100 text-rose-700 border-rose-200" },
 }
+
+// Status values that mark a school as "the one I'm attending". Mirrors
+// COMMITTED_SCHOOL_STATUSES in backend/services/crawlers/crawlerManager.js
+// so the UI's "committed" badge and the backend's school-card narrowing
+// agree on the same vocabulary.
+const COMMITTED_STATUSES = new Set(["committed", "enrolled", "attending"])
+const isCommittedStatus = (status) =>
+  COMMITTED_STATUSES.has(String(status || "").trim().toLowerCase())
 
 const PIPELINE_STATUS_BADGES = {
   planned: { label: "Planned", className: "bg-slate-100 text-slate-700 border-slate-200" },
@@ -721,6 +730,77 @@ export default function UniversityApplicationsSection({
     return { total, submitted, accepted, scholarships }
   }, [localApplications])
 
+  // Schools the student has actually committed to attending. When this is
+  // non-empty, the backend's generateSchoolCards narrows funding cards to
+  // these schools only — the others "fall off" so the student isn't
+  // pestered about UCF / Alabama / etc. once they've chosen MTSU.
+  const committedApplications = useMemo(
+    () => localApplications.filter((app) => isCommittedStatus(app.status)),
+    [localApplications],
+  )
+
+  // Commit one school + (optionally) deferred-mark every other still-active
+  // application. We do NOT auto-overwrite explicit decisions like 'denied'
+  // or 'accepted' at other schools — the user can still browse those for
+  // reference. We mark 'planning' / 'interested' / 'in_progress' as
+  // 'deferred' so the dashboard makes the chosen-vs-not-chosen state clear.
+  const handleCommitToSchool = useCallback(
+    async (applicationId) => {
+      const target = localApplications.find((a) => a.id === applicationId)
+      if (!target) return
+      const proceed = window.confirm(
+        `Commit to ${target.name}?\n\n` +
+        "This marks this school as the one you're attending. Other schools' " +
+        "funding cards (financial aid, housing, off-campus, scholarships) " +
+        "will fall off the funding feed for this profile. You can uncommit " +
+        "later if plans change.",
+      )
+      if (!proceed) return
+
+      const STILL_ACTIVE = new Set([
+        "planning",
+        "interested",
+        "in_progress",
+        "submitted",
+        "accepted",
+        "waitlisted",
+      ])
+      const nextApplications = localApplications.map((app) => {
+        if (app.id === applicationId) return { ...app, status: "committed" }
+        if (STILL_ACTIVE.has(String(app.status || "").toLowerCase())) {
+          return { ...app, status: "deferred" }
+        }
+        return app
+      })
+      setLocalApplications(nextApplications)
+      await persistApplications(
+        nextApplications,
+        `Committed to ${target.name}. Other schools' funding cards will fall off.`,
+      )
+    },
+    [localApplications, persistApplications],
+  )
+
+  const handleUncommitSchool = useCallback(
+    async (applicationId) => {
+      const target = localApplications.find((a) => a.id === applicationId)
+      if (!target) return
+      const proceed = window.confirm(
+        `Uncommit from ${target.name}?\n\n` +
+        "This will move the school back to 'planning' so you can compare " +
+        "options again. Funding cards for all schools will reappear in the " +
+        "funding feed for this profile.",
+      )
+      if (!proceed) return
+      const nextApplications = localApplications.map((app) =>
+        app.id === applicationId ? { ...app, status: "planning" } : app,
+      )
+      setLocalApplications(nextApplications)
+      await persistApplications(nextApplications, `Uncommitted from ${target.name}.`)
+    },
+    [localApplications, persistApplications],
+  )
+
   return (
     <Card className="mt-10 border-slate-200 shadow-sm">
       <SchoolAIAssistStyles />
@@ -769,6 +849,21 @@ export default function UniversityApplicationsSection({
         </div>
       </CardHeader>
       <CardContent className="space-y-6">
+        {committedApplications.length > 0 ? (
+          <Alert className="border-emerald-300 bg-emerald-50">
+            <CheckCircle2 className="h-4 w-4 text-emerald-700" />
+            <AlertDescription className="text-emerald-900">
+              <span className="font-semibold">
+                Committed to {committedApplications.map((a) => a.name).join(", ")}.
+              </span>{" "}
+              School-specific funding cards (financial aid, housing, off-campus, institutional scholarships)
+              are now scoped to {committedApplications.length === 1 ? "this school" : "these schools"} only.
+              Other applications stay on this profile for reference but no longer drive the funding feed.
+              Use <span className="font-medium">Uncommit</span> on the school card to undo.
+            </AlertDescription>
+          </Alert>
+        ) : null}
+
         {localApplications.length === 0 ? (
           <Alert>
             <AlertDescription>
@@ -780,7 +875,15 @@ export default function UniversityApplicationsSection({
           <div className="space-y-6">
             {localApplications
               .slice()
-              .sort((a, b) => a.name.localeCompare(b.name))
+              .sort((a, b) => {
+                // Pin committed schools to the top so the chosen school is
+                // always the first card the user sees.
+                const aCommitted = isCommittedStatus(a.status)
+                const bCommitted = isCommittedStatus(b.status)
+                if (aCommitted && !bCommitted) return -1
+                if (!aCommitted && bCommitted) return 1
+                return a.name.localeCompare(b.name)
+              })
               .map((application) => (
                 <ApplicationCard
                   key={application.id}
@@ -790,6 +893,9 @@ export default function UniversityApplicationsSection({
                   onToggleStage={handleTogglePipelineStatus}
                   studentGender={studentGender}
                   onQuickUpdate={handleQuickUpdateApplication}
+                  onCommit={() => handleCommitToSchool(application.id)}
+                  onUncommit={() => handleUncommitSchool(application.id)}
+                  hasAnyCommittedSchool={committedApplications.length > 0}
                   disabled={persistenceInFlight}
                   documents={profileDocuments}
                   onUploadSchoolDoc={(payload) => uploadSchoolDocMutation.mutate(payload)}
@@ -874,12 +980,22 @@ function ApplicationCard({
   onToggleStage,
   studentGender,
   onQuickUpdate,
+  onCommit,
+  onUncommit,
+  hasAnyCommittedSchool,
   disabled,
   documents,
   onUploadSchoolDoc,
   onDeleteSchoolDoc,
   docBusy,
 }) {
+  const isCommitted = isCommittedStatus(application?.status)
+  // Once any school is committed, mute the others visually so the user can
+  // see at a glance which school they chose. We don't hide them — the user
+  // may still want to reference acceptance letters, financial aid awards,
+  // etc. uploaded under those schools — we just signal that they're not
+  // driving the funding feed anymore.
+  const isMutedByOtherCommit = hasAnyCommittedSchool && !isCommitted
   const aiAssist = useSchoolAIAssist()
   const aiLogRef = useRef(null)
 
@@ -1067,8 +1183,14 @@ function ApplicationCard({
 
   return (
     <div
-      className="border border-slate-200 rounded-xl shadow-sm bg-white overflow-hidden"
-      style={borderColor ? { borderColor } : undefined}
+      className={`border rounded-xl shadow-sm bg-white overflow-hidden ${
+        isCommitted
+          ? "border-emerald-400 ring-2 ring-emerald-200"
+          : isMutedByOtherCommit
+            ? "border-slate-200 opacity-60 grayscale"
+            : "border-slate-200"
+      }`}
+      style={borderColor && !isMutedByOtherCommit ? { borderColor } : undefined}
     >
       {theme ? (
         <div
@@ -1142,6 +1264,37 @@ function ApplicationCard({
             status={aiAssist.status}
             onClick={handleAIAutoFill}
           />
+          {isCommitted ? (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={onUncommit}
+              disabled={disabled || !onUncommit}
+              className="border-emerald-400 text-emerald-800 hover:bg-emerald-50"
+              title="Move this school back to 'planning' so other schools' funding cards reappear."
+            >
+              <CheckCircle2 className="w-4 h-4 mr-2 text-emerald-700" />
+              Uncommit
+            </Button>
+          ) : (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={onCommit}
+              disabled={disabled || !onCommit || hasAnyCommittedSchool}
+              className="border-emerald-300 text-emerald-800 hover:bg-emerald-50"
+              title={
+                hasAnyCommittedSchool
+                  ? "Uncommit from your current school first to commit to a different one."
+                  : "Commit to this school. Other schools' funding cards will fall off."
+              }
+            >
+              <CheckCircle2 className="w-4 h-4 mr-2" />
+              I&apos;m attending
+            </Button>
+          )}
           <Button variant="outline" size="icon" onClick={onEdit}>
             <Edit className="w-4 h-4" />
           </Button>

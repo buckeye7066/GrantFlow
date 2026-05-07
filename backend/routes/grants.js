@@ -28,6 +28,10 @@ import {
   GRANT_FINGERPRINT_VERSION,
 } from '../utils/grantFingerprint.js'
 import { assertSafeIdentifier } from '../utils/safeSql.js'
+import {
+  recordDismissal as recordPipelineDismissal,
+  clearDismissal as clearPipelineDismissal,
+} from '../services/pipelineDismissals.js'
 
 import { createLogger } from '../utils/logger.js'
 const routeLogger = createLogger('route:grants')
@@ -692,7 +696,7 @@ router.get('/automation/summary', async (req, res) => {
       })),
     )
   } catch (error) {
-    console.error('Error building automation summary:', error)
+    routeLogger.error('Error building automation summary:', error)
     res.status(500).json(formatError(error))
   }
 });
@@ -717,7 +721,7 @@ router.get('/:id/automation/events', async (req, res) => {
 
     res.json(events.map(mapAutomationEvent))
   } catch (error) {
-    console.error('Error listing automation events:', error)
+    routeLogger.error('Error listing automation events:', error)
     res.status(500).json(formatError(error))
   }
 });
@@ -741,7 +745,7 @@ router.get('/:id/automation/latest', async (req, res) => {
 
     res.json(mapAutomationEvent(row))
   } catch (error) {
-    console.error('Error fetching latest automation event:', error)
+    routeLogger.error('Error fetching latest automation event:', error)
     res.status(500).json(formatError(error))
   }
 });
@@ -904,7 +908,7 @@ ${JSON.stringify(evidence, null, 2)}
     const updated = await req.db.prepare('SELECT * FROM grants WHERE id = ?').get(req.params.id)
     res.json({ ok: true, grant: updated })
   } catch (error) {
-    console.error('[grants/ai/draft-details] Error:', error)
+    routeLogger.error('[grants/ai/draft-details] Error:', error)
     res.status(500).json(formatError(error))
   }
 })
@@ -1083,17 +1087,73 @@ router.delete('/:id', mutationRateLimiter, async (req, res) => {
     const grantAccess = await ensureGrantAccessUtil(req, res, req.params.id)
     if (!grantAccess) return
 
+    // Capture the row BEFORE we delete so we can record a tombstone in
+    // pipeline_dismissals — that's what makes deletes sticky across
+    // matcher / Process All / re-crawl runs.
+    let grantRow = null
+    let opportunityRow = null
+    try {
+      grantRow = await req.db.prepare('SELECT * FROM grants WHERE id = ? LIMIT 1').get(req.params.id)
+      if (grantRow?.funding_opportunity_id) {
+        try {
+          opportunityRow = await req.db
+            .prepare('SELECT * FROM funding_opportunities WHERE id = ? LIMIT 1')
+            .get(grantRow.funding_opportunity_id)
+        } catch (oppErr) {
+          // Source opportunity may have been purged; tombstone still records by
+          // fingerprint + title + url so the matcher won't re-add it.
+          routeLogger.warn('[grants/delete] failed to load source opportunity for tombstone', {
+            error: oppErr?.message || String(oppErr),
+            opportunity_id: grantRow.funding_opportunity_id,
+          })
+        }
+      }
+    } catch (rowErr) {
+      routeLogger.warn('[grants/delete] failed to load grant row for tombstone', {
+        error: rowErr?.message || String(rowErr),
+        grant_id: req.params.id,
+      })
+    }
+
     // Delete related records first
     await req.db.prepare('DELETE FROM milestones WHERE grant_id = ?').run(req.params.id);
     await req.db.prepare('DELETE FROM expenses WHERE grant_id = ?').run(req.params.id);
     await req.db.prepare('DELETE FROM application_drafts WHERE grant_id = ?').run(req.params.id);
-    
+
     // Update documents to remove grant_id
     await req.db.prepare('UPDATE documents SET grant_id = NULL WHERE grant_id = ?').run(req.params.id);
-    
+
     // Delete the grant
     await req.db.prepare('DELETE FROM grants WHERE id = ?').run(req.params.id);
-    
+
+    // Now write the tombstone. Best-effort — failure here must not turn
+    // the delete into a 500. Only record when the deleted grant was
+    // attached to a profile (organization-only legacy rows can't be
+    // matched back to an auto-add path).
+    if (grantRow?.profile_id) {
+      try {
+        const result = await recordPipelineDismissal(req.db, {
+          profileId: grantRow.profile_id,
+          grantRow,
+          opportunity: opportunityRow,
+          userId: req.user?.userId ?? req.user?.id ?? null,
+          reason: 'user_deleted_from_pipeline',
+        })
+        routeLogger.info('[grants/delete] pipeline dismissal recorded', {
+          grant_id: req.params.id,
+          profile_id: grantRow.profile_id,
+          already_existed: Boolean(result?.alreadyExisted),
+          fingerprint_present: Boolean(result?.key?.fingerprint),
+        })
+      } catch (tombErr) {
+        routeLogger.error('[grants/delete] failed to record tombstone (delete still succeeded)', {
+          error: tombErr?.message || String(tombErr),
+          grant_id: req.params.id,
+          profile_id: grantRow.profile_id,
+        })
+      }
+    }
+
     res.json({ success: true, message: 'Grant deleted' });
   } catch (error) {
     console.error('Error deleting grant:', error);
@@ -1739,6 +1799,29 @@ router.post('/from-opportunity', async (req, res, next) => {
       mergeOpportunitySignals(req.db, normalizedProfileId, opportunity, 'save').catch(() => {
         // Signal merge failures must never affect the pipeline save response.
       })
+    }
+
+    // Manual re-add overrides any prior tombstone for this profile/opportunity.
+    // The user explicitly chose to bring this source back, so the matcher
+    // should be allowed to re-evaluate it on the next Process All / re-crawl.
+    if (normalizedProfileId && opportunity) {
+      try {
+        const cleared = await clearPipelineDismissal(req.db, normalizedProfileId, opportunity)
+        if (cleared > 0) {
+          routeLogger.info('[grants/from-opportunity] cleared pipeline dismissal(s) on manual re-add', {
+            requestId,
+            profile_id: normalizedProfileId,
+            cleared_count: cleared,
+            opportunity_title: opportunity.title || null,
+          })
+        }
+      } catch (clearErr) {
+        routeLogger.warn('[grants/from-opportunity] failed to clear tombstone (non-fatal)', {
+          requestId,
+          profile_id: normalizedProfileId,
+          error: clearErr?.message || String(clearErr),
+        })
+      }
     }
 
     res.status(statusCode).json(result);
