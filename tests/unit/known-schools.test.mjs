@@ -46,7 +46,7 @@ describe('knownSchools registry — getKnownSchool', () => {
       const school = getKnownSchool(v)
       assert.ok(school, `expected MTSU match for variant "${v}"`)
       assert.equal(school.name, 'Middle Tennessee State University')
-      assert.match(school.portals.offCampusHousing, /^https:\/\/(www\.)?mtsu\.edu\//)
+      assert.match(school.portals.offCampusHousing, /^https:\/\/offcampushousing\.mtsu\.edu/)
       assert.match(school.portals.financialAid, /^https:\/\/(www\.)?mtsu\.edu\//)
     }
   })
@@ -111,7 +111,7 @@ describe('knownSchools — enrichSchool', () => {
     assert.equal(enriched.state, 'TN')
     assert.match(enriched.portals.financialAid, /mtsu\.edu/)
     assert.match(enriched.portals.housing, /mtsu\.edu/)
-    assert.match(enriched.portals.offCampusHousing, /mtsu\.edu\/housing\/off-campus/)
+    assert.match(enriched.portals.offCampusHousing, /^https:\/\/offcampushousing\.mtsu\.edu/)
     assert.match(enriched.portals.scholarships, /mtsu\.edu/)
     assert.equal(enriched.status, 'planning', 'must preserve user-supplied fields')
   })
@@ -168,7 +168,7 @@ describe('crawlerManager.generateSchoolCards — Anastasia / MTSU end-to-end', (
     assert.ok(offCampus, 'Off-campus housing card missing for MTSU')
     assert.match(
       offCampus.url,
-      /^https:\/\/(www\.)?mtsu\.edu\/housing\/off-campus/,
+      /^https:\/\/offcampushousing\.mtsu\.edu/,
       `Expected mtsu.edu off-campus URL, got: ${offCampus.url}`,
     )
     assert.ok(
@@ -205,8 +205,14 @@ describe('crawlerManager.generateSchoolCards — Anastasia / MTSU end-to-end', (
     const bama = cards.find(
       (c) => c.schoolName === 'University of Alabama' && c.id.startsWith('school-offcampus-'),
     )
-    assert.ok(ucf && /^https:\/\/offcampus\.ucf\.edu/.test(ucf.url), `UCF off-campus URL bad: ${ucf?.url}`)
-    assert.ok(bama && /^https:\/\/offcampus\.sa\.ua\.edu/.test(bama.url), `UA off-campus URL bad: ${bama?.url}`)
+    assert.ok(
+      ucf && /^https:\/\/ucf\.offcampuspartners\.com/.test(ucf.url),
+      `UCF off-campus URL bad: ${ucf?.url}`,
+    )
+    assert.ok(
+      bama && /^https:\/\/dos\.sl\.ua\.edu\/programs\/off-campus-resources/.test(bama.url),
+      `UA off-campus URL bad: ${bama?.url}`,
+    )
   })
 
   it('unknown school still gets an off-campus card so the user is not zero-result', () => {

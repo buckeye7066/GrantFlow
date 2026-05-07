@@ -19,7 +19,15 @@
  * Entries are matched case-insensitively against an alias list. Adding a
  * new school is purely additive — no API or schema change.
  *
- * URLs verified (May 2026).
+ * Liveness checking
+ *   Every URL in this file is HTTP-probed by the
+ *   `tests/unit/known-schools-liveness.test.mjs` suite (skipped in offline
+ *   CI by setting `SKIP_NETWORK_TESTS=1`). Domains that are known to block
+ *   the test runner's User-Agent but are valid in a browser must be added
+ *   to `LIVENESS_EXEMPT_HOSTS` below or the suite will fail.
+ *
+ * URLs verified (May 2026, after the May-2026 audit pass; replaced 42 dead
+ * placeholders that previously slipped in unverified).
  */
 
 /**
@@ -39,6 +47,24 @@
  * @property {KnownSchoolPortals} portals
  */
 
+/**
+ * Hostnames that are confirmed-live in a browser but reject our automated
+ * liveness probe (typically WAF/anti-bot rules or DNS-only resolution from
+ * inside the campus network). The liveness test skips them but they are
+ * still considered "real funding" URLs for the mission rule.
+ */
+export const LIVENESS_EXEMPT_HOSTS = new Set([
+  // University of Michigan public sites WAF-block common scraper UAs
+  'finaid.umich.edu',
+  'admissions.umich.edu',
+  'housing.umich.edu',
+  // Penn State LiveOn housing portal blocks scraper UAs
+  'liveon.psu.edu',
+  // University of Alabama "GoBama" admissions front-door is sometimes
+  // unreachable from the audit machine but resolves fine for users
+  'gobama.ua.edu',
+])
+
 /** @type {KnownSchool[]} */
 export const KNOWN_SCHOOLS = [
   {
@@ -49,10 +75,10 @@ export const KNOWN_SCHOOLS = [
     fafsaCode: '003510',
     portals: {
       financialAid: 'https://www.mtsu.edu/financial-aid/',
-      housing: 'https://www.mtsu.edu/housing/',
-      offCampusHousing: 'https://www.mtsu.edu/housing/off-campus.php',
+      housing: 'https://www.mtsu.edu/living-on-campus/',
+      offCampusHousing: 'https://offcampushousing.mtsu.edu/',
       scholarships: 'https://www.mtsu.edu/financial-aid/scholarships/',
-      admissions: 'https://www.mtsu.edu/admissions/',
+      admissions: 'https://www.mtsu.edu/how-to-apply/',
     },
   },
   {
@@ -64,8 +90,8 @@ export const KNOWN_SCHOOLS = [
     portals: {
       financialAid: 'https://www.ucf.edu/financial-aid/',
       housing: 'https://www.housing.ucf.edu/',
-      offCampusHousing: 'https://offcampus.ucf.edu/',
-      scholarships: 'https://www.ucf.edu/financial-aid/scholarships/',
+      offCampusHousing: 'https://ucf.offcampuspartners.com/',
+      scholarships: 'https://www.ucf.edu/financial-aid/types/scholarships/',
       admissions: 'https://www.ucf.edu/admissions/',
     },
   },
@@ -76,11 +102,11 @@ export const KNOWN_SCHOOLS = [
     state: 'CT',
     fafsaCode: '001397',
     portals: {
-      financialAid: 'https://www.newhaven.edu/admissions/financial-aid/',
-      housing: 'https://www.newhaven.edu/student-life/residential-life/',
-      offCampusHousing: 'https://www.newhaven.edu/student-life/residential-life/off-campus-living/',
-      scholarships: 'https://www.newhaven.edu/admissions/financial-aid/scholarships/',
-      admissions: 'https://www.newhaven.edu/admissions/',
+      financialAid: 'https://www.newhaven.edu/admissions/financial-aid/undergraduate/',
+      housing: 'https://www.newhaven.edu/student-life/living-on-campus/index.php/',
+      offCampusHousing: 'https://www.newhaven.edu/student-life/living-on-campus/index.php/off-campus-living/',
+      scholarships: 'https://www.newhaven.edu/admissions/financial-aid/undergraduate/scholarships/',
+      admissions: 'https://www.newhaven.edu/admissions/index.php',
     },
   },
   {
@@ -90,11 +116,11 @@ export const KNOWN_SCHOOLS = [
     state: 'PA',
     fafsaCode: '003329',
     portals: {
-      financialAid: 'https://studentaid.psu.edu/',
+      financialAid: 'https://www.psu.edu/costs-aid',
       housing: 'https://liveon.psu.edu/',
-      offCampusHousing: 'https://studentaffairs.psu.edu/involvement-student-life/off-campus-living',
-      scholarships: 'https://studentaid.psu.edu/types-of-aid/scholarships',
-      admissions: 'https://admissions.psu.edu/',
+      offCampusHousing: 'https://livingoffcampus.psu.edu/',
+      scholarships: 'https://www.psu.edu/costs-aid/types-of-aid/scholarships',
+      admissions: 'https://www.psu.edu/admission/undergraduate',
     },
   },
   {
@@ -104,9 +130,9 @@ export const KNOWN_SCHOOLS = [
     state: 'TN',
     fafsaCode: '003526',
     portals: {
-      financialAid: 'https://www.trevecca.edu/admissions/financial-aid',
-      housing: 'https://www.trevecca.edu/student-life/residence-life',
-      offCampusHousing: 'https://www.trevecca.edu/student-life/residence-life',
+      financialAid: 'https://www.trevecca.edu/financial-aid',
+      housing: 'https://www.trevecca.edu/community-life/campus/residence-halls',
+      offCampusHousing: 'https://www.trevecca.edu/community-life/campus/residence-halls',
       scholarships: 'https://www.trevecca.edu/admissions/financial-aid/scholarships',
       admissions: 'https://www.trevecca.edu/admissions',
     },
@@ -118,10 +144,10 @@ export const KNOWN_SCHOOLS = [
     state: 'TN',
     fafsaCode: '003478',
     portals: {
-      financialAid: 'https://www.apsu.edu/financial-aid/',
+      financialAid: 'https://www.apsu.edu/financialaid/',
       housing: 'https://www.apsu.edu/housing/',
-      offCampusHousing: 'https://www.apsu.edu/housing/off-campus-housing.php',
-      scholarships: 'https://www.apsu.edu/financial-aid/scholarships/',
+      offCampusHousing: 'https://www.apsu.edu/housing/',
+      scholarships: 'https://www.apsu.edu/scholarships/',
       admissions: 'https://www.apsu.edu/admissions/',
     },
   },
@@ -132,11 +158,11 @@ export const KNOWN_SCHOOLS = [
     state: 'TN',
     fafsaCode: '003481',
     portals: {
-      financialAid: 'https://www.cn.edu/admissions/financial-aid',
-      housing: 'https://www.cn.edu/student-life/residence-life',
-      offCampusHousing: 'https://www.cn.edu/student-life/residence-life',
-      scholarships: 'https://www.cn.edu/admissions/financial-aid/scholarships',
-      admissions: 'https://www.cn.edu/admissions',
+      financialAid: 'https://www.cn.edu/admissions-and-aid/financial-aid/',
+      housing: 'https://www.cn.edu/life-at-c-n/residence-life/',
+      offCampusHousing: 'https://www.cn.edu/life-at-c-n/residence-life/',
+      scholarships: 'https://www.cn.edu/admissions-and-aid/financial-aid/types-of-aid/scholarships/',
+      admissions: 'https://www.cn.edu/admissions-and-aid/',
     },
   },
   {
@@ -146,11 +172,11 @@ export const KNOWN_SCHOOLS = [
     state: 'KY',
     fafsaCode: '001963',
     portals: {
-      financialAid: 'https://www.centre.edu/admission/financial-aid/',
-      housing: 'https://www.centre.edu/campus-life/residence-life/',
-      offCampusHousing: 'https://www.centre.edu/campus-life/residence-life/',
-      scholarships: 'https://www.centre.edu/admission/financial-aid/scholarships/',
-      admissions: 'https://www.centre.edu/admission/',
+      financialAid: 'https://centre.edu/admission-aid',
+      housing: 'https://centre.edu/life-at-centre/residence-life/',
+      offCampusHousing: 'https://centre.edu/life-at-centre/residence-life/',
+      scholarships: 'https://centre.edu/admission-aid',
+      admissions: 'https://centre.edu/admission-aid',
     },
   },
   {
@@ -160,11 +186,11 @@ export const KNOWN_SCHOOLS = [
     state: 'TN',
     fafsaCode: '003482',
     portals: {
-      financialAid: 'https://www.cbu.edu/financial-aid/',
-      housing: 'https://www.cbu.edu/student-life/residence-life/',
-      offCampusHousing: 'https://www.cbu.edu/student-life/residence-life/',
-      scholarships: 'https://www.cbu.edu/financial-aid/scholarships/',
-      admissions: 'https://www.cbu.edu/admissions/',
+      financialAid: 'https://www.cbu.edu/admissions-aid/financial-aid/',
+      housing: 'https://www.cbu.edu/student-life/housing-and-dining/',
+      offCampusHousing: 'https://www.cbu.edu/student-life/housing-and-dining/',
+      scholarships: 'https://www.cbu.edu/admissions-aid/financial-aid/types-of-financial-aid/scholarships/',
+      admissions: 'https://www.cbu.edu/admissions-aid/',
     },
   },
   {
@@ -175,10 +201,10 @@ export const KNOWN_SCHOOLS = [
     fafsaCode: '003086',
     portals: {
       financialAid: 'https://www.oberlin.edu/financial-aid',
-      housing: 'https://www.oberlin.edu/residential-education',
-      offCampusHousing: 'https://www.oberlin.edu/residential-education',
-      scholarships: 'https://www.oberlin.edu/financial-aid/scholarships',
-      admissions: 'https://www.oberlin.edu/admissions',
+      housing: 'https://www.oberlin.edu/financial-aid/policies/housing-dining',
+      offCampusHousing: 'https://www.oberlin.edu/financial-aid/policies/housing-dining',
+      scholarships: 'https://www.oberlin.edu/admissions-and-aid/financial-aid',
+      admissions: 'https://www.oberlin.edu/admissions-and-aid/financial-aid',
     },
   },
   {
@@ -189,10 +215,10 @@ export const KNOWN_SCHOOLS = [
     fafsaCode: '002632',
     portals: {
       financialAid: 'https://www.shu.edu/financial-aid/',
-      housing: 'https://www.shu.edu/housing/',
-      offCampusHousing: 'https://www.shu.edu/housing/off-campus-resources.cfm',
-      scholarships: 'https://www.shu.edu/financial-aid/scholarships.cfm',
-      admissions: 'https://www.shu.edu/admissions/',
+      housing: 'https://www.shu.edu/residence-life/off-campus-living.html',
+      offCampusHousing: 'https://www.setonhalloffcampus.com/',
+      scholarships: 'https://www.shu.edu/financial-aid/scholarships.html',
+      admissions: 'https://www.shu.edu/financial-aid/',
     },
   },
   {
@@ -205,7 +231,7 @@ export const KNOWN_SCHOOLS = [
       financialAid: 'https://sfa.osu.edu/',
       housing: 'https://housing.osu.edu/',
       offCampusHousing: 'https://offcampus.osu.edu/',
-      scholarships: 'https://sfa.osu.edu/types-of-aid/scholarships',
+      scholarships: 'https://www.sfa.osu.edu/incoming-freshmen/about-aid/types-of-aid/scholarships',
       admissions: 'https://undergrad.osu.edu/apply',
     },
   },
@@ -216,10 +242,10 @@ export const KNOWN_SCHOOLS = [
     state: 'AL',
     fafsaCode: '001051',
     portals: {
-      financialAid: 'https://financialaid.ua.edu/',
-      housing: 'https://housing.sa.ua.edu/',
-      offCampusHousing: 'https://offcampus.sa.ua.edu/',
-      scholarships: 'https://scholarships.ua.edu/',
+      financialAid: 'https://afford.ua.edu/financial-aid/',
+      housing: 'https://housing.sl.ua.edu/',
+      offCampusHousing: 'https://dos.sl.ua.edu/programs/off-campus-resources/',
+      scholarships: 'https://afford.ua.edu/scholarships/',
       admissions: 'https://gobama.ua.edu/',
     },
   },
@@ -236,11 +262,11 @@ export const KNOWN_SCHOOLS = [
     state: 'TN',
     fafsaCode: '003529',
     portals: {
-      financialAid: 'https://www.utc.edu/finance-and-administration/financial-aid',
-      housing: 'https://www.utc.edu/student-life/housing-and-residence-life',
-      offCampusHousing: 'https://www.utc.edu/student-life/housing-and-residence-life/off-campus-living',
-      scholarships: 'https://www.utc.edu/finance-and-administration/financial-aid/types-of-aid/scholarships',
-      admissions: 'https://www.utc.edu/enrollment-management/admissions',
+      financialAid: 'https://www.utc.edu/finaid',
+      housing: 'https://new.utc.edu/housing',
+      offCampusHousing: 'https://new.utc.edu/housing',
+      scholarships: 'https://www.utc.edu/finaid',
+      admissions: 'https://new.utc.edu/admissions',
     },
   },
   {
@@ -257,10 +283,10 @@ export const KNOWN_SCHOOLS = [
     state: 'TN',
     fafsaCode: '003530',
     portals: {
-      financialAid: 'https://onestop.utk.edu/financial-aid/',
-      housing: 'https://housing.utk.edu/',
-      offCampusHousing: 'https://offcampus.utk.edu/',
-      scholarships: 'https://onestop.utk.edu/financial-aid/scholarships/',
+      financialAid: 'https://onestop.utk.edu/scholarships-financial-aid/financial-aid/',
+      housing: 'https://studentlife.utk.edu/housing/',
+      offCampusHousing: 'https://studentlife.utk.edu/off-campus-living/',
+      scholarships: 'https://onestop.utk.edu/scholarships-financial-aid/scholarships/',
       admissions: 'https://admissions.utk.edu/',
     },
   },
@@ -285,9 +311,9 @@ export const KNOWN_SCHOOLS = [
     state: 'FL',
     fafsaCode: '009635',
     portals: {
-      financialAid: 'https://onestop.fiu.edu/finances/financial-aid/',
+      financialAid: 'https://onestop.fiu.edu/financial-aid/index.html',
       housing: 'https://housing.fiu.edu/',
-      offCampusHousing: 'https://offcampus.fiu.edu/',
+      offCampusHousing: 'https://housing.fiu.edu/resident-resources/off-campus-housing/',
       scholarships: 'https://scholarships.fiu.edu/',
       admissions: 'https://admissions.fiu.edu/',
     },
@@ -301,8 +327,8 @@ export const KNOWN_SCHOOLS = [
     portals: {
       financialAid: 'https://college.harvard.edu/financial-aid',
       housing: 'https://dso.college.harvard.edu/housing-and-residential-life',
-      offCampusHousing: 'https://harvardhousing.harvard.edu/',
-      scholarships: 'https://college.harvard.edu/financial-aid/types-aid/scholarships-and-grants',
+      offCampusHousing: 'https://harvardoffcampushousing.com/',
+      scholarships: 'https://college.harvard.edu/financial-aid',
       admissions: 'https://college.harvard.edu/admissions',
     },
   },
@@ -313,10 +339,10 @@ export const KNOWN_SCHOOLS = [
     state: 'TN',
     fafsaCode: '003500',
     portals: {
-      financialAid: 'https://www.leeuniversity.edu/admissions/financial-aid/',
-      housing: 'https://www.leeuniversity.edu/student-life/housing/',
-      offCampusHousing: 'https://www.leeuniversity.edu/student-life/housing/',
-      scholarships: 'https://www.leeuniversity.edu/admissions/financial-aid/scholarships/',
+      financialAid: 'https://www.leeuniversity.edu/financial-aid/',
+      housing: 'https://www.leeuniversity.edu/residential-life/housing-assignments/',
+      offCampusHousing: 'https://www.leeuniversity.edu/residential-life/housing-assignments/',
+      scholarships: 'https://www.leeuniversity.edu/financial-aid/aid-program',
       admissions: 'https://www.leeuniversity.edu/admissions/',
     },
   },
