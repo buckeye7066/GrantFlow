@@ -376,17 +376,20 @@ async function smokeOneProfile(token, fixture, idx) {
   if (!anya.ok) {
     out.warnings.push(`anya_failed: ${anya.status} ${JSON.stringify(anya.body).slice(0, 200)}`)
   } else {
-    // The Anya tool route wraps the tool return in `{ result: <toolReturn> }`
-    // (see backend/routes/anya.js POST /tools/:toolName/invoke). Older
-    // shapes used `output.actions`. Probe in priority order to stay
-    // forward/backward compatible.
+    // The Anya tool route wraps the tool return as
+    //   { result: { id, tool, output: <toolReturn> } }
+    // (see backend/routes/anya.js POST /tools/:toolName/invoke and
+    // backend/services/anyaToolRegistry.js#invokeTool). Probe in priority
+    // order to stay forward-compatible if the wrapper is removed/relabelled.
     const actions =
-      anya.body?.result?.actions
+      anya.body?.result?.output?.actions
+      ?? anya.body?.result?.actions
       ?? anya.body?.output?.actions
       ?? anya.body?.actions
       ?? []
     const reasons =
-      anya.body?.result?.reasons
+      anya.body?.result?.output?.reasons
+      ?? anya.body?.result?.reasons
       ?? anya.body?.output?.reasons
       ?? anya.body?.reasons
       ?? []
