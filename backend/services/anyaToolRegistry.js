@@ -68,6 +68,12 @@ import {
   buildFieldUsageReport,
   forSection,
 } from './profileFieldUsageRegistry.js'
+import {
+  generateActionPlan,
+  createApplicationFromOpportunity,
+  completeApplicationStep,
+  APPLICATION_STATES,
+} from './applicationWorkflow.js'
 
 const tools = new Map()
 
@@ -1521,6 +1527,146 @@ registerTool({
       actions,
       reasons,
       confidence: actions.length > 0 ? 80 : 40,
+    }
+  },
+})
+
+// ============================================================================
+// Application workflow — Anya-callable wrappers around applicationWorkflow.js
+// ============================================================================
+//
+// Mission rule (Phase H): Anya must be able to *act* on the next-best-action
+// recommendations she surfaces. nextBestAction returns tool_call payloads
+// referencing `application.createFromOpportunity` and `application.completeStep`;
+// these registrations make those calls real, grounded, DB-persistent
+// operations rather than dangling references.
+
+registerTool({
+  name: 'application.createFromOpportunity',
+  description: "Creates (or returns the existing) application for the active profile + opportunity. Persists the application record, generates the initial action plan (steps + documents + deadlines), and returns the application id plus the freshly generated plan. Idempotent on (profile_id, opportunity_id). Use this after the user confirms 'save this opportunity' so Anya can actually start the workflow.",
+  schema: {
+    type: 'object',
+    required: ['opportunityId'],
+    properties: {
+      profileId: { type: 'string', description: "Profile ID. Defaults to the user's active profile." },
+      opportunityId: { type: 'string', description: 'Opportunity ID returned by discovery / saved grants.' },
+      opportunity: {
+        type: 'object',
+        description: 'Optional inline opportunity payload (used when the row is not yet persisted server-side, e.g. from a fresh real-time crawl). Must include id + title at minimum.',
+      },
+    },
+  },
+  handler: async (params, context) => {
+    const db = context?.db
+    if (!db) throw new Error('Database connection unavailable')
+    const ctx = context?.ctx
+    const profileId =
+      (params?.profileId && String(params.profileId).trim()) ||
+      (ctx?.activeProfileId ? String(ctx.activeProfileId).trim() : null)
+    if (!profileId) throw new Error('Profile id required')
+    if (!ensureProfileAccess(ctx, profileId)) {
+      const error = new Error('Not authorized to act on this profile')
+      error.status = 403
+      throw error
+    }
+    const opportunityId = params?.opportunityId ? String(params.opportunityId) : null
+    if (!opportunityId) throw new Error('opportunityId required')
+
+    // Prefer the inline payload when provided (avoids a redundant DB lookup);
+    // otherwise fetch the canonical row.
+    let opp = params?.opportunity ?? null
+    if (!opp) {
+      try {
+        opp = await db
+          .prepare('SELECT * FROM funding_opportunities WHERE id = ?')
+          .get(opportunityId)
+      } catch {
+        opp = null
+      }
+    }
+    if (!opp || !opp.id) {
+      throw new Error(`Opportunity ${opportunityId} not found`)
+    }
+
+    let profileContext = null
+    try {
+      profileContext = await loadProfileContext(db, profileId)
+    } catch {
+      profileContext = { profile: { id: profileId } }
+    }
+
+    const result = await createApplicationFromOpportunity(db, {
+      profileId,
+      userId: ctx?.userId ?? 'anya',
+      opportunity: opp,
+      profileContext,
+    })
+
+    const plan = generateActionPlan(opp, profileContext)
+    return {
+      application_id: result.id,
+      created: result.created,
+      profile_id: profileId,
+      opportunity_id: opportunityId,
+      plan,
+      // Mission rule (Phase H): Anya must NOT promise funding. Surface the
+      // reality of an application: this is a plan, not an award.
+      disclaimer: 'GrantFlow does not guarantee that this opportunity will be awarded. The plan below is a checklist + deadline tracker so you know what to prepare and by when.',
+      // Make the canonical opportunity kind explicit so downstream UI /
+      // explanation paths can label direct vs benefit vs directory vs
+      // referral vs school portal.
+      opportunity_kind: opp.opportunity_kind ?? opp.kind ?? 'direct',
+    }
+  },
+})
+
+registerTool({
+  name: 'application.completeStep',
+  description: "Marks the given application step as completed. Use this when the user tells Anya they finished a checklist item (e.g. 'I uploaded the SAM.gov registration confirmation'). Returns the updated step + the next pending step in the same application so Anya can immediately surface 'what comes next'.",
+  schema: {
+    type: 'object',
+    required: ['stepId'],
+    properties: {
+      applicationId: { type: 'string', description: 'Application ID. Used to look up the next pending step after completion.' },
+      stepId: { type: 'string', description: 'application_steps.id of the step to mark complete.' },
+    },
+  },
+  handler: async (params, context) => {
+    const db = context?.db
+    if (!db) throw new Error('Database connection unavailable')
+    const stepId = params?.stepId ? String(params.stepId) : null
+    if (!stepId) throw new Error('stepId required')
+    await completeApplicationStep(db, stepId)
+
+    let nextStep = null
+    let applicationId = params?.applicationId ? String(params.applicationId) : null
+    try {
+      // Resolve applicationId from the step row if the caller didn't pass it.
+      if (!applicationId) {
+        const row = await db
+          .prepare('SELECT application_id FROM application_steps WHERE id = ?')
+          .get(stepId)
+        applicationId = row?.application_id ?? null
+      }
+      if (applicationId) {
+        nextStep = await db
+          .prepare(
+            `SELECT id, title, status, step_order
+               FROM application_steps
+              WHERE application_id = ? AND status = 'pending'
+              ORDER BY step_order ASC LIMIT 1`,
+          )
+          .get(applicationId)
+      }
+    } catch {
+      // Schema may be partial in tests — degrade gracefully.
+    }
+
+    return {
+      step_id: stepId,
+      application_id: applicationId,
+      next_step: nextStep ?? null,
+      application_states: APPLICATION_STATES,
     }
   },
 })
