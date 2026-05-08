@@ -18,6 +18,143 @@ import { apiFetch } from "@/api/client";
 import { useProfileTypes, canonicalizeProfileTypeId } from "@/services/profileTypes";
 import FieldHelpTip from "@/components/help/FieldHelpTip";
 
+/**
+ * Mission Goal 11 (field-to-funding accountability).
+ *
+ * Maps every form field name in this wizard to its canonical
+ * profileFieldUsageRegistry id, so each Label can show a "why we ask"
+ * tooltip from the same registry Anya uses to explain fields. PII
+ * fields automatically display the lock icon and disclosure text.
+ *
+ * The mission test tests/mission/mission-form-field-help.test.mjs
+ * asserts every entry here resolves to a real registry id, every
+ * high-value field listed in the brief is present, and no PII field
+ * leaks through without the lock disclosure.
+ */
+const FIELD_HELP_ID_FOR = Object.freeze({
+  applicant_type: 'profile.primary_profile_type',
+  date_of_birth: 'basic_information.dob',
+  email: 'contact.email',
+  phone: 'contact.phone',
+  address: 'geo.city',
+  city: 'geo.city',
+  state: 'geo.state',
+  zip: 'geo.zip',
+  organization_ein: 'organization.ein',
+  organization_uei: 'organization.uei',
+  organization_cage_code: 'organization.cage_code',
+  ntee_code: 'organization.organization_type',
+  annual_budget: 'organization.annual_budget',
+  staff_count: 'organization.staff_count',
+  sam_gov_registered: 'organization.sam_registered',
+  grants_gov_active: 'organization.sam_registered',
+  faith_based_organization: 'organization.faith_based',
+  serves_rural_area: 'organization.rural_serving',
+  business_501c3_certified: 'organization.501c3',
+  minority_owned_certification: 'organization.business_certifications',
+  women_owned_certification: 'organization.business_certifications',
+  veteran_owned_business: 'organization.business_certifications',
+  promise_zone_designation: 'organization.opportunity_zone',
+  opportunity_zone_designation: 'organization.opportunity_zone',
+  intended_major: 'education.major',
+  current_college: 'education.target_colleges',
+  target_colleges: 'education.target_colleges',
+  gpa: 'education.gpa',
+  act_score: 'education.test_scores',
+  sat_score: 'education.test_scores',
+  first_generation: 'education.first_gen',
+  household_income: 'finance.annual_income',
+  household_size: 'finance.household_size',
+  financial_need_level: 'finance.low_income',
+  low_income: 'finance.low_income',
+  unemployed: 'finance.unemployment',
+  displaced_worker: 'finance.displaced_worker',
+  medicaid_enrolled: 'programs.medicaid',
+  medicare_recipient: 'programs.medicaid',
+  ssi_recipient: 'programs.ssi',
+  ssdi_recipient: 'programs.ssdi',
+  snap_recipient: 'programs.snap',
+  tanf_recipient: 'programs.tanf',
+  section8_housing: 'programs.section8',
+  tenncare_id: 'pii.medicaid_id',
+  cancer_survivor: 'health.cancer',
+  chronic_illness: 'health.chronic_illness',
+  dialysis_patient: 'health.dialysis',
+  organ_transplant: 'health.transplant',
+  hiv_aids: 'health.hiv_aids',
+  tbi_survivor: 'health.tbi',
+  amputee: 'health.amputee',
+  neurodivergent: 'health.neurodivergence',
+  mental_health_condition: 'health.mental_health',
+  substance_recovery: 'health.substance_recovery',
+  immigration_status: 'demographics.immigration_status',
+  african_american: 'demographics.race_ethnicity',
+  hispanic_latino: 'demographics.race_ethnicity',
+  asian_american: 'demographics.race_ethnicity',
+  native_american: 'demographics.race_ethnicity',
+  tribal_affiliation: 'demographics.tribal_affiliation',
+  lgbtq: 'demographics.lgbtq',
+  single_parent: 'family.single_parent',
+  foster_youth: 'family.foster_youth',
+  foster_parent: 'family.foster_or_adoptive_parent',
+  caregiver: 'family.caregiver',
+  widow_widower: 'family.widow_widower',
+  grandparent_raising_grandchildren: 'family.grandparent_raising_grandchildren',
+  first_time_parent: 'family.first_time_parent',
+  homeless: 'family.homelessness_or_housing_insecurity',
+  domestic_violence_survivor: 'family.domestic_violence',
+  trafficking_survivor: 'family.trafficking',
+  disaster_survivor: 'family.disaster',
+  formerly_incarcerated: 'family.formerly_incarcerated',
+  veteran: 'military.veteran',
+  active_duty_military: 'military.active_duty',
+  national_guard: 'military.guard_or_reserve',
+  disabled_veteran: 'military.disabled_veteran',
+  military_spouse: 'military.spouse_or_dependent',
+  military_dependent: 'military.spouse_or_dependent',
+  gold_star_family: 'military.gold_star',
+  healthcare_worker: 'occupation.healthcare_worker',
+  educator: 'occupation.teacher_educator',
+  firefighter: 'occupation.firefighter',
+  ems_worker: 'occupation.firefighter',
+  law_enforcement: 'occupation.law_enforcement',
+  public_servant: 'occupation.public_servant',
+  clergy: 'occupation.clergy_ministry',
+  missionary: 'occupation.clergy_ministry',
+  nonprofit_employee: 'occupation.nonprofit_employee',
+  small_business_owner: 'occupation.small_business_owner',
+  is_minority_owned_business_owner: 'organization.business_certifications',
+  is_women_owned_business_owner: 'organization.business_certifications',
+  union_member: 'occupation.union_member',
+  farmer: 'occupation.farmer_ag_worker',
+  rural_resident: 'organization.rural_serving',
+  appalachian_region: 'organization.appalachian_region',
+  mission: 'narrative.story',
+  primary_goal: 'narrative.goals',
+  funding_amount_needed: 'narrative.funding_use',
+  past_experience: 'narrative.story',
+  special_circumstances: 'narrative.barriers',
+  target_population: 'narrative.story',
+  keywords: 'narrative.keywords',
+})
+
+/**
+ * Renders a Label and (when known) the canonical FieldHelpTip from
+ * the field-usage registry. Always passes the htmlFor through so
+ * accessibility is preserved.
+ */
+function HelpedLabel({ htmlFor, fieldName, required, children, className }) {
+  const helpId = fieldName ? FIELD_HELP_ID_FOR[fieldName] : null
+  return (
+    <Label htmlFor={htmlFor} className={className}>
+      {children}
+      {required ? <span className="text-red-500" aria-hidden="true">{' *'}</span> : null}
+      {helpId ? <FieldHelpTip id={helpId} className="ml-1 align-middle" /> : null}
+    </Label>
+  )
+}
+
+
 const US_STATES = ["AL","AK","AZ","AR","CA","CO","CT","DE","FL","GA","HI","ID","IL","IN","IA","KS","KY","LA","ME","MD","MA","MI","MN","MS","MO","MT","NE","NV","NH","NJ","NM","NY","NC","ND","OH","OK","OR","PA","RI","SC","SD","TN","TX","UT","VT","VA","WA","WV","WI","WY"];
 
 const GRADE_LEVELS = [
@@ -563,7 +700,7 @@ const finalData = buildFinalData(formData);
               </div>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
-                  <Label htmlFor="date_of_birth">Date of Birth</Label>
+                  <HelpedLabel htmlFor="date_of_birth" fieldName="date_of_birth">Date of Birth</HelpedLabel>
                   <Input
                     id="date_of_birth"
                     type="date"
@@ -573,7 +710,7 @@ const finalData = buildFinalData(formData);
                   <p className="text-xs text-slate-500 mt-1">Used to determine age-based eligibility</p>
                 </div>
                 <div>
-                  <Label>Email Address</Label>
+                  <HelpedLabel fieldName="email">Email Address</HelpedLabel>
                   <MultiSelectCombobox
                     options={[]}
                     selected={formData.email}
@@ -584,7 +721,7 @@ const finalData = buildFinalData(formData);
                 </div>
               </div>
               <div>
-                <Label>Phone Number</Label>
+                <HelpedLabel fieldName="phone">Phone Number</HelpedLabel>
                 <MultiSelectCombobox
                   options={[]}
                   selected={formData.phone}
@@ -603,7 +740,7 @@ const finalData = buildFinalData(formData);
               
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
-                  <Label htmlFor="organization_ein">EIN (Tax ID)</Label>
+                  <HelpedLabel htmlFor="organization_ein" fieldName="organization_ein">EIN (Tax ID)</HelpedLabel>
                   <Input
                     id="organization_ein"
                     value={formData.organization_ein}
@@ -612,7 +749,7 @@ const finalData = buildFinalData(formData);
                   />
                 </div>
                 <div>
-                  <Label htmlFor="organization_uei">UEI Number</Label>
+                  <HelpedLabel htmlFor="organization_uei" fieldName="organization_uei">UEI Number</HelpedLabel>
                   <Input
                     id="organization_uei"
                     value={formData.organization_uei}
@@ -624,7 +761,7 @@ const finalData = buildFinalData(formData);
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
-                  <Label htmlFor="organization_cage_code">CAGE Code</Label>
+                  <HelpedLabel htmlFor="organization_cage_code" fieldName="organization_cage_code">CAGE Code</HelpedLabel>
                   <Input
                     id="organization_cage_code"
                     value={formData.organization_cage_code}
@@ -633,7 +770,7 @@ const finalData = buildFinalData(formData);
                   />
                 </div>
                 <div>
-                  <Label htmlFor="ntee_code">NTEE Code</Label>
+                  <HelpedLabel htmlFor="ntee_code" fieldName="ntee_code">NTEE Code</HelpedLabel>
                   <Input
                     id="ntee_code"
                     value={formData.ntee_code}
@@ -645,7 +782,7 @@ const finalData = buildFinalData(formData);
 
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <div>
-                  <Label htmlFor="annual_budget">Annual Budget</Label>
+                  <HelpedLabel htmlFor="annual_budget" fieldName="annual_budget">Annual Budget</HelpedLabel>
                   <Input
                     id="annual_budget"
                     type="number"
@@ -655,7 +792,7 @@ const finalData = buildFinalData(formData);
                   />
                 </div>
                 <div>
-                  <Label htmlFor="staff_count">Staff Count</Label>
+                  <HelpedLabel htmlFor="staff_count" fieldName="staff_count">Staff Count</HelpedLabel>
                   <Input
                     id="staff_count"
                     type="number"
@@ -704,7 +841,7 @@ const finalData = buildFinalData(formData);
                         checked={formData[item.id]}
                         onCheckedChange={(checked) => handleChange(item.id, checked)}
                       />
-                      <Label htmlFor={item.id}>{item.label}</Label>
+                      <Label htmlFor={item.id}>{item.label}<FieldHelpTip id={FIELD_HELP_ID_FOR[item.id]} className="ml-1 align-middle" /></Label>
                     </div>
                   ))}
                 </div>
@@ -724,7 +861,7 @@ const finalData = buildFinalData(formData);
                         checked={formData[item.id]}
                         onCheckedChange={(checked) => handleChange(item.id, checked)}
                       />
-                      <Label htmlFor={item.id}>{item.label}</Label>
+                      <Label htmlFor={item.id}>{item.label}<FieldHelpTip id={FIELD_HELP_ID_FOR[item.id]} className="ml-1 align-middle" /></Label>
                     </div>
                   ))}
                 </div>
@@ -746,7 +883,7 @@ const finalData = buildFinalData(formData);
                         checked={formData[item.id]}
                         onCheckedChange={(checked) => handleChange(item.id, checked)}
                       />
-                      <Label htmlFor={item.id}>{item.label}</Label>
+                      <Label htmlFor={item.id}>{item.label}<FieldHelpTip id={FIELD_HELP_ID_FOR[item.id]} className="ml-1 align-middle" /></Label>
                     </div>
                   ))}
                 </div>
@@ -782,7 +919,7 @@ const finalData = buildFinalData(formData);
                         checked={formData[item.id]}
                         onCheckedChange={(checked) => handleChange(item.id, checked)}
                       />
-                      <Label htmlFor={item.id}>{item.label}</Label>
+                      <Label htmlFor={item.id}>{item.label}<FieldHelpTip id={FIELD_HELP_ID_FOR[item.id]} className="ml-1 align-middle" /></Label>
                     </div>
                   ))}
                 </div>
@@ -808,7 +945,7 @@ const finalData = buildFinalData(formData);
               {(formData.applicant_type === 'college_student' || formData.applicant_type === 'graduate_student') && (
                 <>
                   <div>
-                    <Label htmlFor="current_college">Current College/University</Label>
+                    <HelpedLabel htmlFor="current_college" fieldName="current_college">Current College/University</HelpedLabel>
                     <Input
                       id="current_college"
                       value={formData.current_college}
@@ -834,7 +971,7 @@ const finalData = buildFinalData(formData);
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
-                  <Label htmlFor="intended_major">Intended Major</Label>
+                  <HelpedLabel htmlFor="intended_major" fieldName="intended_major">Intended Major</HelpedLabel>
                   <Input
                     id="intended_major"
                     value={formData.intended_major}
@@ -843,7 +980,7 @@ const finalData = buildFinalData(formData);
                   />
                 </div>
                 <div>
-                  <Label htmlFor="gpa">GPA</Label>
+                  <HelpedLabel htmlFor="gpa" fieldName="gpa">GPA</HelpedLabel>
                   <Input
                     id="gpa"
                     type="number"
@@ -857,7 +994,7 @@ const finalData = buildFinalData(formData);
 
               <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                 <div>
-                  <Label htmlFor="act_score">ACT Score</Label>
+                  <HelpedLabel htmlFor="act_score" fieldName="act_score">ACT Score</HelpedLabel>
                   <Input
                     id="act_score"
                     type="number"
@@ -867,7 +1004,7 @@ const finalData = buildFinalData(formData);
                   />
                 </div>
                 <div>
-                  <Label htmlFor="sat_score">SAT Score</Label>
+                  <HelpedLabel htmlFor="sat_score" fieldName="sat_score">SAT Score</HelpedLabel>
                   <Input
                     id="sat_score"
                     type="number"
@@ -936,7 +1073,7 @@ const finalData = buildFinalData(formData);
               <CardTitle>Financial Situation</CardTitle>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
-                  <Label htmlFor="household_income">Annual Household Income</Label>
+                  <HelpedLabel htmlFor="household_income" fieldName="household_income">Annual Household Income</HelpedLabel>
                   <Input
                     id="household_income"
                     type="number"
@@ -946,7 +1083,7 @@ const finalData = buildFinalData(formData);
                   />
                 </div>
                 <div>
-                  <Label htmlFor="household_size">Household Size</Label>
+                  <HelpedLabel htmlFor="household_size" fieldName="household_size">Household Size</HelpedLabel>
                   <Input
                     id="household_size"
                     type="number"
@@ -1024,7 +1161,7 @@ const finalData = buildFinalData(formData);
                       checked={formData[item.id]}
                       onCheckedChange={(checked) => handleChange(item.id, checked)}
                     />
-                    <Label htmlFor={item.id}>{item.label}</Label>
+                    <Label htmlFor={item.id}>{item.label}<FieldHelpTip id={FIELD_HELP_ID_FOR[item.id]} className="ml-1 align-middle" /></Label>
                   </div>
                 ))}
               </div>
@@ -1051,7 +1188,7 @@ const finalData = buildFinalData(formData);
                     </Select>
                   </div>
                   <div>
-                    <Label htmlFor="tenncare_id">TennCare ID (if applicable)</Label>
+                    <HelpedLabel htmlFor="tenncare_id" fieldName="tenncare_id">TennCare ID (if applicable)</HelpedLabel>
                     <Input
                       id="tenncare_id"
                       value={formData.tenncare_id}
@@ -1083,7 +1220,7 @@ const finalData = buildFinalData(formData);
                 {formData.cancer_survivor && (
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div>
-                      <Label htmlFor="cancer_type">Type of Cancer</Label>
+                      <HelpedLabel htmlFor="cancer_type" fieldName="cancer_type">Type of Cancer</HelpedLabel>
                       <Input
                         id="cancer_type"
                         value={formData.cancer_type}
@@ -1117,7 +1254,7 @@ const finalData = buildFinalData(formData);
                 </div>
                 {formData.chronic_illness && (
                   <div>
-                    <Label htmlFor="chronic_illness_type">Type of Chronic Illness</Label>
+                    <HelpedLabel htmlFor="chronic_illness_type" fieldName="chronic_illness_type">Type of Chronic Illness</HelpedLabel>
                     <Input
                       id="chronic_illness_type"
                       value={formData.chronic_illness_type}
@@ -1149,7 +1286,7 @@ const finalData = buildFinalData(formData);
                       checked={formData[item.id]}
                       onCheckedChange={(checked) => handleChange(item.id, checked)}
                     />
-                    <Label htmlFor={item.id}>{item.label}</Label>
+                    <Label htmlFor={item.id}>{item.label}<FieldHelpTip id={FIELD_HELP_ID_FOR[item.id]} className="ml-1 align-middle" /></Label>
                   </div>
                 ))}
               </div>
@@ -1197,14 +1334,14 @@ const finalData = buildFinalData(formData);
                         checked={formData[item.id]}
                         onCheckedChange={(checked) => handleChange(item.id, checked)}
                       />
-                      <Label htmlFor={item.id}>{item.label}</Label>
+                      <Label htmlFor={item.id}>{item.label}<FieldHelpTip id={FIELD_HELP_ID_FOR[item.id]} className="ml-1 align-middle" /></Label>
                     </div>
                   ))}
                 </div>
 
                 {formData.native_american && (
                   <div>
-                    <Label htmlFor="tribal_affiliation">Tribal Affiliation</Label>
+                    <HelpedLabel htmlFor="tribal_affiliation" fieldName="tribal_affiliation">Tribal Affiliation</HelpedLabel>
                     <Input
                       id="tribal_affiliation"
                       value={formData.tribal_affiliation}
@@ -1253,7 +1390,7 @@ const finalData = buildFinalData(formData);
                       checked={formData[item.id]}
                       onCheckedChange={(checked) => handleChange(item.id, checked)}
                     />
-                    <Label htmlFor={item.id}>{item.label}</Label>
+                    <Label htmlFor={item.id}>{item.label}<FieldHelpTip id={FIELD_HELP_ID_FOR[item.id]} className="ml-1 align-middle" /></Label>
                   </div>
                 ))}
               </div>
@@ -1280,7 +1417,7 @@ const finalData = buildFinalData(formData);
                       checked={formData[item.id]}
                       onCheckedChange={(checked) => handleChange(item.id, checked)}
                     />
-                    <Label htmlFor={item.id}>{item.label}</Label>
+                    <Label htmlFor={item.id}>{item.label}<FieldHelpTip id={FIELD_HELP_ID_FOR[item.id]} className="ml-1 align-middle" /></Label>
                   </div>
                 ))}
               </div>
@@ -1316,14 +1453,14 @@ const finalData = buildFinalData(formData);
                       checked={formData[item.id]}
                       onCheckedChange={(checked) => handleChange(item.id, checked)}
                     />
-                    <Label htmlFor={item.id}>{item.label}</Label>
+                    <Label htmlFor={item.id}>{item.label}<FieldHelpTip id={FIELD_HELP_ID_FOR[item.id]} className="ml-1 align-middle" /></Label>
                   </div>
                 ))}
               </div>
 
               {formData.healthcare_worker && (
                 <div>
-                  <Label htmlFor="healthcare_worker_type">Type of Healthcare Worker</Label>
+                  <HelpedLabel htmlFor="healthcare_worker_type" fieldName="healthcare_worker_type">Type of Healthcare Worker</HelpedLabel>
                   <Input
                     id="healthcare_worker_type"
                     value={formData.healthcare_worker_type}
@@ -1356,7 +1493,7 @@ const finalData = buildFinalData(formData);
                       checked={formData[item.id]}
                       onCheckedChange={(checked) => handleChange(item.id, checked)}
                     />
-                    <Label htmlFor={item.id}>{item.label}</Label>
+                    <Label htmlFor={item.id}>{item.label}<FieldHelpTip id={FIELD_HELP_ID_FOR[item.id]} className="ml-1 align-middle" /></Label>
                   </div>
                 ))}
               </div>
@@ -1384,7 +1521,7 @@ const finalData = buildFinalData(formData);
                       checked={formData[item.id]}
                       onCheckedChange={(checked) => handleChange(item.id, checked)}
                     />
-                    <Label htmlFor={item.id}>{item.label}</Label>
+                    <Label htmlFor={item.id}>{item.label}<FieldHelpTip id={FIELD_HELP_ID_FOR[item.id]} className="ml-1 align-middle" /></Label>
                   </div>
                 ))}
               </div>
@@ -1417,7 +1554,7 @@ const finalData = buildFinalData(formData);
             <div className="space-y-4">
               <CardTitle>Location</CardTitle>
               <div>
-                <Label htmlFor="address">Street Address</Label>
+                <HelpedLabel htmlFor="address" fieldName="address">Street Address</HelpedLabel>
                 <Input
                   id="address"
                   value={formData.address}
@@ -1427,7 +1564,7 @@ const finalData = buildFinalData(formData);
               </div>
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <div>
-                  <Label htmlFor="city">City *</Label>
+                  <HelpedLabel htmlFor="city" fieldName="city">City *</HelpedLabel>
                   <Input
                     id="city"
                     value={formData.city}
@@ -1437,7 +1574,7 @@ const finalData = buildFinalData(formData);
                   />
                 </div>
                 <div>
-                  <Label htmlFor="state">State *</Label>
+                  <HelpedLabel htmlFor="state" fieldName="state">State *</HelpedLabel>
                   <Select
                     value={formData.state}
                     onValueChange={(value) => handleChange('state', value)}
@@ -1453,7 +1590,7 @@ const finalData = buildFinalData(formData);
                   </Select>
                 </div>
                 <div>
-                  <Label htmlFor="zip">ZIP Code</Label>
+                  <HelpedLabel htmlFor="zip" fieldName="zip">ZIP Code</HelpedLabel>
                   <Input
                     id="zip"
                     value={formData.zip}
@@ -1477,7 +1614,7 @@ const finalData = buildFinalData(formData);
                         checked={formData[item.id]}
                         onCheckedChange={(checked) => handleChange(item.id, checked)}
                       />
-                      <Label htmlFor={item.id}>{item.label}</Label>
+                      <Label htmlFor={item.id}>{item.label}<FieldHelpTip id={FIELD_HELP_ID_FOR[item.id]} className="ml-1 align-middle" /></Label>
                     </div>
                   ))}
                 </div>
@@ -1508,7 +1645,7 @@ const finalData = buildFinalData(formData);
               </div>
 
               <div>
-                <Label htmlFor="primary_goal">What are your primary goals?</Label>
+                <HelpedLabel htmlFor="primary_goal" fieldName="primary_goal">What are your primary goals?</HelpedLabel>
                 <Textarea
                   id="primary_goal"
                   value={formData.primary_goal}
@@ -1550,7 +1687,7 @@ const finalData = buildFinalData(formData);
               </div>
 
               <div>
-                <Label htmlFor="funding_amount_needed">Funding Needed</Label>
+                <HelpedLabel htmlFor="funding_amount_needed" fieldName="funding_amount_needed">Funding Needed</HelpedLabel>
                 <Input
                   id="funding_amount_needed"
                   value={formData.funding_amount_needed}
@@ -1560,7 +1697,7 @@ const finalData = buildFinalData(formData);
               </div>
 
               <div>
-                <Label htmlFor="target_population">Target Population (if applicable)</Label>
+                <HelpedLabel htmlFor="target_population" fieldName="target_population">Target Population (if applicable)</HelpedLabel>
                 <Input
                   id="target_population"
                   value={formData.target_population}
