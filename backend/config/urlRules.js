@@ -42,6 +42,41 @@ export const NON_ACTIONABLE_DOMAINS = new Set([
   'medium.com',
 ])
 
+// ── Generic search-engine result URLs ───────────────────────────────────
+// Mission rule (Phase G): no direct opportunity may be displayed with a
+// Google/Bing/etc search URL as its application_url — that's not a real
+// funding source, it's a guess the crawler turned into a click. These
+// patterns trip BOTH placeholder rejection (so the crawler never inserts
+// such a row) AND the smoke script's per-opportunity URL audit.
+//
+// Each entry is an *intentional* validator literal — admin auditor must
+// treat as allowed-placeholders, not findings.
+
+export const SEARCH_ENGINE_URL_PATTERNS = [
+  /\bgoogle\.com\/search\b/i, // audit:allow placeholder
+  /\bgoogle\.com\/url\?/i, // audit:allow placeholder
+  /\bbing\.com\/search\b/i, // audit:allow placeholder
+  /\bduckduckgo\.com\/\?q=/i, // audit:allow placeholder
+  /\bduckduckgo\.com\/\?.*&q=/i, // audit:allow placeholder
+  /\byahoo\.com\/search\b/i, // audit:allow placeholder
+  /\byandex\.\w+\/search\b/i, // audit:allow placeholder
+  /\bbaidu\.com\/s\?/i, // audit:allow placeholder
+  /\becosia\.org\/search\b/i, // audit:allow placeholder
+]
+
+/**
+ * Mission rule (Phase G): a direct funding URL must not be a generic
+ * search-engine result page. Returns true if the URL clearly points to
+ * a search results page rather than a real funding portal.
+ */
+export function isSearchEngineUrl(url) {
+  if (typeof url !== 'string' || !url.trim()) return false
+  for (const rx of SEARCH_ENGINE_URL_PATTERNS) {
+    if (rx.test(url)) return true
+  }
+  return false
+}
+
 // ── URL regex patterns that indicate placeholder/invalid URLs ───────────
 // Each literal below is an *intentional* validator denylist entry. Admin
 // auditor scanners must treat these as allowed-placeholders, not findings.
@@ -56,6 +91,14 @@ export const INVALID_URL_PATTERNS = [
   /^data:/i, // audit:allow placeholder
   /^file:/i, // audit:allow placeholder
   /^mailto:/i, // audit:allow placeholder
+  // Phase G — generic search-engine result URLs are never a real
+  // funding portal. Reject at ingest so they can never be saved as a
+  // direct opportunity's application_url.
+  /\bgoogle\.com\/search\b/i, // audit:allow placeholder
+  /\bgoogle\.com\/url\?/i, // audit:allow placeholder
+  /\bbing\.com\/search\b/i, // audit:allow placeholder
+  /\bduckduckgo\.com\/\?/i, // audit:allow placeholder
+  /\byahoo\.com\/search\b/i, // audit:allow placeholder
 ]
 
 // ── Placeholder text patterns (used in title/description validation) ────

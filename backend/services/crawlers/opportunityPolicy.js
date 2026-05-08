@@ -22,7 +22,12 @@ import {
   isPlaceholderUrl as canonicalIsPlaceholderUrl,
   pickRealUrl as canonicalPickRealUrl,
   extractHostname,
+  isSearchEngineUrl,
 } from '../../config/urlRules.js'
+
+// Re-export so other consumers (smoke script, mission tests, route layer)
+// can import the search-engine guard from a single canonical place.
+export { isSearchEngineUrl }
 
 // ─── Module-level rejection counters ────────────────────────────────────────
 
@@ -266,6 +271,28 @@ export function enforceOpportunityPolicy(opp, opts = {}) {
   if (!pickRealUrl(opp)) {
     bumpCount('no_real_url', rejectionCounts)
     return { ok: false, reason: 'no_real_url' }
+  }
+
+  // Phase G — direct (kind=direct/benefit) opportunities must never be
+  // displayed with a generic search-engine URL as their application_url.
+  // Directories/referrals are allowed to point at search aggregators if
+  // that's truly the consumer-facing surface; only direct funding is
+  // gated. Set opts.allowSearchEngineUrls=true to bypass for special-case
+  // tests.
+  if (!opts.allowSearchEngineUrls) {
+    const kind = String(opp.opportunity_kind ?? opp.kind ?? 'direct').toLowerCase()
+    if (kind === 'direct' || kind === 'benefit') {
+      const candidate =
+        opp.application_url ||
+        opp.url ||
+        opp.source_url ||
+        opp.apply_url ||
+        null
+      if (candidate && isSearchEngineUrl(candidate)) {
+        bumpCount('search_engine_url_for_direct_opp', rejectionCounts)
+        return { ok: false, reason: 'search_engine_url_for_direct_opp' }
+      }
+    }
   }
 
   if (isPlaceholderOpportunity(opp)) {
