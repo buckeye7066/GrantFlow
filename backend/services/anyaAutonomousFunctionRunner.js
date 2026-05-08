@@ -490,7 +490,7 @@ async function saveHighMatchesToProfile(options, context) {
 
     const sourceClause = Array.isArray(sources) && sources.length ? `AND source IN (${sources.map(() => '?').join(', ')})` : ''
 
-    const opportunities = db
+    const opportunities = await db
       .prepare(
         `
           SELECT *
@@ -607,7 +607,7 @@ export async function saveCrawlerResultsToGlobal(options, context) {
     for (const opp of opportunities) {
       // Check if this opportunity already exists in global opportunities
       // We'll consider it a duplicate if title and sponsor match
-      const existing = db
+      const existing = await db
         .prepare(
           `
           SELECT id FROM funding_opportunities
@@ -623,7 +623,7 @@ export async function saveCrawlerResultsToGlobal(options, context) {
         // Create a global version (without profile_id)
         const globalId = randomUUID()
         
-        db.prepare(
+        await db.prepare(
           `
           INSERT INTO funding_opportunities (
             id, title, sponsor, deadline, amount_min, amount_max, amount_description,

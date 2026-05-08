@@ -160,12 +160,40 @@ export async function logTaskExecution({ db, runId, taskId, success, message }) 
  * @param {string} taskId - Task ID
  * @returns {Promise<Object>} Execution history
  */
-export async function getTaskExecutionHistory(db, taskId) {
+export async function getTaskExecutionHistory(db, taskId, ctx = null) {
   try {
-    const task = await db.prepare('SELECT metadata FROM anya_tasks WHERE id = ?').get(taskId)
+    // Enforce ownership: previously this loaded a task by id with no caller
+    // check, allowing any authenticated user to read execution metadata for
+    // any task (IDOR). Now we join the parent anya_session and require that
+    // the caller is the session owner or an admin.
+    const task = await db
+      .prepare(
+        `
+        SELECT t.metadata, t.session_id, s.user_id, s.profile_id
+        FROM anya_tasks t
+        LEFT JOIN anya_sessions s ON s.id = t.session_id
+        WHERE t.id = ?
+      `,
+      )
+      .get(taskId)
 
     if (!task) {
       return { found: false, executions: [] }
+    }
+
+    if (ctx) {
+      const isAdmin = Boolean(ctx?.isAdmin)
+      const callerUserId = ctx?.userId ?? ctx?.user_id ?? null
+      const ownsSession = task.user_id && callerUserId && String(task.user_id) === String(callerUserId)
+      const accessibleProfileIds = ctx?.accessibleProfileIds
+      const profileMatchesCaller =
+        task.profile_id &&
+        (accessibleProfileIds === null ||
+          (accessibleProfileIds instanceof Set &&
+            accessibleProfileIds.has(String(task.profile_id))))
+      if (!isAdmin && !ownsSession && !profileMatchesCaller) {
+        return { found: false, error: 'forbidden' }
+      }
     }
 
     const metadata = task.metadata ? JSON.parse(task.metadata) : {}
