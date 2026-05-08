@@ -176,6 +176,11 @@ export const useAuthStore = create((set, get) => ({
     if (accessToken) {
       client.setToken(accessToken)
       updates.accessToken = accessToken
+      // Tentatively mark authenticated so route guards don't briefly redirect
+      // returning users (and admin smoke tests) to /login while client.auth.me()
+      // is still in flight. App.jsx's bootstrap will call clearState() if the
+      // token turns out to be invalid, flipping this back to false.
+      updates.isAuthenticated = true
     }
     if (refreshToken) {
       client.setRefreshToken?.(refreshToken)

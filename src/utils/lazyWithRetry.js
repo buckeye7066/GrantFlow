@@ -81,14 +81,12 @@ export function lazyWithRetry(importFn, chunkLabel = 'chunk') {
       if (recentlyReloaded()) {
         // We already reloaded once; give up and let the boundary show
         // a message instead of looping.
-        // eslint-disable-next-line no-console
         console.error(
           `[lazyWithRetry] ${chunkLabel} still missing after reload — bubbling to error boundary`,
           err,
         )
         throw err
       }
-      // eslint-disable-next-line no-console
       console.warn(
         `[lazyWithRetry] ${chunkLabel} missing (likely a stale deploy) — forcing reload`,
         err?.message ?? err,

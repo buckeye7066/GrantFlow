@@ -146,9 +146,12 @@ async function scanFile(filePath, allowlist) {
  */
 async function runEslintCheck() {
   return new Promise((resolve) => {
+    // Windows: `npx`/`.cmd` resolution requires shell:true so PATHEXT and
+    // .cmd shims are honored. POSIX runners are unaffected.
+    const useShell = process.platform === 'win32'
     const child = spawn('npx', ['eslint', '--ext', '.js,.jsx,.mjs,.cjs', 'src', 'backend'], {
       cwd: REPO_ROOT,
-      shell: false,
+      shell: useShell,
       stdio: ['pipe', 'pipe', 'pipe']
     })
     

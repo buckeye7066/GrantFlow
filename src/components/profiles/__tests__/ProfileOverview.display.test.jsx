@@ -3,7 +3,8 @@ import React from "react"
 import { render, screen } from "@testing-library/react"
 import { describe, expect, it } from "vitest"
 
-import ProfileOverview, { formatInlinePreviewValue, renderValue } from "../ProfileOverview.jsx"
+import ProfileOverview from "../ProfileOverview.jsx"
+import { formatInlinePreviewValue, renderValue } from "../profileOverviewHelpers.jsx"
 import { calculateProfileCompletion } from "@/utils/profileCompletion"
 
 const baseProfile = {

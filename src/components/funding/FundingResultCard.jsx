@@ -12,8 +12,9 @@
  *   - Source label
  *
  * The card is a pure presentation component. It accepts a `result` prop in
- * the canonical funding-result shape (see canonicalResultShape() in the same
- * file). The shape is derived from what computeMatchDecision() returns plus
+ * the canonical funding-result shape (see canonicalResultShape() in
+ * ./canonicalResultShape.js). The shape is derived from what
+ * computeMatchDecision() returns plus
  * the funding_opportunities columns added by Phase 1.
  *
  * Snapshot tests in src/components/funding/FundingResultCard.test.jsx
@@ -22,6 +23,9 @@
 
 import React from 'react'
 import PropTypes from 'prop-types'
+
+// canonicalResultShape() lives in ./canonicalResultShape.js so this file
+// can stay components-only (Vite Fast Refresh requirement).
 
 const KIND_LABEL = {
   direct: 'Direct grant',
@@ -87,40 +91,6 @@ function pickAction(result) {
   if (kind === 'directory' || kind === 'referral') return 'search_directory'
   if (kind === 'benefit') return 'visit'
   return 'apply'
-}
-
-/**
- * The canonical funding-result shape every card consumes.
- * Stored here so route/payload changes that drift from this shape are
- * caught by the test suite.
- */
-export function canonicalResultShape() {
-  return {
-    id: 'string',
-    title: 'string',
-    sponsor: 'string',
-    description: 'string',
-    application_url: 'string?',
-    source_url: 'string?',
-    source: 'string',
-    kind: 'direct|benefit|directory|referral|school_portal',
-    source_trust_tier: 'official_api|official_portal|verified_directory|community_directory|open_web|manual_curated',
-    link_status: 'verified|unverified|broken|redirect|unreachable',
-    deadline: 'ISO date string?',
-    deadline_type: 'fixed|rolling|ongoing?',
-    amount_min: 'number?',
-    amount_max: 'number?',
-    amount_description: 'string?',
-    eligibility_summary: 'string?',
-    match_score: 'number',
-    match_decision: 'ACCEPT|REVIEW|REJECT',
-    match_confidence: 'number',
-    matched_profile_facts: 'string[]',
-    ineligibility_reasons: 'string[]',
-    next_action: 'apply|visit|contact|search_directory|request_info',
-    threshold_relaxed: 'boolean?',
-    relaxed_reason: 'string?',
-  }
 }
 
 export default function FundingResultCard({ result, onPrimaryAction, onSecondaryAction, className }) {

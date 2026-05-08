@@ -15,6 +15,12 @@ import FirstRunOnboardingWizard from './FirstRunOnboardingWizard'
 export default function FirstRunOnboardingGate({ profiles = [], activeProfileId }) {
   // If the user has already completed onboarding (backend state), never show the gate.
   const hasCompletedOnboarding = useAuthStore((state) => state.hasCompletedOnboarding)
+  // Auth bootstrap: don't probe preferences or open the wizard until we know
+  // who the viewer is. Without this, an admin briefly sees the wizard during
+  // the window between localStorage hydration and `auth.me()` returning,
+  // because `profiles` is `[]` and shouldShow evaluates true.
+  const user = useAuthStore((state) => state.user)
+  const isAdmin = Boolean(user?.is_admin)
 
   const { data: prefs, isSuccess: prefsLoaded } = useQuery({
     queryKey: ['userPreferences'],
@@ -60,6 +66,8 @@ const profileDataReady =
   const activeProfileComplete = hasZip && hasState && hasNeedsData
 
   const shouldShow =
+    Boolean(user) &&
+    !isAdmin &&
     prefsLoaded &&
     profileDataReady &&
     !hasCompletedOnboarding &&

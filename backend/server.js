@@ -155,6 +155,42 @@ app.set('trust proxy', 1);
 app.set('etag', 'strong');
 const PORT = ENV?.PORT ?? process.env.PORT ?? 8080;
 
+// --------------------------------------------------------------------------
+// Base-path API rewrite (Vercel parity for non-Vercel environments)
+//
+// Production frontend is served by Vercel under /grantflow/* and Vercel
+// rewrites `/grantflow/api/:path*` → `https://grantflow-production.up.railway.app/api/:path*`
+// (see vercel.json). The Vite build also bakes the appBase prefix into
+// every API call (see src/config/env.js → getApiBasePrefixForFetch()), so
+// the SPA emits requests like `/grantflow/api/auth/me`.
+//
+// In smoke / Railway / local dev there is no CDN doing that rewrite, and
+// without one the static SPA fallback at `app.use(APP_BASE_PATH, express.static)`
+// answers `/grantflow/api/auth/me` with the SPA's index.html. The frontend
+// then tries to JSON.parse HTML, the auth bootstrap silently fails, and
+// admin-only quick actions stay greyed out (Anya goals 4, 6, 8) — exactly
+// the failure mode the admin-tools-button-live smoke test surfaced.
+//
+// The fix is a thin URL rewriter that strips the configured app base off
+// any `/<base>/api/*` or `/<base>/uploads/*` request before route matching.
+// It is a no-op when the app base is `/`.
+const __appBasePathRaw =
+  ENV?.appBase || process.env.AUTH_FRONTEND_APP_BASE || process.env.VITE_APP_BASE || '/';
+const __appBasePathNormalized = String(__appBasePathRaw).replace(/\/+$/, '');
+if (__appBasePathNormalized && __appBasePathNormalized !== '') {
+  const stripPrefix = __appBasePathNormalized; // e.g. '/grantflow'
+  const stripPattern = new RegExp(
+    `^${stripPrefix.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&')}(/api(?:/|$)|/uploads(?:/|$))`,
+  );
+  app.use((req, _res, next) => {
+    if (stripPattern.test(req.url)) {
+      req.url = req.url.slice(stripPrefix.length);
+      if (req.url === '' || req.url[0] !== '/') req.url = '/' + req.url;
+    }
+    next();
+  });
+}
+
 // --- Upload storage health (single source of truth) ---
 const isProdEnv = String(process.env.NODE_ENV || '').toLowerCase() === 'production'
 const allowEphemeralUploads = String(process.env.ALLOW_EPHEMERAL_UPLOADS || '').toLowerCase() === 'true'

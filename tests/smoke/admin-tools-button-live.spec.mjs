@@ -16,7 +16,11 @@ import { test, expect } from 'playwright/test'
 import { basePath, baseURL } from './playwright.config.mjs'
 
 const appBase = String(basePath || '').replace(/\/$/, '') || '/grantflow'
-const ADMIN_TOKEN = process.env.ADMIN_TOKEN || 'test-admin-token'
+// Doctor / CI runs pass the per-run admin token via SMOKE_ADMIN_TOKEN; standalone
+// runs may set ADMIN_TOKEN directly. Either is accepted; fall back to the legacy
+// 'test-admin-token' default for backwards compatibility with older harnesses.
+const ADMIN_TOKEN =
+  process.env.SMOKE_ADMIN_TOKEN || process.env.ADMIN_TOKEN || 'test-admin-token'
 
 async function seedAdminAuth(page) {
   // Anchor on the SPA base so localStorage is set for the right origin/path.
@@ -36,10 +40,9 @@ test('Admin Tools button is enabled and opens dialog for admins', async ({ page 
 
   await seedAdminAuth(page)
 
-  // Navigate to a page where the Anya floating button renders.
-  await page.goto(`${baseURL}${appBase}/Admin`, { waitUntil: 'networkidle' })
-
-  // Verify we're actually authenticated as admin by hitting /api/auth/me.
+  // Verify the admin token is accepted by the API before we ask the SPA to
+  // boot under it. If the server doesn't recognise the token there is no
+  // point looking for the FAB — the route guard will redirect to /login.
   const me = await page.evaluate(async () => {
     const token = localStorage.getItem('grantflow:access-token')
     const res = await fetch('/api/auth/me', {
@@ -50,9 +53,16 @@ test('Admin Tools button is enabled and opens dialog for admins', async ({ page 
   console.log('[probe] /api/auth/me:', JSON.stringify(me).slice(0, 500))
   expect(me.status, '/api/auth/me should authenticate admin token').toBe(200)
 
+  // Now navigate to /Admin. The SPA boots, hydrates the token from
+  // localStorage (which tentatively flips isAuthenticated=true so route
+  // guards don't bounce us), then calls /api/auth/me to confirm. We wait
+  // for either the FAB or an explicit redirect back to /login — whichever
+  // happens first.
+  await page.goto(`${baseURL}${appBase}/Admin`, { waitUntil: 'networkidle' })
+
   // Open the Anya panel (FAB button with aria-label / sr-only "Open Anya").
   const fab = page.getByRole('button', { name: /open anya/i })
-  await expect(fab).toBeVisible()
+  await expect(fab).toBeVisible({ timeout: 20_000 })
   await fab.click()
 
   // Panel must show the quick-actions row. Wait for tools to finish loading.

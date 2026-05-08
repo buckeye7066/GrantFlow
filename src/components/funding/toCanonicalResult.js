@@ -3,7 +3,7 @@
  *
  * Phase 5/6 mission rule: every funding-result page must render
  * <FundingResultCard /> using the canonical result shape (see
- * src/components/funding/FundingResultCard.jsx — canonicalResultShape()).
+ * src/components/funding/canonicalResultShape.js — canonicalResultShape()).
  *
  * Backend routes (matching.js, discovery.js, opportunities.js, …) and
  * older crawler payloads expose slightly different field names. This

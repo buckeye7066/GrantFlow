@@ -5,14 +5,26 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from "
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import AnyaChat from "./AnyaChat"
 import { cn } from "@/lib/utils"
-import { useAuthStore } from "@/stores/authStore"
+import { useAuthStore, normalizeUserAdmin } from "@/stores/authStore"
 
 export default function AnyaFloatingButton({ profileId, className }) {
   const [isOpen, setIsOpen] = useState(false)
   const [prefillMessage, setPrefillMessage] = useState(null)
-  const isAdmin = useAuthStore((state) => Boolean(state.user?.is_admin))
-  const canOpen = isAdmin || Boolean(profileId)
-  const targetProfileId = profileId ?? (isAdmin ? null : undefined)
+  // Use the canonical admin normalizer so we accept every shape the auth
+  // store may carry (`is_admin` snake_case from the canonical /api/auth/me
+  // bootstrap, `isAdmin` camelCase from JWT payloads, `role === 'admin'`,
+  // or a `roles` array). Hard-coding `state.user?.is_admin` previously
+  // greyed out admin-only chat surfaces during the brief window between
+  // /api/auth/me returning a camelCase isAdmin claim and setAuthenticatedUser
+  // re-projecting it as is_admin — violating Anya goals 4, 6, 8.
+  const user = useAuthStore((state) => state.user)
+  const isAdmin = normalizeUserAdmin(user)
+  // Treat the synthetic admin sentinel as "no real profile" — the AnyaChat
+  // child filters it out anyway, but recognising it here prevents a
+  // misleading targetProfileId from leaking into bug reports.
+  const realProfileId = profileId && profileId !== '__admin__' ? profileId : null
+  const canOpen = isAdmin || Boolean(realProfileId)
+  const targetProfileId = realProfileId ?? (isAdmin ? null : undefined)
 
   useEffect(() => {
     function handleOpen(event) {

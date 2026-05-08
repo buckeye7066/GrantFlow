@@ -37,8 +37,18 @@ export default function OnboardingFlow() {
   const [showProfileWizard, setShowProfileWizard] = useState(false)
 
   useEffect(() => {
+    // Wait for auth bootstrap to populate `user`. If we trigger the manual
+    // before then, an admin signing in briefly sees the onboarding wizard
+    // because `user?.is_admin` is undefined for the first paint and
+    // `hasCompletedOnboarding` defaults to false.
+    if (!user) {
+      return
+    }
     // Admin users never get auto-triggered onboarding
     if (user?.is_admin) {
+      // If a previous render opened the manual before user arrived, close it.
+      setShowVideo(false)
+      setShowProfileWizard(false)
       return
     }
 
