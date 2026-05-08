@@ -81,7 +81,7 @@ export function ensureProfileAccess(profileIdParam = 'id') {
       
       // Check if profile belongs to user via user_id (async DB call)
       if (user.userId) {
-        const profile = req.db.prepare('SELECT id, user_id FROM profiles WHERE id = ?').get(profileId);
+        const profile = await req.db.prepare('SELECT id, user_id FROM profiles WHERE id = ?').get(profileId);
         
         if (profile && profile.user_id === user.userId) {
           return next();

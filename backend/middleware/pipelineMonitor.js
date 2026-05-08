@@ -20,9 +20,25 @@ const buckets = {
   anya: { total: 0, zeroResult: 0, slow: 0, errors: 0, recent: [] },
 }
 
+// `discoveryRouter` (backend/routes/discovery.js) is mounted at `/api`, not
+// at `/api/discovery`. The actual paths it serves are `/api/discover-grants`,
+// `/api/comprehensiveMatch`, `/api/searchOpportunities`,
+// `/api/archOpportunities`, `/api/discoverECFServices`. The previous
+// `/api/discovery` prefix never matched any real request, so the
+// `discovery` bucket was always empty and zero-result discovery events
+// were silently lost (Goal #8 -- "avoid zero-result experiences" -- needed
+// this telemetry to detect production regressions).
 function classifyPath(path) {
   if (path.startsWith('/api/matching')) return 'matching'
-  if (path.startsWith('/api/discovery')) return 'discovery'
+  if (
+    path.startsWith('/api/discover-grants') ||
+    path.startsWith('/api/comprehensiveMatch') ||
+    path.startsWith('/api/searchOpportunities') ||
+    path.startsWith('/api/archOpportunities') ||
+    path.startsWith('/api/discoverECFServices')
+  ) {
+    return 'discovery'
+  }
   if (path.startsWith('/api/ai/match') || path.startsWith('/api/ai/comprehensive')) return 'ai'
   if (path.startsWith('/api/anya')) return 'anya'
   return null

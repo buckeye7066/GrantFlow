@@ -38,8 +38,13 @@ export function responseCache(ttlMs = 30000) {
     // req.originalUrl includes the path and query string, so it's a precise key
     // Key must include user identity to prevent cross-user cache poisoning
     // and must be invalidated externally on profile/opportunity mutations.
-    const userId = req.user?.id;
-if (!userId) return next(); // Never cache unauthenticated or unidentifiable requests
+    // Auth middleware sets `req.user.userId` (camelCase) -- the legacy
+    // `req.user.id` lookup was inert, which silently disabled this cache
+    // for every authenticated request and let cacheable endpoints
+    // (`/api/help`, `/api/categories`, `/api/states`) re-query the DB on
+    // every hit. Goal #9 (reliability) and #10 (action speed) regression.
+    const userId = req.user?.userId ?? req.user?.id;
+    if (!userId) return next(); // Never cache unauthenticated or unidentifiable requests
     const key = `${userId}:${req.originalUrl}`;
     const cached = cache.get(key);
 
