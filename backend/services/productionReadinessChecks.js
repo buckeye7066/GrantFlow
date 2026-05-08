@@ -69,7 +69,7 @@ export function checkSqliteInProduction({ env = process.env, dbDialect = null } 
  * endpoint and smoke script can read it without relying on a startup
  * crash.
  */
-export function checkPersistentUploads({ env = process.env, storageStatus = null } = {}) {
+export function checkPersistentUploads({ env = process.env, storageStatus = null, runtimeOnly = false } = {}) {
   const isProd = String(env.NODE_ENV || '').toLowerCase() === 'production'
   if (!isProd) {
     return { id: 'persistent_uploads', level: 'info', detail: 'NODE_ENV is not production.', ok: true }
@@ -83,6 +83,26 @@ export function checkPersistentUploads({ env = process.env, storageStatus = null
     }
   }
   if (!storageStatus) {
+    // Two callers:
+    //   - bootstrap (authoritative; throws in production when uploads
+    //     aren't persistent — see backend/server.js + bootstrap.js).
+    //   - runtime mission health (`/api/health/mission`, every dashboard
+    //     refresh). When mission health hits this path it only means
+    //     `storageStatus` was not plumbed through req.app.locals; the
+    //     bootstrap gate has already run (otherwise the process would
+    //     not be serving traffic).
+    // Boot-time callers want a hard `warn` (test enforces this). Runtime
+    // callers should not re-trip the gate on every health hit, so they
+    // pass `runtimeOnly: true` and we demote to `info`.
+    if (runtimeOnly) {
+      return {
+        id: 'persistent_uploads',
+        level: 'info',
+        detail:
+          'No storageStatus plumbed to runtime mission health. The authoritative persistent-uploads check runs at boot (backend/startup/bootstrap.js); if the process is serving traffic, that check passed.',
+        ok: true,
+      }
+    }
     return {
       id: 'persistent_uploads',
       level: 'warn',
@@ -265,7 +285,7 @@ export function buildProductionReadinessReport({
 } = {}) {
   const results = [
     checkSqliteInProduction({ env, dbDialect }),
-    checkPersistentUploads({ env, storageStatus }),
+    checkPersistentUploads({ env, storageStatus, runtimeOnly: Boolean(selfReference) }),
     checkUrlVerificationEnabled({ env }),
     checkPendingMigrations({ pendingMigrations }),
     checkCrawlerFreshness({ ageHours: crawlerSourceRunsAgeHours, maxAgeHours: crawlerSourceRunsMaxAgeHours, env }),

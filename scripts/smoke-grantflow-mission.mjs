@@ -156,11 +156,35 @@ async function saveOpportunity(token, profileId, opportunityId) {
   )
 }
 
-async function prepareApplication(token, profileId, opportunityId) {
+async function addOpportunityToPipeline(token, profileId, opportunityId, opportunityFallbackData) {
+  // /api/applications/prepare requires a real `grantId` (grants table row,
+  // i.e. an item in the user's pipeline) and `organizationId`. Discovery
+  // returns opportunity ids, NOT grant ids. The canonical bridge is
+  // /api/grants/from-opportunity which gates on the trust check, links the
+  // opportunity to the user's profile/org, and returns the new grant row.
+  return fetchJSON(
+    `${BASE_URL}/api/grants/from-opportunity`,
+    {
+      method: 'POST',
+      headers: authHeaders(token),
+      body: JSON.stringify({
+        profile_id: profileId,
+        opportunity_id: opportunityId,
+        // Fall back to inline opportunity_data when discovery returned a
+        // synthetic id (curated/national-program rows that are not in
+        // funding_opportunities). The trust gate still applies.
+        ...(opportunityFallbackData ? { opportunity_data: opportunityFallbackData } : {}),
+      }),
+    },
+    'grants.from-opportunity',
+  )
+}
+
+async function prepareApplication(token, grantId, organizationId) {
   return fetchJSON(
     `${BASE_URL}/api/applications/prepare`,
     { method: 'POST', headers: authHeaders(token),
-      body: JSON.stringify({ profile_id: profileId, opportunity_id: opportunityId }) },
+      body: JSON.stringify({ grantId, organizationId }) },
     'applications.prepare',
   )
 }
@@ -240,15 +264,36 @@ async function smokeOneProfile(token, fixture, idx) {
   out.coverage_outcomes_count = outcomes.length
 
   // Mission rule: must plan >= 3 source families relevant to this profile.
-  const planned = new Set(crawl.body?.coverage_report?.sources_planned ?? [])
+  // realCrawlers populates BOTH `coverage_plan` (planning input) and
+  // `coverage_report` (post-run summary). `sources_planned` lives on both;
+  // prefer the report when present.
+  const planned = new Set(
+    crawl.body?.coverage_report?.sources_planned
+      ?? crawl.body?.coverage_plan?.sources_planned
+      ?? [],
+  )
   if (planned.size < 3) {
     out.errors.push(`source_plan_too_thin: planned=${planned.size} (mission rule: >= 3)`)
   }
 
   // Mission rule: mustHaveDirectSource fixtures must attempt at least 1 direct.
+  // `direct_sources` is the registry-derived split of planned sources into
+  // direct vs directory. It lives on `coverage_plan` (where buildCoveragePlan
+  // wrote it), NOT on `coverage_report`. The report can be cross-checked via
+  // sources_planned ∩ (NOT directory) for older deploys that didn't carry
+  // direct_sources on the plan.
   if (fixture.expectations?.mustHaveDirectSource) {
-    const directSources = (crawl.body?.coverage_report?.direct_sources ?? [])
-    if (directSources.length === 0) {
+    let directSources = crawl.body?.coverage_plan?.direct_sources
+      ?? crawl.body?.coverage_report?.direct_sources
+      ?? []
+    if (!Array.isArray(directSources) || directSources.length === 0) {
+      // Fallback: derive from source_labels (each entry has `directory: bool`).
+      const labels = crawl.body?.source_labels ?? {}
+      directSources = Object.entries(labels)
+        .filter(([, v]) => v && v.directory !== true)
+        .map(([id]) => id)
+    }
+    if (!Array.isArray(directSources) || directSources.length === 0) {
       out.errors.push('no_direct_source_attempted')
     }
   }
@@ -281,7 +326,10 @@ async function smokeOneProfile(token, fixture, idx) {
       ?? (Array.isArray(top.matched_profile_facts) ? top.matched_profile_facts.slice(0, 5) : [])
   }
 
-  // Save first opportunity to pipeline
+  // Save first opportunity. Two layers:
+  //   1. /api/saved-grants  -> user-level bookmark (low gate)
+  //   2. /api/grants/from-opportunity -> pipeline grant row (high gate;
+  //      runs the canonical trust check). Required to seed prepare().
   if (top?.id) {
     const saveRes = await saveOpportunity(token, profileId, top.id)
     if (!saveRes.ok) {
@@ -290,12 +338,34 @@ async function smokeOneProfile(token, fixture, idx) {
       out.saved_opportunity_id = top.id
     }
 
-    // Create application
-    const prep = await prepareApplication(token, profileId, top.id)
-    if (!prep.ok) {
-      out.warnings.push(`application_prepare_failed: ${prep.status} ${JSON.stringify(prep.body).slice(0, 200)}`)
+    const opportunityFallback = {
+      title: top.title,
+      sponsor: top.sponsor,
+      url: top.application_url || top.url || top.source_url,
+      amount_min: top.amount_min,
+      amount_max: top.amount_max,
+      deadline: top.deadline,
+      deadline_type: top.deadline_type,
+      source: top.source,
+    }
+    const fromOpp = await addOpportunityToPipeline(token, profileId, top.id, opportunityFallback)
+    if (!fromOpp.ok) {
+      out.warnings.push(`from_opportunity_failed: ${fromOpp.status} ${JSON.stringify(fromOpp.body).slice(0, 200)}`)
     } else {
-      out.application_id = prep.body?.id ?? prep.body?.application_id ?? null
+      const grantId = fromOpp.body?.id ?? fromOpp.body?.grant?.id ?? fromOpp.body?.grant_id ?? null
+      const organizationId = fromOpp.body?.organization_id ?? fromOpp.body?.grant?.organization_id ?? null
+      out.grant_id = grantId
+      out.organization_id = organizationId
+      if (grantId && organizationId) {
+        const prep = await prepareApplication(token, grantId, organizationId)
+        if (!prep.ok) {
+          out.warnings.push(`application_prepare_failed: ${prep.status} ${JSON.stringify(prep.body).slice(0, 200)}`)
+        } else {
+          out.application_id = prep.body?.id ?? prep.body?.application_id ?? null
+        }
+      } else {
+        out.warnings.push(`application_prepare_skipped: missing grantId/organizationId in from-opportunity response`)
+      }
     }
   } else {
     out.warnings.push('no_top_opportunity_to_save')
@@ -306,8 +376,21 @@ async function smokeOneProfile(token, fixture, idx) {
   if (!anya.ok) {
     out.warnings.push(`anya_failed: ${anya.status} ${JSON.stringify(anya.body).slice(0, 200)}`)
   } else {
-    const actions = anya.body?.output?.actions ?? anya.body?.actions ?? []
-    out.anya = { actions_count: actions.length, reasons: anya.body?.output?.reasons ?? anya.body?.reasons ?? [] }
+    // The Anya tool route wraps the tool return in `{ result: <toolReturn> }`
+    // (see backend/routes/anya.js POST /tools/:toolName/invoke). Older
+    // shapes used `output.actions`. Probe in priority order to stay
+    // forward/backward compatible.
+    const actions =
+      anya.body?.result?.actions
+      ?? anya.body?.output?.actions
+      ?? anya.body?.actions
+      ?? []
+    const reasons =
+      anya.body?.result?.reasons
+      ?? anya.body?.output?.reasons
+      ?? anya.body?.reasons
+      ?? []
+    out.anya = { actions_count: actions.length, reasons }
     if (fixture.expectations?.anyaActionMustExist && actions.length === 0) {
       out.errors.push('anya_returned_zero_actions')
     }

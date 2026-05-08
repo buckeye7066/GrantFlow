@@ -136,11 +136,29 @@ export async function detectModuleUsage(serviceFiles = [], consumerFiles = []) {
         })
       }
       consumers[consumerFile] = consumed
-    } catch {
-      consumers[typeof consumer === 'string' ? consumer : consumer?.file ?? 'unknown'] = false
+    } catch (err) {
+      // ENOENT = the file is not part of THIS deploy artifact. Backend deploys
+      // (Railway) do not ship src/, so reading src/pages/SavedGrants.jsx from
+      // the backend filesystem will always fail. That is NOT the same as
+      // "consumer exists but does not import the service" -- treating it as
+      // `false` produced a permanent false-positive on
+      // mission_service_not_globally_integrated for every prod health hit.
+      // Report `null` (unknown) so the aggregator can ignore it cleanly.
+      const isMissing =
+        err?.code === 'ENOENT' ||
+        err?.code === 'ENOTDIR' ||
+        err?.code === 'EISDIR' ||
+        err?.code === 'EACCES'
+      consumers[typeof consumer === 'string' ? consumer : consumer?.file ?? 'unknown'] =
+        isMissing ? null : false
     }
   }
-  const allConsumed = Object.values(consumers).length > 0 && Object.values(consumers).every(Boolean)
+  // `consumed` is true only if at least one consumer was actually checked AND
+  // every checked consumer imported the service. Unknown consumers (file not
+  // present on this deploy) are excluded from the denominator: we should not
+  // gate a release on a frontend file the backend deploy does not own.
+  const checkedValues = Object.values(consumers).filter((v) => v !== null && v !== undefined)
+  const allConsumed = checkedValues.length > 0 && checkedValues.every(Boolean)
   const value = {
     service_files: serviceFiles,
     consumed: allConsumed,
@@ -217,10 +235,27 @@ export async function buildMissionHealth(db) {
   )
 
   // ── Application funnel ──────────────────────────────────────────────
-  const funnel = await safeAll(
+  // SQLite production carried `grant_applications` (migration 047), but the
+  // canonical Postgres schema (apply engine, migration 0019) uses the
+  // `applications` table. Try the legacy name first for back-compat with
+  // older sqlite deploys, and fall back to `applications` if Postgres
+  // reports `relation does not exist` so the live `/api/health/mission`
+  // payload doesn't carry an inline `__error` for every dashboard hit.
+  let funnel = await safeAll(
     db,
     `SELECT status, COUNT(*) AS n FROM grant_applications GROUP BY status`,
   )
+  const funnelHasMissingTableError =
+    Array.isArray(funnel) &&
+    funnel.length === 1 &&
+    funnel[0]?.__error &&
+    /does not exist|no such table/i.test(String(funnel[0].__error))
+  if (funnelHasMissingTableError) {
+    funnel = await safeAll(
+      db,
+      `SELECT status, COUNT(*) AS n FROM applications GROUP BY status`,
+    )
+  }
 
   const verifiedPct = pct(verifiedDirect, totalDirect)
   const brokenPct = pct(brokenDirect, totalDirect)
