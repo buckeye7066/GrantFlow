@@ -50,6 +50,7 @@ import path from 'path'
 import { fileURLToPath } from 'url'
 import { promises as fs } from 'fs'
 import { spawn } from 'node:child_process'
+import { parse as babelParse } from '@babel/parser'
 import { AUDIT_CATEGORIES, SEVERITY, logAuditEvent } from './auditService.js'
 
 // ---------------------------------------------------------------------------
@@ -165,8 +166,23 @@ const PROFILE_BLEED_ISOLATION_RE = /profile_id/i
  * pattern in our routes and is responsible for every "missing await"
  * production 500 we have shipped a fix for in 2026-04/05.
  */
-const DB_PREPARE_CALL_RE =
-  /(\b(?:\w+\.)*\w*[Dd]b\.prepare\s*\([\s\S]*?\)\s*\.\s*(?:all|get|run)\s*\()/g
+// IMPORTANT: the body of prepare(...) must NOT span across statement
+// boundaries. The codebase uses a no-semi style, so a `;` boundary alone is
+// not sufficient -- we also reject statement-introducing keywords inside the
+// lazy body (`const`, `let`, `var`, `return`, `await`, control-flow words).
+// Real SQL strings never contain those tokens, but a 2-step pattern always
+// will (`const s = db.prepare(sql)` followed by ` ... await s.run()`).
+// Without this guard the regex bridges across the closing paren of prepare
+// into a much later chained `.run(`, and the applier injects `await` in
+// front of the prepare statement -- which is wrong and was the root cause
+// of the 90+ false-positive rewrites that landed in the previous repair
+// pass before being reverted.
+const DB_PREPARE_CALL_RE = new RegExp(
+  String.raw`(\b(?:\w+\.)*\w*[Dd]b\.prepare\s*\(` +
+    String.raw`(?:(?!\b(?:const|let|var|return|await|if|for|while|function|=>)\b)[^;])*?` +
+    String.raw`\)\s*\.\s*(?:all|get|run)\s*\()`,
+  'g',
+)
 
 /**
  * Known column-name typos that compile against zero production migrations
@@ -510,27 +526,196 @@ function applyConsoleLog(filePath, content) {
 }
 
 /**
+ * (Deprecated regex helper, retained only so existing tests that import it
+ * keep type-checking. The current applyMissingDbAwait uses @babel/parser
+ * for precise async-context detection — see callIsDbPrepareChain /
+ * nearestAsyncFunction below.)
+ */
+function isInsideAsyncFunction(view, offset) {
+  // Scan up to 20k chars back; that covers any reasonable enclosing
+  // function while keeping the scan bounded.
+  const start = Math.max(0, offset - 20000)
+  const window = view.slice(start, offset)
+  // Walk backward, balancing `{`/`}` to find the enclosing function-body
+  // opening brace. We track depth: every `}` we encounter while walking
+  // backward increases depth (we're "skipping" a sibling block); every `{`
+  // decreases depth. When depth hits -1 we've found the enclosing block's
+  // open brace.
+  let depth = 0
+  let i = window.length - 1
+  let braceIdx = -1
+  while (i >= 0) {
+    const ch = window[i]
+    if (ch === '}') depth++
+    else if (ch === '{') {
+      if (depth === 0) {
+        braceIdx = i
+        break
+      }
+      depth--
+    }
+    i--
+  }
+  if (braceIdx === -1) {
+    // Not inside any block. Top-level module: ESM top-level await is OK.
+    return true
+  }
+  // Look at the chars immediately before the `{`. The function signature
+  // ends here. We allow up to 240 chars of signature lookback to cover
+  // params spread over multiple lines.
+  const sigStart = Math.max(0, braceIdx - 240)
+  const sig = window.slice(sigStart, braceIdx).trim()
+  // The signature ends right before the `{`, so we anchor patterns to the
+  // END of `sig`. This is the critical invariant -- without it the regex
+  // matches `async` keywords on SIBLING functions (e.g. an earlier
+  // `beforeAll(async () => {` block) and false-flags later
+  // non-async arrow callbacks like `beforeEach(() => {` as async, which
+  // produced the test-suite parser regression in the first dry-run.
+  // Arrow function: `... =>` at end of sig means the body's function is
+  // an arrow function. Check whether the arrow is preceded by `async`.
+  if (/=>\s*$/.test(sig)) {
+    // Look for `async` immediately before the params or the arrow.
+    return /\basync\s*\([^()]*\)\s*=>\s*$/.test(sig) || /\basync\s+[\w$]+\s*=>\s*$/.test(sig)
+  }
+  // Function expression: `function name(args)` or `function(args)` ending
+  // right before the brace.
+  const funcMatch = sig.match(/(?:^|[^\w$])(async\s+)?function\b[^()]*\([^()]*\)\s*$/)
+  if (funcMatch) return Boolean(funcMatch[1])
+  // Method shorthand inside an object/class: `name(args)` ending right
+  // before the brace. Async methods are written `async name(args) { ... }`.
+  const methodMatch = sig.match(/(?:^|[^\w$])(async\s+)?[\w$]+\s*\([^()]*\)\s*$/)
+  if (methodMatch) return Boolean(methodMatch[1])
+  // Could not determine signature shape (likely a bare block `{ ... }`,
+  // catch handler, or an unusual layout). Default conservatively to true:
+  // bare blocks inherit the async context from their enclosing function,
+  // and a try/catch sits inside whatever function wraps it.
+  return true
+}
+
+/**
+ * AST helpers for missing_db_await detection.
+ *
+ * The original regex-based applier produced parser-error regressions
+ * because it could not reliably tell whether a chained
+ * `db.prepare().run()` call sat inside an async function body, a
+ * synchronous `db.transaction(() => { ... })` callback, a top-level
+ * `.forEach((x) => { ... })` migration, or an arrow expression body. We
+ * now parse with @babel/parser, walk the AST, and only fire on calls
+ * whose nearest enclosing function is `async: true`. This eliminates
+ * both classes of false positive (sibling-async match,
+ * arrow-expression-body match) without giving up any genuine fixes.
+ */
+function callIsDbPrepareChain(node) {
+  if (!node || node.type !== 'CallExpression') return false
+  const outerCallee = node.callee
+  if (!outerCallee || outerCallee.type !== 'MemberExpression') return false
+  const outerProp = outerCallee.property
+  const outerName =
+    outerProp?.type === 'Identifier'
+      ? outerProp.name
+      : outerProp?.type === 'StringLiteral'
+        ? outerProp.value
+        : null
+  if (outerName !== 'get' && outerName !== 'all' && outerName !== 'run') return false
+  const inner = outerCallee.object
+  if (!inner || inner.type !== 'CallExpression') return false
+  const innerCallee = inner.callee
+  if (!innerCallee || innerCallee.type !== 'MemberExpression') return false
+  const innerProp = innerCallee.property
+  const innerName =
+    innerProp?.type === 'Identifier'
+      ? innerProp.name
+      : innerProp?.type === 'StringLiteral'
+        ? innerProp.value
+        : null
+  if (innerName !== 'prepare') return false
+  // The receiver of `.prepare` must be something that ends in `db` or `_db`
+  // (e.g. `req.db`, `this._db`, `singleton._db`).
+  let receiver = innerCallee.object
+  while (receiver && receiver.type === 'MemberExpression') {
+    receiver = receiver.property
+  }
+  const receiverName =
+    receiver?.type === 'Identifier'
+      ? receiver.name
+      : receiver?.type === 'StringLiteral'
+        ? receiver.value
+        : null
+  if (!receiverName) return false
+  return /[Dd]b$/.test(receiverName)
+}
+
+function walkAstForDbCalls(node, parents, onCall) {
+  if (!node || typeof node !== 'object') return
+  if (Array.isArray(node)) {
+    for (const child of node) walkAstForDbCalls(child, parents, onCall)
+    return
+  }
+  if (typeof node.type !== 'string') return
+  if (node.type === 'CallExpression' && callIsDbPrepareChain(node)) {
+    onCall(node, parents)
+  }
+  parents.push(node)
+  for (const key of Object.keys(node)) {
+    if (key === 'loc' || key === 'start' || key === 'end' || key === 'range') continue
+    const child = node[key]
+    if (child && (Array.isArray(child) || typeof child === 'object')) {
+      walkAstForDbCalls(child, parents, onCall)
+    }
+  }
+  parents.pop()
+}
+
+function nearestAsyncFunction(parents) {
+  for (let i = parents.length - 1; i >= 0; i--) {
+    const p = parents[i]
+    if (
+      p.type === 'FunctionDeclaration' ||
+      p.type === 'FunctionExpression' ||
+      p.type === 'ArrowFunctionExpression' ||
+      p.type === 'ObjectMethod' ||
+      p.type === 'ClassMethod'
+    ) {
+      return p.async === true
+    }
+    if (p.type === 'Program') {
+      // Top-level: ESM modules support top-level await; CommonJS does not.
+      return p.sourceType === 'module'
+    }
+  }
+  return false
+}
+
+/**
  * Apply missing_db_await repair: prepend `await ` to every chained
- * `db.prepare(...).all/get/run(...)` call that isn't already awaited.
- * Skips files without an `async ` token to avoid creating syntax errors
- * in modules that don't have an async context.
+ * `db.prepare(...).all/get/run(...)` call whose nearest enclosing function
+ * is async (and that isn't already wrapped in an AwaitExpression).
  */
 function applyMissingDbAwait(content) {
   if (!content.includes('async ')) return { newContent: content, count: 0 }
-  // Use the comment-stripped view to find match offsets so we never rewrite
-  // text inside a /* ... */ block or // line comment. Because
-  // `stripCommentsPreservingLayout` preserves byte offsets, every offset
-  // we find in the view also points at the same character in the
-  // original content.
-  const view = stripCommentsPreservingLayout(content)
-  const offsets = []
-  for (const m of view.matchAll(DB_PREPARE_CALL_RE)) {
-    const offset = m.index ?? 0
-    const before = view.slice(Math.max(0, offset - 12), offset)
-    if (/\bawait\s*$/.test(before)) continue
-    offsets.push(offset)
+  let ast
+  try {
+    ast = babelParse(content, {
+      sourceType: 'module',
+      plugins: ['jsx', 'typescript', 'topLevelAwait'],
+      errorRecovery: true,
+      allowAwaitOutsideFunction: true,
+      allowReturnOutsideFunction: true,
+      allowImportExportEverywhere: true,
+    })
+  } catch {
+    // Parse failure → skip silently; never crash the repair pass.
+    return { newContent: content, count: 0 }
   }
+  const offsets = []
+  walkAstForDbCalls(ast.program, [ast.program], (node, parents) => {
+    const parent = parents[parents.length - 1]
+    if (parent && parent.type === 'AwaitExpression') return
+    if (!nearestAsyncFunction(parents)) return
+    if (typeof node.start === 'number') offsets.push(node.start)
+  })
   if (offsets.length === 0) return { newContent: content, count: 0 }
+  offsets.sort((a, b) => a - b)
   // Splice from the back so earlier offsets remain valid.
   let result = content
   for (let i = offsets.length - 1; i >= 0; i--) {
