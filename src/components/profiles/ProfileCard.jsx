@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 import { createPageUrl } from "@/utils";
 import { useAuthenticatedAvatar } from "@/hooks/useAuthenticatedAvatar";
+import { isRealProfileId } from "@/api/profileIdGuards";
 
 export default function ProfileCard({ profile, onViewInvoices, onDelete, isAdmin, onHardDelete, onRestore }) {
   const navigate = useNavigate();
@@ -94,7 +95,14 @@ export default function ProfileCard({ profile, onViewInvoices, onDelete, isAdmin
       const base = String(profile.avatar_download_url)
       return avatarCacheBuster ? `${base}${base.includes("?") ? "&" : "?"}v=${avatarCacheBuster}` : base
     }
-    if (profile?.avatar_url && String(profile.avatar_url).includes('/uploads/')) {
+    // Only emit /api/profiles/<id>/avatar/download for routable ids; the
+    // admin sentinel (or any other non-routable id) would 404 the avatar
+    // request and produce a console error in production.
+    if (
+      profile?.avatar_url &&
+      String(profile.avatar_url).includes('/uploads/') &&
+      isRealProfileId(profile?.id)
+    ) {
       const base = `/api/profiles/${profile.id}/avatar/download`
       return avatarCacheBuster ? `${base}?v=${avatarCacheBuster}` : base
     }

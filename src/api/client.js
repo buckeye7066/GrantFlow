@@ -1,6 +1,7 @@
 import { env, getApiBasePrefixForFetch } from '@/config/env.js'
 import { createLogger } from '@/utils/logger'
 import { toast as showToast } from '@/components/ui/use-toast'
+import { assertRealProfileId } from './profileIdGuards'
 
 // API Client
 
@@ -875,6 +876,7 @@ class APIClient {
   }
 
   profileSectionsClient(profileId) {
+    assertRealProfileId(profileId, 'profileSectionsClient');
     const base = `/api/profiles/${profileId}/sections`;
     return {
       list: async () => this.fetch(base),

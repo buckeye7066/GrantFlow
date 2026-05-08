@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { createCrawlerJob } from "@/api/crawlers"
 import { apiFetch } from "@/api/client"
+import { assertRealProfileId } from "@/api/profileIdGuards"
 import { useToast } from "@/components/ui/use-toast"
 import { formatDistanceToNow } from "date-fns"
 
@@ -159,6 +160,7 @@ export default function StudentPortalsCard({ state, profileId }) {
 
   const handleConfirmAward = async (result) => {
     try {
+      assertRealProfileId(profileId, 'StudentPortalsCard.handleConfirmAward')
       await apiFetch(`/api/profiles/${profileId}/pipeline`, {
         method: "POST",
         body: JSON.stringify({

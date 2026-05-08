@@ -25,6 +25,7 @@ import {
 } from '@/components/ui/select'
 import { Loader2, ChevronRight, ChevronLeft } from 'lucide-react'
 import { apiFetch } from '@/api/client'
+import { isRealProfileId } from '@/api/profileIdGuards'
 import { useToast } from '@/components/ui/use-toast'
 import { useQueryClient } from '@tanstack/react-query'
 import { upsertProfileSection } from '@/api/profiles'
@@ -133,7 +134,7 @@ const inferredType =
   }),
 })
 profileId = created?.id
-if (!profileId) throw new Error('Failed to create profile')
+if (!isRealProfileId(profileId)) throw new Error('Failed to create profile (admin sentinel or empty id returned)')
       }
 
       let basicData = { zip, state }

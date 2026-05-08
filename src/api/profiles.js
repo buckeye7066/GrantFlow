@@ -37,6 +37,7 @@ export async function updateProfile(id, payload) {
 }
 
 export async function uploadProfileAvatar(profileId, file) {
+  assertRealProfileId(profileId, 'uploadProfileAvatar')
   const formData = new FormData()
   formData.append('avatar', file)
   return client.fetch(`/api/profiles/${profileId}/avatar`, {
@@ -46,16 +47,19 @@ export async function uploadProfileAvatar(profileId, file) {
 }
 
 export async function requestProfileAvatarAI(profileId) {
+  assertRealProfileId(profileId, 'requestProfileAvatarAI')
   return apiFetch(`/api/profiles/${profileId}/avatar/ai`, {
     method: 'POST',
   })
 }
 
 export async function upsertProfileSection(profileId, sectionKey, data, updatedBy) {
+  assertRealProfileId(profileId, 'upsertProfileSection')
   return getProfileSectionsClient(profileId).update(sectionKey, data, updatedBy)
 }
 
 export async function listProfileSections(profileId) {
+  assertRealProfileId(profileId, 'listProfileSections')
   return getProfileSectionsClient(profileId).list()
 }
 

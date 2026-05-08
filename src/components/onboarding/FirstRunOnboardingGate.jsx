@@ -8,6 +8,7 @@
 import React from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { apiFetch } from '@/api/client'
+import { isRealProfileId } from '@/api/profileIdGuards'
 import { useAuthStore } from '@/stores/authStore'
 import FirstRunOnboardingWizard from './FirstRunOnboardingWizard'
 
@@ -28,7 +29,7 @@ export default function FirstRunOnboardingGate({ profiles = [], activeProfileId 
   const { data: activeProfileDetail } = useQuery({
     queryKey: ['profile', activeProfileId],
     queryFn: () => apiFetch(`/api/profiles/${activeProfileId}`),
-    enabled: Boolean(activeProfileId) && activeProfileId !== '__admin__' && profiles.length > 0,
+    enabled: isRealProfileId(activeProfileId) && profiles.length > 0,
     staleTime: 30_000,
   })
 

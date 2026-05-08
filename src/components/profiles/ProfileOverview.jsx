@@ -34,6 +34,7 @@ import { SECTION_METADATA } from "@/config/sectionMetadata"
 import { useDashboardPreferences } from "@/contexts/DashboardPreferencesContext.jsx"
 import EditableField from "@/components/shared/EditableField.jsx"
 import { useAuthenticatedAvatar } from "@/hooks/useAuthenticatedAvatar"
+import { isRealProfileId } from "@/api/profileIdGuards"
 import {
   calculateProfileCompletion,
   hasMeaningfulProfileValue,
@@ -688,7 +689,14 @@ export default function ProfileOverview({
       const base = String(profile.avatar_download_url)
       return avatarCacheBuster ? `${base}${base.includes("?") ? "&" : "?"}v=${avatarCacheBuster}` : base
     }
-    if (profile.avatar_url && String(profile.avatar_url).includes('/uploads/')) {
+    // Only emit /api/profiles/<id>/avatar/download for routable ids -- the
+    // admin sentinel would 404 the avatar request and surface as a broken
+    // image in the dashboard.
+    if (
+      profile.avatar_url &&
+      String(profile.avatar_url).includes('/uploads/') &&
+      isRealProfileId(profile.id)
+    ) {
       const base = `/api/profiles/${profile.id}/avatar/download`
       return avatarCacheBuster ? `${base}?v=${avatarCacheBuster}` : base
     }

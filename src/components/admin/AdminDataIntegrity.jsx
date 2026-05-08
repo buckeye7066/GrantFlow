@@ -32,7 +32,7 @@ export default function AdminDataIntegrity() {
   const handleRepairAll = async () => {
     setRepairing(true);
     try {
-      const res = await apiFetch('/api/profiles/admin/repair-all-profiles', { method: 'POST' });
+      const res = await apiFetch('/api/admin/repair-all-profiles', { method: 'POST' });
       toast({ title: 'Repair complete', description: res.message });
       fetchData();
     } catch (err) {

@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query"
 import { AlertTriangle, X, FileDown } from "lucide-react"
 import { useAuthStore } from "@/stores/authStore"
 import { apiFetch } from "@/api/client"
+import { isRealProfileId } from "@/api/profileIdGuards"
 
 const DISMISS_KEY = "grantflow:pro-bono-banner-dismissed"
 const PDF_URL = `${(import.meta.env.BASE_URL ?? "/").replace(/\/+$/, "")}/docs/Payment_sheet_Grantflow.pdf`
@@ -28,7 +29,7 @@ export default function ProBonoBanner() {
   const { data: profile } = useQuery({
         queryKey: ["profile", activeProfileId],
         queryFn: () => apiFetch(`/api/profiles/${activeProfileId}`),
-        enabled: Boolean(activeProfileId) && activeProfileId !== "__admin__",
+        enabled: isRealProfileId(activeProfileId),
         staleTime: 5 * 60 * 1000,
         retry: false,
   })
