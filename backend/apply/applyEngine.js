@@ -414,7 +414,7 @@ export async function prepareApplication({ db, grantId, organizationId, userId }
     )
     .run(id, String(grantId), String(organizationId), safeJsonStringify({ created_by: userId ?? null }))
 
-  return db.prepare('SELECT * FROM applications WHERE id = ?').get(id)
+  return await db.prepare('SELECT * FROM applications WHERE id = ?').get(id)
 }
 
 export async function getApplication({ db, applicationId }) {
@@ -461,7 +461,7 @@ export async function patchApplication({ db, applicationId, patch = {} }) {
     )
     .run(nextStatus, portalUrl === undefined ? null : portalUrl, mergedSnapshot === undefined ? null : mergedSnapshot, String(applicationId))
 
-  return db.prepare('SELECT * FROM applications WHERE id = ?').get(String(applicationId))
+  return await db.prepare('SELECT * FROM applications WHERE id = ?').get(String(applicationId))
 }
 
 export async function listSections({ db, applicationId }) {
@@ -971,17 +971,49 @@ export function classifyApplicationStyle(grant, opportunity) {
   const description = String(
     grant?.program_description || opportunity?.description || '',
   ).toLowerCase()
+  const fundingSourceType = String(
+    grant?.funding_source_type || opportunity?.funding_source_type || '',
+  )
+    .trim()
+    .toLowerCase()
+
+  // URL host signals: studentaid.gov, fafsa.gov, .edu/financial-aid, common
+  // university aid portals (TSAC etc) — these all mean "the application is
+  // FAFSA + a school portal, NOT a free-form grant narrative".
+  const urlBlob = [
+    grant?.application_url,
+    grant?.source_url,
+    grant?.evidence_url,
+    opportunity?.application_url,
+    opportunity?.source_url,
+    opportunity?.evidence_url,
+  ]
+    .filter(Boolean)
+    .map(u => String(u).toLowerCase())
+    .join(' ')
+
+  const urlLooksLikeStudentAid =
+    /(^|\W)(studentaid\.gov|fafsa\.gov|fafsa\.ed\.gov)\b/.test(urlBlob) ||
+    /\.(edu)\/[^ ]*(financial[-_]?aid|tuition|scholarship|aid)/.test(urlBlob)
 
   const looksLikeUniversity =
-    /\b(university|college|institute of technology|community college|polytechnic)\b/.test(sponsor) ||
-    /\b(university|college)\b/.test(title)
+    fundingSourceType === 'university' ||
+    /\b(university|college|institute of technology|community college|polytechnic|state college)\b/.test(sponsor) ||
+    /\b(university|college)\b/.test(title) ||
+    /\.(edu)\b/.test(urlBlob)
   const looksLikeStudentAidProgram =
-    /\b(financial aid|tuition assistance|tuition support|student aid|need-based aid|institutional aid|grant-in-aid|federal student aid|fafsa)\b/.test(
+    /\b(financial aid|tuition assistance|tuition support|student aid|need-based aid|institutional aid|grant-in-aid|federal student aid|fafsa|pell grant|seog|tsac|hope scholarship|hope grant)\b/.test(
       title,
     ) ||
-    /\b(fafsa|federal student aid|institutional aid|need-based)\b/.test(description)
+    /\b(fafsa|federal student aid|institutional aid|need-based|complete the fafsa|pell grant)\b/.test(description) ||
+    urlLooksLikeStudentAid
 
   if (looksLikeUniversity && looksLikeStudentAidProgram) {
+    return 'auto_fafsa'
+  }
+  // Direct studentaid.gov / FAFSA-anchored opportunities (Pell, SEOG, TEACH, etc.)
+  // are FAFSA-driven even when the "university" signal is missing.
+  if (urlLooksLikeStudentAid && /\b(pell|seog|teach|federal|fafsa)\b/.test(`${title} ${description}`)) {
     return 'auto_fafsa'
   }
   return 'standard'
@@ -1547,16 +1579,45 @@ function buildProfileContext(profile) {
   if (profile.state) parts.push(`Location: ${profile.city || ''} ${profile.state} ${profile.zip_code || ''}`.trim())
   if (profile.primary_type) parts.push(`Type: ${profile.primary_type}`)
   const s = profile.sections || {}
-  if (s.demographics) parts.push(`Demographics: ${JSON.stringify(s.demographics)}`)
-  if (s.financial) parts.push(`Financial: ${JSON.stringify(s.financial)}`)
-  if (s.health) parts.push(`Health: ${JSON.stringify(s.health)}`)
-  if (s.education) parts.push(`Education: ${JSON.stringify(s.education)}`)
-  if (s.military) parts.push(`Military: ${JSON.stringify(s.military)}`)
-  if (s.family) parts.push(`Family: ${JSON.stringify(s.family)}`)
-  if (s.government_assistance) parts.push(`Government Assistance: ${JSON.stringify(s.government_assistance)}`)
-  if (s.employment) parts.push(`Employment: ${JSON.stringify(s.employment)}`)
-  if (s.housing) parts.push(`Housing: ${JSON.stringify(s.housing)}`)
-  if (s.disabilities) parts.push(`Disabilities: ${JSON.stringify(s.disabilities)}`)
+  // Section keys must match the canonical schema (see backend/config/profileSchema.js
+  // and gatherProfileForApplication above). Earlier this function read short
+  // aliases like `s.financial` / `s.health` that never exist on the loaded row,
+  // which silently starved every LLM prompt of real grounding and let the model
+  // fabricate "plausible" content. Use the real keys + a small alias fallback
+  // so older callers still work.
+  const pick = (...keys) => {
+    for (const k of keys) {
+      const v = s?.[k]
+      if (v && (typeof v !== 'object' || Object.keys(v).length > 0)) return v
+    }
+    return null
+  }
+  const demographics = pick('demographics')
+  const financial = pick('financial_information', 'financial')
+  const health = pick('health_medical', 'health')
+  const education = pick('education', 'education_background', 'education_information')
+  const military = pick('military_service', 'military')
+  const family = pick('family_household', 'family', 'household')
+  const govAssist = pick('government_assistance', 'benefits_received')
+  const employment = pick('employment_income', 'employment')
+  const housing = pick('housing', 'housing_situation')
+  const disabilities = pick('disabilities_accessibility', 'disabilities')
+  const programs = pick('programs_services', 'programs_and_services')
+  const orgInfo = pick('organization_information', 'organization')
+  const narrative = pick('narrative', 'mission_narrative')
+  if (demographics) parts.push(`Demographics: ${JSON.stringify(demographics)}`)
+  if (financial) parts.push(`Financial: ${JSON.stringify(financial)}`)
+  if (health) parts.push(`Health: ${JSON.stringify(health)}`)
+  if (education) parts.push(`Education: ${JSON.stringify(education)}`)
+  if (military) parts.push(`Military: ${JSON.stringify(military)}`)
+  if (family) parts.push(`Family: ${JSON.stringify(family)}`)
+  if (govAssist) parts.push(`Government Assistance: ${JSON.stringify(govAssist)}`)
+  if (employment) parts.push(`Employment: ${JSON.stringify(employment)}`)
+  if (housing) parts.push(`Housing: ${JSON.stringify(housing)}`)
+  if (disabilities) parts.push(`Disabilities: ${JSON.stringify(disabilities)}`)
+  if (programs) parts.push(`Programs/Services: ${JSON.stringify(programs)}`)
+  if (orgInfo) parts.push(`Organization: ${JSON.stringify(orgInfo)}`)
+  if (narrative) parts.push(`Narrative/Mission: ${JSON.stringify(narrative)}`)
   return parts.join('\n')
 }
 
