@@ -49,15 +49,30 @@ const ONBOARDING_LS_KEY = "anya_onboarded"
 const NUDGE_SS_KEY = "anya_nudge_shown"
 const TOTAL_PROFILE_SECTIONS = 21
 
+// Anya onboarding chips. The display labels here intentionally read
+// like spoken English ("Volunteer Fire / EMS") rather than the
+// canonical snake_case ids from the registry; the lookup below
+// canonicalizes them on the way to /api/profiles.
 const PROFILE_TYPES = [
   "Individual",
   "Family",
   "Student",
   "Nonprofit",
-  "Business",
   "Church",
-  "School",
-  "Volunteer Fire Dept",
+  "Ministry",
+  "Public School",
+  "School District",
+  "Classroom Teacher",
+  "Library",
+  "Volunteer Fire / EMS",
+  "Small Business",
+  "County Government",
+  "City / Municipality",
+  "Public Health Department",
+  "Tribal Government",
+  "Food Pantry",
+  "Animal Rescue",
+  "Medical / Health Need",
   "Other",
 ]
 
@@ -75,16 +90,30 @@ const LIFE_SITUATIONS = [
   "Experiencing homelessness",
 ]
 
-// Maps onboarding display labels → backend primary_type values
+// Maps onboarding display labels → backend primary_type canonical ids
+// (matches shared/profileTypeOptions.js). The backend further
+// canonicalizes through profileTypeRegistry.resolveProfileType so any
+// alias here still resolves cleanly even if a label is renamed.
 const PROFILE_TYPE_MAP = {
   Individual: "individual",
   Family: "family",
   Student: "student",
   Nonprofit: "nonprofit",
-  Business: "small_business",
   Church: "church",
-  School: "school",
-  "Volunteer Fire Dept": "volunteer_fire",
+  Ministry: "ministry",
+  "Public School": "public_school",
+  "School District": "school_district",
+  "Classroom Teacher": "classroom_teacher",
+  Library: "library",
+  "Volunteer Fire / EMS": "volunteer_fire_department",
+  "Small Business": "business",
+  "County Government": "county_government",
+  "City / Municipality": "municipality",
+  "Public Health Department": "public_health_department",
+  "Tribal Government": "tribal_government",
+  "Food Pantry": "food_pantry",
+  "Animal Rescue": "animal_rescue",
+  "Medical / Health Need": "medical_need",
   Other: "individual",
 }
 

@@ -14,7 +14,8 @@ const OrganizationForm = React.lazy(() => import("@/components/organizations/Org
 const QuickAddDialog = React.lazy(() => import("@/components/organizations/QuickAddDialog"))
 const UploadFormDialog = React.lazy(() => import("@/components/organizations/UploadFormDialog"))
 import { useToast } from "@/components/ui/use-toast"
-import { listProfiles } from "@/api/profiles"
+import { listProfiles, uploadProfileAvatar } from "@/api/profiles"
+import { canonicalizeProfileTypeId } from "@/services/profileTypes"
 import { createPageUrl } from "@/utils"
 import { useAuthStore } from "@/stores/authStore"
 import { apiFetch } from "@/api/client"
@@ -85,7 +86,10 @@ const matchesSearch =
         (Array.isArray(org.tags) && org.tags.some((t) => t.toLowerCase().includes(lowerSearch))) ||
         (Array.isArray(org.needs) && org.needs.some((n) => n.toLowerCase().includes(lowerSearch)))
 
-      const matchesType = typeFilter === "all" || org.applicant_type === typeFilter
+      const matchesType =
+        typeFilter === "all" ||
+        canonicalizeProfileTypeId(org.applicant_type) === canonicalizeProfileTypeId(typeFilter) ||
+        org.applicant_type === typeFilter
 
       return matchesSearch && matchesType
     })
@@ -177,21 +181,15 @@ const matchesSearch =
         throw new Error('Profile creation failed: No profile ID returned')
       }
       
-      // If avatar file is provided, upload it
+      // If avatar file is provided, upload it via the canonical helper.
+      // The helper applies assertRealProfileId, so a sentinel id (or any
+      // other non-routable value) throws here instead of issuing a 404.
       if (formData.avatarFile && result.id) {
-        const avatarFormData = new FormData()
-        avatarFormData.append('avatar', formData.avatarFile)
-        
-        const avatarResponse = await fetch(`/api/profiles/${result.id}/avatar`, {
-          method: 'POST',
-          body: avatarFormData,
-          headers: {
-            'Authorization': `Bearer ${localStorage.getItem('grantflow:access-token')}`,
-          },
-        })
-        if (!avatarResponse.ok) {
+        try {
+          await uploadProfileAvatar(result.id, formData.avatarFile)
+        } catch (avatarErr) {
           // Non-fatal: profile was created; log and surface a warning but do not throw.
-          log.warn('Avatar upload failed', { profileId: result.id, status: avatarResponse.status })
+          log.warn('Avatar upload failed', { profileId: result.id, error: avatarErr?.message })
           toast({
             title: 'Profile created',
             description: 'Profile was saved but the avatar could not be uploaded. You can add it later from the profile page.',

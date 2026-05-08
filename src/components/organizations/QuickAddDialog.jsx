@@ -10,28 +10,10 @@ import {
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
 import { Loader2, Upload, X } from 'lucide-react'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
-
-const PROFILE_TYPES = [
-  { value: 'individual', label: 'Individual' },
-  { value: 'family', label: 'Family' },
-  { value: 'student', label: 'Student' },
-  { value: 'college_student', label: 'College Student' },
-  { value: 'high_school_student', label: 'High School Student' },
-  { value: 'nonprofit', label: 'Nonprofit Organization' },
-  { value: 'small_business', label: 'Small Business' },
-  { value: 'organization', label: 'Organization' },
-  { value: 'medical_assistance', label: 'Medical Assistance' },
-  { value: 'other', label: 'Other' },
-]
+import { canonicalizeProfileTypeId } from '@/services/profileTypes'
+import ProfileTypeSelect from '@/components/shared/ProfileTypeSelect'
 
 export default function QuickAddDialog({ open, onOpenChange, onSubmit }) {
   const [formData, setFormData] = useState({
@@ -44,7 +26,7 @@ export default function QuickAddDialog({ open, onOpenChange, onSubmit }) {
 
   const handleSubmit = async (e) => {
     e.preventDefault()
-    
+
     if (!formData.display_name || !formData.primary_type) {
       return
     }
@@ -53,6 +35,7 @@ export default function QuickAddDialog({ open, onOpenChange, onSubmit }) {
     try {
       await onSubmit({
         ...formData,
+        primary_type: canonicalizeProfileTypeId(formData.primary_type),
         avatarFile,
       })
       setFormData({ display_name: '', primary_type: '' })
@@ -110,22 +93,12 @@ export default function QuickAddDialog({ open, onOpenChange, onSubmit }) {
             </div>
             <div className="grid gap-2">
               <Label htmlFor="primary_type">Profile Type *</Label>
-              <Select
+              <ProfileTypeSelect
+                id="primary_type"
                 value={formData.primary_type}
-                onValueChange={(value) => handleChange('primary_type', value)}
+                onChange={(value) => handleChange('primary_type', value)}
                 required
-              >
-                <SelectTrigger>
-                  <SelectValue placeholder="Select profile type" />
-                </SelectTrigger>
-                <SelectContent>
-                  {PROFILE_TYPES.map((type) => (
-                    <SelectItem key={type.value} value={type.value}>
-                      {type.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              />
             </div>
             <div className="grid gap-2">
               <Label htmlFor="avatar">Profile Picture (optional)</Label>

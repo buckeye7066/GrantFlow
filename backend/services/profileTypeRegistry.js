@@ -137,13 +137,37 @@ export const PROFILE_TYPES = Object.freeze({
     anyaLabel: 'Adult with disability',
     summary: 'Adult with one or more disabilities seeking accommodations and assistance.',
   },
+  medical_need: {
+    id: 'medical_need',
+    aliases: [
+      'medical_assistance',
+      'medical',
+      'health_profile',
+      'medical_profile',
+      'patient_assistance',
+      'medical_hardship',
+    ],
+    parentTypes: ['individual', 'family'],
+    defaultNeeds: ['health', 'medical_bills', 'medication', 'transportation', 'caregiving'],
+    requiredProfileFields: ['state'],
+    recommendedSources: [
+      SOURCE_IDS.UNITED_WAY_211,
+      SOURCE_IDS.HRSA_HEALTH_CENTERS,
+      SOURCE_IDS.MEDICAID,
+      SOURCE_IDS.MENTAL_HEALTH_NONPROFIT_GRANTS,
+      SOURCE_IDS.COMMUNITY_ACTION,
+    ],
+    recommendedStrategy: 'comprehensive',
+    anyaLabel: 'Medical / health need',
+    summary: 'Person or family with active medical, disability, or caregiving funding needs.',
+  },
 
   // ---------------------------------------------------------------------
   // Students
   // ---------------------------------------------------------------------
   student: {
     id: 'student',
-    aliases: ['college_student', 'high_school_student', 'graduate_student'],
+    aliases: ['scholar', 'student_general'],
     parentTypes: ['individual'],
     defaultNeeds: ['scholarship', 'education', 'housing'],
     requiredProfileFields: ['state'],
@@ -156,6 +180,54 @@ export const PROFILE_TYPES = Object.freeze({
     recommendedStrategy: 'student_grants',
     anyaLabel: 'Student',
     summary: 'Student seeking scholarships, financial aid, and education funding.',
+  },
+  high_school_student: {
+    id: 'high_school_student',
+    aliases: ['hs_student', 'high_schooler', '12th_grader', '11th_grader', '10th_grader', '9th_grader'],
+    parentTypes: ['student', 'individual'],
+    defaultNeeds: ['scholarship', 'college_prep', 'fafsa', 'first_gen'],
+    requiredProfileFields: ['state'],
+    recommendedSources: [
+      SOURCE_IDS.STUDENT_SCHOLARSHIP_PORTALS,
+      SOURCE_IDS.SCHOLARSHIP_DIRECTORY,
+      SOURCE_IDS.PELL_GRANT,
+      SOURCE_IDS.ED_GOV_FAFSA,
+    ],
+    recommendedStrategy: 'student_grants',
+    anyaLabel: 'High school student',
+    summary: 'Grades 9-12 student preparing for college and seeking scholarships / FAFSA / Pell.',
+  },
+  college_student: {
+    id: 'college_student',
+    aliases: ['undergraduate', 'undergrad', 'college_undergraduate', 'university_student'],
+    parentTypes: ['student', 'individual'],
+    defaultNeeds: ['scholarship', 'tuition', 'housing', 'textbooks', 'fafsa'],
+    requiredProfileFields: ['state'],
+    recommendedSources: [
+      SOURCE_IDS.STUDENT_SCHOLARSHIP_PORTALS,
+      SOURCE_IDS.SCHOLARSHIP_DIRECTORY,
+      SOURCE_IDS.PELL_GRANT,
+      SOURCE_IDS.ED_GOV_FAFSA,
+    ],
+    recommendedStrategy: 'student_grants',
+    anyaLabel: 'College / undergraduate student',
+    summary: 'Undergraduate seeking scholarships, FAFSA / Pell, housing, and textbook aid.',
+  },
+  graduate_student: {
+    id: 'graduate_student',
+    aliases: ['grad_student', 'masters_student', 'phd_student', 'doctoral_student', 'professional_student'],
+    parentTypes: ['student', 'individual'],
+    defaultNeeds: ['fellowship', 'research_funding', 'tuition', 'stipend'],
+    requiredProfileFields: ['state'],
+    recommendedSources: [
+      SOURCE_IDS.STUDENT_SCHOLARSHIP_PORTALS,
+      SOURCE_IDS.SCHOLARSHIP_DIRECTORY,
+      SOURCE_IDS.GRANTS_GOV,
+      SOURCE_IDS.ED_GOV_FAFSA,
+    ],
+    recommendedStrategy: 'student_grants',
+    anyaLabel: 'Graduate student',
+    summary: 'Master\u2019s, PhD, or professional school student seeking fellowships and research funding.',
   },
 
   // ---------------------------------------------------------------------

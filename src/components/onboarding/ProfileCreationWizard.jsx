@@ -12,34 +12,14 @@ import {
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Loader2, User, AlertCircle, Upload, X } from 'lucide-react'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { apiFetch } from '@/api/client'
+import { uploadProfileAvatar } from '@/api/profiles'
 import { useToast } from '@/components/ui/use-toast'
-
-const PROFILE_TYPES = [
-  { value: 'individual', label: 'Individual' },
-  { value: 'family', label: 'Family' },
-  { value: 'student', label: 'Student' },
-  { value: 'college_student', label: 'College Student' },
-  { value: 'high_school_student', label: 'High School Student' },
-  { value: 'nonprofit', label: 'Nonprofit Organization' },
-  { value: 'church', label: 'Church / Ministry' },
-  { value: 'school', label: 'School (K-12)' },
-  { value: 'volunteer_fire', label: 'Volunteer Fire Department' },
-  { value: 'small_business', label: 'Small Business' },
-  { value: 'organization', label: 'Organization' },
-  { value: 'medical_assistance', label: 'Medical Assistance' },
-  { value: 'other', label: 'Other' },
-]
+import { canonicalizeProfileTypeId } from '@/services/profileTypes'
+import ProfileTypeSelect from '@/components/shared/ProfileTypeSelect'
 
 export default function ProfileCreationWizard({ open, onComplete, onSkip }) {
   const [formData, setFormData] = useState({
@@ -60,18 +40,11 @@ export default function ProfileCreationWizard({ open, onComplete, onSkip }) {
         body: JSON.stringify(profileData),
       })
 
-      // If avatar file is provided, upload it
+      // If avatar file is provided, upload it through the canonical helper.
+      // The helper applies assertRealProfileId, so a sentinel id (or any
+      // other non-routable value) throws here instead of issuing a 404.
       if (avatarFile && profile.id) {
-        const avatarFormData = new FormData()
-        avatarFormData.append('avatar', avatarFile)
-        
-        await fetch(`/api/profiles/${profile.id}/avatar`, {
-          method: 'POST',
-          body: avatarFormData,
-          headers: {
-            'Authorization': `Bearer ${localStorage.getItem('grantflow:access-token')}`,
-          },
-        })
+        await uploadProfileAvatar(profile.id, avatarFile)
       }
 
       return profile
@@ -99,8 +72,11 @@ export default function ProfileCreationWizard({ open, onComplete, onSkip }) {
       return
     }
 
-    createProfileMutation.mutate({ 
-      profileData: formData,
+    createProfileMutation.mutate({
+      profileData: {
+        ...formData,
+        primary_type: canonicalizeProfileTypeId(formData.primary_type),
+      },
       avatarFile,
     })
   }
@@ -170,22 +146,12 @@ export default function ProfileCreationWizard({ open, onComplete, onSkip }) {
               <Label htmlFor="primary_type">
                 Profile Type <span className="text-red-500">*</span>
               </Label>
-              <Select
+              <ProfileTypeSelect
+                id="primary_type"
                 value={formData.primary_type}
-                onValueChange={(value) => handleChange('primary_type', value)}
+                onChange={(value) => handleChange('primary_type', value)}
                 required
-              >
-                <SelectTrigger>
-                  <SelectValue placeholder="Select profile type" />
-                </SelectTrigger>
-                <SelectContent>
-                  {PROFILE_TYPES.map((type) => (
-                    <SelectItem key={type.value} value={type.value}>
-                      {type.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              />
             </div>
             <div className="grid gap-2">
               <Label htmlFor="avatar">Profile Picture (optional)</Label>

@@ -30,6 +30,25 @@ import { resolveUploadsDir } from '../utils/uploadsDir.js'
 import { syncProfileFieldsFromSection } from '../utils/profileSectionSync.js'
 import { guardProfileSectionPayload } from '../utils/profileSuggestionGuards.js'
 import { normalizeProfileSectionData } from '../services/profileHelpers.js'
+import { resolveProfileType } from '../services/profileTypeRegistry.js'
+
+/**
+ * Mission goal #4/#5: every saved profile must carry a profile-type
+ * value that the source-planning, strategy-dispatch, and Anya layers
+ * can recognise. We never throw away a user-supplied value (some
+ * legacy profiles use display labels), but if we *can* canonicalize
+ * it through the registry we do so on the way in. Unknown values are
+ * preserved verbatim so a later migration / Anya question can fix
+ * them up.
+ */
+function canonicalizePrimaryTypeForSave(raw) {
+  if (raw === undefined || raw === null) return raw
+  if (typeof raw !== 'string') return raw
+  const trimmed = raw.trim()
+  if (!trimmed) return null
+  const id = resolveProfileType(trimmed)
+  return id || trimmed
+}
 
 const router = express.Router()
 const profileLogger = createLogger('route:profiles')
@@ -731,7 +750,8 @@ router.delete('/:id/emails/:emailId', async (req, res) => {
 router.post('/', createProfileLimiter, async (req, res) => {
   const isAdmin = req.ctx?.isAdmin === true
   const userId = req.ctx?.userId ?? null
-  const { display_name, primary_type, organization_id, user_id, created_by, status = 'active', tags = [] } = req.body ?? {}
+  const { display_name, primary_type: rawPrimaryType, organization_id, user_id, created_by, status = 'active', tags = [] } = req.body ?? {}
+  const primary_type = canonicalizePrimaryTypeForSave(rawPrimaryType)
 
   if (!display_name || typeof display_name !== 'string') {
     return res.status(400).json({ error: 'display_name is required' })
@@ -1181,7 +1201,7 @@ router.put('/:id', async (req, res) => {
 
   if (primary_type !== undefined) {
     updates.push('primary_type = ?')
-    values.push(primary_type || null)
+    values.push(canonicalizePrimaryTypeForSave(primary_type) || null)
   }
 
   if (organization_id !== undefined) {
@@ -2484,8 +2504,17 @@ router.post('/:id/import', async (req, res) => {
   }
 })
 
-// Send application email (for draft applications or completed profiles)
-router.post('/send-application-email', async (req, res) => {
+// Send application email (for draft applications or completed profiles).
+// Auth-gated: previously this route accepted any unauthenticated caller and
+// would send an email to a body-supplied address with body-supplied content,
+// turning the API into a free email-relay surface (Goal #9 reliability and
+// general security violation). Now requires an authenticated user.
+router.post('/send-application-email', async (req, res, next) => {
+  if (!req.user?.userId && !req.ctx?.userId) {
+    return res.status(401).json({ error: 'Authentication required' })
+  }
+  return next()
+}, async (req, res) => {
   try {
     // Use environment variable with fallback, or require toEmail in request
     const defaultEmail = process.env.APPLICATION_EMAIL || null

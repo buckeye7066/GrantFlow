@@ -1,18 +1,18 @@
-import React from "react";
-import { Card } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Building2, Filter, GraduationCap, Heart, Search } from "lucide-react";
+import React from "react"
+import { Card } from "@/components/ui/card"
+import { Input } from "@/components/ui/input"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Filter, Search } from "lucide-react"
+import { useProfileTypes } from "@/services/profileTypes"
 
 /**
- * Organization filter and search component
- * @param {Object} props
- * @param {string} props.searchTerm - Current search term
- * @param {Function} props.onSearchChange - Callback when search changes
- * @param {string} props.typeFilter - Current type filter
- * @param {Function} props.onTypeChange - Callback when type filter changes
+ * Organization filter and search component. Profile-type filter is
+ * driven by the canonical curated list so adding a new profile type
+ * automatically gives users a way to filter for it.
  */
 export default function OrganizationFilters({ searchTerm, onSearchChange, typeFilter, onTypeChange }) {
+  const { grouped } = useProfileTypes()
+
   return (
     <Card className="p-6 mb-6 shadow-lg border-0">
       <div className="flex flex-col md:flex-row gap-4">
@@ -27,53 +27,32 @@ export default function OrganizationFilters({ searchTerm, onSearchChange, typeFi
           />
         </div>
         <div className="flex gap-3">
-          <Select value={typeFilter} onValueChange={onTypeChange}>
-            <SelectTrigger className="w-48" aria-label="Filter by type">
+          <Select
+            value={typeFilter || "all"}
+            onValueChange={(value) => onTypeChange(value || "all")}
+          >
+            <SelectTrigger className="w-56" aria-label="Filter by type">
               <Filter className="w-4 h-4 mr-2" />
               <SelectValue placeholder="Filter by type" />
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="all">All Types</SelectItem>
-              <SelectItem value="organization">
-                <div className="flex items-center gap-2">
-                  <Building2 className="w-4 h-4" />
-                  Organizations
-                </div>
-              </SelectItem>
-              <SelectItem value="high_school_student">
-                <div className="flex items-center gap-2">
-                  <GraduationCap className="w-4 h-4" />
-                  High School Students
-                </div>
-              </SelectItem>
-              <SelectItem value="college_student">
-                <div className="flex items-center gap-2">
-                  <GraduationCap className="w-4 h-4" />
-                  College Students
-                </div>
-              </SelectItem>
-              <SelectItem value="graduate_student">
-                <div className="flex items-center gap-2">
-                  <GraduationCap className="w-4 h-4" />
-                  Graduate Students
-                </div>
-              </SelectItem>
-              <SelectItem value="individual_need">
-                <div className="flex items-center gap-2">
-                  <Heart className="w-4 h-4" />
-                  Individual Assistance
-                </div>
-              </SelectItem>
-              <SelectItem value="medical_assistance">
-                <div className="flex items-center gap-2">
-                  <Heart className="w-4 h-4" />
-                  Medical Assistance
-                </div>
-              </SelectItem>
+              {grouped.map(({ group, options }) => (
+                <React.Fragment key={group}>
+                  <div className="px-2 pb-1 pt-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                    {group}
+                  </div>
+                  {options.map((option) => (
+                    <SelectItem key={option.id} value={option.id}>
+                      {option.label}
+                    </SelectItem>
+                  ))}
+                </React.Fragment>
+              ))}
             </SelectContent>
           </Select>
         </div>
       </div>
     </Card>
-  );
+  )
 }

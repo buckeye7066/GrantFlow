@@ -15,6 +15,8 @@ import MultiSelectCombobox from "../shared/MultiSelectCombobox";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/components/ui/use-toast";
 import { apiFetch } from "@/api/client";
+import { useProfileTypes, canonicalizeProfileTypeId } from "@/services/profileTypes";
+import FieldHelpTip from "@/components/help/FieldHelpTip";
 
 const US_STATES = ["AL","AK","AZ","AR","CA","CO","CT","DE","FL","GA","HI","ID","IL","IN","IA","KS","KY","LA","ME","MD","MA","MI","MN","MS","MO","MT","NE","NV","NH","NJ","NM","NY","NC","ND","OH","OK","OR","PA","RI","SC","SD","TN","TX","UT","VT","VA","WA","WV","WI","WY"];
 
@@ -32,6 +34,7 @@ const GRADE_LEVELS = [
 
 export default function ComprehensiveApplicationForm({ onSubmit, onCancel, isSubmitting, initialData = null }) {
   const { toast } = useToast();
+  const { grouped: profileTypeGroups } = useProfileTypes();
   const [currentStep, setCurrentStep] = useState(0);
   const [isSendingEmail, setIsSendingEmail] = useState(false);
   const appliedInitialDataRef = useRef(false);
@@ -507,32 +510,40 @@ const finalData = buildFinalData(formData);
           {currentStepData.id === 'type' && (
             <div className="space-y-4">
               <CardTitle>Who are you applying as?</CardTitle>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {[
-                  { value: 'organization', label: 'Organization / Nonprofit', desc: 'Tax-exempt organization' },
-                  { value: 'high_school_student', label: 'High School Student', desc: 'Currently in grades 9-12' },
-                  { value: 'college_student', label: 'College Student', desc: 'Undergraduate student' },
-                  { value: 'graduate_student', label: 'Graduate Student', desc: 'Masters or PhD' },
-                  { value: 'individual_need', label: 'Individual', desc: 'Seeking personal assistance' },
-                  { value: 'medical_assistance', label: 'Medical Need', desc: 'Medical or health assistance' },
-                  { value: 'family', label: 'Family', desc: 'Family seeking assistance' },
-                  { value: 'minister', label: 'Minister / Clergy', desc: 'Religious leader or missionary' },
-                ].map(type => (
-                  <button
-                    key={type.value}
-                    type="button"
-                    onClick={() => handleChange('applicant_type', type.value)}
-                    className={`p-4 rounded-lg border-2 text-left transition-all ${
-                      formData.applicant_type === type.value
-                        ? 'border-blue-600 bg-blue-50'
-                        : 'border-slate-200 hover:border-blue-300'
-                    }`}
-                  >
-                    <p className="font-semibold">{type.label}</p>
-                    <p className="text-sm text-slate-600 mt-1">{type.desc}</p>
-                  </button>
-                ))}
-              </div>
+              <p className="text-sm text-slate-600">
+                Pick the profile type that best fits you. We use this to plan which funding sources to search and how to score matches.
+              </p>
+              {profileTypeGroups.map(({ group, options }) => (
+                <div key={group} className="space-y-3">
+                  <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                    {group}
+                  </h3>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    {options.map((type) => {
+                      const isSelected =
+                        canonicalizeProfileTypeId(formData.applicant_type) === type.id ||
+                        formData.applicant_type === type.id
+                      return (
+                        <button
+                          key={type.id}
+                          type="button"
+                          onClick={() => handleChange('applicant_type', type.id)}
+                          className={`p-4 rounded-lg border-2 text-left transition-all ${
+                            isSelected
+                              ? 'border-blue-600 bg-blue-50'
+                              : 'border-slate-200 hover:border-blue-300'
+                          }`}
+                        >
+                          <p className="font-semibold">{type.label}</p>
+                          {type.description ? (
+                            <p className="text-sm text-slate-600 mt-1">{type.description}</p>
+                          ) : null}
+                        </button>
+                      )
+                    })}
+                  </div>
+                </div>
+              ))}
             </div>
           )}
 

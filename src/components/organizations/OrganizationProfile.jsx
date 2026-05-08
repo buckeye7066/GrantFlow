@@ -1,5 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import client from '@/api/client';
+import { canonicalizeProfileTypeId } from '@/services/profileTypes';
+import ProfileTypeSelect from '@/components/shared/ProfileTypeSelect';
 import { useMutation, useQueryClient, useQuery } from '@tanstack/react-query';
 import { Link, useNavigate } from 'react-router-dom';
 import { createPageUrl } from '@/utils';
@@ -857,24 +859,10 @@ if (_logoUrl && _logoUrl.startsWith('https://') && _validExt) {
 
             <div className="space-y-2">
               <Label>Profile type</Label>
-              <Select value={editPrimaryType} onValueChange={setEditPrimaryType}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Select profile type" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="organization">Organization</SelectItem>
-                  <SelectItem value="nonprofit">Nonprofit</SelectItem>
-                  <SelectItem value="small_business">Small Business</SelectItem>
-                  <SelectItem value="individual_need">Individual</SelectItem>
-                  <SelectItem value="family">Family</SelectItem>
-                  <SelectItem value="medical_assistance">Medical Assistance</SelectItem>
-                  <SelectItem value="high_school_student">High School Student</SelectItem>
-                  <SelectItem value="college_student">College Student</SelectItem>
-                  <SelectItem value="graduate_student">Graduate Student</SelectItem>
-                  <SelectItem value="government">Government</SelectItem>
-                  <SelectItem value="other">Other</SelectItem>
-                </SelectContent>
-              </Select>
+              <ProfileTypeSelect
+                value={editPrimaryType}
+                onChange={(next) => setEditPrimaryType(canonicalizeProfileTypeId(next) ?? '')}
+              />
             </div>
 
             <div className="space-y-2">
