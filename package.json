@@ -55,6 +55,7 @@
     "smoke:auth-diagnostics": "node ./scripts/smoke-auth-diagnostics.mjs",
     "smoke:org-profile": "node ./scripts/smoke-organization-profile.mjs",
     "smoke:prod": "node ./scripts/smoke-prod-readonly.mjs",
+    "smoke:mission": "node ./scripts/smoke-grantflow-mission.mjs",
     "check:profiles": "node ./scripts/check-profiles.mjs",
     "seed:profiles": "node ./scripts/seed-profiles.mjs",
     "seed:db": "node ./scripts/build-seed-db.mjs",
