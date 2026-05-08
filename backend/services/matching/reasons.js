@@ -44,7 +44,19 @@ export function deriveMatchReasonCodes(decision = {}, opportunity = {}, trust = 
   if (decision?.eligible === true || decision?.decision === 'ACCEPT') {
     codes.add(MATCH_REASON_CODES.ELIGIBILITY_FIT)
   }
-  if (trust?.trustTier === 'high' || trust?.sourceTrust >= 80 || /verified|official|trusted/.test(String(opportunity?.source || '').toLowerCase())) {
+  // `assessOpportunityTrust` (backend/services/opportunityTrust.js) emits
+  // `trustTier` as one of `trusted | standard | low`, and `sourceTrust` as a
+  // STRING label `official | verified | directory | community | unknown`.
+  // Earlier code compared `sourceTrust >= 80` (number), which never matched and
+  // silently disabled the TRUSTED_SOURCE reason code on real official rows --
+  // a Goal #9 (explainable) violation.
+  const sourceTrustLabel = String(trust?.sourceTrust || '').toLowerCase()
+  if (
+    trust?.trustTier === 'trusted' ||
+    sourceTrustLabel === 'official' ||
+    sourceTrustLabel === 'verified' ||
+    /verified|official|trusted/.test(String(opportunity?.source || '').toLowerCase())
+  ) {
     codes.add(MATCH_REASON_CODES.TRUSTED_SOURCE)
   }
   if (Number(breakdown.amount || 0) > 0 || /\bamount eligibility\b/.test(reasonText)) {

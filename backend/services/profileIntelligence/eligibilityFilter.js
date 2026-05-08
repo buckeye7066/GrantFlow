@@ -18,6 +18,7 @@
 
 import { NEEDS_TAXONOMY } from './needsTaxonomy.js'
 import { isValidHttpUrl } from '../crawlers/crawlerOpportunityContract.js'
+import { isTruthyFlag } from '../opportunityTrust.js'
 
 /** Parse a DB field that may be a JSON array, CSV string, or already an array. */
 function parseArrayField(value) {
@@ -261,7 +262,11 @@ export function filterEligibility(intel, opportunity) {
   }
 
   // 3. Loan (never eligible for grant seekers)
-  const isLoan = Boolean(opportunity.is_loan) ||
+  // Use the canonical isTruthyFlag from opportunityTrust.js so DB values like
+  // '0' / 'false' / NULL are treated identically across the entire pipeline.
+  // Previously this used Boolean(...) which returned true for '0'/'false'
+  // strings, silently flipping non-loan grants into "is_loan" rejections.
+  const isLoan = isTruthyFlag(opportunity.is_loan) ||
     /^loan$/i.test(String(opportunity.opportunity_type || '').trim())
   if (isLoan) {
     hard_failures.push('is_loan')
@@ -269,15 +274,15 @@ export function filterEligibility(intel, opportunity) {
   }
 
   // 4. Pro bono / in-kind / referral-only
-  if (opportunity.is_pro_bono) {
+  if (isTruthyFlag(opportunity.is_pro_bono)) {
     hard_failures.push('is_pro_bono')
     reasons.push('Pro bono service, not direct funding')
   }
-  if (opportunity.is_in_kind) {
+  if (isTruthyFlag(opportunity.is_in_kind)) {
     hard_failures.push('is_in_kind')
     reasons.push('In-kind goods/services, not direct financial assistance')
   }
-  if (opportunity.is_referral_only) {
+  if (isTruthyFlag(opportunity.is_referral_only)) {
     hard_failures.push('is_referral_only')
     reasons.push('Referral service only, not a direct grant application')
   }
