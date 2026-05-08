@@ -371,16 +371,24 @@ async function main() {
     }
   }
 
-  // Mission health
+  // Mission health — strict gate
   const mh = await fetchMissionHealth()
   report.mission_health = mh.body ?? { ok: false, status: mh.status, error: mh.error }
   if (mh.body?.ok === false) {
-    const critical = Array.isArray(mh.body.errors) ? mh.body.errors : []
+    const critical = Array.isArray(mh.body.alerts)
+      ? mh.body.alerts.filter((a) => a.level === 'error').map((a) => `${a.code}:${a.detail}`)
+      : []
     if (critical.length > 0) {
       report.errors.push(`mission_health_errors: ${critical.slice(0, 3).join('; ')}`)
     } else {
       report.errors.push('mission_health_not_ok')
     }
+  }
+  if (mh.body?.production_gate === false) {
+    const blockers = Array.isArray(mh.body.release_blockers)
+      ? mh.body.release_blockers.map((b) => `${b.code}`)
+      : []
+    report.errors.push(`production_gate_blocked: ${blockers.slice(0, 5).join(', ') || 'unknown'}`)
   }
 
   writeReport(report)

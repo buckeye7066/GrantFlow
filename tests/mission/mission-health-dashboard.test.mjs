@@ -165,3 +165,49 @@ test('mission-health: missing db is handled safely without throwing', async () =
   assert.equal(h.ok, false)
   assert.ok(h.error)
 })
+
+// ── Phase F — strict production release gate ────────────────────────────
+test('mission-health: empty DB has production_gate=true and release_blockers=[]', async () => {
+  const db = createDb()
+  const h = await buildMissionHealth(db)
+  assert.equal(h.production_gate, true, 'empty/clean DB must clear the release gate')
+  assert.deepEqual(h.release_blockers, [])
+})
+
+test('mission-health: placeholder rows trip the production gate (release_blockers includes placeholder code)', async () => {
+  const db = createDb()
+  seedRow(db, { id: 'p-1', source: 'synthetic', record_origin: 'synthetic', kind: 'direct' })
+  const h = await buildMissionHealth(db)
+  assert.equal(h.production_gate, false)
+  assert.ok(h.release_blockers.some((b) => b.code === 'placeholder_opportunities_present'))
+})
+
+test('mission-health: low verified % trips the production gate even though ok stays true', async () => {
+  const db = createDb()
+  // 1 verified out of 10 = 10%
+  seedRow(db, { id: 'v-1', kind: 'direct', link_status: 'verified' })
+  for (let i = 0; i < 9; i++) seedRow(db, { id: `u-${i}`, kind: 'direct', link_status: 'unverified' })
+  const h = await buildMissionHealth(db)
+  // ok stays true because verified_pct_below_target is a warn alert. The
+  // production gate is strict and refuses the deploy.
+  assert.equal(h.ok, true, 'live API must not 503 on a slow-degrading signal')
+  assert.equal(h.production_gate, false, 'release gate must refuse deploy when verified % < 95')
+  assert.ok(h.release_blockers.some((b) => b.code === 'verified_pct_below_target'))
+})
+
+test('mission-health: high broken-link % trips the production gate', async () => {
+  const db = createDb()
+  seedRow(db, { id: 'v-1', kind: 'direct', link_status: 'verified' })
+  for (let i = 0; i < 4; i++) seedRow(db, { id: `b-${i}`, kind: 'direct', link_status: 'broken' })
+  const h = await buildMissionHealth(db)
+  assert.equal(h.production_gate, false)
+  assert.ok(h.release_blockers.some((b) => b.code === 'broken_pct_above_target'))
+})
+
+test('mission-health: TARGETS exposes the release-gate code list', () => {
+  assert.ok(Array.isArray(MISSION_TARGETS.release_blocking_codes))
+  assert.ok(MISSION_TARGETS.release_blocking_codes.includes('placeholder_opportunities_present'))
+  assert.ok(MISSION_TARGETS.release_blocking_codes.includes('pii_external_query_violation'))
+  assert.ok(MISSION_TARGETS.release_blocking_codes.includes('crawler_source_outcomes_stale'))
+  assert.equal(typeof MISSION_TARGETS.crawler_source_runs_max_age_hours, 'number')
+})

@@ -38,6 +38,27 @@ const TARGETS = Object.freeze({
   verified_pct_min: 95,
   broken_pct_max: 5,
   placeholder_max: 0,
+  // Phase F (release-gate): codes that block a production release. Any
+  // alert with one of these codes — at warn or error level — flips
+  // `production_gate` to false. The runtime `ok` flag stays softer so
+  // /api/health/mission doesn't 503 the live app for a slow-degrading
+  // signal.
+  release_blocking_codes: Object.freeze([
+    'placeholder_opportunities_present',
+    'pii_external_query_violation',
+    'unmapped_profile_fields',
+    'field_usage_references_unknown_source',
+    'profile_types_below_source_minimum',
+    'mission_service_not_globally_integrated',
+    'verified_pct_below_target',
+    'broken_pct_above_target',
+    'crawler_source_outcomes_stale',
+  ]),
+  // How long is "recent" for crawler_source_runs freshness? If no
+  // crawler_source_runs row exists in the last `crawler_source_runs_max_age_hours`
+  // hours, we assume coverage outcomes are not being recorded and trip
+  // the release gate.
+  crawler_source_runs_max_age_hours: 48,
 })
 
 async function safeGet(db, sql, params = []) {
@@ -323,8 +344,60 @@ export async function buildMissionHealth(db) {
     })
   }
 
+  // ── Phase F: crawler source-run freshness ───────────────────────────
+  // crawler_source_runs is populated by realCrawlers after each run. If
+  // we haven't seen any rows in the configured freshness window, the
+  // coverage pipeline has stopped recording outcomes and the release
+  // gate should refuse a deploy.
+  let crawlerSourceRunsFreshness = { table_present: false, latest_at: null, age_hours: null }
+  try {
+    const latest = await safeGet(
+      db,
+      `SELECT MAX(created_at) AS latest FROM crawler_source_runs`,
+    )
+    if (latest && !latest.__error) {
+      crawlerSourceRunsFreshness.table_present = true
+      crawlerSourceRunsFreshness.latest_at = latest.latest ?? null
+      if (latest.latest) {
+        const ageMs = Date.now() - new Date(latest.latest).getTime()
+        crawlerSourceRunsFreshness.age_hours = Number.isFinite(ageMs) ? Math.round(ageMs / 3_600_000) : null
+        if (
+          Number.isFinite(crawlerSourceRunsFreshness.age_hours) &&
+          crawlerSourceRunsFreshness.age_hours > TARGETS.crawler_source_runs_max_age_hours
+        ) {
+          alerts.push({
+            level: 'warn',
+            code: 'crawler_source_outcomes_stale',
+            detail: `crawler_source_runs latest row is ${crawlerSourceRunsFreshness.age_hours}h old (max ${TARGETS.crawler_source_runs_max_age_hours}h). Per-source outcomes are not being recorded; release gate will block until a fresh crawler run completes.`,
+          })
+        }
+      } else {
+        // Table exists but is empty — only flag in production where we
+        // expect runs to have happened.
+        if (process.env.NODE_ENV === 'production') {
+          alerts.push({
+            level: 'warn',
+            code: 'crawler_source_outcomes_stale',
+            detail: 'crawler_source_runs table is empty in production — coverage outcomes are not being recorded.',
+          })
+        }
+      }
+    }
+  } catch {
+    // Migration 072 may not be applied on legacy DBs — ignore silently.
+  }
+
+  // ── Production release gate (strict) ────────────────────────────────
+  // Any alert whose code appears in TARGETS.release_blocking_codes
+  // — at warn OR error level — flips `production_gate` to false.
+  const blocking = new Set(TARGETS.release_blocking_codes)
+  const releaseBlockers = alerts.filter((a) => blocking.has(a.code))
+  const productionGate = releaseBlockers.length === 0
+
   return {
     ok: alerts.every((a) => a.level !== 'error'),
+    production_gate: productionGate,
+    release_blockers: releaseBlockers.map((a) => ({ level: a.level, code: a.code, detail: a.detail })),
     generated_at: generatedAt,
     matcher_version: MATCHER_VERSION,
     targets: TARGETS,
@@ -349,6 +422,7 @@ export async function buildMissionHealth(db) {
       profile_types_total: listProfileTypes().length,
       profile_types_below_source_minimum: profileTypesBelowMin,
     },
+    crawler_source_runs: crawlerSourceRunsFreshness,
     alerts,
   }
 }
