@@ -482,6 +482,8 @@ export default function DiscoverGrants() {
       setCoverageInfo({
         plan: responsePayload.coverage_plan ?? null,
         report: responsePayload.coverage_report ?? null,
+        outcomes: Array.isArray(responsePayload.coverage_outcomes) ? responsePayload.coverage_outcomes : null,
+        summary: responsePayload.coverage_summary ?? null,
         labels: responsePayload.source_labels ?? null,
         crawlerType: responsePayload.crawler_type ?? null,
       })
@@ -1257,6 +1259,8 @@ export default function DiscoverGrants() {
           <SearchCoveragePanel
             coveragePlan={coverageInfo.plan}
             coverageReport={coverageInfo.report}
+            coverageOutcomes={coverageInfo.outcomes}
+            coverageSummary={coverageInfo.summary}
             sourceLabels={coverageInfo.labels}
             crawlerType={coverageInfo.crawlerType}
           />

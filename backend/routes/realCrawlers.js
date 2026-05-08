@@ -20,11 +20,64 @@ import { scoreOpportunity, makeDecision } from '../services/matchEngine.js'
 import { runAllDomainEngines } from '../services/crawlers/domainEngines/index.js'
 import { crawlStateWaiverBenefits, evaluateStateWaiverEligibility } from '../services/crawlers/stateWaiverBenefitsCrawler.js'
 import { planCoverage, buildCoverageReport, buildGrantsGovQueryTerms, getSource } from '../services/sourceRegistry.js'
+import { deriveCoverageOutcomes, summariseOutcomes } from '../services/coverageOutcomes.js'
 
 import { createLogger } from '../utils/logger.js'
 const routeLogger = createLogger('route:realCrawlers')
 
 const router = express.Router()
+
+/**
+ * Persist per-source crawler outcomes so missionHealth can answer
+ * "did we actually query Grants.gov for this profile, or just plan
+ * to?". Best-effort: never throws, never blocks the user response.
+ * Schema: see backend/db/migrations/072_crawler_source_runs.sql.
+ */
+async function persistCoverageOutcomes(db, { crawlerRunId, profileId, crawlerType, outcomes }) {
+  if (!db || typeof db.prepare !== 'function') return
+  if (!Array.isArray(outcomes) || outcomes.length === 0) return
+  const isPg = db?.dialect === 'postgres'
+  const sql = isPg
+    ? `INSERT INTO crawler_source_runs
+        (crawler_run_id, profile_id, crawler_type, source_id, source_label,
+         planned, queried, failed, found, directory, duration_ms, error)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`
+    : `INSERT INTO crawler_source_runs
+        (crawler_run_id, profile_id, crawler_type, source_id, source_label,
+         planned, queried, failed, found, directory, duration_ms, error)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  // Schema may not exist on older databases (migrations not yet
+  // applied); a single try/catch on the first insert tells us to skip
+  // the rest of the batch silently.
+  let firstFailure = null
+  for (const outcome of outcomes) {
+    if (!outcome?.source_id) continue
+    try {
+      const stmt = db.prepare(sql)
+      await stmt.run(
+        crawlerRunId,
+        profileId ?? null,
+        crawlerType ?? null,
+        outcome.source_id,
+        outcome.source_label ?? null,
+        isPg ? !!outcome.planned : (outcome.planned ? 1 : 0),
+        isPg ? !!outcome.queried : (outcome.queried ? 1 : 0),
+        isPg ? !!outcome.failed : (outcome.failed ? 1 : 0),
+        Number(outcome.found ?? 0) | 0,
+        isPg ? !!outcome.directory : (outcome.directory ? 1 : 0),
+        outcome.duration_ms ?? null,
+        outcome.error ?? null,
+      )
+    } catch (err) {
+      if (!firstFailure) firstFailure = err
+      // If the table is missing the very first insert will fail; abort
+      // the rest so we don't spam logs with the same error.
+      if (String(err?.message || '').toLowerCase().includes('no such table')) return
+      if (String(err?.message || '').toLowerCase().includes('does not exist')) return
+    }
+  }
+  if (firstFailure) throw firstFailure
+}
 
 /**
  * Query funding_opportunities table for the user's state + national opportunities.
@@ -251,17 +304,12 @@ router.post('/run', ensureAuth, async (req, res) => {
     // but never block the crawl itself (recall over suppression).
     let coveragePlan = null
     let coverageReport = null
+    let coverageOutcomes = []
+    const crawlerRunId = randomUUID()
     try {
       coveragePlan = planCoverage(profileContext)
-      // Bug fix: buildCoverageReport(plan, outcomes) — earlier code passed
-      // (profileContext, coveragePlan) which made `plan` undefined-shaped
-      // and `outcomes` non-iterable, so the report was silently empty.
-      // We don't have per-source crawl outcomes at plan-time so we pass
-      // an empty outcomes array; the report still surfaces the planned
-      // sources, profile type, and gaps the UI / Anya consume.
-      coverageReport = buildCoverageReport(coveragePlan, [])
       routeLogger.info(
-        `[RealCrawlers] coverage plan: ${coveragePlan?.sources_planned?.length ?? 0} sources for profile_type=${coverageReport?.profile_type ?? 'unknown'}`,
+        `[RealCrawlers] coverage plan: ${coveragePlan?.sources_planned?.length ?? 0} sources for profile_type=${coveragePlan?.profile_type ?? 'unknown'}`,
       )
     } catch (planErr) {
       routeLogger.warn(`[RealCrawlers] coverage planning failed: ${planErr?.message ?? planErr}`)
@@ -283,6 +331,43 @@ router.post('/run', ensureAuth, async (req, res) => {
       coveragePlan,
       searchTerms: derivedSearchTerms,
     })
+
+    // Mission rule (Goal 9 — explainable, reliable): coverage report
+    // must distinguish PLANNED vs QUERIED vs FAILED vs FOUND. The
+    // outcomes are derived from the strategy's per-group candidate
+    // counts and the actually-displayed opportunities so the UI never
+    // claims a source was "queried" when no candidates loaded.
+    try {
+      coverageOutcomes = deriveCoverageOutcomes({
+        coveragePlan,
+        runResult: result,
+        opportunities: result?.results ?? [],
+        errors: result?.debug?.errors ?? [],
+      })
+      coverageReport = buildCoverageReport(coveragePlan, coverageOutcomes)
+      const summary = summariseOutcomes(coverageOutcomes)
+      routeLogger.info(
+        `[RealCrawlers] coverage outcomes — queried=${summary.sources_queried}/${summary.sources_total} failed=${summary.sources_failed} direct=${summary.direct_found} directory=${summary.directory_found}`,
+      )
+      // Persist the per-source outcomes so missionHealth can answer
+      // "which sources actually ran for recent crawler runs?". Best-
+      // effort — never block the user response on a logging failure.
+      try {
+        await persistCoverageOutcomes(db, {
+          crawlerRunId,
+          profileId: profile_id,
+          crawlerType: crawler_type,
+          outcomes: coverageOutcomes,
+        })
+      } catch (persistErr) {
+        routeLogger.warn(`[RealCrawlers] persist coverage outcomes failed: ${persistErr?.message ?? persistErr}`)
+      }
+    } catch (outcomeErr) {
+      routeLogger.warn(`[RealCrawlers] coverage outcomes failed: ${outcomeErr?.message ?? outcomeErr}`)
+      // Fallback: at least surface the plan so the UI can still render
+      // planned sources rather than nothing.
+      try { coverageReport = buildCoverageReport(coveragePlan, []) } catch { /* swallow */ }
+    }
 
     // If strategy was gated, return early with reason
     if (result.debug?.gated) {
@@ -557,17 +642,32 @@ router.post('/run', ensureAuth, async (req, res) => {
       // round-tripping the registry.
       coverage_plan: coveragePlan,
       coverage_report: coverageReport,
+      coverage_outcomes: coverageOutcomes,
+      coverage_summary: summariseOutcomes(coverageOutcomes),
       source_labels: (() => {
         const ids = new Set([
           ...(coveragePlan?.sources_planned ?? []),
           ...(coverageReport?.sources_required ?? []),
           ...(coverageReport?.sources_queried ?? []),
           ...(coverageReport?.coverage_gaps ?? []),
+          ...(coverageOutcomes ?? []).map((o) => o.source_id).filter(Boolean),
         ])
         const out = {}
         for (const id of ids) {
           const src = getSource(id)
-          if (src) out[id] = { label: src.label, directory: !!src.directory, trust: src.trust ?? null }
+          if (src) {
+            out[id] = { label: src.label, directory: !!src.directory, trust: src.trust ?? null }
+          } else if (typeof id === 'string' && id.startsWith('curated_')) {
+            // Synthetic id for a strategy candidate group not yet
+            // mapped to a SourceRegistry id. Render it sensibly so the
+            // UI doesn't show a snake_case blob to the user.
+            const human = id.replace(/^curated_/, '').replace(/_/g, ' ')
+            out[id] = {
+              label: `Curated ${human} dataset`,
+              directory: false,
+              trust: 'curated',
+            }
+          }
         }
         return out
       })(),
