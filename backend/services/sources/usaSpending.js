@@ -6,6 +6,8 @@
 
 import { fetchWithRetry } from './httpClient.js';
 import crypto from 'crypto';
+import { createLogger } from '../../utils/logger.js'
+const log = createLogger('usaSpending')
 
 const API_BASE = 'https://api.usaspending.gov/api/v2';
 const SOURCE_NAME = 'usaspending.gov';
@@ -20,7 +22,7 @@ const SOURCE_NAME = 'usaspending.gov';
 export async function fetchUSASpending(options = {}) {
   const { limit = 100, page = 1 } = options;
   
-  console.log(`[usaspending.gov] Fetching opportunities (limit: ${limit}, page: ${page})`);
+  log.info(`[usaspending.gov] Fetching opportunities (limit: ${limit}, page: ${page})`);
   
   try {
     // Use the spending by award endpoint to find recent grants
@@ -68,7 +70,7 @@ export async function fetchUSASpending(options = {}) {
     // Parse response
     const opportunities = parseUSASpendingResponse(data);
     
-    console.log(`[usaspending.gov] Fetched ${opportunities.length} opportunities`);
+    log.info(`[usaspending.gov] Fetched ${opportunities.length} opportunities`);
     
     return {
       opportunities,

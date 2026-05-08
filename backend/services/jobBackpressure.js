@@ -6,6 +6,8 @@
  */
 
 import { incrementRetryCount } from './deadLetterQueue.js'
+import { createLogger } from '../utils/logger.js'
+const log = createLogger('jobBackpressure')
 
 /**
  * Maximum number of retries for a crawler job before giving up
@@ -62,7 +64,7 @@ export function shouldRetryJob(job, error) {
     lowerError.includes('unhandled crawler type') ||
     lowerError.includes('foreign key constraint')
   ) {
-    console.log('[backpressure] Permanent failure, not retrying', {
+    log.info('[backpressure] Permanent failure, not retrying', {
       jobId: job.id,
       error: errorMessage.substring(0, 100),
     })
@@ -75,7 +77,7 @@ export function shouldRetryJob(job, error) {
     lowerError.includes('forbidden') ||
     lowerError.includes('api key')
   ) {
-    console.log('[backpressure] Auth failure, not retrying', {
+    log.info('[backpressure] Auth failure, not retrying', {
       jobId: job.id,
       error: errorMessage.substring(0, 100),
     })
@@ -91,7 +93,7 @@ export function shouldRetryJob(job, error) {
     lowerError.includes('503') ||
     lowerError.includes('502')
   ) {
-    console.log('[backpressure] Transient failure, scheduling retry', {
+    log.info('[backpressure] Transient failure, scheduling retry', {
       jobId: job.id,
       retryCount,
       error: errorMessage.substring(0, 100),
@@ -161,7 +163,7 @@ export async function scheduleJobRetry(db, jobId, deadLetterEntryId, errorContex
       await incrementRetryCount(db, deadLetterEntryId, nextRetryAt)
     }
     
-    console.log('[backpressure] Scheduled job retry', {
+    log.info('[backpressure] Scheduled job retry', {
       jobId,
       retryCount: retryCount + 1,
       delaySeconds,

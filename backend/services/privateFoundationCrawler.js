@@ -12,6 +12,8 @@
 
 import crypto from 'crypto'
 import { extractProfileData } from './relevanceFilter.js'
+import { createLogger } from '../utils/logger.js'
+const log = createLogger('privateFoundationCrawler')
 
 // ── Foundation registry ────────────────────────────────────────────────────────
 
@@ -754,11 +756,11 @@ if (
   }
 
   crawlPrivateFoundations(demoContext).then(({ opportunities, sourcesSearched }) => {
-    console.log(`=== Private Foundation Crawler Demo ===`)
-    console.log(`Sources in registry: ${sourcesSearched}`)
-    console.log(`Matched opportunities: ${opportunities.length}`)
+    log.info(`=== Private Foundation Crawler Demo ===`)
+    log.info(`Sources in registry: ${sourcesSearched}`)
+    log.info(`Matched opportunities: ${opportunities.length}`)
     opportunities.slice(0, 5).forEach((o) =>
-      console.log(`  [${o.relevance_score}] ${o.title} — ${o.source_url}`),
+      log.info(`  [${o.relevance_score}] ${o.title} — ${o.source_url}`),
     )
   })
 }

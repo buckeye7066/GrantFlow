@@ -6,6 +6,8 @@ import { createCrawlerJob } from './crawlerJobCreation.js'
 import { AUDIT_CATEGORIES, SEVERITY, logAuditEvent } from './auditService.js'
 import { buildProfileContext } from './profileHelpers.js'
 import { saveToProfilePipeline } from './opportunityMatcher.js'
+import { createLogger } from '../utils/logger.js'
+const log = createLogger('anyaAutonomousFunctionRunner')
 
 const REPO_ROOT = path.resolve(process.cwd())
 
@@ -45,7 +47,7 @@ async function auditLog(entry, context) {
   }
 
   // Durable fallback when DB is unavailable: platform logs.
-  console.log('[audit][autonomous-crawlers]', JSON.stringify(logEntry))
+  log.info('[audit][autonomous-crawlers]', JSON.stringify(logEntry))
 
   // Dev-only filesystem sink (explicit opt-in).
   if (!isProdEnv() && String(process.env.ALLOW_DEV_FILESYSTEM_AUDIT_LOGS || '').toLowerCase() === 'true') {
@@ -532,7 +534,7 @@ async function saveHighMatchesToProfile(options, context) {
 
     // If we found opportunities but saved none, log why (failure-state visibility).
     if (checked > 0 && saved === 0) {
-      console.info('[autonomous] no pipeline inserts for job', {
+      log.info('[autonomous] no pipeline inserts for job', {
         job_id: jobId,
         profile_id: profileId,
         checked,

@@ -1,3 +1,5 @@
+import { createLogger } from '../utils/logger.js'
+const log = createLogger('crawlerFramework')
 /**
  * crawlerFramework.js
  *
@@ -160,7 +162,7 @@ export async function runFederalCrawl(db, profileId, profileContext, options = {
     try {
       const { opportunities } = await _fetchSamGov({ limit: perSource, offset: 0 });
       allOpportunities.push(...opportunities);
-      console.log(`[crawlerFramework] SAM.gov: ${opportunities.length} results`);
+      log.info(`[crawlerFramework] SAM.gov: ${opportunities.length} results`);
     } catch (err) {
       console.error('[crawlerFramework] SAM.gov fetch error:', err.message);
       errors.push({ source: 'sam.gov', error: err.message });
@@ -172,7 +174,7 @@ export async function runFederalCrawl(db, profileId, profileContext, options = {
     const { fetchUSASpending: _fetchUSASpending } = await import('./sources/usaSpending.js');
     const { opportunities } = await _fetchUSASpending({ limit: perSource, page: 1 });
     allOpportunities.push(...opportunities);
-    console.log(`[crawlerFramework] USASpending: ${opportunities.length} results`);
+    log.info(`[crawlerFramework] USASpending: ${opportunities.length} results`);
   } catch (err) {
     console.error('[crawlerFramework] USASpending fetch error:', err.message);
     errors.push({ source: 'usaspending.gov', error: err.message });
@@ -188,7 +190,7 @@ export async function runFederalCrawl(db, profileId, profileContext, options = {
     const results = await _fetchNih({ text, limit: perSource, offset: 0 });
     // NIH RePORTER adapter already returns canonical FundingOpportunity shape.
     allOpportunities.push(...results);
-    console.log(
+    log.info(
       `[crawlerFramework] NIH RePORTER: ${results.length} results (text="${text || '<none>'}")`,
     );
   } catch (err) {

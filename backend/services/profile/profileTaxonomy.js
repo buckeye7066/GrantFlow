@@ -4,6 +4,8 @@ import { resolveCountyForZip } from '../geo/zipCountyResolver.js'
 
 const require = createRequire(import.meta.url)
 const schema = require('./applicationSchema.json')
+import { createLogger } from '../../utils/logger.js'
+const log = createLogger('profileTaxonomy')
 if (!schema) throw new Error('applicationSchema.json is required for profile taxonomy')
 
 const CANONICAL_SECTION_KEYS = (schema && Array.isArray(schema.canonical_section_keys))
@@ -973,7 +975,7 @@ export function buildProfileFacets(profileContext = {}) {
   }
 
   if (String(process.env.PROFILE_TAXONOMY_DEBUG || '').toLowerCase() === 'true') {
-    console.log('[profileTaxonomy] facets built', {
+    log.info('[profileTaxonomy] facets built', {
       required_missing: coverage.required_missing,
       mapped_fields: mappedFieldIds.size,
       relevant_fields: coverage.field_map_coverage.relevant_fields_total,

@@ -9,6 +9,8 @@
  */
 
 import { loadProfileContext } from '../profileHelpers.js';
+import { createLogger } from '../../utils/logger.js'
+const log = createLogger('index')
 
 /**
  * Normalize Set-like profile signals after JSON snapshot round-trip or legacy shapes.
@@ -517,7 +519,7 @@ export async function loadProfileSignals(db, profileId) {
     rawInputs = { profileId, error: err.message };
   }
 
-  console.info(`[profileSignals] profile=${profileId} intents=[${[...intents].join(',')}] programs=[${assistancePrograms.join(',')}]`);
+  log.info(`[profileSignals] profile=${profileId} intents=[${[...intents].join(',')}] programs=[${assistancePrograms.join(',')}]`);
 
   return { signals, intents, assistancePrograms, rawInputs, profileContext }
 }

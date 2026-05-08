@@ -6,6 +6,8 @@
 import fs from 'fs/promises'
 import path from 'path'
 import { AUDIT_CATEGORIES, SEVERITY, logAuditEvent } from './auditService.js'
+import { createLogger } from '../utils/logger.js'
+const log = createLogger('anyaTestRepair')
 
 function isProdEnv() {
   const nodeEnv = String(process.env.NODE_ENV || '').toLowerCase()
@@ -63,7 +65,7 @@ export async function repairFailingTests(failedTests, dbOrContext) {
       ? dbOrContext
       : { db: dbOrContext }
   const db = context?.db
-  console.log(`[Anya Test Repair] 🔧 Analyzing ${failedTests.length} failing tests...`)
+  log.info(`[Anya Test Repair] 🔧 Analyzing ${failedTests.length} failing tests...`)
   
   const repairReport = {
     total_failures: failedTests.length,
@@ -73,7 +75,7 @@ export async function repairFailingTests(failedTests, dbOrContext) {
   }
   
   for (const test of failedTests) {
-    console.log(`[Anya Test Repair] Analyzing: ${test.test_name}`)
+    log.info(`[Anya Test Repair] Analyzing: ${test.test_name}`)
     
     try {
       // Categorize failure type
@@ -161,10 +163,10 @@ export async function repairFailingTests(failedTests, dbOrContext) {
   }
   
   // Log repair results
-  console.log('[Anya Test Repair] ========================================')
-  console.log(`[Anya Test Repair] ✅ Repaired: ${repairReport.repaired.length}/${failedTests.length}`)
-  console.log(`[Anya Test Repair] ❌ Unable to repair: ${repairReport.unable_to_repair.length}`)
-  console.log('[Anya Test Repair] ========================================')
+  log.info('[Anya Test Repair] ========================================')
+  log.info(`[Anya Test Repair] ✅ Repaired: ${repairReport.repaired.length}/${failedTests.length}`)
+  log.info(`[Anya Test Repair] ❌ Unable to repair: ${repairReport.unable_to_repair.length}`)
+  log.info('[Anya Test Repair] ========================================')
   
   return repairReport
 }

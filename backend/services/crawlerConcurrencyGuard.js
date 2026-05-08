@@ -7,6 +7,8 @@
 
 import crypto from 'crypto'
 import { logFailedJob } from './deadLetterQueue.js'
+import { createLogger } from '../utils/logger.js'
+const log = createLogger('crawlerConcurrencyGuard')
 
 /**
  * Maximum concurrent crawlers globally (prevent system overload)
@@ -146,7 +148,7 @@ export async function acquireCrawlerLock(db, profileId, jobType, { jobId } = {})
   const existingJob = await db.prepare(sql).get(profileId, ...(hasJobId ? [jobId] : []))
   
   if (existingJob) {
-    console.log('[crawler-concurrency] Profile already has running crawler', {
+    log.info('[crawler-concurrency] Profile already has running crawler', {
       profileId,
       existingJobId: existingJob.id,
       existingType: existingJob.type,

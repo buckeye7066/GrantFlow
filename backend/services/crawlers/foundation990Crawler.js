@@ -12,6 +12,8 @@
 import { searchOrganizations, getOrganization, orgToFundingOpportunity } from '../../src/integrations/propublica990.js'
 import { bulkUpsertFundingOpportunities } from '../opportunityInserter.js'
 import { NTEE_DESCRIPTIONS } from '../../constants/nteeMapping.js'
+import { createLogger } from '../../utils/logger.js'
+const log = createLogger('foundation990Crawler')
 
 const DEFAULT_MIN_GRANT = 10_000
 const DEFAULT_MAX_PAGES = 20
@@ -37,7 +39,7 @@ export async function processFoundation990Job(context) {
     max_pages = DEFAULT_MAX_PAGES,
   } = params
 
-  console.log(`[foundation990] Starting batch ingestion: states=${states.join(',')}, ntee=${ntee_codes.join(',')}, min_grant=$${min_grant_amount}`)
+  log.info(`[foundation990] Starting batch ingestion: states=${states.join(',')}, ntee=${ntee_codes.join(',')}, min_grant=$${min_grant_amount}`)
 
   let totalOrgs = 0
   let qualifiedOrgs = 0
@@ -48,7 +50,7 @@ export async function processFoundation990Job(context) {
     for (const ntee of ntee_codes) {
       const stateLabel = state === 'nationwide' ? 'all states' : state
       const nteeLabel = NTEE_DESCRIPTIONS[ntee] ?? ntee
-      console.log(`[foundation990] Searching: ${stateLabel} / ${nteeLabel} (NTEE ${ntee})`)
+      log.info(`[foundation990] Searching: ${stateLabel} / ${nteeLabel} (NTEE ${ntee})`)
 
       for (let page = 0; page < max_pages; page++) {
         try {
@@ -66,7 +68,7 @@ export async function processFoundation990Job(context) {
           const orgs = result.organizations ?? []
 
           if (orgs.length === 0) {
-            console.log(`[foundation990] No more results for ${stateLabel}/${ntee} at page ${page}`)
+            log.info(`[foundation990] No more results for ${stateLabel}/${ntee} at page ${page}`)
             break
           }
 
@@ -101,7 +103,7 @@ export async function processFoundation990Job(context) {
     }
   }
 
-  console.log(`[foundation990] Complete: ${totalOrgs} orgs scanned, ${qualifiedOrgs} qualified (>=$${min_grant_amount}), ${insertedCount} upserted`)
+  log.info(`[foundation990] Complete: ${totalOrgs} orgs scanned, ${qualifiedOrgs} qualified (>=$${min_grant_amount}), ${insertedCount} upserted`)
 
   return {
     success: true,

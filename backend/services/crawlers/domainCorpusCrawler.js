@@ -12,6 +12,8 @@ import { DOMAIN_CRAWLER_REGISTRY } from './domainCrawlerRegistry.js'
 import { runAllDomainEngines, DOMAIN_ENGINES } from './domainEngines/index.js'
 import { bulkUpsertFundingOpportunities } from '../opportunityInserter.js'
 import { headForVerification } from './httpClient.js'
+import { createLogger } from '../../utils/logger.js'
+const log = createLogger('domainCorpusCrawler')
 
 const CRAWLER_VERSION = 'v3-domain-engine'
 const DOMAIN_CRAWL_TIMEOUT_MS = Number(process.env.DOMAIN_CORPUS_CRAWL_TIMEOUT_MS ?? 8000)
@@ -196,7 +198,7 @@ export async function runDomainCorpusCrawl(db, options = {}) {
   stats.number_deduped = allOpportunities.length - deduped.length
   stats.total_candidates = allOpportunities.length
   if (stats.number_deduped > 0) {
-    console.info(
+    log.info(
       `[domainCorpusCrawler] Deduplication removed ${stats.number_deduped} duplicate URLs from ${allOpportunities.length} candidates.`,
     )
   }
@@ -280,11 +282,11 @@ export async function runDomainCorpusCrawl(db, options = {}) {
           }
         }
       } catch (httpErr) {
-        console.debug(`[domainCorpusCrawler] URL verification failed for ${url}:`, httpErr?.message)
+        log.debug(`[domainCorpusCrawler] URL verification failed for ${url}:`, httpErr?.message)
       }
     }
   }
 
-  console.log('[domainCorpusCrawler] Complete:', stats)
+  log.info('[domainCorpusCrawler] Complete:', stats)
   return stats
 }

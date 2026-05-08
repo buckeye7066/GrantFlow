@@ -6,6 +6,8 @@
  */
 
 import crypto from 'crypto'
+import { createLogger } from '../utils/logger.js'
+const log = createLogger('deadLetterQueue')
 
 /**
  * Log a failed crawler job to the dead letter queue
@@ -70,7 +72,7 @@ export async function logFailedJob(db, options) {
         severity,
       )
     
-    console.log('[deadLetterQueue] Logged failed job to dead letter queue', {
+    log.info('[deadLetterQueue] Logged failed job to dead letter queue', {
       id,
       jobId,
       jobType,
@@ -175,7 +177,7 @@ export async function resolveFailure(db, id, resolvedBy, resolutionNotes = null)
     )
     .run(resolvedBy, resolutionNotes, id)
 
-  console.log('[deadLetterQueue] Resolved dead letter entry', { id, resolvedBy })
+  log.info('[deadLetterQueue] Resolved dead letter entry', { id, resolvedBy })
 }
 
 /**

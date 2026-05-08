@@ -17,6 +17,8 @@ import path from 'path'
 import { fileURLToPath } from 'url'
 import { upsertFundingOpportunity } from './opportunityInserter.js'
 import { scoreOpportunity } from './matchEngine.js'
+import { createLogger } from '../utils/logger.js'
+const log = createLogger('itemGiftCrawler')
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -181,7 +183,7 @@ export async function processItemGiftCrawlerJob({ db, job, profileContext }) {
     })
   }
 
-  console.info('[itemGiftCrawler] completed', {
+  log.info('[itemGiftCrawler] completed', {
     jobId: job?.id ?? null,
     profileId,
     item,

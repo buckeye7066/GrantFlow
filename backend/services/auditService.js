@@ -6,6 +6,8 @@
  */
 
 import { randomUUID } from 'crypto'
+import { createLogger } from '../utils/logger.js'
+const log = createLogger('auditService')
 
 // Audit event categories
 export const AUDIT_CATEGORIES = {
@@ -427,7 +429,7 @@ export async function cleanupAuditLogs(db, { retentionDays = 90 } = {}) {
         AND severity NOT IN ('error', 'critical')
     `).run(cutoff)
     
-    console.log(`[Audit] Cleaned up ${result.changes} old audit logs`)
+    log.info(`[Audit] Cleaned up ${result.changes} old audit logs`)
     
     return { deleted: result.changes }
   } catch (error) {

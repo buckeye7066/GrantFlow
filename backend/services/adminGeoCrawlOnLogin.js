@@ -9,6 +9,8 @@ import { createGeoCrawlRun, backfillGeoCrawlRunFromJob } from './geoCrawlRunStor
 import { resolveUploadsDir } from '../utils/uploadsDir.js'
 import { dirname, join } from 'path'
 import { fileURLToPath } from 'url'
+import { createLogger } from '../utils/logger.js'
+const log = createLogger('adminGeoCrawlOnLogin')
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
@@ -63,7 +65,7 @@ export async function scheduleAdminGeoCrawlOnLogin(db, user, ctx = {}) {
       .get(`%${marker}%`)
 
     if (active?.id) {
-      console.info(`[adminGeoCrawlOnLogin] Skip: geo sweep already active job=${active.id}`)
+      log.info(`[adminGeoCrawlOnLogin] Skip: geo sweep already active job=${active.id}`)
       return { scheduled: false, reason: 'already_running', job_id: active.id }
     }
 
@@ -84,7 +86,7 @@ export async function scheduleAdminGeoCrawlOnLogin(db, user, ctx = {}) {
 
       const completedAt = last?.completed_at ? new Date(last.completed_at).getTime() : 0
       if (completedAt && Date.now() - completedAt < hours * 3600 * 1000) {
-        console.info(
+        log.info(
           `[adminGeoCrawlOnLogin] Skip: last sweep ${new Date(completedAt).toISOString()} (cooldown ${hours}h)`,
         )
         return { scheduled: false, reason: 'cooldown', cooldown_hours: hours }
@@ -151,7 +153,7 @@ export async function scheduleAdminGeoCrawlOnLogin(db, user, ctx = {}) {
       })
     })
 
-    console.info(`[adminGeoCrawlOnLogin] Scheduled nationwide geo sweep job=${jobId} run=${geoRunId}`)
+    log.info(`[adminGeoCrawlOnLogin] Scheduled nationwide geo sweep job=${jobId} run=${geoRunId}`)
     return { scheduled: true, job_id: jobId, run_id: geoRunId }
   } catch (error) {
     console.error('[adminGeoCrawlOnLogin] Failed:', error)

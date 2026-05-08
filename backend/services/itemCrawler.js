@@ -15,6 +15,8 @@ import {
   safeParseArrayField,
 } from './profileHelpers.js'
 import { scoreOpportunity, computeMatchDecision } from './matchEngine.js'
+import { createLogger } from '../utils/logger.js'
+const log = createLogger('itemCrawler')
 
 /**
  * Explicit mapper from the canonical camelCase decision object returned by
@@ -65,7 +67,7 @@ function loadJSON(filePath) {
  * Process item crawler job - finds funding for specific items/equipment
  */
 export async function processItemCrawlerJob({ db, job, dataDir, profileContext }) {
-  console.log('[itemCrawler] Starting item funding search...')
+  log.info('[itemCrawler] Starting item funding search...')
   
   const parameters = job.parameters ?? {}
   const matchThreshold = parameters.match_threshold || 50
@@ -105,7 +107,7 @@ export async function processItemCrawlerJob({ db, job, dataDir, profileContext }
     return { evaluated: 0, inserted: 0, opportunityLogs: [] }
   }
   
-  console.log('[itemCrawler] Searching for:', itemKeywords.join(', '))
+  log.info('[itemCrawler] Searching for:', itemKeywords.join(', '))
   
   // Build profile signals
   const signals = buildProfileSignals(profileContext)
@@ -113,11 +115,11 @@ export async function processItemCrawlerJob({ db, job, dataDir, profileContext }
                        profileContext?.sections?.location_focus?.state ||
                        parameters.state
   
-  console.log('[itemCrawler] Profile state:', profileState)
+  log.info('[itemCrawler] Profile state:', profileState)
   
   // Load item funding sources
   const itemSources = loadJSON(join(dataDir, 'item_funding_sources.json'))
-  console.log(`[itemCrawler] Loaded ${itemSources.length} item funding sources`)
+  log.info(`[itemCrawler] Loaded ${itemSources.length} item funding sources`)
   
   // Also check database for equipment grants
   const keywordConditions = itemKeywords.map(() => 
@@ -152,7 +154,7 @@ export async function processItemCrawlerJob({ db, job, dataDir, profileContext }
     dbOpps = []
   }
   
-  console.log(`[itemCrawler] Found ${dbOpps.length} matching opportunities in database`)
+  log.info(`[itemCrawler] Found ${dbOpps.length} matching opportunities in database`)
   
   // Combine and dedupe
   const seenTitles = new Set()
@@ -196,7 +198,7 @@ export async function processItemCrawlerJob({ db, job, dataDir, profileContext }
     })
   }
   if (requiresMatchSkipped > 0) {
-    console.log(
+    log.info(
       `[itemCrawler] Pre-score skip: ${requiresMatchSkipped} opportunities omitted because requires_match=true (needs separate match flow).`,
     )
   }
@@ -207,7 +209,7 @@ export async function processItemCrawlerJob({ db, job, dataDir, profileContext }
   // maxResults caps volume only; canonical ACCEPT/REVIEW decisions are never suppressed by threshold.
   const topOpps = scoredOpps.slice(0, maxResults)
   
-  console.log(
+  log.info(
     `[itemCrawler] Found ${topOpps.length} matching item funding sources (threshold: ${matchThreshold}%)`,
   )
   if (scoredOpps.length > 0 && topOpps.length === 0) {
@@ -234,7 +236,7 @@ export async function processItemCrawlerJob({ db, job, dataDir, profileContext }
 
       // Goal 3: hard-reject anything the decision engine rejects
       if (decision.decision === 'REJECT') {
-        console.log(
+        log.info(
           `[itemCrawler] REJECTED "${opp.title}" - ${decision.explanation ?? 'decision engine reject'}`,
         )
         continue

@@ -42,6 +42,8 @@ import {
   enforceCrawlerOpportunityContract,
 } from './crawlerOpportunityContract.js'
 import { enforceOpportunityPolicy } from './opportunityPolicy.js'
+import { createLogger } from '../../utils/logger.js'
+const log = createLogger('itemFundingCrawler')
 
 /**
    * Known organizations that provide specific item categories.
@@ -623,16 +625,16 @@ export async function crawlItemFunding(profileInput, options = {}) {
         const itemRequest = options.item_request
 
   if (!itemRequest) {
-        console.log('[ItemFundingCrawler] No item request specified')
+        log.info('[ItemFundingCrawler] No item request specified')
         return results
   }
 
     const searchKeywords = signals ? mergePlanKeywords(buildSearchKeywords(profile, 10), queryPlan).slice(0, 20) : []
         const parsed = parseItemRequest(itemRequest)
 
-  console.log(`[ItemFundingCrawler] Searching for: "${itemRequest}"`)
-    console.log(`[ItemFundingCrawler] Detected categories: ${parsed.categories.join(', ')}`)
-    console.log(`[ItemFundingCrawler] Profile: ${profile.display_name || profile.name || 'Unknown'}`)
+  log.info(`[ItemFundingCrawler] Searching for: "${itemRequest}"`)
+    log.info(`[ItemFundingCrawler] Detected categories: ${parsed.categories.join(', ')}`)
+    log.info(`[ItemFundingCrawler] Profile: ${profile.display_name || profile.name || 'Unknown'}`)
 
   const seenUrls = new Set()
 
@@ -691,11 +693,11 @@ export async function crawlItemFunding(profileInput, options = {}) {
 
   // === 2. LIVE WEB SEARCH for the specific item ===
   try {
-        console.log(`[ItemFundingCrawler] Searching web for "${itemRequest}"...`)
+        log.info(`[ItemFundingCrawler] Searching web for "${itemRequest}"...`)
         const rawWebResults = await searchWebForItem(itemRequest, profile)
         const webResults = Array.isArray(rawWebResults) && rawWebResults !== null ? rawWebResults : []
 
-      console.log(`[ItemFundingCrawler] Web search found ${webResults.length} results`)
+      log.info(`[ItemFundingCrawler] Web search found ${webResults.length} results`)
 
       for (const webResult of webResults) {
               const urlKey = (webResult.url || '').toLowerCase().replace(/\/$/, '')
@@ -770,7 +772,7 @@ export async function crawlItemFunding(profileInput, options = {}) {
   // Cap results
   const capped = results.slice(0, 30)
 
-  console.log(`[ItemFundingCrawler] Found ${capped.length} real sources for "${itemRequest}"`)
+  log.info(`[ItemFundingCrawler] Found ${capped.length} real sources for "${itemRequest}"`)
     return finalizeItemResults(capped, { facets, queryPlan })
 }
 

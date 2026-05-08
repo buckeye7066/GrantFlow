@@ -1,3 +1,5 @@
+import { createLogger } from '../utils/logger.js'
+const log = createLogger('seasonalCrawlCalendar')
 /**
  * seasonalCrawlCalendar.js
  *
@@ -538,24 +540,24 @@ if (
   const month = parseInt(process.argv[2] || '', 10) || new Date().getMonth() + 1
   const { currentlyOpen, openingSoon, recentlyClosed } = getSeasonalPrograms(month)
 
-  console.log(`=== Seasonal Crawl Calendar (Month ${month}) ===`)
-  console.log(`\nCurrently Open (${currentlyOpen.length}):`)
-  currentlyOpen.forEach((p) => console.log(`  [${p.crawlPriority.toUpperCase()}] ${p.programName}`))
+  log.info(`=== Seasonal Crawl Calendar (Month ${month}) ===`)
+  log.info(`\nCurrently Open (${currentlyOpen.length}):`)
+  currentlyOpen.forEach((p) => log.info(`  [${p.crawlPriority.toUpperCase()}] ${p.programName}`))
 
-  console.log(`\nOpening Soon (${openingSoon.length}):`)
-  openingSoon.forEach((p) => console.log(`  [${p.crawlPriority.toUpperCase()}] ${p.programName}`))
+  log.info(`\nOpening Soon (${openingSoon.length}):`)
+  openingSoon.forEach((p) => log.info(`  [${p.crawlPriority.toUpperCase()}] ${p.programName}`))
 
-  console.log(`\nRecently Closed (${recentlyClosed.length}):`)
-  recentlyClosed.forEach((p) => console.log(`  [${p.crawlPriority.toUpperCase()}] ${p.programName}`))
+  log.info(`\nRecently Closed (${recentlyClosed.length}):`)
+  recentlyClosed.forEach((p) => log.info(`  [${p.crawlPriority.toUpperCase()}] ${p.programName}`))
 
   const demoContext = {
     profile: { primary_type: 'individual', state: 'tn' },
     signals: { location: { state: 'tn' }, applicantTypes: ['individual'] },
   }
   const { boostedQueries, reason } = getSeasonalCrawlBoosts(demoContext, month)
-  console.log(`\n${reason}`)
-  console.log(`Top boosted queries:`)
+  log.info(`\n${reason}`)
+  log.info(`Top boosted queries:`)
   boostedQueries.slice(0, 5).forEach((q) =>
-    console.log(`  [${q.timing}][${q.crawlPriority}] ${q.query}`),
+    log.info(`  [${q.timing}][${q.crawlPriority}] ${q.query}`),
   )
 }

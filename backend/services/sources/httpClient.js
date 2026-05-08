@@ -4,6 +4,8 @@
  */
 
 import axios from 'axios';
+import { createLogger } from '../../utils/logger.js'
+const log = createLogger('httpClient')
 
 const DEFAULT_TIMEOUT = 30000; // 30 seconds
 const DEFAULT_MAX_RETRIES = 3;
@@ -49,11 +51,11 @@ export async function fetchWithRetry(url, options = {}) {
   let lastError;
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try {
-      console.log(`[httpClient] ${method} ${url} (attempt ${attempt + 1}/${maxRetries + 1})`);
+      log.info(`[httpClient] ${method} ${url} (attempt ${attempt + 1}/${maxRetries + 1})`);
       const response = await axios(config);
       
       if (attempt > 0) {
-        console.log(`[httpClient] Success after ${attempt} retries`);
+        log.info(`[httpClient] Success after ${attempt} retries`);
       }
       
       if (returnMeta) {

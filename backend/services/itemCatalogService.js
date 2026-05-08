@@ -4,6 +4,8 @@ import crypto from 'crypto'
 import { fileURLToPath } from 'url'
 import { buildProfileContext, buildProfileSignals } from './profileHelpers.js'
 import { getOpenAIOptional, invokeJsonWithFallback } from '../utils/aiProviders.js'
+import { createLogger } from '../utils/logger.js'
+const log = createLogger('itemCatalogService')
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -522,7 +524,7 @@ export async function discoverNewCatalogItems(db, { minCount = 3, limit = 50 } =
     }
 
     if (deactivated > 0) {
-      console.info('[itemCatalog] deactivated noisy discovered items', { count: deactivated })
+      log.info('[itemCatalog] deactivated noisy discovered items', { count: deactivated })
     }
   } catch {
     // best-effort cleanup
@@ -630,7 +632,7 @@ export async function discoverNewCatalogItems(db, { minCount = 3, limit = 50 } =
     generated_at: new Date().toISOString(),
     items: insertedItems.slice(0, 50),
   }
-  console.info('[itemCatalog] discovery report', report)
+  log.info('[itemCatalog] discovery report', report)
   return report
 }
 

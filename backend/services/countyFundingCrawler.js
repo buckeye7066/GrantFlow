@@ -16,6 +16,8 @@ import fs from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { upsertFundingOpportunity } from './opportunityInserter.js';
+import { createLogger } from '../utils/logger.js'
+const log = createLogger('countyFundingCrawler')
 
 // NOTE: In some hosted environments, the complete county dataset file may not be present
 // (e.g. older deploy artifacts / missing repo data folder). We fall back to the bundled JSON.
@@ -142,7 +144,7 @@ const ORG_PATTERNS = {
 const CRAWLER_VERSION = '3.0'; // Using complete census data
 
 async function loadCounties() {
-  console.log(`[CountyCrawler] Using ${COUNTY_STATS.totalCounties} counties from ${COUNTY_STATS.totalStates} states (${COUNTY_STATS.source})`);
+  log.info(`[CountyCrawler] Using ${COUNTY_STATS.totalCounties} counties from ${COUNTY_STATS.totalStates} states (${COUNTY_STATS.source})`);
   return COMPLETE_US_COUNTIES;
 }
 
@@ -197,11 +199,11 @@ export async function crawlStateCounties(db, state, options = {}) {
   const stateCounties = counties.filter(c => c.state === state);
   
   if (stateCounties.length === 0) {
-    console.log(`[CountyCrawler] No counties found for state: ${state}`);
+    log.info(`[CountyCrawler] No counties found for state: ${state}`);
     return { inserted: 0, updated: 0, errors: 0 };
   }
   
-  console.log(`[CountyCrawler] Processing ${stateCounties.length} counties in ${state}...`);
+  log.info(`[CountyCrawler] Processing ${stateCounties.length} counties in ${state}...`);
   
   let inserted = 0, updated = 0, errors = 0;
   
@@ -214,12 +216,12 @@ export async function crawlStateCounties(db, state, options = {}) {
       else if (result.updated) updated++;
       else if (result.error) errors++;
       else if (result.rejected) {
-        console.log(`[CountyCrawler] Suppressed (relevanceFilter): ${opp.id} â ${result.reason}`);
+        log.info(`[CountyCrawler] Suppressed (relevanceFilter): ${opp.id} â ${result.reason}`);
       }
     }
   }
   
-  console.log(`[CountyCrawler] ${state}: ${inserted} inserted, ${updated} updated, ${errors} errors`);
+  log.info(`[CountyCrawler] ${state}: ${inserted} inserted, ${updated} updated, ${errors} errors`);
   return { inserted, updated, errors, counties: stateCounties.length };
 }
 
@@ -231,7 +233,7 @@ export async function crawlAllCounties(db, options = {}) {
   const counties = await loadCounties();
   const states = [...new Set(counties.map(c => c.state))];
   
-  console.log(`[CountyCrawler] Starting crawl of ${states.length} states...`);
+  log.info(`[CountyCrawler] Starting crawl of ${states.length} states...`);
   
   let totalInserted = 0, totalUpdated = 0, totalErrors = 0, totalCounties = 0;
   
@@ -246,7 +248,7 @@ export async function crawlAllCounties(db, options = {}) {
     await new Promise(r => setTimeout(r, delayMs));
   }
   
-  console.log(`[CountyCrawler] Complete: ${totalCounties} counties, ${totalInserted} inserted, ${totalUpdated} updated`);
+  log.info(`[CountyCrawler] Complete: ${totalCounties} counties, ${totalInserted} inserted, ${totalUpdated} updated`);
   
   return {
     states: states.length,

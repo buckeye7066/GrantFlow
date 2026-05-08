@@ -13,6 +13,8 @@
 
 import zipcodes from 'zipcodes'
 import { haversineDistanceMiles } from '../sharedGeo.js'
+import { createLogger } from '../../utils/logger.js'
+const log = createLogger('geoCoverageService')
 
 // ── Thresholds ──────────────────────────────────────────────────────────────
 const LOCAL_RADIUS_MI = 25
@@ -172,7 +174,7 @@ export async function resolveGeoCoverage(db, { zip, state, county } = {}) {
         result.tier = 'state'
       }
     }
-    console.log(`[GeoCoverage] No ZIP; tier=${result.tier} states=[${[...result.nearbyStates]}]`)
+    log.info(`[GeoCoverage] No ZIP; tier=${result.tier} states=[${[...result.nearbyStates]}]`)
     return result
   }
 
@@ -188,7 +190,7 @@ export async function resolveGeoCoverage(db, { zip, state, county } = {}) {
 
   if (localCount >= MIN_LOCAL_RESULTS) {
     result.tier = 'local'
-    console.log(
+    log.info(
       `[GeoCoverage] zip=${zip} tier=local zips=${result.localZips.length} hits=${localCount} states=[${[...result.nearbyStates]}]`,
     )
     return result
@@ -206,7 +208,7 @@ export async function resolveGeoCoverage(db, { zip, state, county } = {}) {
 
   if (expandedCount >= MIN_EXPANDED_RESULTS) {
     result.tier = 'expanded'
-    console.log(
+    log.info(
       `[GeoCoverage] zip=${zip} tier=expanded zips=${result.expandedZips.length} hits=${expandedCount} states=[${[...result.nearbyStates]}]`,
     )
     return result
@@ -218,7 +220,7 @@ export async function resolveGeoCoverage(db, { zip, state, county } = {}) {
     result.stats.state = stateCount
     if (stateCount >= MIN_STATE_RESULTS) {
       result.tier = 'state'
-      console.log(
+      log.info(
         `[GeoCoverage] zip=${zip} tier=state states=[${[...result.nearbyStates]}] hits=${stateCount}`,
       )
       return result
@@ -226,7 +228,7 @@ export async function resolveGeoCoverage(db, { zip, state, county } = {}) {
   }
 
   // ── Tier 4: National (always included) ──
-  console.log(
+  log.info(
     `[GeoCoverage] zip=${zip} tier=national (local=${localCount} expanded=${expandedCount} state=${result.stats.state})`,
   )
   return result
@@ -335,7 +337,7 @@ export async function findStatesNeedingCoverage(db) {
       }
     }
 
-    console.log(
+    log.info(
       `[GeoCoverage] Profile states: ${unique.length} total, ${covered.length} covered, ${uncovered.length} need crawling`,
     )
     return { all: unique, covered, uncovered }
@@ -466,18 +468,18 @@ export async function populateProfileZipCoverage(db) {
   }
 
   const uniqueZips = [...new Set(profileZips)]
-  console.log(`[GeoCoverage] Populating coverage for ${uniqueZips.length} profile ZIPs...`)
+  log.info(`[GeoCoverage] Populating coverage for ${uniqueZips.length} profile ZIPs...`)
 
   let totalEntries = 0
   for (let i = 0; i < uniqueZips.length; i++) {
     const count = await populateZipCoverage(db, uniqueZips[i])
     totalEntries += count
     if ((i + 1) % 50 === 0 || i === uniqueZips.length - 1) {
-      console.log(`[GeoCoverage] Progress: ${i + 1}/${uniqueZips.length} ZIPs, ${totalEntries} entries`)
+      log.info(`[GeoCoverage] Progress: ${i + 1}/${uniqueZips.length} ZIPs, ${totalEntries} entries`)
     }
   }
 
-  console.log(`[GeoCoverage] Population complete: ${uniqueZips.length} ZIPs, ${totalEntries} coverage entries`)
+  log.info(`[GeoCoverage] Population complete: ${uniqueZips.length} ZIPs, ${totalEntries} coverage entries`)
   return { zips: uniqueZips.length, entries: totalEntries }
 }
 

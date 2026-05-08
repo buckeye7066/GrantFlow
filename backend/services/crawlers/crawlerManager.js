@@ -31,6 +31,8 @@ import { VOLUNTEER_FIRE_PROGRAMS } from './data/volunteerFirePrograms.js';
 import { generateStatePrograms, isStateInRegistry } from './data/stateBase.js';
 import { enrichSchool } from './data/knownSchools.js';
 import { upsertFundingOpportunity } from '../opportunityInserter.js';
+import { createLogger } from '../../utils/logger.js'
+const log = createLogger('crawlerManager')
 
 // ── Schema bootstrap ──
 
@@ -512,10 +514,10 @@ export async function runCrawler(db, profileId, options = {}) {
   const effectiveMaxResults = maxResults ?? strategy.maxResults;
   const gateResult = checkGates(strategy, intents);
 
-  console.log(`[CrawlerManager] strategy=${strategy.id} profile=${profileId} intents=[${[...intents]}]`);
+  log.info(`[CrawlerManager] strategy=${strategy.id} profile=${profileId} intents=[${[...intents]}]`);
 
   if (gateResult.gated) {
-    console.log(`[CrawlerManager] Strategy "${strategy.id}" gated: ${gateResult.reason}`);
+    log.info(`[CrawlerManager] Strategy "${strategy.id}" gated: ${gateResult.reason}`);
     return {
       results: [],
       analysis,
@@ -545,7 +547,7 @@ export async function runCrawler(db, profileId, options = {}) {
   timing.candidateLoad_ms = Date.now() - t3;
 
   const totalCandidates = allPrograms.length + schoolCards.length;
-  console.log(`[CrawlerManager] Candidates: ${JSON.stringify(candidateCounts)} total=${totalCandidates}`);
+  log.info(`[CrawlerManager] Candidates: ${JSON.stringify(candidateCounts)} total=${totalCandidates}`);
 
   // ── Step 4: Match and score ──
   const t4 = Date.now();
@@ -624,7 +626,7 @@ export async function runCrawler(db, profileId, options = {}) {
     rawInputs: safeRawInputs,
   };
 
-  console.log(
+  log.info(
     `[CrawlerManager] Done strategy=${strategy.id} ` +
     `accepted=${accepted.length} demoted=${demoted.length} schoolCards=${schoolCards.length} ` +
     `dedup(id:${matchStats.dupId||0} url:${matchStats.dupUrl||0} name:${matchStats.dupName||0}) ` +
@@ -744,7 +746,7 @@ async function storeResults(db, profileId, results, analysis, stateMeta, countyC
         // Do not modify fundingUpserted â it counts successes only
       }
     }
-    console.log(`[CrawlerManager] Stored ${results.length} crawl_results + ${fundingUpserted} funding_opportunities`);
+    log.info(`[CrawlerManager] Stored ${results.length} crawl_results + ${fundingUpserted} funding_opportunities`);
   } catch (err) {
     console.error('[CrawlerManager] Error storing results:', err.message);
     throw err;

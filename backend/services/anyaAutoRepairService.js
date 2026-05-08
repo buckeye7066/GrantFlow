@@ -11,7 +11,7 @@
  * Patterns
  * --------
  *  1. empty_catch         — `.catch(() => {})` → `.catch(e => console.warn(...))`
- *  2. console_log         — `console.log(` in route handler files → `console.info(`
+ *  2. console_log         — `log.info(` in route handler files → `log.info(`
  *  3. profile_bleed       — SQL queries against `funding_opportunities` missing
  *                            `profile_id` isolation (REPORT-ONLY)
  *  4. missing_db_await    — `db.prepare(...).all/get/run(...)` not preceded by
@@ -52,6 +52,8 @@ import { promises as fs } from 'fs'
 import { spawn } from 'node:child_process'
 import { parse as babelParse } from '@babel/parser'
 import { AUDIT_CATEGORIES, SEVERITY, logAuditEvent } from './auditService.js'
+import { createLogger } from '../utils/logger.js'
+const log = createLogger('anyaAutoRepairService')
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -141,9 +143,9 @@ function stripCommentsPreservingLayout(source) {
 const EMPTY_CATCH_RE = /\.catch\(\(\)\s*=>\s*\{\s*\}\)/g
 const EMPTY_CATCH_REPLACEMENT = ".catch(e => console.warn('[background]', e?.message || e))"
 
-/** Matches `console.log(` */
+/** Matches `log.info(` */
 const CONSOLE_LOG_RE = /console\.log\(/g
-const CONSOLE_LOG_REPLACEMENT = 'console.info('
+const CONSOLE_LOG_REPLACEMENT = 'log.info('
 
 /**
  * SQL queries against funding_opportunities that do NOT reference profile_id.
@@ -300,7 +302,7 @@ function scanEmptyCatch(filePath, content) {
 }
 
 /**
- * Scan a single file for `console.log(` in route handler files.
+ * Scan a single file for `log.info(` in route handler files.
  * @param {string} filePath
  * @param {string} content
  * @returns {{ matches: number }}

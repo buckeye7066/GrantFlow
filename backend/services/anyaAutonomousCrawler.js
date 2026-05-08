@@ -5,6 +5,8 @@ import crypto from 'node:crypto'
 import { createRequire } from 'node:module'
 import { AUDIT_CATEGORIES, SEVERITY, logAuditEvent } from './auditService.js'
 import { runGrantFlowDomainAudits } from './anyaGrantFlowAudits.js'
+import { createLogger } from '../utils/logger.js'
+const log = createLogger('anyaAutonomousCrawler')
 
 const REPO_ROOT = path.resolve(process.cwd())
 
@@ -402,8 +404,8 @@ function runAstAnalysis(content, filePath) {
       })
     }
 
-    // CallExpression console.log / console.debug (AST-precise: ignores string
-    // literals containing "console.log(").
+    // CallExpression console.log / log.debug(AST-precise: ignores string
+    // literals containing "log.info(").
     if (
       node.type === 'CallExpression' &&
       node.callee &&
@@ -636,7 +638,7 @@ async function auditLog(entry, context) {
   const logEntry = { timestamp, ...entry }
 
   // Durable fallback: platform logs (structured JSON)
-  console.log('[audit][autonomous-crawler]', JSON.stringify(logEntry))
+  log.info('[audit][autonomous-crawler]', JSON.stringify(logEntry))
 
   // Dev-only filesystem sink (explicit opt-in).
   if (!isProdEnv() && String(process.env.ALLOW_DEV_FILESYSTEM_AUDIT_LOGS || '').toLowerCase() === 'true') {

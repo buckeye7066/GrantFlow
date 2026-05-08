@@ -16,6 +16,8 @@
  */
 
 import { getWithRetry, postWithRetry } from './httpClient.js'
+import { createLogger } from '../../utils/logger.js'
+const log = createLogger('grantsGovClient')
 import {
   GRANTS_GOV_SEARCH2_URL as LEGACY_API,
   SIMPLER_GRANTS_SEARCH_URL as SIMPLER_API,
@@ -196,7 +198,7 @@ async function queryLegacyAPI(keyword, rows = MAX_ROWS_PER_QUERY) {
         console.error(`[GrantsGovClient] Raw data sample: ${sample}`)
       }
     } else {
-      console.log(`[GrantsGovClient] Legacy "${keyword}" → ${resultRows.length} hits`)
+      log.info(`[GrantsGovClient] Legacy "${keyword}" → ${resultRows.length} hits`)
     }
 
     const normalised = resultRows.map(normaliseLegacyHit).filter(Boolean)
@@ -270,7 +272,7 @@ async function querySimplerAPI(keyword, rows = MAX_ROWS_PER_QUERY) {
         `[GrantsGovClient] Simpler 0 hits for "${keyword}" | total=${total} msg="${msg}" keys=[${topKeys}]`,
       )
     } else {
-      console.log(`[GrantsGovClient] Simpler "${keyword}" → ${resultRows.length} hits`)
+      log.info(`[GrantsGovClient] Simpler "${keyword}" → ${resultRows.length} hits`)
     }
 
     const normalised = resultRows.map(normaliseSimplerHit).filter(Boolean)
@@ -331,7 +333,7 @@ export async function searchGrants(keyword, opts = {}) {
     : (opp.title || '').toLowerCase().trim()
   if (!stableKey) continue
   if (seen.has(stableKey)) {
-    console.debug(
+    log.debug(
       `[GrantsGovClient] Dedup skip: "${opp.title}" (key=${stableKey}, source=${opp._api_source})`
     )
     continue
@@ -409,7 +411,7 @@ export async function searchGrantsBatch(strategies, opts = {}) {
     : (opp.title || '').toLowerCase().trim()
   if (!stableKey) continue
   if (seenTitles.has(stableKey)) {
-    console.debug(
+    log.debug(
       `[GrantsGovClient] Batch dedup skip: "${opp.title}" (key=${stableKey}, strategy=${strategy.label})`
     )
     continue
@@ -424,7 +426,7 @@ export async function searchGrantsBatch(strategies, opts = {}) {
     }
   }
 
-  console.log(
+  log.info(
     `[GrantsGovClient] Batch: ${strategies.length} strategies → ${allOpportunities.length} unique opps (legacy=${legacyReachable}, simpler=${simplerReachable})`,
   )
 

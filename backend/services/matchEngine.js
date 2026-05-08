@@ -33,6 +33,8 @@ import { normalizeProfile } from './profileNormalizer.js'
 import { normalizeOpportunity, inferHousingClassification } from './opportunityNormalizer.js'
 import { haversineDistanceMiles } from './sharedGeo.js'
 import { listPresentProfileSignals } from './profileCoverage.js'
+import { createLogger } from '../utils/logger.js'
+const log = createLogger('matchEngine')
 import {
   SCORE_FLOOR,
   W_NEED, W_ELIGIBILITY, W_GEO, W_CATEGORY,
@@ -809,7 +811,7 @@ function calculateFacetAdjustments({ facets, opportunity, oppText }) {
   if (bounded !== points) reasons.push(`Facet adjustment capped (${points} -> ${bounded})`)
 
   if (String(process.env.MATCHING_ENGINE_FACET_DEBUG || '').toLowerCase() === 'true') {
-    console.log('[matchEngine] facet adjustments', {
+    log.info('[matchEngine] facet adjustments', {
       title: opportunity?.title ?? null,
       points: bounded,
       reasons,

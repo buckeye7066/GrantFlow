@@ -2,6 +2,8 @@ import path from 'path'
 import { promises as fs } from 'fs'
 import { scrubPII } from '../../utils/piiScrubber.js'
 import { AUDIT_CATEGORIES, SEVERITY, logAuditEvent } from '../auditService.js'
+import { createLogger } from '../../utils/logger.js'
+const log = createLogger('audit')
 
 const REPO_ROOT = path.resolve(process.cwd())
 
@@ -37,7 +39,7 @@ export async function auditLog(entry, { db = null, actorUserId = null, actorRole
   }
 
   // Durable fallback: platform logs
-  console.log('[audit][national-programs]', scrubPII(JSON.stringify(safeEntry)))
+  log.info('[audit][national-programs]', scrubPII(JSON.stringify(safeEntry)))
 
   // Dev-only filesystem sink (explicit opt-in)
   if (!isProdEnv() && String(process.env.ALLOW_DEV_FILESYSTEM_AUDIT_LOGS || '').toLowerCase() === 'true') {

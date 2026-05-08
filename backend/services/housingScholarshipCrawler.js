@@ -18,6 +18,8 @@
  */
 
 import { upsertFundingOpportunity } from './opportunityInserter.js'
+import { createLogger } from '../utils/logger.js'
+const log = createLogger('housingScholarshipCrawler')
 
 const delay = (ms) => new Promise((r) => setTimeout(r, ms))
 
@@ -677,7 +679,7 @@ export async function runHousingScholarshipCrawler(db, opts = {}) {
   let skipped = 0
   let errors = 0
 
-  console.log(`[HousingCrawler] Starting — ${total} opportunities to process (URL validation: ${validateUrls})`)
+  log.info(`[HousingCrawler] Starting — ${total} opportunities to process (URL validation: ${validateUrls})`)
 
   for (let i = 0; i < HOUSING_FUNDING_CATALOG.length; i++) {
     const opp = HOUSING_FUNDING_CATALOG[i]
@@ -722,11 +724,11 @@ export async function runHousingScholarshipCrawler(db, opts = {}) {
 
       if (result.inserted || result.id) {
         inserted++
-        console.log(`${label} — ${result.inserted ? 'inserted' : 'updated'} (id: ${result.id})`)
+        log.info(`${label} — ${result.inserted ? 'inserted' : 'updated'} (id: ${result.id})`)
         if (onProgress) onProgress(i + 1, total, opp.title, result.inserted ? 'inserted' : 'updated')
       } else {
         skipped++
-        console.log(`${label} — skipped: ${result.reason}`)
+        log.info(`${label} — skipped: ${result.reason}`)
         if (onProgress) onProgress(i + 1, total, opp.title, 'skipped')
       }
     } catch (err) {
@@ -740,6 +742,6 @@ export async function runHousingScholarshipCrawler(db, opts = {}) {
   }
 
   const summary = { inserted, skipped, errors, total }
-  console.log('[HousingCrawler] Complete:', summary)
+  log.info('[HousingCrawler] Complete:', summary)
   return summary
 }

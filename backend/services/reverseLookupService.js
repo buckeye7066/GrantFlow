@@ -12,6 +12,8 @@ import { searchOrganizations, getOrganization } from '../src/integrations/propub
 import { needsToNteeCodes, NTEE_DESCRIPTIONS } from '../constants/nteeMapping.js'
 import { buildProfileContext } from './profileHelpers.js'
 import { normalizeProfile } from './profileNormalizer.js'
+import { createLogger } from '../utils/logger.js'
+const log = createLogger('reverseLookupService')
 
 const RATE_LIMIT_MS = 250
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)) }
@@ -47,7 +49,7 @@ export async function findSimilarOrgsFunders(db, profileId, options = {}) {
   // Map profile needs to NTEE codes
   const nteeCodes = needsToNteeCodes(needCategories)
 
-  console.log(`[reverseLookup] Profile ${profileId}: state=${state}, entity=${entityType}, needs=${needCategories.join(',')}, ntee=${nteeCodes.join(',')}`)
+  log.info(`[reverseLookup] Profile ${profileId}: state=${state}, entity=${entityType}, needs=${needCategories.join(',')}, ntee=${nteeCodes.join(',')}`)
 
   // Search for similar organizations
   const allOrgs = []

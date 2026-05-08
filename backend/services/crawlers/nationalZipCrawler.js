@@ -50,6 +50,8 @@ import {
   getGeoCrawlRun,
 } from '../geoCrawlRunStore.js'
 import { resolveCountyForZip } from '../geo/zipCountyResolver.js'
+import { createLogger } from '../../utils/logger.js'
+const log = createLogger('nationalZipCrawler')
 
 // All US ZIP codes (~43k total).
 // We load from the local `zipcodes` dataset to avoid network lookups.
@@ -850,7 +852,7 @@ async function getZipCoordinates(zip) {
  * Process a single ZIP code
  */
 async function processZip(zip, db, config) {
-  console.log(`[GeoCrawl] Processing ZIP ${zip}...`)
+  log.info(`[GeoCrawl] Processing ZIP ${zip}...`)
   
   const startTime = Date.now()
   let sources = []
@@ -882,7 +884,7 @@ async function processZip(zip, db, config) {
       }
 
       const eligibleFixtureCount = sources.filter((opp) => opp && !isLoanOrMatchingFund(opp)).length
-      console.log(`  [fixtures] Found ${eligibleFixtureCount} sources; inserted ${insertedNew} new for ZIP ${zip}`)
+      log.info(`  [fixtures] Found ${eligibleFixtureCount} sources; inserted ${insertedNew} new for ZIP ${zip}`)
       return {
         zip,
         status: 'completed',
@@ -964,7 +966,7 @@ async function processZip(zip, db, config) {
       ...(overpassResults || []),
     ]
     
-    console.log(`  Found ${sources.length} sources for ZIP ${zip}`)
+    log.info(`  Found ${sources.length} sources for ZIP ${zip}`)
 
     // De-dupe by (source, source_id) so retries don’t collapse to “0 found”.
     const seen = new Set()
@@ -1023,7 +1025,7 @@ async function processZip(zip, db, config) {
     // Enforce minimum only; there is no cap on max sources per zip (all eligible are saved).
     const min = Number(config?.min_sources_per_zip ?? DEFAULT_CONFIG.min_sources_per_zip)
     if (eligibleFound < min) {
-      console.log(`  Warning: Only found ${eligibleFound} eligible sources (minimum: ${min})`)
+      log.info(`  Warning: Only found ${eligibleFound} eligible sources (minimum: ${min})`)
     }
     
   } catch (err) {
@@ -1509,13 +1511,13 @@ export async function runNationalZipCrawl(dbPath, options = {}) {
       // ignore (schema drift / migrations not applied yet)
     }
   }
-  console.log('='.repeat(80))
-  console.log('Geo Crawl Starting')
-  console.log('='.repeat(80))
-  console.log(`Batch size: ${config.batch_size}`)
-  console.log(`Min sources per ZIP: ${config.min_sources_per_zip}`)
-  console.log(`Rate limit: ${config.rate_limit_ms}ms`)
-  console.log()
+  log.info('='.repeat(80))
+  log.info('Geo Crawl Starting')
+  log.info('='.repeat(80))
+  log.info(`Batch size: ${config.batch_size}`)
+  log.info(`Min sources per ZIP: ${config.min_sources_per_zip}`)
+  log.info(`Rate limit: ${config.rate_limit_ms}ms`)
+  log.info()
   
   // Resumability:
   // - Full crawl is resumable by default (resume=true)
@@ -1543,17 +1545,17 @@ export async function runNationalZipCrawl(dbPath, options = {}) {
   }
   
   if (lastProcessedZip) {
-    console.log(`Resuming from ZIP ${lastProcessedZip} (index ${startIndex})`)
+    log.info(`Resuming from ZIP ${lastProcessedZip} (index ${startIndex})`)
   } else {
-    console.log('Starting from beginning')
+    log.info('Starting from beginning')
   }
   
   const totalZips = zipList.length
   const remainingZips = Math.max(0, totalZips - startIndex)
   
-  console.log(`Total ZIPs: ${totalZips}`)
-  console.log(`Remaining: ${remainingZips}`)
-  console.log()
+  log.info(`Total ZIPs: ${totalZips}`)
+  log.info(`Remaining: ${remainingZips}`)
+  log.info()
   
   let processedCount = 0
   let totalSources = 0
@@ -1572,7 +1574,7 @@ export async function runNationalZipCrawl(dbPath, options = {}) {
       const batchEnd = Math.min(i + config.batch_size, totalZips)
       const batch = zipList.slice(i, batchEnd)
       
-      console.log(`Processing batch ${Math.floor(i / config.batch_size) + 1}: ZIPs ${i} - ${batchEnd}`)
+      log.info(`Processing batch ${Math.floor(i / config.batch_size) + 1}: ZIPs ${i} - ${batchEnd}`)
       
       for (const zip of batch) {
         // Per-ZIP wall-clock timeout: prevents a single hung API call from blocking the entire job.
@@ -1649,7 +1651,7 @@ export async function runNationalZipCrawl(dbPath, options = {}) {
         if (processedCount % 100 === 0) {
           const elapsed = Date.now() - startTime
           const rate = (processedCount / elapsed) * 1000 * 60 // per minute
-          console.log(`  Progress: ${processedCount}/${remainingZips} ZIPs (${rate.toFixed(1)}/min), ${totalSources} sources found`)
+          log.info(`  Progress: ${processedCount}/${remainingZips} ZIPs (${rate.toFixed(1)}/min), ${totalSources} sources found`)
           
           // Force garbage collection if available
           if (global.gc) {
@@ -1658,8 +1660,8 @@ export async function runNationalZipCrawl(dbPath, options = {}) {
         }
       }
       
-      console.log(`  Batch complete, checkpointing...`)
-      console.log()
+      log.info(`  Batch complete, checkpointing...`)
+      log.info()
     }
   } catch (error) {
     fatalError = error
@@ -1709,14 +1711,14 @@ export async function runNationalZipCrawl(dbPath, options = {}) {
   
   const totalDuration = Date.now() - startTime
   
-  console.log('='.repeat(80))
-  console.log('Geo Crawl Complete')
-  console.log('='.repeat(80))
-  console.log(`Total ZIPs processed: ${processedCount}`)
-  console.log(`Total sources found: ${totalSources}`)
-  console.log(`Average sources per ZIP: ${processedCount > 0 ? (totalSources / processedCount).toFixed(2) : '0.00'}`)
-  console.log(`Duration: ${(totalDuration / 1000 / 60).toFixed(2)} minutes`)
-  console.log()
+  log.info('='.repeat(80))
+  log.info('Geo Crawl Complete')
+  log.info('='.repeat(80))
+  log.info(`Total ZIPs processed: ${processedCount}`)
+  log.info(`Total sources found: ${totalSources}`)
+  log.info(`Average sources per ZIP: ${processedCount > 0 ? (totalSources / processedCount).toFixed(2) : '0.00'}`)
+  log.info(`Duration: ${(totalDuration / 1000 / 60).toFixed(2)} minutes`)
+  log.info()
   
   if (ownsDb && typeof db?.close === 'function') {
     db.close()

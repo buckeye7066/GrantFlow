@@ -4,6 +4,8 @@ import { createCircuitBreaker } from '../utils/circuitBreaker.js'
 import { createOpenAIClient, summarizeOpenAIError } from '../utils/openaiClient.js'
 import path from 'path'
 import { promises as fs } from 'fs'
+import { createLogger } from '../utils/logger.js'
+const log = createLogger('anyaOrchestrator')
 
 const TASK_STATUSES = new Set(['open', 'in_progress', 'completed', 'cancelled'])
 const TASK_PRIORITIES = new Set(['low', 'normal', 'high', 'urgent'])
@@ -924,7 +926,7 @@ export async function generateAssistantResponse(db, user, sessionId, { content, 
  if (isHealthQuery) {
   try {
     const { invokeTool: invokeRegisteredTool } = await import('./anyaToolRegistry.js')
-    console.log('[Anya] Health query detected, invoking system.health tool')
+    log.info('[Anya] Health query detected, invoking system.health tool')
     // The tool authorizes via context.ctx.isAdmin -- if we forget to forward the
     // ctx the registered handler treats us as a non-admin user and Anya
     // returns the redacted "safe" health summary even for real admins,
@@ -1193,7 +1195,7 @@ export async function generateAssistantResponse(db, user, sessionId, { content, 
   // 1) Try OpenAI first (if configured)
   if (openai) {
     try {
-      console.log('[Anya] Calling OpenAI API with model:', DEFAULT_ASSISTANT_MODEL)
+      log.info('[Anya] Calling OpenAI API with model:', DEFAULT_ASSISTANT_MODEL)
       const response = await openAIBreaker.exec(
         async () =>
           await openai.chat.completions.create({
@@ -1214,7 +1216,7 @@ export async function generateAssistantResponse(db, user, sessionId, { content, 
 
       const reply = response.choices[0]?.message?.content?.trim()
       if (reply) {
-        console.log('[Anya] OpenAI API response received successfully')
+        log.info('[Anya] OpenAI API response received successfully')
         return reply
       }
     } catch (error) {

@@ -118,7 +118,19 @@ test('e2e: login, key routes, Anya on, refresh persistence, logout', async ({ pa
   const sheetAfter = page.locator('[data-state="open"]').filter({ has: page.locator('text=/Anya|Next steps|Use current screen/i') }).first()
   await expect(sheetAfter).toBeVisible({ timeout: 10_000 })
 
-  // 5) Logout
-  await page.getByRole('button', { title: 'Logout' }).click()
+  // 5) Logout. The Anya sheet covers the sidebar after step 4's refresh+open,
+  // so close it first; then click the sidebar logout (matched by accessible
+  // title/name, not by the no-op `title:` filter on getByRole that previously
+  // matched ALL buttons and triggered a strict-mode violation).
+  const closeAnya = page.getByRole('button', { name: /^close$/i }).first()
+  if (await closeAnya.isVisible().catch(() => false)) {
+    await closeAnya.click().catch(() => {})
+  }
+  await page.keyboard.press('Escape').catch(() => {})
+  const logoutBtn = page
+    .getByTitle('Logout')
+    .or(page.getByRole('button', { name: /^logout$/i }))
+    .first()
+  await logoutBtn.click({ timeout: 10_000 })
   await page.waitForURL(/\/login/i, { timeout: 10_000 })
 })

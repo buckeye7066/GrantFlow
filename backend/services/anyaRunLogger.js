@@ -6,6 +6,8 @@
  */
 
 import crypto from 'crypto'
+import { createLogger } from '../utils/logger.js'
+const log = createLogger('anyaRunLogger')
 
 /**
  * Anya operation modes
@@ -67,7 +69,7 @@ export async function createAnyaRun(db, options) {
       )
       .run(id, runId, mode, operationType, userId, profileId, requestedBy, authorized ? 1 : 0)
     
-    console.log('[anya-runs] Created Anya run entry', {
+    log.info('[anya-runs] Created Anya run entry', {
       id,
       runId,
       mode,
@@ -107,7 +109,7 @@ export async function updateAnyaRunStatus(db, id, status) {
       .prepare(`UPDATE anya_runs SET ${setClause} WHERE id = ?`)
       .run(...values, id)
 
-    console.log('[anya-runs] Updated Anya run status', { id, status })
+    log.info('[anya-runs] Updated Anya run status', { id, status })
   } catch (error) {
     console.error('[anya-runs] Failed to update Anya run status', { id, status, error })
     throw error
@@ -148,7 +150,7 @@ export async function completeAnyaRun(db, id, results = {}) {
     )
     .run(JSON.stringify(toolsUsed), inputTokens, outputTokens, durationMs, id)
   
-  console.log('[anya-runs] Completed Anya run', {
+  log.info('[anya-runs] Completed Anya run', {
     id,
     toolsUsed: toolsUsed.length,
     inputTokens,

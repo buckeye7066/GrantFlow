@@ -9,6 +9,8 @@
 
 import { Resend } from 'resend'
 import twilio from 'twilio'
+import { createLogger } from '../utils/logger.js'
+const log = createLogger('deadlineEmailSmsService')
 
 // ── Configuration (lazy, from env) ──────────────────────────────────────────
 
@@ -72,7 +74,7 @@ export async function sendDeadlineEmail(email, { grantTitle, daysRemaining, dead
 
   try {
     await resend.emails.send({ from, to: email, subject, html })
-    console.info('[deadline-email] Sent to', email, '—', grantTitle)
+    log.info('[deadline-email] Sent to', email, '—', grantTitle)
     return true
   } catch (err) {
     console.warn('[deadline-email] Failed:', err.message)
@@ -99,7 +101,7 @@ export async function sendDeadlineSms(phone, { grantTitle, daysRemaining }) {
 
   try {
     await client.messages.create(payload)
-    console.info('[deadline-sms] Sent to', phone.slice(0, 4) + '***')
+    log.info('[deadline-sms] Sent to', phone.slice(0, 4) + '***')
     return true
   } catch (err) {
     console.warn('[deadline-sms] Failed:', err.message)

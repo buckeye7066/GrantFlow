@@ -15,6 +15,8 @@
  */
 
 import fetch from 'node-fetch';
+import { createLogger } from '../../utils/logger.js'
+const log = createLogger('stateOpenDataConnector')
 
 const RATE_LIMIT_MS = 1000; // 1 request per second
 
@@ -120,7 +122,7 @@ export async function searchStateData(state, params = {}) {
     return [];
   }
   
-  console.log(`[State Open Data] Searching ${portal.name} for ${state}`);
+  log.info(`[State Open Data] Searching ${portal.name} for ${state}`);
   
   // In production, you would:
   // 1. Configure specific dataset IDs for each state
@@ -176,7 +178,7 @@ export async function searchStateData(state, params = {}) {
             last_crawled: new Date().toISOString()
           });
         }
-        console.log(`[State Open Data] ${state}: Fetched ${data.length} records from Socrata dataset ${portal.grants_dataset}`);
+        log.info(`[State Open Data] ${state}: Fetched ${data.length} records from Socrata dataset ${portal.grants_dataset}`);
       }
     } catch (socrataError) {
       console.warn(`[State Open Data] ${state}: Socrata fetch failed (${socrataError.message}), using portal directory entry only`);
@@ -218,7 +220,7 @@ export function configureStatePortal(state, config) {
     name: config.name
   };
   
-  console.log(`[State Open Data] Configured portal for ${state}`);
+  log.info(`[State Open Data] Configured portal for ${state}`);
 }
 
 /**

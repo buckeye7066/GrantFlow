@@ -24,6 +24,8 @@ import { detectMaterialChange } from './purgeMaterialChange.js'
 import { verifyOpportunityUrl } from './purgeVerification.js'
 import { stableTextHash } from './purgeDiffUtils.js'
 import { randomUUID } from 'crypto'
+import { createLogger } from '../utils/logger.js'
+const log = createLogger('regionalPurgeService')
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -397,7 +399,7 @@ async function processOneOpportunity(db, opp, { dryRun, fetchFn }) {
   if (dryRun) {
     // GOAL 8: Always log the computed outcome in dry-run so operators can audit
     // what would have changed without DB writes.
-    console.info(
+    log.info(
       `[regionalPurge][dryRun] opp=${opp.id} prev=${previousState} next=${nextState}` +
       ` reason=${reason ?? 'none'} statusHint=${verificationResult.statusHint}` +
       ` similarity=${changeResult.similarity?.toFixed(3) ?? 'n/a'}`

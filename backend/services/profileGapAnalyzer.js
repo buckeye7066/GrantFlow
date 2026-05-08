@@ -1,3 +1,5 @@
+import { createLogger } from '../utils/logger.js'
+const log = createLogger('profileGapAnalyzer')
 /**
  * profileGapAnalyzer.js
  *
@@ -295,11 +297,11 @@ if (
     },
   }
   const result = analyzeProfileGaps(demoContext)
-  console.log('=== Profile Gap Analysis Demo ===')
-  console.log(`Completion: ${result.completionPercentage}%`)
-  console.log(`Programs potentially unlocked by completing gaps: ${result.potentialProgramsUnlocked}`)
-  console.log(`\nGaps (${result.gaps.length}):`)
+  log.info('=== Profile Gap Analysis Demo ===')
+  log.info(`Completion: ${result.completionPercentage}%`)
+  log.info(`Programs potentially unlocked by completing gaps: ${result.potentialProgramsUnlocked}`)
+  log.info(`\nGaps (${result.gaps.length}):`)
   result.gaps.forEach((g) =>
-    console.log(`  [${g.importance.toUpperCase()}] ${g.sectionLabel}: ${g.actionMessage}`),
+    log.info(`  [${g.importance.toUpperCase()}] ${g.sectionLabel}: ${g.actionMessage}`),
   )
 }

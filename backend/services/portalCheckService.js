@@ -23,6 +23,8 @@ import { SCHOLARSHIPS } from './crawlers/data/scholarships.js'
 import { STATE_REGISTRY } from './crawlers/data/stateRegistry.js'
 import ensurePortalCheckResultsTable from '../utils/ensurePortalCheckResultsTable.js'
 import { guardProfileSectionForWrite } from '../utils/guardedProfileSectionWrite.js'
+import { createLogger } from '../utils/logger.js'
+const log = createLogger('portalCheckService')
 
 // ---------------------------------------------------------------------------
 // Helpers — re-implemented locally so this service has no circular dependency
@@ -473,7 +475,7 @@ export async function getPortalCheckStatus(db, profileId) {
 export async function runPortalCheck(db, profileId, options = {}) {
   const { checkType = 'scheduled', maxPortals = 20 } = options
 
-  console.log(`[portal-check] Starting portal check for profile ${profileId}`)
+  log.info(`[portal-check] Starting portal check for profile ${profileId}`)
 
   await ensurePortalCheckResultsTable(db)
 
@@ -515,7 +517,7 @@ export async function runPortalCheck(db, profileId, options = {}) {
 
   const portals = buildPortalList({ profileSections, state }).slice(0, maxPortals)
 
-  console.log(`[portal-check] Checking ${portals.length} portals for profile ${profileId}`)
+  log.info(`[portal-check] Checking ${portals.length} portals for profile ${profileId}`)
 
   const updates = []
   let awardsDetected = 0
@@ -548,7 +550,7 @@ export async function runPortalCheck(db, profileId, options = {}) {
     })
   }
 
-  console.log(`[portal-check] Completed for profile ${profileId}: ${awardsDetected} awards detected across ${portals.length} portals`)
+  log.info(`[portal-check] Completed for profile ${profileId}: ${awardsDetected} awards detected across ${portals.length} portals`)
 
   return {
     profileId,

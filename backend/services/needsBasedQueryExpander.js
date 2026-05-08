@@ -1,3 +1,5 @@
+import { createLogger } from '../utils/logger.js'
+const log = createLogger('needsBasedQueryExpander')
 /**
  * needsBasedQueryExpander.js
  *
@@ -1057,10 +1059,10 @@ if (
   }
 
   const result = expandNeedsQueries(demoContext)
-  console.log('=== Needs-Based Query Expander Demo ===')
-  console.log(`Situation rules matched: ${result.situationMatches.length}`)
-  console.log(`Total expanded queries: ${result.queries.length}`)
+  log.info('=== Needs-Based Query Expander Demo ===')
+  log.info(`Situation rules matched: ${result.situationMatches.length}`)
+  log.info(`Total expanded queries: ${result.queries.length}`)
   result.situationMatches.forEach((sm) =>
-    console.log(`  [${sm.ruleId}] ${sm.description}`),
+    log.info(`  [${sm.ruleId}] ${sm.description}`),
   )
 }

@@ -9,6 +9,8 @@
 
 import { randomUUID } from 'crypto'
 import { dispatchDeadlineAlerts } from './deadlineEmailSmsService.js'
+import { createLogger } from '../utils/logger.js'
+const log = createLogger('deadlineNotificationService')
 
 const THRESHOLDS_DAYS = [7, 3, 1]
 
@@ -130,7 +132,7 @@ export async function generateDeadlineNotifications(db) {
   }
 
   if (!Array.isArray(candidates) || candidates.length === 0) {
-    console.info('[deadlineNotifications] No approaching deadlines found')
+    log.info('[deadlineNotifications] No approaching deadlines found')
     return { created: 0 }
   }
 
@@ -224,7 +226,7 @@ export async function generateDeadlineNotifications(db) {
   }
 
   if (created > 0) {
-    console.info('[deadlineNotifications] Created notifications', { created })
+    log.info('[deadlineNotifications] Created notifications', { created })
   }
 
   return { created }

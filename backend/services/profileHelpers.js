@@ -3,6 +3,8 @@ import { resolveCountyForZip } from './geo/zipCountyResolver.js'
 import crypto from 'crypto'
 import { inferUsStateZipFromText, collectAddressTextForInference } from '../utils/inferLocationFromAddress.js'
 import { normalizeState, normalizeStateFromText } from '../utils/stateNormalization.js'
+import { createLogger } from '../utils/logger.js'
+const log = createLogger('profileHelpers')
 
 // Full state name → 2-letter abbreviation for extractStateFromContext fallback
 const STATE_NAME_TO_ABBR = {
@@ -216,7 +218,7 @@ export async function loadProfileContext(db, profileId) {
   }
   
   const sectionKeys = Object.keys(sections)
-  console.info(
+  log.info(
     `[loadProfileContext] profile=${profileId} zip=${mergedProfile.postal_code || mergedProfile.zip_code || '?'} ` +
     `state=${mergedProfile.state || '?'} city=${mergedProfile.city || '?'} ` +
     `sections=[${sectionKeys.join(',')}] org=${profile.organization_id || 'none'}`,

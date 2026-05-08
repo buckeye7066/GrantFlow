@@ -1,3 +1,5 @@
+import { createLogger } from '../utils/logger.js'
+const log = createLogger('benefitEligibilityService')
 /**
  * benefitEligibilityService.js
  *
@@ -528,9 +530,9 @@ if (
     },
   }
   const result = screenBenefitEligibility(demoContext)
-  console.log('=== Benefit Eligibility Demo ===')
-  console.log(`Eligible programs (${result.eligible.length}):`)
-  result.eligible.forEach((p) => console.log(`  ✅ ${p.name} — ${p.reason}`))
-  console.log(`\nNot currently eligible / needs data (${result.suggestions.length}):`)
-  result.suggestions.forEach((p) => console.log(`  ❌ ${p.name} — ${p.reason}`))
+  log.info('=== Benefit Eligibility Demo ===')
+  log.info(`Eligible programs (${result.eligible.length}):`)
+  result.eligible.forEach((p) => log.info(`  ✅ ${p.name} — ${p.reason}`))
+  log.info(`\nNot currently eligible / needs data (${result.suggestions.length}):`)
+  result.suggestions.forEach((p) => log.info(`  ❌ ${p.name} — ${p.reason}`))
 }

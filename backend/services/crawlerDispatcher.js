@@ -19,6 +19,8 @@ import { logFailedJob, determineSeverity } from './deadLetterQueue.js'
 import { runCrawler as runCuratedCrawler } from './crawlers/crawlerManager.js'
 import { updateJobHeartbeat, maybeCleanupStaleRunningJobs } from './crawlerConcurrencyGuard.js'
 import { runPortalCheck } from './portalCheckService.js'
+import { createLogger } from '../utils/logger.js'
+const log = createLogger('crawlerDispatcher')
 import {
   WORKER_ID,
   claimJob as claimJobState,
@@ -561,15 +563,15 @@ export function dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }) {
         if (snapshotJson) {
           profileContext = restoreContextFromSnapshot(parseJSON(snapshotJson))
           if (repaired) {
-            console.info('[crawlerDispatcher] Repaired missing job snapshot (persisted)', jobId)
+            log.info('[crawlerDispatcher] Repaired missing job snapshot (persisted)', jobId)
           } else {
-            console.log('[crawlerDispatcher] Using stored profile snapshot for job', jobId)
+            log.info('[crawlerDispatcher] Using stored profile snapshot for job', jobId)
           }
         }
       } else if (job.profile_context_snapshot) {
         // Non-profile jobs may still carry a snapshot; use it when present.
         profileContext = restoreContextFromSnapshot(parseJSON(job.profile_context_snapshot))
-        console.log('[crawlerDispatcher] Using stored profile snapshot for job', jobId)
+        log.info('[crawlerDispatcher] Using stored profile snapshot for job', jobId)
       }
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : String(error)
@@ -635,7 +637,7 @@ export function dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }) {
 
       const timeoutMs = getJobTimeoutMs(job.type, job, parameters)
       if (job.type === 'comprehensive') {
-        console.info('[crawlerDispatcher] Comprehensive job timeout (ms)', {
+        log.info('[crawlerDispatcher] Comprehensive job timeout (ms)', {
           jobId,
           timeoutMs,
           profile_id: job.profile_id ?? null,
@@ -791,7 +793,7 @@ export function startQueueDrainInterval(db, uploadDir, getOpenAI) {
 
       if (!Array.isArray(ready) || ready.length === 0) return
 
-      console.log(`[queue-drain-interval] Found ${ready.length} ready queued job(s), dispatching with 1s stagger`)
+      log.info(`[queue-drain-interval] Found ${ready.length} ready queued job(s), dispatching with 1s stagger`)
 
       for (let i = 0; i < ready.length; i++) {
         if (i > 0) await new Promise((r) => setTimeout(r, 1_000))
@@ -804,6 +806,6 @@ export function startQueueDrainInterval(db, uploadDir, getOpenAI) {
     }
   }, intervalMs)
 
-  console.log(`[queue-drain-interval] Started (every ${intervalMs / 1000}s)`)
+  log.info(`[queue-drain-interval] Started (every ${intervalMs / 1000}s)`)
   return intervalId
 }

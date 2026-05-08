@@ -13,6 +13,8 @@
  */
 
 import { runAutoRepair } from './anyaAutoRepairService.js'
+import { createLogger } from '../utils/logger.js'
+const log = createLogger('anyaHealthService')
 
 const DEFAULT_INTERVAL_MS = 1800000 // 30 minutes
 
@@ -59,7 +61,7 @@ export async function runHealthCheck(db) {
     const count = result.changes ?? result.rowCount ?? 0
     status.expire_stale = { expired: count }
     if (count > 0) {
-      console.log(`[AnyaHealth] Expired ${count} stale opportunities`)
+      log.info(`[AnyaHealth] Expired ${count} stale opportunities`)
     }
   } catch (err) {
     console.error('[AnyaHealth] expire_stale error:', err.message)
@@ -109,7 +111,7 @@ export async function runHealthCheck(db) {
     const count = result.changes ?? result.rowCount ?? 0
     status.orphaned_crawlers = { cleaned: count }
     if (count > 0) {
-      console.log(`[AnyaHealth] Cleaned ${count} orphaned crawler jobs`)
+      log.info(`[AnyaHealth] Cleaned ${count} orphaned crawler jobs`)
     }
   } catch (err) {
     // crawler_jobs table may not exist in all environments — not fatal
@@ -258,7 +260,7 @@ export async function runHealthCheck(db) {
         const delta = result.changes ?? result.rowCount ?? 0
         removed += delta
         if (delta > 0) {
-          console.log(
+          log.info(
             `[AnyaHealth] dedup: kept id=${keepId}, removed ids=${toRemove.map((r) => r.id).join(',')}, title="${group.title}"`,
           )
         }
@@ -270,7 +272,7 @@ export async function runHealthCheck(db) {
 
     status.dedup_opportunities = { groups_found: dupGroups.length, removed }
     if (removed > 0) {
-      console.log(`[AnyaHealth] Deduped ${removed} duplicate global catalog entries across ${dupGroups.length} groups`)
+      log.info(`[AnyaHealth] Deduped ${removed} duplicate global catalog entries across ${dupGroups.length} groups`)
     }
   } catch (err) {
     console.error('[AnyaHealth] dedup_opportunities error:', err.message)
@@ -306,14 +308,14 @@ export async function runHealthCheck(db) {
  */
 export function startHealthService(db) {
   if (_intervalId) {
-    console.log('[AnyaHealth] Service already running — skipping duplicate start')
+    log.info('[AnyaHealth] Service already running — skipping duplicate start')
     return { stop: stopHealthService }
   }
 
   _db = db
   const intervalMs = Number(process.env.ANYA_HEALTH_INTERVAL_MS) || DEFAULT_INTERVAL_MS
 
-  console.log(`[AnyaHealth] Starting background health service (interval: ${intervalMs}ms)`)
+  log.info(`[AnyaHealth] Starting background health service (interval: ${intervalMs}ms)`)
 
   async function tick() {
     if (_running) return
@@ -339,7 +341,7 @@ export function stopHealthService() {
   if (_intervalId) {
     clearInterval(_intervalId)
     _intervalId = null
-    console.log('[AnyaHealth] Service stopped')
+    log.info('[AnyaHealth] Service stopped')
   }
 }
 

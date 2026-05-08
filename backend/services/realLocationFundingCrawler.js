@@ -13,6 +13,8 @@ import fs from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { upsertFundingOpportunity } from './opportunityInserter.js';
+import { createLogger } from '../utils/logger.js'
+const log = createLogger('realLocationFundingCrawler')
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -1432,7 +1434,7 @@ async function upsertOpportunity(db, opp, state = 'nationwide') {
     if (result?.inserted) return { inserted: true }
     if (result?.updated) return { updated: true }
     if (result?.skipped) {
-      console.log(`[RealFunding] Skipped ${opp.id}: ${result.reason}`)
+      log.info(`[RealFunding] Skipped ${opp.id}: ${result.reason}`)
       return { skipped: true }
     }
     return { updated: true }
@@ -1446,7 +1448,7 @@ async function upsertOpportunity(db, opp, state = 'nationwide') {
  * Seed all real national programs
  */
 export async function seedNationalPrograms(db) {
-  console.log('[RealFunding] Seeding national programs...');
+  log.info('[RealFunding] Seeding national programs...');
   let inserted = 0, updated = 0, errors = 0;
   
   for (const program of NATIONAL_PROGRAMS) {
@@ -1465,7 +1467,7 @@ export async function seedNationalPrograms(db) {
     }
   }
   
-  console.log(`[RealFunding] National: ${inserted} inserted, ${updated} updated, ${errors} errors`);
+  log.info(`[RealFunding] National: ${inserted} inserted, ${updated} updated, ${errors} errors`);
   return { inserted, updated, errors };
 }
 
@@ -1497,7 +1499,7 @@ export async function seedStatePrograms(db, state) {
  * Seed programs for all states
  */
 export async function seedAllStatePrograms(db) {
-  console.log('[RealFunding] Seeding state programs...');
+  log.info('[RealFunding] Seeding state programs...');
   let totalInserted = 0, totalUpdated = 0, totalErrors = 0;
   
   for (const state of Object.keys(STATE_NAMES)) {
@@ -1507,7 +1509,7 @@ export async function seedAllStatePrograms(db) {
     totalErrors += result.errors;
   }
   
-  console.log(`[RealFunding] States: ${totalInserted} inserted, ${totalUpdated} updated`);
+  log.info(`[RealFunding] States: ${totalInserted} inserted, ${totalUpdated} updated`);
   return { inserted: totalInserted, updated: totalUpdated, errors: totalErrors };
 }
 
@@ -1540,7 +1542,7 @@ export async function getOpportunityCountsByState(db) {
  * Main function to seed all real funding opportunities
  */
 export async function seedAllRealFunding(db) {
-  console.log('[RealFunding] Starting comprehensive real funding seed...');
+  log.info('[RealFunding] Starting comprehensive real funding seed...');
   
   // Seed national programs
   const nationalResult = await seedNationalPrograms(db);
@@ -1556,8 +1558,8 @@ export async function seedAllRealFunding(db) {
       : await db.prepare('SELECT COUNT(*) as count FROM funding_opportunities WHERE is_active = 1').get())
   const total = Number(totalRow?.count || 0)
   
-  console.log(`[RealFunding] Complete. Total active opportunities: ${total}`);
-  console.log(`[RealFunding] Every ZIP code has access to at least ${counts.nationwide} national programs`);
+  log.info(`[RealFunding] Complete. Total active opportunities: ${total}`);
+  log.info(`[RealFunding] Every ZIP code has access to at least ${counts.nationwide} national programs`);
   
   return {
     national: nationalResult,

@@ -9,6 +9,8 @@
 import fetch from 'node-fetch';
 
 import crypto from 'crypto';
+import { createLogger } from '../../utils/logger.js'
+const log = createLogger('samGov')
 
 async function fetchWithRetry(url, options, maxRetries = 3) {
   let lastError;
@@ -75,7 +77,7 @@ export async function fetchSamGov(options = {}) {
     ptype = 'g',
   } = options;
 
-  console.log(`[sam.gov] Fetching opportunities (limit: ${limit}, offset: ${offset})`);
+  log.info(`[sam.gov] Fetching opportunities (limit: ${limit}, offset: ${offset})`);
 
   try {
     const paramObj = {
@@ -100,7 +102,7 @@ export async function fetchSamGov(options = {}) {
 
     const opportunities = parseSamGovResponse(data);
 
-    console.log(`[sam.gov] Fetched ${opportunities.length} opportunities`);
+    log.info(`[sam.gov] Fetched ${opportunities.length} opportunities`);
 
     return {
       opportunities,

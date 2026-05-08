@@ -5,6 +5,8 @@
 
 import { crawlECFBenefits } from './ecfBenefitsCrawler.js'
 import { normalizeOpportunity } from './domainCrawlerEngine.js'
+import { createLogger } from '../../utils/logger.js'
+const log = createLogger('stateWaiverBenefitsCrawler')
 
 const CRAWLER_ID = 'state_waiver_benefits'
 
@@ -57,7 +59,7 @@ const GENERIC_DIRECTORY = [
 export async function crawlStateWaiverBenefits(profile, options = {}) {
   const eligibility = evaluateStateWaiverEligibility(profile)
   if (!eligibility.eligible) {
-    console.info(`[${CRAWLER_ID}] Skipping: ${eligibility.reason ?? 'not eligible'}`)
+    log.info(`[${CRAWLER_ID}] Skipping: ${eligibility.reason ?? 'not eligible'}`)
     return []
   }
   const state = eligibility.state

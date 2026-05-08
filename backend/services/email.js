@@ -11,10 +11,12 @@
  */
 
 import { Resend } from 'resend'
+import { createLogger } from '../utils/logger.js'
+const log = createLogger('email')
 
 // Startup diagnostic (runs once at import time during backend boot).
 // IMPORTANT: Never log secrets; only log safe presence booleans.
-console.info('[email] Email config check', {
+log.info('[email] Email config check', {
   has_resend_key: Boolean(process.env.RESEND_API_KEY),
   has_from_email: Boolean(process.env.FROM_EMAIL || process.env.EMAIL_FROM),
   node_env: process.env.NODE_ENV,
@@ -277,7 +279,7 @@ export async function sendApplicationEmail(toEmail, applicationData) {
       text: `Your GrantFlow application has been submitted.\n\n${JSON.stringify(applicationData, null, 2)}`,
     })
 
-    console.info('[email/sendApplicationEmail] Application email sent', {
+    log.info('[email/sendApplicationEmail] Application email sent', {
       to: toEmail,
       provider: 'resend',
       runtime: 'railway',

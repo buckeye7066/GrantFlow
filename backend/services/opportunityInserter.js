@@ -9,6 +9,8 @@ import { normalizeOpportunityState } from '../utils/stateNormalization.js'
 import { checkUrl as verifyUrlLiveness, recordVerificationEvent } from './linkVerificationService.js'
 import { headForVerification } from './crawlers/httpClient.js'
 import { assessReality } from './opportunityRealityGate.js'
+import { createLogger } from '../utils/logger.js'
+const log = createLogger('opportunityInserter')
 
 /**
  * Production reality gate.
@@ -1109,7 +1111,7 @@ export async function bulkUpsertFundingOpportunities(db, opportunities = [], opt
   // Pre-deduplicate by normalized URL within the batch itself.
   const { unique: deduped, duplicateCount } = deduplicateByUrl(opportunities)
   if (duplicateCount > 0) {
-    console.log(`[bulkUpsert] Removed ${duplicateCount} intra-batch URL duplicates`)
+    log.info(`[bulkUpsert] Removed ${duplicateCount} intra-batch URL duplicates`)
   }
 
   // Live URL verification, when enabled. Done outside the DB transaction so a
@@ -1129,7 +1131,7 @@ export async function bulkUpsertFundingOpportunities(db, opportunities = [], opt
       else if (proof.link_status === 'broken') verificationStats.broken++
       return { ...opp, ...proof }
     })
-    console.log('[bulkUpsert] URL verification:', verificationStats)
+    log.info('[bulkUpsert] URL verification:', verificationStats)
   }
 
   const BATCH_SIZE = 50

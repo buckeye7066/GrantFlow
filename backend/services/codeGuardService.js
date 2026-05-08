@@ -13,6 +13,8 @@
 import { storeMemory, getMemory } from './anyaBrainService.js'
 import { MISSION_GOALS } from '../config/missionGoals.js'
 import { ensureAdminSchemaRepair } from './adminSchemaRepair.js'
+import { createLogger } from '../utils/logger.js'
+const log = createLogger('codeGuardService')
 
 export { MISSION_GOALS }
 
@@ -145,7 +147,7 @@ export async function testEndpoints(db, baseUrl, adminToken = null) {
     console.warn('[codeGuard] Failed to store endpoint health:', e.message)
   }
 
-  console.log(`[codeGuard] Endpoint health: ${passed} pass, ${failed} fail, ${skipped} skip of ${ENDPOINTS.length}`)
+  log.info(`[codeGuard] Endpoint health: ${passed} pass, ${failed} fail, ${skipped} skip of ${ENDPOINTS.length}`)
   return summary
 }
 
@@ -234,7 +236,7 @@ export async function auditMatchQuality(db) {
     console.warn('[codeGuard] Failed to store match quality:', e.message)
   }
 
-  console.log(`[codeGuard] Match quality audit: ${profiles.length} profiles — A:${gradeMap.A} B:${gradeMap.B} C:${gradeMap.C} D:${gradeMap.D} F:${gradeMap.F}`)
+  log.info(`[codeGuard] Match quality audit: ${profiles.length} profiles — A:${gradeMap.A} B:${gradeMap.B} C:${gradeMap.C} D:${gradeMap.D} F:${gradeMap.F}`)
   return summary
 }
 
@@ -452,7 +454,7 @@ export async function verifyMissionGoals(db) {
     console.warn('[codeGuard] Failed to store mission score:', e.message)
   }
 
-  console.log(`[codeGuard] Mission verification: ${score}% (${passCount} pass, ${warnCount} warn, ${failCount} fail)`)
+  log.info(`[codeGuard] Mission verification: ${score}% (${passCount} pass, ${warnCount} warn, ${failCount} fail)`)
   return result
 }
 

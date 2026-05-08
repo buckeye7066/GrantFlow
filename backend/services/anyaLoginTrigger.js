@@ -6,6 +6,8 @@
 
 import { randomUUID } from 'crypto'
 import { dispatchCrawlerJob } from './crawlerDispatcher.js'
+import { createLogger } from '../utils/logger.js'
+const log = createLogger('anyaLoginTrigger')
 
 function isAdmin(user) {
   return Boolean(user?.role === 'admin' || user?.is_admin === true || user?.is_admin === 1)
@@ -223,7 +225,7 @@ export async function initializeAnyaOnLogin(db, user, profileId = null, { upload
           dispatchResults.filter(r => !r.dispatched)
         )
       } else {
-        console.info(
+        log.info(
           `[anyaLoginTrigger] All ${dispatchResults.length} crawler jobs dispatched for profileId=${profileId}`
         )
       }

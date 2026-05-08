@@ -1,3 +1,5 @@
+import { createLogger } from '../utils/logger.js'
+const log = createLogger('pipelineLifecycleService')
 /**
  * pipelineLifecycleService.js
  *
@@ -322,14 +324,14 @@ if (
     process.exit(1)
   }
 
-  console.log('=== Pipeline Lifecycle Service ===')
+  log.info('=== Pipeline Lifecycle Service ===')
   const result = await runPipelineLifecycle(db)
-  console.log(`Archived expired grants:    ${result.archived}`)
-  console.log(`Flagged stale discoveries:  ${result.flaggedStale}`)
-  console.log(`New cycles detected:        ${result.newCyclesDetected}`)
-  console.log(`\nProfile reports (${result.report.length} profiles with grants):`)
+  log.info(`Archived expired grants:    ${result.archived}`)
+  log.info(`Flagged stale discoveries:  ${result.flaggedStale}`)
+  log.info(`New cycles detected:        ${result.newCyclesDetected}`)
+  log.info(`\nProfile reports (${result.report.length} profiles with grants):`)
   result.report.slice(0, 10).forEach((r) =>
-    console.log(
+    log.info(
       `  ${r.profileName}: ${r.totalGrants} total, ` +
         `${r.archivedInRun} archived, ${r.flaggedStaleInRun} stale, ${r.newCyclesInRun} new cycles`,
     ),

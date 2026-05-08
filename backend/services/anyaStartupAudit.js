@@ -1,3 +1,5 @@
+import { createLogger } from '../utils/logger.js'
+const log = createLogger('anyaStartupAudit')
 /**
  * anyaStartupAudit.js — Automatic CodeGuard audits on admin startup.
  *
@@ -40,7 +42,7 @@ export function triggerStartupAudit(db, opts = {}) {
   const baseUrl = `http://localhost:${port}`
   const adminToken = opts.adminToken || process.env.ADMIN_TOKEN || process.env.ANYA_ADMIN_TOKEN || null
 
-  console.log('[anyaStartupAudit] Starting background CodeGuard audit...')
+  log.info('[anyaStartupAudit] Starting background CodeGuard audit...')
 
   // Run asynchronously — never block the request
   ;(async () => {
@@ -72,10 +74,10 @@ export function triggerStartupAudit(db, opts = {}) {
     }
 
     const elapsed = ((Date.now() - startTime) / 1000).toFixed(1)
-    console.log(`[anyaStartupAudit] Background audit complete in ${elapsed}s`)
+    log.info(`[anyaStartupAudit] Background audit complete in ${elapsed}s`)
 
     if (results.mission) {
-      console.log(`[anyaStartupAudit] Mission score: ${results.mission.score}% (${results.mission.pass}/${results.mission.total})`)
+      log.info(`[anyaStartupAudit] Mission score: ${results.mission.score}% (${results.mission.pass}/${results.mission.total})`)
     }
   })().catch(e => {
     console.error('[anyaStartupAudit] Unexpected error:', e)

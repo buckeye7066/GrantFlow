@@ -8,6 +8,8 @@ import crypto from 'crypto';
 import { enforceOpportunityPolicy } from '../crawlers/opportunityPolicy.js';
 import { validateOpportunity } from '../opportunityValidator.js';
 import { reviewOpportunity } from '../reviewerAgent.js';
+import { createLogger } from '../../utils/logger.js'
+const log = createLogger('ingestionService')
 
 /**
  * Ingest opportunities into the database
@@ -20,7 +22,7 @@ export async function ingestOpportunities(db, opportunities, sourceName) {
   const runId = crypto.randomUUID();
   const startedAt = new Date().toISOString();
   
-  console.log(`[ingestion] Starting ingestion run ${runId} for source: ${sourceName}`);
+  log.info(`[ingestion] Starting ingestion run ${runId} for source: ${sourceName}`);
   
   // Create ingestion run record
   const createRun = db.prepare(`
@@ -134,10 +136,10 @@ export async function ingestOpportunities(db, opportunities, sourceName) {
     validated.push(opp);
   }
   if (policySkipped > 0) {
-    console.log(`[ingestion] Pre-filtered ${policySkipped} opportunities by policy/validation`);
+    log.info(`[ingestion] Pre-filtered ${policySkipped} opportunities by policy/validation`);
   }
   if (reviewerSkipped > 0) {
-    console.log(`[ingestion] Pre-filtered ${reviewerSkipped} opportunities by reviewer agent`);
+    log.info(`[ingestion] Pre-filtered ${reviewerSkipped} opportunities by reviewer agent`);
   }
 
   // Process in a transaction for performance
@@ -238,7 +240,7 @@ const existing = checkExists.get(opp.source, opp.source_id);
     
     completeRun.run(new Date().toISOString(), inserted, updated, runId);
     
-    console.log(`[ingestion] Completed run ${runId}: inserted=${inserted}, updated=${updated}, errors=${errors}`);
+    log.info(`[ingestion] Completed run ${runId}: inserted=${inserted}, updated=${updated}, errors=${errors}`);
     
     return {
       success: true,

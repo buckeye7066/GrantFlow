@@ -30,6 +30,8 @@
  */
 
 import { NEEDS_TAXONOMY, FUNDING_CATEGORY } from './needsTaxonomy.js'
+import { createLogger } from '../../utils/logger.js'
+const log = createLogger('searchPlanGenerator')
 
 // ---------------------------------------------------------------------------
 // Search lane definitions
@@ -282,7 +284,7 @@ export function generateSearchPlans(intel, options = {}) {
     needs = Array.isArray(needs) ? needs.filter(n => n.confidence !== 'low') : []
     const dropped = before - needs.length
     if (dropped > 0) {
-      console.debug(
+      log.debug(
         `[searchPlanGenerator] Suppressed ${dropped} low-confidence need(s) from plan generation. ` +
         'Pass includeLowConfidence:true to include them.'
       )
@@ -309,11 +311,11 @@ export function generateSearchPlans(intel, options = {}) {
     })
 
   if (dedupDropped > 0) {
-    console.debug(`[searchPlanGenerator] Deduplication removed ${dedupDropped} duplicate search plan(s).`)
+    log.debug(`[searchPlanGenerator] Deduplication removed ${dedupDropped} duplicate search plan(s).`)
   }
   const truncated = deduped.length - Math.min(deduped.length, maxPlans)
   if (truncated > 0) {
-    console.debug(`[searchPlanGenerator] maxPlans=${maxPlans} truncated ${truncated} lower-priority plan(s).`)
+    log.debug(`[searchPlanGenerator] maxPlans=${maxPlans} truncated ${truncated} lower-priority plan(s).`)
   }
 
   return deduped.slice(0, maxPlans)

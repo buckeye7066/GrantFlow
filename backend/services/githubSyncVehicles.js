@@ -1,3 +1,5 @@
+import { createLogger } from '../utils/logger.js'
+const log = createLogger('githubSyncVehicles')
 /**
  * GitHub Sync Service — Vehicle Opportunities
  *
@@ -147,7 +149,7 @@ export async function syncVehicleOpportunitiesToGitHub(db) {
   }
 
   lastSyncAt = Date.now();
-  console.info('[githubSyncVehicles] Successfully synced vehicle opportunities to GitHub', {
+  log.info('[githubSyncVehicles] Successfully synced vehicle opportunities to GitHub', {
     count: payload.length,
     repo,
     path: DATA_FILE_PATH,

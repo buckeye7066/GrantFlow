@@ -8,6 +8,8 @@
 import crypto from 'crypto'
 import { buildProfileContext, computeProfileDigest } from './profileHelpers.js'
 import { validateJobStatus, validateZipCode, validateStateCode, validateUuid } from '../utils/dbValidation.js'
+import { createLogger } from '../utils/logger.js'
+const log = createLogger('crawlerJobCreation')
 
 // Postgres migrations run asynchronously at startup (see `backend/start.js`), so during deploys
 // a new app instance may begin creating crawler jobs before the latest migrations add new columns.
@@ -164,7 +166,7 @@ export async function createCrawlerJob(db, options) {
       .get(idempotencyKey, 'queued', 'running')
 
     if (existing) {
-      console.log('[createCrawlerJob] Found existing job with same idempotency key', {
+      log.info('[createCrawlerJob] Found existing job with same idempotency key', {
         jobId: existing.id,
         type,
         status: existing.status,
@@ -185,7 +187,7 @@ export async function createCrawlerJob(db, options) {
     if (completedExisting) {
       const suffix = '_' + Date.now().toString(36)
       idempotencyKey = idempotencyKey.substring(0, 32 - suffix.length) + suffix
-      console.log('[createCrawlerJob] Regenerated idempotency key to avoid collision with completed job', {
+      log.info('[createCrawlerJob] Regenerated idempotency key to avoid collision with completed job', {
         existingJobId: completedExisting.id,
         type,
         newKey: idempotencyKey,
@@ -310,7 +312,7 @@ export async function createCrawlerJob(db, options) {
       )
   }
 
-  console.log('[createCrawlerJob] Created new crawler job', {
+  log.info('[createCrawlerJob] Created new crawler job', {
     jobId,
     type,
     profileId,

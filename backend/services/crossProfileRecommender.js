@@ -14,6 +14,8 @@
  */
 
 import { safeParseArrayField, resolveApplicantType, buildProfileSignals } from './profileHelpers.js'
+import { createLogger } from '../utils/logger.js'
+const log = createLogger('crossProfileRecommender')
 
 // ── Signal helpers ────────────────────────────────────────────────────────────
 
@@ -341,17 +343,17 @@ if (
     process.exit(1)
   }
 
-  console.log(`=== Cross-Profile Recommender (profile: ${profileId}) ===`)
+  log.info(`=== Cross-Profile Recommender (profile: ${profileId}) ===`)
 
   const { similar } = await findSimilarProfiles(db, profileId)
-  console.log(`\nSimilar profiles (${similar.length}):`)
+  log.info(`\nSimilar profiles (${similar.length}):`)
   similar.forEach((s) =>
-    console.log(`  [${(s.similarity * 100).toFixed(0)}%] ${s.displayName} — ${s.sharedSignals.join(', ')}`),
+    log.info(`  [${(s.similarity * 100).toFixed(0)}%] ${s.displayName} — ${s.sharedSignals.join(', ')}`),
   )
 
   const { recommendations } = await getRecommendationsFromSimilarProfiles(db, profileId)
-  console.log(`\nRecommendations from similar profiles (${recommendations.length}):`)
+  log.info(`\nRecommendations from similar profiles (${recommendations.length}):`)
   recommendations.slice(0, 10).forEach((r) =>
-    console.log(`  [${(r.estimatedRelevance * 100).toFixed(0)}%] ${r.grantTitle} — ${r.matchReason}`),
+    log.info(`  [${(r.estimatedRelevance * 100).toFixed(0)}%] ${r.grantTitle} — ${r.matchReason}`),
   )
 }

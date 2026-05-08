@@ -8,6 +8,8 @@
 
 import { fetchWithRetry } from './httpClient.js';
 import crypto, { createHash } from 'crypto';
+import { createLogger } from '../../utils/logger.js'
+const log = createLogger('statePortals')
 
 const SOURCE_NAME = 'state-portals';
 
@@ -93,7 +95,7 @@ export async function fetchStatePortals(stateCode, options = {}) {
     };
   }
 
-  console.log(`[state-portals] Fetching from ${portal.name} (${code})`);
+  log.info(`[state-portals] Fetching from ${portal.name} (${code})`);
 
   try {
     const params = portal.buildParams(options);
@@ -119,7 +121,7 @@ export async function fetchStatePortals(stateCode, options = {}) {
 
     const opportunities = portal.parse(data, url);
 
-    console.log(`[state-portals] ${portal.name}: ${opportunities.length} opportunities`);
+    log.info(`[state-portals] ${portal.name}: ${opportunities.length} opportunities`);
 
     return {
       opportunities,

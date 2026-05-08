@@ -13,6 +13,8 @@
  */
 
 import fetch from 'node-fetch';
+import { createLogger } from '../../utils/logger.js'
+const log = createLogger('benefitsGovConnector')
 // NOTE: cheerio was imported here for planned HTML scraping of benefits.gov but is not
 // currently used because screen scraping benefits.gov violates their TOS.
 // Use the official benefits.gov API when it becomes available, or integrate
@@ -61,7 +63,7 @@ async function rateLimitedFetch(url) {
  * @returns {Promise<Array>} Array of benefit programs (PROGRAM type)
  */
 export async function searchStateBenefits(state, profile = {}) {
-  console.log(`[Benefits.gov] Searching benefits for ${state}`);
+  log.info(`[Benefits.gov] Searching benefits for ${state}`);
   
   // NOTE: This is a simplified implementation
   // In production, you would:
@@ -150,7 +152,7 @@ export async function getBenefitDetails(benefitId, state) {
   const safeBenefitId = encodeURIComponent(benefitId.trim());
   const evidenceUrl = `${BASE_URL}/benefit/${safeBenefitId}`;
 
-  console.log(`[Benefits.gov] Getting benefit details for ${benefitId} in ${state}`);
+  log.info(`[Benefits.gov] Getting benefit details for ${benefitId} in ${state}`);
 
   // Stub: application_url is required for any record that reaches ACCEPT (Goal 1).
   // Callers MUST supplement this with a real portal URL before pipeline insertion.

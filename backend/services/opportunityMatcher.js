@@ -25,6 +25,8 @@ import {
   GRANT_FINGERPRINT_VERSION,
 } from '../utils/grantFingerprint.js'
 import { isDismissed as isPipelineDismissed } from './pipelineDismissals.js'
+import { createLogger } from '../utils/logger.js'
+const log = createLogger('opportunityMatcher')
 
 // Cache the result of the decision-columns PRAGMA check per DB instance to avoid
 // running PRAGMA table_info(grants) on every saveToProfilePipeline call.
@@ -111,7 +113,7 @@ export async function saveToProfilePipeline(
     // Gate 1: Source allowlist — blocks non-approved sources entirely
     const oppSource = opportunity?.source ? String(opportunity.source).trim() : null
     if (oppSource && !isPipelineSourceAllowed(oppSource)) {
-      console.log(`[opportunityMatcher] Gate:SOURCE_ALLOWLIST suppressed "${opportunity.title}" — source "${oppSource}" not allowed`)
+      log.info(`[opportunityMatcher] Gate:SOURCE_ALLOWLIST suppressed "${opportunity.title}" — source "${oppSource}" not allowed`)
       return {
         saved: false,
         reason: `Source "${oppSource}" is not in the pipeline allowed sources list`,
@@ -133,7 +135,7 @@ export async function saveToProfilePipeline(
       try {
         const dismissed = await isPipelineDismissed(db, profileId, opportunity)
         if (dismissed) {
-          console.log(
+          log.info(
             `[opportunityMatcher] Gate:DISMISSED suppressed "${opportunity?.title}" — profile ${profileId} previously removed this opportunity`,
           )
           return {
@@ -173,7 +175,7 @@ export async function saveToProfilePipeline(
 
     // Gate 2: Canonical decision engine — REJECT means hard ineligible
     if (decision?.decision === 'REJECT') {
-      console.log(`[opportunityMatcher] Gate:DECISION_ENGINE rejected "${opportunity.title}" — ${(decision.ineligibilityReasons ?? []).join('; ')}`)
+      log.info(`[opportunityMatcher] Gate:DECISION_ENGINE rejected "${opportunity.title}" — ${(decision.ineligibilityReasons ?? []).join('; ')}`)
       return {
         saved: false,
         reason: `Rejected: ${(decision.ineligibilityReasons ?? []).join('; ')}`,
@@ -192,7 +194,7 @@ export async function saveToProfilePipeline(
     } catch { /* table may not exist yet; treat as ALLOW */ }
 
     if (exclusion.decision === 'SUPPRESS') {
-      console.log(`[opportunityMatcher] Gate:EXCLUSION_ENGINE suppressed "${opportunity.title}" — rule ${exclusion.rule_id}`)
+      log.info(`[opportunityMatcher] Gate:EXCLUSION_ENGINE suppressed "${opportunity.title}" — rule ${exclusion.rule_id}`)
       return {
         saved: false,
         reason: `Excluded by rule ${exclusion.rule_id}`,
@@ -222,7 +224,7 @@ export async function saveToProfilePipeline(
 
     // Gate 4: Score threshold — only applies when decision engine did not produce ACCEPT/REVIEW
     if (!bypassThreshold && adjustedScore < threshold) {
-      console.log(`[opportunityMatcher] Gate:THRESHOLD suppressed "${opportunity.title}" — score ${adjustedScore}% < ${threshold}%, decision was ${canonicalDecision ?? 'null'}`)
+      log.info(`[opportunityMatcher] Gate:THRESHOLD suppressed "${opportunity.title}" — score ${adjustedScore}% < ${threshold}%, decision was ${canonicalDecision ?? 'null'}`)
       return {
         saved: false,
         reason: `Match score ${adjustedScore}% below ${threshold}% threshold`,
@@ -237,7 +239,7 @@ export async function saveToProfilePipeline(
       const profileData = extractProfileData(profileContext)
       const relevance = applyRelevanceFilter(opportunity, profileData)
       if (!relevance.pass) {
-        console.log(`[opportunityMatcher] Gate:RELEVANCE_FILTER suppressed "${opportunity.title}" — ${relevance.reason}`)
+        log.info(`[opportunityMatcher] Gate:RELEVANCE_FILTER suppressed "${opportunity.title}" — ${relevance.reason}`)
         return { saved: false, reason: relevance.reason, gate: 'RELEVANCE_FILTER', matchPercentage, threshold }
       }
     }
@@ -441,7 +443,7 @@ export async function saveToProfilePipeline(
         .run(...vals)
     }
     
-    console.log(`[opportunityMatcher] Added to pipeline: ${opportunity.title} (${matchPercentage}% match for profile ${profileId}, decision: ${decision?.decision ?? 'N/A'})`)
+    log.info(`[opportunityMatcher] Added to pipeline: ${opportunity.title} (${matchPercentage}% match for profile ${profileId}, decision: ${decision?.decision ?? 'N/A'})`)
     
     return {
       saved: true,
@@ -548,9 +550,9 @@ export async function processCrawledOpportunities(db, opportunities, profileId, 
     }
   }
   
-  console.log(`[opportunityMatcher] Processed ${results.total} opportunities:`)
-  console.log(`  - ${results.savedToPipeline} saved to pipeline (>=${minMatchThreshold}% match)`)
-  console.log(`  - ${results.savedGlobally} saved globally`)
+  log.info(`[opportunityMatcher] Processed ${results.total} opportunities:`)
+  log.info(`  - ${results.savedToPipeline} saved to pipeline (>=${minMatchThreshold}% match)`)
+  log.info(`  - ${results.savedGlobally} saved globally`)
   
   return results
 }

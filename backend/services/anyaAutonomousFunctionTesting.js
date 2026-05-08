@@ -5,6 +5,8 @@ import { fileURLToPath } from 'url'
 import { AUDIT_CATEGORIES, SEVERITY, logAuditEvent } from './auditService.js'
 import { collectComponentFiles, scanComponentForButtons } from './anyaButtonScanner.js'
 import { getJwtSecretOrThrow } from '../config/env.js'
+import { createLogger } from '../utils/logger.js'
+const log = createLogger('anyaAutonomousFunctionTesting')
 
 const REPO_ROOT = path.resolve(process.cwd())
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -83,7 +85,7 @@ async function auditLog(entry, context) {
   }
 
   // Durable fallback: platform logs
-  console.log('[audit][autonomous-function-tests]', JSON.stringify(logEntry))
+  log.info('[audit][autonomous-function-tests]', JSON.stringify(logEntry))
 
   // Dev-only filesystem sink (explicit opt-in).
   if (!isProdEnv() && String(process.env.ALLOW_DEV_FILESYSTEM_AUDIT_LOGS || '').toLowerCase() === 'true') {
@@ -200,7 +202,7 @@ function resolveInternalBaseUrl(context = {}) {
       return globalUrl.trim().replace(/\/+$/, '')
     }
   } catch (error) {
-    console.debug('[anyaAutonomousFunctionTesting] globalThis access failed:', error.message)
+    log.debug('[anyaAutonomousFunctionTesting] globalThis access failed:', error.message)
   }
 
   const port = String(process.env.PORT || '').trim()
@@ -712,7 +714,7 @@ export async function getAutonomousFunctionTestsStatus(db = null) {
           try {
             return JSON.parse(line)
           } catch (error) {
-            console.debug('[anyaAutonomousFunctionTesting] Failed to parse audit log line:', error.message)
+            log.debug('[anyaAutonomousFunctionTesting] Failed to parse audit log line:', error.message)
             return null
           }
         })

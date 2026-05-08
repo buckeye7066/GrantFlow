@@ -1,6 +1,8 @@
 import { buildGrantApplicationApproachPrompt } from '../prompts/grantApplicationApproach.js'
 import { createOpenAIClient, summarizeOpenAIError } from '../utils/openaiClient.js'
 import { extractCompletionText } from '../utils/openai.js'
+import { createLogger } from '../utils/logger.js'
+const log = createLogger('grantApplicationApproachAdvisor')
 
 function normalizeString(value) {
   if (typeof value !== 'string') return ''
@@ -131,7 +133,7 @@ async function updateGrantGuidance(db, grantId, payload) {
   if (payload.portal_url) {
     setIf('portal_url', payload.portal_url)
   } else {
-    console.debug('[grant-application-approach] portal_url not set â value was empty or invalid', { grantId })
+    log.debug('[grant-application-approach] portal_url not set â value was empty or invalid', { grantId })
   }
   if (payload.application_url) {
     setIf('application_url', payload.application_url)

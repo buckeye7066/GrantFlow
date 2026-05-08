@@ -23,6 +23,8 @@
 
 import os from 'os'
 import crypto from 'crypto'
+import { createLogger } from '../utils/logger.js'
+const log = createLogger('crawlerJobState')
 
 // ---------------------------------------------------------------------------
 // Worker identity
@@ -93,7 +95,7 @@ export function logJobEvent(event, message, fields = {}) {
   if (severe) {
     console.warn(line)
   } else {
-    console.log(line)
+    log.info(line)
   }
 }
 

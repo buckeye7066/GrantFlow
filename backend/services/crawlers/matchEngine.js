@@ -1,5 +1,7 @@
 import { toSignalSet } from '../profileSignals/index.js';
 import { normalizeState, statesMatch } from '../../utils/stateNormalization.js';
+import { createLogger } from '../../utils/logger.js'
+const log = createLogger('matchEngine')
 
 /**
  * crawlers/matchEngine.js — CANDIDATE PREFILTER (NOT the match authority).
@@ -785,7 +787,7 @@ export function matchPrograms(allPrograms, analysis, options = {}) {
     return (a.priority || 99) - (b.priority || 99);
   });
 
-  console.log(`[MatchEngine] ${stats.total} candidates -> ${results.length} matched | ` +
+  log.info(`[MatchEngine] ${stats.total} candidates -> ${results.length} matched | ` +
     `dedup(id:${stats.dupId} url:${stats.dupUrl} name:${stats.dupName}) ` +
     `filtered(info:${stats.informational} copay:${stats.copayGated} excl:${stats.excluded}) ` +
     `scored(null:${stats.nullScore} low:${stats.belowMin})`);

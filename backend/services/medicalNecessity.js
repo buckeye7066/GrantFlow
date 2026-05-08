@@ -8,6 +8,8 @@
  */
 
 import { createOpenAIClient } from '../utils/openaiClient.js'
+import { createLogger } from '../utils/logger.js'
+const log = createLogger('medicalNecessity')
 
 // ─── Document Types ──────────────────────────────────────────────────────────
 
@@ -323,7 +325,7 @@ export async function generateMedicalNecessityDocument(db, profileId, options = 
   }
 
   if (!openai) {
-    console.log('[medicalNecessity] No OpenAI key; generating template-based document')
+    log.info('[medicalNecessity] No OpenAI key; generating template-based document')
     return {
       type: documentType,
       content: buildTemplateDocument(documentType, medProfile, opportunity, grant, options),
@@ -344,7 +346,7 @@ export async function generateMedicalNecessityDocument(db, profileId, options = 
     })
 
     const content = completion.choices?.[0]?.message?.content?.trim() || ''
-    console.log(`[medicalNecessity] Generated ${documentType} for profile ${profileId} (${content.length} chars)`)
+    log.info(`[medicalNecessity] Generated ${documentType} for profile ${profileId} (${content.length} chars)`)
 
     return {
       type: documentType,

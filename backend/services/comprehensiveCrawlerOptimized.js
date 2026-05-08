@@ -11,6 +11,8 @@ import { saveToProfilePipeline } from './opportunityMatcher.js'
 import { runNationalZipCrawl } from './crawlers/nationalZipCrawler.js'
 import { runDomainCorpusCrawl } from './crawlers/domainCorpusCrawler.js'
 import { trustedOriginClause, trustedSourceClause } from '../utils/recordOrigins.js'
+import { createLogger } from '../utils/logger.js'
+const log = createLogger('comprehensiveCrawlerOptimized')
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
@@ -20,7 +22,7 @@ function loadJSON(filePath) {
     return JSON.parse(fs.readFileSync(filePath, 'utf8'))
   } catch (e) {
     if (e && (e.code === 'ENOENT' || /ENOENT/i.test(String(e.message || '')))) {
-      console.info(
+      log.info(
         `[comprehensiveCrawler] Curated opportunities dataset not present at ${filePath}; continuing with empty curated dataset`,
       )
       return null
@@ -266,12 +268,12 @@ export async function runComprehensiveCrawler(contextOrDb, profileContextArg = {
             skipVerification: params.skip_url_verification ?? false,
             geoRunId: params.geo_run_id ?? params.geoRunId ?? null,
           })
-          console.log('[comprehensiveCrawler] Domain corpus phase complete:', domainCorpusStats)
+          log.info('[comprehensiveCrawler] Domain corpus phase complete:', domainCorpusStats)
         } catch (domainErr) {
           console.warn('[comprehensiveCrawler] Domain corpus phase failed (continuing with ZIP crawl):', domainErr?.message || domainErr)
         }
       } else {
-        console.info('[comprehensiveCrawler] GEO mode: skipping domain corpus phase (skip_domain_corpus)')
+        log.info('[comprehensiveCrawler] GEO mode: skipping domain corpus phase (skip_domain_corpus)')
       }
 
       const runOnce = async (stateArg) => {
@@ -301,7 +303,7 @@ export async function runComprehensiveCrawler(contextOrDb, profileContextArg = {
         // 15 ZIPs/state × 51 = 765 total ZIPs — fits within 6h timeout with margin.
         const ALL_STATES_DEFAULT_MAX_ZIPS = 15
         if (!maxZips) {
-          console.info(
+          log.info(
             `[comprehensiveCrawler] GEO all-states: no max_zips specified, defaulting to ${ALL_STATES_DEFAULT_MAX_ZIPS} per state`,
           )
         }
@@ -323,7 +325,7 @@ export async function runComprehensiveCrawler(contextOrDb, profileContextArg = {
         const pacing =
           Number.isFinite(statePacingMs) && statePacingMs > 0 ? Math.min(statePacingMs, 120_000) : 0
 
-        console.log('[comprehensiveCrawler] GEO mode starting: all states', {
+        log.info('[comprehensiveCrawler] GEO mode starting: all states', {
           states: statesToRun.length,
           maxZips: effectiveMaxZips,
           batchSize,
@@ -446,7 +448,7 @@ export async function runComprehensiveCrawler(contextOrDb, profileContextArg = {
         }
       }
 
-      console.log('[comprehensiveCrawler] GEO mode starting', { state, maxZips, batchSize })
+      log.info('[comprehensiveCrawler] GEO mode starting', { state, maxZips, batchSize })
       const result = await runOnce(state)
 
       return {
@@ -478,19 +480,19 @@ export async function runComprehensiveCrawler(contextOrDb, profileContextArg = {
     saveToDatabase = options.saveToDatabase !== false
   }
   
-  console.log('[comprehensiveCrawler] Starting with real opportunities...')
+  log.info('[comprehensiveCrawler] Starting with real opportunities...')
   
   // Build profile signals
   const signals = buildProfileSignals(profileContext)
   const profileState = profileContext.profile?.state || profileContext.signals?.location?.state
   const profileId = profileContext.profile_id || profileContext.profile?.id
   
-  console.log('[comprehensiveCrawler] Profile signals:', summarizeProfileSignals(signals))
-  console.log('[comprehensiveCrawler] Profile state:', profileState)
+  log.info('[comprehensiveCrawler] Profile signals:', summarizeProfileSignals(signals))
+  log.info('[comprehensiveCrawler] Profile state:', profileState)
   
   // Load real opportunities
   const realOpps = loadRealOpportunities()
-  console.log(`[comprehensiveCrawler] Loaded ${realOpps.length} real opportunities`)
+  log.info(`[comprehensiveCrawler] Loaded ${realOpps.length} real opportunities`)
   
   // Also load from database
   const isPg = db?.dialect === 'postgres'
@@ -523,7 +525,7 @@ export async function runComprehensiveCrawler(contextOrDb, profileContextArg = {
     console.error('[comprehensiveCrawler] Error querying database for opportunities:', err.message)
   }
   
-  console.log(`[comprehensiveCrawler] Found ${dbOpps.length} opportunities in database`)
+  log.info(`[comprehensiveCrawler] Found ${dbOpps.length} opportunities in database`)
   
   // Combine and dedupe
   const seenTitles = new Set()
@@ -587,7 +589,7 @@ export async function runComprehensiveCrawler(contextOrDb, profileContextArg = {
   const topOpps = filteredOpps.slice(0, maxResults)
   const thresholdFallbackApplied = thresholdUsed !== requestedThreshold
   
-  console.log(
+  log.info(
     `[comprehensiveCrawler] Found ${topOpps.length} matching opportunities (requested: ${requestedThreshold}%, used: ${thresholdUsed}%)`,
   )
   
@@ -665,7 +667,7 @@ export async function runComprehensiveCrawler(contextOrDb, profileContextArg = {
     }
   }
 
-  console.log(`[comprehensiveCrawler] Saved ${savedToProfile} opportunities to profile pipeline`)
+  log.info(`[comprehensiveCrawler] Saved ${savedToProfile} opportunities to profile pipeline`)
   
   return {
     success: true,

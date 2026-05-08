@@ -15,6 +15,8 @@ import {
 } from './profileHelpers.js'
 import { trustedOriginClause, trustedSourceClause } from '../utils/recordOrigins.js'
 import { scoreOpportunity } from './matchEngine.js'
+import { createLogger } from '../utils/logger.js'
+const log = createLogger('localCrawler')
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
@@ -54,7 +56,7 @@ function safeJsonArray(value) {
  * Process local crawler job - matches local community grants to profile
  */
 export async function processLocalCrawlerJob({ db, job, dataDir, profileContext }) {
-  console.log('[localCrawler] Starting local opportunity search...')
+  log.info('[localCrawler] Starting local opportunity search...')
 
   // Validate required inputs
   if (!db) {
@@ -110,14 +112,14 @@ export async function processLocalCrawlerJob({ db, job, dataDir, profileContext 
     }
   }
   
-  console.log('[localCrawler] Profile state:', profileState)
-  console.log('[localCrawler] Profile signals:', summarizeProfileSignals(signals))
+  log.info('[localCrawler] Profile state:', profileState)
+  log.info('[localCrawler] Profile signals:', summarizeProfileSignals(signals))
   
   // Load local opportunities from data file
   let localOpps = []
   try {
     localOpps = loadJSON(join(dataDir, 'local_opportunities.json'))
-    console.log(`[localCrawler] Loaded ${localOpps.length} local opportunities`)
+    log.info(`[localCrawler] Loaded ${localOpps.length} local opportunities`)
   } catch (error) {
     console.warn('[localCrawler] Could not load local opportunities file:', error.message)
     // Continue with empty array - will try database next
@@ -146,7 +148,7 @@ export async function processLocalCrawlerJob({ db, job, dataDir, profileContext 
       )
       .all(profileState)
     
-    console.log(`[localCrawler] Found ${dbOpps.length} local opportunities in database`)
+    log.info(`[localCrawler] Found ${dbOpps.length} local opportunities in database`)
   } catch (error) {
     console.error('[localCrawler] Error querying database for opportunities:', error.message)
     // Database failure is critical for local matching - return partial results with warning
@@ -242,7 +244,7 @@ export async function processLocalCrawlerJob({ db, job, dataDir, profileContext 
   const topOpps = filteredOpps.slice(0, maxResults)
   const thresholdFallbackApplied = thresholdUsed !== requestedThreshold
   
-  console.log(
+  log.info(
     `[localCrawler] Found ${topOpps.length} matching local opportunities (requested: ${requestedThreshold}%, used: ${thresholdUsed}%)`,
   )
   
@@ -302,7 +304,7 @@ export async function processLocalCrawlerJob({ db, job, dataDir, profileContext 
     }
   }
   
-  console.log(`[localCrawler] Saved ${savedToPipeline} opportunities to profile pipeline (≥${thresholdUsed}% match)`)
+  log.info(`[localCrawler] Saved ${savedToPipeline} opportunities to profile pipeline (≥${thresholdUsed}% match)`)
   
   return {
     evaluated: allOpps.length,

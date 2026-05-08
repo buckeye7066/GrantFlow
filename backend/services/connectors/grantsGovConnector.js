@@ -10,6 +10,8 @@
  */
 
 import fetch from 'node-fetch';
+import { createLogger } from '../../utils/logger.js'
+const log = createLogger('grantsGovConnector')
 import {
   GRANTS_GOV_SEARCH2_URL as SEARCH2_URL,
   SIMPLER_GRANTS_OPPORTUNITY_URL as SIMPLER_OPPORTUNITY_URL,
@@ -73,7 +75,7 @@ export async function searchOpportunities(params = {}) {
   };
   
   try {
-    console.log('[grants.gov] search2 request payload:', JSON.stringify(searchPayload));
+    log.info('[grants.gov] search2 request payload:', JSON.stringify(searchPayload));
     const { status, data } = await rateLimitedFetch(SEARCH2_URL, {
       method: 'POST',
       headers: {
@@ -87,8 +89,8 @@ export async function searchOpportunities(params = {}) {
     const hitsNode = data?.data?.oppHits ? data.data : data?.data?.data?.oppHits ? data.data.data : data
     const hits = Array.isArray(hitsNode?.oppHits) ? hitsNode.oppHits : []
 
-    console.log('[grants.gov] search2 HTTP status:', status)
-    console.log('[grants.gov] search2 oppHits returned:', hits.length)
+    log.info('[grants.gov] search2 HTTP status:', status)
+    log.info('[grants.gov] search2 oppHits returned:', hits.length)
     if (hits.length === 0) {
       console.warn('[grants.gov] search2 returned 0 results; full response:', JSON.stringify(data, null, 2))
     }

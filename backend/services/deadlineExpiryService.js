@@ -1,3 +1,5 @@
+import { createLogger } from '../utils/logger.js'
+const log = createLogger('deadlineExpiryService')
 /**
  * Deadline Expiry Service
  *
@@ -40,7 +42,7 @@ export async function expirePassedDeadlines(db) {
       )
       .run()
     expired = Number(result?.changes ?? result?.rowCount ?? 0)
-    console.info('[deadlineExpiry] Expired opportunities', { count: expired })
+    log.info('[deadlineExpiry] Expired opportunities', { count: expired })
   } catch (error) {
     console.error('[deadlineExpiry] Failed to expire opportunities:', error?.message || error)
     throw error
@@ -81,7 +83,7 @@ export async function expirePassedDeadlines(db) {
       )
       .run(...terminalStatuses)
     pipelineUpdated = Number(result?.changes ?? result?.rowCount ?? 0)
-    console.info('[deadlineExpiry] Pipeline grants marked deadline_passed', { count: pipelineUpdated })
+    log.info('[deadlineExpiry] Pipeline grants marked deadline_passed', { count: pipelineUpdated })
   } catch (error) {
     // Non-fatal: grants table may not have status='deadline_passed' in CHECK constraint on some DBs.
     // Log and continue — opportunity expiry is the primary goal.

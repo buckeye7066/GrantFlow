@@ -10,6 +10,8 @@
 
 import axios from 'axios';
 import { upsertFundingOpportunity } from './opportunityInserter.js';
+import { createLogger } from '../utils/logger.js'
+const log = createLogger('grantsDotGovCrawler')
 import {
   GRANTS_GOV_SEARCH2_URL as GRANTS_GOV_SEARCH2,
   GRANTS_GOV_DETAIL_URL as GRANTS_GOV_VIEW,
@@ -50,7 +52,7 @@ export async function fetchGrantsGov(params = {}) {
 
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
     try {
-      console.log(`[GrantsGov] search2 request (attempt ${attempt}/${MAX_RETRIES}):`, JSON.stringify(payload))
+      log.info(`[GrantsGov] search2 request (attempt ${attempt}/${MAX_RETRIES}):`, JSON.stringify(payload))
       const response = await axios.post(GRANTS_GOV_SEARCH2, payload, {
         timeout: 30000,
         headers: {
@@ -60,14 +62,14 @@ export async function fetchGrantsGov(params = {}) {
         }
       });
 
-      console.log('[GrantsGov] search2 HTTP status:', response.status)
+      log.info('[GrantsGov] search2 HTTP status:', response.status)
 
       const body = response?.data ?? null
       if (!body) return null
 
       const hitsNode = body?.data?.oppHits ? body.data : body?.data?.data?.oppHits ? body.data.data : body
       const oppHits = Array.isArray(hitsNode?.oppHits) ? hitsNode.oppHits : []
-      console.log('[GrantsGov] search2 oppHits returned:', oppHits.length)
+      log.info('[GrantsGov] search2 oppHits returned:', oppHits.length)
       if (oppHits.length === 0) {
         console.warn('[GrantsGov] search2 returned 0 results; full response:', JSON.stringify(body, null, 2))
       }
@@ -195,7 +197,7 @@ export async function crawlGrantsGov(db, options = {}) {
   }
   const { maxPages = 4, rowsPerPage = 25 } = options;
   
-  console.log('[GrantsGov] Starting crawl...');
+  log.info('[GrantsGov] Starting crawl...');
   
   let totalInserted = 0;
   let totalUpdated = 0;
@@ -227,7 +229,7 @@ export async function crawlGrantsGov(db, options = {}) {
   ];
   
   for (const keyword of searchTerms) {
-    console.log(`[GrantsGov] Searching: "${keyword || 'all open grants'}"...`);
+    log.info(`[GrantsGov] Searching: "${keyword || 'all open grants'}"...`);
     
     let keywordFailed = false;
     for (let page = 0; page < maxPages; page++) {
@@ -255,7 +257,7 @@ export async function crawlGrantsGov(db, options = {}) {
         // Pre-filter: skip obviously closed opportunities before touching the DB
 const status = (opp?.oppStatus ?? '').toLowerCase();
 if (status === 'closed' || status === 'archived') {
-  console.log(`[GrantsGov] Skipping closed/archived opportunity ${transformed.id} (${opp?.oppStatus})`);
+  log.info(`[GrantsGov] Skipping closed/archived opportunity ${transformed.id} (${opp?.oppStatus})`);
   continue;
 }
 
@@ -282,7 +284,7 @@ const result = await upsertFundingOpportunity(db, {
     if (keywordFailed) keywordErrors++;
   }
   
-  console.log(`[GrantsGov] Complete: ${totalInserted} inserted, ${totalUpdated} updated, ${totalErrors} errors, ${keywordErrors}/${searchTerms.length} keywords failed`);
+  log.info(`[GrantsGov] Complete: ${totalInserted} inserted, ${totalUpdated} updated, ${totalErrors} errors, ${keywordErrors}/${searchTerms.length} keywords failed`);
   
   return {
     inserted: totalInserted,

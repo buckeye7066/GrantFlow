@@ -15,6 +15,8 @@
 import { randomUUID } from 'crypto';
 import { upsertFundingOpportunity } from './opportunityInserter.js';
 import { GRANTS_GOV_SEARCH2_URL } from '../config/grantsGovEndpoints.js';
+import { createLogger } from '../utils/logger.js'
+const log = createLogger('realFundingCrawler')
 
 // Use native fetch (Node 18+) or fall back to node-fetch
 const fetchImpl = globalThis.fetch || (async () => { const nodeFetch = await import('node-fetch'); return nodeFetch.default; })();
@@ -63,7 +65,7 @@ async function fetchWithRetry(url, options = {}, retries = 3) {
       if (response.status === 429) {
         // Rate limited - wait and retry
         const waitTime = Math.pow(2, i) * 5000;
-        console.log(`[RealCrawler] Rate limited, waiting ${waitTime}ms...`);
+        log.info(`[RealCrawler] Rate limited, waiting ${waitTime}ms...`);
         await delay(waitTime);
         continue;
       }
@@ -146,7 +148,7 @@ async function crawlGrantsGov(state = null, keywords = []) {
       }
     }
     
-    console.log(`[RealCrawler] Grants.gov: Found ${opportunities.length} opportunities`);
+    log.info(`[RealCrawler] Grants.gov: Found ${opportunities.length} opportunities`);
   } catch (error) {
     console.error('[RealCrawler] Grants.gov error:', error.message);
   }
@@ -207,7 +209,7 @@ async function crawlUSASpending(state = null) {
       }
     }
     
-    console.log(`[RealCrawler] USASpending: Found ${opportunities.length} opportunities`);
+    log.info(`[RealCrawler] USASpending: Found ${opportunities.length} opportunities`);
   } catch (error) {
     console.error('[RealCrawler] USASpending error:', error.message);
   }
@@ -273,7 +275,7 @@ async function crawlStateGrants(state) {
   const statePrograms = getKnownStatePrograms(state);
   opportunities.push(...statePrograms);
   
-  console.log(`[RealCrawler] State ${state}: Found ${opportunities.length} opportunities`);
+  log.info(`[RealCrawler] State ${state}: Found ${opportunities.length} opportunities`);
   return opportunities;
 }
 
@@ -466,7 +468,7 @@ async function crawlCommunityFoundations(state, city = null) {
     });
   }
   
-  console.log(`[RealCrawler] Community Foundations ${state}: Found ${opportunities.length} opportunities`);
+  log.info(`[RealCrawler] Community Foundations ${state}: Found ${opportunities.length} opportunities`);
   return opportunities;
 }
 
@@ -591,7 +593,7 @@ async function crawlCorporateGiving() {
     });
   }
   
-  console.log(`[RealCrawler] Corporate Giving: Found ${opportunities.length} opportunities`);
+  log.info(`[RealCrawler] Corporate Giving: Found ${opportunities.length} opportunities`);
   return opportunities;
 }
 
@@ -676,7 +678,7 @@ async function crawlScholarships(state = null) {
     });
   }
   
-  console.log(`[RealCrawler] Scholarships: Found ${opportunities.length} opportunities`);
+  log.info(`[RealCrawler] Scholarships: Found ${opportunities.length} opportunities`);
   return opportunities;
 }
 
@@ -929,7 +931,7 @@ async function crawlProBonoAndInKind(state = null) {
     if (!opp.id) opp.id = randomUUID();
   }
 
-  console.log(`[RealCrawler] Pro Bono/In-Kind: Found ${opportunities.length} opportunities`);
+  log.info(`[RealCrawler] Pro Bono/In-Kind: Found ${opportunities.length} opportunities`);
   return opportunities;
 }
 
@@ -945,7 +947,7 @@ export async function crawlRealOpportunities(db, state = null, options = {}) {
     onProgress = null
   } = options;
   
-  console.log(`[RealCrawler] Starting crawl for ${state || 'nationwide'}...`);
+  log.info(`[RealCrawler] Starting crawl for ${state || 'nationwide'}...`);
   
   const allOpportunities = [];
   const errors = [];
@@ -1051,7 +1053,7 @@ export async function crawlRealOpportunities(db, state = null, options = {}) {
       else if (result?.skipped) {
         skipped++;
         if (result.reason) {
-          console.log(`[RealCrawler] Skipped: ${result.reason} | ${opp.title}`);
+          log.info(`[RealCrawler] Skipped: ${result.reason} | ${opp.title}`);
         }
       }
     } catch (dbError) {
@@ -1060,7 +1062,7 @@ export async function crawlRealOpportunities(db, state = null, options = {}) {
     }
   }
   
-  console.log(`[RealCrawler] Complete: ${inserted} inserted, ${updated} updated, ${skipped} skipped (loan/matching), ${errors.length} errors`);
+  log.info(`[RealCrawler] Complete: ${inserted} inserted, ${updated} updated, ${skipped} skipped (loan/matching), ${errors.length} errors`);
 
   return {
     total: allOpportunities.length,
@@ -1085,7 +1087,7 @@ export async function crawlAllStates(db, onProgress = null) {
   };
   
   // First, crawl national opportunities
-  console.log('[RealCrawler] Crawling national opportunities...');
+  log.info('[RealCrawler] Crawling national opportunities...');
   try {
     const national = await crawlRealOpportunities(db, null, { onProgress });
     results.total_inserted += national.inserted;
@@ -1098,7 +1100,7 @@ export async function crawlAllStates(db, onProgress = null) {
   
   // Then crawl each state
   for (const state of states) {
-    console.log(`[RealCrawler] Crawling ${state}...`);
+    log.info(`[RealCrawler] Crawling ${state}...`);
     try {
       const stateResult = await crawlRealOpportunities(db, state, { 
         includeCorporate: false, // Already included in national
@@ -1119,7 +1121,7 @@ export async function crawlAllStates(db, onProgress = null) {
     }
   }
   
-  console.log(`[RealCrawler] All states complete: ${results.total_inserted} inserted, ${results.total_updated} updated`);
+  log.info(`[RealCrawler] All states complete: ${results.total_inserted} inserted, ${results.total_updated} updated`);
   return results;
 }
 

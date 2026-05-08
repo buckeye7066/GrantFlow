@@ -6,6 +6,8 @@
 
 import axios from 'axios'
 import * as cheerio from 'cheerio'
+import { createLogger } from '../../utils/logger.js'
+const log = createLogger('ecfBenefitsCrawler')
 
 const ECF_SOURCES = {
   individual: [
@@ -45,12 +47,12 @@ export async function crawlECFBenefits(profile, options = {}) {
   const { eligibleIndividual, eligibleSupport, supportType } = evaluateEcfUnlockEligibility(profile)
   
   if (!eligibleIndividual && !eligibleSupport) {
-    console.log('[ECFBenefitsCrawler] Locked: profile not eligible for ECF CHOICES (participant/caregiver/provider)')
+    log.info('[ECFBenefitsCrawler] Locked: profile not eligible for ECF CHOICES (participant/caregiver/provider)')
     return results
   }
   
-  console.log(`[ECFBenefitsCrawler] Starting ECF benefits search`)
-  console.log(
+  log.info(`[ECFBenefitsCrawler] Starting ECF benefits search`)
+  log.info(
     `[ECFBenefitsCrawler] Individual eligible: ${eligibleIndividual}, Support eligible: ${eligibleSupport}${
       eligibleSupport ? ` (${supportType})` : ''
     }`,
@@ -110,7 +112,7 @@ export async function crawlECFBenefits(profile, options = {}) {
     }
   }
   
-  console.log(`[ECFBenefitsCrawler] Returning ${results.length} ECF benefit candidate(s) to pipeline for decision-engine evaluation`)
+  log.info(`[ECFBenefitsCrawler] Returning ${results.length} ECF benefit candidate(s) to pipeline for decision-engine evaluation`)
   return results
 }
 

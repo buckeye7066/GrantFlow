@@ -8,6 +8,8 @@ import { scheduleAdminGeoCrawlOnLogin } from './adminGeoCrawlOnLogin.js'
 import { promises as fs } from 'fs'
 import path from 'path'
 import { AUDIT_CATEGORIES, SEVERITY, logAuditEvent } from './auditService.js'
+import { createLogger } from '../utils/logger.js'
+const log = createLogger('anyaAutonomousScheduler')
 
 const REPO_ROOT = path.resolve(process.cwd())
 
@@ -105,7 +107,7 @@ async function logOperation(operation, status, details = {}, context = null) {
   }
 
   // Durable fallback: platform logs
-  console.log('[audit][autonomous-scheduler]', JSON.stringify(logEntry))
+  log.info('[audit][autonomous-scheduler]', JSON.stringify(logEntry))
 
   // Dev-only filesystem sink (explicit opt-in).
   if (!isProdEnv() && String(process.env.ALLOW_DEV_FILESYSTEM_AUDIT_LOGS || '').toLowerCase() === 'true') {
@@ -125,7 +127,7 @@ async function logOperation(operation, status, details = {}, context = null) {
  */
 export async function runAllAutonomousOperations(context, trigger = 'manual') {
   if (!AUTONOMOUS_CONFIG.enabled) {
-    console.log('[Anya Scheduler] Autonomous operations are disabled')
+    log.info('[Anya Scheduler] Autonomous operations are disabled')
     return { enabled: false, message: 'Autonomous operations disabled' }
   }
   
@@ -137,12 +139,12 @@ export async function runAllAutonomousOperations(context, trigger = 'manual') {
   }
   
   await logOperation('batch_start', 'started', { trigger }, context)
-  console.log(`[Anya Scheduler] Starting autonomous operations (trigger: ${trigger})`)
+  log.info(`[Anya Scheduler] Starting autonomous operations (trigger: ${trigger})`)
   
   try {
     // Phase 1: Code Crawl and Fix
     if (AUTONOMOUS_CONFIG.operations.codeCrawl) {
-      console.log('[Anya Scheduler] Phase 1: Running code crawl...')
+      log.info('[Anya Scheduler] Phase 1: Running code crawl...')
       try {
         const result = await runAutonomousCodeCrawl(
           AUTONOMOUS_CONFIG.params.codeCrawl,
@@ -154,7 +156,7 @@ export async function runAllAutonomousOperations(context, trigger = 'manual') {
           files_modified: result.files_modified,
           issues_fixed: result.issues_fixed,
         }
-        console.log(`[Anya Scheduler] Code crawl complete: ${result.files_modified} files modified`)
+        log.info(`[Anya Scheduler] Code crawl complete: ${result.files_modified} files modified`)
       } catch (error) {
         report.errors.push({ phase: 'codeCrawl', error: error.message })
         report.operations.codeCrawl = { status: 'failed', error: error.message }
@@ -163,7 +165,7 @@ export async function runAllAutonomousOperations(context, trigger = 'manual') {
     
     // Phase 2: Function Testing
     if (AUTONOMOUS_CONFIG.operations.functionTests) {
-      console.log('[Anya Scheduler] Phase 2: Testing functions...')
+      log.info('[Anya Scheduler] Phase 2: Testing functions...')
       try {
         const result = await runAutonomousFunctionTests(
           AUTONOMOUS_CONFIG.params.functionTests,
@@ -175,11 +177,11 @@ export async function runAllAutonomousOperations(context, trigger = 'manual') {
           tests_passed: result.tests_passed,
           tests_failed: result.tests_failed,
         }
-        console.log(`[Anya Scheduler] Function tests complete: ${result.tests_passed}/${result.total_tests} passed`)
+        log.info(`[Anya Scheduler] Function tests complete: ${result.tests_passed}/${result.total_tests} passed`)
         
         // Phase 2b: Auto-repair failing tests
         if (result.failed_tests && result.failed_tests.length > 0) {
-          console.log(`[Anya Scheduler] Phase 2b: Attempting to repair ${result.failed_tests.length} failing tests...`)
+          log.info(`[Anya Scheduler] Phase 2b: Attempting to repair ${result.failed_tests.length} failing tests...`)
           try {
             const repairResult = await repairFailingTests(result.failed_tests, context.db)
             report.operations.testRepair = {
@@ -188,11 +190,11 @@ export async function runAllAutonomousOperations(context, trigger = 'manual') {
               unable_to_repair: repairResult.unable_to_repair.length,
               actions: repairResult.actions_taken
             }
-            console.log(`[Anya Scheduler] Test repair complete: ${repairResult.repaired.length}/${result.failed_tests.length} fixed`)
+            log.info(`[Anya Scheduler] Test repair complete: ${repairResult.repaired.length}/${result.failed_tests.length} fixed`)
             
             // Re-run tests if any were repaired
             if (repairResult.repaired.length > 0) {
-              console.log('[Anya Scheduler] Re-running tests after repairs...')
+              log.info('[Anya Scheduler] Re-running tests after repairs...')
               const retestResult = await runAutonomousFunctionTests(
                 AUTONOMOUS_CONFIG.params.functionTests,
                 context
@@ -202,7 +204,7 @@ export async function runAllAutonomousOperations(context, trigger = 'manual') {
                 tests_failed: retestResult.tests_failed,
                 improvement: retestResult.tests_passed - result.tests_passed
               }
-              console.log(`[Anya Scheduler] After repair: ${retestResult.tests_passed}/${retestResult.total_tests} passing (+${retestResult.tests_passed - result.tests_passed})`)
+              log.info(`[Anya Scheduler] After repair: ${retestResult.tests_passed}/${retestResult.total_tests} passing (+${retestResult.tests_passed - result.tests_passed})`)
             }
           } catch (repairError) {
             console.error('[Anya Scheduler] Test repair error:', repairError)
@@ -217,7 +219,7 @@ export async function runAllAutonomousOperations(context, trigger = 'manual') {
     
     // Phase 3: Run Crawlers
     if (AUTONOMOUS_CONFIG.operations.crawlers) {
-      console.log('[Anya Scheduler] Phase 3: Running crawlers...')
+      log.info('[Anya Scheduler] Phase 3: Running crawlers...')
       try {
         const crawlerProfileId = context?.profileId ?? context?.profile_id ?? null
 const crawlerLocation = context?.profile?.location ?? null
@@ -246,7 +248,7 @@ const result = await runAutonomousCrawlers(crawlerParams, context)
           jobs_created: result.jobs_created,
           jobs_completed: result.jobs_completed,
         }
-        console.log(`[Anya Scheduler] Crawlers complete: ${result.jobs_created} jobs for ${result.profiles_processed} profiles`)
+        log.info(`[Anya Scheduler] Crawlers complete: ${result.jobs_created} jobs for ${result.profiles_processed} profiles`)
       } catch (error) {
         report.errors.push({ phase: 'crawlers', error: error.message })
         report.operations.crawlers = { status: 'failed', error: error.message }
@@ -255,7 +257,7 @@ const result = await runAutonomousCrawlers(crawlerParams, context)
 
     // Phase 4: Discover new requestable items (deterministic; uses DB only)
     if (AUTONOMOUS_CONFIG.operations.itemDiscovery) {
-      console.log('[Anya Scheduler] Phase 4: Discovering new requestable items...')
+      log.info('[Anya Scheduler] Phase 4: Discovering new requestable items...')
       try {
         const result = await discoverNewCatalogItems(context.db, AUTONOMOUS_CONFIG.params.itemDiscovery)
         report.operations.itemDiscovery = {
@@ -264,7 +266,7 @@ const result = await runAutonomousCrawlers(crawlerParams, context)
           scanned_opportunities: result.scanned_opportunities ?? null,
           min_count: result.min_count ?? null,
         }
-        console.log(`[Anya Scheduler] Item discovery complete: ${result.inserted ?? 0} new items`)
+        log.info(`[Anya Scheduler] Item discovery complete: ${result.inserted ?? 0} new items`)
       } catch (error) {
         report.errors.push({ phase: 'itemDiscovery', error: error.message })
         report.operations.itemDiscovery = { status: 'failed', error: error.message }
@@ -273,7 +275,7 @@ const result = await runAutonomousCrawlers(crawlerParams, context)
 
     // Phase 5: Portal check-in for student profiles
     if (AUTONOMOUS_CONFIG.operations.portalChecks && context.db) {
-      console.log('[Anya Scheduler] Phase 5: Running portal checks for student profiles...')
+      log.info('[Anya Scheduler] Phase 5: Running portal checks for student profiles...')
       try {
         // Student primary_type values — mirrors the list used in autoDiscoveryCrawlers.js
         // and grants.js. No shared constant exists; keep in sync if new student types are added.
@@ -304,7 +306,7 @@ const result = await runAutonomousCrawlers(crawlerParams, context)
           portals_checked: portalChecksTotal,
           awards_detected: portalAwardsTotal,
         }
-        console.log(`[Anya Scheduler] Portal checks complete: ${portalAwardsTotal} awards detected across ${portalChecksTotal} portals for ${eligibleProfiles.length} profiles`)
+        log.info(`[Anya Scheduler] Portal checks complete: ${portalAwardsTotal} awards detected across ${portalChecksTotal} portals for ${eligibleProfiles.length} profiles`)
       } catch (error) {
         report.errors.push({ phase: 'portalChecks', error: error.message })
         report.operations.portalChecks = { status: 'failed', error: error.message }
@@ -315,7 +317,7 @@ const result = await runAutonomousCrawlers(crawlerParams, context)
     // Each run resumes from the last checkpoint, so over successive daily runs all ~43k ZIPs
     // get covered without any single run needing to process them all.
     if (AUTONOMOUS_CONFIG.operations.geoCrawl && context.db) {
-      console.log('[Anya Scheduler] Phase 6: Scheduling resumable geo crawl...')
+      log.info('[Anya Scheduler] Phase 6: Scheduling resumable geo crawl...')
       try {
         const result = await scheduleAdminGeoCrawlOnLogin(
           context.db,
@@ -328,7 +330,7 @@ const result = await runAutonomousCrawlers(crawlerParams, context)
           job_id: result.job_id ?? null,
           run_id: result.run_id ?? null,
         }
-        console.log(`[Anya Scheduler] Geo crawl: ${result.scheduled ? 'scheduled job=' + result.job_id : 'skipped (' + result.reason + ')'}`)
+        log.info(`[Anya Scheduler] Geo crawl: ${result.scheduled ? 'scheduled job=' + result.job_id : 'skipped (' + result.reason + ')'}`)
       } catch (error) {
         report.errors.push({ phase: 'geoCrawl', error: error.message })
         report.operations.geoCrawl = { status: 'failed', error: error.message }
@@ -340,15 +342,15 @@ const result = await runAutonomousCrawlers(crawlerParams, context)
     
     await logOperation('batch_complete', report.status, report, context)
     
-    console.log('[Anya Scheduler] ========================================')
-    console.log('[Anya Scheduler] AUTONOMOUS OPERATIONS COMPLETE')
-    console.log(`[Anya Scheduler] Trigger: ${trigger}`)
-    console.log(`[Anya Scheduler] Status: ${report.status}`)
-    console.log(`[Anya Scheduler] Errors: ${report.errors.length}`)
+    log.info('[Anya Scheduler] ========================================')
+    log.info('[Anya Scheduler] AUTONOMOUS OPERATIONS COMPLETE')
+    log.info(`[Anya Scheduler] Trigger: ${trigger}`)
+    log.info(`[Anya Scheduler] Status: ${report.status}`)
+    log.info(`[Anya Scheduler] Errors: ${report.errors.length}`)
     for (const err of report.errors) {
       console.warn(`[Anya Scheduler]   → ${err.phase}: ${err.error}`)
     }
-    console.log('[Anya Scheduler] ========================================')
+    log.info('[Anya Scheduler] ========================================')
     
     return report
   } catch (error) {
@@ -364,11 +366,11 @@ const result = await runAutonomousCrawlers(crawlerParams, context)
  */
 export async function runOnStartup(db) {
   if (!AUTONOMOUS_CONFIG.runOnStartup) {
-    console.log('[Anya Scheduler] Startup operations disabled')
+    log.info('[Anya Scheduler] Startup operations disabled')
     return null
   }
   
-  console.log('[Anya Scheduler] Running startup operations...')
+  log.info('[Anya Scheduler] Running startup operations...')
   return runAllAutonomousOperations({ db, user: { id: 'system', role: 'admin', is_admin: true } }, 'startup')
 }
 
@@ -382,12 +384,12 @@ export async function runOnAdminLogin(db, userId) {
     return null
   }
   if (_adminLoginRunInProgress) {
-    console.log('[Anya Scheduler] Admin login ops already in progress, skipping')
+    log.info('[Anya Scheduler] Admin login ops already in progress, skipping')
     return null
   }
   
   _adminLoginRunInProgress = true
-  console.log(`[Anya Scheduler] Running operations for admin login: ${userId}`)
+  log.info(`[Anya Scheduler] Running operations for admin login: ${userId}`)
   try {
     return await runAllAutonomousOperations({ db, user: { id: userId, role: 'admin' } }, 'admin_login')
   } finally {
@@ -420,7 +422,7 @@ export async function checkSchedule(db) {
     return null
   }
 
-  console.log('[Anya Scheduler] Running scheduled operations...')
+  log.info('[Anya Scheduler] Running scheduled operations...')
   try {
     const result = await runAllAutonomousOperations({ db, user: { id: 'system', role: 'admin', is_admin: true } }, 'schedule')
     _lastScheduledRunDate = today
