@@ -221,7 +221,7 @@ router.get('/audit-events', async (req, res) => {
       audit_events: logs.slice(0, limit),
     })
   } catch (error) {
-    console.error('[admin/audit-events] list failed', error)
+    routeLogger.error('[admin/audit-events] list failed', error)
     res.status(500).json({ error: 'Unable to list audit events' })
   }
 })
@@ -1918,7 +1918,7 @@ router.get('/login-events', async (req, res) => {
       events: finalEvents,
     })
   } catch (error) {
-    console.error('[admin/login-events] Error:', error)
+    routeLogger.error('[admin/login-events] Error:', error)
     return res.status(500).json({ error: 'Failed to load login events' })
   }
 })
@@ -1995,7 +1995,7 @@ router.get('/page-views', async (req, res) => {
 
     return res.json({ ok: true, page_views: views })
   } catch (error) {
-    console.error('[admin/page-views] Error:', error)
+    routeLogger.error('[admin/page-views] Error:', error)
     return res.status(500).json({ error: 'Failed to load page views' })
   }
 })
@@ -2317,7 +2317,7 @@ router.get('/geo/summary', async (req, res) => {
 
     res.json({ states: summary })
   } catch (error) {
-    console.error('[admin/geo/summary] Error:', error)
+    routeLogger.error('[admin/geo/summary] Error:', error)
     res.status(500).json({ error: error?.message || String(error) })
   }
 })
@@ -2498,7 +2498,7 @@ router.get('/profiles/search', async (req, res) => {
 
     res.json({ ok: true, q, limit: lim, count: rows?.length ?? 0, profiles: rows || [] })
   } catch (error) {
-    console.error('[admin/profiles/search]', error)
+    routeLogger.error('[admin/profiles/search]', error)
     res.status(500).json({ ok: false, error: error?.message || String(error) })
   }
 })
@@ -3133,7 +3133,7 @@ router.post('/profiles/ownership/repair', async (req, res) => {
       updatedBy: actorUserId || 'admin-ownership-repair',
     })
   } catch (error) {
-    console.error('[admin/profiles/ownership/repair] failed', error)
+    routeLogger.error('[admin/profiles/ownership/repair] failed', error)
     return res.status(500).json({
       ok: false,
       error: error?.message || String(error),
@@ -4576,7 +4576,7 @@ router.post('/profiles/restore-sections-from-orgs', async (req, res) => {
     })
     return res.json(result)
   } catch (error) {
-    console.error('[admin/profiles/restore-sections-from-orgs]', error)
+    routeLogger.error('[admin/profiles/restore-sections-from-orgs]', error)
     return res.status(500).json({ ok: false, error: error?.message || String(error) })
   }
 })
@@ -4610,7 +4610,7 @@ router.post('/profiles/merge', async (req, res, next) => {
 
     return res.json({ ok: true, ...result })
   } catch (error) {
-    console.error('[admin/profiles/merge] Error:', error)
+    routeLogger.error('[admin/profiles/merge] Error:', error)
     return res.status(500).json({
       ok: false,
       error: error?.message || String(error),
@@ -4824,7 +4824,7 @@ router.post('/profiles/deduplicate', async (req, res) => {
       results,
     })
   } catch (error) {
-    console.error('[admin/profiles/deduplicate] Error:', error)
+    routeLogger.error('[admin/profiles/deduplicate] Error:', error)
     return res.status(500).json({
       ok: false,
       error: error?.message || String(error),
@@ -4913,7 +4913,7 @@ router.post('/clear-all-pipelines', async (req, res) => {
       deleted: results,
     })
   } catch (error) {
-    console.error('[admin] clear-all-pipelines error:', error)
+    routeLogger.error('[admin] clear-all-pipelines error:', error)
     res.status(500).json({ error: error.message })
   }
 })
@@ -4944,7 +4944,7 @@ router.post('/backfill-matches', async (req, res) => {
           .get('grants', 'match_decision')
         hasDecisionColumns = Boolean(row?.ok)
       } else {
-        const cols = db.prepare('PRAGMA table_info(grants)').all()
+        const cols = await db.prepare('PRAGMA table_info(grants)').all()
         hasDecisionColumns = cols.some((c) => c.name === 'match_decision')
       }
     } catch { /* ignore */ }
@@ -5087,7 +5087,7 @@ router.post('/backfill-matches', async (req, res) => {
       matcherVersion: MATCHER_VERSION,
     })
   } catch (error) {
-    console.error('[admin/backfill-matches] error:', error)
+    routeLogger.error('[admin/backfill-matches] error:', error)
     res.status(500).json({ error: error.message })
   }
 })
@@ -5121,7 +5121,7 @@ router.post('/purge/regional/run', async (req, res) => {
 
     res.json({ ok: true, dryRun: Boolean(dryRun), ...result })
   } catch (err) {
-    console.error('[admin/purge/regional/run] Error:', err)
+    routeLogger.error('[admin/purge/regional/run] Error:', err)
     res.status(500).json({ error: err?.message || 'Purge failed' })
   }
 })
@@ -5136,7 +5136,7 @@ router.get('/purge/regional/summary', async (req, res) => {
     const summary = getPurgeSummary(req.db)
     res.json({ ok: true, ...summary })
   } catch (err) {
-    console.error('[admin/purge/regional/summary] Error:', err)
+    routeLogger.error('[admin/purge/regional/summary] Error:', err)
     res.status(500).json({ error: err?.message })
   }
 })
@@ -5159,7 +5159,7 @@ router.get('/purge/regional/events', async (req, res) => {
     const result = getPurgeEvents(req.db, { page, pageSize, state })
     res.json({ ok: true, ...result })
   } catch (err) {
-    console.error('[admin/purge/regional/events] Error:', err)
+    routeLogger.error('[admin/purge/regional/events] Error:', err)
     res.status(500).json({ error: err?.message })
   }
 })
@@ -5187,7 +5187,7 @@ router.post('/anya-health/run', async (req, res) => {
     const result = await runHealthCheck(req.db)
     res.json(result)
   } catch (err) {
-    console.error('[admin/anya-health/run] Error:', err)
+    routeLogger.error('[admin/anya-health/run] Error:', err)
     res.status(500).json({ error: err.message })
   }
 })
@@ -5202,7 +5202,7 @@ router.get('/anya-repair', async (req, res) => {
     const report = await runAutoRepair(req.db, { dryRun: true })
     res.json(report)
   } catch (err) {
-    console.error('[admin/anya-repair] Error:', err)
+    routeLogger.error('[admin/anya-repair] Error:', err)
     res.status(500).json({ error: err.message })
   }
 })
@@ -5218,7 +5218,7 @@ router.post('/anya-repair/run', async (req, res) => {
     const report = await runAutoRepair(req.db, { dryRun: false, repairTypes })
     res.json(report)
   } catch (err) {
-    console.error('[admin/anya-repair/run] Error:', err)
+    routeLogger.error('[admin/anya-repair/run] Error:', err)
     res.status(500).json({ error: err.message })
   }
 })
@@ -5232,7 +5232,7 @@ router.get('/exclusion-rules', async (req, res) => {
     const rules = await req.db.prepare(`SELECT * FROM exclusion_rules`).all()
     res.json({ rules })
   } catch (err) {
-    console.error('[admin/exclusion-rules] Error:', err)
+    routeLogger.error('[admin/exclusion-rules] Error:', err)
     res.status(500).json({ error: err.message })
   }
 })
@@ -5257,7 +5257,7 @@ router.post('/exclusion-rules', async (req, res) => {
 
     res.json({ success: true, rule_id: id })
   } catch (err) {
-    console.error('[admin/exclusion-rules] Error:', err)
+    routeLogger.error('[admin/exclusion-rules] Error:', err)
     res.status(500).json({ error: err.message })
   }
 })
@@ -5281,7 +5281,7 @@ router.delete('/exclusion-rules/:ruleId', async (req, res) => {
     }
     res.json({ success: true, deleted })
   } catch (err) {
-    console.error('[admin/exclusion-rules] Delete error:', err)
+    routeLogger.error('[admin/exclusion-rules] Delete error:', err)
     res.status(500).json({ error: err.message })
   }
 })
@@ -5298,7 +5298,7 @@ router.post('/verify-links', async (req, res) => {
     const stats = await runLinkVerification(req.db, { limit: 200 })
     res.json({ success: true, stats })
   } catch (err) {
-    console.error('[admin/verify-links] Error:', err)
+    routeLogger.error('[admin/verify-links] Error:', err)
     res.status(500).json({ success: false, error: err.message })
   }
 })
@@ -5320,7 +5320,7 @@ router.post('/crawler-jobs/resolve-failures', async (req, res) => {
     routeLogger.info(`[admin] Deleted ${deleted} stale failed crawler job(s)`)
     res.json({ success: true, deleted })
   } catch (err) {
-    console.error('[admin/resolve-failures] Error:', err)
+    routeLogger.error('[admin/resolve-failures] Error:', err)
     res.status(500).json({ success: false, error: err.message })
   }
 })
@@ -5379,7 +5379,7 @@ router.post('/anya/runAutonomous', async (req, res) => {
       output,
     })
   } catch (err) {
-    console.error('[admin/anya/runAutonomous] Error:', err)
+    routeLogger.error('[admin/anya/runAutonomous] Error:', err)
     return res.status(500).json({
       id: crypto.randomUUID(),
       tool: 'admin.anya.runAutonomous',

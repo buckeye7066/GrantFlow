@@ -52,7 +52,7 @@ router.get('/', async (req, res) => {
       .all(limit)
     return res.json((rows || []).map(mapRow))
   } catch (error) {
-    console.error('[crawl-logs] list error:', error)
+    routeLogger.error('[crawl-logs] list error:', error)
     return res.status(500).json({ error: error?.message || String(error) })
   }
 })
@@ -104,7 +104,7 @@ router.post('/filter', async (req, res) => {
 
     return res.json((rows || []).map(mapRow))
   } catch (error) {
-    console.error('[crawl-logs] filter error:', error)
+    routeLogger.error('[crawl-logs] filter error:', error)
     return res.status(500).json({ error: error?.message || String(error) })
   }
 })

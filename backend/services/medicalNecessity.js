@@ -41,7 +41,7 @@ export async function extractMedicalProfile(db, profileId) {
   if (!db?.prepare) throw new Error('Invalid database connection')
   let profile
   try {
-    profile = db.prepare('SELECT * FROM profiles WHERE id = ?').get(profileId)
+    profile = await db.prepare('SELECT * FROM profiles WHERE id = ?').get(profileId)
   } catch (dbErr) {
     console.error('[medicalNecessity] DB error fetching profile', profileId, dbErr)
     throw new Error(`Database error fetching profile ${profileId}: ${dbErr.message}`)
@@ -50,7 +50,7 @@ export async function extractMedicalProfile(db, profileId) {
 
   let rows
   try {
-    rows = db.prepare(
+    rows = await db.prepare(
       'SELECT section_key, data FROM profile_sections WHERE profile_id = ?'
     ).all(profileId)
   } catch (dbErr) {
@@ -247,7 +247,7 @@ function guessBestDocType(triggers) {
 export async function scanPipelineForMedNec(db, profileId) {
   let grants
   try {
-    grants = db.prepare(`
+    grants = await db.prepare(`
       SELECT g.id, g.title, g.status, g.funding_opportunity_id, g.application_method,
              fo.description, fo.eligibility_bullets, fo.application_url
       FROM grants g
@@ -296,7 +296,7 @@ export async function generateMedicalNecessityDocument(db, profileId, options = 
 
   let opportunity = null
   if (opportunityId) {
-    opportunity = db.prepare('SELECT * FROM funding_opportunities WHERE id = ?').get(opportunityId)
+    opportunity = await db.prepare('SELECT * FROM funding_opportunities WHERE id = ?').get(opportunityId)
   }
   let grant = null
   if (grantId) {

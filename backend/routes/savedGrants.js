@@ -158,7 +158,7 @@ router.post('/', async (req, res) => {
 
     res.json({ saved: true, id })
   } catch (err) {
-    console.error('[saved-grants] POST error:', err)
+    routeLogger.error('[saved-grants] POST error:', err)
     res.status(500).json({ error: err.message })
   }
 })
@@ -181,7 +181,7 @@ router.patch('/:opportunityId/notes', async (req, res) => {
     if (result.changes === 0) return res.status(404).json({ error: 'Saved grant not found' })
     res.json({ updated: true })
   } catch (err) {
-    console.error('[saved-grants] PATCH notes error:', err)
+    routeLogger.error('[saved-grants] PATCH notes error:', err)
     res.status(500).json({ error: err.message })
   }
 })
@@ -200,7 +200,7 @@ router.delete('/:opportunityId', async (req, res) => {
 
     res.json({ removed: true })
   } catch (err) {
-    console.error('[saved-grants] DELETE error:', err)
+    routeLogger.error('[saved-grants] DELETE error:', err)
     res.status(500).json({ error: err.message })
   }
 })

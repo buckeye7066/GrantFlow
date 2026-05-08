@@ -42,7 +42,7 @@ router.get('/catalog', async (req, res) => {
     const catalog = await listServiceCatalog(req.db, { includeInactive })
     res.json({ ok: true, catalog })
   } catch (error) {
-    console.error('[services] GET /catalog error:', error?.message || String(error))
+    routeLogger.error('[services] GET /catalog error:', error?.message || String(error))
     res.status(500).json({ ok: false, error: 'Failed to load service catalog' })
   }
 })
@@ -52,7 +52,7 @@ router.get('/terms', ensureAuth, async (req, res) => {
     const terms = await getLatestServiceTerms(req.db)
     res.json({ ok: true, terms })
   } catch (error) {
-    console.error('[services] GET /terms error:', error?.message || String(error))
+    routeLogger.error('[services] GET /terms error:', error?.message || String(error))
     res.status(500).json({ ok: false, error: 'Failed to load service terms' })
   }
 })

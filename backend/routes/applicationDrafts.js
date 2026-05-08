@@ -65,7 +65,7 @@ router.get('/', async (req, res) => {
 
     return res.json(rows || [])
   } catch (error) {
-    console.error('[application-drafts] list error:', error)
+    routeLogger.error('[application-drafts] list error:', error)
     return res.status(500).json({ error: error?.message || String(error) })
   }
 })
@@ -81,7 +81,7 @@ router.get('/:id', async (req, res) => {
     if (!grant) return
     return res.json(row)
   } catch (error) {
-    console.error('[application-drafts] get error:', error)
+    routeLogger.error('[application-drafts] get error:', error)
     return res.status(500).json({ error: error?.message || String(error) })
   }
 })
@@ -127,7 +127,7 @@ router.post('/', async (req, res) => {
     const row = await req.db.prepare('SELECT * FROM application_drafts WHERE id = ?').get(id)
     return res.status(201).json(row)
   } catch (error) {
-    console.error('[application-drafts] create error:', error)
+    routeLogger.error('[application-drafts] create error:', error)
     return res.status(500).json({ error: error?.message || String(error) })
   }
 })
@@ -175,7 +175,7 @@ router.put('/:id', async (req, res) => {
     const row = await req.db.prepare('SELECT * FROM application_drafts WHERE id = ?').get(String(req.params.id))
     return res.json(row)
   } catch (error) {
-    console.error('[application-drafts] update error:', error)
+    routeLogger.error('[application-drafts] update error:', error)
     return res.status(500).json({ error: error?.message || String(error) })
   }
 })
@@ -193,7 +193,7 @@ router.delete('/:id', async (req, res) => {
     await req.db.prepare('DELETE FROM application_drafts WHERE id = ?').run(String(req.params.id))
     return res.json({ ok: true })
   } catch (error) {
-    console.error('[application-drafts] delete error:', error)
+    routeLogger.error('[application-drafts] delete error:', error)
     return res.status(500).json({ error: error?.message || String(error) })
   }
 })

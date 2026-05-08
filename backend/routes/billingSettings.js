@@ -47,7 +47,7 @@ router.get('/', async (req, res) => {
     if (!row) return res.json({})
     return res.json(mapRow(row))
   } catch (error) {
-    console.error('[billing-settings] list error:', error)
+    routeLogger.error('[billing-settings] list error:', error)
     return res.status(500).json({ error: error?.message || String(error) })
   }
 })
@@ -64,7 +64,7 @@ router.get('/:id', async (req, res) => {
     if (String(row.id) !== String(req.params.id)) return res.status(404).json({ error: 'Not found' })
     return res.json(mapRow(row))
   } catch (error) {
-    console.error('[billing-settings] get error:', error)
+    routeLogger.error('[billing-settings] get error:', error)
     return res.status(500).json({ error: error?.message || String(error) })
   }
 })
@@ -114,7 +114,7 @@ router.post('/', async (req, res) => {
     const row = await loadUserPreferencesRow(req.db, userId)
     return res.status(201).json(mapRow(row))
   } catch (error) {
-    console.error('[billing-settings] create error:', error)
+    routeLogger.error('[billing-settings] create error:', error)
     return res.status(500).json({ error: error?.message || String(error) })
   }
 })
@@ -150,7 +150,7 @@ router.put('/:id', async (req, res) => {
     const row = await loadUserPreferencesRow(req.db, userId)
     return res.json(mapRow(row))
   } catch (error) {
-    console.error('[billing-settings] update error:', error)
+    routeLogger.error('[billing-settings] update error:', error)
     return res.status(500).json({ error: error?.message || String(error) })
   }
 })

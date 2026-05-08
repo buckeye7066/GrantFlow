@@ -40,7 +40,7 @@ router.get('/search', async (req, res) => {
 
     res.json(result)
   } catch (error) {
-    console.error('[foundations/search] error', error?.message)
+    routeLogger.error('[foundations/search] error', error?.message)
     res.status(500).json(formatError(error))
   }
 })
@@ -59,7 +59,7 @@ router.get('/:ein', async (req, res) => {
     const org = await propublica.getOrganization(ein)
     res.json(org)
   } catch (error) {
-    console.error('[foundations/:ein] error', error?.message)
+    routeLogger.error('[foundations/:ein] error', error?.message)
     res.status(500).json(formatError(error))
   }
 })
@@ -77,7 +77,7 @@ router.get('/:ein/filing/:taxPeriod', async (req, res) => {
     const filing = await propublica.getFiling(ein, taxPeriod)
     res.json(filing)
   } catch (error) {
-    console.error('[foundations/filing] error', error?.message)
+    routeLogger.error('[foundations/filing] error', error?.message)
     res.status(500).json(formatError(error))
   }
 })
@@ -104,7 +104,7 @@ router.get('/nsf/search', async (req, res) => {
 
     res.json({ count: results.length, opportunities: results })
   } catch (error) {
-    console.error('[foundations/nsf] error', error?.message)
+    routeLogger.error('[foundations/nsf] error', error?.message)
     res.status(500).json(formatError(error))
   }
 })
@@ -129,7 +129,7 @@ router.get('/federal/search', async (req, res) => {
 
     res.json(results)
   } catch (error) {
-    console.error('[foundations/federal] error', error?.message)
+    routeLogger.error('[foundations/federal] error', error?.message)
     res.status(500).json(formatError(error))
   }
 })
@@ -231,7 +231,7 @@ router.get('/calendar/deadlines', async (req, res) => {
 
     res.json({ count: events.length, events })
   } catch (error) {
-    console.error('[foundations/calendar] error', error?.message)
+    routeLogger.error('[foundations/calendar] error', error?.message)
     res.status(500).json(formatError(error))
   }
 })
@@ -249,7 +249,7 @@ router.post('/reverse-lookup', requireAuthenticatedUserMiddleware, async (req, r
 
     res.json(result)
   } catch (error) {
-    console.error('[foundations/reverse-lookup] error', error?.message)
+    routeLogger.error('[foundations/reverse-lookup] error', error?.message)
     res.status(500).json(formatError(error))
   }
 })

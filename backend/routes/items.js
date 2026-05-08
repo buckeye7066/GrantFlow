@@ -30,7 +30,7 @@ router.get('/suggestions', async (req, res) => {
 
     return res.json(response)
   } catch (error) {
-    console.error('[items/suggestions] error', error)
+    routeLogger.error('[items/suggestions] error', error)
     return res.status(500).json(formatError(error))
   }
 })
@@ -46,7 +46,7 @@ router.post('/discover', async (req, res) => {
     const report = await discoverNewCatalogItems(req.db, { minCount, limit })
     return res.json(report)
   } catch (error) {
-    console.error('[items/discover] error', error)
+    routeLogger.error('[items/discover] error', error)
     return res.status(500).json(formatError(error))
   }
 })
@@ -60,7 +60,7 @@ router.post('/seed', async (req, res) => {
     const result = await ensureItemCatalogSeeded(req.db)
     return res.json(result)
   } catch (error) {
-    console.error('[items/seed] error', error)
+    routeLogger.error('[items/seed] error', error)
     return res.status(500).json(formatError(error))
   }
 })

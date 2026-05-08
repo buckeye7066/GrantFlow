@@ -126,7 +126,7 @@ export async function dispatchDeadlineAlerts(db, { userId, userEmail, userPhone,
   // Check user preferences
   let prefs = null
   try {
-    prefs = db.prepare('SELECT email_notifications FROM user_preferences WHERE user_id = ?').get(userId)
+    prefs = await db.prepare('SELECT email_notifications FROM user_preferences WHERE user_id = ?').get(userId)
   } catch { /* table may not exist yet */ }
 
   const emailOptIn = prefs?.email_notifications !== 0 // default true if no prefs row

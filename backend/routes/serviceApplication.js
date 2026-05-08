@@ -163,7 +163,7 @@ router.post('/', async (req, res) => {
       message: 'Invalid request type',
     })
   } catch (error) {
-    console.error('[serviceApplication] Error:', error)
+    routeLogger.error('[serviceApplication] Error:', error)
     return res.status(500).json({
       success: false,
       message: error.message || 'Failed to process request',
@@ -245,7 +245,7 @@ router.post('/submit', async (req, res) => {
       applicationId,
     })
   } catch (error) {
-    console.error('[serviceApplication] Error submitting application:', error)
+    routeLogger.error('[serviceApplication] Error submitting application:', error)
     res.status(500).json({
       success: false,
       message: error.message || 'Failed to submit application',
@@ -309,7 +309,7 @@ router.get('/list', async (req, res) => {
       total: total.count,
     })
   } catch (error) {
-    console.error('[serviceApplication] Error listing applications:', error)
+    routeLogger.error('[serviceApplication] Error listing applications:', error)
     res.status(500).json({
       success: false,
       message: error.message || 'Failed to list applications',
@@ -384,7 +384,7 @@ res.json({
   application: updated,
 })
   } catch (error) {
-    console.error('[serviceApplication] Error updating application:', error)
+    routeLogger.error('[serviceApplication] Error updating application:', error)
     res.status(500).json({
       success: false,
       message: error.message || 'Failed to update application',
@@ -414,7 +414,7 @@ router.delete('/:id', async (req, res) => {
     await req.db.prepare('DELETE FROM service_applications WHERE id = ?').run(id)
     return res.json({ success: true, deleted: true })
   } catch (error) {
-    console.error('[serviceApplication] Error deleting application:', error)
+    routeLogger.error('[serviceApplication] Error deleting application:', error)
     return res.status(500).json({
       success: false,
       message: error.message || 'Failed to delete application',
@@ -531,7 +531,7 @@ router.post('/:id/delete-profile', async (req, res) => {
       matched_candidates: candidates?.length ? candidates : undefined,
     })
   } catch (error) {
-    console.error('[serviceApplication] Error deleting linked profile:', error)
+    routeLogger.error('[serviceApplication] Error deleting linked profile:', error)
     return res.status(500).json({
       success: false,
       message: error.message || 'Failed to delete profile',

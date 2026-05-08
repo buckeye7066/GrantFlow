@@ -69,7 +69,7 @@ router.get('/', async (req, res) => {
 
     return res.json({ notifications, unreadCount })
   } catch (error) {
-    console.error('[notifications] GET / error:', error?.message || error)
+    routeLogger.error('[notifications] GET / error:', error?.message || error)
     return res.status(500).json({ error: 'Internal server error' })
   }
 })
@@ -116,7 +116,7 @@ router.post('/:id/read', async (req, res) => {
 
     return res.json({ ok: true })
   } catch (error) {
-    console.error('[notifications] POST /:id/read error:', error?.message || error)
+    routeLogger.error('[notifications] POST /:id/read error:', error?.message || error)
     return res.status(500).json({ error: 'Internal server error' })
   }
 })
@@ -154,7 +154,7 @@ router.post('/read-all', async (req, res) => {
     const updated = Number(result?.changes ?? result?.rowCount ?? 0)
     return res.json({ ok: true, updated })
   } catch (error) {
-    console.error('[notifications] POST /read-all error:', error?.message || error)
+    routeLogger.error('[notifications] POST /read-all error:', error?.message || error)
     return res.status(500).json({ error: 'Internal server error' })
   }
 })

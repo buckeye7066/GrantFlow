@@ -171,7 +171,7 @@ export async function processNationalProgramsJob({ db, job, dataDir }) {
           const a = resultsByTrack.get('CLIENT')
           const b = resultsByTrack.get('PROVIDER')
           try {
-            db.prepare(
+            await db.prepare(
               `
                 INSERT INTO program_crosslinks (
                   client_program_id,

@@ -95,7 +95,7 @@ router.get('/', async (req, res) => {
 
     return res.json((rows || []).map(mapRow))
   } catch (error) {
-    console.error('[grant-applications] list error:', error)
+    routeLogger.error('[grant-applications] list error:', error)
     return res.status(500).json({ error: error?.message || String(error) })
   }
 })
@@ -161,7 +161,7 @@ router.post('/', async (req, res) => {
 
     return res.status(201).json(mapRow(row))
   } catch (error) {
-    console.error('[grant-applications] create error:', error)
+    routeLogger.error('[grant-applications] create error:', error)
     return res.status(500).json({ error: error?.message || String(error) })
   }
 })
@@ -185,7 +185,7 @@ router.get('/:id', async (req, res) => {
 
     return res.json(mapRow(row))
   } catch (error) {
-    console.error('[grant-applications] get error:', error)
+    routeLogger.error('[grant-applications] get error:', error)
     return res.status(500).json({ error: error?.message || String(error) })
   }
 })
@@ -258,7 +258,7 @@ router.put('/:id', async (req, res) => {
 
     return res.json(mapRow(updated))
   } catch (error) {
-    console.error('[grant-applications] update error:', error)
+    routeLogger.error('[grant-applications] update error:', error)
     return res.status(500).json({ error: error?.message || String(error) })
   }
 })
@@ -290,7 +290,7 @@ router.delete('/:id', async (req, res) => {
 
     return res.status(204).send()
   } catch (error) {
-    console.error('[grant-applications] delete error:', error)
+    routeLogger.error('[grant-applications] delete error:', error)
     return res.status(500).json({ error: error?.message || String(error) })
   }
 })
@@ -325,7 +325,7 @@ router.post('/:id/submit', async (req, res) => {
 
     return res.json(mapRow(updated))
   } catch (error) {
-    console.error('[grant-applications] submit error:', error)
+    routeLogger.error('[grant-applications] submit error:', error)
     return res.status(500).json({ error: error?.message || String(error) })
   }
 })
@@ -380,7 +380,7 @@ router.post('/:id/outcome', async (req, res) => {
 
     return res.json(mapRow(updated))
   } catch (error) {
-    console.error('[grant-applications] outcome error:', error)
+    routeLogger.error('[grant-applications] outcome error:', error)
     return res.status(500).json({ error: error?.message || String(error) })
   }
 })

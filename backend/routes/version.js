@@ -82,7 +82,7 @@ router.get('/', (req, res) => {
       },
     })
   } catch (error) {
-    console.error('[version] Failed to get version info:', error)
+    routeLogger.error('[version] Failed to get version info:', error)
     res.status(500).json({
       error: 'failed_to_get_version',
       message: 'Could not retrieve version information',

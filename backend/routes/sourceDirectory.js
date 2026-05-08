@@ -77,7 +77,7 @@ router.get('/', async (req, res) => {
 
     return res.json((rows || []).map(mapRow))
   } catch (error) {
-    console.error('[source-directory] list error:', error)
+    routeLogger.error('[source-directory] list error:', error)
     return res.status(500).json({ error: error?.message || String(error) })
   }
 })
@@ -92,7 +92,7 @@ router.get('/:id', async (req, res) => {
     if (!(await ensureOrganizationAccess(req, res, String(row.discovered_for_organization_id)))) return
     return res.json(mapRow(row))
   } catch (error) {
-    console.error('[source-directory] get error:', error)
+    routeLogger.error('[source-directory] get error:', error)
     return res.status(500).json({ error: error?.message || String(error) })
   }
 })
@@ -158,7 +158,7 @@ router.post('/', async (req, res) => {
     const row = await req.db.prepare('SELECT * FROM source_directory WHERE id = ?').get(id)
     return res.status(201).json(mapRow(row))
   } catch (error) {
-    console.error('[source-directory] create error:', error)
+    routeLogger.error('[source-directory] create error:', error)
     return res.status(500).json({ error: error?.message || String(error) })
   }
 })
@@ -221,7 +221,7 @@ router.put('/:id', async (req, res) => {
     const row = await req.db.prepare('SELECT * FROM source_directory WHERE id = ?').get(String(req.params.id))
     return res.json(mapRow(row))
   } catch (error) {
-    console.error('[source-directory] update error:', error)
+    routeLogger.error('[source-directory] update error:', error)
     return res.status(500).json({ error: error?.message || String(error) })
   }
 })
@@ -238,7 +238,7 @@ router.delete('/:id', async (req, res) => {
     await req.db.prepare('DELETE FROM source_directory WHERE id = ?').run(String(req.params.id))
     return res.json({ ok: true })
   } catch (error) {
-    console.error('[source-directory] delete error:', error)
+    routeLogger.error('[source-directory] delete error:', error)
     return res.status(500).json({ error: error?.message || String(error) })
   }
 })

@@ -412,7 +412,7 @@ router.post('/discoverLocalSources', async (req, res) => {
 
     return res.json({ success: true, added })
   } catch (error) {
-    console.error('[legacyFunctions] discoverLocalSources error:', error)
+    routeLogger.error('[legacyFunctions] discoverLocalSources error:', error)
     return res.status(500).json({ success: false, message: error?.message || String(error) })
   }
 })
@@ -469,7 +469,7 @@ router.post('/crawlSourceDirectory', async (req, res) => {
 
     return res.json({ success: true })
   } catch (error) {
-    console.error('[legacyFunctions] crawlSourceDirectory error:', error)
+    routeLogger.error('[legacyFunctions] crawlSourceDirectory error:', error)
     return res.status(500).json({ success: false, message: error?.message || String(error) })
   }
 })
@@ -568,7 +568,7 @@ router.post('/deleteSourceWithCascade', async (req, res) => {
       grantsDeleted,
     })
   } catch (error) {
-    console.error('[legacyFunctions] deleteSourceWithCascade error:', error)
+    routeLogger.error('[legacyFunctions] deleteSourceWithCascade error:', error)
     return res.status(500).json({ success: false, message: error?.message || String(error) })
   }
 })
@@ -665,7 +665,7 @@ Notes:
       },
     })
   } catch (error) {
-    console.error('[legacyFunctions] analyzeGrant error:', error)
+    routeLogger.error('[legacyFunctions] analyzeGrant error:', error)
     return res.status(500).json({ success: false, error: error?.message || String(error) })
   }
 })

@@ -200,7 +200,7 @@ router.get('/:id/artifacts/:artifactId/download', async (req, res) => {
   res.setHeader('Content-Disposition', `attachment; filename="application_${row.id}_${artifact.id}${ext || ''}"`)
   const stream = fs.createReadStream(resolved)
 stream.on('error', (err) => {
-  console.error('[applications] artifact stream error', { artifactId: req.params.artifactId, err })
+  routeLogger.error('[applications] artifact stream error', { artifactId: req.params.artifactId, err })
   if (!res.headersSent) {
     res.status(500).json({ error: 'File read error' })
   }

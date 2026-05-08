@@ -55,7 +55,7 @@ export function createAuthMeRouter({ db, adminName, adminEmail }) {
         let dbUser, profiles
 
         try {
-          dbUser = db
+          dbUser = await db
             .prepare(
               `
                 SELECT *
@@ -78,7 +78,7 @@ export function createAuthMeRouter({ db, adminName, adminEmail }) {
           // Create the user record on-demand so the frontend auth bootstrap (`/api/auth/me`) is not brittle.
           if (user.role === 'admin' || user.is_admin === true) {
             try {
-              db.prepare(
+              await db.prepare(
                 `
                   INSERT INTO users (id, display_name, primary_email, is_admin)
                   VALUES (?, ?, ?, ?)
@@ -90,7 +90,7 @@ export function createAuthMeRouter({ db, adminName, adminEmail }) {
                 true,
               )
 
-              dbUser = db
+              dbUser = await db
                 .prepare(
                   `
                     SELECT *
@@ -130,7 +130,7 @@ export function createAuthMeRouter({ db, adminName, adminEmail }) {
           if (isAdminUser) {
             // Admin UX expects cross-org profile selection.
             // Return a large (but bounded) list to avoid "missing profiles" in the UI.
-            profiles = db
+            profiles = await db
               .prepare(
                 `
                   SELECT id, display_name, organization_id, status
@@ -169,7 +169,7 @@ export function createAuthMeRouter({ db, adminName, adminEmail }) {
 
             if (emails.length > 0) {
               const placeholders = emails.map(() => '?').join(', ')
-              profiles = db
+              profiles = await db
                 .prepare(
                   `
                     SELECT DISTINCT p.id, p.display_name, p.organization_id, p.status
@@ -183,7 +183,7 @@ export function createAuthMeRouter({ db, adminName, adminEmail }) {
                 )
                 .all(dbUser.id, ...emails)
             } else {
-              profiles = db
+              profiles = await db
                 .prepare(
                   `
                     SELECT id, display_name, organization_id, status
@@ -281,7 +281,7 @@ export function createAuthMeRouter({ db, adminName, adminEmail }) {
         const hc = await db.healthcheck()
         if (!hc?.ok) throw new Error(hc?.error || 'Database healthcheck failed')
       } else {
-        db.prepare('SELECT COUNT(*) as count FROM users').get()
+        await db.prepare('SELECT COUNT(*) as count FROM users').get()
       }
       diagnostics.auth.database = 'connected'
     } catch (error) {

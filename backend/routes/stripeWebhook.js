@@ -29,7 +29,7 @@ router.post('/', async (req, res) => {
   try {
     record = await recordStripeEventIfNew(req.db, event)
   } catch (recordErr) {
-    console.error('Stripe webhook: failed to record event idempotency key', { eventId: event?.id, error: recordErr?.message })
+    routeLogger.error('Stripe webhook: failed to record event idempotency key', { eventId: event?.id, error: recordErr?.message })
     return res.status(500).json({ ok: false, error: 'idempotency_check_failed', message: recordErr?.message })
   }
   if (record?.ok && record.inserted === false) {
@@ -96,7 +96,7 @@ router.post('/', async (req, res) => {
       } else if (kind === 'service_purchase') {
         const purchaseId = String(metadata.purchase_id || '').trim()
         if (purchaseId) {
-          const spResult = req.db.prepare(
+          const spResult = await req.db.prepare(
             `UPDATE service_purchases
              SET status = 'paid',
                  stripe_payment_intent_id = COALESCE(stripe_payment_intent_id, ?),
@@ -105,7 +105,7 @@ router.post('/', async (req, res) => {
              WHERE id = ?`
           ).run(paymentIntent, checkoutSessionId, purchaseId)
           if (spResult.changes === 0) {
-            console.error('Stripe webhook: service_purchase UPDATE matched 0 rows â purchaseId not found in DB', { purchaseId, eventId: event?.id, checkoutSessionId })
+            routeLogger.error('Stripe webhook: service_purchase UPDATE matched 0 rows â purchaseId not found in DB', { purchaseId, eventId: event?.id, checkoutSessionId })
           }
         }
       }

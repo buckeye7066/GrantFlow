@@ -31,7 +31,7 @@ async function contactsHasProfileIdColumn(db) {
     }
 
     // sqlite
-    const rows = db.prepare(`PRAGMA table_info(contacts)`).all()
+    const rows = await db.prepare(`PRAGMA table_info(contacts)`).all()
     contactsHasProfileIdColumnCache = (rows || []).some((r) => String(r?.name || '') === 'profile_id')
     return contactsHasProfileIdColumnCache
   } catch {
@@ -125,7 +125,7 @@ router.get('/', async (req, res) => {
 
     return res.json(rows || [])
   } catch (error) {
-    console.error('[contacts] list error:', error)
+    routeLogger.error('[contacts] list error:', error)
     return res.status(500).json({ error: error?.message || String(error) })
   }
 })
@@ -151,7 +151,7 @@ router.get('/:id', async (req, res) => {
     
     return res.json(row)
   } catch (error) {
-    console.error('[contacts] get error:', error)
+    routeLogger.error('[contacts] get error:', error)
     return res.status(500).json({ error: error?.message || String(error) })
   }
 })
@@ -231,7 +231,7 @@ router.post('/', async (req, res) => {
     const row = await req.db.prepare('SELECT * FROM contacts WHERE id = ?').get(id)
     return res.status(201).json(row)
   } catch (error) {
-    console.error('[contacts] create error:', error)
+    routeLogger.error('[contacts] create error:', error)
     return res.status(500).json({ error: error?.message || String(error) })
   }
 })
@@ -299,7 +299,7 @@ router.put('/:id', async (req, res) => {
     const row = await req.db.prepare('SELECT * FROM contacts WHERE id = ?').get(String(req.params.id))
     return res.json(row)
   } catch (error) {
-    console.error('[contacts] update error:', error)
+    routeLogger.error('[contacts] update error:', error)
     return res.status(500).json({ error: error?.message || String(error) })
   }
 })
@@ -316,7 +316,7 @@ router.delete('/:id', async (req, res) => {
     await req.db.prepare('DELETE FROM contacts WHERE id = ?').run(String(req.params.id))
     return res.json({ ok: true })
   } catch (error) {
-    console.error('[contacts] delete error:', error)
+    routeLogger.error('[contacts] delete error:', error)
     return res.status(500).json({ error: error?.message || String(error) })
   }
 })

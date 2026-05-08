@@ -214,7 +214,7 @@ router.post('/comprehensive-match', async (req, res) => {
       profile
     })
   } catch (error) {
-    console.error('Comprehensive match error:', error)
+    routeLogger.error('Comprehensive match error:', error)
     res.status(500).json({ error: error.message })
   }
 })
@@ -270,7 +270,7 @@ router.post('/ecf-service-search', async (req, res) => {
       profile
     })
   } catch (error) {
-    console.error('ECF service search error:', error)
+    routeLogger.error('ECF service search error:', error)
     res.status(500).json({ error: error.message })
   }
 })

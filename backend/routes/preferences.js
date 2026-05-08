@@ -151,7 +151,7 @@ router.get('/', async (req, res) => {
 
     res.json(mapPreferencesRow(preferences))
   } catch (error) {
-    console.error('[preferences] Error fetching preferences:', error)
+    routeLogger.error('[preferences] Error fetching preferences:', error)
     res.status(500).json({ error: 'Failed to fetch preferences' })
   }
 })
@@ -238,7 +238,7 @@ router.put('/', async (req, res) => {
     
     res.json(mapPreferencesRow(updated))
   } catch (error) {
-    console.error('[preferences] Error updating preferences:', error)
+    routeLogger.error('[preferences] Error updating preferences:', error)
     res.status(500).json({ error: 'Failed to update preferences' })
   }
 })
@@ -275,7 +275,7 @@ router.post('/reset', async (req, res) => {
     
     res.json(mapPreferencesRow(preferences))
   } catch (error) {
-    console.error('[preferences] Error resetting preferences:', error)
+    routeLogger.error('[preferences] Error resetting preferences:', error)
     res.status(500).json({ error: 'Failed to reset preferences' })
   }
 })

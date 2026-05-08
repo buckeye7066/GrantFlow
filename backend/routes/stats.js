@@ -97,7 +97,7 @@ router.get('/dashboard', standardRateLimiter, async (req, res) => {
       isRealData: false,
     })
   } catch (error) {
-    console.error('[stats/dashboard] Error:', error)
+    routeLogger.error('[stats/dashboard] Error:', error)
     return res.status(500).json({
       error: 'Failed to fetch dashboard stats',
       organizations: 0,

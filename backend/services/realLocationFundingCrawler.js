@@ -1552,8 +1552,8 @@ export async function seedAllRealFunding(db) {
   const counts = await getOpportunityCountsByState(db);
   
   const totalRow = await (db?.dialect === 'postgres' 
-      ? db.prepare('SELECT COUNT(*) as count FROM funding_opportunities WHERE is_active = TRUE').get()
-      : db.prepare('SELECT COUNT(*) as count FROM funding_opportunities WHERE is_active = 1').get())
+      ? await db.prepare('SELECT COUNT(*) as count FROM funding_opportunities WHERE is_active = TRUE').get()
+      : await db.prepare('SELECT COUNT(*) as count FROM funding_opportunities WHERE is_active = 1').get())
   const total = Number(totalRow?.count || 0)
   
   console.log(`[RealFunding] Complete. Total active opportunities: ${total}`);

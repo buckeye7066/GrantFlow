@@ -110,7 +110,7 @@ router.get('/', async (req, res) => {
 
     return res.json((rows || []).map(mapRow))
   } catch (error) {
-    console.error('[budgets] list error:', error)
+    routeLogger.error('[budgets] list error:', error)
     return res.status(500).json({ error: error?.message || String(error) })
   }
 })
@@ -126,7 +126,7 @@ router.get('/:id', async (req, res) => {
     if (!grant) return
     return res.json(mapRow(row))
   } catch (error) {
-    console.error('[budgets] get error:', error)
+    routeLogger.error('[budgets] get error:', error)
     return res.status(500).json({ error: error?.message || String(error) })
   }
 })
@@ -182,7 +182,7 @@ if (total < 0) return res.status(400).json({ error: 'Budget total cannot be nega
     const row = await req.db.prepare('SELECT * FROM budgets WHERE id = ?').get(id)
     return res.status(201).json(mapRow(row))
   } catch (error) {
-    console.error('[budgets] create error:', error)
+    routeLogger.error('[budgets] create error:', error)
     return res.status(500).json({ error: error?.message || String(error) })
   }
 })
@@ -238,7 +238,7 @@ if (total < 0) return res.status(400).json({ error: 'Budget total cannot be nega
     const row = await req.db.prepare('SELECT * FROM budgets WHERE id = ?').get(String(req.params.id))
     return res.json(mapRow(row))
   } catch (error) {
-    console.error('[budgets] update error:', error)
+    routeLogger.error('[budgets] update error:', error)
     return res.status(500).json({ error: error?.message || String(error) })
   }
 })
@@ -256,7 +256,7 @@ router.delete('/:id', async (req, res) => {
     await req.db.prepare('DELETE FROM budgets WHERE id = ?').run(String(req.params.id))
     return res.json({ ok: true })
   } catch (error) {
-    console.error('[budgets] delete error:', error)
+    routeLogger.error('[budgets] delete error:', error)
     return res.status(500).json({ error: error?.message || String(error) })
   }
 })

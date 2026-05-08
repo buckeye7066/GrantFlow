@@ -80,7 +80,7 @@ router.get('/', async (req, res) => {
       items: rows || [],
     })
   } catch (error) {
-    console.error('[outreach-logs] list error:', error)
+    routeLogger.error('[outreach-logs] list error:', error)
     return res.status(500).json(formatError(error))
   }
 })
@@ -181,7 +181,7 @@ if (occurredAtRaw) {
 
     return res.status(201).json(row)
   } catch (error) {
-    console.error('[outreach-logs] create error:', error)
+    routeLogger.error('[outreach-logs] create error:', error)
     return res.status(500).json(formatError(error))
   }
 })
@@ -203,7 +203,7 @@ router.delete('/:id', async (req, res) => {
     await req.db.prepare('DELETE FROM outreach_logs WHERE id = ?').run(id)
     return res.json({ ok: true })
   } catch (error) {
-    console.error('[outreach-logs] delete error:', error)
+    routeLogger.error('[outreach-logs] delete error:', error)
     return res.status(500).json(formatError(error))
   }
 })

@@ -460,7 +460,7 @@ router.get('/jobs', async (req, res) => {
         try {
           return mapJob(row)
         } catch (err) {
-          console.error('Error mapping job row:', err)
+          routeLogger.error('Error mapping job row:', err)
           return { error: err.message, id: row?.id }
         }
       })
@@ -983,7 +983,7 @@ router.get('/jobs/metrics', async (req, res) => {
       recent_failures: recentFailures,
     })
   } catch (error) {
-    console.error('Error building crawler job metrics:', error)
+    routeLogger.error('Error building crawler job metrics:', error)
     if (!res.headersSent) {
       res.status(500).json({ error: error.message || 'Error building crawler job metrics' })
     }
@@ -1015,7 +1015,7 @@ router.get('/jobs/:id', async (req, res) => {
       lineage,
     })
   } catch (error) {
-    console.error('Error fetching crawler job:', error)
+    routeLogger.error('Error fetching crawler job:', error)
     res.status(500).json(formatError(error))
   }
 })
@@ -1336,7 +1336,7 @@ router.post('/jobs/:id/retry', async (req, res) => {
 
     res.status(201).json(mapJob(newJob))
   } catch (error) {
-    console.error('Error retrying crawler job:', error)
+    routeLogger.error('Error retrying crawler job:', error)
     res.status(500).json(formatError(error))
   }
 })
@@ -1378,7 +1378,7 @@ router.post('/jobs/:id/cancel', async (req, res) => {
     const updated = await req.db.prepare('SELECT * FROM crawler_jobs WHERE id = ?').get(job.id)
     res.json(mapJob(updated))
   } catch (error) {
-    console.error('Error cancelling crawler job:', error)
+    routeLogger.error('Error cancelling crawler job:', error)
     res.status(500).json(formatError(error))
   }
 })
@@ -1581,7 +1581,7 @@ router.patch('/jobs/:id', async (req, res) => {
     const updated = await req.db.prepare('SELECT * FROM crawler_jobs WHERE id = ?').get(req.params.id)
     res.json(mapJob(updated))
   } catch (error) {
-    console.error('Error updating crawler job:', error)
+    routeLogger.error('Error updating crawler job:', error)
     res.status(500).json(formatError(error))
   }
 })
@@ -1621,7 +1621,7 @@ router.get('/auto-discovery-status/:profileId', async (req, res) => {
       failed: stats.failed || 0,
     })
   } catch (error) {
-    console.error('Error fetching auto-discovery status:', error)
+    routeLogger.error('Error fetching auto-discovery status:', error)
     return res.status(500).json(formatError(error))
   }
 })
@@ -1707,7 +1707,7 @@ router.post('/bulk-populate', async (req, res) => {
       errors: errors.length > 0 ? errors : undefined
     })
   } catch (error) {
-    console.error('Error in bulk populate:', error)
+    routeLogger.error('Error in bulk populate:', error)
     res.status(500).json(formatError(error))
   }
 })
@@ -1744,7 +1744,7 @@ router.post('/crawl-all-counties', async (req, res) => {
       note: 'Each county now has United Way, Food Bank, Housing Authority, Community Action, and Salvation Army entries'
     })
   } catch (error) {
-    console.error('[crawl-all-counties] Error:', error)
+    routeLogger.error('[crawl-all-counties] Error:', error)
     res.status(500).json(formatError(error))
   }
 })
@@ -1776,7 +1776,7 @@ router.post('/crawl-state-counties/:state', async (req, res) => {
       errors: result.errors
     })
   } catch (error) {
-    console.error(`[crawl-state-counties] Error for ${state}:`, error)
+    routeLogger.error(`[crawl-state-counties] Error for ${state}:`, error)
     res.status(500).json(formatError(error))
   }
 })
@@ -1897,7 +1897,7 @@ router.post('/seed-local-networks', async (req, res) => {
       total_opportunities: totalCount
     })
   } catch (error) {
-    console.error('[seed-local-networks] Error:', error)
+    routeLogger.error('[seed-local-networks] Error:', error)
     res.status(500).json(formatError(error))
   }
 })
@@ -2001,7 +2001,7 @@ router.post('/seed-state-assistance', async (req, res) => {
       total_opportunities: totalCount
     })
   } catch (error) {
-    console.error('[seed-state-assistance] Error:', error)
+    routeLogger.error('[seed-state-assistance] Error:', error)
     res.status(500).json(formatError(error))
   }
 })
@@ -2037,7 +2037,7 @@ router.post('/crawl-grants-gov', async (req, res) => {
       note: 'All opportunities are REAL federal grants from Grants.gov'
     })
   } catch (error) {
-    console.error('[crawl-grants-gov] Error:', error)
+    routeLogger.error('[crawl-grants-gov] Error:', error)
     res.status(500).json(formatError(error))
   }
 })
@@ -2081,7 +2081,7 @@ router.post('/remove-loans', async (req, res) => {
       message: 'All loans and matching-fund opportunities have been removed'
     })
   } catch (error) {
-    console.error('[remove-loans] Error:', error)
+    routeLogger.error('[remove-loans] Error:', error)
     res.status(500).json(formatError(error))
   }
 })
@@ -2116,7 +2116,7 @@ router.post('/seed-all-real', async (req, res) => {
       note: 'All opportunities have verified, clickable URLs to real funding sources'
     })
   } catch (error) {
-    console.error('[seed-all-real] Error:', error)
+    routeLogger.error('[seed-all-real] Error:', error)
     res.status(500).json(formatError(error))
   }
 })
@@ -2154,12 +2154,12 @@ router.post('/seed-real-opportunities', async (req, res) => {
     
     for (const opp of opportunities) {
       try {
-        const existing = req.db.prepare(
+        const existing = await req.db.prepare(
           'SELECT id FROM funding_opportunities WHERE id = ? OR (source = ? AND source_id = ?)'
         ).get(opp.id, opp.source, opp.source_id || opp.id)
         
         if (existing) {
-          req.db.prepare(`
+          await req.db.prepare(`
             UPDATE funding_opportunities SET
               title = ?, sponsor = ?, description = ?, amount_min = ?, amount_max = ?,
               deadline = ?, deadline_type = ?, application_url = ?, source_url = ?,
@@ -2178,7 +2178,7 @@ router.post('/seed-real-opportunities', async (req, res) => {
           )
           updated++
         } else {
-          req.db.prepare(`
+          await req.db.prepare(`
             INSERT INTO funding_opportunities (
               id, title, sponsor, source, source_id, source_url, description,
               amount_min, amount_max, deadline, deadline_type, application_url,
@@ -2213,7 +2213,7 @@ router.post('/seed-real-opportunities', async (req, res) => {
       errors: errors.length > 0 ? errors : undefined
     })
   } catch (error) {
-    console.error('[seed-real] Error:', error)
+    routeLogger.error('[seed-real] Error:', error)
     res.status(500).json(formatError(error))
   }
 })
@@ -2336,7 +2336,7 @@ router.get('/health', async (req, res) => {
       warnings: warnings.length > 0 ? warnings : undefined
     })
   } catch (error) {
-    console.error('[crawlers/health] Error:', error)
+    routeLogger.error('[crawlers/health] Error:', error)
     res.status(500).json({ 
       status: 'error', 
       error: 'Failed to get crawler health',
@@ -2386,7 +2386,7 @@ router.post('/real-crawl', async (req, res) => {
       ...result
     })
   } catch (error) {
-    console.error('[real-crawl] Error:', error)
+    routeLogger.error('[real-crawl] Error:', error)
     res.status(500).json(formatError(error))
   }
 })
@@ -2409,7 +2409,7 @@ router.get('/portal-check-results/:profileId', standardRateLimiter, async (req, 
     const results = await getPortalCheckStatus(req.db, profileId)
     return res.json({ profileId, results })
   } catch (error) {
-    console.error('[portal-check-results] Error:', error)
+    routeLogger.error('[portal-check-results] Error:', error)
     return res.status(500).json(formatError(error))
   }
 })
@@ -2500,7 +2500,7 @@ router.post('/profile-change', standardRateLimiter, async (req, res) => {
     })
 
   } catch (err) {
-    console.error('[profile-reval]', err)
+    routeLogger.error('[profile-reval]', err)
     res.status(500).json({ error: 'internal_error' })
   }
 })
@@ -2539,7 +2539,7 @@ router.post('/foundation-990/batch', async (req, res) => {
       message: `Foundation 990 batch job queued: ${states.length} states, ${ntee_codes.length} NTEE codes`,
     })
   } catch (err) {
-    console.error('[foundation-990/batch]', err)
+    routeLogger.error('[foundation-990/batch]', err)
     res.status(500).json({ error: err.message })
   }
 })

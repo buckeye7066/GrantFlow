@@ -40,7 +40,7 @@ router.get('/health', async (req, res) => {
     }
     return res.json({ status: 'ok' })
   } catch (error) {
-    console.error('[incognito] Error checking health:', error)
+    routeLogger.error('[incognito] Error checking health:', error)
     return res.status(500).json({ error: 'Failed to check Incognito status' })
   }
 })

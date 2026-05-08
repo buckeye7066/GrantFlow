@@ -82,7 +82,7 @@ router.get('/local-funding', async (req, res) => {
         `, [true, state]);
         rows = result.rows;
       } else {
-        rows = db.prepare(`
+        rows = await db.prepare(`
           SELECT title, source_url, application_url, sponsor, source, state
           FROM funding_opportunities
           WHERE is_active = ?
@@ -109,7 +109,7 @@ router.get('/local-funding', async (req, res) => {
         `, [true]);
         rows = result.rows;
       } else {
-        rows = db.prepare(`
+        rows = await db.prepare(`
           SELECT title, source_url, application_url, sponsor, source, state
           FROM funding_opportunities
           WHERE is_active = ?
@@ -145,8 +145,7 @@ router.get('/local-funding', async (req, res) => {
     })
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
-    console.error(`[colleges/local-funding] ${requestId} zip=${zip} error:`, err)
-    
+    routeLogger.error(`[colleges/local-funding] ${requestId} zip=${zip} error:`, err)
     if (err.code === 'SQLITE_ERROR' || err.code?.startsWith('42')) {
       return res.status(500).json({
         success: false,

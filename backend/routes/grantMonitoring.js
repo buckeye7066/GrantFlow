@@ -84,7 +84,7 @@ router.get('/alerts', async (req, res) => {
 
     res.json(rows)
   } catch (error) {
-    console.error('[grant-monitoring/alerts] Error:', error)
+    routeLogger.error('[grant-monitoring/alerts] Error:', error)
     res.status(500).json(formatError(error))
   }
 })
@@ -120,7 +120,7 @@ router.get('/logs', async (req, res) => {
 
     res.json(rows)
   } catch (error) {
-    console.error('[grant-monitoring/logs] Error:', error)
+    routeLogger.error('[grant-monitoring/logs] Error:', error)
     res.status(500).json(formatError(error))
   }
 })
@@ -154,7 +154,7 @@ router.put('/logs/:id', async (req, res) => {
     const updated = await req.db.prepare('SELECT * FROM grant_monitoring_logs WHERE id = ?').get(id)
     res.json(updated)
   } catch (error) {
-    console.error('[grant-monitoring/logs/:id] Error:', error)
+    routeLogger.error('[grant-monitoring/logs/:id] Error:', error)
     res.status(500).json(formatError(error))
   }
 })
@@ -277,7 +277,7 @@ router.post('/check', async (req, res) => {
       organization_id: orgId,
     })
   } catch (error) {
-    console.error('[grant-monitoring/check] Error:', error)
+    routeLogger.error('[grant-monitoring/check] Error:', error)
     res.status(500).json(formatError(error))
   }
 })

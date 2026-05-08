@@ -131,7 +131,7 @@ router.get('/', async (req, res) => {
     const provider = await fetchTrack('PROVIDER')
     return res.json({ client, provider, limit, offset })
   } catch (error) {
-    console.error('[programs] list error:', error)
+    routeLogger.error('[programs] list error:', error)
     return res.status(500).json({ error: 'Internal server error' })
   }
 })
@@ -174,7 +174,7 @@ router.get('/changes', async (req, res) => {
 
     return res.json({ track: track ?? 'ALL', data: rows, total: total ?? rows.length, limit, offset })
   } catch (error) {
-    console.error('[programs] changes error:', error)
+    routeLogger.error('[programs] changes error:', error)
     return res.status(500).json({ error: 'Internal server error' })
   }
 })
@@ -216,7 +216,7 @@ router.get('/:track/:programId', async (req, res) => {
 
     return res.json({ track, program, versions, events })
   } catch (error) {
-    console.error('[programs] detail error:', error)
+    routeLogger.error('[programs] detail error:', error)
     return res.status(500).json({ error: 'Internal server error' })
   }
 })

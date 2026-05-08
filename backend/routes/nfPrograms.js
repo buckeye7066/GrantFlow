@@ -127,7 +127,7 @@ router.get('/', async (req, res) => {
       offset,
     })
   } catch (error) {
-    console.error('[nfPrograms] list error:', error)
+    routeLogger.error('[nfPrograms] list error:', error)
     res.status(500).json({ error: 'Internal server error' })
   }
 })
@@ -159,7 +159,7 @@ router.get('/:track/:programId', async (req, res) => {
 
     res.json({ program: decorate(row), versions })
   } catch (error) {
-    console.error('[nfPrograms] detail error:', error)
+    routeLogger.error('[nfPrograms] detail error:', error)
     res.status(500).json({ error: 'Internal server error' })
   }
 })

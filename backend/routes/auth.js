@@ -1675,7 +1675,7 @@ router.post('/email/start', emailStartLimiter, async (req, res) => {
       credential = result.credential
       routeLogger.info('[auth/email/start] User credential ensured for:', email, 'user_id:', user?.id)
     } catch (dbError) {
-      console.error('[auth/email/start] Database error ensuring credential:', dbError)
+      routeLogger.error('[auth/email/start] Database error ensuring credential:', dbError)
       return res.status(500).json({ 
         error: 'Database error occurred. Please try again.',
         error_type: 'database_error',
@@ -1725,7 +1725,7 @@ router.post('/email/start', emailStartLimiter, async (req, res) => {
         .run(codeHash, nowISOString(), credential.id)
       routeLogger.info('[auth/email/start] Verification code stored in database for:', email)
     } catch (dbError) {
-      console.error('[auth/email/start] Database error storing verification code:', dbError)
+      routeLogger.error('[auth/email/start] Database error storing verification code:', dbError)
       return res.status(500).json({ 
         error: 'Failed to create verification code. Please try again.',
         error_type: 'database_error',
@@ -1796,7 +1796,7 @@ router.post('/email/start', emailStartLimiter, async (req, res) => {
     
   } catch (error) {
     // Catch-all for any unexpected errors
-    console.error('[auth/email/start] Unexpected error:', error)
+    routeLogger.error('[auth/email/start] Unexpected error:', error)
     sendAuthAttemptNotification({
       event: 'email_start',
       identifier: typeof req.body?.email === 'string' ? req.body.email : 'unknown',
@@ -2110,7 +2110,7 @@ router.post('/phone/start', phoneStartLimiter, async (req, res) => {
     user = result.user
     credential = result.credential
   } catch (dbError) {
-    console.error('[auth/phone/start] Database error ensuring credential:', dbError)
+    routeLogger.error('[auth/phone/start] Database error ensuring credential:', dbError)
     return res.status(500).json({ error: 'Database error occurred. Please try again.', error_type: 'database_error' })
   }
   const now = new Date()
@@ -2469,7 +2469,7 @@ router.post('/access/check', async (req, res) => {
       hasPassword,
     })
   } catch (error) {
-    console.error('[auth/access/check] Unexpected error:', error)
+    routeLogger.error('[auth/access/check] Unexpected error:', error)
     return res.status(500).json({ error: 'An unexpected error occurred', error_type: 'internal_error' })
   }
 })
@@ -2649,7 +2649,7 @@ router.post('/password/setup/start', passwordRateLimiter, async (req, res) => {
 
     return res.status(202).json(response)
   } catch (error) {
-    console.error('[auth/password/setup/start] Unexpected error:', error)
+    routeLogger.error('[auth/password/setup/start] Unexpected error:', error)
     return res.status(500).json({ error: 'An unexpected error occurred', error_type: 'internal_error' })
   }
 })
@@ -2766,7 +2766,7 @@ router.post('/password/reset/start', passwordRateLimiter, async (req, res) => {
 
     return res.status(202).json(response)
   } catch (error) {
-    console.error('[auth/password/reset/start] Unexpected error:', error)
+    routeLogger.error('[auth/password/reset/start] Unexpected error:', error)
     return res.status(500).json({ error: 'An unexpected error occurred', error_type: 'internal_error' })
   }
 })
@@ -2853,7 +2853,7 @@ router.post('/password/setup/complete', passwordRateLimiter, async (req, res) =>
       user: buildUserPayload(user, profiles, activeProfileId),
     })
   } catch (error) {
-    console.error('[auth/password/setup/complete] Unexpected error:', error)
+    routeLogger.error('[auth/password/setup/complete] Unexpected error:', error)
     return res.status(500).json({ error: 'An unexpected error occurred', error_type: 'internal_error' })
   }
 })
@@ -2938,7 +2938,7 @@ router.post('/password/login', passwordRateLimiter, async (req, res) => {
       user: buildUserPayload(user, profiles, activeProfileId),
     })
   } catch (error) {
-    console.error('[auth/password/login] Unexpected error:', error)
+    routeLogger.error('[auth/password/login] Unexpected error:', error)
     return res.status(500).json({ error: 'An unexpected error occurred', error_type: 'internal_error' })
   }
 })
@@ -2986,7 +2986,7 @@ router.get('/:provider/start', async (req, res) => {
     routeLogger.info(`[auth] Redirecting to ${provider} OAuth authorization page`)
     return res.redirect(authorizeUrl)
   } catch (error) {
-    console.error(`[auth] Error starting OAuth flow for ${provider}:`, error)
+    routeLogger.error(`[auth] Error starting OAuth flow for ${provider}:`, error)
     return res.status(500).json({ 
       error: 'Failed to initiate OAuth flow',
       provider,
@@ -3193,7 +3193,7 @@ router.get('/me', async (req, res) => {
       tourDismissedAt,
     })
   } catch (error) {
-    console.error('[auth/me] Unexpected error:', error)
+    routeLogger.error('[auth/me] Unexpected error:', error)
     return res.status(500).json({ 
       error: 'An unexpected error occurred',
       error_type: 'internal_error',
@@ -3274,7 +3274,7 @@ router.patch('/onboarding-state', async (req, res) => {
       tourDismissedAt: row?.tour_dismissed_at ?? null,
     })
   } catch (error) {
-    console.error('[auth/onboarding-state] Unexpected error:', error)
+    routeLogger.error('[auth/onboarding-state] Unexpected error:', error)
     return res.status(500).json({
       error: 'An unexpected error occurred',
       error_type: 'internal_error',

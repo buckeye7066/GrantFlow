@@ -437,9 +437,14 @@ router.get('/tasks/executable', adminAuth, async (req, res) => {
 // Get execution history for a specific task
 router.get('/tasks/:taskId/execution-history', async (req, res) => {
   try {
+    if (!req.ctx?.userId && !req.ctx?.isAdmin) {
+      return res.status(401).json({ error: 'Authentication required' })
+    }
     const { getTaskExecutionHistory } = await import('../services/anyaTaskExecutionHelper.js')
-    
-    const history = await getTaskExecutionHistory(req.db, req.params.taskId)
+    const history = await getTaskExecutionHistory(req.db, req.params.taskId, req.ctx)
+    if (history.error === 'forbidden') {
+      return res.status(403).json({ error: 'Not authorized to view this task' })
+    }
     res.json({ ok: true, ...history })
   } catch (error) {
     handleError(res, error)

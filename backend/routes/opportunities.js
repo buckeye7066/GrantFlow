@@ -968,13 +968,47 @@ router.get('/', async (req, res) => {
     }
 
     const mainTrust = filterByTrust(withoutExpired);
+    // Project rule: zero-results is a failure state. If the trust filter
+    // collapses the entire candidate pool to 0 included, relax once to allow
+    // expired/lower-trust rows so users always see something when something
+    // exists. Logs the reasons that caused the original drop for explainability.
+    let trustRelaxed = false
+    let finalKept = mainTrust.kept
+    let finalDropped = mainTrust.dropped
+    let finalDroppedReasons = mainTrust.droppedReasons
+    if (mainTrust.kept.length === 0 && Array.isArray(withoutExpired) && withoutExpired.length > 0) {
+      const relaxed = []
+      for (const row of withoutExpired) {
+        const trust = assessOpportunityTrust(row, {
+          allowDirectory: true,
+          allowExpired: true,
+          allowLoans: true,
+          allowMatchingFunds: true,
+        })
+        if (trust.display || trust.trustTier !== 'low') {
+          relaxed.push(row)
+        }
+      }
+      if (relaxed.length > 0) {
+        finalKept = relaxed
+        finalDropped = withoutExpired.length - relaxed.length
+        finalDroppedReasons = mainTrust.droppedReasons
+        trustRelaxed = true
+        console.warn('[opportunities] zero-results trust relax fallback applied', {
+          original_dropped: mainTrust.dropped,
+          relaxed_kept: relaxed.length,
+          original_drop_reasons: mainTrust.droppedReasons,
+        })
+      }
+    }
     res.json({
-      data: mainTrust.kept,
+      data: finalKept,
       total: Math.max(0, filteredTotal),
       total_found: Math.max(0, filteredTotal),
-      included: mainTrust.kept.length,
-      trust_dropped: mainTrust.dropped,
-      trust_dropped_reasons: mainTrust.droppedReasons,
+      included: finalKept.length,
+      trust_dropped: finalDropped,
+      trust_dropped_reasons: finalDroppedReasons,
+      trust_relaxed: trustRelaxed,
       limit: parsedLimit,
       offset: parsedOffset,
       compliance_requested: normalizedCompliance,
@@ -1562,7 +1596,7 @@ router.get('/:id/explain', async (req, res) => {
     const explanation = buildMatchExplanation(profile, sections, opp)
     res.json(explanation)
   } catch (err) {
-    console.error('Explain endpoint error:', err)
+    routeLogger.error('Explain endpoint error:', err)
     res.status(500).json({ error: 'Failed to generate explanation' })
   }
 })

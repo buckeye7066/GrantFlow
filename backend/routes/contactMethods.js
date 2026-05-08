@@ -69,7 +69,7 @@ router.get('/', async (req, res) => {
 
     return res.json(rows || [])
   } catch (error) {
-    console.error('[contact-methods] list error:', error)
+    routeLogger.error('[contact-methods] list error:', error)
     return res.status(500).json({ error: error?.message || String(error) })
   }
 })
@@ -84,7 +84,7 @@ router.get('/:id', async (req, res) => {
     if (!(await ensureOrganizationAccess(req, res, String(row.organization_id)))) return
     return res.json(row)
   } catch (error) {
-    console.error('[contact-methods] get error:', error)
+    routeLogger.error('[contact-methods] get error:', error)
     return res.status(500).json({ error: error?.message || String(error) })
   }
 })
@@ -133,7 +133,7 @@ router.post('/', async (req, res) => {
     const row = await req.db.prepare('SELECT * FROM contact_methods WHERE id = ?').get(id)
     return res.status(201).json(row)
   } catch (error) {
-    console.error('[contact-methods] create error:', error)
+    routeLogger.error('[contact-methods] create error:', error)
     return res.status(500).json({ error: error?.message || String(error) })
   }
 })
@@ -171,7 +171,7 @@ router.put('/:id', async (req, res) => {
     const row = await req.db.prepare('SELECT * FROM contact_methods WHERE id = ?').get(String(req.params.id))
     return res.json(row)
   } catch (error) {
-    console.error('[contact-methods] update error:', error)
+    routeLogger.error('[contact-methods] update error:', error)
     return res.status(500).json({ error: error?.message || String(error) })
   }
 })
@@ -188,7 +188,7 @@ router.delete('/:id', async (req, res) => {
     await req.db.prepare('DELETE FROM contact_methods WHERE id = ?').run(String(req.params.id))
     return res.json({ ok: true })
   } catch (error) {
-    console.error('[contact-methods] delete error:', error)
+    routeLogger.error('[contact-methods] delete error:', error)
     return res.status(500).json({ error: error?.message || String(error) })
   }
 })

@@ -98,7 +98,7 @@ export default function createGeoCrawlRouter({ uploadDir, getOpenAI } = {}) {
 
       res.status(201).json({ ok: true, run_id: geoRunId, crawler_job_id: jobId, job })
     } catch (error) {
-      console.error('[geo-crawl/start] Error:', error)
+      routeLogger.error('[geo-crawl/start] Error:', error)
       res.status(500).json({ error: error?.message || String(error) })
     }
   })
@@ -125,7 +125,7 @@ export default function createGeoCrawlRouter({ uploadDir, getOpenAI } = {}) {
 
       res.json({ ok: true, run, missing: false })
     } catch (error) {
-      console.error('[geo-crawl/runs/:runId] Error:', error)
+      routeLogger.error('[geo-crawl/runs/:runId] Error:', error)
       res.status(500).json({ error: error?.message || String(error) })
     }
   })
@@ -154,7 +154,7 @@ export default function createGeoCrawlRouter({ uploadDir, getOpenAI } = {}) {
         missing: !run,
       })
     } catch (error) {
-      console.error('[geo-crawl/events] Error:', error)
+      routeLogger.error('[geo-crawl/events] Error:', error)
       res.status(500).json({ error: error?.message || String(error) })
     }
   })

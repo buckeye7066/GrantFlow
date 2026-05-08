@@ -113,14 +113,14 @@ router.get('/', ensureAuth, async (req, res) => {
  * Profile sections hold the narrative/comprehensive data that the raw organizations table may not have.
  */
 async function mergeProfileSectionsIntoOrg(db, orgId, base) {
-  const profileRow = db
+  const profileRow = await db
     .prepare(
       `SELECT id FROM profiles WHERE organization_id = ? ORDER BY created_at ASC LIMIT 1`
     )
     .get(orgId)
   if (!profileRow?.id) return base
 
-  const sectionRows = db
+  const sectionRows = await db
     .prepare(
       `SELECT section_key, data FROM profile_sections WHERE profile_id = ?`
     )
@@ -247,12 +247,12 @@ router.post('/', ensureAuth, mutationRateLimiter, async (req, res) => {
     const placeholders = columns.map(() => '?').join(', ');
     const values = [id, ...Object.values(sanitizedData)];
     
-    req.db.prepare(`
+    await req.db.prepare(`
       INSERT INTO organizations (${columns.join(', ')})
       VALUES (${placeholders})
     `).run(...values);
     
-    const org = req.db.prepare('SELECT * FROM organizations WHERE id = ?').get(id);
+    const org = await req.db.prepare('SELECT * FROM organizations WHERE id = ?').get(id);
 
     // Keep profile_sections (and matching/crawlers) in sync with comprehensive application data.
     let profileId = null

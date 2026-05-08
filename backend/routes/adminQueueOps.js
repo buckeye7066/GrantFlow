@@ -106,7 +106,7 @@ router.get('/stats', async (req, res) => {
       generated_at: new Date().toISOString(),
     })
   } catch (err) {
-    console.error('[adminQueueOps] stats failed:', err?.message || err)
+    routeLogger.error('[adminQueueOps] stats failed:', err?.message || err)
     res.status(500).json({ error: 'Failed to load queue stats', detail: err?.message })
   }
 })
@@ -165,7 +165,7 @@ router.get('/jobs', async (req, res) => {
       rows: rows || [],
     })
   } catch (err) {
-    console.error('[adminQueueOps] list failed:', err?.message || err)
+    routeLogger.error('[adminQueueOps] list failed:', err?.message || err)
     res.status(500).json({ error: 'Failed to list jobs', detail: err?.message })
   }
 })
@@ -212,7 +212,7 @@ router.post('/jobs/:id/requeue', async (req, res) => {
       .get(jobId)
     res.json({ ok: true, job: after })
   } catch (err) {
-    console.error('[adminQueueOps] requeue failed:', err?.message || err)
+    routeLogger.error('[adminQueueOps] requeue failed:', err?.message || err)
     res.status(500).json({ error: 'Failed to requeue job', detail: err?.message })
   }
 })
@@ -254,7 +254,7 @@ router.post('/jobs/:id/cancel', async (req, res) => {
       .get(jobId)
     res.json({ ok: true, job: after })
   } catch (err) {
-    console.error('[adminQueueOps] cancel failed:', err?.message || err)
+    routeLogger.error('[adminQueueOps] cancel failed:', err?.message || err)
     res.status(500).json({ error: 'Failed to cancel job', detail: err?.message })
   }
 })
@@ -292,7 +292,7 @@ router.post('/recover-stale', async (req, res) => {
       queued_stale_ms: queuedMs,
     })
   } catch (err) {
-    console.error('[adminQueueOps] recover-stale failed:', err?.message || err)
+    routeLogger.error('[adminQueueOps] recover-stale failed:', err?.message || err)
     res.status(500).json({ error: 'Failed to recover stale jobs', detail: err?.message })
   }
 })
