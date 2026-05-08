@@ -153,12 +153,23 @@ export async function detectModuleUsage(serviceFiles = [], consumerFiles = []) {
         isMissing ? null : false
     }
   }
-  // `consumed` is true only if at least one consumer was actually checked AND
-  // every checked consumer imported the service. Unknown consumers (file not
-  // present on this deploy) are excluded from the denominator: we should not
-  // gate a release on a frontend file the backend deploy does not own.
+  // Tri-state aggregation:
+  //   - At least one consumer CHECKED AND every checked consumer imports
+  //     the service -> `consumed: true` (the integration story is proven).
+  //   - At least one consumer CHECKED AND any of them does NOT import the
+  //     service -> `consumed: false` (the integration story is broken).
+  //   - Zero consumers CHECKED (every probe came back unknown / null
+  //     because the backend deploy doesn't ship those frontend files) ->
+  //     `consumed: true`, because backend mission health is not the
+  //     authoritative gate for frontend-only consumers. The frontend's
+  //     own build pipeline is. Reporting `false` here would permanently
+  //     trip mission_service_not_globally_integrated on every prod hit
+  //     for canonical_card (3/3 frontend consumers).
   const checkedValues = Object.values(consumers).filter((v) => v !== null && v !== undefined)
-  const allConsumed = checkedValues.length > 0 && checkedValues.every(Boolean)
+  const anyChecked = checkedValues.length > 0
+  const allConsumed = anyChecked
+    ? checkedValues.every(Boolean)
+    : true
   const value = {
     service_files: serviceFiles,
     consumed: allConsumed,
@@ -434,6 +445,7 @@ export async function buildMissionHealth(db) {
     pendingMigrations: [], // surfaced by migration runner; left empty for runtime call
     crawlerSourceRunsAgeHours: crawlerSourceRunsFreshness?.age_hours ?? null,
     crawlerSourceRunsMaxAgeHours: TARGETS.crawler_source_runs_max_age_hours,
+    crawlerSourceRunsTablePresent: crawlerSourceRunsFreshness?.table_present ?? null,
     missionHealth: null,
     selfReference: true, // we ARE mission health — skip the self-reachability check
   })

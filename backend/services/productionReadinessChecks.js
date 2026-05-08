@@ -191,8 +191,24 @@ export function checkPendingMigrations({ pendingMigrations = [] } = {}) {
  * release gate only trips on this check in production OR when ageHours
  * is past the freshness window.
  */
-export function checkCrawlerFreshness({ ageHours = null, maxAgeHours = 48, env = process.env } = {}) {
+export function checkCrawlerFreshness({ ageHours = null, maxAgeHours = 48, env = process.env, tablePresent = null } = {}) {
   const isProd = String(env?.NODE_ENV || '').toLowerCase() === 'production'
+  // tablePresent=false means the underlying `crawler_source_runs` table
+  // does not yet exist on this database (e.g. migration 0066/072 has not
+  // been applied). That is a one-shot install issue, not a freshness
+  // failure -- the very next crawler run after migration will populate
+  // it. Reporting `warn` on every health hit until the next deploy
+  // uselessly trips the production_gate. Demote to `info` and tell the
+  // operator what to do.
+  if (tablePresent === false) {
+    return {
+      id: 'crawler_data_freshness',
+      level: 'info',
+      detail:
+        'crawler_source_runs table is not present yet. Apply pending migrations (0066/072) and run the next crawler — coverage outcomes will populate.',
+      ok: true,
+    }
+  }
   if (!Number.isFinite(ageHours)) {
     if (!isProd) {
       return {
@@ -280,6 +296,7 @@ export function buildProductionReadinessReport({
   pendingMigrations = [],
   crawlerSourceRunsAgeHours = null,
   crawlerSourceRunsMaxAgeHours = 48,
+  crawlerSourceRunsTablePresent = null,
   missionHealth = null,
   selfReference = false,
 } = {}) {
@@ -288,7 +305,7 @@ export function buildProductionReadinessReport({
     checkPersistentUploads({ env, storageStatus, runtimeOnly: Boolean(selfReference) }),
     checkUrlVerificationEnabled({ env }),
     checkPendingMigrations({ pendingMigrations }),
-    checkCrawlerFreshness({ ageHours: crawlerSourceRunsAgeHours, maxAgeHours: crawlerSourceRunsMaxAgeHours, env }),
+    checkCrawlerFreshness({ ageHours: crawlerSourceRunsAgeHours, maxAgeHours: crawlerSourceRunsMaxAgeHours, env, tablePresent: crawlerSourceRunsTablePresent }),
     checkMissionHealthAvailability(missionHealth, { selfReference }),
   ]
 
