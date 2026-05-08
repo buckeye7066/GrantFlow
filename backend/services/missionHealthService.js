@@ -33,6 +33,7 @@ import path from 'path'
 import { MATCHER_VERSION } from './matchEngine.js'
 import { buildFieldUsageReport } from './profileFieldUsageRegistry.js'
 import { listProfileTypes, recommendedSourcesFor, recommendStrategyFor } from './profileTypeRegistry.js'
+import { buildProductionReadinessReport } from './productionReadinessChecks.js'
 
 const TARGETS = Object.freeze({
   verified_pct_min: 95,
@@ -387,11 +388,38 @@ export async function buildMissionHealth(db) {
     // Migration 072 may not be applied on legacy DBs — ignore silently.
   }
 
+  // ── Phase I — production readiness checks ──────────────────────────
+  // Aggregate environment / storage / migrations / freshness / health-route
+  // checks. These do not flip the soft `ok` flag — they feed the strict
+  // release gate alongside the alert codes below.
+  const productionReadiness = buildProductionReadinessReport({
+    env: process.env,
+    dbDialect: db?.dialect ?? null,
+    storageStatus: null, // bootstrap maintains this; route layer can pass it through
+    pendingMigrations: [], // surfaced by migration runner; left empty for runtime call
+    crawlerSourceRunsAgeHours: crawlerSourceRunsFreshness?.age_hours ?? null,
+    crawlerSourceRunsMaxAgeHours: TARGETS.crawler_source_runs_max_age_hours,
+    missionHealth: null,
+    selfReference: true, // we ARE mission health — skip the self-reachability check
+  })
+  for (const check of productionReadiness.checks) {
+    if (check.level === 'error' || check.level === 'warn') {
+      alerts.push({
+        level: check.level,
+        code: `production_readiness:${check.id}`,
+        detail: check.detail,
+      })
+    }
+  }
+
   // ── Production release gate (strict) ────────────────────────────────
-  // Any alert whose code appears in TARGETS.release_blocking_codes
-  // — at warn OR error level — flips `production_gate` to false.
+  // Any alert whose code appears in TARGETS.release_blocking_codes,
+  // OR any production_readiness:* alert at warn/error level — flips
+  // `production_gate` to false.
   const blocking = new Set(TARGETS.release_blocking_codes)
-  const releaseBlockers = alerts.filter((a) => blocking.has(a.code))
+  const releaseBlockers = alerts.filter(
+    (a) => blocking.has(a.code) || a.code?.startsWith('production_readiness:'),
+  )
   const productionGate = releaseBlockers.length === 0
 
   return {
@@ -423,6 +451,7 @@ export async function buildMissionHealth(db) {
       profile_types_below_source_minimum: profileTypesBelowMin,
     },
     crawler_source_runs: crawlerSourceRunsFreshness,
+    production_readiness: productionReadiness,
     alerts,
   }
 }
