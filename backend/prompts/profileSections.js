@@ -66,7 +66,17 @@ Rules:
 - Use the source documents to confirm enrollment when possible.
 - When unsure, use null and mention ambiguous evidence in other_programs.
 - Do not set *_recipient_self=true when the text only says "dependent child of", "household member receives", "household receives", or "parent gets/receives"; use the matching *_recipient_household field instead.
-- other_programs should be a short comma-separated list or an empty string.
+- The following count as Medicaid enrollment for medicaid_recipient_self:
+  Medicaid, TennCare, MassHealth, Medi-Cal, Apple Health, MO HealthNet, KanCare,
+  NJ FamilyCare, Husky Health, HealthChoice, SoonerCare, Iowa Health Link,
+  TennCare CHOICES, Employment & Community First (ECF) CHOICES, HCBS waiver
+  enrollment, and managed-care plans carrying state Medicaid programs
+  (BlueCare TennCare, Amerigroup TennCare, UnitedHealthcare Community Plan,
+  Humana Healthy Horizons, Wellpoint Medicaid, Molina, Anthem Medicaid, etc.).
+- Mention specific waivers / programs / managed-care plans by their proper
+  brand name in other_programs (e.g., "ECF CHOICES (TN)", "TennCare BlueCare",
+  "UnitedHealthcare Community Plan"). other_programs should be a short
+  comma-separated list, or an empty string when nothing applies.
     `.trim(),
     keys: Object.keys(PROFILE_SCHEMA.government_assistance.fields),
   },
@@ -87,14 +97,27 @@ Rules:
   medical_insurance: {
     title: PROFILE_SCHEMA.medical_insurance.title,
     instructions: `
-Extract insurance details only when explicitly present in the profile or uploaded documents (insurance cards, enrollment letters, EOBs).
+Extract insurance details only when explicitly present in the profile or uploaded documents (insurance cards, enrollment letters, EOBs, ECF CHOICES award letters, Medicaid eligibility notices).
 Return JSON with keys: ${Object.keys(PROFILE_SCHEMA.medical_insurance.fields).join(', ')}.
 
 Rules:
 - Do NOT invent member_id or group_id. Leave them empty if not explicitly present.
 - member_id and group_id must be raw identifier strings only (no sentences, no extra commentary).
-- If the document says "Medicaid Number", that is the member_id.
+- The following labels ALL refer to the member_id, in priority order:
+  "Medicaid Number", "Medicaid Recipient ID", "Medicaid Member ID", "Medicaid #",
+  "TennCare ID", "TennCare Member ID",
+  "Recipient ID/Number/No.", "Beneficiary ID/Number/No.",
+  "Cardholder ID", "Subscriber ID", "Enrollee ID",
+  "Member ID/Number/No./#", and a bare "ID Number/No./#" when the document
+  is clearly an insurance card or eligibility notice.
+- Group, Group ID, Group No., Group # → group_id.
 - plan_type should be a short label (e.g., "Medicaid", "Medicare", "Marketplace", "HMO", "PPO") when known.
+- insurance_provider should capture the brand on the card (e.g., "TennCare BlueCare",
+  "Amerigroup TennCare", "UnitedHealthcare Community Plan", "Wellpoint Medicaid",
+  "Humana Healthy Horizons", "Molina Healthcare", "Anthem Medicaid"). When the card
+  shows TennCare or another state Medicaid program with no MCO brand, "Medicaid"
+  (or the program name, e.g., "TennCare", "MassHealth", "Medi-Cal") is acceptable.
+- effective_date should be the coverage start date (YYYY-MM-DD).
 - Keep notes high-level and non-speculative (avoid medical advice).
     `.trim(),
     keys: Object.keys(PROFILE_SCHEMA.medical_insurance.fields),

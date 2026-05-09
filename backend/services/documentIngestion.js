@@ -5,6 +5,12 @@ import { buildFallbackDocumentSummary, applyFallbackUniversityUpdates } from './
 import { classifyUniversityApplicationForDocument, loadUniversityApplicationsForProfile } from './universityDocumentClassifier.js'
 import { extractAndUpsertOpportunitiesFromText } from './extractOpportunitiesFromDocumentText.js'
 import { countWords, detectFileType, extractTextWithFallback, normalizeText, scoreExtraction, sha256File } from './documentIngestion/index.js'
+import {
+  extractBasicInformationHeuristics,
+  extractGovernmentAssistanceHeuristics,
+  extractMedicalInsuranceHeuristics,
+  extractOrganizationDetailsHeuristics,
+} from './documentIngestion/heuristics.js'
 import { guardProfileSectionForWrite } from '../utils/guardedProfileSectionWrite.js'
 import {
   ensureDocumentExtract,
@@ -78,79 +84,6 @@ function extractAnthropicText(response) {
 // IMPORTANT: OCR is handled by the ingestion pipeline (tesseract / cloud OCR providers).
 // We intentionally do NOT use an LLM vision model as an OCR fallback.
 
-function extractFirstMatch(text, regex) {
-  if (!text) return null
-  const match = String(text).match(regex)
-  const value = match?.[1] ?? match?.[0]
-  const normalized = typeof value === 'string' ? value.trim() : null
-  return normalized || null
-}
-
-function extractLabeledValue(text, labelRegex) {
-  // e.g. /(?:EIN|Tax ID)\s*[:#-]\s*([0-9-]{9,})/i
-  if (!text) return null
-  const regex = new RegExp(`${labelRegex.source}\\s*[:#\\-]?\\s*([^\\n\\r]{2,80})`, labelRegex.flags)
-  const m = String(text).match(regex)
-  const value = m?.[1]?.trim()
-  return value || null
-}
-
-function extractBasicInformationHeuristics(text) {
-  const source = String(text || '')
-
-  const email = extractFirstMatch(source, /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i)
-  const phone = extractFirstMatch(
-    source,
-    /(\+?1[\s.-]?)?(?:\(\s*\d{3}\s*\)|\d{3})[\s.-]?\d{3}[\s.-]?\d{4}/,
-  )
-  const website = extractFirstMatch(
-    source,
-    /\bhttps?:\/\/[^\s)]+/i,
-  )
-
-  const fullName =
-    extractLabeledValue(source, /(?:full\s+name|name|applicant)\b/i) ||
-    extractFirstMatch(source, /^\s*([A-Z][A-Za-z'.-]+(?:\s+[A-Z][A-Za-z'.-]+){1,4})\s*$/m)
-
-  const address =
-    extractLabeledValue(source, /(?:address|mailing\s+address)\b/i) ||
-    null
-
-  return {
-    full_name: fullName || '',
-    email: email || '',
-    phone: phone || '',
-    website: website || '',
-    address: address || '',
-    notes: '',
-  }
-}
-
-function extractOrganizationDetailsHeuristics(text) {
-  const source = String(text || '')
-
-  const ein =
-    extractFirstMatch(source, /(?:\bEIN\b|\bTax\s*ID\b)[^0-9]*([0-9]{2}-[0-9]{7})/i) ||
-    extractLabeledValue(source, /\bEIN\b/i)
-
-  const uei =
-    extractFirstMatch(source, /(?:\bUEI\b|\bUnique\s+Entity\s+ID\b)[^A-Z0-9]*([A-Z0-9]{12})/i) ||
-    extractLabeledValue(source, /\bUEI\b/i)
-
-  const cage =
-    extractFirstMatch(source, /(?:\bCAGE\b|\bCAGE\s*Code\b)[^A-Z0-9]*([A-Z0-9]{5})/i) ||
-    extractLabeledValue(source, /\bCAGE(?:\s*Code)?\b/i)
-
-  return {
-    organization_type: '',
-    ein: ein || '',
-    uei: uei || '',
-    cage_code: cage || '',
-    annual_budget: null,
-    staff_count: null,
-    mission: '',
-  }
-}
 function normalizeValue(value) {
   if (typeof value === 'string') {
     return value.trim()
@@ -251,66 +184,6 @@ function mergeSectionData(existing = {}, incoming = {}) {
   })
 
   return { data: merged, updatedFields }
-}
-
-function extractMedicalInsuranceHeuristics(text) {
-  const raw = String(text || '')
-  const singleLine = raw.replace(/[\r\n]+/g, ' ').replace(/\s{2,}/g, ' ').trim()
-
-  const extractLineValue = (labelRegex) => {
-    const re = new RegExp(`(?:^|[\\r\\n])\\s*${labelRegex.source}\\s*[:#\\-]?\\s*([^\\r\\n]+)`, labelRegex.flags)
-    const m = raw.match(re)
-    return m?.[1]?.trim() || null
-  }
-
-  const extractIdFromRemainder = (remainder) => {
-    if (!remainder) return null
-    return extractFirstMatch(String(remainder), /([A-Z0-9-]{6,40})/i)
-  }
-
-  const medicaidNumber =
-    extractIdFromRemainder(
-      extractLineValue(/\bMedicaid\s*(?:Number|No\.|ID|#|Member\s*ID)\b/i) ||
-        extractFirstMatch(singleLine, /\bMedicaid\s*(?:Number|No\.|ID|#|Member\s*ID)\b\s*[:#-]?\s*([A-Z0-9-]{6,40})\b/i),
-    ) ||
-    extractFirstMatch(singleLine, /\bMedicaid\s+([A-Z]{2,6}\d{4,20})\b/i) ||
-    null
-
-  const memberId =
-    extractIdFromRemainder(
-      extractLineValue(/\b(?:Member|Subscriber)\s*(?:ID|Number|No\.|#)\b/i) ||
-        extractFirstMatch(singleLine, /\b(?:Member|Subscriber)\s*(?:ID|Number|No\.|#)\b\s*[:#-]?\s*([A-Z0-9-]{6,40})\b/i),
-    ) ||
-    medicaidNumber
-
-  const groupId =
-    extractIdFromRemainder(
-      extractLineValue(/\bGroup\s*(?:ID|Number|No\.|#)\b/i) ||
-        extractFirstMatch(singleLine, /\bGroup\s*(?:ID|Number|No\.|#)\b\s*[:#-]?\s*([A-Z0-9-]{4,40})\b/i),
-    ) || null
-
-  const provider =
-    extractLineValue(/\bInsurance\s+provider\b/i) ||
-    extractFirstMatch(singleLine, /\bInsurance\s+provider\b\s*[:#-]?\s*([A-Za-z][A-Za-z0-9 .,'/-]{2,60})/i) ||
-    (/\bMedicaid\b/i.test(singleLine) ? 'Medicaid' : null)
-
-  const planType =
-    extractFirstMatch(extractLineValue(/\bPlan\s+type\b/i) || '', /\b(Medicaid|Medicare|Marketplace|HMO|PPO)\b/i) ||
-    extractFirstMatch(singleLine, /\bPlan\s+type\b\s*[:#-]?\s*(Medicaid|Medicare|Marketplace|HMO|PPO)\b/i) ||
-    (/\bMedicaid\b/i.test(singleLine) ? 'Medicaid' : null)
-
-  const planName =
-    extractLineValue(/\bPlan\s+name\b/i) ||
-    extractFirstMatch(singleLine, /\bPlan\s+name\b\s*[:#-]?\s*([A-Za-z0-9][A-Za-z0-9 .,'/-]{2,80})/i) ||
-    null
-
-  return {
-    insurance_provider: provider ? String(provider).replace(/\bPlan\s+name\b.*$/i, '').trim() : '',
-    plan_name: planName ? String(planName).replace(/\bPlan\s+type\b.*$/i, '').trim() : '',
-    plan_type: planType || '',
-    member_id: memberId || '',
-    group_id: groupId || '',
-  }
 }
 
 async function upsertProfileSection(db, profileId, sectionKey, data, documentId) {
@@ -730,6 +603,57 @@ export async function processDocumentIngestionJob({
         sections.medical_insurance = mergedIns
         updates.push({ section_key: 'medical_insurance', updated_fields: Array.from(updatedIns) })
         aiSectionsLog.medical_insurance = { ...(aiSectionsLog.medical_insurance || {}), heuristic: heuristicInsurance }
+      }
+
+      // Goal 2 / Goal 3: when a Medicaid (TennCare, ECF CHOICES, MassHealth,
+      // Medi-Cal, Apple Health, etc.), Medicare, SSI, SSDI, SNAP, TANF,
+      // or Section 8 document is uploaded, flip the matching benefit
+      // flag and append the program brand to other_programs so the
+      // matcher routes the applicant to the right resources without
+      // waiting for an LLM to re-discover the obvious. Heuristic only
+      // emits POSITIVE signals — silent on a program means we leave
+      // that flag untouched (neutral, not exclusionary).
+      const heuristicGov = extractGovernmentAssistanceHeuristics(document.extracted_text ?? document.notes ?? '')
+      if (Object.keys(heuristicGov).length > 0) {
+        const { data: mergedGov, updatedFields: updatedGov } = mergeSectionData(
+          sections.government_assistance ?? {},
+          heuristicGov,
+        )
+        // other_programs is a comma-separated text field — union with
+        // any existing list rather than replacing wholesale.
+        if (heuristicGov.other_programs) {
+          const existingPrograms = String(sections.government_assistance?.other_programs ?? '').trim()
+          if (existingPrograms) {
+            const parts = new Set(
+              existingPrograms
+                .split(/[,;\n]/)
+                .map((p) => p.trim())
+                .filter(Boolean),
+            )
+            for (const p of String(heuristicGov.other_programs).split(/,\s*/)) {
+              if (p) parts.add(p.trim())
+            }
+            const unioned = Array.from(parts).join(', ')
+            if (unioned !== existingPrograms) {
+              mergedGov.other_programs = unioned
+              updatedGov.add('other_programs')
+            } else {
+              mergedGov.other_programs = existingPrograms
+            }
+          }
+        }
+        if (updatedGov.size > 0) {
+          if (!profile?.id) throw new Error('Profile ID required for section updates'); await upsertProfileSection(db, profile.id, 'government_assistance', mergedGov, document.id)
+          sections.government_assistance = mergedGov
+          updates.push({
+            section_key: 'government_assistance',
+            updated_fields: Array.from(updatedGov),
+          })
+          aiSectionsLog.government_assistance = {
+            ...(aiSectionsLog.government_assistance || {}),
+            heuristic: heuristicGov,
+          }
+        }
       }
     } catch {
       // best-effort
