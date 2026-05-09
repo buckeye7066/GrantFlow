@@ -1,6 +1,13 @@
 import { describe, expect, it, vi } from "vitest"
 
-import { formatFieldLabel, formatFieldValue, humanizeFieldKey } from "@/utils/fieldDisplay"
+import {
+  formatFieldLabel,
+  formatFieldValue,
+  humanizeFieldKey,
+  isSentinelDisplayValue,
+  looksLikeObjectStringification,
+  normalizeDisplayString,
+} from "@/utils/fieldDisplay"
 
 describe("formatFieldLabel", () => {
   it("reads labels from SECTION_METADATA only", () => {
@@ -77,6 +84,85 @@ describe("formatFieldLabel", () => {
       .filter((message) => message.startsWith("[fieldDisplay] Missing or invalid SECTION_METADATA"))
     expect(offenders).toEqual([])
     warn.mockRestore()
+  })
+
+  it("never leaks raw `[object Object]` for any profile's university_applications shape (Anastasia + Robert regression guard)", () => {
+    // Real production shape we observed on student profiles. Both
+    // Anastasia (student profile) and Robert (also a student profile in
+    // this account) had the same university_applications.applications
+    // payload of nested `portals` / `costs` objects that the legacy
+    // formatter rendered as the literal string "[object Object]".
+    // This test pins down formatFieldValue so the regression cannot
+    // come back for ANY profile, not just Anastasia.
+    const application = {
+      id: "6b8a89b1-a26b-41db-834a-8e39dc1c23bf",
+      name: "Middle Tennessee State University",
+      status: "planning",
+      portals: {
+        admissions_url: "https://www.mtsu.edu/admissions/",
+        financial_aid_url: "https://www.mtsu.edu/financial-aid/",
+      },
+      costs: {
+        tuition_in_state: 9600,
+        room_and_board: 12000,
+      },
+      interests: null,
+      department_contacts: [],
+      institution_type: "university",
+    }
+
+    const formatted = formatFieldValue("university_applications", "applications", [application])
+    expect(formatted).not.toContain("[object Object]")
+    expect(formatted).toContain("Middle Tennessee State University")
+    expect(formatted).toContain("admissions url")
+    expect(formatted).toContain("https://www.mtsu.edu/admissions/")
+    expect(formatted).toContain("tuition in state: 9600")
+
+    const empty = formatFieldValue("university_applications", "applications", [])
+    expect(empty).toBe("—")
+    const nullValue = formatFieldValue("university_applications", "applications", null)
+    expect(nullValue).toBe("—")
+  })
+
+  it("collapses raw object stringifications to null at the normalize layer (defence in depth)", () => {
+    // If ANY caller — present or future, frontend or backend mirror —
+    // accidentally calls `String(obj)` on a non-array object and feeds
+    // the result into normalizeDisplayString, the user must NEVER see
+    // the raw "[object Object]" / "[object Array]" / "[object Map]"
+    // literals. This is the global trap-door that protects every
+    // profile from the same dump the user reported.
+    expect(looksLikeObjectStringification("[object Object]")).toBe(true)
+    expect(looksLikeObjectStringification("[object Map]")).toBe(true)
+    expect(looksLikeObjectStringification("[object Set]")).toBe(true)
+    expect(looksLikeObjectStringification("plain string")).toBe(false)
+    expect(looksLikeObjectStringification("[unrelated]")).toBe(false)
+
+    expect(isSentinelDisplayValue("[object Object]")).toBe(true)
+    expect(isSentinelDisplayValue("  [object Object]  ")).toBe(true)
+
+    expect(normalizeDisplayString("[object Object]")).toBeNull()
+    expect(normalizeDisplayString({ foo: "bar" })).toBeNull()
+    expect(normalizeDisplayString([1, 2, 3])).toBeNull()
+    expect(normalizeDisplayString("Real text")).toBe("Real text")
+  })
+
+  it("renders json-format fields without raw object output for arbitrary nested data (Robert-style profiles)", () => {
+    // Robert's profile (and any non-student profile that happens to
+    // have university_applications data) hits the same json formatter.
+    // Verify that even with weird shapes we never produce
+    // "[object Object]".
+    const cases = [
+      { foo: { bar: { baz: "deep" } } },
+      [{ a: 1 }, { b: 2 }],
+      { mixed: ["one", { two: 2 }, [3, 4]] },
+      { empty: {}, blank: [], nothing: null },
+    ]
+    for (const value of cases) {
+      const out = formatFieldValue("university_applications", "applications", value)
+      expect(out).toBeTypeOf("string")
+      expect(out).not.toContain("[object Object]")
+      expect(out).not.toContain("[object Array]")
+    }
   })
 
   it("humanizes unknown field keys instead of emitting Unknown field (permanent drift guard)", () => {

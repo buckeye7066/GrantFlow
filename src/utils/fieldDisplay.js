@@ -66,13 +66,39 @@ export function humanizeFieldKey(fieldKey) {
     .join(" ")
 }
 
+// Defensive: any path that ends up calling `String(obj)` on a real
+// non-array object produces the literal "[object Object]" — a value that
+// is never useful to a user and that earlier slipped through every UI
+// surface (Profile overview, Anya context dumps, comprehensive forms,
+// etc.) when the formatter forgot to recurse. By recognising it here
+// (and any "[object …]" toString variant) and at the
+// looksLikeObjectStringification check below, we make
+// `normalizeDisplayString` the global trap-door so a regression in any
+// downstream renderer can never leak the raw stringification to the
+// user. Mission goal 9 (explainable) + goal 10 (UI must not show raw
+// stringification) — applies to every profile, not just Anastasia.
+const RAW_OBJECT_TOSTRING_RE = /^\[object [A-Za-z][A-Za-z0-9_$]*\]$/
+
+export function looksLikeObjectStringification(value) {
+  if (typeof value !== "string") return false
+  return RAW_OBJECT_TOSTRING_RE.test(value.trim())
+}
+
 export function isSentinelDisplayValue(value) {
   if (value === null || value === undefined) return true
-  return SENTINEL_VALUES.has(String(value).trim().toLowerCase())
+  const raw = String(value).trim()
+  if (looksLikeObjectStringification(raw)) return true
+  return SENTINEL_VALUES.has(raw.toLowerCase())
 }
 
 export function normalizeDisplayString(value) {
   if (value === null || value === undefined) return null
+  // Catch `String(obj)` / `String(arr)` accidents BEFORE any other
+  // logic so the ugly literal can never appear in the UI for any
+  // profile.
+  if (typeof value === "object") {
+    return null
+  }
   const raw = String(value).trim()
   if (isSentinelDisplayValue(raw)) return null
   const withoutTrailingUnknown = raw.replace(/\s+unknown\s*$/i, "").trim()
