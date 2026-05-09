@@ -40,6 +40,7 @@ import { runAutoRepair } from '../services/anyaAutoRepairService.js'
 import { runRegionalPurge, getPurgeSummary, getPurgeEvents } from '../services/regionalPurgeService.js'
 import { restoreProfileSectionsFromLinkedOrganizations } from '../services/profileOrganizationSync.js'
 import { runAutonomousCodeCrawl } from '../services/anyaAutonomousCrawler.js'
+import { auditPipelinesAgainstGoals } from '../services/pipelineGoalCleanupService.js'
 
 import { createLogger } from '../utils/logger.js'
 const routeLogger = createLogger('route:admin')
@@ -4914,6 +4915,78 @@ router.post('/clear-all-pipelines', async (req, res) => {
     })
   } catch (error) {
     routeLogger.error('[admin] clear-all-pipelines error:', error)
+    res.status(500).json({ error: error.message })
+  }
+})
+
+/**
+ * POST /api/admin/clean-pipelines-against-goals
+ *
+ * Audit every profile's pipeline (the `grants` table) against the
+ * GrantFlow mission goals and remove items that fail the canonical
+ * "real funding only / matches actual needs" checks while keeping
+ * directory-style resources, items with usable URLs, and items the
+ * matcher accepts or sends to REVIEW.
+ *
+ * Removal verdicts (Goal numbers in parens):
+ *   - source_disallowed (Goal 1)
+ *   - dead_url          (Goals 1 + 7)
+ *   - duplicate_title   (Goal 9)
+ *   - wrong_state       (Goal 6)
+ *   - relevance_reject  (Goals 2 + 4)
+ *
+ * Body (all optional):
+ *   {
+ *     dry_run?: boolean = true   // when false, actually deletes
+ *   }
+ *
+ * Response:
+ *   {
+ *     success: true,
+ *     dry_run: boolean,
+ *     total_grants, profiles_with_pipeline, removed, kept,
+ *     verdict_totals: { keep, source_disallowed, dead_url, ... },
+ *     per_profile: [
+ *       { profile_id, display_name, primary_type, profile_state,
+ *         total, verdicts, removed_items: [{ id, title, verdict, reason, ruleId }] }
+ *     ]
+ *   }
+ */
+router.post('/clean-pipelines-against-goals', async (req, res) => {
+  try {
+    if (!(await ensureAdminRequest(req, res))) return
+
+    const dryRun = req.body?.dry_run !== false
+
+    const report = await auditPipelinesAgainstGoals(req.db, { dryRun })
+
+    routeLogger.info(
+      `[admin] clean-pipelines-against-goals (${dryRun ? 'DRY RUN' : 'LIVE'}): ` +
+        `audited=${report.total_grants}, removed=${report.removed}, kept=${report.kept}, ` +
+        `profiles=${report.profiles_with_pipeline}`,
+    )
+
+    if (!dryRun) {
+      try {
+        logAuditEvent(req.db, {
+          category: AUDIT_CATEGORIES.ADMIN,
+          action: 'clean_pipelines_against_goals',
+          severity: SEVERITY.WARNING,
+          userId: req.ctx?.userId ?? req.user?.userId ?? null,
+          details: {
+            removed: report.removed,
+            kept: report.kept,
+            verdict_totals: report.verdict_totals,
+          },
+        })
+      } catch {
+        // Audit log failure is non-fatal
+      }
+    }
+
+    res.json({ success: true, ...report })
+  } catch (error) {
+    routeLogger.error('[admin] clean-pipelines-against-goals error:', error)
     res.status(500).json({ error: error.message })
   }
 })
