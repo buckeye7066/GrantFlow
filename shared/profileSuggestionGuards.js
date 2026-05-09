@@ -62,7 +62,36 @@ function jaccard(a, b) {
   return intersection / union
 }
 
+/**
+ * Merge an AI-suggested long-text update into an existing value without
+ * duplicating sentences the user already has.
+ *
+ * IMPORTANT — explicit-clear semantics (Mission goal 9: explainable,
+ * Mission goal 7: clear discovery UI, plus the user-facing rule
+ * "If results are found but not displayed, treat this as a bug, not a
+ * UX choice"):
+ *   - If `suggestionValue` is explicitly an empty string (user cleared
+ *     the textarea), or only whitespace, the user wants the field
+ *     CLEARED — return `''` so the save round-trips a delete.
+ *   - If `suggestionValue` is `null` or `undefined` (no signal at all,
+ *     e.g. an AI suggestion that omitted the field), preserve the
+ *     existing value so AI augmentation never wipes user prose.
+ *   - Otherwise, splice in only the new sentences (existing behaviour).
+ *
+ * Without this distinction, every clear of `notes` / `mission` / `goals`
+ * / `personal_statement` / `needs_description` was silently reverted to
+ * the pre-edit value the moment the form re-saved — which is exactly
+ * the regression Kimberly's profile hit when the user tried to remove
+ * the incorrect "nonprofit employee and small business owner" line
+ * from her Occupational notes.
+ */
 export function dedupeLongText(existingValue, suggestionValue, threshold = 0.85) {
+  if (suggestionValue === null || suggestionValue === undefined) {
+    return existingValue ?? ''
+  }
+  if (typeof suggestionValue === 'string' && suggestionValue.trim() === '') {
+    return ''
+  }
   const existingSentences = splitSentences(existingValue)
   const nextSentences = splitSentences(suggestionValue)
   const additions = nextSentences.filter((candidate) =>

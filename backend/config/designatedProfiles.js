@@ -652,7 +652,14 @@ export const DESIGNATED_PROFILES = [
     display_name: 'Kimberly Botts',
     primary_type: 'individual',
     status: 'active',
-    tags: ['baseline', 'designated', 'entrepreneur'],
+    // Tags reflect Kimberly's actual situation (Goal 3: use the full
+    // profile, Goal 4: support all user types). She is NOT an
+    // entrepreneur — earlier seed data carried a fictional
+    // "small business owner / nonprofit founder" persona that the
+    // matcher then chased entrepreneurship grants for. Real Kimberly
+    // is disabled, enrolled in TN's ECF CHOICES Medicaid waiver, and
+    // unable to work.
+    tags: ['baseline', 'designated', 'disability', 'ecf_choices', 'hcbs_waiver'],
     sections: {
       basic_information: {
         full_name: 'Kimberly Botts',
@@ -663,10 +670,12 @@ export const DESIGNATED_PROFILES = [
       },
       demographics: {
         white_caucasian: true,
-        notes: 'White / Caucasian. Religious affiliation: Southern Baptist.',
+        disability_status: true,
+        notes: 'White / Caucasian. Religious affiliation: Southern Baptist. Adult with intellectual / developmental disability.',
       },
       government_assistance: {
         medicaid_enrolled: true,
+        ssi_recipient_self: true,
         other_programs: 'Medicaid Waiver Program, ECF CHOICES (TN) - Employment & Community First.',
       },
       health_medical: {
@@ -679,27 +688,51 @@ export const DESIGNATED_PROFILES = [
       location_focus: {
         geographic_focus: 'Cleveland, Tennessee',
       },
+      // Explicit occupation section so document-ingestion / AI fillers
+      // never re-invent the "nonprofit employee and small business
+      // owner" prose the user previously could not delete. All
+      // occupational identity flags are FALSE — Kimberly is unable to
+      // work and receives Medicaid + ECF CHOICES support.
+      occupation: {
+        healthcare_worker: false,
+        ems_worker: false,
+        educator: false,
+        firefighter: false,
+        public_servant: false,
+        clergy: false,
+        missionary: false,
+        nonprofit_employee: false,
+        small_business_owner: false,
+        union_member: false,
+        farmer: false,
+        notes:
+          'Disabled and unable to work. Receives Medicaid and is enrolled in TN ECF CHOICES (Employment & Community First Medicaid waiver). Not a business owner, not a nonprofit employee.',
+      },
+      employment: {
+        current_status: 'unable_to_work',
+        notes:
+          'Unable to work due to disability. Receives SSI and HCBS waiver supports through ECF CHOICES.',
+      },
+      family_life: {
+        household_size: 1,
+      },
       narrative: {
         mission:
-          'Support underrepresented founders, especially women and youth, by providing comprehensive resources and funding opportunities. Champion small business grants and innovation funding to transform ideas into reality.',
+          'Live independently in Cleveland, TN with the supports of TN ECF CHOICES (HCBS Medicaid waiver) and remain connected to her Southern Baptist faith community.',
         primary_goal:
-          'Support at least 50 underrepresented entrepreneurs over the next year; facilitate four annual community workshops; direct $100,000 toward small business grants within 18 months.',
+          'Maintain stable housing, dental and medical care, assistive technology, and day / community-engagement supports through ECF CHOICES and complementary disability programs.',
         target_population:
-          'Underrepresented founders, specifically women and youth entrepreneurs in Cleveland, TN who face barriers to funding, mentorship, and networking.',
+          'Adults with intellectual / developmental disabilities in rural East Tennessee who rely on Medicaid waivers, SSI, and faith-community supports.',
         funding_amount_needed:
-          '$250,000 total: $100,000 for a grant program, $75,000 for resource workshops, and $75,000 for a mentorship program.',
+          'Disability-related expenses not fully covered by Medicaid: dental work, assistive technology, accessible transportation, and respite care.',
         timeline:
-          'Establish resource platform by March; first community workshop by June; three additional workshops through the year; begin directing grant funds by end of third quarter. 18-month overall timeline.',
-        past_experience:
-          'Founded a mentorship program connecting underrepresented founders with seasoned entrepreneurs (75% increase in business sustainability). Directed over $200,000 toward grants supporting women and youth entrepreneurs. Orchestrated workshops for 300+ participants.',
+          'Ongoing support needs — annual ECF CHOICES recertification, recurring dental and medical appointments, assistive-tech upgrades as approved by her ECF CHOICES support coordinator.',
         unique_qualities:
-          'Commitment to empowering underrepresented founders; proactive approach designing tailored community workshops and mentorship opportunities; connections to innovative tech startups and sustainable business practices.',
-        collaboration_partners:
-          'Small Business Development Center, SCORE, local universities and colleges, seasoned entrepreneurs in the Cleveland, TN ecosystem.',
-        sustainability_plan:
-          'Build strategic partnerships with local businesses, educational institutions, and community organizations. Establish sliding scale model for services. Cultivate alumni network for referral system and community contribution.',
+          'Engaged in her local faith community; clinical-trial ready; telehealth capable; working with an ECF CHOICES support coordinator on person-centered planning.',
         barriers_faced:
-          'Lack of access to funding for aspiring entrepreneurs; difficulty finding qualified mentors willing to engage with underrepresented groups; challenges scaling reach while maintaining quality of support.',
+          'Disability-related limits on employment and self-advocacy; rural East Tennessee location with limited specialty providers; reliance on Medicaid which does not cover all dental and assistive-tech needs.',
+        special_circumstances:
+          'Adult enrolled in TN Employment & Community First (ECF) CHOICES — Tennessee\'s 1115 HCBS Medicaid waiver for people with intellectual / developmental disabilities. Eligible for HCBS-waiver services including community engagement, employment supports, and respite.',
       },
     },
   },
