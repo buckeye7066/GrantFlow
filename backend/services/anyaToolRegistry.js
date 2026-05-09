@@ -1315,6 +1315,196 @@ registerTool({
   },
 })
 
+// ----------------------------------------------------------------------------
+// Student-only: commit to (or uncommit from) a single university.
+//
+// This is the action behind the user-facing "I'm attending MTSU" button —
+// only here it is exposed as an Anya tool so the assistant can do the
+// thing instead of describing it. When a student tells Anya "I want only
+// MTSU" / "I picked MTSU" / "I committed to Tennessee Tech", Anya calls
+// this tool with the school name; the handler resolves the matching
+// application in `university_applications.applications`, marks it as
+// `committed`, and downgrades every still-active sibling application to
+// `deferred` so the funding feed narrows the way the UI does. The
+// vocabulary mirrors COMMITTED_SCHOOL_STATUSES in
+// backend/services/crawlers/crawlerManager.js and isCommittedStatus in
+// src/components/profiles/UniversityApplicationsSection.jsx — keep the
+// three in lockstep.
+registerTool({
+  name: 'student.commitToUniversity',
+  description: 'Mark a single university application as the school the student is attending (status="committed"). Other still-active applications are moved to "deferred" so school-specific funding cards (financial aid, housing, scholarships) narrow to the chosen school. This is the same action as clicking "I\'m attending" on a school card. Pass `name` (or `applicationId`) for the school to commit to. Pass `confirmed:true` ONLY after the user has explicitly approved the change. If the user just wants to undo a previous commit, pass `unset:true` to move the school back to "planning" and restore the funding feed.',
+  schema: {
+    type: 'object',
+    properties: {
+      profileId: { type: 'string', description: 'The student profile to update.' },
+      name: { type: 'string', description: 'The school name (or fragment, e.g., "MTSU", "Middle Tennessee", "Trevecca"). Case-insensitive partial match is allowed.' },
+      applicationId: { type: 'string', description: 'Optional explicit university_applications.applications[].id if the assistant already has it.' },
+      unset: { type: 'boolean', description: 'When true, uncommit (set back to "planning") instead of committing. Defaults to false.' },
+      confirmed: { type: 'boolean', description: 'Set to true ONLY after the user has explicitly approved the change. Default false → returns confirmation_required:true.' },
+    },
+    required: ['profileId'],
+  },
+  handler: async (params, context) => {
+    if (!context?.db) throw new Error('Database connection unavailable')
+    const db = context.db
+    const ctx = context?.ctx
+
+    const profileId = String(params?.profileId || '').trim()
+    if (!profileId) throw new Error('profileId is required')
+    if (!ensureProfileAccess(ctx, profileId)) {
+      const error = new Error('Not authorized to update this profile')
+      error.status = 403
+      throw error
+    }
+
+    const COMMITTED_STATUSES = new Set(['committed', 'enrolled', 'attending'])
+    const STILL_ACTIVE = new Set([
+      'planning',
+      'interested',
+      'in_progress',
+      'submitted',
+      'accepted',
+      'waitlisted',
+    ])
+
+    // Load the existing university_applications section. If it doesn't
+    // exist yet, that's a hard "nothing to commit to" — be explicit so
+    // Anya tells the user instead of silently inventing a school. (Mission
+    // rule: never claim to do something we didn't actually do.)
+    let existing = { applications: [] }
+    try {
+      const row = await db
+        .prepare(`SELECT data FROM profile_sections WHERE profile_id = ? AND section_key = ?`)
+        .get(profileId, 'university_applications')
+      if (row?.data) {
+        const parsed = JSON.parse(row.data)
+        existing = parsed && typeof parsed === 'object' ? parsed : { applications: [] }
+      }
+    } catch (e) {
+      console.warn('[student.commitToUniversity] failed to load section:', e?.message)
+    }
+    const apps = Array.isArray(existing?.applications) ? existing.applications : []
+
+    if (apps.length === 0) {
+      return {
+        committed: false,
+        reason: 'no_applications',
+        message:
+          'There are no universities tracked on this profile yet, so I cannot mark a school as the one you are attending. Add the school to the Universities tab first, then I can commit it for you.',
+      }
+    }
+
+    const rawName = typeof params?.name === 'string' ? params.name.trim() : ''
+    const explicitId = params?.applicationId ? String(params.applicationId).trim() : ''
+    const unset = params?.unset === true
+
+    // Resolve the target application by id first, then by case-insensitive
+    // contains-match on `name`. The contains-match handles "MTSU" /
+    // "Middle Tennessee" / "Tennessee State" the way a student would
+    // actually type it.
+    let target = null
+    if (explicitId) {
+      target = apps.find((a) => String(a?.id || '') === explicitId) ?? null
+    }
+    if (!target && rawName) {
+      const q = rawName.toLowerCase()
+      const exact = apps.find((a) => String(a?.name || '').toLowerCase() === q)
+      target = exact ?? apps.find((a) => String(a?.name || '').toLowerCase().includes(q)) ?? null
+      // MTSU is an extremely common abbreviation — if the user typed
+      // "mtsu" and we still couldn't find it, try the canonical full name
+      // before giving up.
+      if (!target && q === 'mtsu') {
+        target = apps.find((a) => String(a?.name || '').toLowerCase().includes('middle tennessee')) ?? null
+      }
+    }
+    if (!target) {
+      return {
+        committed: false,
+        reason: 'school_not_found',
+        message: rawName
+          ? `I could not find "${rawName}" in the universities tracked on this profile. The schools on file are: ${apps
+              .map((a) => a?.name || '(unnamed)')
+              .filter(Boolean)
+              .join(', ')}. Tell me which one you mean and I will commit to it.`
+          : 'Tell me which school you want to mark as the one you are attending — I need a name or id to commit to.',
+        availableSchools: apps.map((a) => ({ id: a?.id ?? null, name: a?.name ?? null, status: a?.status ?? null })),
+      }
+    }
+
+    // Confirmation gate (mission rule: do not write profile changes
+    // without explicit user approval). When unset:true the same gate
+    // applies — uncommitting is also a profile mutation.
+    const confirmed = params?.confirmed === true
+    if (!confirmed) {
+      return {
+        confirmation_required: true,
+        action: unset ? 'uncommit' : 'commit',
+        target: { id: target.id, name: target.name, status: target.status ?? null },
+        message: unset
+          ? `Want me to move ${target.name} back to "planning"? That will bring all schools' funding cards back into your feed.`
+          : `Want me to mark ${target.name} as the school you are attending? Other still-active applications will move to "deferred" so the funding feed narrows to ${target.name}.`,
+        next_call: {
+          tool: 'student.commitToUniversity',
+          params: {
+            profileId,
+            applicationId: target.id,
+            unset,
+            confirmed: true,
+          },
+        },
+      }
+    }
+
+    // Apply the change — narrow / widen the funding feed to match the
+    // student's real decision. (Mirrors handleCommitToSchool /
+    // handleUncommitSchool in UniversityApplicationsSection.jsx so the UI
+    // and the chat path always produce the same result.)
+    const nextApps = apps.map((app) => {
+      if (String(app?.id || '') !== String(target.id)) {
+        if (!unset && STILL_ACTIVE.has(String(app?.status || '').toLowerCase())) {
+          return { ...app, status: 'deferred' }
+        }
+        return app
+      }
+      return { ...app, status: unset ? 'planning' : 'committed' }
+    })
+    const nextSection = { ...existing, applications: nextApps }
+
+    const guarded = await guardProfileSectionForWrite(
+      db,
+      profileId,
+      'university_applications',
+      nextSection,
+    )
+
+    const updatedBy = ctx?.email || ctx?.userId || 'anya-commit-school'
+    await db
+      .prepare(
+        `INSERT INTO profile_sections (profile_id, section_key, data, updated_by)
+         VALUES (?, ?, ?, ?)
+         ON CONFLICT(profile_id, section_key) DO UPDATE SET
+           data = excluded.data,
+           updated_by = excluded.updated_by,
+           updated_at = CURRENT_TIMESTAMP`,
+      )
+      .run(profileId, 'university_applications', JSON.stringify(guarded.data), updatedBy)
+
+    const committedNames = nextApps
+      .filter((a) => COMMITTED_STATUSES.has(String(a?.status || '').toLowerCase()))
+      .map((a) => a?.name || '(unnamed)')
+
+    return {
+      committed: !unset,
+      action: unset ? 'uncommit' : 'commit',
+      target: { id: target.id, name: target.name, status: unset ? 'planning' : 'committed' },
+      committedSchools: committedNames,
+      message: unset
+        ? `Done — ${target.name} is back to "planning" and all schools' funding cards are visible in the feed again.`
+        : `Done — ${target.name} is marked as the school you are attending. Other still-active applications were moved to "deferred", and the funding feed is now scoped to ${target.name}.`,
+    }
+  },
+})
+
 registerTool({
   name: 'profile.getCompletionStatus',
   description: 'Check which profile sections are filled and which are empty. Use this to decide what to ask the user about next.',

@@ -65,9 +65,49 @@ function extractAnthropicText(response) {
 const DEFAULT_ASSISTANT_MODEL = process.env.ANYA_OPENAI_MODEL || 'gpt-4o-mini'
 const DEFAULT_ANTHROPIC_MODEL = process.env.ANTHROPIC_MODEL || 'claude-3-haiku-20240307'
 
+// Whitelist of tools the chat path is allowed to call mid-conversation
+// via OpenAI tool calling. Keep this list tight — every tool exposed here
+// is one Anya can run autonomously on a single user message, so it must
+// be safe, idempotent (or confirmation-gated), and scoped to the active
+// profile. The wider tool registry stays available via the Admin Tools
+// dialog and explicit /tools/invoke calls; this set is the
+// "things Anya can do herself when the user just talks to her" surface.
+//
+// Mission rule: every name here MUST be the canonical id from
+// anyaToolRegistry.js. Do not invent shortened variants — Anya looks
+// these up by name to invoke them.
+const CHAT_TOOL_WHITELIST = [
+  'profile.updateSection',
+  'profile.getCompletionStatus',
+  'student.commitToUniversity',
+  'anya.nextBestAction',
+  'grants.summarizeMatches',
+]
+
+// OpenAI's tool/function naming spec only allows [a-zA-Z0-9_-], so the
+// dotted names from our registry (`profile.updateSection`) need to be
+// flattened on the way out and re-expanded on the way back in. We keep
+// the mapping here as one-pass lookup tables so the chat path stays
+// allocation-light per request.
+function _toOpenAIToolName(registryName) {
+  return String(registryName).replace(/\./g, '__')
+}
+function _fromOpenAIToolName(openAIName) {
+  return String(openAIName).replace(/__/g, '.')
+}
+
 // Pre-built static prompt sections (role + capabilities). These never change at runtime
 // so we compute them once and reuse across every generateAssistantResponse call.
 const _STATIC_PROMPT_BASE = [
+  'CRITICAL HONESTY RULE — ABSOLUTELY MANDATORY:',
+  '- NEVER say you are doing, performing, updating, saving, or completing an action unless you have actually called the corresponding tool in this same response. There is no offline "I will do it later" — there is only "I just called the tool and here is the result" or "I cannot do that here, please use [specific UI control]".',
+  '- NEVER write theatrical placeholders like "[Updating the profile…]", "[Working on it…]", "[Doing the task…]", "Let me update that for you…", or any phrase that pretends a side-effect happened. Those phrases are forbidden — the user reads them as proof you did the thing, and finds out later you did not.',
+  '- If the user asks you to change something (e.g. "only include MTSU as Anastasia\'s university"), choose ONE of these paths:',
+  '  1. Call the right tool now (e.g. student.commitToUniversity, profile.updateSection) WITH confirmed:false on the first call to surface the confirmation, then again with confirmed:true after the user approves. The tool result is the proof of work.',
+  '  2. If no tool can do it, tell the user plainly: "I cannot do that from chat. Open the Universities tab, find the school card, and click \'I\'m attending\' on the school you chose." Point them to the exact UI control.',
+  '- After a tool call, your text reply must reference the tool result truthfully. Do NOT claim success if the tool returned confirmation_required:true, an error, or a "school_not_found" reason — instead, surface what actually happened and what the user needs to do next.',
+  '- If you are uncertain whether a tool exists or whether you are allowed to call it, say so honestly: "I am not sure I can do this directly — let me check / let me show you where to do it manually."',
+  '',
   'Your Role:',
   '- You are the in-app guide for GrantFlow. Help users understand what GrantFlow is, how it works, and what to do next.',
   '- For new users: explain the app in plain language. Walk them through what a profile is, why it matters, and what happens after they fill it out.',
@@ -97,9 +137,11 @@ const _STATIC_PROMPT_BASE = [
   '- After saving data, tell the user what you saved and why it helps their matches',
   '- When asked about matches, use the grants.summarizeMatches tool to show real results',
   '',
-  'Tools Available to You:',
-  '- profile.updateSection: Save user-provided information to a specific profile section (merge-safe)',
+  'Tools Available to You (you can invoke these directly via tool calling — DO NOT pretend to call them, ACTUALLY call them):',
+  '- profile.updateSection: Save user-provided information to a specific profile section (merge-safe). Confirmation-gated: first call returns confirmation_required, second call (with confirmed:true) writes.',
   '- profile.getCompletionStatus: Check which sections are filled/empty and get suggestions for what to ask next',
+  '- student.commitToUniversity: For student profiles, mark a single school (by name or id, e.g. "MTSU") as the one the student is attending. Other still-active applications are moved to "deferred" so funding cards narrow to the chosen school. Confirmation-gated like profile.updateSection.',
+  '- anya.nextBestAction: Returns the recommended next action grounded in current page + opportunity + profile gaps.',
   '- grants.summarizeMatches: Show matched funding opportunities for a profile',
   '- grants.writeLOI: Write a professional Letter of Intent for a specific opportunity, using the user\'s real profile data',
   '- grants.writeNeedsStatement: Write a compelling needs statement for a grant proposal, grounded in profile data',
@@ -1192,33 +1234,164 @@ export async function generateAssistantResponse(db, user, sessionId, { content, 
 
   const systemPrompt = dynamicHeader + profileContextSection + pageContextSection + _STATIC_PROMPT_BASE + (isAdmin ? adminSection : _STATIC_PROMPT_USER_SECTION)
 
+  // Build the OpenAI tool schema for the chat-time whitelist. Without
+  // this, the LLM had no way to actually run profile.updateSection /
+  // student.commitToUniversity / etc., so it would hallucinate
+  // "[Updating the profile…]" placeholders and never write anything —
+  // the exact bug the user reported. With tools wired in, the LLM either
+  // calls the tool (and we surface the real result) or it answers in
+  // text without claiming to have done anything.
+  const activeProfileId = user?.activeProfileId || user?.profile_id || null
+  let openaiTools
+  try {
+    const toolMetadata = listToolMetadata(user)
+    const allowed = toolMetadata.filter((t) => CHAT_TOOL_WHITELIST.includes(t.name))
+    if (allowed.length > 0) {
+      openaiTools = allowed.map((t) => ({
+        type: 'function',
+        function: {
+          name: _toOpenAIToolName(t.name),
+          description: typeof t.description === 'string' ? t.description.slice(0, 1024) : '',
+          parameters: t.schema && typeof t.schema === 'object'
+            ? t.schema
+            : { type: 'object', properties: {} },
+        },
+      }))
+    }
+  } catch (toolListErr) {
+    console.warn('[Anya] Could not assemble chat-time tool list:', toolListErr?.message)
+    openaiTools = undefined
+  }
+
   // 1) Try OpenAI first (if configured)
   if (openai) {
     try {
-      log.info('[Anya] Calling OpenAI API with model:', DEFAULT_ASSISTANT_MODEL)
-      const response = await openAIBreaker.exec(
-        async () =>
-          await openai.chat.completions.create({
-            model: DEFAULT_ASSISTANT_MODEL,
-            messages: [{ role: 'system', content: systemPrompt }, ...conversationMessages],
-            temperature: 0.3,
-            max_tokens: 1000,
-          }),
-        {
-          shouldTrip: (err) => {
-            const summary = summarizeOpenAIError(err)
-            if (summary.isAuth || summary.isRateLimit) return true
-            const status = summary.status
-            return (status === null || status === undefined) || status >= 500
-          },
-        },
-      )
+      log.info('[Anya] Calling OpenAI API with model:', DEFAULT_ASSISTANT_MODEL, openaiTools ? `(tools=${openaiTools.length})` : '(tools=disabled)')
 
-      const reply = response.choices[0]?.message?.content?.trim()
-      if (reply) {
-        log.info('[Anya] OpenAI API response received successfully')
-        return reply
+      // Tool-calling loop. We cap iterations so a misbehaving model
+      // cannot pin the chat thread in a forever-loop of tool calls.
+      // 4 iterations is enough for: ask → tool (confirmation) → user
+      // can't speak inside a single request, so the second invocation
+      // (with confirmed:true) typically arrives in a *separate* user
+      // turn. Most chats finish in 1–2 iterations.
+      const MAX_TOOL_ITERATIONS = 4
+      let workingMessages = [
+        { role: 'system', content: systemPrompt },
+        ...conversationMessages,
+      ]
+      let finalReply = null
+
+      for (let iter = 0; iter < MAX_TOOL_ITERATIONS; iter += 1) {
+        const response = await openAIBreaker.exec(
+          async () =>
+            await openai.chat.completions.create({
+              model: DEFAULT_ASSISTANT_MODEL,
+              messages: workingMessages,
+              ...(openaiTools ? { tools: openaiTools, tool_choice: 'auto' } : {}),
+              temperature: 0.3,
+              max_tokens: 1000,
+            }),
+          {
+            shouldTrip: (err) => {
+              const summary = summarizeOpenAIError(err)
+              if (summary.isAuth || summary.isRateLimit) return true
+              const status = summary.status
+              return (status === null || status === undefined) || status >= 500
+            },
+          },
+        )
+
+        const choice = response.choices?.[0]?.message
+        if (!choice) break
+
+        const toolCalls = Array.isArray(choice.tool_calls) ? choice.tool_calls : []
+        if (toolCalls.length === 0) {
+          finalReply = (choice.content || '').trim() || null
+          break
+        }
+
+        // Capture the assistant turn that requested tool calls so the
+        // next round has the full conversation history.
+        workingMessages.push({
+          role: 'assistant',
+          content: choice.content ?? '',
+          tool_calls: toolCalls,
+        })
+
+        for (const call of toolCalls) {
+          const openaiName = call?.function?.name || ''
+          const registryName = _fromOpenAIToolName(openaiName)
+          let toolPayload
+          try {
+            const rawArgs = call?.function?.arguments
+            let parsedArgs = {}
+            if (typeof rawArgs === 'string' && rawArgs.trim()) {
+              try {
+                parsedArgs = JSON.parse(rawArgs)
+              } catch (parseErr) {
+                throw new Error(`Could not parse tool arguments JSON: ${parseErr.message}`)
+              }
+            } else if (rawArgs && typeof rawArgs === 'object') {
+              parsedArgs = rawArgs
+            }
+            // Inject the active profileId when the model forgot it —
+            // every chat-whitelisted tool is profile-scoped, and forcing
+            // the active profile prevents the LLM from accidentally
+            // crossing profiles.
+            if (parsedArgs && typeof parsedArgs === 'object') {
+              if (!parsedArgs.profileId && activeProfileId) {
+                parsedArgs.profileId = activeProfileId
+              }
+              if (!parsedArgs.profile_id && activeProfileId) {
+                parsedArgs.profile_id = activeProfileId
+              }
+            }
+            const invoked = await invokeRegisteredTool(registryName, parsedArgs, {
+              ctx: user,
+              user,
+              db,
+              sessionId,
+              profileId: activeProfileId,
+              pageContext: pageContext ?? null,
+              currentPage: currentPage ?? null,
+            })
+            toolPayload = invoked?.output ?? invoked ?? null
+          } catch (toolErr) {
+            const status = toolErr?.status ?? null
+            toolPayload = {
+              error: true,
+              status,
+              message: toolErr?.message ? String(toolErr.message).slice(0, 800) : 'tool_error',
+              tool: registryName,
+            }
+            console.warn('[Anya] chat tool call failed:', { tool: registryName, status, message: toolPayload.message })
+          }
+          let serializedPayload = ''
+          try {
+            serializedPayload = JSON.stringify(toolPayload)
+          } catch {
+            serializedPayload = String(toolPayload ?? '')
+          }
+          if (serializedPayload.length > 8000) {
+            serializedPayload = `${serializedPayload.slice(0, 8000)}…[truncated]`
+          }
+          workingMessages.push({
+            role: 'tool',
+            tool_call_id: call.id,
+            name: openaiName,
+            content: serializedPayload,
+          })
+        }
+        // Loop continues — the next iteration lets the model react to
+        // the tool results (e.g. summarise the commit, ask for
+        // confirmation, retry with adjusted args).
       }
+
+      if (finalReply) {
+        log.info('[Anya] OpenAI API response received successfully')
+        return finalReply
+      }
+      log.warn('[Anya] OpenAI tool-calling loop exhausted without a textual reply')
     } catch (error) {
       const summary = summarizeOpenAIError(error)
       console.error('[Anya] OpenAI API Error:', {

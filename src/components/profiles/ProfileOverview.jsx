@@ -312,6 +312,115 @@ function TargetCollegesCards({ colleges, onViewInUniversities }) {
   )
 }
 
+// Status values that mark a school as "the one I'm attending". Mirrors
+// COMMITTED_SCHOOL_STATUSES in backend/services/crawlers/crawlerManager.js
+// and isCommittedStatus in UniversityApplicationsSection.jsx so the
+// Profile overview, the rich Universities tab, and the backend's
+// school-card narrowing all agree on the same vocabulary.
+const COMMITTED_APPLICATION_STATUSES = new Set(["committed", "enrolled", "attending"])
+const STATUS_LABELS = {
+  planning: "Planning",
+  interested: "Interested",
+  in_progress: "In progress",
+  submitted: "Submitted",
+  accepted: "Accepted",
+  committed: "Committed",
+  enrolled: "Enrolled",
+  attending: "Attending",
+  deferred: "Deferred",
+  waitlisted: "Waitlisted",
+  denied: "Denied",
+}
+
+function formatApplicationStatus(status) {
+  const raw = String(status || "").trim().toLowerCase()
+  if (!raw) return "Status unknown"
+  return STATUS_LABELS[raw] ?? formatStatusLabel(raw)
+}
+
+function isCommittedApplicationStatus(status) {
+  return COMMITTED_APPLICATION_STATUSES.has(String(status || "").trim().toLowerCase())
+}
+
+function UniversityApplicationsPreview({ applications, onViewInUniversities }) {
+  const list = Array.isArray(applications) ? applications.filter(Boolean) : []
+  if (list.length === 0) {
+    return <span className="text-sm text-slate-500">—</span>
+  }
+
+  const committed = list.filter((app) => isCommittedApplicationStatus(app?.status))
+  // Pin committed schools to the top so the chosen-school state is
+  // unmissable in the Profile overview preview.
+  const sorted = [...list].sort((a, b) => {
+    const aCommitted = isCommittedApplicationStatus(a?.status)
+    const bCommitted = isCommittedApplicationStatus(b?.status)
+    if (aCommitted && !bCommitted) return -1
+    if (!aCommitted && bCommitted) return 1
+    return String(a?.name ?? "").localeCompare(String(b?.name ?? ""))
+  })
+  const previewLimit = 8
+  const preview = sorted.slice(0, previewLimit)
+  const remaining = sorted.length - preview.length
+
+  return (
+    <div className="space-y-2 max-w-[360px] text-right">
+      {committed.length > 0 ? (
+        <div className="rounded-md border border-emerald-300 bg-emerald-50 px-3 py-2 text-left">
+          <p className="text-[10px] font-semibold uppercase tracking-wide text-emerald-700">
+            Attending
+          </p>
+          <p className="text-sm font-semibold text-emerald-900">
+            {committed.map((app) => app?.name || "Unnamed school").join(", ")}
+          </p>
+          <p className="text-[11px] text-emerald-800 mt-0.5">
+            Funding cards now scoped to {committed.length === 1 ? "this school" : "these schools"}.
+          </p>
+        </div>
+      ) : null}
+      <ul className="space-y-1 text-left">
+        {preview.map((app, idx) => {
+          const name = String(app?.name || `School ${idx + 1}`).trim() || `School ${idx + 1}`
+          const status = formatApplicationStatus(app?.status)
+          const isCommitted = isCommittedApplicationStatus(app?.status)
+          return (
+            <li
+              key={app?.id || `${name}-${idx}`}
+              className="flex items-center justify-between gap-3 rounded-md border border-slate-200 bg-slate-50/80 px-2.5 py-1.5"
+            >
+              <span className="text-sm font-medium text-slate-800 truncate">{name}</span>
+              <Badge
+                variant={isCommitted ? "default" : "outline"}
+                className={`text-[10px] uppercase tracking-wide ${
+                  isCommitted ? "bg-emerald-100 text-emerald-800 border-emerald-200" : ""
+                }`}
+              >
+                {status}
+              </Badge>
+            </li>
+          )
+        })}
+      </ul>
+      {remaining > 0 ? (
+        <p className="text-[11px] text-slate-500">+{remaining} more</p>
+      ) : null}
+      {onViewInUniversities ? (
+        <Button
+          variant="outline"
+          size="sm"
+          className="ml-auto"
+          onClick={(event) => {
+            event.stopPropagation()
+            onViewInUniversities()
+          }}
+        >
+          <ArrowRight className="w-3.5 h-3.5 mr-1.5" />
+          {committed.length > 0 ? "Manage in Universities" : "Choose attending school"}
+        </Button>
+      ) : null}
+    </div>
+  )
+}
+
 function TriStateField({ label, value, disabled, onChange }) {
   const state = value === true ? "yes" : value === false ? "no" : "unknown"
   const nextValue = state === "unknown" ? true : state === "yes" ? false : null
@@ -417,6 +526,17 @@ function SectionPreview({
               const isComplexValue =
                 (Array.isArray(value) && value.some((v) => v && typeof v === "object")) ||
                 (value && typeof value === "object" && !Array.isArray(value))
+
+              if (sectionKey === "university_applications" && key === "applications") {
+                return (
+                  <div key={key} onClick={(e) => e.stopPropagation()}>
+                    <UniversityApplicationsPreview
+                      applications={value}
+                      onViewInUniversities={onNavigateToUniversities}
+                    />
+                  </div>
+                )
+              }
 
               if (sectionKey === "education" && key === "target_colleges") {
                 const colleges = normalizeTargetColleges(value)

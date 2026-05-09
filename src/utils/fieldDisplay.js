@@ -136,6 +136,47 @@ function formatBooleanTri(value) {
   return value ? "Yes" : "No"
 }
 
+/**
+ * Format any value for display under a `json`-typed field without ever
+ * leaking the JS default `[object Object]` toString. Nested objects are
+ * recursively summarised down to a small bounded depth, scalars are
+ * normalised through `normalizeDisplayString`, and empty / sentinel
+ * values collapse to `null` so callers can fall back to the standard
+ * em-dash placeholder. (Goal 9 — explainable + Goal 10 — UI must not show
+ * raw object stringification.)
+ */
+function formatJsonValue(value, depth = 0) {
+  const MAX_DEPTH = 3
+  if (value === null || value === undefined) return null
+  if (typeof value === "boolean") return value ? "Yes" : "No"
+  if (typeof value === "number") return Number.isFinite(value) ? String(value) : null
+  if (typeof value === "string") return normalizeDisplayString(value)
+  if (Array.isArray(value)) {
+    const parts = value
+      .map((item) => formatJsonValue(item, depth + 1))
+      .filter((part) => part && part !== "—")
+    return parts.length > 0 ? parts.join("; ") : null
+  }
+  if (typeof value === "object") {
+    if (depth >= MAX_DEPTH) {
+      // Avoid infinite recursion (and absurdly long previews) by collapsing
+      // deep objects to a count summary instead of dumping every key.
+      const keyCount = Object.keys(value).length
+      return keyCount > 0 ? `${keyCount} field${keyCount === 1 ? "" : "s"}` : null
+    }
+    const parts = []
+    for (const [key, inner] of Object.entries(value)) {
+      const innerFormatted = formatJsonValue(inner, depth + 1)
+      if (innerFormatted && innerFormatted !== "—") {
+        const label = String(key).replace(/[_-]+/g, " ")
+        parts.push(`${label}: ${innerFormatted}`)
+      }
+    }
+    return parts.length > 0 ? parts.join(", ") : null
+  }
+  return null
+}
+
 function normalizeStringArrayEntry(value) {
   if (value === null || value === undefined) return []
   if (Array.isArray(value)) return value.flatMap((entry) => normalizeStringArrayEntry(entry))
@@ -214,25 +255,7 @@ export function formatFieldValue(sectionKey, fieldKey, value, metadata = SECTION
     return "—"
   }
   if (format === "json") {
-    if (typeof value === "string") return normalizeDisplayString(value) ?? "—"
-    if (Array.isArray(value)) {
-      return value
-        .map((item) => {
-          if (item === null || item === undefined) return null
-          if (typeof item !== "object") return normalizeDisplayString(item)
-          return Object.entries(item)
-            .map(([key, inner]) => `${key}: ${normalizeDisplayString(inner) ?? "—"}`)
-            .join(", ")
-        })
-        .filter(Boolean)
-        .join("; ") || "—"
-    }
-    if (typeof value === "object") {
-      return Object.entries(value)
-        .map(([key, inner]) => `${key}: ${normalizeDisplayString(inner) ?? "—"}`)
-        .join(", ") || "—"
-    }
-    return normalizeDisplayString(value) ?? "—"
+    return formatJsonValue(value) ?? "—"
   }
 
   if (typeof value === "string") return normalizeDisplayString(value) ?? "—"
