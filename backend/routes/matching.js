@@ -610,7 +610,19 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
       // If the existing pipeline produced no items but the ladder found
       // a usable tier (RELAXED_DIRECT, DIRECTORY, GEO_EXPAND), surface
       // the ladder's items so the user never sees a blank page.
-      if (capped.length === 0 && Array.isArray(ladder.opportunities) && ladder.opportunities.length > 0) {
+      //
+      // strict=1 (Discover slider, admin batch runs at a fixed min_score)
+      // must NOT have its threshold relaxed by the ladder fallback —
+      // otherwise the UI slider value (and admin queries like
+      // ?min_score=70&strict=1) silently return items below the requested
+      // threshold (the score_hint still tells the caller the best score so
+      // they can lower the slider deliberately).
+      if (
+        !strictMin &&
+        capped.length === 0 &&
+        Array.isArray(ladder.opportunities) &&
+        ladder.opportunities.length > 0
+      ) {
         capped = ladder.opportunities
         if (ladder.threshold_relaxed_reason) {
           relaxedReason = relaxedReason || ladder.threshold_relaxed_reason
