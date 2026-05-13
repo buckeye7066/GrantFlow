@@ -34,6 +34,14 @@ const MAX_ORPHAN_AUTO_RETRIES = parseInt(process.env.MAX_ORPHAN_AUTO_RETRIES || 
  */
 const STALE_RUNNING_MS = parseInt(process.env.CRAWLER_STALE_RUNNING_MS || String(7 * 60 * 60 * 1000), 10)
 const STALE_CLEANUP_INTERVAL_MS = parseInt(process.env.CRAWLER_STALE_CLEANUP_INTERVAL_MS || String(5 * 60 * 1000), 10)
+// Heartbeat-based staleness: if a worker is alive it stamps last_heartbeat_at every
+// HEARTBEAT_INTERVAL_MS (60s — see crawlerDispatcher.js). After 5 missed beats the
+// worker is overwhelmingly likely to be dead (deploy, OOM, network split). The old
+// 7-hour blanket threshold was wrong here: it required BOTH started_at older than 7h
+// AND heartbeat older than 7h, so a worker killed by a deploy left the job locked on
+// the per-profile concurrency claim for the remainder of those 7 hours, blocking every
+// new job for that profile. Use the dedicated, much shorter heartbeat threshold.
+const STALE_HEARTBEAT_MS = parseInt(process.env.CRAWLER_STALE_HEARTBEAT_MS || String(5 * 60 * 1000), 10)
 let lastStaleCleanupAtMs = 0
 
 export async function maybeCleanupStaleRunningJobs(db) {
@@ -43,10 +51,22 @@ export async function maybeCleanupStaleRunningJobs(db) {
   lastStaleCleanupAtMs = now
 
   try {
-    const cleaned = await cleanupStaleCrawlers(db, STALE_RUNNING_MS)
+    // Two passes:
+    //   1. Heartbeat-based: aggressive (5 min default) — catches workers killed mid-run by
+    //      a deploy, crash, or OOM so their per-profile lock releases quickly.
+    //   2. Started-at fallback: lenient (7 hr default) — catches jobs that died before
+    //      their first heartbeat ever stamped (e.g. crashed in the handler bootstrap).
+    let cleaned = 0
+    try {
+      cleaned += await cleanupStaleCrawlersByHeartbeat(db, STALE_HEARTBEAT_MS)
+    } catch (heartbeatError) {
+      console.error('[crawler-concurrency] Heartbeat-based cleanup failed (continuing with started-at fallback)', heartbeatError?.message || String(heartbeatError))
+    }
+    cleaned += await cleanupStaleCrawlers(db, STALE_RUNNING_MS)
     if (cleaned > 0) {
       console.warn('[crawler-concurrency] Cleaned stale running jobs (unblocked locks)', {
         cleaned,
+        stale_heartbeat_ms: STALE_HEARTBEAT_MS,
         stale_running_ms: STALE_RUNNING_MS,
       })
     }
@@ -208,6 +228,92 @@ export async function updateJobHeartbeat(db, jobId) {
     // Best-effort; heartbeat failure should never crash a running job
     console.warn('[crawler-concurrency] Failed to update job heartbeat:', error?.message)
   }
+}
+
+/**
+ * Aggressive heartbeat-based cleanup. Marks any 'running' job whose
+ * last_heartbeat_at is older than `heartbeatThresholdMs` as failed and
+ * releases the per-profile concurrency lock so queued jobs can proceed.
+ *
+ * Heartbeats are stamped every 60s by `crawlerDispatcher.js`. After ~5 missed
+ * stamps the worker is overwhelmingly likely to be dead (deploy, OOM, crash).
+ * Without this, the per-profile lock would stay held until the legacy
+ * 7-hour `cleanupStaleCrawlers` sweep — long enough that operators see
+ * "queued forever" jobs after every deploy. This was the exact symptom that
+ * blocked the pipeline_automation force-rerun on 2026-05-13.
+ *
+ * Jobs that have NEVER stamped a heartbeat are intentionally NOT touched
+ * here; they're handled by the started_at fallback in `cleanupStaleCrawlers`,
+ * which lets brand-new jobs (started < 1 min ago, no first heartbeat yet)
+ * survive their startup race.
+ *
+ * @param {object} db - Database connection
+ * @param {number} heartbeatThresholdMs - Time since last_heartbeat_at after which a job is presumed dead
+ * @returns {Promise<number>} Number of jobs marked as failed
+ */
+export async function cleanupStaleCrawlersByHeartbeat(db, heartbeatThresholdMs = 5 * 60 * 1000) {
+  const thresholdDate = new Date(Date.now() - heartbeatThresholdMs)
+  const thresholdIso = thresholdDate.toISOString()
+  const thresholdSqlite = thresholdIso.replace('T', ' ').replace('Z', '').replace(/\.\d+$/, '')
+
+  const isPostgres = db?.dialect === 'postgres'
+  const threshold = isPostgres ? thresholdIso : thresholdSqlite
+
+  const staleJobs = await db
+    .prepare(
+      isPostgres
+        ? `
+            SELECT id, type, profile_id
+            FROM crawler_jobs
+            WHERE status = 'running'
+              AND last_heartbeat_at IS NOT NULL
+              AND last_heartbeat_at < ?
+          `
+        : `
+            SELECT id, type, profile_id
+            FROM crawler_jobs
+            WHERE status = 'running'
+              AND last_heartbeat_at IS NOT NULL
+              AND datetime(last_heartbeat_at) < datetime(?)
+          `,
+    )
+    .all(threshold)
+
+  if (!staleJobs || staleJobs.length === 0) return 0
+
+  let cleaned = 0
+  for (const job of staleJobs) {
+    const errorMessage = `Job orphaned - heartbeat stale > ${heartbeatThresholdMs}ms (worker presumed dead)`
+    try {
+      await db
+        .prepare(
+          `
+            UPDATE crawler_jobs
+            SET status = 'failed',
+                completed_at = CURRENT_TIMESTAMP,
+                error = ?,
+                retry_count = COALESCE(retry_count, 0) + 1,
+                last_retry_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+              AND status = 'running'
+          `,
+        )
+        .run(errorMessage, job.id)
+      cleaned += 1
+      console.warn('[crawler-concurrency] Released per-profile lock for orphaned job', {
+        jobId: job.id,
+        type: job.type,
+        profileId: job.profile_id,
+        heartbeatThresholdMs,
+      })
+    } catch (updateError) {
+      console.warn('[crawler-concurrency] Failed to mark heartbeat-stale job as failed', {
+        jobId: job.id,
+        error: updateError?.message || String(updateError),
+      })
+    }
+  }
+  return cleaned
 }
 
 /**
