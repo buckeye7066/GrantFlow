@@ -95,7 +95,7 @@ export function parseDateToISO(value) {
 
   // MM/DD/YYYY or M/D/YYYY  (US-style; the only style we see on TN
   // benefit documents and ID cards.)
-  m = raw.match(/\b(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})\b/)
+  m = raw.match(/\b(\d{1,2})[/\-.](\d{1,2})[/\-.](\d{2,4})\b/)
   if (m) {
     const [, mo, d, y] = m
     let year = y
@@ -175,7 +175,7 @@ export function extractBasicInformationHeuristics(text) {
   // DOB — many label variants; convert to ISO.
   const dobLabelMatch =
     extractLabeledValue(source, /(?:date\s+of\s+birth|d\.?o\.?b\.?|birth\s*date|birthdate)\b/i) ||
-    extractFirstMatch(source, /\b(?:DOB|D\.O\.B\.|Date\s+of\s+Birth|Birthdate|Birth\s*Date)\b\s*[:#\-]?\s*([0-9A-Za-z\/.,\s-]{6,30})/i)
+    extractFirstMatch(source, /\b(?:DOB|D\.O\.B\.|Date\s+of\s+Birth|Birthdate|Birth\s*Date)\b\s*[:#-]?\s*([0-9A-Za-z/.,\s-]{6,30})/i)
   const dobISO = parseDateToISO(dobLabelMatch)
 
   return {
@@ -318,7 +318,7 @@ export function extractMedicalInsuranceHeuristics(text) {
 
   const effectiveRaw =
     extractLabeledValue(raw, /\bEffective(?:\s+(?:Date|On))?\b/i) ||
-    extractFirstMatch(singleLine, /\bEffective(?:\s+(?:Date|On))?\b\s*[:#-]?\s*([0-9A-Za-z\/.,\s-]{6,30})/i)
+    extractFirstMatch(singleLine, /\bEffective(?:\s+(?:Date|On))?\b\s*[:#-]?\s*([0-9A-Za-z/.,\s-]{6,30})/i)
   const effectiveISO = parseDateToISO(effectiveRaw)
 
   return {

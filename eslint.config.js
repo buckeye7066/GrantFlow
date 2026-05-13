@@ -44,6 +44,13 @@ export default [
       'react-hooks/exhaustive-deps': 'off',
       'react-hooks/set-state-in-effect': 'off',
       'no-case-declarations': 'off',
+      // `no-useless-escape` is intentionally NOT auto-fixable in ESLint
+      // (removing an escape can silently change regex semantics, esp. in
+      // character classes like `[\/\-.]`). Automated code fixers routinely
+      // (re)introduce these escapes in regex-heavy files. Treat as a warning
+      // so cosmetic regex-escape preferences cannot fail CI; the corruption
+      // detector + lint:ci both honor this severity.
+      'no-useless-escape': 'warn',
       // Enforce strict equality across the entire repo. Audit flagged
       // `== null` / `!= null` patterns as latent bug surfaces (implicit
       // coercion of user input, DB column values, etc.). Callers that
