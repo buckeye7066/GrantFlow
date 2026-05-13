@@ -46,6 +46,7 @@ import {
   completeGeoCrawlRun,
   incrementGeoCrawlRunCounts,
   markGeoCrawlRunRunning,
+  touchGeoCrawlRunHeartbeat,
   updateGeoCrawlRunCurrent,
   getGeoCrawlRun,
 } from '../geoCrawlRunStore.js'
@@ -917,20 +918,44 @@ async function processZip(zip, db, config) {
 
     const reportSource = async (source, message) => {
       if (!runId) return
-      await updateGeoCrawlRunCurrent(db, runId, {
-        state: stateForZip,
-        zip,
-        county: countyForZip,
-        source,
-      })
-      await appendGeoCrawlEvent(db, runId, {
-        level: 'info',
-        state: stateForZip,
-        zip,
-        county: countyForZip,
-        source,
-        message,
-      })
+      // Surface row-update failures (previously silent). The monitor depends on
+      // these UPDATEs to advance state/current_zip/current_source/heartbeat.
+      // We still continue past a failed UPDATE so the ZIP work itself is not
+      // lost — the background heartbeat ticker (see runNationalZipCrawl) keeps
+      // the run alive even if a transient UPDATE fails here.
+      try {
+        await updateGeoCrawlRunCurrent(db, runId, {
+          state: stateForZip,
+          zip,
+          county: countyForZip,
+          source,
+        })
+      } catch (updateErr) {
+        log.warn('[geoCrawl] updateGeoCrawlRunCurrent failed', {
+          runId,
+          state: stateForZip,
+          zip,
+          source,
+          error: updateErr?.message || String(updateErr),
+        })
+      }
+      try {
+        await appendGeoCrawlEvent(db, runId, {
+          level: 'info',
+          state: stateForZip,
+          zip,
+          county: countyForZip,
+          source,
+          message,
+        })
+      } catch (eventErr) {
+        log.warn('[geoCrawl] appendGeoCrawlEvent failed', {
+          runId,
+          zip,
+          source,
+          error: eventErr?.message || String(eventErr),
+        })
+      }
     }
 
     await reportSource(null, `Starting ZIP ${zip}`)
@@ -1566,7 +1591,40 @@ export async function runNationalZipCrawl(dbPath, options = {}) {
   // Per-state run tracking (Phase 6). Only persists when a valid state is provided.
   const stateRun =
     options.state && normalizeState(options.state) ? await createStateRunRow(db, { state: options.state, jobId: options.job_id ?? null }) : null
-  
+
+  // Background heartbeat ticker.
+  //
+  // Why: the per-source `reportSource` and per-ZIP `incrementGeoCrawlRunCounts`
+  // calls both update `geo_crawl_runs.last_heartbeat_at`, but they sit deep in
+  // the per-ZIP loop. If any of them silently fails (transient DB error, lock
+  // contention, statement timeout) the Admin Geo Crawl Monitor sees a frozen
+  // heartbeat / state / current_zip even though the crawler is still emitting
+  // events. This lightweight 10s ticker keeps `last_heartbeat_at` fresh
+  // independent of per-ZIP work — same pattern as the dispatcher's
+  // `crawler_jobs` heartbeat at backend/services/crawlerDispatcher.js:614.
+  const HEARTBEAT_TICK_MS = Number.parseInt(process.env.GEO_CRAWL_HEARTBEAT_MS || '10000', 10)
+  let heartbeatTickFailures = 0
+  const MAX_HEARTBEAT_TICK_FAILURES = 6
+  const heartbeatTicker = geoRunId
+    ? setInterval(() => {
+        touchGeoCrawlRunHeartbeat(db, geoRunId).catch((err) => {
+          heartbeatTickFailures += 1
+          log.warn('[geoCrawl] background heartbeat tick failed', {
+            runId: geoRunId,
+            failures: heartbeatTickFailures,
+            error: err?.message || String(err),
+          })
+          if (heartbeatTickFailures === MAX_HEARTBEAT_TICK_FAILURES) {
+            log.error('[geoCrawl] background heartbeat failed too many times — monitor may show stale state', {
+              runId: geoRunId,
+              failures: heartbeatTickFailures,
+            })
+          }
+        })
+      }, HEARTBEAT_TICK_MS)
+    : null
+  if (heartbeatTicker && typeof heartbeatTicker.unref === 'function') heartbeatTicker.unref()
+
   // Process in batches
   let fatalError = null
   try {
@@ -1606,17 +1664,30 @@ export async function runNationalZipCrawl(dbPath, options = {}) {
         }
 
         if (geoRunId) {
+          // Each post-ZIP write is wrapped individually so a single transient
+          // failure (e.g. statement timeout, lock contention) does not skip the
+          // others. Any failure is logged so silent-stuck-monitor regressions
+          // surface in production logs instead of disappearing.
           try {
             await incrementGeoCrawlRunCounts(db, geoRunId, {
               processedZipDelta: 1,
-              // Count “new run associations” so progress is non-zero even when the global
+              // Count "new run associations" so progress is non-zero even when the global
               // opportunity already existed (global de-dupe is preserved).
               foundOppDelta: Number(result?.associations_new ?? result?.inserted_new ?? 0),
             })
-            const eventState =
-              options.state ? String(options.state).toUpperCase() : (zipcodes.lookup(result.zip)?.state ?? null)
-            const delta = Number(result?.associations_new ?? result?.inserted_new ?? 0)
-            if (delta > 0) {
+          } catch (incrementErr) {
+            log.warn('[geoCrawl] incrementGeoCrawlRunCounts failed', {
+              runId: geoRunId,
+              zip: result?.zip ?? null,
+              error: incrementErr?.message || String(incrementErr),
+            })
+          }
+
+          const eventState =
+            options.state ? String(options.state).toUpperCase() : (zipcodes.lookup(result.zip)?.state ?? null)
+          const delta = Number(result?.associations_new ?? result?.inserted_new ?? 0)
+          if (delta > 0) {
+            try {
               await appendGeoCrawlEvent(db, geoRunId, {
                 level: 'info',
                 state: eventState,
@@ -1626,8 +1697,16 @@ export async function runNationalZipCrawl(dbPath, options = {}) {
                 message: `Saved ${delta} run result link(s)`,
                 foundCountDelta: delta,
               })
+            } catch (eventErr) {
+              log.warn('[geoCrawl] appendGeoCrawlEvent (delta) failed', {
+                runId: geoRunId,
+                zip: result?.zip ?? null,
+                error: eventErr?.message || String(eventErr),
+              })
             }
-            if (result.status === 'failed' && result.error) {
+          }
+          if (result.status === 'failed' && result.error) {
+            try {
               await appendGeoCrawlEvent(db, geoRunId, {
                 level: 'error',
                 state: eventState,
@@ -1636,9 +1715,13 @@ export async function runNationalZipCrawl(dbPath, options = {}) {
                 source: null,
                 message: `ZIP failed: ${result.error}`,
               })
+            } catch (eventErr) {
+              log.warn('[geoCrawl] appendGeoCrawlEvent (failure) failed', {
+                runId: geoRunId,
+                zip: result?.zip ?? null,
+                error: eventErr?.message || String(eventErr),
+              })
             }
-          } catch {
-            // ignore
           }
         }
         
@@ -1682,6 +1765,13 @@ export async function runNationalZipCrawl(dbPath, options = {}) {
     }
     throw error
   } finally {
+    // Stop the background heartbeat ticker first so it can't race with the
+    // terminal status update below (otherwise a tick could fire after
+    // completeGeoCrawlRun and re-bump heartbeat without changing status,
+    // which is harmless but noisy).
+    if (heartbeatTicker) {
+      try { clearInterval(heartbeatTicker) } catch { /* non-fatal */ }
+    }
     if (geoRunId && !fatalError) {
       try {
         await completeGeoCrawlRun(db, geoRunId, { status: 'complete', error: null })
@@ -1693,8 +1783,11 @@ export async function runNationalZipCrawl(dbPath, options = {}) {
           source: null,
           message: 'Geo crawl complete',
         })
-      } catch {
-        // ignore
+      } catch (completeErr) {
+        log.warn('[geoCrawl] terminal completeGeoCrawlRun failed', {
+          runId: geoRunId,
+          error: completeErr?.message || String(completeErr),
+        })
       }
     }
     if (stateRun) {

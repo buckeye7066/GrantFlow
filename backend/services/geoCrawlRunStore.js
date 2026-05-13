@@ -226,6 +226,30 @@ export async function markGeoCrawlRunRunning(db, runId) {
   await db.prepare(sql).run(runId)
 }
 
+/**
+ * Background-ticker-friendly heartbeat that ONLY bumps `last_heartbeat_at`
+ * (no other side effects). Distinct from `markGeoCrawlRunRunning` because it
+ * does not transition status, so we can call it during paused/failed states
+ * if needed without flipping the run back to 'running'.
+ */
+export async function touchGeoCrawlRunHeartbeat(db, runId) {
+  if (!runId) return
+  await ensureGeoCrawlSchema(db)
+  const sql =
+    db?.dialect === 'postgres'
+      ? `
+          UPDATE geo_crawl_runs
+          SET last_heartbeat_at = CURRENT_TIMESTAMP
+          WHERE id = $1
+        `
+      : `
+          UPDATE geo_crawl_runs
+          SET last_heartbeat_at = datetime('now')
+          WHERE id = ?
+        `
+  await db.prepare(sql).run(runId)
+}
+
 export async function updateGeoCrawlRunCurrent(db, runId, { state, zip, county, source } = {}) {
   if (!runId) return
   await ensureGeoCrawlSchema(db)
