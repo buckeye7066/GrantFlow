@@ -552,6 +552,48 @@ router.get('/pipeline', async (req, res) => {
     `;
     const params = [];
 
+    // Canonical pipeline buckets — must include every status produced by the
+    // pipeline_automation engine (backend/services/pipelineAutomation.js)
+    // and the frontend KanbanBoard (src/components/pipeline/KanbanBoard.jsx).
+    // Without this the endpoint silently drops grants advanced past
+    // `submitted` (portal, pending_review, follow_up, report, declined,
+    // declined_no_review, closed) and breaks the UI counts contract:
+    // "If results are found but not displayed, treat this as a bug."
+    const PIPELINE_BUCKETS = [
+      'discovery',
+      'discovered',
+      'interested',
+      'auto_applied',
+      'drafting',
+      'application_prep',
+      'app_prep', // legacy alias kept for API back-compat
+      'revision',
+      'portal',
+      'submitted',
+      'pending_review',
+      'follow_up',
+      'awarded',
+      'report',
+      'declined',
+      'declined_no_review',
+      'closed',
+      'rejected', // legacy alias kept for API back-compat
+    ]
+    const buildEmptyPipeline = () =>
+      PIPELINE_BUCKETS.reduce((acc, key) => {
+        acc[key] = []
+        return acc
+      }, {})
+
+    // Legacy statuses that may still live in the DB → canonical bucket.
+    // We keep the legacy bucket present in the response so older clients keep working.
+    const LEGACY_STATUS_TO_BUCKET = {
+      app_prep: 'application_prep',
+      under_review: 'pending_review',
+      rejected: 'declined',
+      archived: 'closed',
+    }
+
     if (!isAdminUser(user)) {
       // If a profile is selected (query or X-Profile-Id), scope the pipeline strictly to it.
       if (profile_id) {
@@ -561,16 +603,7 @@ router.get('/pipeline', async (req, res) => {
       } else {
         const orgIds = await getAccessibleOrganizationIds(req.db, user)
         if (!orgIds || orgIds.size === 0) {
-          return res.json({
-            discovered: [],
-            interested: [],
-            drafting: [],
-            app_prep: [],
-            revision: [],
-            submitted: [],
-            awarded: [],
-            rejected: [],
-          })
+          return res.json(buildEmptyPipeline())
         }
         if (organization_id && !orgIds.has(String(organization_id))) {
           return res.status(403).json({ error: 'Not authorized to access this organization' })
@@ -597,19 +630,12 @@ router.get('/pipeline', async (req, res) => {
     }
     
     const grants = await req.db.prepare(query).all(...params);
-    
-    // Group by status
-    const pipeline = {
-      discovered: [],
-      interested: [],
-      drafting: [],
-      app_prep: [],
-      revision: [],
-      submitted: [],
-      awarded: [],
-      rejected: []
-    };
-    
+
+    // Group by canonical bucket. Map legacy statuses into their canonical
+    // bucket so nothing is silently dropped, and place a copy in the legacy
+    // bucket too so older clients still see their familiar shape.
+    const pipeline = buildEmptyPipeline();
+    let droppedUnknown = 0
     grants.forEach(grant => {
       const withReasons = { ...grant, match_reasons: safeParseJSON(grant.match_reasons, []) }
       const freshness = decorateOpportunityFreshness(withReasons)
@@ -620,11 +646,28 @@ router.get('/pipeline', async (req, res) => {
         freshness_warning: freshness.freshness_warning,
       };
 
-      if (pipeline.hasOwnProperty(grant.status)) {
-        pipeline[grant.status].push(parsed);
+      const rawStatus = typeof grant.status === 'string' ? grant.status.trim().toLowerCase() : ''
+      const canonicalBucket = LEGACY_STATUS_TO_BUCKET[rawStatus] ?? rawStatus
+
+      if (pipeline.hasOwnProperty(canonicalBucket)) {
+        pipeline[canonicalBucket].push(parsed)
+      }
+      // Keep legacy alias bucket populated too so back-compat clients still see them.
+      if (rawStatus !== canonicalBucket && pipeline.hasOwnProperty(rawStatus)) {
+        pipeline[rawStatus].push(parsed)
+      }
+      if (!pipeline.hasOwnProperty(canonicalBucket) && !pipeline.hasOwnProperty(rawStatus)) {
+        droppedUnknown += 1
       }
     });
-    
+
+    if (droppedUnknown > 0) {
+      console.warn('[grants/pipeline] dropped grants with unknown status', {
+        dropped: droppedUnknown,
+        profile_id: profile_id || null,
+      })
+    }
+
     res.json(pipeline);
   } catch (error) {
     console.error('Error getting pipeline:', error);
