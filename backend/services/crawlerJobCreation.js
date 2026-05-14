@@ -132,6 +132,7 @@ export async function createCrawlerJob(db, options) {
     'profile_enrichment',
     'scholarship',
     'special_needs',
+    'student_bridge_funding',
     'student_grants',
   ]
 
