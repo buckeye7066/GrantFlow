@@ -847,10 +847,10 @@ if (db.dialect === 'sqlite') {
     )
   }
 
-  // Idempotent self-heal: funding_opportunities verification metadata columns
-  // (migration 0061). Several writers — including the new student bridge
-  // funding pipeline — assume these columns exist and crash with PG 42703
-  // when production hasn't run migrations yet.
+  // Idempotent self-heal: funding_opportunities verification metadata + reality
+  // gate columns (migrations 0061 + 0062). Several writers — including the new
+  // student bridge funding pipeline — assume these columns exist and crash
+  // with PG 42703 when production hasn't run migrations yet.
   try {
     await db.exec(`
       ALTER TABLE funding_opportunities ADD COLUMN IF NOT EXISTS discovered_at TIMESTAMPTZ;
@@ -858,10 +858,12 @@ if (db.dialect === 'sqlite') {
       ALTER TABLE funding_opportunities ADD COLUMN IF NOT EXISTS verified_by TEXT;
       ALTER TABLE funding_opportunities ADD COLUMN IF NOT EXISTS verification_error TEXT;
       ALTER TABLE funding_opportunities ADD COLUMN IF NOT EXISTS link_status_code INTEGER;
+      ALTER TABLE funding_opportunities ADD COLUMN IF NOT EXISTS opportunity_kind TEXT;
+      ALTER TABLE funding_opportunities ADD COLUMN IF NOT EXISTS source_trust_tier TEXT;
     `)
   } catch (e) {
     console.warn(
-      '[database] funding_opportunities verification-metadata self-heal failed (run npm run migrate to apply 0061):',
+      '[database] funding_opportunities verification + kind/trust self-heal failed (run npm run migrate to apply 0061 + 0062):',
       e?.message || e,
     )
   }
