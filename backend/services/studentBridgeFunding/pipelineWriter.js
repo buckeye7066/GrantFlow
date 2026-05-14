@@ -154,26 +154,34 @@ export async function addBridgeOpportunityToProfilePipeline({
 
   let opportunityId = upsert.id
   if (upsert.skipped) {
-    // url_duplicate means another source already owns this URL. The existing
-    // funding_opportunities row id is embedded in the reason string
-    // ("url_duplicate:<source>/<id>") — recover it so we can still create the
-    // profile-scoped grant against the canonical opportunity.
-    const duplicateMatch =
-      typeof upsert.reason === 'string' && upsert.reason.match(/^url_duplicate:[^/]*\/(\S+)$/i)
-    if (!duplicateMatch && !opportunityId) {
+    // url_duplicate means another source already owns this URL. The inserter
+    // returns the existing row id in `upsert.id`, but we ALSO parse it from
+    // upsert.reason ("url_duplicate:<source>/<id>") as a fallback so callers
+    // get the same recovery behavior even if the inserter contract changes.
+    // For url_duplicate skips we attach the profile grant to the canonical
+    // funding_opportunities row instead of dropping it.
+    const isUrlDuplicate =
+      typeof upsert.reason === 'string' && /^url_duplicate:/i.test(upsert.reason)
+
+    if (!isUrlDuplicate) {
+      // Real upsert failure (policy / quality / reality / validation gate).
+      return { skipped: true, reason: `upsert:${upsert.reason}`, opportunity_id: opportunityId ?? null }
+    }
+
+    if (!opportunityId) {
+      const duplicateMatch = upsert.reason.match(/^url_duplicate:[^/]*\/(\S+)$/i)
+      if (duplicateMatch) opportunityId = duplicateMatch[1]
+    }
+
+    if (!opportunityId) {
       return { skipped: true, reason: `upsert:${upsert.reason}`, opportunity_id: null }
     }
-    if (!opportunityId && duplicateMatch) {
-      opportunityId = duplicateMatch[1]
-      log.info('Reusing existing funding_opportunity for bridge funding', {
-        profile_id: profile.id,
-        opportunity_id: opportunityId,
-        reason: upsert.reason,
-      })
-    } else if (upsert.skipped) {
-      // Other skip reasons (policy / quality / reality / validation) are real failures.
-      return { skipped: true, reason: `upsert:${upsert.reason}`, opportunity_id: upsert.id ?? null }
-    }
+
+    log.info('Reusing existing funding_opportunity for bridge funding', {
+      profile_id: profile.id,
+      opportunity_id: opportunityId,
+      reason: upsert.reason,
+    })
   }
   if (!opportunityId) return { skipped: true, reason: 'upsert_no_id' }
 
