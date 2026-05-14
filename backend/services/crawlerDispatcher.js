@@ -15,6 +15,7 @@ import { prepareContextForSnapshot, restoreContextFromSnapshot } from './snapsho
 import { processProfileEnrichmentJob } from './profileEnrichment.js'
 import { processFoundation990Job } from './crawlers/foundation990Crawler.js'
 import { processNationalJob } from './nationalJobRouter.js'
+import { processStudentBridgeFundingJob } from './crawlers/studentBridgeFundingCrawler.js'
 import { logFailedJob, determineSeverity } from './deadLetterQueue.js'
 import { runCrawler as runCuratedCrawler } from './crawlers/crawlerManager.js'
 import { updateJobHeartbeat, maybeCleanupStaleRunningJobs } from './crawlerConcurrencyGuard.js'
@@ -255,6 +256,7 @@ const HANDLERS = {
   document_ingest: processDocumentIngestionJob,
   pipeline_automation: processPipelineAutomationJob,
   profile_enrichment: processProfileEnrichmentJob,
+  student_bridge_funding: processStudentBridgeFundingJob,
   government_funding: processCuratedBenefitsJob,
   student_grants: processCuratedBenefitsJob,
   ecf_benefits: processCuratedBenefitsJob,

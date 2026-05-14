@@ -261,6 +261,16 @@ export async function triggerAutoDiscoveryCrawlers(db, profileId, options = {}) 
         profile_id: profileId,
         parameters: {}
       })
+
+      // 2a. Student bridge funding (off-campus living + move-in + emergency
+      // bridge funds tied to the student's actual Fall enrollment cycle).
+      // Idempotent — safe to enqueue on every auto-discovery cycle.
+      jobs.push({
+        id: randomUUID(),
+        type: 'student_bridge_funding',
+        profile_id: profileId,
+        parameters: {},
+      })
     }
 
     // 2b. Health resources crawler (if health indicators exist)

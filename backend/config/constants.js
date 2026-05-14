@@ -97,6 +97,7 @@ export const CRAWLER_JOB_TYPES = [
   'local_funding',
   'item_matching',
   'portal_check',
+  'student_bridge_funding',
 ];
 
 export const CRAWLER_JOB_STATUSES = [
