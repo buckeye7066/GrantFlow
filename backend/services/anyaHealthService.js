@@ -95,23 +95,60 @@ export async function runHealthCheck(db) {
     status.profile_bleed_check = { error: err.message }
   }
 
-  // 3. Clean orphaned crawlers — stuck jobs older than 2 hours → mark failed
+  // 3. Clean orphaned crawlers
+  //
+  // OLD behavior: marked ANY running job older than 2h as failed. This killed
+  //   long-running but actively-progressing geo crawls that legitimately take
+  //   3-6h to walk all 50 states. The geo dispatcher itself has a 6h hard
+  //   timeout and graceful-stop logic between states, so a healthy long-running
+  //   geo job should NOT be killed by this cleanup.
+  //
+  // NEW behavior:
+  //   - QUEUED jobs > 2h old: still cleaned (never started, almost certainly stuck).
+  //   - RUNNING jobs: only marked failed when their `last_heartbeat_at` is
+  //     stale (>10 min without a ping). Healthy workers (geo crawler, anya
+  //     orchestrator, profile enrichment) all bump the heartbeat at least
+  //     every 60s. A 10-minute window is generous enough to absorb a slow
+  //     batch / Postgres pause / network hiccup without false-killing the run.
+  //   - Jobs whose `last_heartbeat_at` is NULL but whose `started_at` is
+  //     >2h old are treated as orphaned (the worker died before ever
+  //     heartbeating).
   try {
     const isPostgres = db?.dialect === 'postgres'
     const cleanOrphansSql = isPostgres
       ? `UPDATE crawler_jobs
-         SET status = 'failed'
-         WHERE status IN ('queued', 'running')
-           AND (created_at < NOW() - INTERVAL '2 hours')`
+         SET status = 'failed',
+             completed_at = NOW(),
+             error = COALESCE(error, 'Marked failed by AnyaHealth orphan cleanup: stale heartbeat or never-started queued job')
+         WHERE (
+           (status = 'queued' AND created_at < NOW() - INTERVAL '2 hours')
+           OR (
+             status = 'running'
+             AND (
+               (last_heartbeat_at IS NOT NULL AND last_heartbeat_at < NOW() - INTERVAL '10 minutes')
+               OR (last_heartbeat_at IS NULL AND COALESCE(started_at, created_at) < NOW() - INTERVAL '2 hours')
+             )
+           )
+         )`
       : `UPDATE crawler_jobs
-         SET status = 'failed'
-         WHERE status IN ('queued', 'running')
-           AND (created_at < datetime('now', '-2 hours'))`
+         SET status = 'failed',
+             completed_at = datetime('now'),
+             error = COALESCE(error, 'Marked failed by AnyaHealth orphan cleanup: stale heartbeat or never-started queued job')
+         WHERE (
+           (status = 'queued' AND created_at < datetime('now', '-2 hours'))
+           OR (
+             status = 'running'
+             AND (
+               (last_heartbeat_at IS NOT NULL AND last_heartbeat_at < datetime('now', '-10 minutes'))
+               OR (last_heartbeat_at IS NULL AND COALESCE(started_at, created_at) < datetime('now', '-2 hours'))
+             )
+           )
+         )`
     const result = await db.prepare(cleanOrphansSql).run()
     const count = result.changes ?? result.rowCount ?? 0
     status.orphaned_crawlers = { cleaned: count }
     if (count > 0) {
-      log.info(`[AnyaHealth] Cleaned ${count} orphaned crawler jobs`)
+      log.info(`[AnyaHealth] Cleaned ${count} orphaned crawler jobs (stale heartbeat or stuck queued)`)
     }
   } catch (err) {
     // crawler_jobs table may not exist in all environments — not fatal
