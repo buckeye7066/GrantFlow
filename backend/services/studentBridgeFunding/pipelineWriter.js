@@ -152,10 +152,29 @@ export async function addBridgeOpportunityToProfilePipeline({
     },
   )
 
+  let opportunityId = upsert.id
   if (upsert.skipped) {
-    return { skipped: true, reason: `upsert:${upsert.reason}`, opportunity_id: upsert.id ?? null }
+    // url_duplicate means another source already owns this URL. The existing
+    // funding_opportunities row id is embedded in the reason string
+    // ("url_duplicate:<source>/<id>") — recover it so we can still create the
+    // profile-scoped grant against the canonical opportunity.
+    const duplicateMatch =
+      typeof upsert.reason === 'string' && upsert.reason.match(/^url_duplicate:[^/]*\/(\S+)$/i)
+    if (!duplicateMatch && !opportunityId) {
+      return { skipped: true, reason: `upsert:${upsert.reason}`, opportunity_id: null }
+    }
+    if (!opportunityId && duplicateMatch) {
+      opportunityId = duplicateMatch[1]
+      log.info('Reusing existing funding_opportunity for bridge funding', {
+        profile_id: profile.id,
+        opportunity_id: opportunityId,
+        reason: upsert.reason,
+      })
+    } else if (upsert.skipped) {
+      // Other skip reasons (policy / quality / reality / validation) are real failures.
+      return { skipped: true, reason: `upsert:${upsert.reason}`, opportunity_id: upsert.id ?? null }
+    }
   }
-  const opportunityId = upsert.id
   if (!opportunityId) return { skipped: true, reason: 'upsert_no_id' }
 
   const orgId = organizationId || (await ensureOrganizationForProfile(db, profile))

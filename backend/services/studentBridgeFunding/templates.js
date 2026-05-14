@@ -269,12 +269,14 @@ export const STUDENT_BRIDGE_FUNDING_TEMPLATES = [
       title: `Tennessee Student Assistance Award (TSAA) (${calendar.academicCycle})`,
       sponsor: 'Tennessee Student Assistance Corporation (TSAC)',
       application_url: 'https://www.tn.gov/collegepays/tsac-student-portal.html',
-      description: `Need-based grant up to $4,000/yr for TN residents at participating in-state schools. First-come-first-served — funds frequently exhaust by midsummer. File FAFSA + TSAA application by priority date ${calendar.cycleDeadlines.state_aid_priority}, but late applicants are still considered until funds run out.`,
-      deadline: calendar.cycleDeadlines.state_aid_priority,
-      deadline_type: 'fixed',
+      description: `Need-based grant up to $4,000/yr for TN residents at participating in-state schools. First-come-first-served — funds frequently exhaust by midsummer. Priority date for ${calendar.academicCycle} was ${calendar.cycleDeadlines.state_aid_priority} but late applicants are still considered until funds run out — file FAFSA + TSAA application NOW.`,
+      // Use rolling: first-come funds remain open after the priority date.
+      deadline: null,
+      deadline_type: 'rolling',
       amount_min: null,
       amount_max: 4000,
       application_method: 'portal',
+      applicationNote: `Priority date ${calendar.cycleDeadlines.state_aid_priority} has passed but TSAA still accepts late filers until ${calendar.academicCycle} funds are exhausted.`,
     }),
   },
 
