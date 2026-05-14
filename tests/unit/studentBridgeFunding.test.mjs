@@ -180,6 +180,111 @@ test('templates: every template has stable id, category, source, build()', () =>
   }
 })
 
+test('templates: NO template is a loan (mission rule: no funding requiring repayment)', () => {
+  const loanLike = STUDENT_BRIDGE_FUNDING_TEMPLATES.filter((t) => {
+    if (t.isLoan === true) return true
+    const cat = String(t.category || '').toLowerCase()
+    if (cat.includes('loan')) return true
+    const id = String(t.id || '').toLowerCase()
+    if (id.includes('loan')) return true
+    return false
+  })
+  assert.equal(
+    loanLike.length,
+    0,
+    `Found ${loanLike.length} loan-like template(s): ${loanLike.map((t) => t.id).join(', ')} — GrantFlow must NEVER recommend funding requiring repayment`,
+  )
+})
+
+test('templates: every rendered opportunity_data is grant-shaped (no repayment language)', () => {
+  // Render every template against a generic TN HS-senior context and walk the
+  // built opportunity_data for repayment red-flags in the description / title /
+  // category. This catches a contributor accidentally adding a private loan,
+  // income-share agreement, or "loan forgiveness with repayment" entry.
+  const ctx = {
+    profile: { id: 'test-loan-guard' },
+    sections: {},
+    calendar: {
+      academicCycle: '2026-27',
+      enrollmentYear: 2026,
+      classesStartEstimate: '2026-08-24',
+      moveInWindow: { start: '2026-07-15', end: '2026-08-20' },
+      refundWindow: { start: '2026-08-25', end: '2026-09-15' },
+      bridgeGapDays: 35,
+      cycleDeadlines: {
+        fafsa_priority: '2026-03-01',
+        fafsa_close: '2027-06-30',
+        state_aid_priority: '2026-04-15',
+        state_grant_app: '2026-08-01',
+        school_priority: null,
+      },
+    },
+    school: {
+      name: 'Middle Tennessee State University',
+      website: 'https://www.mtsu.edu',
+      portals: {
+        financialAid: 'https://www.mtsu.edu/financial-aid/',
+        deanOfStudentsEmergencyFund: 'https://www.mtsu.edu/dean-of-students/emergency-fund.php',
+        oneStop: 'https://www.mtsu.edu/one-stop/',
+        offCampusHousing: 'https://offcampushousing.mtsu.edu/',
+      },
+    },
+    state: 'TN',
+    county: 'Rutherford County',
+    collegeState: 'TN',
+    collegeCounty: 'Rutherford County',
+    collegeTown: 'Murfreesboro',
+    homeState: 'TN',
+    homeCounty: 'Bradley County',
+    homeCity: 'Cleveland',
+    today: new Date('2026-05-13T00:00:00Z'),
+  }
+
+  // Words/phrases that signal a repayment-required product. Excludes the word
+  // "loan" itself only when it appears in a forgiveness / grant context — but
+  // since we already disallow loan templates entirely, finding the word at all
+  // in a built opportunity is a regression.
+  const FORBIDDEN_REPAYMENT_PATTERNS = [
+    /\bloan\b/i,
+    /\binterest rate\b/i,
+    /\bmonthly payment\b/i,
+    /\brepay\b/i,
+    /\bfinanced\b/i,
+    /\bborrow\b/i,
+    /\bprincipal balance\b/i,
+    /\bincome[- ]share agreement\b/i,
+    /\bisa\b/i,
+    /\bcosigner\b/i,
+  ]
+
+  const violations = []
+  for (const tpl of STUDENT_BRIDGE_FUNDING_TEMPLATES) {
+    let applies = true
+    try { applies = typeof tpl.appliesIf === 'function' ? tpl.appliesIf(ctx) : true } catch { applies = false }
+    if (!applies) continue
+
+    let built
+    try { built = tpl.build(ctx) } catch { continue }
+    if (!built) continue
+
+    const haystack = [built.title, built.description, built.applicationNote, built.sponsor]
+      .filter(Boolean)
+      .join(' \n ')
+
+    for (const pattern of FORBIDDEN_REPAYMENT_PATTERNS) {
+      if (pattern.test(haystack)) {
+        violations.push({ id: tpl.id, pattern: String(pattern), snippet: haystack.match(pattern)?.[0] })
+      }
+    }
+  }
+
+  assert.equal(
+    violations.length,
+    0,
+    `Found ${violations.length} template(s) with repayment language: ${JSON.stringify(violations, null, 2)}`,
+  )
+})
+
 test('templates: at least 6 universal templates fire for any student', () => {
   const universal = STUDENT_BRIDGE_FUNDING_TEMPLATES.filter((t) => t.id.startsWith('universal-'))
   assert.ok(universal.length >= 6, `expected ≥6 universal templates, got ${universal.length}`)

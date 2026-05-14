@@ -143,8 +143,13 @@ export async function addBridgeOpportunityToProfilePipeline({
       state: data.state ?? null,
     },
     {
-      // Bridge funding template includes Direct Subsidized Loan; let it through.
-      allowLoans: Boolean(expanded.is_loan),
+      // Mission rule: NO LOANS. GrantFlow never adds funding sources that
+      // require repayment. This bypass is intentionally hardcoded to false
+      // — do not flip it to expanded.is_loan, do not accept a per-call
+      // override. If a template is ever flagged isLoan=true the upstream
+      // policy gate will (correctly) reject it before it reaches the
+      // pipeline.
+      allowLoans: false,
       // Some emergency assistance programs are "directory-style"; keep them.
       allowDirectories: true,
       // Past-fixed-deadline on FAFSA priority etc. should not block.

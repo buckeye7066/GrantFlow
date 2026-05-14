@@ -65,13 +65,13 @@ export const STUDENT_BRIDGE_FUNDING_TEMPLATES = [
       title: `FAFSA — Free Application for Federal Student Aid (${calendar.academicCycle})`,
       sponsor: 'U.S. Department of Education — Federal Student Aid',
       application_url: 'https://studentaid.gov/h/apply-for-aid/fafsa',
-      description: `The FAFSA is the gateway for Pell Grant, FSEOG, Direct Subsidized Loan, Work-Study, state aid (HOPE/TOPS/etc.), AND most institutional need-based aid. The ${calendar.academicCycle} cycle is accepted through ${calendar.cycleDeadlines.fafsa_close}; school priority deadlines were typically ${calendar.cycleDeadlines.fafsa_priority}. File NOW to maximize aid for Fall ${calendar.enrollmentYear}.`,
+      description: `The FAFSA is the gateway for Pell Grant, FSEOG, Work-Study, state aid (HOPE/TOPS/etc.), AND most institutional need-based aid. The ${calendar.academicCycle} cycle is accepted through ${calendar.cycleDeadlines.fafsa_close}; school priority deadlines were typically ${calendar.cycleDeadlines.fafsa_priority}. File NOW to maximize grant aid for Fall ${calendar.enrollmentYear}.`,
       deadline: calendar.cycleDeadlines.fafsa_close,
       deadline_type: 'fixed',
       amount_min: null,
       amount_max: null,
       application_method: 'portal',
-      applicationNote: `Refunds typically disburse to the school around ${calendar.refundWindow.start} and to the student bank account a few days later.`,
+      applicationNote: `Grant refunds typically disburse to the school around ${calendar.refundWindow.start} and to the student bank account a few days later.`,
     }),
   },
 
@@ -114,26 +114,12 @@ export const STUDENT_BRIDGE_FUNDING_TEMPLATES = [
     }),
   },
 
-  {
-    id: 'universal-direct-subsidized-loan',
-    category: 'federal_loan',
-    source: 'curated_benefits',
-    matchScore: 60,
-    appliesIf: () => true,
-    isLoan: true,
-    build: ({ calendar }) => ({
-      title: `Federal Direct Subsidized Loan (${calendar.academicCycle})`,
-      sponsor: 'U.S. Department of Education',
-      application_url: 'https://studentaid.gov/understand-aid/types/loans/subsidized-unsubsidized',
-      description: `Subsidized loan: government pays interest while in school. ${calendar.academicCycle} freshman cap $3,500. Disbursement happens ~10 days BEFORE classes start (≈${new Date(new Date(calendar.classesStartEstimate).getTime() - 10 * 86400_000).toISOString().slice(0, 10)}), so this is one of the few aid sources that can reach the student bank account before the August refund cycle.`,
-      deadline: null,
-      deadline_type: 'rolling',
-      amount_min: null,
-      amount_max: 3500,
-      application_method: 'portal',
-      applicationNote: 'Eligibility flows from FAFSA. Accept on the school MyAid portal once awarded.',
-    }),
-  },
+  // NO LOANS. Mission rule: GrantFlow never recommends funding sources that
+  // require repayment. The Federal Direct Subsidized Loan was previously
+  // listed here and was removed in favor of grant-only bridge funding
+  // (Pell + FSEOG + Work-Study earnings + state HOPE + emergency rent funds).
+  // If a future contributor needs to surface loan information for context,
+  // do it as documentation in the Anya guidance UI — never as a pipeline grant.
 
   {
     id: 'universal-work-study',
