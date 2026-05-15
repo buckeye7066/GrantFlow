@@ -2323,6 +2323,129 @@ router.get('/geo/summary', async (req, res) => {
   }
 })
 
+// ZIP-level geo coverage report (admin-only).
+//
+// Answers: "Has the geocrawl run via every US ZIP code?" by comparing the
+// `zipcodes` package (~43k US ZIPs — the same source nationalZipCrawler.js
+// uses to build US_ZIP_CODES_ALL) against the `national_zip_progress` table.
+//
+// Returns:
+//   {
+//     total_us_zips,           // total ZIPs in the zipcodes dataset
+//     progress_total,          // total rows in national_zip_progress
+//     progress_completed,      // rows with status='completed'
+//     progress_in_progress,
+//     progress_failed,
+//     progress_skipped,
+//     progress_pending,
+//     coverage_percent,        // (completed / total_us_zips) * 100
+//     uncovered_zip_count,     // total_us_zips - completed
+//     by_state: [
+//       { state, total_zips, completed, pending, percent }
+//     ]
+//   }
+router.get('/geo/zip-coverage', async (req, res) => {
+  try {
+    if (!(await ensureAdminRequest(req, res))) return
+
+    res.set('Cache-Control', 'no-store')
+
+    // 1. Build the canonical US ZIP universe + per-state ZIP counts from the
+    //    zipcodes dataset (same source nationalZipCrawler.js uses).
+    const allZipObj = (zipcodes?.codes && typeof zipcodes.codes === 'object') ? zipcodes.codes : {}
+    const allZips = Object.keys(allZipObj)
+    const totalUsZips = allZips.length
+
+    const stateZipCounts = new Map() // state -> count
+    for (const zip of allZips) {
+      const meta = allZipObj[zip]
+      const st = String(meta?.state || '').toUpperCase()
+      if (!st) continue
+      stateZipCounts.set(st, (stateZipCounts.get(st) || 0) + 1)
+    }
+
+    // 2. Pull per-status counts from national_zip_progress.
+    let statusCounts = []
+    try {
+      statusCounts = await req.db
+        .prepare('SELECT status, COUNT(*) as count FROM national_zip_progress GROUP BY status')
+        .all()
+    } catch (e) {
+      statusCounts = []
+    }
+    const statusMap = new Map((statusCounts || []).map((r) => [String(r.status || ''), Number(r.count || 0)]))
+    const progressTotal = (statusCounts || []).reduce((s, r) => s + Number(r.count || 0), 0)
+    const completedCount = statusMap.get('completed') ?? 0
+    const inProgressCount = statusMap.get('in_progress') ?? 0
+    const failedCount = statusMap.get('failed') ?? 0
+    const skippedCount = statusMap.get('skipped') ?? 0
+    const pendingCount = statusMap.get('pending') ?? 0
+
+    // 3. Per-state breakdown: how many of each state's ZIPs are completed.
+    //    We resolve each progress row's state by looking it up in the zipcodes
+    //    dataset (the table itself doesn't store state, only the zip).
+    let progressRows = []
+    try {
+      progressRows = await req.db
+        .prepare(`SELECT zip, status FROM national_zip_progress`)
+        .all()
+    } catch (e) {
+      progressRows = []
+    }
+
+    const perState = new Map() // state -> { completed, in_progress, failed, skipped, pending, other }
+    function bumpState(st, key) {
+      if (!st) return
+      if (!perState.has(st)) {
+        perState.set(st, { completed: 0, in_progress: 0, failed: 0, skipped: 0, pending: 0, other: 0 })
+      }
+      const slot = perState.get(st)
+      if (key in slot) slot[key] += 1
+      else slot.other += 1
+    }
+    for (const row of progressRows) {
+      const meta = allZipObj[String(row.zip || '').padStart(5, '0')]
+      const st = String(meta?.state || '').toUpperCase()
+      bumpState(st, String(row.status || ''))
+    }
+
+    const byState = Array.from(stateZipCounts.entries())
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([st, totalZips]) => {
+        const slot = perState.get(st) || { completed: 0, in_progress: 0, failed: 0, skipped: 0, pending: 0, other: 0 }
+        const completed = slot.completed
+        const percent = totalZips > 0 ? Math.round((completed / totalZips) * 1000) / 10 : 0
+        return {
+          state: st,
+          total_zips: totalZips,
+          completed,
+          in_progress: slot.in_progress,
+          failed: slot.failed,
+          skipped: slot.skipped,
+          pending: slot.pending,
+          percent,
+        }
+      })
+
+    res.json({
+      ok: true,
+      total_us_zips: totalUsZips,
+      progress_total: progressTotal,
+      progress_completed: completedCount,
+      progress_in_progress: inProgressCount,
+      progress_failed: failedCount,
+      progress_skipped: skippedCount,
+      progress_pending: pendingCount,
+      coverage_percent: totalUsZips > 0 ? Math.round((completedCount / totalUsZips) * 1000) / 10 : 0,
+      uncovered_zip_count: Math.max(0, totalUsZips - completedCount),
+      by_state: byState,
+    })
+  } catch (error) {
+    routeLogger.error('[admin/geo/zip-coverage] Error:', error)
+    res.status(500).json({ error: error?.message || String(error) })
+  }
+})
+
 router.post('/geo/crawl/start', async (req, res) => {
   try {
     if (!(await ensureAdminRequest(req, res))) return;
