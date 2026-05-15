@@ -1439,17 +1439,41 @@ async function updateZipProgress(db, zip, status, sources_found, error = null) {
 }
 
 /**
+ * Resume window for national_zip_progress checkpoints.
+ *
+ * The previous value (2 hours) was too tight for nationwide multi-day crawls:
+ * each new run could only resume from ZIPs completed in the last 2h, so a
+ * fresh `runAllStates: true` job would re-walk every state already finished
+ * by the previous run. Result: at ~30 ZIPs/min and a 6h dispatcher cap, each
+ * subsequent run only added 3-5 NEW fully-covered states before re-doing
+ * the others.
+ *
+ * 7 days is a sane default: long enough to skip already-completed states
+ * across an entire week of nightly runs, short enough that genuinely stale
+ * data still gets re-crawled on a normal cadence. Override via
+ * GEO_RESUME_WINDOW_DAYS env var if needed.
+ */
+const RESUME_WINDOW_DAYS = Math.max(
+  1,
+  Number.parseInt(process.env.GEO_RESUME_WINDOW_DAYS || '7', 10) || 7,
+)
+
+function resumeWindowSql(db) {
+  if (db?.dialect === 'postgres') {
+    return `updated_at > (NOW() - INTERVAL '${RESUME_WINDOW_DAYS} days')`
+  }
+  return `updated_at > datetime('now', '-${RESUME_WINDOW_DAYS} days')`
+}
+
+/**
  * Get last processed ZIP for resumability
  */
 async function getLastProcessedZip(db) {
-  // Only resume from ZIPs completed within the last 2 hours to avoid stale checkpoints.
-  const since2h = db?.dialect === 'postgres'
-    ? "updated_at > (NOW() - INTERVAL '2 hours')"
-    : "updated_at > datetime('now', '-2 hours')"
+  const within = resumeWindowSql(db)
   const row = await db.prepare(`
     SELECT zip FROM national_zip_progress
     WHERE status = 'completed'
-      AND ${since2h}
+      AND ${within}
     ORDER BY updated_at DESC
     LIMIT 1
   `).get()
@@ -1459,14 +1483,13 @@ async function getLastProcessedZip(db) {
 
 async function getLastProcessedZipForList(db, zipList) {
   if (!Array.isArray(zipList) || zipList.length === 0) return null
-  if (zipList.length > 2000) return null
+  // Cap large IN clauses to keep Postgres happy. The biggest US state by ZIP
+  // count is Texas at ~2,657 — well under 5,000. National-scope runs (43k+)
+  // fall through to the global getLastProcessedZip() helper instead.
+  if (zipList.length > 5000) return null
 
-  // Only resume from ZIPs completed within the last 2 hours.
-  // Stale checkpoints from previous runs should not cause the crawl to skip everything.
   const placeholders = zipList.map(() => '?').join(', ')
-  const since2h = db?.dialect === 'postgres'
-    ? "updated_at > (NOW() - INTERVAL '2 hours')"
-    : "updated_at > datetime('now', '-2 hours')"
+  const within = resumeWindowSql(db)
   const row = await db
     .prepare(
       `
@@ -1474,7 +1497,7 @@ async function getLastProcessedZipForList(db, zipList) {
         FROM national_zip_progress
         WHERE status = 'completed'
           AND zip IN (${placeholders})
-          AND ${since2h}
+          AND ${within}
         ORDER BY updated_at DESC
         LIMIT 1
       `,
@@ -1625,16 +1648,51 @@ export async function runNationalZipCrawl(dbPath, options = {}) {
     : null
   if (heartbeatTicker && typeof heartbeatTicker.unref === 'function') heartbeatTicker.unref()
 
+  // Per-batch deadline check.
+  //
+  // The dispatcher wraps this handler in a hard `withTimeout()` race. If the
+  // wall-clock deadline fires first, the job is marked `failed` even if real
+  // work happened. Previously the comprehensive crawler only checked the
+  // deadline BETWEEN states, which meant a long state (CA: 2,500+ ZIPs at
+  // 30/min ≈ 80 min) started near the deadline could blow past it.
+  //
+  // The fix: also honor `config.deadline_ms` here, in the per-ZIP loop.
+  // If we cross `deadline_ms - deadline_buffer_ms`, log + break. The
+  // function returns normally with whatever was processed, the caller marks
+  // success, the dispatcher records `completed` with partial progress.
+  const deadlineMs = Number.isFinite(Number(config.deadline_ms)) ? Number(config.deadline_ms) : null
+  // Default: stop 90s before the dispatcher would. That's enough time for the
+  // batch's final flushes (geo_crawl_runs, national_zip_progress, result_meta).
+  const deadlineBufferMs = Number.isFinite(Number(config.deadline_buffer_ms))
+    ? Number(config.deadline_buffer_ms)
+    : 90_000
+  let stoppedForDeadline = false
+
   // Process in batches
   let fatalError = null
   try {
-    for (let i = startIndex; i < totalZips; i += config.batch_size) {
+    batchLoop: for (let i = startIndex; i < totalZips; i += config.batch_size) {
       const batchEnd = Math.min(i + config.batch_size, totalZips)
       const batch = zipList.slice(i, batchEnd)
-      
+
+      if (deadlineMs && Date.now() + deadlineBufferMs >= deadlineMs) {
+        stoppedForDeadline = true
+        log.info(
+          `[geoCrawl] Deadline approaching (${Math.round((deadlineMs - Date.now()) / 1000)}s left); stopping gracefully after ${processedCount} ZIPs`,
+        )
+        break batchLoop
+      }
+
       log.info(`Processing batch ${Math.floor(i / config.batch_size) + 1}: ZIPs ${i} - ${batchEnd}`)
-      
+
       for (const zip of batch) {
+        if (deadlineMs && Date.now() + deadlineBufferMs >= deadlineMs) {
+          stoppedForDeadline = true
+          log.info(
+            `[geoCrawl] Deadline crossed mid-batch; stopping at ZIP ${zip} (processed=${processedCount})`,
+          )
+          break batchLoop
+        }
         // Per-ZIP wall-clock timeout: prevents a single hung API call from blocking the entire job.
         const perZipMs = Number(config.per_zip_timeout_ms) || 45_000
         let result
@@ -1823,7 +1881,8 @@ export async function runNationalZipCrawl(dbPath, options = {}) {
     failed: failedCount,
     skipped: skippedCount,
     total_zips: totalZips,
-    duration: totalDuration
+    duration: totalDuration,
+    stopped_for_deadline: stoppedForDeadline,
   }
 }
 

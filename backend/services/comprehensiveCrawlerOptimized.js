@@ -294,6 +294,10 @@ export async function runComprehensiveCrawler(contextOrDb, profileContextArg = {
           geo_run_id: params.geo_run_id ?? params.geoRunId ?? null,
           fixtures_dir: process.env.GEO_CRAWL_FIXTURES_DIR || undefined,
           heartbeat: heartbeatFn,
+          // Pass the dispatcher deadline + a 90s buffer so per-batch loops can exit
+          // gracefully BEFORE withTimeout() kills the job as `failed`.
+          deadline_ms: deadlineMs,
+          deadline_buffer_ms: 90_000,
         })
       }
 
@@ -351,6 +355,10 @@ export async function runComprehensiveCrawler(contextOrDb, profileContextArg = {
             geo_run_id: params.geo_run_id ?? params.geoRunId ?? null,
             fixtures_dir: process.env.GEO_CRAWL_FIXTURES_DIR || undefined,
             heartbeat: heartbeatFn,
+            // Pass the dispatcher deadline + a 90s buffer so per-batch loops can exit
+            // gracefully BEFORE withTimeout() kills the job as `failed`.
+            deadline_ms: deadlineMs,
+            deadline_buffer_ms: 90_000,
           })
         }
 
@@ -403,7 +411,20 @@ export async function runComprehensiveCrawler(contextOrDb, profileContextArg = {
             sources: Number(r?.sources ?? 0),
             failed: Number(r?.failed ?? 0),
             skipped: Number(r?.skipped ?? 0),
+            stopped_for_deadline: r?.stopped_for_deadline === true,
           })
+
+          // If the per-state crawl exited because it hit the dispatcher
+          // deadline buffer, stop the per-state loop immediately rather than
+          // attempting another state we know we cannot finish. We're returning
+          // success either way; the next run will pick up via the (now 7-day)
+          // resume window.
+          if (r?.stopped_for_deadline) {
+            console.warn(
+              `[comprehensiveCrawler] State ${st} stopped for deadline; exiting per-state loop`,
+            )
+            break
+          }
 
           // Flush intermediate progress to crawler_jobs so timeouts still capture partial results.
           if (jobId) {
