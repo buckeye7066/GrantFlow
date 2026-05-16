@@ -113,6 +113,7 @@ export async function createCrawlerJob(db, options) {
 
   // Validate job type — must match crawlerDispatcher HANDLERS and DB CHECK (postgres migrations).
   const VALID_TYPES = [
+    'anya_match_scout',
     'avatar_lookup',
     'comprehensive',
     'curated_benefits',

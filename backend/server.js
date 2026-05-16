@@ -29,6 +29,7 @@ import documentsRouter from './routes/documents.js';
 import expensesRouter from './routes/expenses.js';
 import aiRouter from './routes/ai.js';
 import anyaRouter from './routes/anya.js';
+import anyaMatchSuggestionsRouter from './routes/anyaMatchSuggestions.js';
 import itemsRouter from './routes/items.js';
 import profilesRouter from './routes/profiles.js';
 import remindersRouter from './routes/reminders.js';
@@ -837,12 +838,59 @@ if (db.dialect === 'sqlite') {
           'ecf_benefits',
           'special_needs',
           'local_funding',
-          'item_matching'
+          'item_matching',
+          'anya_match_scout'
         ))
     `)
   } catch (e) {
     console.warn(
-      '[database] crawler_jobs.type CHECK self-heal failed (run npm run migrate to apply 0067):',
+      '[database] crawler_jobs.type CHECK self-heal failed (run npm run migrate to apply 0067/0069):',
+      e?.message || e,
+    )
+  }
+
+  // Idempotent self-heal: anya_match_suggestions (migration 0068).
+  // The Match Scout writes here; the recommend-only popup + notification
+  // bell read from it. Without this table the scout's INSERT fails with
+  // PG 42P01 ("relation does not exist") on a fresh deploy where
+  // MIGRATE_ON_BOOT=0.
+  try {
+    await db.exec(`
+      CREATE TABLE IF NOT EXISTS anya_match_suggestions (
+        id TEXT PRIMARY KEY,
+        profile_id TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+        user_id TEXT,
+        opportunity_id TEXT,
+        title TEXT NOT NULL,
+        funder TEXT,
+        match_score REAL NOT NULL,
+        match_reasons JSONB,
+        need_summary JSONB,
+        search_strategy JSONB,
+        opportunity_data JSONB,
+        status TEXT NOT NULL DEFAULT 'pending'
+          CHECK (status IN ('pending', 'accepted', 'dismissed', 'already_in_pipeline', 'expired')),
+        created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        acted_at TIMESTAMPTZ,
+        action_result TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_anya_match_suggestions_profile
+        ON anya_match_suggestions(profile_id);
+      CREATE INDEX IF NOT EXISTS idx_anya_match_suggestions_user
+        ON anya_match_suggestions(user_id);
+      CREATE INDEX IF NOT EXISTS idx_anya_match_suggestions_status
+        ON anya_match_suggestions(status);
+      CREATE INDEX IF NOT EXISTS idx_anya_match_suggestions_opportunity
+        ON anya_match_suggestions(opportunity_id);
+      CREATE INDEX IF NOT EXISTS idx_anya_match_suggestions_created
+        ON anya_match_suggestions(created_at);
+      CREATE UNIQUE INDEX IF NOT EXISTS uq_anya_match_suggestions_active_pair
+        ON anya_match_suggestions(profile_id, opportunity_id)
+        WHERE status = 'pending';
+    `)
+  } catch (e) {
+    console.warn(
+      '[database] anya_match_suggestions self-heal failed (run npm run migrate to apply 0068):',
       e?.message || e,
     )
   }
@@ -1874,6 +1922,11 @@ app.use('/api/field-usage', lazyRouter('./routes/fieldUsage.js'));
 app.use('/api/profile-types', lazyRouter('./routes/profileTypes.js'));
 const PIPELINE_TIMEOUT = Number(process.env.PIPELINE_TIMEOUT_MS || 30000)
 app.use('/api/ai', requestTimeout(PIPELINE_TIMEOUT), aiRouter);
+// Anya Match Scout — recommend-only background suggestions. Mounted BEFORE
+// the generic /api/anya router so the /match-suggestions/* sub-paths
+// resolve here cleanly and don't accidentally collide with any future
+// `/api/anya/match-suggestions/*` handler.
+app.use('/api/anya/match-suggestions', anyaMatchSuggestionsRouter);
 app.use('/api/anya', anyaRouter);
 app.use('/api/profiles', profilesRouter);
 app.use('/api/reminders', remindersRouter);

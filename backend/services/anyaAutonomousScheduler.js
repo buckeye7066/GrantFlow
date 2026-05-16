@@ -5,6 +5,7 @@ import { repairFailingTests } from './anyaTestRepair.js'
 import { discoverNewCatalogItems } from './itemCatalogService.js'
 import { runPortalCheck } from './portalCheckService.js'
 import { scheduleAdminGeoCrawlOnLogin } from './adminGeoCrawlOnLogin.js'
+import { runMatchScoutForAllActiveProfiles } from './anyaMatchScout.js'
 import { promises as fs } from 'fs'
 import path from 'path'
 import { AUDIT_CATEGORIES, SEVERITY, logAuditEvent } from './auditService.js'
@@ -36,7 +37,11 @@ const AUTONOMOUS_CONFIG = {
   runOnAdminLogin: process.env.ANYA_RUN_ON_ADMIN_LOGIN === 'true',
   runOnSchedule: process.env.ANYA_RUN_ON_SCHEDULE === 'true',
 
-  // What operations to run (each must be explicitly enabled)
+  // What operations to run (each must be explicitly enabled).
+  // matchScout defaults ON when the scheduler itself is on — the scout is
+  // recommend-only (writes anya_match_suggestions, never auto-adds to
+  // pipelines) so the safety bar is lower than for crawlers/codeCrawl.
+  // Operators can still mute per-user via user_preferences.custom_preferences.
   operations: {
     codeCrawl: process.env.ANYA_CODE_CRAWL === 'true',
     functionTests: process.env.ANYA_FUNCTION_TESTS === 'true',
@@ -44,6 +49,7 @@ const AUTONOMOUS_CONFIG = {
     itemDiscovery: process.env.ANYA_ITEM_DISCOVERY === 'true',
     portalChecks: process.env.ANYA_PORTAL_CHECKS === 'true',
     geoCrawl: process.env.ANYA_GEO_CRAWL === 'true',
+    matchScout: process.env.ANYA_MATCH_SCOUT !== 'false',
   },
   
   // Schedule (cron-like format)
@@ -334,6 +340,30 @@ const result = await runAutonomousCrawlers(crawlerParams, context)
       } catch (error) {
         report.errors.push({ phase: 'geoCrawl', error: error.message })
         report.operations.geoCrawl = { status: 'failed', error: error.message }
+      }
+    }
+
+    // Phase 7: Anya Match Scout — recommend-only background scan that
+    // surfaces high-confidence (>=ANYA_MATCH_SCOUT_THRESHOLD, default 85)
+    // matches per profile as pending suggestions + notifications. NEVER
+    // auto-adds to pipelines. Honors the per-user mute preference.
+    if (AUTONOMOUS_CONFIG.operations.matchScout && context.db) {
+      log.info('[Anya Scheduler] Phase 7: Running Anya Match Scout across all active profiles...')
+      try {
+        const result = await runMatchScoutForAllActiveProfiles(context.db)
+        report.operations.matchScout = {
+          status: 'completed',
+          profiles_scanned: result.profiles_scanned,
+          profiles_with_suggestions: result.profiles_with_suggestions,
+          suggestions_created: result.suggestions_created,
+          notifications_created: result.notifications_created,
+        }
+        log.info(
+          `[Anya Scheduler] Match Scout complete: ${result.suggestions_created} suggestions created across ${result.profiles_with_suggestions}/${result.profiles_scanned} profiles`,
+        )
+      } catch (error) {
+        report.errors.push({ phase: 'matchScout', error: error.message })
+        report.operations.matchScout = { status: 'failed', error: error.message }
       }
     }
 

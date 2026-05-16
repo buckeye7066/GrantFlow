@@ -35,6 +35,7 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { useAuthStore } from "@/stores/authStore";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import AnyaFloatingButton from "@/components/anya/AnyaFloatingButton";
+import AnyaMatchScoutAlerts from "@/components/anya/AnyaMatchScoutAlerts";
 import { AnyaContextProvider } from "@/contexts/AnyaContext";
 import { useFeatureFlags } from "@/lib/featureFlags";
 import ProBonoBanner from "@/components/banners/ProBonoBanner.jsx";
@@ -376,6 +377,14 @@ export default function Layout({ children, currentPageName }) {
           src/pages/index.jsx or any page-level file.
         */}
         <UserStepCoach />
+
+        {/*
+          Anya Match Scout — recommend-only popup that polls
+          /api/anya/match-suggestions/pending and shows a friendly toast
+          with [Add to Pipeline] / [Not right now] buttons. Never
+          auto-adds. Mounted exactly once here, alongside AnyaFloatingButton.
+        */}
+        <AnyaMatchScoutAlerts />
 
         {/* Anya AI Assistant Floating Button */}
         <AnyaFloatingButton profileId={activeProfileId} />

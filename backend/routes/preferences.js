@@ -96,10 +96,14 @@ router.get('/', async (req, res) => {
     if (!preferences) {
       // Create default preferences for user (rollout: Anya copilot ON, screenshot OFF)
       const id = crypto.randomUUID()
-      // Initialize custom preferences with feature flags and incognito toggle
+      // Initialize custom preferences with feature flags and incognito toggle.
+      // `anya_match_scout_muted` defaults to false so new users get the
+      // recommend-only popup. They can mute it from Settings; the scout
+      // service reads this flag before creating any suggestion/notification.
       const defaultCustom = {
         feature_flags: { anyaCopilotEnabled: true, anyaScreenshotEnabled: false },
         incognitoEnabled: false,
+        anya_match_scout_muted: false,
       }
       const insertSql =
         dialect === 'postgres'

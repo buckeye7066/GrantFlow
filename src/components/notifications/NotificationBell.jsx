@@ -95,6 +95,56 @@ export default function NotificationBell() {
     }
   }, [])
 
+  // Anya Match Scout actions on a notification of type 'anya_high_match'.
+  // The notification's `data.suggestion_id` points at the row in
+  // anya_match_suggestions. Accept forwards through the existing trust-
+  // gated /api/grants/from-opportunity path; dismiss just records the
+  // dismissal (the suggestion row is retained for the learning loop).
+  const handleSuggestionAccept = useCallback(
+    async (notification) => {
+      const suggestionId = notification?.data?.suggestion_id
+      if (!suggestionId) return
+      try {
+        setLoading(true)
+        await apiFetch(`/api/anya/match-suggestions/${encodeURIComponent(suggestionId)}/accept`, {
+          method: 'POST',
+        })
+        // Mark the notification read and remove it from the local list so
+        // the bell count stays accurate (count maps 1:1 to backend state).
+        await apiFetch(`/api/notifications/${notification.id}/read`, { method: 'POST' }).catch(() => {})
+        setNotifications((prev) => prev.filter((n) => n.id !== notification.id))
+        setUnreadCount((prev) => Math.max(0, prev - (notification.read ? 0 : 1)))
+      } catch {
+        // Non-fatal — the suggestion remains pending and the user can retry.
+      } finally {
+        setLoading(false)
+      }
+    },
+    [],
+  )
+
+  const handleSuggestionDismiss = useCallback(
+    async (notification) => {
+      const suggestionId = notification?.data?.suggestion_id
+      if (!suggestionId) return
+      try {
+        setLoading(true)
+        await apiFetch(`/api/anya/match-suggestions/${encodeURIComponent(suggestionId)}/dismiss`, {
+          method: 'POST',
+          body: JSON.stringify({ reason: 'bell_dismiss' }),
+        })
+        await apiFetch(`/api/notifications/${notification.id}/read`, { method: 'POST' }).catch(() => {})
+        setNotifications((prev) => prev.filter((n) => n.id !== notification.id))
+        setUnreadCount((prev) => Math.max(0, prev - (notification.read ? 0 : 1)))
+      } catch {
+        // Best-effort
+      } finally {
+        setLoading(false)
+      }
+    },
+    [],
+  )
+
   if (!isAuthenticated) return null
 
   return (
@@ -140,36 +190,87 @@ export default function NotificationBell() {
                 No notifications
               </div>
             ) : (
-              notifications.map((n) => (
-                <button
-                  key={n.id}
-                  type="button"
-                  onClick={() => !n.read && handleMarkRead(n.id)}
-                  disabled={loading || n.read}
-                  className={[
-                    'w-full text-left px-4 py-3 border-b border-border last:border-0',
-                    'hover:bg-muted/50 transition-colors duration-150',
-                    n.read ? 'opacity-60' : 'bg-blue-50/30 dark:bg-blue-950/20',
-                  ].join(' ')}
-                >
-                  <div className="flex items-start gap-2">
-                    {!n.read && (
-                      <span className="mt-1.5 w-2 h-2 rounded-full bg-blue-500 shrink-0" />
-                    )}
-                    <div className={n.read ? 'pl-4' : ''}>
-                      <p className="text-sm font-medium text-foreground leading-snug line-clamp-2">
-                        {n.title}
-                      </p>
-                      <p className="mt-0.5 text-xs text-muted-foreground line-clamp-2">
-                        {n.message}
-                      </p>
-                      <p className="mt-1 text-[10px] text-muted-foreground">
-                        {formatRelativeTime(n.createdAt)}
-                      </p>
+              notifications.map((n) => {
+                const isAnyaHighMatch =
+                  n.type === 'anya_high_match' && n.data && n.data.suggestion_id
+                const baseClass = [
+                  'w-full text-left px-4 py-3 border-b border-border last:border-0',
+                  'hover:bg-muted/50 transition-colors duration-150',
+                  n.read ? 'opacity-60' : 'bg-blue-50/30 dark:bg-blue-950/20',
+                ].join(' ')
+
+                if (isAnyaHighMatch) {
+                  // Special-case render: not a single clickable row, because
+                  // the row contains two action buttons. Mark-read fires
+                  // only when the user clicks Accept or Dismiss (see
+                  // handleSuggestionAccept / handleSuggestionDismiss).
+                  return (
+                    <div key={n.id} className={baseClass}>
+                      <div className="flex items-start gap-2">
+                        {!n.read && (
+                          <span className="mt-1.5 w-2 h-2 rounded-full bg-blue-500 shrink-0" />
+                        )}
+                        <div className={n.read ? 'pl-4 w-full' : 'w-full'}>
+                          <p className="text-sm font-medium text-foreground leading-snug line-clamp-2">
+                            {n.title}
+                          </p>
+                          <p className="mt-0.5 text-xs text-muted-foreground line-clamp-3">
+                            {n.message}
+                          </p>
+                          <p className="mt-1 text-[10px] text-muted-foreground">
+                            {formatRelativeTime(n.createdAt)}
+                          </p>
+                          <div className="mt-2 flex gap-2">
+                            <button
+                              type="button"
+                              onClick={() => handleSuggestionAccept(n)}
+                              disabled={loading}
+                              className="text-xs px-2.5 py-1 rounded-md bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50"
+                            >
+                              Add to Pipeline
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleSuggestionDismiss(n)}
+                              disabled={loading}
+                              className="text-xs px-2.5 py-1 rounded-md border border-border bg-background hover:bg-muted disabled:opacity-50"
+                            >
+                              Not right now
+                            </button>
+                          </div>
+                        </div>
+                      </div>
                     </div>
-                  </div>
-                </button>
-              ))
+                  )
+                }
+
+                return (
+                  <button
+                    key={n.id}
+                    type="button"
+                    onClick={() => !n.read && handleMarkRead(n.id)}
+                    disabled={loading || n.read}
+                    className={baseClass}
+                  >
+                    <div className="flex items-start gap-2">
+                      {!n.read && (
+                        <span className="mt-1.5 w-2 h-2 rounded-full bg-blue-500 shrink-0" />
+                      )}
+                      <div className={n.read ? 'pl-4' : ''}>
+                        <p className="text-sm font-medium text-foreground leading-snug line-clamp-2">
+                          {n.title}
+                        </p>
+                        <p className="mt-0.5 text-xs text-muted-foreground line-clamp-2">
+                          {n.message}
+                        </p>
+                        <p className="mt-1 text-[10px] text-muted-foreground">
+                          {formatRelativeTime(n.createdAt)}
+                        </p>
+                      </div>
+                    </div>
+                  </button>
+                )
+              })
             )}
           </div>
         </div>
