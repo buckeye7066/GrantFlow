@@ -2344,25 +2344,51 @@ router.get('/geo/summary', async (req, res) => {
 //       { state, total_zips, completed, pending, percent }
 //     ]
 //   }
+// The 51 jurisdictions the comprehensive ZIP crawler actually walks (50 states + DC).
+// MUST stay in sync with backend/services/comprehensiveCrawlerOptimized.js's
+// statesToRun default list. Anything not in this set is excluded from the
+// "real US coverage" math (territories, military APO/FPO, and bogus Canadian
+// province strings that leak in from the zipcodes NPM dataset).
+const CRAWLABLE_US_JURISDICTIONS = new Set([
+  'AL','AK','AZ','AR','CA','CO','CT','DE','FL','GA',
+  'HI','ID','IL','IN','IA','KS','KY','LA','ME','MD',
+  'MA','MI','MN','MS','MO','MT','NE','NV','NH','NJ',
+  'NM','NY','NC','ND','OH','OK','OR','PA','RI','SC',
+  'SD','TN','TX','UT','VT','VA','WA','WV','WI','WY','DC',
+])
+
 router.get('/geo/zip-coverage', async (req, res) => {
   try {
     if (!(await ensureAdminRequest(req, res))) return
 
     res.set('Cache-Control', 'no-store')
 
-    // 1. Build the canonical US ZIP universe + per-state ZIP counts from the
+    // 1. Build the canonical ZIP universe + per-state ZIP counts from the
     //    zipcodes dataset (same source nationalZipCrawler.js uses).
+    //
+    //    The dataset is noisy: it includes ~2,500 entries that are NOT US
+    //    state ZIPs the crawler will ever walk — Canadian postal codes
+    //    (Ontario, Quebec, …), military APO/FPO buckets (AA, AE, AP), and
+    //    US territories (PR, GU, VI, AS, MP, FM, MH, PW). We partition the
+    //    universe into "crawlable US" vs "non-crawlable" so the coverage
+    //    percentage reflects what the system can actually reach, instead
+    //    of being permanently capped at ~94% by data noise.
     const allZipObj = (zipcodes?.codes && typeof zipcodes.codes === 'object') ? zipcodes.codes : {}
     const allZips = Object.keys(allZipObj)
-    const totalUsZips = allZips.length
+    const totalDatasetZips = allZips.length
 
-    const stateZipCounts = new Map() // state -> count
+    const stateZipCounts = new Map() // state -> count (for ALL dataset entries)
+    const crawlableZipSet = new Set() // every zip in a crawlable US jurisdiction
     for (const zip of allZips) {
       const meta = allZipObj[zip]
       const st = String(meta?.state || '').toUpperCase()
       if (!st) continue
       stateZipCounts.set(st, (stateZipCounts.get(st) || 0) + 1)
+      if (CRAWLABLE_US_JURISDICTIONS.has(st)) {
+        crawlableZipSet.add(String(zip).padStart(5, '0'))
+      }
     }
+    const crawlableUsZips = crawlableZipSet.size
 
     // 2. Pull per-status counts from national_zip_progress.
     let statusCounts = []
@@ -2394,6 +2420,7 @@ router.get('/geo/zip-coverage', async (req, res) => {
     }
 
     const perState = new Map() // state -> { completed, in_progress, failed, skipped, pending, other }
+    let crawlableCompleted = 0
     function bumpState(st, key) {
       if (!st) return
       if (!perState.has(st)) {
@@ -2404,9 +2431,14 @@ router.get('/geo/zip-coverage', async (req, res) => {
       else slot.other += 1
     }
     for (const row of progressRows) {
-      const meta = allZipObj[String(row.zip || '').padStart(5, '0')]
+      const zip = String(row.zip || '').padStart(5, '0')
+      const meta = allZipObj[zip]
       const st = String(meta?.state || '').toUpperCase()
-      bumpState(st, String(row.status || ''))
+      const status = String(row.status || '')
+      bumpState(st, status)
+      if (status === 'completed' && CRAWLABLE_US_JURISDICTIONS.has(st) && crawlableZipSet.has(zip)) {
+        crawlableCompleted += 1
+      }
     }
 
     const byState = Array.from(stateZipCounts.entries())
@@ -2424,20 +2456,42 @@ router.get('/geo/zip-coverage', async (req, res) => {
           skipped: slot.skipped,
           pending: slot.pending,
           percent,
+          crawlable: CRAWLABLE_US_JURISDICTIONS.has(st),
         }
       })
 
+    // The headline "coverage" we report is over the CRAWLABLE universe (50
+    // states + DC). We keep `dataset_*` fields for callers that want the
+    // raw zipcodes-package totals (legacy + diagnostics).
+    const crawlableCoveragePercent =
+      crawlableUsZips > 0 ? Math.round((crawlableCompleted / crawlableUsZips) * 1000) / 10 : 0
+
     res.json({
       ok: true,
-      total_us_zips: totalUsZips,
+
+      // Headline numbers (what the system can actually reach):
+      crawlable_us_zips: crawlableUsZips,
+      crawlable_completed: crawlableCompleted,
+      coverage_percent: crawlableCoveragePercent,
+      uncovered_zip_count: Math.max(0, crawlableUsZips - crawlableCompleted),
+
+      // Status breakdown across ALL rows in national_zip_progress
+      // (includes any past one-off territory/military crawls).
       progress_total: progressTotal,
       progress_completed: completedCount,
       progress_in_progress: inProgressCount,
       progress_failed: failedCount,
       progress_skipped: skippedCount,
       progress_pending: pendingCount,
-      coverage_percent: totalUsZips > 0 ? Math.round((completedCount / totalUsZips) * 1000) / 10 : 0,
-      uncovered_zip_count: Math.max(0, totalUsZips - completedCount),
+
+      // Raw zipcodes-package totals, for diagnostics. These include ~2.5k
+      // non-crawlable entries (territories, military, Canadian noise).
+      total_us_zips: crawlableUsZips, // alias preserved for back-compat (was the noisy total)
+      dataset_total_zips: totalDatasetZips,
+      dataset_coverage_percent:
+        totalDatasetZips > 0 ? Math.round((completedCount / totalDatasetZips) * 1000) / 10 : 0,
+      dataset_uncovered_count: Math.max(0, totalDatasetZips - completedCount),
+
       by_state: byState,
     })
   } catch (error) {
