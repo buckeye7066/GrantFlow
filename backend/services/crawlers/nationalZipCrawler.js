@@ -1508,6 +1508,42 @@ async function getLastProcessedZipForList(db, zipList) {
 }
 
 /**
+ * Return a Set of every ZIP in `zipList` that has a `completed` checkpoint
+ * inside the resume window. Used to filter the working list so that already-
+ * crawled ZIPs are NOT re-walked, regardless of whether the order returned by
+ * `zipcodes.lookupByState()` matches the order rows were originally inserted.
+ *
+ * Why: `getLastProcessedZipForList` returns the single most-recently-updated
+ * ZIP. We then resume from `indexOf(lastZip) + 1` — but if the iteration
+ * order of `zipcodes.lookupByState()` doesn't match the update-time order,
+ * `indexOf` can land near the start of the list and we end up re-walking
+ * almost the entire state. A Set-based filter sidesteps the ordering
+ * assumption entirely: any ZIP already completed in the window is skipped.
+ */
+async function getCompletedZipsInWindow(db, zipList) {
+  if (!Array.isArray(zipList) || zipList.length === 0) return new Set()
+  if (zipList.length > 5000) return new Set()
+  const placeholders = zipList.map(() => '?').join(', ')
+  const within = resumeWindowSql(db)
+  const rows = await db
+    .prepare(
+      `
+        SELECT zip
+        FROM national_zip_progress
+        WHERE status = 'completed'
+          AND zip IN (${placeholders})
+          AND ${within}
+      `,
+    )
+    .all(...zipList)
+  const set = new Set()
+  for (const row of (rows || [])) {
+    if (row?.zip) set.add(String(row.zip))
+  }
+  return set
+}
+
+/**
  * Geo Crawl ZIP discovery function
  */
 export async function runNationalZipCrawl(dbPath, options = {}) {
@@ -1518,7 +1554,7 @@ export async function runNationalZipCrawl(dbPath, options = {}) {
   const ownsDb = typeof dbPath === 'string'
   const db = ownsDb ? new (await getSQLiteDatabase())(dbPath) : dbPath
 
-  const zipList = await resolveZipList({
+  let zipList = await resolveZipList({
     zip_list: options.zip_list,
     state: options.state,
     max_zips: options.max_zips,
@@ -1572,6 +1608,35 @@ export async function runNationalZipCrawl(dbPath, options = {}) {
   // - State-scoped and explicit-list crawls default to resume=false to avoid surprising skips.
   const inferredResumeDefault = !options.state && !options.zip_list
   const allowResume = (options.resume !== null && options.resume !== undefined) ? Boolean(options.resume) : inferredResumeDefault
+
+  // Set-based skip filter: any ZIP already completed inside the resume window
+  // is dropped from `zipList` entirely. This is order-independent and avoids
+  // the "indexOf returned 1, so we re-walked 99% of the state" failure mode
+  // that the lastProcessedZip-based resume had.
+  if (allowResume) {
+    try {
+      const completedSet = await getCompletedZipsInWindow(db, zipList)
+      if (completedSet.size > 0) {
+        const beforeCount = zipList.length
+        const filtered = zipList.filter((z) => !completedSet.has(String(z)))
+        const skippedCount = beforeCount - filtered.length
+        if (skippedCount > 0) {
+          log.info(
+            `[geoCrawl] Resume skip: ${skippedCount}/${beforeCount} ZIP(s) already completed in last ${RESUME_WINDOW_DAYS}d — skipping`,
+          )
+          zipList = filtered
+        }
+      }
+    } catch (skipErr) {
+      log.warn('[geoCrawl] getCompletedZipsInWindow failed; falling back to full walk', {
+        error: skipErr?.message || String(skipErr),
+      })
+    }
+  }
+
+  // Legacy lastProcessedZip path (kept as a defence-in-depth fallback when
+  // the Set filter is unavailable for any reason — e.g. national 43k-ZIP
+  // crawls that exceed the IN-clause cap in getCompletedZipsInWindow).
   let lastProcessedZip = allowResume
     ? (await getLastProcessedZipForList(db, zipList)) ?? (await getLastProcessedZip(db))
     : null
@@ -1579,6 +1644,10 @@ export async function runNationalZipCrawl(dbPath, options = {}) {
   // Prefer geo_crawl_runs.current_zip when provided (durable per-run resume).
   // We re-run the current ZIP on resume for safety (dedupe prevents duplication).
   let startIndex = lastProcessedZip ? zipList.indexOf(lastProcessedZip) + 1 : 0
+  // indexOf can return -1 if the most-recently-updated ZIP is not in zipList
+  // (e.g. because the Set filter already removed it). Clamp to 0 so we don't
+  // accidentally walk negative indices.
+  if (startIndex < 0) startIndex = 0
   if (geoRunId && allowResume) {
     try {
       const runRow = await getGeoCrawlRun(db, geoRunId)
@@ -1591,8 +1660,10 @@ export async function runNationalZipCrawl(dbPath, options = {}) {
       // ignore
     }
   }
-  
-  if (lastProcessedZip) {
+
+  if (zipList.length === 0) {
+    log.info('[geoCrawl] All ZIPs in scope already completed inside the resume window — nothing to do')
+  } else if (lastProcessedZip) {
     log.info(`Resuming from ZIP ${lastProcessedZip} (index ${startIndex})`)
   } else {
     log.info('Starting from beginning')

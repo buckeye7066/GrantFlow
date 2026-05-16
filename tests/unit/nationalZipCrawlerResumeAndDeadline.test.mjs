@@ -162,6 +162,83 @@ test('resume window: list under 5000 (Texas-sized: 2657 ZIPs) does query', () =>
 })
 
 // ---------------------------------------------------------------------------
+// Set-based resume filter (getCompletedZipsInWindow)
+// ---------------------------------------------------------------------------
+//
+// The Set-based filter is the *correct* resume strategy: drop every already-
+// completed ZIP from the working list, regardless of ordering. The earlier
+// lastProcessedZip approach assumed `zipList` order matched `updated_at`
+// order, which empirically isn't true for `zipcodes.lookupByState()`.
+
+const COMPLETED_SET_SQL_SQLITE = (zipList) => `
+  SELECT zip
+  FROM national_zip_progress
+  WHERE status = 'completed'
+    AND zip IN (${zipList.map(() => '?').join(', ')})
+    AND updated_at > datetime('now', '-7 days')
+`
+
+function getCompletedZipsInWindow(db, zipList) {
+  if (!Array.isArray(zipList) || zipList.length === 0) return new Set()
+  if (zipList.length > 5000) return new Set()
+  const rows = db.prepare(COMPLETED_SET_SQL_SQLITE(zipList)).all(...zipList)
+  const set = new Set()
+  for (const row of rows || []) {
+    if (row?.zip) set.add(String(row.zip))
+  }
+  return set
+}
+
+test('set filter: returns every completed-in-window ZIP, in any order', () => {
+  const db = makeDb()
+  const list = ['10001', '10002', '10003', '10004', '10005']
+  // 10001 + 10003 completed within window, 10004 outside window, 10005 failed.
+  insertProgress(db, { zip: '10001', status: 'completed', updated_at: ago(60) })
+  insertProgress(db, { zip: '10003', status: 'completed', updated_at: ago(60 * 60 * 24) })
+  insertProgress(db, { zip: '10004', status: 'completed', updated_at: ago(8 * 24 * 60 * 60) })
+  insertProgress(db, { zip: '10005', status: 'failed', updated_at: ago(60) })
+  const set = getCompletedZipsInWindow(db, list)
+  assert.deepEqual([...set].sort(), ['10001', '10003'])
+})
+
+test('set filter: filtering zipList correctly drops completed and keeps remainder', () => {
+  const db = makeDb()
+  // Real-world scenario: 839 AL zips, 800 already completed yesterday, 39 untouched.
+  const list = []
+  for (let i = 0; i < 839; i++) list.push(String(35000 + i))
+  for (let i = 0; i < 800; i++) {
+    insertProgress(db, { zip: list[i], status: 'completed', updated_at: ago(24 * 60 * 60) })
+  }
+  const set = getCompletedZipsInWindow(db, list)
+  const remaining = list.filter((z) => !set.has(z))
+  assert.equal(remaining.length, 39, 'only the 39 never-completed ZIPs should remain')
+  assert.equal(remaining[0], list[800], 'remainder starts at the first un-done ZIP')
+})
+
+test('set filter: returns empty Set when no rows are completed-in-window', () => {
+  const db = makeDb()
+  const list = ['90210', '90211']
+  insertProgress(db, { zip: '90210', status: 'failed', updated_at: ago(60) })
+  insertProgress(db, { zip: '90211', status: 'completed', updated_at: ago(8 * 24 * 60 * 60) })
+  const set = getCompletedZipsInWindow(db, list)
+  assert.equal(set.size, 0)
+})
+
+test('set filter: huge list (>5000) returns empty Set without querying', () => {
+  const db = makeDb()
+  const list = []
+  for (let i = 0; i < 5001; i++) list.push(String(10000 + i))
+  const set = getCompletedZipsInWindow(db, list)
+  assert.equal(set.size, 0)
+})
+
+test('set filter: empty input returns empty Set', () => {
+  const db = makeDb()
+  const set = getCompletedZipsInWindow(db, [])
+  assert.equal(set.size, 0)
+})
+
+// ---------------------------------------------------------------------------
 // Per-batch deadline behavior
 // ---------------------------------------------------------------------------
 //
