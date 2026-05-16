@@ -41,6 +41,7 @@ import ProBonoBanner from "@/components/banners/ProBonoBanner.jsx";
 import NotificationBell from "@/components/notifications/NotificationBell";
 import FirstRunOnboardingGate from "@/components/onboarding/FirstRunOnboardingGate";
 import AppBreadcrumb from "@/components/shared/AppBreadcrumb";
+import UserStepCoach from "@/components/guidance/UserStepCoach";
 import GrantLifecyclePhaseIndicator from "@/components/shared/GrantLifecyclePhaseIndicator";
 import { apiFetch } from "@/api/client";
 import { createPageUrl } from "@/utils";
@@ -367,6 +368,14 @@ export default function Layout({ children, currentPageName }) {
           profiles={profiles ?? []}
           activeProfileId={activeProfileId === '__admin__' ? null : activeProfileId}
         />
+
+        {/*
+          Per-page coach prompt (plain-English "what is this page for / what
+          to do next"). Shown at most once per (page, profile) via
+          localStorage. Mounted exactly once here — DO NOT mount in
+          src/pages/index.jsx or any page-level file.
+        */}
+        <UserStepCoach />
 
         {/* Anya AI Assistant Floating Button */}
         <AnyaFloatingButton profileId={activeProfileId} />

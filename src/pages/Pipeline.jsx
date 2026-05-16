@@ -5,7 +5,7 @@ import { useNavigate, useLocation, Link } from "react-router-dom";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { Filter, Loader2, RefreshCcw, Trash2 } from "lucide-react";
+import { Filter, Loader2, RefreshCcw, Trash2, UserCheck, Printer } from "lucide-react";
 import { getCrawlerJob, createCrawlerJob } from "@/api/crawlers";
 import KanbanBoard from "@/components/pipeline/KanbanBoard";
 import AdvancedFilters from "@/components/pipeline/AdvancedFilters";
@@ -143,6 +143,18 @@ export default function Pipeline() {
         title: "Process All completed",
         description: `Evaluated ${evaluated} grant(s). ${advanced} advanced, ${handoffs} need review.`,
       });
+      // Anya goal #4: every prompt leaves the user knowing what to do next.
+      // When the automation flagged grants for human review, fire a second
+      // warmer toast that points at the cards rather than a number.
+      if (handoffs > 0) {
+        toast({
+          id: `pipeline-handoffs-${processAllJobId}`,
+          title: `${handoffs} grant${handoffs === 1 ? "" : "s"} need a person to step in`,
+          description:
+            "Look for cards marked Human Review Needed. GrantFlow has prepared the next steps, but a person must finish this part.",
+          duration: 12000,
+        });
+      }
     } else if (processAllJobStatus === "failed") {
       toast({
         variant: "destructive",
@@ -260,6 +272,21 @@ export default function Pipeline() {
     });
     return Array.from(tagSet).sort();
   }, [grants]);
+
+  // Count of grants needing a human to step in. We treat both
+  // (a) the stage-level human-required statuses, and (b) the latest
+  // automation event's handoff_required flag as triggers — same rule the
+  // per-card "Human Review Needed" badge uses. Computed across the
+  // currently-scoped grants so it reflects the visible board.
+  const handoffsNeededCount = useMemo(() => {
+    const HUMAN_STAGES = new Set(['portal', 'follow_up', 'report']);
+    return (Array.isArray(scopedGrants) ? scopedGrants : []).filter((g) => {
+      if (!g) return false;
+      if (g.latest_automation?.handoff_required === true) return true;
+      if (g.latestAutomation?.handoff_required === true) return true;
+      return HUMAN_STAGES.has(String(g.status || '').toLowerCase());
+    }).length;
+  }, [scopedGrants]);
 
   // Use custom hook for filtering
   const scopedGrants = useMemo(() => {
@@ -385,6 +412,16 @@ export default function Pipeline() {
               <p className="text-slate-600 mt-2">
                 Track all your grants across every profile • {filteredGrants.length} of {scopedGrants.length} grants
               </p>
+              {handoffsNeededCount > 0 && (
+                <p
+                  className="mt-2 inline-flex items-center gap-2 rounded-md bg-amber-50 border border-amber-200 text-amber-800 px-3 py-1.5 text-sm font-medium"
+                  role="status"
+                  aria-live="polite"
+                >
+                  <UserCheck className="w-4 h-4" />
+                  {handoffsNeededCount} grant{handoffsNeededCount === 1 ? "" : "s"} need a person to step in
+                </p>
+              )}
             </div>
             <div className="flex items-center gap-2">
               <Filter className="w-4 h-4 text-slate-500" />
@@ -430,6 +467,29 @@ export default function Pipeline() {
                 >
                   <Trash2 className="w-4 h-4 mr-2" />
                   Remove {expiredDiscoveredGrants.length} Expired
+                </Button>
+              )}
+              {/*
+                Print This Profile's Packet — only shown when a specific
+                profile is selected. The packet renders profile summary,
+                pipeline by stage, human-review items with prepared
+                application steps, and a next-steps checklist. Opens in a
+                new tab so the in-app session stays intact.
+              */}
+              {selectedProfileId && selectedProfileId !== "all" && (
+                <Button
+                  variant="outline"
+                  onClick={() =>
+                    window.open(
+                      `/PrintProfilePacket?profile_id=${encodeURIComponent(selectedProfileId)}`,
+                      "_blank",
+                      "noopener,noreferrer",
+                    )
+                  }
+                  aria-label="Print this profile's packet"
+                >
+                  <Printer className="w-4 h-4 mr-2" />
+                  Print This Profile's Packet
                 </Button>
               )}
             </div>

@@ -2,7 +2,7 @@ import React, { useRef, useEffect } from "react"
 import { useSearchParams, useNavigate } from "react-router-dom"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { syncTargetCollegesToApplications } from "@/utils/targetCollegesSync"
-import { AlertCircle, Loader2, Palette } from "lucide-react"
+import { AlertCircle, Loader2, Palette, Printer } from "lucide-react"
 import {
   getProfile,
   requestProfileSectionAI,
@@ -597,6 +597,26 @@ export default function ProfileDetail() {
               <Palette className="w-4 h-4 mr-2" />
               Appearance
             </Button>
+            {/*
+              Print Profile Packet — opens /PrintProfilePacket?profile_id=<id>
+              in a new tab. The packet renders profile summary, pipeline by
+              stage, items that need human review (with the application_steps
+              the pipeline_automation worker prepared), and a simple next-steps
+              checklist. Backed by GET /api/profiles/:id/report-packet.
+            */}
+            <Button
+              variant="outline"
+              onClick={() =>
+                window.open(
+                  createPageUrl("PrintProfilePacket", { profile_id: profileId }),
+                  "_blank",
+                  "noopener,noreferrer",
+                )
+              }
+            >
+              <Printer className="w-4 h-4 mr-2" />
+              Print Profile Packet
+            </Button>
             {profile.organization_id && (
               <Button onClick={() => navigate(createPageUrl("OrganizationProfile", { id: profile.organization_id }))}>
                 View Linked Organization
@@ -684,7 +704,7 @@ export default function ProfileDetail() {
               <p className="text-slate-600 mb-4">
                 View and manage grants in your pipeline for this profile.
               </p>
-              <Button onClick={() => navigate(createPageUrl("Pipeline", { organization_id: profile.organization_id }))}>
+              <Button onClick={() => navigate(createPageUrl("Pipeline", { profile_id: profileId }))}>
                 Go to Pipeline
               </Button>
             </div>

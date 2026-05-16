@@ -1022,6 +1022,225 @@ router.get('/:id/applications/all', async (req, res) => {
   }
 })
 
+// -----------------------------------------------------------------------------
+// GET /api/profiles/:id/report-packet
+// -----------------------------------------------------------------------------
+// One backend call that returns everything the printable "Profile Packet"
+// needs, in one stable shape:
+//
+//   {
+//     profile,                  // mapProfile() row + sections
+//     pipeline_grants: [...],   // every grant for this profile + latest_automation
+//     handoffs: [...],          // subset of pipeline_grants flagged for human review
+//     potential_funds: [...],   // reserved — currently always [] (the funding-
+//                               // results store is client-only today). Kept as a
+//                               // field so the print component can render the
+//                               // section header without conditionals.
+//     stage_summary: [...],     // [{ status, label, count }] across pipeline_grants
+//     generated_at: ISO string
+//   }
+//
+// MUST be declared BEFORE `GET /:id` or Express will route /report-packet
+// into the generic profile-by-id handler.
+// -----------------------------------------------------------------------------
+router.get('/:id/report-packet', async (req, res) => {
+  const { id } = req.params
+  const isAdmin = req.ctx?.isAdmin === true
+  const userId = req.ctx?.userId ?? null
+
+  // 1. Load profile row + access check.
+  let row = null
+  try {
+    row = await req.db.prepare(`${profileSelect} WHERE p.id = ?`).get(String(id))
+  } catch (error) {
+    profileLogger.error('[profiles] report-packet: failed to load profile row', { id, err: error?.message })
+    return res.status(500).json(formatError(error))
+  }
+  if (!row || row.status === 'deleted') {
+    return res.status(404).json({ error: 'Profile not found' })
+  }
+  if (!isAdmin) {
+    if (!userId) return res.status(401).json({ error: 'Authentication required' })
+    if (!canAccessProfileRowFromCtx(req.ctx, row)) {
+      return res.status(403).json({ error: 'Access denied' })
+    }
+  }
+
+  // 2. Profile sections (same shape as GET /:id).
+  let sections = []
+  try {
+    const rawRows = await req.db
+      .prepare(
+        `SELECT section_key, data, updated_at, updated_by
+         FROM profile_sections
+         WHERE profile_id = ?
+         ORDER BY section_key`,
+      )
+      .all(String(id))
+    sections = coerceDbRows(rawRows).map((s) => ({
+      section_key: s.section_key,
+      data: normalizeProfileSectionData(s.section_key, safeParseJSON(s.data, {})),
+      updated_at: s.updated_at,
+      updated_by: s.updated_by,
+    }))
+  } catch (error) {
+    profileLogger.warn('[profiles] report-packet: sections load failed', { id, err: error?.message })
+    sections = []
+  }
+
+  // 3. Pipeline grants for this profile + the latest automation event per grant.
+  //
+  // We do this in two queries instead of a window-function join because
+  // production Postgres + the SQLite fallback used in tests don't share
+  // identical row_number() syntax — two passes keep the code portable.
+  let grants = []
+  try {
+    grants = await req.db
+      .prepare(
+        `SELECT g.*, o.name AS organization_name
+         FROM grants g
+         LEFT JOIN organizations o ON g.organization_id = o.id
+         WHERE g.profile_id = ?
+         ORDER BY
+           CASE
+             WHEN g.status IN ('portal','follow_up','report') THEN 0
+             WHEN g.status IN ('drafting','application_prep','app_prep','revision') THEN 1
+             WHEN g.status IN ('submitted','pending_review','under_review') THEN 2
+             WHEN g.status IN ('discovery','discovered','interested') THEN 3
+             ELSE 4
+           END,
+           g.deadline ASC NULLS LAST,
+           g.created_date DESC`,
+      )
+      .all(String(id))
+  } catch (error) {
+    // Some legacy DBs don't have NULLS LAST or created_date. Fall back to
+    // a plain query that just sorts by id — never let this 500.
+    profileLogger.warn('[profiles] report-packet: rich grants query failed, using fallback', {
+      id,
+      err: error?.message,
+    })
+    try {
+      grants = await req.db
+        .prepare(
+          `SELECT g.*, o.name AS organization_name
+           FROM grants g
+           LEFT JOIN organizations o ON g.organization_id = o.id
+           WHERE g.profile_id = ?
+           ORDER BY g.id DESC`,
+        )
+        .all(String(id))
+    } catch (fallbackError) {
+      profileLogger.warn('[profiles] report-packet: fallback grants query failed', {
+        id,
+        err: fallbackError?.message,
+      })
+      grants = []
+    }
+  }
+
+  const grantIds = (grants || []).map((g) => g?.id).filter(Boolean)
+
+  // Latest pipeline_automation event per grant — single query, then group.
+  // We rely on grant_pipeline_events.created_at being monotonic (same pattern
+  // GET /:id/automation/latest uses).
+  let latestEventsByGrant = new Map()
+  if (grantIds.length > 0) {
+    try {
+      const placeholders = grantIds.map(() => '?').join(',')
+      const events = await req.db
+        .prepare(
+          `SELECT *
+           FROM grant_pipeline_events
+           WHERE grant_id IN (${placeholders})
+           ORDER BY created_at DESC`,
+        )
+        .all(...grantIds)
+      for (const ev of events || []) {
+        if (!ev?.grant_id) continue
+        // First row wins (DESC order), so only set once per grant.
+        if (!latestEventsByGrant.has(ev.grant_id)) {
+          latestEventsByGrant.set(ev.grant_id, ev)
+        }
+      }
+    } catch (error) {
+      profileLogger.warn('[profiles] report-packet: events load failed', {
+        id,
+        err: error?.message,
+      })
+      latestEventsByGrant = new Map()
+    }
+  }
+
+  // 4. Re-use the same shaping helper grants.js exports for /automation/latest
+  //    so this endpoint's `latest_automation` field is byte-identical to the
+  //    one the per-grant detail screen renders. We import lazily to dodge a
+  //    potential circular import.
+  let mapAutomationEvent = (r) => r
+  try {
+    const grantsModule = await import('./grants.js')
+    if (typeof grantsModule.mapAutomationEvent === 'function') {
+      mapAutomationEvent = grantsModule.mapAutomationEvent
+    }
+  } catch {
+    // Soft-fall: leave raw rows in place. UI tolerates both shapes.
+  }
+
+  const HUMAN_STAGES = new Set(['portal', 'follow_up', 'report'])
+  const pipelineGrants = (grants || []).map((g) => {
+    const evRow = latestEventsByGrant.get(g.id) || null
+    const latest_automation = evRow ? mapAutomationEvent(evRow) : null
+    const matchReasons = safeParseJSON(g.match_reasons, [])
+    return {
+      id: g.id,
+      title: g.title,
+      funder: g.funder,
+      status: g.status,
+      deadline: g.deadline,
+      amount_min: g.amount_min,
+      amount_max: g.amount_max,
+      amount_requested: g.amount_requested,
+      match_score: g.match_score ?? g.match ?? null,
+      match_reasons: Array.isArray(matchReasons) ? matchReasons : [],
+      application_url: g.application_url || g.url || g.source_url || null,
+      organization_id: g.organization_id || null,
+      organization_name: g.organization_name || null,
+      notes: g.notes || null,
+      latest_automation,
+      needs_human_review:
+        (latest_automation?.handoff_required === true) ||
+        HUMAN_STAGES.has(String(g.status || '').toLowerCase()),
+    }
+  })
+
+  const handoffs = pipelineGrants.filter((g) => g.needs_human_review)
+
+  // Stage summary: [{ status, count }] over the visible grants. The packet
+  // print groups by status, so giving the UI a pre-computed counter
+  // avoids it having to re-walk the full list to render section headers.
+  const stageCounts = new Map()
+  for (const g of pipelineGrants) {
+    const key = String(g.status || 'unknown').toLowerCase()
+    stageCounts.set(key, (stageCounts.get(key) || 0) + 1)
+  }
+  const stage_summary = Array.from(stageCounts.entries()).map(([status, count]) => ({
+    status,
+    count,
+  }))
+
+  return res.json({
+    profile: { ...mapProfile(row), sections },
+    pipeline_grants: pipelineGrants,
+    handoffs,
+    // Reserved for a future server-side cache of high-match opportunities
+    // not yet in the pipeline. The UI renders the section header either
+    // way so always emit the (possibly empty) field.
+    potential_funds: [],
+    stage_summary,
+    generated_at: new Date().toISOString(),
+  })
+})
+
 router.get('/:id', async (req, res) => {
   const { id } = req.params
   const isAdmin = req.ctx?.isAdmin === true

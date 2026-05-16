@@ -1,6 +1,5 @@
 import React, { Suspense } from "react";
 import Layout from "./Layout.jsx";
-import OnboardingFlow from "@/components/onboarding/OnboardingFlow";
 // lazyWithRetry catches "stale chunk" failures after a deploy (the
 // MIME-type / "Failed to fetch dynamically imported module" errors)
 // and forces a single page reload so the user picks up the new
@@ -37,6 +36,7 @@ const NOFOParser = lazy(() => import("./NOFOParser"), 'NOFOParser');
 const AIGrantScorer = lazy(() => import("./AIGrantScorer"), 'AIGrantScorer');
 const BudgetDetail = lazy(() => import("./BudgetDetail"), 'BudgetDetail');
 const PrintPipeline = lazy(() => import("./PrintPipeline"), 'PrintPipeline');
+const PrintProfilePacket = lazy(() => import("./PrintProfilePacket"), 'PrintProfilePacket');
 const OneTimeFix = lazy(() => import("./OneTimeFix"), 'OneTimeFix');
 const DataSources = lazy(() => import("./DataSources"), 'DataSources');
 const SourceRegistry = lazy(() => import("./SourceRegistry"), 'SourceRegistry');
@@ -137,7 +137,9 @@ const PAGES = {
     BudgetDetail: BudgetDetail,
     
     PrintPipeline: PrintPipeline,
-    
+
+    PrintProfilePacket: PrintProfilePacket,
+
     OneTimeFix: OneTimeFix,
     
     DataSources: DataSources,
@@ -293,6 +295,7 @@ function LayoutRoutes() {
                 <Route path="/BudgetDetail" element={withBoundary(<BudgetDetail />, "BudgetDetail")} />
 
                 <Route path="/PrintPipeline" element={withBoundary(<PrintPipeline />, "PrintPipeline")} />
+                <Route path="/PrintProfilePacket" element={withBoundary(<PrintProfilePacket />, "PrintProfilePacket")} />
 
                 <Route path="/OneTimeFix" element={withBoundary(<OneTimeFix />, "OneTimeFix")} />
 
@@ -339,7 +342,10 @@ function LayoutRoutes() {
 
                 </Routes>
             </Layout>
-            <OnboardingFlow />
+            {/* OnboardingFlow is mounted ONCE inside Layout.jsx — do not
+                re-mount here. Previously it was mounted in both places,
+                which caused duplicate first-run modals and a race in
+                completion-state writes. */}
         </Suspense>
     );
 }

@@ -386,9 +386,34 @@ function normalizeSortOrder(raw) {
   return key === 'asc' ? 'ASC' : 'DESC'
 }
 
-function mapAutomationEvent(row) {
+export function mapAutomationEvent(row) {
   if (!row) return null
-  const actions = safeParseJSON(row.recommended_actions, []);
+
+  // `recommended_actions` is historically a JSON column that can hold either:
+  //   - an array of action strings (legacy shape), OR
+  //   - an object like { actions: [...], application_steps: "...", ... }
+  //     (the shape the pipeline_automation worker has been emitting).
+  //
+  // The UI handoff panel needs both `actions` (a normalised array) and
+  // `application_steps` (a free-form multi-line string the user can print
+  // or read). Previously we returned the raw parsed value as
+  // `recommended_actions` and the application_steps were buried inside an
+  // object that the frontend had to introspect itself.
+  const parsed = safeParseJSON(row.recommended_actions, [])
+  const actions = Array.isArray(parsed)
+    ? parsed
+    : Array.isArray(parsed?.actions)
+      ? parsed.actions
+      : []
+
+  const applicationStepsRaw =
+    parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? parsed.application_steps
+      : null
+  const application_steps =
+    typeof applicationStepsRaw === 'string' && applicationStepsRaw.trim()
+      ? applicationStepsRaw.trim()
+      : null
 
   return {
     id: row.id,
@@ -402,6 +427,7 @@ function mapAutomationEvent(row) {
     handoff_required: Boolean(row.handoff_required),
     handoff_reason: row.handoff_reason,
     recommended_actions: actions,
+    application_steps,
     ai_summary: row.ai_summary,
   }
 }

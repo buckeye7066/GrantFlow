@@ -8,13 +8,14 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import { MoreVertical, Star, Edit, Trash2, Calendar, DollarSign, Building2, Target, CheckSquare, Sparkles, ExternalLink, AlertCircle, Clock, Info, CalendarClock, CheckCircle2, FileEdit, Link2Off } from 'lucide-react';
+import { MoreVertical, Star, Edit, Trash2, Calendar, DollarSign, Building2, Target, CheckSquare, Sparkles, ExternalLink, AlertCircle, Clock, Info, CalendarClock, CheckCircle2, FileEdit, Link2Off, UserCheck } from 'lucide-react';
 import { format, isPast } from 'date-fns';
 import { Link, useNavigate } from 'react-router-dom';
 import { createPageUrl } from '@/utils';
 import HelpTip from '@/components/help/HelpTip';
 import { isRenderableUrl } from '@/lib/matchDisplayThresholds';
 import { formatReasonText } from '@/utils/reasonText';
+import { isHumanReviewNeeded, getStageHelp } from '@/components/pipeline/pipelineStageHelp';
 
 function getGrantDetailUrl(grant, isDiscoveryResult = false) {
   if (grant.id) {
@@ -98,6 +99,18 @@ export default function GrantCard({ grant, organization, organizationName, onSta
 
   const matchColor = getMatchScoreColor(matchScore);
 
+  // Human review surface: surface when the stage itself is human-required
+  // (portal / follow_up / report) OR the latest pipeline_automation event
+  // for this grant said handoff_required=true. The reason string (if any)
+  // is shown in the badge tooltip so a clinician/grant writer sees WHY.
+  const latestAutomation = grant.latest_automation ?? grant.latestAutomation ?? null;
+  const needsHumanReview = isHumanReviewNeeded(grant.status, latestAutomation);
+  const stageHelp = getStageHelp(grant.status);
+  const humanReviewReason =
+    latestAutomation?.handoff_reason ||
+    stageHelp.nextStep ||
+    'A person needs to finish this step.';
+
   return (
     <div
       ref={cardRef}
@@ -147,6 +160,18 @@ export default function GrantCard({ grant, organization, organizationName, onSta
               <CheckCircle2 className="w-3 h-3" />
               In Pipeline
             </Badge>
+          )}
+          {/* Human Review Needed — fires when stage requires a person
+              (portal / follow_up / report) or the latest automation event
+              flagged handoff_required. Tooltip shows the actual reason
+              from automation when available, otherwise the stage's next-step. */}
+          {needsHumanReview && (
+            <HelpTip text={`Human Review Needed: ${humanReviewReason}`}>
+              <Badge className="text-xs gap-1 bg-amber-500 text-white hover:bg-amber-600 cursor-help">
+                <UserCheck className="w-3 h-3" />
+                Human Review Needed
+              </Badge>
+            </HelpTip>
           )}
           {/* Freshness Badges */}
           {freshness === 'fresh' && (
