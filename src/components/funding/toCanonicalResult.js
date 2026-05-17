@@ -45,7 +45,7 @@ function inferKind(opp) {
   if (fundingType === 'service' || fundingType === 'cost_coverage') return 'benefit'
   // Last-ditch heuristics
   const src = String(opp?.source || '').toLowerCase()
-  if (src.includes('directory') || src.includes('212')) return 'directory'
+  if (src.includes('directory') || src.includes('211')) return 'directory'
   if (src.includes('school_portal') || src.includes('portal')) return 'school_portal'
   return 'direct'
 }

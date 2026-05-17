@@ -7,8 +7,8 @@
  *   1. SOURCE_ALLOWLIST  — blocks non-approved sources
  *   2. DECISION_ENGINE   — REJECT = hard ineligible
  *   3. EXCLUSION_ENGINE   — custom suppression rules
- *   4. THRESHOLD          — numeric floor (bypassed when engine returns ACCEPT/REVIEW)
- *   5. RELEVANCE_FILTER   — hard disqualification rules
+ *   4. RELEVANCE_FILTER   — hard exclusions + soft penalties
+ *   5. THRESHOLD          — numeric floor; never bypassed by ACCEPT/REVIEW
  *   6. IDEMPOTENCY        — dedup by profile + opportunity
  *
  * computeMatchDecision() is the sole scoring/decision authority.
@@ -204,45 +204,69 @@ export async function saveToProfilePipeline(
       }
     }
 
-    // Use decision engine score when available, fall back to legacy scorer
+    // Use decision engine score when available, fall back to legacy scorer.
+    // The numeric threshold is authoritative. ACCEPT/REVIEW explain match quality;
+    // they do not override the user's minimum score.
     if (matchPercentage === null) {
       matchPercentage = decision?.score ?? calculateMatchPercentage(opportunity, profileContext)
     }
 
-    // Apply WATCH penalty before threshold comparison
-    let adjustedScore = matchPercentage
+    let adjustedScore = Number(matchPercentage)
+    if (!Number.isFinite(adjustedScore)) adjustedScore = 0
+
     if (exclusion?.decision === 'WATCH') {
-      adjustedScore = Math.max(0, matchPercentage - 15)
+      adjustedScore = Math.max(0, adjustedScore - 15)
     }
 
-    // Threshold gate — respects canonical decisions from the engine.
-    // If the decision engine produced ACCEPT or REVIEW, its authority takes precedence
-    // over the numeric threshold. The threshold only applies as a fallback when the
-    // decision engine did not run (decision is null) or for edge-case WATCH penalties.
-    const canonicalDecision = decision?.decision
-    const bypassThreshold = canonicalDecision === 'ACCEPT' || canonicalDecision === 'REVIEW'
+    // Gate 4: Relevance filter.
+    // Run in soft mode so non-exclusive mismatches reduce score instead of deleting
+    // potentially useful real opportunities. Rules marked hard:true still reject.
+    if (profileContext) {
+      const profileData = extractProfileData(profileContext)
+      const relevance = applyRelevanceFilter(opportunity, profileData, { mode: 'soft' })
+      if (!relevance.pass) {
+        log.info(`[opportunityMatcher] Gate:RELEVANCE_FILTER suppressed "${opportunity.title}" — ${relevance.reason}`)
+        return {
+          saved: false,
+          reason: relevance.reason,
+          gate: 'RELEVANCE_FILTER',
+          matchPercentage: adjustedScore,
+          threshold,
+        }
+      }
 
-    // Gate 4: Score threshold — only applies when decision engine did not produce ACCEPT/REVIEW
-    if (!bypassThreshold && adjustedScore < threshold) {
-      log.info(`[opportunityMatcher] Gate:THRESHOLD suppressed "${opportunity.title}" — score ${adjustedScore}% < ${threshold}%, decision was ${canonicalDecision ?? 'null'}`)
+      if (relevance.softFail) {
+        const penalty = Number.isFinite(Number(relevance.penalty)) ? Number(relevance.penalty) : 25
+        adjustedScore = Math.max(0, adjustedScore - penalty)
+        if (decision) {
+          decision.reasons = [
+            ...(Array.isArray(decision.reasons) ? decision.reasons : []),
+            `Soft relevance penalty -${penalty}: ${relevance.reason}`,
+          ]
+        }
+      }
+    }
+
+    adjustedScore = Math.round(Math.max(0, Math.min(100, adjustedScore)))
+
+    // Gate 5: Score threshold.
+    // IMPORTANT: do not bypass this for ACCEPT/REVIEW. A score below the user's
+    // floor is not eligible for automatic pipeline insertion.
+    if (adjustedScore < threshold) {
+      log.info(
+        `[opportunityMatcher] Gate:THRESHOLD suppressed "${opportunity.title}" — score ${adjustedScore}% < ${threshold}%, decision was ${decision?.decision ?? 'null'}`,
+      )
       return {
         saved: false,
         reason: `Match score ${adjustedScore}% below ${threshold}% threshold`,
         gate: 'THRESHOLD',
-        matchPercentage,
+        matchPercentage: adjustedScore,
         threshold,
+        decision: decision?.decision ?? null,
       }
     }
 
-    // Gate 5: Relevance filter — hard disqualification rules (always enforced)
-    if (profileContext) {
-      const profileData = extractProfileData(profileContext)
-      const relevance = applyRelevanceFilter(opportunity, profileData)
-      if (!relevance.pass) {
-        log.info(`[opportunityMatcher] Gate:RELEVANCE_FILTER suppressed "${opportunity.title}" — ${relevance.reason}`)
-        return { saved: false, reason: relevance.reason, gate: 'RELEVANCE_FILTER', matchPercentage, threshold }
-      }
-    }
+    matchPercentage = adjustedScore
 
     // Resolve profile context (organization is optional; profile-scoped pipeline is canonical).
     const profile = await db

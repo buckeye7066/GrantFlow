@@ -11,7 +11,7 @@
 
 import { loadProfileContext, buildProfileSignals } from './profileHelpers.js'
 import { buildProfileFacets } from './profile/profileTaxonomy.js'
-import { scoreOpportunity } from './matchEngine.js'
+import { computeMatchDecision } from './matchDecisionEngine.js'
 import { trustedOriginClause, trustedSourceClause } from '../utils/recordOrigins.js'
 import { assessOpportunityTrust } from './opportunityTrust.js'
 
@@ -228,14 +228,27 @@ async function buildResultsSnapshot(db, profileContext) {
 
     // Score the top candidates and attach canonical trust assessments so
     // Anya can explain *why* a result is lower-trust or directory-only.
+    // Anya MUST explain only what the canonical matcher would actually
+    // accept or send for review. Use computeMatchDecision (the same path
+    // Discover and the pipeline use) rather than raw scoreOpportunity().
+    const rawProfileForDecision = profileContext?.profile ?? profileContext
+    const profileSectionsForDecision = profileContext?.sections ?? null
+    const signalsForDecision = profileContext?.signals ?? null
+
     const scored = rows.map((opp) => {
-      const result = scoreOpportunity(profileContext, opp)
+      const decision = computeMatchDecision(rawProfileForDecision, opp, {
+        profileSections: profileSectionsForDecision,
+        signals: signalsForDecision,
+      })
       const trust = assessOpportunityTrust(opp, { allowDirectory: true, allowExpired: false })
-      return { opp, trust, ...result }
+      return { opp, trust, ...decision }
     })
-    // Drop items that the canonical trust layer would never display so Anya
-    // does not reference dead/placeholder opportunities.
-    const displayable = scored.filter((s) => s.trust?.display !== false)
+    // Drop items the canonical trust layer would never display AND items the
+    // canonical decision engine rejected — Anya must not reference dead,
+    // placeholder, or ineligible opportunities.
+    const displayable = scored.filter((s) =>
+      s.trust?.display !== false && s.decision !== 'REJECT'
+    )
     displayable.sort((a, b) => b.score - a.score)
 
     const top5 = displayable.slice(0, 5)
@@ -279,10 +292,10 @@ async function buildResultsSnapshot(db, profileContext) {
 
     lines.push('')
     lines.push('**Trust vocabulary (use these exact meanings when the user asks "is this legit?"):**')
-    lines.push('- `trust:primary` = official/government/foundation source with real URL — highest confidence.')
-    lines.push('- `trust:verified` = reputable private source, passed validation.')
-    lines.push('- `trust:community` = known community source, usually OK but caveat accordingly.')
+    lines.push('- `trust:trusted` = official or verified source with a real URL — highest confidence.')
+    lines.push('- `trust:standard` = directory or community source that passed display checks — useful, but verify details before applying.')
     lines.push('- `trust:low` = lower-trust or partially unverified — tell the user to double-check before applying.')
+    lines.push('- `source_trust:official|verified|directory|community|unknown` explains why the source received its trust tier.')
     lines.push('- `[directory]` = this is a directory/referral resource, not a direct funder. Suggest the user browse it to find specific programs.')
     lines.push('- `[loan]` = this is a loan, not a grant. Mention that repayment is required.')
     lines.push('- `[expired]` = the posted deadline has passed. Suggest watching for the next cycle.')

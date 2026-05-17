@@ -90,6 +90,10 @@ export function assembleFundingResults(scored = [], opts = {}) {
   const maxResults = Math.max(1, Math.min(200, Number(opts.maxResults) || 50))
   const geoExpansionPool = Array.isArray(opts.geoExpansionPool) ? opts.geoExpansionPool : []
   const profileGaps = Array.isArray(opts.profileGaps) ? opts.profileGaps : []
+  // Strict mode: caller (e.g. Discover slider with strict=1) wants the minimum
+  // score to be a HARD floor. Relaxed direct, directories, and geo-expanded
+  // tiers are all suppressed unless the user deliberately lowers their slider.
+  const strictMinScore = opts.strictMinScore === true
 
   const all = (Array.isArray(scored) ? scored : []).filter((o) => o && !rejected(o))
   const tierAttempts = []
@@ -102,6 +106,37 @@ export function assembleFundingResults(scored = [], opts = {}) {
       tier: TIERS.STRONG_DIRECT,
       opportunities: strong.slice(0, maxResults),
       explanation: `Found ${strong.length} direct opportunit${strong.length === 1 ? 'y' : 'ies'} at or above your threshold (${minScore}%).`,
+      tierAttempts,
+    })
+  }
+
+  // Strict mode: the caller asked for the minimum score to be a hard floor.
+  // Do not return relaxed/directories/geo-expanded results below that floor.
+  if (strictMinScore) {
+    if (profileGaps.length > 0) {
+      tierAttempts.push({
+        tier: TIERS.PROFILE_GAPS,
+        count: 0,
+        reason: 'strict_threshold_no_relax',
+      })
+      return finalize({
+        tier: TIERS.PROFILE_GAPS,
+        opportunities: [],
+        profile_gaps: profileGaps,
+        explanation: `No direct opportunities met your strict ${minScore}% threshold. Key profile fields are missing: ${profileGaps.join(', ')}. Fill these in or deliberately lower the slider to broaden results.`,
+        tierAttempts,
+      })
+    }
+
+    tierAttempts.push({
+      tier: TIERS.EXPLAIN_ZERO,
+      count: 0,
+      reason: 'strict_threshold_no_relax',
+    })
+    return finalize({
+      tier: TIERS.EXPLAIN_ZERO,
+      opportunities: [],
+      explanation: `No opportunities met your strict ${minScore}% match threshold. Lower the slider deliberately to see weaker matches, or add more profile detail so GrantFlow can find better-fit sources.`,
       tierAttempts,
     })
   }

@@ -16,7 +16,8 @@ import {
   assessOpportunityTrust,
   buildTrustMetadata,
 } from '../services/opportunityTrust.js'
-import { scoreOpportunity, makeDecision } from '../services/matchEngine.js'
+import { scoreOpportunity } from '../services/matchEngine.js'
+import { canonicalizeOpportunityList } from '../services/matching/resultEnricher.js'
 import { runAllDomainEngines } from '../services/crawlers/domainEngines/index.js'
 import { crawlStateWaiverBenefits, evaluateStateWaiverEligibility } from '../services/crawlers/stateWaiverBenefitsCrawler.js'
 import { planCoverage, buildCoverageReport, buildGrantsGovQueryTerms, getSource } from '../services/sourceRegistry.js'
@@ -389,10 +390,21 @@ router.post('/run', ensureAuth, async (req, res) => {
 
     const mapped = result.results.map(mapResultToFrontendShape)
 
-    // Merge "near you" opportunities from funding_opportunities table
-    const curatedTitles = mapped.map(o => o.title || o.name || '');
-    const nearbyOpps = await queryNearbyOpportunities(db, result.analysis, curatedTitles, profileContext, 30);
-    const allMapped = filterActionableOpportunities([...mapped, ...nearbyOpps]);
+    // Merge "near you" opportunities from funding_opportunities table.
+    // IMPORTANT: crawler matchScore is only a retrieval prefilter score.
+    // Re-score everything with the canonical decision engine before filtering,
+    // displaying, saving, or explaining it.
+    const curatedTitles = mapped.map(o => o.title || o.name || '')
+    const nearbyOpps = await queryNearbyOpportunities(db, result.analysis, curatedTitles, profileContext, 30)
+    const initialMapped = filterActionableOpportunities([...mapped, ...nearbyOpps])
+
+    const canonicalized = canonicalizeOpportunityList(profileContext, initialMapped, {
+      preserveDirectories: true,
+      trustOptions: { allowDirectory: true, allowExpired: false },
+      trustDowngradePenalty: 5,
+    })
+    const allMapped = canonicalized.kept
+    const canonicalDropCounts = canonicalized.dropped
 
     const _isDirectoryOpp = (opp) => (
       Boolean(opp.is_directory_resource) ||
@@ -401,7 +413,12 @@ router.post('/run', ensureAuth, async (req, res) => {
       String(opp.record_origin || '').startsWith('directory')
     )
 
-    const dropCounts = { belowMinScore: 0, relevance: 0, relevanceByRule: {} }
+    const dropCounts = {
+      belowMinScore: 0,
+      relevance: 0,
+      relevanceByRule: {},
+      canonical: canonicalDropCounts,
+    }
 
     // Directories are exempt from the numeric threshold only in the
     // directory-centric crawler type (local_funding) where the caller is
@@ -494,11 +511,17 @@ router.post('/run', ensureAuth, async (req, res) => {
       )
     }
 
-    const effectiveProfile = profileContext?.profile ?? {}
-    filtered = filtered.map(opp => {
-      const { decision, explanation } = makeDecision(opp.match_score ?? 0, effectiveProfile, opp)
-      return { ...opp, match_decision: decision, decision, match_decision_explanation: explanation }
-    })
+    // Canonical decision was already attached by canonicalizeOpportunityList
+    // above. Do NOT re-run makeDecision against the crawler/prefilter
+    // match_score — that path inflated weak generic rows. Just ensure
+    // every survivor has stable fallback display fields.
+    filtered = filtered.map((opp) => ({
+      ...opp,
+      match_decision: opp.match_decision ?? opp.decision ?? 'REVIEW',
+      decision: opp.decision ?? opp.match_decision ?? 'REVIEW',
+      match_decision_explanation:
+        opp.match_decision_explanation ?? opp.match_explanation ?? null,
+    }))
 
     // Policy enforcement: remove loans, matching-funds, no-URL, and hard-REJECT items.
     // Directory resources survive REJECT unless they are themselves loans/matching-funds.
@@ -679,6 +702,7 @@ router.post('/run', ensureAuth, async (req, res) => {
         matchedCount: result.debug?.matchedCount || 0,
         demotedForUrl: result.debug?.demotedForUrl || 0,
         matchStats: result.debug?.matchStats || {},
+        canonicalDrops: canonicalDropCounts,
         timing: result.debug?.timing || {},
         analysis: {
           state: result.analysis.location?.state,

@@ -294,7 +294,19 @@ export async function processLocalCrawlerJob({ db, job, dataDir, profileContext 
         // computeMatchDecision() as the single canonical authority (Goal 4).
         // relevanceFilter hard-rejection, audit metadata, and ACCEPT/REVIEW
         // decisions are all produced inside that call (Goals 3, 8).
-        const pipelineResult = await saveToProfilePipeline(db, oppWithId, profileId, profileContext)
+        // Pass the crawler's already-chosen threshold (thresholdUsed) so
+        // saveToProfilePipeline does not silently apply its own 55% default
+        // and drop everything the crawler legitimately surfaced. The saver
+        // still re-runs computeMatchDecision and still treats the numeric
+        // floor as authoritative (ACCEPT/REVIEW does NOT bypass it).
+        const pipelineResult = await saveToProfilePipeline(
+          db,
+          oppWithId,
+          profileId,
+          profileContext,
+          null,
+          thresholdUsed,
+        )
         if (pipelineResult.saved) {
           savedToPipeline++
         }

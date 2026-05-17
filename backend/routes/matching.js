@@ -605,6 +605,7 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
         minScore: Number.isFinite(minScore) ? minScore : 50,
         maxResults: MAX_RESPONSE,
         profileGaps: ladderProfileGaps,
+        strictMinScore: strictMin,
       })
 
       // If the existing pipeline produced no items but the ladder found
@@ -627,7 +628,7 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
         if (ladder.threshold_relaxed_reason) {
           relaxedReason = relaxedReason || ladder.threshold_relaxed_reason
         }
-      } else if (ladder.threshold_relaxed) {
+      } else if (!strictMin && ladder.threshold_relaxed) {
         // Annotate every shown item with the per-card relaxed flags so
         // FundingResultCard renders the honest "lower-confidence" banner.
         capped = capped.map((o) => ({
@@ -660,8 +661,8 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
               },
               profile_signal_audit: signalAudit,
               score_hint: allScored._scoreHint || null,
-              threshold_relaxed: effectiveMinScore !== minScore || ladder.threshold_relaxed ? true : undefined,
-              threshold_relaxed_reason: relaxedReason || ladder.threshold_relaxed_reason || undefined,
+              threshold_relaxed: !strictMin && (effectiveMinScore !== minScore || ladder.threshold_relaxed) ? true : undefined,
+              threshold_relaxed_reason: !strictMin ? (relaxedReason || ladder.threshold_relaxed_reason || undefined) : undefined,
               result_tier: ladder.tier,
               directory_only: ladder.directory_only || undefined,
               geo_expanded: ladder.geo_expanded || undefined,

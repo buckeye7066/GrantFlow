@@ -222,8 +222,19 @@ export default function DiscoverGrants() {
     queryFn: async () => {
       if (!effectiveProfileId) return { opportunities: [] }
       const ms = Math.min(100, Math.max(0, Number(minMatchScore) || 0))
+      // Catalog query honors the Discover slider as a HARD floor. The user
+      // can broaden via the "Try Broader Search" button, which deliberately
+      // lowers the slider; until that happens we want strict mode end-to-end.
+      const params = new URLSearchParams({
+        min_score: String(ms),
+        limit: '2000',
+        skip_readiness_check: '1',
+        strict: '1',
+        allow_relax: '0',
+        relax: '0',
+      })
       return apiFetch(
-        `/api/matching/profile/${effectiveProfileId}/opportunities?min_score=${ms}&limit=2000&skip_readiness_check=1&allow_relax=1`,
+        `/api/matching/profile/${effectiveProfileId}/opportunities?${params.toString()}`,
       )
     },
     enabled: authReady && Boolean(effectiveProfileId),
@@ -234,26 +245,34 @@ export default function DiscoverGrants() {
     const payload = catalogMatchResponse?.data ?? catalogMatchResponse ?? {}
     const rows = payload?.opportunities ?? []
     if (!Array.isArray(rows)) return []
-    return rows.map((opp) => ({
-      id: opp.id,
-      title: opp.title,
-      program_name: opp.title,
-      sponsor: opp.sponsor || opp.funder,
-      url: opp.application_url ?? opp.source_url ?? opp.url,
-      deadline: opp.deadline,
-      deadlineAt: opp.deadline,
-      description: opp.description,
-      descriptionMd: opp.description,
-      match_score: opp.match_score,
-      match: opp.match_score,
-      matched_fields: opp.match_reasons ?? [],
-      matchReasons: opp.match_reasons ?? [],
-      source: opp.source || 'catalog',
-      usable_for_housing: opp.usable_for_housing ?? false,
-      refund_potential: opp.refund_potential ?? false,
-      funding_category: opp.funding_category ?? null,
-    }))
-  }, [catalogMatchResponse])
+    // Defense in depth: if any backend path leaks results below the user's
+    // slider value, the UI must still honor the slider as a hard floor.
+    const minScoreFloor = Math.min(100, Math.max(0, Number(minMatchScore) || 0))
+    return rows
+      .filter((opp) => {
+        const score = Number(opp.match_score ?? opp.match ?? -Infinity)
+        return Number.isFinite(score) && score >= minScoreFloor
+      })
+      .map((opp) => ({
+        id: opp.id,
+        title: opp.title,
+        program_name: opp.title,
+        sponsor: opp.sponsor || opp.funder,
+        url: opp.application_url ?? opp.source_url ?? opp.url,
+        deadline: opp.deadline,
+        deadlineAt: opp.deadline,
+        description: opp.description,
+        descriptionMd: opp.description,
+        match_score: opp.match_score,
+        match: opp.match_score,
+        matched_fields: opp.match_reasons ?? [],
+        matchReasons: opp.match_reasons ?? [],
+        source: opp.source || 'catalog',
+        usable_for_housing: opp.usable_for_housing ?? false,
+        refund_potential: opp.refund_potential ?? false,
+        funding_category: opp.funding_category ?? null,
+      }))
+  }, [catalogMatchResponse, minMatchScore])
 
   const catalogResultMeta = useMemo(() => {
     const payload = catalogMatchResponse?.data ?? catalogMatchResponse ?? {}
@@ -368,7 +387,7 @@ export default function DiscoverGrants() {
     }
   }, [selectedProfile, profileDetailForUi, profileForSearch, selectedOrg])
 
-  const handleFindFunding = async (overrideCategoryQuery) => {
+  const handleFindFunding = async (overrideCategoryQuery, options = {}) => {
     const profileIdToUse = effectiveProfileId ?? selectedProfileId
     const pid = (typeof profileIdToUse === 'string' ? profileIdToUse.trim() : null) || null
     if (!pid) {
@@ -380,6 +399,13 @@ export default function DiscoverGrants() {
       })
       return
     }
+    // Strict-by-default: callers may explicitly broaden by passing
+    // { strictMinScore: false } or by lowering the slider.
+    const effectiveMinMatchScore = Math.min(
+      100,
+      Math.max(0, Number(options?.minMatchScoreOverride ?? minMatchScore) || 0),
+    )
+    const strictMinScore = options?.strictMinScore !== false
     setIsSearching(true)
     setProfileCompletionHint(null)
     setScoreHint(null)
@@ -415,7 +441,8 @@ export default function DiscoverGrants() {
         profileId: pid,
         crawlerType: 'comprehensive',
         profileData: profileForSearch,
-        minMatchScore,
+        minMatchScore: effectiveMinMatchScore,
+        strictMinScore,
         itemRequest,
       })
       if (data && data.success === false) {
@@ -436,7 +463,16 @@ export default function DiscoverGrants() {
         })
         return
       }
-      const opportunities = data?.opportunities ?? []
+      const rawOpportunities = Array.isArray(data?.opportunities) ? data.opportunities : []
+      // Frontend hard floor (defense in depth) — backend should already have
+      // enforced this when strictMinScore is set, but never trust looser
+      // results to silently leak through the slider.
+      const opportunities = strictMinScore
+        ? rawOpportunities.filter((opp) => {
+            const score = Number(opp.match_score ?? opp.match ?? -Infinity)
+            return Number.isFinite(score) && score >= effectiveMinMatchScore
+          })
+        : rawOpportunities
       setProfileCompletionHint(null)
       setScoreHint(data?.score_hint || null)
       await handleCrawlerResults(opportunities, data)
@@ -1179,7 +1215,7 @@ export default function DiscoverGrants() {
                               type="button"
                               onClick={async () => {
                                 setCategoryQuery(cat.query)
-                                await handleFindFunding(cat.query)
+                                await handleFindFunding(cat.query, { strictMinScore: true })
                               }}
                               disabled={isSearching || !selectedProfile}
                               className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium bg-white border border-amber-300 text-amber-900 hover:bg-amber-100 hover:border-amber-400 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
@@ -1209,7 +1245,7 @@ export default function DiscoverGrants() {
                   onClick={() => {
                     setMinMatchScore(0)
                     setCategoryQuery(null)
-                    void handleFindFunding(null)
+                    void handleFindFunding(null, { minMatchScoreOverride: 0, strictMinScore: true })
                   }}
                   disabled={isSearching || !selectedProfile}
                   className="bg-amber-600 hover:bg-amber-700 text-white"

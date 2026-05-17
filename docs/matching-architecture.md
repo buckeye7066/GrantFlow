@@ -22,10 +22,17 @@ own. `matchingEngine.js` is a tiny wrapper that exposes the legacy
 `scoreOpportunity(profile, opp)` — a scoring helper only, NEVER an acceptance
 authority.
 
-**MATCHER_VERSION: 4.0.0** — `computeMatchDecision()` is the sole
+**MATCHER_VERSION: 4.1.0** — `computeMatchDecision()` is the sole
 acceptance/rejection authority. `scoreOpportunity()` /
 `calculateMatchScore()` return a raw score only and are used solely for
 lightweight ranking and junk pre-filtering.
+
+User-facing result paths (Discover, real crawlers, Anya context, pipeline
+auto-add) are funnelled through
+`backend/services/matching/resultEnricher.js`, which combines
+`assessOpportunityTrust()` + `computeMatchDecision()` +
+`deriveMatchReasonCodes()` and emits stable display fields. Crawler
+prefilter scores are never treated as final user-facing scores.
 
 ### Exported Functions
 
@@ -62,7 +69,7 @@ lightweight ranking and junk pre-filtering.
   matchedProfileTraits: string[],   // Which profile traits matched
   missingEligibilityFields: string[], // Fields needed but missing
   explanation: string,              // Human-readable summary
-  matcherVersion: "4.0.0",
+  matcherVersion: "4.1.0",
   evaluatedAt: ISO timestamp
 }
 ```
@@ -224,9 +231,22 @@ Pipeline entries (grants table) include the `matcher_version`, `profile_fingerpr
 
 ## Matcher Versioning
 
-Current version: **4.0.0** (defined as `MATCHER_VERSION` in
+Current version: **4.1.0** (defined as `MATCHER_VERSION` in
 `backend/services/matchEngine.js`; re-exported by
 `backend/services/matchDecisionEngine.js`)
+
+**Changes from v4.0.0 → v4.1.0 relevant to callers:**
+- Generic / category-empty opportunities now score modestly (max ~45) so
+  filler rows no longer surface as strong matches.
+- `scoreCategoryComponent` baseline lowered (15) and floor lowered (5) to
+  prevent generic directories from looking like strong matches.
+- `scoreEligibilityComponent` baseline lowered (35) and soft type mismatch
+  penalty increased (-25) so misaligned entity types lose more score.
+- `matchOpportunities(opts)` now accepts `strictMinScore: true` to disable
+  automatic relaxation — used by Discover slider strict mode.
+- The numeric threshold in `opportunityMatcher.saveToProfilePipeline` is no
+  longer bypassed by ACCEPT/REVIEW. Relevance filter runs in soft mode and
+  penalties feed into the score before the threshold check.
 
 **Changes from v2.0.0 → v4.0.0 relevant to callers:**
 - `matchEngine.js` is the single implementation; `matchDecisionEngine.js` is a
@@ -265,7 +285,7 @@ Re-evaluates all existing pipeline entries using the current decision engine:
   "reviewed": 123,
   "rejected": 221,
   "errors": 0,
-  "matcherVersion": "4.0.0"
+  "matcherVersion": "4.1.0"
 }
 ```
 
@@ -291,12 +311,12 @@ All insertion paths go through `saveToProfilePipeline()` in `opportunityMatcher.
 the sole decision authority; `calculateMatchScore` / `scoreOpportunity` are
 used only as non-authoritative ranking helpers.
 
-### Path audit (v4.0.0)
+### Path audit (v4.1.0)
 
 | Path | Status | Notes |
 |---|---|---|
 | `backend/services/opportunityMatcher.js:saveToProfilePipeline` | ✅ canonical | Production pipeline insertion — sole INSERT authority |
-| `backend/services/itemCrawler.js` | ✅ canonical (v4.0.0) | Uses `computeMatchDecision(profile, opp)` with explicit camelCase→snake_case mapping into `upsertFundingOpportunity` |
+| `backend/services/itemCrawler.js` | ✅ canonical (v4.1.0) | Uses `computeMatchDecision(profile, opp)` with explicit camelCase→snake_case mapping into `upsertFundingOpportunity` |
 | `backend/services/localCrawler.js` | ✅ canonical | Calls `saveToProfilePipeline` |
 | `backend/services/comprehensiveCrawlerOptimized.js` | ✅ canonical | Calls `saveToProfilePipeline` |
 | `backend/services/anyaAutonomousFunctionRunner.js` | ✅ canonical | Calls `saveToProfilePipeline` |
@@ -304,7 +324,7 @@ used only as non-authoritative ranking helpers.
 | `backend/routes/admin.js POST /api/admin/backfill-matches` | ✅ canonical | Re-evaluates using `computeMatchDecision` |
 | `backend/utils/seedOnStartup.js` | ✅ canonical | Inserts into `funding_opportunities`, not grants pipeline |
 | `backend/scripts/seed-profile-grants.mjs` | ✅ canonical | Dev-only; guarded by NODE_ENV/DISABLE_SEEDING; uses `computeMatchDecision` |
-| `scripts/seed-profile-grants.mjs` | ✅ canonical (v4.0.0) | Dev-only; guarded by NODE_ENV/DISABLE_SEEDING; heuristic pre-score via canonical `scoreOpportunity`; `computeMatchDecision` is sole acceptance authority |
+| `scripts/seed-profile-grants.mjs` | ✅ canonical (v4.1.0) | Dev-only; guarded by NODE_ENV/DISABLE_SEEDING; heuristic pre-score via canonical `scoreOpportunity`; `computeMatchDecision` is sole acceptance authority |
 | `scripts/seed-matched-grants.mjs` | ✅ canonical | Dev-only; guarded by NODE_ENV/DISABLE_SEEDING; uses `computeMatchDecision` |
 | `backend/scripts/create-orgs-and-grants.mjs` | ❌ hard-disabled | Throws on load; previous body inserted random placeholder data, bypassing `computeMatchDecision` |
 
@@ -408,7 +428,7 @@ Tests are in:
 
 ### Comprehensive Test Coverage
 
-1. **MATCHER_VERSION** is `4.0.0`
+1. **MATCHER_VERSION** is `4.1.0`
 2. **Profile classes** (ACCEPT/REVIEW/REJECT for each):
    - Caregiver/family profile
    - Student profile (including non-student REJECT for student-only)

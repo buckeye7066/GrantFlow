@@ -659,7 +659,11 @@ export async function runComprehensiveCrawler(contextOrDb, profileContextArg = {
   }
   
   // Save matches to profile pipeline if profileId provided.
-  // Let saveToProfilePipeline handle threshold logic (default 55%, ACCEPT/REVIEW bypass)
+  // Pass the crawler's chosen threshold (thresholdUsed) to
+  // saveToProfilePipeline. ACCEPT/REVIEW no longer bypasses the saver's
+  // numeric floor, so callers must explicitly supply the floor they already
+  // filtered against. Otherwise the saver's 55% default silently rejects
+  // opportunities this crawler legitimately surfaced.
   // instead of pre-filtering at 80% which blocked all individual-profile results.
   let savedToProfile = 0
   if (profileId) {
@@ -676,7 +680,16 @@ export async function runComprehensiveCrawler(contextOrDb, profileContextArg = {
           const oppWithId = { ...opp, id: insertedOpp.id, source: opp.source || 'verified_real' }
           // Do NOT pass pre-computed score — let saveToProfilePipeline run
           // computeMatchDecision() as the single canonical authority (Goal 4).
-          const result = await saveToProfilePipeline(db, oppWithId, profileId, profileContext)
+          // Pass the crawler's chosen threshold so the saver respects this
+          // caller's filtering choice instead of using its 55% default.
+          const result = await saveToProfilePipeline(
+            db,
+            oppWithId,
+            profileId,
+            profileContext,
+            null,
+            thresholdUsed,
+          )
           if (result.saved) {
             savedToProfile++
           }

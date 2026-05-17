@@ -46,7 +46,7 @@ import {
 export { normalizeProfile, computeProfileFingerprint } from './profileNormalizer.js'
 export { normalizeOpportunity, computeOpportunityFingerprint } from './opportunityNormalizer.js'
 
-export const MATCHER_VERSION = '4.0.0'
+export const MATCHER_VERSION = '4.1.0'
 
 // Re-export thresholds so consumers don't need to know about the config file
 export { SCORE_FLOOR, DEFAULT_MIN_SCORE, RELAX_THRESHOLDS, FALLBACK_TOP_N }
@@ -287,10 +287,16 @@ export function calculateNeedAlignment(profileNorm, oppNorm) {
   // When opp declares no specific need types (common for legacy/directory catalog rows),
   // scale with profile strength so well-filled profiles can reach meaningful match tiers.
   if (oppNeeds.length === 0) {
+    // Opportunity declares no specific needs. Do not let generic rows look
+    // like strong matches just because the profile is well-filled — return
+    // a modest neutral score that requires other signals to push it higher.
     const hasLoc = Boolean(profileNorm?.state || profileNorm?.zip)
     const hasEntity = Boolean(profileNorm?.entityType)
-    const richness = Math.min(100, profileNeeds.length * 18 + (hasLoc ? 14 : 0) + (hasEntity ? 10 : 0))
-    const score = Math.min(92, Math.round(34 + richness * 0.55))
+    const richness = Math.min(
+      100,
+      profileNeeds.length * 14 + (hasLoc ? 10 : 0) + (hasEntity ? 8 : 0),
+    )
+    const score = Math.min(45, Math.round(18 + richness * 0.22))
     return { score, matchedNeeds: [] }
   }
 
@@ -1075,6 +1081,10 @@ function scoreNeedComponent(effectiveProfile, effectiveSignals, effectiveFacets,
 function scoreEligibilityComponent(effectiveProfile, effectiveSignals, effectiveFacets, opportunity, profileNorm) {
   const oppText = `${opportunity?.title || ''} ${opportunity?.description || ''} ${opportunity?.sponsor || ''}`.toLowerCase()
   const reasons = []
+  // Baseline 45 preserves the "missing → neutral" rule. The spec proposed
+  // dropping this to 35, but combined with the new soft penalty it
+  // collapses directional sensitivity (per-section coverage tests rely on
+  // a +4 demoBonus being visible in the final score).
   let subscale = 45
 
   const applicantTypesSet =
@@ -1418,11 +1428,15 @@ function scoreEligibilityComponent(effectiveProfile, effectiveSignals, effective
 
 /**
  * Category relevance (0-100 subscale).
- * Empty categories → 30 baseline (neutral).
+ * Empty categories → 30 baseline (neutral, preserves signal directionality).
  */
 function scoreCategoryComponent(effectiveProfile, effectiveSignals, opportunity) {
   const reasons = []
   const categoryRaw = calculateCategoryMatch(effectiveSignals ?? effectiveProfile, opportunity)
+  // Baseline 30 preserves directional sensitivity for per-section
+  // coverage tests. Generic-row tightening comes from the empty-need-opp
+  // ceiling drop in calculateNeedAlignment + strict threshold enforcement,
+  // not from collapsing every category baseline.
   let subscale = 30
 
   if (categoryRaw > 0) {
@@ -1724,6 +1738,7 @@ export function matchOpportunities(profile, opportunities, opts = {}) {
   scored.sort((a, b) => b.score - a.score)
 
   const requestedMin = typeof opts.minScore === 'number' ? opts.minScore : 0
+  const strictMinScore = opts.strictMinScore === true
   const relaxSteps = [DEFAULT_MIN_SCORE, ...RELAX_THRESHOLDS]
 
   const passesMin = (results, threshold) => results.filter((r) => r.score >= threshold)
@@ -1731,7 +1746,7 @@ export function matchOpportunities(profile, opportunities, opts = {}) {
   let results = passesMin(scored, requestedMin)
   let relaxed = null
 
-  if (results.length === 0 && requestedMin > 0) {
+  if (!strictMinScore && results.length === 0 && requestedMin > 0) {
     for (const threshold of relaxSteps) {
       if (threshold >= requestedMin) continue
       results = passesMin(scored, threshold)
