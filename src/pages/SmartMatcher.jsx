@@ -63,6 +63,13 @@ export default function SmartMatcher() {
     /** When set, catalog query uses OR across these terms (from “Understand & search”). */
     const [parsedSearchTerms, setParsedSearchTerms] = useState(null)
     const [intentSummary, setIntentSummary] = useState("")
+    // Captured from interpretMatcherIntent so the catalog query can skip
+    // SSI/SNAP/TANF when the user is searching for professional development /
+    // continuing education funding (Smart Matcher spec §3, §4).
+    const [intentPrimaryCategory, setIntentPrimaryCategory] = useState(null)
+    const [intentExcludedCategories, setIntentExcludedCategories] = useState([])
+    const [intentBrandedProgram, setIntentBrandedProgram] = useState(null)
+    const [intentCredentials, setIntentCredentials] = useState([])
     const [freeTextNeed, setFreeTextNeed] = useState("")
     const [minScore, setMinScore] = useState(50)
     const [selectedOpp, setSelectedOpp] = useState(null)
@@ -99,6 +106,10 @@ export default function SmartMatcher() {
         setSearchQuery("")
         setParsedSearchTerms(null)
         setIntentSummary("")
+        setIntentPrimaryCategory(null)
+        setIntentExcludedCategories([])
+        setIntentBrandedProgram(null)
+        setIntentCredentials([])
         setFreeTextNeed("")
         setSelectedOpp(null)
         setIsSearchingNeeds(false)
@@ -200,6 +211,10 @@ export default function SmartMatcher() {
       }
       setParsedSearchTerms(terms.map((t) => String(t).toLowerCase().trim()).filter(Boolean))
       setIntentSummary(typeof payload.summary === "string" ? payload.summary : "")
+      setIntentPrimaryCategory(typeof payload.primary_category === "string" ? payload.primary_category : null)
+      setIntentExcludedCategories(Array.isArray(payload.excluded_categories) ? payload.excluded_categories : [])
+      setIntentBrandedProgram(payload.branded_program ?? null)
+      setIntentCredentials(Array.isArray(payload.credentials_detected) ? payload.credentials_detected : [])
       setSearchQuery(terms.join(", "))
       queryClient.invalidateQueries({ queryKey: ["smart-matcher"] })
       toast({
@@ -223,6 +238,8 @@ export default function SmartMatcher() {
         state: selectedProfile?.state ?? undefined,
         city: selectedProfile?.city ?? undefined,
         applicantType: selectedProfile?.primary_type ?? selectedProfile?.applicant_type ?? undefined,
+        primaryCategory: intentPrimaryCategory ?? undefined,
+        intentTerms: Array.isArray(parsedSearchTerms) ? parsedSearchTerms : undefined,
 }),
         onSuccess: (data) => {
                 queryClient.invalidateQueries({ queryKey: ['smart-matcher'] })
@@ -266,7 +283,7 @@ export default function SmartMatcher() {
 
   // -- Matching data --
   const { data: scoredResponse, isLoading: isScoring } = useQuery({
-        queryKey: ['smart-matcher', selectedProfileId, minScore, searchQuery, parsedSearchTerms],
+        queryKey: ['smart-matcher', selectedProfileId, minScore, searchQuery, parsedSearchTerms, intentPrimaryCategory, intentExcludedCategories.join('|')],
         queryFn: async () => {
                 if (!selectedProfileId || selectedProfileId === 'all') {
                           return { opportunities: [], total_scored: 0, returned: 0 }
@@ -287,6 +304,12 @@ export default function SmartMatcher() {
                   for (const t of terms) {
                     qs.append('q_terms', t)
                   }
+                }
+                if (intentPrimaryCategory) {
+                  qs.set('primary_category', String(intentPrimaryCategory))
+                }
+                if (Array.isArray(intentExcludedCategories) && intentExcludedCategories.length > 0) {
+                  qs.set('excluded_categories', intentExcludedCategories.join(','))
                 }
                 return await apiFetch(`/api/matching/profile/${selectedProfileId}/opportunities?${qs.toString()}`)
         },

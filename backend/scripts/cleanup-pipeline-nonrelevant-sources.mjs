@@ -2,10 +2,18 @@
 /**
  * cleanup-pipeline-nonrelevant-sources.mjs
  *
- * Removes pipeline rows (grants) whose linked funding opportunity comes from a
- * source that is NOT in the canonical allowlist (PIPELINE_ALLOWED_SOURCES).
+ * Removes pipeline rows (grants) whose linked funding opportunity fails the
+ * canonical pipeline-source gate (denylist + untrusted record_origin). Grants
+ * where funding_opportunity_id IS NULL (manual entries) are never touched.
  *
- * Grants where funding_opportunity_id IS NULL (manual entries) are never touched.
+ * NOTE: This script previously used a raw SQL `NOT IN (PIPELINE_ALLOWED_SOURCES)`
+ * filter, which silently deleted every legitimate domain-crawler row (e.g.
+ * "Student Endowments", "Trade School Grants") because those labels were never
+ * in the static allowlist. We now evaluate each row in JavaScript using
+ * `evaluatePipelineSource`, the same predicate used by:
+ *   • POST /api/grants/from-opportunity (routes/grants.js)
+ *   • saveToProfilePipeline (services/opportunityMatcher.js)
+ *   • startup cleanup (utils/seedOnStartup.js)
  *
  * Usage:
  *   node backend/scripts/cleanup-pipeline-nonrelevant-sources.mjs          # dry-run (safe)
@@ -15,68 +23,65 @@
  */
 
 import { db } from '../db/index.js'
-import { PIPELINE_ALLOWED_SOURCES } from '../config/pipelineAllowedSources.js'
+import { evaluatePipelineSource } from '../config/pipelineAllowedSources.js'
 
 const isDryRun = !process.argv.includes('--apply')
 
 async function main() {
   console.log('[cleanup-pipeline] Starting pipeline source cleanup')
   console.log(`[cleanup-pipeline] Mode: ${isDryRun ? 'DRY RUN (use --apply to delete)' : 'APPLY — will delete rows'}`)
-  console.log(`[cleanup-pipeline] Allowed sources (${PIPELINE_ALLOWED_SOURCES.length}): ${PIPELINE_ALLOWED_SOURCES.join(', ')}`)
-
-  // Build ? placeholders for the IN clause
-  const placeholders = PIPELINE_ALLOWED_SOURCES.map(() => '?').join(', ')
 
   // ------------------------------------------------------------------
-  // 1. Find disallowed sources currently in the pipeline
+  // 1. Pull every pipeline row joined to its funding_opportunity, then
+  //    classify in JS using evaluatePipelineSource. We can't push the
+  //    decision into SQL because the heuristic combines source label tokens
+  //    with record_origin trust, which the gate routes also use.
   // ------------------------------------------------------------------
-  const sourceSummary = await db
+  const rows = await db
     .prepare(
       `
-        SELECT fo.source, COUNT(g.id) AS cnt
+        SELECT g.id AS grant_id,
+               g.profile_id,
+               fo.source,
+               fo.record_origin
         FROM grants g
         JOIN funding_opportunities fo ON fo.id = g.funding_opportunity_id
         WHERE g.funding_opportunity_id IS NOT NULL
-          AND fo.source NOT IN (${placeholders})
-        GROUP BY fo.source
-        ORDER BY cnt DESC
       `,
     )
-    .all(...PIPELINE_ALLOWED_SOURCES)
+    .all()
 
-  if (sourceSummary.length === 0) {
+  const toDelete = []
+  const sourceCounts = new Map()
+  const profileCounts = new Map()
+
+  for (const row of rows) {
+    const gate = evaluatePipelineSource({
+      source: row.source,
+      record_origin: row.record_origin,
+    })
+    if (gate.allowed) continue
+    toDelete.push(row)
+
+    const sourceKey = `${row.source ?? 'NULL'} (origin=${row.record_origin ?? 'NULL'}, reason=${gate.reason})`
+    sourceCounts.set(sourceKey, (sourceCounts.get(sourceKey) ?? 0) + 1)
+    profileCounts.set(row.profile_id, (profileCounts.get(row.profile_id) ?? 0) + 1)
+  }
+
+  if (toDelete.length === 0) {
     console.log('[cleanup-pipeline] No disallowed pipeline rows found — nothing to do.')
     return
   }
 
-  let totalToDelete = 0
   console.log('\n[cleanup-pipeline] Disallowed sources found in pipeline:')
-  for (const row of sourceSummary) {
-    console.log(`  source="${row.source ?? 'NULL'}"  rows=${row.cnt}`)
-    totalToDelete += Number(row.cnt)
+  for (const [src, cnt] of sourceCounts.entries()) {
+    console.log(`  ${src}  rows=${cnt}`)
   }
-  console.log(`[cleanup-pipeline] Total rows to delete: ${totalToDelete}`)
+  console.log(`[cleanup-pipeline] Total rows to delete: ${toDelete.length}`)
 
-  // ------------------------------------------------------------------
-  // 2. Show per-profile impact
-  // ------------------------------------------------------------------
-  const profileSummary = await db
-    .prepare(
-      `
-        SELECT g.profile_id, COUNT(g.id) AS cnt
-        FROM grants g
-        JOIN funding_opportunities fo ON fo.id = g.funding_opportunity_id
-        WHERE g.funding_opportunity_id IS NOT NULL
-          AND fo.source NOT IN (${placeholders})
-        GROUP BY g.profile_id
-        ORDER BY cnt DESC
-      `,
-    )
-    .all(...PIPELINE_ALLOWED_SOURCES)
-
-  console.log(`\n[cleanup-pipeline] Profiles affected: ${profileSummary.length}`)
-  for (const row of profileSummary) {
-    console.log(`  profile_id=${row.profile_id}  rows_to_remove=${row.cnt}`)
+  console.log(`\n[cleanup-pipeline] Profiles affected: ${profileCounts.size}`)
+  for (const [profileId, cnt] of profileCounts.entries()) {
+    console.log(`  profile_id=${profileId}  rows_to_remove=${cnt}`)
   }
 
   if (isDryRun) {
@@ -86,23 +91,19 @@ async function main() {
   }
 
   // ------------------------------------------------------------------
-  // 3. Delete the disallowed pipeline rows
+  // 2. Delete each disallowed pipeline row by id (per-row to keep the
+  //    JS-side classification authoritative).
   // ------------------------------------------------------------------
-  const deleteResult = await db
-    .prepare(
-      `
-        DELETE FROM grants
-        WHERE funding_opportunity_id IS NOT NULL
-          AND funding_opportunity_id IN (
-            SELECT fo.id
-            FROM funding_opportunities fo
-            WHERE fo.source NOT IN (${placeholders})
-          )
-      `,
-    )
-    .run(...PIPELINE_ALLOWED_SOURCES)
+  let deleted = 0
+  for (const row of toDelete) {
+    try {
+      const res = await db.prepare('DELETE FROM grants WHERE id = ?').run(row.grant_id)
+      deleted += res?.changes ?? res?.rowCount ?? 0
+    } catch (err) {
+      console.warn(`[cleanup-pipeline] Failed to delete grant=${row.grant_id}:`, err?.message ?? err)
+    }
+  }
 
-  const deleted = deleteResult?.changes ?? deleteResult?.rowCount ?? 0
   console.log(`\n[cleanup-pipeline] Deleted ${deleted} pipeline row(s) from disallowed sources.`)
   console.log('[cleanup-pipeline] Done.')
 }

@@ -1141,7 +1141,12 @@ router.get('/health-check', async (req, res) => {
  * POST /api/real-crawlers/run-smart
  */
 router.post('/run-smart', ensureAuth, standardRateLimiter, async (req, res) => {
-  const { profile_id, min_match_score = 50 } = req.body || {}
+  const {
+    profile_id,
+    min_match_score = 50,
+    primary_category: clientPrimaryCategory = null,
+    intent_terms: clientIntentTerms = null,
+  } = req.body || {}
 
   if (!profile_id) {
     return res.status(400).json({
@@ -1168,9 +1173,52 @@ router.post('/run-smart', ensureAuth, standardRateLimiter, async (req, res) => {
     // continue without profile context; crawlers will fall back to live DB load
   }
 
+  // ── Spec §1 + §5: dispatch professional-development strategies whenever
+  // the client's intent OR the profile itself indicates licensed-professional
+  // / CE / licensure needs. This is the routing fix that stops run-smart
+  // from defaulting to local_funding + government_funding only.
+  const profileSignals = smartProfileContext?.signals ?? null
+  const profileNeeds = profileSignals?.needs instanceof Set
+    ? profileSignals.needs
+    : new Set(Array.isArray(profileSignals?.needs) ? profileSignals.needs : [])
+  const profileIsLicensedProfessional = Boolean(profileSignals?.isLicensedProfessional)
+    || (profileSignals?.credentials instanceof Set && profileSignals.credentials.size > 0)
+  const profileHasProfDevNeed =
+    profileNeeds.has('professional_development') ||
+    profileNeeds.has('continuing_education') ||
+    profileNeeds.has('license_reinstatement_support') ||
+    profileNeeds.has('professional_remediation_funding') ||
+    profileNeeds.has('workforce_reentry_training') ||
+    profileNeeds.has('nursing_reentry_support')
+  const intentTermsLower = Array.isArray(clientIntentTerms)
+    ? clientIntentTerms.map((t) => String(t).toLowerCase())
+    : []
+  const intentSignalsProfDev =
+    String(clientPrimaryCategory || '').toLowerCase() === 'professional_development' ||
+    intentTermsLower.some((t) =>
+      t.includes('continuing education') ||
+      t.includes('professional development') ||
+      t.includes('licensure') ||
+      t.includes('license reinstatement') ||
+      t.includes('cme') ||
+      t.includes('ceu') ||
+      t.includes('ethics training') ||
+      t.includes('boundary training') ||
+      t.includes('wioa') ||
+      t.includes('workforce development') ||
+      t.includes('vocational rehabilitation'),
+    )
+  const dispatchProfDev = intentSignalsProfDev || profileIsLicensedProfessional || profileHasProfDevNeed
+
+  // Base crawler set (existing behavior).
+  const crawlerTypes = ['local_funding', 'government_funding']
+  if (dispatchProfDev) {
+    crawlerTypes.push('license_reinstatement', 'certification_training')
+  }
+
   try {
-    // 1) Curated crawlers (local_funding + government_funding)
-    for (const crawlerType of ['local_funding', 'government_funding']) {
+    routeLogger.info(`[run-smart] profile=${profile_id} crawlerTypes=${JSON.stringify(crawlerTypes)} dispatchProfDev=${dispatchProfDev} (licensed=${profileIsLicensedProfessional}, profDevNeed=${profileHasProfDevNeed}, intent=${intentSignalsProfDev})`)
+    for (const crawlerType of crawlerTypes) {
       try {
         const result = await runCrawler(db, profile_id, {
           minScore: Math.max(1, Math.floor(minScore * 0.25)),
@@ -1254,8 +1302,48 @@ router.post('/run-smart', ensureAuth, standardRateLimiter, async (req, res) => {
       console.warn('[run-smart] State waiver crawl failed (continuing):', waiverErr?.message)
     }
 
+    // Spec §3: when professional-development intent is active, exclude
+    // generic cash-assistance / means-tested rows so SSI/SNAP/TANF don't
+    // pad the result list (the regression case from the original PROBE
+    // query). Directory-style or general funding directories survive — they
+    // help the user navigate to the right funder.
+    const isCashAssistanceOpportunity = (opp) => {
+      const haystack = [
+        opp?.title,
+        opp?.name,
+        opp?.description,
+        opp?.categories,
+        opp?.funding_category,
+        opp?.opportunity_type,
+        opp?.type,
+      ]
+        .map((v) => (v == null ? '' : Array.isArray(v) ? v.join(' ') : String(v)))
+        .join(' ')
+        .toLowerCase()
+      if (!haystack) return false
+      return [
+        'supplemental security income',
+        'ssi ',
+        ' ssi',
+        ' ssdi',
+        'tanf',
+        'snap benefits',
+        'food stamps',
+        'general assistance',
+        'cash assistance',
+        'income support',
+        'liheap',
+        'wic ',
+      ].some((kw) => haystack.includes(kw))
+    }
+
     const filtered = filterActionableOpportunities(allOpportunities)
       .filter((opp) => { const rel = applyRelevanceFilter(opp, smartProfileData); return rel.pass; })
+      .filter((opp) => {
+        if (!dispatchProfDev) return true
+        if (opp.is_directory_resource) return true
+        return !isCashAssistanceOpportunity(opp)
+      })
       .filter((opp) => typeof opp.match_score !== 'number' || opp.match_score >= minScore || opp.is_directory_resource)
       .sort((a, b) => (b.match_score ?? 0) - (a.match_score ?? 0))
       .slice(0, 100)
@@ -1282,7 +1370,11 @@ router.post('/run-smart', ensureAuth, standardRateLimiter, async (req, res) => {
       total_found: allOpportunities.length,
       min_match_score: minScore,
       opportunities: decoratedSmart,
-      sources_used: ['local_funding', 'government_funding', 'domain_engines', 'state_waiver_benefits'],
+      sources_used: [...crawlerTypes, 'domain_engines', 'state_waiver_benefits'],
+      dispatch_profile_development: dispatchProfDev,
+      profile_credentials: profileSignals?.credentials instanceof Set
+        ? Array.from(profileSignals.credentials)
+        : Array.isArray(profileSignals?.credentials) ? profileSignals.credentials : [],
     })
   } catch (err) {
     routeLogger.error('[RealCrawlers] run-smart error:', err)

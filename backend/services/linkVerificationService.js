@@ -173,7 +173,7 @@ export async function runLinkVerification(
     .prepare(
       `
         SELECT id, application_url, source_url, type, opportunity_type,
-               last_verified_at, link_status
+               result_kind, last_verified_at, link_status
         FROM funding_opportunities
         WHERE (application_url IS NOT NULL OR source_url IS NOT NULL)
           AND (last_verified_at IS NULL OR last_verified_at < ?)
@@ -202,6 +202,14 @@ export async function runLinkVerification(
         verification_method = ?,
         verified_by = ?,
         verification_error = ?
+    WHERE id = ?
+  `)
+
+  // Soft-hide for broken direct opps (separate from is_active; allows admin
+  // views to surface them via allowHidden, while normal users don't see them).
+  const hide = db.prepare(`
+    UPDATE funding_opportunities
+    SET is_hidden = 1
     WHERE id = ?
   `)
 
@@ -248,15 +256,22 @@ export async function runLinkVerification(
         })
 
         // Direct (non-directory) broken opportunities should not stay visible.
+        // Prefer the explicit result_kind column when set; fall back to
+        // legacy heuristics for older rows.
+        const resultKindLower = String(row.result_kind || '').toLowerCase()
         const isDirectory =
+          resultKindLower === 'directory' ||
           String(row.type || '').toUpperCase() === 'DIRECTORY' ||
           String(row.opportunity_type || '').toLowerCase().includes('directory')
         if (result.status === 'broken' && !isDirectory) {
           try {
+            // is_hidden is the soft signal consumer queries filter on; deactivate
+            // is the hard kill-switch that strips it from active=1 paths.
+            await hide.run(row.id)
             await deactivate.run(falseVal, row.id)
             stats.deactivated++
           } catch (err) {
-            console.warn('[link-verify] deactivate failed for', row.id, err?.message)
+            console.warn('[link-verify] hide/deactivate failed for', row.id, err?.message)
           }
         }
       }),
@@ -281,6 +296,7 @@ export async function runLinkVerification(
             AND (
               UPPER(COALESCE(type, '')) <> 'DIRECTORY'
               AND LOWER(COALESCE(opportunity_type, '')) NOT LIKE '%directory%'
+              AND LOWER(COALESCE(result_kind, '')) <> 'directory'
             )
             AND link_status IN ('broken', 'unverified')
             AND COALESCE(last_verified_at, discovered_at, created_at) < ?

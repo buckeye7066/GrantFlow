@@ -15,7 +15,8 @@ import {
   requireAuthenticatedUser,
 } from '../utils/accessControl.js'
 import { scheduleGrantApplicationApproach } from '../services/grantApplicationApproachAdvisor.js'
-import { isPipelineSourceAllowed } from '../config/pipelineAllowedSources.js'
+import { isPipelineSourceAllowed, evaluatePipelineSource } from '../config/pipelineAllowedSources.js'
+import { evaluateApplicantTypeEligibility } from '../services/applicantTypeGate.js'
 import { mergeOpportunitySignals } from '../services/profileHelpers.js'
 import { decorateOpportunityFreshness } from '../services/opportunityMatcher.js'
 import {
@@ -1481,17 +1482,106 @@ router.post('/from-opportunity', async (req, res, next) => {
     // Remember so we can serialize a trust summary into match_reasons below.
     const pipelineTrustMeta = buildTrustMetadata(pipelineGate.trust)
 
-    // Guardrail: block pipeline inserts from non-approved sources.
-    // This mirrors the same gate in opportunityMatcher.js and prevents irrelevant
-    // funding sources from entering individual profile pipelines via the frontend.
+    // Guardrail: block pipeline inserts from clearly-untrusted provenance
+    // (denied source markers or untrusted record_origin).
+    //
+    // Per project rules, this is intentionally a denylist + provenance check
+    // rather than a hard allowlist. Any opportunity coming from a trusted
+    // crawler origin (live_crawl, curated_verified, geo_crawl, etc.) — or
+    // whose source label looks like a real funding-domain identifier — is
+    // permitted into pipelines, so directory-style and domain-crawler
+    // resources surface to users instead of returning 400 (Goal 7).
     const opportunitySource = opportunity.source ? String(opportunity.source).trim() : null
-    if (opportunitySource && !isPipelineSourceAllowed(opportunitySource)) {
+    const opportunityRecordOrigin = opportunity.record_origin
+      ? String(opportunity.record_origin).trim()
+      : null
+    const sourceGate = evaluatePipelineSource({
+      source: opportunitySource,
+      record_origin: opportunityRecordOrigin,
+    })
+    if (!sourceGate.allowed) {
+      routeLogger.info('[grants/from-opportunity] blocked by source gate', {
+        requestId,
+        profile_id: normalizedProfileId,
+        organization_id: normalizedOrgId,
+        opportunity_id: resolvedOpportunityId,
+        reason: sourceGate.reason,
+        source: opportunitySource,
+        record_origin: opportunityRecordOrigin,
+      })
+      const messageByReason = {
+        denied_source:
+          'This funding source is on the explicit pipeline denylist (synthetic / placeholder / spam).',
+        untrusted_origin:
+          'This opportunity comes from an origin that is not trusted for pipeline saves.',
+        unknown_source:
+          'This opportunity has an unrecognised source. Please report it so we can verify the crawler.',
+        missing_source:
+          'This opportunity has no source provenance and cannot be added to your pipeline.',
+      }
       return res.status(400).json({
         error: 'source_not_allowed',
-        message: 'This funding source is not approved for individual pipelines.',
+        message:
+          messageByReason[sourceGate.reason] ||
+          'This funding source is not approved for individual pipelines.',
+        reason: sourceGate.reason,
         source: opportunitySource,
+        record_origin: opportunityRecordOrigin,
         requestId,
       })
+    }
+
+    // Symmetry with /api/matching/profile/:id/opportunities: refuse pipeline
+    // inserts whose explicit applicant-type eligibility hard-conflicts with
+    // the target profile (e.g. trying to save NSF research-institution
+    // grants into an individual profile's pipeline). Without this gate, the
+    // matcher would drop them silently while POST /from-opportunity would
+    // happily save them, creating a UX divergence between Discover and
+    // Pipeline. We only look up applicant_type when we have a profile id —
+    // organisation-only saves take a different code path below.
+    if (normalizedProfileId) {
+      try {
+        const targetProfileRow = await req.db
+          .prepare(
+            'SELECT applicant_type, primary_type, primary_profile_type FROM profiles WHERE id = ?',
+          )
+          .get(normalizedProfileId)
+        const profileApplicantType =
+          targetProfileRow?.applicant_type ??
+          targetProfileRow?.primary_type ??
+          targetProfileRow?.primary_profile_type ??
+          null
+        if (profileApplicantType) {
+          const eligDecision = evaluateApplicantTypeEligibility(opportunity, profileApplicantType)
+          if (eligDecision.decision === 'mismatch') {
+            routeLogger.info('[grants/from-opportunity] blocked by applicant-type gate', {
+              requestId,
+              profile_id: normalizedProfileId,
+              opportunity_id: resolvedOpportunityId,
+              applicant_type: profileApplicantType,
+              reason: eligDecision.reason,
+            })
+            return res.status(400).json({
+              error: 'ineligible_for_profile',
+              message:
+                'This opportunity is restricted to applicant types that do not match the selected profile (e.g. institutions of higher education, federal agencies, or 501(c)(3) organisations only).',
+              reason: eligDecision.reason,
+              applicant_type: profileApplicantType,
+              opportunity_id: resolvedOpportunityId,
+              requestId,
+            })
+          }
+        }
+      } catch (eligErr) {
+        // Eligibility lookup failure is non-fatal — fall through and let the
+        // existing trust / source / readiness gates make the call. Logged
+        // for traceability per project rule on lightweight logging.
+        routeLogger.warn('[grants/from-opportunity] applicant-type lookup failed', {
+          requestId,
+          profile_id: normalizedProfileId,
+          error: eligErr?.message || String(eligErr),
+        })
+      }
     }
 
     // Guardrail: don't allow expired opportunities into pipelines.

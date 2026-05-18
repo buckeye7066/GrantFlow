@@ -342,6 +342,18 @@ const NEED_SYNONYMS = {
   childcare: ['childcare', 'daycare', 'preschool', 'child care', 'children'],
   financial_assistance: ['financial', 'assistance', 'emergency', 'cash', 'payment', 'aid'],
   clothing_goods: ['clothing', 'clothes', 'furniture', 'goods', 'household', 'material'],
+  // Smart Matcher spec §2 — Professional Development & Continuing Education
+  professional_development: [
+    'professional', 'development', 'continuing', 'education', 'license', 'licensure',
+    'certification', 'credential', 'workforce', 'wioa', 'training', 'remediation',
+    'ethics', 'boundaries', 'cme', 'ceu', 'recertification', 'reentry', 're-entry',
+    'scholarship', 'tuition', 'probe', 'citi', 'scope', 'pace', 'cpep', 'apprenticeship',
+    'fellowship', 'residency',
+  ],
+  continuing_education: [
+    'professional', 'development', 'continuing', 'education', 'cme', 'ceu', 'license',
+    'licensure', 'certification', 'recertification', 'training', 'workshop', 'course',
+  ],
 }
 
 const STATE_MAPPING = {
@@ -472,7 +484,13 @@ function eligibilityMatchesApplicantType(opportunity, profile) {
   if ((!profileType || profileType.length === 0) && (!applicantTypesSet || applicantTypesSet.size === 0)) return false
 
   const typeKeywords = {
-    individual_need: ['individual', 'person', 'resident', 'household'],
+    // 'individual' and 'individual_need' are aliases — both share the same
+    // applicant-type keywords so a profile with primary_type='individual'
+    // is recognized when an opportunity describes its audience as
+    // "residents", "households", or "persons" without using the literal
+    // word "individual".
+    individual: ['individual', 'person', 'resident', 'residents', 'household', 'households'],
+    individual_need: ['individual', 'person', 'resident', 'residents', 'household', 'households'],
     family: ['family', 'household', 'parent', 'families'],
     organization: ['organization', 'org', 'agency', 'entity'],
     nonprofit: ['nonprofit', 'non-profit', '501(c)(3)', 'charity', 'charitable'],
@@ -502,6 +520,17 @@ function eligibilityMatchesApplicantType(opportunity, profile) {
 
   const eligibilityText = eligibility.join(' ').toLowerCase()
   const oppText = `${opportunity.title || ''} ${opportunity.description || ''}`.toLowerCase()
+
+  // Also consult declared opportunity categories so a profile of
+  // primary_type='small_business' is recognized when the opportunity carries
+  // categories: ["small_business"] even if its prose says "small organizations"
+  // rather than the literal phrase "small business".
+  const oppCategories = safeParseArrayField(opportunity.categories, [])
+    .map((c) => String(c).toLowerCase().replace(/[\s-]+/g, '_'))
+  const profileTypesNormalized = profileTypesToCheck.map((t) =>
+    String(t).toLowerCase().replace(/[\s-]+/g, '_'),
+  )
+  if (oppCategories.some((c) => profileTypesNormalized.includes(c))) return true
 
   return keywords.some(
     (keyword) => eligibilityText.includes(keyword.toLowerCase()) || oppText.includes(keyword.toLowerCase()),
@@ -1102,8 +1131,20 @@ function scoreEligibilityComponent(effectiveProfile, effectiveSignals, effective
   } else if (!hasApplicantTypeSignals) {
     reasons.push('Type unknown (neutral)')
   } else {
-    subscale -= 10
-    reasons.push('Type mismatch (soft)')
+    // The profile declares an applicant type but the opportunity does not
+    // confirm it. Distinguish "opp explicitly targets a *different* type"
+    // (real soft mismatch, -25) from "opp is silent on applicant type"
+    // (no signal, neutral). A silent opp is effectively open to any
+    // applicant — penalising it would suppress legitimate matches like a
+    // small_business profile against a "general-purpose funding" opp.
+    const oppMentionsApplicantType =
+      /\b(individual|person|resident|household|family|low[- ]income|adult|senior|nonprofit|non[- ]profit|501\(c\)|charity|charitable|small business|enterprise|micro[- ]enterprise|startup|entrepreneur|sba|smb|student|undergraduate|graduate|college|university|veteran|service member|active duty|military|tribal|indigenous|government|municipal|public sector|institution|institutional|research)\b/i.test(oppText)
+    if (oppMentionsApplicantType) {
+      subscale -= 25
+      reasons.push('Type mismatch (soft)')
+    } else {
+      reasons.push('Opp silent on applicant type (neutral)')
+    }
   }
 
   // Cross-category penalties — proportional, capped
@@ -1440,7 +1481,7 @@ function scoreCategoryComponent(effectiveProfile, effectiveSignals, opportunity)
   let subscale = 30
 
   if (categoryRaw > 0) {
-    subscale = 30 + Math.round((categoryRaw / 20) * 60)
+    subscale = 20 + Math.round((categoryRaw / 20) * 65)
     reasons.push(`Category: ${categoryRaw} raw`)
   }
 
@@ -1454,7 +1495,7 @@ function scoreCategoryComponent(effectiveProfile, effectiveSignals, opportunity)
     reasons.push('Expired deadline')
   }
 
-  return { subscale: Math.min(100, Math.max(10, subscale)), reasons, categoryRaw, deadlineScore }
+  return { subscale: Math.min(100, Math.max(5, subscale)), reasons, categoryRaw, deadlineScore }
 }
 
 // ---------------------------------------------------------------------------
@@ -1534,6 +1575,86 @@ export function scoreOpportunity(profile, opportunity) {
     if (/\bhope\b|\btenessee\s+hope\b/i.test(oppText)) {
       rawScore = Math.min(100, rawScore + 15)
       housingBonusReasons.push('Tennessee HOPE scholarship GPA match (+15)')
+    }
+  }
+
+  // Major / STEM / interest boost: when the profile declares an intended major
+  // or a strong interest set (STEM, forensic science, criminal justice, etc.)
+  // and the opportunity is a scholarship/education resource, boost the score.
+  // This addresses a project-rule failure where STEM-track students saw broad
+  // scholarship search platforms (Bold.org, Scholarships.com, Fastweb) at low
+  // scores even though they're the primary path to STEM scholarships.
+  const profileEducation = profileNorm?.education || {}
+  const profileIntendedMajor = String(
+    profileEducation.intendedMajor || effectiveSignals?.education?.intendedMajor || '',
+  ).toLowerCase()
+  const profileIsStem = Boolean(profileEducation.stemStudent || effectiveSignals?.education?.stemStudent)
+  const profileInterestsList = effectiveSignals?.interests instanceof Set
+    ? Array.from(effectiveSignals.interests)
+    : Array.isArray(effectiveSignals?.interests) ? effectiveSignals.interests : []
+  const profileKeywordsSet = effectiveSignals?.keywordSet instanceof Set
+    ? effectiveSignals.keywordSet
+    : new Set(Array.isArray(effectiveSignals?.keywords) ? effectiveSignals.keywords.map((k) => String(k).toLowerCase()) : [])
+
+  const SCHOLARSHIP_OPP_KEYWORDS = [
+    'scholarship', 'scholarships', 'fellowship', 'grant for student', 'grants for student',
+    'tuition', 'student aid', 'student grant', 'scholarship search', 'no-essay',
+    'no essay', 'merit scholarship', 'study grant',
+  ]
+  const STEM_OPP_KEYWORDS = [
+    'stem', 'science technology engineering math', 'engineer', 'engineering',
+    'computer science', 'forensic', 'forensics', 'biology', 'biomedical', 'chemistry',
+    'physics', 'mathematics', 'data science', 'cybersecurity', 'health science',
+    'nursing scholar', 'pre-med', 'pre med', 'biotechnology', 'environmental science',
+    'criminal justice scholarship',
+  ]
+  const isScholarshipOpp = SCHOLARSHIP_OPP_KEYWORDS.some((k) => oppText.includes(k))
+  const isStemOpp = STEM_OPP_KEYWORDS.some((k) => oppText.includes(k))
+
+  // Track non-major-derived interest hits separately so a major+interest stack does not double-count.
+  if (isScholarshipOpp) {
+    let majorInterestBoost = 0
+    const majorMatched = profileIntendedMajor && (
+      oppText.includes(profileIntendedMajor) ||
+      profileIntendedMajor.split(/[\s,/]+/).filter((p) => p.length >= 4).some((p) => oppText.includes(p))
+    )
+    if (majorMatched) {
+      majorInterestBoost += 12
+      housingBonusReasons.push(`Major match (${profileIntendedMajor}) +12`)
+    }
+    if (profileIsStem && isStemOpp) {
+      majorInterestBoost += 10
+      housingBonusReasons.push('STEM profile × STEM scholarship +10')
+    } else if (profileIsStem && !majorMatched) {
+      // Broad scholarship platforms surface STEM scholarships even without explicit STEM
+      // tags. Give a smaller boost so they rise above unrelated emergency-aid programs.
+      majorInterestBoost += 6
+      housingBonusReasons.push('STEM profile × scholarship platform +6')
+    }
+    let interestHits = 0
+    for (const interest of profileInterestsList) {
+      const norm = String(interest || '').toLowerCase().trim()
+      if (norm.length < 4) continue
+      if (oppText.includes(norm)) {
+        interestHits++
+        if (interestHits <= 2) housingBonusReasons.push(`Interest match (${norm}) +4`)
+      }
+    }
+    if (interestHits > 0) {
+      majorInterestBoost += Math.min(8, interestHits * 4)
+    }
+    // Generic scholarship search platforms (referral_type) are the primary path
+    // to discover field-specific scholarships. Give a small structural boost so
+    // they don't lose to unrelated rows for student profiles that reach this branch.
+    const fundingType = String(opportunity?.funding_type || '').toLowerCase()
+    const oppType = String(opportunity?.opportunity_type || opportunity?.type || '').toLowerCase()
+    const isPlatform = fundingType === 'referral_service' || ['portal', 'referral'].includes(oppType)
+    if (isPlatform && (profileNorm?.isStudent || profileKeywordsSet.has('scholarship'))) {
+      majorInterestBoost += 5
+      housingBonusReasons.push('Scholarship platform (broad coverage) +5')
+    }
+    if (majorInterestBoost > 0) {
+      rawScore = Math.min(100, rawScore + Math.min(20, majorInterestBoost))
     }
   }
 
@@ -1634,14 +1755,25 @@ export function scoreOpportunity(profile, opportunity) {
   // Housing-aware signal reasons
   for (const r of housingBonusReasons) reasons.push(r)
 
-  // Collect matched signals for match_explain
+  // Collect matched signals for match_explain.
+  // Use the canonical normalized opportunity/profile need alignment so Anya and
+  // result cards can explain exactly which profile needs matched.
+  const canonicalOppNormForExplain = profileNorm ? normalizeOpportunity(effectiveOpp) : null
+  const canonicalNeedForExplain =
+    profileNorm && canonicalOppNormForExplain
+      ? calculateNeedAlignment(profileNorm, canonicalOppNormForExplain)
+      : { matchedNeeds: [] }
+
   const matchedSignals = []
-  const matchedNeeds = []
+  const matchedNeeds = Array.isArray(canonicalNeedForExplain.matchedNeeds)
+    ? canonicalNeedForExplain.matchedNeeds
+    : []
   if (geo.tier && geo.tier !== 'mismatch' && geo.tier !== 'unknown' && geo.tier !== 'soft_mismatch' && geo.tier !== 'title_state_mismatch')
     matchedSignals.push(`geo:${geo.tier}`)
   if (elig.applicantTypeMatch) matchedSignals.push('applicant_type')
   if (need.keywordRaw > 0) matchedSignals.push('keywords')
   if (cat.categoryRaw > 0) matchedSignals.push('category')
+  if (matchedNeeds.length > 0) matchedSignals.push('needs')
 
   const opportunityType = String(opportunity?.opportunity_type || opportunity?.type || '').toLowerCase()
   const fundingType = normalizeString(opportunity?.funding_type || '')
@@ -1700,7 +1832,10 @@ export function scoreOpportunity(profile, opportunity) {
       demographic_affiliation: elig.demoBonus,
       amount: amountInRange(effectiveProfile?.funding_amount_needed, opportunity) ? 10 : 0,
       deadline: cat.deadlineScore,
-      housing_signal_bonus: housingBonusReasons.length > 0 ? rawScore - (rawScore - housingBonusReasons.reduce(() => 0, 0)) : 0,
+      housing_signal_bonus: housingBonusReasons.reduce((sum, reason) => {
+        const match = String(reason).match(/\+(\d+)/)
+        return sum + (match ? Number(match[1]) : 0)
+      }, 0),
       total: finalScore,
     },
     reasons: reasons.length > 0 ? reasons : ['No specific matches found'],
@@ -1973,6 +2108,42 @@ export function computeMatchDecision(rawProfile, rawOpportunity, opts = {}) {
     ? rawOpportunity
     : normalizeOpportunity(rawOpportunity)
 
+  const eligibilityEval = evaluateEligibility(profileNorm, oppNorm)
+
+  // Hard eligibility gate.
+  // Geography is intentionally excluded here because makeDecision() has the
+  // project-specific rule: state mismatch is hard only when the opportunity is
+  // explicitly resident/state-exclusive. All other hard ineligibility reasons
+  // should reject before scoring so profile-inappropriate matches do not appear.
+  const hardEligibilityReasons = (eligibilityEval.ineligibilityReasons ?? [])
+    .filter((reason) => !/^Geographic mismatch:/i.test(String(reason)))
+
+  if (hardEligibilityReasons.length > 0) {
+    const evaluatedAt = new Date().toISOString()
+    return {
+      score: 0,
+      reasons: hardEligibilityReasons,
+      match_explain: {
+        matchedNeeds: [],
+        matchedSignals: [],
+        scoreBreakdown: { total: 0 },
+        reasons: hardEligibilityReasons,
+      },
+      decision: 'REJECT',
+      explanation: `Rejected by hard eligibility rules: ${hardEligibilityReasons.join('; ')}`,
+      eligible: false,
+      ineligibilityReasons: hardEligibilityReasons,
+      matchedNeeds: [],
+      matchedProfileTraits: [],
+      matched_profile_facts: [],
+      missingEligibilityFields: eligibilityEval.missingFields ?? [],
+      needAlignment: 0,
+      confidence: 95,
+      matcherVersion: MATCHER_VERSION,
+      evaluatedAt,
+    }
+  }
+
   // Pass sections/signals to scoreOpportunity so it can build keyword + facet
   // signals (geo, keywords, etc.). Without this, already-normalized profiles
   // short-circuit the scoring context and every opportunity gets the same score.
@@ -1984,11 +2155,57 @@ export function computeMatchDecision(rawProfile, rawOpportunity, opts = {}) {
     : rawProfile
   const { score, reasons, match_explain } = scoreOpportunity(profileForScoring, rawOpportunity)
 
-  // Decision via makeDecision — pass normalizedProfile so section-derived flags are used
-  let { decision, explanation, reasons: decisionReasons } = makeDecision(score, rawProfile, rawOpportunity, profileNorm)
-
   // Need alignment from normalised objects (uses calculateNeedAlignment for consistency)
   const { score: needAlignment, matchedNeeds } = calculateNeedAlignment(profileNorm, oppNorm)
+
+  let finalScore = score
+  const scoreCaps = []
+  const matchedSignalsForCap = Array.isArray(match_explain?.matchedSignals)
+    ? match_explain.matchedSignals
+    : []
+
+  const hasMaterialProfileEvidence =
+    matchedNeeds.length > 0 ||
+    matchedSignalsForCap.some((sig) => {
+      const s = String(sig)
+      return (
+        s === 'applicant_type' ||
+        s === 'keywords' ||
+        s === 'category' ||
+        s === 'needs' ||
+        s.startsWith('opportunity_type:') ||
+        s.startsWith('funding_type:')
+      )
+    }) ||
+    Number(match_explain?.scoreBreakdown?.facet ?? 0) > 0 ||
+    Number(match_explain?.scoreBreakdown?.demographic_affiliation ?? 0) > 0
+
+  if (!hasMaterialProfileEvidence && !oppNorm?.isDirectory && finalScore > 45) {
+    finalScore = 45
+    scoreCaps.push(
+      'Capped at 45: only generic/geographic evidence; no direct need, applicant-type, keyword, category, demographic, or profile-facet match.',
+    )
+  }
+
+  if (eligibilityEval.eligible === 'maybe' && finalScore > 80) {
+    finalScore = 80
+    scoreCaps.push('Capped at 80: eligibility is incomplete and needs user review.')
+  }
+
+  finalScore = Math.round(Math.max(0, Math.min(100, finalScore)))
+
+  if (match_explain?.scoreBreakdown) {
+    match_explain.scoreBreakdown.total_before_caps = score
+    match_explain.scoreBreakdown.total = finalScore
+    if (scoreCaps.length > 0) match_explain.scoreBreakdown.score_caps = scoreCaps
+  }
+  if (scoreCaps.length > 0) {
+    match_explain.scoreCaps = scoreCaps
+    reasons.push(...scoreCaps)
+  }
+
+  // Decision via makeDecision — pass normalizedProfile so section-derived flags are used
+  let { decision, explanation, reasons: decisionReasons } = makeDecision(finalScore, rawProfile, rawOpportunity, profileNorm)
 
   // Post-decision guards
   const hasUrl = Boolean(rawOpportunity?.application_url || rawOpportunity?.url)
@@ -2050,7 +2267,7 @@ export function computeMatchDecision(rawProfile, rawOpportunity, opts = {}) {
   if (profileNorm?.entityType) matchedProfileFacts.push(`Applicant type: ${profileNorm.entityType}`)
 
   return {
-    score,
+    score: finalScore,
     reasons,
     match_explain,
     decision,

@@ -114,7 +114,6 @@ export async function searchAssistanceListings(params = {}) {
       opportunity_type: 'program',
       type: 'PROGRAM', // Standing assistance program, NOT an open solicitation
       evidence_url: url,
-      last_verified_at: new Date().toISOString(),
       is_active: true,
       last_crawled: new Date().toISOString(),
       is_loan: false,
@@ -157,7 +156,6 @@ export async function getAssistanceListingDetails(cfdaNumber) {
       is_national: true,
       type: 'PROGRAM',
       evidence_url: url,
-      last_verified_at: new Date().toISOString(),
       cfda_number: cfdaNumber,
       authorization: listing.authorization || null,
       contact_email: listing.contactEmail || null,

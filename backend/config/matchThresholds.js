@@ -35,10 +35,10 @@ export const FALLBACK_TOP_N = 20
 // ── Decision Engine ─────────────────────────────────────────────────────
 
 /** Score above which an opportunity is auto-accepted (ACCEPT decision) */
-export const ACCEPT_SCORE = 55
+export const ACCEPT_SCORE = 70
 
 /** Score above which an opportunity enters review (REVIEW decision) */
-export const REVIEW_SCORE = 25
+export const REVIEW_SCORE = 35
 
 /** Minimum score for ACCEPT in the structured decision pipeline */
 export const DECISION_ACCEPT_MIN = 40

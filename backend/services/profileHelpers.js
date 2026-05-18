@@ -1430,6 +1430,104 @@ export function buildProfileSignals({ profile, sections, asOf = null }) {
     }
   })
 
+  // ============ CREDENTIALS / LICENSED PROFESSIONAL DETECTION ============
+  // Look across occupation, narrative, basic_information.title, demographics
+  // and the profile.display_name for healthcare / mental-health / legal /
+  // education credential abbreviations. When found, the profile gets the
+  // "professional_development" need bucket so opportunities like WIOA ITA,
+  // state nursing foundations, and CE scholarships surface even when the
+  // user's free-text query is generic — per spec "Profile-Aware Defaults".
+  const credentialsSet = new Set()
+  const CREDENTIAL_PATTERN = /\b(RN|LPN|APRN|CNA|MD|DO|MBBS|PA|PA-C|NP|FNP|DNP|CRNA|LCSW|LMSW|LSW|MSW|LPC|LMFT|LMHC|LCDC|LADC|PsyD|PhD|EdD|DDS|DMD|RDH|PharmD|RPh|DPT|PT|OT|OTR|SLP|RN-BC|EMT|EMT-P|paramedic|firefighter|teacher\s+credential|teaching\s+license|esthetician|cosmetolog(ist|y)|attorney|esquire|engineer\s+\(P\.?E\.?\)|cpa|enrolled agent)\b/gi
+  const credentialSources = [
+    profile?.display_name,
+    profile?.name,
+    basic?.full_name,
+    basic?.title,
+    basic?.profile_name,
+    occupation?.notes,
+    occupation?.job_title,
+    occupation?.healthcare_worker_type,
+    occupation?.industry,
+    sections?.narrative?.story,
+    sections?.narrative?.background,
+    sections?.narrative?.primary_goal,
+    sections?.narrative?.barriers_faced,
+    sections?.narrative?.mission,
+    sections?.narrative?.notes,
+    sections?.demographics?.profession,
+    sections?.demographics?.occupation,
+    sections?.demographics?.notes,
+    sections?.basic_information?.notes,
+    sections?.basic_information?.profession,
+  ]
+  for (const src of credentialSources) {
+    if (typeof src !== 'string' || src.length === 0) continue
+    const matches = src.match(CREDENTIAL_PATTERN) || []
+    for (const m of matches) credentialsSet.add(m.toUpperCase().replace(/\s+/g, ' '))
+  }
+  // Healthcare-worker_type values like "registered_nurse" / "licensed_clinical_social_worker"
+  // also imply credentials; capture them as canonical labels so the matcher
+  // exposes credential-aware messaging.
+  const HCW_TYPE_TO_CREDENTIAL = {
+    registered_nurse: 'RN',
+    licensed_practical_nurse: 'LPN',
+    advanced_practice_nurse: 'APRN',
+    nurse_practitioner: 'NP',
+    physician: 'MD',
+    physician_assistant: 'PA',
+    medical_doctor: 'MD',
+    doctor: 'MD',
+    licensed_clinical_social_worker: 'LCSW',
+    licensed_master_social_worker: 'LMSW',
+    licensed_social_worker: 'LSW',
+    licensed_professional_counselor: 'LPC',
+    licensed_marriage_family_therapist: 'LMFT',
+    licensed_mental_health_counselor: 'LMHC',
+    physical_therapist: 'PT',
+    occupational_therapist: 'OT',
+    speech_language_pathologist: 'SLP',
+    pharmacist: 'RPH',
+    dentist: 'DDS',
+    dental_hygienist: 'RDH',
+  }
+  const hcwType = String(occupation?.healthcare_worker_type || '').toLowerCase()
+  if (hcwType && HCW_TYPE_TO_CREDENTIAL[hcwType]) {
+    credentialsSet.add(HCW_TYPE_TO_CREDENTIAL[hcwType])
+  }
+  // Demographics-level explicit profession field (some forms collect it).
+  const demoProfession = String(sections?.demographics?.profession || '').toLowerCase()
+  for (const key of Object.keys(HCW_TYPE_TO_CREDENTIAL)) {
+    if (demoProfession === key) credentialsSet.add(HCW_TYPE_TO_CREDENTIAL[key])
+  }
+
+  if (credentialsSet.size > 0) {
+    // Tag profile-level keywords/intent so the matcher's keyword overlap
+    // contributes a positive score on professional-development funding.
+    registerKeyword('licensed professional')
+    registerKeyword('professional development')
+    registerKeyword('continuing education')
+    registerKeyword('licensure')
+    intentPhraseSet.add('professional development')
+    intentPhraseSet.add('continuing education')
+    // Add a soft applicant-type tag so downstream scoring recognizes the
+    // licensed-professional bucket without breaking the canonical
+    // primary_type contract.
+    applicantTypeSet.add('licensed_professional')
+    // Healthcare credentials get extra workforce-board hints because WIOA ITA
+    // is the dominant funding pathway for nurse / allied-health CE.
+    const isHealthcareCredential = ['RN', 'LPN', 'APRN', 'CNA', 'NP', 'FNP', 'DNP', 'CRNA', 'MD', 'DO', 'PA', 'PT', 'OT', 'SLP', 'RDH', 'DDS', 'DMD', 'PHARM', 'RPH']
+      .some((c) => credentialsSet.has(c) || credentialsSet.has(`${c}-BC`))
+    if (isHealthcareCredential) {
+      registerKeyword('healthcare worker')
+      registerKeyword('wioa training')
+      registerKeyword('individual training account')
+      registerKeyword('workforce training board')
+      registerKeyword('vocational rehabilitation')
+      occupationSet.add('healthcare_worker')
+    }
+  }
+
   // ============ LOCATION FOCUS ============
   if (locationFocus.geographic_focus) {
     registerKeyword(locationFocus.geographic_focus)
@@ -1809,6 +1907,47 @@ export function buildProfileSignals({ profile, sections, asOf = null }) {
     registerKeyword(education.intended_major)
     interestSet.add(normalizeString(education.intended_major))
   }
+  // Education-section interests array — preserve every interest as a keyword and
+  // an interestSet entry so STEM/forensic/criminal-justice/etc. signals reach the
+  // matcher's keyword overlap and category scoring.
+  if (Array.isArray(education.interests)) {
+    education.interests.forEach((interest) => {
+      if (interest && typeof interest === 'string') {
+        registerKeyword(interest)
+        interestSet.add(normalizeString(interest))
+      }
+    })
+  }
+  // STEM detection — if the student's major OR any interest is STEM-related,
+  // emit explicit `stem` / `stem_student` keywords so STEM-targeted scholarships
+  // (Society of Women Engineers, AAFS, etc.) and broad scholarship platforms
+  // (Bold.org, Scholarships.com) align with the profile.
+  const _stemHaystack = [
+    String(education.field_of_study || ''),
+    String(education.intended_major || ''),
+    String(education.major || ''),
+    ...(Array.isArray(education.interests) ? education.interests.map((i) => String(i || '')) : []),
+  ].join(' ').toLowerCase()
+  const _STEM_TERMS = [
+    'stem', 'science', 'technology', 'engineering', 'mathematics', 'forensic',
+    'forensics', 'biology', 'chemistry', 'physics', 'computer', 'data science',
+    'cybersecurity', 'biomedical', 'biotechnology', 'pre-med', 'pre med',
+    'health science', 'nursing', 'paramedic', 'pharmacy', 'environmental science',
+    'criminal justice',
+  ]
+  if (_STEM_TERMS.some((t) => _stemHaystack.includes(t))) {
+    registerKeyword('stem')
+    registerKeyword('stem student')
+    interestSet.add('stem')
+    if (_stemHaystack.includes('forensic')) {
+      registerKeyword('forensic science')
+      interestSet.add('forensic science')
+    }
+    if (_stemHaystack.includes('criminal justice')) {
+      registerKeyword('criminal justice')
+      interestSet.add('criminal justice')
+    }
+  }
   // Education notes — additional context keywords
   if (education.notes && typeof education.notes === 'string') {
     collectNarrativeKeywords({ notes: education.notes }, registerKeyword)
@@ -2138,6 +2277,27 @@ export function buildProfileSignals({ profile, sections, asOf = null }) {
   if (familySet.has('homeless')) needs.add('housing')
   if (familySet.has('domestic_violence') || familySet.has('trafficking_survivor')) { needs.add('housing'); needs.add('legal') }
 
+  // Credentials → professional development pool (per spec section 5).
+  // These needs unlock the professional_development funder taxonomy in
+  // matching (workforce boards, nursing foundations, professional-association
+  // scholarships, HRSA Nurse Corps, etc.) without requiring the user to type
+  // the right keywords.
+  if (credentialsSet.size > 0) {
+    needs.add('professional_development')
+    needs.add('continuing_education')
+    needs.add('license_reinstatement_support')
+    needs.add('professional_remediation_funding')
+    needs.add('workforce_reentry_training')
+    if (
+      credentialsSet.has('RN') || credentialsSet.has('LPN') ||
+      credentialsSet.has('APRN') || credentialsSet.has('NP') ||
+      credentialsSet.has('FNP') || credentialsSet.has('DNP') ||
+      credentialsSet.has('CRNA') || credentialsSet.has('CNA')
+    ) {
+      needs.add('nursing_reentry_support')
+    }
+  }
+
   // ============ APPLICANT TYPE (single string) ============
   let applicantType = 'individual'
   if (applicantTypeSet.has('organization') || applicantTypeSet.has('nonprofit') || applicantTypeSet.has('501c3')) {
@@ -2148,7 +2308,14 @@ export function buildProfileSignals({ profile, sections, asOf = null }) {
     applicantType = 'business'
     needs.add('business')
   } else if (applicantTypeSet.has('student') || applicantTypeSet.has('college student') ||
-             applicantTypeSet.has('high school student') || demographicSet.has('current_student')) {
+             applicantTypeSet.has('college_student') ||
+             applicantTypeSet.has('high school student') || applicantTypeSet.has('high_school_student') ||
+             applicantTypeSet.has('graduate_student') || applicantTypeSet.has('graduate student') ||
+             applicantTypeSet.has('returning_student') || applicantTypeSet.has('returning student') ||
+             demographicSet.has('current_student') ||
+             // Tags or primary_type may use any of these synonyms; match liberally so
+             // sparse profiles get classified as student before the generic fallback fires.
+             [...applicantTypeSet].some((t) => /\b(?:high.?school.?student|college.?student|graduate.?student|undergraduate|hs.?student|hs.?senior|hs.?junior|hs.?sophomore|hs.?freshman|student)\b/i.test(t))) {
     applicantType = 'student'
     needs.add('education'); needs.add('scholarship')
   } else if (militarySet.has('veteran') || militarySet.has('disabled_veteran')) {
@@ -2206,13 +2373,49 @@ export function buildProfileSignals({ profile, sections, asOf = null }) {
   if (demographicSet.has('frontier')) geographicSet.add('frontier')
 
   // ============ FULL EDUCATION OBJECT ============
+  // Read major + STEM signals from EVERY supported field shape:
+  //   eduSection.field_of_study, eduSection.intended_major, eduSection.major,
+  //   plus the interests array and any university_applications[*].intended_major.
+  // STEM detection considers the major, the interests/keywords list, and a
+  // broader set of STEM disciplines (forensic science, criminal justice with
+  // forensics, environmental science, health science, etc.) so STEM-track
+  // students get the same boosts as engineering/CS students.
   const eduSection = sections?.education ?? sections?.education_details ?? {}
   const uniApps = sections?.university_applications ?? {}
+  const eduInterestsRaw = Array.isArray(eduSection.interests)
+    ? eduSection.interests
+    : []
+  const uniIntendedMajors = Array.isArray(uniApps.applications)
+    ? uniApps.applications.map((a) => a?.intended_major).filter(Boolean)
+    : []
+  const intendedMajorResolved =
+    eduSection.field_of_study ||
+    eduSection.intended_major ||
+    eduSection.major ||
+    eduSection.degree_program ||
+    uniIntendedMajors[0] ||
+    null
+  const STEM_DISCIPLINES = [
+    'stem', 'engineering', 'computer science', 'mathematics', 'biology', 'chemistry',
+    'physics', 'forensic', 'forensics', 'forensic science', 'biomedical',
+    'biotechnology', 'environmental science', 'data science', 'statistics',
+    'information technology', 'cybersecurity', 'health science', 'nursing',
+    'paramedic', 'pre-med', 'pre med', 'pharmacy', 'veterinary', 'physics',
+    'astronomy', 'geology', 'neuroscience', 'genetics', 'molecular',
+    'mechanical', 'electrical', 'civil engineering', 'aerospace',
+  ]
+  const stemSearchHaystack = [
+    String(intendedMajorResolved || ''),
+    ...eduInterestsRaw.map((i) => String(i || '')),
+    ...uniIntendedMajors.map((m) => String(m || '')),
+  ].join(' ').toLowerCase()
+  const stemStudentResolved = STEM_DISCIPLINES.some((s) => stemSearchHaystack.includes(s))
+
   const fullEducation = {
     level: eduSection.highest_level || eduSection.degree_type || null,
     currentSchool: eduSection.current_institution || eduSection.school_name || null,
     targetColleges: Array.isArray(eduSection.target_colleges) ? eduSection.target_colleges : [],
-    intendedMajor: eduSection.field_of_study || null,
+    intendedMajor: intendedMajorResolved,
     gpa: academics.gpa,
     act: academics.act,
     sat: academics.sat,
@@ -2222,8 +2425,7 @@ export function buildProfileSignals({ profile, sections, asOf = null }) {
     leadershipRoles: Array.isArray(eduSection.leadership_roles) ? eduSection.leadership_roles : [],
     extracurriculars: Array.isArray(eduSection.extracurriculars) ? eduSection.extracurriculars : [],
     achievements: Array.isArray(eduSection.achievements) ? eduSection.achievements : [],
-    stemStudent: !!(['stem','engineering','computer science','mathematics','biology','chemistry','physics']
-      .some(s => (eduSection.field_of_study || '').toLowerCase().includes(s))),
+    stemStudent: stemStudentResolved,
     returningAdult: !!eduSection.returning_adult,
     recentGraduate: !!eduSection.recent_graduate,
     gedGraduate: !!eduSection.ged_graduate,
@@ -2298,6 +2500,8 @@ export function buildProfileSignals({ profile, sections, asOf = null }) {
     health: healthSet,
     family: familySet,
     occupation: occupationSet,
+    credentials: credentialsSet,
+    isLicensedProfessional: credentialsSet.size > 0,
     proBonoTerms,
     location,
     academics,

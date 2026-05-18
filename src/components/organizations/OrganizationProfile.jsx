@@ -8,15 +8,15 @@ import { createPageUrl } from '@/utils';
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { User, Building, Mail, Phone, Globe, DollarSign, Target, Award, TrendingUp, Calendar, Info, Loader2, Printer, MapPin, Sparkles, Wand, FolderOpen, ImagePlus, Kanban, Search, DatabaseZap, ExternalLink, Star, ArrowRightSquare, AlertCircle } from "lucide-react";
+import { User, Building, Mail, Phone, Globe, DollarSign, Target, Award, TrendingUp, Calendar, Info, Loader2, Printer, MapPin, Sparkles, Wand, ImagePlus, Kanban, Search, DatabaseZap, ExternalLink, Star, ArrowRightSquare, AlertCircle } from "lucide-react";
 import OrganizationProfileDetails from './OrganizationProfileDetails';
+import ProfileFilesPanel from '@/components/profiles/ProfileFilesPanel.jsx';
 import KanbanBoard from "@/components/pipeline/KanbanBoard";
 import PrintablePipeline from "@/components/pipeline/PrintablePipeline";
 import PipelineAutomationPanel from "@/components/pipeline/PipelineAutomationPanel";
 import { usePrintMode } from '@/components/hooks/usePrintMode';
 import { format } from "date-fns";
 import OrganizationEmailComposer from './OrganizationEmailComposer';
-import DocumentItem from '../documents/DocumentItem';
 import ErrorBoundary from '@/components/shared/ErrorBoundary';
 import AutoTimeTracker from '../billing/AutoTimeTracker';
 import { Badge } from "@/components/ui/badge";
@@ -362,7 +362,13 @@ export default function OrganizationProfile({
   };
 
   const handleFindPicture = async () => {
-      if (!orgData?.website) {
+      // The `profiles` table has no `website` column - the URL lives inside the
+      // `basic_information` section JSON.  `flatOrgData` merges section data onto the
+      // root object, so it is the only reliable source for fields like website/email/phone.
+      // (We keep `orgData` as a fallback in case future profile types start storing it at the top level.)
+      const websiteUrl = flatOrgData?.website || orgData?.website || '';
+      const orgName = flatOrgData?.name || orgData?.name || '';
+      if (!websiteUrl) {
           toast({
             title: "Website Missing",
             description: "Please add a website to the profile before searching for a picture.",
@@ -372,14 +378,14 @@ export default function OrganizationProfile({
       }
       setIsFindingPicture(true);
       try {
-          const prompt = `You are an expert brand asset analyst. Your mission is to find the official logo for the organization named "${orgData.name}". Use their website, ${orgData.website}, as the primary source, but use web searches as a powerful fallback.
+          const prompt = `You are an expert brand asset analyst. Your mission is to find the official logo for the organization named "${orgName}". Use their website, ${websiteUrl}, as the primary source, but use web searches as a powerful fallback.
 
 **Search Strategy:**
 1.  **Primary Source (Website Analysis):**
-    *   **Inspect HTML Meta Tags:** Thoroughly check the source of ${orgData.website} for meta tags like \`og:image\`, \`twitter:image\`, \`apple-touch-icon\`, and \`<link rel="icon" ...>\`. These often point directly to the logo.
+    *   **Inspect HTML Meta Tags:** Thoroughly check the source of ${websiteUrl} for meta tags like \`og:image\`, \`twitter:image\`, \`apple-touch-icon\`, and \`<link rel="icon" ...>\`. These often point directly to the logo.
     *   **Homepage DOM Analysis:** If meta tags are unhelpful, analyze the rendered homepage's structure. Look for an \`<img>\` tag within the main header or navigation, typically linked to the homepage. Extract its absolute URL. Prioritize SVG logos if available.
 2.  **Secondary Source (Web Search):
-    *   **Targeted Google Search:** If the website analysis fails, perform a targeted Google search. Use precise queries like: \`"${orgData.name}" logo filetype:svg\`, \`"${orgData.name}" logo site:clearbit.com\`, and finally \`"${orgData.name}" logo official\`. Clearbit is a good source for company logos.
+    *   **Targeted Google Search:** If the website analysis fails, perform a targeted Google search. Use precise queries like: \`"${orgName}" logo filetype:svg\`, \`"${orgName}" logo site:clearbit.com\`, and finally \`"${orgName}" logo official\`. Clearbit is a good source for company logos.
     *   **Validate the Result:** From the search results, select the URL that's most likely to be the official, high-quality logo. Avoid watermarked images, social media profile pictures, or images from third-party news articles unless no other option exists.
 
 **Final Output:**
@@ -770,32 +776,14 @@ if (_logoUrl && _logoUrl.startsWith('https://') && _validExt) {
                )}
             </TabsContent>
 
-            {/* Documents tab */}
+            {/* Documents tab — full upload / parse / URL-import / paste UI */}
             <TabsContent value="documents" className="mt-4">
-              <Card>
-                <CardHeader>
-                  <CardTitle>Document Library</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  {isLoadingDocuments ? (
-                     <div className="flex justify-center items-center py-16">
-                        <Loader2 className="w-8 h-8 text-blue-600 animate-spin" />
-                     </div>
-                  ) : documents.length === 0 ? (
-                    <div className="text-center py-16 text-slate-500">
-                        <FolderOpen className="w-16 h-16 mx-auto mb-4 text-slate-300" />
-                        <h3 className="text-xl font-semibold text-slate-900 mb-2">No Documents Yet</h3>
-                        <p>Upload a document to start building this profile's intelligence layer.</p>
-                    </div>
-                  ) : (
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                      {documents.map(doc => (
-                        <DocumentItem key={doc.id} document={doc} onDelete={() => {}} />
-                      ))}
-                    </div>
-                  )}
-                </CardContent>
-              </Card>
+              <ProfileFilesPanel
+                profileId={orgData?.id}
+                profileName={orgData?.display_name ?? orgData?.name}
+                canDocumentAI={true}
+                canDeleteDocuments={true}
+              />
             </TabsContent>
           </Tabs>
       </main>

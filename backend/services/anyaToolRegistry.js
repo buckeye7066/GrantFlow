@@ -531,13 +531,22 @@ async function summarizeGrants(db, params, context) {
   try {
     context_profile = await loadProfileContext(db, profileId)
   } catch (err) {
+    if (/not found/i.test(err?.message || '')) {
+      throw new Error('Profile not found')
+    }
     throw new Error(`Profile not found or unreadable: ${err?.message ?? err}`)
   }
   const profile = context_profile.profile
+  const enrichedProfile = {
+    ...profile,
+    sections: context_profile.sections,
+    organization: context_profile.organization,
+    signals: context_profile.signals,
+  }
 
   const limit = Math.max(1, Math.min(Number(params?.limit) || DEFAULT_GRANT_LIMIT, 10))
   const opportunities = collectGrantMatches(db, profileId, limit)
-  const formatted = formatGrantSummaries(opportunities, profile)
+  const formatted = formatGrantSummaries(opportunities, enrichedProfile)
 
   // Re-run the canonical decision engine for each opportunity so the returned
   // explanation lines up with what matching/discovery would show. We attach
@@ -594,10 +603,33 @@ async function summarizeGrants(db, params, context) {
       display_name: profile.display_name,
       status: profile.status,
     },
+    profile_facts_used: summarizeProfileFactsUsed(enrichedProfile),
     count: formatted.length,
     limit,
     opportunities: formatted,
     profile_signal_audit,
+  }
+}
+
+/**
+ * Surface the specific profile fields Anya actually saw when explaining matches.
+ * Lets users (and admins) audit whether Anya is grounded in the real profile.
+ */
+function summarizeProfileFactsUsed(p) {
+  const basic = p?.sections?.basic_information ?? {}
+  const org = p?.organization ?? {}
+  const sigLoc = p?.signals?.location ?? {}
+  const needCategories = p?.signals?.needs ? Array.from(p.signals.needs) : []
+  return {
+    profile_type: p?.primary_type || p?.applicant_type || basic.profile_category || null,
+    state: sigLoc.state || basic.state || p?.state || org.state || null,
+    zip: sigLoc.zip || basic.zip || p?.postal_code || org.postal_code || null,
+    city: sigLoc.city || basic.city || p?.city || org.city || null,
+    organization_type: p?.organization_type || org.organization_type || null,
+    serves_veterans: p?.serves_veterans ?? null,
+    serves_disabled: p?.serves_disabled ?? null,
+    section_count: p?.sections ? Object.keys(p.sections).length : 0,
+    need_categories_detected: needCategories,
   }
 }
 

@@ -8,7 +8,12 @@ import { getDataReadiness } from '../services/dataReadinessService.js'
 import { checkProfileReadiness } from '../services/profileReadinessService.js'
 import { trustedOriginClause, trustedSourceClause } from '../utils/recordOrigins.js'
 import { isJunkOpportunity } from '../services/contentFilter.js'
-import { interpretFundingIntent, sanitizeSearchTerm } from '../services/smartMatcherIntent.js'
+import {
+  interpretFundingIntent,
+  sanitizeSearchTerm,
+  detectPrimaryCategory,
+  INCOME_SUPPORT_CATEGORIES,
+} from '../services/smartMatcherIntent.js'
 import { createOpenAIClient } from '../utils/openaiClient.js'
 import { assessOpportunityTrust } from '../services/opportunityTrust.js'
 import {
@@ -18,6 +23,8 @@ import {
 import { deriveMatchReasonCodes, MATCH_REASON_CODES } from '../services/matching/reasons.js'
 import { normalizeOpportunityState, normalizeState } from '../utils/stateNormalization.js'
 import { assembleFundingResults, TIERS as ZERO_RESULT_TIERS } from '../services/zeroResultLadder.js'
+import { evaluatePipelineSource } from '../config/pipelineAllowedSources.js'
+import { evaluateApplicantTypeEligibility } from '../services/applicantTypeGate.js'
 
 import { createLogger } from '../utils/logger.js'
 const routeLogger = createLogger('route:matching')
@@ -286,6 +293,38 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
       const sortBy = req.query.sort_by ?? 'match_score' // match_score | deadline | amount | recently_added
       const searchTerms = collectSearchTermsFromQuery(req)
 
+      // ── Primary-category routing (spec §3, §4) ────────────────────────────
+      // The frontend passes primary_category from interpretFundingIntent.
+      // We also re-detect server-side from the search terms so older clients
+      // and direct API callers get the same protection (defense in depth).
+      const queryPrimaryCategory = typeof req.query.primary_category === 'string'
+        ? String(req.query.primary_category).toLowerCase().trim()
+        : ''
+      const explicitlyIncludeIncomeSupport =
+        req.query.include_income_support === '1' || req.query.allow_income_support === '1'
+
+      const detectedCat = detectPrimaryCategory(searchTerms.join(' '), searchTerms)
+      const effectivePrimaryCategory = queryPrimaryCategory || detectedCat.primary_category
+      const queryExcluded = String(req.query.excluded_categories ?? '')
+        .split(',')
+        .map((s) => s.trim().toLowerCase())
+        .filter(Boolean)
+      const excludedCategories = new Set([
+        ...queryExcluded,
+        ...(detectedCat.excluded_categories || []),
+        ...(effectivePrimaryCategory === 'professional_development'
+          ? INCOME_SUPPORT_CATEGORIES
+          : []),
+      ])
+
+      // Spec §3: when professional_development is the intent, hard-exclude
+      // means-tested cash-assistance programs from the SQL candidate set
+      // (NOT just from the score). This is the rule "exclude general
+      // means-tested cash-assistance programs unless explicitly requested."
+      const applyProfDevExclusion =
+        effectivePrimaryCategory === 'professional_development' &&
+        !explicitlyIncludeIncomeSupport
+
       const baseContext = await loadProfileContext(req.db, profileId)
                    const profileContext = buildProfileFacets(baseContext)
 
@@ -309,6 +348,29 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
       conditions.push(trustedOriginClause())
 
       conditions.push(trustedSourceClause())
+
+      // ── Spec §3: hard-exclude cash-assistance / income-support programs
+      // when the user's intent is professional development. Without this
+      // SSI/SNAP/TANF rows enter the candidate set and (because their
+      // categories often include words like "training" or "financial") leak
+      // through scoring. Tracked separately from the score-cap below so we
+      // can honor `include_income_support=1` callers (e.g., Anya admin tools).
+      if (applyProfDevExclusion) {
+        const exclusionTerms = [
+          'income_support', 'cash_assistance', 'food_assistance', 'income_assistance',
+          'general_assistance', 'tanf', 'ssi', 'ssdi', 'snap', 'wic',
+          'general assistance', 'cash assistance', 'food assistance',
+        ]
+        const orParts = exclusionTerms
+          .map(() => '(LOWER(COALESCE(categories, \'\')) NOT LIKE ? AND LOWER(COALESCE(title, \'\')) NOT LIKE ?)')
+          .join(' AND ')
+        conditions.push(`(${orParts})`)
+        for (const term of exclusionTerms) {
+          const pattern = `%${term}%`
+          params.push(pattern, pattern)
+        }
+        routeLogger.info(`[matching] prof-dev intent: excluding ${exclusionTerms.length} cash-assistance categories from candidate set`)
+      }
 
       // Profile isolation: only global catalog entries (profile_id IS NULL) or this profile's own crawl results.
       conditions.push('(profile_id IS NULL OR profile_id = ?)')
@@ -375,8 +437,31 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
                              )
                      .all(...params, limit)
 
-      const rejectStats = { quality: 0, wrongState: 0, junk: 0, reject: 0, rejectDirectoryPreserved: 0, trust: 0, noReason: 0 }
+      // Resolve profile applicant type once for the hard eligibility gate
+      // below. Mirrors the resolution used by /matching-gaps so we read the
+      // same source of truth.
+      const basicSection = profileContext?.sections?.basic_information ?? {}
+      const profileApplicantType =
+        profileRow.applicant_type ??
+        profileRow.primary_type ??
+        profileRow.primary_profile_type ??
+        basicSection.profile_category ??
+        null
+
+      const rejectStats = {
+        quality: 0,
+        wrongState: 0,
+        junk: 0,
+        reject: 0,
+        rejectDirectoryPreserved: 0,
+        trust: 0,
+        noReason: 0,
+        sourceNotAllowed: 0,
+        ineligibleApplicantType: 0,
+      }
       const qualityDropReasons = {}
+      const sourceDropReasons = {}
+      const eligibilityDropReasons = {}
       const referralTemplates = new Map()
       const candidates = []
       for (const rawCandidate of rawCandidates) {
@@ -393,6 +478,37 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
           continue
         }
         normalized.state = candidateState
+
+        // GATE 1: pipeline-source policy. If an opportunity won't survive
+        // saveToProfilePipeline / POST /api/grants/from-opportunity (denylist
+        // or untrusted record_origin), it must not be surfaced here either.
+        // Symmetry between matcher and writer is the project rule.
+        const sourceGate = evaluatePipelineSource({
+          source: normalized.source ?? rawCandidate.source ?? null,
+          record_origin: normalized.record_origin ?? rawCandidate.record_origin ?? null,
+        })
+        if (!sourceGate.allowed) {
+          rejectStats.sourceNotAllowed++
+          sourceDropReasons[sourceGate.reason] = (sourceDropReasons[sourceGate.reason] || 0) + 1
+          continue
+        }
+
+        // GATE 2: hard applicant-type eligibility. Drops opportunities whose
+        // text or applicant_types array EXCLUDES this profile's bucket
+        // (e.g. NSF research-institution programs against an individual
+        // profile). Soft mismatches still flow through and get a scoring
+        // penalty inside computeMatchDecision.
+        const eligDecision = evaluateApplicantTypeEligibility(normalized, profileApplicantType)
+        if (eligDecision.decision === 'mismatch') {
+          rejectStats.ineligibleApplicantType++
+          eligibilityDropReasons[eligDecision.reason] = (eligibilityDropReasons[eligDecision.reason] || 0) + 1
+          continue
+        }
+        if (eligDecision.decision === 'review') {
+          // Surface but flag — computeMatchDecision will emit a REVIEW score.
+          normalized.eligibility_unknown = true
+        }
+
         if (quality.kind === 'referral_template') {
           if (!referralTemplates.has(quality.referralKey)) {
             referralTemplates.set(quality.referralKey, {
@@ -430,15 +546,79 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
       const profileNormForDecision = normalizeProfile(rawProfileForDecision, profileSectionsForDecision, profileContext?.signals ?? null)
 
       // Directory-style / general funding resources must always survive
-      // filtering unless explicitly excluded (project rule).
+      // filtering unless explicitly excluded (project rule). However, they
+      // are NOT direct grants and must not score higher than real funding
+      // opportunities — see `applyDirectoryScoreCap` below.
       const isDirectoryRecord = (opp) => Boolean(
         opp?.is_directory_resource ||
+        opp?.excluded_from_grant_scoring ||
         String(opp?.source || '').startsWith('directory') ||
         String(opp?.source || '').includes('local_directory') ||
         String(opp?.record_origin || '').startsWith('directory') ||
         String(opp?.type || '').toUpperCase() === 'DIRECTORY' ||
-        String(opp?.opportunity_type || '').toUpperCase() === 'DIRECTORY',
+        String(opp?.opportunity_type || '').toUpperCase() === 'DIRECTORY' ||
+        String(opp?.opportunity_type || '').toLowerCase() === 'referral' ||
+        String(opp?.type || '').toLowerCase() === 'referral' ||
+        String(opp?.funding_type || '').toLowerCase() === 'referral' ||
+        String(opp?.funding_type || '').toLowerCase() === 'referral_service',
       )
+
+      // Cap the displayed match score for directory / referral entries.
+      //   • A directory points the user at a place to call/search — it is
+      //     not, itself, a grant. Letting one hit 100 would put it above
+      //     a real direct grant in the same list.
+      //   • Per project rule "Counts displayed in the UI must map 1:1 to
+      //     backend response fields", we communicate this via the score
+      //     itself rather than a hidden tier so the strict slider works
+      //     intuitively (e.g. a slider at 85% should not bury direct
+      //     grants underneath inflated directory rows).
+      // 70 places directory entries firmly in REVIEW tier (below ACCEPT)
+      // while keeping them visible at moderate slider positions (≤70%).
+      const DIRECTORY_SCORE_CAP = 70
+      const applyDirectoryScoreCap = (score, isDirectory) => {
+        if (!isDirectory) return score
+        if (typeof score !== 'number' || !Number.isFinite(score)) return score
+        return Math.min(score, DIRECTORY_SCORE_CAP)
+      }
+
+      // ── Spec §4: cross-category score cap. When the user's intent is
+      // professional development and the opportunity's category does not
+      // overlap (e.g., income support, food, utilities), cap the match score
+      // at 25 so the result falls below the default 50% threshold. We never
+      // touch directory entries (they keep their soft 70 cap) and we never
+      // touch opportunities tagged as professional_development / education /
+      // employment / healthcare since those legitimately overlap.
+      const CROSS_CATEGORY_CAP = 25
+      const PROF_DEV_OVERLAP_KEYWORDS = [
+        'professional_development', 'continuing_education', 'continuing education',
+        'cme', 'ceu', 'license', 'licensure', 'certification', 'credentialing',
+        'workforce', 'wioa', 'training', 'scholarship', 'tuition', 'education',
+        'employment', 'career', 'vocational', 'apprentic', 'reentry', 're-entry',
+        'remediation', 'recertification', 'healthcare', 'health workforce',
+        'nurse', 'nursing', 'physician', 'social work', 'mental health',
+        'allied health', 'professional', 'fellowship', 'residency',
+      ]
+      const opportunityHasProfDevOverlap = (opp) => {
+        const haystack = [
+          opp?.categories,
+          opp?.title,
+          opp?.description,
+          opp?.keywords,
+          opp?.eligibility_criteria,
+          opp?.tags,
+        ]
+          .map((v) => (v == null ? '' : Array.isArray(v) ? v.join(' ') : String(v)))
+          .join(' ')
+          .toLowerCase()
+        if (!haystack) return false
+        return PROF_DEV_OVERLAP_KEYWORDS.some((kw) => haystack.includes(kw))
+      }
+      const applyCrossCategoryCap = (score, opp) => {
+        if (effectivePrimaryCategory !== 'professional_development') return score
+        if (typeof score !== 'number' || !Number.isFinite(score)) return score
+        if (opportunityHasProfDevOverlap(opp)) return score
+        return Math.min(score, CROSS_CATEGORY_CAP)
+      }
 
       const trustDropReasons = {}
       const allScored = candidates
@@ -494,13 +674,36 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
                                   }
 
                                   // Soft downgrade for stale/non-official rows.
-                                  const adjustedScore = trust.downgrade
+                                  const downgradedScore = trust.downgrade
                                     ? Math.max(0, (decision.score ?? 0) - 5)
                                     : decision.score
+                                  // Cap directory/referral entries (Goal: don't let
+                                  // a place-to-call outrank a direct grant on the
+                                  // user's match-score slider).
+                                  const directoryCappedScore = applyDirectoryScoreCap(downgradedScore, isDirectory)
+                                  const directoryCapped = isDirectory && typeof downgradedScore === 'number' && downgradedScore > DIRECTORY_SCORE_CAP
+
+                                  // Spec §4: cross-category cap (e.g., SSI for a
+                                  // PROBE ethics CE search) — if the opportunity has
+                                  // no professional-development overlap, cap at 25
+                                  // so it falls below the default 50% threshold.
+                                  const crossCategoryApplied =
+                                    effectivePrimaryCategory === 'professional_development' &&
+                                    !opportunityHasProfDevOverlap(opp) &&
+                                    typeof directoryCappedScore === 'number' &&
+                                    directoryCappedScore > CROSS_CATEGORY_CAP
+                                  const adjustedScore = applyCrossCategoryCap(directoryCappedScore, opp)
 
                                return {
                                            ...opp,
                                            match_score: adjustedScore,
+                                           is_directory: isDirectory,
+                                           directory_score_capped: directoryCapped || undefined,
+                                           directory_score_cap: isDirectory ? DIRECTORY_SCORE_CAP : undefined,
+                                           directory_uncapped_score: directoryCapped ? downgradedScore : undefined,
+                                           cross_category_capped: crossCategoryApplied || undefined,
+                                           cross_category_cap: crossCategoryApplied ? CROSS_CATEGORY_CAP : undefined,
+                                           cross_category_uncapped_score: crossCategoryApplied ? directoryCappedScore : undefined,
                                            match_reasons: matchReasons,
                                            match_decision: decision.decision,
                                            match_explanation: decision.explanation,
@@ -648,16 +851,65 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
         signalAudit = { error: auditErr?.message ?? String(auditErr) }
       }
 
+      // ── Spec §7: low-coverage telemetry. Log every search where the
+      // qualified set has < 3 results so admins can iteratively fill source
+      // gaps. Lightweight (single info-level line) and reversible — flipping
+      // the threshold or removing the call does not change behavior.
+      const QUALIFIED_THRESHOLD = 50
+      const qualifiedCount = scored.filter((o) => (o.match_score ?? 0) >= QUALIFIED_THRESHOLD).length
+      if (qualifiedCount < 3) {
+        try {
+          routeLogger.warn(`[matching][low-coverage] profile=${profileId} qualified=${qualifiedCount} returned=${capped.length} candidates=${rawCandidates.length} primary_category=${effectivePrimaryCategory || 'none'} terms=${JSON.stringify(searchTerms.slice(0, 12))}`)
+          // Best-effort persistence so admins can build a coverage dashboard.
+          // Wrapped in try/catch — failure must not block the matching response.
+          await req.db
+            .prepare(
+              `INSERT INTO low_coverage_events (profile_id, primary_category, search_terms, qualified_count, returned_count, candidate_count, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ${isPostgres ? 'NOW()' : "datetime('now')"})`,
+            )
+            .run(
+              profileId,
+              effectivePrimaryCategory || null,
+              JSON.stringify(searchTerms.slice(0, 32)),
+              qualifiedCount,
+              capped.length,
+              rawCandidates.length,
+            )
+            .catch?.(() => {})
+        } catch (telemetryErr) {
+          // Table may not exist on older deploys; log once at debug level.
+          routeLogger.debug?.(`[matching][low-coverage] persistence skipped: ${telemetryErr?.message || telemetryErr}`)
+        }
+      }
+
       res.json({
               profile_id: profileId,
+              profile_applicant_type: profileApplicantType ?? null,
+              primary_category: effectivePrimaryCategory || null,
+              excluded_categories: Array.from(excludedCategories),
               min_score: Number.isFinite(effectiveMinScore) ? effectiveMinScore : null,
               total_scored: rawCandidates.length,
               returned: capped.length,
+              qualified_count: qualifiedCount,
               opportunities: capped,
               referrals: Array.from(referralTemplates.values()),
               diagnostics: {
                 dropped_for_no_reason: rejectStats.noReason,
                 dropped_for_wrong_state: rejectStats.wrongState,
+                dropped_source_not_allowed: rejectStats.sourceNotAllowed,
+                dropped_ineligible_applicant_type: rejectStats.ineligibleApplicantType,
+                source_drop_reasons: sourceDropReasons,
+                eligibility_drop_reasons: eligibilityDropReasons,
+              },
+              coverage_summary: {
+                total_candidates: rawCandidates.length,
+                returned: capped.length,
+                dropped_quality: rejectStats.quality,
+                dropped_wrong_state: rejectStats.wrongState,
+                dropped_source_not_allowed: rejectStats.sourceNotAllowed,
+                dropped_ineligible_count: rejectStats.ineligibleApplicantType,
+                dropped_trust: rejectStats.trust,
+                dropped_no_reason: rejectStats.noReason,
               },
               profile_signal_audit: signalAudit,
               score_hint: allScored._scoreHint || null,

@@ -73,6 +73,29 @@ export const NEED_ALIAS_MAP = {
   vocational: 'education',
   financial_aid: 'education',
 
+  // Professional development / continuing education / licensure remediation
+  // (top-level taxonomy bucket per spec section 2). These map to the
+  // professional_development category — distinct from K–12 / college
+  // education, which keeps general scholarship results from polluting
+  // licensed-professional CE searches.
+  professional_development: 'professional_development',
+  continuing_education: 'professional_development',
+  cme: 'professional_development',
+  ceu: 'professional_development',
+  ce: 'professional_development',
+  license_reinstatement: 'professional_development',
+  license_reinstatement_support: 'professional_development',
+  licensure: 'professional_development',
+  licensure_exam: 'professional_development',
+  recertification: 'professional_development',
+  credentialing: 'professional_development',
+  remediation_course: 'professional_development',
+  ethics_training: 'professional_development',
+  professional_remediation_funding: 'professional_development',
+  nursing_reentry_support: 'professional_development',
+  workforce_reentry_training: 'professional_development',
+  certification_assistance: 'professional_development',
+
   // Disability
   disability: 'disability',
   chronic_illness: 'disability',
@@ -1424,6 +1447,15 @@ export function normalizeProfile(rawProfile, sections = null, signals = null) {
     employeeCount: business.employeeCount,
     annualRevenue: business.annualRevenue,
     yearsInOperation: business.yearsInOperation,
+    // Professional credentials (RN/LCSW/MD/...) inferred via signals.
+    // When set, scoring routes to professional_development funder pools
+    // (state nursing foundations, ANA/NASW/AMA scholarships, WIOA ITA, etc.)
+    // even when the user's free-text query is generic.
+    credentials: signals?.credentials instanceof Set
+      ? Array.from(signals.credentials)
+      : Array.isArray(signals?.credentials) ? signals.credentials : [],
+    isLicensedProfessional: Boolean(signals?.isLicensedProfessional)
+      || (signals?.credentials instanceof Set && signals.credentials.size > 0),
     // Display
     displayName: profile.display_name ?? profile.name ?? null,
   }

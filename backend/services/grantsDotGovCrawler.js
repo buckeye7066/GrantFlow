@@ -142,7 +142,6 @@ export function transformGrantsGovOpportunity(opp) {
     requires_501c3: false,
     requires_match: false,
     eligibility_bullets: buildEligibility({ oppNumber, agencyName, agencyCode, openDate, closeDate, oppStatus, alnlist }),
-    last_verified_at: new Date().toISOString(),
   };
 }
 

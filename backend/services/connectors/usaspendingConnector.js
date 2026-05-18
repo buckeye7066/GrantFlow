@@ -115,7 +115,6 @@ export async function searchAwards(params = {}) {
       evidence_url: award['Award ID']
         ? `https://www.usaspending.gov/award/${encodeURIComponent(award['Award ID'])}`
         : null,
-      last_verified_at: new Date().toISOString(),
       is_active: false, // Past awards are not active opportunities
       last_crawled: new Date().toISOString(),
       notes: 'Historical award data - verify if program currently accepting applications'
@@ -144,7 +143,6 @@ export async function getAgencySpending(agencyCode, params = {}) {
       active_programs: data.active_programs || [],
       type: 'DIRECTORY', // Agency information, not an opportunity
       evidence_url: `https://www.usaspending.gov/agency/${agencyCode}/`,
-      last_verified_at: new Date().toISOString()
     };
   } catch (error) {
     console.error(`[USAspending] Failed to get agency ${agencyCode}:`, error.message);

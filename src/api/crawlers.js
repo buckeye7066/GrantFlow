@@ -94,7 +94,15 @@ export async function listRealCrawlers() {
  * @param {string} [opts.applicantType]
  * @returns {Promise<{ success, count, opportunities, sources_used }>}
  */
-export async function runSmartCrawler({ profileId, minMatchScore = 50, state, city, applicantType }) {
+export async function runSmartCrawler({
+  profileId,
+  minMatchScore = 50,
+  state,
+  city,
+  applicantType,
+  primaryCategory = null,
+  intentTerms = null,
+}) {
   const pid = typeof profileId === 'string' ? profileId.trim() : null
   if (!pid) throw new Error('profile_id is required. Select a profile first.')
   return apiFetch('/api/real-crawlers/run-smart', {
@@ -105,6 +113,13 @@ export async function runSmartCrawler({ profileId, minMatchScore = 50, state, ci
       state: state || undefined,
       city: city || undefined,
       applicant_type: applicantType || undefined,
+      // Forward Smart Matcher intent so the run-smart endpoint dispatches
+      // license_reinstatement / certification_training strategies when the
+      // user is searching for professional development funding.
+      primary_category: primaryCategory || undefined,
+      intent_terms: Array.isArray(intentTerms) && intentTerms.length > 0
+        ? intentTerms
+        : undefined,
     }),
   })
 }

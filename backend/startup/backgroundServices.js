@@ -112,6 +112,40 @@ export function startBackgroundServices({ db, uploadsDir, actualPort, loggedCors
     console.warn('[FeatureFlags] Failed to initialize:', err.message);
   }
 
+  // ── 4b. Seed curated NATIONAL_PROGRAMS into funding_opportunities ────────
+  // Guarantees the professional-development / CE / licensure-remediation /
+  // workforce-development funders we just added to nationalPrograms.js are
+  // matchable on a brand-new deployment, before any periodic crawler run.
+  // Idempotent: each row has a stable source_id and upsert-by-source_id
+  // means re-running has no effect.
+  setTimeout(() => {
+    import('../services/seed/seedNationalPrograms.js')
+      .then(async ({ seedNationalPrograms }) => {
+        const result = await seedNationalPrograms(db, { skipUrlVerification: true });
+        if (result?.error) {
+          console.warn(
+            `[seed] National programs seed failed: ${result.error} (attempted ${result.attempted}).`,
+          );
+          return;
+        }
+        if ((result?.inserted ?? 0) > 0) {
+          console.log(
+            `[seed] National programs: upserted ${result.inserted}/${result.attempted} curated rows.`,
+          );
+        } else {
+          console.log(
+            `[seed] National programs: no new rows (already present), attempted ${result?.attempted ?? 0}.`,
+          );
+        }
+      })
+      .catch((err) => {
+        console.warn(
+          '[seed] Failed to load national programs seeder:',
+          err?.message || err,
+        );
+      });
+  }, 3000);
+
   // ── 5. Startup smoke crawlers (production, opt-in) ─────────────────────────
   const startupSmokeEnabled = _parseBoolEnv(process.env.STARTUP_SMOKE_CRAWL_ENABLED) === true;
   if (startupSmokeEnabled) {

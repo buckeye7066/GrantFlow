@@ -1,12 +1,36 @@
 /**
- * Canonical allowlist of funding opportunity sources permitted in profile pipelines.
+ * Canonical pipeline source policy.
  *
- * Any opportunity whose `source` is NOT in this list must never be saved to the
- * grants (pipeline) table. This is the single source of truth — all pipeline
- * write paths and cleanup scripts import from here.
+ * Per project rules:
+ *   - "Hard boolean filters (AND logic) must be avoided unless the funding
+ *     source is explicitly exclusive."
+ *   - "Directory-style or general funding resources must always survive
+ *     filtering unless explicitly excluded."
+ *   - "null, undefined, or missing profile fields must NOT disqualify a
+ *     funding source by default."
  *
- * IMPORTANT: Keep this list in sync with all crawler source values.
- * When adding a new crawler, add its source string here too.
+ * The previous design was a strict allowlist that silently rejected every
+ * source produced by the domain crawlers (e.g. "Student Endowments",
+ * "Trade School Grants", "Workforce Development Grants" — all 60+ labels in
+ * `services/crawlers/domainCrawlerRegistry.js`). That meant Discover Grants
+ * surfaced legitimate funding opportunities the system had crawled, but the
+ * "Add to Pipeline" button returned `400 source_not_allowed` for almost all
+ * of them.
+ *
+ * This module now combines:
+ *   1. An explicit ALLOWLIST of well-known, normalized canonical source ids
+ *      (federal APIs, curated origins, geo crawler tags). Existing tests pin
+ *      this list to keep behaviour explicit.
+ *   2. An explicit DENYLIST of well-known unsafe markers (synthetic data,
+ *      placeholder, spam, fake, template, regression test markers).
+ *   3. A TRUSTED-LABEL heuristic that accepts any source string whose tokens
+ *      look like a real funding-domain label ("Grants", "Scholarships",
+ *      "Endowments", "Funding", "Benefits", "Support", "Aid", "Relief",
+ *      "Foundation", "Programs", etc.). This is what the registry labels look
+ *      like, so they all pass without having to hard-code each one.
+ *
+ * Result: Goal-7 directory resources reach the pipeline; only sources that
+ * are either explicitly denied or look completely unrecognised get rejected.
  *
  * Sources included by category:
  *
@@ -130,16 +154,231 @@ export const PIPELINE_ALLOWED_SOURCES = [
   'scholarship',
   'school',
   'curated_program',
+
+  // Well-known external scholarship/discovery platforms surfaced by referral
+  // crawlers. These don't contain a generic funding token in their brand name
+  // (so the heuristic alone won't pass them), but they are vetted referral
+  // services that legitimately surface on Discover Grants.
+  'bold.org',
+  'bold_org',
+  'scholarships.com',
+  'scholarships_com',
+  'fastweb',
+  'fastweb.com',
+  'cappex',
+  'unigo',
+  'salliemae',
+  'studentaid.gov',
+  'studentaid_gov',
+  'collegescholarships.org',
+  'niche',
+  'going_merry',
+  'goingmerry',
+  'chegg',
 ];
 
 export const PIPELINE_ALLOWED_SOURCES_SET = new Set(PIPELINE_ALLOWED_SOURCES);
 
 /**
+ * Sources that must NEVER reach a pipeline. Matched case-insensitively and
+ * after normalizing whitespace/underscores. Tests pin: 'template', 'spam',
+ * 'fake_source', 'regression_test'. Mirrors UNTRUSTED_SOURCES from
+ * utils/recordOrigins.js so the pipeline gate stays consistent with the read
+ * path and inserter validation.
+ */
+export const PIPELINE_DENIED_SOURCES = [
+  'synthetic',
+  'template',
+  'fake',
+  'fake_source',
+  'spam',
+  'spam_source',
+  'regression_test',
+  'placeholder',
+  'untrusted',
+  'unverified_external',
+  'mock',
+  'test_only',
+  'demo_only',
+];
+
+const PIPELINE_DENIED_SET = new Set(PIPELINE_DENIED_SOURCES.map((s) => normalizeSourceKey(s)));
+const PIPELINE_ALLOWED_NORM_SET = new Set(PIPELINE_ALLOWED_SOURCES.map((s) => normalizeSourceKey(s)));
+
+/**
+ * Tokens that mark a string as a "funding-domain label" — i.e. it looks like a
+ * real crawler source and should be accepted by default. Tuned against every
+ * label in `services/crawlers/domainCrawlerRegistry.js` plus the geo and
+ * curated-domain crawlers, so any registry entry passes without needing to
+ * be hard-coded into PIPELINE_ALLOWED_SOURCES.
+ */
+const TRUSTED_LABEL_TOKENS = [
+  'grant', 'grants',
+  'scholarship', 'scholarships', 'fellowship', 'fellowships',
+  'endowment', 'endowments',
+  'funding', 'fund', 'funds',
+  'benefit', 'benefits',
+  'aid',
+  'relief',
+  'support',
+  'assistance',
+  'voucher', 'vouchers',
+  'foundation', 'foundations',
+  'directory', 'portal',
+  'program', 'programs',
+  'service', 'services',
+  'crawler',
+  'waiver', 'waivers',
+  'subsidy', 'subsidies',
+  'stipend', 'stipends',
+  'award', 'awards',
+  'loan_forgiveness',
+  'reentry',
+  'training',
+  'apprenticeship',
+  // Tokens used by domain registry labels that don't carry a "grant"/"funding"
+  // word but are still legitimate funding-program identifiers.
+  'affairs',          // "Veteran Affairs Programs"
+  'entrepreneurship', // "Military Spouse Entrepreneurship"
+  'retraining',       // "Displaced Worker Retraining"
+  'commission',       // "Appalachian Regional Commission"
+  'opportunity', 'opportunities',
+  'philanthropy',
+  'charitable', 'charity',
+  'nonprofit',
+  'wellness',
+  'workforce',
+  // Geographic / institutional identifiers seen in geo + state crawlers.
+  'agency',
+  'department',
+  'office',
+  'bureau',
+  'authority',
+  'council',
+  'institute',
+  'center',
+  'centers',
+  'network',
+  'corporation',
+];
+
+const TRUSTED_LABEL_TOKEN_SET = new Set(TRUSTED_LABEL_TOKENS);
+
+/**
+ * Normalize a source string: trim, lowercase, collapse runs of whitespace and
+ * connector chars (`-`, `_`) to single underscores. Used for comparison only;
+ * the original string is preserved for storage/display.
+ */
+export function normalizeSourceKey(source) {
+  if (source === null || source === undefined) return '';
+  return String(source)
+    .toLowerCase()
+    .trim()
+    .replace(/[\s\-_/.]+/g, '_')
+    .replace(/^_+|_+$/g, '');
+}
+
+/**
  * Check if a funding opportunity source is allowed in profile pipelines.
+ *
+ * Decision order:
+ *   1. Empty / null / undefined  → false (no source provenance to verify).
+ *   2. Explicit denylist match   → false (synthetic/spam/template/etc.).
+ *   3. Explicit allowlist match  → true  (canonical crawler ids).
+ *   4. Trusted-label heuristic   → true  (any token in TRUSTED_LABEL_TOKENS,
+ *      e.g. "Student Endowments", "Trade School Grants", "Veteran Affairs
+ *      Programs", "UAW Strike Relief").
+ *   5. Fallback                  → false (unknown / unrecognised marker).
+ *
  * @param {string|null|undefined} source
  * @returns {boolean}
  */
 export function isPipelineSourceAllowed(source) {
   if (!source) return false;
-  return PIPELINE_ALLOWED_SOURCES_SET.has(String(source).trim());
+  const normalized = normalizeSourceKey(source);
+  if (!normalized) return false;
+  if (PIPELINE_DENIED_SET.has(normalized)) return false;
+  if (PIPELINE_ALLOWED_NORM_SET.has(normalized)) return true;
+
+  const tokens = normalized.split('_').filter(Boolean);
+  for (const token of tokens) {
+    if (TRUSTED_LABEL_TOKEN_SET.has(token)) return true;
+  }
+  return false;
+}
+
+/**
+ * Record-origin values that are produced by trusted ingestion paths. Any
+ * opportunity carrying one of these origins came from a vetted crawler /
+ * curator, so its `source` label can be trusted even if the brand string
+ * doesn't contain a funding-domain keyword (e.g. "Bold.org", "Fastweb").
+ *
+ * Mirrors `ALLOWED_RECORD_ORIGINS` from utils/recordOrigins.js minus the
+ * untrusted markers ('synthetic', 'manual') so the pipeline gate stays in
+ * lock-step with the read path and inserter validation.
+ */
+const TRUSTED_ORIGIN_SET = new Set([
+  'live_crawl',
+  'curated_verified',
+  'curated_benefits',
+  'curated_program',
+  'scholarship_crawler',
+  'school_portal',
+  'grants_gov',
+  'verified_real',
+  'cof_foundation_locator',
+  'funding_api',
+  'url_import',
+  'directory_resource',
+  'directory:health_resources',
+  'directory:student_grants',
+  'discovered',
+  'geo_crawl',
+  'seeded',
+  'imported',
+]);
+
+/**
+ * Decide whether an opportunity row may be saved into a profile pipeline.
+ *
+ * This is the **canonical** pipeline-gate predicate. It accepts the full
+ * opportunity object so it can reason about both `source` (label) and
+ * `record_origin` (provenance). An opportunity passes if:
+ *
+ *   • Its `record_origin` is in TRUSTED_ORIGIN_SET, OR
+ *   • Its `source` passes `isPipelineSourceAllowed`.
+ *
+ * It is rejected when:
+ *
+ *   • The source matches the explicit denylist, OR
+ *   • Both source and origin are unknown (no provenance to verify).
+ *
+ * @param {{source?: string|null, record_origin?: string|null} | null | undefined} opportunity
+ * @returns {{ allowed: boolean, reason?: string, source?: string|null, record_origin?: string|null }}
+ */
+export function evaluatePipelineSource(opportunity) {
+  const source = opportunity?.source ?? null;
+  const recordOrigin = opportunity?.record_origin ?? null;
+  const normalizedSource = normalizeSourceKey(source);
+  const normalizedOrigin = normalizeSourceKey(recordOrigin);
+
+  if (normalizedSource && PIPELINE_DENIED_SET.has(normalizedSource)) {
+    return { allowed: false, reason: 'denied_source', source, record_origin: recordOrigin };
+  }
+  if (normalizedOrigin && (normalizedOrigin === 'synthetic' || normalizedOrigin === 'untrusted')) {
+    return { allowed: false, reason: 'untrusted_origin', source, record_origin: recordOrigin };
+  }
+
+  if (normalizedOrigin && TRUSTED_ORIGIN_SET.has(normalizedOrigin)) {
+    return { allowed: true, reason: 'trusted_origin', source, record_origin: recordOrigin };
+  }
+  if (source && isPipelineSourceAllowed(source)) {
+    return { allowed: true, reason: 'allowed_source', source, record_origin: recordOrigin };
+  }
+  return {
+    allowed: false,
+    reason: source ? 'unknown_source' : 'missing_source',
+    source,
+    record_origin: recordOrigin,
+  };
 }

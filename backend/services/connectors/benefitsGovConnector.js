@@ -131,7 +131,6 @@ export async function searchStateBenefits(state, profile = {}) {
       state: state,
       type: 'PROGRAM', // These are standing programs, not grants
       evidence_url: BASE_URL,
-      last_verified_at: new Date().toISOString(),
       is_active: true,
       last_crawled: new Date().toISOString()
     });
@@ -163,7 +162,6 @@ export async function getBenefitDetails(benefitId, state) {
     evidence_url: evidenceUrl,
     application_url: null, // Must be populated by caller before pipeline insert
     _stub: true,           // Signal to pipeline that this record is incomplete
-    last_verified_at: new Date().toISOString()
   };
 }
 

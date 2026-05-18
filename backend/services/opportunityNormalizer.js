@@ -35,7 +35,7 @@ const ENTITY_PATTERNS = [
   { type: 'veteran', patterns: ['veteran', 'military', 'armed forces', 'service member', 'vets', 'active duty', 'military personnel'] },
   { type: 'nonprofit', patterns: ['nonprofit', 'non-profit', '501(c)(3)', '501c3', 'charitable organization', 'charity', 'faith-based', 'church', 'religious organization', 'ministry', 'faith organization', 'volunteer fire', 'fire department', 'fire station', 'ems organization', 'first responder organization', 'rescue squad', 'emergency services organization'] },
   { type: 'business', patterns: ['business', 'small business', 'entrepreneur', 'startup', 'self-employed', 'sole proprietor', 'llc', 'corporation', 'microenterprise', 'business owner', 'for-profit'] },
-  { type: 'individual', patterns: ['individual', 'person', 'resident', 'household', 'family', 'low-income', 'applicant', 'adult', 'senior'] },
+  { type: 'individual', patterns: ['individual', 'person', 'resident', 'household', 'family', 'low-income', 'adult', 'senior'] },
   { type: 'researcher', patterns: ['researcher', 'academic', 'faculty', 'scientist', 'investigator', 'principal investigator', 'research institution', 'university'] },
   { type: 'artist', patterns: ['artist', 'creative', 'musician', 'performer', 'writer', 'filmmaker', 'visual artist'] },
   { type: 'caregiver', patterns: ['caregiver', 'parent', 'guardian', 'foster parent', 'foster care', 'family caregiver'] },
@@ -218,7 +218,7 @@ function extractEntityTypesFromText(text) {
   const lower = text.toLowerCase()
   const types = new Set()
   for (const { type, patterns } of ENTITY_PATTERNS) {
-    if (patterns.some((p) => lower.includes(p))) {
+    if (patterns.some((p) => containsSearchPhrase(lower, p))) {
       types.add(type)
     }
   }
@@ -228,10 +228,28 @@ function extractEntityTypesFromText(text) {
 // ---------------------------------------------------------------------------
 // Check if text contains any pattern from a list
 // ---------------------------------------------------------------------------
+function escapeRegex(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+function containsSearchPhrase(lower, phrase) {
+  const p = String(phrase || '').toLowerCase().trim()
+  if (!p) return false
+  // Single words must match word boundaries so "als" does not match "individuals",
+  // and "applicant" style generic language does not inflate entity detection.
+  // We allow an optional trailing "s" so the singular pattern "resident" still
+  // matches the word "residents" — a common-English regression of strict
+  // boundary matching that would otherwise silently drop legitimate matches.
+  if (/^[a-z0-9]+$/.test(p)) {
+    return new RegExp(`\\b${escapeRegex(p)}s?\\b`, 'i').test(lower)
+  }
+  return lower.includes(p)
+}
+
 function matchesAnyPattern(text, patterns) {
   if (!text) return false
   const lower = text.toLowerCase()
-  return patterns.some((p) => lower.includes(p))
+  return patterns.some((p) => containsSearchPhrase(lower, p))
 }
 
 // ---------------------------------------------------------------------------
@@ -242,7 +260,7 @@ function extractNeedTypesFromText(text) {
   const lower = text.toLowerCase()
   const needs = new Set()
   for (const [need, patterns] of NEED_TEXT_PATTERNS) {
-    if (patterns.some((p) => lower.includes(p))) {
+    if (patterns.some((p) => containsSearchPhrase(lower, p))) {
       needs.add(need)
     }
   }
@@ -259,6 +277,44 @@ function normalizeDeadlineStatus(deadline, deadlineType) {
   if (isNaN(d.getTime())) return 'unknown'
   if (d < new Date()) return 'closed'
   return 'open'
+}
+
+// ---------------------------------------------------------------------------
+// Exclusive applicant-entity requirement detection.
+//
+// These patterns flag opportunities that are *only* open to a specific
+// entity class. Used by `requiresVeteran/Student/Nonprofit/Business` so the
+// hard eligibility gate in computeMatchDecision can reject mismatched
+// profiles before scoring (per project rule "Hard boolean filters must be
+// avoided unless the funding source is explicitly exclusive").
+// ---------------------------------------------------------------------------
+const EXCLUSIVE_ENTITY_REQUIREMENTS = {
+  veteran: [
+    /\b(veterans?|service members?|active duty|military personnel)\s+(only|required|eligible)\b/i,
+    /\b(must be|limited to|exclusively for|only for)\s+(?:u\.?s\.?\s+)?(?:military\s+)?veterans?\b/i,
+  ],
+  student: [
+    /\b(students?|undergraduates?|graduates?|enrolled students?)\s+(only|required|eligible)\b/i,
+    /\b(must be|limited to|exclusively for|only for)\s+(?:currently\s+)?enrolled students?\b/i,
+    /\bcurrently enrolled\b/i,
+    /\benrollment verification\b/i,
+  ],
+  nonprofit: [
+    /\b(nonprofits?|non-profit organizations?|501\(c\)\(3\)|501c3|charitable organizations?)\s+(only|required|eligible)\b/i,
+    /\b(must be|limited to|exclusively for|only for)\s+(?:a\s+)?(?:nonprofit|non-profit|501\(c\)\(3\)|501c3)\b/i,
+    /\b501\(c\)\(3\)\s+status\s+required\b/i,
+    /\bein required\b/i,
+  ],
+  business: [
+    /\b(small businesses?|business owners?|entrepreneurs?|for-profit businesses?|sole proprietors?)\s+(only|required|eligible)\b/i,
+    /\b(must be|limited to|exclusively for|only for)\s+(?:a\s+)?(?:small business|business owner|entrepreneur|for-profit|sole proprietor)\b/i,
+    /\beligible applicants?\s+(?:are|include)\s+(?:small businesses?|business owners?|entrepreneurs?|for-profit businesses?)\b/i,
+  ],
+}
+
+function matchesExclusiveEntityRequirement(text, type) {
+  const patterns = EXCLUSIVE_ENTITY_REQUIREMENTS[type] ?? []
+  return patterns.some((rx) => rx.test(text))
 }
 
 // ---------------------------------------------------------------------------
@@ -375,20 +431,24 @@ export function normalizeOpportunity(rawOpp) {
   // -- Veteran/student/nonprofit requirements --
   const requiresVeteran =
     Boolean(rawOpp.requires_veteran) ||
+    matchesExclusiveEntityRequirement(text, 'veteran') ||
     (entityTypesAllowed.length > 0 && entityTypesAllowed.every(t => t === 'veteran'))
 
   const requiresStudent =
     Boolean(rawOpp.requires_student) ||
+    matchesExclusiveEntityRequirement(text, 'student') ||
     (entityTypesAllowed.length > 0 && entityTypesAllowed.every(t => t === 'student')) ||
     matchesAnyPattern(text, UNIVERSITY_STUDENT_ONLY_PATTERNS)
 
   const requiresNonprofit =
     Boolean(rawOpp.requires_501c3) ||
     Boolean(rawOpp.requires_nonprofit) ||
+    matchesExclusiveEntityRequirement(text, 'nonprofit') ||
     (entityTypesAllowed.length > 0 && entityTypesAllowed.every(t => t === 'nonprofit'))
 
   const requiresBusiness =
     Boolean(rawOpp.requires_business) ||
+    matchesExclusiveEntityRequirement(text, 'business') ||
     (entityTypesAllowed.length > 0 && entityTypesAllowed.every(t => t === 'business'))
 
   // -- Has real application URL? --

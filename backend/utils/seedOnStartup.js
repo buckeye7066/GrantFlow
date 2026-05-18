@@ -11,7 +11,7 @@ import crypto from 'crypto';
 import { applyRelevanceFilter } from '../services/relevanceFilter.js';
 import { buildProfileSignals } from '../services/profileHelpers.js';
 import { computeMatchDecision, MATCHER_VERSION, normalizeProfile, normalizeOpportunity, computeProfileFingerprint, computeOpportunityFingerprint } from '../services/matchEngine.js';
-import { PIPELINE_ALLOWED_SOURCES } from '../config/pipelineAllowedSources.js';
+import { PIPELINE_ALLOWED_SOURCES, evaluatePipelineSource } from '../config/pipelineAllowedSources.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -339,25 +339,35 @@ export function cleanupIrrelevantGrants(db) {
   }
   console.log('[seedOnStartup] Running cleanup of irrelevant profile grants...');
 
-  // Phase 1: Remove pipeline entries whose linked opportunity has a disallowed source.
-  // This cleans up any entries that were inserted before source-allowlist enforcement
-  // was added to the POST /from-opportunity route.
+  // Phase 1: Remove pipeline entries whose linked opportunity has a denied
+  // source or untrusted record_origin. The previous implementation issued a
+  // raw SQL `NOT IN (PIPELINE_ALLOWED_SOURCES)` clause, which would delete
+  // every legitimate domain-crawler row (e.g. "Student Endowments",
+  // "Trade School Grants") because those labels were never in the static
+  // allowlist. We now evaluate each row in JS using `evaluatePipelineSource`
+  // so the same denylist + provenance logic applies as the route gate.
   let removedBySource = 0;
   try {
-    const placeholders = PIPELINE_ALLOWED_SOURCES.map(() => '?').join(', ');
-    const disallowedBySource = db.prepare(`
-      SELECT g.id, g.title, fo.source
+    const candidates = db.prepare(`
+      SELECT g.id, g.title, fo.source, fo.record_origin
       FROM grants g
       JOIN funding_opportunities fo ON fo.id = g.funding_opportunity_id
       WHERE g.profile_id IS NOT NULL
         AND g.funding_opportunity_id IS NOT NULL
-        AND fo.source NOT IN (${placeholders})
-    `).all(...PIPELINE_ALLOWED_SOURCES);
+    `).all();
 
-    for (const grant of disallowedBySource) {
+    for (const grant of candidates) {
+      const gate = evaluatePipelineSource({
+        source: grant.source,
+        record_origin: grant.record_origin,
+      });
+      if (gate.allowed) continue;
       try {
         db.prepare('DELETE FROM grants WHERE id = ?').run(grant.id);
-        console.log(`[seedOnStartup] Removed disallowed-source grant "${grant.title}" (source="${grant.source}")`);
+        console.log(
+          `[seedOnStartup] Removed disallowed-source grant "${grant.title}" ` +
+          `(reason=${gate.reason}, source="${grant.source}", record_origin="${grant.record_origin}")`
+        );
         removedBySource++;
       } catch (e) {
         // Ignore per-row errors
@@ -370,12 +380,16 @@ export function cleanupIrrelevantGrants(db) {
     console.warn('[seedOnStartup] Phase 1 source cleanup failed (non-fatal):', e?.message || e);
   }
 
-  // Get all profile-scoped grants with their associated profile data
+  // Get all profile-scoped grants with their associated profile data.
+  // We also fetch record_origin so the per-row source check below can use the
+  // canonical evaluator (which considers both source label and provenance).
   const grants = db.prepare(`
     SELECT g.id, g.title, g.funder, g.match_score,
            g.profile_id, g.funding_opportunity_id,
            fo.description, fo.keywords, fo.categories, fo.state, fo.is_national,
-           fo.sponsor, fo.eligibility_bullets, fo.source AS opportunity_source
+           fo.sponsor, fo.eligibility_bullets,
+           fo.source AS opportunity_source,
+           fo.record_origin AS opportunity_record_origin
     FROM grants g
     LEFT JOIN funding_opportunities fo ON g.funding_opportunity_id = fo.id
     WHERE g.profile_id IS NOT NULL
@@ -433,7 +447,16 @@ export function cleanupIrrelevantGrants(db) {
   let removed = 0;
   for (const grant of grants) {
     if (!grant.funding_opportunity_id) continue;
-    if (grant.opportunity_source && PIPELINE_ALLOWED_SOURCES.includes(grant.opportunity_source)) continue;
+    // Skip relevance re-check when the opportunity is already from a trusted
+    // source/origin — phase 1 already removed denylist rows. This preserves
+    // legitimate domain-crawler entries (e.g. "Student Endowments",
+    // "Trade School Grants") that would otherwise be re-evaluated and could
+    // be falsely scrubbed by stricter relevance heuristics.
+    const phase2Gate = evaluatePipelineSource({
+      source: grant.opportunity_source,
+      record_origin: grant.opportunity_record_origin,
+    });
+    if (phase2Gate.allowed) continue;
     const profileData = getProfileData(grant.profile_id);
     if (!profileData) continue;
 

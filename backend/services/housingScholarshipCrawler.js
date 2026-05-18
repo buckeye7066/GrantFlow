@@ -64,7 +64,6 @@ const HOUSING_FUNDING_CATALOG = [
       talent_type: null,
     },
     verification_status: 'verified_live_url',
-    last_verified_at: new Date().toISOString(),
   },
 
   {
@@ -101,7 +100,6 @@ const HOUSING_FUNDING_CATALOG = [
       talent_type: null,
     },
     verification_status: 'verified_live_url',
-    last_verified_at: new Date().toISOString(),
   },
 
   {
@@ -138,7 +136,6 @@ const HOUSING_FUNDING_CATALOG = [
       talent_type: null,
     },
     verification_status: 'verified_live_url',
-    last_verified_at: new Date().toISOString(),
   },
 
   {
@@ -174,7 +171,6 @@ const HOUSING_FUNDING_CATALOG = [
       talent_type: null,
     },
     verification_status: 'verified_live_url',
-    last_verified_at: new Date().toISOString(),
   },
 
   // ── Faith-Based Scholarships ───────────────────────────────────────────────
@@ -212,7 +208,6 @@ const HOUSING_FUNDING_CATALOG = [
       talent_type: null,
     },
     verification_status: 'verified_live_url',
-    last_verified_at: new Date().toISOString(),
   },
 
   {
@@ -248,7 +243,6 @@ const HOUSING_FUNDING_CATALOG = [
       talent_type: null,
     },
     verification_status: 'verified_live_url',
-    last_verified_at: new Date().toISOString(),
   },
 
   {
@@ -284,7 +278,6 @@ const HOUSING_FUNDING_CATALOG = [
       talent_type: null,
     },
     verification_status: 'verified_live_url',
-    last_verified_at: new Date().toISOString(),
   },
 
   {
@@ -320,7 +313,6 @@ const HOUSING_FUNDING_CATALOG = [
       talent_type: null,
     },
     verification_status: 'verified_live_url',
-    last_verified_at: new Date().toISOString(),
   },
 
   // ── Music / Talent-Based Scholarships ─────────────────────────────────────
@@ -359,7 +351,6 @@ const HOUSING_FUNDING_CATALOG = [
       talent_type: 'music',
     },
     verification_status: 'verified_live_url',
-    last_verified_at: new Date().toISOString(),
   },
 
   {
@@ -395,7 +386,6 @@ const HOUSING_FUNDING_CATALOG = [
       talent_type: 'music',
     },
     verification_status: 'verified_live_url',
-    last_verified_at: new Date().toISOString(),
   },
 
   {
@@ -431,7 +421,6 @@ const HOUSING_FUNDING_CATALOG = [
       talent_type: 'music_flute',
     },
     verification_status: 'verified_live_url',
-    last_verified_at: new Date().toISOString(),
   },
 
   // ── COA Adjustment / Housing Direct ───────────────────────────────────────
@@ -470,7 +459,6 @@ const HOUSING_FUNDING_CATALOG = [
       talent_type: null,
     },
     verification_status: 'verified_live_url',
-    last_verified_at: new Date().toISOString(),
   },
 
   {
@@ -507,7 +495,6 @@ const HOUSING_FUNDING_CATALOG = [
       talent_type: null,
     },
     verification_status: 'verified_live_url',
-    last_verified_at: new Date().toISOString(),
   },
 
   {
@@ -544,7 +531,6 @@ const HOUSING_FUNDING_CATALOG = [
       talent_type: null,
     },
     verification_status: 'verified_live_url',
-    last_verified_at: new Date().toISOString(),
   },
 
   {
@@ -580,7 +566,6 @@ const HOUSING_FUNDING_CATALOG = [
       talent_type: null,
     },
     verification_status: 'verified_live_url',
-    last_verified_at: new Date().toISOString(),
   },
 
   {
@@ -616,7 +601,6 @@ const HOUSING_FUNDING_CATALOG = [
       talent_type: null,
     },
     verification_status: 'verified_live_url',
-    last_verified_at: new Date().toISOString(),
   },
 ]
 

@@ -61,6 +61,21 @@ function getOpportunityTypeBadge(opp) {
   return { label, fundingLabel, isProBono };
 }
 
+// Visible label + tooltip explaining what KIND of result this is. Critical
+// for trust — users must never mistake a directory/referral for a grant.
+const RESULT_KIND_BADGE = {
+  direct:        { label: 'Direct Grant',         classes: 'border-emerald-300 text-emerald-800 bg-emerald-50',  tooltip: 'A grant, scholarship, or award you can apply for directly.' },
+  benefit:       { label: 'Benefit Program',      classes: 'border-blue-300 text-blue-800 bg-blue-50',           tooltip: 'A public or nonprofit program you can apply to for assistance.' },
+  directory:     { label: 'Directory / Referral', classes: 'border-amber-300 text-amber-800 bg-amber-50',        tooltip: 'A place to search, call, or contact — not itself the funding source. Use it to find help near you.' },
+  school_portal: { label: 'School Aid Portal',    classes: 'border-indigo-300 text-indigo-800 bg-indigo-50',     tooltip: 'A school-specific financial aid page. Apply through the institution.' },
+  action_step:   { label: 'Action Step',          classes: 'border-purple-300 text-purple-800 bg-purple-50',     tooltip: 'A task, training, or program — not direct cash. Useful next step toward funding.' },
+};
+
+function getResultKindBadge(opp) {
+  const kind = String(opp?.result_kind || '').toLowerCase();
+  return RESULT_KIND_BADGE[kind] || null;
+}
+
 /**
  * Returns housing usability info for an opportunity.
  * Checks: usable_for_housing flag, refund_potential flag, and funding_category.
@@ -523,6 +538,24 @@ export default function SearchResults({ results = [], profileId, onAddToPipeline
                     />
                   </button>
                 )}
+                {(() => {
+                  const kindBadge = getResultKindBadge(opp);
+                  if (!kindBadge) return null;
+                  return (
+                    <TooltipProvider delayDuration={200}>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Badge variant="outline" className={`text-xs shrink-0 cursor-help ${kindBadge.classes}`}>
+                            {kindBadge.label}
+                          </Badge>
+                        </TooltipTrigger>
+                        <TooltipContent side="bottom" className="max-w-xs text-xs leading-relaxed">
+                          <p>{kindBadge.tooltip}</p>
+                        </TooltipContent>
+                      </Tooltip>
+                    </TooltipProvider>
+                  );
+                })()}
                 {(opp.source || opp.crawler_type) && (
                   <Badge variant="outline" className="text-xs shrink-0">
                     {formatSourceLabel(opp.source || opp.crawler_type)}
@@ -531,6 +564,11 @@ export default function SearchResults({ results = [], profileId, onAddToPipeline
                 {!opp.application_url && (
                   <Badge variant="outline" className="text-xs shrink-0 border-amber-300 text-amber-700 bg-amber-50">
                     No apply link
+                  </Badge>
+                )}
+                {opp.link_status === 'broken' && (
+                  <Badge variant="outline" className="text-xs shrink-0 border-red-300 text-red-700 bg-red-50">
+                    Link broken
                   </Badge>
                 )}
                 {(() => {

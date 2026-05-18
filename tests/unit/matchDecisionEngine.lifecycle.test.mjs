@@ -423,12 +423,25 @@ test('canonical seeding (G): REJECT decision prevents pipeline insert via saveTo
     is_loan: 1,
     categories: '["housing"]',
     keywords: '["loan"]',
+    // saveToProfilePipeline now gates on a valid source/record_origin pair
+    // (Gate 1 SOURCE_ALLOWLIST) before the decision engine runs. Provide a
+    // trusted source so the test exercises the intended Gate 2 path.
+    source: 'national',
+    record_origin: 'curated_program',
   })
 
   const profileContext = { profile: { id: 'profile-canonical', primary_type: 'individual', state: 'OH' }, sections: {} }
   const result = await saveToProfilePipeline(
     db,
-    { id: 'opp-canonical-loan', title: 'Loan Program', is_loan: 1, application_url: 'https://bank.com/loan' },
+    {
+      id: 'opp-canonical-loan',
+      title: 'Loan Program',
+      description: 'This is a loan, not a grant. Repayment required.',
+      is_loan: 1,
+      application_url: 'https://bank.com/loan',
+      source: 'national',
+      record_origin: 'curated_program',
+    },
     'profile-canonical',
     profileContext,
   )

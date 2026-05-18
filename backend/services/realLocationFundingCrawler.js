@@ -1426,7 +1426,6 @@ async function upsertOpportunity(db, opp, state = 'nationwide') {
     is_national: opp.is_national !== false,
     eligibility_bullets: opp.eligibility ?? opp.eligibility_bullets ?? [],
     record_origin: 'curated_verified',
-    last_verified_at: new Date().toISOString(),
   }
 
   try {

@@ -14,6 +14,55 @@ import {
 import client, { apiFetch } from '@/api/client'
 import { toast } from '@/components/ui/use-toast'
 import { useFundingResultsStore } from '@/stores/fundingResultsStore'
+import { clearAllProfileScopedStorage } from '@/utils/profileScopedStorage'
+
+// Wired up at app boot via registerQueryClient(qc) from src/App.jsx so we can
+// evict React-Query cache entries that include the previous profile id when
+// the active profile changes. Avoids hard-coupling this store to the qc
+// instance / module load order.
+let registeredQueryClient = null
+
+/**
+ * Register the application's React-Query client so the auth store can purge
+ * profile-bound queries on profile switch and logout. Idempotent — last call
+ * wins; passing null deregisters.
+ */
+export function registerQueryClient(qc) {
+  registeredQueryClient = qc ?? null
+}
+
+function evictProfileQueries(previousProfileId) {
+  if (!registeredQueryClient) return
+  try {
+    if (previousProfileId) {
+      registeredQueryClient.removeQueries({
+        predicate: (q) =>
+          Array.isArray(q.queryKey) &&
+          q.queryKey.some((k) => k !== null && k !== undefined && String(k) === String(previousProfileId)),
+      })
+    }
+    // Always purge the profile-bound discovery / matching keys outright so a
+    // hard reload after a profile switch never serves a stale cached result.
+    const PROFILE_BOUND_PREFIXES = [
+      'discover-catalog',
+      'discover-profile',
+      'matcher-opportunities',
+      'matching-opportunities',
+      'smart-matcher',
+      'funding-results',
+      'reverse-lookup',
+      'profile-pipeline',
+    ]
+    registeredQueryClient.removeQueries({
+      predicate: (q) =>
+        Array.isArray(q.queryKey) &&
+        typeof q.queryKey[0] === 'string' &&
+        PROFILE_BOUND_PREFIXES.includes(q.queryKey[0]),
+    })
+  } catch (err) {
+    try { console.warn('[authStore] queryClient eviction failed:', err?.message || err) } catch { /* ignore */ }
+  }
+}
 
 const ACCESS_EXPIRY_STORAGE_KEY = 'grantflow:access-expiry'
 const REFRESH_LEEWAY_MS = 60 * 1000
@@ -209,6 +258,7 @@ export const useAuthStore = create((set, get) => ({
 
   clearState: () => {
     const preferredAuthMethod = get().preferredAuthMethod
+    const prevProfileId = get().activeProfileId
     clearRefreshTimer()
     clearAccessExpiry()
     client.clearToken()
@@ -219,6 +269,13 @@ export const useAuthStore = create((set, get) => ({
     try { useFundingResultsStore.getState().clear() } catch (err) {
       console.warn('[authStore] failed to clear funding results store:', err?.message || err)
     }
+    // Drop every profile-scoped localStorage key (matcher checklists, saved
+    // grants caches, dismissed suggestions, etc.) so a fresh user never sees
+    // the previous user's profile artefacts.
+    try { clearAllProfileScopedStorage() } catch (err) {
+      console.warn('[authStore] failed to clear profile-scoped storage:', err?.message || err)
+    }
+    evictProfileQueries(prevProfileId)
     set({ ...initialState, preferredAuthMethod })
   },
 
@@ -844,12 +901,31 @@ export const useAuthStore = create((set, get) => ({
     const prev = get().activeProfileId
     client.setActiveProfileId?.(normalized)
     set({ activeProfileId: normalized })
-    // If the active profile actually changed, clear any cached funding results
-    // so the new profile doesn't see the previous profile's matches.
-    if (prev && normalized && String(prev) !== String(normalized)) {
+    // Persist immediately so onRehydrateStorage callbacks (fundingResultsStore,
+    // saved grants, etc.) can compare against the canonical active id without
+    // racing the auth store's own persistence.
+    try {
+      if (typeof window !== 'undefined') {
+        if (normalized) {
+          window.localStorage.setItem('grantflow:active-profile-id', String(normalized))
+        } else {
+          window.localStorage.removeItem('grantflow:active-profile-id')
+        }
+      }
+    } catch { /* ignore storage errors */ }
+
+    const profileActuallyChanged =
+      prev !== null && prev !== undefined &&
+      normalized !== null && normalized !== undefined &&
+      String(prev) !== String(normalized)
+    if (profileActuallyChanged) {
       try { useFundingResultsStore.getState().clear() } catch (err) {
         console.warn('[authStore] failed to clear funding results on profile switch:', err?.message || err)
       }
+      try { clearAllProfileScopedStorage() } catch (err) {
+        console.warn('[authStore] failed to clear profile-scoped storage on profile switch:', err?.message || err)
+      }
+      evictProfileQueries(prev)
     }
   },
 
@@ -930,3 +1006,12 @@ export const useAuthStore = create((set, get) => ({
 client.setAuthFailureHandler?.((message) => {
   useAuthStore.getState().markSessionExpired(message)
 })
+
+/**
+ * Canonical active-profile-id selector. Use this hook in every page / component
+ * that depends on the active profile so reads stay in lock-step with
+ * authStore.setActiveProfileId(). Don't keep parallel local profile-id state.
+ */
+export function useActiveProfileId() {
+  return useAuthStore((state) => state.activeProfileId)
+}

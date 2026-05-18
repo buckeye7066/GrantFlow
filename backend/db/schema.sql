@@ -206,7 +206,13 @@ CREATE TABLE IF NOT EXISTS funding_opportunities (
   --                      'community_directory' | 'open_web' | 'manual_curated'
   opportunity_kind TEXT,
   source_trust_tier TEXT,
-  
+  -- result_kind separates "real grant a user can apply for" from
+  -- "directory/referral the user can call/search". Drives UI badge + the
+  -- broken-link hide rule (broken direct → hide; broken directory → label).
+  result_kind TEXT,           -- direct | benefit | directory | school_portal | action_step
+  is_hidden INTEGER DEFAULT 0,
+
+
   -- Requirements
   requires_501c3 BOOLEAN DEFAULT FALSE,
   requires_match BOOLEAN DEFAULT FALSE,
@@ -2204,3 +2210,46 @@ CREATE TABLE IF NOT EXISTS exclusion_audit (
   false_positive BOOLEAN,
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
+
+-- Low-coverage telemetry (Smart Matcher spec §7).
+-- One row per Discover/SmartMatcher search where qualified_count < 3.
+-- Fed by routes/matching.js → /profile/:profileId/opportunities. Lets admins
+-- iteratively fill funder source gaps and surface frequent low-coverage
+-- queries on the Anya Admin dashboard.
+CREATE TABLE IF NOT EXISTS low_coverage_events (
+  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+  profile_id TEXT,
+  primary_category TEXT,
+  search_terms TEXT,
+  qualified_count INTEGER,
+  returned_count INTEGER,
+  candidate_count INTEGER,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_low_coverage_created
+  ON low_coverage_events(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_low_coverage_profile
+  ON low_coverage_events(profile_id);
+CREATE INDEX IF NOT EXISTS idx_low_coverage_category
+  ON low_coverage_events(primary_category);
+
+-- Match feedback (Smart Matcher spec §7 — "Not relevant / Wrong category").
+-- Lightweight per-result feedback that future scorer iterations can read to
+-- down-weight chronically irrelevant opportunities for a given query type.
+CREATE TABLE IF NOT EXISTS match_feedback (
+  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+  profile_id TEXT,
+  opportunity_id TEXT,
+  primary_category TEXT,
+  feedback TEXT,        -- 'not_relevant' | 'wrong_category' | 'low_quality' | 'helpful'
+  notes TEXT,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_match_feedback_profile
+  ON match_feedback(profile_id);
+CREATE INDEX IF NOT EXISTS idx_match_feedback_opp
+  ON match_feedback(opportunity_id);
+CREATE INDEX IF NOT EXISTS idx_match_feedback_created
+  ON match_feedback(created_at DESC);

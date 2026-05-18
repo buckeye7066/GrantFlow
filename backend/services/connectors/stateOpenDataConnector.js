@@ -145,7 +145,6 @@ export async function searchStateData(state, params = {}) {
     type: 'DIRECTORY', // Portal/directory, not a specific grant
     state: state,
     evidence_url: portalUrl,
-    last_verified_at: new Date().toISOString(),
     is_active: true,
     last_crawled: new Date().toISOString()
   });
@@ -173,7 +172,6 @@ export async function searchStateData(state, params = {}) {
             type: 'OPPORTUNITY',
             state: state,
             evidence_url: socrataUrl,
-            last_verified_at: new Date().toISOString(),
             is_active: true,
             last_crawled: new Date().toISOString()
           });
@@ -204,7 +202,6 @@ export async function getStateProgramDetails(state, programId) {
     state: state,
     type: 'PROGRAM', // State programs are typically standing programs
     evidence_url: `https://${portal.domain}`,
-    last_verified_at: new Date().toISOString()
   };
 }
 
