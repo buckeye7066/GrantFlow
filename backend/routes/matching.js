@@ -598,6 +598,34 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
         'nurse', 'nursing', 'physician', 'social work', 'mental health',
         'allied health', 'professional', 'fellowship', 'residency',
       ]
+      // Student-aid overlap keywords — the same idea applied to the
+      // student_aid primary category. An opportunity with any of these
+      // tokens is "in scope" for an off-campus / cost-of-attendance / room-
+      // and-board / FAFSA / Pell / state-student-aid query and keeps its
+      // full score. Anything else (general adult homelessness, SNAP, LIHEAP,
+      // etc.) gets the 25-point cap so it does not crowd out real student
+      // aid in the slider — but it remains in the result set per the user
+      // rule "directory-style resources must always survive filtering" and
+      // "Population / eligibility mismatches must reduce score, not discard
+      // results".
+      const STUDENT_AID_OVERLAP_KEYWORDS = [
+        'student_aid', 'student aid', 'scholarship', 'grant', 'tuition',
+        'fafsa', 'pell', 'fseog', 'work-study', 'work study',
+        'cost of attendance', 'cost_of_attendance', 'coa',
+        'room and board', 'room_and_board',
+        'student housing', 'student_housing',
+        'off-campus', 'off campus', 'off_campus',
+        'on-campus', 'on campus', 'on_campus',
+        'dorm', 'residence hall', 'residence_hall',
+        'college', 'university', 'undergrad', 'graduate',
+        'campus', 'institutional aid', 'institutional_aid',
+        'completion grant', 'emergency aid', 'emergency_aid',
+        'student emergency aid', 'student_emergency_aid',
+        'student living', 'student_living',
+        'education', 'student',
+        'forensic', 'stem', 'women in stem', 'heritage',
+        'veteran', 'military',
+      ]
       const opportunityHasProfDevOverlap = (opp) => {
         const haystack = [
           opp?.categories,
@@ -613,11 +641,32 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
         if (!haystack) return false
         return PROF_DEV_OVERLAP_KEYWORDS.some((kw) => haystack.includes(kw))
       }
+      const opportunityHasStudentAidOverlap = (opp) => {
+        const haystack = [
+          opp?.categories,
+          opp?.title,
+          opp?.description,
+          opp?.keywords,
+          opp?.eligibility_criteria,
+          opp?.tags,
+        ]
+          .map((v) => (v == null ? '' : Array.isArray(v) ? v.join(' ') : String(v)))
+          .join(' ')
+          .toLowerCase()
+        if (!haystack) return false
+        return STUDENT_AID_OVERLAP_KEYWORDS.some((kw) => haystack.includes(kw))
+      }
       const applyCrossCategoryCap = (score, opp) => {
-        if (effectivePrimaryCategory !== 'professional_development') return score
         if (typeof score !== 'number' || !Number.isFinite(score)) return score
-        if (opportunityHasProfDevOverlap(opp)) return score
-        return Math.min(score, CROSS_CATEGORY_CAP)
+        if (effectivePrimaryCategory === 'professional_development') {
+          if (opportunityHasProfDevOverlap(opp)) return score
+          return Math.min(score, CROSS_CATEGORY_CAP)
+        }
+        if (effectivePrimaryCategory === 'student_aid') {
+          if (opportunityHasStudentAidOverlap(opp)) return score
+          return Math.min(score, CROSS_CATEGORY_CAP)
+        }
+        return score
       }
 
       const trustDropReasons = {}
@@ -684,14 +733,18 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
                                   const directoryCapped = isDirectory && typeof downgradedScore === 'number' && downgradedScore > DIRECTORY_SCORE_CAP
 
                                   // Spec §4: cross-category cap (e.g., SSI for a
-                                  // PROBE ethics CE search) — if the opportunity has
-                                  // no professional-development overlap, cap at 25
-                                  // so it falls below the default 50% threshold.
+                                  // PROBE ethics CE search, or generic homeless-shelter
+                                  // rows for a "off-campus living expenses at MTSU"
+                                  // student-aid search) — if the opportunity has no
+                                  // overlap with the primary category, cap at 25 so it
+                                  // falls below the default 50% threshold.
                                   const crossCategoryApplied =
-                                    effectivePrimaryCategory === 'professional_development' &&
-                                    !opportunityHasProfDevOverlap(opp) &&
                                     typeof directoryCappedScore === 'number' &&
-                                    directoryCappedScore > CROSS_CATEGORY_CAP
+                                    directoryCappedScore > CROSS_CATEGORY_CAP &&
+                                    ((effectivePrimaryCategory === 'professional_development' &&
+                                      !opportunityHasProfDevOverlap(opp)) ||
+                                     (effectivePrimaryCategory === 'student_aid' &&
+                                      !opportunityHasStudentAidOverlap(opp)))
                                   const adjustedScore = applyCrossCategoryCap(directoryCappedScore, opp)
 
                                return {

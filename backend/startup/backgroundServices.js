@@ -146,6 +146,40 @@ export function startBackgroundServices({ db, uploadsDir, actualPort, loggedCors
       });
   }, 3000);
 
+  // ── 4c. Seed curated SCHOLARSHIPS into funding_opportunities ──────────────
+  // Pushes services/crawlers/data/scholarships.js (TN HOPE / Promise / TSAA /
+  // STEP UP / Aspire, Federal Pell / FSEOG, off-campus / room-and-board
+  // scholarships, forensic / STEM / heritage funds) into the catalog so
+  // queries like "off-campus living expenses at MTSU" return real student
+  // aid rows from the first request — not "0 results" until a crawl runs.
+  setTimeout(() => {
+    import('../services/seed/seedScholarships.js')
+      .then(async ({ seedScholarships }) => {
+        const result = await seedScholarships(db, { skipUrlVerification: true });
+        if (result?.error) {
+          console.warn(
+            `[seed] Scholarships seed failed: ${result.error} (attempted ${result.attempted}).`,
+          );
+          return;
+        }
+        if ((result?.inserted ?? 0) > 0) {
+          console.log(
+            `[seed] Scholarships: upserted ${result.inserted}/${result.attempted} curated rows.`,
+          );
+        } else {
+          console.log(
+            `[seed] Scholarships: no new rows (already present), attempted ${result?.attempted ?? 0}.`,
+          );
+        }
+      })
+      .catch((err) => {
+        console.warn(
+          '[seed] Failed to load scholarships seeder:',
+          err?.message || err,
+        );
+      });
+  }, 3500);
+
   // ── 5. Startup smoke crawlers (production, opt-in) ─────────────────────────
   const startupSmokeEnabled = _parseBoolEnv(process.env.STARTUP_SMOKE_CRAWL_ENABLED) === true;
   if (startupSmokeEnabled) {

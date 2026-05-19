@@ -354,6 +354,31 @@ const NEED_SYNONYMS = {
     'professional', 'development', 'continuing', 'education', 'cme', 'ceu', 'license',
     'licensure', 'certification', 'recertification', 'training', 'workshop', 'course',
   ],
+  // Student aid / cost-of-attendance (parallels Professional Development).
+  // Surfaces FAFSA / Pell / FSEOG / state aid / room-and-board scholarships /
+  // school-cost-of-attendance rows when the student profile or query mentions
+  // off-campus, on-campus, dorm, room and board, COA, college living, or
+  // any of the federal / state student-aid program names.
+  student_aid: [
+    'student', 'scholarship', 'tuition', 'fafsa', 'pell', 'fseog',
+    'work-study', 'work study', 'cost', 'attendance', 'room', 'board',
+    'housing', 'off-campus', 'on-campus', 'dorm', 'residence',
+    'college', 'university', 'undergrad', 'graduate', 'campus',
+    'aid', 'grant', 'completion', 'emergency', 'institutional',
+    'hope', 'promise', 'aspire', 'tsaa', 'reconnect', 'cal grant',
+    'tap', 'map', 'bright futures', 'kees',
+  ],
+  student_living: [
+    'student', 'housing', 'off-campus', 'on-campus', 'dorm', 'residence',
+    'rent', 'apartment', 'living', 'campus', 'room', 'board', 'cost',
+    'attendance', 'fafsa', 'pell', 'fseog', 'aid', 'scholarship', 'grant',
+    'emergency', 'completion',
+  ],
+  cost_of_attendance: [
+    'cost', 'attendance', 'coa', 'fafsa', 'pell', 'fseog', 'work-study',
+    'tuition', 'fees', 'room', 'board', 'housing', 'transportation',
+    'books', 'supplies', 'student', 'scholarship', 'aid',
+  ],
 }
 
 const STATE_MAPPING = {

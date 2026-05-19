@@ -15,6 +15,12 @@ export const ALLOWED_RECORD_ORIGINS = new Set([
   'curated_verified',
   'curated_benefits',
   'curated_program',
+  // Curated startup seed (NATIONAL_PROGRAMS + SCHOLARSHIPS data files
+  // pushed into funding_opportunities by services/seed/seed*Programs.js).
+  // Without this, the inserter silently rewrites the origin to 'live_crawl'
+  // which loses provenance and (more importantly) blocks the curated rows
+  // from being recognised as a TRUSTED_ORIGIN by pipelineAllowedSources.js.
+  'curated_catalog',
   'scholarship_crawler',
   'school_portal',
   'grants_gov',

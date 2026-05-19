@@ -2318,6 +2318,206 @@ export function buildProfileSignals({ profile, sections, asOf = null }) {
              [...applicantTypeSet].some((t) => /\b(?:high.?school.?student|college.?student|graduate.?student|undergraduate|hs.?student|hs.?senior|hs.?junior|hs.?sophomore|hs.?freshman|student)\b/i.test(t))) {
     applicantType = 'student'
     needs.add('education'); needs.add('scholarship')
+
+    // STUDENT AID AUTO-TAGGING (global, profile-aware default per spec).
+    // Every student profile gets a baseline pool of student-aid signals so
+    // the matching SQL filter (LOWER(keywords) LIKE ...) hits the right
+    // rows even when the user's free-text query is "off-campus living
+    // expenses at MTSU" (which only tokenizes to "campus", "living",
+    // "expenses", "mtsu"). These keywords surface FAFSA / Pell / FSEOG /
+    // state student aid / room-and-board scholarships / school emergency
+    // aid / school cards. Per the user rule "Profile attributes should
+    // increase score, not eliminate results", these are additive — they
+    // never block other matches.
+    ;[
+      'student aid',
+      'student housing',
+      'off-campus housing',
+      'on-campus housing',
+      'student living',
+      'cost of attendance',
+      'room and board',
+      'tuition assistance',
+      'scholarship',
+      'fafsa',
+      'pell grant',
+      'fseog',
+      'federal work-study',
+      'student emergency aid',
+      'completion grant',
+      'institutional aid',
+      'financial aid office',
+    ].forEach((kw) => registerKeyword(kw))
+
+    // Add student_living and student_aid as needs so the need-based scoring
+    // in matchEngine bucket-aligns with student-aid opportunities and the
+    // route can detect student_aid as the primary intent server-side.
+    needs.add('student_aid')
+    needs.add('student_living')
+    needs.add('cost_of_attendance')
+
+    // Tennessee residents get the state student-aid program names so HOPE
+    // / TSAA / STEP UP / Aspire / Promise rows appear in candidates even
+    // before the user types those acronyms. Same pattern is used for
+    // any state in profile.location.state via STATE_STUDENT_AID below.
+    const STATE_STUDENT_AID = {
+      TN: ['tennessee hope', 'tn promise', 'tennessee promise', 'tennessee student assistance award', 'tsaa', 'step up scholarship', 'aspire award', 'tennessee reconnect'],
+      WV: ['promise scholarship', 'wv invests', 'higher education grant', 'cfwv'],
+      CA: ['cal grant', 'middle class scholarship', 'chafee grant'],
+      NY: ['tap grant', 'tuition assistance program', 'excelsior scholarship'],
+      IL: ['map grant', 'monetary award program'],
+      TX: ['toward excellence access success', 'teach grant'],
+      GA: ['hope scholarship georgia', 'zell miller', 'hope grant'],
+      FL: ['bright futures', 'florida student assistance grant'],
+      OH: ['ohio college opportunity grant', 'choose ohio first'],
+      PA: ['pheaa state grant', 'ready to succeed'],
+      NC: ['nc need based', 'nc community college grant'],
+      MI: ['michigan competitive scholarship', 'tuition incentive program'],
+      KY: ['kentucky educational excellence scholarship', 'kees', 'cap grant', 'go higher'],
+      AL: ['alabama student assistance program', 'asap grant'],
+      VA: ['virginia tuition assistance grant', 'vtag'],
+      SC: ['palmetto fellows', 'life scholarship', 'south carolina need based grant'],
+    }
+    const stateAidKey = String(location?.state || '').toUpperCase()
+    if (stateAidKey && STATE_STUDENT_AID[stateAidKey]) {
+      STATE_STUDENT_AID[stateAidKey].forEach((kw) => registerKeyword(kw))
+    }
+
+    // Target colleges → emit the college name as a keyword AND add a
+    // generic "<college name> financial aid" / "<college name> housing"
+    // pair so the candidate set includes school-specific cards.
+    // `education` (singular) is declared earlier in this function as the
+    // alias for sections.education ?? sections.education_details.
+    const targetCollegesArr = Array.isArray(education?.target_colleges)
+      ? education.target_colleges
+      : []
+    targetCollegesArr.forEach((college) => {
+      if (!college || typeof college !== 'string') return
+      registerKeyword(college)
+      const lc = college.toLowerCase()
+      registerKeyword(`${lc} financial aid`)
+      registerKeyword(`${lc} housing`)
+      registerKeyword(`${lc} scholarship`)
+    })
+    if (education?.current_institution) {
+      const lc = String(education.current_institution).toLowerCase()
+      registerKeyword(`${lc} financial aid`)
+      registerKeyword(`${lc} scholarship`)
+    }
+
+    // Auto-eligibility hints for HOPE-style merit aid based on GPA / ACT /
+    // SAT thresholds. These DO NOT discard anything — they only register
+    // additional keywords so the right candidate rows surface. Match-score
+    // weighting is still done by matchEngine.
+    if (Number.isFinite(academics.gpa) && academics.gpa >= 3.0) registerKeyword('merit scholarship')
+    if (Number.isFinite(academics.gpa) && academics.gpa >= 3.5) registerKeyword('high merit scholarship')
+    if (Number.isFinite(academics.act) && academics.act >= 21) registerKeyword('hope eligible')
+    if (Number.isFinite(academics.act) && academics.act >= 27) registerKeyword('aspire eligible')
+    if (Number.isFinite(academics.gpa) && academics.gpa >= 3.75 &&
+        Number.isFinite(academics.act) && academics.act >= 27) {
+      registerKeyword('aspire scholarship eligible')
+    }
+
+    // Low-income student signals → Pell / FSEOG / state need-based aid.
+    // These are additive scoring boosts, never filters.
+    const householdIncomeNum = parseNumber(financialSection?.household_income)
+    const householdSizeNum = parseNumber(financialSection?.household_size)
+    if (Number.isFinite(householdIncomeNum) && Number.isFinite(householdSizeNum) && householdSizeNum > 0) {
+      const perCapita = householdIncomeNum / householdSizeNum
+      if (perCapita < 15000) {
+        registerKeyword('low_income_student')
+        registerKeyword('high_financial_need')
+        registerKeyword('pell eligible')
+        registerKeyword('need based aid')
+      }
+    }
+    if (financialSection?.financial_need_level) {
+      const lvl = String(financialSection.financial_need_level).toLowerCase()
+      if (/(high|moderate|severe|extreme)/.test(lvl)) {
+        registerKeyword('need based aid')
+        registerKeyword('pell eligible')
+      }
+    }
+
+    // Children of disabled / SSDI parents qualify for Social Security
+    // dependent benefits while in school in some states + may qualify for
+    // additional Pell / FSEOG. Emit the relevant scholarship keywords.
+    // `government` (singular) is the alias declared earlier in this function.
+    if (assistanceSet.has('ssdi') || government?.ssdi_recipient) {
+      registerKeyword('social security dependent')
+      registerKeyword('children of ssdi recipients')
+      registerKeyword('disability dependent scholarship')
+    }
+    if (familySet.has('caregiver') || familySet.has('family_caregiver')) {
+      registerKeyword('caregiver scholarship')
+      registerKeyword('student caregiver')
+    }
+    if (/immigrant|second.generation|first.generation/i.test(String(demographicsSection?.immigrant_status || '')) ||
+        /immigrant|second.generation|first.generation/i.test(String(demographicsSection?.notes || ''))) {
+      registerKeyword('immigrant scholarship')
+      registerKeyword('first generation scholarship')
+      registerKeyword('multilingual student')
+    }
+    // Heritage / language scholarships — Polish / Russian / Slavic / etc.
+    // `basic` (singular) is the alias for sections.basic_information.
+    const heritageHaystack = [
+      String(demographicsSection?.notes || ''),
+      String(demographicsSection?.ethnicity || ''),
+      String(basic?.notes || ''),
+    ].join(' ').toLowerCase()
+    const HERITAGE_KEYWORDS = {
+      polish: ['polish american scholarship', 'kosciuszko foundation', 'polish heritage'],
+      russian: ['russian heritage scholarship', 'slavic scholarship'],
+      ukrainian: ['ukrainian heritage scholarship'],
+      irish: ['irish heritage scholarship', 'ancient order of hibernians'],
+      italian: ['italian american scholarship', 'order sons italy'],
+      german: ['german american scholarship'],
+      hispanic: ['hispanic scholarship fund', 'hsf'],
+      latino: ['hispanic scholarship fund', 'hsf'],
+      asian: ['asian pacific fund', 'apia scholars'],
+      'african american': ['uncf', 'thurgood marshall college fund', 'tmcf'],
+      black: ['uncf', 'thurgood marshall college fund', 'tmcf'],
+      jewish: ['jewish federation scholarship'],
+      armenian: ['armenian general benevolent union', 'agbu'],
+      greek: ['ahepa scholarship'],
+    }
+    for (const [tag, kws] of Object.entries(HERITAGE_KEYWORDS)) {
+      if (heritageHaystack.includes(tag)) {
+        kws.forEach((kw) => registerKeyword(kw))
+      }
+    }
+    // Female STEM students → Society of Women Engineers / NCWIT / etc.
+    // Look at every place gender can be expressed: basic.gender (already
+    // captured in genderSet), demographics.gender, demographics.notes, and
+    // basic.notes. Many real profiles list gender in a free-text notes
+    // field rather than the dedicated gender field.
+    const genderHaystack = [
+      ...Array.from(genderSet),
+      String(basic?.gender || ''),
+      String(demographicsSection?.gender || ''),
+      String(demographicsSection?.notes || ''),
+      String(basic?.notes || ''),
+    ].join(' ').toLowerCase()
+    const isFemale =
+      genderSet.has('female') || genderSet.has('woman') || genderSet.has('women') ||
+      /\b(female|woman|women|she\/her|girl|she\/they)\b/i.test(genderHaystack)
+    if (isFemale) {
+      registerKeyword('female')
+      if (interestSet.has('stem') || keywordSet.has('stem') || keywordSet.has('forensic science') ||
+          interestSet.has('forensic science')) {
+        registerKeyword('women in stem')
+        registerKeyword('society of women engineers')
+        registerKeyword('ncwit')
+        registerKeyword('aauw')
+      }
+    }
+    // Rural / Appalachian student → Appalachian Regional Commission scholars,
+    // rural-student scholarships.
+    if (demographicSet.has('rural') || demographicSet.has('appalachian')) {
+      registerKeyword('rural student scholarship')
+      registerKeyword('appalachian scholar')
+      registerKeyword('appalachian regional commission')
+    }
   } else if (militarySet.has('veteran') || militarySet.has('disabled_veteran')) {
     applicantType = 'veteran'
   } else if (familySet.has('caregiver')) {

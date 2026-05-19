@@ -155,6 +155,13 @@ export const PIPELINE_ALLOWED_SOURCES = [
   'school',
   'curated_program',
 
+  // Curated startup seeds — push the NATIONAL_PROGRAMS + SCHOLARSHIPS data
+  // files into funding_opportunities at server boot. Both seed modules are
+  // explicitly authored content (not scraped); they must be pipeline-eligible
+  // so the "Add to Pipeline" button works on every row they emit.
+  'national_programs_seed',
+  'scholarships_seed',
+
   // Well-known external scholarship/discovery platforms surfaced by referral
   // crawlers. These don't contain a generic funding token in their brand name
   // (so the heuristic alone won't pass them), but they are vetted referral
@@ -322,6 +329,11 @@ const TRUSTED_ORIGIN_SET = new Set([
   'curated_verified',
   'curated_benefits',
   'curated_program',
+  // Mirrors ALLOWED_RECORD_ORIGINS — curated startup seeds (NATIONAL_PROGRAMS
+  // + SCHOLARSHIPS data files) are explicitly authored content and must be
+  // accepted by the pipeline gate. Without this, every seeded row falls into
+  // the "unknown_origin" branch and the "Add to Pipeline" button returns 400.
+  'curated_catalog',
   'scholarship_crawler',
   'school_portal',
   'grants_gov',

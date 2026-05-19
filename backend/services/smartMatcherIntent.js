@@ -17,7 +17,13 @@
 import { createOpenAIClient } from '../utils/openaiClient.js'
 
 const MAX_INPUT = 2000
-const MAX_TERMS = 18
+// Raised from 18 to 24 in the student_aid + professional_development
+// expansion era so overlapping rules (e.g. off-campus + student housing +
+// MTSU + room-and-board) don't push high-signal terms like "student aid"
+// or "fafsa" off the end of the array. SQL `LIKE` cost is linear in the
+// number of OR clauses, but at 24 terms × 4 columns this is still well
+// under the index-scan cliff for our funding_opportunities table sizes.
+const MAX_TERMS = 24
 const MAX_TERM_LEN = 64
 
 const STOP = new Set(
@@ -200,6 +206,40 @@ const PROFESSIONAL_DEVELOPMENT_TRIGGERS = [
   /\b(professional\s+association\s+(scholarship|grant)|ana|nasw|amas?|apa|aacn|aanp)\s+(scholarship|grant|ce|fund)\b/i,
 ]
 
+// ---------------------------------------------------------------------------
+// Student aid / cost-of-attendance triggers.
+//
+// This is the new pool that powers queries like "off-campus living expenses
+// at MTSU", "room and board scholarships", "rent help while in college",
+// "cost of attendance gap". These ALL belong in the student_aid bucket so we
+// route to scholarships.js / school cards / Pell / state student aid — NOT
+// to generic homeless / Section 8 / utility programs (which dominate any
+// "housing" or "rent" keyword query for a non-student profile).
+// ---------------------------------------------------------------------------
+const STUDENT_AID_TRIGGERS = [
+  // Direct student-aid signals.
+  /\b(financial\s+aid|fafsa|pell\s+grant|fseog|tuition\s+assistance|tuition\s+grant|college\s+aid)\b/i,
+  /\b(scholarship(?:s)?|grant)\s+(?:for|to)\s+(?:students?|college|university|undergraduates?|graduate)\b/i,
+  /\b(cost\s+of\s+attendance|coa\s+gap|coa\s+appeal|coa\s+adjustment)\b/i,
+  /\b(room\s+and\s+board|room\s*&\s*board|board\s+scholarship)\b/i,
+  /\b(off[\s-]?campus|on[\s-]?campus)\s+(?:hous|liv|rent|apartment|expense)/i,
+  /\b(student\s+(?:hous|liv|rent|apartment|loan|emergency|debt|food)|residence\s+hall|dorm(?:itory)?|campus\s+hous)/i,
+  /\b(college|university|undergrad(?:uate)?|graduate)\s+(?:hous|liv|rent|expense|emergency|food\s+pantry)/i,
+  /\b(emergency\s+aid|completion\s+grant|micro\s+grant|persistence\s+grant)\s+(?:for|to)?\s*(?:student|college|university)?/i,
+  // Branded student aid programs — explicit hooks for the most common ones
+  // we surface in scholarships.js / nationalPrograms.js.
+  /\b(hope\s+scholarship|tn\s+promise|tennessee\s+promise|tennessee\s+student\s+assistance|step\s+up\s+scholarship|aspire\s+award|cal\s+grant|tap\s+grant|map\s+grant)\b/i,
+  // Common college / university name patterns. We can't enumerate every
+  // school here, but a query mentioning a 4-letter university acronym or
+  // "<word> University" / "<word> State" alongside a living/rent/expense
+  // intent is almost always a cost-of-attendance question.
+  /\b(mtsu|ucf|ucla|ucsb|ucsd|usc|nyu|psu|asu|fsu|fiu|fau|ksu|osu|tsu|ttu|wvu|byu|tcu|smu|csu|mu|uga|uva|umd|uw|um|umass|csun|cuny|suny)\b/i,
+  /\b(university\s+of|state\s+university|community\s+college|technical\s+college|college\s+of)\b.*\b(hous|liv|rent|expense|tuition|scholarship|aid|cost|grant)\b/i,
+  /\b(penn\s+state|ohio\s+state|iowa\s+state|michigan\s+state|florida\s+state|kansas\s+state|oklahoma\s+state|oregon\s+state|texas\s+state|tennessee\s+state|middle\s+tennessee\s+state)\b.*\b(hous|liv|rent|expense|tuition|scholarship|aid|cost|grant)\b/i,
+  // University / college + tuition / aid / scholarship is always student aid.
+  /\b(university|college|undergrad(?:uate)?|graduate)\b.*\b(tuition|scholarship|grant|aid|fafsa|pell|fseog|cost|hous|liv|rent|expense)\b/i,
+]
+
 const INCOME_SUPPORT_CATEGORIES = [
   'income_support',
   'cash_assistance',
@@ -212,6 +252,17 @@ const INCOME_SUPPORT_CATEGORIES = [
   'general_assistance',
 ]
 
+// When the primary intent is student_aid, generic adult homelessness and
+// Section 8 / shelter programs are not what the user wants ("rent help for
+// college" ≠ "I am homeless"). Cap them via cross-category logic in
+// routes/matching.js the same way professional_development does.
+const ADULT_HOMELESSNESS_CATEGORIES = [
+  'homelessness',
+  'shelter',
+  'public_housing',
+  'section_8',
+]
+
 function detectPrimaryCategory(text, expandedTerms = []) {
   const haystack = `${String(text || '').toLowerCase()} ${expandedTerms.join(' ').toLowerCase()}`
   for (const re of PROFESSIONAL_DEVELOPMENT_TRIGGERS) {
@@ -219,6 +270,20 @@ function detectPrimaryCategory(text, expandedTerms = []) {
       return {
         primary_category: 'professional_development',
         excluded_categories: INCOME_SUPPORT_CATEGORIES.slice(),
+      }
+    }
+  }
+  for (const re of STUDENT_AID_TRIGGERS) {
+    if (re.test(haystack)) {
+      return {
+        primary_category: 'student_aid',
+        // Do NOT exclude income_support outright — many low-income students
+        // DO need SNAP / utility help in college. Per the user rule
+        // "Population / eligibility mismatches must reduce score, not
+        // discard results", we let the cross-category cap handle this in
+        // matching.js (caps non-overlapping rows at 25%) and keep results
+        // in the candidate set so the user sees them when sorting/filtering.
+        excluded_categories: [],
       }
     }
   }
@@ -276,6 +341,182 @@ const EXPANSIONS = [
   {
     re: /\b(education|tuition|scholarship|college|student)\b/i,
     add: ['education', 'scholarship', 'tuition assistance'],
+  },
+  // Student living / off-campus / cost-of-attendance.
+  // This is the pool that surfaces room-and-board / cost-of-attendance
+  // scholarships, school emergency-aid funds, Pell, FSEOG, and state
+  // student-aid programs (HOPE / TSAA / STEP UP / Cal Grant / TAP / MAP)
+  // for queries like "off-campus living expenses at MTSU" or "rent help
+  // while I'm at college". Without this expansion, "off campus living"
+  // and "MTSU" tokens never reach scholarships.js / school cards.
+  //
+  // IMPORTANT: 'student aid' is intentionally first in every add list so
+  // it survives the MAX_TERMS=18 cap even when several rules fire and
+  // produce overlapping expansions. This is the catalog-side guarantee
+  // that "%student aid%" SQL LIKE queries hit the right candidate set.
+  {
+    re: /\b(off[\s-]?campus|on[\s-]?campus)\s+(?:hous|liv|rent|apartment|expense|cost)/i,
+    add: [
+      'student aid',
+      'off-campus housing',
+      'cost of attendance',
+      'room and board',
+      'student housing',
+      'fafsa',
+      'pell grant',
+      'fseog',
+      'scholarship',
+      'off-campus living',
+      'college housing',
+      'student emergency aid',
+    ],
+  },
+  // Bare "off campus" / "off-campus" mention (without an immediately
+  // adjacent housing/rent token) — still a very strong student-aid
+  // signal on its own. Common phrasing: "...rent off campus", "I live
+  // off-campus and need help", "Studying off campus this year".
+  {
+    re: /\b(off[\s-]?campus|on[\s-]?campus)\b/i,
+    add: [
+      'student aid',
+      'off-campus housing',
+      'cost of attendance',
+      'room and board',
+      'student housing',
+      'fafsa',
+      'pell grant',
+      'scholarship',
+    ],
+  },
+  {
+    re: /\b(student\s+(?:hous|liv|rent|apartment|food\s+pantry|emergency|debt)|residence\s+hall|dorm(?:itory)?|campus\s+hous)/i,
+    add: [
+      'student aid',
+      'off-campus housing',
+      'student housing',
+      'cost of attendance',
+      'room and board',
+      'student living',
+      'residence hall',
+      'fafsa',
+      'pell grant',
+      'completion grant',
+      'student emergency aid',
+      'scholarship',
+    ],
+  },
+  {
+    re: /\b(room\s+and\s+board|room\s*&\s*board|board\s+scholarship|cost\s+of\s+attendance|coa\s+(?:gap|appeal|adjustment))\b/i,
+    add: [
+      'student aid',
+      'room and board',
+      'cost of attendance',
+      'off-campus housing',
+      'student housing',
+      'fafsa',
+      'pell grant',
+      'fseog',
+      'coa appeal',
+      'scholarship',
+    ],
+  },
+  {
+    re: /\b(college|university|undergrad(?:uate)?|graduate)\s+(?:hous|liv|rent|expense|emergency|food\s+pantry|tuition|fees|cost|aid|scholarship|grant|financial)/i,
+    add: [
+      'student aid',
+      'cost of attendance',
+      'student housing',
+      'room and board',
+      'fafsa',
+      'pell grant',
+      'fseog',
+      'scholarship',
+      'tuition assistance',
+      'institutional aid',
+      'student emergency aid',
+    ],
+  },
+  // Federal / state student aid program names.
+  {
+    re: /\b(financial\s+aid|fafsa|pell\s+grant|fseog|federal\s+work[\s-]?study|teach\s+grant)\b/i,
+    add: [
+      'student aid',
+      'fafsa',
+      'pell grant',
+      'fseog',
+      'cost of attendance',
+      'federal work-study',
+      'scholarship',
+      'room and board',
+      'teach grant',
+    ],
+  },
+  {
+    re: /\b(hope\s+scholarship|tn\s+hope|tennessee\s+hope|tn\s+promise|tennessee\s+promise|tennessee\s+student\s+assistance|tsaa|step\s+up\s+scholarship|aspire\s+award|hope\s+aspire|tn\s+reconnect|tennessee\s+reconnect)\b/i,
+    add: [
+      'student aid',
+      'tennessee hope',
+      'tn promise',
+      'tennessee student assistance award',
+      'tsaa',
+      'step up scholarship',
+      'aspire award',
+      'state student aid',
+      'pell grant',
+      'fafsa',
+      'scholarship',
+      'cost of attendance',
+      'room and board',
+    ],
+  },
+  // Common college / university name expansions. Catches the "at MTSU" /
+  // "at Penn State" / "at UCF" pattern from the test query.
+  {
+    re: /\b(mtsu|ucf|ucla|ucsb|ucsd|usc|nyu|psu|asu|fsu|fiu|fau|ksu|osu|tsu|ttu|wvu|byu|tcu|smu|csu|uga|uva|umd|uw|umass|csun|cuny|suny|university\s+of|state\s+university|community\s+college|technical\s+college|college\s+of|penn\s+state|ohio\s+state|iowa\s+state|michigan\s+state|florida\s+state|kansas\s+state|oklahoma\s+state|oregon\s+state|texas\s+state|tennessee\s+state)\b/i,
+    add: [
+      'student aid',
+      'cost of attendance',
+      'student housing',
+      'room and board',
+      'fafsa',
+      'pell grant',
+      'fseog',
+      'scholarship',
+      'institutional aid',
+      'financial aid office',
+      'emergency aid',
+    ],
+  },
+  // Bare "living expenses" without an explicit student token still very
+  // often means student living when paired with a school name, so we
+  // emit student-aid terms in addition to housing-assistance terms. The
+  // server cross-category cap keeps adult homelessness rows below the
+  // threshold when student_aid is the primary category.
+  {
+    re: /\b(living\s+expense|living\s+cost|cost\s+of\s+living)\b/i,
+    add: [
+      'student aid',
+      'cost of attendance',
+      'student housing',
+      'room and board',
+      'rental assistance',
+      'utility assistance',
+    ],
+  },
+  // Plain "tuition assistance" / "tuition help" / generic university
+  // tuition phrasing. Keeps "tuition" routed to the student-aid pool
+  // even when no scholarship/Pell/FAFSA word is in the query.
+  {
+    re: /\b(tuition|undergrad(?:uate)?\s+aid|graduate\s+aid|college\s+aid)\b/i,
+    add: [
+      'student aid',
+      'tuition assistance',
+      'cost of attendance',
+      'fafsa',
+      'pell grant',
+      'fseog',
+      'scholarship',
+    ],
   },
   // Professional development / continuing education / licensure.
   // This is the new pool that powers PROBE / CITI / nursing / social-work CE
@@ -466,10 +707,33 @@ export function interpretFundingIntentRules(text) {
     cat.excluded_categories = INCOME_SUPPORT_CATEGORIES.slice()
   }
 
-  const summary =
-    search_terms.length > 0
-      ? `Searching for opportunities related to: ${search_terms.slice(0, 6).join(', ')}${search_terms.length > 6 ? '…' : ''}.`
-      : 'Describe what you need above — we will suggest search terms.'
+  // Late-bound student_aid promotion: if a generic "rent" / "housing" /
+  // "living expenses" query mentions ANY college/student/scholarship token
+  // (or any of our school-name tokens), upgrade primary_category to
+  // student_aid so the cross-category cap and student-aid sources kick in.
+  // This handles the "off campus living expenses at MTSU" path even when
+  // the regex above has already classified "general" via term overlap.
+  if (cat.primary_category === 'general') {
+    const studentSignal =
+      /\b(student|college|university|undergrad|graduate|scholarship|tuition|fafsa|pell|fseog|dorm|residence\s+hall|campus|off[\s-]?campus|cost\s+of\s+attendance|room\s+and\s+board|mtsu|ucf|ucla|ucsb|ucsd|usc|nyu|psu|asu|fsu|fiu|fau|ksu|osu|tsu|ttu|wvu|byu|tcu|smu|csu|uga|uva|umd|umass|csun|cuny|suny|penn\s+state|ohio\s+state|iowa\s+state|michigan\s+state|florida\s+state|kansas\s+state|oklahoma\s+state|texas\s+state|tennessee\s+state|middle\s+tennessee\s+state|state\s+university|community\s+college|technical\s+college|college\s+of)\b/i
+    const livingSignal =
+      /\b(hous|liv|rent|apartment|expense|cost|food\s+pantry|emergency|debt|aid|grant|scholarship|tuition|board)/i
+    if (studentSignal.test(haystack) && livingSignal.test(haystack)) {
+      cat.primary_category = 'student_aid'
+      cat.excluded_categories = []
+    }
+  }
+
+  let summary
+  if (search_terms.length === 0) {
+    summary = 'Describe what you need above — we will suggest search terms.'
+  } else if (cat.primary_category === 'student_aid') {
+    summary = `Routing to student aid sources (FAFSA, Pell, FSEOG, state student aid, room-and-board scholarships): ${search_terms.slice(0, 6).join(', ')}${search_terms.length > 6 ? '…' : ''}.`
+  } else if (cat.primary_category === 'professional_development') {
+    summary = `Routing to professional development / CE / licensure sources: ${search_terms.slice(0, 6).join(', ')}${search_terms.length > 6 ? '…' : ''}.`
+  } else {
+    summary = `Searching for opportunities related to: ${search_terms.slice(0, 6).join(', ')}${search_terms.length > 6 ? '…' : ''}.`
+  }
 
   return {
     summary,
@@ -506,6 +770,7 @@ Rules:
 - search_terms: 4-12 short lowercase phrases (2-4 words each) useful for SQL LIKE against titles/descriptions (funding, nonprofits, government programs, charities).
 - Include both specific items (e.g. "bereavement travel", "passenger van") and adjacent help types (e.g. "emergency assistance", "transportation grant").
 - For professional development / continuing education / licensure / nursing PROBE / CME / remediation requests, also include: "professional development", "continuing education", "license reinstatement", "wioa training", "workforce training board", "individual training account".
+- For student / college / university / off-campus / on-campus / dorm / room-and-board / cost-of-attendance / FAFSA / Pell / financial-aid / tuition / scholarship requests, also include: "cost of attendance", "room and board", "student housing", "off-campus housing", "college housing", "fafsa", "pell grant", "fseog", "student emergency aid", "completion grant", "scholarship", "tuition assistance", "state student aid".
 - No duplicates. No PII. English only.`,
       },
       { role: 'user', content: raw },
@@ -574,4 +839,11 @@ export async function interpretFundingIntent(text, opts = {}) {
 
 // Exported for tests & for the matching route to re-detect category server-side
 // when a frontend pre-dates the new fields.
-export { detectPrimaryCategory, extractCredentials, INCOME_SUPPORT_CATEGORIES }
+export {
+  detectPrimaryCategory,
+  extractCredentials,
+  INCOME_SUPPORT_CATEGORIES,
+  ADULT_HOMELESSNESS_CATEGORIES,
+  STUDENT_AID_TRIGGERS,
+  PROFESSIONAL_DEVELOPMENT_TRIGGERS,
+}
