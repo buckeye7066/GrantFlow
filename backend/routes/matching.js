@@ -626,6 +626,15 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
         'forensic', 'stem', 'women in stem', 'heritage',
         'veteran', 'military',
       ]
+      // Strict-equality nullish coercion. Repo policy is
+      // `eqeqeq: ['error', 'always']`, so we spell out the
+      // null-or-undefined check explicitly: empty string for nullish,
+      // joined array for arrays, String(v) otherwise.
+      const stringifyForOverlap = (v) => {
+        if (v === null || v === undefined) return ''
+        if (Array.isArray(v)) return v.join(' ')
+        return String(v)
+      }
       const opportunityHasProfDevOverlap = (opp) => {
         const haystack = [
           opp?.categories,
@@ -635,7 +644,7 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
           opp?.eligibility_criteria,
           opp?.tags,
         ]
-          .map((v) => (v == null ? '' : Array.isArray(v) ? v.join(' ') : String(v)))
+          .map(stringifyForOverlap)
           .join(' ')
           .toLowerCase()
         if (!haystack) return false
@@ -650,7 +659,7 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
           opp?.eligibility_criteria,
           opp?.tags,
         ]
-          .map((v) => (v == null ? '' : Array.isArray(v) ? v.join(' ') : String(v)))
+          .map(stringifyForOverlap)
           .join(' ')
           .toLowerCase()
         if (!haystack) return false

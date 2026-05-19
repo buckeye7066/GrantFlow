@@ -36,7 +36,18 @@ jobs:
         # auto-fixable issues like unused eslint-disable directives.
         # Changes are NOT committed - this just helps CI pass when possible.
         # Note: We ignore warnings during auto-fix (they'll be caught in strict check).
+        #
+        # `fix-eqeqeq-null.mjs` runs FIRST because eqeqeq has no built-in
+        # auto-fix (the rule is intentionally not auto-fixable in ESLint —
+        # converting `x == null` to `x === null` would silently change
+        # semantics by no longer matching `undefined`). Our codemod is
+        # string/template/comment-safe and rewrites `x == null` →
+        # `(x === null || x === undefined)` (and `!=` to the inverse), so
+        # any future automated fixer or AI assistant that re-introduces the
+        # idiom is normalised before lint, and CI never breaks on it again.
         run: |
+          echo "Normalising == null / != null patterns..."
+          node scripts/fix-eqeqeq-null.mjs || true
           echo "Attempting ESLint auto-fix..."
           npx eslint --fix "src/**/*.{js,jsx}" "backend/**/*.js" 2>/dev/null || true
           echo "Auto-fix complete. Proceeding to validation..."

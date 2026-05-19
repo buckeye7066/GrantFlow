@@ -30,7 +30,7 @@ function rowMatchesAnyTerm(row, terms) {
     Array.isArray(row.categories) ? row.categories.join(' ') : row.categories,
     Array.isArray(row.intentMatch) ? row.intentMatch.join(' ') : row.intentMatch,
   ]
-    .map((v) => (v == null ? '' : String(v)))
+    .map((v) => (v === null || v === undefined ? '' : String(v)))
     .join(' ')
     .toLowerCase()
   return terms.some((t) => haystack.includes(String(t).toLowerCase()))

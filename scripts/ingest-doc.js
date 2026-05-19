@@ -30,7 +30,7 @@ async function main() {
   console.log('file:', filePath)
   console.log('source_type:', out.meta?.source_type ?? detected.source_type ?? 'unknown')
   console.log('methods_used:', methods || 'none')
-  console.log('pages:', pages == null ? 'n/a' : pages)
+  console.log('pages:', (pages === null || pages === undefined) ? 'n/a' : pages)
   console.log('words:', words)
   console.log('chars:', out.meta?.char_count ?? 0)
   console.log('ocr_used:', Boolean(out.meta?.ocr_used))

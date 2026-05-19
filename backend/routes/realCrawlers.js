@@ -1308,6 +1308,13 @@ router.post('/run-smart', ensureAuth, standardRateLimiter, async (req, res) => {
     // query). Directory-style or general funding directories survive — they
     // help the user navigate to the right funder.
     const isCashAssistanceOpportunity = (opp) => {
+      // Repo policy: `eqeqeq: ['error', 'always']` — spell the nullish
+      // check out explicitly so the corruption detector stays happy.
+      const stringifyForCashScan = (v) => {
+        if (v === null || v === undefined) return ''
+        if (Array.isArray(v)) return v.join(' ')
+        return String(v)
+      }
       const haystack = [
         opp?.title,
         opp?.name,
@@ -1317,7 +1324,7 @@ router.post('/run-smart', ensureAuth, standardRateLimiter, async (req, res) => {
         opp?.opportunity_type,
         opp?.type,
       ]
-        .map((v) => (v == null ? '' : Array.isArray(v) ? v.join(' ') : String(v)))
+        .map(stringifyForCashScan)
         .join(' ')
         .toLowerCase()
       if (!haystack) return false

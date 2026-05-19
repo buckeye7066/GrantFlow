@@ -84,7 +84,7 @@ function normalizeState(value) {
 }
 
 function collectStatesFromValue(value, keyHint, sink) {
-  if (value == null) return
+  if ((value === null || value === undefined)) return
 
   if (Array.isArray(value)) {
     value.forEach(entry => collectStatesFromValue(entry, keyHint, sink))

@@ -92,7 +92,7 @@ async function main() {
       
       try {
         // Check if process is still running
-        if (p.exitCode == null) {
+        if ((p.exitCode === null || p.exitCode === undefined)) {
           p.kill('SIGTERM')
           console.log(`[crawl] Terminated process ${p.pid}`)
         }
