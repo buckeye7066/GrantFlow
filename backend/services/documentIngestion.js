@@ -11,6 +11,19 @@ import {
   extractMedicalInsuranceHeuristics,
   extractOrganizationDetailsHeuristics,
 } from './documentIngestion/heuristics.js'
+
+// Re-export the heuristic helpers so external callers (regression tests
+// in tests/unit/, downstream services) can import them directly from
+// `backend/services/documentIngestion.js` without having to know the
+// internal path under documentIngestion/heuristics.js. This is the
+// existing public surface that the documentIngestion-heuristics and
+// heuristics-cleveland-end-to-end test suites depend on.
+export {
+  extractBasicInformationHeuristics,
+  extractGovernmentAssistanceHeuristics,
+  extractMedicalInsuranceHeuristics,
+  extractOrganizationDetailsHeuristics,
+}
 import { guardProfileSectionForWrite } from '../utils/guardedProfileSectionWrite.js'
 import {
   ensureDocumentExtract,

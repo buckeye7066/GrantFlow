@@ -155,22 +155,164 @@ export function detectMedicareContext(text) {
 /* basic_information                                                 */
 /* ----------------------------------------------------------------- */
 
+// Words we accept as the suffix of a US street address. Conservative on
+// purpose — we'd rather miss an obscure abbreviation than turn the line
+// "Mission: Support and expand…" into a street.
+const STREET_SUFFIX_RE =
+  /(?:Street|St|Drive|Dr|Road|Rd|Avenue|Ave|Boulevard|Blvd|Lane|Ln|Way|Court|Ct|Terrace|Ter|Place|Pl|Highway|Hwy|Parkway|Pkwy|Trail|Trl|Circle|Cir|Square|Sq)\.?/i
+
+const STREET_LINE_RE = new RegExp(
+  `^(\\d{1,6}\\s+[A-Z0-9][A-Za-z0-9. '-]*(?:\\s+[A-Z0-9][A-Za-z0-9. '-]*)*\\s+${STREET_SUFFIX_RE.source})\\s*\\.?\\s*$`,
+  'i',
+)
+
+// Postal line: "Cleveland TN 37312", "Anytown, CA 90210", "Cleveland, TN 37312-1234".
+const CITY_STATE_ZIP_RE =
+  /^([A-Z][A-Za-z .'-]+?),?\s+([A-Z]{2})\s+(\d{5}(?:-\d{4})?)\s*$/
+
+/**
+ * Extract street address and (when present on the next line) city / state /
+ * zip from `lines`. Returns `{ address, city, state, zip, addressLineIdx }`
+ * with empty strings for missing pieces.
+ *
+ * Strategy:
+ *   1. Find the first standalone STREET_LINE_RE match. The line immediately
+ *      after it is the postal line, if it matches CITY_STATE_ZIP_RE.
+ *   2. If no clean street line exists, fall back to a labeled "Address:"
+ *      line. We strip:
+ *        - leading list bullets ("- ", "• ")
+ *        - "/phone:" and similar compound-label noise
+ *        - everything after the first ',' / ';' so we don't grab the city
+ *          / phone tail in single-line "Address/phone: 850 ..., …; (423)…"
+ *      and only accept the cleaned value if it still looks like a street.
+ *   3. Postal info found on any line via CITY_STATE_ZIP_RE wins as a last
+ *      resort — better to surface partial location data than nothing.
+ */
+function extractStreetAndPostal(source, lines) {
+  let address = ''
+  let addressLineIdx = -1
+
+  for (let i = 0; i < lines.length; i += 1) {
+    const m = lines[i].match(STREET_LINE_RE)
+    if (m) {
+      address = m[1].trim().replace(/\.$/, '')
+      addressLineIdx = i
+      break
+    }
+  }
+
+  if (!address) {
+    const labeled = extractLabeledValue(source, /(?:^|\n)\s*(?:-\s*)?(?:mailing\s+)?address\b/i)
+    if (labeled) {
+      let cleaned = labeled
+        .replace(/^[\s•:>-]+/, '')
+        .replace(/\/phone\b.*$/i, '')
+        .replace(/[;,].*$/, '')
+        .trim()
+      if (/^\d{1,6}\s+\S/.test(cleaned)) {
+        address = cleaned
+        const idx = lines.findIndex((l) => l.includes(cleaned))
+        if (idx >= 0) addressLineIdx = idx
+      }
+    }
+  }
+
+  let city = ''
+  let state = ''
+  let zip = ''
+
+  if (addressLineIdx >= 0 && addressLineIdx + 1 < lines.length) {
+    const m = lines[addressLineIdx + 1].match(CITY_STATE_ZIP_RE)
+    if (m) {
+      city = m[1].trim()
+      state = m[2]
+      zip = m[3]
+    }
+  }
+  if (!city) {
+    for (const line of lines) {
+      const m = line.match(CITY_STATE_ZIP_RE)
+      if (m) {
+        city = m[1].trim()
+        state = m[2]
+        zip = m[3]
+        break
+      }
+    }
+  }
+
+  return { address, city, state, zip, addressLineIdx }
+}
+
+/**
+ * Pull a multi-word organisation / person name from the first ~10 lines.
+ *
+ * Skips:
+ *   - Single-character placeholders ("X")
+ *   - URLs, email addresses, lines that begin with a digit or punctuation
+ *   - The address line itself
+ *   - Boilerplate "Filed/Prepared from public sources only" disclaimers
+ *
+ * Strips a trailing parenthetical "(Cleveland High School / CCS)" so we
+ * keep "Cleveland High School Blue Raider Marching Band" cleanly.
+ */
+function extractFullNameHeuristic(lines) {
+  const skipRe =
+    /^(?:filed|prepared|public information|key public facts|key facts|verify|--?\s*\d|page\s+\d)/i
+
+  for (let i = 0; i < Math.min(lines.length, 10); i += 1) {
+    const raw = lines[i]
+    if (!raw) continue
+    const trimmed = raw.trim()
+    if (!trimmed) continue
+    if (/^x$/i.test(trimmed)) continue
+    if (/^https?:\/\//i.test(trimmed)) continue
+    if (/@/.test(trimmed)) continue
+    if (/^[\d(]/.test(trimmed)) continue
+    if (skipRe.test(trimmed)) continue
+    if (STREET_LINE_RE.test(trimmed)) continue
+    if (CITY_STATE_ZIP_RE.test(trimmed)) continue
+
+    const parenStripped = trimmed
+      .replace(/\s*\(.*?\)\s*$/, '')
+      .replace(/\s*[/|].*$/, '')
+      .trim()
+    const words = parenStripped.split(/\s+/).filter(Boolean)
+    if (words.length < 3 || words.length > 12) continue
+    const capCount = words.filter((w) => /^[A-Z][A-Za-z'.-]*$/.test(w)).length
+    if (capCount < Math.ceil(words.length * 0.6)) continue
+    return parenStripped
+  }
+  return ''
+}
+
 export function extractBasicInformationHeuristics(text) {
   const source = String(text || '')
+  const lines = source.split(/\r?\n/).map((l) => l.replace(/\s+$/, ''))
 
   const email = extractFirstMatch(source, /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i)
   const phone = extractFirstMatch(
     source,
     /(\+?1[\s.-]?)?(?:\(\s*\d{3}\s*\)|\d{3})[\s.-]?\d{3}[\s.-]?\d{4}/,
   )
-  const website = extractFirstMatch(source, /\bhttps?:\/\/[^\s)]+/i)
+  const websiteRaw = extractFirstMatch(source, /\bhttps?:\/\/[^\s)]+/i)
+  // Strip trailing punctuation/whitespace that can leak in from
+  // semicolon-delimited URL lists ("https://…org ; https://…com").
+  const website = websiteRaw ? websiteRaw.replace(/[\s);,.]+$/, '') : ''
 
-  const fullName =
-    extractLabeledValue(source, /(?:full\s+name|patient\s+name|member\s+name|recipient\s+name|name|applicant)\b/i) ||
-    extractFirstMatch(source, /^\s*([A-Z][A-Za-z'.-]+(?:\s+[A-Z][A-Za-z'.-]+){1,4})\s*$/m)
+  // Address / city / state / zip — prefer a standalone street line.
+  const { address, city, state, zip } = extractStreetAndPostal(source, lines)
 
-  const address =
-    extractLabeledValue(source, /(?:address|mailing\s+address)\b/i) || null
+  // Full name — try labelled value first, fall back to a multi-word
+  // capitalised-word heuristic on the first ~10 lines.
+  const labeledFullName = extractLabeledValue(
+    source,
+    /(?:full\s+name|patient\s+name|member\s+name|recipient\s+name|applicant)\b/i,
+  )
+  let fullName = labeledFullName ? labeledFullName.trim() : ''
+  if (!fullName) {
+    fullName = extractFullNameHeuristic(lines)
+  }
 
   // DOB — many label variants; convert to ISO.
   const dobLabelMatch =
@@ -184,6 +326,9 @@ export function extractBasicInformationHeuristics(text) {
     phone: phone || '',
     website: website || '',
     address: address || '',
+    city: city || '',
+    state: state || '',
+    zip: zip || '',
     date_of_birth: dobISO || '',
     notes: '',
   }
@@ -196,26 +341,37 @@ export function extractBasicInformationHeuristics(text) {
 export function extractOrganizationDetailsHeuristics(text) {
   const source = String(text || '')
 
-  const ein =
+  // Generic numeric EIN line (e.g. "62-6000265 (CCS; verify) LAB4BVJDQ7U7
+  // 4ZY55") — when no explicit EIN/Tax ID label is present.
+  const einPattern =
     extractFirstMatch(source, /(?:\bEIN\b|\bTax\s*ID\b)[^0-9]*([0-9]{2}-[0-9]{7})/i) ||
-    extractLabeledValue(source, /\bEIN\b/i)
+    extractLabeledValue(source, /\bEIN\b/i) ||
+    extractFirstMatch(source, /\b([0-9]{2}-[0-9]{7})\b/)
 
   const uei =
     extractFirstMatch(source, /(?:\bUEI\b|\bUnique\s+Entity\s+ID\b)[^A-Z0-9]*([A-Z0-9]{12})/i) ||
-    extractLabeledValue(source, /\bUEI\b/i)
+    extractLabeledValue(source, /\bUEI\b/i) ||
+    extractFirstMatch(source, /\b([A-Z][A-Z0-9]{11})\b/)
 
   const cage =
     extractFirstMatch(source, /(?:\bCAGE\b|\bCAGE\s*Code\b)[^A-Z0-9]*([A-Z0-9]{5})/i) ||
     extractLabeledValue(source, /\bCAGE(?:\s*Code)?\b/i)
 
+  // Mission — accept either an explicit "Mission:" label or a
+  // free-text sentence that begins with the verb pattern we emit on
+  // the curated profiles (e.g. "Support and expand …").
+  let mission =
+    extractLabeledValue(source, /(?:^|\n)\s*(?:mission(?:\s+statement)?|purpose)\b/i) || ''
+  mission = mission ? mission.replace(/[\s.;]+$/, '').trim() : ''
+
   return {
     organization_type: '',
-    ein: ein || '',
+    ein: einPattern || '',
     uei: uei || '',
     cage_code: cage || '',
     annual_budget: null,
     staff_count: null,
-    mission: '',
+    mission,
   }
 }
 
