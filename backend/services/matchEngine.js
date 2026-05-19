@@ -1562,12 +1562,17 @@ export function scoreOpportunity(profile, opportunity) {
   const cat = scoreCategoryComponent(effectiveProfile, effectiveSignals, opportunity)
 
   // ── Weighted combination ──
-  let rawScore = Math.round(
+  // Keep `rawScore` as a float through the depth multiplier; rounding the
+  // intermediate value washes out small ownership / mission / population
+  // bonuses (e.g. a +2 ownership bonus times W_ELIGIBILITY=0.25 = +0.5
+  // pre-round, which used to silently disappear before the depth multiplier
+  // ran). The matcher per-section coverage tests rely on these directional
+  // signals being visible in the final integer total.
+  let rawScore =
     need.subscale * W_NEED +
     elig.subscale * W_ELIGIBILITY +
     geo.subscale * W_GEO +
-    cat.subscale * W_CATEGORY,
-  )
+    cat.subscale * W_CATEGORY
 
   // ── Profile depth bonus: richer profiles get up to 10% boost ──
   const depth = measureProfileDepth(effectiveProfile, effectiveSignals, profileNorm)
