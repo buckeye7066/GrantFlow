@@ -305,9 +305,15 @@ export function extractBasicInformationHeuristics(text) {
 
   // Full name — try labelled value first, fall back to a multi-word
   // capitalised-word heuristic on the first ~10 lines.
+  //
+  // The bare `name` label is intentionally listed because uploaded forms
+  // commonly use "Name: <value>" (without "Full"). The heuristic-fallback
+  // path mistakes a "Name: Smoke User" line for an organisation name and
+  // returns "Name: Smoke User" verbatim, so we have to catch the labelled
+  // form first.
   const labeledFullName = extractLabeledValue(
     source,
-    /(?:full\s+name|patient\s+name|member\s+name|recipient\s+name|applicant)\b/i,
+    /(?:full\s+name|patient\s+name|member\s+name|recipient\s+name|applicant|name)\b/i,
   )
   let fullName = labeledFullName ? labeledFullName.trim() : ''
   if (!fullName) {
