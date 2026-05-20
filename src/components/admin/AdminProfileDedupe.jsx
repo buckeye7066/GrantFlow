@@ -15,7 +15,7 @@ async function post(path, body) {
 
 export default function AdminProfileDedupe() {
   const { toast } = useToast()
-  const [strategy, setStrategy] = useState('exact_name')
+  const [strategy, setStrategy] = useState('similar_name')
   const [loading, setLoading] = useState(false)
   const [groups, setGroups] = useState([])
   const [output, setOutput] = useState(null)
@@ -130,11 +130,19 @@ export default function AdminProfileDedupe() {
             <AlertCircle className="w-4 h-4" />
             <AlertDescription>
               This tool merges duplicate profiles by moving linked data (sections, documents, crawler history, Anya state) into a single “winner” profile and deleting the duplicates.
+              Use <strong>Similar names</strong> to combine profiles like “Luibov” with “Luibov S. Samoylenko”.
               The bulk merge button keeps the profile owned by the real (non-admin) user whose email matches the profile email when possible.
             </AlertDescription>
           </Alert>
 
           <div className="flex flex-wrap items-center gap-2">
+            <Button
+              variant={strategy === 'similar_name' ? 'default' : 'outline'}
+              onClick={() => setStrategy('similar_name')}
+              disabled={loading}
+            >
+              Similar names
+            </Button>
             <Button
               variant={strategy === 'exact_name' ? 'default' : 'outline'}
               onClick={() => setStrategy('exact_name')}

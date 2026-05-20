@@ -10,7 +10,8 @@ import {
   AlertCircle, 
   Search,
   Plus,
-  Building2
+  Building2,
+  Users,
 } from "lucide-react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
@@ -230,10 +231,21 @@ export default function MyProfiles() {
                 All Profiles
               </Button>
             </div>
-            <label className="flex items-center gap-2 text-sm text-slate-700">
-              <Checkbox checked={includeDeleted} onCheckedChange={(v) => setIncludeDeleted(Boolean(v))} />
-              Include deleted
-            </label>
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+              <label className="flex items-center gap-2 text-sm text-slate-700">
+                <Checkbox checked={includeDeleted} onCheckedChange={(v) => setIncludeDeleted(Boolean(v))} />
+                Include deleted
+              </label>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => navigate(createPageUrl("Admin"))}
+              >
+                <Users className="w-4 h-4 mr-2" />
+                Merge similar profiles
+              </Button>
+            </div>
           </div>
         ) : null}
         

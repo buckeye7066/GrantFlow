@@ -25,6 +25,124 @@ export function normalizeProfileNameKey(displayName) {
     .trim()
 }
 
+export function tokenizeProfileDisplayName(displayName) {
+  const key = normalizeProfileNameKey(displayName)
+  if (!key) return []
+  return key.split(' ').filter(Boolean)
+}
+
+/** True when names likely refer to the same person (e.g. "Luibov" vs "Luibov S Samoylenko"). */
+export function profilesHaveSimilarNames(nameA, nameB) {
+  const a = tokenizeProfileDisplayName(nameA)
+  const b = tokenizeProfileDisplayName(nameB)
+  if (!a.length || !b.length) return false
+
+  if (a.join(' ') === b.join(' ')) return true
+
+  const [short, long] = a.length <= b.length ? [a, b] : [b, a]
+
+  // Token prefix: "luibov" is a prefix of "luibov s samoylenko".
+  if (short.length < long.length && short.every((token, index) => long[index] === token)) {
+    return true
+  }
+
+  // First + last token match when both names are multi-word (handles middle initials/names).
+  if (short.length >= 2 && long.length >= 2) {
+    if (short[0] === long[0] && short[short.length - 1] === long[long.length - 1]) {
+      return true
+    }
+  }
+
+  // Single given name vs fuller name that shares the first token.
+  if (short.length === 1 && long.length >= 2 && short[0] === long[0]) {
+    return true
+  }
+
+  return false
+}
+
+function buildDuplicateGroupsFromMembers(members, metaByProfile, { minGroupSize }) {
+  if (!members || members.length < minGroupSize) return null
+
+  const candidates = members.map((profile) => ({
+    profile,
+    meta: metaByProfile.get(profile.id) || { score: 0 },
+  }))
+  const winner = pickWinner(candidates)
+  const losers = candidates.filter((c) => c.profile.id !== winner.profile.id)
+
+  const key = candidates
+    .map((c) => normalizeProfileNameKey(c.profile.display_name) || c.profile.display_name)
+    .filter(Boolean)
+    .sort()
+    .join(' | ')
+
+  return {
+    key,
+    winner: summarizeProfileRow(winner.profile, winner.meta),
+    losers: losers.map((c) => summarizeProfileRow(c.profile, c.meta)),
+    count: candidates.length,
+  }
+}
+
+function findSimilarNameClusters(profiles) {
+  const n = profiles.length
+  if (n < 2) return []
+
+  const parent = Array.from({ length: n }, (_, index) => index)
+
+  const find = (index) => {
+    let root = index
+    while (parent[root] !== root) root = parent[root]
+    let current = index
+    while (parent[current] !== current) {
+      const next = parent[current]
+      parent[current] = root
+      current = next
+    }
+    return root
+  }
+
+  const union = (left, right) => {
+    const rootLeft = find(left)
+    const rootRight = find(right)
+    if (rootLeft !== rootRight) parent[rootRight] = rootLeft
+  }
+
+  const byFirstToken = new Map()
+  for (let index = 0; index < n; index += 1) {
+    const tokens = tokenizeProfileDisplayName(profiles[index].display_name)
+    if (!tokens.length) continue
+    const bucketKey = tokens[0]
+    if (!byFirstToken.has(bucketKey)) byFirstToken.set(bucketKey, [])
+    byFirstToken.get(bucketKey).push(index)
+  }
+
+  for (const indices of byFirstToken.values()) {
+    if (indices.length < 2) continue
+    for (let left = 0; left < indices.length; left += 1) {
+      for (let right = left + 1; right < indices.length; right += 1) {
+        const i = indices[left]
+        const j = indices[right]
+        if (profilesHaveSimilarNames(profiles[i].display_name, profiles[j].display_name)) {
+          union(i, j)
+        }
+      }
+    }
+  }
+
+  const clustersMap = new Map()
+  for (let index = 0; index < n; index += 1) {
+    const tokens = tokenizeProfileDisplayName(profiles[index].display_name)
+    if (!tokens.length) continue
+    const root = find(index)
+    if (!clustersMap.has(root)) clustersMap.set(root, [])
+    clustersMap.get(root).push(profiles[index])
+  }
+
+  return Array.from(clustersMap.values())
+}
+
 function normalizeEmail(value) {
   const email = String(value ?? '').trim().toLowerCase()
   if (!email || !email.includes('@')) return null
@@ -277,39 +395,37 @@ export async function findDuplicateProfileGroups(db, {
     metaByProfile.set(p.id, { score, nonEmptyFields, sectionCount, documentsCount, jobsCount, sessionsCount, billingCount })
   }
 
-  const makeKey = (p) => {
-    const nameKey = normalizeProfileNameKey(p.display_name)
-    const signals = signalByProfile.get(p.id) || {}
+  let groups = []
 
-    if (strategy === 'email_or_phone') {
-      return signals.email || signals.phone || nameKey
+  if (strategy === 'similar_name') {
+    const clusters = findSimilarNameClusters(profiles)
+    groups = clusters
+      .map((members) => buildDuplicateGroupsFromMembers(members, metaByProfile, { minGroupSize }))
+      .filter(Boolean)
+  } else {
+    const makeKey = (p) => {
+      const nameKey = normalizeProfileNameKey(p.display_name)
+      const signals = signalByProfile.get(p.id) || {}
+
+      if (strategy === 'email_or_phone') {
+        return signals.email || signals.phone || nameKey
+      }
+
+      return nameKey
     }
 
-    return nameKey
-  }
+    const groupsMap = new Map()
+    for (const p of profiles) {
+      const key = makeKey(p)
+      if (!key) continue
+      if (!groupsMap.has(key)) groupsMap.set(key, [])
+      groupsMap.get(key).push(p)
+    }
 
-  const groupsMap = new Map()
-  for (const p of profiles) {
-    const key = makeKey(p)
-    if (!key) continue
-    if (!groupsMap.has(key)) groupsMap.set(key, [])
-    groupsMap.get(key).push(p)
-  }
-
-  const groups = []
-  for (const [key, members] of groupsMap.entries()) {
-    if (!members || members.length < minGroupSize) continue
-
-    const candidates = members.map((profile) => ({ profile, meta: metaByProfile.get(profile.id) || { score: 0 } }))
-    const winner = pickWinner(candidates)
-    const losers = candidates.filter((c) => c.profile.id !== winner.profile.id)
-
-    groups.push({
-      key,
-      winner: summarizeProfileRow(winner.profile, winner.meta),
-      losers: losers.map((c) => summarizeProfileRow(c.profile, c.meta)),
-      count: candidates.length,
-    })
+    for (const [, members] of groupsMap.entries()) {
+      const group = buildDuplicateGroupsFromMembers(members, metaByProfile, { minGroupSize })
+      if (group) groups.push(group)
+    }
   }
 
   groups.sort((a, b) => (b.count - a.count) || String(a.key).localeCompare(String(b.key)))
