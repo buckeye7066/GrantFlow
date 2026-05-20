@@ -742,22 +742,25 @@ export function interpretFundingIntentRules(text) {
     cat.excluded_categories = INCOME_SUPPORT_CATEGORIES.slice()
   }
 
-  // Late-bound student_aid promotion: if a generic "rent" / "housing" /
-  // "living expenses" query mentions ANY college/student/scholarship token
-  // (or any of our school-name tokens), upgrade primary_category to
-  // student_aid so the cross-category cap and student-aid sources kick in.
-  // This handles the "off campus living expenses at MTSU" path even when
-  // expandNeed or PD triggers misclassified the query first.
+  // Late-bound student_aid promotion: college + living-cost queries must win
+  // over weak PD/taxonomy false positives (e.g. "cover" ⊂ "recovery"). Only
+  // inspect the user's raw text — expanded terms like CITI → "university
+  // training" must not trigger this path.
   {
-    const studentSignal =
-      /\b(student|college|university|undergrad|graduate|scholarship|tuition|fafsa|pell|fseog|dorm|residence\s+hall|campus|off[\s-]?campus|cost\s+of\s+attendance|room\s+and\s+board|mtsu|ucf|ucla|ucsb|ucsd|usc|nyu|psu|asu|fsu|fiu|fau|ksu|osu|tsu|ttu|wvu|byu|tcu|smu|csu|uga|uva|umd|umass|csun|cuny|suny|penn\s+state|ohio\s+state|iowa\s+state|michigan\s+state|florida\s+state|kansas\s+state|oklahoma\s+state|texas\s+state|tennessee\s+state|middle\s+tennessee\s+state|state\s+university|community\s+college|technical\s+college|college\s+of)\b/i
-    const livingSignal =
-      /\b(hous|liv|rent|apartment|expense|cost|food\s+pantry|emergency|debt|aid|grant|scholarship|tuition|board)/i
+    const rawLower = raw.toLowerCase()
+    const collegeContext =
+      /\b(student|college|university|undergrad|graduate|tuition|fafsa|pell|fseog|dorm|residence\s+hall|campus|off[\s-]?campus|cost\s+of\s+attendance|room\s+and\s+board|mtsu|ucf|ucla|ucsb|ucsd|usc|nyu|psu|asu|fsu|fiu|fau|ksu|osu|tsu|ttu|wvu|byu|tcu|smu|csu|uga|uva|umd|umass|csun|cuny|suny|penn\s+state|ohio\s+state|iowa\s+state|michigan\s+state|florida\s+state|kansas\s+state|oklahoma\s+state|texas\s+state|tennessee\s+state|middle\s+tennessee\s+state|state\s+university|community\s+college|technical\s+college|college\s+of)\b/i.test(rawLower)
+    const livingCostContext =
+      /\b(hous|liv|rent|apartment|expenses?|cost\s+of\s+attendance|room\s+and\s+board|off[\s-]?campus|tuition|board)\b/i.test(rawLower)
     const pdExplicit =
-      /\b(probe|pro-?be|ethics|boundaries|continuing education|cme|ce credits|licensure|license reinstatement|remediation|wioa|workforce training|professional development|board required|return to practice|nurse re-?entry|vocational rehabilitation)\b/i.test(raw)
+      /\b(probe|pro-?be|nclex|citi|scope|pace|cpep|ethics|boundaries|continuing education|cme|ce credits|ceu|licensure|license reinstatement|remediation|wioa|workforce training|professional development|board required|return to practice|nurse re-?entry|vocational rehabilitation|research compliance|human subjects)\b/i.test(rawLower)
+    const studentAidDirect = detectPrimaryCategory(raw, [])
+    const strongStudentAid =
+      studentAidDirect.primary_category === 'student_aid' ||
+      (collegeContext && livingCostContext)
     if (
-      studentSignal.test(haystack) &&
-      livingSignal.test(haystack) &&
+      (cat.primary_category === 'general' || cat.primary_category === 'professional_development') &&
+      strongStudentAid &&
       credentials.length === 0 &&
       !pdExplicit
     ) {

@@ -263,7 +263,7 @@ const EXPAND_NEED_STOPWORDS = new Set([
   'for', 'the', 'and', 'help', 'find', 'get', 'need', 'with', 'from', 'that',
   'have', 'want', 'pay', 'paying', 'source', 'fund', 'funding', 'assistance',
   'me', 'my', 'our', 'you', 'your', 'can', 'could', 'would', 'should', 'about',
-  'cover', 'covers', 'covering',
+  'cover', 'covers', 'covering', 'state', 'year', 'this', 'next', 'apply',
 ])
 
 function escapeRegExp(value) {
