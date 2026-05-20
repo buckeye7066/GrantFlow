@@ -15,6 +15,7 @@
  */
 
 import { createOpenAIClient } from '../utils/openaiClient.js'
+import { expandNeed } from './crawlers/needTaxonomy.js'
 
 const MAX_INPUT = 2000
 // Raised from 18 to 24 in the student_aid + professional_development
@@ -337,9 +338,26 @@ const EXPANSIONS = [
     re: /\b(medical|health|hospital|prescription|dental|vision|disability)\b/i,
     add: ['healthcare', 'medical assistance', 'disability'],
   },
+  {
+    re: /\b(probe|pro-?be|ethics|boundaries|continuing education|cme|ce credits|licensure|license reinstatement|remediation|wioa|workforce training|professional development|board required|return to practice|nurse re-?entry|vocational rehabilitation|ita\b|etpl|nursing foundation|hrsa|nhsc|nasw|ana foundation|tuition reimbursement|certification exam)\b/i,
+    add: [
+      'wioa training',
+      'workforce development board',
+      'license reinstatement',
+      'professional remediation',
+      'nursing reentry',
+      'vocational rehabilitation',
+      'continuing education',
+      'ethics training',
+      'probe ethics',
+      'professional boundaries',
+      'nursing foundation',
+      'training scholarship',
+    ],
+  },
   // Generic education (kept for college / K-12 routing).
   {
-    re: /\b(education|tuition|scholarship|college|student)\b/i,
+    re: /\b(education|tuition|scholarship|college|student|training)\b/i,
     add: ['education', 'scholarship', 'tuition assistance'],
   },
   // Student living / off-campus / cost-of-attendance.
@@ -690,7 +708,24 @@ export function interpretFundingIntentRules(text) {
   }
   phraseHints.push(...bigram.slice(0, 4))
 
-  const search_terms = uniqueTerms([...added, ...phraseHints, ...tokens])
+  let search_terms = uniqueTerms([...added, ...phraseHints, ...tokens])
+
+  const expanded = expandNeed(raw)
+  if (expanded?.programCategories?.length) {
+    search_terms.push(
+      ...expanded.programCategories.slice(0, 6).map((c) => c.replace(/_/g, ' ')),
+    )
+  }
+  if (expanded?.matchedKey === 'license_reinstatement' || expanded?.matchedKey === 'professional_development') {
+    search_terms.push(
+      'wioa training',
+      'license reinstatement',
+      'professional remediation',
+      'continuing education',
+      'nursing reentry',
+    )
+  }
+  search_terms = uniqueTerms(search_terms)
 
   const credentials = extractCredentials(raw)
   // Credentials by themselves should also trigger the professional development
@@ -743,6 +778,7 @@ export function interpretFundingIntentRules(text) {
     excluded_categories: cat.excluded_categories,
     branded_program: brandedProgram,
     credentials_detected: credentials,
+    expanded_need: expanded?.canonicalNeed || null,
   }
 }
 

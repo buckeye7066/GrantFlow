@@ -1584,6 +1584,20 @@ export function scoreOpportunity(profile, opportunity) {
   // without distorting the base component model.
   const housingBonusReasons = []
 
+  // Workforce / pro bono service alignment — applied after weighting so a WIOA
+  // training row beats a generic corporate grant when profile proBonoTerms match.
+  if (PRO_BONO_OPPORTUNITY_TYPES.has(String(opportunity?.opportunity_type || '').toLowerCase())) {
+    const proBonoTerms = effectiveSignals?.proBonoTerms
+    if (proBonoTerms instanceof Set && proBonoTerms.size > 0) {
+      const hits = [...proBonoTerms].filter((term) => oppText.includes(normalizeString(term))).length
+      if (hits > 0) {
+        const boost = Math.min(8, hits * 3)
+        rawScore = Math.min(100, rawScore + boost)
+        housingBonusReasons.push(`Workforce/service need match (+${boost})`)
+      }
+    }
+  }
+
   // Dynamically infer housing classification for legacy opportunities without explicit columns
   const housingClass = inferHousingClassification(opportunity)
   const effectiveOpp = (housingClass.fundingCategory && !opportunity.funding_category)

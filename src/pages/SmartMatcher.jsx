@@ -283,7 +283,7 @@ export default function SmartMatcher() {
 
   // -- Matching data --
   const { data: scoredResponse, isLoading: isScoring } = useQuery({
-        queryKey: ['smart-matcher', selectedProfileId, minScore, searchQuery, parsedSearchTerms, intentPrimaryCategory, intentExcludedCategories.join('|')],
+        queryKey: ['smart-matcher', selectedProfileId, minScore, searchQuery, parsedSearchTerms, intentPrimaryCategory, intentExcludedCategories.join('|'), freeTextNeed],
         queryFn: async () => {
                 if (!selectedProfileId || selectedProfileId === 'all') {
                           return { opportunities: [], total_scored: 0, returned: 0 }
@@ -300,7 +300,7 @@ export default function SmartMatcher() {
                 const terms = fromIntent && fromIntent.length > 0 ? fromIntent : manual
                 if (terms.length === 1) {
                   qs.set('q', terms[0])
-                } else if (terms.length > 1) {
+                } else                 if (terms.length > 1) {
                   for (const t of terms) {
                     qs.append('q_terms', t)
                   }
@@ -310,6 +310,9 @@ export default function SmartMatcher() {
                 }
                 if (Array.isArray(intentExcludedCategories) && intentExcludedCategories.length > 0) {
                   qs.set('excluded_categories', intentExcludedCategories.join(','))
+                }
+                if (freeTextNeed.trim()) {
+                  qs.set('need_text', freeTextNeed.trim())
                 }
                 return await apiFetch(`/api/matching/profile/${selectedProfileId}/opportunities?${qs.toString()}`)
         },

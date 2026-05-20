@@ -222,8 +222,31 @@ router.get('/audit-events', async (req, res) => {
       audit_events: logs.slice(0, limit),
     })
   } catch (error) {
-    routeLogger.error('[admin/audit-events] list failed', error)
-    res.status(500).json({ error: 'Unable to list audit events' })
+    console.error('[admin/audit-events]', error)
+    res.status(500).json({ error: error?.message || 'Failed to load audit events' })
+  }
+})
+
+router.get('/matching/low-coverage-events', async (req, res) => {
+  if (!(await ensureAdminRequest(req, res))) return
+  try {
+    const limit = Math.max(1, Math.min(Number(req.query?.limit) || 100, 500))
+    const rows = await req.db.prepare(`
+      SELECT profile_id, search_terms, free_text, qualified_count, min_score,
+             intent_label, branded_program, recorded_at
+      FROM matching_low_coverage_events
+      ORDER BY recorded_at DESC
+      LIMIT ?
+    `).all(limit)
+    const events = (rows || []).map((row) => ({
+      ...row,
+      search_terms: (() => {
+        try { return JSON.parse(row.search_terms || '[]') } catch { return [] }
+      })(),
+    }))
+    res.json({ count: events.length, events })
+  } catch (error) {
+    res.json({ count: 0, events: [], note: 'matching_low_coverage_events table not initialized yet' })
   }
 })
 

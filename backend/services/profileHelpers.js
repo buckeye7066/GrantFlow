@@ -1400,6 +1400,18 @@ export function buildProfileSignals({ profile, sections, asOf = null }) {
     if (key === 'healthcare_worker_type' && typeof value === 'string') {
       occupationSet.add(normalizeString(value))
       registerKeyword(value)
+      const cred = normalizeString(value)
+      if (/\b(rn|lpn|lvn|np|crna|cnm|cna|md|do|pa|lcsw|lmft|lpc|pharmd|pt|ot|slp|rd|rt)\b/.test(cred)) {
+        needs.add('professional_development_continuing_education')
+        needs.add('healthcare')
+        needs.add('employment')
+      }
+      // Board remediation / reinstatement defaults apply to fully licensed roles,
+      // not entry-level certifications like CNA seeking advancement training.
+      if (/\b(rn|lpn|lvn|np|crna|cnm|md|do|pa|lcsw|lmft|lpc|pharmd|pt|ot|slp|rd|rt)\b/.test(cred)) {
+        needs.add('license_reinstatement_support')
+        needs.add('professional_remediation_funding')
+      }
       return
     }
     if (key === 'job_title' && typeof value === 'string') {
@@ -2247,6 +2259,7 @@ export function buildProfileSignals({ profile, sections, asOf = null }) {
     license_reinstatement_support: ['probe','probe class','probe course','probe ethics','license reinstatement','nursing reinstatement','reinstatement course','ethics course','ethics class','remediation','remediation course','remediation program','board required','board-required','professional boundaries','return to practice','return to nursing','relicensing','recertification','nurse reentry','nurse re-entry','credential restoration','license back','nursing license back','disciplinary education','board-ordered education','mandatory professional education','professional compliance'],
     nursing_reentry_support: ['nurse reentry','nurse re-entry','return to nursing','return to practice','nursing refresher','nursing re-entry','healthcare return to work','nursing workforce'],
     professional_remediation_funding: ['probe','remediation','ethics course','professional boundaries','disciplinary remediation','board required education','mandated continuing education','professional compliance training'],
+    professional_development_continuing_education: ['continuing education','professional development','cme','ce credits','licensure exam','certification exam','workforce training','wioa','vocational rehabilitation','tuition reimbursement','training scholarship','conference travel','professional association dues','refresher program','re-entry program'],
   }
   // Check both individual tokens (keywordSet) AND full phrases (phraseSet) so multi-word
   // triggers like 'food bank', 'mental health', 'probe ethics' are correctly matched.

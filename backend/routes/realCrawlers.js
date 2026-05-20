@@ -18,6 +18,11 @@ import {
 } from '../services/opportunityTrust.js'
 import { scoreOpportunity } from '../services/matchEngine.js'
 import { canonicalizeOpportunityList } from '../services/matching/resultEnricher.js'
+import {
+  detectProfessionalDevelopmentIntent,
+  loadCuratedProfessionalDevelopmentPrograms,
+  applyProfessionalDevelopmentQueryPolicy,
+} from '../services/matching/professionalDevelopmentPolicy.js'
 import { runAllDomainEngines } from '../services/crawlers/domainEngines/index.js'
 import { crawlStateWaiverBenefits, evaluateStateWaiverEligibility } from '../services/crawlers/stateWaiverBenefitsCrawler.js'
 import { planCoverage, buildCoverageReport, buildGrantsGovQueryTerms, getSource } from '../services/sourceRegistry.js'
@@ -1146,6 +1151,7 @@ router.post('/run-smart', ensureAuth, standardRateLimiter, async (req, res) => {
     min_match_score = 50,
     primary_category: clientPrimaryCategory = null,
     intent_terms: clientIntentTerms = null,
+    need_text = '',
   } = req.body || {}
 
   if (!profile_id) {
@@ -1355,8 +1361,31 @@ router.post('/run-smart', ensureAuth, standardRateLimiter, async (req, res) => {
       .sort((a, b) => (b.match_score ?? 0) - (a.match_score ?? 0))
       .slice(0, 100)
 
+    const pdIntent = detectProfessionalDevelopmentIntent({
+      searchTerms: need_text ? [String(need_text)] : [],
+      freeText: String(need_text || ''),
+      profileContext: smartProfileContext,
+    })
+
+    let working = filtered
+    if (pdIntent.active) {
+      const profileState = smartProfileContext?.profile?.state || smartProfileContext?.signals?.location?.state
+      const curated = loadCuratedProfessionalDevelopmentPrograms(profileState)
+      const seen = new Set(working.map((o) => String(o.title || '').toLowerCase()))
+      for (const opp of curated) {
+        const key = String(opp.title || '').toLowerCase()
+        if (!key || seen.has(key)) continue
+        seen.add(key)
+        working.push({ ...opp, match_score: opp.match_score ?? 72, result_source: 'pd_curated' })
+      }
+      working = applyProfessionalDevelopmentQueryPolicy(working, pdIntent)
+        .filter((opp) => (opp.match_score ?? 0) >= minScore || opp.is_directory_resource)
+        .sort((a, b) => (b.match_score ?? 0) - (a.match_score ?? 0))
+        .slice(0, 100)
+    }
+
     // Canonical trust decoration — same vocabulary everywhere.
-    const decoratedSmart = filtered.map((opp) => {
+    const decoratedSmart = working.map((opp) => {
       const trust = assessOpportunityTrust(opp, { allowDirectory: true, allowExpired: false })
       const meta = buildTrustMetadata(trust) || {}
       return {
@@ -1382,6 +1411,8 @@ router.post('/run-smart', ensureAuth, standardRateLimiter, async (req, res) => {
       profile_credentials: profileSignals?.credentials instanceof Set
         ? Array.from(profileSignals.credentials)
         : Array.isArray(profileSignals?.credentials) ? profileSignals.credentials : [],
+      professional_development_intent: pdIntent.active || undefined,
+      branded_program: pdIntent.branded?.label || undefined,
     })
   } catch (err) {
     routeLogger.error('[RealCrawlers] run-smart error:', err)

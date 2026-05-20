@@ -25,6 +25,12 @@ import { normalizeOpportunityState, normalizeState } from '../utils/stateNormali
 import { assembleFundingResults, TIERS as ZERO_RESULT_TIERS } from '../services/zeroResultLadder.js'
 import { evaluatePipelineSource } from '../config/pipelineAllowedSources.js'
 import { evaluateApplicantTypeEligibility } from '../services/applicantTypeGate.js'
+import {
+  detectProfessionalDevelopmentIntent,
+  loadCuratedProfessionalDevelopmentPrograms,
+  applyProfessionalDevelopmentQueryPolicy,
+  recordLowCoverageEvent,
+} from '../services/matching/professionalDevelopmentPolicy.js'
 
 import { createLogger } from '../utils/logger.js'
 const routeLogger = createLogger('route:matching')
@@ -292,6 +298,7 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
       const limit = Math.min(Math.max(Number.parseInt(req.query.limit ?? '2000', 10) || 2000, 1), 5000)
       const sortBy = req.query.sort_by ?? 'match_score' // match_score | deadline | amount | recently_added
       const searchTerms = collectSearchTermsFromQuery(req)
+      const freeTextNeed = typeof req.query.need_text === 'string' ? req.query.need_text.trim() : ''
 
       // ── Primary-category routing (spec §3, §4) ────────────────────────────
       // The frontend passes primary_category from interpretFundingIntent.
@@ -327,6 +334,12 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
 
       const baseContext = await loadProfileContext(req.db, profileId)
                    const profileContext = buildProfileFacets(baseContext)
+
+      const pdIntent = detectProfessionalDevelopmentIntent({
+        searchTerms,
+        freeText: freeTextNeed,
+        profileContext,
+      })
 
       const isPostgres = req.db?.dialect === 'postgres'
       const activeVal = isPostgres ? 'TRUE' : '1'
@@ -524,6 +537,18 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
           continue
         }
         candidates.push(normalized)
+      }
+
+      if (pdIntent.active) {
+        const curatedPd = loadCuratedProfessionalDevelopmentPrograms(profileState)
+        const seenCurated = new Set(candidates.map((c) => String(c.id || c.title || '').toLowerCase()))
+        for (const opp of curatedPd) {
+          const key = String(opp.id || opp.title || '').toLowerCase()
+          if (!key || seenCurated.has(key)) continue
+          seenCurated.add(key)
+          candidates.push(opp)
+        }
+        routeLogger.info(`[matching] PD intent active — injected ${curatedPd.length} curated professional-development programs`)
       }
 
       const healthSet = profileContext?.signals?.health
@@ -786,6 +811,14 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
                                }
                      })
                      .filter((opp) => opp !== null)
+
+      if (pdIntent.active) {
+        const adjusted = applyProfessionalDevelopmentQueryPolicy(allScored, pdIntent)
+        allScored.length = 0
+        allScored.push(...adjusted)
+        allScored.sort((a, b) => (b.match_score ?? 0) - (a.match_score ?? 0))
+      }
+
       if (rejectStats.quality || rejectStats.wrongState || rejectStats.junk || rejectStats.reject || rejectStats.rejectDirectoryPreserved || rejectStats.trust || rejectStats.noReason) {
         routeLogger.info(`[matching] candidates=${rawCandidates.length} quality_candidates=${candidates.length} scored=${allScored.length} referrals=${referralTemplates.size} drops=${JSON.stringify(rejectStats)} quality_reasons=${JSON.stringify(qualityDropReasons)} trust_reasons=${JSON.stringify(trustDropReasons)}`)
       }
@@ -913,12 +946,7 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
         signalAudit = { error: auditErr?.message ?? String(auditErr) }
       }
 
-      // ── Spec §7: low-coverage telemetry. Log every search where the
-      // qualified set has < 3 results so admins can iteratively fill source
-      // gaps. Lightweight (single info-level line) and reversible — flipping
-      // the threshold or removing the call does not change behavior.
-      const QUALIFIED_THRESHOLD = 50
-      const qualifiedCount = scored.filter((o) => (o.match_score ?? 0) >= QUALIFIED_THRESHOLD).length
+      const qualifiedCount = capped.filter((o) => (o.match_score ?? 0) >= minScore).length
       if (qualifiedCount < 3) {
         try {
           routeLogger.warn(`[matching][low-coverage] profile=${profileId} qualified=${qualifiedCount} returned=${capped.length} candidates=${rawCandidates.length} primary_category=${effectivePrimaryCategory || 'none'} terms=${JSON.stringify(searchTerms.slice(0, 12))}`)
@@ -943,6 +971,16 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
           routeLogger.debug?.(`[matching][low-coverage] persistence skipped: ${telemetryErr?.message || telemetryErr}`)
         }
       }
+      if (qualifiedCount < 3 && (searchTerms.length > 0 || pdIntent.active)) {
+        void recordLowCoverageEvent(req.db, {
+          profileId,
+          searchTerms,
+          freeText: freeTextNeed,
+          qualifiedCount,
+          minScore,
+          intent: pdIntent,
+        })
+      }
 
       res.json({
               profile_id: profileId,
@@ -962,6 +1000,9 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
                 dropped_ineligible_applicant_type: rejectStats.ineligibleApplicantType,
                 source_drop_reasons: sourceDropReasons,
                 eligibility_drop_reasons: eligibilityDropReasons,
+                professional_development_intent: pdIntent.active || undefined,
+                branded_program: pdIntent.branded?.label || undefined,
+                income_support_excluded: pdIntent.excludeIncomeSupport || undefined,
               },
               coverage_summary: {
                 total_candidates: rawCandidates.length,

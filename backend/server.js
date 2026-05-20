@@ -895,6 +895,44 @@ if (db.dialect === 'sqlite') {
     )
   }
 
+  try {
+    if (db.dialect === 'postgres') {
+      await db.exec(`
+        CREATE TABLE IF NOT EXISTS matching_low_coverage_events (
+          id BIGSERIAL PRIMARY KEY,
+          profile_id TEXT REFERENCES profiles(id) ON DELETE SET NULL,
+          search_terms TEXT,
+          free_text TEXT,
+          qualified_count INTEGER NOT NULL DEFAULT 0,
+          min_score INTEGER NOT NULL DEFAULT 50,
+          intent_label TEXT,
+          branded_program TEXT,
+          recorded_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS idx_matching_low_coverage_recorded
+          ON matching_low_coverage_events(recorded_at DESC);
+      `)
+    } else {
+      await db.exec(`
+        CREATE TABLE IF NOT EXISTS matching_low_coverage_events (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          profile_id TEXT,
+          search_terms TEXT,
+          free_text TEXT,
+          qualified_count INTEGER NOT NULL DEFAULT 0,
+          min_score INTEGER NOT NULL DEFAULT 50,
+          intent_label TEXT,
+          branded_program TEXT,
+          recorded_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_matching_low_coverage_recorded
+          ON matching_low_coverage_events(recorded_at DESC);
+      `)
+    }
+  } catch (e) {
+    console.warn('[database] matching_low_coverage_events self-heal failed:', e?.message || e)
+  }
+
   // Idempotent self-heal: funding_opportunities verification metadata + reality
   // gate columns (migrations 0061 + 0062). Several writers — including the new
   // student bridge funding pipeline — assume these columns exist and crash

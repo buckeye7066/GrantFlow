@@ -68,6 +68,7 @@ const TAXONOMY = {
     synonyms: [
       // PROBE / ethics specific
       'PROBE class', 'PROBE ethics class', 'PROBE course', 'PROBE ethics course',
+      'PROBE: Ethics and Boundaries', 'PROBE ethics and boundaries',
       'nursing ethics class', 'nursing ethics course', 'professional ethics course',
       'ethics course', 'ethics class', 'board-required ethics course',
       'board-required course', 'board required course', 'board required education',
@@ -105,6 +106,37 @@ const TAXONOMY = {
     programCategories: ['license_reinstatement_support', 'professional_remediation_funding',
       'nursing_reentry_support', 'workforce_reentry_training', 'employment',
       'education', 'healthcare'],
+  },
+  professional_development: {
+    canonicalNeed: 'professional_development_continuing_education',
+    synonyms: [
+      'professional development', 'continuing education', 'continuing professional development',
+      'CE credits', 'CME credits', 'CME course', 'CE course', 'license renewal',
+      'certification exam fees', 'licensure exam fees', 'board exam fees',
+      'required remedial coursework', 'ethics remediation', 'boundaries training',
+      'conference travel', 'professional association dues', 'workforce remediation',
+      'career re-entry training', 'refresher program', 're-entry program',
+      'employer tuition assistance', 'tuition reimbursement', 'training scholarship',
+      'WIOA', 'Individual Training Account', 'ITA', 'ETPL', 'American Job Center',
+      'vocational rehabilitation', 'nurse corps', 'NHSC', 'HRSA training',
+      'Ohio Nurses Foundation', 'Texas Nurses Foundation', 'ANA scholarship', 'NASW scholarship',
+    ],
+    programCategories: [
+      'professional_development_continuing_education',
+      'license_reinstatement_support',
+      'professional_remediation_funding',
+      'nursing_reentry_support',
+      'workforce_reentry_training',
+      'continuing_education',
+      'ce_cme_credits',
+      'licensure_exam_fees',
+      'remedial_coursework',
+      'workforce_training',
+      'employment',
+      'education',
+      'healthcare',
+      'scholarship',
+    ],
   },
   training: {
     canonicalNeed: 'employment',
@@ -342,17 +374,41 @@ export function scoreNeedMatch(program, expandedNeed) {
 
   // Category overlap â capped at 40 pts total to prevent broad-category programs
   // from reaching acceptance thresholds on category tags alone (Goal 3).
-  const cats = new Set(program.categories || []);
+  const cats = new Set((program.categories || []).map((c) => String(c).toLowerCase()));
   let catScore = 0;
   for (const cat of expandedNeed.programCategories) {
-    if (cats.has(cat)) {
+    const norm = String(cat).toLowerCase();
+    if (cats.has(norm)) {
       catScore += 25;
-      matchedTerms.push(`category:${cat}`);
+      matchedTerms.push(`category:${norm}`);
     }
   }
   score += Math.min(40, catScore);
 
-  // Must-term presence â cap total must-term contribution to avoid raw-word inflation
+  const pdQuery =
+    expandedNeed.canonicalNeed === 'professional_development_continuing_education' ||
+    expandedNeed.canonicalNeed === 'license_reinstatement_support' ||
+    (expandedNeed.programCategories || []).some((c) =>
+      ['license_reinstatement_support', 'professional_remediation_funding', 'professional_development_continuing_education'].includes(String(c).toLowerCase()),
+    );
+  if (pdQuery) {
+    const incomeSupport =
+      cats.has('cash_assistance') ||
+      cats.has('income_support') ||
+      /\b(ssi|supplemental security income|ssdi|snap|tanf|general assistance)\b/i.test(programText);
+    const pdAligned =
+      (expandedNeed.programCategories || []).some((c) => cats.has(String(c).toLowerCase())) ||
+      /\b(wioa|workforce|vocational rehabilitation|continuing education|probe|license reinstatement|nursing re-?entry|remediation|nurse corps|nhsc|american job center)\b/i.test(programText);
+    if (incomeSupport && !pdAligned) {
+      return {
+        score: Math.min(15, score),
+        matchedTerms: [...matchedTerms, 'pd_query_income_support_penalty'],
+        canonicalNeed: expandedNeed.canonicalNeed,
+      };
+    }
+  }
+
+  // Must-term presence
   let mustHits = 0;
   for (const term of expandedNeed.mustTerms) {
     if (programText.includes(term.toLowerCase())) {
