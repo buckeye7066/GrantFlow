@@ -263,7 +263,24 @@ const EXPAND_NEED_STOPWORDS = new Set([
   'for', 'the', 'and', 'help', 'find', 'get', 'need', 'with', 'from', 'that',
   'have', 'want', 'pay', 'paying', 'source', 'fund', 'funding', 'assistance',
   'me', 'my', 'our', 'you', 'your', 'can', 'could', 'would', 'should', 'about',
+  'cover', 'covers', 'covering',
 ])
+
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+function wordMatchesTaxonomyKey(key, word) {
+  const normKey = String(key).toLowerCase()
+  if (normKey === word) return true
+  return normKey.split('_').some((part) => part === word || (word.length >= 5 && part.includes(word)))
+}
+
+function wordMatchesSynonym(synonym, word) {
+  if (!word || word.length < 3) return false
+  const re = new RegExp(`\\b${escapeRegExp(word)}\\b`, 'i')
+  return re.test(String(synonym))
+}
 
 /**
  * Expand a free-text need into taxonomy terms.
@@ -333,7 +350,8 @@ export function expandNeed(needText) {
   for (const word of words) {
     for (const [key, entry] of taxonomyEntries) {
       if (!seenFallbackKeys.has(key) &&
-          (key.includes(word) || entry.synonyms.some(s => s.toLowerCase().includes(word)))) {
+          (wordMatchesTaxonomyKey(key, word) ||
+            entry.synonyms.some((s) => wordMatchesSynonym(s, word)))) {
         fallbackMatches.push({ key, entry });
         seenFallbackKeys.add(key);
         // Do NOT break â a single word may match multiple taxonomy keys;

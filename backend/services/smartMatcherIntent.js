@@ -747,13 +747,20 @@ export function interpretFundingIntentRules(text) {
   // (or any of our school-name tokens), upgrade primary_category to
   // student_aid so the cross-category cap and student-aid sources kick in.
   // This handles the "off campus living expenses at MTSU" path even when
-  // the regex above has already classified "general" via term overlap.
-  if (cat.primary_category === 'general') {
+  // expandNeed or PD triggers misclassified the query first.
+  {
     const studentSignal =
       /\b(student|college|university|undergrad|graduate|scholarship|tuition|fafsa|pell|fseog|dorm|residence\s+hall|campus|off[\s-]?campus|cost\s+of\s+attendance|room\s+and\s+board|mtsu|ucf|ucla|ucsb|ucsd|usc|nyu|psu|asu|fsu|fiu|fau|ksu|osu|tsu|ttu|wvu|byu|tcu|smu|csu|uga|uva|umd|umass|csun|cuny|suny|penn\s+state|ohio\s+state|iowa\s+state|michigan\s+state|florida\s+state|kansas\s+state|oklahoma\s+state|texas\s+state|tennessee\s+state|middle\s+tennessee\s+state|state\s+university|community\s+college|technical\s+college|college\s+of)\b/i
     const livingSignal =
       /\b(hous|liv|rent|apartment|expense|cost|food\s+pantry|emergency|debt|aid|grant|scholarship|tuition|board)/i
-    if (studentSignal.test(haystack) && livingSignal.test(haystack)) {
+    const pdExplicit =
+      /\b(probe|pro-?be|ethics|boundaries|continuing education|cme|ce credits|licensure|license reinstatement|remediation|wioa|workforce training|professional development|board required|return to practice|nurse re-?entry|vocational rehabilitation)\b/i.test(raw)
+    if (
+      studentSignal.test(haystack) &&
+      livingSignal.test(haystack) &&
+      credentials.length === 0 &&
+      !pdExplicit
+    ) {
       cat.primary_category = 'student_aid'
       cat.excluded_categories = []
     }
