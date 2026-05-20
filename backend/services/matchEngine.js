@@ -1128,6 +1128,40 @@ function scoreNeedComponent(effectiveProfile, effectiveSignals, effectiveFacets,
 }
 
 /**
+ * Population/mission alignment applied as integer post-weight boosts.
+ * These signals are +2 on the eligibility subscale (× W_ELIGIBILITY 0.25 =
+ * +0.5 raw), which Math.round can erase — breaking the directional contract
+ * in matcherSectionCoverage and hiding nonprofit set-aside signals in the UI.
+ */
+function computePopulationMissionPostBoost(profileNorm, oppText) {
+  const organizationProfile = profileNorm?.organization || {}
+  const hits = []
+  let boost = 0
+
+  for (const pop of Array.isArray(organizationProfile.populationServed)
+    ? organizationProfile.populationServed
+    : []) {
+    const token = String(pop).toLowerCase().trim()
+    if (token.length >= 3 && oppText.includes(token)) {
+      boost += 2
+      hits.push(`Population alignment (+2: ${pop})`)
+    }
+  }
+
+  for (const focus of Array.isArray(organizationProfile.missionFocus)
+    ? organizationProfile.missionFocus
+    : []) {
+    const token = String(focus).toLowerCase().trim()
+    if (token.length >= 3 && oppText.includes(token)) {
+      boost += 2
+      hits.push(`Mission alignment (+2: ${focus})`)
+    }
+  }
+
+  return { boost: Math.min(8, boost), hits }
+}
+
+/**
  * Eligibility match component (0-100 subscale).
  * Checks applicant type match, demographic alignment, requirements compatibility.
  * Missing type → 45 baseline (neutral). Penalties are proportional, never zero.
@@ -1272,7 +1306,6 @@ function scoreEligibilityComponent(effectiveProfile, effectiveSignals, effective
   // out.
   const ownership = profileNorm?.ownership || {}
   const businessProfile = profileNorm?.business || {}
-  const organizationProfile = profileNorm?.organization || {}
   let ownershipBonus = 0
   const ownershipHits = []
 
@@ -1322,30 +1355,8 @@ function scoreEligibilityComponent(effectiveProfile, effectiveSignals, effective
     }
   }
 
-  // Population served / mission focus alignment -- critical for nonprofits,
-  // churches, schools, ministries, and service organizations.
-  const populationServed = Array.isArray(organizationProfile.populationServed)
-    ? organizationProfile.populationServed
-    : []
-  for (const pop of populationServed) {
-    const token = String(pop).toLowerCase().trim()
-    if (token && token.length >= 3 && oppText.includes(token)) {
-      ownershipBonus += 2
-      ownershipHits.push(`serves:${token}`)
-      if (ownershipBonus >= 18) break
-    }
-  }
-  const missionFocus = Array.isArray(organizationProfile.missionFocus)
-    ? organizationProfile.missionFocus
-    : []
-  for (const focus of missionFocus) {
-    const token = String(focus).toLowerCase().trim()
-    if (token && token.length >= 3 && oppText.includes(token)) {
-      ownershipBonus += 2
-      ownershipHits.push(`mission:${token}`)
-      if (ownershipBonus >= 18) break
-    }
-  }
+  // Population served / mission focus alignment — scored post-weight (see
+  // computePopulationMissionPostBoost) so +2 signals are never lost to rounding.
 
   ownershipBonus = Math.min(18, ownershipBonus)
   if (ownershipBonus > 0) {
@@ -1762,6 +1773,13 @@ export function scoreOpportunity(profile, opportunity) {
       rawScore = Math.min(100, rawScore + 10)
       housingBonusReasons.push('Housing-usable funding matched student housing need (+10)')
     }
+  }
+
+  const { boost: populationMissionBoost, hits: populationMissionHits } =
+    computePopulationMissionPostBoost(profileNorm, oppText)
+  if (populationMissionBoost > 0) {
+    rawScore = Math.min(100, rawScore + populationMissionBoost)
+    housingBonusReasons.push(...populationMissionHits)
   }
 
   // ── Floor guarantee: validated opportunities always score ≥ SCORE_FLOOR ──
