@@ -15,6 +15,7 @@ import { useNavigate } from 'react-router-dom';
 import { createPageUrl } from '@/utils';
 import { useToast } from "@/components/ui/use-toast";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { parseGrantsGovDigest } from '../../shared/grantsGovDigestParser.js';
 
 const grantSchemaForExtraction = {
   type: "object",
@@ -37,6 +38,17 @@ const grantSchemaForExtraction = {
   },
   required: ["title", "funder", "program_description"]
 };
+
+function unwrapApiPayload(response) {
+  if (response?.data && typeof response.data === 'object' && !Array.isArray(response.data)) {
+    return response.data;
+  }
+  return response;
+}
+
+function isRouteNotFoundError(err) {
+  return err?.status === 404 || /not found/i.test(String(err?.message || ''));
+}
 
 function buildGrantPayload(extractedData, { organizationId, inputMode, url }) {
   const rawAppUrl = extractedData.application_url || '';
@@ -107,37 +119,65 @@ export default function NOFOParser() {
   };
 
   const saveGrantToPipeline = async (grantPayload) => {
-    const pipelineResult = await client.functions.invoke('saveToProfilePipeline', {
-      opportunity: grantPayload,
-      organizationId: selectedOrgId,
-      source: 'nofo_parser',
-    });
+    try {
+      const pipelineResult = unwrapApiPayload(
+        await client.functions.invoke('saveToProfilePipeline', {
+          opportunity: grantPayload,
+          organizationId: selectedOrgId,
+          source: 'nofo_parser',
+        }),
+      );
 
-    if (!pipelineResult?.data?.success) {
-      const reason =
-        pipelineResult?.data?.rejection_reason ||
-        pipelineResult?.data?.ineligibility_reasons?.[0] ||
-        pipelineResult?.data?.message ||
-        'Pipeline rejected this opportunity. Check eligibility criteria.';
-      throw new Error(reason);
+      if (!pipelineResult?.success) {
+        const reason =
+          pipelineResult?.rejection_reason ||
+          pipelineResult?.ineligibility_reasons?.[0] ||
+          pipelineResult?.message ||
+          'Pipeline rejected this opportunity. Check eligibility criteria.';
+        throw new Error(reason);
+      }
+
+      return pipelineResult.grant;
+    } catch (err) {
+      if (!isRouteNotFoundError(err)) throw err;
+
+      log.warn('saveToProfilePipeline route unavailable; falling back to /api/grants/from-opportunity', {
+        title: grantPayload.title,
+      });
+
+      return client.post('/api/grants/from-opportunity', {
+        organization_id: selectedOrgId,
+        opportunity_data: {
+          title: grantPayload.title,
+          sponsor: grantPayload.funder || grantPayload.sponsor,
+          application_url: grantPayload.application_url,
+          url: grantPayload.url || grantPayload.application_url,
+          descriptionMd: grantPayload.program_description,
+          source: grantPayload.source || 'grants.gov',
+        },
+      });
     }
+  };
 
-    const newGrant = pipelineResult.data.grant;
+  const saveAndAnalyzeGrant = async (grantPayload) => {
+    const newGrant = await saveGrantToPipeline(grantPayload);
 
-    const analysisResult = await client.functions.invoke('analyzeGrant', {
-      grantId: newGrant.id,
-      title: newGrant.title,
-      programDescription: newGrant.program_description,
-      eligibilitySummary: newGrant.eligibility_summary,
-      selectionCriteria: newGrant.selection_criteria,
-      awardCeiling: newGrant.amount_max,
-      deadline: newGrant.deadline,
-    });
+    const analysisResult = unwrapApiPayload(
+      await client.functions.invoke('analyzeGrant', {
+        grantId: newGrant.id,
+        title: newGrant.title,
+        programDescription: newGrant.program_description,
+        eligibilitySummary: newGrant.eligibility_summary,
+        selectionCriteria: newGrant.selection_criteria,
+        awardCeiling: newGrant.amount_max,
+        deadline: newGrant.deadline,
+      }),
+    );
 
-    if (!analysisResult?.data?.success) {
+    if (!analysisResult?.success) {
       log.warn('analyzeGrant did not return success — patching record with analysis_failed status', {
         grantId: newGrant.id,
-        response: analysisResult?.data,
+        response: analysisResult,
       });
       await client.entities.Grant.update(newGrant.id, {
         ai_status: 'analysis_failed',
@@ -205,17 +245,18 @@ export default function NOFOParser() {
         is_url: inputMode === 'url'
       });
 
-      log.debug('parseNOFO response received', { success: response?.data?.success });
+      log.debug('parseNOFO response received', { success: response?.success });
 
-      if (response.data.success && response.data.output) {
-        setExtractedData(response.data.output);
+      const parsed = unwrapApiPayload(response);
+      if (parsed.success && parsed.output) {
+        setExtractedData(parsed.output);
         setStatus('success');
         toast({
           title: "Document Processed! ✨",
           description: "Review the extracted information below."
         });
       } else {
-        const errorMsg = response.data.message || response.data.details || "Could not extract data from document";
+        const errorMsg = parsed.message || parsed.details || "Could not extract data from document";
         throw new Error(errorMsg);
       }
 
@@ -246,9 +287,9 @@ export default function NOFOParser() {
     }
   };
 
-  const handleParseDigest = async () => {
+  const handleParseDigest = () => {
     if (!digestText.trim()) {
-      setError('Paste a Grants.gov digest email before parsing.');
+      setError('Paste Grants.gov listing text before parsing.');
       setStatus('error');
       return;
     }
@@ -259,31 +300,35 @@ export default function NOFOParser() {
     setDigestImportSummary(null);
     setExtractedData(null);
 
-    try {
-      const response = await client.functions.invoke('parseGrantsGovDigest', { text: digestText });
-      if (!response?.data?.success) {
-        throw new Error(response?.data?.message || 'Could not parse digest text');
-      }
-
-      const opportunities = response.data.opportunities || [];
-      setParsedDigest(opportunities);
-      setStatus('success');
-
-      toast({
-        title: 'Digest Parsed',
-        description: `Found ${opportunities.length} Grants.gov opportunit${opportunities.length === 1 ? 'y' : 'ies'}.`,
-      });
-    } catch (err) {
-      const errorMsg = err.message || 'Failed to parse Grants.gov digest';
+    const parsed = parseGrantsGovDigest(digestText);
+    if (!parsed.opportunities.length) {
+      const errorMsg = parsed.parse_errors[0] || 'No Grants.gov listings found in pasted text';
       setError(errorMsg);
       setStatus('error');
       toast({ variant: 'destructive', title: 'Parse Failed', description: errorMsg });
+      return;
+    }
+
+    setParsedDigest(parsed.opportunities);
+    setStatus('success');
+
+    toast({
+      title: 'Listings Parsed',
+      description: `Found ${parsed.opportunities.length} Grants.gov opportunit${parsed.opportunities.length === 1 ? 'y' : 'ies'}.`,
+    });
+
+    if (parsed.parse_errors.length) {
+      log.warn('Grants.gov digest parse warnings', parsed.parse_errors);
     }
   };
 
   const handleImportAllDigest = async () => {
-    if (!digestText.trim()) {
-      toast({ variant: 'destructive', title: 'Nothing to import', description: 'Paste digest text first.' });
+    const opportunities = parsedDigest.length
+      ? parsedDigest
+      : parseGrantsGovDigest(digestText).opportunities;
+
+    if (!opportunities.length) {
+      toast({ variant: 'destructive', title: 'Nothing to import', description: 'Parse listing text first.' });
       return;
     }
     if (!selectedOrgId) {
@@ -298,25 +343,45 @@ export default function NOFOParser() {
     setIsSavingGrant(true);
     setError(null);
 
-    try {
-      const response = await client.functions.invoke('importGrantsGovDigest', {
-        text: digestText,
-        organizationId: selectedOrgId,
-      });
+    const results = [];
+    let savedCount = 0;
 
-      if (!response?.data?.success) {
-        throw new Error(response?.data?.message || 'Import failed');
+    try {
+      for (const opp of opportunities) {
+        const grantPayload = buildGrantPayload(opp, {
+          organizationId: selectedOrgId,
+          inputMode: 'digest',
+          url: opp.application_url,
+        });
+
+        try {
+          await saveGrantToPipeline(grantPayload);
+          savedCount += 1;
+          results.push({ opportunity_id: opp.opportunity_id, title: opp.title, saved: true });
+        } catch (err) {
+          results.push({
+            opportunity_id: opp.opportunity_id,
+            title: opp.title,
+            saved: false,
+            reason: err.message || 'Save failed',
+          });
+        }
       }
 
-      setDigestImportSummary(response.data);
+      const summary = {
+        total_parsed: opportunities.length,
+        saved_count: savedCount,
+        results,
+      };
+      setDigestImportSummary(summary);
       queryClient.invalidateQueries({ queryKey: ['grants'] });
 
       toast({
         title: 'Import Complete',
-        description: `Saved ${response.data.saved_count} of ${response.data.total_parsed} opportunities to the pipeline.`,
+        description: `Saved ${savedCount} of ${opportunities.length} opportunities to the pipeline.`,
       });
     } catch (err) {
-      const errorMsg = err.message || 'Failed to import digest';
+      const errorMsg = err.message || 'Failed to import listings';
       setError(errorMsg);
       toast({ variant: 'destructive', title: 'Import Failed', description: errorMsg });
     } finally {
@@ -343,7 +408,7 @@ export default function NOFOParser() {
         inputMode: 'digest',
         url: opp.application_url,
       });
-      const newGrant = await saveGrantToPipeline(grantPayload);
+      const newGrant = await saveAndAnalyzeGrant(grantPayload);
       navigate(createPageUrl('GrantDetail', { id: newGrant.id }));
     } catch (err) {
       const errorMsg = err.message || 'Failed to save opportunity';
@@ -394,7 +459,7 @@ export default function NOFOParser() {
     }
 
     try {
-      const newGrant = await saveGrantToPipeline(grantPayload);
+      const newGrant = await saveAndAnalyzeGrant(grantPayload);
       navigate(createPageUrl("GrantDetail", { id: newGrant.id }));
     } catch (err) {
       const errorMessage = `Failed to save grant or start analysis: ${err.message}`;
@@ -422,7 +487,7 @@ export default function NOFOParser() {
           <FileStack className="w-12 h-12 mx-auto text-blue-600 mb-4" />
           <h1 className="text-3xl font-bold text-slate-900">NOFO Parser</h1>
           <p className="text-slate-600 mt-2">
-            Upload a grant PDF, enter a URL, or paste a Grants.gov digest email to extract and import opportunities.
+            Upload a grant PDF, enter a URL, or paste Grants.gov listings from any source to extract and import opportunities.
           </p>
         </div>
 
@@ -463,7 +528,7 @@ export default function NOFOParser() {
                   </TabsTrigger>
                   <TabsTrigger value="digest" disabled={isProcessing}>
                     <ClipboardList className="w-4 h-4 mr-2" />
-                    Paste Digest
+                    Paste Listings
                   </TabsTrigger>
                 </TabsList>
 
@@ -535,17 +600,17 @@ export default function NOFOParser() {
                 <TabsContent value="digest" className="mt-4">
                   <Alert className="mb-4 border-amber-200 bg-amber-50">
                     <Info className="h-4 w-4 text-amber-600" />
-                    <AlertTitle className="text-amber-900">Grants.gov Email Digest</AlertTitle>
+                    <AlertTitle className="text-amber-900">Grants.gov Listings</AlertTitle>
                     <AlertDescription className="text-amber-800">
-                      Paste the full text from a Grants.gov update email. We will extract each listing with its agency, title, notice type, and detail URL.
+                      Paste grant listings from any source — email, document, spreadsheet, or website. Each entry needs a Grants.gov detail URL (<code className="text-xs">search-results-detail/&#123;id&#125;</code>). Multi-line and slash-separated formats both work.
                     </AlertDescription>
                   </Alert>
 
                   <div className="space-y-2">
-                    <Label htmlFor="digest-input">Digest Text</Label>
+                    <Label htmlFor="digest-input">Listing Text</Label>
                     <Textarea
                       id="digest-input"
-                      placeholder="Paste the Grants.gov email digest here..."
+                      placeholder="Paste Grants.gov listings here (multi-line or slash-separated)..."
                       value={digestText}
                       onChange={(e) => setDigestText(e.target.value)}
                       disabled={isProcessing}
@@ -580,7 +645,7 @@ export default function NOFOParser() {
                 {isProcessing
                   ? 'Processing...'
                   : inputMode === 'digest'
-                    ? 'Parse Digest'
+                    ? 'Parse Listings'
                     : 'Process Document'}
               </Button>
             </div>
@@ -592,9 +657,9 @@ export default function NOFOParser() {
                 <CardHeader>
                     <CardTitle className="flex items-center">
                         {status === 'uploading' && <><Loader2 className="w-6 h-6 mr-2 animate-spin" /> {inputMode === 'file' ? 'Uploading file...' : 'Fetching URL...'}</>}
-                        {status === 'processing' && <><Loader2 className="w-6 h-6 mr-2 animate-spin" /> {inputMode === 'digest' ? 'Parsing digest...' : 'AI is reading the document...'}</>}
+                        {status === 'processing' && <><Loader2 className="w-6 h-6 mr-2 animate-spin" /> {inputMode === 'digest' ? 'Parsing listings...' : 'AI is reading the document...'}</>}
                         {status === 'success' && inputMode !== 'digest' && <><CheckCircle className="w-6 h-6 mr-2 text-emerald-500" /> Extraction Complete!</>}
-                        {status === 'success' && inputMode === 'digest' && <><CheckCircle className="w-6 h-6 mr-2 text-emerald-500" /> Digest Parsed ({parsedDigest.length})</>}
+                        {status === 'success' && inputMode === 'digest' && <><CheckCircle className="w-6 h-6 mr-2 text-emerald-500" /> Listings Parsed ({parsedDigest.length})</>}
                         {status === 'error' && <><AlertTriangle className="w-6 h-6 mr-2 text-red-500" /> Processing Failed</>}
                     </CardTitle>
                 </CardHeader>

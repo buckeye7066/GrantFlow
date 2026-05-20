@@ -1,18 +1,33 @@
 /**
- * Parse Grants.gov email digest text into structured opportunity rows.
+ * Parse Grants.gov listing text into structured opportunity rows.
  *
- * Expected block shape (blank line between entries):
- *   DOS
- *   Department of State
- *   U.S. Mission to Belgium
- *   Opportunity Title
- *   Synopsis 1
- *   https://www.grants.gov/search-results-detail/362469
+ * Supports multi-line email digests, slash-separated pastes, and mixed formats.
+ * Each entry must include a Grants.gov detail URL:
+ *   https://www.grants.gov/search-results-detail/{id}
  */
 
 const GRANTS_GOV_DETAIL_RE = /https:\/\/(?:www\.)?grants\.gov\/search-results-detail\/(\d+)/gi
 const NOTICE_TYPE_RE = /^(Synopsis|Forecast)\s+(\d+)$/i
 const AGENCY_ACRONYM_RE = /^[A-Z]{2,6}$/
+
+function normalizeDigestText(text) {
+  return String(text || '')
+    .replace(/\r\n/g, '\n')
+    .split('\n')
+    .flatMap((line) => {
+      const trimmed = line.trim()
+      if (!trimmed) return ['']
+      // Slash-separated single-line blocks (docs, spreadsheets, chat pastes).
+      if (trimmed.includes('grants.gov/search-results-detail/') && /\s\/\s/.test(trimmed)) {
+        return trimmed
+          .split(/\s+\/\s+/)
+          .map((part) => part.trim())
+          .filter(Boolean)
+      }
+      return [trimmed]
+    })
+    .join('\n')
+}
 
 function normalizeLines(text) {
   return String(text || '')
@@ -83,11 +98,11 @@ function parseBlockLines(lines, url, opportunityId) {
 }
 
 /**
- * @param {string} text - Raw pasted digest text
+ * @param {string} text - Raw pasted listing text from any source
  * @returns {{ opportunities: object[], parse_errors: string[], total_urls: number }}
  */
 export function parseGrantsGovDigest(text) {
-  const raw = String(text || '').trim()
+  const raw = normalizeDigestText(text).trim()
   if (!raw) {
     return { opportunities: [], parse_errors: ['No text provided'], total_urls: 0 }
   }
@@ -111,7 +126,6 @@ export function parseGrantsGovDigest(text) {
     const blockText = raw.slice(blockStart, match.index)
     const lines = normalizeLines(blockText)
 
-    // Drop known digest header / boilerplate lines anywhere in the preamble.
     const filteredLines = lines.filter(
       (line) => !/^(the following grant opportunities|created, updated, or deleted on grants\.gov)/i.test(line),
     )

@@ -4,7 +4,7 @@ import fetch from 'node-fetch'
 import { createOpenAIClient, summarizeOpenAIError } from '../utils/openaiClient.js'
 import { requireAuthenticatedUser, ensureOrganizationAccess } from '../utils/accessControl.js'
 import { standardRateLimiter } from '../middleware/rateLimiting.js'
-import { parseGrantsGovDigest } from '../services/grantsGovDigestParser.js'
+import { parseGrantsGovDigest } from '../../shared/grantsGovDigestParser.js'
 import { saveToProfilePipeline } from '../services/opportunityMatcher.js'
 import { loadProfileContext } from '../services/profileHelpers.js'
 

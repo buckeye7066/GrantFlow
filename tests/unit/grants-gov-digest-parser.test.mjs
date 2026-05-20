@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { parseGrantsGovDigest } from '../../backend/services/grantsGovDigestParser.js'
+import { parseGrantsGovDigest } from '../../shared/grantsGovDigestParser.js'
 
 const SAMPLE_DIGEST = `The following grant opportunities were created, updated, or deleted on Grants.gov:
 
@@ -225,4 +225,14 @@ test('parseGrantsGovDigest returns helpful error when no URLs found', () => {
   const result = parseGrantsGovDigest('No grants here')
   assert.equal(result.opportunities.length, 0)
   assert.ok(result.parse_errors[0].includes('No Grants.gov detail URLs'))
+})
+
+test('parseGrantsGovDigest handles slash-separated single-line pastes', () => {
+  const slashPaste =
+    'HHS / Department of Health and Human Services / National Institutes of Health / HEAL INITIATIVE: INTERACT Data Coordination and Integration Center (U24 Clinical Trial Not Allowed) / Synopsis 1 / https://www.grants.gov/search-results-detail/358939'
+  const result = parseGrantsGovDigest(slashPaste)
+  assert.equal(result.opportunities.length, 1)
+  assert.equal(result.opportunities[0].agency_acronym, 'HHS')
+  assert.equal(result.opportunities[0].opportunity_id, '358939')
+  assert.match(result.opportunities[0].title, /HEAL INITIATIVE/)
 })
