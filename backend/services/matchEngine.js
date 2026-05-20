@@ -46,7 +46,7 @@ import {
 export { normalizeProfile, computeProfileFingerprint } from './profileNormalizer.js'
 export { normalizeOpportunity, computeOpportunityFingerprint } from './opportunityNormalizer.js'
 
-export const MATCHER_VERSION = '4.1.1'
+export const MATCHER_VERSION = '4.1.2'
 
 // Re-export thresholds so consumers don't need to know about the config file
 export { SCORE_FLOOR, DEFAULT_MIN_SCORE, RELAX_THRESHOLDS, FALLBACK_TOP_N }
@@ -131,6 +131,11 @@ export function evaluateEligibility(profileNorm, oppNorm) {
   if (oppNorm.deadlineStatus === 'closed') ineligibilityReasons.push('Application deadline has passed')
   if (oppNorm.requiresVeteran && !profileNorm.isVeteran) ineligibilityReasons.push('Requires veteran status')
   if (oppNorm.requiresStudent && !profileNorm.isStudent) ineligibilityReasons.push('Requires student status')
+  if (oppNorm.requiresWomen) {
+    const isFemale = profileGenderIsFemale(profileNorm)
+    if (isFemale === false) ineligibilityReasons.push('Requires women/female applicants')
+    else if (isFemale === null) missingFields.push('gender')
+  }
   if (oppNorm.requiresNonprofit && !profileNorm.isNonprofit) ineligibilityReasons.push('Requires 501(c)(3) or nonprofit status')
   if (oppNorm.requiresBusiness && !profileNorm.isBusiness) ineligibilityReasons.push('Requires business or self-employment')
 
@@ -412,7 +417,9 @@ const RE_BUSINESS_SBA = /\b(sba\b|small business (administration|development|inn
 const RE_NONPROFIT_ONLY = /\b(for nonprofits|philanthropy for nonprofits|grants? for nonprofits)\b/i
 const RE_INSTITUTIONAL_ONLY = /\b(research institution|institutional grant|universities only|colleges only)\b/i
 const RE_VETERAN_ONLY = /\bveterans?\s+only\b|\bfor\s+veterans?\s+only\b/i
-const RE_STUDENT_ONLY = /\bstudents?\s+only\b|\bfor\s+students?\s+only\b|\bfor\s+enrolled\s+students?\b|\benrolled\s+students?\s+(?:at|in|of)\b/i
+const RE_STUDENT_ONLY = /\bstudents?\s+only\b|\bfor\s+students?\s+only\b|\bfor\s+enrolled\s+students?\b|\benrolled\s+students?\s+(?:at|in|of)\b|\bfor\s+(?:tn\s+|state\s+)?students?\s+(?:with|pursuing|enrolled|attending)\b|\b(?:female|women(?:'s)?)\s+students?\b/i
+const RE_STUDENT_AID_SIGNAL = /\b(scholarship|scholarships|tuition|fafsa|pell|fseog|work[- ]study|cost of attendance|cost_of_attendance|room and board|student aid|student_aid|hope scholarship|collegepays|undergraduate|community college)\b/i
+const RE_WOMEN_ONLY = /\b(women\s+only|female\s+students?|women(?:'s)?\s+engineers?|for\s+women\b|women\s+in\s+(?:stem|engineering))\b/i
 const RE_NONPROFIT_REQUIRED = /\b(for nonprofits only|nonprofits only|501\(c\)\(3\) required|exclusively\s+(?:for|to)\s+501\(c\)\(3\)|501\(c\)\(3\) organizations)\b/i
 const RE_DISASTER_SIGNAL = /disaster|fema|emergency|flood|fire|tornado|hurricane|storm/i
 
@@ -427,6 +434,32 @@ function normalizeString(value) {
 
 function normalizeCounty(value) {
   return normalizeString(String(value || '')).replace(/\bcounty\b/g, '').replace(/\s+/g, ' ').trim()
+}
+
+function profileGenderIsFemale(profileNorm) {
+  const g = String(profileNorm?.gender || '').toLowerCase().trim()
+  if (!g) return null
+  if (/\bfemale\b|\bwoman\b|\bwomen\b|\bgirl\b/.test(g)) return true
+  if (/\bmale\b|\bman\b|\bmen\b|\bboy\b/.test(g)) return false
+  return null
+}
+
+function profileWantsStudentAid(profileNorm, effectiveSignals) {
+  const cats = profileNorm?.needCategories ?? []
+  if (cats.some((n) => ['student_aid', 'cost_of_attendance', 'scholarship'].includes(String(n)))) return true
+  const signalNeeds =
+    effectiveSignals?.needs instanceof Set ? Array.from(effectiveSignals.needs) : []
+  return signalNeeds.some((n) => ['student_aid', 'cost_of_attendance', 'scholarship'].includes(String(n)))
+}
+
+function isStudentAidOpportunity(opportunity, oppNorm) {
+  if (oppNorm?.requiresStudent) return true
+  const oppText = `${opportunity?.title || ''} ${opportunity?.description || ''}`.toLowerCase()
+  if (RE_STUDENT_AID_SIGNAL.test(oppText)) return true
+  const oppType = String(opportunity?.opportunity_type || opportunity?.type || '').toLowerCase()
+  if (['portal', 'referral', 'school_portal'].includes(oppType) && /\bscholarship\b/.test(oppText)) return true
+  const cats = safeParseArrayField(opportunity?.categories, []).map((c) => String(c).toLowerCase())
+  return cats.some((c) => ['student_aid', 'cost_of_attendance', 'scholarship', 'education'].includes(c))
 }
 
 function normalizeState(value) {
@@ -1627,6 +1660,14 @@ export function scoreOpportunity(profile, opportunity) {
   // without distorting the base component model.
   const housingBonusReasons = []
 
+  const profileIsStudent = Boolean(profileNorm?.isStudent)
+  const wantsStudentAid = profileWantsStudentAid(profileNorm, effectiveSignals)
+  const oppNormForAid = profileNorm ? normalizeOpportunity(opportunity) : null
+  if (!profileIsStudent && !wantsStudentAid && isStudentAidOpportunity(opportunity, oppNormForAid)) {
+    rawScore = Math.min(rawScore, 40)
+    housingBonusReasons.push('Non-student profile × student-aid opportunity (capped at 40)')
+  }
+
   // Workforce / pro bono service alignment — applied after weighting so a WIOA
   // training row beats a generic corporate grant when profile proBonoTerms match.
   if (PRO_BONO_OPPORTUNITY_TYPES.has(String(opportunity?.opportunity_type || '').toLowerCase())) {
@@ -1699,7 +1740,7 @@ export function scoreOpportunity(profile, opportunity) {
   const isStemOpp = STEM_OPP_KEYWORDS.some((k) => oppText.includes(k))
 
   // Track non-major-derived interest hits separately so a major+interest stack does not double-count.
-  if (isScholarshipOpp) {
+  if (isScholarshipOpp && (profileIsStudent || wantsStudentAid)) {
     let majorInterestBoost = 0
     const majorMatched = profileIntendedMajor && (
       oppText.includes(profileIntendedMajor) ||
@@ -2075,6 +2116,11 @@ export function makeDecision(score, profile, opportunity, normalizedProfile = nu
     return { decision: 'REJECT', explanation: 'Opportunity requires student status.', reasons }
   }
 
+  if ((opp.requires_women || RE_WOMEN_ONLY.test(oppText)) && profileGenderIsFemale(np) === false) {
+    reasons.push('Women-only program; profile is not female')
+    return { decision: 'REJECT', explanation: 'Opportunity is for women/female applicants only.', reasons }
+  }
+
   if ((opp.requires_nonprofit || RE_NONPROFIT_REQUIRED.test(oppText)) && !isNonprofit) {
     reasons.push('Nonprofit-only program; profile is not a nonprofit')
     return { decision: 'REJECT', explanation: 'Opportunity is for nonprofits only.', reasons }
@@ -2300,6 +2346,16 @@ export function computeMatchDecision(rawProfile, rawOpportunity, opts = {}) {
   if (eligibilityEval.eligible === 'maybe' && finalScore > 80) {
     finalScore = 80
     scoreCaps.push('Capped at 80: eligibility is incomplete and needs user review.')
+  }
+
+  if (
+    !profileNorm.isStudent &&
+    !profileWantsStudentAid(profileNorm, signals) &&
+    isStudentAidOpportunity(rawOpportunity, oppNorm) &&
+    finalScore > 45
+  ) {
+    finalScore = 45
+    scoreCaps.push('Capped at 45: student-aid opportunity not aligned with non-student profile.')
   }
 
   finalScore = Math.round(Math.max(0, Math.min(100, finalScore)))

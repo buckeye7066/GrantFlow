@@ -2830,6 +2830,48 @@ export function buildProfileSignals({ profile, sections, asOf = null }) {
     signal_richness: keywordSet.size > 0 ? Math.min(100, keywordSet.size) : 0,
   }
 
+  // Educators / grant-seeking professionals must not inherit student-aid needs
+  // from narrative keywords ("STEM education pathways", "scholarship", etc.).
+  const eduSectionForGate = sections?.education ?? sections?.education_details ?? {}
+  const hasExplicitStudentEnrollment =
+    applicantType === 'student' ||
+    Boolean(
+      eduSectionForGate.currently_enrolled ||
+        eduSectionForGate.enrolled_in_school ||
+        eduSectionForGate.is_student ||
+        eduSectionForGate.current_institution ||
+        eduSectionForGate.school_name ||
+        eduSectionForGate.grade_level ||
+        (Array.isArray(eduSectionForGate.target_colleges) && eduSectionForGate.target_colleges.length > 0),
+    ) ||
+    demographicSet.has('current_student')
+
+  if (!hasExplicitStudentEnrollment) {
+    for (const studentAidNeed of ['scholarship', 'student_aid', 'student_living', 'cost_of_attendance']) {
+      needs.delete(studentAidNeed)
+    }
+    const tagHaystack = [
+      ...(Array.isArray(profile?.tags) ? profile.tags : []),
+      profile?.primary_type,
+      basic?.notes,
+      sections?.narrative?.mission,
+      sections?.narrative?.primary_goal,
+    ]
+      .filter(Boolean)
+      .join(' ')
+      .toLowerCase()
+    const isEducatorOrGrantSeeker =
+      /\beducator\b|\binstructor\b|\bteacher\b|\bprofessor\b|\bcommunity (?:leader|advocate)\b|\bgrant\b|\bfunding\b|\bnonprofit\b|\bministr/.test(
+        tagHaystack,
+      )
+    const adultLearner = Boolean(
+      eduSectionForGate.returning_adult || eduSectionForGate.job_retraining || eduSectionForGate.ged_graduate,
+    )
+    if ((isEducatorOrGrantSeeker || applicantType === 'individual') && !adultLearner) {
+      needs.delete('education')
+    }
+  }
+
   return {
     keywords: Array.from(keywordSet),
     keywordSet,

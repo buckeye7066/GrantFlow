@@ -298,6 +298,12 @@ const EXCLUSIVE_ENTITY_REQUIREMENTS = {
     /\b(must be|limited to|exclusively for|only for)\s+(?:currently\s+)?enrolled students?\b/i,
     /\bcurrently enrolled\b/i,
     /\benrollment verification\b/i,
+    /\bfor\s+(?:tn\s+|state\s+)?students?\s+(?:with|pursuing|enrolled|attending)\b/i,
+    /\b(?:female|women(?:'s)?)\s+students?\b/i,
+    /\bscholarships?\s+for\s+(?:female\s+)?students?\b/i,
+    /\b(?:hope|tsaa|step\s+up|tennessee\s+promise|pell|fseog|fafsa)\b/i,
+    /\bcost\s+of\s+attendance\b/i,
+    /\broom\s+and\s+board\b/i,
   ],
   nonprofit: [
     /\b(nonprofits?|non-profit organizations?|501\(c\)\(3\)|501c3|charitable organizations?)\s+(only|required|eligible)\b/i,
@@ -452,6 +458,18 @@ export function normalizeOpportunity(rawOpp) {
     matchesExclusiveEntityRequirement(text, 'business') ||
     (entityTypesAllowed.length > 0 && entityTypesAllowed.every(t => t === 'business'))
 
+  const requiresWomen =
+    Boolean(rawOpp.requires_women) ||
+    matchesAnyPattern(text, [
+      /\bfemale\s+students?\b/i,
+      /\bwomen(?:'s)?\s+engineers?\b/i,
+      /\bwomen\s+only\b/i,
+      /\bfor\s+women\b/i,
+      /\bwomen\s+in\s+(?:stem|engineering|business)\b/i,
+    ]) ||
+    (allNeedTypes.includes('women') &&
+      (allNeedTypes.includes('education') || /\bstudents?\b/i.test(text)))
+
   // -- Has real application URL? --
   const hasApplicationUrl = Boolean(
     rawOpp.application_url ||
@@ -502,6 +520,7 @@ export function normalizeOpportunity(rawOpp) {
     isCaregiverProgram,
     requiresVeteran,
     requiresStudent,
+    requiresWomen,
     requiresNonprofit,
     requiresBusiness,
     hasApplicationUrl,

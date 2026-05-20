@@ -8,6 +8,7 @@ import { seedNationalPrograms } from '../services/seed/seedNationalPrograms.js'
 import { runCrawler } from '../services/crawlers/crawlerManager.js'
 import { canonicalizeOpportunityList } from '../services/matching/resultEnricher.js'
 import { extractProfileData, applyRelevanceFilter } from '../services/relevanceFilter.js'
+import { computeMatchDecision } from '../services/matchDecisionEngine.js'
 
 const JOHN_WHITE = {
   id: 'profile-john-white-discover85',
@@ -77,6 +78,44 @@ describe('Dr. John White Discover at 85%', () => {
     expect(ctx.signals?.location?.state).toBe('TN')
     expect(ctx.signals?.location?.zip).toBe('37312')
     expect(ctx.signals?.location?.city?.toLowerCase()).toContain('cleveland')
+  })
+
+  it('rejects irrelevant student scholarships and search portals', async () => {
+    const ctx = await loadProfileContext(db, JOHN_WHITE.id)
+    const irrelevant = [
+      {
+        title: 'Tennessee STEP UP Scholarship',
+        description: 'Need-based supplement to the HOPE Scholarship for TN students with adjusted gross income of $36,000 or less.',
+        state: 'TN',
+        categories: ['scholarship', 'education', 'student_aid'],
+        url: 'https://example.com/step-up',
+      },
+      {
+        title: 'Society of Women Engineers (SWE) Scholarships',
+        description: 'Scholarships for female students pursuing engineering, computer science, math, or related STEM fields.',
+        categories: ['scholarship', 'education', 'women', 'stem'],
+        is_national: true,
+        url: 'https://swe.org',
+      },
+      {
+        title: 'Fastweb — Housing & Living Expense Scholarship Search',
+        description: 'Scholarship search for housing-eligible awards, room-and-board scholarships, and cost-of-attendance grants.',
+        categories: ['scholarship', 'education', 'student_aid', 'housing'],
+        type: 'portal',
+        funding_type: 'referral',
+        is_national: true,
+        url: 'https://fastweb.com',
+      },
+    ]
+
+    for (const opp of irrelevant) {
+      const decision = computeMatchDecision(ctx.profile, opp, {
+        profileSections: ctx.sections,
+        signals: ctx.signals,
+      })
+      expect(decision.score).toBeLessThan(85)
+      expect(decision.decision).not.toBe('ACCEPT')
+    }
   })
 
   it('returns at least one opportunity at or above 85% after comprehensive crawl', async () => {

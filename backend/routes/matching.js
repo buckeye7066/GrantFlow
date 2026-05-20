@@ -700,6 +700,9 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
           if (opportunityHasStudentAidOverlap(opp)) return score
           return Math.min(score, CROSS_CATEGORY_CAP)
         }
+        if (!profileNormForDecision.isStudent && opportunityHasStudentAidOverlap(opp)) {
+          return Math.min(score, CROSS_CATEGORY_CAP)
+        }
         return score
       }
 
