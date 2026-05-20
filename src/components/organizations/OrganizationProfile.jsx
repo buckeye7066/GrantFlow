@@ -215,6 +215,7 @@ export default function OrganizationProfile({
       queryClient.invalidateQueries({ queryKey: ['organization', organizationId] });
       queryClient.invalidateQueries({ queryKey: ['organizations'] });
       setShowEditForm(false);
+      setEditCoreOpen(false);
       toast({
         title: "✓ Saved",
         description: "Your changes have been saved automatically.",
