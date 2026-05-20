@@ -1,6 +1,6 @@
 import { dispatchCrawlerJob } from './crawlerDispatcher.js'
 import { randomUUID } from 'crypto'
-import { buildProfileSignals } from './profileHelpers.js'
+import { buildProfileSignals, computeProfileDigest } from './profileHelpers.js'
 
 /**
  * Check if a profile has student indicators
@@ -208,12 +208,30 @@ function checkHealthIndicators({ profile, sections, signals }) {
  * @param {object} options - Additional options (uploadDir, getOpenAI for dispatcher)
  * @returns {Promise<void>}
  */
+function withDiscoveryMetadata(parameters, { profileDigest, trigger }) {
+  const merged = { ...(parameters && typeof parameters === 'object' ? parameters : {}) }
+  if (profileDigest) merged._profile_digest = profileDigest
+  if (trigger) merged._trigger = trigger
+  return merged
+}
+
 export async function triggerAutoDiscoveryCrawlers(db, profileId, options = {}) {
   try {
     if (!profileId) {
       console.warn('[auto-discovery] No profileId provided, skipping auto-discovery')
       return
     }
+
+    const requestedBy = options.requestedBy || 'auto-discovery'
+    let profileDigest = options.profileDigest
+    if (!profileDigest) {
+      try {
+        profileDigest = await computeProfileDigest(db, profileId)
+      } catch (digestErr) {
+        console.warn('[auto-discovery] Unable to compute profile digest:', digestErr?.message || digestErr)
+      }
+    }
+    const discoveryMeta = { profileDigest, trigger: options.trigger || null }
 
     const profile = await db.prepare('SELECT * FROM profiles WHERE id = ?').get(profileId)
     if (!profile) {
@@ -249,7 +267,7 @@ export async function triggerAutoDiscoveryCrawlers(db, profileId, options = {}) 
       id: randomUUID(),
       type: 'local',
       profile_id: profileId,
-      parameters: { radius: 25 }
+      parameters: withDiscoveryMetadata({ radius: 25 }, discoveryMeta),
     })
     
     // 2. Scholarship crawler (if student indicators exist)
@@ -259,7 +277,7 @@ export async function triggerAutoDiscoveryCrawlers(db, profileId, options = {}) 
         id: randomUUID(),
         type: 'scholarship',
         profile_id: profileId,
-        parameters: {}
+        parameters: withDiscoveryMetadata({}, discoveryMeta),
       })
 
       // 2a. Student bridge funding (off-campus living + move-in + emergency
@@ -269,7 +287,7 @@ export async function triggerAutoDiscoveryCrawlers(db, profileId, options = {}) 
         id: randomUUID(),
         type: 'student_bridge_funding',
         profile_id: profileId,
-        parameters: {},
+        parameters: withDiscoveryMetadata({}, discoveryMeta),
       })
     }
 
@@ -281,7 +299,7 @@ export async function triggerAutoDiscoveryCrawlers(db, profileId, options = {}) 
         id: randomUUID(),
         type: 'health_resources',
         profile_id: profileId,
-        parameters: { include_trials: consent }
+        parameters: withDiscoveryMetadata({ include_trials: consent }, discoveryMeta),
       })
     }
     
@@ -291,9 +309,12 @@ export async function triggerAutoDiscoveryCrawlers(db, profileId, options = {}) 
       id: randomUUID(),
       type: 'comprehensive',
       profile_id: profileId,
-      parameters: {
-        fallback_zip_limit: 100 // Start with 100 zips, expand over time
-      }
+      parameters: withDiscoveryMetadata(
+        {
+          fallback_zip_limit: 100, // Start with 100 zips, expand over time
+        },
+        discoveryMeta,
+      ),
     })
 
         // 4. Government Funding crawler (federal and state grants)
@@ -301,7 +322,7 @@ export async function triggerAutoDiscoveryCrawlers(db, profileId, options = {}) 
                 id: randomUUID(),
                 type: 'government_funding',
                 profile_id: profileId,
-                parameters: {}
+                parameters: withDiscoveryMetadata({}, discoveryMeta),
         })
 
         // 5. Student Grants crawler (scholarships, tuition assistance)
@@ -311,7 +332,7 @@ export async function triggerAutoDiscoveryCrawlers(db, profileId, options = {}) 
                           id: randomUUID(),
                           type: 'student_grants',
                           profile_id: profileId,
-                          parameters: {}
+                          parameters: withDiscoveryMetadata({}, discoveryMeta),
                 })
         }
 
@@ -320,7 +341,7 @@ export async function triggerAutoDiscoveryCrawlers(db, profileId, options = {}) 
                 id: randomUUID(),
                 type: 'special_needs',
                 profile_id: profileId,
-                parameters: {}
+                parameters: withDiscoveryMetadata({}, discoveryMeta),
         })
 
         // 7. ECF / HCBS Benefits crawler (Medicaid waivers, community-based services)
@@ -328,7 +349,7 @@ export async function triggerAutoDiscoveryCrawlers(db, profileId, options = {}) 
                 id: randomUUID(),
                 type: 'ecf_hcbs',
                 profile_id: profileId,
-                parameters: {}
+                parameters: withDiscoveryMetadata({}, discoveryMeta),
         })
 
         // 8. Volunteer fire department / EMS grants
@@ -338,10 +359,10 @@ export async function triggerAutoDiscoveryCrawlers(db, profileId, options = {}) 
             id: randomUUID(),
             type: 'government_funding',
             profile_id: profileId,
-            parameters: {
+            parameters: withDiscoveryMetadata({
               focus_areas: ['fire_department', 'afg', 'safer', 'fema_grants', 'volunteer_fire'],
               keywords: ['Assistance to Firefighters Grant', 'SAFER grant', 'volunteer fire department', 'EMS grant', 'FEMA AFG'],
-            }
+            }, discoveryMeta),
           })
         }
 
@@ -352,10 +373,10 @@ export async function triggerAutoDiscoveryCrawlers(db, profileId, options = {}) 
             id: randomUUID(),
             type: 'government_funding',
             profile_id: profileId,
-            parameters: {
+            parameters: withDiscoveryMetadata({
               focus_areas: ['faith_based', 'church', 'community_development', 'social_services'],
               keywords: ['faith-based organization grant', 'community development church', 'CDBG faith based', 'HHS faith based'],
-            }
+            }, discoveryMeta),
           })
         }
 
@@ -366,10 +387,10 @@ export async function triggerAutoDiscoveryCrawlers(db, profileId, options = {}) 
             id: randomUUID(),
             type: 'government_funding',
             profile_id: profileId,
-            parameters: {
+            parameters: withDiscoveryMetadata({
               focus_areas: ['rural', 'agriculture', 'usda', 'tribal'],
               keywords: ['USDA rural development', 'tribal grant', 'agriculture grant', 'rural community', 'rural cooperative'],
-            }
+            }, discoveryMeta),
           })
         }
 
@@ -380,10 +401,10 @@ export async function triggerAutoDiscoveryCrawlers(db, profileId, options = {}) 
             id: randomUUID(),
             type: 'curated_benefits',
             profile_id: profileId,
-            parameters: {
+            parameters: withDiscoveryMetadata({
               focus_areas: ['single_parent', 'childcare', 'tanf', 'child_support', 'wic', 'head_start', 'ccap'],
               priority: 'high',
-            }
+            }, discoveryMeta),
           })
         }
 
@@ -394,21 +415,21 @@ export async function triggerAutoDiscoveryCrawlers(db, profileId, options = {}) 
             id: randomUUID(),
             type: 'curated_benefits',
             profile_id: profileId,
-            parameters: {
+            parameters: withDiscoveryMetadata({
               focus_areas: ['senior', 'medicare', 'medicaid_senior', 'meals_on_wheels', 'senior_nutrition', 'property_tax_relief', 'senior_housing', 'aaa', 'ship_counseling'],
               priority: 'high',
-            }
+            }, discoveryMeta),
           })
         }
 
     // Insert all jobs into database
     const insertStmt = db.prepare(`
       INSERT INTO crawler_jobs (id, type, status, profile_id, parameters, requested_by)
-      VALUES (?, ?, 'queued', ?, ?, 'auto-discovery')
+      VALUES (?, ?, 'queued', ?, ?, ?)
     `)
 
     for (const job of jobs) {
-      await insertStmt.run(job.id, job.type, job.profile_id, JSON.stringify(job.parameters))
+      await insertStmt.run(job.id, job.type, job.profile_id, JSON.stringify(job.parameters), requestedBy)
     }
 
     // Dispatch jobs asynchronously (fire and forget)

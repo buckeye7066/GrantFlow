@@ -2808,6 +2808,23 @@ if (process.env.NODE_ENV !== 'test') {
     console.log('[Anya] Autonomous operations disabled — running basic startup crawlers only');
   }
 
+  // Daily profile-aware auto-discovery (independent of ANYA_AUTONOMOUS_*).
+  if (process.env.AUTO_DISCOVERY_DAILY_ENABLED === 'true') {
+    const SCHEDULE_CHECK_MS = 30 * 60 * 1000;
+    setInterval(() => {
+      import('./services/scheduledAutoDiscovery.js')
+        .then(({ checkScheduledAutoDiscovery }) => {
+          checkScheduledAutoDiscovery(db, { uploadDir: uploadsDir, getOpenAI: null }).catch((err) => {
+            console.error('[scheduled-auto-discovery] Scheduled check failed:', err?.message || err);
+          });
+        })
+        .catch((err) => {
+          serverLogger.debug('scheduled_auto_discovery.import_failed', { error: err?.message || String(err) });
+        });
+    }, SCHEDULE_CHECK_MS);
+    console.log('[scheduled-auto-discovery] Daily profile-aware discovery enabled (checking every 30 min)');
+  }
+
   // Deadline expiry + notification cron (runs daily at 2am, and once at startup after 5s delay).
   // Marks opportunities with passed deadlines as inactive and generates approaching-deadline notifications.
   async function runDeadlineCron() {

@@ -17,6 +17,7 @@ import {
   startBackgroundCodeCrawlAndRepair,
   checkSchedule,
 } from './anyaAutonomousScheduler.js'
+import { checkScheduledAutoDiscovery } from './scheduledAutoDiscovery.js'
 
 let _initialized = false
 let _scheduleIntervalId = null
@@ -116,6 +117,21 @@ _scheduleIntervalId = setInterval(() => {
     } else {
       log.info('[AnyaBootstrap] Schedule runner skipped (ANYA_RUN_ON_SCHEDULE !== "true")')
       report.schedule_runner = { skipped: true }
+    }
+
+    // 6. Daily profile-aware auto-discovery (independent of ANYA_AUTONOMOUS_*).
+    if (process.env.AUTO_DISCOVERY_DAILY_ENABLED === 'true') {
+      const SCHEDULE_CHECK_MS = 30 * 60 * 1000
+      const dailyIntervalId = setInterval(() => {
+        checkScheduledAutoDiscovery(db).catch((err) => {
+          console.error('[AnyaBootstrap] Scheduled auto-discovery check failed:', err?.message || err)
+        })
+      }, SCHEDULE_CHECK_MS)
+      if (dailyIntervalId.unref) dailyIntervalId.unref()
+      report.scheduled_auto_discovery = { started: true, interval_ms: SCHEDULE_CHECK_MS }
+      log.info('[AnyaBootstrap] Daily profile-aware auto-discovery enabled (checking every 30 min)')
+    } else {
+      report.scheduled_auto_discovery = { skipped: true }
     }
 
     report.completed_at = new Date().toISOString()

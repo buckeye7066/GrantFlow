@@ -255,6 +255,26 @@ export function startBackgroundServices({ db, uploadsDir, actualPort, loggedCors
           console.log('[Anya] Scheduled runner enabled (checking every 30 min)');
         }
 
+        // Daily profile-aware auto-discovery (independent of ANYA_AUTONOMOUS_*).
+        if (process.env.AUTO_DISCOVERY_DAILY_ENABLED === 'true') {
+          const SCHEDULE_CHECK_MS = 30 * 60 * 1000;
+          setInterval(() => {
+            import('../services/scheduledAutoDiscovery.js')
+              .then(({ checkScheduledAutoDiscovery }) => {
+                checkScheduledAutoDiscovery(db, { uploadDir: uploadsDir }).catch((err) => {
+                  console.error(
+                    '[scheduled-auto-discovery] Scheduled check failed:',
+                    err?.message || err,
+                  );
+                });
+              })
+              .catch((e) => console.warn('[background]', e?.message || e));
+          }, SCHEDULE_CHECK_MS);
+          console.log(
+            '[scheduled-auto-discovery] Daily profile-aware discovery enabled (checking every 30 min)',
+          );
+        }
+
         // Recurring background code-crawl-and-repair every 60 minutes.
         if (typeof startBackgroundCodeCrawlAndRepair === 'function') {
           const CODE_CRAWL_INTERVAL_MS = 60 * 60 * 1000;

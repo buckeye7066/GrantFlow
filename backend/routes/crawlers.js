@@ -1610,7 +1610,7 @@ router.get('/auto-discovery-status/:profileId', async (req, res) => {
         SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed,
         SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed
       FROM crawler_jobs
-      WHERE profile_id = ? AND requested_by = 'auto-discovery'
+      WHERE profile_id = ? AND requested_by IN ('auto-discovery', 'scheduled-auto-discovery')
     `).get(profileId)
 
     return res.json({
