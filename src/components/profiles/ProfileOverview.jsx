@@ -1,9 +1,19 @@
-import React, { useMemo, useRef } from "react"
+import React, { useMemo, useRef, useState } from "react"
 import { format, formatDistanceToNow } from "date-fns"
 import { Badge } from "@/components/ui/badge"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Switch } from "@/components/ui/switch"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
 import {
   ArrowRight,
   CalendarClock,
@@ -697,7 +707,11 @@ export default function ProfileOverview({
   fundsTotal = 0,
   billing = null,
   onNavigateToUniversities,
+  onRenameProfile,
+  isRenamingProfile = false,
 }) {
+  const [renameOpen, setRenameOpen] = useState(false)
+  const [renameValue, setRenameValue] = useState("")
   const { state: dashboardPrefs } = useDashboardPreferences()
   const theme = THEME_PRESETS[dashboardPrefs.colorTheme] ?? THEME_PRESETS.blue
   const columnMap = {
@@ -869,6 +883,21 @@ export default function ProfileOverview({
             <div className="space-y-3">
               <div className="flex items-center gap-3 flex-wrap">
                 <h1 className="text-3xl md:text-4xl font-bold text-slate-900">{profile.display_name}</h1>
+                {onRenameProfile ? (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="h-8 gap-1.5 text-slate-600"
+                    onClick={() => {
+                      setRenameValue(profile.display_name || "")
+                      setRenameOpen(true)
+                    }}
+                  >
+                    <PenSquare className="w-3.5 h-3.5" />
+                    Edit name
+                  </Button>
+                ) : null}
                 {profile.status ? (
                   <Badge className="bg-emerald-50 text-emerald-700 border-emerald-200 capitalize">{profile.status}</Badge>
                 ) : null}
@@ -1105,6 +1134,52 @@ export default function ProfileOverview({
           <li>Introduce audit history, reviewer assignments, and collaborative comments ahead of grants intake.</li>
         </ul>
       </section>
+
+      <Dialog open={renameOpen} onOpenChange={setRenameOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Edit profile name</DialogTitle>
+            <DialogDescription>
+              This is the name shown across GrantFlow — billing, matching, and your profile list. For organizations,
+              enter the legal or public organization name.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2">
+            <Label htmlFor="profile-display-name">Profile / organization name</Label>
+            <Input
+              id="profile-display-name"
+              value={renameValue}
+              onChange={(event) => setRenameValue(event.target.value)}
+              placeholder="e.g. Church of God of Prophecy International Offices"
+              autoFocus
+            />
+          </div>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setRenameOpen(false)} disabled={isRenamingProfile}>
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              disabled={isRenamingProfile || !renameValue.trim()}
+              onClick={async () => {
+                const nextName = renameValue.trim()
+                if (!nextName || !onRenameProfile) return
+                await onRenameProfile(nextName)
+                setRenameOpen(false)
+              }}
+            >
+              {isRenamingProfile ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin mr-2" />
+                  Saving…
+                </>
+              ) : (
+                "Save name"
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

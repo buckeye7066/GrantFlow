@@ -17,6 +17,15 @@ import { normalizeState } from './stateNormalization.js';
 const SYNC_RULES = [
   {
     sectionKey: 'basic_information',
+    sectionField: 'full_name',
+    profileColumn: 'display_name',
+    transform: (v) => {
+      const trimmed = typeof v === 'string' ? v.trim() : String(v ?? '').trim()
+      return trimmed.length >= 2 ? trimmed.slice(0, 200) : null
+    },
+  },
+  {
+    sectionKey: 'basic_information',
     sectionField: 'state',
     profileColumn: 'state',
     transform: (v) => normalizeState(v),
@@ -116,4 +125,42 @@ export function fullResyncProfileFields(db, profileId) {
   }
 }
 
-export default { syncProfileFieldsFromSection, fullResyncProfileFields };
+/**
+ * Keep basic_information.full_name aligned when the profile title changes.
+ */
+export async function syncDisplayNameToBasicInformation(db, profileId, displayName) {
+  if (!db || !profileId) return
+
+  const trimmed = String(displayName || '').trim()
+  if (trimmed.length < 2) return
+
+  let existing = {}
+  try {
+    const row = await db
+      .prepare(
+        'SELECT data FROM profile_sections WHERE profile_id = ? AND section_key = ? LIMIT 1',
+      )
+      .get(profileId, 'basic_information')
+    if (row?.data) {
+      existing = typeof row.data === 'object' ? row.data : JSON.parse(row.data || '{}')
+    }
+  } catch {
+    existing = {}
+  }
+
+  const merged = { ...existing, full_name: trimmed.slice(0, 200) }
+
+  await db
+    .prepare(
+      `
+        INSERT INTO profile_sections (profile_id, section_key, data, updated_by)
+        VALUES (?, 'basic_information', ?, 'display-name-sync')
+        ON CONFLICT(profile_id, section_key) DO UPDATE SET
+          data = excluded.data,
+          updated_at = CURRENT_TIMESTAMP
+      `,
+    )
+    .run(profileId, JSON.stringify(merged))
+}
+
+export default { syncProfileFieldsFromSection, fullResyncProfileFields, syncDisplayNameToBasicInformation };

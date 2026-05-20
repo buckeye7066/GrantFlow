@@ -8,6 +8,7 @@ import {
   requestProfileSectionAI,
   upsertProfileSection,
   uploadProfileAvatar,
+  updateProfile,
 } from "@/api/profiles"
 import { ingestDocument } from "@/api/documents"
 import ProfileOverview from "@/components/profiles/ProfileOverview"
@@ -93,6 +94,7 @@ export default function ProfileDetail() {
     mutationFn: ({ sectionKey, values }) => upsertProfileSection(profileId, sectionKey, values),
     onSuccess: (response, variables) => {
       queryClient.invalidateQueries({ queryKey: ["profile", profileId] })
+      queryClient.invalidateQueries({ queryKey: ["profiles"] })
       const rejected = Array.isArray(response?.rejected) ? response.rejected : []
       toast({
         title: rejected.length > 0 ? "Section saved with skipped fields" : "Section saved",
@@ -236,12 +238,45 @@ export default function ProfileDetail() {
     },
   })
 
+  const renameProfileMutation = useMutation({
+    mutationFn: (displayName) => updateProfile(profileId, { display_name: displayName }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["profile", profileId] })
+      queryClient.invalidateQueries({ queryKey: ["profiles"] })
+      toast({
+        title: "Profile name updated",
+        description: "The new name is saved and synced to Basic Information.",
+      })
+    },
+    onError: (err) => {
+      toast({
+        title: "Rename failed",
+        description: err instanceof Error ? err.message : "Unable to update the profile name right now.",
+        variant: "destructive",
+      })
+    },
+  })
+
+  const handleRenameProfile = React.useCallback(
+    async (displayName) => {
+      await renameProfileMutation.mutateAsync(displayName)
+    },
+    [renameProfileMutation],
+  )
+
   const handleOpenSection = React.useCallback((sectionKey, data = {}) => {
+    let sectionData = data ?? {}
+    if (sectionKey === "basic_information" && profile?.display_name) {
+      const existingName = String(sectionData.full_name || "").trim()
+      if (!existingName) {
+        sectionData = { ...sectionData, full_name: profile.display_name }
+      }
+    }
     setEditingSection({
       key: sectionKey,
-      data: data ?? {},
+      data: sectionData,
     })
-  }, [])
+  }, [profile?.display_name])
 
   const handleCloseEditor = React.useCallback(() => {
     if (savingSectionKey) return
@@ -709,6 +744,8 @@ export default function ProfileDetail() {
               isUploadingDocument={uploadDocumentMutation.isPending}
               fundsTotal={profile.pipeline_funds_total ?? 0}
               onNavigateToUniversities={isStudentProfile ? () => setActiveTab("universities") : undefined}
+              onRenameProfile={handleRenameProfile}
+              isRenamingProfile={renameProfileMutation.isPending}
             />
           </TabsContent>
 

@@ -27,7 +27,7 @@ import {
 } from '../utils/accessControl.js'
 import { isDesignatedProfileId } from '../utils/ensureDesignatedProfiles.js'
 import { resolveUploadsDir } from '../utils/uploadsDir.js'
-import { syncProfileFieldsFromSection } from '../utils/profileSectionSync.js'
+import { syncProfileFieldsFromSection, syncDisplayNameToBasicInformation } from '../utils/profileSectionSync.js'
 import { guardProfileSectionPayload } from '../utils/profileSuggestionGuards.js'
 import { normalizeProfileSectionData } from '../services/profileHelpers.js'
 import { resolveProfileType } from '../services/profileTypeRegistry.js'
@@ -1449,6 +1449,14 @@ router.put('/:id', async (req, res) => {
   if (updates.length > 0) {
     const stmt = req.db.prepare(`UPDATE profiles SET ${updates.join(', ')} WHERE id = ?`)
     await stmt.run(...values, id)
+  }
+
+  if (display_name !== undefined) {
+    try {
+      await syncDisplayNameToBasicInformation(req.db, id, display_name)
+    } catch (syncErr) {
+      console.warn(`[profiles] display_name → basic_information sync failed for ${id}:`, syncErr?.message)
+    }
   }
 
   // Persist flat application fields into profile_sections so application settings save and completeness updates.
