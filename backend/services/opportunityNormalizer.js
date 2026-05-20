@@ -377,9 +377,10 @@ export function normalizeOpportunity(rawOpp) {
     String(rawOpp.state ?? '').toLowerCase() === 'nationwide' ||
     String(rawOpp.state ?? '').toLowerCase() === 'national'
 
+  const oppState = rawOpp.state ?? rawOpp.stateRestriction ?? null
   const geography = {
     isNational,
-    state: rawOpp.state ?? null,
+    state: oppState,
     zip: rawOpp.geo_zip ?? null,
     county: rawOpp.geo_county ?? null,
   }

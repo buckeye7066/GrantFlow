@@ -46,7 +46,7 @@ import {
 export { normalizeProfile, computeProfileFingerprint } from './profileNormalizer.js'
 export { normalizeOpportunity, computeOpportunityFingerprint } from './opportunityNormalizer.js'
 
-export const MATCHER_VERSION = '4.1.0'
+export const MATCHER_VERSION = '4.1.1'
 
 // Re-export thresholds so consumers don't need to know about the config file
 export { SCORE_FLOOR, DEFAULT_MIN_SCORE, RELAX_THRESHOLDS, FALLBACK_TOP_N }
@@ -335,8 +335,9 @@ const NEED_SYNONYMS = {
   rent: ['housing', 'rental', 'rent', 'eviction', 'tenant', 'apartment', 'shelter'],
   utilities: ['utility', 'utilities', 'energy', 'electric', 'heating', 'water', 'gas'],
   food: ['food', 'nutrition', 'hunger', 'snap', 'meal', 'pantry', 'grocery'],
-  medical: ['health', 'medical', 'healthcare', 'hospital', 'prescription', 'dental', 'vision'],
-  disability: ['disability', 'disabled', 'accessible', 'accommodation', 'mobility'],
+  medical: ['health', 'medical', 'healthcare', 'hospital', 'prescription', 'dental', 'vision', 'medicaid', 'medicare', 'tenncare'],
+  healthcare: ['health', 'medical', 'healthcare', 'hospital', 'prescription', 'medicaid', 'medicare', 'tenncare', 'clinic'],
+  disability: ['disability', 'disabled', 'accessible', 'accommodation', 'mobility', 'caregiver'],
   transportation: ['transportation', 'transit', 'bus', 'vehicle', 'rideshare', 'car'],
   education: ['education', 'tuition', 'scholarship', 'school', 'college', 'university', 'academic'],
   childcare: ['childcare', 'daycare', 'preschool', 'child care', 'children'],
@@ -921,6 +922,37 @@ function measureProfileDepth(effectiveProfile, effectiveSignals, profileNorm) {
 // ---------------------------------------------------------------------------
 
 /**
+ * Merge declared needs from profile columns, normalized facets, and
+ * buildProfileSignals() output. Most real profiles store needs only in
+ * sections/tags/narrative — not on profiles.needs — so ignoring signals
+ * under-scores well-filled profiles (Goal #3).
+ */
+function collectProfileNeeds(effectiveProfile, effectiveSignals, profileNorm) {
+  const fromProfile = safeParseArrayField(effectiveProfile?.needs, [])
+  const fromNorm = safeParseArrayField(profileNorm?.needCategories, [])
+  const fromSignals =
+    effectiveSignals?.needs instanceof Set
+      ? Array.from(effectiveSignals.needs)
+      : safeParseArrayField(effectiveSignals?.needs, [])
+  const merged = [...fromProfile, ...fromNorm, ...fromSignals]
+    .map((n) => String(n).toLowerCase().trim())
+    .filter(Boolean)
+  return [...new Set(merged)]
+}
+
+function countNeedSynonymHits(rawNeeds, oppText, allOppSignals) {
+  let hits = 0
+  for (const need of rawNeeds) {
+    const synonyms = NEED_SYNONYMS[need] || [need]
+    const matched =
+      synonyms.some((syn) => oppText.includes(syn)) ||
+      allOppSignals.some((signal) => synonyms.some((syn) => signal.includes(syn) || syn.includes(signal)))
+    if (matched) hits++
+  }
+  return hits
+}
+
+/**
  * Geographic relevance (0-100 subscale).
  * Missing profile location → 35 (neutral baseline, not penalty).
  * State mismatch → 10 (reduced, never zero).
@@ -932,7 +964,7 @@ function scoreGeoComponent(effectiveProfile, effectiveSignals, opportunity) {
   const profileCity = profileLocation?.city ?? effectiveProfile?.city ?? null
   const profileState = profileLocation?.state ?? effectiveProfile?.state ?? null
 
-  const oppState = opportunity?.state ?? null
+  const oppState = opportunity?.state ?? opportunity?.stateRestriction ?? null
   const oppZip = opportunity?.geo_zip ?? null
   const oppCounty = opportunity?.geo_county ?? null
   const oppIsNational =
@@ -1054,7 +1086,7 @@ function scoreNeedComponent(effectiveProfile, effectiveSignals, effectiveFacets,
   let subscale = 0
 
   // 1. Need-synonym matching (0-45 of subscale)
-  const rawNeeds = safeParseArrayField(effectiveProfile?.needs, [])
+  const rawNeeds = collectProfileNeeds(effectiveProfile, effectiveSignals, profileNorm)
   const oppKws = safeParseArrayField(opportunity?.keywords, [])
   const oppCats = safeParseArrayField(opportunity?.categories, [])
   const allOppSignals = [...oppKws, ...oppCats].map((t) => String(t).toLowerCase())
@@ -1780,6 +1812,22 @@ export function scoreOpportunity(profile, opportunity) {
   if (populationMissionBoost > 0) {
     rawScore = Math.min(100, rawScore + populationMissionBoost)
     housingBonusReasons.push(...populationMissionHits)
+  }
+
+  // Strong local fit: profile need(s) align with this program AND geography
+  // is at least state-level (or closer). Surfaces TN SNAP / TennCare / AAAD
+  // at realistic slider thresholds for profiles like Dr. John White.
+  const profileNeedsForBoost = collectProfileNeeds(effectiveProfile, effectiveSignals, profileNorm)
+  if (profileNeedsForBoost.length > 0 && geo.subscale >= 75) {
+    const oppKwsForBoost = safeParseArrayField(opportunity?.keywords, [])
+    const oppCatsForBoost = safeParseArrayField(opportunity?.categories, [])
+    const oppSignalsForBoost = [...oppKwsForBoost, ...oppCatsForBoost].map((t) => String(t).toLowerCase())
+    const needHitsForBoost = countNeedSynonymHits(profileNeedsForBoost, oppText, oppSignalsForBoost)
+    if (needHitsForBoost > 0) {
+      const needGeoBoost = Math.min(24, 12 + needHitsForBoost * 5)
+      rawScore = Math.min(100, rawScore + needGeoBoost)
+      housingBonusReasons.push(`Direct need + geographic fit (+${needGeoBoost})`)
+    }
   }
 
   // ── Floor guarantee: validated opportunities always score ≥ SCORE_FLOOR ──

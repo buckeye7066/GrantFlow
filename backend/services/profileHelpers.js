@@ -828,10 +828,14 @@ function extractZipFromAddress(address) {
  */
 function extractCityFromAddress(address) {
   if (!address || typeof address !== 'string') return null
+  const normalized = address.replace(/\r/g, '').trim()
+  // Prefer "City, ST ZIP" on one line (common in multiline addresses).
+  const cityStateZip = normalized.match(/\b([A-Za-z][A-Za-z\s.'-]+),\s*([A-Z]{2})\s+(\d{5})(?:-\d{4})?\b/)
+  if (cityStateZip) return cityStateZip[1].trim()
   // Split by newlines, look for line with city, state ZIP pattern
-  const lines = address.split(/\n|,/).map(l => l.trim()).filter(Boolean)
+  const lines = normalized.split(/\n/).map((l) => l.trim()).filter(Boolean)
   for (const line of lines) {
-    const match = line.match(/^([A-Za-z\s]+),?\s+[A-Z]{2}\s*\d{5}/)
+    const match = line.match(/^([A-Za-z][A-Za-z\s.'-]+),?\s+[A-Z]{2}\s*\d{5}/)
     if (match) return match[1].trim()
   }
   return null

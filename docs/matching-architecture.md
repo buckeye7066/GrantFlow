@@ -22,7 +22,7 @@ own. `matchingEngine.js` is a tiny wrapper that exposes the legacy
 `scoreOpportunity(profile, opp)` — a scoring helper only, NEVER an acceptance
 authority.
 
-**MATCHER_VERSION: 4.1.0** — `computeMatchDecision()` is the sole
+**MATCHER_VERSION: 4.1.1** — `computeMatchDecision()` is the sole
 acceptance/rejection authority. `scoreOpportunity()` /
 `calculateMatchScore()` return a raw score only and are used solely for
 lightweight ranking and junk pre-filtering.
@@ -69,7 +69,7 @@ prefilter scores are never treated as final user-facing scores.
   matchedProfileTraits: string[],   // Which profile traits matched
   missingEligibilityFields: string[], // Fields needed but missing
   explanation: string,              // Human-readable summary
-  matcherVersion: "4.1.0",
+  matcherVersion: "4.1.1",
   evaluatedAt: ISO timestamp
 }
 ```
@@ -231,11 +231,11 @@ Pipeline entries (grants table) include the `matcher_version`, `profile_fingerpr
 
 ## Matcher Versioning
 
-Current version: **4.1.0** (defined as `MATCHER_VERSION` in
+Current version: **4.1.1** (defined as `MATCHER_VERSION` in
 `backend/services/matchEngine.js`; re-exported by
 `backend/services/matchDecisionEngine.js`)
 
-**Changes from v4.0.0 → v4.1.0 relevant to callers:**
+**Changes from v4.0.0 → v4.1.1 relevant to callers:**
 - Generic / category-empty opportunities now score modestly (max ~45) so
   filler rows no longer surface as strong matches.
 - `scoreCategoryComponent` baseline lowered (15) and floor lowered (5) to
@@ -285,7 +285,7 @@ Re-evaluates all existing pipeline entries using the current decision engine:
   "reviewed": 123,
   "rejected": 221,
   "errors": 0,
-  "matcherVersion": "4.1.0"
+  "matcherVersion": "4.1.1"
 }
 ```
 
@@ -311,12 +311,12 @@ All insertion paths go through `saveToProfilePipeline()` in `opportunityMatcher.
 the sole decision authority; `calculateMatchScore` / `scoreOpportunity` are
 used only as non-authoritative ranking helpers.
 
-### Path audit (v4.1.0)
+### Path audit (v4.1.1)
 
 | Path | Status | Notes |
 |---|---|---|
 | `backend/services/opportunityMatcher.js:saveToProfilePipeline` | ✅ canonical | Production pipeline insertion — sole INSERT authority |
-| `backend/services/itemCrawler.js` | ✅ canonical (v4.1.0) | Uses `computeMatchDecision(profile, opp)` with explicit camelCase→snake_case mapping into `upsertFundingOpportunity` |
+| `backend/services/itemCrawler.js` | ✅ canonical (v4.1.1) | Uses `computeMatchDecision(profile, opp)` with explicit camelCase→snake_case mapping into `upsertFundingOpportunity` |
 | `backend/services/localCrawler.js` | ✅ canonical | Calls `saveToProfilePipeline` |
 | `backend/services/comprehensiveCrawlerOptimized.js` | ✅ canonical | Calls `saveToProfilePipeline` |
 | `backend/services/anyaAutonomousFunctionRunner.js` | ✅ canonical | Calls `saveToProfilePipeline` |
@@ -324,7 +324,7 @@ used only as non-authoritative ranking helpers.
 | `backend/routes/admin.js POST /api/admin/backfill-matches` | ✅ canonical | Re-evaluates using `computeMatchDecision` |
 | `backend/utils/seedOnStartup.js` | ✅ canonical | Inserts into `funding_opportunities`, not grants pipeline |
 | `backend/scripts/seed-profile-grants.mjs` | ✅ canonical | Dev-only; guarded by NODE_ENV/DISABLE_SEEDING; uses `computeMatchDecision` |
-| `scripts/seed-profile-grants.mjs` | ✅ canonical (v4.1.0) | Dev-only; guarded by NODE_ENV/DISABLE_SEEDING; heuristic pre-score via canonical `scoreOpportunity`; `computeMatchDecision` is sole acceptance authority |
+| `scripts/seed-profile-grants.mjs` | ✅ canonical (v4.1.1) | Dev-only; guarded by NODE_ENV/DISABLE_SEEDING; heuristic pre-score via canonical `scoreOpportunity`; `computeMatchDecision` is sole acceptance authority |
 | `scripts/seed-matched-grants.mjs` | ✅ canonical | Dev-only; guarded by NODE_ENV/DISABLE_SEEDING; uses `computeMatchDecision` |
 | `backend/scripts/create-orgs-and-grants.mjs` | ❌ hard-disabled | Throws on load; previous body inserted random placeholder data, bypassing `computeMatchDecision` |
 
@@ -428,7 +428,7 @@ Tests are in:
 
 ### Comprehensive Test Coverage
 
-1. **MATCHER_VERSION** is `4.1.0`
+1. **MATCHER_VERSION** is `4.1.1`
 2. **Profile classes** (ACCEPT/REVIEW/REJECT for each):
    - Caregiver/family profile
    - Student profile (including non-student REJECT for student-only)
