@@ -342,7 +342,7 @@ const matchesSearch =
                 <OrganizationCard
                   key={org.id}
                   organization={org}
-                  onEdit={() => navigate(createPageUrl("OrganizationProfile", { id: org.id }))}
+                  onEdit={() => navigate(createPageUrl("ProfileDetail", { id: org.id }))}
                   onDelete={() => {
                     // Navigate to profile page where delete functionality exists
                     navigate(createPageUrl("OrganizationProfile", { id: org.id }))

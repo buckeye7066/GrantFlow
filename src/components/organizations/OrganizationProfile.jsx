@@ -1,7 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
 import client from '@/api/client';
-import { canonicalizeProfileTypeId } from '@/services/profileTypes';
-import ProfileTypeSelect from '@/components/shared/ProfileTypeSelect';
 import { useMutation, useQueryClient, useQuery } from '@tanstack/react-query';
 import { Link, useNavigate } from 'react-router-dom';
 import { createPageUrl } from '@/utils';
@@ -22,10 +20,6 @@ import AutoTimeTracker from '../billing/AutoTimeTracker';
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/components/ui/use-toast";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { createLogger } from "@/utils/logger";
 import { useAuthStore } from "@/stores/authStore";
 import { isRealProfileId } from "@/api/profileIdGuards";
@@ -53,11 +47,6 @@ export default function OrganizationProfile({
   const [isFindingPicture, setIsFindingPicture] = useState(false);
   const [imgError, setImgError] = React.useState(false);
   const [manualRetryCount, setManualRetryCount] = React.useState(0);
-  const [showEditForm, setShowEditForm] = React.useState(false);
-  const [editCoreOpen, setEditCoreOpen] = React.useState(false);
-  const [editDisplayName, setEditDisplayName] = React.useState('');
-  const [editPrimaryType, setEditPrimaryType] = React.useState('organization');
-  const [editTags, setEditTags] = React.useState('');
   const [showDeleteConfirm, setShowDeleteConfirm] = React.useState(false);
   const isPrint = usePrintMode();
 
@@ -176,16 +165,11 @@ export default function OrganizationProfile({
     setImgError(false);
   }, [orgData?.profile_image_url]);
 
-  useEffect(() => {
-    if (!orgData) return;
-    // Sync the edit dialog fields from the loaded profile data
-    setEditDisplayName(orgData.display_name ?? orgData.name ?? '');
-    setEditPrimaryType(orgData.primary_type ?? orgData.applicant_type ?? 'organization');
-    const tags = Array.isArray(orgData.tags) ? orgData.tags : [];
-    setEditTags(tags.join(', '));
-  }, [orgData]);
 
-
+  const handleEditProfile = React.useCallback(() => {
+    if (!organizationId) return
+    navigate(createPageUrl('ProfileDetail', { id: organizationId }))
+  }, [navigate, organizationId])
   const updateGrantMutation = useMutation({
     mutationFn: ({ id, data }) => client.entities.Grant.update(id, data),
     onSuccess: () => {
@@ -214,8 +198,6 @@ export default function OrganizationProfile({
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['organization', organizationId] });
       queryClient.invalidateQueries({ queryKey: ['organizations'] });
-      setShowEditForm(false);
-      setEditCoreOpen(false);
       toast({
         title: "✓ Saved",
         description: "Your changes have been saved automatically.",
@@ -351,10 +333,6 @@ export default function OrganizationProfile({
 
   const handleBack = () => {
     navigate(createPageUrl('Organizations'));
-  };
-
-  const handleEdit = () => {
-    setShowEditForm(true);
   };
 
   const handleDelete = () => {
@@ -499,7 +477,7 @@ if (_logoUrl && _logoUrl.startsWith('https://') && _validExt) {
                 )}
                  <div
                     className="absolute inset-0 bg-black bg-opacity-0 group-hover:bg-opacity-50 flex items-center justify-center rounded-xl transition-opacity cursor-pointer"
-                    onClick={handleEdit}
+                    onClick={handleEditProfile}
                  >
                     <span className="text-white font-bold opacity-0 group-hover:opacity-100 transition-opacity text-sm">Upload</span>
                 </div>
@@ -528,7 +506,7 @@ if (_logoUrl && _logoUrl.startsWith('https://') && _validExt) {
            )}
            <Button
              variant="outline"
-             onClick={() => setEditCoreOpen(true)}
+             onClick={handleEditProfile}
            >
              Edit Profile
            </Button>
@@ -576,6 +554,10 @@ if (_logoUrl && _logoUrl.startsWith('https://') && _validExt) {
               <TabsTrigger value="documents">Documents</TabsTrigger>
             </TabsList>
             <TabsContent value="details" className="mt-4 print:mt-0">
+              <div className="mb-4 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-900 printable-hidden">
+                This tab shows a quick summary. Click <strong>Edit Profile</strong> to open every comprehensive application section
+                (basic information, organization details, programs &amp; services, financials, location, story &amp; goals, and more).
+              </div>
               <OrganizationProfileDetails
                             organization={flatOrgData}
                 contactMethods={contactMethods}
@@ -840,79 +822,6 @@ if (_logoUrl && _logoUrl.startsWith('https://') && _validExt) {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-
-      {/* Edit Core Profile Dialog (real persisted fields) */}
-      <Dialog open={editCoreOpen} onOpenChange={setEditCoreOpen}>
-        <DialogContent className="max-w-lg">
-          <DialogHeader>
-            <DialogTitle>Edit Profile</DialogTitle>
-            <DialogDescription>
-              Update the display name, profile type, and tags. Profile type controls which sections and funding sources apply.
-            </DialogDescription>
-          </DialogHeader>
-
-          <div className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="profile-display-name">Display name</Label>
-              <Input
-                id="profile-display-name"
-                value={editDisplayName}
-                onChange={(e) => setEditDisplayName(e.target.value)}
-                placeholder="Profile name"
-              />
-            </div>
-
-            <div className="space-y-2">
-              <Label>Profile type</Label>
-              <ProfileTypeSelect
-                value={editPrimaryType}
-                onChange={(next) => setEditPrimaryType(canonicalizeProfileTypeId(next) ?? '')}
-              />
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="profile-tags">Tags (comma-separated)</Label>
-              <Input
-                id="profile-tags"
-                value={editTags}
-                onChange={(e) => setEditTags(e.target.value)}
-                placeholder="e.g. veteran, rural, STEM"
-              />
-            </div>
-          </div>
-
-          <DialogFooter className="flex gap-2 justify-end">
-            <Button
-              variant="outline"
-              onClick={() => setEditCoreOpen(false)}
-              disabled={updateOrgMutation.isPending}
-            >
-              Cancel
-            </Button>
-            <Button
-              onClick={() => {
-                const tags = editTags
-                  .split(',')
-                  .map((t) => t.trim())
-                  .filter(Boolean);
-
-                updateOrgMutation.mutate({
-                  id: organizationId,
-                  data: {
-                    display_name: editDisplayName?.trim() || (orgData.display_name ?? orgData.name ?? ''),
-                    primary_type: editPrimaryType || (orgData.primary_type ?? orgData.applicant_type ?? null),
-                    tags,
-                  },
-                });
-              }}
-              disabled={updateOrgMutation.isPending || !editDisplayName.trim()}
-              className="bg-blue-600 hover:bg-blue-700"
-            >
-              {updateOrgMutation.isPending ? 'Saving…' : 'Save'}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
     </div>
   );
 }
