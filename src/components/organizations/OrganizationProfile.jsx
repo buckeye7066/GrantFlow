@@ -27,6 +27,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { createLogger } from "@/utils/logger";
+import { useAuthStore } from "@/stores/authStore";
+import { isRealProfileId } from "@/api/profileIdGuards";
 
 
 const capitalize = (s) => s && s.charAt(0).toUpperCase() + s.slice(1);
@@ -45,6 +47,7 @@ export default function OrganizationProfile({
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const log = React.useMemo(() => createLogger("OrganizationProfile"), [])
+  const setActiveProfileId = useAuthStore((state) => state.setActiveProfileId);
   const [activeTab, setActiveTab] = useState('details');
   const [isEmailComposerOpen, setIsEmailComposerOpen] = useState(false);
   const [isFindingPicture, setIsFindingPicture] = useState(false);
@@ -161,6 +164,12 @@ export default function OrganizationProfile({
                                                                 }, [orgData]);
   const emails = contactMethods.filter(c => c.type === 'email');
   const phones = contactMethods.filter(c => c.type === 'phone');
+
+  useEffect(() => {
+    if (isRealProfileId(organizationId)) {
+      setActiveProfileId(organizationId);
+    }
+  }, [organizationId, setActiveProfileId]);
 
   useEffect(() => {
     // Reset image error state when organization's profile image URL changes
@@ -392,6 +401,7 @@ export default function OrganizationProfile({
 Return a single JSON object with the key "logo_url" containing the absolute, direct URL to the best image file you found. The URL must end in .png, .jpg, .jpeg, or .svg. For example: {"logo_url": "https://example.com/logo.svg"}`;
 
           const response = await client.integrations.Core.InvokeLLM({
+            profile_id: orgData.id,
             prompt,
             add_context_from_internet: true,
             response_json_schema: {
@@ -419,9 +429,12 @@ if (_logoUrl && _logoUrl.startsWith('https://') && _validExt) {
           }
       } catch (error) {
           console.error("Error finding picture:", error);
+          const message = error?.message?.includes('Profile not found')
+            ? 'Could not verify this profile for AI access. Refresh the page and try again.'
+            : 'An error occurred while the AI was searching for a picture. This can happen with complex websites. Please try uploading manually.';
           toast({
             title: "Error Searching",
-            description: "An error occurred while the AI was searching for a picture. This can happen with complex websites. Please try uploading manually.",
+            description: message,
             variant: "destructive",
           });
       } finally {

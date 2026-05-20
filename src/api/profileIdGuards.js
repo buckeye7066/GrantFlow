@@ -26,6 +26,14 @@ export function isRealProfileId(id) {
   return true
 }
 
+/** Pick the first real profile id from candidates (payload, active context, etc.). */
+export function resolveProfileIdForApi(...candidates) {
+  for (const id of candidates) {
+    if (isRealProfileId(id)) return String(id).trim()
+  }
+  return null
+}
+
 /**
  * Throw a tagged error if `id` is not a real profile id. Designed to live
  * at the top of every `/api/profiles/<id>` helper so we never issue an

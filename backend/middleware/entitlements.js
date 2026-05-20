@@ -1,5 +1,6 @@
 import { requireTierCapability } from '../utils/tierGating.js'
 import { TIER_CAPABILITIES } from '../utils/tierGating.js'
+import { ADMIN_PROFILE_SENTINEL } from '../config/userProfileMappings.js'
 
 export function resolveProfileId(req) {
   const fromParams = req?.params?.profileId ?? req?.params?.profile_id ?? req?.params?.id ?? null
@@ -10,7 +11,8 @@ export function resolveProfileId(req) {
 
   const candidate = fromParams ?? fromBody ?? fromQuery ?? fromCtx ?? fromHeader ?? null
   const normalized = candidate ? String(candidate).trim() : ''
-  return normalized || null
+  if (!normalized || normalized === ADMIN_PROFILE_SENTINEL) return null
+  return normalized
 }
 
 async function profileExists(db, profileId) {

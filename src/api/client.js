@@ -1,7 +1,7 @@
 import { env, getApiBasePrefixForFetch } from '@/config/env.js'
 import { createLogger } from '@/utils/logger'
 import { toast as showToast } from '@/components/ui/use-toast'
-import { assertRealProfileId } from './profileIdGuards'
+import { assertRealProfileId, isRealProfileId, resolveProfileIdForApi } from './profileIdGuards'
 
 // API Client
 
@@ -118,12 +118,14 @@ class APIClient {
   }
 
   getActiveProfileId() {
-    if (this.activeProfileId) return this.activeProfileId
-    if (typeof window !== 'undefined') {
-      const stored = localStorage.getItem('grantflow:active-profile-id')
-      return stored && String(stored).trim() ? String(stored).trim() : null
-    }
-    return null
+    const stored = this.activeProfileId
+      || (typeof window !== 'undefined' ? localStorage.getItem('grantflow:active-profile-id') : null)
+    return isRealProfileId(stored) ? String(stored).trim() : null
+  }
+
+  /** Real profile id for tier-gated API calls (never the __admin__ sentinel). */
+  resolveRequestProfileId(explicitId) {
+    return resolveProfileIdForApi(explicitId, this.getActiveProfileId())
   }
 
   getToken() {
@@ -347,20 +349,13 @@ class APIClient {
       headers['Authorization'] = `Bearer ${token}`;
     }
 
-    const activeProfileId = this.getActiveProfileId()
+    const activeProfileId = this.resolveRequestProfileId(
+      headers['X-Profile-Id'] || requestOptions.profileId || requestOptions.profile_id
+    )
     if (activeProfileId) {
-      // Always enforce the current active profile â do not allow a stale value
-      // passed in via requestOptions.headers to silently override it.
-      if (!headers['X-Profile-Id']) {
-        headers['X-Profile-Id'] = activeProfileId
-      } else if (headers['X-Profile-Id'] !== String(activeProfileId)) {
-        log.warn(
-          `[APIClient] X-Profile-Id header mismatch: passed=${headers['X-Profile-Id']} active=${activeProfileId}. Using active profile id.`
-        )
-        headers['X-Profile-Id'] = activeProfileId
-      }
-    } else if (headers['X-Profile-Id']) {
-      log.warn('[APIClient] X-Profile-Id set in headers but no active profile on client â forwarding caller value.')
+      headers['X-Profile-Id'] = activeProfileId
+    } else {
+      delete headers['X-Profile-Id']
     }
 
     headers['X-Request-Id'] = headers['X-Request-Id'] || requestId;
@@ -807,9 +802,13 @@ class APIClient {
   integrations = {
     Core: {
       InvokeLLM: async (payload = {}) => {
+        const profileId = this.resolveRequestProfileId(payload.profile_id ?? payload.profileId)
+        const body = profileId
+          ? { ...payload, profile_id: profileId }
+          : payload
         return this.fetch('/api/ai/invoke', {
           method: 'POST',
-          body: JSON.stringify(payload),
+          body: JSON.stringify(body),
         });
       },
 

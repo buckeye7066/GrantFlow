@@ -30,6 +30,7 @@ import {
   ADMIN_PROFILE_SENTINEL,
   isRealProfileId,
   assertRealProfileId,
+  resolveProfileIdForApi,
 } from '../../src/api/profileIdGuards.js'
 
 test('isRealProfileId returns false for the __admin__ sentinel', () => {
@@ -74,4 +75,10 @@ test('assertRealProfileId throws for null / undefined / empty string', () => {
 test('assertRealProfileId is a no-op for valid ids', () => {
   assert.doesNotThrow(() => assertRealProfileId('uuid-here', 'getProfile'))
   assert.doesNotThrow(() => assertRealProfileId(42, 'getProfile'))
+})
+
+test('resolveProfileIdForApi skips sentinel and picks first real id', () => {
+  assert.equal(resolveProfileIdForApi('__admin__', null, 'profile-abc'), 'profile-abc')
+  assert.equal(resolveProfileIdForApi('profile-xyz'), 'profile-xyz')
+  assert.equal(resolveProfileIdForApi('__admin__', ''), null)
 })
