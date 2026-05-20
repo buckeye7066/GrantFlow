@@ -153,6 +153,14 @@ export default function OrganizationProfile({
                                                                   }
                                                                       return flat;
                                                                 }, [orgData]);
+
+  const avatarSourceUrl = React.useMemo(() => {
+    if (!orgData) return null
+    return orgData.avatar_download_url || orgData.profile_image_url || orgData.avatar_url || null
+  }, [orgData])
+
+  const { blobUrl: avatarSrc } = useAuthenticatedAvatar(avatarSourceUrl)
+
   const emails = contactMethods.filter(c => c.type === 'email');
   const phones = contactMethods.filter(c => c.type === 'phone');
 
@@ -165,7 +173,7 @@ export default function OrganizationProfile({
   useEffect(() => {
     // Reset image error state when organization's profile image URL changes
     setImgError(false);
-  }, [orgData?.profile_image_url]);
+  }, [avatarSourceUrl]);
 
 
   const handleEditProfile = React.useCallback(() => {
@@ -350,13 +358,6 @@ export default function OrganizationProfile({
   const handleUpdate = async ({ id, orgData: updateData }) => {
     updateOrgMutation.mutate({ id, data: updateData });
   };
-
-  const avatarSourceUrl = React.useMemo(() => {
-    if (!orgData) return null
-    return orgData.avatar_download_url || orgData.profile_image_url || orgData.avatar_url || null
-  }, [orgData])
-
-  const { blobUrl: avatarSrc } = useAuthenticatedAvatar(avatarSourceUrl)
 
   const handleFindPicture = async () => {
     const websiteUrl = flatOrgData?.website || orgData?.website || ''
