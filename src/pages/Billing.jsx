@@ -12,6 +12,7 @@ import { useToast } from "@/components/ui/use-toast"
 import { useAuthStore } from "@/stores/authStore"
 import { listBillingTiers, listBillingAccounts, updateBillingAccount, getBillingAccount } from "@/api/billing"
 import { getProfile } from "@/api/profiles"
+import { labelForProfileType } from "@/services/profileTypes"
 import { Link } from "react-router-dom"
 import { createPageUrl } from "@/utils"
 
@@ -259,7 +260,7 @@ function BillingAccountCard({ account, tiers, onSave, saving }) {
       invoiceNumber,
       invoiceDate,
       profileName: account.profile_name,
-      profileType: account.profile_type?.replace(/_/g, ' ') || 'N/A',
+      profileType: account.profile_type_label || labelForProfileType(account.profile_type, 'N/A'),
       tierName: tier?.name ?? 'Not assigned',
       monthly,
       hourly,
@@ -301,7 +302,7 @@ function BillingAccountCard({ account, tiers, onSave, saving }) {
           <CardTitle className="text-lg font-semibold text-slate-900 flex items-center gap-2">
             {account.profile_name}
             <Badge variant="outline" className="capitalize text-xs text-slate-500 border-slate-200">
-              {account.profile_type?.replace(/_/g, " ") || "profile"}
+              {account.profile_type_label || labelForProfileType(account.profile_type, "Profile")}
             </Badge>
           </CardTitle>
           <CardDescription>

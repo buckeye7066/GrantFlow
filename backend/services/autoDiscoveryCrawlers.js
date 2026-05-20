@@ -1,6 +1,6 @@
 import { dispatchCrawlerJob } from './crawlerDispatcher.js'
 import { randomUUID } from 'crypto'
-import { buildProfileSignals, computeProfileDigest } from './profileHelpers.js'
+import { buildProfileSignals, computeProfileDigest, resolveEffectiveProfileType } from './profileHelpers.js'
 
 /**
  * Check if a profile has student indicators
@@ -82,6 +82,11 @@ function checkChurchIndicators(profile) {
   const primaryType = normalizeString(profile.primary_type)
   const churchTypes = ['church', 'religious_organization', 'faith_based', 'congregation', 'ministry', 'mosque', 'synagogue', 'temple']
   if (churchTypes.some((t) => primaryType.includes(t))) return true
+  const displayName = normalizeString(profile.display_name)
+  if (displayName) {
+    const churchNameKeywords = ['church', 'congregation', 'parish', 'diocese', 'synagogue', 'mosque', 'temple', 'faith community']
+    if (churchNameKeywords.some((kw) => displayName.includes(kw))) return true
+  }
   const tags = safeParseJson(profile.tags, [])
   if (Array.isArray(tags)) {
     const tagsLower = tags.map((t) => normalizeString(t)).filter(Boolean)
@@ -256,8 +261,14 @@ export async function triggerAutoDiscoveryCrawlers(db, profileId, options = {}) 
       console.warn('[auto-discovery] Unable to load profile_sections (continuing):', error?.message || String(error))
     }
 
+    const effectivePrimaryType = resolveEffectiveProfileType(profile, sections)
+    const profileForDiscovery = {
+      ...profile,
+      primary_type: effectivePrimaryType ?? profile.primary_type,
+    }
+
     // Derive signals (mirrors crawler matching logic).
-    const signals = buildProfileSignals({ profile, sections })
+    const signals = buildProfileSignals({ profile: profileForDiscovery, sections })
 
     const jobs = []
     
@@ -271,7 +282,7 @@ export async function triggerAutoDiscoveryCrawlers(db, profileId, options = {}) 
     })
     
     // 2. Scholarship crawler (if student indicators exist)
-    const isStudent = checkStudentIndicators(profile)
+    const isStudent = checkStudentIndicators(profileForDiscovery)
     if (isStudent) {
       jobs.push({
         id: randomUUID(),
@@ -292,7 +303,7 @@ export async function triggerAutoDiscoveryCrawlers(db, profileId, options = {}) 
     }
 
     // 2b. Health resources crawler (if health indicators exist)
-    const isHealth = checkHealthIndicators({ profile, sections, signals })
+    const isHealth = checkHealthIndicators({ profile: profileForDiscovery, sections, signals })
     if (isHealth) {
       const consent = Boolean(sections?.health_medical?.consent_for_studies)
       jobs.push({
@@ -353,7 +364,7 @@ export async function triggerAutoDiscoveryCrawlers(db, profileId, options = {}) 
         })
 
         // 8. Volunteer fire department / EMS grants
-        const isFireDept = checkFireDepartmentIndicators(profile)
+        const isFireDept = checkFireDepartmentIndicators(profileForDiscovery)
         if (isFireDept) {
           jobs.push({
             id: randomUUID(),
@@ -367,7 +378,7 @@ export async function triggerAutoDiscoveryCrawlers(db, profileId, options = {}) 
         }
 
         // 9. Church / faith-based organization grants
-        const isChurch = checkChurchIndicators(profile)
+        const isChurch = checkChurchIndicators(profileForDiscovery)
         if (isChurch) {
           jobs.push({
             id: randomUUID(),
@@ -381,7 +392,7 @@ export async function triggerAutoDiscoveryCrawlers(db, profileId, options = {}) 
         }
 
         // 10. Rural organization / farm / tribal grants
-        const isRuralOrg = checkRuralOrganizationIndicators(profile)
+        const isRuralOrg = checkRuralOrganizationIndicators(profileForDiscovery)
         if (isRuralOrg) {
           jobs.push({
             id: randomUUID(),
@@ -395,7 +406,7 @@ export async function triggerAutoDiscoveryCrawlers(db, profileId, options = {}) 
         }
 
         // 11. Single-parent household benefits
-        const isSingleParent = checkSingleParentIndicators({ profile, sections })
+        const isSingleParent = checkSingleParentIndicators({ profile: profileForDiscovery, sections })
         if (isSingleParent) {
           jobs.push({
             id: randomUUID(),
@@ -409,7 +420,7 @@ export async function triggerAutoDiscoveryCrawlers(db, profileId, options = {}) 
         }
 
         // 12. Senior (age 60+) benefits
-        const isSenior = checkSeniorIndicators({ profile, sections, signals })
+        const isSenior = checkSeniorIndicators({ profile: profileForDiscovery, sections, signals })
         if (isSenior) {
           jobs.push({
             id: randomUUID(),

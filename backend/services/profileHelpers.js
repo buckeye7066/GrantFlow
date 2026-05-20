@@ -4,6 +4,7 @@ import crypto from 'crypto'
 import { inferUsStateZipFromText, collectAddressTextForInference } from '../utils/inferLocationFromAddress.js'
 import { normalizeState, normalizeStateFromText } from '../utils/stateNormalization.js'
 import { createLogger } from '../utils/logger.js'
+import { getProfileType, resolveProfileType } from './profileTypeRegistry.js'
 const log = createLogger('profileHelpers')
 
 // Full state name → 2-letter abbreviation for extractStateFromContext fallback
@@ -40,6 +41,124 @@ export function resolveApplicantType(profile) {
     profile.primary_profile_type ??
     null
   )
+}
+
+const GENERIC_PROFILE_TYPES = new Set([
+  '',
+  'individual',
+  'individual_need',
+  'family',
+  'other',
+])
+
+function normalizeProfileTypeCandidate(value) {
+  if (value === null || value === undefined) return null
+  const trimmed = String(value).trim()
+  return trimmed || null
+}
+
+function isGenericProfileType(value) {
+  const normalized = normalizeProfileTypeCandidate(value)
+  if (!normalized) return true
+  return GENERIC_PROFILE_TYPES.has(normalized.toLowerCase())
+}
+
+/**
+ * Infer a more specific profile type from an organization-style display name
+ * when stored columns are still generic (e.g. legacy "individual" defaults).
+ */
+export function inferProfileTypeFromDisplayName(displayName) {
+  const name = String(displayName || '').trim().toLowerCase()
+  if (!name) return null
+
+  if (/\b(church|congregation|parish|diocese|synagogue|mosque|temple|faith community)\b/.test(name)) {
+    return 'church'
+  }
+  if (/\b(ministr(?:y|ies)|mission(?:ary)?)\b/.test(name)) {
+    return 'ministry'
+  }
+  if (/\b(nonprofit|non-profit|foundation|501\(c\)|charit(?:y|able))\b/.test(name)) {
+    return 'nonprofit'
+  }
+  if (/\b(school district|public school|university|college|academy)\b/.test(name)) {
+    return 'public_school'
+  }
+  if (/\b(county government|county of|municipal|city of|town of|borough of)\b/.test(name)) {
+    return 'municipality'
+  }
+  if (/\b(fire department|fire dept|ems squad|rescue squad|volunteer fire)\b/.test(name)) {
+    return 'volunteer_fire_department'
+  }
+  if (/\b(food pantry|food bank|homeless shelter|animal rescue|animal shelter)\b/.test(name)) {
+    if (name.includes('food')) return 'food_pantry'
+    if (name.includes('animal')) return 'animal_rescue'
+    return 'homeless_shelter'
+  }
+  if (/\b(corporation|corp\.|inc\.|llc|company|enterprises)\b/.test(name)) {
+    if (/\b(large|international|global)\b/.test(name)) return 'large_corporation'
+    if (/\b(medium|mid-size|regional)\b/.test(name)) return 'medium_corporation'
+    return 'business'
+  }
+
+  return null
+}
+
+/**
+ * Resolve the best profile type for display, matching, and billing from
+ * profile columns plus section data. Prefers specific section values over
+ * generic stored defaults like "individual".
+ */
+export function resolveEffectiveProfileType(profile, sections = {}) {
+  const basic =
+    sections?.basic_information && typeof sections.basic_information === 'object'
+      ? sections.basic_information
+      : {}
+  const organizationDetails =
+    sections?.organization_details && typeof sections.organization_details === 'object'
+      ? sections.organization_details
+      : {}
+
+  const candidates = [
+    organizationDetails.organization_type,
+    basic.profile_type,
+    basic.profile_category,
+    profile?.applicant_type,
+    profile?.primary_type,
+    profile?.primary_profile_type,
+  ]
+    .map(normalizeProfileTypeCandidate)
+    .filter(Boolean)
+
+  for (const candidate of candidates) {
+    if (!isGenericProfileType(candidate)) {
+      return resolveProfileType(candidate) ?? candidate
+    }
+  }
+
+  const inferred = inferProfileTypeFromDisplayName(profile?.display_name)
+  if (inferred) return inferred
+
+  const fallback = candidates[0] ?? normalizeProfileTypeCandidate(resolveApplicantType(profile))
+  if (!fallback) return null
+  return resolveProfileType(fallback) ?? fallback
+}
+
+/**
+ * Human-readable label for a stored/canonical profile type id.
+ */
+export function getProfileTypeDisplayLabel(rawType) {
+  if (!rawType) return null
+  const resolved = resolveProfileType(rawType) ?? rawType
+  const entry = getProfileType(resolved)
+  if (entry?.anyaLabel) return entry.anyaLabel
+  if (typeof rawType === 'string') {
+    return rawType
+      .replace(/[_-]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .replace(/\b\w/g, (char) => char.toUpperCase())
+  }
+  return String(rawType)
 }
 
 function safeParseJSON(value, fallback) {
@@ -186,6 +305,8 @@ export async function loadProfileContext(db, profileId) {
   const tags = safeParseArrayField(profile.tags, [])
   const interests = safeParseArrayField(profile.interests, [])
 
+  const effectivePrimaryType = resolveEffectiveProfileType(profile, sections)
+
   // Merge organization address fields into the profile context when available.
   // Many workflows store ZIP/state/city on `organizations`, but matching relies on profileContext.signals.location.
   let organization = null
@@ -207,6 +328,8 @@ export async function loadProfileContext(db, profileId) {
 
   const mergedProfile = {
     ...profile,
+    primary_type: effectivePrimaryType ?? profile.primary_type,
+    applicant_type: profile.applicant_type ?? effectivePrimaryType ?? profile.primary_type,
     tags,
     interests,
     // Provide fallbacks for location extraction
@@ -330,6 +453,8 @@ export async function buildProfileContext(db, profileId, options = {}) {
   const tags = safeParseArrayField(profile.tags, [])
   const interests = safeParseArrayField(profile.interests, [])
 
+  const effectivePrimaryType = resolveEffectiveProfileType(profile, sections)
+
   // Get organization if linked
   let organization = null
   if (profile.organization_id) {
@@ -381,6 +506,8 @@ export async function buildProfileContext(db, profileId, options = {}) {
   // Build merged profile with location fallbacks
   const mergedProfile = {
     ...profile,
+    primary_type: effectivePrimaryType ?? profile.primary_type,
+    applicant_type: profile.applicant_type ?? effectivePrimaryType ?? profile.primary_type,
     tags,
     interests,
     postal_code: profile.postal_code || organization?.zip || organization?.postal_code || null,

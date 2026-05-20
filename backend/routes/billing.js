@@ -8,6 +8,10 @@ import {
   fetchAccountEvents,
   logBillingAccountEvent,
 } from '../services/billingAccounts.js'
+import {
+  getProfileTypeDisplayLabel,
+  resolveEffectiveProfileType,
+} from '../services/profileHelpers.js'
 import { formatError } from '../middleware/errorHandler.js'
 import { ensureProfileAccess as ensureProfileAccessByEmail } from '../utils/accessControl.js'
 
@@ -34,6 +38,33 @@ function requireAdmin(req, res, next) {
     return res.status(403).json({ error: 'Admin privileges required' })
   }
   return next()
+}
+
+function parseSectionData(raw) {
+  if (!raw) return {}
+  if (typeof raw === 'object') return raw
+  try {
+    return JSON.parse(raw)
+  } catch {
+    return {}
+  }
+}
+
+function resolveBillingProfileType(row) {
+  const profile = {
+    display_name: row.profile_name,
+    primary_type: row.profile_type,
+    applicant_type: row.applicant_type,
+  }
+  const sections = {
+    basic_information: parseSectionData(row.basic_section),
+    organization_details: parseSectionData(row.org_section),
+  }
+  const effectiveType = resolveEffectiveProfileType(profile, sections)
+  return {
+    profile_type: effectiveType,
+    profile_type_label: getProfileTypeDisplayLabel(effectiveType),
+  }
 }
 
 router.use(requireAuth)
@@ -169,16 +200,20 @@ router.get('/accounts', requireAdmin, async (req, res) => {
     // orderBy is already embedded directly in the query strings below; no separate variable needed.
 
     const query = req.db?.dialect === 'postgres' 
-      ? `SELECT ba.*, bt.name AS tier_name, bt.description AS tier_description, bt.base_monthly_cents AS tier_monthly, bt.hourly_rate_cents AS tier_hourly, bt.enable_pipeline_automation AS tier_enable_pipeline_automation, bt.enable_item_funding AS tier_enable_item_funding, bt.enable_document_ai AS tier_enable_document_ai, p.display_name AS profile_name, p.primary_type AS profile_type FROM billing_accounts ba LEFT JOIN billing_tiers bt ON bt.id = ba.tier_id LEFT JOIN profiles p ON p.id = ba.profile_id ORDER BY p.display_name ASC`
-      : `SELECT ba.*, bt.name AS tier_name, bt.description AS tier_description, bt.base_monthly_cents AS tier_monthly, bt.hourly_rate_cents AS tier_hourly, bt.enable_pipeline_automation AS tier_enable_pipeline_automation, bt.enable_item_funding AS tier_enable_item_funding, bt.enable_document_ai AS tier_enable_document_ai, p.display_name AS profile_name, p.primary_type AS profile_type FROM billing_accounts ba LEFT JOIN billing_tiers bt ON bt.id = ba.tier_id LEFT JOIN profiles p ON p.id = ba.profile_id ORDER BY p.display_name COLLATE NOCASE ASC`
+      ? `SELECT ba.*, bt.name AS tier_name, bt.description AS tier_description, bt.base_monthly_cents AS tier_monthly, bt.hourly_rate_cents AS tier_hourly, bt.enable_pipeline_automation AS tier_enable_pipeline_automation, bt.enable_item_funding AS tier_enable_item_funding, bt.enable_document_ai AS tier_enable_document_ai, p.display_name AS profile_name, p.primary_type AS profile_type, p.applicant_type AS applicant_type, (SELECT ps.data FROM profile_sections ps WHERE ps.profile_id = p.id AND ps.section_key = 'basic_information' LIMIT 1) AS basic_section, (SELECT ps.data FROM profile_sections ps WHERE ps.profile_id = p.id AND ps.section_key = 'organization_details' LIMIT 1) AS org_section FROM billing_accounts ba LEFT JOIN billing_tiers bt ON bt.id = ba.tier_id LEFT JOIN profiles p ON p.id = ba.profile_id ORDER BY p.display_name ASC`
+      : `SELECT ba.*, bt.name AS tier_name, bt.description AS tier_description, bt.base_monthly_cents AS tier_monthly, bt.hourly_rate_cents AS tier_hourly, bt.enable_pipeline_automation AS tier_enable_pipeline_automation, bt.enable_item_funding AS tier_enable_item_funding, bt.enable_document_ai AS tier_enable_document_ai, p.display_name AS profile_name, p.primary_type AS profile_type, p.applicant_type AS applicant_type, (SELECT ps.data FROM profile_sections ps WHERE ps.profile_id = p.id AND ps.section_key = 'basic_information' LIMIT 1) AS basic_section, (SELECT ps.data FROM profile_sections ps WHERE ps.profile_id = p.id AND ps.section_key = 'organization_details' LIMIT 1) AS org_section FROM billing_accounts ba LEFT JOIN billing_tiers bt ON bt.id = ba.tier_id LEFT JOIN profiles p ON p.id = ba.profile_id ORDER BY p.display_name COLLATE NOCASE ASC`
 
     const rows = (await req.db.prepare(query)
         .all()
-    ).map((row) => ({
-      ...mapAccountRow(row),
-      profile_name: row.profile_name,
-      profile_type: row.profile_type,
-    }))
+    ).map((row) => {
+      const resolved = resolveBillingProfileType(row)
+      return {
+        ...mapAccountRow(row),
+        profile_name: row.profile_name,
+        profile_type: resolved.profile_type,
+        profile_type_label: resolved.profile_type_label,
+      }
+    })
 
     res.json(rows)
   } catch (error) {
