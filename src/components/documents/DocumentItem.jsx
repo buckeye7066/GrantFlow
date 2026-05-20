@@ -208,16 +208,16 @@ export default function DocumentItem({ document, onDelete }) {
   };
 
   return (
-    <Card className="flex flex-col cursor-pointer hover:shadow-md hover:border-primary/30 transition-shadow">
-      <div onClick={handleDownload} className="flex-1 min-w-0" role="button" tabIndex={0} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') handleDownload() }}>
-      <CardHeader className="flex-row items-center gap-4 space-y-0 pb-4">
-        <div className="p-3 bg-blue-50 rounded-lg">
-          <FileText className="w-6 h-6 text-blue-600" />
+    <Card className="flex flex-col h-full cursor-pointer hover:shadow-md hover:border-primary/30 transition-shadow">
+      <div onClick={handleDownload} className="flex-1 min-w-0 flex flex-col" role="button" tabIndex={0} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') handleDownload() }}>
+      <CardHeader className="flex-row items-start gap-3 space-y-0 pb-3">
+        <div className="p-2.5 bg-blue-50 rounded-lg shrink-0">
+          <FileText className="w-5 h-5 text-blue-600" />
         </div>
-        <div className="flex-1">
-          <CardTitle className="text-base leading-tight">{document.name}</CardTitle>
-          <div className="flex items-center gap-2 mt-1">
-            <p className="text-xs text-slate-500 capitalize">{(document.type || 'unspecified').replace(/_/g, ' ')}</p>
+        <div className="flex-1 min-w-0">
+          <CardTitle className="text-base leading-snug break-words">{document.name}</CardTitle>
+          <p className="text-xs text-slate-500 capitalize mt-1">{(document.type || 'unspecified').replace(/_/g, ' ')}</p>
+          <div className="flex flex-wrap items-center gap-1.5 mt-2">
             <Badge
               variant={
                 processingStatus === 'completed'
@@ -253,7 +253,7 @@ export default function DocumentItem({ document, onDelete }) {
           </div>
         </div>
       </CardHeader>
-      <CardContent className="flex-grow space-y-2">
+      <CardContent className="flex-grow space-y-2 pt-0 pb-4">
         <p className="text-xs text-slate-500">Uploaded on {uploadedLabel}</p>
         {processingStatus === 'failed' && document.processing_error ? (
           <p className="text-xs text-red-700 bg-red-50 border border-red-100 rounded-md p-2">
@@ -261,13 +261,13 @@ export default function DocumentItem({ document, onDelete }) {
           </p>
         ) : null}
         {document.ai_summary ? (
-          <p className="text-xs text-slate-600 line-clamp-3">
+          <p className="text-xs text-slate-600 line-clamp-4 leading-relaxed">
             {document.ai_summary}
           </p>
         ) : null}
       </CardContent>
       </div>
-      <CardFooter className="flex gap-2">
+      <CardFooter className="flex flex-wrap gap-2 pt-0 mt-auto">
         {isUnparsed && (
           <Button
             variant="default"

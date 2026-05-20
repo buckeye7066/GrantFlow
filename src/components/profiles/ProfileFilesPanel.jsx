@@ -65,7 +65,7 @@ export default function ProfileFilesPanel({
 
   const [uploadFile, setUploadFile] = useState(null)
   const [uploadError, setUploadError] = useState(null)
-  const [parseWithAI, setParseWithAI] = useState(false)
+  const [parseWithAI, setParseWithAI] = useState(true)
   const [handwritingOcr, setHandwritingOcr] = useState(true)
   const [urlToIngest, setUrlToIngest] = useState("")
   const [urlError, setUrlError] = useState(null)
@@ -87,6 +87,7 @@ export default function ProfileFilesPanel({
       const canParse = isLikelyParseable(file)
       const skipParsing = !parseWithAI || !canParse
       formData.append("skip_parsing", skipParsing ? "true" : "false")
+      formData.append("enable_ai", skipParsing ? "false" : "true")
 
       // OCR options (server will only apply OCR to image-like files).
       formData.append("ocr", "true")

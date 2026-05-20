@@ -222,6 +222,12 @@ const matchesSearch =
     try {
       const formData = new FormData()
       formData.append('document', file)
+      formData.append('enable_ai', 'true')
+      formData.append('skip_parsing', 'false')
+      formData.append('type', 'source_material')
+      formData.append('ocr', 'true')
+      formData.append('handwriting', 'true')
+      formData.append('source', 'profile_create_upload')
       const inferredName = file.name?.replace(/\.[^/.]+$/, '') ?? ''
       if (inferredName) {
         formData.append('display_name', inferredName)

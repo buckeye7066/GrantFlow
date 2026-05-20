@@ -51,7 +51,8 @@ async function withTempSqliteDb() {
     PRAGMA foreign_keys = ON;
 
     CREATE TABLE profiles (
-      id TEXT PRIMARY KEY
+      id TEXT PRIMARY KEY,
+      display_name TEXT
     );
 
     CREATE TABLE documents (
@@ -166,6 +167,63 @@ test('document_ingest job: updates profile sections and marks document ready for
     const data = JSON.parse(sectionRow.data)
     assert.equal(data.email, 'smoke.user@example.com')
     assert.equal(data.full_name, 'Smoke User')
+  } finally {
+    await close()
+  }
+})
+
+test('document_ingest job: heuristics-only mode still writes profile sections and ai_sections', async () => {
+  const { db, close } = await withTempSqliteDb()
+  try {
+    const profileId = 'profile-heuristics'
+    const documentId = 'doc-heuristics'
+
+    db.prepare('INSERT INTO profiles (id, display_name) VALUES (?, ?)').run(
+      profileId,
+      'Cleveland_Blue_Raiders_Marching_Band_Grantflow_Public_Info_Filled.pdf',
+    )
+    db.prepare(
+      `
+        INSERT INTO documents (id, profile_id, name, type, extracted_text, processing_status)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `,
+    ).run(
+      documentId,
+      profileId,
+      'band.pdf',
+      'source_material',
+      'Cleveland High School Blue Raider Marching Band (Cleveland High School / CCS)\n' +
+        'jburton@clevelandschools.org\n(423) 478-1113\nhttps://www.theclevelandband.org\n' +
+        '850 Raider Drive\nCleveland TN 37312\n62-6000265 LAB4BVJDQ7U7 4ZY55',
+      'pending',
+    )
+
+    const result = await processDocumentIngestionJob({
+      db,
+      job: { id: 'job-h', parameters: { document_id: documentId, enable_ai: false } },
+      profileContext: { profile: { id: profileId }, sections: {} },
+      getOpenAI: () => {
+        throw new Error('OpenAI should not be called in heuristics-only mode')
+      },
+      uploadDir: null,
+    })
+
+    assert.equal(result?.result_meta?.heuristics_only, true)
+
+    const docRow = db.prepare('SELECT processing_status, ai_summary, ai_sections FROM documents WHERE id = ?').get(documentId)
+    assert.equal(docRow.processing_status, 'completed')
+    assert.ok(typeof docRow.ai_sections === 'string' && docRow.ai_sections.length > 0)
+    assert.match(docRow.ai_summary, /basic_information|organization_details/)
+
+    const basic = db
+      .prepare('SELECT data FROM profile_sections WHERE profile_id = ? AND section_key = ?')
+      .get(profileId, 'basic_information')
+    const basicData = JSON.parse(basic.data)
+    assert.equal(basicData.email, 'jburton@clevelandschools.org')
+    assert.equal(basicData.city, 'Cleveland')
+
+    const profileRow = db.prepare('SELECT display_name FROM profiles WHERE id = ?').get(profileId)
+    assert.match(profileRow.display_name, /Cleveland High School Blue Raider Marching Band/)
   } finally {
     await close()
   }

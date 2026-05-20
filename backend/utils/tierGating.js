@@ -12,6 +12,12 @@ export async function getProfileBillingAccount(db, profileId) {
   return mapAccountRow(row)
 }
 
+export async function hasTierCapability(db, req, profileId, capabilityKey) {
+  if (req.ctx?.isAdmin) return true
+  const billing = await getProfileBillingAccount(db, profileId)
+  return Boolean(billing?.tier?.[capabilityKey])
+}
+
 export async function requireTierCapability(req, res, profileId, capabilityKey) {
   if (req.ctx?.isAdmin) return true
 

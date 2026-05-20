@@ -15,7 +15,7 @@ import { classifyUniversityApplicationForDocument, loadUniversityApplicationsFor
 import { supportedSectionKeys } from '../prompts/profileSections.js'
 import { ident } from '../utils/safeSql.js'
 import { getDefaultSectionData } from '../config/profileSchema.js'
-import { requireTierCapability, TIER_CAPABILITIES } from '../utils/tierGating.js'
+import { hasTierCapability, requireTierCapability, TIER_CAPABILITIES } from '../utils/tierGating.js'
 import { detectFileType } from '../services/documentIngestion/index.js'
 import { ensureDocumentExtract } from '../services/documentIngestion/documentExtractStore.js'
 import { resolveUploadsDir } from '../utils/uploadsDir.js'
@@ -933,22 +933,23 @@ router.post('/ingest', uploadLimiter, requireUploadsWritable, runUploadSingle('d
     // IMPORTANT: Text extraction (including OCR) is async and handled by the `document_ingest` worker.
 
     const hasEnableAiField = rawEnableAi !== undefined;
-    const hasSkipParsingField = rawSkipParsing !== undefined;
     const enableAiRequested = rawEnableAi === 'true' || rawEnableAi === true;
     const skipParsingRequested = rawSkipParsing === 'true' || rawSkipParsing === true;
 
     // DOCUMENT_AI gating is enforced only when AI-dependent parsing is requested.
     // Baseline ingest (upload + text extraction) is allowed for all tiers by default.
-    const shouldRunAi =
-      hasEnableAiField
-        ? enableAiRequested && !skipParsingRequested
-        : hasSkipParsingField
-          ? !skipParsingRequested
-          : context.isAdmin
-            ? true
-            : false;
+    // Default: parse uploaded documents into profile sections unless the caller
+    // explicitly opts out via skip_parsing / enable_ai=false. Create-profile
+    // uploads (Organizations "Upload Form") historically omitted these flags and
+    // silently stored files without section mapping.
+    const shouldRunAi = skipParsingRequested
+      ? false
+      : hasEnableAiField
+        ? enableAiRequested
+        : true;
 
     const skipParsing = !shouldRunAi;
+    const docType = rawType || (shouldRunAi ? 'source_material' : 'profile_file');
     const processingStatus = extractedText ? 'completed' : 'pending';
 
     // Auto-classify to a university application when possible (if caller didn't specify one).
@@ -988,7 +989,7 @@ router.post('/ingest', uploadLimiter, requireUploadsWritable, runUploadSingle('d
       universityApplicationId,
       universityApplicationName,
       docName,
-      rawType || null,
+      docType,
       publicUrl,
       file?.path || null,
       file?.size || null,
@@ -1080,14 +1081,15 @@ router.post('/ingest', uploadLimiter, requireUploadsWritable, runUploadSingle('d
       (extractedTextFromHtml && !skipParsing && profileId) ||
       (extractedTextFromHtml && addToOpportunities && profileId);
     if (shouldQueue) {
+      let enableAiForJob = !skipParsing
       if (!skipParsing && profileId) {
-        if (!(await requireTierCapability(req, res, profileId, TIER_CAPABILITIES.DOCUMENT_AI))) {
-          // Tier gate sent a response; still return 202 for the document record
-          // that was already inserted â but we cannot send two responses.
-          // Instead, return early here; the caller will not get a 202,
-          // and the document is in the DB with processing_status = 'pending'.
-          // The UI should poll /extract for status.
-          return
+        const tierAllowed = await hasTierCapability(req.db, req, profileId, TIER_CAPABILITIES.DOCUMENT_AI)
+        if (!tierAllowed) {
+          enableAiForJob = false
+          routeLogger.info('[documents/ingest] DOCUMENT_AI tier unavailable; queueing heuristics-only ingest', {
+            profile_id: profileId,
+            document_id: docId,
+          })
         }
       }
 
@@ -1106,7 +1108,7 @@ router.post('/ingest', uploadLimiter, requireUploadsWritable, runUploadSingle('d
             document_id: docId,
             source,
             handwriting: req.body?.handwriting === 'true' || req.body?.handwriting === true,
-            enable_ai: !skipParsing,
+            enable_ai: enableAiForJob,
             add_to_opportunities: addToOpportunities,
           }),
           requestedBy,
