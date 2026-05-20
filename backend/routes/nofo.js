@@ -2,8 +2,11 @@ import express from 'express'
 import pdfParse from 'pdf-parse'
 import fetch from 'node-fetch'
 import { createOpenAIClient, summarizeOpenAIError } from '../utils/openaiClient.js'
-import { requireAuthenticatedUser } from '../utils/accessControl.js'
+import { requireAuthenticatedUser, ensureOrganizationAccess } from '../utils/accessControl.js'
 import { standardRateLimiter } from '../middleware/rateLimiting.js'
+import { parseGrantsGovDigest } from '../services/grantsGovDigestParser.js'
+import { saveToProfilePipeline } from '../services/opportunityMatcher.js'
+import { loadProfileContext } from '../services/profileHelpers.js'
 
 import { createLogger } from '../utils/logger.js'
 const routeLogger = createLogger('route:nofo')
@@ -145,6 +148,52 @@ function heuristicFallback(text) {
   return { title, funder: null }
 }
 
+async function resolveProfileId(db, { profileId, organizationId }) {
+  const normalizedProfileId = profileId ? String(profileId).trim() : ''
+  if (normalizedProfileId) {
+    const profile = await db.prepare('SELECT id FROM profiles WHERE id = ? LIMIT 1').get(normalizedProfileId)
+    return profile?.id ?? null
+  }
+
+  const normalizedOrgId = organizationId ? String(organizationId).trim() : ''
+  if (!normalizedOrgId) return null
+
+  const byOrg = await db
+    .prepare('SELECT id FROM profiles WHERE organization_id = ? ORDER BY updated_at DESC LIMIT 1')
+    .get(normalizedOrgId)
+  if (byOrg?.id) return byOrg.id
+
+  // Legacy deployments sometimes used organization id as profile id.
+  const direct = await db.prepare('SELECT id FROM profiles WHERE id = ? LIMIT 1').get(normalizedOrgId)
+  return direct?.id ?? null
+}
+
+function digestOpportunityToGrantPayload(opp, organizationId) {
+  return {
+    ...opp,
+    title: opp.title,
+    funder: opp.funder || opp.sponsor || opp.department || 'Federal',
+    sponsor: opp.sponsor || opp.funder || opp.department || 'Federal',
+    application_url: opp.application_url || opp.url,
+    url: opp.url || opp.application_url,
+    organization_id: organizationId,
+    status: 'discovered',
+    opportunity_type: 'grant',
+    ai_status: 'queued',
+    source: opp.source || 'grants.gov',
+    record_origin: opp.record_origin || 'url_import',
+    match_decision: null,
+    match_explanation: null,
+    matched_needs: [],
+    eligibility_status: 'pending',
+    ineligibility_reasons: [],
+    fingerprints: null,
+    matcher_version: null,
+    evaluated_at: null,
+    match_confidence: null,
+  }
+}
+
 // POST /api/parseNOFO
 // Body: { file_url: string, json_schema?: object, is_url?: boolean }
 router.post('/parseNOFO', standardRateLimiter, async (req, res) => {
@@ -260,6 +309,199 @@ router.post('/parseNOFO', standardRateLimiter, async (req, res) => {
       success: false,
       message: 'parseNOFO failed',
       error_type: 'nofo_parse_failed',
+      details: process.env.NODE_ENV === 'production' ? undefined : (error?.message || String(error)),
+    })
+  }
+})
+
+// POST /api/parseGrantsGovDigest
+// Body: { text: string }
+router.post('/parseGrantsGovDigest', standardRateLimiter, async (req, res) => {
+  try {
+    const user = requireAuthenticatedUser(req, res)
+    if (!user) return
+
+    const text = typeof req.body?.text === 'string' ? req.body.text : ''
+    if (!text.trim()) {
+      return res.status(400).json({ success: false, message: 'text is required' })
+    }
+
+    const parsed = parseGrantsGovDigest(text)
+    return res.json({
+      success: true,
+      opportunities: parsed.opportunities,
+      total_urls: parsed.total_urls,
+      parse_errors: parsed.parse_errors,
+    })
+  } catch (error) {
+    console.error('[parseGrantsGovDigest] Failed:', error)
+    return res.status(500).json({
+      success: false,
+      message: 'parseGrantsGovDigest failed',
+      details: process.env.NODE_ENV === 'production' ? undefined : (error?.message || String(error)),
+    })
+  }
+})
+
+// POST /api/importGrantsGovDigest
+// Body: { text: string, organizationId?: string, profileId?: string, minMatchThreshold?: number }
+router.post('/importGrantsGovDigest', standardRateLimiter, async (req, res) => {
+  try {
+    const user = requireAuthenticatedUser(req, res)
+    if (!user) return
+
+    const text = typeof req.body?.text === 'string' ? req.body.text : ''
+    const organizationId = req.body?.organizationId ?? req.body?.organization_id ?? null
+    const profileIdInput = req.body?.profileId ?? req.body?.profile_id ?? null
+    const minMatchThreshold = Number(req.body?.minMatchThreshold ?? req.body?.min_match_threshold ?? 55)
+
+    if (!text.trim()) {
+      return res.status(400).json({ success: false, message: 'text is required' })
+    }
+
+    const resolvedProfileId = await resolveProfileId(req.db, {
+      profileId: profileIdInput,
+      organizationId,
+    })
+    if (!resolvedProfileId) {
+      return res.status(400).json({
+        success: false,
+        message: 'Select a profile (or organization linked to a profile) before importing.',
+      })
+    }
+
+    if (organizationId && !(await ensureOrganizationAccess(req, res, String(organizationId)))) return
+
+    const parsed = parseGrantsGovDigest(text)
+    const profileContext = await loadProfileContext(req.db, resolvedProfileId)
+    const results = []
+
+    for (const opp of parsed.opportunities) {
+      const grantPayload = digestOpportunityToGrantPayload(opp, organizationId)
+      const pipelineResult = await saveToProfilePipeline(
+        req.db,
+        grantPayload,
+        resolvedProfileId,
+        profileContext,
+        null,
+        minMatchThreshold,
+      )
+
+      let grant = null
+      if (pipelineResult.saved && pipelineResult.pipelineId) {
+        grant = await req.db.prepare('SELECT * FROM grants WHERE id = ? LIMIT 1').get(pipelineResult.pipelineId)
+      }
+
+      results.push({
+        opportunity_id: opp.opportunity_id,
+        title: opp.title,
+        saved: pipelineResult.saved,
+        reason: pipelineResult.reason ?? null,
+        gate: pipelineResult.gate ?? null,
+        matchPercentage: pipelineResult.matchPercentage ?? null,
+        grant_id: grant?.id ?? pipelineResult.pipelineId ?? null,
+      })
+    }
+
+    const savedCount = results.filter((row) => row.saved).length
+    routeLogger.info('[importGrantsGovDigest] imported digest', {
+      profileId: resolvedProfileId,
+      total: parsed.opportunities.length,
+      saved: savedCount,
+    })
+
+    return res.json({
+      success: true,
+      total_parsed: parsed.opportunities.length,
+      total_urls: parsed.total_urls,
+      saved_count: savedCount,
+      parse_errors: parsed.parse_errors,
+      results,
+    })
+  } catch (error) {
+    console.error('[importGrantsGovDigest] Failed:', error)
+    return res.status(500).json({
+      success: false,
+      message: 'importGrantsGovDigest failed',
+      details: process.env.NODE_ENV === 'production' ? undefined : (error?.message || String(error)),
+    })
+  }
+})
+
+// POST /api/saveToProfilePipeline
+// Body: { opportunity: object, organizationId?: string, profileId?: string, source?: string, minMatchThreshold?: number }
+router.post('/saveToProfilePipeline', standardRateLimiter, async (req, res) => {
+  try {
+    const user = requireAuthenticatedUser(req, res)
+    if (!user) return
+
+    const opportunity = req.body?.opportunity
+    const organizationId = req.body?.organizationId ?? req.body?.organization_id ?? opportunity?.organization_id ?? null
+    const profileIdInput = req.body?.profileId ?? req.body?.profile_id ?? null
+    const minMatchThreshold = Number(req.body?.minMatchThreshold ?? req.body?.min_match_threshold ?? 55)
+
+    if (!opportunity || typeof opportunity !== 'object' || Array.isArray(opportunity)) {
+      return res.status(400).json({ success: false, message: 'opportunity object is required' })
+    }
+
+    const resolvedProfileId = await resolveProfileId(req.db, {
+      profileId: profileIdInput,
+      organizationId,
+    })
+    if (!resolvedProfileId) {
+      return res.status(400).json({
+        success: false,
+        message: 'Select a profile (or organization linked to a profile) before saving to the pipeline.',
+      })
+    }
+
+    if (organizationId && !(await ensureOrganizationAccess(req, res, String(organizationId)))) return
+
+    const normalizedOpportunity = {
+      ...opportunity,
+      source: opportunity.source || req.body?.source || 'grants.gov',
+      record_origin: opportunity.record_origin || 'url_import',
+      application_url: opportunity.application_url || opportunity.url || null,
+      url: opportunity.url || opportunity.application_url || null,
+    }
+
+    const profileContext = await loadProfileContext(req.db, resolvedProfileId)
+    const pipelineResult = await saveToProfilePipeline(
+      req.db,
+      normalizedOpportunity,
+      resolvedProfileId,
+      profileContext,
+      null,
+      minMatchThreshold,
+    )
+
+    if (!pipelineResult.saved) {
+      return res.status(422).json({
+        success: false,
+        message: pipelineResult.reason || 'Pipeline rejected this opportunity',
+        rejection_reason: pipelineResult.reason ?? null,
+        gate: pipelineResult.gate ?? null,
+        ineligibility_reasons: pipelineResult.ineligibilityReasons ?? [],
+        matchPercentage: pipelineResult.matchPercentage ?? null,
+        threshold: pipelineResult.threshold ?? null,
+      })
+    }
+
+    const grant = pipelineResult.pipelineId
+      ? await req.db.prepare('SELECT * FROM grants WHERE id = ? LIMIT 1').get(pipelineResult.pipelineId)
+      : null
+
+    return res.json({
+      success: true,
+      grant,
+      matchPercentage: pipelineResult.matchPercentage ?? null,
+      pipelineId: pipelineResult.pipelineId ?? null,
+    })
+  } catch (error) {
+    console.error('[saveToProfilePipeline] Failed:', error)
+    return res.status(500).json({
+      success: false,
+      message: 'saveToProfilePipeline failed',
       details: process.env.NODE_ENV === 'production' ? undefined : (error?.message || String(error)),
     })
   }

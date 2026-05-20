@@ -8,7 +8,8 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
-import { Loader2, FileStack, Sparkles, Upload, CheckCircle, AlertTriangle, Info, Link as LinkIcon } from 'lucide-react';
+import { Textarea } from '@/components/ui/textarea';
+import { Loader2, FileStack, Sparkles, Upload, CheckCircle, AlertTriangle, Info, Link as LinkIcon, ClipboardList, ExternalLink } from 'lucide-react';
 import { Alert, AlertTitle, AlertDescription } from '@/components/ui/alert';
 import { useNavigate } from 'react-router-dom';
 import { createPageUrl } from '@/utils';
@@ -37,19 +38,52 @@ const grantSchemaForExtraction = {
   required: ["title", "funder", "program_description"]
 };
 
+function buildGrantPayload(extractedData, { organizationId, inputMode, url }) {
+  const rawAppUrl = extractedData.application_url || '';
+  const validatedAppUrl =
+    rawAppUrl.startsWith('http://') || rawAppUrl.startsWith('https://')
+      ? rawAppUrl
+      : '';
+
+  return {
+    ...extractedData,
+    application_url: validatedAppUrl,
+    organization_id: organizationId,
+    status: 'discovered',
+    opportunity_type: 'grant',
+    ai_status: 'queued',
+    url: inputMode === 'url' ? url : (extractedData.url || validatedAppUrl || ''),
+    source: extractedData.source || 'grants.gov',
+    record_origin: extractedData.record_origin || 'url_import',
+    match_decision: null,
+    match_explanation: null,
+    matched_needs: [],
+    eligibility_status: validatedAppUrl ? 'pending' : 'INELIGIBLE',
+    ineligibility_reasons: validatedAppUrl ? [] : ['missing_application_url'],
+    fingerprints: null,
+    matcher_version: null,
+    evaluated_at: null,
+    match_confidence: null,
+  };
+}
+
 export default function NOFOParser() {
   const log = useMemo(() => createLogger('NOFOParser'), []);
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const { toast } = useToast();
   const [selectedOrgId, setSelectedOrgId] = useState('');
-  const [inputMode, setInputMode] = useState('file'); // 'file' or 'url'
+  const [inputMode, setInputMode] = useState('file'); // 'file' | 'url' | 'digest'
   const [file, setFile] = useState(null);
   const [url, setUrl] = useState('');
+  const [digestText, setDigestText] = useState('');
+  const [parsedDigest, setParsedDigest] = useState([]);
+  const [digestImportSummary, setDigestImportSummary] = useState(null);
   const [status, setStatus] = useState('idle');
   const [error, setError] = useState(null);
   const [extractedData, setExtractedData] = useState(null);
   const [isSavingGrant, setIsSavingGrant] = useState(false);
+  const [rowActionId, setRowActionId] = useState(null);
 
   const { data: organizations = [], isLoading: isLoadingOrgs } = useQuery({
     queryKey: ['organizations'],
@@ -60,17 +94,72 @@ export default function NOFOParser() {
     const selectedFile = e.target.files?.[0];
     if (selectedFile) {
       const fileName = selectedFile.name.toLowerCase();
-      
-      // Only accept PDF files
+
       if (!fileName.endsWith('.pdf')) {
         setError('Only PDF files are supported at this time. Please convert your Word document to PDF first.');
         setFile(null);
         return;
       }
-      
+
       setFile(selectedFile);
       setError(null);
     }
+  };
+
+  const saveGrantToPipeline = async (grantPayload) => {
+    const pipelineResult = await client.functions.invoke('saveToProfilePipeline', {
+      opportunity: grantPayload,
+      organizationId: selectedOrgId,
+      source: 'nofo_parser',
+    });
+
+    if (!pipelineResult?.data?.success) {
+      const reason =
+        pipelineResult?.data?.rejection_reason ||
+        pipelineResult?.data?.ineligibility_reasons?.[0] ||
+        pipelineResult?.data?.message ||
+        'Pipeline rejected this opportunity. Check eligibility criteria.';
+      throw new Error(reason);
+    }
+
+    const newGrant = pipelineResult.data.grant;
+
+    const analysisResult = await client.functions.invoke('analyzeGrant', {
+      grantId: newGrant.id,
+      title: newGrant.title,
+      programDescription: newGrant.program_description,
+      eligibilitySummary: newGrant.eligibility_summary,
+      selectionCriteria: newGrant.selection_criteria,
+      awardCeiling: newGrant.amount_max,
+      deadline: newGrant.deadline,
+    });
+
+    if (!analysisResult?.data?.success) {
+      log.warn('analyzeGrant did not return success — patching record with analysis_failed status', {
+        grantId: newGrant.id,
+        response: analysisResult?.data,
+      });
+      await client.entities.Grant.update(newGrant.id, {
+        ai_status: 'analysis_failed',
+        match_explanation: 'AI analysis could not complete at time of submission. Queued for retry.',
+        evaluated_at: new Date().toISOString(),
+      }).catch((patchErr) => {
+        log.error('Failed to patch grant ai_status after analysis failure', { grantId: newGrant.id, patchErr });
+      });
+      toast({
+        variant: 'destructive',
+        title: 'Analysis Queued',
+        description: `Grant "${newGrant.title}" saved but AI analysis could not start. It will retry automatically.`,
+      });
+    } else {
+      toast({
+        title: 'Saved and Analyzing',
+        description: `Grant "${newGrant.title}" created and sent for AI analysis.`,
+      });
+    }
+
+    queryClient.invalidateQueries({ queryKey: ['grants'] });
+    return newGrant;
   };
 
   const handleProcess = async () => {
@@ -86,21 +175,19 @@ export default function NOFOParser() {
       return;
     }
 
-    // Clear any previous errors
     setError(null);
     setStatus('uploading');
     setExtractedData(null);
 
     try {
       let fileUrl;
-      
+
       if (inputMode === 'file') {
         log.debug('Uploading file', file?.name);
         const { file_url } = await client.integrations.Core.UploadFile({ file });
         fileUrl = file_url;
         log.debug('File uploaded', fileUrl);
       } else {
-        // URL mode - validate URL format
         const trimmedUrl = url.trim();
         if (!trimmedUrl.startsWith('http://') && !trimmedUrl.startsWith('https://')) {
           throw new Error('Please enter a valid URL starting with http:// or https://');
@@ -111,7 +198,6 @@ export default function NOFOParser() {
 
       setStatus('processing');
 
-      // Use custom parseNOFO function
       log.debug('Invoking parseNOFO');
       const response = await client.functions.invoke('parseNOFO', {
         file_url: fileUrl,
@@ -135,9 +221,9 @@ export default function NOFOParser() {
 
     } catch (err) {
       console.error('[NOFOParser] Processing failed:', err);
-      
+
       let errorMsg = 'An unexpected error occurred while processing the document.';
-      
+
       if (err.response?.data) {
         if (typeof err.response.data === 'string') {
           errorMsg = err.response.data;
@@ -149,7 +235,7 @@ export default function NOFOParser() {
       } else if (err.message) {
         errorMsg = err.message;
       }
-      
+
       setError(errorMsg);
       setStatus('error');
       toast({
@@ -158,6 +244,127 @@ export default function NOFOParser() {
         description: errorMsg
       });
     }
+  };
+
+  const handleParseDigest = async () => {
+    if (!digestText.trim()) {
+      setError('Paste a Grants.gov digest email before parsing.');
+      setStatus('error');
+      return;
+    }
+
+    setError(null);
+    setStatus('processing');
+    setParsedDigest([]);
+    setDigestImportSummary(null);
+    setExtractedData(null);
+
+    try {
+      const response = await client.functions.invoke('parseGrantsGovDigest', { text: digestText });
+      if (!response?.data?.success) {
+        throw new Error(response?.data?.message || 'Could not parse digest text');
+      }
+
+      const opportunities = response.data.opportunities || [];
+      setParsedDigest(opportunities);
+      setStatus('success');
+
+      toast({
+        title: 'Digest Parsed',
+        description: `Found ${opportunities.length} Grants.gov opportunit${opportunities.length === 1 ? 'y' : 'ies'}.`,
+      });
+    } catch (err) {
+      const errorMsg = err.message || 'Failed to parse Grants.gov digest';
+      setError(errorMsg);
+      setStatus('error');
+      toast({ variant: 'destructive', title: 'Parse Failed', description: errorMsg });
+    }
+  };
+
+  const handleImportAllDigest = async () => {
+    if (!digestText.trim()) {
+      toast({ variant: 'destructive', title: 'Nothing to import', description: 'Paste digest text first.' });
+      return;
+    }
+    if (!selectedOrgId) {
+      toast({
+        variant: 'destructive',
+        title: 'Select a profile to import',
+        description: 'Choose a profile before importing opportunities into the pipeline.',
+      });
+      return;
+    }
+
+    setIsSavingGrant(true);
+    setError(null);
+
+    try {
+      const response = await client.functions.invoke('importGrantsGovDigest', {
+        text: digestText,
+        organizationId: selectedOrgId,
+      });
+
+      if (!response?.data?.success) {
+        throw new Error(response?.data?.message || 'Import failed');
+      }
+
+      setDigestImportSummary(response.data);
+      queryClient.invalidateQueries({ queryKey: ['grants'] });
+
+      toast({
+        title: 'Import Complete',
+        description: `Saved ${response.data.saved_count} of ${response.data.total_parsed} opportunities to the pipeline.`,
+      });
+    } catch (err) {
+      const errorMsg = err.message || 'Failed to import digest';
+      setError(errorMsg);
+      toast({ variant: 'destructive', title: 'Import Failed', description: errorMsg });
+    } finally {
+      setIsSavingGrant(false);
+    }
+  };
+
+  const handleQuickAddDigestRow = async (opp) => {
+    if (!selectedOrgId) {
+      toast({
+        variant: 'destructive',
+        title: 'Select a profile to save',
+        description: 'Choose a profile before adding an opportunity to the pipeline.',
+      });
+      return;
+    }
+
+    setRowActionId(opp.opportunity_id);
+    setError(null);
+
+    try {
+      const grantPayload = buildGrantPayload(opp, {
+        organizationId: selectedOrgId,
+        inputMode: 'digest',
+        url: opp.application_url,
+      });
+      const newGrant = await saveGrantToPipeline(grantPayload);
+      navigate(createPageUrl('GrantDetail', { id: newGrant.id }));
+    } catch (err) {
+      const errorMsg = err.message || 'Failed to save opportunity';
+      setError(errorMsg);
+      toast({ variant: 'destructive', title: 'Save Failed', description: errorMsg });
+    } finally {
+      setRowActionId(null);
+    }
+  };
+
+  const handleFullParseDigestRow = async (opp) => {
+    setInputMode('url');
+    setUrl(opp.application_url);
+    setExtractedData(null);
+    setError(null);
+    setStatus('idle');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+    toast({
+      title: 'Ready for full AI parse',
+      description: 'Click "Process Document" to extract full details from this Grants.gov page.',
+    });
   };
 
   const handleSaveToPipeline = async () => {
@@ -173,122 +380,40 @@ export default function NOFOParser() {
     setIsSavingGrant(true);
     setError(null);
 
-    const rawAppUrl = extractedData.application_url || '';
-    const validatedAppUrl =
-      rawAppUrl.startsWith('http://') || rawAppUrl.startsWith('https://')
-        ? rawAppUrl
-        : '';
+    const grantPayload = buildGrantPayload(extractedData, {
+      organizationId: selectedOrgId,
+      inputMode,
+      url,
+    });
 
-    if (!validatedAppUrl) {
-      log.warn('NOFOParser: no valid application_url extracted â grant will be marked ineligible (missing_application_url)', {
+    if (!grantPayload.application_url) {
+      log.warn('NOFOParser: no valid application_url extracted — grant will be marked ineligible (missing_application_url)', {
         title: extractedData.title,
-        raw: rawAppUrl,
+        raw: extractedData.application_url,
       });
     }
 
-    const grantPayload = {
-      ...extractedData,
-      application_url: validatedAppUrl,
-      organization_id: selectedOrgId,
-      status: 'discovered',
-      opportunity_type: 'grant',
-      ai_status: 'queued',
-      url: inputMode === 'url' ? url : (extractedData.url || ''),
-      // Seed audit fields so the pipeline function receives a well-formed
-      // record and does not overwrite computed values with null (Goals 8, 9).
-      match_decision: null,
-      match_explanation: null,
-      matched_needs: [],
-      eligibility_status: validatedAppUrl ? 'pending' : 'INELIGIBLE',
-      ineligibility_reasons: validatedAppUrl ? [] : ['missing_application_url'],
-      fingerprints: null,
-      matcher_version: null,
-      evaluated_at: null,
-      match_confidence: null,
-    };
-
     try {
-        // Route through the canonical pipeline insertion function so that
-        // relevanceFilter hard-disqualification and computeMatchDecision run
-        // before any record is written to the DB (Goals 3, 4, 8).
-        const pipelineResult = await client.functions.invoke('saveToProfilePipeline', {
-          opportunity: grantPayload,
-          organizationId: selectedOrgId,
-          source: 'nofo_parser',
-        });
-
-        if (!pipelineResult?.data?.success) {
-          const reason =
-            pipelineResult?.data?.rejection_reason ||
-            pipelineResult?.data?.ineligibility_reasons?.[0] ||
-            pipelineResult?.data?.message ||
-            'Pipeline rejected this opportunity. Check eligibility criteria.';
-          log.warn('NOFOParser: pipeline rejected opportunity', {
-            title: grantPayload.title,
-            rejection_reason: reason,
-            raw_response: pipelineResult?.data,
-          });
-          throw new Error(reason);
-        }
-
-        const newGrant = pipelineResult.data.grant;
-
-        const analysisResult = await client.functions.invoke('analyzeGrant', {
-            grantId: newGrant.id,
-            title: newGrant.title,
-            programDescription: newGrant.program_description,
-            eligibilitySummary: newGrant.eligibility_summary,
-            selectionCriteria: newGrant.selection_criteria,
-            awardCeiling: newGrant.amount_max,
-            deadline: newGrant.deadline,
-        });
-
-        if (!analysisResult?.data?.success) {
-            log.warn('analyzeGrant did not return success â patching record with analysis_failed status', {
-                grantId: newGrant.id,
-                response: analysisResult?.data,
-            });
-            // Patch the record so the pipeline state machine reflects the failure
-            // and operators can query for records needing retry.
-            await client.entities.Grant.update(newGrant.id, {
-                ai_status: 'analysis_failed',
-                match_explanation: 'AI analysis could not complete at time of submission. Queued for retry.',
-                evaluated_at: new Date().toISOString(),
-            }).catch((patchErr) => {
-                log.error('Failed to patch grant ai_status after analysis failure', { grantId: newGrant.id, patchErr });
-            });
-            toast({
-                variant: 'destructive',
-                title: 'Analysis Queued',
-                description: `Grant "${newGrant.title}" saved but AI analysis could not start. It will retry automatically.`,
-            });
-        } else {
-            toast({
-                title: "Saved and Analyzing",
-                description: `Grant "${newGrant.title}" created and sent for AI analysis.`,
-            });
-        }
-
-        queryClient.invalidateQueries({ queryKey: ['grants'] });
-        navigate(createPageUrl("GrantDetail", { id: newGrant.id }));
+      const newGrant = await saveGrantToPipeline(grantPayload);
+      navigate(createPageUrl("GrantDetail", { id: newGrant.id }));
     } catch (err) {
-        const errorMessage = `Failed to save grant or start analysis: ${err.message}`;
-        setError(errorMessage);
-        setStatus('error');
-        toast({
-            title: "Error",
-            description: errorMessage,
-            variant: "destructive",
-        });
+      const errorMessage = `Failed to save grant or start analysis: ${err.message}`;
+      setError(errorMessage);
+      setStatus('error');
+      toast({
+        title: "Error",
+        description: errorMessage,
+        variant: "destructive",
+      });
     } finally {
-        setIsSavingGrant(false);
+      setIsSavingGrant(false);
     }
   };
 
-  // Determine if button should be enabled
   const isProcessing = status === 'uploading' || status === 'processing';
   const canProcess =
-    ((inputMode === 'file' && file) || (inputMode === 'url' && url.trim())) && !isProcessing;
+    ((inputMode === 'file' && file) || (inputMode === 'url' && url.trim()) || (inputMode === 'digest' && digestText.trim())) &&
+    !isProcessing;
 
   return (
     <div className="p-6 md:p-8">
@@ -296,7 +421,9 @@ export default function NOFOParser() {
         <div className="text-center mb-8">
           <FileStack className="w-12 h-12 mx-auto text-blue-600 mb-4" />
           <h1 className="text-3xl font-bold text-slate-900">NOFO Parser</h1>
-          <p className="text-slate-600 mt-2">Upload a grant opportunity PDF or provide a URL, and let AI extract the key information instantly.</p>
+          <p className="text-slate-600 mt-2">
+            Upload a grant PDF, enter a URL, or paste a Grants.gov digest email to extract and import opportunities.
+          </p>
         </div>
 
         <Card className="shadow-xl border-0">
@@ -306,7 +433,7 @@ export default function NOFOParser() {
           <CardContent className="space-y-6">
             <div>
               <Label className="text-base font-semibold mb-2 block">Link to Profile (optional)</Label>
-              <Select value={selectedOrgId} onValueChange={setSelectedOrgId} disabled={isProcessing}>
+              <Select value={selectedOrgId} onValueChange={setSelectedOrgId} disabled={isProcessing || isSavingGrant}>
                 <SelectTrigger className="text-base h-12 mt-2">
                   <SelectValue placeholder="Optional: select a profile to save into its pipeline..." />
                 </SelectTrigger>
@@ -321,11 +448,11 @@ export default function NOFOParser() {
                 </SelectContent>
               </Select>
             </div>
-            
+
             <div>
               <Label className="text-base font-semibold mb-3 block">Choose Input Method</Label>
               <Tabs value={inputMode} onValueChange={setInputMode} className="w-full">
-                <TabsList className="grid w-full grid-cols-2">
+                <TabsList className="grid w-full grid-cols-3">
                   <TabsTrigger value="file" disabled={isProcessing}>
                     <Upload className="w-4 h-4 mr-2" />
                     Upload PDF
@@ -334,8 +461,12 @@ export default function NOFOParser() {
                     <LinkIcon className="w-4 h-4 mr-2" />
                     Enter URL
                   </TabsTrigger>
+                  <TabsTrigger value="digest" disabled={isProcessing}>
+                    <ClipboardList className="w-4 h-4 mr-2" />
+                    Paste Digest
+                  </TabsTrigger>
                 </TabsList>
-                
+
                 <TabsContent value="file" className="mt-4">
                   <Alert className="mb-4 border-blue-200 bg-blue-50">
                     <Info className="h-4 w-4 text-blue-600" />
@@ -344,7 +475,7 @@ export default function NOFOParser() {
                       Currently, only PDF documents are supported. If you have a Word document (.docx), please convert it to PDF first.
                     </AlertDescription>
                   </Alert>
-                  
+
                   <div className="border-2 border-dashed rounded-xl p-8 text-center hover:border-blue-300 transition-colors">
                     <input
                       type="file"
@@ -374,7 +505,7 @@ export default function NOFOParser() {
                     </label>
                   </div>
                 </TabsContent>
-                
+
                 <TabsContent value="url" className="mt-4">
                   <Alert className="mb-4 border-green-200 bg-green-50">
                     <Info className="h-4 w-4 text-green-600" />
@@ -383,7 +514,7 @@ export default function NOFOParser() {
                       Enter the direct URL to a grant opportunity webpage. The AI will fetch and extract information from the page.
                     </AlertDescription>
                   </Alert>
-                  
+
                   <div className="space-y-2">
                     <Label htmlFor="url-input">Grant Opportunity URL</Label>
                     <Input
@@ -400,12 +531,45 @@ export default function NOFOParser() {
                     </p>
                   </div>
                 </TabsContent>
+
+                <TabsContent value="digest" className="mt-4">
+                  <Alert className="mb-4 border-amber-200 bg-amber-50">
+                    <Info className="h-4 w-4 text-amber-600" />
+                    <AlertTitle className="text-amber-900">Grants.gov Email Digest</AlertTitle>
+                    <AlertDescription className="text-amber-800">
+                      Paste the full text from a Grants.gov update email. We will extract each listing with its agency, title, notice type, and detail URL.
+                    </AlertDescription>
+                  </Alert>
+
+                  <div className="space-y-2">
+                    <Label htmlFor="digest-input">Digest Text</Label>
+                    <Textarea
+                      id="digest-input"
+                      placeholder="Paste the Grants.gov email digest here..."
+                      value={digestText}
+                      onChange={(e) => setDigestText(e.target.value)}
+                      disabled={isProcessing}
+                      className="min-h-[240px] text-sm"
+                    />
+                  </div>
+                </TabsContent>
               </Tabs>
             </div>
-            
-            <div className="flex justify-end">
+
+            <div className="flex justify-end gap-3">
+              {inputMode === 'digest' && parsedDigest.length > 0 && (
+                <Button
+                  onClick={handleImportAllDigest}
+                  disabled={isSavingGrant || !selectedOrgId}
+                  variant="outline"
+                  size="lg"
+                >
+                  {isSavingGrant ? <Loader2 className="w-5 h-5 mr-2 animate-spin" /> : <CheckCircle className="mr-2 h-5 w-5" />}
+                  Import All to Pipeline
+                </Button>
+              )}
               <Button
-                onClick={handleProcess}
+                onClick={inputMode === 'digest' ? handleParseDigest : handleProcess}
                 disabled={!canProcess}
                 className="bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
                 size="lg"
@@ -413,19 +577,24 @@ export default function NOFOParser() {
                 {isProcessing ?
                  <Loader2 className="w-5 h-5 mr-2 animate-spin" /> :
                  <Sparkles className="mr-2 h-5 w-5" />}
-                {isProcessing ? 'Processing...' : 'Process Document'}
+                {isProcessing
+                  ? 'Processing...'
+                  : inputMode === 'digest'
+                    ? 'Parse Digest'
+                    : 'Process Document'}
               </Button>
             </div>
           </CardContent>
         </Card>
 
-        {(status !== 'idle') && (
+        {(status !== 'idle' || parsedDigest.length > 0) && (
             <Card className="mt-8 shadow-xl border-0">
                 <CardHeader>
                     <CardTitle className="flex items-center">
                         {status === 'uploading' && <><Loader2 className="w-6 h-6 mr-2 animate-spin" /> {inputMode === 'file' ? 'Uploading file...' : 'Fetching URL...'}</>}
-                        {status === 'processing' && <><Loader2 className="w-6 h-6 mr-2 animate-spin" /> AI is reading the document...</>}
-                        {status === 'success' && <><CheckCircle className="w-6 h-6 mr-2 text-emerald-500" /> Extraction Complete!</>}
+                        {status === 'processing' && <><Loader2 className="w-6 h-6 mr-2 animate-spin" /> {inputMode === 'digest' ? 'Parsing digest...' : 'AI is reading the document...'}</>}
+                        {status === 'success' && inputMode !== 'digest' && <><CheckCircle className="w-6 h-6 mr-2 text-emerald-500" /> Extraction Complete!</>}
+                        {status === 'success' && inputMode === 'digest' && <><CheckCircle className="w-6 h-6 mr-2 text-emerald-500" /> Digest Parsed ({parsedDigest.length})</>}
                         {status === 'error' && <><AlertTriangle className="w-6 h-6 mr-2 text-red-500" /> Processing Failed</>}
                     </CardTitle>
                 </CardHeader>
@@ -438,7 +607,81 @@ export default function NOFOParser() {
                         </Alert>
                     </CardContent>
                 )}
-                {extractedData && status === 'success' && (
+
+                {inputMode === 'digest' && parsedDigest.length > 0 && (
+                  <CardContent className="space-y-4">
+                    {digestImportSummary && (
+                      <Alert className="border-emerald-200 bg-emerald-50">
+                        <CheckCircle className="h-4 w-4 text-emerald-600" />
+                        <AlertTitle className="text-emerald-900">Import Summary</AlertTitle>
+                        <AlertDescription className="text-emerald-800">
+                          Saved {digestImportSummary.saved_count} of {digestImportSummary.total_parsed} opportunities to the pipeline.
+                        </AlertDescription>
+                      </Alert>
+                    )}
+
+                    <div className="overflow-x-auto border rounded-lg">
+                      <table className="min-w-full text-sm">
+                        <thead className="bg-slate-50 text-left">
+                          <tr>
+                            <th className="px-3 py-2 font-semibold">Agency</th>
+                            <th className="px-3 py-2 font-semibold">Title</th>
+                            <th className="px-3 py-2 font-semibold">Notice</th>
+                            <th className="px-3 py-2 font-semibold">Actions</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {parsedDigest.map((opp) => (
+                            <tr key={opp.opportunity_id} className="border-t align-top">
+                              <td className="px-3 py-3 whitespace-nowrap">
+                                <div className="font-medium">{opp.agency_acronym || '—'}</div>
+                                <div className="text-xs text-slate-500 max-w-[180px]">{opp.funder}</div>
+                              </td>
+                              <td className="px-3 py-3">
+                                <div className="font-medium text-slate-800">{opp.title}</div>
+                                <a
+                                  href={opp.application_url}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="inline-flex items-center text-xs text-blue-600 hover:underline mt-1"
+                                >
+                                  View on Grants.gov <ExternalLink className="w-3 h-3 ml-1" />
+                                </a>
+                              </td>
+                              <td className="px-3 py-3 whitespace-nowrap capitalize">
+                                {opp.notice_type ? `${opp.notice_type} ${opp.notice_number}` : 'Listing'}
+                              </td>
+                              <td className="px-3 py-3 whitespace-nowrap">
+                                <div className="flex flex-col gap-2">
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    onClick={() => handleQuickAddDigestRow(opp)}
+                                    disabled={rowActionId === opp.opportunity_id || isSavingGrant}
+                                  >
+                                    {rowActionId === opp.opportunity_id ? (
+                                      <Loader2 className="w-4 h-4 mr-1 animate-spin" />
+                                    ) : null}
+                                    Quick Add
+                                  </Button>
+                                  <Button
+                                    size="sm"
+                                    variant="ghost"
+                                    onClick={() => handleFullParseDigestRow(opp)}
+                                  >
+                                    Full AI Parse
+                                  </Button>
+                                </div>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </CardContent>
+                )}
+
+                {extractedData && status === 'success' && inputMode !== 'digest' && (
                     <CardContent className="space-y-4">
                         <h3 className="text-lg font-semibold text-slate-800 border-b pb-2">Extracted Information</h3>
                         <div className="space-y-3">
