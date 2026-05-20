@@ -4,6 +4,14 @@
  * Labels use sentence case. Every persisted profile section key must be declared
  * here with a label, format, and help text before it can be rendered or saved.
  */
+import {
+  ORGANIZATION_DETAILS_TYPES,
+  NONPROFIT_COMPLIANCE_TYPES,
+  SMALL_BUSINESS_DETAILS_TYPES,
+  STUDENT_TYPES,
+  MEDICAL_PROFILE_TYPES,
+} from '../../shared/profileSectionApplicability.js'
+
 export const SECTION_METADATA = {
   "basic_information": {
     "title": "Basic Information",
@@ -134,6 +142,8 @@ export const SECTION_METADATA = {
           "tribal_government",
           "public_health_department",
           "business",
+          "medium_corporation",
+          "large_corporation",
           "minority_owned_business",
           "women_owned_business",
           "medical_need",
@@ -181,12 +191,7 @@ export const SECTION_METADATA = {
   "organization_details": {
     "title": "Organization Details",
     "description": "Entity registration, capacity indicators, and mission summary for Section 4 of the comprehensive application.",
-    "applies_to": [
-      "organization",
-      "nonprofit",
-      "small_business",
-      "government"
-    ],
+    "applies_to": ORGANIZATION_DETAILS_TYPES,
     "fields": [
       {
         "name": "organization_type",
@@ -845,12 +850,7 @@ export const SECTION_METADATA = {
   "medical_insurance": {
     "title": "Medical Insurance",
     "description": "Store insurance details (provider/plan). Upload insurance cards or letters in the Files panel.",
-    "applies_to": [
-      "medical_assistance",
-      "medical_need",
-      "individual_need",
-      "family"
-    ],
+    "applies_to": MEDICAL_PROFILE_TYPES,
     "fields": [
       {
         "name": "insurance_provider",
@@ -920,12 +920,7 @@ export const SECTION_METADATA = {
   "medical_history": {
     "title": "Medical History & Needs",
     "description": "Capture medical context needed for assistance resources and support letters (keep concise).",
-    "applies_to": [
-      "medical_assistance",
-      "medical_need",
-      "individual_need",
-      "family"
-    ],
+    "applies_to": MEDICAL_PROFILE_TYPES,
     "fields": [
       {
         "name": "primary_condition",
@@ -980,10 +975,7 @@ export const SECTION_METADATA = {
   "nonprofit_compliance": {
     "title": "Nonprofit Compliance",
     "description": "Track core compliance readiness signals used by many grants.",
-    "applies_to": [
-      "nonprofit",
-      "organization"
-    ],
+    "applies_to": NONPROFIT_COMPLIANCE_TYPES,
     "fields": [
       {
         "name": "is_501c3",
@@ -1026,9 +1018,7 @@ export const SECTION_METADATA = {
   "small_business_details": {
     "title": "Small Business Details",
     "description": "Track business details needed for small business programs and certifications.",
-    "applies_to": [
-      "small_business"
-    ],
+    "applies_to": SMALL_BUSINESS_DETAILS_TYPES,
     "fields": [
       {
         "name": "business_name",
@@ -1591,12 +1581,7 @@ export const SECTION_METADATA = {
   "education": {
     "title": "Education",
     "description": "Academic history and student qualifiers (GPA, tests, service hours) for scholarship and education-focused matching.",
-    "applies_to": [
-      "student",
-      "college_student",
-      "high_school_student",
-      "graduate_student"
-    ],
+    "applies_to": STUDENT_TYPES,
     "fields": [
       {
         "name": "highest_level",

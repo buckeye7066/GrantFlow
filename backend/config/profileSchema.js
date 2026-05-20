@@ -10,6 +10,14 @@
  * - Sections are stored as JSON in `profile_sections.data`; adding keys is backwards compatible.
  * - Keep this file as the single source of truth; prompts, validation, and crawlers should derive from it.
  */
+import {
+  ORGANIZATION_DETAILS_TYPES,
+  NONPROFIT_COMPLIANCE_TYPES,
+  SMALL_BUSINESS_DETAILS_TYPES,
+  STUDENT_TYPES,
+  MEDICAL_PROFILE_TYPES,
+} from '../../shared/profileSectionApplicability.js'
+
 export const PROFILE_SCHEMA = {
   basic_information: {
     title: 'Basic Information',
@@ -41,6 +49,7 @@ export const PROFILE_SCHEMA = {
   organization_details: {
     title: 'Organization Details',
     description: 'Organization identifiers and capacity indicators used for nonprofit/small business eligibility.',
+    applies_to: ORGANIZATION_DETAILS_TYPES,
     fields: {
       organization_type: {
         type: 'string',
@@ -228,7 +237,7 @@ export const PROFILE_SCHEMA = {
     title: 'Medical Insurance',
     description:
       'Insurance coverage details used for care coordination, assistance programs, and documentation (do not invent identifiers).',
-    applies_to: ['medical_assistance', 'medical_need', 'individual_need', 'family'],
+    applies_to: MEDICAL_PROFILE_TYPES,
     fields: {
       insurance_provider: {
         type: 'string',
@@ -263,7 +272,7 @@ export const PROFILE_SCHEMA = {
     title: 'Medical History & Needs',
     description:
       'Medical background needed to target condition-specific resources and support letters (avoid unnecessary PHI; keep concise).',
-    applies_to: ['medical_assistance', 'medical_need', 'individual_need', 'family'],
+    applies_to: MEDICAL_PROFILE_TYPES,
     fields: {
       primary_condition: { type: 'string', default: '', description: 'Primary condition/diagnosis when explicitly stated.' },
       secondary_conditions: {
@@ -295,7 +304,7 @@ export const PROFILE_SCHEMA = {
   nonprofit_compliance: {
     title: 'Nonprofit Compliance',
     description: 'Nonprofit compliance signals used for grant readiness and eligibility.',
-    applies_to: ['nonprofit', 'organization'],
+    applies_to: NONPROFIT_COMPLIANCE_TYPES,
     fields: {
       is_501c3: { type: 'boolean', default: false, description: 'True if 501(c)(3) status is confirmed.' },
       fiscal_sponsor: { type: 'boolean', default: false, description: 'True if operating under a fiscal sponsor.' },
@@ -309,7 +318,7 @@ export const PROFILE_SCHEMA = {
   small_business_details: {
     title: 'Small Business Details',
     description: 'Business details used for small business programs, certifications, and lending resources.',
-    applies_to: ['small_business'],
+    applies_to: SMALL_BUSINESS_DETAILS_TYPES,
     fields: {
       business_name: { type: 'string', default: '', description: 'Legal business name if different from profile name.' },
       naics_code: { type: 'string', default: '', description: 'NAICS code if known.' },
@@ -446,6 +455,7 @@ export const PROFILE_SCHEMA = {
   education: {
     title: 'Education',
     description: 'Academic history and student qualifiers used for scholarship eligibility.',
+    applies_to: STUDENT_TYPES,
     fields: {
       highest_level: { type: 'string', default: '', description: 'Highest education level attained (freeform string).' },
       current_institution: { type: 'string', default: '', description: 'Current institution/school name.' },

@@ -1,15 +1,11 @@
 import { SECTION_METADATA } from "@/config/sectionMetadata"
 import { isSentinelDisplayValue } from "@/utils/fieldDisplay"
+import { sectionAppliesToProfileType } from "../../shared/profileSectionApplicability.js"
 
 export function isProfileSectionApplicable(sectionKey, profile, metadata = SECTION_METADATA) {
   const config = metadata?.[sectionKey]
   if (!config) return true
-  const appliesTo = config.applies_to ?? config.appliesTo ?? null
-  if (!Array.isArray(appliesTo) || appliesTo.length === 0) return true
-
-  const primaryType = String(profile?.primary_type ?? profile?.primaryType ?? "").trim()
-  if (!primaryType) return false
-  return appliesTo.includes(primaryType)
+  return sectionAppliesToProfileType(config, profile)
 }
 
 export function hasMeaningfulProfileValue(value) {

@@ -22,7 +22,7 @@ import AutoTimeTracker from '../billing/AutoTimeTracker';
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/components/ui/use-toast";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -846,6 +846,9 @@ if (_logoUrl && _logoUrl.startsWith('https://') && _validExt) {
         <DialogContent className="max-w-lg">
           <DialogHeader>
             <DialogTitle>Edit Profile</DialogTitle>
+            <DialogDescription>
+              Update the display name, profile type, and tags. Profile type controls which sections and funding sources apply.
+            </DialogDescription>
           </DialogHeader>
 
           <div className="space-y-4">
