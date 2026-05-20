@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React, { useState, useEffect, useCallback } from 'react'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -12,7 +12,7 @@ export default function ReverseLookup({ profileId, profileName }) {
   const [expanded, setExpanded] = useState(false)
   const { toast } = useToast()
 
-  const handleSearch = async () => {
+  const handleSearch = useCallback(async () => {
     if (!profileId) return
     setLoading(true)
     try {
@@ -27,13 +27,32 @@ export default function ReverseLookup({ profileId, profileName }) {
     } finally {
       setLoading(false)
     }
-  }
+  }, [profileId, toast])
+
+  useEffect(() => {
+    setResults(null)
+    setExpanded(false)
+    if (profileId) {
+      void handleSearch()
+    }
+  }, [profileId, handleSearch])
 
   const formatAmount = (amt) => {
     if (!amt) return null
     if (amt >= 1_000_000) return `$${(amt / 1_000_000).toFixed(1)}M`
     if (amt >= 1_000) return `$${(amt / 1_000).toFixed(0)}K`
     return `$${amt.toLocaleString()}`
+  }
+
+  if (!expanded && loading) {
+    return (
+      <Card className="border-purple-200 bg-purple-50/50">
+        <CardContent className="pt-4 pb-4 flex items-center gap-2 text-sm text-purple-900">
+          <Loader2 className="w-4 h-4 animate-spin" />
+          Finding funders aligned with {profileName || 'this profile'}…
+        </CardContent>
+      </Card>
+    )
   }
 
   if (!expanded) {
@@ -76,7 +95,9 @@ export default function ReverseLookup({ profileId, profileName }) {
         <CardDescription>
           {funders.length > 0
             ? `Found ${funders.length} foundations that fund similar organizations`
-            : 'No matching funders found. Try completing more profile fields.'}
+            : loading
+              ? 'Searching for aligned funders…'
+              : 'No matching funders found. Try completing more profile fields.'}
           {results?.ntee_codes_used?.length > 0 && (
             <span className="block mt-1 text-xs text-slate-500">
               Searched: {results.ntee_codes_used.map(c => c.label).join(', ')}
