@@ -6,7 +6,7 @@ import * as cheerio from 'cheerio'
 
 const fetchImpl = globalThis.fetch
 
-function normalizeHttpUrl(value) {
+export function normalizeHttpUrl(value) {
   const raw = String(value ?? '').trim()
   if (!raw) return null
   const withScheme = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`
@@ -171,14 +171,40 @@ async function tryDownloadDirectUrl(imageUrl, uploadDir) {
   }
 }
 
-async function tryUseWebsiteCoverPhoto({ profileContext, uploadDir }) {
-  const websiteRaw =
-    profileContext?.sections?.basic_information?.website ??
-    profileContext?.profile?.website ??
-    profileContext?.organization?.website ??
-    null
+export function extractProfileWebsite(profileContext) {
+  const sections = profileContext?.sections ?? {}
+  const candidates = [
+    profileContext?.website_hint,
+    sections.basic_information?.website,
+    sections.organization_details?.website,
+    profileContext?.profile?.website,
+    profileContext?.organization?.website,
+  ]
 
-  const website = normalizeHttpUrl(websiteRaw)
+  for (const raw of candidates) {
+    const normalized = normalizeHttpUrl(raw)
+    if (normalized) return normalized
+  }
+
+  const contactInfo = profileContext?.organization?.contact_info
+  if (contactInfo) {
+    let parsed = contactInfo
+    if (typeof contactInfo === 'string') {
+      try {
+        parsed = JSON.parse(contactInfo)
+      } catch {
+        parsed = null
+      }
+    }
+    const fromContact = normalizeHttpUrl(parsed?.website)
+    if (fromContact) return fromContact
+  }
+
+  return null
+}
+
+async function tryUseWebsiteCoverPhoto({ profileContext, uploadDir }) {
+  const website = extractProfileWebsite(profileContext)
   if (!website) {
     return { ok: false, reason: 'no_website' }
   }
@@ -282,8 +308,13 @@ async function tryUseWebsiteCoverPhoto({ profileContext, uploadDir }) {
   }
 }
 
-export async function processAvatarLookupJob({ profileContext, uploadDir, getOpenAI }) {
-  const profile = profileContext?.profile
+export async function processAvatarLookupJob({ profileContext, uploadDir, getOpenAI, job }) {
+  const websiteHint = job?.parameters?.website_hint ?? null
+  const effectiveContext = websiteHint
+    ? { ...profileContext, website_hint: websiteHint }
+    : profileContext
+
+  const profile = effectiveContext?.profile
   if (!profile) {
     // Never fail the job: avatar lookup is a cosmetic enhancement.
     return {
@@ -323,7 +354,7 @@ export async function processAvatarLookupJob({ profileContext, uploadDir, getOpe
   // Step 2: Use website cover image if available.
   // This makes the UI button deterministic and matches user intent.
   try {
-    const websiteResult = await tryUseWebsiteCoverPhoto({ profileContext, uploadDir })
+    const websiteResult = await tryUseWebsiteCoverPhoto({ profileContext: effectiveContext, uploadDir })
     if (websiteResult?.ok && websiteResult.avatarUrl) {
       return {
         inserted: 1,

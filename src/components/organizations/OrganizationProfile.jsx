@@ -23,6 +23,8 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { createLogger } from "@/utils/logger";
 import { useAuthStore } from "@/stores/authStore";
 import { isRealProfileId } from "@/api/profileIdGuards";
+import { useAuthenticatedAvatar } from "@/hooks/useAuthenticatedAvatar";
+import { runProfileAvatarLookup } from "@/services/profileAvatarAI";
 
 
 const capitalize = (s) => s && s.charAt(0).toUpperCase() + s.slice(1);
@@ -349,76 +351,64 @@ export default function OrganizationProfile({
     updateOrgMutation.mutate({ id, data: updateData });
   };
 
+  const avatarSourceUrl = React.useMemo(() => {
+    if (!orgData) return null
+    return orgData.avatar_download_url || orgData.profile_image_url || orgData.avatar_url || null
+  }, [orgData])
+
+  const { blobUrl: avatarSrc } = useAuthenticatedAvatar(avatarSourceUrl)
+
   const handleFindPicture = async () => {
-      // The `profiles` table has no `website` column - the URL lives inside the
-      // `basic_information` section JSON.  `flatOrgData` merges section data onto the
-      // root object, so it is the only reliable source for fields like website/email/phone.
-      // (We keep `orgData` as a fallback in case future profile types start storing it at the top level.)
-      const websiteUrl = flatOrgData?.website || orgData?.website || '';
-      const orgName = flatOrgData?.name || orgData?.name || '';
-      if (!websiteUrl) {
-          toast({
-            title: "Website Missing",
-            description: "Please add a website to the profile before searching for a picture.",
-            variant: "destructive",
-          });
-          return;
+    const websiteUrl = flatOrgData?.website || orgData?.website || ''
+    if (!websiteUrl || websiteUrl === 'none') {
+      toast({
+        title: 'Website missing',
+        description: 'Add a website to this profile before searching for a picture.',
+        variant: 'destructive',
+      })
+      return
+    }
+
+    if (!isRealProfileId(organizationId)) {
+      toast({
+        title: 'Profile unavailable',
+        description: 'Select a saved profile before running AI picture lookup.',
+        variant: 'destructive',
+      })
+      return
+    }
+
+    setIsFindingPicture(true)
+    try {
+      const result = await runProfileAvatarLookup(organizationId, {
+        websiteHint: websiteUrl,
+      })
+
+      await queryClient.invalidateQueries({ queryKey: ['organization', organizationId] })
+      await queryClient.invalidateQueries({ queryKey: ['profile', organizationId] })
+
+      if (result.ok) {
+        toast({
+          title: 'Picture found',
+          description: 'We saved a profile photo from the organization website.',
+        })
+      } else {
+        toast({
+          title: 'Picture not found',
+          description: 'We could not find a usable logo or photo on that website. You can upload one manually.',
+          variant: 'destructive',
+        })
       }
-      setIsFindingPicture(true);
-      try {
-          const prompt = `You are an expert brand asset analyst. Your mission is to find the official logo for the organization named "${orgName}". Use their website, ${websiteUrl}, as the primary source, but use web searches as a powerful fallback.
-
-**Search Strategy:**
-1.  **Primary Source (Website Analysis):**
-    *   **Inspect HTML Meta Tags:** Thoroughly check the source of ${websiteUrl} for meta tags like \`og:image\`, \`twitter:image\`, \`apple-touch-icon\`, and \`<link rel="icon" ...>\`. These often point directly to the logo.
-    *   **Homepage DOM Analysis:** If meta tags are unhelpful, analyze the rendered homepage's structure. Look for an \`<img>\` tag within the main header or navigation, typically linked to the homepage. Extract its absolute URL. Prioritize SVG logos if available.
-2.  **Secondary Source (Web Search):
-    *   **Targeted Google Search:** If the website analysis fails, perform a targeted Google search. Use precise queries like: \`"${orgName}" logo filetype:svg\`, \`"${orgName}" logo site:clearbit.com\`, and finally \`"${orgName}" logo official\`. Clearbit is a good source for company logos.
-    *   **Validate the Result:** From the search results, select the URL that's most likely to be the official, high-quality logo. Avoid watermarked images, social media profile pictures, or images from third-party news articles unless no other option exists.
-
-**Final Output:**
-Return a single JSON object with the key "logo_url" containing the absolute, direct URL to the best image file you found. The URL must end in .png, .jpg, .jpeg, or .svg. For example: {"logo_url": "https://example.com/logo.svg"}`;
-
-          const response = await client.integrations.Core.InvokeLLM({
-            profile_id: orgData.id,
-            prompt,
-            add_context_from_internet: true,
-            response_json_schema: {
-                "type": "object",
-                "properties": {
-                    "logo_url": { "type": "string" }
-                }
-            }
-          });
-
-          const _logoUrl = response?.logo_url ?? '';
-const _validExt = /\.(png|jpe?g|svg|webp)(\?.*)?$/i.test(_logoUrl);
-if (_logoUrl && _logoUrl.startsWith('https://') && _validExt) {
-              handleUpdate({ id: orgData.id, orgData: { profile_image_url: response.logo_url } });
-              toast({
-                title: "Picture Found!",
-                description: "AI successfully found and updated the profile picture.",
-              });
-          } else {
-              toast({
-                title: "Picture Not Found",
-                description: "AI could not find a suitable image, even after a web search. You can still upload one manually.",
-                variant: "destructive",
-              });
-          }
-      } catch (error) {
-          console.error("Error finding picture:", error);
-          const message = error?.message?.includes('Profile not found')
-            ? 'Could not verify this profile for AI access. Refresh the page and try again.'
-            : 'An error occurred while the AI was searching for a picture. This can happen with complex websites. Please try uploading manually.';
-          toast({
-            title: "Error Searching",
-            description: message,
-            variant: "destructive",
-          });
-      } finally {
-          setIsFindingPicture(false);
-      }
+    } catch (error) {
+      console.error('Error finding picture:', error)
+      toast({
+        title: 'Error searching',
+        description: error?.message || 'Could not complete AI picture lookup. Try again or upload manually.',
+        variant: 'destructive',
+      })
+    } finally {
+      setIsFindingPicture(false)
+    }
   };
 
   const triggerPrint = () => {
@@ -463,9 +453,9 @@ if (_logoUrl && _logoUrl.startsWith('https://') && _validExt) {
         <div className="flex items-start gap-6">
             <div className="relative group">
                 {/* Conditional rendering based on profile_image_url and imgError state */}
-                {orgData.profile_image_url && !imgError ? (
+                {avatarSrc && !imgError ? (
                     <img
-                      src={orgData.profile_image_url}
+                      src={avatarSrc}
                       alt={orgData.name}
                       className="w-24 h-24 rounded-xl object-cover border-2 border-slate-100"
                       onError={() => setImgError(true)} // Set imgError to true if image fails to load
@@ -488,7 +478,7 @@ if (_logoUrl && _logoUrl.startsWith('https://') && _validExt) {
               </Button>
               <h1 className="text-3xl font-bold text-slate-900">{orgData.display_name ?? orgData.name}</h1>
               <p className="text-md text-slate-600 mt-1">{subtitle}</p>
-              {(!orgData.profile_image_url || imgError) && (
+              {(!avatarSrc || imgError) && (
                   <Button variant="outline" size="sm" className="mt-3" onClick={handleFindPicture} disabled={isFindingPicture || updateOrgMutation.isPending}>
                       {isFindingPicture ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Sparkles className="w-4 h-4 mr-2" />}
                       {isFindingPicture ? 'Searching...' : 'Find Picture with AI'}

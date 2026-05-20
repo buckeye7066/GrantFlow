@@ -46,10 +46,14 @@ export async function uploadProfileAvatar(profileId, file) {
   })
 }
 
-export async function requestProfileAvatarAI(profileId) {
+export async function requestProfileAvatarAI(profileId, options = {}) {
   assertRealProfileId(profileId, 'requestProfileAvatarAI')
+  const body = {}
+  const websiteHint = options?.websiteHint ?? options?.website
+  if (websiteHint) body.website_hint = websiteHint
   return apiFetch(`/api/profiles/${profileId}/avatar/ai`, {
     method: 'POST',
+    body: JSON.stringify(body),
   })
 }
 

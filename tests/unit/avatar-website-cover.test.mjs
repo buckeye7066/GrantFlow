@@ -5,7 +5,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 
-import { processAvatarLookupJob } from '../../backend/services/avatarCrawler.js'
+import { processAvatarLookupJob, extractProfileWebsite } from '../../backend/services/avatarCrawler.js'
 
 // Enable localhost fetch for this test (SSRF guard).
 process.env.NODE_ENV = 'test'
@@ -123,5 +123,13 @@ test('avatar lookup uses organization.website and falls back to icon when no og:
     await new Promise((resolve) => server.close(resolve))
     rmSync(uploadDir, { recursive: true, force: true })
   }
+})
+
+test('extractProfileWebsite honors website_hint from avatar job parameters', () => {
+  const url = extractProfileWebsite({
+    sections: { basic_information: {} },
+    website_hint: 'https://www.zacog.org/',
+  })
+  assert.equal(url, 'https://www.zacog.org/')
 })
 

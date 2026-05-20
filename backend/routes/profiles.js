@@ -31,6 +31,7 @@ import { syncProfileFieldsFromSection } from '../utils/profileSectionSync.js'
 import { guardProfileSectionPayload } from '../utils/profileSuggestionGuards.js'
 import { normalizeProfileSectionData } from '../services/profileHelpers.js'
 import { resolveProfileType } from '../services/profileTypeRegistry.js'
+import { normalizeHttpUrl } from '../services/avatarCrawler.js'
 
 /**
  * Mission goal #4/#5: every saved profile must carry a profile-type
@@ -1716,6 +1717,31 @@ router.post('/:id/avatar/ai', async (req, res) => {
   const parameters = {
     display_name: profileRow.display_name,
     primary_type: profileRow.primary_type,
+  }
+
+  const websiteHint = normalizeHttpUrl(req.body?.website_hint ?? req.body?.website)
+  if (websiteHint) {
+    parameters.website_hint = websiteHint
+    const sectionRow = await req.db
+      .prepare('SELECT data FROM profile_sections WHERE profile_id = ? AND section_key = ?')
+      .get(id, 'basic_information')
+    const existingData = sectionRow?.data ? safeParseJSON(sectionRow.data, {}) : {}
+    if (!normalizeHttpUrl(existingData.website)) {
+      const merged = { ...existingData, website: websiteHint }
+      await req.db.prepare(
+        `INSERT INTO profile_sections (profile_id, section_key, data, updated_by)
+         VALUES (?, ?, ?, ?)
+         ON CONFLICT(profile_id, section_key) DO UPDATE SET
+           data = excluded.data,
+           updated_by = excluded.updated_by,
+           updated_at = CURRENT_TIMESTAMP`,
+      ).run(
+        id,
+        'basic_information',
+        JSON.stringify(merged),
+        req.ctx?.userId ?? req.ctx?.email ?? 'avatar-ai',
+      )
+    }
   }
 
   const jobId = crypto.randomUUID()

@@ -8,7 +8,6 @@ import {
   requestProfileSectionAI,
   upsertProfileSection,
   uploadProfileAvatar,
-  requestProfileAvatarAI,
 } from "@/api/profiles"
 import { ingestDocument } from "@/api/documents"
 import ProfileOverview from "@/components/profiles/ProfileOverview"
@@ -35,6 +34,7 @@ import UniversityApplicationsSection from "@/components/profiles/UniversityAppli
 import StudentPortalsCard from "@/components/profiles/StudentPortalsCard.jsx"
 import HealthResourcesCard from "@/components/profiles/HealthResourcesCard.jsx"
 import { SECTION_METADATA } from "@/config/sectionMetadata"
+import { runProfileAvatarLookup } from "@/services/profileAvatarAI"
 import { calculateProfileCompletion } from "@/utils/profileCompletion"
 import { deriveEmploymentStatusForSave, guardProfileSectionSuggestion } from "@/utils/profileSuggestionGuards"
 import { formatFieldLabel } from "@/utils/fieldDisplay"
@@ -205,15 +205,29 @@ export default function ProfileDetail() {
   )
 
   const requestAvatarAIMutation = useMutation({
-    mutationFn: () => requestProfileAvatarAI(profileId),
-    onSuccess: () => {
-      toast({
-        title: "AI search queued",
-        description: "We'll add a suggested avatar to this profile if one is located.",
-      })
+    mutationFn: async () => {
+      const basic =
+        profile?.sections?.find((section) => section.section_key === "basic_information")?.data ?? {}
+      const websiteHint = basic?.website || profile?.website || null
+      return runProfileAvatarLookup(profileId, { websiteHint })
+    },
+    onSuccess: (result) => {
+      queryClient.invalidateQueries({ queryKey: ["profile", profileId] })
+      if (result?.ok) {
+        toast({
+          title: "Picture found",
+          description: "We saved a profile photo from the website or generated one with AI.",
+        })
+      } else {
+        toast({
+          title: "Picture not found",
+          description: "We could not locate a usable photo. Try uploading one manually.",
+          variant: "destructive",
+        })
+      }
     },
     onError: (err) => {
-      const message = err instanceof Error ? err.message : "Unable to start the AI avatar search."
+      const message = err instanceof Error ? err.message : "Unable to complete the AI avatar search."
       toast({
         title: "Request failed",
         description: message,
