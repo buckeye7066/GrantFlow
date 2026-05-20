@@ -2147,14 +2147,17 @@ async function scheduleAutoProfileDedupe({ db }) {
   let skippedGroups = 0
 
   try {
-    const report = await findDuplicateProfileGroups(db, {
-      strategy: 'exact_name',
-      limitGroups: 500,
-      minGroupSize: 2,
-      includeInactive: false,
-    })
+    const strategies = ['similar_name', 'exact_name']
 
-    for (const group of report?.groups || []) {
+    for (const strategy of strategies) {
+      const report = await findDuplicateProfileGroups(db, {
+        strategy,
+        limitGroups: 500,
+        minGroupSize: 2,
+        includeInactive: false,
+      })
+
+      for (const group of report?.groups || []) {
       const winner = group?.winner
       const losers = Array.isArray(group?.losers) ? group.losers : []
       if (!winner?.id || losers.length === 0) continue
@@ -2233,6 +2236,7 @@ async function scheduleAutoProfileDedupe({ db }) {
             error: mergeError?.message || String(mergeError),
           },
         })
+      }
       }
     }
   } finally {

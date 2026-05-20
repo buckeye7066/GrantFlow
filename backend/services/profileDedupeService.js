@@ -854,12 +854,32 @@ export async function mergeProfiles(db, {
         } catch { /* best effort */ }
 
         try {
-          await tx.prepare('DELETE FROM profiles WHERE id = ?').run(loserId)
-          changes.push({ type: 'profiles.delete', id: loserId })
+          const deleteResult = await tx.prepare('DELETE FROM profiles WHERE id = ?').run(loserId)
+          const deletedRows = Number(deleteResult?.changes ?? 0)
+          if (deletedRows > 0) {
+            changes.push({ type: 'profiles.delete', id: loserId })
+          } else {
+            const softResult = await tx
+              .prepare("UPDATE profiles SET status = 'deleted', user_id = NULL WHERE id = ?")
+              .run(loserId)
+            if (Number(softResult?.changes ?? 0) === 0) {
+              throw new Error(`Merged profile ${loserId} could not be deleted or soft-deleted`)
+            }
+            changes.push({
+              type: 'profiles.soft_delete',
+              id: loserId,
+              reason: 'hard delete removed 0 rows',
+            })
+          }
         } catch (deleteError) {
           // Postgres can enforce FK constraints that SQLite doesn't. If hard-delete fails,
           // soft-delete instead so the merge operation succeeds without leaving data inconsistent.
-          await tx.prepare("UPDATE profiles SET status = 'deleted', user_id = NULL WHERE id = ?").run(loserId)
+          const softResult = await tx
+            .prepare("UPDATE profiles SET status = 'deleted', user_id = NULL WHERE id = ?")
+            .run(loserId)
+          if (Number(softResult?.changes ?? 0) === 0) {
+            throw deleteError
+          }
           changes.push({
             type: 'profiles.soft_delete',
             id: loserId,
@@ -902,5 +922,198 @@ export async function mergeProfiles(db, {
       changes,
     }
   })
+}
+
+export function coerceDryRun(value, defaultDryRun = true) {
+  if (value === false || value === 0) return false
+  if (value === true || value === 1) return true
+  const text = String(value ?? '').trim().toLowerCase()
+  if (text === 'false' || text === '0' || text === 'apply') return false
+  if (text === 'true' || text === '1' || text === 'dry-run' || text === 'dry_run') return true
+  return defaultDryRun
+}
+
+function normalizeProfileEmail(value) {
+  const email = String(value ?? '').trim().toLowerCase()
+  if (!email || !email.includes('@')) return null
+  return email
+}
+
+async function loadProfileEmailSignals(db, profileIds) {
+  const ids = Array.from(new Set((profileIds || []).filter(Boolean).map(String)))
+  const byProfile = new Map(ids.map((id) => [id, new Set()]))
+  if (ids.length === 0) return byProfile
+
+  const placeholders = ids.map(() => '?').join(', ')
+  const sectionRows = await db
+    .prepare(
+      `
+        SELECT profile_id, data
+        FROM profile_sections
+        WHERE profile_id IN (${placeholders})
+      `,
+    )
+    .all(...ids)
+
+  for (const row of sectionRows || []) {
+    const pid = String(row.profile_id || '')
+    if (!pid || !byProfile.has(pid)) continue
+    const obj = safeParseJSON(row.data, null)
+    if (!obj || typeof obj !== 'object') continue
+    for (const candidate of [obj.email, obj.primary_email, obj.contact_email, obj.contactEmail]) {
+      const email = normalizeProfileEmail(candidate)
+      if (email) byProfile.get(pid).add(email)
+    }
+  }
+
+  try {
+    const emailRows = await db
+      .prepare(
+        `
+          SELECT profile_id, email
+          FROM profile_emails
+          WHERE profile_id IN (${placeholders})
+        `,
+      )
+      .all(...ids)
+    for (const row of emailRows || []) {
+      const pid = String(row.profile_id || '')
+      if (!pid || !byProfile.has(pid)) continue
+      const email = normalizeProfileEmail(row.email)
+      if (email) byProfile.get(pid).add(email)
+    }
+  } catch {
+    // ignore missing table/schema
+  }
+
+  return byProfile
+}
+
+export async function chooseWinnerForProfileGroup(db, memberIds) {
+  const ids = Array.from(new Set((memberIds || []).filter(Boolean).map(String)))
+  if (ids.length < 2) return ids[0] ?? null
+
+  const placeholders = ids.map(() => '?').join(', ')
+  const profiles = await db
+    .prepare(
+      `
+        SELECT id, user_id, display_name, updated_at
+        FROM profiles
+        WHERE id IN (${placeholders})
+      `,
+    )
+    .all(...ids)
+
+  const metricsRows = await db
+    .prepare(
+      `
+        SELECT profile_id, COUNT(*) as section_count, COALESCE(SUM(LENGTH(data)), 0) as data_bytes
+        FROM profile_sections
+        WHERE profile_id IN (${placeholders})
+        GROUP BY profile_id
+      `,
+    )
+    .all(...ids)
+
+  const metricsByProfile = new Map()
+  for (const row of metricsRows || []) {
+    metricsByProfile.set(String(row.profile_id), {
+      sectionCount: Number(row.section_count ?? row.count ?? 0) || 0,
+      dataBytes: Number(row.data_bytes ?? 0) || 0,
+    })
+  }
+
+  const emailsByProfile = await loadProfileEmailSignals(db, ids)
+
+  const userIds = Array.from(new Set((profiles || []).map((p) => p.user_id).filter(Boolean).map(String)))
+  const usersById = new Map()
+  if (userIds.length > 0) {
+    const userPlaceholders = userIds.map(() => '?').join(', ')
+    const users = await db
+      .prepare(
+        `
+          SELECT id, primary_email, is_admin
+          FROM users
+          WHERE id IN (${userPlaceholders})
+        `,
+      )
+      .all(...userIds)
+    for (const u of users || []) usersById.set(String(u.id), u)
+  }
+
+  let best = null
+  let bestScore = -Infinity
+
+  for (const p of profiles || []) {
+    const pid = String(p.id)
+    const metrics = metricsByProfile.get(pid) || { sectionCount: 0, dataBytes: 0 }
+    const updated = Date.parse(p.updated_at ?? '') || 0
+    const emails = emailsByProfile.get(pid) || new Set()
+    const user = p.user_id ? usersById.get(String(p.user_id)) : null
+    const userEmail = normalizeProfileEmail(user?.primary_email)
+    const isAdmin = Boolean(user?.is_admin === true || user?.is_admin === 1)
+    const ownerEmailMatchesProfile = Boolean(userEmail && emails.has(userEmail))
+    const hasNonAdminOwner = Boolean(user && !isAdmin)
+
+    const ownershipWeight =
+      ownerEmailMatchesProfile && hasNonAdminOwner ? 1_000_000_000 :
+      hasNonAdminOwner ? 1_000_000 :
+      isAdmin ? 10_000 :
+      0
+
+    const completenessWeight = metrics.sectionCount * 10_000 + Math.floor(metrics.dataBytes / 10)
+    const score = ownershipWeight + completenessWeight + Math.floor(updated / 1_000_000)
+
+    if (score > bestScore) {
+      bestScore = score
+      best = pid
+    }
+  }
+
+  return best ?? ids[0] ?? null
+}
+
+export const PROFILE_DEDUPE_STRATEGIES = Object.freeze(['similar_name', 'exact_name', 'email_or_phone'])
+
+export async function deduplicateProfileGroups(db, {
+  strategies = PROFILE_DEDUPE_STRATEGIES,
+  limitGroups = 500,
+  minGroupSize = 2,
+  includeInactive = false,
+  dryRun = false,
+  actorUserId = null,
+} = {}) {
+  const strategyList = Array.from(
+    new Set((strategies || PROFILE_DEDUPE_STRATEGIES).map((s) => String(s || '').trim()).filter(Boolean)),
+  )
+
+  const results = []
+  for (const strategy of strategyList) {
+    const report = await findDuplicateProfileGroups(db, { strategy, limitGroups, minGroupSize, includeInactive })
+    for (const group of report?.groups || []) {
+      const memberIds = [group?.winner?.id, ...(group?.losers || []).map((l) => l?.id)].filter(Boolean)
+      if (memberIds.length < minGroupSize) continue
+
+      const winnerId = await chooseWinnerForProfileGroup(db, memberIds)
+      const loserIds = memberIds.filter((id) => String(id) !== String(winnerId))
+      if (!winnerId || loserIds.length === 0) continue
+
+      const merged = await mergeProfiles(db, { winnerId, loserIds, dryRun, actorUserId })
+      results.push({
+        strategy,
+        key: group.key,
+        winnerId,
+        loserIds,
+        dry_run: merged?.dry_run ?? dryRun,
+        changes: merged?.changes ?? [],
+      })
+    }
+  }
+
+  return {
+    strategies: strategyList,
+    merged_groups: results.length,
+    results,
+  }
 }
 

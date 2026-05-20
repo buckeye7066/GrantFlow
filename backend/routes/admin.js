@@ -25,7 +25,7 @@ import { getRequestError } from '../services/requestIdErrorStore.js';
 import { extractTextFromFile } from '../services/documentTextExtraction.js'
 import { crawlItemFunding } from '../services/crawlers/itemFundingCrawler.js';
 import { runCrawler as runCuratedCrawlerForAudit } from '../services/crawlers/crawlerManager.js';
-import { findDuplicateProfileGroups, mergeProfiles } from '../services/profileDedupeService.js'
+import { findDuplicateProfileGroups, mergeProfiles, deduplicateProfileGroups, coerceDryRun } from '../services/profileDedupeService.js'
 import { ensureAdminUser, isAdminUser, addProfileEmails, listProfileEmails } from '../utils/accessControl.js'
 import { ensureAuth, ensureAdmin } from '../middleware/auth.js'
 import { repairProfileOwnership } from '../utils/profileOwnershipRepair.js'
@@ -4792,7 +4792,7 @@ router.post('/profiles/merge', async (req, res, next) => {
 
     const winnerId = typeof req.body?.winnerId === 'string' ? req.body.winnerId : null
     const loserIds = Array.isArray(req.body?.loserIds) ? req.body.loserIds : null
-    const dryRun = req.body?.dryRun !== false
+    const dryRun = coerceDryRun(req.body?.dryRun, true)
 
     if (!winnerId || !loserIds || loserIds.length === 0) {
       return res.status(400).json({
@@ -4888,90 +4888,6 @@ async function loadProfileEmailSignals(db, profileIds) {
   return byProfile
 }
 
-async function chooseWinnerForGroup(db, memberIds) {
-  const ids = Array.from(new Set((memberIds || []).filter(Boolean).map(String)))
-  if (ids.length < 2) return ids[0] ?? null
-
-  const placeholders = ids.map(() => '?').join(', ')
-  const profiles = await db
-    .prepare(
-      `
-        SELECT id, user_id, display_name, updated_at
-        FROM profiles
-        WHERE id IN (${placeholders})
-      `,
-    )
-    .all(...ids)
-
-  const metricsRows = await db
-    .prepare(
-      `
-        SELECT profile_id, COUNT(*) as section_count, COALESCE(SUM(LENGTH(data)), 0) as data_bytes
-        FROM profile_sections
-        WHERE profile_id IN (${placeholders})
-        GROUP BY profile_id
-      `,
-    )
-    .all(...ids)
-
-  const metricsByProfile = new Map()
-  for (const row of metricsRows || []) {
-    metricsByProfile.set(String(row.profile_id), {
-      sectionCount: Number(row.section_count ?? row.count ?? 0) || 0,
-      dataBytes: Number(row.data_bytes ?? 0) || 0,
-    })
-  }
-
-  const emailsByProfile = await loadProfileEmailSignals(db, ids)
-
-  const userIds = Array.from(new Set((profiles || []).map((p) => p.user_id).filter(Boolean).map(String)))
-  const usersById = new Map()
-  if (userIds.length > 0) {
-    const userPlaceholders = userIds.map(() => '?').join(', ')
-    const users = await db
-      .prepare(
-        `
-          SELECT id, primary_email, is_admin
-          FROM users
-          WHERE id IN (${userPlaceholders})
-        `,
-      )
-      .all(...userIds)
-    for (const u of users || []) usersById.set(String(u.id), u)
-  }
-
-  let best = null
-  let bestScore = -Infinity
-
-  for (const p of profiles || []) {
-    const pid = String(p.id)
-    const m = metricsByProfile.get(pid) || { sectionCount: 0, dataBytes: 0 }
-    const updated = Date.parse(p.updated_at ?? '') || 0
-    const emails = emailsByProfile.get(pid) || new Set()
-    const user = p.user_id ? usersById.get(String(p.user_id)) : null
-    const userEmail = normalizeEmail(user?.primary_email)
-    const isAdmin = Boolean(user?.is_admin === true || user?.is_admin === 1)
-    const ownerEmailMatchesProfile = Boolean(userEmail && emails.has(userEmail))
-    const hasNonAdminOwner = Boolean(user && !isAdmin)
-
-    // Hard preference: keep the profile owned by the real (non-admin) user whose email matches the profile email.
-    const ownershipWeight =
-      ownerEmailMatchesProfile && hasNonAdminOwner ? 1_000_000_000 :
-      hasNonAdminOwner ? 1_000_000 :
-      isAdmin ? 10_000 :
-      0
-
-    const completenessWeight = m.sectionCount * 10_000 + Math.floor(m.dataBytes / 10)
-    const score = ownershipWeight + completenessWeight + Math.floor(updated / 1_000_000)
-
-    if (score > bestScore) {
-      bestScore = score
-      best = pid
-    }
-  }
-
-  return best ?? ids[0] ?? null
-}
 
 /**
  * POST /api/admin/profiles/deduplicate
@@ -4984,45 +4900,35 @@ router.post('/profiles/deduplicate', async (req, res) => {
   try {
     if (!(await ensureAdminRequest(req, res))) return
 
-    const strategy = String(req.body?.strategy || req.query?.strategy || 'exact_name')
+    const strategy = String(req.body?.strategy || req.query?.strategy || 'similar_name')
+    const strategies = Array.isArray(req.body?.strategies)
+      ? req.body.strategies.map((s) => String(s || '').trim()).filter(Boolean)
+      : [strategy]
     const includeInactive = String(req.body?.includeInactive || req.query?.includeInactive || '').toLowerCase() === 'true'
     const limitGroups = Math.max(1, Math.min(Number(req.body?.limitGroups ?? req.query?.limitGroups) || 500, 2000))
     const minGroupSize = Math.max(2, Math.min(Number(req.body?.minGroupSize ?? req.query?.minGroupSize) || 2, 50))
-    const dryRun = req.body?.dryRun === true
-
-    const report = await findDuplicateProfileGroups(req.db, { strategy, limitGroups, minGroupSize, includeInactive })
-    const groups = report?.groups || []
+    const dryRun = coerceDryRun(req.body?.dryRun, false)
 
     const actorUserId = req.ctx?.userId ?? req.user?.userId ?? null
-
-    const results = []
-    for (const g of groups) {
-      const memberIds = [g?.winner?.id, ...(g?.losers || []).map((l) => l?.id)].filter(Boolean)
-      if (memberIds.length < 2) continue
-
-      const winnerId = await chooseWinnerForGroup(req.db, memberIds)
-      const loserIds = memberIds.filter((id) => String(id) !== String(winnerId))
-      if (!winnerId || loserIds.length === 0) continue
-
-      const merged = await mergeProfiles(req.db, { winnerId, loserIds, dryRun, actorUserId })
-      results.push({
-        key: g.key,
-        winnerId,
-        loserIds,
-        dry_run: merged?.dry_run ?? dryRun,
-        changes: merged?.changes ?? [],
-      })
-    }
+    const deduped = await deduplicateProfileGroups(req.db, {
+      strategies,
+      limitGroups,
+      minGroupSize,
+      includeInactive,
+      dryRun,
+      actorUserId,
+    })
 
     return res.json({
       ok: true,
       strategy,
+      strategies: deduped.strategies,
       includeInactive,
       limitGroups,
       minGroupSize,
       dryRun,
-      merged_groups: results.length,
-      results,
+      merged_groups: deduped.merged_groups,
+      results: deduped.results,
     })
   } catch (error) {
     routeLogger.error('[admin/profiles/deduplicate] Error:', error)
