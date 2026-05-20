@@ -259,6 +259,12 @@ for (const [key, entry] of Object.entries(TAXONOMY)) {
   }
 }
 
+const EXPAND_NEED_STOPWORDS = new Set([
+  'for', 'the', 'and', 'help', 'find', 'get', 'need', 'with', 'from', 'that',
+  'have', 'want', 'pay', 'paying', 'source', 'fund', 'funding', 'assistance',
+  'me', 'my', 'our', 'you', 'your', 'can', 'could', 'would', 'should', 'about',
+])
+
 /**
  * Expand a free-text need into taxonomy terms.
  *
@@ -317,7 +323,7 @@ export function expandNeed(needText) {
   }
 
   // Fallback: collect ALL word-level matches and merge their categories for maximum recall
-  const words = text.split(/\s+/).filter(w => w.length > 2);
+  const words = text.split(/\s+/).filter((w) => w.length > 2 && !EXPAND_NEED_STOPWORDS.has(w))
   const fallbackMatches = [];
   // Collect ALL taxonomy keys that contain any word, then deduplicate by key name.
   // Sort by key length descending before iterating so longer (more specific) keys win
