@@ -50,8 +50,11 @@ async function main() {
 
   // Test-spawned server processes may keep open handles that prevent
   // node --test from exiting. Hard-kill after a generous timeout so the
-  // CI pipeline can proceed to vitest and build steps.
-  const HARD_TIMEOUT_MS = Number(process.env.UNIT_TEST_HARD_TIMEOUT_MS) || 5 * 60 * 1000
+  // CI pipeline can proceed to vitest and build steps. The full suite
+  // (1500+ tests, several spawning full backend processes) takes ~230s
+  // warm. Use 10 minutes as the default to absorb cold-start variance
+  // on Windows / slower CI hosts; override with UNIT_TEST_HARD_TIMEOUT_MS.
+  const HARD_TIMEOUT_MS = Number(process.env.UNIT_TEST_HARD_TIMEOUT_MS) || 10 * 60 * 1000
   setTimeout(() => {
     if (!exited) {
       console.error(`[unit] Hard timeout (${HARD_TIMEOUT_MS / 1000}s) reached — killing test runner`)

@@ -294,6 +294,14 @@ const EXCLUSIVE_ENTITY_REQUIREMENTS = {
     /\b(must be|limited to|exclusively for|only for)\s+(?:u\.?s\.?\s+)?(?:military\s+)?veterans?\b/i,
   ],
   student: [
+    // Explicit students-only language only. Program-name mentions (HOPE, Pell,
+    // STEP UP, FAFSA, "cost of attendance", "room and board") are scholarship
+    // SIGNALS used elsewhere (isStudentAidOpportunity + score caps) but they
+    // do NOT by themselves declare an opportunity to be exclusive to
+    // currently-enrolled students. Promoting them to a hard requirement
+    // forces a REJECT for profiles whose student status is unknown, which
+    // violates the mission rule: missing profile fields default to neutral,
+    // not exclusionary.
     /\b(students?|undergraduates?|graduates?|enrolled students?)\s+(only|required|eligible)\b/i,
     /\b(must be|limited to|exclusively for|only for)\s+(?:currently\s+)?enrolled students?\b/i,
     /\bcurrently enrolled\b/i,
@@ -301,9 +309,6 @@ const EXCLUSIVE_ENTITY_REQUIREMENTS = {
     /\bfor\s+(?:tn\s+|state\s+)?students?\s+(?:with|pursuing|enrolled|attending)\b/i,
     /\b(?:female|women(?:'s)?)\s+students?\b/i,
     /\bscholarships?\s+for\s+(?:female\s+)?students?\b/i,
-    /\b(?:hope|tsaa|step\s+up|tennessee\s+promise|pell|fseog|fafsa)\b/i,
-    /\bcost\s+of\s+attendance\b/i,
-    /\broom\s+and\s+board\b/i,
   ],
   nonprofit: [
     /\b(nonprofits?|non-profit organizations?|501\(c\)\(3\)|501c3|charitable organizations?)\s+(only|required|eligible)\b/i,

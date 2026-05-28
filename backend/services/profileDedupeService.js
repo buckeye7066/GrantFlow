@@ -61,7 +61,7 @@ export function profilesHaveSimilarNames(nameA, nameB) {
   return false
 }
 
-function buildDuplicateGroupsFromMembers(members, metaByProfile, { minGroupSize }) {
+function buildDuplicateGroupsFromMembers(members, metaByProfile, { minGroupSize, groupingKey = null } = {}) {
   if (!members || members.length < minGroupSize) return null
 
   const candidates = members.map((profile) => ({
@@ -71,11 +71,17 @@ function buildDuplicateGroupsFromMembers(members, metaByProfile, { minGroupSize 
   const winner = pickWinner(candidates)
   const losers = candidates.filter((c) => c.profile.id !== winner.profile.id)
 
-  const key = candidates
+  const nameKey = candidates
     .map((c) => normalizeProfileNameKey(c.profile.display_name) || c.profile.display_name)
     .filter(Boolean)
     .sort()
     .join(' | ')
+
+  // Prefer the grouping signal (email / phone) as the response key when the
+  // caller supplied one — it tells the admin UI WHY these profiles were
+  // grouped (e.g. shared email). Fall back to the joined-name key so the
+  // similar_name / exact_name strategies still produce a readable key.
+  const key = groupingKey || nameKey
 
   return {
     key,
@@ -422,8 +428,15 @@ export async function findDuplicateProfileGroups(db, {
       groupsMap.get(key).push(p)
     }
 
-    for (const [, members] of groupsMap.entries()) {
-      const group = buildDuplicateGroupsFromMembers(members, metaByProfile, { minGroupSize })
+    for (const [groupingKey, members] of groupsMap.entries()) {
+      // Only surface the grouping key as the response key when the strategy
+      // produces a non-name signal — for exact_name the key IS the name key,
+      // so the existing joined-name response is the right thing.
+      const exposedKey = strategy === 'email_or_phone' ? groupingKey : null
+      const group = buildDuplicateGroupsFromMembers(members, metaByProfile, {
+        minGroupSize,
+        groupingKey: exposedKey,
+      })
       if (group) groups.push(group)
     }
   }
