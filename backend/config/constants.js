@@ -108,17 +108,53 @@ export const CRAWLER_JOB_STATUSES = [
   'cancelled',
 ]
 
-// Grant statuses
+// Grant (pipeline) statuses — single source of truth.
+// MUST stay in sync with:
+//   * backend/db/postgres/migrations/0032_expand_grants_status_check.sql
+//     (Postgres CHECK constraint)
+//   * src/components/pipeline/KanbanBoard.jsx STATUSES
+//     (every status listed here MUST render in some column, never silently
+//     filtered — per the project rule "Counts displayed in the UI must map
+//     1:1 to backend response fields.")
+//
+// Drift between this list and the UI column list is what produced the
+// "pipeline totals don't match what's in the pipeline" user report:
+// the API would 400 a valid UI status, or the UI would accept a status
+// from the DB it had no column for. Keep them aligned.
 export const GRANT_STATUSES = [
+  // Current UI stages (post-migration 0032)
+  'discovery',
   'discovered',
   'interested',
+  'auto_applied',
   'drafting',
-  'app_prep',
+  'application_prep',
   'revision',
+  'portal',
   'submitted',
-  'under_review',
+  'pending_review',
+  'follow_up',
   'awarded',
-  'rejected',
+  'report',
+  'declined_no_review',
+  'declined',
   'closed',
-  'archived'
+  // Legacy stages preserved for backward compatibility with rows written
+  // before migration 0032. New writes should prefer the current names
+  // above, but reads must accept these so historical pipeline rows are
+  // still routable to a column (no silent drops).
+  'app_prep',
+  'under_review',
+  'rejected',
+  'archived',
 ];
+
+// Legacy → current canonical name. Used by UI helpers to normalize a
+// status before bucketing into Kanban columns so legacy data still
+// renders in the right place.
+export const GRANT_STATUS_ALIASES = Object.freeze({
+  app_prep: 'application_prep',
+  under_review: 'pending_review',
+  rejected: 'declined',
+  archived: 'closed',
+});

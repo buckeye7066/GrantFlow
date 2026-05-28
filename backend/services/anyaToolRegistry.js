@@ -994,6 +994,103 @@ registerTool({
   },
 })
 
+// pipeline.getTotals — exposes the real per-stage counts for the active
+// profile (or one explicitly named by id). Returned so Anya can
+// truthfully answer "how many grants are in my pipeline" / "the totals
+// don't match" without resorting to vague "let me run a diagnostic"
+// language. The shape mirrors what the Pipeline UI computes from the
+// /api/grants response so a 1:1 comparison is trivial for the user.
+//
+// The handler reads from the same `grants` table the UI does and
+// applies the same legacy-status normalisation as the KanbanBoard's
+// canonicalStatus helper, so the numbers reported here always match
+// what the user sees on the board.
+registerTool({
+  name: 'pipeline.getTotals',
+  description: 'Returns per-stage grant counts for a profile\'s pipeline. Use this whenever the user asks about pipeline totals, pipeline counts, "how many grants do I have", "what\'s in my pipeline", or claims the totals look wrong. Returns the same numbers the Pipeline page displays.',
+  schema: {
+    type: 'object',
+    properties: {
+      profile_id: {
+        type: 'string',
+        description: 'Profile to summarise. Defaults to the active profile when omitted.',
+      },
+    },
+  },
+  handler: async (params, context) => {
+    const db = context?.db
+    if (!db) throw new Error('Database connection unavailable')
+
+    const profileId =
+      (typeof params?.profile_id === 'string' && params.profile_id.trim()) ||
+      (typeof params?.profileId === 'string' && params.profileId.trim()) ||
+      context?.profileId ||
+      context?.ctx?.activeProfileId ||
+      context?.user?.activeProfileId ||
+      null
+
+    if (!profileId) {
+      return {
+        ok: false,
+        reason: 'no_active_profile',
+        message:
+          'No active profile is selected. Ask the user to select a profile from the dropdown, then run this again.',
+      }
+    }
+
+    // Legacy → current stage alias, mirrors KanbanBoard.canonicalStatus
+    // and backend/config/constants.js GRANT_STATUS_ALIASES.
+    const ALIASES = {
+      app_prep: 'application_prep',
+      under_review: 'pending_review',
+      rejected: 'declined',
+      archived: 'closed',
+    }
+
+    let rows = []
+    try {
+      const stmt = db.prepare(
+        'SELECT status FROM grants WHERE profile_id = ?',
+      )
+      const result = stmt.all(profileId)
+      rows = Array.isArray(result) ? result : Array.isArray(result?.rows) ? result.rows : []
+    } catch (err) {
+      return {
+        ok: false,
+        reason: 'query_failed',
+        error: err?.message || String(err),
+      }
+    }
+
+    const byStage = {}
+    let total = 0
+    let unknown = 0
+    for (const r of rows) {
+      total += 1
+      const raw = String(r?.status || 'unknown').toLowerCase()
+      const canonical = ALIASES[raw] ?? raw
+      byStage[canonical] = (byStage[canonical] || 0) + 1
+      if (!canonical || canonical === 'unknown') unknown += 1
+    }
+
+    const sortedStages = Object.entries(byStage)
+      .map(([stage, count]) => ({ stage, count }))
+      .sort((a, b) => b.count - a.count || a.stage.localeCompare(b.stage))
+
+    return {
+      ok: true,
+      profile_id: profileId,
+      total,
+      unknown_status_count: unknown,
+      stages: sortedStages,
+      breakdown_pretty: sortedStages.map((s) => `${s.stage}=${s.count}`).join('  '),
+      sum_equals_total: sortedStages.reduce((acc, s) => acc + s.count, 0) === total,
+      note:
+        'These counts mirror the Pipeline page totals. If they disagree with what the user sees on the Kanban board, the Kanban "Other / Unknown" column will hold any uncategorised rows.',
+    }
+  },
+})
+
 registerTool({
   name: 'grants.explainMatch',
   description: "Explains why a specific funding opportunity matched (or didn't fully match) the user's profile. Returns a breakdown of matching signals like applicant type, location, keywords, and financial need.",

@@ -299,6 +299,20 @@ export default function Pipeline() {
 
   const filteredGrants = useFilteredGrants(scopedGrants, filters, 'all');
 
+  // Per-stage breakdown so the header tally provably equals what the
+  // user can count on the Kanban board. Project rule: "Counts
+  // displayed in the UI must map 1:1 to backend response fields." If a
+  // grant has a status the UI doesn't recognise, it lands in the
+  // 'Other / Unknown' column on the board — and is still counted here.
+  const stageBreakdown = useMemo(() => {
+    const byStage = {};
+    for (const g of filteredGrants) {
+      const raw = String(g?.status || 'unknown').toLowerCase();
+      byStage[raw] = (byStage[raw] || 0) + 1;
+    }
+    return { total: filteredGrants.length, byStage };
+  }, [filteredGrants]);
+
   // Get all expired grants in "discovered" or "interested" status
   const expiredDiscoveredGrants = useMemo(() => {
     return grants.filter(grant => 
@@ -411,6 +425,18 @@ export default function Pipeline() {
               <p className="text-slate-600 mt-2">
                 Track all your grants across every profile • {filteredGrants.length} of {scopedGrants.length} grants
               </p>
+              {stageBreakdown.total > 0 && (
+                <p
+                  className="text-xs text-slate-500 mt-1 font-mono"
+                  title="Sum of per-stage counts equals the visible grant total. If a stage is missing from the Kanban board, it appears in the 'Other / Unknown' column."
+                >
+                  {Object.entries(stageBreakdown.byStage)
+                    .sort(([a], [b]) => a.localeCompare(b))
+                    .map(([stage, n]) => `${stage}=${n}`)
+                    .join('  ')}
+                  {'  '}∑={stageBreakdown.total}
+                </p>
+              )}
               {handoffsNeededCount > 0 && (
                 <p
                   className="mt-2 inline-flex items-center gap-2 rounded-md bg-amber-50 border border-amber-200 text-amber-800 px-3 py-1.5 text-sm font-medium"
