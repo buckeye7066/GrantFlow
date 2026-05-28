@@ -168,43 +168,8 @@ export default function BillingSheet() {
     setSelectedServices(newSelected);
   };
 
-  const calculateTotal = () => {
-    let total = 0;
-    const allServices = [
-      ...SERVICES.discovery,
-      ...SERVICES.writing,
-      ...SERVICES.support,
-    ];
-    
-    allServices.forEach(service => {
-      if (selectedServices.has(service.id)) {
-        const price = service[clientCategory] || 0;
-        total += price;
-      }
-    });
-    
-    return total;
-  };
-
-  const handleGenerateInvoice = () => {
-    if (selectedServices.size === 0) {
-      alert('Please select at least one service');
-      return;
-    }
-    
-    // Construct selected service IDs for the invoice URL
-    const selectedServiceIds = Array.from(selectedServices).join(',');
-    
-    // Navigate to create invoice with pre-selected services
-    navigate(
-      createPageUrl("CreateInvoice", {
-        organization_id: organizationId,
-        selectedServices: selectedServiceIds,
-      }),
-    );
-  };
-
-  // Determine client category
+  // Determine client category. Hoisted above calculateTotal so the
+  // price-lookup expression below reads an initialized binding.
   const getClientCategory = () => {
     if (!organization) return 'large';
 
@@ -219,6 +184,40 @@ export default function BillingSheet() {
   };
 
   const clientCategory = getClientCategory();
+
+  const calculateTotal = () => {
+    let total = 0;
+    const allServices = [
+      ...SERVICES.discovery,
+      ...SERVICES.writing,
+      ...SERVICES.support,
+    ];
+
+    allServices.forEach(service => {
+      if (selectedServices.has(service.id)) {
+        const price = service[clientCategory] || 0;
+        total += price;
+      }
+    });
+
+    return total;
+  };
+
+  const handleGenerateInvoice = () => {
+    if (selectedServices.size === 0) {
+      alert('Please select at least one service');
+      return;
+    }
+
+    const selectedServiceIds = Array.from(selectedServices).join(',');
+
+    navigate(
+      createPageUrl("CreateInvoice", {
+        organization_id: organizationId,
+        selectedServices: selectedServiceIds,
+      }),
+    );
+  };
   const categoryLabels = {
     individual: 'Individual/Household',
     small: 'Small Org/Ministry (<$250K budget)',

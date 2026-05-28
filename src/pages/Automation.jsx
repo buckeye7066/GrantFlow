@@ -1711,6 +1711,32 @@ export default function Automation() {
     })
   }
 
+  // jobDetailsMutation + handleInspectJob declared above retryJobMutation so
+  // its onSuccess closure can call them without a temporal-dead-zone read.
+  // Order matters: jobDetailsMutation -> handleInspectJob -> retryJobMutation.
+  const jobDetailsMutation = useMutation({
+    mutationFn: (jobId) => getCrawlerJob(jobId),
+    onSuccess: (job) => {
+      setSelectedJob(job)
+    },
+    onError: (error) => {
+      toast({
+        variant: "destructive",
+        title: "Unable to load job details",
+        description: error instanceof Error ? error.message : "Please try again shortly.",
+      })
+    },
+  })
+
+  function handleInspectJob(jobOrId) {
+    if (!jobOrId) return
+    if (typeof jobOrId === "string") {
+      jobDetailsMutation.mutate(jobOrId)
+      return
+    }
+    setSelectedJob(jobOrId)
+  }
+
   const retryJobMutation = useMutation({
     mutationFn: (jobId) => retryCrawlerJob(jobId),
     onSuccess: (newJob) => {
@@ -1747,20 +1773,6 @@ export default function Automation() {
       toast({
         variant: "destructive",
         title: "Unable to cancel job",
-        description: error instanceof Error ? error.message : "Please try again shortly.",
-      })
-    },
-  })
-
-  const jobDetailsMutation = useMutation({
-    mutationFn: (jobId) => getCrawlerJob(jobId),
-    onSuccess: (job) => {
-      setSelectedJob(job)
-    },
-    onError: (error) => {
-      toast({
-        variant: "destructive",
-        title: "Unable to load job details",
         description: error instanceof Error ? error.message : "Please try again shortly.",
       })
     },
@@ -1859,15 +1871,6 @@ export default function Automation() {
       profile_id: profileId || null,
       parameters: params,
     })
-  }
-
-  const handleInspectJob = (jobOrId) => {
-    if (!jobOrId) return
-    if (typeof jobOrId === "string") {
-      jobDetailsMutation.mutate(jobOrId)
-      return
-    }
-    setSelectedJob(jobOrId)
   }
 
   const handleRetryJob = (jobId) => {

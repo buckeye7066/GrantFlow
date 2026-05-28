@@ -77,8 +77,14 @@ function AnswerCard({ answer, index }) {
 
 export default function PortalAssistantPanel({ open, onClose, grant }) {
   const [portalUrl, setPortalUrl] = useState(grant?.application_url || grant?.url || '');
+  const [customQuestions, setCustomQuestions] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [result, setResult] = useState(null);
+  const [error, setError] = useState(null);
+  const { toast } = useToast();
 
-  // Reset derived state whenever the grant changes
+  // Reset derived state whenever the grant changes. Declared AFTER the
+  // useState hooks above so the setters exist by the time the effect runs.
   const prevGrantId = React.useRef(grant?.id);
   React.useEffect(() => {
     if (grant?.id !== prevGrantId.current) {
@@ -89,11 +95,6 @@ export default function PortalAssistantPanel({ open, onClose, grant }) {
       setError(null);
     }
   }, [grant]);
-  const [customQuestions, setCustomQuestions] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [result, setResult] = useState(null);
-  const [error, setError] = useState(null);
-  const { toast } = useToast();
 
   const handleAssist = useCallback(async () => {
     if (!grant?.id) {

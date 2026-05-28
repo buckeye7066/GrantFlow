@@ -510,7 +510,11 @@ export default function DiscoverGrants() {
     handleFindFunding()
   }, [effectiveProfileId, searchParams, isSearching, hasSearched])
 
-  const handleCrawlerResults = async (opportunities, responsePayload = null) => {
+  // Declared as a hoisted function declaration (not const arrow) so the
+  // earlier handleFindFunding caller and other forward references stay
+  // outside the temporal dead zone. Same reasoning for handleAddToPipeline
+  // below — both are used in render-time JSX above their lexical position.
+  async function handleCrawlerResults(opportunities, responsePayload = null) {
     log.debug('processing crawler results', { count: opportunities.length })
     const resultMeta = normalizeResultMetadata(responsePayload, opportunities)
     setCrawlerResultMeta(resultMeta)
@@ -575,9 +579,9 @@ export default function DiscoverGrants() {
       organizationId: selectedProfile?.organization_id ?? null,
       ...resultMeta,
     })
-  };
+  }
 
-  const handleAddToPipeline = async (opportunity, { silent = false } = {}) => {
+  async function handleAddToPipeline(opportunity, { silent = false } = {}) {
     log.debug('add to pipeline requested')
     if (!authReady) {
       if (!silent) {
@@ -744,7 +748,7 @@ export default function DiscoverGrants() {
       
       return { status: 'failed', error: errorCode, message: userMessage, requestId }
     }
-  };
+  }
 
   // --- Next Steps / Suggestions Logic ---
   const suggestions = React.useMemo(() => {

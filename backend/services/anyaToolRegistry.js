@@ -112,6 +112,40 @@ const ALLOWED_EXTENSIONS = new Set([
 ])
 const MAX_FILE_BYTES = 350_000
 const DEFAULT_GRANT_LIMIT = 5
+
+// Writing directives used by the LOI / needs statement / full application
+// tools. Hoisted to the top of the module so registerTool() handlers can
+// safely close over them regardless of declaration order. Keeping them
+// here (not in handler bodies) avoids the temporal-dead-zone footgun.
+const LOI_WRITING_DIRECTIVE = `You are a seasoned grant writer with an MBA and 15+ years of experience securing funding for individuals and organizations. Write a compelling, professional Letter of Intent that:
+- Opens with a clear statement of purpose and funding amount requested
+- Demonstrates alignment between the applicant's needs and the funder's mission
+- Uses specific data from the profile (demographics, health, financial, family, education)
+- Articulates measurable outcomes and impact
+- Maintains a confident, professional tone
+- Follows standard LOI format: Introduction, Statement of Need, Project Description, Budget Summary, Conclusion
+- Is ready to print, sign, and submit`
+
+const NEEDS_STATEMENT_WRITING_DIRECTIVE = `You are a seasoned grant writer with an MBA and 15+ years of experience. Write a compelling needs statement that:
+- Grounds every claim in the applicant's actual profile data
+- Cites relevant statistics for the geographic area and population
+- Connects individual/community need to the funder's priorities
+- Uses authoritative, data-driven language without being clinical
+- Builds an emotional narrative anchored in facts
+- Is 300-500 words unless otherwise specified`
+
+const FULL_APPLICATION_WRITING_DIRECTIVE = `You are a seasoned grant writer with an MBA and 15+ years of experience securing federal, state, and foundation funding. Write a complete grant application that:
+- Addresses every required section with professional, compelling content
+- Uses the applicant's real profile data throughout (no placeholders)
+- Writes needs statements grounded in demographics, health conditions, financial data, and geographic factors
+- Creates realistic budgets based on actual amounts and needs
+- Includes a clear project description with measurable objectives
+- Writes at the highest professional standard — this must compete with applications from funded organizations
+- Provides all submission instructions: where to send, how to submit, deadlines, and required attachments
+- If the application must be printed and mailed, provide the complete mailing address
+- If it requires fax, provide the fax number
+- If it's a portal submission, provide the portal URL and step-by-step instructions for the portal`
+
 // Match scoring - no base score, must earn points through actual matches
 function safeParseJSON(value, fallback) {
   if (!value) return fallback
@@ -3263,35 +3297,6 @@ function extractSubmissionInfo(opp) {
       : null,
   }
 }
-
-const LOI_WRITING_DIRECTIVE = `You are a seasoned grant writer with an MBA and 15+ years of experience securing funding for individuals and organizations. Write a compelling, professional Letter of Intent that:
-- Opens with a clear statement of purpose and funding amount requested
-- Demonstrates alignment between the applicant's needs and the funder's mission
-- Uses specific data from the profile (demographics, health, financial, family, education)
-- Articulates measurable outcomes and impact
-- Maintains a confident, professional tone
-- Follows standard LOI format: Introduction, Statement of Need, Project Description, Budget Summary, Conclusion
-- Is ready to print, sign, and submit`
-
-const NEEDS_STATEMENT_WRITING_DIRECTIVE = `You are a seasoned grant writer with an MBA and 15+ years of experience. Write a compelling needs statement that:
-- Grounds every claim in the applicant's actual profile data
-- Cites relevant statistics for the geographic area and population
-- Connects individual/community need to the funder's priorities
-- Uses authoritative, data-driven language without being clinical
-- Builds an emotional narrative anchored in facts
-- Is 300-500 words unless otherwise specified`
-
-const FULL_APPLICATION_WRITING_DIRECTIVE = `You are a seasoned grant writer with an MBA and 15+ years of experience securing federal, state, and foundation funding. Write a complete grant application that:
-- Addresses every required section with professional, compelling content
-- Uses the applicant's real profile data throughout (no placeholders)
-- Writes needs statements grounded in demographics, health conditions, financial data, and geographic factors
-- Creates realistic budgets based on actual amounts and needs
-- Includes a clear project description with measurable objectives
-- Writes at the highest professional standard — this must compete with applications from funded organizations
-- Provides all submission instructions: where to send, how to submit, deadlines, and required attachments
-- If the application must be printed and mailed, provide the complete mailing address
-- If it requires fax, provide the fax number
-- If it's a portal submission, provide the portal URL and step-by-step instructions for the portal`
 
 // ─── Medical Necessity Tools ─────────────────────────────────────────────────
 

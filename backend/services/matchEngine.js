@@ -501,6 +501,8 @@ function tokenizeFacetTerms(values = []) {
     })
 }
 
+const _regexCache = new Map()
+
 function textIncludesToken(text, token) {
   const needle = normalizeString(token)
   if (!needle) return false
@@ -511,8 +513,6 @@ function textIncludesToken(text, token) {
   }
   return _regexCache.get(escaped).test(text)
 }
-
-const _regexCache = new Map()
 
 function countTokenMatches(text, tokens = []) {
   let count = 0

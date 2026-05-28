@@ -828,40 +828,6 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, pref
     }
   }, [isAdmin])
 
-  // Auto-send a pre-filled message when the panel is opened with one (e.g. from zero-result guidance)
-  useEffect(() => {
-    if (!prefillMessage || !sessionId || isSendingRef.current) return
-    const trimmed = prefillMessage.trim()
-    if (!trimmed) return
-    if (typeof onPrefillConsumed === "function") onPrefillConsumed()
-    isSendingRef.current = true
-    setIsSending(true)
-    const optimisticId = uuid()
-    setMessages((prev) => [
-      ...prev,
-      { id: optimisticId, session_id: sessionId, created_at: new Date().toISOString(), role: "user", content: trimmed },
-    ])
-    postAnyaMessage(sessionId, trimmed, { currentPage, pageContext: pageContextPayload })
-      .then((response) => {
-        if (Array.isArray(response?.messages) && response.messages.length > 0) {
-          setMessages((prev) => {
-            const without = prev.filter((m) => m.id !== optimisticId)
-            return [...without, ...response.messages]
-          })
-        } else {
-          refreshMessages(sessionId)
-        }
-      })
-      .catch((err) => {
-        console.error("[AnyaChat] prefill send failed:", err)
-        setMessages((prev) => prev.filter((m) => m.id !== optimisticId))
-      })
-      .finally(() => {
-        isSendingRef.current = false
-        setIsSending(false)
-      })
-  }, [prefillMessage, sessionId])
-
   const { anyaCopilotEnabled: copilotEnabled, anyaScreenshotEnabled: screenshotEnabled } = useFeatureFlags()
   const anyaContext = useAnyaContext()
   const pageContextPayload = useMemo(() => {
@@ -895,6 +861,43 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, pref
     }
     return ctx
   }, [anyaContext?.adapter, currentPage, location?.pathname, effectiveProfileId])
+
+  // Auto-send a pre-filled message when the panel is opened with one (e.g. from zero-result guidance).
+  // Declared after `pageContextPayload` so the effect's closure reads an
+  // initialized memo on first render (avoids a temporal-dead-zone read).
+  useEffect(() => {
+    if (!prefillMessage || !sessionId || isSendingRef.current) return
+    const trimmed = prefillMessage.trim()
+    if (!trimmed) return
+    if (typeof onPrefillConsumed === "function") onPrefillConsumed()
+    isSendingRef.current = true
+    setIsSending(true)
+    const optimisticId = uuid()
+    setMessages((prev) => [
+      ...prev,
+      { id: optimisticId, session_id: sessionId, created_at: new Date().toISOString(), role: "user", content: trimmed },
+    ])
+    postAnyaMessage(sessionId, trimmed, { currentPage, pageContext: pageContextPayload })
+      .then((response) => {
+        if (Array.isArray(response?.messages) && response.messages.length > 0) {
+          setMessages((prev) => {
+            const without = prev.filter((m) => m.id !== optimisticId)
+            return [...without, ...response.messages]
+          })
+        } else {
+          refreshMessages(sessionId)
+        }
+      })
+      .catch((err) => {
+        console.error("[AnyaChat] prefill send failed:", err)
+        setMessages((prev) => prev.filter((m) => m.id !== optimisticId))
+      })
+      .finally(() => {
+        isSendingRef.current = false
+        setIsSending(false)
+      })
+  }, [prefillMessage, sessionId])
+
   const navigate = useNavigate()
   const onboardingActions = useMemo(() => [
     { type: "navigate", label: "Create or select a profile", payload: { path: createPageUrl("MyProfiles") } },

@@ -55,6 +55,11 @@ export default function AnyaGuidedTour() {
     }
   }, [user, isAdmin, lastCompletedTourVersion])
 
+  const handleComplete = () => {
+    setIsOpen(false)
+    markTourComplete(CURRENT_TOUR_VERSION)
+  }
+
   const handleNext = () => {
     if (currentStep < steps.length - 1) {
       setCurrentStep((s) => s + 1)
@@ -67,11 +72,6 @@ export default function AnyaGuidedTour() {
     if (currentStep > 0) {
       setCurrentStep((s) => s - 1)
     }
-  }
-
-  const handleComplete = () => {
-    setIsOpen(false)
-    markTourComplete(CURRENT_TOUR_VERSION)
   }
 
   const handleSkip = () => {

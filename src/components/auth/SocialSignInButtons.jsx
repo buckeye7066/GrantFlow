@@ -85,6 +85,47 @@ async function checkAuthDiagnostics(providerId) {
   }
 }
 
+// Pure helper hoisted above the component so handleClick can call it
+// without tripping ESLint's no-use-before-define guard. Does not depend on
+// component state.
+function getErrorMessage(err) {
+  const message = err.message || err.toString()
+
+  if (message.includes('Backend server is not responding')) {
+    return (
+      <div className="space-y-2">
+        <p className="font-semibold">Backend Server Unavailable</p>
+        <p>The authentication server is not responding. Please:</p>
+        <ul className="list-disc pl-5 space-y-1 text-xs">
+          <li>Ensure the backend server is running</li>
+          <li>Check your network connection</li>
+          <li>Verify the API URL configuration</li>
+        </ul>
+      </div>
+    )
+  }
+
+  if (message.includes('not configured')) {
+    return (
+      <div className="space-y-2">
+        <p className="font-semibold">Provider Not Configured</p>
+        <p>{message}</p>
+      </div>
+    )
+  }
+
+  if (message.includes('502') || message.includes('Bad Gateway')) {
+    return (
+      <div className="space-y-2">
+        <p className="font-semibold">Server Error (502)</p>
+        <p>The authentication server returned an error. Please try again or contact support.</p>
+      </div>
+    )
+  }
+
+  return `Unable to launch the provider sign-in: ${message}`
+}
+
 export default function SocialSignInButtons({ onComplete: _onComplete }) {
   const [activeProvider, setActiveProvider] = useState(null)
   const [error, setError] = useState(null)
@@ -175,46 +216,6 @@ export default function SocialSignInButtons({ onComplete: _onComplete }) {
       }
     }
   }, [])
-
-  const getErrorMessage = (err) => {
-    const message = err.message || err.toString()
-    
-    // Check for specific error patterns
-    if (message.includes('Backend server is not responding')) {
-      return (
-        <div className="space-y-2">
-          <p className="font-semibold">Backend Server Unavailable</p>
-          <p>The authentication server is not responding. Please:</p>
-          <ul className="list-disc pl-5 space-y-1 text-xs">
-            <li>Ensure the backend server is running</li>
-            <li>Check your network connection</li>
-            <li>Verify the API URL configuration</li>
-          </ul>
-        </div>
-      )
-    }
-    
-    if (message.includes('not configured')) {
-      return (
-        <div className="space-y-2">
-          <p className="font-semibold">Provider Not Configured</p>
-          <p>{message}</p>
-        </div>
-      )
-    }
-    
-    if (message.includes('502') || message.includes('Bad Gateway')) {
-      return (
-        <div className="space-y-2">
-          <p className="font-semibold">Server Error (502)</p>
-          <p>The authentication server returned an error. Please try again or contact support.</p>
-        </div>
-      )
-    }
-    
-    // Default error
-    return `Unable to launch the provider sign-in: ${message}`
-  }
 
   const handleRetry = () => {
     setError(null)

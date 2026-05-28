@@ -56,6 +56,21 @@ export default [
       // coercion of user input, DB column values, etc.). Callers that
       // truly mean "null or undefined" must spell it out explicitly.
       eqeqeq: ['error', 'always'],
+      // Catch temporal-dead-zone bugs that minify to opaque
+      // "Cannot access 'X' before initialization" runtime errors. We allow
+      // function declarations (hoisted), function-typed `var`s, and
+      // class self-references to stay practical, but block any read of a
+      // `let`/`const`/`class` (including by enclosed closures such as
+      // useMemo/useCallback/useEffect bodies) before it is initialized.
+      'no-use-before-define': [
+        'error',
+        {
+          functions: false,
+          classes: false,
+          variables: true,
+          allowNamedExports: true,
+        },
+      ],
     },
   },
   {

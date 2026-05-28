@@ -51,6 +51,11 @@ export function getLogLevel() {
 const MAX_RECORDS = Number(process.env.LOG_BUFFER_SIZE || 500)
 const _records = []
 
+// External audit_logs sink. Registered once at boot by server.js.
+// Declared above pushRecord() so module init never triggers a temporal
+// dead zone read if the buffer is hit before setAuditLogSink() runs.
+let _auditSink = null
+
 function pushRecord(rec) {
   _records.push(rec)
   if (_records.length > MAX_RECORDS) {
@@ -68,10 +73,6 @@ function pushRecord(rec) {
   }
 }
 
-// ---------------------------------------------------------------------------
-// External audit_logs sink. Registered once at boot by server.js.
-// ---------------------------------------------------------------------------
-let _auditSink = null
 export function setAuditLogSink(fn) {
   _auditSink = typeof fn === 'function' ? fn : null
 }

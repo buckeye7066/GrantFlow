@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import client from '@/api/client';
 import { Clock, Pause, Play, Save } from 'lucide-react';
@@ -33,6 +33,31 @@ const TASK_CATEGORIES = [
   'Compliance',
   'Other'
 ];
+
+// Pure helpers hoisted above the component so the auto-save effect and the
+// save-time mutation can call them without tripping the TDZ lint guard.
+function formatTime(seconds) {
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  const secs = seconds % 60;
+  return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+}
+
+function roundTimeWithSettings(settings, minutes) {
+  if (!settings) return minutes;
+  const increment = settings.time_increment_minutes || 6;
+  const minimum = settings.minimum_billable_minutes || 15;
+
+  if (minutes < minimum) return minimum;
+  return Math.ceil(minutes / increment) * increment;
+}
+
+function calculateAmountWithSettings(settings, minutes) {
+  if (!settings) return 0;
+  const hours = minutes / 60;
+  const rate = settings.default_hourly_rate || 225;
+  return hours * rate;
+}
 
 export default function AutoTimeTracker({ organizationId, organizationName }) {
   const [isTracking, setIsTracking] = useState(false);
@@ -72,13 +97,6 @@ export default function AutoTimeTracker({ organizationId, organizationName }) {
     });
   }, []);
 
-  // Auto-start timer for non-admin users — wait for ALL required data
-  useEffect(() => {
-    if (currentUser && !currentUser.is_admin && !isTracking && organizationId && organizationName && settings) {
-      handleStart();
-    }
-  }, [currentUser, organizationId, organizationName, settings]);
-
   const saveTimeMutation = useMutation({
     mutationFn: async (timeData) => {
       const created = await client.entities.TimeEntry.create(timeData);
@@ -102,31 +120,74 @@ export default function AutoTimeTracker({ organizationId, organizationName }) {
     }
   });
 
-  // Format time display
-  const formatTime = (seconds) => {
-    const hours = Math.floor(seconds / 3600);
-    const minutes = Math.floor((seconds % 3600) / 60);
-    const secs = seconds % 60;
-    return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
-  };
+  // Local wrappers around the hoisted helpers that bind the current settings
+  // snapshot. Wrapped in useCallback so effect dependency arrays stay stable.
+  const roundTime = useCallback((minutes) => roundTimeWithSettings(settings, minutes), [settings]);
+  const calculateAmount = useCallback((minutes) => calculateAmountWithSettings(settings, minutes), [settings]);
 
-  // Round time to nearest increment
-  const roundTime = (minutes) => {
-    if (!settings) return minutes;
-    const increment = settings.time_increment_minutes || 6;
-    const minimum = settings.minimum_billable_minutes || 15;
-    
-    if (minutes < minimum) return minimum;
-    return Math.ceil(minutes / increment) * increment;
-  };
+  const handleStart = useCallback(() => {
+    if (!organizationName || !organizationId) return;
 
-  // Calculate billable amount
-  const calculateAmount = (minutes) => {
-    if (!settings) return 0;
-    const hours = minutes / 60;
-    const rate = settings.default_hourly_rate || 225;
-    return hours * rate;
-  };
+    setIsTracking(true);
+    setIsPaused(false);
+    startTimeRef.current = Date.now();
+    lastActivityRef.current = Date.now();
+    lastSaveRef.current = Date.now();
+    setElapsedSeconds(0);
+
+    toast({
+      title: "Timer Started",
+      description: `Tracking time for ${organizationName}`,
+      duration: 4000,
+    });
+  }, [organizationId, organizationName, toast]);
+
+  const handleAutoSave = useCallback(() => {
+    if (elapsedSeconds < 60) return;
+
+    const now = Date.now();
+    const endTime = pauseTimeRef.current || now;
+    const rawMinutes = elapsedSeconds / 60;
+    const roundedMinutes = roundTime(rawMinutes);
+    // Amount preview kept for downstream use; we only persist minutes here.
+    calculateAmount(roundedMinutes);
+
+    const timeData = {
+      organization_id: organizationId,
+      user_id: currentUser?.id || currentUser?.email,
+      task_category: taskCategory,
+      start_at: new Date(startTimeRef.current).toISOString(),
+      end_at: new Date(endTime).toISOString(),
+      raw_minutes: Math.round(rawMinutes),
+      rounded_minutes: roundedMinutes,
+      note: note || `Work on ${organizationName}`,
+      activity_hints: [window.location.pathname],
+      source: 'auto',
+      invoiced: false,
+    };
+
+    saveTimeMutation.mutate(timeData);
+    lastSaveRef.current = now;
+  }, [
+    elapsedSeconds,
+    roundTime,
+    calculateAmount,
+    organizationId,
+    organizationName,
+    currentUser,
+    taskCategory,
+    note,
+    saveTimeMutation,
+  ]);
+
+  // Auto-start timer for non-admin users — wait for ALL required data.
+  // Declared AFTER handleStart so the effect closure has the initialized
+  // callback (no temporal-dead-zone read).
+  useEffect(() => {
+    if (currentUser && !currentUser.is_admin && !isTracking && organizationId && organizationName && settings) {
+      handleStart();
+    }
+  }, [currentUser, organizationId, organizationName, settings, isTracking, handleStart]);
 
   // Track user activity
   useEffect(() => {
@@ -209,23 +270,6 @@ export default function AutoTimeTracker({ organizationId, organizationName }) {
     };
   }, [isTracking, isPaused]);
 
-  const handleStart = () => {
-    if (!organizationName || !organizationId) return;
-
-    setIsTracking(true);
-    setIsPaused(false);
-    startTimeRef.current = Date.now();
-    lastActivityRef.current = Date.now();
-    lastSaveRef.current = Date.now();
-    setElapsedSeconds(0);
-    
-    toast({
-      title: "Timer Started",
-      description: `Tracking time for ${organizationName}`,
-      duration: 4000,
-    });
-  };
-
   const handlePause = () => {
     setIsPaused(true);
     pauseTimeRef.current = Date.now();
@@ -238,33 +282,6 @@ export default function AutoTimeTracker({ organizationId, organizationName }) {
 
   const handleStop = () => {
     setShowSaveDialog(true);
-  };
-
-  const handleAutoSave = () => {
-    if (elapsedSeconds < 60) return; // Don't save less than 1 minute
-    
-    const now = Date.now();
-    const endTime = pauseTimeRef.current || now;
-    const rawMinutes = elapsedSeconds / 60;
-    const roundedMinutes = roundTime(rawMinutes);
-    const totalAmount = calculateAmount(roundedMinutes);
-
-    const timeData = {
-      organization_id: organizationId,
-      user_id: currentUser?.id || currentUser?.email,
-      task_category: taskCategory,
-      start_at: new Date(startTimeRef.current).toISOString(),
-      end_at: new Date(endTime).toISOString(),
-      raw_minutes: Math.round(rawMinutes),
-      rounded_minutes: roundedMinutes,
-      note: note || `Work on ${organizationName}`,
-      activity_hints: [window.location.pathname],
-      source: 'auto',
-      invoiced: false,
-    };
-
-    saveTimeMutation.mutate(timeData);
-    lastSaveRef.current = now;
   };
 
   const handleSave = () => {
