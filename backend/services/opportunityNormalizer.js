@@ -301,7 +301,14 @@ const EXCLUSIVE_ENTITY_REQUIREMENTS = {
     /\bfor\s+(?:tn\s+|state\s+)?students?\s+(?:with|pursuing|enrolled|attending)\b/i,
     /\b(?:female|women(?:'s)?)\s+students?\b/i,
     /\bscholarships?\s+for\s+(?:female\s+)?students?\b/i,
-    /\b(?:hope|tsaa|step\s+up|tennessee\s+promise|pell|fseog|fafsa)\b/i,
+    // Program-name signals. "HOPE" and "STEP UP" are common English phrases on
+    // their own, so require an explicit program qualifier (scholarship / grant /
+    // aid / award) to avoid false positives on opportunity titles such as
+    // "Tennessee HOPE Initiative" (housing nonprofit) or "Step Up for Families".
+    // The remaining acronyms (TSAA, Pell, FSEOG, FAFSA) and the multi-word
+    // "Tennessee Promise" are program-specific enough to keep as bare matches.
+    /\b(?:hope|step\s+up|tennessee\s+promise)\s+(?:scholarship|grant|aid|award|program)s?\b/i,
+    /\b(?:tsaa|pell|fseog|fafsa|tennessee\s+promise)\b/i,
     /\bcost\s+of\s+attendance\b/i,
     /\broom\s+and\s+board\b/i,
   ],

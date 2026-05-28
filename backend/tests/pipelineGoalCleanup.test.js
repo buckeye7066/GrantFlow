@@ -170,8 +170,11 @@ describe('classifyPipelineItem — Goal 8 (directory resources always survive)',
 describe('classifyPipelineItem — Goal 9 (no duplicates)', () => {
   it('keeps the first occurrence and removes later duplicates', () => {
     const seen = new Set()
-    const row1 = makeRow({ id: 'g-1', title: 'Tennessee HOPE Scholarship' })
-    const row2 = makeRow({ id: 'g-2', title: 'Tennessee HOPE Scholarship' })
+    // Use a title that does NOT trip exclusive-eligibility flags (no student-aid,
+    // women-only, veteran-only signals). The Goal 9 dedupe rule must fire before
+    // any matching-engine REJECT can mask it.
+    const row1 = makeRow({ id: 'g-1', title: 'Tennessee Family Resource Grant' })
+    const row2 = makeRow({ id: 'g-2', title: 'Tennessee Family Resource Grant' })
     const r1 = classifyPipelineItem(row1, {
       profile: TN_PROFILE,
       sections: TN_SECTIONS,
@@ -201,7 +204,10 @@ describe('classifyPipelineItem — Goal 6 (geographic match)', () => {
   })
 
   it('keeps items whose title matches the profile state', () => {
-    const row = makeRow({ title: 'Tennessee HOPE Scholarship' })
+    // Same constraint as the Goal 9 dedupe test: pick a TN program whose title
+    // does not also trigger exclusive-eligibility flags (HOPE / Pell / FAFSA
+    // etc.), so the geography check is what's being exercised here.
+    const row = makeRow({ title: 'Tennessee Family Resource Grant' })
     const result = classifyPipelineItem(row, {
       profile: TN_PROFILE,
       sections: TN_SECTIONS,

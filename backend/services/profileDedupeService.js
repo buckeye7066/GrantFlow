@@ -61,7 +61,7 @@ export function profilesHaveSimilarNames(nameA, nameB) {
   return false
 }
 
-function buildDuplicateGroupsFromMembers(members, metaByProfile, { minGroupSize }) {
+function buildDuplicateGroupsFromMembers(members, metaByProfile, { minGroupSize, bucketKey } = {}) {
   if (!members || members.length < minGroupSize) return null
 
   const candidates = members.map((profile) => ({
@@ -71,11 +71,17 @@ function buildDuplicateGroupsFromMembers(members, metaByProfile, { minGroupSize 
   const winner = pickWinner(candidates)
   const losers = candidates.filter((c) => c.profile.id !== winner.profile.id)
 
-  const key = candidates
-    .map((c) => normalizeProfileNameKey(c.profile.display_name) || c.profile.display_name)
-    .filter(Boolean)
-    .sort()
-    .join(' | ')
+  // When the caller supplies the bucket key that actually grouped these profiles
+  // (e.g. an email or phone signal), surface it as the group key so callers can
+  // see *why* the rows were grouped. Fall back to a sorted name composite for
+  // similarity-based clustering where no single bucket key exists.
+  const key =
+    bucketKey ||
+    candidates
+      .map((c) => normalizeProfileNameKey(c.profile.display_name) || c.profile.display_name)
+      .filter(Boolean)
+      .sort()
+      .join(' | ')
 
   return {
     key,
@@ -422,8 +428,8 @@ export async function findDuplicateProfileGroups(db, {
       groupsMap.get(key).push(p)
     }
 
-    for (const [, members] of groupsMap.entries()) {
-      const group = buildDuplicateGroupsFromMembers(members, metaByProfile, { minGroupSize })
+    for (const [bucketKey, members] of groupsMap.entries()) {
+      const group = buildDuplicateGroupsFromMembers(members, metaByProfile, { minGroupSize, bucketKey })
       if (group) groups.push(group)
     }
   }

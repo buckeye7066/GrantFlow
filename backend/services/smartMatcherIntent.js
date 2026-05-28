@@ -175,7 +175,7 @@ const BRANDED_PROGRAMS = [
 // ---------------------------------------------------------------------------
 // Credentials → professional_development pool
 // ---------------------------------------------------------------------------
-const CREDENTIAL_RE = /\b(RN|LPN|APRN|CNA|MD|DO|MBBS|PA|PA\-C|NP|FNP|DNP|CRNA|LCSW|LMSW|LSW|MSW|LPC|LMFT|LMHC|PsyD|PhD|EdD|DDS|DMD|RDH|PharmD|RPh|DPT|PT|OT|OTR|SLP|RN\-BC)\b/g
+const CREDENTIAL_RE = /\b(RN|LPN|APRN|CNA|MD|DO|MBBS|PA|PA-C|NP|FNP|DNP|CRNA|LCSW|LMSW|LSW|MSW|LPC|LMFT|LMHC|PsyD|PhD|EdD|DDS|DMD|RDH|PharmD|RPh|DPT|PT|OT|OTR|SLP|RN-BC)\b/g
 
 function extractCredentials(text) {
   const found = new Set()

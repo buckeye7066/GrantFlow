@@ -135,7 +135,10 @@ describe('admin db/query and validation', () => {
 })
 
 describe('admin code and health tools', () => {
-  it('ignores debugger mentions inside comments', async () => {
+  // Recursively scans every .js file under backend/services (hundreds of files)
+  // and is filesystem-bound — under heavy parallel test load on Windows it can
+  // exceed the default 15s vitest timeout, so give it room to breathe.
+  it('ignores debugger mentions inside comments', { timeout: 60_000 }, async () => {
     const result = await adminCodeScan(
       { directory: 'backend/services', filePattern: '*.js', issueTypes: ['debugger'] },
       { user: { isAdmin: true } },
@@ -250,11 +253,14 @@ describe('admin code and health tools', () => {
     expect(infoResult.logs.map((log) => log.event)).toEqual(['warn_inserted', 'info_inserted'])
   })
 
+  // Walks the default component search roots — filesystem-bound, can run long
+  // under heavy parallel test load on Windows. Bump above the 15s default that
+  // was previously set on this case.
   it('finds component files from the default button-test search roots', async () => {
     const result = await testButtonFunctionality({ probe: false }, { user: { isAdmin: true } })
     expect(result.files_scanned).toBeGreaterThan(0)
     expect(result.component_path).toBeTruthy()
-  }, 15000)
+  }, 60000)
 
   it('extracts shadcn buttons plus role/onClick non-button controls', () => {
     const buttons = extractButtons(`
