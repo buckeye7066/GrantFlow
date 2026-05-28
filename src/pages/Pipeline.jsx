@@ -273,6 +273,15 @@ export default function Pipeline() {
     return Array.from(tagSet).sort();
   }, [grants]);
 
+  const scopedGrants = useMemo(() => {
+    if (!selectedProfileId || selectedProfileId === 'all') return grants
+    return (Array.isArray(grants) ? grants : []).filter((g) => {
+      // CRITICAL: When a specific profile is selected, ONLY show grants explicitly assigned to it.
+      // Do NOT fall back to organization_id, which can cause cross-profile leakage when orgs are shared.
+      return Boolean(g?.profile_id) && String(g.profile_id) === String(selectedProfileId)
+    })
+  }, [grants, selectedProfileId])
+
   // Count of grants needing a human to step in. We treat both
   // (a) the stage-level human-required statuses, and (b) the latest
   // automation event's handoff_required flag as triggers — same rule the
@@ -287,16 +296,6 @@ export default function Pipeline() {
       return HUMAN_STAGES.has(String(g.status || '').toLowerCase());
     }).length;
   }, [scopedGrants]);
-
-  // Use custom hook for filtering
-  const scopedGrants = useMemo(() => {
-    if (!selectedProfileId || selectedProfileId === 'all') return grants
-    return (Array.isArray(grants) ? grants : []).filter((g) => {
-      // CRITICAL: When a specific profile is selected, ONLY show grants explicitly assigned to it.
-      // Do NOT fall back to organization_id, which can cause cross-profile leakage when orgs are shared.
-      return Boolean(g?.profile_id) && String(g.profile_id) === String(selectedProfileId)
-    })
-  }, [grants, selectedProfileId])
 
   const filteredGrants = useFilteredGrants(scopedGrants, filters, 'all');
 
