@@ -45,6 +45,26 @@ requires live credentials/network it is **not faked** — the required env is do
 
 ---
 
+## 1b. Part-2 continuation (commits f6f23137, 7ea4dd70)
+
+Additional fixes after the first commit, each gated by lint + typecheck + build +
+unit (all PASS) and, for crawler changes, `crawler:doctor` (PASS):
+
+| Area | Change | Tests |
+|------|--------|-------|
+| RC-7 geo crawler | `nationalZipCrawler.saveOpportunity` routes through the gated `upsertFundingOpportunity` (reality gate + URL-fingerprint dedupe) | `geo-crawl-missing-tables` updated to full schema; `crawler:doctor` PASS |
+| RC-7 Anya promote | `anyaAutonomousFunctionRunner` global-promote routes through `upsertFundingOpportunity` | unit suite |
+| RC-9 match scout | `anyaMatchScout` uses `computeMatchDecision`; never surfaces/notifies a REJECT | `anyaMatchScout.test.mjs` (9) PASS |
+| RC-10 explainMatch | `grants.explainMatch` uses `computeMatchDecision` instead of bespoke scoring | unit suite |
+| RC-11 Anya prompt | callable-tool list generated from `CHAT_TOOL_WHITELIST`; honest reframe of non-callable capabilities | `anya-prompt-whitelist-parity.test.mjs` (3) PASS |
+| RC-12 zero-result | `matching.js` junk-dump removed (canonical ladder authoritative); store carries `diagnostics`; `FundingResults` empty state explains searched/expanded + profile gaps + actions | `fundingResultsStore.profileScope` (6, +1 new) PASS |
+| RC-15 card warnings | loan / matching-funds / expired chips on `FundingResultCard`; `toCanonicalResult` maps `is_loan`/`requires_match` | `FundingResultCard.test.jsx` (15, +4 new) PASS |
+
+Deferred items (RC-8, RC-13, RC-14, RC-16, RC-17) with rationale are documented in
+`AUDIT_GRANTFLOW_ROOT_CAUSES.md` — each requires a core-table schema/constraint
+rebuild, a cross-cutting UI sweep, or a central matching-behavior change whose
+quality impact is not verifiable without a live/E2E environment.
+
 ## 2. Migrations / schema
 
 - **No destructive schema changes.** No production migration files were added in this

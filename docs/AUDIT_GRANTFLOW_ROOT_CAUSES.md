@@ -137,7 +137,39 @@ The canonical layers from Part 1 all exist and are largely sound:
 
 ---
 
-## NOT FIXED (follow-up) — confirmed real, deferred with recommended fix
+## Part-2 continuation — current status (updated)
+
+Subsequent commits resolved several of the items below. Current status:
+
+| Item | Status | Commit |
+|------|--------|--------|
+| RC-1 Schema idempotency | ✅ FIXED & VERIFIED | 1f91c67d |
+| RC-2 Unknown funding type | ✅ FIXED & VERIFIED | 1f91c67d |
+| RC-3 Loan detection (full text) | ✅ FIXED & VERIFIED | 1f91c67d |
+| RC-4 UI fabricated decision | ✅ FIXED & VERIFIED | 1f91c67d |
+| RC-5 missingEligibilityFields | ✅ FIXED & VERIFIED | 1f91c67d |
+| RC-6 Gov import reality gate | ✅ FIXED & VERIFIED | 1f91c67d |
+| RC-7 Crawler/import insert bypasses | ✅ FIXED (geo crawler + Anya global-promote routed through gated inserter). Admin manual-create/bulk + curated-seed routes intentionally remain store-then-filter-at-display paths (proven by `opportunities-compliance-soft-filters` test). | f6f23137 |
+| RC-9 Anya match scout non-authoritative scoring | ✅ FIXED & VERIFIED (uses computeMatchDecision; never surfaces a REJECT) | f6f23137 |
+| RC-10 Anya explainMatch re-implements matching | ✅ FIXED & VERIFIED (uses computeMatchDecision) | f6f23137 |
+| RC-11 Anya prompt advertises uncallable tools | ✅ FIXED & VERIFIED (prompt callable-list generated from whitelist; parity test) | f6f23137 |
+| RC-12 Zero-result UI dead-end | ✅ FIXED & VERIFIED (ladder diagnostics surfaced; legacy junk-dump removed) | 7ea4dd70 |
+| RC-15 Result card loan/expired warnings | ✅ FIXED & VERIFIED (loan/matching-funds/expired chips + tests) | 7ea4dd70 |
+| RC-8 Persist reality_status / unify display gate | ⏸ DEFERRED — structural; needs a migration + inserter + reader changes. Note: insert-side (`assessReality`) and display-side (`assessOpportunityTrust`) already share the same low-level classifiers (`classifyOpportunityKind`/`classifySourceTrustTier` + policy helpers), so drift risk is bounded; and a single persisted `reality_status` cannot express per-user `allowLoans`/`allowExpired` context, so re-deriving at display is arguably correct. Lower priority than first assessed. |
+| RC-13 Canonical pipeline enum | ⏸ DEFERRED — `grants.status` (pipeline) and `applicationWorkflow.APPLICATION_STATES` (applications) are two distinct features. Unifying touches the core `grants` table CHECK (SQLite CHECK widening requires a full table rebuild), backend validation, and many UI components — too broad to do safely without an E2E harness. |
+| RC-14 Saved items profile-scoping | ⏸ DEFERRED — `saved_grants` is user-scoped + ownership-enforced (persists correctly); adding profile partitioning requires a UNIQUE-constraint rebuild + frontend changes + legacy-NULL handling, not E2E-verifiable here. |
+| RC-16 sourceRegistry operational metadata | ⏸ DEFERRED — additive fields with no current consumer; low value until a consumer exists. |
+| RC-17 Documents → profile signals | ⏸ DEFERRED — folding `documents.extracted_text` into the central signal/intent pipeline risks altering match/crawler-strategy behavior across many tests; matching-quality impact is not verifiable in this environment. |
+
+> **Why some items are deferred, not done:** each remaining item requires either a
+> schema/constraint rebuild on a core table, a cross-cutting UI sweep, or a change
+> to central matching behavior whose quality impact cannot be verified without a
+> live/E2E environment. Per the project's own rule ("do not claim success until
+> verification passes"), these are documented with a concrete recommended fix
+> rather than shipped as unverifiable changes. The detailed recommendations below
+> remain accurate.
+
+## Detailed findings & recommended fixes (RC-7 … RC-17)
 
 ### RC-7 — Remaining reality-gate insert bypasses
 Confirmed raw `INSERT INTO funding_opportunities` paths that still skip `assessReality`:
