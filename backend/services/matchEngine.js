@@ -2410,7 +2410,11 @@ export function computeMatchDecision(rawProfile, rawOpportunity, opts = {}) {
   confidence = Math.max(0, Math.min(100, confidence))
 
   const matchedProfileTraits = match_explain?.matchedSignals ?? []
-  const missingEligibilityFields = []
+  // Surface the profile fields that, if provided, would strengthen this match.
+  // Previously hardcoded to [] on the ACCEPT/REVIEW path, which silently dropped
+  // the "what's missing from your profile" guidance for non-rejected matches
+  // (it was only ever populated on the REJECT branch). (Mission System 3.)
+  const missingEligibilityFields = eligibilityEval.missingFields ?? []
 
   // matched_profile_facts: a plain-language list of what specifically about
   // the profile caused this opportunity to surface. Used by Anya, the result

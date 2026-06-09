@@ -16,6 +16,23 @@
  * Lightweight + pure → safe to call inside render.
  */
 
+const VALID_DECISIONS = new Set(['ACCEPT', 'REVIEW', 'REJECT'])
+
+/**
+ * Return the backend canonical decision verbatim (normalized to upper-case) or
+ * 'UNRATED' when the backend did not supply one. The UI never computes the
+ * accept/review/reject verdict itself — that authority belongs solely to the
+ * backend match engine (computeMatchDecision).
+ */
+function normalizeBackendDecision(...candidates) {
+  for (const c of candidates) {
+    if (!c) continue
+    const up = String(c).toUpperCase()
+    if (VALID_DECISIONS.has(up)) return up
+  }
+  return 'UNRATED'
+}
+
 const KIND_ALIASES = new Map([
   ['direct', 'direct'],
   ['grant', 'direct'],
@@ -118,7 +135,12 @@ export function toCanonicalResult(opp) {
     amount_description: pickString(opp.amount_description, opp.amount, opp.award_description),
     eligibility_summary: pickString(opp.eligibility_summary, opp.eligibility, opp.eligibilitySummary),
     match_score: score ?? 0,
-    match_decision: pickString(opp.match_decision, opp.decision) || (score >= 70 ? 'ACCEPT' : score >= 35 ? 'REVIEW' : 'REJECT'),
+    // The accept/review/reject decision is the backend canonical match engine's
+    // to make (computeMatchDecision). The UI must NOT re-derive it from a score
+    // ladder — doing so created a second, drifting decision authority in the
+    // client. When the backend did not decide, surface 'UNRATED' honestly rather
+    // than inventing a verdict. (Mission System 2.)
+    match_decision: normalizeBackendDecision(opp.match_decision, opp.decision),
     match_confidence: confidence ?? null,
     matched_profile_facts: matchedFacts,
     ineligibility_reasons: ineligibility,
