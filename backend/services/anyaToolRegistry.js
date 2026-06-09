@@ -1031,106 +1031,64 @@ registerTool({
       throw error
     }
 
-    const profile = await db.prepare('SELECT * FROM profiles WHERE id = ?').get(profileId)
-    if (!profile) {
-      const error = new Error('Profile not found')
-      error.status = 404
-      throw error
-    }
-
-    let sectionRows = []
+    // Use the CANONICAL decision engine (Mission System 2/8, RC-10) so Anya's
+    // "why did this match?" explanation can never contradict the matcher /
+    // discovery. Previously this handler hand-rolled applicant/location/keyword/
+    // financial scoring with its own 70/40 buckets — a second, drifting match
+    // authority. There is no bespoke scoring here anymore.
+    let context_profile
     try {
-      sectionRows = await db.prepare('SELECT section_key, data FROM profile_sections WHERE profile_id = ?').all(profileId)
-    } catch (_e) { /* sections may not exist */ }
-    const sections = sectionRows.reduce((acc, row) => {
-      try { acc[row.section_key] = row.data ? JSON.parse(row.data) : {} } catch { acc[row.section_key] = {} }
-      return acc
-    }, {})
-
-    // Helper to safely parse arrays
-    const parseArr = (v) => {
-      if (!v) return []
-      if (Array.isArray(v)) return v
-      try { const p = JSON.parse(v); return Array.isArray(p) ? p : [] } catch { return [] }
+      context_profile = await loadProfileContext(db, profileId)
+    } catch (err) {
+      if (/not found/i.test(err?.message || '')) {
+        const error = new Error('Profile not found')
+        error.status = 404
+        throw error
+      }
+      throw new Error(`Profile not found or unreadable: ${err?.message ?? err}`)
     }
 
-    const matches = []
-    const misses = []
+    const decision = computeMatchDecision(
+      context_profile.profile,
+      opp,
+      { profileSections: context_profile.sections, signals: context_profile.signals },
+    )
+
+    const matches = (decision.matched_profile_facts ?? [])
+      .filter(Boolean)
+      .map((fact) => ({ signal: 'Profile match', detail: String(fact) }))
+    const misses = [
+      ...(decision.ineligibilityReasons ?? [])
+        .filter(Boolean)
+        .map((r) => ({ signal: 'Eligibility concern', detail: String(r) })),
+      ...(decision.missingEligibilityFields ?? [])
+        .filter(Boolean)
+        .map((f) => ({ signal: 'Missing profile info', detail: `Add "${f}" to your profile to strengthen this match.` })),
+    ]
     const neutral = []
-    const basic = sections.basic_information ?? {}
-
-    // Applicant type
-    const profileType = profile.primary_type || basic.profile_category || null
-    const oppTypes = parseArr(opp.applicant_types || opp.eligible_applicants)
-    if (profileType && oppTypes.length > 0) {
-      const typeMatch = oppTypes.some(t =>
-        t?.toLowerCase().includes(profileType?.toLowerCase()) ||
-        profileType?.toLowerCase().includes(t?.toLowerCase())
-      )
-      if (typeMatch) {
-        matches.push({ signal: 'Applicant Type', detail: `Your profile type "${profileType}" matches eligible applicants: ${oppTypes.join(', ')}` })
-      } else {
-        misses.push({ signal: 'Applicant Type', detail: `Your profile type "${profileType}" may not match eligible applicants: ${oppTypes.join(', ')}. Check the opportunity details.` })
-      }
-    } else if (oppTypes.length === 0) {
-      neutral.push({ signal: 'Applicant Type', detail: 'This opportunity does not specify applicant type restrictions.' })
+    if (matches.length === 0 && misses.length === 0) {
+      neutral.push({ signal: 'Match', detail: 'No specific match signals were recorded for this opportunity.' })
     }
 
-    // Location
-    const profileState = basic.state || profile.state || null
-    const oppState = opp.state || opp.location || null
-    const oppScope = opp.geographic_scope || opp.scope || 'national'
-    if (oppScope === 'national' || oppScope === 'federal') {
-      matches.push({ signal: 'Location', detail: 'This is a national program available in all states.' })
-    } else if (profileState && oppState) {
-      if (oppState.toLowerCase().includes(profileState.toLowerCase()) || profileState.toLowerCase().includes(oppState.toLowerCase())) {
-        matches.push({ signal: 'Location', detail: `Your state (${profileState}) matches this opportunity's location (${oppState}).` })
-      } else {
-        misses.push({ signal: 'Location', detail: `Your state (${profileState}) may not match this opportunity's location (${oppState}).` })
-      }
-    } else if (!profileState) {
-      misses.push({ signal: 'Location', detail: 'Your profile does not have a state set. Adding your state may improve match accuracy.' })
-    }
-
-    // Keywords / categories
-    const oppCategories = parseArr(opp.categories || opp.focus_areas)
-    const profileKeywords = parseArr(profile.keywords || profile.interests)
-    const profileFocusAreas = parseArr(sections.programs_services?.focus_areas)
-    const allProfileTerms = [...profileKeywords, ...profileFocusAreas].map(t => t?.toLowerCase()).filter(Boolean)
-    const oppTerms = oppCategories.map(t => t?.toLowerCase()).filter(Boolean)
-    const matchedTerms = allProfileTerms.filter(pt => oppTerms.some(ot => ot.includes(pt) || pt.includes(ot)))
-    if (matchedTerms.length > 0) {
-      matches.push({ signal: 'Focus Areas / Keywords', detail: `Matched on: ${matchedTerms.join(', ')}` })
-    } else if (oppCategories.length > 0 && allProfileTerms.length > 0) {
-      neutral.push({ signal: 'Focus Areas / Keywords', detail: `Opportunity covers: ${oppCategories.join(', ')}. Your profile covers: ${allProfileTerms.slice(0, 5).join(', ')}. No direct keyword overlap.` })
-    }
-
-    // Financial need
-    const belowPoverty = profile.below_poverty_line || sections.financial?.below_poverty_line
-    if (opp.needs_based || oppCategories.some(c => ['financial_assistance', 'low_income'].includes(c))) {
-      if (belowPoverty) {
-        matches.push({ signal: 'Financial Need', detail: 'Your profile indicates financial need, which this needs-based program prioritizes.' })
-      } else {
-        neutral.push({ signal: 'Financial Need', detail: 'This program may prioritize financial need. Adding income information could improve match accuracy.' })
-      }
-    }
-
-    const matchScore = opp.match_score ?? opp.score ?? null
-    const scoreContext = matchScore !== null
-      ? matchScore >= 70 ? 'Strong match' : matchScore >= 40 ? 'Moderate match' : 'Weak match'
-      : null
+    const scoreContext = decision.decision === 'ACCEPT'
+      ? 'Strong match'
+      : decision.decision === 'REVIEW'
+        ? 'Worth reviewing'
+        : 'Likely not a fit'
 
     return {
       opportunityId: opp.id,
-      opportunityName: opp.name || opp.title,
-      matchScore,
+      opportunityName: opp.title || opp.name,
+      matchScore: decision.score ?? null,
+      decision: decision.decision,
       scoreContext,
       matches,
       misses,
       neutral,
+      matcher_version: decision.matcherVersion,
       summary: matches.length > 0
-        ? `This opportunity matched your profile on ${matches.length} signal(s): ${matches.map(m => m.signal).join(', ')}.`
-        : 'No strong match signals found. Review the opportunity details to determine eligibility manually.',
+        ? `This is a ${scoreContext.toLowerCase()} (engine decision: ${decision.decision}). It matched on: ${matches.map((m) => m.detail).slice(0, 5).join('; ')}.`
+        : `Engine decision: ${decision.decision}. ${misses.length ? 'Concerns: ' + misses.map((m) => m.detail).slice(0, 3).join('; ') : 'No strong match signals found — review the opportunity details.'}`,
     }
   },
 })

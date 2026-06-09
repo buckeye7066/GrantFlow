@@ -26,7 +26,7 @@
 import crypto from 'crypto'
 
 import { loadProfileContext } from './profileHelpers.js'
-import { scoreOpportunity } from './matchEngine.js'
+import { computeMatchDecision } from './matchEngine.js'
 import { decorateOpportunityFreshness } from './opportunityMatcher.js'
 import { isJunkOpportunity } from './contentFilter.js'
 import { assessOpportunityTrust } from './opportunityTrust.js'
@@ -373,14 +373,28 @@ export async function runMatchScoutForProfile(db, profileId, options = {}) {
     trustKept.push({ opp, trust })
   }
 
-  // ── 2. Score + threshold ──
+  // ── 2. Canonical decision + threshold ──
+  // Use computeMatchDecision (the SOLE match authority) — not the
+  // non-authoritative scoreOpportunity — so the scout never surfaces or notifies
+  // a user about an opportunity the engine would REJECT (Mission System 2, RC-9).
   const scored = trustKept
     .map(({ opp, trust }) => {
-      const computed = scoreOpportunity(profileContext, opp)
-      const adjusted = trust.downgrade ? Math.max(0, computed.score - 5) : computed.score
-      return { opp, trust, score: adjusted, reasons: computed.reasons }
+      const decision = computeMatchDecision(
+        profileContext.profile,
+        opp,
+        { profileSections: profileContext.sections, signals: profileContext.signals },
+      )
+      return {
+        opp,
+        trust,
+        score: decision.score,
+        decision: decision.decision,
+        reasons: decision.reasons ?? decision.matched_profile_facts ?? [],
+      }
     })
-    .filter((entry) => entry.score >= threshold)
+    // Never surface/notify a REJECT. The threshold remains an additional
+    // surfacing floor on top of the canonical accept/review decision.
+    .filter((entry) => entry.decision !== 'REJECT' && entry.score >= threshold)
     .sort((a, b) => b.score - a.score)
 
   stats.above_threshold = scored.length

@@ -1,10 +1,17 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import Database from 'better-sqlite3'
 import { runNationalZipCrawl } from '../../backend/services/crawlers/nationalZipCrawler.js'
+import { applySqliteSchema } from '../../backend/db/ensureSqliteSchema.js'
+
+// The geo crawler now persists through the canonical gated inserter
+// (upsertFundingOpportunity), which requires the full funding_opportunities
+// schema. Build the real schema, then drop the geo-progress tables so the
+// crawler's self-heal path is still exercised.
+const SCHEMA_SQL = readFileSync(new URL('../../backend/db/schema.sql', import.meta.url), 'utf8')
 
 test('geo crawl: self-heals when geo progress tables are missing (sqlite)', async () => {
   const tmp = mkdtempSync(path.join(tmpdir(), 'grantflow-geo-missing-'))
@@ -40,77 +47,16 @@ test('geo crawl: self-heals when geo progress tables are missing (sqlite)', asyn
 
   const db = new Database(dbPath)
 
-  // Minimal tables required for Geo Crawl inserts + geo_state_runs FK reference.
-  // Intentionally DO NOT create national_zip_progress or geo_state_runs here.
-  db.exec(`
-    PRAGMA foreign_keys=ON;
-
-    CREATE TABLE crawler_jobs (
-      id TEXT PRIMARY KEY
-    );
-
-    CREATE TABLE funding_opportunities (
-      id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
-      title TEXT NOT NULL,
-      sponsor TEXT,
-      description TEXT,
-      source TEXT,
-      source_id TEXT,
-      source_url TEXT,
-      application_url TEXT,
-      evidence_url TEXT,
-      contact_info TEXT DEFAULT NULL,
-      record_origin TEXT DEFAULT 'live_crawl',
-      eligibility_bullets TEXT DEFAULT '[]',
-      amount_min REAL,
-      amount_max REAL,
-      amount_description TEXT,
-      deadline TEXT,
-      deadline_type TEXT,
-      is_national BOOLEAN DEFAULT FALSE,
-      state TEXT,
-      categories TEXT DEFAULT '[]',
-      keywords TEXT DEFAULT '[]',
-      opportunity_type TEXT,
-      funding_type TEXT,
-      type TEXT,
-      requires_match BOOLEAN DEFAULT FALSE,
-      match_percentage REAL,
-      match_reasons TEXT DEFAULT '[]',
-      notes TEXT,
-      is_loan BOOLEAN DEFAULT FALSE,
-      is_active INTEGER DEFAULT 1,
-      -- Production reality gate columns.
-      discovered_at DATETIME,
-      last_verified_at DATETIME,
-      link_status TEXT DEFAULT 'unverified',
-      link_status_code INTEGER,
-      verification_method TEXT,
-      verified_by TEXT,
-      verification_error TEXT,
-      opportunity_kind TEXT,
-      source_trust_tier TEXT,
-      profile_id TEXT,
-      requires_501c3 INTEGER DEFAULT 0,
-      last_crawled DATETIME,
-      funding_domain TEXT,
-      funding_subdomain TEXT,
-      source_category TEXT,
-      compliance_required TEXT DEFAULT '[]',
-      certifications_required TEXT DEFAULT '[]',
-      geo_eligibility TEXT,
-      signal_tags TEXT DEFAULT '[]',
-      verified_url INTEGER DEFAULT 0,
-      crawler_version TEXT,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    );
-    CREATE UNIQUE INDEX funding_opportunities_source_source_id_uniq
-      ON funding_opportunities(source, source_id);
-  `)
+  // Build the FULL production schema (funding_opportunities needs every column
+  // the canonical inserter writes), then DROP the geo-progress tables so the
+  // crawler's self-heal path is exercised. Intentionally leaves
+  // national_zip_progress / geo_state_runs missing.
+  applySqliteSchema(db, SCHEMA_SQL)
+  db.exec('DROP TABLE IF EXISTS geo_state_runs')
+  db.exec('DROP TABLE IF EXISTS national_zip_progress')
 
   // Insert a matching crawler_jobs row so geo_state_runs.job_id FK can be satisfied.
-  db.prepare('INSERT INTO crawler_jobs (id) VALUES (?)').run(jobId)
+  db.prepare("INSERT INTO crawler_jobs (id, type) VALUES (?, 'national_zip_scan')").run(jobId)
   db.close()
 
   const result = await runNationalZipCrawl(dbPath, {

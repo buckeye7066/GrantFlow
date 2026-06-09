@@ -6,7 +6,22 @@ import { createCrawlerJob } from './crawlerJobCreation.js'
 import { AUDIT_CATEGORIES, SEVERITY, logAuditEvent } from './auditService.js'
 import { buildProfileContext } from './profileHelpers.js'
 import { saveToProfilePipeline } from './opportunityMatcher.js'
+import { upsertFundingOpportunity } from './opportunityInserter.js'
 import { createLogger } from '../utils/logger.js'
+
+// Parse a JSON-array column that may already be an array or a JSON string.
+function parseJsonArrayColumn(value) {
+  if (Array.isArray(value)) return value
+  if (typeof value === 'string' && value.trim()) {
+    try {
+      const parsed = JSON.parse(value)
+      return Array.isArray(parsed) ? parsed : []
+    } catch {
+      return []
+    }
+  }
+  return []
+}
 const log = createLogger('anyaAutonomousFunctionRunner')
 
 const REPO_ROOT = path.resolve(process.cwd())
@@ -622,40 +637,43 @@ export async function saveCrawlerResultsToGlobal(options, context) {
         .get(opp.title, opp.sponsor)
 
       if (!existing) {
-        // Create a global version (without profile_id)
-        const globalId = randomUUID()
-        
-        await db.prepare(
-          `
-          INSERT INTO funding_opportunities (
-            id, title, sponsor, deadline, amount_min, amount_max, amount_description,
-            application_url, state, opportunity_type, requires_match, match_percentage,
-            eligibility_bullets, categories, source, source_url, evidence_url, is_active,
-            created_at, updated_at
-          )
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-          `
-        ).run(
-          globalId,
-          opp.title,
-          opp.sponsor,
-          opp.deadline,
-          opp.amount_min,
-          opp.amount_max,
-          opp.amount_description,
-          opp.application_url,
-          opp.state,
-          opp.opportunity_type,
-          opp.requires_match,
-          opp.match_percentage,
-          opp.eligibility_bullets,
-          opp.categories,
-          opp.source,
-          opp.source_url,
-          opp.evidence_url || opp.source_url || opp.application_url
+        // Create a global version (without profile_id) THROUGH the canonical
+        // gated inserter (Mission System 1, RC-7). Promoting a profile-scoped
+        // row into the global pool makes it globally user-visible, so it must
+        // pass the reality gate + quality/policy/validation/reviewer gates and
+        // canonical URL dedupe — previously this was a raw, un-gated INSERT.
+        const res = await upsertFundingOpportunity(
+          db,
+          {
+            title: opp.title,
+            sponsor: opp.sponsor,
+            deadline: opp.deadline,
+            deadline_type: opp.deadline_type,
+            amount_min: opp.amount_min,
+            amount_max: opp.amount_max,
+            amount_description: opp.amount_description,
+            application_url: opp.application_url,
+            source: opp.source,
+            source_url: opp.source_url,
+            evidence_url: opp.evidence_url || opp.source_url || opp.application_url,
+            state: opp.state,
+            is_national: opp.is_national,
+            opportunity_type: opp.opportunity_type,
+            funding_type: opp.funding_type,
+            requires_match: opp.requires_match,
+            requires_501c3: opp.requires_501c3,
+            match_percentage: opp.match_percentage,
+            is_loan: opp.is_loan,
+            eligibility_bullets: parseJsonArrayColumn(opp.eligibility_bullets),
+            categories: parseJsonArrayColumn(opp.categories),
+            keywords: parseJsonArrayColumn(opp.keywords),
+            record_origin: opp.record_origin,
+            // Intentionally NO profile_id → this is the global row.
+          },
+          {},
         )
 
-        savedToGlobal++
+        if (res?.inserted) savedToGlobal++
       }
     }
 
