@@ -113,6 +113,20 @@ export default function FundingResultCard({ result, onPrimaryAction, onSecondary
   const isBroken = linkStatus === 'broken' || linkStatus === 'unreachable'
   const isDirectory = kind === 'directory' || kind === 'referral'
 
+  // Loan / matching-funds / expired warnings (Mission System 7, RC-15). These
+  // caveats must be visible on the card so a user is never misled into treating
+  // a loan or an expired deadline as free, currently-open grant money.
+  const isLoan = result.is_loan === true || result.is_loan === 1
+  const requiresMatch = result.requires_match === true || result.requires_match === 1
+  const deadlineType = String(result.deadline_type || '').toLowerCase()
+  const isExpired = (() => {
+    if (deadlineType === 'rolling' || deadlineType === 'ongoing') return false
+    if (!result.deadline) return false
+    const d = new Date(result.deadline)
+    if (Number.isNaN(d.getTime())) return false
+    return d.getTime() < Date.now()
+  })()
+
   return (
     <article
       data-testid="funding-result-card"
@@ -256,6 +270,33 @@ export default function FundingResultCard({ result, onPrimaryAction, onSecondary
         >
           We couldn't reach this link recently. The program may still exist — try contacting the
           source directly.
+        </p>
+      )}
+
+      {isLoan && (
+        <p
+          data-testid="funding-result-card-loan"
+          className="rounded bg-orange-50 px-2 py-1 text-xs text-orange-800"
+        >
+          ⚠️ This is a loan — it must be repaid. It is not grant money.
+        </p>
+      )}
+
+      {requiresMatch && (
+        <p
+          data-testid="funding-result-card-matching-funds"
+          className="rounded bg-orange-50 px-2 py-1 text-xs text-orange-800"
+        >
+          ⚠️ Requires matching funds — you must contribute your own money to qualify.
+        </p>
+      )}
+
+      {isExpired && (
+        <p
+          data-testid="funding-result-card-expired"
+          className="rounded bg-red-50 px-2 py-1 text-xs text-red-700"
+        >
+          The deadline for this opportunity appears to have passed.
         </p>
       )}
 

@@ -130,6 +130,9 @@ export function toCanonicalResult(opp) {
     link_status: linkStatus,
     deadline: pickString(opp.deadline, opp.deadlineAt, opp.deadline_date),
     deadline_type: pickString(opp.deadline_type, opp.deadlineType),
+    // Loan / matching-funds caveats so the card can warn the user (RC-15).
+    is_loan: opp.is_loan === true || opp.is_loan === 1,
+    requires_match: opp.requires_match === true || opp.requires_match === 1,
     amount_min: pickNumber(opp.amount_min, opp.awardMin, opp.min_amount),
     amount_max: pickNumber(opp.amount_max, opp.awardMax, opp.max_amount),
     amount_description: pickString(opp.amount_description, opp.amount, opp.award_description),

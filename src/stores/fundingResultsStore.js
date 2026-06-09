@@ -13,6 +13,11 @@ import { persist } from 'zustand/middleware'
  *   4. authStore.setActiveProfileId() also calls .clear() on profile change
  *      and clearAllProfileScopedStorage() — so even if a reader forgets to
  *      use the selector, the underlying state is empty.
+ *
+ * `diagnostics` carries the zero-result ladder telemetry the backend produces
+ * (result tier, what was searched/expanded, profile gaps, honest explanation)
+ * so the UI can render an explanatory zero-result state instead of a dead end.
+ * (Mission System 5, RC-12.)
  */
 const EMPTY_RESULT_VIEW = Object.freeze({
   results: [],
@@ -24,6 +29,7 @@ const EMPTY_RESULT_VIEW = Object.freeze({
   totalScored: null,
   truncated: false,
   thresholdFallbackMessage: null,
+  diagnostics: null,
 })
 
 export const useFundingResultsStore = create(
@@ -38,6 +44,7 @@ export const useFundingResultsStore = create(
       totalScored: null,
       truncated: false,
       thresholdFallbackMessage: null,
+      diagnostics: null,
 
       setResults: (data) => set({
         results: Array.isArray(data?.results) ? data.results : [],
@@ -49,6 +56,7 @@ export const useFundingResultsStore = create(
         totalScored: Number.isFinite(Number(data?.totalScored)) ? Number(data.totalScored) : null,
         truncated: Boolean(data?.truncated),
         thresholdFallbackMessage: data?.thresholdFallbackMessage ?? null,
+        diagnostics: data?.diagnostics ?? null,
       }),
 
       clear: () => set({
@@ -61,6 +69,7 @@ export const useFundingResultsStore = create(
         totalScored: null,
         truncated: false,
         thresholdFallbackMessage: null,
+        diagnostics: null,
       }),
 
       /**
@@ -95,6 +104,7 @@ export const useFundingResultsStore = create(
           totalScored: state.totalScored,
           truncated: state.truncated,
           thresholdFallbackMessage: state.thresholdFallbackMessage,
+          diagnostics: state.diagnostics,
         }
       },
     }),
@@ -110,6 +120,7 @@ export const useFundingResultsStore = create(
         totalScored: state.totalScored,
         truncated: state.truncated,
         thresholdFallbackMessage: state.thresholdFallbackMessage,
+        diagnostics: state.diagnostics,
       }),
       onRehydrateStorage: () => (state, error) => {
         // Self-evict on profile mismatch. We avoid importing authStore here
@@ -134,6 +145,7 @@ export const useFundingResultsStore = create(
             state.totalScored = null
             state.truncated = false
             state.thresholdFallbackMessage = null
+            state.diagnostics = null
             try {
               useFundingResultsStore.setState({
                 results: [],
@@ -145,6 +157,7 @@ export const useFundingResultsStore = create(
                 totalScored: null,
                 truncated: false,
                 thresholdFallbackMessage: null,
+                diagnostics: null,
               })
             } catch { /* ignore */ }
             try {
