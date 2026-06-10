@@ -8,6 +8,7 @@
 import crypto from 'crypto'
 import { buildProfileContext, computeProfileDigest } from './profileHelpers.js'
 import { validateJobStatus, validateZipCode, validateStateCode, validateUuid } from '../utils/dbValidation.js'
+import { CRAWLER_JOB_TYPES } from '../config/constants.js'
 import { createLogger } from '../utils/logger.js'
 const log = createLogger('crawlerJobCreation')
 
@@ -111,31 +112,9 @@ export async function createCrawlerJob(db, options) {
 
   const createdAtIso = new Date().toISOString()
 
-  // Validate job type — must match crawlerDispatcher HANDLERS and DB CHECK (postgres migrations).
-  const VALID_TYPES = [
-    'anya_match_scout',
-    'avatar_lookup',
-    'comprehensive',
-    'curated_benefits',
-    'document_ingest',
-    'ecf_benefits',
-    'government_funding',
-    'health_resources',
-    'item_gift_search',
-    'item_matching',
-    'item_search',
-    'local',
-    'local_funding',
-    'national',
-    'national_zip_scan',
-    'pipeline_automation',
-    'portal_check',
-    'profile_enrichment',
-    'scholarship',
-    'special_needs',
-    'student_bridge_funding',
-    'student_grants',
-  ]
+  // Validate job type — single source of truth is CRAWLER_JOB_TYPES (config/constants.js),
+  // which must match crawlerDispatcher HANDLERS and the DB CHECK (postgres migrations).
+  const VALID_TYPES = CRAWLER_JOB_TYPES
 
   if (!VALID_TYPES.includes(type)) {
     throw new Error(`Invalid crawler job type: ${type}`)

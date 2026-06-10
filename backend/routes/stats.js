@@ -1,5 +1,9 @@
 import express from 'express'
-import { requireAuthenticatedUser } from '../utils/accessControl.js'
+import {
+  requireAuthenticatedUser,
+  getAccessibleProfileIds,
+  getAccessibleOrganizationIds,
+} from '../utils/accessControl.js'
 import { standardRateLimiter } from '../middleware/rateLimiting.js'
 
 import { createLogger } from '../utils/logger.js'
@@ -7,107 +11,141 @@ const routeLogger = createLogger('route:stats')
 
 const router = express.Router()
 
-// Marketing stats for non-admin users
-// Align marketing stats keys with the admin response shape so
-// frontend components can rely on a single stable contract.
-const MARKETING_STATS = {
-  organizations: 3144,
-  fundsSecured: 22895000,
-  grantsTotal: 31560,      // renamed from activeGrants to match admin shape
-  activeProfiles: 3144,
-  opportunitiesFound: 15000,
-  pipelineTotal: 0,        // not meaningful for marketing view; set to 0
-  isRealData: false,
+// Pipeline stages whose requested amounts count toward "in-pipeline" totals.
+// Terminal stages (awarded/declined/closed/deadline_passed/archived) are excluded.
+const PIPELINE_ACTIVE_STATUSES = [
+  'discovery', 'discovered', 'interested', 'auto_applied', 'drafting',
+  'application_prep', 'app_prep', 'revision', 'portal', 'submitted',
+  'pending_review', 'under_review', 'follow_up', 'report',
+]
+
+const ZERO_STATS = {
+  organizations: 0,
+  fundsSecured: 0,
+  activeProfiles: 0,
+  opportunitiesFound: 0,
+  grantsTotal: 0,
+  pipelineTotal: 0,
+  isRealData: true,
+}
+
+/**
+ * Build a SQL `column IN (...)` fragment for a list of ids.
+ * Returns a clause that matches nothing when the id list is empty, so an
+ * unscoped (no-access) user honestly gets zeros rather than every row.
+ */
+function inClause(column, ids) {
+  if (!Array.isArray(ids) || ids.length === 0) {
+    return { sql: '1 = 0', params: [] }
+  }
+  return { sql: `${column} IN (${ids.map(() => '?').join(', ')})`, params: ids }
+}
+
+/**
+ * Compute REAL dashboard stats.
+ * @param db database handle
+ * @param scope null → all rows (admin); otherwise { profileIds, orgIds } arrays
+ *        used to restrict every aggregate to the user's own data.
+ */
+async function computeDashboardStats(db, scope) {
+  const isAdmin = scope === null
+
+  // Counts of the user's own profiles/orgs (or all, for admin).
+  let organizations
+  let activeProfiles
+  let grantScopeSql
+  let grantScopeParams
+
+  if (isAdmin) {
+    organizations = (await db.prepare('SELECT COUNT(*) as count FROM organizations').get())?.count ?? 0
+    activeProfiles = (await db.prepare('SELECT COUNT(*) as count FROM profiles').get())?.count ?? 0
+    grantScopeSql = '1 = 1'
+    grantScopeParams = []
+  } else {
+    const profileIds = scope.profileIds
+    const orgIds = scope.orgIds
+    organizations = orgIds.length
+    activeProfiles = profileIds.length
+    // A grant belongs to the user if it is tied to one of their organizations
+    // OR one of their profiles.
+    const orgClause = inClause('organization_id', orgIds)
+    const profileClause = inClause('profile_id', profileIds)
+    grantScopeSql = `(${orgClause.sql} OR ${profileClause.sql})`
+    grantScopeParams = [...orgClause.params, ...profileClause.params]
+  }
+
+  const grantsTotal = (await db
+    .prepare(`SELECT COUNT(*) as count FROM grants WHERE ${grantScopeSql}`)
+    .get(...grantScopeParams))?.count ?? 0
+
+  const fundsSecured = (await db
+    .prepare(`SELECT COALESCE(SUM(amount_awarded), 0) as total FROM grants
+              WHERE ${grantScopeSql} AND status = 'awarded' AND amount_awarded > 0`)
+    .get(...grantScopeParams))?.total ?? 0
+
+  const pipelineStatusClause = `status IN (${PIPELINE_ACTIVE_STATUSES.map(() => '?').join(', ')})`
+  const pipelineTotal = (await db
+    .prepare(`SELECT COALESCE(SUM(amount_requested), 0) as total FROM grants
+              WHERE ${grantScopeSql} AND ${pipelineStatusClause}`)
+    .get(...grantScopeParams, ...PIPELINE_ACTIVE_STATUSES))?.total ?? 0
+
+  // opportunitiesFound is the real, currently-active funding catalog the user can
+  // search — a genuine "X real opportunities available to find" figure, not a
+  // per-user number, and honestly the same for everyone.
+  const opportunitiesFound = (await db
+    .prepare('SELECT COUNT(*) as count FROM funding_opportunities WHERE is_active = 1')
+    .get())?.count ?? 0
+
+  return {
+    organizations,
+    fundsSecured,
+    activeProfiles,
+    opportunitiesFound,
+    grantsTotal,
+    pipelineTotal,
+    isRealData: true,
+  }
 }
 
 /**
  * GET /api/stats/dashboard
- * Returns dashboard statistics based on user role
- * - Admin users see real database stats
- * - Regular users see marketing stats
+ * Returns REAL dashboard statistics for the authenticated user:
+ * - Admin users see database-wide totals.
+ * - Regular users see totals scoped to their own profiles/organizations.
+ * No marketing/placeholder numbers are ever returned to an authenticated user —
+ * the dashboard must show the user's real data (or honest zeros).
  */
 router.get('/dashboard', standardRateLimiter, async (req, res) => {
   try {
     const user = requireAuthenticatedUser(req, res)
     if (!user) return
 
-    const isAdmin = Boolean(req.ctx?.isAdmin)
-
-    if (isAdmin) {
-      if (!req.db) {
-        return res.status(500).json({
-          error: 'Database not available',
-          organizations: 0,
-          fundsSecured: 0,
-          activeProfiles: 0,
-          opportunitiesFound: 0,
-          grantsTotal: 0,
-          pipelineTotal: 0,
-          isRealData: true,
-        })
-      }
-
-      // Return real database stats for admin
-      const profilesCount = await req.db
-        .prepare('SELECT COUNT(*) as count FROM profiles')
-        .get()
-      
-      const organizationsCount = await req.db
-        .prepare('SELECT COUNT(*) as count FROM organizations')
-        .get()
-      
-      const grantsCount = await req.db
-        .prepare('SELECT COUNT(*) as count FROM grants')
-        .get()
-      
-      const opportunitiesCount = await req.db
-        .prepare('SELECT COUNT(*) as count FROM funding_opportunities WHERE is_active = 1')
-        .get()
-      
-      const awardedGrants = await req.db
-        .prepare(`
-          SELECT COALESCE(SUM(amount_awarded), 0) as total
-          FROM grants
-          WHERE status = 'awarded' AND amount_awarded > 0
-        `)
-        .get()
-      
-      const pipelineTotal = await req.db
-        .prepare(`
-          SELECT COALESCE(SUM(amount_requested), 0) as total
-          FROM grants
-          WHERE status IN ('interested', 'drafting', 'app_prep', 'revision', 'submitted', 'under_review')
-        `)
-        .get()
-
-      return res.json({
-        organizations: organizationsCount?.count ?? 0,
-        fundsSecured: awardedGrants?.total ?? 0,
-        activeProfiles: profilesCount?.count ?? 0,
-        opportunitiesFound: opportunitiesCount?.count ?? 0,
-        grantsTotal: grantsCount?.count ?? 0,
-        pipelineTotal: pipelineTotal?.total ?? 0,
-        isRealData: true,
-      })
+    if (!req.db) {
+      return res.status(500).json({ error: 'Database not available', ...ZERO_STATS })
     }
 
-    // Return marketing stats for regular users
-    return res.json({
-      ...MARKETING_STATS,
-      isRealData: false,
-    })
+    const isAdmin = Boolean(req.ctx?.isAdmin)
+    let scope = null
+    if (!isAdmin) {
+      const profileIdSet = await getAccessibleProfileIds(req.db, user)
+      const orgIdSet = await getAccessibleOrganizationIds(req.db, user)
+      // A null id set means the access layer itself classified this user as an
+      // admin — fall through to unscoped (DB-wide) stats rather than zeros.
+      if (profileIdSet === null && orgIdSet === null) {
+        scope = null
+      } else {
+        scope = {
+          profileIds: [...(profileIdSet || [])],
+          orgIds: [...(orgIdSet || [])],
+        }
+      }
+    }
+
+    const stats = await computeDashboardStats(req.db, scope)
+    return res.json(stats)
   } catch (error) {
     routeLogger.error('[stats/dashboard] Error:', error)
-    return res.status(500).json({
-      error: 'Failed to fetch dashboard stats',
-      organizations: 0,
-      fundsSecured: 0,
-      activeProfiles: 0,
-      opportunitiesFound: 0,
-      grantsTotal: 0,
-      pipelineTotal: 0,
-      isRealData: false,
-    })
+    return res.status(500).json({ error: 'Failed to fetch dashboard stats', ...ZERO_STATS })
   }
 })
 

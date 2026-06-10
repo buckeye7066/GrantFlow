@@ -77,27 +77,33 @@ export const DISCOUNT_TYPES = {
 };
 
 // Crawler job types
+// Crawler job types — single source of truth. MUST stay in sync with:
+//   * backend/db/postgres/migrations (the crawler_jobs.type CHECK constraint, latest 0069)
+//   * backend/services/crawlerJobCreation.js VALID_TYPES (imports this list)
+//   * backend/services/crawlerDispatcher.js HANDLERS
 export const CRAWLER_JOB_TYPES = [
-  'local',
-  'scholarship',
-  'health_resources',
-  'comprehensive',
-  'national',
-  'item_search',
-  'item_gift_search',
+  'anya_match_scout',
   'avatar_lookup',
-  'document_ingest',
-  'pipeline_automation',
-  'profile_enrichment',
+  'comprehensive',
   'curated_benefits',
-  'government_funding',
-  'student_grants',
+  'document_ingest',
   'ecf_benefits',
-  'special_needs',
-  'local_funding',
+  'government_funding',
+  'health_resources',
+  'item_gift_search',
   'item_matching',
+  'item_search',
+  'local',
+  'local_funding',
+  'national',
+  'national_zip_scan',
+  'pipeline_automation',
   'portal_check',
+  'profile_enrichment',
+  'scholarship',
+  'special_needs',
   'student_bridge_funding',
+  'student_grants',
 ];
 
 export const CRAWLER_JOB_STATUSES = [
@@ -108,16 +114,28 @@ export const CRAWLER_JOB_STATUSES = [
   'cancelled',
 ]
 
-// Grant statuses
+// Grant (pipeline) statuses — single source of truth for status validation.
 //
-// Canonical pipeline (RC-13) re-exported from the shared module. The list
-// here MUST stay a superset of every status the UI exposes and every status
-// the DB CHECK accepts; otherwise PATCH /api/grants/:id/status will reject
-// stage transitions the user just made via drag-and-drop.
+// RC-13 (PR #505): canonicalised through shared/pipelineStages.js so backend,
+// frontend (KanbanBoard), and the DB CHECK all consume the same list and stop
+// drifting. The shared module already accepts every status migration 0032
+// expanded the CHECK to (discovery, auto_applied, application_prep, revision,
+// portal, pending_review, report, declined_no_review, closed, app_prep,
+// under_review, rejected, deadline_passed) as legacy aliases mapped to one of
+// the 11 canonical stages, so existing rows continue to validate and historic
+// pipelines render correctly.
 //
-// Source of truth: shared/pipelineStages.js. Consumed by routes/grants.js,
-// services/relevanceFilterRules.js, and other API validators.
-import { PIPELINE_STAGE_ALL, PIPELINE_STAGES, PIPELINE_STAGE_ALIASES } from '../../shared/pipelineStages.js'
+// MUST stay in sync with:
+//   * backend/db/postgres/migrations/0032_expand_grants_status_check.sql + 0072
+//   * backend/db/migrations/076_grants_status_canonical_pipeline.mjs
+//   * src/components/pipeline/KanbanBoard.jsx STATUSES (consumes the shared module)
+//
+// Drift between these is what produced the "pipeline totals don't match" report.
+import {
+  PIPELINE_STAGE_ALL,
+  PIPELINE_STAGES,
+  PIPELINE_STAGE_ALIASES,
+} from '../../shared/pipelineStages.js'
 export const GRANT_STATUSES = [...PIPELINE_STAGE_ALL]
 export const GRANT_STATUSES_CANONICAL = PIPELINE_STAGES
-export const GRANT_STATUS_ALIASES = PIPELINE_STAGE_ALIASES;
+export const GRANT_STATUS_ALIASES = PIPELINE_STAGE_ALIASES

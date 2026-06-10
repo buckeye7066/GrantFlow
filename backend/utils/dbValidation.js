@@ -1,9 +1,11 @@
 /**
  * Database Write Normalization and Validation
- * 
+ *
  * Centralized validation for enums, statuses, dates, and foreign keys before writes.
  * All high-risk database writes MUST use these validators to prevent constraint violations.
  */
+
+import { GRANT_STATUSES } from '../config/constants.js'
 
 /**
  * Validate and normalize job status
@@ -29,27 +31,15 @@ export function validateJobStatus(status) {
  * @throws {Error} If status is invalid
  */
 export function validateGrantStatus(status) {
-  const VALID_STATUSES = [
-    'discovered',
-    'interested',
-    'drafting',
-    'app_prep',
-    'revision',
-    'submission_ready',
-    'submitted',
-    'under_review',
-    'awarded',
-    'rejected',
-    'withdrawn',
-    'pending',
-    'matched',
-  ]
+  // Single source of truth: GRANT_STATUSES (config/constants.js), which is kept in
+  // sync with the DB CHECK constraint and the KanbanBoard columns. Do NOT maintain a
+  // parallel list here — that is exactly the drift that lets valid statuses 400.
   const normalized = String(status || 'interested').toLowerCase().trim()
-  
-  if (!VALID_STATUSES.includes(normalized)) {
-    throw new Error(`Invalid grant status: ${status}. Must be one of: ${VALID_STATUSES.join(', ')}`)
+
+  if (!GRANT_STATUSES.includes(normalized)) {
+    throw new Error(`Invalid grant status: ${status}. Must be one of: ${GRANT_STATUSES.join(', ')}`)
   }
-  
+
   return normalized
 }
 
@@ -77,35 +67,6 @@ export function validateApplicantType(type) {
   
   if (!VALID_TYPES.includes(normalized)) {
     throw new Error(`Invalid applicant type: ${type}. Must be one of: ${VALID_TYPES.join(', ')}`)
-  }
-  
-  return normalized
-}
-
-/**
- * Validate and normalize document type
- * @param {string} type - Document type
- * @returns {string} Normalized type
- * @throws {Error} If type is invalid
- */
-export function validateDocumentType(type) {
-  const VALID_TYPES = [
-    'resume',
-    'cv',
-    'transcript',
-    'financial_statement',
-    'tax_return',
-    'recommendation_letter',
-    'essay',
-    'personal_statement',
-    'application_form',
-    'budget',
-    'other',
-  ]
-  const normalized = String(type || 'other').toLowerCase().trim()
-  
-  if (!VALID_TYPES.includes(normalized)) {
-    throw new Error(`Invalid document type: ${type}. Must be one of: ${VALID_TYPES.join(', ')}`)
   }
   
   return normalized

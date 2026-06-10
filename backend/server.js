@@ -76,7 +76,7 @@ import { attachRequestContext } from './middleware/requestContext.js';
 import { pipelineMonitor, getPipelineHealth } from './middleware/pipelineMonitor.js';
 import { requestTimeout } from './middleware/requestTimeout.js';
 import { responseCache } from './middleware/responseCache.js';
-import { MAX_JSON_BODY_SIZE } from './config/constants.js';
+import { MAX_JSON_BODY_SIZE, GRANT_STATUSES } from './config/constants.js';
 import { getSafeHealthSummary } from './services/diagnosticsService.js';
 import { initializeFeatureFlags } from './services/featureFlagService.js';
 import { logAuditEvent, AUDIT_CATEGORIES, SEVERITY } from './services/auditService.js';
@@ -2502,20 +2502,12 @@ if (process.env.NODE_ENV !== 'test') {
         }
 
         try {
-          // Keep in lock-step with shared/pipelineStages.js +
-          // backend/db/postgres/migrations/0072_grants_status_canonical_pipeline.sql.
+          // Generate the CHECK list from GRANT_STATUSES (config/constants.js → shared/pipelineStages.js)
+          // so the live constraint can never drift from the constant the API/UI validate against.
+          const grantStatusList = GRANT_STATUSES.map((s) => `'${s}'`).join(',')
           await db.exec(`
             ALTER TABLE grants DROP CONSTRAINT IF EXISTS grants_status_check;
-            ALTER TABLE grants ADD CONSTRAINT grants_status_check CHECK (status IN (
-              -- Canonical 11-stage pipeline (RC-13)
-              'discovered','saved','interested','gathering_documents',
-              'drafting','ready_to_submit','submitted','follow_up',
-              'awarded','declined','archived',
-              -- Legacy stages preserved for back-compat
-              'discovery','auto_applied','application_prep','revision',
-              'portal','pending_review','report','declined_no_review',
-              'closed','app_prep','under_review','rejected','deadline_passed'
-            ));
+            ALTER TABLE grants ADD CONSTRAINT grants_status_check CHECK (status IN (${grantStatusList}));
           `)
           console.log('[startup] grants status CHECK constraint verified/expanded')
         } catch (e) {
