@@ -28,7 +28,7 @@ import {
   Trash2,
   X,
 } from "lucide-react"
-import { format, formatDistanceToNowStrict } from "date-fns"
+import { format } from "date-fns"
 import { Card, CardContent, CardFooter, CardHeader } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -201,111 +201,25 @@ function buildOpportunitySummary(opportunity, profile, match) {
   return lines.join("\n")
 }
 
-function computeProfileSignals(profile) {
-  if (!profile) return { tags: new Set(), strings: [] }
-  const tagSet = new Set((profile.tags ?? []).map((tag) => tag.toLowerCase()))
-  const strings = []
-
-  const sections = profile.sections ?? []
-  sections.forEach((section) => {
-    if (!section?.data) return
-    Object.entries(section.data).forEach(([key, value]) => {
-      if (typeof value === "string" && value.trim()) {
-        strings.push(value.toLowerCase())
-      } else if (Array.isArray(value)) {
-        value.forEach((entry) => {
-          if (typeof entry === "string") strings.push(entry.toLowerCase())
-        })
-      } else if (value === true) {
-        tagSet.add(key.replace(/_/g, " ").toLowerCase())
-      }
-    })
-  })
-
-  return { tags: tagSet, strings }
-}
-
+// Match score for an opportunity. This intentionally does NOT compute a score
+// in the browser — the backend scores each opportunity server-side from the real
+// profile (GET /api/opportunities?profile_id=...) and returns match_score /
+// match_reasons. A client-side score would be a fabricated number that diverges
+// from the matcher the rest of the app trusts. When the backend hasn't scored a
+// row (e.g. no profile selected yet), we show no match % rather than inventing one.
 function scoreOpportunity(opportunity, profileDetail) {
   if (!profileDetail) {
-    return { score: 0, reasons: ["Select a profile to see a match score"], overlap: [] }
+    return { score: null, reasons: ["Select a profile to see a match score"], overlap: [] }
   }
 
-  const { tags, strings } = computeProfileSignals(profileDetail)
-
-  let score = 45
-  const reasons = []
-  const overlap = []
-
-  if (opportunity.is_national) {
-    score += 10
-    reasons.push("National coverage")
+  const backendScore = Number(opportunity?.match_score)
+  if (Number.isFinite(backendScore)) {
+    const reasons = Array.isArray(opportunity?.match_reasons) ? opportunity.match_reasons : []
+    return { score: Math.max(0, Math.min(100, Math.round(backendScore))), reasons, overlap: [] }
   }
 
-  const profileLocation =
-    profileDetail.sections?.find((section) => section.section_key === "location_focus")?.data?.geographic_focus ?? null
-  const profileState =
-    profileDetail.sections?.find((section) => section.section_key === "basic_information")?.data?.state ?? null
-
-  if (opportunity.state && profileState && opportunity.state.toLowerCase() === profileState.toLowerCase()) {
-    score += 15
-    reasons.push(`Matches profile state (${profileState})`)
-  } else if (
-    opportunity.state &&
-    profileLocation &&
-    profileLocation.toLowerCase().includes(opportunity.state.toLowerCase())
-  ) {
-    score += 10
-    reasons.push(`Covered in profile location focus (${opportunity.state})`)
-  }
-
-  const keywordOverlap = []
-  ;(opportunity.keywords ?? []).forEach((keyword) => {
-    const normalized = keyword.toLowerCase()
-    if (tags.has(normalized) || strings.some((str) => str.includes(normalized))) {
-      keywordOverlap.push(keyword)
-    }
-  })
-
-  if (keywordOverlap.length) {
-    score += 15
-    overlap.push(...keywordOverlap)
-    reasons.push(`Matches profile focus: ${keywordOverlap.slice(0, 3).join(", ")}`)
-  }
-
-  const categoryOverlap = []
-  ;(opportunity.categories ?? []).forEach((category) => {
-    const normalized = category.toLowerCase()
-    if (tags.has(normalized) || strings.some((str) => str.includes(normalized))) {
-      categoryOverlap.push(category)
-    }
-  })
-
-  if (categoryOverlap.length) {
-    score += 10
-    overlap.push(...categoryOverlap)
-    reasons.push(`Relevant categories: ${categoryOverlap.slice(0, 2).join(", ")}`)
-  }
-
-  if (opportunity.deadline_type === "rolling") {
-    score += 5
-    reasons.push("Rolling deadline – flexible submission window")
-  } else if (opportunity.deadline) {
-    try {
-      const deadlineDate = new Date(opportunity.deadline)
-      if (!isNaN(deadlineDate.getTime())) {
-        const timeToDeadline = formatDistanceToNowStrict(deadlineDate, { addSuffix: true })
-        reasons.push(`Deadline ${timeToDeadline}`)
-      }
-    } catch {
-      // Invalid date, skip deadline display
-    }
-  }
-
-  return {
-    score: Math.min(100, Math.round(score)),
-    reasons,
-    overlap,
-  }
+  // Backend returned no score for this row — do not fabricate one.
+  return { score: null, reasons: [], overlap: [] }
 }
 
 function OpportunityCard({
@@ -323,7 +237,7 @@ function OpportunityCard({
   onUnhide,
   isGrantHidden = false,
 }) {
-  const matchScore = match?.score ?? 0
+  const matchScore = typeof match?.score === "number" ? match.score : null
   const complianceStatus = opportunity.compliance_status ?? "unknown"
   const complianceReasons = Array.isArray(opportunity.compliance_reasons)
     ? opportunity.compliance_reasons
@@ -506,8 +420,8 @@ function OpportunityCard({
           </div>
         )}
 
-        {/* Match Score - Prominently displayed with tooltip for reasons */}
-        {match ? (
+        {/* Match Score - shown only when the backend actually scored this row */}
+        {match && matchScore !== null ? (
           <TooltipProvider>
             <Tooltip>
               <TooltipTrigger asChild>
@@ -1080,6 +994,10 @@ export default function FundingOpportunities() {
         is_national: filters.nationalOnly ? "true" : undefined,
         compliance: filters.compliance,
         geo_run_id: filters.geo_run_id || undefined,
+        // Pass the selected profile so the backend scores each opportunity
+        // server-side (returns match_score/match_reasons). Without this the page
+        // has no real score to show.
+        profile_id: filters.profileId || undefined,
         limit: ITEMS_PER_PAGE,
         offset: (currentPage - 1) * ITEMS_PER_PAGE,
       }),

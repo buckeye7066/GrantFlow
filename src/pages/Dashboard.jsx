@@ -368,9 +368,11 @@ export default function Dashboard() {
 
   const totalFundsSecured = useMemo(
     () => {
-      // Use marketing stats for non-admin, real stats for admin
-      if (dashboardStats && !dashboardStats.isRealData) {
-        return dashboardStats.fundsSecured
+      // Real funds secured. Prefer the backend's authoritative, per-user-scoped
+      // figure when available so the card maps 1:1 to /api/stats; otherwise
+      // compute from the grants loaded in the UI. Never show marketing numbers.
+      if (dashboardStats && Number.isFinite(Number(dashboardStats.fundsSecured))) {
+        return Number(dashboardStats.fundsSecured)
       }
       return relevantGrants
         .filter((g) => g.status === 'awarded' && g.amount)
@@ -400,25 +402,21 @@ export default function Dashboard() {
   )
 
   const displayOrganizationsCount = useMemo(() => {
-    // Use marketing stats for non-admin users
-    if (currentUser?.role !== "admin" && dashboardStats && !dashboardStats.isRealData) {
-      return dashboardStats.organizations
+    // Real organization count. Prefer the backend's scoped figure; otherwise
+    // derive from loaded data. No marketing numbers.
+    if (dashboardStats && Number.isFinite(Number(dashboardStats.organizations))) {
+      return Number(dashboardStats.organizations)
     }
     if (currentUser?.role === "admin") {
       return profiles.length || organizations.length
     }
-    // For non-admin users, show their organization count (1 if they belong to one)
     return profileOrganizationId ? 1 : 0
   }, [currentUser?.role, profiles.length, organizations.length, profileOrganizationId, dashboardStats])
 
   const displayActiveGrantsCount = useMemo(() => {
-    // Use marketing stats for non-admin users when provided by backend.
-    if (currentUser?.role !== "admin" && dashboardStats && !dashboardStats.isRealData) {
-      const value = Number(dashboardStats.activeGrants)
-      if (Number.isFinite(value) && value >= 0) return value
-    }
+    // Real grant count from the grants loaded in the UI. No marketing numbers.
     return activeGrants.length
-  }, [currentUser?.role, dashboardStats, activeGrants.length])
+  }, [activeGrants.length])
 
   const stats = useMemo(
     () => [
