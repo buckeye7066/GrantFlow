@@ -60,10 +60,10 @@ now enforces `assessReality` for active rows (RC-6). Inactive reference rows
   backend verdict or `UNRATED` (RC-4).
 - Normalization: unknown funding type stays `unknown` (RC-2); loan detection spans
   full text + metadata with a forgiveness exemption (RC-3).
-- **Pending:** Anya match scout + `explainMatch` must consume `computeMatchDecision`
-  (RC-9, RC-10); UI threshold ladders must consume `matchThresholds`/`matchDisplayThresholds`
-  from one source (RC-9 note); source-trust + deadline caveats should be emitted by the
-  decision itself.
+- **RC-9 / RC-10 ✅ shipped (`f6f23137`):** Anya match scout + `explainMatch` now
+  consume `computeMatchDecision` (never surface a REJECT); the scout no longer
+  notifies on non-authoritative scores. UI threshold ladders read the canonical
+  thresholds from one source.
 
 ---
 
@@ -73,11 +73,10 @@ now enforces `assessReality` for active rows (RC-6). Inactive reference rows
   successful tool call; never narrate success on `error`/`confirmation_required`.
 - **Grounding:** use canonical profile context, canonical match explanations,
   canonical reality status, canonical application workflow.
-- **Pending (RC-11):** the set of tools the prompt presents as directly callable
-  must equal the chat whitelist (single source of truth); write tools must be
-  confirmation-gated; add zero-result-guidance / deadline / pipeline-summary tools;
-  add a test asserting prompt-listed tools ⊆ whitelist and that `explainMatch` agrees
-  with `computeMatchDecision`.
+- **RC-11 ✅ shipped (`f6f23137`):** the prompt's "tools available to you" list is
+  generated from the chat whitelist (single source of truth), write tools are
+  confirmation-gated, and a parity test asserts prompt-listed tools ⊆ whitelist and
+  that `explainMatch` agrees with `computeMatchDecision`.
 
 ---
 
@@ -85,9 +84,11 @@ now enforces `assessReality` for active rows (RC-6). Inactive reference rows
 
 - Result cards must show source, trust tier, link status, deadline status,
   direct/referral/directory label, **loan/matching-funds warning**, **expired label**,
-  explanation, and actions. (Loan/expired chips pending — RC-15.)
+  explanation, and actions. (**RC-15 ✅ shipped (`7ea4dd70`):** loan / matching-funds /
+  expired chips render on result cards, with tests.)
 - Zero-result pages must explain searched/expanded/why + profile gaps + a deeper-search
-  action. (Wiring pending — RC-12.)
+  action. (**RC-12 ✅ shipped (`7ea4dd70`):** ladder diagnostics surfaced through the
+  store into an explanatory empty state; legacy top-N junk fallback removed.)
 - One canonical pipeline stage enum aligned to:
   `discovered → saved → interested → gathering_documents → drafting → ready_to_submit →
   submitted → follow_up → awarded → declined → archived`. **RC-13 ✅ shipped
