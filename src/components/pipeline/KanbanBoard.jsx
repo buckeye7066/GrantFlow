@@ -3,7 +3,7 @@ import { DragDropContext, Droppable, Draggable } from "@hello-pangea/dnd";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import GrantCard from "./GrantCard";
-import { Award, Eye, FileEdit, Layers, Send, Archive, XCircle, HardHat, FileBarChart, CheckCircle } from 'lucide-react';
+import { Award, Eye, FileEdit, Layers, Send, Archive, XCircle, HardHat, FileBarChart, CheckCircle, CalendarX } from 'lucide-react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import client from '@/api/client';
 import { useToast } from "@/components/ui/use-toast";
@@ -25,7 +25,20 @@ const STATUSES = [
                                 { value: "declined_no_review", label: "Declined (No Review)", icon: XCircle },
                                   { value: "declined", label: "Declined", icon: XCircle },
                                     { value: "closed", label: "Closed", icon: Archive },
+                                      { value: "deadline_passed", label: "Deadline Passed", icon: CalendarX },
                                     ];
+
+                                    // Legacy / pre-migration statuses that have no column of their own are
+                                    // mapped to the closest visible column so historical grants never vanish
+                                    // from the board. Every value in GRANT_STATUSES (backend/config/constants.js)
+                                    // must resolve to a column here or via this alias map — counts must map 1:1
+                                    // to backend rows (no silent drops).
+                                    const STATUS_ALIASES = {
+                                          app_prep: "application_prep",
+                                            under_review: "pending_review",
+                                              rejected: "declined",
+                                                archived: "closed",
+                                                };
 
                                     const statusColors = {
                                           discovery: "bg-gray-100 text-gray-900",
@@ -44,6 +57,7 @@ const STATUSES = [
                                                                     declined_no_review: "bg-red-100 text-red-800",
                                                                       declined: "bg-red-100 text-red-800",
                                                                         closed: "bg-gray-100 text-gray-900",
+                                                                          deadline_passed: "bg-rose-100 text-rose-800",
                                                                         };
 
                                                                         function PipelineSlider({ scrollRef }) {
@@ -195,11 +209,20 @@ const STATUSES = [
                                                                                                                                                                                                                                                                                                                                     };
 
                                                                                                                                                                                                                                                                                                                                       const grantsByStatus = React.useMemo(() => {
-                                                                                                                                                                                                                                                                                                                                            return STATUSES.reduce((acc, statusObj) => {
-                                                                                                                                                                                                                                                                                                                                                      const statusGrants = Array.isArray(grants) ? grants.filter(g => g.status === statusObj.value) : [];
-                                                                                                                                                                                                                                                                                                                                                            acc[statusObj.value] = statusGrants.sort((a, b) => (a.starred === b.starred) ? 0 : a.starred ? -1 : 1);
-                                                                                                                                                                                                                                                                                                                                                                  return acc;
-                                                                                                                                                                                                                                                                                                                                            }, {});
+                                                                                                                                                                                                                                                                                                                                            const acc = {};
+                                                                                                                                                                                                                                                                                                                                            STATUSES.forEach((s) => { acc[s.value] = []; });
+                                                                                                                                                                                                                                                                                                                                            const list = Array.isArray(grants) ? grants : [];
+                                                                                                                                                                                                                                                                                                                                            for (const g of list) {
+                                                                                                                                                                                                                                                                                                                                              // Normalize legacy statuses to their visible column; unknown/empty
+                                                                                                                                                                                                                                                                                                                                              // status falls back to the first column so a grant is never dropped.
+                                                                                                                                                                                                                                                                                                                                              const col = STATUS_ALIASES[g.status] || g.status;
+                                                                                                                                                                                                                                                                                                                                              const bucket = acc[col] ? col : STATUSES[0].value;
+                                                                                                                                                                                                                                                                                                                                              acc[bucket].push(g);
+                                                                                                                                                                                                                                                                                                                                            }
+                                                                                                                                                                                                                                                                                                                                            Object.keys(acc).forEach((k) => {
+                                                                                                                                                                                                                                                                                                                                              acc[k].sort((a, b) => (a.starred === b.starred) ? 0 : a.starred ? -1 : 1);
+                                                                                                                                                                                                                                                                                                                                            });
+                                                                                                                                                                                                                                                                                                                                            return acc;
                                                                                                                                                                                                                                                                                                                                         }, [grants]);
 
                                                                                                                                                                                                                                                                                                                                           const handleStarToggle = (grant) => {
