@@ -502,8 +502,10 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, pref
       return
     }
 
-    // Onboarding complete — persist collected data to the backend profile
-    localStorage.setItem(ONBOARDING_LS_KEY, "1")
+    // Onboarding complete — persist collected data to the backend profile.
+    // Do NOT mark onboarding done yet: the flag is only set after a confirmed
+    // write below, so a failed save re-prompts the wizard instead of silently
+    // claiming "I've saved your profile" with nothing persisted.
     setOnboardingStep(null)
 
     try {
@@ -558,14 +560,23 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, pref
         )
       )
 
+      // Write confirmed — now it is honest to mark onboarding complete.
+      localStorage.setItem(ONBOARDING_LS_KEY, "1")
+
       // Refresh profile data across the app
       queryClient.invalidateQueries({ queryKey: ["profiles"] })
       queryClient.invalidateQueries({ queryKey: ["profile"] })
 
       log.info("[onboarding] Profile data persisted", { profileId, primaryType, state: obState, situations: obSituations.length })
     } catch (err) {
-      // Don't block the user — onboarding is marked complete, data can be added manually
+      // Persistence failed — surface it and leave onboarding UNmarked so the user
+      // can retry rather than being told their profile was saved when it wasn't.
       log.warn("[onboarding] Failed to persist profile data:", err.message)
+      toast({
+        variant: "destructive",
+        title: "Couldn't save your profile",
+        description: "Something went wrong saving your details. Please try again from your profile page.",
+      })
     }
   }, [profiles, effectiveProfileId, obProfileType, obState, obSituations, user, queryClient, log])
 
@@ -1052,6 +1063,16 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, pref
         })
       } else {
         await refreshMessages(sessionId)
+      }
+      // The backend returns degraded=true when the AI service failed and Anya
+      // replied with a canned fallback. Signal it so the user knows to retry
+      // rather than trusting the fallback as a real answer.
+      if (response?.degraded) {
+        toast({
+          variant: "destructive",
+          title: "Anya had trouble reaching the AI service",
+          description: "That last reply is a fallback — please try again in a moment.",
+        })
       }
       log.debug('messages refreshed')
     } catch (error) {

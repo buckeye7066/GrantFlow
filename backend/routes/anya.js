@@ -300,6 +300,7 @@ router.post('/sessions/:sessionId/messages', async (req, res) => {
     })
 
     let assistantText
+    let degraded = false
     try {
       assistantText = await generateAssistantResponse(req.db, req.ctx, req.params.sessionId, {
         content,
@@ -311,6 +312,10 @@ router.post('/sessions/:sessionId/messages', async (req, res) => {
       await appendAnyaRunLog(req.db, runId, 'error', 'assistant_generation_failed', {
         message: assistantError?.message || String(assistantError),
       })
+      // This is a fallback, NOT a genuine answer. Flag it so the UI can render
+      // an error/retry affordance instead of presenting canned text as if Anya
+      // actually responded (silent-failure / trust violation otherwise).
+      degraded = true
       assistantText =
         "I hit a snag while reaching the AI service. Try again in a moment or share more details so I can help manually."
     }
@@ -320,11 +325,12 @@ router.post('/sessions/:sessionId/messages', async (req, res) => {
       content: assistantText,
     })
 
-    await completeAnyaRun(req.db, runId, { status: 'completed', response: { assistantText } })
+    await completeAnyaRun(req.db, runId, { status: 'completed', response: { assistantText, degraded } })
 
     res.status(201).json({
       session_id: req.params.sessionId,
       messages: [userMessage, assistantMessage],
+      degraded,
     })
   } catch (error) {
     try {

@@ -23,12 +23,24 @@ import {
   upsertSection,
 } from '../apply/applyEngine.js'
 import { assertArtifactPathIsSafe } from '../apply/storageAdapter.js'
+import { asyncHandler } from '../middleware/errorHandler.js'
 
 import { createLogger } from '../utils/logger.js'
 const routeLogger = createLogger('route:applications')
 
 const router = express.Router()
 router.use(requireAuthenticatedUserMiddleware)
+
+// Auto-wrap every route handler registered below in asyncHandler so a rejected
+// promise reaches the central errorHandler instead of hanging until the request
+// timeout returns a generic 504. Express 4 does not forward async rejections,
+// and these handlers (prepare/validate/compile/export/submit) are async with no
+// try/catch — a throw would otherwise be an invisible unhandled rejection.
+for (const method of ['get', 'post', 'put', 'patch', 'delete']) {
+  const original = router[method].bind(router)
+  router[method] = (routePath, ...handlers) =>
+    original(routePath, ...handlers.map((h) => (typeof h === 'function' ? asyncHandler(h) : h)))
+}
 
 async function ensureApplicationAccess(req, res, applicationId) {
   const userId = getAuthUserId(req?.user ?? req?.ctx)
