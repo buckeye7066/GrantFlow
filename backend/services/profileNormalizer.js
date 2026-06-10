@@ -318,6 +318,101 @@ function safeParseArray(val) {
 }
 
 // ---------------------------------------------------------------------------
+// Document-derived signal extraction (RC-17)
+//
+// Folds `documents.extracted_text` from uploaded profile documents into the
+// canonical need vocabulary. Bounded to NEED_ALIAS_MAP keys so a malicious
+// or noisy document can't add anything outside the existing taxonomy.
+// ---------------------------------------------------------------------------
+const DOCUMENT_TEXT_SCAN_CAP = 200_000  // 200 KB total, prevents pathological scans
+// Pre-build the canonical-need vocabulary as { canonical: Set<keyword>}.
+// Each NEED_ALIAS_MAP key becomes a keyword for its canonical bucket.
+// Whitespace is added inside the keyword so a free-text document like
+// "we need housing repair help" still matches "housing_repair" (we strip
+// underscores when scanning).
+let _NEED_KEYWORDS_BY_CANONICAL = null
+function _ensureNeedKeywordIndex() {
+  if (_NEED_KEYWORDS_BY_CANONICAL) return _NEED_KEYWORDS_BY_CANONICAL
+  const map = new Map()
+  for (const [alias, canonical] of Object.entries(NEED_ALIAS_MAP)) {
+    if (!canonical) continue
+    const normalized = String(alias).toLowerCase().replace(/_/g, ' ').trim()
+    if (!normalized) continue
+    if (!map.has(canonical)) map.set(canonical, new Set())
+    map.get(canonical).add(normalized)
+  }
+  _NEED_KEYWORDS_BY_CANONICAL = map
+  return map
+}
+
+/**
+ * Scan an extracted-text blob for canonical need keywords. Returns the
+ * set of canonical need buckets the document touched. Bounded to the
+ * NEED_ALIAS_MAP vocabulary so we cannot introduce new buckets from
+ * uploaded text.
+ *
+ * Each canonical bucket fires at most once even when many keywords match,
+ * which keeps documentSignals stable for fingerprinting.
+ */
+export function extractNeedSignalsFromDocumentText(rawText) {
+  if (typeof rawText !== 'string' || !rawText.trim()) return []
+  const haystack = rawText
+    .toLowerCase()
+    .replace(/[\u00a0]/g, ' ')
+    .replace(/[_-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .slice(0, DOCUMENT_TEXT_SCAN_CAP)
+  const index = _ensureNeedKeywordIndex()
+  const hits = new Set()
+  for (const [canonical, keywords] of index) {
+    for (const kw of keywords) {
+      if (haystack.includes(kw)) {
+        hits.add(canonical)
+        break
+      }
+    }
+  }
+  return Array.from(hits)
+}
+
+/**
+ * Pull all extracted_text strings out of a documents argument. Accepts:
+ *   - an array of { extracted_text } rows
+ *   - { documents: [...] }
+ *   - a single string (already concatenated)
+ * Returns one combined string (cap-bounded) or null when nothing usable.
+ */
+function _coerceDocumentsToText(documents) {
+  if (!documents) return null
+  const list = Array.isArray(documents)
+    ? documents
+    : Array.isArray(documents?.documents)
+      ? documents.documents
+      : null
+  if (Array.isArray(list)) {
+    const parts = []
+    let total = 0
+    for (const doc of list) {
+      const text = typeof doc === 'string'
+        ? doc
+        : typeof doc?.extracted_text === 'string'
+          ? doc.extracted_text
+          : null
+      if (!text) continue
+      // Reserve a soft cap so a single huge doc cannot starve the others.
+      const remaining = DOCUMENT_TEXT_SCAN_CAP - total
+      if (remaining <= 0) break
+      const slice = text.length > remaining ? text.slice(0, remaining) : text
+      parts.push(slice)
+      total += slice.length
+    }
+    return parts.length > 0 ? parts.join('\n') : null
+  }
+  if (typeof documents === 'string') return documents
+  return null
+}
+
+// ---------------------------------------------------------------------------
 // Normalize a profile + sections into a canonical structure
 // ---------------------------------------------------------------------------
 /**
@@ -330,9 +425,14 @@ function safeParseArray(val) {
  *   When provided, signals.needs (a Set of inferred need strings) is merged into
  *   needCategories after the normalizer's own extraction, canonicalized via NEED_ALIAS_MAP.
  *   This bridges the rich signal engine output into the scoring pipeline.
+ * @param {Array|Object|string|null} documents
+ *   Optional documents bundle. Accepts an array of `{ extracted_text }`
+ *   rows, an object with a `.documents` array, or a single concatenated
+ *   string. Document-derived needs are bounded to the NEED_ALIAS_MAP
+ *   vocabulary so uploads cannot introduce noise (RC-17).
  * @returns {Object|null} Normalized profile or null if rawProfile is falsy
  */
-export function normalizeProfile(rawProfile, sections = null, signals = null) {
+export function normalizeProfile(rawProfile, sections = null, signals = null, documents = null) {
   if (!rawProfile) return null
 
   const profile = rawProfile?.profile ?? rawProfile
@@ -1130,6 +1230,27 @@ export function normalizeProfile(rawProfile, sections = null, signals = null) {
   }
 
   // ---------------------------------------------------------------------------
+  // RC-17: Document-derived signals
+  //
+  // documents.extracted_text is the parsed-plaintext output from PDF / DOCX
+  // / image OCR ingestion (see backend/services/documentIngestion.js). When
+  // a user uploads a benefits letter, IEP, eviction notice, etc., we can
+  // cheaply check whether the text mentions any keyword in the canonical
+  // need vocabulary. We never create new need buckets — only canonical
+  // values from NEED_ALIAS_MAP can come out of this scan, so a noisy or
+  // adversarial document cannot pollute the matcher.
+  // ---------------------------------------------------------------------------
+  const _docText = _coerceDocumentsToText(
+    documents ?? rawProfile?.documents ?? null,
+  )
+  const documentSignals = _docText
+    ? extractNeedSignalsFromDocumentText(_docText)
+    : []
+  for (const docNeed of documentSignals) {
+    if (!needCategories.includes(docNeed)) needCategories.push(docNeed)
+  }
+
+  // ---------------------------------------------------------------------------
   // Soft inference: ensure no profile produces empty needCategories
   // ---------------------------------------------------------------------------
   if (needCategories.length === 0) {
@@ -1456,6 +1577,9 @@ export function normalizeProfile(rawProfile, sections = null, signals = null) {
       : Array.isArray(signals?.credentials) ? signals.credentials : [],
     isLicensedProfessional: Boolean(signals?.isLicensedProfessional)
       || (signals?.credentials instanceof Set && signals.credentials.size > 0),
+    // RC-17: traceability for which canonical needs were folded in from
+    // uploaded documents.extracted_text. Always an array (possibly empty).
+    documentSignals,
     // Display
     displayName: profile.display_name ?? profile.name ?? null,
   }

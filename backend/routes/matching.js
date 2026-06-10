@@ -142,9 +142,17 @@ router.get('/profile/:profileId/grants', async (req, res) => {
 
       // Pre-normalize profile once for the v2.0.0 decision engine.
       // CRITICAL: pass signals so needCategories are populated from buildProfileSignals().
+      // RC-17: pass documents so extracted_text from uploaded files folds
+      // into the canonical need vocabulary.
       const rawProfileForGrants = profileContext?.profile ?? profileContext
       const profileSectionsForGrants = profileContext?.sections ?? null
-      const profileNormForDecision = normalizeProfile(rawProfileForGrants, profileSectionsForGrants, profileContext?.signals ?? null)
+      const profileDocumentsForGrants = profileContext?.documents ?? null
+      const profileNormForDecision = normalizeProfile(
+        rawProfileForGrants,
+        profileSectionsForGrants,
+        profileContext?.signals ?? null,
+        profileDocumentsForGrants,
+      )
 
       // Query grants by organization_id if set, otherwise fall back to profile_id-scoped grants.
       let rows
@@ -566,9 +574,17 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
 
       // Pre-normalize profile once for the v2.0.0 REJECT filter (avoids re-running per opportunity).
       // CRITICAL: pass signals so needCategories are populated from buildProfileSignals().
+      // RC-17: pass documents so extracted_text from uploaded files folds
+      // into the canonical need vocabulary.
       const rawProfileForDecision = profileContext?.profile ?? profileContext
       const profileSectionsForDecision = profileContext?.sections ?? null
-      const profileNormForDecision = normalizeProfile(rawProfileForDecision, profileSectionsForDecision, profileContext?.signals ?? null)
+      const profileDocumentsForDecision = profileContext?.documents ?? null
+      const profileNormForDecision = normalizeProfile(
+        rawProfileForDecision,
+        profileSectionsForDecision,
+        profileContext?.signals ?? null,
+        profileDocumentsForDecision,
+      )
 
       // Directory-style / general funding resources must always survive
       // filtering unless explicitly excluded (project rule). However, they
