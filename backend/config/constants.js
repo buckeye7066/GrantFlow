@@ -77,27 +77,33 @@ export const DISCOUNT_TYPES = {
 };
 
 // Crawler job types
+// Crawler job types — single source of truth. MUST stay in sync with:
+//   * backend/db/postgres/migrations (the crawler_jobs.type CHECK constraint, latest 0069)
+//   * backend/services/crawlerJobCreation.js VALID_TYPES (imports this list)
+//   * backend/services/crawlerDispatcher.js HANDLERS
 export const CRAWLER_JOB_TYPES = [
-  'local',
-  'scholarship',
-  'health_resources',
-  'comprehensive',
-  'national',
-  'item_search',
-  'item_gift_search',
+  'anya_match_scout',
   'avatar_lookup',
-  'document_ingest',
-  'pipeline_automation',
-  'profile_enrichment',
+  'comprehensive',
   'curated_benefits',
-  'government_funding',
-  'student_grants',
+  'document_ingest',
   'ecf_benefits',
-  'special_needs',
-  'local_funding',
+  'government_funding',
+  'health_resources',
+  'item_gift_search',
   'item_matching',
+  'item_search',
+  'local',
+  'local_funding',
+  'national',
+  'national_zip_scan',
+  'pipeline_automation',
   'portal_check',
+  'profile_enrichment',
+  'scholarship',
+  'special_needs',
   'student_bridge_funding',
+  'student_grants',
 ];
 
 export const CRAWLER_JOB_STATUSES = [
@@ -141,5 +147,10 @@ export const GRANT_STATUSES = [
   'app_prep',
   'under_review',
   'rejected',
-  'archived'
+  'archived',
+  // Auto-transition terminal status written by deadlineExpiryService when an
+  // opportunity's deadline passes. Must be accepted by PATCH /grants/:id/status
+  // and routed to a column in KanbanBoard, or deadline transitions either 400
+  // (constraint reject) or vanish from the pipeline (silent drop).
+  'deadline_passed'
 ];

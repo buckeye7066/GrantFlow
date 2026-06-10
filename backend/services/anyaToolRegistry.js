@@ -2618,7 +2618,7 @@ registerTool({
 
 registerTool({
   name: 'admin.anya.testFunctions',
-  description: 'Test all API endpoints and functions systematically. Find and fix errors. Admin only.',
+  description: 'Test all API endpoints and functions systematically and report which fail. Reports findings only — it does not auto-fix errors. Admin only.',
   requiresAdmin: true,
   schema: {
     type: 'object',
@@ -3084,6 +3084,50 @@ registerTool({
 // Grant Writing Tools (End-User — LOI, Proposals, Needs Statements)
 // ============================================================================
 
+// Shared generator for the grant-writing tools below. These tools previously
+// returned only a writingDirective + raw data — so invoking them produced NO
+// document, despite their descriptions promising a "full LOI draft" / "complete
+// application". This helper actually generates the document via the injected
+// OpenAI client (context.getOpenAI, the same path code.suggestPatch uses),
+// grounded strictly in the real profile + opportunity facts. When the AI service
+// is unavailable it says so honestly rather than implying a draft was written.
+async function generateGrantWritingDocument(context, { systemDirective, opportunity, profileData, extra }) {
+  const userPrompt = [
+    `OPPORTUNITY:\n${JSON.stringify(opportunity, null, 2)}`,
+    `APPLICANT PROFILE — use ONLY these real facts; do not invent details:\n${JSON.stringify(profileData, null, 2)}`,
+    extra ? `ADDITIONAL INSTRUCTIONS:\n${extra}` : null,
+  ]
+    .filter(Boolean)
+    .join('\n\n')
+
+  const getOpenAI = context?.getOpenAI
+  const openai = typeof getOpenAI === 'function' ? getOpenAI() : null
+  if (!openai) {
+    return {
+      content: null,
+      generated: 'unavailable',
+      note: 'The AI writing service is not configured, so a finished draft could not be generated here. The opportunity and profile facts are included so the draft can be written manually.',
+    }
+  }
+
+  try {
+    const response = await openai.chat.completions.create({
+      model: process.env.ANYA_OPENAI_MODEL || process.env.OPENAI_MODEL || 'gpt-4o-mini',
+      temperature: 0.6,
+      max_tokens: 3000,
+      messages: [
+        { role: 'system', content: systemDirective },
+        { role: 'user', content: userPrompt },
+      ],
+    })
+    const content = response?.choices?.[0]?.message?.content?.trim() || ''
+    return { content: content || null, generated: content ? 'ai' : 'empty', usage: response?.usage || null }
+  } catch (err) {
+    console.error('[grants.write] AI generation failed:', err.message)
+    return { content: null, generated: 'error', error: err.message }
+  }
+}
+
 registerTool({
   name: 'grants.writeLOI',
   description: 'Generate a full Letter of Intent (LOI) draft for a specific grant opportunity, using the profile data to write at MBA-level grant writer quality.',
@@ -3103,13 +3147,24 @@ registerTool({
     if (!opp) throw new Error(`Opportunity ${params.opportunityId} not found`)
 
     const profileData = await gatherProfileData(db, profileId)
+    const opportunity = { id: opp.id, title: opp.title, sponsor: opp.sponsor, deadline: opp.deadline, description: opp.description, url: opp.url, application_url: opp.application_url, contact_info: opp.contact_info }
+
+    const generation = await generateGrantWritingDocument(context, {
+      systemDirective: LOI_WRITING_DIRECTIVE,
+      opportunity,
+      profileData,
+      extra: params.customInstructions,
+    })
 
     return {
       type: 'loi_draft',
-      opportunity: { id: opp.id, title: opp.title, sponsor: opp.sponsor, deadline: opp.deadline, description: opp.description, url: opp.url, application_url: opp.application_url, contact_info: opp.contact_info },
+      document: generation.content,
+      generated: generation.generated,
+      ...(generation.note ? { note: generation.note } : {}),
+      ...(generation.error ? { error: generation.error } : {}),
+      opportunity,
       profile: profileData,
       instructions: params.customInstructions || null,
-      writingDirective: LOI_WRITING_DIRECTIVE,
       submissionInfo: extractSubmissionInfo(opp),
     }
   },
@@ -3134,13 +3189,24 @@ registerTool({
     if (!opp) throw new Error(`Opportunity ${params.opportunityId} not found`)
 
     const profileData = await gatherProfileData(db, profileId)
+    const opportunity = { id: opp.id, title: opp.title, sponsor: opp.sponsor, description: opp.description }
+
+    const generation = await generateGrantWritingDocument(context, {
+      systemDirective: NEEDS_STATEMENT_WRITING_DIRECTIVE,
+      opportunity,
+      profileData,
+      extra: params.focusArea ? `Emphasize this area of need: ${params.focusArea}` : null,
+    })
 
     return {
       type: 'needs_statement',
-      opportunity: { id: opp.id, title: opp.title, sponsor: opp.sponsor, description: opp.description },
+      document: generation.content,
+      generated: generation.generated,
+      ...(generation.note ? { note: generation.note } : {}),
+      ...(generation.error ? { error: generation.error } : {}),
+      opportunity,
       profile: profileData,
       focusArea: params.focusArea || null,
-      writingDirective: NEEDS_STATEMENT_WRITING_DIRECTIVE,
     }
   },
 })
@@ -3171,14 +3237,27 @@ registerTool({
 
     const profileData = await gatherProfileData(db, profileId)
     const submission = extractSubmissionInfo(opp)
+    const opportunity = { id: opp.id, title: opp.title, sponsor: opp.sponsor, deadline: opp.deadline, description: opp.description, url: opp.url, application_url: opp.application_url, contact_info: opp.contact_info }
+
+    const generation = await generateGrantWritingDocument(context, {
+      systemDirective: FULL_APPLICATION_WRITING_DIRECTIVE,
+      opportunity,
+      profileData,
+      extra: Array.isArray(params.sections) && params.sections.length
+        ? `Write only these sections: ${params.sections.join(', ')}.`
+        : null,
+    })
 
     return {
       type: 'full_application',
-      opportunity: { id: opp.id, title: opp.title, sponsor: opp.sponsor, deadline: opp.deadline, description: opp.description, url: opp.url, application_url: opp.application_url, contact_info: opp.contact_info },
+      document: generation.content,
+      generated: generation.generated,
+      ...(generation.note ? { note: generation.note } : {}),
+      ...(generation.error ? { error: generation.error } : {}),
+      opportunity,
       grant: grant ? { id: grant.id, status: grant.status, notes: grant.notes, application_method: grant.application_method } : null,
       profile: profileData,
       requestedSections: params.sections || null,
-      writingDirective: FULL_APPLICATION_WRITING_DIRECTIVE,
       submissionInfo: submission,
     }
   },
