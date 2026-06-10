@@ -155,19 +155,20 @@ Subsequent commits resolved several of the items below. Current status:
 | RC-11 Anya prompt advertises uncallable tools | ✅ FIXED & VERIFIED (prompt callable-list generated from whitelist; parity test) | f6f23137 |
 | RC-12 Zero-result UI dead-end | ✅ FIXED & VERIFIED (ladder diagnostics surfaced; legacy junk-dump removed) | 7ea4dd70 |
 | RC-15 Result card loan/expired warnings | ✅ FIXED & VERIFIED (loan/matching-funds/expired chips + tests) | 7ea4dd70 |
-| RC-8 Persist reality_status / unify display gate | ⏸ DEFERRED — structural; needs a migration + inserter + reader changes. Note: insert-side (`assessReality`) and display-side (`assessOpportunityTrust`) already share the same low-level classifiers (`classifyOpportunityKind`/`classifySourceTrustTier` + policy helpers), so drift risk is bounded; and a single persisted `reality_status` cannot express per-user `allowLoans`/`allowExpired` context, so re-deriving at display is arguably correct. Lower priority than first assessed. |
-| RC-13 Canonical pipeline enum | ⏸ DEFERRED — `grants.status` (pipeline) and `applicationWorkflow.APPLICATION_STATES` (applications) are two distinct features. Unifying touches the core `grants` table CHECK (SQLite CHECK widening requires a full table rebuild), backend validation, and many UI components — too broad to do safely without an E2E harness. |
-| RC-14 Saved items profile-scoping | ⏸ DEFERRED — `saved_grants` is user-scoped + ownership-enforced (persists correctly); adding profile partitioning requires a UNIQUE-constraint rebuild + frontend changes + legacy-NULL handling, not E2E-verifiable here. |
-| RC-16 sourceRegistry operational metadata | ⏸ DEFERRED — additive fields with no current consumer; low value until a consumer exists. |
-| RC-17 Documents → profile signals | ⏸ DEFERRED — folding `documents.extracted_text` into the central signal/intent pipeline risks altering match/crawler-strategy behavior across many tests; matching-quality impact is not verifiable in this environment. |
+| RC-8 Persist reality_status / unify display gate | ✅ FIXED & LIVE-VERIFIED (2026-06-09 PR #502) — migration `077_funding_opportunities_reality_verdict.sql` (SQLite, idempotent) + `0073_funding_opportunities_reality_verdict.sql` (Postgres) add `reality_status`, `reality_reasons`, `final_url`, `http_status` + index. `opportunityInserter` and `linkVerificationService` write the verdict; `opportunityTrust.assessOpportunityTrust` prefers the persisted verdict but keeps per-user `allowLoans`/`allowExpired` re-derivation. Drift test: `tests/unit/reality-verdict-persistence.test.mjs` (8 cases). Live probe confirmed all 4 columns + index present; fingerprint hits clean. | 4de429a0 |
+| RC-13 Canonical pipeline enum | ✅ FIXED & LIVE-VERIFIED (2026-06-09 PR #502) — new `shared/pipelineStages.js` (11 canonical stages + alias resolver). Migration `076_grants_status_canonical_pipeline.mjs` (SQLite, programmatic CHECK rewrite via `unsafeMode` + `PRAGMA writable_schema`) + `0072_grants_status_canonical_pipeline.sql` (Postgres). `applicationWorkflow.APPLICATION_STATES`, `KanbanBoard`, `GRANT_STATUSES`, `applyEngine`, `server.js`, `backgroundServices.js` all consume the shared module. 11 contract tests (`tests/unit/pipeline-stages-canonical.test.mjs`). Live DB has all 11 stages in the CHECK. | 118877b1 |
+| RC-14 Saved items profile-scoping | ✅ FIXED & LIVE-VERIFIED (2026-06-09 PR #502) — migration `075_saved_grants_profile_scope.sql` (SQLite, table-rebuild) + `0071_saved_grants_profile_scope.sql` (Postgres, `ALTER TABLE`) add nullable `profile_id` and replace single UNIQUE with two partial unique indexes (`uq_saved_grants_user_profile_opp`, `uq_saved_grants_user_legacy_opp`) so legacy NULL rows stay visible. Service scopes by `user_id + profile_id`; POST requires the active profile. `savedGrantsStore` is profile-namespaced and resyncs on profile switch. 6 integration tests (`backend/tests/savedGrantsProfileScope.test.js`). Live `/api/saved-grants` correctly rejects 401/400 without an active profile. | b156462e |
+| RC-16 sourceRegistry operational metadata | ✅ FIXED & LIVE-VERIFIED (2026-06-09 PR #502) — `base_url`, `crawl_method`, `rate_limit`, `robots_note`, `locations` now present on every source via `applyOperationalMetadata`. `loadCrawlerSourceRuntimeStatus(db)` queries `crawler_source_runs` for `last_crawl`/`failure_status`; `buildCoverageReport` surfaces both static + runtime fields. 10 contract tests (`tests/unit/source-registry-coverage.test.mjs`). Live probe: all 61 sources have the operational fields; coverage report exposes `crawl_method=api`, `last_crawl`, etc. | a4771572 |
+| RC-17 Documents → profile signals | ✅ FIXED & LIVE-VERIFIED (2026-06-09 PR #502) — `extractNeedSignalsFromDocumentText` (bounded to `NEED_ALIAS_MAP` keys, 200KB cap, **word-token** matching to avoid substring collisions like `noti**ce**`/`g**roce**ries` falsely firing professional_development) folds into `normalizeProfile`'s `needCategories`. `loadProfileContext` hydrates `documents.extracted_text` from the `documents` table; `routes/matching.js` passes documents through. 10 unit tests (`tests/unit/profile-document-signals.test.mjs`) including the substring-collision regression. Live probe: an "eviction notice" doc folds in `housing` only — clean signal, no noise. | 93da99a3, 2f3b2347 |
 
-> **Why some items are deferred, not done:** each remaining item requires either a
-> schema/constraint rebuild on a core table, a cross-cutting UI sweep, or a change
-> to central matching behavior whose quality impact cannot be verified without a
-> live/E2E environment. Per the project's own rule ("do not claim success until
-> verification passes"), these are documented with a concrete recommended fix
-> rather than shipped as unverifiable changes. The detailed recommendations below
-> remain accurate.
+> **Update 2026-06-09:** the 5 previously-deferred root-causes (RC-8, RC-13,
+> RC-14, RC-16, RC-17) have all been shipped on branch
+> `fix/audit-deferred-rc-completion` (PR #502) with idempotent SQLite +
+> Postgres migrations, contract tests, the full gate suite green, a live
+> backend boot that successfully ran every new migration, and 15/15 live
+> probes (`scripts/probe-deferred-rcs.mjs`) passing against the running
+> server. The detailed recommendations below remain the canonical
+> per-item history.
 
 ## Detailed findings & recommended fixes (RC-7 … RC-17)
 

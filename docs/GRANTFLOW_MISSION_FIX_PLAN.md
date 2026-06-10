@@ -18,7 +18,7 @@ confirmed work in `AUDIT_GRANTFLOW_ROOT_CAUSES.md`.
 | Thresholds | `backend/config/matchThresholds.js` | All accept/review/reject + display thresholds. UI must consume these, not hardcode. |
 | Profile interpretation | `backend/services/profileNormalizer.js` + `profileSignals/` | Reads full profile (top-level + sections + org). All matchers/crawlers consume this context. |
 | Opportunity normalization | `backend/services/opportunityNormalizer.js` | Funding-type, loan, entity/need classification. Unknown → `unknown` (never `grant`). |
-| Source definitions | `backend/services/sourceRegistry.js` | Source id/name/type/trust/profile-types/needs. (Operational metadata pending — RC-16.) |
+| Source definitions | `backend/services/sourceRegistry.js` | Source id/name/type/trust/profile-types/needs **+ operational metadata** (`base_url`, `crawl_method`, `rate_limit`, `robots_note`, `locations`) and runtime status (`last_crawl`, `failure_status`) via `loadCrawlerSourceRuntimeStatus(db)` + `buildCoverageReport`. RC-16 ✅ shipped. |
 | Zero-result expansion | `backend/services/zeroResultLadder.js` | Staged, labeled fallback — never threshold-to-zero junk. |
 | Schema apply (scripts) | `backend/db/ensureSqliteSchema.js` (`applySqliteSchema`) | Reconciles columns on pre-existing SQLite DBs before applying schema. |
 
@@ -36,7 +36,12 @@ on non-actionable/broken links.
 
 **Contract:** every insert path and every active-row display path must derive its
 visibility from this gate — either by calling it, or by filtering on a persisted
-`reality_status` written at insert time (RC-8, pending).
+`reality_status` written at insert time. **RC-8 ✅ shipped (2026-06-09):**
+`reality_status`, `reality_reasons`, `final_url`, `http_status` are now
+persisted on `funding_opportunities` (SQLite migration 077, Postgres 0073);
+`opportunityInserter` and `linkVerificationService` write them;
+`opportunityTrust.assessOpportunityTrust` prefers the stored verdict but
+keeps per-user `allowLoans`/`allowExpired` re-derivation.
 
 **This pass:** the government-import path (`ingestionService.ingestOpportunities`)
 now enforces `assessReality` for active rows (RC-6). Inactive reference rows
@@ -85,9 +90,18 @@ now enforces `assessReality` for active rows (RC-6). Inactive reference rows
   action. (Wiring pending — RC-12.)
 - One canonical pipeline stage enum aligned to:
   `discovered → saved → interested → gathering_documents → drafting → ready_to_submit →
-  submitted → follow_up → awarded → declined → archived`. (Unification pending — RC-13.)
+  submitted → follow_up → awarded → declined → archived`. **RC-13 ✅ shipped
+  (2026-06-09):** new `shared/pipelineStages.js` is the single source of truth;
+  `applicationWorkflow.APPLICATION_STATES`, `KanbanBoard`, `GRANT_STATUSES`,
+  background services all consume it; `grants.status` CHECK widened via
+  programmatic SQLite migration `076` and Postgres migration `0072`.
 - Persistence: saved/favorite/hide/application/deadline survive reload + login,
-  scoped by **user AND profile**. (Saved items need `profile_id` — RC-14.)
+  scoped by **user AND profile**. **RC-14 ✅ shipped (2026-06-09):** SQLite
+  migration `075` + Postgres `0071` add nullable `profile_id` to
+  `saved_grants` and rebuild UNIQUE as two partial indexes
+  (profile-scoped + legacy-NULL-scoped); service + frontend store now scope
+  by `user_id + profile_id`; legacy NULL rows remain visible to every
+  profile of the original user.
 
 ---
 
@@ -104,17 +118,23 @@ now enforces `assessReality` for active rows (RC-6). Inactive reference rows
 
 ---
 
-## 7. Recommended remediation sequence (remaining)
+## 7. Remediation sequence — status
 
-1. **RC-8 (structural):** persist `reality_status`/`reality_reasons`/`final_url`/`http_status`;
-   make readers filter the stored verdict. Unblocks consistent insert↔display gating.
-2. **RC-7:** route `nationalZipCrawler`, Anya autonomous promote, admin create/bulk,
-   and seed endpoints through `opportunityInserter` (gate + URL-fingerprint dedupe).
-3. **RC-9 / RC-10 / RC-11:** make Anya consume the canonical engine and reconcile
-   prompt↔whitelist; add grounding tests.
-4. **RC-12:** surface zero-result ladder diagnostics in the UI; remove legacy top-N junk fallback.
-5. **RC-13 / RC-14 / RC-15:** unify pipeline stages; profile-scope saved items; render loan/expired chips.
-6. **RC-16 / RC-17:** sourceRegistry operational metadata; fold document text into profile signals.
+| Step | Status | Commit / PR |
+|------|--------|-------------|
+| RC-8 — persist `reality_status`/`reality_reasons`/`final_url`/`http_status`; readers filter the stored verdict. | ✅ shipped 2026-06-09 | `4de429a0` (PR #502) |
+| RC-7 — route `nationalZipCrawler`, Anya autonomous promote, admin create/bulk, and seed endpoints through `opportunityInserter`. | ✅ shipped (geo crawler + Anya global-promote routed; admin manual + seed routes intentionally remain store-then-filter-at-display, see RC-7 detail). | `f6f23137` |
+| RC-9 / RC-10 / RC-11 — Anya consumes the canonical engine and prompt ↔ whitelist parity. | ✅ shipped & tested. | `f6f23137` |
+| RC-12 — surface zero-result ladder diagnostics in the UI; remove legacy top-N junk fallback. | ✅ shipped & tested. | `7ea4dd70` |
+| RC-13 — unify pipeline stages (one canonical 11-stage enum). | ✅ shipped 2026-06-09 | `118877b1` (PR #502) |
+| RC-14 — profile-scope `saved_grants`. | ✅ shipped 2026-06-09 | `b156462e` (PR #502) |
+| RC-15 — render loan / matching-funds / expired chips on result cards. | ✅ shipped & tested. | `7ea4dd70` |
+| RC-16 — sourceRegistry operational metadata + runtime status. | ✅ shipped 2026-06-09 | `a4771572` (PR #502) |
+| RC-17 — fold `documents.extracted_text` into profile signals. | ✅ shipped 2026-06-09 | `93da99a3` + `2f3b2347` (PR #502) |
 
-Each step ships with unit + integration tests and is gated by
-`npm run check:prepush` and the mission gates before merge.
+Every step shipped with unit / contract / integration tests. The full gate
+suite (`npm run lint && npm run typecheck && npm run build && npm run unit
+&& npm run crawler:doctor && npm run opps:check-national-minimum`) is run
+green before each commit; live HTTP probes
+(`scripts/probe-deferred-rcs.mjs`, 15/15 PASS) confirm the migrations
+applied and the new code paths behave correctly against a running backend.
