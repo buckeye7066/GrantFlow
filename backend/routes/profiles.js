@@ -17,6 +17,7 @@ import { validatePagination } from '../utils/validation.js'
 import { formatError } from '../middleware/errorHandler.js'
 import { createLogger } from '../utils/logger.js'
 import { requireTierCapability, TIER_CAPABILITIES } from '../utils/tierGating.js'
+import { applicationStatusToStage } from '../../shared/pipelineStages.js'
 import {
   listProfileEmails,
   addProfileEmails,
@@ -993,7 +994,13 @@ router.get('/:id/applications/all', async (req, res) => {
       ...grantApplications,
       ...vnextApplications,
       ...applyEngineApplications,
-    ]
+    ].map((row) => ({
+      // Reconcile every tracked item (regardless of source feature) onto ONE
+      // canonical pipeline stage so discovery→action reads as a single lifecycle
+      // (mission goal #10). Read-only annotation; underlying status is unchanged.
+      ...row,
+      canonical_stage: applicationStatusToStage(row.status),
+    }))
 
     profileLogger.info('[profiles] applications/all response', {
       profileId: String(id),
