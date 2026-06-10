@@ -20,6 +20,7 @@
  */
 
 import jwt from 'jsonwebtoken'
+import { safeTokenEqual } from '../utils/safeTokenEqual.js'
 
 // better-sqlite3 is synchronous; no Promise wrapper needed.
 // If the DB handle is ever swapped for an async driver, update call sites directly.
@@ -58,9 +59,7 @@ export function createAuthIdentityMiddleware({ adminToken, adminName, adminEmail
     // Admitted as a synthetic read-only admin so admin-gated diagnostics routes pass.
     if (
       !handled &&
-      healthToken &&
-      xHealthToken &&
-      xHealthToken === healthToken &&
+      safeTokenEqual(xHealthToken, healthToken) &&
       ['GET', 'HEAD', 'OPTIONS'].includes(String(req.method || '').toUpperCase())
     ) {
       user = {
@@ -80,8 +79,8 @@ export function createAuthIdentityMiddleware({ adminToken, adminName, adminEmail
     if (
       !handled &&
       xAdminToken &&
-      ((expectedAdminToken && xAdminToken === expectedAdminToken) ||
-        (expectedBulkKey && xAdminToken === expectedBulkKey))
+      (safeTokenEqual(xAdminToken, expectedAdminToken) ||
+        safeTokenEqual(xAdminToken, expectedBulkKey))
     ) {
       user = {
         role: 'admin',
@@ -98,7 +97,7 @@ export function createAuthIdentityMiddleware({ adminToken, adminName, adminEmail
     }
 
     // 2. Check X-Anya-Token (autonomous bot)
-    if (!handled && xAnyaToken && anyaApiKey && xAnyaToken === anyaApiKey) {
+    if (!handled && xAnyaToken && safeTokenEqual(xAnyaToken, anyaApiKey)) {
       user = {
         role: 'admin',
         is_admin: true,
@@ -117,8 +116,8 @@ export function createAuthIdentityMiddleware({ adminToken, adminName, adminEmail
         // 3a. Accept admin/bulk tokens via Authorization header for frontend/dev compatibility.
         // This does NOT expand the trust boundary; these same tokens are already accepted via X-Admin-Token.
         if (
-          (expectedAdminToken && token === expectedAdminToken) ||
-          (expectedBulkKey && token === expectedBulkKey)
+          safeTokenEqual(token, expectedAdminToken) ||
+          safeTokenEqual(token, expectedBulkKey)
         ) {
           user = {
             role: 'admin',
@@ -132,7 +131,7 @@ export function createAuthIdentityMiddleware({ adminToken, adminName, adminEmail
         }
 
         // 3b. Allow the Anya API key to authenticate via Authorization bearer as well.
-        if (!handled && anyaApiKey && token === anyaApiKey) {
+        if (!handled && safeTokenEqual(token, anyaApiKey)) {
           user = {
             role: 'admin',
             is_admin: true,
