@@ -25,7 +25,7 @@ import {
 } from '../services/matching/professionalDevelopmentPolicy.js'
 import { runAllDomainEngines } from '../services/crawlers/domainEngines/index.js'
 import { crawlStateWaiverBenefits, evaluateStateWaiverEligibility } from '../services/crawlers/stateWaiverBenefitsCrawler.js'
-import { planCoverage, buildCoverageReport, buildGrantsGovQueryTerms, getSource } from '../services/sourceRegistry.js'
+import { planCoverage, buildCoverageReport, buildGrantsGovQueryTerms, getSource, loadCrawlerSourceRuntimeStatus } from '../services/sourceRegistry.js'
 import { deriveCoverageOutcomes, summariseOutcomes } from '../services/coverageOutcomes.js'
 
 import { createLogger } from '../utils/logger.js'
@@ -350,7 +350,16 @@ router.post('/run', ensureAuth, async (req, res) => {
         opportunities: result?.results ?? [],
         errors: result?.debug?.errors ?? [],
       })
-      coverageReport = buildCoverageReport(coveragePlan, coverageOutcomes)
+      // RC-16: surface last_crawl + failure_status per source from the
+      // crawler_source_runs table. Best-effort — falls back to outcome-
+      // derived status when the table is empty / missing.
+      let runtimeStatus
+      try {
+        runtimeStatus = await loadCrawlerSourceRuntimeStatus(db)
+      } catch {
+        runtimeStatus = new Map()
+      }
+      coverageReport = buildCoverageReport(coveragePlan, coverageOutcomes, { runtimeStatus })
       const summary = summariseOutcomes(coverageOutcomes)
       routeLogger.info(
         `[RealCrawlers] coverage outcomes — queried=${summary.sources_queried}/${summary.sources_total} failed=${summary.sources_failed} direct=${summary.direct_found} directory=${summary.directory_found}`,
