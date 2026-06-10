@@ -108,17 +108,38 @@ export const CRAWLER_JOB_STATUSES = [
   'cancelled',
 ]
 
-// Grant statuses
+// Grant (pipeline) statuses — single source of truth for status validation.
+// MUST stay in sync with:
+//   * backend/db/postgres/migrations/0032_expand_grants_status_check.sql
+//     (the Postgres CHECK constraint — anything the DB will store, the API
+//     must accept, or PATCH /grants/:id/status 400s a valid drag-and-drop)
+//   * src/components/pipeline/KanbanBoard.jsx STATUSES
+//     (every status here must render in some column — per the product rule
+//     "counts displayed in the UI must map 1:1 to backend response fields")
+// Drift here is what produced the "pipeline totals don't match" report.
 export const GRANT_STATUSES = [
+  // Current UI stages (post-migration 0032 — match KanbanBoard exactly)
+  'discovery',
   'discovered',
   'interested',
+  'auto_applied',
   'drafting',
-  'app_prep',
+  'application_prep',
   'revision',
+  'portal',
   'submitted',
-  'under_review',
+  'pending_review',
+  'follow_up',
   'awarded',
-  'rejected',
+  'report',
+  'declined_no_review',
+  'declined',
   'closed',
+  // Legacy stages preserved for backward compatibility with rows written
+  // before migration 0032. Reads must accept these so historical pipeline
+  // rows remain routable to a column (no silent drops).
+  'app_prep',
+  'under_review',
+  'rejected',
   'archived'
 ];
