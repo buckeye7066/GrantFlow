@@ -362,11 +362,21 @@ export function extractNeedSignalsFromDocumentText(rawText) {
     .replace(/[_-]+/g, ' ')
     .replace(/\s+/g, ' ')
     .slice(0, DOCUMENT_TEXT_SCAN_CAP)
+  // Build the token set ONCE so single-word aliases (e.g. "ce" = continuing
+  // education, "rent", "water") match only as discrete word tokens — never as
+  // a substring inside an unrelated word like "noti**ce**" or "g**roce**ries".
+  // Multi-word aliases (after underscore→space normalization, e.g. "small
+  // business") still match as substrings, since their composition makes
+  // collisions vanishingly rare.
+  const tokenSet = new Set(
+    haystack.split(/[^a-z0-9]+/).filter(Boolean),
+  )
   const index = _ensureNeedKeywordIndex()
   const hits = new Set()
   for (const [canonical, keywords] of index) {
     for (const kw of keywords) {
-      if (haystack.includes(kw)) {
+      const isPhrase = kw.indexOf(' ') !== -1
+      if (isPhrase ? haystack.includes(kw) : tokenSet.has(kw)) {
         hits.add(canonical)
         break
       }

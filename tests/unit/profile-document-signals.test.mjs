@@ -141,6 +141,32 @@ test('normalizeProfile document signals only add canonical needs (no noise)', ()
   assert.ok(norm.needCategories.includes('transportation'))
 })
 
+test('extractNeedSignalsFromDocumentText does NOT misfire on substring collisions', () => {
+  // Short alias tokens like "ce" (= continuing education) used to substring
+  // match into unrelated words like "groceries" or "notice" and falsely fire
+  // professional_development. Word-boundary matching prevents that.
+  const needs = extractNeedSignalsFromDocumentText(
+    'Eviction notice. Groceries pickup. Past due rent.',
+  )
+  assert.ok(
+    !needs.includes('professional_development'),
+    `professional_development should not fire from "notice"/"groceries", got: ${needs.join(',')}`,
+  )
+  // But housing and food should still fire from real keywords.
+  assert.ok(needs.includes('housing'))
+  assert.ok(needs.includes('food'))
+})
+
+test('extractNeedSignalsFromDocumentText fires on phrase aliases that span tokens', () => {
+  // Multi-word aliases ("small business", "rental assistance") should still
+  // match as substrings — they don't risk collisions.
+  const needs = extractNeedSignalsFromDocumentText(
+    'Looking for small business mentorship and rental assistance options.',
+  )
+  assert.ok(needs.includes('business'), 'small business should fold to business')
+  assert.ok(needs.includes('housing'), 'rental assistance should fold to housing')
+})
+
 test('normalizeProfile back-compat: existing 3-arg callers still work without documents', () => {
   const norm = normalizeProfile(
     { id: 'p-5', primary_type: 'individual', state: 'OH' },
