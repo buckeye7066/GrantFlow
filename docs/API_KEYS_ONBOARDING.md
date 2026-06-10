@@ -23,7 +23,9 @@ admin.
 | Source | Powers ingest? | Key required? | Env var | Where to get it |
 | --- | --- | --- | --- | --- |
 | **Grants.gov `search2`** | ✅ yes (eligibility-filtered federal) | **No** (optional key for rate priority) | `GRANTS_GOV_API_KEY` | [grants.gov/api](https://www.grants.gov/api) · [Help Desk](https://www.grants.gov/support) |
+| **Federal Register** | ✅ yes (cross-agency NOFOs, filtered) | **No** | *(none)* | [federalregister.gov/developers](https://www.federalregister.gov/developers/documentation/api/v1) |
 | **NIH RePORTER** | ✅ yes (research awards) | **No** | *(none)* | [api.reporter.nih.gov](https://api.reporter.nih.gov/) |
+| **NSF Awards** | ✅ yes (science/edu research) | **No** | *(none)* | [NSF Award API](https://resources.research.gov/common/webapi/awardapisearch-v1.htm) |
 | **ProPublica Nonprofit Explorer** | ✅ yes (foundations / grantmakers) | **No** | *(none)* | [projects.propublica.org/nonprofits/api](https://projects.propublica.org/nonprofits/api/) |
 | **Simpler.Grants.gov** | ✅ yes (modern HHS opportunities) | **Yes** (Login.gov) | `SIMPLER_GRANTS_API_KEY` | [simpler.grants.gov/developers](https://simpler.grants.gov/developers) |
 | **SAM.gov Assistance Listings / Opportunities** | ✅ yes (CFDA catalog) | **Yes** (SAM.gov account) | `SAM_GOV_PUBLIC_API_KEY` | [sam.gov/profile/details](https://sam.gov/profile/details) |
@@ -32,8 +34,9 @@ admin.
 > ⚠️ **api.data.gov keys do NOT work for SAM.gov.** They are separate GSA systems.
 > `api.sam.gov` only accepts a SAM.gov account-issued **Public API Key** — see §5.
 
-**Three sources need no key at all** (Grants.gov, NIH RePORTER, ProPublica), so GrantFlow
-ingests from them the moment a crawl runs. Add Simpler and SAM to widen coverage further.
+**Five sources need no key at all** (Grants.gov, Federal Register, NIH RePORTER, NSF
+Awards, ProPublica), so GrantFlow ingests from them the moment a crawl runs. Add Simpler
+and SAM to widen coverage further.
 
 **Canonical env var names — use exactly:**
 

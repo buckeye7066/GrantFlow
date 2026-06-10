@@ -24,6 +24,8 @@
  */
 
 import { fetchOpportunities as fetchNihReporter } from '../src/integrations/nihReporter.js'
+import { fetchOpportunities as fetchNsfAwards } from '../src/integrations/nsfAwards.js'
+import { fetchOpportunities as fetchFederalRegister } from '../src/integrations/federalRegister.js'
 import { fetchAssistanceListings } from '../src/integrations/samAssistanceListings.js'
 import { fetchOpportunities as fetchSimplerGrants } from '../src/integrations/simplerGrants.js'
 import { searchOrganizations, orgToFundingOpportunity } from '../src/integrations/propublica990.js'
@@ -142,11 +144,19 @@ export function buildConnectorQueryPlan(profileContext = {}, signals = {}) {
 
   const terms = collectNeedTerms(profileContext, signals)
 
+  // Federal agency NOFOs are applied for by organizations/governments, not by
+  // individuals/families/students (who want benefits & scholarships instead).
+  // Derived here (not stored per-row in PROFILE_QUERY_MAP) so the map stays lean.
+  const INDIVIDUAL_TYPES = new Set([
+    'individual', 'family', 'student', 'high_school_student', 'college_student',
+  ])
+
   return {
     primaryType: primaryType || 'unknown',
     state: state ? String(state) : null,
     terms,
     ...base,
+    federalApplicant: !INDIVIDUAL_TYPES.has(primaryType),
   }
 }
 
@@ -239,6 +249,40 @@ async function ingestNihReporter(db, plan, limits, row) {
   }
 }
 
+async function ingestNsfAwards(db, plan, limits, row) {
+  // NSF funded awards (science/engineering/education). Historical, like NIH —
+  // never run a blank sweep; bias to the awardee state when known.
+  const queries = plan.terms.slice(0, limits.maxTerms)
+  if (queries.length === 0) return
+  for (const keyword of queries) {
+    const opportunities = await fetchNsfAwards({
+      keyword,
+      ...(plan.state ? { awardeeStateCode: String(plan.state).slice(0, 2).toUpperCase() } : {}),
+      limit: limits.rowsPerQuery,
+    })
+    row.fetched += opportunities.length
+    await upsertAll(db, opportunities, row, { allowDirectories: true })
+    await sleep(limits.delayMs)
+  }
+}
+
+async function ingestFederalRegister(db, plan, limits, row) {
+  // Cross-agency NOFO/NOFA notices. The connector itself hard-filters to real
+  // funding notices, so a blank sweep is safe and useful for sparse profiles.
+  const queries = plan.terms.slice(0, limits.maxTerms)
+  if (queries.length === 0) queries.push('funding opportunity grant')
+  for (const keyword of queries) {
+    const opportunities = await fetchFederalRegister({
+      keyword,
+      perPage: 250,
+      sinceDays: 365,
+    })
+    row.fetched += opportunities.length
+    await upsertAll(db, opportunities, row)
+    await sleep(limits.delayMs)
+  }
+}
+
 async function ingestFoundations(db, plan, limits, row) {
   // Surface real grantmakers (501c3 foundations) near the profile, by need.
   const queries = plan.terms.slice(0, limits.maxTerms)
@@ -258,12 +302,16 @@ async function ingestFoundations(db, plan, limits, row) {
   }
 }
 
+// `keyed` marks sources whose gate failure means "no API key" (vs. simply
+// not-applicable to this profile). Drives honest status in the coverage report.
 const SOURCES = [
-  { key: 'grants.gov', run: ingestGrantsGov, gate: () => true },
-  { key: 'simpler.grants.gov', run: ingestSimplerGrants, gate: () => Boolean(process.env.SIMPLER_GRANTS_API_KEY) },
-  { key: 'sam.assistance', run: ingestSamListings, gate: () => Boolean(process.env.SAM_GOV_PUBLIC_API_KEY) },
-  { key: 'nih.reporter', run: ingestNihReporter, gate: (plan) => plan.wantsResearch },
-  { key: 'propublica.990', run: ingestFoundations, gate: (plan) => plan.foundationSeeker },
+  { key: 'grants.gov', run: ingestGrantsGov, keyed: false, gate: () => true },
+  { key: 'federal.register', run: ingestFederalRegister, keyed: false, gate: (plan) => plan.federalApplicant },
+  { key: 'simpler.grants.gov', run: ingestSimplerGrants, keyed: true, gate: () => Boolean(process.env.SIMPLER_GRANTS_API_KEY) },
+  { key: 'sam.assistance', run: ingestSamListings, keyed: true, gate: () => Boolean(process.env.SAM_GOV_PUBLIC_API_KEY) },
+  { key: 'nih.reporter', run: ingestNihReporter, keyed: false, gate: (plan) => plan.wantsResearch },
+  { key: 'nsf.awards', run: ingestNsfAwards, keyed: false, gate: (plan) => plan.wantsResearch },
+  { key: 'propublica.990', run: ingestFoundations, keyed: false, gate: (plan) => plan.foundationSeeker },
 ]
 
 /**
@@ -300,7 +348,7 @@ export async function ingestFromConnectors({ db, profileContext = {}, signals = 
   for (const source of SOURCES) {
     const row = { source: source.key, fetched: 0, inserted: 0, updated: 0, skipped: 0, status: 'ok' }
     if (!source.gate(plan)) {
-      row.status = source.key === 'nih.reporter' || source.key === 'propublica.990' ? 'not_applicable' : 'no_api_key'
+      row.status = source.keyed ? 'no_api_key' : 'not_applicable'
       coverage.push(row)
       continue
     }
