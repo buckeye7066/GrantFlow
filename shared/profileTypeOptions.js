@@ -46,6 +46,9 @@ export const PROFILE_TYPE_OPTIONS = Object.freeze([
   { id: 'individual',                     group: 'People',     label: 'Individual',                      description: 'Single adult seeking benefits, scholarships, or grants.' },
   { id: 'family',                         group: 'People',     label: 'Family',                          description: 'Household with children or dependents.' },
   { id: 'medical_need',                   group: 'People',     label: 'Medical / Health Need',           description: 'Person or family with medical, disability, or caregiving needs.' },
+  { id: 'senior',                         group: 'People',     label: 'Senior / Older Adult',            description: 'Adult 60+ seeking benefits, Medicare help, or senior programs.' },
+  { id: 'veteran',                        group: 'People',     label: 'Veteran / Military Family',       description: 'Veteran or military family seeking benefits and support.' },
+  { id: 'disabled_adult',                 group: 'People',     label: 'Adult with a Disability',         description: 'Person with a disability seeking benefits, services, or employment help.' },
 
   // Students
   { id: 'student',                        group: 'Education',  label: 'Student',                         description: 'Student of any level (will refine on the next step).' },
@@ -56,6 +59,10 @@ export const PROFILE_TYPE_OPTIONS = Object.freeze([
   { id: 'classroom_teacher',              group: 'Education',  label: 'Classroom Teacher',               description: 'PK-12 classroom teacher seeking classroom or program funding.' },
   { id: 'school_district',                group: 'Education',  label: 'School District',                 description: 'Public school district or LEA.' },
   { id: 'public_school',                  group: 'Education',  label: 'Public School',                   description: 'Single public school site (not the whole district).' },
+  { id: 'special_education_program',      group: 'Education',  label: 'Special Education Program',       description: 'School special-education program seeking program or assistive-tech funding.' },
+  { id: 'school_food_service',            group: 'Education',  label: 'School Nutrition / Food Service',  description: 'School meal or nutrition program seeking food-service funding.' },
+  { id: 'school_transportation',          group: 'Education',  label: 'School Transportation',           description: 'School transportation/busing program seeking equipment or safety grants.' },
+  { id: 'pta_pto',                        group: 'Education',  label: 'PTA / PTO / Parent Group',        description: 'Parent-teacher association or booster club funding classroom needs.' },
   { id: 'library',                        group: 'Education',  label: 'Library',                         description: 'Public, school, or tribal library.' },
 
   // Mission organizations
@@ -65,12 +72,21 @@ export const PROFILE_TYPE_OPTIONS = Object.freeze([
   { id: 'food_pantry',                    group: 'Mission',    label: 'Food Pantry / Bank',              description: 'Food pantry, food bank, or feeding ministry.' },
   { id: 'homeless_shelter',               group: 'Mission',    label: 'Homeless Shelter / Housing',      description: 'Shelter, transitional housing, or street outreach.' },
   { id: 'animal_rescue',                  group: 'Mission',    label: 'Animal Rescue / Welfare',         description: 'Animal shelter, rescue, sanctuary, or welfare nonprofit.' },
+  { id: 'mental_health_nonprofit',        group: 'Mission',    label: 'Mental Health Nonprofit',         description: 'Behavioral / mental-health nonprofit or clinic.' },
+  { id: 'substance_recovery_org',         group: 'Mission',    label: 'Substance Recovery Org',          description: 'Addiction recovery, treatment, or harm-reduction nonprofit.' },
+  { id: 'reentry_program',                group: 'Mission',    label: 'Reentry / Justice Program',       description: 'Reentry, second-chance, or justice-involved support nonprofit.' },
+  { id: 'community_center',               group: 'Mission',    label: 'Community Center',                description: 'Neighborhood or community center serving local residents.' },
+  { id: 'museum',                         group: 'Mission',    label: 'Museum / Cultural Org',           description: 'Museum, cultural institution, or arts nonprofit.' },
 
   // Public-sector / government
   { id: 'volunteer_fire_department',      group: 'Public',     label: 'Volunteer Fire / EMS',            description: 'Volunteer fire department, EMS squad, or rescue.' },
   { id: 'county_government',              group: 'Public',     label: 'County Government',               description: 'County office, board of commissioners, or county agency.' },
   { id: 'municipality',                   group: 'Public',     label: 'City / Town / Municipality',      description: 'City, town, village, or borough government.' },
-  { id: 'public_agency',                  group: 'Public',     label: 'Public Agency',                   description: 'Other public-sector agency (regional planning, EDA, authority).' },
+  { id: 'public_agency',                  group: 'Public',     label: 'Public Agency',                   description: 'Other public-sector agency or authority.' },
+  { id: 'local_housing_authority',        group: 'Public',     label: 'Public Housing Authority',        description: 'Local/regional public housing authority (CDBG, HUD programs).' },
+  { id: 'parks_department',               group: 'Public',     label: 'Parks & Recreation Department',   description: 'Municipal or county parks, recreation, or trails department.' },
+  { id: 'regional_planning_agency',       group: 'Public',     label: 'Regional Planning Agency',        description: 'MPO, council of governments, or regional planning body.' },
+  { id: 'economic_development_agency',    group: 'Public',     label: 'Economic Development Agency',      description: 'County/regional economic development organization (EDA, CDBG).' },
   { id: 'tribal_government',              group: 'Public',     label: 'Tribal Government',               description: 'Federally recognized tribal government or tribal entity.' },
   { id: 'public_health_department',       group: 'Public',     label: 'Public Health Department',        description: 'Local, county, or state public health department.' },
 

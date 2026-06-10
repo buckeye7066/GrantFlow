@@ -54,6 +54,13 @@ test('PROFILE_TYPE_OPTIONS: every required user-facing type is present (per the 
     'library', 'public_health_department',
     'food_pantry', 'homeless_shelter', 'animal_rescue',
     'medical_need',
+    // Specialist personas surfaced so no supported user-type has to pick "Other"
+    // (mission goal #4). These are fully supported in the registry (strategy +
+    // >=3 sources) and must stay exposed.
+    'senior', 'veteran', 'disabled_adult',
+    'pta_pto', 'school_food_service', 'school_transportation', 'special_education_program',
+    'museum', 'community_center', 'mental_health_nonprofit', 'substance_recovery_org', 'reentry_program',
+    'parks_department', 'local_housing_authority', 'regional_planning_agency', 'economic_development_agency',
     'other',
   ]
   const have = new Set(listCanonicalProfileTypeIds())
