@@ -61,7 +61,7 @@ unit (all PASS) and, for crawler changes, `crawler:doctor` (PASS):
 | RC-15 card warnings | loan / matching-funds / expired chips on `FundingResultCard`; `toCanonicalResult` maps `is_loan`/`requires_match` | `FundingResultCard.test.jsx` (15, +4 new) PASS |
 
 ~~Deferred items (RC-8, RC-13, RC-14, RC-16, RC-17)~~ **all five shipped on
-branch `fix/audit-deferred-rc-completion` (PR #502, 2026-06-09)** — see
+branch `fix/audit-deferred-rc-completion` (PR #505, 2026-06-09)** — see
 "Part 3" below for the live-verification evidence.
 
 ## 2. Migrations / schema
@@ -148,7 +148,7 @@ npm run opps:ensure-national-minimum && npm run opps:check-national-minimum
 
 ---
 
-## Part 3 — Deferred RCs shipped (branch `fix/audit-deferred-rc-completion`, PR #502, 2026-06-09)
+## Part 3 — Deferred RCs shipped (branch `fix/audit-deferred-rc-completion`, PR #505, 2026-06-09)
 
 The 5 previously deferred root-causes (RC-8, RC-13, RC-14, RC-16, RC-17) are now
 all live behind idempotent SQLite + Postgres migrations and contract tests.

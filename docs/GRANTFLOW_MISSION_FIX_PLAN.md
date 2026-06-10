@@ -122,15 +122,15 @@ now enforces `assessReality` for active rows (RC-6). Inactive reference rows
 
 | Step | Status | Commit / PR |
 |------|--------|-------------|
-| RC-8 — persist `reality_status`/`reality_reasons`/`final_url`/`http_status`; readers filter the stored verdict. | ✅ shipped 2026-06-09 | `4de429a0` (PR #502) |
+| RC-8 — persist `reality_status`/`reality_reasons`/`final_url`/`http_status`; readers filter the stored verdict. | ✅ shipped 2026-06-09 | `4de429a0` (PR #505) |
 | RC-7 — route `nationalZipCrawler`, Anya autonomous promote, admin create/bulk, and seed endpoints through `opportunityInserter`. | ✅ shipped (geo crawler + Anya global-promote routed; admin manual + seed routes intentionally remain store-then-filter-at-display, see RC-7 detail). | `f6f23137` |
 | RC-9 / RC-10 / RC-11 — Anya consumes the canonical engine and prompt ↔ whitelist parity. | ✅ shipped & tested. | `f6f23137` |
 | RC-12 — surface zero-result ladder diagnostics in the UI; remove legacy top-N junk fallback. | ✅ shipped & tested. | `7ea4dd70` |
-| RC-13 — unify pipeline stages (one canonical 11-stage enum). | ✅ shipped 2026-06-09 | `118877b1` (PR #502) |
-| RC-14 — profile-scope `saved_grants`. | ✅ shipped 2026-06-09 | `b156462e` (PR #502) |
+| RC-13 — unify pipeline stages (one canonical 11-stage enum). | ✅ shipped 2026-06-09 | `118877b1` (PR #505) |
+| RC-14 — profile-scope `saved_grants`. | ✅ shipped 2026-06-09 | `b156462e` (PR #505) |
 | RC-15 — render loan / matching-funds / expired chips on result cards. | ✅ shipped & tested. | `7ea4dd70` |
-| RC-16 — sourceRegistry operational metadata + runtime status. | ✅ shipped 2026-06-09 | `a4771572` (PR #502) |
-| RC-17 — fold `documents.extracted_text` into profile signals. | ✅ shipped 2026-06-09 | `93da99a3` + `2f3b2347` (PR #502) |
+| RC-16 — sourceRegistry operational metadata + runtime status. | ✅ shipped 2026-06-09 | `a4771572` (PR #505) |
+| RC-17 — fold `documents.extracted_text` into profile signals. | ✅ shipped 2026-06-09 | `93da99a3` + `2f3b2347` (PR #505) |
 
 Every step shipped with unit / contract / integration tests. The full gate
 suite (`npm run lint && npm run typecheck && npm run build && npm run unit
