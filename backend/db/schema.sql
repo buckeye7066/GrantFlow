@@ -206,6 +206,15 @@ CREATE TABLE IF NOT EXISTS funding_opportunities (
   --                      'community_directory' | 'open_web' | 'manual_curated'
   opportunity_kind TEXT,
   source_trust_tier TEXT,
+  -- Persisted reality-gate verdict (migration 077 / RC-8).
+  --   reality_status: 'allowed' | 'rejected' | 'downgraded' | NULL (unknown / pre-RC8)
+  --   reality_reasons: JSON array of policy reason codes from assessReality().
+  --   final_url: URL after redirects (proven landing page).
+  --   http_status: HTTP status code from the last live probe.
+  reality_status TEXT,
+  reality_reasons TEXT,
+  final_url TEXT,
+  http_status INTEGER,
   -- result_kind separates "real grant a user can apply for" from
   -- "directory/referral the user can call/search". Drives UI badge + the
   -- broken-link hide rule (broken direct → hide; broken directory → label).
@@ -273,6 +282,8 @@ CREATE INDEX IF NOT EXISTS idx_funding_opportunities_opportunity_kind
   ON funding_opportunities(opportunity_kind);
 CREATE INDEX IF NOT EXISTS idx_funding_opportunities_source_trust_tier
   ON funding_opportunities(source_trust_tier);
+CREATE INDEX IF NOT EXISTS idx_funding_opportunities_reality_status
+  ON funding_opportunities(reality_status);
 
 -- Append-only audit log of every URL verification probe (migration 069).
 -- Lets the mission dashboard answer "when was this opportunity actually

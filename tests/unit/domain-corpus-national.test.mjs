@@ -78,6 +78,11 @@ function createTestDb() {
       verification_error TEXT,
       opportunity_kind TEXT,
       source_trust_tier TEXT,
+      -- RC-8: persisted reality verdict (migration 077).
+      reality_status TEXT,
+      reality_reasons TEXT,
+      final_url TEXT,
+      http_status INTEGER,
       profile_id TEXT,
       requires_501c3 INTEGER DEFAULT 0,
       requires_match INTEGER DEFAULT 0,

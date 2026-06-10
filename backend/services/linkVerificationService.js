@@ -118,10 +118,13 @@ export async function checkUrl(url, opts = {}) {
         },
       })
       clearTimeout(timer)
-      return { code: res.status, error: null }
+      // res.url contains the URL after redirects (whatwg-fetch + node-fetch).
+      // Fall back to the original URL when undici declines to surface it.
+      const finalUrl = typeof res.url === 'string' && res.url ? res.url : url
+      return { code: res.status, error: null, finalUrl }
     } catch (err) {
       clearTimeout(timer)
-      return { code: null, error: err?.message || String(err) }
+      return { code: null, error: err?.message || String(err), finalUrl: null }
     }
   }
 
@@ -137,20 +140,21 @@ export async function checkUrl(url, opts = {}) {
 
   if (outcome.code !== null && outcome.code !== undefined) {
     if (outcome.code >= 200 && outcome.code < 300) {
-      return { status: 'ok', code: outcome.code, method, error: null }
+      return { status: 'ok', code: outcome.code, method, error: null, finalUrl: outcome.finalUrl }
     }
     if (outcome.code >= 300 && outcome.code < 400) {
-      return { status: 'redirect', code: outcome.code, method, error: null }
+      return { status: 'redirect', code: outcome.code, method, error: null, finalUrl: outcome.finalUrl }
     }
     return {
       status: 'broken',
       code: outcome.code,
       method,
       error: `HTTP ${outcome.code}`,
+      finalUrl: outcome.finalUrl,
     }
   }
 
-  return { status: 'broken', code: null, method, error: outcome.error }
+  return { status: 'broken', code: null, method, error: outcome.error, finalUrl: null }
 }
 
 /**
@@ -201,7 +205,9 @@ export async function runLinkVerification(
         link_status_code = ?,
         verification_method = ?,
         verified_by = ?,
-        verification_error = ?
+        verification_error = ?,
+        final_url = COALESCE(?, final_url),
+        http_status = COALESCE(?, http_status)
     WHERE id = ?
   `)
 
@@ -238,6 +244,8 @@ export async function runLinkVerification(
           result.method,
           verifiedBy,
           result.error,
+          result.finalUrl ?? null,
+          typeof result.code === 'number' ? result.code : null,
           row.id,
         )
         stats.checked++

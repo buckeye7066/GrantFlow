@@ -23,6 +23,25 @@ const log = createLogger('opportunityInserter')
  * `discovered_at` carries the "when did we first see this row" timestamp that
  * was previously being stuffed into last_verified_at.
  */
+/**
+ * Always serialise reality_reasons to a TEXT/JSONB-friendly JSON string.
+ * Accepts an array (from assessReality), an already-stringified JSON, or
+ * null/undefined. Returns null when nothing meaningful is present so the
+ * persisted column reflects "not yet assessed" honestly.
+ */
+function serializeRealityReasons(value) {
+  if (value === null || value === undefined) return null
+  if (typeof value === 'string') {
+    const trimmed = value.trim()
+    if (!trimmed) return null
+    return trimmed
+  }
+  if (Array.isArray(value)) {
+    return value.length > 0 ? JSON.stringify(value) : '[]'
+  }
+  return JSON.stringify(value)
+}
+
 function applyVerificationGate(opportunity) {
   const now = new Date().toISOString()
   const out = { ...opportunity }
@@ -387,6 +406,16 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
   }
   opportunity.opportunity_kind = reality.kind
   opportunity.source_trust_tier = reality.trustTier
+  // Persist the verdict so display readers don't have to re-derive it on
+  // every render (RC-8). Per-user toggles (allowLoans/allowExpired) re-
+  // evaluate on top of the stored verdict in opportunityTrust.js.
+  opportunity.reality_status = reality.downgrade ? 'downgraded' : 'allowed'
+  opportunity.reality_reasons = JSON.stringify(
+    Array.isArray(reality.reasons) ? reality.reasons : [],
+  )
+  if (!opportunity.final_url && reality.usableUrl) {
+    opportunity.final_url = reality.usableUrl
+  }
   // Direct grants never legitimately point to a social URL as the primary
   // application path. The gate already rejected those above; here we only
   // need to make sure the reality_gate's downgrade reasons surface to the
@@ -533,6 +562,10 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
       // consumer/UI layer never has to re-derive "what kind of result is this".
       opportunity_kind: opportunity.opportunity_kind ?? null,
       source_trust_tier: opportunity.source_trust_tier ?? null,
+      reality_status: opportunity.reality_status ?? null,
+      reality_reasons: serializeRealityReasons(opportunity.reality_reasons),
+      final_url: opportunity.final_url ?? null,
+      http_status: typeof opportunity.http_status === 'number' ? opportunity.http_status : null,
       profile_id: opportunity.profile_id ?? null,
       requires_501c3: toDbBoolean(db, opportunity.requires_501c3),
       requires_match: toDbBoolean(db, opportunity.requires_match),
@@ -577,6 +610,10 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
         discovered_at = COALESCE(discovered_at, ?),
         opportunity_kind = COALESCE(?, opportunity_kind),
         source_trust_tier = COALESCE(?, source_trust_tier),
+        reality_status = COALESCE(?, reality_status),
+        reality_reasons = COALESCE(?, reality_reasons),
+        final_url = COALESCE(?, final_url),
+        http_status = COALESCE(?, http_status),
         profile_id = COALESCE(?, profile_id),
         requires_501c3 = COALESCE(?, requires_501c3),
         requires_match = COALESCE(?, requires_match),
@@ -619,6 +656,10 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
         discovered_at = COALESCE(discovered_at, ?),
         opportunity_kind = COALESCE(?, opportunity_kind),
         source_trust_tier = COALESCE(?, source_trust_tier),
+        reality_status = COALESCE(?, reality_status),
+        reality_reasons = COALESCE(?, reality_reasons),
+        final_url = COALESCE(?, final_url),
+        http_status = COALESCE(?, http_status),
         profile_id = COALESCE(?, profile_id),
         requires_501c3 = COALESCE(?, requires_501c3),
         requires_match = COALESCE(?, requires_match),
@@ -661,6 +702,10 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
       record.discovered_at ?? new Date().toISOString(),
       record.opportunity_kind,
       record.source_trust_tier,
+      record.reality_status,
+      record.reality_reasons,
+      record.final_url,
+      record.http_status,
       record.profile_id,
       record.requires_501c3,
       record.requires_match,
@@ -751,6 +796,10 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
     // Reality-gate classification — set by assessReality() above.
     opportunity_kind: opportunity.opportunity_kind ?? null,
     source_trust_tier: opportunity.source_trust_tier ?? null,
+    reality_status: opportunity.reality_status ?? null,
+    reality_reasons: serializeRealityReasons(opportunity.reality_reasons),
+    final_url: opportunity.final_url ?? null,
+    http_status: typeof opportunity.http_status === 'number' ? opportunity.http_status : null,
     profile_id: opportunity.profile_id ?? null,
     requires_501c3: toDbBoolean(db, opportunity.requires_501c3),
     requires_match: toDbBoolean(db, opportunity.requires_match),
@@ -812,6 +861,10 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
       discovered_at,
       opportunity_kind,
       source_trust_tier,
+      reality_status,
+      reality_reasons,
+      final_url,
+      http_status,
       profile_id,
       requires_501c3,
       requires_match,
@@ -868,6 +921,10 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
       @discovered_at,
       @opportunity_kind,
       @source_trust_tier,
+      @reality_status,
+      @reality_reasons,
+      @final_url,
+      @http_status,
       @profile_id,
       @requires_501c3,
       @requires_match,
@@ -939,6 +996,10 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
       discovered_at = COALESCE(funding_opportunities.discovered_at, excluded.discovered_at),
       opportunity_kind = COALESCE(excluded.opportunity_kind, funding_opportunities.opportunity_kind),
       source_trust_tier = COALESCE(excluded.source_trust_tier, funding_opportunities.source_trust_tier),
+      reality_status = COALESCE(excluded.reality_status, funding_opportunities.reality_status),
+      reality_reasons = COALESCE(excluded.reality_reasons, funding_opportunities.reality_reasons),
+      final_url = COALESCE(excluded.final_url, funding_opportunities.final_url),
+      http_status = COALESCE(excluded.http_status, funding_opportunities.http_status),
       match_reasons = COALESCE(excluded.match_reasons, funding_opportunities.match_reasons),
       updated_at = CURRENT_TIMESTAMP,
       last_crawled = CURRENT_TIMESTAMP
@@ -978,6 +1039,10 @@ export async function upsertFundingOpportunity(db, opportunity, opts = {}) {
     discovered_at: record.discovered_at ?? new Date().toISOString(),
     opportunity_kind: record.opportunity_kind ?? null,
     source_trust_tier: record.source_trust_tier ?? null,
+    reality_status: record.reality_status ?? null,
+    reality_reasons: record.reality_reasons ?? null,
+    final_url: record.final_url ?? null,
+    http_status: typeof record.http_status === 'number' ? record.http_status : null,
     profile_id: record.profile_id,
     requires_501c3: record.requires_501c3,
     requires_match: record.requires_match,
@@ -1036,6 +1101,8 @@ async function verifyOpportunityUrl(opportunity, opts = {}) {
         verification_method: 'head',
         verified_by: verifiedBy,
         verification_error: null,
+        final_url: probe.finalUrl ?? url,
+        http_status: typeof probe.status === 'number' ? probe.status : null,
       }
     } else {
       proof = {
@@ -1045,6 +1112,8 @@ async function verifyOpportunityUrl(opportunity, opts = {}) {
         verification_method: 'head',
         verified_by: verifiedBy,
         verification_error: probe.error || `HTTP ${probe.status ?? 'no_response'}`,
+        final_url: probe.finalUrl ?? null,
+        http_status: typeof probe.status === 'number' ? probe.status : null,
       }
     }
   } catch (err) {
@@ -1055,6 +1124,8 @@ async function verifyOpportunityUrl(opportunity, opts = {}) {
       verification_method: 'head',
       verified_by: verifiedBy,
       verification_error: err?.message || String(err),
+      final_url: null,
+      http_status: null,
     }
   }
 
