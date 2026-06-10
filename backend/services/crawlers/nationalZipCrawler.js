@@ -23,6 +23,7 @@ import fs from 'fs'
 import path from 'path'
 import zipcodes from 'zipcodes'
 import { searchGrants } from './grantsGovClient.js'
+import { upsertFundingOpportunity } from '../opportunityInserter.js'
 
 // Lazy-import better-sqlite3 only when actually needed (local script mode).
 // In production (Railway/Postgres), the app passes the shared db wrapper,
@@ -1143,134 +1144,44 @@ async function saveOpportunity(db, opp) {
   const hasUrl = normalizeUrl(opp?.url) || normalizeUrl(opp?.source_url) || normalizeUrl(opp?.application_url)
   if (!hasUrl) return { inserted: false, id: null }
 
-  const id = crypto.randomUUID()
-  const insertSql =
-    db?.dialect === 'postgres'
-      ? `
-          INSERT INTO funding_opportunities (
-            id,
-            title, sponsor, description,
-            source, source_id, source_url,
-            application_url, evidence_url,
-            is_national, state,
-            categories, keywords,
-            opportunity_type, type,
-            requires_match, match_percentage,
-            discovered_at, last_verified_at, link_status,
-            created_at, updated_at
-          )
-          SELECT
-            ?,
-            ?, ?, ?,
-            ?, ?, ?,
-            ?, ?,
-            ?, ?,
-            ?, ?,
-            ?, ?,
-            ?, ?,
-            ?, ?, ?,
-            CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
-          WHERE NOT EXISTS (
-            SELECT 1
-            FROM funding_opportunities
-            WHERE source = ?
-              AND source_id = ?
-          )
-        `
-      : `
-          INSERT INTO funding_opportunities (
-            id,
-            title, sponsor, description,
-            source, source_id, source_url,
-            application_url, evidence_url,
-            is_national, state,
-            categories, keywords,
-            opportunity_type, type,
-            requires_match, match_percentage,
-            discovered_at, last_verified_at, link_status,
-            created_at, updated_at
-          )
-          SELECT
-            ?,
-            ?, ?, ?,
-            ?, ?, ?,
-            ?, ?,
-            ?, ?,
-            ?, ?,
-            ?, ?,
-            ?, ?,
-            ?, ?, ?,
-            datetime('now'), datetime('now')
-          WHERE NOT EXISTS (
-            SELECT 1
-            FROM funding_opportunities
-            WHERE source = ?
-              AND source_id = ?
-          )
-        `
-
-  const stmt = db.prepare(insertSql)
-
-  const categoriesJson = JSON.stringify(Array.isArray(opp.categories) ? opp.categories : [])
-  const keywordsJson = JSON.stringify(Array.isArray(opp.keywords) ? opp.keywords : [])
+  // CANONICAL GATED INSERT (Mission System 1, RC-7).
+  // Previously this did a raw INSERT ... WHERE NOT EXISTS (source, source_id)
+  // that bypassed the reality gate and used title/source_id-only dedupe. Route
+  // through upsertFundingOpportunity, which runs the mandatory reality gate +
+  // quality/policy/validation/reviewer gates and canonical URL-fingerprint
+  // dedupe. Geo columns are tagged afterwards, only on a fresh insert.
   const isNational = Boolean(opp.is_national)
-  const requiresMatch = Boolean(opp.requires_match)
-  const matchPct = typeof opp.match_percentage === 'number' ? opp.match_percentage : 0
-  // Discovery vs verification: stamp discovered_at to "now" for new rows. Only
-  // pass through last_verified_at when the caller actually verified the URL
-  // (link_status / verification_method present). Otherwise leave it null so
-  // the recurring linkVerificationService treats this row as needing a check.
-  const discoveredAt = opp.discovered_at ? String(opp.discovered_at) : new Date().toISOString()
   const callerVerified =
     !!opp.link_status && opp.link_status !== 'unverified' && opp.link_status !== 'unknown'
-  const lastVerifiedAt = callerVerified && opp.last_verified_at ? String(opp.last_verified_at) : null
-  const linkStatus = callerVerified ? String(opp.link_status) : 'unverified'
-  
-  if (db?.dialect === 'postgres') {
-    const result = await stmt.run(
-      id,
-      opp.title,
-      opp.sponsor || null,
-      opp.description || null,
-      String(opp.source),
-      String(opp.source_id),
-      opp.source_url || opp.url || null,
-      opp.application_url || opp.url || null,
-      opp.evidence_url || opp.url || null,
-      isNational,
-      opp.state || null,
-      categoriesJson,
-      keywordsJson,
-      opp.opportunity_type || null,
-      opp.type || 'OPPORTUNITY',
-      requiresMatch,
-      matchPct,
-      discoveredAt,
-      lastVerifiedAt,
-      linkStatus,
-      // De-dupe keys (no unique index required)
-      String(opp.source),
-      String(opp.source_id),
-    )
+  const payload = {
+    ...opp,
+    source_url: opp.source_url || opp.url || null,
+    application_url: opp.application_url || opp.url || null,
+    evidence_url: opp.evidence_url || opp.url || null,
+    type: opp.type || 'OPPORTUNITY',
+    discovered_at: opp.discovered_at ? String(opp.discovered_at) : new Date().toISOString(),
+    // Only forward verification proof when the caller actually verified the URL;
+    // otherwise leave it for the recurring linkVerificationService.
+    last_verified_at: callerVerified && opp.last_verified_at ? String(opp.last_verified_at) : null,
+    link_status: callerVerified ? String(opp.link_status) : 'unverified',
+  }
 
-    const inserted = Number(result?.changes ?? result?.rowCount ?? 0) > 0
-    let finalId = id
-    if (!inserted) {
-      try {
-        const existing = await db
-          .prepare('SELECT id FROM funding_opportunities WHERE source = ? AND source_id = ? LIMIT 1')
-          .get(String(opp.source), String(opp.source_id))
-        if (existing?.id) finalId = existing.id
-      } catch {
-        // ignore
-      }
-    }
+  let result
+  try {
+    result = await upsertFundingOpportunity(db, payload, {})
+  } catch (err) {
+    return { inserted: false, id: null, error: err?.message }
+  }
 
-    // Tag geo columns ONLY on insert to avoid overwriting geo fields for globally deduped opportunities.
-    if (
-      inserted &&
-      (opp.geo_run_id || opp.geo_zip || opp.geo_county || opp.geo_source || opp.geo_scope)
-    ) {
+  const inserted = result?.inserted === true
+  const finalId = result?.id ?? null
+
+  // Tag geo columns ONLY on a fresh insert (don't overwrite geo fields for
+  // globally deduped opportunities), and apply grants.gov national hygiene.
+  if (inserted && finalId) {
+    const hasGeo =
+      opp.geo_run_id || opp.geo_zip || opp.geo_county || opp.geo_source || opp.geo_scope
+    if (hasGeo) {
       try {
         await db
           .prepare(
@@ -1282,8 +1193,7 @@ async function saveOpportunity(db, opp) {
                   geo_source = ?,
                   geo_scope = ?,
                   updated_at = CURRENT_TIMESTAMP
-              WHERE source = ?
-                AND source_id = ?
+              WHERE id = ?
             `,
           )
           .run(
@@ -1292,124 +1202,35 @@ async function saveOpportunity(db, opp) {
             opp.geo_county ?? null,
             opp.geo_source ?? null,
             opp.geo_scope ?? null,
-            String(opp.source),
-            String(opp.source_id),
+            finalId,
           )
       } catch {
         // ignore (schema drift / migrations not applied yet)
       }
     }
 
-    // Data hygiene: Grants.gov opportunities are national. Older rows may have been incorrectly
-    // stamped with a state from the first ZIP that discovered them.
+    // Data hygiene: Grants.gov opportunities are national. Older rows may have
+    // been incorrectly stamped with a state from the first ZIP that found them.
     if (String(opp.source) === 'grants.gov' && isNational === true) {
       try {
         await db
           .prepare(
             `
               UPDATE funding_opportunities
-              SET is_national = TRUE,
+              SET is_national = ${db?.dialect === 'postgres' ? 'TRUE' : '1'},
                   state = NULL,
                   updated_at = CURRENT_TIMESTAMP
-              WHERE source = ?
-                AND source_id = ?
+              WHERE id = ?
             `,
           )
-          .run(String(opp.source), String(opp.source_id))
+          .run(finalId)
       } catch {
         // ignore
       }
     }
-    return { inserted, id: finalId }
-  } else {
-    const result = stmt.run(
-      id,
-      opp.title,
-      opp.sponsor || null,
-      opp.description || null,
-      String(opp.source),
-      String(opp.source_id),
-      opp.source_url || opp.url || null,
-      opp.application_url || opp.url || null,
-      opp.evidence_url || opp.url || null,
-      isNational ? 1 : 0,
-      opp.state || null,
-      categoriesJson,
-      keywordsJson,
-      opp.opportunity_type || null,
-      opp.type || 'OPPORTUNITY',
-      requiresMatch ? 1 : 0,
-      matchPct,
-      discoveredAt,
-      lastVerifiedAt,
-      linkStatus,
-      // De-dupe keys (no unique index required)
-      String(opp.source),
-      String(opp.source_id),
-    )
-
-    const inserted = Number(result?.changes ?? 0) > 0
-    let finalId = id
-    if (!inserted) {
-      try {
-        const existing = await db
-          .prepare('SELECT id FROM funding_opportunities WHERE source = ? AND source_id = ? LIMIT 1')
-          .get(String(opp.source), String(opp.source_id))
-        if (existing?.id) finalId = existing.id
-      } catch {
-        // ignore
-      }
-    }
-
-    if (
-      inserted &&
-      (opp.geo_run_id || opp.geo_zip || opp.geo_county || opp.geo_source || opp.geo_scope)
-    ) {
-      try {
-        await db.prepare(
-          `
-            UPDATE funding_opportunities
-            SET geo_run_id = ?,
-                geo_zip = ?,
-                geo_county = ?,
-                geo_source = ?,
-                geo_scope = ?,
-                updated_at = CURRENT_TIMESTAMP
-            WHERE source = ?
-              AND source_id = ?
-          `,
-        ).run(
-          opp.geo_run_id ?? null,
-          opp.geo_zip ?? null,
-          opp.geo_county ?? null,
-          opp.geo_source ?? null,
-          opp.geo_scope ?? null,
-          String(opp.source),
-          String(opp.source_id),
-        )
-      } catch {
-        // ignore (schema drift / migrations not applied yet)
-      }
-    }
-
-    if (String(opp.source) === 'grants.gov' && isNational === true) {
-      try {
-        await db.prepare(
-          `
-            UPDATE funding_opportunities
-            SET is_national = 1,
-                state = NULL,
-                updated_at = CURRENT_TIMESTAMP
-            WHERE source = ?
-              AND source_id = ?
-          `,
-        ).run(String(opp.source), String(opp.source_id))
-      } catch {
-        // ignore
-      }
-    }
-    return { inserted, id: finalId }
   }
+
+  return { inserted, id: finalId }
 }
 
 /**

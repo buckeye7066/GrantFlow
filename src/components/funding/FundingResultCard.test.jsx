@@ -63,6 +63,36 @@ describe('FundingResultCard', () => {
     expect(screen.getByTestId('funding-result-card-broken')).toBeTruthy()
   })
 
+  it('warns when an opportunity is a loan (RC-15)', () => {
+    render(<FundingResultCard result={{ ...BASE, kind: 'direct', link_status: 'verified', is_loan: true }} />)
+    const banner = screen.getByTestId('funding-result-card-loan')
+    expect(banner).toBeTruthy()
+    expect(banner.textContent).toMatch(/loan/i)
+  })
+
+  it('warns when an opportunity requires matching funds (RC-15)', () => {
+    render(<FundingResultCard result={{ ...BASE, kind: 'direct', link_status: 'verified', requires_match: true }} />)
+    expect(screen.getByTestId('funding-result-card-matching-funds')).toBeTruthy()
+  })
+
+  it('warns when a fixed deadline has passed (RC-15)', () => {
+    render(
+      <FundingResultCard
+        result={{ ...BASE, kind: 'direct', link_status: 'verified', deadline: '2000-01-01', deadline_type: 'fixed' }}
+      />,
+    )
+    expect(screen.getByTestId('funding-result-card-expired')).toBeTruthy()
+  })
+
+  it('does NOT warn expired for rolling deadlines (RC-15)', () => {
+    render(
+      <FundingResultCard
+        result={{ ...BASE, kind: 'direct', link_status: 'verified', deadline: '2000-01-01', deadline_type: 'rolling' }}
+      />,
+    )
+    expect(screen.queryByTestId('funding-result-card-expired')).toBeNull()
+  })
+
   it('shows ineligibility reasons when present', () => {
     render(
       <FundingResultCard

@@ -76,12 +76,30 @@ const DEFAULT_ANTHROPIC_MODEL = process.env.ANTHROPIC_MODEL || 'claude-3-haiku-2
 // Mission rule: every name here MUST be the canonical id from
 // anyaToolRegistry.js. Do not invent shortened variants — Anya looks
 // these up by name to invoke them.
-const CHAT_TOOL_WHITELIST = [
-  'profile.updateSection',
-  'profile.getCompletionStatus',
-  'student.commitToUniversity',
-  'anya.nextBestAction',
-  'grants.summarizeMatches',
+// The ONLY tools the chat path actually exposes to the model (see the OpenAI
+// tools array build in generateAssistantResponse). The prompt's "tools you can
+// call" section is GENERATED from this list so the two can never drift — Anya is
+// never told it can directly call a tool the chat path will not hand it.
+// (Mission System 8, RC-11.)
+export const CHAT_CALLABLE_TOOL_DOCS = [
+  ['profile.updateSection', 'Save user-provided information to a specific profile section (merge-safe). Confirmation-gated: first call returns confirmation_required, second call (with confirmed:true) writes.'],
+  ['profile.getCompletionStatus', 'Check which sections are filled/empty and get suggestions for what to ask next.'],
+  ['student.commitToUniversity', 'For student profiles, mark a single school (by name or id, e.g. "MTSU") as the one the student is attending. Confirmation-gated like profile.updateSection.'],
+  ['anya.nextBestAction', 'Return the recommended next action grounded in current page + opportunity + profile gaps.'],
+  ['grants.summarizeMatches', 'Show matched funding opportunities for a profile.'],
+]
+export const CHAT_TOOL_WHITELIST = CHAT_CALLABLE_TOOL_DOCS.map(([name]) => name)
+
+// Prompt lines describing exactly what Anya can call from chat, plus an honest
+// statement of what it CANNOT call (so it guides the user / writes content
+// inline instead of fabricating tool calls).
+const _CHAT_TOOL_PROMPT_LINES = [
+  'Tools you can call directly RIGHT NOW (via tool calling — actually call them, never pretend):',
+  ...CHAT_CALLABLE_TOOL_DOCS.map(([name, desc]) => `- ${name}: ${desc}`),
+  '',
+  'You do NOT have a chat tool for anything else. In particular:',
+  '- Writing an LOI, needs statement, or full grant/benefit application: there is NO tool — you write the document yourself, directly in your reply, using the user\'s real profile data. Producing the text IS the deliverable; never claim a tool "generated" or "saved" it.',
+  '- Submission details, letters of medical necessity, medical profile review, pipeline medical scans, codebase search, cross-session memory, and system-health checks run through GrantFlow\'s app panels, not this chat. If the user needs one, explain it and point them to the exact screen — do NOT claim you executed it.',
 ]
 
 // OpenAI's tool/function naming spec only allows [a-zA-Z0-9_-], so the
@@ -137,28 +155,13 @@ const _STATIC_PROMPT_BASE = [
   '- After saving data, tell the user what you saved and why it helps their matches',
   '- When asked about matches, use the grants.summarizeMatches tool to show real results',
   '',
-  'Tools Available to You (you can invoke these directly via tool calling — DO NOT pretend to call them, ACTUALLY call them):',
-  '- profile.updateSection: Save user-provided information to a specific profile section (merge-safe). Confirmation-gated: first call returns confirmation_required, second call (with confirmed:true) writes.',
-  '- profile.getCompletionStatus: Check which sections are filled/empty and get suggestions for what to ask next',
-  '- student.commitToUniversity: For student profiles, mark a single school (by name or id, e.g. "MTSU") as the one the student is attending. Other still-active applications are moved to "deferred" so funding cards narrow to the chosen school. Confirmation-gated like profile.updateSection.',
-  '- anya.nextBestAction: Returns the recommended next action grounded in current page + opportunity + profile gaps.',
-  '- grants.summarizeMatches: Show matched funding opportunities for a profile',
-  '- grants.writeLOI: Write a professional Letter of Intent for a specific opportunity, using the user\'s real profile data',
-  '- grants.writeNeedsStatement: Write a compelling needs statement for a grant proposal, grounded in profile data',
-  '- grants.writeFullApplication: Write a complete grant/benefit application with all sections, submission instructions, and contact info',
-  '- grants.getSubmissionInfo: Get portal URLs, mailing addresses, fax numbers, emails, and step-by-step submission instructions',
-  '- medical.generateLOMN: Generate a Letter of Medical Necessity, DME justification, disability statement, insurance appeal, or prior authorization narrative using the profile\'s real health data',
-  '- medical.reviewProfile: Review the profile\'s medical data — conditions, disabilities, DME needs, functional limitations, insurance',
-  '- medical.scanPipeline: Scan pipeline grants to flag which ones need medical necessity documentation',
-  '- brain.remember / brain.recall / brain.search: Store and retrieve information for continuity across sessions',
-  '- system.health: Check if GrantFlow systems are running properly',
-  '- code.search: Search the codebase (available to all users for transparency)',
+  ..._CHAT_TOOL_PROMPT_LINES,
   '',
   'Grant Writing Quality:',
   '- You write at MBA-level, as a seasoned grant writer with 15+ years of experience',
   '- ALWAYS use the user\'s real profile data — never use placeholders or generic text',
   '- Ground every needs statement in real demographics, health conditions, financial data, and geographic factors',
-  '- When the user asks you to help with an application, first call grants.getSubmissionInfo to determine HOW to submit',
+  '- When the user asks you to help with an application, ask how they plan to submit (portal, email, mail, fax) or point them to the opportunity\'s submission details in the app, then tailor your help to that channel',
   '- If the application must be printed and mailed, provide the complete mailing address and tell the user to print',
   '- If it requires fax, provide the fax number',
   '- If it\'s a portal, walk them through the portal step by step',
@@ -197,7 +200,7 @@ const _STATIC_PROMPT_BASE = [
 const _STATIC_PROMPT_ADMIN_SECTION = [
   'Admin Access:',
   '- The current user is a system administrator',
-  '- You have full access to all admin tools',
+  '- The admin operations below exist in the GrantFlow Admin Tools panel. From THIS chat you can explain them, interpret their output, and guide the admin — but the ONLY tools you can directly call here are the chat tools listed above. Never claim you ran an admin operation (crawler, geo-crawl, diagnostics, code, db) that you did not actually call.',
   '',
   'Crawler Operations:',
   '- admin.crawler.run: Run any crawler type (comprehensive, local, curated_benefits, scholarship, item_search, profile_enrichment)',

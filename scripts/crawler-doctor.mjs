@@ -13,6 +13,7 @@ import path from 'node:path'
 import fs from 'node:fs'
 import { spawn } from 'node:child_process'
 import Database from 'better-sqlite3'
+import { applySqliteSchema } from '../backend/db/ensureSqliteSchema.js'
 
 const projectRoot = path.resolve(process.cwd())
 const dbPath = process.env.DATABASE_URL || path.join(projectRoot, 'backend', 'data', 'grantflow.db')
@@ -54,7 +55,9 @@ async function ensureSchema() {
   const schema = fs.readFileSync(schemaPath, 'utf8')
   const db = new Database(dbPath)
   db.pragma('journal_mode = WAL')
-  db.exec(schema)
+  // Reconcile columns on pre-existing/old DB files before applying schema so
+  // index statements referencing newer columns (e.g. opportunity_kind) succeed.
+  applySqliteSchema(db, schema)
   db.close()
 }
 

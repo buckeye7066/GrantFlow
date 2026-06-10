@@ -851,28 +851,23 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
       let effectiveMinScore = minScore
       let relaxedReason = null
       if (!strictMin && scored.length === 0 && allScored.length > 0) {
-        const fallbackThresholds = [30, 15, 0]
+        // Mild relaxation only (30, then 15). We deliberately DROPPED the
+        // threshold-to-zero dump and the top-20 "LAST RESORT" — those returned
+        // irrelevant rows and, worse, superseded the canonical staged
+        // zero-result ladder below. When nothing scores >= 15, `scored` stays
+        // empty so assembleFundingResults() provides the proper, clearly
+        // LABELED fallback (relaxed-direct → directory → geo-expand → profile
+        // gaps → honest zero). (Mission System 5, RC-12.)
+        const fallbackThresholds = [30, 15]
         for (const threshold of fallbackThresholds) {
           scored = allScored.filter((opp) => (opp.match_score ?? 0) >= threshold)
           if (scored.length > 0) {
             effectiveMinScore = threshold
-            relaxedReason = threshold > 0
-              ? 'No strong matches found. These results are lower-confidence. Complete your profile (location, needs, organization type) to improve match quality.'
-              : 'Showing best-available matches (all scored below default thresholds). Complete your profile for better matches.'
+            relaxedReason =
+              'No strong matches found. These results are lower-confidence. Complete your profile (location, needs, organization type) to improve match quality.'
             routeLogger.info(`[matching] Zero results at min_score=${minScore}; relaxed to ${threshold} (${scored.length} results)`)
             break
           }
-        }
-        if (scored.length === 0) {
-          // LAST RESORT: still take the top-N by score — zero results is a
-          // failure state, not an acceptable outcome (project rule).
-          scored = allScored
-            .slice()
-            .sort((a, b) => (b.match_score ?? 0) - (a.match_score ?? 0))
-            .slice(0, Math.min(20, allScored.length))
-          effectiveMinScore = 0
-          relaxedReason = 'Showing best-available funding sources. Complete your profile with location, specific needs, and organization type to improve match quality.'
-          routeLogger.info(`[matching] LAST-RESORT fallback: returning top ${scored.length} of ${allScored.length} scored candidates`)
         }
       } else if (strictMin && scored.length === 0 && allScored.length > 0) {
         const rawScores = allScored

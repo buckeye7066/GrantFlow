@@ -99,6 +99,7 @@ export default function FundingResults() {
     totalScored,
     truncated,
     thresholdFallbackMessage,
+    diagnostics,
   } = useFundingResultsStore();
   const { isAuthenticated, accessToken, sessionExpired } = useAuthStore((s) => ({
     isAuthenticated: s.isAuthenticated,
@@ -278,20 +279,46 @@ export default function FundingResults() {
   };
 
   if (!results || results.length === 0) {
+    // Explain the zero-result state using the backend's staged-ladder
+    // diagnostics instead of a dead end (Mission System 5, RC-12): what was
+    // searched/expanded, and what profile info would unlock more matches.
+    const diag = diagnostics || {};
+    const gaps = Array.isArray(diag.profileGaps) ? diag.profileGaps : [];
+    const gapLabel = (g) =>
+      typeof g === 'string' ? g : (g?.label || g?.message || g?.field || g?.section || JSON.stringify(g));
     return (
       <div className="p-6 md:p-8">
         <div className="max-w-2xl mx-auto text-center space-y-6">
           <Search className="w-16 h-16 mx-auto text-muted-foreground" aria-hidden />
-          <h2 className="text-2xl font-semibold text-foreground">No matches yet</h2>
+          <h2 className="text-2xl font-semibold text-foreground">No verified direct matches yet</h2>
           <p className="text-muted-foreground">
-            Try lowering the match score or add ZIP/state to your profile for better results.
+            {diag.tierExplanation
+              || 'We searched for funding that fits your profile but did not find verified direct matches yet. Try the steps below.'}
           </p>
+          {(diag.directoryOnly || diag.geoExpanded) && (
+            <p className="text-xs text-muted-foreground">
+              {diag.directoryOnly ? 'Some results are directory/referral resources, not direct grants. ' : ''}
+              {diag.geoExpanded ? 'The search was expanded beyond your immediate area to find options.' : ''}
+            </p>
+          )}
+          {gaps.length > 0 && (
+            <div className="text-left inline-block">
+              <p className="text-sm font-medium text-foreground">
+                Add these to your profile to unlock more matches:
+              </p>
+              <ul className="list-disc list-inside text-sm text-muted-foreground mt-1">
+                {gaps.slice(0, 6).map((g, i) => (
+                  <li key={i}>{gapLabel(g)}</li>
+                ))}
+              </ul>
+            </div>
+          )}
           <div className="flex flex-wrap gap-3 justify-center">
             <Button asChild>
-              <Link to={createPageUrl('DiscoverGrants')}>Run a new search</Link>
+              <Link to={createPageUrl('DiscoverGrants')}>Run a deeper search</Link>
             </Button>
             <Button variant="outline" asChild>
-              <Link to={createPageUrl('MyProfiles')}>Edit profile</Link>
+              <Link to={createPageUrl('MyProfiles')}>Improve your profile</Link>
             </Button>
           </div>
         </div>

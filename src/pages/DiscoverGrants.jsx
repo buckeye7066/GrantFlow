@@ -72,7 +72,27 @@ function normalizeResultMetadata(payload, results) {
     totalScored: Number.isFinite(Number(payload?.total_scored)) ? Number(payload.total_scored) : null,
     truncated: Boolean(payload?.truncated),
     thresholdFallbackMessage: payload?.threshold_fallback_message ?? null,
+    // Zero-result ladder telemetry (Mission System 5, RC-12). Present only when
+    // the backend ran the staged fallback ladder (matching.js / discovery.js).
+    diagnostics: extractDiagnostics(payload),
   }
+}
+
+// Pull the staged-ladder diagnostics out of a results payload so the UI can
+// explain what was searched/expanded and what profile info would help — instead
+// of showing a dead-end empty state. Returns null when nothing is present.
+function extractDiagnostics(payload) {
+  if (!payload || typeof payload !== 'object') return null
+  const resultTier = payload.result_tier ?? null
+  const tierExplanation = payload.tier_explanation ?? null
+  const tierAttempts = Array.isArray(payload.tier_attempts) ? payload.tier_attempts : null
+  const profileGaps = Array.isArray(payload.profile_gaps) ? payload.profile_gaps : []
+  const directoryOnly = Boolean(payload.directory_only)
+  const geoExpanded = Boolean(payload.geo_expanded)
+  if (!resultTier && !tierExplanation && !tierAttempts && profileGaps.length === 0 && !directoryOnly && !geoExpanded) {
+    return null
+  }
+  return { resultTier, tierExplanation, tierAttempts, profileGaps, directoryOnly, geoExpanded }
 }
 
 // Category taxonomy imported from @/constants/needCategories
@@ -308,6 +328,7 @@ export default function DiscoverGrants() {
       totalScored: catalogResultMeta?.totalScored ?? null,
       truncated: Boolean(catalogResultMeta?.truncated || crawlerResultMeta?.truncated),
       thresholdFallbackMessage: crawlerResultMeta?.thresholdFallbackMessage ?? null,
+      diagnostics: catalogResultMeta?.diagnostics ?? crawlerResultMeta?.diagnostics ?? null,
     })
   }, [catalogOpportunities, catalogResultMeta, searchResults, crawlerResultMeta, effectiveProfileId, selectedProfileId, selectedProfile, setFundingResults])
 

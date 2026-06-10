@@ -77,6 +77,35 @@ test('fundingResultsStore — getResultsForProfile returns the stored view on ex
   }
 })
 
+test('fundingResultsStore — carries zero-result ladder diagnostics through to the profile view (RC-12)', async () => {
+  setupStorage()
+  try {
+    const { useFundingResultsStore } = await import('../../src/stores/fundingResultsStore.js?case=diagnostics')
+    const diagnostics = {
+      resultTier: 'DIRECTORY',
+      tierExplanation: 'No verified direct grants; showing directory resources.',
+      tierAttempts: [{ tier: 'STRONG_DIRECT', count: 0 }],
+      profileGaps: ['location', 'entity_type'],
+      directoryOnly: true,
+      geoExpanded: false,
+    }
+    useFundingResultsStore.getState().setResults({
+      results: [],
+      profileId: 'profile-z',
+      returned: 0,
+      totalFound: 0,
+      diagnostics,
+    })
+    const view = useFundingResultsStore.getState().getResultsForProfile('profile-z')
+    assert.deepEqual(view.diagnostics, diagnostics)
+    // And a profile mismatch must NOT leak diagnostics either.
+    const other = useFundingResultsStore.getState().getResultsForProfile('profile-other')
+    assert.equal(other.diagnostics, null)
+  } finally {
+    teardownStorage()
+  }
+})
+
 test('fundingResultsStore — getResultsForProfile rejects null/undefined requested id', async () => {
   setupStorage()
   try {

@@ -15,6 +15,7 @@ import fs from 'node:fs'
 import Database from 'better-sqlite3'
 
 import ensureMinimumNationalOpportunities from '../backend/utils/ensureMinimumNationalOpportunities.js'
+import { applySqliteSchema } from '../backend/db/ensureSqliteSchema.js'
 
 const projectRoot = path.resolve(process.cwd())
 const dbPath = process.env.DB_PATH || path.join(projectRoot, 'backend', 'data', 'grantflow.db')
@@ -143,7 +144,9 @@ async function main() {
 
   const db = new Database(dbPath)
   db.pragma('journal_mode = WAL')
-  db.exec(fs.readFileSync(schemaPath, 'utf8'))
+  // Reconcile columns on pre-existing/old DB files before applying schema so
+  // index statements referencing newer columns (e.g. opportunity_kind) succeed.
+  applySqliteSchema(db, fs.readFileSync(schemaPath, 'utf8'))
 
   // Ensure new column exists even on an already-created DB file.
   try {

@@ -8,7 +8,12 @@ import crypto from 'crypto';
 import { enforceOpportunityPolicy } from '../crawlers/opportunityPolicy.js';
 import { validateOpportunity } from '../opportunityValidator.js';
 import { reviewOpportunity } from '../reviewerAgent.js';
+import { assessReality } from '../opportunityRealityGate.js';
 import { createLogger } from '../../utils/logger.js'
+
+function isActiveFlag(value) {
+  return value === 1 || value === true || value === '1' || value === 'true';
+}
 const log = createLogger('ingestionService')
 
 /**
@@ -101,6 +106,7 @@ export async function ingestOpportunities(db, opportunities, sourceName) {
   // Pre-filter through policy, validation, and the reviewer agent before touching DB.
   let policySkipped = 0;
   let reviewerSkipped = 0;
+  let realitySkipped = 0;
   const validated = [];
   for (const opp of opportunities) {
     const policy = enforceOpportunityPolicy(opp);
@@ -121,6 +127,23 @@ export async function ingestOpportunities(db, opportunities, sourceName) {
       console.warn(`[ingestion] Reviewer rejection: ${review.reason} | ${opp?.title ?? 'untitled'}`);
       continue;
     }
+    // CANONICAL REALITY GATE (Mission System 1): the government-import path must
+    // not bypass the single reality gate that every user-visible opportunity
+    // passes through. We gate rows destined to be ACTIVE/user-visible. Rows
+    // explicitly ingested as inactive reference data (e.g. USAspending past
+    // awards, is_active=0) are reference-only and never surfaced as live
+    // opportunities, so they are exempt from the live-opportunity gate.
+    const willBeActive = opp.is_active === null || opp.is_active === undefined
+      ? true
+      : isActiveFlag(opp.is_active);
+    if (willBeActive) {
+      const reality = assessReality(opp);
+      if (!reality.allowed) {
+        realitySkipped++;
+        console.warn(`[ingestion] Reality-gate rejection: ${reality.reasons.join(',')} | ${opp?.title ?? 'untitled'}`);
+        continue;
+      }
+    }
     // Normalize required DB fields that upstream adapters sometimes omit
     // (NIH RePORTER, older connectors). funding_opportunities.id is a
     // non-null primary key so we generate a stable UUID here when missing.
@@ -140,6 +163,9 @@ export async function ingestOpportunities(db, opportunities, sourceName) {
   }
   if (reviewerSkipped > 0) {
     log.info(`[ingestion] Pre-filtered ${reviewerSkipped} opportunities by reviewer agent`);
+  }
+  if (realitySkipped > 0) {
+    log.info(`[ingestion] Pre-filtered ${realitySkipped} opportunities by canonical reality gate`);
   }
 
   // Process in a transaction for performance
@@ -251,6 +277,7 @@ const existing = checkExists.get(opp.source, opp.source_id);
       records_updated: updated,
       records_rejected_policy: policySkipped,
       records_rejected_reviewer: reviewerSkipped,
+      records_rejected_reality: realitySkipped,
       errors,
       error_messages: errorMessages,
     };

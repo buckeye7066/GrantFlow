@@ -207,7 +207,10 @@ const FUNDING_TYPE_MAP = {
 function normalizeFundingType(raw) {
   if (!raw) return 'unknown'
   const key = String(raw).toLowerCase().trim().replace(/[\s-]+/g, '_')
-  return FUNDING_TYPE_MAP[key] ?? 'grant'
+  // Unrecognized funding types must stay 'unknown' (→ REVIEW downstream), never
+  // silently default to 'grant'. Mislabeling e.g. a "loan" or "prize" as a grant
+  // would let it pass as direct grant funding it is not. (Mission System 2.)
+  return FUNDING_TYPE_MAP[key] ?? 'unknown'
 }
 
 // ---------------------------------------------------------------------------
@@ -399,13 +402,24 @@ export function normalizeOpportunity(rawOpp) {
   }
 
   // -- Is loan? --
+  // Inspect the FULL opportunity text (title + description + sponsor + eligibility),
+  // plus funding_type / opportunity_type / type metadata — not the title alone — so
+  // a loan disclosed only in the body is still caught. (Mission System 2.)
   // Exempts loan forgiveness, repayment assistance, and similar non-loan programs
-  // that mention "loan" in context of helping borrowers, not lending.
-  const titleLower = String(rawOpp.title ?? '').toLowerCase()
-  const loanAssistanceExempt = /loan (forgiveness|repayment|discharge|cancellation|redemption)|repay.*loan|pslf|income.driven repayment/i.test(titleLower)
+  // that mention "loan" in the context of helping borrowers, not lending.
+  const loanText = [
+    text,
+    rawOpp.funding_type ?? '',
+    rawOpp.opportunity_type ?? '',
+    rawOpp.type ?? '',
+  ].join(' ').toLowerCase()
+  const loanAssistanceExempt = /loan\s+(forgiveness|repayment|discharge|cancellation|redemption|relief|assistance)|repay\w*\s+\w*\s*loan|pslf|income.driven repayment/i.test(loanText)
+  const mentionsLoan = /\bloans?\b/i.test(loanText) ||
+    /\bmicroloans?\b/i.test(loanText) ||
+    /\blending\b/i.test(loanText)
   const isLoan = Boolean(rawOpp.is_loan) ||
     fundingType === 'loan' ||
-    (!loanAssistanceExempt && titleLower.includes('loan'))
+    (!loanAssistanceExempt && mentionsLoan)
 
   // -- Pro bono / in-kind / referral-only flags --
   const isProBono = Boolean(rawOpp.is_pro_bono) ||
