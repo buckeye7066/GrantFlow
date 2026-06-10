@@ -14,6 +14,7 @@ import {
 import client, { apiFetch } from '@/api/client'
 import { toast } from '@/components/ui/use-toast'
 import { useFundingResultsStore } from '@/stores/fundingResultsStore'
+import { useSavedGrantsStore } from '@/stores/savedGrantsStore'
 import { clearAllProfileScopedStorage } from '@/utils/profileScopedStorage'
 
 // Wired up at app boot via registerQueryClient(qc) from src/App.jsx so we can
@@ -268,6 +269,9 @@ export const useAuthStore = create((set, get) => ({
     // different active profile) sees stale results from the previous session.
     try { useFundingResultsStore.getState().clear() } catch (err) {
       console.warn('[authStore] failed to clear funding results store:', err?.message || err)
+    }
+    try { useSavedGrantsStore.getState().clear() } catch (err) {
+      console.warn('[authStore] failed to clear saved grants store:', err?.message || err)
     }
     // Drop every profile-scoped localStorage key (matcher checklists, saved
     // grants caches, dismissed suggestions, etc.) so a fresh user never sees
@@ -926,6 +930,14 @@ export const useAuthStore = create((set, get) => ({
         console.warn('[authStore] failed to clear profile-scoped storage on profile switch:', err?.message || err)
       }
       evictProfileQueries(prev)
+    }
+
+    // Re-point the saved-grants store at the active profile's bucket and force a
+    // re-sync from the backend (RC-14). Unconditional (not gated on
+    // profileActuallyChanged) so the initial null→profile set also scopes saves;
+    // loadForProfile is a no-op when the profile id is unchanged.
+    try { useSavedGrantsStore.getState().loadForProfile(normalized) } catch (err) {
+      console.warn('[authStore] failed to repoint saved grants on profile switch:', err?.message || err)
     }
   },
 

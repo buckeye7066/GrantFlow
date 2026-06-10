@@ -635,16 +635,20 @@ CREATE TABLE IF NOT EXISTS users (
   metadata TEXT
 );
 
+-- Profile-scoped (RC-14): saves are keyed by user AND profile so they never
+-- bleed across a user's profiles. profile_id '' = legacy / no-profile save.
 CREATE TABLE IF NOT EXISTS saved_grants (
   id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
   user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  profile_id TEXT NOT NULL DEFAULT '',
   opportunity_id TEXT NOT NULL,
   saved_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   notes TEXT DEFAULT NULL,
-  UNIQUE(user_id, opportunity_id)
+  UNIQUE(user_id, profile_id, opportunity_id)
 );
 CREATE INDEX IF NOT EXISTS idx_saved_grants_user_id ON saved_grants(user_id);
 CREATE INDEX IF NOT EXISTS idx_saved_grants_opportunity_id ON saved_grants(opportunity_id);
+CREATE INDEX IF NOT EXISTS idx_saved_grants_profile_id ON saved_grants(profile_id);
 
 -- vNext fine-grained audit events (before/after snapshots for state transitions, tasks, scoring, etc.)
 CREATE TABLE IF NOT EXISTS audit_events (

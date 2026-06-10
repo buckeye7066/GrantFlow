@@ -157,7 +157,7 @@ Subsequent commits resolved several of the items below. Current status:
 | RC-15 Result card loan/expired warnings | ✅ FIXED & VERIFIED (loan/matching-funds/expired chips + tests) | 7ea4dd70 |
 | RC-8 Persist reality_status / unify display gate | ⏸ DEFERRED — structural; needs a migration + inserter + reader changes. Note: insert-side (`assessReality`) and display-side (`assessOpportunityTrust`) already share the same low-level classifiers (`classifyOpportunityKind`/`classifySourceTrustTier` + policy helpers), so drift risk is bounded; and a single persisted `reality_status` cannot express per-user `allowLoans`/`allowExpired` context, so re-deriving at display is arguably correct. Lower priority than first assessed. |
 | RC-13 Canonical pipeline enum | ⏸ DEFERRED — `grants.status` (pipeline) and `applicationWorkflow.APPLICATION_STATES` (applications) are two distinct features. Unifying touches the core `grants` table CHECK (SQLite CHECK widening requires a full table rebuild), backend validation, and many UI components — too broad to do safely without an E2E harness. |
-| RC-14 Saved items profile-scoping | ⏸ DEFERRED — `saved_grants` is user-scoped + ownership-enforced (persists correctly); adding profile partitioning requires a UNIQUE-constraint rebuild + frontend changes + legacy-NULL handling, not E2E-verifiable here. |
+| RC-14 Saved items profile-scoping | ✅ FIXED & VERIFIED — `saved_grants` gains `profile_id` (NOT NULL DEFAULT '' sentinel = legacy/no-profile); UNIQUE rebuilt to `(user_id, profile_id, opportunity_id)` so the same opportunity can be saved under multiple profiles. SQLite migration 075 (table rebuild, preserves existing profile_id; FK-off rebuild in runtime self-heal) + Postgres 0071 (idempotent ALTER + unique index) + schema.sql + `ensureSavedGrantsSchema` self-heal. Route scopes GET/POST/PATCH/DELETE by `user_id`+`profile_id` (legacy '' rows shown as a non-lossy grace), enforces `ensureProfileAccess` when a profile is supplied. Frontend `savedGrantsStore` is per-profile via `scopedKey`, re-pointed by `authStore.setActiveProfileId`. Tests: `backend/tests/savedGrantsProfileScope.test.js` (isolation, multi-profile, re-save upsert, 403, legacy grace, scoped delete, old→new heal). |
 | RC-16 sourceRegistry operational metadata | ⏸ DEFERRED — additive fields with no current consumer; low value until a consumer exists. |
 | RC-17 Documents → profile signals | ⏸ DEFERRED — folding `documents.extracted_text` into the central signal/intent pipeline risks altering match/crawler-strategy behavior across many tests; matching-quality impact is not verifiable in this environment. |
 
@@ -244,11 +244,20 @@ Confirmed raw `INSERT INTO funding_opportunities` paths that still skip `assessR
 - **Recommended fix:** one canonical stage enum (shared module) aligned to the 11-stage
   spec; migration to widen the `grants.status` CHECK.
 
-### RC-14 — Saved/favorited items are user-scoped only, not profile-scoped
-- `saved_grants` (`051_saved_grants.sql`) has no `profile_id`; saves bleed across a
+### RC-14 — Saved/favorited items are user-scoped only, not profile-scoped — ✅ FIXED
+- `saved_grants` (`051_saved_grants.sql`) had no `profile_id`; saves bled across a
   user's profiles. (Application workflow IS correctly profile-scoped.) **MEDIUM.**
-- **Recommended fix:** add nullable `profile_id` to `saved_grants`; scope queries by
-  `user_id` + `profile_id`.
+- **Fix shipped:** `profile_id TEXT NOT NULL DEFAULT ''` added; UNIQUE rebuilt to
+  `(user_id, profile_id, opportunity_id)`. SQLite migration `075` (idempotent
+  rebuild that preserves any already-stored `profile_id`), Postgres `0071`
+  (idempotent `ALTER` + unique index), `schema.sql`, and a self-healing
+  `ensureSavedGrantsSchema` (SQLite rebuild runs with FK enforcement off per the
+  SQLite-recommended table-mutation procedure). `routes/savedGrants.js` scopes all
+  verbs by `user_id`+`profile_id` and calls `ensureProfileAccess` when a profile is
+  supplied; legacy '' rows surface under every profile as a non-lossy grace.
+  Frontend `savedGrantsStore` is per-profile (`scopedKey`), re-pointed on profile
+  switch by `authStore.setActiveProfileId`. Tests in
+  `backend/tests/savedGrantsProfileScope.test.js`.
 
 ### RC-15 — Result card omits loan / matching-funds warning and expired label
 - `is_loan`/`requires_match` are selected (`savedGrants.js:48-49`) but never rendered;

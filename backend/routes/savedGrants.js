@@ -5,11 +5,23 @@
  * POST   /api/saved-grants              — save a grant (optional notes)
  * PATCH  /api/saved-grants/:id/notes    — update notes on a saved grant
  * DELETE /api/saved-grants/:id          — unsave a grant (id = opportunity_id)
+ *
+ * Profile scoping (RC-14): when the caller supplies a `profile_id` (query param
+ * on GET/DELETE, body field on POST/PATCH) the save is keyed to that profile so
+ * a user's saves never bleed across their profiles, and the same opportunity can
+ * be saved independently under more than one profile. Rows with an empty
+ * `profile_id` are legacy / no-profile saves; they remain visible under every
+ * profile (we can't know which profile they belonged to, so hiding them would
+ * look like data loss) but new saves are always profile-stamped and isolated.
+ * `profile_id` is optional for backward compatibility with older clients.
  */
 
 import { Router } from 'express'
 import crypto from 'node:crypto'
-import { requireAuthenticatedUser } from '../utils/accessControl.js'
+import {
+  requireAuthenticatedUser,
+  ensureProfileAccess,
+} from '../utils/accessControl.js'
 import {
   assessOpportunityTrust,
   buildTrustMetadata,
@@ -20,6 +32,14 @@ import { createLogger } from '../utils/logger.js'
 const routeLogger = createLogger('route:savedGrants')
 
 const router = Router()
+
+// Normalize an incoming profile_id to a non-empty string, or '' when absent.
+// '' is the canonical "no/legacy profile" sentinel stored in the column.
+function readProfileId(value) {
+  if (value === null || value === undefined) return ''
+  const str = String(value).trim()
+  return str
+}
 
 // Columns we want to project off `funding_opportunities` when listing saved
 // grants. Kept in sync with `backend/db/schema.sql` (`CREATE TABLE
@@ -67,13 +87,18 @@ const FO_PROJECTION_MIN = `
   fo.categories
 `
 
-function buildSavedGrantsListSql(projection) {
+// Build the list query. When `scopeByProfile` is true we add the profile
+// filter (the active profile's rows plus legacy '' rows); otherwise we return
+// every saved row for the user (admin / no-profile clients).
+function buildSavedGrantsListSql(projection, scopeByProfile) {
+  const profileClause = scopeByProfile ? "AND (sg.profile_id = ? OR sg.profile_id = '')" : ''
   return `
-    SELECT sg.opportunity_id, sg.saved_at, sg.notes,
+    SELECT sg.opportunity_id, sg.profile_id, sg.saved_at, sg.notes,
            ${projection}
     FROM saved_grants sg
     LEFT JOIN funding_opportunities fo ON fo.id = sg.opportunity_id
     WHERE sg.user_id = ?
+    ${profileClause}
     ORDER BY sg.saved_at DESC
     LIMIT 500
   `
@@ -87,9 +112,18 @@ router.get('/', async (req, res) => {
     if (!userId) return res.status(401).json({ error: 'Authentication required' })
     await ensureSavedGrantsSchema(req.db)
 
+    const profileId = readProfileId(req.query.profile_id)
+    if (profileId) {
+      const canAccess = await ensureProfileAccess(req, res, profileId)
+      if (!canAccess) return
+    }
+    const params = profileId ? [userId, profileId] : [userId]
+
     let userRows
     try {
-      userRows = await req.db.prepare(buildSavedGrantsListSql(FO_PROJECTION_FULL)).all(userId)
+      userRows = await req.db
+        .prepare(buildSavedGrantsListSql(FO_PROJECTION_FULL, Boolean(profileId)))
+        .all(...params)
     } catch (selectErr) {
       // Schema drift recovery: a missing column on funding_opportunities (e.g.
       // a Postgres instance that hasn't received a recent migration) must NOT
@@ -103,7 +137,9 @@ router.get('/', async (req, res) => {
         '[saved-grants] funding_opportunities column drift detected — falling back to minimal projection',
         { error: message, userId },
       )
-      userRows = await req.db.prepare(buildSavedGrantsListSql(FO_PROJECTION_MIN)).all(userId)
+      userRows = await req.db
+        .prepare(buildSavedGrantsListSql(FO_PROJECTION_MIN, Boolean(profileId)))
+        .all(...params)
     }
 
     // Attach canonical trust metadata so saved-grants UI and Anya can explain
@@ -148,13 +184,19 @@ router.post('/', async (req, res) => {
     const { opportunity_id, notes } = req.body ?? {}
     if (!opportunity_id) return res.status(400).json({ error: 'opportunity_id required' })
 
+    const profileId = readProfileId(req.body?.profile_id)
+    if (profileId) {
+      const canAccess = await ensureProfileAccess(req, res, profileId)
+      if (!canAccess) return
+    }
+
     const id = crypto.randomUUID()
     await req.db.prepare(`
-      INSERT INTO saved_grants (id, user_id, opportunity_id, notes)
-      VALUES (?, ?, ?, ?)
-      ON CONFLICT(user_id, opportunity_id) DO UPDATE SET
+      INSERT INTO saved_grants (id, user_id, profile_id, opportunity_id, notes)
+      VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(user_id, profile_id, opportunity_id) DO UPDATE SET
         notes = COALESCE(excluded.notes, saved_grants.notes)
-    `).run(id, userId, opportunity_id, notes ?? null)
+    `).run(id, userId, profileId, opportunity_id, notes ?? null)
 
     res.json({ saved: true, id })
   } catch (err) {
@@ -174,9 +216,17 @@ router.patch('/:opportunityId/notes', async (req, res) => {
     const { notes } = req.body ?? {}
     if (typeof notes !== 'string') return res.status(400).json({ error: 'notes must be a string' })
 
-    const result = await req.db.prepare(`
-      UPDATE saved_grants SET notes = ? WHERE user_id = ? AND opportunity_id = ?
-    `).run(notes, userId, req.params.opportunityId)
+    const profileId = readProfileId(req.body?.profile_id)
+    const clauses = ['user_id = ?', 'opportunity_id = ?']
+    const params = [notes, userId, req.params.opportunityId]
+    if (profileId) {
+      clauses.push('profile_id = ?')
+      params.push(profileId)
+    }
+
+    const result = await req.db
+      .prepare(`UPDATE saved_grants SET notes = ? WHERE ${clauses.join(' AND ')}`)
+      .run(...params)
 
     if (result.changes === 0) return res.status(404).json({ error: 'Saved grant not found' })
     res.json({ updated: true })
@@ -194,9 +244,17 @@ router.delete('/:opportunityId', async (req, res) => {
     if (!userId) return res.status(401).json({ error: 'Authentication required' })
     await ensureSavedGrantsSchema(req.db)
 
-    await req.db.prepare(`
-      DELETE FROM saved_grants WHERE user_id = ? AND opportunity_id = ?
-    `).run(userId, req.params.opportunityId)
+    const profileId = readProfileId(req.query.profile_id)
+    const clauses = ['user_id = ?', 'opportunity_id = ?']
+    const params = [userId, req.params.opportunityId]
+    if (profileId) {
+      clauses.push('profile_id = ?')
+      params.push(profileId)
+    }
+
+    await req.db
+      .prepare(`DELETE FROM saved_grants WHERE ${clauses.join(' AND ')}`)
+      .run(...params)
 
     res.json({ removed: true })
   } catch (err) {
