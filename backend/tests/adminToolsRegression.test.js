@@ -479,7 +479,10 @@ describe('admin schema migration and domain audits', () => {
     expect(source).toContain('<Textarea')
   })
 
-  it('domain audits use prepare-compatible DB clients instead of db.query-only calls', async () => {
+  // runGrantFlowDomainAudits scans the repo from disk, which can exceed the 5s
+  // default under full-suite CPU contention (it passes in ~3s in isolation).
+  // Matches the 60s budget the other repo-scanning tests in this file use.
+  it('domain audits use prepare-compatible DB clients instead of db.query-only calls', { timeout: 60_000 }, async () => {
     const db = makeDb()
     db.exec(`
       CREATE TABLE funding_opportunities (
