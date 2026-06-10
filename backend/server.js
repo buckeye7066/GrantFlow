@@ -12,6 +12,7 @@ const serverLogger = createLogger('server');
 import fs from 'fs';
 import rateLimit from 'express-rate-limit';
 import crypto from 'crypto';
+import { safeTokenEqual } from './utils/safeTokenEqual.js';
 import { db } from './db/index.js';
 
 console.info('[server] Booting backend', {
@@ -1455,8 +1456,8 @@ app.use(async (req, res, next) => {
   if (
     !handled &&
     xAdminToken &&
-    ((expectedAdminToken && xAdminToken === expectedAdminToken) ||
-      (expectedBulkKey && xAdminToken === expectedBulkKey))
+    (safeTokenEqual(xAdminToken, expectedAdminToken) ||
+      safeTokenEqual(xAdminToken, expectedBulkKey))
   ) {
     user = {
       role: 'admin',
@@ -1473,7 +1474,7 @@ app.use(async (req, res, next) => {
   }
 
   // 2. Check X-Anya-Token (autonomous bot)
-  if (!handled && xAnyaToken && process.env.ANYA_API_KEY && xAnyaToken === process.env.ANYA_API_KEY) {
+  if (!handled && xAnyaToken && safeTokenEqual(xAnyaToken, process.env.ANYA_API_KEY)) {
     user = {
       role: 'admin',
       is_admin: true,
@@ -1491,8 +1492,8 @@ app.use(async (req, res, next) => {
       // Accept admin/bulk tokens via Authorization header for frontend/dev compatibility.
       // This does NOT expand the trust boundary; these same tokens are already accepted via X-Admin-Token.
       if (
-        (expectedAdminToken && token === expectedAdminToken) ||
-        (expectedBulkKey && token === expectedBulkKey)
+        safeTokenEqual(token, expectedAdminToken) ||
+        safeTokenEqual(token, expectedBulkKey)
       ) {
         user = {
           role: 'admin',
@@ -1506,7 +1507,7 @@ app.use(async (req, res, next) => {
       }
 
       // Allow the Anya API key to authenticate via Authorization bearer as well.
-      if (!handled && process.env.ANYA_API_KEY && token === process.env.ANYA_API_KEY) {
+      if (!handled && safeTokenEqual(token, process.env.ANYA_API_KEY)) {
         user = {
           role: 'admin',
           is_admin: true,
@@ -1588,7 +1589,7 @@ app.use(async (req, res, next) => {
       }
     }
 
-    if (!handled && token && ADMIN_TOKEN && token === ADMIN_TOKEN) {
+    if (!handled && token && safeTokenEqual(token, ADMIN_TOKEN)) {
       user = {
         role: 'admin',
         is_admin: true,
