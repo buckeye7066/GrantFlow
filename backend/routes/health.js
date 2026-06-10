@@ -10,6 +10,7 @@ import { getPipelineHealth } from '../middleware/pipelineMonitor.js'
 import { MATCHER_VERSION } from '../services/matchEngine.js'
 import { RELEVANCE_RULES } from '../services/relevanceFilterRules.js'
 import { buildMissionHealth } from '../services/missionHealthService.js'
+import { looksUnsafeJwtSecret } from '../config/env.js'
 
 import { createLogger } from '../utils/logger.js'
 const routeLogger = createLogger('route:health')
@@ -73,7 +74,9 @@ function checkJwtSecret() {
   const secret = String(process.env.AUTH_JWT_SECRET || process.env.JWT_SECRET || '').trim()
   if (!isProd) return { ok: true, configured: Boolean(secret) }
   if (!secret) return { ok: false, reason: 'missing_auth_jwt_secret' }
-  if (secret === 'grantflow-dev-secret') return { ok: false, reason: 'insecure_auth_jwt_secret' }
+  // Use the canonical weak-secret detector (config/env.js) so /readyz agrees with
+  // the boot-time gate rather than only catching the single legacy literal.
+  if (looksUnsafeJwtSecret(secret)) return { ok: false, reason: 'insecure_auth_jwt_secret' }
   return { ok: true, configured: true }
 }
 

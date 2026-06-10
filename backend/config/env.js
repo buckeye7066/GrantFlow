@@ -25,7 +25,7 @@ function normalizeMaybeSecret(value) {
   return trimmed || null
 }
 
-function looksUnsafeJwtSecret(value) {
+export function looksUnsafeJwtSecret(value) {
   const v = String(value || '').trim()
   if (!v) return true
   const lowered = v.toLowerCase()

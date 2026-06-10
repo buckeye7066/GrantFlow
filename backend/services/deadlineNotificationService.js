@@ -70,8 +70,199 @@ async function ensureNotificationsTable(db) {
   }
 }
 
+// Application-tracker statuses that are still actively working toward a deadline.
+// grant_applications is a distinct feature from the grants pipeline (see RC-13);
+// its lifecycle is: draft, in_progress, submitted, under_review, awarded, denied,
+// withdrawn. Terminal = awarded / denied / withdrawn.
+const APPLICATION_ACTIVE_STATUSES = ['draft', 'in_progress', 'submitted', 'under_review']
+
 /**
- * Generate deadline-approaching notifications for grants in the pipeline.
+ * Days remaining until a date, normalized to whole days at local midnight.
+ * Returns null when the value can't be parsed.
+ */
+function daysUntil(value) {
+  if (!value) return null
+  const deadline = new Date(value)
+  if (Number.isNaN(deadline.getTime())) return null
+  const today = new Date()
+  today.setHours(0, 0, 0, 0)
+  deadline.setHours(0, 0, 0, 0)
+  return Math.round((deadline - today) / (1000 * 60 * 60 * 24))
+}
+
+/**
+ * Dedup + insert a single deadline notification and fire the email/SMS alert.
+ * Shared by both the pipeline (grants) and application-tracker (grant_applications)
+ * sources so their behavior, dedup, and expiry stay identical.
+ *
+ * @returns {Promise<boolean>} true when a notification was created.
+ */
+async function emitDeadlineNotification(db, isPostgres, { userId, userEmail, userPhone, title, deadline, daysRemaining, data }) {
+  if (!userId) return false
+  const dayLabel = daysRemaining === 1 ? 'tomorrow' : `in ${daysRemaining} days`
+  const notifTitle = `Deadline ${dayLabel}: ${title}`
+
+  // Dedup: one notification per (user, title) per day. The title encodes the
+  // grant/application title and day threshold, making it a reliable dedup key.
+  const dupCheckExpr = isPostgres ? `created_at >= CURRENT_DATE::TIMESTAMP` : `created_at >= date('now')`
+  try {
+    const existing = await db
+      .prepare(
+        `SELECT id FROM notifications
+         WHERE user_id = ?
+           AND type = 'deadline_approaching'
+           AND title = ?
+           AND ${dupCheckExpr}
+         LIMIT 1`,
+      )
+      .get(userId, notifTitle)
+    if (existing) return false
+  } catch (error) {
+    console.warn('[deadlineNotifications] Dedup check failed:', error?.message || error)
+    return false
+  }
+
+  const notifMessage =
+    daysRemaining === 1
+      ? `The deadline for "${title}" is tomorrow. Make sure your application is ready to submit.`
+      : `The deadline for "${title}" is in ${daysRemaining} days (${deadline}). Don't miss it!`
+
+  const expiresAt = isPostgres ? `NOW() + INTERVAL '30 days'` : `datetime('now', '+30 days')`
+
+  try {
+    await db
+      .prepare(
+        `INSERT INTO notifications (id, user_id, type, title, message, data, read, expires_at)
+         VALUES (?, ?, 'deadline_approaching', ?, ?, ?, 0, ${expiresAt})`,
+      )
+      .run(randomUUID(), userId, notifTitle, notifMessage, JSON.stringify(data))
+
+    dispatchDeadlineAlerts(db, {
+      userId,
+      userEmail,
+      userPhone,
+      grantTitle: title,
+      daysRemaining,
+      deadline,
+    }).catch((err) => console.warn('[deadlineNotifications] Email/SMS dispatch failed:', err?.message))
+    return true
+  } catch (error) {
+    console.warn('[deadlineNotifications] Failed to insert notification:', error?.message || error)
+    return false
+  }
+}
+
+/**
+ * Notifications for grants in the discovery→submission pipeline (grants table).
+ */
+async function notifyPipelineDeadlines(db, isPostgres, todayExpr, dateAddFn) {
+  const inStatusPlaceholders = ACTIVE_STATUSES.map(() => '?').join(', ')
+  let candidates = []
+  try {
+    candidates = await db
+      .prepare(
+        `SELECT
+           g.id AS grant_id,
+           g.funding_opportunity_id AS opportunity_id,
+           g.title AS grant_title,
+           fo.title AS opp_title,
+           fo.deadline AS deadline,
+           u.id AS user_id,
+           u.primary_email AS user_email,
+           u.primary_phone AS user_phone
+         FROM grants g
+         JOIN funding_opportunities fo ON fo.id = g.funding_opportunity_id
+         JOIN profiles p ON p.id = g.profile_id
+         JOIN users u ON u.id = p.user_id
+         WHERE g.status IN (${inStatusPlaceholders})
+           AND fo.deadline IS NOT NULL
+           AND fo.deadline >= ${todayExpr}
+           AND fo.deadline <= ${dateAddFn(8)}
+           AND g.profile_id IS NOT NULL
+           AND p.user_id IS NOT NULL`,
+      )
+      .all(...ACTIVE_STATUSES)
+  } catch (error) {
+    console.warn('[deadlineNotifications] Pipeline candidate query failed:', error?.message || error)
+    return 0
+  }
+
+  let created = 0
+  for (const row of candidates) {
+    const daysRemaining = daysUntil(row.deadline)
+    if (daysRemaining === null || !THRESHOLDS_DAYS.includes(daysRemaining)) continue
+    const title = row.opp_title || row.grant_title || 'Grant deadline approaching'
+    const ok = await emitDeadlineNotification(db, isPostgres, {
+      userId: row.user_id,
+      userEmail: row.user_email,
+      userPhone: row.user_phone,
+      title,
+      deadline: row.deadline,
+      daysRemaining,
+      data: { grant_id: row.grant_id, opportunity_id: row.opportunity_id, days_remaining: daysRemaining, deadline: row.deadline },
+    })
+    if (ok) created++
+  }
+  return created
+}
+
+/**
+ * Notifications for the application tracker (grant_applications table). Its
+ * deadline_date was previously unwatched, so users tracking applications got no
+ * deadline alerts. Best-effort: silently no-ops if the table is absent.
+ */
+async function notifyApplicationDeadlines(db, isPostgres, todayExpr, dateAddFn) {
+  const inStatusPlaceholders = APPLICATION_ACTIVE_STATUSES.map(() => '?').join(', ')
+  let candidates = []
+  try {
+    candidates = await db
+      .prepare(
+        `SELECT
+           ga.id AS application_id,
+           ga.opportunity_id AS opportunity_id,
+           ga.grant_name AS grant_name,
+           ga.funder_name AS funder_name,
+           ga.deadline_date AS deadline,
+           u.id AS user_id,
+           u.primary_email AS user_email,
+           u.primary_phone AS user_phone
+         FROM grant_applications ga
+         JOIN users u ON u.id = ga.user_id
+         WHERE ga.status IN (${inStatusPlaceholders})
+           AND ga.deadline_date IS NOT NULL
+           AND ga.deadline_date >= ${todayExpr}
+           AND ga.deadline_date <= ${dateAddFn(8)}
+           AND ga.user_id IS NOT NULL`,
+      )
+      .all(...APPLICATION_ACTIVE_STATUSES)
+  } catch (error) {
+    // grant_applications may not exist on older DBs — non-fatal.
+    console.warn('[deadlineNotifications] Application candidate query skipped:', error?.message || error)
+    return 0
+  }
+
+  let created = 0
+  for (const row of candidates) {
+    const daysRemaining = daysUntil(row.deadline)
+    if (daysRemaining === null || !THRESHOLDS_DAYS.includes(daysRemaining)) continue
+    const title = row.grant_name || (row.funder_name ? `${row.funder_name} application` : 'Application deadline approaching')
+    const ok = await emitDeadlineNotification(db, isPostgres, {
+      userId: row.user_id,
+      userEmail: row.user_email,
+      userPhone: row.user_phone,
+      title,
+      deadline: row.deadline,
+      daysRemaining,
+      data: { application_id: row.application_id, opportunity_id: row.opportunity_id, days_remaining: daysRemaining, deadline: row.deadline },
+    })
+    if (ok) created++
+  }
+  return created
+}
+
+/**
+ * Generate deadline-approaching notifications across BOTH tracking surfaces:
+ * the grants pipeline and the application tracker (grant_applications).
  *
  * @param {object} db - Dialect-aware db handle
  * @returns {{ created: number }}
@@ -91,142 +282,14 @@ export async function generateDeadlineNotifications(db) {
     ? (days) => `CURRENT_DATE + INTERVAL '${days} days'`
     : (days) => `date('now', '+${days} days')`
 
-  // Query: find grants in active stages where the linked opportunity has a deadline
-  // within the next 8 days (covers our 1/3/7-day thresholds with a small buffer).
-  const inStatusPlaceholders = ACTIVE_STATUSES.map(() => '?').join(', ')
-
-  let candidates = []
-  try {
-    candidates = await db
-      .prepare(
-        `SELECT
-           g.id AS grant_id,
-           g.status AS grant_status,
-           g.funding_opportunity_id AS opportunity_id,
-           g.title AS grant_title,
-           fo.title AS opp_title,
-           fo.deadline AS deadline,
-           u.id AS user_id,
-           u.primary_email AS user_email,
-           u.primary_phone AS user_phone,
-           p.id AS profile_id
-         FROM grants g
-         JOIN funding_opportunities fo
-           ON fo.id = g.funding_opportunity_id
-         JOIN profiles p
-           ON p.id = g.profile_id
-         JOIN users u
-           ON u.id = p.user_id
-         WHERE g.status IN (${inStatusPlaceholders})
-           AND fo.deadline IS NOT NULL
-           AND fo.deadline >= ${todayExpr}
-           AND fo.deadline <= ${dateAddFn(8)}
-           AND g.profile_id IS NOT NULL
-           AND p.user_id IS NOT NULL`,
-      )
-      .all(...ACTIVE_STATUSES)
-  } catch (error) {
-    // Best-effort: if the query fails (e.g. missing column), log and return.
-    console.warn('[deadlineNotifications] Candidate query failed:', error?.message || error)
-    return { created: 0 }
-  }
-
-  if (!Array.isArray(candidates) || candidates.length === 0) {
-    log.info('[deadlineNotifications] No approaching deadlines found')
-    return { created: 0 }
-  }
-
-  let created = 0
-
-  for (const row of candidates) {
-    const deadline = row.deadline ? new Date(row.deadline) : null
-    if (!deadline) continue
-
-    const today = new Date()
-    today.setHours(0, 0, 0, 0)
-    deadline.setHours(0, 0, 0, 0)
-    const diffMs = deadline - today
-    const daysRemaining = Math.round(diffMs / (1000 * 60 * 60 * 24))
-
-    // Only notify at exact thresholds.
-    if (!THRESHOLDS_DAYS.includes(daysRemaining)) continue
-
-    const userId = row.user_id
-    const grantId = row.grant_id
-    const oppId = row.opportunity_id
-    const title = row.opp_title || row.grant_title || 'Grant deadline approaching'
-    const threshold = daysRemaining
-
-    // Build notification content first so we can use the title as a dedup key.
-    const dayLabel = threshold === 1 ? 'tomorrow' : `in ${threshold} days`
-    const notifTitle = `Deadline ${dayLabel}: ${title}`
-
-    // Dedup: check if we already sent this exact notification today (same user + title).
-    // The title encodes the grant title and day threshold, making it a reliable dedup key.
-    const dupCheckExpr = isPostgres
-      ? `created_at >= CURRENT_DATE::TIMESTAMP`
-      : `created_at >= date('now')`
-
-    try {
-      const existing = await db
-        .prepare(
-          `SELECT id FROM notifications
-           WHERE user_id = ?
-             AND type = 'deadline_approaching'
-             AND title = ?
-             AND ${dupCheckExpr}
-           LIMIT 1`,
-        )
-        .get(userId, notifTitle)
-
-      if (existing) continue
-    } catch (error) {
-      // Dedup check failed — skip this notification to be safe.
-      console.warn('[deadlineNotifications] Dedup check failed:', error?.message || error)
-      continue
-    }
-    const notifMessage =
-      threshold === 1
-        ? `The deadline for "${title}" is tomorrow. Make sure your application is ready to submit.`
-        : `The deadline for "${title}" is in ${threshold} days (${row.deadline}). Don't miss it!`
-
-    const data = JSON.stringify({
-      grant_id: grantId,
-      opportunity_id: oppId,
-      days_remaining: threshold,
-      deadline: row.deadline,
-    })
-
-    // 30-day expiry (stale notifications auto-clean).
-    const expiresAt = isPostgres
-      ? `NOW() + INTERVAL '30 days'`
-      : `datetime('now', '+30 days')`
-
-    try {
-      await db
-        .prepare(
-          `INSERT INTO notifications (id, user_id, type, title, message, data, read, expires_at)
-           VALUES (?, ?, 'deadline_approaching', ?, ?, ?, 0, ${expiresAt})`,
-        )
-        .run(randomUUID(), userId, notifTitle, notifMessage, data)
-      created++
-
-      // Dispatch email/SMS (best-effort, non-blocking)
-      dispatchDeadlineAlerts(db, {
-        userId,
-        userEmail: row.user_email,
-        userPhone: row.user_phone,
-        grantTitle: title,
-        daysRemaining: threshold,
-        deadline: row.deadline,
-      }).catch((err) => console.warn('[deadlineNotifications] Email/SMS dispatch failed:', err?.message))
-    } catch (error) {
-      console.warn('[deadlineNotifications] Failed to insert notification:', error?.message || error)
-    }
-  }
+  const fromPipeline = await notifyPipelineDeadlines(db, isPostgres, todayExpr, dateAddFn)
+  const fromApplications = await notifyApplicationDeadlines(db, isPostgres, todayExpr, dateAddFn)
+  const created = fromPipeline + fromApplications
 
   if (created > 0) {
-    log.info('[deadlineNotifications] Created notifications', { created })
+    log.info('[deadlineNotifications] Created notifications', { created, fromPipeline, fromApplications })
+  } else {
+    log.info('[deadlineNotifications] No approaching deadlines found')
   }
 
   return { created }
