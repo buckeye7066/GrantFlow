@@ -1,0 +1,332 @@
+/**
+ * connectorIngestService.js
+ *
+ * Profile-driven ingest from the official funding-data connectors that already
+ * ship in backend/src/integrations/ but were never wired into the live crawl:
+ *
+ *   - Grants.gov search2        (no key)   — federal opportunities, eligibility-filtered
+ *   - NIH RePORTER              (no key)   — funded research awards (health/research/edu)
+ *   - SAM.gov Assistance Listings (key)    — full CFDA catalog (~2,400 federal programs)
+ *   - Simpler.Grants.gov        (key)      — modern HHS opportunity API
+ *   - ProPublica Nonprofit Explorer (no key) — real foundations / grantmakers (990 data)
+ *
+ * Mission rules honored (see project_grantflow_goals):
+ *   #1 real opportunities  #2/#3 match the FULL profile  #4 many user types
+ *   #6 local→national sources  #8 avoid zero results
+ *
+ * Design contract:
+ *   - Every connector call is independently try/caught and key-gated. A missing
+ *     API key or a single failing source NEVER aborts the others, and NEVER
+ *     throws out of ingestFromConnectors — it just shows up in the coverage report.
+ *   - Rows are written through upsertFundingOpportunity, so the existing quality
+ *     gate / policy / verification / dedupe all still apply. We add volume at the
+ *     TOP of the funnel and let the established pipeline filter as usual.
+ */
+
+import { fetchOpportunities as fetchNihReporter } from '../src/integrations/nihReporter.js'
+import { fetchAssistanceListings } from '../src/integrations/samAssistanceListings.js'
+import { fetchOpportunities as fetchSimplerGrants } from '../src/integrations/simplerGrants.js'
+import { searchOrganizations, orgToFundingOpportunity } from '../src/integrations/propublica990.js'
+import { fetchGrantsGov, transformGrantsGovOpportunity } from './grantsDotGovCrawler.js'
+import { upsertFundingOpportunity } from './opportunityInserter.js'
+import { createLogger } from '../utils/logger.js'
+
+const log = createLogger('connectorIngestService')
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PROFILE → QUERY PLAN  (the relatability lever)
+//
+// This map is the single most important piece of domain judgment in the file:
+// it translates a GrantFlow profile type into the eligibility/applicant codes
+// each external source understands. Get this right and every source returns
+// programs the profile can actually apply for; get it wrong and you flood the
+// user with irrelevant federal noise.
+//
+// Codes:
+//   ggEligibility    — Grants.gov search2 eligible-applicant codes
+//                      (21=Individuals, 12=501c3 nonprofits, 13=non-501c3,
+//                       05=school districts, 06=public higher-ed, 20=private higher-ed,
+//                       23=small business, 22=other for-profit, 07=tribal gov,
+//                       11=tribal orgs, 00=state, 01=county, 02=city/township,
+//                       04=special district, 25=others, 99=unrestricted)
+//   simplerApplicant — Simpler.Grants.gov applicant_type one_of values
+//   foundationSeeker — whether ProPublica foundation grantmakers are relevant
+//   wantsResearch    — whether NIH RePORTER research awards are relevant
+// ─────────────────────────────────────────────────────────────────────────────
+export const PROFILE_QUERY_MAP = Object.freeze({
+  individual: { ggEligibility: ['21', '25'], simplerApplicant: ['individuals'], foundationSeeker: true, wantsResearch: false },
+  family: { ggEligibility: ['21', '25'], simplerApplicant: ['individuals'], foundationSeeker: true, wantsResearch: false },
+  student: { ggEligibility: ['21', '25'], simplerApplicant: ['individuals'], foundationSeeker: true, wantsResearch: false },
+  high_school_student: { ggEligibility: ['21', '25'], simplerApplicant: ['individuals'], foundationSeeker: true, wantsResearch: false },
+  college_student: { ggEligibility: ['21', '25'], simplerApplicant: ['individuals'], foundationSeeker: true, wantsResearch: false },
+
+  nonprofit: { ggEligibility: ['12', '13', '25'], simplerApplicant: ['nonprofits_501c3', 'nonprofits_non_501c3'], foundationSeeker: true, wantsResearch: true },
+  organization: { ggEligibility: ['12', '13', '25'], simplerApplicant: ['nonprofits_501c3', 'nonprofits_non_501c3'], foundationSeeker: true, wantsResearch: true },
+  church: { ggEligibility: ['12', '13', '25'], simplerApplicant: ['nonprofits_501c3', 'nonprofits_non_501c3'], foundationSeeker: true, wantsResearch: false },
+  ministry: { ggEligibility: ['12', '13', '25'], simplerApplicant: ['nonprofits_501c3', 'nonprofits_non_501c3'], foundationSeeker: true, wantsResearch: false },
+
+  school: { ggEligibility: ['05', '06', '20', '12'], simplerApplicant: ['independent_school_districts', 'public_and_state_institutions_of_higher_education', 'private_institutions_of_higher_education'], foundationSeeker: true, wantsResearch: true },
+  public_school: { ggEligibility: ['05', '06'], simplerApplicant: ['independent_school_districts'], foundationSeeker: true, wantsResearch: false },
+  school_district: { ggEligibility: ['05', '06'], simplerApplicant: ['independent_school_districts'], foundationSeeker: true, wantsResearch: false },
+  teacher: { ggEligibility: ['05', '25'], simplerApplicant: ['independent_school_districts'], foundationSeeker: true, wantsResearch: false },
+
+  business: { ggEligibility: ['23', '22'], simplerApplicant: ['small_businesses', 'for_profit_organizations_other_than_small_businesses'], foundationSeeker: false, wantsResearch: true },
+  small_business: { ggEligibility: ['23', '22'], simplerApplicant: ['small_businesses'], foundationSeeker: false, wantsResearch: true },
+
+  volunteer_fire: { ggEligibility: ['04', '12', '25'], simplerApplicant: ['special_district_governments', 'nonprofits_501c3'], foundationSeeker: true, wantsResearch: false },
+  volunteer_fire_department: { ggEligibility: ['04', '12', '25'], simplerApplicant: ['special_district_governments', 'nonprofits_501c3'], foundationSeeker: true, wantsResearch: false },
+
+  tribal: { ggEligibility: ['07', '11'], simplerApplicant: ['federally_recognized_native_american_tribal_governments', 'other_native_american_tribal_organizations'], foundationSeeker: false, wantsResearch: false },
+  tribal_government: { ggEligibility: ['07', '11'], simplerApplicant: ['federally_recognized_native_american_tribal_governments'], foundationSeeker: false, wantsResearch: false },
+
+  county_government: { ggEligibility: ['01', '04', '00'], simplerApplicant: ['county_governments', 'special_district_governments'], foundationSeeker: false, wantsResearch: false },
+  municipality: { ggEligibility: ['02', '04', '00'], simplerApplicant: ['city_or_township_governments', 'special_district_governments'], foundationSeeker: false, wantsResearch: false },
+  local_government: { ggEligibility: ['01', '02', '04'], simplerApplicant: ['county_governments', 'city_or_township_governments'], foundationSeeker: false, wantsResearch: false },
+  public_agency: { ggEligibility: ['00', '01', '02', '04'], simplerApplicant: ['state_governments', 'county_governments'], foundationSeeker: false, wantsResearch: false },
+  state_local_gov: { ggEligibility: ['00', '01', '02', '04'], simplerApplicant: ['state_governments', 'county_governments', 'city_or_township_governments'], foundationSeeker: false, wantsResearch: false },
+})
+
+// Unknown / unset profile type: cast wide but still avoid pure noise.
+const DEFAULT_PLAN = Object.freeze({
+  ggEligibility: ['99', '25'],
+  simplerApplicant: [],
+  foundationSeeker: true,
+  wantsResearch: false,
+})
+
+/**
+ * Collect a small set of need/topic search terms from anywhere they may live on
+ * the profile. Defensive: tolerates missing sections, arrays, Sets, or strings.
+ *
+ * @returns {string[]} de-duplicated lowercase terms (most specific first)
+ */
+export function collectNeedTerms(profileContext = {}, signals = {}) {
+  const out = []
+  const push = (v) => {
+    if (!v) return
+    const s = String(v).toLowerCase().trim()
+    if (s && s.length >= 3 && s.length <= 60) out.push(s)
+  }
+
+  const profile = profileContext.profile || {}
+  // Explicit needs are the strongest signal.
+  const needs = profile.needs || profileContext.needs
+  if (Array.isArray(needs)) needs.forEach(push)
+  // buildProfileSignals exposes keyword/assistance Sets — fold them in if present.
+  for (const key of ['keywords', 'assistance', 'geographic']) {
+    const v = signals?.[key]
+    if (v instanceof Set) v.forEach(push)
+    else if (Array.isArray(v)) v.forEach(push)
+  }
+  // A couple of free-text profile fields, lightly mined.
+  push(profile.primary_need)
+  push(profile.focus_area)
+
+  // De-dup preserving order.
+  return [...new Set(out)]
+}
+
+/** Resolve the query plan for a profile, merging in derived need terms. */
+export function buildConnectorQueryPlan(profileContext = {}, signals = {}) {
+  const primaryType = String(profileContext.profile?.primary_type || profileContext.primary_type || '')
+    .toLowerCase()
+    .trim()
+  const base = PROFILE_QUERY_MAP[primaryType] || DEFAULT_PLAN
+  const state =
+    profileContext.profile?.state ||
+    profileContext.signals?.location?.state ||
+    signals?.location?.state ||
+    null
+
+  const terms = collectNeedTerms(profileContext, signals)
+
+  return {
+    primaryType: primaryType || 'unknown',
+    state: state ? String(state) : null,
+    terms,
+    ...base,
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Per-source ingest helpers. Each returns a coverage row and never throws.
+// ─────────────────────────────────────────────────────────────────────────────
+
+async function upsertAll(db, opportunities, row, opts = {}) {
+  for (const opp of opportunities) {
+    if (!opp) continue
+    try {
+      const result = await upsertFundingOpportunity(db, opp, opts)
+      if (result?.inserted) row.inserted += 1
+      else if (result?.updated) row.updated += 1
+      else row.skipped += 1
+    } catch (err) {
+      row.skipped += 1
+      row.lastError = err?.message || String(err)
+    }
+  }
+}
+
+async function ingestGrantsGov(db, plan, limits, row) {
+  // One eligibility-filtered query per need term, plus one broad eligibility-only
+  // query so a sparse profile still gets the right slice of the federal pool.
+  const queries = [...plan.terms.slice(0, limits.maxTerms), '']
+  for (const keyword of queries) {
+    const data = await fetchGrantsGov({
+      keyword,
+      eligibilities: plan.ggEligibility,
+      rows: limits.rowsPerQuery,
+    })
+    const hits = Array.isArray(data?.oppHits) ? data.oppHits : []
+    row.fetched += hits.length
+    const transformed = hits
+      .filter((o) => !['closed', 'archived'].includes(String(o?.oppStatus || '').toLowerCase()))
+      .map((o) => ({
+        ...transformGrantsGovOpportunity(o),
+        record_origin: 'funding_api',
+      }))
+    await upsertAll(db, transformed, row)
+    await sleep(limits.delayMs)
+  }
+}
+
+async function ingestSimplerGrants(db, plan, limits, row) {
+  const filters = {
+    opportunity_status: { one_of: ['posted', 'forecasted'] },
+    ...(plan.simplerApplicant.length ? { applicant_type: { one_of: plan.simplerApplicant } } : {}),
+  }
+  const queries = plan.terms.slice(0, limits.maxTerms)
+  if (queries.length === 0) queries.push('')
+  for (const q of queries) {
+    const { opportunities } = await fetchSimplerGrants({
+      query: q || undefined,
+      queryOperator: q ? 'AND' : undefined,
+      pageSize: limits.rowsPerQuery,
+      filters,
+    })
+    row.fetched += opportunities.length
+    await upsertAll(db, opportunities, row)
+    await sleep(limits.delayMs)
+  }
+}
+
+async function ingestSamListings(db, plan, limits, row) {
+  const queries = plan.terms.slice(0, limits.maxTerms)
+  if (queries.length === 0) queries.push('')
+  for (const keyword of queries) {
+    const { opportunities } = await fetchAssistanceListings({
+      keyword: keyword || undefined,
+      assistanceType: 'grant',
+      limit: limits.rowsPerQuery,
+    })
+    row.fetched += opportunities.length
+    // Assistance listings are programs (not dated postings) — allow directories.
+    await upsertAll(db, opportunities, row, { allowDirectories: true })
+    await sleep(limits.delayMs)
+  }
+}
+
+async function ingestNihReporter(db, plan, limits, row) {
+  const queries = plan.terms.slice(0, limits.maxTerms)
+  if (queries.length === 0) return // never run a blank NIH sweep — pure noise
+  for (const text of queries) {
+    const opportunities = await fetchNihReporter({ text, limit: limits.rowsPerQuery })
+    row.fetched += opportunities.length
+    await upsertAll(db, opportunities, row, { allowDirectories: true })
+    await sleep(limits.delayMs)
+  }
+}
+
+async function ingestFoundations(db, plan, limits, row) {
+  // Surface real grantmakers (501c3 foundations) near the profile, by need.
+  const queries = plan.terms.slice(0, limits.maxTerms)
+  if (queries.length === 0) return
+  for (const q of queries) {
+    const { organizations } = await searchOrganizations({
+      q,
+      ...(plan.state ? { state: String(plan.state).slice(0, 2) } : {}),
+      c_code: '3', // 501(c)(3)
+    })
+    // Keep only orgs that actually pay grants — a recipient charity is not a funder.
+    const funders = organizations.filter((o) => Number(o.grant_amount) > 0)
+    row.fetched += funders.length
+    const opps = funders.map(orgToFundingOpportunity)
+    await upsertAll(db, opps, row, { allowDirectories: true })
+    await sleep(limits.delayMs)
+  }
+}
+
+const SOURCES = [
+  { key: 'grants.gov', run: ingestGrantsGov, gate: () => true },
+  { key: 'simpler.grants.gov', run: ingestSimplerGrants, gate: () => Boolean(process.env.SIMPLER_GRANTS_API_KEY) },
+  { key: 'sam.assistance', run: ingestSamListings, gate: () => Boolean(process.env.SAM_GOV_PUBLIC_API_KEY) },
+  { key: 'nih.reporter', run: ingestNihReporter, gate: (plan) => plan.wantsResearch },
+  { key: 'propublica.990', run: ingestFoundations, gate: (plan) => plan.foundationSeeker },
+]
+
+/**
+ * Run profile-driven ingest across every connector.
+ *
+ * @param {Object} args
+ * @param {Object} args.db                 - DB handle (sqlite or pg shim)
+ * @param {Object} args.profileContext     - { profile, sections, signals, ... }
+ * @param {Object} [args.signals]          - buildProfileSignals() output (optional)
+ * @param {Object} [args.limits]
+ * @param {number} [args.limits.maxTerms=4]      - need terms used per source
+ * @param {number} [args.limits.rowsPerQuery=25] - rows requested per query
+ * @param {number} [args.limits.delayMs=300]     - politeness delay between calls
+ * @returns {Promise<{ plan: Object, coverage: Array, totals: Object }>}
+ */
+export async function ingestFromConnectors({ db, profileContext = {}, signals = {}, limits = {} } = {}) {
+  if (!db) throw new Error('ingestFromConnectors requires a db handle')
+
+  const effLimits = {
+    maxTerms: Number.isFinite(limits.maxTerms) ? limits.maxTerms : 4,
+    rowsPerQuery: Number.isFinite(limits.rowsPerQuery) ? limits.rowsPerQuery : 25,
+    delayMs: Number.isFinite(limits.delayMs) ? limits.delayMs : 300,
+  }
+
+  const plan = buildConnectorQueryPlan(profileContext, signals)
+  log.info('[connectorIngest] plan', {
+    primaryType: plan.primaryType,
+    state: plan.state,
+    terms: plan.terms.slice(0, effLimits.maxTerms),
+    ggEligibility: plan.ggEligibility,
+  })
+
+  const coverage = []
+  for (const source of SOURCES) {
+    const row = { source: source.key, fetched: 0, inserted: 0, updated: 0, skipped: 0, status: 'ok' }
+    if (!source.gate(plan)) {
+      row.status = source.key === 'nih.reporter' || source.key === 'propublica.990' ? 'not_applicable' : 'no_api_key'
+      coverage.push(row)
+      continue
+    }
+    try {
+      await source.run(db, plan, effLimits, row)
+    } catch (err) {
+      // MISSING_API_KEY and transient failures land here — recorded, never fatal.
+      row.status = err?.code === 'MISSING_API_KEY' ? 'no_api_key' : 'error'
+      row.lastError = err?.message || String(err)
+      log.warn(`[connectorIngest] ${source.key} failed: ${row.lastError}`)
+    }
+    coverage.push(row)
+  }
+
+  const totals = coverage.reduce(
+    (acc, r) => ({
+      fetched: acc.fetched + r.fetched,
+      inserted: acc.inserted + r.inserted,
+      updated: acc.updated + r.updated,
+      skipped: acc.skipped + r.skipped,
+    }),
+    { fetched: 0, inserted: 0, updated: 0, skipped: 0 },
+  )
+
+  log.info('[connectorIngest] complete', { totals, coverage })
+  return { plan, coverage, totals }
+}
+
+export default { ingestFromConnectors, buildConnectorQueryPlan, collectNeedTerms, PROFILE_QUERY_MAP }

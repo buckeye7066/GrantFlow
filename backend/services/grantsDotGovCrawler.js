@@ -34,6 +34,7 @@ export async function fetchGrantsGov(params = {}) {
     rows = 25,
     startRow = 0,
     fundingCategories = null, // Array of category codes
+    eligibilities = null, // Array of Grants.gov eligible-applicant codes (e.g. '21' individuals, '12' 501c3)
   } = params;
 
   const payload = {
@@ -43,6 +44,9 @@ export async function fetchGrantsGov(params = {}) {
     startRecordNum: Number(startRow) || 0,
     agencies: '',
     fundingCategories: Array.isArray(fundingCategories) ? fundingCategories.join('|') : '',
+    // Eligible-applicant filter is the single biggest relatability lever: it narrows
+    // the federal pool to programs this profile type can actually apply for.
+    eligibilities: Array.isArray(eligibilities) ? eligibilities.join('|') : '',
     aln: '',
     oppNum: '',
   };
