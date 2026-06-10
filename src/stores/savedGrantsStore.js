@@ -1,11 +1,29 @@
 import { create } from 'zustand'
 import { apiFetch } from '@/api/client'
+import client from '@/api/client'
 
-const STORAGE_KEY = 'grantflow:saved-grants'
+// localStorage cache key. Note: per-user/per-profile partitioning is enforced
+// SERVER-side now (RC-14). We keep a single client cache but namespace it by
+// the active profile id so reload-while-switched doesn't show another
+// profile's saved IDs for a frame.
+const STORAGE_KEY_BASE = 'grantflow:saved-grants'
+
+function activeProfileId() {
+  try {
+    return client?.getActiveProfileId?.() || null
+  } catch {
+    return null
+  }
+}
+
+function storageKey() {
+  const pid = activeProfileId()
+  return pid ? `${STORAGE_KEY_BASE}:profile:${pid}` : STORAGE_KEY_BASE
+}
 
 function loadFromStorage() {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY)
+    const raw = localStorage.getItem(storageKey())
     if (!raw) return []
     const parsed = JSON.parse(raw)
     return Array.isArray(parsed) ? parsed : []
@@ -16,7 +34,7 @@ function loadFromStorage() {
 
 function saveToStorage(ids) {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(ids))
+    localStorage.setItem(storageKey(), JSON.stringify(ids))
   } catch { /* ignore */ }
 }
 
@@ -26,15 +44,22 @@ export const useSavedGrantsStore = create((set, get) => ({
   notesMap: {},
   synced: false,
 
-  /** Fetch saved IDs from backend and merge with localStorage cache */
+  /** Fetch saved IDs from backend (scoped server-side by active profile) and merge with localStorage cache */
   async sync() {
     try {
+      // apiFetch automatically attaches the X-Profile-Id header from the
+      // shared client. The backend uses that to filter saved_grants by
+      // (user, profile-or-NULL), so no extra param is needed here.
       const res = await apiFetch('/api/saved-grants')
       const backendIds = res?.ids ?? []
       const localIds = get().savedIds
 
-      // Merge: anything in local but not backend gets pushed up
-      const toUpload = localIds.filter((id) => !backendIds.includes(id))
+      // Merge: anything in local but not backend gets pushed up.
+      // POSTs only succeed when an active profile is set; if not, the
+      // backend returns 400 and we just keep the local cache. We never
+      // silently overwrite another profile's data.
+      const pid = activeProfileId()
+      const toUpload = pid ? localIds.filter((id) => !backendIds.includes(id)) : []
       await Promise.all(
         toUpload.map((id) =>
           apiFetch('/api/saved-grants', {
@@ -44,8 +69,12 @@ export const useSavedGrantsStore = create((set, get) => ({
         )
       )
 
-      // Final set = union of both
-      const merged = [...new Set([...backendIds, ...localIds])]
+      // Final set = union of both (only if we successfully sent uploads or
+      // we already had backend rows — avoids accidentally promoting a stale
+      // local cache built under a different profile).
+      const merged = pid
+        ? [...new Set([...backendIds, ...localIds])]
+        : backendIds
       saveToStorage(merged)
       // Build notes map from backend response
       const notes = {}
@@ -59,13 +88,24 @@ export const useSavedGrantsStore = create((set, get) => ({
     }
   },
 
+  /**
+   * Reload from backend after the active profile changes. Clears the in-memory
+   * cache so we never display the previous profile's saved set for a frame.
+   */
+  async resyncForProfile() {
+    set({ savedIds: loadFromStorage(), notesMap: {}, synced: false })
+    await get().sync()
+  },
+
   saveGrant(id) {
     const current = get().savedIds
     if (current.includes(id)) return
     const next = [...current, id]
     saveToStorage(next)
     set({ savedIds: next })
-    // Fire-and-forget backend save
+    // Fire-and-forget backend save (X-Profile-Id auto-attached by client).
+    // The backend rejects with 400 if no active profile is set, in which case
+    // the local cache still tracks the intent and the next sync will retry.
     apiFetch('/api/saved-grants', {
       method: 'POST',
       body: JSON.stringify({ opportunity_id: id }),
@@ -76,7 +116,8 @@ export const useSavedGrantsStore = create((set, get) => ({
     const next = get().savedIds.filter((s) => s !== id)
     saveToStorage(next)
     set({ savedIds: next })
-    // Fire-and-forget backend delete
+    // Fire-and-forget backend delete (server scopes to the active profile +
+    // any legacy NULL row, leaving other profiles' explicit saves intact).
     apiFetch(`/api/saved-grants/${encodeURIComponent(id)}`, {
       method: 'DELETE',
     }).catch(() => {})

@@ -635,16 +635,31 @@ CREATE TABLE IF NOT EXISTS users (
   metadata TEXT
 );
 
+-- saved_grants: profile-scoped favorites/bookmarks. Each user can save the
+-- same opportunity independently under each of their profiles. Legacy rows
+-- created before migration 075 keep profile_id=NULL and are visible to all
+-- of that user's profiles (read-only fallback). New saves always carry a
+-- non-null profile_id.
 CREATE TABLE IF NOT EXISTS saved_grants (
   id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
   user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  profile_id TEXT REFERENCES profiles(id) ON DELETE CASCADE,
   opportunity_id TEXT NOT NULL,
   saved_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-  notes TEXT DEFAULT NULL,
-  UNIQUE(user_id, opportunity_id)
+  notes TEXT DEFAULT NULL
 );
+-- Per-profile uniqueness for new saves; partial so legacy NULL rows are
+-- preserved and don't conflict.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_saved_grants_user_profile_opp
+  ON saved_grants(user_id, profile_id, opportunity_id)
+  WHERE profile_id IS NOT NULL;
+-- Legacy uniqueness: at most one NULL-profile row per (user, opportunity).
+CREATE UNIQUE INDEX IF NOT EXISTS uq_saved_grants_user_legacy_opp
+  ON saved_grants(user_id, opportunity_id)
+  WHERE profile_id IS NULL;
 CREATE INDEX IF NOT EXISTS idx_saved_grants_user_id ON saved_grants(user_id);
 CREATE INDEX IF NOT EXISTS idx_saved_grants_opportunity_id ON saved_grants(opportunity_id);
+CREATE INDEX IF NOT EXISTS idx_saved_grants_profile_id ON saved_grants(profile_id);
 
 -- vNext fine-grained audit events (before/after snapshots for state transitions, tasks, scoring, etc.)
 CREATE TABLE IF NOT EXISTS audit_events (

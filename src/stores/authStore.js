@@ -926,6 +926,19 @@ export const useAuthStore = create((set, get) => ({
         console.warn('[authStore] failed to clear profile-scoped storage on profile switch:', err?.message || err)
       }
       evictProfileQueries(prev)
+      // Saved-grants are profile-scoped server-side (RC-14). Re-fetch from
+      // the backend with the new X-Profile-Id so the client cache reflects
+      // this profile's saves rather than the previous profile's.
+      try {
+        // Lazy import: savedGrantsStore lives in the same dir but importing it
+        // statically would create a cycle (it imports the api client which
+        // ultimately reads from authStore). Resolve via dynamic import.
+        import('./savedGrantsStore.js')
+          .then(({ useSavedGrantsStore }) => {
+            useSavedGrantsStore.getState().resyncForProfile?.()
+          })
+          .catch(() => {})
+      } catch { /* ignore */ }
     }
   },
 
