@@ -1018,6 +1018,116 @@ export const STATE_REGISTRY = {
     housingUrl: 'https://www.wyomingcda.com/',
     housingName: 'Wyoming Community Development Authority',
   },
+
+  // Tennessee and West Virginia also have dedicated rich data files
+  // (states/TN.js, states/WV.js) that take precedence in loadStateData. These
+  // registry entries make them part of the canonical enumeration
+  // (isStateInRegistry), portal checks, and the baseline-generation fallback —
+  // so all 50 states + DC are now registry-enumerated.
+  TN: {
+    name: 'Tennessee',
+    benefitsPortal: 'https://faonlineapp.dhs.tn.gov/',
+    benefitsPortalName: 'TN DHS Family Assistance',
+    dhsPhone: '1-866-311-4287',
+    tanfName: 'Families First',
+    medicaidName: 'TennCare',
+    medicaidUrl: 'https://tenncareconnect.tn.gov/',
+    medicaidExpanded: false,
+    hcbsWaiver: {
+      name: 'Employment and Community First CHOICES (ECF CHOICES)',
+      description: 'Tennessee Medicaid program providing employment and community-based services for people with intellectual and developmental disabilities, with a strong focus on integrated, competitive employment and independent living.',
+      url: 'https://www.tn.gov/tenncare/long-term-services-supports/employment-and-community-first-choices.html',
+      agencyName: 'Tennessee Department of Disability and Aging (DDA)',
+      agencyUrl: 'https://www.tn.gov/disability-and-aging.html',
+    },
+    housingUrl: 'https://thda.org/',
+    housingName: 'Tennessee Housing Development Agency',
+  },
+  WV: {
+    name: 'West Virginia',
+    benefitsPortal: 'https://www.wvpath.wv.gov/',
+    benefitsPortalName: 'WV PATH',
+    dhsPhone: '1-877-716-1212',
+    tanfName: 'WV WORKS',
+    medicaidName: 'West Virginia Medicaid',
+    medicaidUrl: 'https://dhhr.wv.gov/bms/Pages/default.aspx',
+    medicaidExpanded: true,
+    hcbsWaiver: {
+      name: 'I/DD Waiver Program',
+      description: 'West Virginia Medicaid Home and Community-Based Services waiver for individuals with intellectual and developmental disabilities, providing residential, day, and supported-employment services.',
+      url: 'https://dhhr.wv.gov/bms/Members/WaiverPrograms/IDDW/Pages/default.aspx',
+      agencyName: 'WV Bureau for Medical Services — I/DD Waiver Program',
+      agencyUrl: 'https://dhhr.wv.gov/bms/',
+    },
+    housingUrl: 'https://www.wvhdf.com/',
+    housingName: 'West Virginia Housing Development Fund',
+  },
 };
+
+// Vocational Rehabilitation agency URLs for every state + DC. Maintained as a
+// single map (rather than editing 51 entries) and merged into the registry
+// below, so stateBase.js emits the voc-rehab program for ALL states — it was
+// previously dropped everywhere because vocRehabUrl was unset. These are the
+// federally mandated state VR agencies (Rehabilitation Act of 1973; one
+// designated agency per state). The link-verification service marks any URL
+// drift as broken, so a user never sees a dead link.
+const VOC_REHAB_URLS = {
+  AL: 'https://rehab.alabama.gov/',
+  AK: 'https://labor.alaska.gov/dvr/',
+  AZ: 'https://des.az.gov/services/disabilities/vocational-rehabilitation',
+  AR: 'https://arcareereducation.org/programs/arkansas-rehabilitation-services',
+  CA: 'https://www.dor.ca.gov/',
+  CO: 'https://dvr.colorado.gov/',
+  CT: 'https://portal.ct.gov/aes',
+  DE: 'https://dvr.delawareworks.com/',
+  DC: 'https://dds.dc.gov/page/rehabilitation-services-administration-rsa',
+  FL: 'https://www.rehabworks.org/',
+  GA: 'https://gvs.georgia.gov/',
+  HI: 'https://humanservices.hawaii.gov/vr/',
+  ID: 'https://vr.idaho.gov/',
+  IL: 'https://www.dhs.state.il.us/page.aspx?item=29736',
+  IN: 'https://www.in.gov/fssa/ddrs/vocational-rehabilitation/',
+  IA: 'https://ivrs.iowa.gov/',
+  KS: 'https://www.dcf.ks.gov/services/RS/Pages/Vocational-Rehabilitation.aspx',
+  KY: 'https://kcc.ky.gov/Vocational-Rehabilitation/Pages/default.aspx',
+  LA: 'https://www.lrs.la.gov/',
+  ME: 'https://www.maine.gov/rehab/',
+  MD: 'https://dors.maryland.gov/',
+  MA: 'https://www.mass.gov/orgs/massachusetts-rehabilitation-commission',
+  MI: 'https://www.michigan.gov/leo/bureaus-agencies/mrs',
+  MN: 'https://mn.gov/deed/job-seekers/disabilities/vr/',
+  MS: 'https://www.mdrs.ms.gov/',
+  MO: 'https://dese.mo.gov/adult-learning-rehabilitation-services/vocational-rehabilitation',
+  MT: 'https://dphhs.mt.gov/detd/vocrehab',
+  NE: 'https://www.vr.nebraska.gov/',
+  NV: 'https://detr.nv.gov/page/Rehabilitation',
+  NH: 'https://www.education.nh.gov/who-we-are/division-of-workforce-innovation/bureau-of-vocational-rehabilitation',
+  NJ: 'https://www.nj.gov/labor/career-services/special-services/individuals-with-disabilities/',
+  NM: 'https://www.dvr.state.nm.us/',
+  NY: 'https://www.acces.nysed.gov/vr',
+  NC: 'https://www.ncdhhs.gov/divisions/vocational-rehabilitation-services',
+  ND: 'https://www.hhs.nd.gov/vocational-rehabilitation',
+  OH: 'https://ood.ohio.gov/',
+  OK: 'https://oklahoma.gov/okdrs.html',
+  OR: 'https://www.oregon.gov/odhs/providers-partners/vr/Pages/default.aspx',
+  PA: 'https://www.pa.gov/agencies/dli/programs-services/vocational-rehabilitation.html',
+  RI: 'https://ors.ri.gov/',
+  SC: 'https://scvrd.net/',
+  SD: 'https://dhs.sd.gov/rehabservices/',
+  TN: 'https://www.tn.gov/humanservices/ds/vocational-rehabilitation.html',
+  TX: 'https://www.twc.texas.gov/programs/vocational-rehabilitation',
+  UT: 'https://jobs.utah.gov/usor/vr/',
+  VT: 'https://vr.vermont.gov/',
+  VA: 'https://www.dars.virginia.gov/',
+  WA: 'https://www.dshs.wa.gov/dvr',
+  WV: 'https://wvdrs.org/',
+  WI: 'https://dwd.wisconsin.gov/dvr/',
+  WY: 'https://dws.wyo.gov/dws-division/vocational-rehabilitation/',
+};
+
+for (const [code, url] of Object.entries(VOC_REHAB_URLS)) {
+  const entry = STATE_REGISTRY[code];
+  if (entry && !entry.vocRehabUrl) entry.vocRehabUrl = url;
+}
 
 export default STATE_REGISTRY;
