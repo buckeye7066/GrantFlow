@@ -27,6 +27,8 @@ import {
   canonicalStage,
   isAcceptedStage,
   stageOrder,
+  applicationStatusToStage,
+  APPLICATION_STATUS_TO_STAGE,
 } from '../../shared/pipelineStages.js'
 import { GRANT_STATUSES, GRANT_STATUSES_CANONICAL } from '../../backend/config/constants.js'
 import { APPLICATION_STATES } from '../../backend/services/applicationWorkflow.js'
@@ -202,4 +204,26 @@ test('SQLite migration 076 is idempotent (re-run is a no-op)', async () => {
   } finally {
     db.close()
   }
+})
+
+test('applicationStatusToStage: reconciles application-tracker statuses onto canonical pipeline stages (goal #10)', () => {
+  // Every application-tracker status maps to a real canonical stage.
+  for (const [appStatus, stage] of Object.entries(APPLICATION_STATUS_TO_STAGE)) {
+    assert.ok(PIPELINE_STAGES.includes(stage), `${appStatus} -> ${stage} must be a canonical stage`)
+    assert.equal(applicationStatusToStage(appStatus), stage)
+  }
+  // The full grant_applications lifecycle is covered (no app status maps to null).
+  for (const s of ['draft', 'in_progress', 'submitted', 'under_review', 'awarded', 'denied', 'withdrawn']) {
+    assert.ok(applicationStatusToStage(s), `application status ${s} must reconcile to a stage`)
+  }
+  // under_review means post-submission for an application → follow_up (NOT the
+  // pipeline alias's 'submitted'), so the unified view shows it after submission.
+  assert.equal(applicationStatusToStage('under_review'), 'follow_up')
+  // Falls back to the pipeline resolver for grants/vnext/apply-engine statuses.
+  assert.equal(applicationStatusToStage('interested'), 'interested')
+  assert.equal(applicationStatusToStage('discovery'), 'discovered')
+  // Unknown / empty → null so callers bucket as "Other".
+  assert.equal(applicationStatusToStage('totally_unknown'), null)
+  assert.equal(applicationStatusToStage(''), null)
+  assert.equal(applicationStatusToStage(null), null)
 })

@@ -169,6 +169,9 @@ test('profiles applications/all: returns linked application rows without 500', a
     assert.equal(response.json?.count, 1)
     assert.equal(response.json?.applications?.[0]?.id, appId)
     assert.equal(response.json?.applications?.[0]?.source_table, 'grant_applications')
+    // Cohesion (goal #10): the unified view reconciles every tracked item onto
+    // one canonical pipeline stage. A 'submitted' application → 'submitted'.
+    assert.equal(response.json?.applications?.[0]?.canonical_stage, 'submitted')
   } finally {
     await srv.stop()
   }

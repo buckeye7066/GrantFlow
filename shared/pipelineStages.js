@@ -116,3 +116,43 @@ export function stageOrder(stage) {
   if (!c) return -1
   return PIPELINE_STAGES.indexOf(c)
 }
+
+// ── Application tracker ↔ pipeline reconciliation ─────────────────────────
+//
+// The application tracker (grant_applications) is a DISTINCT feature from the
+// opportunity pipeline (grants) — it tracks the formal application-execution
+// lifecycle, not opportunity assessment. The two are intentionally separate, but
+// for a coherent discovery→action view (mission goal #10) every tracked item
+// should report a position on ONE canonical lifecycle. This maps the application
+// statuses (draft/in_progress/submitted/under_review/awarded/denied/withdrawn)
+// onto the canonical pipeline stages — a READ-side reconciliation only; it does
+// NOT change what the application tracker stores (no lossy migration).
+export const APPLICATION_STATUS_TO_STAGE = Object.freeze({
+  draft: 'drafting',
+  in_progress: 'drafting',
+  submitted: 'submitted',
+  under_review: 'follow_up',
+  awarded: 'awarded',
+  denied: 'declined',
+  withdrawn: 'archived',
+})
+
+/**
+ * Reconcile any tracked-item status to a canonical pipeline stage for unified
+ * display/reporting. Tries the application-status map first (its `under_review`
+ * means "post-submission", → follow_up), then falls back to the pipeline
+ * canonicalStage resolver (covers grants/vnext/apply-engine statuses). Returns
+ * null for unknown values so callers can bucket them as "Other".
+ *
+ * @param {string|null|undefined} status
+ * @returns {string|null} canonical pipeline stage
+ */
+export function applicationStatusToStage(status) {
+  if (status === null || status === undefined) return null
+  const v = String(status).toLowerCase().trim()
+  if (!v) return null
+  if (Object.prototype.hasOwnProperty.call(APPLICATION_STATUS_TO_STAGE, v)) {
+    return APPLICATION_STATUS_TO_STAGE[v]
+  }
+  return canonicalStage(v)
+}
