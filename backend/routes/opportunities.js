@@ -1467,6 +1467,7 @@ router.post('/bulk', async (req, res) => {
         updated_at = CURRENT_TIMESTAMP
     `;
 
+    const skipped = [];
     const imported = await req.db.withTransaction(async (tx) => {
       const insertStmt = tx.prepare(upsertSql);
       let count = 0;
@@ -1477,8 +1478,11 @@ router.post('/bulk', async (req, res) => {
             const validated = validateFundingTerms(newOpp);
             newOpp.requires_match = validated.requires_match;
             newOpp.match_percentage = validated.match_percentage;
-          } catch {
-            // Ignore validation errors for bulk import to avoid disruption; flagged via compliance status later.
+          } catch (err) {
+            // Do NOT silently insert a row with invalid funding terms — skip it
+            // and report why, instead of swallowing the error and writing it anyway.
+            skipped.push({ title: newOpp.title ?? 'untitled', reason: err.message });
+            continue;
           }
         }
         const id = newOpp.id || crypto.randomUUID();
@@ -1511,7 +1515,12 @@ router.post('/bulk', async (req, res) => {
     res.json({
       success: true,
       imported,
-      message: `Imported ${imported} opportunities`,
+      skipped: skipped.length,
+      skipped_details: skipped.slice(0, 50),
+      message:
+        skipped.length > 0
+          ? `Imported ${imported} opportunities; skipped ${skipped.length} with invalid funding terms.`
+          : `Imported ${imported} opportunities`,
     });
   } catch (error) {
     console.error('Error bulk importing opportunities:', error);
