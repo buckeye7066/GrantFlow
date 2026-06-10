@@ -10,6 +10,7 @@ import {
 import { saveToProfilePipeline } from './opportunityMatcher.js'
 import { runNationalZipCrawl } from './crawlers/nationalZipCrawler.js'
 import { runDomainCorpusCrawl } from './crawlers/domainCorpusCrawler.js'
+import { ingestFromConnectors } from './connectorIngestService.js'
 import { trustedOriginClause, trustedSourceClause } from '../utils/recordOrigins.js'
 import { createLogger } from '../utils/logger.js'
 const log = createLogger('comprehensiveCrawlerOptimized')
@@ -510,7 +511,23 @@ export async function runComprehensiveCrawler(contextOrDb, profileContextArg = {
   
   log.info('[comprehensiveCrawler] Profile signals:', summarizeProfileSignals(signals))
   log.info('[comprehensiveCrawler] Profile state:', profileState)
-  
+
+  // Phase: profile-driven connector ingest. Pulls fresh, eligibility-matched rows
+  // from Grants.gov / Simpler.Grants.gov / SAM Assistance Listings / NIH RePORTER /
+  // ProPublica foundations into funding_opportunities BEFORE we query the DB below,
+  // so this profile's matches draw from a pool sized to its actual eligibility
+  // rather than a generic federal dump. Fully isolated: any failure is logged and
+  // the established crawl continues unchanged. Opt out with INGEST_CONNECTORS=off.
+  let connectorIngest = null
+  if (db && String(process.env.INGEST_CONNECTORS || 'on').toLowerCase() !== 'off') {
+    try {
+      connectorIngest = await ingestFromConnectors({ db, profileContext, signals })
+      log.info('[comprehensiveCrawler] Connector ingest totals:', connectorIngest.totals)
+    } catch (ingestErr) {
+      console.warn('[comprehensiveCrawler] Connector ingest phase failed (continuing):', ingestErr?.message || ingestErr)
+    }
+  }
+
   // Load real opportunities
   const realOpps = loadRealOpportunities()
   log.info(`[comprehensiveCrawler] Loaded ${realOpps.length} real opportunities`)
