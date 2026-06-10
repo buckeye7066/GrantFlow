@@ -52,7 +52,19 @@ function hostnameOf(u) {
 // Harvard Off-Campus Housing) to flap red on every CI run after they
 // started bot-blocking AWS IPs in May 2026, even though every URL is
 // confirmed-live in a browser.
-const ALIVE_BUT_BLOCKED_STATUSES = new Set([401, 403, 405, 407, 429, 451])
+//
+// 520-525 + 530 are Cloudflare-specific codes meaning "edge is up, origin
+// misbehaved" (520 unknown origin error, 521 origin down, 522 timeout,
+// 523 origin unreachable, 524 timeout reading body, 525 SSL handshake,
+// 530 generic gateway error). These were a CI flake on Jun-2026 PR #505:
+// utc.edu (Cloudflare-fronted) returned 520 to GitHub-Actions runners
+// while the URLs were live in any browser. None of these codes prove the
+// URL in our registry is dead — only 404/410 do — so they belong here
+// next to 403/429 rather than failing the suite.
+const ALIVE_BUT_BLOCKED_STATUSES = new Set([
+  401, 403, 405, 407, 429, 451,
+  520, 521, 522, 523, 524, 525, 530,
+])
 // Status codes that prove the URL is dead.
 const DEFINITELY_DEAD_STATUSES = new Set([404, 410])
 

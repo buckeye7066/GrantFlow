@@ -115,42 +115,27 @@ export const CRAWLER_JOB_STATUSES = [
 ]
 
 // Grant (pipeline) statuses — single source of truth for status validation.
+//
+// RC-13 (PR #505): canonicalised through shared/pipelineStages.js so backend,
+// frontend (KanbanBoard), and the DB CHECK all consume the same list and stop
+// drifting. The shared module already accepts every status migration 0032
+// expanded the CHECK to (discovery, auto_applied, application_prep, revision,
+// portal, pending_review, report, declined_no_review, closed, app_prep,
+// under_review, rejected, deadline_passed) as legacy aliases mapped to one of
+// the 11 canonical stages, so existing rows continue to validate and historic
+// pipelines render correctly.
+//
 // MUST stay in sync with:
-//   * backend/db/postgres/migrations/0032_expand_grants_status_check.sql
-//     (the Postgres CHECK constraint — anything the DB will store, the API
-//     must accept, or PATCH /grants/:id/status 400s a valid drag-and-drop)
-//   * src/components/pipeline/KanbanBoard.jsx STATUSES
-//     (every status here must render in some column — per the product rule
-//     "counts displayed in the UI must map 1:1 to backend response fields")
-// Drift here is what produced the "pipeline totals don't match" report.
-export const GRANT_STATUSES = [
-  // Current UI stages (post-migration 0032 — match KanbanBoard exactly)
-  'discovery',
-  'discovered',
-  'interested',
-  'auto_applied',
-  'drafting',
-  'application_prep',
-  'revision',
-  'portal',
-  'submitted',
-  'pending_review',
-  'follow_up',
-  'awarded',
-  'report',
-  'declined_no_review',
-  'declined',
-  'closed',
-  // Legacy stages preserved for backward compatibility with rows written
-  // before migration 0032. Reads must accept these so historical pipeline
-  // rows remain routable to a column (no silent drops).
-  'app_prep',
-  'under_review',
-  'rejected',
-  'archived',
-  // Auto-transition terminal status written by deadlineExpiryService when an
-  // opportunity's deadline passes. Must be accepted by PATCH /grants/:id/status
-  // and routed to a column in KanbanBoard, or deadline transitions either 400
-  // (constraint reject) or vanish from the pipeline (silent drop).
-  'deadline_passed'
-];
+//   * backend/db/postgres/migrations/0032_expand_grants_status_check.sql + 0072
+//   * backend/db/migrations/076_grants_status_canonical_pipeline.mjs
+//   * src/components/pipeline/KanbanBoard.jsx STATUSES (consumes the shared module)
+//
+// Drift between these is what produced the "pipeline totals don't match" report.
+import {
+  PIPELINE_STAGE_ALL,
+  PIPELINE_STAGES,
+  PIPELINE_STAGE_ALIASES,
+} from '../../shared/pipelineStages.js'
+export const GRANT_STATUSES = [...PIPELINE_STAGE_ALL]
+export const GRANT_STATUSES_CANONICAL = PIPELINE_STAGES
+export const GRANT_STATUS_ALIASES = PIPELINE_STAGE_ALIASES

@@ -206,6 +206,15 @@ CREATE TABLE IF NOT EXISTS funding_opportunities (
   --                      'community_directory' | 'open_web' | 'manual_curated'
   opportunity_kind TEXT,
   source_trust_tier TEXT,
+  -- Persisted reality-gate verdict (migration 077 / RC-8).
+  --   reality_status: 'allowed' | 'rejected' | 'downgraded' | NULL (unknown / pre-RC8)
+  --   reality_reasons: JSON array of policy reason codes from assessReality().
+  --   final_url: URL after redirects (proven landing page).
+  --   http_status: HTTP status code from the last live probe.
+  reality_status TEXT,
+  reality_reasons TEXT,
+  final_url TEXT,
+  http_status INTEGER,
   -- result_kind separates "real grant a user can apply for" from
   -- "directory/referral the user can call/search". Drives UI badge + the
   -- broken-link hide rule (broken direct → hide; broken directory → label).
@@ -273,6 +282,8 @@ CREATE INDEX IF NOT EXISTS idx_funding_opportunities_opportunity_kind
   ON funding_opportunities(opportunity_kind);
 CREATE INDEX IF NOT EXISTS idx_funding_opportunities_source_trust_tier
   ON funding_opportunities(source_trust_tier);
+CREATE INDEX IF NOT EXISTS idx_funding_opportunities_reality_status
+  ON funding_opportunities(reality_status);
 
 -- Append-only audit log of every URL verification probe (migration 069).
 -- Lets the mission dashboard answer "when was this opportunity actually
@@ -402,11 +413,14 @@ CREATE TABLE IF NOT EXISTS grants (
   amount_max REAL,
   
   status TEXT DEFAULT 'discovered' CHECK(status IN (
-        'discovery', 'discovered', 'interested', 'auto_applied',
-        'drafting', 'application_prep', 'revision', 'portal',
-        'submitted', 'pending_review', 'follow_up', 'awarded',
-        'report', 'declined_no_review', 'declined', 'closed',
-        'app_prep', 'under_review', 'rejected', 'archived',
+        -- Canonical pipeline (RC-13, shared/pipelineStages.js):
+        'discovered', 'saved', 'interested', 'gathering_documents',
+        'drafting', 'ready_to_submit', 'submitted', 'follow_up',
+        'awarded', 'declined', 'archived',
+        -- Legacy stage names preserved so pre-RC-13 rows stay valid:
+        'discovery', 'auto_applied', 'application_prep', 'revision',
+        'portal', 'pending_review', 'report', 'declined_no_review',
+        'closed', 'app_prep', 'under_review', 'rejected',
         'deadline_passed'
       )),
   
@@ -635,16 +649,31 @@ CREATE TABLE IF NOT EXISTS users (
   metadata TEXT
 );
 
+-- saved_grants: profile-scoped favorites/bookmarks. Each user can save the
+-- same opportunity independently under each of their profiles. Legacy rows
+-- created before migration 075 keep profile_id=NULL and are visible to all
+-- of that user's profiles (read-only fallback). New saves always carry a
+-- non-null profile_id.
 CREATE TABLE IF NOT EXISTS saved_grants (
   id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
   user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  profile_id TEXT REFERENCES profiles(id) ON DELETE CASCADE,
   opportunity_id TEXT NOT NULL,
   saved_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-  notes TEXT DEFAULT NULL,
-  UNIQUE(user_id, opportunity_id)
+  notes TEXT DEFAULT NULL
 );
+-- Per-profile uniqueness for new saves; partial so legacy NULL rows are
+-- preserved and don't conflict.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_saved_grants_user_profile_opp
+  ON saved_grants(user_id, profile_id, opportunity_id)
+  WHERE profile_id IS NOT NULL;
+-- Legacy uniqueness: at most one NULL-profile row per (user, opportunity).
+CREATE UNIQUE INDEX IF NOT EXISTS uq_saved_grants_user_legacy_opp
+  ON saved_grants(user_id, opportunity_id)
+  WHERE profile_id IS NULL;
 CREATE INDEX IF NOT EXISTS idx_saved_grants_user_id ON saved_grants(user_id);
 CREATE INDEX IF NOT EXISTS idx_saved_grants_opportunity_id ON saved_grants(opportunity_id);
+CREATE INDEX IF NOT EXISTS idx_saved_grants_profile_id ON saved_grants(profile_id);
 
 -- vNext fine-grained audit events (before/after snapshots for state transitions, tasks, scoring, etc.)
 CREATE TABLE IF NOT EXISTS audit_events (

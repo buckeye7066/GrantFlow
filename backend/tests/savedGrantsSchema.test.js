@@ -154,8 +154,13 @@ describe('saved grants schema repair', () => {
     const db = new Database(':memory:')
     try {
       createFundingOpportunitiesWithoutLinkStatus(db)
+      // RC-14: profile-scoped saves require a `profiles` table because the
+      // saved_grants migration declares an FK to it. Earlier fixture didn't
+      // include it; this one does.
       db.exec(`
+        CREATE TABLE profiles (id TEXT PRIMARY KEY);
         INSERT INTO users (id) VALUES ('user-1');
+        INSERT INTO profiles (id) VALUES ('profile-A');
         INSERT INTO funding_opportunities (id, title, sponsor, application_url, source, description, categories)
         VALUES
           ('opp-1', 'Real Grant One', 'Real Funder', 'https://example.org/apply-1', 'verified_real', 'A real grant.', '["grant"]'),
@@ -163,13 +168,17 @@ describe('saved grants schema repair', () => {
       `)
       const app = createSavedGrantsApp(db)
 
+      // Post-RC-14: every save must carry an active profile id. The route
+      // rejects with 400 otherwise.
       const firstSave = await request(app)
         .post('/api/saved-grants')
+        .set('X-Profile-Id', 'profile-A')
         .send({ opportunity_id: 'opp-1', notes: 'First' })
       const secondSave = await request(app)
         .post('/api/saved-grants')
+        .set('X-Profile-Id', 'profile-A')
         .send({ opportunity_id: 'opp-2', notes: 'Second' })
-      const list = await request(app).get('/api/saved-grants')
+      const list = await request(app).get('/api/saved-grants').set('X-Profile-Id', 'profile-A')
 
       expect(firstSave.status).toBe(200)
       expect(secondSave.status).toBe(200)

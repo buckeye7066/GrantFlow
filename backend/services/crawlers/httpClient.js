@@ -127,13 +127,21 @@ export async function headForVerification(url, options = {}) {
       url,
       timeout: timeoutMs,
       validateStatus: () => true,
+      maxRedirects: 5,
       headers: {
         'User-Agent': 'GrantFlow Crawler/1.0 (+contact: support@grantflow.app)',
       },
     })
     const ok = response.status >= 200 && response.status < 400
-    return { ok, status: response.status }
+    // axios surfaces the final URL after redirects on response.request.res.responseUrl
+    // (Node adapter) or response.request.responseURL (browser/xhr adapter).
+    const finalUrl =
+      response?.request?.res?.responseUrl ||
+      response?.request?.responseURL ||
+      response?.config?.url ||
+      url
+    return { ok, status: response.status, finalUrl }
   } catch (err) {
-    return { ok: false, status: null, error: err?.message || String(err) }
+    return { ok: false, status: null, error: err?.message || String(err), finalUrl: null }
   }
 }

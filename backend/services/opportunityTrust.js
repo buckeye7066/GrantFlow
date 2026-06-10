@@ -200,7 +200,30 @@ export function assessOpportunityTrust(opp, opts = {}) {
       sourceTrust: 'unknown',
       kind: OPPORTUNITY_KINDS.DIRECT,
       sourceTrustTier: 'open_web',
+      persistedRealityStatus: null,
+      persistedRealityReasons: [],
     }
+  }
+
+  // 0. Persisted reality-gate verdict (RC-8). assessReality() ran at insert
+  //    time; we prefer that verdict on display so the two paths can never
+  //    drift again. Per-user toggles (allowLoans/allowExpired/...) still
+  //    rescue policy reasons the user has explicitly opted into, so personal
+  //    preferences are not lost.
+  const persistedRealityStatus =
+    typeof opp.reality_status === 'string' && opp.reality_status
+      ? opp.reality_status.toLowerCase()
+      : null
+  let persistedRealityReasons = []
+  if (typeof opp.reality_reasons === 'string' && opp.reality_reasons.length > 0) {
+    try {
+      const parsed = JSON.parse(opp.reality_reasons)
+      if (Array.isArray(parsed)) persistedRealityReasons = parsed
+    } catch {
+      /* malformed JSON — fall back to consumer-side derivation only */
+    }
+  } else if (Array.isArray(opp.reality_reasons)) {
+    persistedRealityReasons = opp.reality_reasons
   }
 
   // 1. Source trust / origin
@@ -335,6 +358,47 @@ export function assessOpportunityTrust(opp, opts = {}) {
     reasons.push('hidden_broken_direct_link')
   }
 
+  // 9b. Apply the persisted reality verdict (RC-8). The insert path already
+  //     decided; we only override here when it disagrees with the consumer-side
+  //     derivation, and we let per-user toggles rescue policy reasons the
+  //     user has explicitly opted into.
+  if (persistedRealityStatus === 'rejected') {
+    const userCanRescue =
+      persistedRealityReasons.length > 0 &&
+      persistedRealityReasons.every((reason) => {
+        if (reason === 'loan_like') return allowLoans
+        if (reason === 'expired_deadline') return allowExpired
+        if (reason === 'matching_funds_required') return allowMatchingFunds
+        if (reason === 'social_only_url_for_direct' || reason === 'non_actionable_primary_url')
+          return allowSocial
+        return false
+      })
+    if (!userCanRescue) {
+      display = false
+      for (const r of persistedRealityReasons) {
+        if (!reasons.includes(r)) reasons.push(r)
+      }
+      if (!reasons.includes('persisted_reality_rejected')) {
+        reasons.push('persisted_reality_rejected')
+      }
+    }
+  } else if (
+    persistedRealityStatus === 'allowed' ||
+    persistedRealityStatus === 'downgraded'
+  ) {
+    // Insert-side accepted this row. Trust that decision over consumer-side
+    // drift, but never resurrect rows with hard data-quality failures.
+    if (!display && !flags.no_real_url && !flags.placeholder && !flags.untrusted) {
+      display = true
+    }
+    if (persistedRealityStatus === 'downgraded' && display) {
+      downgrade = true
+      if (!reasons.includes('persisted_reality_downgraded')) {
+        reasons.push('persisted_reality_downgraded')
+      }
+    }
+  }
+
   // Soft penalties — still display but mark as lower priority.
   if (display && flags.non_actionable_url) downgrade = true
   if (display && flags.stale_flag) downgrade = true
@@ -358,6 +422,8 @@ export function assessOpportunityTrust(opp, opts = {}) {
     primaryUrl: usableUrl,
     kind: opportunityKind,
     sourceTrustTier,
+    persistedRealityStatus,
+    persistedRealityReasons,
   }
 }
 

@@ -383,11 +383,47 @@ export async function loadProfileContext(db, profileId) {
     }
   }
 
-  return { 
-    profile: mergedProfile, 
-    sections, 
+  // RC-17: load uploaded document text so the normalizer can fold need
+  // signals out of PDFs / DOCX / OCR output. Best-effort: never break
+  // matching if the documents table is absent (fresh DB) or empty.
+  let documents = []
+  try {
+    documents = await db
+      .prepare(
+        `SELECT id, name, mime_type, extracted_text
+         FROM documents
+         WHERE profile_id = ?
+           AND extracted_text IS NOT NULL
+           AND TRIM(extracted_text) <> ''
+         ORDER BY uploaded_at DESC NULLS LAST, created_at DESC NULLS LAST
+         LIMIT 25`,
+      )
+      .all(profileId)
+  } catch {
+    // SQLite doesn't support `NULLS LAST` — retry with a portable form.
+    try {
+      documents = await db
+        .prepare(
+          `SELECT id, name, mime_type, extracted_text
+           FROM documents
+           WHERE profile_id = ?
+             AND extracted_text IS NOT NULL
+             AND TRIM(extracted_text) <> ''
+           ORDER BY COALESCE(uploaded_at, created_at) DESC
+           LIMIT 25`,
+        )
+        .all(profileId)
+    } catch {
+      documents = []
+    }
+  }
+
+  return {
+    profile: mergedProfile,
+    sections,
     signals,
     organization: organization ?? undefined,
+    documents: Array.isArray(documents) ? documents : [],
   }
 }
 

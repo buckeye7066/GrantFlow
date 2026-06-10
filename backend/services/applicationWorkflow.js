@@ -19,18 +19,21 @@
 
 import { randomUUID } from 'crypto'
 import { OPPORTUNITY_KINDS } from './opportunityRealityGate.js'
+import {
+  PIPELINE_STAGES,
+  PIPELINE_STAGE_ALL,
+  isAcceptedStage,
+} from '../../shared/pipelineStages.js'
 
-const APPLICATION_STATES = Object.freeze([
-  'discovered',
-  'interested',
-  'in_progress',
-  'submitted',
-  'under_review',
-  'awarded',
-  'denied',
-  'withdrawn',
-  'closed',
-])
+// Canonical lifecycle for a grant application. RC-13: one canonical enum
+// shared with the pipeline UI, the API status validator, and the DB CHECK
+// constraint. We accept legacy values too (PIPELINE_STAGE_ALL = canonical ∪
+// legacy aliases) so historical data isn't rejected by the workflow API.
+//
+// Pre-RC-13 this list had 9 ad-hoc values (`in_progress`, `denied`,
+// `withdrawn`) that didn't match either the UI columns or the grants.status
+// CHECK. Those legacy strings are now mapped via PIPELINE_STAGE_ALIASES.
+const APPLICATION_STATES = Object.freeze([...PIPELINE_STAGE_ALL])
 
 const DEFAULT_DOCUMENTS_BY_TYPE = Object.freeze({
   nonprofit: ['IRS 501(c)(3) determination letter', 'Most recent Form 990', 'Annual budget', 'Board roster'],
@@ -266,7 +269,9 @@ export async function recordSubmissionEvent(db, applicationId, { eventType, note
 
 export async function setApplicationStatus(db, applicationId, status) {
   if (!applicationId || !status) throw new Error('applicationId and status required')
-  if (!APPLICATION_STATES.includes(status)) {
+  // Accept canonical OR legacy-alias names. The DB CHECK accepts both, so
+  // rejecting them at the service boundary would create a fake mismatch.
+  if (!isAcceptedStage(status)) {
     throw new Error(`Invalid application status: ${status}. Allowed: ${APPLICATION_STATES.join(', ')}`)
   }
   await db
@@ -274,7 +279,7 @@ export async function setApplicationStatus(db, applicationId, status) {
     .run(status, applicationId)
 }
 
-export { APPLICATION_STATES }
+export { APPLICATION_STATES, PIPELINE_STAGES }
 
 export default {
   APPLICATION_STATES,

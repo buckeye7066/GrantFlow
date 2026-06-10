@@ -114,8 +114,265 @@ export const SOURCE_IDS = Object.freeze({
  *   directory          — true means rows from this source are directory
  *                        resources, not direct grants
  *   notes              — human-readable note for admin/Anya/dashboard
+ *
+ * RC-16 operational metadata (filled in per-source via SOURCE_META below
+ * and merged before freezing):
+ *   base_url           — canonical entry point for the source
+ *   crawl_method       — 'api' | 'html_scrape' | 'feed' | 'directory_lookup' |
+ *                        'manual_curated'
+ *   rate_limit         — { requests_per_minute, requests_per_hour } | null
+ *   robots_note        — human-readable note about robots.txt status
+ *   locations          — array of state codes or ['national']
+ *
+ * Runtime fields not stored on the registry but surfaced by
+ * buildCoverageReport from crawler_source_runs:
+ *   last_crawl         — most recent successful run timestamp (ISO)
+ *   failure_status     — 'ok' | 'failed' | 'never_run'
  */
-export const SOURCES = Object.freeze({
+
+/**
+ * Per-trust-tier defaults for the RC-16 operational metadata. Sources
+ * that don't override these get reasonable values so the coverage report
+ * always has something to show.
+ */
+const CRAWL_METHOD_DEFAULTS = {
+  [SOURCE_TRUST_TIERS.OFFICIAL_API]: 'api',
+  [SOURCE_TRUST_TIERS.OFFICIAL_PORTAL]: 'html_scrape',
+  [SOURCE_TRUST_TIERS.VERIFIED_DIRECTORY]: 'directory_lookup',
+  [SOURCE_TRUST_TIERS.COMMUNITY_DIRECTORY]: 'directory_lookup',
+  [SOURCE_TRUST_TIERS.OPEN_WEB]: 'html_scrape',
+  [SOURCE_TRUST_TIERS.MANUAL_CURATED]: 'manual_curated',
+}
+
+const RATE_LIMIT_DEFAULTS = {
+  api: { requests_per_minute: 60, requests_per_hour: 1000 },
+  feed: { requests_per_minute: 30, requests_per_hour: 600 },
+  html_scrape: { requests_per_minute: 20, requests_per_hour: 500 },
+  directory_lookup: { requests_per_minute: 10, requests_per_hour: 200 },
+  manual_curated: null,
+}
+
+/**
+ * Per-source metadata overrides. Anything not listed inherits the
+ * trust-tier default. We only encode values we are confident about
+ * (canonical federal entry points, well-known portals); everything else
+ * stays on its trust-tier default to avoid lying to admins.
+ */
+const SOURCE_META = {
+  [SOURCE_IDS.GRANTS_GOV]: {
+    base_url: 'https://www.grants.gov',
+    crawl_method: 'api',
+    robots_note: 'allowed: public API (search2 endpoint)',
+    locations: ['national'],
+  },
+  [SOURCE_IDS.SAM_GOV_ASSISTANCE_LISTINGS]: {
+    base_url: 'https://sam.gov/data-services/Assistance%20Listings',
+    crawl_method: 'api',
+    robots_note: 'allowed: public CFDA assistance listings',
+    locations: ['national'],
+  },
+  [SOURCE_IDS.GRANTS_GOV_LOCAL_GOV]: {
+    base_url: 'https://www.grants.gov',
+    crawl_method: 'api',
+    robots_note: 'allowed: public API filtered by eligible_applicant',
+    locations: ['national'],
+  },
+  [SOURCE_IDS.COF_FOUNDATION_LOCATOR]: {
+    base_url: 'https://www.cof.org/community-foundation-locator',
+    crawl_method: 'directory_lookup',
+    robots_note: 'allowed: public directory; respect User-Agent header',
+    locations: ['national'],
+  },
+  [SOURCE_IDS.STATE_PORTAL]: {
+    base_url: null,
+    crawl_method: 'html_scrape',
+    robots_note: 'varies by state; respect per-portal robots.txt',
+    locations: [],
+  },
+  [SOURCE_IDS.FOUNDATION_LOCATOR]: {
+    base_url: null,
+    crawl_method: 'directory_lookup',
+    robots_note: 'varies by foundation; respect per-foundation robots.txt',
+    locations: ['national'],
+  },
+  [SOURCE_IDS.OVERPASS_LOCAL]: {
+    base_url: 'https://overpass-api.de/api/interpreter',
+    crawl_method: 'api',
+    rate_limit: { requests_per_minute: 6, requests_per_hour: 100 },
+    robots_note: 'allowed: Overpass API; honor 429 backoff',
+    locations: [],
+  },
+  [SOURCE_IDS.USDA_RURAL_DEV]: {
+    base_url: 'https://www.rd.usda.gov/programs-services',
+    crawl_method: 'html_scrape',
+    robots_note: 'allowed; rd.usda.gov has open robots.txt',
+    locations: ['national'],
+  },
+  [SOURCE_IDS.FEMA_AFG]: {
+    base_url: 'https://www.fema.gov/grants/preparedness/firefighters',
+    crawl_method: 'html_scrape',
+    robots_note: 'allowed: public grant program pages',
+    locations: ['national'],
+  },
+  [SOURCE_IDS.SBA_GRANTS]: {
+    base_url: 'https://www.sba.gov/funding-programs/grants',
+    crawl_method: 'html_scrape',
+    robots_note: 'allowed; sba.gov has open robots.txt',
+    locations: ['national'],
+  },
+  [SOURCE_IDS.SCHOLARSHIP_DIRECTORY]: {
+    base_url: null,
+    crawl_method: 'directory_lookup',
+    robots_note: 'varies by directory provider',
+    locations: ['national'],
+  },
+  [SOURCE_IDS.STUDENT_SCHOLARSHIP_PORTALS]: {
+    base_url: null,
+    crawl_method: 'directory_lookup',
+    robots_note: 'varies; commercial portals may rate-limit',
+    locations: ['national'],
+  },
+  [SOURCE_IDS.COMMUNITY_ACTION]: {
+    base_url: 'https://communityactionpartnership.com',
+    crawl_method: 'directory_lookup',
+    robots_note: 'allowed: public CAP agency directory',
+    locations: ['national'],
+  },
+  [SOURCE_IDS.UNITED_WAY_211]: {
+    base_url: 'https://www.211.org',
+    crawl_method: 'directory_lookup',
+    robots_note: 'allowed: public 211 referral data',
+    locations: ['national'],
+  },
+  [SOURCE_IDS.FEEDING_AMERICA]: {
+    base_url: 'https://www.feedingamerica.org/find-your-local-foodbank',
+    crawl_method: 'directory_lookup',
+    robots_note: 'allowed: public food bank locator',
+    locations: ['national'],
+  },
+  [SOURCE_IDS.ED_GOV_FAFSA]: {
+    base_url: 'https://studentaid.gov',
+    crawl_method: 'html_scrape',
+    robots_note: 'allowed: public student aid pages',
+    locations: ['national'],
+  },
+  [SOURCE_IDS.HRSA_HEALTH_CENTERS]: {
+    base_url: 'https://findahealthcenter.hrsa.gov',
+    crawl_method: 'api',
+    robots_note: 'allowed: public Find-A-Health-Center API',
+    locations: ['national'],
+  },
+  [SOURCE_IDS.LIHEAP]: {
+    base_url: 'https://www.acf.hhs.gov/ocs/programs/liheap',
+    crawl_method: 'html_scrape',
+    robots_note: 'allowed: public ACF program pages',
+    locations: ['national'],
+  },
+  [SOURCE_IDS.SNAP]: {
+    base_url: 'https://www.fns.usda.gov/snap/state-directory',
+    crawl_method: 'directory_lookup',
+    robots_note: 'allowed: public USDA SNAP directory',
+    locations: ['national'],
+  },
+  [SOURCE_IDS.MEDICAID]: {
+    base_url: 'https://www.medicaid.gov',
+    crawl_method: 'html_scrape',
+    robots_note: 'allowed: public Medicaid program pages',
+    locations: ['national'],
+  },
+  [SOURCE_IDS.PELL_GRANT]: {
+    base_url: 'https://studentaid.gov/understand-aid/types/grants/pell',
+    crawl_method: 'html_scrape',
+    robots_note: 'allowed: public Pell Grant pages',
+    locations: ['national'],
+  },
+  [SOURCE_IDS.USED_DEPT_OF_ED]: {
+    base_url: 'https://www2.ed.gov/fund/grant.html',
+    crawl_method: 'html_scrape',
+    robots_note: 'allowed: public ED grant pages',
+    locations: ['national'],
+  },
+  [SOURCE_IDS.USDA_RD_COMMUNITY_FACILITIES]: {
+    base_url: 'https://www.rd.usda.gov/programs-services/community-facilities',
+    crawl_method: 'html_scrape',
+    robots_note: 'allowed; rd.usda.gov',
+    locations: ['national'],
+  },
+  [SOURCE_IDS.FEMA_PUBLIC_ASSISTANCE]: {
+    base_url: 'https://www.fema.gov/assistance/public',
+    crawl_method: 'html_scrape',
+    robots_note: 'allowed: public FEMA program pages',
+    locations: ['national'],
+  },
+  [SOURCE_IDS.FEMA_HAZARD_MITIGATION]: {
+    base_url: 'https://www.fema.gov/grants/mitigation',
+    crawl_method: 'html_scrape',
+    robots_note: 'allowed: public FEMA HMA pages',
+    locations: ['national'],
+  },
+  [SOURCE_IDS.CDBG_STATE_LOCAL]: {
+    base_url: 'https://www.hud.gov/program_offices/comm_planning/cdbg',
+    crawl_method: 'html_scrape',
+    robots_note: 'allowed: public HUD program pages',
+    locations: ['national'],
+  },
+  [SOURCE_IDS.EDA_ECONOMIC_DEVELOPMENT]: {
+    base_url: 'https://www.eda.gov/funding',
+    crawl_method: 'html_scrape',
+    robots_note: 'allowed: public EDA program pages',
+    locations: ['national'],
+  },
+  [SOURCE_IDS.DOT_TRANSPORTATION_GRANTS]: {
+    base_url: 'https://www.transportation.gov/grants',
+    crawl_method: 'html_scrape',
+    robots_note: 'allowed: public DOT program pages',
+    locations: ['national'],
+  },
+  [SOURCE_IDS.EPA_WATER_INFRASTRUCTURE]: {
+    base_url: 'https://www.epa.gov/grants',
+    crawl_method: 'html_scrape',
+    robots_note: 'allowed: public EPA program pages',
+    locations: ['national'],
+  },
+  [SOURCE_IDS.BROADBAND_GRANTS]: {
+    base_url: 'https://broadbandusa.ntia.doc.gov/funding-programs',
+    crawl_method: 'html_scrape',
+    robots_note: 'allowed: public NTIA program pages',
+    locations: ['national'],
+  },
+  [SOURCE_IDS.TRIBAL_GOVERNMENT_GRANTS]: {
+    base_url: 'https://www.bia.gov/service/grants',
+    crawl_method: 'html_scrape',
+    robots_note: 'allowed: public BIA grant pages',
+    locations: ['national'],
+  },
+  [SOURCE_IDS.BIA_TRIBAL_PROGRAMS]: {
+    base_url: 'https://www.bia.gov',
+    crawl_method: 'html_scrape',
+    robots_note: 'allowed: public BIA pages',
+    locations: ['national'],
+  },
+  [SOURCE_IDS.IMLS_LIBRARY_MUSEUM]: {
+    base_url: 'https://www.imls.gov/grants',
+    crawl_method: 'html_scrape',
+    robots_note: 'allowed: public IMLS pages',
+    locations: ['national'],
+  },
+  [SOURCE_IDS.PARKS_RECREATION_GRANTS]: {
+    base_url: 'https://www.nps.gov/subjects/lwcf/grants.htm',
+    crawl_method: 'html_scrape',
+    robots_note: 'allowed: public NPS pages',
+    locations: ['national'],
+  },
+  [SOURCE_IDS.PUBLIC_HEALTH_DEPT_GRANTS]: {
+    base_url: 'https://www.cdc.gov/grants',
+    crawl_method: 'html_scrape',
+    robots_note: 'allowed: public CDC program pages',
+    locations: ['national'],
+  },
+}
+
+const BASE_SOURCES = {
   [SOURCE_IDS.GRANTS_GOV]: {
     id: SOURCE_IDS.GRANTS_GOV,
     label: 'Grants.gov',
@@ -971,7 +1228,101 @@ export const SOURCES = Object.freeze({
     directory: false,
     notes: 'SAMHSA SOR, state opioid response funds, SUPTRS Block Grant pass-through.',
   },
-})
+}
+
+/**
+ * Apply per-trust-tier defaults + per-source RC-16 metadata overrides.
+ * Returns a new entry object with the operational fields filled in.
+ */
+function applyOperationalMetadata(entry) {
+  const meta = SOURCE_META[entry.id] ?? {}
+  const crawl_method =
+    meta.crawl_method ?? CRAWL_METHOD_DEFAULTS[entry.trust] ?? 'html_scrape'
+  const rate_limit =
+    meta.rate_limit !== undefined
+      ? meta.rate_limit
+      : RATE_LIMIT_DEFAULTS[crawl_method] ?? null
+  const base_url = meta.base_url ?? null
+  const robots_note = meta.robots_note ?? 'unknown — verify before automated crawl'
+  const locations = Array.isArray(meta.locations) ? meta.locations : []
+  return {
+    ...entry,
+    base_url,
+    crawl_method,
+    rate_limit,
+    robots_note,
+    locations,
+  }
+}
+
+/**
+ * Final, frozen registry. Every entry carries both the original
+ * classification fields and the RC-16 operational metadata.
+ */
+export const SOURCES = Object.freeze(
+  Object.fromEntries(
+    Object.entries(BASE_SOURCES).map(([id, entry]) => [
+      id,
+      Object.freeze(applyOperationalMetadata(entry)),
+    ]),
+  ),
+)
+
+/**
+ * Load runtime status (last_crawl + failure_status) for every source
+ * from the crawler_source_runs table. Returns a Map of source_id → {
+ * last_crawl: ISO|null, failure_status: 'ok'|'failed'|'never_run',
+ * last_error: string|null }.
+ *
+ * Best-effort: when the table is missing (fresh DB) or the query fails,
+ * returns an empty map so callers can degrade gracefully without
+ * surfacing crawler-runtime concerns to a freshly-installed deployment.
+ *
+ * Compatible with the SqliteDb wrapper and Postgres pool used elsewhere.
+ */
+export async function loadCrawlerSourceRuntimeStatus(db) {
+  const out = new Map()
+  if (!db || typeof db.prepare !== 'function') return out
+  try {
+    const rows = await db
+      .prepare(
+        `
+        SELECT source_id,
+               MAX(created_at) AS last_crawl,
+               -- 'failed' if the most-recent run failed; otherwise 'ok'.
+               (
+                 SELECT CASE WHEN failed = 1 THEN 'failed' ELSE 'ok' END
+                 FROM crawler_source_runs r2
+                 WHERE r2.source_id = crawler_source_runs.source_id
+                 ORDER BY r2.created_at DESC
+                 LIMIT 1
+               ) AS failure_status,
+               (
+                 SELECT error
+                 FROM crawler_source_runs r3
+                 WHERE r3.source_id = crawler_source_runs.source_id
+                   AND r3.failed = 1
+                 ORDER BY r3.created_at DESC
+                 LIMIT 1
+               ) AS last_error
+        FROM crawler_source_runs
+        GROUP BY source_id
+      `,
+      )
+      .all()
+    for (const row of rows ?? []) {
+      if (!row?.source_id) continue
+      out.set(row.source_id, {
+        last_crawl: row.last_crawl ?? null,
+        failure_status: row.failure_status ?? 'ok',
+        last_error: row.last_error ?? null,
+      })
+    }
+  } catch {
+    // crawler_source_runs may not exist on a brand-new DB; that's fine.
+  }
+  return out
+}
 
 /**
  * Get the registry entry for a source id. Returns null when unknown so
@@ -1081,31 +1432,87 @@ export function planCoverage(profileContext = {}) {
  * Crawlers call this after a run to emit a structured report so the
  * mission dashboard can show coverage metrics.
  *
- *   plan      — output from planCoverage()
- *   outcomes  — array of { source_id, queried, failed, found, error }
+ *   plan          — output from planCoverage()
+ *   outcomes      — array of { source_id, queried, failed, found, error }
+ *   options.runtimeStatus
+ *                 — optional Map<source_id, {last_crawl, failure_status,
+ *                   last_error}> from loadCrawlerSourceRuntimeStatus().
+ *                   When provided, every per-source entry surfaces these
+ *                   fields so the mission dashboard can show the last
+ *                   real run timestamp without re-querying the DB.
  *
  * Returns a structured object the mission dashboard / Anya / tests can
- * consume directly.
+ * consume directly. Each entry in `sources` carries the full operational
+ * metadata (base_url, crawl_method, rate_limit, robots_note, locations)
+ * plus the runtime fields (last_crawl, failure_status, last_error).
  */
-export function buildCoverageReport(plan, outcomes = []) {
+export function buildCoverageReport(plan, outcomes = [], options = {}) {
   const planned = new Set(plan?.sources_planned ?? [])
   const required = new Set(plan?.sources_required ?? [])
+  const runtimeStatus =
+    options?.runtimeStatus instanceof Map
+      ? options.runtimeStatus
+      : new Map(Object.entries(options?.runtimeStatus ?? {}))
 
   const sources_queried = []
   const sources_failed = []
+  const sources = []
   let direct_opportunities_found = 0
   let directory_opportunities_found = 0
 
+  // Build a lookup so we can describe both planned-but-not-run sources
+  // and run-but-not-planned sources in one consistent shape.
+  const outcomeById = new Map()
   for (const o of outcomes) {
     if (!o?.source_id) continue
-    if (o.queried) sources_queried.push(o.source_id)
-    if (o.failed || o.error) sources_failed.push({ source_id: o.source_id, error: o.error ?? 'unknown' })
-    const src = SOURCES[o.source_id]
-    if (src?.directory) {
-      directory_opportunities_found += Number(o.found ?? 0)
-    } else {
-      direct_opportunities_found += Number(o.found ?? 0)
+    outcomeById.set(o.source_id, o)
+  }
+
+  const allSourceIds = new Set([
+    ...planned,
+    ...required,
+    ...outcomeById.keys(),
+  ])
+
+  for (const sourceId of allSourceIds) {
+    const o = outcomeById.get(sourceId)
+    const src = SOURCES[sourceId] ?? null
+    const runtime = runtimeStatus.get(sourceId) ?? null
+
+    if (o?.queried) sources_queried.push(sourceId)
+    if (o?.failed || o?.error) {
+      sources_failed.push({ source_id: sourceId, error: o.error ?? 'unknown' })
     }
+    if (src?.directory) {
+      directory_opportunities_found += Number(o?.found ?? 0)
+    } else {
+      direct_opportunities_found += Number(o?.found ?? 0)
+    }
+
+    sources.push({
+      source_id: sourceId,
+      label: src?.label ?? sourceId,
+      planned: planned.has(sourceId),
+      required: required.has(sourceId),
+      queried: !!o?.queried,
+      failed: !!(o?.failed || o?.error),
+      found: Number(o?.found ?? 0),
+      duration_ms: o?.duration_ms ?? null,
+      error: o?.error ?? null,
+      // Static operational metadata (RC-16).
+      trust: src?.trust ?? null,
+      directory: src?.directory ?? false,
+      base_url: src?.base_url ?? null,
+      crawl_method: src?.crawl_method ?? null,
+      rate_limit: src?.rate_limit ?? null,
+      robots_note: src?.robots_note ?? null,
+      locations: src?.locations ?? [],
+      freshness_days: src?.freshness_days ?? null,
+      // Runtime status (RC-16).
+      last_crawl: runtime?.last_crawl ?? null,
+      failure_status: runtime?.failure_status ?? (o?.queried ? (o?.failed ? 'failed' : 'ok') : 'never_run'),
+      last_error: runtime?.last_error ?? null,
+    })
   }
 
   const coverage_gaps = Array.from(required).filter((id) => !sources_queried.includes(id))
@@ -1119,6 +1526,7 @@ export function buildCoverageReport(plan, outcomes = []) {
     coverage_gaps,
     direct_opportunities_found,
     directory_opportunities_found,
+    sources,
     notes: plan?.notes ?? [],
   }
 }
@@ -1235,4 +1643,5 @@ export default {
   buildCoverageReport,
   buildGrantsGovQueryTerms,
   looksLikePiiTerm,
+  loadCrawlerSourceRuntimeStatus,
 }

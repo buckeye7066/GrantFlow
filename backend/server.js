@@ -2502,8 +2502,8 @@ if (process.env.NODE_ENV !== 'test') {
         }
 
         try {
-          // Generate the CHECK list from GRANT_STATUSES (config/constants.js) so the
-          // live constraint can never drift from the constant the API/UI validate against.
+          // Generate the CHECK list from GRANT_STATUSES (config/constants.js → shared/pipelineStages.js)
+          // so the live constraint can never drift from the constant the API/UI validate against.
           const grantStatusList = GRANT_STATUSES.map((s) => `'${s}'`).join(',')
           await db.exec(`
             ALTER TABLE grants DROP CONSTRAINT IF EXISTS grants_status_check;

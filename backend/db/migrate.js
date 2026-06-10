@@ -67,9 +67,13 @@ function ensureDirExists(dir) {
 }
 
 function listSqlMigrations(dir) {
+  // Includes both .sql files (SQL-only migrations) and .mjs files (migrations
+  // that need procedural escape hatches not expressible in SQL — e.g. SQLite
+  // CHECK-constraint rewrites that require the better-sqlite3 unsafeMode +
+  // writable_schema + schema_version trick).
   return fs
     .readdirSync(dir)
-    .filter((f) => f.endsWith('.sql'))
+    .filter((f) => f.endsWith('.sql') || f.endsWith('.mjs'))
     .sort();
 }
 
@@ -102,9 +106,36 @@ async function getAppliedSet() {
 
 async function applyMigration(filename) {
   const fullPath = path.join(migrationsDir, filename);
-  const sql = fs.readFileSync(fullPath, 'utf8');
 
   console.log(`Applying: ${filename}`);
+
+  // .mjs migrations export a default async function(db). They get the live
+  // connection (so they can use better-sqlite3 escape hatches like
+  // unsafeMode), and they're responsible for inserting their own row into
+  // _migrations only on success — but for symmetry we record afterwards.
+  if (filename.endsWith('.mjs')) {
+    // Import via file: URL so Windows paths work; cache-bust by filename so
+    // repeated invocations in the same process get fresh module instances.
+    const mod = await import(`file://${fullPath.replace(/\\/g, '/')}`)
+    const fn = typeof mod?.default === 'function' ? mod.default : mod?.up
+    if (typeof fn !== 'function') {
+      throw new Error(`Migration ${filename} must export a default function or 'up' (received ${typeof fn})`)
+    }
+    if (db.dialect === 'postgres') {
+      await db.withTransaction(async (tx) => {
+        await fn(tx)
+        await tx.prepare('INSERT INTO _migrations (name) VALUES (?)').run(filename)
+      })
+    } else {
+      await db.withTransaction(async (tx) => {
+        await fn(tx)
+        await tx.prepare('INSERT INTO _migrations (name) VALUES (?)').run(filename)
+      })
+    }
+    return
+  }
+
+  const sql = fs.readFileSync(fullPath, 'utf8');
 
   if (db.dialect === 'postgres') {
     await db.withTransaction(async (tx) => {
