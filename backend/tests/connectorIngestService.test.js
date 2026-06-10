@@ -38,6 +38,7 @@ describe('buildConnectorQueryPlan', () => {
     expect(plan.ggEligibility).toContain('21') // Grants.gov: Individuals
     expect(plan.foundationSeeker).toBe(true)
     expect(plan.wantsResearch).toBe(false) // never flood an individual with NIH research awards
+    expect(plan.federalApplicant).toBe(false) // individuals don't apply to agency NOFOs
     expect(plan.state).toBe('TN')
     expect(plan.terms).toContain('food')
   })
@@ -47,6 +48,12 @@ describe('buildConnectorQueryPlan', () => {
     expect(plan.ggEligibility).toContain('12') // 501c3 nonprofits
     expect(plan.simplerApplicant).toContain('nonprofits_501c3')
     expect(plan.wantsResearch).toBe(true)
+    expect(plan.federalApplicant).toBe(true) // orgs apply to federal NOFOs
+  })
+
+  it('treats unknown profile types as federal applicants (cast wide)', () => {
+    expect(buildConnectorQueryPlan({ profile: { primary_type: 'wizard' } }).federalApplicant).toBe(true)
+    expect(buildConnectorQueryPlan({ profile: { primary_type: 'student' } }).federalApplicant).toBe(false)
   })
 
   it('maps a volunteer fire department to special-district + nonprofit eligibility', () => {
