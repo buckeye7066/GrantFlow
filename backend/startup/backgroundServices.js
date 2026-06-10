@@ -47,13 +47,19 @@ export function startBackgroundServices({ db, uploadsDir, actualPort, loggedCors
       }
 
       try {
+        // Keep this self-heal in lock-step with shared/pipelineStages.js +
+        // backend/db/postgres/migrations/0072_grants_status_canonical_pipeline.sql.
         await db.exec(`
           ALTER TABLE grants DROP CONSTRAINT IF EXISTS grants_status_check;
           ALTER TABLE grants ADD CONSTRAINT grants_status_check CHECK (status IN (
-            'discovery','discovered','interested','auto_applied','drafting',
-            'application_prep','revision','portal','submitted','pending_review',
-            'follow_up','awarded','report','declined_no_review','declined','closed',
-            'app_prep','under_review','rejected','archived'
+            -- Canonical 11-stage pipeline (RC-13)
+            'discovered','saved','interested','gathering_documents',
+            'drafting','ready_to_submit','submitted','follow_up',
+            'awarded','declined','archived',
+            -- Legacy stages preserved for back-compat
+            'discovery','auto_applied','application_prep','revision',
+            'portal','pending_review','report','declined_no_review',
+            'closed','app_prep','under_review','rejected','deadline_passed'
           ));
         `);
         console.log('[startup] grants status CHECK constraint verified/expanded');

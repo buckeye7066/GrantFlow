@@ -402,11 +402,14 @@ CREATE TABLE IF NOT EXISTS grants (
   amount_max REAL,
   
   status TEXT DEFAULT 'discovered' CHECK(status IN (
-        'discovery', 'discovered', 'interested', 'auto_applied',
-        'drafting', 'application_prep', 'revision', 'portal',
-        'submitted', 'pending_review', 'follow_up', 'awarded',
-        'report', 'declined_no_review', 'declined', 'closed',
-        'app_prep', 'under_review', 'rejected', 'archived',
+        -- Canonical pipeline (RC-13, shared/pipelineStages.js):
+        'discovered', 'saved', 'interested', 'gathering_documents',
+        'drafting', 'ready_to_submit', 'submitted', 'follow_up',
+        'awarded', 'declined', 'archived',
+        -- Legacy stage names preserved so pre-RC-13 rows stay valid:
+        'discovery', 'auto_applied', 'application_prep', 'revision',
+        'portal', 'pending_review', 'report', 'declined_no_review',
+        'closed', 'app_prep', 'under_review', 'rejected',
         'deadline_passed'
       )),
   

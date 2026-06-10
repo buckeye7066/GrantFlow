@@ -430,6 +430,16 @@ class SqliteDb {
     return this._db.exec(sql);
   }
 
+  /**
+   * better-sqlite3 escape hatch for migrations that need to modify
+   * sqlite_master (e.g. RC-13 widening the grants.status CHECK without a
+   * full table rebuild). Pass-through to the raw connection so callers can
+   * temporarily flip unsafe mode + writable_schema.
+   */
+  unsafeMode(enable) {
+    return this._db.unsafeMode(Boolean(enable))
+  }
+
   async healthcheck() {
     // Keep async signature for parity with Postgres, but run synchronously here.
     this.prepare('SELECT 1 as ok').get();

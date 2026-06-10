@@ -109,16 +109,15 @@ export const CRAWLER_JOB_STATUSES = [
 ]
 
 // Grant statuses
-export const GRANT_STATUSES = [
-  'discovered',
-  'interested',
-  'drafting',
-  'app_prep',
-  'revision',
-  'submitted',
-  'under_review',
-  'awarded',
-  'rejected',
-  'closed',
-  'archived'
-];
+//
+// Canonical pipeline (RC-13) re-exported from the shared module. The list
+// here MUST stay a superset of every status the UI exposes and every status
+// the DB CHECK accepts; otherwise PATCH /api/grants/:id/status will reject
+// stage transitions the user just made via drag-and-drop.
+//
+// Source of truth: shared/pipelineStages.js. Consumed by routes/grants.js,
+// services/relevanceFilterRules.js, and other API validators.
+import { PIPELINE_STAGE_ALL, PIPELINE_STAGES, PIPELINE_STAGE_ALIASES } from '../../shared/pipelineStages.js'
+export const GRANT_STATUSES = [...PIPELINE_STAGE_ALL]
+export const GRANT_STATUSES_CANONICAL = PIPELINE_STAGES
+export const GRANT_STATUS_ALIASES = PIPELINE_STAGE_ALIASES;

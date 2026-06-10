@@ -3,48 +3,48 @@ import { DragDropContext, Droppable, Draggable } from "@hello-pangea/dnd";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import GrantCard from "./GrantCard";
-import { Award, Eye, FileEdit, Layers, Send, Archive, XCircle, HardHat, FileBarChart, CheckCircle } from 'lucide-react';
+import { Award, Eye, FileEdit, Layers, Send, Archive, XCircle, HardHat, FileBarChart, Bookmark, FolderOpen } from 'lucide-react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import client from '@/api/client';
 import { useToast } from "@/components/ui/use-toast";
+import { canonicalStage } from '../../../shared/pipelineStages.js';
 
+// RC-13: one canonical 11-stage pipeline. Legacy stage names that come back
+// from the API (e.g. `auto_applied`, `pending_review`, `under_review`,
+// `closed`, `app_prep`, etc.) are mapped to canonical buckets via
+// `canonicalStage()` from the shared module. Anything that doesn't map
+// cleanly lands in the synthetic "other" column so users always see 100%
+// of the rows the backend returned (no silent drops).
 const STATUSES = [
-      { value: "discovery", label: "Discovery", icon: Layers },
-        { value: "discovered", label: "Discovered", icon: Layers },
-          { value: "interested", label: "Assess", icon: Eye },
-            { value: "auto_applied", label: "Auto-Applied", icon: CheckCircle },
-              { value: "drafting", label: "Drafting", icon: FileEdit },
-                { value: "application_prep", label: "Application Prep", icon: FileEdit },
-                  { value: "revision", label: "Revision", icon: HardHat },
-                    { value: "portal", label: "Portal", icon: HardHat },
-                      { value: "submitted", label: "Submitted", icon: Send },
-                        { value: "pending_review", label: "Pending Review", icon: Eye },
-                          { value: "follow_up", label: "Follow Up", icon: Send },
-                            { value: "awarded", label: "Awarded", icon: Award },
-                              { value: "report", label: "Reporting", icon: FileBarChart },
-                                { value: "declined_no_review", label: "Declined (No Review)", icon: XCircle },
-                                  { value: "declined", label: "Declined", icon: XCircle },
-                                    { value: "closed", label: "Closed", icon: Archive },
-                                    ];
+  { value: "discovered", label: "Discovered", icon: Layers },
+  { value: "saved", label: "Saved", icon: Bookmark },
+  { value: "interested", label: "Interested", icon: Eye },
+  { value: "gathering_documents", label: "Gathering Documents", icon: FolderOpen },
+  { value: "drafting", label: "Drafting", icon: FileEdit },
+  { value: "ready_to_submit", label: "Ready to Submit", icon: HardHat },
+  { value: "submitted", label: "Submitted", icon: Send },
+  { value: "follow_up", label: "Follow Up", icon: FileBarChart },
+  { value: "awarded", label: "Awarded", icon: Award },
+  { value: "declined", label: "Declined", icon: XCircle },
+  { value: "archived", label: "Archived", icon: Archive },
+  // Synthetic fallback. Hidden when empty, never accepts drops (read-only).
+  { value: "other", label: "Other / Unknown", icon: Archive },
+];
 
-                                    const statusColors = {
-                                          discovery: "bg-gray-100 text-gray-900",
-                                            discovered: "bg-slate-100 text-slate-900",
-                                              interested: "bg-blue-100 text-blue-800",
-                                                auto_applied: "bg-green-100 text-green-800",
-                                                  drafting: "bg-purple-100 text-purple-800",
-                                                    application_prep: "bg-yellow-100 text-yellow-800",
-                                                      revision: "bg-orange-100 text-orange-800",
-                                                        portal: "bg-orange-100 text-orange-800",
-                                                          submitted: "bg-amber-100 text-amber-800",
-                                                            pending_review: "bg-indigo-100 text-indigo-800",
-                                                              follow_up: "bg-green-100 text-green-800",
-                                                                awarded: "bg-emerald-100 text-emerald-800",
-                                                                  report: "bg-teal-100 text-teal-800",
-                                                                    declined_no_review: "bg-red-100 text-red-800",
-                                                                      declined: "bg-red-100 text-red-800",
-                                                                        closed: "bg-gray-100 text-gray-900",
-                                                                        };
+const statusColors = {
+  discovered: "bg-slate-100 text-slate-900",
+  saved: "bg-yellow-100 text-yellow-900",
+  interested: "bg-blue-100 text-blue-800",
+  gathering_documents: "bg-amber-100 text-amber-800",
+  drafting: "bg-purple-100 text-purple-800",
+  ready_to_submit: "bg-orange-100 text-orange-800",
+  submitted: "bg-indigo-100 text-indigo-800",
+  follow_up: "bg-teal-100 text-teal-800",
+  awarded: "bg-emerald-100 text-emerald-800",
+  declined: "bg-red-100 text-red-800",
+  archived: "bg-gray-100 text-gray-900",
+  other: "bg-zinc-100 text-zinc-900",
+};
 
                                                                         function PipelineSlider({ scrollRef }) {
                                                                               const [sliderValue, setSliderValue] = useState(0);
@@ -168,15 +168,28 @@ const STATUSES = [
                                                                                                                                                                                                                                                                             queryFn: () => client.entities.ChecklistItem.list()
                                                                                                                                                                                                                                                                               });
 
-                                                                                                                                                                                                                                                                                const onDragEnd = async (result) => {
-                                                                                                                                                                                                                                                                                        const { destination, source, draggableId } = result;
-                                                                                                                                                                                                                                                                                            if (!destination || (destination.droppableId === source.droppableId && destination.index === source.index)) {
-                                                                                                                                                                                                                                                                                                      return;
-                                                                                                                                                                                                                                                                                            }
-                                                                                                                                                                                                                                                                                                const newStatus = destination.droppableId;
-                                                                                                                                                                                                                                                                                                    onGrantUpdate(draggableId, { status: newStatus });
+  const onDragEnd = async (result) => {
+    const { destination, source, draggableId } = result;
+    if (!destination || (destination.droppableId === source.droppableId && destination.index === source.index)) {
+      return;
+    }
+    const newStatus = destination.droppableId;
+    if (newStatus === 'other') {
+      // The "Other / Unknown" column is a UI fallback for legacy/unknown
+      // statuses; it is not a writable stage. Reject the drop so the user
+      // doesn't accidentally persist an invalid status.
+      toast({
+        variant: 'destructive',
+        title: 'Cannot drop here',
+        description: '"Other / Unknown" is a read-only column for legacy grants. Drag the card into a real stage instead.',
+      });
+      return;
+    }
+    onGrantUpdate(draggableId, { status: newStatus });
 
-                                                                                                                                                                                                                                                                                                        if (newStatus === 'discovery') {
+    // Trigger AI assessment when a grant enters the "interested" stage —
+    // the canonical equivalent of the legacy "Assess" / "Discovery" column.
+    if (newStatus === 'interested') {
                                                                                                                                                                                                                                                                                                                   const grant = grants.find(g => g.id === draggableId);
                                                                                                                                                                                                                                                                                                                         const organization = organizations.find(o => o.id === grant.organization_id);
                                                                                                                                                                                                                                                                                                                               if (grant && organization) {
@@ -194,13 +207,24 @@ const STATUSES = [
                                                                                                                                                                                                                                                                                                                                         }
                                                                                                                                                                                                                                                                                                                                     };
 
-                                                                                                                                                                                                                                                                                                                                      const grantsByStatus = React.useMemo(() => {
-                                                                                                                                                                                                                                                                                                                                            return STATUSES.reduce((acc, statusObj) => {
-                                                                                                                                                                                                                                                                                                                                                      const statusGrants = Array.isArray(grants) ? grants.filter(g => g.status === statusObj.value) : [];
-                                                                                                                                                                                                                                                                                                                                                            acc[statusObj.value] = statusGrants.sort((a, b) => (a.starred === b.starred) ? 0 : a.starred ? -1 : 1);
-                                                                                                                                                                                                                                                                                                                                                                  return acc;
-                                                                                                                                                                                                                                                                                                                                            }, {});
-                                                                                                                                                                                                                                                                                                                                        }, [grants]);
+  const grantsByStatus = React.useMemo(() => {
+    // Bucket grants by canonical stage, mapping legacy / unknown values via
+    // shared/pipelineStages.canonicalStage(). Anything that maps to null
+    // lands in the "other" bucket so the column count always equals the
+    // number of grants the API returned.
+    const acc = {};
+    for (const s of STATUSES) acc[s.value] = [];
+    if (!Array.isArray(grants)) return acc;
+    for (const g of grants) {
+      const canon = canonicalStage(g?.status);
+      const bucket = canon && acc[canon] ? canon : 'other';
+      acc[bucket].push(g);
+    }
+    for (const key of Object.keys(acc)) {
+      acc[key].sort((a, b) => (a.starred === b.starred) ? 0 : a.starred ? -1 : 1);
+    }
+    return acc;
+  }, [grants]);
 
                                                                                                                                                                                                                                                                                                                                           const handleStarToggle = (grant) => {
                                                                                                                                                                                                                                                                                                                                                 onGrantUpdate(grant.id, { starred: !grant.starred });
@@ -222,10 +246,13 @@ const STATUSES = [
                                                                                                                                                                                                                                                                                                                                                                       <PipelineSlider scrollRef={scrollRef} />
                                                                                                                                                                                                                                                                                                                                                                             <div className="overflow-x-auto pb-4" ref={scrollRef}>
                                                                                                                                                                                                                                                                                                                                                                                         <div className="flex gap-4" style={{ minWidth: STATUSES.length * 300 }}>
-                                                                                                                                                                                                                                                                                                                                                                                                      {STATUSES.map((status) => {
-                                                                                                                                                                                                                                                                                                                                                                                                                    const statusGrants = grantsByStatus[status.value] || [];
-                                                                                                                                                                                                                                                                                                                                                                                                                                const StatusIcon = status.icon;
-                                                                                                                                                                                                                                                                                                                                                                                                                                            return (
+          {STATUSES.map((status) => {
+            const statusGrants = grantsByStatus[status.value] || [];
+            // Hide the "other" column when there's nothing in it so the UI
+            // stays clean for users who never had legacy data.
+            if (status.value === 'other' && statusGrants.length === 0) return null;
+            const StatusIcon = status.icon;
+            return (
                                                                                                                                                                                                                                                                                                                                                                                                                                                               <div key={status.value} className="w-72 flex-shrink-0">
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 <Card className="shadow-lg border-0 bg-slate-50/50 h-full flex flex-col">
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   <CardHeader className={`${statusColors[status.value]} p-3`}>
