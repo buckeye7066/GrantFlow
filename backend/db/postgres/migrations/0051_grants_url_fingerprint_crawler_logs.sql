@@ -14,6 +14,11 @@ CREATE EXTENSION IF NOT EXISTS pgcrypto;
 ALTER TABLE grants ADD COLUMN IF NOT EXISTS url TEXT;
 ALTER TABLE grants ADD COLUMN IF NOT EXISTS matched_needs JSONB DEFAULT '[]'::jsonb;
 ALTER TABLE grants ADD COLUMN IF NOT EXISTS match_decision TEXT;
+-- match_explanation is TEXT in the canonical Postgres schema (grants stores
+-- JSON-as-text; the matcher writes JSON.stringify(...)). It must exist before
+-- the backfill below — on a fresh replay nothing has created it yet (0052 is
+-- the next migration to add it), so create it here to keep the chain replayable.
+ALTER TABLE grants ADD COLUMN IF NOT EXISTS match_explanation TEXT;
 ALTER TABLE grants ADD COLUMN IF NOT EXISTS fingerprint TEXT;
 ALTER TABLE grants ADD COLUMN IF NOT EXISTS fingerprint_version INT DEFAULT 1;
 

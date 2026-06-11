@@ -8,7 +8,8 @@ CREATE EXTENSION IF NOT EXISTS pgcrypto;
 ALTER TABLE grants ADD COLUMN IF NOT EXISTS url TEXT;
 ALTER TABLE grants ADD COLUMN IF NOT EXISTS matched_needs JSONB DEFAULT '[]'::jsonb;
 ALTER TABLE grants ADD COLUMN IF NOT EXISTS match_decision TEXT;
-ALTER TABLE grants ADD COLUMN IF NOT EXISTS match_explanation JSONB;
+-- match_explanation is TEXT in the canonical Postgres schema (0001_init / 0052).
+ALTER TABLE grants ADD COLUMN IF NOT EXISTS match_explanation TEXT;
 ALTER TABLE grants ADD COLUMN IF NOT EXISTS fingerprint TEXT;
 ALTER TABLE grants ADD COLUMN IF NOT EXISTS fingerprint_version INT DEFAULT 1;
 ALTER TABLE grants ADD COLUMN IF NOT EXISTS profile_fingerprint TEXT;
