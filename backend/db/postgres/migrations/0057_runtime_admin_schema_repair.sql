@@ -5,7 +5,9 @@ CREATE EXTENSION IF NOT EXISTS pgcrypto;
 ALTER TABLE grants ADD COLUMN IF NOT EXISTS url TEXT;
 ALTER TABLE grants ADD COLUMN IF NOT EXISTS matched_needs JSONB DEFAULT '[]'::jsonb;
 ALTER TABLE grants ADD COLUMN IF NOT EXISTS match_decision TEXT;
-ALTER TABLE grants ADD COLUMN IF NOT EXISTS match_explanation JSONB;
+-- match_explanation is TEXT in the canonical Postgres schema (0001_init / 0052);
+-- declaring it JSONB here was a no-op on existing columns but is misleading.
+ALTER TABLE grants ADD COLUMN IF NOT EXISTS match_explanation TEXT;
 ALTER TABLE grants ADD COLUMN IF NOT EXISTS fingerprint TEXT;
 ALTER TABLE grants ADD COLUMN IF NOT EXISTS fingerprint_version INT DEFAULT 1;
 ALTER TABLE grants ADD COLUMN IF NOT EXISTS profile_fingerprint TEXT;
@@ -35,9 +37,11 @@ UPDATE grants
 SET match_decision = COALESCE(NULLIF(match_decision, ''), 'review')
 WHERE match_decision IS NULL OR match_decision = '';
 
+-- match_explanation is TEXT: COALESCE with a text literal (not ::jsonb), or
+-- Postgres raises "COALESCE types text and jsonb cannot be matched".
 UPDATE grants
-SET match_explanation = COALESCE(match_explanation, '{"source":"admin_schema_repair","reason":"migration 0057 backfill"}'::jsonb)
-WHERE match_explanation IS NULL OR match_explanation::text IN ('', 'null');
+SET match_explanation = COALESCE(NULLIF(match_explanation, ''), '{"source":"admin_schema_repair","reason":"migration 0057 backfill"}')
+WHERE match_explanation IS NULL OR match_explanation IN ('', 'null');
 
 UPDATE grants
 SET fingerprint = COALESCE(NULLIF(fingerprint, ''), COALESCE(NULLIF(opportunity_fingerprint, ''), funding_opportunity_id::text, id::text))

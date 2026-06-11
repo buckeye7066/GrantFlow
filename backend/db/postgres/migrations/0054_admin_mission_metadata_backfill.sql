@@ -1,14 +1,23 @@
 -- 0054: Backfill mission-verification metadata for historical profile grants.
 
+-- These columns are first created by 0056/0057; add them here (idempotent) so a
+-- fresh replay of the chain does not reference columns that don't exist yet.
+ALTER TABLE grants ADD COLUMN IF NOT EXISTS profile_fingerprint TEXT;
+ALTER TABLE grants ADD COLUMN IF NOT EXISTS opportunity_fingerprint TEXT;
+ALTER TABLE grants ADD COLUMN IF NOT EXISTS matcher_version TEXT;
+
 UPDATE grants
 SET matched_needs = '["backfill"]'::jsonb
 WHERE profile_id IS NOT NULL
   AND (matched_needs IS NULL OR matched_needs = '[]'::jsonb);
 
+-- grants.match_reasons is TEXT (canonical, from 0001_init), storing JSON-as-text.
+-- Compare/assign as text, not jsonb, or Postgres raises "operator does not exist:
+-- text = jsonb".
 UPDATE grants
-SET match_reasons = '["Backfilled from existing pipeline row; re-score on next match run."]'::jsonb
+SET match_reasons = '["Backfilled from existing pipeline row; re-score on next match run."]'
 WHERE profile_id IS NOT NULL
-  AND (match_reasons IS NULL OR match_reasons = '[]'::jsonb);
+  AND (match_reasons IS NULL OR match_reasons = '[]');
 
 UPDATE grants
 SET profile_fingerprint = COALESCE(profile_fingerprint, 'profile:' || profile_id::text),

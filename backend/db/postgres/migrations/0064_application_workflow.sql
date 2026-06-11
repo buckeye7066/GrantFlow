@@ -1,5 +1,35 @@
 -- Phase 7: Discovery -> Action workflow (Postgres mirror of SQLite migration 070)
 
+-- grant_applications is created by SQLite migration 047 but was never ported to
+-- Postgres, so the FK references below (application_id -> grant_applications)
+-- failed on a fresh Postgres replay with "relation grant_applications does not
+-- exist". Create it here (idempotent) — a no-op where it already exists.
+CREATE TABLE IF NOT EXISTS grant_applications (
+  id TEXT PRIMARY KEY,
+  profile_id TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+  opportunity_id TEXT,
+  pipeline_grant_id TEXT,
+  user_id TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'draft',
+  title TEXT,
+  grant_name TEXT NOT NULL,
+  funder_name TEXT,
+  amount_requested DOUBLE PRECISION,
+  amount_awarded DOUBLE PRECISION,
+  deadline_date TEXT,
+  submitted_at TIMESTAMPTZ,
+  response_expected_date TEXT,
+  response_received_at TIMESTAMPTZ,
+  notes TEXT,
+  contact_name TEXT,
+  contact_email TEXT,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_grant_applications_user_id ON grant_applications(user_id);
+CREATE INDEX IF NOT EXISTS idx_grant_applications_profile_id ON grant_applications(profile_id);
+CREATE INDEX IF NOT EXISTS idx_grant_applications_status ON grant_applications(status);
+
 CREATE TABLE IF NOT EXISTS profile_opportunity_matches (
   id TEXT PRIMARY KEY,
   profile_id TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,

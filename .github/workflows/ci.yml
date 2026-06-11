@@ -89,3 +89,57 @@ jobs:
         run: |
           npx playwright install chromium --with-deps 2>/dev/null || npm run smoke:install
           npm run smoke
+
+  # Replays the full Postgres migration chain against an ephemeral database on
+  # every PR. Production runs Postgres (Railway) but the unit suite runs on
+  # in-memory SQLite, so dialect-only migration bugs (TEXT-vs-JSONB drift,
+  # missing ADD COLUMN, tables never ported from the SQLite set, boolean=integer
+  # comparisons) were invisible until a real deploy/restore. This job is the
+  # guard: a fresh `npm run migrate` must apply cleanly, be idempotent on
+  # re-run, and produce the canonical schema.
+  postgres-migrations:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: grantflow_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/grantflow_ci
+      DB_PROVIDER: postgres
+      DB_DIALECT: postgres
+      NODE_ENV: development
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install
+        run: npm ci --include=optional || npm install --include=optional
+
+      - name: Migrate fresh database (full chain)
+        run: npm run migrate
+
+      - name: Re-run migrate (must be idempotent)
+        run: npm run migrate
+
+      - name: Verify canonical Postgres schema
+        run: node backend/scripts/verify-pg-schema.mjs
