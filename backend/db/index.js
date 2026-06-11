@@ -546,13 +546,22 @@ const KNOWN_BOOLEAN_COLUMNS = [
   'is_active', 'is_archived', 'is_verified', 'is_published', 'is_deleted',
   'is_eligible', 'is_approved', 'is_rejected', 'is_flagged', 'is_locked',
   'is_recurring', 'is_featured', 'is_hidden', 'is_system',
-  'active', 'activated', 'verified', 'archived', 'published', 'ocr_used'
+  'active', 'activated', 'verified', 'archived', 'published', 'ocr_used',
+  // funding_opportunities / grants boolean columns. These are BOOLEAN in the
+  // Postgres schema but were stored as 0/1 integers under SQLite, so any
+  // unguarded `is_national = 1` / `requires_match = 0` style comparison threw
+  // `operator does not exist: boolean = integer` (HTTP 500) on the funding
+  // pipeline. Listing them here lets the shim rewrite `= 1`/`= 0` to
+  // `= TRUE`/`= FALSE` everywhere, instead of relying on each call site to
+  // hand-write an `isPostgres ? 'IS TRUE' : '= 1'` branch.
+  'is_national', 'is_loan', 'requires_match', 'requires_501c3',
+  'usable_for_housing', 'refund_potential', 'verified_url'
 ];
 const BOOL_COL_PATTERN = KNOWN_BOOLEAN_COLUMNS.map(c => c.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
 const BOOL_TRUE_RE = new RegExp(`\\b(${BOOL_COL_PATTERN})\\s*=\\s*1\\b`, 'gi');
 const BOOL_FALSE_RE = new RegExp(`\\b(${BOOL_COL_PATTERN})\\s*=\\s*0\\b`, 'gi');
 
-function fixBooleanIntegers(sql) {
+export function fixBooleanIntegers(sql) {
   return sql
     .replace(BOOL_TRUE_RE, '$1 = TRUE')
     .replace(BOOL_FALSE_RE, '$1 = FALSE');
