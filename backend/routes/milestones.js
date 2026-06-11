@@ -98,10 +98,14 @@ router.get('/', async (req, res) => {
       params.push(...Array.from(orgIds))
     }
 
-    // Apply filter conditions
-    if (completed === 'true') query += ' AND m.completed = 1'
+    // Apply filter conditions.
+    // milestones.completed is BOOLEAN; use it directly (and NOT …) rather than
+    // `= 1`/`= 0`, which is fine in SQLite (0/1 ints) but raises
+    // "operator does not exist: boolean = integer" in Postgres. Bare boolean
+    // truthiness is portable across both dialects.
+    if (completed === 'true') query += ' AND m.completed'
     if (completed === 'false') {
-      query += ' AND m.completed = 0'
+      query += ' AND NOT m.completed'
     }
     if (upcoming === 'true') {
       query +=

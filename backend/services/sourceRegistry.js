@@ -1290,8 +1290,12 @@ export async function loadCrawlerSourceRuntimeStatus(db) {
         SELECT source_id,
                MAX(created_at) AS last_crawl,
                -- 'failed' if the most-recent run failed; otherwise 'ok'.
+               -- crawler_source_runs.failed is BOOLEAN; use it directly rather
+               -- than failed = 1, which is fine in SQLite (0/1 ints) but raises
+               -- operator does not exist: boolean = integer in Postgres. The
+               -- bare boolean is truthy in both dialects.
                (
-                 SELECT CASE WHEN failed = 1 THEN 'failed' ELSE 'ok' END
+                 SELECT CASE WHEN failed THEN 'failed' ELSE 'ok' END
                  FROM crawler_source_runs r2
                  WHERE r2.source_id = crawler_source_runs.source_id
                  ORDER BY r2.created_at DESC
@@ -1301,7 +1305,7 @@ export async function loadCrawlerSourceRuntimeStatus(db) {
                  SELECT error
                  FROM crawler_source_runs r3
                  WHERE r3.source_id = crawler_source_runs.source_id
-                   AND r3.failed = 1
+                   AND r3.failed
                  ORDER BY r3.created_at DESC
                  LIMIT 1
                ) AS last_error

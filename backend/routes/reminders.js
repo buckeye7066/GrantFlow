@@ -148,7 +148,9 @@ export async function fetchReminderSnapshot(db, lookaheadDays = DAYS_LOOKAHEAD, 
           FROM milestones m
           LEFT JOIN grants g ON g.id = m.grant_id
           LEFT JOIN organizations o ON o.id = m.organization_id
-          WHERE m.completed = 0
+          -- m.completed is BOOLEAN; NOT m.completed is portable, = 0 is not
+          -- (Postgres raises operator does not exist: boolean = integer).
+          WHERE NOT m.completed
             AND m.due_date IS NOT NULL
             AND m.due_date >= ?
             AND m.due_date <= ?
