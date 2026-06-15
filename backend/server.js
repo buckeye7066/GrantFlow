@@ -1990,6 +1990,9 @@ app.use('/api/colleges', collegesRouter);
 app.use('/api/notifications', notificationsRouter);
 app.use('/api/saved-grants', savedGrantsRouter);
 app.use('/api/foundations', foundationsRouter);
+// Robert — Funding Discovery Agent. Disabled by default; the scheduler
+// only starts if ROBERT_ENABLED + ROBERT_RUN_ON_SCHEDULE/STARTUP say so.
+app.use('/api/robert', lazyRouter('./routes/robert.js'));
 
 function resolveBuildSha() {
   return (
@@ -2485,6 +2488,19 @@ if (process.env.NODE_ENV !== 'test') {
     console.log(`CORS origins: ${loggedCorsOrigins.join(', ')}`);
     const actualPort = server.address()?.port ?? PORT;
     console.log('[Server] Ready on port', actualPort);
+
+    // Robert — funding-discovery agent scheduler. Disabled by default;
+    // only starts if ROBERT_ENABLED + ROBERT_RUN_ON_SCHEDULE/STARTUP are true.
+    ;(async () => {
+      try {
+        const { startRobertScheduler } = await import('./services/robert/robertScheduler.js')
+        const result = startRobertScheduler({ db })
+        if (result?.started) console.log('[Server] Robert scheduler started')
+        else console.log('[Server] Robert scheduler not started:', result?.reason || 'disabled')
+      } catch (err) {
+        console.warn('[Server] Robert scheduler startup skipped:', err?.message)
+      }
+    })()
 
     // Auto-heal Postgres CHECK constraints that may be outdated if migrations haven't run.
     if (db.dialect === 'postgres') {

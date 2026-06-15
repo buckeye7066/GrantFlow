@@ -6,6 +6,7 @@ import AdminDiagnostics from '@/components/admin/AdminDiagnostics';
 import AdminGeoCrawl from '@/components/admin/AdminGeoCrawl';
 import AdminMaintenance from '@/components/admin/AdminMaintenance';
 import AdminAnyaConsole from '@/components/admin/AdminAnyaConsole';
+import AdminRobertConsole from '@/components/admin/AdminRobertConsole';
 import AdminServiceApplications from '@/components/admin/AdminServiceApplications';
 import AdminLoginNotifications from '@/components/admin/AdminLoginNotifications.jsx';
 import AdminProfileDedupe from '@/components/admin/AdminProfileDedupe.jsx';
@@ -80,6 +81,10 @@ export default function Admin() {
               <Bot className="w-4 h-4 mr-2" />
               Anya
             </TabsTrigger>
+            <TabsTrigger value="robert">
+              <Bot className="w-4 h-4 mr-2" />
+              Robert
+            </TabsTrigger>
             <TabsTrigger value="billing">
               <DollarSign className="w-4 h-4 mr-2" />
               Billing
@@ -134,6 +139,10 @@ export default function Admin() {
 
           <TabsContent value="anya" className="mt-6">
             <AdminAnyaConsole />
+          </TabsContent>
+
+          <TabsContent value="robert" className="mt-6">
+            <AdminRobertConsole />
           </TabsContent>
 
           <TabsContent value="billing" className="mt-6">
