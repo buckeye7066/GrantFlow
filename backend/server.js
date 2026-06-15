@@ -1991,6 +1991,13 @@ app.use('/api/notifications', notificationsRouter);
 app.use('/api/saved-grants', savedGrantsRouter);
 app.use('/api/foundations', foundationsRouter);
 
+// School-portal bridge — public partner-auth (Bearer API key) routes that let
+// a registered school's student-information system push roster data into
+// GrantFlow profiles and read back the funding sources the matcher says each
+// student is eligible for. Admin sub-routes (/admin/*) gate on req.user.is_admin
+// inside the router.
+app.use('/api/school-portal', lazyRouter('./routes/schoolPortal.js'))
+
 function resolveBuildSha() {
   return (
     process.env.RAILWAY_GIT_COMMIT_SHA ||

@@ -103,3 +103,18 @@ export async function restoreProfileAccessAdmin(profileId, payload = {}) {
     body: JSON.stringify(payload),
   })
 }
+
+// School-portal bridge — show / revoke the link between this profile and a
+// registered school's student-information system. (Mission goal 4 + 7: the
+// student can always see and control which school is feeding their data.)
+export async function getProfileSchoolLink(profileId) {
+  assertRealProfileId(profileId, 'getProfileSchoolLink')
+  return apiFetch(`/api/profiles/${profileId}/school-link`)
+}
+
+export async function revokeProfileSchoolLink(profileId) {
+  assertRealProfileId(profileId, 'revokeProfileSchoolLink')
+  return apiFetch(`/api/profiles/${profileId}/school-link/revoke`, {
+    method: 'POST',
+  })
+}
