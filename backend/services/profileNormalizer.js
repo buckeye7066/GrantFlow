@@ -72,6 +72,9 @@ export const NEED_ALIAS_MAP = {
   training: 'education',
   vocational: 'education',
   financial_aid: 'education',
+  textbooks: 'education',
+  books: 'education',
+  fellowship: 'education',
 
   // Professional development / continuing education / licensure remediation
   // (top-level taxonomy bucket per spec section 2). These map to the
