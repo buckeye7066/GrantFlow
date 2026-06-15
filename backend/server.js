@@ -1991,6 +1991,11 @@ app.use('/api/notifications', notificationsRouter);
 app.use('/api/saved-grants', savedGrantsRouter);
 app.use('/api/foundations', foundationsRouter);
 
+// Sam — production-readiness agent. /api/sam/health is public; everything
+// else is admin-gated inside the router. Mounted after the rest of the API
+// so Sam's HTTP probes can hit /api/health/* and /readyz cleanly.
+app.use('/api/sam', lazyRouter('./routes/sam.js'))
+
 function resolveBuildSha() {
   return (
     process.env.RAILWAY_GIT_COMMIT_SHA ||
@@ -2485,6 +2490,18 @@ if (process.env.NODE_ENV !== 'test') {
     console.log(`CORS origins: ${loggedCorsOrigins.join(', ')}`);
     const actualPort = server.address()?.port ?? PORT;
     console.log('[Server] Ready on port', actualPort);
+
+    // Sam scheduler — opt-in via SAM_ENABLED + SAM_RUN_ON_STARTUP /
+    // SAM_RUN_ON_SCHEDULE. Default behaviour is OFF; the scheduler logs
+    // once and exits when env gates aren't set.
+    (async () => {
+      try {
+        const { startSamScheduler } = await import('./services/sam/samScheduler.js')
+        startSamScheduler({ db, logger: console })
+      } catch (samErr) {
+        console.warn('[sam:scheduler] failed to start:', samErr?.message || samErr)
+      }
+    })();
 
     // Auto-heal Postgres CHECK constraints that may be outdated if migrations haven't run.
     if (db.dialect === 'postgres') {
