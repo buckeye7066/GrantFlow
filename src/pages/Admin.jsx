@@ -1,11 +1,12 @@
 import React, { Suspense } from 'react';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Shield, Activity, AlertCircle, Bot, DollarSign, Wrench, Workflow, Users, Bell, Loader2 } from 'lucide-react';
+import { Shield, Activity, AlertCircle, Bot, DollarSign, Mail, Wrench, Workflow, Users, Bell, Loader2 } from 'lucide-react';
 import AdminDocumentUpload from '@/components/admin/AdminDocumentUpload';
 import AdminDiagnostics from '@/components/admin/AdminDiagnostics';
 import AdminGeoCrawl from '@/components/admin/AdminGeoCrawl';
 import AdminMaintenance from '@/components/admin/AdminMaintenance';
 import AdminAnyaConsole from '@/components/admin/AdminAnyaConsole';
+import AdminLarryConsole from '@/components/admin/AdminLarryConsole';
 import AdminServiceApplications from '@/components/admin/AdminServiceApplications';
 import AdminLoginNotifications from '@/components/admin/AdminLoginNotifications.jsx';
 import AdminProfileDedupe from '@/components/admin/AdminProfileDedupe.jsx';
@@ -80,6 +81,10 @@ export default function Admin() {
               <Bot className="w-4 h-4 mr-2" />
               Anya
             </TabsTrigger>
+            <TabsTrigger value="larry">
+              <Mail className="w-4 h-4 mr-2" />
+              Larry
+            </TabsTrigger>
             <TabsTrigger value="billing">
               <DollarSign className="w-4 h-4 mr-2" />
               Billing
@@ -134,6 +139,10 @@ export default function Admin() {
 
           <TabsContent value="anya" className="mt-6">
             <AdminAnyaConsole />
+          </TabsContent>
+
+          <TabsContent value="larry" className="mt-6">
+            <AdminLarryConsole />
           </TabsContent>
 
           <TabsContent value="billing" className="mt-6">
