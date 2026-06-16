@@ -31,13 +31,14 @@ function startServer(extraEnv = {}) {
 
   const ready = new Promise((resolve, reject) => {
     let resolved = false
+    let timeout = null
 
     const tryResolveReady = () => {
       if (resolved) return true
       const match = stdout.match(/\[Server\] Ready on port\s+(\d+)/) || stderr.match(/\[Server\] Ready on port\s+(\d+)/)
       if (!match) return false
       resolved = true
-      clearTimeout(timeout)
+      if (timeout) clearTimeout(timeout)
       resolve({ port: Number(match[1]), dbPath })
       return true
     }
@@ -54,7 +55,7 @@ function startServer(extraEnv = {}) {
 
     tryResolveReady()
 
-    const timeout = setTimeout(() => {
+    timeout = setTimeout(() => {
       if (tryResolveReady()) return
       try {
         child.kill('SIGTERM')
