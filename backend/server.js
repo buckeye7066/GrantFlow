@@ -1939,6 +1939,7 @@ app.use('/api/admin/queue', adminQueueOpsRouter)
 app.use('/api/organizations', organizationsRouter);
 app.use('/api/grants', grantsRouter);
 app.use('/api/opportunities', opportunitiesRouter);
+app.use('/api/sam/onboarding-audit', lazyRouter('./routes/samOnboardingAudit.js'));
 app.use('/api/funding-library', lazyRouter('./routes/fundingLibrary.js'));
 app.use('/api/programs', programsRouter);
 app.use('/api/milestones', milestonesRouter);
