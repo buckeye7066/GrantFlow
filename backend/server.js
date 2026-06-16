@@ -1991,6 +1991,7 @@ app.use('/api/colleges', collegesRouter);
 app.use('/api/notifications', notificationsRouter);
 app.use('/api/saved-grants', savedGrantsRouter);
 app.use('/api/foundations', foundationsRouter);
+app.use('/api/larry', lazyRouter('./routes/larry.js'));
 // Robert — Funding Discovery Agent. Disabled by default; the scheduler
 // only starts if ROBERT_ENABLED + ROBERT_RUN_ON_SCHEDULE/STARTUP say so.
 app.use('/api/robert', lazyRouter('./routes/robert.js'));
@@ -2610,6 +2611,20 @@ if (process.env.NODE_ENV !== 'test') {
         }
       } catch (err) {
         console.warn('[startup] Stale crawler cleanup failed:', err?.message)
+      }
+    })()
+
+    // Larry — Lead Discovery & Outreach Agent. Off by default; the scheduler
+    // is a no-op unless LARRY_ENABLED=true and at least one of
+    // LARRY_RUN_ON_STARTUP / LARRY_RUN_ON_SCHEDULE is true.
+    ;(async () => {
+      try {
+        const { startLarryScheduler } = await import('./services/larry/larryScheduler.js')
+        const result = startLarryScheduler({ db })
+        if (result?.started) console.log('[Server] Larry scheduler started')
+        else console.log('[Server] Larry scheduler not started:', result?.reason || 'disabled')
+      } catch (err) {
+        console.warn('[Server] Larry scheduler startup skipped:', err?.message)
       }
     })()
 
