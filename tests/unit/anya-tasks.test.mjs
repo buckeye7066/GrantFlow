@@ -90,7 +90,6 @@ async function startBackend({ rootDir, sqlitePath }) {
 
   const start = Date.now()
   const timeoutMs = 60_000
-  // eslint-disable-next-line no-constant-condition
   while (true) {
     if (spawnError) {
       const stdout = stdoutBuf
@@ -122,7 +121,6 @@ async function startBackend({ rootDir, sqlitePath }) {
       // keep polling
     }
 
-    // eslint-disable-next-line no-await-in-loop
     await sleep(250)
   }
 
@@ -166,7 +164,6 @@ async function safeRm(dir, { retries = 8 } = {}) {
     } catch (error) {
       const code = error?.code
       if (code === 'EBUSY' || code === 'EPERM') {
-        // eslint-disable-next-line no-await-in-loop
         await sleep(150 * (i + 1))
         continue
       }

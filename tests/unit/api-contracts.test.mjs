@@ -13,34 +13,32 @@ async function sleep(ms) {
 
 async function waitForHttpOk(url, { timeoutMs = 30_000 } = {}) {
   const start = Date.now()
-  // eslint-disable-next-line no-constant-condition
   while (true) {
     if (Date.now() - start > timeoutMs) return false
     try {
       const res = await fetch(url, { method: 'GET' })
       if (res.ok) return true
     } catch {}
-    // eslint-disable-next-line no-await-in-loop
     await sleep(250)
   }
+}
 
-  async function reservePort() {
-    return await new Promise((resolve, reject) => {
-      const server = net.createServer()
-      server.listen(0, '127.0.0.1', () => {
-        const address = server.address()
-        const port = typeof address === 'object' && address ? address.port : null
-        server.close((error) => {
-          if (error) {
-            reject(error)
-            return
-          }
-          resolve(port)
-        })
+async function reservePort() {
+  return await new Promise((resolve, reject) => {
+    const server = net.createServer()
+    server.listen(0, '127.0.0.1', () => {
+      const address = server.address()
+      const port = typeof address === 'object' && address ? address.port : null
+      server.close((error) => {
+        if (error) {
+          reject(error)
+          return
+        }
+        resolve(port)
       })
-      server.on('error', reject)
     })
-  }
+    server.on('error', reject)
+  })
 }
 
 async function stopProcess(proc) {
@@ -103,7 +101,6 @@ async function startBackend({ rootDir }) {
 
   const start = Date.now()
   const timeoutMs = 60_000
-  // eslint-disable-next-line no-constant-condition
   while (true) {
     if (spawnError) {
       const stdout = stdoutChunks.join('')
@@ -134,7 +131,6 @@ async function startBackend({ rootDir }) {
       // keep polling
     }
 
-    // eslint-disable-next-line no-await-in-loop
     await sleep(250)
   }
 
