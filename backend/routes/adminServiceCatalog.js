@@ -1,6 +1,8 @@
 import express from 'express'
 import { ensureAdmin, ensureAuth } from '../middleware/auth.js'
 import { ensureServiceCatalogSchema, listServiceCatalog, seedServiceCatalogFromExtract } from '../services/serviceCatalogStore.js'
+import { verifyStripePriceMapping } from '../services/pricing/stripePriceVerifier.js'
+import { resolveAllCatalogCharges } from '../services/pricing/chargeResolver.js'
 
 import { createLogger } from '../utils/logger.js'
 const routeLogger = createLogger('route:adminServiceCatalog')
@@ -33,6 +35,34 @@ router.post('/service/:slug/toggle', async (req, res) => {
     res.json({ ok: true, updated: changed > 0 })
   } catch (error) {
     res.status(500).json({ ok: false, error: error.message })
+  }
+})
+
+router.get('/stripe-price-verification', async (req, res) => {
+  try {
+    await ensureServiceCatalogSchema(req.db)
+    const report = await verifyStripePriceMapping(req.db)
+    res.json({ ok: report.ok, ...report })
+  } catch (error) {
+    routeLogger.error('stripe-price-verification failed', { error: error?.message })
+    res.status(500).json({ ok: false, error: error?.message || String(error) })
+  }
+})
+
+router.get('/charge-resolution', async (req, res) => {
+  try {
+    await ensureServiceCatalogSchema(req.db)
+    const rows = await resolveAllCatalogCharges(req.db)
+    const blocked = rows.filter((r) => !r.can_checkout)
+    res.json({
+      ok: blocked.length === 0,
+      total: rows.length,
+      blocked_count: blocked.length,
+      rows,
+    })
+  } catch (error) {
+    routeLogger.error('charge-resolution audit failed', { error: error?.message })
+    res.status(500).json({ ok: false, error: error?.message || String(error) })
   }
 })
 
