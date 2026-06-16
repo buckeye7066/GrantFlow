@@ -11,9 +11,14 @@ async function waitForHttpOk(url, { timeoutMs = 30_000 } = {}) {
   const start = Date.now()
   // eslint-disable-next-line no-constant-condition
   while (true) {
-    if (Date.now() - start > timeoutMs) return false
+    const elapsed = Date.now() - start
+    if (elapsed > timeoutMs) return false
     try {
-      const res = await fetch(url, { method: 'GET' })
+      const requestTimeoutMs = Math.max(1, Math.min(1_000, timeoutMs - elapsed))
+      const res = await fetch(url, {
+        method: 'GET',
+        signal: AbortSignal.timeout(requestTimeoutMs),
+      })
       if (res.ok) return true
     } catch {}
     // eslint-disable-next-line no-await-in-loop
