@@ -19,6 +19,12 @@ function startServer(extraEnv = {}) {
       SQLITE_DB_PATH: dbPath,
       DB_AUTO_MIGRATE: 'true',
       AUTH_JWT_SECRET: 'test-secret',
+      SMOKE_MODE: 'true',
+      ANYA_AUTONOMOUS_ENABLED: 'false',
+      ANYA_RUN_ON_STARTUP: 'false',
+      ANYA_RUN_ON_SCHEDULE: 'false',
+      NATIONAL_PROGRAMS_CRAWLER_ENABLED: 'false',
+      STARTUP_SMOKE_CRAWL_ENABLED: 'false',
       ...extraEnv,
     },
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -28,35 +34,24 @@ function startServer(extraEnv = {}) {
   let stderr = ''
   child.stdout.setEncoding('utf8')
   child.stderr.setEncoding('utf8')
+  child.stdout.on('data', (chunk) => {
+    stdout += chunk
+  })
+  child.stderr.on('data', (chunk) => {
+    stderr += chunk
+  })
 
   const ready = new Promise((resolve, reject) => {
-    let resolved = false
-    let timeout = null
-
-    const tryResolveReady = () => {
-      if (resolved) return true
+    const interval = setInterval(() => {
       const match = stdout.match(/\[Server\] Ready on port\s+(\d+)/) || stderr.match(/\[Server\] Ready on port\s+(\d+)/)
-      if (!match) return false
-      resolved = true
-      if (timeout) clearTimeout(timeout)
+      if (!match) return
+      clearInterval(interval)
+      clearTimeout(timeout)
       resolve({ port: Number(match[1]), dbPath })
-      return true
-    }
+    }, 50)
 
-    child.stdout.on('data', (chunk) => {
-      stdout += chunk
-      tryResolveReady()
-    })
-
-    child.stderr.on('data', (chunk) => {
-      stderr += chunk
-      tryResolveReady()
-    })
-
-    tryResolveReady()
-
-    timeout = setTimeout(() => {
-      if (tryResolveReady()) return
+    const timeout = setTimeout(() => {
+      clearInterval(interval)
       try {
         child.kill('SIGTERM')
       } catch {
@@ -66,13 +61,15 @@ function startServer(extraEnv = {}) {
     }, 60_000)
 
     child.on('error', (err) => {
-      if (resolved) return
+      clearInterval(interval)
       clearTimeout(timeout)
       reject(new Error(`server failed to spawn: ${String(err?.message || err)}\nstdout:\n${stdout}\nstderr:\n${stderr}`))
     })
 
     child.on('exit', (code) => {
-      if (resolved || tryResolveReady()) return
+      const match = stdout.match(/\[Server\] Ready on port\s+(\d+)/) || stderr.match(/\[Server\] Ready on port\s+(\d+)/)
+      if (match) return
+      clearInterval(interval)
       clearTimeout(timeout)
       reject(new Error(`server exited before ready (code=${code})\nstdout:\n${stdout}\nstderr:\n${stderr}`))
     })
@@ -81,7 +78,14 @@ function startServer(extraEnv = {}) {
   async function stop() {
     if (child.killed) return
     child.kill('SIGTERM')
-    await new Promise((resolve) => child.once('exit', resolve))
+    await Promise.race([
+      new Promise((resolve) => child.once('exit', resolve)),
+      new Promise((resolve) => setTimeout(resolve, 2_000)),
+    ])
+    if (!child.killed && child.exitCode === null) {
+      try { child.kill('SIGKILL') } catch {}
+      await new Promise((resolve) => child.once('exit', resolve))
+    }
   }
 
   return { ready, stop, dbPath }
