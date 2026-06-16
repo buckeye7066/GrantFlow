@@ -44,7 +44,7 @@ function startServer(extraEnv = {}) {
     }, 60_000)
 
     child.stdout.on('data', () => {
-      const m = stdout.match(/\[Server\] Ready on port\s+(\d+)/)
+      const m = stdout.match(/\[Server\](?:\u001B\[[0-?]*[ -/]*[@-~]|\s)+Ready on port\s+(\d+)/)
       if (m) {
         clearTimeout(timeout)
         resolve({ port: Number(m[1]), dbPath })
@@ -57,7 +57,7 @@ function startServer(extraEnv = {}) {
     })
 
     child.on('exit', (code) => {
-      if (stdout.includes('[Server] Ready on port')) return
+      if (/\[Server\](?:\u001B\[[0-?]*[ -/]*[@-~]|\s)+Ready on port/.test(stdout)) return
       clearTimeout(timeout)
       reject(new Error(`server exited before ready (code=${code})\nstdout:\n${stdout}\nstderr:\n${stderr}`))
     })

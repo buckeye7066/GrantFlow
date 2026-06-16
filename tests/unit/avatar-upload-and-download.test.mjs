@@ -48,7 +48,7 @@ function startServer(extraEnv = {}) {
     const checkReady = (newChunk) => {
       if (resolved) return true
       const textToCheck = stdout + (newChunk || '')
-      const match = textToCheck.match(/\[Server\] Ready on port\s+(\d+)/)
+      const match = textToCheck.match(/\[Server\](?:\u001B\[[0-?]*[ -/]*[@-~]|\s)+Ready on port\s+(\d+)/)
       if (match) {
         clearTimeout(timeout)
         clearInterval(readyPoll)

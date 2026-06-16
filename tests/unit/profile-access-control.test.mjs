@@ -34,7 +34,7 @@ function startServer(extraEnv = {}) {
 
     const tryResolveReady = () => {
       if (resolved) return true
-      const match = stdout.match(/\[Server\] Ready on port\s+(\d+)/) || stderr.match(/\[Server\] Ready on port\s+(\d+)/)
+      const match = stdout.match(/\[Server\](?:\u001B\[[0-?]*[ -/]*[@-~]|\s)+Ready on port\s+(\d+)/) || stderr.match(/\[Server\](?:\u001B\[[0-?]*[ -/]*[@-~]|\s)+Ready on port\s+(\d+)/)
       if (!match) return false
       resolved = true
       clearTimeout(timeout)

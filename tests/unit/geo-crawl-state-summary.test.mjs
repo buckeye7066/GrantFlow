@@ -49,7 +49,7 @@ function startServer(extraEnv = {}) {
 
     const checkReady = () => {
       if (resolved) return
-      const m = stdout.match(/\[Server\] Ready on port\s+(\d+)/)
+      const m = stdout.match(/\[Server\](?:\u001B\[[0-?]*[ -/]*[@-~]|\s)+Ready on port\s+(\d+)/)
       if (m) {
         resolved = true
         clearInterval(readyPoll)
@@ -71,7 +71,7 @@ function startServer(extraEnv = {}) {
 
     child.on('exit', (code) => {
       if (resolved) return
-      if (stdout.includes('[Server] Ready on port')) return
+      if (/\[Server\](?:\u001B\[[0-?]*[ -/]*[@-~]|\s)+Ready on port/.test(stdout)) return
       resolved = true
       clearInterval(readyPoll)
       clearTimeout(timeout)

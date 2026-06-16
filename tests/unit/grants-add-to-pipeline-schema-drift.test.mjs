@@ -46,7 +46,7 @@ function startServer({ dbPath }) {
     const checkReady = (chunk = '') => {
       if (resolved) return
       stdout += chunk
-      const match = stdout.match(/\[Server\] Ready on port\s+(\d+)/)
+      const match = stdout.match(/\[Server\](?:\u001B\[[0-?]*[ -/]*[@-~]|\s)+Ready on port\s+(\d+)/)
       if (match) {
         resolved = true
         clearInterval(readyPoll)
