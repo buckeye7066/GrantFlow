@@ -1180,6 +1180,28 @@ function ApplicationCard({
 
   const theme = getSchoolTheme(application)
   const borderColor = theme?.primary || undefined
+  const handleCardActivate = useCallback(
+    (event) => {
+      if (!onEdit || disabled) return
+      const interactiveTarget = event.target instanceof Element
+        ? event.target.closest('a,button,input,select,textarea,[role="button"],[data-card-ignore-click="true"]')
+        : null
+      if (interactiveTarget && interactiveTarget !== event.currentTarget) return
+      onEdit()
+    },
+    [disabled, onEdit],
+  )
+
+  const handleCardKeyDown = useCallback(
+    (event) => {
+      if (!onEdit || disabled) return
+      if (event.target !== event.currentTarget) return
+      if (event.key !== "Enter" && event.key !== " ") return
+      event.preventDefault()
+      onEdit()
+    },
+    [disabled, onEdit],
+  )
 
   return (
     <div
@@ -1189,8 +1211,13 @@ function ApplicationCard({
           : isMutedByOtherCommit
             ? "border-slate-200 opacity-60 grayscale"
             : "border-slate-200"
-      }`}
+      } ${disabled ? "" : "cursor-pointer hover:shadow-md transition-shadow"}`}
       style={borderColor && !isMutedByOtherCommit ? { borderColor } : undefined}
+      role="button"
+      tabIndex={disabled ? -1 : 0}
+      aria-label={`Open university card for ${application.name}`}
+      onClick={handleCardActivate}
+      onKeyDown={handleCardKeyDown}
     >
       {theme ? (
         <div
