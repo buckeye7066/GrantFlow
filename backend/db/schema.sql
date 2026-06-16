@@ -1088,11 +1088,6 @@ CREATE TABLE IF NOT EXISTS profile_documents (
 -- policy, validation, ingestion, and matching to canonical services;
 -- these tables only track Robert's own discovery + recommendation queue.
 CREATE TABLE IF NOT EXISTS robert_runs (
--- Sam — production-readiness agent run history. See
--- docs/SAM_PRODUCTION_AGENT.md for design notes. Sam orchestrates the
--- existing Anya autonomous tooling and project release gates; this table
--- records each orchestrating run alongside per-tool history in `anya_runs`.
-CREATE TABLE IF NOT EXISTS sam_runs (
   id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
   mode TEXT NOT NULL DEFAULT 'observe',
   trigger TEXT NOT NULL DEFAULT 'manual',
@@ -1118,6 +1113,27 @@ CREATE TABLE IF NOT EXISTS sam_runs (
 CREATE INDEX IF NOT EXISTS idx_robert_runs_started_at ON robert_runs(started_at DESC);
 CREATE INDEX IF NOT EXISTS idx_robert_runs_status     ON robert_runs(status);
 CREATE INDEX IF NOT EXISTS idx_robert_runs_mode       ON robert_runs(mode);
+
+-- Sam — production-readiness agent run history. See
+-- docs/SAM_PRODUCTION_AGENT.md for design notes. Sam orchestrates the
+-- existing Anya autonomous tooling and project release gates; this table
+-- records each orchestrating run alongside per-tool history in `anya_runs`.
+CREATE TABLE IF NOT EXISTS sam_runs (
+  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+  mode TEXT NOT NULL DEFAULT 'observe',
+  trigger TEXT NOT NULL DEFAULT 'manual',
+  status TEXT NOT NULL DEFAULT 'running',
+  started_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  completed_at DATETIME,
+  health_score REAL,
+  production_ready INTEGER,
+  summary_json TEXT DEFAULT '{}',
+  findings_json TEXT DEFAULT '[]',
+  repair_plan_json TEXT DEFAULT '[]',
+  applied_fixes_json TEXT DEFAULT '[]',
+  error TEXT,
+  created_by_user_id TEXT
+);
 
 CREATE TABLE IF NOT EXISTS robert_source_candidates (
   id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
@@ -1247,15 +1263,7 @@ CREATE TABLE IF NOT EXISTS robert_domain_rate_limits (
   last_error TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_robert_rate_limits_blocked ON robert_domain_rate_limits(blocked_until);
-  health_score REAL,
-  production_ready INTEGER,
-  summary_json TEXT DEFAULT '{}',
-  findings_json TEXT DEFAULT '[]',
-  repair_plan_json TEXT DEFAULT '[]',
-  applied_fixes_json TEXT DEFAULT '[]',
-  error TEXT,
-  created_by_user_id TEXT
-);
+
 CREATE INDEX IF NOT EXISTS idx_sam_runs_started_at ON sam_runs(started_at DESC);
 CREATE INDEX IF NOT EXISTS idx_sam_runs_status     ON sam_runs(status);
 CREATE INDEX IF NOT EXISTS idx_sam_runs_mode       ON sam_runs(mode);
@@ -2583,7 +2591,6 @@ CREATE INDEX IF NOT EXISTS idx_agent_rollups_agent_date
 -- ============================================================================
 
 CREATE TABLE IF NOT EXISTS john_runs (
-CREATE TABLE IF NOT EXISTS larry_runs (
   id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
   mode TEXT NOT NULL,
   trigger TEXT NOT NULL DEFAULT 'manual',
@@ -2595,6 +2602,21 @@ CREATE TABLE IF NOT EXISTS larry_runs (
   drafts_blocked INTEGER DEFAULT 0,
   drafts_failed INTEGER DEFAULT 0,
   alias_report_json TEXT,
+  summary_json TEXT,
+  error TEXT,
+  created_by_user_id TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_john_runs_started_at ON john_runs(started_at DESC);
+CREATE INDEX IF NOT EXISTS idx_john_runs_status ON john_runs(status);
+
+CREATE TABLE IF NOT EXISTS larry_runs (
+  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+  mode TEXT NOT NULL,
+  trigger TEXT NOT NULL DEFAULT 'manual',
+  status TEXT NOT NULL DEFAULT 'running',
+  started_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  completed_at DATETIME,
   prospects_considered INTEGER DEFAULT 0,
   prospects_verified INTEGER DEFAULT 0,
   leads_qualified INTEGER DEFAULT 0,
@@ -2609,9 +2631,6 @@ CREATE TABLE IF NOT EXISTS larry_runs (
   error TEXT,
   created_by_user_id TEXT
 );
-
-CREATE INDEX IF NOT EXISTS idx_john_runs_started_at ON john_runs(started_at DESC);
-CREATE INDEX IF NOT EXISTS idx_john_runs_status ON john_runs(status);
 
 CREATE TABLE IF NOT EXISTS john_email_drafts (
   id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
