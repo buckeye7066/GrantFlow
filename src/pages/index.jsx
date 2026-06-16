@@ -53,6 +53,7 @@ const BillingSheet = lazy(() => import("./BillingSheet"), 'BillingSheet');
 const OrganizationProfile = lazy(() => import("./OrganizationProfile"), 'OrganizationProfile');
 const FundingOpportunities = lazy(() => import("./FundingOpportunities"), 'FundingOpportunities');
 const FundingResults = lazy(() => import("./FundingResults"), 'FundingResults');
+const FundingLibrary = lazy(() => import("./FundingLibrary"), 'FundingLibrary');
 const Pricing = lazy(() => import("./Pricing"), 'Pricing');
 const Services = lazy(() => import("./Services"), 'Services');
 const Settings = lazy(() => import("./Settings"), 'Settings');
@@ -65,6 +66,7 @@ const ServiceApplication = lazy(() => import("./ServiceApplication"), 'ServiceAp
 const SetPassword = lazy(() => import("./SetPassword"), 'SetPassword');
 const SavedGrants = lazy(() => import("./SavedGrants"), 'SavedGrants');
 const FoundationSearch = lazy(() => import("./FoundationSearch"), 'FoundationSearch');
+const AnyaIntakeResults = lazy(() => import("./AnyaIntakeResults"), 'AnyaIntakeResults');
 
 import { Route, Routes, useLocation, Navigate } from 'react-router-dom';
 import { useAuthStore } from "@/stores/authStore";
@@ -159,6 +161,7 @@ const PAGES = {
     SourceDirectory: SourceDirectory,
     
     FundingOpportunities: FundingOpportunities,
+    FundingLibrary: FundingLibrary,
     
     GrantMonitoring: GrantMonitoring,
     
@@ -178,7 +181,8 @@ const PAGES = {
     Help: Help,
     
     Admin: Admin,
-    
+
+    AnyaIntakeResults: AnyaIntakeResults,
 }
 
 function _getCurrentPage(url) {
@@ -321,6 +325,7 @@ function LayoutRoutes() {
                 <Route path="/SourceDirectory" element={withBoundary(<SourceDirectory />, "SourceDirectory")} />
 
                 <Route path="/FundingOpportunities" element={withBoundary(<FundingOpportunities />, "FundingOpportunities")} />
+                <Route path="/FundingLibrary" element={withBoundary(<FundingLibrary />, "FundingLibrary")} />
 
                 <Route path="/GrantMonitoring" element={withBoundary(<GrantMonitoring />, "GrantMonitoring")} />
 
@@ -339,6 +344,8 @@ function LayoutRoutes() {
 
                 <Route path="/SavedGrants" element={withBoundary(<SavedGrants />, "SavedGrants")} />
                 <Route path="/FoundationSearch" element={withBoundary(<FoundationSearch />, "FoundationSearch")} />
+
+                <Route path="/AnyaIntakeResults" element={withBoundary(<AnyaIntakeResults />, "AnyaIntakeResults")} />
 
                 </Routes>
             </Layout>
