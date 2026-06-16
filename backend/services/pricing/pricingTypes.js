@@ -262,5 +262,3 @@ export function fromCents(cents) {
   if (!Number.isFinite(n)) return 0
   return Math.round(n) / 100
 }
-  PRICING_REQUIRE_ADMIN_APPROVAL: 'PRICING_REQUIRE_ADMIN_APPROVAL',
-})
