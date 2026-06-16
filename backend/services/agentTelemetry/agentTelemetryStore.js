@@ -146,7 +146,7 @@ export async function insertActivityEvent(db, event = {}) {
          metric_key, metric_value, entity_type, entity_id,
          user_id, profile_id, organization_id,
          state, county, city, latitude, longitude, details_json, created_at)
-      VALUES (?,?,?,?,?,?, ?,?,?,?, ?,?,?, ?,?,?,?,?, ?, COALESCE(?, CURRENT_TIMESTAMP))
+      VALUES (?,?,?,?,?,?, ?,?,?,?, ?,?,?, ?,?,?,?,?, ?, COALESCE(?, strftime('%Y-%m-%dT%H:%M:%fZ','now')))
     `
     db.prepare(sql).run(
       agent,
