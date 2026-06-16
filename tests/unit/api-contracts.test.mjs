@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import path from 'node:path'
 import fs from 'node:fs'
+import net from 'node:net'
 import os from 'node:os'
 import { fileURLToPath } from 'node:url'
 
@@ -21,6 +22,24 @@ async function waitForHttpOk(url, { timeoutMs = 30_000 } = {}) {
     } catch {}
     // eslint-disable-next-line no-await-in-loop
     await sleep(250)
+  }
+
+  async function reservePort() {
+    return await new Promise((resolve, reject) => {
+      const server = net.createServer()
+      server.listen(0, '127.0.0.1', () => {
+        const address = server.address()
+        const port = typeof address === 'object' && address ? address.port : null
+        server.close((error) => {
+          if (error) {
+            reject(error)
+            return
+          }
+          resolve(port)
+        })
+      })
+      server.on('error', reject)
+    })
   }
 }
 
@@ -41,13 +60,13 @@ async function startBackend({ rootDir }) {
   // Always isolate the DB per test run.
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'grantflow-contracts-'))
   const sqlitePath = path.join(tempDir, 'grantflow-test.db')
+  const port = await reservePort()
 
   const env = {
     ...process.env,
     NODE_ENV: 'development',
     SMOKE_MODE: 'true',
-    // IMPORTANT: Use ephemeral OS port to avoid race conditions in parallel test runs.
-    PORT: '0',
+    PORT: String(port),
     DB_PROVIDER: 'sqlite',
     SQLITE_DB_PATH: sqlitePath,
     DB_AUTO_MIGRATE: 'true',
@@ -55,6 +74,12 @@ async function startBackend({ rootDir }) {
     ADMIN_TOKEN: process.env.ADMIN_TOKEN || 'test-admin-token',
     CORS_ORIGIN: process.env.CORS_ORIGIN || 'http://localhost:5173,http://127.0.0.1:5173',
     AUTH_FRONTEND_APP_BASE: process.env.VITE_APP_BASE || '/grantflow',
+    DISABLE_BACKGROUND_SERVICES: 'true',
+    ANYA_AUTONOMOUS_ENABLED: 'false',
+    ANYA_RUN_ON_STARTUP: 'false',
+    ANYA_RUN_ON_SCHEDULE: 'false',
+    NATIONAL_PROGRAMS_CRAWLER_ENABLED: 'false',
+    STARTUP_SMOKE_CRAWL_ENABLED: 'false',
   }
 
   // IMPORTANT: Use backend/start.js so dotenv is loaded consistently before server boot.
@@ -74,14 +99,6 @@ async function startBackend({ rootDir }) {
   let spawnError = null
   proc.once('error', (err) => {
     spawnError = err
-  })
-
-  let readyPort = null
-  proc.stdout?.on('data', () => {
-    if (readyPort) return
-    const combined = stdoutChunks.join('')
-    const match = combined.match(/\[Server\]\s+Ready on port\s+(\d+)/)
-    if (match) readyPort = Number(match[1])
   })
 
   const start = Date.now()
@@ -111,10 +128,8 @@ async function startBackend({ rootDir }) {
     if (Date.now() - start > timeoutMs) break
 
     try {
-      if (readyPort) {
-        const ok = await waitForHttpOk(`http://127.0.0.1:${readyPort}/api/health`, { timeoutMs: 2_000 })
-        if (ok) return { proc, tempDir, port: readyPort }
-      }
+      const ok = await waitForHttpOk(`http://127.0.0.1:${port}/api/health`, { timeoutMs: 2_000 })
+      if (ok) return { proc, tempDir, port }
     } catch {
       // keep polling
     }
