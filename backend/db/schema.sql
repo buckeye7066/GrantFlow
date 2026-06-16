@@ -1083,6 +1083,31 @@ CREATE TABLE IF NOT EXISTS profile_documents (
   PRIMARY KEY (profile_id, document_id)
 );
 
+-- Sam — production-readiness agent run history. See
+-- docs/SAM_PRODUCTION_AGENT.md for design notes. Sam orchestrates the
+-- existing Anya autonomous tooling and project release gates; this table
+-- records each orchestrating run alongside per-tool history in `anya_runs`.
+CREATE TABLE IF NOT EXISTS sam_runs (
+  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+  mode TEXT NOT NULL DEFAULT 'observe',
+  trigger TEXT NOT NULL DEFAULT 'manual',
+  status TEXT NOT NULL DEFAULT 'running',
+  started_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  completed_at DATETIME,
+  health_score REAL,
+  production_ready INTEGER,
+  summary_json TEXT DEFAULT '{}',
+  findings_json TEXT DEFAULT '[]',
+  repair_plan_json TEXT DEFAULT '[]',
+  applied_fixes_json TEXT DEFAULT '[]',
+  error TEXT,
+  created_by_user_id TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_sam_runs_started_at ON sam_runs(started_at DESC);
+CREATE INDEX IF NOT EXISTS idx_sam_runs_status     ON sam_runs(status);
+CREATE INDEX IF NOT EXISTS idx_sam_runs_mode       ON sam_runs(mode);
+CREATE INDEX IF NOT EXISTS idx_sam_runs_user       ON sam_runs(created_by_user_id);
+
 CREATE TABLE IF NOT EXISTS billing_accounts (
   id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
