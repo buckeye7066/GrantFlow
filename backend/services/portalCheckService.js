@@ -334,6 +334,16 @@ function buildPortalAwardPipelineNote(update = {}) {
   return bits.join(' — ')
 }
 
+function toIsoDateString(value) {
+  if (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}/.test(value)) {
+    return value.slice(0, 10)
+  }
+  const parsed = new Date(value || Date.now())
+  return Number.isNaN(parsed.getTime())
+    ? new Date().toISOString().slice(0, 10)
+    : parsed.toISOString().slice(0, 10)
+}
+
 export function mergePortalAwardIntoApplications(applications, update, options = {}) {
   const nextApplications = safeArray(applications).map((application) => ({
     ...application,
@@ -371,10 +381,11 @@ export function mergePortalAwardIntoApplications(applications, update, options =
 
   const pipeline = safeArray(target.financial_aid_pipeline).slice()
   const label = buildPortalAwardPipelineLabel(update)
+  const normalizedLabel = label.toLowerCase()
   const notes = buildPortalAwardPipelineNote(update)
-  const completedAt = nowIso.slice(0, 10)
+  const completedAt = toIsoDateString(nowIso)
   const existingStageIndex = pipeline.findIndex(
-    (stage) => String(stage?.label || '').trim().toLowerCase() === label.toLowerCase(),
+    (stage) => String(stage?.label || '').trim().toLowerCase() === normalizedLabel,
   )
   if (existingStageIndex === -1) {
     pipeline.unshift({
@@ -575,7 +586,13 @@ export async function getPortalCheckStatus(db, profileId) {
     const seen = new Set()
     const latestRows = []
     for (const row of rows || []) {
-      const key = String(row?.portal_url || row?.portal_name || row?.id || '')
+      const parsed = row?.results_json ? tryParse(row.results_json) : {}
+      const applicationKey = String(parsed?.applicationId ?? parsed?.application_id ?? '').trim()
+      const portalNameKey = String(row?.portal_name ?? parsed?.portalName ?? '').trim().toLowerCase()
+      const portalUrlKey = String(row?.portal_url ?? parsed?.portalUrl ?? '').trim().toLowerCase()
+      const key = applicationKey
+        ? `${applicationKey}|${portalNameKey || portalUrlKey || row?.id || ''}`
+        : String(portalUrlKey || portalNameKey || row?.id || '')
       if (!key || seen.has(key)) continue
       seen.add(key)
       latestRows.push(row)
