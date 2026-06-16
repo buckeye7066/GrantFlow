@@ -1591,6 +1591,12 @@ export const SECTION_METADATA = {
         "label": "Applications",
         "format": "json",
         "help": "Array of tracked college applications and their details."
+      },
+      {
+        "name": "school_portal_imports",
+        "label": "School portal imports",
+        "format": "json",
+        "help": "Stored school-portal connections, provider metadata, and importable award records."
       }
     ]
   },

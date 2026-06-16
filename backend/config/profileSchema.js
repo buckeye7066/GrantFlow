@@ -449,6 +449,7 @@ export const PROFILE_SCHEMA = {
     description: 'Student college application tracking (for scholarship targeting).',
     fields: {
       applications: { type: 'array<object>', default: [], description: 'Array of tracked college applications and details.' },
+      school_portal_imports: { type: 'object', default: {}, description: 'Imported school-portal connection metadata and available awards.' },
     },
   },
 
@@ -590,4 +591,3 @@ export function getFlatFieldToSectionMap() {
   if (!map.has('current_college')) map.set('current_college', { sectionKey: 'education', storageKey: 'current_institution' })
   return map
 }
-
