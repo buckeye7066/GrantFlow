@@ -71,6 +71,10 @@ async function startBackend({ rootDir, port, sqlitePath }) {
     const match = stdoutBuf.match(/\[Server\]\s+Ready on port\s+(\d+)/)
     if (match) readyPort = Number(match[1])
   })
+  {
+    const match = stdoutBuf.match(/\[Server\]\s+Ready on port\s+(\d+)/)
+    if (match) readyPort = Number(match[1])
+  }
 
   const start = Date.now()
   const timeoutMs = 60_000
