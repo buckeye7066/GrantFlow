@@ -405,7 +405,11 @@ export function SchoolCard({ school, index = 0 }) {
 export function AIAssistButton({ status, onClick, className = "" }) {
   return (
     <button
-      onClick={onClick}
+      type="button"
+      onClick={(event) => {
+        event.stopPropagation();
+        onClick?.(event);
+      }}
       disabled={status === "loading"}
       className={className}
       style={{

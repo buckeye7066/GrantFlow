@@ -998,15 +998,43 @@ function ApplicationCard({
   const isMutedByOtherCommit = hasAnyCommittedSchool && !isCommitted
   const aiAssist = useSchoolAIAssist()
   const aiLogRef = useRef(null)
+  const { toast } = useToast()
 
   const handleAIAutoFill = async () => {
     if (!application.name) return
-    const data = await aiAssist.runLookup(application.name)
-    if (data && onQuickUpdate) {
-      const patch = mapAIDataToApplicationPatch(data)
-      if (Object.keys(patch).length > 0) {
-        await onQuickUpdate(application.id, patch, "AI auto-filled school data.")
+    try {
+      const data = await aiAssist.runLookup(application.name)
+      if (!data) {
+        toast({
+          title: "AI assist unavailable",
+          description: "We could not load school data right now. Please try again.",
+          variant: "destructive",
+        })
+        return
       }
+
+      if (onQuickUpdate) {
+        const patch = mapAIDataToApplicationPatch(data)
+        if (Object.keys(patch).length > 0) {
+          await onQuickUpdate(application.id, patch, "AI auto-filled school data.")
+          toast({
+            title: "School data updated",
+            description: `AI assist updated ${application.name}.`,
+          })
+          return
+        }
+      }
+
+      toast({
+        title: "No new school data found",
+        description: `AI assist did not find any new fields for ${application.name}.`,
+      })
+    } catch (error) {
+      toast({
+        title: "AI assist failed",
+        description: error instanceof Error ? error.message : "We could not update this school right now.",
+        variant: "destructive",
+      })
     }
   }
 
@@ -1029,8 +1057,6 @@ function ApplicationCard({
       .filter((doc) => String(doc?.university_application_id || "") === String(application.id))
       .sort((a, b) => String(b?.created_at || "").localeCompare(String(a?.created_at || "")))
   }, [documents, application.id])
-
-  const { toast } = useToast()
   const [interestDialogOpen, setInterestDialogOpen] = useState(false)
   const [interestSearch, setInterestSearch] = useState("")
   const [customInterest, setCustomInterest] = useState("")
