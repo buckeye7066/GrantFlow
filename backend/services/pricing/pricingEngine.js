@@ -109,6 +109,8 @@ export function buildRecommendedQuote({
     admin_review_required: adminReviewRequired,
     user_payment_required: userPaymentRequired,
     discount_eligible: discountEligible,
+    currency: CURRENCY_USD,
+    admin_review_required: adminReviewRequired,
     reasons: [...recommendation.reasons, ...discountResult.notes].filter(Boolean),
     missing_pricing_inputs: [
       ...(recommendation.missing_pricing_inputs || []),
