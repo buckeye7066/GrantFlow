@@ -1374,19 +1374,23 @@ try {
 }
 
 try {
-  const faithRow = await db
-    .prepare("SELECT COUNT(*) as count FROM funding_opportunities WHERE source = 'faith_based_assistance' AND state = 'OH' AND is_active = 1")
-    .get()
-  const faithCount = faithRow?.count ?? 0
-  if (faithCount < 6) {
-    console.info('[startup] Seeding faith-based housing assistance (Lorain County OH)...')
-    const result = await seedFaithBasedHousing(db)
-    const afterRow = await db
+  if (IS_SMOKE_MODE) {
+    console.info('[startup] Skipping faith-based housing seeding (SMOKE_MODE)')
+  } else {
+    const faithRow = await db
       .prepare("SELECT COUNT(*) as count FROM funding_opportunities WHERE source = 'faith_based_assistance' AND state = 'OH' AND is_active = 1")
       .get()
-    console.info('[startup] Seeded faith-based housing', { ...result, after: afterRow?.count })
-  } else {
-    console.info('[startup] Faith-based housing already seeded', { count: faithCount })
+    const faithCount = faithRow?.count ?? 0
+    if (faithCount < 6) {
+      console.info('[startup] Seeding faith-based housing assistance (Lorain County OH)...')
+      const result = await seedFaithBasedHousing(db)
+      const afterRow = await db
+        .prepare("SELECT COUNT(*) as count FROM funding_opportunities WHERE source = 'faith_based_assistance' AND state = 'OH' AND is_active = 1")
+        .get()
+      console.info('[startup] Seeded faith-based housing', { ...result, after: afterRow?.count })
+    } else {
+      console.info('[startup] Faith-based housing already seeded', { count: faithCount })
+    }
   }
 } catch (error) {
   console.warn('[startup] Failed to seed faith-based housing:', error?.message || error)
@@ -1394,16 +1398,20 @@ try {
 
 // ── Housing Funding Opportunities ──
 try {
-  const housingRow = await db
-    .prepare("SELECT COUNT(*) as count FROM funding_opportunities WHERE funding_category IS NOT NULL AND usable_for_housing = 1 AND is_active = 1")
-    .get()
-  const housingCount = housingRow?.count ?? 0
-  if (housingCount < 5) {
-    console.info('[startup] Seeding housing-eligible funding opportunities...')
-    const result = await seedHousingFundingOpportunities(db)
-    console.info('[startup] Seeded housing funding', result)
+  if (IS_SMOKE_MODE) {
+    console.info('[startup] Skipping housing funding seeding (SMOKE_MODE)')
   } else {
-    console.info('[startup] Housing funding already seeded', { count: housingCount })
+    const housingRow = await db
+      .prepare("SELECT COUNT(*) as count FROM funding_opportunities WHERE funding_category IS NOT NULL AND usable_for_housing = 1 AND is_active = 1")
+      .get()
+    const housingCount = housingRow?.count ?? 0
+    if (housingCount < 5) {
+      console.info('[startup] Seeding housing-eligible funding opportunities...')
+      const result = await seedHousingFundingOpportunities(db)
+      console.info('[startup] Seeded housing funding', result)
+    } else {
+      console.info('[startup] Housing funding already seeded', { count: housingCount })
+    }
   }
 } catch (error) {
   console.warn('[startup] Failed to seed housing funding:', error?.message || error)
@@ -2499,7 +2507,7 @@ if (process.env.NODE_ENV !== 'test') {
     const loggedCorsOrigins = Array.isArray(corsOptions.origin) ? corsOptions.origin : [corsOptions.origin];
     console.log(`CORS origins: ${loggedCorsOrigins.join(', ')}`);
     const actualPort = server.address()?.port ?? PORT;
-    console.log('[Server] Ready on port', actualPort);
+    console.log(`[Server] Ready on port ${actualPort}`);
 
     // Robert — funding-discovery agent scheduler. Disabled by default;
     // only starts if ROBERT_ENABLED + ROBERT_RUN_ON_SCHEDULE/STARTUP are true.
@@ -2778,6 +2786,11 @@ if (process.env.NODE_ENV !== 'test') {
       globalThis.__grantflow_internal_base_url = `http://127.0.0.1:${actualPort}`
     } catch {
       // best-effort only
+    }
+
+    if (IS_SMOKE_MODE) {
+      console.info('[startup] Smoke mode: skipping background services')
+      return
     }
   
   // Initialize feature flags
