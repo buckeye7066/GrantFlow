@@ -1,6 +1,7 @@
 import crypto from 'node:crypto'
 import { loadPaymentSheetExtractFromDisk, parsePaymentSheetExtract } from './serviceCatalogExtractParser.js'
 import { hourlyRateToSixMinuteUnitCents } from './hourlyRounding.js'
+import { LEGACY_SLUG_TO_CANONICAL } from './pricing/serviceSlugAliases.js'
 
 export const CLIENT_CATEGORIES = Object.freeze(['individual', 'small', 'mid', 'large'])
 export const PRICING_MODELS = Object.freeze(['one_time', 'milestone', 'hourly'])
@@ -159,8 +160,49 @@ function computeMilestoneSplit(totalCents) {
   return { kickoff, draft, submission }
 }
 
+/**
+ * Rewrite legacy service slugs to their canonical form so the upsert by
+ * canonical slug updates the existing row in place instead of creating an
+ * orphan duplicate. Idempotent: skips the rename when the canonical row
+ * already exists, and deactivates the legacy row in that case so it is
+ * never used for new checkouts. Existing `service_purchases.service_id`
+ * (UUID) references continue to resolve correctly because we keep the
+ * primary-key id stable.
+ */
+async function migrateLegacySlugs(db) {
+  for (const [legacy, canonical] of Object.entries(LEGACY_SLUG_TO_CANONICAL)) {
+    // Step 1: rename legacy → canonical when the canonical slug is free.
+    await db
+      .prepare(
+        `
+          UPDATE service_catalog_items
+          SET slug = ?, updated_at = ${nowSqlLiteral(db)}
+          WHERE slug = ?
+            AND NOT EXISTS (SELECT 1 FROM service_catalog_items WHERE slug = ?)
+        `,
+      )
+      .run(canonical, legacy, canonical)
+
+    // Step 2: if both the legacy and canonical row exist (older deploys
+    // already created the canonical row), deactivate the legacy one so
+    // checkout cannot select it. Existing purchases keep working via
+    // `service_id`; new checkouts use the canonical row.
+    await db
+      .prepare(
+        `
+          UPDATE service_catalog_items
+          SET is_active = ${isPostgres(db) ? 'FALSE' : '0'},
+              updated_at = ${nowSqlLiteral(db)}
+          WHERE slug = ?
+        `,
+      )
+      .run(legacy)
+  }
+}
+
 export async function seedServiceCatalogFromExtract(db) {
   await ensureServiceCatalogSchema(db)
+  await migrateLegacySlugs(db)
 
   const markdown = loadPaymentSheetExtractFromDisk()
   const parsed = parsePaymentSheetExtract(markdown)
