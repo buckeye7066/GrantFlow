@@ -88,15 +88,19 @@ export default function Admin() {
             <TabsTrigger value="agents">
               <Activity className="w-4 h-4 mr-2" />
               Mission Control
+            </TabsTrigger>
             <TabsTrigger value="john">
               <Bot className="w-4 h-4 mr-2" />
               John
+            </TabsTrigger>
             <TabsTrigger value="larry">
               <Mail className="w-4 h-4 mr-2" />
               Larry
+            </TabsTrigger>
             <TabsTrigger value="robert">
               <Bot className="w-4 h-4 mr-2" />
               Robert
+            </TabsTrigger>
             <TabsTrigger value="sam">
               <Wrench className="w-4 h-4 mr-2" />
               Sam
@@ -159,12 +163,20 @@ export default function Admin() {
 
           <TabsContent value="agents" className="mt-6">
             <AdminAgentMissionControl />
+          </TabsContent>
+
           <TabsContent value="john" className="mt-6">
             <AdminJohnConsole />
+          </TabsContent>
+
           <TabsContent value="larry" className="mt-6">
             <AdminLarryConsole />
+          </TabsContent>
+
           <TabsContent value="robert" className="mt-6">
             <AdminRobertConsole />
+          </TabsContent>
+
           <TabsContent value="sam" className="mt-6">
             <AdminSamConsole />
           </TabsContent>
