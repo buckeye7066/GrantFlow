@@ -7,6 +7,10 @@ async function sleep(ms) {
   await new Promise((r) => setTimeout(r, ms))
 }
 
+function stripAnsi(text) {
+  return String(text || '').replace(/\u001B\[[0-?]*[ -/]*[@-~]/g, '')
+}
+
 async function waitForHttpOk(url, { timeoutMs = 30_000 } = {}) {
   const start = Date.now()
   // eslint-disable-next-line no-constant-condition
@@ -99,7 +103,7 @@ export async function startBackend({ rootDir, envOverrides = {} }) {
   let readyPort = null
   const detectReadyPort = () => {
     if (readyPort) return
-    const combined = stdoutChunks.join('')
+    const combined = stripAnsi(stdoutChunks.join(''))
     const match = combined.match(/\[Server\]\s+Ready on port\s+(\d+)/)
     if (match) readyPort = Number(match[1])
   }
