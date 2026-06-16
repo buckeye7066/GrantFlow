@@ -1,11 +1,15 @@
 import React, { Suspense } from 'react';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Shield, Activity, AlertCircle, Bot, DollarSign, Wrench, Workflow, Users, Bell, Loader2 } from 'lucide-react';
+import { Shield, Activity, AlertCircle, Bot, DollarSign, Mail, Wrench, Workflow, Users, Bell, Loader2 } from 'lucide-react';
 import AdminDocumentUpload from '@/components/admin/AdminDocumentUpload';
 import AdminDiagnostics from '@/components/admin/AdminDiagnostics';
 import AdminGeoCrawl from '@/components/admin/AdminGeoCrawl';
 import AdminMaintenance from '@/components/admin/AdminMaintenance';
 import AdminAnyaConsole from '@/components/admin/AdminAnyaConsole';
+import AdminJohnConsole from '@/components/admin/AdminJohnConsole';
+import AdminLarryConsole from '@/components/admin/AdminLarryConsole';
+import AdminRobertConsole from '@/components/admin/AdminRobertConsole';
+import AdminSamConsole from '@/components/admin/AdminSamConsole';
 import AdminServiceApplications from '@/components/admin/AdminServiceApplications';
 import AdminLoginNotifications from '@/components/admin/AdminLoginNotifications.jsx';
 import AdminProfileDedupe from '@/components/admin/AdminProfileDedupe.jsx';
@@ -84,6 +88,18 @@ export default function Admin() {
             <TabsTrigger value="agents">
               <Activity className="w-4 h-4 mr-2" />
               Mission Control
+            <TabsTrigger value="john">
+              <Bot className="w-4 h-4 mr-2" />
+              John
+            <TabsTrigger value="larry">
+              <Mail className="w-4 h-4 mr-2" />
+              Larry
+            <TabsTrigger value="robert">
+              <Bot className="w-4 h-4 mr-2" />
+              Robert
+            <TabsTrigger value="sam">
+              <Wrench className="w-4 h-4 mr-2" />
+              Sam
             </TabsTrigger>
             <TabsTrigger value="billing">
               <DollarSign className="w-4 h-4 mr-2" />
@@ -143,6 +159,14 @@ export default function Admin() {
 
           <TabsContent value="agents" className="mt-6">
             <AdminAgentMissionControl />
+          <TabsContent value="john" className="mt-6">
+            <AdminJohnConsole />
+          <TabsContent value="larry" className="mt-6">
+            <AdminLarryConsole />
+          <TabsContent value="robert" className="mt-6">
+            <AdminRobertConsole />
+          <TabsContent value="sam" className="mt-6">
+            <AdminSamConsole />
           </TabsContent>
 
           <TabsContent value="billing" className="mt-6">
