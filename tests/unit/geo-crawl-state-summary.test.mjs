@@ -34,7 +34,11 @@ function startServer(extraEnv = {}) {
   child.stderr.on('data', (d) => (stderr += d))
 
   const ready = new Promise((resolve, reject) => {
+    let resolved = false
+    let readyPoll = null
     const timeout = setTimeout(() => {
+      if (resolved) return
+      clearInterval(readyPoll)
       try {
         child.kill('SIGTERM')
       } catch {
@@ -44,22 +48,32 @@ function startServer(extraEnv = {}) {
     }, 60_000)
 
     const checkReady = () => {
+      if (resolved) return
       const m = stdout.match(/\[Server\] Ready on port\s+(\d+)/)
       if (m) {
+        resolved = true
+        clearInterval(readyPoll)
         clearTimeout(timeout)
         resolve({ port: Number(m[1]), dbPath })
       }
     }
     child.stdout.on('data', checkReady)
+    readyPoll = setInterval(checkReady, 50)
     checkReady()
 
     child.on('error', (err) => {
+      if (resolved) return
+      resolved = true
+      clearInterval(readyPoll)
       clearTimeout(timeout)
       reject(new Error(`server failed to spawn: ${String(err?.message || err)}\nstdout:\n${stdout}\nstderr:\n${stderr}`))
     })
 
     child.on('exit', (code) => {
+      if (resolved) return
       if (stdout.includes('[Server] Ready on port')) return
+      resolved = true
+      clearInterval(readyPoll)
       clearTimeout(timeout)
       reject(new Error(`server exited before ready (code=${code})\nstdout:\n${stdout}\nstderr:\n${stderr}`))
     })

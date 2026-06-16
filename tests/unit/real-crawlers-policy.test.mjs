@@ -34,15 +34,26 @@ function startServer(extraEnv = {}) {
   child.stdout.on('data', (d) => (stdout += d))
   child.stderr.on('data', (d) => (stderr += d))
   const ready = new Promise((resolve, reject) => {
+    let resolved = false
+    let readyPoll = null
     const timeout = setTimeout(() => {
+      if (resolved) return
+      clearInterval(readyPoll)
       try { child.kill('SIGTERM') } catch { /* noop */ }
       reject(new Error(`server not ready\n${stdout}\n${stderr}`))
     }, 60_000)
     const checkReady = () => {
+      if (resolved) return
       const m = stdout.match(/\[Server\] Ready on port\s+(\d+)/)
-      if (m) { clearTimeout(timeout); resolve({ port: Number(m[1]) }) }
+      if (m) {
+        resolved = true
+        clearInterval(readyPoll)
+        clearTimeout(timeout)
+        resolve({ port: Number(m[1]) })
+      }
     }
     child.stdout.on('data', checkReady)
+    readyPoll = setInterval(checkReady, 50)
     checkReady()
   })
   async function stop() {

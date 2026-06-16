@@ -37,8 +37,10 @@ function startServer({ dbPath, uploadsDir }) {
 
   const ready = new Promise((resolve, reject) => {
     let resolved = false
+    let readyPoll = null
     const timeout = setTimeout(() => {
       if (resolved) return
+      clearInterval(readyPoll)
       try { child.kill('SIGTERM') } catch {}
       reject(new Error(`server did not become ready\nstdout:\n${stdout}\nstderr:\n${stderr}`))
     }, 60_000)
@@ -47,11 +49,13 @@ function startServer({ dbPath, uploadsDir }) {
       const match = stdout.match(/\[Server\] Ready on port\s+(\d+)/)
       if (match) {
         resolved = true
+        clearInterval(readyPoll)
         clearTimeout(timeout)
         resolve({ port: Number(match[1]) })
       }
     }
     child.stdout.on('data', checkReady)
+    readyPoll = setInterval(checkReady, 50)
     checkReady()
   })
 
