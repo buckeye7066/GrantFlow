@@ -347,6 +347,7 @@ function LayoutRoutes() {
                 <Route path="/SourceDirectory" element={withGate(<SourceDirectory />, "SourceDirectory")} />
 
                 <Route path="/FundingOpportunities" element={withGate(<FundingOpportunities />, "FundingOpportunities")} />
+                <Route path="/FundingOpportunities" element={withBoundary(<FundingOpportunities />, "FundingOpportunities")} />
                 <Route path="/FundingLibrary" element={withBoundary(<FundingLibrary />, "FundingLibrary")} />
 
                 <Route path="/GrantMonitoring" element={withGate(<GrantMonitoring />, "GrantMonitoring")} />

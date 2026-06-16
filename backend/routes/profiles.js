@@ -1389,6 +1389,20 @@ router.get('/:id/readiness', async (req, res) => {
   }
 })
 
+// GET /api/profiles/:id/readiness/detailed — 10-category breakdown with
+// per-category guidance, used by the ProfileReadinessScore component and
+// by Robert when deciding match quality.
+router.get('/:id/readiness/detailed', async (req, res) => {
+  const { id } = req.params
+  try {
+    const { computeDetailedReadiness } = await import('../services/profileReadinessService.js')
+    const result = await computeDetailedReadiness(req.db, id)
+    return res.status(200).json(result)
+  } catch (error) {
+    return res.status(500).json({ error: error?.message || String(error) })
+  }
+})
+
 router.put('/:id', async (req, res) => {
   const { id } = req.params
   const body = req.body ?? {}
