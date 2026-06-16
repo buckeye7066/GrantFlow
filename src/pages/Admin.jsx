@@ -13,6 +13,7 @@ import AdminProfileIntegrity from '@/components/admin/AdminProfileIntegrity.jsx'
 import AdminKnowledgeBase from '@/components/admin/AdminKnowledgeBase.jsx'
 import AdminServiceCatalog from '@/components/admin/AdminServiceCatalog.jsx'
 import AdminExclusionRules from '@/components/admin/AdminExclusionRules'
+import AdminAgentMissionControl from '@/components/admin/AdminAgentMissionControl'
 const Billing = React.lazy(() => import('@/pages/Billing'));
 const Automation = React.lazy(() => import('@/pages/Automation'));
 import { useAuthStore } from '@/stores/authStore';
@@ -80,6 +81,10 @@ export default function Admin() {
               <Bot className="w-4 h-4 mr-2" />
               Anya
             </TabsTrigger>
+            <TabsTrigger value="agents">
+              <Activity className="w-4 h-4 mr-2" />
+              Mission Control
+            </TabsTrigger>
             <TabsTrigger value="billing">
               <DollarSign className="w-4 h-4 mr-2" />
               Billing
@@ -134,6 +139,10 @@ export default function Admin() {
 
           <TabsContent value="anya" className="mt-6">
             <AdminAnyaConsole />
+          </TabsContent>
+
+          <TabsContent value="agents" className="mt-6">
+            <AdminAgentMissionControl />
           </TabsContent>
 
           <TabsContent value="billing" className="mt-6">
