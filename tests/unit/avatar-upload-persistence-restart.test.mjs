@@ -4,57 +4,77 @@ import { spawn } from 'node:child_process'
 import { mkdtempSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
+import { createServer as createNetServer } from 'node:net'
+
+function reservePort() {
+  return new Promise((resolve, reject) => {
+    const srv = createNetServer()
+    srv.on('error', reject)
+    srv.listen(0, '127.0.0.1', () => {
+      const address = srv.address()
+      const port = typeof address === 'object' && address ? address.port : null
+      srv.close((err) => {
+        if (err) reject(err)
+        else resolve(port)
+      })
+    })
+  })
+}
+
+async function waitForHealthz(port, { child, getLogs, timeoutMs = 60_000 }) {
+  const startedAt = Date.now()
+  while (Date.now() - startedAt < timeoutMs) {
+    if (child?.exitCode !== null && child?.exitCode !== undefined) {
+      const { stdout, stderr } = getLogs()
+      throw new Error(`server exited before ready (code=${child.exitCode})\nstdout:\n${stdout}\nstderr:\n${stderr}`)
+    }
+    try {
+      const response = await fetch(`http://127.0.0.1:${port}/healthz`)
+      if (response.ok) return { port }
+    } catch {
+      // retry
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100))
+  }
+  const { stdout, stderr } = getLogs()
+  throw new Error(`server did not become ready\nstdout:\n${stdout}\nstderr:\n${stderr}`)
+}
 
 function startServer({ dbPath, uploadsDir, extraEnv = {} }) {
-  const child = spawn(process.execPath, ['backend/server.js'], {
-    cwd: path.resolve('.'),
-    env: {
-      ...process.env,
-      NODE_ENV: 'development',
-      PORT: '0',
-      DB_PROVIDER: 'sqlite',
-      SQLITE_DB_PATH: dbPath,
-      DB_AUTO_MIGRATE: 'true',
-      AUTH_JWT_SECRET: 'test-secret-avatar-persist',
-      SMOKE_MODE: '1',
-      UPLOADS_DIR: uploadsDir,
-      ALLOW_EPHEMERAL_UPLOADS: 'true',
-      ...extraEnv,
-    },
-    stdio: ['ignore', 'pipe', 'pipe'],
-  })
-
+  let child = null
   let stdout = ''
   let stderr = ''
-  child.stdout.setEncoding('utf8')
-  child.stderr.setEncoding('utf8')
-  child.stdout.on('data', (d) => (stdout += d))
-  child.stderr.on('data', (d) => (stderr += d))
-
-  const ready = new Promise((resolve, reject) => {
-    let resolved = false
-    const timeout = setTimeout(() => {
-      if (resolved) return
-      try { child.kill('SIGTERM') } catch {}
-      reject(new Error(`server did not become ready\nstdout:\n${stdout}\nstderr:\n${stderr}`))
-    }, 60_000)
-
-    child.stdout.on('data', () => {
-      if (resolved) return
-      const m = stdout.match(/\[Server\] Ready on port\s+(\d+)/)
-      if (m) {
-        resolved = true
-        clearTimeout(timeout)
-        resolve({ port: Number(m[1]) })
-      }
+  const ready = (async () => {
+    const port = await reservePort()
+    child = spawn(process.execPath, ['backend/server.js'], {
+      cwd: path.resolve('.'),
+      env: {
+        ...process.env,
+        NODE_ENV: 'development',
+        PORT: String(port),
+        DB_PROVIDER: 'sqlite',
+        SQLITE_DB_PATH: dbPath,
+        DB_AUTO_MIGRATE: 'true',
+        AUTH_JWT_SECRET: 'test-secret-avatar-persist',
+        SMOKE_MODE: '1',
+        DISABLE_BACKGROUND_SERVICES: 'true',
+        UPLOADS_DIR: uploadsDir,
+        ALLOW_EPHEMERAL_UPLOADS: 'true',
+        ...extraEnv,
+      },
+      stdio: ['ignore', 'pipe', 'pipe'],
     })
 
-    child.on('exit', (code) => {
-      if (resolved) return
-      clearTimeout(timeout)
-      reject(new Error(`server exited before ready (code=${code})\nstdout:\n${stdout}\nstderr:\n${stderr}`))
+    child.stdout.setEncoding('utf8')
+    child.stderr.setEncoding('utf8')
+    child.stdout.on('data', (d) => (stdout += d))
+    child.stderr.on('data', (d) => (stderr += d))
+
+    return waitForHealthz(port, {
+      child,
+      getLogs: () => ({ stdout, stderr }),
     })
-  })
+  })()
 
   async function stop() {
     if (child.killed) return
@@ -168,4 +188,3 @@ test('uploads persistence: avatar upload survives server restart (same db + uplo
     await srv2.stop()
   }
 })
-
