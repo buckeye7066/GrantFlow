@@ -374,6 +374,8 @@ function LayoutRoutes() {
                 <Route path="/ServiceAgreement" element={withBoundary(<ServiceAgreement />, "ServiceAgreement")} />
                 <Route path="/CheckoutRequired" element={withBoundary(<CheckoutRequired />, "CheckoutRequired")} />
 
+                <Route path="/AnyaIntakeResults" element={withBoundary(<AnyaIntakeResults />, "AnyaIntakeResults")} />
+
                 </Routes>
             </Layout>
             <AdminPricingToastListener />

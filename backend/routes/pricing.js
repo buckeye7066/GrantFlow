@@ -247,12 +247,14 @@ router.post('/recommend', async (req, res) => {
       matches,
       discountInputs,
     })
+
     const persisted = await persistQuote(req.db, {
       userId: req.user?.id || null,
       profileId,
       intakeSessionId,
       quote,
     })
+
     return res.status(200).json({
       ok: true,
       quote_id: persisted?.id || null,
