@@ -43,13 +43,15 @@ function startServer(extraEnv = {}) {
       reject(new Error(`server did not become ready\nstdout:\n${stdout}\nstderr:\n${stderr}`))
     }, 60_000)
 
-    child.stdout.on('data', () => {
+    const checkReady = () => {
       const m = stdout.match(/\[Server\] Ready on port\s+(\d+)/)
       if (m) {
         clearTimeout(timeout)
         resolve({ port: Number(m[1]), dbPath })
       }
-    })
+    }
+    child.stdout.on('data', checkReady)
+    checkReady()
 
     child.on('error', (err) => {
       clearTimeout(timeout)
@@ -189,4 +191,3 @@ test('phase6: geo crawl persists state runs + summary counts (fixtures, no netwo
     await srv.stop()
   }
 })
-

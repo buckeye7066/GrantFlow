@@ -38,10 +38,12 @@ function startServer(extraEnv = {}) {
       try { child.kill('SIGTERM') } catch { /* noop */ }
       reject(new Error(`server not ready\n${stdout}\n${stderr}`))
     }, 60_000)
-    child.stdout.on('data', () => {
+    const checkReady = () => {
       const m = stdout.match(/\[Server\] Ready on port\s+(\d+)/)
       if (m) { clearTimeout(timeout); resolve({ port: Number(m[1]) }) }
-    })
+    }
+    child.stdout.on('data', checkReady)
+    checkReady()
   })
   async function stop() {
     if (!child.killed) child.kill('SIGTERM')

@@ -52,6 +52,7 @@ function startServer({ dbPath, uploadsDir }) {
       }
     }
     child.stdout.on('data', checkReady)
+    checkReady()
   })
 
   async function stop() {
@@ -124,4 +125,3 @@ test('documents download: 401 without auth, 200 with admin bearer', async () => 
     await stop()
   }
 })
-

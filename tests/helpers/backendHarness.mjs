@@ -70,17 +70,20 @@ export async function startBackend({ rootDir, envOverrides = {} }) {
   proc.stderr?.on('data', (buf) => stderrChunks.push(String(buf)))
 
   let readyPort = null
-  proc.stdout?.on('data', () => {
+  const detectReadyPort = () => {
     if (readyPort) return
     const combined = stdoutChunks.join('')
     const match = combined.match(/\[Server\]\s+Ready on port\s+(\d+)/)
     if (match) readyPort = Number(match[1])
-  })
+  }
+  proc.stdout?.on('data', detectReadyPort)
+  detectReadyPort()
 
   const start = Date.now()
   const timeoutMs = 60_000
   // eslint-disable-next-line no-constant-condition
   while (true) {
+    detectReadyPort()
     if (proc.exitCode != null) {
       throw new Error(
         `Backend exited before becoming healthy (exit=${proc.exitCode}).\n` +
@@ -106,4 +109,3 @@ export async function startBackend({ rootDir, envOverrides = {} }) {
     await sleep(250)
   }
 }
-
