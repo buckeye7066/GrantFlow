@@ -1939,6 +1939,8 @@ app.use('/api/admin/queue', adminQueueOpsRouter)
 app.use('/api/organizations', organizationsRouter);
 app.use('/api/grants', grantsRouter);
 app.use('/api/opportunities', opportunitiesRouter);
+app.use('/api/sam/onboarding-audit', lazyRouter('./routes/samOnboardingAudit.js'));
+app.use('/api/funding-library', lazyRouter('./routes/fundingLibrary.js'));
 app.use('/api/programs', programsRouter);
 app.use('/api/milestones', milestonesRouter);
 app.use('/api/documents', documentsRouter);
@@ -2327,6 +2329,7 @@ app.get('/api/meta/dedupe', async (_req, res) => {
 })
 
 app.use('/api/admin', adminRouter);
+app.use('/api/admin/agent-telemetry', lazyRouter('./routes/agentTelemetry.js'));
 app.use('/api', requestTimeout(PIPELINE_TIMEOUT), discoveryRouter);
 app.use('/api/crawler-v2', lazyRouter('./routes/crawlerV2.js'));
 app.use('/api/nf-programs', lazyRouter('./routes/nfPrograms.js'));
