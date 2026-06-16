@@ -52,7 +52,7 @@ function startServer(extraEnv = {}) {
       }
     }
     child.stdout.on('data', onData)
-    onData()
+    onData('')
   })
 
   async function stop() {
