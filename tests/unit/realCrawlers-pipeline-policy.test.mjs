@@ -12,62 +12,20 @@
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { spawn } from 'node:child_process'
-import { mkdtempSync } from 'node:fs'
-import { tmpdir } from 'node:os'
 import path from 'node:path'
+import { startBackend, stopProcess } from '../helpers/backendHarness.mjs'
 
-function startServer(extraEnv = {}) {
-  const tmp = mkdtempSync(path.join(tmpdir(), 'grantflow-pipeline-policy-'))
-  const dbPath = path.join(tmp, 'test.db')
-
-  const child = spawn(process.execPath, ['backend/server.js'], {
-    cwd: path.resolve('.'),
-    env: {
-      ...process.env,
-      NODE_ENV: 'development',
-      PORT: '0',
-      DB_PROVIDER: 'sqlite',
-      SQLITE_DB_PATH: dbPath,
-      DB_AUTO_MIGRATE: 'true',
-      AUTH_JWT_SECRET: 'test-secret',
-      ...extraEnv,
-    },
-    stdio: ['ignore', 'pipe', 'pipe'],
+async function startServer(extraEnv = {}) {
+  const started = await startBackend({
+    rootDir: path.resolve('.'),
+    envOverrides: extraEnv,
   })
 
-  let stdout = ''
-  let stderr = ''
-  child.stdout.setEncoding('utf8')
-  child.stderr.setEncoding('utf8')
-  child.stdout.on('data', (d) => (stdout += d))
-  child.stderr.on('data', (d) => (stderr += d))
-
-  const ready = new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      try { child.kill('SIGTERM') } catch { /* ignore */ }
-      reject(new Error(`server did not become ready\nstdout:\n${stdout}\nstderr:\n${stderr}`))
-    }, 60_000)
-
-    const onData = () => {
-      const match = stdout.match(/\[Server\](?:\u001B\[[0-?]*[ -/]*[@-~]|\s)+Ready on port\s+(\d+)/)
-      if (match) {
-        clearTimeout(timeout)
-        resolve({ port: Number(match[1]) })
-      }
-    }
-
-    child.stdout.on('data', onData)
-    onData('')
-  })
-
-  async function stop() {
-    if (child.killed) return
-    child.kill('SIGTERM')
-    await new Promise((resolve) => child.once('exit', resolve))
+  return {
+    port: started.port,
+    dbPath: path.join(started.tempDir, 'grantflow-test.db'),
+    stop: async () => stopProcess(started.proc),
   }
-
-  return { ready, stop, dbPath }
 }
 
 async function fetchJson(url, init) {
@@ -85,8 +43,8 @@ async function fetchJson(url, init) {
 test('pipeline policy: DB fallback drops loans, matching-funds, missing-URL; keeps valid grant', async () => {
   // Force live crawl timeout so we always use DB fallback path.
   // Disable token narrowing so the seeded valid grant is not filtered out by profile-derived LIKE clauses.
-  const srv = startServer({ LIVE_CRAWL_TIMEOUT_MS: '1', ENABLE_TOKEN_NARROWING: 'false' })
-  const { port } = await srv.ready
+  const srv = await startServer({ LIVE_CRAWL_TIMEOUT_MS: '1', ENABLE_TOKEN_NARROWING: 'false' })
+  const { port } = srv
 
   try {
     const email = 'policy-pipe@example.com'
@@ -239,8 +197,8 @@ test('pipeline policy: DB fallback drops loans, matching-funds, missing-URL; kee
 })
 
 test('pipeline policy: min_match_score=100 filters everything below threshold', async () => {
-  const srv = startServer({ LIVE_CRAWL_TIMEOUT_MS: '1' })
-  const { port } = await srv.ready
+  const srv = await startServer({ LIVE_CRAWL_TIMEOUT_MS: '1' })
+  const { port } = srv
 
   try {
     const email = 'policy-score@example.com'
