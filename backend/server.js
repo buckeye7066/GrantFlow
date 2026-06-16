@@ -2512,7 +2512,7 @@ if (process.env.NODE_ENV !== 'test') {
       } catch (err) {
         console.warn('[Server] Robert scheduler startup skipped:', err?.message)
       }
-    })()
+    })();
     // Sam scheduler — opt-in via SAM_ENABLED + SAM_RUN_ON_STARTUP /
     // SAM_RUN_ON_SCHEDULE. Default behaviour is OFF; the scheduler logs
     // once and exits when env gates aren't set.
