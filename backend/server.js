@@ -1991,6 +1991,8 @@ app.use('/api/colleges', collegesRouter);
 app.use('/api/notifications', notificationsRouter);
 app.use('/api/saved-grants', savedGrantsRouter);
 app.use('/api/foundations', foundationsRouter);
+// John — Outreach Drafting Agent. Draft-only; never sends. Admin-only except /health.
+app.use('/api/john', lazyRouter('./routes/john.js'));
 app.use('/api/larry', lazyRouter('./routes/larry.js'));
 // Robert — Funding Discovery Agent. Disabled by default; the scheduler
 // only starts if ROBERT_ENABLED + ROBERT_RUN_ON_SCHEDULE/STARTUP say so.
@@ -2551,6 +2553,21 @@ if (process.env.NODE_ENV !== 'test') {
         }
       })()
     }
+
+    // John — Outreach Drafting Agent. Disabled by default; only starts a
+    // scheduler if JOHN_ENABLED=true and JOHN_RUN_ON_SCHEDULE=true (or
+    // JOHN_RUN_ON_STARTUP=true). Never blocks startup, never crashes the
+    // server on failure. Draft-only; never sends.
+    ;(async () => {
+      try {
+        const { startJohnScheduler } = await import('./services/john/johnScheduler.js')
+        const result = startJohnScheduler({ db })
+        if (result?.started) console.log('[Server] John scheduler started:', JSON.stringify(result))
+        else console.log('[Server] John scheduler not started:', result?.reason || 'disabled')
+      } catch (err) {
+        console.warn('[Server] John scheduler startup skipped:', err?.message)
+      }
+    })();
 
     // Reset jobs stuck in 'running' from a previous process crash/restart (no persistent worker).
     (async () => {

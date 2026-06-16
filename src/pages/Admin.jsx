@@ -6,6 +6,7 @@ import AdminDiagnostics from '@/components/admin/AdminDiagnostics';
 import AdminGeoCrawl from '@/components/admin/AdminGeoCrawl';
 import AdminMaintenance from '@/components/admin/AdminMaintenance';
 import AdminAnyaConsole from '@/components/admin/AdminAnyaConsole';
+import AdminJohnConsole from '@/components/admin/AdminJohnConsole';
 import AdminLarryConsole from '@/components/admin/AdminLarryConsole';
 import AdminRobertConsole from '@/components/admin/AdminRobertConsole';
 import AdminSamConsole from '@/components/admin/AdminSamConsole';
@@ -83,6 +84,9 @@ export default function Admin() {
               <Bot className="w-4 h-4 mr-2" />
               Anya
             </TabsTrigger>
+            <TabsTrigger value="john">
+              <Bot className="w-4 h-4 mr-2" />
+              John
             <TabsTrigger value="larry">
               <Mail className="w-4 h-4 mr-2" />
               Larry
@@ -149,6 +153,8 @@ export default function Admin() {
             <AdminAnyaConsole />
           </TabsContent>
 
+          <TabsContent value="john" className="mt-6">
+            <AdminJohnConsole />
           <TabsContent value="larry" className="mt-6">
             <AdminLarryConsole />
           <TabsContent value="robert" className="mt-6">
