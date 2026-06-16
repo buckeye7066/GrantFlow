@@ -7,6 +7,8 @@ import AdminGeoCrawl from '@/components/admin/AdminGeoCrawl';
 import AdminMaintenance from '@/components/admin/AdminMaintenance';
 import AdminAnyaConsole from '@/components/admin/AdminAnyaConsole';
 import AdminJohnConsole from '@/components/admin/AdminJohnConsole';
+import AdminRobertConsole from '@/components/admin/AdminRobertConsole';
+import AdminSamConsole from '@/components/admin/AdminSamConsole';
 import AdminServiceApplications from '@/components/admin/AdminServiceApplications';
 import AdminLoginNotifications from '@/components/admin/AdminLoginNotifications.jsx';
 import AdminProfileDedupe from '@/components/admin/AdminProfileDedupe.jsx';
@@ -84,6 +86,12 @@ export default function Admin() {
             <TabsTrigger value="john">
               <Bot className="w-4 h-4 mr-2" />
               John
+            <TabsTrigger value="robert">
+              <Bot className="w-4 h-4 mr-2" />
+              Robert
+            <TabsTrigger value="sam">
+              <Wrench className="w-4 h-4 mr-2" />
+              Sam
             </TabsTrigger>
             <TabsTrigger value="billing">
               <DollarSign className="w-4 h-4 mr-2" />
@@ -143,6 +151,10 @@ export default function Admin() {
 
           <TabsContent value="john" className="mt-6">
             <AdminJohnConsole />
+          <TabsContent value="robert" className="mt-6">
+            <AdminRobertConsole />
+          <TabsContent value="sam" className="mt-6">
+            <AdminSamConsole />
           </TabsContent>
 
           <TabsContent value="billing" className="mt-6">

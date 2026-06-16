@@ -1939,6 +1939,7 @@ app.use('/api/admin/queue', adminQueueOpsRouter)
 app.use('/api/organizations', organizationsRouter);
 app.use('/api/grants', grantsRouter);
 app.use('/api/opportunities', opportunitiesRouter);
+app.use('/api/funding-library', lazyRouter('./routes/fundingLibrary.js'));
 app.use('/api/programs', programsRouter);
 app.use('/api/milestones', milestonesRouter);
 app.use('/api/documents', documentsRouter);
@@ -1992,6 +1993,14 @@ app.use('/api/saved-grants', savedGrantsRouter);
 app.use('/api/foundations', foundationsRouter);
 // John — Outreach Drafting Agent. Draft-only; never sends. Admin-only except /health.
 app.use('/api/john', lazyRouter('./routes/john.js'));
+// Robert — Funding Discovery Agent. Disabled by default; the scheduler
+// only starts if ROBERT_ENABLED + ROBERT_RUN_ON_SCHEDULE/STARTUP say so.
+app.use('/api/robert', lazyRouter('./routes/robert.js'));
+
+// Sam — production-readiness agent. /api/sam/health is public; everything
+// else is admin-gated inside the router. Mounted after the rest of the API
+// so Sam's HTTP probes can hit /api/health/* and /readyz cleanly.
+app.use('/api/sam', lazyRouter('./routes/sam.js'))
 
 function resolveBuildSha() {
   return (
@@ -2329,6 +2338,7 @@ app.get('/api/meta/dedupe', async (_req, res) => {
 })
 
 app.use('/api/admin', adminRouter);
+app.use('/api/admin/agent-telemetry', lazyRouter('./routes/agentTelemetry.js'));
 app.use('/api', requestTimeout(PIPELINE_TIMEOUT), discoveryRouter);
 app.use('/api/crawler-v2', lazyRouter('./routes/crawlerV2.js'));
 app.use('/api/nf-programs', lazyRouter('./routes/nfPrograms.js'));
@@ -2487,6 +2497,30 @@ if (process.env.NODE_ENV !== 'test') {
     console.log(`CORS origins: ${loggedCorsOrigins.join(', ')}`);
     const actualPort = server.address()?.port ?? PORT;
     console.log('[Server] Ready on port', actualPort);
+
+    // Robert — funding-discovery agent scheduler. Disabled by default;
+    // only starts if ROBERT_ENABLED + ROBERT_RUN_ON_SCHEDULE/STARTUP are true.
+    ;(async () => {
+      try {
+        const { startRobertScheduler } = await import('./services/robert/robertScheduler.js')
+        const result = startRobertScheduler({ db })
+        if (result?.started) console.log('[Server] Robert scheduler started')
+        else console.log('[Server] Robert scheduler not started:', result?.reason || 'disabled')
+      } catch (err) {
+        console.warn('[Server] Robert scheduler startup skipped:', err?.message)
+      }
+    })()
+    // Sam scheduler — opt-in via SAM_ENABLED + SAM_RUN_ON_STARTUP /
+    // SAM_RUN_ON_SCHEDULE. Default behaviour is OFF; the scheduler logs
+    // once and exits when env gates aren't set.
+    (async () => {
+      try {
+        const { startSamScheduler } = await import('./services/sam/samScheduler.js')
+        startSamScheduler({ db, logger: console })
+      } catch (samErr) {
+        console.warn('[sam:scheduler] failed to start:', samErr?.message || samErr)
+      }
+    })();
 
     // Auto-heal Postgres CHECK constraints that may be outdated if migrations haven't run.
     if (db.dialect === 'postgres') {
