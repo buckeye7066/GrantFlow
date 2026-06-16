@@ -29,13 +29,21 @@ function isSmokeLikeRuntime() {
   return explicitSmoke || inferredSmoke
 }
 
+const shouldOverrideDotenv =
+  !isTruthy(process.env.SMOKE_MODE) &&
+  !(
+    String(process.env.PORT || '').trim() === '0' &&
+    isTruthy(process.env.DB_AUTO_MIGRATE) &&
+    String(process.env.NODE_ENV || '').trim().toLowerCase() !== 'production'
+  )
+
 // Load .env from the current working directory.
 //
 // IMPORTANT:
 // - In normal local development, we want `.env` to win over stale machine-level values.
 // - In SMOKE_MODE / automation (tests), we must NOT override the env passed by the test runner
 //   (especially PORT/DB paths), otherwise parallel tests can collide and hang.
-dotenv.config({ override: !isSmokeLikeRuntime() })
+dotenv.config({ override: shouldOverrideDotenv })
 
 function findSqliteDbPath() {
   const explicit = String(process.env.SQLITE_DB_PATH || '').trim()
