@@ -85,6 +85,10 @@ export function buildRecommendedQuote({
 
   const total = Math.max(0, round2(subtotal - sumApproved(discountResult.discounts)))
 
+  const primaryServiceKey = lineItems[0]?.service_key || null
+  const userPaymentRequired = total > 0
+  const discountEligible = (discountResult.discounts || []).length > 0
+
   return {
     pricing_catalog_version: PRICING_CATALOG_VERSION,
     client_category: category.client_category,
@@ -95,11 +99,16 @@ export function buildRecommendedQuote({
     recommended_package_name:
       recommendation.recommended_package_name ||
       (lineItems[0] ? lineItems[0].service_name : 'GrantFlow Service'),
+    primary_service_key: primaryServiceKey,
     line_items: lineItems,
     discounts: discountResult.discounts,
     subtotal,
     discount_total: discountResult.discount_total,
     total,
+    currency: String(CURRENCY_USD || 'USD').toLowerCase(),
+    admin_review_required: adminReviewRequired,
+    user_payment_required: userPaymentRequired,
+    discount_eligible: discountEligible,
     currency: CURRENCY_USD,
     admin_review_required: adminReviewRequired,
     reasons: [...recommendation.reasons, ...discountResult.notes].filter(Boolean),
