@@ -37,6 +37,14 @@ import {
   editLineItem,
   updateQuoteStatus,
 } from '../services/pricing/quoteBuilder.js'
+import { initializeProfilePricing } from '../services/pricing/profilePricingInitializer.js'
+import {
+  listForAdmin,
+  markDelivered,
+  dismiss,
+  flushQueuedOnLogin,
+} from '../services/pricing/pricingNotificationService.js'
+import { isAdminNotificationTarget } from '../services/pricing/pricingTypes.js'
 
 const routeLogger = createLogger('route:pricing')
 const router = express.Router()
@@ -199,10 +207,39 @@ router.post('/recommend', async (req, res) => {
       profile = {},
       organization = {},
       discount_inputs: discountInputs = {},
+      source = 'pricing_recommend_endpoint',
     } = req.body || {}
 
     if (!profileId) return res.status(400).json({ ok: false, error: 'profile_id_required' })
 
+    // Prefer the integrated initializer (creates profile_pricing +
+    // service_agreement + admin notification + access events). Falls
+    // back to a quote-only flow if the access-gate tables aren't
+    // installed yet.
+    const profilePayload = profile && profile.id ? profile : { ...profile, id: profileId }
+    const initialized = await initializeProfilePricing(req.db, {
+      profile: profilePayload,
+      intakeAnswers,
+      organization,
+      matches,
+      user: req.user || null,
+      discountInputs,
+      intakeSessionId,
+      source,
+    })
+
+    if (initialized?.ok) {
+      return res.status(200).json({
+        ok: true,
+        ...initialized,
+      })
+    }
+
+    if (initialized?.error && initialized.error !== 'pricing_tables_not_installed') {
+      return res.status(400).json({ ok: false, error: initialized.error })
+    }
+
+    // Fallback: pricing-engine-only path (used when migration 080 hasn't run yet).
     const quote = buildRecommendedQuote({
       profile,
       intakeAnswers,
@@ -210,14 +247,12 @@ router.post('/recommend', async (req, res) => {
       matches,
       discountInputs,
     })
-
     const persisted = await persistQuote(req.db, {
       userId: req.user?.id || null,
       profileId,
       intakeSessionId,
       quote,
     })
-
     return res.status(200).json({
       ok: true,
       quote_id: persisted?.id || null,
@@ -232,6 +267,49 @@ router.post('/recommend', async (req, res) => {
     })
   } catch (err) {
     routeLogger.error('recommend_failed', { err: err?.message })
+    return res.status(500).json({ ok: false, error: err?.message || String(err) })
+  }
+})
+
+// ── Admin pricing notifications ─────────────────────────────────────────────
+
+router.get('/admin-notifications', async (req, res) => {
+  try {
+    if (!isAdminNotificationTarget(req.user?.email)) {
+      return res.status(200).json({ ok: true, items: [], not_admin_target: true })
+    }
+    const limit = Math.min(Math.max(Number(req.query.limit) || 25, 1), 100)
+    const status = req.query.status || null
+    const r = await listForAdmin(req.db, { user: req.user, limit, status })
+    return res.status(200).json(r)
+  } catch (err) {
+    return res.status(500).json({ ok: false, error: err?.message || String(err) })
+  }
+})
+
+router.post('/admin-notifications/flush-queued', async (req, res) => {
+  try {
+    const r = await flushQueuedOnLogin(req.db, { user: req.user })
+    return res.status(r?.ok ? 200 : 400).json(r)
+  } catch (err) {
+    return res.status(500).json({ ok: false, error: err?.message || String(err) })
+  }
+})
+
+router.post('/admin-notifications/:id/delivered', async (req, res) => {
+  try {
+    const r = await markDelivered(req.db, { user: req.user, id: req.params.id, mode: req.body?.mode })
+    return res.status(r?.ok ? 200 : 400).json(r)
+  } catch (err) {
+    return res.status(500).json({ ok: false, error: err?.message || String(err) })
+  }
+})
+
+router.post('/admin-notifications/:id/dismiss', async (req, res) => {
+  try {
+    const r = await dismiss(req.db, { user: req.user, id: req.params.id })
+    return res.status(r?.ok ? 200 : 400).json(r)
+  } catch (err) {
     return res.status(500).json({ ok: false, error: err?.message || String(err) })
   }
 })

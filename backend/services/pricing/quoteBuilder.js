@@ -195,7 +195,20 @@ export async function updateQuoteStatus(db, quoteId, status) {
 }
 
 export async function approveQuote(db, quoteId) {
-  return updateQuoteStatus(db, quoteId, QUOTE_STATUS.APPROVED)
+  const r = await updateQuoteStatus(db, quoteId, QUOTE_STATUS.APPROVED)
+  // Also unblock the access gate so the user can move past the
+  // "admin review pending" screen and accept the agreement.
+  if (r?.ok && (await tableExists(db, 'profile_pricing'))) {
+    return withProfileScope({ bypass: true }, async () => {
+      await db.prepare(
+        `UPDATE profile_pricing
+          SET access_status = 'pending_agreement', admin_review_required = 0, updated_at = ?
+         WHERE quote_id = ? AND access_status = 'pending_pricing'`,
+      ).run(new Date().toISOString(), quoteId)
+      return r
+    })
+  }
+  return r
 }
 
 export async function approveDiscount(db, quoteId, discountId) {

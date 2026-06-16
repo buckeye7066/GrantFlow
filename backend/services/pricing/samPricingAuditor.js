@@ -86,7 +86,8 @@ export function auditQuote(quote) {
     })
   }
 
-  if ((quote.currency || 'USD') !== 'USD') {
+  const currencyLower = String(quote.currency || 'usd').toLowerCase()
+  if (currencyLower !== 'usd') {
     findings.push({
       severity: SAM_PRICING_FINDING_SEVERITY.HIGH,
       category: 'unsupported_currency',

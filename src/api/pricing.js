@@ -62,6 +62,24 @@ export const pricingApi = {
   listDiscountRules: () => apiFetch('/api/pricing/discount-rules'),
   saveDiscountRule: (rule) =>
     apiFetch('/api/pricing/discount-rules', { method: 'POST', body: JSON.stringify(rule) }),
+
+  // ── Admin pricing toast notifications ────────────────────────────────────
+  listAdminNotifications: ({ status, limit = 25 } = {}) => {
+    const p = new URLSearchParams()
+    if (status) p.set('status', status)
+    if (limit) p.set('limit', String(limit))
+    const qs = p.toString()
+    return apiFetch(`/api/pricing/admin-notifications${qs ? `?${qs}` : ''}`)
+  },
+  flushQueuedAdminNotifications: () =>
+    apiFetch('/api/pricing/admin-notifications/flush-queued', { method: 'POST' }),
+  markAdminNotificationDelivered: (id, mode = 'live') =>
+    apiFetch(`/api/pricing/admin-notifications/${encodeURIComponent(id)}/delivered`, {
+      method: 'POST',
+      body: JSON.stringify({ mode }),
+    }),
+  dismissAdminNotification: (id) =>
+    apiFetch(`/api/pricing/admin-notifications/${encodeURIComponent(id)}/dismiss`, { method: 'POST' }),
 }
 
 export default pricingApi

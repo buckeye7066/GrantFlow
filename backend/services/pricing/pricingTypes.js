@@ -43,14 +43,70 @@ export const QUOTE_STATUS = Object.freeze({
   DRAFT: 'draft',
   INTERNAL_RECOMMENDATION: 'internal_recommendation',
   PENDING_ADMIN_REVIEW: 'pending_admin_review',
+  PENDING_USER_AGREEMENT: 'pending_user_agreement',
+  PENDING_USER_PAYMENT: 'pending_user_payment',
   APPROVED: 'approved',
   PRESENTED_TO_CLIENT: 'presented_to_client',
   ACCEPTED: 'accepted',
   DECLINED: 'declined',
+  PAID: 'paid',
+  ADMIN_WAIVED: 'admin_waived',
   EXPIRED: 'expired',
 })
 
 export const QUOTE_STATUSES = Object.freeze(Object.values(QUOTE_STATUS))
+
+export const ACCESS_STATUS = Object.freeze({
+  PENDING_PRICING: 'pending_pricing',
+  PENDING_AGREEMENT: 'pending_agreement',
+  PENDING_PAYMENT: 'pending_payment',
+  ACTIVE_PAID: 'active_paid',
+  ADMIN_WAIVED: 'admin_waived',
+  BLOCKED: 'blocked',
+  EXPIRED: 'expired',
+})
+
+export const ACCESS_STATUSES = Object.freeze(Object.values(ACCESS_STATUS))
+
+export const ADMIN_NOTIFICATION_STATUS = Object.freeze({
+  QUEUED: 'queued',
+  DELIVERED_LIVE: 'delivered_live',
+  DELIVERED_ON_LOGIN: 'delivered_on_login',
+  DISMISSED: 'dismissed',
+})
+
+export const ADMIN_NOTIFICATION_TYPE = Object.freeze({
+  NEW_USER_PRICING: 'new_user_pricing',
+  DISCOUNT_ELIGIBLE: 'discount_eligible',
+  PAYMENT_COMPLETED: 'payment_completed',
+  PAYMENT_FAILED: 'payment_failed',
+  ADMIN_REVIEW_REQUIRED: 'admin_review_required',
+})
+
+export const PAYMENT_ACCESS_EVENT = Object.freeze({
+  PRICING_CREATED: 'pricing_created',
+  ADMIN_NOTIFIED: 'admin_notified',
+  AGREEMENT_VIEWED: 'agreement_viewed',
+  AGREEMENT_ACCEPTED: 'agreement_accepted',
+  CHECKOUT_STARTED: 'checkout_started',
+  PAYMENT_SUCCEEDED: 'payment_succeeded',
+  PAYMENT_FAILED: 'payment_failed',
+  ACCESS_GRANTED: 'access_granted',
+  ACCESS_BLOCKED: 'access_blocked',
+  ADMIN_WAIVED: 'admin_waived',
+})
+
+/**
+ * Service-agreement template version. Bumping this requires a fresh
+ * acceptance from each user — the gate compares against this constant.
+ */
+export const SERVICE_AGREEMENT_VERSION = '2026-06-15'
+
+/**
+ * The single admin who receives pricing toast notifications. Configurable
+ * via `PRICING_ADMIN_NOTIFICATION_EMAIL`.
+ */
+export const DEFAULT_ADMIN_NOTIFICATION_EMAIL = 'buckeye7066@gmail.com'
 
 export const PAYMENT_TERMS = Object.freeze({
   schedule: [
@@ -172,5 +228,37 @@ export const PRICING_ENV_KEYS = Object.freeze({
   PRICING_REQUIRE_ADMIN_APPROVAL_FOR_DISCOUNTS: 'PRICING_REQUIRE_ADMIN_APPROVAL_FOR_DISCOUNTS',
   PRICING_MAX_TOTAL_DISCOUNT_PERCENT: 'PRICING_MAX_TOTAL_DISCOUNT_PERCENT',
   PRICING_SHOW_CLIENT_ESTIMATE: 'PRICING_SHOW_CLIENT_ESTIMATE',
+  PRICING_SHOW_DISCOUNT_ELIGIBILITY_TO_CLIENT: 'PRICING_SHOW_DISCOUNT_ELIGIBILITY_TO_CLIENT',
   PRICING_REQUIRE_ADMIN_APPROVAL: 'PRICING_REQUIRE_ADMIN_APPROVAL',
+  PRICING_REQUIRE_PAYMENT_BEFORE_FULL_ACCESS: 'PRICING_REQUIRE_PAYMENT_BEFORE_FULL_ACCESS',
+  PRICING_ALLOW_LIMITED_MATCH_PREVIEW_BEFORE_PAYMENT: 'PRICING_ALLOW_LIMITED_MATCH_PREVIEW_BEFORE_PAYMENT',
+  PRICING_ADMIN_NOTIFICATION_EMAIL: 'PRICING_ADMIN_NOTIFICATION_EMAIL',
+  PRICING_ADMIN_TOASTS_ENABLED: 'PRICING_ADMIN_TOASTS_ENABLED',
+  PRICING_AUTO_INITIALIZE_ON_PROFILE_CREATE: 'PRICING_AUTO_INITIALIZE_ON_PROFILE_CREATE',
 })
+
+export function adminNotificationEmail() {
+  const v = (process.env || {})[PRICING_ENV_KEYS.PRICING_ADMIN_NOTIFICATION_EMAIL]
+  if (typeof v === 'string' && v.includes('@')) return v.toLowerCase().trim()
+  return DEFAULT_ADMIN_NOTIFICATION_EMAIL
+}
+
+export function isAdminNotificationTarget(email) {
+  if (!email) return false
+  return String(email).toLowerCase().trim() === adminNotificationEmail()
+}
+
+/**
+ * Convert dollars (number) → integer cents. Always rounds, never truncates.
+ */
+export function toCents(dollars) {
+  const n = Number(dollars)
+  if (!Number.isFinite(n)) return 0
+  return Math.round(n * 100)
+}
+
+export function fromCents(cents) {
+  const n = Number(cents)
+  if (!Number.isFinite(n)) return 0
+  return Math.round(n) / 100
+}

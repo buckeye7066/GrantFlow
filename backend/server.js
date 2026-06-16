@@ -1940,6 +1940,7 @@ app.use('/api/organizations', organizationsRouter);
 app.use('/api/grants', grantsRouter);
 app.use('/api/opportunities', opportunitiesRouter);
 app.use('/api/pricing', lazyRouter('./routes/pricing.js'));
+app.use('/api/access-gate', lazyRouter('./routes/accessGate.js'));
 app.use('/api/sam/onboarding-audit', lazyRouter('./routes/samOnboardingAudit.js'));
 app.use('/api/funding-library', lazyRouter('./routes/fundingLibrary.js'));
 app.use('/api/programs', programsRouter);
