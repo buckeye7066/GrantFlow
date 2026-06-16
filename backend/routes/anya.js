@@ -534,10 +534,26 @@ router.post('/tools/:toolName/invoke', async (req, res) => {
 
 // ============================================================================
 // Autonomous Operations Endpoints
+//
+// These endpoints predate Sam (GrantFlow's production-readiness agent). The
+// canonical home for production-health work is now `/api/sam/*`. We keep
+// these routes intact so existing admin UI / Anya tooling does not break,
+// but we mark each response with a `Deprecation` header pointing at the
+// matching Sam route. Internally they still delegate to the same Anya tool
+// registry — Sam itself delegates to those tools too, so we are not
+// duplicating work.
 // ============================================================================
+
+function attachSamDeprecationHeader(res, samPath) {
+  // RFC 8594 deprecation header (informational; clients keep working).
+  res.set('Deprecation', 'true')
+  res.set('Link', `</api/sam/${samPath}>; rel="successor-version"`)
+  res.set('X-Sam-Owns', 'production_readiness')
+}
 
 router.post('/autonomous/code', adminAuth, async (req, res) => {
   try {
+    attachSamDeprecationHeader(res, 'run')
     const result = await invokeTool(req.db, req.ctx, 'admin.anya.runAutonomous', req.body, {})
     res.status(201).json(result)
   } catch (error) {
@@ -547,6 +563,7 @@ router.post('/autonomous/code', adminAuth, async (req, res) => {
 
 router.post('/autonomous/code/background', adminAuth, async (req, res) => {
   try {
+    attachSamDeprecationHeader(res, 'run')
     const { startBackgroundCodeCrawlAndRepair } = await import('../services/anyaAutonomousScheduler.js')
     const context = { db: req.db, user: req.ctx?.user ?? req.user }
     const result = startBackgroundCodeCrawlAndRepair(context)
@@ -562,6 +579,7 @@ router.post('/autonomous/code/background', adminAuth, async (req, res) => {
 
 router.post('/autonomous/crawlers', adminAuth, async (req, res) => {
   try {
+    attachSamDeprecationHeader(res, 'run')
     const result = await invokeTool(req.db, req.ctx, 'admin.anya.runCrawlers', req.body, {})
     res.status(201).json(result)
   } catch (error) {
@@ -571,6 +589,7 @@ router.post('/autonomous/crawlers', adminAuth, async (req, res) => {
 
 router.post('/autonomous/functions', adminAuth, async (req, res) => {
   try {
+    attachSamDeprecationHeader(res, 'diagnose')
     const result = await invokeTool(req.db, req.ctx, 'admin.anya.testFunctions', req.body, {})
     res.status(201).json(result)
   } catch (error) {
@@ -580,6 +599,7 @@ router.post('/autonomous/functions', adminAuth, async (req, res) => {
 
 router.post('/autonomous/buttons', adminAuth, async (req, res) => {
   try {
+    attachSamDeprecationHeader(res, 'diagnose')
     const result = await invokeTool(req.db, req.ctx, 'admin.anya.testButtons', req.body, {})
     res.status(201).json(result)
   } catch (error) {
@@ -589,6 +609,7 @@ router.post('/autonomous/buttons', adminAuth, async (req, res) => {
 
 router.get('/autonomous/status', adminAuth, async (req, res) => {
   try {
+    attachSamDeprecationHeader(res, 'status')
     const operationType = req.query.type || 'all'
     const result = await invokeTool(req.db, req.ctx, 'admin.anya.getStatus', { operationType }, {})
     res.json(result)
