@@ -1,0 +1,549 @@
+import { randomUUID, createHash } from 'crypto'
+import { safeParseJSON } from '../utils/safeJson.js'
+import { guardProfileSectionForWrite } from '../utils/guardedProfileSectionWrite.js'
+
+const SCHOOL_PORTAL_PROVIDERS = Object.freeze([
+  {
+    id: 'tsac',
+    name: 'Tennessee Student Assistance Corporation (TSAC)',
+    short_name: 'TSAC',
+    portal_url: 'https://www.tn.gov/collegepays.html',
+    integration_mode: 'pilot_manual_import',
+    live_supported: false,
+    description:
+      'Pilot/manual-import support for awards copied from the TSAC student portal. GrantFlow does not perform live TSAC authentication.',
+    limitations: [
+      'Live TSAC OAuth/API authentication is not implemented in this release.',
+      'Users must paste award data that they exported or copied from the provider portal.',
+    ],
+  },
+])
+
+function getProvider(providerId) {
+  return SCHOOL_PORTAL_PROVIDERS.find((provider) => provider.id === String(providerId || '').trim().toLowerCase()) ?? null
+}
+
+function safeArray(value) {
+  return Array.isArray(value) ? value : []
+}
+
+function safeText(value) {
+  return typeof value === 'string' ? value.trim() : ''
+}
+
+function formatCurrency(value) {
+  const amount = Number(value)
+  if (!Number.isFinite(amount)) return null
+  return new Intl.NumberFormat('en-US', {
+    style: 'currency',
+    currency: 'USD',
+    minimumFractionDigits: 0,
+    maximumFractionDigits: amount % 1 === 0 ? 0 : 2,
+  }).format(amount)
+}
+
+function parseAmount(value) {
+  if (value === null || value === undefined || value === '') return null
+  if (typeof value === 'number' && Number.isFinite(value)) return value
+  const text = String(value).replace(/[^0-9.-]/g, '')
+  const amount = Number(text)
+  return Number.isFinite(amount) ? amount : null
+}
+
+function hashFingerprint(parts) {
+  return createHash('sha1')
+    .update(parts.filter(Boolean).join('|'))
+    .digest('hex')
+    .slice(0, 16)
+}
+
+function pickFirstText(record, keys) {
+  for (const key of keys) {
+    const value = safeText(record?.[key])
+    if (value) return value
+  }
+  return ''
+}
+
+function normalizeAwardRecord(provider, record, { portalUrl, schoolName, connectionId }) {
+  if (!record || typeof record !== 'object') return null
+
+  const title = pickFirstText(record, [
+    'title',
+    'name',
+    'award_name',
+    'scholarship_name',
+    'program_name',
+    'program',
+    'description',
+  ])
+  if (!title) return null
+
+  const amount =
+    parseAmount(record.amount) ??
+    parseAmount(record.amount_awarded) ??
+    parseAmount(record.estimated_amount) ??
+    parseAmount(record.value)
+  const externalId =
+    pickFirstText(record, ['external_id', 'id', 'award_id', 'program_code', 'reference_number']) ||
+    hashFingerprint([provider.id, title, String(amount ?? ''), schoolName])
+  const academicYear = pickFirstText(record, ['academic_year', 'year', 'aid_year', 'term'])
+  const status = pickFirstText(record, ['status', 'award_status', 'state'])
+  const effectiveSchoolName = schoolName || pickFirstText(record, ['school_name', 'institution_name'])
+  const fingerprint = hashFingerprint([
+    provider.id,
+    externalId,
+    title.toLowerCase(),
+    String(amount ?? ''),
+    effectiveSchoolName.toLowerCase(),
+    academicYear.toLowerCase(),
+  ])
+  const normalizedId = `portal_award_${fingerprint}`
+
+  return {
+    id: normalizedId,
+    external_id: externalId,
+    title,
+    description: pickFirstText(record, ['description', 'notes', 'details']),
+    amount,
+    amount_display: amount !== null ? formatCurrency(amount) : null,
+    currency: 'USD',
+    status: status || 'reported',
+    academic_year: academicYear || null,
+    school_name: effectiveSchoolName || null,
+    provider_id: provider.id,
+    provider_name: provider.name,
+    source_name: provider.short_name,
+    source_url: portalUrl || provider.portal_url,
+    portal_url: portalUrl || provider.portal_url,
+    connection_id: connectionId,
+    import_mode: provider.integration_mode,
+    fingerprint,
+    provenance: {
+      provider_id: provider.id,
+      provider_name: provider.name,
+      integration_mode: provider.integration_mode,
+      live_supported: provider.live_supported,
+    },
+    raw_reference: {
+      program_code: safeText(record.program_code) || null,
+      term: safeText(record.term) || null,
+    },
+  }
+}
+
+export function normalizeProviderScholarshipRecords(providerId, rawInput, options = {}) {
+  const provider = getProvider(providerId)
+  if (!provider) {
+    throw new Error(`Unsupported school portal provider: ${providerId}`)
+  }
+
+  const records = Array.isArray(rawInput)
+    ? rawInput
+    : Array.isArray(rawInput?.awards)
+      ? rawInput.awards
+      : Array.isArray(rawInput?.items)
+        ? rawInput.items
+        : Array.isArray(rawInput?.records)
+          ? rawInput.records
+          : []
+
+  if (records.length === 0) {
+    throw new Error('Import payload must contain an array of awards.')
+  }
+
+  const byId = new Map()
+  for (const record of records) {
+    const normalized = normalizeAwardRecord(provider, record, options)
+    if (!normalized) continue
+    if (!byId.has(normalized.id)) {
+      byId.set(normalized.id, normalized)
+    }
+  }
+
+  const awards = [...byId.values()]
+  if (awards.length === 0) {
+    throw new Error('No valid scholarship or funding awards were found in the import payload.')
+  }
+  return awards
+}
+
+function normalizeConnection(connection) {
+  return {
+    id: safeText(connection?.id) || `portal_connection_${randomUUID().slice(0, 8)}`,
+    provider_id: safeText(connection?.provider_id),
+    provider_name: safeText(connection?.provider_name),
+    provider_short_name: safeText(connection?.provider_short_name),
+    connection_label: safeText(connection?.connection_label) || null,
+    school_name: safeText(connection?.school_name) || null,
+    portal_url: safeText(connection?.portal_url) || null,
+    default_application_id: safeText(connection?.default_application_id) || null,
+    integration_mode: safeText(connection?.integration_mode) || 'pilot_manual_import',
+    live_supported: Boolean(connection?.live_supported),
+    connected_at: safeText(connection?.connected_at) || null,
+    last_synced_at: safeText(connection?.last_synced_at) || null,
+    limitations: safeArray(connection?.limitations),
+    available_awards: safeArray(connection?.available_awards),
+  }
+}
+
+function normalizeImportedAwardRecord(award) {
+  return {
+    ...award,
+    id: safeText(award?.id),
+    title: safeText(award?.title),
+    provider_id: safeText(award?.provider_id),
+    provider_name: safeText(award?.provider_name),
+    application_id: safeText(award?.application_id) || null,
+    application_name: safeText(award?.application_name) || null,
+    merged_at: safeText(award?.merged_at) || null,
+    pipeline_stage_id: safeText(award?.pipeline_stage_id) || null,
+  }
+}
+
+function normalizeSectionData(data) {
+  const parsed = typeof data === 'string' ? safeParseJSON(data, {}) : (data ?? {})
+  const applications = safeArray(parsed?.applications).map((application) => ({
+    ...application,
+    imported_portal_awards: safeArray(application?.imported_portal_awards).map(normalizeImportedAwardRecord),
+    financial_aid_pipeline: safeArray(application?.financial_aid_pipeline),
+  }))
+  return {
+    ...parsed,
+    applications,
+    school_portal_imports: {
+      version: 1,
+      connections: safeArray(parsed?.school_portal_imports?.connections).map(normalizeConnection),
+    },
+  }
+}
+
+async function loadUniversityApplicationsSection(db, profileId) {
+  const row = await db
+    .prepare(
+      `SELECT data
+       FROM profile_sections
+       WHERE profile_id = ? AND section_key = 'university_applications'
+       LIMIT 1`,
+    )
+    .get(profileId)
+
+  return normalizeSectionData(row?.data ? safeParseJSON(row.data, {}) : {})
+}
+
+async function saveUniversityApplicationsSection(db, profileId, data, updatedBy) {
+  const sectionKey = 'university_applications'
+  const guarded = await guardProfileSectionForWrite(db, profileId, sectionKey, data)
+  await db
+    .prepare(
+      `INSERT INTO profile_sections (profile_id, section_key, data, updated_by)
+       VALUES (?, ?, ?, ?)
+       ON CONFLICT(profile_id, section_key) DO UPDATE SET
+         data = excluded.data,
+         updated_by = excluded.updated_by,
+         updated_at = CURRENT_TIMESTAMP`,
+    )
+    .run(profileId, sectionKey, JSON.stringify(guarded.data), updatedBy)
+
+  return guarded.data
+}
+
+function findImportedAwardIndex(existingAwards, award) {
+  return existingAwards.findIndex((entry) => {
+    if (entry.id && award.id && entry.id === award.id) return true
+    if (entry.provider_id === award.provider_id && entry.external_id && entry.external_id === award.external_id) return true
+    return (
+      safeText(entry.title).toLowerCase() === safeText(award.title).toLowerCase() &&
+      Number(entry.amount) === Number(award.amount)
+    )
+  })
+}
+
+function createPipelineStage(award, connection) {
+  const stageId = `portal_${award.id}`.slice(0, 64)
+  const notes = [
+    `Imported from ${connection.provider_name}`,
+    award.amount_display ? `Amount: ${award.amount_display}` : '',
+    award.status ? `Status: ${award.status}` : '',
+    award.academic_year ? `Academic year: ${award.academic_year}` : '',
+    `Portal award ID: ${award.id}`,
+    connection.portal_url ? `Source portal: ${connection.portal_url}` : '',
+    'Mode: pilot manual import',
+  ]
+    .filter(Boolean)
+    .join(' · ')
+
+  return {
+    id: stageId,
+    label: `Imported Portal Award: ${award.title}`,
+    status: 'completed',
+    due_date: '',
+    completed_at: new Date().toISOString().slice(0, 10),
+    notes,
+  }
+}
+
+function mergedAwardsFromApplications(applications) {
+  return applications.flatMap((application) =>
+    safeArray(application?.imported_portal_awards).map((award) => ({
+      ...award,
+      application_id: award.application_id || application.id || null,
+      application_name: award.application_name || application.name || application.school_name || null,
+    })),
+  )
+}
+
+function mapConnectionForResponse(connection, mergedAwards) {
+  const mergedIds = new Set(mergedAwards.map((award) => award.id))
+  return {
+    ...connection,
+    available_awards: safeArray(connection.available_awards).map((award) => ({
+      ...award,
+      already_merged: mergedIds.has(award.id),
+    })),
+  }
+}
+
+function buildWorkspace(sectionData) {
+  const applications = safeArray(sectionData?.applications)
+  const merged_awards = mergedAwardsFromApplications(applications)
+  return {
+    providers: SCHOOL_PORTAL_PROVIDERS,
+    applications: applications.map((application) => ({
+      id: application.id || null,
+      name: application.name || application.school_name || 'Unnamed school',
+      status: application.status || 'planning',
+      school_name: application.school_name || application.name || null,
+      imported_award_count: safeArray(application.imported_portal_awards).length,
+    })),
+    connections: safeArray(sectionData?.school_portal_imports?.connections).map((connection) =>
+      mapConnectionForResponse(connection, merged_awards),
+    ),
+    merged_awards,
+  }
+}
+
+export async function getSchoolPortalWorkspace(db, profileId) {
+  const sectionData = await loadUniversityApplicationsSection(db, profileId)
+  return buildWorkspace(sectionData)
+}
+
+export async function createSchoolPortalConnection(db, profileId, payload, updatedBy) {
+  const provider = getProvider(payload?.provider_id)
+  if (!provider) {
+    throw new Error('A supported school portal provider is required.')
+  }
+
+  const sectionData = await loadUniversityApplicationsSection(db, profileId)
+  const awards = normalizeProviderScholarshipRecords(provider.id, payload?.awards, {
+    portalUrl: safeText(payload?.portal_url) || provider.portal_url,
+    schoolName: safeText(payload?.school_name),
+    connectionId: payload?.connection_id,
+  })
+
+  const connection = normalizeConnection({
+    id: payload?.connection_id || `portal_connection_${randomUUID().slice(0, 8)}`,
+    provider_id: provider.id,
+    provider_name: provider.name,
+    provider_short_name: provider.short_name,
+    connection_label: safeText(payload?.connection_label),
+    school_name: safeText(payload?.school_name),
+    portal_url: safeText(payload?.portal_url) || provider.portal_url,
+    default_application_id: safeText(payload?.application_id),
+    integration_mode: provider.integration_mode,
+    live_supported: provider.live_supported,
+    connected_at: new Date().toISOString(),
+    last_synced_at: new Date().toISOString(),
+    limitations: provider.limitations,
+    available_awards: awards,
+  })
+
+  const nextConnections = [
+    ...safeArray(sectionData.school_portal_imports?.connections).filter((item) => item.id !== connection.id),
+    connection,
+  ]
+
+  const nextData = {
+    ...sectionData,
+    school_portal_imports: {
+      version: 1,
+      connections: nextConnections,
+    },
+  }
+
+  const saved = await saveUniversityApplicationsSection(db, profileId, nextData, updatedBy)
+  return {
+    connection,
+    workspace: buildWorkspace(saved),
+  }
+}
+
+export async function mergeSchoolPortalAwards(db, profileId, payload, updatedBy) {
+  const connectionId = safeText(payload?.connection_id)
+  const awardIds = safeArray(payload?.award_ids).map((value) => safeText(value)).filter(Boolean)
+  if (!connectionId) throw new Error('connection_id is required.')
+  if (awardIds.length === 0) throw new Error('Select at least one award to merge.')
+
+  const sectionData = await loadUniversityApplicationsSection(db, profileId)
+  const connections = safeArray(sectionData.school_portal_imports?.connections)
+  const connection = connections.find((item) => item.id === connectionId)
+  if (!connection) throw new Error('School portal connection not found.')
+
+  const targetApplicationId =
+    safeText(payload?.application_id) ||
+    safeText(connection.default_application_id) ||
+    (sectionData.applications.length === 1 ? safeText(sectionData.applications[0]?.id) : '')
+  if (!targetApplicationId) {
+    throw new Error('Select a university before merging portal awards.')
+  }
+
+  const applicationIndex = sectionData.applications.findIndex(
+    (application) => safeText(application?.id) === targetApplicationId,
+  )
+  if (applicationIndex === -1) {
+    throw new Error('Target university application not found.')
+  }
+
+  const selectedAwards = safeArray(connection.available_awards).filter((award) => awardIds.includes(award.id))
+  if (selectedAwards.length === 0) {
+    throw new Error('The selected awards are no longer available on this connection.')
+  }
+
+  const application = { ...(sectionData.applications[applicationIndex] || {}) }
+  const importedAwards = safeArray(application.imported_portal_awards).slice()
+  const pipeline = safeArray(application.financial_aid_pipeline).slice()
+  const mergedAt = new Date().toISOString()
+
+  let mergedCount = 0
+  for (const award of selectedAwards) {
+    const stage = createPipelineStage(award, connection)
+    const mergedAward = {
+      ...award,
+      application_id: application.id || targetApplicationId,
+      application_name: application.name || application.school_name || connection.school_name || null,
+      connection_id: connection.id,
+      connection_label: connection.connection_label || connection.provider_name,
+      merged_at: mergedAt,
+      pipeline_stage_id: stage.id,
+      source_metadata: {
+        provider_id: award.provider_id,
+        provider_name: award.provider_name,
+        connection_id: connection.id,
+        connection_label: connection.connection_label || connection.provider_name,
+        portal_url: award.portal_url || connection.portal_url,
+        import_mode: award.import_mode,
+        live_supported: false,
+      },
+    }
+
+    const importedIndex = findImportedAwardIndex(importedAwards, mergedAward)
+    if (importedIndex === -1) {
+      importedAwards.unshift(mergedAward)
+      mergedCount += 1
+    } else {
+      importedAwards[importedIndex] = {
+        ...importedAwards[importedIndex],
+        ...mergedAward,
+        merged_at: importedAwards[importedIndex]?.merged_at || mergedAt,
+      }
+    }
+
+    const stageIndex = pipeline.findIndex(
+      (entry) =>
+        safeText(entry?.id) === stage.id ||
+        safeText(entry?.notes).includes(`Portal award ID: ${award.id}`) ||
+        safeText(entry?.label).toLowerCase() === stage.label.toLowerCase(),
+    )
+    if (stageIndex === -1) {
+      pipeline.unshift(stage)
+    } else {
+      pipeline[stageIndex] = {
+        ...pipeline[stageIndex],
+        ...stage,
+        completed_at: pipeline[stageIndex]?.completed_at || stage.completed_at,
+      }
+    }
+  }
+
+  application.imported_portal_awards = importedAwards
+  application.financial_aid_pipeline = pipeline
+
+  const nextApplications = sectionData.applications.slice()
+  nextApplications.splice(applicationIndex, 1, application)
+  const nextData = {
+    ...sectionData,
+    applications: nextApplications,
+  }
+
+  const saved = await saveUniversityApplicationsSection(db, profileId, nextData, updatedBy)
+  return {
+    merged_count: mergedCount,
+    workspace: buildWorkspace(saved),
+  }
+}
+
+export async function removeMergedSchoolPortalAward(db, profileId, payload, updatedBy) {
+  const awardId = safeText(payload?.award_id)
+  if (!awardId) throw new Error('award_id is required.')
+
+  const sectionData = await loadUniversityApplicationsSection(db, profileId)
+  const nextApplications = sectionData.applications.map((application) => {
+    const importedAwards = safeArray(application.imported_portal_awards)
+    const nextImportedAwards = importedAwards.filter((award) => safeText(award?.id) !== awardId)
+    if (nextImportedAwards.length === importedAwards.length) {
+      return application
+    }
+    return {
+      ...application,
+      imported_portal_awards: nextImportedAwards,
+      financial_aid_pipeline: safeArray(application.financial_aid_pipeline).filter(
+        (stage) =>
+          safeText(stage?.id) !== `portal_${awardId}` &&
+          !safeText(stage?.notes).includes(`Portal award ID: ${awardId}`),
+      ),
+    }
+  })
+
+  const saved = await saveUniversityApplicationsSection(
+    db,
+    profileId,
+    {
+      ...sectionData,
+      applications: nextApplications,
+    },
+    updatedBy,
+  )
+
+  return {
+    workspace: buildWorkspace(saved),
+  }
+}
+
+export async function disconnectSchoolPortalConnection(db, profileId, payload, updatedBy) {
+  const connectionId = safeText(payload?.connection_id)
+  if (!connectionId) throw new Error('connection_id is required.')
+
+  const sectionData = await loadUniversityApplicationsSection(db, profileId)
+  const nextConnections = safeArray(sectionData.school_portal_imports?.connections).filter(
+    (connection) => connection.id !== connectionId,
+  )
+
+  const saved = await saveUniversityApplicationsSection(
+    db,
+    profileId,
+    {
+      ...sectionData,
+      school_portal_imports: {
+        version: 1,
+        connections: nextConnections,
+      },
+    },
+    updatedBy,
+  )
+
+  return {
+    workspace: buildWorkspace(saved),
+  }
+}
+
+export { SCHOOL_PORTAL_PROVIDERS }

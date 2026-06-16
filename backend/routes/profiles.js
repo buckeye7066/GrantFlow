@@ -33,6 +33,13 @@ import { guardProfileSectionPayload } from '../utils/profileSuggestionGuards.js'
 import { normalizeProfileSectionData } from '../services/profileHelpers.js'
 import { resolveProfileType } from '../services/profileTypeRegistry.js'
 import { normalizeHttpUrl } from '../services/avatarCrawler.js'
+import {
+  createSchoolPortalConnection,
+  disconnectSchoolPortalConnection,
+  getSchoolPortalWorkspace,
+  mergeSchoolPortalAwards,
+  removeMergedSchoolPortalAward,
+} from '../services/schoolPortalImportService.js'
 
 /**
  * Mission goal #4/#5: every saved profile must carry a profile-type
@@ -2111,6 +2118,151 @@ router.delete('/:id/sections/:sectionKey', async (req, res) => {
     return res.status(404).json({ error: 'Section not found' })
   }
   res.status(204).send()
+})
+
+router.get('/:id/school-portals', async (req, res) => {
+  const { id } = req.params
+
+  const profile = await req.db.prepare(`${profileSelect} WHERE p.id = ?`).get(id)
+  if (!profile) {
+    return res.status(404).json({ error: 'Profile not found' })
+  }
+
+  if (!canAccessProfileRowFromCtx(req.ctx, profile)) {
+    return denyAuth(req, res)
+  }
+
+  try {
+    const workspace = await getSchoolPortalWorkspace(req.db, id)
+    return res.json({ ok: true, ...workspace })
+  } catch (error) {
+    profileLogger.error('[profiles/school-portals] failed to load workspace', {
+      profile_id: id,
+      error: error?.message || String(error),
+    })
+    return res.status(500).json(formatError(error))
+  }
+})
+
+router.post('/:id/school-portals/connections', async (req, res) => {
+  const { id } = req.params
+  const profile = await req.db.prepare(`${profileSelect} WHERE p.id = ?`).get(id)
+  if (!profile) {
+    return res.status(404).json({ error: 'Profile not found' })
+  }
+
+  if (!canAccessProfileRowFromCtx(req.ctx, profile)) {
+    return denyAuth(req, res)
+  }
+
+  const {
+    provider_id,
+    application_id,
+    school_name,
+    connection_label,
+    portal_url,
+    awards_payload,
+    awards,
+  } = req.body ?? {}
+
+  let parsedAwards = awards
+  if (!parsedAwards && typeof awards_payload === 'string') {
+    parsedAwards = safeParseJSON(awards_payload, null)
+    if (!parsedAwards) {
+      return res.status(400).json({ error: 'awards_payload must be valid JSON.' })
+    }
+  }
+
+  try {
+    const result = await createSchoolPortalConnection(
+      req.db,
+      id,
+      {
+        provider_id,
+        application_id,
+        school_name,
+        connection_label,
+        portal_url,
+        awards: parsedAwards,
+      },
+      req.ctx?.userId ?? req.ctx?.email ?? 'school-portal-import',
+    )
+    return res.status(201).json({ ok: true, connection: result.connection, ...result.workspace })
+  } catch (error) {
+    return res.status(400).json(formatError(error))
+  }
+})
+
+router.post('/:id/school-portals/merge', async (req, res) => {
+  const { id } = req.params
+  const profile = await req.db.prepare(`${profileSelect} WHERE p.id = ?`).get(id)
+  if (!profile) {
+    return res.status(404).json({ error: 'Profile not found' })
+  }
+
+  if (!canAccessProfileRowFromCtx(req.ctx, profile)) {
+    return denyAuth(req, res)
+  }
+
+  try {
+    const result = await mergeSchoolPortalAwards(
+      req.db,
+      id,
+      req.body ?? {},
+      req.ctx?.userId ?? req.ctx?.email ?? 'school-portal-merge',
+    )
+    return res.json({ ok: true, merged_count: result.merged_count, ...result.workspace })
+  } catch (error) {
+    return res.status(400).json(formatError(error))
+  }
+})
+
+router.delete('/:id/school-portals/awards/:awardId', async (req, res) => {
+  const { id, awardId } = req.params
+  const profile = await req.db.prepare(`${profileSelect} WHERE p.id = ?`).get(id)
+  if (!profile) {
+    return res.status(404).json({ error: 'Profile not found' })
+  }
+
+  if (!canAccessProfileRowFromCtx(req.ctx, profile)) {
+    return denyAuth(req, res)
+  }
+
+  try {
+    const result = await removeMergedSchoolPortalAward(
+      req.db,
+      id,
+      { award_id: awardId },
+      req.ctx?.userId ?? req.ctx?.email ?? 'school-portal-remove',
+    )
+    return res.json({ ok: true, ...result.workspace })
+  } catch (error) {
+    return res.status(400).json(formatError(error))
+  }
+})
+
+router.delete('/:id/school-portals/connections/:connectionId', async (req, res) => {
+  const { id, connectionId } = req.params
+  const profile = await req.db.prepare(`${profileSelect} WHERE p.id = ?`).get(id)
+  if (!profile) {
+    return res.status(404).json({ error: 'Profile not found' })
+  }
+
+  if (!canAccessProfileRowFromCtx(req.ctx, profile)) {
+    return denyAuth(req, res)
+  }
+
+  try {
+    const result = await disconnectSchoolPortalConnection(
+      req.db,
+      id,
+      { connection_id: connectionId },
+      req.ctx?.userId ?? req.ctx?.email ?? 'school-portal-disconnect',
+    )
+    return res.json({ ok: true, ...result.workspace })
+  } catch (error) {
+    return res.status(400).json(formatError(error))
+  }
 })
 
 async function handleProfileSectionAi(req, res) {

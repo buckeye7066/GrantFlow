@@ -61,6 +61,35 @@ npm run migrate
 npm run dev
 ```
 
+## School portal scholarship imports (pilot)
+
+GrantFlow now includes a provider-based foundation for importing scholarships and funding items from school portals into student profiles.
+
+- **Supported provider(s):** TSAC (`tsac`)
+- **Current mode:** `pilot_manual_import`
+- **Live TSAC auth/API:** **not** implemented in this release
+
+### Architecture overview
+
+- Provider adapters normalize portal-specific award records into a canonical GrantFlow scholarship shape.
+- Imported awards are stored with provenance metadata (provider, portal URL, import mode, and merge timestamps).
+- Merged awards are attached to `university_applications.applications[].imported_portal_awards` and mirrored into each school’s `financial_aid_pipeline`.
+- Duplicate merges are collapsed by provider/source identity plus award fingerprint so the same portal award is not repeatedly added.
+
+### Current user flow
+
+1. Open a student profile’s **Student portals** card.
+2. Choose **Connect portal**.
+3. Select the provider (currently TSAC), optionally choose the target university, and paste JSON copied/exported from the portal.
+4. Review the normalized awards and merge the selected items into the student profile.
+5. Remove merged awards later if needed; disconnecting a provider does not delete awards that were already merged into the profile.
+
+### Limitations / setup
+
+- This is intentionally a **manual-import pilot**, not a simulated OAuth flow.
+- GrantFlow does **not** request or store raw school-portal passwords.
+- For TSAC, provide award records as JSON objects with fields such as `title`, `amount`, `status`, and `academic_year`.
+- No extra environment variables are required for the current pilot mode.
 
 ## Contributing
 
