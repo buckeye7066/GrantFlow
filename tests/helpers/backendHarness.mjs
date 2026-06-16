@@ -23,14 +23,36 @@ async function waitForHttpOk(url, { timeoutMs = 30_000 } = {}) {
 
 export async function stopProcess(proc) {
   if (!proc) return
+  const waitForExit = () =>
+    new Promise((resolve) => {
+      if (proc.exitCode != null) {
+        resolve()
+        return
+      }
+
+      const done = () => {
+        proc.off('exit', done)
+        proc.off('close', done)
+        resolve()
+      }
+
+      proc.once('exit', done)
+      proc.once('close', done)
+    })
+
+  const exitWait = waitForExit()
+
   try {
     proc.kill('SIGTERM')
   } catch {}
-  await sleep(250)
+
+  await Promise.race([exitWait, sleep(1_000)])
+
   if (proc.exitCode == null) {
     try {
       proc.kill('SIGKILL')
     } catch {}
+    await Promise.race([exitWait, sleep(1_000)])
   }
 }
 
