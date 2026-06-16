@@ -66,6 +66,7 @@ const ServiceApplication = lazy(() => import("./ServiceApplication"), 'ServiceAp
 const SetPassword = lazy(() => import("./SetPassword"), 'SetPassword');
 const SavedGrants = lazy(() => import("./SavedGrants"), 'SavedGrants');
 const FoundationSearch = lazy(() => import("./FoundationSearch"), 'FoundationSearch');
+const AnyaIntakeResults = lazy(() => import("./AnyaIntakeResults"), 'AnyaIntakeResults');
 
 import { Route, Routes, useLocation, Navigate } from 'react-router-dom';
 import { useAuthStore } from "@/stores/authStore";
@@ -180,7 +181,8 @@ const PAGES = {
     Help: Help,
     
     Admin: Admin,
-    
+
+    AnyaIntakeResults: AnyaIntakeResults,
 }
 
 function _getCurrentPage(url) {
@@ -342,6 +344,8 @@ function LayoutRoutes() {
 
                 <Route path="/SavedGrants" element={withBoundary(<SavedGrants />, "SavedGrants")} />
                 <Route path="/FoundationSearch" element={withBoundary(<FoundationSearch />, "FoundationSearch")} />
+
+                <Route path="/AnyaIntakeResults" element={withBoundary(<AnyaIntakeResults />, "AnyaIntakeResults")} />
 
                 </Routes>
             </Layout>
