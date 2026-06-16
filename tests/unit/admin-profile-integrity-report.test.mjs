@@ -28,11 +28,34 @@ function startServer(extraEnv = {}) {
   let stderr = ''
   child.stdout.setEncoding('utf8')
   child.stderr.setEncoding('utf8')
-  child.stdout.on('data', (d) => (stdout += d))
-  child.stderr.on('data', (d) => (stderr += d))
 
   const ready = new Promise((resolve, reject) => {
+    let resolved = false
+
+    const tryResolveReady = () => {
+      if (resolved) return true
+      const match = stdout.match(/\[Server\] Ready on port\s+(\d+)/) || stderr.match(/\[Server\] Ready on port\s+(\d+)/)
+      if (!match) return false
+      resolved = true
+      clearTimeout(timeout)
+      resolve({ port: Number(match[1]), dbPath })
+      return true
+    }
+
+    child.stdout.on('data', (chunk) => {
+      stdout += chunk
+      tryResolveReady()
+    })
+
+    child.stderr.on('data', (chunk) => {
+      stderr += chunk
+      tryResolveReady()
+    })
+
+    tryResolveReady()
+
     const timeout = setTimeout(() => {
+      if (tryResolveReady()) return
       try {
         child.kill('SIGTERM')
       } catch {
@@ -41,12 +64,16 @@ function startServer(extraEnv = {}) {
       reject(new Error(`server did not become ready\nstdout:\n${stdout}\nstderr:\n${stderr}`))
     }, 60_000)
 
-    child.stdout.on('data', () => {
-      const m = stdout.match(/\[Server\] Ready on port\s+(\d+)/)
-      if (m) {
-        clearTimeout(timeout)
-        resolve({ port: Number(m[1]), dbPath })
-      }
+    child.on('error', (err) => {
+      if (resolved) return
+      clearTimeout(timeout)
+      reject(new Error(`server failed to spawn: ${String(err?.message || err)}\nstdout:\n${stdout}\nstderr:\n${stderr}`))
+    })
+
+    child.on('exit', (code) => {
+      if (resolved || tryResolveReady()) return
+      clearTimeout(timeout)
+      reject(new Error(`server exited before ready (code=${code})\nstdout:\n${stdout}\nstderr:\n${stderr}`))
     })
   })
 
@@ -146,4 +173,3 @@ test('admin profile integrity report is admin-only and returns counts', async ()
     await srv.stop()
   }
 })
-
