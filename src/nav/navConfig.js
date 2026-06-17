@@ -31,6 +31,7 @@ import {
   HandCoins,
   ShieldCheck,
   Star,
+  Library,
 } from "lucide-react";
 
 /** @typedef {{ title: string, routeName: string, url: string, icon: import('lucide-react').LucideIcon, isAdminOnly?: boolean, isAdvanced?: boolean }} NavItem */
@@ -76,6 +77,7 @@ export const NAV_GROUPS = [
       { title: "Smart Matcher", routeName: "SmartMatcher", url: createPageUrl("SmartMatcher"), icon: Brain },
       { title: "Profile Matcher", routeName: "ProfileMatcher", url: createPageUrl("ProfileMatcher"), icon: Target },
       { title: "Funding Opportunities", routeName: "FundingOpportunities", url: createPageUrl("FundingOpportunities"), icon: Layers },
+      { title: "Funding Library", routeName: "FundingLibrary", url: createPageUrl("FundingLibrary"), icon: Library },
       { title: "Foundation Search", routeName: "FoundationSearch", url: createPageUrl("FoundationSearch"), icon: Database },
       { title: "Funder", routeName: "Funder", url: createPageUrl("Funder"), icon: HandCoins },
       { title: "Data Sources", routeName: "DataSources", url: createPageUrl("DataSources"), icon: Database },
@@ -171,6 +173,7 @@ export const ROUTE_LABELS = {
   FundingResults: "Funding Results",
   FoundationSearch: "Foundation Search",
   FundingOpportunities: "Funding Opportunities",
+  FundingLibrary: "Funding Library",
   ItemFunding: "Item Funding",
   ProfileMatcher: "Profile Matcher",
   Pipeline: "Pipeline",

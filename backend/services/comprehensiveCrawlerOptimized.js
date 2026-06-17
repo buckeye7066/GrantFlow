@@ -518,8 +518,13 @@ export async function runComprehensiveCrawler(contextOrDb, profileContextArg = {
   // so this profile's matches draw from a pool sized to its actual eligibility
   // rather than a generic federal dump. Fully isolated: any failure is logged and
   // the established crawl continues unchanged. Opt out with INGEST_CONNECTORS=off.
+  const hasFixtureCrawlerData = Boolean(String(process.env.CRAWLER_DATA_DIR || '').trim())
+  const defaultConnectorIngestMode =
+    process.env.NODE_ENV === 'test' || String(process.env.SMOKE_MODE || '').toLowerCase() === 'true' || hasFixtureCrawlerData
+      ? 'off'
+      : 'on'
   let connectorIngest = null
-  if (db && String(process.env.INGEST_CONNECTORS || 'on').toLowerCase() !== 'off') {
+  if (db && String(process.env.INGEST_CONNECTORS || defaultConnectorIngestMode).toLowerCase() !== 'off') {
     try {
       connectorIngest = await ingestFromConnectors({ db, profileContext, signals })
       log.info('[comprehensiveCrawler] Connector ingest totals:', connectorIngest.totals)

@@ -43,7 +43,7 @@ function startServer(extraEnv = {}) {
     }, 60_000)
 
     const onData = () => {
-      const match = stdout.match(/\[Server\] Ready on port\s+(\d+)/)
+      const match = stdout.match(/\[Server\](?:\u001B\[[0-?]*[ -/]*[@-~]|\s)+Ready on port\s+(\d+)/)
       if (match) {
         clearTimeout(timeout)
         resolve({ port: Number(match[1]), dbPath })
@@ -51,6 +51,7 @@ function startServer(extraEnv = {}) {
     }
 
     child.stdout.on('data', onData)
+    onData('')
 
     child.on('error', (err) => {
       clearTimeout(timeout)
@@ -60,7 +61,7 @@ function startServer(extraEnv = {}) {
 
     child.on('exit', (code) => {
       // If the server exits before becoming ready, surface logs to the test output.
-      if (stdout.includes('[Server] Ready on port')) return
+      if (/\[Server\](?:\u001B\[[0-?]*[ -/]*[@-~]|\s)+Ready on port/.test(stdout)) return
       clearTimeout(timeout)
       reject(new Error(`server exited before ready (code=${code})\nstdout:\n${stdout}\nstderr:\n${stderr}`))
     })

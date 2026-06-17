@@ -33,8 +33,10 @@ function startServer(extraEnv = {}) {
 
   const ready = new Promise((resolve, reject) => {
     let resolved = false
+    let readyPoll = null
     const timeout = setTimeout(() => {
       if (resolved) return
+      clearInterval(readyPoll)
       try {
         child.kill('SIGTERM')
       } catch {
@@ -46,9 +48,10 @@ function startServer(extraEnv = {}) {
     const checkReady = (newChunk) => {
       if (resolved) return true
       const textToCheck = stdout + (newChunk || '')
-      const match = textToCheck.match(/\[Server\] Ready on port\s+(\d+)/)
+      const match = textToCheck.match(/\[Server\](?:\u001B\[[0-?]*[ -/]*[@-~]|\s)+Ready on port\s+(\d+)/)
       if (match) {
         clearTimeout(timeout)
+        clearInterval(readyPoll)
         resolved = true
         resolve({ port: parseInt(match[1], 10), child, tmp, dbPath })
         return true
@@ -62,9 +65,14 @@ function startServer(extraEnv = {}) {
         process.stdout.write(chunk)
       }
     })
+    readyPoll = setInterval(() => {
+      checkReady()
+    }, 50)
+    checkReady()
 
     child.on('error', (err) => {
       if (resolved) return
+      clearInterval(readyPoll)
       clearTimeout(timeout)
       resolved = true
       reject(err)
@@ -184,4 +192,3 @@ test('avatar upload + download: authorized upload stores /uploads and download s
     await killServer(child)
   }
 })
-

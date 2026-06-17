@@ -32,7 +32,11 @@ function startServer(extraEnv = {}) {
   child.stderr.on('data', (d) => (stderr += d))
 
   const ready = new Promise((resolve, reject) => {
+    let resolved = false
+    let readyPoll = null
     const timeout = setTimeout(() => {
+      if (resolved) return
+      clearInterval(readyPoll)
       try {
         child.kill('SIGTERM')
       } catch {
@@ -42,14 +46,19 @@ function startServer(extraEnv = {}) {
     }, 60_000)
 
     const onData = () => {
-      const match = stdout.match(/\[Server\] Ready on port\s+(\d+)/)
+      if (resolved) return
+      const match = stdout.match(/\[Server\](?:\u001B\[[0-?]*[ -/]*[@-~]|\s)+Ready on port\s+(\d+)/)
       if (match) {
+        resolved = true
+        clearInterval(readyPoll)
         clearTimeout(timeout)
         resolve({ port: Number(match[1]) })
       }
     }
 
     child.stdout.on('data', onData)
+    readyPoll = setInterval(onData, 50)
+    onData('')
   })
 
   async function stop() {
@@ -179,4 +188,3 @@ test('queued crawler: local job completes even with legacy keyword formats and d
     await srv.stop()
   }
 })
-

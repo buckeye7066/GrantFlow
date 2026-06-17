@@ -4,6 +4,9 @@ import { ensureAuth, ensureAdmin } from '../middleware/auth.js'
 import { ensureServiceCatalogSchema, MILESTONE_PHASES } from '../services/serviceCatalogStore.js'
 import { createCheckoutSessionForPrice, getOrCreateStripeCustomerId } from '../services/stripeService.js'
 import { roundBillableMinutes } from '../services/hourlyRounding.js'
+import { resolveChargeForQuote } from '../services/pricing/chargeResolver.js'
+import { getQuote } from '../services/pricing/quoteBuilder.js'
+import { PRICING_CATALOG_VERSION } from '../services/pricing/pricingTypes.js'
 
 import { createLogger } from '../utils/logger.js'
 const routeLogger = createLogger('route:stripe')
@@ -35,6 +38,7 @@ router.post('/checkout/service', ensureAuth, async (req, res) => {
   const purchaseId = typeof body.purchase_id === 'string' ? body.purchase_id.trim() : ''
   const phase = (body.milestone_phase !== null && body.milestone_phase !== undefined) ? String(body.milestone_phase).trim() : null
   const agree = body.agree === true
+  const explicitQuoteId = typeof body.quote_id === 'string' ? body.quote_id.trim() : ''
 
   if (!agree) {
     return res.status(400).json({ ok: false, error: 'terms_not_accepted', code: 'TERMS_REQUIRED' })
@@ -62,22 +66,13 @@ router.post('/checkout/service', ensureAuth, async (req, res) => {
   const pricingModel = String(purchase.pricing_model)
   const clientCategory = String(purchase.client_category)
 
-  // Determine the price row to pay
-  let priceRow = null
-  let idempotencyKey = null
-  let metadata = {
-    purchase_id: String(purchaseId),
-    service_slug: String(purchase.service_slug),
-    client_category: clientCategory,
-    pricing_model: pricingModel,
-    kind: 'service_purchase',
-  }
-
+  // Milestone ordering enforcement still happens here because it depends on
+  // the database state of milestone_payments; the chargeResolver covers
+  // service / category / phase price math, not flow-of-payment ordering.
   if (pricingModel === 'milestone') {
     if (!phase) return res.status(400).json({ ok: false, error: 'milestone_phase required' })
     if (!MILESTONE_PHASES.includes(phase)) return res.status(400).json({ ok: false, error: 'invalid milestone_phase' })
 
-    // Enforce ordering: only next unpaid phase allowed.
     const milestones = await req.db
       .prepare('SELECT phase, status FROM milestone_payments WHERE purchase_id = ? ORDER BY phase ASC')
       .all(purchaseId)
@@ -93,47 +88,86 @@ router.post('/checkout/service', ensureAuth, async (req, res) => {
         allowed_next_phase: firstUnpaid,
       })
     }
-
-    priceRow = await req.db
-      .prepare(
-        `
-          SELECT amount_cents, stripe_price_id
-          FROM service_prices
-          WHERE service_id = ?
-            AND client_category = ?
-            AND milestone_phase = ?
-            AND active = 1
-          LIMIT 1
-        `,
-      )
-      .get(String(purchase.service_id), clientCategory, phase)
-
-    if (!priceRow?.stripe_price_id) {
-      return res.status(409).json({ ok: false, error: 'stripe_price_not_mapped', code: 'STRIPE_PRICE_MISSING' })
-    }
-
-    idempotencyKey = `purchase:${purchaseId}:phase:${phase}`
-    metadata = { ...metadata, milestone_phase: phase, kind: 'milestone_payment' }
-  } else if (pricingModel === 'one_time') {
-    priceRow = await req.db
-      .prepare(
-        `
-          SELECT amount_cents, stripe_price_id
-          FROM service_prices
-          WHERE service_id = ?
-            AND client_category = ?
-            AND COALESCE(milestone_phase, '') = ''
-            AND active = 1
-          LIMIT 1
-        `,
-      )
-      .get(String(purchase.service_id), clientCategory)
-    if (!priceRow?.stripe_price_id) {
-      return res.status(409).json({ ok: false, error: 'stripe_price_not_mapped', code: 'STRIPE_PRICE_MISSING' })
-    }
-    idempotencyKey = `purchase:${purchaseId}:one_time`
-  } else {
+  } else if (pricingModel !== 'one_time') {
     return res.status(400).json({ ok: false, error: 'unsupported pricing_model for this endpoint' })
+  }
+
+  // Resolve the quote so the resolver can apply approved discounts. We tie a
+  // checkout to the most recent quote on the same profile/service when the
+  // request body doesn't specify `quote_id`.
+  let quote = null
+  let quoteIdResolved = explicitQuoteId || null
+  try {
+    if (explicitQuoteId) {
+      quote = await getQuote(req.db, explicitQuoteId)
+    } else if (purchase.profile_id) {
+      const latest = await req.db
+        .prepare(
+          `SELECT id FROM pricing_quotes
+            WHERE profile_id = ?
+            ORDER BY created_at DESC LIMIT 1`,
+        )
+        .get(String(purchase.profile_id))
+      if (latest?.id) {
+        quoteIdResolved = String(latest.id)
+        quote = await getQuote(req.db, quoteIdResolved)
+      }
+    }
+  } catch (err) {
+    routeLogger.warn('checkout: failed to load latest quote', { purchaseId, error: err?.message })
+  }
+
+  // Single source of truth: chargeResolver decides the price and Stripe ID.
+  const charge = await resolveChargeForQuote({
+    db: req.db,
+    quoteId: quoteIdResolved,
+    profileId: purchase.profile_id ? String(purchase.profile_id) : null,
+    userId: String(userId),
+    serviceKey: String(purchase.service_slug),
+    clientCategory,
+    milestonePhase: pricingModel === 'milestone' ? phase : null,
+    discountState: quote
+      ? { line_items: quote.line_items, discounts: quote.discounts }
+      : null,
+  })
+
+  if (!charge.can_checkout) {
+    const reason = charge.blocking_reason || 'CHECKOUT_BLOCKED'
+    routeLogger.warn('checkout blocked by resolver', { purchaseId, reason, issues: charge.issues })
+    const httpStatus =
+      reason === 'STRIPE_PRICE_MISSING' ||
+      reason === 'STRIPE_PRICE_AMOUNT_MISMATCH' ||
+      reason === 'STRIPE_PRICE_CURRENCY_MISMATCH' ||
+      reason === 'STRIPE_PRICE_INACTIVE' ||
+      reason === 'DB_PRICE_CATALOG_DRIFT' ||
+      reason === 'DISCOUNT_REQUIRES_DEDICATED_PRICE_OR_COUPON'
+        ? 409
+        : 400
+    return res.status(httpStatus).json({
+      ok: false,
+      error: 'checkout_blocked',
+      code: reason,
+      charge_resolution: charge,
+    })
+  }
+
+  const idempotencyKey = pricingModel === 'milestone'
+    ? `purchase:${purchaseId}:phase:${phase}:v${charge.final_amount_cents}`
+    : `purchase:${purchaseId}:one_time:v${charge.final_amount_cents}`
+
+  const metadata = {
+    kind: pricingModel === 'milestone' ? 'milestone_payment' : 'service_purchase',
+    purchase_id: String(purchaseId),
+    quote_id: quoteIdResolved || '',
+    service_slug: charge.service_slug || String(purchase.service_slug),
+    service_id: charge.service_id || String(purchase.service_id),
+    client_category: charge.client_category || clientCategory,
+    pricing_model: pricingModel,
+    milestone_phase: pricingModel === 'milestone' ? String(phase) : '',
+    catalog_version: PRICING_CATALOG_VERSION,
+    catalog_amount_cents: String(charge.catalog_amount_cents),
+    approved_discount_cents: String(charge.approved_discount_cents),
+    final_amount_cents: String(charge.final_amount_cents),
   }
 
   // Stripe customer
@@ -147,7 +181,7 @@ router.post('/checkout/service', ensureAuth, async (req, res) => {
   }
 
   const session = await createCheckoutSessionForPrice({
-    priceId: String(priceRow.stripe_price_id),
+    priceId: String(charge.stripe_price_id),
     quantity: 1,
     customerId: String(customer.stripe_customer_id),
     successUrl: buildSuccessUrl(purchaseId),
@@ -160,7 +194,6 @@ router.post('/checkout/service', ensureAuth, async (req, res) => {
     return res.status(503).json({ ok: false, error: 'stripe_session_create_failed', code: 'STRIPE_SESSION_ERROR' })
   }
 
-  // Persist checkout session id
   if (pricingModel === 'milestone') {
     await req.db
       .prepare(
@@ -183,7 +216,21 @@ router.post('/checkout/service', ensureAuth, async (req, res) => {
       .run(String(session.id), purchaseId)
   }
 
-  return res.json({ ok: true, url: session.url, checkout_session_id: session.id })
+  return res.json({
+    ok: true,
+    url: session.url,
+    checkout_session_id: session.id,
+    charge_resolution: {
+      service_slug: charge.service_slug,
+      client_category: charge.client_category,
+      pricing_model: charge.pricing_model,
+      milestone_phase: charge.milestone_phase,
+      catalog_amount_cents: charge.catalog_amount_cents,
+      approved_discount_cents: charge.approved_discount_cents,
+      final_amount_cents: charge.final_amount_cents,
+      catalog_version: charge.catalog_version,
+    },
+  })
 })
 
 router.post('/checkout/hourly', ensureAuth, async (req, res) => {
@@ -279,6 +326,11 @@ router.post('/checkout/hourly', ensureAuth, async (req, res) => {
         purchase_id: String(purchaseId),
         hourly_invoice_id: String(invoiceId),
         units: String(units),
+        client_category: String(purchase.client_category),
+        pricing_model: 'hourly',
+        catalog_version: PRICING_CATALOG_VERSION,
+        unit_amount_cents: String(Number(priceRow.amount_cents)),
+        final_amount_cents: String(amountCents),
       },
       idempotencyKey: `hourly:${purchaseId}:${invoiceId}`,
     })

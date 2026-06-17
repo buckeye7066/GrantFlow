@@ -262,6 +262,169 @@ function tryParse(value) {
   }
 }
 
+function safeArray(value) {
+  return Array.isArray(value) ? value : []
+}
+
+function normalizePortalAward(update = {}, nowIso = new Date().toISOString()) {
+  const amountValue = Number(update.awardAmount ?? update.award_amount)
+  const awardName =
+    String(
+      update.awardName ??
+      update.award_name ??
+      update.portalName ??
+      update.portal_name ??
+      'Portal award',
+    ).trim() || 'Portal award'
+  const portalName =
+    String(update.portalName ?? update.portal_name ?? awardName).trim() || awardName
+  const portalUrl = String(update.portalUrl ?? update.portal_url ?? '').trim() || null
+  const awardAmountRaw = String(update.awardAmountRaw ?? update.award_amount_raw ?? '').trim() || null
+  return {
+    id: String(update.id ?? update.portal_award_id ?? `portal_award_${randomUUID().slice(0, 8)}`),
+    source: 'portal_check',
+    portal_name: portalName,
+    portal_url: portalUrl,
+    award_name: awardName,
+    award_amount: Number.isFinite(amountValue) ? amountValue : null,
+    award_amount_raw: awardAmountRaw,
+    detected_at: String(update.detectedAt ?? update.detected_at ?? nowIso),
+    merged_at: String(update.mergedAt ?? update.merged_at ?? nowIso),
+    status: 'merged',
+  }
+}
+
+function portalAwardIdentityParts(award = {}) {
+  return [
+    String(award.portal_url ?? award.portalUrl ?? '').trim().toLowerCase(),
+    String(award.portal_name ?? award.portalName ?? '').trim().toLowerCase(),
+    String(award.award_name ?? award.awardName ?? '').trim().toLowerCase(),
+    String(award.award_amount_raw ?? award.awardAmountRaw ?? '').trim().toLowerCase(),
+    Number.isFinite(Number(award.award_amount ?? award.awardAmount))
+      ? String(Number(award.award_amount ?? award.awardAmount))
+      : '',
+  ]
+}
+
+export function portalAwardsMatch(left = {}, right = {}) {
+  const [leftUrl, leftPortal, leftAward, leftRaw, leftAmount] = portalAwardIdentityParts(left)
+  const [rightUrl, rightPortal, rightAward, rightRaw, rightAmount] = portalAwardIdentityParts(right)
+  const sameUrl = leftUrl && rightUrl ? leftUrl === rightUrl : true
+  const samePortal = leftPortal && rightPortal ? leftPortal === rightPortal : true
+  const sameAward = leftAward && rightAward ? leftAward === rightAward : true
+  const sameRaw = leftRaw && rightRaw ? leftRaw === rightRaw : true
+  const sameAmount = leftAmount && rightAmount ? leftAmount === rightAmount : true
+  return sameUrl && samePortal && sameAward && sameRaw && sameAmount
+}
+
+function buildPortalAwardPipelineLabel(update = {}) {
+  const awardName =
+    String(update.awardName ?? update.award_name ?? update.portalName ?? update.portal_name ?? 'Portal award').trim() ||
+    'Portal award'
+  return `Scholarship Award Detected: ${awardName}`
+}
+
+function buildPortalAwardPipelineNote(update = {}) {
+  const bits = []
+  const amountRaw = String(update.awardAmountRaw ?? update.award_amount_raw ?? '').trim()
+  if (amountRaw) bits.push(`Amount: ${amountRaw}`)
+  const portalName = String(update.portalName ?? update.portal_name ?? '').trim()
+  if (portalName) bits.push(`Source: ${portalName}`)
+  bits.push('Merged from portal check')
+  return bits.join(' — ')
+}
+
+function toIsoDateString(value) {
+  if (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}/.test(value)) {
+    return value.slice(0, 10)
+  }
+  const parsed = new Date(value || Date.now())
+  return Number.isNaN(parsed.getTime())
+    ? new Date().toISOString().slice(0, 10)
+    : parsed.toISOString().slice(0, 10)
+}
+
+export function mergePortalAwardIntoApplications(applications, update, options = {}) {
+  const nextApplications = safeArray(applications).map((application) => ({
+    ...application,
+    imported_portal_awards: safeArray(application?.imported_portal_awards).map((award) => ({ ...award })),
+    financial_aid_pipeline: safeArray(application?.financial_aid_pipeline).map((stage) => ({ ...stage })),
+  }))
+  const targetApplicationId = String(
+    update.applicationId ??
+    update.application_id ??
+    options.applicationId ??
+    '',
+  ).trim()
+  if (!targetApplicationId) {
+    throw new Error('application_id required')
+  }
+  const targetIndex = nextApplications.findIndex((application) => String(application?.id ?? '') === targetApplicationId)
+  if (targetIndex === -1) {
+    throw new Error('University application not found')
+  }
+
+  const nowIso = String(options.nowIso ?? new Date().toISOString())
+  const mergedAward = normalizePortalAward(update, nowIso)
+  const target = { ...nextApplications[targetIndex] }
+  const importedAwards = safeArray(target.imported_portal_awards).slice()
+  const existingAwardIndex = importedAwards.findIndex((award) => portalAwardsMatch(award, mergedAward))
+  if (existingAwardIndex === -1) {
+    importedAwards.unshift(mergedAward)
+  } else {
+    importedAwards[existingAwardIndex] = {
+      ...importedAwards[existingAwardIndex],
+      ...mergedAward,
+      id: importedAwards[existingAwardIndex]?.id ?? mergedAward.id,
+    }
+  }
+
+  const pipeline = safeArray(target.financial_aid_pipeline).slice()
+  const label = buildPortalAwardPipelineLabel(update)
+  const normalizedLabel = label.toLowerCase()
+  const notes = buildPortalAwardPipelineNote(update)
+  const completedAt = toIsoDateString(nowIso)
+  const existingStageIndex = pipeline.findIndex(
+    (stage) => String(stage?.label || '').trim().toLowerCase() === normalizedLabel,
+  )
+  if (existingStageIndex === -1) {
+    pipeline.unshift({
+      id: `stage_${randomUUID().slice(0, 8)}`,
+      label,
+      status: 'completed',
+      due_date: null,
+      completed_at: completedAt,
+      notes,
+    })
+  } else {
+    pipeline[existingStageIndex] = {
+      ...pipeline[existingStageIndex],
+      status: 'completed',
+      completed_at: pipeline[existingStageIndex]?.completed_at || completedAt,
+      notes: pipeline[existingStageIndex]?.notes || notes,
+    }
+  }
+
+  target.imported_portal_awards = importedAwards
+  target.financial_aid_pipeline = pipeline
+  nextApplications.splice(targetIndex, 1, target)
+  return {
+    applications: nextApplications,
+    mergedAward: importedAwards[existingAwardIndex === -1 ? 0 : existingAwardIndex],
+    application: target,
+  }
+}
+
+export function collectMergedPortalAwards(applications) {
+  return safeArray(applications).flatMap((application) =>
+    safeArray(application?.imported_portal_awards).map((award) => ({
+      ...award,
+      application_id: application?.id ?? null,
+      application_name: application?.name ?? application?.school_name ?? null,
+    })),
+  )
+}
+
 // ---------------------------------------------------------------------------
 // Check a single portal
 // ---------------------------------------------------------------------------
@@ -331,46 +494,8 @@ async function syncAwardToProfile(db, profileId, update) {
   }
 
   const apps = Array.isArray(parsed?.applications) ? parsed.applications : []
-  const idx = apps.findIndex((a) => String(a?.id) === String(update.applicationId))
-  if (idx === -1) return
-
-  const app = { ...(apps[idx] || {}) }
-  const pipeline = Array.isArray(app.financial_aid_pipeline)
-    ? app.financial_aid_pipeline.slice()
-    : []
-
-  const now = new Date().toISOString().slice(0, 10)
-  const label = `Scholarship Award Detected: ${update.awardName}`
-  const existing = pipeline.findIndex(
-    (s) => String(s?.label || '').toLowerCase() === label.toLowerCase(),
-  )
-
-  const amountNote = update.awardAmountRaw
-    ? `Amount: ${update.awardAmountRaw} — detected via portal check`
-    : 'Detected via portal check'
-
-  if (existing === -1) {
-    pipeline.unshift({
-      id: `stage_${randomUUID().slice(0, 8)}`,
-      label,
-      status: 'completed',
-      due_date: null,
-      completed_at: now,
-      notes: amountNote,
-    })
-  } else {
-    pipeline[existing] = {
-      ...pipeline[existing],
-      status: 'completed',
-      completed_at: pipeline[existing]?.completed_at || now,
-      notes: pipeline[existing]?.notes || amountNote,
-    }
-  }
-
-  app.financial_aid_pipeline = pipeline
-  const nextApps = apps.slice()
-  nextApps.splice(idx, 1, app)
-  const nextPayload = { ...(parsed || {}), applications: nextApps }
+  const merged = mergePortalAwardIntoApplications(apps, update)
+  const nextPayload = { ...(parsed || {}), applications: merged.applications }
 
   await new Promise((resolve, reject) => {
     try {
@@ -424,35 +549,78 @@ export async function getPortalCheckStatus(db, profileId) {
   try {
     await ensurePortalCheckResultsTable(db)
 
-    const isPostgres = db?.dialect === 'postgres'
-    const rows = isPostgres
-      ? await new Promise((resolve, reject) => {
-          try {
-            const stmt = db.prepare(`SELECT DISTINCT ON (portal_url)
-               portal_name, portal_url, awards_detected, checked_at
-             FROM portal_check_results
-             WHERE profile_id = ?
-             ORDER BY portal_url, checked_at DESC`)
-            const result = stmt.all(profileId)
-            resolve(result)
-          } catch (err) {
-            reject(err)
-          }
-        })
-      : await new Promise((resolve, reject) => {
-          try {
-            const stmt = db.prepare(`SELECT portal_name, portal_url, awards_detected, MAX(checked_at) as checked_at
-             FROM portal_check_results
-             WHERE profile_id = ?
-             GROUP BY portal_url`)
-            const result = stmt.all(profileId)
-            resolve(result)
-          } catch (err) {
-            reject(err)
-          }
-        })
+    const rows = await new Promise((resolve, reject) => {
+      try {
+        const stmt = db.prepare(`SELECT id, portal_name, portal_url, awards_detected, checked_at, results_json
+          FROM portal_check_results
+          WHERE profile_id = ?
+          ORDER BY checked_at DESC`)
+        const result = stmt.all(profileId)
+        resolve(result)
+      } catch (err) {
+        reject(err)
+      }
+    })
 
-    return rows || []
+    const sectionRow = await new Promise((resolve, reject) => {
+      try {
+        const stmt = db.prepare(`SELECT data FROM profile_sections
+          WHERE profile_id = ? AND section_key = 'university_applications'
+          LIMIT 1`)
+        const result = stmt.get(profileId)
+        resolve(result)
+      } catch (err) {
+        reject(err)
+      }
+    })
+    const parsedSection = sectionRow?.data ? tryParse(sectionRow.data) : {}
+    const applications = safeArray(parsedSection?.applications)
+    const mergedAwards = collectMergedPortalAwards(applications)
+    const appNameById = new Map(
+      applications.map((application) => [
+        String(application?.id ?? ''),
+        application?.name ?? application?.school_name ?? null,
+      ]),
+    )
+
+    const seen = new Set()
+    const latestRows = []
+    for (const row of rows || []) {
+      const parsed = row?.results_json ? tryParse(row.results_json) : {}
+      const applicationKey = String(parsed?.applicationId ?? parsed?.application_id ?? '').trim()
+      const portalNameKey = String(row?.portal_name ?? parsed?.portalName ?? '').trim().toLowerCase()
+      const portalUrlKey = String(row?.portal_url ?? parsed?.portalUrl ?? '').trim().toLowerCase()
+      const key = applicationKey
+        ? `${applicationKey}|${portalNameKey || portalUrlKey || row?.id || ''}`
+        : String(portalUrlKey || portalNameKey || row?.id || '')
+      if (!key || seen.has(key)) continue
+      seen.add(key)
+      latestRows.push(row)
+    }
+
+    return latestRows.map((row) => {
+      const parsed = row?.results_json ? tryParse(row.results_json) : {}
+      const mergedAward = mergedAwards.find((award) => portalAwardsMatch(award, parsed)) || null
+      const applicationId = String(parsed?.applicationId ?? parsed?.application_id ?? '').trim() || null
+      return {
+        id: row?.id ?? null,
+        portal_name: row?.portal_name ?? parsed?.portalName ?? null,
+        portal_url: row?.portal_url ?? parsed?.portalUrl ?? null,
+        awards_detected: row?.awards_detected ?? 0,
+        checked_at: row?.checked_at ?? null,
+        application_id: applicationId,
+        application_name: applicationId ? appNameById.get(applicationId) ?? null : null,
+        award_name: parsed?.awardName ?? null,
+        award_amount: parsed?.awardAmount ?? null,
+        award_amount_raw: parsed?.awardAmountRaw ?? null,
+        detected_at: parsed?.detectedAt ?? row?.checked_at ?? null,
+        update_type: parsed?.updateType ?? null,
+        error: parsed?.error ?? null,
+        merged_to_profile: Boolean(mergedAward),
+        merged_application_id: mergedAward?.application_id ?? null,
+        merged_application_name: mergedAward?.application_name ?? null,
+      }
+    })
   } catch {
     return []
   }

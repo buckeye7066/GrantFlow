@@ -53,6 +53,7 @@ const BillingSheet = lazy(() => import("./BillingSheet"), 'BillingSheet');
 const OrganizationProfile = lazy(() => import("./OrganizationProfile"), 'OrganizationProfile');
 const FundingOpportunities = lazy(() => import("./FundingOpportunities"), 'FundingOpportunities');
 const FundingResults = lazy(() => import("./FundingResults"), 'FundingResults');
+const FundingLibrary = lazy(() => import("./FundingLibrary"), 'FundingLibrary');
 const Pricing = lazy(() => import("./Pricing"), 'Pricing');
 const Services = lazy(() => import("./Services"), 'Services');
 const Settings = lazy(() => import("./Settings"), 'Settings');
@@ -65,10 +66,16 @@ const ServiceApplication = lazy(() => import("./ServiceApplication"), 'ServiceAp
 const SetPassword = lazy(() => import("./SetPassword"), 'SetPassword');
 const SavedGrants = lazy(() => import("./SavedGrants"), 'SavedGrants');
 const FoundationSearch = lazy(() => import("./FoundationSearch"), 'FoundationSearch');
+const AnyaIntakeResults = lazy(() => import("./AnyaIntakeResults"), 'AnyaIntakeResults');
+const PricingRequired = lazy(() => import("./PricingRequired"), 'PricingRequired');
+const ServiceAgreement = lazy(() => import("./ServiceAgreement"), 'ServiceAgreement');
+const CheckoutRequired = lazy(() => import("./CheckoutRequired"), 'CheckoutRequired');
 
 import { Route, Routes, useLocation, Navigate } from 'react-router-dom';
 import { useAuthStore } from "@/stores/authStore";
 import RouteErrorBoundary from "@/components/shared/RouteErrorBoundary";
+import { RequirePaidAccess } from '@/components/auth/RequirePaidAccess';
+import AdminPricingToastListener from '@/components/admin/AdminPricingToastListener';
 
 function RouteLoading() {
     return (
@@ -159,6 +166,7 @@ const PAGES = {
     SourceDirectory: SourceDirectory,
     
     FundingOpportunities: FundingOpportunities,
+    FundingLibrary: FundingLibrary,
     
     GrantMonitoring: GrantMonitoring,
     
@@ -178,7 +186,11 @@ const PAGES = {
     Help: Help,
     
     Admin: Admin,
-    
+
+    AnyaIntakeResults: AnyaIntakeResults,
+    PricingRequired: PricingRequired,
+    ServiceAgreement: ServiceAgreement,
+    CheckoutRequired: CheckoutRequired,
 }
 
 function _getCurrentPage(url) {
@@ -199,6 +211,20 @@ function withBoundary(element, routeName) {
         <RouteErrorBoundary routeName={routeName}>
             <Suspense fallback={<RouteLoading />}>
                 {element}
+            </Suspense>
+        </RouteErrorBoundary>
+    )
+}
+
+// withGate: wraps a route in <RequirePaidAccess> so non-admin unpaid users
+// are redirected to /PricingRequired instead of seeing gated features.
+function withGate(element, routeName) {
+    return (
+        <RouteErrorBoundary routeName={routeName}>
+            <Suspense fallback={<RouteLoading />}>
+                <RequirePaidAccess fallback={<RouteLoading />}>
+                    {element}
+                </RequirePaidAccess>
             </Suspense>
         </RouteErrorBoundary>
     )
@@ -235,58 +261,58 @@ function LayoutRoutes() {
             <Layout currentPageName={currentPage}>
                 <Routes>
 
-                <Route path="/" element={withBoundary(<Dashboard />, "Dashboard")} />
+                <Route path="/" element={withGate(<Dashboard />, "Dashboard")} />
 
 
-                <Route path="/Dashboard" element={withBoundary(<Dashboard />, "Dashboard")} />
+                <Route path="/Dashboard" element={withGate(<Dashboard />, "Dashboard")} />
 
                 <Route path="/Organizations" element={withBoundary(<Organizations />, "Organizations")} />
 
                 <Route path="/MyProfiles" element={withBoundary(<MyProfiles />, "MyProfiles")} />
 
-                <Route path="/Funder" element={withBoundary(<Funder />, "Funder")} />
+                <Route path="/Funder" element={withGate(<Funder />, "Funder")} />
 
-                <Route path="/DiscoverGrants" element={withBoundary(<DiscoverGrants />, "DiscoverGrants")} />
-                <Route path="/FundingResults" element={withBoundary(<FundingResults />, "FundingResults")} />
+                <Route path="/DiscoverGrants" element={withGate(<DiscoverGrants />, "DiscoverGrants")} />
+                <Route path="/FundingResults" element={withGate(<FundingResults />, "FundingResults")} />
 
-                <Route path="/SmartMatcher" element={withBoundary(<SmartMatcher />, "SmartMatcher")} />
+                <Route path="/SmartMatcher" element={withGate(<SmartMatcher />, "SmartMatcher")} />
 
-                <Route path="/ItemFunding" element={withBoundary(<ItemFunding />, "ItemFunding")} />
+                <Route path="/ItemFunding" element={withGate(<ItemFunding />, "ItemFunding")} />
 
-                <Route path="/Pipeline" element={withBoundary(<Pipeline />, "Pipeline")} />
+                <Route path="/Pipeline" element={withGate(<Pipeline />, "Pipeline")} />
 
-                <Route path="/Applications" element={withBoundary(<Applications />, "Applications")} />
+                <Route path="/Applications" element={withGate(<Applications />, "Applications")} />
 
-                <Route path="/Proposals" element={withBoundary(<Proposals />, "Proposals")} />
+                <Route path="/Proposals" element={withGate(<Proposals />, "Proposals")} />
 
-                <Route path="/Outreach" element={withBoundary(<Outreach />, "Outreach")} />
+                <Route path="/Outreach" element={withGate(<Outreach />, "Outreach")} />
 
-                <Route path="/GrantDeadline" element={withBoundary(<GrantDeadline />, "GrantDeadline")} />
+                <Route path="/GrantDeadline" element={withGate(<GrantDeadline />, "GrantDeadline")} />
 
-                <Route path="/Budgets" element={withBoundary(<Budgets />, "Budgets")} />
+                <Route path="/Budgets" element={withGate(<Budgets />, "Budgets")} />
 
-                <Route path="/Documents" element={withBoundary(<Documents />, "Documents")} />
+                <Route path="/Documents" element={withGate(<Documents />, "Documents")} />
 
-                <Route path="/Calendar" element={withBoundary(<Calendar />, "Calendar")} />
+                <Route path="/Calendar" element={withGate(<Calendar />, "Calendar")} />
 
-                <Route path="/Reports" element={withBoundary(<Reports />, "Reports")} />
+                <Route path="/Reports" element={withGate(<Reports />, "Reports")} />
 
-                <Route path="/AdvancedAnalytics" element={withBoundary(<AdvancedAnalytics />, "AdvancedAnalytics")} />
+                <Route path="/AdvancedAnalytics" element={withGate(<AdvancedAnalytics />, "AdvancedAnalytics")} />
 
-                <Route path="/Billing" element={withBoundary(<Billing />, "Billing")} />
+                <Route path="/Billing" element={withGate(<Billing />, "Billing")} />
 
-                <Route path="/Automation" element={withBoundary(<Automation />, "Automation")} />
+                <Route path="/Automation" element={withGate(<Automation />, "Automation")} />
 
-                <Route path="/NewProject" element={withBoundary(<NewProject />, "NewProject")} />
+                <Route path="/NewProject" element={withGate(<NewProject />, "NewProject")} />
 
-                <Route path="/GrantDetail" element={withBoundary(<GrantDetail />, "GrantDetail")} />
-                <Route path="/Apply" element={withBoundary(<Apply />, "Apply")} />
-                <Route path="/VNextApplication" element={withBoundary(<VNextApplication />, "VNextApplication")} />
-                <Route path="/VNextFinishPacket" element={withBoundary(<VNextFinishPacket />, "VNextFinishPacket")} />
+                <Route path="/GrantDetail" element={withGate(<GrantDetail />, "GrantDetail")} />
+                <Route path="/Apply" element={withGate(<Apply />, "Apply")} />
+                <Route path="/VNextApplication" element={withGate(<VNextApplication />, "VNextApplication")} />
+                <Route path="/VNextFinishPacket" element={withGate(<VNextFinishPacket />, "VNextFinishPacket")} />
 
-                <Route path="/InvoiceView" element={withBoundary(<InvoiceView />, "InvoiceView")} />
+                <Route path="/InvoiceView" element={withGate(<InvoiceView />, "InvoiceView")} />
 
-                <Route path="/CreateInvoice" element={withBoundary(<CreateInvoice />, "CreateInvoice")} />
+                <Route path="/CreateInvoice" element={withGate(<CreateInvoice />, "CreateInvoice")} />
 
                 <Route path="/NOFOParser" element={withBoundary(<NOFOParser />, "NOFOParser")} />
 
@@ -318,30 +344,41 @@ function LayoutRoutes() {
 
                 <Route path="/ProfileMatcher" element={withBoundary(<ProfileMatcher />, "ProfileMatcher")} />
 
-                <Route path="/SourceDirectory" element={withBoundary(<SourceDirectory />, "SourceDirectory")} />
+                <Route path="/SourceDirectory" element={withGate(<SourceDirectory />, "SourceDirectory")} />
 
+                <Route path="/FundingOpportunities" element={withGate(<FundingOpportunities />, "FundingOpportunities")} />
                 <Route path="/FundingOpportunities" element={withBoundary(<FundingOpportunities />, "FundingOpportunities")} />
+                <Route path="/FundingLibrary" element={withBoundary(<FundingLibrary />, "FundingLibrary")} />
 
-                <Route path="/GrantMonitoring" element={withBoundary(<GrantMonitoring />, "GrantMonitoring")} />
+                <Route path="/GrantMonitoring" element={withGate(<GrantMonitoring />, "GrantMonitoring")} />
 
-                <Route path="/PrintableApplication" element={withBoundary(<PrintableApplication />, "PrintableApplication")} />
+                <Route path="/PrintableApplication" element={withGate(<PrintableApplication />, "PrintableApplication")} />
 
-                <Route path="/BillingSheet" element={withBoundary(<BillingSheet />, "BillingSheet")} />
+                <Route path="/BillingSheet" element={withGate(<BillingSheet />, "BillingSheet")} />
 
-                <Route path="/ProfileDetail" element={withBoundary(<ProfileDetail />, "ProfileDetail")} />
+                <Route path="/ProfileDetail" element={withGate(<ProfileDetail />, "ProfileDetail")} />
 
                 <Route path="/OrganizationProfile" element={withBoundary(<OrganizationProfile />, "OrganizationProfile")} />
 
                 <Route path="/Admin" element={withBoundary(<Admin />, "Admin")} />
+                <Route path="/Admin/*" element={withBoundary(<Admin />, "Admin")} />
 
                 <Route path="/Pricing" element={withBoundary(<Pricing />, "Pricing")} />
                 <Route path="/Services" element={withBoundary(<Services />, "Services")} />
 
-                <Route path="/SavedGrants" element={withBoundary(<SavedGrants />, "SavedGrants")} />
-                <Route path="/FoundationSearch" element={withBoundary(<FoundationSearch />, "FoundationSearch")} />
+                <Route path="/SavedGrants" element={withGate(<SavedGrants />, "SavedGrants")} />
+                <Route path="/FoundationSearch" element={withGate(<FoundationSearch />, "FoundationSearch")} />
+
+                <Route path="/AnyaIntakeResults" element={withBoundary(<AnyaIntakeResults />, "AnyaIntakeResults")} />
+                <Route path="/PricingRequired" element={withBoundary(<PricingRequired />, "PricingRequired")} />
+                <Route path="/ServiceAgreement" element={withBoundary(<ServiceAgreement />, "ServiceAgreement")} />
+                <Route path="/CheckoutRequired" element={withBoundary(<CheckoutRequired />, "CheckoutRequired")} />
+
+                <Route path="/AnyaIntakeResults" element={withBoundary(<AnyaIntakeResults />, "AnyaIntakeResults")} />
 
                 </Routes>
             </Layout>
+            <AdminPricingToastListener />
             {/* OnboardingFlow is mounted ONCE inside Layout.jsx — do not
                 re-mount here. Previously it was mounted in both places,
                 which caused duplicate first-run modals and a race in

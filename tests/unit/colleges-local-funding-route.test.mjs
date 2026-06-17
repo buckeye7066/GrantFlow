@@ -9,8 +9,43 @@ import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { createHmac } from 'node:crypto'
+import { createServer as createNetServer } from 'node:net'
 
 const TEST_JWT_SECRET = 'test-secret'
+
+function reservePort() {
+  return new Promise((resolve, reject) => {
+    const srv = createNetServer()
+    srv.on('error', reject)
+    srv.listen(0, '127.0.0.1', () => {
+      const address = srv.address()
+      const port = typeof address === 'object' && address ? address.port : null
+      srv.close((err) => {
+        if (err) reject(err)
+        else resolve(port)
+      })
+    })
+  })
+}
+
+async function waitForHealthz(port, { child, getLogs, timeoutMs = 60_000 }) {
+  const startedAt = Date.now()
+  while (Date.now() - startedAt < timeoutMs) {
+    if (child?.exitCode !== null && child?.exitCode !== undefined) {
+      const { stdout, stderr } = getLogs()
+      throw new Error(`server exited before ready (code=${child.exitCode})\nstdout:\n${stdout}\nstderr:\n${stderr}`)
+    }
+    try {
+      const response = await fetch(`http://127.0.0.1:${port}/healthz`)
+      if (response.ok) return { port }
+    } catch {
+      // retry
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100))
+  }
+  const { stdout, stderr } = getLogs()
+  throw new Error(`server did not become ready\nstdout:\n${stdout}\nstderr:\n${stderr}`)
+}
 
 function base64url(obj) {
   return Buffer.from(JSON.stringify(obj)).toString('base64url')
@@ -34,54 +69,38 @@ function makeAuthToken() {
 function startServer(extraEnv = {}) {
   const tmp = mkdtempSync(path.join(tmpdir(), 'grantflow-colleges-test-'))
   const dbPath = path.join(tmp, 'test.db')
-
-  const child = spawn(process.execPath, ['backend/server.js'], {
-    cwd: path.resolve(process.cwd()),
-    env: {
-      ...process.env,
-      NODE_ENV: 'development',
-      PORT: '0',
-      DB_PROVIDER: 'sqlite',
-      SQLITE_DB_PATH: dbPath,
-      DB_AUTO_MIGRATE: 'true',
-      AUTH_JWT_SECRET: TEST_JWT_SECRET,
-      ...extraEnv,
-    },
-    stdio: ['ignore', 'pipe', 'pipe'],
-  })
-
+  let child = null
   let stdout = ''
   let stderr = ''
-  child.stdout.setEncoding('utf8')
-  child.stderr.setEncoding('utf8')
-  child.stdout.on('data', (d) => (stdout += d))
-  child.stderr.on('data', (d) => (stderr += d))
-
-  const ready = new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      try {
-        child.kill('SIGTERM')
-      } catch (killErr) {
-        // process may have already exited; ignore but log for observability
-        process.stderr.write(`[test] kill failed: ${killErr.message}\n`)
-      }
-      reject(new Error(`server did not become ready\nstdout:\n${stdout}\nstderr:\n${stderr}`))
-    }, 60_000)
-
-    child.on('error', (spawnErr) => {
-      clearTimeout(timeout)
-      reject(new Error(`server spawn failed: ${spawnErr.message}\nstdout:\n${stdout}\nstderr:\n${stderr}`))
+  const ready = (async () => {
+    const port = await reservePort()
+    child = spawn(process.execPath, ['backend/server.js'], {
+      cwd: path.resolve(process.cwd()),
+      env: {
+        ...process.env,
+        NODE_ENV: 'development',
+        PORT: String(port),
+        DB_PROVIDER: 'sqlite',
+        SQLITE_DB_PATH: dbPath,
+        DB_AUTO_MIGRATE: 'true',
+        AUTH_JWT_SECRET: TEST_JWT_SECRET,
+        SMOKE_MODE: 'true',
+        DISABLE_BACKGROUND_SERVICES: 'true',
+        ...extraEnv,
+      },
+      stdio: ['ignore', 'pipe', 'pipe'],
     })
 
-    const onData = () => {
-      const match = stdout.match(/\[Server\] Ready on port\s+(\d+)/)
-      if (match) {
-        clearTimeout(timeout)
-        resolve({ port: Number(match[1]) })
-      }
-    }
-    child.stdout.on('data', onData)
-  })
+    child.stdout.setEncoding('utf8')
+    child.stderr.setEncoding('utf8')
+    child.stdout.on('data', (d) => (stdout += d))
+    child.stderr.on('data', (d) => (stderr += d))
+
+    return waitForHealthz(port, {
+      child,
+      getLogs: () => ({ stdout, stderr }),
+    })
+  })()
 
   async function stop() {
     if (child.killed) return
@@ -174,4 +193,3 @@ test('colleges local-funding: 200 with valid zip', async () => {
     await srv.stop()
   }
 })
-

@@ -33,6 +33,14 @@ import { guardProfileSectionPayload } from '../utils/profileSuggestionGuards.js'
 import { normalizeProfileSectionData } from '../services/profileHelpers.js'
 import { resolveProfileType } from '../services/profileTypeRegistry.js'
 import { normalizeHttpUrl } from '../services/avatarCrawler.js'
+import { mergePortalAwardIntoApplications } from '../services/portalCheckService.js'
+import {
+  createSchoolPortalConnection,
+  disconnectSchoolPortalConnection,
+  getSchoolPortalWorkspace,
+  mergeSchoolPortalAwards,
+  removeMergedSchoolPortalAward,
+} from '../services/schoolPortalImportService.js'
 
 /**
  * Mission goal #4/#5: every saved profile must carry a profile-type
@@ -1456,6 +1464,20 @@ router.get('/:id/readiness', async (req, res) => {
   }
 })
 
+// GET /api/profiles/:id/readiness/detailed — 10-category breakdown with
+// per-category guidance, used by the ProfileReadinessScore component and
+// by Robert when deciding match quality.
+router.get('/:id/readiness/detailed', async (req, res) => {
+  const { id } = req.params
+  try {
+    const { computeDetailedReadiness } = await import('../services/profileReadinessService.js')
+    const result = await computeDetailedReadiness(req.db, id)
+    return res.status(200).json(result)
+  } catch (error) {
+    return res.status(500).json({ error: error?.message || String(error) })
+  }
+})
+
 router.put('/:id', async (req, res) => {
   const { id } = req.params
   const body = req.body ?? {}
@@ -2012,6 +2034,105 @@ router.get('/:id/sections/:sectionKey', async (req, res) => {
   })
 })
 
+router.post('/:id/portal-awards/merge', async (req, res) => {
+  const { id } = req.params
+  const {
+    application_id,
+    portal_name,
+    portal_url,
+    award_name,
+    award_amount,
+    award_amount_raw,
+    detected_at,
+  } = req.body ?? {}
+
+  const profile = await req.db.prepare(`${profileSelect} WHERE p.id = ?`).get(id)
+  if (!profile) {
+    return res.status(404).json({ error: 'Profile not found' })
+  }
+
+  if (!canAccessProfileRowFromCtx(req.ctx, profile)) {
+    return denyAuth(req, res)
+  }
+
+  const applicationId = String(application_id ?? '').trim()
+  if (!applicationId) {
+    return res.status(400).json({ error: 'application_id required' })
+  }
+
+  const existingSection = await req.db
+    .prepare(
+      `SELECT data FROM profile_sections
+       WHERE profile_id = ? AND section_key = 'university_applications'
+       LIMIT 1`,
+    )
+    .get(id)
+
+  if (!existingSection?.data) {
+    return res.status(404).json({ error: 'University applications section not found' })
+  }
+
+  const currentData = safeParseJSON(existingSection.data, {})
+  const currentApplications = Array.isArray(currentData?.applications) ? currentData.applications : []
+
+  let merged
+  try {
+    merged = mergePortalAwardIntoApplications(currentApplications, {
+      applicationId,
+      portalName: portal_name,
+      portalUrl: portal_url,
+      awardName: award_name,
+      awardAmount: award_amount,
+      awardAmountRaw: award_amount_raw,
+      detectedAt: detected_at,
+    })
+  } catch (error) {
+    return res.status(400).json({ error: error?.message || 'Unable to merge portal award' })
+  }
+
+  let guardedPayload
+  try {
+    guardedPayload = guardProfileSectionPayload(
+      { applications: merged.applications },
+      {
+        profile,
+        sections: { university_applications: currentData, },
+        sectionKey: 'university_applications',
+        existing: currentData,
+      },
+    )
+  } catch (guardError) {
+    profileLogger.warn('[profiles] portal award merge guard failed', {
+      profile_id: id,
+      error: guardError?.message || String(guardError),
+    })
+    return res.status(422).json({
+      ok: false,
+      error: 'profile_section_validation_failed',
+      message: guardError?.message || 'Portal award merge could not be validated.',
+      rejected: [],
+    })
+  }
+
+  logProfileSectionRejections(id, 'university_applications', guardedPayload.rejected)
+  await req.db.prepare(
+    `
+      INSERT INTO profile_sections (profile_id, section_key, data, updated_by)
+      VALUES (?, 'university_applications', ?, ?)
+      ON CONFLICT(profile_id, section_key) DO UPDATE SET
+        data = excluded.data,
+        updated_by = excluded.updated_by,
+        updated_at = CURRENT_TIMESTAMP
+    `,
+  ).run(id, JSON.stringify(guardedPayload.data), 'portal_merge')
+
+  return res.json({
+    ok: true,
+    application_id: applicationId,
+    merged_award: merged.mergedAward,
+  })
+})
+
 router.put('/:id/sections/:sectionKey', async (req, res) => {
   const { id, sectionKey } = req.params
   const { data, updated_by } = req.body ?? {}
@@ -2164,6 +2285,151 @@ router.delete('/:id/sections/:sectionKey', async (req, res) => {
     return res.status(404).json({ error: 'Section not found' })
   }
   res.status(204).send()
+})
+
+router.get('/:id/school-portals', async (req, res) => {
+  const { id } = req.params
+
+  const profile = await req.db.prepare(`${profileSelect} WHERE p.id = ?`).get(id)
+  if (!profile) {
+    return res.status(404).json({ error: 'Profile not found' })
+  }
+
+  if (!canAccessProfileRowFromCtx(req.ctx, profile)) {
+    return denyAuth(req, res)
+  }
+
+  try {
+    const workspace = await getSchoolPortalWorkspace(req.db, id)
+    return res.json({ ok: true, ...workspace })
+  } catch (error) {
+    profileLogger.error('[profiles/school-portals] failed to load workspace', {
+      profile_id: id,
+      error: error?.message || String(error),
+    })
+    return res.status(500).json(formatError(error))
+  }
+})
+
+router.post('/:id/school-portals/connections', async (req, res) => {
+  const { id } = req.params
+  const profile = await req.db.prepare(`${profileSelect} WHERE p.id = ?`).get(id)
+  if (!profile) {
+    return res.status(404).json({ error: 'Profile not found' })
+  }
+
+  if (!canAccessProfileRowFromCtx(req.ctx, profile)) {
+    return denyAuth(req, res)
+  }
+
+  const {
+    provider_id,
+    application_id,
+    school_name,
+    connection_label,
+    portal_url,
+    awards_payload,
+    awards,
+  } = req.body ?? {}
+
+  let parsedAwards = awards
+  if (!parsedAwards && typeof awards_payload === 'string') {
+    parsedAwards = safeParseJSON(awards_payload, null)
+    if (!parsedAwards) {
+      return res.status(400).json({ error: 'awards_payload must be valid JSON.' })
+    }
+  }
+
+  try {
+    const result = await createSchoolPortalConnection(
+      req.db,
+      id,
+      {
+        provider_id,
+        application_id,
+        school_name,
+        connection_label,
+        portal_url,
+        awards: parsedAwards,
+      },
+      req.ctx?.userId ?? req.ctx?.email ?? 'school-portal-import',
+    )
+    return res.status(201).json({ ok: true, connection: result.connection, ...result.workspace })
+  } catch (error) {
+    return res.status(400).json(formatError(error))
+  }
+})
+
+router.post('/:id/school-portals/merge', async (req, res) => {
+  const { id } = req.params
+  const profile = await req.db.prepare(`${profileSelect} WHERE p.id = ?`).get(id)
+  if (!profile) {
+    return res.status(404).json({ error: 'Profile not found' })
+  }
+
+  if (!canAccessProfileRowFromCtx(req.ctx, profile)) {
+    return denyAuth(req, res)
+  }
+
+  try {
+    const result = await mergeSchoolPortalAwards(
+      req.db,
+      id,
+      req.body ?? {},
+      req.ctx?.userId ?? req.ctx?.email ?? 'school-portal-merge',
+    )
+    return res.json({ ok: true, merged_count: result.merged_count, ...result.workspace })
+  } catch (error) {
+    return res.status(400).json(formatError(error))
+  }
+})
+
+router.delete('/:id/school-portals/awards/:awardId', async (req, res) => {
+  const { id, awardId } = req.params
+  const profile = await req.db.prepare(`${profileSelect} WHERE p.id = ?`).get(id)
+  if (!profile) {
+    return res.status(404).json({ error: 'Profile not found' })
+  }
+
+  if (!canAccessProfileRowFromCtx(req.ctx, profile)) {
+    return denyAuth(req, res)
+  }
+
+  try {
+    const result = await removeMergedSchoolPortalAward(
+      req.db,
+      id,
+      { award_id: awardId },
+      req.ctx?.userId ?? req.ctx?.email ?? 'school-portal-remove',
+    )
+    return res.json({ ok: true, ...result.workspace })
+  } catch (error) {
+    return res.status(400).json(formatError(error))
+  }
+})
+
+router.delete('/:id/school-portals/connections/:connectionId', async (req, res) => {
+  const { id, connectionId } = req.params
+  const profile = await req.db.prepare(`${profileSelect} WHERE p.id = ?`).get(id)
+  if (!profile) {
+    return res.status(404).json({ error: 'Profile not found' })
+  }
+
+  if (!canAccessProfileRowFromCtx(req.ctx, profile)) {
+    return denyAuth(req, res)
+  }
+
+  try {
+    const result = await disconnectSchoolPortalConnection(
+      req.db,
+      id,
+      { connection_id: connectionId },
+      req.ctx?.userId ?? req.ctx?.email ?? 'school-portal-disconnect',
+    )
+    return res.json({ ok: true, ...result.workspace })
+  } catch (error) {
+    return res.status(400).json(formatError(error))
+  }
 })
 
 async function handleProfileSectionAi(req, res) {

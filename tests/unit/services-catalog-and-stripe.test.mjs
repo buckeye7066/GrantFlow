@@ -54,7 +54,7 @@ function startServer(extraEnv = {}) {
 
     child.stdout.on('data', (chunk) => {
       if (resolved) return
-      const match = String(stdout + chunk).match(/\[Server\] Ready on port\s+(\d+)/)
+      const match = String(stdout + chunk).match(/\[Server\](?:\u001B\[[0-?]*[ -/]*[@-~]|\s)+Ready on port\s+(\d+)/)
       if (match) {
         resolved = true
         clearTimeout(timeout)
@@ -94,14 +94,30 @@ async function fetchJson(url, init) {
   return { status: res.status, json }
 }
 
-test('service catalog extract parser: parses all expected services', () => {
+test('service catalog extract parser: parses 2026-06-15 menu and canonical slugs', () => {
   const md = loadPaymentSheetExtractFromDisk()
   const parsed = parsePaymentSheetExtract(md)
-  assert.equal(parsed.version, '2025-11-13')
-  assert.equal(parsed.services.length >= 12, true)
-  const names = new Set(parsed.services.map((s) => s.name))
-  assert.ok(names.has('Quick Eligibility Scan'))
-  assert.ok(names.has('Hourly Consultation & Advisory'))
+  assert.equal(parsed.version, '2026-06-15')
+  assert.equal(parsed.services.length, 12)
+  const slugs = new Set(parsed.services.map((s) => s.slug))
+  // Canonical slugs from serviceSlugAliases.CANONICAL_SLUGS — bare names,
+  // no inline price-range qualifiers in the slug.
+  for (const expected of [
+    'quick-eligibility-scan',
+    'comprehensive-funding-dossier',
+    'application-strategy-session',
+    'micro-grant-application',
+    'standard-foundation-application',
+    'complex-federal-application',
+    'transfer-scholarship-pack',
+    'editing-and-redraft-service',
+    'budget-and-logic-model-development',
+    'compliance-reporting-and-management',
+    'grant-calendar-setup-and-management',
+    'hourly-consultation-and-advisory',
+  ]) {
+    assert.ok(slugs.has(expected), `missing canonical slug: ${expected}`)
+  }
 })
 
 test('hourly rounding rules: 15-minute minimum + 6-minute increment', () => {

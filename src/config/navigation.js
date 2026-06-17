@@ -27,6 +27,7 @@ import {
   Settings,
   Beaker,
   Shield,
+  Library,
 } from "lucide-react";
 
 /** Route path (no leading slash in key) → human label for breadcrumb/phase */
@@ -40,6 +41,7 @@ export const ROUTE_LABELS = {
   DiscoverGrants: "Find Grants",
   SmartMatcher: "Find Grants",
   FundingOpportunities: "Find Grants",
+  FundingLibrary: "Funding Library",
   ItemFunding: "Item Funding",
   ProfileMatcher: "Match to Grants",
   Pipeline: "Your Applications",
@@ -111,6 +113,7 @@ export const MORE_NAV = [
   { title: "Analytics", url: createPageUrl("AdvancedAnalytics"), icon: LineChart, route: "AdvancedAnalytics" },
   { title: "Automation", url: createPageUrl("Automation"), icon: Workflow, route: "Automation" },
   { title: "Funding Opportunities", url: createPageUrl("FundingOpportunities"), icon: Layers, route: "FundingOpportunities" },
+  { title: "Funding Library", url: createPageUrl("FundingLibrary"), icon: Library, route: "FundingLibrary" },
   { title: "Match to Grants", url: createPageUrl("ProfileMatcher"), icon: Search, route: "ProfileMatcher" },
   { title: "Smart Match", url: createPageUrl("SmartMatcher"), icon: Brain, route: "SmartMatcher" },
   { title: "Item Funding", url: createPageUrl("ItemFunding"), icon: FileText, route: "ItemFunding" },

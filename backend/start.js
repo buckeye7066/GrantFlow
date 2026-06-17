@@ -20,13 +20,30 @@ function isTruthy(value) {
   return v === '1' || v === 'true' || v === 'yes' || v === 'y' || v === 'on'
 }
 
+function isSmokeLikeRuntime() {
+  const explicitSmoke = isTruthy(process.env.SMOKE_MODE)
+  const inferredSmoke =
+    String(process.env.PORT || '').trim() === '0' &&
+    isTruthy(process.env.DB_AUTO_MIGRATE) &&
+    String(process.env.NODE_ENV || '').trim().toLowerCase() !== 'production'
+  return explicitSmoke || inferredSmoke
+}
+
+const shouldOverrideDotenv =
+  !isTruthy(process.env.SMOKE_MODE) &&
+  !(
+    String(process.env.PORT || '').trim() === '0' &&
+    isTruthy(process.env.DB_AUTO_MIGRATE) &&
+    String(process.env.NODE_ENV || '').trim().toLowerCase() !== 'production'
+  )
+
 // Load .env from the current working directory.
 //
 // IMPORTANT:
 // - In normal local development, we want `.env` to win over stale machine-level values.
 // - In SMOKE_MODE / automation (tests), we must NOT override the env passed by the test runner
 //   (especially PORT/DB paths), otherwise parallel tests can collide and hang.
-dotenv.config({ override: !isTruthy(process.env.SMOKE_MODE) })
+dotenv.config({ override: shouldOverrideDotenv })
 
 function findSqliteDbPath() {
   const explicit = String(process.env.SQLITE_DB_PATH || '').trim()
@@ -66,6 +83,10 @@ function findSqliteDbPath() {
 }
 
 function runMigrationsInBackground() {
+  if (isSmokeLikeRuntime()) {
+    console.log('[startup] Skipping background DB migrations in smoke mode')
+    return
+  }
   // IMPORTANT:
   // - `backend/db/migrate.js` calls `process.exit()`, so we must run it as a separate process.
   // - We run this *after* env is loaded, and *without* blocking server startup so Railway

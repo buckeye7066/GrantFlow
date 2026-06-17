@@ -1,9 +1,45 @@
 import express from 'express'
 import { verifyAndConstructStripeEvent, recordStripeEventIfNew } from '../services/stripeService.js'
 import { ensureServiceCatalogSchema } from '../services/serviceCatalogStore.js'
+import { markPaid } from '../services/pricing/pricingAccessGate.js'
+import { recordPaymentAccessEvent } from '../services/pricing/profilePricingInitializer.js'
+import { PAYMENT_ACCESS_EVENT, QUOTE_STATUS } from '../services/pricing/pricingTypes.js'
+import { updateQuoteStatus, tableExists } from '../services/pricing/quoteBuilder.js'
 
 import { createLogger } from '../utils/logger.js'
 const routeLogger = createLogger('route:stripeWebhook')
+
+/**
+ * Grant paid access to a profile after a verified Stripe payment.
+ * Updates the profile_pricing access_status, marks the linked quote as
+ * paid (when present), and records a payment_access_event so Sam can
+ * audit the full webhook -> access transition.
+ */
+async function grantPaidAccess(db, { profileId, quoteId, purchaseId }) {
+  if (!profileId) return
+  try {
+    await markPaid(db, { profileId })
+  } catch (err) {
+    routeLogger.error('webhook: markPaid failed', { profileId, error: err?.message })
+  }
+  try {
+    if (quoteId && (await tableExists(db, 'pricing_quotes'))) {
+      await updateQuoteStatus(db, quoteId, QUOTE_STATUS.PAID)
+    }
+  } catch (err) {
+    routeLogger.error('webhook: updateQuoteStatus failed', { quoteId, error: err?.message })
+  }
+  try {
+    await recordPaymentAccessEvent(db, {
+      profileId,
+      quoteId: quoteId || null,
+      eventType: PAYMENT_ACCESS_EVENT.PAYMENT_SUCCEEDED,
+      details: { purchase_id: purchaseId || null },
+    })
+  } catch (err) {
+    routeLogger.error('webhook: recordPaymentAccessEvent failed', { profileId, error: err?.message })
+  }
+}
 
 const router = express.Router()
 
@@ -49,13 +85,15 @@ router.post('/', async (req, res) => {
         const purchaseId = String(metadata.purchase_id || '').trim()
         const phase = String(metadata.milestone_phase || '').trim()
         if (purchaseId && phase) {
+          // Only `kickoff` and `submission` should drive purchase status; `draft`
+          // is a mid-cycle update we record as paid on the milestone but leave
+          // the purchase status alone for so the UI shows the project still in
+          // progress.
           const MILESTONE_PHASE_TO_STATUS = { kickoff: 'in_progress', submission: 'paid' }
           const newStatus = MILESTONE_PHASE_TO_STATUS[phase] ?? null
-          // Only process recognised phases; log and skip unknown ones to avoid
-          // partial-state corruption in the purchase pipeline.
           const knownPhases = Object.keys(MILESTONE_PHASE_TO_STATUS)
           if (!knownPhases.includes(phase)) {
-            console.warn('Stripe webhook: unrecognised milestone_phase â skipping purchase state update', { purchaseId, phase, eventId: event?.id })
+            console.warn('Stripe webhook: unrecognised milestone_phase; skipping purchase state update', { purchaseId, phase, eventId: event?.id })
           }
           const transaction = req.db.transaction(() => {
             req.db.prepare(
@@ -68,6 +106,19 @@ router.post('/', async (req, res) => {
             }
           })
           transaction()
+
+          if (phase === 'submission') {
+            const purchaseRow = await req.db
+              .prepare(`SELECT id, profile_id FROM service_purchases WHERE id = ? LIMIT 1`)
+              .get(purchaseId)
+            if (purchaseRow?.profile_id) {
+              await grantPaidAccess(req.db, {
+                profileId: String(purchaseRow.profile_id),
+                quoteId: String(metadata.quote_id || '') || null,
+                purchaseId,
+              })
+            }
+          }
         }
       } else if (kind === 'hourly_invoice') {
         const invoiceId = String(metadata.hourly_invoice_id || '').trim()
@@ -93,19 +144,67 @@ router.post('/', async (req, res) => {
           }
         })
         hourlyTransaction()
+
+        if (purchaseId) {
+          const purchaseRow = await req.db
+            .prepare(`SELECT id, profile_id FROM service_purchases WHERE id = ? LIMIT 1`)
+            .get(purchaseId)
+          if (purchaseRow?.profile_id) {
+            await grantPaidAccess(req.db, {
+              profileId: String(purchaseRow.profile_id),
+              quoteId: String(metadata.quote_id || '') || null,
+              purchaseId,
+            })
+          }
+        }
       } else if (kind === 'service_purchase') {
         const purchaseId = String(metadata.purchase_id || '').trim()
-        if (purchaseId) {
-          const spResult = await req.db.prepare(
-            `UPDATE service_purchases
-             SET status = 'paid',
-                 stripe_payment_intent_id = COALESCE(stripe_payment_intent_id, ?),
-                 stripe_checkout_session_id = COALESCE(stripe_checkout_session_id, ?),
-                 updated_at = CURRENT_TIMESTAMP
-             WHERE id = ?`
-          ).run(paymentIntent, checkoutSessionId, purchaseId)
-          if (spResult.changes === 0) {
-            routeLogger.error('Stripe webhook: service_purchase UPDATE matched 0 rows â purchaseId not found in DB', { purchaseId, eventId: event?.id, checkoutSessionId })
+        const metaQuoteId = String(metadata.quote_id || '').trim()
+        if (!purchaseId) {
+          routeLogger.error('Stripe webhook: service_purchase missing purchase_id metadata; refusing to grant access', { eventId: event?.id, checkoutSessionId })
+        } else {
+          const purchaseRow = await req.db
+            .prepare(`SELECT id, profile_id, user_id FROM service_purchases WHERE id = ? LIMIT 1`)
+            .get(purchaseId)
+          if (!purchaseRow) {
+            routeLogger.error('Stripe webhook: service_purchase purchaseId not found; refusing to grant access', { purchaseId, eventId: event?.id })
+          } else {
+            // Cross-check quote_id (when provided) against the purchase's profile
+            // so a forged metadata block cannot grant access on the wrong profile.
+            let validQuoteId = null
+            if (metaQuoteId) {
+              try {
+                const q = await req.db
+                  .prepare(`SELECT id, profile_id FROM pricing_quotes WHERE id = ? LIMIT 1`)
+                  .get(metaQuoteId)
+                if (q && (!purchaseRow.profile_id || String(q.profile_id) === String(purchaseRow.profile_id))) {
+                  validQuoteId = String(q.id)
+                } else {
+                  routeLogger.error('Stripe webhook: quote_id metadata does not match purchase profile; NOT granting access', { purchaseId, metaQuoteId, eventId: event?.id })
+                }
+              } catch {
+                // pricing_quotes table not installed; proceed without quote linkage.
+              }
+            }
+
+            const spResult = await req.db.prepare(
+              `UPDATE service_purchases
+               SET status = 'paid',
+                   stripe_payment_intent_id = COALESCE(stripe_payment_intent_id, ?),
+                   stripe_checkout_session_id = COALESCE(stripe_checkout_session_id, ?),
+                   updated_at = CURRENT_TIMESTAMP
+               WHERE id = ?`
+            ).run(paymentIntent, checkoutSessionId, purchaseId)
+
+            if (spResult.changes === 0) {
+              routeLogger.error('Stripe webhook: service_purchase UPDATE matched 0 rows; purchaseId not found in DB', { purchaseId, eventId: event?.id, checkoutSessionId })
+            } else if (purchaseRow.profile_id) {
+              await grantPaidAccess(req.db, {
+                profileId: String(purchaseRow.profile_id),
+                quoteId: validQuoteId,
+                purchaseId,
+              })
+            }
           }
         }
       }
@@ -129,4 +228,3 @@ router.post('/', async (req, res) => {
 })
 
 export default router
-

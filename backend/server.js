@@ -1149,7 +1149,7 @@ if (db.dialect === 'sqlite') {
 // Smoke mode: used by unit/contract tests (fast deterministic boot).
 // Many unit tests start the server with PORT=0 + DB_AUTO_MIGRATE=true but do not set SMOKE_MODE explicitly.
 // In that case, we infer smoke mode so that heavy startup tasks never block the "Ready" signal.
-const explicitSmoke = String(process.env.SMOKE_MODE || '').trim().toLowerCase() === 'true'
+const explicitSmoke = ['1', 'true', 'yes', 'on'].includes(String(process.env.SMOKE_MODE || '').trim().toLowerCase())
 const inferredSmoke =
   String(PORT) === '0' &&
   String(process.env.DB_AUTO_MIGRATE || '').trim().toLowerCase() === 'true' &&
@@ -1229,10 +1229,14 @@ if (app.locals.db_startup_error) {
 }
 
 // Ensure the Payment Sheet service catalog + terms exist (fast + idempotent).
-try {
-  await seedServiceCatalogFromExtract(db)
-} catch (error) {
-  console.warn('[startup] Failed to seed service catalog from extract:', error?.message || error)
+if (IS_SMOKE_MODE) {
+  console.info('[startup] Skipping service catalog seeding (SMOKE_MODE)')
+} else {
+  try {
+    await seedServiceCatalogFromExtract(db)
+  } catch (error) {
+    console.warn('[startup] Failed to seed service catalog from extract:', error?.message || error)
+  }
 }
 
 // Check funding opportunities count and provide guidance
@@ -1266,6 +1270,9 @@ function parseBoolEnv(value) {
   if (['0', 'false', 'no', 'n', 'off'].includes(v)) return false
   return null
 }
+
+const BACKGROUND_SERVICES_DISABLED =
+  IS_SMOKE_MODE || parseBoolEnv(process.env.DISABLE_BACKGROUND_SERVICES) === true
 
 // Ensure at least N REAL national opportunities are available (visible from any ZIP).
 // - Non-prod: default ON (local reliability).
@@ -1373,40 +1380,48 @@ try {
   console.warn('[startup] Failed to seed assistance directories:', error?.message || error)
 }
 
-try {
-  const faithRow = await db
-    .prepare("SELECT COUNT(*) as count FROM funding_opportunities WHERE source = 'faith_based_assistance' AND state = 'OH' AND is_active = 1")
-    .get()
-  const faithCount = faithRow?.count ?? 0
-  if (faithCount < 6) {
-    console.info('[startup] Seeding faith-based housing assistance (Lorain County OH)...')
-    const result = await seedFaithBasedHousing(db)
-    const afterRow = await db
+if (IS_SMOKE_MODE) {
+  console.info('[startup] Skipping faith-based housing seeding (SMOKE_MODE)')
+} else {
+  try {
+    const faithRow = await db
       .prepare("SELECT COUNT(*) as count FROM funding_opportunities WHERE source = 'faith_based_assistance' AND state = 'OH' AND is_active = 1")
       .get()
-    console.info('[startup] Seeded faith-based housing', { ...result, after: afterRow?.count })
-  } else {
-    console.info('[startup] Faith-based housing already seeded', { count: faithCount })
+    const faithCount = faithRow?.count ?? 0
+    if (faithCount < 6) {
+      console.info('[startup] Seeding faith-based housing assistance (Lorain County OH)...')
+      const result = await seedFaithBasedHousing(db)
+      const afterRow = await db
+        .prepare("SELECT COUNT(*) as count FROM funding_opportunities WHERE source = 'faith_based_assistance' AND state = 'OH' AND is_active = 1")
+        .get()
+      console.info('[startup] Seeded faith-based housing', { ...result, after: afterRow?.count })
+    } else {
+      console.info('[startup] Faith-based housing already seeded', { count: faithCount })
+    }
+  } catch (error) {
+    console.warn('[startup] Failed to seed faith-based housing:', error?.message || error)
   }
-} catch (error) {
-  console.warn('[startup] Failed to seed faith-based housing:', error?.message || error)
 }
 
 // ── Housing Funding Opportunities ──
-try {
-  const housingRow = await db
-    .prepare("SELECT COUNT(*) as count FROM funding_opportunities WHERE funding_category IS NOT NULL AND usable_for_housing = 1 AND is_active = 1")
-    .get()
-  const housingCount = housingRow?.count ?? 0
-  if (housingCount < 5) {
-    console.info('[startup] Seeding housing-eligible funding opportunities...')
-    const result = await seedHousingFundingOpportunities(db)
-    console.info('[startup] Seeded housing funding', result)
-  } else {
-    console.info('[startup] Housing funding already seeded', { count: housingCount })
+if (IS_SMOKE_MODE) {
+  console.info('[startup] Skipping housing funding seeding (SMOKE_MODE)')
+} else {
+  try {
+    const housingRow = await db
+      .prepare("SELECT COUNT(*) as count FROM funding_opportunities WHERE funding_category IS NOT NULL AND usable_for_housing = 1 AND is_active = 1")
+      .get()
+    const housingCount = housingRow?.count ?? 0
+    if (housingCount < 5) {
+      console.info('[startup] Seeding housing-eligible funding opportunities...')
+      const result = await seedHousingFundingOpportunities(db)
+      console.info('[startup] Seeded housing funding', result)
+    } else {
+      console.info('[startup] Housing funding already seeded', { count: housingCount })
+    }
+  } catch (error) {
+    console.warn('[startup] Failed to seed housing funding:', error?.message || error)
   }
-} catch (error) {
-  console.warn('[startup] Failed to seed housing funding:', error?.message || error)
 }
 
 function resolveJwtSecret() {
@@ -1939,6 +1954,9 @@ app.use('/api/admin/queue', adminQueueOpsRouter)
 app.use('/api/organizations', organizationsRouter);
 app.use('/api/grants', grantsRouter);
 app.use('/api/opportunities', opportunitiesRouter);
+app.use('/api/pricing', lazyRouter('./routes/pricing.js'));
+app.use('/api/sam/onboarding-audit', lazyRouter('./routes/samOnboardingAudit.js'));
+app.use('/api/funding-library', lazyRouter('./routes/fundingLibrary.js'));
 app.use('/api/programs', programsRouter);
 app.use('/api/milestones', milestonesRouter);
 app.use('/api/documents', documentsRouter);
@@ -1990,6 +2008,17 @@ app.use('/api/colleges', collegesRouter);
 app.use('/api/notifications', notificationsRouter);
 app.use('/api/saved-grants', savedGrantsRouter);
 app.use('/api/foundations', foundationsRouter);
+// John — Outreach Drafting Agent. Draft-only; never sends. Admin-only except /health.
+app.use('/api/john', lazyRouter('./routes/john.js'));
+app.use('/api/larry', lazyRouter('./routes/larry.js'));
+// Robert — Funding Discovery Agent. Disabled by default; the scheduler
+// only starts if ROBERT_ENABLED + ROBERT_RUN_ON_SCHEDULE/STARTUP say so.
+app.use('/api/robert', lazyRouter('./routes/robert.js'));
+
+// Sam — production-readiness agent. /api/sam/health is public; everything
+// else is admin-gated inside the router. Mounted after the rest of the API
+// so Sam's HTTP probes can hit /api/health/* and /readyz cleanly.
+app.use('/api/sam', lazyRouter('./routes/sam.js'))
 
 // School-portal bridge — public partner-auth (Bearer API key) routes that let
 // a registered school's student-information system push roster data into
@@ -2334,6 +2363,7 @@ app.get('/api/meta/dedupe', async (_req, res) => {
 })
 
 app.use('/api/admin', adminRouter);
+app.use('/api/admin/agent-telemetry', lazyRouter('./routes/agentTelemetry.js'));
 app.use('/api', requestTimeout(PIPELINE_TIMEOUT), discoveryRouter);
 app.use('/api/crawler-v2', lazyRouter('./routes/crawlerV2.js'));
 app.use('/api/nf-programs', lazyRouter('./routes/nfPrograms.js'));
@@ -2491,7 +2521,31 @@ if (process.env.NODE_ENV !== 'test') {
     const loggedCorsOrigins = Array.isArray(corsOptions.origin) ? corsOptions.origin : [corsOptions.origin];
     console.log(`CORS origins: ${loggedCorsOrigins.join(', ')}`);
     const actualPort = server.address()?.port ?? PORT;
-    console.log('[Server] Ready on port', actualPort);
+    console.log(`[Server] Ready on port ${actualPort}`);
+
+    // Robert — funding-discovery agent scheduler. Disabled by default;
+    // only starts if ROBERT_ENABLED + ROBERT_RUN_ON_SCHEDULE/STARTUP are true.
+    ;(async () => {
+      try {
+        const { startRobertScheduler } = await import('./services/robert/robertScheduler.js')
+        const result = startRobertScheduler({ db })
+        if (result?.started) console.log('[Server] Robert scheduler started')
+        else console.log('[Server] Robert scheduler not started:', result?.reason || 'disabled')
+      } catch (err) {
+        console.warn('[Server] Robert scheduler startup skipped:', err?.message)
+      }
+    })();
+    // Sam scheduler — opt-in via SAM_ENABLED + SAM_RUN_ON_STARTUP /
+    // SAM_RUN_ON_SCHEDULE. Default behaviour is OFF; the scheduler logs
+    // once and exits when env gates aren't set.
+    (async () => {
+      try {
+        const { startSamScheduler } = await import('./services/sam/samScheduler.js')
+        startSamScheduler({ db, logger: console })
+      } catch (samErr) {
+        console.warn('[sam:scheduler] failed to start:', samErr?.message || samErr)
+      }
+    })();
 
     // Auto-heal Postgres CHECK constraints that may be outdated if migrations haven't run.
     if (db.dialect === 'postgres') {
@@ -2523,6 +2577,21 @@ if (process.env.NODE_ENV !== 'test') {
         }
       })()
     }
+
+    // John — Outreach Drafting Agent. Disabled by default; only starts a
+    // scheduler if JOHN_ENABLED=true and JOHN_RUN_ON_SCHEDULE=true (or
+    // JOHN_RUN_ON_STARTUP=true). Never blocks startup, never crashes the
+    // server on failure. Draft-only; never sends.
+    ;(async () => {
+      try {
+        const { startJohnScheduler } = await import('./services/john/johnScheduler.js')
+        const result = startJohnScheduler({ db })
+        if (result?.started) console.log('[Server] John scheduler started:', JSON.stringify(result))
+        else console.log('[Server] John scheduler not started:', result?.reason || 'disabled')
+      } catch (err) {
+        console.warn('[Server] John scheduler startup skipped:', err?.message)
+      }
+    })();
 
     // Reset jobs stuck in 'running' from a previous process crash/restart (no persistent worker).
     (async () => {
@@ -2586,6 +2655,20 @@ if (process.env.NODE_ENV !== 'test') {
       }
     })()
 
+    // Larry — Lead Discovery & Outreach Agent. Off by default; the scheduler
+    // is a no-op unless LARRY_ENABLED=true and at least one of
+    // LARRY_RUN_ON_STARTUP / LARRY_RUN_ON_SCHEDULE is true.
+    ;(async () => {
+      try {
+        const { startLarryScheduler } = await import('./services/larry/larryScheduler.js')
+        const result = startLarryScheduler({ db })
+        if (result?.started) console.log('[Server] Larry scheduler started')
+        else console.log('[Server] Larry scheduler not started:', result?.reason || 'disabled')
+      } catch (err) {
+        console.warn('[Server] Larry scheduler startup skipped:', err?.message)
+      }
+    })()
+
     // Background queue poller: pick up orphaned 'queued' jobs that were never dispatched.
     const QUEUE_POLL_INTERVAL_MS = Number.parseInt(process.env.QUEUE_POLL_INTERVAL_MS || '60000', 10)
     const queuePollEnabled = String(process.env.QUEUE_POLL_ENABLED ?? 'true').toLowerCase() !== 'false'
@@ -2627,7 +2710,9 @@ if (process.env.NODE_ENV !== 'test') {
       }
     }
 
-    if (queuePollEnabled) {
+    if (BACKGROUND_SERVICES_DISABLED) {
+      console.log('[startup] Background queue poller disabled for smoke/test startup')
+    } else if (queuePollEnabled) {
       // Run a staggered startup drain before the regular poller begins.
       drainQueuedJobsGradually(db, uploadsDir).catch((err) => {
         console.warn('[startup-drain] Staggered drain failed:', err?.message)
@@ -2718,6 +2803,11 @@ if (process.env.NODE_ENV !== 'test') {
     } catch {
       // best-effort only
     }
+
+    if (IS_SMOKE_MODE) {
+      console.info('[startup] Smoke mode: skipping background services')
+      return
+    }
   
   // Initialize feature flags
   try {
@@ -2727,28 +2817,32 @@ if (process.env.NODE_ENV !== 'test') {
     console.warn('[FeatureFlags] Failed to initialize:', err.message);
   }
 
-  // Startup smoke crawlers (PRODUCTION): default OFF.
-  // These are useful for deploy verification, but must not run automatically unless explicitly enabled.
-  const startupSmokeEnabled = parseBoolEnv(process.env.STARTUP_SMOKE_CRAWL_ENABLED) === true
-  if (startupSmokeEnabled) {
-    setTimeout(() => {
-      scheduleCrawlerSmokeJobs({ db, uploadsDir }).catch((err) =>
-        serverLogger.warn('smoke.schedule_failed', { error: err?.message || String(err) }),
-      )
-    }, 10_000)
-    console.info('[startup] Startup smoke crawlers enabled (STARTUP_SMOKE_CRAWL_ENABLED=true)')
+  if (BACKGROUND_SERVICES_DISABLED) {
+    console.info('[startup] Background services disabled for smoke/test startup')
   } else {
-    console.info(
-      '[startup] Startup smoke crawlers disabled (set STARTUP_SMOKE_CRAWL_ENABLED=true to enable)',
-    )
-  }
+    // Startup smoke crawlers (PRODUCTION): default OFF.
+    // These are useful for deploy verification, but must not run automatically unless explicitly enabled.
+    const startupSmokeEnabled = parseBoolEnv(process.env.STARTUP_SMOKE_CRAWL_ENABLED) === true
+    if (startupSmokeEnabled) {
+      setTimeout(() => {
+        scheduleCrawlerSmokeJobs({ db, uploadsDir }).catch((err) =>
+          serverLogger.warn('smoke.schedule_failed', { error: err?.message || String(err) }),
+        )
+      }, 10_000)
+      console.info('[startup] Startup smoke crawlers enabled (STARTUP_SMOKE_CRAWL_ENABLED=true)')
+    } else {
+      console.info(
+        '[startup] Startup smoke crawlers disabled (set STARTUP_SMOKE_CRAWL_ENABLED=true to enable)',
+      )
+    }
 
-  // Auto-merge duplicate profiles once per deploy (production only).
-  setTimeout(() => {
-    scheduleAutoProfileDedupe({ db }).catch((err) => {
-      console.warn('[auto-dedupe] failed:', err?.message || String(err))
-    })
-  }, 20_000)
+    // Auto-merge duplicate profiles once per deploy (production only).
+    setTimeout(() => {
+      scheduleAutoProfileDedupe({ db }).catch((err) => {
+        console.warn('[auto-dedupe] failed:', err?.message || String(err))
+      })
+    }, 20_000)
+  }
   
   // Log server startup event
   logAuditEvent(db, {
@@ -2766,7 +2860,9 @@ if (process.env.NODE_ENV !== 'test') {
   });
   
   // Start Anya autonomous operations 5 seconds after server is ready.
-  if (process.env.ANYA_AUTONOMOUS_ENABLED === 'true') {
+  if (BACKGROUND_SERVICES_DISABLED) {
+    console.log('[Anya] Startup operations disabled for smoke/test startup')
+  } else if (process.env.ANYA_AUTONOMOUS_ENABLED === 'true') {
     setTimeout(() => {
       if (process.env.ANYA_RUN_ON_STARTUP === 'true') {
         import('./services/anyaAutonomousScheduler.js')
@@ -2815,7 +2911,7 @@ if (process.env.NODE_ENV !== 'test') {
   }
 
   // Daily profile-aware auto-discovery (independent of ANYA_AUTONOMOUS_*).
-  if (process.env.AUTO_DISCOVERY_DAILY_ENABLED === 'true') {
+  if (!BACKGROUND_SERVICES_DISABLED && process.env.AUTO_DISCOVERY_DAILY_ENABLED === 'true') {
     const SCHEDULE_CHECK_MS = 30 * 60 * 1000;
     setInterval(() => {
       import('./services/scheduledAutoDiscovery.js')
@@ -2848,35 +2944,39 @@ if (process.env.NODE_ENV !== 'test') {
     }
   }
 
-  // Run once at startup (5s delay to let the DB settle).
-  setTimeout(() => {
-    runDeadlineCron().catch((err) => {
-      console.error('[deadline-cron] Startup run failed:', err?.message || err)
-    })
-  }, 5000)
+  if (BACKGROUND_SERVICES_DISABLED) {
+    console.info('[deadline-cron] Disabled for smoke/test startup')
+  } else {
+    // Run once at startup (5s delay to let the DB settle).
+    setTimeout(() => {
+      runDeadlineCron().catch((err) => {
+        console.error('[deadline-cron] Startup run failed:', err?.message || err)
+      })
+    }, 5000)
 
-  // Run daily at 2am: check every 60s whether it's time to run.
-  // This avoids needing a real cron daemon while still running close to 2am.
-  ;(function scheduleDailyDeadlineCron() {
-    let lastRunDate = null
-    const DAILY_CRON_INTERVAL_MS = 60 * 1000 // check every minute
+    // Run daily at 2am: check every 60s whether it's time to run.
+    // This avoids needing a real cron daemon while still running close to 2am.
+    ;(function scheduleDailyDeadlineCron() {
+      let lastRunDate = null
+      const DAILY_CRON_INTERVAL_MS = 60 * 1000 // check every minute
 
-    const handle = setInterval(() => {
-      const now = new Date()
-      const todayStr = now.toISOString().slice(0, 10)
-      // Run at 2am (hours === 2) and only once per calendar day.
-      if (now.getHours() === 2 && lastRunDate !== todayStr) {
-        lastRunDate = todayStr
-        runDeadlineCron().catch((err) => {
-          console.error('[deadline-cron] Daily run failed:', err?.message || err)
-        })
-      }
-    }, DAILY_CRON_INTERVAL_MS)
+      const handle = setInterval(() => {
+        const now = new Date()
+        const todayStr = now.toISOString().slice(0, 10)
+        // Run at 2am (hours === 2) and only once per calendar day.
+        if (now.getHours() === 2 && lastRunDate !== todayStr) {
+          lastRunDate = todayStr
+          runDeadlineCron().catch((err) => {
+            console.error('[deadline-cron] Daily run failed:', err?.message || err)
+          })
+        }
+      }, DAILY_CRON_INTERVAL_MS)
 
-    process.once('SIGTERM', () => clearInterval(handle))
-    process.once('SIGINT', () => clearInterval(handle))
-    console.info('[deadline-cron] Daily deadline cron scheduled (runs at 2am)')
-  })()
+      process.once('SIGTERM', () => clearInterval(handle))
+      process.once('SIGINT', () => clearInterval(handle))
+      console.info('[deadline-cron] Daily deadline cron scheduled (runs at 2am)')
+    })()
+  }
 
   // Run link verification in background (non-blocking).
   //
@@ -2908,15 +3008,19 @@ if (process.env.NODE_ENV !== 'test') {
     setTimeout(runOnce, 30_000)
     setInterval(runOnce, intervalMs)
   }
-  scheduleLinkVerification(db)
+  if (BACKGROUND_SERVICES_DISABLED) {
+    console.info('[startup] Link verification, health service, and Anya cleanup disabled for smoke/test startup')
+  } else {
+    scheduleLinkVerification(db)
 
-  // Start the background health service (runs every 30 min, configurable via ANYA_HEALTH_INTERVAL_MS)
-  startHealthService(db);
+    // Start the background health service (runs every 30 min, configurable via ANYA_HEALTH_INTERVAL_MS)
+    startHealthService(db);
 
-  // Daily Anya brain/tool-usage cleanup (keeps the memory + audit tables bounded).
-  import('./jobs/anyaBrainCleanup.js')
-    .then(({ startAnyaBrainCleanupCron }) => startAnyaBrainCleanupCron({ db }))
-    .catch((err) => console.warn('[anyaBrainCleanup] failed to start:', err?.message || err));
+    // Daily Anya brain/tool-usage cleanup (keeps the memory + audit tables bounded).
+    import('./jobs/anyaBrainCleanup.js')
+      .then(({ startAnyaBrainCleanupCron }) => startAnyaBrainCleanupCron({ db }))
+      .catch((err) => console.warn('[anyaBrainCleanup] failed to start:', err?.message || err));
+  }
 
   // Group 7: persist warn/error logs to audit_logs so admin.health.logs
   // survives process restarts. The logger ring buffer stays in-memory; this
@@ -2968,7 +3072,7 @@ if (process.env.NODE_ENV !== 'test') {
     .catch((err) => console.warn('[anyaToolRegistry] verify import failed:', err?.message || err));
 
   // Optional: continuous national programs crawler (Track A/B programs)
-  if (process.env.NATIONAL_PROGRAMS_CRAWLER_ENABLED === 'true') {
+  if (!BACKGROUND_SERVICES_DISABLED && process.env.NATIONAL_PROGRAMS_CRAWLER_ENABLED === 'true') {
     const intervalMinutes = Number.parseInt(
       process.env.NATIONAL_PROGRAMS_CRAWLER_INTERVAL_MINUTES || '360',
       10,
@@ -2994,17 +3098,19 @@ if (process.env.NODE_ENV !== 'test') {
           console.error('[NationalPrograms] Failed to start continuous crawler:', err?.message || err)
         })
     }, 8000)
-  } else {
+  } else if (!BACKGROUND_SERVICES_DISABLED) {
     console.log(
       '[NationalPrograms] Continuous crawler disabled (set NATIONAL_PROGRAMS_CRAWLER_ENABLED=true to enable)',
     )
   }
 
   // Start Anya background health service
-  try {
-    startHealthService(db)
-  } catch (err) {
-    console.error('[AnyaHealth] Failed to start health service:', err?.message || err)
+  if (!BACKGROUND_SERVICES_DISABLED) {
+    try {
+      startHealthService(db)
+    } catch (err) {
+      console.error('[AnyaHealth] Failed to start health service:', err?.message || err)
+    }
   }
 
   // Validate critical module imports (non-blocking).

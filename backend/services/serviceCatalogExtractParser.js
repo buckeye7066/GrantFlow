@@ -8,13 +8,29 @@ function repoRootFromHere() {
   return path.resolve(__dirname, '..', '..')
 }
 
+// Canonical extract version. Bump this in lock-step with
+// `PRICING_CATALOG_VERSION` in `pricing/pricingTypes.js`.
+export const CANONICAL_EXTRACT_VERSION = '2026-06-15'
+export const CANONICAL_EXTRACT_FILENAME = `Payment_sheet_Grantflow_${CANONICAL_EXTRACT_VERSION}_EXTRACT.md`
+// Older extracts are kept on disk for archival/forensic use only — they
+// must not seed the live catalog.
+export const LEGACY_EXTRACT_FILENAMES = Object.freeze([
+  'Payment_sheet_Grantflow_2025-11-13_EXTRACT.md',
+])
+
 export function getCanonicalServiceCatalogExtractPath() {
-  return path.join(repoRootFromHere(), 'docs', 'Payment_sheet_Grantflow_2025-11-13_EXTRACT.md')
+  return path.join(repoRootFromHere(), 'docs', CANONICAL_EXTRACT_FILENAME)
+}
+
+function stripDisplayQualifiers(title) {
+  // Strip parenthetical price/qualifier clauses (e.g. "(<$5K)" or "($5K-$250K)")
+  // from titles before computing the canonical slug. The full title is still
+  // stored as the display name; only the slug ignores the qualifier.
+  return String(title || '').replace(/\s*\([^)]*\)\s*/g, ' ').trim()
 }
 
 function normalizeSlug(value) {
-  return String(value || '')
-    .trim()
+  return stripDisplayQualifiers(value)
     .toLowerCase()
     .replace(/&/g, 'and')
     .replace(/[’']/g, '')
@@ -45,7 +61,9 @@ export function parsePaymentSheetExtract(markdown) {
   const text = String(markdown || '')
   if (!text.trim()) throw new Error('extract_empty')
 
-  const version = '2025-11-13'
+  // Active GrantFlow pricing catalog. Drift from `PRICING_CATALOG_VERSION`
+  // is treated as a Sam-critical finding (`stale_catalog`).
+  const version = CANONICAL_EXTRACT_VERSION
 
   const serviceSectionHeadings = new Map([
     ['Service Catalog (Discovery & Assessment Services)', 'Discovery & Assessment Services'],
@@ -149,15 +167,18 @@ export function parsePaymentSheetExtract(markdown) {
 
   flushCurrent()
 
-  // Validate expected set (must not silently drop)
+  // Validate expected set (must not silently drop). These are the canonical
+  // service titles for the 2026-06-15 catalog. The "Micro-Grant Application
+  // (<$5K)" parenthetical is intentional — it identifies the service tier
+  // and survives slug normalization to `micro-grant-application`.
   const expectedNames = new Set([
     'Quick Eligibility Scan',
     'Comprehensive Funding Dossier',
     'Application Strategy Session',
     'Micro-Grant Application (<$5K)',
-    'Standard Foundation Application ($5K–$250K)',
-    'Complex/Federal Application ($250K+)',
-    'Transfer Scholarship Pack (flat pricing)',
+    'Standard Foundation Application',
+    'Complex/Federal Application',
+    'Transfer Scholarship Pack',
     'Editing & Redraft Service',
     'Budget & Logic Model Development',
     'Compliance Reporting & Management',

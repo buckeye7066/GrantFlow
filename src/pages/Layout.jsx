@@ -36,6 +36,7 @@ import { useAuthStore } from "@/stores/authStore";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import AnyaFloatingButton from "@/components/anya/AnyaFloatingButton";
 import AnyaMatchScoutAlerts from "@/components/anya/AnyaMatchScoutAlerts";
+import RobertRecommendationListener from "@/components/robert/RobertRecommendationListener";
 import { AnyaContextProvider } from "@/contexts/AnyaContext";
 import { useFeatureFlags } from "@/lib/featureFlags";
 import ProBonoBanner from "@/components/banners/ProBonoBanner.jsx";
@@ -385,6 +386,12 @@ export default function Layout({ children, currentPageName }) {
           auto-adds. Mounted exactly once here, alongside AnyaFloatingButton.
         */}
         <AnyaMatchScoutAlerts />
+
+        {/* Robert — Funding Discovery Agent. Polls
+            /api/robert/recommendations/stream for the active profile and
+            shows toasts with [View Details] / [Yes, Add to Pipeline] /
+            [No, Keep in Resources]. Robert never auto-adds. */}
+        <RobertRecommendationListener />
 
         {/* Anya AI Assistant Floating Button */}
         <AnyaFloatingButton profileId={activeProfileId} />

@@ -42,7 +42,7 @@ function startServer({ dbPath, extraEnv = {} } = {}) {
 
     child.stdout.on('data', (chunk) => {
       if (resolved) return
-      const match = String(stdout + chunk).match(/\[Server\] Ready on port\s+(\d+)/)
+      const match = String(stdout + chunk).match(/\[Server\](?:\u001B\[[0-?]*[ -/]*[@-~]|\s)+Ready on port\s+(\d+)/)
       if (match) {
         resolved = true
         clearTimeout(timeout)
