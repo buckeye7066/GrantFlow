@@ -6,13 +6,25 @@ CREATE TABLE IF NOT EXISTS yana_blockers (
   task_id TEXT NOT NULL,
   profile_id TEXT NOT NULL,
   user_id TEXT,
+  funding_source_id TEXT,
   blocker_type TEXT NOT NULL,
   blocker_source TEXT,
+  blocker_title TEXT,
+  blocker_message TEXT,
   blocker_text TEXT,
+  severity TEXT NOT NULL DEFAULT 'warning',
+  required_action TEXT,
+  resolver_route TEXT,
+  admin_required BOOLEAN NOT NULL DEFAULT FALSE,
+  user_required BOOLEAN NOT NULL DEFAULT TRUE,
+  deadline_at TIMESTAMPTZ,
   detected_at TIMESTAMPTZ DEFAULT now(),
   resolution_strategy TEXT,
   resolved_at TIMESTAMPTZ,
+  resolved_by_user_id TEXT,
   unresolved_reason TEXT,
+  user_notification_id TEXT,
+  admin_notification_ids TEXT,
   requires_user_action BOOLEAN NOT NULL DEFAULT FALSE,
   metadata_json JSONB NOT NULL DEFAULT '{}'::jsonb,
   created_at TIMESTAMPTZ DEFAULT now(),
@@ -22,6 +34,7 @@ CREATE INDEX IF NOT EXISTS idx_yana_blockers_task     ON yana_blockers(task_id);
 CREATE INDEX IF NOT EXISTS idx_yana_blockers_profile  ON yana_blockers(profile_id);
 CREATE INDEX IF NOT EXISTS idx_yana_blockers_type     ON yana_blockers(blocker_type);
 CREATE INDEX IF NOT EXISTS idx_yana_blockers_open     ON yana_blockers(task_id, resolved_at);
+CREATE INDEX IF NOT EXISTS idx_yana_blockers_admin    ON yana_blockers(admin_required, resolved_at);
 
 CREATE TABLE IF NOT EXISTS yana_blocker_resolutions (
   id TEXT PRIMARY KEY DEFAULT (gen_random_uuid()::text),

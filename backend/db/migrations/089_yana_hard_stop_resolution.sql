@@ -17,13 +17,25 @@ CREATE TABLE IF NOT EXISTS yana_blockers (
   task_id TEXT NOT NULL,
   profile_id TEXT NOT NULL,
   user_id TEXT,
+  funding_source_id TEXT,               -- opportunity_id or grant_id
   blocker_type TEXT NOT NULL,           -- one of the 15 categories
   blocker_source TEXT,                  -- preflight | engine | classifier | manual
+  blocker_title TEXT,                   -- short headline for notifications
+  blocker_message TEXT,                 -- plain-English explanation for the user
   blocker_text TEXT,                    -- captured page text / field name
+  severity TEXT NOT NULL DEFAULT 'warning',
+  required_action TEXT,                 -- 'provide_info' | 'upload_document' | 'renew_session' | 'approve_payment' | 'review_attestation' | 'admin_review' | 'resume' | 'cancel'
+  resolver_route TEXT,                  -- frontend route for the action button
+  admin_required INTEGER NOT NULL DEFAULT 0,
+  user_required INTEGER NOT NULL DEFAULT 1,
+  deadline_at DATETIME,
   detected_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   resolution_strategy TEXT,             -- which resolver was attempted
   resolved_at DATETIME,
+  resolved_by_user_id TEXT,
   unresolved_reason TEXT,
+  user_notification_id TEXT,
+  admin_notification_ids TEXT,          -- comma-separated list
   requires_user_action INTEGER NOT NULL DEFAULT 0,
   metadata_json TEXT NOT NULL DEFAULT '{}',
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -33,6 +45,7 @@ CREATE INDEX IF NOT EXISTS idx_yana_blockers_task     ON yana_blockers(task_id);
 CREATE INDEX IF NOT EXISTS idx_yana_blockers_profile  ON yana_blockers(profile_id);
 CREATE INDEX IF NOT EXISTS idx_yana_blockers_type     ON yana_blockers(blocker_type);
 CREATE INDEX IF NOT EXISTS idx_yana_blockers_open     ON yana_blockers(task_id, resolved_at);
+CREATE INDEX IF NOT EXISTS idx_yana_blockers_admin    ON yana_blockers(admin_required, resolved_at);
 
 CREATE TABLE IF NOT EXISTS yana_blocker_resolutions (
   id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),

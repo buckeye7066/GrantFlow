@@ -44,6 +44,9 @@ export const YANA_NOTIFICATION_TYPES = Object.freeze([
   'yana_failed',
   'yana_2fa_required',
   'yana_captcha_required',
+  // Hard-Stop Resolver — mandatory dual alerts when Yana actually pauses.
+  'yana_hard_stop',         // for the profile owner / user
+  'yana_admin_hard_stop',   // for admin/operator
 ])
 
 export const YANA_SEVERITIES = Object.freeze(['info', 'warning', 'error', 'success'])
@@ -183,6 +186,129 @@ export async function emitYanaNotificationToProfileAndAdmins(db, {
     if (id) ids.push(id)
   }
   return ids
+}
+
+/**
+ * Hard-Stop alert: the mandatory dual-channel notification Yana fires
+ * EVERY time she pauses on an unresolved blocker. The profile owner
+ * gets `yana_hard_stop`; every admin gets `yana_admin_hard_stop`.
+ *
+ * Returns:
+ *   { user_notification_id, admin_notification_ids: [...] }
+ *
+ * Spec mapping (verbatim from the requirement):
+ *   - title:    "Yana needs help completing [Funding Source]"
+ *               "Yana hard stop: [Profile] / [Funding Source]"
+ *   - data fields: task_id, profile_id, user_id, funding_source_id,
+ *                  blocker_type, required_action, route_to_resolve /
+ *                  route_to_admin_task, deadline, admin_required,
+ *                  user_required, severity.
+ */
+export async function emitHardStopAlerts(db, {
+  profileId, profileUserId = null,
+  fundingSourceId = null, fundingSourceTitle = null,
+  profileLabel = null,
+  taskId, blockerId = null,
+  blockerType,
+  blockerTitle = null, blockerMessage = null,
+  requiredAction = null,
+  resolverRoute = null,
+  adminRoute = null,
+  deadlineAt = null,
+  severity = 'warning',
+  adminRequired = true,
+  userRequired = true,
+  expiresInDays = 30,
+} = {}) {
+  if (!db) return { user_notification_id: null, admin_notification_ids: [] }
+  await ensureNotificationsSchema(db)
+
+  const sourceLabel = fundingSourceTitle || fundingSourceId || 'this funding source'
+  const profLabel   = profileLabel || profileId || 'profile'
+  const userTitle   = `Yana needs help completing ${sourceLabel}`
+  const adminTitle  = `Yana hard stop: ${profLabel} / ${sourceLabel}`
+  const baseMessage = blockerMessage
+    || `Yana paused for: ${blockerTitle || blockerType.replace(/_/g, ' ')}.`
+  const adminMessage = `${baseMessage} ${adminRequired && !userRequired
+    ? 'Admin action required.'
+    : userRequired && !adminRequired
+      ? 'User action required.'
+      : 'Either the user or an admin can resolve this.'}`
+
+  const baseData = {
+    task_id: taskId,
+    profile_id: profileId,
+    user_id: profileUserId,
+    funding_source_id: fundingSourceId,
+    blocker_type: blockerType,
+    blocker_id: blockerId,
+    required_action: requiredAction,
+    severity,
+    deadline: deadlineAt,
+    admin_required: !!adminRequired,
+    user_required: !!userRequired,
+  }
+
+  // 1. User notification.
+  let userNotificationId = null
+  if (userRequired && profileUserId) {
+    userNotificationId = await emitYanaNotification(db, {
+      userId: profileUserId,
+      type: 'yana_hard_stop',
+      title: userTitle,
+      message: baseMessage,
+      data: { ...baseData, route_to_resolve: resolverRoute || `/yana/tasks/${taskId}` },
+      severity,
+      expiresInDays,
+    })
+  }
+
+  // 2. Admin notification(s).
+  const adminIds = []
+  let admins = []
+  try {
+    const rows = await db.prepare("SELECT id FROM users WHERE role = 'admin'").all()
+    admins = (rows || []).map((r) => r?.id).filter(Boolean)
+  } catch {
+    admins = []
+  }
+  for (const adminId of admins) {
+    const id = await emitYanaNotification(db, {
+      userId: adminId,
+      type: 'yana_admin_hard_stop',
+      title: adminTitle,
+      message: adminMessage,
+      data: {
+        ...baseData,
+        route_to_admin_task: adminRoute || `/admin/yana/hard-stops/${blockerId || taskId}`,
+        route_to_resolve: resolverRoute || `/yana/tasks/${taskId}`,
+      },
+      severity,
+      expiresInDays,
+    })
+    if (id) adminIds.push(id)
+  }
+  return { user_notification_id: userNotificationId, admin_notification_ids: adminIds }
+}
+
+/**
+ * Mark a list of notification ids as read. Used when a hard stop is
+ * resolved so the persistent alert doesn't keep nagging the user.
+ */
+export async function markNotificationsResolved(db, notificationIds = []) {
+  if (!db || !Array.isArray(notificationIds) || notificationIds.length === 0) return 0
+  await ensureNotificationsSchema(db)
+  let n = 0
+  for (const id of notificationIds) {
+    if (!id) continue
+    try {
+      await db.prepare('UPDATE notifications SET read = 1 WHERE id = ?').run(String(id))
+      n += 1
+    } catch {
+      // best-effort
+    }
+  }
+  return n
 }
 
 export function _resetNotificationsSchemaCache() {

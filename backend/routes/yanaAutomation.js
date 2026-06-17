@@ -81,8 +81,13 @@ import {
   saveResolvedField,
   listResolvedFields,
 } from '../services/yana/yanaResolvedFieldStore.js'
-import { listBlockersForTask } from '../services/yana/yanaBlockerStore.js'
+import {
+  listBlockersForTask,
+  listOpenAdminBlockers,
+  resolveOpenBlockersForTask,
+} from '../services/yana/yanaBlockerStore.js'
 import { resolveBlocker } from '../services/yana/yanaHardStopResolver.js'
+import { markNotificationsResolved } from '../services/yana/yanaNotifications.js'
 import { createLogger } from '../utils/logger.js'
 
 export const YANA_AUTOPILOT_AUTHORIZATION_TEXT = (
@@ -481,6 +486,21 @@ router.post('/tasks/:taskId/resolve-blocker', async (req, res) => {
   if (!ctx) return
   const note = String(req.body?.note || '').slice(0, 1000)
   try {
+    // 1. Mark every open blocker for this task as resolved + write
+    //    audit row(s) + clear the related persistent notifications so
+    //    the bell stops nagging.
+    const resolvedBlockers = await resolveOpenBlockersForTask(req.db, {
+      taskId: ctx.task.id,
+      strategy: 'user_action',
+      detail: note || null,
+      resolvedByUserId: ctx.user.id,
+    })
+    for (const b of resolvedBlockers) {
+      const ids = []
+      if (b.user_notification_id) ids.push(b.user_notification_id)
+      ids.push(...(b.admin_notification_ids || []))
+      if (ids.length > 0) await markNotificationsResolved(req.db, ids)
+    }
     await appendTaskEvent(req.db, {
       taskId: ctx.task.id,
       eventType: 'note',
@@ -488,6 +508,7 @@ router.post('/tasks/:taskId/resolve-blocker', async (req, res) => {
       message: note || 'User indicated the blocker is resolved. Re-running Yana Autopilot.',
       actorUserId: ctx.user.id,
       actorRole: ctx.user.role === 'admin' ? 'admin' : 'user',
+      details: { resolved_blocker_ids: resolvedBlockers.map((b) => b.id) },
     })
     const profile = await loadProfile(req.db, ctx.task.profile_id)
     if (!profile) return res.status(404).json({ error: 'profile_not_found' })
@@ -503,7 +524,7 @@ router.post('/tasks/:taskId/resolve-blocker', async (req, res) => {
       },
       options: { autopilot: true, allow_auto_submit: true },
     })
-    return res.json({ ok: true, ...result })
+    return res.json({ ok: true, resolved_blockers: resolvedBlockers, ...result })
   } catch (err) {
     log.error('resolve_blocker_failed', { err: err?.message })
     return res.status(500).json({ error: 'resolve_failed', detail: err?.message })
@@ -670,6 +691,52 @@ router.post('/resolved-fields', async (req, res) => {
     return res.json({ ok: true, field })
   } catch (err) {
     return res.status(400).json({ error: 'save_failed', detail: err?.message })
+  }
+})
+
+// Admin: dashboard list of every open hard stop in the system.
+router.get('/admin/hard-stops', async (req, res) => {
+  const user = requireAuthenticatedUser(req, res)
+  if (!user) return
+  if (user.role !== 'admin') return res.status(403).json({ error: 'forbidden_admin_only' })
+  try {
+    const limit = Math.max(1, Math.min(500, Number.parseInt(req.query.limit || '200', 10) || 200))
+    const blockers = await listOpenAdminBlockers(req.db, { limit })
+    return res.json({ ok: true, blockers })
+  } catch (err) {
+    log.error('admin_hard_stops_failed', { err: err?.message })
+    return res.status(500).json({ error: 'list_failed' })
+  }
+})
+
+// Cancel a Yana task. Resolves all open blockers and stops automation.
+router.post('/tasks/:taskId/cancel', async (req, res) => {
+  const ctx = await loadTaskAndAuthorise(req, res, req.params.taskId)
+  if (!ctx) return
+  const reason = String(req.body?.reason || '').slice(0, 500) || 'cancelled_by_user'
+  try {
+    const resolvedBlockers = await resolveOpenBlockersForTask(req.db, {
+      taskId: ctx.task.id,
+      strategy: 'cancelled',
+      detail: reason,
+      resolvedByUserId: ctx.user.id,
+    })
+    for (const b of resolvedBlockers) {
+      const ids = [b.user_notification_id, ...(b.admin_notification_ids || [])].filter(Boolean)
+      if (ids.length > 0) await markNotificationsResolved(req.db, ids)
+    }
+    await appendTaskEvent(req.db, {
+      taskId: ctx.task.id,
+      eventType: 'cancelled',
+      step: 'cancel',
+      message: reason,
+      actorUserId: ctx.user.id,
+      actorRole: ctx.user.role === 'admin' ? 'admin' : 'user',
+    })
+    return res.json({ ok: true, resolved_blockers: resolvedBlockers })
+  } catch (err) {
+    log.error('cancel_task_failed', { err: err?.message })
+    return res.status(500).json({ error: 'cancel_failed', detail: err?.message })
   }
 })
 

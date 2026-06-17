@@ -27,7 +27,10 @@
  */
 
 import { classifyBlocker } from './yanaBlockerClassifier.js'
-import { recordBlocker, recordResolution } from './yanaBlockerStore.js'
+import {
+  recordBlocker, recordResolution, attachBlockerNotifications,
+} from './yanaBlockerStore.js'
+import { emitHardStopAlerts } from './yanaNotifications.js'
 import {
   findValidSession,
   markSessionUsed,
@@ -59,6 +62,171 @@ function escalate(strategy, detail, payload = {}) {
 }
 
 /**
+ * Profile per blocker category. Drives notification copy, the action
+ * button label, and which side(s) get alerted.
+ *
+ *   required_action:
+ *     'provide_info' | 'upload_document' | 'renew_session' |
+ *     'approve_payment' | 'review_attestation' | 'admin_review' |
+ *     'resume' | 'cancel' | 'review' | 'find_alternate'
+ */
+export const BLOCKER_PROFILE = Object.freeze({
+  missing_required_information: {
+    title: 'Missing required information',
+    message: 'Yana needs a value for a required field. Provide it once and Yana will reuse it for future portals.',
+    required_action: 'provide_info',
+    severity: 'warning',
+    admin_required: true,
+    user_required: true,
+  },
+  missing_required_document: {
+    title: 'Missing required document',
+    message: 'Yana needs a required document uploaded to the profile before she can attach it to the application.',
+    required_action: 'upload_document',
+    severity: 'warning',
+    admin_required: true,
+    user_required: true,
+  },
+  login_required: {
+    title: 'Portal login required',
+    message: 'Yana needs an authenticated session for this portal. Log in once and save the session so Yana can reuse it.',
+    required_action: 'renew_session',
+    severity: 'warning',
+    admin_required: true,
+    user_required: true,
+  },
+  sso_required: {
+    title: 'University SSO login required',
+    message: 'Yana cannot complete SSO herself. Sign in once with your university account and save the session.',
+    required_action: 'renew_session',
+    severity: 'warning',
+    admin_required: true,
+    user_required: true,
+  },
+  two_factor_required: {
+    title: 'Two-factor authentication required',
+    message: 'The portal asked for a 2FA code. Yana will never intercept codes; complete 2FA once and Yana will reuse the trusted-device session.',
+    required_action: 'renew_session',
+    severity: 'warning',
+    admin_required: true,
+    user_required: true,
+  },
+  captcha_required: {
+    title: 'CAPTCHA challenge',
+    message: 'The portal triggered CAPTCHA. Yana never solves CAPTCHAs; complete it once and Yana will resume from a saved session.',
+    required_action: 'renew_session',
+    severity: 'warning',
+    admin_required: true,
+    user_required: true,
+  },
+  payment_required: {
+    title: 'Application payment approval required',
+    message: 'The portal requires a fee. Yana will only charge inside an explicit pre-authorized envelope. Review and approve the payment.',
+    required_action: 'approve_payment',
+    severity: 'warning',
+    admin_required: true,
+    user_required: true,
+  },
+  wet_signature_required: {
+    title: 'Wet signature required',
+    message: 'The application needs a hand-written signature. Yana prepared the packet — print, sign, and upload it back so Yana can resume.',
+    required_action: 'review',
+    severity: 'info',
+    admin_required: true,
+    user_required: true,
+  },
+  legal_attestation_required: {
+    title: 'Attestation needs personal review',
+    message: 'This attestation requires fresh personal judgment. Review the language and confirm the decision.',
+    required_action: 'review_attestation',
+    severity: 'warning',
+    admin_required: true,
+    user_required: true,
+  },
+  portal_terms_block: {
+    title: 'Portal forbids automation',
+    message: 'The portal terms disallow agent automation. Yana switched to the lawful packet path; review the packet and submit manually.',
+    required_action: 'review',
+    severity: 'info',
+    admin_required: true,
+    user_required: true,
+  },
+  portal_anti_bot_block: {
+    title: 'Portal blocked automated access',
+    message: 'The portal blocked automated access. Yana never bypasses anti-bot controls — review the packet and submit manually, or set up a saved session and retry.',
+    required_action: 'admin_review',
+    severity: 'error',
+    admin_required: true,
+    user_required: true,
+  },
+  ambiguous_required_field: {
+    title: 'Yana needs help with a field',
+    message: 'Yana could not confidently map a required field. Provide a value once; she will reuse it for future portals.',
+    required_action: 'provide_info',
+    severity: 'warning',
+    admin_required: true,
+    user_required: true,
+  },
+  final_review_screen: {
+    title: 'Final review',
+    message: 'Yana paused at the final review screen.',
+    required_action: 'review',
+    severity: 'info',
+    admin_required: false,
+    user_required: true,
+  },
+  deadline_expired: {
+    title: 'Funding source expired',
+    message: 'The application deadline has passed. Yana suggests related opportunities and will not waste cycles on this one unless you override.',
+    required_action: 'find_alternate',
+    severity: 'info',
+    admin_required: true,
+    user_required: true,
+  },
+  unknown_application_method: {
+    title: 'Unknown application method',
+    message: 'Yana could not determine how to apply to this funding source. She prepared a funder-contact packet you can use.',
+    required_action: 'review',
+    severity: 'info',
+    admin_required: true,
+    user_required: true,
+  },
+  unknown: {
+    title: 'Yana hit an unrecognised blocker',
+    message: 'Yana paused for a blocker she could not classify. An admin should review the captured page text.',
+    required_action: 'admin_review',
+    severity: 'error',
+    admin_required: true,
+    user_required: false,
+  },
+})
+
+function isAlertingOutcome(outcome) {
+  return outcome === 'blocked' || outcome === 'escalated'
+}
+
+async function loadProfileMeta(db, profileId) {
+  if (!db || !profileId) return { user_id: null, label: null }
+  try {
+    const row = await db.prepare(
+      `SELECT id, user_id, name, organization_name FROM profiles WHERE id = ? LIMIT 1`,
+    ).get(String(profileId))
+    if (!row) return { user_id: null, label: null }
+    const label = row.name || row.organization_name || row.id
+    return { user_id: row.user_id || null, label }
+  } catch {
+    return { user_id: null, label: null }
+  }
+}
+
+function deadlineFromOpportunity(opp) {
+  const d = opp?.deadline || opp?.application_deadline || opp?.due_date || opp?.close_date
+  if (!d) return null
+  const t = new Date(d).getTime()
+  return Number.isFinite(t) ? new Date(t).toISOString() : null
+}
+
+/**
  * Resolve a single blocker. Pure dispatcher — each category has its
  * own helper below. Always writes to yana_blockers / yana_blocker_resolutions.
  *
@@ -76,15 +244,31 @@ function escalate(strategy, detail, payload = {}) {
  */
 export async function resolveBlocker(db, ctx, blockerInput) {
   const cls = classifyBlocker(blockerInput || {})
+  const profileMeta = await loadProfileMeta(db, ctx.profileId)
+  const profileUserId = ctx.userId || profileMeta.user_id || null
+  const fundingSourceId = ctx?.opportunity?.id || ctx?.grant?.id || null
+  const fundingSourceTitle = ctx?.opportunity?.title || ctx?.grant?.title || null
+  const deadlineAt = deadlineFromOpportunity(ctx?.opportunity)
+  const profileSpec = BLOCKER_PROFILE[cls.category] || BLOCKER_PROFILE.unknown
+
   const blocker = await recordBlocker(db, {
     taskId: ctx.taskId,
     profileId: ctx.profileId,
-    userId: ctx.userId || null,
+    userId: profileUserId,
+    fundingSourceId,
     blockerType: cls.category,
     blockerSource: cls.source,
+    blockerTitle: profileSpec.title,
+    blockerMessage: profileSpec.message,
     blockerText: blockerInput?.text || blockerInput?.detail || null,
+    severity: profileSpec.severity,
+    requiredAction: profileSpec.required_action,
+    resolverRoute: `/yana/tasks/${ctx.taskId}`,
+    adminRequired: !!profileSpec.admin_required,
+    userRequired: !!profileSpec.user_required,
+    deadlineAt,
     requiresUserAction: false,
-    metadata: { classification: cls, ...(blockerInput?.context || {}) },
+    metadata: { classification: cls, funding_source_title: fundingSourceTitle, ...(blockerInput?.context || {}) },
   })
 
   let directive
@@ -146,7 +330,57 @@ export async function resolveBlocker(db, ctx, blockerInput) {
     detail: directive.detail,
     metadata: { directive, classification: cls },
   })
-  return { ...directive, blocker_id: blocker.id, classification: cls }
+
+  // MANDATORY HARD-STOP ALERT — every unresolved blocker must page
+  // both the user and the admins. Resolved/degraded outcomes are
+  // already-handled successes (saved session reused, payment within
+  // envelope, packet generated) and don't need a hard-stop alert.
+  let userNotificationId = null
+  let adminNotificationIds = []
+  if (isAlertingOutcome(directive.outcome)) {
+    const alerts = await emitHardStopAlerts(db, {
+      profileId: ctx.profileId,
+      profileUserId,
+      profileLabel: profileMeta.label,
+      fundingSourceId,
+      fundingSourceTitle,
+      taskId: ctx.taskId,
+      blockerId: blocker.id,
+      blockerType: cls.category,
+      blockerTitle: profileSpec.title,
+      blockerMessage: directive.detail || profileSpec.message,
+      requiredAction: profileSpec.required_action,
+      resolverRoute: `/yana/tasks/${ctx.taskId}`,
+      adminRoute: `/admin/yana/hard-stops/${blocker.id}`,
+      deadlineAt,
+      severity: profileSpec.severity,
+      adminRequired: !!profileSpec.admin_required,
+      userRequired: !!profileSpec.user_required,
+    })
+    userNotificationId = alerts.user_notification_id
+    adminNotificationIds = alerts.admin_notification_ids || []
+    await attachBlockerNotifications(db, blocker.id, {
+      userNotificationId, adminNotificationIds,
+    })
+  }
+
+  return {
+    ...directive,
+    blocker_id: blocker.id,
+    classification: cls,
+    blocker: {
+      id: blocker.id,
+      type: cls.category,
+      title: profileSpec.title,
+      message: directive.detail || profileSpec.message,
+      required_action: profileSpec.required_action,
+      severity: profileSpec.severity,
+      admin_required: !!profileSpec.admin_required,
+      user_required: !!profileSpec.user_required,
+      user_notification_id: userNotificationId,
+      admin_notification_ids: adminNotificationIds,
+    },
+  }
 }
 
 // ── Per-category resolvers ──────────────────────────────────────────

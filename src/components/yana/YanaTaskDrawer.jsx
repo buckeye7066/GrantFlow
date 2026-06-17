@@ -20,6 +20,7 @@ export default function YanaTaskDrawer({ open, onClose, task: initialTask, onTas
   const [task, setTask] = useState(initialTask || null)
   const [events, setEvents] = useState([])
   const [missingInfo, setMissingInfo] = useState([])
+  const [openBlockers, setOpenBlockers] = useState([])
   const [values, setValues] = useState({})
   const [loading, setLoading] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -41,6 +42,8 @@ export default function YanaTaskDrawer({ open, onClose, task: initialTask, onTas
           setEvents(Array.isArray(detail?.events) ? detail.events : [])
           setMissingInfo(Array.isArray(detail?.missing_info) ? detail.missing_info.filter((m) => !m.resolved) : [])
         }
+        const bRes = await client.get(`/api/yana/automation/tasks/${task.id}/blockers?onlyOpen=true`).catch(() => null)
+        if (!cancelled) setOpenBlockers(Array.isArray(bRes?.blockers) ? bRes.blockers : [])
       } catch (err) {
         if (!cancelled) {
           showErrorToast(toast, 'Could not load task', err?.message || 'See logs.')
@@ -131,19 +134,39 @@ export default function YanaTaskDrawer({ open, onClose, task: initialTask, onTas
     }
   }
 
-  async function resolveBlocker() {
+  async function resolveBlocker(note = '') {
     if (!task?.id) return
     setBusy(true)
     try {
-      const res = await client.post(`/api/yana/automation/tasks/${task.id}/resolve-blocker`, {})
+      const res = await client.post(`/api/yana/automation/tasks/${task.id}/resolve-blocker`, note ? { note } : {})
       setTask(res?.task || task)
       onTaskUpdated?.(res?.task || task)
       showInfoToast(toast, 'Yana Autopilot resumed', 'Yana is running again. You will be alerted only on a true hard blocker.')
       const detail = await yanaApi.getApplicationTask(task.id)
       setEvents(detail?.events || [])
       setMissingInfo((detail?.missing_info || []).filter((m) => !m.resolved))
+      const bRes = await client.get(`/api/yana/automation/tasks/${task.id}/blockers?onlyOpen=true`).catch(() => null)
+      setOpenBlockers(Array.isArray(bRes?.blockers) ? bRes.blockers : [])
     } catch (err) {
       showErrorToast(toast, 'Could not resume Yana', err?.message || 'See logs.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function cancelTask() {
+    if (!task?.id) return
+    if (!window.confirm('Cancel this Yana task? She will stop and clear the alert. You can re-queue this funding source later.')) return
+    setBusy(true)
+    try {
+      await client.post(`/api/yana/automation/tasks/${task.id}/cancel`, { reason: 'cancelled_from_task_drawer' })
+      const detail = await yanaApi.getApplicationTask(task.id)
+      setTask(detail?.task || task)
+      onTaskUpdated?.(detail?.task || task)
+      setOpenBlockers([])
+      showInfoToast(toast, 'Yana task cancelled', 'The alert has been cleared.')
+    } catch (err) {
+      showErrorToast(toast, 'Could not cancel', err?.message || 'See logs.')
     } finally {
       setBusy(false)
     }
@@ -216,22 +239,20 @@ export default function YanaTaskDrawer({ open, onClose, task: initialTask, onTas
               </div>
             )}
 
-            {(task.status === 'blocked'
-              || task.status === 'waiting_for_login'
-              || task.status === 'waiting_for_2fa'
-              || task.status === 'waiting_for_captcha'
-              || task.status === 'waiting_for_missing_info') && (
-              <div className="flex items-center justify-between bg-amber-50 border border-amber-200 rounded p-3">
-                <div className="flex items-start gap-2">
-                  <AlertTriangle className="w-4 h-4 text-amber-700 mt-0.5" />
-                  <div className="text-xs text-amber-900">
-                    Yana stopped for a hard blocker. Once you've resolved the issue (login, 2FA, missing
-                    info, etc.), continue Autopilot.
-                  </div>
-                </div>
-                <Button size="sm" className="bg-indigo-600 hover:bg-indigo-700 text-white" onClick={resolveBlocker} disabled={busy}>
-                  Resolve blocker and continue
-                </Button>
+            {openBlockers.length > 0 && (
+              <div className="space-y-2">
+                <h4 className="text-sm font-semibold text-amber-900 flex items-center gap-2">
+                  <AlertTriangle className="w-4 h-4" /> Hard stops awaiting action ({openBlockers.length})
+                </h4>
+                {openBlockers.map((b) => (
+                  <BlockerCard
+                    key={b.id}
+                    blocker={b}
+                    busy={busy}
+                    onResume={() => resolveBlocker(`Resolved ${b.blocker_type}`)}
+                    onCancel={cancelTask}
+                  />
+                ))}
               </div>
             )}
 
@@ -385,5 +406,54 @@ export default function YanaTaskDrawer({ open, onClose, task: initialTask, onTas
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  )
+}
+
+const ACTION_LABEL = {
+  provide_info: 'Provide missing info',
+  upload_document: 'Upload document',
+  renew_session: 'Renew login session',
+  approve_payment: 'Approve payment',
+  review_attestation: 'Review attestation',
+  admin_review: 'Admin review',
+  resume: 'Resume Yana',
+  review: 'Review',
+  find_alternate: 'Find alternate funding',
+  cancel: 'Cancel task',
+}
+
+function BlockerCard({ blocker, busy, onResume, onCancel }) {
+  const action = blocker?.required_action || 'resume'
+  const label = ACTION_LABEL[action] || 'Resolve and continue'
+  return (
+    <div className="bg-amber-50 border border-amber-200 rounded p-3 space-y-2">
+      <div className="flex items-start justify-between gap-2">
+        <div>
+          <div className="text-sm font-semibold text-amber-900">{blocker.blocker_title || blocker.blocker_type}</div>
+          <div className="text-xs text-amber-800">{blocker.blocker_message || ''}</div>
+          {blocker.deadline_at ? (
+            <div className="text-[11px] text-amber-700 mt-1">Deadline: {new Date(blocker.deadline_at).toLocaleString()}</div>
+          ) : null}
+          <div className="text-[11px] text-amber-700 mt-1">
+            {blocker.user_required ? 'User action required.' : ''}
+            {blocker.admin_required ? ' Admin can also resolve.' : ''}
+          </div>
+        </div>
+        <span className="text-[10px] px-2 py-0.5 rounded bg-amber-100 border border-amber-300 text-amber-900 whitespace-nowrap">
+          {blocker.blocker_type.replace(/_/g, ' ')}
+        </span>
+      </div>
+      <div className="flex flex-wrap gap-2">
+        <Button size="sm" className="bg-indigo-600 hover:bg-indigo-700 text-white" onClick={onResume} disabled={busy}>
+          {label}
+        </Button>
+        <Button size="sm" variant="outline" onClick={onResume} disabled={busy}>
+          Resume Yana
+        </Button>
+        <Button size="sm" variant="ghost" className="text-rose-700 hover:bg-rose-50" onClick={onCancel} disabled={busy}>
+          Cancel task
+        </Button>
+      </div>
+    </div>
   )
 }

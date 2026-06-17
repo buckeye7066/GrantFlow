@@ -31,6 +31,17 @@ const YANA_TYPES = new Set([
   'yana_application_submitted',
   'yana_application_blocked',
   'yana_application_failed',
+  // Hard-Stop Resolver mandatory dual alerts.
+  'yana_hard_stop',
+  'yana_admin_hard_stop',
+  // Autopilot lifecycle alerts.
+  'yana_task_started',
+  'yana_task_blocked',
+  'yana_generated_document_saved',
+  'yana_submitted',
+  'yana_failed',
+  'yana_2fa_required',
+  'yana_captcha_required',
 ])
 
 function loadSeenSet() {
@@ -64,12 +75,21 @@ function pickToaster(notification, toast) {
 
 function severityForType(type) {
   switch (type) {
-    case 'yana_application_submitted': return 'success'
-    case 'yana_application_failed': return 'error'
+    case 'yana_application_submitted':
+    case 'yana_submitted':
+      return 'success'
+    case 'yana_application_failed':
+    case 'yana_failed':
+    case 'yana_admin_hard_stop':
+      return 'error'
+    case 'yana_hard_stop':
+    case 'yana_task_blocked':
     case 'yana_application_blocked':
     case 'yana_login_required':
     case 'yana_document_required':
     case 'yana_missing_info':
+    case 'yana_2fa_required':
+    case 'yana_captcha_required':
       return 'warning'
     default: return 'info'
   }

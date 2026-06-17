@@ -6,6 +6,7 @@ import AdminDiagnostics from '@/components/admin/AdminDiagnostics';
 import AdminGeoCrawl from '@/components/admin/AdminGeoCrawl';
 import AdminMaintenance from '@/components/admin/AdminMaintenance';
 import AdminAnyaConsole from '@/components/admin/AdminAnyaConsole';
+import AdminYanaHardStops from '@/components/admin/AdminYanaHardStops.jsx';
 import AdminJohnConsole from '@/components/admin/AdminJohnConsole';
 import AdminLarryConsole from '@/components/admin/AdminLarryConsole';
 import AdminRobertConsole from '@/components/admin/AdminRobertConsole';
@@ -85,6 +86,10 @@ export default function Admin() {
               <Bot className="w-4 h-4 mr-2" />
               Anya
             </TabsTrigger>
+            <TabsTrigger value="yana_hard_stops">
+              <AlertCircle className="w-4 h-4 mr-2" />
+              Yana hard stops
+            </TabsTrigger>
             <TabsTrigger value="agents">
               <Activity className="w-4 h-4 mr-2" />
               Mission Control
@@ -159,6 +164,10 @@ export default function Admin() {
 
           <TabsContent value="anya" className="mt-6">
             <AdminAnyaConsole />
+          </TabsContent>
+
+          <TabsContent value="yana_hard_stops" className="mt-6">
+            <AdminYanaHardStops />
           </TabsContent>
 
           <TabsContent value="agents" className="mt-6">
