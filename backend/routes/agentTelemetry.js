@@ -14,6 +14,7 @@ import {
   getSummary,
   getTimeline,
   getYana,
+  getHamilton,
   getRobert,
   getRobertMap,
   getSam,
@@ -119,6 +120,14 @@ router.get(
   '/john',
   adminScoped(async (req, res) => {
     const data = await getJohn(req.db, pickRangeOpts(req))
+    res.json({ ok: true, ...data })
+  }),
+)
+
+router.get(
+  '/hamilton',
+  adminScoped(async (req, res) => {
+    const data = await getHamilton(req.db, pickRangeOpts(req))
     res.json({ ok: true, ...data })
   }),
 )

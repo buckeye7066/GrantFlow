@@ -21,6 +21,7 @@ export const agentTelemetryApi = {
   sam: (params) => apiFetch(`${BASE}/sam${qs(params)}`),
   anya: (params) => apiFetch(`${BASE}/anya${qs(params)}`),
   john: (params) => apiFetch(`${BASE}/john${qs(params)}`),
+  hamilton: (params) => apiFetch(`${BASE}/hamilton${qs(params)}`),
   health: () => apiFetch(`${BASE}/health`),
 }
 

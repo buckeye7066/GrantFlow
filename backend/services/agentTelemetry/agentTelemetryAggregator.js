@@ -462,11 +462,17 @@ export async function aggregateYana(db, range) {
   out.label = AGENT_LABELS.yana
   out.tagline = AGENT_TAGLINES.yana
 
-  const runs = await tableExists(db, 'yana_runs')
+  // yana_runs was historically a compatibility table; it has been
+  // renamed to hamilton_runs as part of the autopilot agent split.
+  // We still attempt yana_runs first so older databases that have not
+  // applied the rename migration keep producing telemetry, then fall
+  // through to hamilton_runs.
+  const yanaRunsTable = (await tableExists(db, 'yana_runs')) ? 'yana_runs'
+    : ((await tableExists(db, 'hamilton_runs')) ? 'hamilton_runs' : null)
   const leads = await tableExists(db, 'yana_lead_candidates')
   const johnQ = await tableExists(db, 'yana_john_queue')
   const larryQ = await tableExists(db, 'yana_larry_queue')
-  const installed = runs || leads || johnQ || larryQ
+  const installed = !!yanaRunsTable || leads || johnQ || larryQ
   if (!installed) return out
   out.installed = true
   out.enabled = true
@@ -476,10 +482,10 @@ export async function aggregateYana(db, range) {
   const since = range.startIso
 
   return withProfileScope({ bypass: true }, async () => {
-    if (runs) {
-      const u = await db.prepare("SELECT COALESCE(SUM(urls_fetched),0) AS n FROM yana_runs WHERE created_at >= ?").get(since)
+    if (yanaRunsTable) {
+      const u = await db.prepare(`SELECT COALESCE(SUM(urls_fetched),0) AS n FROM ${yanaRunsTable} WHERE created_at >= ?`).get(since)
       out.primary_metrics.websites_checked = Number(u?.n || 0)
-      const lf = await db.prepare("SELECT COALESCE(SUM(leads_found),0) AS n FROM yana_runs WHERE created_at >= ?").get(since)
+      const lf = await db.prepare(`SELECT COALESCE(SUM(leads_found),0) AS n FROM ${yanaRunsTable} WHERE created_at >= ?`).get(since)
       out.primary_metrics.leads_found = Number(lf?.n || 0)
     }
     if (leads) {
@@ -510,6 +516,80 @@ export async function aggregateYana(db, range) {
       Number(out.primary_metrics.leads_sent_to_john || 0),
       Number(out.primary_metrics.websites_checked || 0),
     )
+    out.health = deriveHealth(out)
+    return out
+  })
+}
+
+/** ─── HAMILTON ──────────────────────────────────────────────────────────── */
+
+/**
+ * Hamilton — Application Autopilot / Funding Completion. Reads from
+ * hamilton_runs, hamilton_autopilot_runs, hamilton_blockers, and
+ * application_tasks (the unified task table Hamilton drives).
+ */
+export async function aggregateHamilton(db, range) {
+  const out = makeEmptyAgentSummary('hamilton')
+  out.label = AGENT_LABELS.hamilton
+  out.tagline = AGENT_TAGLINES.hamilton
+
+  const runsTable = (await tableExists(db, 'hamilton_runs')) ? 'hamilton_runs'
+    : ((await tableExists(db, 'yana_runs')) ? 'yana_runs' : null)
+  const autopilotRunsTable = (await tableExists(db, 'hamilton_autopilot_runs')) ? 'hamilton_autopilot_runs'
+    : ((await tableExists(db, 'yana_autopilot_runs')) ? 'yana_autopilot_runs' : null)
+  const blockersTable = (await tableExists(db, 'hamilton_blockers')) ? 'hamilton_blockers'
+    : ((await tableExists(db, 'yana_blockers')) ? 'yana_blockers' : null)
+  const tasksTable = (await tableExists(db, 'application_tasks')) ? 'application_tasks' : null
+
+  const installed = !!(runsTable || autopilotRunsTable || blockersTable || tasksTable)
+  if (!installed) return out
+  out.installed = true
+  out.enabled = true
+  out.notes = []
+  Object.assign(out, await unifiedAgentBase(db, 'hamilton', range))
+
+  const since = range.startIso
+
+  return withProfileScope({ bypass: true }, async () => {
+    if (runsTable) {
+      // The legacy yana_runs schema only has lead-discovery columns; Hamilton
+      // metrics live in the autopilot-specific columns we added in migration
+      // 085. Probe the column list so that older databases / tests without
+      // those columns still produce a useful (zero-filled) summary.
+      const cols = new Set(await columnsFor(db, runsTable))
+      const sumIfPresent = async (col, key) => {
+        if (!cols.has(col)) { out.primary_metrics[key] = 0; return }
+        const r = await db.prepare(`SELECT COALESCE(SUM(${col}),0) AS n FROM ${runsTable} WHERE created_at >= ?`).get(since)
+        out.primary_metrics[key] = Number(r?.n || 0)
+      }
+      await sumIfPresent('fields_filled', 'fields_filled')
+      await sumIfPresent('drafts_completed', 'drafts_completed')
+      await sumIfPresent('submissions_completed', 'submissions_completed')
+      await sumIfPresent('blocked_safety', 'blocked_safety')
+    }
+    if (autopilotRunsTable) {
+      const finished = await db.prepare(`SELECT status, COUNT(*) AS n FROM ${autopilotRunsTable} WHERE created_at >= ? GROUP BY status`).all(since)
+      const map = {}
+      for (const row of finished) map[row.status] = Number(row.n || 0)
+      out.primary_metrics.autopilot_runs_by_status = map
+      out.primary_metrics.autopilot_total = Object.values(map).reduce((a, b) => a + b, 0)
+    }
+    if (blockersTable) {
+      const open = await db.prepare(`SELECT COUNT(*) AS n FROM ${blockersTable} WHERE resolved_at IS NULL`).get()
+      out.primary_metrics.open_blockers = Number(open?.n || 0)
+      const adminOpen = await db.prepare(`SELECT COUNT(*) AS n FROM ${blockersTable} WHERE resolved_at IS NULL AND admin_required = 1`).get()
+      out.primary_metrics.open_blockers_admin = Number(adminOpen?.n || 0)
+      const byType = await db.prepare(`SELECT blocker_type, COUNT(*) AS n FROM ${blockersTable} WHERE resolved_at IS NULL GROUP BY blocker_type`).all()
+      const tmap = {}
+      for (const row of byType) tmap[row.blocker_type] = Number(row.n || 0)
+      out.primary_metrics.open_blockers_by_type = tmap
+    }
+    if (tasksTable) {
+      const byStatus = await db.prepare(`SELECT status, COUNT(*) AS n FROM ${tasksTable} GROUP BY status`).all()
+      const tmap = {}
+      for (const row of byStatus) tmap[row.status] = Number(row.n || 0)
+      out.primary_metrics.application_tasks_by_status = tmap
+    }
     out.health = deriveHealth(out)
     return out
   })

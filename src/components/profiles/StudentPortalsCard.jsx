@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react"
+﻿import React, { useEffect, useMemo, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import {
   Award,
@@ -36,7 +36,7 @@ import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Textarea } from "@/components/ui/textarea"
 import { useToast } from "@/components/ui/use-toast"
-import YanaPortalsPanel from "@/components/yana/YanaPortalsPanel"
+import HamiltonPortalsPanel from "@/components/hamilton/HamiltonPortalsPanel"
 
 const PORTAL_CHECK_REFRESH_DELAY_MS = 3000
 
@@ -769,7 +769,7 @@ export default function StudentPortalsCard({ state, profileId, applications: pro
           university cards below.
         </p>
         {/* Yana — student-portal records & funding-opportunity portal links. */}
-        <YanaPortalsPanel profileId={profileId} />
+        <HamiltonPortalsPanel profileId={profileId} />
       </CardContent>
 
       <Dialog open={connectOpen} onOpenChange={setConnectOpen}>

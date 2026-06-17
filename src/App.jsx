@@ -4,7 +4,7 @@ import './App.css'
 import Pages from '@/pages/index.jsx'
 import { Toaster } from '@/components/ui/toaster'
 import SessionExpiredDialog from '@/components/auth/SessionExpiredDialog'
-import YanaToastBridge from '@/components/yana/YanaToastBridge'
+import HamiltonToastBridge from '@/components/hamilton/HamiltonToastBridge'
 import client from '@/api/client';
 import RouteErrorBoundary from '@/components/shared/RouteErrorBoundary.jsx'
 import { useAuthStore } from '@/stores/authStore'
@@ -96,7 +96,7 @@ function App() {
       </RouteErrorBoundary>
       <Toaster />
       <SessionExpiredDialog />
-      <YanaToastBridge />
+      <HamiltonToastBridge />
     </Router>
   )
 }

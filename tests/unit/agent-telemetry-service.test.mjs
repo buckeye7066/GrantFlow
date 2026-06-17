@@ -33,7 +33,7 @@ test('getHealth reports overall not_installed when no agents are present', async
   assert.equal(h.rollup_table_present, true)
   assert.deepEqual(
     Object.keys(h.diagnostics).sort(),
-    ['anya', 'john', 'robert', 'sam', 'yana'],
+    ['anya', 'hamilton', 'john', 'robert', 'sam', 'yana'],
   )
   for (const d of Object.values(h.diagnostics)) {
     assert.deepEqual(d.present_tables, [])

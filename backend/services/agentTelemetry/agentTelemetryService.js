@@ -21,6 +21,7 @@ import {
   aggregateRobertMap,
   aggregateYana,
   aggregateYanaFunnel,
+  aggregateHamilton,
   aggregateJohn,
   aggregateTimeline,
 } from './agentTelemetryAggregator.js'
@@ -40,14 +41,15 @@ function normalizeRange(opts = {}) {
  */
 export async function getSummary(db, opts = {}) {
   const range = normalizeRange(opts)
-  const [anya, sam, robert, yana, john] = await Promise.all([
+  const [anya, sam, robert, yana, hamilton, john] = await Promise.all([
     aggregateAnya(db, range),
     aggregateSam(db, range),
     aggregateRobert(db, range),
     aggregateYana(db, range),
+    aggregateHamilton(db, range),
     aggregateJohn(db, range),
   ])
-  const agents = { anya, sam, robert, yana, john }
+  const agents = { anya, sam, robert, yana, hamilton, john }
   for (const name of AGENT_NAMES) {
     if (!agents[name]) agents[name] = makeEmptyAgentSummary(name)
   }
@@ -122,26 +124,49 @@ export async function getJohn(db, opts = {}) {
   return { range, summary }
 }
 
+export async function getHamilton(db, opts = {}) {
+  const range = normalizeRange(opts)
+  const summary = await aggregateHamilton(db, range)
+  return { range, summary }
+}
+
 /**
  * Health probe for every agent — mirrors the overview cards but adds a
  * diagnostics section listing tables that are missing per agent.
  */
 export async function getHealth(db) {
   const range = resolveRange({ range: '24h' })
-  const [anya, sam, robert, yana, john] = await Promise.all([
+  const [anya, sam, robert, yana, hamilton, john] = await Promise.all([
     aggregateAnya(db, range),
     aggregateSam(db, range),
     aggregateRobert(db, range),
     aggregateYana(db, range),
+    aggregateHamilton(db, range),
     aggregateJohn(db, range),
   ])
-  const agents = { anya, sam, robert, yana, john }
+  const agents = { anya, sam, robert, yana, hamilton, john }
 
+  // Hamilton-specific Sam checks live alongside the agent's table list
+  // so Sam can monitor application autopilot health independently of
+  // the lead-discovery Yana agent. The keys correspond directly to the
+  // agent.hamilton.* checks in the user's spec:
+  //   agent.hamilton.health, agent.hamilton.routes,
+  //   agent.hamilton.portalAutomation, agent.hamilton.documents,
+  //   agent.hamilton.notifications, agent.hamilton.blockers,
+  //   agent.hamilton.security
   const expected = {
     anya: ['anya_runs', 'anya_sessions', 'anya_messages', 'anya_tool_usage'],
     sam: ['sam_runs', 'sam_findings'],
     robert: ['robert_runs', 'robert_opportunity_candidates', 'robert_profile_recommendations'],
-    yana: ['yana_runs', 'yana_lead_candidates', 'yana_john_queue', 'yana_larry_queue'],
+    yana: ['yana_lead_candidates', 'yana_john_queue', 'yana_larry_queue'],
+    hamilton: [
+      'hamilton_runs', 'hamilton_autopilot_runs', 'hamilton_authorizations',
+      'hamilton_blockers', 'hamilton_blocker_resolutions', 'hamilton_saved_sessions',
+      'hamilton_payment_authorizations', 'hamilton_attestation_authorizations',
+      'hamilton_portal_policies', 'hamilton_resolved_fields', 'hamilton_portal_providers',
+      'application_tasks', 'application_missing_info', 'application_portal_links',
+      'student_portals',
+    ],
     john: ['john_runs', 'john_email_drafts', 'john_email_audit', 'john_suppression_list', 'john_alias_checks'],
   }
   const diagnostics = {}

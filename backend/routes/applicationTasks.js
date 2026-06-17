@@ -1,4 +1,4 @@
-/**
+﻿/**
  * /api/application-tasks/*
  *
  * Yana application-task surface. Uses the existing auth + profile-scoping
@@ -10,8 +10,8 @@
  *   GET    /api/application-tasks                       — list tasks for my accessible profiles
  *   GET    /api/application-tasks/:taskId               — fetch a single task with events + missing info
  *   POST   /api/application-tasks                       — create or fetch a task for (profile, opportunity)
- *   POST   /api/application-tasks/:taskId/yana/start    — start Yana on this task
- *   POST   /api/application-tasks/:taskId/yana/continue — continue (e.g. after user supplied info)
+ *   POST   /api/application-tasks/:taskId/hamilton/start    � start Hamilton on this task
+ *   POST   /api/application-tasks/:taskId/hamilton/continue � continue (e.g. after user supplied info)
  *   POST   /api/application-tasks/:taskId/missing-info  — supply missing info (resolves items)
  *   POST   /api/application-tasks/:taskId/approve-submit — opt-in to auto-submit
  *   POST   /api/application-tasks/:taskId/cancel        — cancel a task
@@ -31,18 +31,18 @@ import {
   resolveMissingInfoItem,
   listTaskEvents,
   TASK_TERMINAL_STATUSES,
-} from '../services/yana/applicationTaskStore.js'
+} from '../services/hamilton/applicationTaskStore.js'
 import {
-  startYanaForOpportunity,
-  continueYanaTask,
-} from '../services/yanaApplicationAgent.js'
+  startHamiltonForOpportunity,
+  continueHamiltonTask,
+} from '../services/hamiltonApplicationAgent.js'
 import { createLogger } from '../utils/logger.js'
 
 const log = createLogger('route:application-tasks')
 
 const router = express.Router()
 
-const yanaRunLimiter = rateLimit({
+const hamiltonRunLimiter = rateLimit({
   windowMs: 60_000,
   max: 30,
   standardHeaders: true,
@@ -144,7 +144,9 @@ router.post('/', async (req, res) => {
   }
 })
 
-router.post('/:taskId/yana/start', yanaRunLimiter, async (req, res) => {
+// Per-task Hamilton handlers. /yana/* aliases preserved for any in-flight
+// clients written before the rename; both paths execute the same code.
+async function handleHamiltonStart(req, res) {
   const user = requireAuthenticatedUser(req, res)
   if (!user) return
   const { taskId } = req.params
@@ -153,7 +155,7 @@ router.post('/:taskId/yana/start', yanaRunLimiter, async (req, res) => {
     if (!task) return res.status(404).json({ error: 'task_not_found' })
     if (!(await userMayAccessTask(req, user, task))) return res.status(403).json({ error: 'Forbidden' })
 
-    const result = await startYanaForOpportunity(req.db, {
+    const result = await startHamiltonForOpportunity(req.db, {
       profileId: task.profile_id,
       userId: getAuthUserId(user),
       opportunityId: task.opportunity_id,
@@ -163,12 +165,12 @@ router.post('/:taskId/yana/start', yanaRunLimiter, async (req, res) => {
     })
     return res.json(result)
   } catch (err) {
-    log.error('yana start failed', { error: err?.message, taskId })
-    return res.status(err?.status || 500).json({ ok: false, error: err?.message || 'yana_start_failed' })
+    log.error('hamilton start failed', { error: err?.message, taskId })
+    return res.status(err?.status || 500).json({ ok: false, error: err?.message || 'hamilton_start_failed' })
   }
-})
+}
 
-router.post('/:taskId/yana/continue', yanaRunLimiter, async (req, res) => {
+async function handleHamiltonContinue(req, res) {
   const user = requireAuthenticatedUser(req, res)
   if (!user) return
   const { taskId } = req.params
@@ -179,17 +181,23 @@ router.post('/:taskId/yana/continue', yanaRunLimiter, async (req, res) => {
     if (TASK_TERMINAL_STATUSES.includes(task.status)) {
       return res.status(400).json({ error: 'task_in_terminal_state', status: task.status })
     }
-    const result = await continueYanaTask(req.db, {
+    const result = await continueHamiltonTask(req.db, {
       taskId,
       actorUserId: getAuthUserId(user),
       actorRole: user.role || null,
     })
     return res.json(result)
   } catch (err) {
-    log.error('yana continue failed', { error: err?.message, taskId })
-    return res.status(err?.status || 500).json({ ok: false, error: err?.message || 'yana_continue_failed' })
+    log.error('hamilton continue failed', { error: err?.message, taskId })
+    return res.status(err?.status || 500).json({ ok: false, error: err?.message || 'hamilton_continue_failed' })
   }
-})
+}
+
+router.post('/:taskId/hamilton/start',    hamiltonRunLimiter, handleHamiltonStart)
+router.post('/:taskId/hamilton/continue', hamiltonRunLimiter, handleHamiltonContinue)
+// Backwards-compatible aliases.
+router.post('/:taskId/yana/start',        hamiltonRunLimiter, handleHamiltonStart)
+router.post('/:taskId/yana/continue',     hamiltonRunLimiter, handleHamiltonContinue)
 
 router.post('/:taskId/missing-info', async (req, res) => {
   const user = requireAuthenticatedUser(req, res)

@@ -1,4 +1,4 @@
-import React, { Suspense } from 'react';
+﻿import React, { Suspense } from 'react';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Shield, Activity, AlertCircle, Bot, DollarSign, Mail, Wrench, Workflow, Users, Bell, Loader2 } from 'lucide-react';
 import AdminDocumentUpload from '@/components/admin/AdminDocumentUpload';
@@ -6,7 +6,7 @@ import AdminDiagnostics from '@/components/admin/AdminDiagnostics';
 import AdminGeoCrawl from '@/components/admin/AdminGeoCrawl';
 import AdminMaintenance from '@/components/admin/AdminMaintenance';
 import AdminAnyaConsole from '@/components/admin/AdminAnyaConsole';
-import AdminYanaHardStops from '@/components/admin/AdminYanaHardStops.jsx';
+import AdminHamiltonHardStops from '@/components/admin/AdminHamiltonHardStops.jsx';
 import AdminJohnConsole from '@/components/admin/AdminJohnConsole';
 import AdminLarryConsole from '@/components/admin/AdminLarryConsole';
 import AdminRobertConsole from '@/components/admin/AdminRobertConsole';
@@ -23,14 +23,14 @@ const Billing = React.lazy(() => import('@/pages/Billing'));
 const Automation = React.lazy(() => import('@/pages/Automation'));
 import { useAuthStore } from '@/stores/authStore';
 import { Alert, AlertDescription } from '@/components/ui/alert';
-import { isYanaAdminEmail } from '../../shared/adminEmail.js';
+import { isHamiltonAdminEmail } from '../../shared/adminEmail.js';
 
 export default function Admin() {
   const user = useAuthStore((state) => state.user);
   // Use Boolean coercion to align with backend truthy checks - not strict equality
   const isAdmin = Boolean(user?.is_admin) || user?.role === 'admin';
   // Yana operator dashboard is restricted to the single canonical admin email.
-  const isYanaOperator = isYanaAdminEmail(user?.email || user?.primary_email);
+  const isYanaOperator = isHamiltonAdminEmail(user?.email || user?.primary_email);
 
   if (!isAdmin) {
     return (
@@ -90,7 +90,7 @@ export default function Admin() {
               Anya
             </TabsTrigger>
             {isYanaOperator && (
-              <TabsTrigger value="yana_hard_stops">
+              <TabsTrigger value="hamilton_hard_stops">
                 <AlertCircle className="w-4 h-4 mr-2" />
                 Yana hard stops
               </TabsTrigger>
@@ -172,8 +172,8 @@ export default function Admin() {
           </TabsContent>
 
           {isYanaOperator && (
-            <TabsContent value="yana_hard_stops" className="mt-6">
-              <AdminYanaHardStops />
+            <TabsContent value="hamilton_hard_stops" className="mt-6">
+              <AdminHamiltonHardStops />
             </TabsContent>
           )}
 

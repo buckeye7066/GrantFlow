@@ -1,4 +1,4 @@
-/**
+﻿/**
  * /api/profiles/:profileId/student-portals — list/create/update student
  *   portal records for a profile.
  * /api/profiles/:profileId/funding-portal-links — list portal-link
@@ -23,12 +23,12 @@ import {
   PORTAL_TYPES,
   PORTAL_SOURCES,
   CREDENTIAL_STATES,
-} from '../services/yana/studentPortalStore.js'
+} from '../services/hamilton/studentPortalStore.js'
 import {
   linkOpportunityToPortal,
   listFundingPortalLinks,
   classifyFundingPortal,
-} from '../services/yana/studentFundingPortalLinker.js'
+} from '../services/hamilton/studentFundingPortalLinker.js'
 import { createLogger } from '../utils/logger.js'
 
 const log = createLogger('route:student-portals')

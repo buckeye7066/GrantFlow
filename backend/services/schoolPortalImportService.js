@@ -1,10 +1,10 @@
-import { randomUUID, createHash } from 'crypto'
+﻿import { randomUUID, createHash } from 'crypto'
 import { safeParseJSON } from '../utils/safeJson.js'
 import { guardProfileSectionForWrite } from '../utils/guardedProfileSectionWrite.js'
 
 // Manual-import remains as a fallback path. The primary product
-// behavior is now Yana Autopilot driving the live portal — see
-// backend/services/yana/yanaPortalProviders.js for the canonical
+// behavior is now Hamilton Autopilot driving the live portal — see
+// backend/services/hamilton/hamiltonPortalProviders.js for the canonical
 // provider catalogue with automation_supported / session_reuse / etc.
 const SCHOOL_PORTAL_PROVIDERS = Object.freeze([
   {
@@ -23,7 +23,7 @@ const SCHOOL_PORTAL_PROVIDERS = Object.freeze([
     two_factor_likely: false,
     adapter_name: 'genericScholarshipPortalAdapter',
     description:
-      'Manual import is supported as a fallback. Yana Autopilot can drive the public TSAC application form unattended once the user authorizes Autopilot.',
+      'Manual import is supported as a fallback. Hamilton Autopilot can drive the public TSAC application form unattended once the user authorizes Autopilot.',
     limitations: [
       'Yana refuses to type an FSA ID or other federal credential — those use saved session or vault references only.',
     ],
