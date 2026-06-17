@@ -1083,6 +1083,71 @@ CREATE TABLE IF NOT EXISTS profile_documents (
   PRIMARY KEY (profile_id, document_id)
 );
 
+-- School-portal bridge — see docs/school-portal-integration.md.
+-- Lets a registered school's student-information system (Banner / Workday /
+-- PeopleSoft / Slate / Anthology Apply) push student records into GrantFlow
+-- profiles and read back funding sources the matcher says they're eligible for.
+CREATE TABLE IF NOT EXISTS school_partners (
+  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+  slug TEXT NOT NULL UNIQUE,
+  name TEXT NOT NULL,
+  ein TEXT,
+  ipeds_id TEXT,
+  contact_name TEXT,
+  contact_email TEXT,
+  status TEXT NOT NULL DEFAULT 'active'
+    CHECK(status IN ('active','suspended','revoked')),
+  allowed_origins TEXT DEFAULT '[]',
+  metadata TEXT DEFAULT '{}',
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_school_partners_status ON school_partners(status);
+CREATE INDEX IF NOT EXISTS idx_school_partners_slug   ON school_partners(slug);
+
+CREATE TABLE IF NOT EXISTS school_partner_api_keys (
+  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+  school_partner_id TEXT NOT NULL
+    REFERENCES school_partners(id) ON DELETE CASCADE,
+  key_hash TEXT NOT NULL UNIQUE,
+  key_prefix TEXT NOT NULL,
+  label TEXT,
+  created_by TEXT,
+  last_used_at DATETIME,
+  expires_at DATETIME,
+  revoked_at DATETIME,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_school_partner_api_keys_partner
+  ON school_partner_api_keys(school_partner_id);
+CREATE INDEX IF NOT EXISTS idx_school_partner_api_keys_hash
+  ON school_partner_api_keys(key_hash);
+
+CREATE TABLE IF NOT EXISTS school_student_links (
+  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+  school_partner_id TEXT NOT NULL
+    REFERENCES school_partners(id) ON DELETE CASCADE,
+  profile_id TEXT REFERENCES profiles(id) ON DELETE SET NULL,
+  external_student_id TEXT NOT NULL,
+  email TEXT,
+  consent_status TEXT NOT NULL DEFAULT 'granted'
+    CHECK(consent_status IN ('pending','granted','revoked')),
+  consented_at DATETIME,
+  revoked_at DATETIME,
+  last_synced_at DATETIME,
+  last_sync_payload_hash TEXT,
+  metadata TEXT DEFAULT '{}',
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(school_partner_id, external_student_id)
+);
+CREATE INDEX IF NOT EXISTS idx_school_student_links_profile
+  ON school_student_links(profile_id);
+CREATE INDEX IF NOT EXISTS idx_school_student_links_email
+  ON school_student_links(email);
+CREATE INDEX IF NOT EXISTS idx_school_student_links_consent
+  ON school_student_links(consent_status);
+
 -- Robert — funding-discovery agent persistent state. See
 -- docs/ROBERT_FUNDING_DISCOVERY_AGENT.md. Robert delegates scoring,
 -- policy, validation, ingestion, and matching to canonical services;

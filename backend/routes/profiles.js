@@ -677,6 +677,73 @@ function isValidEmail(email) {
 }
 
 // Profile login allowlist (board members, collaborators).
+// ---------------------------------------------------------------------------
+// GET /api/profiles/:id/school-link
+//
+// Returns whether this profile is bridged to a registered school partner
+// and (if so) when it was last synced and what the school is called. Used
+// by ProfileDetail.jsx to render the SchoolPortalLinkPanel and let the
+// student revoke the bridge.
+// ---------------------------------------------------------------------------
+router.get('/:id/school-link', async (req, res) => {
+  try {
+    if (!isAuthenticatedFromCtx(req.ctx)) {
+      return res.status(401).json({ error: 'Authentication required' })
+    }
+    const profileId = String(req.params.id)
+    const profileRow = await req.db.prepare('SELECT user_id FROM profiles WHERE id = ?').get(profileId)
+    const canRead =
+      req.ctx?.isAdmin === true ||
+      (req.ctx?.userId && profileRow?.user_id && String(profileRow.user_id) === String(req.ctx.userId)) ||
+      (req.ctx?.activeProfileId && String(req.ctx.activeProfileId) === profileId)
+    if (!canRead) return res.status(403).json({ error: 'Not authorized' })
+
+    const link = await req.db
+      .prepare(`SELECT l.id, l.school_partner_id, l.external_student_id, l.email,
+                       l.consent_status, l.consented_at, l.revoked_at,
+                       l.last_synced_at, p.slug AS partner_slug, p.name AS partner_name
+                  FROM school_student_links l
+                  JOIN school_partners p ON p.id = l.school_partner_id
+                  WHERE l.profile_id = ?
+                  ORDER BY COALESCE(l.last_synced_at, l.created_at) DESC, l.created_at DESC
+                  LIMIT 1`)
+      .get(profileId)
+    if (!link) return res.json({ ok: true, link: null })
+    return res.json({ ok: true, link })
+  } catch (error) {
+    console.error('[profiles] /school-link failed:', error)
+    res.status(500).json(formatError(error))
+  }
+})
+
+// POST /api/profiles/:id/school-link/revoke — student-side revoke
+router.post('/:id/school-link/revoke', async (req, res) => {
+  try {
+    if (!isAuthenticatedFromCtx(req.ctx)) {
+      return res.status(401).json({ error: 'Authentication required' })
+    }
+    const profileId = String(req.params.id)
+    const profileRow = await req.db.prepare('SELECT user_id FROM profiles WHERE id = ?').get(profileId)
+    const canManage =
+      req.ctx?.isAdmin === true ||
+      (req.ctx?.userId && profileRow?.user_id && String(profileRow.user_id) === String(req.ctx.userId)) ||
+      (req.ctx?.activeProfileId && String(req.ctx.activeProfileId) === profileId)
+    if (!canManage) return res.status(403).json({ error: 'Not authorized' })
+
+    const result = await req.db
+      .prepare(`UPDATE school_student_links
+                  SET consent_status = 'revoked',
+                      revoked_at = ?,
+                      updated_at = ?
+                WHERE profile_id = ? AND consent_status != 'revoked'`)
+      .run(new Date().toISOString(), new Date().toISOString(), profileId)
+    return res.json({ ok: true, revoked: result?.changes ?? 0 })
+  } catch (error) {
+    console.error('[profiles] /school-link/revoke failed:', error)
+    res.status(500).json(formatError(error))
+  }
+})
+
 router.get('/:id/emails', async (req, res) => {
   try {
     if (!isAuthenticatedFromCtx(req.ctx)) return res.status(401).json({ error: 'Authentication required' })

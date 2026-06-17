@@ -2031,6 +2031,13 @@ app.use('/api/robert', lazyRouter('./routes/robert.js'));
 // so Sam's HTTP probes can hit /api/health/* and /readyz cleanly.
 app.use('/api/sam', lazyRouter('./routes/sam.js'))
 
+// School-portal bridge — public partner-auth (Bearer API key) routes that let
+// a registered school's student-information system push roster data into
+// GrantFlow profiles and read back the funding sources the matcher says each
+// student is eligible for. Admin sub-routes (/admin/*) gate on req.user.is_admin
+// inside the router.
+app.use('/api/school-portal', lazyRouter('./routes/schoolPortal.js'))
+
 function resolveBuildSha() {
   return (
     process.env.RAILWAY_GIT_COMMIT_SHA ||
