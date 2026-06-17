@@ -2017,6 +2017,11 @@ app.use('/api/notifications', notificationsRouter);
 // router (which uses :id).
 app.use('/api', lazyRouter('./routes/studentPortals.js'));
 app.use('/api/application-tasks', lazyRouter('./routes/applicationTasks.js'));
+// Yana real-browser-automation endpoints. Mounted at the same prefix so
+// /api/application-tasks/:taskId/yana/browser/* lives next to the
+// non-browser surface above. All routes refuse to act unless
+// YANA_ENABLE_BROWSER_AUTOMATION=true.
+app.use('/api/application-tasks', lazyRouter('./routes/yanaApplications.js'));
 app.use('/api/saved-grants', savedGrantsRouter);
 app.use('/api/foundations', foundationsRouter);
 // John — Outreach Drafting Agent. Draft-only; never sends. Admin-only except /health.

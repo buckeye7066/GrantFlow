@@ -22,6 +22,9 @@ export default function YanaTaskDrawer({ open, onClose, task: initialTask, onTas
   const [values, setValues] = useState({})
   const [loading, setLoading] = useState(false)
   const [busy, setBusy] = useState(false)
+  const [browser, setBrowser] = useState(null)
+  const [browserEnabled, setBrowserEnabled] = useState(false)
+  const [autoSubmitGlobal, setAutoSubmitGlobal] = useState(false)
 
   useEffect(() => {
     setTask(initialTask || null)
@@ -34,11 +37,19 @@ export default function YanaTaskDrawer({ open, onClose, task: initialTask, onTas
     async function load() {
       setLoading(true)
       try {
-        const detail = await yanaApi.getApplicationTask(task.id)
+        const [detail, browserStatus] = await Promise.all([
+          yanaApi.getApplicationTask(task.id),
+          yanaApi.getBrowserStatus(task.id).catch(() => null),
+        ])
         if (!cancelled) {
           setTask(detail?.task || task)
           setEvents(Array.isArray(detail?.events) ? detail.events : [])
           setMissingInfo(Array.isArray(detail?.missing_info) ? detail.missing_info.filter((m) => !m.resolved) : [])
+          if (browserStatus?.ok) {
+            setBrowser(browserStatus.session || null)
+            setBrowserEnabled(Boolean(browserStatus.enabled))
+            setAutoSubmitGlobal(Boolean(browserStatus.auto_submit_enabled_globally))
+          }
         }
       } catch (err) {
         if (!cancelled) {
@@ -51,6 +62,33 @@ export default function YanaTaskDrawer({ open, onClose, task: initialTask, onTas
     load()
     return () => { cancelled = true }
   }, [open, task?.id, toast])
+
+  async function refreshBrowserStatus() {
+    if (!task?.id) return
+    try {
+      const s = await yanaApi.getBrowserStatus(task.id)
+      if (s?.ok) {
+        setBrowser(s.session || null)
+        setBrowserEnabled(Boolean(s.enabled))
+        setAutoSubmitGlobal(Boolean(s.auto_submit_enabled_globally))
+      }
+    } catch { /* ignore */ }
+  }
+
+  async function callBrowser(label, fn) {
+    if (!task?.id) return
+    setBusy(true)
+    try {
+      const r = await fn(task.id)
+      if (r?.session) setBrowser(r.session)
+      showInfoToast(toast, label, r?.session?.status ? `Status: ${yanaApi.browserStatusLabel(r.session.status)}` : 'Done.')
+      await refreshBrowserStatus()
+    } catch (err) {
+      showErrorToast(toast, `${label} failed`, err?.message || 'See logs.')
+    } finally {
+      setBusy(false)
+    }
+  }
 
   async function submitMissingInfo() {
     if (!task?.id) return
@@ -189,6 +227,81 @@ export default function YanaTaskDrawer({ open, onClose, task: initialTask, onTas
               <div className="flex items-center gap-2 text-sm text-emerald-700">
                 <CheckCircle2 className="w-4 h-4" />
                 No missing information. Yana is ready to continue.
+              </div>
+            )}
+
+            {/* Real browser automation panel */}
+            {(browserEnabled || browser) && (
+              <div className="space-y-2 border border-purple-200 rounded p-3 bg-purple-50/40">
+                <div className="flex items-center gap-2">
+                  <Sparkles className="w-4 h-4 text-purple-600" />
+                  <h4 className="text-sm font-semibold">Supervised browser automation</h4>
+                  {browser?.status && (
+                    <Badge variant="outline" className="text-[10px]">
+                      {yanaApi.browserStatusLabel(browser.status)}
+                    </Badge>
+                  )}
+                </div>
+                {!browserEnabled && (
+                  <p className="text-xs text-slate-500">
+                    Set <code>YANA_ENABLE_BROWSER_AUTOMATION=true</code> on the server to enable.
+                  </p>
+                )}
+                {browser?.current_url && (
+                  <p className="text-xs text-slate-700">
+                    Current page: <a href={browser.current_url} target="_blank" rel="noopener noreferrer" className="text-blue-600 underline">{browser.page_title || browser.current_url}</a>
+                  </p>
+                )}
+                {Array.isArray(browser?.missing_fields) && browser.missing_fields.length > 0 && (
+                  <div className="text-xs text-amber-800">
+                    <strong>{browser.missing_fields.filter((m) => m.required).length}</strong> required fields are missing:{' '}
+                    {browser.missing_fields.slice(0, 5).map((m) => m.label).join(', ')}
+                    {browser.missing_fields.length > 5 ? ` +${browser.missing_fields.length - 5} more` : ''}
+                  </div>
+                )}
+                {browser?.confirmation_reference && (
+                  <div className="text-xs text-emerald-800">
+                    Confirmation reference: <code>{browser.confirmation_reference}</code>
+                  </div>
+                )}
+                <div className="flex flex-wrap gap-2 pt-1">
+                  {!browser && browserEnabled && (
+                    <Button size="sm" onClick={() => callBrowser('Open with Yana', yanaApi.startBrowser)} disabled={busy}>
+                      Open with Yana
+                    </Button>
+                  )}
+                  {browser && browser.status !== 'submitted' && browser.status !== 'cancelled' && (
+                    <>
+                      <Button size="sm" variant="outline" onClick={() => callBrowser("I'm logged in", yanaApi.userReadyContinue)} disabled={busy}>
+                        I'm logged in — continue
+                      </Button>
+                      <Button size="sm" variant="outline" onClick={() => callBrowser('Refill', yanaApi.fillBrowser)} disabled={busy}>
+                        Re-fill known fields
+                      </Button>
+                      <Button size="sm" variant="outline" onClick={() => callBrowser('Save draft', yanaApi.saveBrowserDraft)} disabled={busy}>
+                        Save draft
+                      </Button>
+                      {autoSubmitGlobal && task?.auto_submit_enabled && (
+                        <Button size="sm" onClick={() => callBrowser('Approve submit', yanaApi.approveBrowserSubmit)} disabled={busy}>
+                          Approve submit
+                        </Button>
+                      )}
+                      <Button size="sm" variant="ghost" onClick={() => callBrowser('Cancel', (id) => yanaApi.cancelBrowser(id))} disabled={busy}>
+                        Cancel browser session
+                      </Button>
+                    </>
+                  )}
+                  {browser?.status === 'submitted' && (
+                    <Button size="sm" variant="ghost" onClick={() => callBrowser('Reopen', yanaApi.startBrowser)} disabled={busy}>
+                      Open audit
+                    </Button>
+                  )}
+                </div>
+                {!autoSubmitGlobal && (
+                  <p className="text-[10px] text-slate-500">
+                    Auto-submit is globally disabled (server flag <code>YANA_ALLOW_AUTOSUBMIT</code>). Yana will only fill + draft.
+                  </p>
+                )}
               </div>
             )}
 

@@ -97,6 +97,74 @@ export function cancelApplicationTask(taskId, reason = null) {
   })
 }
 
+// ── Real browser automation (gated by YANA_ENABLE_BROWSER_AUTOMATION) ─
+
+const browserBase = (taskId) => `/api/application-tasks/${encodeURIComponent(taskId)}/yana/browser`
+
+export function getBrowserStatus(taskId) {
+  return apiFetch(`${browserBase(taskId)}/status`)
+}
+
+export function startBrowser(taskId, { headless = null } = {}) {
+  return apiFetch(`${browserBase(taskId)}/start`, {
+    method: 'POST',
+    body: JSON.stringify(typeof headless === 'boolean' ? { headless } : {}),
+  })
+}
+
+export function resumeBrowser(taskId) {
+  return apiFetch(`${browserBase(taskId)}/resume`, { method: 'POST', body: '{}' })
+}
+
+export function userReadyContinue(taskId) {
+  return apiFetch(`${browserBase(taskId)}/user-ready`, { method: 'POST', body: '{}' })
+}
+
+export function fillBrowser(taskId) {
+  return apiFetch(`${browserBase(taskId)}/fill`, { method: 'POST', body: '{}' })
+}
+
+export function saveBrowserDraft(taskId) {
+  return apiFetch(`${browserBase(taskId)}/save-draft`, { method: 'POST', body: '{}' })
+}
+
+export function approveBrowserSubmit(taskId) {
+  return apiFetch(`${browserBase(taskId)}/approve-submit`, { method: 'POST', body: '{}' })
+}
+
+export function cancelBrowser(taskId, reason = null) {
+  return apiFetch(`${browserBase(taskId)}/cancel`, {
+    method: 'POST',
+    body: JSON.stringify({ reason }),
+  })
+}
+
+export function getBrowserAudit(taskId) {
+  return apiFetch(`/api/application-tasks/${encodeURIComponent(taskId)}/yana/audit`)
+}
+
+export const BROWSER_SESSION_STATUS_LABELS = Object.freeze({
+  not_started: 'Not started',
+  launching_browser: 'Launching browser…',
+  waiting_for_user_login: 'Please log in',
+  waiting_for_2fa: 'Please complete 2FA',
+  waiting_for_captcha: 'Please solve CAPTCHA',
+  inspecting_form: 'Inspecting form',
+  mapping_fields: 'Mapping fields',
+  filling_fields: 'Filling fields',
+  missing_info_required: 'Missing required info',
+  waiting_for_user_review: 'Review the draft',
+  ready_for_submit: 'Ready to submit',
+  submitted: 'Submitted',
+  blocked: 'Blocked',
+  failed: 'Failed',
+  cancelled: 'Cancelled',
+})
+
+export function browserStatusLabel(status) {
+  return BROWSER_SESSION_STATUS_LABELS[status] || status || 'Unknown'
+}
+
 export const TASK_STATUS_LABELS = Object.freeze({
   queued: 'Queued',
   ready: 'Ready',

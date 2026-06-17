@@ -209,16 +209,207 @@ Every Yana entry point is scoped:
   `tests/unit/yana-application-agent.test.mjs` include the
   "no profile bleed" cases.
 
-## Browser automation
+## Real Browser Automation
 
-Disabled by default. Set `YANA_ENABLE_BROWSER_AUTOMATION=true` to
-opt in. The flag is read inside `yanaApplicationAgent.js`
-(`isBrowserAutomationEnabled()`) and is passed to adapters via
-`ctx.options.browserAutomation`. The current adapters never trigger
-real browser automation — they call `applyEngine.js` for drafting and
-defer all interactive steps to the user. Live Playwright integration
-should be added behind this flag and behind a per-adapter
-allow-list.
+Yana ships with a real, supervised, Playwright-driven browser
+automation layer. It is **disabled by default** and only activates
+when the operator explicitly opts in.
+
+### Environment flags
+
+| Flag | Default | Effect |
+| --- | --- | --- |
+| `YANA_ENABLE_BROWSER_AUTOMATION` | unset | Turns on every browser endpoint and the live Playwright integration. Without it, the routes return 412 and `startBrowserSession` throws `BROWSER_DISABLED`. |
+| `YANA_BROWSER_HEADLESS` | `false` | Whether chromium runs headless. Default is supervised (visible). Tests set this to `true`. |
+| `YANA_BROWSER_TIMEOUT_MS` | `60000` | Playwright `setDefaultTimeout` for the context. |
+| `YANA_BROWSER_STORAGE_DIR` | `<os.tmpdir>/grantflow-yana-storage` | Directory holding per-session storage state (cookies + tokens — never plain passwords). |
+| `YANA_ALLOW_AUTOSUBMIT` | unset | Globally permit Yana to click final submit. Each task **also** needs `application_tasks.auto_submit_enabled = TRUE`. |
+
+### State machine
+
+```
+not_started
+   │ start()
+   ▼
+launching_browser
+   │ navigate to portal_url
+   ▼
+waiting_for_user_login   (also: waiting_for_2fa | waiting_for_captcha)
+   │ user-ready
+   ▼
+inspecting_form ─► mapping_fields ─► filling_fields
+   │                                     │
+   ▼                                     ▼
+missing_info_required             waiting_for_user_review
+   │ supplyMissingInfo() then user-ready
+   │                                     │ approve-submit (with all flags ON)
+   ▼                                     ▼
+waiting_for_user_review           ready_for_submit ─► submitted
+
+Anything that goes wrong → blocked (recoverable) or failed (terminal).
+```
+
+### How supervised login works
+
+1. The operator (or a logged-in user / admin) clicks **Open with Yana**
+   in the `YanaTaskDrawer`. The frontend hits
+   `POST /api/application-tasks/:taskId/yana/browser/start`.
+2. `browserSessionService.launchSession` opens a chromium context for
+   that task, loading any prior `storage_state.json` from
+   `YANA_BROWSER_STORAGE_DIR`.
+3. The first page is detected by the matching browser adapter
+   (`base`, `scholarship`, `financial_aid`, `admissions`, or `manual`).
+   If a login form / 2FA prompt / CAPTCHA / SSO button is visible, the
+   session is moved to one of `waiting_for_user_login`,
+   `waiting_for_2fa`, or `waiting_for_captcha`.
+4. A persistent `yana_login_required` notification is created and a
+   real-time toast surfaces via `YanaToastBridge`.
+5. The user/admin completes the login in the supervised browser
+   window. They click **I'm logged in — continue**, hitting
+   `POST .../user-ready`.
+6. Yana re-detects the gate; if clear, she runs
+   `inspectForm` → `mapFields` → fills every recognised field.
+7. The captured `storageState` is persisted at every step so a
+   restarted Node process can re-attach without forcing a re-login.
+
+### What Yana can fill
+
+Deterministic rules in `portalFieldMapper.js` cover:
+
+- Identity: first/last/middle/preferred/full name
+- Contact: email, phone
+- Address: line 1, line 2, city, state, zip, country
+- Demographics: DOB, gender, citizenship, residency
+- Academic: school, student id, major/program, degree level, GPA, ACT/SAT, expected graduation
+- Financial / household: FAFSA status, household income & size, parent first/last name + email + phone
+- Status: veteran, dependent
+- Narratives: essay / personal statement (only when a textarea matches and the profile has the text)
+
+LLM-assisted mapping is exposed as a hook
+(`extendWithLLMMapping(...)`) but every LLM-supplied value must come
+back with `confidence ≥ 0.6` plus a rationale or it is rejected.
+Yana never invents missing fields.
+
+### What Yana refuses to bypass
+
+Forbidden field patterns are short-circuited inside the mapper:
+
+- `password`
+- `ssn` / social security number
+- credit card / CVV / banking
+- signature / agreement / consent / attestation / terms / privacy
+
+Adapter-level gates also stop the run:
+
+- captcha (`iframe[src*="recaptcha|hcaptcha"]`, "captcha" text)
+- 2FA / verification code
+- consent boxes (manual adapter never inspects)
+- SSO buttons ("Sign in with…")
+
+The orchestrator refuses to submit if any of these conditions hold.
+
+### Submit approval
+
+`POST .../approve-submit` requires **all** of:
+
+1. `YANA_ENABLE_BROWSER_AUTOMATION=true` (server-wide),
+2. `YANA_ALLOW_AUTOSUBMIT=true` (server-wide),
+3. `application_tasks.auto_submit_enabled = TRUE` for the specific task,
+4. zero required fields missing from the live session,
+5. no gate detected on the current page,
+6. a submit button can be located.
+
+When all six pass, Yana takes a pre-submit screenshot
+(`pre_submit_snapshot_path`), clicks submit, takes a post-submit
+screenshot, parses a confirmation reference (looking for "Confirmation:"
+or "Reference #" patterns that contain a hyphen or ≥6 chars), and
+flips the task to `submitted`.
+
+### Audit logs
+
+Every browser-side action flows through `recordBrowserEvent` which
+writes a row to `application_task_events` with:
+
+- `event_type` ∈ `browser_session_created | browser_launched | browser_navigated | login_detected | two_factor_detected | captcha_detected | consent_detected | user_resumed | form_inspected | fields_mapped | fields_filled | missing_info_detected | document_attached | draft_saved | pre_submit_snapshot | submit_clicked | submitted | failed | cancelled`
+- `actor_user_id`, `actor_role`
+- `payload` containing `session_id`, `gate`, `field_count`, `mapped_count`, `missing_count`, screenshot path, etc.
+- `status` matching the new browser session status
+
+Combine that with `yana_browser_sessions` to reconstruct the entire
+run — what was filled, what was missing, what was submitted, who
+authorised it.
+
+### How to add a new browser adapter
+
+1. Create `backend/services/yana/portalAdapters/<your>.js` exporting
+   an object with at minimum `name`, `portalTypes`, `canHandle`,
+   `detectGate`, `detectForm`, `detectSubmitButton`,
+   `detectSaveDraftButton`, `detectConfirmation`. Inherit from
+   `basePortalBrowserAdapter` to get sensible defaults.
+2. Register it in `portalBrowserAdapterRegistry.js` *before* the
+   manual adapter — order matters.
+3. If the adapter introduces a portal type that's not in
+   `student_portals.portal_type` yet, add it to:
+   - `studentPortalStore.js` `PORTAL_TYPES`
+   - SQLite + Postgres migrations
+   - `backend/db/schema.sql`
+   - frontend `PORTAL_TYPE_LABELS` in `src/api/yana.js`
+4. Add a unit test under `tests/unit/` that runs against a local
+   Express mock portal (see
+   `tests/fixtures/mock-portal-server.mjs` for the pattern). Live
+   institutional portals must **never** be hit in tests.
+
+### Routes
+
+```
+GET  /api/application-tasks/:taskId/yana/browser/status
+POST /api/application-tasks/:taskId/yana/browser/start
+POST /api/application-tasks/:taskId/yana/browser/resume
+POST /api/application-tasks/:taskId/yana/browser/user-ready
+POST /api/application-tasks/:taskId/yana/browser/fill
+POST /api/application-tasks/:taskId/yana/browser/save-draft
+POST /api/application-tasks/:taskId/yana/browser/approve-submit
+POST /api/application-tasks/:taskId/yana/browser/cancel
+GET  /api/application-tasks/:taskId/yana/audit
+```
+
+All endpoints are rate-limited and refuse to act unless the calling
+user can access the underlying profile.
+
+### Testing with mock portals
+
+`tests/fixtures/mock-portal-server.mjs` spins up a tiny Express server
+that mimics a real scholarship portal: landing page → login form →
+session cookie → application form → submit confirmation. The unit
+test file `tests/unit/yana-browser-automation.test.mjs` exercises the
+full flow:
+
+```bash
+node --test tests/unit/yana-browser-automation.test.mjs
+```
+
+The test skips automatically when Playwright chromium is not installed.
+Install it once with:
+
+```bash
+npm run smoke:install
+```
+
+Tests are sandboxed: each one uses its own
+`YANA_BROWSER_STORAGE_DIR`, runs chromium in headless mode, and
+cancels its session at the end. **No live institutional portal is
+ever contacted.**
+
+### Why no automatic legacy login?
+
+The spec is strict: Yana does not store raw usernames or passwords
+unless an existing GrantFlow credential vault is present. Today
+GrantFlow has no such vault, so `student_portals.credentials_status`
+is restricted to
+`unknown | needed | stored_reference | user_session_required | unavailable`
+and the user is always asked to log in manually inside the supervised
+browser window. The cookie-based `storage_state.json` keeps that login
+across cycles without ever exposing a password to the application.
 
 ## Testing with mock portals
 

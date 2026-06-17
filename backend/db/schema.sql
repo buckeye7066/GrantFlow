@@ -3189,3 +3189,41 @@ CREATE INDEX IF NOT EXISTS idx_yana_runs_task     ON yana_runs(task_id);
 CREATE INDEX IF NOT EXISTS idx_yana_runs_profile  ON yana_runs(profile_id);
 CREATE INDEX IF NOT EXISTS idx_yana_runs_started  ON yana_runs(started_at DESC);
 CREATE INDEX IF NOT EXISTS idx_yana_runs_status   ON yana_runs(status);
+
+-- ─────────────────────────────────────────────────────────────────────
+-- Yana real-browser-automation layer (migration 086).
+-- See backend/db/migrations/086_yana_browser_sessions.sql for design.
+-- Browser automation is gated behind YANA_ENABLE_BROWSER_AUTOMATION
+-- and never bypasses CAPTCHA / 2FA / SSO / consent.
+-- ─────────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS yana_browser_sessions (
+  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+  task_id TEXT NOT NULL,
+  profile_id TEXT NOT NULL,
+  user_id TEXT,
+  status TEXT NOT NULL DEFAULT 'not_started',
+  portal_url TEXT,
+  login_url TEXT,
+  application_url TEXT,
+  current_url TEXT,
+  page_title TEXT,
+  storage_state_path TEXT,
+  headless INTEGER NOT NULL DEFAULT 0,
+  field_map_json TEXT NOT NULL DEFAULT '{}',
+  filled_fields_json TEXT NOT NULL DEFAULT '{}',
+  missing_fields_json TEXT NOT NULL DEFAULT '[]',
+  required_actions_json TEXT NOT NULL DEFAULT '[]',
+  pre_submit_snapshot_path TEXT,
+  last_screenshot_path TEXT,
+  confirmation_reference TEXT,
+  approved_to_submit INTEGER NOT NULL DEFAULT 0,
+  last_activity_at DATETIME,
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  error TEXT,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_yana_browser_sessions_task    ON yana_browser_sessions(task_id);
+CREATE INDEX IF NOT EXISTS idx_yana_browser_sessions_profile ON yana_browser_sessions(profile_id);
+CREATE INDEX IF NOT EXISTS idx_yana_browser_sessions_user    ON yana_browser_sessions(user_id);
+CREATE INDEX IF NOT EXISTS idx_yana_browser_sessions_status  ON yana_browser_sessions(status);
