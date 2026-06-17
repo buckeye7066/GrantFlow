@@ -2006,6 +2006,12 @@ app.use('/api', lazyRouter('./routes/legacyFunctions.js'));
 app.use('/api/crawl-logs', crawlLogsRouter);
 app.use('/api/colleges', collegesRouter);
 app.use('/api/notifications', notificationsRouter);
+// Yana — student-portal layer + application-task surface. Mounted at /api so
+// the /profiles/:id/student-portals path lives alongside the legacy
+// /profiles/:id/school-portals routes without colliding with the profiles
+// router (which uses :id).
+app.use('/api', lazyRouter('./routes/studentPortals.js'));
+app.use('/api/application-tasks', lazyRouter('./routes/applicationTasks.js'));
 app.use('/api/saved-grants', savedGrantsRouter);
 app.use('/api/foundations', foundationsRouter);
 // John — Outreach Drafting Agent. Draft-only; never sends. Admin-only except /health.

@@ -16,6 +16,8 @@ import HelpTip from '@/components/help/HelpTip';
 import { isRenderableUrl } from '@/lib/matchDisplayThresholds';
 import { formatReasonText } from '@/utils/reasonText';
 import { isHumanReviewNeeded, getStageHelp } from '@/components/pipeline/pipelineStageHelp';
+import YanaTaskBadge from '@/components/yana/YanaTaskBadge';
+import YanaTaskDrawer from '@/components/yana/YanaTaskDrawer';
 
 function getGrantDetailUrl(grant, isDiscoveryResult = false) {
   if (grant.id) {
@@ -48,6 +50,8 @@ function isValidExternalUrl(url) {
 export default function GrantCard({ grant, organization, organizationName, onStatusChange, onStarToggle, onDelete, isDragging, checklistProgress, showSummary = false, isInPipeline = false, onAddToPipeline = null }) {
   const [showMenu, setShowMenu] = useState(false);
   const [showMatchBreakdown, setShowMatchBreakdown] = useState(false);
+  const [yanaTask, setYanaTask] = useState(null);
+  const [yanaDrawerOpen, setYanaDrawerOpen] = useState(false);
   const cardRef = useRef(null);
   const navigate = useNavigate();
 
@@ -502,8 +506,30 @@ export default function GrantCard({ grant, organization, organizationName, onSta
               )}
             </div>
           )}
+
+          {/* Yana — application-completion agent. Visible on pipeline cards
+              (isInPipeline) so the user sees a "Let Yana help" CTA without
+              cluttering discovery results. */}
+          {isInPipeline && grant.id && grant.profile_id && (
+            <div onClick={(e) => { e.preventDefault(); e.stopPropagation(); }}>
+              <YanaTaskBadge
+                profileId={grant.profile_id}
+                grant={grant}
+                onTaskUpdated={(t) => setYanaTask(t)}
+                onOpenDrawer={(t) => { setYanaTask(t); setYanaDrawerOpen(true); }}
+              />
+            </div>
+          )}
         </div>
       </Link>
+      {yanaDrawerOpen && (
+        <YanaTaskDrawer
+          open={yanaDrawerOpen}
+          task={yanaTask}
+          onClose={() => setYanaDrawerOpen(false)}
+          onTaskUpdated={(t) => setYanaTask(t)}
+        />
+      )}
     </div>
   );
 }
