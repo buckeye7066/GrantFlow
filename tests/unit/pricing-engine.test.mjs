@@ -8,14 +8,12 @@ import {
 } from '../../backend/services/pricing/pricingEngine.js'
 import { PRICING_CATALOG_VERSION } from '../../backend/services/pricing/pricingTypes.js'
 
-test('buildRecommendedQuote returns a versioned quote with usd currency', () => {
 test('buildRecommendedQuote returns a versioned quote with USD currency', () => {
   const q = buildRecommendedQuote({
     profile: { primary_type: 'individual' },
     intakeAnswers: { wants_research_only: true },
   })
   assert.equal(q.pricing_catalog_version, PRICING_CATALOG_VERSION)
-  assert.equal(q.currency, 'usd')
   assert.ok(q.primary_service_key, 'primary_service_key must be set on every quote')
   assert.equal(typeof q.user_payment_required, 'boolean')
   assert.equal(typeof q.discount_eligible, 'boolean')

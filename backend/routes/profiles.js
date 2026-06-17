@@ -33,6 +33,7 @@ import { guardProfileSectionPayload } from '../utils/profileSuggestionGuards.js'
 import { normalizeProfileSectionData } from '../services/profileHelpers.js'
 import { resolveProfileType } from '../services/profileTypeRegistry.js'
 import { normalizeHttpUrl } from '../services/avatarCrawler.js'
+import { mergePortalAwardIntoApplications } from '../services/portalCheckService.js'
 import {
   createSchoolPortalConnection,
   disconnectSchoolPortalConnection,
@@ -1963,6 +1964,105 @@ router.get('/:id/sections/:sectionKey', async (req, res) => {
     data: normalizeProfileSectionData(section.section_key, safeParseJSON(section.data, {})),
     updated_at: section.updated_at,
     updated_by: section.updated_by,
+  })
+})
+
+router.post('/:id/portal-awards/merge', async (req, res) => {
+  const { id } = req.params
+  const {
+    application_id,
+    portal_name,
+    portal_url,
+    award_name,
+    award_amount,
+    award_amount_raw,
+    detected_at,
+  } = req.body ?? {}
+
+  const profile = await req.db.prepare(`${profileSelect} WHERE p.id = ?`).get(id)
+  if (!profile) {
+    return res.status(404).json({ error: 'Profile not found' })
+  }
+
+  if (!canAccessProfileRowFromCtx(req.ctx, profile)) {
+    return denyAuth(req, res)
+  }
+
+  const applicationId = String(application_id ?? '').trim()
+  if (!applicationId) {
+    return res.status(400).json({ error: 'application_id required' })
+  }
+
+  const existingSection = await req.db
+    .prepare(
+      `SELECT data FROM profile_sections
+       WHERE profile_id = ? AND section_key = 'university_applications'
+       LIMIT 1`,
+    )
+    .get(id)
+
+  if (!existingSection?.data) {
+    return res.status(404).json({ error: 'University applications section not found' })
+  }
+
+  const currentData = safeParseJSON(existingSection.data, {})
+  const currentApplications = Array.isArray(currentData?.applications) ? currentData.applications : []
+
+  let merged
+  try {
+    merged = mergePortalAwardIntoApplications(currentApplications, {
+      applicationId,
+      portalName: portal_name,
+      portalUrl: portal_url,
+      awardName: award_name,
+      awardAmount: award_amount,
+      awardAmountRaw: award_amount_raw,
+      detectedAt: detected_at,
+    })
+  } catch (error) {
+    return res.status(400).json({ error: error?.message || 'Unable to merge portal award' })
+  }
+
+  let guardedPayload
+  try {
+    guardedPayload = guardProfileSectionPayload(
+      { applications: merged.applications },
+      {
+        profile,
+        sections: { university_applications: currentData, },
+        sectionKey: 'university_applications',
+        existing: currentData,
+      },
+    )
+  } catch (guardError) {
+    profileLogger.warn('[profiles] portal award merge guard failed', {
+      profile_id: id,
+      error: guardError?.message || String(guardError),
+    })
+    return res.status(422).json({
+      ok: false,
+      error: 'profile_section_validation_failed',
+      message: guardError?.message || 'Portal award merge could not be validated.',
+      rejected: [],
+    })
+  }
+
+  logProfileSectionRejections(id, 'university_applications', guardedPayload.rejected)
+  await req.db.prepare(
+    `
+      INSERT INTO profile_sections (profile_id, section_key, data, updated_by)
+      VALUES (?, 'university_applications', ?, ?)
+      ON CONFLICT(profile_id, section_key) DO UPDATE SET
+        data = excluded.data,
+        updated_by = excluded.updated_by,
+        updated_at = CURRENT_TIMESTAMP
+    `,
+  ).run(id, JSON.stringify(guardedPayload.data), 'portal_merge')
+
+  return res.json({
+    ok: true,
+    application_id: applicationId,
+    merged_award: merged.mergedAward,
   })
 })
 

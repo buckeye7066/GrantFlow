@@ -95,9 +95,19 @@ function PortalSection({ title, items }) {
   )
 }
 
-function DetectedAwardCard({ result }) {
+function DetectedAwardCard({
+  result,
+  onMerge,
+  selectedApplicationId,
+  onSelectApplication,
+  applicationOptions,
+}) {
   const [dismissed, setDismissed] = useState(false)
   if (dismissed) return null
+  const hasExplicitApplication = Boolean(result.application_id || result.merged_application_id)
+  const needsSelection = !hasExplicitApplication && applicationOptions.length > 1
+  const targetApplicationId = result.application_id || selectedApplicationId || applicationOptions[0]?.id || ""
+  const mergeDisabled = !result.merged_to_profile && applicationOptions.length === 0
   return (
     <div className="flex items-start gap-2 rounded-md border border-emerald-200 bg-emerald-50 p-3">
       <Award className="mt-0.5 h-4 w-4 flex-shrink-0 text-emerald-600" />
@@ -105,25 +115,74 @@ function DetectedAwardCard({ result }) {
         <p className="truncate text-sm font-medium text-emerald-900">{result.portal_name}</p>
         {result.awards_detected > 0 && (
           <p className="text-xs text-emerald-700">
-            Public portal signal detected{extractAwardAmount(result.results_json)}.
+            {result.award_name || "Award signal detected"}
+            {result.award_amount_raw ? ` — ${result.award_amount_raw}` : extractAwardAmount(result.results_json)}
           </p>
         )}
+        {result.merged_to_profile ? (
+          <p className="text-xs text-emerald-700">
+            Merged into {result.merged_application_name || "your profile"}.
+          </p>
+        ) : null}
+        {!result.merged_to_profile && applicationOptions.length === 0 ? (
+          <p className="text-xs text-amber-700">
+            Add a university application first so this scholarship can be merged into the profile.
+          </p>
+        ) : null}
         <p className="text-xs text-emerald-600">
           Verify the portal inside the pilot import flow below before merging it into the profile.
         </p>
         <p className="text-xs text-emerald-600">
           {result.checked_at ? formatDistanceToNow(new Date(result.checked_at), { addSuffix: true }) : ""}
         </p>
+        {needsSelection ? (
+          <div className="mt-2">
+            <select
+              className="h-8 w-full rounded-md border border-emerald-200 bg-white px-2 text-xs text-slate-700"
+              value={targetApplicationId}
+              onChange={(event) => onSelectApplication(result, event.target.value)}
+            >
+              <option value="">Choose a school</option>
+              {applicationOptions.map((application) => (
+                <option key={application.id} value={application.id}>
+                  {application.name}
+                </option>
+              ))}
+            </select>
+          </div>
+        ) : null}
       </div>
-      <Button
-        variant="ghost"
-        size="sm"
-        className="h-6 w-6 p-0 text-slate-500 hover:bg-slate-100"
-        title="Dismiss"
-        onClick={() => setDismissed(true)}
-      >
-        <X className="h-3.5 w-3.5" />
-      </Button>
+      <div className="flex items-center gap-1 flex-shrink-0">
+        {result.merged_to_profile ? (
+          <Badge variant="secondary" className="bg-emerald-200 text-emerald-900">
+            Merged
+          </Badge>
+        ) : (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-7 px-2 text-emerald-700 hover:bg-emerald-100"
+            title="Merge award"
+            disabled={mergeDisabled || (needsSelection && !targetApplicationId)}
+            onClick={async () => {
+              const merged = await onMerge(result, targetApplicationId)
+              if (merged) setDismissed(true)
+            }}
+          >
+            <CheckCircle2 className="mr-1 h-3.5 w-3.5" />
+            Merge
+          </Button>
+        )}
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-6 w-6 p-0 text-slate-500 hover:bg-slate-100"
+          title="Dismiss"
+          onClick={() => setDismissed(true)}
+        >
+          <X className="h-3.5 w-3.5" />
+        </Button>
+      </div>
     </div>
   )
 }
@@ -139,11 +198,12 @@ function formatAwardMeta(award) {
     .join(" · ")
 }
 
-export default function StudentPortalsCard({ state, profileId }) {
+export default function StudentPortalsCard({ state, profileId, applications: profileApplications = [] }) {
   const st = normalizeState(state)
   const { toast } = useToast()
   const queryClient = useQueryClient()
   const [checking, setChecking] = useState(false)
+  const [selectedApplicationIds, setSelectedApplicationIds] = useState({})
   const [connectOpen, setConnectOpen] = useState(false)
   const [providerId, setProviderId] = useState("tsac")
   const [applicationId, setApplicationId] = useState("")
@@ -175,9 +235,26 @@ export default function StudentPortalsCard({ state, profileId }) {
     staleTime: 30_000,
   })
 
-  const applications = schoolPortalWorkspace?.applications ?? []
+  const applications = schoolPortalWorkspace?.applications ?? (Array.isArray(profileApplications) ? profileApplications : [])
   const connections = schoolPortalWorkspace?.connections ?? []
-  const mergedAwards = schoolPortalWorkspace?.merged_awards ?? []
+  const applicationOptions = useMemo(
+    () =>
+      applications
+        .filter((application) => application?.id && (application?.name || application?.school_name))
+        .map((application) => ({
+          id: application.id,
+          name: application.name || application.school_name,
+        })),
+    [applications],
+  )
+  const mergedAwards =
+    schoolPortalWorkspace?.merged_awards ??
+    applications.flatMap((application) =>
+      (Array.isArray(application?.imported_portal_awards) ? application.imported_portal_awards : []).map((award) => ({
+        ...award,
+        application_name: application?.name || application?.school_name || "University",
+      })),
+    )
   const providers = schoolPortalWorkspace?.providers ?? []
 
   useEffect(() => {
@@ -338,6 +415,45 @@ export default function StudentPortalsCard({ state, profileId }) {
     }
   }
 
+  const handleMergeAward = async (result, targetApplicationId) => {
+    try {
+      assertRealProfileId(profileId, "StudentPortalsCard.handleMergeAward")
+      const applicationId = result.application_id || targetApplicationId || applicationOptions[0]?.id || null
+      if (!applicationId) {
+        toast({
+          title: "Choose a school first",
+          description: "Select the university that should receive this portal scholarship.",
+          variant: "destructive",
+        })
+        return false
+      }
+      await apiFetch(`/api/profiles/${profileId}/portal-awards/merge`, {
+        method: "POST",
+        body: JSON.stringify({
+          application_id: applicationId,
+          portal_name: result.portal_name,
+          portal_url: result.portal_url ?? null,
+          award_name: result.award_name ?? result.portal_name,
+          award_amount: result.award_amount ?? null,
+          award_amount_raw: result.award_amount_raw ?? null,
+          detected_at: result.detected_at ?? result.checked_at ?? new Date().toISOString(),
+        }),
+      })
+      invalidatePortalQueries()
+      toast({
+        title: "Scholarship merged",
+        description: `${result.portal_name} was merged into your university funding profile.`,
+      })
+      return true
+    } catch (err) {
+      toast({
+        title: "Merge failed",
+        description: err?.message || "Unable to merge this award into the profile.",
+        variant: "destructive",
+      })
+      return false
+    }
+  }
   const admissionsAndAid = [
     { label: "FAFSA (Federal Student Aid)", href: "https://studentaid.gov/h/apply-for-aid/fafsa" },
     { label: "FSA ID login", href: "https://studentaid.gov/fsa-id/sign-in/landing" },
@@ -626,11 +742,22 @@ export default function StudentPortalsCard({ state, profileId }) {
               Detected public portal signals
             </p>
             {detectedAwards.map((result) => (
-              <DetectedAwardCard key={result.portal_url ?? result.portal_name} result={result} />
+              <DetectedAwardCard
+                key={result.id ?? result.portal_url ?? result.portal_name}
+                result={result}
+                onMerge={handleMergeAward}
+                selectedApplicationId={selectedApplicationIds[result.id ?? result.portal_url ?? result.portal_name] ?? ""}
+                onSelectApplication={(awardResult, nextApplicationId) =>
+                  setSelectedApplicationIds((current) => ({
+                    ...current,
+                    [awardResult.id ?? awardResult.portal_url ?? awardResult.portal_name]: nextApplicationId,
+                  }))
+                }
+                applicationOptions={applicationOptions}
+              />
             ))}
           </div>
         )}
-
         <div className="space-y-5">
           <PortalSection title="Admissions + financial aid" items={admissionsAndAid} />
           <PortalSection title="Standardized testing" items={standardizedTesting} />

@@ -2514,7 +2514,7 @@ if (process.env.NODE_ENV !== 'test') {
     const loggedCorsOrigins = Array.isArray(corsOptions.origin) ? corsOptions.origin : [corsOptions.origin];
     console.log(`CORS origins: ${loggedCorsOrigins.join(', ')}`);
     const actualPort = server.address()?.port ?? PORT;
-    console.log('[Server] Ready on port', actualPort);
+    console.log(`[Server] Ready on port ${actualPort}`);
 
     // Robert — funding-discovery agent scheduler. Disabled by default;
     // only starts if ROBERT_ENABLED + ROBERT_RUN_ON_SCHEDULE/STARTUP are true.
@@ -2795,6 +2795,11 @@ if (process.env.NODE_ENV !== 'test') {
       globalThis.__grantflow_internal_base_url = `http://127.0.0.1:${actualPort}`
     } catch {
       // best-effort only
+    }
+
+    if (IS_SMOKE_MODE) {
+      console.info('[startup] Smoke mode: skipping background services')
+      return
     }
   
   // Initialize feature flags
