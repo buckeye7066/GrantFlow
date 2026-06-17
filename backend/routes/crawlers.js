@@ -6,6 +6,7 @@ import { dirname, join } from 'path'
 import { dispatchCrawlerJob } from '../services/crawlerDispatcher.js'
 import { createCrawlerJob, validateJobParameters, generateIdempotencyKey } from '../services/crawlerJobCreation.js'
 import { buildProfileContext, computeProfileDigest } from '../services/profileHelpers.js'
+import { resolveProfileForId } from '../utils/profileResolver.js'
 import { validatePagination } from '../utils/validation.js'
 import { createOpenAIClient } from '../utils/openaiClient.js'
 import { formatError } from '../middleware/errorHandler.js'
@@ -1255,11 +1256,39 @@ router.post('/jobs/:id/retry', async (req, res) => {
         ? job.profile_id
         : ctx.userId ?? ctx.email ?? 'system'
 
+    // Self-heal stale profile_id aliases (e.g. designated slug -> live UUID)
+    // before retry so the new job inherits a real id and isn't doomed to
+    // re-fail with `Profile X not found` / non_retryable: true.
+    let retryProfileId = job.profile_id ?? null
+    if (retryProfileId) {
+      try {
+        const resolved = await resolveProfileForId(req.db, retryProfileId)
+        if (resolved && resolved.repaired) {
+          console.warn('[crawlers] Retrying with repaired profile_id', {
+            jobId: job.id,
+            from: resolved.originalId,
+            to: resolved.resolvedId,
+            strategy: resolved.strategy,
+          })
+          retryProfileId = resolved.resolvedId
+          if (parameters && typeof parameters === 'object' && parameters.profile_id) {
+            parameters.profile_id = resolved.resolvedId
+          }
+        }
+      } catch (resolveErr) {
+        console.warn('[crawlers] Profile alias resolution failed during retry; continuing with original id', {
+          jobId: job.id,
+          profileId: retryProfileId,
+          error: resolveErr?.message || String(resolveErr),
+        })
+      }
+    }
+
     // Build fresh profile context snapshot for retry
     let profileContextSnapshot = null
-    if (job.profile_id) {
+    if (retryProfileId) {
       try {
-        const context = await buildProfileContext(req.db, job.profile_id)
+        const context = await buildProfileContext(req.db, retryProfileId)
         profileContextSnapshot = JSON.stringify(context)
       } catch (error) {
         console.warn('[crawlers] Failed to build profile context snapshot for retry:', error?.message)
@@ -1302,7 +1331,7 @@ router.post('/jobs/:id/retry', async (req, res) => {
       .run(
         newJobId,
         job.type,
-        job.profile_id ?? null,
+        retryProfileId,
         job.organization_id ?? null,
         JSON.stringify(parameters),
         profileContextSnapshot,

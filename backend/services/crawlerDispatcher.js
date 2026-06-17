@@ -11,6 +11,7 @@ import { processItemGiftCrawlerJob } from './itemGiftCrawler.js'
 import { processDocumentIngestionJob } from './documentIngestion.js'
 import { processPipelineAutomationJob } from './pipelineAutomation.js'
 import { buildProfileContext } from './profileHelpers.js'
+import { resolveProfileForId } from '../utils/profileResolver.js'
 import { prepareContextForSnapshot, restoreContextFromSnapshot } from './snapshotSerialization.js'
 import { processProfileEnrichmentJob } from './profileEnrichment.js'
 import { processFoundation990Job } from './crawlers/foundation990Crawler.js'
@@ -335,7 +336,60 @@ async function ensureJobSnapshot(db, job) {
 
   // Deterministic reference: use the job's persisted created_at when available.
   const asOf = normalizeIso(job.created_at) || null
-  const context = await buildProfileContext(db, job.profile_id, { asOf })
+
+  // Self-heal stale profile_ids before building the snapshot. A job may carry a
+  // designated-profile slug (e.g. `profile-anastasia-white`) while the live row
+  // is keyed by UUID (or vice-versa) — we must not mark the job non-retryable
+  // when an alias resolution would succeed.
+  let snapshotProfileId = job.profile_id
+  let context
+  try {
+    context = await buildProfileContext(db, snapshotProfileId, { asOf })
+  } catch (lookupErr) {
+    const lookupMsg = String(lookupErr?.message || lookupErr || '')
+    const looksLikeMissingProfile = /Profile\s.+?\snot found/i.test(lookupMsg)
+    if (!looksLikeMissingProfile) throw lookupErr
+
+    const resolved = await resolveProfileForId(db, snapshotProfileId)
+    if (!resolved) throw lookupErr
+
+    snapshotProfileId = resolved.resolvedId
+    if (resolved.repaired) {
+      // Persist the corrected id so future passes (retries, telemetry,
+      // entitlement checks) all see the live profile.
+      try {
+        await db
+          .prepare('UPDATE crawler_jobs SET profile_id = ? WHERE id = ?')
+          .run(snapshotProfileId, job.id)
+        log.info(
+          '[crawlerDispatcher] Repaired stale crawler_jobs.profile_id alias',
+          {
+            jobId: job.id,
+            from: resolved.originalId,
+            to: resolved.resolvedId,
+            strategy: resolved.strategy,
+          },
+        )
+      } catch (persistErr) {
+        // Repair is best-effort; we still proceed with the snapshot using the
+        // resolved id even if the UPDATE failed.
+        console.warn(
+          '[crawlerDispatcher] Failed to persist repaired profile_id, continuing with in-memory id',
+          {
+            jobId: job.id,
+            error: persistErr?.message || String(persistErr),
+          },
+        )
+      }
+      // Reflect the new id on the in-memory job object so downstream
+      // handlers see the live profile.
+      try {
+        job.profile_id = snapshotProfileId
+      } catch { /* read-only proxies are fine to skip */ }
+    }
+    context = await buildProfileContext(db, snapshotProfileId, { asOf })
+  }
+
   const serializable = prepareContextForSnapshot(context)
   const snapshotJson = stableStringify(serializable)
   const snapshotHash = crypto.createHash('sha256').update(snapshotJson).digest('hex')
