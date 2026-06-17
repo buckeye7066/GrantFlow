@@ -97,6 +97,28 @@ function getEffectiveJobStatus(job) {
   return job.status ?? null
 }
 
+/**
+ * True when the user should see a Retry / Resume action for this job. Covers
+ * the canonical retry surface (failed / cancelled) AND partial runs, which
+ * are stored as status=completed but represent an unfinished crawl whose
+ * remaining states should be picked up via the same retry endpoint (the
+ * route already preserves resume:true + geo_run_id in the new queued job).
+ */
+function canRetryOrResume(job) {
+  if (!job) return false
+  const effective = getEffectiveJobStatus(job)
+  return effective === "failed" || effective === "cancelled" || effective === "partial"
+}
+
+/**
+ * Label for the retry / resume button. Partial runs read more naturally as
+ * "Resume" because the retry endpoint will continue from the next un-crawled
+ * state rather than re-running everything.
+ */
+function retryButtonLabel(job) {
+  return getEffectiveJobStatus(job) === "partial" ? "Resume" : "Retry"
+}
+
 const METRIC_TYPE_ORDER = Object.keys(JOB_LABELS)
 
 const JOB_ICON_MAP = {
@@ -1021,16 +1043,23 @@ function JobDetailsDialog({ job, onOpenChange, onRetry, retrying, onCancel, canc
                 {cancelling ? "Cancelling…" : "Cancel job"}
               </Button>
             ) : null}
-            {["failed", "cancelled"].includes(job.status) && typeof onRetry === "function" ? (
+            {canRetryOrResume(job) && typeof onRetry === "function" ? (
               <Button
-                variant="destructive"
+                variant={getEffectiveJobStatus(job) === "partial" ? "default" : "destructive"}
                 size="sm"
                 className="gap-2"
                 onClick={() => onRetry(job.id)}
                 disabled={retrying}
+                title={
+                  getEffectiveJobStatus(job) === "partial"
+                    ? "Continue this partial run from the next un-crawled state"
+                    : undefined
+                }
               >
                 {retrying ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
-                {retrying ? "Retrying…" : "Retry job"}
+                {retrying
+                  ? `${retryButtonLabel(job)}ing…`
+                  : `${retryButtonLabel(job)} job`}
               </Button>
             ) : null}
           </div>
@@ -2290,20 +2319,27 @@ export default function Automation() {
                                   {cancellingJobId === job.id ? "Cancelling…" : "Cancel"}
                                 </Button>
                               )}
-                              {(job.status === "failed" || job.status === "cancelled") && (
+                              {canRetryOrResume(job) && (
                                 <Button
-                                  variant="destructive"
+                                  variant={getEffectiveJobStatus(job) === "partial" ? "default" : "destructive"}
                                   size="sm"
                                   className="text-xs gap-2"
                                   onClick={() => handleRetryJob(job.id)}
                                   disabled={retryingJobId === job.id}
+                                  title={
+                                    getEffectiveJobStatus(job) === "partial"
+                                      ? "Continue this partial run from the next un-crawled state"
+                                      : undefined
+                                  }
                                 >
                                   {retryingJobId === job.id ? (
                                     <Loader2 className="h-3 w-3 animate-spin" />
                                   ) : (
                                     <RefreshCw className="h-3 w-3" />
                                   )}
-                                  {retryingJobId === job.id ? "Retrying…" : "Retry"}
+                                  {retryingJobId === job.id
+                                    ? `${retryButtonLabel(job)}ing…`
+                                    : retryButtonLabel(job)}
                                 </Button>
                               )}
                               <Button variant="outline" size="sm" onClick={() => handleInspectJob(job)}>
