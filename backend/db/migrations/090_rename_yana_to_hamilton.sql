@@ -248,3 +248,22 @@ CREATE TABLE IF NOT EXISTS hamilton_resolved_fields (
 );
 CREATE INDEX IF NOT EXISTS idx_hamilton_resolved_profile ON hamilton_resolved_fields(profile_id);
 CREATE INDEX IF NOT EXISTS idx_hamilton_resolved_key     ON hamilton_resolved_fields(profile_id, field_key);
+
+-- Cleanup pass: on fresh DBs `schema.sql` already created the canonical
+-- hamilton_* tables, so the ALTER TABLE ... RENAME statements above were
+-- swallowed harmlessly — but the empty yana_* sources (created by
+-- migrations 088 / 089) are now orphans. Drop them so the runtime
+-- doesn't carry two copies of the same schema. On dev DBs that DID
+-- complete the rename, these DROPs are no-ops because the yana_* tables
+-- have already been renamed away.
+DROP TABLE IF EXISTS yana_authorizations;
+DROP TABLE IF EXISTS yana_portal_providers;
+DROP TABLE IF EXISTS yana_autopilot_runs;
+DROP TABLE IF EXISTS yana_blockers;
+DROP TABLE IF EXISTS yana_blocker_resolutions;
+DROP TABLE IF EXISTS yana_saved_sessions;
+DROP TABLE IF EXISTS yana_payment_authorizations;
+DROP TABLE IF EXISTS yana_attestation_authorizations;
+DROP TABLE IF EXISTS yana_portal_policies;
+DROP TABLE IF EXISTS yana_resolved_fields;
+DROP TABLE IF EXISTS yana_runs;

@@ -3302,13 +3302,25 @@ CREATE TABLE IF NOT EXISTS hamilton_blockers (
   task_id TEXT NOT NULL,
   profile_id TEXT NOT NULL,
   user_id TEXT,
+  funding_source_id TEXT,
   blocker_type TEXT NOT NULL,           -- one of the 15 categories
   blocker_source TEXT,                  -- preflight | engine | classifier | manual
+  blocker_title TEXT,
+  blocker_message TEXT,
   blocker_text TEXT,                    -- captured page text / field name
+  severity TEXT NOT NULL DEFAULT 'warning',
+  required_action TEXT,
+  resolver_route TEXT,
+  admin_required INTEGER NOT NULL DEFAULT 0,
+  user_required INTEGER NOT NULL DEFAULT 1,
+  deadline_at DATETIME,
   detected_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   resolution_strategy TEXT,             -- which resolver was attempted
   resolved_at DATETIME,
+  resolved_by_user_id TEXT,
   unresolved_reason TEXT,
+  user_notification_id TEXT,
+  admin_notification_ids TEXT,
   requires_user_action INTEGER NOT NULL DEFAULT 0,
   metadata_json TEXT NOT NULL DEFAULT '{}',
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -3318,6 +3330,7 @@ CREATE INDEX IF NOT EXISTS idx_hamilton_blockers_task     ON hamilton_blockers(t
 CREATE INDEX IF NOT EXISTS idx_hamilton_blockers_profile  ON hamilton_blockers(profile_id);
 CREATE INDEX IF NOT EXISTS idx_hamilton_blockers_type     ON hamilton_blockers(blocker_type);
 CREATE INDEX IF NOT EXISTS idx_hamilton_blockers_open     ON hamilton_blockers(task_id, resolved_at);
+CREATE INDEX IF NOT EXISTS idx_hamilton_blockers_admin    ON hamilton_blockers(admin_required, resolved_at);
 
 CREATE TABLE IF NOT EXISTS hamilton_blocker_resolutions (
   id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),

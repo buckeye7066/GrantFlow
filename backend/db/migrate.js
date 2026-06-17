@@ -181,6 +181,11 @@ function isIdempotentAlreadyAppliedError(err) {
   if (msg.includes('already exists')) return true; // table/index already exists
   if (msg.includes('duplicate index')) return true;
 
+  // ALTER TABLE ... RENAME TO <name> when <name> already exists. This is a
+  // harmless idempotent state on fresh DBs where schema.sql already created
+  // the target table — the rename is a no-op and we can move on.
+  if (msg.includes('there is already another table or index with this name')) return true;
+
   // sqlite < 3.35 does not support `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`;
   // the legacy schema-apply path already materialized the column in practice,
   // so treat this specific parser error as an "already applied" signal.
