@@ -131,6 +131,24 @@ export default function YanaTaskDrawer({ open, onClose, task: initialTask, onTas
     }
   }
 
+  async function resolveBlocker() {
+    if (!task?.id) return
+    setBusy(true)
+    try {
+      const res = await client.post(`/api/yana/automation/tasks/${task.id}/resolve-blocker`, {})
+      setTask(res?.task || task)
+      onTaskUpdated?.(res?.task || task)
+      showInfoToast(toast, 'Yana Autopilot resumed', 'Yana is running again. You will be alerted only on a true hard blocker.')
+      const detail = await yanaApi.getApplicationTask(task.id)
+      setEvents(detail?.events || [])
+      setMissingInfo((detail?.missing_info || []).filter((m) => !m.resolved))
+    } catch (err) {
+      showErrorToast(toast, 'Could not resume Yana', err?.message || 'See logs.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
   async function markChannel(channel) {
     if (!task?.id) return
     setBusy(true)
@@ -159,7 +177,7 @@ export default function YanaTaskDrawer({ open, onClose, task: initialTask, onTas
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Sparkles className="w-4 h-4 text-purple-600" />
-            Yana application task
+            Yana Autopilot task
           </DialogTitle>
         </DialogHeader>
 
@@ -195,6 +213,25 @@ export default function YanaTaskDrawer({ open, onClose, task: initialTask, onTas
             {task.last_agent_message && (
               <div className="text-sm bg-purple-50 border border-purple-200 rounded p-3">
                 <span className="font-medium text-purple-900">Yana said:</span> {task.last_agent_message}
+              </div>
+            )}
+
+            {(task.status === 'blocked'
+              || task.status === 'waiting_for_login'
+              || task.status === 'waiting_for_2fa'
+              || task.status === 'waiting_for_captcha'
+              || task.status === 'waiting_for_missing_info') && (
+              <div className="flex items-center justify-between bg-amber-50 border border-amber-200 rounded p-3">
+                <div className="flex items-start gap-2">
+                  <AlertTriangle className="w-4 h-4 text-amber-700 mt-0.5" />
+                  <div className="text-xs text-amber-900">
+                    Yana stopped for a hard blocker. Once you've resolved the issue (login, 2FA, missing
+                    info, etc.), continue Autopilot.
+                  </div>
+                </div>
+                <Button size="sm" className="bg-indigo-600 hover:bg-indigo-700 text-white" onClick={resolveBlocker} disabled={busy}>
+                  Resolve blocker and continue
+                </Button>
               </div>
             )}
 

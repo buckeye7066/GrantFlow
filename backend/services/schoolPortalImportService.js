@@ -2,6 +2,10 @@ import { randomUUID, createHash } from 'crypto'
 import { safeParseJSON } from '../utils/safeJson.js'
 import { guardProfileSectionForWrite } from '../utils/guardedProfileSectionWrite.js'
 
+// Manual-import remains as a fallback path. The primary product
+// behavior is now Yana Autopilot driving the live portal — see
+// backend/services/yana/yanaPortalProviders.js for the canonical
+// provider catalogue with automation_supported / session_reuse / etc.
 const SCHOOL_PORTAL_PROVIDERS = Object.freeze([
   {
     id: 'tsac',
@@ -9,12 +13,19 @@ const SCHOOL_PORTAL_PROVIDERS = Object.freeze([
     short_name: 'TSAC',
     portal_url: 'https://www.tn.gov/collegepays.html',
     integration_mode: 'pilot_manual_import',
-    live_supported: false,
+    integration_modes: ['pilot_manual_import', 'browser_autopilot'],
+    live_supported: true,
+    automation_supported: true,
+    authentication_strategy: 'username_password',
+    session_reuse_supported: true,
+    credential_reference_supported: false,
+    captcha_likely: false,
+    two_factor_likely: false,
+    adapter_name: 'genericScholarshipPortalAdapter',
     description:
-      'Pilot/manual-import support for awards copied from the TSAC student portal. GrantFlow does not perform live TSAC authentication.',
+      'Manual import is supported as a fallback. Yana Autopilot can drive the public TSAC application form unattended once the user authorizes Autopilot.',
     limitations: [
-      'Live TSAC OAuth/API authentication is not implemented in this release.',
-      'Users must paste award data that they exported or copied from the provider portal.',
+      'Yana refuses to type an FSA ID or other federal credential — those use saved session or vault references only.',
     ],
   },
 ])
@@ -179,7 +190,15 @@ function normalizeConnection(connection) {
     portal_url: safeText(connection?.portal_url) || null,
     default_application_id: safeText(connection?.default_application_id) || null,
     integration_mode: safeText(connection?.integration_mode) || 'pilot_manual_import',
+    integration_modes: safeArray(connection?.integration_modes),
     live_supported: Boolean(connection?.live_supported),
+    automation_supported: Boolean(connection?.automation_supported),
+    authentication_strategy: safeText(connection?.authentication_strategy) || null,
+    session_reuse_supported: Boolean(connection?.session_reuse_supported),
+    credential_reference_supported: Boolean(connection?.credential_reference_supported),
+    captcha_likely: Boolean(connection?.captcha_likely),
+    two_factor_likely: Boolean(connection?.two_factor_likely),
+    adapter_name: safeText(connection?.adapter_name) || null,
     connected_at: safeText(connection?.connected_at) || null,
     last_synced_at: safeText(connection?.last_synced_at) || null,
     limitations: safeArray(connection?.limitations),
@@ -268,7 +287,7 @@ function createPipelineStage(award, connection) {
     award.academic_year ? `Academic year: ${award.academic_year}` : '',
     `Portal award ID: ${award.id}`,
     connection.portal_url ? `Source portal: ${connection.portal_url}` : '',
-    'Mode: pilot manual import',
+    `Mode: ${connection.integration_mode || 'pilot_manual_import'}`,
   ]
     .filter(Boolean)
     .join(' · ')
@@ -351,7 +370,15 @@ export async function createSchoolPortalConnection(db, profileId, payload, updat
     portal_url: safeText(payload?.portal_url) || provider.portal_url,
     default_application_id: safeText(payload?.application_id),
     integration_mode: provider.integration_mode,
+    integration_modes: provider.integration_modes || [provider.integration_mode],
     live_supported: provider.live_supported,
+    automation_supported: provider.automation_supported,
+    authentication_strategy: provider.authentication_strategy || null,
+    session_reuse_supported: provider.session_reuse_supported,
+    credential_reference_supported: provider.credential_reference_supported,
+    captcha_likely: provider.captcha_likely,
+    two_factor_likely: provider.two_factor_likely,
+    adapter_name: provider.adapter_name || null,
     connected_at: new Date().toISOString(),
     last_synced_at: new Date().toISOString(),
     limitations: provider.limitations,
@@ -432,7 +459,9 @@ export async function mergeSchoolPortalAwards(db, profileId, payload, updatedBy)
         connection_label: connection.connection_label || connection.provider_name,
         portal_url: award.portal_url || connection.portal_url,
         import_mode: award.import_mode,
-        live_supported: false,
+        integration_mode: connection.integration_mode || award.import_mode,
+        live_supported: connection.live_supported,
+        automation_supported: connection.automation_supported,
       },
     }
 

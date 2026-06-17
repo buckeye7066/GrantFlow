@@ -1,4 +1,4 @@
-# Yana Automation Agent
+# Yana Automation Agent — Autopilot
 
 > **Yana** is GrantFlow's automation agent for grant, scholarship, and
 > institutional-aid applications. She is described in-product as "an
@@ -6,11 +6,31 @@
 > scholarships, institutional aid, foundation funding, government
 > funding, school aid, and private assistance."
 >
-> This document covers the **select-many** automation flow added on
-> branch `feat/yana-automation`. It builds on the per-grant Yana flow
-> documented in [`YANA_APPLICATION_AGENT.md`](./YANA_APPLICATION_AGENT.md)
-> and the supervised browser-automation layer documented in the same
-> file.
+> Yana operates as **Yana Autopilot**: user-authorized **unattended**
+> automation. The user selects funding sources, grants Autopilot
+> authority once on the launch screen, and Yana then runs to
+> completion by herself. Yana stops only for true hard blockers —
+> never for ordinary "review" screens. The earlier supervised /
+> assisted-completion framing is no longer the primary product
+> behavior; it now exists as a fallback that the user enables only
+> when standing authorization is incomplete.
+
+## Autopilot in one paragraph
+
+When the user clicks **Automate with Yana**, the
+`YanaAutopilotAuthorization` modal records the standing authorization
+(`POST /api/yana/automation/authorize`), runs preflight against the
+selected sources (`POST /api/yana/automation/preflight`) so any
+missing field/document/URL is fixed before launch, and then starts
+the unattended run (`POST /api/yana/automation/start-autopilot`).
+The orchestrator hands portal sources to `yanaAutopilotEngine.runAutopilot`
+which drives Playwright through multi-page forms, fills mapped
+fields, generates narratives, uploads authorized documents, ticks
+authorized standing attestations, walks Next/Continue buttons,
+resolves validation errors, and submits when the user pre-authorized
+auto-submit. Yana captures a confirmation reference + screenshot on
+the success page and stops only on a hard blocker
+(login/2FA/CAPTCHA/payment/signature/attestation/validation).
 
 ## What changed
 
@@ -36,7 +56,7 @@ deterministic function that maps a funding source to one of:
 
 | `automation_type` | Yana's behaviour                                                                                                                                  |
 | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `portal`          | Open a supervised Playwright browser on the application URL, pause for login/2FA/CAPTCHA, fill known fields, save draft, stop at review.          |
+| `portal`          | Open Playwright **unattended** on the application URL, fill mapped fields, walk multi-page forms, upload authorized documents, submit if pre-authorized, capture confirmation. Stops only on a hard blocker. |
 | `pdf_docx`        | Generate a complete DOCX + PDF packet from the profile, save it under the profile's Documents, hand it to the user for review and signing.       |
 | `mail`            | Same as `pdf_docx` plus structured **mailing instructions** (funder address, postmark deadline, certified-mail recommendation, envelope subject). |
 | `fax`             | Generate the packet plus structured fax instructions (number, cover-sheet content, deadline).                                                     |
@@ -65,19 +85,30 @@ src/components/yana/YanaTaskDrawer.jsx         ── per-task review + output d
                                                  submission instructions + channel "mark"
                                                  buttons (mailed / emailed / faxed)
 
-POST /api/yana/automation/start                ── bulk entry point (selected_sources[])
+POST /api/yana/automation/authorize            ── Phase A: persist standing authorization
+GET  /api/yana/automation/authorizations       ── list / lookup active authorizations
+POST /api/yana/automation/authorizations/:id/revoke
+POST /api/yana/automation/preflight            ── Phase B: pre-launch checks
+POST /api/yana/automation/start-autopilot      ── Phase C: launch unattended Autopilot
+POST /api/yana/automation/tasks/:taskId/resolve-blocker  ── Phase D: continue after blocker
+GET  /api/yana/automation/providers            ── Phase F: portal provider catalogue
+GET  /api/yana/automation/tasks/:taskId/autopilot-runs   ── per-task autopilot run history
+
+POST /api/yana/automation/start                ── legacy bulk entry (still works, no auth gate)
 GET  /api/yana/automation/tasks                ── caller-scoped automation queue
 GET  /api/yana/automation/tasks/:taskId        ── one task with events + missing info
 POST /api/yana/automation/tasks/:taskId/regenerate
-POST /api/yana/automation/tasks/:taskId/mark-mailed
-POST /api/yana/automation/tasks/:taskId/mark-emailed
-POST /api/yana/automation/tasks/:taskId/mark-faxed
+POST /api/yana/automation/tasks/:taskId/mark-mailed / mark-emailed / mark-faxed
 POST /api/yana/automation/tasks/:taskId/approve
 POST /api/yana/automation/tasks/:taskId/retry
 
 backend/services/yana/yanaAutomationClassifier.js
 backend/services/yana/yanaApplicationPacketGenerator.js
 backend/services/yana/yanaAutomationOrchestrator.js
+backend/services/yana/yanaAuthorizationStore.js   ── Phase E: standing authorization model
+backend/services/yana/yanaPreflight.js            ── Phase B: preflight checks
+backend/services/yana/yanaAutopilotEngine.js      ── Phase C: unattended Playwright engine
+backend/services/yana/yanaPortalProviders.js      ── Phase F: provider catalogue
 backend/routes/yanaAutomation.js
 ```
 
@@ -96,28 +127,74 @@ Postgres) with:
 The runtime ensure-schema (`applicationTaskStore.ensureApplicationTaskSchema`)
 upgrades pre-migration databases in place via `ALTER TABLE ADD COLUMN`.
 
-## "Fully automated once started"
+## Standing authorization (Phase E)
 
-Once a task starts, Yana proceeds without further user action **except**
-for these hard blockers, all of which raise a `blocked` status, persist
-a missing-info record, and emit a notification:
+The user grants Autopilot authority once on the launch screen. The
+authorization is recorded in `yana_authorizations` (migration **088**
+SQLite / **0084** Postgres) with the exact text shown on screen,
+the version (`yana-autopilot-v1`), the option payload, the IP
+address and user agent, and the timestamp. Authorization types:
 
-- missing required profile field or document
-- login / SSO required
+- `complete_forms`
+- `upload_documents`
+- `generate_narratives`
+- `save_drafts`
+- `submit_applications`
+- `use_saved_session`
+- `use_saved_credentials_reference`
+- `use_standing_attestation`
+
+Authorizations are scoped: `profile`, `funding_source`, or `task`.
+Revocation is a status transition (`revoked_at IS NOT NULL`); rows
+are never deleted, so the audit trail is always complete.
+
+## Hard blockers (Phase D)
+
+Once Autopilot starts, Yana proceeds without further user action
+**except** for these hard blockers, all of which raise a `blocked`
+status, persist a missing-info record, and emit a notification:
+
+- missing required profile field or document (preflight blocker)
+- login / SSO required and `use_saved_session` not authorized
 - 2FA / OTP required
 - CAPTCHA detected
 - payment / fee step
-- signature, legal attestation, or consent checkbox
-- automation explicitly forbidden by the funder
-- ambiguous field mapping (low classifier confidence)
+- digital or wet signature
+- legal attestation outside the standing-attestation allow-list
+- portal validation error after fill (low confidence in correction)
+- portal anti-bot block / TOS forbids automation
+- ambiguous field mapping below confidence threshold
 
 Yana never invents missing info, never bypasses a security control,
-never auto-submits unless **all** of the following are true:
+never types an FSA-ID or other federal credential, never fakes a
+signature. She never auto-submits unless **all** of the following
+are true:
 
-- automation_type is `portal` and the user clicked "Approve submit"
-- `YANA_ALLOW_AUTOSUBMIT=true` on the server
-- the form is grounded (every required field has a profile-backed source)
-- pre-submit and post-submit screenshots are captured
+- the user authorized `submit_applications`
+- the user ticked "Allow auto-submit" on the launch screen
+- preflight passed
+- a `Submit` button is visible AND no validation errors are present
+- a confirmation reference (or full-page screenshot of confirmation)
+  is captured after the click
+
+## Provider catalogue (Phase F)
+
+`backend/services/yana/yanaPortalProviders.js` exposes the seeded
+provider catalogue plus any `yana_portal_providers` overrides. Each
+provider record carries the new automation columns:
+
+- `integration_modes` (any of `pilot_manual_import`,
+  `browser_autopilot`, `browser_session_reuse`,
+  `secure_credential_reference`, `api_integration`)
+- `live_supported` / `automation_supported`
+- `authentication_strategy` (e.g. `sso`, `username_password`, `fsa_id`)
+- `session_reuse_supported`, `credential_reference_supported`
+- `captcha_likely`, `two_factor_likely`
+- `tos_notes`, `adapter_name`
+
+The legacy `schoolPortalImportService` still supports
+`pilot_manual_import` as a **fallback** (for sites where Yana cannot
+yet run Autopilot), but the default behavior is now real automation.
 
 ## Persona
 

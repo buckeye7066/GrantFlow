@@ -3208,3 +3208,75 @@ CREATE INDEX IF NOT EXISTS idx_yana_runs_task     ON yana_runs(task_id);
 CREATE INDEX IF NOT EXISTS idx_yana_runs_profile  ON yana_runs(profile_id);
 CREATE INDEX IF NOT EXISTS idx_yana_runs_started  ON yana_runs(started_at DESC);
 CREATE INDEX IF NOT EXISTS idx_yana_runs_status   ON yana_runs(status);
+
+
+-- ── Yana Autopilot authorization model (migration 088) ─────────────
+CREATE TABLE IF NOT EXISTS yana_authorizations (
+  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+  user_id TEXT NOT NULL,
+  profile_id TEXT NOT NULL,
+  scope TEXT NOT NULL CHECK(scope IN ('profile','task','funding_source')),
+  authorization_type TEXT NOT NULL,
+  funding_source_id TEXT,
+  task_id TEXT,
+  authorization_text TEXT NOT NULL,
+  authorization_version TEXT NOT NULL DEFAULT 'yana-autopilot-v1',
+  options_json TEXT NOT NULL DEFAULT '{}',
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  accepted_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  revoked_at DATETIME,
+  revoked_reason TEXT,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_yana_auth_user    ON yana_authorizations(user_id);
+CREATE INDEX IF NOT EXISTS idx_yana_auth_profile ON yana_authorizations(profile_id);
+CREATE INDEX IF NOT EXISTS idx_yana_auth_scope   ON yana_authorizations(scope);
+CREATE INDEX IF NOT EXISTS idx_yana_auth_type    ON yana_authorizations(authorization_type);
+CREATE INDEX IF NOT EXISTS idx_yana_auth_funding ON yana_authorizations(funding_source_id);
+CREATE INDEX IF NOT EXISTS idx_yana_auth_task    ON yana_authorizations(task_id);
+CREATE INDEX IF NOT EXISTS idx_yana_auth_active  ON yana_authorizations(profile_id, authorization_type, revoked_at);
+
+CREATE TABLE IF NOT EXISTS yana_portal_providers (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  short_name TEXT,
+  portal_url TEXT,
+  integration_modes TEXT NOT NULL DEFAULT 'pilot_manual_import',
+  live_supported INTEGER NOT NULL DEFAULT 0,
+  automation_supported INTEGER NOT NULL DEFAULT 0,
+  authentication_strategy TEXT,
+  session_reuse_supported INTEGER NOT NULL DEFAULT 0,
+  credential_reference_supported INTEGER NOT NULL DEFAULT 0,
+  captcha_likely INTEGER NOT NULL DEFAULT 0,
+  two_factor_likely INTEGER NOT NULL DEFAULT 0,
+  tos_notes TEXT,
+  adapter_name TEXT,
+  notes TEXT,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS yana_autopilot_runs (
+  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+  task_id TEXT NOT NULL,
+  profile_id TEXT NOT NULL,
+  user_id TEXT,
+  authorization_id TEXT,
+  status TEXT NOT NULL DEFAULT 'queued' CHECK(status IN (
+    'queued','preflight','running','blocked','completed','submitted','failed','cancelled'
+  )),
+  blocker_kind TEXT,
+  blocker_detail TEXT,
+  preflight_json TEXT NOT NULL DEFAULT '{}',
+  result_json TEXT NOT NULL DEFAULT '{}',
+  confirmation_reference TEXT,
+  confirmation_screenshot_path TEXT,
+  started_at DATETIME,
+  finished_at DATETIME,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_yana_autopilot_task     ON yana_autopilot_runs(task_id);
+CREATE INDEX IF NOT EXISTS idx_yana_autopilot_profile  ON yana_autopilot_runs(profile_id);
+CREATE INDEX IF NOT EXISTS idx_yana_autopilot_status   ON yana_autopilot_runs(status);

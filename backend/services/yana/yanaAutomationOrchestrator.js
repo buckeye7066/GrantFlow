@@ -45,6 +45,15 @@ import {
 import { generateAndSavePacket } from './yanaApplicationPacketGenerator.js'
 import { emitYanaNotificationToProfileAndAdmins } from './yanaNotifications.js'
 import { canonicalStage } from '../../../shared/pipelineStages.js'
+import { runAutopilot } from './yanaAutopilotEngine.js'
+import {
+  preflightSingleSource,
+  readAuthorizations,
+} from './yanaPreflight.js'
+import {
+  createAutopilotRun,
+  updateAutopilotRun,
+} from './yanaAuthorizationStore.js'
 
 const PERSONA_VERSION = 'yana-mba-2026'
 
@@ -420,21 +429,27 @@ async function runActionPacketPathway(db, {
 async function runPortalPathway(db, {
   task, profile, opportunity, grant, classification, userId, options,
 }) {
-  // Kick off the supervised browser layer when enabled. When it isn't,
-  // mark the task ready_to_start and notify the user that they need
-  // to enable browser automation.
-  const { isBrowserAutomationEnabled } = await import('./browserSessionService.js').catch(() => ({}))
-  if (!isBrowserAutomationEnabled || !isBrowserAutomationEnabled()) {
+  // The portal pathway always runs Yana Autopilot when the user
+  // authorized at least `complete_forms`. Without that authorization
+  // we save the portal URL and wait — Autopilot does not run until
+  // the user has explicitly granted authority on the launch screen.
+  const authorizations = options?.authorizations || (await readAuthorizations(db, {
+    profileId: task.profile_id,
+    fundingSourceId: opportunity?.id || grant?.id || null,
+    taskId: task.id,
+  }))
+
+  if (!authorizations.complete_forms) {
     await updateApplicationTask(db, task.id, {
       status: 'ready_to_start',
       lastAgentMessage:
-        'Yana classified this as a portal application. Browser automation is not enabled on this server (set YANA_ENABLE_BROWSER_AUTOMATION=true), so Yana saved the portal URL and is waiting for the operator to start the supervised session.',
+        'Yana classified this as a portal application. Click "Automate with Yana" and authorize Autopilot to run unattended.',
     })
     await appendTaskEvent(db, {
       taskId: task.id,
       eventType: 'note',
       status: 'ready_to_start',
-      message: 'Browser automation disabled — operator must enable to proceed.',
+      message: 'Awaiting Autopilot authorization (complete_forms not yet granted).',
       actorUserId: userId,
       actorRole: 'agent',
     })
@@ -442,47 +457,249 @@ async function runPortalPathway(db, {
       profileId: task.profile_id,
       profileUserId: task.user_id,
       type: 'yana_task_started',
-      title: 'Yana saved a portal application',
-      message: `Yana saved the portal URL for "${opportunity?.title || grant?.title || 'this funding source'}". Enable browser automation to drive the application.`,
+      title: 'Yana is ready to start a portal application',
+      message: `Authorize Yana Autopilot for "${opportunity?.title || grant?.title || 'this funding source'}" to run unattended.`,
       severity: 'info',
       data: { task_id: task.id, portal_url: classification.resolved_url, classification },
     })
-    void profile
     return { task: await reload(db, task.id), classification, portal_url: classification.resolved_url }
   }
 
-  // Browser automation is enabled — defer to the existing automation
-  // service. Importing dynamically so test environments without
-  // chromium can still run the orchestrator unit tests.
-  try {
-    const { startBrowserSession } = await import('./yanaPortalAutomation.js')
-    if (typeof startBrowserSession === 'function' && options?.portal_automation !== false) {
-      await updateApplicationTask(db, task.id, { status: 'launching_portal' })
-      await startBrowserSession(db, {
-        taskId: task.id,
-        profileId: task.profile_id,
-        userId,
-      })
-      return { task: await reload(db, task.id), classification, portal_started: true }
-    }
-  } catch (err) {
+  // Run Autopilot now (unattended).
+  return await runAutopilotPathway(db, {
+    task, profile, opportunity, grant, classification,
+    userId, authorizations, options,
+  })
+}
+
+/**
+ * Yana Autopilot — user-authorized unattended portal completion.
+ *
+ * Order of operations:
+ *   1. Persist the autopilot_run row, status=preflight.
+ *   2. Run preflight against the profile + classification.
+ *   3. If preflight has hard blockers → status=blocked, notify user.
+ *   4. Otherwise launch the engine (yanaAutopilotEngine.runAutopilot)
+ *      and persist the result. Status becomes one of:
+ *        - submitted        confirmation reference captured
+ *        - completed_draft  draft saved (no submit authority)
+ *        - blocked          hard blocker hit (login/2fa/captcha/...)
+ *        - failed           engine error
+ */
+async function runAutopilotPathway(db, {
+  task, profile, opportunity, grant, classification, userId, authorizations, options = {},
+}) {
+  const url = classification.resolved_url
+  const run = await createAutopilotRun(db, {
+    taskId: task.id,
+    profileId: task.profile_id,
+    userId,
+    authorizationId: options?.authorizationId || null,
+    preflight: {},
+    status: 'preflight',
+  })
+  await updateApplicationTask(db, task.id, { status: 'launching_portal' })
+  await appendTaskEvent(db, {
+    taskId: task.id,
+    eventType: 'progress',
+    status: 'launching_portal',
+    step: 'autopilot',
+    message: 'Yana Autopilot starting (user-authorized unattended completion).',
+    actorUserId: userId,
+    actorRole: 'agent',
+    details: { autopilot_run_id: run.id, url },
+  })
+
+  // Preflight (re-runs the lightweight checks; the launch screen
+  // already passed them, but conditions can change between authorization
+  // and launch).
+  const preflight = await preflightSingleSource(db, {
+    profile,
+    profileId: task.profile_id,
+    source: { opportunity_id: opportunity?.id || null, grant_id: grant?.id || null, task_id: task.id },
+    opportunity,
+    grant,
+  })
+  await updateAutopilotRun(db, run.id, { preflight })
+  if (!preflight.ok) {
+    const detail = preflight.blockers.map((b) => b.label).join('; ')
+    await updateAutopilotRun(db, run.id, {
+      status: 'blocked',
+      blockerKind: 'preflight',
+      blockerDetail: detail,
+      finishedAt: new Date().toISOString(),
+    })
     await updateApplicationTask(db, task.id, {
       status: 'blocked',
+      lastAgentMessage: `Yana Autopilot stopped at preflight: ${detail}`,
+    })
+    await setMissingInfo(db, task.id, preflight.blockers.map((b) => ({
+      kind: b.kind === 'missing_field' ? 'field' : (b.kind === 'missing_document' ? 'document' : 'other'),
+      key: b.key, label: b.label, description: b.detail, required: true,
+    })))
+    await emitYanaNotificationToProfileAndAdmins(db, {
+      profileId: task.profile_id,
+      profileUserId: task.user_id,
+      type: 'yana_task_blocked',
+      title: 'Yana Autopilot needs information',
+      message: detail || 'Preflight found something Yana needs before she can run.',
+      severity: 'warning',
+      data: { task_id: task.id, run_id: run.id, preflight },
+    })
+    return { task: await reload(db, task.id), classification, autopilot_run: run.id, preflight }
+  }
+
+  // Launch.
+  await updateAutopilotRun(db, run.id, { status: 'running' })
+  await updateApplicationTask(db, task.id, { status: 'filling_portal' })
+
+  const engineResult = await runAutopilot({
+    url,
+    profile,
+    authorizations,
+    documents: options?.documents || [],
+    storageStatePath: options?.storageStatePath || null,
+    allowAutoSubmit: options?.allow_auto_submit ?? authorizations.submit_applications,
+    headless: options?.headless ?? true,
+  })
+  await updateAutopilotRun(db, run.id, {
+    result: engineResult,
+    confirmationReference: engineResult.confirmation_reference || null,
+    confirmationScreenshotPath: engineResult.confirmation_screenshot_path || null,
+    blockerKind: engineResult.blocker_kind || null,
+    blockerDetail: engineResult.blocker_detail || null,
+    status: engineResult.status === 'submitted'
+      ? 'submitted'
+      : engineResult.status === 'completed_draft'
+        ? 'completed'
+        : engineResult.status === 'blocked'
+          ? 'blocked'
+          : 'failed',
+    finishedAt: new Date().toISOString(),
+  })
+
+  if (engineResult.status === 'submitted') {
+    await updateApplicationTask(db, task.id, {
+      status: 'submitted',
+      submittedAt: new Date().toISOString(),
+      completedAt: new Date().toISOString(),
       lastAgentMessage:
-        `Yana could not launch the supervised browser: ${err?.message || err}. The portal URL is saved — try again once the issue is resolved.`,
+        `Yana Autopilot submitted the application. Confirmation: ${engineResult.confirmation_reference || 'captured (see screenshot)'}.`,
+    })
+    await appendTaskEvent(db, {
+      taskId: task.id,
+      eventType: 'submitted',
+      status: 'submitted',
+      step: 'autopilot',
+      message: `Yana Autopilot submitted: ${engineResult.confirmation_reference || 'reference captured in run record'}`,
+      actorUserId: userId,
+      actorRole: 'agent',
+      details: { autopilot_run_id: run.id, confirmation: engineResult.confirmation_reference, screenshot: engineResult.confirmation_screenshot_path },
+    })
+    await emitYanaNotificationToProfileAndAdmins(db, {
+      profileId: task.profile_id,
+      profileUserId: task.user_id,
+      type: 'yana_submitted',
+      title: 'Yana submitted your application',
+      message: `Yana Autopilot completed and submitted "${opportunity?.title || grant?.title || 'this application'}".`,
+      severity: 'success',
+      data: { task_id: task.id, run_id: run.id, confirmation: engineResult.confirmation_reference },
+    })
+  } else if (engineResult.status === 'completed_draft') {
+    await updateApplicationTask(db, task.id, {
+      status: 'waiting_for_review',
+      lastAgentMessage:
+        'Yana Autopilot finished filling the application and saved a draft. Authorize submit_applications and click "Run to completion" to finish.',
+    })
+    await appendTaskEvent(db, {
+      taskId: task.id,
+      eventType: 'progress',
+      status: 'waiting_for_review',
+      step: 'autopilot',
+      message: 'Autopilot saved a draft (submit_applications not authorized).',
+      actorUserId: userId,
+      actorRole: 'agent',
+      details: { autopilot_run_id: run.id },
+    })
+  } else if (engineResult.status === 'blocked') {
+    await updateApplicationTask(db, task.id, {
+      status: 'blocked',
+      lastAgentMessage: `Yana Autopilot stopped: ${engineResult.blocker_kind} — ${engineResult.blocker_detail}`,
+    })
+    await appendTaskEvent(db, {
+      taskId: task.id,
+      eventType: 'blocked',
+      status: 'blocked',
+      step: 'autopilot',
+      message: engineResult.blocker_detail || 'Hard blocker',
+      actorUserId: userId,
+      actorRole: 'agent',
+      details: { autopilot_run_id: run.id, blocker_kind: engineResult.blocker_kind },
+    })
+    await emitYanaNotificationToProfileAndAdmins(db, {
+      profileId: task.profile_id,
+      profileUserId: task.user_id,
+      type: blockerNotificationType(engineResult.blocker_kind),
+      title: blockerTitle(engineResult.blocker_kind),
+      message: engineResult.blocker_detail || 'Yana Autopilot needs your help to continue.',
+      severity: 'warning',
+      data: { task_id: task.id, run_id: run.id, blocker_kind: engineResult.blocker_kind },
+    })
+  } else {
+    // failed
+    await updateApplicationTask(db, task.id, {
+      status: 'failed',
+      lastAgentMessage: `Yana Autopilot failed: ${engineResult.blocker_detail || engineResult.blocker_kind}`,
+    })
+    await appendTaskEvent(db, {
+      taskId: task.id,
+      eventType: 'failed',
+      status: 'failed',
+      step: 'autopilot',
+      message: engineResult.blocker_detail || 'Engine error',
+      actorUserId: userId,
+      actorRole: 'agent',
+      details: { autopilot_run_id: run.id, blocker_kind: engineResult.blocker_kind },
     })
     await emitYanaNotificationToProfileAndAdmins(db, {
       profileId: task.profile_id,
       profileUserId: task.user_id,
       type: 'yana_failed',
-      title: 'Yana could not launch the supervised browser',
-      message: `Error: ${err?.message || err}`,
+      title: 'Yana Autopilot failed',
+      message: engineResult.blocker_detail || 'See the task audit trail.',
       severity: 'error',
-      data: { task_id: task.id },
+      data: { task_id: task.id, run_id: run.id },
     })
   }
 
-  return { task: await reload(db, task.id), classification }
+  return {
+    task: await reload(db, task.id),
+    classification,
+    autopilot_run: run.id,
+    autopilot_result: engineResult,
+  }
+}
+
+function blockerNotificationType(kind) {
+  switch (kind) {
+    case '2fa':       return 'yana_2fa_required'
+    case 'captcha':   return 'yana_captcha_required'
+    case 'login':     return 'yana_login_required'
+    case 'signature': return 'yana_review_required'
+    default:          return 'yana_task_blocked'
+  }
+}
+function blockerTitle(kind) {
+  switch (kind) {
+    case 'login':       return 'Yana needs a login'
+    case '2fa':         return 'Yana needs 2FA'
+    case 'captcha':     return 'Yana hit a CAPTCHA'
+    case 'payment':     return 'Yana hit a payment step'
+    case 'signature':   return 'Yana hit a signature step'
+    case 'attestation': return 'Yana hit a legal attestation'
+    case 'validation':  return 'Yana hit a validation error'
+    default:            return 'Yana stopped on a blocker'
+  }
 }
 
 /**

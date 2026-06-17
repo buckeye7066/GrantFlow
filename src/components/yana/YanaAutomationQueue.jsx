@@ -50,7 +50,7 @@ export default function YanaAutomationQueue({ profileId }) {
       <CardHeader className="flex flex-row items-center justify-between">
         <CardTitle className="text-sm font-semibold flex items-center gap-2">
           <Sparkles className="w-4 h-4 text-indigo-600" />
-          Yana automation queue
+          Yana Autopilot queue
           <Badge variant="outline" className="ml-1 text-[10px]">{tasks.length}</Badge>
         </CardTitle>
         <Button variant="ghost" size="icon" onClick={load} title="Refresh">
@@ -60,7 +60,7 @@ export default function YanaAutomationQueue({ profileId }) {
       <CardContent>
         {tasks.length === 0 ? (
           <div className="text-xs text-slate-500">
-            Nothing here yet. Select funding sources from the pipeline and click <span className="font-semibold">Automate selected with Yana</span>.
+            Nothing here yet. Select funding sources from the pipeline and click <span className="font-semibold">Automate with Yana</span>.
           </div>
         ) : (
           <ul className="space-y-2">

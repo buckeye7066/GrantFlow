@@ -40,7 +40,29 @@ import {
 } from '../services/yana/yanaAutomationOrchestrator.js'
 import { generateAndSavePacket } from '../services/yana/yanaApplicationPacketGenerator.js'
 import { emitYanaNotificationToProfileAndAdmins } from '../services/yana/yanaNotifications.js'
+import {
+  recordAuthorizations,
+  revokeAuthorization,
+  listActiveAuthorizations,
+  YANA_AUTHORIZATION_TYPES,
+  listAutopilotRuns,
+} from '../services/yana/yanaAuthorizationStore.js'
+import {
+  preflightSelected,
+  readAuthorizations,
+} from '../services/yana/yanaPreflight.js'
+import { listPortalProviders } from '../services/yana/yanaPortalProviders.js'
 import { createLogger } from '../utils/logger.js'
+
+export const YANA_AUTOPILOT_AUTHORIZATION_TEXT = (
+  'Yana will attempt to complete and submit the selected application(s) '
+  + 'automatically using the profile information and authorized documents on file. '
+  + 'Yana may open portals, fill forms, upload documents, save drafts, and submit '
+  + 'applications when allowed. Yana will only stop if required information, '
+  + 'documents, credentials, CAPTCHA, 2FA, payment, or a legally personal '
+  + 'attestation is required and not already authorized.'
+)
+export const YANA_AUTOPILOT_AUTHORIZATION_VERSION = 'yana-autopilot-v1'
 
 const log = createLogger('route:yana-automation')
 
@@ -290,6 +312,195 @@ router.post('/tasks/:taskId/retry', async (req, res) => {
   } catch (err) {
     log.error('retry_failed', { err: err?.message })
     return res.status(500).json({ error: 'retry_failed', detail: err?.message })
+  }
+})
+
+// ── Phase A — Yana Autopilot authorization ─────────────────────────
+
+router.post('/authorize', async (req, res) => {
+  const user = requireAuthenticatedUser(req, res)
+  if (!user) return
+  const profileId = String(req.body?.profile_id || req.body?.profileId || '').trim()
+  const scope = String(req.body?.scope || 'task')
+  const fundingSourceIds = Array.isArray(req.body?.funding_source_ids) ? req.body.funding_source_ids : []
+  const taskIds = Array.isArray(req.body?.task_ids) ? req.body.task_ids : []
+  const authorizationTypesIn = Array.isArray(req.body?.authorization_types) ? req.body.authorization_types : []
+  const options = req.body?.options || {}
+  const authorizationText = String(req.body?.authorization_text || YANA_AUTOPILOT_AUTHORIZATION_TEXT)
+  const authorizationVersion = String(req.body?.authorization_version || YANA_AUTOPILOT_AUTHORIZATION_VERSION)
+
+  if (!profileId) return res.status(400).json({ error: 'profile_id_required' })
+  if (!(await userMayAccessProfile(req, user, profileId))) {
+    return res.status(403).json({ error: 'forbidden' })
+  }
+  const types = authorizationTypesIn.filter((t) => YANA_AUTHORIZATION_TYPES.includes(t))
+  if (types.length === 0) return res.status(400).json({ error: 'authorization_types_required' })
+
+  try {
+    const ids = await recordAuthorizations(req.db, {
+      userId: user.id,
+      profileId,
+      scope,
+      fundingSourceIds,
+      taskIds,
+      authorizationTypes: types,
+      authorizationText,
+      authorizationVersion,
+      options,
+      metadata: {
+        ip: req.ip || req.headers['x-forwarded-for'] || null,
+        user_agent: req.headers['user-agent'] || null,
+        accepted_at: new Date().toISOString(),
+      },
+    })
+    return res.json({ ok: true, authorization_ids: ids, authorization_text: authorizationText, authorization_version: authorizationVersion })
+  } catch (err) {
+    log.error('authorize_failed', { err: err?.message })
+    return res.status(500).json({ error: 'authorize_failed', detail: err?.message })
+  }
+})
+
+router.get('/authorizations', async (req, res) => {
+  const user = requireAuthenticatedUser(req, res)
+  if (!user) return
+  const profileId = String(req.query?.profile_id || req.query?.profileId || '').trim()
+  if (!profileId) return res.status(400).json({ error: 'profile_id_required' })
+  if (!(await userMayAccessProfile(req, user, profileId))) {
+    return res.status(403).json({ error: 'forbidden' })
+  }
+  const fundingSourceId = req.query?.funding_source_id ? String(req.query.funding_source_id) : null
+  const taskId = req.query?.task_id ? String(req.query.task_id) : null
+  try {
+    const list = await listActiveAuthorizations(req.db, { profileId, fundingSourceId, taskId })
+    const flags = await readAuthorizations(req.db, { profileId, fundingSourceId, taskId })
+    return res.json({ ok: true, active: list, flags })
+  } catch (err) {
+    log.error('list_auth_failed', { err: err?.message })
+    return res.status(500).json({ error: 'list_failed' })
+  }
+})
+
+router.post('/authorizations/:id/revoke', async (req, res) => {
+  const user = requireAuthenticatedUser(req, res)
+  if (!user) return
+  try {
+    const row = await revokeAuthorization(req.db, { id: req.params.id, reason: req.body?.reason || null })
+    return res.json({ ok: true, authorization: row })
+  } catch (err) {
+    log.error('revoke_failed', { err: err?.message })
+    return res.status(500).json({ error: 'revoke_failed' })
+  }
+})
+
+// ── Phase B — Preflight (gather missing inputs before launch) ──────
+
+router.post('/preflight', async (req, res) => {
+  const user = requireAuthenticatedUser(req, res)
+  if (!user) return
+  const profileId = String(req.body?.profile_id || req.body?.profileId || '').trim()
+  const selectedSources = Array.isArray(req.body?.selected_sources) ? req.body.selected_sources : []
+  if (!profileId) return res.status(400).json({ error: 'profile_id_required' })
+  if (selectedSources.length === 0) return res.status(400).json({ error: 'selected_sources_required' })
+  if (!(await userMayAccessProfile(req, user, profileId))) return res.status(403).json({ error: 'forbidden' })
+  try {
+    const profile = await loadProfile(req.db, profileId)
+    if (!profile) return res.status(404).json({ error: 'profile_not_found' })
+    const report = await preflightSelected(req.db, { profile, profileId, selectedSources })
+    return res.json({ ok: true, ...report })
+  } catch (err) {
+    log.error('preflight_failed', { err: err?.message })
+    return res.status(500).json({ error: 'preflight_failed', detail: err?.message })
+  }
+})
+
+// ── Phase C — Start Autopilot (preflight → unattended run) ─────────
+
+router.post('/start-autopilot', startLimiter, async (req, res) => {
+  const user = requireAuthenticatedUser(req, res)
+  if (!user) return
+  const profileId = String(req.body?.profile_id || req.body?.profileId || '').trim()
+  const selectedSources = Array.isArray(req.body?.selected_sources) ? req.body.selected_sources : []
+  if (!profileId) return res.status(400).json({ error: 'profile_id_required' })
+  if (selectedSources.length === 0) return res.status(400).json({ error: 'selected_sources_required' })
+  if (!(await userMayAccessProfile(req, user, profileId))) return res.status(403).json({ error: 'forbidden' })
+  try {
+    const result = await automateSelected(req.db, {
+      profileId,
+      userId: user.id,
+      selectedSources,
+      options: {
+        autopilot: true,
+        allow_auto_submit: req.body?.options?.allow_auto_submit !== false,
+        documents: Array.isArray(req.body?.options?.documents) ? req.body.options.documents : [],
+        storageStatePath: req.body?.options?.storage_state_path || null,
+        headless: req.body?.options?.headless !== false,
+      },
+    })
+    return res.json({ ok: true, ...result })
+  } catch (err) {
+    log.error('start_autopilot_failed', { err: err?.message })
+    return res.status(err?.status || 500).json({ error: 'start_failed', detail: err?.message })
+  }
+})
+
+// ── Phase D — Resolve a hard blocker and continue ───────────────────
+
+router.post('/tasks/:taskId/resolve-blocker', async (req, res) => {
+  const ctx = await loadTaskAndAuthorise(req, res, req.params.taskId)
+  if (!ctx) return
+  const note = String(req.body?.note || '').slice(0, 1000)
+  try {
+    await appendTaskEvent(req.db, {
+      taskId: ctx.task.id,
+      eventType: 'note',
+      step: 'resolve_blocker',
+      message: note || 'User indicated the blocker is resolved. Re-running Yana Autopilot.',
+      actorUserId: ctx.user.id,
+      actorRole: ctx.user.role === 'admin' ? 'admin' : 'user',
+    })
+    const profile = await loadProfile(req.db, ctx.task.profile_id)
+    if (!profile) return res.status(404).json({ error: 'profile_not_found' })
+    const result = await automateSingleSource(req.db, {
+      profile,
+      profileId: ctx.task.profile_id,
+      userId: ctx.user.id,
+      source: {
+        opportunity_id: ctx.task.opportunity_id,
+        grant_id: ctx.task.grant_id,
+        task_id: ctx.task.id,
+        current_stage: ctx.task.current_pipeline_stage || ctx.task.selected_from_stage,
+      },
+      options: { autopilot: true, allow_auto_submit: true },
+    })
+    return res.json({ ok: true, ...result })
+  } catch (err) {
+    log.error('resolve_blocker_failed', { err: err?.message })
+    return res.status(500).json({ error: 'resolve_failed', detail: err?.message })
+  }
+})
+
+// ── Phase F — Provider catalogue ───────────────────────────────────
+
+router.get('/providers', async (_req, res) => {
+  try {
+    const providers = await listPortalProviders()
+    return res.json({ ok: true, providers })
+  } catch (err) {
+    log.error('list_providers_failed', { err: err?.message })
+    return res.status(500).json({ error: 'list_failed' })
+  }
+})
+
+// Autopilot-run history per task.
+router.get('/tasks/:taskId/autopilot-runs', async (req, res) => {
+  const ctx = await loadTaskAndAuthorise(req, res, req.params.taskId)
+  if (!ctx) return
+  try {
+    const runs = await listAutopilotRuns(req.db, { taskId: ctx.task.id, limit: 50 })
+    return res.json({ ok: true, runs })
+  } catch (err) {
+    log.error('list_runs_failed', { err: err?.message })
+    return res.status(500).json({ error: 'list_failed' })
   }
 })
 

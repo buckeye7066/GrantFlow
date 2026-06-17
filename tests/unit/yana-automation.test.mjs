@@ -41,6 +41,7 @@ import {
   _resetSchemaCache,
 } from '../../backend/services/yana/applicationTaskStore.js'
 import { _resetNotificationsSchemaCache } from '../../backend/services/yana/yanaNotifications.js'
+import { _resetAuthSchemaCache } from '../../backend/services/yana/yanaAuthorizationStore.js'
 
 function makeMemoryDb() {
   const sqlite = new Database(':memory:')
@@ -118,6 +119,7 @@ function makeMemoryDb() {
 function resetCaches() {
   _resetSchemaCache()
   _resetNotificationsSchemaCache()
+  _resetAuthSchemaCache()
 }
 
 before(() => {
