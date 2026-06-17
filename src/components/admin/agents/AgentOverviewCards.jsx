@@ -1,17 +1,18 @@
 import React from 'react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
-import { Bot, ShieldCheck, Search, Users, Mail } from 'lucide-react'
+import { Bot, ShieldCheck, Search, Users, Mail, Workflow } from 'lucide-react'
 
 const AGENT_ICONS = {
   anya: Bot,
   sam: ShieldCheck,
   robert: Search,
   yana: Users,
+  hamilton: Workflow,
   john: Mail,
 }
 
-const AGENT_ORDER = ['anya', 'sam', 'robert', 'yana', 'john']
+const AGENT_ORDER = ['anya', 'sam', 'robert', 'yana', 'hamilton', 'john']
 
 const HEALTH_STYLES = {
   healthy: 'bg-emerald-100 text-emerald-800 border-emerald-200 dark:bg-emerald-900/40 dark:text-emerald-200',
@@ -77,6 +78,17 @@ function PrimaryMetrics({ agent }) {
           ]}
         />
       )
+    case 'hamilton':
+      return (
+        <MetricRow
+          items={[
+            ['Submissions', m.submissions_completed ?? 0],
+            ['Drafts', m.drafts_completed ?? 0],
+            ['Open blockers', m.open_blockers ?? 0],
+            ['Admin blockers', m.open_blockers_admin ?? 0],
+          ]}
+        />
+      )
     case 'john':
       return (
         <MetricRow
@@ -110,7 +122,7 @@ export default function AgentOverviewCards({ agents }) {
   const ordered = AGENT_ORDER.map((name) => agents?.[name]).filter(Boolean)
 
   return (
-    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-5">
+    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6">
       {ordered.map((agent) => {
         const Icon = AGENT_ICONS[agent.agent_name] || Bot
         const healthCls = HEALTH_STYLES[agent.health] || HEALTH_STYLES.idle

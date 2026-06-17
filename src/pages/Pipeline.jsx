@@ -9,6 +9,9 @@ import { Filter, Loader2, RefreshCcw, Trash2, UserCheck, Printer } from "lucide-
 import { getCrawlerJob, createCrawlerJob } from "@/api/crawlers";
 import KanbanBoard from "@/components/pipeline/KanbanBoard";
 import AdvancedFilters from "@/components/pipeline/AdvancedFilters";
+import { HamiltonSelectionProvider } from "@/components/hamilton/HamiltonSelectionContext";
+import HamiltonSelectionToolbar from "@/components/hamilton/HamiltonSelectionToolbar";
+import HamiltonAutomationQueue from "@/components/hamilton/HamiltonAutomationQueue";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -402,6 +405,7 @@ export default function Pipeline() {
                           selectedProfileId !== "all";
 
   return (
+    <HamiltonSelectionProvider enabled={true}>
     <div className="p-6 md:p-8 space-y-6">
       <div className="max-w-full mx-auto">
         <div className="flex flex-col gap-4 mb-8">
@@ -672,6 +676,15 @@ export default function Pipeline() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+      <HamiltonSelectionToolbar
+        profileId={selectedProfileId && selectedProfileId !== 'all' ? selectedProfileId : null}
+      />
+      {selectedProfileId && selectedProfileId !== 'all' && (
+        <div className="max-w-full mx-auto mt-6">
+          <HamiltonAutomationQueue profileId={selectedProfileId} />
+        </div>
+      )}
     </div>
+    </HamiltonSelectionProvider>
   );
 }

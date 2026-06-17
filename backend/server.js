@@ -2017,6 +2017,12 @@ app.use('/api/notifications', notificationsRouter);
 // router (which uses :id).
 app.use('/api', lazyRouter('./routes/studentPortals.js'));
 app.use('/api/application-tasks', lazyRouter('./routes/applicationTasks.js'));
+// Hamilton Automation Agent — Application Autopilot / Funding Completion.
+// Note: existing Yana = Client Discovery / Lead Funnel and is unchanged.
+app.use('/api/hamilton/automation', lazyRouter('./routes/hamiltonAutomation.js'));
+// Backwards-compatible alias so any in-flight client still works during
+// the rollout. Both paths resolve to the same router.
+app.use('/api/yana/automation', lazyRouter('./routes/hamiltonAutomation.js'));
 app.use('/api/saved-grants', savedGrantsRouter);
 app.use('/api/foundations', foundationsRouter);
 // John — Outreach Drafting Agent. Draft-only; never sends. Admin-only except /health.
@@ -2375,6 +2381,10 @@ app.get('/api/meta/dedupe', async (_req, res) => {
 
 app.use('/api/admin', adminRouter);
 app.use('/api/admin/agent-telemetry', lazyRouter('./routes/agentTelemetry.js'));
+// Admin Agent Control Center — start/stop/pause/resume/emergency-stop the
+// whole agent process. Restricted to the canonical operator
+// (buckeye7066@gmail.com or AGENT_CONTROL_ADMIN_EMAIL env override).
+app.use('/api/admin/agent-control', lazyRouter('./routes/adminAgentControl.js'));
 app.use('/api', requestTimeout(PIPELINE_TIMEOUT), discoveryRouter);
 app.use('/api/crawler-v2', lazyRouter('./routes/crawlerV2.js'));
 app.use('/api/nf-programs', lazyRouter('./routes/nfPrograms.js'));

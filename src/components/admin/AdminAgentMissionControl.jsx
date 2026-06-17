@@ -5,12 +5,14 @@ import AgentTelemetryFilters from '@/components/admin/agents/AgentTelemetryFilte
 import AgentOverviewCards from '@/components/admin/agents/AgentOverviewCards'
 import AgentHealthGrid from '@/components/admin/agents/AgentHealthGrid'
 import YanaLeadFunnel from '@/components/admin/agents/YanaLeadFunnel'
+import HamiltonAutopilotPanel from '@/components/admin/agents/HamiltonAutopilotPanel'
 import RobertOpportunityFunnel from '@/components/admin/agents/RobertOpportunityFunnel'
 import RobertOpportunityMap from '@/components/admin/agents/RobertOpportunityMap'
 import SamErrorPanel from '@/components/admin/agents/SamErrorPanel'
 import AnyaInteractionPanel from '@/components/admin/agents/AnyaInteractionPanel'
 import JohnDraftMetrics from '@/components/admin/agents/JohnDraftMetrics'
 import AgentActivityTimeline from '@/components/admin/agents/AgentActivityTimeline'
+import AgentControlCenter from '@/components/admin/agentControl/AgentControlCenter.jsx'
 
 const DEFAULT_REFRESH_MS = 45_000
 
@@ -37,6 +39,7 @@ export default function AdminAgentMissionControl({ autoRefreshMs = DEFAULT_REFRE
   const [summary, setSummary] = useState(null)
   const [timeline, setTimeline] = useState(null)
   const [yana, setYana] = useState(null)
+  const [hamilton, setHamilton] = useState(null)
   const [robert, setRobert] = useState(null)
   const [robertMap, setRobertMap] = useState(null)
   const [sam, setSam] = useState(null)
@@ -62,10 +65,11 @@ export default function AdminAgentMissionControl({ autoRefreshMs = DEFAULT_REFRE
     try {
       const params = buildParams()
       const safe = (p) => p.catch((err) => ({ ok: false, error: err?.message || String(err) }))
-      const [s, t, y, r, rm, sa, an, jo, he] = await Promise.all([
+      const [s, t, y, h2, r, rm, sa, an, jo, he] = await Promise.all([
         safe(agentTelemetryApi.summary(params)),
         safe(agentTelemetryApi.timeline(params)),
         safe(agentTelemetryApi.yana(params)),
+        safe(agentTelemetryApi.hamilton(params)),
         safe(agentTelemetryApi.robert(params)),
         safe(agentTelemetryApi.robertMap(params)),
         safe(agentTelemetryApi.sam(params)),
@@ -76,6 +80,7 @@ export default function AdminAgentMissionControl({ autoRefreshMs = DEFAULT_REFRE
       setSummary(s)
       setTimeline(t)
       setYana(y)
+      setHamilton(h2)
       setRobert(r)
       setRobertMap(rm)
       setSam(sa)
@@ -114,10 +119,18 @@ export default function AdminAgentMissionControl({ autoRefreshMs = DEFAULT_REFRE
             Agent Mission Control
           </h2>
           <p className="text-sm text-slate-500 dark:text-slate-400">
-            Track what Anya, Sam, Robert, Yana, and John are doing across GrantFlow.
+            Track what Anya, Sam, Robert, Yana (lead discovery), Hamilton
+            (application autopilot), and John are doing across GrantFlow.
           </p>
         </div>
       </div>
+
+      {/* Agent Control Center: start/stop/pause/resume/emergency-stop the
+          whole agent process. Restricted to the canonical operator
+          (buckeye7066@gmail.com); non-admin sees a friendly notice and
+          telemetry below still renders. Mounted ABOVE telemetry so the
+          stop controls are always reachable in one click. */}
+      <AgentControlCenter />
 
       <AgentTelemetryFilters
         range={range}
@@ -149,6 +162,7 @@ export default function AdminAgentMissionControl({ autoRefreshMs = DEFAULT_REFRE
 
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
         <YanaLeadFunnel data={yana} />
+        <HamiltonAutopilotPanel data={hamilton} />
         <JohnDraftMetrics data={john} />
         <RobertOpportunityFunnel data={robert} />
         <RobertOpportunityMap data={robertMap} />

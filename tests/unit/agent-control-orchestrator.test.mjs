@@ -1,0 +1,493 @@
+/**
+ * Admin Agent Control Center orchestrator tests.
+ *
+ * Covers:
+ *   - admin gating (only buckeye7066@gmail.com can start)
+ *   - run creation: full_cycle / selected_agents / *_only
+ *   - ordered step plan (sam preflight → robert → yana → john → hamilton → sam postflight)
+ *   - graceful_stop / pause / resume / cancel / emergency_stop semantics
+ *   - single-flight lock for full_cycle
+ *   - lifecycle notifications routed to canonical admin
+ *   - stop_on_critical_sam_finding short-circuits the cycle
+ */
+
+import { describe, it, beforeEach } from 'node:test'
+import assert from 'node:assert/strict'
+import Database from 'better-sqlite3'
+
+import {
+  startRun,
+  pauseRun,
+  resumeRun,
+  stopRun,
+  emergencyStopRun,
+  cancelRun,
+  executeRun,
+  getControlCenterStatus,
+  getCanonicalAdminEmail,
+  isControlCenterAdmin,
+} from '../../backend/services/agentControl/agentControlOrchestrator.js'
+import {
+  _resetSchemaCache,
+  ensureSchema,
+  getRun,
+  listSteps,
+  listEvents,
+  recordStopRequest,
+  latestUnfulfilledStop,
+} from '../../backend/services/agentControl/agentControlStore.js'
+import { setAdapter, resetRegistry } from '../../backend/services/agentControl/agentAdapters/agentAdapterRegistry.js'
+import { BaseAgentAdapter } from '../../backend/services/agentControl/agentAdapters/baseAgentAdapter.js'
+import { _resetAdminAccountCache } from '../../backend/services/hamilton/hamiltonAdminAccount.js'
+import { _resetNotificationsSchemaCache } from '../../backend/services/agentControl/agentControlNotifications.js'
+
+const ADMIN_EMAIL = 'buckeye7066@gmail.com'
+const NON_ADMIN = 'someone@example.com'
+
+class MockAdapter extends BaseAgentAdapter {
+  constructor(name, behaviour = {}) {
+    super({ name })
+    this.behaviour = behaviour
+    this.startCallCount = 0
+    this.stopCallCount = 0
+    this.lastSignal = null
+  }
+
+  async getStatus() { return { agent_name: this.name, health: 'idle', queue_depth: 0 } }
+
+  async start({ controlRunId, signal, options } = {}) {
+    this.startCallCount += 1
+    this.lastSignal = signal
+    if (typeof this.behaviour.start === 'function') {
+      return this.behaviour.start({ controlRunId, signal, options })
+    }
+    return this.behaviour.startResult || {
+      ok: true,
+      status: 'completed',
+      summary: { agent: this.name, run_id: controlRunId },
+    }
+  }
+
+  async stop() { this.stopCallCount += 1; return { ok: true, partial: false } }
+}
+
+function makeDb() {
+  const sqlite = new Database(':memory:')
+  sqlite.exec(`
+    CREATE TABLE IF NOT EXISTS profiles (id TEXT PRIMARY KEY, user_id TEXT, name TEXT);
+    CREATE TABLE IF NOT EXISTS users (
+      id TEXT PRIMARY KEY,
+      display_name TEXT,
+      primary_email TEXT,
+      is_admin INTEGER NOT NULL DEFAULT 0,
+      role TEXT
+    );
+  `)
+  sqlite.prepare('INSERT INTO users (id, primary_email, is_admin, role) VALUES (?, ?, 1, ?)').run('u_admin', ADMIN_EMAIL, 'admin')
+
+  return {
+    dialect: 'sqlite',
+    prepare(sql) {
+      const stmt = sqlite.prepare(sql)
+      return {
+        get: async (...p) => stmt.get(...p),
+        all: async (...p) => stmt.all(...p),
+        run: async (...p) => { const r = stmt.run(...p); return { changes: r.changes, lastInsertRowid: r.lastInsertRowid } },
+      }
+    },
+    exec(sql) { sqlite.exec(sql) },
+    raw: sqlite,
+  }
+}
+
+function adminUser() {
+  return { userId: 'u_admin', email: ADMIN_EMAIL, role: 'admin', is_admin: 1 }
+}
+
+function nonAdminUser() {
+  return { userId: 'u_other', email: NON_ADMIN, role: 'user' }
+}
+
+async function readNotifications(db, type = null) {
+  try {
+    const rows = type
+      ? await db.prepare('SELECT * FROM notifications WHERE type = ? ORDER BY created_at').all(type)
+      : await db.prepare('SELECT * FROM notifications ORDER BY created_at').all()
+    return rows.map((r) => ({ ...r, data: r.data ? JSON.parse(r.data) : {} }))
+  } catch { return [] }
+}
+
+function installMockAdapters(behaviours = {}) {
+  const mocks = {
+    sam: new MockAdapter('sam', behaviours.sam || {}),
+    robert: new MockAdapter('robert', behaviours.robert || {}),
+    yana: new MockAdapter('yana', behaviours.yana || {}),
+    john: new MockAdapter('john', behaviours.john || {}),
+    hamilton: new MockAdapter('hamilton', behaviours.hamilton || {}),
+  }
+  for (const [name, adapter] of Object.entries(mocks)) setAdapter(name, adapter)
+  return mocks
+}
+
+beforeEach(() => {
+  resetRegistry()
+  _resetSchemaCache()
+  _resetAdminAccountCache()
+  _resetNotificationsSchemaCache()
+})
+
+describe('Agent Control Center — admin gating', () => {
+  it(`canonical admin email matches ${ADMIN_EMAIL}`, () => {
+    assert.equal(getCanonicalAdminEmail(), ADMIN_EMAIL)
+  })
+
+  it('isControlCenterAdmin only returns true for the canonical email', () => {
+    assert.equal(isControlCenterAdmin({ email: ADMIN_EMAIL }), true)
+    assert.equal(isControlCenterAdmin({ primary_email: ADMIN_EMAIL }), true)
+    assert.equal(isControlCenterAdmin({ email: 'BUCKEYE7066@gmail.com' }), true)
+    assert.equal(isControlCenterAdmin({ email: NON_ADMIN, role: 'admin', is_admin: 1 }), false)
+    assert.equal(isControlCenterAdmin(null), false)
+  })
+
+  it('non-admin cannot start a run', async () => {
+    const db = makeDb()
+    await ensureSchema(db)
+    installMockAdapters()
+    await assert.rejects(
+      () => startRun(db, { runType: 'full_cycle', user: nonAdminUser() }),
+      /admin/i,
+    )
+  })
+
+  it('canonical admin can start a full_cycle', async () => {
+    const db = makeDb()
+    installMockAdapters()
+    const { run } = await startRun(db, { runType: 'full_cycle', user: adminUser() })
+    assert.equal(run.run_type, 'full_cycle')
+    assert.deepEqual(run.requested_agents, ['sam', 'robert', 'yana', 'john', 'hamilton'])
+  })
+})
+
+describe('Agent Control Center — full_cycle ordering', () => {
+  it('builds steps in order: sam preflight → robert → yana → john → hamilton → sam postflight', async () => {
+    const db = makeDb()
+    installMockAdapters()
+    const { run } = await startRun(db, { runType: 'full_cycle', user: adminUser() })
+    // Wait for execution to complete.
+    await new Promise((r) => setTimeout(r, 50))
+    const steps = await listSteps(db, run.id)
+    const names = steps.map((s) => `${s.agent_name}:${s.step_name}`)
+    assert.deepEqual(names, [
+      'sam:sam_preflight',
+      'robert:robert_main',
+      'yana:yana_main',
+      'john:john_main',
+      'hamilton:hamilton_main',
+      'sam:sam_postflight',
+    ])
+  })
+
+  it('full_cycle completes when every adapter returns ok', async () => {
+    const db = makeDb()
+    installMockAdapters()
+    const { run } = await startRun(db, { runType: 'full_cycle', user: adminUser() })
+    await new Promise((r) => setTimeout(r, 80))
+    const finalRun = await getRun(db, run.id)
+    assert.equal(finalRun.status, 'completed')
+    const steps = await listSteps(db, run.id)
+    for (const s of steps) {
+      assert.equal(s.status, 'completed', `step ${s.step_name} should be completed`)
+    }
+  })
+
+  it('selected_agents respects the order even when the user passes a different order', async () => {
+    const db = makeDb()
+    installMockAdapters()
+    const { run } = await startRun(db, {
+      runType: 'selected_agents',
+      agents: ['hamilton', 'robert', 'yana'],
+      user: adminUser(),
+    })
+    await new Promise((r) => setTimeout(r, 50))
+    const steps = await listSteps(db, run.id)
+    const names = steps.map((s) => s.agent_name)
+    assert.deepEqual(names, ['robert', 'yana', 'hamilton'])
+  })
+
+  it('stop_on_critical_sam_finding short-circuits the rest of the cycle', async () => {
+    const db = makeDb()
+    installMockAdapters({
+      sam: { startResult: { ok: true, status: 'blocked', summary: { critical_findings: 2 }, blocked_reason: 'critical findings' } },
+    })
+    const { run } = await startRun(db, {
+      runType: 'full_cycle',
+      user: adminUser(),
+      options: { stop_on_critical_sam_finding: true },
+    })
+    await new Promise((r) => setTimeout(r, 80))
+    const steps = await listSteps(db, run.id)
+    const samStep = steps.find((s) => s.step_name === 'sam_preflight')
+    assert.equal(samStep.status, 'blocked')
+    const robertStep = steps.find((s) => s.step_name === 'robert_main')
+    // Robert should never have started
+    assert.notEqual(robertStep.status, 'completed')
+  })
+
+  it('failed agent does NOT stop cycle by default; stops when stop_on_agent_failure=true', async () => {
+    {
+      const db = makeDb()
+      installMockAdapters({
+        robert: { startResult: { ok: false, status: 'failed', error: 'boom', summary: { error: 'boom' } } },
+      })
+      const { run } = await startRun(db, { runType: 'full_cycle', user: adminUser() })
+      await new Promise((r) => setTimeout(r, 80))
+      const steps = await listSteps(db, run.id)
+      const after = steps.find((s) => s.step_name === 'yana_main')
+      assert.equal(after.status, 'completed', 'yana should still run when stop_on_agent_failure=false (default)')
+    }
+    resetRegistry()
+    {
+      const db = makeDb()
+      installMockAdapters({
+        robert: { startResult: { ok: false, status: 'failed', error: 'boom', summary: { error: 'boom' } } },
+      })
+      const { run } = await startRun(db, {
+        runType: 'full_cycle',
+        user: adminUser(),
+        options: { stop_on_agent_failure: true },
+      })
+      await new Promise((r) => setTimeout(r, 80))
+      const finalRun = await getRun(db, run.id)
+      assert.equal(finalRun.status, 'failed')
+    }
+  })
+})
+
+describe('Agent Control Center — stop / pause / resume / emergency-stop', () => {
+  it('graceful stop prevents the next queued step from starting', async () => {
+    const db = makeDb()
+    // Make robert hang: it never returns until shouldStop fires.
+    let robertEntered = null
+    const slowRobert = {
+      start: async ({ signal }) => {
+        robertEntered = Date.now()
+        // Loop, polling shouldStop every 5ms
+        while (!signal.shouldStop()) {
+          await new Promise((r) => setTimeout(r, 5))
+          if (Date.now() - robertEntered > 250) break
+        }
+        return { ok: true, status: signal.shouldStop() ? 'stopped' : 'completed', summary: {} }
+      },
+    }
+    installMockAdapters({ robert: slowRobert })
+
+    const { run } = await startRun(db, { runType: 'full_cycle', user: adminUser() })
+    // Wait for robert to start.
+    await new Promise((r) => setTimeout(r, 50))
+    await stopRun(db, run.id, { user: adminUser(), reason: 'admin asked' })
+    await new Promise((r) => setTimeout(r, 200))
+    const finalRun = await getRun(db, run.id)
+    assert.match(finalRun.status, /stopped|stop|cancelled/)
+    const steps = await listSteps(db, run.id)
+    const yana = steps.find((s) => s.step_name === 'yana_main')
+    assert.notEqual(yana.status, 'completed', 'Yana should not have started after stop')
+  })
+
+  it('pause sets run status to paused and resume continues from next queued step', async () => {
+    const db = makeDb()
+    let count = { sam: 0, robert: 0, yana: 0, john: 0, hamilton: 0 }
+    installMockAdapters({
+      robert: {
+        start: async ({ signal }) => {
+          count.robert += 1
+          // Wait briefly so the pause request can be written before we exit.
+          for (let i = 0; i < 5; i += 1) {
+            await new Promise((r) => setTimeout(r, 5))
+            if (signal.shouldPause()) break
+          }
+          return { ok: true, status: 'completed', summary: {} }
+        },
+      },
+    })
+
+    const { run } = await startRun(db, { runType: 'full_cycle', user: adminUser() })
+    await new Promise((r) => setTimeout(r, 30))
+    await pauseRun(db, run.id, { user: adminUser() })
+    await new Promise((r) => setTimeout(r, 100))
+    let after = await getRun(db, run.id)
+    assert.match(after.status, /paus(ing|ed)/)
+
+    await resumeRun(db, run.id, { user: adminUser() })
+    await new Promise((r) => setTimeout(r, 80))
+    after = await getRun(db, run.id)
+    assert.equal(after.status, 'completed')
+  })
+
+  it('emergency stop marks queued steps stopped immediately', async () => {
+    const db = makeDb()
+    installMockAdapters({
+      sam: {
+        start: async ({ signal }) => {
+          // Hold until stop arrives.
+          for (let i = 0; i < 50; i += 1) {
+            await new Promise((r) => setTimeout(r, 5))
+            if (signal.shouldStop()) return { ok: true, status: 'stopped', summary: {} }
+          }
+          return { ok: true, status: 'completed', summary: {} }
+        },
+      },
+    })
+    const { run } = await startRun(db, { runType: 'full_cycle', user: adminUser() })
+    await new Promise((r) => setTimeout(r, 30))
+    await emergencyStopRun(db, run.id, { user: adminUser(), reason: 'panic' })
+    await new Promise((r) => setTimeout(r, 200))
+    const steps = await listSteps(db, run.id)
+    const queued = steps.find((s) => s.agent_name === 'hamilton')
+    assert.match(queued.status, /stopped|skipped/)
+    const events = await listEvents(db, run.id, { limit: 100, eventType: 'control.run.emergency_stop' })
+    assert.equal(events.length >= 1, true)
+  })
+
+  it('cancel marks queued steps skipped and finalises the run as cancelled', async () => {
+    const db = makeDb()
+    installMockAdapters({
+      sam: {
+        start: async ({ signal }) => {
+          for (let i = 0; i < 30; i += 1) {
+            await new Promise((r) => setTimeout(r, 5))
+            if (signal.shouldStop()) return { ok: true, status: 'stopped', summary: {} }
+          }
+          return { ok: true, status: 'completed', summary: {} }
+        },
+      },
+    })
+    const { run } = await startRun(db, { runType: 'full_cycle', user: adminUser() })
+    await new Promise((r) => setTimeout(r, 25))
+    await cancelRun(db, run.id, { user: adminUser(), reason: 'admin cancelled' })
+    await new Promise((r) => setTimeout(r, 200))
+    const finalRun = await getRun(db, run.id)
+    assert.equal(finalRun.status, 'cancelled')
+    const steps = await listSteps(db, run.id)
+    for (const s of steps) {
+      assert.notEqual(s.status, 'queued', 'no step should remain queued after cancel')
+    }
+  })
+})
+
+describe('Agent Control Center — single-flight + locks', () => {
+  it('rejects a second full_cycle while one is active', async () => {
+    const db = makeDb()
+    installMockAdapters({
+      sam: {
+        start: async ({ signal }) => {
+          // hold open
+          for (let i = 0; i < 30; i += 1) {
+            await new Promise((r) => setTimeout(r, 10))
+            if (signal.shouldStop()) return { ok: true, status: 'stopped', summary: {} }
+          }
+          return { ok: true, status: 'completed', summary: {} }
+        },
+      },
+    })
+    await startRun(db, { runType: 'full_cycle', user: adminUser() })
+    await new Promise((r) => setTimeout(r, 30))
+    await assert.rejects(
+      () => startRun(db, { runType: 'full_cycle', user: adminUser() }),
+      /already in progress|Lock/i,
+    )
+  })
+})
+
+describe('Agent Control Center — notifications + status', () => {
+  it('emits agent_control_started + agent_control_completed for the canonical admin', async () => {
+    const db = makeDb()
+    installMockAdapters()
+    const { run } = await startRun(db, { runType: 'full_cycle', user: adminUser() })
+    await new Promise((r) => setTimeout(r, 100))
+    const finalRun = await getRun(db, run.id)
+    assert.equal(finalRun.status, 'completed')
+    const started = await readNotifications(db, 'agent_control_started')
+    const done = await readNotifications(db, 'agent_control_completed')
+    assert.equal(started.length, 1)
+    assert.equal(started[0].user_id, 'u_admin')
+    assert.equal(done.length, 1)
+  })
+
+  it('getControlCenterStatus includes the active run + every adapter snapshot', async () => {
+    const db = makeDb()
+    installMockAdapters({
+      sam: {
+        start: async ({ signal }) => {
+          for (let i = 0; i < 10; i += 1) {
+            await new Promise((r) => setTimeout(r, 10))
+            if (signal.shouldStop()) return { ok: true, status: 'stopped', summary: {} }
+          }
+          return { ok: true, status: 'completed', summary: {} }
+        },
+      },
+    })
+    const { run } = await startRun(db, { runType: 'full_cycle', user: adminUser() })
+    await new Promise((r) => setTimeout(r, 25))
+    const status = await getControlCenterStatus(db)
+    assert.equal(status.admin_email, ADMIN_EMAIL)
+    assert.ok(status.active_run)
+    assert.equal(status.active_run.id, run.id)
+    assert.deepEqual(Object.keys(status.agents).sort(), ['hamilton', 'john', 'robert', 'sam', 'yana'])
+    // Cleanup so the in-flight sam adapter loop doesn't run forever.
+    await emergencyStopRun(db, run.id, { user: adminUser() })
+    await new Promise((r) => setTimeout(r, 150))
+  })
+})
+
+describe('Agent Control Center — store helpers', () => {
+  it('latestUnfulfilledStop respects priority: emergency > cancel > graceful_stop > pause', async () => {
+    const db = makeDb()
+    await ensureSchema(db)
+    const runId = 'run_test'
+    await recordStopRequest(db, { controlRunId: runId, requestType: 'pause' })
+    let r = await latestUnfulfilledStop(db, runId)
+    assert.equal(r?.request_type, 'pause')
+    await recordStopRequest(db, { controlRunId: runId, requestType: 'graceful_stop' })
+    r = await latestUnfulfilledStop(db, runId)
+    assert.equal(r?.request_type, 'graceful_stop')
+    await recordStopRequest(db, { controlRunId: runId, requestType: 'cancel' })
+    r = await latestUnfulfilledStop(db, runId)
+    assert.equal(r?.request_type, 'cancel')
+    await recordStopRequest(db, { controlRunId: runId, requestType: 'emergency_stop' })
+    r = await latestUnfulfilledStop(db, runId)
+    assert.equal(r?.request_type, 'emergency_stop')
+  })
+})
+
+describe('Agent Control Center — adapter signal contract', () => {
+  it('signal.heartbeat updates step row + signal.recordEvent writes events', async () => {
+    const db = makeDb()
+    installMockAdapters({
+      sam: {
+        start: async ({ signal }) => {
+          await signal.heartbeat({ phase: 'pre' })
+          await signal.recordEvent({ eventType: 'agent.sam.test', message: 'hello' })
+          return { ok: true, status: 'completed', summary: {} }
+        },
+      },
+    })
+    const { run } = await startRun(db, { runType: 'sam_only', user: adminUser() })
+    await new Promise((r) => setTimeout(r, 80))
+    const events = await listEvents(db, run.id, { limit: 50 })
+    assert.equal(events.some((e) => e.event_type === 'agent.sam.test'), true)
+    const steps = await listSteps(db, run.id)
+    assert.ok(steps.some((s) => s.heartbeat_at))
+  })
+})
+
+describe('Agent Control Center — executeRun is idempotent on re-entry', () => {
+  it('re-invoking executeRun on a finished run does not re-run steps', async () => {
+    const db = makeDb()
+    const mocks = installMockAdapters()
+    const { run } = await startRun(db, { runType: 'sam_only', user: adminUser() })
+    await new Promise((r) => setTimeout(r, 50))
+    const before = mocks.sam.startCallCount
+    await executeRun({ db, runId: run.id })
+    assert.equal(mocks.sam.startCallCount, before, 'sam adapter should not start twice')
+  })
+})

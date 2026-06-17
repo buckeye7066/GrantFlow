@@ -19,11 +19,21 @@ system — activity, productivity, outcomes, errors, recent events.
 | **Anya** | User Assistance | interactions, sessions, tool invocations, unique users |
 | **Sam** | Production Readiness | checks run, errors found, errors resolved, failed gates |
 | **Robert** | Funding Discovery | sources checked, opportunities found / verified / ingested, recommendations, accepted |
-| **Yana** | Client Discovery | websites checked, leads found / qualified / sent to John, conversion rate |
+| **Yana** | Client Discovery (NOT autopilot) | websites checked, leads found / qualified / sent to John, conversion rate |
+| **Hamilton** | Application Autopilot / Funding Completion | application tasks queued / processed, blockers, drafts, submissions |
 | **John** | Outreach Drafts | drafts created (24h), daily capacity remaining, blocked, alias review, suppression hits |
+
+> **Yana ≠ Hamilton.** Yana is the lead-discovery agent (existing); Hamilton
+> is the new application-completion autopilot. Mission Control surfaces them
+> as separate cards / panels and the Agent Control Center starts/stops them
+> independently.
 
 ## Dashboard sections
 
+0. **Agent Control Center** *(top of the page, admin-only)* —
+   start / stop / pause / resume / emergency-stop the whole agent process.
+   Restricted to the canonical operator (`buckeye7066@gmail.com`). See
+   [`AGENT_CONTROL_CENTER.md`](./AGENT_CONTROL_CENTER.md).
 1. **Agent overview cards** — one card per agent showing health, install
    state, success rate, error count, and the agent's primary metrics.
 2. **Agent system health** — health badge per agent + which expected

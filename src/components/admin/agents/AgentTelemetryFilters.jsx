@@ -14,7 +14,8 @@ const AGENT_OPTIONS = [
   { value: 'anya', label: 'Anya' },
   { value: 'sam', label: 'Sam' },
   { value: 'robert', label: 'Robert' },
-  { value: 'yana', label: 'Yana' },
+  { value: 'yana', label: 'Yana (lead discovery)' },
+  { value: 'hamilton', label: 'Hamilton (application autopilot)' },
   { value: 'john', label: 'John' },
 ]
 

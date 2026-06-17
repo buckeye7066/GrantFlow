@@ -3,25 +3,28 @@
  *
  * Pure-data module — no I/O, no env reads. Safe to import from anywhere.
  *
- * Five canonical agent names map onto five concerns:
- *   - anya   user/admin assistant + workflow helper
- *   - sam    production readiness / code health
- *   - robert funding discovery + recommendation
- *   - yana   client discovery / lead intelligence
- *   - john   outreach drafting (Outlook drafts)
+ * Six canonical agent names map onto six concerns:
+ *   - anya     user/admin assistant + workflow helper
+ *   - sam      production readiness / code health
+ *   - robert   funding discovery + recommendation
+ *   - yana     client discovery / lead intelligence  (NOT autopilot)
+ *   - hamilton application autopilot / funding completion (separate
+ *              agent — do NOT confuse with Yana lead discovery)
+ *   - john     outreach drafting (Outlook drafts)
  *
  * The dashboard never assumes per-agent tables exist. The unified
  * `agent_activity_events` table is always queried first, agent-specific
  * tables are read only when a `tableExists` check returns true.
  */
 
-export const AGENT_NAMES = Object.freeze(['anya', 'sam', 'robert', 'yana', 'john'])
+export const AGENT_NAMES = Object.freeze(['anya', 'sam', 'robert', 'yana', 'hamilton', 'john'])
 
 export const AGENT_LABELS = Object.freeze({
   anya: 'Anya',
   sam: 'Sam',
   robert: 'Robert',
   yana: 'Yana',
+  hamilton: 'Hamilton',
   john: 'John',
 })
 
@@ -30,6 +33,7 @@ export const AGENT_TAGLINES = Object.freeze({
   sam: 'Production Readiness',
   robert: 'Funding Discovery',
   yana: 'Client Discovery',
+  hamilton: 'Application Autopilot / Funding Completion',
   john: 'Outreach Drafts',
 })
 

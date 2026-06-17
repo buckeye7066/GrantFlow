@@ -2,7 +2,7 @@
 
 **Last updated:** 2026-01-15
 
-This is the production-readiness â€œreality reportâ€ for GrantFlow: whatâ€™s deployed, whatâ€™s broken, and what we verify before shipping changes.
+This is the production-readiness “reality report� for GrantFlow: what’s deployed, what’s broken, and what we verify before shipping changes.
 
 ## Current Deployment Topology (observed)
 
@@ -16,7 +16,7 @@ See **[`ERROR_LEDGER.md`](ERROR_LEDGER.md)**.
 ### Key finding (2026-01-15)
 
 - `app.axiombiolabs.org/grantflow/*` works (login + API health).
-- `www.axiombiolabs.org/grantflow/login` returns a static â€œFile not found (404 error)â€ page.
+- `www.axiombiolabs.org/grantflow/login` returns a static “File not found (404 error)� page.
 - `www.axiombiolabs.org/grantflow/api/health` also 404s.
 
 This strongly suggests a **domain routing / rewrites** problem for `www.axiombiolabs.org` (not an SPA/router code bug).
@@ -29,7 +29,7 @@ Use the built-in baseline gate:
 npm run doctor
 ```
 
-This runs: env inventory â†’ lint â†’ typecheck â†’ unit â†’ build â†’ start backend â†’ Playwright smoke.
+This runs: env inventory → lint → typecheck → unit → build → start backend → Playwright smoke.
 
 ## Environment Variables (single source of truth)
 
@@ -58,7 +58,7 @@ This runs: env inventory â†’ lint â†’ typecheck â†’ unit â†’
 
 ## What still needs log access to complete Phase 0.4
 
-To fully complete the live â€œError Ledgerâ€ phase we need:
+To fully complete the live “Error Ledger� phase we need:
 
 - Vercel logs (prod) for `www.axiombiolabs.org` requests and rewrite behavior
 - Railway logs for `/api/*` around the same times

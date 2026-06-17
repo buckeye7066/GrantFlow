@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+﻿import React, { useState, useRef, useEffect } from 'react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -16,8 +16,9 @@ import HelpTip from '@/components/help/HelpTip';
 import { isRenderableUrl } from '@/lib/matchDisplayThresholds';
 import { formatReasonText } from '@/utils/reasonText';
 import { isHumanReviewNeeded, getStageHelp } from '@/components/pipeline/pipelineStageHelp';
-import YanaTaskBadge from '@/components/yana/YanaTaskBadge';
-import YanaTaskDrawer from '@/components/yana/YanaTaskDrawer';
+import HamiltonTaskBadge from '@/components/hamilton/HamiltonTaskBadge';
+import HamiltonTaskDrawer from '@/components/hamilton/HamiltonTaskDrawer';
+import { useHamiltonSelection } from '@/components/hamilton/HamiltonSelectionContext';
 
 function getGrantDetailUrl(grant, isDiscoveryResult = false) {
   if (grant.id) {
@@ -47,13 +48,23 @@ function isValidExternalUrl(url) {
   return isRenderableUrl(url);
 }
 
-export default function GrantCard({ grant, organization, organizationName, onStatusChange, onStarToggle, onDelete, isDragging, checklistProgress, showSummary = false, isInPipeline = false, onAddToPipeline = null }) {
+export default function GrantCard({ grant, organization, organizationName, onStatusChange, onStarToggle, onDelete, isDragging, checklistProgress, showSummary = false, isInPipeline = false, onAddToPipeline = null, profileId = null }) {
   const [showMenu, setShowMenu] = useState(false);
   const [showMatchBreakdown, setShowMatchBreakdown] = useState(false);
-  const [yanaTask, setYanaTask] = useState(null);
-  const [yanaDrawerOpen, setYanaDrawerOpen] = useState(false);
+  const [hamiltonTask, setHamiltonTask] = useState(null);
+  const [hamiltonDrawerOpen, setHamiltonDrawerOpen] = useState(false);
   const cardRef = useRef(null);
   const navigate = useNavigate();
+  const hamiltonSelection = useHamiltonSelection();
+  const hamiltonSelectionSource = {
+    grant_id: grant?.id || null,
+    opportunity_id: grant?.opportunity_id || grant?.funding_opportunity_id || null,
+    current_stage: grant?.status || null,
+    title: grant?.title || null,
+  };
+  const hamiltonIsSelected = hamiltonSelection?.enabled
+    ? hamiltonSelection.isSelected(hamiltonSelectionSource)
+    : false;
 
   useEffect(() => {
     const handleClickOutside = (event) => {
@@ -122,6 +133,22 @@ export default function GrantCard({ grant, organization, organizationName, onSta
     >
       <div className="flex items-center justify-between p-3 border-b border-slate-100">
         <div className="flex items-center gap-2 flex-wrap">
+          {hamiltonSelection?.enabled && (
+            <label
+              className="inline-flex items-center cursor-pointer select-none mr-1"
+              onClick={(e) => e.stopPropagation()}
+              onMouseDown={(e) => e.stopPropagation()}
+              title={hamiltonIsSelected ? 'Selected for Hamilton' : 'Select for Hamilton automation'}
+            >
+              <input
+                type="checkbox"
+                className="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                checked={hamiltonIsSelected}
+                onClick={(e) => e.stopPropagation()}
+                onChange={(e) => { e.stopPropagation(); hamiltonSelection.toggle(hamiltonSelectionSource); }}
+              />
+            </label>
+          )}
           {grant.starred && <Star className="w-4 h-4 text-yellow-400 fill-yellow-400" />}
           {isExpired && <Badge variant="destructive" className="text-xs">EXPIRED</Badge>}
           {hasSummary && showSummary && (
@@ -231,7 +258,7 @@ export default function GrantCard({ grant, organization, organizationName, onSta
             </Badge>
           )}
         </div>
-        {(onStarToggle || onDelete) && (
+        {(onStarToggle || onDelete || hamiltonSelection?.enabled) && (
           <DropdownMenu open={showMenu} onOpenChange={setShowMenu}>
             <DropdownMenuTrigger asChild>
               <Button variant="ghost" size="icon" className="h-6 w-6">
@@ -243,6 +270,20 @@ export default function GrantCard({ grant, organization, organizationName, onSta
                 <DropdownMenuItem onSelect={() => { onStarToggle(); setShowMenu(false); }}>
                   <Star className="w-4 h-4 mr-2" />
                   {grant.starred ? 'Unstar' : 'Star'}
+                </DropdownMenuItem>
+              )}
+              {hamiltonSelection?.enabled && (
+                <DropdownMenuItem
+                  onSelect={() => { hamiltonSelection.toggle(hamiltonSelectionSource); setShowMenu(false); }}
+                >
+                  <Sparkles className="w-4 h-4 mr-2" />
+                  {hamiltonIsSelected ? 'Remove from Hamilton selection' : 'Automate with Hamilton'}
+                </DropdownMenuItem>
+              )}
+              {hamiltonTask && (
+                <DropdownMenuItem onSelect={() => { setHamiltonDrawerOpen(true); setShowMenu(false); }}>
+                  <Sparkles className="w-4 h-4 mr-2" />
+                  Resume / view Hamilton task
                 </DropdownMenuItem>
               )}
               <DropdownMenuItem onSelect={() => { navigate(createPageUrl("GrantDetail", { id: grant.id })); setShowMenu(false); }}>
@@ -508,26 +549,26 @@ export default function GrantCard({ grant, organization, organizationName, onSta
           )}
 
           {/* Yana — application-completion agent. Visible on pipeline cards
-              (isInPipeline) so the user sees a "Let Yana help" CTA without
+              (isInPipeline) so the user sees a "Let Hamilton help" CTA without
               cluttering discovery results. */}
           {isInPipeline && grant.id && grant.profile_id && (
             <div onClick={(e) => { e.preventDefault(); e.stopPropagation(); }}>
-              <YanaTaskBadge
+              <HamiltonTaskBadge
                 profileId={grant.profile_id}
                 grant={grant}
-                onTaskUpdated={(t) => setYanaTask(t)}
-                onOpenDrawer={(t) => { setYanaTask(t); setYanaDrawerOpen(true); }}
+                onTaskUpdated={(t) => setHamiltonTask(t)}
+                onOpenDrawer={(t) => { setHamiltonTask(t); setHamiltonDrawerOpen(true); }}
               />
             </div>
           )}
         </div>
       </Link>
-      {yanaDrawerOpen && (
-        <YanaTaskDrawer
-          open={yanaDrawerOpen}
-          task={yanaTask}
-          onClose={() => setYanaDrawerOpen(false)}
-          onTaskUpdated={(t) => setYanaTask(t)}
+      {hamiltonDrawerOpen && (
+        <HamiltonTaskDrawer
+          open={hamiltonDrawerOpen}
+          task={hamiltonTask}
+          onClose={() => setHamiltonDrawerOpen(false)}
+          onTaskUpdated={(t) => setHamiltonTask(t)}
         />
       )}
     </div>

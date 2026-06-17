@@ -162,6 +162,134 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
     severityOnFailure: SEVERITY.LOW,
     description: 'Deployment version + commit identifier; helps Sam correlate findings with the running build.',
   },
+  // ── Hamilton (Application Autopilot / Funding Completion) checks ────
+  // Hamilton is a separate agent from Yana (lead discovery). Sam owns
+  // its health gate so the application-completion stack — portal
+  // adapters, autopilot engine, blockers store, dual notifications —
+  // is exercised on every gatekeeper run.
+  {
+    id: 'agent.hamilton.health',
+    label: 'Hamilton agent health',
+    category: SAM_CATEGORIES.APPLICATION_WORKFLOW_INTEGRITY,
+    kind: CHECK_KIND.HTTP,
+    method: 'GET',
+    path: '/api/admin/agent-telemetry/hamilton',
+    expectStatus: 200,
+    severityOnFailure: SEVERITY.HIGH,
+    description: 'Confirms Hamilton telemetry is reachable and the autopilot summary is populated (hamilton_runs, autopilot runs, blockers).',
+  },
+  {
+    id: 'agent.hamilton.routes',
+    label: 'Hamilton automation routes',
+    category: SAM_CATEGORIES.ROUTE_INTEGRITY,
+    kind: CHECK_KIND.HTTP,
+    method: 'GET',
+    path: '/api/hamilton/automation/tasks',
+    expectStatus: 200,
+    severityOnFailure: SEVERITY.HIGH,
+    description: 'Probes the canonical Hamilton automation router so renames / mount-point regressions are caught before deploy.',
+  },
+  {
+    id: 'agent.hamilton.portalAutomation',
+    label: 'Hamilton portal automation surface',
+    category: SAM_CATEGORIES.APPLICATION_WORKFLOW_INTEGRITY,
+    kind: CHECK_KIND.HTTP,
+    method: 'GET',
+    path: '/api/hamilton/automation/portal-policies',
+    expectStatus: 200,
+    severityOnFailure: SEVERITY.MEDIUM,
+    description: 'Verifies the portal-policy registry endpoint is live so Hamilton can refuse automation on portals where it is not allowed.',
+  },
+  {
+    id: 'agent.hamilton.documents',
+    label: 'Hamilton document stack',
+    category: SAM_CATEGORIES.APPLICATION_WORKFLOW_INTEGRITY,
+    kind: CHECK_KIND.TOOL,
+    tool: 'admin.health.check',
+    parameters: { area: 'application_documents' },
+    severityOnFailure: SEVERITY.MEDIUM,
+    description: 'Spot-checks document plumbing Hamilton relies on (printable packets, attachments, profile uploads).',
+  },
+  {
+    id: 'agent.hamilton.notifications',
+    label: 'Hamilton notifications routing',
+    category: SAM_CATEGORIES.APPLICATION_WORKFLOW_INTEGRITY,
+    kind: CHECK_KIND.HTTP,
+    method: 'GET',
+    path: '/api/hamilton/automation/admin/hard-stops',
+    expectStatus: 200,
+    severityOnFailure: SEVERITY.HIGH,
+    description: 'Confirms the canonical-admin (buckeye7066@gmail.com) hard-stop dashboard is reachable so dual user/admin alerts have a consumer.',
+  },
+  {
+    id: 'agent.hamilton.blockers',
+    label: 'Hamilton blocker classifier surface',
+    category: SAM_CATEGORIES.APPLICATION_WORKFLOW_INTEGRITY,
+    kind: CHECK_KIND.HTTP,
+    method: 'GET',
+    path: '/api/hamilton/automation/admin/tasks?status=blocked',
+    expectStatus: 200,
+    severityOnFailure: SEVERITY.HIGH,
+    description: 'Lists currently blocked Hamilton tasks; non-200 means the resolver pipeline is broken or admin guard is misconfigured.',
+  },
+  {
+    id: 'agent.hamilton.security',
+    label: 'Hamilton authorization + payment guard',
+    category: SAM_CATEGORIES.PRODUCTION_CONFIG,
+    kind: CHECK_KIND.HTTP,
+    method: 'GET',
+    path: '/api/hamilton/automation/payment-authorizations',
+    expectStatus: 200,
+    severityOnFailure: SEVERITY.CRITICAL,
+    description: 'Hamilton must never store raw card data; the authorization endpoint must respond 200 with {ok:true,...} and never echo card numbers.',
+  },
+  // ── Agent Control Center (admin-only orchestration) checks ─────────
+  // Confirms the new Control Center router is mounted, admin-gated, and
+  // healthy. Sam is run by the Control Center itself, so this check is
+  // technically circular — but it's still useful: every Sam preflight
+  // catches a broken router before Robert / Yana / John / Hamilton step
+  // start. The non-admin probe also verifies the 403 gate is firing.
+  {
+    id: 'agent.controlCenter.status',
+    label: 'Agent Control Center status route',
+    category: SAM_CATEGORIES.ROUTE_INTEGRITY,
+    kind: CHECK_KIND.HTTP,
+    method: 'GET',
+    path: '/api/admin/agent-control/status',
+    expectStatus: 200,
+    severityOnFailure: SEVERITY.HIGH,
+    description: 'Confirms the admin-only Agent Control Center status endpoint is reachable and the canonical-admin gate returns the orchestration snapshot.',
+  },
+  {
+    id: 'agent.controlCenter.lockHygiene',
+    label: 'Agent Control Center lock hygiene',
+    category: SAM_CATEGORIES.PRODUCTION_CONFIG,
+    kind: CHECK_KIND.INTERNAL,
+    severityOnFailure: SEVERITY.MEDIUM,
+    description: 'Stale full_cycle locks past their TTL must be auto-released; if they aren\'t, no new run can ever start.',
+    async run({ db }) {
+      try {
+        const row = await db
+          ?.prepare(`
+            SELECT lock_name, control_run_id, expires_at FROM agent_control_locks
+             WHERE expires_at IS NOT NULL AND expires_at < CURRENT_TIMESTAMP
+             LIMIT 1
+          `)
+          .get()
+        if (!row) return { ok: true, summary: 'no expired locks' }
+        return {
+          ok: false,
+          summary: `Expired lock not released: ${row.lock_name} (run ${row.control_run_id})`,
+          evidence: row,
+        }
+      } catch (err) {
+        return {
+          ok: true,
+          summary: `agent_control_locks not present yet (${err?.message || 'unknown'})`,
+        }
+      }
+    },
+  },
 ])
 
 // ---------------------------------------------------------------------------

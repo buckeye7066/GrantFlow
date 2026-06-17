@@ -1,4 +1,4 @@
--- GrantFlow Database Schema
+﻿-- GrantFlow Database Schema
 -- SQLite version for Railway deployment
 
 -- Organizations (clients/applicants)
@@ -3020,7 +3020,7 @@ CREATE TABLE IF NOT EXISTS larry_domain_rate_limits (
   last_error TEXT
 );
 
--- Yana student-university portal layer + application tasks (migration 085).
+-- Hamilton (formerly Yana autopilot) student portal layer + application tasks (migration 085).
 -- See backend/db/migrations/085_yana_student_portals_and_application_tasks.sql
 -- for the canonical definition; the migration is the source of truth and is
 -- replayed on every boot.
@@ -3116,13 +3116,32 @@ CREATE TABLE IF NOT EXISTS application_tasks (
   submitted_at DATETIME,
   cancelled_at DATETIME,
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  -- ?? Automation-task extension (migration 087). Adds the columns the
+  -- "Automate with Yana" select-many flow needs.
+  automation_type TEXT NOT NULL DEFAULT 'unknown',
+  selected_from_stage TEXT,
+  current_pipeline_stage TEXT,
+  agent_persona_version TEXT NOT NULL DEFAULT 'yana-mba-2026',
+  portal_url TEXT,
+  application_url TEXT,
+  university_application_id TEXT,
+  output_document_id TEXT,
+  output_pdf_document_id TEXT,
+  output_docx_document_id TEXT,
+  mailing_instructions_json TEXT NOT NULL DEFAULT '{}',
+  audit_summary_json TEXT NOT NULL DEFAULT '{}',
+  allow_auto_submit INTEGER NOT NULL DEFAULT 0,
+  started_at DATETIME,
+  completed_at DATETIME
 );
-CREATE INDEX IF NOT EXISTS idx_application_tasks_profile  ON application_tasks(profile_id);
-CREATE INDEX IF NOT EXISTS idx_application_tasks_user     ON application_tasks(user_id);
-CREATE INDEX IF NOT EXISTS idx_application_tasks_opp      ON application_tasks(opportunity_id);
-CREATE INDEX IF NOT EXISTS idx_application_tasks_grant    ON application_tasks(grant_id);
-CREATE INDEX IF NOT EXISTS idx_application_tasks_status   ON application_tasks(status);
+CREATE INDEX IF NOT EXISTS idx_application_tasks_profile          ON application_tasks(profile_id);
+CREATE INDEX IF NOT EXISTS idx_application_tasks_user             ON application_tasks(user_id);
+CREATE INDEX IF NOT EXISTS idx_application_tasks_opp              ON application_tasks(opportunity_id);
+CREATE INDEX IF NOT EXISTS idx_application_tasks_grant            ON application_tasks(grant_id);
+CREATE INDEX IF NOT EXISTS idx_application_tasks_status           ON application_tasks(status);
+CREATE INDEX IF NOT EXISTS idx_application_tasks_automation_type  ON application_tasks(automation_type);
+CREATE INDEX IF NOT EXISTS idx_application_tasks_selected_stage   ON application_tasks(selected_from_stage);
 CREATE UNIQUE INDEX IF NOT EXISTS ux_application_tasks_profile_subject
   ON application_tasks(profile_id, COALESCE(opportunity_id,''), COALESCE(grant_id,''));
 
@@ -3163,7 +3182,7 @@ CREATE INDEX IF NOT EXISTS idx_application_missing_info_resolved ON application_
 CREATE UNIQUE INDEX IF NOT EXISTS ux_application_missing_info_task_kind_key
   ON application_missing_info(task_id, kind, key);
 
-CREATE TABLE IF NOT EXISTS yana_runs (
+CREATE TABLE IF NOT EXISTS hamilton_runs (
   id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
   task_id TEXT,
   profile_id TEXT,
@@ -3185,7 +3204,357 @@ CREATE TABLE IF NOT EXISTS yana_runs (
   summary_json TEXT DEFAULT '{}',
   error TEXT
 );
-CREATE INDEX IF NOT EXISTS idx_yana_runs_task     ON yana_runs(task_id);
-CREATE INDEX IF NOT EXISTS idx_yana_runs_profile  ON yana_runs(profile_id);
-CREATE INDEX IF NOT EXISTS idx_yana_runs_started  ON yana_runs(started_at DESC);
-CREATE INDEX IF NOT EXISTS idx_yana_runs_status   ON yana_runs(status);
+CREATE INDEX IF NOT EXISTS idx_hamilton_runs_task     ON hamilton_runs(task_id);
+CREATE INDEX IF NOT EXISTS idx_hamilton_runs_profile  ON hamilton_runs(profile_id);
+CREATE INDEX IF NOT EXISTS idx_hamilton_runs_started  ON hamilton_runs(started_at DESC);
+CREATE INDEX IF NOT EXISTS idx_hamilton_runs_status   ON hamilton_runs(status);
+
+
+-- ── Hamilton Autopilot authorization model (migration 088) ─────────────
+CREATE TABLE IF NOT EXISTS hamilton_authorizations (
+  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+  user_id TEXT NOT NULL,
+  profile_id TEXT NOT NULL,
+  scope TEXT NOT NULL CHECK(scope IN ('profile','task','funding_source')),
+  authorization_type TEXT NOT NULL,
+  funding_source_id TEXT,
+  task_id TEXT,
+  authorization_text TEXT NOT NULL,
+  authorization_version TEXT NOT NULL DEFAULT 'yana-autopilot-v1',
+  options_json TEXT NOT NULL DEFAULT '{}',
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  accepted_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  revoked_at DATETIME,
+  revoked_reason TEXT,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_hamilton_auth_user    ON hamilton_authorizations(user_id);
+CREATE INDEX IF NOT EXISTS idx_hamilton_auth_profile ON hamilton_authorizations(profile_id);
+CREATE INDEX IF NOT EXISTS idx_hamilton_auth_scope   ON hamilton_authorizations(scope);
+CREATE INDEX IF NOT EXISTS idx_hamilton_auth_type    ON hamilton_authorizations(authorization_type);
+CREATE INDEX IF NOT EXISTS idx_hamilton_auth_funding ON hamilton_authorizations(funding_source_id);
+CREATE INDEX IF NOT EXISTS idx_hamilton_auth_task    ON hamilton_authorizations(task_id);
+CREATE INDEX IF NOT EXISTS idx_hamilton_auth_active  ON hamilton_authorizations(profile_id, authorization_type, revoked_at);
+
+CREATE TABLE IF NOT EXISTS hamilton_portal_providers (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  short_name TEXT,
+  portal_url TEXT,
+  integration_modes TEXT NOT NULL DEFAULT 'pilot_manual_import',
+  live_supported INTEGER NOT NULL DEFAULT 0,
+  automation_supported INTEGER NOT NULL DEFAULT 0,
+  authentication_strategy TEXT,
+  session_reuse_supported INTEGER NOT NULL DEFAULT 0,
+  credential_reference_supported INTEGER NOT NULL DEFAULT 0,
+  captcha_likely INTEGER NOT NULL DEFAULT 0,
+  two_factor_likely INTEGER NOT NULL DEFAULT 0,
+  tos_notes TEXT,
+  adapter_name TEXT,
+  notes TEXT,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS hamilton_autopilot_runs (
+  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+  task_id TEXT NOT NULL,
+  profile_id TEXT NOT NULL,
+  user_id TEXT,
+  authorization_id TEXT,
+  status TEXT NOT NULL DEFAULT 'queued' CHECK(status IN (
+    'queued','preflight','running','blocked','completed','submitted','failed','cancelled'
+  )),
+  blocker_kind TEXT,
+  blocker_detail TEXT,
+  preflight_json TEXT NOT NULL DEFAULT '{}',
+  result_json TEXT NOT NULL DEFAULT '{}',
+  confirmation_reference TEXT,
+  confirmation_screenshot_path TEXT,
+  started_at DATETIME,
+  finished_at DATETIME,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_hamilton_autopilot_task     ON hamilton_autopilot_runs(task_id);
+CREATE INDEX IF NOT EXISTS idx_hamilton_autopilot_profile  ON hamilton_autopilot_runs(profile_id);
+CREATE INDEX IF NOT EXISTS idx_hamilton_autopilot_status   ON hamilton_autopilot_runs(status);
+
+
+-- == migration 089: yana hard-stop resolution =========================
+-- 089_yana_hard_stop_resolution.sql
+-- @sqlite-continue-on-idempotent-errors
+--
+-- Yana Hard-Stop Resolution layer. Adds the tables Yana needs to
+-- predict, classify, and lawfully resolve every kind of application
+-- blocker: missing info, missing documents, login, SSO, 2FA, CAPTCHA,
+-- payment, signatures, attestations, portal terms, anti-bot, ambiguous
+-- mapping, deadlines, unknown-method, and final-review screens.
+--
+-- Yana NEVER stores plaintext credentials, NEVER stores raw card data,
+-- NEVER stores 2FA codes or session cookies in cleartext. All sensitive
+-- fields hold *references* to a downstream secure vault / payment
+-- processor / Playwright storage-state file.
+
+CREATE TABLE IF NOT EXISTS hamilton_blockers (
+  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+  task_id TEXT NOT NULL,
+  profile_id TEXT NOT NULL,
+  user_id TEXT,
+  blocker_type TEXT NOT NULL,           -- one of the 15 categories
+  blocker_source TEXT,                  -- preflight | engine | classifier | manual
+  blocker_text TEXT,                    -- captured page text / field name
+  detected_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  resolution_strategy TEXT,             -- which resolver was attempted
+  resolved_at DATETIME,
+  unresolved_reason TEXT,
+  requires_user_action INTEGER NOT NULL DEFAULT 0,
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_hamilton_blockers_task     ON hamilton_blockers(task_id);
+CREATE INDEX IF NOT EXISTS idx_hamilton_blockers_profile  ON hamilton_blockers(profile_id);
+CREATE INDEX IF NOT EXISTS idx_hamilton_blockers_type     ON hamilton_blockers(blocker_type);
+CREATE INDEX IF NOT EXISTS idx_hamilton_blockers_open     ON hamilton_blockers(task_id, resolved_at);
+
+CREATE TABLE IF NOT EXISTS hamilton_blocker_resolutions (
+  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+  blocker_id TEXT NOT NULL,
+  task_id TEXT NOT NULL,
+  attempted_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  strategy TEXT NOT NULL,
+  outcome TEXT NOT NULL,                -- resolved | blocked | degraded | escalated
+  detail TEXT,
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  resolved_by_user_id TEXT,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_hamilton_blocker_res_blocker ON hamilton_blocker_resolutions(blocker_id);
+CREATE INDEX IF NOT EXISTS idx_hamilton_blocker_res_task    ON hamilton_blocker_resolutions(task_id);
+
+-- Saved authenticated browser sessions (Playwright storageState file
+-- pointers, never the storage state contents themselves).
+CREATE TABLE IF NOT EXISTS hamilton_saved_sessions (
+  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+  user_id TEXT NOT NULL,
+  profile_id TEXT NOT NULL,
+  portal_host TEXT NOT NULL,            -- "studentaid.gov", "mtsu.edu", ...
+  label TEXT,
+  storage_state_path TEXT,              -- on-disk path under YANA_BROWSER_STORAGE_DIR
+  storage_state_ref TEXT,               -- alternative: opaque vault reference
+  authentication_strategy TEXT,         -- 'sso' | 'username_password' | 'fsa_id' | 'oauth' | ...
+  established_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  last_used_at DATETIME,
+  expires_at DATETIME,
+  status TEXT NOT NULL DEFAULT 'valid' CHECK(status IN ('valid','expired','revoked')),
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_hamilton_sessions_profile ON hamilton_saved_sessions(profile_id);
+CREATE INDEX IF NOT EXISTS idx_hamilton_sessions_host    ON hamilton_saved_sessions(portal_host);
+CREATE INDEX IF NOT EXISTS idx_hamilton_sessions_status  ON hamilton_saved_sessions(status);
+
+-- Pre-authorized payment categories. Payment_method_reference is a
+-- token from a PCI-compliant processor (Stripe payment_method_id,
+-- etc.). Raw card data is NEVER stored here.
+CREATE TABLE IF NOT EXISTS hamilton_payment_authorizations (
+  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+  user_id TEXT NOT NULL,
+  profile_id TEXT NOT NULL,
+  category TEXT NOT NULL,               -- 'application_fee' | 'transcript_fee' | 'test_score_send_fee' | 'postage' | 'fax_fee' | 'other'
+  max_amount_cents INTEGER NOT NULL,
+  currency TEXT NOT NULL DEFAULT 'USD',
+  payment_method_reference TEXT,        -- e.g. Stripe pm_xxx
+  payment_method_label TEXT,            -- e.g. "Visa ending 4242"
+  allowed_portal_hosts TEXT,            -- comma-separated list, NULL = any
+  authorization_text TEXT NOT NULL,
+  spent_cents INTEGER NOT NULL DEFAULT 0,
+  approved_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  revoked_at DATETIME,
+  expires_at DATETIME,
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_hamilton_pay_profile ON hamilton_payment_authorizations(profile_id);
+CREATE INDEX IF NOT EXISTS idx_hamilton_pay_active  ON hamilton_payment_authorizations(profile_id, category, revoked_at);
+
+-- Standing attestation authorizations. Each row says: "the user has
+-- authorized Yana to tick attestation checkboxes that match this
+-- category" (e.g. "information is accurate to the best of my
+-- knowledge"). Yana NEVER ticks penalty-of-perjury / wet-signature
+-- attestations from this table.
+CREATE TABLE IF NOT EXISTS hamilton_attestation_authorizations (
+  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+  user_id TEXT NOT NULL,
+  profile_id TEXT NOT NULL,
+  category TEXT NOT NULL,               -- 'truthfulness' | 'terms_of_use' | 'authorize_release' | 'eligibility_self_certify' | 'understand_disqualification'
+  pattern TEXT NOT NULL,                -- regex source the engine matches
+  authorization_text TEXT NOT NULL,
+  approved_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  revoked_at DATETIME,
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_hamilton_attest_profile ON hamilton_attestation_authorizations(profile_id);
+CREATE INDEX IF NOT EXISTS idx_hamilton_attest_active  ON hamilton_attestation_authorizations(profile_id, category, revoked_at);
+
+-- Portal policy registry. One row per unique portal host telling Yana
+-- whether automation is permitted, and what the lawful fallback path
+-- is when it is not.
+CREATE TABLE IF NOT EXISTS hamilton_portal_policies (
+  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+  portal_host TEXT NOT NULL UNIQUE,
+  automation_allowed INTEGER NOT NULL DEFAULT 1,
+  agent_submission_allowed INTEGER NOT NULL DEFAULT 1,
+  scraping_allowed INTEGER NOT NULL DEFAULT 0,
+  api_available INTEGER NOT NULL DEFAULT 0,
+  manual_only INTEGER NOT NULL DEFAULT 0,
+  fallback_path TEXT,                   -- 'pdf_docx' | 'mail' | 'fax' | 'email' | 'manual' | 'api'
+  source_of_policy TEXT,                -- url to the ToS / RPA / public statement
+  last_checked_at DATETIME,
+  notes TEXT,
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_hamilton_policy_host ON hamilton_portal_policies(portal_host);
+
+-- Resolved-field cache. When Yana asks the user for a missing or
+-- ambiguous field once, we save the answer for future portals so the
+-- same question is never asked twice.
+CREATE TABLE IF NOT EXISTS hamilton_resolved_fields (
+  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+  profile_id TEXT NOT NULL,
+  user_id TEXT,
+  field_key TEXT NOT NULL,              -- normalised key, e.g. 'first_name', 'fafsa_efc'
+  field_value TEXT NOT NULL,
+  confidence REAL NOT NULL DEFAULT 1.0,
+  source TEXT,                          -- 'user' | 'admin' | 'document_extraction' | 'ai_mapping'
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  resolved_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_hamilton_resolved_profile ON hamilton_resolved_fields(profile_id);
+CREATE INDEX IF NOT EXISTS idx_hamilton_resolved_key     ON hamilton_resolved_fields(profile_id, field_key);
+
+-- ---------------------------------------------------------------------------
+-- Agent Control Center (migration 091).
+--
+-- Admin-only orchestration runs. The single canonical admin/operator
+-- (buckeye7066@gmail.com) starts/stops/pauses/resumes the whole agent
+-- process from Admin Mission Control. Stop requests are persisted so they
+-- survive process restarts and the orchestrator polls them between atomic
+-- operations.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS agent_control_runs (
+  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+  run_name TEXT,
+  run_type TEXT NOT NULL CHECK(run_type IN (
+    'full_cycle','selected_agents','sam_only','robert_only',
+    'yana_only','john_only','hamilton_only','scheduled_cycle'
+  )),
+  status TEXT NOT NULL DEFAULT 'queued' CHECK(status IN (
+    'queued','running','pausing','paused','stopping','stopped',
+    'completed','failed','cancelled','partial_stop','stop_failed'
+  )),
+  started_by_user_id TEXT,
+  started_by_email TEXT,
+  admin_email TEXT NOT NULL DEFAULT 'buckeye7066@gmail.com',
+  requested_agents_json TEXT NOT NULL DEFAULT '[]',
+  options_json TEXT NOT NULL DEFAULT '{}',
+  cancellation_requested_at DATETIME,
+  pause_requested_at DATETIME,
+  resume_requested_at DATETIME,
+  started_at DATETIME,
+  completed_at DATETIME,
+  error_message TEXT,
+  summary_json TEXT,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_agent_control_runs_status      ON agent_control_runs(status);
+CREATE INDEX IF NOT EXISTS idx_agent_control_runs_run_type    ON agent_control_runs(run_type);
+CREATE INDEX IF NOT EXISTS idx_agent_control_runs_started_at  ON agent_control_runs(started_at DESC);
+CREATE INDEX IF NOT EXISTS idx_agent_control_runs_created_at  ON agent_control_runs(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_agent_control_runs_admin       ON agent_control_runs(admin_email);
+
+CREATE TABLE IF NOT EXISTS agent_control_steps (
+  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+  control_run_id TEXT NOT NULL,
+  agent_name TEXT NOT NULL CHECK(agent_name IN (
+    'sam','robert','yana','john','hamilton'
+  )),
+  step_name TEXT NOT NULL,
+  step_order INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'queued' CHECK(status IN (
+    'queued','running','paused','stopping','stopped',
+    'completed','failed','skipped','blocked'
+  )),
+  started_at DATETIME,
+  completed_at DATETIME,
+  heartbeat_at DATETIME,
+  cancellation_checked_at DATETIME,
+  progress_json TEXT NOT NULL DEFAULT '{}',
+  result_json TEXT,
+  error_message TEXT,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_agent_control_steps_run        ON agent_control_steps(control_run_id);
+CREATE INDEX IF NOT EXISTS idx_agent_control_steps_agent      ON agent_control_steps(agent_name);
+CREATE INDEX IF NOT EXISTS idx_agent_control_steps_status     ON agent_control_steps(status);
+CREATE INDEX IF NOT EXISTS idx_agent_control_steps_run_order  ON agent_control_steps(control_run_id, step_order);
+
+CREATE TABLE IF NOT EXISTS agent_control_events (
+  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+  control_run_id TEXT,
+  step_id TEXT,
+  agent_name TEXT,
+  event_type TEXT NOT NULL,
+  severity TEXT NOT NULL DEFAULT 'info' CHECK(severity IN (
+    'critical','high','medium','low','info'
+  )),
+  message TEXT,
+  data_json TEXT NOT NULL DEFAULT '{}',
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_agent_control_events_run       ON agent_control_events(control_run_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_agent_control_events_agent     ON agent_control_events(agent_name, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_agent_control_events_type      ON agent_control_events(event_type, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_agent_control_events_severity  ON agent_control_events(severity, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS agent_control_locks (
+  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+  lock_name TEXT NOT NULL UNIQUE,
+  control_run_id TEXT NOT NULL,
+  acquired_by TEXT,
+  acquired_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  expires_at DATETIME
+);
+CREATE INDEX IF NOT EXISTS idx_agent_control_locks_run        ON agent_control_locks(control_run_id);
+CREATE INDEX IF NOT EXISTS idx_agent_control_locks_expires    ON agent_control_locks(expires_at);
+
+CREATE TABLE IF NOT EXISTS agent_control_stop_requests (
+  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+  control_run_id TEXT NOT NULL,
+  agent_name TEXT,
+  requested_by_email TEXT,
+  requested_by_user_id TEXT,
+  request_type TEXT NOT NULL CHECK(request_type IN (
+    'pause','resume','graceful_stop','emergency_stop','cancel'
+  )),
+  reason TEXT,
+  fulfilled_at DATETIME,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_agent_control_stop_run         ON agent_control_stop_requests(control_run_id);
+CREATE INDEX IF NOT EXISTS idx_agent_control_stop_unfulfilled ON agent_control_stop_requests(control_run_id, fulfilled_at);
+CREATE INDEX IF NOT EXISTS idx_agent_control_stop_agent       ON agent_control_stop_requests(agent_name);
+CREATE INDEX IF NOT EXISTS idx_agent_control_stop_type        ON agent_control_stop_requests(request_type);
+
