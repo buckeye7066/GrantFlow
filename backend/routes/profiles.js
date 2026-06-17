@@ -15,6 +15,7 @@ import { linkProfileToAdmin } from '../utils/adminProfileLinks.js'
 import { safeParseJSON } from '../utils/safeJson.js'
 import { validatePagination } from '../utils/validation.js'
 import { formatError } from '../middleware/errorHandler.js'
+import { isMissingSchoolBridgeTable } from '../utils/schoolBridgeErrors.js'
 import { createLogger } from '../utils/logger.js'
 import { requireTierCapability, TIER_CAPABILITIES } from '../utils/tierGating.js'
 import { applicationStatusToStage } from '../../shared/pipelineStages.js'
@@ -698,16 +699,31 @@ router.get('/:id/school-link', async (req, res) => {
       (req.ctx?.activeProfileId && String(req.ctx.activeProfileId) === profileId)
     if (!canRead) return res.status(403).json({ error: 'Not authorized' })
 
-    const link = await req.db
-      .prepare(`SELECT l.id, l.school_partner_id, l.external_student_id, l.email,
-                       l.consent_status, l.consented_at, l.revoked_at,
-                       l.last_synced_at, p.slug AS partner_slug, p.name AS partner_name
-                  FROM school_student_links l
-                  JOIN school_partners p ON p.id = l.school_partner_id
-                  WHERE l.profile_id = ?
-                  ORDER BY COALESCE(l.last_synced_at, l.created_at) DESC, l.created_at DESC
-                  LIMIT 1`)
-      .get(profileId)
+    let link = null
+    try {
+      link = await req.db
+        .prepare(`SELECT l.id, l.school_partner_id, l.external_student_id, l.email,
+                         l.consent_status, l.consented_at, l.revoked_at,
+                         l.last_synced_at, p.slug AS partner_slug, p.name AS partner_name
+                    FROM school_student_links l
+                    JOIN school_partners p ON p.id = l.school_partner_id
+                    WHERE l.profile_id = ?
+                    ORDER BY COALESCE(l.last_synced_at, l.created_at) DESC, l.created_at DESC
+                    LIMIT 1`)
+        .get(profileId)
+    } catch (queryError) {
+      if (isMissingSchoolBridgeTable(queryError)) {
+        // Log once so the operator knows migration 079/0075 still needs to land
+        // on this database, but answer the route as "no link" so the UI keeps
+        // working for every user that isn't (yet) school-bridged.
+        console.warn(
+          '[profiles] /school-link: school-bridge tables not provisioned; returning link=null',
+          { code: queryError?.code, message: queryError?.message },
+        )
+        return res.json({ ok: true, link: null })
+      }
+      throw queryError
+    }
     if (!link) return res.json({ ok: true, link: null })
     return res.json({ ok: true, link })
   } catch (error) {
@@ -730,13 +746,25 @@ router.post('/:id/school-link/revoke', async (req, res) => {
       (req.ctx?.activeProfileId && String(req.ctx.activeProfileId) === profileId)
     if (!canManage) return res.status(403).json({ error: 'Not authorized' })
 
-    const result = await req.db
-      .prepare(`UPDATE school_student_links
-                  SET consent_status = 'revoked',
-                      revoked_at = ?,
-                      updated_at = ?
-                WHERE profile_id = ? AND consent_status != 'revoked'`)
-      .run(new Date().toISOString(), new Date().toISOString(), profileId)
+    let result
+    try {
+      result = await req.db
+        .prepare(`UPDATE school_student_links
+                    SET consent_status = 'revoked',
+                        revoked_at = ?,
+                        updated_at = ?
+                  WHERE profile_id = ? AND consent_status != 'revoked'`)
+        .run(new Date().toISOString(), new Date().toISOString(), profileId)
+    } catch (queryError) {
+      if (isMissingSchoolBridgeTable(queryError)) {
+        console.warn(
+          '[profiles] /school-link/revoke: school-bridge tables not provisioned; nothing to revoke',
+          { code: queryError?.code, message: queryError?.message },
+        )
+        return res.json({ ok: true, revoked: 0 })
+      }
+      throw queryError
+    }
     return res.json({ ok: true, revoked: result?.changes ?? 0 })
   } catch (error) {
     console.error('[profiles] /school-link/revoke failed:', error)
