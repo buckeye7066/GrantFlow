@@ -51,7 +51,38 @@ import {
   preflightSelected,
   readAuthorizations,
 } from '../services/yana/yanaPreflight.js'
+import { preflightAndResolveSelected } from '../services/yana/yanaPreflightResolver.js'
 import { listPortalProviders } from '../services/yana/yanaPortalProviders.js'
+import {
+  authorizePayment,
+  canPayFor,
+  revokePaymentAuthorization,
+  listPaymentAuthorizations,
+  PAYMENT_CATEGORIES,
+} from '../services/yana/yanaPaymentAuthorizationService.js'
+import {
+  recordSession,
+  listSessionsForProfile,
+  revokeSession,
+  markSessionExpired,
+} from '../services/yana/yanaCredentialSessionService.js'
+import {
+  authorizeAttestation,
+  revokeAttestation,
+  listActiveAttestations,
+  ATTESTATION_CATEGORIES,
+} from '../services/yana/yanaAttestationStore.js'
+import {
+  getPolicyFor,
+  upsertPolicy,
+  listPolicies,
+} from '../services/yana/yanaPortalPolicyRegistry.js'
+import {
+  saveResolvedField,
+  listResolvedFields,
+} from '../services/yana/yanaResolvedFieldStore.js'
+import { listBlockersForTask } from '../services/yana/yanaBlockerStore.js'
+import { resolveBlocker } from '../services/yana/yanaHardStopResolver.js'
 import { createLogger } from '../utils/logger.js'
 
 export const YANA_AUTOPILOT_AUTHORIZATION_TEXT = (
@@ -501,6 +532,169 @@ router.get('/tasks/:taskId/autopilot-runs', async (req, res) => {
   } catch (err) {
     log.error('list_runs_failed', { err: err?.message })
     return res.status(500).json({ error: 'list_failed' })
+  }
+})
+
+// ── Hard-Stop Resolver routes ─────────────────────────────────────
+
+// Extended resolver-aware preflight. Returns full readiness readout
+// per source plus the resolutions Yana already applied.
+router.post('/preflight-resolve', async (req, res) => {
+  try {
+    const { profileId, selectedSources = [] } = req.body || {}
+    if (!profileId) return res.status(400).json({ error: 'profileId required' })
+    const userId = req.user?.id || null
+    const profile = await loadProfile(req.db, profileId, userId)
+    if (!profile) return res.status(404).json({ error: 'profile_not_found' })
+    const result = await preflightAndResolveSelected(req.db, {
+      profile, profileId, selectedSources, userId,
+    })
+    return res.json(result)
+  } catch (err) {
+    log.error('preflight_resolve_failed', { err: err?.message })
+    return res.status(500).json({ error: 'preflight_resolve_failed', detail: err?.message })
+  }
+})
+
+// Payment authorizations.
+router.get('/payment-authorizations', async (req, res) => {
+  const profileId = req.query.profileId
+  if (!profileId) return res.status(400).json({ error: 'profileId required' })
+  try {
+    const list = await listPaymentAuthorizations(req.db, profileId)
+    return res.json({ ok: true, payment_categories: PAYMENT_CATEGORIES, authorizations: list })
+  } catch (err) {
+    return res.status(500).json({ error: 'list_failed', detail: err?.message })
+  }
+})
+router.post('/payment-authorizations', async (req, res) => {
+  try {
+    const userId = req.user?.id || null
+    if (!userId) return res.status(401).json({ error: 'unauthenticated' })
+    const auth = await authorizePayment(req.db, { userId, ...req.body })
+    return res.json({ ok: true, authorization: auth })
+  } catch (err) {
+    return res.status(400).json({ error: 'authorize_failed', detail: err?.message })
+  }
+})
+router.post('/payment-authorizations/:id/revoke', async (req, res) => {
+  const auth = await revokePaymentAuthorization(req.db, req.params.id, req.body?.reason || null)
+  return res.json({ ok: true, authorization: auth })
+})
+router.get('/payment-authorizations/can-pay', async (req, res) => {
+  const { profileId, category, amountCents, portalHost } = req.query
+  if (!profileId || !category) return res.status(400).json({ error: 'profileId and category required' })
+  const decision = await canPayFor(req.db, {
+    profileId, category, amountCents: Number(amountCents || 0), portalHost: portalHost || null,
+  })
+  return res.json(decision)
+})
+
+// Saved sessions.
+router.get('/sessions', async (req, res) => {
+  const profileId = req.query.profileId
+  if (!profileId) return res.status(400).json({ error: 'profileId required' })
+  const list = await listSessionsForProfile(req.db, profileId)
+  return res.json({ ok: true, sessions: list })
+})
+router.post('/sessions', async (req, res) => {
+  try {
+    const userId = req.user?.id || null
+    if (!userId) return res.status(401).json({ error: 'unauthenticated' })
+    const session = await recordSession(req.db, { userId, ...req.body })
+    return res.json({ ok: true, session })
+  } catch (err) {
+    return res.status(400).json({ error: 'record_failed', detail: err?.message })
+  }
+})
+router.post('/sessions/:id/revoke', async (req, res) => {
+  const session = await revokeSession(req.db, req.params.id, req.body?.reason || null)
+  return res.json({ ok: true, session })
+})
+router.post('/sessions/:id/expire', async (req, res) => {
+  const session = await markSessionExpired(req.db, req.params.id, req.body?.reason || null)
+  return res.json({ ok: true, session })
+})
+
+// Standing attestations.
+router.get('/attestations', async (req, res) => {
+  const profileId = req.query.profileId
+  if (!profileId) return res.status(400).json({ error: 'profileId required' })
+  const list = await listActiveAttestations(req.db, profileId)
+  return res.json({ ok: true, categories: ATTESTATION_CATEGORIES, attestations: list })
+})
+router.post('/attestations', async (req, res) => {
+  try {
+    const userId = req.user?.id || null
+    if (!userId) return res.status(401).json({ error: 'unauthenticated' })
+    const auth = await authorizeAttestation(req.db, { userId, ...req.body })
+    return res.json({ ok: true, attestation: auth })
+  } catch (err) {
+    return res.status(400).json({ error: 'authorize_failed', detail: err?.message })
+  }
+})
+router.post('/attestations/:id/revoke', async (req, res) => {
+  const auth = await revokeAttestation(req.db, req.params.id, req.body?.reason || null)
+  return res.json({ ok: true, attestation: auth })
+})
+
+// Portal policies.
+router.get('/portal-policies', async (req, res) => {
+  if (req.query.host) {
+    const policy = await getPolicyFor(req.db, req.query.host)
+    return res.json({ ok: true, policy })
+  }
+  const list = await listPolicies(req.db)
+  return res.json({ ok: true, policies: list })
+})
+router.post('/portal-policies', async (req, res) => {
+  try {
+    const policy = await upsertPolicy(req.db, req.body || {})
+    return res.json({ ok: true, policy })
+  } catch (err) {
+    return res.status(400).json({ error: 'upsert_failed', detail: err?.message })
+  }
+})
+
+// Resolved fields.
+router.get('/resolved-fields', async (req, res) => {
+  const profileId = req.query.profileId
+  if (!profileId) return res.status(400).json({ error: 'profileId required' })
+  const list = await listResolvedFields(req.db, profileId)
+  return res.json({ ok: true, fields: list })
+})
+router.post('/resolved-fields', async (req, res) => {
+  try {
+    const userId = req.user?.id || null
+    const field = await saveResolvedField(req.db, { userId, ...req.body })
+    return res.json({ ok: true, field })
+  } catch (err) {
+    return res.status(400).json({ error: 'save_failed', detail: err?.message })
+  }
+})
+
+// Blockers.
+router.get('/tasks/:taskId/blockers', async (req, res) => {
+  const ctx = await loadTaskAndAuthorise(req, res, req.params.taskId)
+  if (!ctx) return
+  const onlyOpen = String(req.query.onlyOpen || 'false').toLowerCase() === 'true'
+  const list = await listBlockersForTask(req.db, ctx.task.id, { onlyOpen })
+  return res.json({ ok: true, blockers: list })
+})
+router.post('/tasks/:taskId/resolve-blocker-input', async (req, res) => {
+  const ctx = await loadTaskAndAuthorise(req, res, req.params.taskId)
+  if (!ctx) return
+  try {
+    const directive = await resolveBlocker(req.db, {
+      taskId: ctx.task.id,
+      profileId: ctx.task.profile_id,
+      userId: req.user?.id || null,
+      portalUrl: ctx.task.portal_url || ctx.task.application_url || null,
+      classification: { automation_type: ctx.task.automation_type },
+    }, req.body || {})
+    return res.json({ ok: true, directive })
+  } catch (err) {
+    return res.status(400).json({ error: 'resolve_failed', detail: err?.message })
   }
 })
 

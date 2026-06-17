@@ -54,6 +54,7 @@ import {
   createAutopilotRun,
   updateAutopilotRun,
 } from './yanaAuthorizationStore.js'
+import { resolveBlocker } from './yanaHardStopResolver.js'
 
 const PERSONA_VERSION = 'yana-mba-2026'
 
@@ -549,19 +550,107 @@ async function runAutopilotPathway(db, {
     return { task: await reload(db, task.id), classification, autopilot_run: run.id, preflight }
   }
 
-  // Launch.
+  // Launch with a Hard-Stop Resolver loop. After each engine pass we
+  // run the resolver against the engine's blocker (if any) and either:
+  //   - retry with new options (saved session, document candidate)
+  //   - degrade to the lawful fallback (PDF/DOCX/manual packet)
+  //   - mark the task blocked for true unavoidable blockers.
+  // The loop runs at most MAX_RESOLVER_ATTEMPTS times so a misbehaving
+  // portal can't trap Yana in an infinite cycle.
+  const MAX_RESOLVER_ATTEMPTS = 3
   await updateAutopilotRun(db, run.id, { status: 'running' })
   await updateApplicationTask(db, task.id, { status: 'filling_portal' })
 
-  const engineResult = await runAutopilot({
-    url,
-    profile,
-    authorizations,
-    documents: options?.documents || [],
-    storageStatePath: options?.storageStatePath || null,
-    allowAutoSubmit: options?.allow_auto_submit ?? authorizations.submit_applications,
-    headless: options?.headless ?? true,
-  })
+  let storageStatePath = options?.storageStatePath || null
+  let documents = Array.isArray(options?.documents) ? [...options.documents] : []
+  let allowAutoSubmit = options?.allow_auto_submit ?? authorizations.submit_applications
+  let engineResult = null
+  let degradedDirective = null
+  for (let attempt = 0; attempt < MAX_RESOLVER_ATTEMPTS; attempt += 1) {
+    engineResult = await runAutopilot({
+      url, profile, authorizations,
+      documents, storageStatePath, allowAutoSubmit,
+      headless: options?.headless ?? true,
+    })
+    if (engineResult.status === 'submitted' || engineResult.status === 'completed_draft') break
+    if (engineResult.status === 'failed' && engineResult.blocker_kind === 'no_browser') break
+
+    // Hand the blocker to the resolver.
+    const directive = await resolveBlocker(db, {
+      taskId: task.id, profileId: task.profile_id, userId,
+      portalUrl: url, opportunity, profile, classification,
+      documentCandidates: documents,
+    }, {
+      kind: engineResult.blocker_kind,
+      text: engineResult.blocker_detail,
+      detail: engineResult.blocker_detail,
+      url,
+    })
+    await appendTaskEvent(db, {
+      taskId: task.id,
+      eventType: 'progress',
+      status: 'filling_portal',
+      step: 'resolver',
+      message: `Resolver: ${directive.strategy} → ${directive.outcome}`,
+      actorUserId: userId,
+      actorRole: 'agent',
+      details: { directive },
+    })
+
+    if (directive.outcome === 'resolved' && directive.retry) {
+      // Adjust engine inputs based on the resolver payload.
+      if (directive.payload?.storage_state_path) storageStatePath = directive.payload.storage_state_path
+      if (directive.payload?.document) documents = [...documents, directive.payload.document]
+      continue
+    }
+    if (directive.outcome === 'degraded') {
+      degradedDirective = directive
+      break
+    }
+    // 'blocked' or 'escalated' — Yana will surface the blocker to the user.
+    break
+  }
+
+  if (degradedDirective) {
+    // Lawful fallback: build a complete packet and mark the task as
+    // ready_to_print_mail / ready_to_email / ready_to_fax / waiting_for_review
+    // depending on the fallback path.
+    const packet = await generateAndSavePacket(db, {
+      profile, opportunity, grant,
+      automationType: degradedDirective.fallback || 'pdf_docx',
+      taskId: task.id, userId,
+    }).catch((err) => ({ error: err?.message || String(err) }))
+    if (packet && !packet.error) {
+      await updateApplicationTask(db, task.id, {
+        outputDocxDocumentId: packet.docx_document_id,
+        outputPdfDocumentId: packet.pdf_document_id || null,
+        outputDocumentId: packet.pdf_document_id || packet.docx_document_id,
+        mailingInstructions: packet.mailing_instructions,
+        status: degradedDirective.fallback === 'mail' ? 'ready_to_print_mail'
+              : degradedDirective.fallback === 'email' ? 'ready_to_email'
+              : degradedDirective.fallback === 'fax' ? 'ready_to_fax'
+              : 'waiting_for_review',
+        lastAgentMessage:
+          `Yana Autopilot switched to the ${degradedDirective.fallback || 'pdf_docx'} pathway: ${degradedDirective.detail || 'lawful fallback'}.`,
+      })
+      await updateAutopilotRun(db, run.id, {
+        status: 'completed',
+        result: { ...engineResult, degraded_to: degradedDirective.fallback, directive: degradedDirective, packet },
+        finishedAt: new Date().toISOString(),
+      })
+      await emitYanaNotificationToProfileAndAdmins(db, {
+        profileId: task.profile_id,
+        profileUserId: task.user_id,
+        type: 'yana_generated_document_saved',
+        title: 'Yana built a manual packet',
+        message: degradedDirective.detail || 'Yana built a packet you can send manually.',
+        severity: 'info',
+        data: { task_id: task.id, run_id: run.id, fallback: degradedDirective.fallback },
+      })
+      return { task: await reload(db, task.id), classification, autopilot_run: run.id, autopilot_result: engineResult, degraded: degradedDirective }
+    }
+  }
+
   await updateAutopilotRun(db, run.id, {
     result: engineResult,
     confirmationReference: engineResult.confirmation_reference || null,

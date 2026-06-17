@@ -241,3 +241,66 @@ node --test tests/unit/yana-automation.test.mjs
   to DOCX-only and skips the PDF row.
 - `mark-mailed/emailed/faxed` is a user-confirmed transition; we do not
   watch the user's mailbox or send fax/email on their behalf.
+
+## Hard-Stop Resolver layer (Phase Addendum)
+
+Yana never gives up at the first portal hiccup. Every detected blocker
+flows through the **Hard-Stop Resolver**, which classifies the blocker
+into one of fifteen canonical categories and tries an approved
+resolution strategy *before* asking the user.
+
+| Category | Resolver strategy | Lawful guard |
+| --- | --- | --- |
+| missing_required_information | reuse `yana_resolved_fields`; else ask once and persist | never invent values |
+| missing_required_document | reuse profile document; else generate (cover letter / packet); else request | never fabricate signatures or third-party docs |
+| login_required | reuse saved Playwright storage state when authorized | no plaintext credentials |
+| sso_required | reuse saved SSO session | never bypass the IdP |
+| two_factor_required | reuse trusted-device session | never intercept codes |
+| captcha_required | reuse session that does not trigger CAPTCHA | never solve / spoof |
+| payment_required | charge inside `yana_payment_authorizations` envelope, record receipt | tokenised refs only, no raw card data |
+| wet_signature_required | always degrade to printable signature packet | never forge |
+| legal_attestation_required | auto-tick only routine attestations matching `yana_attestation_authorizations` patterns | never tick penalty-of-perjury text |
+| portal_terms_block | switch to `policy.fallback_path` (pdf_docx / mail / fax / email / manual / api) | always respect ToS |
+| portal_anti_bot_block | retry with saved session, otherwise switch to packet | no stealth / fingerprint evasion |
+| ambiguous_required_field | reuse cached resolved field, otherwise ask once | never guess |
+| final_review_screen | proceed automatically — Autopilot does not stop here | n/a |
+| deadline_expired | mark task blocked + suggest related opportunities | n/a |
+| unknown_application_method | generate funder contact packet | n/a |
+
+### Persistence
+
+| Table | Purpose |
+| --- | --- |
+| `yana_blockers` | every detected blocker, with type, source, text, audit timestamps |
+| `yana_blocker_resolutions` | every attempted resolution: strategy, outcome, detail |
+| `yana_saved_sessions` | references to authenticated Playwright storage states |
+| `yana_payment_authorizations` | pre-authorized payment categories + tokenised method ref + spent counter |
+| `yana_attestation_authorizations` | per-profile standing attestation patterns |
+| `yana_portal_policies` | per-host `automation_allowed` / `scraping_allowed` / `api_available` / `manual_only` |
+| `yana_resolved_fields` | "resolve once, reuse forever" cache |
+
+### Modules
+
+- `backend/services/yana/yanaBlockerClassifier.js`
+- `backend/services/yana/yanaHardStopResolver.js`
+- `backend/services/yana/yanaPreflightResolver.js`
+- `backend/services/yana/yanaCredentialSessionService.js`
+- `backend/services/yana/yanaPaymentAuthorizationService.js`
+- `backend/services/yana/yanaESignatureService.js`
+- `backend/services/yana/yanaPortalPolicyRegistry.js`
+- `backend/services/yana/yanaAttestationStore.js`
+- `backend/services/yana/yanaResolvedFieldStore.js`
+- `backend/services/yana/yanaBlockerStore.js`
+
+### Wiring
+
+- `yanaAutomationOrchestrator.runAutopilotPathway` now wraps the engine
+  call in a resolver loop. After every engine pass, the directive
+  determines whether Yana retries with new options (saved session,
+  document candidate), degrades to a lawful packet path, or surfaces a
+  blocker to the user.
+- `POST /api/yana/automation/preflight-resolve` returns the resolver-aware
+  preflight + readiness readout consumed by `YanaAutopilotAuthorization`.
+- New routes: `/payment-authorizations`, `/sessions`, `/attestations`,
+  `/portal-policies`, `/resolved-fields`, `/tasks/:id/blockers`,
+  `/tasks/:id/resolve-blocker-input`.

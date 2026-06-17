@@ -118,10 +118,10 @@ export default function YanaAutopilotAuthorization({
         options: opts,
       })
 
-      // 2. Preflight (Phase B).
-      const preflightRes = await client.post('/api/yana/automation/preflight', {
-        profile_id: profileId,
-        selected_sources: selectedSources,
+      // 2. Resolver-aware preflight (Phase B + Hard-Stop predict & resolve).
+      const preflightRes = await client.post('/api/yana/automation/preflight-resolve', {
+        profileId,
+        selectedSources,
       })
       setPreflight(preflightRes)
       if (preflightRes?.ok === false) {
@@ -237,29 +237,92 @@ function Toggle({ id, label, checked, onChange, highlight = false }) {
 }
 
 function PreflightReport({ preflight }) {
-  const allBlockers = (preflight?.results || []).flatMap((r) => r.blockers || [])
-  const allWarnings = (preflight?.results || []).flatMap((r) => r.warnings || [])
-  if (preflight?.ok) {
-    return (
-      <div className="text-sm text-emerald-700 bg-emerald-50 border border-emerald-200 rounded p-2">
-        Preflight passed for {preflight.results.length} source(s). Yana is ready.
-      </div>
-    )
-  }
+  const results = preflight?.results || []
+  const allBlockers = results.flatMap((r) => r.blockers || [])
+  const allWarnings = results.flatMap((r) => r.warnings || [])
+  const allResolutions = results.flatMap((r) => r.resolutions || [])
   return (
-    <div className="text-sm bg-amber-50 border border-amber-200 rounded p-2 space-y-1">
-      <div className="font-semibold text-amber-900">Yana needs the following before she can run:</div>
-      <ul className="list-disc pl-5">
-        {allBlockers.map((b, i) => <li key={`b${i}`} className="text-amber-900">{b.label} — <span className="text-amber-700">{b.detail}</span></li>)}
-      </ul>
+    <div className="space-y-2">
+      {results.map((r, i) => <SourceReadiness key={`s${i}`} result={r} />)}
+      {preflight?.ok ? (
+        <div className="text-sm text-emerald-700 bg-emerald-50 border border-emerald-200 rounded p-2">
+          Preflight passed for {results.length} source(s). Yana is ready.
+        </div>
+      ) : (
+        <div className="text-sm bg-amber-50 border border-amber-200 rounded p-2 space-y-1">
+          <div className="font-semibold text-amber-900">Yana needs the following before she can run:</div>
+          <ul className="list-disc pl-5">
+            {allBlockers.map((b, i) => <li key={`b${i}`} className="text-amber-900">{b.label} — <span className="text-amber-700">{b.detail}</span></li>)}
+          </ul>
+        </div>
+      )}
       {allWarnings.length > 0 ? (
-        <details>
-          <summary className="cursor-pointer text-amber-800">Warnings ({allWarnings.length})</summary>
-          <ul className="list-disc pl-5 mt-1 text-amber-700">
+        <details className="text-xs text-slate-700">
+          <summary className="cursor-pointer">Warnings ({allWarnings.length})</summary>
+          <ul className="list-disc pl-5 mt-1">
             {allWarnings.map((w, i) => <li key={`w${i}`}>{w.label} — {w.detail}</li>)}
           </ul>
         </details>
       ) : null}
+      {allResolutions.length > 0 ? (
+        <details className="text-xs text-slate-700">
+          <summary className="cursor-pointer">Resolutions Yana already applied ({allResolutions.length})</summary>
+          <ul className="list-disc pl-5 mt-1">
+            {allResolutions.map((d, i) => (
+              <li key={`r${i}`}>
+                <span className="font-medium">{d.classification?.category || 'unknown'}</span> — {d.strategy} → {d.outcome}
+                {d.detail ? ` (${d.detail})` : ''}
+              </li>
+            ))}
+          </ul>
+        </details>
+      ) : null}
     </div>
+  )
+}
+
+function SourceReadiness({ result }) {
+  const r = result?.readiness || {}
+  const idn = r.identity || {}
+  const sch = r.school || {}
+  const fin = r.financial || {}
+  const ap  = r.application_path || {}
+  const cs  = r.credentials_session || {}
+  const py  = r.payment || {}
+  const at  = r.attestation || {}
+  const as  = r.auto_submit || {}
+  const policy = ap.policy || {}
+  return (
+    <div className="text-xs text-slate-700 bg-white border border-slate-200 rounded p-2 space-y-1">
+      <div className="font-semibold text-slate-900">
+        {result?.source?.title || result?.source?.opportunity_id || result?.source?.grant_id || 'Selected source'}
+        <span className="text-slate-500 ml-2">[{ap.automation_type || 'unknown'}]</span>
+      </div>
+      <div className="grid grid-cols-2 gap-1">
+        <Pill ok={idn.first_name && idn.last_name && idn.email} label={`Identity ${idn.first_name && idn.last_name ? '✓' : '!'}`} />
+        <Pill ok={sch.school || !sch.is_student_funding} label={`School ${sch.school || !sch.is_student_funding ? '✓' : '!'}`} />
+        <Pill ok={fin.household_income} label={`Financial ${fin.household_income ? '✓' : '~'}`} />
+        <Pill ok={(r.documents?.count ?? 0) > 0} label={`Docs (${r.documents?.count ?? 0})`} />
+        <Pill ok={cs.session_present || cs.authorized?.use_saved_session} label={`Session ${cs.session_present ? '✓' : (cs.authorized?.use_saved_session ? 'auth' : '!')}`} />
+        <Pill ok={!py.needed || py.allowed} label={`Payment ${!py.needed ? 'n/a' : py.allowed ? '✓' : '!'}`} />
+        <Pill ok={at.use_standing_attestation_flag} label={`Attestation ${at.use_standing_attestation_flag ? '✓' : 'manual'}`} />
+        <Pill ok={as.submit_applications_authorized} label={`Auto-submit ${as.submit_applications_authorized ? '✓' : 'off'}`} />
+      </div>
+      {policy.automation_allowed === false ? (
+        <div className="text-amber-800 bg-amber-50 border border-amber-200 rounded p-1">
+          Portal terms require manual completion → fallback: <span className="font-mono">{policy.fallback_path || 'pdf_docx'}</span>
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
+function Pill({ ok, label }) {
+  return (
+    <span className={`px-2 py-0.5 rounded text-[11px] inline-flex items-center justify-between ${
+      ok ? 'bg-emerald-50 text-emerald-800 border border-emerald-200' : 'bg-amber-50 text-amber-800 border border-amber-200'
+    }`}>
+      {label}
+    </span>
   )
 }
