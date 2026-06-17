@@ -18,6 +18,7 @@ import { formatReasonText } from '@/utils/reasonText';
 import { isHumanReviewNeeded, getStageHelp } from '@/components/pipeline/pipelineStageHelp';
 import YanaTaskBadge from '@/components/yana/YanaTaskBadge';
 import YanaTaskDrawer from '@/components/yana/YanaTaskDrawer';
+import { useYanaSelection } from '@/components/yana/YanaSelectionContext';
 
 function getGrantDetailUrl(grant, isDiscoveryResult = false) {
   if (grant.id) {
@@ -47,13 +48,23 @@ function isValidExternalUrl(url) {
   return isRenderableUrl(url);
 }
 
-export default function GrantCard({ grant, organization, organizationName, onStatusChange, onStarToggle, onDelete, isDragging, checklistProgress, showSummary = false, isInPipeline = false, onAddToPipeline = null }) {
+export default function GrantCard({ grant, organization, organizationName, onStatusChange, onStarToggle, onDelete, isDragging, checklistProgress, showSummary = false, isInPipeline = false, onAddToPipeline = null, profileId = null }) {
   const [showMenu, setShowMenu] = useState(false);
   const [showMatchBreakdown, setShowMatchBreakdown] = useState(false);
   const [yanaTask, setYanaTask] = useState(null);
   const [yanaDrawerOpen, setYanaDrawerOpen] = useState(false);
   const cardRef = useRef(null);
   const navigate = useNavigate();
+  const yanaSelection = useYanaSelection();
+  const yanaSelectionSource = {
+    grant_id: grant?.id || null,
+    opportunity_id: grant?.opportunity_id || grant?.funding_opportunity_id || null,
+    current_stage: grant?.status || null,
+    title: grant?.title || null,
+  };
+  const yanaIsSelected = yanaSelection?.enabled
+    ? yanaSelection.isSelected(yanaSelectionSource)
+    : false;
 
   useEffect(() => {
     const handleClickOutside = (event) => {
@@ -122,6 +133,22 @@ export default function GrantCard({ grant, organization, organizationName, onSta
     >
       <div className="flex items-center justify-between p-3 border-b border-slate-100">
         <div className="flex items-center gap-2 flex-wrap">
+          {yanaSelection?.enabled && (
+            <label
+              className="inline-flex items-center cursor-pointer select-none mr-1"
+              onClick={(e) => e.stopPropagation()}
+              onMouseDown={(e) => e.stopPropagation()}
+              title={yanaIsSelected ? 'Selected for Yana' : 'Select for Yana automation'}
+            >
+              <input
+                type="checkbox"
+                className="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                checked={yanaIsSelected}
+                onClick={(e) => e.stopPropagation()}
+                onChange={(e) => { e.stopPropagation(); yanaSelection.toggle(yanaSelectionSource); }}
+              />
+            </label>
+          )}
           {grant.starred && <Star className="w-4 h-4 text-yellow-400 fill-yellow-400" />}
           {isExpired && <Badge variant="destructive" className="text-xs">EXPIRED</Badge>}
           {hasSummary && showSummary && (
@@ -231,7 +258,7 @@ export default function GrantCard({ grant, organization, organizationName, onSta
             </Badge>
           )}
         </div>
-        {(onStarToggle || onDelete) && (
+        {(onStarToggle || onDelete || yanaSelection?.enabled) && (
           <DropdownMenu open={showMenu} onOpenChange={setShowMenu}>
             <DropdownMenuTrigger asChild>
               <Button variant="ghost" size="icon" className="h-6 w-6">
@@ -243,6 +270,20 @@ export default function GrantCard({ grant, organization, organizationName, onSta
                 <DropdownMenuItem onSelect={() => { onStarToggle(); setShowMenu(false); }}>
                   <Star className="w-4 h-4 mr-2" />
                   {grant.starred ? 'Unstar' : 'Star'}
+                </DropdownMenuItem>
+              )}
+              {yanaSelection?.enabled && (
+                <DropdownMenuItem
+                  onSelect={() => { yanaSelection.toggle(yanaSelectionSource); setShowMenu(false); }}
+                >
+                  <Sparkles className="w-4 h-4 mr-2" />
+                  {yanaIsSelected ? 'Remove from Yana selection' : 'Automate with Yana'}
+                </DropdownMenuItem>
+              )}
+              {yanaTask && (
+                <DropdownMenuItem onSelect={() => { setYanaDrawerOpen(true); setShowMenu(false); }}>
+                  <Sparkles className="w-4 h-4 mr-2" />
+                  Resume / view Yana task
                 </DropdownMenuItem>
               )}
               <DropdownMenuItem onSelect={() => { navigate(createPageUrl("GrantDetail", { id: grant.id })); setShowMenu(false); }}>

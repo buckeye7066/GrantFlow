@@ -2017,6 +2017,8 @@ app.use('/api/notifications', notificationsRouter);
 // router (which uses :id).
 app.use('/api', lazyRouter('./routes/studentPortals.js'));
 app.use('/api/application-tasks', lazyRouter('./routes/applicationTasks.js'));
+// Yana Automation Agent (select-many entry point on top of /application-tasks).
+app.use('/api/yana/automation', lazyRouter('./routes/yanaAutomation.js'));
 app.use('/api/saved-grants', savedGrantsRouter);
 app.use('/api/foundations', foundationsRouter);
 // John — Outreach Drafting Agent. Draft-only; never sends. Admin-only except /health.

@@ -19,6 +19,7 @@ import crypto from 'crypto'
 import { withProfileScope } from '../../middleware/profileContext.js'
 
 export const TASK_STATUSES = Object.freeze([
+  // Legacy task statuses (per-grant Yana flow).
   'queued',
   'ready',
   'waiting_for_user',
@@ -33,6 +34,40 @@ export const TASK_STATUSES = Object.freeze([
   'submitted',
   'failed',
   'cancelled',
+  // Automation-task extension (migration 087). The select-many
+  // "Automate with Yana" flow drives tasks through this richer state
+  // machine. The legacy statuses above remain valid so existing
+  // per-grant Yana cycles keep working unchanged.
+  'analyzing',
+  'ready_to_start',
+  'generating_application',
+  'generating_documents',
+  'saving_documents',
+  'launching_portal',
+  'waiting_for_login',
+  'waiting_for_2fa',
+  'waiting_for_captcha',
+  'waiting_for_missing_info',
+  'filling_portal',
+  'saving_portal_draft',
+  'waiting_for_review',
+  'ready_to_submit',
+  'ready_to_print_mail',
+  'ready_to_email',
+  'ready_to_fax',
+  'completed',
+  'blocked',
+])
+
+export const AUTOMATION_TYPES = Object.freeze([
+  'portal',
+  'pdf_docx',
+  'mail',
+  'fax',
+  'email',
+  'no_application',
+  'auto_profile',
+  'unknown',
 ])
 
 export const TASK_BLOCKED_STATUSES = Object.freeze([
@@ -92,6 +127,9 @@ export async function ensureApplicationTaskSchema(db) {
   const boolType = isPostgres ? 'BOOLEAN' : 'INTEGER'
   const defFalse = isPostgres ? 'FALSE' : '0'
 
+  const jsonbType = isPostgres ? 'JSONB' : 'TEXT'
+  const emptyJsonObject = isPostgres ? `'{}'::jsonb` : `'{}'`
+
   await db.exec(`
     CREATE TABLE IF NOT EXISTS application_tasks (
       id TEXT PRIMARY KEY DEFAULT ${idDefault},
@@ -101,15 +139,30 @@ export async function ensureApplicationTaskSchema(db) {
       grant_id TEXT,
       portal_id TEXT,
       application_id TEXT,
+      university_application_id TEXT,
       assigned_agent TEXT NOT NULL DEFAULT 'yana',
+      agent_persona_version TEXT NOT NULL DEFAULT 'yana-mba-2026',
+      automation_type TEXT NOT NULL DEFAULT 'unknown',
+      selected_from_stage TEXT,
+      current_pipeline_stage TEXT,
       status TEXT NOT NULL DEFAULT 'queued',
       current_step TEXT,
+      portal_url TEXT,
+      application_url TEXT,
+      output_document_id TEXT,
+      output_pdf_document_id TEXT,
+      output_docx_document_id TEXT,
+      mailing_instructions_json ${jsonbType} NOT NULL DEFAULT ${emptyJsonObject},
+      audit_summary_json ${jsonbType} NOT NULL DEFAULT ${emptyJsonObject},
       missing_fields_json TEXT NOT NULL DEFAULT '[]',
       missing_documents_json TEXT NOT NULL DEFAULT '[]',
       required_user_actions_json TEXT NOT NULL DEFAULT '[]',
       last_agent_message TEXT,
       auto_submit_enabled ${boolType} NOT NULL DEFAULT ${defFalse},
+      allow_auto_submit ${boolType} NOT NULL DEFAULT ${defFalse},
+      started_at ${tsType},
       submitted_at ${tsType},
+      completed_at ${tsType},
       cancelled_at ${tsType},
       created_at ${tsType} DEFAULT ${nowFn},
       updated_at ${tsType} DEFAULT ${nowFn}
@@ -160,6 +213,37 @@ export async function ensureApplicationTaskSchema(db) {
       ON application_missing_info(task_id, kind, key);
   `)
 
+  // Upgrade legacy shape (pre-migration 087) to the automation-task
+  // shape. Each ALTER is wrapped in a try/catch so a re-run on an
+  // already-upgraded DB is a no-op. We never DROP anything — the
+  // legacy columns and statuses remain valid.
+  const ensureColumn = async (col, type, defaultLiteral = null) => {
+    try {
+      const def = defaultLiteral ? ` DEFAULT ${defaultLiteral}` : ''
+      await db.exec(`ALTER TABLE application_tasks ADD COLUMN ${col} ${type}${def}`)
+    } catch (err) {
+      const msg = String(err?.message || '').toLowerCase()
+      if (!msg.includes('duplicate column') && !msg.includes('already exists')) {
+        if (process.env.NODE_ENV !== 'test') console.warn(`[applicationTaskStore] ALTER TABLE ${col} failed: ${err?.message || err}`)
+      }
+    }
+  }
+  await ensureColumn('automation_type', 'TEXT', "'unknown'")
+  await ensureColumn('selected_from_stage', 'TEXT')
+  await ensureColumn('current_pipeline_stage', 'TEXT')
+  await ensureColumn('agent_persona_version', 'TEXT', "'yana-mba-2026'")
+  await ensureColumn('portal_url', 'TEXT')
+  await ensureColumn('application_url', 'TEXT')
+  await ensureColumn('university_application_id', 'TEXT')
+  await ensureColumn('output_document_id', 'TEXT')
+  await ensureColumn('output_pdf_document_id', 'TEXT')
+  await ensureColumn('output_docx_document_id', 'TEXT')
+  await ensureColumn('mailing_instructions_json', isPostgres ? 'JSONB' : 'TEXT', isPostgres ? `'{}'::jsonb` : `'{}'`)
+  await ensureColumn('audit_summary_json', isPostgres ? 'JSONB' : 'TEXT', isPostgres ? `'{}'::jsonb` : `'{}'`)
+  await ensureColumn('allow_auto_submit', boolType, defFalse)
+  await ensureColumn('started_at', tsType)
+  await ensureColumn('completed_at', tsType)
+
   ensuredSchema = true
 }
 
@@ -183,15 +267,30 @@ function rowToTask(row) {
     grant_id: row.grant_id ?? null,
     portal_id: row.portal_id ?? null,
     application_id: row.application_id ?? null,
+    university_application_id: row.university_application_id ?? null,
     assigned_agent: row.assigned_agent ?? 'yana',
+    agent_persona_version: row.agent_persona_version ?? 'yana-mba-2026',
+    automation_type: row.automation_type ?? 'unknown',
+    selected_from_stage: row.selected_from_stage ?? null,
+    current_pipeline_stage: row.current_pipeline_stage ?? null,
     status: row.status,
     current_step: row.current_step ?? null,
+    portal_url: row.portal_url ?? null,
+    application_url: row.application_url ?? null,
+    output_document_id: row.output_document_id ?? null,
+    output_pdf_document_id: row.output_pdf_document_id ?? null,
+    output_docx_document_id: row.output_docx_document_id ?? null,
+    mailing_instructions: safeJson(row.mailing_instructions_json, {}),
+    audit_summary: safeJson(row.audit_summary_json, {}),
     missing_fields: safeJson(row.missing_fields_json, []),
     missing_documents: safeJson(row.missing_documents_json, []),
     required_user_actions: safeJson(row.required_user_actions_json, []),
     last_agent_message: row.last_agent_message ?? null,
     auto_submit_enabled: Boolean(row.auto_submit_enabled),
+    allow_auto_submit: Boolean(row.allow_auto_submit),
+    started_at: row.started_at ?? null,
     submitted_at: row.submitted_at ?? null,
+    completed_at: row.completed_at ?? null,
     cancelled_at: row.cancelled_at ?? null,
     created_at: row.created_at,
     updated_at: row.updated_at,
@@ -245,6 +344,11 @@ export async function ensureApplicationTask(db, {
   grantId = null,
   portalId = null,
   applicationId = null,
+  universityApplicationId = null,
+  automationType = 'unknown',
+  selectedFromStage = null,
+  currentPipelineStage = null,
+  agentPersonaVersion = 'yana-mba-2026',
   initialStatus = 'queued',
   currentStep = null,
 } = {}) {
@@ -252,6 +356,9 @@ export async function ensureApplicationTask(db, {
   if (!opportunityId && !grantId) throw new Error('opportunityId or grantId required')
   if (!TASK_STATUSES.includes(initialStatus)) {
     throw new Error(`invalid initialStatus: ${initialStatus}`)
+  }
+  if (!AUTOMATION_TYPES.includes(automationType)) {
+    throw new Error(`invalid automationType: ${automationType}`)
   }
   await ensureApplicationTaskSchema(db)
 
@@ -267,16 +374,38 @@ export async function ensureApplicationTask(db, {
         opportunityId ? String(opportunityId) : '',
         grantId ? String(grantId) : '',
       )
-    if (existing) return rowToTask(existing)
+    if (existing) {
+      // Re-bump the automation metadata when the user re-selects the
+      // same source from a different stage so the task picks up the
+      // latest classification + selected-from-stage.
+      const patch = []
+      const params = []
+      if (automationType && automationType !== 'unknown' && existing.automation_type !== automationType) {
+        patch.push('automation_type = ?'); params.push(automationType)
+      }
+      if (selectedFromStage && existing.selected_from_stage !== selectedFromStage) {
+        patch.push('selected_from_stage = ?'); params.push(selectedFromStage)
+      }
+      if (currentPipelineStage && existing.current_pipeline_stage !== currentPipelineStage) {
+        patch.push('current_pipeline_stage = ?'); params.push(currentPipelineStage)
+      }
+      if (patch.length > 0) {
+        params.push(existing.id)
+        await db.prepare(`UPDATE application_tasks SET ${patch.join(', ')}, updated_at = ${nowSqlLiteral(db)} WHERE id = ?`).run(...params)
+        const refreshed = await db.prepare('SELECT * FROM application_tasks WHERE id = ?').get(existing.id)
+        return rowToTask(refreshed)
+      }
+      return rowToTask(existing)
+    }
 
     const id = crypto.randomUUID()
     await db
       .prepare(
         `INSERT INTO application_tasks
            (id, user_id, profile_id, opportunity_id, grant_id, portal_id, application_id,
-            assigned_agent, status, current_step, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?,
-                 'yana', ?, ?, ${nowSqlLiteral(db)}, ${nowSqlLiteral(db)})`,
+            university_application_id, automation_type, selected_from_stage, current_pipeline_stage,
+            agent_persona_version, assigned_agent, status, current_step, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'yana', ?, ?, ${nowSqlLiteral(db)}, ${nowSqlLiteral(db)})`,
       )
       .run(
         id,
@@ -286,6 +415,11 @@ export async function ensureApplicationTask(db, {
         grantId,
         portalId,
         applicationId,
+        universityApplicationId,
+        automationType,
+        selectedFromStage,
+        currentPipelineStage,
+        agentPersonaVersion,
         initialStatus,
         currentStep,
       )
@@ -295,8 +429,9 @@ export async function ensureApplicationTask(db, {
       eventType: 'created',
       status: initialStatus,
       step: currentStep,
-      message: 'Application task created',
+      message: `Application task created (automation_type=${automationType}, selected_from_stage=${selectedFromStage || 'unspecified'})`,
       actorUserId: userId,
+      details: { automation_type: automationType, selected_from_stage: selectedFromStage, current_pipeline_stage: currentPipelineStage },
     })
 
     const row = await db.prepare('SELECT * FROM application_tasks WHERE id = ?').get(id)
@@ -347,14 +482,31 @@ export async function updateApplicationTask(db, taskId, {
   requiredUserActions,
   lastAgentMessage,
   autoSubmitEnabled,
+  allowAutoSubmit,
   applicationId,
+  universityApplicationId,
   portalId,
+  automationType,
+  selectedFromStage,
+  currentPipelineStage,
+  portalUrl,
+  applicationUrl,
+  outputDocumentId,
+  outputPdfDocumentId,
+  outputDocxDocumentId,
+  mailingInstructions,
+  auditSummary,
+  startedAt,
   submittedAt,
+  completedAt,
   cancelledAt,
 } = {}) {
   if (!taskId) throw new Error('taskId required')
   if (status !== undefined && !TASK_STATUSES.includes(status)) {
     throw new Error(`invalid status: ${status}`)
+  }
+  if (automationType !== undefined && !AUTOMATION_TYPES.includes(automationType)) {
+    throw new Error(`invalid automationType: ${automationType}`)
   }
   await ensureApplicationTaskSchema(db)
 
@@ -367,9 +519,23 @@ export async function updateApplicationTask(db, taskId, {
   if (requiredUserActions !== undefined) { sets.push('required_user_actions_json = ?'); params.push(JSON.stringify(requiredUserActions ?? [])) }
   if (lastAgentMessage !== undefined) { sets.push('last_agent_message = ?'); params.push(lastAgentMessage ?? null) }
   if (autoSubmitEnabled !== undefined) { sets.push('auto_submit_enabled = ?'); params.push(autoSubmitEnabled ? 1 : 0) }
+  if (allowAutoSubmit !== undefined) { sets.push('allow_auto_submit = ?'); params.push(allowAutoSubmit ? 1 : 0) }
   if (applicationId !== undefined) { sets.push('application_id = ?'); params.push(applicationId ?? null) }
+  if (universityApplicationId !== undefined) { sets.push('university_application_id = ?'); params.push(universityApplicationId ?? null) }
   if (portalId !== undefined) { sets.push('portal_id = ?'); params.push(portalId ?? null) }
+  if (automationType !== undefined) { sets.push('automation_type = ?'); params.push(automationType) }
+  if (selectedFromStage !== undefined) { sets.push('selected_from_stage = ?'); params.push(selectedFromStage ?? null) }
+  if (currentPipelineStage !== undefined) { sets.push('current_pipeline_stage = ?'); params.push(currentPipelineStage ?? null) }
+  if (portalUrl !== undefined) { sets.push('portal_url = ?'); params.push(portalUrl ?? null) }
+  if (applicationUrl !== undefined) { sets.push('application_url = ?'); params.push(applicationUrl ?? null) }
+  if (outputDocumentId !== undefined) { sets.push('output_document_id = ?'); params.push(outputDocumentId ?? null) }
+  if (outputPdfDocumentId !== undefined) { sets.push('output_pdf_document_id = ?'); params.push(outputPdfDocumentId ?? null) }
+  if (outputDocxDocumentId !== undefined) { sets.push('output_docx_document_id = ?'); params.push(outputDocxDocumentId ?? null) }
+  if (mailingInstructions !== undefined) { sets.push('mailing_instructions_json = ?'); params.push(JSON.stringify(mailingInstructions ?? {})) }
+  if (auditSummary !== undefined) { sets.push('audit_summary_json = ?'); params.push(JSON.stringify(auditSummary ?? {})) }
+  if (startedAt !== undefined) { sets.push('started_at = ?'); params.push(startedAt ?? null) }
   if (submittedAt !== undefined) { sets.push('submitted_at = ?'); params.push(submittedAt ?? null) }
+  if (completedAt !== undefined) { sets.push('completed_at = ?'); params.push(completedAt ?? null) }
   if (cancelledAt !== undefined) { sets.push('cancelled_at = ?'); params.push(cancelledAt ?? null) }
 
   if (sets.length === 1) return await getApplicationTask(db, taskId)

@@ -26,6 +26,7 @@
 import crypto from 'crypto'
 
 export const YANA_NOTIFICATION_TYPES = Object.freeze([
+  // Per-grant Yana flow (legacy).
   'yana_missing_info',
   'yana_login_required',
   'yana_document_required',
@@ -34,6 +35,15 @@ export const YANA_NOTIFICATION_TYPES = Object.freeze([
   'yana_application_submitted',
   'yana_application_blocked',
   'yana_application_failed',
+  // "Automate with Yana" select-many automation flow.
+  'yana_task_started',
+  'yana_task_blocked',
+  'yana_task_progress',
+  'yana_generated_document_saved',
+  'yana_submitted',
+  'yana_failed',
+  'yana_2fa_required',
+  'yana_captcha_required',
 ])
 
 export const YANA_SEVERITIES = Object.freeze(['info', 'warning', 'error', 'success'])

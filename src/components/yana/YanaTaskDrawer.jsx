@@ -9,10 +9,11 @@ import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
-import { Loader2, Sparkles, AlertTriangle, CheckCircle2, ExternalLink } from 'lucide-react'
+import { Loader2, Sparkles, AlertTriangle, CheckCircle2, ExternalLink, Download, Mail, Send, Phone } from 'lucide-react'
 import { useToast } from '@/components/ui/use-toast'
 import { showErrorToast, showInfoToast } from '@/components/shared/toastHelpers'
 import * as yanaApi from '@/api/yana'
+import client from '@/api/client'
 
 export default function YanaTaskDrawer({ open, onClose, task: initialTask, onTaskUpdated }) {
   const { toast } = useToast()
@@ -112,6 +113,44 @@ export default function YanaTaskDrawer({ open, onClose, task: initialTask, onTas
     }
   }
 
+  async function regeneratePacket() {
+    if (!task?.id) return
+    setBusy(true)
+    try {
+      const res = await client.post(`/api/yana/automation/tasks/${task.id}/regenerate`, {})
+      showInfoToast(toast, 'Packet regenerated', 'A new DOCX/PDF was saved under the profile\'s Documents.')
+      const detail = await yanaApi.getApplicationTask(task.id)
+      setTask(detail?.task || task)
+      setEvents(detail?.events || [])
+      onTaskUpdated?.(detail?.task || task)
+      void res
+    } catch (err) {
+      showErrorToast(toast, 'Could not regenerate', err?.message || 'See logs.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function markChannel(channel) {
+    if (!task?.id) return
+    setBusy(true)
+    try {
+      const res = await client.post(`/api/yana/automation/tasks/${task.id}/mark-${channel}`, {})
+      setTask(res?.task || task)
+      onTaskUpdated?.(res?.task || task)
+      showInfoToast(toast, `Marked ${channel}`, 'Yana logged the submission.')
+    } catch (err) {
+      showErrorToast(toast, `Could not mark ${channel}`, err?.message || 'See logs.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  function downloadHref(documentId) {
+    if (!documentId) return null
+    return `/api/documents/${encodeURIComponent(documentId)}/download`
+  }
+
   if (!open) return null
 
   return (
@@ -135,6 +174,14 @@ export default function YanaTaskDrawer({ open, onClose, task: initialTask, onTas
           <div className="space-y-4">
             <div className="flex flex-wrap items-center gap-2">
               <Badge variant="outline">{yanaApi.statusLabel(task.status)}</Badge>
+              {task.automation_type && task.automation_type !== 'unknown' && (
+                <Badge variant="outline" className="text-xs bg-indigo-50 text-indigo-800 border-indigo-200">
+                  {task.automation_type.replace('_', ' ')}
+                </Badge>
+              )}
+              {task.selected_from_stage && (
+                <Badge variant="outline" className="text-xs">from {task.selected_from_stage}</Badge>
+              )}
               {task.application_id && (
                 <Badge variant="outline" className="text-xs">apply-engine: {String(task.application_id).slice(0, 8)}…</Badge>
               )}
@@ -148,6 +195,67 @@ export default function YanaTaskDrawer({ open, onClose, task: initialTask, onTas
             {task.last_agent_message && (
               <div className="text-sm bg-purple-50 border border-purple-200 rounded p-3">
                 <span className="font-medium text-purple-900">Yana said:</span> {task.last_agent_message}
+              </div>
+            )}
+
+            {(task.output_pdf_document_id || task.output_docx_document_id) && (
+              <div className="space-y-2">
+                <h4 className="text-sm font-semibold text-slate-800">Generated application packet</h4>
+                <div className="flex flex-wrap gap-2">
+                  {task.output_docx_document_id && (
+                    <a
+                      href={downloadHref(task.output_docx_document_id)}
+                      className="inline-flex items-center gap-1 px-3 py-1.5 text-xs rounded border border-slate-300 hover:bg-slate-50"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                    >
+                      <Download className="w-3 h-3" /> Download DOCX
+                    </a>
+                  )}
+                  {task.output_pdf_document_id && (
+                    <a
+                      href={downloadHref(task.output_pdf_document_id)}
+                      className="inline-flex items-center gap-1 px-3 py-1.5 text-xs rounded border border-slate-300 hover:bg-slate-50"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                    >
+                      <Download className="w-3 h-3" /> Download PDF
+                    </a>
+                  )}
+                  <Button variant="ghost" size="sm" onClick={regeneratePacket} disabled={busy}>
+                    Regenerate
+                  </Button>
+                </div>
+              </div>
+            )}
+
+            {task.mailing_instructions && Array.isArray(task.mailing_instructions.instructions) && task.mailing_instructions.instructions.length > 0 && (
+              <div className="space-y-2">
+                <h4 className="text-sm font-semibold text-slate-800">Submission instructions</h4>
+                <ul className="text-xs text-slate-700 list-disc pl-5 space-y-1 bg-slate-50 border border-slate-200 rounded p-3">
+                  {task.mailing_instructions.instructions.map((line, i) => (
+                    <li key={i}>{line}</li>
+                  ))}
+                </ul>
+                {(task.status === 'ready_to_print_mail' || task.status === 'ready_to_email' || task.status === 'ready_to_fax') && (
+                  <div className="flex flex-wrap gap-2 pt-1">
+                    {task.status === 'ready_to_print_mail' && (
+                      <Button size="sm" variant="outline" onClick={() => markChannel('mailed')} disabled={busy}>
+                        <Mail className="w-3 h-3 mr-1" /> Mark mailed
+                      </Button>
+                    )}
+                    {task.status === 'ready_to_email' && (
+                      <Button size="sm" variant="outline" onClick={() => markChannel('emailed')} disabled={busy}>
+                        <Send className="w-3 h-3 mr-1" /> Mark emailed
+                      </Button>
+                    )}
+                    {task.status === 'ready_to_fax' && (
+                      <Button size="sm" variant="outline" onClick={() => markChannel('faxed')} disabled={busy}>
+                        <Phone className="w-3 h-3 mr-1" /> Mark faxed
+                      </Button>
+                    )}
+                  </div>
+                )}
               </div>
             )}
 

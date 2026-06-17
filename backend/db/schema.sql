@@ -3116,13 +3116,32 @@ CREATE TABLE IF NOT EXISTS application_tasks (
   submitted_at DATETIME,
   cancelled_at DATETIME,
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  -- ?? Automation-task extension (migration 087). Adds the columns the
+  -- "Automate with Yana" select-many flow needs.
+  automation_type TEXT NOT NULL DEFAULT 'unknown',
+  selected_from_stage TEXT,
+  current_pipeline_stage TEXT,
+  agent_persona_version TEXT NOT NULL DEFAULT 'yana-mba-2026',
+  portal_url TEXT,
+  application_url TEXT,
+  university_application_id TEXT,
+  output_document_id TEXT,
+  output_pdf_document_id TEXT,
+  output_docx_document_id TEXT,
+  mailing_instructions_json TEXT NOT NULL DEFAULT '{}',
+  audit_summary_json TEXT NOT NULL DEFAULT '{}',
+  allow_auto_submit INTEGER NOT NULL DEFAULT 0,
+  started_at DATETIME,
+  completed_at DATETIME
 );
-CREATE INDEX IF NOT EXISTS idx_application_tasks_profile  ON application_tasks(profile_id);
-CREATE INDEX IF NOT EXISTS idx_application_tasks_user     ON application_tasks(user_id);
-CREATE INDEX IF NOT EXISTS idx_application_tasks_opp      ON application_tasks(opportunity_id);
-CREATE INDEX IF NOT EXISTS idx_application_tasks_grant    ON application_tasks(grant_id);
-CREATE INDEX IF NOT EXISTS idx_application_tasks_status   ON application_tasks(status);
+CREATE INDEX IF NOT EXISTS idx_application_tasks_profile          ON application_tasks(profile_id);
+CREATE INDEX IF NOT EXISTS idx_application_tasks_user             ON application_tasks(user_id);
+CREATE INDEX IF NOT EXISTS idx_application_tasks_opp              ON application_tasks(opportunity_id);
+CREATE INDEX IF NOT EXISTS idx_application_tasks_grant            ON application_tasks(grant_id);
+CREATE INDEX IF NOT EXISTS idx_application_tasks_status           ON application_tasks(status);
+CREATE INDEX IF NOT EXISTS idx_application_tasks_automation_type  ON application_tasks(automation_type);
+CREATE INDEX IF NOT EXISTS idx_application_tasks_selected_stage   ON application_tasks(selected_from_stage);
 CREATE UNIQUE INDEX IF NOT EXISTS ux_application_tasks_profile_subject
   ON application_tasks(profile_id, COALESCE(opportunity_id,''), COALESCE(grant_id,''));
 
