@@ -31,8 +31,9 @@ if [ -f "$APP_DIR/backend/data/grantflow.db" ]; then
   cp "$APP_DIR/backend/data/grantflow.db" "$BACKUP_DIR/${TIMESTAMP}_grantflow.db" || true
 fi
 
-# Keep only the 5 most recent backups
+# Keep only the 5 most recent backups (frontend archives and DB snapshots)
 ls -dt "$BACKUP_DIR"/*_frontend.tar.gz 2>/dev/null | tail -n +6 | xargs rm -f || true
+ls -dt "$BACKUP_DIR"/*_grantflow.db    2>/dev/null | tail -n +6 | xargs rm -f || true
 
 # ── 2. Pull latest code ───────────────────────────────────────────────────────
 log "Pulling latest code"
@@ -75,7 +76,22 @@ for i in 1 2 3 4 5; do
   log "Attempt $i: HTTP $STATUS – waiting 5s"
   sleep 5
   if [ "$i" = "5" ]; then
-    die "Health check failed after 5 attempts. Rolling back…"
+    log "Health check failed after 5 attempts – attempting rollback"
+    LATEST_FRONTEND=$(ls -dt "$BACKUP_DIR"/*_frontend.tar.gz 2>/dev/null | head -1 || true)
+    LATEST_DB=$(ls -dt "$BACKUP_DIR"/*_grantflow.db 2>/dev/null | head -1 || true)
+    if [ -n "$LATEST_FRONTEND" ]; then
+      log "Restoring frontend from $LATEST_FRONTEND"
+      rm -rf "${WEB_ROOT:?}"/*
+      tar -xzf "$LATEST_FRONTEND" -C "$WEB_ROOT"
+      systemctl reload nginx || true
+    fi
+    if [ -n "$LATEST_DB" ]; then
+      log "Restoring database from $LATEST_DB"
+      systemctl stop grantflow-backend || true
+      cp "$LATEST_DB" "$APP_DIR/backend/data/grantflow.db"
+      systemctl start grantflow-backend || true
+    fi
+    die "Deployment failed – rollback attempted. Check logs: journalctl -u grantflow-backend -n 50"
   fi
 done
 
