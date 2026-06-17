@@ -3,83 +3,98 @@ import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
+import net from 'node:net'
 import path from 'node:path'
+
+async function reservePort() {
+  return await new Promise((resolve, reject) => {
+    const server = net.createServer()
+    server.listen(0, '127.0.0.1', () => {
+      const address = server.address()
+      const port = typeof address === 'object' && address ? address.port : null
+      server.close((error) => {
+        if (error) {
+          reject(error)
+          return
+        }
+        resolve(port)
+      })
+    })
+    server.on('error', reject)
+  })
+}
 
 function startServer(extraEnv = {}) {
   const tmp = mkdtempSync(path.join(tmpdir(), 'grantflow-anya-test-'))
   const dbPath = path.join(tmp, 'test.db')
-
-  const child = spawn(process.execPath, ['backend/server.js'], {
-    cwd: path.resolve('.'),
-    env: {
-      ...process.env,
-      NODE_ENV: 'development',
-      PORT: '0',
-      DB_PROVIDER: 'sqlite',
-      SQLITE_DB_PATH: dbPath,
-      DB_AUTO_MIGRATE: 'true',
-      AUTH_JWT_SECRET: 'test-secret',
-      // Provide a configured admin token so non-admin /api/anya/status yields a deterministic 403.
-      ADMIN_TOKEN: 'test-admin-token',
-      ...extraEnv,
-    },
-    stdio: ['ignore', 'pipe', 'pipe'],
-  })
-
+  let child = null
   let stdout = ''
   let stderr = ''
-  child.stdout.setEncoding('utf8')
-  child.stderr.setEncoding('utf8')
-  child.stderr.on('data', (d) => (stderr += d))
 
-  const ready = new Promise((resolve, reject) => {
-    let resolved = false
-    const timeout = setTimeout(() => {
-      if (resolved) return
-      try {
-        child.kill('SIGTERM')
-      } catch {
-        // ignore
-      }
-      reject(new Error(`server did not become ready\nstdout:\n${stdout}\nstderr:\n${stderr}`))
-    }, 60_000)
+  const ready = (async () => {
+    const port = await reservePort()
+    child = spawn(process.execPath, ['backend/server.js'], {
+      cwd: path.resolve('.'),
+      env: {
+        ...process.env,
+        NODE_ENV: 'development',
+        PORT: String(port),
+        DB_PROVIDER: 'sqlite',
+        SQLITE_DB_PATH: dbPath,
+        DB_AUTO_MIGRATE: 'true',
+        AUTH_JWT_SECRET: 'test-secret',
+        SMOKE_MODE: 'true',
+        DISABLE_BACKGROUND_SERVICES: 'true',
+        ANYA_AUTONOMOUS_ENABLED: 'false',
+        ANYA_RUN_ON_STARTUP: 'false',
+        ANYA_RUN_ON_SCHEDULE: 'false',
+        NATIONAL_PROGRAMS_CRAWLER_ENABLED: 'false',
+        STARTUP_SMOKE_CRAWL_ENABLED: 'false',
+        // Provide a configured admin token so non-admin /api/anya/status yields a deterministic 403.
+        ADMIN_TOKEN: 'test-admin-token',
+        ...extraEnv,
+      },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
 
-    const checkReady = (newChunk) => {
-      if (resolved) return true
-      const textToCheck = stdout + (newChunk || '')
-      const match = textToCheck.match(/\[Server\] Ready on port\s+(\d+)/)
-      if (match) {
-        resolved = true
-        clearTimeout(timeout)
-        resolve({ port: Number(match[1]) })
-        return true
-      }
-      return false
-    }
-
+    child.stdout.setEncoding('utf8')
+    child.stderr.setEncoding('utf8')
     child.stdout.on('data', (chunk) => {
       stdout += chunk
-      checkReady(chunk)
+    })
+    child.stderr.on('data', (chunk) => {
+      stderr += chunk
     })
 
-    child.on('error', (err) => {
-      if (resolved) return
-      clearTimeout(timeout)
-      reject(new Error(`server failed to spawn: ${String(err?.message || err)}\nstdout:\n${stdout}\nstderr:\n${stderr}`))
-    })
-
-    child.on('exit', (code) => {
-      if (resolved) return
-      if (stdout.includes('[Server] Ready on port')) return
-      clearTimeout(timeout)
-      reject(new Error(`server exited before ready (code=${code})\nstdout:\n${stdout}\nstderr:\n${stderr}`))
-    })
-  })
+    const deadline = Date.now() + 60_000
+    while (Date.now() < deadline) {
+      if (child.exitCode !== null) {
+        throw new Error(`server exited before ready (code=${child.exitCode})\nstdout:\n${stdout}\nstderr:\n${stderr}`)
+      }
+      try {
+        const res = await fetch(`http://127.0.0.1:${port}/healthz`)
+        if (res.ok) return { port }
+      } catch {
+        // retry
+      }
+      await new Promise((resolve) => setTimeout(resolve, 100))
+    }
+    try { child.kill('SIGTERM') } catch {}
+    throw new Error(`server did not become ready\nstdout:\n${stdout}\nstderr:\n${stderr}`)
+  })()
 
   async function stop() {
+    if (!child) return
     if (child.killed) return
-    child.kill('SIGTERM')
-    await new Promise((resolve) => child.once('exit', resolve))
+    try { child.kill('SIGTERM') } catch {}
+    await Promise.race([
+      new Promise((resolve) => child.once('exit', resolve)),
+      new Promise((resolve) => setTimeout(resolve, 2_000)),
+    ])
+    if (!child.killed && child.exitCode === null) {
+      try { child.kill('SIGKILL') } catch {}
+      await new Promise((resolve) => child.once('exit', resolve))
+    }
   }
 
   return { ready, stop, dbPath }
@@ -252,4 +267,3 @@ test('anya: status, sessions/messages, tasks, tools (deterministic)', async () =
     await srv.stop()
   }
 })
-

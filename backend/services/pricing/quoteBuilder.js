@@ -209,7 +209,6 @@ export async function approveQuote(db, quoteId) {
     })
   }
   return r
-  return updateQuoteStatus(db, quoteId, QUOTE_STATUS.APPROVED)
 }
 
 export async function approveDiscount(db, quoteId, discountId) {

@@ -34,7 +34,11 @@ function startServer(extraEnv = {}) {
   child.stderr.on('data', (d) => (stderr += d))
 
   const ready = new Promise((resolve, reject) => {
+    let resolved = false
+    let readyPoll = null
     const timeout = setTimeout(() => {
+      if (resolved) return
+      clearInterval(readyPoll)
       try {
         child.kill('SIGTERM')
       } catch {
@@ -43,21 +47,33 @@ function startServer(extraEnv = {}) {
       reject(new Error(`server did not become ready\nstdout:\n${stdout}\nstderr:\n${stderr}`))
     }, 60_000)
 
-    child.stdout.on('data', () => {
-      const m = stdout.match(/\[Server\] Ready on port\s+(\d+)/)
+    const checkReady = () => {
+      if (resolved) return
+      const m = stdout.match(/\[Server\](?:\u001B\[[0-?]*[ -/]*[@-~]|\s)+Ready on port\s+(\d+)/)
       if (m) {
+        resolved = true
+        clearInterval(readyPoll)
         clearTimeout(timeout)
         resolve({ port: Number(m[1]), dbPath })
       }
-    })
+    }
+    child.stdout.on('data', checkReady)
+    readyPoll = setInterval(checkReady, 50)
+    checkReady()
 
     child.on('error', (err) => {
+      if (resolved) return
+      resolved = true
+      clearInterval(readyPoll)
       clearTimeout(timeout)
       reject(new Error(`server failed to spawn: ${String(err?.message || err)}\nstdout:\n${stdout}\nstderr:\n${stderr}`))
     })
 
     child.on('exit', (code) => {
-      if (stdout.includes('[Server] Ready on port')) return
+      if (resolved) return
+      if (/\[Server\](?:\u001B\[[0-?]*[ -/]*[@-~]|\s)+Ready on port/.test(stdout)) return
+      resolved = true
+      clearInterval(readyPoll)
       clearTimeout(timeout)
       reject(new Error(`server exited before ready (code=${code})\nstdout:\n${stdout}\nstderr:\n${stderr}`))
     })
@@ -189,4 +205,3 @@ test('phase6: geo crawl persists state runs + summary counts (fixtures, no netwo
     await srv.stop()
   }
 })
-

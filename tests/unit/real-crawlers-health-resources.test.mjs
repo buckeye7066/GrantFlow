@@ -1,64 +1,19 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { spawn } from 'node:child_process'
-import { mkdtempSync } from 'node:fs'
-import { tmpdir } from 'node:os'
 import path from 'node:path'
+import { startBackend, stopProcess } from '../helpers/backendHarness.mjs'
 
-function startServer(extraEnv = {}) {
-  const tmp = mkdtempSync(path.join(tmpdir(), 'grantflow-health-crawler-test-'))
-  const dbPath = path.join(tmp, 'test.db')
-
-  const child = spawn(process.execPath, ['backend/server.js'], {
-    cwd: path.resolve('.'),
-    env: {
-      ...process.env,
-      NODE_ENV: 'development',
-      PORT: '0',
-      DB_PROVIDER: 'sqlite',
-      SQLITE_DB_PATH: dbPath,
-      DB_AUTO_MIGRATE: 'true',
-      AUTH_JWT_SECRET: 'test-secret',
-      ...extraEnv,
-    },
-    stdio: ['ignore', 'pipe', 'pipe'],
+async function startServer(extraEnv = {}) {
+  const started = await startBackend({
+    rootDir: path.resolve('.'),
+    envOverrides: extraEnv,
   })
 
-  let stdout = ''
-  let stderr = ''
-  child.stdout.setEncoding('utf8')
-  child.stderr.setEncoding('utf8')
-  child.stdout.on('data', (d) => (stdout += d))
-  child.stderr.on('data', (d) => (stderr += d))
-
-  const ready = new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      try {
-        child.kill('SIGTERM')
-      } catch {
-        // ignore
-      }
-      reject(new Error(`server did not become ready\nstdout:\n${stdout}\nstderr:\n${stderr}`))
-    }, 60_000)
-
-    const onData = () => {
-      const match = stdout.match(/\[Server\] Ready on port\s+(\d+)/)
-      if (match) {
-        clearTimeout(timeout)
-        resolve({ port: Number(match[1]) })
-      }
-    }
-
-    child.stdout.on('data', onData)
-  })
-
-  async function stop() {
-    if (child.killed) return
-    child.kill('SIGTERM')
-    await new Promise((resolve) => child.once('exit', resolve))
+  return {
+    port: started.port,
+    dbPath: path.join(started.tempDir, 'grantflow-test.db'),
+    stop: async () => stopProcess(started.proc),
   }
-
-  return { ready, stop, dbPath }
 }
 
 async function fetchJson(url, init) {
@@ -81,13 +36,16 @@ function assertValidHttpUrl(url) {
 }
 
 test('real crawler: health_resources respects consent gating for trials', async () => {
-  const srv = startServer()
-  const { port } = await srv.ready
+  const srv = await startServer()
+  const { port } = srv
 
   try {
     const email = 'healthcrawler@example.com'
+    const secondEmail = 'healthcrawler-noconsent@example.com'
     const userId = '00000000-0000-0000-0000-00000000bb01'
+    const secondUserId = '00000000-0000-0000-0000-00000000bb06'
     const credentialId = '00000000-0000-0000-0000-00000000bb02'
+    const secondCredentialId = '00000000-0000-0000-0000-00000000bb07'
     const orgId = '00000000-0000-0000-0000-00000000bb03'
     const profileWithConsent = '00000000-0000-0000-0000-00000000bb04'
     const profileNoConsent = '00000000-0000-0000-0000-00000000bb05'
@@ -101,6 +59,12 @@ test('real crawler: health_resources respects consent gating for trials', async 
       INSERT INTO user_credentials (id, user_id, type, identifier, attempt_count)
       VALUES ('${credentialId}', '${userId}', 'email_otp', '${email}', 0);
 
+      INSERT INTO users (id, display_name, primary_email, is_admin)
+      VALUES ('${secondUserId}', 'healthcrawler-noconsent', '${secondEmail}', 0);
+
+      INSERT INTO user_credentials (id, user_id, type, identifier, attempt_count)
+      VALUES ('${secondCredentialId}', '${secondUserId}', 'email_otp', '${secondEmail}', 0);
+
       INSERT INTO organizations (id, name, city, state, zip)
       VALUES ('${orgId}', 'Test Org', 'Nashville', 'TN', '37209');
 
@@ -108,7 +72,7 @@ test('real crawler: health_resources respects consent gating for trials', async 
       VALUES ('${profileWithConsent}', '${userId}', '${orgId}', 'Health Profile (consent)', 'individual_need', 'active', '["health"]');
 
       INSERT INTO profiles (id, user_id, organization_id, display_name, primary_type, status, tags)
-      VALUES ('${profileNoConsent}', '${userId}', '${orgId}', 'Health Profile (no consent)', 'individual_need', 'active', '["health"]');
+      VALUES ('${profileNoConsent}', '${secondUserId}', '${orgId}', 'Health Profile (no consent)', 'individual_need', 'active', '["health"]');
 
       INSERT INTO profile_sections (profile_id, section_key, data, updated_by)
       VALUES (
@@ -159,6 +123,23 @@ test('real crawler: health_resources respects consent gating for trials', async 
     assert.equal(verify.status, 200)
     assert.ok(verify.json?.accessToken)
 
+    const secondStart = await fetchJson(`http://127.0.0.1:${port}/api/auth/email/start`, {
+      method: 'POST',
+      body: JSON.stringify({ email: secondEmail }),
+    })
+    assert.equal(secondStart.status, 202)
+
+    const secondVerify = await fetchJson(`http://127.0.0.1:${port}/api/auth/email/verify`, {
+      method: 'POST',
+      body: JSON.stringify({
+        email: secondEmail,
+        code: secondStart.json.previewCode,
+        verification_token: secondStart.json.verification_token,
+      }),
+    })
+    assert.equal(secondVerify.status, 200)
+    assert.ok(secondVerify.json?.accessToken)
+
     const runConsent = await fetchJson(`http://127.0.0.1:${port}/api/real-crawlers/run`, {
       method: 'POST',
       headers: {
@@ -193,7 +174,7 @@ test('real crawler: health_resources respects consent gating for trials', async 
     const runNoConsent = await fetchJson(`http://127.0.0.1:${port}/api/real-crawlers/run`, {
       method: 'POST',
       headers: {
-        Authorization: `Bearer ${verify.json.accessToken}`,
+        Authorization: `Bearer ${secondVerify.json.accessToken}`,
       },
       body: JSON.stringify({
         crawler_type: 'health_resources',
@@ -213,4 +194,3 @@ test('real crawler: health_resources respects consent gating for trials', async 
     await srv.stop()
   }
 })
-

@@ -28,12 +28,34 @@ function startServer(extraEnv = {}) {
   let stderr = ''
   child.stdout.setEncoding('utf8')
   child.stderr.setEncoding('utf8')
-  child.stderr.on('data', (d) => (stderr += d))
 
   const ready = new Promise((resolve, reject) => {
     let resolved = false
+
+    const tryResolveReady = () => {
+      if (resolved) return true
+      const match = stdout.match(/\[Server\](?:\u001B\[[0-?]*[ -/]*[@-~]|\s)+Ready on port\s+(\d+)/) || stderr.match(/\[Server\](?:\u001B\[[0-?]*[ -/]*[@-~]|\s)+Ready on port\s+(\d+)/)
+      if (!match) return false
+      resolved = true
+      clearTimeout(timeout)
+      resolve({ port: Number(match[1]) })
+      return true
+    }
+
+    child.stdout.on('data', (chunk) => {
+      stdout += chunk
+      tryResolveReady()
+    })
+
+    child.stderr.on('data', (chunk) => {
+      stderr += chunk
+      tryResolveReady()
+    })
+
+    tryResolveReady()
+
     const timeout = setTimeout(() => {
-      if (resolved) return
+      if (tryResolveReady()) return
       try {
         child.kill('SIGTERM')
       } catch {
@@ -42,24 +64,6 @@ function startServer(extraEnv = {}) {
       reject(new Error(`server did not become ready\nstdout:\n${stdout}\nstderr:\n${stderr}`))
     }, 60_000)
 
-    const checkReady = (newChunk) => {
-      if (resolved) return true
-      const textToCheck = stdout + (newChunk || '')
-      const match = textToCheck.match(/\[Server\] Ready on port\s+(\d+)/)
-      if (match) {
-        resolved = true
-        clearTimeout(timeout)
-        resolve({ port: Number(match[1]) })
-        return true
-      }
-      return false
-    }
-
-    child.stdout.on('data', (chunk) => {
-      stdout += chunk
-      checkReady(chunk)
-    })
-
     child.on('error', (err) => {
       if (resolved) return
       clearTimeout(timeout)
@@ -67,8 +71,7 @@ function startServer(extraEnv = {}) {
     })
 
     child.on('exit', (code) => {
-      if (resolved) return
-      if (stdout.includes('[Server] Ready on port')) return
+      if (resolved || tryResolveReady()) return
       clearTimeout(timeout)
       reject(new Error(`server exited before ready (code=${code})\nstdout:\n${stdout}\nstderr:\n${stderr}`))
     })

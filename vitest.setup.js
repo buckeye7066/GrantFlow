@@ -4,3 +4,10 @@ try {
   // Optional: extends expect with DOM matchers when available (e.g. toBeInTheDocument)
 }
 
+globalThis.ResizeObserver =
+  globalThis.ResizeObserver ??
+  class {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  }

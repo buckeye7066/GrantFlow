@@ -4,50 +4,23 @@
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { spawn } from 'node:child_process'
-import { mkdtempSync } from 'node:fs'
-import { tmpdir } from 'node:os'
 import path from 'node:path'
+import { startBackend, stopProcess } from '../helpers/backendHarness.mjs'
 
-function startServer(extraEnv = {}) {
-  const tmp = mkdtempSync(path.join(tmpdir(), 'grantflow-policy-test-'))
-  const dbPath = path.join(tmp, 'test.db')
-  const child = spawn(process.execPath, ['backend/server.js'], {
-    cwd: path.resolve('.'),
-    env: {
-      ...process.env,
-      NODE_ENV: 'development',
-      PORT: '0',
-      DB_PROVIDER: 'sqlite',
-      SQLITE_DB_PATH: dbPath,
-      DB_AUTO_MIGRATE: 'true',
-      AUTH_JWT_SECRET: 'test-secret',
+async function startServer(extraEnv = {}) {
+  const started = await startBackend({
+    rootDir: path.resolve('.'),
+    envOverrides: {
       LIVE_CRAWL_TIMEOUT_MS: '1',
       ...extraEnv,
     },
-    stdio: ['ignore', 'pipe', 'pipe'],
   })
-  let stdout = ''
-  let stderr = ''
-  child.stdout.setEncoding('utf8')
-  child.stderr.setEncoding('utf8')
-  child.stdout.on('data', (d) => (stdout += d))
-  child.stderr.on('data', (d) => (stderr += d))
-  const ready = new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      try { child.kill('SIGTERM') } catch { /* noop */ }
-      reject(new Error(`server not ready\n${stdout}\n${stderr}`))
-    }, 60_000)
-    child.stdout.on('data', () => {
-      const m = stdout.match(/\[Server\] Ready on port\s+(\d+)/)
-      if (m) { clearTimeout(timeout); resolve({ port: Number(m[1]) }) }
-    })
-  })
-  async function stop() {
-    if (!child.killed) child.kill('SIGTERM')
-    await new Promise((r) => child.once('exit', r))
+
+  return {
+    port: started.port,
+    dbPath: path.join(started.tempDir, 'grantflow-test.db'),
+    stop: async () => stopProcess(started.proc),
   }
-  return { ready, stop, dbPath }
 }
 
 async function fetchJson(url, init) {
@@ -57,8 +30,8 @@ async function fetchJson(url, init) {
 }
 
 test('real-crawlers: DB fallback excludes loan, matching_funds, missing URL; returns only valid grant', async () => {
-  const srv = startServer({ LIVE_CRAWL_TIMEOUT_MS: '1' })
-  const { port } = await srv.ready
+  const srv = await startServer({ LIVE_CRAWL_TIMEOUT_MS: '1' })
+  const { port } = srv
   const email = 'policy@example.com'
   const userId = '10000000-0000-0000-0000-000000000001'
   const credId = '10000000-0000-0000-0000-000000000002'
@@ -124,8 +97,8 @@ test('real-crawlers: DB fallback excludes loan, matching_funds, missing URL; ret
 })
 
 test('real-crawlers: min_match_score threshold enforced', async () => {
-  const srv = startServer({ LIVE_CRAWL_TIMEOUT_MS: '1' })
-  const { port } = await srv.ready
+  const srv = await startServer({ LIVE_CRAWL_TIMEOUT_MS: '1' })
+  const { port } = srv
   const email = 'score@example.com'
   const userId = '20000000-0000-0000-0000-000000000001'
   const credId = '20000000-0000-0000-0000-000000000002'

@@ -30,7 +30,11 @@ function startServer({ dbPath }) {
   child.stderr.on('data', (d) => (stderr += d))
 
   const ready = new Promise((resolve, reject) => {
+    let resolved = false
+    let readyPoll = null
     const timeout = setTimeout(() => {
+      if (resolved) return
+      clearInterval(readyPoll)
       try {
         child.kill('SIGTERM')
       } catch {
@@ -39,14 +43,20 @@ function startServer({ dbPath }) {
       reject(new Error(`server did not become ready\nstdout:\n${stdout}\nstderr:\n${stderr}`))
     }, 60_000)
 
-    child.stdout.on('data', (chunk) => {
+    const checkReady = (chunk = '') => {
+      if (resolved) return
       stdout += chunk
-      const match = stdout.match(/\[Server\] Ready on port\s+(\d+)/)
+      const match = stdout.match(/\[Server\](?:\u001B\[[0-?]*[ -/]*[@-~]|\s)+Ready on port\s+(\d+)/)
       if (match) {
+        resolved = true
+        clearInterval(readyPoll)
         clearTimeout(timeout)
         resolve({ port: Number.parseInt(match[1], 10), child })
       }
-    })
+    }
+    child.stdout.on('data', checkReady)
+    readyPoll = setInterval(checkReady, 50)
+    checkReady()
   })
 
   return ready
@@ -177,4 +187,3 @@ test('DiscoverGrants: add-to-pipeline does not 500 when grants.profile_id is mis
     await stopServer(child)
   }
 })
-

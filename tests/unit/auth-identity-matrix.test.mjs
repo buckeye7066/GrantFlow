@@ -22,6 +22,7 @@ import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import fs from 'node:fs'
+import { createServer as createNetServer } from 'node:net'
 import { fileURLToPath } from 'node:url'
 
 const __filename = fileURLToPath(import.meta.url)
@@ -36,67 +37,82 @@ const TEST_ADMIN_TOKEN = 'test-admin-token-identity-matrix'
 const TEST_ANYA_API_KEY = 'test-anya-api-key-identity-matrix'
 const TEST_JWT_SECRET = 'test-jwt-secret-identity-matrix'
 
+function reservePort() {
+  return new Promise((resolve, reject) => {
+    const srv = createNetServer()
+    srv.on('error', reject)
+    srv.listen(0, '127.0.0.1', () => {
+      const address = srv.address()
+      const port = typeof address === 'object' && address ? address.port : null
+      srv.close((err) => {
+        if (err) reject(err)
+        else resolve(port)
+      })
+    })
+  })
+}
+
+async function waitForHealthz(port, { child, getLogs, dbPath, timeoutMs = 60_000 }) {
+  const startedAt = Date.now()
+  while (Date.now() - startedAt < timeoutMs) {
+    if (child?.exitCode !== null && child?.exitCode !== undefined) {
+      const { stdout, stderr } = getLogs()
+      throw new Error(`server exited before ready (code=${child.exitCode})\nstdout:\n${stdout}\nstderr:\n${stderr}`)
+    }
+    try {
+      const response = await fetch(`http://127.0.0.1:${port}/healthz`)
+      if (response.ok) return { port, dbPath }
+    } catch {
+      // retry
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100))
+  }
+  const { stdout, stderr } = getLogs()
+  throw new Error(`server did not become ready\nstdout:\n${stdout}\nstderr:\n${stderr}`)
+}
+
 function startServer(extraEnv = {}) {
   const tmp = mkdtempSync(path.join(tmpdir(), 'grantflow-auth-matrix-'))
   const dbPath = path.join(tmp, 'test.db')
-
-  const child = spawn(process.execPath, ['backend/server.js'], {
-    cwd: ROOT,
-    env: {
-      ...process.env,
-      NODE_ENV: 'development',
-      PORT: '0',
-      DB_PROVIDER: 'sqlite',
-      SQLITE_DB_PATH: dbPath,
-      DB_AUTO_MIGRATE: 'true',
-      AUTH_JWT_SECRET: TEST_JWT_SECRET,
-      ADMIN_TOKEN: TEST_ADMIN_TOKEN,
-      ANYA_API_KEY: TEST_ANYA_API_KEY,
-      // Keep boot fast
-      SMOKE_MODE: 'true',
-      DISABLE_BACKGROUND_SERVICES: 'true',
-      ...extraEnv,
-    },
-    stdio: ['ignore', 'pipe', 'pipe'],
-  })
-
+  let child = null
   let stdout = ''
   let stderr = ''
-  child.stdout.setEncoding('utf8')
-  child.stderr.setEncoding('utf8')
-  child.stdout.on('data', (d) => (stdout += d))
-  child.stderr.on('data', (d) => (stderr += d))
-
-  const ready = new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      try { child.kill('SIGTERM') } catch { /* ignore */ }
-      reject(new Error(`server did not become ready\nstdout:\n${stdout}\nstderr:\n${stderr}`))
-    }, 60_000)
-
-    const onData = () => {
-      const match = stdout.match(/\[Server\] Ready on port\s+(\d+)/)
-      if (match) {
-        clearTimeout(timeout)
-        resolve({ port: Number(match[1]), dbPath })
-      }
-    }
-
-    child.stdout.on('data', onData)
-
-    child.on('error', (err) => {
-      clearTimeout(timeout)
-      reject(new Error(`server failed to spawn: ${err?.message || err}\nstdout:\n${stdout}\nstderr:\n${stderr}`))
+  const ready = (async () => {
+    const port = await reservePort()
+    child = spawn(process.execPath, ['backend/server.js'], {
+      cwd: ROOT,
+      env: {
+        ...process.env,
+        NODE_ENV: 'development',
+        PORT: String(port),
+        DB_PROVIDER: 'sqlite',
+        SQLITE_DB_PATH: dbPath,
+        DB_AUTO_MIGRATE: 'true',
+        AUTH_JWT_SECRET: TEST_JWT_SECRET,
+        ADMIN_TOKEN: TEST_ADMIN_TOKEN,
+        ANYA_API_KEY: TEST_ANYA_API_KEY,
+        // Keep boot fast
+        SMOKE_MODE: 'true',
+        DISABLE_BACKGROUND_SERVICES: 'true',
+        ...extraEnv,
+      },
+      stdio: ['ignore', 'pipe', 'pipe'],
     })
 
-    child.on('exit', (code) => {
-      if (stdout.includes('[Server] Ready on port')) return
-      clearTimeout(timeout)
-      reject(new Error(`server exited before ready (code=${code})\nstdout:\n${stdout}\nstderr:\n${stderr}`))
+    child.stdout.setEncoding('utf8')
+    child.stderr.setEncoding('utf8')
+    child.stdout.on('data', (d) => (stdout += d))
+    child.stderr.on('data', (d) => (stderr += d))
+
+    return waitForHealthz(port, {
+      child,
+      dbPath,
+      getLogs: () => ({ stdout, stderr }),
     })
-  })
+  })()
 
   async function stop() {
-    if (child.killed) return
+    if (!child || child.killed) return
     child.kill('SIGTERM')
     await new Promise((resolve) => child.once('exit', resolve))
   }
