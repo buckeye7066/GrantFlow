@@ -1,0 +1,32 @@
+[Unit]
+Description=GrantFlow Backend API
+Documentation=https://github.com/buckeye7066/GrantFlow
+After=network.target
+
+[Service]
+Type=simple
+User=www-data
+Group=www-data
+WorkingDirectory=/opt/grantflow
+
+# Load production environment variables
+EnvironmentFile=/opt/grantflow/.env.production
+
+ExecStart=/usr/bin/node backend/start.js
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=grantflow-backend
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/grantflow/backend/data /opt/grantflow/backend/storage /opt/grantflow/uploads
+
+# Resource limits
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target
