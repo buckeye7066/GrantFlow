@@ -7,6 +7,7 @@
 
 import crypto from 'crypto'
 import { logFailedJob } from './deadLetterQueue.js'
+import { jobHasMeaningfulProgress, markJobPartial } from './crawlerJobState.js'
 import { createLogger } from '../utils/logger.js'
 const log = createLogger('crawlerConcurrencyGuard')
 
@@ -263,14 +264,14 @@ export async function cleanupStaleCrawlersByHeartbeat(db, heartbeatThresholdMs =
     .prepare(
       isPostgres
         ? `
-            SELECT id, type, profile_id
+            SELECT id, type, profile_id, result_count, result_meta
             FROM crawler_jobs
             WHERE status = 'running'
               AND last_heartbeat_at IS NOT NULL
               AND last_heartbeat_at < ?
           `
         : `
-            SELECT id, type, profile_id
+            SELECT id, type, profile_id, result_count, result_meta
             FROM crawler_jobs
             WHERE status = 'running'
               AND last_heartbeat_at IS NOT NULL
@@ -283,6 +284,34 @@ export async function cleanupStaleCrawlersByHeartbeat(db, heartbeatThresholdMs =
 
   let cleaned = 0
   for (const job of staleJobs) {
+    // Worker died, but if the job had already flushed real, durable progress
+    // (e.g. a geo crawl that processed 3,891 ZIPs and inserted 93,384 sources
+    // before the deploy/OOM killed it), classifying it `failed` would silently
+    // bury successful work. Mark it partial-complete instead — the data lives
+    // in funding_opportunities and is queryable.
+    if (jobHasMeaningfulProgress(job)) {
+      try {
+        const result = await markJobPartial(db, job.id, {
+          reason: 'heartbeat_stale',
+          error: `Worker presumed dead — last heartbeat > ${heartbeatThresholdMs}ms ago`,
+        }, { force: true })
+        if (result.ok) {
+          cleaned += 1
+          console.warn('[crawler-concurrency] Marked orphan as partial-complete (real progress preserved)', {
+            jobId: job.id,
+            type: job.type,
+            profileId: job.profile_id,
+            heartbeatThresholdMs,
+          })
+          continue
+        }
+      } catch (partialErr) {
+        console.warn('[crawler-concurrency] Partial-mark failed; falling back to failed', {
+          jobId: job.id,
+          error: partialErr?.message || String(partialErr),
+        })
+      }
+    }
     const errorMessage = `Job orphaned - heartbeat stale > ${heartbeatThresholdMs}ms (worker presumed dead)`
     try {
       await db
@@ -339,7 +368,7 @@ export async function cleanupStaleCrawlers(db, staleThresholdMs = 30 * 60 * 1000
         isPostgres
           ? `
               SELECT id, type, profile_id, organization_id, parameters, retry_count,
-                     started_at, created_at, last_heartbeat_at, error, result_meta
+                     started_at, created_at, last_heartbeat_at, error, result_count, result_meta
               FROM crawler_jobs
               WHERE status = 'running'
                 AND (
@@ -353,7 +382,7 @@ export async function cleanupStaleCrawlers(db, staleThresholdMs = 30 * 60 * 1000
             `
           : `
               SELECT id, type, profile_id, organization_id, parameters, retry_count,
-                     started_at, created_at, last_heartbeat_at, error, result_meta
+                     started_at, created_at, last_heartbeat_at, error, result_count, result_meta
               FROM crawler_jobs
               WHERE status = 'running'
                 AND (
@@ -370,6 +399,35 @@ export async function cleanupStaleCrawlers(db, staleThresholdMs = 30 * 60 * 1000
     
     let cleaned = 0
     for (const job of staleJobs) {
+      // Worker died, but if the job had already flushed real, durable progress
+      // (e.g. a 6-hour geo crawl that processed thousands of ZIPs and inserted
+      // tens of thousands of sources before the deploy/OOM killed it),
+      // classifying the row `failed` would silently bury successful work.
+      // Mark it partial-complete instead.
+      if (jobHasMeaningfulProgress(job)) {
+        try {
+          const result = await markJobPartial(db, job.id, {
+            reason: 'started_stale',
+            error: `Worker presumed dead — no heartbeat for ${staleThresholdMs}ms`,
+          }, { force: true })
+          if (result.ok) {
+            cleaned++
+            console.warn('[crawler-concurrency] Marked started-stale orphan as partial-complete (real progress preserved)', {
+              jobId: job.id,
+              type: job.type,
+              profileId: job.profile_id,
+              startedAt: job.started_at,
+              createdAt: job.created_at,
+            })
+            continue
+          }
+        } catch (partialErr) {
+          console.warn('[crawler-concurrency] Partial-mark failed for started-stale job; falling back to failed', {
+            jobId: job.id,
+            error: partialErr?.message || String(partialErr),
+          })
+        }
+      }
       const errorMessage = `Job orphaned - no heartbeat for ${staleThresholdMs}ms`
 
       // retry_count is now included in the SELECT, no extra DB roundtrip needed.

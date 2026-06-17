@@ -28,6 +28,8 @@ import {
   claimJob as claimJobState,
   completeJob as completeJobState,
   failJob as failJobState,
+  markJobPartial as partialJobState,
+  jobHasMeaningfulProgress,
   logJobEvent,
 } from './crawlerJobState.js'
 
@@ -705,6 +707,38 @@ export function dispatchCrawlerJob({ db, jobId, uploadDir, getOpenAI }) {
       const durationSeconds = Math.max(0, Math.round((Date.now() - startedAt) / 1000))
       const errorMsg = error instanceof Error ? error.message : String(error)
       const notRetryable = isNonRetryableError(errorMsg)
+
+      // PARTIAL-COMPLETION DETECTION: if this catch is firing because
+      // withTimeout aborted a long-running geo/comprehensive job AFTER it had
+      // already flushed real progress (3,891 ZIPs / 93,384 sources etc. in
+      // result_meta), classifying the row as `failed` would silently discard
+      // a real successful run. The data lives in funding_opportunities and
+      // is already queryable. Mark the row `completed` with
+      // result_meta.partial = true so the UI tells the truth and resume
+      // tooling can pick up where the run stopped.
+      const isTimeout =
+        error?.code === 'JOB_TIMEOUT' ||
+        /timed out after \d+s/i.test(errorMsg) ||
+        /aborted/i.test(errorMsg) ||
+        Boolean(abortController?.signal?.aborted)
+      if (isTimeout) {
+        let liveRow = null
+        try {
+          liveRow = await db
+            .prepare('SELECT result_count, result_meta FROM crawler_jobs WHERE id = ?')
+            .get(jobId)
+        } catch { /* best effort */ }
+        if (jobHasMeaningfulProgress(liveRow)) {
+          await partialJobState(db, jobId, {
+            reason: 'withTimeout',
+            error: errorMsg,
+            durationSeconds,
+          }, { force: true })
+          // Intentionally do NOT log to dead-letter: this is a successful
+          // partial run, not a failure.
+          return
+        }
+      }
 
       const finalResultMeta = {
         duration_seconds: durationSeconds,

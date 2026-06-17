@@ -304,6 +304,148 @@ export async function failJob(db, jobId, error, opts = {}) {
 }
 
 // ---------------------------------------------------------------------------
+// Partial completion (running -> completed, with result_meta.partial = true)
+// ---------------------------------------------------------------------------
+
+/**
+ * Decide whether a job's currently-flushed result_count / result_meta represent
+ * real, durable progress that must NOT be reclassified as a failure.
+ *
+ * A geo / comprehensive crawl flushes its per-state progress to
+ * crawler_jobs.result_count and crawler_jobs.result_meta after every state
+ * (see backend/services/comprehensiveCrawlerOptimized.js). When a worker is
+ * killed by a deploy/OOM/withTimeout abort partway through state N+1, the
+ * orphan-cleanup or dispatcher catch must NOT lose those committed totals
+ * by stamping the row `failed` — the data the run produced is already in
+ * funding_opportunities and is queryable; the run simply did not finish
+ * every state.
+ *
+ * Per mission-goals.mdc: "If total_found > 0 and included === 0, log why,
+ * relax constraints, re-score." The same principle applies to job-level
+ * status: real, persisted output is success; the run just stopped early.
+ *
+ * @param {{ result_count?: number|null, result_meta?: string|object|null }} row
+ * @returns {boolean}
+ */
+export function jobHasMeaningfulProgress(row) {
+  if (!row) return false
+  const count = Number(row.result_count ?? 0)
+  if (Number.isFinite(count) && count > 0) return true
+  let meta = row.result_meta
+  if (typeof meta === 'string') {
+    try { meta = JSON.parse(meta) } catch { meta = null }
+  }
+  if (!meta || typeof meta !== 'object') return false
+  const sources = Number(meta.sources ?? 0)
+  const processed = Number(meta.processed ?? 0)
+  const inserted = Number(meta.inserted ?? meta.inserted_new ?? 0)
+  return (
+    (Number.isFinite(sources) && sources > 0) ||
+    (Number.isFinite(processed) && processed > 0) ||
+    (Number.isFinite(inserted) && inserted > 0)
+  )
+}
+
+/**
+ * Mark a job as partially completed. Sets `status = 'completed'` so existing
+ * UI/consumers continue to treat the row as a successful run (the data is
+ * real and persisted), and sets `result_meta.partial = true` plus a
+ * `partial_reason` so finer-grained UIs and resume tooling can detect that
+ * the run stopped before covering every input.
+ *
+ * Use this from the dispatcher catch when withTimeout aborts a long-running
+ * job that has already flushed real progress, and from orphan-cleanup when
+ * a stale-heartbeat job has real progress.
+ *
+ * @param {object} db
+ * @param {string} jobId
+ * @param {object} info
+ * @param {string} info.reason       - short label (e.g. 'withTimeout',
+ *                                      'heartbeat_stale', 'started_stale')
+ * @param {string} [info.error]      - underlying error message (preserved)
+ * @param {number} [info.durationSeconds]
+ * @param {object} [opts]
+ * @param {string}  [opts.workerId]
+ * @param {boolean} [opts.force]     - skip worker_id ownership check
+ *                                      (orphan-cleanup must use force=true)
+ * @returns {Promise<{ ok: boolean, reason?: string }>}
+ */
+export async function markJobPartial(db, jobId, info = {}, opts = {}) {
+  if (!db || !jobId) return { ok: false, reason: 'missing_db_or_job_id' }
+
+  // Pull live counters so we preserve whatever the running handler flushed.
+  let row = null
+  try {
+    row = await db
+      .prepare('SELECT result_count, result_meta FROM crawler_jobs WHERE id = ?')
+      .get(jobId)
+  } catch { /* fall through; we'll persist whatever we have */ }
+
+  let liveMeta = {}
+  if (row?.result_meta) {
+    try {
+      liveMeta = typeof row.result_meta === 'string'
+        ? JSON.parse(row.result_meta)
+        : row.result_meta
+    } catch { liveMeta = {} }
+  }
+
+  const partialMeta = {
+    ...(liveMeta && typeof liveMeta === 'object' ? liveMeta : {}),
+    partial: true,
+    partial_reason: String(info.reason || 'unknown').slice(0, 80),
+    ...(info.error ? { partial_error: String(info.error).slice(0, 400) } : {}),
+    ...(typeof info.durationSeconds === 'number'
+      ? { duration_seconds: info.durationSeconds }
+      : {}),
+  }
+  const partialMetaJson = JSON.stringify(partialMeta)
+
+  const force = !!opts.force
+  const workerId = opts.workerId || WORKER_ID
+
+  const sql = force
+    ? `
+        UPDATE crawler_jobs
+        SET status = 'completed',
+            completed_at = CURRENT_TIMESTAMP,
+            result_meta = ?,
+            error = NULL
+        WHERE id = ?
+          AND status IN ('queued', 'running')
+      `
+    : `
+        UPDATE crawler_jobs
+        SET status = 'completed',
+            completed_at = CURRENT_TIMESTAMP,
+            result_meta = ?,
+            error = NULL
+        WHERE id = ?
+          AND status = 'running'
+          AND (worker_id IS NULL OR worker_id = ?)
+      `
+
+  const args = force
+    ? [partialMetaJson, jobId]
+    : [partialMetaJson, jobId, workerId]
+
+  const res = await db.prepare(sql).run(...args)
+  const changes = Number(res?.changes ?? res?.rowCount ?? 0)
+  logJobEvent('complete', 'job marked partial-complete', {
+    jobId,
+    reason: partialMeta.partial_reason,
+    sources: liveMeta?.sources ?? null,
+    processed: liveMeta?.processed ?? null,
+    states_completed: liveMeta?.states_completed ?? null,
+    states_total: liveMeta?.states_total ?? null,
+    force,
+    changes,
+  })
+  if (changes === 0) return { ok: false, reason: 'not_running_or_owner_mismatch' }
+  return { ok: true }
+}
+
+// ---------------------------------------------------------------------------
 // Cancel (admin action)
 // ---------------------------------------------------------------------------
 

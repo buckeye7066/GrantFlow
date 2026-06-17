@@ -74,8 +74,27 @@ const STATUS_VARIANTS = {
   queued: "bg-slate-100 text-slate-700",
   running: "bg-blue-100 text-blue-700",
   completed: "bg-emerald-100 text-emerald-700",
+  // `partial` is a virtual status: backend stores status='completed' with
+  // result_meta.partial=true so existing query consumers stay correct, and the
+  // UI promotes that combination to its own pill so operators see at a glance
+  // that the run produced real data but did not finish every input.
+  partial: "bg-amber-100 text-amber-800",
   failed: "bg-red-100 text-red-700",
   cancelled: "bg-amber-100 text-amber-700",
+}
+
+/**
+ * Returns the effective (UI-facing) status for a job. Promotes
+ * `completed` → `partial` when the backend recorded a partial-completion run
+ * (worker died / withTimeout aborted after real, durable progress was flushed
+ * to result_meta). Falls back to the raw `status` field for everything else.
+ */
+function getEffectiveJobStatus(job) {
+  if (!job) return null
+  const meta =
+    job.result_meta && typeof job.result_meta === "object" ? job.result_meta : null
+  if (job.status === "completed" && meta?.partial === true) return "partial"
+  return job.status ?? null
 }
 
 const METRIC_TYPE_ORDER = Object.keys(JOB_LABELS)
@@ -760,9 +779,14 @@ function LiveQueueCard({
       >
         <div className="flex items-center justify-between gap-3">
           <JobTypeBadge job={job} />
-          <Badge className={cn("text-[10px] uppercase tracking-wide", STATUS_VARIANTS[job.status] ?? STATUS_VARIANTS.queued)}>
-            {job.status.replace(/_/g, " ")}
-          </Badge>
+          {(() => {
+            const effective = getEffectiveJobStatus(job) ?? "queued"
+            return (
+              <Badge className={cn("text-[10px] uppercase tracking-wide", STATUS_VARIANTS[effective] ?? STATUS_VARIANTS.queued)}>
+                {effective.replace(/_/g, " ")}
+              </Badge>
+            )
+          })()}
         </div>
         <div className="flex flex-wrap items-center gap-2 text-[11px] text-slate-500">
           <span className="font-mono text-[10px] text-slate-400">{job.id.slice(0, 10)}…</span>
@@ -943,12 +967,13 @@ function LiveQueueCard({
   )
 }
 
-function JobStatusBadge({ status }) {
-  if (!status) return null
-  const variant = STATUS_VARIANTS[status] ?? STATUS_VARIANTS.queued
+function JobStatusBadge({ status, job }) {
+  const effective = job ? getEffectiveJobStatus(job) : status
+  if (!effective) return null
+  const variant = STATUS_VARIANTS[effective] ?? STATUS_VARIANTS.queued
   return (
     <Badge className={cn("text-xs capitalize", variant)}>
-      {status.replace(/_/g, " ")}
+      {effective.replace(/_/g, " ")}
     </Badge>
   )
 }
@@ -1067,7 +1092,7 @@ function JobDetailsDialog({ job, onOpenChange, onRetry, retrying, onCancel, canc
             </div>
             <div className="flex items-center gap-2">
               <span className="text-xs uppercase tracking-wide text-slate-500">Status</span>
-              <JobStatusBadge status={job.status} />
+              <JobStatusBadge job={job} />
             </div>
           </div>
 
@@ -1157,7 +1182,7 @@ function JobDetailsDialog({ job, onOpenChange, onRetry, retrying, onCancel, canc
                           >
                             Attempt {attemptNumber}
                           </Badge>
-                          <JobStatusBadge status={attempt.status} />
+                          <JobStatusBadge job={attempt} />
                           {isCurrent ? <span className="text-[11px] font-semibold">(current)</span> : null}
                         </div>
                         {isCurrent ? null : typeof onInspectJob === "function" ? (
@@ -2133,11 +2158,13 @@ export default function Automation() {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">All statuses</SelectItem>
-                  {Object.keys(STATUS_VARIANTS).map((status) => (
-                    <SelectItem key={status} value={status}>
-                      {status.replace(/_/g, " ")}
-                    </SelectItem>
-                  ))}
+                  {Object.keys(STATUS_VARIANTS)
+                    .filter((status) => status !== "partial")
+                    .map((status) => (
+                      <SelectItem key={status} value={status}>
+                        {status.replace(/_/g, " ")}
+                      </SelectItem>
+                    ))}
                 </SelectContent>
               </Select>
               {isAdmin ? (
@@ -2205,7 +2232,7 @@ export default function Automation() {
                             </div>
                           </td>
                           <td className="px-4 py-3">
-                            <JobStatusBadge status={job.status} />
+                            <JobStatusBadge job={job} />
                           </td>
                           <td className="px-4 py-3 text-xs text-slate-600">
                             {formatNumber(typeof job.result_count === "number" ? job.result_count : null) ?? "—"}
