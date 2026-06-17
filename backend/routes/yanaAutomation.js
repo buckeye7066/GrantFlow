@@ -87,6 +87,7 @@ import {
   resolveOpenBlockersForTask,
 } from '../services/yana/yanaBlockerStore.js'
 import { resolveBlocker } from '../services/yana/yanaHardStopResolver.js'
+import { isAdminUser, YANA_ADMIN_EMAIL } from '../services/yana/yanaAdminAccount.js'
 import { markNotificationsResolved } from '../services/yana/yanaNotifications.js'
 import { createLogger } from '../utils/logger.js'
 
@@ -694,17 +695,60 @@ router.post('/resolved-fields', async (req, res) => {
   }
 })
 
-// Admin: dashboard list of every open hard stop in the system.
+// Admin: dashboard list of every open hard stop in the system. Restricted to
+// the canonical Yana operator (buckeye7066@gmail.com). Multi-admin routing
+// is *not* the primary path — this endpoint accepts is_admin=1 OR an email
+// that matches the canonical admin email.
 router.get('/admin/hard-stops', async (req, res) => {
   const user = requireAuthenticatedUser(req, res)
   if (!user) return
-  if (user.role !== 'admin') return res.status(403).json({ error: 'forbidden_admin_only' })
+  if (!isAdminUser(user)) return res.status(403).json({ error: 'forbidden_admin_only' })
   try {
     const limit = Math.max(1, Math.min(500, Number.parseInt(req.query.limit || '200', 10) || 200))
     const blockers = await listOpenAdminBlockers(req.db, { limit })
-    return res.json({ ok: true, blockers })
+    return res.json({ ok: true, blockers, admin_email: YANA_ADMIN_EMAIL })
   } catch (err) {
     log.error('admin_hard_stops_failed', { err: err?.message })
+    return res.status(500).json({ error: 'list_failed' })
+  }
+})
+
+// Admin: aggregated counts + recent task list for the canonical admin
+// dashboard. Used by AdminYanaHardStops to render the four columns
+// (pending hard stops / active / failed / completed) with a single
+// round-trip.
+router.get('/admin/tasks', async (req, res) => {
+  const user = requireAuthenticatedUser(req, res)
+  if (!user) return
+  if (!isAdminUser(user)) return res.status(403).json({ error: 'forbidden_admin_only' })
+  try {
+    const status = String(req.query.status || 'all').toLowerCase()
+    const allowed = new Set(['all', 'active', 'blocked', 'failed', 'completed'])
+    const filter = allowed.has(status) ? status : 'all'
+    const limit = Math.max(1, Math.min(500, Number.parseInt(req.query.limit || '100', 10) || 100))
+
+    let where = ''
+    const params = []
+    if (filter === 'active') {
+      where = "WHERE status IN ('queued','running','waiting_for_review','in_progress')"
+    } else if (filter === 'blocked') {
+      where = "WHERE status = 'blocked'"
+    } else if (filter === 'failed') {
+      where = "WHERE status = 'failed'"
+    } else if (filter === 'completed') {
+      where = "WHERE status IN ('submitted','completed','completed_draft')"
+    }
+    const rows = await req.db.prepare(
+      `SELECT id, profile_id, user_id, opportunity_id, grant_id, status,
+              automation_type, last_agent_message, updated_at, created_at
+         FROM application_tasks
+         ${where}
+         ORDER BY updated_at DESC
+         LIMIT ?`,
+    ).all(...params, limit)
+    return res.json({ ok: true, tasks: rows || [], filter, admin_email: YANA_ADMIN_EMAIL })
+  } catch (err) {
+    log.error('admin_tasks_failed', { err: err?.message })
     return res.status(500).json({ error: 'list_failed' })
   }
 })

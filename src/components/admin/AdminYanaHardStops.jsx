@@ -37,19 +37,37 @@ function severityClass(s) {
   }
 }
 
+const TASK_FILTERS = [
+  { id: 'blocked',   label: 'Pending hard stops' },
+  { id: 'active',    label: 'Active' },
+  { id: 'failed',    label: 'Failed' },
+  { id: 'completed', label: 'Completed' },
+]
+
 export default function AdminYanaHardStops() {
   const { toast } = useToast()
   const [loading, setLoading] = useState(false)
   const [busy, setBusy] = useState(null)
   const [blockers, setBlockers] = useState([])
+  const [adminEmail, setAdminEmail] = useState(null)
+  const [tasksByFilter, setTasksByFilter] = useState({
+    blocked: [], active: [], failed: [], completed: [],
+  })
 
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      const res = await client.get('/api/yana/automation/admin/hard-stops')
-      setBlockers(Array.isArray(res?.blockers) ? res.blockers : [])
+      const [hardStops, ...taskResults] = await Promise.all([
+        client.get('/api/yana/automation/admin/hard-stops'),
+        ...TASK_FILTERS.map((f) => client.get(`/api/yana/automation/admin/tasks?status=${f.id}&limit=50`)),
+      ])
+      setBlockers(Array.isArray(hardStops?.blockers) ? hardStops.blockers : [])
+      setAdminEmail(hardStops?.admin_email || null)
+      const next = { blocked: [], active: [], failed: [], completed: [] }
+      taskResults.forEach((res, i) => { next[TASK_FILTERS[i].id] = Array.isArray(res?.tasks) ? res.tasks : [] })
+      setTasksByFilter(next)
     } catch (err) {
-      showErrorToast(toast, 'Could not load Yana hard stops', err?.message || 'See logs.')
+      showErrorToast(toast, 'Could not load Yana admin dashboard', err?.message || 'See logs.')
     } finally {
       setLoading(false)
     }
@@ -87,17 +105,32 @@ export default function AdminYanaHardStops() {
   }
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-6">
       <div className="flex items-center justify-between">
         <h2 className="text-lg font-semibold flex items-center gap-2">
           <AlertTriangle className="w-5 h-5 text-amber-600" />
-          Yana hard stops
+          Yana operator dashboard
           <Badge variant="outline" className="ml-2">{blockers.length} open</Badge>
+          {adminEmail && (
+            <span className="ml-2 text-xs font-normal text-slate-500">routed to <strong>{adminEmail}</strong></span>
+          )}
         </h2>
         <Button variant="outline" size="sm" onClick={load} disabled={loading}>
           {loading ? <Loader2 className="w-3 h-3 mr-1 animate-spin" /> : <RefreshCw className="w-3 h-3 mr-1" />}
           Refresh
         </Button>
+      </div>
+
+      {/* Status overview cards */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        {TASK_FILTERS.map((f) => (
+          <div key={f.id} className="border border-slate-200 rounded-lg p-3 bg-white">
+            <div className="text-xs uppercase text-slate-500">{f.label}</div>
+            <div className="text-2xl font-semibold text-slate-900">
+              {f.id === 'blocked' ? blockers.length : (tasksByFilter[f.id]?.length || 0)}
+            </div>
+          </div>
+        ))}
       </div>
 
       {!loading && blockers.length === 0 && (
@@ -154,6 +187,43 @@ export default function AdminYanaHardStops() {
           </tbody>
         </table>
       </div>
+
+      {/* Recent tasks across all states */}
+      {(['active', 'failed', 'completed']).map((state) => {
+        const tasks = tasksByFilter[state] || []
+        if (!tasks.length) return null
+        return (
+          <div key={state} className="space-y-2">
+            <h3 className="text-sm font-semibold text-slate-700 capitalize">{state} Yana tasks ({tasks.length})</h3>
+            <div className="overflow-x-auto">
+              <table className="min-w-full text-xs">
+                <thead className="bg-slate-50 text-[10px] uppercase text-slate-500">
+                  <tr>
+                    <th className="text-left px-3 py-2">Task</th>
+                    <th className="text-left px-3 py-2">Profile</th>
+                    <th className="text-left px-3 py-2">Funding source</th>
+                    <th className="text-left px-3 py-2">Status</th>
+                    <th className="text-left px-3 py-2">Last update</th>
+                    <th className="text-left px-3 py-2">Last message</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {tasks.map((t) => (
+                    <tr key={t.id} className="border-t border-slate-100">
+                      <td className="px-3 py-1.5 font-mono">{(t.id || '').slice(0, 8)}</td>
+                      <td className="px-3 py-1.5 font-mono">{(t.profile_id || '').slice(0, 8)}</td>
+                      <td className="px-3 py-1.5 font-mono">{(t.opportunity_id || t.grant_id || '—').slice(0, 8)}</td>
+                      <td className="px-3 py-1.5">{t.status}</td>
+                      <td className="px-3 py-1.5">{t.updated_at ? new Date(t.updated_at).toLocaleString() : '—'}</td>
+                      <td className="px-3 py-1.5 text-slate-600">{t.last_agent_message || '—'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )
+      })}
     </div>
   )
 }

@@ -1,13 +1,17 @@
 /**
  * Yana Hard-Stop alerting tests.
  *
- * Covers the mandatory dual-notification requirement:
- *   - Every unresolved hard stop creates a `yana_hard_stop` user
- *     notification AND a `yana_admin_hard_stop` admin notification.
- *   - Every blocker row carries the spec'd fields (funding_source_id,
- *     blocker_title, blocker_message, severity, required_action,
- *     resolver_route, admin_required, user_required, deadline_at).
- *   - Resolved/degraded outcomes do NOT create alert notifications.
+ * Covers the mandatory dual-notification requirement and the
+ * "single canonical admin" routing rule:
+ *
+ *   - Every unresolved hard stop creates a per-category user
+ *     notification AND a per-category admin notification.
+ *   - The admin notification ALWAYS goes to the single canonical
+ *     operator (buckeye7066@gmail.com); multi-admin fan-out is not
+ *     the primary path.
+ *   - If no admin row exists yet, resolveAdminUserId creates one.
+ *   - Per-category type derivation works for every blocker family.
+ *   - Resolved/degraded outcomes do NOT create alerts.
  *   - resolveOpenBlockersForTask + markNotificationsResolved clears
  *     the alert and writes a resolution audit row.
  *   - listOpenAdminBlockers powers the admin dashboard.
@@ -35,16 +39,39 @@ import {
 import { resolveBlocker } from '../../backend/services/yana/yanaHardStopResolver.js'
 import {
   _resetNotificationsSchemaCache,
+  _resetAdminAccountCache,
   markNotificationsResolved,
+  userTypeForCategory,
+  adminTypeForCategory,
 } from '../../backend/services/yana/yanaNotifications.js'
+import {
+  resolveAdminUserId,
+  isAdminUser,
+  YANA_ADMIN_EMAIL,
+} from '../../backend/services/yana/yanaAdminAccount.js'
 
-function makeDb() {
+const ADMIN_EMAIL = 'buckeye7066@gmail.com'
+
+function makeDb({ seedAdmin = true } = {}) {
   const sqlite = new Database(':memory:')
-  // Seed minimal schema for the tables the alerting layer reads.
+  // Match production users schema (id, primary_email, is_admin, display_name)
   sqlite.exec(`
-    CREATE TABLE IF NOT EXISTS profiles (id TEXT PRIMARY KEY, user_id TEXT, name TEXT, organization_name TEXT);
-    CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY, role TEXT NOT NULL DEFAULT 'user');
+    CREATE TABLE IF NOT EXISTS profiles (
+      id TEXT PRIMARY KEY, user_id TEXT, name TEXT, organization_name TEXT
+    );
+    CREATE TABLE IF NOT EXISTS users (
+      id TEXT PRIMARY KEY,
+      display_name TEXT,
+      primary_email TEXT,
+      is_admin INTEGER NOT NULL DEFAULT 0,
+      role TEXT
+    );
   `)
+  if (seedAdmin) {
+    sqlite.prepare(
+      'INSERT INTO users (id, primary_email, is_admin, role) VALUES (?, ?, 1, ?)',
+    ).run('u_admin', ADMIN_EMAIL, 'admin')
+  }
   return {
     dialect: 'sqlite',
     prepare(sql) {
@@ -69,13 +96,12 @@ function resetCaches() {
   _resetResolvedFieldSchemaCache()
   _resetBlockerSchemaCache()
   _resetNotificationsSchemaCache()
+  _resetAdminAccountCache()
 }
 
-async function seed(db) {
+async function seedProfile(db) {
   await db.prepare("INSERT INTO profiles (id, user_id, name) VALUES ('p1', 'u_owner', 'Anastasia')").run()
-  await db.prepare("INSERT INTO users (id, role) VALUES ('u_owner','user')").run()
-  await db.prepare("INSERT INTO users (id, role) VALUES ('u_admin1','admin')").run()
-  await db.prepare("INSERT INTO users (id, role) VALUES ('u_admin2','admin')").run()
+  await db.prepare("INSERT INTO users (id, primary_email, is_admin, role) VALUES ('u_owner', 'owner@example.com', 0, 'user')").run()
 }
 
 function ctx(overrides = {}) {
@@ -83,7 +109,7 @@ function ctx(overrides = {}) {
     taskId: 't1', profileId: 'p1', userId: null,
     portalUrl: 'https://aid.mtsu.edu/apply',
     opportunity: { id: 'op1', title: 'MTSU Tuition Aid', deadline: '2099-12-31' },
-    profile: { id: 'p1' },
+    profile: { id: 'p1', name: 'Anastasia' },
     classification: { automation_type: 'portal' },
     ...overrides,
   }
@@ -96,24 +122,24 @@ async function readNotifications(db, type = null) {
       : await db.prepare('SELECT * FROM notifications ORDER BY created_at').all()
     return rows.map((r) => ({ ...r, data: r.data ? JSON.parse(r.data) : {} }))
   } catch {
-    // Table is created lazily on first emit — if no alert ever fires
-    // it never exists, which is exactly what the "no alert" tests
-    // assert. Return empty.
     return []
   }
 }
 
-describe('yana hard-stop alerting', () => {
+describe('yana hard-stop alerting (single canonical admin)', () => {
   beforeEach(resetCaches)
 
-  it('every blocked outcome emits dual notifications and enriched blocker row', async () => {
+  it('every blocked outcome emits per-category dual notifications and enriched blocker row', async () => {
     const db = makeDb()
-    await seed(db)
+    await seedProfile(db)
     const directive = await resolveBlocker(db, ctx(), { kind: '2fa' })
     assert.equal(directive.outcome, 'escalated')
     assert.equal(directive.classification.category, 'two_factor_required')
 
-    // Blocker row has the enriched fields the spec demanded.
+    // Per-category type derivation: 2fa → login_required family.
+    assert.equal(userTypeForCategory('two_factor_required'),  'yana_login_required')
+    assert.equal(adminTypeForCategory('two_factor_required'), 'yana_admin_login_required')
+
     const blockers = await listBlockersForTask(db, 't1', { onlyOpen: true })
     assert.equal(blockers.length, 1)
     const b = blockers[0]
@@ -127,30 +153,126 @@ describe('yana hard-stop alerting', () => {
     assert.equal(b.admin_required, true)
     assert.equal(b.user_required, true)
     assert.ok(b.user_notification_id)
-    assert.equal(b.admin_notification_ids.length, 2)
+    assert.equal(b.admin_notification_ids.length, 1, 'single admin → exactly one admin notification')
 
-    // Two distinct notification types exist — user + admin.
-    const userNotifs  = await readNotifications(db, 'yana_hard_stop')
-    const adminNotifs = await readNotifications(db, 'yana_admin_hard_stop')
+    // Per-category notification types — NOT the generic yana_hard_stop.
+    const userNotifs  = await readNotifications(db, 'yana_login_required')
+    const adminNotifs = await readNotifications(db, 'yana_admin_login_required')
     assert.equal(userNotifs.length, 1)
     assert.equal(userNotifs[0].user_id, 'u_owner')
     assert.match(userNotifs[0].title, /Yana needs help/)
     assert.equal(userNotifs[0].data.blocker_type, 'two_factor_required')
+    assert.equal(userNotifs[0].data.profile_name, 'Anastasia')
+    assert.equal(userNotifs[0].data.funding_source_title, 'MTSU Tuition Aid')
     assert.equal(userNotifs[0].data.blocker_id, b.id)
     assert.equal(userNotifs[0].data.task_id, 't1')
     assert.equal(userNotifs[0].read, 0)
+    assert.match(userNotifs[0].data.route_to_resolve, /\/yana\/tasks\/t1/)
+    assert.match(userNotifs[0].data.route_to_resume,  /\/yana\/tasks\/t1\/resume/)
 
-    assert.equal(adminNotifs.length, 2)
-    const adminUsers = new Set(adminNotifs.map((n) => n.user_id))
-    assert.deepEqual(adminUsers, new Set(['u_admin1', 'u_admin2']))
+    assert.equal(adminNotifs.length, 1, 'admin alerts go to single canonical operator only')
+    assert.equal(adminNotifs[0].user_id, 'u_admin')
     assert.match(adminNotifs[0].title, /Yana hard stop/)
+    assert.match(adminNotifs[0].title, /Anastasia/)
+    assert.equal(adminNotifs[0].data.admin_email, ADMIN_EMAIL)
     assert.equal(adminNotifs[0].data.admin_required, true)
+    assert.equal(adminNotifs[0].data.profile_name, 'Anastasia')
+  })
+
+  it('admin notification is routed to buckeye7066@gmail.com regardless of how many admins exist', async () => {
+    const db = makeDb()
+    await seedProfile(db)
+    // Seed a second is_admin=1 user that is NOT the canonical operator.
+    // The new routing must ignore them.
+    await db.prepare(
+      "INSERT INTO users (id, primary_email, is_admin, role) VALUES ('u_other_admin', 'someone@else.com', 1, 'admin')",
+    ).run()
+
+    await resolveBlocker(db, ctx(), { kind: '2fa' })
+    const adminNotifs = await readNotifications(db, 'yana_admin_login_required')
+    assert.equal(adminNotifs.length, 1)
+    assert.equal(adminNotifs[0].user_id, 'u_admin')
+    assert.equal(adminNotifs[0].data.admin_email, ADMIN_EMAIL)
+
+    // The other "admin" got nothing.
+    const others = await db.prepare(
+      "SELECT COUNT(*) AS n FROM notifications WHERE user_id = 'u_other_admin'",
+    ).get()
+    assert.equal(others.n, 0)
+  })
+
+  it('auto-creates the admin user if no row exists for buckeye7066@gmail.com', async () => {
+    const db = makeDb({ seedAdmin: false }) // intentionally no admin row
+    await seedProfile(db)
+
+    const directive = await resolveBlocker(db, ctx(), { kind: '2fa' })
+    assert.equal(directive.outcome, 'escalated')
+
+    const adminRow = await db.prepare(
+      'SELECT id, primary_email, is_admin FROM users WHERE LOWER(primary_email) = ?',
+    ).get(ADMIN_EMAIL)
+    assert.ok(adminRow, 'admin row created on demand')
+    assert.equal(adminRow.is_admin, 1)
+    assert.equal(adminRow.primary_email, ADMIN_EMAIL)
+
+    const adminNotifs = await readNotifications(db, 'yana_admin_login_required')
+    assert.equal(adminNotifs.length, 1)
+    assert.equal(adminNotifs[0].user_id, adminRow.id)
+  })
+
+  it('every category gets the right per-category admin type', async () => {
+    const cases = [
+      ['missing_required_information', 'yana_admin_missing_info'],
+      ['ambiguous_required_field',     'yana_admin_missing_info'],
+      ['missing_required_document',    'yana_admin_document_required'],
+      ['login_required',               'yana_admin_login_required'],
+      ['sso_required',                 'yana_admin_login_required'],
+      ['two_factor_required',          'yana_admin_login_required'],
+      ['captcha_required',             'yana_admin_login_required'],
+      ['payment_required',             'yana_admin_payment_required'],
+      ['wet_signature_required',       'yana_admin_attestation_required'],
+      ['legal_attestation_required',   'yana_admin_attestation_required'],
+      ['portal_terms_block',           'yana_admin_portal_blocked'],
+      ['portal_anti_bot_block',        'yana_admin_portal_blocked'],
+      ['deadline_expired',             'yana_admin_task_failed'],
+      ['unknown_application_method',   'yana_admin_task_failed'],
+      ['final_review_screen',          'yana_admin_hard_stop'],
+      ['unknown_thing',                'yana_admin_hard_stop'],
+    ]
+    for (const [cat, expected] of cases) {
+      assert.equal(adminTypeForCategory(cat), expected, `admin type for ${cat}`)
+    }
+    assert.equal(userTypeForCategory('payment_required'),         'yana_payment_required')
+    assert.equal(userTypeForCategory('legal_attestation_required'), 'yana_attestation_required')
+    assert.equal(userTypeForCategory('missing_required_document'), 'yana_document_required')
+  })
+
+  it('isAdminUser returns true for canonical email even without is_admin flag', () => {
+    assert.equal(isAdminUser({ email: ADMIN_EMAIL }), true)
+    assert.equal(isAdminUser({ primary_email: 'BUCKEYE7066@GMAIL.com' }), true)
+    assert.equal(isAdminUser({ is_admin: true }), true)
+    assert.equal(isAdminUser({ role: 'admin' }), true)
+    assert.equal(isAdminUser({ email: 'someone@example.com' }), false)
+    assert.equal(isAdminUser({}), false)
+    assert.equal(isAdminUser(null), false)
+  })
+
+  it('YANA_ADMIN_EMAIL is the canonical admin', () => {
+    assert.equal(YANA_ADMIN_EMAIL, ADMIN_EMAIL)
+  })
+
+  it('resolveAdminUserId is idempotent — second call returns the same id', async () => {
+    const db = makeDb()
+    await seedProfile(db)
+    const id1 = await resolveAdminUserId(db)
+    const id2 = await resolveAdminUserId(db)
+    assert.equal(id1, id2)
+    assert.equal(id1, 'u_admin')
   })
 
   it('resolved (auto-handled) outcomes do NOT emit hard-stop alerts', async () => {
     const db = makeDb()
-    await seed(db)
-    // Authorize + record a saved session so login/2FA is auto-resolved.
+    await seedProfile(db)
     await recordAuthorizations(db, {
       userId: 'u_owner', profileId: 'p1', scope: 'funding_source',
       fundingSourceIds: ['op1'], authorizationTypes: ['use_saved_session'],
@@ -164,27 +286,25 @@ describe('yana hard-stop alerting', () => {
     const directive = await resolveBlocker(db, ctx({ userId: 'u_owner' }), { kind: 'login' })
     assert.equal(directive.outcome, 'resolved')
 
-    const userNotifs  = await readNotifications(db, 'yana_hard_stop')
-    const adminNotifs = await readNotifications(db, 'yana_admin_hard_stop')
-    assert.equal(userNotifs.length, 0, 'no user alert for auto-resolved blockers')
-    assert.equal(adminNotifs.length, 0, 'no admin alert for auto-resolved blockers')
+    const all = await readNotifications(db)
+    const hardStopAlerts = all.filter((n) => n.type.startsWith('yana_hard_stop')
+      || n.type.startsWith('yana_admin_'))
+    assert.equal(hardStopAlerts.length, 0)
   })
 
   it('degraded (lawful fallback) outcomes do NOT emit hard-stop alerts', async () => {
     const db = makeDb()
-    await seed(db)
-    // Wet signature ALWAYS degrades — never alerts as a hard stop.
+    await seedProfile(db)
     const directive = await resolveBlocker(db, ctx(), { kind: 'signature', text: 'Hand-written signature required' })
     assert.equal(directive.outcome, 'degraded')
 
     const all = await readNotifications(db)
-    assert.equal(all.filter((n) => n.type === 'yana_hard_stop' || n.type === 'yana_admin_hard_stop').length, 0)
+    assert.equal(all.filter((n) => n.type.startsWith('yana_admin_')).length, 0)
   })
 
   it('admin dashboard sees every open blocker; resolution clears it and notifications', async () => {
     const db = makeDb()
-    await seed(db)
-    // Two distinct hard stops on the same task.
+    await seedProfile(db)
     await resolveBlocker(db, ctx(), { kind: '2fa' })
     await resolveBlocker(db, ctx(), { kind: 'captcha' })
 
@@ -192,14 +312,14 @@ describe('yana hard-stop alerting', () => {
     assert.equal(open.length, 2)
     assert.ok(open.every((b) => b.admin_required === true))
 
-    const userBefore  = await readNotifications(db, 'yana_hard_stop')
-    const adminBefore = await readNotifications(db, 'yana_admin_hard_stop')
+    // Both 2fa and captcha map to the login_required family.
+    const userBefore  = await readNotifications(db, 'yana_login_required')
+    const adminBefore = await readNotifications(db, 'yana_admin_login_required')
     assert.equal(userBefore.length, 2)
-    assert.equal(adminBefore.length, 4) // 2 admins * 2 blockers
+    assert.equal(adminBefore.length, 2) // single admin × 2 blockers
     assert.ok(userBefore.every((n) => n.read === 0))
+    assert.ok(adminBefore.every((n) => n.user_id === 'u_admin'))
 
-    // Resolve every open blocker for this task — should also mark
-    // every notification read.
     const resolved = await resolveOpenBlockersForTask(db, {
       taskId: 't1', strategy: 'user_action',
       detail: 'User logged in.', resolvedByUserId: 'u_owner',
@@ -208,46 +328,50 @@ describe('yana hard-stop alerting', () => {
 
     const idsToClear = resolved.flatMap((b) => [b.user_notification_id, ...(b.admin_notification_ids || [])]).filter(Boolean)
     const cleared = await markNotificationsResolved(db, idsToClear)
-    assert.equal(cleared, 6)
+    assert.equal(cleared, 4) // 2 user + 2 admin
 
     const remainingOpen = await listOpenAdminBlockers(db)
     assert.equal(remainingOpen.length, 0)
 
-    const userAfter  = await readNotifications(db, 'yana_hard_stop')
-    const adminAfter = await readNotifications(db, 'yana_admin_hard_stop')
+    const userAfter  = await readNotifications(db, 'yana_login_required')
+    const adminAfter = await readNotifications(db, 'yana_admin_login_required')
     assert.ok(userAfter.every((n) => n.read === 1))
     assert.ok(adminAfter.every((n) => n.read === 1))
 
-    // An audit row was written per blocker per resolution call:
-    //   2 alerts when resolveBlocker raised (each writes one outcome row)
-    // + 2 'resolved' rows from resolveOpenBlockersForTask
     const resolutions = await db.prepare('SELECT * FROM yana_blocker_resolutions').all()
     assert.ok(resolutions.length >= 4)
     assert.ok(resolutions.some((r) => r.outcome === 'resolved' && r.strategy === 'user_action'))
   })
 
-  it('payment alert carries the spec\'d fields including funding_source_id', async () => {
+  it('payment alert uses yana_payment_required and includes funding context', async () => {
     const db = makeDb()
-    await seed(db)
+    await seedProfile(db)
     const directive = await resolveBlocker(db, ctx(), {
       kind: 'payment', context: { category: 'application_fee', amount_cents: 5000 },
     })
     assert.equal(directive.outcome, 'escalated')
-    const userNotifs = await readNotifications(db, 'yana_hard_stop')
+
+    const userNotifs = await readNotifications(db, 'yana_payment_required')
     assert.equal(userNotifs.length, 1)
     const data = userNotifs[0].data
     assert.equal(data.task_id, 't1')
     assert.equal(data.profile_id, 'p1')
     assert.equal(data.user_id, 'u_owner')
     assert.equal(data.funding_source_id, 'op1')
+    assert.equal(data.funding_source_title, 'MTSU Tuition Aid')
     assert.equal(data.blocker_type, 'payment_required')
     assert.equal(data.required_action, 'approve_payment')
     assert.match(data.route_to_resolve, /\/yana\/tasks\/t1/)
+
+    const adminNotifs = await readNotifications(db, 'yana_admin_payment_required')
+    assert.equal(adminNotifs.length, 1)
+    assert.equal(adminNotifs[0].user_id, 'u_admin')
+    assert.equal(adminNotifs[0].data.admin_email, ADMIN_EMAIL)
   })
 
-  it('deadline_expired emits alert and the row carries deadline_at', async () => {
+  it('deadline_expired emits yana_admin_task_failed and the row carries deadline_at', async () => {
     const db = makeDb()
-    await seed(db)
+    await seedProfile(db)
     const expiredCtx = ctx({ opportunity: { id: 'op2', title: 'Expired Grant', deadline: '2000-01-01' } })
     const directive = await resolveBlocker(db, expiredCtx, { kind: 'deadline_expired' })
     assert.equal(directive.outcome, 'blocked')
@@ -258,5 +382,9 @@ describe('yana hard-stop alerting', () => {
     const userNotifs = await readNotifications(db, 'yana_hard_stop')
     assert.equal(userNotifs.length, 1)
     assert.equal(userNotifs[0].data.deadline, '2000-01-01T00:00:00.000Z')
+
+    const adminNotifs = await readNotifications(db, 'yana_admin_task_failed')
+    assert.equal(adminNotifs.length, 1)
+    assert.equal(adminNotifs[0].user_id, 'u_admin')
   })
 })

@@ -43,7 +43,10 @@ import {
   setMissingInfo,
 } from './applicationTaskStore.js'
 import { generateAndSavePacket } from './yanaApplicationPacketGenerator.js'
-import { emitYanaNotificationToProfileAndAdmins } from './yanaNotifications.js'
+import {
+  emitYanaNotificationToProfileAndAdmins,
+  emitYanaLifecycleAlerts,
+} from './yanaNotifications.js'
 import { canonicalStage } from '../../../shared/pipelineStages.js'
 import { runAutopilot } from './yanaAutopilotEngine.js'
 import {
@@ -694,6 +697,19 @@ async function runAutopilotPathway(db, {
       severity: 'success',
       data: { task_id: task.id, run_id: run.id, confirmation: engineResult.confirmation_reference },
     })
+    await emitYanaLifecycleAlerts(db, {
+      profileId: task.profile_id,
+      profileUserId: task.user_id,
+      fundingSourceId: opportunity?.id || grant?.id || task.grant_id || task.opportunity_id,
+      fundingSourceTitle: opportunity?.title || grant?.title || null,
+      taskId: task.id,
+      userType: 'yana_task_completed',
+      adminType: 'yana_admin_task_completed',
+      title: 'Yana submitted application',
+      message: `Yana Autopilot completed and submitted "${opportunity?.title || grant?.title || 'this application'}".`,
+      severity: 'success',
+      data: { run_id: run.id, confirmation: engineResult.confirmation_reference },
+    })
   } else if (engineResult.status === 'completed_draft') {
     await updateApplicationTask(db, task.id, {
       status: 'waiting_for_review',
@@ -758,6 +774,19 @@ async function runAutopilotPathway(db, {
       message: engineResult.blocker_detail || 'See the task audit trail.',
       severity: 'error',
       data: { task_id: task.id, run_id: run.id },
+    })
+    await emitYanaLifecycleAlerts(db, {
+      profileId: task.profile_id,
+      profileUserId: task.user_id,
+      fundingSourceId: opportunity?.id || grant?.id || task.grant_id || task.opportunity_id,
+      fundingSourceTitle: opportunity?.title || grant?.title || null,
+      taskId: task.id,
+      userType: null,
+      adminType: 'yana_admin_task_failed',
+      title: 'Yana Autopilot failed',
+      message: engineResult.blocker_detail || 'See the task audit trail for details.',
+      severity: 'error',
+      data: { run_id: run.id, blocker_kind: engineResult.blocker_kind },
     })
   }
 

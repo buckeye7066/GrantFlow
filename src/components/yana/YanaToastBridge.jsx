@@ -23,6 +23,7 @@ const POLL_INTERVAL_MS = 2 * 60 * 1000 // 2 minutes — faster than the bell so 
 const STORAGE_KEY = 'yana_toasted_notifications_v1'
 
 const YANA_TYPES = new Set([
+  // Per-grant Yana flow (legacy).
   'yana_missing_info',
   'yana_login_required',
   'yana_document_required',
@@ -31,9 +32,21 @@ const YANA_TYPES = new Set([
   'yana_application_submitted',
   'yana_application_blocked',
   'yana_application_failed',
-  // Hard-Stop Resolver mandatory dual alerts.
+  // Hard-Stop Resolver dual alerts (user side).
   'yana_hard_stop',
+  'yana_payment_required',
+  'yana_attestation_required',
+  'yana_task_completed',
+  // Hard-Stop Resolver dual alerts (admin / single-operator side).
   'yana_admin_hard_stop',
+  'yana_admin_missing_info',
+  'yana_admin_login_required',
+  'yana_admin_document_required',
+  'yana_admin_payment_required',
+  'yana_admin_attestation_required',
+  'yana_admin_portal_blocked',
+  'yana_admin_task_failed',
+  'yana_admin_task_completed',
   // Autopilot lifecycle alerts.
   'yana_task_started',
   'yana_task_blocked',
@@ -77,10 +90,14 @@ function severityForType(type) {
   switch (type) {
     case 'yana_application_submitted':
     case 'yana_submitted':
+    case 'yana_task_completed':
+    case 'yana_admin_task_completed':
       return 'success'
     case 'yana_application_failed':
     case 'yana_failed':
+    case 'yana_admin_task_failed':
     case 'yana_admin_hard_stop':
+    case 'yana_admin_portal_blocked':
       return 'error'
     case 'yana_hard_stop':
     case 'yana_task_blocked':
@@ -88,8 +105,15 @@ function severityForType(type) {
     case 'yana_login_required':
     case 'yana_document_required':
     case 'yana_missing_info':
+    case 'yana_payment_required':
+    case 'yana_attestation_required':
     case 'yana_2fa_required':
     case 'yana_captcha_required':
+    case 'yana_admin_missing_info':
+    case 'yana_admin_login_required':
+    case 'yana_admin_document_required':
+    case 'yana_admin_payment_required':
+    case 'yana_admin_attestation_required':
       return 'warning'
     default: return 'info'
   }

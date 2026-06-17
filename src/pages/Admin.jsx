@@ -23,11 +23,14 @@ const Billing = React.lazy(() => import('@/pages/Billing'));
 const Automation = React.lazy(() => import('@/pages/Automation'));
 import { useAuthStore } from '@/stores/authStore';
 import { Alert, AlertDescription } from '@/components/ui/alert';
+import { isYanaAdminEmail } from '../../shared/adminEmail.js';
 
 export default function Admin() {
   const user = useAuthStore((state) => state.user);
   // Use Boolean coercion to align with backend truthy checks - not strict equality
   const isAdmin = Boolean(user?.is_admin) || user?.role === 'admin';
+  // Yana operator dashboard is restricted to the single canonical admin email.
+  const isYanaOperator = isYanaAdminEmail(user?.email || user?.primary_email);
 
   if (!isAdmin) {
     return (
@@ -86,10 +89,12 @@ export default function Admin() {
               <Bot className="w-4 h-4 mr-2" />
               Anya
             </TabsTrigger>
-            <TabsTrigger value="yana_hard_stops">
-              <AlertCircle className="w-4 h-4 mr-2" />
-              Yana hard stops
-            </TabsTrigger>
+            {isYanaOperator && (
+              <TabsTrigger value="yana_hard_stops">
+                <AlertCircle className="w-4 h-4 mr-2" />
+                Yana hard stops
+              </TabsTrigger>
+            )}
             <TabsTrigger value="agents">
               <Activity className="w-4 h-4 mr-2" />
               Mission Control
@@ -166,9 +171,11 @@ export default function Admin() {
             <AdminAnyaConsole />
           </TabsContent>
 
-          <TabsContent value="yana_hard_stops" className="mt-6">
-            <AdminYanaHardStops />
-          </TabsContent>
+          {isYanaOperator && (
+            <TabsContent value="yana_hard_stops" className="mt-6">
+              <AdminYanaHardStops />
+            </TabsContent>
+          )}
 
           <TabsContent value="agents" className="mt-6">
             <AdminAgentMissionControl />

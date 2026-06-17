@@ -24,8 +24,9 @@
  */
 
 import crypto from 'crypto'
+import { resolveAdminUserId, YANA_ADMIN_EMAIL } from './yanaAdminAccount.js'
 
-export const YANA_NOTIFICATION_TYPES = Object.freeze([
+export const YANA_USER_NOTIFICATION_TYPES = Object.freeze([
   // Per-grant Yana flow (legacy).
   'yana_missing_info',
   'yana_login_required',
@@ -44,10 +45,88 @@ export const YANA_NOTIFICATION_TYPES = Object.freeze([
   'yana_failed',
   'yana_2fa_required',
   'yana_captcha_required',
-  // Hard-Stop Resolver — mandatory dual alerts when Yana actually pauses.
-  'yana_hard_stop',         // for the profile owner / user
-  'yana_admin_hard_stop',   // for admin/operator
+  // Hard-Stop Resolver dual alerts — user side.
+  'yana_hard_stop',
+  'yana_payment_required',
+  'yana_attestation_required',
+  'yana_task_completed',
 ])
+
+export const YANA_ADMIN_NOTIFICATION_TYPES = Object.freeze([
+  'yana_admin_hard_stop',
+  'yana_admin_missing_info',
+  'yana_admin_login_required',
+  'yana_admin_document_required',
+  'yana_admin_payment_required',
+  'yana_admin_attestation_required',
+  'yana_admin_portal_blocked',
+  'yana_admin_task_failed',
+  'yana_admin_task_completed',
+])
+
+export const YANA_NOTIFICATION_TYPES = Object.freeze([
+  ...YANA_USER_NOTIFICATION_TYPES,
+  ...YANA_ADMIN_NOTIFICATION_TYPES,
+])
+
+/**
+ * Map the canonical hard-stop blocker_type to the per-category USER
+ * notification type. Anything we don't have a named category for gets
+ * the generic `yana_hard_stop` envelope.
+ */
+export function userTypeForCategory(blockerType) {
+  switch (String(blockerType || '').trim()) {
+    case 'missing_required_information':
+    case 'ambiguous_required_field':
+      return 'yana_missing_info'
+    case 'missing_required_document':
+      return 'yana_document_required'
+    case 'login_required':
+    case 'sso_required':
+    case 'two_factor_required':
+    case 'captcha_required':
+      return 'yana_login_required'
+    case 'payment_required':
+      return 'yana_payment_required'
+    case 'wet_signature_required':
+    case 'legal_attestation_required':
+      return 'yana_attestation_required'
+    default:
+      return 'yana_hard_stop'
+  }
+}
+
+/**
+ * Map the canonical hard-stop blocker_type to the per-category ADMIN
+ * notification type.
+ */
+export function adminTypeForCategory(blockerType) {
+  switch (String(blockerType || '').trim()) {
+    case 'missing_required_information':
+    case 'ambiguous_required_field':
+      return 'yana_admin_missing_info'
+    case 'missing_required_document':
+      return 'yana_admin_document_required'
+    case 'login_required':
+    case 'sso_required':
+    case 'two_factor_required':
+    case 'captcha_required':
+      return 'yana_admin_login_required'
+    case 'payment_required':
+      return 'yana_admin_payment_required'
+    case 'wet_signature_required':
+    case 'legal_attestation_required':
+      return 'yana_admin_attestation_required'
+    case 'portal_terms_block':
+    case 'portal_anti_bot_block':
+      return 'yana_admin_portal_blocked'
+    case 'deadline_expired':
+    case 'unknown_application_method':
+      return 'yana_admin_task_failed'
+    default:
+      return 'yana_admin_hard_stop'
+  }
+}
 
 export const YANA_SEVERITIES = Object.freeze(['info', 'warning', 'error', 'success'])
 
@@ -172,8 +251,8 @@ export async function emitYanaNotificationToProfileAndAdmins(db, {
   let admins = adminUserIds
   if (!Array.isArray(admins)) {
     try {
-      const rows = await db.prepare("SELECT id FROM users WHERE role = 'admin'").all()
-      admins = (rows || []).map((r) => r?.id).filter(Boolean)
+      const single = await resolveAdminUserId(db)
+      admins = single ? [single] : []
     } catch {
       admins = []
     }
@@ -204,6 +283,26 @@ export async function emitYanaNotificationToProfileAndAdmins(db, {
  *                  route_to_admin_task, deadline, admin_required,
  *                  user_required, severity.
  */
+async function lookupProfileLabel(db, profileId) {
+  if (!db || !profileId) return null
+  try {
+    const row = await db.prepare(
+      `SELECT
+         COALESCE(name, display_name, organization_name, profile_name, profile_label) AS label,
+         user_id
+       FROM profiles WHERE id = ? LIMIT 1`,
+    ).get(String(profileId))
+    return row?.label || null
+  } catch {
+    // Fall back to a narrower query if some columns aren't present in
+    // older test schemas.
+    try {
+      const row = await db.prepare('SELECT name FROM profiles WHERE id = ? LIMIT 1').get(String(profileId))
+      return row?.name || null
+    } catch { return null }
+  }
+}
+
 export async function emitHardStopAlerts(db, {
   profileId, profileUserId = null,
   fundingSourceId = null, fundingSourceTitle = null,
@@ -224,69 +323,151 @@ export async function emitHardStopAlerts(db, {
   await ensureNotificationsSchema(db)
 
   const sourceLabel = fundingSourceTitle || fundingSourceId || 'this funding source'
-  const profLabel   = profileLabel || profileId || 'profile'
+  const profLabel   = profileLabel || (await lookupProfileLabel(db, profileId)) || profileId || 'profile'
   const userTitle   = `Yana needs help completing ${sourceLabel}`
   const adminTitle  = `Yana hard stop: ${profLabel} / ${sourceLabel}`
   const baseMessage = blockerMessage
-    || `Yana paused for: ${blockerTitle || blockerType.replace(/_/g, ' ')}.`
-  const adminMessage = `${baseMessage} ${adminRequired && !userRequired
+    || `Yana paused for: ${blockerTitle || String(blockerType || 'a blocker').replace(/_/g, ' ')}.`
+  const whoMustAct = adminRequired && !userRequired
     ? 'Admin action required.'
     : userRequired && !adminRequired
       ? 'User action required.'
-      : 'Either the user or an admin can resolve this.'}`
+      : 'Either the user or an admin can resolve this.'
+  const adminMessage = `${baseMessage} ${whoMustAct}`
+
+  const userType  = userTypeForCategory(blockerType)
+  const adminType = adminTypeForCategory(blockerType)
+  const resolveLink = resolverRoute || `/yana/tasks/${taskId}`
+  const resumeLink  = `/yana/tasks/${taskId}/resume`
+  const adminLink   = adminRoute || `/admin/yana/hard-stops/${blockerId || taskId}`
 
   const baseData = {
     task_id: taskId,
     profile_id: profileId,
+    profile_name: profLabel,
     user_id: profileUserId,
     funding_source_id: fundingSourceId,
-    blocker_type: blockerType,
+    funding_source_title: fundingSourceTitle,
     blocker_id: blockerId,
+    blocker_type: blockerType,
+    blocker_title: blockerTitle,
+    blocker_message: blockerMessage,
     required_action: requiredAction,
     severity,
     deadline: deadlineAt,
     admin_required: !!adminRequired,
     user_required: !!userRequired,
+    route_to_resolve: resolveLink,
+    route_to_resume: resumeLink,
   }
 
-  // 1. User notification.
+  // 1. User notification (per-category type).
   let userNotificationId = null
   if (userRequired && profileUserId) {
     userNotificationId = await emitYanaNotification(db, {
       userId: profileUserId,
-      type: 'yana_hard_stop',
+      type: userType,
       title: userTitle,
       message: baseMessage,
-      data: { ...baseData, route_to_resolve: resolverRoute || `/yana/tasks/${taskId}` },
+      data: baseData,
       severity,
       expiresInDays,
     })
   }
 
-  // 2. Admin notification(s).
+  // 2. Admin notification — single canonical operator (buckeye7066@gmail.com
+  // by default). We always create the row even if the request says
+  // adminRequired=false, because GrantFlow's operator must always see
+  // every hard stop.
   const adminIds = []
-  let admins = []
   try {
-    const rows = await db.prepare("SELECT id FROM users WHERE role = 'admin'").all()
-    admins = (rows || []).map((r) => r?.id).filter(Boolean)
+    const adminId = await resolveAdminUserId(db)
+    if (adminId) {
+      const id = await emitYanaNotification(db, {
+        userId: adminId,
+        type: adminType,
+        title: adminTitle,
+        message: adminMessage,
+        data: {
+          ...baseData,
+          admin_email: YANA_ADMIN_EMAIL,
+          route_to_admin_task: adminLink,
+        },
+        severity,
+        expiresInDays,
+      })
+      if (id) adminIds.push(id)
+    }
   } catch {
-    admins = []
+    // best-effort
   }
-  for (const adminId of admins) {
-    const id = await emitYanaNotification(db, {
-      userId: adminId,
-      type: 'yana_admin_hard_stop',
-      title: adminTitle,
-      message: adminMessage,
-      data: {
-        ...baseData,
-        route_to_admin_task: adminRoute || `/admin/yana/hard-stops/${blockerId || taskId}`,
-        route_to_resolve: resolverRoute || `/yana/tasks/${taskId}`,
-      },
+  return { user_notification_id: userNotificationId, admin_notification_ids: adminIds }
+}
+
+/**
+ * Emit a paired user + admin notification for any non-blocker Yana
+ * lifecycle event (task completed, task failed, etc.). Keeps the
+ * operator inbox in sync without going through the hard-stop pathway.
+ */
+export async function emitYanaLifecycleAlerts(db, {
+  profileId, profileUserId = null,
+  fundingSourceId = null, fundingSourceTitle = null,
+  profileLabel = null,
+  taskId,
+  userType,            // e.g. 'yana_task_completed'
+  adminType,           // e.g. 'yana_admin_task_completed'
+  title, message,
+  severity = 'info',
+  data = {},
+  expiresInDays = 30,
+} = {}) {
+  if (!db || !taskId) return { user_notification_id: null, admin_notification_ids: [] }
+  await ensureNotificationsSchema(db)
+  const sourceLabel = fundingSourceTitle || fundingSourceId || 'this funding source'
+  const profLabel = profileLabel
+    || (await lookupProfileLabel(db, profileId))
+    || profileId || 'profile'
+  const baseData = {
+    task_id: taskId,
+    profile_id: profileId,
+    profile_name: profLabel,
+    user_id: profileUserId,
+    funding_source_id: fundingSourceId,
+    funding_source_title: fundingSourceTitle,
+    severity,
+    ...data,
+  }
+  let userNotificationId = null
+  if (userType && profileUserId) {
+    userNotificationId = await emitYanaNotification(db, {
+      userId: profileUserId,
+      type: userType,
+      title,
+      message,
+      data: baseData,
       severity,
       expiresInDays,
     })
-    if (id) adminIds.push(id)
+  }
+  const adminIds = []
+  if (adminType) {
+    try {
+      const adminId = await resolveAdminUserId(db)
+      if (adminId) {
+        const id = await emitYanaNotification(db, {
+          userId: adminId,
+          type: adminType,
+          title: `${title} — ${profLabel} / ${sourceLabel}`,
+          message,
+          data: { ...baseData, admin_email: YANA_ADMIN_EMAIL },
+          severity,
+          expiresInDays,
+        })
+        if (id) adminIds.push(id)
+      }
+    } catch {
+      // best-effort
+    }
   }
   return { user_notification_id: userNotificationId, admin_notification_ids: adminIds }
 }
@@ -314,5 +495,9 @@ export async function markNotificationsResolved(db, notificationIds = []) {
 export function _resetNotificationsSchemaCache() {
   ensuredNotifications = false
 }
+
+// Re-export for tests so a single resetCaches() call wipes both schema
+// and the canonical admin id memoization.
+export { _resetAdminAccountCache } from './yanaAdminAccount.js'
 
 export const _internal = { ensureNotificationsSchema }
