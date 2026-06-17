@@ -28,3 +28,28 @@ export function showErrorToast(toast, title, description) {
     description,
   });
 }
+
+/**
+ * Display a warning toast (uses default variant; we attach a yellow accent
+ * via title styling on the consumer side when needed). Yana uses this for
+ * "needs info / login required" toasts.
+ */
+export function showWarningToast(toast, title, description) {
+  toast({
+    title,
+    description,
+    duration: 6000,
+  });
+}
+
+/**
+ * Display an info toast — used for low-urgency Yana notifications
+ * (draft started, application ready for review, etc.).
+ */
+export function showInfoToast(toast, title, description) {
+  toast({
+    title,
+    description,
+    duration: 5000,
+  });
+}

@@ -36,6 +36,7 @@ import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Textarea } from "@/components/ui/textarea"
 import { useToast } from "@/components/ui/use-toast"
+import YanaPortalsPanel from "@/components/yana/YanaPortalsPanel"
 
 const PORTAL_CHECK_REFRESH_DELAY_MS = 3000
 
@@ -767,6 +768,8 @@ export default function StudentPortalsCard({ state, profileId, applications: pro
           Tip: keep these logins handy. Add each university&apos;s direct application, portal, and fee/payment links inside the
           university cards below.
         </p>
+        {/* Yana — student-portal records & funding-opportunity portal links. */}
+        <YanaPortalsPanel profileId={profileId} />
       </CardContent>
 
       <Dialog open={connectOpen} onOpenChange={setConnectOpen}>

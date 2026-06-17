@@ -12,6 +12,7 @@ const { apiFetchMock, createCrawlerJobMock, toastMock } = vi.hoisted(() => ({
 
 vi.mock("@/api/client", () => ({
   apiFetch: (...args) => apiFetchMock(...args),
+  default: { fetch: (...args) => apiFetchMock(...args) },
 }))
 
 vi.mock("@/api/crawlers", () => ({
