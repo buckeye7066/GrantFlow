@@ -12,6 +12,7 @@ import SamErrorPanel from '@/components/admin/agents/SamErrorPanel'
 import AnyaInteractionPanel from '@/components/admin/agents/AnyaInteractionPanel'
 import JohnDraftMetrics from '@/components/admin/agents/JohnDraftMetrics'
 import AgentActivityTimeline from '@/components/admin/agents/AgentActivityTimeline'
+import AgentControlCenter from '@/components/admin/agentControl/AgentControlCenter.jsx'
 
 const DEFAULT_REFRESH_MS = 45_000
 
@@ -123,6 +124,13 @@ export default function AdminAgentMissionControl({ autoRefreshMs = DEFAULT_REFRE
           </p>
         </div>
       </div>
+
+      {/* Agent Control Center: start/stop/pause/resume/emergency-stop the
+          whole agent process. Restricted to the canonical operator
+          (buckeye7066@gmail.com); non-admin sees a friendly notice and
+          telemetry below still renders. Mounted ABOVE telemetry so the
+          stop controls are always reachable in one click. */}
+      <AgentControlCenter />
 
       <AgentTelemetryFilters
         range={range}

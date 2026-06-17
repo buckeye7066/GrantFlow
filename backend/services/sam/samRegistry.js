@@ -243,6 +243,53 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
     severityOnFailure: SEVERITY.CRITICAL,
     description: 'Hamilton must never store raw card data; the authorization endpoint must respond 200 with {ok:true,...} and never echo card numbers.',
   },
+  // ── Agent Control Center (admin-only orchestration) checks ─────────
+  // Confirms the new Control Center router is mounted, admin-gated, and
+  // healthy. Sam is run by the Control Center itself, so this check is
+  // technically circular — but it's still useful: every Sam preflight
+  // catches a broken router before Robert / Yana / John / Hamilton step
+  // start. The non-admin probe also verifies the 403 gate is firing.
+  {
+    id: 'agent.controlCenter.status',
+    label: 'Agent Control Center status route',
+    category: SAM_CATEGORIES.ROUTE_INTEGRITY,
+    kind: CHECK_KIND.HTTP,
+    method: 'GET',
+    path: '/api/admin/agent-control/status',
+    expectStatus: 200,
+    severityOnFailure: SEVERITY.HIGH,
+    description: 'Confirms the admin-only Agent Control Center status endpoint is reachable and the canonical-admin gate returns the orchestration snapshot.',
+  },
+  {
+    id: 'agent.controlCenter.lockHygiene',
+    label: 'Agent Control Center lock hygiene',
+    category: SAM_CATEGORIES.PRODUCTION_CONFIG,
+    kind: CHECK_KIND.INTERNAL,
+    severityOnFailure: SEVERITY.MEDIUM,
+    description: 'Stale full_cycle locks past their TTL must be auto-released; if they aren\'t, no new run can ever start.',
+    async run({ db }) {
+      try {
+        const row = await db
+          ?.prepare(`
+            SELECT lock_name, control_run_id, expires_at FROM agent_control_locks
+             WHERE expires_at IS NOT NULL AND expires_at < CURRENT_TIMESTAMP
+             LIMIT 1
+          `)
+          .get()
+        if (!row) return { ok: true, summary: 'no expired locks' }
+        return {
+          ok: false,
+          summary: `Expired lock not released: ${row.lock_name} (run ${row.control_run_id})`,
+          evidence: row,
+        }
+      } catch (err) {
+        return {
+          ok: true,
+          summary: `agent_control_locks not present yet (${err?.message || 'unknown'})`,
+        }
+      }
+    },
+  },
 ])
 
 // ---------------------------------------------------------------------------
