@@ -30,6 +30,7 @@ import seedAssistanceDirectories from '../utils/seedAssistanceDirectories.js';
 import seedFaithBasedHousing from '../utils/seedFaithBasedHousing.js';
 import seedHousingFundingOpportunities from '../utils/seedHousingFunding.js';
 import { seedServiceCatalogFromExtract } from '../services/serviceCatalogStore.js';
+import { repairOrphanedJobProfiles } from '../utils/repairOrphanedJobProfiles.js';
 
 export async function runSelfHeal({ db, uploadsDir, IS_SMOKE_MODE, baseDir }) {
   // ── 1. Upload-avatar repair ───────────────────────────────────────────────
@@ -95,6 +96,35 @@ export async function runSelfHeal({ db, uploadsDir, IS_SMOKE_MODE, baseDir }) {
     await ensurePortalCheckResultsTable(db);
     await repairInvalidDocumentStatuses(db);
     await repairMissingUploadAvatars({ db, uploadsDir });
+
+    // Recover crawler_jobs that died with `Profile X not found` because the
+    // job's profile_id pointed at a designated slug that has been re-keyed to
+    // a live UUID (or vice versa). The resolver heals the id and the row is
+    // re-queued so the autonomous run actually finishes. Mission goals:
+    // "avoid zero-result experiences" and "missing fields default to neutral,
+    // not exclusionary."
+    try {
+      const repairLimit = Number.parseInt(
+        process.env.STARTUP_PROFILE_JOB_REPAIR_LIMIT || '500',
+        10,
+      );
+      const result = await repairOrphanedJobProfiles(db, {
+        limit: Number.isFinite(repairLimit) ? repairLimit : 500,
+      });
+      if (result.repaired > 0 || result.errors > 0) {
+        console.info('[startup] repaired orphaned crawler_jobs profile aliases', {
+          scanned: result.scanned,
+          repaired: result.repaired,
+          skipped: result.skipped,
+          errors: result.errors,
+        });
+      }
+    } catch (error) {
+      console.warn(
+        '[startup] Failed to repair orphaned crawler_jobs profile aliases:',
+        error?.message || error,
+      );
+    }
   }
 
   // ── 3. Service-catalog seeding ────────────────────────────────────────────
