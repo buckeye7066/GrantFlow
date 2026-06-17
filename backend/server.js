@@ -743,9 +743,28 @@ if (shouldAutoMigrate) {
 
 // MIGRATE_ON_BOOT: apply any pending SQL migrations from backend/db/(postgres/)migrations
 // and emit a single `schema check: OK|DRIFT` line. This is the canonical way to keep
-// production in sync with new migrations — operators set MIGRATE_ON_BOOT=1 once,
-// pending migrations run on deploy, and any residual drift is visible in the startup log.
-const shouldMigrateOnBoot = /^(1|true|yes|on)$/i.test(String(process.env.MIGRATE_ON_BOOT || '').trim())
+// production in sync with new migrations.
+//
+// DEFAULT: ON (opt out with MIGRATE_ON_BOOT=0|false|no|off). Every migration in the
+// repo is idempotent (CREATE TABLE IF NOT EXISTS / ALTER ... IF EXISTS), and the
+// outer try/catch below isolates any failure from the rest of the boot. Defaulting
+// to off was producing real production outages — e.g. the Agent Control Center
+// reporting "relation \"robert_runs\" does not exist" because operators didn't know
+// they had to flip the flag manually after a deploy that added new agent telemetry
+// tables (sam_runs, robert_*, john_*, agent_activity_events, agent_daily_rollups,
+// hamilton_*, agent_control_*).
+const migrateOnBootEnv = String(process.env.MIGRATE_ON_BOOT || '').trim()
+const explicitlyOptedOut = /^(0|false|no|off)$/i.test(migrateOnBootEnv)
+const explicitlyOptedIn = /^(1|true|yes|on)$/i.test(migrateOnBootEnv)
+// In smoke mode the integration tests bootstrap a fresh sqlite DB from
+// `schema.sql` and then exercise specific routes; replaying every historical
+// migration on top of that schema produces real conflicts (e.g. adding
+// columns/triggers the test fixtures don't account for) and breaks the
+// avatar/upload/profile tests that rely on a clean fixture. Tests that
+// genuinely need migrations applied set MIGRATE_ON_BOOT=1 explicitly.
+const _smokeMode =
+  /^(1|true|yes|on)$/i.test(String(process.env.SMOKE_MODE || '').trim().toLowerCase())
+const shouldMigrateOnBoot = explicitlyOptedIn || (!explicitlyOptedOut && !_smokeMode)
 if (shouldMigrateOnBoot && !app.locals.db_startup_error) {
   try {
     const { runPendingMigrationsOnBoot } = await import('./db/migrate.js')

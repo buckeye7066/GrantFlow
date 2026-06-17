@@ -272,11 +272,12 @@ async function main() {
 /**
  * Idempotent boot-time migrate + schema-check entry point.
  *
- * Called from backend/server.js when MIGRATE_ON_BOOT=1 is set. Applies
- * pending migrations using the same logic as `npm run migrate`, then emits
- * exactly one line of the form `schema check: OK` or
- * `schema check: DRIFT: <cols>` so operators can grep the startup log for
- * drift without reading the full admin.diagnostics output.
+ * Called from backend/server.js by default (opt out with
+ * MIGRATE_ON_BOOT=0|false|no|off). Applies pending migrations using the same
+ * logic as `npm run migrate`, then emits exactly one line of the form
+ * `schema check: OK` or `schema check: DRIFT: <cols>` so operators can grep
+ * the startup log for drift without reading the full admin.diagnostics
+ * output.
  *
  * Safe to call multiple times; _migrations is the idempotency table.
  */

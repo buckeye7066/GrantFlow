@@ -2056,6 +2056,21 @@ It enumerates environment variables referenced in code and/or present in example
 
 ### `MIGRATE_ON_BOOT`
 
+- **Default**: ON in production / development (env unset). Pending SQL
+  migrations under `backend/db/(postgres/)migrations` are applied
+  automatically on every backend boot via `runPendingMigrationsOnBoot`. All
+  migrations in the repo are idempotent (`CREATE TABLE IF NOT EXISTS`,
+  `ALTER TABLE IF EXISTS`, etc.) so re-running a migration that's already in
+  `_migrations` is a no-op.
+- **Default**: OFF in `SMOKE_MODE=1` (integration tests). Smoke tests
+  bootstrap a fresh `schema.sql` and exercise specific routes; replaying
+  every historical migration on top corrupts the test fixture. Tests that
+  genuinely need migrations applied set `MIGRATE_ON_BOOT=1` explicitly.
+- **Opt out**: Set `MIGRATE_ON_BOOT=0` (also accepted: `false`, `no`, `off`)
+  to skip the boot step in any mode. Run `npm run migrate` manually after
+  deploy in that case.
+- **Opt in**: Set `MIGRATE_ON_BOOT=1` to force the boot step even in smoke
+  mode.
 - **Templates**: (not present)
 - **Code references**:
   - `backend/server.js:L710` (process.env)
