@@ -1083,7 +1083,6 @@ CREATE TABLE IF NOT EXISTS profile_documents (
   PRIMARY KEY (profile_id, document_id)
 );
 
-<<<<<<< HEAD
 -- School-portal bridge — see docs/school-portal-integration.md.
 -- Lets a registered school's student-information system (Banner / Workday /
 -- PeopleSoft / Slate / Anthology Apply) push student records into GrantFlow
@@ -1148,7 +1147,7 @@ CREATE INDEX IF NOT EXISTS idx_school_student_links_email
   ON school_student_links(email);
 CREATE INDEX IF NOT EXISTS idx_school_student_links_consent
   ON school_student_links(consent_status);
-=======
+
 -- Robert — funding-discovery agent persistent state. See
 -- docs/ROBERT_FUNDING_DISCOVERY_AGENT.md. Robert delegates scoring,
 -- policy, validation, ingestion, and matching to canonical services;
@@ -1334,7 +1333,6 @@ CREATE INDEX IF NOT EXISTS idx_sam_runs_started_at ON sam_runs(started_at DESC);
 CREATE INDEX IF NOT EXISTS idx_sam_runs_status     ON sam_runs(status);
 CREATE INDEX IF NOT EXISTS idx_sam_runs_mode       ON sam_runs(mode);
 CREATE INDEX IF NOT EXISTS idx_sam_runs_user       ON sam_runs(created_by_user_id);
->>>>>>> origin/main
 
 CREATE TABLE IF NOT EXISTS billing_accounts (
   id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),

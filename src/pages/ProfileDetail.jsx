@@ -993,12 +993,8 @@ export default function ProfileDetail() {
           {isStudentProfile ? (
             <TabsContent value="universities" className="mt-6">
               <div className="space-y-6">
-<<<<<<< HEAD
                 <SchoolPortalLinkPanel profileId={profileId} />
-                <StudentPortalsCard state={studentState} profileId={profileId} />
-=======
                 <StudentPortalsCard state={studentState} profileId={profileId} applications={universityApplications} />
->>>>>>> origin/main
               <UniversityApplicationsSection
                 applications={universityApplications}
                 onSave={handleSaveUniversityApplications}
