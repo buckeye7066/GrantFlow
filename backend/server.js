@@ -1944,6 +1944,11 @@ app.get('/api/admin/pipeline-health', (req, res) => {
 // API routes
 app.use('/api/auth', authRouter);
 app.use('/api/activity', activityRouter);
+// Conversational onboarding — public, no auth required. This is the SINGLE
+// entry funnel for new GrantFlow users: /start in the SPA talks to these
+// endpoints, finishes by creating a profile + email-OTP credential, and hands
+// the user off to /api/auth/email/verify with a stateless token.
+app.use('/api/onboarding', lazyRouter('./routes/onboarding.js'));
 app.use('/api/service-application', lazyRouter('./routes/serviceApplication.js'));
 app.use('/api/billing', billingRouter);
 app.use('/api/stats', responseCache(60_000), statsRouter);

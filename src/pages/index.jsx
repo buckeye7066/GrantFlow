@@ -64,6 +64,7 @@ const Login = lazy(() => import("./Login"), 'Login');
 const AuthCallback = lazy(() => import("./AuthCallback"), 'AuthCallback');
 const ServiceApplication = lazy(() => import("./ServiceApplication"), 'ServiceApplication');
 const SetPassword = lazy(() => import("./SetPassword"), 'SetPassword');
+const Start = lazy(() => import("./Start"), 'Start');
 const SavedGrants = lazy(() => import("./SavedGrants"), 'SavedGrants');
 const FoundationSearch = lazy(() => import("./FoundationSearch"), 'FoundationSearch');
 const AnyaIntakeResults = lazy(() => import("./AnyaIntakeResults"), 'AnyaIntakeResults');
@@ -246,14 +247,13 @@ function LayoutRoutes() {
         return <Navigate to="/login" state={{ from: location, sessionExpired }} replace />;
     }
 
-    // Block dashboard access if user needs profile creation (unless admin)
+    // Anya conversational onboarding (/start) is the single funnel for new
+    // users. If a non-admin user has no profile yet, route them straight
+    // there — the legacy OnboardingFlow / FirstRunOnboardingGate / Quick-Add
+    // wizards have all been removed.
     const isAdmin = user?.is_admin
     if (isAuthenticated && !isAdmin && needsProfileCreation && profiles.length === 0) {
-        const ALLOWED_DURING_ONBOARDING = ['/Organizations', '/MyProfiles', '/Help', '/Settings', '/Pricing', '/Services'];
-        const isAllowed = ALLOWED_DURING_ONBOARDING.some(p => location.pathname.startsWith(p));
-        if (!isAllowed) {
-            return <Navigate to="/Organizations" replace />;
-        }
+        return <Navigate to="/start" replace />;
     }
 
     return (
@@ -390,6 +390,14 @@ function LayoutRoutes() {
 export default function Pages() {
     return (
         <Routes>
+            {/*
+                /start is the SINGLE entry point for new users — Anya runs the
+                conversational quiz here and finalises with profile + email-OTP
+                creation in one step. Public, unauthenticated, mounted ABOVE the
+                catch-all layout route so it can never be gated by the
+                Layout's "redirect to /login" check.
+              */}
+            <Route path="/start" element={withBoundary(<Start />, "Start")} />
             <Route path="/login" element={withBoundary(<Login />, "Login")} />
             <Route path="/set-password" element={withBoundary(<SetPassword />, "SetPassword")} />
             <Route path="/ServiceApplication" element={withBoundary(<ServiceApplication />, "ServiceApplication")} />

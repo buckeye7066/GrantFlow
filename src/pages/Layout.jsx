@@ -28,7 +28,11 @@ import {
 } from "@/components/ui/collapsible";
 import AutoTimeTracker from "@/components/billing/AutoTimeTracker";
 import { useDashboardPreferences } from "@/contexts/DashboardPreferencesContext.jsx";
-import OnboardingFlow from "@/components/onboarding/OnboardingFlow";
+// OnboardingFlow / FirstRunOnboardingGate were the previous duplicated
+// onboarding gates. They are intentionally removed in favour of the single
+// /start conversational quiz with Anya — see src/pages/Start.jsx. Existing
+// users coming back are routed straight to the dashboard; new users land at
+// /start (handled by index.jsx + LayoutRoutes redirect below).
 import AnyaGuidedTour from "@/components/onboarding/AnyaGuidedTour";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -41,7 +45,6 @@ import { AnyaContextProvider } from "@/contexts/AnyaContext";
 import { useFeatureFlags } from "@/lib/featureFlags";
 import ProBonoBanner from "@/components/banners/ProBonoBanner.jsx";
 import NotificationBell from "@/components/notifications/NotificationBell";
-import FirstRunOnboardingGate from "@/components/onboarding/FirstRunOnboardingGate";
 import AppBreadcrumb from "@/components/shared/AppBreadcrumb";
 import UserStepCoach from "@/components/guidance/UserStepCoach";
 import GrantLifecyclePhaseIndicator from "@/components/shared/GrantLifecyclePhaseIndicator";
@@ -113,13 +116,12 @@ export default function Layout({ children, currentPageName }) {
   const [navGroupsOpen, toggleNavGroup] = useNavGroupsOpen();
   const [showAdvancedTools, setShowAdvancedToolsState] = useState(getShowAdvancedTools);
   const { state: dashboardPrefs, dispatch: preferencesDispatch } = useDashboardPreferences();
-  const { user, profiles, activeProfileId, setActiveProfileId, logout, triggerOnboardingVideo } = useAuthStore((state) => ({
+  const { user, profiles, activeProfileId, setActiveProfileId, logout } = useAuthStore((state) => ({
     user: state.user,
     profiles: state.profiles,
     activeProfileId: state.activeProfileId,
     setActiveProfileId: state.setActiveProfileId,
     logout: state.logout,
-    triggerOnboardingVideo: state.triggerOnboardingVideo,
   }));
   const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
   const isAdmin = Boolean(user?.is_admin);
@@ -315,13 +317,15 @@ export default function Layout({ children, currentPageName }) {
               </div>
           <div className="flex items-center gap-2 md:gap-3">
             <Button
+              asChild
               variant="outline"
               size="sm"
               className="hidden md:inline-flex"
-              onClick={triggerOnboardingVideo}
             >
-              <Sparkles className="w-3.5 h-3.5 mr-2" />
-              User Manual
+              <Link to={createPageUrl('Help')}>
+                <Sparkles className="w-3.5 h-3.5 mr-2" />
+                User Manual
+              </Link>
             </Button>
             <NotificationBell />
             <Button
@@ -359,17 +363,18 @@ export default function Layout({ children, currentPageName }) {
           </div>
         </main>
 
-        {/* Onboarding Flow */}
-        <OnboardingFlow />
+        {/*
+          Onboarding is now handled OUTSIDE the layout: new users land at
+          /start (Anya conversational quiz) and finish there with a profile +
+          email-OTP credential. The previous OnboardingFlow,
+          ProfileCreationWizard, and FirstRunOnboardingGate modals are
+          intentionally not rendered here — keeping them mounted alongside
+          /start would re-introduce the duplicate-modal bug we set out to
+          eliminate.
+         */}
 
         {/* Anya guided tour (versioned, non-admin only) */}
         <AnyaGuidedTour />
-
-        {/* First-run onboarding wizard (ZIP, state, intent) */}
-        <FirstRunOnboardingGate
-          profiles={profiles ?? []}
-          activeProfileId={activeProfileId === '__admin__' ? null : activeProfileId}
-        />
 
         {/*
           Per-page coach prompt (plain-English "what is this page for / what

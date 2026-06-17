@@ -3370,4 +3370,24 @@ router.post('/logout', async (req, res) => {
   return res.status(204).send()
 })
 
+// ---------------------------------------------------------------------------
+// Named exports — used by sibling routes that need to drive the same
+// email-OTP flow programmatically (e.g. the conversational onboarding funnel
+// in routes/onboarding.js calls ensureEmailCredential + insertVerificationCode
+// after creating a profile so the user gets a sign-in code in one step).
+//
+// These are pure helpers — they do not touch req/res — so re-exporting them
+// keeps a single source of truth for the OTP plumbing instead of forcing the
+// onboarding route to duplicate hash/sign/insert logic.
+// ---------------------------------------------------------------------------
+export {
+  ensureEmailCredential,
+  insertVerificationCode,
+  generateSixDigitCode,
+  hashValue,
+  signOtpToken,
+  sendVerificationEmail,
+  EMAIL_CODE_TTL,
+}
+
 export default router

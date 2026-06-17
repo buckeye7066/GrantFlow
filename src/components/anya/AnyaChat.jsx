@@ -433,21 +433,12 @@ export default function AnyaChat({ profileId, currentPage: currentPageProp, pref
   // ---------------------------------------------------------------------------
   // First-run / onboarding detection
   // ---------------------------------------------------------------------------
-  const isFirstRun = useMemo(() => {
-    if (typeof window === "undefined") return false
-    if (localStorage.getItem(ONBOARDING_LS_KEY)) return false
-    // Admins are never treated as first-run users. `profiles` for admins
-    // contains every profile in the system, so `profiles[0]` (used below)
-    // belongs to some arbitrary other user — reading its sections_complete
-    // would push admins into the non-admin onboarding wizard and hide the
-    // Admin Tools / Grant insights quick actions behind a pre-bootstrap
-    // disabled state. Short-circuit here so admins always see the live chat.
-    if (isAdmin) return false
-    if (!profiles || profiles.length === 0) return true
-    const activeProfile = profiles.find((p) => String(p.id) === String(effectiveProfileId)) ?? profiles[0]
-    const sectionsComplete = Number(activeProfile?.sections_complete ?? 0)
-    return sectionsComplete <= 1
-  }, [profiles, effectiveProfileId, isAdmin])
+  // The first-run chat-chips onboarding has been retired. New users go through
+  // the dedicated /start conversational quiz with Anya before they ever see
+  // the floating chat panel, so `isFirstRun` is always false here. The chip
+  // wizard below remains in the file as dead code so this change stays
+  // minimal; the next cleanup pass will excise it entirely.
+  const isFirstRun = false
 
   // onboardingStep: null = not in onboarding; 0-4 = step index
   const [onboardingStep, setOnboardingStep] = useState(null)

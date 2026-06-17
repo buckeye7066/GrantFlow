@@ -2,7 +2,7 @@
  * Canonical Help Registry — single source of truth for all page descriptions,
  * field explanations, tour steps, and Anya app knowledge.
  *
- * Consumed by: OnboardingManual, Help page, AnyaGuidedTour, anyaHelpKnowledge (backend).
+ * Consumed by: Help page, AnyaGuidedTour, anyaHelpKnowledge (backend).
  *
  * For profile section titles, descriptions, and field-level metadata, see:
  * @see src/config/sectionMetadata.js
