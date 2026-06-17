@@ -15,6 +15,7 @@ import { scoreOpportunity as calculateMatchScore } from '../services/matchEngine
 import { trustedOriginClause, trustedSourceClause } from '../utils/recordOrigins.js';
 import { DEFAULT_MIN_SCORE, RELAX_THRESHOLDS, FALLBACK_TOP_N } from '../config/matchThresholds.js';
 import { createOpenAIClient, summarizeOpenAIError } from '../utils/openaiClient.js';
+import { buildSchoolLookupFallbackData } from '../services/schoolLookupFallback.js'
 import { enforceTierCapability } from '../middleware/entitlements.js'
 import { TIER_CAPABILITIES } from '../utils/tierGating.js'
 import {
@@ -1623,6 +1624,7 @@ router.post('/school-lookup', async (req, res) => {
     }
 
     const trimmedName = school_name.trim();
+    const fallbackData = buildSchoolLookupFallbackData(trimmedName)
     routeLogger.info(`[school-lookup] Looking up data for: ${trimmedName}`);
 
     const anthropic = await createAnthropicClient();
@@ -1635,12 +1637,24 @@ router.post('/school-lookup', async (req, res) => {
       });
 
       if (!result.text) {
-        return res.status(502).json({ error: 'AI provider unavailable' });
+        return res.json({
+          success: true,
+          school_name: trimmedName,
+          data: fallbackData,
+          provider: 'fallback',
+          warning: 'AI provider unavailable; returned registry-backed fallback data.',
+        });
       }
 
       const parsed = tryExtractFirstJson(result.text);
       if (!parsed) {
-        return res.status(502).json({ error: 'Failed to parse AI response', raw: result.text });
+        return res.json({
+          success: true,
+          school_name: trimmedName,
+          data: fallbackData,
+          provider: 'fallback',
+          warning: 'Failed to parse AI response; returned registry-backed fallback data.',
+        });
       }
 
       return res.json({ success: true, school_name: trimmedName, data: parsed, provider: result.provider });
@@ -1688,7 +1702,13 @@ Return ONLY the JSON object, no backticks, no explanation.`
 
     if (!parsed) {
       console.warn('[school-lookup] Could not parse response:', textBlocks.slice(0, 300));
-      return res.status(502).json({ error: 'Failed to parse AI response', raw: textBlocks.slice(0, 500) });
+      return res.json({
+        success: true,
+        school_name: trimmedName,
+        data: fallbackData,
+        provider: 'fallback',
+        warning: 'Failed to parse AI response; returned registry-backed fallback data.',
+      });
     }
 
     routeLogger.info(`[school-lookup] Success for ${trimmedName}: ${Object.keys(parsed).length} fields`);

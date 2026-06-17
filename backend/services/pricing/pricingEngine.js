@@ -105,7 +105,7 @@ export function buildRecommendedQuote({
     subtotal,
     discount_total: discountResult.discount_total,
     total,
-    currency: CURRENCY_USD || 'USD',
+    currency: CURRENCY_USD,
     admin_review_required: adminReviewRequired,
     user_payment_required: userPaymentRequired,
     discount_eligible: discountEligible,

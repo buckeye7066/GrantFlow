@@ -1,66 +1,24 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { spawn } from 'node:child_process'
-import { mkdtempSync } from 'node:fs'
-import { tmpdir } from 'node:os'
 import path from 'node:path'
+import { startBackend, stopProcess } from '../helpers/backendHarness.mjs'
 
-function startServer(extraEnv = {}) {
-  const tmp = mkdtempSync(path.join(tmpdir(), 'grantflow-comprehensive-test-'))
-  const dbPath = path.join(tmp, 'test.db')
-
-  const child = spawn(process.execPath, ['backend/server.js'], {
-    cwd: path.resolve('.'),
-    env: {
-      ...process.env,
-      NODE_ENV: 'development',
-      PORT: '0',
-      DB_PROVIDER: 'sqlite',
-      SQLITE_DB_PATH: dbPath,
-      DB_AUTO_MIGRATE: 'true',
-      AUTH_JWT_SECRET: 'test-secret',
+async function startServer(extraEnv = {}) {
+  const started = await startBackend({
+    rootDir: path.resolve('.'),
+    envOverrides: {
       LIVE_CRAWL_TIMEOUT_MS: '1',
       MIN_LIVE_RESULTS_BEFORE_SKIP_FALLBACK: '999',
       ENABLE_TOKEN_NARROWING: 'false',
       ...extraEnv,
     },
-    stdio: ['ignore', 'pipe', 'pipe'],
   })
 
-  let stdout = ''
-  let stderr = ''
-  child.stdout.setEncoding('utf8')
-  child.stderr.setEncoding('utf8')
-  child.stdout.on('data', (d) => (stdout += d))
-  child.stderr.on('data', (d) => (stderr += d))
-
-  const ready = new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      try {
-        child.kill('SIGTERM')
-      } catch {
-        // ignore
-      }
-      reject(new Error(`server did not become ready\nstdout:\n${stdout}\nstderr:\n${stderr}`))
-    }, 60_000)
-
-    const onData = () => {
-      const match = stdout.match(/\[Server\] Ready on port\s+(\d+)/)
-      if (match) {
-        clearTimeout(timeout)
-        resolve({ port: Number(match[1]) })
-      }
-    }
-    child.stdout.on('data', onData)
-  })
-
-  async function stop() {
-    if (child.killed) return
-    child.kill('SIGTERM')
-    await new Promise((resolve) => child.once('exit', resolve))
+  return {
+    port: started.port,
+    dbPath: path.join(started.tempDir, 'grantflow-test.db'),
+    stop: async () => stopProcess(started.proc),
   }
-
-  return { ready, stop, dbPath }
 }
 
 async function fetchJson(url, init) {
@@ -76,12 +34,12 @@ async function fetchJson(url, init) {
 }
 
 test('real crawler: comprehensive returns non-zero results from multiple funding sources', async () => {
-  const srv = startServer({
+  const srv = await startServer({
     LIVE_CRAWL_TIMEOUT_MS: '1',
     MIN_LIVE_RESULTS_BEFORE_SKIP_FALLBACK: '999',
     ENABLE_TOKEN_NARROWING: 'false',
   })
-  const { port } = await srv.ready
+  const { port } = srv
 
   try {
     const email = 'comprehensive.crawler@example.com'

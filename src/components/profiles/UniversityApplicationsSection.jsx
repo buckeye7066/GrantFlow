@@ -998,15 +998,43 @@ function ApplicationCard({
   const isMutedByOtherCommit = hasAnyCommittedSchool && !isCommitted
   const aiAssist = useSchoolAIAssist()
   const aiLogRef = useRef(null)
+  const { toast } = useToast()
 
   const handleAIAutoFill = async () => {
     if (!application.name) return
-    const data = await aiAssist.runLookup(application.name)
-    if (data && onQuickUpdate) {
-      const patch = mapAIDataToApplicationPatch(data)
-      if (Object.keys(patch).length > 0) {
-        await onQuickUpdate(application.id, patch, "AI auto-filled school data.")
+    try {
+      const data = await aiAssist.runLookup(application.name)
+      if (!data) {
+        toast({
+          title: "AI assist unavailable",
+          description: "We could not load school data right now. Please try again.",
+          variant: "destructive",
+        })
+        return
       }
+
+      if (onQuickUpdate) {
+        const patch = mapAIDataToApplicationPatch(data)
+        if (Object.keys(patch).length > 0) {
+          await onQuickUpdate(application.id, patch, "AI auto-filled school data.")
+          toast({
+            title: "School data updated",
+            description: `AI assist updated ${application.name}.`,
+          })
+          return
+        }
+      }
+
+      toast({
+        title: "No new school data found",
+        description: `AI assist did not find any new fields for ${application.name}.`,
+      })
+    } catch (error) {
+      toast({
+        title: "AI assist failed",
+        description: error instanceof Error ? error.message : "We could not update this school right now.",
+        variant: "destructive",
+      })
     }
   }
 
@@ -1029,8 +1057,6 @@ function ApplicationCard({
       .filter((doc) => String(doc?.university_application_id || "") === String(application.id))
       .sort((a, b) => String(b?.created_at || "").localeCompare(String(a?.created_at || "")))
   }, [documents, application.id])
-
-  const { toast } = useToast()
   const [interestDialogOpen, setInterestDialogOpen] = useState(false)
   const [interestSearch, setInterestSearch] = useState("")
   const [customInterest, setCustomInterest] = useState("")
@@ -1180,6 +1206,28 @@ function ApplicationCard({
 
   const theme = getSchoolTheme(application)
   const borderColor = theme?.primary || undefined
+  const handleCardActivate = useCallback(
+    (event) => {
+      if (!onEdit || disabled) return
+      const interactiveTarget = event.target instanceof Element
+        ? event.target.closest('a,button,input,select,textarea,[role="button"],[data-card-ignore-click="true"]')
+        : null
+      if (interactiveTarget && interactiveTarget !== event.currentTarget) return
+      onEdit()
+    },
+    [disabled, onEdit],
+  )
+
+  const handleCardKeyDown = useCallback(
+    (event) => {
+      if (!onEdit || disabled) return
+      if (event.target !== event.currentTarget) return
+      if (event.key !== "Enter" && event.key !== " ") return
+      event.preventDefault()
+      onEdit()
+    },
+    [disabled, onEdit],
+  )
 
   return (
     <div
@@ -1189,8 +1237,13 @@ function ApplicationCard({
           : isMutedByOtherCommit
             ? "border-slate-200 opacity-60 grayscale"
             : "border-slate-200"
-      }`}
+      } ${disabled ? "" : "cursor-pointer hover:shadow-md transition-shadow"}`}
       style={borderColor && !isMutedByOtherCommit ? { borderColor } : undefined}
+      role="button"
+      tabIndex={disabled ? -1 : 0}
+      aria-label={`Open university card for ${application.name}`}
+      onClick={handleCardActivate}
+      onKeyDown={handleCardKeyDown}
     >
       {theme ? (
         <div

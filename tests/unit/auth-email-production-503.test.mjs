@@ -3,7 +3,26 @@ import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
+import net from 'node:net'
 import path from 'node:path'
+
+async function reservePort() {
+  return await new Promise((resolve, reject) => {
+    const server = net.createServer()
+    server.listen(0, '127.0.0.1', () => {
+      const address = server.address()
+      const port = typeof address === 'object' && address ? address.port : null
+      server.close((error) => {
+        if (error) {
+          reject(error)
+          return
+        }
+        resolve(port)
+      })
+    })
+    server.on('error', reject)
+  })
+}
 
 function startServer(extraEnv = {}) {
   const tmp = mkdtempSync(path.join(tmpdir(), 'grantflow-auth-503-test-'))
@@ -13,7 +32,7 @@ function startServer(extraEnv = {}) {
   const baseEnv = {
     ...process.env,
     NODE_ENV: 'production', // Force production mode
-    PORT: '0',
+    PORT: undefined,
     DB_PROVIDER: 'sqlite',
     SQLITE_DB_PATH: dbPath,
     DB_AUTO_MIGRATE: 'true',
@@ -22,6 +41,13 @@ function startServer(extraEnv = {}) {
     ALLOW_EPHEMERAL_SQLITE: 'true',
     ALLOW_EPHEMERAL_UPLOADS: 'true',
     ADMIN_TOKEN: 'test-admin-token-ci',
+    SMOKE_MODE: 'true',
+    DISABLE_BACKGROUND_SERVICES: 'true',
+    ANYA_AUTONOMOUS_ENABLED: 'false',
+    ANYA_RUN_ON_STARTUP: 'false',
+    ANYA_RUN_ON_SCHEDULE: 'false',
+    NATIONAL_PROGRAMS_CRAWLER_ENABLED: 'false',
+    STARTUP_SMOKE_CRAWL_ENABLED: 'false',
   }
 
   // Remove email service configuration to simulate unconfigured email service
@@ -29,61 +55,60 @@ function startServer(extraEnv = {}) {
   delete baseEnv.FROM_EMAIL
   delete baseEnv.EMAIL_FROM
 
-  const child = spawn(process.execPath, ['backend/server.js'], {
-    cwd: path.resolve('.'),
-    env: {
-      ...baseEnv,
-      // Merge extraEnv, filtering out undefined values to ensure they're truly unset
-      ...Object.fromEntries(
-        Object.entries(extraEnv).filter(([_, value]) => value !== undefined)
-      ),
-    },
-    stdio: ['ignore', 'pipe', 'pipe'],
-  })
-
+  let child = null
   let stdout = ''
   let stderr = ''
-  child.stdout.setEncoding('utf8')
-  child.stderr.setEncoding('utf8')
-  child.stdout.on('data', (d) => (stdout += d))
-  child.stderr.on('data', (d) => (stderr += d))
 
-  const ready = new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => {
+  const ready = (async () => {
+    const port = await reservePort()
+    child = spawn(process.execPath, ['backend/server.js'], {
+      cwd: path.resolve('.'),
+      env: {
+        ...baseEnv,
+        PORT: String(port),
+        ...Object.fromEntries(Object.entries(extraEnv).filter(([_, value]) => value !== undefined)),
+      },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+
+    child.stdout.setEncoding('utf8')
+    child.stderr.setEncoding('utf8')
+    child.stdout.on('data', (chunk) => {
+      stdout += chunk
+    })
+    child.stderr.on('data', (chunk) => {
+      stderr += chunk
+    })
+
+    const deadline = Date.now() + 60_000
+    while (Date.now() < deadline) {
+      if (child.exitCode !== null) {
+        throw new Error(`server exited before ready (code=${child.exitCode})\nstdout:\n${stdout}\nstderr:\n${stderr}`)
+      }
       try {
-        child.kill('SIGTERM')
+        const res = await fetch(`http://127.0.0.1:${port}/healthz`)
+        if (res.ok) return { port }
       } catch {
-        // ignore
+        // retry
       }
-      reject(new Error(`server did not become ready\nstdout:\n${stdout}\nstderr:\n${stderr}`))
-    }, 60_000)
-
-    const onData = () => {
-      const match = stdout.match(/\[Server\] Ready on port\s+(\d+)/)
-      if (match) {
-        clearTimeout(timeout)
-        resolve({ port: Number(match[1]) })
-      }
+      await new Promise((resolve) => setTimeout(resolve, 100))
     }
-
-    child.stdout.on('data', onData)
-
-    child.on('error', (err) => {
-      clearTimeout(timeout)
-      reject(new Error(`server failed to spawn: ${String(err?.message || err)}\nstdout:\n${stdout}\nstderr:\n${stderr}`))
-    })
-
-    child.on('exit', (code) => {
-      if (stdout.includes('[Server] Ready on port')) return
-      clearTimeout(timeout)
-      reject(new Error(`server exited before ready (code=${code})\nstdout:\n${stdout}\nstderr:\n${stderr}`))
-    })
-  })
+    try { child.kill('SIGTERM') } catch {}
+    throw new Error(`server did not become ready\nstdout:\n${stdout}\nstderr:\n${stderr}`)
+  })()
 
   async function stop() {
+    if (!child) return
     if (child.killed) return
-    child.kill('SIGTERM')
-    await new Promise((resolve) => child.once('exit', resolve))
+    try { child.kill('SIGTERM') } catch {}
+    await Promise.race([
+      new Promise((resolve) => child.once('exit', resolve)),
+      new Promise((resolve) => setTimeout(resolve, 2_000)),
+    ])
+    if (!child.killed && child.exitCode === null) {
+      try { child.kill('SIGKILL') } catch {}
+      await new Promise((resolve) => child.once('exit', resolve))
+    }
   }
 
   return { ready, stop, dbPath }

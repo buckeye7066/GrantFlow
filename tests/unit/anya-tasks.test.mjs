@@ -1,12 +1,31 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import os from 'node:os'
+import net from 'node:net'
 import { join } from 'node:path'
 import { promises as fsp } from 'node:fs'
 import { spawn } from 'node:child_process'
 
 async function sleep(ms) {
   await new Promise((r) => setTimeout(r, ms))
+}
+
+async function reservePort() {
+  return await new Promise((resolve, reject) => {
+    const server = net.createServer()
+    server.listen(0, '127.0.0.1', () => {
+      const address = server.address()
+      const port = typeof address === 'object' && address ? address.port : null
+      server.close((error) => {
+        if (error) {
+          reject(error)
+          return
+        }
+        resolve(port)
+      })
+    })
+    server.on('error', reject)
+  })
 }
 
 async function assertOk(res, label) {
@@ -18,15 +37,15 @@ async function assertOk(res, label) {
   throw new Error(`${label} failed: status=${res.status} body=${body}`)
 }
 
-async function startBackend({ rootDir, port, sqlitePath }) {
+async function startBackend({ rootDir, sqlitePath }) {
   let stdoutBuf = ''
   let stderrBuf = ''
+  const port = await reservePort()
   const env = {
     ...process.env,
     NODE_ENV: 'development',
     SMOKE_MODE: 'true',
-    // IMPORTANT: Use ephemeral OS port to avoid race conditions in parallel test runs.
-    PORT: '0',
+    PORT: String(port),
     // Force sqlite for unit tests even if the parent env has DATABASE_URL set.
     DB_PROVIDER: 'sqlite',
     DB_DIALECT: 'sqlite',
@@ -38,8 +57,12 @@ async function startBackend({ rootDir, port, sqlitePath }) {
     CORS_ORIGIN: process.env.CORS_ORIGIN || 'http://localhost:5173,http://127.0.0.1:5173',
     AUTH_FRONTEND_APP_BASE: process.env.VITE_APP_BASE || '/grantflow',
     // Avoid any surprise background work during unit tests.
+    DISABLE_BACKGROUND_SERVICES: 'true',
     ANYA_AUTONOMOUS_ENABLED: 'false',
+    ANYA_RUN_ON_STARTUP: 'false',
+    ANYA_RUN_ON_SCHEDULE: 'false',
     NATIONAL_PROGRAMS_CRAWLER_ENABLED: 'false',
+    STARTUP_SMOKE_CRAWL_ENABLED: 'false',
   }
 
   // IMPORTANT: Use backend/start.js so dotenv is loaded consistently before server boot.
@@ -65,16 +88,8 @@ async function startBackend({ rootDir, port, sqlitePath }) {
     if (stderrBuf.length > 20_000) stderrBuf = stderrBuf.slice(-20_000)
   })
 
-  let readyPort = null
-  proc.stdout?.on('data', () => {
-    if (readyPort) return
-    const match = stdoutBuf.match(/\[Server\]\s+Ready on port\s+(\d+)/)
-    if (match) readyPort = Number(match[1])
-  })
-
   const start = Date.now()
   const timeoutMs = 60_000
-  // eslint-disable-next-line no-constant-condition
   while (true) {
     if (spawnError) {
       const stdout = stdoutBuf
@@ -100,15 +115,12 @@ async function startBackend({ rootDir, port, sqlitePath }) {
     if (Date.now() - start > timeoutMs) break
 
     try {
-      if (readyPort) {
-        const res = await fetch(`http://127.0.0.1:${readyPort}/api/health`, { method: 'GET' })
-        if (res.ok) break
-      }
+      const res = await fetch(`http://127.0.0.1:${port}/healthz`, { method: 'GET' })
+      if (res.ok) break
     } catch {
       // keep polling
     }
 
-    // eslint-disable-next-line no-await-in-loop
     await sleep(250)
   }
 
@@ -123,7 +135,7 @@ async function startBackend({ rootDir, port, sqlitePath }) {
 
   return {
     proc,
-    port: readyPort,
+    port,
     getLogs: () => ({ stdout: stdoutBuf, stderr: stderrBuf }),
   }
 }
@@ -152,7 +164,6 @@ async function safeRm(dir, { retries = 8 } = {}) {
     } catch (error) {
       const code = error?.code
       if (code === 'EBUSY' || code === 'EPERM') {
-        // eslint-disable-next-line no-await-in-loop
         await sleep(150 * (i + 1))
         continue
       }
@@ -168,7 +179,7 @@ test('Anya sessions + tasks: create and update task', async () => {
   const tempDir = await fsp.mkdtemp(join(os.tmpdir(), 'grantflow-anya-'))
   const sqlitePath = join(tempDir, 'grantflow-test.db')
 
-  const { proc, getLogs, port } = await startBackend({ rootDir, port: 0, sqlitePath })
+  const { proc, getLogs, port } = await startBackend({ rootDir, sqlitePath })
   assert.ok(Number.isFinite(port) && port > 0, `expected backend to pick a real port, got ${port}`)
   try {
     const headers = {
@@ -226,4 +237,3 @@ test('Anya sessions + tasks: create and update task', async () => {
     await safeRm(tempDir)
   }
 })
-

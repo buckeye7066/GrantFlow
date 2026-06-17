@@ -75,17 +75,11 @@ export function classifyClient(profile, intakeAnswers, organization) {
     intakeAnswers: intakeAnswers || {},
     organization: organization || {},
   })
-
   const catalogCategory = toCatalogCategory(result.client_category)
   const baseReview = result.confidence === 'needs_admin_review'
   const missing = Array.isArray(result.missing_fields) ? result.missing_fields : []
-  // Per spec: missing annual_budget on an org always flags admin review.
   const orgWithoutBudget = missing.includes('annual_budget') && catalogCategory !== 'individual'
   const adminReviewRequired = baseReview || orgWithoutBudget
-
-  // Spec-aligned confidence label for the unknown-org-budget case so admin
-  // dashboards can render a single, stable token instead of two near-duplicates
-  // ("estimated" / "needs_admin_review").
   const confidence = orgWithoutBudget ? CONFIDENCE_NEEDS_ADMIN : result.confidence
 
   return {

@@ -1,5 +1,5 @@
 /* eslint-disable react-refresh/only-export-components */
-import { useState, useEffect, useRef, useCallback } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 import { apiFetch } from "@/api/client";
 
 const FIELD_KEYS = [
@@ -405,7 +405,11 @@ export function SchoolCard({ school, index = 0 }) {
 export function AIAssistButton({ status, onClick, className = "" }) {
   return (
     <button
-      onClick={onClick}
+      type="button"
+      onClick={(event) => {
+        event.stopPropagation();
+        onClick?.(event);
+      }}
       disabled={status === "loading"}
       className={className}
       style={{

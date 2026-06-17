@@ -7,13 +7,22 @@ async function sleep(ms) {
   await new Promise((r) => setTimeout(r, ms))
 }
 
+function stripAnsi(text) {
+  return String(text || '').replace(/\u001B\[[0-?]*[ -/]*[@-~]/g, '')
+}
+
 async function waitForHttpOk(url, { timeoutMs = 30_000 } = {}) {
   const start = Date.now()
   // eslint-disable-next-line no-constant-condition
   while (true) {
-    if (Date.now() - start > timeoutMs) return false
+    const elapsed = Date.now() - start
+    if (elapsed > timeoutMs) return false
     try {
-      const res = await fetch(url, { method: 'GET' })
+      const requestTimeoutMs = Math.max(1, Math.min(1_000, timeoutMs - elapsed))
+      const res = await fetch(url, {
+        method: 'GET',
+        signal: AbortSignal.timeout(requestTimeoutMs),
+      })
       if (res.ok) return true
     } catch {}
     // eslint-disable-next-line no-await-in-loop
@@ -23,14 +32,36 @@ async function waitForHttpOk(url, { timeoutMs = 30_000 } = {}) {
 
 export async function stopProcess(proc) {
   if (!proc) return
+  const waitForExit = () =>
+    new Promise((resolve) => {
+      if (proc.exitCode != null) {
+        resolve()
+        return
+      }
+
+      const done = () => {
+        proc.off('exit', done)
+        proc.off('close', done)
+        resolve()
+      }
+
+      proc.once('exit', done)
+      proc.once('close', done)
+    })
+
+  const exitWait = waitForExit()
+
   try {
     proc.kill('SIGTERM')
   } catch {}
-  await sleep(250)
+
+  await Promise.race([exitWait, sleep(1_000)])
+
   if (proc.exitCode == null) {
     try {
       proc.kill('SIGKILL')
     } catch {}
+    await Promise.race([exitWait, sleep(1_000)])
   }
 }
 
@@ -70,17 +101,20 @@ export async function startBackend({ rootDir, envOverrides = {} }) {
   proc.stderr?.on('data', (buf) => stderrChunks.push(String(buf)))
 
   let readyPort = null
-  proc.stdout?.on('data', () => {
+  const detectReadyPort = () => {
     if (readyPort) return
-    const combined = stdoutChunks.join('')
+    const combined = stripAnsi(stdoutChunks.join(''))
     const match = combined.match(/\[Server\]\s+Ready on port\s+(\d+)/)
     if (match) readyPort = Number(match[1])
-  })
+  }
+  proc.stdout?.on('data', detectReadyPort)
+  detectReadyPort()
 
   const start = Date.now()
   const timeoutMs = 60_000
   // eslint-disable-next-line no-constant-condition
   while (true) {
+    detectReadyPort()
     if (proc.exitCode != null) {
       throw new Error(
         `Backend exited before becoming healthy (exit=${proc.exitCode}).\n` +
@@ -106,4 +140,3 @@ export async function startBackend({ rootDir, envOverrides = {} }) {
     await sleep(250)
   }
 }
-

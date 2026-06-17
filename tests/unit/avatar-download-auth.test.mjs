@@ -4,72 +4,80 @@ import { spawn } from 'node:child_process'
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
+import { createServer as createNetServer } from 'node:net'
+
+function reservePort() {
+  return new Promise((resolve, reject) => {
+    const srv = createNetServer()
+    srv.on('error', reject)
+    srv.listen(0, '127.0.0.1', () => {
+      const address = srv.address()
+      const port = typeof address === 'object' && address ? address.port : null
+      srv.close((err) => {
+        if (err) reject(err)
+        else resolve(port)
+      })
+    })
+  })
+}
+
+async function waitForHealthz(port, { child, getLogs, timeoutMs = 60_000 }) {
+  const startedAt = Date.now()
+  while (Date.now() - startedAt < timeoutMs) {
+    if (child?.exitCode !== null && child?.exitCode !== undefined) {
+      const { stdout, stderr } = getLogs()
+      throw new Error(`server exited before ready (code=${child.exitCode})\nstdout:\n${stdout}\nstderr:\n${stderr}`)
+    }
+    try {
+      const response = await fetch(`http://127.0.0.1:${port}/healthz`)
+      if (response.ok) return { port, child }
+    } catch {
+      // retry
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100))
+  }
+  const { stdout, stderr } = getLogs()
+  throw new Error(`server did not become ready\nstdout:\n${stdout}\nstderr:\n${stderr}`)
+}
 
 function startServer(extraEnv = {}) {
   const tmp = mkdtempSync(path.join(tmpdir(), 'grantflow-avatar-auth-test-'))
   const dbPath = path.join(tmp, 'test.db')
-
-  const child = spawn(process.execPath, ['backend/server.js'], {
-    cwd: path.resolve('.'),
-    env: {
-      ...process.env,
-      NODE_ENV: 'development',
-      PORT: '0',
-      DB_PROVIDER: 'sqlite',
-      SQLITE_DB_PATH: dbPath,
-      DB_AUTO_MIGRATE: 'true',
-      AUTH_JWT_SECRET: 'test-secret-avatar',
-      SMOKE_MODE: '1',
-      ...extraEnv,
-    },
-    stdio: ['ignore', 'pipe', 'pipe'],
-  })
-
+  let child = null
   let stdout = ''
   let stderr = ''
-  child.stdout.setEncoding('utf8')
-  child.stderr.setEncoding('utf8')
-  child.stderr.on('data', (d) => (stderr += d))
+  const ready = (async () => {
+    const port = await reservePort()
+    child = spawn(process.execPath, ['backend/server.js'], {
+      cwd: path.resolve('.'),
+      env: {
+        ...process.env,
+        NODE_ENV: 'development',
+        PORT: String(port),
+        DB_PROVIDER: 'sqlite',
+        SQLITE_DB_PATH: dbPath,
+        DB_AUTO_MIGRATE: 'true',
+        AUTH_JWT_SECRET: 'test-secret-avatar',
+        SMOKE_MODE: '1',
+        DISABLE_BACKGROUND_SERVICES: 'true',
+        ...extraEnv,
+      },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
 
-  const ready = new Promise((resolve, reject) => {
-    let resolved = false
-    const timeout = setTimeout(() => {
-      if (resolved) return
-      try {
-        child.kill('SIGTERM')
-      } catch {
-        // ignore
-      }
-      reject(new Error(`server did not become ready\nstdout:\n${stdout}\nstderr:\n${stderr}`))
-    }, 60_000)
-
-    const checkReady = (newChunk) => {
-      if (resolved) return true
-      const textToCheck = stdout + (newChunk || '')
-      const match = textToCheck.match(/\[Server\] Ready on port\s+(\d+)/)
-      if (match) {
-        clearTimeout(timeout)
-        resolved = true
-        resolve({ port: parseInt(match[1], 10), child, tmp, dbPath })
-        return true
-      }
-      return false
-    }
-
+    child.stdout.setEncoding('utf8')
+    child.stderr.setEncoding('utf8')
     child.stdout.on('data', (chunk) => {
       stdout += chunk
-      if (!checkReady(chunk)) {
-        process.stdout.write(chunk)
-      }
+      process.stdout.write(chunk)
     })
+    child.stderr.on('data', (d) => (stderr += d))
 
-    child.on('error', (err) => {
-      if (resolved) return
-      clearTimeout(timeout)
-      resolved = true
-      reject(err)
-    })
-  })
+    return waitForHealthz(port, {
+      child,
+      getLogs: () => ({ stdout, stderr }),
+    }).then(() => ({ port, child, tmp, dbPath }))
+  })()
 
   return ready
 }
