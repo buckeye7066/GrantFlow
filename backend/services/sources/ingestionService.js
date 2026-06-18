@@ -56,6 +56,7 @@ export async function ingestOpportunities(db, opportunities, sourceName) {
       categories, keywords, eligibility_bullets,
       requires_match, requires_501c3, match_percentage,
       opportunity_type, is_active, raw_source_payload, last_crawled,
+      opportunity_kind, source_trust_tier, reality_status, reality_reasons,
       created_at, updated_at
     ) VALUES (
       ?, ?, ?, ?, ?, ?,
@@ -64,6 +65,7 @@ export async function ingestOpportunities(db, opportunities, sourceName) {
       ?, ?,
       ?, ?, ?,
       ?, ?, ?,
+      ?, ?, ?, ?,
       ?, ?, ?, ?,
       CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
     )
@@ -94,6 +96,10 @@ export async function ingestOpportunities(db, opportunities, sourceName) {
       is_active = ?,
       raw_source_payload = ?,
       last_crawled = ?,
+      opportunity_kind = COALESCE(?, opportunity_kind),
+      source_trust_tier = COALESCE(?, source_trust_tier),
+      reality_status = COALESCE(?, reality_status),
+      reality_reasons = COALESCE(?, reality_reasons),
       updated_at = CURRENT_TIMESTAMP
     WHERE source = ? AND source_id = ?
   `);
@@ -143,6 +149,14 @@ export async function ingestOpportunities(db, opportunities, sourceName) {
         console.warn(`[ingestion] Reality-gate rejection: ${reality.reasons.join(',')} | ${opp?.title ?? 'untitled'}`);
         continue;
       }
+      // PERSIST the canonical verdict (RC-8). Previously this path gated on
+      // reality but discarded the result, leaving reality_status = NULL so the
+      // persisted-verdict fast path in opportunityTrust.js could not use it.
+      // Mirror opportunityInserter's mapping so both writers agree.
+      opp.opportunity_kind = reality.kind ?? opp.opportunity_kind ?? null;
+      opp.source_trust_tier = reality.trustTier ?? opp.source_trust_tier ?? null;
+      opp.reality_status = reality.downgrade ? 'downgraded' : 'allowed';
+      opp.reality_reasons = JSON.stringify(Array.isArray(reality.reasons) ? reality.reasons : []);
     }
     // Normalize required DB fields that upstream adapters sometimes omit
     // (NIH RePORTER, older connectors). funding_opportunities.id is a
@@ -203,6 +217,10 @@ const existing = checkExists.get(opp.source, opp.source_id);
             opp.is_active,
             opp.raw_source_payload,
             opp.last_crawled,
+            opp.opportunity_kind ?? null,
+            opp.source_trust_tier ?? null,
+            opp.reality_status ?? null,
+            opp.reality_reasons ?? null,
             opp.source,
             opp.source_id,
           );
@@ -234,6 +252,10 @@ const existing = checkExists.get(opp.source, opp.source_id);
             opp.is_active,
             opp.raw_source_payload,
             opp.last_crawled,
+            opp.opportunity_kind ?? null,
+            opp.source_trust_tier ?? null,
+            opp.reality_status ?? null,
+            opp.reality_reasons ?? null,
           );
           inserted++;
         }

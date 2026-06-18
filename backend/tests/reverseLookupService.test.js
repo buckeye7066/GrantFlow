@@ -79,10 +79,13 @@ describe('reverseLookupService', () => {
     await seedNationalPrograms(db, { skipUrlVerification: true })
   })
 
+  // This case does ~11-13s of real DB work and reliably exceeds vitest's 5s
+  // default testTimeout under full-suite load (it passes in isolation). Give it
+  // an explicit generous timeout so the gate is deterministic.
   it('returns local catalog funders when ProPublica returns no rows', async () => {
     const result = await findSimilarOrgsFunders(db, JOHN_WHITE.id, { maxResults: 10 })
     expect(result.suggested_funders.length).toBeGreaterThan(0)
     expect(result.suggested_funders.some((f) => /Community Foundation/i.test(f.name))).toBe(true)
     expect(result.ntee_codes_used.length).toBeGreaterThan(0)
-  })
+  }, 30000)
 })

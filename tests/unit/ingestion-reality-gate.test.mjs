@@ -97,3 +97,26 @@ test('inactive reference rows (e.g. USAspending past awards) bypass the live-opp
   assert.equal(result.records_rejected_reality, 0, 'inactive rows are not reality-gated')
   db.close()
 })
+
+test('import path PERSISTS the canonical reality verdict (reality_status not NULL)', async () => {
+  // Regression: the gov-import path used to gate on assessReality but discard
+  // the verdict, leaving reality_status = NULL and defeating the persisted-
+  // verdict fast path in opportunityTrust.js (RC-8).
+  const db = freshDb()
+  const result = await ingestOpportunities(db, [CLEAN_GRANT], 'test-source')
+  assert.equal(result.records_inserted, 1)
+
+  const row = db
+    .prepare('SELECT reality_status, opportunity_kind, source_trust_tier, reality_reasons FROM funding_opportunities WHERE source_id = ?')
+    .get('clean-1')
+  assert.ok(row, 'clean grant should be persisted')
+  assert.ok(
+    row.reality_status === 'allowed' || row.reality_status === 'downgraded',
+    `reality_status must be persisted (got ${row.reality_status})`,
+  )
+  assert.ok(row.opportunity_kind, 'opportunity_kind must be persisted')
+  assert.ok(row.source_trust_tier, 'source_trust_tier must be persisted')
+  // reality_reasons is a JSON string array.
+  assert.doesNotThrow(() => JSON.parse(row.reality_reasons || '[]'))
+  db.close()
+})

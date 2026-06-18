@@ -132,7 +132,13 @@ async function listDocumentStructuredForProfile(db, profileId) {
     return (rows || [])
       .map((r) => safeJsonParse(r.extracted_structured, null))
       .filter(Boolean)
-  } catch {
+  } catch (err) {
+    // Do NOT swallow silently: a DB failure here would otherwise make the
+    // missingness engine tell the applicant required docs/fields are missing
+    // when the data merely failed to load. Log so the failure is visible.
+    console.warn(
+      `[missingness] listDocumentStructuredForProfile failed for profile=${profileId} (treating as no structured docs): ${err?.message || err}`,
+    )
     return []
   }
 }

@@ -28,6 +28,7 @@ import {
   isValidMode,
 } from './robertTypes.js'
 import { getRobertConfig, maskSecrets } from './robertSafety.js'
+import { createLogger } from '../../utils/logger.js'
 import {
   completeRun,
   insertOpportunityCandidate,
@@ -50,6 +51,8 @@ import { verifyOpportunity } from './robertVerification.js'
 import { ingestOpportunity } from './robertIngestionBridge.js'
 import { scoreOpportunityForProfile } from './robertMatchBridge.js'
 import { createRecommendationIfHelpful } from './robertRecommendationService.js'
+
+const log = createLogger('robert-agent')
 
 const MODE_REQUIRES_LIVE_WEB = new Set([
   ROBERT_MODES.DISCOVER_SOURCES,
@@ -263,7 +266,7 @@ export async function runRobert({
           const insertResult = await safe(() => ingestOpportunity({
             db, opportunity: normalized,
             upsertFundingOpportunity: deps.upsertFundingOpportunity,
-          }))
+          }), { errors: summary.errors, stage: 'ingest_opportunity' })
           if (insertResult?.id) {
             counters.opportunities_ingested += (insertResult.inserted || insertResult.updated) ? 1 : 0
             summary.ingested.push({ id: insertResult.id, title: candidate.title, inserted: insertResult.inserted, updated: insertResult.updated })
@@ -273,7 +276,7 @@ export async function runRobert({
                 verification_reasons: verification.warnings || [],
                 ingested_opportunity_id: insertResult.id,
                 normalized_opportunity_json: normalized,
-              }))
+              }), { errors: summary.errors, stage: 'update_candidate' })
             }
           } else if (insertResult?.skipped) {
             summary.rejected.push({ candidate_id: id, reason: insertResult.reason || 'inserter_skipped', stage: 'inserter' })
@@ -281,8 +284,14 @@ export async function runRobert({
               await safe(() => updateOpportunityCandidate(db, id, {
                 verification_status: 'rejected',
                 verification_reasons: [insertResult.reason].filter(Boolean),
-              }))
+              }), { errors: summary.errors, stage: 'update_candidate' })
             }
+          } else {
+            // ingestOpportunity threw (already logged + recorded in
+            // summary.errors by safe()). Surface it as a rejected candidate so a
+            // verified opportunity is never silently dropped while the run still
+            // reports success.
+            summary.rejected.push({ candidate_id: id, reason: 'ingest_error', stage: 'inserter' })
           }
         } else if (id && !dryRun) {
           await safe(() => updateOpportunityCandidate(db, id, {
@@ -414,7 +423,8 @@ async function resolveProfileIds({ db, profileIds, cap, deps }) {
       `SELECT id FROM profiles WHERE COALESCE(status,'active') = 'active' ORDER BY updated_at DESC LIMIT ?`,
     ).all(Number(cap) || 50)
     return rows.map((r) => r.id)
-  } catch {
+  } catch (err) {
+    log.warn(`resolveProfileIds failed (returning none): ${String(err?.message || err)}`)
     return []
   }
 }
@@ -424,13 +434,26 @@ async function fetchOpportunitiesByIds(db, ids) {
   const placeholders = ids.map(() => '?').join(',')
   try {
     return await db.prepare(`SELECT * FROM funding_opportunities WHERE id IN (${placeholders})`).all(...ids) || []
-  } catch {
+  } catch (err) {
+    log.warn(`fetchOpportunitiesByIds failed (returning none): ${String(err?.message || err)}`)
     return []
   }
 }
 
-async function safe(fn) {
-  try { return await fn() } catch { return null }
+// Run fn, returning null on failure — but NEVER silently. Every caught error is
+// logged, and when a `ctx.errors` array is supplied (the run summary's errors
+// list) the failure is recorded there so a swallowed DB write (e.g. a verified
+// opportunity that failed to ingest) surfaces in the run summary instead of
+// vanishing while the run still reports success.
+async function safe(fn, ctx = null) {
+  try {
+    return await fn()
+  } catch (err) {
+    const msg = maskSecrets(String(err?.message || err)).slice(0, 300)
+    if (Array.isArray(ctx?.errors)) ctx.errors.push({ stage: ctx?.stage || 'safe', error: msg })
+    log.warn(`safe() swallowed error${ctx?.stage ? ` at ${ctx.stage}` : ''}: ${msg}`)
+    return null
+  }
 }
 
 function dedup(arr) {
