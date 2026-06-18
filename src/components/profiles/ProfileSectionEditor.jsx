@@ -113,6 +113,9 @@ function normalizeInitialData(config, initialData) {
 
 const basicInfoSchema = z.object({
   full_name: z.string().min(1, "Name is required"),
+  first_name: z.string().optional().or(z.literal("")),
+  middle_name: z.string().optional().or(z.literal("")),
+  last_name: z.string().optional().or(z.literal("")),
   email: z.string().email("Enter a valid email address").optional().or(z.literal("")),
   phone: z.string().optional().or(z.literal("")),
   website: z.string().url("Enter a valid URL").optional().or(z.literal("")),
@@ -679,6 +682,9 @@ export const SECTION_CONFIG = {
     schema: basicInfoSchema,
     defaults: {
       full_name: "",
+      first_name: "",
+      middle_name: "",
+      last_name: "",
       email: "",
       phone: "",
       website: "",
@@ -695,6 +701,9 @@ export const SECTION_CONFIG = {
     },
     fields: [
       { name: "full_name", label: "Full name / organization name", component: Input },
+      { name: "first_name", label: "First name", component: Input, description: "Auto-filled from the full name. Edit if the split is wrong." },
+      { name: "middle_name", label: "Middle name", component: Input },
+      { name: "last_name", label: "Last name", component: Input, description: "Auto-filled from the full name. Edit if the split is wrong." },
       { name: "email", label: "Email address", component: Input },
       { name: "phone", label: "Phone number", component: Input },
       { name: "website", label: "Website", component: Input },
@@ -1461,6 +1470,7 @@ export default function ProfileSectionEditor({
   open,
   sectionKey,
   initialData,
+  focusField,
   profileId,
   onClose,
   onSave,
@@ -1491,6 +1501,18 @@ export default function ProfileSectionEditor({
       setAiError(null)
     }
   }, [config, defaults, initialData, form])
+
+  // Deep-link focus: when opened via a "Fix in profile" link that names a
+  // specific field, scroll it into view and focus it once the dialog mounts.
+  useEffect(() => {
+    if (!open || !config || !focusField) return
+    const isKnownField = (config.fields ?? []).some((f) => f.name === focusField)
+    if (!isKnownField) return
+    const timer = setTimeout(() => {
+      try { form.setFocus(focusField, { shouldSelect: true }) } catch { /* field not focusable yet */ }
+    }, 150)
+    return () => clearTimeout(timer)
+  }, [open, config, focusField, form])
 
   const handleSubmit = form.handleSubmit((values) => {
     const legacyValues = dropLegacyOnSave ? {} : Object.fromEntries(legacyEntries)

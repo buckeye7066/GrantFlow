@@ -9,6 +9,7 @@
  */
 
 import { normalizeState } from './stateNormalization.js';
+import { deriveNamePartsIntoBasicInfo } from '../../shared/nameParsing.js';
 
 /**
  * Mapping of section fields → profiles table columns.
@@ -148,7 +149,12 @@ export async function syncDisplayNameToBasicInformation(db, profileId, displayNa
     existing = {}
   }
 
-  const merged = { ...existing, full_name: trimmed.slice(0, 200) }
+  let merged = { ...existing, full_name: trimmed.slice(0, 200) }
+
+  // "Parse, baby, parse." Derive first_name/last_name from the full name so
+  // Hamilton's preflight (which requires those decomposed fields) stops
+  // flagging them as missing. Never clobbers a name a human already entered.
+  merged = deriveNamePartsIntoBasicInfo(merged, trimmed).data
 
   await db
     .prepare(

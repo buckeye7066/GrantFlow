@@ -1,13 +1,15 @@
 import React, { useState } from "react"
+import { Link } from "react-router-dom"
 import { useMutation } from "@tanstack/react-query"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import {
   Loader2, Printer, ClipboardList, Clock, FileText, DollarSign,
-  Award, Folder, Phone, Target, AlertCircle, ChevronDown, ChevronUp,
+  Award, Folder, Phone, Target, AlertCircle, ChevronDown, ChevronUp, ArrowRight,
 } from "lucide-react"
 import { apiFetch } from "@/api/client"
+import { buildProfileSectionLink } from "@/config/missingInfoTargets"
 
 const ICON_MAP = {
   clipboard: ClipboardList,
@@ -114,7 +116,7 @@ function buildPrintHtml(todo, applicantName) {
 </html>`
 }
 
-function TodoItemCard({ item }) {
+function TodoItemCard({ item, profileId }) {
   const [expanded, setExpanded] = useState(false)
   const PriorityBadge = () => (
     <Badge variant="outline" className={`text-xs ${PRIORITY_STYLES[item.priority] || PRIORITY_STYLES.medium}`}>
@@ -124,6 +126,10 @@ function TodoItemCard({ item }) {
 
   const hasDetails = Boolean(item.instructions || item.resources_needed || item.contact_or_location)
   const toggle = () => setExpanded((v) => !v)
+
+  // Deep-link this todo into the matching ProfileDetail section when the AI
+  // tagged it as a profile-field item (field_key preferred, else profile_section).
+  const profileLink = buildProfileSectionLink(profileId, item.field_key || item.profile_section)
 
   return (
     <div
@@ -146,6 +152,16 @@ function TodoItemCard({ item }) {
             <PriorityBadge />
             {item.deadline && (
               <span className="text-xs text-red-600 font-medium">Due: {item.deadline}</span>
+            )}
+            {profileLink && (
+              <Link
+                to={profileLink}
+                onClick={(e) => e.stopPropagation()}
+                className="inline-flex items-center gap-1 text-xs font-medium text-blue-600 hover:text-blue-700 hover:underline"
+              >
+                Fix in profile
+                <ArrowRight className="w-3 h-3" />
+              </Link>
             )}
           </div>
           {!expanded && hasDetails && (
@@ -288,7 +304,7 @@ export default function PrintableProfileTodo({ profileId, profileName }) {
                 </h3>
                 <div className="space-y-2">
                   {(cat.items || []).map((item, itemIdx) => (
-                    <TodoItemCard key={itemIdx} item={item} />
+                    <TodoItemCard key={itemIdx} item={item} profileId={profileId} />
                   ))}
                 </div>
               </div>

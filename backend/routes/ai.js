@@ -1479,6 +1479,7 @@ For each todo item, provide:
 - What documents, information, or resources are needed
 - Who to contact or where to go (if applicable)
 - Priority level (critical, high, medium, low)
+- If (and ONLY if) the item is about filling in a missing PROFILE field, set "profile_section" to the matching profile section key so the app can deep-link the user straight to it. Allowed keys: basic_information, demographics, financial_information, education, employment, health_medical, housing, narrative, additional, university_applications, documents. When the item refers to a specific field, also set "field_key" (e.g. first_name, last_name, email, phone, household_income, school_name). Omit both (use null) for real-world actions that are not about a profile field (e.g. "request a transcript from your school", "call the funder").
 
 Be SPECIFIC to this person's actual situation. Reference their real profile data, their real pipeline opportunities, and their actual needs. Don't be generic.
 
@@ -1498,7 +1499,9 @@ Return ONLY valid JSON:
           "deadline": "specific date or timeframe if applicable, or null",
           "instructions": "Detailed step-by-step instructions. Be thorough — this is what they'll print and follow.",
           "resources_needed": "What they need to complete this (documents, information, etc.)",
-          "contact_or_location": "Who to contact or where to go, if applicable"
+          "contact_or_location": "Who to contact or where to go, if applicable",
+          "profile_section": "matching profile section key if this is a profile-field item, else null",
+          "field_key": "matching field key if known, else null"
         }
       ]
     }
