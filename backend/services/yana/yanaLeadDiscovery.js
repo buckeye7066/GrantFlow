@@ -169,6 +169,25 @@ function parseJsonArray(v) {
 
 function clamp100(n) { return Math.max(0, Math.min(100, Math.round(Number(n) || 0))) }
 
+// Max concurrent contact-enrichment lookups (network-bound). Tunable via env.
+const ENRICH_CONCURRENCY = Math.max(1, Number(process.env.YANA_ENRICH_CONCURRENCY || 5))
+
+/** Run `fn` over `items` with at most `limit` in flight. Preserves order. */
+async function mapWithConcurrency(items, limit, fn) {
+  const list = Array.isArray(items) ? items : []
+  const results = new Array(list.length)
+  let cursor = 0
+  const poolSize = Math.max(1, Math.min(Number(limit) || 1, list.length))
+  const worker = async () => {
+    while (cursor < list.length) {
+      const idx = cursor++
+      results[idx] = await fn(list[idx], idx)
+    }
+  }
+  await Promise.all(Array.from({ length: poolSize }, worker))
+  return results
+}
+
 /**
  * Deterministic scoring for one organization record. No randomness, no
  * network. Returns the derived lead fields + an explainable reason list.
@@ -497,38 +516,48 @@ export async function discoverProspects(db, {
     }
     result.by_source[name] = (result.by_source[name] || 0)
 
+    // 1. Filter (don't prospect ourselves) + score ONCE.
+    const scoredList = []
     for (const prospect of prospects || []) {
-      // Don't prospect ourselves.
       const nameKey = prospect.organization_name ? `name:${String(prospect.organization_name).trim().toLowerCase()}` : null
       const einKey = prospect.ein ? `ein:${String(prospect.ein).replace(/\D/g, '')}` : null
       if ((nameKey && ownKeys.has(nameKey)) || (einKey && ownKeys.has(einKey))) continue
-
-      let scored = scoreOrganizationLead(prospect)
+      const scored = scoreOrganizationLead(prospect)
       if (!scored.organization_name) continue
+      scoredList.push({ prospect, scored, enriched: false })
+    }
 
-      // Contact enrichment: fill website/email for reachability when allowed.
-      if (!scored.hasEmail && enrich?.enabled) {
+    // 2. Contact enrichment is network-bound — run it in PARALLEL (bounded) for
+    //    the prospects missing an email, instead of one-at-a-time. Re-score in
+    //    place when a contact channel is found.
+    if (enrich?.enabled) {
+      const targets = scoredList.filter((x) => !x.scored.hasEmail)
+      await mapWithConcurrency(targets, ENRICH_CONCURRENCY, async (x) => {
         try {
-          const enriched = await enrich.enrich(prospect)
+          const enriched = await enrich.enrich(x.prospect)
           if (enriched?.ok && (enriched.email || enriched.website_url)) {
-            scored = scoreOrganizationLead({
-              ...prospect,
-              email: enriched.email || prospect.email,
-              website: enriched.website_url || prospect.website,
-              website_url: enriched.website_url || prospect.website_url,
+            x.scored = scoreOrganizationLead({
+              ...x.prospect,
+              email: enriched.email || x.prospect.email,
+              website: enriched.website_url || x.prospect.website,
+              website_url: enriched.website_url || x.prospect.website_url,
             })
-            if (enriched.website_url && !scored.source_urls.includes(enriched.website_url)) {
-              scored.source_urls = [...scored.source_urls, enriched.website_url]
+            if (enriched.website_url && !x.scored.source_urls.includes(enriched.website_url)) {
+              x.scored.source_urls = [...x.scored.source_urls, enriched.website_url]
             }
-            result.enriched += 1
+            x.enriched = true
           }
         } catch (err) {
-          log.warn(`enrichment failed for "${prospect.organization_name}": ${err?.message || err}`)
+          log.warn(`enrichment failed for "${x.prospect.organization_name}": ${err?.message || err}`)
         }
-      }
+      })
+    }
 
-      const status = prospectStatus(scored)
-      await upsertProspectCandidate(db, scored, prospect, runId, status)
+    // 3. Persist serially (DB writes — keep sqlite-safe + counts deterministic).
+    for (const x of scoredList) {
+      if (x.enriched) result.enriched += 1
+      const status = prospectStatus(x.scored)
+      await upsertProspectCandidate(db, x.scored, x.prospect, runId, status)
       result.discovered += 1
       result.by_source[name] += 1
       if (status === 'qualified') result.qualified += 1
