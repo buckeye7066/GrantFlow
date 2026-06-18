@@ -70,6 +70,12 @@ import {
   markSessionExpired,
 } from '../services/hamilton/hamiltonCredentialSessionService.js'
 import {
+  saveCredential,
+  listCredentialsForProfile,
+  getCredentialById,
+  deleteCredential,
+} from '../services/hamilton/hamiltonPortalCredentialService.js'
+import {
   authorizeAttestation,
   revokeAttestation,
   getAttestationById,
@@ -694,6 +700,44 @@ router.post('/sessions/:id/expire', async (req, res) => {
   if (!ctx) return
   const session = await markSessionExpired(req.db, req.params.id, req.body?.reason || null)
   return res.json({ ok: true, session })
+})
+
+// Saved portal LOGINS (username + encrypted password) Hamilton uses to
+// authenticate. Profile-scoped. The plaintext password is NEVER returned —
+// list responses are masked; only the server-side engine decrypts.
+router.get('/credentials', async (req, res) => {
+  const user = await requireProfileScope(req, res, req.query.profileId)
+  if (!user) return
+  try {
+    const credentials = await listCredentialsForProfile(req.db, req.query.profileId)
+    return res.json({ ok: true, credentials })
+  } catch (err) {
+    return res.status(500).json({ error: 'list_failed', detail: err?.message })
+  }
+})
+router.post('/credentials', async (req, res) => {
+  const user = await requireProfileScope(req, res, req.body?.profileId)
+  if (!user) return
+  try {
+    const credential = await saveCredential(req.db, {
+      userId: user.id,
+      profileId: req.body?.profileId,
+      portalHost: req.body?.portalHost || req.body?.portal_host || req.body?.login_url,
+      username: req.body?.username,
+      password: req.body?.password,
+      label: req.body?.label || null,
+      loginUrl: req.body?.login_url || req.body?.loginUrl || null,
+    })
+    return res.json({ ok: true, credential })
+  } catch (err) {
+    return res.status(400).json({ error: 'save_failed', detail: err?.message })
+  }
+})
+router.delete('/credentials/:id', async (req, res) => {
+  const ctx = await requireRecordOwnership(req, res, req.params.id, getCredentialById)
+  if (!ctx) return
+  const deleted = await deleteCredential(req.db, req.params.id)
+  return res.json({ ok: true, deleted })
 })
 
 // Standing attestations.

@@ -49,6 +49,7 @@ import {
 } from './hamiltonNotifications.js'
 import { canonicalStage } from '../../../shared/pipelineStages.js'
 import { runAutopilot } from './hamiltonAutopilotEngine.js'
+import { getDecryptedCredential, markCredentialUsed } from './hamiltonPortalCredentialService.js'
 import {
   preflightSingleSource,
   readAuthorizations,
@@ -648,12 +649,27 @@ async function runAutopilotPathway(db, {
   let allowAutoSubmit = options?.allow_auto_submit ?? authorizations.submit_applications
   let engineResult = null
   let degradedDirective = null
+
+  // Resolve a saved login for this portal host so Hamilton can authenticate
+  // herself at the login gate (only when the user authorized saved-credential
+  // use). Decrypted server-side and handed straight to the portal's own login
+  // form — never logged or returned.
+  let loginCredential = null
+  if (authorizations.use_saved_credentials_reference) {
+    try {
+      loginCredential = await getDecryptedCredential(db, { profileId: task.profile_id, portalHost: url })
+    } catch { loginCredential = null }
+  }
+
   for (let attempt = 0; attempt < MAX_RESOLVER_ATTEMPTS; attempt += 1) {
     engineResult = await runAutopilot({
       url, profile, authorizations,
-      documents, storageStatePath, allowAutoSubmit,
+      documents, storageStatePath, allowAutoSubmit, loginCredential,
       headless: options?.headless ?? true,
     })
+    if (loginCredential && engineResult?.logged_in) {
+      await markCredentialUsed(db, loginCredential.id).catch(() => {})
+    }
     if (engineResult.status === 'submitted' || engineResult.status === 'completed_draft') break
     if (engineResult.status === 'failed' && engineResult.blocker_kind === 'no_browser') break
 

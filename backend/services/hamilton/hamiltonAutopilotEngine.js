@@ -286,6 +286,57 @@ async function clickButtonByBid(page, bid) {
   }
 }
 
+/**
+ * Best-effort login using a saved credential. Fills the username + password
+ * fields on the current login form and submits. Returns true when the resulting
+ * page no longer shows a password field (heuristic for a successful sign-in).
+ * Generic across portals — if it can't find/submit the form it returns false
+ * and Hamilton falls back to the normal login hard-stop. Never logs the values.
+ */
+async function attemptLogin(page, credential) {
+  try {
+    const username = credential?.username
+    const password = credential?.password
+    if (!username || !password) return false
+    const userSelectors = [
+      'input[autocomplete="username"]:not([disabled])',
+      'input[type="email"]:not([disabled])',
+      'input[name*="user" i]:not([disabled])',
+      'input[id*="user" i]:not([disabled])',
+      'input[name*="email" i]:not([disabled])',
+      'input[id*="email" i]:not([disabled])',
+      'input[name*="login" i]:not([disabled])',
+      'input[type="text"]:not([disabled])',
+    ]
+    let userField = null
+    for (const sel of userSelectors) {
+      userField = await page.$(sel).catch(() => null)
+      if (userField) break
+    }
+    const passField = await page.$('input[type="password"]:not([disabled])').catch(() => null)
+    if (!userField || !passField) return false
+    await userField.fill(String(username), { timeout: 5000 }).catch(() => {})
+    await passField.fill(String(password), { timeout: 5000 }).catch(() => {})
+
+    let clicked = false
+    for (const sel of ['button[type="submit"]:not([disabled])', 'input[type="submit"]:not([disabled])']) {
+      const b = await page.$(sel).catch(() => null)
+      if (b) { await b.click({ timeout: 5000 }).catch(() => {}); clicked = true; break }
+    }
+    if (!clicked) {
+      const b = await page.$('button:has-text("Log in"), button:has-text("Sign in"), button:has-text("Login"), button:has-text("Continue")').catch(() => null)
+      if (b) { await b.click({ timeout: 5000 }).catch(() => {}); clicked = true }
+    }
+    if (!clicked) await passField.press('Enter').catch(() => {})
+
+    await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {})
+    const stillPassword = await page.$('input[type="password"]:not([disabled])').catch(() => null)
+    return !stillPassword
+  } catch {
+    return false
+  }
+}
+
 async function detectGate(page, { authorizations }) {
   // Login: a visible password field, OR a URL containing /login|/signin.
   const url = (() => { try { return page.url() } catch { return '' } })()
@@ -411,6 +462,7 @@ export async function runAutopilot({
   documents = [],
   storageStatePath = null,
   allowAutoSubmit = null,
+  loginCredential = null,
   headless = true,
   screenshotsDir = null,
 } = {}) {
@@ -421,6 +473,8 @@ export async function runAutopilot({
 
   const trace = []
   const filled = []
+  let loggedIn = false
+  let loginAttempted = false
 
   let chromium
   try {
@@ -452,8 +506,21 @@ export async function runAutopilot({
 
       const gate = await detectGate(page, { authorizations })
       if (gate) {
+        // Saved-login path: when Hamilton hits a login gate and the user saved a
+        // login for this portal, type it into the portal's own login form and
+        // continue — instead of hard-stopping. Tried at most once.
+        if (gate.kind === 'login' && loginCredential && !loginAttempted) {
+          loginAttempted = true
+          trace.push({ step: 'login_attempt', detail: { username: '***' } })
+          const ok = await attemptLogin(page, loginCredential)
+          trace.push({ step: 'login_result', detail: { ok } })
+          if (ok) { loggedIn = true; continue }
+          // Login fill failed (couldn't find/submit form) — fall through to the
+          // normal hard-stop so the user is told login is required.
+          return { status: 'blocked', blocker_kind: 'login', blocker_detail: 'Saved login could not be completed automatically', filled_fields: filled, pages_visited: pagesVisited, trace, logged_in: loggedIn }
+        }
         trace.push({ step: 'gate', detail: gate })
-        return { status: 'blocked', blocker_kind: gate.kind, blocker_detail: gate.detail, filled_fields: filled, pages_visited: pagesVisited, trace }
+        return { status: 'blocked', blocker_kind: gate.kind, blocker_detail: gate.detail, filled_fields: filled, pages_visited: pagesVisited, trace, logged_in: loggedIn }
       }
       const sigGate = await detectAttestationGate(page, { authorizations })
       if (sigGate) {
@@ -563,7 +630,7 @@ export async function runAutopilot({
           status: 'submitted',
           confirmation_reference: conf.reference,
           confirmation_screenshot_path: conf.screenshot_path,
-          filled_fields: filled, pages_visited: pagesVisited, trace,
+          filled_fields: filled, pages_visited: pagesVisited, trace, logged_in: loggedIn,
         }
       }
 
@@ -575,7 +642,7 @@ export async function runAutopilot({
           await page.waitForLoadState('domcontentloaded', { timeout: NAV_TIMEOUT_MS }).catch(() => null)
         }
         trace.push({ step: 'completed_draft', detail: { reason: 'submit_not_authorized' } })
-        return { status: 'completed_draft', filled_fields: filled, pages_visited: pagesVisited, trace }
+        return { status: 'completed_draft', filled_fields: filled, pages_visited: pagesVisited, trace, logged_in: loggedIn }
       }
 
       if (canNext) {
@@ -597,7 +664,7 @@ export async function runAutopilot({
       if (canDraft && authorizations.save_drafts) {
         await clickButtonByBid(page, draftButtons[0].bid)
         trace.push({ step: 'completed_draft', detail: { reason: 'no_next_button' } })
-        return { status: 'completed_draft', filled_fields: filled, pages_visited: pagesVisited, trace }
+        return { status: 'completed_draft', filled_fields: filled, pages_visited: pagesVisited, trace, logged_in: loggedIn }
       }
 
       trace.push({ step: 'no_progress', detail: { reason: 'no advance button found' } })
