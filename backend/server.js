@@ -2605,6 +2605,19 @@ if (process.env.NODE_ENV !== 'test') {
         console.warn('[Server] Robert scheduler startup skipped:', err?.message)
       }
     })();
+    // Yana — client-discovery agent scheduler. Disabled by default; only
+    // starts if YANA_ENABLED + YANA_RUN_ON_SCHEDULE/STARTUP are true. Runs the
+    // deterministic lead funnel in the background regardless of login.
+    ;(async () => {
+      try {
+        const { startYanaScheduler } = await import('./services/yana/yanaScheduler.js')
+        const result = startYanaScheduler({ db })
+        if (result?.started) console.log('[Server] Yana scheduler started')
+        else console.log('[Server] Yana scheduler not started:', result?.reason || 'disabled')
+      } catch (err) {
+        console.warn('[Server] Yana scheduler startup skipped:', err?.message)
+      }
+    })();
     // Sam scheduler — opt-in via SAM_ENABLED + SAM_RUN_ON_STARTUP /
     // SAM_RUN_ON_SCHEDULE. Default behaviour is OFF; the scheduler logs
     // once and exits when env gates aren't set.
