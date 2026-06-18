@@ -13,6 +13,8 @@
  * "not committed" / null fields, never fabricated amounts.
  */
 
+import { describeFafsaStatus } from './fafsaStatus.js'
+
 // Statuses that mean "this is the school the student chose".
 export const COMMITTED_STATUSES = Object.freeze([
   'committed', 'enrolled', 'attending', 'current', 'matriculated', 'deposited',
@@ -168,8 +170,12 @@ export function buildCollegeAidWorkspace({ sections = {}, matchedFunding = [], h
   const matchedFundingTotal = (Array.isArray(matchedFunding) ? matchedFunding : [])
     .reduce((sum, f) => sum + (numOrNull(f?.amount ?? f?.award_amount) || 0), 0)
 
+  const fafsaStatus = describeFafsaStatus(edu)
   const fafsa = {
-    completed: Boolean(edu.fafsa_completed),
+    completed: fafsaStatus.completed,
+    stage: fafsaStatus.stage,
+    stage_label: fafsaStatus.label,
+    next_action: fafsaStatus.next_action,
     efc_sai_band: edu.efc_sai_band || edu.sai_band || null,
     pell_grant_eligible: Boolean(edu.pell_grant_eligible),
     first_generation: Boolean(edu.first_generation_college_student),

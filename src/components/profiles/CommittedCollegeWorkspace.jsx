@@ -6,9 +6,11 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Separator } from '@/components/ui/separator'
+import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@/components/ui/select'
 import { useToast } from '@/components/ui/use-toast'
 import {
   getCommittedCollegeWorkspace, commitToCollege, uncommitCollege,
+  getFafsaStatus, setFafsaStatus,
 } from '@/api/committedCollege.js'
 import CollegeFundingMergeModal from './CollegeFundingMergeModal.jsx'
 
@@ -60,6 +62,23 @@ export default function CommittedCollegeWorkspace({ profileId, applications = []
     mutationFn: (collegeId) => uncommitCollege(profileId, collegeId),
     onSuccess: () => { toast({ title: 'Restored' }); invalidate() },
     onError: (err) => toast({ title: 'Restore failed', description: err?.message, variant: 'destructive' }),
+  })
+
+  const committed = Boolean(workspace?.committed)
+  const fafsaQuery = useQuery({
+    queryKey: ['fafsa-status', profileId],
+    queryFn: () => getFafsaStatus(profileId),
+    enabled: Boolean(profileId) && committed,
+  })
+  const fafsaInfo = fafsaQuery.data?.fafsa
+  const setStage = useMutation({
+    mutationFn: (stage) => setFafsaStatus(profileId, stage),
+    onSuccess: () => {
+      toast({ title: 'FAFSA status updated' })
+      queryClient.invalidateQueries({ queryKey: ['fafsa-status', profileId] })
+      invalidate()
+    },
+    onError: (err) => toast({ title: 'Update failed', description: err?.message, variant: 'destructive' }),
   })
 
   const cardShell = (children) => (
@@ -148,15 +167,36 @@ export default function CommittedCollegeWorkspace({ profileId, applications = []
             />
           </div>
 
-          {/* FAFSA */}
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="text-sm font-medium text-slate-700">FAFSA:</span>
-            {fafsa.completed
-              ? <Badge variant="outline" className="bg-emerald-100 text-emerald-700 border-emerald-200"><CheckCircle2 className="mr-1 h-3.5 w-3.5" />Filed</Badge>
-              : <Badge variant="outline" className="bg-amber-100 text-amber-800 border-amber-200"><AlertTriangle className="mr-1 h-3.5 w-3.5" />Not filed</Badge>}
-            {fafsa.pell_grant_eligible ? <Badge variant="outline">Pell-eligible</Badge> : null}
-            {fafsa.first_generation ? <Badge variant="outline">First-gen</Badge> : null}
-            {fafsa.efc_sai_band ? <Badge variant="outline">SAI {fafsa.efc_sai_band}</Badge> : null}
+          {/* FAFSA lifecycle */}
+          <div className="rounded-md border border-slate-200 p-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-sm font-medium text-slate-700">FAFSA:</span>
+              <Badge
+                variant="outline"
+                className={fafsa.completed
+                  ? 'bg-emerald-100 text-emerald-700 border-emerald-200'
+                  : 'bg-amber-100 text-amber-800 border-amber-200'}
+              >
+                {fafsa.completed ? <CheckCircle2 className="mr-1 h-3.5 w-3.5" /> : <AlertTriangle className="mr-1 h-3.5 w-3.5" />}
+                {fafsa.stage_label || (fafsa.completed ? 'Filed' : 'Not started')}
+              </Badge>
+              {fafsa.pell_grant_eligible ? <Badge variant="outline">Pell-eligible</Badge> : null}
+              {fafsa.first_generation ? <Badge variant="outline">First-gen</Badge> : null}
+              {fafsa.efc_sai_band ? <Badge variant="outline">SAI {fafsa.efc_sai_band}</Badge> : null}
+            </div>
+            {(fafsa.next_action || fafsaInfo?.next_action) ? (
+              <p className="mt-2 text-sm text-slate-600">Next: {fafsaInfo?.next_action || fafsa.next_action}</p>
+            ) : null}
+            {fafsaInfo?.stages?.length ? (
+              <div className="mt-2 max-w-xs">
+                <Select value={fafsaInfo.stage} onValueChange={(v) => setStage.mutate(v)} disabled={setStage.isPending}>
+                  <SelectTrigger className="h-8 text-sm"><SelectValue placeholder="Update FAFSA stage" /></SelectTrigger>
+                  <SelectContent>
+                    {fafsaInfo.stages.map((s) => <SelectItem key={s.key} value={s.key}>{s.label}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </div>
+            ) : null}
           </div>
 
           <Separator />

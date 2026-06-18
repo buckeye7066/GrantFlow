@@ -20,6 +20,7 @@ import {
   buildCollegeAidWorkspace,
 } from '../services/college/committedCollege.js'
 import { planCollegeFundingMerge } from '../services/college/collegeFundingMerge.js'
+import { describeFafsaStatus, normalizeFafsaStatus, setFafsaStage } from '../services/college/fafsaStatus.js'
 import { createLogger } from '../utils/logger.js'
 
 const log = createLogger('route:committed-college')
@@ -94,6 +95,59 @@ async function persistUniversityApplications(db, profileId, userId, section) {
       .run(String(profileId), data, userId)
   }
 }
+
+async function persistEducation(db, profileId, userId, education) {
+  const data = JSON.stringify(education)
+  const existing = await db
+    .prepare(`SELECT 1 AS x FROM profile_sections WHERE profile_id = ? AND section_key = 'education'`)
+    .get(String(profileId))
+  if (existing) {
+    await db
+      .prepare(`UPDATE profile_sections SET data = ?, updated_by = ?, updated_at = CURRENT_TIMESTAMP WHERE profile_id = ? AND section_key = 'education'`)
+      .run(data, userId, String(profileId))
+  } else {
+    await db
+      .prepare(`INSERT INTO profile_sections (profile_id, section_key, data, updated_by) VALUES (?, 'education', ?, ?)`)
+      .run(String(profileId), data, userId)
+  }
+}
+
+router.get('/profiles/:profileId/fafsa-status', async (req, res) => {
+  const user = requireAuthenticatedUser(req, res)
+  if (!user) return
+  const { profileId } = req.params
+  if (!(await userMayAccessProfile(req, profileId))) return res.status(403).json({ error: 'Forbidden' })
+  try {
+    const sections = await loadSections(req.db, profileId)
+    return res.json({ ok: true, fafsa: describeFafsaStatus(sections.education || {}) })
+  } catch (err) {
+    log.error('GET fafsa-status failed', { error: err?.message })
+    return res.status(500).json({ ok: false, error: 'fafsa_status_failed' })
+  }
+})
+
+router.post('/profiles/:profileId/fafsa-status', async (req, res) => {
+  const user = requireAuthenticatedUser(req, res)
+  if (!user) return
+  const { profileId } = req.params
+  const stage = req.body?.stage
+  if (!stage) return res.status(400).json({ ok: false, error: 'stage is required' })
+  if (!(await userMayAccessProfile(req, profileId))) return res.status(403).json({ error: 'Forbidden' })
+  try {
+    const sections = await loadSections(req.db, profileId)
+    const education = sections.education || {}
+    const current = normalizeFafsaStatus(education)
+    const result = setFafsaStage(current, stage, { now: new Date().toISOString() })
+    if (!result.ok) return res.status(400).json({ ok: false, error: result.error })
+    education.fafsa_status = result.status
+    education.fafsa_completed = result.fafsa_completed
+    await persistEducation(req.db, profileId, getAuthUserId(user), education)
+    return res.json({ ok: true, fafsa: describeFafsaStatus(education) })
+  } catch (err) {
+    log.error('POST fafsa-status failed', { error: err?.message })
+    return res.status(500).json({ ok: false, error: 'fafsa_status_update_failed' })
+  }
+})
 
 router.get('/profiles/:profileId/committed-college/workspace', async (req, res) => {
   const user = requireAuthenticatedUser(req, res)
