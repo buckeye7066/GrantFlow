@@ -96,6 +96,7 @@ export async function ensureSchema(db) {
       id TEXT PRIMARY KEY DEFAULT (${idDefault}),
       lock_name TEXT NOT NULL UNIQUE,
       control_run_id TEXT NOT NULL,
+      owner_token TEXT,
       acquired_by TEXT,
       acquired_at ${tsType} DEFAULT ${isPostgres ? 'now()' : 'CURRENT_TIMESTAMP'},
       expires_at ${tsType}
@@ -122,6 +123,23 @@ export async function ensureSchema(db) {
     } catch {
       // table may already exist via migrations; ignore.
     }
+  }
+
+  // Defensive column add for lock fencing. A lock table created by the
+  // original migration (091 / 0087) has no `owner_token`; this self-heals
+  // it so a process can release only the lock it actually owns. SQLite has
+  // no `ADD COLUMN IF NOT EXISTS`, so we lean on try/catch for both dialects.
+  const alterOwnerToken = isPostgres
+    ? `ALTER TABLE agent_control_locks ADD COLUMN IF NOT EXISTS owner_token TEXT`
+    : `ALTER TABLE agent_control_locks ADD COLUMN owner_token TEXT`
+  try {
+    if (typeof db.exec === 'function') {
+      await db.exec(alterOwnerToken)
+    } else {
+      await db.prepare(alterOwnerToken).run()
+    }
+  } catch {
+    // column already exists; ignore.
   }
 }
 
@@ -520,48 +538,222 @@ export async function listEvents(db, runId, { limit = 200, severity = null, even
 }
 
 // ---------------------------------------------------------------------------
-// Locks (single-flight)
+// Locks (single-flight) — TTL'd, fenced, self-healing
 // ---------------------------------------------------------------------------
-export async function tryAcquireLock(db, { lockName, controlRunId, acquiredBy = null, ttlMs = 6 * 60 * 60 * 1000 } = {}) {
-  if (!db || !lockName || !controlRunId) return false
+//
+// Every lock carries:
+//   - an `expires_at` TTL so a crashed/restarted holder can never wedge the
+//     system: the row self-heals once the deadline passes,
+//   - a unique `owner_token` per acquisition so a process releases only the
+//     lock it actually holds (a stale late-release can't free a successor's
+//     lock),
+//   - structured `[agent-control][lock]` logging on every acquire / takeover /
+//     contention / release / sweep so contention is observable in prod logs.
+//
+// The acquire path is: sweep expired → INSERT (UNIQUE gives mutual exclusion)
+// → on conflict, atomically take over IFF the existing row is expired → else
+// it's genuinely held, so log contention and (optionally) back off and retry.
+
+// Hard ceiling fallback when a caller passes no TTL. Real callers pass a TTL
+// derived from the run's max_runtime_minutes; this is just a backstop so a
+// missing TTL can never mean "never expires".
+const DEFAULT_LOCK_TTL_MS = 60 * 60 * 1000 // 1h
+const MIN_LOCK_TTL_MS = 60_000             // 1m floor
+const LOCK_TOKEN = () => crypto.randomUUID()
+
+/**
+ * Single-line, greppable structured log for lock events (acquire / takeover /
+ * contention / release / sweep). Routed through console.warn because the lock
+ * subsystem is low-frequency (agent runs are occasional) and these lines are
+ * the breadcrumbs for diagnosing any future contention. Best-effort — logging
+ * must never throw and never affect lock correctness.
+ */
+function lockLog(event, fields = {}) {
+  try {
+    const parts = Object.entries(fields)
+      .filter(([, v]) => v !== undefined && v !== null)
+      .map(([k, v]) => `${k}=${v}`)
+      .join(' ')
+    console.warn(`[agent-control][lock] ${event}${parts ? ` ${parts}` : ''}`)
+  } catch { /* logging must never throw */ }
+}
+
+/**
+ * Delete every expired lock. Safe to call anytime (boot, before an acquire).
+ * Returns the count swept so callers can meter orphaned-lock recovery.
+ */
+export async function sweepExpiredLocks(db, { now = NOW() } = {}) {
+  if (!db) return 0
   await ensureSchema(db)
-  const id = ID()
-  const expiresAt = new Date(Date.now() + Math.max(60_000, Number(ttlMs) || 0)).toISOString()
-
-  // First sweep expired locks so a crashed run never wedges the system.
   try {
-    await db
+    const res = await db
       .prepare(`DELETE FROM agent_control_locks WHERE expires_at IS NOT NULL AND expires_at < ?`)
-      .run(NOW())
-  } catch { /* ignore */ }
-
-  // Try insert; UNIQUE(lock_name) means a second writer fails.
-  try {
-    await db
-      .prepare(`
-        INSERT INTO agent_control_locks (id, lock_name, control_run_id, acquired_by, acquired_at, expires_at)
-        VALUES (?, ?, ?, ?, ?, ?)
-      `)
-      .run(id, String(lockName), String(controlRunId), acquiredBy || null, NOW(), expiresAt)
-    return true
+      .run(now)
+    const swept = Number(res?.changes || 0)
+    if (swept > 0) lockLog('sweep.reclaimed', { count: swept })
+    return swept
   } catch {
-    return false
+    return 0
   }
 }
 
-export async function releaseLock(db, { lockName = null, controlRunId = null } = {}) {
-  if (!db) return
-  if (!lockName && !controlRunId) return
+/**
+ * Acquire a lock with a TTL, an owner token, atomic takeover of an expired
+ * holder, and bounded retry-with-backoff. Returns a lease descriptor:
+ *
+ *   { acquired: true,  ownerToken, lockName, expiresAt, tookOver? }
+ *   { acquired: false, reason: 'held'|'invalid_args', heldBy, expiresAt }
+ *
+ * `retries` is the number of EXTRA attempts after the first (so retries=5 →
+ * up to 6 attempts). Backoff is exponential off `backoffMs`, capped at 5s,
+ * with a little jitter to de-correlate competing workers.
+ */
+export async function acquireLock(db, {
+  lockName,
+  controlRunId,
+  acquiredBy = null,
+  ttlMs = DEFAULT_LOCK_TTL_MS,
+  retries = 0,
+  backoffMs = 250,
+} = {}) {
+  if (!db || !lockName || !controlRunId) {
+    return { acquired: false, reason: 'invalid_args' }
+  }
+  await ensureSchema(db)
+
+  const ownerToken = LOCK_TOKEN()
+  const effTtl = Math.max(MIN_LOCK_TTL_MS, Number(ttlMs) || DEFAULT_LOCK_TTL_MS)
+  const maxAttempts = Math.max(1, Number(retries) + 1)
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    const now = NOW()
+    const expiresAt = new Date(Date.now() + effTtl).toISOString()
+
+    // 1. Reclaim any expired lock so a crashed/restarted holder never wedges us.
+    await sweepExpiredLocks(db, { now })
+
+    // 2. Fresh acquire. UNIQUE(lock_name) gives us mutual exclusion.
+    try {
+      await db
+        .prepare(`
+          INSERT INTO agent_control_locks
+            (id, lock_name, control_run_id, owner_token, acquired_by, acquired_at, expires_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?)
+        `)
+        .run(ID(), String(lockName), String(controlRunId), ownerToken, acquiredBy || null, now, expiresAt)
+      lockLog('acquire.ok', { lock: lockName, run: controlRunId, token: ownerToken, attempt })
+      return { acquired: true, ownerToken, lockName, expiresAt }
+    } catch {
+      // Row already exists — fall through to the expired-takeover path.
+    }
+
+    // 3. Atomic takeover IFF the existing row is expired. This closes the race
+    //    where the sweep above deleted nothing because another worker had just
+    //    re-inserted, or the holder's deadline lapsed between sweep and insert.
+    try {
+      const res = await db
+        .prepare(`
+          UPDATE agent_control_locks
+             SET control_run_id = ?, owner_token = ?, acquired_by = ?, acquired_at = ?, expires_at = ?
+           WHERE lock_name = ? AND expires_at IS NOT NULL AND expires_at < ?
+        `)
+        .run(String(controlRunId), ownerToken, acquiredBy || null, now, expiresAt, String(lockName), now)
+      if (Number(res?.changes || 0) > 0) {
+        lockLog('acquire.takeover', { lock: lockName, run: controlRunId, token: ownerToken, attempt })
+        return { acquired: true, ownerToken, lockName, expiresAt, tookOver: true }
+      }
+    } catch {
+      // Treat any takeover failure as "still contended" and let retry/backoff handle it.
+    }
+
+    // 4. Genuinely held by a live owner. Log contention; back off and retry.
+    const holder = await getLock(db, lockName)
+    lockLog('acquire.contended', {
+      lock: lockName,
+      run: controlRunId,
+      attempt,
+      held_by: holder?.control_run_id || 'unknown',
+      expires_at: holder?.expires_at || 'n/a',
+    })
+
+    if (attempt < maxAttempts) {
+      const base = Math.min(5_000, backoffMs * 2 ** (attempt - 1))
+      const delay = base + Math.floor(Math.random() * 100)
+      await new Promise((resolve) => setTimeout(resolve, delay))
+    }
+  }
+
+  const holder = await getLock(db, lockName)
+  lockLog('acquire.failed', { lock: lockName, run: controlRunId, held_by: holder?.control_run_id || 'unknown' })
+  return {
+    acquired: false,
+    reason: 'held',
+    heldBy: holder?.control_run_id || null,
+    expiresAt: holder?.expires_at || null,
+  }
+}
+
+/**
+ * Backwards-compatible boolean wrapper. Existing callers / tests that only
+ * need a yes/no answer keep working; new callers should use `acquireLock`
+ * (or `withLock`) so they get the owner token for fenced release.
+ */
+export async function tryAcquireLock(db, opts = {}) {
+  const lease = await acquireLock(db, opts)
+  return lease.acquired
+}
+
+/**
+ * Release a lock. Scope it as tightly as the caller can:
+ *   - `ownerToken` (preferred) fences the delete to the exact acquisition,
+ *   - `controlRunId` scopes to a run (run IDs are unique, so this is also a
+ *     safe fence and is what the orchestrator uses across process restarts),
+ *   - `lockName` alone is a blunt release and should be avoided unless paired.
+ * Returns the number of rows deleted.
+ */
+export async function releaseLock(db, { lockName = null, controlRunId = null, ownerToken = null } = {}) {
+  if (!db) return 0
+  if (!lockName && !controlRunId && !ownerToken) return 0
   const where = []
   const args = []
+  if (ownerToken) { where.push('owner_token = ?'); args.push(String(ownerToken)) }
   if (lockName) { where.push('lock_name = ?'); args.push(String(lockName)) }
   if (controlRunId) { where.push('control_run_id = ?'); args.push(String(controlRunId)) }
   try {
-    await db
+    const res = await db
       .prepare(`DELETE FROM agent_control_locks WHERE ${where.join(' AND ')}`)
       .run(...args)
+    const released = Number(res?.changes || 0)
+    lockLog('release', { lock: lockName || 'n/a', run: controlRunId || 'n/a', token: ownerToken || 'n/a', released })
+    return released
   } catch {
-    // ignore
+    return 0
+  }
+}
+
+/**
+ * Context-manager / defer-style helper: acquire, run `fn(lease)`, and ALWAYS
+ * release in a finally — including on exception or timeout. Throws a
+ * `LOCK_NOT_ACQUIRED` error (with `.lease` attached) when the lock is held.
+ * This is the safest way to use a lock for any new in-process critical section.
+ */
+export async function withLock(db, opts = {}, fn) {
+  if (typeof fn !== 'function') throw new Error('withLock: fn required')
+  const lease = await acquireLock(db, opts)
+  if (!lease.acquired) {
+    const e = new Error(`withLock: could not acquire "${opts?.lockName}" (held by ${lease.heldBy || 'unknown'})`)
+    e.code = 'LOCK_NOT_ACQUIRED'
+    e.lease = lease
+    throw e
+  }
+  try {
+    return await fn(lease)
+  } finally {
+    await releaseLock(db, {
+      lockName: opts.lockName,
+      controlRunId: opts.controlRunId,
+      ownerToken: lease.ownerToken,
+    })
   }
 }
 

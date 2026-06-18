@@ -71,6 +71,35 @@ Only **one `full_cycle` run can be active at a time**. The
 gets back HTTP `409`. Per-agent runs each take `agent_control:agent:<name>`
 locks so the same agent can't be started twice at the same time.
 
+### Lock self-healing
+
+Locks live in `agent_control_locks` and are designed to survive crashes and
+Railway dyno restarts without manual intervention:
+
+- **TTL** — every lock carries an `expires_at` (derived from the run's
+  `max_runtime_minutes`, 1h ceiling). A holder that crashes mid-cycle can
+  never wedge the system: the row self-heals once the deadline passes.
+- **Atomic takeover** — acquisition sweeps expired locks and atomically takes
+  over an expired holder (`UPDATE … WHERE expires_at < now`), so a single
+  orphaned lock is reclaimed by the very next run.
+- **Owner-token fencing** — each acquisition stamps a unique `owner_token`;
+  release is scoped to `(control_run_id, owner_token)` so a stale, late
+  release can never free a successor's lock.
+- **Always-release** — the orchestrator wraps the run in try/finally; the lock
+  is released on success, agent failure, OR an unexpected exception. (A
+  deliberate `pause` keeps the lock so `resume` can continue — the TTL is the
+  backstop if resume never comes.)
+- **Bounded retry** — acquisition retries with exponential backoff before
+  giving up, smoothing over a prior run's brief teardown window.
+- **Graceful skip** — a `scheduled_cycle` (or any caller passing
+  `options.skip_if_locked`) whose lock is held is recorded as a `cancelled`
+  no-op (with a `control.run.skipped` event), NOT a `failed` run — so a
+  recurring scheduler never pollutes the "Last failure" dashboard. A manual
+  start on a held lock still returns `409`, but is likewise recorded as
+  `cancelled`, not `failed`.
+- **Boot recovery** — boot self-heal (`ensureAgentSubsystemTables`) sweeps any
+  already-orphaned locks the instant a new build comes up.
+
 ## API surface
 
 All routes require authentication and the canonical-admin check above.

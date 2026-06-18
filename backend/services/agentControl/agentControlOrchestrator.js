@@ -51,6 +51,7 @@ import {
   resolveAgentsForRun,
 } from './agentControlTypes.js'
 import {
+  acquireLock,
   createRun,
   createSteps,
   ensureSchema,
@@ -65,7 +66,6 @@ import {
   releaseLock,
   setRunStatus,
   setStepStatus,
-  tryAcquireLock,
 } from './agentControlStore.js'
 import { getAdapter } from './agentAdapters/agentAdapterRegistry.js'
 import { makeSignal } from './agentAdapters/baseAgentAdapter.js'
@@ -206,49 +206,101 @@ export async function startRun(db, {
     ? FULL_CYCLE_LOCK
     : (resolvedAgents.length === 1 ? agentLockName(resolvedAgents[0]) : null)
 
+  // Automated/scheduled triggers (and any caller that opts in) treat a
+  // held lock as "already running" — a graceful skip, not a failure — so a
+  // recurring scheduler can't spam the failure dashboard. A manual start
+  // still surfaces a 409 so the operator knows their click was a no-op, but
+  // we never record it as a `failed` run.
+  const skipIfLocked = runType === 'scheduled_cycle'
+    || mergedOptions.skip_if_locked === true
+    || mergedOptions.scheduled === true
+  // Bounded retry-with-backoff smooths over the brief window where a prior
+  // run is mid-teardown or its lock is a tick away from expiry.
+  const lockRetries = Number.isFinite(mergedOptions.lock_acquire_retries)
+    ? mergedOptions.lock_acquire_retries
+    : 5
+
+  let lockLease = null
   if (lockName) {
-    const acquired = await tryAcquireLock(db, {
+    lockLease = await acquireLock(db, {
       lockName,
       controlRunId: runId,
       acquiredBy: user?.email || ADMIN_EMAIL,
       ttlMs: Math.max(60_000, Number(mergedOptions.max_runtime_minutes) * 60_000 || 60 * 60_000),
+      retries: lockRetries,
+      backoffMs: 250,
     })
-    if (!acquired) {
-      await setRunStatus(db, runId, 'failed', { errorMessage: `Could not acquire lock "${lockName}".` })
+    if (!lockLease.acquired) {
+      // Mark the run terminal as `cancelled` (a no-op skip), NOT `failed`:
+      // `cancelled` is excluded from the Mission Control failure highlights,
+      // so a contended lock stops generating "Last failure" noise.
+      await setRunStatus(db, runId, 'cancelled', {
+        errorMessage: `Skipped: "${lockName}" already held by run ${lockLease.heldBy || 'unknown'}.`,
+        summary: { skipped: true, reason: 'lock_held', lock_name: lockName, held_by: lockLease.heldBy },
+      })
+      await recordEvent(db, {
+        controlRunId: runId,
+        eventType: 'control.run.skipped',
+        severity: 'info',
+        message: `Run skipped — "${lockName}" already running (held by run ${lockLease.heldBy || 'unknown'}).`,
+        data: { lock_name: lockName, held_by: lockLease.heldBy, expires_at: lockLease.expiresAt },
+      })
+      if (skipIfLocked) {
+        const skippedRun = await getRun(db, runId)
+        return { run: skippedRun, steps: [], skipped: true }
+      }
       const e = new Error(`Lock "${lockName}" already held by another run.`)
       e.status = 409
+      e.skipped = true
       throw e
     }
   }
 
-  const plan = buildStepPlan(runType, resolvedAgents, mergedOptions)
-  await createSteps(db, runId, plan.map((p) => ({
-    agentName: p.agent,
-    stepName: p.step_name,
-    stepOrder: p.step_order,
-    status: 'queued',
-    progress: { stage: p.stage || 'main' },
-  })))
+  // From here on a lock may be held. Any failure during setup must release
+  // it (try/catch below) so a setup crash can never orphan the lock — the
+  // executor only takes ownership once it's running.
+  try {
+    const plan = buildStepPlan(runType, resolvedAgents, mergedOptions)
+    await createSteps(db, runId, plan.map((p) => ({
+      agentName: p.agent,
+      stepName: p.step_name,
+      stepOrder: p.step_order,
+      status: 'queued',
+      progress: { stage: p.stage || 'main' },
+    })))
 
-  await recordEvent(db, {
-    controlRunId: runId,
-    eventType: 'control.run.created',
-    severity: 'info',
-    message: `Run created: ${runType} (agents: ${resolvedAgents.join(', ')})`,
-    data: { run_type: runType, agents: resolvedAgents, options: mergedOptions },
-  })
+    await recordEvent(db, {
+      controlRunId: runId,
+      eventType: 'control.run.created',
+      severity: 'info',
+      message: `Run created: ${runType} (agents: ${resolvedAgents.join(', ')})`,
+      data: { run_type: runType, agents: resolvedAgents, options: mergedOptions },
+    })
 
-  const run = await getRun(db, runId)
-  await notifyStarted(db, run)
+    const run = await getRun(db, runId)
+    await notifyStarted(db, run)
 
-  // Fire-and-forget execution. The run keeps going after the HTTP
-  // response returns.
-  executeRun({ db, runId }).catch((err) => {
-    console.error('[agent-control] executeRun crashed:', err?.message || err)
-  })
+    // Fire-and-forget execution. The run keeps going after the HTTP
+    // response returns.
+    executeRun({ db, runId }).catch((err) => {
+      console.error('[agent-control] executeRun crashed:', err?.message || err)
+    })
 
-  const steps = await listSteps(db, runId)
-  return { run, steps }
+    const steps = await listSteps(db, runId)
+    return { run, steps }
+  } catch (setupErr) {
+    if (lockLease?.acquired) {
+      await releaseLock(db, {
+        lockName,
+        controlRunId: runId,
+        ownerToken: lockLease.ownerToken,
+      }).catch(() => {})
+    }
+    await setRunStatus(db, runId, 'failed', {
+      errorMessage: `Run setup failed: ${setupErr?.message || setupErr}`,
+    }).catch(() => {})
+    throw setupErr
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -481,7 +533,13 @@ export async function executeRun({ db, runId } = {}) {
   if (!run) return
 
   const finalStates = ['completed', 'failed', 'cancelled', 'stopped', 'partial_stop', 'stop_failed']
-  if (finalStates.includes(run.status)) return
+  if (finalStates.includes(run.status)) {
+    // Run is already terminal (e.g. a skipped/cancelled start). Guarantee no
+    // lock lingers for it — releasing by runId is owner-safe because run IDs
+    // are unique, so we can only ever free this run's own lock.
+    await releaseLock(db, { controlRunId: runId }).catch(() => {})
+    return
+  }
 
   if (run.status === 'queued') {
     await setRunStatus(db, runId, 'running')
@@ -508,6 +566,12 @@ export async function executeRun({ db, runId } = {}) {
   let runError = null
   const stepResults = []
 
+  // Everything from here is wrapped so the lock is ALWAYS released on the way
+  // out — happy path, agent failure, OR an unexpected exception in the loop /
+  // finalization. The only exception is an intentional pause `return` inside
+  // the loop, which deliberately keeps the lock so resume can continue (the
+  // lock's TTL is the safety net if resume never comes).
+  try {
   while (true) {
     // Refresh stop signal between every step.
     const stopReq = await latestUnfulfilledStop(db, runId)
@@ -730,4 +794,29 @@ export async function executeRun({ db, runId } = {}) {
     message: `Run finished with status: ${finalStatus}`,
     data: { final_status: finalStatus, error: runError, emergency, stopped: stoppedRequested },
   })
+  } catch (runtimeErr) {
+    // Unexpected failure anywhere in the loop or finalization. Never leak the
+    // lock: drive the run to `failed` (unless a stop/cancel command already
+    // moved it terminal) and release. The TTL would eventually reclaim it,
+    // but releasing now lets the next run for this agent start immediately.
+    console.error('[agent-control] executeRun fatal:', runtimeErr?.message || runtimeErr)
+    try {
+      const cur = await getRun(db, runId)
+      const TERMINAL = new Set(['completed', 'failed', 'cancelled', 'stopped', 'partial_stop', 'stop_failed'])
+      if (!cur || !TERMINAL.has(cur.status)) {
+        await setRunStatus(db, runId, 'failed', {
+          errorMessage: `Orchestrator crashed: ${runtimeErr?.message || runtimeErr}`,
+        })
+      }
+    } catch { /* best-effort */ }
+    await releaseLock(db, { controlRunId: runId }).catch(() => {})
+    try {
+      await recordEvent(db, {
+        controlRunId: runId,
+        eventType: 'control.run.crashed',
+        severity: 'critical',
+        message: `Orchestrator crashed: ${runtimeErr?.message || runtimeErr}`,
+      })
+    } catch { /* best-effort */ }
+  }
 }

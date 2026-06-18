@@ -3548,6 +3548,7 @@ CREATE TABLE IF NOT EXISTS agent_control_locks (
   id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
   lock_name TEXT NOT NULL UNIQUE,
   control_run_id TEXT NOT NULL,
+  owner_token TEXT,
   acquired_by TEXT,
   acquired_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   expires_at DATETIME
