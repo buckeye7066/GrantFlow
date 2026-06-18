@@ -216,7 +216,7 @@ export const AddToPipelineButton = ({ opportunity, onAddToPipeline, organization
   );
 };
 
-export default function SearchResults({ results = [], profileId, onAddToPipeline, organizationName }) {
+export default function SearchResults({ results = [], profileId, onAddToPipeline, organizationName, diagnostics = null }) {
   const [selectedOpportunities, setSelectedOpportunities] = React.useState(new Set());
   const [isProcessing, setIsProcessing] = React.useState(false);
   const [processingProgress, setProcessingProgress] = React.useState({ current: 0, total: 0 });
@@ -355,16 +355,47 @@ export default function SearchResults({ results = [], profileId, onAddToPipeline
   };
 
   if (!results || results.length === 0) {
+    // Zero-result is a diagnosable state, never a dead end (mission Goals 8/9).
+    // When the staged-ladder diagnostics are available, explain what was
+    // searched/expanded and which profile fields to fill in next.
+    const profileGaps = Array.isArray(diagnostics?.profileGaps) ? diagnostics.profileGaps : [];
+    const tierExplanation = diagnostics?.tierExplanation || null;
+    const expansions = [
+      diagnostics?.geoExpanded ? 'expanded the search radius' : null,
+      diagnostics?.directoryOnly ? 'included funding directories' : null,
+      Number(diagnostics?.tierAttempts) > 1 ? `relaxed the match threshold across ${diagnostics.tierAttempts} tiers` : null,
+    ].filter(Boolean);
     return (
       <div className="rounded-xl border bg-white p-12 text-center space-y-4">
         <Search className="w-14 h-14 mx-auto text-slate-300" />
-        <h3 className="text-xl font-semibold text-slate-900">No opportunities matched your profile</h3>
+        <h3 className="text-xl font-semibold text-slate-900">No opportunities matched your profile yet</h3>
         <p className="text-slate-600 max-w-md mx-auto">
-          No funding sources closely matched your profile criteria at this time. This means results would not be relevant enough to show.
+          {tierExplanation
+            || 'No funding sources closely matched your profile criteria at this time.'}
         </p>
-        <p className="text-sm text-muted-foreground">
-          To improve results: add your location (state or ZIP code), profile type, and specific needs to your profile. The more complete your profile, the better we can find grants that truly fit you.
-        </p>
+        {expansions.length > 0 && (
+          <p className="text-sm text-muted-foreground max-w-md mx-auto">
+            We already {expansions.join(', ')} — still no strong matches.
+          </p>
+        )}
+        <div className="max-w-md mx-auto text-left">
+          <p className="text-sm font-medium text-slate-800 mb-1">Next steps to surface real matches:</p>
+          {profileGaps.length > 0 ? (
+            <ul className="list-disc list-inside text-sm text-slate-600 space-y-1">
+              {profileGaps.slice(0, 6).map((gap) => (
+                <li key={typeof gap === 'string' ? gap : gap?.field || JSON.stringify(gap)}>
+                  {typeof gap === 'string' ? gap : (gap?.label || gap?.message || gap?.field)}
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <ul className="list-disc list-inside text-sm text-slate-600 space-y-1">
+              <li>Add your location (state or ZIP code).</li>
+              <li>Set your profile type (individual, nonprofit, church, school, business…).</li>
+              <li>Describe your specific needs or focus areas.</li>
+            </ul>
+          )}
+        </div>
       </div>
     );
   }
