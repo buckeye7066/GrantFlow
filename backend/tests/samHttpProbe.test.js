@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { __testing__ } from '../routes/sam.js'
 
-const { buildHttpProbe } = __testing__
+const { buildHttpProbe, isLoopbackHttpHost } = __testing__
 
 describe('Sam buildHttpProbe presents admin credentials (no more 401 on internal probes)', () => {
   const realFetch = global.fetch
@@ -64,5 +64,36 @@ describe('Sam buildHttpProbe presents admin credentials (no more 401 on internal
     const probe = buildHttpProbe({ headers: {} })
     const r = await probe({ method: 'GET', path: '/api/admin/agent-control/status' })
     expect(r.status).toBe(0)
+  })
+
+  // SECURITY: credentials must never be sent to a client-controlled remote host.
+  it('IGNORES a non-loopback x-sam-internal-host and never sends credentials off-box (SSRF guard)', async () => {
+    const calls = []
+    global.fetch = vi.fn(async (url, opts) => {
+      calls.push({ url, opts })
+      return { status: 200, json: async () => ({ ok: true }), text: async () => 'ok' }
+    })
+
+    // An attacker-controlled host that would otherwise receive ADMIN_TOKEN.
+    const req = {
+      headers: { authorization: 'Bearer caller-admin-jwt', 'x-sam-internal-host': 'http://attacker.example.com' },
+    }
+    const probe = buildHttpProbe(req)
+    await probe({ method: 'GET', path: '/api/admin/agent-control/status' })
+
+    const { url } = calls[0]
+    expect(url).not.toContain('attacker.example.com')         // override rejected
+    expect(url.startsWith('http://127.0.0.1:')).toBe(true)    // fell back to loopback
+  })
+
+  it('rejects sneaky override hosts (credentialed userinfo, non-loopback, bad scheme)', () => {
+    expect(isLoopbackHttpHost('http://127.0.0.1:3911')).toBe(true)
+    expect(isLoopbackHttpHost('http://localhost:8080')).toBe(true)
+    expect(isLoopbackHttpHost('http://[::1]:3000')).toBe(true)
+    expect(isLoopbackHttpHost('http://attacker.example.com')).toBe(false)
+    expect(isLoopbackHttpHost('http://169.254.169.254')).toBe(false)        // cloud metadata
+    expect(isLoopbackHttpHost('http://127.0.0.1.attacker.com')).toBe(false) // suffix trick
+    expect(isLoopbackHttpHost('file:///etc/passwd')).toBe(false)            // non-http scheme
+    expect(isLoopbackHttpHost('not a url')).toBe(false)
   })
 })
