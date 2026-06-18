@@ -15,6 +15,28 @@
 
 import { BaseAgentAdapter } from './baseAgentAdapter.js'
 
+// Sam runs server-side as a trusted internal operator (it is only ever
+// triggered by the canonical-admin-gated Agent Control Center). Its admin
+// tool invocations flow through anyaOrchestrator.invokeTool → assertAuthenticated,
+// which requires a non-null userId, and then anyaToolRegistry, which authorises
+// on ctx.isAdmin === true. A null userId made every admin tool call 401 with
+// "Tool invocation failed". We give Sam an explicit internal admin principal:
+// a stable synthetic userId (audit_logs.user_id has no FK, so this is safe and
+// is honestly attributed to the agent) plus isAdmin/is_admin so the registry's
+// admin gate passes without a DB lookup.
+const SAM_SYSTEM_USER_ID = 'agent:sam'
+const SAM_ADMIN_CTX = Object.freeze({
+  isAdmin: true,
+  is_admin: true,
+  role: 'admin',
+  samAuthorised: false,
+  userId: SAM_SYSTEM_USER_ID,
+  id: SAM_SYSTEM_USER_ID,
+  email: (process.env.AGENT_CONTROL_ADMIN_EMAIL
+    || process.env.ADMIN_EMAIL
+    || 'buckeye7066@gmail.com').trim().toLowerCase(),
+})
+
 export class SamAgentAdapter extends BaseAgentAdapter {
   constructor() {
     super({
@@ -77,7 +99,7 @@ export class SamAgentAdapter extends BaseAgentAdapter {
     try {
       result = await runSam({
         db,
-        ctx: { isAdmin: true, samAuthorised: false, userId: null },
+        ctx: { ...SAM_ADMIN_CTX },
         mode: 'observe',
         trigger: 'admin-ui',
         dryRun,

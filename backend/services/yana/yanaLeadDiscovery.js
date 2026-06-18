@@ -63,11 +63,16 @@ export function getYanaConfig(env = process.env) {
   }
 }
 
-let schemaEnsured = false
-export function _resetYanaSchemaCache() { schemaEnsured = false }
+// Per-db schema cache (WeakMap), not a process-global boolean: a module-global
+// flag is shared across every db in the process, so the SECOND db (a new run, a
+// concurrent test, a multi-tenant handle) skips schema creation and hits
+// "no such table". Keying by the db object makes each independent; in
+// production (one shared db) behaviour is identical. Mirrors agentControlStore.
+let schemaReady = new WeakMap()
+export function _resetYanaSchemaCache() { schemaReady = new WeakMap() }
 
 async function ensureSchema(db) {
-  if (!db || schemaEnsured || typeof db.exec !== 'function') return
+  if (!db || schemaReady.has(db) || typeof db.exec !== 'function') return
   const isPg = db?.dialect === 'postgres'
   const idDefault = isPg ? '(gen_random_uuid()::text)' : '(lower(hex(randomblob(16))))'
   const tsType = isPg ? 'TIMESTAMPTZ' : 'DATETIME'
@@ -118,7 +123,7 @@ async function ensureSchema(db) {
       created_by_user_id TEXT
     );
   `)
-  schemaEnsured = true
+  schemaReady.set(db, true)
 }
 
 function parseJsonArray(v) {
@@ -277,7 +282,7 @@ async function upsertCandidate(db, scored, org, runId) {
       values.contact_confidence, values.lead_score, values.qualification_status,
       values.qualification_reasons_json, values.run_id, existing.id,
     )
-    return { id: existing.id, status, created: false }
+    return { id: existing.id, status, created: false, reasons: qReasons }
   }
 
   const id = crypto.randomUUID()
@@ -297,7 +302,7 @@ async function upsertCandidate(db, scored, org, runId) {
     values.contact_confidence, values.lead_score, values.qualification_status,
     values.qualification_reasons_json, values.run_id,
   )
-  return { id, status, created: true }
+  return { id, status, created: true, reasons: qReasons }
 }
 
 /** Discover + qualify lead candidates from organizations. */
@@ -307,14 +312,35 @@ export async function discoverLeadCandidates(db, { limit = 200, runId = null, lo
   const orgs = await loader(db, { limit })
   let total = 0
   let qualified = 0
+  // Aggregate WHY candidates were disqualified so a 0-qualified run explains
+  // itself instead of being a silent NOOP. This makes the genuine upstream
+  // condition (organizations lack email/website/evidence to clear the score
+  // threshold) visible to the operator on the run summary + Mission Control.
+  const disqualificationReasons = {}
   for (const org of orgs || []) {
     const scored = scoreOrganizationLead(org)
     if (!scored.organization_name) continue
     const res = await upsertCandidate(db, scored, org, runId)
     total += 1
-    if (res.status === 'qualified') qualified += 1
+    if (res.status === 'qualified') {
+      qualified += 1
+    } else {
+      for (const reason of res.reasons || []) {
+        // Collapse the per-org "lead_score_42_below_70" into one stable bucket.
+        const key = reason.startsWith('lead_score_') && reason.includes('below')
+          ? 'lead_score_below_threshold'
+          : reason
+        if (key.endsWith('_meets_threshold') || key.includes('_meets_')) continue
+        disqualificationReasons[key] = (disqualificationReasons[key] || 0) + 1
+      }
+    }
   }
-  return { considered: orgs?.length || 0, candidates_total: total, candidates_qualified: qualified }
+  return {
+    considered: orgs?.length || 0,
+    candidates_total: total,
+    candidates_qualified: qualified,
+    disqualification_reasons: disqualificationReasons,
+  }
 }
 
 /** Dialect-safe "pushed within the last N hours" cutoff expression. */
@@ -448,6 +474,19 @@ export async function runYanaDiscovery(db, { trigger = 'manual', allowLeads = tr
     summary.candidates_total = disc.candidates_total
     summary.candidates_qualified = disc.candidates_qualified
     summary.considered = disc.considered
+    summary.disqualification_reasons = disc.disqualification_reasons || {}
+    // Honest NOOP: when nothing qualified, say why in one line so the run isn't
+    // a silent zero. This is a data/config condition (see audit notes), not a bug.
+    if (disc.candidates_qualified === 0) {
+      const top = Object.entries(disc.disqualification_reasons || {})
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 3)
+        .map(([k, n]) => `${k}×${n}`)
+        .join(', ')
+      summary.noop_reason = disc.considered === 0
+        ? 'no source organizations with a contact email to evaluate'
+        : `0 of ${disc.considered} organizations qualified${top ? ` (${top})` : ''}`
+    }
     if (allowLeads) {
       const pushed = await pushQualifiedToJohn(db)
       summary.leads_pushed_to_john = pushed.leads_pushed_to_john

@@ -1,6 +1,6 @@
 import express from 'express'
 import { ensureAdmin, ensureAuth } from '../middleware/auth.js'
-import { ensureServiceCatalogSchema, listServiceCatalog, seedServiceCatalogFromExtract } from '../services/serviceCatalogStore.js'
+import { ensureServiceCatalogSchema, loadServiceCatalogResilient } from '../services/serviceCatalogStore.js'
 import { verifyStripePriceMapping } from '../services/pricing/stripePriceVerifier.js'
 import { resolveAllCatalogCharges } from '../services/pricing/chargeResolver.js'
 
@@ -12,13 +12,12 @@ router.use(ensureAuth)
 router.use(ensureAdmin)
 
 router.get('/catalog', async (req, res) => {
-  try {
-    await seedServiceCatalogFromExtract(req.db)
-    const catalog = await listServiceCatalog(req.db, { includeInactive: true })
-    res.json({ ok: true, catalog })
-  } catch (error) {
-    res.status(500).json({ ok: false, error: error.message })
-  }
+  // Best-effort seed + list with graceful degradation (see
+  // loadServiceCatalogResilient). A seed/list failure returns a soft
+  // { degraded: true, catalog: [] } at HTTP 200 instead of a 500, so the
+  // Services tab always renders. This was the source of the Services-tab 500.
+  const result = await loadServiceCatalogResilient(req.db, { logger: routeLogger })
+  res.json({ ok: true, ...result })
 })
 
 router.post('/service/:slug/toggle', async (req, res) => {

@@ -8,6 +8,27 @@ import { enforceCanonicalHost } from '@/utils/enforceCanonicalHost.js'
 import { enforceBasename } from '@/utils/enforceBasename.js'
 import { registerQueryClient } from '@/stores/authStore'
 import { migrateLegacyProfileScopedKeys } from '@/utils/profileScopedStorage'
+import { maybeReloadForStaleChunk } from '@/utils/lazyWithRetry'
+
+// Global stale-chunk recovery. After a deploy, the open tab still references
+// chunk hashes that no longer exist; a dynamic import() then fails. lazyWithRetry
+// handles lazy routes, but raw import()s and Vite's modulepreload surface here:
+//   - `vite:preloadError`  — Vite's own event for a failed modulepreload (cancelable)
+//   - `unhandledrejection` — a rejected dynamic import() not caught by a boundary
+// Both delegate to the same dedupe so we reload at most once, then let the
+// RouteErrorBoundary show its message if the chunk is genuinely gone.
+if (typeof window !== 'undefined') {
+  window.addEventListener('vite:preloadError', (event) => {
+    if (maybeReloadForStaleChunk(event?.payload ?? event)) {
+      event.preventDefault?.()
+    }
+  })
+  window.addEventListener('unhandledrejection', (event) => {
+    if (maybeReloadForStaleChunk(event?.reason)) {
+      event.preventDefault?.()
+    }
+  })
+}
 
 const queryClient = new QueryClient({
   defaultOptions: {

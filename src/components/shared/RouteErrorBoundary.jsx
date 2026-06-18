@@ -4,6 +4,7 @@ import { Link } from "react-router-dom"
 import { Button } from "@/components/ui/button"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { createPageUrl } from "@/utils"
+import { maybeReloadForStaleChunk } from "@/utils/lazyWithRetry"
 
 const MAX_RETRIES = 3
 
@@ -40,6 +41,13 @@ export default class RouteErrorBoundary extends React.Component {
   componentDidCatch(error, info) {
     const newCount = (this.state.errorCount || 0) + 1
     this.setState({ errorCount: newCount })
+
+    // Auto-recover from a stale-deploy chunk: try exactly one reload (shared
+    // dedupe with lazyWithRetry, so we never loop). If we already reloaded
+    // once, fall through to the manual "Reload to update" CTA below.
+    if (isStaleChunkError(error)) {
+      maybeReloadForStaleChunk(error)
+    }
 
     // Keep this log — it's the primary breadcrumb when users report "blank screen".
     console.error("[RouteErrorBoundary] route crash", {

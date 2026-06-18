@@ -24,7 +24,44 @@
 import os from 'os'
 import crypto from 'crypto'
 import { createLogger } from '../utils/logger.js'
+import { writeCrawlLog } from './crawlLogStore.js'
 const log = createLogger('crawlerJobState')
+
+/**
+ * Write a canonical crawl_logs run-summary row for a finished job. This is the
+ * single place every crawler passes through, so logging here fixes the
+ * "crawl-log count is 0" gap for all crawler types at once. Best-effort:
+ * fetches the job's type + start time for the summary and never throws.
+ */
+async function logRunSummary(db, jobId, { status, resultCount = null, resultMeta = null, errorMessage = null } = {}) {
+  if (!db || !jobId) return
+  try {
+    const job = await db
+      .prepare('SELECT type, profile_id, created_at, started_at FROM crawler_jobs WHERE id = ? LIMIT 1')
+      .get(jobId)
+    if (!job) return
+    const startedAt = job.started_at || job.created_at
+    let durationMs = null
+    if (startedAt) {
+      const startMs = new Date(startedAt).getTime()
+      if (Number.isFinite(startMs)) durationMs = Math.max(0, Date.now() - startMs)
+    }
+    await writeCrawlLog(db, {
+      source: job.type || 'unknown',
+      status,
+      recordsFound: typeof resultCount === 'number' ? resultCount : 0,
+      durationMs,
+      errorMessage,
+      metadata: {
+        job_id: jobId,
+        profile_id: job.profile_id || null,
+        ...(resultMeta && typeof resultMeta === 'object' ? { result_meta: resultMeta } : {}),
+      },
+    })
+  } catch (err) {
+    log.warn?.(`[crawler-job:log] run-summary log failed (non-fatal): ${err?.message || err}`)
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Worker identity
@@ -233,6 +270,15 @@ export async function completeJob(db, jobId, opts = {}) {
     jobId,
     resultCount: resultCountValue,
   })
+
+  // Canonical run-summary log (crawl_logs). Fixes the 0-count: every crawler
+  // run now leaves a summary row the Diagnostics page can read.
+  await logRunSummary(db, jobId, {
+    status: 'success',
+    resultCount: resultCountValue,
+    resultMeta: opts.resultMeta && typeof opts.resultMeta === 'object' ? opts.resultMeta : null,
+  })
+
   return { ok: true }
 }
 
@@ -300,6 +346,17 @@ export async function failJob(db, jobId, error, opts = {}) {
     error: errorMsg.slice(0, 200),
     changes,
   })
+
+  // Canonical run-summary log (crawl_logs) for the failure, so error history +
+  // count reflect failed runs too. Only when we actually transitioned the job.
+  if (changes > 0) {
+    await logRunSummary(db, jobId, {
+      status: 'error',
+      errorMessage: errorMsg,
+      resultMeta: opts.resultMeta && typeof opts.resultMeta === 'object' ? opts.resultMeta : null,
+    })
+  }
+
   return { ok: changes > 0 }
 }
 
