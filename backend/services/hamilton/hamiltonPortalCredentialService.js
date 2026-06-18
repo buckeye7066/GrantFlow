@@ -22,8 +22,22 @@
  */
 
 import crypto from 'node:crypto'
+import psl from 'psl'
 import { encryptRuntimeSecret, decryptRuntimeSecret } from '../../utils/runtimeSecrets.js'
 import { normalizeHost } from './hamiltonCredentialSessionService.js'
+
+/**
+ * Registrable domain (eTLD+1) via the Public Suffix List. Returns null for
+ * public suffixes ('co.uk', 'edu') and invalid hosts. Using PSL — instead of a
+ * naive last-two-labels split — is what prevents a credential from being scoped
+ * to an entire public suffix (e.g. every '*.co.uk' matching each other) or
+ * leaked across unrelated registrable domains.
+ */
+export function registrableDomain(input) {
+  const h = normalizeHost(input)
+  if (!h) return null
+  try { return psl.get(h) || null } catch { return null }
+}
 
 let ensured = false
 export function _resetCredentialSchemaCache() { ensured = false }
@@ -99,6 +113,9 @@ export async function saveCredential(db, {
   if (!db || !userId || !profileId) throw new Error('userId and profileId required')
   const host = normalizeHost(portalHost)
   if (!host) throw new Error('portalHost required')
+  // Must resolve to a real registrable domain — rejects single labels ('edu')
+  // and public suffixes ('co.uk') that would over-scope the credential.
+  if (!registrableDomain(host)) throw new Error('portalHost must be a full domain (e.g. mtsu.edu)')
   if (!username || !String(username).trim()) throw new Error('username required')
   if (!password || !String(password).trim()) throw new Error('password required')
   await ensureSchema(db)
@@ -172,14 +189,13 @@ export async function getDecryptedCredential(db, { profileId, portalHost } = {})
     `SELECT * FROM hamilton_portal_credentials
        WHERE profile_id = ? AND status = 'active' ORDER BY length(portal_host) DESC`,
   ).all(String(profileId))
-  // Last two labels ≈ registrable domain (e.g. login.mtsu.edu → mtsu.edu), so a
-  // login saved for one MTSU subdomain works across sibling MTSU portals.
-  const baseDomain = (h) => String(h || '').toLowerCase().split('.').slice(-2).join('.')
-  const hostBase = baseDomain(host)
-  const match = (rows || []).find((r) => {
-    const h = String(r.portal_host || '').toLowerCase()
-    return host === h || host.endsWith(`.${h}`) || h.endsWith(`.${host}`) || baseDomain(h) === hostBase
-  })
+  // Match ONLY when the visited host and the saved host share the same
+  // registrable domain (eTLD+1) computed via the Public Suffix List. So a login
+  // saved for any mtsu.edu host works across mtsu.edu portals, but never leaks
+  // across unrelated domains or public suffixes ('foo.co.uk' ≠ 'bar.co.uk').
+  const wantDomain = registrableDomain(host)
+  if (!wantDomain) return null
+  const match = (rows || []).find((r) => registrableDomain(r.portal_host) === wantDomain)
   if (!match || !match.password_ciphertext) return null
   let password = null
   try {

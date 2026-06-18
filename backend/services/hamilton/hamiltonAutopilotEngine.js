@@ -39,6 +39,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
+import { registrableDomain } from './hamiltonPortalCredentialService.js'
 
 const NAV_TIMEOUT_MS = Number(process.env.HAMILTON_AUTOPILOT_NAV_TIMEOUT_MS) || 25_000
 const STEP_TIMEOUT_MS = Number(process.env.HAMILTON_AUTOPILOT_STEP_TIMEOUT_MS) || 8_000
@@ -298,6 +299,16 @@ async function attemptLogin(page, credential) {
     const username = credential?.username
     const password = credential?.password
     if (!username || !password) return false
+    // Origin safety: only type a saved credential into a page whose host shares
+    // the credential's registrable domain (eTLD+1). Defeats a portal that
+    // redirects mid-flow to an attacker origin before the login form. Re-checked
+    // here against the LIVE page.url() right before any field is touched.
+    const allowedDomain = registrableDomain(credential?.portal_host)
+    let currentDomain = null
+    try { currentDomain = registrableDomain(new URL(page.url()).hostname) } catch { return false }
+    if (!allowedDomain || currentDomain !== allowedDomain) {
+      return false
+    }
     const userSelectors = [
       'input[autocomplete="username"]:not([disabled])',
       'input[type="email"]:not([disabled])',
