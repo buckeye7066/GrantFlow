@@ -116,14 +116,35 @@ router.get('/runs/:runId', adminOnly, async (req, res) => {
 // ---------------------------------------------------------------------------
 // Orchestration endpoints
 // ---------------------------------------------------------------------------
+
+// SECURITY: the probe attaches the server's admin/service credentials, so it
+// must ONLY ever talk to this server over loopback. A client-supplied
+// x-sam-internal-host pointing at a remote host would otherwise exfiltrate
+// ADMIN_TOKEN / the admin's Authorization (credential-exfiltration SSRF). Only
+// a loopback http(s) host is accepted; anything else falls back to localhost.
+function isLoopbackHttpHost(value) {
+  try {
+    const u = new URL(value)
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return false
+    // URL.hostname returns IPv6 in bracketed form (e.g. "[::1]") — normalize it.
+    const hostname = u.hostname.replace(/^\[|\]$/g, '')
+    return hostname === '127.0.0.1' || hostname === '::1' || hostname === 'localhost'
+  } catch {
+    return false
+  }
+}
+
 function buildHttpProbe(req) {
   // In-process probe so /readyz checks still work when only the API is up.
   // We use the existing express app's request context via a fresh fetch
   // when available; otherwise return null and the diagnostic skips the
   // HTTP class of checks (those are nice-to-have).
   if (typeof fetch !== 'function') return null
-  const host = req.headers['x-sam-internal-host'] ||
-    `http://127.0.0.1:${process.env.PORT || 3911}`
+  const defaultHost = `http://127.0.0.1:${process.env.PORT || 3911}`
+  const requested = req.headers['x-sam-internal-host']
+  // Honor the override ONLY when it resolves to loopback; never let a caller
+  // redirect credentialed probes to an arbitrary host.
+  const host = requested && isLoopbackHttpHost(requested) ? requested : defaultHost
 
   // Sam probes admin-only + Hamilton endpoints (/api/admin/agent-control/status,
   // /api/admin/agent-telemetry/*, /api/hamilton/automation/*). Those require an
@@ -134,6 +155,7 @@ function buildHttpProbe(req) {
   // (ADMIN_TOKEN, accepted as admin by the auth middleware via X-Admin-Token),
   // and also forward the triggering admin's Authorization header (these /api/sam
   // routes are adminOnly, so the caller is already an admin) as a fallback.
+  // `host` is guaranteed loopback above, so these credentials never leave the box.
   const adminToken = process.env.ADMIN_TOKEN || process.env.ANYA_ADMIN_TOKEN || null
   const forwardedAuth = req.headers.authorization || null
 
@@ -152,8 +174,8 @@ function buildHttpProbe(req) {
   }
 }
 
-// Exposed for tests: assert the probe presents admin credentials.
-export const __testing__ = { buildHttpProbe }
+// Exposed for tests: assert the probe presents admin credentials to loopback only.
+export const __testing__ = { buildHttpProbe, isLoopbackHttpHost }
 
 router.post('/run', adminOnly, async (req, res) => {
   try {
