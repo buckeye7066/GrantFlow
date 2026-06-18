@@ -1,5 +1,6 @@
 // Inspired by react-hot-toast library
 import { useState, useEffect, createContext, useContext } from "react";
+import { getCurrentRoute } from "@/lib/currentRoute";
 
 // Keep toast UI calm: avoid "walls" of notifications.
 const TOAST_LIMIT = 4;
@@ -127,6 +128,10 @@ function toast({ id: providedId, duration, ...props }) {
   const nextToast = {
     ...props,
     id,
+    // Remember where this toast was fired so clicking it can return the
+    // user/admin to that location (unless the caller set an explicit
+    // navigateTo). Captured here at creation time.
+    originRoute: props.originRoute ?? getCurrentRoute(),
     open: true,
     onOpenChange: (open) => {
       if (!open) dismiss();
