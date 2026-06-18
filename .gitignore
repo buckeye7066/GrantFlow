@@ -32,9 +32,18 @@ e2e-backend.log
 e2e-backend.err.log
 test-runner.log
 test-via-npm.log
+# Catch-all for ad-hoc local run logs (browser-test2.log, btest.log,
+# unit-out.log, etc.) so they never clutter the working tree.
+*.log
+# Self-test / readiness logs written by Sam and other background agents.
+docs/_readiness_logs/
 
 # Runtime audit output from Anya / background services.
 audit-reports/
+
+# Nested public-audit clone of the project (its own git repo); must never be
+# committed into the main repo as a nested repo / accidental submodule.
+GrantFlow-public-audit/
 
 # OS / editor
 .DS_Store
