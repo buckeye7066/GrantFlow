@@ -56,3 +56,18 @@ export async function setFafsaStatus(profileId, stage) {
     body: JSON.stringify({ stage }),
   })
 }
+
+/** GET the FAFSA verification-document checklist. */
+export async function getFafsaVerification(profileId) {
+  assertRealProfileId(profileId, 'getFafsaVerification')
+  return apiFetch(`/api/profiles/${profileId}/fafsa-verification`)
+}
+
+/** Toggle one verification document's done-state. */
+export async function setFafsaVerificationDoc(profileId, key, done) {
+  assertRealProfileId(profileId, 'setFafsaVerificationDoc')
+  return apiFetch(`/api/profiles/${profileId}/fafsa-verification`, {
+    method: 'POST',
+    body: JSON.stringify({ key, done }),
+  })
+}

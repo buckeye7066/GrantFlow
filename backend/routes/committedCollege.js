@@ -20,7 +20,10 @@ import {
   buildCollegeAidWorkspace,
 } from '../services/college/committedCollege.js'
 import { planCollegeFundingMerge } from '../services/college/collegeFundingMerge.js'
-import { describeFafsaStatus, normalizeFafsaStatus, setFafsaStage } from '../services/college/fafsaStatus.js'
+import {
+  describeFafsaStatus, normalizeFafsaStatus, setFafsaStage,
+  buildVerificationChecklist, setVerificationDoc,
+} from '../services/college/fafsaStatus.js'
 import { createLogger } from '../utils/logger.js'
 
 const log = createLogger('route:committed-college')
@@ -146,6 +149,42 @@ router.post('/profiles/:profileId/fafsa-status', async (req, res) => {
   } catch (err) {
     log.error('POST fafsa-status failed', { error: err?.message })
     return res.status(500).json({ ok: false, error: 'fafsa_status_update_failed' })
+  }
+})
+
+router.get('/profiles/:profileId/fafsa-verification', async (req, res) => {
+  const user = requireAuthenticatedUser(req, res)
+  if (!user) return
+  const { profileId } = req.params
+  if (!(await userMayAccessProfile(req, profileId))) return res.status(403).json({ error: 'Forbidden' })
+  try {
+    const sections = await loadSections(req.db, profileId)
+    return res.json({ ok: true, verification: buildVerificationChecklist(sections.education || {}) })
+  } catch (err) {
+    log.error('GET fafsa-verification failed', { error: err?.message })
+    return res.status(500).json({ ok: false, error: 'fafsa_verification_failed' })
+  }
+})
+
+router.post('/profiles/:profileId/fafsa-verification', async (req, res) => {
+  const user = requireAuthenticatedUser(req, res)
+  if (!user) return
+  const { profileId } = req.params
+  const key = req.body?.key
+  const done = req.body?.done
+  if (!key) return res.status(400).json({ ok: false, error: 'key is required' })
+  if (!(await userMayAccessProfile(req, profileId))) return res.status(403).json({ error: 'Forbidden' })
+  try {
+    const sections = await loadSections(req.db, profileId)
+    const education = sections.education || {}
+    const result = setVerificationDoc(education, key, done)
+    if (!result.ok) return res.status(400).json({ ok: false, error: result.error })
+    education.fafsa_verification_docs = result.fafsa_verification_docs
+    await persistEducation(req.db, profileId, getAuthUserId(user), education)
+    return res.json({ ok: true, verification: buildVerificationChecklist(education) })
+  } catch (err) {
+    log.error('POST fafsa-verification failed', { error: err?.message })
+    return res.status(500).json({ ok: false, error: 'fafsa_verification_update_failed' })
   }
 })
 

@@ -11,6 +11,9 @@ import {
   normalizeFafsaStatus,
   setFafsaStage,
   describeFafsaStatus,
+  FAFSA_VERIFICATION_DOCUMENTS,
+  buildVerificationChecklist,
+  setVerificationDoc,
 } from '../services/college/fafsaStatus.js'
 
 describe('stage basics', () => {
@@ -73,6 +76,38 @@ describe('setFafsaStage', () => {
     const r = setFafsaStage(status, 'submitted', { now: 'x' })
     expect(r.status.history.length).toBeLessThanOrEqual(50)
     expect(r.status.history.at(-1).stage).toBe('submitted')
+  })
+})
+
+describe('buildVerificationChecklist', () => {
+  it('is active only at the verification stage', () => {
+    expect(buildVerificationChecklist({ fafsa_status: { stage: 'submitted' } }).active).toBe(false)
+    expect(buildVerificationChecklist({ fafsa_status: { stage: 'verification' } }).active).toBe(true)
+  })
+  it('reflects done-state and remaining count', () => {
+    const edu = { fafsa_status: { stage: 'verification' }, fafsa_verification_docs: { verification_worksheet: true } }
+    const vc = buildVerificationChecklist(edu)
+    expect(vc.total).toBe(FAFSA_VERIFICATION_DOCUMENTS.length)
+    expect(vc.items.find((i) => i.key === 'verification_worksheet').done).toBe(true)
+    expect(vc.remaining).toBe(vc.total - 1)
+    expect(vc.complete).toBe(false)
+  })
+  it('is complete when every doc is done', () => {
+    const docs = Object.fromEntries(FAFSA_VERIFICATION_DOCUMENTS.map((d) => [d.key, true]))
+    const vc = buildVerificationChecklist({ fafsa_status: { stage: 'verification' }, fafsa_verification_docs: docs })
+    expect(vc.remaining).toBe(0)
+    expect(vc.complete).toBe(true)
+  })
+})
+
+describe('setVerificationDoc', () => {
+  it('toggles a known document', () => {
+    const r = setVerificationDoc({}, 'w2_forms', true)
+    expect(r.ok).toBe(true)
+    expect(r.fafsa_verification_docs.w2_forms).toBe(true)
+  })
+  it('rejects an unknown document', () => {
+    expect(setVerificationDoc({}, 'bogus', true)).toEqual({ ok: false, error: 'unknown_document' })
   })
 })
 

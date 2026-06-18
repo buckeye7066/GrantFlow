@@ -13,7 +13,7 @@
  * "not committed" / null fields, never fabricated amounts.
  */
 
-import { describeFafsaStatus } from './fafsaStatus.js'
+import { describeFafsaStatus, buildVerificationChecklist } from './fafsaStatus.js'
 
 // Statuses that mean "this is the school the student chose".
 export const COMMITTED_STATUSES = Object.freeze([
@@ -179,6 +179,10 @@ export function buildCollegeAidWorkspace({ sections = {}, matchedFunding = [], h
     efc_sai_band: edu.efc_sai_band || edu.sai_band || null,
     pell_grant_eligible: Boolean(edu.pell_grant_eligible),
     first_generation: Boolean(edu.first_generation_college_student),
+  }
+  if (fafsaStatus.stage === 'verification') {
+    const vc = buildVerificationChecklist(edu)
+    fafsa.verification = { active: true, remaining: vc.remaining, total: vc.total, complete: vc.complete }
   }
 
   const unmetNeed = coa.total === null
