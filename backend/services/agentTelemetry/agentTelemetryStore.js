@@ -299,6 +299,32 @@ export async function countEventsByAgent(db, { startIso, endIso } = {}) {
   })
 }
 
+/**
+ * Canonical "last run" timestamp for one agent: the most recent unified
+ * activity event. This is the SAME source the telemetry summary cards read
+ * (countEventsByAgent -> MAX(created_at)), so the Control Center per-agent
+ * status cards can use it to stay in agreement with the telemetry timeline
+ * instead of reading each agent's own run-table `started_at` (which differs
+ * from the event time by the run's duration). Returns null when no unified
+ * events exist yet (older DBs / first boot), letting callers fall back to
+ * their per-agent run table.
+ */
+export async function getLastRunAtFromEvents(db, agentName) {
+  if (!db || !agentName) return null
+  const exists = await tableExists(db, 'agent_activity_events')
+  if (!exists) return null
+  return withProfileScope({ bypass: true }, async () => {
+    try {
+      const row = await db
+        .prepare('SELECT MAX(created_at) AS last_at FROM agent_activity_events WHERE agent_name = ?')
+        .get(String(agentName).toLowerCase())
+      return row?.last_at || null
+    } catch {
+      return null
+    }
+  })
+}
+
 function numericOrNull(v) {
   if (v === null || v === undefined) return null
   const n = Number(v)

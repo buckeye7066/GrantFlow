@@ -612,6 +612,41 @@ export async function sweepExpiredLocks(db, { now = NOW() } = {}) {
   }
 }
 
+// Autonomous orphaned-lock recovery.
+//
+// sweepExpiredLocks already runs before every acquireLock, so a lock left
+// behind by a crashed/restarted worker is reclaimed the next time ANY run
+// tries to acquire it. But if no run is attempted for a while (idle system),
+// an expired lock lingers and the Control Center keeps reporting the agent as
+// "locked". The periodic sweeper closes that gap: it reclaims expired locks on
+// a timer regardless of acquire traffic, so locks self-heal even while idle.
+const LOCK_SWEEP_INTERVAL_MS = 5 * 60 * 1000 // 5m
+let lockSweeperHandle = null
+
+export function startLockSweeper(db, { intervalMs = LOCK_SWEEP_INTERVAL_MS, logger = console } = {}) {
+  if (!db) return null
+  if (lockSweeperHandle) return lockSweeperHandle // idempotent — never stack timers
+  const period = Math.max(MIN_LOCK_TTL_MS, Number(intervalMs) || LOCK_SWEEP_INTERVAL_MS)
+  // Reclaim anything already orphaned at boot, then on a steady cadence.
+  sweepExpiredLocks(db).catch(() => {})
+  lockSweeperHandle = setInterval(() => {
+    sweepExpiredLocks(db).catch((err) =>
+      logger?.warn?.('[agent-control] periodic lock sweep failed:', err?.message || err),
+    )
+  }, period)
+  // Never keep the process alive solely for the sweeper.
+  if (typeof lockSweeperHandle?.unref === 'function') lockSweeperHandle.unref()
+  lockLog('sweeper.started', { intervalMs: period })
+  return lockSweeperHandle
+}
+
+export function stopLockSweeper() {
+  if (lockSweeperHandle) {
+    clearInterval(lockSweeperHandle)
+    lockSweeperHandle = null
+  }
+}
+
 /**
  * Acquire a lock with a TTL, an owner token, atomic takeover of an expired
  * holder, and bounded retry-with-backoff. Returns a lease descriptor:

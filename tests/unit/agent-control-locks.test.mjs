@@ -24,6 +24,8 @@ import {
   releaseLock,
   withLock,
   sweepExpiredLocks,
+  startLockSweeper,
+  stopLockSweeper,
   getLock,
 } from '../../backend/services/agentControl/agentControlStore.js'
 import { startRun } from '../../backend/services/agentControl/agentControlOrchestrator.js'
@@ -120,6 +122,30 @@ test('sweepExpiredLocks reclaims only expired rows', async () => {
   assert.equal(swept, 1, 'only the expired lock should be swept')
   assert.equal(await getLock(db, 'agent_control:agent:robert'), null)
   assert.ok(await getLock(db, 'agent_control:agent:john'), 'live lock must survive')
+})
+
+test('startLockSweeper reclaims an orphaned lock on boot — no acquire required (idle self-heal)', async () => {
+  const db = await freshDb()
+  stopLockSweeper() // ensure a clean module-global handle
+  // A crashed worker left an expired lock and nothing ever tries to acquire it.
+  plantLock(db, { lockName: SAM_LOCK, runId: 'dead-run', expiresAt: new Date(Date.now() - 60_000).toISOString() })
+  assert.ok(await getLock(db, SAM_LOCK), 'orphaned lock present before the sweeper runs')
+
+  startLockSweeper(db, { intervalMs: 60_000, logger: { warn() {} } })
+  // The boot sweep is fire-and-forget; let the microtask/IO settle.
+  await new Promise((r) => setTimeout(r, 50))
+
+  assert.equal(await getLock(db, SAM_LOCK), null, 'idle orphaned lock must self-heal via the periodic sweeper')
+  stopLockSweeper()
+})
+
+test('startLockSweeper is idempotent — it never stacks timers', async () => {
+  const db = await freshDb()
+  stopLockSweeper()
+  const h1 = startLockSweeper(db, { intervalMs: 60_000, logger: { warn() {} } })
+  const h2 = startLockSweeper(db, { intervalMs: 60_000, logger: { warn() {} } })
+  assert.equal(h1, h2, 'a second start returns the same handle instead of starting a second timer')
+  stopLockSweeper()
 })
 
 test('owner-token fence: a stale owner cannot release a successor\'s lock', async () => {

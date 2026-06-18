@@ -14,6 +14,7 @@
  */
 
 import { BaseAgentAdapter } from './baseAgentAdapter.js'
+import { getLastRunAtFromEvents } from '../../agentTelemetry/agentTelemetryStore.js'
 
 // Sam runs server-side as a trusted internal operator (it is only ever
 // triggered by the canonical-admin-gated Agent Control Center). Its admin
@@ -55,10 +56,13 @@ export class SamAgentAdapter extends BaseAgentAdapter {
         .get()
       last = row || null
     } catch { /* sam_runs may not exist on bare test DBs */ }
+    // Reconcile "last run" with the telemetry timeline: both read the unified
+    // agent_activity_events stream. Fall back to the run table on older DBs.
+    const lastRunAt = (await getLastRunAtFromEvents(db, 'sam')) || last?.started_at || null
     return {
       ...base,
       installed: true,
-      last_run_at: last?.started_at || null,
+      last_run_at: lastRunAt,
       last_status: last?.status || null,
       health: last?.status === 'failed' ? 'error' : last ? 'healthy' : 'idle',
       details: last,

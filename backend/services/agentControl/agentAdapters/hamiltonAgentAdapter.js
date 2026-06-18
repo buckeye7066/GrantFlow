@@ -18,6 +18,7 @@
  */
 
 import { BaseAgentAdapter } from './baseAgentAdapter.js'
+import { getLastRunAtFromEvents } from '../../agentTelemetry/agentTelemetryStore.js'
 
 export class HamiltonAgentAdapter extends BaseAgentAdapter {
   constructor() {
@@ -51,11 +52,12 @@ export class HamiltonAgentAdapter extends BaseAgentAdapter {
         .get()
       last = r || null
     } catch { /* table may not exist */ }
+    const lastRunAt = (await getLastRunAtFromEvents(db, 'hamilton')) || last?.started_at || null
     return {
       ...base,
       installed: true,
       queue_depth: queueDepth,
-      last_run_at: last?.started_at || null,
+      last_run_at: lastRunAt,
       last_status: last?.status || null,
       health: openBlockers > 0 ? 'warning' : last?.status === 'failed' ? 'error' : last ? 'healthy' : 'idle',
       open_blockers: openBlockers,
