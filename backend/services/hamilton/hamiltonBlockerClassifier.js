@@ -3,7 +3,7 @@
  *
  * Pure, deterministic blocker classifier. Given an arbitrary blocker
  * signal — text from a portal page, an engine `blocker_kind`, or a
- * preflight finding — returns one of fifteen canonical categories
+ * preflight finding — returns one of sixteen canonical categories
  * defined by the Hard-Stop Resolver spec.
  *
  *   01 missing_required_information
@@ -13,14 +13,20 @@
  *   05 two_factor_required
  *   06 captcha_required
  *   07 payment_required
- *   08 wet_signature_required
- *   09 legal_attestation_required
- *   10 portal_terms_block
- *   11 portal_anti_bot_block
- *   12 ambiguous_required_field
- *   13 final_review_screen
- *   14 deadline_expired
- *   15 unknown_application_method
+ *   08 wet_signature_required        (hand-written / notarized — print & sign)
+ *   09 digital_signature_required    (e-sign in the portal — user must sign)
+ *   10 legal_attestation_required    (certify under penalty / oath — judgment)
+ *   11 portal_terms_block
+ *   12 portal_anti_bot_block
+ *   13 ambiguous_required_field
+ *   14 final_review_screen
+ *   15 deadline_expired
+ *   16 unknown_application_method
+ *
+ * 08/09/10 are deliberately distinct: a wet signature needs ink, a digital
+ * signature needs the applicant to e-sign (Hamilton never forges either), and
+ * an attestation needs fresh personal/legal judgment — different hard stops,
+ * different resolutions.
  *
  * The classifier never throws. Unrecognised inputs come back as
  * `category='unknown'` so callers can always surface them in the
@@ -36,6 +42,7 @@ export const BLOCKER_CATEGORIES = Object.freeze([
   'captcha_required',
   'payment_required',
   'wet_signature_required',
+  'digital_signature_required',
   'legal_attestation_required',
   'portal_terms_block',
   'portal_anti_bot_block',
@@ -54,6 +61,9 @@ const ENGINE_KIND_MAP = Object.freeze({
   captcha: 'captcha_required',
   payment: 'payment_required',
   signature: 'wet_signature_required',
+  digital_signature: 'digital_signature_required',
+  esignature: 'digital_signature_required',
+  e_signature: 'digital_signature_required',
   attestation: 'legal_attestation_required',
   validation: 'ambiguous_required_field',
   no_progress: 'unknown_application_method',
@@ -70,7 +80,11 @@ const TEXT_RULES = Object.freeze([
   { rx: /\b(g[-\s]?recaptcha|recaptcha|hcaptcha|captcha|i'?m\s*not\s*a\s*robot|cloudflare\s*challenge|bot\s*challenge|prove\s*you'?re\s*human|image\s*puzzle)\b/i, category: 'captcha_required' },
   { rx: /\b(application\s*fee|transcript\s*fee|portal\s*fee|test\s*score\s*send\s*fee|submission\s*fee|processing\s*fee|payment\s*required|fee\s*of|\$[0-9]+\.\d{2})\b/i, category: 'payment_required' },
   { rx: /\b(wet\s*signature|hand[-\s]*written\s*signature|notarized?|signed\s*in\s*ink|original\s*signature|sign\s*and\s*mail)\b/i, category: 'wet_signature_required' },
-  { rx: /\b(electronic\s*signature|e[-\s]?signature|sign\s*here|sign\s*below|penalty\s*of\s*perjury|under\s*oath|i\s*certify|i\s*swear|i\s*understand|i\s*am\s*the\s*applicant|legal\s*attestation|i\s*affirm|i\s*declare\s*under\s*penalty)\b/i, category: 'legal_attestation_required' },
+  // Digital/e-signature must be checked BEFORE attestation: it's a signature
+  // action the applicant performs in the portal, distinct from certifying a
+  // legal statement. Hamilton never applies it on the user's behalf.
+  { rx: /\b(electronic\s*signature|e[-\s]?signature|e[-\s]?sign\b|digital\s*signature|sign\s*here|sign\s*below|docusign|adobe\s*sign|hellosign|type\s*your\s*name\s*to\s*sign|draw\s*your\s*signature)\b/i, category: 'digital_signature_required' },
+  { rx: /\b(penalty\s*of\s*perjury|under\s*oath|i\s*certify|i\s*swear|i\s*understand|i\s*am\s*the\s*applicant|legal\s*attestation|i\s*affirm|i\s*declare\s*under\s*penalty)\b/i, category: 'legal_attestation_required' },
   { rx: /(automated\s*(submissions?|access|completion)|automation)\s*(is\s+|are\s+)?(prohibit|forbid|not\s*permit|not\s*allow)|no\s*bots?\s*allowed|robots\s*not\s*allowed|terms\s*of\s*service\s*prohibit|third[-\s]*party\s*agent\s*submission/i, category: 'portal_terms_block' },
   { rx: /\b(access\s*denied|forbidden|too\s*many\s*requests|rate[-\s]*limit|blocked\s*for\s*automated|cloudflare\s*ray\s*id|akamai|imperva|datadome|perimeterx)\b/i, category: 'portal_anti_bot_block' },
   { rx: /\b(deadline\s*has\s*passed|application\s*closed|no\s*longer\s*accepting|past\s*due|submissions\s*closed|expired)\b/i, category: 'deadline_expired' },
