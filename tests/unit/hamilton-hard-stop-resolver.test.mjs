@@ -92,8 +92,11 @@ function resetCaches() {
 // ── classifier ──────────────────────────────────────────────────────
 
 describe('hamiltonBlockerClassifier', () => {
-  it('exports the 15 spec categories', () => {
-    assert.equal(BLOCKER_CATEGORIES.length, 15)
+  it('exports the 16 spec categories incl. distinct signature/attestation', () => {
+    assert.equal(BLOCKER_CATEGORIES.length, 16)
+    assert.ok(BLOCKER_CATEGORIES.includes('wet_signature_required'))
+    assert.ok(BLOCKER_CATEGORIES.includes('digital_signature_required'))
+    assert.ok(BLOCKER_CATEGORIES.includes('legal_attestation_required'))
   })
 
   it('classifies preflight inputs', () => {
@@ -110,6 +113,7 @@ describe('hamiltonBlockerClassifier', () => {
     assert.equal(classifyBlocker({ kind: 'captcha' }).category, 'captcha_required')
     assert.equal(classifyBlocker({ kind: 'payment' }).category, 'payment_required')
     assert.equal(classifyBlocker({ kind: 'signature' }).category, 'wet_signature_required')
+    assert.equal(classifyBlocker({ kind: 'digital_signature' }).category, 'digital_signature_required')
     assert.equal(classifyBlocker({ kind: 'attestation' }).category, 'legal_attestation_required')
     assert.equal(classifyBlocker({ kind: 'validation' }).category, 'ambiguous_required_field')
     assert.equal(classifyBlocker({ kind: 'too_many_pages' }).category, 'portal_anti_bot_block')
@@ -121,6 +125,8 @@ describe('hamiltonBlockerClassifier', () => {
     assert.equal(classifyBlocker({ text: 'Please complete the reCAPTCHA' }).category, 'captcha_required')
     assert.equal(classifyBlocker({ text: 'Application fee of $25.00 is required' }).category, 'payment_required')
     assert.equal(classifyBlocker({ text: 'Hand-written signature required' }).category, 'wet_signature_required')
+    assert.equal(classifyBlocker({ text: 'Please add your electronic signature below' }).category, 'digital_signature_required')
+    assert.equal(classifyBlocker({ text: 'Sign here to continue' }).category, 'digital_signature_required')
     assert.equal(classifyBlocker({ text: 'I certify under penalty of perjury' }).category, 'legal_attestation_required')
     assert.equal(classifyBlocker({ text: 'Automated submissions are prohibited' }).category, 'portal_terms_block')
     assert.equal(classifyBlocker({ text: 'Cloudflare Ray ID 12345 — access denied' }).category, 'portal_anti_bot_block')

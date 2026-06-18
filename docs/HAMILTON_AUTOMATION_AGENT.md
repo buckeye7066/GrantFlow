@@ -246,7 +246,7 @@ node --test tests/unit/hamilton-automation.test.mjs
 
 Hamilton never gives up at the first portal hiccup. Every detected blocker
 flows through the **Hard-Stop Resolver**, which classifies the blocker
-into one of fifteen canonical categories and tries an approved
+into one of sixteen canonical categories and tries an approved
 resolution strategy *before* asking the user.
 
 | Category | Resolver strategy | Lawful guard |
@@ -259,6 +259,7 @@ resolution strategy *before* asking the user.
 | captcha_required | reuse session that does not trigger CAPTCHA | never solve / spoof |
 | payment_required | charge inside `hamilton_payment_authorizations` envelope, record receipt | tokenised refs only, no raw card data |
 | wet_signature_required | always degrade to printable signature packet | never forge |
+| digital_signature_required | fill everything else, then escalate for the applicant to e-sign | never e-sign on the user's behalf |
 | legal_attestation_required | auto-tick only routine attestations matching `hamilton_attestation_authorizations` patterns | never tick penalty-of-perjury text |
 | portal_terms_block | switch to `policy.fallback_path` (pdf_docx / mail / fax / email / manual / api) | always respect ToS |
 | portal_anti_bot_block | retry with saved session, otherwise switch to packet | no stealth / fingerprint evasion |

@@ -135,6 +135,14 @@ export const BLOCKER_PROFILE = Object.freeze({
     admin_required: true,
     user_required: true,
   },
+  digital_signature_required: {
+    title: 'Electronic signature required',
+    message: 'The portal requires the applicant\'s electronic signature. Hamilton never signs on your behalf — Hamilton completed everything else; e-sign and Hamilton will resume.',
+    required_action: 'review',
+    severity: 'warning',
+    admin_required: true,
+    user_required: true,
+  },
   legal_attestation_required: {
     title: 'Attestation needs personal review',
     message: 'This attestation requires fresh personal judgment. Review the language and confirm the decision.',
@@ -296,6 +304,9 @@ export async function resolveBlocker(db, ctx, blockerInput) {
       break
     case 'wet_signature_required':
       directive = await resolveWetSignature(db, ctx, blockerInput)
+      break
+    case 'digital_signature_required':
+      directive = await resolveDigitalSignature(db, ctx, blockerInput)
       break
     case 'legal_attestation_required':
       directive = await resolveAttestation(db, ctx, blockerInput)
@@ -497,6 +508,15 @@ async function resolveWetSignature(db, ctx, input) {
   return degraded('wet_signature_packet', 'pdf_docx',
     'Wet signature is required. Hamilton prepared the packet under profile Documents and queued mailing instructions.',
     { fallback: 'pdf_docx' })
+}
+
+async function resolveDigitalSignature(db, ctx, input) {
+  // Hamilton NEVER applies a digital/electronic signature on the applicant's
+  // behalf — it is the user's own legal signature. Hamilton fills everything
+  // else, then escalates so the user e-signs; the task resumes afterward.
+  return escalate('ask_user_to_esign',
+    'This application requires the applicant\'s electronic signature. Hamilton completed everything else and will resume after you e-sign.',
+    { detail: String(input?.text || input?.detail || input?.context?.label || '').slice(0, 200) })
 }
 
 async function resolveAttestation(db, ctx, input) {
