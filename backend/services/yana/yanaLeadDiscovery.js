@@ -35,6 +35,34 @@ export const QUALIFY_THRESHOLD = Number(process.env.YANA_QUALIFY_THRESHOLD || 70
 export const DAILY_LEAD_CAP = Number(process.env.YANA_DAILY_LEAD_CAP || 50)
 export const CAP_WINDOW_HOURS = Number(process.env.YANA_CAP_WINDOW_HOURS || 24)
 
+function readEnvBool(env, name, fallback) {
+  const raw = env?.[name]
+  if (raw === null || raw === undefined || raw === '') return fallback
+  return /^(1|true|yes|on)$/i.test(String(raw).trim())
+}
+
+/**
+ * Background-runtime config for Yana (Phase 9). OFF by default — Yana only runs
+ * unattended when an admin opts in via env, exactly like Robert/John/Sam.
+ *   YANA_ENABLED            master switch (default false)
+ *   YANA_RUN_ON_STARTUP     run once shortly after boot
+ *   YANA_RUN_ON_SCHEDULE    run on the recurring interval
+ *   YANA_SCHEDULE           cron-ish spec ("0 * * * *" hourly, "0 H * * *" daily)
+ *   YANA_ALLOW_LEADS        push qualified leads to John (default true); when
+ *                           false Yana observes only (qualify, never push)
+ *   YANA_DISCOVERY_LIMIT    max organizations scanned per cycle (default 200)
+ */
+export function getYanaConfig(env = process.env) {
+  return {
+    enabled: readEnvBool(env, 'YANA_ENABLED', false),
+    runOnStartup: readEnvBool(env, 'YANA_RUN_ON_STARTUP', false),
+    runOnSchedule: readEnvBool(env, 'YANA_RUN_ON_SCHEDULE', false),
+    schedule: String(env?.YANA_SCHEDULE || '0 * * * *'),
+    allowLeads: readEnvBool(env, 'YANA_ALLOW_LEADS', true),
+    limit: Number(env?.YANA_DISCOVERY_LIMIT || 200),
+  }
+}
+
 let schemaEnsured = false
 export function _resetYanaSchemaCache() { schemaEnsured = false }
 
