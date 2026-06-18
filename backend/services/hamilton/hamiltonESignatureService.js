@@ -87,8 +87,8 @@ export function buildESignEnvelope({
       pages: d.pages || null,
     })),
     instructions:
-      `Please review and sign the attached pages. Hamilton prepared the application; '
-      + 'the only step left is your signature.`,
+      'Please review and sign the attached pages. Hamilton prepared the '
+      + 'application; the only step left is your signature.',
     routing_method: 'external_compliant_provider',
   }
 }

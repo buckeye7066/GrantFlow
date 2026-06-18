@@ -84,7 +84,11 @@ export async function fetchReminderSnapshot(db, lookaheadDays = DAYS_LOOKAHEAD, 
     'g.deadline IS NOT NULL',
     'g.deadline >= ?',
     'g.deadline <= ?',
-    "g.status IN ('discovered', 'interested', 'drafting', 'app_prep', 'submission_ready')",
+    // Canonical pipeline stages (shared/pipelineStages.js) for which an
+    // upcoming deadline is actionable. NOTE: must use canonical names — the
+    // old 'submission_ready' is not a real stage, so the filter silently
+    // matched nothing and deadline reminders never fired.
+    "g.status IN ('discovered', 'interested', 'gathering_documents', 'drafting', 'ready_to_submit', 'app_prep')",
   ]
   const deadlineParams = [todayStr, endDateStr]
 

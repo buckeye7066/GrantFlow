@@ -293,11 +293,6 @@ router.post('/match', async (req, res) => {
       return res.status(404).json({ error: 'Profile not found' });
     }
     
-    // Parse JSON fields safely
-    const keywords = safeParseJSON(profile.keywords, []);
-    const focusAreas = safeParseJSON(profile.focus_areas, []);
-    const programAreas = safeParseJSON(profile.program_areas, []);
-    
     const isPostgresMatch = req.db?.dialect === 'postgres'
     const activeMatch = isPostgresMatch ? 'TRUE' : '1'
 
@@ -328,95 +323,27 @@ router.post('/match', async (req, res) => {
       return res.json({ opportunities: [], count: 0, profile_id });
     }
     
-    // Score opportunities using keyword matching
+    // Canonical scoring ONLY. matchEngine.scoreOpportunity (imported as
+    // calculateMatchScore) is the sole match authority — this route previously
+    // hand-rolled a keyword scorer with a hardcoded 50-point base + ad-hoc
+    // bonuses, which is a forbidden competing match authority (mission Goals
+    // 6 & 7). We now delegate to the canonical engine and use the canonical
+    // threshold config instead of a hardcoded number.
     const scoredOpportunities = opportunities.map(opp => {
-      const oppText = `${opp.title || ''} ${opp.description || ''} ${opp.sponsor || ''}`.toLowerCase();
-      const eligibility = safeParseJSON(opp.eligibility_bullets, []).join(' ').toLowerCase();
-      const combined = `${oppText} ${eligibility}`;
-      
-      let score = 50; // Base score
-      const matchReasons = [];
-      
-      // Geographic match
-      if (opp.is_national || opp.state === profile.state) {
-        score += 10;
-        matchReasons.push('Geographic match');
-      }
-      
-      // Keyword matching
-      const allKeywords = [...keywords, ...focusAreas, ...programAreas];
-      const matchedKeywords = [];
-      
-      allKeywords.forEach(keyword => {
-        if (keyword && combined.includes(keyword.toLowerCase())) {
-          score += 5;
-          matchedKeywords.push(keyword);
-        }
-      });
-      
-      if (matchedKeywords.length > 0) {
-        matchReasons.push(`Keywords: ${matchedKeywords.slice(0, 3).join(', ')}`);
-      }
-      
-      // Applicant type matching
-      if (profile.applicant_type) {
-        const typeKeywords = {
-          'individual_need': ['individual', 'personal', 'person', 'citizen'],
-          'nonprofit': ['nonprofit', '501c3', 'organization', 'charity'],
-          'small_business': ['business', 'entrepreneur', 'startup', 'company'],
-          'student': ['student', 'scholarship', 'education', 'college', 'university']
-        };
-        
-        const typeMatchKeywords = typeKeywords[profile.applicant_type] || [];
-        typeMatchKeywords.forEach(kw => {
-          if (combined.includes(kw)) {
-            score += 5;
-            if (!matchReasons.includes('Applicant type match')) {
-              matchReasons.push('Applicant type match');
-            }
-          }
-        });
-      }
-      
-      // Veteran matching
-      if (profile.veteran && (combined.includes('veteran') || combined.includes('military'))) {
-        score += 15;
-        matchReasons.push('Veteran eligible');
-      }
-      
-      // Disability matching
-      if (profile.disabled && (combined.includes('disab') || combined.includes('special needs'))) {
-        score += 15;
-        matchReasons.push('Disability support');
-      }
-      
-      // First generation matching
-      if (profile.first_generation && combined.includes('first generation')) {
-        score += 10;
-        matchReasons.push('First generation');
-      }
-      
-      // Low income matching
-      if (profile.snap_recipient || profile.ssi_recipient || profile.tanf_recipient) {
-        if (combined.includes('low income') || combined.includes('need-based') || combined.includes('financial need')) {
-          score += 10;
-          matchReasons.push('Need-based');
-        }
-      }
-      
+      const matchResult = calculateMatchScore(profile, opp);
       return {
         ...opp,
         eligibility_bullets: safeParseJSON(opp.eligibility_bullets, []),
         categories: safeParseJSON(opp.categories, []),
         keywords: safeParseJSON(opp.keywords, []),
-        match_score: Math.min(score, 100),
-        match_reasons: matchReasons.slice(0, 5)
+        match_score: matchResult.score,
+        match_reasons: Array.isArray(matchResult.reasons) ? matchResult.reasons.slice(0, 5) : [],
       };
     });
-    
-    // Sort by score and limit
+
+    // Sort by canonical score and limit (threshold from canonical config).
     const topMatches = scoredOpportunities
-      .filter(o => o.match_score >= 50)
+      .filter(o => o.match_score >= DEFAULT_MIN_SCORE)
       .sort((a, b) => b.match_score - a.match_score)
       .slice(0, limit);
     

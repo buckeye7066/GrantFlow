@@ -481,6 +481,7 @@ export async function runHamiltonCycle(db, {
   // If the adapter signalled SUBMITTED and we have an apply-engine row,
   // mirror the submission so the rest of the system knows.
   if (result.outcome === ADAPTER_OUTCOMES.SUBMITTED && applicationId) {
+    let mirrored = false
     try {
       await markSubmitted({
         db,
@@ -492,8 +493,16 @@ export async function runHamiltonCycle(db, {
           task_id: taskId,
         },
       })
-    } catch (_err) { /* non-fatal */ }
-    await updateApplicationTask(db, taskId, { submittedAt: new Date().toISOString() })
+      mirrored = true
+    } catch (err) {
+      // Never claim a submission we did not actually record. If the
+      // apply-engine mirror fails, log it and DO NOT mark the task submitted —
+      // leave it for review instead of falsely showing "submitted".
+      console.warn(`[hamilton] markSubmitted failed for task ${taskId}; not marking submitted: ${err?.message || err}`)
+    }
+    if (mirrored) {
+      await updateApplicationTask(db, taskId, { submittedAt: new Date().toISOString() })
+    }
   }
 
   await appendTaskEvent(db, {
