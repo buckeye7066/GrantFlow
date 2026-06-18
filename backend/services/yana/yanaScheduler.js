@@ -15,6 +15,7 @@
  */
 
 import { runYanaDiscovery, getYanaConfig } from './yanaLeadDiscovery.js'
+import { runYanaWebCrawl, getYanaCrawlerConfig, registerConfiguredWebSources } from './yanaWebCrawler.js'
 
 let _running = false
 let _interval = null
@@ -44,6 +45,20 @@ export async function runYanaScheduledCycle({ db, deps = {}, logger = console, t
   if (_running) return { skipped: true, reason: 'already_running' }
   _running = true
   try {
+    // Optional broad-web client discovery first (default OFF, vetted sources
+    // only) so freshly-crawled orgs are scored in this same cycle. Best-effort.
+    let webCrawl = null
+    const crawlerCfg = getYanaCrawlerConfig()
+    if (crawlerCfg.enabled && crawlerCfg.sources.length) {
+      try {
+        registerConfiguredWebSources(crawlerCfg)
+        webCrawl = await runYanaWebCrawl(db, { config: crawlerCfg, logger })
+        logger?.info?.('yana.scheduler.web_crawl', { inserted: webCrawl?.inserted, sources: webCrawl?.sources_run })
+      } catch (crawlErr) {
+        logger?.warn?.('yana.scheduler.web_crawl_failed', { message: String(crawlErr?.message || crawlErr) })
+      }
+    }
+
     const result = await runYanaDiscovery(db, {
       trigger,
       allowLeads: cfg.allowLeads,
@@ -56,7 +71,7 @@ export async function runYanaScheduledCycle({ db, deps = {}, logger = console, t
       candidates_qualified: result?.candidates_qualified,
       leads_pushed_to_john: result?.leads_pushed_to_john,
     })
-    return result
+    return webCrawl ? { ...result, web_crawl: webCrawl } : result
   } catch (err) {
     logger?.error?.('yana.scheduler.error', { message: String(err?.message || err) })
     return { ok: false, error: String(err?.message || err) }
