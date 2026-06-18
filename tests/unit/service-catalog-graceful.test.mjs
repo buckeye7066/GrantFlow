@@ -20,6 +20,7 @@ import {
   ensureServiceCatalogSchema,
   listServiceCatalog,
   loadServiceCatalogResilient,
+  seedServiceCatalogFromExtract,
 } from '../../backend/services/serviceCatalogStore.js'
 
 const silentLogger = { error: () => {} }
@@ -66,6 +67,19 @@ test('a seed failure does NOT fail the read (best-effort seed)', async () => {
   // Seed failed, but listing the (empty) catalog still succeeds — no 500.
   assert.equal(result.degraded, false)
   assert.ok(Array.isArray(result.catalog))
+})
+
+test('seeding is throttled per-db: re-seed within TTL is skipped, force bypasses', async () => {
+  const db = makeDb()
+  const first = await seedServiceCatalogFromExtract(db)
+  assert.notEqual(first.skipped, true, 'first seed actually runs')
+  assert.ok(first.service_count > 0)
+
+  const second = await seedServiceCatalogFromExtract(db)
+  assert.equal(second.skipped, true, 'a second seed within the TTL is skipped (no disk read / upserts)')
+
+  const forced = await seedServiceCatalogFromExtract(db, { force: true })
+  assert.notEqual(forced.skipped, true, 'force re-seeds regardless of throttle')
 })
 
 test('a list failure degrades gracefully (degraded:true, empty catalog, no throw)', async () => {

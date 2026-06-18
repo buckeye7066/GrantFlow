@@ -165,6 +165,45 @@ test('never prospects the operator\'s own organizations (dedupe by name/EIN)', a
   _resetProspectSources()
 })
 
+test('enrichment runs with bounded concurrency (parallel, not serial)', async () => {
+  const db = makeDb()
+  _resetProspectSources()
+  // A source that returns 8 contact-less prospects (each needs enrichment).
+  const many = Array.from({ length: 8 }, (_, i) => ({
+    source: 'test_many',
+    external_id: `e${i}`,
+    organization_name: `Org ${i}`,
+    organization_type: 'nonprofit',
+    entity_type: 'nonprofit',
+    focus_areas: ['education'],
+    public_evidence: [{ type: 'focus_areas', value: ['education'] }],
+    source_urls: [],
+    email: null,
+    website_url: null,
+  }))
+  registerProspectSource('test_many', { discover: async () => many })
+
+  let inFlight = 0
+  let maxInFlight = 0
+  const enricher = {
+    enabled: true,
+    enrich: async (p) => {
+      inFlight += 1
+      maxInFlight = Math.max(maxInFlight, inFlight)
+      await new Promise((r) => setTimeout(r, 5)) // hold the slot so peers overlap
+      inFlight -= 1
+      return { ok: true, website_url: `https://${p.external_id}.org`, email: `info@${p.external_id}.org` }
+    },
+  }
+
+  const res = await discoverProspects(db, { allowLiveWeb: true, sources: ['test_many'], enricher })
+  assert.equal(res.discovered, 8)
+  assert.equal(res.enriched, 8)
+  assert.ok(maxInFlight >= 2, `enrichment should overlap (saw max ${maxInFlight} in flight)`)
+  assert.ok(maxInFlight <= 5, `must respect the concurrency cap (saw ${maxInFlight})`)
+  _resetProspectSources()
+})
+
 test('runYanaDiscovery surfaces prospect funnel in the summary', async () => {
   const db = makeDb()
   _resetProspectSources()

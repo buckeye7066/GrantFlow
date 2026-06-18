@@ -15,8 +15,24 @@ function nowSqlLiteral(db) {
   return isPostgres(db) ? 'now()' : 'CURRENT_TIMESTAMP'
 }
 
+// ── Hot-path throttles ───────────────────────────────────────────────────────
+// Both the public /services route and the admin /catalog route called
+// ensureServiceCatalogSchema (≈10 CREATE TABLE IF NOT EXISTS — round-trips on
+// Postgres) AND seedServiceCatalogFromExtract (reads a markdown file off disk +
+// runs many upserts) on EVERY request. Neither needs to run per-request: schema
+// is stable and the seed comes from a static file. We cache both per-db
+// (WeakMap) so a fresh db (tests, multi-tenant) is never wrongly skipped — the
+// same lesson as the agent schema caches.
+let schemaReady = new WeakMap()
+let lastSeededAt = new WeakMap()
+const SEED_TTL_MS = Number(process.env.SERVICE_CATALOG_SEED_TTL_MS || 10 * 60 * 1000)
+export function _resetServiceCatalogCaches() {
+  schemaReady = new WeakMap()
+  lastSeededAt = new WeakMap()
+}
+
 export async function ensureServiceCatalogSchema(db) {
-  if (!db || typeof db.prepare !== 'function') return
+  if (!db || typeof db.prepare !== 'function' || schemaReady.has(db)) return
 
   // Core catalog
   await db.prepare(`
@@ -140,6 +156,8 @@ export async function ensureServiceCatalogSchema(db) {
       created_at ${isPostgres(db) ? 'TIMESTAMPTZ' : 'DATETIME'} DEFAULT ${nowSqlLiteral(db)}
     );
   `).run()
+
+  schemaReady.set(db, true)
 }
 
 function pickPricingModelByName(name) {
@@ -200,8 +218,20 @@ async function migrateLegacySlugs(db) {
   }
 }
 
-export async function seedServiceCatalogFromExtract(db) {
+export async function seedServiceCatalogFromExtract(db, { force = false } = {}) {
   await ensureServiceCatalogSchema(db)
+
+  // Hot-path throttle: the catalog comes from a static disk file, so re-reading
+  // it + re-running the legacy-slug migration + dozens of upserts on every
+  // request is pure waste. Seed at most once per SEED_TTL_MS per db. Boot/admin
+  // callers can pass { force: true } to guarantee a fresh seed.
+  if (!force) {
+    const last = lastSeededAt.get(db)
+    if (last && Date.now() - last < SEED_TTL_MS) {
+      return { ok: true, skipped: true, reason: 'recently_seeded' }
+    }
+  }
+
   await migrateLegacySlugs(db)
 
   const markdown = loadPaymentSheetExtractFromDisk()
@@ -294,6 +324,7 @@ export async function seedServiceCatalogFromExtract(db) {
     }
   }
 
+  lastSeededAt.set(db, Date.now())
   return { ok: true, version: parsed.version, service_count: parsed.services.length }
 }
 
