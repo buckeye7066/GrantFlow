@@ -54,6 +54,7 @@ const POSTGRES_FILES = [
   '0086_rename_yana_to_hamilton.sql',
   '0087_agent_control_center.sql',
   '0089_yana_lead_discovery.sql',
+  '0095_agent_control_lock_owner_token.sql',
 ]
 
 const SQLITE_FILES = [
@@ -68,6 +69,7 @@ const SQLITE_FILES = [
   '090_rename_yana_to_hamilton.sql',
   '091_agent_control_center.sql',
   '093_yana_lead_discovery.sql',
+  '099_agent_control_lock_owner_token.sql',
 ]
 
 // A representative ("witness") table for each migration file. When a file is
@@ -271,6 +273,22 @@ export async function ensureAgentSubsystemTables(db, { logger = console } = {}) 
     logger.info?.(
       `[agent-subsystem] self-heal complete: applied=${out.applied.length} skipped=${out.skipped.length} failed=${out.failed.length}`,
     )
+  }
+
+  // Stale-lock recovery. Reclaim any Agent Control Center lock orphaned by a
+  // crashed/killed run BEFORE this fix shipped (or by an earlier deploy of
+  // this process). The acquire path also sweeps on every attempt, but doing
+  // it once at boot means a wedged lock is cleared the instant the new build
+  // comes up — no need to wait for the next run to be triggered.
+  try {
+    const { sweepExpiredLocks } = await import('../services/agentControl/agentControlStore.js')
+    const swept = await sweepExpiredLocks(db)
+    out.locksSwept = swept
+    if (swept > 0) {
+      logger.info?.(`[agent-subsystem] reclaimed ${swept} expired agent-control lock(s) at boot`)
+    }
+  } catch (sweepErr) {
+    logger.warn?.(`[agent-subsystem] stale-lock sweep skipped: ${sweepErr?.message || sweepErr}`)
   }
 
   return out
