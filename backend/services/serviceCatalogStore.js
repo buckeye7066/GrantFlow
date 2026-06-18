@@ -297,6 +297,39 @@ export async function seedServiceCatalogFromExtract(db) {
   return { ok: true, version: parsed.version, service_count: parsed.services.length }
 }
 
+/**
+ * Resilient catalog load for the admin Services tab.
+ *
+ * Seeding is a best-effort write-on-read (it reads a markdown extract from disk
+ * and runs upserts); a seed failure must never turn a read into a 500. We seed
+ * best-effort, then list. If listing itself fails we degrade gracefully —
+ * returning an empty catalog with `degraded: true` so the tab still renders a
+ * soft "temporarily unavailable" state instead of a hard route crash.
+ *
+ * @returns {Promise<{ catalog: object[], degraded: boolean, error?: string }>}
+ */
+export async function loadServiceCatalogResilient(db, { logger = console } = {}) {
+  try {
+    await seedServiceCatalogFromExtract(db)
+  } catch (seedError) {
+    logger?.error?.('[serviceCatalog] seed failed (continuing with existing catalog)', {
+      error: seedError?.message,
+      stack: seedError?.stack,
+    })
+  }
+
+  try {
+    const catalog = await listServiceCatalog(db, { includeInactive: true })
+    return { catalog, degraded: false }
+  } catch (error) {
+    logger?.error?.('[serviceCatalog] list failed — degrading gracefully', {
+      error: error?.message,
+      stack: error?.stack,
+    })
+    return { catalog: [], degraded: true, error: error?.message }
+  }
+}
+
 async function upsertPriceRow(
   db,
   { serviceId, clientCategory, amountCents, currency, milestonePhase = '', stripePriceId = null, active = true },
@@ -323,7 +356,11 @@ async function upsertPriceRow(
 export async function listServiceCatalog(db, { includeInactive = false } = {}) {
   await ensureServiceCatalogSchema(db)
 
-  const where = includeInactive ? 'WHERE 1=1' : 'WHERE is_active = 1'
+  // Dialect-safe boolean: `is_active` is NOT in the Postgres boolean-rewrite
+  // allowlist (only `active` is), so a bare `is_active = 1` is an integer-vs-
+  // boolean comparison error on Postgres. Use an explicit literal per dialect.
+  const trueLit = isPostgres(db) ? 'TRUE' : '1'
+  const where = includeInactive ? 'WHERE 1=1' : `WHERE is_active = ${trueLit}`
   const items = await db
     .prepare(
       `
@@ -345,7 +382,7 @@ export async function listServiceCatalog(db, { includeInactive = false } = {}) {
         SELECT *
         FROM service_prices
         WHERE service_id IN (${placeholders})
-          AND active = 1
+          AND active = ${trueLit}
         ORDER BY client_category ASC,
                  CASE WHEN COALESCE(milestone_phase, '') = '' THEN 0 ELSE 1 END,
                  milestone_phase ASC

@@ -66,6 +66,26 @@ function recordReload() {
   }
 }
 
+/**
+ * Shared entry point for the global handlers (vite:preloadError /
+ * unhandledrejection) in main.jsx. If `err` looks like a stale-chunk failure
+ * and we haven't already reloaded in the dedupe window, force exactly one
+ * reload and return true (so the caller can preventDefault). Returns false
+ * when it's not a stale chunk, or when we've already reloaded once (let the
+ * error boundary show its message instead of looping).
+ */
+export function maybeReloadForStaleChunk(err) {
+  if (!looksLikeStaleChunkError(err)) return false
+  if (recentlyReloaded()) {
+    console.error('[chunk] stale chunk persisted after one reload — not looping', err?.message ?? err)
+    return false
+  }
+  console.warn('[chunk] stale chunk detected (likely a fresh deploy) — forcing one reload', err?.message ?? err)
+  recordReload()
+  try { window.location.reload() } catch { /* SSR / no window */ }
+  return true
+}
+
 export function lazyWithRetry(importFn, chunkLabel = 'chunk') {
   return React.lazy(async () => {
     try {

@@ -8,11 +8,14 @@ import OrganizationCard from "@/components/organizations/OrganizationCard"
 import OrganizationFilters from "@/components/organizations/OrganizationFilters"
 import OrganizationActions from "@/components/organizations/OrganizationActions"
 import OrganizationEmptyState from "@/components/organizations/OrganizationEmptyState"
-const ComprehensiveApplicationForm = React.lazy(() => import("@/components/organizations/ComprehensiveApplicationForm"))
-const UploadApplicationForm = React.lazy(() => import("@/components/organizations/UploadApplicationForm"))
-const OrganizationForm = React.lazy(() => import("@/components/organizations/OrganizationForm"))
-const QuickAddDialog = React.lazy(() => import("@/components/organizations/QuickAddDialog"))
-const UploadFormDialog = React.lazy(() => import("@/components/organizations/UploadFormDialog"))
+import { lazyWithRetry } from "@/utils/lazyWithRetry"
+// lazyWithRetry (not raw React.lazy): opening these dialogs during/after a
+// deploy must auto-recover from a stale chunk instead of crashing the route.
+const ComprehensiveApplicationForm = lazyWithRetry(() => import("@/components/organizations/ComprehensiveApplicationForm"), 'Org:ComprehensiveApplicationForm')
+const UploadApplicationForm = lazyWithRetry(() => import("@/components/organizations/UploadApplicationForm"), 'Org:UploadApplicationForm')
+const OrganizationForm = lazyWithRetry(() => import("@/components/organizations/OrganizationForm"), 'Org:OrganizationForm')
+const QuickAddDialog = lazyWithRetry(() => import("@/components/organizations/QuickAddDialog"), 'Org:QuickAddDialog')
+const UploadFormDialog = lazyWithRetry(() => import("@/components/organizations/UploadFormDialog"), 'Org:UploadFormDialog')
 import { useToast } from "@/components/ui/use-toast"
 import { listProfiles, uploadProfileAvatar } from "@/api/profiles"
 import { canonicalizeProfileTypeId } from "@/services/profileTypes"

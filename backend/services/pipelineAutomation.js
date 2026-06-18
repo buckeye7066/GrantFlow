@@ -204,6 +204,33 @@ function buildProfileSummary(profileContext) {
 }
 
 async function recordAutomationEvent(db, payload) {
+    // FK guard: grant_pipeline_events.grant_id REFERENCES grants(id) NOT NULL.
+    // A pipeline job fetches the grant, then runs AI for many seconds; the grant
+    // can be deleted in that window. Inserting the event then violates
+    // grant_pipeline_events_grant_id_fkey and aborts the job. Verify the grant
+    // still exists (and is committed) immediately before the write; if it's
+    // gone, skip the audit event rather than crash — the work it described no
+    // longer has a parent to attach to.
+    if (!payload.grantId) {
+      console.warn('[pipeline_automation] recordAutomationEvent skipped: no grantId')
+      return
+    }
+    try {
+      const grant = await db
+        .prepare('SELECT id FROM grants WHERE id = ? LIMIT 1')
+        .get(String(payload.grantId))
+      if (!grant) {
+        console.warn(
+          `[pipeline_automation] grant ${payload.grantId} no longer exists — skipping pipeline event (avoids FK violation)`,
+        )
+        return
+      }
+    } catch (lookupErr) {
+      console.warn(
+        `[pipeline_automation] grant existence check failed for ${payload.grantId}: ${lookupErr?.message || lookupErr} — skipping event`,
+      )
+      return
+    }
     await db.prepare(
           `
               INSERT INTO grant_pipeline_events (
@@ -547,3 +574,6 @@ export async function processPipelineAutomationJob({ db, job, profileContext, ge
         },
   }
 }
+
+// Test-only exports.
+export const __testing__ = { recordAutomationEvent }

@@ -58,7 +58,31 @@ export default function AdminServiceCatalog() {
   if (q.error) {
     return (
       <Alert variant="destructive">
-        <AlertDescription>Failed to load service catalog.</AlertDescription>
+        <AlertDescription className="flex flex-col gap-2">
+          <span>Failed to load service catalog.</span>
+          {q.error?.message ? (
+            <span className="text-xs opacity-80 break-words">{String(q.error.message)}</span>
+          ) : null}
+          <Button size="sm" variant="outline" className="w-fit" onClick={() => q.refetch()}>
+            Retry
+          </Button>
+        </AlertDescription>
+      </Alert>
+    )
+  }
+
+  // Server-side graceful degradation: the catalog endpoint returns
+  // { degraded: true, catalog: [] } (HTTP 200) when seeding/listing failed, so
+  // the tab still renders instead of hard-crashing. Surface a soft notice + retry.
+  if (q.data?.degraded) {
+    return (
+      <Alert>
+        <AlertDescription className="flex flex-col gap-2">
+          <span>Service catalog is temporarily unavailable. The team has been notified.</span>
+          <Button size="sm" variant="outline" className="w-fit" onClick={() => q.refetch()}>
+            Retry
+          </Button>
+        </AlertDescription>
       </Alert>
     )
   }

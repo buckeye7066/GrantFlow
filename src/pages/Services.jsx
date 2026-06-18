@@ -167,7 +167,31 @@ export default function Services() {
 
             {catalogQuery.error ? (
               <Alert variant="destructive">
-                <AlertDescription>Failed to load service catalog.</AlertDescription>
+                <AlertDescription className="flex flex-col gap-2">
+                  <span>Failed to load service catalog.</span>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="w-fit"
+                    onClick={() => catalogQuery.refetch()}
+                  >
+                    Retry
+                  </Button>
+                </AlertDescription>
+              </Alert>
+            ) : catalogQuery.data?.degraded ? (
+              <Alert>
+                <AlertDescription className="flex flex-col gap-2">
+                  <span>Service catalog is temporarily unavailable. Please try again shortly.</span>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="w-fit"
+                    onClick={() => catalogQuery.refetch()}
+                  >
+                    Retry
+                  </Button>
+                </AlertDescription>
               </Alert>
             ) : null}
 

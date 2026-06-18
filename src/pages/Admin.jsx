@@ -1,4 +1,5 @@
 ﻿import React, { Suspense } from 'react';
+import { lazyWithRetry } from '@/utils/lazyWithRetry';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Shield, Activity, AlertCircle, Bot, DollarSign, Mail, Wrench, Workflow, Users, Bell, Loader2, Search } from 'lucide-react';
 import AdminDocumentUpload from '@/components/admin/AdminDocumentUpload';
@@ -20,8 +21,11 @@ import AdminServiceCatalog from '@/components/admin/AdminServiceCatalog.jsx'
 import AdminExclusionRules from '@/components/admin/AdminExclusionRules'
 import AdminAgentMissionControl from '@/components/admin/AdminAgentMissionControl'
 import AdminFundingTrace from '@/components/admin/AdminFundingTrace.jsx'
-const Billing = React.lazy(() => import('@/pages/Billing'));
-const Automation = React.lazy(() => import('@/pages/Automation'));
+// Use lazyWithRetry (not raw React.lazy) so a stale-deploy chunk failure when
+// switching to the Billing/Automation tabs auto-recovers with one reload
+// instead of tripping the RouteErrorBoundary.
+const Billing = lazyWithRetry(() => import('@/pages/Billing'), 'Admin:Billing');
+const Automation = lazyWithRetry(() => import('@/pages/Automation'), 'Admin:Automation');
 import { useAuthStore } from '@/stores/authStore';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { isHamiltonAdminEmail } from '../../shared/adminEmail.js';
@@ -62,7 +66,12 @@ export default function Admin() {
         </div>
 
         <Tabs defaultValue="applications" className="w-full">
-          <TabsList className="flex flex-wrap">
+          {/* Single-row, horizontally scrollable tablist. `flex-wrap` previously
+              wrapped tabs into rows that overlapped the panel (fixed-height
+              container) and made lower-row tabs unclickable. flex-nowrap +
+              overflow-x-auto keeps every tab on one scrollable row; shrink-0
+              stops triggers from compressing so labels stay readable. */}
+          <TabsList className="flex w-full max-w-full justify-start flex-nowrap overflow-x-auto overflow-y-hidden [&>button]:shrink-0">
             <TabsTrigger value="applications">
               <Users className="w-4 h-4 mr-2" />
               Applications
