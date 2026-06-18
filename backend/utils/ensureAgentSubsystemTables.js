@@ -57,6 +57,7 @@ const POSTGRES_FILES = [
   '0095_agent_control_lock_owner_token.sql',
   '0096_agent_telemetry_missing_tables.sql',
   '0098_yana_prospect_columns.sql',
+  '0099_yana_candidate_perf_indexes.sql',
 ]
 
 const SQLITE_FILES = [
@@ -74,6 +75,7 @@ const SQLITE_FILES = [
   '099_agent_control_lock_owner_token.sql',
   '100_agent_telemetry_missing_tables.sql',
   '101_yana_prospect_columns.sql',
+  '102_yana_candidate_perf_indexes.sql',
 ]
 
 // A representative ("witness") table for each migration file. When a file is
