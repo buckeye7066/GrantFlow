@@ -213,6 +213,26 @@ export async function ensureApplicationTaskSchema(db) {
       ON application_missing_info(task_id, kind, key);
   `)
 
+  // Resync the Postgres status CHECK constraint to the current TASK_STATUSES.
+  // The constraint is created by migrations, and this prod DB drifted to an
+  // older, smaller status list (migration 087's expansion never applied), so
+  // advancing a task to a new-state-machine status like 'analyzing' /
+  // 'generating_application' threw `application_tasks_status_check` violations —
+  // Hamilton could not create OR progress ANY task. Driving the constraint from
+  // TASK_STATUSES (the single source of truth the JS layer already validates
+  // against) makes it self-healing and drift-proof. SQLite local DBs create the
+  // table without this constraint, so it's Postgres-only.
+  if (isPostgres) {
+    const statusList = TASK_STATUSES.map((s) => `'${String(s).replace(/'/g, "''")}'`).join(', ')
+    try {
+      await db.exec(`ALTER TABLE application_tasks DROP CONSTRAINT IF EXISTS application_tasks_status_check`)
+      await db.exec(`ALTER TABLE application_tasks ADD CONSTRAINT application_tasks_status_check CHECK (status IN (${statusList}))`)
+    } catch (err) {
+      // Tolerate concurrent-boot races re-adding the same constraint.
+      if (!/already exists|does not exist/i.test(String(err?.message || err))) throw err
+    }
+  }
+
   // Upgrade legacy shape (pre-migration 087) to the automation-task
   // shape. Each ALTER is wrapped in a try/catch so a re-run on an
   // already-upgraded DB is a no-op. We never DROP anything — the
