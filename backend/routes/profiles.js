@@ -2576,7 +2576,7 @@ async function handleProfileSectionAi(req, res) {
     if (anthropic) {
       try {
         const response = await anthropic.messages.create({
-          model: process.env.ANTHROPIC_MODEL || 'claude-3-haiku-20240307',
+          model: process.env.ANTHROPIC_MODEL || 'claude-haiku-4-5',
           max_tokens: 1200,
           temperature: 0.2,
           messages: [{ role: 'user', content: promptPayload.prompt }],
@@ -2753,7 +2753,7 @@ Return ONLY the field value content, no JSON wrapper or explanations.`
     if (anthropic) {
       try {
         const response = await anthropic.messages.create({
-          model: process.env.ANTHROPIC_MODEL || 'claude-3-haiku-20240307',
+          model: process.env.ANTHROPIC_MODEL || 'claude-haiku-4-5',
           max_tokens: 400,
           temperature: 0.3,
           messages: [{ role: 'user', content: prompt }],

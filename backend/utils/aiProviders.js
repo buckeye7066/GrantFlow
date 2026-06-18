@@ -110,7 +110,7 @@ export async function invokeTextWithFallback({
   if (anthropic) {
     try {
       const response = await anthropic.messages.create({
-        model: anthropicModel || process.env.ANTHROPIC_MODEL || 'claude-3-haiku-20240307',
+        model: anthropicModel || process.env.ANTHROPIC_MODEL || 'claude-haiku-4-5',
         max_tokens: maxTokens,
         temperature,
         system: system ? String(system) : undefined,
@@ -185,7 +185,7 @@ export async function invokeJsonWithFallback({
         .join('\n\n')
 
       const response = await anthropic.messages.create({
-        model: anthropicModel || process.env.ANTHROPIC_MODEL || 'claude-3-haiku-20240307',
+        model: anthropicModel || process.env.ANTHROPIC_MODEL || 'claude-haiku-4-5',
         max_tokens: maxTokens,
         temperature,
         system: systemText || undefined,

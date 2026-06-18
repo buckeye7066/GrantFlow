@@ -262,7 +262,7 @@ router.post('/parseNOFO', standardRateLimiter, async (req, res) => {
     if (anthropic) {
       try {
         const response = await anthropic.messages.create({
-          model: process.env.ANTHROPIC_MODEL || 'claude-3-haiku-20240307',
+          model: process.env.ANTHROPIC_MODEL || 'claude-haiku-4-5',
           max_tokens: 1800,
           temperature: 0.1,
           system,

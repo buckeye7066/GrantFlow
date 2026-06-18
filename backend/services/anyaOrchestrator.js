@@ -63,7 +63,7 @@ function extractAnthropicText(response) {
 }
 
 const DEFAULT_ASSISTANT_MODEL = process.env.ANYA_OPENAI_MODEL || 'gpt-4o-mini'
-const DEFAULT_ANTHROPIC_MODEL = process.env.ANTHROPIC_MODEL || 'claude-3-haiku-20240307'
+const DEFAULT_ANTHROPIC_MODEL = process.env.ANTHROPIC_MODEL || 'claude-haiku-4-5'
 
 // Whitelist of tools the chat path is allowed to call mid-conversation
 // via OpenAI tool calling. Keep this list tight — every tool exposed here
@@ -1408,7 +1408,7 @@ export async function generateAssistantResponse(db, user, sessionId, { content, 
           const anthropic = await getAnthropicClient()
           if (!anthropic) return null
           const response = await anthropic.messages.create({
-            model: process.env.ANTHROPIC_MODEL || 'claude-3-haiku-20240307',
+            model: process.env.ANTHROPIC_MODEL || 'claude-haiku-4-5',
             max_tokens: 1000,
             temperature: 0.3,
             system: systemPrompt,
@@ -1454,7 +1454,7 @@ export async function generateAssistantResponse(db, user, sessionId, { content, 
     const anthropic = await getAnthropicClient()
     if (anthropic) {
       const response = await anthropic.messages.create({
-        model: process.env.ANTHROPIC_MODEL || 'claude-3-haiku-20240307',
+        model: process.env.ANTHROPIC_MODEL || 'claude-haiku-4-5',
         max_tokens: 1000,
         temperature: 0.3,
         system: systemPrompt,

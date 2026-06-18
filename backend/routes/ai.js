@@ -138,7 +138,7 @@ async function invokeTextWithFallback({ model, system, prompt, temperature, maxT
   if (anthropic) {
     try {
       const response = await anthropic.messages.create({
-        model: process.env.ANTHROPIC_MODEL || 'claude-3-haiku-20240307',
+        model: process.env.ANTHROPIC_MODEL || 'claude-haiku-4-5',
         max_tokens: typeof maxTokens === 'number' ? maxTokens : 1200,
         temperature: typeof temperature === 'number' ? temperature : 0.3,
         system: system || undefined,
@@ -477,7 +477,7 @@ Return ONLY valid JSON in this format:
         const anthropic = await createAnthropicClient()
         if (anthropic) {
           const response = await anthropic.messages.create({
-            model: process.env.ANTHROPIC_MODEL || 'claude-3-haiku-20240307',
+            model: process.env.ANTHROPIC_MODEL || 'claude-haiku-4-5',
             max_tokens: 2000,
             temperature: 0.3,
             messages: [{ role: 'user', content: prompt }],
@@ -1589,7 +1589,7 @@ router.post('/school-lookup', async (req, res) => {
 
     // Use Anthropic with web search for best results
     const response = await anthropic.messages.create({
-      model: process.env.ANTHROPIC_MODEL_SCHOOL_LOOKUP || 'claude-sonnet-4-20250514',
+      model: process.env.ANTHROPIC_MODEL_SCHOOL_LOOKUP || 'claude-sonnet-4-6',
       max_tokens: 1000,
       tools: [{ type: 'web_search_20250305', name: 'web_search', max_uses: 5 }],
       messages: [{
@@ -1642,6 +1642,21 @@ Return ONLY the JSON object, no backticks, no explanation.`
     return res.json({ success: true, school_name: trimmedName, data: parsed, provider: 'anthropic-web-search' });
   } catch (error) {
     console.error('[school-lookup] Error:', error);
+    // Degrade gracefully — the AI-assist button must never be "dead". A model
+    // retirement, web_search outage, or timeout should fall back to registry
+    // data with a 200, not a 500 the frontend renders as "Internal server error".
+    try {
+      const name = String(req.body?.school_name || '').trim();
+      if (name) {
+        return res.json({
+          success: true,
+          school_name: name,
+          data: buildSchoolLookupFallbackData(name),
+          provider: 'fallback',
+          warning: `AI lookup failed (${error?.message || 'unknown error'}); returned registry-backed fallback data.`,
+        });
+      }
+    } catch { /* fall through to error response */ }
     res.status(500).json(formatError(error));
   }
 });

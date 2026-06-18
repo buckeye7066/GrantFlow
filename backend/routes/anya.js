@@ -154,7 +154,7 @@ router.get('/status', adminAuth, async (_req, res) => {
         })
 
         const testResponse = await client.messages.create({
-          model: 'claude-3-haiku-20240307',
+          model: 'claude-haiku-4-5',
           max_tokens: 10,
           messages: [{ role: 'user', content: 'Say "ok"' }],
         })
@@ -162,7 +162,7 @@ router.get('/status', adminAuth, async (_req, res) => {
         if (testResponse?.content?.[0]?.text) {
           anthropicStatus = 'connected'
           modelInfo = {
-            model: 'claude-3-haiku-20240307',
+            model: 'claude-haiku-4-5',
             test_response: testResponse.content[0].text,
           }
         } else {
