@@ -18,6 +18,8 @@ import {
   commitToCollege,
   uncommitArchived,
   buildCollegeAidWorkspace,
+  resolveCommittedCollege,
+  getApplications,
 } from '../services/college/committedCollege.js'
 import { planCollegeFundingMerge } from '../services/college/collegeFundingMerge.js'
 import {
@@ -345,6 +347,57 @@ router.post('/profiles/:profileId/committed-college/merge-funding', async (req, 
   } catch (err) {
     log.error('POST committed-college/merge-funding failed', { error: err?.message })
     return res.status(500).json({ ok: false, error: 'committed_college_merge_failed' })
+  }
+})
+
+/**
+ * Set the cost-of-attendance for the committed college. The COA grid + unmet-need
+ * read from the committed application's `costs` object; nothing else wrote it, so
+ * the workspace showed blanks and a dead "Add COA" label. Persists the provided
+ * fields onto that application and returns the recomputed workspace.
+ */
+router.post('/profiles/:profileId/committed-college/cost-of-attendance', async (req, res) => {
+  const user = requireAuthenticatedUser(req, res)
+  if (!user) return
+  const { profileId } = req.params
+  if (!(await userMayAccessProfile(req, profileId))) return res.status(403).json({ error: 'Forbidden' })
+
+  const num = (v) => {
+    if (v === '' || v === null || v === undefined) return null
+    const n = Number(v)
+    return Number.isFinite(n) ? n : null
+  }
+
+  try {
+    const sections = await loadSections(req.db, profileId)
+    const uni = sections.university_applications || {}
+    const committed = resolveCommittedCollege(uni)
+    if (!committed) return res.status(409).json({ ok: false, error: 'no_committed_college' })
+
+    const body = req.body || {}
+    const patch = {}
+    for (const k of ['tuition', 'housing', 'books', 'other', 'total']) {
+      if (k in body) patch[k] = num(body[k])
+    }
+    if (Object.keys(patch).length === 0) {
+      return res.status(400).json({ ok: false, error: 'no_coa_fields' })
+    }
+
+    const nextUni = {
+      ...uni,
+      applications: getApplications(uni).map((a) => (
+        a.id === committed.id ? { ...a, costs: { ...(a.costs || {}), ...patch } } : a
+      )),
+    }
+    await persistUniversityApplications(req.db, profileId, getAuthUserId(user), nextUni)
+
+    const workspace = buildCollegeAidWorkspace({
+      sections: { ...sections, university_applications: nextUni },
+    })
+    return res.json({ ok: true, workspace })
+  } catch (err) {
+    log.error('POST committed-college/cost-of-attendance failed', { error: err?.message })
+    return res.status(500).json({ ok: false, error: 'cost_of_attendance_failed' })
   }
 })
 

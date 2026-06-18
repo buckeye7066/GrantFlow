@@ -45,6 +45,15 @@ export async function mergeCommittedCollegeFunding(
   })
 }
 
+/** Set the committed college's cost-of-attendance ({tuition, housing, books, other, total}). */
+export async function setCommittedCollegeCOA(profileId, coa = {}) {
+  assertRealProfileId(profileId, 'setCommittedCollegeCOA')
+  return apiFetch(`/api/profiles/${profileId}/committed-college/cost-of-attendance`, {
+    method: 'POST',
+    body: JSON.stringify(coa),
+  })
+}
+
 /** GET the FAFSA lifecycle status (stage, label, next action, ordered stages). */
 export async function getFafsaStatus(profileId) {
   assertRealProfileId(profileId, 'getFafsaStatus')

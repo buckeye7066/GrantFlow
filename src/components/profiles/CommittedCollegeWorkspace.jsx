@@ -11,9 +11,11 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { useToast } from '@/components/ui/use-toast'
 import {
   getCommittedCollegeWorkspace, commitToCollege, uncommitCollege,
+  setCommittedCollegeCOA,
   getFafsaStatus, setFafsaStatus,
   getFafsaVerification, setFafsaVerificationDoc,
 } from '@/api/committedCollege.js'
+import { Input } from '@/components/ui/input'
 import CollegeFundingMergeModal from './CollegeFundingMergeModal.jsx'
 
 const TERMINAL = new Set(['declined', 'denied', 'rejected', 'withdrawn', 'archived'])
@@ -65,6 +67,19 @@ export default function CommittedCollegeWorkspace({ profileId, applications = []
     onSuccess: () => { toast({ title: 'Restored' }); invalidate() },
     onError: (err) => toast({ title: 'Restore failed', description: err?.message, variant: 'destructive' }),
   })
+
+  const [coaOpen, setCoaOpen] = useState(false)
+  const [coaForm, setCoaForm] = useState({ tuition: '', housing: '', books: '', other: '', total: '' })
+  const coaMut = useMutation({
+    mutationFn: (payload) => setCommittedCollegeCOA(profileId, payload),
+    onSuccess: () => { toast({ title: 'Cost of attendance saved' }); setCoaOpen(false); invalidate() },
+    onError: (err) => toast({ title: 'Save failed', description: err?.message, variant: 'destructive' }),
+  })
+  const openCoaEditor = (coa = {}) => {
+    const s = (v) => (v === null || v === undefined ? '' : String(v))
+    setCoaForm({ tuition: s(coa.tuition), housing: s(coa.housing), books: s(coa.books), other: s(coa.other), total: s(coa.total) })
+    setCoaOpen(true)
+  }
 
   const committed = Boolean(workspace?.committed)
   const fafsaQuery = useQuery({
@@ -173,6 +188,12 @@ export default function CommittedCollegeWorkspace({ profileId, applications = []
           </div>
 
           {/* Cost of attendance + unmet need */}
+          <div className="flex items-center justify-between">
+            <span className="text-sm font-medium text-slate-700">Cost of attendance</span>
+            <Button size="sm" variant="outline" onClick={() => openCoaEditor(coa)}>
+              {coa.total === null && coa.tuition === null ? 'Add COA' : 'Edit COA'}
+            </Button>
+          </div>
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
             <Stat label="Tuition" value={fmt(coa.tuition)} />
             <Stat label="Housing" value={fmt(coa.housing)} />
@@ -181,10 +202,46 @@ export default function CommittedCollegeWorkspace({ profileId, applications = []
             <Stat label="Aid received" value={fmt(workspace.aid?.received_total)} accent="text-emerald-700" />
             <Stat
               label="Unmet need"
-              value={workspace.unmet_need === null ? 'Add COA' : fmt(workspace.unmet_need)}
+              value={workspace.unmet_need === null ? '—' : fmt(workspace.unmet_need)}
               accent={workspace.unmet_need ? 'text-amber-700' : 'text-emerald-700'}
             />
           </div>
+
+          {coaOpen ? (
+            <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+                {[
+                  ['tuition', 'Tuition'],
+                  ['housing', 'Housing'],
+                  ['books', 'Books'],
+                  ['other', 'Other'],
+                  ['total', 'Total cost of attendance'],
+                ].map(([key, label]) => (
+                  <label key={key} className="text-xs text-slate-600">
+                    {label}
+                    <Input
+                      type="number"
+                      inputMode="decimal"
+                      min="0"
+                      value={coaForm[key]}
+                      onChange={(e) => setCoaForm((f) => ({ ...f, [key]: e.target.value }))}
+                      className="mt-1"
+                      placeholder="$"
+                    />
+                  </label>
+                ))}
+              </div>
+              <p className="mt-2 text-xs text-slate-500">
+                Leave a field blank to clear it. Unmet need is computed as total − aid received − matched funding.
+              </p>
+              <div className="mt-3 flex justify-end gap-2">
+                <Button size="sm" variant="outline" onClick={() => setCoaOpen(false)} disabled={coaMut.isPending}>Cancel</Button>
+                <Button size="sm" onClick={() => coaMut.mutate(coaForm)} disabled={coaMut.isPending}>
+                  {coaMut.isPending ? 'Saving…' : 'Save COA'}
+                </Button>
+              </div>
+            </div>
+          ) : null}
 
           {/* FAFSA lifecycle */}
           <div className="rounded-md border border-slate-200 p-3">
