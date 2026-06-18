@@ -1,6 +1,6 @@
 ﻿import React, { Suspense } from 'react';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Shield, Activity, AlertCircle, Bot, DollarSign, Mail, Wrench, Workflow, Users, Bell, Loader2 } from 'lucide-react';
+import { Shield, Activity, AlertCircle, Bot, DollarSign, Mail, Wrench, Workflow, Users, Bell, Loader2, Search } from 'lucide-react';
 import AdminDocumentUpload from '@/components/admin/AdminDocumentUpload';
 import AdminDiagnostics from '@/components/admin/AdminDiagnostics';
 import AdminGeoCrawl from '@/components/admin/AdminGeoCrawl';
@@ -19,6 +19,7 @@ import AdminKnowledgeBase from '@/components/admin/AdminKnowledgeBase.jsx'
 import AdminServiceCatalog from '@/components/admin/AdminServiceCatalog.jsx'
 import AdminExclusionRules from '@/components/admin/AdminExclusionRules'
 import AdminAgentMissionControl from '@/components/admin/AdminAgentMissionControl'
+import AdminFundingTrace from '@/components/admin/AdminFundingTrace.jsx'
 const Billing = React.lazy(() => import('@/pages/Billing'));
 const Automation = React.lazy(() => import('@/pages/Automation'));
 import { useAuthStore } from '@/stores/authStore';
@@ -128,6 +129,10 @@ export default function Admin() {
               Maintenance
             </TabsTrigger>
             <TabsTrigger value="exclusions">Exclusions</TabsTrigger>
+            <TabsTrigger value="funding_trace">
+              <Search className="w-4 h-4 mr-2" />
+              Funding Trace
+            </TabsTrigger>
           </TabsList>
           
           <TabsContent value="applications" className="mt-6">
@@ -213,6 +218,10 @@ export default function Admin() {
 
           <TabsContent value="exclusions" className="mt-6">
             <AdminExclusionRules />
+          </TabsContent>
+
+          <TabsContent value="funding_trace" className="mt-6">
+            <AdminFundingTrace />
           </TabsContent>
         </Tabs>
       </div>

@@ -2448,6 +2448,7 @@ app.get('/api/meta/dedupe', async (_req, res) => {
 })
 
 app.use('/api/admin', adminRouter);
+app.use('/api/admin/funding-trace', lazyRouter('./routes/fundingTrace.js'));
 app.use('/api/admin/agent-telemetry', lazyRouter('./routes/agentTelemetry.js'));
 // Admin Agent Control Center — start/stop/pause/resume/emergency-stop the
 // whole agent process. Restricted to the canonical operator

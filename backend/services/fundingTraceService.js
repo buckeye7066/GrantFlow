@@ -1,0 +1,306 @@
+/**
+ * Funding Trace Service
+ * ---------------------
+ * Given a free-text entity (a company, public entity, or individual), trace
+ * WHERE that entity gets its funding and return a consolidated list of distinct
+ * funding sources that an admin can add to the GrantFlow catalog.
+ *
+ * Data backbone (factual, deterministic):
+ *   - USASpending.gov  — federal awards (contracts + grants) the entity RECEIVED,
+ *                        grouped by awarding agency = "who funds them".
+ *   - ProPublica 990   — if the entity is a nonprofit, its 990 financials and the
+ *                        grantmaker ecosystem around it.
+ *
+ * AI layer (optional, best-effort): classifies the entity and surfaces likely
+ * funding channels the public datasets miss (e.g. VC backers, parent companies,
+ * corporate CSR programs). Never required — the service degrades to public data.
+ */
+
+import { fetchWithRetry } from './sources/httpClient.js'
+import { searchOrganizations } from '../src/integrations/propublica990.js'
+import { invokeJsonWithFallback } from '../utils/aiProviders.js'
+import { createLogger } from '../utils/logger.js'
+
+const log = createLogger('fundingTrace')
+
+const USASPENDING_API = 'https://api.usaspending.gov/api/v2'
+
+// Federal award type codes. Grants/direct-payments + contracts both count as
+// "funding received" for a recipient.
+const GRANT_AWARD_TYPES = ['02', '03', '04', '05']
+const CONTRACT_AWARD_TYPES = ['A', 'B', 'C', 'D']
+
+/**
+ * Query USASpending for every award a named recipient received within a window.
+ * Returns raw award rows (un-consolidated).
+ */
+async function fetchRecipientAwards(entity, { awardTypeCodes, sinceYears = 5, limit = 100 } = {}) {
+  const end = new Date()
+  const start = new Date()
+  start.setFullYear(start.getFullYear() - sinceYears)
+
+  const payload = {
+    filters: {
+      recipient_search_text: [entity],
+      award_type_codes: awardTypeCodes,
+      time_period: [{ start_date: start.toISOString().slice(0, 10), end_date: end.toISOString().slice(0, 10) }],
+    },
+    fields: [
+      'Award ID',
+      'Recipient Name',
+      'Award Amount',
+      'Awarding Agency',
+      'Awarding Sub Agency',
+      'Award Type',
+      'Start Date',
+      'Description',
+    ],
+    page: 1,
+    limit,
+    order: 'desc',
+    sort: 'Award Amount',
+  }
+
+  try {
+    const data = await fetchWithRetry(`${USASPENDING_API}/search/spending_by_award/`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      data: payload,
+      timeout: 60000,
+    })
+    return Array.isArray(data?.results) ? data.results : []
+  } catch (err) {
+    log.warn(`[fundingTrace] USASpending query failed for "${entity}": ${err?.message}`)
+    return []
+  }
+}
+
+function parseAmount(v) {
+  const n = Number(v)
+  return Number.isFinite(n) ? n : 0
+}
+
+function yearOf(dateStr) {
+  if (!dateStr) return null
+  const y = Number(String(dateStr).slice(0, 4))
+  return Number.isFinite(y) ? y : null
+}
+
+/**
+ * ────────────────────────────────────────────────────────────────────────────
+ * consolidateFundingSources — THE core business decision (see request below).
+ * ────────────────────────────────────────────────────────────────────────────
+ * Collapse raw federal-award rows into distinct, rankable funding SOURCES.
+ *
+ * @param {Array<object>} awards  raw USASpending rows (mixed grants + contracts)
+ * @returns {Array<object>} consolidated sources, each:
+ *   { key, name, sub_agency, type, total_amount, award_count, latest_year,
+ *     sample_award_id, sample_url }
+ *
+ * Default implementation groups by Awarding Agency. See the note after this
+ * function for the trade-offs an admin might want to tune.
+ */
+export function consolidateFundingSources(awards) {
+  const byAgency = new Map()
+
+  for (const row of awards) {
+    const agency = (row['Awarding Agency'] || '').trim()
+    if (!agency) continue
+
+    const amount = parseAmount(row['Award Amount'])
+    const year = yearOf(row['Start Date'])
+    const awardId = row['Award ID'] || null
+
+    const existing = byAgency.get(agency)
+    if (existing) {
+      existing.total_amount += amount
+      existing.award_count += 1
+      if (year && (!existing.latest_year || year > existing.latest_year)) existing.latest_year = year
+      // Track the largest single award as the representative sample.
+      if (amount > existing._max_amount) {
+        existing._max_amount = amount
+        existing.sample_award_id = awardId
+        existing.sub_agency = (row['Awarding Sub Agency'] || existing.sub_agency || '').trim()
+      }
+    } else {
+      byAgency.set(agency, {
+        key: `usaspending:${agency}`,
+        name: agency,
+        sub_agency: (row['Awarding Sub Agency'] || '').trim(),
+        type: 'federal_agency',
+        total_amount: amount,
+        award_count: 1,
+        latest_year: year,
+        sample_award_id: awardId,
+        _max_amount: amount,
+      })
+    }
+  }
+
+  return Array.from(byAgency.values())
+    .map(({ _max_amount, ...src }) => ({
+      ...src,
+      sample_url: src.sample_award_id
+        ? `https://www.usaspending.gov/award/${encodeURIComponent(src.sample_award_id)}`
+        : null,
+    }))
+    // Rank by total dollars received — the biggest funders first.
+    .sort((a, b) => b.total_amount - a.total_amount)
+}
+
+/**
+ * Best-effort AI synthesis: classify the entity and name likely funding channels
+ * that public award data won't show (VC, parent company, corporate foundations).
+ * Returns [] on any failure or when no AI provider is configured.
+ */
+async function aiFundingChannels(entity, entityType) {
+  const prompt = `You are a funding-research analyst. The user wants to know WHERE the following ${entityType} gets its funding.
+
+Entity: "${entity}"
+
+Return STRICT JSON: an array (max 8) of likely funding SOURCES under the key "sources".
+Each item: { "name": string, "type": one of ["federal_agency","foundation","venture_capital","corporate_csr","parent_company","state_agency","other"], "rationale": short string, "addable": boolean (true only if it is a real, nameable grantmaking/funding ORGANIZATION an admin could add to a grant catalog) }.
+Only include sources you are reasonably confident about. Do NOT invent specific dollar amounts.`
+
+  try {
+    const result = await invokeJsonWithFallback({
+      system: 'You output only valid JSON. No prose.',
+      prompt,
+      maxTokens: 900,
+      anthropicModel: process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-6',
+    })
+    if (!result?.ok) return []
+    const arr = Array.isArray(result.json?.sources) ? result.json.sources : []
+    return arr
+      .filter((s) => s && typeof s.name === 'string' && s.name.trim())
+      .map((s) => ({
+        key: `ai:${s.name.trim().toLowerCase()}`,
+        name: s.name.trim(),
+        type: s.type || 'other',
+        rationale: s.rationale || null,
+        origin: 'ai_synthesis',
+        addable: s.addable !== false,
+        total_amount: null,
+        award_count: null,
+      }))
+  } catch (err) {
+    log.warn(`[fundingTrace] AI synthesis failed: ${err?.message}`)
+    return []
+  }
+}
+
+/**
+ * Flag which traced sources already exist in the GrantFlow catalog so the admin
+ * isn't offered duplicates. Matches on sponsor/title name (case-insensitive).
+ */
+async function markExistingInCatalog(db, sources) {
+  if (!sources.length) return sources
+  try {
+    const rows = await db
+      .prepare(`SELECT DISTINCT LOWER(sponsor) AS sponsor FROM funding_opportunities WHERE sponsor IS NOT NULL`)
+      .all()
+    const known = new Set(rows.map((r) => r.sponsor))
+    return sources.map((s) => ({ ...s, already_in_catalog: known.has(s.name.toLowerCase()) }))
+  } catch (err) {
+    log.warn(`[fundingTrace] catalog dedupe check failed: ${err?.message}`)
+    return sources.map((s) => ({ ...s, already_in_catalog: false }))
+  }
+}
+
+/**
+ * Main entry point. Trace an entity's funding into a consolidated, addable list.
+ */
+export async function traceFunding(db, { entity, entityType = 'company', useAi = true } = {}) {
+  const clean = String(entity || '').trim()
+  if (!clean) throw new Error('entity is required')
+
+  // 1) Pull federal awards received (grants + contracts) in parallel.
+  const [grantRows, contractRows] = await Promise.all([
+    fetchRecipientAwards(clean, { awardTypeCodes: GRANT_AWARD_TYPES }),
+    fetchRecipientAwards(clean, { awardTypeCodes: CONTRACT_AWARD_TYPES }),
+  ])
+  const federalSources = consolidateFundingSources([...grantRows, ...contractRows]).map((s) => ({
+    ...s,
+    origin: 'usaspending',
+    addable: true,
+  }))
+
+  // 2) ProPublica 990 — is the entity itself a nonprofit? (context + 990 link)
+  let nonprofitMatch = null
+  try {
+    const pp = await searchOrganizations({ q: clean })
+    nonprofitMatch = pp.organizations?.[0] ?? null
+  } catch (err) {
+    log.warn(`[fundingTrace] ProPublica lookup failed: ${err?.message}`)
+  }
+
+  // 3) Optional AI synthesis for channels the public data misses.
+  const aiSources = useAi ? await aiFundingChannels(clean, entityType) : []
+
+  // 4) Merge + dedupe by name (federal/public data wins over AI guesses).
+  const merged = []
+  const seen = new Set()
+  for (const s of [...federalSources, ...aiSources]) {
+    const k = s.name.toLowerCase()
+    if (seen.has(k)) continue
+    seen.add(k)
+    merged.push(s)
+  }
+
+  const sources = await markExistingInCatalog(db, merged)
+
+  return {
+    entity: clean,
+    entity_type: entityType,
+    nonprofit_match: nonprofitMatch,
+    counts: {
+      federal_grant_awards: grantRows.length,
+      federal_contract_awards: contractRows.length,
+      total_sources: sources.length,
+    },
+    sources,
+  }
+}
+
+/**
+ * Map a traced funding source into a GrantFlow funding_opportunities payload,
+ * compatible with POST /api/opportunities (validateFundingTerms + normalize).
+ */
+export function traceSourceToOpportunity(source, entity) {
+  const fundingType =
+    source.type === 'foundation' ? 'foundation' : source.type === 'federal_agency' ? 'government' : 'other'
+
+  const descBits = [
+    `Identified as a funding source for "${entity}".`,
+    source.award_count ? `${source.award_count} federal award(s) traced` : null,
+    source.total_amount ? `Total traced: $${Number(source.total_amount).toLocaleString()}` : null,
+    source.latest_year ? `Most recent: ${source.latest_year}` : null,
+    source.sub_agency ? `Sub-agency: ${source.sub_agency}` : null,
+    source.rationale ? `Note: ${source.rationale}` : null,
+  ].filter(Boolean)
+
+  return {
+    title: `${source.name} — Funding Source`,
+    sponsor: source.name,
+    source: source.origin === 'ai_synthesis' ? 'funding_trace.ai' : 'funding_trace.usaspending',
+    source_id: source.key,
+    source_url: source.sample_url || null,
+    description: descBits.join(' '),
+    amount_min: null,
+    amount_max: source.total_amount || null,
+    amount_description: source.total_amount ? `Traced total: $${Number(source.total_amount).toLocaleString()}` : null,
+    deadline: null,
+    deadline_type: 'rolling',
+    is_national: true,
+    state: 'nationwide',
+    categories: ['funding-source', source.type].filter(Boolean),
+    keywords: [source.type, 'funding-trace'].filter(Boolean),
+    eligibility_bullets: [],
+    opportunity_type: 'grant',
+    type: 'DIRECTORY',
+    record_origin: 'funding_trace',
+    funding_source_type: fundingType,
+    requires_501c3: false,
+    requires_match: false,
+  }
+}
