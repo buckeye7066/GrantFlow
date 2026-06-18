@@ -40,7 +40,9 @@ import {
   listSourceCandidates,
   setSourceCandidateStatus,
   updateOpportunityCandidate,
+  upsertSourceCandidate,
 } from '../services/robert/robertRunStore.js'
+import { traceFundingIntoCandidates } from '../services/robert/robertFundingTraceBridge.js'
 import {
   markAccepted,
   markDeclined,
@@ -173,6 +175,28 @@ router.get('/source-candidates', adminOnly, async (req, res) => {
     const rows = await listSourceCandidates(req.db, { status, limit })
     return res.json({ ok: true, candidates: rows })
   } catch (err) { return handleError(res, err) }
+})
+
+// Funding Trace as a discovery tool: trace where a known entity gets its
+// funding and stage the real funders as pending source candidates.
+router.post('/trace-funding', adminOnly, async (req, res) => {
+  try {
+    const entity = req.body?.entity
+    if (!entity || !String(entity).trim()) {
+      return res.status(400).json({ ok: false, error: 'entity is required' })
+    }
+    const entityType = req.body?.entity_type || 'company'
+    const useAi = req.body?.use_ai !== false
+    const summary = await traceFundingIntoCandidates(req.db, {
+      entity: String(entity),
+      entityType,
+      useAi,
+      upsert: upsertSourceCandidate,
+    })
+    return res.json({ ok: true, ...summary })
+  } catch (err) {
+    return handleError(res, err, 'Funding trace failed.')
+  }
 })
 
 router.post('/source-candidates/:id/approve', adminOnly, async (req, res) => {

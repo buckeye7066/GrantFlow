@@ -30,6 +30,41 @@ const USASPENDING_API = 'https://api.usaspending.gov/api/v2'
 const GRANT_AWARD_TYPES = ['02', '03', '04', '05']
 const CONTRACT_AWARD_TYPES = ['A', 'B', 'C', 'D']
 
+// Addability floor: don't offer trivial or stale funders for one-click add.
+// A funder is only worth adding to the catalog if it has moved real money
+// recently. Tunable via env so ops can adjust without a code change.
+export const ADDABILITY_DEFAULTS = Object.freeze({
+  minAmount: Number(process.env.FUNDING_TRACE_MIN_AMOUNT) || 25_000,
+  maxAgeYears: Number(process.env.FUNDING_TRACE_MAX_AGE_YEARS) || 5,
+})
+
+/**
+ * Decide whether a traced source is worth offering for one-click add.
+ *
+ * Applies to data-backed (federal) sources: requires a total at or above
+ * `minAmount` AND a most-recent award within `maxAgeYears`. Sources with no
+ * dollar data (e.g. AI-identified channels) are not subject to the dollar
+ * floor — they keep whatever `addable` flag they arrived with.
+ *
+ * @returns {boolean}
+ */
+export function isSourceAddable(source, { minAmount, maxAgeYears, now = new Date() } = {}) {
+  const min = Number.isFinite(minAmount) ? minAmount : ADDABILITY_DEFAULTS.minAmount
+  const maxAge = Number.isFinite(maxAgeYears) ? maxAgeYears : ADDABILITY_DEFAULTS.maxAgeYears
+
+  // No dollar signal (AI sources): defer to the source's own flag.
+  if (source.total_amount === null || source.total_amount === undefined) return source.addable !== false
+
+  if (Number(source.total_amount) < min) return false
+
+  // Recency floor — only enforced when we know the latest year.
+  if (source.latest_year !== null && source.latest_year !== undefined) {
+    const cutoff = now.getFullYear() - maxAge
+    if (source.latest_year < cutoff) return false
+  }
+  return true
+}
+
 /**
  * Query USASpending for every award a named recipient received within a window.
  * Returns raw award rows (un-consolidated).
@@ -219,7 +254,7 @@ async function markExistingInCatalog(db, sources) {
 /**
  * Main entry point. Trace an entity's funding into a consolidated, addable list.
  */
-export async function traceFunding(db, { entity, entityType = 'company', useAi = true } = {}) {
+export async function traceFunding(db, { entity, entityType = 'company', useAi = true, addability = {} } = {}) {
   const clean = String(entity || '').trim()
   if (!clean) throw new Error('entity is required')
 
@@ -231,7 +266,7 @@ export async function traceFunding(db, { entity, entityType = 'company', useAi =
   const federalSources = consolidateFundingSources([...grantRows, ...contractRows]).map((s) => ({
     ...s,
     origin: 'usaspending',
-    addable: true,
+    addable: isSourceAddable(s, addability),
   }))
 
   // 2) ProPublica 990 — is the entity itself a nonprofit? (context + 990 link)
@@ -262,10 +297,15 @@ export async function traceFunding(db, { entity, entityType = 'company', useAi =
     entity: clean,
     entity_type: entityType,
     nonprofit_match: nonprofitMatch,
+    addability: {
+      min_amount: Number.isFinite(addability.minAmount) ? addability.minAmount : ADDABILITY_DEFAULTS.minAmount,
+      max_age_years: Number.isFinite(addability.maxAgeYears) ? addability.maxAgeYears : ADDABILITY_DEFAULTS.maxAgeYears,
+    },
     counts: {
       federal_grant_awards: grantRows.length,
       federal_contract_awards: contractRows.length,
       total_sources: sources.length,
+      addable_sources: sources.filter((s) => s.addable !== false).length,
     },
     sources,
   }

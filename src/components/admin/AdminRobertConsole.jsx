@@ -1,9 +1,11 @@
 import React, { useCallback, useEffect, useState } from "react"
-import { AlertCircle, Compass, Loader2, PlayCircle, RefreshCw } from "lucide-react"
+import { AlertCircle, Compass, Loader2, PlayCircle, RefreshCw, Search } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
 import { Label } from "@/components/ui/label"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { useToast } from "@/components/ui/use-toast"
@@ -35,6 +37,9 @@ export default function AdminRobertConsole() {
     createRecommendations: true,
     deliverToasts: true,
   }, null, 2))
+  const [traceEntity, setTraceEntity] = useState('')
+  const [traceType, setTraceType] = useState('company')
+  const [traceResult, setTraceResult] = useState(null)
 
   const refresh = useCallback(async () => {
     try {
@@ -66,6 +71,26 @@ export default function AdminRobertConsole() {
       await refresh()
     } catch (err) {
       toast({ title: `Failed: ${label}`, description: err.message, variant: 'destructive' })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function traceFunding() {
+    const entity = traceEntity.trim()
+    if (!entity) return
+    setBusy(true)
+    setTraceResult(null)
+    try {
+      const res = await postRun('/api/robert/trace-funding', { entity, entity_type: traceType })
+      setTraceResult(res)
+      toast({
+        title: 'Funding traced',
+        description: `${res.addable} addable of ${res.traced} traced • ${res.upserted} staged as source candidates`,
+      })
+      await refresh()
+    } catch (err) {
+      toast({ title: 'Funding trace failed', description: err.message, variant: 'destructive' })
     } finally {
       setBusy(false)
     }
@@ -158,6 +183,55 @@ export default function AdminRobertConsole() {
               <RefreshCw className="w-4 h-4 mr-2" /> Refresh
             </Button>
           </div>
+
+          <Card className="border-emerald-200 bg-emerald-50/40">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm flex items-center gap-2">
+                <Search className="w-4 h-4 text-emerald-600" /> Trace funding for an entity
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-2">
+              <p className="text-xs text-slate-600">
+                Give Robert a company, public entity, or individual and he traces where their money comes from
+                (federal awards + AI analysis). Real, recently-funded sources are staged as <strong>pending source
+                candidates</strong> for the normal verify → ingest pipeline.
+              </p>
+              <div className="flex flex-col sm:flex-row gap-2">
+                <Input
+                  placeholder="e.g. Lockheed Martin, City of Columbus"
+                  value={traceEntity}
+                  onChange={(e) => setTraceEntity(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') traceFunding() }}
+                  className="flex-1"
+                />
+                <Select value={traceType} onValueChange={setTraceType}>
+                  <SelectTrigger className="sm:w-48"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="company">Company / Corporation</SelectItem>
+                    <SelectItem value="public_entity">Public Entity</SelectItem>
+                    <SelectItem value="individual">Individual</SelectItem>
+                  </SelectContent>
+                </Select>
+                <Button onClick={traceFunding} disabled={busy || !traceEntity.trim()} className="bg-emerald-600 hover:bg-emerald-700">
+                  {busy ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Search className="w-4 h-4 mr-2" />}
+                  Trace
+                </Button>
+              </div>
+              {traceResult && (
+                <div className="text-xs text-slate-700 flex flex-wrap gap-x-4 gap-y-1 pt-1">
+                  <span><strong>{traceResult.traced}</strong> traced</span>
+                  <span><strong>{traceResult.addable}</strong> addable</span>
+                  <span><strong>{traceResult.upserted}</strong> staged ({traceResult.inserted} new)</span>
+                  {traceResult.skipped_no_url > 0 && <span>{traceResult.skipped_no_url} skipped (no URL)</span>}
+                  {traceResult.addability && (
+                    <span className="text-slate-400">
+                      floor: ${(traceResult.addability.min_amount || 0).toLocaleString()} / {traceResult.addability.max_age_years}yr
+                    </span>
+                  )}
+                </div>
+              )}
+            </CardContent>
+          </Card>
         </CardContent>
       </Card>
 
