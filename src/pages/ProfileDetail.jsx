@@ -41,6 +41,7 @@ import { runProfileAvatarLookup } from "@/services/profileAvatarAI"
 import { calculateProfileCompletion } from "@/utils/profileCompletion"
 import { deriveEmploymentStatusForSave, guardProfileSectionSuggestion } from "@/utils/profileSuggestionGuards"
 import { formatFieldLabel } from "@/utils/fieldDisplay"
+import { EDITABLE_SECTIONS } from "@/config/missingInfoTargets"
 
 export default function ProfileDetail() {
   const [searchParams] = useSearchParams()
@@ -438,7 +439,9 @@ export default function ProfileDetail() {
     if (token === "|" || deepLinkHandled.current === token) return
     deepLinkHandled.current = token
     if (tabParam) setActiveTab(tabParam)
-    if (sectionParam) {
+    // Only pop the section editor for sections that actually have one — for
+    // documents / universities we just land on the tab.
+    if (sectionParam && EDITABLE_SECTIONS.has(sectionParam)) {
       const existing =
         profile.sections?.find((section) => section.section_key === sectionParam)?.data ?? {}
       handleOpenSection(sectionParam, existing, fieldParam)

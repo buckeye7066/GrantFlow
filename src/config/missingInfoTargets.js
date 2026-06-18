@@ -39,13 +39,30 @@ export const MISSING_INFO_TARGETS = {
   fafsa_efc: { tab: "profile", section: "financial_information", field: "fafsa_efc", label: "FAFSA EFC / SAI" },
 
   // ── education / school ────────────────────────────────────────────
+  // university_applications has no modal section editor — the "universities"
+  // tab owns that UI — so these deep-link to the tab, not a section editor.
   school_name: { tab: "universities", section: "university_applications", field: "name", label: "School / university" },
   major: { tab: "universities", section: "university_applications", field: "major", label: "Program / major" },
 
   // ── documents ─────────────────────────────────────────────────────
+  // documents are managed on the "documents" tab, not as a profile_section.
   transcript: { tab: "documents", section: "documents", isDocument: true, label: "Transcript" },
   personal_statement: { tab: "documents", section: "documents", isDocument: true, label: "Personal statement / essay" },
 }
+
+/**
+ * Sections that have a real modal editor in ProfileSectionEditor's
+ * SECTION_CONFIG. Deep-links only pass a `section` query param for these;
+ * for everything else (documents, university_applications) the link just
+ * switches tabs so we never pop the raw-JSON "unmapped section" fallback.
+ */
+export const EDITABLE_SECTIONS = new Set([
+  "basic_information", "organization_details", "financial_information",
+  "government_assistance", "health_medical", "medical_insurance", "medical_history",
+  "nonprofit_compliance", "small_business_details", "demographics", "education",
+  "employment", "housing", "family", "programs_services", "family_life",
+  "military_service", "occupation", "location_focus", "narrative",
+])
 
 /**
  * Section-level fallback so an AI todo item that only knows its target
@@ -94,11 +111,14 @@ export function buildProfileSectionLink(profileId, key) {
   if (!profileId) return null
   const target = resolveMissingInfoTarget(key)
   if (!target) return null
+  // Only pass section/field when the section has a real modal editor; otherwise
+  // just switch tabs so we never open the raw-JSON "unmapped section" fallback.
+  const editable = target.section && EDITABLE_SECTIONS.has(target.section)
   return createPageUrl("ProfileDetail", {
     id: profileId,
     tab: target.tab,
-    section: target.section,
-    field: target.field || undefined,
+    section: editable ? target.section : undefined,
+    field: editable ? target.field || undefined : undefined,
   })
 }
 
