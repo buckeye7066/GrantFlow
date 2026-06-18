@@ -11,12 +11,13 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { useToast } from '@/components/ui/use-toast'
 import {
   getCommittedCollegeWorkspace, commitToCollege, uncommitCollege,
-  setCommittedCollegeCOA,
+  setCommittedCollegeCOA, mergeCommittedCollegeFunding,
   getFafsaStatus, setFafsaStatus,
   getFafsaVerification, setFafsaVerificationDoc,
 } from '@/api/committedCollege.js'
 import { Input } from '@/components/ui/input'
 import CollegeFundingMergeModal from './CollegeFundingMergeModal.jsx'
+import HamiltonAutomationConsent from './HamiltonAutomationConsent.jsx'
 
 const TERMINAL = new Set(['declined', 'denied', 'rejected', 'withdrawn', 'archived'])
 const COMMITTED = new Set(['committed', 'enrolled', 'attending', 'current', 'matriculated', 'deposited'])
@@ -40,6 +41,7 @@ export default function CommittedCollegeWorkspace({ profileId, applications = []
   const { toast } = useToast()
   const queryClient = useQueryClient()
   const [mergeOpen, setMergeOpen] = useState(false)
+  const [automateConsentOpen, setAutomateConsentOpen] = useState(false)
 
   const { data, isLoading, isError } = useQuery({
     queryKey: ['committed-college-workspace', profileId],
@@ -74,6 +76,20 @@ export default function CommittedCollegeWorkspace({ profileId, applications = []
     mutationFn: (payload) => setCommittedCollegeCOA(profileId, payload),
     onSuccess: () => { toast({ title: 'Cost of attendance saved' }); setCoaOpen(false); invalidate() },
     onError: (err) => toast({ title: 'Save failed', description: err?.message, variant: 'destructive' }),
+  })
+
+  // One-click "Automate with Hamilton": consent → hand off ALL matched funding.
+  const quickAutomate = useMutation({
+    mutationFn: (items) => mergeCommittedCollegeFunding(profileId, { selectedFunding: items, authorize: true }),
+    onSuccess: (res) => {
+      const n = res?.plan?.automatable_ids?.length || 0
+      const parts = [n > 0 ? `${n} item(s) sent to Hamilton` : 'No portal/packet items to automate yet']
+      if (res?.plan?.requires_user_action) parts.push('some need your action and won’t be auto-submitted')
+      toast({ title: 'Funding handed to Hamilton', description: `${parts.join('; ')}.` })
+      setAutomateConsentOpen(false)
+      invalidate()
+    },
+    onError: (err) => toast({ title: 'Automation failed', description: err?.message, variant: 'destructive' }),
   })
   const openCoaEditor = (coa = {}) => {
     const s = (v) => (v === null || v === undefined ? '' : String(v))
@@ -313,9 +329,18 @@ export default function CommittedCollegeWorkspace({ profileId, applications = []
                 {workspace.matched_funding?.count || 0} source(s) · {fmt(workspace.matched_funding?.total)}
               </div>
             </div>
-            <Button size="sm" onClick={() => setMergeOpen(true)} disabled={(workspace.matched_funding?.count || 0) === 0}>
-              Merge with Hamilton
-            </Button>
+            <div className="flex flex-wrap gap-2">
+              <Button size="sm" variant="outline" onClick={() => setMergeOpen(true)} disabled={(workspace.matched_funding?.count || 0) === 0}>
+                Review &amp; merge
+              </Button>
+              <Button
+                size="sm"
+                onClick={() => setAutomateConsentOpen(true)}
+                disabled={(workspace.matched_funding?.count || 0) === 0 || quickAutomate.isPending}
+              >
+                {quickAutomate.isPending ? 'Handing off…' : 'Automate with Hamilton'}
+              </Button>
+            </div>
           </div>
 
           {/* Missing documents */}
@@ -374,6 +399,14 @@ export default function CommittedCollegeWorkspace({ profileId, applications = []
         onOpenChange={setMergeOpen}
         profileId={profileId}
         matchedFunding={workspace.matched_funding?.items || []}
+      />
+
+      <HamiltonAutomationConsent
+        open={automateConsentOpen}
+        onOpenChange={setAutomateConsentOpen}
+        busy={quickAutomate.isPending}
+        body={`Hamilton will prepare and drive all ${workspace.matched_funding?.count || 0} matched funding source(s) for ${c.name || 'this college'}: open each portal, fill every field from this profile, and assemble the packet.`}
+        onConfirm={() => quickAutomate.mutate(workspace.matched_funding?.items || [])}
       />
     </>
   )
