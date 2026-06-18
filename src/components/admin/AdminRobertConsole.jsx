@@ -40,6 +40,8 @@ export default function AdminRobertConsole() {
   const [traceEntity, setTraceEntity] = useState('')
   const [traceType, setTraceType] = useState('company')
   const [traceResult, setTraceResult] = useState(null)
+  const [autoProfileId, setAutoProfileId] = useState('')
+  const [autoResult, setAutoResult] = useState(null)
 
   const refresh = useCallback(async () => {
     try {
@@ -91,6 +93,26 @@ export default function AdminRobertConsole() {
       await refresh()
     } catch (err) {
       toast({ title: 'Funding trace failed', description: err.message, variant: 'destructive' })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function autoSeedTrace() {
+    const profileId = autoProfileId.trim()
+    if (!profileId) return
+    setBusy(true)
+    setAutoResult(null)
+    try {
+      const res = await postRun('/api/robert/trace-funding/auto', { profileId })
+      setAutoResult(res)
+      toast({
+        title: 'Auto-seed complete',
+        description: `${res.seeds_traced} peer entities traced • ${res.total_upserted} funders staged`,
+      })
+      await refresh()
+    } catch (err) {
+      toast({ title: 'Auto-seed failed', description: err.message, variant: 'destructive' })
     } finally {
       setBusy(false)
     }
@@ -230,6 +252,33 @@ export default function AdminRobertConsole() {
                   )}
                 </div>
               )}
+
+              <div className="border-t border-emerald-200/70 pt-2 mt-1 space-y-2">
+                <p className="text-xs text-slate-600">
+                  Or let Robert <strong>auto-seed</strong>: he finds funded organizations similar to a profile and
+                  traces their funders — no entity entry needed.
+                </p>
+                <div className="flex flex-col sm:flex-row gap-2">
+                  <Input
+                    placeholder="Profile ID to auto-seed from"
+                    value={autoProfileId}
+                    onChange={(e) => setAutoProfileId(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === 'Enter') autoSeedTrace() }}
+                    className="flex-1"
+                  />
+                  <Button variant="outline" onClick={autoSeedTrace} disabled={busy || !autoProfileId.trim()}>
+                    {busy ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Compass className="w-4 h-4 mr-2" />}
+                    Auto-seed from profile
+                  </Button>
+                </div>
+                {autoResult && (
+                  <div className="text-xs text-slate-700 flex flex-wrap gap-x-4 gap-y-1">
+                    <span><strong>{autoResult.seeds_traced}</strong> peers traced</span>
+                    <span><strong>{autoResult.total_addable}</strong> addable</span>
+                    <span><strong>{autoResult.total_upserted}</strong> staged</span>
+                  </div>
+                )}
+              </div>
             </CardContent>
           </Card>
         </CardContent>

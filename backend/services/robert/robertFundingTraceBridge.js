@@ -15,6 +15,7 @@
  */
 
 import { traceFunding } from '../fundingTraceService.js'
+import { findSimilarOrgsFunders } from '../reverseLookupService.js'
 import { makeSourceCandidate, SOURCE_STATUS } from './robertTypes.js'
 import { createLogger } from '../../utils/logger.js'
 
@@ -23,7 +24,7 @@ const log = createLogger('robertFundingTrace')
 // Map a traced source type to Robert's source-type taxonomy + scope + trust.
 // Federal award data is authoritative, so those carry high trust; AI-identified
 // channels are plausible leads and carry lower trust pending verification.
-function classify(source) {
+export function classifyTracedSource(source) {
   switch (source.type) {
     case 'federal_agency':
       return { source_type: 'federal_portal', source_scope: 'federal', trust: 85 }
@@ -51,12 +52,13 @@ function classify(source) {
  * @param {boolean}  [args.useAi]       include AI-synthesized channels (default true)
  * @param {Function} args.upsert        async (db, candidate) => { id, inserted, updated }
  * @param {string|null} [args.runId]    associate candidates with a Robert run
+ * @param {Function} [args.traceFn]     trace implementation (injected for tests)
  * @returns {Promise<object>} summary { entity, traced, addable, upserted, skipped, candidates }
  */
-export async function traceFundingIntoCandidates(db, { entity, entityType = 'company', useAi = true, upsert, runId = null } = {}) {
+export async function traceFundingIntoCandidates(db, { entity, entityType = 'company', useAi = true, upsert, runId = null, traceFn = traceFunding } = {}) {
   if (typeof upsert !== 'function') throw new Error('traceFundingIntoCandidates: upsert function required')
 
-  const trace = await traceFunding(db, { entity, entityType, useAi })
+  const trace = await traceFn(db, { entity, entityType, useAi })
 
   // Only addable funders become candidates; a source MUST have a real URL
   // (Robert rejects sources without one — goal #1: no dead/placeholder links).
@@ -68,7 +70,7 @@ export async function traceFundingIntoCandidates(db, { entity, entityType = 'com
   const candidates = []
 
   for (const source of addable) {
-    const { source_type, source_scope, trust } = classify(source)
+    const { source_type, source_scope, trust } = classifyTracedSource(source)
     try {
       const candidate = makeSourceCandidate({
         source_name: source.parent_agency ? `${source.name} (${source.parent_agency})` : source.name,
@@ -113,5 +115,119 @@ export async function traceFundingIntoCandidates(db, { entity, entityType = 'com
     updated,
     skipped_no_url: skippedNoUrl,
     candidates,
+  }
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// Auto-seed: derive entities to trace from a profile Robert already covers.
+// ───────────────────────────────────────────────────────────────────────────
+
+// Generic words that make a peer-org name useless as a USASpending recipient
+// search (they match thousands of unrelated recipients).
+const STOPWORD_NAMES = new Set(['unknown', 'n/a', 'none', 'various', 'anonymous'])
+
+function usableEntityName(name) {
+  const n = String(name || '').trim()
+  if (n.length < 4) return false
+  return !STOPWORD_NAMES.has(n.toLowerCase())
+}
+
+/**
+ * PURE: turn a profile's peer organizations into a deduped, capped list of
+ * entities worth tracing. The premise (goals #1/#6): organizations *similar to
+ * our user* that already win funding reveal real funders we can add — so we
+ * trace the peers, not the user.
+ *
+ * @param {object} args
+ * @param {Array}  args.similarOrgs   peer orgs from reverse-lookup ([{ name }])
+ * @param {object} [args.profileSummary] { entity_type }
+ * @param {string} [args.ownOrgName]  the profile's own org name (traced too if established)
+ * @param {number} [args.max]         cap on entities returned
+ * @returns {Array<{ entity, entityType, reason }>}
+ */
+export function deriveSeedEntities({ similarOrgs = [], profileSummary = {}, ownOrgName = null, max = 8 } = {}) {
+  // Peers are organizations regardless of the profile's own entity type.
+  const entityType = 'company'
+  const seeds = []
+  const seen = new Set()
+
+  const push = (name, reason) => {
+    if (!usableEntityName(name)) return
+    const key = name.trim().toLowerCase()
+    if (seen.has(key)) return
+    seen.add(key)
+    seeds.push({ entity: name.trim(), entityType, reason })
+  }
+
+  // The profile's own org first (find where THEY already get funding).
+  if (ownOrgName) push(ownOrgName, 'profile_own_org')
+  // Then mission-aligned peers, in the order reverse-lookup ranked them.
+  for (const org of similarOrgs) push(org?.name, 'similar_org_peer')
+
+  // profileSummary kept for future weighting (e.g. de-prioritize peers in a
+  // different state); not needed for the current ordering.
+  void profileSummary
+
+  return seeds.slice(0, max)
+}
+
+/**
+ * Auto-seed funding-trace from a profile: find peers, trace each, stage the
+ * funders as pending source candidates. Dependencies are injected so the
+ * orchestration is testable without network or DB.
+ *
+ * @param {object} db
+ * @param {object} args
+ * @param {string} args.profileId
+ * @param {number} [args.maxEntities]   cap on peer entities to trace (default 5)
+ * @param {boolean} [args.useAi]        pass-through to the trace (default false here — peers are many, keep it cheap)
+ * @param {string|null} [args.runId]
+ * @param {object} [args.deps]          { findPeers, traceInto, upsert }
+ * @returns {Promise<object>} aggregate summary
+ */
+export async function autoSeedTraceForProfile(db, { profileId, maxEntities = 5, useAi = false, runId = null, deps = {} } = {}) {
+  if (!profileId) throw new Error('autoSeedTraceForProfile: profileId required')
+  const findPeers = deps.findPeers || ((d, id) => findSimilarOrgsFunders(d, id, { maxResults: 15 }))
+  const traceInto = deps.traceInto || traceFundingIntoCandidates
+  const upsert = deps.upsert
+  if (typeof upsert !== 'function') throw new Error('autoSeedTraceForProfile: deps.upsert function required')
+
+  const peerResult = await findPeers(db, profileId)
+  const seeds = deriveSeedEntities({
+    similarOrgs: peerResult?.similar_orgs || [],
+    profileSummary: peerResult?.profile_summary || {},
+    ownOrgName: peerResult?.profile_summary?.org_name || null,
+    max: maxEntities,
+  })
+
+  const perEntity = []
+  let totalUpserted = 0
+  let totalAddable = 0
+  for (const seed of seeds) {
+    try {
+      const summary = await traceInto(db, {
+        entity: seed.entity,
+        entityType: seed.entityType,
+        useAi,
+        upsert,
+        runId,
+      })
+      totalUpserted += summary.upserted || 0
+      totalAddable += summary.addable || 0
+      perEntity.push({ ...seed, addable: summary.addable, upserted: summary.upserted })
+    } catch (err) {
+      log.warn(`[robert:funding-trace] auto-seed trace failed for "${seed.entity}": ${err?.message}`)
+      perEntity.push({ ...seed, error: err?.message || 'trace failed' })
+    }
+  }
+
+  log.info(`[robert:funding-trace] auto-seed profile=${profileId} peers=${seeds.length} addable=${totalAddable} upserted=${totalUpserted}`)
+
+  return {
+    profile_id: profileId,
+    seeds_traced: seeds.length,
+    total_addable: totalAddable,
+    total_upserted: totalUpserted,
+    per_entity: perEntity,
   }
 }

@@ -42,7 +42,7 @@ import {
   updateOpportunityCandidate,
   upsertSourceCandidate,
 } from '../services/robert/robertRunStore.js'
-import { traceFundingIntoCandidates } from '../services/robert/robertFundingTraceBridge.js'
+import { traceFundingIntoCandidates, autoSeedTraceForProfile } from '../services/robert/robertFundingTraceBridge.js'
 import {
   markAccepted,
   markDeclined,
@@ -196,6 +196,27 @@ router.post('/trace-funding', adminOnly, async (req, res) => {
     return res.json({ ok: true, ...summary })
   } catch (err) {
     return handleError(res, err, 'Funding trace failed.')
+  }
+})
+
+// Auto-seed: derive trace entities from a profile's funded peers and stage
+// their funders as candidates — no manual entity entry needed.
+router.post('/trace-funding/auto', adminOnly, async (req, res) => {
+  try {
+    const profileId = req.body?.profileId || req.body?.profile_id
+    if (!profileId) {
+      return res.status(400).json({ ok: false, error: 'profileId is required' })
+    }
+    const maxEntities = Math.max(1, Math.min(15, Number(req.body?.maxEntities) || 5))
+    const summary = await autoSeedTraceForProfile(req.db, {
+      profileId: String(profileId),
+      maxEntities,
+      useAi: req.body?.use_ai === true,
+      deps: { upsert: upsertSourceCandidate },
+    })
+    return res.json({ ok: true, ...summary })
+  } catch (err) {
+    return handleError(res, err, 'Auto-seed funding trace failed.')
   }
 })
 
