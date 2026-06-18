@@ -1,0 +1,43 @@
+/**
+ * API client for the committed-college financial-aid workspace.
+ * Backend: backend/routes/committedCollege.js (mounted on /api).
+ */
+import { apiFetch } from '@/api/apiClient.js'
+import { assertRealProfileId } from '@/api/profileIdGuards'
+
+/** GET the aggregated workspace (committed college, COA, FAFSA, aid, funding…). */
+export async function getCommittedCollegeWorkspace(profileId) {
+  assertRealProfileId(profileId, 'getCommittedCollegeWorkspace')
+  return apiFetch(`/api/profiles/${profileId}/committed-college/workspace`)
+}
+
+/** Commit to one college — the others archive (drop off). */
+export async function commitToCollege(profileId, collegeId) {
+  assertRealProfileId(profileId, 'commitToCollege')
+  return apiFetch(`/api/profiles/${profileId}/committed-college/commit`, {
+    method: 'POST',
+    body: JSON.stringify({ collegeId }),
+  })
+}
+
+/** Restore an archived college to its previous status (undo). */
+export async function uncommitCollege(profileId, collegeId) {
+  assertRealProfileId(profileId, 'uncommitCollege')
+  return apiFetch(`/api/profiles/${profileId}/committed-college/uncommit`, {
+    method: 'POST',
+    body: JSON.stringify({ collegeId }),
+  })
+}
+
+/**
+ * Plan/merge selected funding into Hamilton. With authorize=false this returns
+ * the compliance-annotated plan (preview); authorize=true also hands the
+ * autopilot/packet (non-federal) items to Hamilton.
+ */
+export async function mergeCommittedCollegeFunding(profileId, { selectedFunding = [], authorize = false } = {}) {
+  assertRealProfileId(profileId, 'mergeCommittedCollegeFunding')
+  return apiFetch(`/api/profiles/${profileId}/committed-college/merge-funding`, {
+    method: 'POST',
+    body: JSON.stringify({ selectedFunding, authorize }),
+  })
+}

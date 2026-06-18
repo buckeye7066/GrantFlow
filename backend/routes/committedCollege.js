@@ -54,9 +54,14 @@ async function loadSections(db, profileId) {
 async function loadMatchedFunding(db, profileId) {
   try {
     const rows = await db
-      .prepare(`SELECT title, amount_awarded, amount_requested FROM grants WHERE profile_id = ? ORDER BY updated_at DESC LIMIT 100`)
+      .prepare(`SELECT id, funding_opportunity_id, title, amount_awarded, amount_requested FROM grants WHERE profile_id = ? ORDER BY updated_at DESC LIMIT 100`)
       .all(String(profileId))
-    return (rows || []).map((r) => ({ title: r.title, amount: r.amount_awarded ?? r.amount_requested ?? null }))
+    return (rows || []).map((r) => ({
+      id: r.id,
+      opportunity_id: r.funding_opportunity_id || null,
+      title: r.title,
+      amount: r.amount_awarded ?? r.amount_requested ?? null,
+    }))
   } catch {
     return []
   }
