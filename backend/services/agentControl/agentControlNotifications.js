@@ -56,6 +56,8 @@ async function ensureNotificationsSchema(db) {
 
 function severityFromType(type) {
   switch (type) {
+    case 'agent_control_sam_critical':
+      return 'critical'
     case 'agent_control_failed':
     case 'agent_control_emergency_stopped':
     case 'agent_control_agent_failed':
@@ -208,5 +210,28 @@ export async function notifyAgentBlocked(db, run, agentName, reason = 'unknown b
     title: `Agent Control Center: ${agentName} blocked`,
     message: `Agent "${agentName}" blocked inside ${runLabel(run)} — ${reason}`,
     data: { run_id: run?.id, run_type: run?.run_type, agent: agentName, reason },
+  })
+}
+
+/**
+ * Sam (code supervisor) escalation: emit ONE persistent critical notification
+ * to the canonical admin when a Sam run finds critical issues (charter §3/§6 —
+ * "report critical issues to the single admin"). Kept here so Sam reuses the
+ * canonical notification path instead of inventing its own.
+ */
+export async function notifySamCritical(db, {
+  runId = null,
+  criticalCount = 0,
+  totalFindings = 0,
+  healthScore = null,
+  productionReady = null,
+} = {}) {
+  const score = (healthScore === null || healthScore === undefined) ? '' : ` Health score ${healthScore}.`
+  return emitControlNotification(db, {
+    type: 'agent_control_sam_critical',
+    title: `Sam: ${criticalCount} critical issue${criticalCount === 1 ? '' : 's'} need review`,
+    message: `Sam's supervision run found ${criticalCount} critical issue${criticalCount === 1 ? '' : 's'} (of ${totalFindings} findings).${score}${productionReady === false ? ' GrantFlow is NOT production-ready until these are resolved.' : ''}`,
+    data: { run_id: runId, agent: 'sam', critical_count: criticalCount, total_findings: totalFindings, health_score: healthScore, production_ready: productionReady },
+    expiresInDays: 90,
   })
 }

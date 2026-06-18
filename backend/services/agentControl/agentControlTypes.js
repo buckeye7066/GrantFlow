@@ -101,6 +101,7 @@ export const CONTROL_NOTIFICATION_TYPES = Object.freeze([
   'agent_control_emergency_stopped',
   'agent_control_agent_failed',
   'agent_control_agent_blocked',
+  'agent_control_sam_critical',
 ])
 
 /**
