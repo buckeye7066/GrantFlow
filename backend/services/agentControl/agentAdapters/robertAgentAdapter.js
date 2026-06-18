@@ -64,9 +64,26 @@ export class RobertAgentAdapter extends BaseAgentAdapter {
 
     // Default mode is observe (read-only coverage analysis). When the admin
     // explicitly authorises ingestion we upgrade to full-cycle, which runs
-    // every Robert phase — gated internally by ROBERT_ENABLED and
-    // ROBERT_ALLOW_LIVE_WEB env knobs.
+    // every Robert phase.
     const mode = allowIngest ? 'full-cycle' : 'observe'
+
+    // An admin explicitly authorising ingest through the Control Center IS the
+    // authorization to run Robert's full cycle. Without this override, runRobert
+    // re-reads the env safe-defaults (ROBERT_ENABLED / ROBERT_ALLOW_LIVE_WEB,
+    // both false by default) and silently downgrades the requested 'full-cycle'
+    // back to read-only 'observe' (robertAgent.js liveWebPermitted gate) — so
+    // toggling Robert ON in the app did nothing. Passing an explicit
+    // configOverride makes the in-app authorization authoritative over the env
+    // defaults; runRobert merges it over getRobertConfig().
+    //
+    // Note: this does NOT cause outbound web calls. Live source/opportunity
+    // discovery (phases 3–4) additionally requires deps.searchProvider /
+    // deps.opportunityAdapter, which are not wired on this path — so the
+    // override only unlocks verify + ingest + match + recommend over candidates
+    // that already exist in Robert's stores.
+    const configOverride = allowIngest
+      ? { enabled: true, allowLiveWeb: true, allowSourceDiscovery: true, autoIngestVerified: true }
+      : { enabled: true }
 
     let result
     try {
@@ -75,6 +92,7 @@ export class RobertAgentAdapter extends BaseAgentAdapter {
         mode,
         trigger: 'admin-ui',
         dryRun,
+        deps: { configOverride },
       })
     } catch (err) {
       return {
