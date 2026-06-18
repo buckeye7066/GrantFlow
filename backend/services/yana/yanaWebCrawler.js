@@ -318,8 +318,113 @@ export function makeProPublicaNonprofitSource({ query = 'foundation', state = nu
   }
 }
 
+// ── Generic operator-configured feed sources (JSON / CSV) ────────────────────
+// Let an operator point Yana at ANY vetted public org directory without code:
+// set YANA_WEB_JSON_FEED_URL or YANA_WEB_CSV_FEED_URL and name 'json_feed' /
+// 'csv_feed' in YANA_WEB_SOURCES. Fields are matched by common aliases.
+
+const FIELD_ALIASES = Object.freeze({
+  name: ['name', 'organization_name', 'org_name', 'organization', 'title'],
+  email: ['email', 'contact_email', 'email_address', 'e_mail'],
+  website: ['website', 'website_url', 'url', 'homepage', 'web'],
+  city: ['city', 'town', 'locality'],
+  state: ['state', 'state_id', 'st', 'province', 'region'],
+  ein: ['ein', 'tax_id', 'taxid'],
+  mission: ['mission', 'description', 'summary', 'about', 'ntee_classification'],
+  organization_type: ['organization_type', 'org_type', 'type', 'category', 'sector'],
+})
+
+function pickField(row, aliases) {
+  for (const a of aliases) {
+    const v = row?.[a]
+    if (v !== undefined && v !== null && String(v).trim() !== '') return String(v).trim()
+  }
+  return null
+}
+
+/** Map an arbitrary feed row to an org candidate via field aliases. Pure. */
+export function mapFeedRow(row = {}) {
+  const get = (k) => pickField(row, FIELD_ALIASES[k])
+  const orgType = get('organization_type')
+  return {
+    name: get('name'),
+    email: get('email'),
+    website: get('website'),
+    city: get('city'),
+    state: get('state'),
+    ein: get('ein'),
+    mission: get('mission'),
+    organization_type: orgType,
+    applicant_type: orgType || 'organization',
+  }
+}
+
+function findArray(json) {
+  if (Array.isArray(json)) return json
+  for (const key of ['results', 'data', 'organizations', 'items', 'records', 'rows']) {
+    if (Array.isArray(json?.[key])) return json[key]
+  }
+  return []
+}
+
+function splitCsvLine(line) {
+  const out = []
+  let cur = ''
+  let q = false
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i]
+    if (q) {
+      if (c === '"') { if (line[i + 1] === '"') { cur += '"'; i++ } else q = false } else cur += c
+    } else if (c === '"') { q = true } else if (c === ',') { out.push(cur); cur = '' } else cur += c
+  }
+  out.push(cur)
+  return out
+}
+
+/** Minimal CSV → array of objects keyed by lower-cased header. Pure. */
+export function parseCsv(text) {
+  const lines = String(text || '').split(/\r?\n/).filter((l) => l.length > 0)
+  if (!lines.length) return []
+  const header = splitCsvLine(lines[0]).map((h) => h.trim().toLowerCase())
+  return lines.slice(1).map((line) => {
+    const cells = splitCsvLine(line)
+    if (!cells.some((c) => c.trim() !== '')) return null
+    const obj = {}
+    header.forEach((h, i) => { obj[h] = (cells[i] ?? '').trim() })
+    return obj
+  }).filter(Boolean)
+}
+
+export function makeJsonFeedSource({ url = process.env.YANA_WEB_JSON_FEED_URL || null } = {}) {
+  return {
+    name: 'json_feed',
+    baseUrl: url,
+    async fetchCandidates({ fetchImpl, limit = 200 } = {}) {
+      if (!url) return []
+      const res = await fetchImpl(url, { responseType: 'json' })
+      if (!res?.ok || !res.json) return []
+      return findArray(res.json).slice(0, limit).map(mapFeedRow).filter((r) => r.name)
+    },
+  }
+}
+
+export function makeCsvFeedSource({ url = process.env.YANA_WEB_CSV_FEED_URL || null } = {}) {
+  return {
+    name: 'csv_feed',
+    baseUrl: url,
+    async fetchCandidates({ fetchImpl, limit = 200 } = {}) {
+      if (!url) return []
+      const res = await fetchImpl(url, { responseType: 'text' })
+      if (!res?.ok || !res.text) return []
+      return parseCsv(res.text).slice(0, limit).map(mapFeedRow).filter((r) => r.name)
+    },
+  }
+}
+
 const KNOWN_SOURCE_FACTORIES = Object.freeze({
   propublica_nonprofits: makeProPublicaNonprofitSource,
+  json_feed: makeJsonFeedSource,
+  csv_feed: makeCsvFeedSource,
 })
 
 /** Register the vetted sources named in config.sources (operator opt-in). */
