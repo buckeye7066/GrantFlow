@@ -2699,6 +2699,17 @@ if (process.env.NODE_ENV !== 'test') {
         console.warn('[sam:scheduler] failed to start:', samErr?.message || samErr)
       }
     })();
+    // Agent-control lock sweeper — reclaims orphaned/expired locks on a timer so
+    // a lock left behind by a crashed worker self-heals even while the system is
+    // idle (acquireLock already sweeps, but only when a run is attempted).
+    (async () => {
+      try {
+        const { startLockSweeper } = await import('./services/agentControl/agentControlStore.js')
+        startLockSweeper(db, { logger: console })
+      } catch (sweepErr) {
+        console.warn('[agent-control] lock sweeper failed to start:', sweepErr?.message || sweepErr)
+      }
+    })();
 
     // Auto-heal Postgres CHECK constraints that may be outdated if migrations haven't run.
     if (db.dialect === 'postgres') {

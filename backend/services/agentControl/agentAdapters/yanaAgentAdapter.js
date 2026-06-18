@@ -22,6 +22,7 @@
 
 import { BaseAgentAdapter } from './baseAgentAdapter.js'
 import { runYanaDiscovery, getYanaStatus, getYanaConfig } from '../../yana/yanaLeadDiscovery.js'
+import { getLastRunAtFromEvents } from '../../agentTelemetry/agentTelemetryStore.js'
 
 export class YanaAgentAdapter extends BaseAgentAdapter {
   constructor() {
@@ -39,13 +40,14 @@ export class YanaAgentAdapter extends BaseAgentAdapter {
       s = (await getYanaStatus(db)) || {}
     } catch { /* fresh DBs may not have the tables yet */ }
     const queueDepth = Number(s.queue_depth || 0)
+    const lastRunAt = (await getLastRunAtFromEvents(db, 'yana')) || s.last_run_at || null
     return {
       ...base,
       installed: true,
       queue_depth: queueDepth,
-      last_run_at: s.last_run_at || null,
+      last_run_at: lastRunAt,
       last_status: s.last_status || null,
-      health: s.last_status === 'failed' ? 'error' : (queueDepth > 0 ? 'healthy' : (s.last_run_at ? 'idle' : 'idle')),
+      health: s.last_status === 'failed' ? 'error' : (queueDepth > 0 ? 'healthy' : (lastRunAt ? 'idle' : 'idle')),
       details: s.details || null,
     }
   }

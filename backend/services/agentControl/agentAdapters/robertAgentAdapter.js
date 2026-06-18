@@ -12,6 +12,7 @@
  */
 
 import { BaseAgentAdapter } from './baseAgentAdapter.js'
+import { getLastRunAtFromEvents } from '../../agentTelemetry/agentTelemetryStore.js'
 
 export class RobertAgentAdapter extends BaseAgentAdapter {
   constructor() {
@@ -31,10 +32,11 @@ export class RobertAgentAdapter extends BaseAgentAdapter {
         .get()
       last = row || null
     } catch { /* table may not exist */ }
+    const lastRunAt = (await getLastRunAtFromEvents(db, 'robert')) || last?.started_at || null
     return {
       ...base,
       installed: true,
-      last_run_at: last?.started_at || null,
+      last_run_at: lastRunAt,
       last_status: last?.status || null,
       health: last?.status === 'failed' ? 'error' : last ? 'healthy' : 'idle',
       details: last,
