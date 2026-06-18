@@ -41,3 +41,18 @@ export async function mergeCommittedCollegeFunding(profileId, { selectedFunding 
     body: JSON.stringify({ selectedFunding, authorize }),
   })
 }
+
+/** GET the FAFSA lifecycle status (stage, label, next action, ordered stages). */
+export async function getFafsaStatus(profileId) {
+  assertRealProfileId(profileId, 'getFafsaStatus')
+  return apiFetch(`/api/profiles/${profileId}/fafsa-status`)
+}
+
+/** Advance/correct the FAFSA stage. */
+export async function setFafsaStatus(profileId, stage) {
+  assertRealProfileId(profileId, 'setFafsaStatus')
+  return apiFetch(`/api/profiles/${profileId}/fafsa-status`, {
+    method: 'POST',
+    body: JSON.stringify({ stage }),
+  })
+}
