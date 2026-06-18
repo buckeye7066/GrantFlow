@@ -25,7 +25,7 @@
 import crypto from 'node:crypto'
 import { getWithRetry, headForVerification } from '../crawlers/httpClient.js'
 import { isUrlAllowed } from '../crawlers/robotsPolicy.js'
-import { enrichOrgEmail } from '../crawlers/orgContactEnrichment.js'
+import { enrichOrgContact } from '../crawlers/orgContactEnrichment.js'
 import { createLogger } from '../../utils/logger.js'
 
 const log = createLogger('yana-web-crawler')
@@ -151,14 +151,16 @@ async function insertOrganization(db, org) {
   await db
     .prepare(
       `INSERT INTO organizations
-         (id, name, email, website, mission, focus_areas, program_areas,
-          applicant_type, organization_type, ein, city, state, created_by, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'yana-web-crawler', ${nowFn}, ${nowFn})`,
+         (id, name, email, phone, website, mission, focus_areas, program_areas,
+          applicant_type, organization_type, ein, city, state, contact_name, contact_title,
+          created_by, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'yana-web-crawler', ${nowFn}, ${nowFn})`,
     )
     .run(
       id,
       String(org.name || org.organization_name || '').trim(),
       org.email ? String(org.email).trim() : null,
+      org.phone ? String(org.phone).trim() : null,
       normalizeWebsite(org.website || org.website_url),
       org.mission ? String(org.mission).slice(0, 4000) : null,
       JSON.stringify(Array.isArray(org.focus_areas) ? org.focus_areas : []),
@@ -168,6 +170,8 @@ async function insertOrganization(db, org) {
       org.ein ? String(org.ein) : null,
       org.city || null,
       org.state || null,
+      org.contact_name ? String(org.contact_name).slice(0, 200) : null,
+      org.contact_title ? String(org.contact_title).slice(0, 200) : null,
     )
   return id
 }
@@ -195,6 +199,8 @@ export async function runYanaWebCrawl(db, {
     rejected_junk: 0,
     rejected_dead: 0,
     enriched_emails: 0,
+    enriched_phones: 0,
+    enriched_contacts: 0,
     robots_blocked: [],
   }
 
@@ -247,17 +253,23 @@ export async function runYanaWebCrawl(db, {
         if (!head || head.ok !== true) { summary.rejected_dead += 1; continue }
       }
 
-      // Enrich a website-only org with its published contact email so the funnel
-      // can qualify it (email is a required gate). Same-domain, robots-respected.
-      if (config.enrichEmails && !org.email && site) {
+      // Enrich a website-only org with its published contact details (email so
+      // the funnel can qualify it, plus phone + contact person for richer
+      // outreach packets). Same-domain, robots-respected.
+      if (config.enrichEmails && site && (!org.email || !org.phone || !org.contact_name)) {
         try {
-          const found = await enrichOrgEmail(org, { fetchImpl, robotsCheck, delay, delayMs: config.perDomainDelayMs, userAgent: config.userAgent })
-          if (found?.email) {
-            org.email = found.email
-            summary.enriched_emails += 1
+          const found = await enrichOrgContact(org, { fetchImpl, robotsCheck, delay, delayMs: config.perDomainDelayMs, userAgent: config.userAgent })
+          if (found) {
+            if (found.email && !org.email) { org.email = found.email; summary.enriched_emails += 1 }
+            if (found.phone && !org.phone) { org.phone = found.phone; summary.enriched_phones += 1 }
+            if (found.contact_name && !org.contact_name) {
+              org.contact_name = found.contact_name
+              org.contact_title = found.contact_title || null
+              summary.enriched_contacts += 1
+            }
           }
         } catch (err) {
-          logger?.warn?.(`email enrichment failed for "${org.name}": ${err?.message || err}`)
+          logger?.warn?.(`contact enrichment failed for "${org.name}": ${err?.message || err}`)
         }
       }
 

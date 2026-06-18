@@ -76,14 +76,74 @@ export function pickBestOrgEmail(emails, { domain = null } = {}) {
   return [...list].sort((a, b) => score(b) - score(a))[0]
 }
 
+// ── Phone extraction ────────────────────────────────────────────────────────
+const TEL_RX = /tel:\+?([0-9.\-()\s]{7,})/gi
+const PHONE_RX = /(?:\+?1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}/g
+
+function normalizePhone(raw) {
+  let d = String(raw || '').replace(/\D/g, '')
+  if (d.length === 11 && d.startsWith('1')) d = d.slice(1)
+  if (d.length !== 10) return null
+  if (/^(\d)\1{9}$/.test(d)) return null // 0000000000 / 1111111111 etc
+  return `(${d.slice(0, 3)}) ${d.slice(3, 6)}-${d.slice(6)}`
+}
+
+/** Extract normalized US phone numbers (tel: links first). Pure. */
+export function extractPhones(html) {
+  const text = String(html || '')
+  const out = []
+  const seen = new Set()
+  const add = (raw) => { const p = normalizePhone(raw); if (p && !seen.has(p)) { seen.add(p); out.push(p) } }
+  let m
+  while ((m = TEL_RX.exec(text))) add(m[1])
+  for (const raw of text.match(PHONE_RX) || []) add(raw)
+  return out
+}
+
+// ── Contact name + title extraction (conservative — needs an explicit role) ──
+const ROLE_TITLES = [
+  'Executive Director', 'Development Director', 'Director of Development', 'Grants Manager',
+  'Grant Manager', 'Program Director', 'Chief Executive Officer', 'Executive Officer',
+  'President', 'CEO', 'Founder', 'Director', 'Coordinator', 'Manager', 'Administrator',
+]
+const NAME = "[A-Z][a-z]+(?:\\s+[A-Z][A-Za-z.'-]+){1,2}"
+const TITLE_ALT = ROLE_TITLES.map((t) => t.replace(/ /g, '\\s+')).join('|')
+const TITLE_THEN_NAME = new RegExp(`(${TITLE_ALT})\\s*[:\\-–]\\s*(${NAME})`)
+const NAME_THEN_TITLE = new RegExp(`(${NAME})\\s*,\\s*(${TITLE_ALT})`)
+
+function stripTags(html) {
+  return String(html || '').replace(/<[^>]+>/g, ' ').replace(/&nbsp;|&amp;/gi, ' ').replace(/\s+/g, ' ').trim()
+}
+
+// Common words that greedily attach to the front of a captured name.
+const NAME_STOPWORDS = new Set(['contact', 'reach', 'email', 'call', 'meet', 'our', 'the', 'welcome', 'about', 'please'])
+function cleanName(raw) {
+  let words = String(raw || '').trim().split(/\s+/)
+  while (words.length > 2 && NAME_STOPWORDS.has(words[0].toLowerCase())) words = words.slice(1)
+  return words.join(' ')
+}
+
+/** Best-effort {name, title} of an org contact person, or null. Pure. */
+export function extractContactName(html) {
+  const text = stripTags(html)
+  let m = TITLE_THEN_NAME.exec(text)
+  if (m) return { name: cleanName(m[2]), title: m[1].replace(/\s+/g, ' ').trim() }
+  m = NAME_THEN_TITLE.exec(text)
+  if (m) return { name: cleanName(m[1]), title: m[2].replace(/\s+/g, ' ').trim() }
+  return null
+}
+
 const realDelay = (ms) => new Promise((resolve) => { const t = setTimeout(resolve, ms); if (t?.unref) t.unref() })
 
 /**
- * Enrich one org with a public contact email by reading its own site.
+ * Enrich one org with public contact details (email + phone + contact person)
+ * by reading a small fixed set of its OWN pages. Returns whatever it found, or
+ * null if nothing usable. Never throws.
  *
- * @returns {Promise<{email:string, source_url:string}|null>}
+ * @returns {Promise<{email:string|null, phone:string|null, contact_name:string|null,
+ *                    contact_title:string|null, source_url:string|null}|null>}
  */
-export async function enrichOrgEmail(org, {
+export async function enrichOrgContact(org, {
   fetchImpl,
   robotsCheck = null,
   delay = realDelay,
@@ -99,7 +159,13 @@ export async function enrichOrgEmail(org, {
     return { ok: r.ok === true, text: r.text || '' }
   }
 
+  let email = null
+  let phone = null
+  let contact = null
+  let sourceUrl = null
+
   for (const path of paths) {
+    if (email && phone && contact) break
     const url = `${origin}${path}`
     if (robotsCheck) {
       let verdict
@@ -110,10 +176,26 @@ export async function enrichOrgEmail(org, {
     try { res = await fetchImpl(url, { responseType: 'text' }) } catch { res = null }
     if (delayMs) await delay(delayMs)
     if (!res || res.ok !== true || !res.text) continue
-    const best = pickBestOrgEmail(extractContactEmails(res.text), { domain })
-    if (best) return { email: best, source_url: url }
+
+    if (!email) { const e = pickBestOrgEmail(extractContactEmails(res.text), { domain }); if (e) { email = e; sourceUrl = sourceUrl || url } }
+    if (!phone) { const p = extractPhones(res.text)[0]; if (p) { phone = p; sourceUrl = sourceUrl || url } }
+    if (!contact) { const c = extractContactName(res.text); if (c) { contact = c; sourceUrl = sourceUrl || url } }
   }
-  return null
+
+  if (!email && !phone && !contact) return null
+  return {
+    email,
+    phone,
+    contact_name: contact?.name || null,
+    contact_title: contact?.title || null,
+    source_url: sourceUrl,
+  }
+}
+
+/** Back-compat: email-only enrichment (wraps enrichOrgContact). */
+export async function enrichOrgEmail(org, opts) {
+  const r = await enrichOrgContact(org, opts)
+  return r?.email ? { email: r.email, source_url: r.source_url } : null
 }
 
 export const __testing__ = { ROLE_LOCALS, JUNK_LOCALS, localPart, emailDomain }

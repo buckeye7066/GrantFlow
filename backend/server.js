@@ -690,6 +690,8 @@ try {
 // Schema migrations - Add columns if they don't exist
 // Table and column names are validated against a whitelist for security
 const allowedMigrations = [
+  { table: 'organizations', column: 'contact_name', type: 'TEXT' },
+  { table: 'organizations', column: 'contact_title', type: 'TEXT' },
   { table: 'profiles', column: 'avatar_url', type: 'TEXT' },
   { table: 'profiles', column: 'user_id', type: 'TEXT REFERENCES users(id) ON DELETE SET NULL' },
   { table: 'crawler_jobs', column: 'result_meta', type: 'TEXT' },
@@ -839,6 +841,9 @@ if (db.dialect === 'sqlite') {
     await db.exec(
       'CREATE INDEX IF NOT EXISTS idx_organizations_deleted_at ON organizations(deleted_at)',
     )
+    // Yana web-crawler enrichment writes a contact person (migration 094/0090).
+    await db.exec('ALTER TABLE organizations ADD COLUMN IF NOT EXISTS contact_name TEXT')
+    await db.exec('ALTER TABLE organizations ADD COLUMN IF NOT EXISTS contact_title TEXT')
   } catch (e) {
     console.warn(
       '[database] organizations.deleted_at startup ensure failed (run npm run migrate):',

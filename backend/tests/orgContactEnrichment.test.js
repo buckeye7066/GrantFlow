@@ -9,6 +9,9 @@ import {
   extractContactEmails,
   pickBestOrgEmail,
   enrichOrgEmail,
+  enrichOrgContact,
+  extractPhones,
+  extractContactName,
 } from '../services/crawlers/orgContactEnrichment.js'
 import {
   runYanaWebCrawl,
@@ -54,6 +57,51 @@ describe('domainOf', () => {
   })
 })
 
+describe('extractPhones', () => {
+  it('normalizes US phones from tel: links and text, dropping junk', () => {
+    const html = '<a href="tel:+1 (614) 555-0190">call</a> or 614.555.0123. Fax 000-000-0000.'
+    const phones = extractPhones(html)
+    expect(phones).toContain('(614) 555-0190')
+    expect(phones).toContain('(614) 555-0123')
+    expect(phones).not.toContain('(000) 000-0000')
+  })
+})
+
+describe('extractContactName', () => {
+  it('reads "Title: Name"', () => {
+    expect(extractContactName('<p>Executive Director: Jane Smith</p>')).toEqual({ name: 'Jane Smith', title: 'Executive Director' })
+  })
+  it('reads "Name, Title"', () => {
+    expect(extractContactName('Contact Maria Lopez-Reyes, Development Director today')).toEqual({ name: 'Maria Lopez-Reyes', title: 'Development Director' })
+  })
+  it('returns null without an explicit role', () => {
+    expect(extractContactName('Welcome to our homepage')).toBeNull()
+  })
+})
+
+describe('enrichOrgContact', () => {
+  const noDelay = async () => {}
+  it('gathers email + phone + contact person across pages', async () => {
+    const fetchImpl = async (url) => {
+      if (url.endsWith('/contact')) {
+        return { ok: true, text: '<a href="mailto:info@hh.org">email</a> <a href="tel:614-555-0190">call</a> Executive Director: Jane Smith' }
+      }
+      return { ok: true, text: 'home' }
+    }
+    const r = await enrichOrgContact({ website: 'hh.org' }, { fetchImpl, delay: noDelay, delayMs: 0 })
+    expect(r).toMatchObject({
+      email: 'info@hh.org',
+      phone: '(614) 555-0190',
+      contact_name: 'Jane Smith',
+      contact_title: 'Executive Director',
+    })
+  })
+  it('back-compat enrichOrgEmail still returns email only', async () => {
+    const fetchImpl = async (u) => (u.endsWith('/contact') ? { ok: true, text: 'mailto:info@hh.org' } : { ok: true, text: 'home' })
+    expect(await enrichOrgEmail({ website: 'hh.org' }, { fetchImpl, delay: noDelay, delayMs: 0 })).toMatchObject({ email: 'info@hh.org' })
+  })
+})
+
 describe('enrichOrgEmail', () => {
   const noDelay = async () => {}
 
@@ -84,9 +132,9 @@ describe('crawler integration — enrichment makes a website-only org qualifiabl
   function makeDb() {
     const db = new Database(':memory:')
     db.exec(`CREATE TABLE organizations (
-      id TEXT PRIMARY KEY, name TEXT, email TEXT, website TEXT, mission TEXT,
+      id TEXT PRIMARY KEY, name TEXT, email TEXT, phone TEXT, website TEXT, mission TEXT,
       focus_areas TEXT, program_areas TEXT, applicant_type TEXT, organization_type TEXT,
-      ein TEXT, city TEXT, state TEXT, created_by TEXT,
+      ein TEXT, city TEXT, state TEXT, contact_name TEXT, contact_title TEXT, created_by TEXT,
       created_at DATETIME, updated_at DATETIME, deleted_at DATETIME );`)
     return db
   }
@@ -103,7 +151,7 @@ describe('crawler integration — enrichment makes a website-only org qualifiabl
     })
     const config = { enabled: true, sources: ['stub'], maxPerRun: 50, perDomainDelayMs: 0, enrichEmails: true, userAgent: 'GrantFlow Crawler/1.0' }
     const fetchImpl = async (url) => (url.endsWith('/contact')
-      ? { ok: true, text: '<a href="mailto:info@helpinghands.org">' }
+      ? { ok: true, text: '<a href="mailto:info@helpinghands.org">email</a> <a href="tel:614-555-0190">call</a> Executive Director: Jane Smith' }
       : { ok: true, text: 'home' })
 
     const r = await runYanaWebCrawl(db, {
@@ -115,8 +163,13 @@ describe('crawler integration — enrichment makes a website-only org qualifiabl
       logger: { info() {}, warn() {} },
     })
     expect(r.enriched_emails).toBe(1)
+    expect(r.enriched_phones).toBe(1)
+    expect(r.enriched_contacts).toBe(1)
     expect(r.inserted).toBe(1)
-    const row = db.prepare("SELECT email FROM organizations WHERE name = 'Helping Hands'").get()
+    const row = db.prepare("SELECT email, phone, contact_name, contact_title FROM organizations WHERE name = 'Helping Hands'").get()
     expect(row.email).toBe('info@helpinghands.org')
+    expect(row.phone).toBe('(614) 555-0190')
+    expect(row.contact_name).toBe('Jane Smith')
+    expect(row.contact_title).toBe('Executive Director')
   })
 })

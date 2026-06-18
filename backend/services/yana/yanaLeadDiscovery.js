@@ -169,6 +169,14 @@ export function scoreOrganizationLead(org = {}) {
   if (mission) publicEvidence.push({ type: 'mission_statement', text: mission.slice(0, 500) })
   if (focus.length) publicEvidence.push({ type: 'focus_areas', value: focus.slice(0, 10) })
   if (programs.length) publicEvidence.push({ type: 'program_areas', value: programs.slice(0, 10) })
+
+  // Richer contact for John's outreach packet — a real person/phone where known.
+  const phone = String(org.phone || '').trim() || null
+  const contactName = String(org.contact_name || '').trim() || null
+  const contactTitle = String(org.contact_title || '').trim() || null
+  if (contactName || phone) {
+    publicEvidence.push({ type: 'contact', name: contactName, title: contactTitle, phone, email: hasEmail ? email : null })
+  }
   const sourceUrls = website ? [website] : []
 
   const needBits = [...focus, ...programs].filter(Boolean).slice(0, 4)
@@ -469,14 +477,20 @@ export async function getYanaStatus(db) {
 // ── John lead-source interface (johnYanaBridge) ────────────────────────────
 
 function candidateToLeadPacket(row) {
+  const publicEvidence = parseJsonArray(row.public_evidence_json)
+  const contactEvidence = publicEvidence.find((e) => e?.type === 'contact') || null
+  const contactPoints = []
+  if (row.contact_email) contactPoints.push({ type: 'email', value: row.contact_email })
+  if (contactEvidence?.phone) contactPoints.push({ type: 'phone', value: contactEvidence.phone })
   return {
     lead_id: row.id,
     organization_name: row.organization_name,
     organization_type: row.organization_type,
     website_url: row.website_url,
     location: row.location,
-    contact_points: row.contact_email ? [{ type: 'email', value: row.contact_email }] : [],
-    public_evidence: parseJsonArray(row.public_evidence_json),
+    contact_points: contactPoints,
+    contact_person: contactEvidence?.name ? { name: contactEvidence.name, title: contactEvidence.title || null } : null,
+    public_evidence: publicEvidence,
     funding_need_summary: row.funding_need_summary,
     grantflow_fit_summary: row.grantflow_fit_summary,
     lead_score: Number(row.lead_score) || 0,

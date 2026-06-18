@@ -25,9 +25,9 @@ function makeDb() {
   const db = new Database(':memory:')
   db.exec(`
     CREATE TABLE organizations (
-      id TEXT PRIMARY KEY, name TEXT, email TEXT, website TEXT, mission TEXT,
+      id TEXT PRIMARY KEY, name TEXT, email TEXT, phone TEXT, website TEXT, mission TEXT,
       focus_areas TEXT, program_areas TEXT, applicant_type TEXT, organization_type TEXT,
-      ein TEXT, city TEXT, state TEXT, created_by TEXT,
+      ein TEXT, city TEXT, state TEXT, contact_name TEXT, contact_title TEXT, created_by TEXT,
       created_at DATETIME, updated_at DATETIME, deleted_at DATETIME
     );
   `)
