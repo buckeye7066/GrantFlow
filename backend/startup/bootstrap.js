@@ -292,6 +292,10 @@ export async function runBootstrap({ db, uploadsDir, legacyUploadsDir, baseDir }
     }
   }
 
+  // Additional validation for column type to prevent injection. Shared by the
+  // SQLite and Postgres self-heal branches below.
+  const allowedTypes = new Set(['TEXT', 'INTEGER', 'DATETIME', 'TEXT DEFAULT \'live_crawl\'', 'INTEGER DEFAULT 0', 'TEXT REFERENCES users(id) ON DELETE SET NULL', "TEXT DEFAULT '[]'"]);
+
   // Add columns that may be missing (SQLite-only legacy auto-migration).
   if (db.dialect === 'sqlite') {
     allowedMigrations.forEach(({ table, column, type }) => {
@@ -299,8 +303,7 @@ export async function runBootstrap({ db, uploadsDir, legacyUploadsDir, baseDir }
         console.error(`Migration error: Invalid table "${table}" or column "${column}"`);
         return;
       }
-      // Additional validation for type to prevent injection
-      const allowedTypes = new Set(['TEXT', 'INTEGER', 'DATETIME', 'TEXT DEFAULT \'live_crawl\'', 'INTEGER DEFAULT 0', 'TEXT REFERENCES users(id) ON DELETE SET NULL', "TEXT DEFAULT '[]'"]); if (!allowedTypes.has(type)) {
+      if (!allowedTypes.has(type)) {
         console.error(`Migration error: Invalid type "${type}"`);
         return;
       }
@@ -313,7 +316,36 @@ export async function runBootstrap({ db, uploadsDir, legacyUploadsDir, baseDir }
       }
     });
   } else {
-    console.info('[database] Skipping legacy column auto-migrations (dialect !== sqlite)');
+    // Postgres: the numbered migration chain is the primary schema mechanism,
+    // but PARTIAL drift leaves individual columns missing whenever a migration
+    // aborted partway — e.g. migration 036 tried to ADD an already-existing
+    // grants.match_decision, threw "column already exists", and never reached
+    // grants.eligibility_status. The matcher's "save to pipeline" write then
+    // 500s on every run with `column "eligibility_status" of relation "grants"
+    // does not exist`. ADD COLUMN IF NOT EXISTS is idempotent and metadata-only
+    // (no table rewrite for nullable/defaulted columns), so we self-heal each
+    // column independently and one pre-existing column can never abort the rest.
+    let ensured = 0;
+    for (const { table, column, type } of allowedMigrations) {
+      if (!validTables.has(table) || !validColumnPattern.test(column)) {
+        console.error(`Migration error: Invalid table "${table}" or column "${column}"`);
+        continue;
+      }
+      if (!allowedTypes.has(type)) {
+        console.error(`Migration error: Invalid type "${type}"`);
+        continue;
+      }
+      // Postgres has no DATETIME type; map it to TIMESTAMPTZ to match the
+      // canonical schema's timestamp columns.
+      const pgType = type === 'DATETIME' ? 'TIMESTAMPTZ' : type;
+      try {
+        await db.exec('ALTER TABLE ' + table + ' ADD COLUMN IF NOT EXISTS ' + column + ' ' + pgType);
+        ensured += 1;
+      } catch (error) {
+        console.warn(`[database] PG column self-heal warning for ${table}.${column}:`, error?.message || error);
+      }
+    }
+    console.info(`[database] Postgres column self-heal complete (ADD COLUMN IF NOT EXISTS across ${ensured} column(s))`);
   }
 
   // ── 5. Core-table self-heal (SQLite) ──────────────────────────────────────

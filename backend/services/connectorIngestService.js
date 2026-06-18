@@ -64,10 +64,10 @@ export const PROFILE_QUERY_MAP = Object.freeze({
   high_school_student: { ggEligibility: ['21', '25'], simplerApplicant: ['individuals'], foundationSeeker: true, wantsResearch: false },
   college_student: { ggEligibility: ['21', '25'], simplerApplicant: ['individuals'], foundationSeeker: true, wantsResearch: false },
 
-  nonprofit: { ggEligibility: ['12', '13', '25'], simplerApplicant: ['nonprofits_501c3', 'nonprofits_non_501c3'], foundationSeeker: true, wantsResearch: true },
-  organization: { ggEligibility: ['12', '13', '25'], simplerApplicant: ['nonprofits_501c3', 'nonprofits_non_501c3'], foundationSeeker: true, wantsResearch: true },
-  church: { ggEligibility: ['12', '13', '25'], simplerApplicant: ['nonprofits_501c3', 'nonprofits_non_501c3'], foundationSeeker: true, wantsResearch: false },
-  ministry: { ggEligibility: ['12', '13', '25'], simplerApplicant: ['nonprofits_501c3', 'nonprofits_non_501c3'], foundationSeeker: true, wantsResearch: false },
+  nonprofit: { ggEligibility: ['12', '13', '25'], simplerApplicant: ['nonprofits_non_higher_education_with_501c3', 'nonprofits_non_higher_education_without_501c3'], foundationSeeker: true, wantsResearch: true },
+  organization: { ggEligibility: ['12', '13', '25'], simplerApplicant: ['nonprofits_non_higher_education_with_501c3', 'nonprofits_non_higher_education_without_501c3'], foundationSeeker: true, wantsResearch: true },
+  church: { ggEligibility: ['12', '13', '25'], simplerApplicant: ['nonprofits_non_higher_education_with_501c3', 'nonprofits_non_higher_education_without_501c3'], foundationSeeker: true, wantsResearch: false },
+  ministry: { ggEligibility: ['12', '13', '25'], simplerApplicant: ['nonprofits_non_higher_education_with_501c3', 'nonprofits_non_higher_education_without_501c3'], foundationSeeker: true, wantsResearch: false },
 
   school: { ggEligibility: ['05', '06', '20', '12'], simplerApplicant: ['independent_school_districts', 'public_and_state_institutions_of_higher_education', 'private_institutions_of_higher_education'], foundationSeeker: true, wantsResearch: true },
   public_school: { ggEligibility: ['05', '06'], simplerApplicant: ['independent_school_districts'], foundationSeeker: true, wantsResearch: false },
@@ -77,8 +77,8 @@ export const PROFILE_QUERY_MAP = Object.freeze({
   business: { ggEligibility: ['23', '22'], simplerApplicant: ['small_businesses', 'for_profit_organizations_other_than_small_businesses'], foundationSeeker: false, wantsResearch: true },
   small_business: { ggEligibility: ['23', '22'], simplerApplicant: ['small_businesses'], foundationSeeker: false, wantsResearch: true },
 
-  volunteer_fire: { ggEligibility: ['04', '12', '25'], simplerApplicant: ['special_district_governments', 'nonprofits_501c3'], foundationSeeker: true, wantsResearch: false },
-  volunteer_fire_department: { ggEligibility: ['04', '12', '25'], simplerApplicant: ['special_district_governments', 'nonprofits_501c3'], foundationSeeker: true, wantsResearch: false },
+  volunteer_fire: { ggEligibility: ['04', '12', '25'], simplerApplicant: ['special_district_governments', 'nonprofits_non_higher_education_with_501c3'], foundationSeeker: true, wantsResearch: false },
+  volunteer_fire_department: { ggEligibility: ['04', '12', '25'], simplerApplicant: ['special_district_governments', 'nonprofits_non_higher_education_with_501c3'], foundationSeeker: true, wantsResearch: false },
 
   tribal: { ggEligibility: ['07', '11'], simplerApplicant: ['federally_recognized_native_american_tribal_governments', 'other_native_american_tribal_organizations'], foundationSeeker: false, wantsResearch: false },
   tribal_government: { ggEligibility: ['07', '11'], simplerApplicant: ['federally_recognized_native_american_tribal_governments'], foundationSeeker: false, wantsResearch: false },
