@@ -7,10 +7,12 @@ import { Button } from '@/components/ui/button'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Separator } from '@/components/ui/separator'
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@/components/ui/select'
+import { Checkbox } from '@/components/ui/checkbox'
 import { useToast } from '@/components/ui/use-toast'
 import {
   getCommittedCollegeWorkspace, commitToCollege, uncommitCollege,
   getFafsaStatus, setFafsaStatus,
+  getFafsaVerification, setFafsaVerificationDoc,
 } from '@/api/committedCollege.js'
 import CollegeFundingMergeModal from './CollegeFundingMergeModal.jsx'
 
@@ -76,6 +78,23 @@ export default function CommittedCollegeWorkspace({ profileId, applications = []
     onSuccess: () => {
       toast({ title: 'FAFSA status updated' })
       queryClient.invalidateQueries({ queryKey: ['fafsa-status', profileId] })
+      queryClient.invalidateQueries({ queryKey: ['fafsa-verification', profileId] })
+      invalidate()
+    },
+    onError: (err) => toast({ title: 'Update failed', description: err?.message, variant: 'destructive' }),
+  })
+
+  const inVerification = fafsaInfo?.stage === 'verification'
+  const verificationQuery = useQuery({
+    queryKey: ['fafsa-verification', profileId],
+    queryFn: () => getFafsaVerification(profileId),
+    enabled: Boolean(profileId) && committed && inVerification,
+  })
+  const verification = verificationQuery.data?.verification
+  const toggleDoc = useMutation({
+    mutationFn: ({ key, done }) => setFafsaVerificationDoc(profileId, key, done),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['fafsa-verification', profileId] })
       invalidate()
     },
     onError: (err) => toast({ title: 'Update failed', description: err?.message, variant: 'destructive' }),
@@ -195,6 +214,34 @@ export default function CommittedCollegeWorkspace({ profileId, applications = []
                     {fafsaInfo.stages.map((s) => <SelectItem key={s.key} value={s.key}>{s.label}</SelectItem>)}
                   </SelectContent>
                 </Select>
+              </div>
+            ) : null}
+
+            {/* Verification checklist — only while FAFSA is in verification */}
+            {inVerification && verification?.items?.length ? (
+              <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 p-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-sm font-medium text-amber-900">Verification documents</span>
+                  <span className="text-xs text-amber-800">
+                    {verification.complete ? 'All gathered' : `${verification.remaining} remaining`}
+                  </span>
+                </div>
+                <ul className="mt-2 space-y-2">
+                  {verification.items.map((d) => (
+                    <li key={d.key} className="flex items-start gap-2">
+                      <Checkbox
+                        checked={d.done}
+                        onCheckedChange={(v) => toggleDoc.mutate({ key: d.key, done: Boolean(v) })}
+                        disabled={toggleDoc.isPending}
+                        className="mt-0.5"
+                      />
+                      <div className="min-w-0">
+                        <div className={`text-sm ${d.done ? 'text-slate-500 line-through' : 'text-slate-800'}`}>{d.label}</div>
+                        {d.help ? <div className="text-xs text-slate-500">{d.help}</div> : null}
+                      </div>
+                    </li>
+                  ))}
+                </ul>
               </div>
             ) : null}
           </div>

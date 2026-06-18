@@ -89,4 +89,42 @@ export function describeFafsaStatus(education = {}) {
   }
 }
 
-export const __testing__ = { KEYS, SUBMITTED_INDEX }
+// ── Verification-document checklist (active at the `verification` stage) ──────
+// Common documents schools request when a FAFSA is selected for verification.
+// GrantFlow only TRACKS which are gathered — it never collects the documents.
+export const FAFSA_VERIFICATION_DOCUMENTS = Object.freeze([
+  { key: 'verification_worksheet', label: 'Verification worksheet (signed)', help: 'The worksheet your school sent, completed and signed.' },
+  { key: 'student_tax_transcript', label: 'Student tax transcript / IRS DRT', help: 'Use the IRS Data Retrieval Tool or order a Tax Return Transcript.' },
+  { key: 'parent_tax_transcript', label: 'Parent tax transcript / IRS DRT', help: 'Required for dependent students.' },
+  { key: 'w2_forms', label: 'W-2 / income statements', help: 'All W-2s (and 1099s) for the relevant tax year.' },
+  { key: 'identity_statement', label: 'Identity + Statement of Educational Purpose', help: 'Photo ID plus the signed statement, if identity verification was requested.' },
+  { key: 'hs_completion', label: 'Proof of high school completion', help: 'Diploma, transcript, or recognized equivalent.' },
+  { key: 'household_size', label: 'Household size / number in college', help: 'Documentation of household members and any in college.' },
+  { key: 'snap_benefits', label: 'SNAP / benefits documentation', help: 'Only if flagged — proof of benefits received.' },
+  { key: 'child_support', label: 'Child support paid/received', help: 'Only if flagged — documentation of amounts.' },
+])
+
+const VERIFICATION_KEYS = new Set(FAFSA_VERIFICATION_DOCUMENTS.map((d) => d.key))
+
+/**
+ * Build the verification checklist with done-state from the education section.
+ * `active` is true only when the FAFSA stage is `verification`, so the UI shows
+ * it exactly when it's relevant.
+ */
+export function buildVerificationChecklist(education = {}) {
+  const stage = normalizeFafsaStatus(education).stage
+  const done = education?.fafsa_verification_docs || {}
+  const items = FAFSA_VERIFICATION_DOCUMENTS.map((d) => ({ ...d, done: Boolean(done[d.key]) }))
+  const remaining = items.filter((i) => !i.done).length
+  return { active: stage === 'verification', stage, items, total: items.length, remaining, complete: remaining === 0 }
+}
+
+/** Toggle one verification document's done-state. Returns the updated map. */
+export function setVerificationDoc(education = {}, key, done) {
+  if (!VERIFICATION_KEYS.has(key)) return { ok: false, error: 'unknown_document' }
+  const docs = { ...(education?.fafsa_verification_docs || {}) }
+  docs[key] = Boolean(done)
+  return { ok: true, fafsa_verification_docs: docs }
+}
+
+export const __testing__ = { KEYS, SUBMITTED_INDEX, VERIFICATION_KEYS }
