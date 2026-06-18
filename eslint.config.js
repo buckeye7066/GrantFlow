@@ -108,4 +108,36 @@ export default [
       ],
     },
   },
+  {
+    // `.mjs` files under tests/unit are executed by `node --test`
+    // (scripts/run-unit-tests.mjs walks for `*.test.mjs`) AND by vitest
+    // (vitest.config.js `include`). Importing from 'vitest' here is fatal:
+    // under `node --test` vitest's describe() runs with no vitest runtime and
+    // throws "Cannot read properties of undefined (reading 'config')", failing
+    // the Release gates step. Use node:test + node:assert/strict instead (the
+    // convention for every sibling unit test). NOTE: scoped to `.mjs` on
+    // purpose — `.test.js` files are NOT picked up by node --test and run only
+    // under vitest, so they may legitimately import 'vitest'. (CI break
+    // 2026-06-18.)
+    files: ['tests/unit/**/*.mjs'],
+    languageOptions: {
+      ecmaVersion: 2023,
+      sourceType: 'module',
+      globals: { ...globals.node },
+    },
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          paths: [
+            {
+              name: 'vitest',
+              message:
+                'tests/unit/**/*.mjs runs under `node --test`; import { describe, it } from "node:test" and assert from "node:assert/strict" instead of "vitest" (vitest API crashes outside the vitest runtime).',
+            },
+          ],
+        },
+      ],
+    },
+  },
 ]
