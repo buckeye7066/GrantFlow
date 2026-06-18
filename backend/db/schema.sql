@@ -3648,6 +3648,8 @@ CREATE TABLE IF NOT EXISTS yana_lead_candidates (
 CREATE INDEX IF NOT EXISTS idx_yana_lead_candidates_status  ON yana_lead_candidates(qualification_status);
 CREATE INDEX IF NOT EXISTS idx_yana_lead_candidates_pushed  ON yana_lead_candidates(pushed_to_john);
 CREATE INDEX IF NOT EXISTS idx_yana_lead_candidates_profile ON yana_lead_candidates(profile_id);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_yana_candidates_source_extid ON yana_lead_candidates(source, external_id) WHERE external_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_yana_candidates_push ON yana_lead_candidates(qualification_status, pushed_to_john, lead_score);
 
 CREATE TABLE IF NOT EXISTS yana_lead_runs (
   id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),

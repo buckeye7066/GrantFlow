@@ -123,6 +123,23 @@ test('discovered prospects land as needs_enrichment without a contact channel', 
   _resetProspectSources()
 })
 
+test('prospect upsert is idempotent (ON CONFLICT source+external_id, no dupes)', async () => {
+  const db = makeDb()
+  _resetProspectSources()
+  registerProspectSource('test_990', makePropublica990Source({ searchOrganizations: fakeSearch() }))
+  const opts = {
+    allowLiveWeb: true,
+    sources: ['test_990'],
+    enricher: { enabled: false, enrich: async () => ({ ok: false }) },
+    providerArgs: { queries: [{ q: 'x' }] },
+  }
+  await discoverProspects(db, opts)
+  await discoverProspects(db, opts) // re-run same prospects
+  const count = await db.prepare('SELECT COUNT(*) AS c FROM yana_lead_candidates').get()
+  assert.equal(Number(count.c), 2, 're-running discovery updates in place — no duplicate prospect rows')
+  _resetProspectSources()
+})
+
 test('enrichment graduates a prospect to qualified (contactable)', async () => {
   const db = makeDb()
   _resetProspectSources()

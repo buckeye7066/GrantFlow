@@ -144,18 +144,27 @@ async function ensureSchema(db) {
     );
   `)
 
-  // Defensive column adds for the prospect-discovery columns on a lead
-  // candidates table created by an earlier migration. SQLite has no
-  // ADD COLUMN IF NOT EXISTS, so each ALTER is tolerated via try/catch.
-  for (const alter of [
+  // Defensive column/index adds, each tolerated via try/catch (SQLite has no
+  // ADD COLUMN IF NOT EXISTS; a partial unique index can fail if legacy dup
+  // data exists). These back the single-statement ON CONFLICT upserts +
+  // the highest-value-first push selection.
+  for (const stmt of [
     isPg
       ? `ALTER TABLE yana_lead_candidates ADD COLUMN IF NOT EXISTS source TEXT DEFAULT 'organizations'`
       : `ALTER TABLE yana_lead_candidates ADD COLUMN source TEXT DEFAULT 'organizations'`,
     isPg
       ? `ALTER TABLE yana_lead_candidates ADD COLUMN IF NOT EXISTS external_id TEXT`
       : `ALTER TABLE yana_lead_candidates ADD COLUMN external_id TEXT`,
+    // Prospect dedup key — the ON CONFLICT target for upsertProspectCandidate.
+    // Partial (external_id IS NOT NULL) so it never collides with org-sourced
+    // rows (external_id null) and allows their UNIQUE(organization_id) to stand.
+    `CREATE UNIQUE INDEX IF NOT EXISTS ux_yana_candidates_source_extid
+       ON yana_lead_candidates(source, external_id) WHERE external_id IS NOT NULL`,
+    // Covers pushQualifiedToJohn's "qualified, not pushed, best first" scan.
+    `CREATE INDEX IF NOT EXISTS idx_yana_candidates_push
+       ON yana_lead_candidates(qualification_status, pushed_to_john, lead_score)`,
   ]) {
-    try { await db.exec(alter) } catch { /* column already exists */ }
+    try { await db.exec(stmt) } catch { /* already exists / legacy dup */ }
   }
 
   schemaReady.set(db, true)
@@ -291,72 +300,50 @@ async function defaultLoadOrganizations(db, { limit }) {
   }
 }
 
+// Shared column list + UPDATE assignment for the lead-candidate upserts. The
+// two upserts differ only in their ON CONFLICT target (organization_id for
+// own-org rows vs (source, external_id) for external prospects).
+const CANDIDATE_UPDATE_SET = `
+  entity_type = excluded.entity_type, organization_name = excluded.organization_name,
+  organization_type = excluded.organization_type, website_url = excluded.website_url,
+  location = excluded.location, contact_email = excluded.contact_email,
+  funding_need_summary = excluded.funding_need_summary,
+  grantflow_fit_summary = excluded.grantflow_fit_summary,
+  public_evidence_json = excluded.public_evidence_json,
+  source_urls_json = excluded.source_urls_json, fit_score = excluded.fit_score,
+  urgency_score = excluded.urgency_score, contact_confidence = excluded.contact_confidence,
+  lead_score = excluded.lead_score, qualification_status = excluded.qualification_status,
+  qualification_reasons_json = excluded.qualification_reasons_json, run_id = excluded.run_id`
+
+const CANDIDATE_INSERT_COLUMNS = `id, organization_id, profile_id, source, external_id, entity_type,
+  organization_name, organization_type, website_url, location, contact_email, funding_need_summary,
+  grantflow_fit_summary, public_evidence_json, source_urls_json, fit_score, urgency_score,
+  contact_confidence, lead_score, qualification_status, qualification_reasons_json, run_id,
+  discovered_at, created_at, updated_at`
+
+// Single-statement idempotent upsert. Replaces the prior SELECT-then-
+// INSERT/UPDATE (2 queries → 1) in the hottest Yana loops, halving DB
+// round-trips per discovered candidate while keeping the exact same
+// "update in place, never duplicate" semantics the tests pin.
 async function upsertCandidate(db, scored, org, runId) {
   const nowFn = db?.dialect === 'postgres' ? 'now()' : 'CURRENT_TIMESTAMP'
   const { qualified, reasons: qReasons } = qualifyScore(scored)
   const status = qualified ? 'qualified' : 'unqualified'
   const orgId = org.id !== null && org.id !== undefined ? String(org.id) : null
-  const existing = orgId
-    ? await db.prepare('SELECT id FROM yana_lead_candidates WHERE organization_id = ? LIMIT 1').get(orgId)
-    : null
+  const profileId = (org.profile_id !== null && org.profile_id !== undefined) ? String(org.profile_id) : null
+  const reasonsJson = JSON.stringify([...scored.reasons, ...qReasons])
 
-  const values = {
-    entity_type: scored.entity_type,
-    organization_name: scored.organization_name,
-    organization_type: scored.organization_type,
-    website_url: scored.website_url,
-    location: scored.location,
-    contact_email: scored.email,
-    funding_need_summary: scored.funding_need_summary,
-    grantflow_fit_summary: scored.grantflow_fit_summary,
-    public_evidence_json: JSON.stringify(scored.public_evidence || []),
-    source_urls_json: JSON.stringify(scored.source_urls || []),
-    fit_score: scored.fit_score,
-    urgency_score: scored.urgency_score,
-    contact_confidence: scored.contact_confidence,
-    lead_score: scored.lead_score,
-    qualification_status: status,
-    qualification_reasons_json: JSON.stringify([...scored.reasons, ...qReasons]),
-    run_id: runId,
-  }
-
-  if (existing) {
-    await db.prepare(
-      `UPDATE yana_lead_candidates SET
-         entity_type = ?, organization_name = ?, organization_type = ?, website_url = ?,
-         location = ?, contact_email = ?, funding_need_summary = ?, grantflow_fit_summary = ?,
-         public_evidence_json = ?, source_urls_json = ?, fit_score = ?, urgency_score = ?,
-         contact_confidence = ?, lead_score = ?, qualification_status = ?,
-         qualification_reasons_json = ?, run_id = ?, updated_at = ${nowFn}
-       WHERE id = ?`,
-    ).run(
-      values.entity_type, values.organization_name, values.organization_type, values.website_url,
-      values.location, values.contact_email, values.funding_need_summary, values.grantflow_fit_summary,
-      values.public_evidence_json, values.source_urls_json, values.fit_score, values.urgency_score,
-      values.contact_confidence, values.lead_score, values.qualification_status,
-      values.qualification_reasons_json, values.run_id, existing.id,
-    )
-    return { id: existing.id, status, created: false, reasons: qReasons }
-  }
-
-  const id = crypto.randomUUID()
   await db.prepare(
-    `INSERT INTO yana_lead_candidates
-       (id, organization_id, profile_id, entity_type, organization_name, organization_type,
-        website_url, location, contact_email, funding_need_summary, grantflow_fit_summary,
-        public_evidence_json, source_urls_json, fit_score, urgency_score, contact_confidence,
-        lead_score, qualification_status, qualification_reasons_json, run_id,
-        discovered_at, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ${nowFn}, ${nowFn}, ${nowFn})`,
+    `INSERT INTO yana_lead_candidates (${CANDIDATE_INSERT_COLUMNS})
+     VALUES (?, ?, ?, 'organizations', NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ${nowFn}, ${nowFn}, ${nowFn})
+     ON CONFLICT(organization_id) DO UPDATE SET ${CANDIDATE_UPDATE_SET}, updated_at = ${nowFn}`,
   ).run(
-    id, orgId, (org.profile_id !== null && org.profile_id !== undefined) ? String(org.profile_id) : null, values.entity_type,
-    values.organization_name, values.organization_type, values.website_url, values.location,
-    values.contact_email, values.funding_need_summary, values.grantflow_fit_summary,
-    values.public_evidence_json, values.source_urls_json, values.fit_score, values.urgency_score,
-    values.contact_confidence, values.lead_score, values.qualification_status,
-    values.qualification_reasons_json, values.run_id,
+    crypto.randomUUID(), orgId, profileId, scored.entity_type, scored.organization_name, scored.organization_type,
+    scored.website_url, scored.location, scored.email, scored.funding_need_summary, scored.grantflow_fit_summary,
+    JSON.stringify(scored.public_evidence || []), JSON.stringify(scored.source_urls || []),
+    scored.fit_score, scored.urgency_score, scored.contact_confidence, scored.lead_score, status, reasonsJson, runId,
   )
-  return { id, status, created: true, reasons: qReasons }
+  return { status, reasons: qReasons }
 }
 
 /** Discover + qualify lead candidates from organizations. */
@@ -416,52 +403,31 @@ function prospectStatus(scored) {
   return 'unqualified'
 }
 
-/** Upsert an external prospect, keyed by (source, external_id). */
+/**
+ * Upsert an external prospect, deduped by (source, external_id) via a single
+ * ON CONFLICT statement (the partial unique index ux_yana_candidates_source_extid).
+ * Falls back to a plain insert when there's no external_id to dedup on.
+ */
 async function upsertProspectCandidate(db, scored, prospect, runId, status) {
   const nowFn = db?.dialect === 'postgres' ? 'now()' : 'CURRENT_TIMESTAMP'
   const source = String(prospect.source || 'propublica_990')
   const externalId = prospect.external_id ? String(prospect.external_id) : null
-  const existing = externalId
-    ? await db.prepare('SELECT id FROM yana_lead_candidates WHERE source = ? AND external_id = ? LIMIT 1').get(source, externalId)
-    : null
-
   const reasonsJson = JSON.stringify([...(scored.reasons || []), `status:${status}`])
-  if (existing) {
-    await db.prepare(
-      `UPDATE yana_lead_candidates SET
-         entity_type = ?, organization_name = ?, organization_type = ?, website_url = ?,
-         location = ?, contact_email = ?, funding_need_summary = ?, grantflow_fit_summary = ?,
-         public_evidence_json = ?, source_urls_json = ?, fit_score = ?, urgency_score = ?,
-         contact_confidence = ?, lead_score = ?, qualification_status = ?,
-         qualification_reasons_json = ?, run_id = ?, updated_at = ${nowFn}
-       WHERE id = ?`,
-    ).run(
-      scored.entity_type, scored.organization_name, scored.organization_type, scored.website_url,
-      scored.location, scored.email, scored.funding_need_summary, scored.grantflow_fit_summary,
-      JSON.stringify(scored.public_evidence || []), JSON.stringify(scored.source_urls || []),
-      scored.fit_score, scored.urgency_score, scored.contact_confidence, scored.lead_score,
-      status, reasonsJson, runId, existing.id,
-    )
-    return { id: existing.id, status, created: false }
-  }
-
-  const id = crypto.randomUUID()
-  await db.prepare(
-    `INSERT INTO yana_lead_candidates
-       (id, organization_id, profile_id, source, external_id, entity_type, organization_name,
-        organization_type, website_url, location, contact_email, funding_need_summary,
-        grantflow_fit_summary, public_evidence_json, source_urls_json, fit_score, urgency_score,
-        contact_confidence, lead_score, qualification_status, qualification_reasons_json, run_id,
-        discovered_at, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ${nowFn}, ${nowFn}, ${nowFn})`,
-  ).run(
-    id, null, null, source, externalId, scored.entity_type, scored.organization_name,
+  const args = [
+    crypto.randomUUID(), null, null, source, externalId, scored.entity_type, scored.organization_name,
     scored.organization_type, scored.website_url, scored.location, scored.email, scored.funding_need_summary,
     scored.grantflow_fit_summary, JSON.stringify(scored.public_evidence || []), JSON.stringify(scored.source_urls || []),
     scored.fit_score, scored.urgency_score, scored.contact_confidence, scored.lead_score,
     status, reasonsJson, runId,
-  )
-  return { id, status, created: true }
+  ]
+  const valuesSql = `(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ${nowFn}, ${nowFn}, ${nowFn})`
+  const onConflict = externalId
+    ? `ON CONFLICT(source, external_id) WHERE external_id IS NOT NULL DO UPDATE SET ${CANDIDATE_UPDATE_SET}, updated_at = ${nowFn}`
+    : '' // no dedup key → plain insert
+  await db
+    .prepare(`INSERT INTO yana_lead_candidates (${CANDIDATE_INSERT_COLUMNS}) VALUES ${valuesSql} ${onConflict}`)
+    .run(...args)
+  return { status }
 }
 
 /** Set of names+EINs of the operator's OWN organizations — never prospect yourself. */
@@ -629,22 +595,31 @@ export async function pushQualifiedToJohn(
     )
     .all(remaining)
 
-  for (const r of rows || []) {
+  const ids = (rows || []).map((r) => r.id)
+  if (ids.length > 0) {
+    const placeholders = ids.map(() => '?').join(', ')
+    // One batch UPDATE instead of one per lead (was N queries → 1).
     await db
-      .prepare(`UPDATE yana_lead_candidates SET pushed_to_john = 1, pushed_at = ${nowFn}, updated_at = ${nowFn} WHERE id = ?`)
-      .run(r.id)
-    // Record the hand-off in Yana's John queue so the Mission Control metric
-    // (leads_sent_to_john) and system-health reflect real forwarded leads.
+      .prepare(
+        `UPDATE yana_lead_candidates
+            SET pushed_to_john = 1, pushed_at = ${nowFn}, updated_at = ${nowFn}
+          WHERE id IN (${placeholders})`,
+      )
+      .run(...ids)
+
+    // Record the hand-offs in Yana's John queue (Mission Control's
+    // leads_sent_to_john metric) in ONE multi-row insert (was N → 1).
     // Best-effort: yana_john_queue is created by migration 0096/100 + boot
     // self-heal, but older DBs may lack it.
     try {
+      const queueValues = ids.map(() => `(?, 'queued', ${nowFn})`).join(', ')
       await db
-        .prepare(`INSERT INTO yana_john_queue (lead_candidate_id, status, created_at) VALUES (?, 'queued', ${nowFn})`)
-        .run(r.id)
+        .prepare(`INSERT INTO yana_john_queue (lead_candidate_id, status, created_at) VALUES ${queueValues}`)
+        .run(...ids)
     } catch { /* queue table missing on older DBs — non-fatal */ }
   }
 
-  const pushed = (rows || []).length
+  const pushed = ids.length
   return {
     leads_pushed_to_john: pushed,
     cap: Number(cap),
