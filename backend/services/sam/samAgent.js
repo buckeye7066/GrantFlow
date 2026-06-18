@@ -41,6 +41,7 @@ import {
   applySafeFixes,
   runWhitelistedCommand,
 } from './samSafeFixes.js'
+import { escalateSamCritical } from './samEscalation.js'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -241,6 +242,19 @@ export async function runSam(args = {}) {
         repair_plan: repairPlan,
         applied_fixes: appliedFixes,
       })
+
+      // Charter §3/§6: push critical findings to the canonical admin. Fires only
+      // on critical findings; best-effort, never affects the run result.
+      try {
+        out.escalation = await escalateSamCritical(db, {
+          runId,
+          findingSummary: summary.findings,
+          healthScore: score,
+          productionReady,
+        })
+      } catch (escErr) {
+        console.warn('[sam] admin escalation skipped:', escErr?.message || escErr)
+      }
     }
 
     return out
