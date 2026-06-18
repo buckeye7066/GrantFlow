@@ -9,11 +9,18 @@
 
 import crypto from 'node:crypto'
 
-let ensured = false
-export function _resetBlockerSchemaCache() { ensured = false }
+// Per-db schema cache. A module-global boolean (`let ensured = false`) is shared
+// across every db in the process, so node:test — which runs a file's top-level
+// suites CONCURRENTLY, each with its own in-memory db — races it: one suite sets
+// it true and a sibling suite's fresh db then skips schema creation, flaking with
+// intermittent "no such table" / bind errors. Keying readiness by the db object
+// (WeakMap) makes each db independent; in production (a single shared db) the
+// behaviour is identical. Mirrors agentControlStore's cache.
+let schemaReady = new WeakMap()
+export function _resetBlockerSchemaCache() { schemaReady = new WeakMap() }
 
 async function ensureSchema(db) {
-  if (!db || ensured || typeof db.prepare !== 'function') return
+  if (!db || schemaReady.has(db) || typeof db.prepare !== 'function') return
   const isPostgres = db?.dialect === 'postgres'
   const idDefault = isPostgres ? '(gen_random_uuid()::text)' : '(lower(hex(randomblob(16))))'
   const tsType = isPostgres ? 'TIMESTAMPTZ' : 'DATETIME'
@@ -106,7 +113,7 @@ async function ensureSchema(db) {
       }
     }
   }
-  ensured = true
+  schemaReady.set(db, true)
 }
 
 function safeJson(v) {
