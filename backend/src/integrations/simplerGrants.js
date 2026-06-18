@@ -187,12 +187,18 @@ function normalizeSimplerOpportunity(row) {
     amount_max: awardCeiling,
     amount_description: toTrimmedStringOrNull(summary?.funding_category_description),
     deadline: closeDate,
-    deadline_type: isForecast ? 'forecasted' : closeDate ? 'fixed' : null,
+    // Canonical deadline_type set is fixed|rolling|ongoing|unknown (DB CHECK
+    // constraint). A forecasted opportunity has no firm deadline yet, so it
+    // maps to 'unknown' — the forecast signal is preserved in keywords below.
+    // (Previously emitted 'forecasted', which violated the constraint and made
+    // every forecasted record get skipped on insert.)
+    deadline_type: isForecast ? 'unknown' : closeDate ? 'fixed' : null,
     is_national: true,
     state: 'nationwide',
     categories,
     keywords: [
       'simpler.grants.gov', 'grants.gov', 'federal', 'grant',
+      ...(isForecast ? ['forecasted'] : []),
       ...fundingInstruments.map((fi) => String(fi).replace(/_/g, ' ')),
     ].filter(Boolean),
     eligibility_bullets: eligibilityBullets,
