@@ -136,15 +136,24 @@ export async function getHamilton(db, opts = {}) {
  */
 export async function getHealth(db) {
   const range = resolveRange({ range: '24h' })
-  const [anya, sam, robert, yana, hamilton, john] = await Promise.all([
-    aggregateAnya(db, range),
-    aggregateSam(db, range),
-    aggregateRobert(db, range),
-    aggregateYana(db, range),
-    aggregateHamilton(db, range),
-    aggregateJohn(db, range),
-  ])
-  const agents = { anya, sam, robert, yana, hamilton, john }
+  // allSettled (not all): one agent's aggregator throwing must never blank the
+  // entire Mission Control dashboard. A rejected aggregator degrades to a
+  // labelled "error" summary for that agent only — the others still render.
+  const names = ['anya', 'sam', 'robert', 'yana', 'hamilton', 'john']
+  const fns = [aggregateAnya, aggregateSam, aggregateRobert, aggregateYana, aggregateHamilton, aggregateJohn]
+  const settled = await Promise.allSettled(fns.map((fn) => fn(db, range)))
+  const agents = {}
+  settled.forEach((res, i) => {
+    const name = names[i]
+    if (res.status === 'fulfilled') {
+      agents[name] = res.value
+    } else {
+      const fallback = makeEmptyAgentSummary(name)
+      fallback.health = AGENT_HEALTH.ERROR
+      fallback.notes = [`aggregator failed: ${res.reason?.message || res.reason}`]
+      agents[name] = fallback
+    }
+  })
 
   // Hamilton-specific Sam checks live alongside the agent's table list
   // so Sam can monitor application autopilot health independently of

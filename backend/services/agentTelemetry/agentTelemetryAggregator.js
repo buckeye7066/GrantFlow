@@ -53,6 +53,24 @@ function pct(n, d) {
   return Math.max(0, Math.min(1, n / d))
 }
 
+/**
+ * Resolve the timestamp column a table actually has, from the live schema.
+ *
+ * The per-agent run tables (sam_runs, robert_runs, hamilton_runs, john_runs)
+ * timestamp with `started_at`; event/candidate tables use `created_at`; some
+ * lead tables only have `discovered_at`. The aggregators were originally
+ * written assuming `created_at` everywhere, so on Postgres every run-table
+ * query threw `column "created_at" does not exist`. Because getHealth fans the
+ * aggregators out with Promise.all, a single throw rejected the whole call and
+ * the dashboard rendered EVERY agent as "Not installed". Resolving the column
+ * from columnsFor() (and zero-filling when none is present) makes each query
+ * schema-accurate across dialects and historical schema drift.
+ */
+function pickTimeCol(cols, preferred = ['started_at', 'created_at', 'discovered_at', 'completed_at']) {
+  for (const c of preferred) if (cols && cols.has(c)) return c
+  return null
+}
+
 function deriveHealth({ installed, last_failure_at, last_success_at, error_count }) {
   if (!installed) return AGENT_HEALTH.NOT_INSTALLED
   if (error_count > 0 && last_failure_at && (!last_success_at || last_failure_at > last_success_at)) {
@@ -234,28 +252,40 @@ export async function aggregateSam(db, range) {
   const since = range.startIso
 
   return withProfileScope({ bypass: true }, async () => {
-    if (runs) {
-      const r = await db.prepare("SELECT COUNT(*) AS n, MAX(created_at) AS last_at FROM sam_runs WHERE created_at >= ?").get(since)
-      out.primary_metrics.checks_run = Number(r?.n || 0)
-      if (r?.last_at && !out.last_run_at) out.last_run_at = r.last_at
-      const ls = await db.prepare("SELECT MAX(created_at) AS last_success_at FROM sam_runs WHERE status = 'succeeded' OR status = 'completed'").get()
-      if (ls?.last_success_at && !out.last_success_at) out.last_success_at = ls.last_success_at
-    }
-    if (findings) {
-      const sev = await db.prepare(`
-        SELECT severity, COUNT(*) AS n FROM sam_findings WHERE created_at >= ? GROUP BY severity
-      `).all(since)
-      const map = { critical: 0, high: 0, medium: 0, low: 0, info: 0 }
-      for (const row of sev) if (map[row.severity] !== undefined) map[row.severity] = Number(row.n || 0)
-      out.primary_metrics.errors_found = map.critical + map.high + map.medium + map.low
-      out.primary_metrics.critical_errors = map.critical
-      out.primary_metrics.severity_breakdown = map
+    try {
+      if (runs) {
+        const tcol = pickTimeCol(new Set(await columnsFor(db, 'sam_runs')))
+        if (tcol) {
+          const r = await db.prepare(`SELECT COUNT(*) AS n, MAX(${tcol}) AS last_at FROM sam_runs WHERE ${tcol} >= ?`).get(since)
+          out.primary_metrics.checks_run = Number(r?.n || 0)
+          if (r?.last_at && !out.last_run_at) out.last_run_at = r.last_at
+          const ls = await db.prepare(`SELECT MAX(${tcol}) AS last_success_at FROM sam_runs WHERE status = 'succeeded' OR status = 'completed'`).get()
+          if (ls?.last_success_at && !out.last_success_at) out.last_success_at = ls.last_success_at
+        }
+      }
+      if (findings) {
+        const fcols = new Set(await columnsFor(db, 'sam_findings'))
+        const ftcol = pickTimeCol(fcols)
+        if (ftcol && fcols.has('severity')) {
+          const sev = await db.prepare(`SELECT severity, COUNT(*) AS n FROM sam_findings WHERE ${ftcol} >= ? GROUP BY severity`).all(since)
+          const map = { critical: 0, high: 0, medium: 0, low: 0, info: 0 }
+          for (const row of sev) if (map[row.severity] !== undefined) map[row.severity] = Number(row.n || 0)
+          out.primary_metrics.errors_found = map.critical + map.high + map.medium + map.low
+          out.primary_metrics.critical_errors = map.critical
+          out.primary_metrics.severity_breakdown = map
 
-      const resolved = await db.prepare("SELECT COUNT(*) AS n FROM sam_findings WHERE status = 'resolved' AND created_at >= ?").get(since)
-      out.primary_metrics.errors_resolved = Number(resolved?.n || 0)
-
-      const failedGates = await db.prepare("SELECT COUNT(*) AS n FROM sam_findings WHERE event_type = 'gate_failed' AND created_at >= ?").get(since)
-      out.primary_metrics.failed_gates = Number(failedGates?.n || 0)
+          if (fcols.has('status')) {
+            const resolved = await db.prepare(`SELECT COUNT(*) AS n FROM sam_findings WHERE status = 'resolved' AND ${ftcol} >= ?`).get(since)
+            out.primary_metrics.errors_resolved = Number(resolved?.n || 0)
+          }
+          if (fcols.has('event_type')) {
+            const failedGates = await db.prepare(`SELECT COUNT(*) AS n FROM sam_findings WHERE event_type = 'gate_failed' AND ${ftcol} >= ?`).get(since)
+            out.primary_metrics.failed_gates = Number(failedGates?.n || 0)
+          }
+        }
+      }
+    } catch (err) {
+      out.notes = [...(out.notes || []), `metrics unavailable: ${err?.message || err}`]
     }
     out.error_count = Number(out.primary_metrics.errors_found || 0)
     out.health = deriveHealth(out)
@@ -330,41 +360,71 @@ export async function aggregateRobert(db, range) {
   const since = range.startIso
 
   return withProfileScope({ bypass: true }, async () => {
-    if (runs) {
-      const r = await db.prepare("SELECT COALESCE(SUM(sources_checked),0) AS n FROM robert_runs WHERE created_at >= ?").get(since)
-      out.primary_metrics.sources_checked = Number(r?.n || 0)
-      const cf = await db.prepare("SELECT COALESCE(SUM(candidates_found),0) AS n FROM robert_runs WHERE created_at >= ?").get(since)
-      out.primary_metrics.opportunities_found = Number(cf?.n || 0)
-    }
-    if (candidates) {
-      if (!out.primary_metrics.opportunities_found) {
-        const r = await db.prepare("SELECT COUNT(*) AS n FROM robert_opportunity_candidates WHERE created_at >= ?").get(since)
-        out.primary_metrics.opportunities_found = Number(r?.n || 0)
+    try {
+      if (runs) {
+        const rcols = new Set(await columnsFor(db, 'robert_runs'))
+        const rtcol = pickTimeCol(rcols)
+        if (rtcol) {
+          // The canonical schema names the column `sources_considered`; fall
+          // back to a legacy `sources_checked` if an old DB still has it.
+          const srcCol = rcols.has('sources_considered') ? 'sources_considered'
+            : (rcols.has('sources_checked') ? 'sources_checked' : null)
+          if (srcCol) {
+            const r = await db.prepare(`SELECT COALESCE(SUM(${srcCol}),0) AS n FROM robert_runs WHERE ${rtcol} >= ?`).get(since)
+            out.primary_metrics.sources_checked = Number(r?.n || 0)
+          }
+          if (rcols.has('candidates_found')) {
+            const cf = await db.prepare(`SELECT COALESCE(SUM(candidates_found),0) AS n FROM robert_runs WHERE ${rtcol} >= ?`).get(since)
+            out.primary_metrics.opportunities_found = Number(cf?.n || 0)
+          }
+        }
       }
-      const v = await db.prepare("SELECT COUNT(*) AS n FROM robert_opportunity_candidates WHERE verification_status = 'verified' AND created_at >= ?").get(since)
-      out.primary_metrics.opportunities_verified = Number(v?.n || 0)
-      const ing = await db.prepare("SELECT COUNT(*) AS n FROM robert_opportunity_candidates WHERE ingested_opportunity_id IS NOT NULL AND created_at >= ?").get(since)
-      out.primary_metrics.opportunities_ingested = Number(ing?.n || 0)
+      if (candidates) {
+        const ccols = new Set(await columnsFor(db, 'robert_opportunity_candidates'))
+        const ctcol = pickTimeCol(ccols)
+        if (ctcol) {
+          if (!out.primary_metrics.opportunities_found) {
+            const r = await db.prepare(`SELECT COUNT(*) AS n FROM robert_opportunity_candidates WHERE ${ctcol} >= ?`).get(since)
+            out.primary_metrics.opportunities_found = Number(r?.n || 0)
+          }
+          const v = await db.prepare(`SELECT COUNT(*) AS n FROM robert_opportunity_candidates WHERE verification_status = 'verified' AND ${ctcol} >= ?`).get(since)
+          out.primary_metrics.opportunities_verified = Number(v?.n || 0)
+          const ing = await db.prepare(`SELECT COUNT(*) AS n FROM robert_opportunity_candidates WHERE ingested_opportunity_id IS NOT NULL AND ${ctcol} >= ?`).get(since)
+          out.primary_metrics.opportunities_ingested = Number(ing?.n || 0)
 
-      const rejBreakdown = await db.prepare(`
-        SELECT rejection_reason, COUNT(*) AS n
-          FROM robert_opportunity_candidates
-         WHERE created_at >= ? AND rejection_reason IS NOT NULL
-         GROUP BY rejection_reason
-      `).all(since)
-      const rej = {}
-      for (const row of rejBreakdown) rej[row.rejection_reason] = Number(row.n || 0)
-      out.primary_metrics.rejection_reasons = rej
-    }
-    if (recs) {
-      const total = await db.prepare("SELECT COUNT(*) AS n FROM robert_profile_recommendations WHERE created_at >= ?").get(since)
-      out.primary_metrics.profile_recommendations = Number(total?.n || 0)
-      const acc = await db.prepare("SELECT COUNT(*) AS n FROM robert_profile_recommendations WHERE recommendation_status = 'accepted' AND created_at >= ?").get(since)
-      out.primary_metrics.pipeline_acceptances = Number(acc?.n || 0)
-      out.primary_metrics.general_pool_only = Math.max(
-        0,
-        Number(out.primary_metrics.opportunities_verified || 0) - Number(out.primary_metrics.profile_recommendations || 0),
-      )
+          // The candidate table's rejection reason lives in
+          // `policy_rejection_reason`; tolerate a legacy `rejection_reason`.
+          const rejCol = ccols.has('policy_rejection_reason') ? 'policy_rejection_reason'
+            : (ccols.has('rejection_reason') ? 'rejection_reason' : null)
+          if (rejCol) {
+            const rejBreakdown = await db.prepare(`
+              SELECT ${rejCol} AS reason, COUNT(*) AS n
+                FROM robert_opportunity_candidates
+               WHERE ${ctcol} >= ? AND ${rejCol} IS NOT NULL
+               GROUP BY ${rejCol}
+            `).all(since)
+            const rej = {}
+            for (const row of rejBreakdown) rej[row.reason] = Number(row.n || 0)
+            out.primary_metrics.rejection_reasons = rej
+          }
+        }
+      }
+      if (recs) {
+        const pcols = new Set(await columnsFor(db, 'robert_profile_recommendations'))
+        const ptcol = pickTimeCol(pcols)
+        if (ptcol) {
+          const total = await db.prepare(`SELECT COUNT(*) AS n FROM robert_profile_recommendations WHERE ${ptcol} >= ?`).get(since)
+          out.primary_metrics.profile_recommendations = Number(total?.n || 0)
+          const acc = await db.prepare(`SELECT COUNT(*) AS n FROM robert_profile_recommendations WHERE recommendation_status = 'accepted' AND ${ptcol} >= ?`).get(since)
+          out.primary_metrics.pipeline_acceptances = Number(acc?.n || 0)
+          out.primary_metrics.general_pool_only = Math.max(
+            0,
+            Number(out.primary_metrics.opportunities_verified || 0) - Number(out.primary_metrics.profile_recommendations || 0),
+          )
+        }
+      }
+    } catch (err) {
+      out.notes = [...(out.notes || []), `metrics unavailable: ${err?.message || err}`]
     }
     out.health = deriveHealth(out)
     return out
@@ -406,6 +466,9 @@ export async function aggregateRobertMap(db, range) {
     const hasState = cols.has('state')
     const hasLat = cols.has('latitude')
     const hasLng = cols.has('longitude')
+    const hasCategory = cols.has('category')
+    const tcol = pickTimeCol(cols)
+    if (!tcol) return out
 
     const rows = await db.prepare(`
       SELECT
@@ -413,13 +476,13 @@ export async function aggregateRobertMap(db, range) {
         ${hasState ? 'state' : 'NULL AS state'},
         ${hasLat ? 'latitude' : 'NULL AS latitude'},
         ${hasLng ? 'longitude' : 'NULL AS longitude'},
-        category,
+        ${hasCategory ? 'category' : 'NULL AS category'},
         title,
         ingested_opportunity_id,
-        created_at
+        ${tcol} AS created_at
       FROM robert_opportunity_candidates
-      WHERE ingested_opportunity_id IS NOT NULL AND created_at >= ?
-      ORDER BY created_at DESC
+      WHERE ingested_opportunity_id IS NOT NULL AND ${tcol} >= ?
+      ORDER BY ${tcol} DESC
       LIMIT 5000
     `).all(since)
 
@@ -482,40 +545,67 @@ export async function aggregateYana(db, range) {
   const since = range.startIso
 
   return withProfileScope({ bypass: true }, async () => {
-    if (yanaRunsTable) {
-      const u = await db.prepare(`SELECT COALESCE(SUM(urls_fetched),0) AS n FROM ${yanaRunsTable} WHERE created_at >= ?`).get(since)
-      out.primary_metrics.websites_checked = Number(u?.n || 0)
-      const lf = await db.prepare(`SELECT COALESCE(SUM(leads_found),0) AS n FROM ${yanaRunsTable} WHERE created_at >= ?`).get(since)
-      out.primary_metrics.leads_found = Number(lf?.n || 0)
-    }
-    if (leads) {
-      if (!out.primary_metrics.leads_found) {
-        const r = await db.prepare("SELECT COUNT(*) AS n FROM yana_lead_candidates WHERE created_at >= ?").get(since)
-        out.primary_metrics.leads_found = Number(r?.n || 0)
+    try {
+      if (yanaRunsTable) {
+        const rcols = new Set(await columnsFor(db, yanaRunsTable))
+        const rtcol = pickTimeCol(rcols)
+        if (rtcol) {
+          if (rcols.has('urls_fetched')) {
+            const u = await db.prepare(`SELECT COALESCE(SUM(urls_fetched),0) AS n FROM ${yanaRunsTable} WHERE ${rtcol} >= ?`).get(since)
+            out.primary_metrics.websites_checked = Number(u?.n || 0)
+          }
+          if (rcols.has('leads_found')) {
+            const lf = await db.prepare(`SELECT COALESCE(SUM(leads_found),0) AS n FROM ${yanaRunsTable} WHERE ${rtcol} >= ?`).get(since)
+            out.primary_metrics.leads_found = Number(lf?.n || 0)
+          }
+        }
       }
-      const q = await db.prepare("SELECT COUNT(*) AS n FROM yana_lead_candidates WHERE qualification_status = 'qualified' AND created_at >= ?").get(since)
-      out.primary_metrics.leads_qualified = Number(q?.n || 0)
-      const rej = await db.prepare(`
-        SELECT rejection_reason, COUNT(*) AS n FROM yana_lead_candidates
-         WHERE rejection_reason IS NOT NULL AND created_at >= ?
-         GROUP BY rejection_reason
-      `).all(since)
-      const map = {}
-      let rejCount = 0
-      for (const row of rej) { map[row.rejection_reason] = Number(row.n || 0); rejCount += Number(row.n || 0) }
-      out.primary_metrics.leads_rejected = rejCount
-      out.primary_metrics.rejection_reasons = map
+      if (leads) {
+        const lcols = new Set(await columnsFor(db, 'yana_lead_candidates'))
+        const ltcol = pickTimeCol(lcols)
+        if (ltcol) {
+          if (!out.primary_metrics.leads_found) {
+            const r = await db.prepare(`SELECT COUNT(*) AS n FROM yana_lead_candidates WHERE ${ltcol} >= ?`).get(since)
+            out.primary_metrics.leads_found = Number(r?.n || 0)
+          }
+          if (lcols.has('qualification_status')) {
+            const q = await db.prepare(`SELECT COUNT(*) AS n FROM yana_lead_candidates WHERE qualification_status = 'qualified' AND ${ltcol} >= ?`).get(since)
+            out.primary_metrics.leads_qualified = Number(q?.n || 0)
+            // Lead candidates have no single rejection_reason column; the count
+            // of non-qualified leads is the closest stable signal.
+            const rejected = await db.prepare(`SELECT COUNT(*) AS n FROM yana_lead_candidates WHERE qualification_status = 'rejected' AND ${ltcol} >= ?`).get(since)
+            out.primary_metrics.leads_rejected = Number(rejected?.n || 0)
+          }
+        }
+      }
+      if (johnQ) {
+        const jcols = new Set(await columnsFor(db, 'yana_john_queue'))
+        const jtcol = pickTimeCol(jcols)
+        if (jtcol) {
+          const r = await db.prepare(`SELECT COUNT(*) AS n FROM yana_john_queue WHERE ${jtcol} >= ?`).get(since)
+          out.primary_metrics.leads_sent_to_john = Number(r?.n || 0)
+        }
+      } else if (leads) {
+        // Fallback: count leads flagged as pushed to John directly on the
+        // lead-candidates table when the dedicated queue table is absent.
+        const lcols = new Set(await columnsFor(db, 'yana_lead_candidates'))
+        const ltcol = pickTimeCol(lcols)
+        if (ltcol && lcols.has('pushed_to_john')) {
+          const r = await db.prepare(`SELECT COUNT(*) AS n FROM yana_lead_candidates WHERE pushed_to_john = TRUE AND ${ltcol} >= ?`).get(since)
+          out.primary_metrics.leads_sent_to_john = Number(r?.n || 0)
+        } else {
+          out.primary_metrics.leads_sent_to_john = 0
+        }
+      } else {
+        out.primary_metrics.leads_sent_to_john = 0
+      }
+      out.primary_metrics.lead_conversion_rate = pct(
+        Number(out.primary_metrics.leads_sent_to_john || 0),
+        Number(out.primary_metrics.websites_checked || 0),
+      )
+    } catch (err) {
+      out.notes = [...(out.notes || []), `metrics unavailable: ${err?.message || err}`]
     }
-    if (johnQ) {
-      const r = await db.prepare("SELECT COUNT(*) AS n FROM yana_john_queue WHERE created_at >= ?").get(since)
-      out.primary_metrics.leads_sent_to_john = Number(r?.n || 0)
-    } else {
-      out.primary_metrics.leads_sent_to_john = 0
-    }
-    out.primary_metrics.lead_conversion_rate = pct(
-      Number(out.primary_metrics.leads_sent_to_john || 0),
-      Number(out.primary_metrics.websites_checked || 0),
-    )
     out.health = deriveHealth(out)
     return out
   })
@@ -551,44 +641,60 @@ export async function aggregateHamilton(db, range) {
   const since = range.startIso
 
   return withProfileScope({ bypass: true }, async () => {
-    if (runsTable) {
-      // The legacy yana_runs schema only has lead-discovery columns; Hamilton
-      // metrics live in the autopilot-specific columns we added in migration
-      // 085. Probe the column list so that older databases / tests without
-      // those columns still produce a useful (zero-filled) summary.
-      const cols = new Set(await columnsFor(db, runsTable))
-      const sumIfPresent = async (col, key) => {
-        if (!cols.has(col)) { out.primary_metrics[key] = 0; return }
-        const r = await db.prepare(`SELECT COALESCE(SUM(${col}),0) AS n FROM ${runsTable} WHERE created_at >= ?`).get(since)
-        out.primary_metrics[key] = Number(r?.n || 0)
+    try {
+      if (runsTable) {
+        // The legacy yana_runs schema only has lead-discovery columns; Hamilton
+        // metrics live in the autopilot-specific columns we added in migration
+        // 085. Probe the column list so that older databases / tests without
+        // those columns still produce a useful (zero-filled) summary.
+        const cols = new Set(await columnsFor(db, runsTable))
+        const rtcol = pickTimeCol(cols)
+        const sumIfPresent = async (col, key) => {
+          if (!cols.has(col) || !rtcol) { out.primary_metrics[key] = 0; return }
+          const r = await db.prepare(`SELECT COALESCE(SUM(${col}),0) AS n FROM ${runsTable} WHERE ${rtcol} >= ?`).get(since)
+          out.primary_metrics[key] = Number(r?.n || 0)
+        }
+        await sumIfPresent('fields_filled', 'fields_filled')
+        await sumIfPresent('drafts_completed', 'drafts_completed')
+        await sumIfPresent('submissions_completed', 'submissions_completed')
+        await sumIfPresent('blocked_safety', 'blocked_safety')
       }
-      await sumIfPresent('fields_filled', 'fields_filled')
-      await sumIfPresent('drafts_completed', 'drafts_completed')
-      await sumIfPresent('submissions_completed', 'submissions_completed')
-      await sumIfPresent('blocked_safety', 'blocked_safety')
-    }
-    if (autopilotRunsTable) {
-      const finished = await db.prepare(`SELECT status, COUNT(*) AS n FROM ${autopilotRunsTable} WHERE created_at >= ? GROUP BY status`).all(since)
-      const map = {}
-      for (const row of finished) map[row.status] = Number(row.n || 0)
-      out.primary_metrics.autopilot_runs_by_status = map
-      out.primary_metrics.autopilot_total = Object.values(map).reduce((a, b) => a + b, 0)
-    }
-    if (blockersTable) {
-      const open = await db.prepare(`SELECT COUNT(*) AS n FROM ${blockersTable} WHERE resolved_at IS NULL`).get()
-      out.primary_metrics.open_blockers = Number(open?.n || 0)
-      const adminOpen = await db.prepare(`SELECT COUNT(*) AS n FROM ${blockersTable} WHERE resolved_at IS NULL AND admin_required = 1`).get()
-      out.primary_metrics.open_blockers_admin = Number(adminOpen?.n || 0)
-      const byType = await db.prepare(`SELECT blocker_type, COUNT(*) AS n FROM ${blockersTable} WHERE resolved_at IS NULL GROUP BY blocker_type`).all()
-      const tmap = {}
-      for (const row of byType) tmap[row.blocker_type] = Number(row.n || 0)
-      out.primary_metrics.open_blockers_by_type = tmap
-    }
-    if (tasksTable) {
-      const byStatus = await db.prepare(`SELECT status, COUNT(*) AS n FROM ${tasksTable} GROUP BY status`).all()
-      const tmap = {}
-      for (const row of byStatus) tmap[row.status] = Number(row.n || 0)
-      out.primary_metrics.application_tasks_by_status = tmap
+      if (autopilotRunsTable) {
+        const acols = new Set(await columnsFor(db, autopilotRunsTable))
+        const atcol = pickTimeCol(acols)
+        if (atcol && acols.has('status')) {
+          const finished = await db.prepare(`SELECT status, COUNT(*) AS n FROM ${autopilotRunsTable} WHERE ${atcol} >= ? GROUP BY status`).all(since)
+          const map = {}
+          for (const row of finished) map[row.status] = Number(row.n || 0)
+          out.primary_metrics.autopilot_runs_by_status = map
+          out.primary_metrics.autopilot_total = Object.values(map).reduce((a, b) => a + b, 0)
+        }
+      }
+      if (blockersTable) {
+        const bcols = new Set(await columnsFor(db, blockersTable))
+        if (bcols.has('resolved_at')) {
+          const open = await db.prepare(`SELECT COUNT(*) AS n FROM ${blockersTable} WHERE resolved_at IS NULL`).get()
+          out.primary_metrics.open_blockers = Number(open?.n || 0)
+          if (bcols.has('admin_required')) {
+            const adminOpen = await db.prepare(`SELECT COUNT(*) AS n FROM ${blockersTable} WHERE resolved_at IS NULL AND admin_required = TRUE`).get()
+            out.primary_metrics.open_blockers_admin = Number(adminOpen?.n || 0)
+          }
+          if (bcols.has('blocker_type')) {
+            const byType = await db.prepare(`SELECT blocker_type, COUNT(*) AS n FROM ${blockersTable} WHERE resolved_at IS NULL GROUP BY blocker_type`).all()
+            const tmap = {}
+            for (const row of byType) tmap[row.blocker_type] = Number(row.n || 0)
+            out.primary_metrics.open_blockers_by_type = tmap
+          }
+        }
+      }
+      if (tasksTable) {
+        const byStatus = await db.prepare(`SELECT status, COUNT(*) AS n FROM ${tasksTable} GROUP BY status`).all()
+        const tmap = {}
+        for (const row of byStatus) tmap[row.status] = Number(row.n || 0)
+        out.primary_metrics.application_tasks_by_status = tmap
+      }
+    } catch (err) {
+      out.notes = [...(out.notes || []), `metrics unavailable: ${err?.message || err}`]
     }
     out.health = deriveHealth(out)
     return out
@@ -641,48 +747,65 @@ export async function aggregateJohn(db, range) {
   const dayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
 
   return withProfileScope({ bypass: true }, async () => {
-    if (drafts) {
-      const created = await db.prepare(`
-        SELECT COUNT(*) AS n FROM john_email_drafts
-         WHERE draft_status IN ('created','needs_review','needs_sender_alias_review') AND created_at >= ?
-      `).get(since)
-      out.primary_metrics.drafts_created = Number(created?.n || 0)
+    try {
+      if (drafts) {
+        const dcols = new Set(await columnsFor(db, 'john_email_drafts'))
+        const dtcol = pickTimeCol(dcols)
+        const hasBlockReason = dcols.has('block_reason')
+        if (dtcol) {
+          const created = await db.prepare(`
+            SELECT COUNT(*) AS n FROM john_email_drafts
+             WHERE draft_status IN ('created','needs_review','needs_sender_alias_review') AND ${dtcol} >= ?
+          `).get(since)
+          out.primary_metrics.drafts_created = Number(created?.n || 0)
 
-      const blocked = await db.prepare("SELECT COUNT(*) AS n FROM john_email_drafts WHERE draft_status = 'blocked' AND created_at >= ?").get(since)
-      out.primary_metrics.drafts_blocked = Number(blocked?.n || 0)
+          const blocked = await db.prepare(`SELECT COUNT(*) AS n FROM john_email_drafts WHERE draft_status = 'blocked' AND ${dtcol} >= ?`).get(since)
+          out.primary_metrics.drafts_blocked = Number(blocked?.n || 0)
 
-      const aliasReview = await db.prepare("SELECT COUNT(*) AS n FROM john_email_drafts WHERE draft_status = 'needs_sender_alias_review' AND created_at >= ?").get(since)
-      out.primary_metrics.drafts_needing_alias_review = Number(aliasReview?.n || 0)
+          const aliasReview = await db.prepare(`SELECT COUNT(*) AS n FROM john_email_drafts WHERE draft_status = 'needs_sender_alias_review' AND ${dtcol} >= ?`).get(since)
+          out.primary_metrics.drafts_needing_alias_review = Number(aliasReview?.n || 0)
 
-      const created24 = await db.prepare(`
-        SELECT COUNT(*) AS n FROM john_email_drafts
-         WHERE draft_status IN ('created','needs_review','needs_sender_alias_review') AND created_at >= ?
-      `).get(dayAgo)
-      const used = Number(created24?.n || 0)
-      out.primary_metrics.drafts_created_24h = used
-      out.primary_metrics.daily_capacity_remaining = Math.max(0, JOHN_DAILY_CAP - used)
-      out.primary_metrics.daily_capacity_total = JOHN_DAILY_CAP
+          const created24 = await db.prepare(`
+            SELECT COUNT(*) AS n FROM john_email_drafts
+             WHERE draft_status IN ('created','needs_review','needs_sender_alias_review') AND ${dtcol} >= ?
+          `).get(dayAgo)
+          const used = Number(created24?.n || 0)
+          out.primary_metrics.drafts_created_24h = used
+          out.primary_metrics.daily_capacity_remaining = Math.max(0, JOHN_DAILY_CAP - used)
+          out.primary_metrics.daily_capacity_total = JOHN_DAILY_CAP
 
-      const blocks = await db.prepare(`
-        SELECT block_reason, COUNT(*) AS n FROM john_email_drafts
-         WHERE draft_status = 'blocked' AND block_reason IS NOT NULL AND created_at >= ?
-         GROUP BY block_reason
-      `).all(since)
-      const blockMap = {}
-      for (const r of blocks) blockMap[r.block_reason] = Number(r.n || 0)
-      out.primary_metrics.block_reasons = blockMap
-    }
-    if (supp) {
-      const hits = await db.prepare(`
-        SELECT COUNT(*) AS n FROM john_email_drafts
-         WHERE block_reason = 'suppressed' AND created_at >= ?
-      `).get(since)
-      out.primary_metrics.suppression_hits = Number(hits?.n || 0)
-    }
-    if (aliasChecks) {
-      const last = await db.prepare("SELECT alias_status, checked_at FROM john_alias_checks ORDER BY checked_at DESC LIMIT 1").get()
-      out.primary_metrics.alias_status = last?.alias_status || 'unknown'
-      out.primary_metrics.alias_checked_at = last?.checked_at || null
+          // `block_reason` is an optional/legacy column; the canonical schema
+          // keeps block detail inside safety_report_json instead.
+          if (hasBlockReason) {
+            const blocks = await db.prepare(`
+              SELECT block_reason, COUNT(*) AS n FROM john_email_drafts
+               WHERE draft_status = 'blocked' AND block_reason IS NOT NULL AND ${dtcol} >= ?
+               GROUP BY block_reason
+            `).all(since)
+            const blockMap = {}
+            for (const r of blocks) blockMap[r.block_reason] = Number(r.n || 0)
+            out.primary_metrics.block_reasons = blockMap
+
+            if (supp) {
+              const hits = await db.prepare(`
+                SELECT COUNT(*) AS n FROM john_email_drafts
+                 WHERE block_reason = 'suppressed' AND ${dtcol} >= ?
+              `).get(since)
+              out.primary_metrics.suppression_hits = Number(hits?.n || 0)
+            }
+          }
+        }
+      }
+      if (aliasChecks) {
+        const acols = new Set(await columnsFor(db, 'john_alias_checks'))
+        if (acols.has('checked_at')) {
+          const last = await db.prepare('SELECT alias_status, checked_at FROM john_alias_checks ORDER BY checked_at DESC LIMIT 1').get()
+          out.primary_metrics.alias_status = last?.alias_status || 'unknown'
+          out.primary_metrics.alias_checked_at = last?.checked_at || null
+        }
+      }
+    } catch (err) {
+      out.notes = [...(out.notes || []), `metrics unavailable: ${err?.message || err}`]
     }
     out.health = deriveHealth(out)
     return out

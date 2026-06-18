@@ -200,7 +200,7 @@ test('getSummary handles partial agent install (only some tables exist)', async 
 test('getRobert returns funnel + summary structure', async () => {
   const db = makeTelemetryDb({ installAgents: ['robert_runs', 'robert_opportunity_candidates'] })
   db._raw
-    .prepare('INSERT INTO robert_runs (id, status, sources_checked, candidates_found) VALUES (?, ?, ?, ?)')
+    .prepare('INSERT INTO robert_runs (id, status, sources_considered, candidates_found) VALUES (?, ?, ?, ?)')
     .run(nextId('rr'), 'succeeded', 10, 5)
   for (let i = 0; i < 5; i += 1) {
     db._raw

@@ -157,7 +157,7 @@ test('Robert funnel reflects sources, candidates, verified, ingested', async () 
     installAgents: ['robert_runs', 'robert_opportunity_candidates', 'robert_profile_recommendations'],
   })
   db._raw
-    .prepare('INSERT INTO robert_runs (id, status, sources_checked, candidates_found) VALUES (?, ?, ?, ?)')
+    .prepare('INSERT INTO robert_runs (id, status, sources_considered, candidates_found) VALUES (?, ?, ?, ?)')
     .run(nextId('rr'), 'succeeded', 25, 18)
   for (let i = 0; i < 18; i += 1) {
     db._raw

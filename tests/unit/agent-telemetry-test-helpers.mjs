@@ -27,6 +27,15 @@ const TELEMETRY_MIGRATION = loadMigration('backend/db/migrations/084_agent_telem
  * branches can be exercised without depending on every other agent's
  * migrations being merged. Production schemas may have more columns;
  * the aggregator only reads the ones we declare.
+ *
+ * IMPORTANT: column NAMES here MUST match the real migrations, or these
+ * tests give false confidence. A prior version timestamped the run tables
+ * (sam_runs, robert_runs, yana_runs, john_runs) with `created_at`, but the
+ * canonical schema uses `started_at` — so the aggregator's `WHERE created_at
+ * >= ?` queries passed in tests yet threw `column "created_at" does not
+ * exist` on Postgres, taking down the entire Mission Control health endpoint
+ * and rendering every agent as "Not installed". Run tables timestamp with
+ * `started_at`; event/candidate/lead/draft tables use `created_at`.
  */
 export const AGENT_TABLE_DDL = {
   anya_runs: `
@@ -95,7 +104,8 @@ export const AGENT_TABLE_DDL = {
   john_runs: `
     CREATE TABLE john_runs (
       id TEXT PRIMARY KEY,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      started_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      completed_at DATETIME,
       status TEXT
     );
   `,
@@ -108,7 +118,8 @@ export const AGENT_TABLE_DDL = {
   yana_runs: `
     CREATE TABLE yana_runs (
       id TEXT PRIMARY KEY,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      started_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      completed_at DATETIME,
       status TEXT,
       urls_fetched INTEGER DEFAULT 0,
       leads_found INTEGER DEFAULT 0
@@ -118,7 +129,9 @@ export const AGENT_TABLE_DDL = {
     CREATE TABLE yana_lead_candidates (
       id TEXT PRIMARY KEY,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      discovered_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       qualification_status TEXT,
+      pushed_to_john INTEGER DEFAULT 0,
       rejection_reason TEXT
     );
   `,
@@ -133,9 +146,10 @@ export const AGENT_TABLE_DDL = {
   robert_runs: `
     CREATE TABLE robert_runs (
       id TEXT PRIMARY KEY,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      started_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      completed_at DATETIME,
       status TEXT,
-      sources_checked INTEGER DEFAULT 0,
+      sources_considered INTEGER DEFAULT 0,
       candidates_found INTEGER DEFAULT 0
     );
   `,
@@ -145,7 +159,7 @@ export const AGENT_TABLE_DDL = {
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       verification_status TEXT,
       ingested_opportunity_id TEXT,
-      rejection_reason TEXT,
+      policy_rejection_reason TEXT,
       title TEXT,
       category TEXT,
       state TEXT,
@@ -166,7 +180,8 @@ export const AGENT_TABLE_DDL = {
   sam_runs: `
     CREATE TABLE sam_runs (
       id TEXT PRIMARY KEY,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      started_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      completed_at DATETIME,
       status TEXT
     );
   `,
