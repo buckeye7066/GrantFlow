@@ -266,8 +266,21 @@ export async function aggregateSam(db, range) {
       if (findings) {
         const fcols = new Set(await columnsFor(db, 'sam_findings'))
         const ftcol = pickTimeCol(fcols)
-        if (ftcol && fcols.has('severity')) {
-          const sev = await db.prepare(`SELECT severity, COUNT(*) AS n FROM sam_findings WHERE ${ftcol} >= ? GROUP BY severity`).all(since)
+        // Scope severity metrics to the LATEST Sam run so the card reflects the
+        // current audit state. Sam re-audits from scratch every cycle, so
+        // counting every finding in the time window made the totals grow
+        // unboundedly run-over-run (the "16 -> 32 Tool invocation failed" creep).
+        let scopeClause = `${ftcol} >= ?`
+        let scopeArg = since
+        if (runs && fcols.has('sam_run_id')) {
+          const rtcol = pickTimeCol(new Set(await columnsFor(db, 'sam_runs')))
+          if (rtcol) {
+            const lr = await db.prepare(`SELECT id FROM sam_runs ORDER BY ${rtcol} DESC LIMIT 1`).get()
+            if (lr?.id) { scopeClause = 'sam_run_id = ?'; scopeArg = lr.id }
+          }
+        }
+        if ((ftcol || scopeClause.startsWith('sam_run_id')) && fcols.has('severity')) {
+          const sev = await db.prepare(`SELECT severity, COUNT(*) AS n FROM sam_findings WHERE ${scopeClause} GROUP BY severity`).all(scopeArg)
           const map = { critical: 0, high: 0, medium: 0, low: 0, info: 0 }
           for (const row of sev) if (map[row.severity] !== undefined) map[row.severity] = Number(row.n || 0)
           out.primary_metrics.errors_found = map.critical + map.high + map.medium + map.low
@@ -275,11 +288,11 @@ export async function aggregateSam(db, range) {
           out.primary_metrics.severity_breakdown = map
 
           if (fcols.has('status')) {
-            const resolved = await db.prepare(`SELECT COUNT(*) AS n FROM sam_findings WHERE status = 'resolved' AND ${ftcol} >= ?`).get(since)
+            const resolved = await db.prepare(`SELECT COUNT(*) AS n FROM sam_findings WHERE status = 'resolved' AND ${scopeClause}`).get(scopeArg)
             out.primary_metrics.errors_resolved = Number(resolved?.n || 0)
           }
           if (fcols.has('event_type')) {
-            const failedGates = await db.prepare(`SELECT COUNT(*) AS n FROM sam_findings WHERE event_type = 'gate_failed' AND ${ftcol} >= ?`).get(since)
+            const failedGates = await db.prepare(`SELECT COUNT(*) AS n FROM sam_findings WHERE event_type = 'gate_failed' AND ${scopeClause}`).get(scopeArg)
             out.primary_metrics.failed_gates = Number(failedGates?.n || 0)
           }
         }
