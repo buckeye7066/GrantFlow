@@ -61,6 +61,37 @@ import { resolveBlocker } from './hamiltonHardStopResolver.js'
 
 const PERSONA_VERSION = 'hamilton-mba-2026'
 
+const ENV = (typeof process !== 'undefined' && process?.env) ? process.env : {}
+
+// Browser-automation gate for the active (Control Center) autopilot path.
+// `HAMILTON_ENABLE_BROWSER_AUTOMATION` must be 'true' before Hamilton launches a
+// real browser; until then she degrades to the lawful pdf_docx packet. This is
+// the flag the legacy hamiltonApplicationAgent path already honored — wiring it
+// here makes it authoritative on the path the Control Center actually drives.
+export function isBrowserAutomationEnabled() {
+  return String(ENV.HAMILTON_ENABLE_BROWSER_AUTOMATION || 'false').toLowerCase() === 'true'
+}
+
+// Optional comma-separated host allowlist (e.g. "tn.gov,mtsu.edu"). When set,
+// browser automation runs ONLY on these hosts (or their subdomains) — every
+// other portal degrades to the packet. Lets browser automation be trialed on a
+// single low-stakes source before going fleet-wide. Empty = no restriction.
+export function browserAutomationHostAllowlist() {
+  return String(ENV.HAMILTON_BROWSER_AUTOMATION_HOST_ALLOWLIST || '')
+    .split(',')
+    .map((h) => h.trim().toLowerCase())
+    .filter(Boolean)
+}
+
+export function browserAutomationPermittedForUrl(url) {
+  if (!isBrowserAutomationEnabled()) return false
+  const allow = browserAutomationHostAllowlist()
+  if (allow.length === 0) return true // enabled with no allowlist → fleet-wide
+  let host = ''
+  try { host = new URL(url).hostname.toLowerCase() } catch { return false }
+  return allow.some((a) => host === a || host.endsWith(`.${a}`))
+}
+
 async function loadProfileBundle(db, profileId) {
   if (!db || !profileId) return null
   const row = await db.prepare('SELECT * FROM profiles WHERE id = ? LIMIT 1').get(String(profileId))
@@ -551,6 +582,54 @@ async function runAutopilotPathway(db, {
       data: { task_id: task.id, run_id: run.id, preflight },
     })
     return { task: await reload(db, task.id), classification, autopilot_run: run.id, preflight }
+  }
+
+  // Scoped browser-automation guard (defense in depth on top of the per-source
+  // `complete_forms` authorization already required above). Browser automation
+  // must be globally enabled via HAMILTON_ENABLE_BROWSER_AUTOMATION, and when
+  // HAMILTON_BROWSER_AUTOMATION_HOST_ALLOWLIST is set the portal host must be on
+  // it. When not permitted, Hamilton does NOT open a browser — she produces the
+  // lawful pdf_docx packet (the same artifact she falls back to when a portal
+  // forbids automation), so the applicant still gets a complete, submittable
+  // document. This makes the env flag authoritative on this path and lets
+  // browser automation be trialed on one low-stakes host before going fleet-wide.
+  if (!browserAutomationPermittedForUrl(url)) {
+    const reason = !isBrowserAutomationEnabled()
+      ? 'HAMILTON_ENABLE_BROWSER_AUTOMATION is not true'
+      : 'portal host is not on HAMILTON_BROWSER_AUTOMATION_HOST_ALLOWLIST'
+    const packet = await generateAndSavePacket(db, {
+      profile, opportunity, grant, automationType: 'pdf_docx', taskId: task.id, userId,
+    }).catch((err) => ({ error: err?.message || String(err) }))
+    if (packet && !packet.error) {
+      await updateApplicationTask(db, task.id, {
+        outputDocxDocumentId: packet.docx_document_id,
+        outputPdfDocumentId: packet.pdf_document_id || null,
+        outputDocumentId: packet.pdf_document_id || packet.docx_document_id,
+        mailingInstructions: packet.mailing_instructions,
+        status: 'waiting_for_review',
+        lastAgentMessage: `Hamilton produced a printable packet instead of browser automation (${reason}).`,
+      })
+      await updateAutopilotRun(db, run.id, {
+        status: 'completed',
+        result: { skipped_browser: true, reason, packet },
+        finishedAt: new Date().toISOString(),
+      })
+      await appendTaskEvent(db, {
+        taskId: task.id, eventType: 'note', status: 'waiting_for_review',
+        message: `Browser automation skipped (${reason}); generated pdf_docx packet instead.`,
+        actorUserId: userId, actorRole: 'agent',
+      })
+      return { task: await reload(db, task.id), classification, autopilot_run: run.id, skipped_browser: true, reason }
+    }
+    await updateAutopilotRun(db, run.id, {
+      status: 'blocked', blockerKind: 'no_browser', blockerDetail: reason,
+      finishedAt: new Date().toISOString(),
+    })
+    await updateApplicationTask(db, task.id, {
+      status: 'blocked',
+      lastAgentMessage: `Hamilton could not run browser automation (${reason}) and packet generation failed.`,
+    })
+    return { task: await reload(db, task.id), classification, autopilot_run: run.id, blocked: true, reason }
   }
 
   // Launch with a Hard-Stop Resolver loop. After each engine pass we

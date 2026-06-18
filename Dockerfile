@@ -42,6 +42,17 @@ RUN apt-get update \
 # Copy ONLY production dependencies from builder
 COPY --from=builder /app/node_modules ./node_modules
 
+# Hamilton browser automation (HAMILTON_ENABLE_BROWSER_AUTOMATION): install the
+# chromium browser Playwright drives, plus its OS shared-library dependencies.
+# `playwright` is a production dependency (above), so node_modules already ships
+# the client; this downloads the matching browser build into a fixed path. The
+# code in hamiltonAutopilotEngine.js calls chromium.executablePath() and falls
+# back to a `no_browser` blocker when this is absent, so the image MUST carry it
+# for automation to run. Adds ~300MB — the cost of in-image browser automation.
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+RUN node node_modules/playwright/cli.js install --with-deps chromium \
+  && rm -rf /var/lib/apt/lists/*
+
 # Copy backend code
 COPY --from=builder /app/backend ./backend
 

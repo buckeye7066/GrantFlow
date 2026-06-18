@@ -838,6 +838,27 @@ if (!app.locals.db_startup_error) {
     )
   }
 
+  // Hamilton self-heal: resync the application_tasks status CHECK constraint to
+  // the full TASK_STATUSES list at boot. ensureApplicationTaskSchema() drops and
+  // re-adds the constraint from the JS source of truth, but it only ran lazily
+  // (first store call) — and prod's queue stays empty (browser automation gated
+  // off), so it never fired and the constraint stayed stuck on the pre-087
+  // 14-status list. Any task advancing to a new-state-machine status like
+  // 'analyzing'/'completed' then threw `application_tasks_status_check` and
+  // Hamilton could neither create nor progress a task. Running it
+  // unconditionally at boot makes it drift-proof.
+  try {
+    const { ensureApplicationTaskSchema } = await import(
+      './services/hamilton/applicationTaskStore.js'
+    )
+    await ensureApplicationTaskSchema(db)
+  } catch (taskSchemaSelfHealErr) {
+    console.warn(
+      '[application-tasks] startup self-heal threw (non-fatal):',
+      taskSchemaSelfHealErr?.message || taskSchemaSelfHealErr,
+    )
+  }
+
   // Register the Yana-backed lead source so John drafts outreach from Yana's
   // qualified client-discovery leads (johnYanaBridge). Yana = Client Discoverer.
   try {
