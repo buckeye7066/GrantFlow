@@ -325,6 +325,15 @@ export default function Pipeline() {
     bulkDeleteMutation.mutate(expiredIds);
   };
 
+  // Hamilton "keep only what I picked" flow: delete the pipeline cards the
+  // user did NOT select for Hamilton. Returns a promise so the toolbar can
+  // show its own progress/confirmation.
+  const handleDeleteUnselectedForHamilton = async (ids) => {
+    if (!Array.isArray(ids) || ids.length === 0) return;
+    await Promise.all(ids.map((id) => client.entities.Grant.delete(id)));
+    queryClient.invalidateQueries({ queryKey: ['grants'] });
+  };
+
   const handleProcessAll = async () => {
     if (!isAdmin) return
     if (isProcessAllPending) return
@@ -678,6 +687,8 @@ export default function Pipeline() {
       </AlertDialog>
       <HamiltonSelectionToolbar
         profileId={selectedProfileId && selectedProfileId !== 'all' ? selectedProfileId : null}
+        grants={filteredGrants}
+        onDeleteGrants={handleDeleteUnselectedForHamilton}
       />
       {selectedProfileId && selectedProfileId !== 'all' && (
         <div className="max-w-full mx-auto mt-6">

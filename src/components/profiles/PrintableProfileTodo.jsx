@@ -122,12 +122,23 @@ function TodoItemCard({ item }) {
     </Badge>
   )
 
+  const hasDetails = Boolean(item.instructions || item.resources_needed || item.contact_or_location)
+  const toggle = () => setExpanded((v) => !v)
+
   return (
-    <div className="border rounded-lg p-3 hover:bg-slate-50 transition-colors">
-      <div
-        className="flex items-start gap-2 cursor-pointer"
-        onClick={() => setExpanded(!expanded)}
-      >
+    <div
+      role="button"
+      tabIndex={0}
+      aria-expanded={expanded}
+      onClick={toggle}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle() }
+      }}
+      className={`border rounded-lg p-3 cursor-pointer transition-colors hover:bg-slate-50 hover:border-blue-300 focus:outline-none focus:ring-2 focus:ring-blue-400 ${
+        expanded ? 'bg-slate-50 border-blue-200' : ''
+      }`}
+    >
+      <div className="flex items-start gap-2">
         <div className="mt-0.5 text-slate-400 text-lg shrink-0">&#9744;</div>
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
@@ -137,14 +148,17 @@ function TodoItemCard({ item }) {
               <span className="text-xs text-red-600 font-medium">Due: {item.deadline}</span>
             )}
           </div>
+          {!expanded && hasDetails && (
+            <span className="text-xs text-blue-600 mt-1 inline-block">Tap to see step-by-step instructions →</span>
+          )}
         </div>
-        {expanded ? (
+        {hasDetails && (expanded ? (
           <ChevronUp className="w-4 h-4 text-slate-400 shrink-0 mt-0.5" />
         ) : (
           <ChevronDown className="w-4 h-4 text-slate-400 shrink-0 mt-0.5" />
-        )}
+        ))}
       </div>
-      {expanded && (
+      {expanded && hasDetails && (
         <div className="ml-7 mt-2 space-y-2 text-sm">
           {item.instructions && (
             <p className="text-slate-700 whitespace-pre-wrap">{item.instructions}</p>

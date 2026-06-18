@@ -135,18 +135,24 @@ export default function GrantCard({ grant, organization, organizationName, onSta
         <div className="flex items-center gap-2 flex-wrap">
           {hamiltonSelection?.enabled && (
             <label
-              className="inline-flex items-center cursor-pointer select-none mr-1"
+              className={`inline-flex items-center gap-1 cursor-pointer select-none mr-1 rounded px-1.5 py-0.5 text-xs font-medium border transition-colors ${
+                hamiltonIsSelected
+                  ? 'bg-indigo-600 text-white border-indigo-600'
+                  : 'bg-white text-indigo-700 border-indigo-200 hover:bg-indigo-50'
+              }`}
               onClick={(e) => e.stopPropagation()}
               onMouseDown={(e) => e.stopPropagation()}
-              title={hamiltonIsSelected ? 'Selected for Hamilton' : 'Select for Hamilton automation'}
+              title={hamiltonIsSelected ? 'Selected for Hamilton — submit or trim from the bar below' : 'Pick this funding source for Hamilton to process'}
             >
               <input
                 type="checkbox"
-                className="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                className="h-3.5 w-3.5 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
                 checked={hamiltonIsSelected}
                 onClick={(e) => e.stopPropagation()}
                 onChange={(e) => { e.stopPropagation(); hamiltonSelection.toggle(hamiltonSelectionSource); }}
               />
+              <Sparkles className="w-3 h-3" />
+              {hamiltonIsSelected ? 'Picked' : 'Hamilton'}
             </label>
           )}
           {grant.starred && <Star className="w-4 h-4 text-yellow-400 fill-yellow-400" />}

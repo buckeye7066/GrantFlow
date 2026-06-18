@@ -411,13 +411,16 @@ router.post('/authorize', async (req, res) => {
   const authorizationVersion = String(req.body?.authorization_version || HAMILTON_AUTOPILOT_AUTHORIZATION_VERSION)
 
   if (!profileId) return res.status(400).json({ error: 'profile_id_required' })
-  if (!(await userMayAccessProfile(req, user, profileId))) {
-    return res.status(403).json({ error: 'forbidden' })
-  }
-  const types = authorizationTypesIn.filter((t) => HAMILTON_AUTHORIZATION_TYPES.includes(t))
-  if (types.length === 0) return res.status(400).json({ error: 'authorization_types_required' })
 
   try {
+    // Access check is inside the try so a DB hiccup here returns a clean,
+    // logged error instead of an unhandled 500 with an empty body.
+    if (!(await userMayAccessProfile(req, user, profileId))) {
+      return res.status(403).json({ error: 'forbidden' })
+    }
+    const types = authorizationTypesIn.filter((t) => HAMILTON_AUTHORIZATION_TYPES.includes(t))
+    if (types.length === 0) return res.status(400).json({ error: 'authorization_types_required' })
+
     const ids = await recordAuthorizations(req.db, {
       userId: user.id,
       profileId,

@@ -323,21 +323,17 @@ router.get('/recommendations/deliverable', requireAuth, async (req, res) => {
   } catch (err) { return handleError(res, err) }
 })
 
-router.get('/recommendations/:id', requireAuth, async (req, res) => {
-  try {
-    const rec = await getRecommendation(req.db, req.params.id)
-    if (!rec) return res.status(404).json({ ok: false, error: 'Recommendation not found' })
-    if (!(await ensureProfileAccess(req, res, rec.profile_id))) return
-    return res.json({ ok: true, recommendation: rec })
-  } catch (err) { return handleError(res, err) }
-})
-
 /**
  * Long-poll-style stream. We expose this as a polling-friendly endpoint
  * that takes a `since` timestamp and returns any recommendations created
  * after it. The frontend listener prefers this over SSE because the
  * project's auth uses bearer tokens (SSE inside the browser cannot send
  * custom headers), so polling is the durable choice.
+ *
+ * IMPORTANT: this MUST be registered before `/recommendations/:id` below.
+ * Express matches routes in declaration order, so if `:id` comes first it
+ * captures `/recommendations/stream` as id="stream" and the lookup 404s —
+ * which is exactly what spammed the console with stream 404s.
  */
 router.get('/recommendations/stream', requireAuth, async (req, res) => {
   try {
@@ -357,6 +353,15 @@ router.get('/recommendations/stream', requireAuth, async (req, res) => {
       recommendations: items,
       server_time: new Date().toISOString(),
     })
+  } catch (err) { return handleError(res, err) }
+})
+
+router.get('/recommendations/:id', requireAuth, async (req, res) => {
+  try {
+    const rec = await getRecommendation(req.db, req.params.id)
+    if (!rec) return res.status(404).json({ ok: false, error: 'Recommendation not found' })
+    if (!(await ensureProfileAccess(req, res, rec.profile_id))) return
+    return res.json({ ok: true, recommendation: rec })
   } catch (err) { return handleError(res, err) }
 })
 

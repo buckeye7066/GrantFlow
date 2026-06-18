@@ -35,10 +35,22 @@ export function _resetAuthSchemaCache() {
   ensuredAuthSchema = false
 }
 
+function isMissingRelationError(err) {
+  // Postgres 42P01 "relation ... does not exist" / SQLite "no such table".
+  const msg = String(err?.message || err || '').toLowerCase()
+  return msg.includes('does not exist') || msg.includes('no such table')
+}
+
 export async function ensureHamiltonAuthorizationSchema(db) {
   if (!db || typeof db.prepare !== 'function') return
   if (ensuredAuthSchema) return
   const isPostgres = db?.dialect === 'postgres'
+  // gen_random_uuid() is core in Postgres 13+, but pgcrypto provides it on
+  // older servers; create the extension defensively so the DEFAULT below never
+  // fails at CREATE TABLE time.
+  if (isPostgres) {
+    try { await db.exec('CREATE EXTENSION IF NOT EXISTS pgcrypto') } catch { /* may lack superuser; core gen_random_uuid still works on PG13+ */ }
+  }
   const idDefault = isPostgres ? '(gen_random_uuid()::text)' : '(lower(hex(randomblob(16))))'
   const tsType = isPostgres ? 'TIMESTAMPTZ' : 'DATETIME'
   const nowFn = isPostgres ? 'now()' : 'CURRENT_TIMESTAMP'
@@ -173,7 +185,6 @@ export async function recordAuthorizations(db, {
   if (!HAMILTON_AUTHORIZATION_SCOPES.includes(scope)) throw new Error(`invalid scope: ${scope}`)
   await ensureHamiltonAuthorizationSchema(db)
 
-  const ids = []
   const targets = scope === 'funding_source' && fundingSourceIds.length > 0
     ? fundingSourceIds.map((id) => ({ funding_source_id: id, task_id: null }))
     : scope === 'task' && taskIds.length > 0
@@ -182,7 +193,23 @@ export async function recordAuthorizations(db, {
 
   const nowFn = db?.dialect === 'postgres' ? 'now()' : 'CURRENT_TIMESTAMP'
 
-  for (const target of targets) {
+  // Self-heal: if the hamilton_authorizations table is missing (prod schema
+  // drift — the same class of failure that produced the 500s on this endpoint
+  // and `relation "robert_runs" does not exist`), force a fresh schema-ensure
+  // and retry once before giving up. ensuredAuthSchema is reset so the cache
+  // can't keep masking a table that was never actually created.
+  try {
+    return await writeAuthorizations()
+  } catch (err) {
+    if (!isMissingRelationError(err)) throw err
+    ensuredAuthSchema = false
+    await ensureHamiltonAuthorizationSchema(db)
+    return await writeAuthorizations()
+  }
+
+  async function writeAuthorizations() {
+   const ids = []
+   for (const target of targets) {
     for (const type of authorizationTypes) {
       const existing = await db.prepare(
         `SELECT id FROM hamilton_authorizations
@@ -225,8 +252,9 @@ export async function recordAuthorizations(db, {
       )
       ids.push(id)
     }
+   }
+   return ids
   }
-  return ids
 }
 
 /**

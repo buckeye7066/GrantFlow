@@ -1,31 +1,58 @@
-﻿import React, { useState } from 'react'
+import React, { useState, useMemo } from 'react'
 import { Button } from '@/components/ui/button'
-import { Sparkles, X } from 'lucide-react'
+import { Sparkles, X, Trash2, Loader2 } from 'lucide-react'
 import { useHamiltonSelection } from './HamiltonSelectionContext'
 import { useToast } from '@/components/ui/use-toast'
 import HamiltonAutopilotAuthorization from './HamiltonAutopilotAuthorization'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
 
 /**
  * HamiltonSelectionToolbar
  *
  * Floating action bar that appears when the user has selected one or
- * more pipeline cards. Clicking "Automate with Hamilton" opens the
- * HamiltonAutopilotAuthorization modal — that modal is where the user
- * grants Autopilot the rights to complete forms, upload docs, generate
- * narratives, save drafts, and submit unattended.
+ * more pipeline cards. From here the user can:
+ *   - "Automate with Hamilton" — opens HamiltonAutopilotAuthorization to
+ *     grant Autopilot the rights to complete/submit the SELECTED sources.
+ *   - "Delete unselected" — removes every other pipeline card so only the
+ *     sources the user picked for Hamilton remain. This is the "click the
+ *     ones you want Hamilton to process; delete the rest" workflow.
  *
- * Phase G wording: "Automate with Hamilton", "Run to completion", "Hamilton
- * Autopilot". No "supervised completion" / "manual review required"
- * framing on this surface.
+ * `grants` is the full list of currently-visible pipeline grants and
+ * `onDeleteGrants(ids)` performs the deletion (wired to the page's bulk
+ * delete mutation). Both are optional — when omitted, the delete action
+ * is hidden and the toolbar behaves as before.
  */
-export default function HamiltonSelectionToolbar({ profileId, onComplete }) {
-  const { enabled, selected, clear, getSelectedSources } = useHamiltonSelection()
+export default function HamiltonSelectionToolbar({ profileId, onComplete, grants = [], onDeleteGrants }) {
+  const { enabled, selected, clear, getSelectedSources, isSelected } = useHamiltonSelection()
   const [open, setOpen] = useState(false)
+  const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false)
+  const [isDeleting, setIsDeleting] = useState(false)
   const { toast } = useToast()
+
+  // Grants the user did NOT pick for Hamilton — candidates for deletion.
+  const unselectedIds = useMemo(() => {
+    return (Array.isArray(grants) ? grants : [])
+      .filter((g) => g && g.id && !isSelected({
+        grant_id: g.id,
+        opportunity_id: g.opportunity_id || g.funding_opportunity_id || null,
+      }))
+      .map((g) => g.id)
+  }, [grants, isSelected])
 
   if (!enabled) return null
   const count = selected?.size || 0
   if (count === 0) return null
+
+  const canDeleteUnselected = typeof onDeleteGrants === 'function' && unselectedIds.length > 0
 
   function openAuthorize() {
     if (!profileId) {
@@ -37,6 +64,27 @@ export default function HamiltonSelectionToolbar({ profileId, onComplete }) {
       return
     }
     setOpen(true)
+  }
+
+  async function handleDeleteUnselected() {
+    if (!canDeleteUnselected) return
+    setIsDeleting(true)
+    try {
+      await onDeleteGrants(unselectedIds)
+      toast({
+        title: 'Pipeline trimmed',
+        description: `Removed ${unselectedIds.length} unselected source${unselectedIds.length === 1 ? '' : 's'}. Your ${count} Hamilton pick${count === 1 ? '' : 's'} remain.`,
+      })
+      setConfirmDeleteOpen(false)
+    } catch (err) {
+      toast({
+        variant: 'destructive',
+        title: 'Could not remove unselected sources',
+        description: err?.message || 'Try again.',
+      })
+    } finally {
+      setIsDeleting(false)
+    }
   }
 
   return (
@@ -55,12 +103,51 @@ export default function HamiltonSelectionToolbar({ profileId, onComplete }) {
           <Button variant="ghost" size="sm" onClick={clear} title="Clear selection">
             <X className="w-4 h-4" />
           </Button>
+          {canDeleteUnselected && (
+            <Button
+              variant="outline"
+              onClick={() => setConfirmDeleteOpen(true)}
+              className="text-red-600 hover:text-red-700 hover:bg-red-50 border-red-200"
+              title="Delete the pipeline cards you did NOT select"
+            >
+              <Trash2 className="w-4 h-4 mr-2" />
+              Delete {unselectedIds.length} unselected
+            </Button>
+          )}
           <Button onClick={openAuthorize} className="bg-indigo-600 hover:bg-indigo-700 text-white">
             <Sparkles className="w-4 h-4 mr-2" />
-            Automate with Hamilton
+            Submit with Hamilton
           </Button>
         </div>
       </div>
+
+      <AlertDialog open={confirmDeleteOpen} onOpenChange={(o) => { if (!isDeleting) setConfirmDeleteOpen(o) }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete unselected sources?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This permanently removes the <strong>{unselectedIds.length}</strong> pipeline
+              {unselectedIds.length === 1 ? ' card' : ' cards'} you did not select. Your{' '}
+              <strong>{count}</strong> Hamilton pick{count === 1 ? '' : 's'} will stay. This cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={isDeleting}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(e) => { e.preventDefault(); handleDeleteUnselected() }}
+              className="bg-red-600 hover:bg-red-700"
+              disabled={isDeleting}
+            >
+              {isDeleting ? (
+                <><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Deleting…</>
+              ) : (
+                `Delete ${unselectedIds.length} unselected`
+              )}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
       <HamiltonAutopilotAuthorization
         open={open}
         onOpenChange={setOpen}

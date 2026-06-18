@@ -86,6 +86,12 @@ const REPRESENTATIVE_TABLES = {
   '083_john_tables.sql': 'john_runs',
   '0080_agent_telemetry.sql': 'agent_activity_events',
   '084_agent_telemetry.sql': 'agent_activity_events',
+  // The yana→hamilton rename also CREATEs the canonical hamilton_* tables for
+  // fresh DBs, so it has a stable witness. Without this, a stamped-but-missing
+  // hamilton_authorizations (the cause of the /authorize 500s) would never be
+  // re-created at boot.
+  '0086_rename_yana_to_hamilton.sql': 'hamilton_authorizations',
+  '090_rename_yana_to_hamilton.sql': 'hamilton_authorizations',
   '0087_agent_control_center.sql': 'agent_control_runs',
   '091_agent_control_center.sql': 'agent_control_runs',
   '0089_yana_lead_discovery.sql': 'yana_lead_candidates',
