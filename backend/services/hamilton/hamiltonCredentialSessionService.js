@@ -234,6 +234,16 @@ export async function revokeSession(db, sessionId, reason = null) {
   return rowToSession(await db.prepare('SELECT * FROM hamilton_saved_sessions WHERE id = ?').get(String(sessionId)))
 }
 
+// Fetch a single saved session by id (includes profile_id so route handlers
+// can enforce profile-scoped ownership before revoking/expiring). Null when
+// not found.
+export async function getSessionById(db, id) {
+  if (!db || !id) return null
+  await ensureSchema(db)
+  const row = await db.prepare('SELECT * FROM hamilton_saved_sessions WHERE id = ?').get(String(id))
+  return row ? rowToSession(row) : null
+}
+
 export async function listSessionsForProfile(db, profileId) {
   if (!db || !profileId) return []
   await ensureSchema(db)

@@ -43,6 +43,7 @@ import { emitHamiltonNotificationToProfileAndAdmins } from '../services/hamilton
 import {
   recordAuthorizations,
   revokeAuthorization,
+  getAuthorizationById,
   listActiveAuthorizations,
   HAMILTON_AUTHORIZATION_TYPES,
   listAutopilotRuns,
@@ -57,18 +58,21 @@ import {
   authorizePayment,
   canPayFor,
   revokePaymentAuthorization,
+  getPaymentAuthorizationById,
   listPaymentAuthorizations,
   PAYMENT_CATEGORIES,
 } from '../services/hamilton/hamiltonPaymentAuthorizationService.js'
 import {
   recordSession,
   listSessionsForProfile,
+  getSessionById,
   revokeSession,
   markSessionExpired,
 } from '../services/hamilton/hamiltonCredentialSessionService.js'
 import {
   authorizeAttestation,
   revokeAttestation,
+  getAttestationById,
   listActiveAttestations,
   ATTESTATION_CATEGORIES,
 } from '../services/hamilton/hamiltonAttestationStore.js'
@@ -142,6 +146,46 @@ async function loadTaskAndAuthorise(req, res, taskId) {
     return null
   }
   return { user, task }
+}
+
+// Auth + profile-scope guard for routes that take an explicit profileId from
+// the request (query or body). Sends 401 / 400 / 403 and returns null on
+// failure; otherwise returns the authenticated user. Centralizing this closes
+// the gap where the payment / session / attestation / resolved-field surfaces
+// trusted a caller-supplied profileId without verifying access (cross-profile
+// bleed).
+async function requireProfileScope(req, res, profileId) {
+  const user = requireAuthenticatedUser(req, res)
+  if (!user) return null
+  const pid = String(profileId || '').trim()
+  if (!pid) {
+    res.status(400).json({ error: 'profileId required' })
+    return null
+  }
+  if (!(await userMayAccessProfile(req, user, pid))) {
+    res.status(403).json({ error: 'forbidden' })
+    return null
+  }
+  return user
+}
+
+// Auth + ownership guard for :id routes on profile-scoped records. Loads the
+// owning row via loader(db, id), 404s if missing, then verifies the caller may
+// access the row's profile before any mutation (revoke / expire). Returns
+// { user, row } or null after the response has been sent.
+async function requireRecordOwnership(req, res, id, loader) {
+  const user = requireAuthenticatedUser(req, res)
+  if (!user) return null
+  const row = await loader(req.db, String(id))
+  if (!row) {
+    res.status(404).json({ error: 'not_found' })
+    return null
+  }
+  if (!(await userMayAccessProfile(req, user, row.profile_id))) {
+    res.status(403).json({ error: 'forbidden' })
+    return null
+  }
+  return { user, row }
 }
 
 router.post('/start', startLimiter, async (req, res) => {
@@ -418,8 +462,8 @@ router.get('/authorizations', async (req, res) => {
 })
 
 router.post('/authorizations/:id/revoke', async (req, res) => {
-  const user = requireAuthenticatedUser(req, res)
-  if (!user) return
+  const ctx = await requireRecordOwnership(req, res, req.params.id, getAuthorizationById)
+  if (!ctx) return
   try {
     const row = await revokeAuthorization(req.db, { id: req.params.id, reason: req.body?.reason || null })
     return res.json({ ok: true, authorization: row })
@@ -562,14 +606,14 @@ router.get('/tasks/:taskId/autopilot-runs', async (req, res) => {
 // Extended resolver-aware preflight. Returns full readiness readout
 // per source plus the resolutions Hamilton already applied.
 router.post('/preflight-resolve', async (req, res) => {
+  const { profileId, selectedSources = [] } = req.body || {}
+  const user = await requireProfileScope(req, res, profileId)
+  if (!user) return
   try {
-    const { profileId, selectedSources = [] } = req.body || {}
-    if (!profileId) return res.status(400).json({ error: 'profileId required' })
-    const userId = req.user?.id || null
-    const profile = await loadProfile(req.db, profileId, userId)
+    const profile = await loadProfile(req.db, profileId)
     if (!profile) return res.status(404).json({ error: 'profile_not_found' })
     const result = await preflightAndResolveSelected(req.db, {
-      profile, profileId, selectedSources, userId,
+      profile, profileId, selectedSources, userId: user.id,
     })
     return res.json(result)
   } catch (err) {
@@ -578,90 +622,107 @@ router.post('/preflight-resolve', async (req, res) => {
   }
 })
 
-// Payment authorizations.
+// Payment authorizations. Token/reference-only — these stores never hold raw
+// card data — but they are still profile-scoped secrets, so every read and
+// write verifies the caller may access the target profile.
 router.get('/payment-authorizations', async (req, res) => {
-  const profileId = req.query.profileId
-  if (!profileId) return res.status(400).json({ error: 'profileId required' })
+  const user = await requireProfileScope(req, res, req.query.profileId)
+  if (!user) return
   try {
-    const list = await listPaymentAuthorizations(req.db, profileId)
+    const list = await listPaymentAuthorizations(req.db, req.query.profileId)
     return res.json({ ok: true, payment_categories: PAYMENT_CATEGORIES, authorizations: list })
   } catch (err) {
     return res.status(500).json({ error: 'list_failed', detail: err?.message })
   }
 })
 router.post('/payment-authorizations', async (req, res) => {
+  const user = await requireProfileScope(req, res, req.body?.profileId)
+  if (!user) return
   try {
-    const userId = req.user?.id || null
-    if (!userId) return res.status(401).json({ error: 'unauthenticated' })
-    const auth = await authorizePayment(req.db, { userId, ...req.body })
+    const auth = await authorizePayment(req.db, { ...req.body, userId: user.id })
     return res.json({ ok: true, authorization: auth })
   } catch (err) {
     return res.status(400).json({ error: 'authorize_failed', detail: err?.message })
   }
 })
 router.post('/payment-authorizations/:id/revoke', async (req, res) => {
+  const ctx = await requireRecordOwnership(req, res, req.params.id, getPaymentAuthorizationById)
+  if (!ctx) return
   const auth = await revokePaymentAuthorization(req.db, req.params.id, req.body?.reason || null)
   return res.json({ ok: true, authorization: auth })
 })
 router.get('/payment-authorizations/can-pay', async (req, res) => {
   const { profileId, category, amountCents, portalHost } = req.query
-  if (!profileId || !category) return res.status(400).json({ error: 'profileId and category required' })
+  const user = await requireProfileScope(req, res, profileId)
+  if (!user) return
+  if (!category) return res.status(400).json({ error: 'category required' })
   const decision = await canPayFor(req.db, {
     profileId, category, amountCents: Number(amountCents || 0), portalHost: portalHost || null,
   })
   return res.json(decision)
 })
 
-// Saved sessions.
+// Saved sessions. Storage stores only Playwright storage-state references /
+// paths — never plaintext credentials — and is profile-scoped.
 router.get('/sessions', async (req, res) => {
-  const profileId = req.query.profileId
-  if (!profileId) return res.status(400).json({ error: 'profileId required' })
-  const list = await listSessionsForProfile(req.db, profileId)
+  const user = await requireProfileScope(req, res, req.query.profileId)
+  if (!user) return
+  const list = await listSessionsForProfile(req.db, req.query.profileId)
   return res.json({ ok: true, sessions: list })
 })
 router.post('/sessions', async (req, res) => {
+  const user = await requireProfileScope(req, res, req.body?.profileId)
+  if (!user) return
   try {
-    const userId = req.user?.id || null
-    if (!userId) return res.status(401).json({ error: 'unauthenticated' })
-    const session = await recordSession(req.db, { userId, ...req.body })
+    const session = await recordSession(req.db, { ...req.body, userId: user.id })
     return res.json({ ok: true, session })
   } catch (err) {
     return res.status(400).json({ error: 'record_failed', detail: err?.message })
   }
 })
 router.post('/sessions/:id/revoke', async (req, res) => {
+  const ctx = await requireRecordOwnership(req, res, req.params.id, getSessionById)
+  if (!ctx) return
   const session = await revokeSession(req.db, req.params.id, req.body?.reason || null)
   return res.json({ ok: true, session })
 })
 router.post('/sessions/:id/expire', async (req, res) => {
+  const ctx = await requireRecordOwnership(req, res, req.params.id, getSessionById)
+  if (!ctx) return
   const session = await markSessionExpired(req.db, req.params.id, req.body?.reason || null)
   return res.json({ ok: true, session })
 })
 
 // Standing attestations.
 router.get('/attestations', async (req, res) => {
-  const profileId = req.query.profileId
-  if (!profileId) return res.status(400).json({ error: 'profileId required' })
-  const list = await listActiveAttestations(req.db, profileId)
+  const user = await requireProfileScope(req, res, req.query.profileId)
+  if (!user) return
+  const list = await listActiveAttestations(req.db, req.query.profileId)
   return res.json({ ok: true, categories: ATTESTATION_CATEGORIES, attestations: list })
 })
 router.post('/attestations', async (req, res) => {
+  const user = await requireProfileScope(req, res, req.body?.profileId)
+  if (!user) return
   try {
-    const userId = req.user?.id || null
-    if (!userId) return res.status(401).json({ error: 'unauthenticated' })
-    const auth = await authorizeAttestation(req.db, { userId, ...req.body })
+    const auth = await authorizeAttestation(req.db, { ...req.body, userId: user.id })
     return res.json({ ok: true, attestation: auth })
   } catch (err) {
     return res.status(400).json({ error: 'authorize_failed', detail: err?.message })
   }
 })
 router.post('/attestations/:id/revoke', async (req, res) => {
+  const ctx = await requireRecordOwnership(req, res, req.params.id, getAttestationById)
+  if (!ctx) return
   const auth = await revokeAttestation(req.db, req.params.id, req.body?.reason || null)
   return res.json({ ok: true, attestation: auth })
 })
 
-// Portal policies.
+// Portal policies govern what Hamilton is *allowed* to do on a given portal
+// host (a legal/safety control), so writes are restricted to the canonical
+// admin and reads require authentication.
 router.get('/portal-policies', async (req, res) => {
+  const user = requireAuthenticatedUser(req, res)
+  if (!user) return
   if (req.query.host) {
     const policy = await getPolicyFor(req.db, req.query.host)
     return res.json({ ok: true, policy })
@@ -670,6 +731,9 @@ router.get('/portal-policies', async (req, res) => {
   return res.json({ ok: true, policies: list })
 })
 router.post('/portal-policies', async (req, res) => {
+  const user = requireAuthenticatedUser(req, res)
+  if (!user) return
+  if (!isAdminUser(user)) return res.status(403).json({ error: 'forbidden_admin_only' })
   try {
     const policy = await upsertPolicy(req.db, req.body || {})
     return res.json({ ok: true, policy })
@@ -680,15 +744,16 @@ router.post('/portal-policies', async (req, res) => {
 
 // Resolved fields.
 router.get('/resolved-fields', async (req, res) => {
-  const profileId = req.query.profileId
-  if (!profileId) return res.status(400).json({ error: 'profileId required' })
-  const list = await listResolvedFields(req.db, profileId)
+  const user = await requireProfileScope(req, res, req.query.profileId)
+  if (!user) return
+  const list = await listResolvedFields(req.db, req.query.profileId)
   return res.json({ ok: true, fields: list })
 })
 router.post('/resolved-fields', async (req, res) => {
+  const user = await requireProfileScope(req, res, req.body?.profileId)
+  if (!user) return
   try {
-    const userId = req.user?.id || null
-    const field = await saveResolvedField(req.db, { userId, ...req.body })
+    const field = await saveResolvedField(req.db, { ...req.body, userId: user.id })
     return res.json({ ok: true, field })
   } catch (err) {
     return res.status(400).json({ error: 'save_failed', detail: err?.message })

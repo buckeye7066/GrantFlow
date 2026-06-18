@@ -128,6 +128,15 @@ export async function revokeAttestation(db, id, reason = null) {
   return rowToAuth(await db.prepare('SELECT * FROM hamilton_attestation_authorizations WHERE id = ?').get(String(id)))
 }
 
+// Fetch one attestation authorization by id (includes profile_id for
+// ownership checks before revoke). Null when not found.
+export async function getAttestationById(db, id) {
+  if (!db || !id) return null
+  await ensureSchema(db)
+  const row = await db.prepare('SELECT * FROM hamilton_attestation_authorizations WHERE id = ?').get(String(id))
+  return row ? rowToAuth(row) : null
+}
+
 export async function listActiveAttestations(db, profileId) {
   if (!db || !profileId) return []
   await ensureSchema(db)

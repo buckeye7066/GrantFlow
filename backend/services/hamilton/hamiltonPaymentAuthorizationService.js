@@ -221,6 +221,15 @@ export async function revokePaymentAuthorization(db, id, reason = null) {
   return rowToAuth(await db.prepare('SELECT * FROM hamilton_payment_authorizations WHERE id = ?').get(String(id)))
 }
 
+// Fetch one payment authorization by id (includes profile_id for ownership
+// checks before revoke). Null when not found.
+export async function getPaymentAuthorizationById(db, id) {
+  if (!db || !id) return null
+  await ensureSchema(db)
+  const row = await db.prepare('SELECT * FROM hamilton_payment_authorizations WHERE id = ?').get(String(id))
+  return row ? rowToAuth(row) : null
+}
+
 export async function listPaymentAuthorizations(db, profileId) {
   if (!db || !profileId) return []
   await ensureSchema(db)

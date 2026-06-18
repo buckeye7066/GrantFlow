@@ -548,7 +548,7 @@ export default function GrantCard({ grant, organization, organizationName, onSta
             </div>
           )}
 
-          {/* Yana — application-completion agent. Visible on pipeline cards
+          {/* Hamilton — application-completion agent. Visible on pipeline cards
               (isInPipeline) so the user sees a "Let Hamilton help" CTA without
               cluttering discovery results. */}
           {isInPipeline && grant.id && grant.profile_id && (
