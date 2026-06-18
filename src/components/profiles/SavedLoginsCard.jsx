@@ -76,7 +76,7 @@ export default function SavedLoginsCard({ profileId }) {
   const canSave = form.username.trim() && form.password.trim() && (form.portalHost.trim() || form.login_url.trim())
 
   return (
-    <Card>
+    <Card data-flash-id="saved-logins">
       <CardHeader className="pb-3">
         <div className="flex items-center justify-between gap-2">
           <CardTitle className="text-base flex items-center gap-2">

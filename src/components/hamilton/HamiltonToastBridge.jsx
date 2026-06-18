@@ -18,6 +18,40 @@ import { apiFetch } from '@/api/client'
 import { useAuthStore } from '@/stores/authStore'
 import { useToast } from '@/components/ui/use-toast'
 import { showInfoToast, showWarningToast, showErrorToast, showSuccessToast } from '@/components/shared/toastHelpers'
+import { createPageUrl } from '@/utils'
+import { buildProfileSectionLink } from '@/config/missingInfoTargets'
+
+/**
+ * Turn a Hamilton notification into a click target: where in the app to go, and
+ * what to flash once there. Returns { navigateTo, flash } or {} when we can't
+ * resolve a profile to land on.
+ */
+function resolveNotificationTarget(n) {
+  const d = n?.data || {}
+  const type = String(n?.type || '')
+  const profileId = d.profile_id || d.profileId || n?.profile_id || null
+  if (!profileId) return {}
+
+  // Login needed → the profile's Saved portal logins card (Pipeline tab) so the
+  // user/admin can add the credential Hamilton needs to sign in.
+  if (/login_required/.test(type)) {
+    return { navigateTo: createPageUrl('ProfileDetail', { id: profileId, tab: 'pipeline' }), flash: 'saved-logins' }
+  }
+  // Missing profile info → deep-link to the exact field's section editor.
+  if (/missing_info/.test(type)) {
+    const key = d.field || d.missing_info_key || d.key || d.missing_field
+    const link = key ? buildProfileSectionLink(profileId, key) : null
+    if (link) return { navigateTo: link, flash: 'profile-section-editor' }
+    return { navigateTo: createPageUrl('ProfileDetail', { id: profileId, tab: 'profile' }) }
+  }
+  // A document is needed → the Documents tab.
+  if (/document_required/.test(type)) {
+    return { navigateTo: createPageUrl('ProfileDetail', { id: profileId, tab: 'documents' }) }
+  }
+  // Review / blocked / payment / attestation / ready / submitted → the pipeline
+  // for this profile, flashing the cards that need a person.
+  return { navigateTo: createPageUrl('Pipeline', { profile_id: profileId }), flash: 'human-review' }
+}
 
 const POLL_INTERVAL_MS = 2 * 60 * 1000 // 2 minutes — faster than the bell so toasts are timely
 const STORAGE_KEY = 'hamilton_toasted_notifications_v1'
@@ -138,7 +172,8 @@ export default function HamiltonToastBridge() {
           if (n.read) continue
           if (seenRef.current.has(n.id)) continue
           const fire = pickToaster(n, toast)
-          fire(n.title || 'Hamilton update', n.message || '')
+          const target = resolveNotificationTarget(n)
+          fire(n.title || 'Hamilton update', n.message || '', target)
           seenRef.current.add(n.id)
           dirty = true
         }

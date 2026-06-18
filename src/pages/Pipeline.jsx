@@ -154,8 +154,10 @@ export default function Pipeline() {
           id: `pipeline-handoffs-${processAllJobId}`,
           title: `${handoffs} grant${handoffs === 1 ? "" : "s"} need a person to step in`,
           description:
-            "Look for cards marked Human Review Needed. GrantFlow has prepared the next steps, but a person must finish this part.",
+            "GrantFlow prepared the next steps, but a person must finish this part. Click to jump to the cards that need attention.",
           duration: 12000,
+          // Clickable: flash the Human-Review-Needed cards already on this page.
+          flash: "human-review",
         });
       }
     } else if (processAllJobStatus === "failed") {

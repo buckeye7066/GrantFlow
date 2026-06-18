@@ -1,55 +1,34 @@
 /**
- * Reusable toast helper functions
+ * Reusable toast helper functions.
+ *
+ * Each accepts an optional `options` object so a notification can become a
+ * clickable toast that takes the user/admin to where attention is needed:
+ *   { navigateTo: "<route>", flash: "<data-flash-id|selector>", duration }
+ * Clicking the toast navigates to `navigateTo` and flashes `flash` on arrival
+ * (handled by the Toaster + FlashHighlighter).
  */
 
-/**
- * Display a success toast notification
- * @param {Function} toast - The toast function from useToast hook
- * @param {string} title - Toast title
- * @param {string} description - Toast description
- */
-export function showSuccessToast(toast, title, description) {
-  toast({
-    title,
-    description,
-  });
+function build(base, options = {}) {
+  const { navigateTo = null, flash = null, duration } = options || {};
+  const toastArgs = { ...base };
+  if (navigateTo) toastArgs.navigateTo = navigateTo;
+  if (flash) toastArgs.flash = flash;
+  if (typeof duration === "number") toastArgs.duration = duration;
+  return toastArgs;
 }
 
-/**
- * Display an error toast notification
- * @param {Function} toast - The toast function from useToast hook
- * @param {string} title - Toast title
- * @param {string} description - Toast description
- */
-export function showErrorToast(toast, title, description) {
-  toast({
-    variant: "destructive",
-    title,
-    description,
-  });
+export function showSuccessToast(toast, title, description, options) {
+  toast(build({ title, description }, options));
 }
 
-/**
- * Display a warning toast (uses default variant; we attach a yellow accent
- * via title styling on the consumer side when needed). Yana uses this for
- * "needs info / login required" toasts.
- */
-export function showWarningToast(toast, title, description) {
-  toast({
-    title,
-    description,
-    duration: 6000,
-  });
+export function showErrorToast(toast, title, description, options) {
+  toast(build({ variant: "destructive", title, description }, options));
 }
 
-/**
- * Display an info toast — used for low-urgency Yana notifications
- * (draft started, application ready for review, etc.).
- */
-export function showInfoToast(toast, title, description) {
-  toast({
-    title,
-    description,
-    duration: 5000,
-  });
+export function showWarningToast(toast, title, description, options) {
+  toast(build({ title, description, duration: 6000 }, options));
+}
+
+export function showInfoToast(toast, title, description, options) {
+  toast(build({ title, description, duration: 5000 }, options));
 }

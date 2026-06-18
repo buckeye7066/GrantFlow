@@ -1547,7 +1547,7 @@ export default function ProfileSectionEditor({
   return (
     <Dialog open={open} onOpenChange={(next) => !isSaving && !next && onClose()}>
       {/* Keep actions visible even for long forms */}
-      <DialogContent className="max-w-xl max-h-[85vh] overflow-hidden flex flex-col">
+      <DialogContent data-flash-id="profile-section-editor" className="max-w-xl max-h-[85vh] overflow-hidden flex flex-col">
         <DialogHeader>
           <div className="flex items-center justify-between">
             <div className="flex-1">

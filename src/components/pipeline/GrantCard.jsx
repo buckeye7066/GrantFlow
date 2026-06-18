@@ -129,6 +129,7 @@ export default function GrantCard({ grant, organization, organizationName, onSta
   return (
     <div
       ref={cardRef}
+      data-flash-id={needsHumanReview ? 'human-review' : undefined}
       className={`bg-white rounded-lg border hover:shadow-md transition-all duration-200 ${isDragging ? 'shadow-2xl rotate-2' : ''} ${grant.starred ? 'border-yellow-400 border-2' : 'border-slate-200'}`}
     >
       <div className="flex items-center justify-between p-3 border-b border-slate-100">

@@ -7,6 +7,7 @@ import SessionExpiredDialog from '@/components/auth/SessionExpiredDialog'
 import HamiltonToastBridge from '@/components/hamilton/HamiltonToastBridge'
 import client from '@/api/client';
 import RouteErrorBoundary from '@/components/shared/RouteErrorBoundary.jsx'
+import FlashHighlighter from '@/components/shared/FlashHighlighter.jsx'
 import { useAuthStore } from '@/stores/authStore'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { env } from '@/config/env.js'
@@ -95,6 +96,7 @@ function App() {
         <Pages />
       </RouteErrorBoundary>
       <Toaster />
+      <FlashHighlighter />
       <SessionExpiredDialog />
       <HamiltonToastBridge />
     </Router>

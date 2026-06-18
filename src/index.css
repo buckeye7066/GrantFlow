@@ -7,6 +7,31 @@ html {
   font-size: var(--base-font-size, 16px);
 }
 
+/* Flash-highlight: draws the eye to the element a clickable toast / notification
+   points at. Applied/removed by src/lib/flashHighlight.js. Uses outline (not
+   box-shadow) so it is never clipped by an ancestor's overflow:hidden. */
+@keyframes gf-flash-pulse {
+  0%   { outline-color: rgba(99, 102, 241, 0);    background-color: rgba(99, 102, 241, 0); }
+  25%  { outline-color: rgba(99, 102, 241, 0.95); background-color: rgba(99, 102, 241, 0.14); }
+  50%  { outline-color: rgba(99, 102, 241, 0);    background-color: rgba(99, 102, 241, 0); }
+  75%  { outline-color: rgba(99, 102, 241, 0.95); background-color: rgba(99, 102, 241, 0.14); }
+  100% { outline-color: rgba(99, 102, 241, 0);    background-color: rgba(99, 102, 241, 0); }
+}
+.gf-flash {
+  outline: 3px solid transparent;
+  outline-offset: 3px;
+  border-radius: 8px;
+  scroll-margin: 120px;
+  animation: gf-flash-pulse 1.4s ease-in-out 2;
+}
+@media (prefers-reduced-motion: reduce) {
+  .gf-flash {
+    animation: none;
+    outline-color: rgba(99, 102, 241, 0.95);
+    background-color: rgba(99, 102, 241, 0.14);
+  }
+}
+
 
 /* :root {
   font-family: Inter, system-ui, Avenir, Helvetica, Arial, sans-serif;
