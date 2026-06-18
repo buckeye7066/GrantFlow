@@ -61,8 +61,19 @@ function hostnameOf(u) {
 // while the URLs were live in any browser. None of these codes prove the
 // URL in our registry is dead — only 404/410 do — so they belong here
 // next to 403/429 rather than failing the suite.
+//
+// 502/503/504 are the standard gateway "server temporarily unavailable"
+// codes (502 bad gateway, 503 service unavailable, 504 gateway timeout).
+// They mean the edge is up but the origin/WAF is transiently refusing the
+// request — NOT that the page is gone. mtsu.edu's WAF started returning 503
+// to GitHub-Actions (AWS) IPs in Jun-2026 for www.mtsu.edu/financial-aid,
+// /living-on-campus, /how-to-apply, etc. — every one confirmed live in a
+// browser, and offCampusHousing (different host) stayed green the same run.
+// Like the Cloudflare codes, these prove "blocked", not "dead", so a
+// blocking release gate must not flap red on them.
 const ALIVE_BUT_BLOCKED_STATUSES = new Set([
   401, 403, 405, 407, 429, 451,
+  502, 503, 504,
   520, 521, 522, 523, 524, 525, 530,
 ])
 // Status codes that prove the URL is dead.
