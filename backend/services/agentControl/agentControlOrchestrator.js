@@ -487,6 +487,20 @@ export async function executeRun({ db, runId } = {}) {
     await setRunStatus(db, runId, 'running')
   }
 
+  // Defense-in-depth: guarantee every agent's telemetry/run tables exist
+  // before any adapter executes. Boot already self-heals these, but a run
+  // can be triggered against a server that booted before the agent
+  // migrations landed (or where _migrations was stamped without the table
+  // actually being created) — without this, an agent like Robert hard-fails
+  // mid-cycle with `relation "robert_runs" does not exist`. Idempotent and a
+  // fast no-op once applied.
+  try {
+    const { ensureAgentSubsystemTables } = await import('../../utils/ensureAgentSubsystemTables.js')
+    await ensureAgentSubsystemTables(db, { logger: console })
+  } catch (ensureErr) {
+    console.warn(`[agent-control] ensureAgentSubsystemTables failed (continuing): ${ensureErr?.message || ensureErr}`)
+  }
+
   let stoppedRequested = false
   let emergency = false
   let partial = false
