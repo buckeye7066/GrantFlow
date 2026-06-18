@@ -33,6 +33,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Switch } from "@/components/ui/switch"
 import UniversityApplicationsSection from "@/components/profiles/UniversityApplicationsSection.jsx"
 import StudentPortalsCard from "@/components/profiles/StudentPortalsCard.jsx"
+import CommittedCollegeWorkspace from "@/components/profiles/CommittedCollegeWorkspace.jsx"
 import SchoolPortalLinkPanel from "@/components/profiles/SchoolPortalLinkPanel.jsx"
 import HealthResourcesCard from "@/components/profiles/HealthResourcesCard.jsx"
 import { SECTION_METADATA } from "@/config/sectionMetadata"
@@ -995,6 +996,7 @@ export default function ProfileDetail() {
               <div className="space-y-6">
                 <SchoolPortalLinkPanel profileId={profileId} />
                 <StudentPortalsCard state={studentState} profileId={profileId} applications={universityApplications} />
+                <CommittedCollegeWorkspace profileId={profileId} applications={universityApplications} />
               <UniversityApplicationsSection
                 applications={universityApplications}
                 onSave={handleSaveUniversityApplications}
