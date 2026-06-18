@@ -37,10 +37,21 @@ describe('Yana/Hamilton naming contract', () => {
   it('application-autopilot route + service tree are Hamilton-named', () => {
     assert.ok(fs.existsSync(path.join(root, 'backend/routes/hamiltonAutomation.js')))
     assert.ok(fs.existsSync(path.join(root, 'backend/services/hamilton/hamiltonAutopilotEngine.js')))
-    // The legacy yana service directory must be gone (renamed, not duplicated).
+    // The APPLICATION-AUTOPILOT files must be Hamilton-named — those were the
+    // ones renamed (yana→hamilton). backend/services/yana still exists, but only
+    // for Yana's real role (Client Discovery), NOT the autopilot.
+    const yanaDir = path.join(root, 'backend/services/yana')
+    if (fs.existsSync(yanaDir)) {
+      const files = fs.readdirSync(yanaDir)
+      const autopilotLeak = files.filter((f) => /autopilot|automationOrchestrator|applicationPacket|attestation|paymentAuthorization|hardStopResolver|portalPolicy/i.test(f))
+      assert.deepEqual(autopilotLeak, [], `application-autopilot files must live under backend/services/hamilton, not yana: ${autopilotLeak.join(', ')}`)
+    }
+  })
+
+  it('Yana retains its real Client-Discovery service (not deleted by the rename)', () => {
     assert.ok(
-      !fs.existsSync(path.join(root, 'backend/services/yana')),
-      'backend/services/yana should have been renamed to backend/services/hamilton',
+      fs.existsSync(path.join(root, 'backend/services/yana/yanaLeadDiscovery.js')),
+      'Yana = Client Discoverer should have its lead-discovery service',
     )
   })
 })
