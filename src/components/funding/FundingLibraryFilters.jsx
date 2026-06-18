@@ -19,14 +19,14 @@ const STATES = [
 ]
 
 const DEADLINE_OPTIONS = [
-  { value: '', label: 'Any' },
+  { value: '__any__', label: 'Any' },
   { value: 'open', label: 'Open / rolling' },
   { value: 'soon', label: 'Closing soon (30d)' },
   { value: 'expired_excluded', label: 'Hide expired' },
 ]
 
 const TRUST_OPTIONS = [
-  { value: '', label: 'Any' },
+  { value: '__any__', label: 'Any' },
   { value: 'official_api', label: 'Official API' },
   { value: 'official_portal', label: 'Official portal' },
   { value: 'verified_directory', label: 'Verified directory' },
@@ -36,7 +36,7 @@ const TRUST_OPTIONS = [
 ]
 
 const APPLICANT_OPTIONS = [
-  { value: '', label: 'Any' },
+  { value: '__any__', label: 'Any' },
   { value: 'individual', label: 'Individual' },
   { value: 'family', label: 'Family' },
   { value: 'student', label: 'Student' },
@@ -96,7 +96,7 @@ export default function FundingLibraryFilters({ filters, onChange, onReset, onRe
           </div>
           <div>
             <Label className="text-xs">Applicant type</Label>
-            <Select value={filters.applicant_type || ''} onValueChange={(v) => set('applicant_type', v)}>
+            <Select value={filters.applicant_type || '__any__'} onValueChange={(v) => set('applicant_type', v === '__any__' ? '' : v)}>
               <SelectTrigger className="mt-1"><SelectValue placeholder="Any" /></SelectTrigger>
               <SelectContent>
                 {APPLICANT_OPTIONS.map((o) => (
@@ -110,7 +110,7 @@ export default function FundingLibraryFilters({ filters, onChange, onReset, onRe
         <div className="grid grid-cols-2 gap-2">
           <div>
             <Label className="text-xs">Deadline</Label>
-            <Select value={filters.deadline || ''} onValueChange={(v) => set('deadline', v)}>
+            <Select value={filters.deadline || '__any__'} onValueChange={(v) => set('deadline', v === '__any__' ? '' : v)}>
               <SelectTrigger className="mt-1"><SelectValue placeholder="Any" /></SelectTrigger>
               <SelectContent>
                 {DEADLINE_OPTIONS.map((o) => (
@@ -121,7 +121,7 @@ export default function FundingLibraryFilters({ filters, onChange, onReset, onRe
           </div>
           <div>
             <Label className="text-xs">Source trust</Label>
-            <Select value={filters.source_trust || ''} onValueChange={(v) => set('source_trust', v)}>
+            <Select value={filters.source_trust || '__any__'} onValueChange={(v) => set('source_trust', v === '__any__' ? '' : v)}>
               <SelectTrigger className="mt-1"><SelectValue placeholder="Any" /></SelectTrigger>
               <SelectContent>
                 {TRUST_OPTIONS.map((o) => (

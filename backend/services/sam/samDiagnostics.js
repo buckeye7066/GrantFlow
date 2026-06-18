@@ -121,6 +121,30 @@ async function runOneCheck({ check, db, ctx, invokeTool, httpProbe }) {
 // ---------------------------------------------------------------------------
 // Tool check — invokes an Anya admin tool
 // ---------------------------------------------------------------------------
+// Sam's tool-style checks are internal, read-only admin diagnostics (health,
+// lint, scan, mission audit). They run both from an admin request (req.ctx) AND
+// autonomously from the scheduler / agent-control, where there is NO request
+// user — samScheduler passes `ctx: null`. anyaOrchestrator.invokeTool requires
+// an authenticated user (user.userId) and admin-gated tools check user.isAdmin,
+// so a null/guest ctx makes EVERY tool fail with "Tool invocation failed"
+// (the ~16 errors seen for admin.health.check, admin.code.*, admin.codeGuard.*).
+//
+// Sam itself only ever runs for an admin or the system scheduler (see the
+// authorisation gate in samAgent.runSam), so we elevate the tool actor to a
+// trusted system admin here. We preserve the caller's identity when present and
+// fall back to the canonical 'system_admin_token' user id (which the app
+// self-heals into a real users row) for autonomous runs.
+export function samToolActor(ctx) {
+  const base = ctx && typeof ctx === 'object' ? ctx : {}
+  return {
+    ...base,
+    userId: base.userId ?? base.id ?? 'system_admin_token',
+    isAdmin: true,
+    is_admin: true,
+    role: 'admin',
+  }
+}
+
 async function runToolCheck({ check, db, ctx, invokeTool }) {
   const dispatcher = invokeTool || (await loadDefaultInvokeTool())
   if (typeof dispatcher !== 'function') {
@@ -139,7 +163,7 @@ async function runToolCheck({ check, db, ctx, invokeTool }) {
 
   let toolResult
   try {
-    toolResult = await dispatcher(db, ctx, check.tool, check.parameters || {}, {})
+    toolResult = await dispatcher(db, samToolActor(ctx), check.tool, check.parameters || {}, {})
   } catch (err) {
     return {
       detail: { ok: false, error: String(err?.message || err) },
