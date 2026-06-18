@@ -293,9 +293,26 @@ export async function getAuditSummary(db, { days = 7 } = {}) {
 }
 
 /**
- * Ensure audit_logs table exists
+ * Ensure audit_logs table exists.
+ *
+ * Cached per-db (WeakMap): the DDL is idempotent but was being re-run on EVERY
+ * logAuditEvent call — including the high-frequency client page-view write that
+ * fires on every navigation. On Postgres that meant 6 catalog-touching DDL
+ * statements per request, which under load slowed the write enough to blow the
+ * proxy timeout and surface to the client as a 503. Running it once per process
+ * (per db handle) removes that hot-path cost. _resetAuditTableCache() is for
+ * tests that recreate in-memory databases.
  */
+const auditTableReady = new WeakMap()
+export function _resetAuditTableCache() {
+  // WeakMap has no clear(); callers in tests use fresh db objects anyway. This
+  // exists so a test can force a re-ensure on the SAME db handle if needed.
+  if (arguments.length && arguments[0]) auditTableReady.delete(arguments[0])
+}
+
 async function ensureAuditTable(db) {
+  if (!db) return
+  if (auditTableReady.get(db)) return
   if (db?.dialect === 'postgres') {
     await db.exec(`
       CREATE TABLE IF NOT EXISTS audit_logs (
@@ -319,6 +336,7 @@ async function ensureAuditTable(db) {
       CREATE INDEX IF NOT EXISTS idx_audit_user ON audit_logs(user_id);
       CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_logs(created_at);
     `)
+    auditTableReady.set(db, true)
     return
   }
 
@@ -347,6 +365,7 @@ async function ensureAuditTable(db) {
   for (const sql of stmts) {
     await db.exec(sql)
   }
+  auditTableReady.set(db, true)
 }
 
 /**
