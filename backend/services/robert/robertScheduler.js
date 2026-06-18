@@ -16,10 +16,14 @@
 import { runRobert } from './robertAgent.js'
 import { ROBERT_TRIGGERS } from './robertTypes.js'
 import { getRobertConfig } from './robertSafety.js'
+import { autoSeedWeakestProfiles } from './robertFundingTraceBridge.js'
+import { upsertSourceCandidate } from './robertRunStore.js'
 
 let _running = false
 let _interval = null
 let _stopped = false
+let _autoSeedRunning = false
+let _autoSeedInterval = null
 
 /**
  * Start the scheduler if the env says so. Safe to call multiple times.
@@ -27,7 +31,9 @@ let _stopped = false
 export function startRobertScheduler({ db, deps = {}, logger = console } = {}) {
   const cfg = getRobertConfig()
   if (!cfg.enabled) return { started: false, reason: 'robert_disabled' }
-  if (!cfg.runOnSchedule && !cfg.runOnStartup) return { started: false, reason: 'no_runtime_triggers_enabled' }
+  if (!cfg.runOnSchedule && !cfg.runOnStartup && !cfg.autoSeedOnSchedule) {
+    return { started: false, reason: 'no_runtime_triggers_enabled' }
+  }
 
   if (cfg.runOnStartup) {
     queueMicrotask(() => kickOff({ db, deps, logger, trigger: ROBERT_TRIGGERS.STARTUP }))
@@ -38,6 +44,12 @@ export function startRobertScheduler({ db, deps = {}, logger = console } = {}) {
     _interval = setInterval(() => kickOff({ db, deps, logger, trigger: ROBERT_TRIGGERS.SCHEDULED }), intervalMs)
     if (typeof _interval.unref === 'function') _interval.unref()
   }
+  if (cfg.autoSeedOnSchedule) {
+    const intervalMs = parseSchedule(cfg.autoSeedSchedule)
+    if (_autoSeedInterval) clearInterval(_autoSeedInterval)
+    _autoSeedInterval = setInterval(() => kickOffAutoSeed({ db, cfg, logger }), intervalMs)
+    if (typeof _autoSeedInterval.unref === 'function') _autoSeedInterval.unref()
+  }
   return { started: true }
 }
 
@@ -46,6 +58,10 @@ export function stopRobertScheduler() {
   if (_interval) {
     clearInterval(_interval)
     _interval = null
+  }
+  if (_autoSeedInterval) {
+    clearInterval(_autoSeedInterval)
+    _autoSeedInterval = null
   }
 }
 
@@ -59,6 +75,30 @@ async function kickOff({ db, deps, logger, trigger }) {
     if (logger?.error) logger.error('robert.scheduler.error', { message: String(err?.message || err) })
   } finally {
     _running = false
+  }
+}
+
+async function kickOffAutoSeed({ db, cfg, logger }) {
+  if (_stopped || _autoSeedRunning) return
+  _autoSeedRunning = true
+  try {
+    const result = await autoSeedWeakestProfiles(db, {
+      limit: cfg.autoSeedMaxProfiles,
+      maxEntitiesPerProfile: cfg.autoSeedMaxEntitiesPerProfile,
+      minRisk: cfg.autoSeedMinRisk,
+      deps: { upsert: upsertSourceCandidate },
+    })
+    if (logger?.info) {
+      logger.info('robert.scheduler.autoseed', {
+        evaluated: result?.evaluated,
+        weak_profiles: result?.weak_profiles,
+        upserted: result?.total_upserted,
+      })
+    }
+  } catch (err) {
+    if (logger?.error) logger.error('robert.scheduler.autoseed.error', { message: String(err?.message || err) })
+  } finally {
+    _autoSeedRunning = false
   }
 }
 

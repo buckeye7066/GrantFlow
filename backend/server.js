@@ -2603,8 +2603,9 @@ if (process.env.NODE_ENV !== 'test') {
     const actualPort = server.address()?.port ?? PORT;
     console.log(`[Server] Ready on port ${actualPort}`);
 
-    // Robert — funding-discovery agent scheduler. Disabled by default;
-    // only starts if ROBERT_ENABLED + ROBERT_RUN_ON_SCHEDULE/STARTUP are true.
+    // Robert — funding-discovery agent scheduler. Disabled by default; only
+    // starts if ROBERT_ENABLED and one of ROBERT_RUN_ON_SCHEDULE/STARTUP or
+    // ROBERT_AUTOSEED_ON_SCHEDULE (funding-trace weak-coverage sweep) is true.
     ;(async () => {
       try {
         const { startRobertScheduler } = await import('./services/robert/robertScheduler.js')

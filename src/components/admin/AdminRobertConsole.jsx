@@ -98,6 +98,24 @@ export default function AdminRobertConsole() {
     }
   }
 
+  async function autoSeedWeakest() {
+    setBusy(true)
+    setAutoResult(null)
+    try {
+      const res = await postRun('/api/robert/trace-funding/auto-weakest', {})
+      setAutoResult({ ...res, weakest: true })
+      toast({
+        title: 'Weak-coverage sweep complete',
+        description: `${res.weak_profiles} weak profiles seeded • ${res.total_upserted} funders staged`,
+      })
+      await refresh()
+    } catch (err) {
+      toast({ title: 'Weak-coverage sweep failed', description: err.message, variant: 'destructive' })
+    } finally {
+      setBusy(false)
+    }
+  }
+
   async function autoSeedTrace() {
     const profileId = autoProfileId.trim()
     if (!profileId) return
@@ -271,11 +289,28 @@ export default function AdminRobertConsole() {
                     Auto-seed from profile
                   </Button>
                 </div>
+                <div className="flex items-center gap-2">
+                  <Button variant="ghost" size="sm" onClick={autoSeedWeakest} disabled={busy} className="text-emerald-700">
+                    {busy ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Compass className="w-4 h-4 mr-2" />}
+                    Sweep weakest-coverage profiles now
+                  </Button>
+                  <span className="text-[11px] text-slate-400">also runs on schedule when enabled</span>
+                </div>
                 {autoResult && (
                   <div className="text-xs text-slate-700 flex flex-wrap gap-x-4 gap-y-1">
-                    <span><strong>{autoResult.seeds_traced}</strong> peers traced</span>
-                    <span><strong>{autoResult.total_addable}</strong> addable</span>
-                    <span><strong>{autoResult.total_upserted}</strong> staged</span>
+                    {autoResult.weakest ? (
+                      <>
+                        <span><strong>{autoResult.evaluated}</strong> profiles evaluated</span>
+                        <span><strong>{autoResult.weak_profiles}</strong> weak profiles seeded</span>
+                        <span><strong>{autoResult.total_upserted}</strong> staged</span>
+                      </>
+                    ) : (
+                      <>
+                        <span><strong>{autoResult.seeds_traced}</strong> peers traced</span>
+                        <span><strong>{autoResult.total_addable}</strong> addable</span>
+                        <span><strong>{autoResult.total_upserted}</strong> staged</span>
+                      </>
+                    )}
                   </div>
                 )}
               </div>

@@ -46,6 +46,13 @@ export function getRobertConfig() {
     runOnStartup: readEnvBool('ROBERT_RUN_ON_STARTUP', false),
     runOnSchedule: readEnvBool('ROBERT_RUN_ON_SCHEDULE', false),
     schedule: readEnvString('ROBERT_SCHEDULE', '0 * * * *'),
+    // Funding-trace auto-seed: periodically trace funded peers of the
+    // weakest-coverage profiles and stage their funders as candidates.
+    autoSeedOnSchedule: readEnvBool('ROBERT_AUTOSEED_ON_SCHEDULE', false),
+    autoSeedSchedule: readEnvString('ROBERT_AUTOSEED_SCHEDULE', '0 3 * * *'),
+    autoSeedMaxProfiles: readEnvInt('ROBERT_AUTOSEED_MAX_PROFILES', 3),
+    autoSeedMaxEntitiesPerProfile: readEnvInt('ROBERT_AUTOSEED_MAX_ENTITIES', 5),
+    autoSeedMinRisk: readEnvInt('ROBERT_AUTOSEED_MIN_RISK', 60),
     mode: readEnvString('ROBERT_MODE', 'observe').toLowerCase(),
     maxSourcesPerRun: readEnvInt('ROBERT_MAX_SOURCES_PER_RUN', 25),
     maxUrlsPerSource: readEnvInt('ROBERT_MAX_URLS_PER_SOURCE', 20),

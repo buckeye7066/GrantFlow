@@ -231,3 +231,128 @@ export async function autoSeedTraceForProfile(db, { profileId, maxEntities = 5, 
     per_entity: perEntity,
   }
 }
+
+// ───────────────────────────────────────────────────────────────────────────
+// Scheduled sweep: auto-seed the WEAKEST-coverage profiles.
+// Serves goal #8 — avoid zero-result experiences by proactively widening the
+// catalog where users are most likely to find nothing.
+// ───────────────────────────────────────────────────────────────────────────
+
+/**
+ * PURE: pick the profiles most in need of new sources. Only profiles at/above
+ * `minRisk` qualify (no point spending API calls on well-covered profiles).
+ * Ranked by zero-result risk desc, then coverage score asc (lowest first).
+ *
+ * @param {Array} coverageRows  [{ profile_id, zero_result_risk, coverage_score }]
+ * @returns {Array<string>} ordered profile ids
+ */
+export function selectWeakestProfiles(coverageRows = [], { limit = 3, minRisk = 60 } = {}) {
+  return coverageRows
+    .filter((r) => r && r.profile_id !== null && r.profile_id !== undefined && Number(r.zero_result_risk ?? 0) >= minRisk)
+    .slice()
+    .sort((a, b) =>
+      (Number(b.zero_result_risk ?? 0) - Number(a.zero_result_risk ?? 0)) ||
+      (Number(a.coverage_score ?? 0) - Number(b.coverage_score ?? 0)),
+    )
+    .slice(0, Math.max(0, limit))
+    .map((r) => r.profile_id)
+}
+
+async function defaultListProfileIds(db, { limit = 50 } = {}) {
+  if (!db?.prepare) return []
+  try {
+    const rows = await db
+      .prepare(`SELECT id FROM profiles WHERE COALESCE(status,'active') = 'active' ORDER BY updated_at DESC LIMIT ?`)
+      .all(Number(limit) || 50)
+    return rows.map((r) => r.id)
+  } catch (err) {
+    log.warn(`[robert:funding-trace] listProfileIds failed: ${err?.message}`)
+    return []
+  }
+}
+
+let _coverageFns = null
+async function defaultAnalyzeCoverage(db, profileId) {
+  if (!_coverageFns) {
+    const [cov, ph] = await Promise.all([
+      import('./robertCoverageAnalyzer.js'),
+      import('../profileHelpers.js'),
+    ])
+    _coverageFns = { analyzeProfileCoverage: cov.analyzeProfileCoverage, loadProfileContext: ph.loadProfileContext }
+  }
+  const result = await _coverageFns.analyzeProfileCoverage({
+    db,
+    profileId,
+    loadProfileContext: _coverageFns.loadProfileContext,
+  })
+  return result?.coverage ?? null
+}
+
+/**
+ * Find the weakest-coverage profiles and auto-seed funding-trace for each.
+ * Designed to run on a schedule. All I/O is injectable for testing.
+ *
+ * @param {object} db
+ * @param {object} args
+ * @param {number} [args.limit]                 # of weak profiles to seed (default 3)
+ * @param {number} [args.maxEntitiesPerProfile] peers traced per profile (default 5)
+ * @param {number} [args.minRisk]               only seed profiles at/above this risk
+ * @param {number} [args.evaluateLimit]         # of profiles to score (default 50)
+ * @param {boolean} [args.useAi]
+ * @param {string|null} [args.runId]
+ * @param {object} [args.deps]  { listProfileIds, analyzeCoverage, autoSeed, upsert }
+ * @returns {Promise<object>} aggregate summary
+ */
+export async function autoSeedWeakestProfiles(db, {
+  limit = 3,
+  maxEntitiesPerProfile = 5,
+  minRisk = 60,
+  evaluateLimit = 50,
+  useAi = false,
+  runId = null,
+  deps = {},
+} = {}) {
+  const listProfileIds = deps.listProfileIds || defaultListProfileIds
+  const analyzeCoverage = deps.analyzeCoverage || defaultAnalyzeCoverage
+  const autoSeed = deps.autoSeed || autoSeedTraceForProfile
+  const upsert = deps.upsert
+  // upsert is only required when the default autoSeed (which needs it) is used.
+  if (!deps.autoSeed && typeof upsert !== 'function') {
+    throw new Error('autoSeedWeakestProfiles: deps.upsert function required')
+  }
+
+  const ids = await listProfileIds(db, { limit: evaluateLimit })
+  const coverageRows = []
+  for (const id of ids) {
+    try {
+      const row = await analyzeCoverage(db, id)
+      if (row) coverageRows.push(row)
+    } catch (err) {
+      log.warn(`[robert:funding-trace] coverage analysis failed for ${id}: ${err?.message}`)
+    }
+  }
+
+  const weakest = selectWeakestProfiles(coverageRows, { limit, minRisk })
+
+  const perProfile = []
+  let totalUpserted = 0
+  for (const profileId of weakest) {
+    try {
+      const summary = await autoSeed(db, { profileId, maxEntities: maxEntitiesPerProfile, useAi, runId, deps: { upsert } })
+      totalUpserted += summary.total_upserted || 0
+      perProfile.push(summary)
+    } catch (err) {
+      log.warn(`[robert:funding-trace] auto-seed failed for ${profileId}: ${err?.message}`)
+      perProfile.push({ profile_id: profileId, error: err?.message || 'auto-seed failed' })
+    }
+  }
+
+  log.info(`[robert:funding-trace] weak-coverage sweep evaluated=${ids.length} weak=${weakest.length} upserted=${totalUpserted}`)
+
+  return {
+    evaluated: ids.length,
+    weak_profiles: weakest.length,
+    total_upserted: totalUpserted,
+    per_profile: perProfile,
+  }
+}

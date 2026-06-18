@@ -5,6 +5,8 @@ import {
   traceFundingIntoCandidates,
   deriveSeedEntities,
   autoSeedTraceForProfile,
+  selectWeakestProfiles,
+  autoSeedWeakestProfiles,
 } from '../../backend/services/robert/robertFundingTraceBridge.js'
 
 const FAKE_DB = {} // never touched — all deps are injected
@@ -145,5 +147,72 @@ describe('autoSeedTraceForProfile', () => {
   it('requires profileId and an upsert dep', async () => {
     await assert.rejects(autoSeedTraceForProfile(FAKE_DB, { deps: { upsert: () => {} } }), /profileId/)
     await assert.rejects(autoSeedTraceForProfile(FAKE_DB, { profileId: 'p1', deps: {} }), /upsert/)
+  })
+})
+
+describe('selectWeakestProfiles', () => {
+  const rows = [
+    { profile_id: 'a', zero_result_risk: 100, coverage_score: 5 },
+    { profile_id: 'b', zero_result_risk: 80, coverage_score: 40 },
+    { profile_id: 'c', zero_result_risk: 35, coverage_score: 70 },  // below default minRisk
+    { profile_id: 'd', zero_result_risk: 80, coverage_score: 20 },
+  ]
+
+  it('ranks by risk desc then coverage asc, and applies the risk floor', () => {
+    // c (risk 35) excluded by minRisk=60; b and d tie on risk 80 -> lower coverage (d) first
+    assert.deepEqual(selectWeakestProfiles(rows, { limit: 10 }), ['a', 'd', 'b'])
+  })
+
+  it('respects the limit', () => {
+    assert.deepEqual(selectWeakestProfiles(rows, { limit: 1 }), ['a'])
+  })
+
+  it('returns nothing when all profiles are above the risk floor', () => {
+    assert.deepEqual(selectWeakestProfiles(rows, { minRisk: 200 }), [])
+  })
+})
+
+describe('autoSeedWeakestProfiles', () => {
+  it('scores listed profiles, picks the weakest, and seeds each', async () => {
+    const listProfileIds = async () => ['a', 'b', 'c']
+    const coverageByProfile = {
+      a: { profile_id: 'a', zero_result_risk: 100, coverage_score: 0 },
+      b: { profile_id: 'b', zero_result_risk: 20, coverage_score: 90 },  // healthy -> skip
+      c: { profile_id: 'c', zero_result_risk: 70, coverage_score: 30 },
+    }
+    const analyzeCoverage = async (_db, id) => coverageByProfile[id]
+    const seeded = []
+    const autoSeed = async (_db, { profileId }) => {
+      seeded.push(profileId)
+      return { profile_id: profileId, total_upserted: 4 }
+    }
+    const res = await autoSeedWeakestProfiles(FAKE_DB, {
+      limit: 5,
+      deps: { listProfileIds, analyzeCoverage, autoSeed },
+    })
+
+    assert.deepEqual(seeded, ['a', 'c'])   // b skipped (low risk), a before c (higher risk)
+    assert.equal(res.evaluated, 3)
+    assert.equal(res.weak_profiles, 2)
+    assert.equal(res.total_upserted, 8)
+  })
+
+  it('survives a coverage-analysis failure for one profile', async () => {
+    const listProfileIds = async () => ['ok', 'broken']
+    const analyzeCoverage = async (_db, id) => {
+      if (id === 'broken') throw new Error('coverage boom')
+      return { profile_id: id, zero_result_risk: 90, coverage_score: 10 }
+    }
+    const autoSeed = async (_db, { profileId }) => ({ profile_id: profileId, total_upserted: 1 })
+    const res = await autoSeedWeakestProfiles(FAKE_DB, { deps: { listProfileIds, analyzeCoverage, autoSeed } })
+    assert.equal(res.weak_profiles, 1)
+    assert.equal(res.total_upserted, 1)
+  })
+
+  it('requires an upsert dep when using the default seeder', async () => {
+    await assert.rejects(
+      autoSeedWeakestProfiles(FAKE_DB, { deps: { listProfileIds: async () => [], analyzeCoverage: async () => null } }),
+      /upsert/,
+    )
   })
 })

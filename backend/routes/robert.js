@@ -42,7 +42,7 @@ import {
   updateOpportunityCandidate,
   upsertSourceCandidate,
 } from '../services/robert/robertRunStore.js'
-import { traceFundingIntoCandidates, autoSeedTraceForProfile } from '../services/robert/robertFundingTraceBridge.js'
+import { traceFundingIntoCandidates, autoSeedTraceForProfile, autoSeedWeakestProfiles } from '../services/robert/robertFundingTraceBridge.js'
 import {
   markAccepted,
   markDeclined,
@@ -217,6 +217,25 @@ router.post('/trace-funding/auto', adminOnly, async (req, res) => {
     return res.json({ ok: true, ...summary })
   } catch (err) {
     return handleError(res, err, 'Auto-seed funding trace failed.')
+  }
+})
+
+// Trigger the weak-coverage sweep on demand (also runs on schedule when
+// ROBERT_AUTOSEED_ON_SCHEDULE=true). Finds the profiles most at risk of
+// zero results and traces their funded peers.
+router.post('/trace-funding/auto-weakest', adminOnly, async (req, res) => {
+  try {
+    const limit = Math.max(1, Math.min(20, Number(req.body?.limit) || 3))
+    const summary = await autoSeedWeakestProfiles(req.db, {
+      limit,
+      maxEntitiesPerProfile: Math.max(1, Math.min(15, Number(req.body?.maxEntities) || 5)),
+      minRisk: Number.isFinite(Number(req.body?.minRisk)) ? Number(req.body.minRisk) : 60,
+      useAi: req.body?.use_ai === true,
+      deps: { upsert: upsertSourceCandidate },
+    })
+    return res.json({ ok: true, ...summary })
+  } catch (err) {
+    return handleError(res, err, 'Weak-coverage auto-seed failed.')
   }
 })
 
