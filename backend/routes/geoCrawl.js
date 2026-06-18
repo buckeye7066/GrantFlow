@@ -46,6 +46,8 @@ export default function createGeoCrawlRouter({ uploadDir, getOpenAI } = {}) {
         state: state ?? undefined,
         run_all_states: runAllStates || undefined,
         states: Array.isArray(incoming.states) ? incoming.states : undefined,
+        // Country scope for national crawls (default US + CA when omitted).
+        countries: Array.isArray(incoming.countries) ? incoming.countries : undefined,
         zip_list: zipList ?? undefined,
         max_zips:
           zipList && zipList.length > 0

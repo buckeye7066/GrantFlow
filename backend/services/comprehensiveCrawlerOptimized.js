@@ -249,6 +249,11 @@ export async function runComprehensiveCrawler(contextOrDb, profileContextArg = {
         params.resume === true ||
         String(params.resume || '').toLowerCase() === 'true'
       const counties = Array.isArray(params.counties) && params.counties.length > 0 ? params.counties : undefined
+      // Country scope for national crawls (no state). Default (US + CA) lives in
+      // resolveZipList; pass through only when the caller specified it explicitly.
+      const countries = Array.isArray(params.countries) && params.countries.length > 0
+        ? params.countries.map((c) => String(c).trim().toUpperCase()).filter(Boolean)
+        : undefined
       const effectiveZipList = runAllStates ? undefined : zipList || undefined
 
       const jobId = contextOrDb?.job?.id ?? null
@@ -281,6 +286,7 @@ export async function runComprehensiveCrawler(contextOrDb, profileContextArg = {
         return await runNationalZipCrawl(db, {
           state: stateArg && /^[A-Z]{2}$/.test(stateArg) ? stateArg : undefined,
           zip_list: effectiveZipList,
+          countries, // national scope: default US + CA (see resolveZipList)
           max_zips: maxZips,
           batch_size: Number.isFinite(batchSize) ? batchSize : 25,
           rate_limit_ms: Number.isFinite(rateLimitMs) ? rateLimitMs : (offlineOnly ? 0 : 250),

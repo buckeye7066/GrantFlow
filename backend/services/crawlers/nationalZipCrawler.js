@@ -21,7 +21,11 @@ import axios from 'axios'
 import crypto from 'crypto'
 import fs from 'fs'
 import path from 'path'
-import zipcodes from 'zipcodes'
+// zipcodes-nrviens is a superset of `zipcodes`: identical US data (42,555 ZIPs)
+// PLUS Canadian postal data keyed by FSA (the first 3 chars, e.g. "K1A" — 1,620
+// of them). Its API surface (lookup/lookupByState/lookupByCoords/codes/states)
+// matches `zipcodes`, so this is a drop-in swap that unlocks Canada coverage.
+import zipcodes from 'zipcodes-nrviens'
 import { searchGrants } from './grantsGovClient.js'
 import { upsertFundingOpportunity } from '../opportunityInserter.js'
 
@@ -55,10 +59,11 @@ import { resolveCountyForZip } from '../geo/zipCountyResolver.js'
 import { createLogger } from '../../utils/logger.js'
 const log = createLogger('nationalZipCrawler')
 
-// All US ZIP codes (~43k total).
-// We load from the local `zipcodes` dataset to avoid network lookups.
-// NOTE: This list is used when Geo Crawl is run without a state scope.
-const US_ZIP_CODES_ALL = generateUSZipCodes()
+// All North American crawl codes: ~42.5k US ZIPs + ~1.6k Canadian FSAs (~44k total).
+// Loaded from the local `zipcodes-nrviens` dataset to avoid network lookups.
+// NOTE: This list is used when Geo Crawl is run without a state scope. Callers
+// can scope it to a subset via the `countries` option (default US + CA).
+const US_ZIP_CODES_ALL = generateAllPostalCodes()
 
 // Default configuration
 const DEFAULT_CONFIG = {
@@ -230,9 +235,72 @@ function isLoanOrMatchingFund(opp) {
   return false
 }
 
+// --- Postal-code helpers (US ZIP + Canadian FSA) -------------------------
+//
+// A "postal code" in Geo Crawl is the crawl unit. For the US that's a 5-digit
+// ZIP; for Canada it's a 3-character Forward Sortation Area (FSA), e.g. "K1A".
+// The Canadian dataset is keyed by FSA and lookup() truncates a full postal
+// code ("K1A 0B1") to its FSA, so FSA is the natural Canadian crawl unit.
+const US_ZIP_RE = /^\d{5}$/
+const CA_FSA_RE = /^[A-Za-z]\d[A-Za-z]$/
+
+// zipcodes-nrviens stores the full province NAME in `state` for Canadian rows
+// (e.g. "Ontario"), unlike US rows which already carry a 2-letter abbr ("OH").
+// Normalize provinces to their official 2-letter abbreviations for clean,
+// consistent geo storage and grouping.
+const CA_PROVINCE_ABBR = {
+  alberta: 'AB',
+  'british columbia': 'BC',
+  manitoba: 'MB',
+  'new brunswick': 'NB',
+  'newfoundland and labrador': 'NL',
+  newfoundland: 'NL',
+  'northwest territories': 'NT',
+  'nova scotia': 'NS',
+  nunavut: 'NU',
+  ontario: 'ON',
+  'prince edward island': 'PE',
+  quebec: 'QC',
+  'québec': 'QC',
+  saskatchewan: 'SK',
+  yukon: 'YT',
+  // Dataset quirk: a few BC sub-regions are labelled by area name.
+  'sunshine coast': 'BC',
+}
+
+function isCanadianCode(value) {
+  return CA_FSA_RE.test(String(value ?? '').trim().slice(0, 3))
+}
+
+function countryForCode(value) {
+  return isCanadianCode(value) ? 'CA' : 'US'
+}
+
+// Canonical crawl key: a US 5-digit ZIP, or a Canadian 3-char FSA (uppercased).
+// Accepts full Canadian postal codes ("K1A 0B1") and reduces them to the FSA.
+function normalizePostalCode(value) {
+  const raw = String(value ?? '')
+    .trim()
+    .toUpperCase()
+    .replace(/\s+/g, '')
+  if (US_ZIP_RE.test(raw)) return raw
+  const fsa = raw.slice(0, 3)
+  if (CA_FSA_RE.test(fsa)) return fsa
+  return null
+}
+
+// Resolve a 2-letter region (US state or CA province) from a meta/coords row.
+function regionForMeta(meta) {
+  const st = meta?.state ? String(meta.state).trim() : null
+  if (!st) return null
+  if (/^[A-Za-z]{2}$/.test(st)) return st.toUpperCase()
+  return CA_PROVINCE_ABBR[st.toLowerCase()] || st.toUpperCase()
+}
+
+// Backwards-compatible: now accepts US ZIPs *and* Canadian FSAs (used by
+// deriveZipMeta and the geo-index association, both of which just store the key).
 function normalizeZip(value) {
-  const zip = String(value ?? '').trim()
-  return /^\d{5}$/.test(zip) ? zip : null
+  return normalizePostalCode(value)
 }
 
 function normalizeState(value) {
@@ -240,30 +308,40 @@ function normalizeState(value) {
   return /^[A-Z]{2}$/.test(s) ? s : null
 }
 
-async function resolveZipList({ zip_list, state, max_zips, counties }) {
-  // Resolve ZIP list for a geo crawl run.
+async function resolveZipList({ zip_list, state, max_zips, counties, countries }) {
+  // Resolve the postal-code list for a geo crawl run.
   // Priority:
-  // 1) Explicit ZIP list (city selection / manual ZIP selection)
-  // 2) State ZIP index
-  // 3) All US ZIPs (when no state is provided)
+  // 1) Explicit list (city selection / manual selection) — US ZIPs or CA FSAs
+  // 2) State/province index
+  // 3) All US ZIPs + Canadian FSAs (when no state is provided)
   // Then optionally filter by counties (within the resolved base list).
+  //
+  // `countries` (default ['US','CA']) scopes the national branch. US keys are
+  // numeric ZIPs; Canadian keys are alphabetic FSAs — so we can partition the
+  // merged dataset by the first character without extra lookups.
+  const wantCountries = Array.isArray(countries) && countries.length
+    ? new Set(countries.map((c) => String(c).trim().toUpperCase()))
+    : new Set(['US', 'CA'])
+
   const fromExplicit = Array.isArray(zip_list) ? zip_list : [];
   const wasZipListProvided = Array.isArray(zip_list) && zip_list.length > 0;
   let zips = fromExplicit
-    .map((z) => String(z || '').trim())
-    .filter((z) => /^\d{5}$/.test(z));
+    .map((z) => normalizePostalCode(z))
+    .filter((z) => z && wantCountries.has(countryForCode(z)));
 
-  // Only fall back to state/national ZIPs if NO explicit zip_list was provided.
+  // Only fall back to state/national codes if NO explicit list was provided.
   // If user provides ['BADZIP'], respect that intent (return empty after filtering).
   if (!zips.length && !wasZipListProvided) {
     if (state && typeof state === 'string') {
       const rows = zipcodes.lookupByState(state) || [];
       zips = rows
-        .map((row) => String(row?.zip || '').padStart(5, '0'))
-        .filter((z) => /^\d{5}$/.test(z));
+        .map((row) => normalizePostalCode(row?.zip))
+        .filter((z) => z && wantCountries.has(countryForCode(z)));
     } else {
-      // National scope: run across all ZIPs (caller can still cap via max_zips).
-      zips = Array.isArray(US_ZIP_CODES_ALL) ? US_ZIP_CODES_ALL.slice() : []
+      // National scope: run across all US ZIPs + Canadian FSAs (caller can still
+      // cap via max_zips, or narrow via `countries`).
+      const all = Array.isArray(US_ZIP_CODES_ALL) ? US_ZIP_CODES_ALL : []
+      zips = all.filter((z) => wantCountries.has(countryForCode(z)))
     }
   }
 
@@ -351,7 +429,8 @@ function deriveZipMeta(zip) {
     return {
       zip: normalizeZip(row?.zip) || zip,
       city: row?.city ?? null,
-      state: normalizeState(row?.state) ?? null,
+      // regionForMeta handles both US abbrs ("OH") and CA province names ("Ontario" → "ON").
+      state: regionForMeta(row) ?? null,
       lat: Number.isFinite(Number.parseFloat(row?.latitude)) ? Number.parseFloat(row.latitude) : null,
       lng: Number.isFinite(Number.parseFloat(row?.longitude)) ? Number.parseFloat(row.longitude) : null,
     }
@@ -434,16 +513,105 @@ function buildBaselineDirectorySources({ zip, meta }) {
   ]
 }
 
+// ── CANADIAN SOURCE SET ───────────────────────────────────────────────────
+//
+// Domain-judgment surface: these are the curated, durable, user-actionable
+// Canadian "entry point" funding/assistance resources — the Canadian analogue
+// of the US United Way / Feeding America / Community Action trio above. They
+// guarantee every Canadian FSA clears `min_sources_per_zip` even when upstream
+// APIs are down, and they map directly to GrantFlow goals #1 (real sources,
+// not junk), #4 (support many user types), and #6 (directory sources).
+//
+// If you want to tune which Canadian orgs represent the baseline, this map and
+// the two functions below (provincial portals + foundations) are the place.
+function buildCanadianBaselineDirectorySources({ code, meta }) {
+  const city = meta?.city ? String(meta.city) : null
+  const province = regionForMeta(meta)
+  const where = city && province ? `${city}, ${province}` : province || 'Canada'
+  const keywords = [code, city, province].filter(Boolean).map((v) => String(v).toLowerCase())
+
+  return [
+    {
+      title: `211 Canada — community & social services near ${where}`,
+      sponsor: '211 Canada',
+      description:
+        'Free, confidential navigator for local community, social, health, and government assistance programs across Canada. Search by postal code for nearby help.',
+      url: 'https://211.ca/',
+      application_url: 'https://211.ca/',
+      source_url: 'https://211.ca/',
+      evidence_url: 'https://211.ca/',
+      opportunity_type: 'program',
+      type: 'DIRECTORY',
+      requires_match: false,
+      match_percentage: 0,
+      is_national: false,
+      state: province,
+      categories: ['community', 'local', 'social_services', 'emergency_assistance'],
+      keywords: ['211', 'community services', 'social services', 'assistance', ...keywords].filter(Boolean),
+      source: 'local_directory_211_ca',
+      source_id: `211ca:${code}`,
+      discovered_at: new Date().toISOString(),
+    },
+    {
+      title: `Food Banks Canada — find a food bank near ${where}`,
+      sponsor: 'Food Banks Canada',
+      description:
+        'Locate a local food bank and emergency food assistance through the national Food Banks Canada network.',
+      url: 'https://foodbankscanada.ca/find-a-food-bank/',
+      application_url: 'https://foodbankscanada.ca/find-a-food-bank/',
+      source_url: 'https://foodbankscanada.ca/find-a-food-bank/',
+      evidence_url: 'https://foodbankscanada.ca/find-a-food-bank/',
+      opportunity_type: 'program',
+      type: 'DIRECTORY',
+      requires_match: false,
+      match_percentage: 0,
+      is_national: false,
+      state: province,
+      categories: ['food', 'local', 'emergency_assistance'],
+      keywords: ['food bank', 'food assistance', 'hunger', ...keywords].filter(Boolean),
+      source: 'local_directory_food_banks_canada',
+      source_id: `foodbankscanada:${code}`,
+      discovered_at: new Date().toISOString(),
+    },
+    {
+      title: `United Way Centraide — find your local United Way near ${where}`,
+      sponsor: 'United Way Centraide Canada',
+      description:
+        'Find your local United Way Centraide for community support, financial empowerment programs, and partner referrals.',
+      url: 'https://www.unitedway.ca/find-your-united-way/',
+      application_url: 'https://www.unitedway.ca/find-your-united-way/',
+      source_url: 'https://www.unitedway.ca/find-your-united-way/',
+      evidence_url: 'https://www.unitedway.ca/find-your-united-way/',
+      opportunity_type: 'program',
+      type: 'DIRECTORY',
+      requires_match: false,
+      match_percentage: 0,
+      is_national: false,
+      state: province,
+      categories: ['community', 'local', 'financial_empowerment'],
+      keywords: ['united way', 'centraide', 'community', ...keywords].filter(Boolean),
+      source: 'local_directory_united_way_ca',
+      source_id: `unitedway_ca:${code}`,
+      discovered_at: new Date().toISOString(),
+    },
+  ]
+}
+
 /**
- * Generate representative US ZIP codes
- * In production, load from zipcodes library or database
+ * Generate every North American crawl code (US ZIPs + Canadian FSAs).
+ * Loaded from the local `zipcodes-nrviens` dataset (no network lookups).
  */
-function generateUSZipCodes() {
-  // `zipcodes.codes` is an object keyed by ZIP string.
-  // This dramatically reduces "skipped" runs caused by invalid generated ZIPs
-  // and removes dependency on external geocoding APIs for basic ZIP metadata.
+function generateAllPostalCodes() {
+  // `zipcodes.codes` is an object keyed by code string (US ZIP or CA FSA).
+  // This removes dependency on external geocoding APIs for basic metadata and
+  // avoids "skipped" runs from invalid generated codes.
   const codes = zipcodes?.codes && typeof zipcodes.codes === 'object' ? zipcodes.codes : {}
-  return Object.keys(codes).sort()
+  // Inline regexes (not the module consts) — this runs at module load, before
+  // those `const`s are initialized (temporal dead zone). Keys are US 5-digit
+  // ZIPs or Canadian 3-char FSAs.
+  return Object.keys(codes)
+    .filter((k) => /^\d{5}$/.test(k) || /^[A-Za-z]\d[A-Za-z]$/.test(String(k).slice(0, 3)))
+    .sort()
 }
 
 /**
@@ -818,6 +986,135 @@ async function searchFoundationLocator(zip, coords) {
   return opportunities
 }
 
+// Official provincial/territorial funding portals (best-effort directory links).
+const CA_PROVINCE_PORTALS = {
+  AB: 'https://www.alberta.ca/funding-grants',
+  BC: 'https://www2.gov.bc.ca/gov/content/employment-business/programs-services-for-businesses',
+  MB: 'https://www.gov.mb.ca/jec/busdev/financial/index.html',
+  NB: 'https://www2.gnb.ca/content/gnb/en/services.html',
+  NL: 'https://www.gov.nl.ca/iet/funding/',
+  NS: 'https://novascotia.ca/programs/',
+  NT: 'https://www.iti.gov.nt.ca/en/services',
+  NU: 'https://www.gov.nu.ca/en/services',
+  ON: 'https://www.ontario.ca/page/available-funding-opportunities-ontario-government',
+  PE: 'https://www.princeedwardisland.ca/en/topic/funding-and-grants',
+  QC: 'https://www.quebec.ca/en/government/ministere/economie/programs',
+  SK: 'https://www.saskatchewan.ca/business/first-nations-metis-and-northern-community-businesses/funding-grants-and-financing',
+  YT: 'https://yukon.ca/en/doing-business/funding',
+}
+
+const CA_PROVINCE_NAME = {
+  AB: 'Alberta', BC: 'British Columbia', MB: 'Manitoba', NB: 'New Brunswick',
+  NL: 'Newfoundland and Labrador', NS: 'Nova Scotia', NT: 'Northwest Territories',
+  NU: 'Nunavut', ON: 'Ontario', PE: 'Prince Edward Island', QC: 'Quebec',
+  SK: 'Saskatchewan', YT: 'Yukon',
+}
+
+/**
+ * Canadian provincial + federal funding portals for a given FSA.
+ * Returns a provincial grants portal and the federal Benefits Finder so every
+ * Canadian code gets a real, government-backed funding entry point.
+ */
+async function searchProvincialGrants(code, coords) {
+  const opportunities = []
+  const province = regionForMeta(coords)
+  const provinceName = (province && CA_PROVINCE_NAME[province]) || 'Canada'
+  const keywords = [code, province, provinceName.toLowerCase(), 'grants', 'funding', 'government']
+    .filter(Boolean)
+    .map((v) => String(v).toLowerCase())
+
+  try {
+    const portalUrl = (province && CA_PROVINCE_PORTALS[province]) || 'https://www.canada.ca/en/services/business/grants.html'
+    opportunities.push({
+      title: `${provinceName} Government Funding & Grants Portal`,
+      sponsor: `${provinceName} Government`,
+      description: province
+        ? `Official ${provinceName} funding and grants portal. Find current provincial funding opportunities, eligibility, and deadlines.`
+        : 'Directory of Canadian government funding and grant programs.',
+      url: portalUrl,
+      application_url: portalUrl,
+      source_url: portalUrl,
+      evidence_url: portalUrl,
+      opportunity_type: 'grant_directory',
+      type: 'DIRECTORY',
+      requires_match: false,
+      match_percentage: 0,
+      is_national: false,
+      state: province,
+      categories: ['government', 'directory', 'provincial_grants'],
+      keywords,
+      source: 'ca_provincial_grants_portal',
+      source_id: `${province || 'CA'}-portal`,
+      discovered_at: new Date().toISOString(),
+    })
+
+    // Federal: Canada Benefits Finder — national, matches users to benefits/grants.
+    const benefitsUrl = 'https://benefitsfinder.services.gc.ca/hm?GoCTemplateCulture=en-CA'
+    opportunities.push({
+      title: 'Government of Canada — Benefits Finder',
+      sponsor: 'Government of Canada',
+      description:
+        'Answer a few questions to find federal, provincial, and territorial benefits and funding programs you may be eligible for.',
+      url: benefitsUrl,
+      application_url: benefitsUrl,
+      source_url: benefitsUrl,
+      evidence_url: benefitsUrl,
+      opportunity_type: 'benefit_finder',
+      type: 'DIRECTORY',
+      requires_match: false,
+      match_percentage: 0,
+      is_national: true,
+      state: province,
+      categories: ['government', 'federal', 'benefits', 'directory'],
+      keywords: ['canada', 'federal benefits', 'benefits finder', ...keywords].filter(Boolean),
+      source: 'ca_benefits_finder',
+      source_id: `ca-benefits-finder:${code}`,
+      discovered_at: new Date().toISOString(),
+    })
+  } catch (error) {
+    console.error(`[GeoCrawl] CA provincial portal error for ${code}:`, error?.message || error)
+  }
+
+  return opportunities
+}
+
+/**
+ * Canadian foundation / philanthropy locator (analogue of the US COF/Candid path).
+ */
+async function searchCanadianFoundations(code, coords) {
+  const opportunities = []
+  const province = regionForMeta(coords)
+  const cfcUrl = 'https://communityfoundations.ca/find-a-community-foundation/'
+  try {
+    opportunities.push({
+      title: 'Community Foundations of Canada — Find a Community Foundation',
+      sponsor: 'Community Foundations of Canada',
+      description:
+        `Directory of Canada's 191+ community foundations. Find a nearby foundation that funds local grants, scholarships, and community projects.`,
+      url: cfcUrl,
+      application_url: cfcUrl,
+      source_url: cfcUrl,
+      evidence_url: cfcUrl,
+      opportunity_type: 'directory',
+      type: 'DIRECTORY',
+      requires_match: false,
+      match_percentage: 0,
+      is_national: true,
+      state: province,
+      categories: ['foundation', 'directory', 'philanthropy'],
+      keywords: [code, coords?.city, province, 'community foundation', 'philanthropy', 'grants']
+        .filter(Boolean)
+        .map((v) => String(v).toLowerCase()),
+      source: 'cfc_foundation_locator',
+      source_id: `cfc:${code}`,
+      discovered_at: new Date().toISOString(),
+    })
+  } catch (error) {
+    console.error(`[GeoCrawl] CA foundation locator error for ${code}:`, error?.message || error)
+  }
+  return opportunities
+}
+
 /**
  * Get coordinates for ZIP code
  */
@@ -900,22 +1197,27 @@ async function processZip(zip, db, config) {
     // Get coordinates
     const coords = await getZipCoordinates(zip)
     const meta = deriveZipMeta(zip) || null
-    
-    // Always include durable local directory sources so every ZIP yields at least 3.
+    const country = countryForCode(zip)
+    const isCanada = country === 'CA'
+
+    // Always include durable local directory sources so every code yields at least 3.
     // (These are “entry points” users can click even when upstream APIs are blocked.)
-    const baselineDirectories = buildBaselineDirectorySources({ zip, meta: meta ?? coords ?? null })
+    // Country-aware: US codes get the US trio, Canadian FSAs get the CA trio.
+    const baselineDirectories = isCanada
+      ? buildCanadianBaselineDirectorySources({ code: zip, meta: meta ?? coords ?? null })
+      : buildBaselineDirectorySources({ zip, meta: meta ?? coords ?? null })
 
     // Deterministic/no-network mode for tests and local debugging.
     // Keeps GeoCrawl stable even when upstream providers throttle.
     const offlineOnly = Boolean(config?.offline_only ?? config?.offlineOnly ?? false)
-    
+
     // Search all data sources (sequential so GeoCrawl Monitor can show current_source live).
     const discoverLocal = Boolean(config?.discover_local_resources)
     const runId = config?.geo_run_id ?? null
-    const stateForZip = (coords?.state ?? meta?.state ?? null)
-      ? String(coords?.state ?? meta?.state).toUpperCase()
-      : null
-    const countyForZip = stateForZip ? (await resolveCountyForZip(zip, stateForZip)) : null
+    // Normalize region to a 2-letter code (US state abbr or CA province abbr).
+    const stateForZip = regionForMeta(coords ?? meta ?? null)
+    // County resolution is US-only (FIPS); Canadian FSAs have no county concept here.
+    const countyForZip = (!isCanada && stateForZip) ? (await resolveCountyForZip(zip, stateForZip)) : null
 
     const reportSource = async (source, message) => {
       if (!runId) return
@@ -968,16 +1270,30 @@ async function processZip(zip, db, config) {
 
     // Directory-style resources must survive "offline" mode.
     // offline_only is intended to skip upstream network calls, not to eliminate deterministic directory links.
-    await reportSource('state_portal', 'Querying source: state portals')
-    stateResults = await searchStateGrantsByZip(zip, coords ?? meta ?? null)
+    // Government portals: US state portals vs. Canadian provincial + federal portals.
+    if (isCanada) {
+      await reportSource('provincial_portal', 'Querying source: provincial/federal portals')
+      stateResults = await searchProvincialGrants(zip, coords ?? meta ?? null)
 
-    await reportSource('foundation_locator', 'Querying source: foundation locators')
-    foundationResults = await searchFoundationLocator(zip, coords ?? meta ?? null)
+      await reportSource('foundation_locator', 'Querying source: Canadian foundations')
+      foundationResults = await searchCanadianFoundations(zip, coords ?? meta ?? null)
+    } else {
+      await reportSource('state_portal', 'Querying source: state portals')
+      stateResults = await searchStateGrantsByZip(zip, coords ?? meta ?? null)
+
+      await reportSource('foundation_locator', 'Querying source: foundation locators')
+      foundationResults = await searchFoundationLocator(zip, coords ?? meta ?? null)
+    }
 
     if (!offlineOnly) {
-      await reportSource('grants.gov', 'Querying source: grants.gov')
-      grantsGovResults = coords ? await searchGrantsGovByZip(zip, coords) : []
+      // Grants.gov is US-federal only — skip it for Canadian FSAs (the CA federal
+      // Benefits Finder is already added via searchProvincialGrants).
+      if (!isCanada) {
+        await reportSource('grants.gov', 'Querying source: grants.gov')
+        grantsGovResults = coords ? await searchGrantsGovByZip(zip, coords) : []
+      }
 
+      // Overpass/OSM is global (lat/lng based) — useful for both US and Canada.
       if (discoverLocal) {
         await reportSource('overpass', 'Querying source: overpass directories')
         overpassResults = await searchOverpassLocalResources(zip, coords ?? meta ?? null, config).catch(() => [])
@@ -1380,6 +1696,7 @@ export async function runNationalZipCrawl(dbPath, options = {}) {
     state: options.state,
     max_zips: options.max_zips,
     counties: options.counties,
+    countries: options.countries, // default US + CA (see resolveZipList)
   })
 
   if (zipList.length === 0) {
@@ -1633,8 +1950,11 @@ export async function runNationalZipCrawl(dbPath, options = {}) {
             })
           }
 
+          const eventCountry = countryForCode(result.zip)
           const eventState =
-            options.state ? String(options.state).toUpperCase() : (zipcodes.lookup(result.zip)?.state ?? null)
+            options.state ? String(options.state).toUpperCase() : (regionForMeta(zipcodes.lookup(result.zip)) ?? null)
+          // County (FIPS) is US-only; never feed a province name into the US resolver.
+          const eventCounty = eventCountry === 'US' ? (resolveCountyForZip(result.zip, eventState) ?? null) : null
           const delta = Number(result?.associations_new ?? result?.inserted_new ?? 0)
           if (delta > 0) {
             try {
@@ -1642,7 +1962,7 @@ export async function runNationalZipCrawl(dbPath, options = {}) {
                 level: 'info',
                 state: eventState,
                 zip: result.zip,
-                county: resolveCountyForZip(result.zip, eventState) ?? null,
+                county: eventCounty,
                 source: null,
                 message: `Saved ${delta} run result link(s)`,
                 foundCountDelta: delta,
@@ -1661,7 +1981,7 @@ export async function runNationalZipCrawl(dbPath, options = {}) {
                 level: 'error',
                 state: eventState,
                 zip: result.zip,
-                county: resolveCountyForZip(result.zip, eventState) ?? null,
+                county: eventCounty,
                 source: null,
                 message: `ZIP failed: ${result.error}`,
               })

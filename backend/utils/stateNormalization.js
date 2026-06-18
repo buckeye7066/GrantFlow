@@ -1,9 +1,15 @@
 /**
  * stateNormalization.js
  *
- * Canonical US state normalization utility.
- * Converts state names, abbreviations, and common variants to a
+ * Canonical US state + Canadian province/territory normalization utility.
+ * Converts region names, abbreviations, and common variants to a
  * standard 2-letter uppercase abbreviation.
+ *
+ * US states and CA provinces share this map because GrantFlow's geo model
+ * treats both as "a specific (non-nationwide) region" — the national Geo Crawl
+ * tags Canadian opportunities with a 2-letter province code (ON, BC, …) the
+ * same way it tags US ones (OH, CA, …), so province codes must resolve here for
+ * region-scoped discovery and matching to work.
  *
  * Used by: matching engine, profile sync, Anya, crawlers.
  */
@@ -65,6 +71,21 @@ const STATE_MAP = {
   'VI': 'VI', 'VIRGIN ISLANDS': 'VI', 'US VIRGIN ISLANDS': 'VI',
   'AS': 'AS', 'AMERICAN SAMOA': 'AS',
   'MP': 'MP', 'NORTHERN MARIANA ISLANDS': 'MP',
+
+  // Canadian provinces & territories.
+  'AB': 'AB', 'ALBERTA': 'AB',
+  'BC': 'BC', 'BRITISH COLUMBIA': 'BC', 'BRITISHCOLUMBIA': 'BC',
+  'MB': 'MB', 'MANITOBA': 'MB',
+  'NB': 'NB', 'NEW BRUNSWICK': 'NB', 'NEWBRUNSWICK': 'NB',
+  'NL': 'NL', 'NEWFOUNDLAND AND LABRADOR': 'NL', 'NEWFOUNDLANDANDLABRADOR': 'NL', 'NEWFOUNDLAND': 'NL',
+  'NS': 'NS', 'NOVA SCOTIA': 'NS', 'NOVASCOTIA': 'NS',
+  'NT': 'NT', 'NORTHWEST TERRITORIES': 'NT', 'NORTHWESTTERRITORIES': 'NT',
+  'NU': 'NU', 'NUNAVUT': 'NU',
+  'ON': 'ON', 'ONTARIO': 'ON',
+  'PE': 'PE', 'PRINCE EDWARD ISLAND': 'PE', 'PRINCEEDWARDISLAND': 'PE', 'PEI': 'PE',
+  'QC': 'QC', 'QUEBEC': 'QC', 'QUÉBEC': 'QC',
+  'SK': 'SK', 'SASKATCHEWAN': 'SK',
+  'YT': 'YT', 'YUKON': 'YT',
 };
 
 // Reverse map used by free-text extraction below. Declared up here so
@@ -86,6 +107,11 @@ const ABBR_TO_NAME = {
   'WI': 'Wisconsin', 'WY': 'Wyoming', 'DC': 'District of Columbia',
   'PR': 'Puerto Rico', 'GU': 'Guam', 'VI': 'Virgin Islands',
   'AS': 'American Samoa', 'MP': 'Northern Mariana Islands',
+  // Canadian provinces & territories.
+  'AB': 'Alberta', 'BC': 'British Columbia', 'MB': 'Manitoba', 'NB': 'New Brunswick',
+  'NL': 'Newfoundland and Labrador', 'NS': 'Nova Scotia', 'NT': 'Northwest Territories',
+  'NU': 'Nunavut', 'ON': 'Ontario', 'PE': 'Prince Edward Island', 'QC': 'Quebec',
+  'SK': 'Saskatchewan', 'YT': 'Yukon',
 };
 
 const STATE_CODES = new Set(Object.keys(ABBR_TO_NAME));

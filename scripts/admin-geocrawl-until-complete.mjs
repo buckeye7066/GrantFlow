@@ -43,12 +43,20 @@ const MAX_RUNS = Number.parseInt(args['max-runs'] || '12', 10)
 const TARGET_PERCENT = Number.parseFloat(args['target-percent'] || '99')
 const MAX_ZIPS = Number.parseInt(args['max-zips'] || '5000', 10)
 const POLL_INTERVAL_MS = Number.parseInt(args['poll-ms'] || '60000', 10)
+const COUNTRIES = (process.env.GF_COUNTRIES || 'US,CA')
+  .split(',')
+  .map((c) => c.trim().toUpperCase())
+  .filter(Boolean)
 const RUN_PARAMS = {
-  run_all_states: true,
+  // National scope (no run_all_states / state / zip_list) walks the full merged
+  // US ZIP + Canadian FSA list. This is the single canonical "national geocrawl"
+  // covering all of the USA and Canada — run_all_states cannot reach Canada
+  // because lookupByState() keys Canadian data by province NAME, not abbr.
+  countries: COUNTRIES, // US + CA by default
   discover_local_resources: true,
   offline_only: false,
-  max_zips: MAX_ZIPS,
-  min_sources_per_zip: 3,
+  max_zips: MAX_ZIPS, // per-run chunk; resume=true advances across the ~44k list
+  min_sources_per_zip: 3, // floor; no max (all eligible sources are saved)
   rate_limit_ms: 600,
   resume: true,
   skip_domain_corpus: true,
