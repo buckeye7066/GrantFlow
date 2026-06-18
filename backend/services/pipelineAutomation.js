@@ -231,7 +231,8 @@ async function recordAutomationEvent(db, payload) {
       )
       return
     }
-    await db.prepare(
+    try {
+      await db.prepare(
           `
               INSERT INTO grant_pipeline_events (
                     grant_id, job_id, previous_status, suggested_status, applied_status,
@@ -255,6 +256,24 @@ async function recordAutomationEvent(db, payload) {
       })(),
           payload.aiSummary ?? null,
         )
+    } catch (err) {
+      // Final guard for the TOCTOU race the pre-check above cannot fully close:
+      // if the grant is deleted between the existence check and this insert,
+      // Postgres raises 23503 / SQLite raises SQLITE_CONSTRAINT_FOREIGNKEY. The
+      // event is best-effort audit, so skip it instead of aborting the job.
+      const code = err?.code || err?.original?.code
+      const isFkViolation =
+        code === '23503' ||
+        code === 'SQLITE_CONSTRAINT_FOREIGNKEY' ||
+        /foreign key/i.test(String(err?.message || ''))
+      if (isFkViolation) {
+        console.warn(
+          `[pipeline_automation] grant ${payload.grantId} deleted mid-flight — pipeline event skipped (FK)`,
+        )
+        return
+      }
+      throw err
+    }
 }
 
 // All statuses that are eligible for pipeline automation processing
