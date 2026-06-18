@@ -43,40 +43,26 @@ function hostnameOf(u) {
   try { return new URL(u).hostname } catch { return '' }
 }
 
-// HTTP status codes that prove the server is alive even when the bot is
-// being refused. A 403 from CloudFront or a 429 from a rate-limiter is NOT
-// the same as a 404: the URL is real, the page is reachable for human
-// visitors, but the GitHub-Actions IP / `node-fetch`-style UA is blocked.
-// Treating these as "dead" caused 5 university off-campus housing /
-// scholarship portals (UCF, PSU LivingOffCampus, Seton Hall, OSU SFA,
-// Harvard Off-Campus Housing) to flap red on every CI run after they
-// started bot-blocking AWS IPs in May 2026, even though every URL is
-// confirmed-live in a browser.
-//
-// 520-525 + 530 are Cloudflare-specific codes meaning "edge is up, origin
-// misbehaved" (520 unknown origin error, 521 origin down, 522 timeout,
-// 523 origin unreachable, 524 timeout reading body, 525 SSL handshake,
-// 530 generic gateway error). These were a CI flake on Jun-2026 PR #505:
-// utc.edu (Cloudflare-fronted) returned 520 to GitHub-Actions runners
-// while the URLs were live in any browser. None of these codes prove the
-// URL in our registry is dead — only 404/410 do — so they belong here
-// next to 403/429 rather than failing the suite.
-//
-// 502/503/504 are the standard gateway "server temporarily unavailable"
-// codes (502 bad gateway, 503 service unavailable, 504 gateway timeout).
-// They mean the edge is up but the origin/WAF is transiently refusing the
-// request — NOT that the page is gone. mtsu.edu's WAF started returning 503
-// to GitHub-Actions (AWS) IPs in Jun-2026 for www.mtsu.edu/financial-aid,
-// /living-on-campus, /how-to-apply, etc. — every one confirmed live in a
-// browser, and offCampusHousing (different host) stayed green the same run.
-// Like the Cloudflare codes, these prove "blocked", not "dead", so a
-// blocking release gate must not flap red on them.
-const ALIVE_BUT_BLOCKED_STATUSES = new Set([
-  401, 403, 405, 407, 429, 451,
-  502, 503, 504,
-  520, 521, 522, 523, 524, 525, 530,
-])
-// Status codes that prove the URL is dead.
+// The contract of this gate, stated precisely: a registry URL is "dead"
+// ONLY if its origin returns 404 (Not Found) or 410 (Gone). EVERY other
+// status >= 400 means the server is reachable but is refusing or erroring
+// for *this* bot/runner — it is never proof that the page our registry
+// points at is gone. We therefore invert the old allowlist (enumerate the
+// dead codes, treat all other >=400 as "alive but blocked") instead of
+// trying to keep an ever-growing list of "blocked" codes in sync with
+// every WAF/CDN's behaviour. That open-ended allowlist flaked the gate one
+// code at a time:
+//   - 403/429 (CloudFront / rate-limiters): UCF, PSU LivingOffCampus,
+//     Seton Hall, OSU SFA, Harvard Off-Campus Housing bot-blocked AWS IPs
+//     (May 2026) — confirmed live in a browser.
+//   - 520-525/530 (Cloudflare "edge up, origin misbehaved"): utc.edu
+//     returned 520 to GitHub-Actions runners (Jun 2026, PR #505).
+//   - 502/503/504 (gateway "temporarily unavailable"): mtsu.edu's WAF
+//     returned 503 to AWS IPs (Jun 2026) for /financial-aid,
+//     /living-on-campus, /how-to-apply — offCampusHousing (different host)
+//     stayed green the same run.
+// None of these prove a dead link; only 404/410 do. The denylist below is
+// closed and cannot rot the way the old allowlist did.
 const DEFINITELY_DEAD_STATUSES = new Set([404, 410])
 
 // Node's fetch() reports network-level failures (DNS NXDOMAIN, TCP RST,
@@ -127,9 +113,11 @@ async function probe(url) {
     if (DEFINITELY_DEAD_STATUSES.has(res.status)) {
       return { ok: false, status: res.status, looksDead: false, blocked: false }
     }
-    if (ALIVE_BUT_BLOCKED_STATUSES.has(res.status)) {
-      // Server is up; bot is being refused. Don't read the body — many
-      // WAFs return marketing HTML on 403 and the dead-page text matcher
+    if (res.status >= 400) {
+      // Reachable server, but refusing/erroring for this bot/runner (4xx
+      // auth/rate-limit/WAF blocks, 5xx gateway/origin trouble). Not 404/410,
+      // so not proof the registry URL is dead. Don't read the body — many
+      // WAFs return marketing/error HTML here and the dead-page text matcher
       // would false-positive.
       return { ok: true, status: res.status, looksDead: false, blocked: true }
     }
