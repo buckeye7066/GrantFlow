@@ -18,6 +18,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import Database from 'better-sqlite3'
+import { wrapSqlite } from '../helpers/sqliteTestDb.mjs'
 
 import {
   recordAuthorizations,
@@ -35,19 +36,7 @@ function makeDb() {
     CREATE TABLE IF NOT EXISTS documents (id TEXT PRIMARY KEY, profile_id TEXT, name TEXT, type TEXT);
     CREATE TABLE IF NOT EXISTS profile_documents (profile_id TEXT, document_id TEXT, PRIMARY KEY(profile_id, document_id));
   `)
-  return {
-    dialect: 'sqlite',
-    prepare(sql) {
-      const stmt = sqlite.prepare(sql)
-      return {
-        get: async (...p) => stmt.get(...p),
-        all: async (...p) => stmt.all(...p),
-        run: async (...p) => { const r = stmt.run(...p); return { changes: r.changes, lastInsertRowid: r.lastInsertRowid } },
-      }
-    },
-    exec(sql) { sqlite.exec(sql) },
-    raw: sqlite,
-  }
+  return wrapSqlite(sqlite)
 }
 
 describe('hamiltonAuthorizationStore', () => {

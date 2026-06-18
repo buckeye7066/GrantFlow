@@ -321,7 +321,7 @@ function bindingsToValues(names, bindings) {
   return names.map((name) => bindings[name]);
 }
 
-function normalizeSqliteValue(value) {
+export function normalizeSqliteValue(value) {
   if (value === undefined) return null
   if (typeof value === 'boolean') return value ? 1 : 0
   if (value instanceof Date) return value.toISOString()
@@ -337,7 +337,7 @@ function normalizeSqliteValue(value) {
   return value
 }
 
-function normalizeSqliteArgs(args) {
+export function normalizeSqliteArgs(args) {
   if (args.length === 1 && Array.isArray(args[0])) {
     return [args[0].map(normalizeSqliteValue)]
   }

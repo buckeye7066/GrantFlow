@@ -15,6 +15,7 @@
 import { describe, it, beforeEach } from 'node:test'
 import assert from 'node:assert/strict'
 import Database from 'better-sqlite3'
+import { wrapSqlite } from '../helpers/sqliteTestDb.mjs'
 
 import { classifyBlocker, BLOCKER_CATEGORIES } from '../../backend/services/hamilton/hamiltonBlockerClassifier.js'
 import {
@@ -64,19 +65,7 @@ import {
 
 function makeDb() {
   const sqlite = new Database(':memory:')
-  return {
-    dialect: 'sqlite',
-    prepare(sql) {
-      const stmt = sqlite.prepare(sql)
-      return {
-        get: async (...p) => stmt.get(...p),
-        all: async (...p) => stmt.all(...p),
-        run: async (...p) => { const r = stmt.run(...p); return { changes: r.changes, lastInsertRowid: r.lastInsertRowid } },
-      }
-    },
-    exec(sql) { sqlite.exec(sql) },
-    raw: sqlite,
-  }
+  return wrapSqlite(sqlite)
 }
 
 function resetCaches() {

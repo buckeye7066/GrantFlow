@@ -14,6 +14,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import Database from 'better-sqlite3'
+import { wrapSqlite } from '../helpers/sqliteTestDb.mjs'
 
 import {
   ensureSchema,
@@ -33,19 +34,9 @@ const SAM_LOCK = agentLockName('sam')
 
 function makeDb() {
   const sqlite = new Database(':memory:')
-  return {
-    dialect: 'sqlite',
-    _sqlite: sqlite,
-    prepare(sql) {
-      const stmt = sqlite.prepare(sql)
-      return {
-        get: async (...p) => stmt.get(...p),
-        all: async (...p) => stmt.all(...p),
-        run: async (...p) => { const r = stmt.run(...p); return { changes: r.changes } },
-      }
-    },
-    exec(sql) { sqlite.exec(sql) },
-  }
+  // `_sqlite` is a test-only escape hatch (plantLock / PRAGMA introspection)
+  // that bypasses the wrapper to talk to better-sqlite3 directly.
+  return { ...wrapSqlite(sqlite), _sqlite: sqlite }
 }
 
 async function freshDb() {

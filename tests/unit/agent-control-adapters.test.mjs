@@ -11,6 +11,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import Database from 'better-sqlite3'
+import { wrapSqlite } from '../helpers/sqliteTestDb.mjs'
 
 import { BaseAgentAdapter, makeSignal } from '../../backend/services/agentControl/agentAdapters/baseAgentAdapter.js'
 import { getAdapter, listAdapters, setAdapter, resetRegistry } from '../../backend/services/agentControl/agentAdapters/agentAdapterRegistry.js'
@@ -18,18 +19,7 @@ import { ALL_AGENTS, FULL_CYCLE_ORDER, RUN_TYPES, resolveAgentsForRun, agentLock
 
 function makeDb() {
   const sqlite = new Database(':memory:')
-  return {
-    dialect: 'sqlite',
-    prepare(sql) {
-      const stmt = sqlite.prepare(sql)
-      return {
-        get: async (...p) => stmt.get(...p),
-        all: async (...p) => stmt.all(...p),
-        run: async (...p) => { const r = stmt.run(...p); return { changes: r.changes } },
-      }
-    },
-    exec(sql) { sqlite.exec(sql) },
-  }
+  return wrapSqlite(sqlite)
 }
 
 test('agentControlTypes: ALL_AGENTS lists exactly sam/robert/yana/john/hamilton', () => {

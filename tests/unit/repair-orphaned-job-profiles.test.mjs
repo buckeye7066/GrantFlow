@@ -15,6 +15,7 @@
 import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
 import Database from 'better-sqlite3'
+import { wrapSqlite } from '../helpers/sqliteTestDb.mjs'
 
 import { repairOrphanedJobProfiles } from '../../backend/utils/repairOrphanedJobProfiles.js'
 
@@ -77,27 +78,7 @@ function makeDb() {
       worker_id TEXT
     );
   `)
-  return {
-    dialect: 'sqlite',
-    prepare(sql) {
-      const stmt = sqlite.prepare(sql)
-      return {
-        get: async (...p) => stmt.get(...p),
-        all: async (...p) => stmt.all(...p),
-        run: async (...p) => {
-          const r = stmt.run(...p)
-          return { changes: r.changes, lastInsertRowid: r.lastInsertRowid }
-        },
-      }
-    },
-    exec(sql) {
-      sqlite.exec(sql)
-    },
-    withTransaction(fn) {
-      return fn(this)
-    },
-    raw: sqlite,
-  }
+  return { ...wrapSqlite(sqlite), withTransaction(fn) { return fn(this) } }
 }
 
 function insertJob(db, overrides = {}) {
