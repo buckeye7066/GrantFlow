@@ -591,7 +591,11 @@ export async function aggregateYana(db, range) {
         const lcols = new Set(await columnsFor(db, 'yana_lead_candidates'))
         const ltcol = pickTimeCol(lcols)
         if (ltcol && lcols.has('pushed_to_john')) {
-          const r = await db.prepare(`SELECT COUNT(*) AS n FROM yana_lead_candidates WHERE pushed_to_john = TRUE AND ${ltcol} >= ?`).get(since)
+          // pushed_to_john is stored as an integer flag (0/1). Comparing it to a
+          // boolean literal (`= TRUE`) throws `operator does not exist:
+          // integer = boolean` on Postgres — compare to 1 so it's valid on both
+          // SQLite and Postgres.
+          const r = await db.prepare(`SELECT COUNT(*) AS n FROM yana_lead_candidates WHERE pushed_to_john = 1 AND ${ltcol} >= ?`).get(since)
           out.primary_metrics.leads_sent_to_john = Number(r?.n || 0)
         } else {
           out.primary_metrics.leads_sent_to_john = 0
@@ -798,9 +802,20 @@ export async function aggregateJohn(db, range) {
       }
       if (aliasChecks) {
         const acols = new Set(await columnsFor(db, 'john_alias_checks'))
+        // The john_alias_checks table has no `alias_status` column — selecting
+        // it threw `column "alias_status" does not exist`. Derive a status from
+        // the columns that DO exist (alias_verified / alias_send_supported),
+        // selecting only present columns.
         if (acols.has('checked_at')) {
-          const last = await db.prepare('SELECT alias_status, checked_at FROM john_alias_checks ORDER BY checked_at DESC LIMIT 1').get()
-          out.primary_metrics.alias_status = last?.alias_status || 'unknown'
+          const selCols = ['checked_at']
+          if (acols.has('alias_status')) selCols.push('alias_status')
+          if (acols.has('alias_verified')) selCols.push('alias_verified')
+          if (acols.has('alias_send_supported')) selCols.push('alias_send_supported')
+          const last = await db.prepare(`SELECT ${selCols.join(', ')} FROM john_alias_checks ORDER BY checked_at DESC LIMIT 1`).get()
+          out.primary_metrics.alias_status = last?.alias_status
+            || (last?.alias_verified
+              ? (last?.alias_send_supported ? 'verified' : 'verified_no_send')
+              : (last ? 'unverified' : 'unknown'))
           out.primary_metrics.alias_checked_at = last?.checked_at || null
         }
       }

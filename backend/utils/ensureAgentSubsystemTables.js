@@ -55,6 +55,7 @@ const POSTGRES_FILES = [
   '0087_agent_control_center.sql',
   '0089_yana_lead_discovery.sql',
   '0095_agent_control_lock_owner_token.sql',
+  '0096_agent_telemetry_missing_tables.sql',
 ]
 
 const SQLITE_FILES = [
@@ -70,6 +71,7 @@ const SQLITE_FILES = [
   '091_agent_control_center.sql',
   '093_yana_lead_discovery.sql',
   '099_agent_control_lock_owner_token.sql',
+  '100_agent_telemetry_missing_tables.sql',
 ]
 
 // A representative ("witness") table for each migration file. When a file is
@@ -98,6 +100,8 @@ const REPRESENTATIVE_TABLES = {
   '091_agent_control_center.sql': 'agent_control_runs',
   '0089_yana_lead_discovery.sql': 'yana_lead_candidates',
   '093_yana_lead_discovery.sql': 'yana_lead_candidates',
+  '0096_agent_telemetry_missing_tables.sql': 'sam_findings',
+  '100_agent_telemetry_missing_tables.sql': 'sam_findings',
 }
 
 // Identifier whitelist so a witness name can never be interpolated unsafely.

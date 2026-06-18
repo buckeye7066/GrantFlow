@@ -1202,6 +1202,43 @@ CREATE TABLE IF NOT EXISTS sam_runs (
   created_by_user_id TEXT
 );
 
+-- Sam's audit findings (read by the Mission Control aggregators + health check).
+CREATE TABLE IF NOT EXISTS sam_findings (
+  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+  sam_run_id TEXT,
+  severity TEXT,
+  status TEXT NOT NULL DEFAULT 'open',
+  event_type TEXT,
+  title TEXT,
+  description TEXT,
+  file_path TEXT,
+  details_json TEXT NOT NULL DEFAULT '{}',
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Yana's downstream hand-off queues (qualified leads forwarded to John / Larry).
+CREATE TABLE IF NOT EXISTS yana_john_queue (
+  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+  lead_candidate_id TEXT,
+  organization_id TEXT,
+  profile_id TEXT,
+  status TEXT NOT NULL DEFAULT 'queued',
+  payload_json TEXT NOT NULL DEFAULT '{}',
+  processed_at DATETIME,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS yana_larry_queue (
+  id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+  lead_candidate_id TEXT,
+  organization_id TEXT,
+  profile_id TEXT,
+  status TEXT NOT NULL DEFAULT 'queued',
+  payload_json TEXT NOT NULL DEFAULT '{}',
+  processed_at DATETIME,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE IF NOT EXISTS robert_source_candidates (
   id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
   source_name TEXT NOT NULL,
@@ -3476,7 +3513,7 @@ CREATE TABLE IF NOT EXISTS agent_control_runs (
   )),
   status TEXT NOT NULL DEFAULT 'queued' CHECK(status IN (
     'queued','running','pausing','paused','stopping','stopped',
-    'completed','failed','cancelled','partial_stop','stop_failed'
+    'completed','completed_noop','failed','cancelled','partial_stop','stop_failed'
   )),
   started_by_user_id TEXT,
   started_by_email TEXT,

@@ -60,6 +60,9 @@ export const RUN_STATUSES = Object.freeze([
   'stopping',
   'stopped',
   'completed',
+  // Run executed cleanly but no agent persisted any real work — reported
+  // honestly instead of a hollow "completed".
+  'completed_noop',
   'failed',
   'cancelled',
   'partial_stop',

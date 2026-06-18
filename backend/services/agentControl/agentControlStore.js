@@ -141,6 +141,21 @@ export async function ensureSchema(db) {
   } catch {
     // column already exists; ignore.
   }
+
+  // Self-heal the agent_control_runs status CHECK so newly-added statuses
+  // (e.g. 'completed_noop' — the honest "ran but did no real work" outcome) are
+  // accepted on a prod DB created by the original migration. Driven from
+  // RUN_STATUSES so it can never drift. Postgres only — the CREATE TABLE IF NOT
+  // EXISTS above carries no CHECK, so SQLite test DBs accept any status.
+  if (isPostgres) {
+    const statusList = RUN_STATUSES.map((s) => `'${String(s).replace(/'/g, "''")}'`).join(', ')
+    try {
+      await db.exec(`ALTER TABLE agent_control_runs DROP CONSTRAINT IF EXISTS agent_control_runs_status_check`)
+      await db.exec(`ALTER TABLE agent_control_runs ADD CONSTRAINT agent_control_runs_status_check CHECK (status IN (${statusList}))`)
+    } catch (err) {
+      if (!/already exists|does not exist/i.test(String(err?.message || err))) throw err
+    }
+  }
 }
 
 export function _resetSchemaCache() {

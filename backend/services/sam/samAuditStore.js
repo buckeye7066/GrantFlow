@@ -141,6 +141,31 @@ export async function completeRun(db, runId, {
       error ? String(maskSecrets(error)).slice(0, 4_000) : null,
       runId,
     )
+
+  // Persist individual findings into sam_findings so Mission Control's Sam
+  // findings card + severity metrics reflect real audit output. Best-effort:
+  // the table is created by migration 0096/100 + boot self-heal, but older DBs
+  // may lack it.
+  try {
+    const nowFn = db?.dialect === 'postgres' ? 'now()' : 'CURRENT_TIMESTAMP'
+    for (const f of Array.isArray(findings) ? findings : []) {
+      if (!f) continue
+      await db
+        .prepare(`INSERT INTO sam_findings
+                    (sam_run_id, severity, status, event_type, title, description, file_path, details_json, created_at)
+                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ${nowFn})`)
+        .run(
+          runId,
+          f.severity || 'info',
+          f.status || 'open',
+          f.event_type || f.type || null,
+          f.title || f.message || f.id || 'finding',
+          f.description || f.detail || null,
+          f.file_path || f.file || null,
+          safeStringify(maskSecrets(f.details || f.data || {})),
+        )
+    }
+  } catch { /* sam_findings missing on older DBs — non-fatal */ }
 }
 
 export async function getRun(db, runId) {

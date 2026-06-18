@@ -69,6 +69,34 @@ import {
 } from './agentControlStore.js'
 import { getAdapter } from './agentAdapters/agentAdapterRegistry.js'
 import { makeSignal } from './agentAdapters/baseAgentAdapter.js'
+import { insertActivityEvent } from '../agentTelemetry/agentTelemetryStore.js'
+
+/**
+ * Count the real, persisted units of work an agent reported in its step
+ * summary. Drives (a) the unified telemetry event status (succeeded vs noop)
+ * and (b) whether the whole run actually did anything (honest completion).
+ */
+function countAgentWork(agentName, summary) {
+  const s = summary || {}
+  const num = (x) => { const n = Number(x); return Number.isFinite(n) ? n : 0 }
+  switch (String(agentName || '').toLowerCase()) {
+    case 'sam':
+      return num(s.findings_total) + (s.sam_run_id ? 1 : 0)
+    case 'robert':
+      return num(s.candidates_inserted) + num(s.recommendations_created)
+        + num(s.opportunities_ingested) + num(s.candidates_found)
+    case 'yana':
+      return num(s.candidates_qualified) + num(s.leads_pushed_to_john) + num(s.candidates_total)
+    case 'john':
+      return num(s.drafts_created) + num(s.drafts_blocked)
+    case 'hamilton':
+      return num(s.processed)
+    case 'anya':
+      return num(s.interactions) + num(s.actions)
+    default:
+      return 0
+  }
+}
 import {
   notifyAgentBlocked,
   notifyAgentFailed,
@@ -532,7 +560,7 @@ export async function executeRun({ db, runId } = {}) {
   const run = await getRun(db, runId)
   if (!run) return
 
-  const finalStates = ['completed', 'failed', 'cancelled', 'stopped', 'partial_stop', 'stop_failed']
+  const finalStates = ['completed', 'completed_noop', 'failed', 'cancelled', 'stopped', 'partial_stop', 'stop_failed']
   if (finalStates.includes(run.status)) {
     // Run is already terminal (e.g. a skipped/cancelled start). Guarantee no
     // lock lingers for it — releasing by runId is owner-safe because run IDs
@@ -565,6 +593,7 @@ export async function executeRun({ db, runId } = {}) {
   let pauseRequested = false
   let runError = null
   const stepResults = []
+  let totalWork = 0
 
   // Everything from here is wrapped so the lock is ALWAYS released on the way
   // out — happy path, agent failure, OR an unexpected exception in the loop /
@@ -700,6 +729,34 @@ export async function executeRun({ db, runId } = {}) {
 
     stepResults.push({ step: next, ok: result?.ok !== false, status, result })
 
+    // Emit a REAL unified telemetry event (agent_activity_events) so Mission
+    // Control's timeline + per-agent metrics reflect this actual execution
+    // instead of the synthetic fallback. The event's status is 'succeeded' only
+    // when the agent persisted real work; 'noop' when it ran clean but did
+    // nothing — that honesty also drives the run's final status below.
+    const work = countAgentWork(next.agent_name, result?.summary)
+    if (status === 'completed') totalWork += work
+    const activityStatus = status === 'completed'
+      ? (work > 0 ? 'succeeded' : 'noop')
+      : (status === 'failed' ? 'failed'
+        : status === 'blocked' ? 'blocked'
+        : status === 'stopped' ? 'stopped'
+        : status === 'skipped' ? 'skipped'
+        : status)
+    await insertActivityEvent(db, {
+      agent_name: next.agent_name,
+      event_type: `agent.${next.agent_name}.${stage}`,
+      status: activityStatus,
+      severity: status === 'failed' ? 'high' : status === 'blocked' ? 'medium' : 'info',
+      title: `${next.agent_name} ${next.step_name} ${activityStatus}`,
+      description: result?.error || null,
+      metric_key: 'work_units',
+      metric_value: work,
+      entity_type: 'agent_control_run',
+      entity_id: runId,
+      details_json: result?.summary || {},
+    }).catch(() => { /* telemetry is best-effort; never fail a run on it */ })
+
     // If an agent failed and stop_on_agent_failure is set, end the run.
     if (status === 'failed') {
       await notifyAgentFailed(db, run, next.agent_name, result?.error || 'unknown')
@@ -740,7 +797,7 @@ export async function executeRun({ db, runId } = {}) {
   // emergencyStopRun) already set the run to a terminal state, respect
   // that — we should not downgrade `cancelled` → `stopped` just because
   // the orchestrator loop noticed a graceful_stop request along the way.
-  const TERMINAL = new Set(['completed', 'failed', 'cancelled', 'stopped', 'partial_stop', 'stop_failed'])
+  const TERMINAL = new Set(['completed', 'completed_noop', 'failed', 'cancelled', 'stopped', 'partial_stop', 'stop_failed'])
   const currentRun = await getRun(db, runId)
   let finalStatus
   if (currentRun && TERMINAL.has(currentRun.status)) {
@@ -752,8 +809,13 @@ export async function executeRun({ db, runId } = {}) {
     finalStatus = 'stopped'
   } else if (runError) {
     finalStatus = 'failed'
-  } else {
+  } else if (totalWork > 0) {
     finalStatus = 'completed'
+  } else {
+    // Acceptance/verification: the agents executed without error but none
+    // persisted any real work. Report that honestly instead of a hollow
+    // "completed" so the dashboard never claims work that didn't happen.
+    finalStatus = 'completed_noop'
   }
 
   await setRunStatus(db, runId, finalStatus, {
@@ -802,7 +864,7 @@ export async function executeRun({ db, runId } = {}) {
     console.error('[agent-control] executeRun fatal:', runtimeErr?.message || runtimeErr)
     try {
       const cur = await getRun(db, runId)
-      const TERMINAL = new Set(['completed', 'failed', 'cancelled', 'stopped', 'partial_stop', 'stop_failed'])
+      const TERMINAL = new Set(['completed', 'completed_noop', 'failed', 'cancelled', 'stopped', 'partial_stop', 'stop_failed'])
       if (!cur || !TERMINAL.has(cur.status)) {
         await setRunStatus(db, runId, 'failed', {
           errorMessage: `Orchestrator crashed: ${runtimeErr?.message || runtimeErr}`,

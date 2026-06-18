@@ -382,6 +382,15 @@ export async function pushQualifiedToJohn(
     await db
       .prepare(`UPDATE yana_lead_candidates SET pushed_to_john = 1, pushed_at = ${nowFn}, updated_at = ${nowFn} WHERE id = ?`)
       .run(r.id)
+    // Record the hand-off in Yana's John queue so the Mission Control metric
+    // (leads_sent_to_john) and system-health reflect real forwarded leads.
+    // Best-effort: yana_john_queue is created by migration 0096/100 + boot
+    // self-heal, but older DBs may lack it.
+    try {
+      await db
+        .prepare(`INSERT INTO yana_john_queue (lead_candidate_id, status, created_at) VALUES (?, 'queued', ${nowFn})`)
+        .run(r.id)
+    } catch { /* queue table missing on older DBs — non-fatal */ }
   }
 
   const pushed = (rows || []).length

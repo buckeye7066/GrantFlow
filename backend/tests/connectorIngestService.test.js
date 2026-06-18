@@ -46,7 +46,9 @@ describe('buildConnectorQueryPlan', () => {
   it('maps a nonprofit to 501c3 eligibility across Grants.gov and Simpler', () => {
     const plan = buildConnectorQueryPlan({ profile: { primary_type: 'nonprofit' } })
     expect(plan.ggEligibility).toContain('12') // 501c3 nonprofits
-    expect(plan.simplerApplicant).toContain('nonprofits_501c3')
+    // Official Simpler Grants applicant_type enum (corrected in 710e0721); the
+    // bare `nonprofits_501c3` value never existed in the canonical enum.
+    expect(plan.simplerApplicant).toContain('nonprofits_non_higher_education_with_501c3')
     expect(plan.wantsResearch).toBe(true)
     expect(plan.federalApplicant).toBe(true) // orgs apply to federal NOFOs
   })
