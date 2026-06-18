@@ -24,10 +24,53 @@ import {
   describeFafsaStatus, normalizeFafsaStatus, setFafsaStage,
   buildVerificationChecklist, setVerificationDoc,
 } from '../services/college/fafsaStatus.js'
+import { recordDismissal as recordPipelineDismissal, ensurePipelineDismissalsSchema } from '../services/pipelineDismissals.js'
 import { createLogger } from '../utils/logger.js'
 
 const log = createLogger('route:committed-college')
 const router = express.Router()
+
+const grantIdOf = (s) => s?.id ?? s?.grant_id ?? null
+
+/**
+ * Hard-delete the deselected funding items from this profile's pipeline and
+ * record sticky tombstones so the matcher / Process All won't resurrect them.
+ * Mirrors the cascade in DELETE /api/grants/:id. Best-effort per item — one
+ * failure never aborts the rest. Returns the count actually removed.
+ */
+async function deleteDeselectedFromPipeline(db, { profileId, deselected, userId }) {
+  let removed = 0
+  try { await ensurePipelineDismissalsSchema(db) } catch { /* best-effort */ }
+  for (const item of Array.isArray(deselected) ? deselected : []) {
+    const grantId = grantIdOf(item)
+    if (!grantId) continue
+    try {
+      const grantRow = await db
+        .prepare('SELECT * FROM grants WHERE id = ? AND profile_id = ? LIMIT 1')
+        .get(String(grantId), String(profileId))
+      if (!grantRow) continue
+      await db.prepare('DELETE FROM milestones WHERE grant_id = ?').run(String(grantId))
+      await db.prepare('DELETE FROM expenses WHERE grant_id = ?').run(String(grantId))
+      await db.prepare('DELETE FROM application_drafts WHERE grant_id = ?').run(String(grantId))
+      await db.prepare('UPDATE documents SET grant_id = NULL WHERE grant_id = ?').run(String(grantId))
+      await db.prepare('DELETE FROM grants WHERE id = ? AND profile_id = ?').run(String(grantId), String(profileId))
+      removed += 1
+      try {
+        await recordPipelineDismissal(db, {
+          profileId,
+          grantRow,
+          userId,
+          reason: 'deselected_from_committed_college_merge',
+        })
+      } catch (tombErr) {
+        log.warn('merge deselect tombstone failed', { grantId, error: tombErr?.message })
+      }
+    } catch (err) {
+      log.warn('merge deselect delete failed', { grantId, error: err?.message })
+    }
+  }
+  return removed
+}
 
 async function userMayAccessProfile(req, profileId) {
   const user = req.user || { role: 'guest' }
@@ -287,7 +330,18 @@ router.post('/profiles/:profileId/committed-college/merge-funding', async (req, 
       }
     }
 
-    return res.json({ ok: true, plan, handoff })
+    // Optionally remove the items the user did NOT select from the pipeline.
+    let removed = 0
+    const deselectedFunding = Array.isArray(req.body?.deselectedFunding) ? req.body.deselectedFunding : []
+    if (authorize && deselectedFunding.length) {
+      removed = await deleteDeselectedFromPipeline(req.db, {
+        profileId,
+        deselected: deselectedFunding,
+        userId: getAuthUserId(user),
+      })
+    }
+
+    return res.json({ ok: true, plan, handoff, removed })
   } catch (err) {
     log.error('POST committed-college/merge-funding failed', { error: err?.message })
     return res.status(500).json({ ok: false, error: 'committed_college_merge_failed' })

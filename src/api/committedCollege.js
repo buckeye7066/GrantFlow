@@ -34,11 +34,14 @@ export async function uncommitCollege(profileId, collegeId) {
  * the compliance-annotated plan (preview); authorize=true also hands the
  * autopilot/packet (non-federal) items to Hamilton.
  */
-export async function mergeCommittedCollegeFunding(profileId, { selectedFunding = [], authorize = false } = {}) {
+export async function mergeCommittedCollegeFunding(
+  profileId,
+  { selectedFunding = [], deselectedFunding = [], authorize = false } = {},
+) {
   assertRealProfileId(profileId, 'mergeCommittedCollegeFunding')
   return apiFetch(`/api/profiles/${profileId}/committed-college/merge-funding`, {
     method: 'POST',
-    body: JSON.stringify({ selectedFunding, authorize }),
+    body: JSON.stringify({ selectedFunding, deselectedFunding, authorize }),
   })
 }
 

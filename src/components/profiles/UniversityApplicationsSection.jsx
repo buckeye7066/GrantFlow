@@ -739,6 +739,17 @@ export default function UniversityApplicationsSection({
     [localApplications],
   )
 
+  // Once a school is committed, the other (non-committed) schools should drop
+  // out of view by default — the student chose MTSU, so UCF / Alabama / etc.
+  // shouldn't keep cluttering the list. We don't delete them (uncommit must be
+  // able to bring them back), we just collapse them behind a toggle.
+  const [showOtherApplications, setShowOtherApplications] = useState(false)
+  const hasCommitted = committedApplications.length > 0
+  const otherApplications = useMemo(
+    () => localApplications.filter((app) => !isCommittedStatus(app.status)),
+    [localApplications],
+  )
+
   // Commit one school + (optionally) deferred-mark every other still-active
   // application. We do NOT auto-overwrite explicit decisions like 'denied'
   // or 'accepted' at other schools — the user can still browse those for
@@ -858,8 +869,8 @@ export default function UniversityApplicationsSection({
               </span>{" "}
               School-specific funding cards (financial aid, housing, off-campus, institutional scholarships)
               are now scoped to {committedApplications.length === 1 ? "this school" : "these schools"} only.
-              Other applications stay on this profile for reference but no longer drive the funding feed.
-              Use <span className="font-medium">Uncommit</span> on the school card to undo.
+              Other applications are hidden (use “Show other applications” below to review them) and no longer
+              drive the funding feed. Use <span className="font-medium">Uncommit</span> on the school card to undo.
             </AlertDescription>
           </Alert>
         ) : null}
@@ -873,7 +884,24 @@ export default function UniversityApplicationsSection({
           </Alert>
         ) : (
           <div className="space-y-6">
-            {localApplications
+            {/* When a school is committed, hide the other schools by default —
+                the student has chosen, so the rest shouldn't linger in view.
+                A toggle reveals them (they're deferred, not deleted, so Uncommit
+                still works). */}
+            {hasCommitted && otherApplications.length > 0 ? (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="text-slate-600"
+                onClick={() => setShowOtherApplications((v) => !v)}
+              >
+                {showOtherApplications
+                  ? `Hide ${otherApplications.length} other application${otherApplications.length === 1 ? "" : "s"}`
+                  : `Show ${otherApplications.length} other application${otherApplications.length === 1 ? "" : "s"}`}
+              </Button>
+            ) : null}
+            {(hasCommitted && !showOtherApplications ? committedApplications : localApplications)
               .slice()
               .sort((a, b) => {
                 // Pin committed schools to the top so the chosen school is

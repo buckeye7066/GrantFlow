@@ -33,12 +33,14 @@ export default function CollegeFundingMergeModal({ open, onOpenChange, profileId
   const selectableItems = useMemo(() => matchedFunding.filter((f) => idOf(f)), [matchedFunding])
   const [selectedIds, setSelectedIds] = useState(() => new Set(selectableItems.map(idOf)))
   const [plan, setPlan] = useState(null)
+  const [removeDeselected, setRemoveDeselected] = useState(false)
 
   // Reset selection whenever the modal re-opens with new funding.
   React.useEffect(() => {
     if (open) {
       setSelectedIds(new Set(selectableItems.map(idOf)))
       setPlan(null)
+      setRemoveDeselected(false)
     }
   }, [open, selectableItems])
 
@@ -46,14 +48,28 @@ export default function CollegeFundingMergeModal({ open, onOpenChange, profileId
     () => selectableItems.filter((f) => selectedIds.has(idOf(f))),
     [selectableItems, selectedIds],
   )
+  const deselectedFunding = useMemo(
+    () => selectableItems.filter((f) => !selectedIds.has(idOf(f))),
+    [selectableItems, selectedIds],
+  )
 
   const merge = useMutation({
-    mutationFn: ({ authorize }) => mergeCommittedCollegeFunding(profileId, { selectedFunding, authorize }),
+    mutationFn: ({ authorize }) => mergeCommittedCollegeFunding(profileId, {
+      selectedFunding,
+      deselectedFunding: authorize && removeDeselected ? deselectedFunding : [],
+      authorize,
+    }),
     onSuccess: (res, vars) => {
       setPlan(res?.plan || null)
       if (vars.authorize) {
         const n = res?.plan?.automatable_ids?.length || 0
-        toast({ title: 'Handed to Hamilton', description: `${n} item(s) sent to Hamilton; review status in the workspace.` })
+        const removed = res?.removed || 0
+        const parts = [
+          n > 0 ? `${n} item(s) sent to Hamilton` : 'No portal/packet items to automate yet',
+        ]
+        if (removed > 0) parts.push(`${removed} unselected item(s) removed from the pipeline`)
+        if (res?.plan?.requires_user_action) parts.push('some items need your action and won’t be auto-submitted')
+        toast({ title: 'Funding handed to Hamilton', description: `${parts.join('; ')}.` })
         queryClient.invalidateQueries({ queryKey: ['committed-college-workspace', profileId] })
         queryClient.invalidateQueries({ queryKey: ['profile', profileId] })
         onOpenChange(false)
@@ -121,6 +137,17 @@ export default function CollegeFundingMergeModal({ open, onOpenChange, profileId
           </Alert>
         ) : null}
 
+        {deselectedFunding.length > 0 ? (
+          <label className="flex items-start gap-3 rounded-md border border-slate-200 p-3 text-sm cursor-pointer">
+            <Checkbox checked={removeDeselected} onCheckedChange={(v) => setRemoveDeselected(v === true)} className="mt-0.5" />
+            <span className="text-slate-700">
+              Also remove the <span className="font-medium">{deselectedFunding.length}</span> unselected item(s)
+              from this profile’s pipeline when I authorize. They’re tombstoned so the matcher won’t re-add them
+              (you can add them back later).
+            </span>
+          </label>
+        ) : null}
+
         <DialogFooter className="gap-2">
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={merge.isPending}>Cancel</Button>
           <Button
@@ -130,9 +157,14 @@ export default function CollegeFundingMergeModal({ open, onOpenChange, profileId
           >
             {merge.isPending && !merge.variables?.authorize ? 'Previewing…' : 'Preview plan'}
           </Button>
+          {/* Enabled whenever at least one item is selected. The handoff is
+              always safe — federal/FAFSA and manual items are never
+              auto-submitted (the plan classifies them as you-confirm/manual);
+              Hamilton only drives portal/packet items. Don't gate on automatable
+              count, or an all-manual list (the common case) can never proceed. */}
           <Button
             onClick={() => merge.mutate({ authorize: true })}
-            disabled={merge.isPending || !plan || (plan.automatable_ids?.length || 0) === 0}
+            disabled={merge.isPending || selectedFunding.length === 0}
           >
             {merge.isPending && merge.variables?.authorize ? 'Handing off…' : 'Authorize & hand to Hamilton'}
           </Button>
