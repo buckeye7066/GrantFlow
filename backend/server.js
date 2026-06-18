@@ -2457,39 +2457,29 @@ app.get('/api/pipeline/stats', async (req, res) => {
       GROUP BY status
     `).all();
 
-    const pipelineKeys = {
-      discovered: 0,
-      interested: 0,
-      drafting: 0,
-      app_prep: 0,
-      submission_ready: 0,
-      submitted: 0,
-      awarded: 0,
-      rejected: 0
-    };
-
-    const statusMap = {
-      discovered: 'discovered',
-      interested: 'interested',
-      drafting: 'drafting',
-      revision: 'drafting',
-      app_prep: 'app_prep',
-      submission_ready: 'submission_ready',
-      submitted: 'submitted',
-      under_review: 'submitted',
-      awarded: 'awarded',
-      rejected: 'rejected',
-      closed: 'rejected',
-      archived: 'rejected'
-    };
-
+    // Bucket every grant into the canonical 11 pipeline stages via the single
+    // source of truth (shared/pipelineStages.js). This fixes the previous
+    // hand-rolled map that (a) mislabeled `archived`/`closed` grants as
+    // `rejected` and (b) had a dead `submission_ready` bucket that nothing
+    // mapped into. canonicalStage() resolves every legacy alias.
+    const { PIPELINE_STAGES, canonicalStage } = await import('../shared/pipelineStages.js');
+    const canonical = Object.fromEntries(PIPELINE_STAGES.map((s) => [s, 0]));
     rows.forEach((row) => {
-      const normalized = statusMap[row.status] || null;
-      if (!normalized || pipelineKeys[normalized] === undefined) return;
-      pipelineKeys[normalized] += Number(row.count ?? 0);
+      const stage = canonicalStage(row.status);
+      if (stage && canonical[stage] !== undefined) {
+        canonical[stage] += Number(row.count ?? 0);
+      }
     });
 
-    res.json(pipelineKeys);
+    // Backward-compatible aliases for existing dashboard cards (legacy keys map
+    // to the right canonical counts — `rejected` now means declined ONLY, so
+    // archived grants are no longer miscounted as rejected).
+    res.json({
+      ...canonical,
+      app_prep: canonical.gathering_documents,
+      submission_ready: canonical.ready_to_submit,
+      rejected: canonical.declined,
+    });
   } catch (error) {
     console.error('Pipeline stats error:', error);
     res.status(500).json({ error: 'Internal server error' });
