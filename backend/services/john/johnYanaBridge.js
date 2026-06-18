@@ -48,10 +48,19 @@ let registeredSource = NULL_LEAD_SOURCE
 
 /**
  * Allow the server bootstrap (or tests) to install a real lead source.
+ *
+ * The source owns daily-cap enforcement: John does NOT re-enforce caps, he
+ * trusts whatever the registered source returns. Yana applies the
+ * ≤50-per-rolling-24h cap in pushQualifiedToJohn (charter §4) before a lead is
+ * ever visible here. Any future source MUST do the same. The contract is both
+ * methods the bridge calls — listQualifiedLeads() and markQueuedForReview().
  */
 export function registerLeadSource(src) {
   if (!src || typeof src.listQualifiedLeads !== 'function') {
     throw new Error('registerLeadSource: src must implement listQualifiedLeads()')
+  }
+  if (typeof src.markQueuedForReview !== 'function') {
+    throw new Error('registerLeadSource: src must implement markQueuedForReview()')
   }
   registeredSource = src
 }

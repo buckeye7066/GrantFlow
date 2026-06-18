@@ -34,6 +34,7 @@ import {
   findSafeFixById,
 } from './samRegistry.js'
 import { maskSecrets } from './samAuditStore.js'
+import { getSamPolicy, isSafeFixAllowed } from './samPolicy.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const REPO_ROOT = path.resolve(__dirname, '..', '..', '..')
@@ -88,6 +89,13 @@ export async function applySafeFix({ fixId, context = {}, params = {} } = {}) {
   }
   if (context.mode !== 'repair-safe') {
     return refusal(`Sam refuses ${fixId}: mode is ${context.mode || 'unset'}, not repair-safe.`)
+  }
+  // Charter §6: only `safe` fixes are auto-applicable, and only when
+  // auto_fix_safe policy is on. Anything riskier must be branched/PR'd.
+  if (!isSafeFixAllowed(fix.risk_level, getSamPolicy())) {
+    return refusal(
+      `Sam refuses ${fixId}: policy disallows auto-applying risk_level='${fix.risk_level || 'unknown'}' (auto_fix_safe).`,
+    )
   }
 
   switch (fixId) {
@@ -279,59 +287,96 @@ async function regenerateReadinessLog({ check_id = 'unknown', content = '' } = {
 }
 
 // ---------------------------------------------------------------------------
-// Safe fix: eslint --fix on a single file
+// Safe fix: eslint --fix on a single file (with independent verification)
 // ---------------------------------------------------------------------------
-async function eslintFixFile({ file = '' } = {}) {
+
+/** Run eslint once on a single file. Resolves { status, stdout, stderr }. */
+function runEslintCli(file, { fix = false } = {}) {
+  const args = fix ? ['eslint', '--fix', file] : ['eslint', file]
+  return new Promise((resolve) => {
+    let stdout = ''
+    let stderr = ''
+    const child = spawn('npx', args, { cwd: REPO_ROOT, shell: false })
+    const timer = setTimeout(() => {
+      try { child.kill('SIGTERM') } catch { /* ignore */ }
+      resolve({ status: -1, stdout, stderr: `${stderr}\n[sam] eslint timed out after 60s`, timed_out: true })
+    }, 60_000)
+    child.stdout?.on('data', (b) => { stdout += b.toString() })
+    child.stderr?.on('data', (b) => { stderr += b.toString() })
+    child.on('exit', (status) => { clearTimeout(timer); resolve({ status: status ?? 0, stdout, stderr }) })
+    child.on('error', (err) => { clearTimeout(timer); resolve({ status: -1, stdout, stderr: String(err?.message || err), error: true }) })
+  })
+}
+
+/**
+ * Pure decision for the eslint safe fix. `verifyStatus` comes from an
+ * INDEPENDENT eslint pass (no --fix) — Sam never trusts the mutating command's
+ * own exit code (charter §6: never claim an untested fix worked).
+ *   verified   → the independent pass reported zero problems (exit 0)
+ *   applied    → verified AND the file content actually changed
+ *   reverted   → unverified AND we mutated the file (caller restores it)
+ */
+export function decideEslintOutcome({ verifyStatus, changed } = {}) {
+  const verified = verifyStatus === 0
+  if (!verified) return { ok: false, verified: false, applied: false, reverted: changed === true }
+  return { ok: true, verified: true, applied: changed === true, reverted: false }
+}
+
+async function eslintFixFile({ file = '', _runEslint = runEslintCli } = {}) {
   if (!file) return refusal('eslintFixFile: file is required')
   if (!isPathSafeForFix(file)) {
     return refusal(`eslintFixFile: ${file} is outside the safe-fix allowlist.`)
   }
   // We deliberately DO NOT add this command to the production-gate whitelist;
   // it's a side-channel guarded by isPathSafeForFix instead.
-  const args = ['eslint', '--fix', file]
-  return await new Promise((resolve) => {
-    let stdout = ''
-    let stderr = ''
-    const child = spawn('npx', args, { cwd: REPO_ROOT, shell: false })
-    const timer = setTimeout(() => {
-      try { child.kill('SIGTERM') } catch { /* ignore */ }
-      resolve({
-        ok: false,
-        fix_id: 'lint.eslint-fix-file',
-        applied: false,
-        message: 'eslint --fix timed out after 60s',
-        evidence: { file, stdout: maskSecrets(stdout.slice(-2000)) },
-      })
-    }, 60_000)
-    child.stdout?.on('data', (b) => { stdout += b.toString() })
-    child.stderr?.on('data', (b) => { stderr += b.toString() })
-    child.on('exit', (status) => {
-      clearTimeout(timer)
-      const ok = (status ?? 0) === 0
-      resolve({
-        ok,
-        fix_id: 'lint.eslint-fix-file',
-        applied: ok,
-        message: ok ? `eslint --fix completed on ${file}` : `eslint --fix exited ${status}`,
-        evidence: {
-          file,
-          status,
-          stdout: maskSecrets(stdout.slice(-4000)),
-          stderr: maskSecrets(stderr.slice(-4000)),
-        },
-      })
-    })
-    child.on('error', (err) => {
-      clearTimeout(timer)
-      resolve({
-        ok: false,
-        fix_id: 'lint.eslint-fix-file',
-        applied: false,
-        message: maskSecrets(String(err?.message || err)),
-        evidence: { file },
-      })
-    })
-  })
+  const abs = path.resolve(REPO_ROOT, file)
+  let original
+  try {
+    original = await fs.readFile(abs, 'utf8')
+  } catch (err) {
+    return { ok: false, fix_id: 'lint.eslint-fix-file', applied: false, message: maskSecrets(`cannot read ${file}: ${err?.message || err}`), evidence: { file } }
+  }
+
+  const fixRes = await _runEslint(file, { fix: true })
+  let after = original
+  try { after = await fs.readFile(abs, 'utf8') } catch { /* keep original */ }
+  const changed = after !== original
+
+  // Independent verification pass — this, not the --fix exit code, gates success.
+  const verifyRes = await _runEslint(file, { fix: false })
+  const outcome = decideEslintOutcome({ verifyStatus: verifyRes.status, changed })
+
+  if (!outcome.verified) {
+    // Never leave an unverified mutation in the tree: restore the original.
+    if (changed) { try { await fs.writeFile(abs, original, 'utf8') } catch { /* ignore */ } }
+    return {
+      ok: false,
+      fix_id: 'lint.eslint-fix-file',
+      applied: false,
+      reverted: changed,
+      message: changed
+        ? `eslint --fix did not verify clean on ${file}; reverted`
+        : `eslint reports unresolved problems in ${file}`,
+      evidence: {
+        file,
+        fix_status: fixRes.status,
+        verify_status: verifyRes.status,
+        stdout: maskSecrets(String(verifyRes.stdout || '').slice(-4000)),
+        stderr: maskSecrets(String(verifyRes.stderr || '').slice(-2000)),
+      },
+    }
+  }
+
+  return {
+    ok: true,
+    fix_id: 'lint.eslint-fix-file',
+    applied: outcome.applied,
+    verified: true,
+    message: outcome.applied
+      ? `eslint --fix applied and verified clean on ${file}`
+      : `${file} already lint-clean (no changes)`,
+    evidence: { file, fix_status: fixRes.status, verify_status: verifyRes.status },
+  }
 }
 
 // ---------------------------------------------------------------------------
