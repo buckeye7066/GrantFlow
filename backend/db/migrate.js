@@ -294,13 +294,25 @@ export async function runPendingMigrationsOnBoot({ logger = console } = {}) {
       await applyMigration(filename)
       ran += 1
     } catch (error) {
+      // SQLite: a recognised "already applied" DDL error means the legacy
+      // schema-apply path already materialised it — stamp it and move on.
       if (db.dialect !== 'postgres' && isIdempotentAlreadyAppliedError(error)) {
         await recordAsApplied(filename, 'idempotent DDL')
         ran += 1
         continue
       }
-      logger.error?.(`[migrate:boot] Failed on ${filename}: ${error?.message || error}`)
-      throw error
+      // Resilient boot (Postgres + SQLite): a single failing migration must
+      // NOT abort the whole chain. Historically the strict `throw` here meant
+      // the first migration that errored against an already-populated prod DB
+      // (e.g. a CHECK constraint or a non-IF-NOT-EXISTS object) blocked every
+      // later additive migration — that is exactly how funding_opportunities
+      // ended up missing `reality_status`, breaking all crawler/connector
+      // writes. We log and continue so subsequent idempotent migrations still
+      // apply; the failed file is left UNSTAMPED (no false "applied" record)
+      // and retried next boot, and the `schema check: DRIFT` line below makes
+      // any remaining gap visible. The CLI runner (`npm run migrate`, main())
+      // stays strict so CI still fails loudly on a bad migration.
+      logger.error?.(`[migrate:boot] Failed on ${filename} (continuing): ${error?.message || error}`)
     }
   }
 

@@ -800,6 +800,22 @@ if (!app.locals.db_startup_error) {
     )
   }
 
+  // Funding Library self-heal: guarantee the funding_opportunities reality-gate
+  // columns exist even if the strict migration chain stalled before 0073.
+  // Without these, every crawler/connector/Robert write fails with
+  // `column "reality_status" ... does not exist` and the library can't grow.
+  try {
+    const { ensureFundingOpportunitySchema } = await import(
+      './utils/ensureFundingOpportunitySchema.js'
+    )
+    await ensureFundingOpportunitySchema(db, { logger: console })
+  } catch (fundingSelfHealErr) {
+    console.warn(
+      '[funding-schema] startup self-heal threw (non-fatal):',
+      fundingSelfHealErr?.message || fundingSelfHealErr,
+    )
+  }
+
   // Register the Yana-backed lead source so John drafts outreach from Yana's
   // qualified client-discovery leads (johnYanaBridge). Yana = Client Discoverer.
   try {

@@ -30,9 +30,31 @@ let _autoSeedInterval = null
  */
 export function startRobertScheduler({ db, deps = {}, logger = console } = {}) {
   const cfg = getRobertConfig()
-  if (!cfg.enabled) return { started: false, reason: 'robert_disabled' }
-  if (!cfg.runOnSchedule && !cfg.runOnStartup && !cfg.autoSeedOnSchedule) {
-    return { started: false, reason: 'no_runtime_triggers_enabled' }
+
+  // Funding-trace weak-coverage sweep runs automatically and INDEPENDENTLY of
+  // the master ROBERT_ENABLED switch: it only reads vetted public APIs
+  // (USASpending / ProPublica) and stages PENDING source candidates for admin
+  // review — it never crawls the open web and never publishes. So it self-
+  // starts here even when the broader Robert crawl is disabled. Opt out with
+  // ROBERT_AUTOSEED_ON_SCHEDULE=false.
+  let autoSeedStarted = false
+  if (cfg.autoSeedOnSchedule) {
+    const intervalMs = parseSchedule(cfg.autoSeedSchedule)
+    if (_autoSeedInterval) clearInterval(_autoSeedInterval)
+    _autoSeedInterval = setInterval(() => kickOffAutoSeed({ db, cfg, logger }), intervalMs)
+    if (typeof _autoSeedInterval.unref === 'function') _autoSeedInterval.unref()
+    // Kick off an initial sweep a few minutes after boot so it doesn't wait a
+    // full interval — delayed so the schema self-heal + warm-up have settled.
+    const initial = setTimeout(() => kickOffAutoSeed({ db, cfg, logger }), 5 * 60 * 1000)
+    if (typeof initial.unref === 'function') initial.unref()
+    autoSeedStarted = true
+  }
+
+  if (!cfg.enabled) {
+    return { started: autoSeedStarted, reason: autoSeedStarted ? 'autoseed_only' : 'robert_disabled' }
+  }
+  if (!cfg.runOnSchedule && !cfg.runOnStartup) {
+    return { started: autoSeedStarted, reason: autoSeedStarted ? 'autoseed_only' : 'no_runtime_triggers_enabled' }
   }
 
   if (cfg.runOnStartup) {
@@ -43,12 +65,6 @@ export function startRobertScheduler({ db, deps = {}, logger = console } = {}) {
     if (_interval) clearInterval(_interval)
     _interval = setInterval(() => kickOff({ db, deps, logger, trigger: ROBERT_TRIGGERS.SCHEDULED }), intervalMs)
     if (typeof _interval.unref === 'function') _interval.unref()
-  }
-  if (cfg.autoSeedOnSchedule) {
-    const intervalMs = parseSchedule(cfg.autoSeedSchedule)
-    if (_autoSeedInterval) clearInterval(_autoSeedInterval)
-    _autoSeedInterval = setInterval(() => kickOffAutoSeed({ db, cfg, logger }), intervalMs)
-    if (typeof _autoSeedInterval.unref === 'function') _autoSeedInterval.unref()
   }
   return { started: true }
 }

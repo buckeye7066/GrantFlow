@@ -48,7 +48,11 @@ export function getRobertConfig() {
     schedule: readEnvString('ROBERT_SCHEDULE', '0 * * * *'),
     // Funding-trace auto-seed: periodically trace funded peers of the
     // weakest-coverage profiles and stage their funders as candidates.
-    autoSeedOnSchedule: readEnvBool('ROBERT_AUTOSEED_ON_SCHEDULE', false),
+    // ON by default and independent of ROBERT_ENABLED — it only reads vetted
+    // public APIs (USASpending/ProPublica) and stages PENDING candidates for
+    // review, never crawling the open web or publishing. Opt out with
+    // ROBERT_AUTOSEED_ON_SCHEDULE=false.
+    autoSeedOnSchedule: readEnvBool('ROBERT_AUTOSEED_ON_SCHEDULE', true),
     autoSeedSchedule: readEnvString('ROBERT_AUTOSEED_SCHEDULE', '0 3 * * *'),
     autoSeedMaxProfiles: readEnvInt('ROBERT_AUTOSEED_MAX_PROFILES', 3),
     autoSeedMaxEntitiesPerProfile: readEnvInt('ROBERT_AUTOSEED_MAX_ENTITIES', 5),
