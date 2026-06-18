@@ -147,7 +147,7 @@ export default function AdminFundingTrace() {
                         </span>
                       ) : null}
                       {source.latest_year && <Badge variant="outline" className="text-xs">Latest {source.latest_year}</Badge>}
-                      {source.sub_agency && <span className="text-xs text-slate-500 truncate">{source.sub_agency}</span>}
+                      {source.parent_agency && <span className="text-xs text-slate-500 truncate">part of {source.parent_agency}</span>}
                       {source.rationale && <span className="text-xs text-slate-500 italic truncate max-w-md">{source.rationale}</span>}
                     </div>
                   </div>

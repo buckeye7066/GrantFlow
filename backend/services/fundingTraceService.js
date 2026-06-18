@@ -94,24 +94,33 @@ function yearOf(dateStr) {
  *
  * @param {Array<object>} awards  raw USASpending rows (mixed grants + contracts)
  * @returns {Array<object>} consolidated sources, each:
- *   { key, name, sub_agency, type, total_amount, award_count, latest_year,
+ *   { key, name, parent_agency, type, total_amount, award_count, latest_year,
  *     sample_award_id, sample_url }
  *
- * Default implementation groups by Awarding Agency. See the note after this
- * function for the trade-offs an admin might want to tune.
+ * Groups by Awarding Sub Agency (the specific funding office, e.g. "Navy",
+ * "National Cancer Institute") — falling back to the parent agency when a row
+ * has no sub-agency. This is more actionable for outreach than rolling
+ * everything up to the department level. See the note after this function for
+ * the trade-offs an admin might want to tune.
  */
 export function consolidateFundingSources(awards) {
-  const byAgency = new Map()
+  const bySubAgency = new Map()
 
   for (const row of awards) {
     const agency = (row['Awarding Agency'] || '').trim()
-    if (!agency) continue
+    const subAgency = (row['Awarding Sub Agency'] || '').trim()
+    // The funder is the sub-agency when present; otherwise the department itself.
+    const funder = subAgency || agency
+    if (!funder) continue
 
     const amount = parseAmount(row['Award Amount'])
     const year = yearOf(row['Start Date'])
     const awardId = row['Award ID'] || null
+    // Key on parent + funder so identically-named offices under different
+    // departments don't collide.
+    const groupKey = `${agency}::${funder}`
 
-    const existing = byAgency.get(agency)
+    const existing = bySubAgency.get(groupKey)
     if (existing) {
       existing.total_amount += amount
       existing.award_count += 1
@@ -120,13 +129,13 @@ export function consolidateFundingSources(awards) {
       if (amount > existing._max_amount) {
         existing._max_amount = amount
         existing.sample_award_id = awardId
-        existing.sub_agency = (row['Awarding Sub Agency'] || existing.sub_agency || '').trim()
       }
     } else {
-      byAgency.set(agency, {
-        key: `usaspending:${agency}`,
-        name: agency,
-        sub_agency: (row['Awarding Sub Agency'] || '').trim(),
+      bySubAgency.set(groupKey, {
+        key: `usaspending:${groupKey}`,
+        name: funder,
+        // Parent department for context; null when the funder IS the department.
+        parent_agency: subAgency && agency !== subAgency ? agency : null,
         type: 'federal_agency',
         total_amount: amount,
         award_count: 1,
@@ -137,7 +146,7 @@ export function consolidateFundingSources(awards) {
     }
   }
 
-  return Array.from(byAgency.values())
+  return Array.from(bySubAgency.values())
     .map(({ _max_amount, ...src }) => ({
       ...src,
       sample_url: src.sample_award_id
@@ -275,7 +284,7 @@ export function traceSourceToOpportunity(source, entity) {
     source.award_count ? `${source.award_count} federal award(s) traced` : null,
     source.total_amount ? `Total traced: $${Number(source.total_amount).toLocaleString()}` : null,
     source.latest_year ? `Most recent: ${source.latest_year}` : null,
-    source.sub_agency ? `Sub-agency: ${source.sub_agency}` : null,
+    source.parent_agency ? `Part of: ${source.parent_agency}` : null,
     source.rationale ? `Note: ${source.rationale}` : null,
   ].filter(Boolean)
 
