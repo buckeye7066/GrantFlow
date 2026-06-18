@@ -1,4 +1,5 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it } from 'node:test'
+import assert from 'node:assert/strict'
 import {
   classifyTracedSource,
   traceFundingIntoCandidates,
@@ -10,7 +11,7 @@ const FAKE_DB = {} // never touched — all deps are injected
 
 describe('classifyTracedSource', () => {
   it('maps federal agencies to high-trust federal portals', () => {
-    expect(classifyTracedSource({ type: 'federal_agency' })).toEqual({
+    assert.deepEqual(classifyTracedSource({ type: 'federal_agency' }), {
       source_type: 'federal_portal',
       source_scope: 'federal',
       trust: 85,
@@ -19,14 +20,14 @@ describe('classifyTracedSource', () => {
 
   it('maps corporate / VC / parent-company channels to corporate_giving', () => {
     for (const type of ['corporate_csr', 'parent_company', 'venture_capital']) {
-      expect(classifyTracedSource({ type }).source_type).toBe('corporate_giving')
+      assert.equal(classifyTracedSource({ type }).source_type, 'corporate_giving')
     }
   })
 
   it('falls back to a low-trust directory for unknown types', () => {
     const c = classifyTracedSource({ type: 'mystery' })
-    expect(c.source_type).toBe('nonprofit_directory')
-    expect(c.trust).toBeLessThan(85)
+    assert.equal(c.source_type, 'nonprofit_directory')
+    assert.ok(c.trust < 85)
   })
 })
 
@@ -48,11 +49,11 @@ describe('traceFundingIntoCandidates (staging path)', () => {
     const upsert = async (_db, c) => { staged.push(c); return { id: `id${staged.length}`, inserted: true } }
     const res = await traceFundingIntoCandidates(FAKE_DB, { entity: 'Acme Corp', upsert, traceFn: traceStub })
 
-    expect(res.traced).toBe(4)
-    expect(res.addable).toBe(2)          // Navy + Acme Foundation (No-URL excluded; Below-Floor not addable)
-    expect(res.upserted).toBe(2)
-    expect(res.skipped_no_url).toBe(1)   // "No URL Funder"
-    expect(staged.map((c) => c.source_name)).toEqual([
+    assert.equal(res.traced, 4)
+    assert.equal(res.addable, 2)          // Navy + Acme Foundation (No-URL excluded; Below-Floor not addable)
+    assert.equal(res.upserted, 2)
+    assert.equal(res.skipped_no_url, 1)   // "No URL Funder"
+    assert.deepEqual(staged.map((c) => c.source_name), [
       'Navy (Department of Defense)',
       'Acme Foundation',
     ])
@@ -64,16 +65,18 @@ describe('traceFundingIntoCandidates (staging path)', () => {
     await traceFundingIntoCandidates(FAKE_DB, { entity: 'Acme Corp', upsert, traceFn: traceStub })
 
     const navy = staged.find((c) => c.source_name.startsWith('Navy'))
-    expect(navy.source_type).toBe('federal_portal')
-    expect(navy.trust_score).toBe(85)
-    expect(navy.evidence.tool).toBe('funding_trace')
-    expect(navy.evidence.traced_entity).toBe('Acme Corp')
-    expect(navy.evidence.total_amount).toBe(1_000_000)
+    assert.equal(navy.source_type, 'federal_portal')
+    assert.equal(navy.trust_score, 85)
+    assert.equal(navy.evidence.tool, 'funding_trace')
+    assert.equal(navy.evidence.traced_entity, 'Acme Corp')
+    assert.equal(navy.evidence.total_amount, 1_000_000)
   })
 
   it('throws without an upsert function', async () => {
-    await expect(traceFundingIntoCandidates(FAKE_DB, { entity: 'x', traceFn: traceStub }))
-      .rejects.toThrow(/upsert/)
+    await assert.rejects(
+      traceFundingIntoCandidates(FAKE_DB, { entity: 'x', traceFn: traceStub }),
+      /upsert/,
+    )
   })
 })
 
@@ -83,22 +86,22 @@ describe('deriveSeedEntities', () => {
       ownOrgName: 'Hope Community Center',
       similarOrgs: [{ name: 'Riverside Youth Org' }, { name: 'Eastside Shelter' }],
     })
-    expect(seeds.map((s) => s.entity)).toEqual(['Hope Community Center', 'Riverside Youth Org', 'Eastside Shelter'])
-    expect(seeds[0].reason).toBe('profile_own_org')
-    expect(seeds[1].reason).toBe('similar_org_peer')
-    expect(seeds.every((s) => s.entityType === 'company')).toBe(true)
+    assert.deepEqual(seeds.map((s) => s.entity), ['Hope Community Center', 'Riverside Youth Org', 'Eastside Shelter'])
+    assert.equal(seeds[0].reason, 'profile_own_org')
+    assert.equal(seeds[1].reason, 'similar_org_peer')
+    assert.equal(seeds.every((s) => s.entityType === 'company'), true)
   })
 
   it('dedupes case-insensitively and drops stopword / too-short names', () => {
     const seeds = deriveSeedEntities({
       similarOrgs: [{ name: 'Acme Org' }, { name: 'ACME ORG' }, { name: 'Unknown' }, { name: 'abc' }],
     })
-    expect(seeds.map((s) => s.entity)).toEqual(['Acme Org'])
+    assert.deepEqual(seeds.map((s) => s.entity), ['Acme Org'])
   })
 
   it('caps the number of seeds', () => {
     const many = Array.from({ length: 20 }, (_, i) => ({ name: `Peer Organization ${i}` }))
-    expect(deriveSeedEntities({ similarOrgs: many, max: 3 })).toHaveLength(3)
+    assert.equal(deriveSeedEntities({ similarOrgs: many, max: 3 }).length, 3)
   })
 })
 
@@ -119,10 +122,10 @@ describe('autoSeedTraceForProfile', () => {
       deps: { findPeers, traceInto, upsert: () => {} },
     })
 
-    expect(traced).toEqual(['My Nonprofit', 'Peer Alpha', 'Peer Beta'])
-    expect(res.seeds_traced).toBe(3)
-    expect(res.total_upserted).toBe(6)
-    expect(res.total_addable).toBe(6)
+    assert.deepEqual(traced, ['My Nonprofit', 'Peer Alpha', 'Peer Beta'])
+    assert.equal(res.seeds_traced, 3)
+    assert.equal(res.total_upserted, 6)
+    assert.equal(res.total_addable, 6)
   })
 
   it('continues past a failing trace and records the error', async () => {
@@ -135,12 +138,12 @@ describe('autoSeedTraceForProfile', () => {
       profileId: 'p1',
       deps: { findPeers, traceInto, upsert: () => {} },
     })
-    expect(res.total_upserted).toBe(1)
-    expect(res.per_entity.find((e) => e.entity === 'Bad Peer').error).toMatch(/boom/)
+    assert.equal(res.total_upserted, 1)
+    assert.match(res.per_entity.find((e) => e.entity === 'Bad Peer').error, /boom/)
   })
 
   it('requires profileId and an upsert dep', async () => {
-    await expect(autoSeedTraceForProfile(FAKE_DB, { deps: { upsert: () => {} } })).rejects.toThrow(/profileId/)
-    await expect(autoSeedTraceForProfile(FAKE_DB, { profileId: 'p1', deps: {} })).rejects.toThrow(/upsert/)
+    await assert.rejects(autoSeedTraceForProfile(FAKE_DB, { deps: { upsert: () => {} } }), /profileId/)
+    await assert.rejects(autoSeedTraceForProfile(FAKE_DB, { profileId: 'p1', deps: {} }), /upsert/)
   })
 })
