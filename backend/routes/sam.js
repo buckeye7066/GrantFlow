@@ -124,12 +124,25 @@ function buildHttpProbe(req) {
   if (typeof fetch !== 'function') return null
   const host = req.headers['x-sam-internal-host'] ||
     `http://127.0.0.1:${process.env.PORT || 3911}`
+
+  // Sam probes admin-only + Hamilton endpoints (/api/admin/agent-control/status,
+  // /api/admin/agent-telemetry/*, /api/hamilton/automation/*). Those require an
+  // authenticated admin, so a probe with no credentials returned 401 for every
+  // one of them — surfacing as Sam "Authentication required" findings. Present
+  // TRUSTED admin credentials here so healthy endpoints answer 200, WITHOUT
+  // weakening the endpoints themselves: prefer the server's service token
+  // (ADMIN_TOKEN, accepted as admin by the auth middleware via X-Admin-Token),
+  // and also forward the triggering admin's Authorization header (these /api/sam
+  // routes are adminOnly, so the caller is already an admin) as a fallback.
+  const adminToken = process.env.ADMIN_TOKEN || process.env.ANYA_ADMIN_TOKEN || null
+  const forwardedAuth = req.headers.authorization || null
+
   return async ({ method, path }) => {
     try {
-      const resp = await fetch(`${host}${path}`, {
-        method,
-        headers: { 'x-sam-internal': 'true' },
-      })
+      const headers = { 'x-sam-internal': 'true' }
+      if (adminToken) headers['x-admin-token'] = adminToken
+      if (forwardedAuth) headers.authorization = forwardedAuth
+      const resp = await fetch(`${host}${path}`, { method, headers })
       let body
       try { body = await resp.json() } catch { body = await resp.text() }
       return { status: resp.status, body }
@@ -138,6 +151,9 @@ function buildHttpProbe(req) {
     }
   }
 }
+
+// Exposed for tests: assert the probe presents admin credentials.
+export const __testing__ = { buildHttpProbe }
 
 router.post('/run', adminOnly, async (req, res) => {
   try {

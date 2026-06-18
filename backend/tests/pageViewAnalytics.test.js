@@ -2,7 +2,7 @@ import express from 'express'
 import request from 'supertest'
 import { describe, expect, it } from 'vitest'
 import Database from 'better-sqlite3'
-import activityRouter from '../routes/activity.js'
+import activityRouter, { __flushActivityWrites } from '../routes/activity.js'
 import { queryAuditLogs, AUDIT_CATEGORIES } from '../services/auditService.js'
 
 function withTimeout(promise, ms = 1000) {
@@ -42,6 +42,9 @@ describe('page-view analytics: accept, persist, and display', () => {
       // Endpoint accepts the event.
       expect(response.status).toBe(204)
 
+      // The write is fire-and-forget (decoupled from the response); flush it.
+      await __flushActivityWrites()
+
       // Persisted: a row exists in audit_logs (auto-created by the service).
       const rows = db.prepare('SELECT category, action, details FROM audit_logs').all()
       expect(rows).toHaveLength(1)
@@ -72,6 +75,7 @@ describe('page-view analytics: accept, persist, and display', () => {
         request(app).post('/api/activity/page-view').send({ path: '/Dashboard', title: 'Home' }),
         1000,
       )
+      await __flushActivityWrites()
 
       // The previous implementation filtered on category 'auth' — which silently
       // dropped every page view (they are written under 'user_activity').
@@ -109,5 +113,59 @@ describe('page-view analytics: accept, persist, and display', () => {
     )
 
     expect(response.status).toBe(204)
+  })
+
+  it('returns 204 (never 503) even when the audit write THROWS', async () => {
+    // Reproduces the production 503: a write that fails/hangs must not surface to
+    // the client. A db whose prepare() throws stands in for a broken/slow backend.
+    const throwingDb = {
+      dialect: 'sqlite',
+      prepare() { throw new Error('db exploded') },
+      exec() { throw new Error('db exploded') },
+    }
+    const app = express()
+    app.use(express.json())
+    app.use((req, _res, next) => {
+      req.user = { id: 'user-1', userId: 'user-1', role: 'user' }
+      req.ctx = { userId: 'user-1', activeProfileId: 'profile-1', email: 'user@example.com' }
+      req.db = throwingDb
+      next()
+    })
+    app.use('/api/activity', activityRouter)
+
+    const response = await withTimeout(
+      request(app).post('/api/activity/page-view').send({ path: '/Dashboard' }),
+      1000,
+    )
+    expect(response.status).toBe(204)
+    // The failing background write must not blow up the process either.
+    await __flushActivityWrites()
+  })
+
+  it('acknowledges 204 WITHOUT waiting for the write to finish (decoupled)', async () => {
+    // A slow write must not delay the ack — this is what prevented the proxy 503.
+    let resolveWrite
+    const slowDb = {
+      dialect: 'sqlite',
+      exec: () => new Promise((r) => { resolveWrite = r }), // hangs until released
+      prepare: () => ({ run: () => new Promise(() => {}), get: () => ({}), all: () => [] }),
+    }
+    const app = express()
+    app.use(express.json())
+    app.use((req, _res, next) => {
+      req.user = { id: 'user-1', userId: 'user-1', role: 'user' }
+      req.ctx = { userId: 'user-1', activeProfileId: 'profile-1', email: 'user@example.com' }
+      req.db = slowDb
+      next()
+    })
+    app.use('/api/activity', activityRouter)
+
+    // Even though the write hangs, the response returns promptly.
+    const response = await withTimeout(
+      request(app).post('/api/activity/page-view').send({ path: '/Dashboard' }),
+      1000,
+    )
+    expect(response.status).toBe(204)
+    if (resolveWrite) resolveWrite()
   })
 })
