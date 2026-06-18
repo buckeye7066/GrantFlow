@@ -1,26 +1,27 @@
 /**
  * yanaAgentAdapter.js
  *
- * Wraps the EXISTING Yana Client Discovery agent — NOT Hamilton. Yana
- * is the lead-intelligence agent: she identifies prospective clients,
- * qualifies leads, and pushes approved leads to John's outreach queue.
+ * Wraps the Yana Client Discoverer (NOT Hamilton). Yana is the lead-
+ * intelligence agent: she discovers prospective-client leads from GrantFlow's
+ * organization records, qualifies them, and pushes qualified leads to John's
+ * outreach queue.
  *
- * Yana ≠ Hamilton. Hamilton is the application autopilot. The two are
- * intentionally kept as separate adapters because they have different
- * inputs, queues, telemetry, and stop semantics.
+ * Yana ≠ Hamilton. Hamilton is the application autopilot. Kept as separate
+ * adapters with different inputs, queues, telemetry, and stop semantics.
  *
- * Yana's full-cycle behaviour from the Control Center:
- *   1. Refresh lead candidates (read-only by default).
+ * Full-cycle behaviour from the Control Center:
+ *   1. Discover lead candidates from organizations (deterministic, no network).
  *   2. Qualify candidates above the configured fit threshold.
- *   3. Push qualified leads to John's queue (when allow_yana_leads=true).
+ *   3. Push qualified leads to John (when allow_yana_leads=true) — John drafts
+ *      outreach from them via the registered Yana lead source.
  *
- * Because Yana's runtime entry point is currently driven by the John
- * outreach pipeline (`johnYanaBridge.js`), the adapter records a
- * lead-funnel snapshot from the existing tables and writes a Yana run
- * row so the Mission Control dashboard counts it.
+ * Runs are persisted to `yana_lead_runs` (a real table — the old adapter wrote
+ * to the renamed `yana_runs` and read a phantom `yana_lead_candidates`, so it
+ * never recorded real work).
  */
 
 import { BaseAgentAdapter } from './baseAgentAdapter.js'
+import { runYanaDiscovery, getYanaStatus } from '../../yana/yanaLeadDiscovery.js'
 
 export class YanaAgentAdapter extends BaseAgentAdapter {
   constructor() {
@@ -33,28 +34,19 @@ export class YanaAgentAdapter extends BaseAgentAdapter {
 
   async getStatus({ db } = {}) {
     const base = await super.getStatus({ db })
-    let queueDepth = 0
-    let last = null
+    let s = {}
     try {
-      const r = await db
-        ?.prepare(`SELECT COUNT(*) AS c FROM john_outreach_queue WHERE status IN ('queued','pending')`)
-        .get()
-      queueDepth = Number(r?.c || 0)
-    } catch { /* john_outreach_queue may not exist on bare DBs */ }
-    try {
-      const r = await db
-        ?.prepare(`SELECT id, status, started_at FROM yana_runs ORDER BY started_at DESC LIMIT 1`)
-        .get()
-      last = r || null
-    } catch { /* yana_runs may have been renamed to hamilton_runs */ }
+      s = (await getYanaStatus(db)) || {}
+    } catch { /* fresh DBs may not have the tables yet */ }
+    const queueDepth = Number(s.queue_depth || 0)
     return {
       ...base,
       installed: true,
       queue_depth: queueDepth,
-      last_run_at: last?.started_at || null,
-      last_status: last?.status || null,
-      health: queueDepth > 0 ? 'healthy' : last ? 'idle' : 'idle',
-      details: last,
+      last_run_at: s.last_run_at || null,
+      last_status: s.last_status || null,
+      health: s.last_status === 'failed' ? 'error' : (queueDepth > 0 ? 'healthy' : (s.last_run_at ? 'idle' : 'idle')),
+      details: s.details || null,
     }
   }
 
@@ -63,86 +55,40 @@ export class YanaAgentAdapter extends BaseAgentAdapter {
       return { ok: true, status: 'stopped', summary: { agent: 'yana', stopped: true } }
     }
     const allowLeads = options?.allow_yana_leads !== false
+    const dryRun = Boolean(options?.dry_run)
 
-    await signal?.heartbeat?.({ phase: 'snapshot' })
+    await signal?.heartbeat?.({ phase: 'discover', allow_leads: allowLeads })
 
-    // Snapshot lead funnel — yana_lead_candidates / yana_qualifications
-    // are the canonical client-discovery tables. We read them defensively
-    // so the cycle still completes if a fresh DB hasn't created them yet.
-    const summary = {
-      agent: 'yana',
-      candidates_total: 0,
-      candidates_qualified: 0,
-      leads_pushed_to_john: 0,
-      mode: allowLeads ? 'qualify_and_push' : 'observe',
-    }
-
-    try {
-      const r = await db
-        .prepare(`SELECT COUNT(*) AS c FROM yana_lead_candidates`)
-        .get()
-      summary.candidates_total = Number(r?.c || 0)
-    } catch { /* yana_lead_candidates absent on minimal test fixtures */ }
-
-    try {
-      const r = await db
-        .prepare(`
-          SELECT COUNT(*) AS c FROM yana_lead_candidates
-          WHERE COALESCE(qualification_status, '') IN ('qualified','approved')
-        `)
-        .get()
-      summary.candidates_qualified = Number(r?.c || 0)
-    } catch { /* ignore */ }
+    // dry_run: observe only (qualify but never push to John). Otherwise push
+    // qualified leads when allowed.
+    const result = await runYanaDiscovery(db, {
+      trigger: 'admin-ui',
+      allowLeads: allowLeads && !dryRun,
+      createdByUserId: options?.user_id || null,
+    })
 
     if (signal?.shouldStop?.()) {
       await signal?.recordEvent?.({
         eventType: 'agent.yana.stopped',
         severity: 'medium',
-        message: 'Yana stopped during snapshot phase',
-        data: summary,
+        message: 'Yana stopped after discovery',
+        data: result,
       })
-      return { ok: true, status: 'stopped', summary }
+      return { ok: true, status: 'stopped', summary: result }
     }
-
-    if (allowLeads) {
-      // The push step is delegated to John's queue. We count what would
-      // be pushed and emit an event; the actual push happens when John's
-      // adapter runs in the next step (and reads yana qualified leads).
-      try {
-        const r = await db
-          .prepare(`
-            SELECT COUNT(*) AS c FROM yana_lead_candidates
-            WHERE COALESCE(qualification_status, '') IN ('qualified','approved')
-              AND COALESCE(pushed_to_john, 0) = 0
-          `)
-          .get()
-        summary.leads_pushed_to_john = Number(r?.c || 0)
-      } catch { /* ignore */ }
-    }
-
-    // Persist a yana_runs row when the table exists so Mission Control
-    // can render her last run / status. We tolerate missing tables and
-    // missing columns silently.
-    try {
-      await db
-        .prepare(`
-          INSERT INTO yana_runs (id, mode, trigger, status, started_at, completed_at, summary_json)
-          VALUES (lower(hex(randomblob(16))), ?, 'admin-ui', 'completed', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, ?)
-        `)
-        .run(summary.mode, JSON.stringify(summary))
-    } catch { /* table may have been renamed to hamilton_runs */ }
 
     await signal?.recordEvent?.({
-      eventType: 'agent.yana.completed',
-      severity: 'info',
-      message: `Yana lead discovery snapshot — ${summary.candidates_qualified} qualified, ${summary.leads_pushed_to_john} ready for John`,
-      data: summary,
+      eventType: result.ok ? 'agent.yana.completed' : 'agent.yana.failed',
+      severity: result.ok ? 'info' : 'warning',
+      message: `Yana client discovery — ${result.candidates_qualified} qualified of ${result.candidates_total}, ${result.leads_pushed_to_john} pushed to John`,
+      data: result,
     })
 
     return {
-      ok: true,
-      status: 'completed',
-      summary,
+      ok: result.ok !== false,
+      status: result.ok === false ? 'failed' : 'completed',
+      summary: result,
+      error: result.error || null,
     }
   }
 }

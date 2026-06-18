@@ -53,6 +53,7 @@ const POSTGRES_FILES = [
   '0085_yana_hard_stop_resolution.sql',
   '0086_rename_yana_to_hamilton.sql',
   '0087_agent_control_center.sql',
+  '0089_yana_lead_discovery.sql',
 ]
 
 const SQLITE_FILES = [
@@ -66,6 +67,7 @@ const SQLITE_FILES = [
   '089_yana_hard_stop_resolution.sql',
   '090_rename_yana_to_hamilton.sql',
   '091_agent_control_center.sql',
+  '093_yana_lead_discovery.sql',
 ]
 
 function isAlreadyAppliedError(err) {

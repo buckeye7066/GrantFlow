@@ -797,6 +797,21 @@ if (!app.locals.db_startup_error) {
       agentSelfHealErr?.message || agentSelfHealErr,
     )
   }
+
+  // Register the Yana-backed lead source so John drafts outreach from Yana's
+  // qualified client-discovery leads (johnYanaBridge). Yana = Client Discoverer.
+  try {
+    const [{ registerLeadSource }, { makeYanaLeadSource }] = await Promise.all([
+      import('./services/john/johnYanaBridge.js'),
+      import('./services/yana/yanaLeadDiscovery.js'),
+    ])
+    registerLeadSource(makeYanaLeadSource(db))
+  } catch (leadSrcErr) {
+    console.warn(
+      '[yana] could not register lead source for John (non-fatal):',
+      leadSrcErr?.message || leadSrcErr,
+    )
+  }
 }
 
 // Then add columns that may be missing (schema.sql may not include every migration column).
