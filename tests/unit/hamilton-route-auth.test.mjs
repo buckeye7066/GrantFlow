@@ -1,0 +1,147 @@
+/**
+ * Hamilton automation route auth + profile-scope regression tests.
+ *
+ * These lock the fix for the LAST_72H_MISSION_AUDIT finding: a block of
+ * Hamilton routes (payment-authorizations, sessions, attestations,
+ * resolved-fields, portal-policies, and the :id revoke surfaces) trusted a
+ * caller-supplied profileId without verifying authentication or profile
+ * access — allowing unauthenticated reads and cross-profile mutation of
+ * another user's automation authorization state.
+ *
+ * We mount the real router on a bare express app, inject req.db (in-memory
+ * SQLite) and req.user via a tiny test-auth middleware (driven by an
+ * x-test-user header), and assert:
+ *   - unauthenticated reads are rejected (401)
+ *   - a user cannot read OR mutate another profile's records (403)
+ *   - a user CAN operate on their own profile (200)
+ *   - a cross-profile revoke leaves the target record untouched
+ *   - portal-policy writes are restricted to the canonical admin (403/200)
+ */
+
+import { describe, it, before } from 'node:test'
+import assert from 'node:assert/strict'
+import express from 'express'
+import request from 'supertest'
+import Database from 'better-sqlite3'
+
+import hamiltonRouter from '../../backend/routes/hamiltonAutomation.js'
+import { recordSession } from '../../backend/services/hamilton/hamiltonCredentialSessionService.js'
+
+// Two users, each owning one profile.
+const USERS = {
+  'u-A': { id: 'u-A', role: 'user', email: 'a@test.com' },
+  'u-B': { id: 'u-B', role: 'user', email: 'b@test.com' },
+  'u-admin': { id: 'u-admin', role: 'user', email: 'buckeye7066@gmail.com' },
+}
+
+function makeDb() {
+  const db = new Database(':memory:')
+  db.exec(`
+    CREATE TABLE profiles (id TEXT PRIMARY KEY, user_id TEXT, display_name TEXT);
+    CREATE TABLE users (id TEXT PRIMARY KEY, primary_email TEXT, is_admin INTEGER DEFAULT 0, role TEXT);
+    INSERT INTO profiles (id, user_id, display_name) VALUES ('p-A', 'u-A', 'Profile A');
+    INSERT INTO profiles (id, user_id, display_name) VALUES ('p-B', 'u-B', 'Profile B');
+    INSERT INTO users (id, primary_email, is_admin, role) VALUES ('u-A', 'a@test.com', 0, 'user');
+    INSERT INTO users (id, primary_email, is_admin, role) VALUES ('u-B', 'b@test.com', 0, 'user');
+  `)
+  return db
+}
+
+function makeApp(db) {
+  const app = express()
+  app.use(express.json())
+  app.use((req, _res, next) => {
+    req.db = db
+    const who = req.headers['x-test-user']
+    if (who && USERS[who]) req.user = USERS[who]
+    next()
+  })
+  app.use('/api/hamilton/automation', hamiltonRouter)
+  return app
+}
+
+describe('Hamilton route auth + profile scoping', () => {
+  let db
+  let app
+  let sessionA // a saved session owned by profile A
+
+  before(async () => {
+    db = makeDb()
+    app = makeApp(db)
+    // Seed a saved session owned by profile A directly via the store, so we
+    // can attempt cross-profile revokes against a real row.
+    sessionA = await recordSession(db, {
+      userId: 'u-A',
+      profileId: 'p-A',
+      portalHost: 'grants.example.gov',
+      storageStateRef: 'ref://A',
+    })
+    assert.ok(sessionA?.id, 'seed session for profile A')
+  })
+
+  it('rejects unauthenticated reads of profile-scoped session list (401)', async () => {
+    const res = await request(app).get('/api/hamilton/automation/sessions?profileId=p-A')
+    assert.equal(res.status, 401)
+  })
+
+  it('forbids reading another profile\'s sessions (403)', async () => {
+    const res = await request(app)
+      .get('/api/hamilton/automation/sessions?profileId=p-A')
+      .set('x-test-user', 'u-B')
+    assert.equal(res.status, 403)
+  })
+
+  it('allows reading own profile sessions (200)', async () => {
+    const res = await request(app)
+      .get('/api/hamilton/automation/sessions?profileId=p-A')
+      .set('x-test-user', 'u-A')
+    assert.equal(res.status, 200)
+    assert.equal(res.body.ok, true)
+    assert.ok(Array.isArray(res.body.sessions))
+  })
+
+  it('forbids cross-profile session revoke and leaves the row intact (403)', async () => {
+    const res = await request(app)
+      .post(`/api/hamilton/automation/sessions/${sessionA.id}/revoke`)
+      .set('x-test-user', 'u-B')
+      .send({ reason: 'malicious' })
+    assert.equal(res.status, 403)
+    // The target session must NOT have been revoked.
+    const row = db.prepare('SELECT status FROM hamilton_saved_sessions WHERE id = ?').get(sessionA.id)
+    assert.notEqual(row.status, 'revoked')
+  })
+
+  it('rejects unauthenticated payment-authorization reads (401)', async () => {
+    const res = await request(app).get('/api/hamilton/automation/payment-authorizations?profileId=p-A')
+    assert.equal(res.status, 401)
+  })
+
+  it('forbids creating a payment authorization on another profile (403)', async () => {
+    const res = await request(app)
+      .post('/api/hamilton/automation/payment-authorizations')
+      .set('x-test-user', 'u-B')
+      .send({ profileId: 'p-A', category: 'application_fee', maxAmountCents: 5000, authorizationText: 'x' })
+    assert.equal(res.status, 403)
+  })
+
+  it('forbids reading another profile\'s resolved fields (403)', async () => {
+    const res = await request(app)
+      .get('/api/hamilton/automation/resolved-fields?profileId=p-A')
+      .set('x-test-user', 'u-B')
+    assert.equal(res.status, 403)
+  })
+
+  it('restricts portal-policy writes to the canonical admin', async () => {
+    const nonAdmin = await request(app)
+      .post('/api/hamilton/automation/portal-policies')
+      .set('x-test-user', 'u-A')
+      .send({ portalHost: 'evil.example.com', automationAllowed: true })
+    assert.equal(nonAdmin.status, 403)
+
+    const admin = await request(app)
+      .post('/api/hamilton/automation/portal-policies')
+      .set('x-test-user', 'u-admin')
+      .send({ portalHost: 'grants.example.gov', automationAllowed: true })
+    assert.equal(admin.status, 200)
+  })
+})

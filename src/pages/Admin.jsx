@@ -92,7 +92,7 @@ export default function Admin() {
             {isYanaOperator && (
               <TabsTrigger value="hamilton_hard_stops">
                 <AlertCircle className="w-4 h-4 mr-2" />
-                Yana hard stops
+                Hamilton hard stops
               </TabsTrigger>
             )}
             <TabsTrigger value="agents">

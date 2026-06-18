@@ -271,6 +271,15 @@ export async function listActiveAuthorizations(db, { profileId, fundingSourceId 
   return (rows || []).map(rowToAuth)
 }
 
+// Fetch one authorization by id (includes profile_id for ownership checks
+// before revoke). Null when not found.
+export async function getAuthorizationById(db, id) {
+  if (!db || !id) return null
+  await ensureHamiltonAuthorizationSchema(db)
+  const row = await db.prepare('SELECT * FROM hamilton_authorizations WHERE id = ?').get(String(id))
+  return row ? rowToAuth(row) : null
+}
+
 export async function revokeAuthorization(db, { id, reason = null } = {}) {
   if (!db || !id) return null
   await ensureHamiltonAuthorizationSchema(db)
