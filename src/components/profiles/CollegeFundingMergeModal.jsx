@@ -9,6 +9,7 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { useToast } from '@/components/ui/use-toast'
 import { mergeCommittedCollegeFunding } from '@/api/committedCollege.js'
+import HamiltonAutomationConsent from './HamiltonAutomationConsent.jsx'
 
 const MODE_BADGE = {
   hamilton_autopilot: { label: 'Hamilton autopilot', className: 'bg-blue-100 text-blue-700 border-blue-200' },
@@ -34,6 +35,7 @@ export default function CollegeFundingMergeModal({ open, onOpenChange, profileId
   const [selectedIds, setSelectedIds] = useState(() => new Set(selectableItems.map(idOf)))
   const [plan, setPlan] = useState(null)
   const [removeDeselected, setRemoveDeselected] = useState(false)
+  const [consentOpen, setConsentOpen] = useState(false)
 
   // Reset selection whenever the modal re-opens with new funding.
   React.useEffect(() => {
@@ -163,12 +165,20 @@ export default function CollegeFundingMergeModal({ open, onOpenChange, profileId
               Hamilton only drives portal/packet items. Don't gate on automatable
               count, or an all-manual list (the common case) can never proceed. */}
           <Button
-            onClick={() => merge.mutate({ authorize: true })}
+            onClick={() => setConsentOpen(true)}
             disabled={merge.isPending || selectedFunding.length === 0}
           >
             {merge.isPending && merge.variables?.authorize ? 'Handing off…' : 'Authorize & hand to Hamilton'}
           </Button>
         </DialogFooter>
+
+        <HamiltonAutomationConsent
+          open={consentOpen}
+          onOpenChange={setConsentOpen}
+          busy={merge.isPending && merge.variables?.authorize}
+          body={`Hamilton will prepare and drive the ${selectedFunding.length} selected item(s): open each portal, fill every field from this profile, and assemble the packet for you.`}
+          onConfirm={() => { setConsentOpen(false); merge.mutate({ authorize: true }) }}
+        />
       </DialogContent>
     </Dialog>
   )
