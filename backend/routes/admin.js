@@ -5429,10 +5429,17 @@ router.post('/exclusion-rules', async (req, res) => {
     const id = rule_id || `rule_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
     const act = action || 'hide'
 
-    await req.db.prepare(`
-      INSERT OR REPLACE INTO exclusion_rules (rule_id, pattern, action)
-      VALUES (?, ?, ?)
-    `).run(id, pattern, act)
+    // Dialect-portable upsert. `INSERT OR REPLACE` is SQLite-only and the
+    // Postgres adapter does not rewrite it, so branch on the active dialect.
+    const upsertSql = req.db.dialect === 'postgres'
+      ? `INSERT INTO exclusion_rules (rule_id, pattern, action)
+         VALUES (?, ?, ?)
+         ON CONFLICT (rule_id) DO UPDATE
+           SET pattern = EXCLUDED.pattern, action = EXCLUDED.action`
+      : `INSERT OR REPLACE INTO exclusion_rules (rule_id, pattern, action)
+         VALUES (?, ?, ?)`
+
+    await req.db.prepare(upsertSql).run(id, pattern, act)
 
     res.json({ success: true, rule_id: id })
   } catch (err) {
