@@ -85,9 +85,14 @@ const SEED_PROVIDERS = Object.freeze([
   }),
 ])
 
-let ensured = false
+// Per-db schema cache (WeakMap), not a process-global boolean: node:test runs a
+// file's top-level suites concurrently, each with its own in-memory db, and a
+// shared boolean races (one suite marks ready, a sibling's fresh db then skips
+// schema creation). Keying by db keeps each db independent; prod (one db) is
+// unchanged. Mirrors agentControlStore.
+let schemaReady = new WeakMap()
 async function ensureSchema(db) {
-  if (!db || ensured || typeof db.prepare !== 'function') return
+  if (!db || schemaReady.has(db) || typeof db.prepare !== 'function') return
   const isPostgres = db?.dialect === 'postgres'
   const boolType = isPostgres ? 'BOOLEAN' : 'INTEGER'
   const tsType = isPostgres ? 'TIMESTAMPTZ' : 'DATETIME'
@@ -113,7 +118,7 @@ async function ensureSchema(db) {
       updated_at ${tsType} DEFAULT ${nowFn}
     )
   `)
-  ensured = true
+  schemaReady.set(db, true)
 }
 
 function normalizeRow(row) {

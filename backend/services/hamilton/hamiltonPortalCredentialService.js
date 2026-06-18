@@ -39,11 +39,16 @@ export function registrableDomain(input) {
   try { return psl.get(h) || null } catch { return null }
 }
 
-let ensured = false
-export function _resetCredentialSchemaCache() { ensured = false }
+// Per-db schema cache (WeakMap), not a process-global boolean: node:test runs a
+// file's top-level suites concurrently, each with its own in-memory db, and a
+// shared boolean races (one suite marks ready, a sibling's fresh db then skips
+// schema creation). Keying by db keeps each db independent; prod (one db) is
+// unchanged. Mirrors agentControlStore.
+let schemaReady = new WeakMap()
+export function _resetCredentialSchemaCache() { schemaReady = new WeakMap() }
 
 async function ensureSchema(db) {
-  if (!db || ensured || typeof db.prepare !== 'function') return
+  if (!db || schemaReady.has(db) || typeof db.prepare !== 'function') return
   const isPostgres = db?.dialect === 'postgres'
   const idDefault = isPostgres ? '(gen_random_uuid()::text)' : '(lower(hex(randomblob(16))))'
   const tsType = isPostgres ? 'TIMESTAMPTZ' : 'DATETIME'
@@ -70,7 +75,7 @@ async function ensureSchema(db) {
     CREATE INDEX IF NOT EXISTS idx_hamilton_portal_cred_profile
       ON hamilton_portal_credentials(profile_id);
   `)
-  ensured = true
+  schemaReady.set(db, true)
 }
 
 // Show only the first character + length so the user can recognise the account
