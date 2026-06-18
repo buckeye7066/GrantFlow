@@ -32,7 +32,23 @@ const ADMIN_EMAIL = 'buckeye7066@gmail.com'
 class TrivialAdapter extends BaseAgentAdapter {
   constructor(name) { super({ name }) }
   async start({ controlRunId } = {}) {
-    return { ok: true, status: 'completed', summary: { agent: this.name, run_id: controlRunId } }
+    // Report one unit of real work so honest-completion accounting marks the
+    // run `completed` (not `completed_noop`). Superset of the per-agent fields
+    // the orchestrator's countAgentWork() recognises.
+    return {
+      ok: true,
+      status: 'completed',
+      summary: {
+        agent: this.name,
+        run_id: controlRunId,
+        findings_total: 1,
+        candidates_inserted: 1,
+        candidates_qualified: 1,
+        drafts_created: 1,
+        processed: 1,
+        interactions: 1,
+      },
+    }
   }
 }
 

@@ -65,7 +65,21 @@ class MockAdapter extends BaseAgentAdapter {
     return this.behaviour.startResult || {
       ok: true,
       status: 'completed',
-      summary: { agent: this.name, run_id: controlRunId },
+      // Report one unit of real work so honest-completion accounting
+      // (orchestrator countAgentWork) marks the run `completed` rather than
+      // `completed_noop`. Superset of the per-agent fields it recognises; the
+      // dedicated no-work / completed_noop path is covered separately in
+      // agent-control-telemetry.test.mjs.
+      summary: {
+        agent: this.name,
+        run_id: controlRunId,
+        findings_total: 1,
+        candidates_inserted: 1,
+        candidates_qualified: 1,
+        drafts_created: 1,
+        processed: 1,
+        interactions: 1,
+      },
     }
   }
 
