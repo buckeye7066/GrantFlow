@@ -1,8 +1,18 @@
 /**
  * yanaLeadDiscovery.js — Yana, the Client Discoverer (mission Goal 14).
  *
- * Yana runs a REAL, network-free client-discovery funnel over GrantFlow's own
- * organization records:
+ * Yana runs two client-discovery funnels:
+ *
+ *   A. INBOUND (network-free): scan GrantFlow's own organization records for
+ *      orgs that already have a contact email and score them. (Legacy path.)
+ *   B. OUTBOUND (prospect discovery): find NEW orgs that aren't GrantFlow
+ *      clients yet but could benefit — grant-seeking nonprofits via ProPublica
+ *      990 (yanaProspectSources) — then enrich a contact channel
+ *      (yanaContactEnrichment) so John can do outreach. Gated by
+ *      YANA_ALLOW_LIVE_WEB; see discoverProspects(). Honest lifecycle:
+ *      discovered → needs_enrichment → qualified.
+ *
+ * The inbound funnel over GrantFlow's own organization records works as:
  *
  *   discover  → scan organizations that have a contact email and derive a
  *               deterministic fit/urgency/contact-confidence/lead score,
@@ -23,6 +33,8 @@
 import crypto from 'node:crypto'
 import { isValidEmail } from '../john/johnOutreachSafety.js'
 import { createLogger } from '../../utils/logger.js'
+import { listProspectSources, getProspectSource } from './yanaProspectSources.js'
+import { getDefaultContactEnricher } from './yanaContactEnrichment.js'
 
 const log = createLogger('yana-lead-discovery')
 
@@ -60,6 +72,10 @@ export function getYanaConfig(env = process.env) {
     schedule: String(env?.YANA_SCHEDULE || '0 * * * *'),
     allowLeads: readEnvBool(env, 'YANA_ALLOW_LEADS', true),
     limit: Number(env?.YANA_DISCOVERY_LIMIT || 200),
+    // Outbound prospect discovery (ProPublica 990) + contact enrichment touch
+    // the live web; OFF by default, mirroring Robert's ROBERT_ALLOW_LIVE_WEB.
+    allowLiveWeb: readEnvBool(env, 'YANA_ALLOW_LIVE_WEB', false),
+    prospectLimit: Number(env?.YANA_PROSPECT_LIMIT || 100),
   }
 }
 
@@ -82,6 +98,8 @@ async function ensureSchema(db) {
       id TEXT PRIMARY KEY DEFAULT ${idDefault},
       organization_id TEXT,
       profile_id TEXT,
+      source TEXT DEFAULT 'organizations',
+      external_id TEXT,
       entity_type TEXT,
       organization_name TEXT,
       organization_type TEXT,
@@ -109,6 +127,8 @@ async function ensureSchema(db) {
     );
     CREATE INDEX IF NOT EXISTS idx_yana_lead_candidates_status ON yana_lead_candidates(qualification_status);
     CREATE INDEX IF NOT EXISTS idx_yana_lead_candidates_pushed ON yana_lead_candidates(pushed_to_john);
+    CREATE INDEX IF NOT EXISTS idx_yana_lead_candidates_source ON yana_lead_candidates(source);
+    CREATE INDEX IF NOT EXISTS idx_yana_lead_candidates_external_id ON yana_lead_candidates(external_id);
     CREATE TABLE IF NOT EXISTS yana_lead_runs (
       id TEXT PRIMARY KEY DEFAULT ${idDefault},
       mode TEXT NOT NULL DEFAULT 'observe',
@@ -123,6 +143,21 @@ async function ensureSchema(db) {
       created_by_user_id TEXT
     );
   `)
+
+  // Defensive column adds for the prospect-discovery columns on a lead
+  // candidates table created by an earlier migration. SQLite has no
+  // ADD COLUMN IF NOT EXISTS, so each ALTER is tolerated via try/catch.
+  for (const alter of [
+    isPg
+      ? `ALTER TABLE yana_lead_candidates ADD COLUMN IF NOT EXISTS source TEXT DEFAULT 'organizations'`
+      : `ALTER TABLE yana_lead_candidates ADD COLUMN source TEXT DEFAULT 'organizations'`,
+    isPg
+      ? `ALTER TABLE yana_lead_candidates ADD COLUMN IF NOT EXISTS external_id TEXT`
+      : `ALTER TABLE yana_lead_candidates ADD COLUMN external_id TEXT`,
+  ]) {
+    try { await db.exec(alter) } catch { /* column already exists */ }
+  }
+
   schemaReady.set(db, true)
 }
 
@@ -343,6 +378,167 @@ export async function discoverLeadCandidates(db, { limit = 200, runId = null, lo
   }
 }
 
+// ---------------------------------------------------------------------------
+// Outbound prospect discovery (NEW orgs, not the operator's own)
+// ---------------------------------------------------------------------------
+
+/**
+ * Decide a prospect's lifecycle status from its score + contact channel:
+ *   qualified         clears the bar AND reachable (email) — ready for John
+ *   needs_enrichment  a real org with identity signal but no contact channel yet
+ *   unqualified       too little signal to pursue
+ */
+function prospectStatus(scored) {
+  const { qualified } = qualifyScore(scored)
+  if (qualified) return 'qualified'
+  const hasIdentity = Boolean(scored.entity_type) &&
+    Array.isArray(scored.public_evidence) && scored.public_evidence.length > 0
+  if (hasIdentity && !scored.hasEmail) return 'needs_enrichment'
+  return 'unqualified'
+}
+
+/** Upsert an external prospect, keyed by (source, external_id). */
+async function upsertProspectCandidate(db, scored, prospect, runId, status) {
+  const nowFn = db?.dialect === 'postgres' ? 'now()' : 'CURRENT_TIMESTAMP'
+  const source = String(prospect.source || 'propublica_990')
+  const externalId = prospect.external_id ? String(prospect.external_id) : null
+  const existing = externalId
+    ? await db.prepare('SELECT id FROM yana_lead_candidates WHERE source = ? AND external_id = ? LIMIT 1').get(source, externalId)
+    : null
+
+  const reasonsJson = JSON.stringify([...(scored.reasons || []), `status:${status}`])
+  if (existing) {
+    await db.prepare(
+      `UPDATE yana_lead_candidates SET
+         entity_type = ?, organization_name = ?, organization_type = ?, website_url = ?,
+         location = ?, contact_email = ?, funding_need_summary = ?, grantflow_fit_summary = ?,
+         public_evidence_json = ?, source_urls_json = ?, fit_score = ?, urgency_score = ?,
+         contact_confidence = ?, lead_score = ?, qualification_status = ?,
+         qualification_reasons_json = ?, run_id = ?, updated_at = ${nowFn}
+       WHERE id = ?`,
+    ).run(
+      scored.entity_type, scored.organization_name, scored.organization_type, scored.website_url,
+      scored.location, scored.email, scored.funding_need_summary, scored.grantflow_fit_summary,
+      JSON.stringify(scored.public_evidence || []), JSON.stringify(scored.source_urls || []),
+      scored.fit_score, scored.urgency_score, scored.contact_confidence, scored.lead_score,
+      status, reasonsJson, runId, existing.id,
+    )
+    return { id: existing.id, status, created: false }
+  }
+
+  const id = crypto.randomUUID()
+  await db.prepare(
+    `INSERT INTO yana_lead_candidates
+       (id, organization_id, profile_id, source, external_id, entity_type, organization_name,
+        organization_type, website_url, location, contact_email, funding_need_summary,
+        grantflow_fit_summary, public_evidence_json, source_urls_json, fit_score, urgency_score,
+        contact_confidence, lead_score, qualification_status, qualification_reasons_json, run_id,
+        discovered_at, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ${nowFn}, ${nowFn}, ${nowFn})`,
+  ).run(
+    id, null, null, source, externalId, scored.entity_type, scored.organization_name,
+    scored.organization_type, scored.website_url, scored.location, scored.email, scored.funding_need_summary,
+    scored.grantflow_fit_summary, JSON.stringify(scored.public_evidence || []), JSON.stringify(scored.source_urls || []),
+    scored.fit_score, scored.urgency_score, scored.contact_confidence, scored.lead_score,
+    status, reasonsJson, runId,
+  )
+  return { id, status, created: true }
+}
+
+/** Set of names+EINs of the operator's OWN organizations — never prospect yourself. */
+async function loadOwnOrgKeys(db) {
+  const keys = new Set()
+  try {
+    const rows = await db.prepare('SELECT name, ein FROM organizations').all()
+    for (const r of rows || []) {
+      if (r.name) keys.add(`name:${String(r.name).trim().toLowerCase()}`)
+      if (r.ein) keys.add(`ein:${String(r.ein).replace(/\D/g, '')}`)
+    }
+  } catch { /* organizations table may be absent in bare test DBs */ }
+  return keys
+}
+
+/**
+ * Discover EXTERNAL prospects (grant-seeking orgs that aren't GrantFlow clients)
+ * via the registered prospect sources, score + (optionally) enrich them, and
+ * upsert into yana_lead_candidates with an honest lifecycle status.
+ *
+ * Gated by allowLiveWeb (default off) — when off it's an honest NOOP. Enrichment
+ * is itself gated/injected; without a provider, prospects stay needs_enrichment.
+ */
+export async function discoverProspects(db, {
+  limit = 100,
+  runId = null,
+  allowLiveWeb = false,
+  sources = null,
+  enricher = null,
+  providerArgs = {},
+} = {}) {
+  await ensureSchema(db)
+  const result = { discovered: 0, qualified: 0, needs_enrichment: 0, unqualified: 0, enriched: 0, by_source: {} }
+  if (!allowLiveWeb) {
+    result.reason = 'live_web_disabled'
+    return result
+  }
+
+  const sourceNames = Array.isArray(sources) && sources.length ? sources : listProspectSources()
+  const enrich = enricher || getDefaultContactEnricher()
+  const ownKeys = await loadOwnOrgKeys(db)
+
+  for (const name of sourceNames) {
+    const provider = getProspectSource(name)
+    if (!provider) continue
+    let prospects = []
+    try {
+      prospects = await provider.discover({ limit, ...providerArgs })
+    } catch (err) {
+      log.warn(`prospect source "${name}" discover failed: ${err?.message || err}`)
+      continue
+    }
+    result.by_source[name] = (result.by_source[name] || 0)
+
+    for (const prospect of prospects || []) {
+      // Don't prospect ourselves.
+      const nameKey = prospect.organization_name ? `name:${String(prospect.organization_name).trim().toLowerCase()}` : null
+      const einKey = prospect.ein ? `ein:${String(prospect.ein).replace(/\D/g, '')}` : null
+      if ((nameKey && ownKeys.has(nameKey)) || (einKey && ownKeys.has(einKey))) continue
+
+      let scored = scoreOrganizationLead(prospect)
+      if (!scored.organization_name) continue
+
+      // Contact enrichment: fill website/email for reachability when allowed.
+      if (!scored.hasEmail && enrich?.enabled) {
+        try {
+          const enriched = await enrich.enrich(prospect)
+          if (enriched?.ok && (enriched.email || enriched.website_url)) {
+            scored = scoreOrganizationLead({
+              ...prospect,
+              email: enriched.email || prospect.email,
+              website: enriched.website_url || prospect.website,
+              website_url: enriched.website_url || prospect.website_url,
+            })
+            if (enriched.website_url && !scored.source_urls.includes(enriched.website_url)) {
+              scored.source_urls = [...scored.source_urls, enriched.website_url]
+            }
+            result.enriched += 1
+          }
+        } catch (err) {
+          log.warn(`enrichment failed for "${prospect.organization_name}": ${err?.message || err}`)
+        }
+      }
+
+      const status = prospectStatus(scored)
+      await upsertProspectCandidate(db, scored, prospect, runId, status)
+      result.discovered += 1
+      result.by_source[name] += 1
+      if (status === 'qualified') result.qualified += 1
+      else if (status === 'needs_enrichment') result.needs_enrichment += 1
+      else result.unqualified += 1
+    }
+  }
+  return result
+}
+
 /** Dialect-safe "pushed within the last N hours" cutoff expression. */
 function windowCutoffExpr(db, hours) {
   const h = Math.max(1, Math.floor(Number(hours) || CAP_WINDOW_HOURS))
@@ -465,7 +661,16 @@ export async function latestYanaRun(db) {
  * Orchestrate one Yana discovery run and persist it.
  * mode 'observe' qualifies but does NOT push to John; otherwise pushes.
  */
-export async function runYanaDiscovery(db, { trigger = 'manual', allowLeads = true, limit = 200, createdByUserId = null, deps = {} } = {}) {
+export async function runYanaDiscovery(db, {
+  trigger = 'manual',
+  allowLeads = true,
+  limit = 200,
+  createdByUserId = null,
+  allowLiveWeb = false,
+  prospectLimit = 100,
+  prospectDeps = {},
+  deps = {},
+} = {}) {
   const mode = allowLeads ? 'qualify_and_push' : 'observe'
   const runId = await startRun(db, { mode, trigger, createdByUserId })
   const summary = { agent: 'yana', mode, candidates_total: 0, candidates_qualified: 0, leads_pushed_to_john: 0 }
@@ -475,17 +680,37 @@ export async function runYanaDiscovery(db, { trigger = 'manual', allowLeads = tr
     summary.candidates_qualified = disc.candidates_qualified
     summary.considered = disc.considered
     summary.disqualification_reasons = disc.disqualification_reasons || {}
-    // Honest NOOP: when nothing qualified, say why in one line so the run isn't
-    // a silent zero. This is a data/config condition (see audit notes), not a bug.
-    if (disc.candidates_qualified === 0) {
+
+    // Outbound prospect discovery (NEW orgs that could become GrantFlow clients).
+    // Gated by allowLiveWeb; honest NOOP when off. Qualified prospects (those
+    // enriched with a real contact channel) join the same qualified pool John
+    // consumes; the rest land as `needs_enrichment` (real org, no contact yet).
+    const prospects = await discoverProspects(db, {
+      limit: prospectLimit,
+      runId,
+      allowLiveWeb,
+      enricher: prospectDeps.enricher || null,
+      sources: prospectDeps.sources || null,
+      providerArgs: prospectDeps.providerArgs || {},
+    })
+    summary.prospects = prospects
+    summary.candidates_qualified += Number(prospects.qualified || 0)
+    summary.candidates_total += Number(prospects.discovered || 0)
+
+    // Honest NOOP: when nothing qualified across BOTH funnels, say why in one
+    // line so the run isn't a silent zero. Data/config condition, not a bug.
+    if (summary.candidates_qualified === 0) {
       const top = Object.entries(disc.disqualification_reasons || {})
         .sort((a, b) => b[1] - a[1])
         .slice(0, 3)
         .map(([k, n]) => `${k}×${n}`)
         .join(', ')
+      const prospectNote = !allowLiveWeb
+        ? 'prospect discovery disabled (set YANA_ALLOW_LIVE_WEB=true)'
+        : `${prospects.discovered} prospects discovered, ${prospects.needs_enrichment} need contact enrichment`
       summary.noop_reason = disc.considered === 0
-        ? 'no source organizations with a contact email to evaluate'
-        : `0 of ${disc.considered} organizations qualified${top ? ` (${top})` : ''}`
+        ? `no source organizations with a contact email to evaluate; ${prospectNote}`
+        : `0 of ${disc.considered} organizations qualified${top ? ` (${top})` : ''}; ${prospectNote}`
     }
     if (allowLeads) {
       const pushed = await pushQualifiedToJohn(db)

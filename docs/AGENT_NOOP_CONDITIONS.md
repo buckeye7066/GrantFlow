@@ -33,14 +33,28 @@ As of this audit Yana's run summary now reports a `noop_reason` and a
 `disqualification_reasons` breakdown (e.g. `no_contact_source×35,
 lead_score_below_threshold×5`) so the condition is visible on Mission Control.
 
-**Actions (any of):**
-- Populate `organizations` with richer prospect data (email + website + mission +
-  focus_areas) — the intended long-term path is a prospect-discovery source.
-- Lower `YANA_QUALIFY_THRESHOLD` if the existing data is borderline-acceptable.
-- Set `YANA_ENABLED=true` / `YANA_ALLOW_LEADS=true` if not already, so qualified
-  leads are pushed to John (capped at `YANA_DAILY_LEAD_CAP`/`YANA_CAP_WINDOW_HOURS`).
+### Outbound prospect discovery (shipped)
+Yana now has a second funnel that finds **NEW** organizations that aren't
+GrantFlow clients yet but could benefit (grant-seeking nonprofits), via
+ProPublica 990 (`yanaProspectSources.js`). 990 yields a nonprofit's identity but
+no contact channel, so `yanaContactEnrichment.js` finds the org's homepage +
+email. Honest lifecycle: `discovered → needs_enrichment → qualified`; only
+prospects with a real contact channel become qualified leads pushed to John.
 
-No code change unblocks this — it is data/config.
+**Config to activate (operator):**
+- `YANA_ENABLED=true` — master switch.
+- `YANA_ALLOW_LIVE_WEB=true` — enables outbound 990 discovery + enrichment
+  (default off, mirrors Robert's `ROBERT_ALLOW_LIVE_WEB`). Off ⇒ honest NOOP.
+- **Contact enrichment provider:** no web-search provider ships in the repo
+  (live web is operator-supplied, exactly like Robert's injected fetcher). Until
+  one is wired via `setDefaultContactEnricher(...)`, discovered prospects stay
+  `needs_enrichment` (real orgs, no contact yet) — never fabricated contacts.
+- `YANA_PROSPECT_LIMIT` (default 100) — prospects scanned per cycle.
+- `YANA_ALLOW_LEADS=true` so qualified leads push to John (capped by
+  `YANA_DAILY_LEAD_CAP`/`YANA_CAP_WINDOW_HOURS`).
+
+The inbound (own-org) funnel remains data/config as above; lowering
+`YANA_QUALIFY_THRESHOLD` only affects that path.
 
 ## Hamilton — gated by 48 blockers (data)
 Hamilton counts unresolved rows in `hamilton_blockers`

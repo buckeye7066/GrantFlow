@@ -21,7 +21,7 @@
  */
 
 import { BaseAgentAdapter } from './baseAgentAdapter.js'
-import { runYanaDiscovery, getYanaStatus } from '../../yana/yanaLeadDiscovery.js'
+import { runYanaDiscovery, getYanaStatus, getYanaConfig } from '../../yana/yanaLeadDiscovery.js'
 
 export class YanaAgentAdapter extends BaseAgentAdapter {
   constructor() {
@@ -61,10 +61,15 @@ export class YanaAgentAdapter extends BaseAgentAdapter {
 
     // dry_run: observe only (qualify but never push to John). Otherwise push
     // qualified leads when allowed.
+    const yanaCfg = getYanaConfig()
     const result = await runYanaDiscovery(db, {
       trigger: 'admin-ui',
       allowLeads: allowLeads && !dryRun,
       createdByUserId: options?.user_id || null,
+      // Outbound prospect discovery + enrichment touch the live web; gated by
+      // YANA_ALLOW_LIVE_WEB (honest NOOP when off).
+      allowLiveWeb: yanaCfg.allowLiveWeb,
+      prospectLimit: yanaCfg.prospectLimit,
     })
 
     if (signal?.shouldStop?.()) {

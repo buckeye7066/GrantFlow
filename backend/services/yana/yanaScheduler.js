@@ -63,6 +63,8 @@ export async function runYanaScheduledCycle({ db, deps = {}, logger = console, t
       trigger,
       allowLeads: cfg.allowLeads,
       limit: cfg.limit,
+      allowLiveWeb: cfg.allowLiveWeb,
+      prospectLimit: cfg.prospectLimit,
       deps,
     })
     logger?.info?.('yana.scheduler.run', {
