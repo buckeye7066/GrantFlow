@@ -42,6 +42,7 @@ import {
   runWhitelistedCommand,
 } from './samSafeFixes.js'
 import { escalateSamCritical } from './samEscalation.js'
+import { gitProposeFixes } from './samGit.js'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -254,6 +255,17 @@ export async function runSam(args = {}) {
         })
       } catch (escErr) {
         console.warn('[sam] admin escalation skipped:', escErr?.message || escErr)
+      }
+
+      // Charter §6: if any safe fixes were applied AND policy allows, put them on
+      // a dedicated branch (+ PR) — never on main. Default OFF (auto_commit_allowed
+      // false), gated by assertCommitAllowed inside gitProposeFixes. Best-effort.
+      if (appliedFixes.some((f) => f?.applied === true)) {
+        try {
+          out.git_proposal = await gitProposeFixes(db, { runId, appliedFixes })
+        } catch (gitErr) {
+          console.warn('[sam] git proposal skipped:', gitErr?.message || gitErr)
+        }
       }
     }
 
