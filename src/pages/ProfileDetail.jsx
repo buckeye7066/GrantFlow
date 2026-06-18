@@ -776,7 +776,7 @@ export default function ProfileDetail() {
             />
           </TabsContent>
 
-          <TabsContent value="pipeline" className="mt-6">
+          <TabsContent value="pipeline" className="mt-6 space-y-6">
             <div className="rounded-lg border bg-white p-6">
               <h3 className="text-lg font-semibold mb-4">Pipeline View</h3>
               <p className="text-slate-600 mb-4">
@@ -786,6 +786,10 @@ export default function ProfileDetail() {
                 Go to Pipeline
               </Button>
             </div>
+            {/* Saved portal logins — available for every profile type, since
+                Hamilton uses them to sign in to any grant/application portal she
+                automates from the pipeline. */}
+            <SavedLoginsCard profileId={profileId} />
           </TabsContent>
 
           <TabsContent value="item-funding" className="mt-6">
@@ -1019,7 +1023,6 @@ export default function ProfileDetail() {
             <TabsContent value="universities" className="mt-6">
               <div className="space-y-6">
                 <SchoolPortalLinkPanel profileId={profileId} />
-                <SavedLoginsCard profileId={profileId} />
                 <StudentPortalsCard state={studentState} profileId={profileId} applications={universityApplications} />
                 <CommittedCollegeWorkspace profileId={profileId} applications={universityApplications} />
               <UniversityApplicationsSection

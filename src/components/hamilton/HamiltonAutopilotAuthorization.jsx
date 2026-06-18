@@ -178,7 +178,7 @@ export default function HamiltonAutopilotAuthorization({
             <Toggle id="opt_submit"       label="Submit applications when complete"      checked={opts.submit_applications}    onChange={(v) => set('submit_applications', v)} />
             <Toggle id="opt_autosubmit"   label="Allow auto-submit (no human review)"    checked={opts.allow_auto_submit}      onChange={(v) => set('allow_auto_submit', v)} highlight />
             <Toggle id="opt_session"      label="Use saved browser session if available" checked={opts.use_saved_session}      onChange={(v) => set('use_saved_session', v)} />
-            <Toggle id="opt_creds"        label="Use saved credential reference"         checked={opts.use_saved_credentials_reference} onChange={(v) => set('use_saved_credentials_reference', v)} />
+            <Toggle id="opt_creds"        label="Use saved portal logins to sign in"     checked={opts.use_saved_credentials_reference} onChange={(v) => set('use_saved_credentials_reference', v)} />
             <Toggle id="opt_attest"       label="Use standing attestation language"      checked={opts.use_standing_attestation} onChange={(v) => set('use_standing_attestation', v)} />
             <Toggle id="opt_review"       label="Require final human review before submit" checked={opts.require_human_review}   onChange={(v) => set('require_human_review', v)} />
           </div>
