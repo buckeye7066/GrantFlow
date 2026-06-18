@@ -19,6 +19,7 @@ import {
   uncommitArchived,
   buildCollegeAidWorkspace,
 } from '../services/college/committedCollege.js'
+import { planCollegeFundingMerge } from '../services/college/collegeFundingMerge.js'
 import { createLogger } from '../utils/logger.js'
 
 const log = createLogger('route:committed-college')
@@ -145,6 +146,53 @@ router.post('/profiles/:profileId/committed-college/uncommit', async (req, res) 
   } catch (err) {
     log.error('POST committed-college/uncommit failed', { error: err?.message })
     return res.status(500).json({ ok: false, error: 'committed_college_uncommit_failed' })
+  }
+})
+
+/**
+ * Merge selected matched funding into Hamilton for the committed college.
+ * Returns a compliance-annotated plan; if { authorize:true }, hands the
+ * autopilot/packet-able (non-federal) items to Hamilton's automateSelected.
+ * Federal/FAFSA + institutional items are never auto-submitted (user_confirm).
+ */
+router.post('/profiles/:profileId/committed-college/merge-funding', async (req, res) => {
+  const user = requireAuthenticatedUser(req, res)
+  if (!user) return
+  const { profileId } = req.params
+  if (!(await userMayAccessProfile(req, profileId))) return res.status(403).json({ error: 'Forbidden' })
+
+  const selectedFunding = Array.isArray(req.body?.selectedFunding) ? req.body.selectedFunding : []
+  if (!selectedFunding.length) return res.status(400).json({ ok: false, error: 'selectedFunding is required' })
+  const authorize = req.body?.authorize === true
+
+  try {
+    const sections = await loadSections(req.db, profileId)
+    const workspace = buildCollegeAidWorkspace({ sections })
+    const plan = planCollegeFundingMerge({ workspace, selectedFunding })
+    if (!plan.ok) return res.status(409).json({ ok: false, error: plan.error })
+
+    let handoff = null
+    if (authorize && plan.automatable_ids.length) {
+      try {
+        const { automateSelected } = await import('../services/hamilton/hamiltonAutomationOrchestrator.js')
+        const idOf = (s) => s.id ?? s.opportunity_id ?? s.grant_id ?? s.funding_opportunity_id
+        const selectedSources = selectedFunding.filter((s) => plan.automatable_ids.includes(idOf(s)))
+        handoff = await automateSelected(req.db, {
+          profileId,
+          userId: getAuthUserId(user),
+          selectedSources,
+          options: { source: 'committed_college_merge' },
+        })
+      } catch (err) {
+        log.warn('committed-college merge handoff failed', { error: err?.message })
+        handoff = { ok: false, error: 'hamilton_handoff_failed' }
+      }
+    }
+
+    return res.json({ ok: true, plan, handoff })
+  } catch (err) {
+    log.error('POST committed-college/merge-funding failed', { error: err?.message })
+    return res.status(500).json({ ok: false, error: 'committed_college_merge_failed' })
   }
 })
 
