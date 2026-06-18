@@ -252,9 +252,14 @@ export async function recordResolution(db, {
       `UPDATE hamilton_blockers SET resolved_at = ${nowFn}, resolution_strategy = ?, updated_at = ${nowFn} WHERE id = ?`,
     ).run(strategy, String(blockerId))
   } else if (outcome === 'blocked' || outcome === 'escalated') {
+    // requires_user_action is BOOLEAN in Postgres. An inline integer literal
+    // (`= 1`) throws "column is of type boolean but expression is of type
+    // integer"; bind a real boolean instead (the sqlite adapter coerces it to
+    // 1/0). This is what 500'd Hamilton's preflight-resolve on profiles whose
+    // selected sources hit a hard-stop blocker.
     await db.prepare(
-      `UPDATE hamilton_blockers SET unresolved_reason = ?, requires_user_action = 1, updated_at = ${nowFn} WHERE id = ?`,
-    ).run(detail || strategy, String(blockerId))
+      `UPDATE hamilton_blockers SET unresolved_reason = ?, requires_user_action = ?, updated_at = ${nowFn} WHERE id = ?`,
+    ).run(detail || strategy, true, String(blockerId))
   }
   return await db.prepare('SELECT * FROM hamilton_blocker_resolutions WHERE id = ?').get(id)
 }

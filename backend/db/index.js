@@ -555,7 +555,16 @@ const KNOWN_BOOLEAN_COLUMNS = [
   // `= TRUE`/`= FALSE` everywhere, instead of relying on each call site to
   // hand-write an `isPostgres ? 'IS TRUE' : '= 1'` branch.
   'is_national', 'is_loan', 'requires_match', 'requires_501c3',
-  'usable_for_housing', 'refund_potential', 'verified_url'
+  'usable_for_housing', 'refund_potential', 'verified_url',
+  // Hamilton automation booleans (hamilton_blockers / portal policies +
+  // providers). These are BOOLEAN in Postgres, so any inline `= 1`/`= 0`
+  // literal (e.g. the hard-stop resolver marking requires_user_action) must
+  // be rewritten to TRUE/FALSE or Postgres throws "boolean = integer".
+  'requires_user_action', 'admin_required', 'user_required',
+  'automation_allowed', 'agent_submission_allowed', 'scraping_allowed',
+  'api_available', 'manual_only', 'live_supported', 'automation_supported',
+  'session_reuse_supported', 'credential_reference_supported',
+  'captcha_likely', 'two_factor_likely'
 ];
 const BOOL_COL_PATTERN = KNOWN_BOOLEAN_COLUMNS.map(c => c.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
 const BOOL_TRUE_RE = new RegExp(`\\b(${BOOL_COL_PATTERN})\\s*=\\s*1\\b`, 'gi');
