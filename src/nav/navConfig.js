@@ -236,10 +236,14 @@ export function getBreadcrumbSegments(pathname, search = "") {
   const groupPath = group?.items?.[0]?.url ?? createPageUrl("Dashboard");
   const currentPath = pathname + (search ? `?${search}` : "");
 
-  // Skip group breadcrumb segment when the group has only one item (e.g. Help Center)
-  // to avoid redundant "Home > Help > Help Center" — show "Home > Help Center" instead.
+  // Skip the group breadcrumb segment in two cases, to avoid a redundant middle crumb:
+  //  1. Single-item groups (e.g. "Home > Help > Help Center" -> "Home > Help Center").
+  //  2. The "home" group itself, whose label is literally "Home" — the fixed first
+  //     crumb already represents it, so without this Calendar rendered
+  //     "Home > Home > Calendar". Show "Home > Calendar" instead.
   const isSingleItemGroup = group?.items?.length === 1;
-  if (isSingleItemGroup) {
+  const isHomeGroup = groupId === "home";
+  if (isSingleItemGroup || isHomeGroup) {
     return [
       home,
       { path: currentPath, label: pageLabel, isCurrent: true },

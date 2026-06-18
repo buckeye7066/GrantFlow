@@ -1965,8 +1965,12 @@ router.get('/page-views', async (req, res) => {
 
     const views = []
 
+    // Match on the unique `action` discriminator only — NOT category. The writer
+    // (POST /api/activity/page-view) records these under category 'user_activity',
+    // so filtering by a fixed category here silently dropped every row. The action
+    // 'client_page_view' is unique to page views, so it is a safe, drift-proof key
+    // that also surfaces any historical rows written under a different category.
     const auditRes = await queryAuditLogs(req.db, {
-      category: AUDIT_CATEGORIES.AUTH,
       action: 'client_page_view',
       startDate: startDateIso,
       limit,
