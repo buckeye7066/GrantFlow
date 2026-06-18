@@ -25,6 +25,7 @@
 import crypto from 'node:crypto'
 import { getWithRetry, headForVerification } from '../crawlers/httpClient.js'
 import { isUrlAllowed } from '../crawlers/robotsPolicy.js'
+import { enrichOrgEmail } from '../crawlers/orgContactEnrichment.js'
 import { createLogger } from '../../utils/logger.js'
 
 const log = createLogger('yana-web-crawler')
@@ -46,6 +47,9 @@ export function getYanaCrawlerConfig(env = process.env) {
     sources,
     maxPerRun: Math.max(1, Number(env?.YANA_WEB_MAX_PER_RUN || 200)),
     perDomainDelayMs: Math.max(0, Number(env?.YANA_WEB_DOMAIN_DELAY_MS || 1000)),
+    // Enrich a website-only org with its published contact email so the funnel
+    // can qualify it (email is a required gate). On by default when crawling.
+    enrichEmails: readBool(env, 'YANA_WEB_ENRICH_EMAILS', true),
     userAgent: 'GrantFlow Crawler/1.0 (+contact: support@grantflow.app)',
   }
 }
@@ -190,6 +194,7 @@ export async function runYanaWebCrawl(db, {
     skipped_dupes: 0,
     rejected_junk: 0,
     rejected_dead: 0,
+    enriched_emails: 0,
     robots_blocked: [],
   }
 
@@ -240,6 +245,20 @@ export async function runYanaWebCrawl(db, {
         const head = await headCheck(site)
         if (config.perDomainDelayMs) await delay(config.perDomainDelayMs)
         if (!head || head.ok !== true) { summary.rejected_dead += 1; continue }
+      }
+
+      // Enrich a website-only org with its published contact email so the funnel
+      // can qualify it (email is a required gate). Same-domain, robots-respected.
+      if (config.enrichEmails && !org.email && site) {
+        try {
+          const found = await enrichOrgEmail(org, { fetchImpl, robotsCheck, delay, delayMs: config.perDomainDelayMs, userAgent: config.userAgent })
+          if (found?.email) {
+            org.email = found.email
+            summary.enriched_emails += 1
+          }
+        } catch (err) {
+          logger?.warn?.(`email enrichment failed for "${org.name}": ${err?.message || err}`)
+        }
       }
 
       if (await organizationExists(db, org)) { summary.skipped_dupes += 1; continue }
