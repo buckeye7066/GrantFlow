@@ -16,6 +16,7 @@ import { ensureProfileAccess } from '../utils/accessControl.js'
 import { enforceCrawlerJobTier, getCrawlerJobCapability } from '../middleware/entitlements.js'
 import { getPortalCheckStatus } from '../services/portalCheckService.js'
 import { standardRateLimiter } from '../middleware/rateLimiting.js'
+import { assessReality } from '../services/opportunityRealityGate.js'
 import {
   classifyProfileChange,
   decideRevalAction,
@@ -28,6 +29,25 @@ import { createLogger } from '../utils/logger.js'
 const routeLogger = createLogger('route:crawlers')
 
 const router = express.Router()
+
+// Gate a seed/admin opportunity through the canonical reality gate and return
+// the persisted verdict columns. Seed routes that write ACTIVE rows must not
+// bypass the single reality gate every user-visible opportunity passes through,
+// and must persist reality_status so the read-side fast path can use it
+// (mirrors opportunityInserter's mapping).
+function gateAndStampReality(opp) {
+  const reality = assessReality(opp)
+  return {
+    allowed: reality.allowed,
+    reasons: Array.isArray(reality.reasons) ? reality.reasons : [],
+    columns: {
+      opportunity_kind: reality.kind ?? null,
+      source_trust_tier: reality.trustTier ?? null,
+      reality_status: reality.downgrade ? 'downgraded' : 'allowed',
+      reality_reasons: JSON.stringify(Array.isArray(reality.reasons) ? reality.reasons : []),
+    },
+  }
+}
 
 const ALLOWED_TYPES = new Set(CRAWLER_JOB_TYPES)
 const ALLOWED_STATUS = new Set(CRAWLER_JOB_STATUSES)
@@ -1856,17 +1876,33 @@ router.post('/seed-local-networks', async (req, res) => {
 
     let inserted = 0, updated = 0, errors = 0
 
+    let realityRejected = 0
     for (const net of data.networks) {
       try {
-        const existing = await req.db.prepare('SELECT id FROM funding_opportunities WHERE id = ?').get(net.id)
         const categoriesJson = JSON.stringify(net.categories || [])
-        const keywordsJson = JSON.stringify([...net.categories, 'local', 'assistance', 'community'].filter(Boolean))
-        
+        const keywordsJson = JSON.stringify([...(net.categories || []), 'local', 'assistance', 'community'].filter(Boolean))
+
+        // Canonical reality gate: never write an ungated active row.
+        const stamp = gateAndStampReality({
+          id: net.id, title: net.title, sponsor: net.sponsor,
+          source: 'verified_real', source_id: net.id,
+          application_url: net.url, source_url: net.url, evidence_url: net.url,
+          description: net.description, is_national: Boolean(net.is_national),
+          state: net.state || 'nationwide', opportunity_type: 'program', is_active: true,
+        })
+        if (!stamp.allowed) {
+          realityRejected++
+          continue
+        }
+        const c = stamp.columns
+
+        const existing = await req.db.prepare('SELECT id FROM funding_opportunities WHERE id = ?').get(net.id)
         if (existing) {
           await req.db.prepare(`
             UPDATE funding_opportunities SET
               title = ?, sponsor = ?, description = ?, application_url = ?, source_url = ?, evidence_url = ?,
               is_national = ?, state = ?, categories = ?, keywords = ?,
+              opportunity_kind = ?, source_trust_tier = ?, reality_status = ?, reality_reasons = ?,
               updated_at = CURRENT_TIMESTAMP
             WHERE id = ?
           `).run(
@@ -1880,6 +1916,7 @@ router.post('/seed-local-networks', async (req, res) => {
             net.state || 'nationwide',
             categoriesJson,
             keywordsJson,
+            c.opportunity_kind, c.source_trust_tier, c.reality_status, c.reality_reasons,
             net.id,
           )
           updated++
@@ -1888,8 +1925,9 @@ router.post('/seed-local-networks', async (req, res) => {
             INSERT INTO funding_opportunities (
               id, title, sponsor, source, source_id, source_url, description,
               application_url, evidence_url, is_national, state, categories, keywords,
-              opportunity_type, is_active, created_at, updated_at
-            ) VALUES (?, ?, ?, 'verified_real', ?, ?, ?, ?, ?, ?, ?, ?, ?, 'program', ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+              opportunity_type, is_active, opportunity_kind, source_trust_tier, reality_status, reality_reasons,
+              created_at, updated_at
+            ) VALUES (?, ?, ?, 'verified_real', ?, ?, ?, ?, ?, ?, ?, ?, ?, 'program', ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
           `).run(
             net.id,
             net.title,
@@ -1904,6 +1942,7 @@ router.post('/seed-local-networks', async (req, res) => {
             categoriesJson,
             keywordsJson,
             true,
+            c.opportunity_kind, c.source_trust_tier, c.reality_status, c.reality_reasons,
           )
           inserted++
         }
@@ -1911,6 +1950,9 @@ router.post('/seed-local-networks', async (req, res) => {
         console.error(`[seed-local-networks] Error for ${net.id}:`, e.message)
         errors++
       }
+    }
+    if (realityRejected > 0) {
+      console.warn(`[seed-local-networks] ${realityRejected} network(s) rejected by the canonical reality gate`)
     }
     
     const totalCount = Number(
@@ -2181,12 +2223,21 @@ router.post('/seed-real-opportunities', async (req, res) => {
     let updated = 0
     const errors = []
     
+    let realityRejected = 0
     for (const opp of opportunities) {
       try {
+        // Canonical reality gate: never write an ungated active row.
+        const stamp = gateAndStampReality(opp)
+        if (!stamp.allowed) {
+          realityRejected++
+          continue
+        }
+        const c = stamp.columns
+
         const existing = await req.db.prepare(
           'SELECT id FROM funding_opportunities WHERE id = ? OR (source = ? AND source_id = ?)'
         ).get(opp.id, opp.source, opp.source_id || opp.id)
-        
+
         if (existing) {
           await req.db.prepare(`
             UPDATE funding_opportunities SET
@@ -2194,7 +2245,9 @@ router.post('/seed-real-opportunities', async (req, res) => {
               deadline = ?, deadline_type = ?, application_url = ?, source_url = ?,
               is_national = ?, state = ?, categories = ?, keywords = ?,
               eligibility_bullets = ?, opportunity_type = ?, requires_501c3 = ?,
-              requires_match = ?, match_percentage = ?, updated_at = CURRENT_TIMESTAMP
+              requires_match = ?, match_percentage = ?,
+              opportunity_kind = ?, source_trust_tier = ?, reality_status = ?, reality_reasons = ?,
+              updated_at = CURRENT_TIMESTAMP
             WHERE id = ?
           `).run(
             opp.title, opp.sponsor, opp.description, opp.amount_min, opp.amount_max,
@@ -2203,6 +2256,7 @@ router.post('/seed-real-opportunities', async (req, res) => {
             JSON.stringify(opp.categories || []), JSON.stringify(opp.keywords || []),
             JSON.stringify(opp.eligibility_bullets || []), opp.opportunity_type || 'grant',
             opp.requires_501c3 ? 1 : 0, opp.requires_match ? 1 : 0, opp.match_percentage || null,
+            c.opportunity_kind, c.source_trust_tier, c.reality_status, c.reality_reasons,
             existing.id
           )
           updated++
@@ -2213,8 +2267,9 @@ router.post('/seed-real-opportunities', async (req, res) => {
               amount_min, amount_max, deadline, deadline_type, application_url,
               is_national, state, categories, keywords, eligibility_bullets,
               opportunity_type, requires_501c3, requires_match, match_percentage, is_active,
+              opportunity_kind, source_trust_tier, reality_status, reality_reasons,
               created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
           `).run(
             opp.id, opp.title, opp.sponsor, opp.source || 'verified_real',
             opp.source_id || opp.id, opp.source_url, opp.description,
@@ -2222,7 +2277,8 @@ router.post('/seed-real-opportunities', async (req, res) => {
             opp.application_url, opp.is_national ? 1 : 0, opp.state || 'nationwide',
             JSON.stringify(opp.categories || []), JSON.stringify(opp.keywords || []),
             JSON.stringify(opp.eligibility_bullets || []), opp.opportunity_type || 'grant',
-            opp.requires_501c3 ? 1 : 0, opp.requires_match ? 1 : 0, opp.match_percentage || null
+            opp.requires_501c3 ? 1 : 0, opp.requires_match ? 1 : 0, opp.match_percentage || null,
+            c.opportunity_kind, c.source_trust_tier, c.reality_status, c.reality_reasons,
           )
           inserted++
         }
@@ -2232,13 +2288,14 @@ router.post('/seed-real-opportunities', async (req, res) => {
       }
     }
     
-    routeLogger.info(`[seed-real] Complete: ${inserted} inserted, ${updated} updated`)
-    
+    routeLogger.info(`[seed-real] Complete: ${inserted} inserted, ${updated} updated, ${realityRejected} reality-gate-rejected`)
+
     res.json({
       success: true,
       total: opportunities.length,
       inserted,
       updated,
+      reality_rejected: realityRejected,
       errors: errors.length > 0 ? errors : undefined
     })
   } catch (error) {
