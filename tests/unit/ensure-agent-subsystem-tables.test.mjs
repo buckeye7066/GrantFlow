@@ -32,11 +32,21 @@ import {
   __testables,
 } from '../../backend/utils/ensureAgentSubsystemTables.js'
 
-const { POSTGRES_FILES, SQLITE_FILES, isAlreadyAppliedError } = __testables
+const { POSTGRES_FILES, SQLITE_FILES, REPRESENTATIVE_TABLES, isAlreadyAppliedError, tableExists } =
+  __testables
 
-function makeFakeDb({ dialect = 'sqlite', failFiles = new Set(), recordTable = true } = {}) {
+// `existingTables` models the live schema independently of the `_migrations`
+// ledger so we can reproduce the "stamped but table missing" drift that caused
+// the `relation "robert_runs" does not exist` outage.
+function makeFakeDb({
+  dialect = 'sqlite',
+  failFiles = new Set(),
+  recordTable = true,
+  existingTables = new Set(),
+} = {}) {
   const exec_log = []
   const recorded = new Set()
+  const tables = new Set(existingTables)
   const db = {
     dialect,
     async exec(sql) {
@@ -48,6 +58,11 @@ function makeFakeDb({ dialect = 'sqlite', failFiles = new Set(), recordTable = t
           throw err
         }
       }
+      // Crudely model CREATE TABLE IF NOT EXISTS so a re-applied file makes
+      // its witness table start existing afterwards.
+      const re = /CREATE TABLE IF NOT EXISTS\s+([A-Za-z_][A-Za-z0-9_]*)/gi
+      let m
+      while ((m = re.exec(sql))) tables.add(m[1])
     },
     prepare(sql) {
       return {
@@ -55,6 +70,11 @@ function makeFakeDb({ dialect = 'sqlite', failFiles = new Set(), recordTable = t
           if (sql.includes('FROM _migrations WHERE name')) {
             const [name] = args
             return recorded.has(name) ? { hit: 1 } : null
+          }
+          // Witness-table existence probe (both dialects).
+          if (sql.includes('information_schema.tables') || sql.includes('sqlite_master')) {
+            const [name] = args
+            return tables.has(name) ? { ok: 1 } : null
           }
           return null
         },
@@ -74,8 +94,12 @@ function makeFakeDb({ dialect = 'sqlite', failFiles = new Set(), recordTable = t
       }
     },
   }
-  return { db, exec_log, recorded }
+  return { db, exec_log, recorded, tables }
 }
+
+// Every witness table the helper knows about — used to seed a
+// "fully-migrated" fake DB so stamped files are genuinely skipped.
+const ALL_WITNESS_TABLES = new Set(Object.values(REPRESENTATIVE_TABLES))
 
 test('declares the canonical agent migration filenames per dialect', () => {
   // If new agent migrations are added, this list must be updated so the
@@ -118,16 +142,58 @@ test('isAlreadyAppliedError detects common idempotent signatures', () => {
 })
 
 test('skips already-applied migrations on a fully-migrated DB', async () => {
-  const { db, exec_log, recorded } = makeFakeDb({ dialect: 'sqlite' })
+  const { db, exec_log, recorded } = makeFakeDb({
+    dialect: 'sqlite',
+    // Fully-migrated means BOTH the ledger is stamped AND the witness
+    // tables physically exist.
+    existingTables: ALL_WITNESS_TABLES,
+  })
   // Pre-mark everything as applied.
   for (const f of SQLITE_FILES) recorded.add(f)
   const out = await ensureAgentSubsystemTables(db, { logger: { info() {}, warn() {}, error() {} } })
   assert.equal(out.applied.length, 0)
+  assert.ok(!out.repaired || out.repaired.length === 0)
   assert.ok(out.skipped.length >= SQLITE_FILES.length)
   // Should still have ensured the _migrations table itself.
   assert.ok(exec_log.some((sql) => /_migrations/.test(sql)))
   // No DDL bodies for the migration files were exec'd.
   // (We can't check filename in SQL, but applied count of 0 is enough.)
+})
+
+test('re-applies a migration stamped as applied whose witness table is missing', async () => {
+  // The exact production drift behind `relation "robert_runs" does not exist`:
+  // 0077/081 is recorded in _migrations, but robert_runs was never physically
+  // created (DB restore/branch, a rolled-back-after-stamp txn, hand-seeded
+  // ledger). Trusting the stamp alone leaves Robert permanently broken.
+  // Every witness EXCEPT robert_runs exists; the ledger says all are applied.
+  const fixture = makeFakeDb({
+    dialect: 'sqlite',
+    existingTables: new Set([...ALL_WITNESS_TABLES].filter((t) => t !== 'robert_runs')),
+  })
+  for (const f of SQLITE_FILES) fixture.recorded.add(f)
+
+  const out = await ensureAgentSubsystemTables(fixture.db, {
+    logger: { info() {}, warn() {}, error() {} },
+  })
+
+  // The robert migration must have been re-applied, not skipped.
+  assert.ok(out.repaired?.includes('081_robert_tables.sql'), 'expected 081 to be repaired')
+  assert.ok(out.applied.includes('081_robert_tables.sql'), 'expected 081 to be re-applied')
+  // And the witness table now exists in the modeled schema.
+  assert.ok(fixture.tables.has('robert_runs'), 'robert_runs should exist after self-heal')
+  // Files whose witness was present are still skipped (no needless re-apply).
+  assert.ok(out.skipped.includes('080_sam_runs.sql'))
+})
+
+test('tableExists is dialect-aware and rejects unsafe identifiers', async () => {
+  const pg = makeFakeDb({ dialect: 'postgres', existingTables: new Set(['robert_runs']) })
+  assert.equal(await tableExists(pg.db, 'robert_runs'), true)
+  assert.equal(await tableExists(pg.db, 'nope_runs'), false)
+  const sq = makeFakeDb({ dialect: 'sqlite', existingTables: new Set(['sam_runs']) })
+  assert.equal(await tableExists(sq.db, 'sam_runs'), true)
+  // Identifier whitelist: anything non-identifier is rejected before any query.
+  assert.equal(await tableExists(sq.db, 'robert_runs; DROP TABLE x'), false)
+  assert.equal(await tableExists(sq.db, ''), false)
 })
 
 test('a per-file failure does not block the rest', async () => {

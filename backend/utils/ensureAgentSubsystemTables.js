@@ -70,6 +70,56 @@ const SQLITE_FILES = [
   '093_yana_lead_discovery.sql',
 ]
 
+// A representative ("witness") table for each migration file. When a file is
+// already stamped in `_migrations` we still confirm its witness table is
+// physically present before trusting the stamp — see the skip logic in
+// ensureAgentSubsystemTables. Files not listed here fall back to trusting the
+// stamp (e.g. the yana_* ALTER-only / rename migrations, which have no single
+// stable witness table). Keyed by BOTH the postgres and sqlite filenames so a
+// single lookup works for either dialect.
+const REPRESENTATIVE_TABLES = {
+  '0076_sam_runs.sql': 'sam_runs',
+  '080_sam_runs.sql': 'sam_runs',
+  '0077_robert_tables.sql': 'robert_runs',
+  '081_robert_tables.sql': 'robert_runs',
+  '0079_john_tables.sql': 'john_runs',
+  '083_john_tables.sql': 'john_runs',
+  '0080_agent_telemetry.sql': 'agent_activity_events',
+  '084_agent_telemetry.sql': 'agent_activity_events',
+  '0087_agent_control_center.sql': 'agent_control_runs',
+  '091_agent_control_center.sql': 'agent_control_runs',
+  '0089_yana_lead_discovery.sql': 'yana_lead_candidates',
+  '093_yana_lead_discovery.sql': 'yana_lead_candidates',
+}
+
+// Identifier whitelist so a witness name can never be interpolated unsafely.
+const TABLE_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/
+
+/**
+ * Does `tableName` actually exist right now? Dialect-aware, mirrors the
+ * canonical helper in agentTelemetryStore.js. Returns false on any error so a
+ * probe failure degrades to "re-apply the idempotent DDL", never a throw.
+ */
+async function tableExists(db, tableName) {
+  if (!db || typeof tableName !== 'string' || !TABLE_NAME_RE.test(tableName)) return false
+  try {
+    if (db.dialect === 'postgres') {
+      const row = await db
+        .prepare(
+          'SELECT 1 AS ok FROM information_schema.tables WHERE table_schema = ANY (current_schemas(false)) AND table_name = ?',
+        )
+        .get(tableName)
+      return Boolean(row && (row.ok === 1 || row.ok === true))
+    }
+    const row = await db
+      .prepare("SELECT 1 AS ok FROM sqlite_master WHERE type IN ('table','view') AND name = ?")
+      .get(tableName)
+    return Boolean(row && (row.ok === 1 || row.ok === true))
+  } catch {
+    return false
+  }
+}
+
 function isAlreadyAppliedError(err) {
   const msg = String(err?.message || err || '').toLowerCase()
   if (msg.includes('duplicate column name')) return true
@@ -158,9 +208,26 @@ export async function ensureAgentSubsystemTables(db, { logger = console } = {}) 
     } catch {
       already = false
     }
+    // Trust the `_migrations` ledger ONLY when the live schema agrees with it.
+    // A file can be stamped as applied while its table is absent — a DB
+    // restore/branch, a transaction that rolled back *after* stamping, or a
+    // hand-seeded `_migrations`. When that happens the stamp lies, so we verify
+    // the file's witness table actually exists and re-apply the (idempotent)
+    // DDL when it doesn't. This is precisely the gap that let Robert fail with
+    // `relation "robert_runs" does not exist` even though both the boot and
+    // the per-run orchestrator self-heal had already "run" (they skipped the
+    // file on the stamp). Files without a witness keep trusting the stamp.
     if (already) {
-      out.skipped.push(filename)
-      continue
+      const witness = REPRESENTATIVE_TABLES[filename]
+      if (!witness || (await tableExists(db, witness))) {
+        out.skipped.push(filename)
+        continue
+      }
+      out.repaired = out.repaired || []
+      out.repaired.push(filename)
+      logger.warn?.(
+        `[agent-subsystem] ${filename} is stamped applied but witness table "${witness}" is missing — re-applying DDL`,
+      )
     }
 
     let sql
@@ -206,5 +273,7 @@ export async function ensureAgentSubsystemTables(db, { logger = console } = {}) 
 export const __testables = {
   POSTGRES_FILES,
   SQLITE_FILES,
+  REPRESENTATIVE_TABLES,
   isAlreadyAppliedError,
+  tableExists,
 }
