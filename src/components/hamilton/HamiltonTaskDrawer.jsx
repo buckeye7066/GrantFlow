@@ -14,6 +14,8 @@ import { useToast } from '@/components/ui/use-toast'
 import { showErrorToast, showInfoToast } from '@/components/shared/toastHelpers'
 import * as hamiltonApi from '@/api/hamilton'
 import client from '@/api/client'
+import MissingInfoChecklist from '@/components/profiles/MissingInfoChecklist'
+import { resolveMissingInfoTarget } from '@/config/missingInfoTargets'
 
 export default function HamiltonTaskDrawer({ open, onClose, task: initialTask, onTaskUpdated }) {
   const { toast } = useToast()
@@ -318,38 +320,60 @@ export default function HamiltonTaskDrawer({ open, onClose, task: initialTask, o
             )}
 
             {missingInfo.length > 0 ? (
-              <div className="space-y-3">
+              <div className="space-y-4">
                 <div className="flex items-center gap-2 text-amber-800">
                   <AlertTriangle className="w-4 h-4" />
                   <h4 className="text-sm font-semibold">Provide missing information</h4>
                 </div>
-                {missingInfo.map((m) => (
-                  <div key={m.id} className="space-y-1">
-                    <label className="text-xs font-medium text-slate-700 flex items-center gap-2">
-                      {m.label || m.key}
-                      <Badge variant="outline" className="text-[10px]">{m.kind}</Badge>
-                    </label>
-                    {m.description && <p className="text-xs text-slate-500">{m.description}</p>}
-                    {m.kind === 'document' || m.kind === 'login' ? (
-                      <Input
-                        placeholder={m.kind === 'login' ? 'Confirmation that you logged in (e.g. yes)' : 'Document filename or note'}
-                        value={values[m.id] ?? ''}
-                        onChange={(e) => setValues((prev) => ({ ...prev, [m.id]: e.target.value }))}
-                      />
-                    ) : (
-                      <Textarea
-                        rows={2}
-                        placeholder="Type the answer here…"
-                        value={values[m.id] ?? ''}
-                        onChange={(e) => setValues((prev) => ({ ...prev, [m.id]: e.target.value }))}
-                      />
-                    )}
+
+                {/* Items that map to a profile field → clickable checklist that
+                    deep-links straight into the matching ProfileDetail section. */}
+                {missingInfo.some((m) => resolveMissingInfoTarget(m.key)) && (
+                  <div className="space-y-2">
+                    <p className="text-xs text-slate-500">
+                      Fix these on the profile — each links to the exact section. Hamilton re-checks them on the next continue.
+                    </p>
+                    <MissingInfoChecklist
+                      profileId={task?.profile_id}
+                      items={missingInfo.filter((m) => resolveMissingInfoTarget(m.key))}
+                    />
                   </div>
-                ))}
-                <Button onClick={submitMissingInfo} disabled={busy} size="sm">
-                  {busy ? <Loader2 className="w-3 h-3 mr-1 animate-spin" /> : null}
-                  Send to Hamilton
-                </Button>
+                )}
+
+                {/* Items with no profile home (portal login, funder address,
+                    application fee, …) — answer Hamilton directly inline. */}
+                {missingInfo.some((m) => !resolveMissingInfoTarget(m.key)) && (
+                  <div className="space-y-3">
+                    <p className="text-xs font-medium text-slate-600">Answer Hamilton directly</p>
+                    {missingInfo.filter((m) => !resolveMissingInfoTarget(m.key)).map((m) => (
+                      <div key={m.id} className="space-y-1">
+                        <label className="text-xs font-medium text-slate-700 flex items-center gap-2">
+                          {m.label || m.key}
+                          <Badge variant="outline" className="text-[10px]">{m.kind}</Badge>
+                        </label>
+                        {m.description && <p className="text-xs text-slate-500">{m.description}</p>}
+                        {m.kind === 'document' || m.kind === 'login' ? (
+                          <Input
+                            placeholder={m.kind === 'login' ? 'Confirmation that you logged in (e.g. yes)' : 'Document filename or note'}
+                            value={values[m.id] ?? ''}
+                            onChange={(e) => setValues((prev) => ({ ...prev, [m.id]: e.target.value }))}
+                          />
+                        ) : (
+                          <Textarea
+                            rows={2}
+                            placeholder="Type the answer here…"
+                            value={values[m.id] ?? ''}
+                            onChange={(e) => setValues((prev) => ({ ...prev, [m.id]: e.target.value }))}
+                          />
+                        )}
+                      </div>
+                    ))}
+                    <Button onClick={submitMissingInfo} disabled={busy} size="sm">
+                      {busy ? <Loader2 className="w-3 h-3 mr-1 animate-spin" /> : null}
+                      Send to Hamilton
+                    </Button>
+                  </div>
+                )}
               </div>
             ) : (
               <div className="flex items-center gap-2 text-sm text-emerald-700">

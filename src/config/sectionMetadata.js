@@ -24,6 +24,24 @@ export const SECTION_METADATA = {
         "help": "Applicant or primary contact's full legal name."
       },
       {
+        "name": "first_name",
+        "label": "First name",
+        "format": "text",
+        "help": "Applicant's legal first/given name. Auto-derived from the full name when left blank."
+      },
+      {
+        "name": "middle_name",
+        "label": "Middle name",
+        "format": "text",
+        "help": "Applicant's middle name(s), if any. Auto-derived from the full name when left blank."
+      },
+      {
+        "name": "last_name",
+        "label": "Last name",
+        "format": "text",
+        "help": "Applicant's legal last/family name. Auto-derived from the full name when left blank."
+      },
+      {
         "name": "email",
         "label": "Email address",
         "format": "email",

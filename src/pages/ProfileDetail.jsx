@@ -266,7 +266,7 @@ export default function ProfileDetail() {
     [renameProfileMutation],
   )
 
-  const handleOpenSection = React.useCallback((sectionKey, data = {}) => {
+  const handleOpenSection = React.useCallback((sectionKey, data = {}, focusField = null) => {
     let sectionData = data ?? {}
     if (sectionKey === "basic_information" && profile?.display_name) {
       const existingName = String(sectionData.full_name || "").trim()
@@ -277,6 +277,7 @@ export default function ProfileDetail() {
     setEditingSection({
       key: sectionKey,
       data: sectionData,
+      focusField: focusField || null,
     })
   }, [profile?.display_name])
 
@@ -424,6 +425,25 @@ export default function ProfileDetail() {
 
   // IMPORTANT: All hooks must be called before any conditional returns (React rules of hooks).
   const [activeTab, setActiveTab] = React.useState("profile")
+  // Deep-link support: ?tab=&section=&field= (emitted by MissingInfoChecklist /
+  // HamiltonTaskDrawer / Profile Action Plan) lands the user on the right tab
+  // and pops the matching section editor focused on the field to fill.
+  const deepLinkHandled = useRef(null)
+  const tabParam = searchParams.get("tab")
+  const sectionParam = searchParams.get("section")
+  const fieldParam = searchParams.get("field")
+  React.useEffect(() => {
+    if (!profile) return
+    const token = `${tabParam || ""}|${sectionParam || ""}|${fieldParam || ""}`
+    if (token === "|" || deepLinkHandled.current === token) return
+    deepLinkHandled.current = token
+    if (tabParam) setActiveTab(tabParam)
+    if (sectionParam) {
+      const existing =
+        profile.sections?.find((section) => section.section_key === sectionParam)?.data ?? {}
+      handleOpenSection(sectionParam, existing, fieldParam)
+    }
+  }, [profile, tabParam, sectionParam, fieldParam, handleOpenSection])
   const hasSyncedTargetColleges = useRef(false)
   const lastSyncedProfileId = useRef(null)
   const failedTargetCollegeSyncProfiles = useRef(new Set())
@@ -1030,6 +1050,7 @@ export default function ProfileDetail() {
         open={Boolean(editingSection)}
         sectionKey={editingSection?.key}
         initialData={editingSection?.data ?? {}}
+        focusField={editingSection?.focusField}
         profileId={profileId}
         onClose={handleCloseEditor}
         onSave={handleSaveSection}

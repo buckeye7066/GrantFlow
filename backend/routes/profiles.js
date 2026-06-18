@@ -30,6 +30,7 @@ import {
 import { isDesignatedProfileId } from '../utils/ensureDesignatedProfiles.js'
 import { resolveUploadsDir } from '../utils/uploadsDir.js'
 import { syncProfileFieldsFromSection, syncDisplayNameToBasicInformation } from '../utils/profileSectionSync.js'
+import { deriveNamePartsIntoBasicInfo } from '../../shared/nameParsing.js'
 import { guardProfileSectionPayload } from '../utils/profileSuggestionGuards.js'
 import { normalizeProfileSectionData } from '../services/profileHelpers.js'
 import { resolveProfileType } from '../services/profileTypeRegistry.js'
@@ -2250,8 +2251,16 @@ router.put('/:id/sections/:sectionKey', async (req, res) => {
       rejected: [],
     })
   }
-  const guardedData = guardedPayload.data
+  let guardedData = guardedPayload.data
   logProfileSectionRejections(id, sectionKey, guardedPayload.rejected)
+
+  // "Parse, baby, parse." When the basic_information section is saved with a
+  // full_name but no first/last name, derive the parts so Hamilton's preflight
+  // stops raising false "missing first/last name" blockers. Runs after the
+  // guard so derived values are never stripped; never clobbers human input.
+  if (sectionKey === 'basic_information') {
+    guardedData = deriveNamePartsIntoBasicInfo(guardedData, profile?.display_name).data
+  }
 
   const upsert = req.db.prepare(
     `

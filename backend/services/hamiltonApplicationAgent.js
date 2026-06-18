@@ -46,6 +46,7 @@ import { getStudentPortal } from './hamilton/studentPortalStore.js'
 import { emitHamiltonNotificationToProfileAndAdmins } from './hamilton/hamiltonNotifications.js'
 import { withProfileScope } from '../middleware/profileContext.js'
 import { prepareApplication, autoPopulate, validateApplication, markSubmitted } from '../apply/applyEngine.js'
+import { deriveNamePartsIntoBasicInfo } from '../../shared/nameParsing.js'
 
 export const HAMILTON_AGENT_NAME = 'hamilton'
 
@@ -142,6 +143,14 @@ async function loadProfile(db, profileId) {
       sections[r.section_key] = null
     }
   }
+
+  // "Parse, baby, parse." Read-time safety net: if basic_information only has a
+  // full_name (or the profile only has a display_name), derive first_name /
+  // last_name on the fly so preflight does not raise false "missing first/last
+  // name" blockers even on profiles the backfill migration has not touched yet.
+  const derived = deriveNamePartsIntoBasicInfo(sections.basic_information || {}, row.display_name)
+  if (derived.changed) sections.basic_information = derived.data
+
   return { ...row, sections, ...sections }
 }
 
