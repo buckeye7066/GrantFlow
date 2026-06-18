@@ -429,7 +429,25 @@ async function repairMissingUploadAvatars({ db, uploadsDir }) {
       const fullPath = join(uploadsDir, fileName);
       if (fs.existsSync(fullPath)) continue;
 
-      // Remove the reference so the frontend uses its built-in non-upload fallback.
+      // Rehydrate the on-disk cache from the durable DB copy when present,
+      // instead of discarding the reference (keeps avatars across restarts).
+      let durable = null;
+      try {
+        durable = db.prepare('SELECT avatar_data FROM profiles WHERE id = ?').get(row.id);
+      } catch {
+        // avatar_data column may not exist yet; treat as no durable copy.
+      }
+      if (durable?.avatar_data) {
+        try {
+          const buf = Buffer.isBuffer(durable.avatar_data) ? durable.avatar_data : Buffer.from(durable.avatar_data);
+          fs.writeFileSync(fullPath, buf);
+          continue;
+        } catch {
+          // fall through to null the dangling reference
+        }
+      }
+
+      // No durable copy: remove the reference so the frontend uses its fallback.
       db
         .prepare(
           'UPDATE profiles SET avatar_url = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?',

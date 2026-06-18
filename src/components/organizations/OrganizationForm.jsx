@@ -1224,14 +1224,15 @@ Focus areas should be:
                 <div className="space-y-2">
                   <Label htmlFor="tier_id">Billing Tier</Label>
                   <Select
-                    value={formData.tier_id || ""}
-                    onValueChange={(value) => handleSelectChange('tier_id', value || null)}
+                    value={formData.tier_id || "__none__"}
+                    onValueChange={(value) => handleSelectChange('tier_id', value === '__none__' ? null : value)}
                   >
                     <SelectTrigger id="tier_id">
                       <SelectValue placeholder={isLoadingTiers ? "Loading tiers..." : "Select billing tier"} />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="">No tier selected</SelectItem>
+                      {/* Radix forbids value=""; sentinel maps back to null (no tier). */}
+                      <SelectItem value="__none__">No tier selected</SelectItem>
                       {billingTiers.map((tier) => (
                         <SelectItem key={tier.id} value={tier.id}>
                           <div className="flex flex-col items-start">

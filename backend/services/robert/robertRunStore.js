@@ -20,6 +20,37 @@ import {
   DELIVERY_STATUS,
 } from './robertTypes.js'
 
+function isMissingRelationError(err) {
+  // Postgres 42P01 "relation ... does not exist" / SQLite "no such table".
+  const msg = String(err?.message || err || '').toLowerCase()
+  return msg.includes('does not exist') || msg.includes('no such table')
+}
+
+/**
+ * Run a robert_* write, self-healing the agent-subsystem schema exactly once if
+ * the target table is missing, then retrying. The boot self-heal
+ * (ensureAgentSubsystemTables) already creates these tables, but it only runs at
+ * startup — a run that fires before/around a deploy, or after a boot where the
+ * heal hit a transient error, would otherwise crash with
+ * `relation "robert_runs" does not exist`. This mirrors the inline self-heal
+ * already used for crawler_jobs / anya_match_suggestions in server.js so the
+ * very first Robert write after a cold deploy succeeds instead of failing.
+ */
+async function withRobertSchema(db, fn) {
+  try {
+    return await fn()
+  } catch (err) {
+    if (!isMissingRelationError(err)) throw err
+    try {
+      const { ensureAgentSubsystemTables } = await import('../../utils/ensureAgentSubsystemTables.js')
+      await ensureAgentSubsystemTables(db, { logger: console })
+    } catch {
+      // best-effort: if the heal itself fails, surface the original error below
+    }
+    return await fn()
+  }
+}
+
 function safeStringify(value) {
   try { return JSON.stringify(value ?? null) } catch { return 'null' }
 }
@@ -40,10 +71,10 @@ export async function startRun(db, { mode, trigger = 'manual', created_by_user_i
   if (!db?.prepare) throw new Error('startRun: db is required')
   if (!mode) throw new Error('startRun: mode is required')
   const id = genId('robert-run')
-  await db.prepare(
+  await withRobertSchema(db, () => db.prepare(
     `INSERT INTO robert_runs (id, mode, trigger, status, started_at, summary_json, created_by_user_id)
      VALUES (?, ?, ?, ?, ?, '{}', ?)`,
-  ).run(id, mode, trigger, RUN_STATUS.RUNNING, nowISO(), created_by_user_id ?? null)
+  ).run(id, mode, trigger, RUN_STATUS.RUNNING, nowISO(), created_by_user_id ?? null))
   return id
 }
 

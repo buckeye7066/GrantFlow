@@ -83,10 +83,11 @@ export default function FundingLibraryFilters({ filters, onChange, onReset, onRe
         <div className="grid grid-cols-2 gap-2">
           <div>
             <Label className="text-xs">State</Label>
-            <Select value={filters.state || ''} onValueChange={(v) => set('state', v)}>
+            <Select value={filters.state || '__any__'} onValueChange={(v) => set('state', v === '__any__' ? '' : v)}>
               <SelectTrigger className="mt-1"><SelectValue placeholder="Any" /></SelectTrigger>
               <SelectContent>
-                <SelectItem value="">Any</SelectItem>
+                {/* Radix forbids value=""; use a sentinel and map it back to '' (the "no filter" state). */}
+                <SelectItem value="__any__">Any</SelectItem>
                 {STATES.filter(Boolean).map((s) => (
                   <SelectItem key={s} value={s}>{s}</SelectItem>
                 ))}

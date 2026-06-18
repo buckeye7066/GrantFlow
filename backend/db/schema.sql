@@ -644,6 +644,8 @@ CREATE TABLE IF NOT EXISTS users (
   primary_email TEXT,
   primary_phone TEXT,
   avatar_url TEXT,
+  avatar_data BLOB,
+  avatar_content_type TEXT,
   is_admin BOOLEAN DEFAULT 0,
   password_hash TEXT,
   metadata TEXT

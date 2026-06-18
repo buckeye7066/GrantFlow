@@ -517,14 +517,15 @@ export default function CreateInvoice() {
               <div>
                 <Label>Project (Optional)</Label>
                 <Select
-                  value={formData.project_id}
-                  onValueChange={(value) => setFormData({ ...formData, project_id: value })}
+                  value={formData.project_id || '__none__'}
+                  onValueChange={(value) => setFormData({ ...formData, project_id: value === '__none__' ? '' : value })}
                 >
                   <SelectTrigger>
                     <SelectValue placeholder="Link to project..." />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="">No Project</SelectItem>
+                    {/* Radix forbids value=""; sentinel maps back to '' (no project linked). */}
+                    <SelectItem value="__none__">No Project</SelectItem>
                     {projects.filter(p => p.organization_id === formData.organization_id).map(project => (
                       <SelectItem key={project.id} value={project.id}>{project.project_name}</SelectItem>
                     ))}

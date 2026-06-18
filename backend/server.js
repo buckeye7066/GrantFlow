@@ -534,6 +534,7 @@ async function repairMissingUploadAvatars({ db, uploadsDir }) {
       .all()
 
     let repaired = 0
+    let rehydrated = 0
     for (const row of rows) {
       const raw = String(row.avatar_url || '').trim()
       if (!raw) continue
@@ -552,13 +553,34 @@ async function repairMissingUploadAvatars({ db, uploadsDir }) {
       const fullPath = join(uploadsDir, fileName)
       if (fs.existsSync(fullPath)) continue
 
-      // Remove the reference so the frontend uses its built-in non-upload fallback.
+      // The ephemeral file is gone. If we have a durable copy in the DB
+      // (avatar_data), rehydrate the on-disk cache instead of discarding the
+      // reference — this is what lets avatars survive a Railway redeploy.
+      let durable = null
+      try {
+        durable = await db.prepare('SELECT avatar_data FROM profiles WHERE id = ?').get(row.id)
+      } catch {
+        // avatar_data column may not exist yet (migration pending); treat as no durable copy.
+      }
+      if (durable?.avatar_data) {
+        try {
+          const buf = Buffer.isBuffer(durable.avatar_data) ? durable.avatar_data : Buffer.from(durable.avatar_data)
+          fs.writeFileSync(fullPath, buf)
+          rehydrated += 1
+          continue
+        } catch (writeErr) {
+          console.warn('[startup] could not rehydrate avatar from DB:', writeErr?.message || writeErr)
+        }
+      }
+
+      // No durable copy: remove the dangling reference so the frontend uses its
+      // built-in non-upload fallback instead of spamming 404s.
       await db.prepare('UPDATE profiles SET avatar_url = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(row.id)
       repaired += 1
     }
 
-    if (repaired > 0) {
-      console.warn('[startup] repaired missing upload avatars', { repaired })
+    if (repaired > 0 || rehydrated > 0) {
+      console.warn('[startup] avatar self-heal', { rehydrated, nulled: repaired })
     }
   } catch (error) {
     console.warn('[startup] failed to repair missing upload avatars:', error?.message || error)

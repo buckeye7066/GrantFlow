@@ -1794,9 +1794,35 @@ router.post('/:id/avatar', requireUploadsWritable, runUploadSingle('avatar'), as
 
   try {
     const publicPath = `/uploads/${req.file.filename}`
-    await req.db
-      .prepare('UPDATE profiles SET avatar_url = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
-      .run(publicPath, id)
+
+    // Persist the image bytes in the DB so the avatar survives an ephemeral
+    // filesystem reset (Railway wipes /uploads on every redeploy). The DB is the
+    // durable source of truth; the on-disk file is just a fast-path cache.
+    let avatarData = null
+    let avatarContentType = null
+    try {
+      avatarData = fs.readFileSync(join(getUploadsDir(req), req.file.filename))
+      avatarContentType = req.file.mimetype || guessImageContentType(req.file.filename)
+    } catch (readErr) {
+      console.warn('[profiles] could not read uploaded avatar for DB persistence:', readErr?.message || readErr)
+    }
+
+    try {
+      await req.db
+        .prepare('UPDATE profiles SET avatar_url = ?, avatar_data = ?, avatar_content_type = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
+        .run(publicPath, avatarData, avatarContentType, id)
+    } catch (colErr) {
+      // Resilience: if the avatar_data/avatar_content_type columns are not yet
+      // present (migration not applied), fall back to the path-only update so
+      // the upload still succeeds rather than 500ing.
+      if (/avatar_data|avatar_content_type|column/i.test(String(colErr?.message || colErr))) {
+        await req.db
+          .prepare('UPDATE profiles SET avatar_url = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
+          .run(publicPath, id)
+      } else {
+        throw colErr
+      }
+    }
 
     const previousAvatar = existing.avatar_url
     if (previousAvatar && previousAvatar.startsWith('/uploads/')) {
@@ -1953,6 +1979,46 @@ router.get('/:id/avatar/download', async (req, res) => {
 
   const avatarUrl = row.avatar_url ? String(row.avatar_url).trim() : ''
   const fileName = extractUploadsFilename(avatarUrl)
+
+  const uploadsDir = getUploadsDir(req)
+  const legacyDir = req?.legacyUploadsDir ? String(req.legacyUploadsDir) : null
+  const tried = []
+  const primary = fileName ? join(uploadsDir, fileName) : null
+
+  // Fast path: serve the on-disk cache when it exists.
+  if (fileName) {
+    tried.push(primary)
+    if (!fs.existsSync(primary) && legacyDir && legacyDir !== uploadsDir) {
+      const legacy = join(legacyDir, fileName)
+      tried.push(legacy)
+      if (fs.existsSync(legacy)) {
+        res.setHeader('Content-Type', guessImageContentType(legacy))
+        return fs.createReadStream(legacy).pipe(res)
+      }
+    }
+    if (fs.existsSync(primary)) {
+      res.setHeader('Content-Type', guessImageContentType(primary))
+      return fs.createReadStream(primary).pipe(res)
+    }
+  }
+
+  // Durable fallback: serve the bytes stored in the DB. Works even when the
+  // ephemeral file is gone or avatar_url was NULLed by an older self-heal.
+  try {
+    const blob = await req.db
+      .prepare('SELECT avatar_data, avatar_content_type FROM profiles WHERE id = ?')
+      .get(id)
+    if (blob?.avatar_data) {
+      const buf = Buffer.isBuffer(blob.avatar_data) ? blob.avatar_data : Buffer.from(blob.avatar_data)
+      res.setHeader('Content-Type', blob.avatar_content_type || 'image/png')
+      // Best-effort rehydrate of the on-disk cache for subsequent requests.
+      if (primary) { try { fs.writeFile(primary, buf, () => {}) } catch { /* ignore */ } }
+      return res.end(buf)
+    }
+  } catch {
+    // avatar_data column may not exist yet (migration pending); fall through.
+  }
+
   if (!fileName) {
     return res.status(404).json({
       ok: false,
@@ -1960,26 +2026,6 @@ router.get('/:id/avatar/download', async (req, res) => {
       code: 'AVATAR_NOT_SET',
       profile_id: String(id),
     })
-  }
-
-  const uploadsDir = getUploadsDir(req)
-  const legacyDir = req?.legacyUploadsDir ? String(req.legacyUploadsDir) : null
-  const tried = []
-
-  const primary = join(uploadsDir, fileName)
-  tried.push(primary)
-  if (!fs.existsSync(primary) && legacyDir && legacyDir !== uploadsDir) {
-    const legacy = join(legacyDir, fileName)
-    tried.push(legacy)
-    if (fs.existsSync(legacy)) {
-      res.setHeader('Content-Type', guessImageContentType(legacy))
-      return fs.createReadStream(legacy).pipe(res)
-    }
-  }
-
-  if (fs.existsSync(primary)) {
-    res.setHeader('Content-Type', guessImageContentType(primary))
-    return fs.createReadStream(primary).pipe(res)
   }
 
   console.warn('[profiles] avatar file missing', {
