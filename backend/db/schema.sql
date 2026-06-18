@@ -3617,6 +3617,8 @@ CREATE TABLE IF NOT EXISTS yana_lead_candidates (
   id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
   organization_id TEXT,
   profile_id TEXT,
+  source TEXT DEFAULT 'organizations',
+  external_id TEXT,
   entity_type TEXT,
   organization_name TEXT,
   organization_type TEXT,
