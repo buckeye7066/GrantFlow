@@ -22,12 +22,24 @@
  * "migration never applied → relation/column missing" production outage.
  */
 
-// Columns added by 0073_funding_opportunities_reality_verdict.sql.
-const REALITY_COLUMNS = [
+// Columns the Funding Library read/write paths require but which live in
+// migrations the strict boot chain may not have reached:
+//   - reality_status/reality_reasons/final_url/http_status: 0073 (reality gate)
+//   - is_hidden/result_kind: 0062. 0062's one-time 90k-row result_kind backfill
+//     exceeds statement_timeout and, because the whole migration is one
+//     transaction, rolls back its own ADD COLUMNs — leaving is_hidden missing,
+//     which BREAKS the Funding Library read query
+//     (`WHERE is_hidden = 0 OR is_hidden IS NULL`). Adding the columns here is a
+//     fast, metadata-only no-op-once-present that decouples the schema from the
+//     slow backfill. `default` is applied as a constant so PG 11+ keeps it
+//     metadata-only even on a large table.
+const REQUIRED_COLUMNS = [
   { name: 'reality_status', pg: 'TEXT', sqlite: 'TEXT' },
   { name: 'reality_reasons', pg: 'JSONB', sqlite: 'TEXT' },
   { name: 'final_url', pg: 'TEXT', sqlite: 'TEXT' },
   { name: 'http_status', pg: 'INTEGER', sqlite: 'INTEGER' },
+  { name: 'is_hidden', pg: 'BOOLEAN', sqlite: 'INTEGER', default: { pg: 'FALSE', sqlite: '0' } },
+  { name: 'result_kind', pg: 'TEXT', sqlite: 'TEXT' },
 ]
 
 // Identifier whitelist — names are hard-coded above, but guard anyway so a
@@ -77,20 +89,23 @@ export async function ensureFundingOpportunitySchema(db, { logger = console } = 
     return out
   }
 
-  for (const col of REALITY_COLUMNS) {
+  for (const col of REQUIRED_COLUMNS) {
     if (!IDENT_RE.test(col.name)) continue
     if (await hasColumn(db, 'funding_opportunities', col.name)) {
       out.present.push(col.name)
       continue
     }
     const type = db.dialect === 'postgres' ? col.pg : col.sqlite
+    const defClause = col.default
+      ? ` DEFAULT ${db.dialect === 'postgres' ? col.default.pg : col.default.sqlite}`
+      : ''
     try {
       if (db.dialect === 'postgres') {
-        await db.exec(`ALTER TABLE funding_opportunities ADD COLUMN IF NOT EXISTS ${col.name} ${type}`)
+        await db.exec(`ALTER TABLE funding_opportunities ADD COLUMN IF NOT EXISTS ${col.name} ${type}${defClause}`)
       } else {
         // SQLite < 3.35 has no IF NOT EXISTS for ADD COLUMN; the hasColumn
         // guard above already prevents the duplicate, try/catch covers races.
-        await db.exec(`ALTER TABLE funding_opportunities ADD COLUMN ${col.name} ${type}`)
+        await db.exec(`ALTER TABLE funding_opportunities ADD COLUMN ${col.name} ${type}${defClause}`)
       }
       out.added.push(col.name)
       logger.info?.(`[funding-schema] added funding_opportunities.${col.name}`)

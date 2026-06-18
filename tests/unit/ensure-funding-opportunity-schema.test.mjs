@@ -12,7 +12,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { ensureFundingOpportunitySchema } from '../../backend/utils/ensureFundingOpportunitySchema.js'
 
-const REALITY_COLS = ['reality_status', 'reality_reasons', 'final_url', 'http_status']
+const REALITY_COLS = ['reality_status', 'reality_reasons', 'final_url', 'http_status', 'is_hidden', 'result_kind']
 
 function makeFakeDb({ dialect = 'postgres', existingCols = new Set(), failCols = new Set() } = {}) {
   const cols = new Set(existingCols)
@@ -75,7 +75,13 @@ test('only adds the missing subset', async () => {
   const db = makeFakeDb({ dialect: 'postgres', existingCols: new Set(['reality_status']) })
   const out = await ensureFundingOpportunitySchema(db, { logger: { info() {}, warn() {} } })
   assert.ok(out.present.includes('reality_status'))
-  assert.deepEqual(out.added.sort(), ['final_url', 'http_status', 'reality_reasons'])
+  assert.deepEqual(out.added.sort(), ['final_url', 'http_status', 'is_hidden', 'reality_reasons', 'result_kind'])
+})
+
+test('is_hidden is added with a default clause', async () => {
+  const db = makeFakeDb({ dialect: 'postgres' })
+  await ensureFundingOpportunitySchema(db, { logger: { info() {}, warn() {} } })
+  assert.ok(db._execLog.some((s) => /ADD COLUMN IF NOT EXISTS is_hidden BOOLEAN DEFAULT FALSE/i.test(s)))
 })
 
 test('a single column failure is non-fatal and recorded', async () => {

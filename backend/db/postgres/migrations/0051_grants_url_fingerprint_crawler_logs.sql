@@ -19,6 +19,25 @@ ALTER TABLE grants ADD COLUMN IF NOT EXISTS match_decision TEXT;
 -- the backfill below — on a fresh replay nothing has created it yet (0052 is
 -- the next migration to add it), so create it here to keep the chain replayable.
 ALTER TABLE grants ADD COLUMN IF NOT EXISTS match_explanation TEXT;
+
+-- Prod drift repair: some environments materialised grants.match_explanation
+-- as JSONB (e.g. via the SQLite->Postgres data import), but the canonical type
+-- is TEXT — the matcher writes JSON.stringify(...) as a string, readers treat
+-- it as text, and no code uses jsonb operators on it. The text backfills below
+-- (and the `match_explanation = ''` comparisons in 0052/0055/0057) fail on a
+-- jsonb column with "invalid input syntax for type json" because '' is not
+-- valid JSON. Normalise to TEXT first; no-op when already TEXT. This unblocks
+-- the whole grants-backfill chain (0051/0052/0055/0057).
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name = 'grants' AND column_name = 'match_explanation' AND data_type = 'jsonb'
+  ) THEN
+    ALTER TABLE grants ALTER COLUMN match_explanation TYPE TEXT USING match_explanation::text;
+  END IF;
+END $$;
+
 ALTER TABLE grants ADD COLUMN IF NOT EXISTS fingerprint TEXT;
 ALTER TABLE grants ADD COLUMN IF NOT EXISTS fingerprint_version INT DEFAULT 1;
 
