@@ -774,6 +774,31 @@ if (shouldMigrateOnBoot && !app.locals.db_startup_error) {
   }
 }
 
+// Mission Control / Agent Control Center self-heal.
+//
+// Runs UNCONDITIONALLY (regardless of MIGRATE_ON_BOOT / SMOKE_MODE),
+// because the agent telemetry + control-center tables must exist for the
+// admin dashboard to show real status instead of "Agent Not installed".
+// Every file applied here is pure DDL with IF NOT EXISTS / IF EXISTS
+// guards (also covered by schema.sql for fresh sqlite fixtures), so this
+// is a strict no-op on a fully-migrated DB and a self-heal on a partially-
+// migrated one. Per-file try/catch inside the helper means a single bad
+// file (e.g. transient PG lock) cannot prevent the rest from applying or
+// block the server from coming up.
+if (!app.locals.db_startup_error) {
+  try {
+    const { ensureAgentSubsystemTables } = await import(
+      './utils/ensureAgentSubsystemTables.js'
+    )
+    await ensureAgentSubsystemTables(db, { logger: console })
+  } catch (agentSelfHealErr) {
+    console.warn(
+      '[agent-subsystem] startup self-heal threw (non-fatal):',
+      agentSelfHealErr?.message || agentSelfHealErr,
+    )
+  }
+}
+
 // Then add columns that may be missing (schema.sql may not include every migration column).
 // This legacy auto-migration is SQLite-only. Postgres must be migrated deterministically via SQL migrations.
 if (db.dialect === 'sqlite') {
