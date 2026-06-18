@@ -2075,6 +2075,10 @@ app.use('/api/notifications', notificationsRouter);
 // /profiles/:id/school-portals routes without colliding with the profiles
 // router (which uses :id).
 app.use('/api', lazyRouter('./routes/studentPortals.js'));
+// Committed-college financial-aid workspace (commit one school → others archive;
+// aggregate COA / FAFSA / aid / matched funding / Hamilton status). Same
+// /:profileId path convention as studentPortals.
+app.use('/api', lazyRouter('./routes/committedCollege.js'));
 app.use('/api/application-tasks', lazyRouter('./routes/applicationTasks.js'));
 // Hamilton Automation Agent — Application Autopilot / Funding Completion.
 // Note: existing Yana = Client Discovery / Lead Funnel and is unchanged.
