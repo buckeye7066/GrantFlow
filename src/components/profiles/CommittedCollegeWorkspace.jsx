@@ -11,7 +11,7 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { useToast } from '@/components/ui/use-toast'
 import {
   getCommittedCollegeWorkspace, commitToCollege, uncommitCollege,
-  setCommittedCollegeCOA, mergeCommittedCollegeFunding,
+  setCommittedCollegeCOA, setCommittedCollegeHousing, mergeCommittedCollegeFunding,
   getFafsaStatus, setFafsaStatus,
   getFafsaVerification, setFafsaVerificationDoc,
   addCommittedCollegeAid, updateCommittedCollegeAid, removeCommittedCollegeAid,
@@ -69,6 +69,15 @@ export default function CommittedCollegeWorkspace({ profileId, applications = []
     mutationFn: (collegeId) => uncommitCollege(profileId, collegeId),
     onSuccess: () => { toast({ title: 'Restored' }); invalidate() },
     onError: (err) => toast({ title: 'Restore failed', description: err?.message, variant: 'destructive' }),
+  })
+
+  // Housing: on/off campus + off-campus address (re-points funding crawlers).
+  const [addrForm, setAddrForm] = useState({ line1: "", city: "", state: "", zip: "" })
+  const [addrDirty, setAddrDirty] = useState(false)
+  const housingMut = useMutation({
+    mutationFn: (payload) => setCommittedCollegeHousing(profileId, payload),
+    onSuccess: () => { toast({ title: "Housing updated", description: "Funding search now follows this location." }); setAddrDirty(false); invalidate() },
+    onError: (err) => toast({ title: "Save failed", description: err?.message, variant: "destructive" }),
   })
 
   const [coaOpen, setCoaOpen] = useState(false)
@@ -307,6 +316,49 @@ export default function CommittedCollegeWorkspace({ profileId, applications = []
               </div>
             </div>
           ) : null}
+
+          {/* Housing — on/off campus + off-campus address; re-points funding crawlers */}
+          {(() => {
+            const housing = c.housing_status || null
+            const fl = workspace.funding_location || null
+            const savedAddr = c.student_address || {}
+            const setStatus = (status) => housingMut.mutate({ housing_status: status, address: status === "off_campus" ? (addrDirty ? addrForm : savedAddr) : null })
+            return (
+              <div className="rounded-md border border-slate-200 p-3">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-sm font-medium text-slate-700">Housing</span>
+                  <div className="flex gap-1">
+                    <Button size="sm" variant={housing === "on_campus" ? "default" : "outline"} onClick={() => setStatus("on_campus")} disabled={housingMut.isPending}>On-campus</Button>
+                    <Button size="sm" variant={housing === "off_campus" ? "default" : "outline"} onClick={() => setStatus("off_campus")} disabled={housingMut.isPending}>Off-campus</Button>
+                  </div>
+                </div>
+                {housing === "off_campus" ? (
+                  <div className="mt-3 space-y-2">
+                    <p className="text-xs text-slate-500">Enter the student’s off-campus address — funding searches (housing, local benefits, community programs) will use this area.</p>
+                    <Input placeholder="Street address" value={addrForm.line1 || savedAddr.line1 || ""} onChange={(e) => { setAddrForm((f) => ({ ...f, line1: e.target.value })); setAddrDirty(true) }} />
+                    <div className="grid grid-cols-3 gap-2">
+                      <Input placeholder="City" value={addrForm.city || savedAddr.city || ""} onChange={(e) => { setAddrForm((f) => ({ ...f, city: e.target.value })); setAddrDirty(true) }} />
+                      <Input placeholder="State" maxLength={2} value={addrForm.state || savedAddr.state || ""} onChange={(e) => { setAddrForm((f) => ({ ...f, state: e.target.value })); setAddrDirty(true) }} />
+                      <Input placeholder="ZIP" value={addrForm.zip || savedAddr.zip || ""} onChange={(e) => { setAddrForm((f) => ({ ...f, zip: e.target.value })); setAddrDirty(true) }} />
+                    </div>
+                    {addrDirty ? (
+                      <div className="flex justify-end">
+                        <Button size="sm" onClick={() => housingMut.mutate({ housing_status: "off_campus", address: addrForm })} disabled={housingMut.isPending}>
+                          {housingMut.isPending ? "Saving…" : "Save address"}
+                        </Button>
+                      </div>
+                    ) : null}
+                  </div>
+                ) : null}
+                {fl ? (
+                  <p className="mt-2 text-xs text-slate-500">
+                    Funding search location: <strong>{[fl.city, fl.state, fl.zip].filter(Boolean).join(", ")}</strong>
+                    {fl.source === "off_campus_address" ? " (off-campus address)" : fl.source === "committed_campus" ? " (campus)" : ""}
+                  </p>
+                ) : null}
+              </div>
+            )
+          })()}
 
           {/* FAFSA lifecycle */}
           <div className="rounded-md border border-slate-200 p-3">

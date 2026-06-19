@@ -45,6 +45,19 @@ export async function mergeCommittedCollegeFunding(
   })
 }
 
+/**
+ * Set the committed student's housing (on/off campus) + off-campus address.
+ * Changes where funding crawlers search. { housing_status: 'on_campus'|'off_campus',
+ * address?: {line1,city,state,zip} }.
+ */
+export async function setCommittedCollegeHousing(profileId, { housing_status, address = null } = {}) {
+  assertRealProfileId(profileId, 'setCommittedCollegeHousing')
+  return apiFetch(`/api/profiles/${profileId}/committed-college/housing`, {
+    method: 'POST',
+    body: JSON.stringify({ housing_status, address }),
+  })
+}
+
 /** Set the committed college's cost-of-attendance ({tuition, housing, books, other, total}). */
 export async function setCommittedCollegeCOA(profileId, coa = {}) {
   assertRealProfileId(profileId, 'setCommittedCollegeCOA')

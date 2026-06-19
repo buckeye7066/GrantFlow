@@ -218,6 +218,58 @@ export function removeAidEntry(uniSection, entryId) {
   return { ok: true, section: withCommittedPipeline(uniSection, committed.id, next) }
 }
 
+export const HOUSING_STATUSES = Object.freeze(['on_campus', 'off_campus'])
+
+function normalizeAddress(a = {}) {
+  const s = (v) => (v === null || v === undefined ? null : String(v).trim().slice(0, 200) || null)
+  return {
+    line1: s(a.line1 ?? a.street ?? a.address),
+    line2: s(a.line2),
+    city: s(a.city),
+    state: s(a.state),
+    zip: s(a.zip ?? a.postal_code ?? a.zip_code),
+  }
+}
+
+/**
+ * Set the committed student's housing choice (on/off campus) + an off-campus
+ * address. Pure. The address changes where funding crawlers search (see
+ * resolveStudentFundingLocation). Returns { ok, error?, section }.
+ */
+export function setHousing(uniSection, { housing_status = null, address = null } = {}, { now = null } = {}) {
+  const committed = resolveCommittedCollege(uniSection)
+  if (!committed) return { ok: false, error: 'no_committed_college', section: uniSection }
+  const status = housing_status === null ? null : normStatus(housing_status)
+  if (status !== null && !HOUSING_STATUSES.includes(status)) return { ok: false, error: 'invalid_housing_status', section: uniSection }
+  const nextAddress = address ? normalizeAddress(address) : (committed.student_address || null)
+  const applications = getApplications(uniSection).map((a) => (
+    a.id === committed.id
+      ? { ...a, housing_status: status, student_address: nextAddress, housing_updated_at: now }
+      : a
+  ))
+  return { ok: true, section: { ...uniSection, applications } }
+}
+
+/**
+ * The location funding crawlers should search for a committed student:
+ *   - off-campus with an address → that address's zip/state/city
+ *   - otherwise (on-campus / committed) → the school's city/state
+ * Returns null when no committed college (caller falls back to the home address).
+ */
+export function resolveStudentFundingLocation(uniSection) {
+  const committed = resolveCommittedCollege(uniSection)
+  if (!committed) return null
+  const status = normStatus(committed.housing_status)
+  const addr = committed.student_address || null
+  if (status === 'off_campus' && addr && (addr.zip || addr.state || addr.city)) {
+    return { zip: addr.zip || null, state: addr.state || null, city: addr.city || null, source: 'off_campus_address', college: committed.name || null }
+  }
+  if (committed.city || committed.state || committed.zip) {
+    return { zip: committed.zip || null, state: committed.state || null, city: committed.city || null, source: 'committed_campus', college: committed.name || null }
+  }
+  return null
+}
+
 function summarizeHamiltonTasks(tasks = []) {
   const list = Array.isArray(tasks) ? tasks : []
   const blocked = list.filter((t) => String(t?.status || '').includes('blocked'))
@@ -319,7 +371,10 @@ export function buildCollegeAidWorkspace({ sections = {}, matchedFunding = [], h
       state: college.state || null,
       website_url: college.website_url || null,
       portals: college.portals || {},
+      housing_status: normStatus(college.housing_status) || null,
+      student_address: college.student_address || null,
     },
+    funding_location: resolveStudentFundingLocation(uni),
     cost_of_attendance: coa,
     fafsa,
     aid: {
