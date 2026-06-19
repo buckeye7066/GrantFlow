@@ -14,6 +14,7 @@ import { buildProfileFacets } from './profile/profileTaxonomy.js'
 import { computeMatchDecision } from './matchDecisionEngine.js'
 import { trustedOriginClause, trustedSourceClause } from '../utils/recordOrigins.js'
 import { assessOpportunityTrust } from './opportunityTrust.js'
+import { getMemories } from './anyaBrainService.js'
 
 // Section labels aligned with canonical keys from backend/config/profileSchema.js
 const SECTION_LABELS = {
@@ -84,6 +85,11 @@ export async function buildAnyaContext(db, user, opts = {}) {
   const profileBlock = buildProfileSnapshot(profileContext)
   if (profileBlock) sections.push(profileBlock)
 
+  // ── 1b. What Anya remembers about THIS profile (cross-session, profile-scoped
+  // brain memory) — lets her be personable and pick up where they left off. ──
+  const memoryBlock = await buildProfileMemoryBlock(db, profileId)
+  if (memoryBlock) sections.push(memoryBlock)
+
   // ── 2. Available results / matching snapshot ──
   const resultsBlock = await buildResultsSnapshot(db, profileContext)
   if (resultsBlock) sections.push(resultsBlock)
@@ -119,6 +125,40 @@ export async function buildAnyaContext(db, user, opts = {}) {
   }
 
   return ['## Live Context (grounded in real data — use this, not generic advice)', '', ...sections].join('\n')
+}
+
+/**
+ * Profile-scoped brain memory — the things Anya has remembered about THIS
+ * profile across sessions (preferences, context, personal notes). Loaded into
+ * the prompt so she can be personable and continue naturally. Best-effort.
+ */
+async function buildProfileMemoryBlock(db, profileId) {
+  if (!db || !profileId) return null
+  let memories = []
+  try {
+    memories = await getMemories(db, { scope: 'profile', scopeId: String(profileId), limit: 25 })
+  } catch {
+    return null // table may not exist yet
+  }
+  if (!Array.isArray(memories) || memories.length === 0) return null
+  const summarize = (content) => {
+    if (content === null || content === undefined) return ''
+    if (typeof content === 'string') return content.slice(0, 240)
+    if (typeof content === 'object') {
+      const v = content.text ?? content.value ?? content.note ?? content.summary
+      if (typeof v === 'string') return v.slice(0, 240)
+      try { return JSON.stringify(content).slice(0, 240) } catch { return '' }
+    }
+    return String(content).slice(0, 240)
+  }
+  const lines = ['### What I remember about this profile']
+  for (const m of memories) {
+    const key = String(m.memory_key || m.memory_type || 'note').replace(/_/g, ' ')
+    const text = summarize(m.content)
+    if (text) lines.push(`- **${key}:** ${text}`)
+  }
+  lines.push('')
+  return lines.length > 2 ? lines.join('\n') : null
 }
 
 /**
