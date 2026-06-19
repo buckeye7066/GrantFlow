@@ -18,6 +18,8 @@ import {
   updateAidEntry,
   removeAidEntry,
   aidIsSecured,
+  setHousing,
+  resolveStudentFundingLocation,
 } from '../services/college/committedCollege.js'
 
 const uni = (apps) => ({ applications: apps })
@@ -113,6 +115,28 @@ describe('aid pipeline (add/update/remove)', () => {
     expect(rem.ok).toBe(true)
     expect(resolveCommittedCollege(rem.section).financial_aid_pipeline).toHaveLength(0)
     expect(removeAidEntry(rem.section, 'x1').error).toBe('aid_entry_not_found')
+  })
+})
+
+describe('housing → funding location', () => {
+  const committedUni = (extra = {}) => uni([app('1', 'MTSU', 'committed', { city: 'Murfreesboro', state: 'TN', ...extra })])
+
+  it('off-campus uses the entered address; on-campus uses the campus', () => {
+    const off = setHousing(committedUni(), { housing_status: 'off_campus', address: { line1: '1 Greek Row', city: 'Murfreesboro', state: 'TN', zip: '37130' } }, { now: 't' })
+    expect(off.ok).toBe(true)
+    expect(resolveStudentFundingLocation(off.section)).toMatchObject({ zip: '37130', source: 'off_campus_address' })
+
+    const on = setHousing(committedUni(), { housing_status: 'on_campus' }, { now: 't' })
+    expect(resolveStudentFundingLocation(on.section)).toMatchObject({ city: 'Murfreesboro', state: 'TN', source: 'committed_campus' })
+  })
+
+  it('rejects an invalid housing status and requires a committed college', () => {
+    expect(setHousing(committedUni(), { housing_status: 'mars' }).error).toBe('invalid_housing_status')
+    expect(setHousing(uni([app('1', 'X', 'accepted')]), { housing_status: 'on_campus' }).error).toBe('no_committed_college')
+  })
+
+  it('no committed college → null funding location (caller falls back to home)', () => {
+    expect(resolveStudentFundingLocation(uni([app('1', 'X', 'accepted')]))).toBeNull()
   })
 })
 

@@ -5,6 +5,7 @@ import { inferUsStateZipFromText, collectAddressTextForInference } from '../util
 import { normalizeState, normalizeStateFromText } from '../utils/stateNormalization.js'
 import { createLogger } from '../utils/logger.js'
 import { getProfileType, resolveProfileType } from './profileTypeRegistry.js'
+import { resolveStudentFundingLocation } from './college/committedCollege.js'
 const log = createLogger('profileHelpers')
 
 // Full state name → 2-letter abbreviation for extractStateFromContext fallback
@@ -340,6 +341,25 @@ export async function loadProfileContext(db, profileId) {
     city: profile.city || organization?.city || null,
   }
   
+  // If this is a student who has COMMITTED to a college, their funding location
+  // follows the school: an off-campus address (when set) or the campus city/state.
+  // This re-points geo/housing crawlers at the school's area instead of the
+  // student's home — the moment they move to school, funding search moves too.
+  try {
+    const uni = sections?.university_applications
+    if (uni) {
+      const fundingLoc = resolveStudentFundingLocation(uni)
+      if (fundingLoc && (fundingLoc.zip || fundingLoc.state || fundingLoc.city)) {
+        if (fundingLoc.zip) { mergedProfile.postal_code = fundingLoc.zip; mergedProfile.zip_code = fundingLoc.zip; mergedProfile.zip = fundingLoc.zip }
+        if (fundingLoc.state) mergedProfile.state = fundingLoc.state
+        if (fundingLoc.city) mergedProfile.city = fundingLoc.city
+        mergedProfile.funding_location_source = fundingLoc.source
+      }
+    }
+  } catch (err) {
+    log.warn(`[loadProfileContext] student funding-location override failed: ${err?.message || err}`)
+  }
+
   const sectionKeys = Object.keys(sections)
   log.info(
     `[loadProfileContext] profile=${profileId} zip=${mergedProfile.postal_code || mergedProfile.zip_code || '?'} ` +

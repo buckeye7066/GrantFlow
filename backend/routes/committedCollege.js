@@ -24,6 +24,8 @@ import {
   addAidEntry,
   updateAidEntry,
   removeAidEntry,
+  setHousing,
+  HOUSING_STATUSES,
 } from '../services/college/committedCollege.js'
 import { planCollegeFundingMerge } from '../services/college/collegeFundingMerge.js'
 import {
@@ -483,6 +485,34 @@ router.delete('/profiles/:profileId/committed-college/aid/:entryId', async (req,
   } catch (err) {
     log.error('DELETE committed-college/aid failed', { error: err?.message })
     return res.status(500).json({ ok: false, error: 'aid_remove_failed' })
+  }
+})
+
+/**
+ * Set the committed student's housing (on/off campus) + off-campus address.
+ * Changes where funding crawlers search for this profile (loadProfileContext
+ * re-points geo location at the school's area / the off-campus address).
+ */
+router.post('/profiles/:profileId/committed-college/housing', async (req, res) => {
+  const user = requireAuthenticatedUser(req, res)
+  if (!user) return
+  const { profileId } = req.params
+  if (!(await userMayAccessProfile(req, profileId))) return res.status(403).json({ error: 'Forbidden' })
+  const housing_status = req.body?.housing_status ?? null
+  if (housing_status !== null && !HOUSING_STATUSES.includes(String(housing_status))) {
+    return res.status(400).json({ ok: false, error: `housing_status must be one of: ${HOUSING_STATUSES.join(', ')}` })
+  }
+  try {
+    const sections = await loadSections(req.db, profileId)
+    const uni = sections.university_applications || { applications: [] }
+    const result = setHousing(uni, { housing_status, address: req.body?.address || null }, { now: new Date().toISOString() })
+    if (!result.ok) return res.status(result.error === 'no_committed_college' ? 409 : 400).json({ ok: false, error: result.error })
+    await persistUniversityApplications(req.db, profileId, getAuthUserId(user), result.section)
+    const workspace = buildCollegeAidWorkspace({ sections: { ...sections, university_applications: result.section } })
+    return res.json({ ok: true, workspace })
+  } catch (err) {
+    log.error('POST committed-college/housing failed', { error: err?.message })
+    return res.status(500).json({ ok: false, error: 'housing_update_failed' })
   }
 })
 
