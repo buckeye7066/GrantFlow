@@ -305,9 +305,39 @@ export async function runRobert({
 
     // ---- Phase 7–9: match + recommend ----
     if ([ROBERT_MODES.MATCH, ROBERT_MODES.RECOMMEND, ROBERT_MODES.FULL_CYCLE].includes(chosenMode)) {
-      // Pull the opportunities we just ingested.
+      // Pull opportunities to score against profiles.
+      //
+      // Historically this only matched against rows ingested in *this* run
+      // (Phase 4 → Phase 5 → Phase 7). When the Agent Control Center runs
+      // Robert without `deps.opportunityAdapter` wired (the default — we don't
+      // want unattended outbound web calls during a Mission Control click),
+      // Phase 4 is skipped, so `summary.ingested` is empty, so the match phase
+      // had nothing to do, so Robert reported `recommendations_created=0` and
+      // Mission Control surfaced him as a "noop" agent every cycle.
+      //
+      // That violated mission goals #2 ("match to actual needs"), #6
+      // ("intelligent matching"), and #8 ("avoid zero results when funding
+      // exists"): the canonical `funding_opportunities` table already holds
+      // tens of thousands of real, ingested-by-other-paths rows (crawlers,
+      // school-portal imports, manual curation), and Robert was ignoring
+      // them. The fallback below scores a recent, capped sample of those rows
+      // against every profile in this run so a Mission Control cycle always
+      // produces real, persisted recommendations when funding exists.
+      // `createRecommendationIfHelpful` is idempotent on (profile_id,
+      // opportunity_id) so repeating across cycles is safe.
       const newlyIngested = summary.ingested.map((x) => x.id)
-      const ingestedRows = await fetchOpportunitiesByIds(db, newlyIngested)
+      let ingestedRows = await fetchOpportunitiesByIds(db, newlyIngested)
+      if (ingestedRows.length === 0) {
+        const fallback = await fetchRecentActiveOpportunities(db, cfg.maxOpportunitiesPerRun)
+        if (fallback.length > 0) {
+          ingestedRows = fallback
+          summary.notes.push({
+            stage: 'match',
+            note: 'no fresh ingests this run — matching against the most-recent active funding_opportunities so the cycle still produces recommendations',
+            fallback_count: fallback.length,
+          })
+        }
+      }
       const profileContexts = await Promise.all(
         profilesToConsider.map((pid) => safe(() => getCtx({ db, profileId: pid, deps }))),
       )
@@ -436,6 +466,40 @@ async function fetchOpportunitiesByIds(db, ids) {
     return await db.prepare(`SELECT * FROM funding_opportunities WHERE id IN (${placeholders})`).all(...ids) || []
   } catch (err) {
     log.warn(`fetchOpportunitiesByIds failed (returning none): ${String(err?.message || err)}`)
+    return []
+  }
+}
+
+// Fallback for the match phase when no opportunities were ingested in this
+// run (the Agent Control Center path — Phase 4 is gated on a wired
+// opportunityAdapter, which we don't ship by default). We pull the most
+// recently updated, *active*, *non-hidden* opportunities so Robert's
+// recommendations stay grounded in real, currently-listed funding instead of
+// going silent. Bounded by maxOpportunitiesPerRun so a cycle is always cheap.
+//
+// SAFETY: this is read-only — Robert's downstream `createRecommendationIfHelpful`
+// is idempotent on (profile_id, opportunity_id), so repeated cycles never
+// duplicate. We deliberately avoid filtering on `link_status='ok'` because
+// directory-style rows (mission rule: directory resources must always survive
+// filtering unless explicitly excluded) often start as 'unverified'.
+async function fetchRecentActiveOpportunities(db, cap = 50) {
+  if (!db?.prepare) return []
+  const limit = Math.max(1, Math.min(Number(cap) || 50, 200))
+  try {
+    return (
+      (await db
+        .prepare(
+          `SELECT *
+             FROM funding_opportunities
+            WHERE COALESCE(is_active, 1) IN (1, TRUE, 'true')
+              AND COALESCE(is_hidden, 0) IN (0, FALSE, 'false')
+            ORDER BY COALESCE(updated_at, created_at) DESC
+            LIMIT ?`,
+        )
+        .all(limit)) || []
+    )
+  } catch (err) {
+    log.warn(`fetchRecentActiveOpportunities failed (returning none): ${String(err?.message || err)}`)
     return []
   }
 }

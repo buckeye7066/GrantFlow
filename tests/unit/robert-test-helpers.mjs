@@ -319,6 +319,22 @@ export function makeMemoryDb() {
     if (/^SELECT \* FROM funding_opportunities WHERE id IN/i.test(sql)) {
       return rowsCopy(tables.funding_opportunities.filter((o) => params.includes(o.id)))
     }
+    // Fallback fetch used by Robert's match phase when no fresh ingests are
+    // available. Mirror the SQL signature in robertAgent.fetchRecentActiveOpportunities.
+    if (/^SELECT \*\s+FROM funding_opportunities\s+WHERE COALESCE\(is_active, 1\) IN \(1, TRUE, 'true'\)\s+AND COALESCE\(is_hidden, 0\) IN \(0, FALSE, 'false'\)\s+ORDER BY COALESCE\(updated_at, created_at\) DESC\s+LIMIT \?$/i.test(sql)) {
+      const limit = Number(params[0]) || 50
+      const truthy = (v, dflt) => {
+        if (v === undefined || v === null) return dflt
+        if (v === true || v === 1 || v === 'true') return true
+        return false
+      }
+      const rows = tables.funding_opportunities
+        .filter((o) => truthy(o.is_active, true) && !truthy(o.is_hidden, false))
+        .map((o) => ({ ...o }))
+        .sort((a, b) => String(b.updated_at || b.created_at || '').localeCompare(String(a.updated_at || a.created_at || '')))
+        .slice(0, limit)
+      return rowsCopy(rows)
+    }
     if (/^SELECT COUNT\(\*\) AS c FROM grants WHERE profile_id = \?/i.test(sql)) {
       const [pid] = params
       return { c: tables.grants.filter((g) => g.profile_id === pid).length }

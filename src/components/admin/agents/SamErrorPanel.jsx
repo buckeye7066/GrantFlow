@@ -13,7 +13,14 @@ const SEVERITY_STYLES = {
 }
 
 export default function SamErrorPanel({ data }) {
-  const [severity, setSeverity] = useState('all')
+  // Default to "issues only" (critical/high/medium/low). INFO entries are
+  // environment notes Sam emits when a tool can't run in the production
+  // runtime (no source tree, sandboxed network, schema bootstrap pending, …)
+  // — they are NOT failures and were drowning the panel with recurring
+  // "skipped" lines that the operator read as errors. We keep them
+  // accessible via the dropdown ("Show all (incl. info)") so they're never
+  // silently lost; the badge row still surfaces real severities.
+  const [severity, setSeverity] = useState('issues')
   const [status, setStatus] = useState('all')
 
   const findings = data?.findings?.findings || []
@@ -22,7 +29,8 @@ export default function SamErrorPanel({ data }) {
 
   const filtered = useMemo(() => {
     return findings.filter((f) => {
-      if (severity !== 'all' && f.severity !== severity) return false
+      if (severity === 'issues' && f.severity === 'info') return false
+      if (severity !== 'all' && severity !== 'issues' && f.severity !== severity) return false
       if (status !== 'all' && f.status !== status) return false
       return true
     })
@@ -52,15 +60,17 @@ export default function SamErrorPanel({ data }) {
           <>
             <div className="mb-2 flex flex-wrap items-center gap-2 text-xs">
               <Select value={severity} onValueChange={setSeverity}>
-                <SelectTrigger className="h-7 w-[120px]">
+                <SelectTrigger className="h-7 w-[180px]">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="all">All severities</SelectItem>
+                  <SelectItem value="issues">Issues only (no info)</SelectItem>
+                  <SelectItem value="all">Show all (incl. info)</SelectItem>
                   <SelectItem value="critical">Critical</SelectItem>
                   <SelectItem value="high">High</SelectItem>
                   <SelectItem value="medium">Medium</SelectItem>
                   <SelectItem value="low">Low</SelectItem>
+                  <SelectItem value="info">Info / skipped only</SelectItem>
                 </SelectContent>
               </Select>
               <Select value={status} onValueChange={setStatus}>

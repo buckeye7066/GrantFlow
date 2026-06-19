@@ -269,6 +269,19 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
     description: 'Stale full_cycle locks past their TTL must be auto-released; if they aren\'t, no new run can ever start.',
     async run({ db }) {
       try {
+        // SELF-HEAL FIRST. The periodic sweeper runs every 5 minutes
+        // (sweepExpiredLocks in agentControlStore), but Sam's audit cadence is
+        // faster — without an explicit sweep here, Sam intermittently flagged
+        // "Expired lock not released" findings against a lock that the next
+        // sweeper tick would have cleared seconds later, producing recurring
+        // false-positive Mission Control errors. Sam's job is to catch real
+        // contention, not to race the sweeper. Sweeping inline first means
+        // the only time we report `ok: false` is if the sweep itself failed
+        // to clear an expired row — i.e. an actual deadlock-class bug.
+        try {
+          const { sweepExpiredLocks } = await import('../agentControl/agentControlStore.js')
+          await sweepExpiredLocks(db).catch(() => {})
+        } catch { /* module load issue is benign for this check */ }
         const row = await db
           ?.prepare(`
             SELECT lock_name, control_run_id, expires_at FROM agent_control_locks
@@ -279,7 +292,7 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
         if (!row) return { ok: true, summary: 'no expired locks' }
         return {
           ok: false,
-          summary: `Expired lock not released: ${row.lock_name} (run ${row.control_run_id})`,
+          summary: `Expired lock survived in-line sweep: ${row.lock_name} (run ${row.control_run_id})`,
           evidence: row,
         }
       } catch (err) {
