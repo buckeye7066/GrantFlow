@@ -136,12 +136,12 @@ export function buildInvoiceEmail({ orgName, amountCents, periodStart, periodEnd
 }
 
 /** Optional Stripe payment link (only when Stripe is configured). Best-effort. */
-async function maybeStripePaymentLink(db, { profileId, amountCents }) {
+async function maybeStripePaymentLink(db, { profileId, amountCents, invoiceId }) {
   if (!process.env.STRIPE_SECRET_KEY) return null
   try {
     const { createInvoicePaymentLink } = await import('../stripeService.js').catch(() => ({}))
     if (typeof createInvoicePaymentLink === 'function') {
-      return await createInvoicePaymentLink(db, { profileId, amountCents })
+      return await createInvoicePaymentLink(db, { profileId, amountCents, invoiceId })
     }
   } catch (err) { log.warn('stripe payment link failed', { error: err?.message }) }
   return null
@@ -173,7 +173,7 @@ export async function generateInvoiceForAccount(db, accountRow, { now = new Date
 
   const id = crypto.randomUUID()
   const recipient = await resolveRecipientEmail(db, account.profile_id)
-  const paymentLink = await maybeStripePaymentLink(db, { profileId: account.profile_id, amountCents: eff.net_monthly_cents })
+  const paymentLink = await maybeStripePaymentLink(db, { profileId: account.profile_id, amountCents: eff.net_monthly_cents, invoiceId: id })
   const dueAt = new Date(now.getTime() + SUSPEND_DAYS() * 86400000).toISOString()
 
   await db.prepare(
@@ -204,6 +204,11 @@ async function resolveOrgName(db, profileId) {
  */
 export async function processDunning(db, { now = new Date() } = {}) {
   await ensureInvoiceSchema(db)
+  // SAFETY: never auto-suspend when there's no way for the user to pay. Suspend
+  // requires either Stripe configured (a real payment path) or an explicit
+  // override. Otherwise we keep reminding but never lock anyone out.
+  const canSuspend = Boolean(process.env.STRIPE_SECRET_KEY)
+    || String(process.env.BILLING_ALLOW_SUSPEND_WITHOUT_STRIPE || 'false').toLowerCase() === 'true'
   const open = await db.prepare(`SELECT * FROM billing_invoices WHERE status IN ('sent','second_notice')`).all()
   let reminded = 0
   let suspended = 0
@@ -212,7 +217,7 @@ export async function processDunning(db, { now = new Date() } = {}) {
     if (!issued) continue
     const ageDays = (now - issued) / 86400000
 
-    if (ageDays >= SUSPEND_DAYS()) {
+    if (ageDays >= SUSPEND_DAYS() && canSuspend) {
       await db.prepare(`UPDATE billing_invoices SET status = 'suspended', suspended_at = ? WHERE id = ?`).run(now.toISOString(), inv.id)
       try { await db.prepare(`UPDATE profiles SET status = 'suspended' WHERE id = ?`).run(inv.profile_id) } catch { /* status col */ }
       const orgName = await resolveOrgName(db, inv.profile_id)
