@@ -25,6 +25,7 @@
 
 import crypto from 'crypto'
 import { resolveAdminUserId, HAMILTON_ADMIN_EMAIL } from './hamiltonAdminAccount.js'
+import { getUserIdsWithProfileAccess } from '../../utils/accessControl.js'
 
 export const HAMILTON_USER_NOTIFICATION_TYPES = Object.freeze([
   // Per-grant Hamilton flow (legacy).
@@ -241,13 +242,20 @@ export async function emitHamiltonNotificationToProfileAndAdmins(db, {
   const recipients = new Set()
   if (profileUserId) recipients.add(String(profileUserId))
 
-  // Resolve the profile owner if not given.
-  if (!profileUserId && profileId) {
+  // Fan out to EVERY user who can access the profile — owner + creator + anyone
+  // email-linked to it (e.g. a student who later logs in under her own account
+  // on a profile a parent currently manages) — not just the single owner row, so
+  // household members all see Hamilton's requests. Falls back to the plain owner
+  // lookup if the access resolver is unavailable.
+  if (profileId) {
     try {
-      const row = await db.prepare('SELECT user_id FROM profiles WHERE id = ? LIMIT 1').get(String(profileId))
-      if (row?.user_id) recipients.add(String(row.user_id))
+      const accessUsers = await getUserIdsWithProfileAccess(db, profileId)
+      for (const u of accessUsers) recipients.add(String(u))
     } catch {
-      // ignore — we'll still notify admins
+      try {
+        const row = await db.prepare('SELECT user_id FROM profiles WHERE id = ? LIMIT 1').get(String(profileId))
+        if (row?.user_id) recipients.add(String(row.user_id))
+      } catch { /* ignore — we'll still notify admins */ }
     }
   }
 

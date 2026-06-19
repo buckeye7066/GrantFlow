@@ -313,6 +313,56 @@ export async function getAccessibleProfileIds(db, user) {
   return ids
 }
 
+/**
+ * Reverse of getAccessibleProfileIds: every USER id that can access a given
+ * profile — its owner + creator, anyone on the profile_emails allowlist, and
+ * anyone whose account email matches the profile's basic_information.email.
+ *
+ * Used to fan profile-scoped notifications out to everyone who manages a profile
+ * (e.g. a parent AND the student on their own login), not just the single
+ * profiles.user_id row. Defensive: every lookup is wrapped so a schema quirk
+ * never throws on a notification path.
+ */
+export async function getUserIdsWithProfileAccess(db, profileId) {
+  const ids = new Set()
+  if (!db || !profileId) return ids
+
+  // 1. Owner + creator on the profile row.
+  try {
+    const row = await db.prepare('SELECT user_id, created_by FROM profiles WHERE id = ? LIMIT 1').get(String(profileId))
+    if (row?.user_id) ids.add(String(row.user_id))
+    if (row?.created_by) ids.add(String(row.created_by))
+  } catch { /* older schema / missing column */ }
+
+  // 2. Emails associated with the profile (allowlist + basic_information.email).
+  const emails = new Set()
+  try {
+    await ensureProfileEmailSchema(db)
+    const rows = await db.prepare('SELECT email FROM profile_emails WHERE profile_id = ?').all(String(profileId))
+    for (const r of rows || []) if (r?.email) emails.add(String(r.email).toLowerCase())
+  } catch { /* ignore */ }
+  try {
+    const r = await db
+      .prepare(`SELECT data FROM profile_sections WHERE profile_id = ? AND section_key = 'basic_information' LIMIT 1`)
+      .get(String(profileId))
+    if (r?.data) {
+      const d = typeof r.data === 'string' ? JSON.parse(r.data) : r.data
+      if (d?.email) emails.add(String(d.email).toLowerCase())
+    }
+  } catch { /* ignore */ }
+
+  // 3. Map those emails → user ids.
+  if (emails.size > 0) {
+    const list = [...emails]
+    const placeholders = list.map(() => '?').join(', ')
+    try {
+      const rows = await db.prepare(`SELECT id FROM users WHERE LOWER(primary_email) IN (${placeholders})`).all(...list)
+      for (const r of rows || []) if (r?.id) ids.add(String(r.id))
+    } catch { /* users schema variance */ }
+  }
+  return ids
+}
+
 export async function isProfileOwner(db, user, profileId) {
   if (!profileId) return false
   if (await isAdminUserWithDb(db, user)) return true
