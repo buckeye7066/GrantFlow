@@ -46,6 +46,7 @@ import { generateAndSavePacket } from './hamiltonApplicationPacketGenerator.js'
 import {
   emitHamiltonNotificationToProfileAndAdmins,
   emitHamiltonLifecycleAlerts,
+  emitMissingInfoAlert,
 } from './hamiltonNotifications.js'
 import { canonicalStage } from '../../../shared/pipelineStages.js'
 import { runAutopilot } from './hamiltonAutopilotEngine.js'
@@ -394,21 +395,33 @@ async function runDocumentPathway(db, {
       `Hamilton saved the ${automationType.toUpperCase()} packet under your profile's Documents and prepared submission instructions. ${result.missing.length > 0 ? `Hamilton flagged ${result.missing.length} item(s) that need human input.` : 'Review the draft, then mark it submitted when you are ready.'}`,
   })
 
-  await emitHamiltonNotificationToProfileAndAdmins(db, {
+  // Precise, field-deep-linking alert when the draft flagged things the user
+  // can supply (even a single missing field). Falls back to the draft-saved
+  // notice when there's nothing field/document-shaped to deep-link.
+  const draftInfoAlertIds = await emitMissingInfoAlert(db, {
     profileId: task.profile_id,
     profileUserId: task.user_id,
-    type: notificationTypeForAutomation(automationType),
-    title: result.missing.length > 0
-      ? 'Hamilton drafted your application — review needed'
-      : 'Hamilton drafted your application',
-    message: `Hamilton saved a ${automationType.toUpperCase()} packet for "${result.title}" under your profile's Documents.${result.missing.length > 0 ? ` ${result.missing.length} item(s) flagged for review.` : ''}`,
-    severity: result.missing.length > 0 ? 'warning' : 'success',
-    data: {
-      task_id: task.id,
-      docx_document_id: result.docx_document_id,
-      pdf_document_id: result.pdf_document_id,
-    },
+    taskId: task.id,
+    missing: result.missing,
+    fundingSourceTitle: result.title,
   })
+  if (draftInfoAlertIds.length === 0) {
+    await emitHamiltonNotificationToProfileAndAdmins(db, {
+      profileId: task.profile_id,
+      profileUserId: task.user_id,
+      type: notificationTypeForAutomation(automationType),
+      title: result.missing.length > 0
+        ? 'Hamilton drafted your application — review needed'
+        : 'Hamilton drafted your application',
+      message: `Hamilton saved a ${automationType.toUpperCase()} packet for "${result.title}" under your profile's Documents.${result.missing.length > 0 ? ` ${result.missing.length} item(s) flagged for review.` : ''}`,
+      severity: result.missing.length > 0 ? 'warning' : 'success',
+      data: {
+        task_id: task.id,
+        docx_document_id: result.docx_document_id,
+        pdf_document_id: result.pdf_document_id,
+      },
+    })
+  }
 
   // Optionally bump the pipeline stage.
   const newStage = mapAutomationTypeToPipelineStage(automationType)
@@ -570,19 +583,33 @@ async function runAutopilotPathway(db, {
       status: 'blocked',
       lastAgentMessage: `Hamilton Autopilot stopped at preflight: ${detail}`,
     })
-    await setMissingInfo(db, task.id, preflight.blockers.map((b) => ({
+    const missingItems = preflight.blockers.map((b) => ({
       kind: b.kind === 'missing_field' ? 'field' : (b.kind === 'missing_document' ? 'document' : 'other'),
       key: b.key, label: b.label, description: b.detail, required: true,
-    })))
-    await emitHamiltonNotificationToProfileAndAdmins(db, {
+    }))
+    await setMissingInfo(db, task.id, missingItems)
+    // Precise, field-deep-linking alert when the blockers are things the user
+    // can supply (even a single missing field) — the toast drops them on the
+    // exact field, and the missing-info auto-resume continues Hamilton once
+    // it's filled. Fall back to a generic blocked alert for non-info blockers.
+    const infoAlertIds = await emitMissingInfoAlert(db, {
       profileId: task.profile_id,
       profileUserId: task.user_id,
-      type: 'hamilton_task_blocked',
-      title: 'Hamilton Autopilot needs information',
-      message: detail || 'Preflight found something Hamilton needs before she can run.',
-      severity: 'warning',
-      data: { task_id: task.id, run_id: run.id, preflight },
+      taskId: task.id,
+      missing: missingItems,
+      fundingSourceTitle: opportunity?.title || grant?.title || null,
     })
+    if (infoAlertIds.length === 0) {
+      await emitHamiltonNotificationToProfileAndAdmins(db, {
+        profileId: task.profile_id,
+        profileUserId: task.user_id,
+        type: 'hamilton_task_blocked',
+        title: 'Hamilton Autopilot needs information',
+        message: detail || 'Preflight found something Hamilton needs before she can run.',
+        severity: 'warning',
+        data: { task_id: task.id, run_id: run.id, preflight },
+      })
+    }
     return { task: await reload(db, task.id), classification, autopilot_run: run.id, preflight }
   }
 

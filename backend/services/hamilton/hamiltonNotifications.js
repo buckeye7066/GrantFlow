@@ -473,6 +473,59 @@ export async function emitHamiltonLifecycleAlerts(db, {
 }
 
 /**
+ * Emit a precise "Hamilton needs information" alert that the toast bridge can
+ * deep-link straight to the exact profile field the user must fill — even when
+ * it's a single missing field. The bridge resolves the field via
+ * `data.field` (see HamiltonToastBridge.resolveNotificationTarget), so once the
+ * user clicks the toast, fills the field, and saves, the missing-info
+ * auto-resume re-queues the task and Hamilton continues.
+ *
+ * Only fires for field/document items (the things a user can supply); returns
+ * [] when there are none so callers can fall back to a generic blocked alert
+ * for non-info blockers.
+ *
+ * @returns {Promise<string[]>} created notification ids
+ */
+export async function emitMissingInfoAlert(db, {
+  profileId, profileUserId = null, taskId,
+  missing = [], fundingSourceTitle = null,
+} = {}) {
+  if (!db) return []
+  const items = (Array.isArray(missing) ? missing : []).filter(
+    (m) => m && (m.kind === 'field' || m.kind === 'document'),
+  )
+  if (items.length === 0) return []
+  // Prefer a FIELD as the deep-link target (the user's focus); fall back to the
+  // first item otherwise.
+  const primary = items.find((m) => m.kind === 'field') || items[0]
+  const count = items.length
+  const label = primary?.label || primary?.key || 'a detail'
+  const src = fundingSourceTitle ? ` to finish "${fundingSourceTitle}"` : ' to finish'
+  const title = count === 1
+    ? `Hamilton needs one detail${src}`
+    : `Hamilton needs ${count} details${src}`
+  const message = count === 1
+    ? `Add "${label}" and Hamilton will continue automatically.`
+    : `Starting with "${label}" — supply the flagged items and Hamilton resumes automatically.`
+  return emitHamiltonNotificationToProfileAndAdmins(db, {
+    profileId,
+    profileUserId,
+    type: 'hamilton_missing_info',
+    title,
+    message,
+    severity: 'warning',
+    data: {
+      task_id: taskId,
+      // The toast bridge deep-links missing_info to the exact field via this key.
+      field: primary?.kind === 'field' ? (primary?.key || null) : null,
+      missing_key: primary?.key || null,
+      missing_keys: items.map((m) => m.key).filter(Boolean),
+      missing_count: count,
+    },
+  })
+}
+
+/**
  * Mark a list of notification ids as read. Used when a hard stop is
  * resolved so the persistent alert doesn't keep nagging the user.
  */
