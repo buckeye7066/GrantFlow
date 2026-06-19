@@ -1,6 +1,11 @@
 /* eslint-disable react-refresh/only-export-components */
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { apiFetch } from "@/api/client";
+// The pure mapping/merge logic lives in a sibling .js file so Node's
+// --test runner (which doesn't transform JSX) can import it directly in
+// unit tests. We re-export it here so existing call sites stay unchanged.
+import { mapAIDataToApplicationPatch as _mapAIDataToApplicationPatch } from "./schoolCardAIAssistPatch.js";
+export const mapAIDataToApplicationPatch = _mapAIDataToApplicationPatch;
 
 const FIELD_KEYS = [
   { key: "acceptanceRate", label: "ACCEPTANCE RATE" },
@@ -20,9 +25,25 @@ const EXTRA_FIELDS = [
   { key: "founded", label: "FOUNDED" },
   { key: "type", label: "TYPE" },
   { key: "setting", label: "SETTING" },
+  { key: "mascot", label: "MASCOT" },
+  { key: "cheerLine", label: "CHEER" },
+  { key: "primaryColor", label: "PRIMARY COLOR" },
+  { key: "secondaryColor", label: "SECONDARY COLOR" },
 ];
 
-const ALL_FIELDS = [...FIELD_KEYS, ...EXTRA_FIELDS];
+// Portal URL keys the AI now also returns. Mapped onto application.portals.*
+// by mapAIDataToApplicationPatch. They're tracked separately so the UI can
+// render them as link buttons rather than table cells.
+const PORTAL_FIELDS = [
+  { key: "websiteUrl",      target: "website_url",                  label: "WEBSITE" },
+  { key: "admissionsUrl",   target: "portals.admissions_url",       label: "ADMISSIONS" },
+  { key: "financialAidUrl", target: "portals.financial_aid_url",    label: "FINANCIAL AID" },
+  { key: "scholarshipsUrl", target: "portals.scholarship_url",      label: "SCHOLARSHIPS" },
+  { key: "housingUrl",      target: "portals.housing_url",          label: "HOUSING" },
+  { key: "studentPortalUrl",target: "portals.student_portal_url",   label: "STUDENT PORTAL" },
+];
+
+const ALL_FIELDS = [...FIELD_KEYS, ...EXTRA_FIELDS, ...PORTAL_FIELDS];
 
 function SparkleIcon({ size = 16 }) {
   return (
@@ -63,64 +84,10 @@ function PulsingDot() {
   );
 }
 
-/**
- * Maps camelCase AI response keys to the application model's snake_case fields.
- * Returns a patch object suitable for onQuickUpdate.
- */
-export function mapAIDataToApplicationPatch(aiData) {
-  if (!aiData || typeof aiData !== "object") return {};
-
-  const parsePercent = (v) => {
-    if (!v || v === "—") return null;
-    const m = String(v).match(/([\d.]+)/);
-    return m ? parseFloat(m[1]) / 100 : null;
-  };
-
-  const parseCurrency = (v) => {
-    if (!v || v === "—") return null;
-    const m = String(v).replace(/,/g, "").match(/([\d.]+)/);
-    return m ? parseFloat(m[1]) : null;
-  };
-
-  const parseRatio = (v) => {
-    if (!v || v === "—") return null;
-    const m = String(v).match(/(\d+)/);
-    return m ? parseInt(m[1], 10) : null;
-  };
-
-  const patch = {};
-
-  if (aiData.acceptanceRate && aiData.acceptanceRate !== "—")
-    patch.acceptance_rate = parsePercent(aiData.acceptanceRate);
-  if (aiData.avgGPA && aiData.avgGPA !== "—")
-    patch.avg_gpa = parseFloat(aiData.avgGPA) || null;
-  if (aiData.satRange && aiData.satRange !== "—")
-    patch.sat_range = aiData.satRange;
-  if (aiData.tuition && aiData.tuition !== "—")
-    patch.tuition = parseCurrency(aiData.tuition);
-  if (aiData.fafsaCode && aiData.fafsaCode !== "—")
-    patch.fafsa_code = aiData.fafsaCode;
-  if (aiData.graduationRate && aiData.graduationRate !== "—")
-    patch.graduation_rate = parsePercent(aiData.graduationRate);
-  if (aiData.studentTeacher && aiData.studentTeacher !== "—")
-    patch.student_teacher_ratio = parseRatio(aiData.studentTeacher);
-  if (aiData.avgClassSize && aiData.avgClassSize !== "—")
-    patch.avg_class_size = parseRatio(aiData.avgClassSize);
-  if (aiData.estCost && aiData.estCost !== "—") {
-    const cost = parseCurrency(aiData.estCost);
-    if (cost) {
-      patch.costs = { on_campus_total: cost };
-    }
-  }
-  if (aiData.type && aiData.type !== "—") {
-    const t = aiData.type.toLowerCase();
-    if (t.includes("private")) patch.institution_type = "private";
-    else if (t.includes("public")) patch.institution_type = "public";
-    else patch.institution_type = aiData.type;
-  }
-
-  return patch;
-}
+// mapAIDataToApplicationPatch is re-exported from ./schoolCardAIAssistPatch.js
+// at the top of this module. The .jsx file keeps only the React UI; the pure
+// mapping/merge logic lives in the .js sibling so unit tests can import it
+// directly under Node's --test runner (which doesn't transform JSX).
 
 /**
  * Hook for AI-assisted school data lookup.

@@ -1557,13 +1557,44 @@ router.post('/school-lookup', async (req, res) => {
     const fallbackData = buildSchoolLookupFallbackData(trimmedName)
     routeLogger.info(`[school-lookup] Looking up data for: ${trimmedName}`);
 
+    // Shared schema text used by both code paths so the AI returns the same
+    // keys regardless of which provider we land on. Keep field names in
+    // camelCase — the frontend's mapAIDataToApplicationPatch maps them to
+    // the application card's snake_case fields.
+    const SCHOOL_LOOKUP_PROMPT_BODY = `\n\nKeys:
+- acceptanceRate (e.g. "65%")
+- avgGPA (e.g. "3.4")
+- satRange (e.g. "1050-1250")
+- tuition (e.g. "$28,900/yr")
+- fafsaCode (e.g. "003525")
+- graduationRate (e.g. "52%")
+- studentTeacher (e.g. "14:1")
+- avgClassSize (e.g. "18")
+- estCost (e.g. "$38,200/yr" — total estimated cost of attendance)
+- enrollment (e.g. "5,200")
+- founded (e.g. "1901")
+- type (e.g. "Private, Nonprofit" or "Public")
+- setting (e.g. "Urban" or "Suburban")
+- websiteUrl (the school's main domain, e.g. "https://www.mtsu.edu/")
+- admissionsUrl (admissions / how-to-apply page)
+- financialAidUrl (financial aid office page)
+- scholarshipsUrl (scholarships hub or AcademicWorks-style portal)
+- housingUrl (housing / residence life page)
+- studentPortalUrl (student SSO landing or "MyMT"-style portal)
+- primaryColor (official primary brand color as a hex string, e.g. "#0066CC")
+- secondaryColor (official secondary brand color as a hex string, e.g. "#FFFFFF")
+- mascot (e.g. "Lightning the Blue Raider")
+- cheerLine (a SHORT, common cheer or chant, e.g. "Go Buckeyes!")
+
+Return ONLY the JSON object, no backticks, no explanation.`
+
     const anthropic = await createAnthropicClient();
     if (!anthropic) {
       // Fall back to OpenAI without web search
       const result = await invokeTextWithFallback({
-        prompt: `Look up the following information for "${trimmedName}" and return ONLY a JSON object with these exact keys. Use "—" for any value you cannot find. Do not include any other text, markdown, or explanation.\n\nKeys:\n- acceptanceRate (e.g. "65%")\n- avgGPA (e.g. "3.4")\n- satRange (e.g. "1050-1250")\n- tuition (e.g. "$28,900/yr")\n- fafsaCode (e.g. "003525")\n- graduationRate (e.g. "52%")\n- studentTeacher (e.g. "14:1")\n- avgClassSize (e.g. "18")\n- estCost (e.g. "$38,200/yr" — total estimated cost of attendance)\n- enrollment (e.g. "5,200")\n- founded (e.g. "1901")\n- type (e.g. "Private, Nonprofit" or "Public")\n- setting (e.g. "Urban" or "Suburban")\n\nReturn ONLY the JSON object, no backticks, no explanation.`,
+        prompt: `Look up the following information for "${trimmedName}" and return ONLY a JSON object with these exact keys. Use "—" for any value you cannot find. Do not include any other text, markdown, or explanation.${SCHOOL_LOOKUP_PROMPT_BODY}`,
         temperature: 0.1,
-        maxTokens: 1000,
+        maxTokens: 1200,
       });
 
       if (!result.text) {
@@ -1587,34 +1618,23 @@ router.post('/school-lookup', async (req, res) => {
         });
       }
 
-      return res.json({ success: true, school_name: trimmedName, data: parsed, provider: result.provider });
+      // Same registry-merge as the Anthropic path so the no-web-search
+      // OpenAI path also benefits from curated portal URLs / fafsa code.
+      const mergedNoSearch = { ...fallbackData }
+      for (const [k, v] of Object.entries(parsed)) {
+        if (v && v !== '—' && v !== '') mergedNoSearch[k] = v
+      }
+      return res.json({ success: true, school_name: trimmedName, data: mergedNoSearch, provider: result.provider });
     }
 
     // Use Anthropic with web search for best results
     const response = await anthropic.messages.create({
       model: process.env.ANTHROPIC_MODEL_SCHOOL_LOOKUP || 'claude-sonnet-4-6',
-      max_tokens: 1000,
+      max_tokens: 1200,
       tools: [{ type: 'web_search_20250305', name: 'web_search', max_uses: 5 }],
       messages: [{
         role: 'user',
-        content: `Look up the following information for "${trimmedName}" and return ONLY a JSON object with these exact keys. Use "—" for any value you cannot find. Do not include any other text, markdown, or explanation.
-
-Keys:
-- acceptanceRate (e.g. "65%")
-- avgGPA (e.g. "3.4")
-- satRange (e.g. "1050-1250")
-- tuition (e.g. "$28,900/yr")
-- fafsaCode (e.g. "003525")
-- graduationRate (e.g. "52%")
-- studentTeacher (e.g. "14:1")
-- avgClassSize (e.g. "18")
-- estCost (e.g. "$38,200/yr" — total estimated cost of attendance)
-- enrollment (e.g. "5,200")
-- founded (e.g. "1901")
-- type (e.g. "Private, Nonprofit" or "Public")
-- setting (e.g. "Urban" or "Suburban")
-
-Return ONLY the JSON object, no backticks, no explanation.`
+        content: `Look up the following information for "${trimmedName}" and return ONLY a JSON object with these exact keys. Use "—" for any value you cannot find. Do not include any other text, markdown, or explanation.${SCHOOL_LOOKUP_PROMPT_BODY}`
       }],
     });
 
@@ -1641,8 +1661,17 @@ Return ONLY the JSON object, no backticks, no explanation.`
       });
     }
 
-    routeLogger.info(`[school-lookup] Success for ${trimmedName}: ${Object.keys(parsed).length} fields`);
-    return res.json({ success: true, school_name: trimmedName, data: parsed, provider: 'anthropic-web-search' });
+    // Merge AI output with registry-backed fallback so a verified portal
+    // URL never gets clobbered by an AI "—". The AI's value wins when it
+    // has one; otherwise we fall back to the curated registry data. This
+    // upholds the "real funding only / avoid placeholder results" rule when
+    // the AI doesn't surface a particular field.
+    const merged = { ...fallbackData }
+    for (const [k, v] of Object.entries(parsed)) {
+      if (v && v !== '—' && v !== '') merged[k] = v
+    }
+    routeLogger.info(`[school-lookup] Success for ${trimmedName}: ${Object.keys(parsed).length} AI fields, merged with registry fallback`);
+    return res.json({ success: true, school_name: trimmedName, data: merged, provider: 'anthropic-web-search' });
   } catch (error) {
     console.error('[school-lookup] Error:', error);
     // Degrade gracefully — the AI-assist button must never be "dead". A model

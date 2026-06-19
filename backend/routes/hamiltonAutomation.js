@@ -72,9 +72,11 @@ import {
 } from '../services/hamilton/hamiltonCredentialSessionService.js'
 import {
   saveCredential,
+  saveGeneratedCredential,
   listCredentialsForProfile,
   getCredentialById,
   deleteCredential,
+  revealPasswordOnceById,
 } from '../services/hamilton/hamiltonPortalCredentialService.js'
 import {
   authorizeAttestation,
@@ -769,6 +771,61 @@ router.delete('/credentials/:id', async (req, res) => {
   if (!ctx) return
   const deleted = await deleteCredential(req.db, req.params.id)
   return res.json({ ok: true, deleted })
+})
+
+// Hamilton creates a new portal account on the user's behalf when no saved
+// login exists. The server picks a strong password, encrypts it, and returns
+// it ONCE so the user can also keep a copy. Subsequent reads see only the
+// masked row — Hamilton uses the decrypted form server-side via
+// getDecryptedCredential during autopilot.
+router.post('/credentials/generate', async (req, res) => {
+  const user = await requireProfileScope(req, res, req.body?.profileId)
+  if (!user) return
+  try {
+    const result = await saveGeneratedCredential(req.db, {
+      userId: getAuthUserId(user),
+      profileId: req.body?.profileId,
+      portalHost: req.body?.portalHost || req.body?.portal_host || req.body?.login_url,
+      username: req.body?.username,
+      label: req.body?.label || null,
+      loginUrl: req.body?.login_url || req.body?.loginUrl || null,
+      reason: req.body?.reason || 'user_requested',
+      generatedBy: req.body?.generated_by === 'hamilton' || !req.body?.generated_by ? 'hamilton' : String(req.body.generated_by).slice(0, 32),
+      passwordLength: Number(req.body?.password_length) || 28,
+    })
+    return res.json({
+      ok: true,
+      credential: result.credential,
+      already_existed: Boolean(result.already_existed),
+      // Plaintext is returned ONCE. The frontend MUST surface this to the
+      // user immediately and never persist it. After this response the
+      // password is only readable server-side via getDecryptedCredential.
+      password_one_time_view: result.password_one_time_view,
+      generated: true,
+    })
+  } catch (err) {
+    return res.status(400).json({ error: 'generate_failed', detail: err?.message })
+  }
+})
+
+// One-shot reveal of an existing credential's password. Only succeeds the
+// FIRST time it's called for a row — every subsequent call returns
+// already_revealed:true with no password. This lets the frontend recover
+// from a "user closed the dialog before copying" scenario without leaving
+// a permanent reveal endpoint open.
+router.post('/credentials/:id/reveal-once', async (req, res) => {
+  const ctx = await requireRecordOwnership(req, res, req.params.id, getCredentialById)
+  if (!ctx) return
+  try {
+    const result = await revealPasswordOnceById(req.db, req.params.id)
+    if (!result) return res.status(404).json({ error: 'credential_not_found' })
+    if (result.already_revealed) {
+      return res.json({ ok: true, already_revealed: true, password: null })
+    }
+    return res.json({ ok: true, already_revealed: false, password: result.password })
+  } catch (err) {
+    return res.status(500).json({ error: 'reveal_failed', detail: err?.message })
+  }
 })
 
 // Standing attestations.

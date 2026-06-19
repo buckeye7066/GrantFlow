@@ -37,6 +37,13 @@
  * @property {string} [offCampusHousing]
  * @property {string} [scholarships]
  * @property {string} [admissions]
+ * @property {string} [studentPortal] - student SSO landing (e.g. MyMT, Pipeline)
+ *
+ * @typedef {Object} KnownSchoolTheme
+ * @property {string} [primaryColor]  - hex color, e.g. "#0066CC"
+ * @property {string} [secondaryColor]
+ * @property {string} [mascot]        - e.g. "Lightning the Blue Raider"
+ * @property {string} [cheerLine]     - e.g. "Go Buckeyes!"
  *
  * @typedef {Object} KnownSchool
  * @property {string} name        - canonical display name
@@ -45,6 +52,7 @@
  * @property {string} [state]     - 2-letter state code
  * @property {string} [fafsaCode]
  * @property {KnownSchoolPortals} portals
+ * @property {KnownSchoolTheme} [theme]
  */
 
 /**
@@ -79,6 +87,13 @@ export const KNOWN_SCHOOLS = [
       offCampusHousing: 'https://offcampushousing.mtsu.edu/',
       scholarships: 'https://www.mtsu.edu/financial-aid/scholarships/',
       admissions: 'https://www.mtsu.edu/how-to-apply/',
+      studentPortal: 'https://www.mtsu.edu/pipelinemt/',
+    },
+    theme: {
+      primaryColor: '#0066CC', // True Blue
+      secondaryColor: '#FFFFFF',
+      mascot: 'Lightning the Blue Raider',
+      cheerLine: 'Go Blue Raiders!',
     },
   },
   {
@@ -233,6 +248,13 @@ export const KNOWN_SCHOOLS = [
       offCampusHousing: 'https://offcampus.osu.edu/',
       scholarships: 'https://www.sfa.osu.edu/incoming-freshmen/about-aid/types-of-aid/scholarships',
       admissions: 'https://undergrad.osu.edu/apply',
+      studentPortal: 'https://buckeyelink.osu.edu/',
+    },
+    theme: {
+      primaryColor: '#BB0000', // Scarlet
+      secondaryColor: '#666666', // Gray
+      mascot: 'Brutus Buckeye',
+      cheerLine: 'Go Buckeyes!',
     },
   },
   {
@@ -247,6 +269,13 @@ export const KNOWN_SCHOOLS = [
       offCampusHousing: 'https://dos.sl.ua.edu/programs/off-campus-resources/',
       scholarships: 'https://afford.ua.edu/scholarships/',
       admissions: 'https://gobama.ua.edu/',
+      studentPortal: 'https://mybama.ua.edu/',
+    },
+    theme: {
+      primaryColor: '#9E1B32', // Crimson
+      secondaryColor: '#828A8F',
+      mascot: 'Big Al',
+      cheerLine: 'Roll Tide!',
     },
   },
   {
@@ -288,6 +317,13 @@ export const KNOWN_SCHOOLS = [
       offCampusHousing: 'https://studentlife.utk.edu/off-campus-living/',
       scholarships: 'https://onestop.utk.edu/scholarships-financial-aid/scholarships/',
       admissions: 'https://admissions.utk.edu/',
+      studentPortal: 'https://my.utk.edu/',
+    },
+    theme: {
+      primaryColor: '#FF8200', // Tennessee Orange
+      secondaryColor: '#FFFFFF',
+      mascot: 'Smokey',
+      cheerLine: 'Go Vols!',
     },
   },
   {

@@ -334,6 +334,9 @@ function normaliseApplications(applications) {
       secondary_color: application.theme?.secondary_color ?? "",
       cheer_line: application.theme?.cheer_line ?? "",
       cheer_enabled: application.theme?.cheer_enabled ?? true,
+      // Mascot is a free-form string ("Lightning the Blue Raider"). Used by
+      // the AI-assist auto-fill and by school-themed UI flourishes.
+      mascot: application.theme?.mascot ?? "",
     },
     graduation_rate: application.graduation_rate ?? null,
     student_teacher_ratio: application.student_teacher_ratio ?? null,
@@ -341,6 +344,10 @@ function normaliseApplications(applications) {
     portals: {
       admissions_url: application.portals?.admissions_url ?? "",
       financial_aid_url: application.portals?.financial_aid_url ?? "",
+      // AI-assist now also fills these. Adding canonical defaults here keeps
+      // the UI buttons stable even before the AI populates them.
+      scholarship_url: application.portals?.scholarship_url ?? "",
+      housing_url: application.portals?.housing_url ?? "",
       student_portal_url: application.portals?.student_portal_url ?? "",
       counseling_url: application.portals?.counseling_url ?? "",
       transcripts_url: application.portals?.transcripts_url ?? "",
@@ -1042,7 +1049,10 @@ function ApplicationCard({
       }
 
       if (onQuickUpdate) {
-        const patch = mapAIDataToApplicationPatch(data)
+        // Pass the current application so the patch deep-merges nested
+        // objects (portals, theme, costs) instead of clobbering user-entered
+        // values via the parent's shallow ({ ...app, ...patch }) merge.
+        const patch = mapAIDataToApplicationPatch(data, application)
         if (Object.keys(patch).length > 0) {
           await onQuickUpdate(application.id, patch, "AI auto-filled school data.")
           toast({
@@ -1333,6 +1343,8 @@ function ApplicationCard({
           <ExternalLinkButton href={application.website_url}>Website</ExternalLinkButton>
           <ExternalLinkButton href={portals.admissions_url}>Admissions</ExternalLinkButton>
           <ExternalLinkButton href={portals.financial_aid_url}>Financial Aid</ExternalLinkButton>
+          <ExternalLinkButton href={portals.scholarship_url}>Scholarships</ExternalLinkButton>
+          <ExternalLinkButton href={portals.housing_url}>Housing</ExternalLinkButton>
           <ExternalLinkButton href={portals.student_portal_url}>Student Portal</ExternalLinkButton>
           <ExternalLinkButton href={portals.counseling_url}>Counseling</ExternalLinkButton>
           <ExternalLinkButton href={portals.transcripts_url}>Transcripts</ExternalLinkButton>
