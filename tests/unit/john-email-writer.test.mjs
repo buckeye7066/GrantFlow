@@ -39,7 +39,7 @@ test('composeEmailFromLead produces an email that passes the safety classifier',
     assert.equal(r.personalization.prospect_link, cfg.prospectLink)
 
     // Recipient is the highest-priority valid email.
-    assert.equal(r.recipient_email, 'chief@riverbendvfd.example.org')
+    assert.equal(r.recipient_email, 'chief@riverbendvfd.test')
 
     // Personalization records the salutation, evidence, and config snapshot.
     assert.equal(r.personalization.template, 'default')
@@ -72,7 +72,7 @@ test('composeEmailFromLead body contains an organization-specific hook', async (
       public_evidence: [
         {
           summary: 'opened a saturday distribution for senior households',
-          source_url: 'https://hope.example.org/news/saturdays',
+          source_url: 'https://hope.test/news/saturdays',
           specificity: 'high',
         },
       ],

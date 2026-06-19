@@ -66,7 +66,7 @@ test('runJohn in draft mode caps drafts at maxDrafts and respects the rolling 24
       leads.push(makeQualifiedLead({
         lead_id: `lead-${i}`,
         organization_name: `Org ${i}`,
-        contact_points: [{ type: 'email', value: `org${i}@example.org`, role: 'Executive Director', confidence: 0.9 }],
+        contact_points: [{ type: 'email', value: `org${i}@example-org-${i}.test`, role: 'Executive Director', confidence: 0.9 }],
       }))
     }
     const provider = makeFakeOutlookProvider({ aliasMode: 'accept' })

@@ -114,15 +114,18 @@ export function makeQualifiedLead(overrides = {}) {
     lead_id: overrides.lead_id || `lead-${Math.random().toString(36).slice(2, 8)}`,
     organization_name: overrides.organization_name || 'Riverbend Volunteer Fire Department',
     organization_type: overrides.organization_type || 'volunteer fire department',
-    website_url: overrides.website_url || 'https://riverbendvfd.example.org',
+    // Fixtures use the RFC 6761 reserved `.test` TLD: it never resolves and is
+    // never a real prospect, so it survives the prospect-exclusion filter
+    // (which legitimately drops example.com/.org placeholder domains in prod).
+    website_url: overrides.website_url || 'https://riverbendvfd.test',
     location: overrides.location || 'Riverbend, OH',
     contact_points: overrides.contact_points || [
-      { type: 'email', value: 'chief@riverbendvfd.example.org', name: 'Chief Allen', role: 'Fire Chief', confidence: 0.85 },
+      { type: 'email', value: 'chief@riverbendvfd.test', name: 'Chief Allen', role: 'Fire Chief', confidence: 0.85 },
     ],
     public_evidence: overrides.public_evidence || [
       {
         summary: 'replacing 25-year-old SCBA gear',
-        source_url: 'https://riverbendvfd.example.org/news/scba-2026',
+        source_url: 'https://riverbendvfd.test/news/scba-2026',
         specificity: 'high',
       },
     ],
@@ -136,7 +139,7 @@ export function makeQualifiedLead(overrides = {}) {
     suggested_persona: overrides.suggested_persona || 'fire_chief',
     do_not_contact_flags: overrides.do_not_contact_flags || [],
     compliance_notes: overrides.compliance_notes || null,
-    source_urls: overrides.source_urls || ['https://riverbendvfd.example.org/about'],
+    source_urls: overrides.source_urls || ['https://riverbendvfd.test/about'],
     discovered_at: overrides.discovered_at || new Date().toISOString(),
     qualified: overrides.qualified === undefined ? true : overrides.qualified,
     status: overrides.status || 'queued_for_john',
