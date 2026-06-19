@@ -851,64 +851,24 @@ if (shouldMigrateOnBoot && !app.locals.db_startup_error) {
   }
 }
 
-// Mission Control / Agent Control Center self-heal.
-//
-// Runs UNCONDITIONALLY (regardless of MIGRATE_ON_BOOT / SMOKE_MODE),
-// because the agent telemetry + control-center tables must exist for the
-// admin dashboard to show real status instead of "Agent Not installed".
-// Every file applied here is pure DDL with IF NOT EXISTS / IF EXISTS
-// guards (also covered by schema.sql for fresh sqlite fixtures), so this
-// is a strict no-op on a fully-migrated DB and a self-heal on a partially-
-// migrated one. Per-file try/catch inside the helper means a single bad
-// file (e.g. transient PG lock) cannot prevent the rest from applying or
-// block the server from coming up.
+// Schema invariants. Single call site that runs every boot-time DDL
+// fix-up (agent subsystem, funding reality-gate columns, application_tasks
+// CHECK, organizations soft-delete, crawler_jobs.type CHECK,
+// anya_match_suggestions, matching_low_coverage_events,
+// funding_opportunities verification columns). Each step has its own
+// per-step try/catch so one failure cannot mask another. Replaces seven
+// inline self-heal blocks that previously lived in this file.
 if (!app.locals.db_startup_error) {
   try {
-    const { ensureAgentSubsystemTables } = await import(
-      './utils/ensureAgentSubsystemTables.js'
-    )
-    await ensureAgentSubsystemTables(db, { logger: console })
-  } catch (agentSelfHealErr) {
+    const { ensureSchemaInvariants } = await import('./startup/ensureSchemaInvariants.js')
+    await ensureSchemaInvariants(db, { logger: console })
+  } catch (schemaInvariantsErr) {
+    // ensureSchemaInvariants is itself wrapped per-step, so an outer throw
+    // here means the import or top-level orchestrator broke — log and
+    // continue, the server must still start for diagnostics.
     console.warn(
-      '[agent-subsystem] startup self-heal threw (non-fatal):',
-      agentSelfHealErr?.message || agentSelfHealErr,
-    )
-  }
-
-  // Funding Library self-heal: guarantee the funding_opportunities reality-gate
-  // columns exist even if the strict migration chain stalled before 0073.
-  // Without these, every crawler/connector/Robert write fails with
-  // `column "reality_status" ... does not exist` and the library can't grow.
-  try {
-    const { ensureFundingOpportunitySchema } = await import(
-      './utils/ensureFundingOpportunitySchema.js'
-    )
-    await ensureFundingOpportunitySchema(db, { logger: console })
-  } catch (fundingSelfHealErr) {
-    console.warn(
-      '[funding-schema] startup self-heal threw (non-fatal):',
-      fundingSelfHealErr?.message || fundingSelfHealErr,
-    )
-  }
-
-  // Hamilton self-heal: resync the application_tasks status CHECK constraint to
-  // the full TASK_STATUSES list at boot. ensureApplicationTaskSchema() drops and
-  // re-adds the constraint from the JS source of truth, but it only ran lazily
-  // (first store call) — and prod's queue stays empty (browser automation gated
-  // off), so it never fired and the constraint stayed stuck on the pre-087
-  // 14-status list. Any task advancing to a new-state-machine status like
-  // 'analyzing'/'completed' then threw `application_tasks_status_check` and
-  // Hamilton could neither create nor progress a task. Running it
-  // unconditionally at boot makes it drift-proof.
-  try {
-    const { ensureApplicationTaskSchema } = await import(
-      './services/hamilton/applicationTaskStore.js'
-    )
-    await ensureApplicationTaskSchema(db)
-  } catch (taskSchemaSelfHealErr) {
-    console.warn(
-      '[application-tasks] startup self-heal threw (non-fatal):',
-      taskSchemaSelfHealErr?.message || taskSchemaSelfHealErr,
+      '[schema-invariants] orchestrator threw (non-fatal):',
+      schemaInvariantsErr?.message || schemaInvariantsErr,
     )
   }
 
@@ -945,191 +905,10 @@ if (db.dialect === 'sqlite') {
     }
   });
 } else {
+  // Postgres-specific schema invariants (organizations soft-delete columns,
+  // crawler_jobs.type CHECK, anya_match_suggestions, etc.) are applied by
+  // ensureSchemaInvariants() above, so we only log the dialect skip here.
   console.info('[database] Skipping legacy column auto-migrations (dialect !== sqlite)');
-  // Idempotent self-heal: list/delete routes filter on organizations.deleted_at (migration 0047).
-  // Background migrate in start.js may still be running; avoid transient 500s on /api/organizations.
-  try {
-    await db.exec('ALTER TABLE organizations ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ')
-    await db.exec(
-      'CREATE INDEX IF NOT EXISTS idx_organizations_deleted_at ON organizations(deleted_at)',
-    )
-    // Yana web-crawler enrichment writes a contact person (migration 094/0090).
-    await db.exec('ALTER TABLE organizations ADD COLUMN IF NOT EXISTS contact_name TEXT')
-    await db.exec('ALTER TABLE organizations ADD COLUMN IF NOT EXISTS contact_title TEXT')
-  } catch (e) {
-    console.warn(
-      '[database] organizations.deleted_at startup ensure failed (run npm run migrate):',
-      e?.message || e,
-    )
-  }
-
-  // Idempotent self-heal: crawler_jobs.type CHECK constraint must include every
-  // job type registered in crawlerDispatcher HANDLERS. When a new type is
-  // shipped (e.g. 'student_bridge_funding' migration 0067) operators don't
-  // always set MIGRATE_ON_BOOT=1, so /api/crawlers/jobs would 500 with PG
-  // 23514 until they did. Mirror migration 0067 inline so the new type is
-  // accepted on the very first request after deploy. Keep the type-list in
-  // sync with backend/services/crawlerJobCreation.js VALID_TYPES.
-  try {
-    await db.exec(`
-      DO $$
-      DECLARE
-        constraint_name text;
-      BEGIN
-        SELECT c.conname
-        INTO constraint_name
-        FROM pg_constraint c
-        JOIN pg_class t ON t.oid = c.conrelid
-        WHERE t.relname = 'crawler_jobs'
-          AND c.contype = 'c'
-          AND pg_get_constraintdef(c.oid) ILIKE '%CHECK%'
-          AND pg_get_constraintdef(c.oid) ILIKE '%type%'
-        LIMIT 1;
-
-        IF constraint_name IS NOT NULL THEN
-          EXECUTE format('ALTER TABLE crawler_jobs DROP CONSTRAINT IF EXISTS %I', constraint_name);
-        END IF;
-      END $$;
-    `)
-    await db.exec(`
-      ALTER TABLE crawler_jobs
-        ADD CONSTRAINT crawler_jobs_type_check
-        CHECK (type IN (
-          'local',
-          'scholarship',
-          'curated_benefits',
-          'health_resources',
-          'comprehensive',
-          'national',
-          'item_search',
-          'item_gift_search',
-          'avatar_lookup',
-          'document_ingest',
-          'pipeline_automation',
-          'profile_enrichment',
-          'national_zip_scan',
-          'portal_check',
-          'government_funding',
-          'student_grants',
-          'student_bridge_funding',
-          'ecf_benefits',
-          'special_needs',
-          'local_funding',
-          'item_matching',
-          'anya_match_scout'
-        ))
-    `)
-  } catch (e) {
-    console.warn(
-      '[database] crawler_jobs.type CHECK self-heal failed (run npm run migrate to apply 0067/0069):',
-      e?.message || e,
-    )
-  }
-
-  // Idempotent self-heal: anya_match_suggestions (migration 0068).
-  // The Match Scout writes here; the recommend-only popup + notification
-  // bell read from it. Without this table the scout's INSERT fails with
-  // PG 42P01 ("relation does not exist") on a fresh deploy where
-  // MIGRATE_ON_BOOT=0.
-  try {
-    await db.exec(`
-      CREATE TABLE IF NOT EXISTS anya_match_suggestions (
-        id TEXT PRIMARY KEY,
-        profile_id TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
-        user_id TEXT,
-        opportunity_id TEXT,
-        title TEXT NOT NULL,
-        funder TEXT,
-        match_score REAL NOT NULL,
-        match_reasons JSONB,
-        need_summary JSONB,
-        search_strategy JSONB,
-        opportunity_data JSONB,
-        status TEXT NOT NULL DEFAULT 'pending'
-          CHECK (status IN ('pending', 'accepted', 'dismissed', 'already_in_pipeline', 'expired')),
-        created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-        acted_at TIMESTAMPTZ,
-        action_result TEXT
-      );
-      CREATE INDEX IF NOT EXISTS idx_anya_match_suggestions_profile
-        ON anya_match_suggestions(profile_id);
-      CREATE INDEX IF NOT EXISTS idx_anya_match_suggestions_user
-        ON anya_match_suggestions(user_id);
-      CREATE INDEX IF NOT EXISTS idx_anya_match_suggestions_status
-        ON anya_match_suggestions(status);
-      CREATE INDEX IF NOT EXISTS idx_anya_match_suggestions_opportunity
-        ON anya_match_suggestions(opportunity_id);
-      CREATE INDEX IF NOT EXISTS idx_anya_match_suggestions_created
-        ON anya_match_suggestions(created_at);
-      CREATE UNIQUE INDEX IF NOT EXISTS uq_anya_match_suggestions_active_pair
-        ON anya_match_suggestions(profile_id, opportunity_id)
-        WHERE status = 'pending';
-    `)
-  } catch (e) {
-    console.warn(
-      '[database] anya_match_suggestions self-heal failed (run npm run migrate to apply 0068):',
-      e?.message || e,
-    )
-  }
-
-  try {
-    if (db.dialect === 'postgres') {
-      await db.exec(`
-        CREATE TABLE IF NOT EXISTS matching_low_coverage_events (
-          id BIGSERIAL PRIMARY KEY,
-          profile_id TEXT REFERENCES profiles(id) ON DELETE SET NULL,
-          search_terms TEXT,
-          free_text TEXT,
-          qualified_count INTEGER NOT NULL DEFAULT 0,
-          min_score INTEGER NOT NULL DEFAULT 50,
-          intent_label TEXT,
-          branded_program TEXT,
-          recorded_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-        );
-        CREATE INDEX IF NOT EXISTS idx_matching_low_coverage_recorded
-          ON matching_low_coverage_events(recorded_at DESC);
-      `)
-    } else {
-      await db.exec(`
-        CREATE TABLE IF NOT EXISTS matching_low_coverage_events (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          profile_id TEXT,
-          search_terms TEXT,
-          free_text TEXT,
-          qualified_count INTEGER NOT NULL DEFAULT 0,
-          min_score INTEGER NOT NULL DEFAULT 50,
-          intent_label TEXT,
-          branded_program TEXT,
-          recorded_at TEXT NOT NULL DEFAULT (datetime('now'))
-        );
-        CREATE INDEX IF NOT EXISTS idx_matching_low_coverage_recorded
-          ON matching_low_coverage_events(recorded_at DESC);
-      `)
-    }
-  } catch (e) {
-    console.warn('[database] matching_low_coverage_events self-heal failed:', e?.message || e)
-  }
-
-  // Idempotent self-heal: funding_opportunities verification metadata + reality
-  // gate columns (migrations 0061 + 0062). Several writers — including the new
-  // student bridge funding pipeline — assume these columns exist and crash
-  // with PG 42703 when production hasn't run migrations yet.
-  try {
-    await db.exec(`
-      ALTER TABLE funding_opportunities ADD COLUMN IF NOT EXISTS discovered_at TIMESTAMPTZ;
-      ALTER TABLE funding_opportunities ADD COLUMN IF NOT EXISTS verification_method TEXT;
-      ALTER TABLE funding_opportunities ADD COLUMN IF NOT EXISTS verified_by TEXT;
-      ALTER TABLE funding_opportunities ADD COLUMN IF NOT EXISTS verification_error TEXT;
-      ALTER TABLE funding_opportunities ADD COLUMN IF NOT EXISTS link_status_code INTEGER;
-      ALTER TABLE funding_opportunities ADD COLUMN IF NOT EXISTS opportunity_kind TEXT;
-      ALTER TABLE funding_opportunities ADD COLUMN IF NOT EXISTS source_trust_tier TEXT;
-    `)
-  } catch (e) {
-    console.warn(
-      '[database] funding_opportunities verification + kind/trust self-heal failed (run npm run migrate to apply 0061 + 0062):',
-      e?.message || e,
-    )
-  }
 }
 
 // Production hardening (SQLite): if the DB was created before profiles existed (or after an ephemeral reset),

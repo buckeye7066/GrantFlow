@@ -1,0 +1,376 @@
+/**
+ * Boot-time schema invariants for GrantFlow.
+ *
+ * GrantFlow accumulated 7+ inline `// ... self-heal:` blocks in
+ * backend/server.js, each one a postgres-only DDL fix-up for a previous
+ * production incident where a migration didn't apply on a deploy. Every
+ * new schema change shipped one more inline block, and server.js drifted
+ * to ~3,000 lines.
+ *
+ * This module collapses every BOOT-TIME schema-shape invariant into one
+ * place with a uniform contract:
+ *
+ *   - Each step is its own exported function with its own try/catch so
+ *     a single failure cannot cascade and stop the rest.
+ *   - Every step is pure idempotent DDL (CREATE TABLE IF NOT EXISTS,
+ *     ALTER TABLE ... IF EXISTS / IF NOT EXISTS, DROP CONSTRAINT IF
+ *     EXISTS) and is safe to re-run on a fully-migrated DB.
+ *   - Per-dialect logic lives inside each step (postgres vs sqlite),
+ *     keeping the call site dialect-agnostic.
+ *   - Each step preserves the existing log prefix from the inline
+ *     blocks so production log alerts keep matching exactly.
+ *
+ * IMPORTANT: this module must NOT carry data-repair logic (avatar
+ * rehydrate, baseline seeding, lock sweepers, etc.) — those are
+ * runtime concerns and live elsewhere. Only DDL invariants here.
+ *
+ * Mission rule: "Zero results is a failure state, not an acceptable
+ * outcome." When any of these tables/columns/CHECK lists drift,
+ * crawlers/connectors/Robert/Hamilton can't write, and the user sees
+ * empty Discover Grants. Fixing them on every boot is a one-line
+ * insurance policy against the operator forgetting MIGRATE_ON_BOOT.
+ */
+
+import { ensureAgentSubsystemTables } from '../utils/ensureAgentSubsystemTables.js'
+
+/**
+ * Wraps a single invariant step in a try/catch that logs but never
+ * throws. Returns true on success, false on caught failure.
+ */
+async function runStep(name, logPrefix, logger, fn) {
+  try {
+    await fn()
+    return true
+  } catch (err) {
+    logger?.warn?.(`${logPrefix} ${name} self-heal failed (non-fatal):`, err?.message || err)
+    return false
+  }
+}
+
+/**
+ * Mission Control / Agent Control Center subsystem tables.
+ * Delegates to the existing per-file applier so its per-file
+ * try/catch + _migrations stamping behavior is preserved.
+ */
+export async function ensureAgentSubsystem(db, { logger = console } = {}) {
+  return runStep(
+    'agent-subsystem',
+    '[agent-subsystem]',
+    logger,
+    async () => {
+      await ensureAgentSubsystemTables(db, { logger })
+    },
+  )
+}
+
+/**
+ * funding_opportunities reality-gate columns.
+ * Without these, every crawler / connector / Robert write fails with
+ * `column "reality_status" ... does not exist` and Discover Grants
+ * stays empty.
+ */
+export async function ensureFundingOpportunityRealityGate(db, { logger = console } = {}) {
+  return runStep(
+    'funding-schema',
+    '[funding-schema]',
+    logger,
+    async () => {
+      const { ensureFundingOpportunitySchema } = await import(
+        '../utils/ensureFundingOpportunitySchema.js'
+      )
+      await ensureFundingOpportunitySchema(db, { logger })
+    },
+  )
+}
+
+/**
+ * application_tasks status CHECK constraint resync.
+ * The store ran this lazily on first call, but Hamilton's queue stayed
+ * empty in prod long enough that the constraint stuck on the pre-087
+ * status list and any new state-machine status threw
+ * application_tasks_status_check.
+ */
+export async function ensureApplicationTaskCheck(db, { logger = console } = {}) {
+  return runStep(
+    'application-tasks',
+    '[application-tasks]',
+    logger,
+    async () => {
+      const { ensureApplicationTaskSchema } = await import(
+        '../services/hamilton/applicationTaskStore.js'
+      )
+      await ensureApplicationTaskSchema(db)
+    },
+  )
+}
+
+/**
+ * organizations.deleted_at + contact_name + contact_title columns
+ * (postgres-only — sqlite handles these via the legacy ALTER loop in
+ * server.js).
+ *
+ * Background: list/delete routes filter on organizations.deleted_at
+ * (migration 0047). Yana web-crawler enrichment writes a contact
+ * person (migration 094/0090). Background migrate in start.js may
+ * still be running when first requests arrive; without these columns
+ * /api/organizations 500s.
+ */
+export async function ensureOrganizationsSoftDeleteColumns(db, { logger = console } = {}) {
+  if (db?.dialect !== 'postgres') return true
+  return runStep(
+    'organizations.deleted_at + contact columns',
+    '[database]',
+    logger,
+    async () => {
+      await db.exec('ALTER TABLE organizations ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ')
+      await db.exec(
+        'CREATE INDEX IF NOT EXISTS idx_organizations_deleted_at ON organizations(deleted_at)',
+      )
+      await db.exec('ALTER TABLE organizations ADD COLUMN IF NOT EXISTS contact_name TEXT')
+      await db.exec('ALTER TABLE organizations ADD COLUMN IF NOT EXISTS contact_title TEXT')
+    },
+  )
+}
+
+/**
+ * crawler_jobs.type CHECK constraint must include every type registered
+ * in crawlerDispatcher HANDLERS. When a new type is shipped, operators
+ * who don't set MIGRATE_ON_BOOT see /api/crawlers/jobs 500 with PG 23514
+ * until they run npm run migrate. Mirror migration 0067/0069 inline.
+ *
+ * Keep this list in sync with backend/services/crawlerJobCreation.js
+ * VALID_TYPES.
+ */
+const CRAWLER_JOB_TYPES = [
+  'local',
+  'scholarship',
+  'curated_benefits',
+  'health_resources',
+  'comprehensive',
+  'national',
+  'item_search',
+  'item_gift_search',
+  'avatar_lookup',
+  'document_ingest',
+  'pipeline_automation',
+  'profile_enrichment',
+  'national_zip_scan',
+  'portal_check',
+  'government_funding',
+  'student_grants',
+  'student_bridge_funding',
+  'ecf_benefits',
+  'special_needs',
+  'local_funding',
+  'item_matching',
+  'anya_match_scout',
+]
+
+export async function ensureCrawlerJobsTypeCheck(db, { logger = console } = {}) {
+  if (db?.dialect !== 'postgres') return true
+  return runStep(
+    'crawler_jobs.type CHECK',
+    '[database]',
+    logger,
+    async () => {
+      // Drop any existing CHECK constraint matching `type` (its name varies
+      // across historical migrations) so we can re-add the canonical one.
+      await db.exec(`
+        DO $$
+        DECLARE
+          constraint_name text;
+        BEGIN
+          SELECT c.conname
+          INTO constraint_name
+          FROM pg_constraint c
+          JOIN pg_class t ON t.oid = c.conrelid
+          WHERE t.relname = 'crawler_jobs'
+            AND c.contype = 'c'
+            AND pg_get_constraintdef(c.oid) ILIKE '%CHECK%'
+            AND pg_get_constraintdef(c.oid) ILIKE '%type%'
+          LIMIT 1;
+
+          IF constraint_name IS NOT NULL THEN
+            EXECUTE format('ALTER TABLE crawler_jobs DROP CONSTRAINT IF EXISTS %I', constraint_name);
+          END IF;
+        END $$;
+      `)
+      const inList = CRAWLER_JOB_TYPES.map((t) => `'${t}'`).join(',\n          ')
+      await db.exec(`
+        ALTER TABLE crawler_jobs
+          ADD CONSTRAINT crawler_jobs_type_check
+          CHECK (type IN (
+          ${inList}
+          ))
+      `)
+    },
+  )
+}
+
+/**
+ * anya_match_suggestions table (migration 0068).
+ * The Match Scout writes here; the recommend popup + notification bell
+ * read from it. Without this table the scout's INSERT fails with
+ * PG 42P01 on a fresh deploy where MIGRATE_ON_BOOT=0.
+ */
+export async function ensureAnyaMatchSuggestions(db, { logger = console } = {}) {
+  if (db?.dialect !== 'postgres') return true
+  return runStep(
+    'anya_match_suggestions',
+    '[database]',
+    logger,
+    async () => {
+      await db.exec(`
+        CREATE TABLE IF NOT EXISTS anya_match_suggestions (
+          id TEXT PRIMARY KEY,
+          profile_id TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+          user_id TEXT,
+          opportunity_id TEXT,
+          title TEXT NOT NULL,
+          funder TEXT,
+          match_score REAL NOT NULL,
+          match_reasons JSONB,
+          need_summary JSONB,
+          search_strategy JSONB,
+          opportunity_data JSONB,
+          status TEXT NOT NULL DEFAULT 'pending'
+            CHECK (status IN ('pending', 'accepted', 'dismissed', 'already_in_pipeline', 'expired')),
+          created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          acted_at TIMESTAMPTZ,
+          action_result TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_anya_match_suggestions_profile
+          ON anya_match_suggestions(profile_id);
+        CREATE INDEX IF NOT EXISTS idx_anya_match_suggestions_user
+          ON anya_match_suggestions(user_id);
+        CREATE INDEX IF NOT EXISTS idx_anya_match_suggestions_status
+          ON anya_match_suggestions(status);
+        CREATE INDEX IF NOT EXISTS idx_anya_match_suggestions_opportunity
+          ON anya_match_suggestions(opportunity_id);
+        CREATE INDEX IF NOT EXISTS idx_anya_match_suggestions_created
+          ON anya_match_suggestions(created_at);
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_anya_match_suggestions_active_pair
+          ON anya_match_suggestions(profile_id, opportunity_id)
+          WHERE status = 'pending';
+      `)
+    },
+  )
+}
+
+/**
+ * matching_low_coverage_events table (both dialects).
+ * Records "<X profile> tried to find <Y need> and got fewer than
+ * threshold qualified matches" so we can drive Robert's coverage
+ * sweep at Mission Goal #6 ("intelligent crawling").
+ */
+export async function ensureMatchingLowCoverageEvents(db, { logger = console } = {}) {
+  return runStep(
+    'matching_low_coverage_events',
+    '[database]',
+    logger,
+    async () => {
+      if (db.dialect === 'postgres') {
+        await db.exec(`
+          CREATE TABLE IF NOT EXISTS matching_low_coverage_events (
+            id BIGSERIAL PRIMARY KEY,
+            profile_id TEXT REFERENCES profiles(id) ON DELETE SET NULL,
+            search_terms TEXT,
+            free_text TEXT,
+            qualified_count INTEGER NOT NULL DEFAULT 0,
+            min_score INTEGER NOT NULL DEFAULT 50,
+            intent_label TEXT,
+            branded_program TEXT,
+            recorded_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+          );
+          CREATE INDEX IF NOT EXISTS idx_matching_low_coverage_recorded
+            ON matching_low_coverage_events(recorded_at DESC);
+        `)
+      } else {
+        await db.exec(`
+          CREATE TABLE IF NOT EXISTS matching_low_coverage_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            profile_id TEXT,
+            search_terms TEXT,
+            free_text TEXT,
+            qualified_count INTEGER NOT NULL DEFAULT 0,
+            min_score INTEGER NOT NULL DEFAULT 50,
+            intent_label TEXT,
+            branded_program TEXT,
+            recorded_at TEXT NOT NULL DEFAULT (datetime('now'))
+          );
+          CREATE INDEX IF NOT EXISTS idx_matching_low_coverage_recorded
+            ON matching_low_coverage_events(recorded_at DESC);
+        `)
+      }
+    },
+  )
+}
+
+/**
+ * funding_opportunities verification + reality columns (postgres
+ * mirror of migrations 0061 + 0062). Several writers — including the
+ * student bridge funding pipeline — assume these columns exist and
+ * crash with PG 42703 when production hasn't run migrations yet.
+ */
+export async function ensureFundingOpportunityVerificationColumns(db, { logger = console } = {}) {
+  if (db?.dialect !== 'postgres') return true
+  return runStep(
+    'funding_opportunities verification + kind/trust',
+    '[database]',
+    logger,
+    async () => {
+      await db.exec(`
+        ALTER TABLE funding_opportunities ADD COLUMN IF NOT EXISTS discovered_at TIMESTAMPTZ;
+        ALTER TABLE funding_opportunities ADD COLUMN IF NOT EXISTS verification_method TEXT;
+        ALTER TABLE funding_opportunities ADD COLUMN IF NOT EXISTS verified_by TEXT;
+        ALTER TABLE funding_opportunities ADD COLUMN IF NOT EXISTS verification_error TEXT;
+        ALTER TABLE funding_opportunities ADD COLUMN IF NOT EXISTS link_status_code INTEGER;
+        ALTER TABLE funding_opportunities ADD COLUMN IF NOT EXISTS opportunity_kind TEXT;
+        ALTER TABLE funding_opportunities ADD COLUMN IF NOT EXISTS source_trust_tier TEXT;
+      `)
+    },
+  )
+}
+
+/**
+ * Run every boot-time schema invariant in a defined order. Each step
+ * has its own per-step try/catch — one failure never blocks the rest.
+ *
+ * Order matters only loosely: dialect-agnostic + always-on items
+ * (agent subsystem, funding reality gate, application_tasks CHECK)
+ * run first because downstream agent code paths depend on them; the
+ * postgres-specific ALTER COLUMN / CHECK constraint repairs run
+ * after.
+ *
+ * @returns {Promise<{ steps: Array<{ name: string, ok: boolean }>, ran: number, failed: number }>}
+ */
+export async function ensureSchemaInvariants(db, { logger = console } = {}) {
+  const steps = [
+    ['agent_subsystem', ensureAgentSubsystem],
+    ['funding_opportunity_reality_gate', ensureFundingOpportunityRealityGate],
+    ['application_task_check', ensureApplicationTaskCheck],
+    ['organizations_soft_delete', ensureOrganizationsSoftDeleteColumns],
+    ['crawler_jobs_type_check', ensureCrawlerJobsTypeCheck],
+    ['anya_match_suggestions', ensureAnyaMatchSuggestions],
+    ['matching_low_coverage_events', ensureMatchingLowCoverageEvents],
+    ['funding_opportunity_verification_columns', ensureFundingOpportunityVerificationColumns],
+  ]
+
+  const results = []
+  for (const [name, fn] of steps) {
+    const ok = await fn(db, { logger })
+    results.push({ name, ok })
+  }
+
+  const failed = results.filter((r) => !r.ok).length
+  if (failed > 0) {
+    logger?.warn?.(
+      `[schema-invariants] ${failed} of ${results.length} steps failed (non-fatal); see prior warnings.`,
+    )
+  } else {
+    logger?.info?.(`[schema-invariants] all ${results.length} steps OK`)
+  }
+  return { steps: results, ran: results.length, failed }
+}
+
+export const __testables = { CRAWLER_JOB_TYPES }
