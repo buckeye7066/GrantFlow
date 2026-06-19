@@ -128,7 +128,44 @@ export async function ensureBillingSchema(db) {
     `)
   }
 
+  // Schema drift guard: `CREATE TABLE IF NOT EXISTS` is a no-op when an OLDER
+  // billing_tiers already exists, so the feature-flag columns added later are
+  // never backfilled. The GET /accounts query selects bt.enable_* and threw
+  // "column does not exist" -> HTTP 500 (the Billing console "No billing
+  // accounts yet" masked this). Additively ensure those columns on both dialects.
+  await ensureBillingTierColumns(db, isPostgres)
+
   await seedBillingTiersIfMissing(db)
+}
+
+const BILLING_TIER_FLAG_COLUMNS = [
+  'enable_pipeline_automation',
+  'enable_item_funding',
+  'enable_document_ai',
+]
+
+async function ensureBillingTierColumns(db, isPostgres) {
+  try {
+    if (isPostgres) {
+      for (const col of BILLING_TIER_FLAG_COLUMNS) {
+        await db.exec(`ALTER TABLE billing_tiers ADD COLUMN IF NOT EXISTS ${col} BOOLEAN DEFAULT FALSE`)
+      }
+      return
+    }
+    // SQLite has no ADD COLUMN IF NOT EXISTS — check the live schema first.
+    const cols = new Set(
+      (await db.prepare(`PRAGMA table_info(billing_tiers)`).all()).map((r) => r.name),
+    )
+    for (const col of BILLING_TIER_FLAG_COLUMNS) {
+      if (!cols.has(col)) {
+        await db.exec(`ALTER TABLE billing_tiers ADD COLUMN ${col} BOOLEAN DEFAULT 0`)
+      }
+    }
+  } catch (error) {
+    // Best-effort: the /accounts handler also has a resilient fallback, so a
+    // failure here must never break billing reads.
+    console.warn('[billing] ensureBillingTierColumns failed (non-fatal):', error?.message || error)
+  }
 }
 
 export function mapAccountRow(row) {
