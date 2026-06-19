@@ -915,6 +915,14 @@ router.get('/:id/portal-access-schedule', async (req, res) => {
   try {
     if (!isAuthenticatedFromCtx(req.ctx)) return res.status(401).json({ error: 'Authentication required' })
     const profileId = String(req.params.id)
+    // Authorization: same gate as the PUT — only an admin, the profile owner, or
+    // the active profile may read the schedule (it's profile-scoped data).
+    const profileRow = await req.db.prepare('SELECT user_id FROM profiles WHERE id = ?').get(profileId)
+    const canView =
+      req.ctx?.isAdmin === true ||
+      (req.ctx?.userId && profileRow?.user_id && String(profileRow.user_id) === String(req.ctx.userId)) ||
+      (req.ctx?.activeProfileId && String(req.ctx.activeProfileId) === profileId)
+    if (!canView) return res.status(403).json({ error: 'Not authorized to view this profile' })
     const prefs = await loadAutomationPreferences(req.db, profileId)
     res.json({ schedule: normalizeSchedule(prefs) })
   } catch (error) {
