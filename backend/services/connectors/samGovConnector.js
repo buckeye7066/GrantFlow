@@ -14,6 +14,7 @@
  */
 
 import fetch from 'node-fetch';
+import { getSamGovApiKey } from '../../config/grantsGovEndpoints.js';
 
 // NOTE: The /prod/ path segment was removed in 2023. The current canonical base is:
 //   https://api.sam.gov/assistance-listing/v1/
@@ -63,10 +64,10 @@ async function rateLimitedFetch(url, apiKey) {
  * @returns {Promise<Array>} Array of programs (PROGRAM type - standing assistance, not open grants)
  */
 export async function searchAssistanceListings(params = {}) {
-  const apiKey = process.env.SAM_GOV_API_KEY;
+  const apiKey = getSamGovApiKey();
 
   if (!apiKey) {
-    console.warn('[SAM.gov] SAM_GOV_API_KEY is not set — skipping SAM.gov assistance listings search.')
+    console.warn('[SAM.gov] SAM_GOV_PUBLIC_API_KEY / SAM_GOV_API_KEY is not set — skipping SAM.gov assistance listings search.')
     return []
   }
 
@@ -132,8 +133,8 @@ export async function searchAssistanceListings(params = {}) {
  * Get assistance listing details by CFDA number
  */
 export async function getAssistanceListingDetails(cfdaNumber) {
-  const apiKey = process.env.SAM_GOV_API_KEY;
-  
+  const apiKey = getSamGovApiKey();
+
   try {
     const url = `${BASE_URL}/assistance-listings/${cfdaNumber}`;
     const data = await rateLimitedFetch(url, apiKey);
