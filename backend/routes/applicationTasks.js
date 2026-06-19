@@ -29,6 +29,7 @@ import {
   appendTaskEvent,
   listMissingInfo,
   resolveMissingInfoItem,
+  resumeTaskAfterMissingInfo,
   listTaskEvents,
   TASK_TERMINAL_STATUSES,
 } from '../services/hamilton/applicationTaskStore.js'
@@ -229,9 +230,34 @@ router.post('/:taskId/missing-info', async (req, res) => {
       actorRole: user.role || null,
       details: { resolved },
     })
-    const updated = await getApplicationTask(req.db, taskId)
     const remaining = await listMissingInfo(req.db, taskId, { includeResolved: false })
-    return res.json({ ok: true, task: updated, remaining_missing_info: remaining, resolved_count: resolved })
+    // Auto-resume: if every flagged item is now supplied and the task was
+    // waiting on the user, re-queue it so Hamilton continues to completion on
+    // her own — no manual relaunch. (The login backup plan does the same for
+    // auth blockers.)
+    const resume = await resumeTaskAfterMissingInfo(req.db, taskId, {
+      resolvedCount: resolved, remainingCount: remaining.length,
+    })
+    if (resume.resumed) {
+      await appendTaskEvent(req.db, {
+        taskId,
+        eventType: 'unblocked',
+        status: 'ready',
+        step: 'auto_resume',
+        message: 'All flagged info supplied — task re-queued; Hamilton will resume automatically.',
+        actorUserId: getAuthUserId(user),
+        actorRole: 'agent',
+        details: { auto_resumed: true },
+      })
+    }
+    const updated = await getApplicationTask(req.db, taskId)
+    return res.json({
+      ok: true,
+      task: updated,
+      remaining_missing_info: remaining,
+      resolved_count: resolved,
+      auto_resumed: Boolean(resume.resumed),
+    })
   } catch (err) {
     log.error('missing-info failed', { error: err?.message, taskId })
     return res.status(500).json({ ok: false, error: err?.message || 'missing_info_failed' })

@@ -574,6 +574,40 @@ export async function updateApplicationTask(db, taskId, {
   return await getApplicationTask(db, taskId)
 }
 
+// Statuses a task can be auto-resumed FROM once the user supplies the info
+// Hamilton flagged: only genuine "waiting on the user for input" states — never
+// terminal (submitted/completed/cancelled/failed) or in-flight ones.
+export const RESUMABLE_AFTER_INFO_STATUSES = Object.freeze([
+  'blocked', 'waiting_for_missing_info', 'waiting_for_user', 'waiting_for_admin',
+])
+
+/**
+ * "Automation is king": once every flagged item is supplied, put a task that
+ * was waiting on the user back into the run queue (status 'ready') so the
+ * periodic Hamilton runner re-picks it and continues to completion/submission
+ * — the user shouldn't have to manually relaunch after answering. Mirrors the
+ * login backup plan's auto-resume.
+ *
+ * Only resumes when (a) at least one item was just resolved, (b) nothing
+ * remains outstanding, and (c) the task is in a resumable waiting state.
+ *
+ * @returns {Promise<{resumed:boolean, status?:string}>}
+ */
+export async function resumeTaskAfterMissingInfo(db, taskId, { resolvedCount = 0, remainingCount = 0 } = {}) {
+  if (!taskId) return { resumed: false }
+  if (!(Number(resolvedCount) > 0 && Number(remainingCount) === 0)) return { resumed: false }
+  const task = await getApplicationTask(db, taskId)
+  if (!task) return { resumed: false }
+  if (!RESUMABLE_AFTER_INFO_STATUSES.includes(task.status)) return { resumed: false, status: task.status }
+  await updateApplicationTask(db, taskId, {
+    status: 'ready',
+    nextRetryAt: null,
+    currentStep: 'resuming_after_missing_info',
+    lastAgentMessage: 'All flagged information supplied — Hamilton will resume automatically and continue to completion.',
+  })
+  return { resumed: true, status: 'ready' }
+}
+
 export async function cancelApplicationTask(db, taskId, { actorUserId = null, actorRole = null, reason = null } = {}) {
   await ensureApplicationTaskSchema(db)
   const ts = new Date().toISOString()
