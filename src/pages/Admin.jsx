@@ -1,7 +1,7 @@
 ﻿import React, { Suspense } from 'react';
 import { lazyWithRetry } from '@/utils/lazyWithRetry';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Shield, Activity, AlertCircle, Bot, DollarSign, Mail, Wrench, Workflow, Users, Bell, Loader2, Search } from 'lucide-react';
+import { Shield, Activity, AlertCircle, Bot, DollarSign, Mail, Wrench, Workflow, Users, Bell, Loader2, Search, KeyRound } from 'lucide-react';
 import AdminDocumentUpload from '@/components/admin/AdminDocumentUpload';
 import AdminDiagnostics from '@/components/admin/AdminDiagnostics';
 import AdminGeoCrawl from '@/components/admin/AdminGeoCrawl';
@@ -21,6 +21,7 @@ import AdminServiceCatalog from '@/components/admin/AdminServiceCatalog.jsx'
 import AdminExclusionRules from '@/components/admin/AdminExclusionRules'
 import AdminAgentMissionControl from '@/components/admin/AdminAgentMissionControl'
 import AdminFundingTrace from '@/components/admin/AdminFundingTrace.jsx'
+import AdminCredentialVault from '@/components/admin/AdminCredentialVault.jsx'
 // Use lazyWithRetry (not raw React.lazy) so a stale-deploy chunk failure when
 // switching to the Billing/Automation tabs auto-recovers with one reload
 // instead of tripping the RouteErrorBoundary.
@@ -133,6 +134,10 @@ export default function Admin() {
               <DollarSign className="w-4 h-4 mr-2" />
               Services
             </TabsTrigger>
+            <TabsTrigger value="vault">
+              <KeyRound className="w-4 h-4 mr-2" />
+              Credential vault
+            </TabsTrigger>
             <TabsTrigger value="maintenance">
               <Wrench className="w-4 h-4 mr-2" />
               Maintenance
@@ -219,6 +224,10 @@ export default function Admin() {
 
           <TabsContent value="services" className="mt-6">
             <AdminServiceCatalog />
+          </TabsContent>
+
+          <TabsContent value="vault" className="mt-6">
+            <AdminCredentialVault />
           </TabsContent>
 
           <TabsContent value="maintenance" className="mt-6">

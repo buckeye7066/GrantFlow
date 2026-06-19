@@ -77,6 +77,10 @@ import {
   getCredentialById,
   deleteCredential,
   revealPasswordOnceById,
+  listManagedCredentials,
+  moveManagedCredential,
+  copyManagedCredentialToProfile,
+  deleteManagedCredential,
 } from '../services/hamilton/hamiltonPortalCredentialService.js'
 import { importCredentialsFromCsv } from '../services/hamilton/hamiltonCredentialCsvImport.js'
 import {
@@ -177,6 +181,22 @@ async function requireProfileScope(req, res, profileId) {
     return null
   }
   return user
+}
+
+// Admin-only guard for the admin vault management surface. Canonical admin
+// truth is DB-backed (req.ctx.isAdmin); we also accept the admin-token flow
+// (req.user.is_admin) so the in-app admin panel and the import tooling both work.
+function requireAdmin(req, res) {
+  if (req.ctx?.isAdmin === true || req.user?.is_admin === true || req.user?.role === 'admin') return true
+  res.status(403).json({ error: 'admin_required' })
+  return false
+}
+
+// Provenance for a newly-saved credential: an admin acting in the app marks it
+// 'admin' (visible/movable from the admin vault); a profile user marks it 'user'
+// (private to that profile, never surfaced to the admin vault).
+function actorManagedBy(req) {
+  return (req.ctx?.isAdmin === true || req.user?.is_admin === true || req.user?.role === 'admin') ? 'admin' : 'user'
 }
 
 // Auth + ownership guard for :id routes on profile-scoped records. Loads the
@@ -761,6 +781,7 @@ router.post('/credentials', async (req, res) => {
       password: req.body?.password,
       label: req.body?.label || null,
       loginUrl: req.body?.login_url || req.body?.loginUrl || null,
+      managedBy: actorManagedBy(req),
     })
     return res.json({ ok: true, credential })
   } catch (err) {
@@ -861,10 +882,83 @@ router.post('/credentials/import-csv', express.json({ limit: '5mb' }), async (re
       profileId: req.body.profileId,
       csvText,
       source,
+      managedBy: actorManagedBy(req),
     })
     return res.json({ ok: true, ...result })
   } catch (err) {
     return res.status(400).json({ error: 'import_failed', detail: err?.message, message: err?.message })
+  }
+})
+
+// --- Admin vault management ----------------------------------------------
+// Admin-only surface for the credentials the admin placed (managed_by='admin').
+// These let the admin move/copy logins in and out of profiles and remove them.
+// They NEVER touch credentials a profile user entered themselves or that
+// Hamilton generated — those stay private to the profile.
+
+// List everything the admin manages, optionally scoped to one profile.
+router.get('/admin/credentials', async (req, res) => {
+  if (!requireAdmin(req, res)) return
+  try {
+    const credentials = await listManagedCredentials(req.db, {
+      managedBy: 'admin',
+      profileId: req.query.profileId ? String(req.query.profileId) : null,
+    })
+    return res.json({ ok: true, credentials })
+  } catch (err) {
+    return res.status(500).json({ error: 'list_failed', detail: err?.message })
+  }
+})
+
+// Move an admin-managed login OUT of its current profile and INTO another.
+router.post('/admin/credentials/:id/move', async (req, res) => {
+  if (!requireAdmin(req, res)) return
+  const toProfileId = req.body?.toProfileId || req.body?.profileId
+  if (!toProfileId) return res.status(400).json({ error: 'toProfileId required' })
+  try {
+    const result = await moveManagedCredential(req.db, { id: req.params.id, toProfileId })
+    if (!result.moved) {
+      const code = result.reason === 'not_found' ? 404 : result.reason === 'not_admin_managed' ? 403 : 400
+      return res.status(code).json({ ok: false, error: result.reason, credential: result.credential || null })
+    }
+    return res.json({ ok: true, ...result })
+  } catch (err) {
+    return res.status(400).json({ error: 'move_failed', detail: err?.message })
+  }
+})
+
+// Copy an admin-managed login INTO a profile, leaving the original in place
+// (e.g. keep it in the admin vault and also grant it to a profile).
+router.post('/admin/credentials/:id/copy', async (req, res) => {
+  if (!requireAdmin(req, res)) return
+  const toProfileId = req.body?.toProfileId || req.body?.profileId
+  if (!toProfileId) return res.status(400).json({ error: 'toProfileId required' })
+  try {
+    const result = await copyManagedCredentialToProfile(req.db, {
+      id: req.params.id, toProfileId, actorUserId: getAuthUserId(req.user),
+    })
+    if (!result.copied) {
+      const code = result.reason === 'not_found' ? 404 : result.reason === 'not_admin_managed' ? 403 : 400
+      return res.status(code).json({ ok: false, error: result.reason })
+    }
+    return res.json({ ok: true, ...result })
+  } catch (err) {
+    return res.status(400).json({ error: 'copy_failed', detail: err?.message })
+  }
+})
+
+// Remove an admin-managed login (only admin-placed rows can be deleted here).
+router.delete('/admin/credentials/:id', async (req, res) => {
+  if (!requireAdmin(req, res)) return
+  try {
+    const result = await deleteManagedCredential(req.db, req.params.id)
+    if (!result.deleted) {
+      const code = result.reason === 'not_found' ? 404 : result.reason === 'not_admin_managed' ? 403 : 400
+      return res.status(code).json({ ok: false, error: result.reason })
+    }
+    return res.json({ ok: true, deleted: true })
+  } catch (err) {
+    return res.status(400).json({ error: 'delete_failed', detail: err?.message })
   }
 })
 

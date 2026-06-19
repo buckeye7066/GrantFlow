@@ -204,7 +204,7 @@ export function extractHostAndLoginUrl(rawUrl) {
  * }>}
  */
 export async function importCredentialsFromCsv(db, {
-  userId, profileId, csvText, source = 'CSV import',
+  userId, profileId, csvText, source = 'CSV import', managedBy = 'user',
 } = {}) {
   if (!db || !userId || !profileId) throw new Error('userId and profileId required')
   if (typeof csvText !== 'string' || !csvText.trim()) throw new Error('csvText required')
@@ -272,6 +272,7 @@ export async function importCredentialsFromCsv(db, {
         password,
         label: label.trim() ? `${label.trim()} (${source})` : `${host} (${source})`,
         loginUrl,
+        managedBy,
       })
       result.imported += 1
     } catch (err) {

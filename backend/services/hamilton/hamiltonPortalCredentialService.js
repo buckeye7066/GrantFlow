@@ -71,13 +71,19 @@ async function ensureSchema(db) {
       generation_reason TEXT,
       generated_at ${tsType},
       password_revealed_once_at ${tsType},
+      managed_by TEXT,
       created_at ${tsType} DEFAULT ${nowFn},
       updated_at ${tsType} DEFAULT ${nowFn}
     );
-    CREATE UNIQUE INDEX IF NOT EXISTS ux_hamilton_portal_cred_profile_host
-      ON hamilton_portal_credentials(profile_id, portal_host);
+    -- Uniqueness on (profile, host, username) so multiple logins per site are
+    -- kept. The legacy (profile, host) index collapsed multi-account sites.
+    DROP INDEX IF EXISTS ux_hamilton_portal_cred_profile_host;
+    CREATE UNIQUE INDEX IF NOT EXISTS ux_hamilton_portal_cred_profile_host_user
+      ON hamilton_portal_credentials(profile_id, portal_host, username);
     CREATE INDEX IF NOT EXISTS idx_hamilton_portal_cred_profile
       ON hamilton_portal_credentials(profile_id);
+    CREATE INDEX IF NOT EXISTS idx_hamilton_portal_cred_managed_by
+      ON hamilton_portal_credentials(managed_by);
   `)
   // Self-heal older deployments where the table existed before these columns
   // were introduced. ALTER TABLE ADD COLUMN is portable; we probe the table
@@ -91,6 +97,7 @@ async function ensureSchema(db) {
       ['generation_reason', 'TEXT'],
       ['generated_at', tsType],
       ['password_revealed_once_at', tsType],
+      ['managed_by', 'TEXT'],
     ]
     for (const [name, type] of wanted) {
       if (have.has(name)) continue
@@ -104,6 +111,7 @@ async function ensureSchema(db) {
       'generation_reason TEXT',
       `generated_at ${tsType}`,
       `password_revealed_once_at ${tsType}`,
+      'managed_by TEXT',
     ]) {
       try { await db.exec(`ALTER TABLE hamilton_portal_credentials ADD COLUMN IF NOT EXISTS ${col};`) }
       catch { /* benign */ }
@@ -144,6 +152,10 @@ function rowToMasked(row) {
     generation_reason: row.generation_reason || null,
     generated_at: row.generated_at || null,
     password_revealed_once_at: row.password_revealed_once_at || null,
+    // Provenance: 'admin' | 'user' | 'hamilton'. Admin management surfaces show
+    // only managed_by='admin' rows so an admin never sees a profile user's own
+    // self-entered logins. Defaults to 'user' for legacy rows.
+    managed_by: row.managed_by || 'user',
     created_at: row.created_at,
     updated_at: row.updated_at,
   }
@@ -185,7 +197,7 @@ export function generateStrongPassword(length = 28) {
  */
 export async function saveCredential(db, {
   userId, profileId, portalHost, username, password,
-  label = null, loginUrl = null,
+  label = null, loginUrl = null, managedBy = 'user',
 } = {}) {
   if (!db || !userId || !profileId) throw new Error('userId and profileId required')
   const host = normalizeHost(portalHost)
@@ -195,23 +207,26 @@ export async function saveCredential(db, {
   if (!registrableDomain(host)) throw new Error('portalHost must be a full domain (e.g. mtsu.edu)')
   if (!username || !String(username).trim()) throw new Error('username required')
   if (!password || !String(password).trim()) throw new Error('password required')
+  const provenance = ['admin', 'user', 'hamilton'].includes(managedBy) ? managedBy : 'user'
   await ensureSchema(db)
 
   const enc = encryptRuntimeSecret(String(password))
   const nowFn = db?.dialect === 'postgres' ? 'now()' : 'CURRENT_TIMESTAMP'
+  // Idempotent on (profile, host, username) — multiple logins per host coexist,
+  // but re-saving the SAME login updates it in place rather than duplicating.
   const existing = await db.prepare(
-    `SELECT id FROM hamilton_portal_credentials WHERE profile_id = ? AND portal_host = ? LIMIT 1`,
-  ).get(String(profileId), host)
+    `SELECT id FROM hamilton_portal_credentials WHERE profile_id = ? AND portal_host = ? AND username = ? LIMIT 1`,
+  ).get(String(profileId), host, String(username))
 
   if (existing) {
     await db.prepare(
       `UPDATE hamilton_portal_credentials SET
          user_id = ?, label = ?, login_url = ?, username = ?,
          password_ciphertext = ?, password_iv = ?, password_tag = ?,
-         status = 'active', updated_at = ${nowFn}
+         managed_by = ?, status = 'active', updated_at = ${nowFn}
        WHERE id = ?`,
     ).run(String(userId), label, loginUrl, String(username),
-      enc.value_ciphertext, enc.iv, enc.tag, existing.id)
+      enc.value_ciphertext, enc.iv, enc.tag, provenance, existing.id)
     return rowToMasked(await db.prepare('SELECT * FROM hamilton_portal_credentials WHERE id = ?').get(existing.id))
   }
 
@@ -219,10 +234,10 @@ export async function saveCredential(db, {
   await db.prepare(
     `INSERT INTO hamilton_portal_credentials
        (id, user_id, profile_id, portal_host, label, login_url, username,
-        password_ciphertext, password_iv, password_tag, status, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ${nowFn}, ${nowFn})`,
+        password_ciphertext, password_iv, password_tag, managed_by, status, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ${nowFn}, ${nowFn})`,
   ).run(id, String(userId), String(profileId), host, label, loginUrl, String(username),
-    enc.value_ciphertext, enc.iv, enc.tag)
+    enc.value_ciphertext, enc.iv, enc.tag, provenance)
   return rowToMasked(await db.prepare('SELECT * FROM hamilton_portal_credentials WHERE id = ?').get(id))
 }
 
@@ -248,6 +263,135 @@ export async function deleteCredential(db, id) {
   await ensureSchema(db)
   const res = await db.prepare('DELETE FROM hamilton_portal_credentials WHERE id = ?').run(String(id))
   return (res?.changes ?? res?.rowCount ?? 0) > 0
+}
+
+// --- Admin vault management ----------------------------------------------
+// These power the admin's ability to move logins in/out of profiles. They all
+// operate ONLY on managed_by='admin' rows: an admin can never list, move, copy,
+// or delete a credential a profile user entered themselves (managed_by='user')
+// or that Hamilton generated (managed_by='hamilton').
+
+/**
+ * List credentials the admin manages (managed_by='admin'), optionally scoped to
+ * one profile. Returns masked rows enriched with the owning profile's display
+ * name so the admin panel can group "what I placed where". Never decrypts.
+ */
+export async function listManagedCredentials(db, { managedBy = 'admin', profileId = null } = {}) {
+  if (!db) return []
+  await ensureSchema(db)
+  const params = [managedBy]
+  let where = 'c.managed_by = ?'
+  if (profileId) { where += ' AND c.profile_id = ?'; params.push(String(profileId)) }
+  let rows
+  try {
+    rows = await db.prepare(
+      `SELECT c.*, p.display_name AS profile_display_name
+         FROM hamilton_portal_credentials c
+         LEFT JOIN profiles p ON p.id = c.profile_id
+        WHERE ${where}
+        ORDER BY c.portal_host ASC, c.created_at DESC`,
+    ).all(...params)
+  } catch {
+    // profiles join unavailable (e.g. isolated test db) — fall back to flat list.
+    rows = await db.prepare(
+      `SELECT c.* FROM hamilton_portal_credentials c WHERE ${where} ORDER BY c.portal_host ASC, c.created_at DESC`,
+    ).all(...params)
+  }
+  return (rows || []).map((r) => ({ ...rowToMasked(r), profile_display_name: r.profile_display_name || null }))
+}
+
+// Internal: fetch the raw row (incl. ciphertext + provenance). Not exported to
+// clients — used only to copy/move within the server.
+async function getRawCredential(db, id) {
+  return db.prepare('SELECT * FROM hamilton_portal_credentials WHERE id = ?').get(String(id))
+}
+
+/**
+ * Move an admin-managed credential from its current profile into another. This
+ * is the "take a login OUT of one profile and put it IN another" operation.
+ * Refuses non-admin-managed rows. If the destination already has the same
+ * (host, username), the moved row is merged into it (source deleted).
+ *
+ * @returns {Promise<{moved:boolean, reason?:string, credential?:object}>}
+ */
+export async function moveManagedCredential(db, { id, toProfileId } = {}) {
+  if (!db || !id || !toProfileId) return { moved: false, reason: 'id_and_toProfileId_required' }
+  await ensureSchema(db)
+  const row = await getRawCredential(db, id)
+  if (!row) return { moved: false, reason: 'not_found' }
+  if ((row.managed_by || 'user') !== 'admin') return { moved: false, reason: 'not_admin_managed' }
+  const dest = String(toProfileId)
+  if (dest === String(row.profile_id)) {
+    return { moved: false, reason: 'already_in_profile', credential: rowToMasked(row) }
+  }
+  const nowFn = db?.dialect === 'postgres' ? 'now()' : 'CURRENT_TIMESTAMP'
+  const clash = await db.prepare(
+    `SELECT id FROM hamilton_portal_credentials WHERE profile_id = ? AND portal_host = ? AND username = ? LIMIT 1`,
+  ).get(dest, row.portal_host, row.username)
+  if (clash) {
+    // Destination already has this exact login — drop the source, keep the dest.
+    await db.prepare('DELETE FROM hamilton_portal_credentials WHERE id = ?').run(String(id))
+    return { moved: true, reason: 'merged_into_existing', credential: rowToMasked(await getRawCredential(db, clash.id)) }
+  }
+  await db.prepare(
+    `UPDATE hamilton_portal_credentials SET profile_id = ?, updated_at = ${nowFn} WHERE id = ?`,
+  ).run(dest, String(id))
+  return { moved: true, credential: rowToMasked(await getRawCredential(db, id)) }
+}
+
+/**
+ * Copy an admin-managed credential INTO another profile while leaving the
+ * original in place (e.g. keep it in the admin vault AND grant it to a
+ * profile). The password ciphertext is copied verbatim — encryption is keyed
+ * globally, not per profile — so no decrypt happens. Idempotent on
+ * (toProfile, host, username).
+ *
+ * @returns {Promise<{copied:boolean, reason?:string, credential?:object}>}
+ */
+export async function copyManagedCredentialToProfile(db, { id, toProfileId, actorUserId = 'system_admin_token' } = {}) {
+  if (!db || !id || !toProfileId) return { copied: false, reason: 'id_and_toProfileId_required' }
+  await ensureSchema(db)
+  const row = await getRawCredential(db, id)
+  if (!row) return { copied: false, reason: 'not_found' }
+  if ((row.managed_by || 'user') !== 'admin') return { copied: false, reason: 'not_admin_managed' }
+  const dest = String(toProfileId)
+  const nowFn = db?.dialect === 'postgres' ? 'now()' : 'CURRENT_TIMESTAMP'
+  const existing = await db.prepare(
+    `SELECT id FROM hamilton_portal_credentials WHERE profile_id = ? AND portal_host = ? AND username = ? LIMIT 1`,
+  ).get(dest, row.portal_host, row.username)
+  if (existing) {
+    await db.prepare(
+      `UPDATE hamilton_portal_credentials SET
+         label = ?, login_url = ?, password_ciphertext = ?, password_iv = ?, password_tag = ?,
+         managed_by = 'admin', status = 'active', updated_at = ${nowFn}
+       WHERE id = ?`,
+    ).run(row.label, row.login_url, row.password_ciphertext, row.password_iv, row.password_tag, existing.id)
+    return { copied: true, reason: 'updated_existing', credential: rowToMasked(await getRawCredential(db, existing.id)) }
+  }
+  const newId = crypto.randomUUID()
+  await db.prepare(
+    `INSERT INTO hamilton_portal_credentials
+       (id, user_id, profile_id, portal_host, label, login_url, username,
+        password_ciphertext, password_iv, password_tag, managed_by, status, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'admin', 'active', ${nowFn}, ${nowFn})`,
+  ).run(newId, String(actorUserId), dest, row.portal_host, row.label, row.login_url, row.username,
+    row.password_ciphertext, row.password_iv, row.password_tag)
+  return { copied: true, credential: rowToMasked(await getRawCredential(db, newId)) }
+}
+
+/**
+ * Delete a credential ONLY if it is admin-managed. Guards the admin remove
+ * action so it can never delete a profile user's own login.
+ * @returns {Promise<{deleted:boolean, reason?:string}>}
+ */
+export async function deleteManagedCredential(db, id) {
+  if (!db || !id) return { deleted: false, reason: 'id_required' }
+  await ensureSchema(db)
+  const row = await getRawCredential(db, id)
+  if (!row) return { deleted: false, reason: 'not_found' }
+  if ((row.managed_by || 'user') !== 'admin') return { deleted: false, reason: 'not_admin_managed' }
+  const res = await db.prepare('DELETE FROM hamilton_portal_credentials WHERE id = ?').run(String(id))
+  return { deleted: (res?.changes ?? res?.rowCount ?? 0) > 0 }
 }
 
 /**
@@ -347,9 +491,9 @@ export async function saveGeneratedCredential(db, {
     `INSERT INTO hamilton_portal_credentials
        (id, user_id, profile_id, portal_host, label, login_url, username,
         password_ciphertext, password_iv, password_tag, status,
-        generated_by, generation_reason, generated_at,
+        generated_by, generation_reason, generated_at, managed_by,
         created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ${nowFn}, ${nowFn}, ${nowFn})`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ${nowFn}, 'hamilton', ${nowFn}, ${nowFn})`,
   ).run(
     id, String(userId), String(profileId), host,
     label || `Generated by ${generatedBy} for ${host}`,
