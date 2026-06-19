@@ -1949,6 +1949,10 @@ app.use('/api/ai', requestTimeout(PIPELINE_TIMEOUT), aiRouter);
 // `/api/anya/match-suggestions/*` handler.
 app.use('/api/anya/match-suggestions', anyaMatchSuggestionsRouter);
 app.use('/api/anya', anyaRouter);
+// Laptop Connector — admin-only ingest of locally-scanned files into a
+// reviewable candidate inbox (lead/funding/profile_field). Lazy so the
+// Anthropic SDK only loads when the connector is actually used.
+app.use('/api/laptop-connector', lazyRouter('./routes/laptopConnector.js'));
 app.use('/api/profiles', profilesRouter);
 app.use('/api/reminders', remindersRouter);
 app.use('/api/matching', requestTimeout(PIPELINE_TIMEOUT), matchingRouter);
