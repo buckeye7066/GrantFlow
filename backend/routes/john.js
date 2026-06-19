@@ -38,6 +38,7 @@ import {
   archiveDraft,
   reviseDraftBody,
 } from '../services/john/johnDraftService.js'
+import { refreshDraftBodies } from '../services/john/johnDraftRefreshService.js'
 import {
   getRun,
   listRuns,
@@ -304,6 +305,27 @@ router.post('/drafts/:id/archive', adminAuth, async (req, res) => {
     await archiveDraft(db, req.params.id, reason)
     res.json({ ok: true })
   } catch (err) {
+    res.status(500).json({ ok: false, error: err?.message })
+  }
+})
+
+/**
+ * Rewrite the body/subject of all of John's existing Outlook drafts to the
+ * current email template (e.g. after a messaging change). Never sends — Graph
+ * PATCH only. Pass { dryRun: true } to preview which drafts would change.
+ */
+router.post('/drafts/refresh-bodies', adminAuth, async (req, res) => {
+  try {
+    assertDraftOnly()
+    const body = req.body || {}
+    const result = await refreshDraftBodies(db, {
+      dryRun: !!body.dryRun,
+      limit: typeof body.limit === 'number' ? body.limit : undefined,
+      logger: log,
+    })
+    res.status(result.ok ? 200 : 503).json(result)
+  } catch (err) {
+    log.error('refresh-bodies failed', { error: err?.message })
     res.status(500).json({ ok: false, error: err?.message })
   }
 })

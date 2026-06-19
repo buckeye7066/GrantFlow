@@ -238,6 +238,115 @@ export function createOutlookProvider({
   }
 
   /**
+   * Fetch a single draft message by its Graph id from the primary mailbox.
+   * Returns { ok, message } or { ok:false, status, notFound, detail }.
+   * Used by the draft-refresh routine to confirm a draft still exists before
+   * patching it (a human may have deleted or sent it).
+   */
+  async function getMessage(messageId) {
+    if (!ready) {
+      const err = new Error(`Outlook provider not configured (missing ${missing || 'fetch'})`)
+      err.code = 'JOHN_OUTLOOK_NOT_CONFIGURED'
+      throw err
+    }
+    if (!messageId) throw new Error('getMessage: messageId is required')
+    const token = await getAccessToken()
+    const mailbox = encodeURIComponent(config.primaryMailbox)
+    const url = `${GRAPH_BASE}/users/${mailbox}/messages/${encodeURIComponent(messageId)}`
+    const res = await fetchImpl(url, {
+      method: 'GET',
+      headers: { authorization: `Bearer ${token}` },
+    })
+    if (res.ok) return { ok: true, message: maskSecrets(await res.json()) }
+    return { ok: false, status: res.status, notFound: res.status === 404, detail: redact(await safeText(res)) }
+  }
+
+  /**
+   * Update the subject/body of an existing draft via Graph PATCH. Only drafts
+   * (isDraft === true) can be edited; Graph rejects edits to sent items. Returns
+   * { ok, provider_draft_id } or throws with a redacted detail.
+   *
+   * Never sends — PATCH only mutates the draft in place.
+   */
+  async function updateDraftBody({ messageId, subject, bodyText, bodyHtml }) {
+    if (!ready) {
+      const err = new Error(`Outlook provider not configured (missing ${missing || 'fetch'})`)
+      err.code = 'JOHN_OUTLOOK_NOT_CONFIGURED'
+      throw err
+    }
+    if (!messageId) {
+      const err = new Error('updateDraftBody: messageId is required')
+      err.code = 'JOHN_OUTLOOK_MISSING_MESSAGE_ID'
+      throw err
+    }
+    const token = await getAccessToken()
+    const mailbox = encodeURIComponent(config.primaryMailbox)
+    const url = `${GRAPH_BASE}/users/${mailbox}/messages/${encodeURIComponent(messageId)}`
+
+    const patch = {}
+    if (subject !== undefined && subject !== null) patch.subject = String(subject).slice(0, 255)
+    if (bodyHtml || bodyText) {
+      patch.body = {
+        contentType: bodyHtml ? 'HTML' : 'Text',
+        content: bodyHtml || bodyText || '',
+      }
+    }
+
+    const res = await fetchImpl(url, {
+      method: 'PATCH',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify(patch),
+    })
+    if (!res.ok) {
+      const text = await safeText(res)
+      const err = new Error(`Outlook draft update failed: ${res.status}`)
+      err.code = 'JOHN_OUTLOOK_DRAFT_UPDATE_FAILED'
+      err.status = res.status
+      err.notFound = res.status === 404
+      err.detail = redact(text)
+      throw err
+    }
+    // Graph PATCH returns the updated message.
+    const json = await res.json().catch(() => ({}))
+    return { ok: true, provider_draft_id: json.id || messageId, is_draft: json.isDraft !== false }
+  }
+
+  /**
+   * List draft messages in the primary mailbox's Drafts folder. Returns the most
+   * recent `top` drafts (id/subject/toRecipients/isDraft). Used for diagnostics
+   * and to reconcile the DB's tracked drafts against the live mailbox.
+   */
+  async function listDrafts({ top = 50 } = {}) {
+    if (!ready) {
+      const err = new Error(`Outlook provider not configured (missing ${missing || 'fetch'})`)
+      err.code = 'JOHN_OUTLOOK_NOT_CONFIGURED'
+      throw err
+    }
+    const token = await getAccessToken()
+    const mailbox = encodeURIComponent(config.primaryMailbox)
+    const lim = Math.max(1, Math.min(200, Number(top) || 50))
+    const url =
+      `${GRAPH_BASE}/users/${mailbox}/mailFolders/drafts/messages` +
+      `?$select=id,subject,toRecipients,isDraft,lastModifiedDateTime&$top=${lim}&$orderby=lastModifiedDateTime desc`
+    const res = await fetchImpl(url, {
+      method: 'GET',
+      headers: { authorization: `Bearer ${token}` },
+    })
+    if (!res.ok) {
+      const text = await safeText(res)
+      const err = new Error(`Outlook list drafts failed: ${res.status}`)
+      err.code = 'JOHN_OUTLOOK_LIST_DRAFTS_FAILED'
+      err.detail = redact(text)
+      throw err
+    }
+    const json = await res.json()
+    return { ok: true, drafts: Array.isArray(json.value) ? json.value : [] }
+  }
+
+  /**
    * Verify the primary mailbox is reachable. Tries /users/{mailbox} which
    * returns 200 for an existing mailbox, 404 otherwise.
    */
@@ -268,6 +377,9 @@ export function createOutlookProvider({
     notConfigured: !ready,
     missing,
     createDraft,
+    getMessage,
+    updateDraftBody,
+    listDrafts,
     verifyMailbox,
     _internal: { buildMessagePayload },
   }
