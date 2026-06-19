@@ -2606,6 +2606,22 @@ if (process.env.NODE_ENV !== 'test') {
         } catch (e) {
           console.warn('[startup] grants status constraint fix skipped:', e?.message)
         }
+
+        try {
+          // Widen yana_lead_candidates.qualification_status to allow the
+          // outbound-prospect status 'needs_enrichment'. The original 0089
+          // constraint predates outbound discovery, so a prospect insert fails
+          // the CHECK and aborts the whole Yana run. Self-heal on boot so prod
+          // (and any DB where the migration hasn't replayed) is always correct.
+          await db.exec(`
+            ALTER TABLE yana_lead_candidates DROP CONSTRAINT IF EXISTS yana_lead_candidates_qualification_status_check;
+            ALTER TABLE yana_lead_candidates ADD CONSTRAINT yana_lead_candidates_qualification_status_check
+              CHECK (qualification_status IN ('candidate', 'qualified', 'unqualified', 'needs_enrichment'));
+          `)
+          console.log('[startup] yana qualification_status CHECK constraint verified/expanded')
+        } catch (e) {
+          console.warn('[startup] yana qualification_status constraint fix skipped:', e?.message)
+        }
       })()
     }
 
