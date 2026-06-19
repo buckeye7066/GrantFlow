@@ -48,6 +48,28 @@ export const SYSTEM_DENYLIST = [
   '/.next',
   '/venv',
   '/__pycache__',
+  // Temp trees (any 'temp'/'tmp' segment) — scratch, not real documents.
+  '/temp/',
+  '/tmp/',
+  // AI-tool + dev caches: contain pasted/scratch content (often sensitive) and
+  // generated noise, NOT the owner's real documents. Never ingest.
+  '/.cursor',
+  '/.claude',
+  '/paste-cache',
+  '/.continue',
+  '/.ollama',
+  '/.idea',
+  '/.gradle',
+  '/.m2',
+  '/.nuget',
+  '/.android',
+  '/.docker',
+  // Credential / secret stores — must never be parsed into a SaaS.
+  '/.aws',
+  '/.ssh',
+  '/.gnupg',
+  '/.azure',
+  '/.config/gcloud',
 ]
 
 /**
