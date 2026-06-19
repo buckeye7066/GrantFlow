@@ -106,7 +106,12 @@ function renderEnvExample({ title, lines }) {
   ].join('\n')
 }
 
-function main() {
+/**
+ * Build the rendered contents for both env example files in memory.
+ * Exposed so scripts/check-env-examples.mjs can run the generator
+ * without writing to disk and compare against the checked-in versions.
+ */
+export function buildOutputs() {
   const files = walk(repoRoot)
 
   const backendVars = new Set()
@@ -208,12 +213,24 @@ function main() {
     backendLines.push(val ? `# ${v}=${val}` : `# ${v}=`)
   }
 
-  fs.writeFileSync(path.join(repoRoot, '.env.example'), renderEnvExample({ title: 'GrantFlow env example (root)', lines: rootLines }))
-  fs.mkdirSync(path.join(repoRoot, 'backend'), { recursive: true })
-  fs.writeFileSync(path.join(repoRoot, 'backend', '.env.example'), renderEnvExample({ title: 'GrantFlow env example (backend)', lines: backendLines }))
+  return {
+    rootEnvExample: renderEnvExample({ title: 'GrantFlow env example (root)', lines: rootLines }),
+    backendEnvExample: renderEnvExample({ title: 'GrantFlow env example (backend)', lines: backendLines }),
+  }
+}
 
+function main() {
+  const { rootEnvExample, backendEnvExample } = buildOutputs()
+  fs.writeFileSync(path.join(repoRoot, '.env.example'), rootEnvExample)
+  fs.mkdirSync(path.join(repoRoot, 'backend'), { recursive: true })
+  fs.writeFileSync(path.join(repoRoot, 'backend', '.env.example'), backendEnvExample)
   console.log('Wrote .env.example and backend/.env.example')
 }
 
-main()
+// Only run main() when invoked as a script — not when imported.
+const isMain = import.meta.url === `file://${process.argv[1]?.replace(/\\/g, '/')}` ||
+  import.meta.url.endsWith(path.basename(process.argv[1] || ''))
+if (isMain) {
+  main()
+}
 
