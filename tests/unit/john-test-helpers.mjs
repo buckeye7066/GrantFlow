@@ -89,6 +89,10 @@ export function applyDefaultJohnEnv() {
     JOHN_OPT_OUT_LANGUAGE_REQUIRED: 'true',
     JOHN_PHYSICAL_ADDRESS_REQUIRED: 'true',
     JOHN_PHYSICAL_ADDRESS: '123 Mission Way, Anywhere, USA',
+    // Deterministic copy path: force the template composer (no live LLM call)
+    // and pin the self-serve prospect link the email invites recipients to.
+    JOHN_AI_DRAFTING: 'off',
+    JOHN_PROSPECT_LINK: 'https://app.axiombiolabs.org/start',
     JOHN_PRIMARY_MAILBOX: 'dr.johnwhite@axiombiolabs.org',
     JOHN_FROM_ALIAS: 'GrantFlow@axiombiolabs.org',
     JOHN_REPLY_TO: 'GrantFlow@axiombiolabs.org',
