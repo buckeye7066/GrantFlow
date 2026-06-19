@@ -19,6 +19,13 @@ import {
   getAccessibleProfileIds,
 } from '../utils/accessControl.js'
 import { fullCatalog } from '../../shared/tierCatalog.js'
+import { normalizeCadence, BILLING_CADENCES } from '../services/billing/invoiceSchedule.js'
+import {
+  ensureInvoiceSchema,
+  runBillingCycle,
+  markInvoicePaid,
+  backfillBillingAnchor,
+} from '../services/billing/invoiceService.js'
 
 import { createLogger } from '../utils/logger.js'
 const routeLogger = createLogger('route:billing')
@@ -118,6 +125,77 @@ router.get('/me/:profileId', async (req, res) => {
       billing,
       read_only: true,
     })
+  } catch (error) {
+    res.status(500).json(formatError(error))
+  }
+})
+
+async function canAccessProfile(req, profileId) {
+  if (req.user?.role === 'admin' || req.ctx?.isAdmin === true) return true
+  const accessible = await getAccessibleProfileIds(req.db, req.user)
+  return accessible === null || accessible.has(String(profileId))
+}
+
+// USER: choose / change the billing cadence (weekly | semimonthly | monthly).
+// This is the "choose at signup" control — it changes WHEN you're invoiced, not
+// the amount, so the user may set it for a profile they can access.
+router.put('/me/:profileId/cadence', async (req, res) => {
+  try {
+    const profileId = String(req.params.profileId)
+    if (!(await canAccessProfile(req, profileId))) return res.status(403).json({ error: 'Not authorized' })
+    const cadence = normalizeCadence(req.body?.cadence)
+    if (!BILLING_CADENCES.includes(cadence)) return res.status(400).json({ error: 'invalid cadence' })
+    await ensureInvoiceSchema(req.db)
+    await ensureBillingAccount(req.db, profileId)
+    await req.db.prepare('UPDATE billing_accounts SET billing_cadence = ? WHERE profile_id = ?').run(cadence, profileId)
+    res.json({ ok: true, cadence })
+  } catch (error) {
+    res.status(500).json(formatError(error))
+  }
+})
+
+// USER: read-only list of their invoices.
+router.get('/me/:profileId/invoices', async (req, res) => {
+  try {
+    const profileId = String(req.params.profileId)
+    if (!(await canAccessProfile(req, profileId))) return res.status(403).json({ error: 'Not authorized' })
+    await ensureInvoiceSchema(req.db)
+    const rows = await req.db
+      .prepare(`SELECT id, period_key, period_start, period_end, amount_cents, currency, status, issued_at, due_at, paid_at, stripe_payment_link
+                  FROM billing_invoices WHERE profile_id = ? ORDER BY issued_at DESC LIMIT 100`)
+      .all(profileId)
+    res.json({ invoices: rows || [] })
+  } catch (error) {
+    res.status(500).json(formatError(error))
+  }
+})
+
+// ADMIN: trigger the billing cycle now (generate due invoices + dunning).
+router.post('/admin/run-cycle', requireAdmin, async (req, res) => {
+  try {
+    const result = await runBillingCycle(req.db, { force: req.body?.force === true })
+    res.json({ ok: true, ...result })
+  } catch (error) {
+    res.status(500).json(formatError(error))
+  }
+})
+
+// ADMIN: set the billing anchor (when billing starts) for accounts without one.
+router.post('/admin/backfill-anchor', requireAdmin, async (req, res) => {
+  try {
+    const anchor = req.body?.anchor ? new Date(req.body.anchor).toISOString() : new Date().toISOString()
+    const result = await backfillBillingAnchor(req.db, anchor)
+    res.json({ ok: true, ...result })
+  } catch (error) {
+    res.status(500).json(formatError(error))
+  }
+})
+
+// ADMIN: manually mark an invoice paid (fallback when Stripe isn't wired).
+router.post('/admin/invoices/:id/mark-paid', requireAdmin, async (req, res) => {
+  try {
+    const result = await markInvoicePaid(req.db, { invoiceId: String(req.params.id), source: 'admin' })
+    res.status(result.ok ? 200 : 404).json(result)
   } catch (error) {
     res.status(500).json(formatError(error))
   }

@@ -105,6 +105,7 @@ import foundationsRouter from './routes/foundations.js'
 import { expirePassedDeadlines } from './services/deadlineExpiryService.js'
 import { generateDeadlineNotifications } from './services/deadlineNotificationService.js'
 import { runLinkVerification } from './services/linkVerificationService.js'
+import { runBillingCycle } from './services/billing/invoiceService.js'
 import { validateCriticalImports } from './startup/validateImports.js'
 
 /**
@@ -3067,10 +3068,29 @@ if (process.env.NODE_ENV !== 'test') {
     setTimeout(runOnce, 30_000)
     setInterval(runOnce, intervalMs)
   }
+
+  // Billing cycle — generate due invoices (weekly Fri 09:00 ET / semimonthly /
+  // monthly) + dunning (3-day second notice, 7-day suspend). Checks hourly;
+  // runBillingCycle is idempotent (one invoice per period) and a NO-OP unless
+  // BILLING_AUTOMATION_ENABLED=true, so this is safe to always schedule.
+  function scheduleBillingCycle(dbInstance) {
+    const intervalMs = Math.max(15 * 60 * 1000, Number(process.env.BILLING_CYCLE_INTERVAL_MS) || 60 * 60 * 1000)
+    const runOnce = async () => {
+      try {
+        const r = await runBillingCycle(dbInstance, {})
+        if (r.ran) console.log('[billing-cycle]', r)
+      } catch (err) {
+        console.warn('[billing-cycle] failed:', err.message)
+      }
+    }
+    setTimeout(runOnce, 45_000)
+    setInterval(runOnce, intervalMs)
+  }
   if (BACKGROUND_SERVICES_DISABLED) {
     console.info('[startup] Link verification, health service, and Anya cleanup disabled for smoke/test startup')
   } else {
     scheduleLinkVerification(db)
+    scheduleBillingCycle(db)
 
     // Start the background health service (runs every 30 min, configurable via ANYA_HEALTH_INTERVAL_MS)
     startHealthService(db);
