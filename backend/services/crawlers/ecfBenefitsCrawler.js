@@ -2,12 +2,71 @@
  * ECF CHOICES Benefits Crawler
  * Searches for benefits for ECF participants and support providers
  * Two branches: Individual benefits and Family Model CLS-FM support
+ *
+ * Architecture: hybrid catalog + live scraping.
+ *
+ *   - The curated catalog (CATALOG_INDIVIDUAL / CATALOG_FAMILY_SUPPORT
+ *     below) is the GUARANTEED FLOOR — it always returns even when the
+ *     network is unreachable, satisfying Mission Goal #8 ("Avoid
+ *     zero-result experiences when relevant funding likely exists.
+ *     Recall over suppression.").
+ *
+ *   - For each source we ALSO attempt a timeboxed live discovery pass
+ *     (discoverLiveBenefits) that fetches the page and extracts any
+ *     additional program candidates. Live failures NEVER drop curated
+ *     entries — they are merged additively. This satisfies Mission
+ *     Goals #1 ("real funding only") and #6 ("intelligent crawling").
+ *
+ *   - The fetch implementation is injectable via options.fetchImpl so
+ *     unit tests can run without real network calls.
  */
 
 import axios from 'axios'
 import * as cheerio from 'cheerio'
 import { createLogger } from '../../utils/logger.js'
 const log = createLogger('ecfBenefitsCrawler')
+
+// Timebox per-source live HTTP fetches. ECF source pages are public
+// info pages; missing them must not stall the crawler.
+const LIVE_FETCH_TIMEOUT_MS = Number(process.env.ECF_LIVE_FETCH_TIMEOUT_MS) || 5000
+const LIVE_FETCH_USER_AGENT =
+  process.env.ECF_LIVE_FETCH_USER_AGENT ||
+  'GrantFlowBot/1.0 (+https://github.com/buckeye7066/GrantFlow)'
+
+// Anchor-text patterns we treat as "this link points to a real
+// program/benefit". Conservative — we'd rather miss a candidate than
+// fabricate one. The decision engine downstream is the sole authority
+// on whether each candidate is a match.
+const LIVE_LINK_KEYWORDS = [
+  'scholarship',
+  'grant',
+  'program',
+  'benefit',
+  'support',
+  'reimbursement',
+  'waiver',
+  'assistance',
+  'subsidy',
+  'stipend',
+  'voucher',
+]
+
+// Skip noisy navigation links that always appear on government
+// gov-info pages. Matched against href OR anchor text.
+const LIVE_LINK_BLOCKLIST = [
+  /^javascript:/i,
+  /^mailto:/i,
+  /^tel:/i,
+  /#/,
+  /\/contact/i,
+  /\/about/i,
+  /\/privacy/i,
+  /\/accessibility/i,
+  /\/sitemap/i,
+  /\/feedback/i,
+  /\/translate/i,
+  /\/help-?center/i,
+]
 
 const ECF_SOURCES = {
   individual: [
@@ -58,24 +117,46 @@ export async function crawlECFBenefits(profile, options = {}) {
     }`,
   )
   
+  // Cross-source dedupe: when the same live-discovered title appears
+  // on multiple ECF source pages (e.g. SSA + Medicaid both linking to
+  // the same waiver page), keep the first occurrence only. Curated
+  // entries stay first in iteration order, so they always win on a
+  // collision with a later live-discovered duplicate.
+  const seenTitles = new Set()
+  const seenUrls = new Set()
+  const norm = (s) => String(s || '').toLowerCase().trim().replace(/\s+/g, ' ')
+
+  function pushIfNew(benefit) {
+    const t = norm(benefit?.title)
+    const u = norm(benefit?.url)
+    if (t && seenTitles.has(t)) return false
+    if (u && seenUrls.has(u)) return false
+    if (t) seenTitles.add(t)
+    if (u) seenUrls.add(u)
+    results.push(benefit)
+    return true
+  }
+
   // Search individual benefits if eligible
   if (eligibleIndividual) {
     for (const source of ECF_SOURCES.individual) {
       try {
-        const benefits = await searchIndividualBenefits(source, profile)
-        
+        const benefits = await searchIndividualBenefits(source, profile, options)
+
         for (const benefit of benefits) {
           if (isLoan(benefit)) continue
-          
+
           const matchScore = calculateECFMatchScore(benefit, profile, 'individual')
-          
+
           // Pass all candidates to the pipeline; let computeMatchDecision() be the sole authority.
-          results.push({
+          // Preserve record_origin from the merge step (curated entries default to
+          // 'curated_static'; live-discovered ones are tagged 'live_scraped').
+          pushIfNew({
             ...benefit,
             match_score: matchScore,
             crawler_type: 'ecf_benefits',
             benefit_type: 'individual',
-            record_origin: 'curated_static',
+            record_origin: benefit.record_origin || 'curated_static',
             source: source.name
           })
         }
@@ -84,25 +165,24 @@ export async function crawlECFBenefits(profile, options = {}) {
       }
     }
   }
-  
+
   // Search family/provider support if provider
   if (eligibleSupport) {
     for (const source of ECF_SOURCES.family_support) {
       try {
-        const benefits = await searchFamilySupportBenefits(source, profile)
-        
+        const benefits = await searchFamilySupportBenefits(source, profile, options)
+
         for (const benefit of benefits) {
           if (isLoan(benefit)) continue
-          
+
           const matchScore = calculateECFMatchScore(benefit, profile, 'provider')
-          
-          // Pass all candidates to the pipeline; let computeMatchDecision() be the sole authority.
-          results.push({
+
+          pushIfNew({
             ...benefit,
             match_score: matchScore,
             crawler_type: 'ecf_benefits',
             benefit_type: 'family_support',
-            record_origin: 'curated_static',
+            record_origin: benefit.record_origin || 'curated_static',
             source: source.name
           })
         }
@@ -111,8 +191,12 @@ export async function crawlECFBenefits(profile, options = {}) {
       }
     }
   }
-  
-  log.info(`[ECFBenefitsCrawler] Returning ${results.length} ECF benefit candidate(s) to pipeline for decision-engine evaluation`)
+
+  const liveCount = results.filter((r) => r.record_origin === 'live_scraped').length
+  const curatedCount = results.length - liveCount
+  log.info(
+    `[ECFBenefitsCrawler] Returning ${results.length} candidate(s) (${curatedCount} curated, ${liveCount} live-discovered) for decision-engine evaluation`,
+  )
   return results
 }
 
@@ -313,15 +397,163 @@ export function evaluateEcfUnlockEligibility(profile) {
   }
 }
 
-// Curated static catalog for known federal/state disability programs.
-// These are real, established programs with stable URLs.
-// TODO: supplement with live scraping to discover new programs and update amounts.
-async function searchIndividualBenefits(source, profile) {
+/**
+ * Default live fetcher. Timeboxed axios GET that returns null on
+ * any failure (including timeout / non-2xx / DNS) so the merge
+ * upstream can fall back to the curated catalog.
+ */
+async function defaultLiveFetch(url, { timeoutMs = LIVE_FETCH_TIMEOUT_MS } = {}) {
+  try {
+    const res = await axios.get(url, {
+      timeout: timeoutMs,
+      headers: { 'User-Agent': LIVE_FETCH_USER_AGENT, Accept: 'text/html,application/xhtml+xml' },
+      validateStatus: (s) => s >= 200 && s < 400,
+      maxRedirects: 5,
+    })
+    return typeof res.data === 'string' ? res.data : null
+  } catch (err) {
+    log.warn(`[ECFBenefitsCrawler] live fetch failed for ${url}: ${err?.message || err}`)
+    return null
+  }
+}
+
+/**
+ * Resolve a possibly-relative href to an absolute URL relative to
+ * baseUrl. Returns null if the result isn't an http(s) URL.
+ */
+function resolveAbsoluteUrl(href, baseUrl) {
+  try {
+    const u = new URL(String(href || '').trim(), baseUrl)
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return null
+    return u.toString()
+  } catch {
+    return null
+  }
+}
+
+function passesBlocklist(href, anchorText) {
+  const haystacks = [String(href || ''), String(anchorText || '')]
+  return !LIVE_LINK_BLOCKLIST.some((re) => haystacks.some((s) => re.test(s)))
+}
+
+function matchesProgramKeyword(text) {
+  const lower = String(text || '').toLowerCase()
+  return LIVE_LINK_KEYWORDS.some((kw) => lower.includes(kw))
+}
+
+/**
+ * Live discovery: parse the source page and return additional
+ * candidate benefits beyond what the curated catalog covers.
+ *
+ * IMPORTANT contract:
+ *   - Returns [] (never throws) on fetch failure / parse error.
+ *   - Each candidate carries record_origin: 'live_scraped' so the
+ *     pipeline + admin UI can distinguish curated vs discovered.
+ *   - Amounts are intentionally null when not available — no
+ *     fabricated numbers. The decision engine + reality-gate
+ *     downstream will re-verify.
+ */
+export async function discoverLiveBenefits(source, profile, options = {}) {
+  if (!source || !source.baseUrl) return []
+  const { fetchImpl = defaultLiveFetch, timeoutMs = LIVE_FETCH_TIMEOUT_MS } = options
+  const html = await fetchImpl(source.baseUrl, { timeoutMs })
+  if (!html || typeof html !== 'string') return []
+
+  let $
+  try {
+    $ = cheerio.load(html)
+  } catch (err) {
+    log.warn(`[ECFBenefitsCrawler] cheerio.load failed for ${source.baseUrl}: ${err?.message}`)
+    return []
+  }
+
+  // Dedupe by either URL OR normalized title — gov pages frequently
+  // link the same program from multiple anchors with marketing
+  // variants in the URL (?utm=, /alt-path, etc.) but the title is the
+  // stable identity.
+  const seenUrls = new Set()
+  const seenTitles = new Set()
+  const candidates = []
+  const normTitle = (s) => String(s || '').toLowerCase().trim().replace(/\s+/g, ' ')
+
+  $('a[href]').each((_, el) => {
+    const href = $(el).attr('href')
+    const anchorText = $(el).text().trim().replace(/\s+/g, ' ')
+    if (!href || !anchorText) return
+    if (anchorText.length < 4 || anchorText.length > 220) return
+    if (!passesBlocklist(href, anchorText)) return
+    if (!matchesProgramKeyword(anchorText)) return
+
+    const absUrl = resolveAbsoluteUrl(href, source.baseUrl)
+    if (!absUrl) return
+    const urlKey = absUrl.toLowerCase()
+    const titleKey = normTitle(anchorText)
+    if (seenUrls.has(urlKey)) return
+    if (seenTitles.has(titleKey)) return
+    seenUrls.add(urlKey)
+    seenTitles.add(titleKey)
+
+    candidates.push({
+      title: anchorText,
+      sponsor: source.name,
+      description: `Discovered from ${source.name}: ${anchorText}`,
+      url: absUrl,
+      amount_min: null,
+      amount_max: null,
+      deadline: null,
+      eligibility: null,
+      benefit_categories: [],
+    })
+  })
+
+  if (candidates.length > 0) {
+    log.info(
+      `[ECFBenefitsCrawler] live discovery found ${candidates.length} candidate(s) on ${source.name}`,
+    )
+  }
+  void profile // currently unused for filtering; decision engine handles ranking
+  return candidates
+}
+
+/**
+ * Merge curated + live candidates, deduping by absolute URL OR
+ * normalized title. Curated entries always win on dedupe collision
+ * (they have richer metadata). Live entries are tagged with
+ * record_origin: 'live_scraped'.
+ */
+function mergeCuratedAndLive(curated, live) {
+  const out = []
+  const urlSeen = new Set()
+  const titleSeen = new Set()
+
+  const norm = (v) => String(v || '').trim().toLowerCase().replace(/\s+/g, ' ')
+
+  for (const item of curated) {
+    out.push(item)
+    if (item?.url) urlSeen.add(norm(item.url))
+    if (item?.title) titleSeen.add(norm(item.title))
+  }
+
+  for (const item of live) {
+    const u = norm(item?.url)
+    const t = norm(item?.title)
+    if (u && urlSeen.has(u)) continue
+    if (t && titleSeen.has(t)) continue
+    out.push({ ...item, record_origin: 'live_scraped' })
+    if (u) urlSeen.add(u)
+    if (t) titleSeen.add(t)
+  }
+
+  return out
+}
+
+// Curated catalog for known federal/state disability programs.
+// These are real, established programs with stable URLs and are the
+// guaranteed floor of crawler output (Mission Goal #8: avoid
+// zero-result experiences). Live discovery runs alongside and merges
+// additional candidates.
+async function searchIndividualBenefits(source, profile, options = {}) {
   const benefits = []
-
-
-
-
 
 
   if (source.type === 'state_program') {
@@ -375,16 +607,26 @@ async function searchIndividualBenefits(source, profile) {
       benefit_categories: ['income_support']
     })
   }
-  
+
+  // Merge live-discovered candidates from the source page (additive;
+  // curated entries above are the floor and always survive).
+  if (options.enableLiveDiscovery !== false) {
+    try {
+      const live = await discoverLiveBenefits(source, profile, options)
+      return mergeCuratedAndLive(benefits, live)
+    } catch (err) {
+      log.warn(
+        `[ECFBenefitsCrawler] live discovery threw for ${source.name} (curated still returned): ${err?.message}`,
+      )
+    }
+  }
   return benefits
 }
 
-// Curated static catalog for known family/provider support programs.
-// TODO: supplement with live scraping.
-async function searchFamilySupportBenefits(source, profile) {
+// Curated catalog for known family/provider support programs (the
+// guaranteed floor). Live discovery runs alongside.
+async function searchFamilySupportBenefits(source, profile, options = {}) {
   const benefits = []
-
-
   if (source.type === 'cls_fm') {
     benefits.push({
       title: 'CLS-FM Provider Reimbursement',
@@ -425,7 +667,17 @@ async function searchFamilySupportBenefits(source, profile) {
       benefit_categories: ['respite', 'training', 'support_groups']
     })
   }
-  
+
+  if (options.enableLiveDiscovery !== false) {
+    try {
+      const live = await discoverLiveBenefits(source, profile, options)
+      return mergeCuratedAndLive(benefits, live)
+    } catch (err) {
+      log.warn(
+        `[ECFBenefitsCrawler] live discovery threw for ${source.name} (curated still returned): ${err?.message}`,
+      )
+    }
+  }
   return benefits
 }
 
