@@ -14,6 +14,10 @@ import {
   commitToCollege,
   uncommitArchived,
   buildCollegeAidWorkspace,
+  addAidEntry,
+  updateAidEntry,
+  removeAidEntry,
+  aidIsSecured,
 } from '../services/college/committedCollege.js'
 
 const uni = (apps) => ({ applications: apps })
@@ -79,6 +83,39 @@ describe('commitToCollege', () => {
   })
 })
 
+describe('aid pipeline (add/update/remove)', () => {
+  const committedUni = () => commitToCollege(
+    uni([app('1', 'State U', 'accepted'), app('2', 'Other', 'planning')]), '1', { now: 't0' },
+  ).section
+
+  it('addAidEntry appends a normalized entry to the committed college', () => {
+    const r = addAidEntry(committedUni(), { name: 'Provost', amount: '5000', status: 'awarded' }, { id: 'x1', now: 't1' })
+    expect(r.ok).toBe(true)
+    const c = resolveCommittedCollege(r.section)
+    expect(c.financial_aid_pipeline).toHaveLength(1)
+    expect(c.financial_aid_pipeline[0]).toMatchObject({ id: 'x1', name: 'Provost', amount: 5000, status: 'awarded' })
+  })
+
+  it('addAidEntry requires a committed college and a name', () => {
+    const noCommit = uni([app('1', 'A', 'accepted')])
+    expect(addAidEntry(noCommit, { name: 'X' }, { id: 'i' }).error).toBe('no_committed_college')
+    expect(addAidEntry(committedUni(), { name: '   ' }, { id: 'i' }).error).toBe('name_required')
+  })
+
+  it('updateAidEntry patches an entry; removeAidEntry deletes it', () => {
+    const added = addAidEntry(committedUni(), { name: 'Provost', amount: 5000, status: 'applied' }, { id: 'x1', now: 't1' })
+    const upd = updateAidEntry(added.section, 'x1', { status: 'awarded', amount: 5500 }, { now: 't2' })
+    expect(upd.ok).toBe(true)
+    expect(resolveCommittedCollege(upd.section).financial_aid_pipeline[0]).toMatchObject({ status: 'awarded', amount: 5500 })
+    expect(aidIsSecured(upd.entry)).toBe(true)
+
+    const rem = removeAidEntry(upd.section, 'x1')
+    expect(rem.ok).toBe(true)
+    expect(resolveCommittedCollege(rem.section).financial_aid_pipeline).toHaveLength(0)
+    expect(removeAidEntry(rem.section, 'x1').error).toBe('aid_entry_not_found')
+  })
+})
+
 describe('uncommitArchived', () => {
   it('restores an archived college to its previous status', () => {
     const committed = commitToCollege(uni([app('1', 'A', 'accepted'), app('2', 'B', 'applied')]), '1', { now: 't' })
@@ -123,6 +160,30 @@ describe('buildCollegeAidWorkspace', () => {
     expect(ws.hamilton).toMatchObject({ total: 2, in_progress: 1, blocked: 1 })
     expect(ws.hamilton.blockers[0]).toMatchObject({ task_id: 't2', blocker_type: 'login_required' })
     expect(ws.archived_colleges).toEqual([{ id: '2', name: 'Other', previous_status: 'accepted' }])
+  })
+
+  it('counts only secured aid toward received_total; tracks applied-for separately', () => {
+    const sections = {
+      university_applications: uni([
+        app('1', 'State U', 'committed', {
+          costs: { total: 30000 },
+          financial_aid_pipeline: [
+            { id: 'a', name: 'Merit', amount: 6000, status: 'awarded' },
+            { id: 'b', name: 'Legacy (no status)', amount: 2000 }, // legacy → secured
+            { id: 'c', name: 'Foundation', amount: 4000, status: 'applied' }, // pending
+            { id: 'd', name: 'Lost one', amount: 1000, status: 'declined' }, // ignored
+          ],
+        }),
+      ]),
+      education: { fafsa_completed: true },
+    }
+    const ws = buildCollegeAidWorkspace({ sections })
+    expect(ws.aid.received_total).toBe(8000) // 6000 awarded + 2000 legacy
+    expect(ws.aid.applied_total).toBe(4000)
+    expect(ws.aid.applied_count).toBe(1)
+    expect(ws.unmet_need).toBe(22000) // 30000 - 8000 (applied does NOT reduce it)
+    expect(ws.aid.pipeline.find((p) => p.id === 'a').secured).toBe(true)
+    expect(ws.aid.pipeline.find((p) => p.id === 'c').secured).toBe(false)
   })
 
   it('flags FAFSA as a missing document + deadline when not filed, and unmet_need null without COA', () => {
