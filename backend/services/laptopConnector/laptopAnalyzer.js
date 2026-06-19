@@ -134,6 +134,12 @@ Rules:
 - Do NOT include the admin's own internal/system files as leads.
 - "evidence_snippet" must be a short verbatim quote (<=200 chars) from the file supporting the candidate.
 - If the file contains no relevant data, return empty arrays.
+
+Field-type discipline (critical for profile_fields and lead contact data):
+- A "website"/"website_url" field MUST be a URL (starts with http:// or https:// or www.). NEVER put an email address in a website field.
+- An "email"/"contact_email" field MUST contain "@". NEVER put a URL or phone number in an email field.
+- A "phone" field MUST be digits/punctuation only.
+- Do not coerce a value into a field of the wrong type — if the only value you found doesn't match the field's type, OMIT that fill rather than forcing it.
 Return: {"leads":[...],"funding":[...],"profile_fields":[...]}`
 
 /**
