@@ -261,6 +261,43 @@ export async function setRunStatus(db, runId, status, extra = {}) {
   if (!RUN_STATUSES.includes(status)) {
     throw new Error(`setRunStatus: invalid status "${status}"`)
   }
+
+  // State-machine guard: refuse to transition OUT of a terminal state.
+  // This is the safety net for the historical regression where
+  // cancelRun() set 'cancelled' but executeRun() then overwrote it with
+  // 'stopped', silently losing the user intent. After consulting
+  // agentRunStateMachine.canDirectSet, an unsafe write becomes a no-op
+  // and gets logged so the next person sees what happened.
+  try {
+    const { canDirectSet } = await import('./agentRunStateMachine.js')
+    const currentRow = await db
+      .prepare('SELECT status FROM agent_control_runs WHERE id = ? LIMIT 1')
+      .get(runId)
+    const current = currentRow?.status || null
+    if (current) {
+      const decision = canDirectSet(current, status)
+      if (!decision.ok) {
+        // No-op: keep the terminal state; emit a warn so it's visible.
+        // Do NOT throw — legacy callers still rely on best-effort
+        // semantics, and a thrown error here would crash the
+        // orchestrator's fire-and-forget execute path.
+        // eslint-disable-next-line no-console
+        console.warn(
+          `[agent-control] setRunStatus refused: runId=${runId} from='${current}' to='${status}' reason='${decision.reason}'`,
+        )
+        return
+      }
+    }
+  } catch (smErr) {
+    // State machine import or DB read failed — fall through to the
+    // raw write so we don't block boot/legacy paths if the module
+    // can't be loaded for any reason.
+    // eslint-disable-next-line no-console
+    console.warn(
+      `[agent-control] setRunStatus state-machine check skipped (non-fatal): ${smErr?.message || smErr}`,
+    )
+  }
+
   const now = NOW()
   const fields = ['status = ?', 'updated_at = ?']
   const args = [status, now]
