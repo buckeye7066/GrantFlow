@@ -50,6 +50,20 @@ export default function SavedLoginsCard({ profileId }) {
   const set = (k, v) => setForm((s) => ({ ...s, [k]: v }))
   const setGen = (k, v) => setGenForm((s) => ({ ...s, [k]: v }))
 
+  // Deep-link target for Hamilton's "Add a login for <host>" flag: when the URL
+  // carries ?addLogin=<host>&loginUrl=<url>, open the add-login dialog prefilled
+  // so the student or admin jumps straight to adding the missing credential.
+  useEffect(() => {
+    try {
+      const sp = new URLSearchParams(window.location.search)
+      const host = sp.get("addLogin")
+      if (!host) return
+      setForm((s) => ({ ...s, portalHost: host, login_url: sp.get("loginUrl") || s.login_url }))
+      setOpen(true)
+    } catch { /* ignore malformed query */ }
+    // run once on mount
+  }, [])
+
   const { data, isLoading } = useQuery({
     queryKey: ["hamilton-credentials", profileId],
     queryFn: () => apiFetch(`/api/hamilton/automation/credentials?profileId=${encodeURIComponent(profileId)}`),
