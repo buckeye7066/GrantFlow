@@ -15,6 +15,37 @@ import { toTrimmedStringOrNull, toNumberOrNull } from './types.js'
 
 const PP_BASE = 'https://projects.propublica.org/nonprofits/api/v2'
 
+// ProPublica's Nonprofit Explorer API groups NTEE codes into 10 numeric MAJOR
+// GROUPS. Its search filter (`ntee[id]`) wants that group number (1-10), NOT a
+// letter or full code — sending a letter returns HTTP 500. Map letters here.
+const NTEE_LETTER_TO_GROUP = {
+  A: 1,
+  B: 2,
+  C: 3, D: 3,
+  E: 4, F: 4, G: 4, H: 4,
+  I: 5, J: 5, K: 5, L: 5, M: 5, N: 5, O: 5, P: 5,
+  Q: 6,
+  R: 7, S: 7, T: 7, U: 7, V: 7, W: 7,
+  X: 8,
+  Y: 9,
+  Z: 10,
+}
+
+/**
+ * Normalize an NTEE filter to ProPublica's numeric major group (1-10).
+ * Accepts a letter ("B"), a full code ("B82"), or an already-numeric group.
+ * Returns null when it can't be mapped (so the filter is simply omitted).
+ */
+function nteeToMajorGroup(ntee) {
+  if (ntee === null || ntee === undefined || ntee === '') return null
+  const raw = String(ntee).trim()
+  if (/^\d+$/.test(raw)) {
+    const n = Number(raw)
+    return n >= 1 && n <= 10 ? n : null
+  }
+  return NTEE_LETTER_TO_GROUP[raw.charAt(0).toUpperCase()] || null
+}
+
 /**
  * Search nonprofits/foundations by name.
  *
@@ -30,12 +61,16 @@ export async function searchOrganizations(query = {}) {
   const { q = '', page = 0, state, ntee, c_code } = query
   if (!q.trim()) return { total_results: 0, organizations: [] }
 
-  const params = {
-    q: q.trim(),
-    page,
-    ...(state ? { state: state.toUpperCase() } : {}),
-    ...(ntee ? { ntee: ntee.toUpperCase() } : {}),
-    ...(c_code ? { c_code } : {}),
+  // ProPublica expects filters as array-style indexed params (state[id],
+  // ntee[id], c_code[id]); bare `state=`/`ntee=` make the API 500. axios
+  // url-encodes the bracket keys, which ProPublica accepts.
+  const params = { q: q.trim(), page }
+  if (state) params['state[id]'] = String(state).toUpperCase()
+  const nteeId = nteeToMajorGroup(ntee)
+  if (nteeId) params['ntee[id]'] = nteeId
+  if (c_code) {
+    const cc = String(c_code).replace(/\D/g, '')
+    if (cc) params['c_code[id]'] = cc
   }
 
   const data = await requestJson({
