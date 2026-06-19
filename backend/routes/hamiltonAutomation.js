@@ -84,6 +84,7 @@ import {
 } from '../services/hamilton/hamiltonPortalCredentialService.js'
 import { importCredentialsFromCsv } from '../services/hamilton/hamiltonCredentialCsvImport.js'
 import { getAuthWatchSummary } from '../services/hamilton/hamiltonAuthWatchService.js'
+import { flagMissingPortalCredential } from '../services/hamilton/hamiltonMissingCredential.js'
 import {
   authorizeAttestation,
   revokeAttestation,
@@ -926,6 +927,27 @@ router.get('/admin/credentials', async (req, res) => {
     return res.json({ ok: true, credentials })
   } catch (err) {
     return res.status(500).json({ error: 'list_failed', detail: err?.message })
+  }
+})
+
+// Proactively flag a missing portal login for a profile (student + admins get a
+// notification with a jump-to-add link). No-op if a credential already exists.
+router.post('/admin/flag-missing-credential', async (req, res) => {
+  if (!requireAdmin(req, res)) return
+  const { profileId, portalHost, loginUrl, fundingTitle } = req.body || {}
+  if (!profileId || !portalHost) {
+    return res.status(400).json({ error: 'profileId and portalHost are required' })
+  }
+  try {
+    const result = await flagMissingPortalCredential(req.db, {
+      profileId: String(profileId),
+      portalHost: String(portalHost),
+      loginUrl: loginUrl ? String(loginUrl) : null,
+      fundingTitle: fundingTitle ? String(fundingTitle) : null,
+    })
+    return res.json({ ok: true, ...result })
+  } catch (err) {
+    return res.status(500).json({ error: 'flag_failed', detail: err?.message })
   }
 })
 
