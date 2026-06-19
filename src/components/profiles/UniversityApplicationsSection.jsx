@@ -55,9 +55,16 @@ const STATUS_STYLES = {
 // COMMITTED_SCHOOL_STATUSES in backend/services/crawlers/crawlerManager.js
 // so the UI's "committed" badge and the backend's school-card narrowing
 // agree on the same vocabulary.
-const COMMITTED_STATUSES = new Set(["committed", "enrolled", "attending"])
+// Must match backend/services/college/committedCollege.js COMMITTED_STATUSES so
+// a school committed from the committed-college workspace is recognized here too
+// (otherwise the non-committed schools wouldn't collapse out of view).
+const COMMITTED_STATUSES = new Set(["committed", "enrolled", "attending", "current", "matriculated", "deposited"])
 const isCommittedStatus = (status) =>
   COMMITTED_STATUSES.has(String(status || "").trim().toLowerCase())
+// Schools that have "dropped off" entirely — never shown in the applications list.
+const DROPPED_STATUSES = new Set(["archived"])
+const isDroppedStatus = (status) =>
+  DROPPED_STATUSES.has(String(status || "").trim().toLowerCase())
 
 const PIPELINE_STATUS_BADGES = {
   planned: { label: "Planned", className: "bg-slate-100 text-slate-700 border-slate-200" },
@@ -753,7 +760,12 @@ export default function UniversityApplicationsSection({
   const [showOtherApplications, setShowOtherApplications] = useState(false)
   const hasCommitted = committedApplications.length > 0
   const otherApplications = useMemo(
-    () => localApplications.filter((app) => !isCommittedStatus(app.status)),
+    () => localApplications.filter((app) => !isCommittedStatus(app.status) && !isDroppedStatus(app.status)),
+    [localApplications],
+  )
+  // Everything we ever render (committed + still-active others), minus dropped.
+  const visibleApplications = useMemo(
+    () => localApplications.filter((app) => !isDroppedStatus(app.status)),
     [localApplications],
   )
 
@@ -908,7 +920,7 @@ export default function UniversityApplicationsSection({
                   : `Show ${otherApplications.length} other application${otherApplications.length === 1 ? "" : "s"}`}
               </Button>
             ) : null}
-            {(hasCommitted && !showOtherApplications ? committedApplications : localApplications)
+            {(hasCommitted && !showOtherApplications ? committedApplications : visibleApplications)
               .slice()
               .sort((a, b) => {
                 // Pin committed schools to the top so the chosen school is

@@ -24,27 +24,36 @@ const router = express.Router()
  */
 router.post('/webhook', async (req, res) => {
   const secret = process.env.STRIPE_WEBHOOK_SECRET
-  if (!process.env.STRIPE_SECRET_KEY) {
-    return res.status(503).json({ ok: false, error: 'stripe_not_configured' })
+  // HARD REQUIREMENT: never act on an unverified event. We require the secret
+  // key, the webhook signing secret, AND a raw (Buffer) body (mount
+  // express.raw on this path before the JSON parser). No signature, no action —
+  // this prevents a forged invoice.paid from faking payment / lifting suspension.
+  if (!process.env.STRIPE_SECRET_KEY || !secret) {
+    return res.status(503).json({ ok: false, error: 'webhook_not_configured' })
+  }
+  if (!Buffer.isBuffer(req.body)) {
+    routeLogger.warn('stripe webhook rejected: body not raw (mount express.raw on /api/stripe/webhook)')
+    return res.status(400).json({ ok: false, error: 'raw_body_required' })
+  }
+  let event
+  try {
+    const { default: Stripe } = await import('stripe')
+    const stripe = new Stripe(process.env.STRIPE_SECRET_KEY)
+    event = stripe.webhooks.constructEvent(req.body, req.headers['stripe-signature'], secret)
+  } catch (err) {
+    routeLogger.warn('stripe webhook signature verification failed', { error: err?.message })
+    return res.status(400).json({ ok: false, error: 'invalid_signature' })
   }
   try {
-    let event = req.body
-    if (secret && Buffer.isBuffer(req.body)) {
-      // Real verification path (raw body present).
-      const { default: Stripe } = await import('stripe')
-      const stripe = new Stripe(process.env.STRIPE_SECRET_KEY)
-      event = stripe.webhooks.constructEvent(req.body, req.headers['stripe-signature'], secret)
-    }
-    const type = event?.type
     const obj = event?.data?.object || {}
     const profileId = obj?.metadata?.profile_id || null
     const stripeInvoiceId = obj?.invoice || obj?.id || null
-    if (['invoice.paid', 'checkout.session.completed', 'payment_intent.succeeded'].includes(type)) {
+    if (['invoice.paid', 'checkout.session.completed', 'payment_intent.succeeded'].includes(event?.type)) {
       await markInvoicePaid(req.db, { profileId, stripeInvoiceId, source: 'stripe_webhook' })
     }
     return res.json({ received: true })
   } catch (err) {
-    routeLogger.warn('stripe webhook failed', { error: err?.message })
+    routeLogger.warn('stripe webhook handler failed', { error: err?.message })
     return res.status(400).json({ ok: false, error: 'webhook_error' })
   }
 })

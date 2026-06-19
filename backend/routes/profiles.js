@@ -2689,6 +2689,44 @@ router.delete('/:id/school-portals/connections/:connectionId', async (req, res) 
   }
 })
 
+/**
+ * Robustly extract a JSON object from an LLM completion: strips ```json fences,
+ * scans for the first BRACE-BALANCED object (not a greedy regex), and repairs a
+ * truncated object by closing open braces. Returns the parsed object or null.
+ * This is what makes the section-AI endpoint resilient instead of 502-ing when a
+ * model wraps JSON in prose or the output is cut off.
+ */
+function extractJsonObjectLoose(text) {
+  if (!text || typeof text !== 'string') return null
+  let s = text.trim()
+  const fence = s.match(/```(?:json)?\s*([\s\S]*?)```/i)
+  if (fence) s = fence[1].trim()
+  const start = s.indexOf('{')
+  if (start === -1) return null
+  let depth = 0
+  let inStr = false
+  let esc = false
+  let end = -1
+  for (let i = start; i < s.length; i += 1) {
+    const ch = s[i]
+    if (inStr) {
+      if (esc) esc = false
+      else if (ch === '\\') esc = true
+      else if (ch === '"') inStr = false
+    } else if (ch === '"') inStr = true
+    else if (ch === '{') depth += 1
+    else if (ch === '}') { depth -= 1; if (depth === 0) { end = i; break } }
+  }
+  let candidate = end !== -1 ? s.slice(start, end + 1) : s.slice(start)
+  if (end === -1) {
+    const opens = (candidate.match(/\{/g) || []).length
+    const closes = (candidate.match(/\}/g) || []).length
+    candidate += '}'.repeat(Math.max(0, opens - closes))
+  }
+  try { return JSON.parse(candidate) } catch { /* try safeParse */ }
+  return safeParseJSON(candidate, null)
+}
+
 async function handleProfileSectionAi(req, res) {
   const { id, sectionKey } = req.params
 
@@ -2766,20 +2804,17 @@ async function handleProfileSectionAi(req, res) {
           model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
           messages: [{ role: 'user', content: promptPayload.prompt }],
           temperature: 0.2,
-          max_tokens: 1200,
+          max_tokens: 4000,
         })
 
         const raw = extractCompletionText(completion)
-        const jsonMatch = raw.match(/\{[\s\S]*\}/)
-        const suggestion = safeParseJSON(jsonMatch ? jsonMatch[0] : raw, null)
+        const suggestion = extractJsonObjectLoose(raw)
 
         if (!suggestion || typeof suggestion !== 'object') {
-          return res.status(502).json({
-            error: 'AI response could not be parsed',
-            raw_response: raw,
-          })
-        }
-
+          // Don't 502 — fall through to Anthropic, then to the graceful
+          // empty-suggestion response so the UI never breaks.
+          console.warn('[profiles/sections/ai] OpenAI output unparseable; trying Anthropic')
+        } else {
         const guardedSuggestion = guardProfileSectionPayload(suggestion, {
           profile: profileRow,
           sections,
@@ -2795,6 +2830,7 @@ async function handleProfileSectionAi(req, res) {
           raw_response: raw,
           ai_provider: 'openai',
         })
+        }
       } catch (openaiError) {
         const summary = summarizeOpenAIError(openaiError)
         console.warn('[profiles/sections/ai] OpenAI failed, will try Anthropic:', summary?.message || openaiError?.message || openaiError)
@@ -2806,37 +2842,32 @@ async function handleProfileSectionAi(req, res) {
       try {
         const response = await anthropic.messages.create({
           model: process.env.ANTHROPIC_MODEL || 'claude-haiku-4-5',
-          max_tokens: 1200,
+          max_tokens: 4000,
           temperature: 0.2,
           messages: [{ role: 'user', content: promptPayload.prompt }],
         })
 
         const raw = extractAnthropicText(response)
-        const jsonMatch = raw.match(/\{[\s\S]*\}/)
-        const suggestion = safeParseJSON(jsonMatch ? jsonMatch[0] : raw, null)
+        const suggestion = extractJsonObjectLoose(raw)
 
-        if (!suggestion || typeof suggestion !== 'object') {
-          return res.status(502).json({
-            error: 'AI response could not be parsed',
+        if (suggestion && typeof suggestion === 'object') {
+          const guardedSuggestion = guardProfileSectionPayload(suggestion, {
+            profile: profileRow,
+            sections,
+            sectionKey,
+          })
+          logProfileSectionRejections(id, sectionKey, guardedSuggestion.rejected)
+
+          return res.json({
+            section_key: sectionKey,
+            suggestion: guardedSuggestion.data,
+            rejected: guardedSuggestion.rejected,
+            usage: null,
             raw_response: raw,
+            ai_provider: 'anthropic',
           })
         }
-
-        const guardedSuggestion = guardProfileSectionPayload(suggestion, {
-          profile: profileRow,
-          sections,
-          sectionKey,
-        })
-        logProfileSectionRejections(id, sectionKey, guardedSuggestion.rejected)
-
-        return res.json({
-          section_key: sectionKey,
-          suggestion: guardedSuggestion.data,
-          rejected: guardedSuggestion.rejected,
-          usage: null,
-          raw_response: raw,
-          ai_provider: 'anthropic',
-        })
+        console.warn('[profiles/sections/ai] Anthropic output unparseable; returning graceful fallback')
       } catch (anthropicError) {
         console.warn('[profiles/sections/ai] Anthropic failed:', anthropicError?.message || anthropicError)
       }
