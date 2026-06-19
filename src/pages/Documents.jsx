@@ -25,7 +25,7 @@ import { getProfile, listProfiles } from "@/api/profiles";
 import { listDocuments, deleteDocument, ingestDocument, parseAllProfileDocuments } from "@/api/documents";
 import { listCrawlerJobs, triggerProfileEnrichment } from "@/api/crawlers";
 import { useAuthStore } from "@/stores/authStore";
-import { canUseFeature } from "@/utils/tier";
+import { useTierEntitlements } from "@/hooks/useTierEntitlements";
 
 // Sentinel used by the auth store / Layout to represent the admin "view all"
 // pseudo-profile. It is NOT a real row in the profiles table — every
@@ -102,8 +102,10 @@ export default function Documents() {
     enabled: isRealProfileId(selectedProfileId),
   });
 
-  const tier = profileDetailQuery.data?.billing?.tier ?? null;
-  const canDocumentAI = isAdmin || canUseFeature(profileDetailQuery.data?.billing, "enable_document_ai");
+  // Centralized entitlement gate (admins bypass inside the hook).
+  const entitlements = useTierEntitlements(selectedProfileId);
+  const tier = entitlements.tier;
+  const canDocumentAI = entitlements.capabilities.documentAI;
 
   const { data: documents = [], isLoading: isLoadingDocuments } = useQuery({
     queryKey: ['documents', selectedProfileId],
