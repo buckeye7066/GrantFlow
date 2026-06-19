@@ -5,6 +5,7 @@ import { Badge } from '@/components/ui/badge';
 import { Check, DollarSign, Users, GraduationCap, Heart, Building, Church } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { createPageUrl } from '@/utils';
+import TierMatrix from '@/components/billing/TierMatrix.jsx';
 
 const pricingTiers = [
   {
@@ -158,12 +159,18 @@ export default function Pricing() {
           </p>
           <div className="mt-6 p-4 bg-amber-50 border border-amber-200 rounded-lg max-w-2xl mx-auto">
             <p className="text-sm text-amber-800">
-              <strong>Special Discounts Available:</strong> We offer pro bono services and hardship discounts for qualifying applicants. Contact us to learn more.
+              <strong>Special Discounts Available:</strong> Student, minister, hardship, and pro bono discounts apply on top of any plan for qualifying applicants. Contact us to learn more.
             </p>
           </div>
         </div>
 
-        {/* Pricing Cards */}
+        {/* Canonical plan comparison — driven by the backend tier catalog so it
+            can never drift from what's actually billed/enforced. */}
+        <div className="mb-12">
+          <TierMatrix />
+        </div>
+
+        {/* Illustrative cards */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mb-12">
           {pricingTiers.map((tier) => {
             const Icon = tier.icon;

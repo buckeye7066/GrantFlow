@@ -37,6 +37,7 @@ const AIGrantScorer = lazy(() => import("./AIGrantScorer"), 'AIGrantScorer');
 const BudgetDetail = lazy(() => import("./BudgetDetail"), 'BudgetDetail');
 const PrintPipeline = lazy(() => import("./PrintPipeline"), 'PrintPipeline');
 const PrintProfilePacket = lazy(() => import("./PrintProfilePacket"), 'PrintProfilePacket');
+const PrintAwardSummary = lazy(() => import("./PrintAwardSummary"), 'PrintAwardSummary');
 const OneTimeFix = lazy(() => import("./OneTimeFix"), 'OneTimeFix');
 const DataSources = lazy(() => import("./DataSources"), 'DataSources');
 const SourceRegistry = lazy(() => import("./SourceRegistry"), 'SourceRegistry');
@@ -147,6 +148,7 @@ const PAGES = {
     PrintPipeline: PrintPipeline,
 
     PrintProfilePacket: PrintProfilePacket,
+    PrintAwardSummary: PrintAwardSummary,
 
     OneTimeFix: OneTimeFix,
     
@@ -322,6 +324,7 @@ function LayoutRoutes() {
 
                 <Route path="/PrintPipeline" element={withBoundary(<PrintPipeline />, "PrintPipeline")} />
                 <Route path="/PrintProfilePacket" element={withBoundary(<PrintProfilePacket />, "PrintProfilePacket")} />
+                <Route path="/PrintAwardSummary" element={withBoundary(<PrintAwardSummary />, "PrintAwardSummary")} />
 
                 <Route path="/OneTimeFix" element={withBoundary(<OneTimeFix />, "OneTimeFix")} />
 

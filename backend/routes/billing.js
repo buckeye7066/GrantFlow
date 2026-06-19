@@ -12,8 +12,13 @@ import {
   getProfileTypeDisplayLabel,
   resolveEffectiveProfileType,
 } from '../services/profileHelpers.js'
+import { computeEffectiveBilling } from '../services/billingAccounts.js'
 import { formatError } from '../middleware/errorHandler.js'
-import { ensureProfileAccess as ensureProfileAccessByEmail } from '../utils/accessControl.js'
+import {
+  ensureProfileAccess as ensureProfileAccessByEmail,
+  getAccessibleProfileIds,
+} from '../utils/accessControl.js'
+import { fullCatalog } from '../../shared/tierCatalog.js'
 
 import { createLogger } from '../utils/logger.js'
 const routeLogger = createLogger('route:billing')
@@ -67,7 +72,56 @@ function resolveBillingProfileType(row) {
   }
 }
 
+// PUBLIC: the canonical tier catalog (plans, capabilities, plain-English copy,
+// discounts) — drives Pricing.jsx + the "What your plan includes" matrix. No
+// auth: it's marketing/pricing information, and the single source of truth lives
+// in shared/tierCatalog.js.
+router.get('/catalog', (_req, res) => {
+  res.json(fullCatalog())
+})
+
 router.use(requireAuth)
+
+/**
+ * NON-ADMIN read of a profile's billing — only for profiles the caller can
+ * access. Read-only: returns the assigned tier + capabilities + the effective
+ * (seat-driven, discount/pro-bono-adjusted) monthly amount, but NO mutation
+ * path. Admins use the richer /accounts/:profileId. This closes the gap where
+ * the Billing overview called the admin-only route and 403'd for normal users.
+ */
+router.get('/me/:profileId', async (req, res) => {
+  try {
+    const profileId = String(req.params.profileId)
+    const isAdmin = req.user?.role === 'admin' || req.ctx?.isAdmin === true
+    if (!isAdmin) {
+      const accessible = await getAccessibleProfileIds(req.db, req.user)
+      // null = admin/global; otherwise must contain this profile.
+      if (accessible !== null && !accessible.has(profileId)) {
+        return res.status(403).json({ error: 'Not authorized to view this profile’s billing' })
+      }
+    }
+    await ensureBillingSchema(req.db)
+    const account = mapAccountRow(await ensureBillingAccount(req.db, profileId))
+    const billing = await computeEffectiveBilling(req.db, profileId, account)
+    // Read-only view: tier + capabilities + effective amount. (Internal fields
+    // like assigned_by/assigned_reason are admin-only; omit them here.)
+    res.json({
+      account: {
+        profile_id: account.profile_id,
+        tier: account.tier,
+        discount_type: account.discount_type,
+        discount_percent: account.discount_percent,
+        is_pro_bono: account.is_pro_bono,
+        custom_monthly_cents: account.custom_monthly_cents,
+        custom_hourly_cents: account.custom_hourly_cents,
+      },
+      billing,
+      read_only: true,
+    })
+  } catch (error) {
+    res.status(500).json(formatError(error))
+  }
+})
 
 router.get('/tiers', async (req, res) => {
   try {

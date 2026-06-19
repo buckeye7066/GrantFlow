@@ -32,6 +32,8 @@ import { resolveUploadsDir } from '../utils/uploadsDir.js'
 import { ADMIN_EMAILS } from '../config/constants.js'
 import { countSeats, describeSeatTier, evaluateSeatChange } from '../services/billing/seatTier.js'
 import { normalizeSchedule } from '../services/hamilton/portalAccessSchedule.js'
+import { buildAwardSummary } from '../services/awardSummary.js'
+import { resolveCommittedCollege } from '../services/college/committedCollege.js'
 import { syncProfileFieldsFromSection, syncDisplayNameToBasicInformation } from '../utils/profileSectionSync.js'
 import { deriveNamePartsIntoBasicInfo } from '../../shared/nameParsing.js'
 import { guardProfileSectionPayload } from '../utils/profileSuggestionGuards.js'
@@ -961,6 +963,65 @@ router.put('/:id/portal-access-schedule', async (req, res) => {
     }
     await saveAutomationPreferences(req.db, profileId, prefs, req.ctx?.userId ?? null)
     res.json({ schedule: normalizeSchedule(prefs) })
+  } catch (error) {
+    res.status(500).json(formatError(error))
+  }
+})
+
+// Aggregated "award amounts and from where" for the printable/PDF document.
+// Pulls scholarships from the committed-college aid pipeline + the grants
+// pipeline (with the opportunity sponsor/source). Read-only; profile-scoped.
+router.get('/:id/award-summary', async (req, res) => {
+  try {
+    if (!isAuthenticatedFromCtx(req.ctx)) return res.status(401).json({ error: 'Authentication required' })
+    const profileId = String(req.params.id)
+    const profileRow = await req.db.prepare('SELECT id, display_name, user_id FROM profiles WHERE id = ?').get(profileId)
+    if (!profileRow) return res.status(404).json({ error: 'Profile not found' })
+    const canView =
+      req.ctx?.isAdmin === true ||
+      (req.ctx?.userId && profileRow.user_id && String(profileRow.user_id) === String(req.ctx.userId)) ||
+      (req.ctx?.activeProfileId && String(req.ctx.activeProfileId) === profileId)
+    if (!canView) return res.status(403).json({ error: 'Not authorized to view this profile' })
+
+    // Committed-college scholarships (financial_aid_pipeline on the committed app).
+    let aidEntries = []
+    let collegeName = null
+    try {
+      const uniRow = await req.db
+        .prepare(`SELECT data FROM profile_sections WHERE profile_id = ? AND section_key = 'university_applications' LIMIT 1`)
+        .get(profileId)
+      if (uniRow?.data) {
+        const uni = typeof uniRow.data === 'string' ? JSON.parse(uniRow.data) : uniRow.data
+        const committed = resolveCommittedCollege(uni)
+        if (committed) {
+          collegeName = committed.name || null
+          aidEntries = Array.isArray(committed.financial_aid_pipeline) ? committed.financial_aid_pipeline : []
+        }
+      }
+    } catch { /* no committed college / unparseable section */ }
+
+    // Grants pipeline + opportunity sponsor/source.
+    let grantRows = []
+    try {
+      grantRows = await req.db
+        .prepare(
+          `SELECT g.title, g.amount_awarded, g.amount_requested, g.amount_min, g.amount_max,
+                  g.status, g.funder, g.url,
+                  fo.sponsor, fo.source, fo.source_url
+             FROM grants g
+             LEFT JOIN funding_opportunities fo ON g.funding_opportunity_id = fo.id
+            WHERE g.profile_id = ?`,
+        )
+        .all(profileId)
+    } catch { grantRows = [] }
+
+    const summary = buildAwardSummary({ aidEntries, collegeName, grantRows })
+    res.json({
+      profile: { id: profileRow.id, name: profileRow.display_name || 'Profile' },
+      committed_college: collegeName,
+      generated_at: new Date().toISOString(),
+      summary,
+    })
   } catch (error) {
     res.status(500).json(formatError(error))
   }
