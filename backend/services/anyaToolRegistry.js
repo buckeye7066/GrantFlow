@@ -38,6 +38,22 @@ import {
   MEMORY_TYPES,
 } from './anyaBrainService.js'
 import { getSystemDiagnostics, analyzeSystemHealth } from './diagnosticsService.js'
+import { ADMIN_EMAIL } from '../config/constants.js'
+
+/**
+ * HARD owner gate for Anya's most powerful tools (running other agents, editing
+ * data, crawling). Stricter than requiresAdmin: ONLY the owner account
+ * (ADMIN_EMAIL = buckeye7066@gmail.com) passes — no other admin, tier, or seat.
+ */
+function callerEmail(context) {
+  const c = context?.ctx || {}
+  const u = context?.user || {}
+  return String(c.email || u.email || u.primary_email || '').trim().toLowerCase()
+}
+export function isOwnerCaller(context) {
+  const owner = String(ADMIN_EMAIL || '').trim().toLowerCase()
+  return Boolean(owner) && callerEmail(context) === owner
+}
 import {
   runAutonomousCodeCrawl,
   getAutonomousStatus,
@@ -667,7 +683,7 @@ function summarizeProfileFactsUsed(p) {
   }
 }
 
-export function registerTool({ name, description, schema, handler, requiresAdmin = false }) {
+export function registerTool({ name, description, schema, handler, requiresAdmin = false, requiresOwner = false }) {
   if (!name || typeof name !== 'string') {
     throw new Error('Tool name required')
   }
@@ -693,7 +709,9 @@ export function registerTool({ name, description, schema, handler, requiresAdmin
     description: description ?? '',
     schema: schema ?? null,
     handler,
-    requiresAdmin: Boolean(requiresAdmin),
+    // Owner-gated tools are also admin-gated (defense in depth).
+    requiresAdmin: Boolean(requiresAdmin) || Boolean(requiresOwner),
+    requiresOwner: Boolean(requiresOwner),
   })
 }
 
@@ -719,13 +737,16 @@ export function assertNoDuplicateToolIds() {
 
 export function listToolMetadata(ctx = null) {
   const isAdmin = Boolean(ctx?.isAdmin)
+  // Owner-gated tools are only even ADVERTISED to the owner account.
+  const isOwner = isOwnerCaller({ ctx, user: ctx })
   return Array.from(tools.values())
-    .filter((tool) => !tool.requiresAdmin || isAdmin)
-    .map(({ name, description, schema, requiresAdmin }) => ({
+    .filter((tool) => (!tool.requiresAdmin || isAdmin) && (!tool.requiresOwner || isOwner))
+    .map(({ name, description, schema, requiresAdmin, requiresOwner }) => ({
       name,
       description,
       schema,
       requiresAdmin,
+      requiresOwner,
     }))
 }
 
@@ -785,6 +806,15 @@ export async function invokeTool(name, params, context) {
 
     if (!isAdmin) {
       const error = new Error(`Tool "${name}" requires admin privileges`)
+      error.status = 403
+      throw error
+    }
+
+    // HARD owner gate (stricter than admin): these powers run other agents /
+    // edit data / crawl, so only the owner account may invoke them — enforced
+    // server-side here, not just hidden from the tool list.
+    if (tool.requiresOwner && !isOwnerCaller(context)) {
+      const error = new Error(`Tool "${name}" is restricted to the owner account`)
       error.status = 403
       throw error
     }
@@ -3775,5 +3805,117 @@ registerTool({
       mission: mission.status === 'fulfilled' ? mission.value : { error: mission.reason?.message },
       summary: cgGetAuditSummary(db),
     }
+  },
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// OWNER-ONLY super-tools — let Anya act with the owner's full reach: run any
+// agent, edit/save profile data, and crawl. HARD-gated to the owner account
+// (buckeye7066@gmail.com) via requiresOwner; no other admin/tier/seat can invoke
+// them, enforced server-side in invokeTool().
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Run any of the other agents on demand.
+registerTool({
+  name: 'owner.run_agent',
+  description: 'OWNER ONLY. Run another agent: Yana (find leads/clients), John (draft outreach), Hamilton (work the application pipeline), or Robert (funding discovery). Use when the owner asks Anya to "have <agent> do X".',
+  requiresOwner: true,
+  schema: {
+    type: 'object',
+    properties: {
+      agent: { type: 'string', enum: ['yana', 'john', 'hamilton', 'robert'], description: 'Which agent to run' },
+      profileId: { type: 'string', description: 'Profile to act on (Hamilton/Robert)' },
+      mode: { type: 'string', description: 'Run mode where applicable (e.g. observe|execute)' },
+    },
+    required: ['agent'],
+  },
+  handler: async (params, context) => {
+    const db = context?.db
+    if (!db) throw new Error('Database connection required')
+    const agent = String(params?.agent || '').toLowerCase()
+    const userId = context?.ctx?.userId ?? context?.user?.id ?? null
+    try {
+      if (agent === 'yana') {
+        const { runYanaDiscovery } = await import('./yana/yanaLeadDiscovery.js')
+        return { agent, result: await runYanaDiscovery(db, { mode: params?.mode || 'observe', trigger: 'anya_owner', createdByUserId: userId }) }
+      }
+      if (agent === 'john') {
+        const { runJohn } = await import('./john/johnAgent.js')
+        return { agent, result: await runJohn({ db, mode: params?.mode || 'observe', trigger: 'anya_owner', draftOnly: true, createdByUserId: userId }) }
+      }
+      if (agent === 'hamilton') {
+        if (!params?.profileId) throw new Error('profileId is required for Hamilton')
+        const { automateSelected } = await import('./hamilton/hamiltonAutomationOrchestrator.js')
+        return { agent, result: await automateSelected(db, { profileId: String(params.profileId), userId, selectedSources: [], options: { source: 'anya_owner' } }) }
+      }
+      if (agent === 'robert') {
+        const { runRobert } = await import('./robert/robertAgent.js').catch(() => ({}))
+        if (typeof runRobert !== 'function') return { agent, result: { skipped: 'robert_runner_unavailable' } }
+        return { agent, result: await runRobert({ db, profileId: params?.profileId || null, trigger: 'anya_owner', createdByUserId: userId }) }
+      }
+      throw new Error(`Unknown agent "${agent}"`)
+    } catch (err) {
+      return { agent, ok: false, error: err?.message || String(err) }
+    }
+  },
+})
+
+// Edit / save any profile section (the "edit, save" power).
+registerTool({
+  name: 'owner.edit_profile_section',
+  description: 'OWNER ONLY. Create or update a section of any profile (e.g. basic_information, education, university_applications). Use when the owner asks Anya to edit/save profile data directly.',
+  requiresOwner: true,
+  schema: {
+    type: 'object',
+    properties: {
+      profileId: { type: 'string' },
+      sectionKey: { type: 'string', description: 'Section key, e.g. basic_information' },
+      data: { type: 'object', description: 'The section JSON to save (replaces the section)' },
+    },
+    required: ['profileId', 'sectionKey', 'data'],
+  },
+  handler: async (params, context) => {
+    const db = context?.db
+    if (!db) throw new Error('Database connection required')
+    const { profileId, sectionKey, data } = params || {}
+    if (!profileId || !sectionKey || typeof data !== 'object') throw new Error('profileId, sectionKey, and object data are required')
+    const userId = context?.ctx?.userId ?? 'anya_owner'
+    const json = JSON.stringify(data)
+    const existing = await db.prepare(`SELECT 1 AS x FROM profile_sections WHERE profile_id = ? AND section_key = ?`).get(String(profileId), String(sectionKey))
+    if (existing) {
+      await db.prepare(`UPDATE profile_sections SET data = ?, updated_by = ?, updated_at = CURRENT_TIMESTAMP WHERE profile_id = ? AND section_key = ?`).run(json, userId, String(profileId), String(sectionKey))
+    } else {
+      await db.prepare(`INSERT INTO profile_sections (profile_id, section_key, data, updated_by) VALUES (?, ?, ?, ?)`).run(String(profileId), String(sectionKey), json, userId)
+    }
+    return { ok: true, profile_id: profileId, section_key: sectionKey, saved: true }
+  },
+})
+
+// Queue a funding crawler ("code crawl" / funding crawl) for a profile.
+registerTool({
+  name: 'owner.run_crawler',
+  description: 'OWNER ONLY. Queue and dispatch a funding crawler job for a profile (e.g. comprehensive, scholarship, local, item_search). Use when the owner asks Anya to "crawl for funding".',
+  requiresOwner: true,
+  schema: {
+    type: 'object',
+    properties: {
+      profileId: { type: 'string' },
+      type: { type: 'string', description: 'Crawler/job type (e.g. comprehensive, scholarship, item_search)' },
+    },
+    required: ['profileId', 'type'],
+  },
+  handler: async (params, context) => {
+    const db = context?.db
+    if (!db) throw new Error('Database connection required')
+    const { createCrawlerJob } = await import('./crawlerJobCreation.js')
+    const { dispatchCrawlerJob } = await import('./crawlerDispatcher.js')
+    const creation = await createCrawlerJob(db, {
+      type: String(params.type),
+      parameters: { profile_id: String(params.profileId) },
+      requestedBy: context?.ctx?.userId ?? 'anya_owner',
+      buildSnapshot: false,
+    })
+    setImmediate(() => { dispatchCrawlerJob({ db, jobId: creation.jobId }).catch(() => {}) })
+    return { ok: true, job_id: creation.jobId, type: params.type, profile_id: params.profileId }
   },
 })
