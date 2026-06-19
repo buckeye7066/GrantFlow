@@ -111,13 +111,16 @@ export async function fetchStatePortals(stateCode, options = {}) {
       headers['Content-Type'] = 'application/json';
     }
 
-    const response = await fetchWithRetry(url, {
+    // fetchWithRetry (axios) returns the ALREADY-PARSED body and throws on HTTP
+    // errors itself — so there is no Response object here: the old
+    // `response.ok` / `response.json()` were always-undefined and made this throw
+    // on every successful fetch (zero opportunities every run). POST bodies go in
+    // the axios `data` option, not `body`.
+    const data = await fetchWithRetry(url, {
       method: portal.method,
       headers,
-      ...(portal.method === 'POST' ? { body: JSON.stringify(params) } : {}),
+      ...(portal.method === 'POST' ? { data: params } : {}),
     });
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    const data = await response.json();
 
     const opportunities = portal.parse(data, url);
 

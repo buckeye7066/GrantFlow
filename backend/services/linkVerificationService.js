@@ -23,7 +23,7 @@
  */
 
 import { setTimeout as sleep } from 'node:timers/promises'
-import { LINK_VERIFICATION_SKIP_DOMAINS, isPlaceholderUrl } from '../config/urlRules.js'
+import { LINK_VERIFICATION_SKIP_DOMAINS, isPlaceholderUrl, assertSsrfSafeUrl } from '../config/urlRules.js'
 
 const REQUEST_TIMEOUT_MS = 10_000
 const BATCH_SIZE = 10
@@ -101,6 +101,15 @@ export async function recordVerificationEvent(db, event = {}) {
 export async function checkUrl(url, opts = {}) {
   if (shouldSkipUrl(url)) {
     return { status: 'skipped', code: null, method: null, error: null }
+  }
+
+  // SSRF guard: these URLs come from untrusted ingested/KB-extracted data. Refuse
+  // to probe anything that resolves to a private/loopback/link-local address so a
+  // crafted application_url can't make us scan internal services (and we follow
+  // redirects below, so only fetch hosts we've cleared here).
+  const ssrf = await assertSsrfSafeUrl(url)
+  if (!ssrf.ok) {
+    return { status: 'skipped', code: null, method: null, error: `ssrf_blocked:${ssrf.reason}` }
   }
 
   const timeoutMs = Number.isFinite(opts?.timeoutMs) ? opts.timeoutMs : REQUEST_TIMEOUT_MS

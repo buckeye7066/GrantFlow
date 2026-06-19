@@ -1,6 +1,6 @@
 import express from 'express'
 import { randomUUID } from 'crypto'
-import { ensureAuth } from '../middleware/auth.js'
+import { ensureAuth, ensureAdmin } from '../middleware/auth.js'
 import { standardRateLimiter } from '../middleware/rateLimiting.js'
 import { runCrawler, SCHEMA } from '../services/crawlerFramework.js'
 import { ensureProfileAccess } from '../utils/accessControl.js'
@@ -920,7 +920,11 @@ function getCrawlerDescription(type) {
  * Find profile by name (diagnostic endpoint).
  * GET /api/real-crawlers/find-profile?name=melissa
  */
-router.get('/find-profile', async (req, res) => {
+// Admin-only: this is a global, un-scoped profile-name lookup (returns matching
+// profiles across every tenant), so it must not be reachable anonymously or by a
+// regular authenticated user — that would allow cross-tenant profile enumeration
+// and profile-ID harvesting for downstream IDOR.
+router.get('/find-profile', ensureAdmin, async (req, res) => {
   const name = req.query.name || ''
   if (!name || name.length < 2) return res.json({ error: 'Provide ?name=... (at least 2 chars)' })
   try {

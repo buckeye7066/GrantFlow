@@ -68,7 +68,10 @@ export async function loadUniversityApplicationsForProfile(db, profileId) {
         LIMIT 1
       `,
       )
-      .get(String(profileId).replace(/[^0-9]/g, ''))
+      // Profile IDs are hex strings (lower(hex(randomblob(16)))) — they contain
+      // a–f, so the old `.replace(/[^0-9]/g, '')` mangled the id and the lookup
+      // never matched. Use the id verbatim (trimmed).
+      .get(String(profileId).trim())
     if (!row?.data) return []
     try {
       const parsed = JSON.parse(row.data)

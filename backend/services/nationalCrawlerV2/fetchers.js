@@ -3,6 +3,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import crypto from 'crypto'
 import { RateLimitedFetcher } from '../nationalPrograms/fetcher.js'
+import { assertSsrfSafeUrl } from '../../config/urlRules.js'
 
 function sha256(text) {
   return crypto.createHash('sha256').update(text || '').digest('hex')
@@ -19,6 +20,12 @@ export function createFetcher({ userAgent, perHostConcurrency, perHostMinDelayMs
 }
 
 export async function fetchToBuffer(fetcher, url) {
+  // SSRF guard: seed/redirect URLs can be data-driven, so refuse to fetch any host
+  // that resolves to a private/loopback/link-local address (e.g. cloud metadata).
+  const ssrf = await assertSsrfSafeUrl(url)
+  if (!ssrf.ok) {
+    return { ok: false, status: null, contentType: null, buffer: null, error: `ssrf_blocked:${ssrf.reason}`, errorType: 'ssrf' }
+  }
   let res; try { res = await fetcher.fetch(url); } catch (error) { return { ok: false, status: null, contentType: null, buffer: null, error: error.message, errorType: 'network' }; }
   const status = res?.status ?? null
   const contentType = res?.headers?.get?.('content-type') || null

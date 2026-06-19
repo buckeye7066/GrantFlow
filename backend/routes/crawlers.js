@@ -428,7 +428,9 @@ function deriveJobSummary(type, job) {
   }
 }
 
-router.get('/', (_req, res) => {
+router.get('/', (req, res) => {
+  const ctx = ensureAuth(req, res)
+  if (!ctx) return
   res.json({
     ok: true,
     service: 'crawlers',
@@ -1832,6 +1834,8 @@ router.post('/crawl-state-counties/:state', async (req, res) => {
 
 // Get county crawler status
 router.get('/county-status', async (req, res) => {
+  const ctx = ensureAuth(req, res)
+  if (!ctx) return
   try {
     const { getCrawlerStatus } = await import('../services/countyFundingCrawler.js')
     const status = await getCrawlerStatus(req.db)
@@ -2307,6 +2311,8 @@ router.post('/seed-real-opportunities', async (req, res) => {
 // Crawler health endpoint
 // GET /api/crawlers/health
 router.get('/health', async (req, res) => {
+  const ctx = ensureAuth(req, res)
+  if (!ctx) return
   try {
     const db = req.db
     const since24hPredicate =
@@ -2593,6 +2599,8 @@ router.post('/profile-change', standardRateLimiter, async (req, res) => {
 
 // ── Foundation 990 Batch Ingestion ───────────────────────────────────────────
 router.post('/foundation-990/batch', async (req, res) => {
+  const ctx = ensureAuth(req, res)
+  if (!ctx) return
   try {
     const {
       states = ['nationwide'],
@@ -2604,7 +2612,9 @@ router.post('/foundation-990/batch', async (req, res) => {
     const creation = await createCrawlerJob(req.db, {
       type: 'foundation_990',
       parameters: { states, ntee_codes, min_grant_amount, max_pages },
-      requestedBy: req.userId ?? 'admin',
+      // req.userId is never populated in this codebase (requestContext sets req.ctx.userId);
+      // the old `req.userId ?? 'admin'` mislabeled every job as admin-originated.
+      requestedBy: ctx.userId ?? 'system',
       buildSnapshot: false,
     })
 
