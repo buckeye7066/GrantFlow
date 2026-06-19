@@ -160,9 +160,9 @@ async function postCredential({ profileId, portalHost, username, password, login
   console.log(`rows processed: ${totalRows}, skipped: ${skipped.length}`)
   for (const [pid, e] of perProfile) {
     const hm = hostsByProfile.get(pid) || new Map()
-    const collisions = [...hm.entries()].filter(([, s]) => s.size > 1)
-    const collNote = collisions.length
-      ? `  (⚠ ${collisions.length} host(s) had multiple logins; vault keeps 1 per host — last wins)`
+    const multi = [...hm.entries()].filter(([, s]) => s.size > 1)
+    const collNote = multi.length
+      ? `  (${multi.length} host(s) have multiple distinct logins — all preserved)`
       : ''
     console.log(`  ${(labelFor.get(pid) || pid).padEnd(26)} saved=${e.imported} errors=${e.errors}${collNote}`)
   }
