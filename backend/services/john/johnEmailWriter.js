@@ -13,6 +13,7 @@
 import { fillTemplate, pickSubjectTemplate, TEMPLATES, frameForType } from './johnEmailTemplates.js'
 import { interpretLead } from './johnLeadInterpreter.js'
 import { getJohnConfig } from './johnOutreachSafety.js'
+import { aiComposerEnabled, composeEmailWithAI } from './johnEmailComposerAI.js'
 
 const FALLBACK_TOPIC = 'community-focused funding work'
 
@@ -49,11 +50,34 @@ function textToHtml(text) {
 /**
  * Compose an email from a lead.
  *
- * Returns an object describing both the rendered email and the
- * personalization decisions, suitable for storing in
- * john_email_drafts.personalization_json.
+ * Tries the AI composer first (personalized, MBA-quality copy that speaks to the
+ * org's mission/goals and how GrantFlow helps). Falls back to the deterministic
+ * template when AI is disabled, unavailable, or its output fails John's safety
+ * classifiers — so John always produces a compliant draft.
+ *
+ * Async because the AI path performs a network call. Returns an object
+ * describing both the rendered email and the personalization decisions,
+ * suitable for storing in john_email_drafts.personalization_json.
  */
-export function composeEmailFromLead(lead, opts = {}) {
+export async function composeEmailFromLead(lead, opts = {}) {
+  const config = opts.config || getJohnConfig()
+  const interpretation = opts.interpretation || interpretLead(lead)
+
+  if (aiComposerEnabled(config)) {
+    try {
+      const ai = await composeEmailWithAI(lead, { config, interpretation, logger: opts.logger })
+      if (ai?.ok) return ai
+    } catch (err) {
+      opts.logger?.warn?.('[John] AI composer threw; using template', { error: err?.message })
+    }
+  }
+  return composeWithTemplate(lead, { config, interpretation })
+}
+
+/**
+ * Deterministic template composer (the original, always-available path).
+ */
+export function composeWithTemplate(lead, opts = {}) {
   const config = opts.config || getJohnConfig()
   const interpretation = opts.interpretation || interpretLead(lead)
 

@@ -237,6 +237,8 @@ export function scoreOrganizationLead(org = {}) {
   if (mission) publicEvidence.push({ type: 'mission_statement', text: mission.slice(0, 500) })
   if (focus.length) publicEvidence.push({ type: 'focus_areas', value: focus.slice(0, 10) })
   if (programs.length) publicEvidence.push({ type: 'program_areas', value: programs.slice(0, 10) })
+  const websiteExcerpt = String(org.website_excerpt || '').trim()
+  if (websiteExcerpt) publicEvidence.push({ type: 'website_excerpt', text: websiteExcerpt.slice(0, 1500) })
 
   // Richer contact for John's outreach packet — a real person/phone where known.
   const phone = String(org.phone || '').trim() || null
@@ -507,6 +509,7 @@ export async function discoverProspects(db, {
               email: enriched.email || x.prospect.email,
               website: enriched.website_url || x.prospect.website,
               website_url: enriched.website_url || x.prospect.website_url,
+              website_excerpt: enriched.excerpt || x.prospect.website_excerpt || null,
             })
             if (enriched.website_url && !x.scored.source_urls.includes(enriched.website_url)) {
               x.scored.source_urls = [...x.scored.source_urls, enriched.website_url]

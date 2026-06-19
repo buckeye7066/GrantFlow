@@ -87,7 +87,7 @@ export async function draftEmailForLead({
 
   // 4. Interpret + compose
   const interpretation = interpretLead(lead)
-  const composed = composeEmailFromLead(lead, { config, interpretation })
+  const composed = await composeEmailFromLead(lead, { config, interpretation, logger })
 
   // 5. Safety classification
   const safety = evaluateDraftSafety({

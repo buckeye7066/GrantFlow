@@ -1,0 +1,252 @@
+/**
+ * John — AI email composer.
+ *
+ * Upgrades John's outreach from a fixed template to genuinely personalized,
+ * MBA-quality copy that (1) speaks to the organization's actual mission /
+ * accomplishments / goals, (2) explains what GrantFlow is, and (3) explains how
+ * GrantFlow can specifically help that org.
+ *
+ * Safety first — this never weakens John's guarantees:
+ *   - The model writes only the personalized OPENING + body. The compliant
+ *     footer (signature, opt-out line, postal address) is appended by code, so
+ *     CAN-SPAM elements are always present verbatim regardless of model output.
+ *   - The result is pre-validated against the SAME classifiers the draft service
+ *     enforces (classifySubject / classifyBody). If the model trips any rule
+ *     (funding guarantees, fake prior relationship, predatory/deceptive), or the
+ *     API is unavailable, the caller falls back to the deterministic template.
+ *   - The model is told to use ONLY the supplied facts and never invent specific
+ *     accomplishments, dollar figures, or relationships.
+ *
+ * Returns the same shape as the template composer, or { ok: false } so the
+ * caller can fall back.
+ */
+
+import {
+  classifyBody,
+  classifySubject,
+  getJohnConfig,
+} from './johnOutreachSafety.js'
+import { interpretLead } from './johnLeadInterpreter.js'
+
+const GRANTFLOW_FACTS = [
+  'GrantFlow is a funding discovery and application-tracking platform.',
+  'It builds a profile of an organization (mission, location, needs, eligibility) and matches it to grants, scholarships, benefits, foundation programs, and other funding sources that actually fit.',
+  'It then helps track deadlines, documents, and application progress in one place.',
+  'It is built for churches, nonprofits, schools, volunteer fire departments, ministries, families, students, and small organizations — groups that rarely have a dedicated grant writer.',
+  'Founder: Dr. John White (Axiom BioLabs).',
+].join(' ')
+
+function aiModel(config) {
+  return (
+    process.env.JOHN_AI_MODEL ||
+    process.env.ANTHROPIC_MODEL ||
+    'claude-sonnet-4-6'
+  )
+}
+
+export function aiComposerEnabled(config = getJohnConfig()) {
+  if (String(process.env.JOHN_AI_DRAFTING || '').toLowerCase() === 'off') return false
+  return !!String(process.env.ANTHROPIC_API_KEY || '').trim()
+}
+
+let cachedClient = null
+async function getClient() {
+  if (cachedClient) return cachedClient
+  const key = String(process.env.ANTHROPIC_API_KEY || '').trim()
+  if (!key) return null
+  const Anthropic = (await import('@anthropic-ai/sdk')).default
+  cachedClient = new Anthropic({
+    apiKey: key,
+    timeout: Number(process.env.JOHN_AI_TIMEOUT_MS || 25_000),
+    maxRetries: Number(process.env.JOHN_AI_MAX_RETRIES || 1),
+  })
+  return cachedClient
+}
+
+/** Pull the structured, factual hooks Yana attached to the lead. */
+function extractOrgFacts(lead) {
+  const evidence = Array.isArray(lead?.public_evidence) ? lead.public_evidence : []
+  const facts = { mission: null, focus_areas: [], revenue: null, assets: null, website_excerpt: null }
+  for (const e of evidence) {
+    if (!e || typeof e !== 'object') continue
+    if (e.type === 'mission_statement' && e.text) facts.mission = String(e.text)
+    else if (e.type === 'focus_areas' && Array.isArray(e.value)) facts.focus_areas = e.value
+    else if (e.type === 'irs_990_financials') {
+      if (e.revenue !== null && e.revenue !== undefined) facts.revenue = e.revenue
+      if (e.assets !== null && e.assets !== undefined) facts.assets = e.assets
+    } else if (e.type === 'website_excerpt' && e.text) {
+      facts.website_excerpt = String(e.text).slice(0, 1500)
+    }
+  }
+  return facts
+}
+
+function buildFooter(config) {
+  const physical = String(config.physicalAddress || '').trim()
+  return [
+    '',
+    'Respectfully,',
+    '',
+    'Dr. John White',
+    'GrantFlow / Axiom BioLabs',
+    String(config.replyTo || 'GrantFlow@axiombiolabs.org'),
+    '',
+    'If this is not relevant, you can reply "no thanks" and I will not follow up.',
+    ...(physical ? ['', physical] : []),
+  ].join('\n')
+}
+
+function htmlEscape(str) {
+  return String(str || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+}
+function textToHtml(text) {
+  const paragraphs = htmlEscape(text)
+    .split(/\n{2,}/)
+    .map((p) => `<p>${p.replace(/\n/g, '<br/>')}</p>`)
+  return `<!doctype html><html><body>${paragraphs.join('')}</body></html>`
+}
+
+function buildPrompt(lead, interpretation, facts, config) {
+  const org = interpretation.organization_name || 'the organization'
+  const ctx = {
+    organization_name: org,
+    organization_type: interpretation.organization_type || lead?.organization_type || null,
+    location: interpretation.location || lead?.location || null,
+    mission: facts.mission,
+    focus_areas: facts.focus_areas,
+    annual_revenue: facts.revenue,
+    total_assets: facts.assets,
+    website: lead?.website_url || null,
+    website_excerpt: facts.website_excerpt,
+    grantflow_fit: interpretation.grantflow_fit_summary || lead?.grantflow_fit_summary || null,
+    recipient_first_name:
+      interpretation.salutation && /^Hi\s+(\w+),/.test(interpretation.salutation)
+        ? interpretation.salutation.match(/^Hi\s+(\w+),/)[1]
+        : null,
+  }
+  const system = [
+    'You are Dr. John White, founder of GrantFlow, writing a concise, professional, MBA-quality cold outreach email to an organization you have NOT spoken with before.',
+    '',
+    `About GrantFlow (use these facts, do not contradict them): ${GRANTFLOW_FACTS}`,
+    '',
+    'The email body MUST, in this order:',
+    '1. Open by genuinely acknowledging the organization\'s mission, accomplishments, or goals — using ONLY the facts provided. If facts are thin, speak to their focus area/sector honestly. NEVER invent specific achievements, dollar figures, programs, names, or events.',
+    '2. Briefly say who you are and what GrantFlow is (1-2 sentences).',
+    '3. Explain specifically how GrantFlow can help THIS organization given its mission/focus/needs — be concrete, not generic.',
+    '4. End with a soft, low-pressure ask (e.g., offer to send a short example funding scan).',
+    '',
+    'Hard rules (a violation makes the email unusable):',
+    '- Do NOT promise, guarantee, or imply guaranteed funding/approval.',
+    '- Do NOT claim any prior relationship, meeting, or conversation.',
+    '- Do NOT use urgency, pressure, scarcity, or "act now" language.',
+    '- No hype, no exclamation-heavy marketing voice. Credible, peer-to-peer, respectful.',
+    '- 150-210 words for the body. Plain text. No links unless given.',
+    '- Do NOT include a signature, sign-off, opt-out line, or postal address — those are added separately. End after the soft ask.',
+    '- Write a subject line that is specific and non-deceptive. Do NOT start with "Re:" or "Urgent", and never use the words guaranteed, approved, or congratulations.',
+    '',
+    'Return ONLY a JSON object: {"subject": "...", "body": "..."} with no markdown, no commentary.',
+  ].join('\n')
+  const user = `Organization facts (JSON):\n${JSON.stringify(ctx, null, 2)}\n\nWrite the email now as JSON {"subject","body"}.`
+  return { system, user }
+}
+
+function parseJsonObject(text) {
+  if (!text) return null
+  const start = text.indexOf('{')
+  const end = text.lastIndexOf('}')
+  if (start === -1 || end === -1 || end <= start) return null
+  try { return JSON.parse(text.slice(start, end + 1)) } catch { return null }
+}
+
+/**
+ * Compose a personalized email via the LLM. Returns the same shape as the
+ * template composer, or { ok: false } when AI is unavailable or the output
+ * fails John's own safety classifiers (caller then falls back to template).
+ */
+export async function composeEmailWithAI(lead, opts = {}) {
+  const config = opts.config || getJohnConfig()
+  const interpretation = opts.interpretation || interpretLead(lead)
+  const logger = opts.logger
+
+  const client = await getClient()
+  if (!client) return { ok: false, reason: 'no_api_key' }
+
+  const facts = extractOrgFacts(lead)
+  const { system, user } = buildPrompt(lead, interpretation, facts, config)
+
+  let raw
+  try {
+    const resp = await client.messages.create({
+      model: aiModel(config),
+      max_tokens: 800,
+      temperature: 0.6,
+      system,
+      messages: [{ role: 'user', content: user }],
+    })
+    raw = (Array.isArray(resp?.content) ? resp.content : [])
+      .map((p) => (typeof p?.text === 'string' ? p.text : ''))
+      .join('\n')
+      .trim()
+  } catch (err) {
+    logger?.warn?.('[John] AI composer API error', { error: err?.message })
+    return { ok: false, reason: 'api_error', error: err?.message }
+  }
+
+  const parsed = parseJsonObject(raw)
+  if (!parsed || !parsed.subject || !parsed.body) {
+    return { ok: false, reason: 'unparseable_output' }
+  }
+
+  let subject = String(parsed.subject).replace(/\s+/g, ' ').trim().slice(0, 180)
+  const aiBody = String(parsed.body).trim()
+
+  // Greeting: prefer the model's own opening only if it greets; otherwise lead
+  // with the interpreter's safe salutation.
+  const hasGreeting = /^(hi|hello|dear|greetings)\b/i.test(aiBody)
+  const salutation = interpretation.salutation || 'Hi team,'
+  const composedBody = (hasGreeting ? aiBody : `${salutation}\n\n${aiBody}`) + '\n' + buildFooter(config)
+
+  // Pre-validate against the SAME gates the draft service enforces, so we never
+  // hand the safety layer something it will block — fall back to template instead.
+  const subjCheck = classifySubject(subject)
+  if (!subjCheck.ok) {
+    subject = `Possible funding help for ${interpretation.organization_name || 'your organization'}`
+  }
+  const bodyCheck = classifyBody(composedBody, {
+    physicalAddress: config.physicalAddress,
+    requirePhysicalAddress: config.physicalAddressRequired,
+  })
+  if (!bodyCheck.ok) {
+    logger?.warn?.('[John] AI body failed safety, falling back to template', { reasons: bodyCheck.reasons })
+    return { ok: false, reason: 'failed_safety', reasons: bodyCheck.reasons }
+  }
+
+  return {
+    ok: true,
+    subject,
+    body_text: composedBody,
+    body_html: textToHtml(composedBody),
+    recipient_email: interpretation?.contact?.email || null,
+    recipient_name: interpretation?.contact?.name || null,
+    recipient_role: interpretation?.contact?.role || null,
+    personalization: {
+      template: 'ai_v1',
+      model: aiModel(config),
+      salutation,
+      contact_name: interpretation.contact?.name || null,
+      contact_role: interpretation.contact?.role || null,
+      organization_name: interpretation.organization_name,
+      facts_used: {
+        mission: facts.mission,
+        focus_areas: facts.focus_areas,
+        has_financials: facts.revenue !== null || facts.assets !== null,
+        has_website_excerpt: !!facts.website_excerpt,
+      },
+      config_snapshot: {
+        from_alias: config.fromAlias,
+        reply_to: config.replyTo,
+        display_name: config.displayName,
+      },
+    },
+  }
+}

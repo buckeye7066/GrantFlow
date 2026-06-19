@@ -49,6 +49,29 @@ export function extractEmailsFromHtml(html) {
   })
 }
 
+/**
+ * Strip a homepage's HTML down to a short, clean text excerpt John's AI composer
+ * can use to speak to the org's actual mission/accomplishments. Drops scripts,
+ * styles, and tags; collapses whitespace; caps length.
+ */
+export function htmlToText(html, maxChars = 1200) {
+  if (!html || typeof html !== 'string') return null
+  const text = html
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<!--[\s\S]*?-->/g, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&#39;|&apos;/gi, "'")
+    .replace(/&quot;/gi, '"')
+    .replace(/&[a-z]+;/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+  if (!text) return null
+  return text.slice(0, maxChars)
+}
+
 /** Heuristic: is this search result the org's own homepage (not a directory)? */
 function looksLikeOfficialSite(url) {
   if (!/^https?:\/\//i.test(url)) return false
@@ -95,15 +118,17 @@ export function makeContactEnricher(deps = {}) {
       if (!homepage) return { ok: false, reason: 'no_homepage_found' }
 
       let email = null
+      let excerpt = null
       if (fetcher) {
         try {
           const html = await fetcher(homepage)
           email = extractEmailsFromHtml(html)[0] || null
+          excerpt = htmlToText(html)
         } catch (err) {
           log.warn(`enrich fetch failed for ${homepage}: ${err?.message || err}`)
         }
       }
-      return { ok: true, website_url: homepage, email }
+      return { ok: true, website_url: homepage, email, excerpt }
     },
   }
 }
