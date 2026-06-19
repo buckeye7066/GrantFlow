@@ -199,9 +199,11 @@ export function createOutlookProvider({
         },
         body: JSON.stringify(payload),
       })
-    } else if (res.ok && requestedFromAlias) {
-      aliasSet = true
     }
+    // A successful POST does NOT prove the alias stuck. Microsoft Graph returns
+    // 200 and silently rewrites `from` to the mailbox identity when the alias
+    // is not a permitted send-as / proxy address on the mailbox. We confirm
+    // against the PERSISTED `from` below rather than assuming success here.
 
     if (!res.ok) {
       const text = await safeText(res)
@@ -212,13 +214,24 @@ export function createOutlookProvider({
     }
 
     const json = await res.json()
+    const actualFrom = json.from?.emailAddress?.address || null
+    // Only treat the alias as set if Graph actually kept it as the sender.
+    // Otherwise it fell back to the mailbox identity and the draft must be
+    // flagged needs_sender_alias_review for a human to fix the send-as config.
+    if (
+      requestedFromAlias &&
+      actualFrom &&
+      actualFrom.toLowerCase() === String(requestedFromAlias).toLowerCase()
+    ) {
+      aliasSet = true
+    }
     return {
       ok: true,
       provider_draft_id: json.id || null,
       provider_message_id: json.internetMessageId || null,
       alias_attempted: aliasAttempted,
       alias_set: aliasSet,
-      actual_from: json.from?.emailAddress?.address || (aliasSet ? requestedFromAlias : config.primaryMailbox),
+      actual_from: actualFrom || (aliasSet ? requestedFromAlias : config.primaryMailbox),
       reply_to: json.replyTo?.[0]?.emailAddress?.address || replyTo || null,
       raw: maskSecrets(json),
     }
