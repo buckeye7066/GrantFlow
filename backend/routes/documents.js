@@ -1049,6 +1049,15 @@ router.post('/ingest', uploadLimiter, requireUploadsWritable, runUploadSingle('d
         )
         .run(profileId, docId);
       await linkProfileToAdmin(req.db, profileId);
+
+      // "Automation is king": if this document satisfies something Hamilton was
+      // waiting on, resolve it and auto-resume the task — uploading the doc
+      // continues Hamilton on its own, just like supplying a missing field.
+      // Best-effort: a Hamilton reconcile must never fail a document upload.
+      try {
+        const { reconcileProfileDocumentUploads } = await import('../services/hamilton/applicationTaskStore.js')
+        await reconcileProfileDocumentUploads(req.db, { profileId, documentName: docName })
+      } catch { /* never block an upload on the Hamilton reconcile */ }
     }
 
     // Create the canonical DocumentExtract row immediately (async worker fills it in).

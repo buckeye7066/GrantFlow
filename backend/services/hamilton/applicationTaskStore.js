@@ -608,6 +608,94 @@ export async function resumeTaskAfterMissingInfo(db, taskId, { resolvedCount = 0
   return { resumed: true, status: 'ready' }
 }
 
+// Words too generic to match a document requirement on (every doc is a
+// "document"/"letter"/"form"); matching on these would resolve the wrong item.
+const DOC_MATCH_STOPWORDS = new Set([
+  'the', 'and', 'for', 'your', 'our', 'most', 'recent', 'latest', 'current', 'copy',
+  'document', 'documents', 'doc', 'docs', 'file', 'form', 'letter', 'statement',
+  'report', 'records', 'record', 'proof', 'official', 'signed', 'scan', 'scanned',
+  'pdf', 'jpg', 'jpeg', 'png', 'page', 'pages',
+])
+
+function docMatchTokens(s) {
+  return String(s || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .split(' ')
+    .map((t) => t.trim())
+    .filter((t) => t.length > 2 && !DOC_MATCH_STOPWORDS.has(t))
+}
+
+/**
+ * Does an uploaded document's name plausibly satisfy a flagged document
+ * requirement? Conservative token overlap on significant words: e.g. uploaded
+ * "irs determination.pdf" matches required "IRS 501(c)(3) determination letter"
+ * (shares irs+determination), but "board roster.pdf" does not match
+ * "tax return". Requiring a shared significant token avoids resolving the wrong
+ * requirement off generic words like "letter"/"form".
+ */
+export function documentNameMatchesRequirement(uploadedName, requirementLabel) {
+  const a = new Set(docMatchTokens(uploadedName))
+  const b = docMatchTokens(requirementLabel)
+  if (a.size === 0 || b.length === 0) return false
+  return b.some((t) => a.has(t))
+}
+
+/**
+ * "Automation is king" for documents: when a document is uploaded to a profile,
+ * resolve any flagged document requirement it satisfies across that profile's
+ * waiting tasks and auto-resume the ones with nothing left outstanding — so the
+ * user uploading a doc continues Hamilton on its own, exactly like supplying a
+ * missing field. Best-effort and side-effect-light; safe to call on every
+ * upload.
+ *
+ * @returns {Promise<{tasksResumed:number, itemsResolved:number, resumedTaskIds:string[]}>}
+ */
+export async function reconcileProfileDocumentUploads(db, { profileId, documentName, resolvedBy = 'document_upload' } = {}) {
+  const out = { tasksResumed: 0, itemsResolved: 0, resumedTaskIds: [] }
+  if (!db || !profileId || !documentName) return out
+  await ensureApplicationTaskSchema(db)
+  const placeholders = RESUMABLE_AFTER_INFO_STATUSES.map(() => '?').join(',')
+  let tasks = []
+  try {
+    tasks = await db.prepare(
+      `SELECT id FROM application_tasks WHERE profile_id = ? AND status IN (${placeholders})`,
+    ).all(String(profileId), ...RESUMABLE_AFTER_INFO_STATUSES)
+    if (!Array.isArray(tasks)) tasks = []
+  } catch { return out }
+
+  for (const t of tasks) {
+    const docItems = (await listMissingInfo(db, t.id, { includeResolved: false }))
+      .filter((m) => m.kind === 'document')
+    let resolvedHere = 0
+    for (const item of docItems) {
+      if (documentNameMatchesRequirement(documentName, item.label || item.key)) {
+        const ok = await resolveMissingInfoItem(db, t.id, {
+          kind: 'document', key: item.key, value: documentName, resolvedBy,
+        })
+        if (ok) { resolvedHere += 1; out.itemsResolved += 1 }
+      }
+    }
+    if (resolvedHere === 0) continue
+    const remaining = await listMissingInfo(db, t.id, { includeResolved: false })
+    const resume = await resumeTaskAfterMissingInfo(db, t.id, { resolvedCount: resolvedHere, remainingCount: remaining.length })
+    if (resume.resumed) {
+      out.resumedTaskIds.push(t.id)
+      out.tasksResumed += 1
+      await appendTaskEvent(db, {
+        taskId: t.id,
+        eventType: 'unblocked',
+        status: 'ready',
+        step: 'auto_resume',
+        message: `Document "${documentName}" satisfied a flagged requirement — task re-queued; Hamilton will resume automatically.`,
+        actorRole: 'agent',
+        details: { auto_resumed: true, via: 'document_upload', document_name: documentName },
+      })
+    }
+  }
+  return out
+}
+
 export async function cancelApplicationTask(db, taskId, { actorUserId = null, actorRole = null, reason = null } = {}) {
   await ensureApplicationTaskSchema(db)
   const ts = new Date().toISOString()
