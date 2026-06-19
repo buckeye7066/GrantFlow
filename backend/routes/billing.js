@@ -194,30 +194,54 @@ router.put('/tiers/:id', requireAdmin, async (req, res) => {
   }
 })
 
-router.get('/accounts', requireAdmin, async (req, res) => {
+// Map a billing_accounts JOIN row to the API shape. Drift-safe: a row missing
+// the optional profile columns must never throw here.
+function mapBillingAccountRow(row) {
+  let resolved = { profile_type: null, profile_type_label: null }
   try {
-    await ensureBillingSchema(req.db)
-    // orderBy is already embedded directly in the query strings below; no separate variable needed.
+    resolved = resolveBillingProfileType(row)
+  } catch {
+    // profile-type resolution is best-effort metadata
+  }
+  return {
+    ...mapAccountRow(row),
+    profile_name: row.profile_name ?? null,
+    profile_type: resolved.profile_type,
+    profile_type_label: resolved.profile_type_label,
+  }
+}
 
-    const query = req.db?.dialect === 'postgres' 
-      ? `SELECT ba.*, bt.name AS tier_name, bt.description AS tier_description, bt.base_monthly_cents AS tier_monthly, bt.hourly_rate_cents AS tier_hourly, bt.enable_pipeline_automation AS tier_enable_pipeline_automation, bt.enable_item_funding AS tier_enable_item_funding, bt.enable_document_ai AS tier_enable_document_ai, p.display_name AS profile_name, p.primary_type AS profile_type, p.applicant_type AS applicant_type, (SELECT ps.data FROM profile_sections ps WHERE ps.profile_id = p.id AND ps.section_key = 'basic_information' LIMIT 1) AS basic_section, (SELECT ps.data FROM profile_sections ps WHERE ps.profile_id = p.id AND ps.section_key = 'organization_details' LIMIT 1) AS org_section FROM billing_accounts ba LEFT JOIN billing_tiers bt ON bt.id = ba.tier_id LEFT JOIN profiles p ON p.id = ba.profile_id ORDER BY p.display_name ASC`
-      : `SELECT ba.*, bt.name AS tier_name, bt.description AS tier_description, bt.base_monthly_cents AS tier_monthly, bt.hourly_rate_cents AS tier_hourly, bt.enable_pipeline_automation AS tier_enable_pipeline_automation, bt.enable_item_funding AS tier_enable_item_funding, bt.enable_document_ai AS tier_enable_document_ai, p.display_name AS profile_name, p.primary_type AS profile_type, p.applicant_type AS applicant_type, (SELECT ps.data FROM profile_sections ps WHERE ps.profile_id = p.id AND ps.section_key = 'basic_information' LIMIT 1) AS basic_section, (SELECT ps.data FROM profile_sections ps WHERE ps.profile_id = p.id AND ps.section_key = 'organization_details' LIMIT 1) AS org_section FROM billing_accounts ba LEFT JOIN billing_tiers bt ON bt.id = ba.tier_id LEFT JOIN profiles p ON p.id = ba.profile_id ORDER BY p.display_name COLLATE NOCASE ASC`
+router.get('/accounts', requireAdmin, async (req, res) => {
+  // Billing reads must NEVER 500: an empty table returns [], and any schema
+  // drift degrades to a resilient query rather than erroring the console.
+  await ensureBillingSchema(req.db).catch((error) => {
+    routeLogger.warn('[billing] ensureBillingSchema failed (continuing):', error?.message || error)
+  })
 
-    const rows = (await req.db.prepare(query)
-        .all()
-    ).map((row) => {
-      const resolved = resolveBillingProfileType(row)
-      return {
-        ...mapAccountRow(row),
-        profile_name: row.profile_name,
-        profile_type: resolved.profile_type,
-        profile_type_label: resolved.profile_type_label,
-      }
-    })
+  // Rich query: full tier flags + profile metadata for the admin console.
+  const richQuery = req.db?.dialect === 'postgres'
+    ? `SELECT ba.*, bt.name AS tier_name, bt.description AS tier_description, bt.base_monthly_cents AS tier_monthly, bt.hourly_rate_cents AS tier_hourly, bt.enable_pipeline_automation AS tier_enable_pipeline_automation, bt.enable_item_funding AS tier_enable_item_funding, bt.enable_document_ai AS tier_enable_document_ai, p.display_name AS profile_name, p.primary_type AS profile_type, p.applicant_type AS applicant_type, (SELECT ps.data FROM profile_sections ps WHERE ps.profile_id = p.id AND ps.section_key = 'basic_information' LIMIT 1) AS basic_section, (SELECT ps.data FROM profile_sections ps WHERE ps.profile_id = p.id AND ps.section_key = 'organization_details' LIMIT 1) AS org_section FROM billing_accounts ba LEFT JOIN billing_tiers bt ON bt.id = ba.tier_id LEFT JOIN profiles p ON p.id = ba.profile_id ORDER BY p.display_name ASC`
+    : `SELECT ba.*, bt.name AS tier_name, bt.description AS tier_description, bt.base_monthly_cents AS tier_monthly, bt.hourly_rate_cents AS tier_hourly, bt.enable_pipeline_automation AS tier_enable_pipeline_automation, bt.enable_item_funding AS tier_enable_item_funding, bt.enable_document_ai AS tier_enable_document_ai, p.display_name AS profile_name, p.primary_type AS profile_type, p.applicant_type AS applicant_type, (SELECT ps.data FROM profile_sections ps WHERE ps.profile_id = p.id AND ps.section_key = 'basic_information' LIMIT 1) AS basic_section, (SELECT ps.data FROM profile_sections ps WHERE ps.profile_id = p.id AND ps.section_key = 'organization_details' LIMIT 1) AS org_section FROM billing_accounts ba LEFT JOIN billing_tiers bt ON bt.id = ba.tier_id LEFT JOIN profiles p ON p.id = ba.profile_id ORDER BY p.display_name COLLATE NOCASE ASC`
 
-    res.json(rows)
+  try {
+    const rows = await req.db.prepare(richQuery).all()
+    return res.json(rows.map(mapBillingAccountRow))
   } catch (error) {
-    res.status(500).json(formatError(error))
+    routeLogger.warn('[billing] /accounts rich query failed; using resilient fallback:', error?.message || error)
+  }
+
+  // Resilient fallback: only base columns guaranteed by ensureBillingSchema —
+  // no tier feature-flags / profile-type columns / profile_sections subqueries
+  // that may have drifted. Accounts still render with their core fields.
+  try {
+    const fallbackQuery =
+      `SELECT ba.*, bt.name AS tier_name, bt.description AS tier_description, bt.base_monthly_cents AS tier_monthly, bt.hourly_rate_cents AS tier_hourly, p.display_name AS profile_name FROM billing_accounts ba LEFT JOIN billing_tiers bt ON bt.id = ba.tier_id LEFT JOIN profiles p ON p.id = ba.profile_id`
+    const rows = await req.db.prepare(fallbackQuery).all()
+    return res.json(rows.map(mapBillingAccountRow))
+  } catch (error) {
+    // Last resort: never surface a 500 to the Billing console.
+    routeLogger.error('[billing] /accounts fallback failed; returning empty list:', error?.message || error)
+    return res.json([])
   }
 })
 
