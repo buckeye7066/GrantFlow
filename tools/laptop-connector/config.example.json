@@ -1,0 +1,19 @@
+{
+  "_comment": "Copy to config.json and edit. The connector scans roots, skips the denylist (see denylist.js for the protective defaults), extracts text locally, and POSTs only text + provenance to GrantFlow.",
+
+  "apiBaseUrl": "https://YOUR-GRANTFLOW-BACKEND.up.railway.app",
+  "_apiBaseUrl_note": "Or set env LAPTOP_CONNECTOR_API. Use http://localhost:8080 against a local backend.",
+
+  "roots": ["C:\\Users\\firer", "G:\\"],
+  "_roots_note": "Owner asked for all of C: and G:. Narrow these if you want a faster, tighter scan. C:\\ root works too but is slower.",
+
+  "extraDenylist": [],
+  "_extraDenylist_note": "Additional path segments to exclude, on top of the regulated + system defaults in denylist.js.",
+
+  "extensions": [".pdf", ".docx", ".txt", ".md", ".rtf", ".csv"],
+  "maxFileSizeMB": 15,
+  "minTextChars": 120,
+  "concurrency": 3,
+  "dryRun": false,
+  "_dryRun_note": "true = walk + list what WOULD be ingested, send nothing. Always do a dry run first."
+}

@@ -1,7 +1,7 @@
 ﻿import React, { Suspense } from 'react';
 import { lazyWithRetry } from '@/utils/lazyWithRetry';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Shield, Activity, AlertCircle, Bot, DollarSign, Mail, Wrench, Workflow, Users, Bell, Loader2, Search, KeyRound } from 'lucide-react';
+import { Shield, Activity, AlertCircle, Bot, DollarSign, Mail, Wrench, Workflow, Users, Bell, Loader2, Search, KeyRound, Laptop } from 'lucide-react';
 import AdminDocumentUpload from '@/components/admin/AdminDocumentUpload';
 import AdminDiagnostics from '@/components/admin/AdminDiagnostics';
 import AdminGeoCrawl from '@/components/admin/AdminGeoCrawl';
@@ -22,6 +22,7 @@ import AdminExclusionRules from '@/components/admin/AdminExclusionRules'
 import AdminAgentMissionControl from '@/components/admin/AdminAgentMissionControl'
 import AdminFundingTrace from '@/components/admin/AdminFundingTrace.jsx'
 import AdminCredentialVault from '@/components/admin/AdminCredentialVault.jsx'
+import AdminLaptopInbox from '@/components/admin/AdminLaptopInbox.jsx'
 // Use lazyWithRetry (not raw React.lazy) so a stale-deploy chunk failure when
 // switching to the Billing/Automation tabs auto-recovers with one reload
 // instead of tripping the RouteErrorBoundary.
@@ -147,6 +148,10 @@ export default function Admin() {
               <Search className="w-4 h-4 mr-2" />
               Funding Trace
             </TabsTrigger>
+            <TabsTrigger value="laptop_inbox">
+              <Laptop className="w-4 h-4 mr-2" />
+              Laptop Inbox
+            </TabsTrigger>
           </TabsList>
           
           <TabsContent value="applications" className="mt-6">
@@ -240,6 +245,10 @@ export default function Admin() {
 
           <TabsContent value="funding_trace" className="mt-6">
             <AdminFundingTrace />
+          </TabsContent>
+
+          <TabsContent value="laptop_inbox" className="mt-6">
+            <AdminLaptopInbox />
           </TabsContent>
         </Tabs>
       </div>
