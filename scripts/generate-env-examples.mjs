@@ -179,7 +179,7 @@ export function buildOutputs() {
     if (v.startsWith('VITE_')) continue
     const val =
       v === 'ADMIN_EMAIL'
-        ? 'admin@grantflow.app'
+        ? 'buckeye7066@gmail.com'
         : v === 'ADMIN_NAME'
           ? 'Admin User'
           : v === 'DB_PROVIDER'
@@ -202,7 +202,7 @@ export function buildOutputs() {
     if (v.startsWith('VITE_')) continue
     const val =
       v === 'ADMIN_EMAIL'
-        ? 'admin@grantflow.app'
+        ? 'buckeye7066@gmail.com'
         : v === 'ADMIN_NAME'
           ? 'Admin User'
           : v === 'DB_PROVIDER'

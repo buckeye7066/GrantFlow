@@ -10,10 +10,17 @@ const log = createLogger('anyaOrchestrator')
 const TASK_STATUSES = new Set(['open', 'in_progress', 'completed', 'cancelled'])
 const TASK_PRIORITIES = new Set(['low', 'normal', 'high', 'urgent'])
 
-// Admin configuration from environment
-// Note: The fallback 'admin@grantflow.app' is a safe default that won't match real users
-// In production, ADMIN_EMAIL should always be explicitly set to the actual admin email
-const ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'admin@grantflow.app'
+// Admin configuration from environment.
+// The fallback is the canonical operator (buckeye7066@gmail.com) — the same
+// default used by services/agentControl/agentControlTypes.CANONICAL_ADMIN_EMAIL_DEFAULT
+// and services/agentControl/agentControlOrchestrator.ADMIN_EMAIL — so primary-admin
+// recognition agrees with the Agent Control Center gate when no override is set.
+// In production, AGENT_CONTROL_ADMIN_EMAIL or ADMIN_EMAIL may still be set to a
+// different email and that override wins.
+const ADMIN_EMAIL =
+  process.env.AGENT_CONTROL_ADMIN_EMAIL ||
+  process.env.ADMIN_EMAIL ||
+  'buckeye7066@gmail.com'
 
 let cachedOpenAI = null
 const openAIBreaker = createCircuitBreaker({

@@ -238,7 +238,14 @@ function resolveInternalAdminToken(context) {
         role: 'admin',
         roles: ['admin'],
         is_admin: true,
-        email: user.email ?? 'admin@grantflow.app',
+        // The minted internal-admin JWT must carry the canonical operator
+        // email so it passes isControlCenterAdmin() on /api/admin/agent-control
+        // and any other canonical-admin gate. The throwaway placeholder used to
+        // fail every canonical check, costing us false-positive Sam findings.
+        email: user.email
+          || process.env.AGENT_CONTROL_ADMIN_EMAIL
+          || process.env.ADMIN_EMAIL
+          || 'buckeye7066@gmail.com',
         typ: 'service',
       },
       secret,

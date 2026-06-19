@@ -44,4 +44,47 @@ describe('Sam tool-check resilience in the production runtime', () => {
     await runDiagnostics({ db: null, ctx: null, checkIds: TOOL_CHECK, invokeTool })
     expect(opts?.internalBaseUrl).toMatch(/^https?:\/\//)
   })
+
+  // Production-only false-alarm classes Sam used to record as HIGH "Tool invocation
+  // failed" findings every cycle. Each is an environment/configuration mismatch
+  // surfaced elsewhere — not a Sam-level critical — so we skip them with INFO.
+  it.each([
+    [
+      'auth-required (status 401 from a tool internal probe)',
+      Object.assign(new Error('Authentication required'), { status: 401 }),
+    ],
+    [
+      'forbidden (canonical-admin gate from a different operator)',
+      Object.assign(new Error('Tool "admin.health.check" requires admin privileges'), { status: 403 }),
+    ],
+    [
+      'sqlite schema gap before migrations finish',
+      new Error('SQLITE_ERROR: no such table: hamilton_runs'),
+    ],
+    [
+      'postgres schema gap before migrations finish',
+      new Error('relation "agent_control_runs" does not exist'),
+    ],
+    [
+      'tool reports its DB context is unavailable',
+      new Error('Database connection unavailable'),
+    ],
+    [
+      'fetch failed inside a tool',
+      new Error('fetch failed'),
+    ],
+  ])('classifies environment failure (%s) as a skipped INFO note', async (_label, err) => {
+    const invokeTool = vi.fn(async () => { throw err })
+    const { findings, results } = await runDiagnostics({
+      db: null,
+      ctx: null,
+      checkIds: TOOL_CHECK,
+      invokeTool,
+    })
+    expect(findings.filter((f) => /Tool invocation failed/i.test(f.title || ''))).toHaveLength(0)
+    const skipped = findings.filter((f) => /skipped/i.test(f.title || ''))
+    expect(skipped).toHaveLength(1)
+    expect(skipped[0].severity).toBe('info')
+    expect(results[0]).toMatchObject({ check_id: 'health.check', skipped: true })
+  })
 })

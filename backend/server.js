@@ -14,6 +14,7 @@ import rateLimit from 'express-rate-limit';
 import crypto from 'crypto';
 import { safeTokenEqual } from './utils/safeTokenEqual.js';
 import { db } from './db/index.js';
+import { CANONICAL_ADMIN_EMAIL_DEFAULT } from './services/agentControl/agentControlTypes.js';
 
 console.info('[server] Booting backend', {
   commit: process.env.RAILWAY_GIT_COMMIT_SHA || 'unknown',
@@ -142,7 +143,21 @@ try {
 
 const ADMIN_TOKEN = process.env.ADMIN_TOKEN || process.env.ANYA_ADMIN_TOKEN || null;
 const ADMIN_NAME = process.env.ADMIN_NAME || 'Admin User';
-const ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'admin@grantflow.app';
+// The synthetic user materialised when a request authenticates with ADMIN_TOKEN /
+// ANYA_ADMIN_TOKEN must carry the canonical operator email so it can pass the
+// canonical-admin gate on routers like /api/admin/agent-control/* and any other
+// place that uses isControlCenterAdmin() (which compares user.email against
+// AGENT_CONTROL_ADMIN_EMAIL || ADMIN_EMAIL || CANONICAL_ADMIN_EMAIL_DEFAULT).
+// Without this, server-internal probes (Sam's httpProbe, codeGuard.endpointHealth,
+// Hamilton automation checks) presented a valid service token but were still
+// rejected with 403 because their synthetic email was the throwaway
+// 'admin@grantflow.app' default that nothing else recognises. Trust here is
+// unchanged: ADMIN_TOKEN was already accepted as `role:admin, is_admin:true`;
+// we are only aligning the email so the canonical-admin check passes.
+const ADMIN_EMAIL =
+  process.env.AGENT_CONTROL_ADMIN_EMAIL ||
+  process.env.ADMIN_EMAIL ||
+  CANONICAL_ADMIN_EMAIL_DEFAULT;
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);

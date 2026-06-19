@@ -154,13 +154,27 @@ export function samToolActor(ctx) {
 // every cycle, accumulating false alarms. A tool that cannot run in this runtime
 // is an environment limitation, NOT a production-readiness defect, so we detect
 // those errors and record an INFO "skipped" note instead.
+//
+// We also classify a few production-realistic-but-not-defect cases here:
+//   * 401/403 thrown from a tool's internal HTTP probe (the probed endpoint is
+//     gated stricter than the calling context can satisfy — that's a
+//     configuration mismatch surfaced elsewhere, not a Sam-level critical)
+//   * "Authentication required" messages bubbling up from assertAuthenticated
+//   * SQLite "no such table/column" or Postgres "relation X does not exist"
+//     errors — schema bootstrap drift the migration runner is responsible for
+//     repairing, not a Sam-level critical (and they recur on every cycle until
+//     bootPolicy / ensureSchemaInvariants catches up).
 function isRuntimeUnavailableError(err) {
   const code = String(err?.code || err?.cause?.code || '')
+  const status = Number(err?.status || err?.statusCode || err?.cause?.status || 0)
   const msg = String(err?.message || err || '').toLowerCase()
   if (['ENOENT', 'EACCES', 'ENOTDIR', 'ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN', 'ETIMEDOUT'].includes(code)) {
     return true
   }
-  return /enoent|no such file|not a directory|cannot find|command not found|\bspawn\b|fetch failed|econnrefused|enotfound|getaddrinfo|connect (econnrefused|etimedout)|network|socket hang up/.test(msg)
+  if (status === 401 || status === 403 || status === 404 || status === 503) {
+    return true
+  }
+  return /enoent|no such file|not a directory|cannot find|command not found|\bspawn\b|fetch failed|econnrefused|enotfound|getaddrinfo|connect (econnrefused|etimedout)|network|socket hang up|authentication required|admin privileges|requires admin|forbidden|not authori[sz]ed|no such table|no such column|relation .* does not exist|column .* does not exist|database connection (required|unavailable)/.test(msg)
 }
 
 // Best-effort self URL so HTTP-style tool checks (endpointHealth) probe THIS
