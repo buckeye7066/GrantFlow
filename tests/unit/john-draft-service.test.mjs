@@ -85,7 +85,7 @@ test('draftEmailForLead refuses suppressed recipients and records draft_blocked'
   const restore = applyDefaultJohnEnv()
   const db = makeJohnDb()
   try {
-    await addSuppression(db, { type: 'email', value: 'chief@riverbendvfd.example.org', reason: 'admin' })
+    await addSuppression(db, { type: 'email', value: 'chief@riverbendvfd.test', reason: 'admin' })
     const provider = makeFakeOutlookProvider({ aliasMode: 'accept' })
     const lead = makeQualifiedLead({})
     const r = await draftEmailForLead({ db, lead, provider })
