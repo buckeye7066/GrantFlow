@@ -97,11 +97,14 @@ export function composeWithTemplate(lead, opts = {}) {
 
   const physical = String(config.physicalAddress || '').trim()
 
+  const prospectLink = String(config.prospectLink || '').trim()
+
   const body_text = fillTemplate(TEMPLATES.default.body, {
     SALUTATION: interpretation.salutation || 'Hi team,',
     ORGANIZATION_NAME: interpretation.organization_name || 'your organization',
     EVIDENCE_TOPIC: topic,
     EVIDENCE_DETAIL: detail,
+    PROSPECT_LINK: prospectLink,
     PHYSICAL_ADDRESS: physical,
   })
 
@@ -119,6 +122,8 @@ export function composeWithTemplate(lead, opts = {}) {
     evidence_topic: topic,
     evidence_detail: detail,
     evidence_source_url: interpretation.evidence?.source || null,
+    prospect_link: prospectLink || null,
+    prospect_link_inserted: prospectLink.length > 0,
     physical_address_inserted: physical.length > 0,
     config_snapshot: {
       from_alias: config.fromAlias,

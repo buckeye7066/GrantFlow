@@ -34,6 +34,7 @@ const GRANTFLOW_FACTS = [
   'It then helps track deadlines, documents, and application progress in one place.',
   'It is built for churches, nonprofits, schools, volunteer fire departments, ministries, families, students, and small organizations — groups that rarely have a dedicated grant writer.',
   'Founder: Dr. John White (Axiom BioLabs).',
+  'Origin (true, may be shared honestly): Dr. White first built GrantFlow to find funding for his own research lab, Axiom BioLabs; he then found the same engine helped the mission and nonprofit work he cares about, and helped him find scholarships and college-endowment opportunities for his own children.',
 ].join(' ')
 
 function aiModel(config) {
@@ -81,9 +82,24 @@ function extractOrgFacts(lead) {
   return facts
 }
 
-function buildFooter(config) {
+/**
+ * The closing block, appended by code after the model's personalized body.
+ *
+ * This is where the call-to-action lives: instead of John offering to run a
+ * scan, we invite the recipient to try GrantFlow themselves — talk to Anya,
+ * get a live funding scan, and only then decide whether to sign up. The link
+ * (config.prospectLink → the frontend /start funnel), signature, opt-out line,
+ * and postal address are all emitted deterministically so CAN-SPAM elements and
+ * the correct URL are always present verbatim regardless of model output.
+ */
+function buildFooter(config, organizationName) {
   const physical = String(config.physicalAddress || '').trim()
+  const link = String(config.prospectLink || '').trim()
+  const org = String(organizationName || '').trim() || 'your organization'
   return [
+    '',
+    `Rather than just describe it, I’d like you to see it for yourself. You can talk through your work with Anya, our assistant, and she’ll pull a live scan of funding sources that fit ${org} — no account or commitment needed. If what comes back is useful, you can choose to create an account from there:`,
+    ...(link ? ['', link] : []),
     '',
     'Respectfully,',
     '',
@@ -131,17 +147,16 @@ function buildPrompt(lead, interpretation, facts, config) {
     '',
     'The email body MUST, in this order:',
     '1. Open by genuinely acknowledging the organization\'s mission, accomplishments, or goals — using ONLY the facts provided. If facts are thin, speak to their focus area/sector honestly. NEVER invent specific achievements, dollar figures, programs, names, or events.',
-    '2. Briefly say who you are and what GrantFlow is (1-2 sentences).',
+    '2. Briefly say who you are and what GrantFlow is, and share its honest origin in 1-2 sentences: you first built GrantFlow to find funding for your own research lab (Axiom BioLabs), then found the same engine helped the mission and nonprofit work you care about, and even helped you find scholarships and college-endowment opportunities for your own children.',
     '3. Explain specifically how GrantFlow can help THIS organization given its mission/focus/needs — be concrete, not generic.',
-    '4. End with a soft, low-pressure ask (e.g., offer to send a short example funding scan).',
     '',
     'Hard rules (a violation makes the email unusable):',
     '- Do NOT promise, guarantee, or imply guaranteed funding/approval.',
     '- Do NOT claim any prior relationship, meeting, or conversation.',
     '- Do NOT use urgency, pressure, scarcity, or "act now" language.',
     '- No hype, no exclamation-heavy marketing voice. Credible, peer-to-peer, respectful.',
-    '- 150-210 words for the body. Plain text. No links unless given.',
-    '- Do NOT include a signature, sign-off, opt-out line, or postal address — those are added separately. End after the soft ask.',
+    '- 130-190 words for the body. Plain text.',
+    '- Do NOT write a call to action, an offer to run a scan, a link, a signature, a sign-off, an opt-out line, or a postal address — ALL of those are added separately by the system. End immediately after explaining how GrantFlow can help this organization (step 3).',
     '- Write a subject line that is specific and non-deceptive. Do NOT start with "Re:" or "Urgent", and never use the words guaranteed, approved, or congratulations.',
     '',
     'Return ONLY a JSON object: {"subject": "...", "body": "..."} with no markdown, no commentary.',
@@ -204,7 +219,7 @@ export async function composeEmailWithAI(lead, opts = {}) {
   // with the interpreter's safe salutation.
   const hasGreeting = /^(hi|hello|dear|greetings)\b/i.test(aiBody)
   const salutation = interpretation.salutation || 'Hi team,'
-  const composedBody = (hasGreeting ? aiBody : `${salutation}\n\n${aiBody}`) + '\n' + buildFooter(config)
+  const composedBody = (hasGreeting ? aiBody : `${salutation}\n\n${aiBody}`) + '\n' + buildFooter(config, interpretation.organization_name)
 
   // Pre-validate against the SAME gates the draft service enforces, so we never
   // hand the safety layer something it will block — fall back to template instead.
@@ -242,6 +257,7 @@ export async function composeEmailWithAI(lead, opts = {}) {
         has_financials: facts.revenue !== null || facts.assets !== null,
         has_website_excerpt: !!facts.website_excerpt,
       },
+      prospect_link: String(config.prospectLink || '').trim() || null,
       config_snapshot: {
         from_alias: config.fromAlias,
         reply_to: config.replyTo,
