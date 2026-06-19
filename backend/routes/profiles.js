@@ -29,6 +29,8 @@ import {
 } from '../utils/accessControl.js'
 import { isDesignatedProfileId } from '../utils/ensureDesignatedProfiles.js'
 import { resolveUploadsDir } from '../utils/uploadsDir.js'
+import { ADMIN_EMAILS } from '../config/constants.js'
+import { countSeats, describeSeatTier, evaluateSeatChange } from '../services/billing/seatTier.js'
 import { syncProfileFieldsFromSection, syncDisplayNameToBasicInformation } from '../utils/profileSectionSync.js'
 import { deriveNamePartsIntoBasicInfo } from '../../shared/nameParsing.js'
 import { guardProfileSectionPayload } from '../utils/profileSuggestionGuards.js'
@@ -788,7 +790,7 @@ router.get('/:id/emails', async (req, res) => {
     }
 
     const emails = await listProfileEmails(req.db, profileId)
-    res.json({ emails })
+    res.json({ emails, seat_tier: describeSeatTier(countSeats(emails, ADMIN_EMAILS)) })
   } catch (error) {
     res.status(500).json(formatError(error))
   }
@@ -822,10 +824,35 @@ router.post('/:id/emails', async (req, res) => {
       return res.status(400).json({ error: `Invalid email(s): ${invalid.slice(0, 3).join(', ')}` })
     }
 
+    // Billing-tier guard: count current seats (excluding platform-admin emails),
+    // figure out how many of the submitted addresses are genuinely NEW, and if
+    // adding them bumps the org into a higher billing tier (small→mid at 2,
+    // mid→large at 6) require an explicit confirm so the org isn't silently
+    // upgraded. Pass { confirm: true } to proceed.
+    const existing = await listProfileEmails(req.db, profileId)
+    const existingSet = new Set(existing.map((e) => String(e.email || '').toLowerCase()))
+    const adminSet = new Set(ADMIN_EMAILS.map((e) => String(e).toLowerCase()))
+    const netNew = normalized.filter((e) => !existingSet.has(e) && !adminSet.has(e))
+    const currentSeats = countSeats(existing, ADMIN_EMAILS)
+    const change = evaluateSeatChange(currentSeats, netNew.length)
+    if (change.crosses_up && req.body?.confirm !== true) {
+      return res.status(409).json({
+        error: 'tier_change_requires_confirmation',
+        requires_confirmation: true,
+        warning: change.warning,
+        tier_change: change,
+        message: 'Adding these logins will move the organization to a higher billing tier. Resend with { confirm: true } to proceed.',
+      })
+    }
+
     const addedBy = req.ctx?.userId ?? req.ctx?.email ?? null
     await addProfileEmails(req.db, { profileId, emails: normalized, addedBy })
     const emails = await listProfileEmails(req.db, profileId)
-    res.status(201).json({ emails })
+    res.status(201).json({
+      emails,
+      seat_tier: describeSeatTier(countSeats(emails, ADMIN_EMAILS)),
+      tier_changed: change.crosses_up,
+    })
   } catch (error) {
     res.status(500).json(formatError(error))
   }

@@ -34,6 +34,7 @@ import { Switch } from "@/components/ui/switch"
 import UniversityApplicationsSection from "@/components/profiles/UniversityApplicationsSection.jsx"
 import StudentPortalsCard from "@/components/profiles/StudentPortalsCard.jsx"
 import SavedLoginsCard from "@/components/profiles/SavedLoginsCard.jsx"
+import OrgMembersCard from "@/components/profiles/OrgMembersCard.jsx"
 import CommittedCollegeWorkspace from "@/components/profiles/CommittedCollegeWorkspace.jsx"
 import SchoolPortalLinkPanel from "@/components/profiles/SchoolPortalLinkPanel.jsx"
 import HealthResourcesCard from "@/components/profiles/HealthResourcesCard.jsx"
@@ -869,7 +870,8 @@ export default function ProfileDetail() {
             <PrintableProfileTodo profileId={profileId} profileName={profile.display_name} />
           </TabsContent>
 
-          <TabsContent value="billing" className="mt-6">
+          <TabsContent value="billing" className="mt-6 space-y-6">
+            <OrgMembersCard profileId={profileId} />
             <div className="rounded-lg border bg-white p-6">
               <h3 className="text-lg font-semibold mb-4">Billing</h3>
               {profile.billing ? (
