@@ -9,6 +9,7 @@
 import fetch from 'node-fetch';
 
 import crypto from 'crypto';
+import { getSamGovApiKey } from '../../config/grantsGovEndpoints.js'
 import { createLogger } from '../../utils/logger.js'
 const log = createLogger('samGov')
 
@@ -53,10 +54,10 @@ const SAM_GOV_MAX_LIMIT = 1000;
  * @returns {Promise<{ opportunities: Array, metadata: object }>}
  */
 export async function fetchSamGov(options = {}) {
-  const apiKey = process.env.SAM_GOV_API_KEY;
+  const apiKey = getSamGovApiKey();
 
   if (!apiKey) {
-    console.warn('[sam.gov] SAM_GOV_API_KEY not set - skipping SAM.gov fetch');
+    console.warn('[sam.gov] SAM_GOV_PUBLIC_API_KEY / SAM_GOV_API_KEY not set - skipping SAM.gov fetch');
     return {
       opportunities: [],
       metadata: {
