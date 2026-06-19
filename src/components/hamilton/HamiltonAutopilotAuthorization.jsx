@@ -147,7 +147,18 @@ export default function HamiltonAutopilotAuthorization({
       })
       onOpenChange?.(false)
     } catch (err) {
-      setError(err?.message || 'Failed to start Hamilton Autopilot.')
+      // The API client builds err.message from the response body, preferring
+      // `message` then falling back to `error`. Older backend responses only
+      // sent {error: 'authorize_failed', detail: '<real cause>'} so the modal
+      // showed the raw token. Pick the most human field we have so the user
+      // always sees the actual failure instead of a code.
+      const friendly =
+        err?.details?.message
+        || err?.details?.detail
+        || (err?.message && err.message !== err?.errorCode ? err.message : null)
+        || err?.errorCode
+        || 'Failed to start Hamilton Autopilot.'
+      setError(friendly)
       setPhase('error')
     }
   }

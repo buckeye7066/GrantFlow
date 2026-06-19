@@ -145,3 +145,123 @@ describe('Hamilton route auth + profile scoping', () => {
     assert.equal(admin.status, 200)
   })
 })
+
+// REGRESSION: the auth middleware writes the canonical user id as
+// `req.user.userId` (JWT `sub` claim), never `req.user.id`. The Hamilton
+// authorize route used to read `user.id` directly when calling
+// recordAuthorizations, which produced "userId required" → 500 →
+// {error: 'authorize_failed'} → the modal showed the literal string
+// "authorize_failed" to the user. We resolve via getAuthUserId() now; this
+// regression mounts the real router with a JWT-shaped req.user (userId only,
+// no id) and asserts the authorize call succeeds.
+describe('Hamilton authorize route — JWT-shaped req.user with userId-only', () => {
+  it('accepts a JWT-shaped user (userId, no id) and records the authorization', async () => {
+    const db = new Database(':memory:')
+    db.exec(`
+      CREATE TABLE profiles (id TEXT PRIMARY KEY, user_id TEXT, display_name TEXT);
+      CREATE TABLE users (id TEXT PRIMARY KEY, primary_email TEXT, is_admin INTEGER DEFAULT 0, role TEXT);
+      INSERT INTO profiles (id, user_id, display_name) VALUES ('p-jwt', 'u-jwt', 'JWT Profile');
+      INSERT INTO users (id, primary_email, is_admin, role) VALUES ('u-jwt', 'jwt@test.com', 0, 'user');
+    `)
+    const app = express()
+    app.use(express.json())
+    app.use((req, _res, next) => {
+      req.db = db
+      // EXACTLY the shape backend/server.js builds for a JWT token: userId,
+      // never id. This is the production path for every signed-in user.
+      req.user = {
+        role: 'user',
+        is_admin: false,
+        userId: 'u-jwt',
+        profileId: null,
+        sessionId: 'sess-jwt',
+        full_name: 'JWT User',
+        email: 'jwt@test.com',
+        roles: [],
+      }
+      next()
+    })
+    app.use('/api/hamilton/automation', hamiltonRouter)
+
+    const res = await request(app)
+      .post('/api/hamilton/automation/authorize')
+      .send({
+        profile_id: 'p-jwt',
+        scope: 'funding_source',
+        funding_source_ids: ['opp-1'],
+        authorization_types: ['complete_forms', 'upload_documents'],
+        authorization_text: 'test authorization text',
+        authorization_version: 'hamilton-autopilot-v1',
+        options: { complete_forms: true },
+      })
+    assert.equal(res.status, 200, `expected 200, got ${res.status}: ${JSON.stringify(res.body)}`)
+    assert.equal(res.body.ok, true)
+    assert.ok(Array.isArray(res.body.authorization_ids))
+    assert.equal(res.body.authorization_ids.length, 2, 'two authorization rows for two types')
+  })
+
+  it('returns a friendly 401 when the auth context has no user id at all', async () => {
+    const db = new Database(':memory:')
+    db.exec(`
+      CREATE TABLE profiles (id TEXT PRIMARY KEY, user_id TEXT, display_name TEXT);
+      CREATE TABLE users (id TEXT PRIMARY KEY, primary_email TEXT, is_admin INTEGER DEFAULT 0, role TEXT);
+      INSERT INTO profiles (id, user_id, display_name) VALUES ('p-x', 'u-x', 'X');
+    `)
+    const app = express()
+    app.use(express.json())
+    app.use((req, _res, next) => {
+      req.db = db
+      // Pathological middleware: marks user as authenticated but supplies no
+      // id field at all. We must NOT 500 here.
+      req.user = { role: 'user', email: 'lost@test.com' }
+      next()
+    })
+    app.use('/api/hamilton/automation', hamiltonRouter)
+
+    const res = await request(app)
+      .post('/api/hamilton/automation/authorize')
+      .send({
+        profile_id: 'p-x',
+        scope: 'funding_source',
+        funding_source_ids: ['opp-1'],
+        authorization_types: ['complete_forms'],
+      })
+    assert.equal(res.status, 401)
+    assert.equal(res.body.error, 'session_invalid')
+    assert.ok(typeof res.body.message === 'string' && res.body.message.length > 0)
+  })
+
+  it('error responses include a human-readable `message` (not just an error code)', async () => {
+    const db = new Database(':memory:')
+    db.exec(`
+      CREATE TABLE profiles (id TEXT PRIMARY KEY, user_id TEXT, display_name TEXT);
+      CREATE TABLE users (id TEXT PRIMARY KEY, primary_email TEXT, is_admin INTEGER DEFAULT 0, role TEXT);
+      INSERT INTO profiles (id, user_id, display_name) VALUES ('p-z', 'u-z', 'Z');
+    `)
+    const app = express()
+    app.use(express.json())
+    app.use((req, _res, next) => {
+      req.db = db
+      req.user = { role: 'user', userId: 'u-z' }
+      next()
+    })
+    app.use('/api/hamilton/automation', hamiltonRouter)
+
+    // Empty authorization_types triggers the 400 — assert the message field
+    // is set so the frontend never has to render the raw error code.
+    const res = await request(app)
+      .post('/api/hamilton/automation/authorize')
+      .send({
+        profile_id: 'p-z',
+        scope: 'funding_source',
+        funding_source_ids: ['opp-1'],
+        authorization_types: [],
+      })
+    assert.equal(res.status, 400)
+    assert.equal(res.body.error, 'authorization_types_required')
+    assert.ok(
+      typeof res.body.message === 'string' && res.body.message.length > 0,
+      'response must include a friendly `message` so the modal does not display the raw error token',
+    )
+  })
+})
