@@ -905,6 +905,18 @@ export async function processDocumentIngestionJob({
 
     await syncProfileDisplayNameFromSections(db, profile?.id, sections)
 
+    // Now that the document's content is parsed into profile_sections (where
+    // Hamilton's autofill reads), re-check her waiting tasks: any field she
+    // flagged that this document just filled is resolved and the task
+    // auto-resumes — "parse the doc → Hamilton knows what to place where →
+    // Hamilton continues". Best-effort: never fail ingestion on the reconcile.
+    if (profile?.id && updates.length > 0) {
+      try {
+        const { reconcileProfileAfterParse } = await import('./hamilton/applicationTaskStore.js')
+        await reconcileProfileAfterParse(db, { profileId: profile.id })
+      } catch { /* never block ingestion on the Hamilton reconcile */ }
+    }
+
     const usedFallback = Boolean(openaiUnavailableMessage || openAIWarning)
     const summary = buildIngestSummaryFromUpdates(updates, {
       usedFallback,

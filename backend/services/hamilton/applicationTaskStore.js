@@ -696,6 +696,96 @@ export async function reconcileProfileDocumentUploads(db, { profileId, documentN
   return out
 }
 
+// Flatten profile_sections rows into a lookup of candidate field keys → value,
+// indexing both the leaf key ("ein") and the dotted path ("organization_details.ein")
+// so a flagged field's key matches however it was named. Empty values are skipped.
+function flattenProfileSectionValues(sectionRows) {
+  const map = {}
+  for (const row of (sectionRows || [])) {
+    let data = row?.data
+    if (typeof data === 'string') { try { data = JSON.parse(data) } catch { data = null } }
+    const sectionKey = String(row?.section_key || '').toLowerCase()
+    const walk = (obj) => {
+      if (!obj || typeof obj !== 'object') return
+      for (const [k, v] of Object.entries(obj)) {
+        if (v && typeof v === 'object' && !Array.isArray(v)) { walk(v); continue }
+        const val = Array.isArray(v) ? v.filter(Boolean).join(', ') : v
+        if (val === null || val === undefined || String(val).trim() === '') continue
+        const leaf = String(k).toLowerCase()
+        if (!map[leaf]) map[leaf] = String(val)
+        if (sectionKey) map[`${sectionKey}.${leaf}`] = String(val)
+      }
+    }
+    walk(data)
+  }
+  return map
+}
+
+/**
+ * After a document is parsed into a profile (profile_sections updated), re-check
+ * that profile's waiting tasks: any field Hamilton flagged that the parsed
+ * document just populated is resolved, and a task with nothing left outstanding
+ * is re-queued — so "parse the doc → Hamilton knows what to place where →
+ * Hamilton continues" happens automatically. The extracted value already lives
+ * in profile_sections (where Hamilton's autofill reads), so resolving the
+ * flagged item + resuming is all that's needed. Best-effort.
+ *
+ * @returns {Promise<{tasksResumed:number, fieldsResolved:number, resumedTaskIds:string[]}>}
+ */
+export async function reconcileProfileAfterParse(db, { profileId } = {}) {
+  const out = { tasksResumed: 0, fieldsResolved: 0, resumedTaskIds: [] }
+  if (!db || !profileId) return out
+  await ensureApplicationTaskSchema(db)
+
+  let sections = []
+  try {
+    sections = await db.prepare('SELECT section_key, data FROM profile_sections WHERE profile_id = ?').all(String(profileId))
+  } catch { return out }
+  const values = flattenProfileSectionValues(sections)
+  if (Object.keys(values).length === 0) return out
+
+  const placeholders = RESUMABLE_AFTER_INFO_STATUSES.map(() => '?').join(',')
+  let tasks = []
+  try {
+    tasks = await db.prepare(
+      `SELECT id FROM application_tasks WHERE profile_id = ? AND status IN (${placeholders})`,
+    ).all(String(profileId), ...RESUMABLE_AFTER_INFO_STATUSES)
+    if (!Array.isArray(tasks)) tasks = []
+  } catch { return out }
+
+  for (const t of tasks) {
+    const fieldItems = (await listMissingInfo(db, t.id, { includeResolved: false }))
+      .filter((m) => m.kind === 'field')
+    let resolvedHere = 0
+    for (const item of fieldItems) {
+      const key = String(item.key || '').toLowerCase()
+      const leaf = key.split('.').pop()
+      const value = (values[key] && values[key].trim()) ? values[key] : (leaf && values[leaf] && values[leaf].trim() ? values[leaf] : null)
+      if (value) {
+        const ok = await resolveMissingInfoItem(db, t.id, { kind: 'field', key: item.key, value, resolvedBy: 'document_parse' })
+        if (ok) { resolvedHere += 1; out.fieldsResolved += 1 }
+      }
+    }
+    if (resolvedHere === 0) continue
+    const remaining = await listMissingInfo(db, t.id, { includeResolved: false })
+    const resume = await resumeTaskAfterMissingInfo(db, t.id, { resolvedCount: resolvedHere, remainingCount: remaining.length })
+    if (resume.resumed) {
+      out.resumedTaskIds.push(t.id)
+      out.tasksResumed += 1
+      await appendTaskEvent(db, {
+        taskId: t.id,
+        eventType: 'unblocked',
+        status: 'ready',
+        step: 'auto_resume',
+        message: 'Hamilton parsed your uploaded document and filled the flagged detail(s) — task re-queued; she will resume automatically.',
+        actorRole: 'agent',
+        details: { auto_resumed: true, via: 'document_parse', fields_resolved: resolvedHere },
+      })
+    }
+  }
+  return out
+}
+
 export async function cancelApplicationTask(db, taskId, { actorUserId = null, actorRole = null, reason = null } = {}) {
   await ensureApplicationTaskSchema(db)
   const ts = new Date().toISOString()
