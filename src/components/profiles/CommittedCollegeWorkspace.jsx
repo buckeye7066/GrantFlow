@@ -1,6 +1,6 @@
 import React, { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { GraduationCap, ExternalLink, CheckCircle2, AlertTriangle, FileWarning, CalendarClock, Bot, Award, Plus, Trash2 } from 'lucide-react'
+import { GraduationCap, ExternalLink, CheckCircle2, AlertTriangle, FileWarning, CalendarClock, Bot, Award, Plus, Trash2, Printer } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -376,9 +376,17 @@ export default function CommittedCollegeWorkspace({ profileId, applications = []
               <div className="flex items-center gap-1.5 text-sm font-medium text-slate-900">
                 <Award className="h-4 w-4 text-emerald-600" /> Scholarships &amp; aid
               </div>
-              <Button size="sm" variant="outline" onClick={openAddAid}>
-                <Plus className="mr-1 h-3.5 w-3.5" /> Add scholarship
-              </Button>
+              <div className="flex gap-2">
+                <Button
+                  size="sm" variant="ghost"
+                  onClick={() => window.open(`/PrintAwardSummary?profile_id=${encodeURIComponent(profileId)}`, '_blank', 'noopener')}
+                >
+                  <Printer className="mr-1 h-3.5 w-3.5" /> Print summary
+                </Button>
+                <Button size="sm" variant="outline" onClick={openAddAid}>
+                  <Plus className="mr-1 h-3.5 w-3.5" /> Add scholarship
+                </Button>
+              </div>
             </div>
             <div className="mt-1 text-xs text-slate-500">
               Both awarded and applied-for scholarships count toward her aid total and lower unmet need; the awarded vs. applied split is shown per entry so you can see what’s secured vs. still pending.

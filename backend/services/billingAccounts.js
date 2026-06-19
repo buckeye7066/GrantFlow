@@ -1,5 +1,53 @@
 import crypto from 'crypto'
 import { safeParseJSON } from '../utils/safeJson.js'
+import { TIERS as CATALOG_TIERS, orgTierForSeats } from '../../shared/tierCatalog.js'
+import { countSeats } from './billing/seatTier.js'
+import { ADMIN_EMAILS } from '../config/constants.js'
+
+const ORG_TIER_IDS = new Set(['small_org', 'mid_size', 'large_org'])
+
+/**
+ * Resolve what a profile is actually billed per month, wiring the seat count
+ * into the amount: an organization account's monthly follows its seat-derived
+ * tier (1 → small, 2–5 → mid, 6+ → large), unless an admin set a custom price or
+ * the account is pro bono. Discounts apply on top. Pure read — never mutates.
+ */
+export async function computeEffectiveBilling(db, profileId, account) {
+  const tier = account?.tier || null
+  const isOrgTier = tier && ORG_TIER_IDS.has(tier.id)
+  let seatCount = null
+  let seatTierId = null
+  let baseMonthly = Number(tier?.base_monthly_cents) || 0
+  let basis = 'assigned_tier'
+
+  if (isOrgTier) {
+    try {
+      const rows = await db.prepare('SELECT email FROM profile_emails WHERE profile_id = ?').all(String(profileId))
+      seatCount = countSeats(rows, ADMIN_EMAILS)
+      const seatTier = orgTierForSeats(seatCount || 1)
+      if (seatTier) { seatTierId = seatTier.id; baseMonthly = seatTier.monthly_cents; basis = 'seats' }
+    } catch { /* fall back to the assigned tier price */ }
+  }
+
+  let effective = baseMonthly
+  if (Number.isInteger(account?.custom_monthly_cents)) { effective = account.custom_monthly_cents; basis = 'custom_override' }
+  const proBono = Boolean(account?.is_pro_bono)
+  if (proBono) { effective = 0; basis = 'pro_bono' }
+
+  const discountPct = Math.max(0, Math.min(100, Number(account?.discount_percent) || 0))
+  const net = proBono ? 0 : Math.max(0, Math.round(effective * (1 - discountPct / 100)))
+
+  return {
+    basis,
+    seat_count: seatCount,
+    seat_tier_id: seatTierId,
+    base_monthly_cents: baseMonthly,
+    effective_monthly_cents: effective,
+    discount_percent: discountPct,
+    net_monthly_cents: net,
+    is_pro_bono: proBono,
+  }
+}
 
 export function mapTierRow(row) {
   if (!row) return null
@@ -136,6 +184,30 @@ export async function ensureBillingSchema(db) {
   await ensureBillingTierColumns(db, isPostgres)
 
   await seedBillingTiersIfMissing(db)
+  await syncCanonicalOrgTierPricing(db)
+}
+
+/**
+ * Give the seat-driven organization tiers their canonical monthly price on
+ * environments that were seeded BEFORE the catalog priced them (they shipped at
+ * $0). Only updates rows still at 0/NULL, so it never clobbers an admin's custom
+ * price. Idempotent — safe to run every boot.
+ */
+async function syncCanonicalOrgTierPricing(db) {
+  try {
+    const orgTiers = CATALOG_TIERS.filter((t) => t.family === 'organization')
+    for (const t of orgTiers) {
+      await db
+        .prepare(
+          `UPDATE billing_tiers
+              SET base_monthly_cents = ?
+            WHERE id = ? AND (base_monthly_cents IS NULL OR base_monthly_cents = 0)`,
+        )
+        .run(t.monthly_cents, t.id)
+    }
+  } catch (err) {
+    console.error('[billingAccounts] syncCanonicalOrgTierPricing failed:', err?.message ?? err)
+  }
 }
 
 const BILLING_TIER_FLAG_COLUMNS = [
@@ -276,79 +348,20 @@ async function seedBillingTiersIfMissing(db) {
     const insert = db.prepare(insertSql)
     const toDbBool = (value) => (db?.dialect === 'postgres' ? value : value ? 1 : 0)
 
-    // Product tiers (existing UI expectations)
-    await insert.run(
-      'foundation',
-      'Foundation',
-      'Baseline research support with curated grant discovery and shared AI document enrichment.',
-      0,
-      0,
-      toDbBool(false),
-      toDbBool(true),
-      toDbBool(true),
-    )
-    await insert.run(
-      'growth',
-      'Growth',
-      'Expanded automation, itemized funding intelligence, and AI-supported document ingestion.',
-      9900,
-      15000,
-      toDbBool(true),
-      toDbBool(true),
-      toDbBool(true),
-    )
-    await insert.run(
-      'enterprise',
-      'Enterprise',
-      'Full-service concierge with custom automation rules and dedicated analyst support.',
-      24900,
-      22500,
-      toDbBool(true),
-      toDbBool(true),
-      toDbBool(true),
-    )
-
-    // Client category tiers (from your service menu / payment sheet)
-    await insert.run(
-      'individual',
-      'Individual',
-      'Individuals/families seeking assistance.',
-      0,
-      8500,
-      toDbBool(false),
-      toDbBool(true),
-      toDbBool(true),
-    )
-    await insert.run(
-      'small_org',
-      'Small Org',
-      'Annual budget under $250,000.',
-      0,
-      8500,
-      toDbBool(false),
-      toDbBool(true),
-      toDbBool(true),
-    )
-    await insert.run(
-      'mid_size',
-      'Mid-Size',
-      'Annual budget $250,000 - $2,000,000.',
-      0,
-      11500,
-      toDbBool(true),
-      toDbBool(true),
-      toDbBool(true),
-    )
-    await insert.run(
-      'large_org',
-      'Large Org',
-      'Annual budget over $2,000,000.',
-      0,
-      15000,
-      toDbBool(true),
-      toDbBool(true),
-      toDbBool(true),
-    )
+    // Seed every tier straight from the canonical catalog (shared/tierCatalog.js)
+    // so billing_tiers can never drift from the single source of truth.
+    for (const t of CATALOG_TIERS) {
+      await insert.run(
+        t.id,
+        t.name,
+        t.summary,
+        t.monthly_cents,
+        t.hourly_cents,
+        toDbBool(t.capabilities.enable_pipeline_automation),
+        toDbBool(t.capabilities.enable_item_funding),
+        toDbBool(t.capabilities.enable_document_ai),
+      )
+    }
   } catch (err) {
     // Log the failure so operators can diagnose billing tier seed issues.
     console.error('[billingAccounts] seedBillingTiersIfMissing: failed to insert seed tiers:', err?.message ?? err)

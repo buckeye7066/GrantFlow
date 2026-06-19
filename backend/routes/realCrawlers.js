@@ -4,6 +4,7 @@ import { ensureAuth, ensureAdmin } from '../middleware/auth.js'
 import { standardRateLimiter } from '../middleware/rateLimiting.js'
 import { runCrawler, SCHEMA } from '../services/crawlerFramework.js'
 import { ensureProfileAccess } from '../utils/accessControl.js'
+import { requireTierCapability, TIER_CAPABILITIES } from '../utils/tierGating.js'
 import { expandNeed, scoreNeedMatch } from '../services/crawlers/needTaxonomy.js'
 import { getStrategy, listStrategies } from '../services/crawlers/strategyRegistry.js'
 import { searchWebForItem, KNOWN_ITEM_SOURCES, parseItemRequest } from '../services/crawlers/itemFundingCrawler.js'
@@ -957,6 +958,11 @@ router.post('/specific-need', ensureAuth, async (req, res) => {
   }
 
   if (!(await ensureProfileAccess(req, res, String(profile_id)))) return
+  // Entitlement: item-funding LIVE SEARCH is gated by the same capability as the
+  // item-funding crawler queueing, so the two can't diverge (admins bypass). In
+  // the canonical catalog every tier currently includes item funding, so this is
+  // a no-op for normal users — but it makes server-side enforcement consistent.
+  if (!(await requireTierCapability(req, res, String(profile_id), TIER_CAPABILITIES.ITEM_FUNDING))) return
 
   try {
     const db = req.db

@@ -10,7 +10,8 @@ import { Badge } from "@/components/ui/badge"
 import { Loader2, PenSquare, ShieldCheck, Users, FileText } from "lucide-react"
 import { useToast } from "@/components/ui/use-toast"
 import { useAuthStore } from "@/stores/authStore"
-import { listBillingTiers, listBillingAccounts, updateBillingAccount, getBillingAccount } from "@/api/billing"
+import { listBillingTiers, listBillingAccounts, updateBillingAccount, getBillingAccount, getBillingOverview } from "@/api/billing"
+import TierMatrix from "@/components/billing/TierMatrix.jsx"
 import { getProfile } from "@/api/profiles"
 import { labelForProfileType } from "@/services/profileTypes"
 import { Link } from "react-router-dom"
@@ -474,7 +475,10 @@ function MemberBillingCard({ profileId, billing, isLoading, onRefresh }) {
   }
 
   const tier = billing.account?.tier
-  const monthly = billing.account?.custom_monthly_cents ?? tier?.base_monthly_cents ?? null
+  // Prefer the effective (seat-driven, discount/pro-bono-adjusted) monthly from
+  // the /me endpoint; fall back to the raw tier price for older shapes.
+  const monthly = billing.billing?.net_monthly_cents
+    ?? billing.account?.custom_monthly_cents ?? tier?.base_monthly_cents ?? null
   const hourly = billing.account?.custom_hourly_cents ?? tier?.hourly_rate_cents ?? null
 
   return (
@@ -545,9 +549,11 @@ export default function Billing() {
     enabled: isAdmin,
   })
 
+  // Non-admin overview uses the read-only /me endpoint (the /accounts/:id route
+  // is admin-only). It returns { account, billing (effective seat-driven amount) }.
   const activeAccountQuery = useQuery({
     queryKey: ["billing-account", activeProfileId],
-    queryFn: () => getBillingAccount(activeProfileId),
+    queryFn: () => getBillingOverview(activeProfileId),
     enabled: !isAdmin && Boolean(activeProfileId),
   })
 
@@ -672,6 +678,9 @@ export default function Billing() {
           profileQuery.refetch()
         }}
       />
+      <div className="mt-6">
+        <TierMatrix currentTierId={activeAccountQuery.data?.account?.tier?.id || null} />
+      </div>
     </div>
   )
 }
