@@ -1,6 +1,6 @@
 import React, { useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { Bot, Copy, Eye, KeyRound, Loader2, Lock, Plus, ShieldCheck, Sparkles, Trash2 } from "lucide-react"
+import { Bot, Copy, Eye, FileUp, KeyRound, Loader2, Lock, Plus, ShieldCheck, Sparkles, Trash2, Upload } from "lucide-react"
 import { apiFetch } from "@/api/client"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
@@ -33,6 +33,15 @@ export default function SavedLoginsCard({ profileId }) {
   const [genForm, setGenForm] = useState({ portalHost: "", login_url: "", username: "", label: "" })
   const [revealedPassword, setRevealedPassword] = useState(null) // { host, username, password }
   const [revealAlreadyDone, setRevealAlreadyDone] = useState(false)
+
+  // Bulk CSV import (Chrome / Edge / Brave / Firefox / 1Password / LastPass).
+  // The user picks a file, the textarea fills in, and the server returns a
+  // structured summary that we render below the dialog. Plaintext content
+  // is never echoed in the UI — only counts and skipped/error reasons.
+  const [importOpen, setImportOpen] = useState(false)
+  const [importCsvText, setImportCsvText] = useState("")
+  const [importSource, setImportSource] = useState("Chrome")
+  const [importResult, setImportResult] = useState(null)
 
   const set = (k, v) => setForm((s) => ({ ...s, [k]: v }))
   const setGen = (k, v) => setGenForm((s) => ({ ...s, [k]: v }))
@@ -158,8 +167,74 @@ export default function SavedLoginsCard({ profileId }) {
     }
   }
 
+  const importMutation = useMutation({
+    mutationFn: () =>
+      apiFetch(`/api/hamilton/automation/credentials/import-csv`, {
+        method: "POST",
+        body: JSON.stringify({
+          profileId,
+          csv_text: importCsvText,
+          source: importSource || "CSV import",
+        }),
+      }),
+    onSuccess: (resp) => {
+      setImportResult(resp)
+      // Drop the textarea contents from memory the moment the import is
+      // accepted. The encrypted rows live on the server; the plaintext
+      // CSV doesn't need to linger in the React state.
+      setImportCsvText("")
+      queryClient.invalidateQueries({ queryKey: ["hamilton-credentials", profileId] })
+      const imported = Number(resp?.imported || 0)
+      const skipped = Array.isArray(resp?.skipped) ? resp.skipped.length : 0
+      const errors = Array.isArray(resp?.errors) ? resp.errors.length : 0
+      toast({
+        title: `Imported ${imported} login${imported === 1 ? "" : "s"}`,
+        description: skipped || errors
+          ? `${skipped} skipped, ${errors} errors. See the dialog for details.`
+          : "All entries saved.",
+      })
+    },
+    onError: (err) => {
+      toast({
+        variant: "destructive",
+        title: "Could not import CSV",
+        description: err?.message || "Check that the file has url, username, and password columns.",
+      })
+    },
+  })
+
+  const handleCsvFile = (file) => {
+    if (!file) return
+    if (file.size > 5 * 1024 * 1024) {
+      toast({ variant: "destructive", title: "File too large", description: "CSV must be under 5 MB." })
+      return
+    }
+    const reader = new FileReader()
+    reader.onload = () => {
+      const text = typeof reader.result === "string" ? reader.result : ""
+      setImportCsvText(text)
+      // Heuristically guess the source label from the filename so the
+      // imported rows are tagged "Chrome", "Edge", etc. The user can
+      // override before clicking Import.
+      const lower = (file.name || "").toLowerCase()
+      if (lower.includes("chrome")) setImportSource("Chrome")
+      else if (lower.includes("edge")) setImportSource("Edge")
+      else if (lower.includes("brave")) setImportSource("Brave")
+      else if (lower.includes("firefox")) setImportSource("Firefox")
+      else if (lower.includes("1password")) setImportSource("1Password")
+      else if (lower.includes("lastpass")) setImportSource("LastPass")
+      else if (lower.includes("safari")) setImportSource("Safari")
+      else setImportSource("CSV import")
+    }
+    reader.onerror = () => {
+      toast({ variant: "destructive", title: "Could not read file", description: "Please try again." })
+    }
+    reader.readAsText(file)
+  }
+
   const canSave = form.username.trim() && form.password.trim() && (form.portalHost.trim() || form.login_url.trim())
   const canGenerate = genForm.username.trim() && (genForm.portalHost.trim() || genForm.login_url.trim())
+  const canImport = importCsvText.trim().length > 0 && /[,\t]/.test(importCsvText.split("\n")[0] || "")
 
   return (
     <Card data-flash-id="saved-logins">
@@ -174,6 +249,15 @@ export default function SavedLoginsCard({ profileId }) {
           </CardTitle>
           {profileId && (
             <div className="flex items-center gap-1">
+              <Button
+                variant="outline" size="sm"
+                className="h-7 gap-1 px-2 text-xs"
+                onClick={() => { setImportResult(null); setImportOpen(true) }}
+                title="Import a Chrome / Edge / Brave / Firefox / 1Password / LastPass CSV password export"
+              >
+                <FileUp className="h-3.5 w-3.5" />
+                Import CSV
+              </Button>
               <Button
                 variant="outline" size="sm"
                 className="h-7 gap-1 px-2 text-xs border-amber-200 bg-amber-50 text-amber-900 hover:bg-amber-100"
@@ -255,6 +339,120 @@ export default function SavedLoginsCard({ profileId }) {
           </div>
         )}
       </CardContent>
+
+      {/* Bulk CSV import (Chrome / Edge / Brave / Firefox / 1Password /
+          LastPass). Plaintext CSV is sent ONCE; the server encrypts each
+          row at rest and returns a structured, no-plaintext summary. */}
+      <Dialog open={importOpen} onOpenChange={(o) => { setImportOpen(o); if (!o) { setImportResult(null); setImportCsvText("") } }}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <FileUp className="h-4 w-4 text-indigo-600" />
+              Import logins from a CSV
+            </DialogTitle>
+            <DialogDescription>
+              Drop in a Chrome / Edge / Brave / Firefox / 1Password / LastPass password export.
+              Hamilton encrypts every password as soon as it lands on the server and skips Android-only entries
+              (apps without a usable web host) and rows missing a username or password.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-3">
+            <div className="flex items-center gap-2">
+              <Label
+                htmlFor="csv-file"
+                className="cursor-pointer inline-flex items-center gap-2 rounded-md border border-slate-200 bg-white px-3 py-2 text-sm hover:bg-slate-50"
+              >
+                <Upload className="h-4 w-4 text-slate-600" />
+                Choose CSV file…
+              </Label>
+              <input
+                id="csv-file"
+                type="file"
+                accept=".csv,text/csv"
+                className="hidden"
+                onChange={(e) => handleCsvFile(e.target.files?.[0])}
+              />
+              <div className="flex-1" />
+              <Label htmlFor="csv-source" className="text-xs text-slate-500">Tag rows as</Label>
+              <Input
+                id="csv-source"
+                className="h-8 w-32"
+                value={importSource}
+                onChange={(e) => setImportSource(e.target.value)}
+                placeholder="Chrome"
+              />
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor="csv-text" className="text-xs">…or paste the CSV contents</Label>
+              <textarea
+                id="csv-text"
+                className="min-h-[140px] w-full rounded-md border border-slate-200 bg-white px-3 py-2 font-mono text-xs"
+                placeholder='name,url,username,password,note
+Example,https://example.com/login,user@example.com,hunter2,'
+                value={importCsvText}
+                onChange={(e) => setImportCsvText(e.target.value)}
+              />
+              <p className="text-xs text-slate-500">
+                The first row must be a header with at least <code>url</code>, <code>username</code>, <code>password</code> columns.
+                The CSV is sent over HTTPS and never stored on disk in plaintext.
+              </p>
+            </div>
+            {importResult && (
+              <Alert className="border-indigo-200 bg-indigo-50">
+                <ShieldCheck className="h-4 w-4 text-indigo-700" />
+                <AlertDescription className="text-indigo-950 text-sm space-y-1">
+                  <div>
+                    <span className="font-semibold">Imported {importResult.imported}</span>
+                    {" of "}{importResult.total} row{importResult.total === 1 ? "" : "s"}
+                    {Array.isArray(importResult.skipped) && importResult.skipped.length > 0 && (
+                      <> · {importResult.skipped.length} skipped</>
+                    )}
+                    {Array.isArray(importResult.errors) && importResult.errors.length > 0 && (
+                      <> · {importResult.errors.length} errors</>
+                    )}
+                  </div>
+                  {Array.isArray(importResult.skipped) && importResult.skipped.length > 0 && (
+                    <details className="text-xs">
+                      <summary className="cursor-pointer">Show skipped rows</summary>
+                      <ul className="mt-1 ml-4 list-disc">
+                        {importResult.skipped.slice(0, 50).map((s, i) => (
+                          <li key={i}>
+                            row {s.row}: {s.reason}{s.label ? ` — ${s.label}` : ""}
+                          </li>
+                        ))}
+                        {importResult.skipped.length > 50 && (
+                          <li>…and {importResult.skipped.length - 50} more.</li>
+                        )}
+                      </ul>
+                    </details>
+                  )}
+                  {Array.isArray(importResult.errors) && importResult.errors.length > 0 && (
+                    <details className="text-xs">
+                      <summary className="cursor-pointer">Show errors</summary>
+                      <ul className="mt-1 ml-4 list-disc">
+                        {importResult.errors.slice(0, 50).map((e, i) => (
+                          <li key={i}>row {e.row}: {e.reason}{e.message ? ` — ${e.message}` : ""}</li>
+                        ))}
+                      </ul>
+                    </details>
+                  )}
+                </AlertDescription>
+              </Alert>
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setImportOpen(false)} disabled={importMutation.isPending}>Close</Button>
+            <Button
+              onClick={() => importMutation.mutate()}
+              disabled={!canImport || importMutation.isPending}
+            >
+              {importMutation.isPending
+                ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Importing…</>
+                : <>Import {importCsvText ? `${Math.max(0, importCsvText.split("\n").length - 1)} rows` : "CSV"}</>}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Hamilton-generated login dialog: user supplies host + username; the
           server picks the password. Password is shown ONCE in the next dialog. */}

@@ -78,6 +78,7 @@ import {
   deleteCredential,
   revealPasswordOnceById,
 } from '../services/hamilton/hamiltonPortalCredentialService.js'
+import { importCredentialsFromCsv } from '../services/hamilton/hamiltonCredentialCsvImport.js'
 import {
   authorizeAttestation,
   revokeAttestation,
@@ -825,6 +826,45 @@ router.post('/credentials/:id/reveal-once', async (req, res) => {
     return res.json({ ok: true, already_revealed: false, password: result.password })
   } catch (err) {
     return res.status(500).json({ error: 'reveal_failed', detail: err?.message })
+  }
+})
+
+// Bulk import a Chrome / Edge / Brave / Firefox / 1Password / LastPass CSV
+// password export into a profile's vault. The plaintext CSV is sent as a
+// JSON `csv_text` field (or pasted into the textarea on the UI dialog) so
+// we don't need multipart parsing on this route. The server-side import
+// service:
+//   - encrypts every password at rest immediately,
+//   - is idempotent on (profile_id, portal_host) so re-importing the same
+//     export is safe,
+//   - returns a structured summary that NEVER echoes any password back.
+// Express's default 100 KB json limit is too small for a real Chrome CSV
+// (≈30 KB per 200 entries with notes); the route bumps it to 5 MB inline.
+router.post('/credentials/import-csv', express.json({ limit: '5mb' }), async (req, res) => {
+  const user = await requireProfileScope(req, res, req.body?.profileId)
+  if (!user) return
+  const csvText = typeof req.body?.csv_text === 'string'
+    ? req.body.csv_text
+    : typeof req.body?.csvText === 'string'
+      ? req.body.csvText
+      : null
+  if (!csvText || !csvText.trim()) {
+    return res.status(400).json({
+      error: 'csv_required',
+      message: 'Send the CSV contents in the `csv_text` field.',
+    })
+  }
+  const source = String(req.body?.source || 'CSV import').slice(0, 32)
+  try {
+    const result = await importCredentialsFromCsv(req.db, {
+      userId: getAuthUserId(user),
+      profileId: req.body.profileId,
+      csvText,
+      source,
+    })
+    return res.json({ ok: true, ...result })
+  } catch (err) {
+    return res.status(400).json({ error: 'import_failed', detail: err?.message, message: err?.message })
   }
 })
 
