@@ -2004,6 +2004,7 @@ app.use('/api/blocklist', lazyRouter('./routes/blocklist.js'));
 // same handlers. /api/yana-leads is the canonical path the admin UI
 // uses; /api/larry is kept so older clients and bookmarks keep working.
 app.use('/api/yana-leads', lazyRouter('./routes/larry.js'));
+app.use('/api/yana-contacts', lazyRouter('./routes/yanaLeads.js'));
 app.use('/api/larry', lazyRouter('./routes/larry.js'));
 // Robert — Funding Discovery Agent. Disabled by default; the scheduler
 // only starts if ROBERT_ENABLED + ROBERT_RUN_ON_SCHEDULE/STARTUP say so.

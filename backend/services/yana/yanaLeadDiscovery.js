@@ -87,6 +87,9 @@ export function getYanaConfig(env = process.env) {
 let schemaReady = new WeakMap()
 export function _resetYanaSchemaCache() { schemaReady = new WeakMap() }
 
+/** Public alias so other modules (e.g. owner-contacts import) can ensure the schema. */
+export async function ensureYanaLeadSchema(db) { return ensureSchema(db) }
+
 async function ensureSchema(db) {
   if (!db || schemaReady.has(db) || typeof db.exec !== 'function') return
   const isPg = db?.dialect === 'postgres'
