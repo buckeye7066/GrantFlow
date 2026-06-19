@@ -302,9 +302,12 @@ export function buildCollegeAidWorkspace({ sections = {}, matchedFunding = [], h
     fafsa.verification = { active: true, remaining: vc.remaining, total: vc.total, complete: vc.complete }
   }
 
+  // Both AWARDED and APPLIED-for aid count toward the student's running total
+  // (and reduce unmet need); the awarded/applied split is preserved for display.
+  const aidTotalInPlay = aidReceived + aidApplied
   const unmetNeed = coa.total === null
     ? null
-    : Math.max(0, coa.total - aidReceived - matchedFundingTotal)
+    : Math.max(0, coa.total - aidTotalInPlay - matchedFundingTotal)
 
   return {
     committed: true,
@@ -323,6 +326,8 @@ export function buildCollegeAidWorkspace({ sections = {}, matchedFunding = [], h
       received_total: aidReceived,
       applied_total: aidApplied,
       applied_count: aidAppliedCount,
+      // Awarded + applied combined — the figure that offsets cost of attendance.
+      total_in_play: aidTotalInPlay,
       // Normalized, id-bearing items so the UI can render/edit each entry.
       pipeline: aidPipeline.map((a) => ({
         id: a.id || null,

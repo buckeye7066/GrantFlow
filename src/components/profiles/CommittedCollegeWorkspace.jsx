@@ -261,6 +261,11 @@ export default function CommittedCollegeWorkspace({ profileId, applications = []
             <Stat label="Cost of attendance" value={fmt(coa.total)} />
             <Stat label="Aid received" value={fmt(workspace.aid?.received_total)} accent="text-emerald-700" />
             <Stat
+              label="Applied (pending)"
+              value={workspace.aid?.applied_total ? fmt(workspace.aid.applied_total) : '—'}
+              accent="text-amber-700"
+            />
+            <Stat
               label="Unmet need"
               value={workspace.unmet_need === null ? '—' : fmt(workspace.unmet_need)}
               accent={workspace.unmet_need ? 'text-amber-700' : 'text-emerald-700'}
@@ -292,7 +297,7 @@ export default function CommittedCollegeWorkspace({ profileId, applications = []
                 ))}
               </div>
               <p className="mt-2 text-xs text-slate-500">
-                Leave a field blank to clear it. Unmet need is computed as total − aid received − matched funding.
+                Leave a field blank to clear it. Unmet need = total − awarded − applied − matched funding.
               </p>
               <div className="mt-3 flex justify-end gap-2">
                 <Button size="sm" variant="outline" onClick={() => setCoaOpen(false)} disabled={coaMut.isPending}>Cancel</Button>
@@ -376,7 +381,7 @@ export default function CommittedCollegeWorkspace({ profileId, applications = []
               </Button>
             </div>
             <div className="mt-1 text-xs text-slate-500">
-              Awarded aid counts toward “Aid received” above and lowers unmet need. Applied-for scholarships are tracked as pending until you mark them awarded.
+              Both awarded and applied-for scholarships count toward her aid total and lower unmet need; the awarded vs. applied split is shown per entry so you can see what’s secured vs. still pending.
               {workspace.aid?.applied_count
                 ? ` · ${workspace.aid.applied_count} pending (${fmt(workspace.aid.applied_total)})`
                 : ''}
