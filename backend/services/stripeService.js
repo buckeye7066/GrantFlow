@@ -85,6 +85,39 @@ export async function getOrCreateStripeCustomerId(db, { userId, email, name } = 
   return { ok: true, stripe_customer_id: customer.id }
 }
 
+/**
+ * A hosted Stripe Checkout URL for one recurring billing invoice (ad-hoc
+ * amount, no pre-created Price). Carries metadata.kind='recurring_invoice' +
+ * billing_invoice_id + profile_id so the webhook (routes/stripeWebhook.js) can
+ * mark it paid. Returns null when Stripe isn't configured (invoice email then
+ * just asks the user to reply for a link). Never throws.
+ */
+export async function createInvoicePaymentLink(_db, { profileId, amountCents, invoiceId = null, currency = 'usd' } = {}) {
+  const stripe = createStripe()
+  if (!stripe || !amountCents || amountCents <= 0) return null
+  const base = String(process.env.PUBLIC_APP_URL || process.env.FRONTEND_URL || 'https://app.axiombiolabs.org').replace(/\/$/, '')
+  try {
+    const session = await stripe.checkout.sessions.create({
+      mode: 'payment',
+      line_items: [{
+        quantity: 1,
+        price_data: {
+          currency,
+          unit_amount: Math.round(Number(amountCents)),
+          product_data: { name: 'GrantFlow service invoice' },
+        },
+      }],
+      success_url: `${base}/Billing?paid=1`,
+      cancel_url: `${base}/Billing`,
+      metadata: { kind: 'recurring_invoice', billing_invoice_id: invoiceId || '', profile_id: String(profileId || '') },
+    })
+    return session?.url || null
+  } catch (error) {
+    console.warn('[stripeService] createInvoicePaymentLink failed:', error?.message)
+    return null
+  }
+}
+
 export async function createCheckoutSessionForPrice({
   priceId,
   quantity = 1,

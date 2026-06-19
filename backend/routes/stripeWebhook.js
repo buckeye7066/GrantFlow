@@ -5,6 +5,7 @@ import { markPaid } from '../services/pricing/pricingAccessGate.js'
 import { recordPaymentAccessEvent } from '../services/pricing/profilePricingInitializer.js'
 import { PAYMENT_ACCESS_EVENT, QUOTE_STATUS } from '../services/pricing/pricingTypes.js'
 import { updateQuoteStatus, tableExists } from '../services/pricing/quoteBuilder.js'
+import { markInvoicePaid } from '../services/billing/invoiceService.js'
 
 import { createLogger } from '../utils/logger.js'
 const routeLogger = createLogger('route:stripeWebhook')
@@ -119,6 +120,14 @@ router.post('/', async (req, res) => {
               })
             }
           }
+        }
+      } else if (kind === 'recurring_invoice') {
+        // Automated recurring billing invoice (invoiceService). Mark it paid +
+        // lift any suspension.
+        const billingInvoiceId = String(metadata.billing_invoice_id || '').trim()
+        const profileId = String(metadata.profile_id || '').trim() || null
+        if (billingInvoiceId || profileId) {
+          await markInvoicePaid(req.db, { invoiceId: billingInvoiceId || null, profileId, source: 'stripe_webhook' })
         }
       } else if (kind === 'hourly_invoice') {
         const invoiceId = String(metadata.hourly_invoice_id || '').trim()

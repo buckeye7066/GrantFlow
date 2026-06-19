@@ -7,56 +7,15 @@ import { roundBillableMinutes } from '../services/hourlyRounding.js'
 import { resolveChargeForQuote } from '../services/pricing/chargeResolver.js'
 import { getQuote } from '../services/pricing/quoteBuilder.js'
 import { PRICING_CATALOG_VERSION } from '../services/pricing/pricingTypes.js'
-import { markInvoicePaid } from '../services/billing/invoiceService.js'
 
 import { createLogger } from '../utils/logger.js'
 const routeLogger = createLogger('route:stripe')
 
 const router = express.Router()
 
-/**
- * Stripe webhook → flips an invoice to PAID (and lifts any suspension) when
- * Stripe reports payment. Dormant until STRIPE_SECRET_KEY + STRIPE_WEBHOOK_SECRET
- * are configured. NOTE: for signature verification this route must receive the
- * RAW request body (mount express.raw on this path in server.js before the JSON
- * parser); until Stripe is wired we accept the parsed body and skip verification.
- * Payment → invoice mapping uses Stripe metadata.profile_id / the stripe invoice id.
- */
-router.post('/webhook', async (req, res) => {
-  const secret = process.env.STRIPE_WEBHOOK_SECRET
-  // HARD REQUIREMENT: never act on an unverified event. We require the secret
-  // key, the webhook signing secret, AND a raw (Buffer) body (mount
-  // express.raw on this path before the JSON parser). No signature, no action —
-  // this prevents a forged invoice.paid from faking payment / lifting suspension.
-  if (!process.env.STRIPE_SECRET_KEY || !secret) {
-    return res.status(503).json({ ok: false, error: 'webhook_not_configured' })
-  }
-  if (!Buffer.isBuffer(req.body)) {
-    routeLogger.warn('stripe webhook rejected: body not raw (mount express.raw on /api/stripe/webhook)')
-    return res.status(400).json({ ok: false, error: 'raw_body_required' })
-  }
-  let event
-  try {
-    const { default: Stripe } = await import('stripe')
-    const stripe = new Stripe(process.env.STRIPE_SECRET_KEY)
-    event = stripe.webhooks.constructEvent(req.body, req.headers['stripe-signature'], secret)
-  } catch (err) {
-    routeLogger.warn('stripe webhook signature verification failed', { error: err?.message })
-    return res.status(400).json({ ok: false, error: 'invalid_signature' })
-  }
-  try {
-    const obj = event?.data?.object || {}
-    const profileId = obj?.metadata?.profile_id || null
-    const stripeInvoiceId = obj?.invoice || obj?.id || null
-    if (['invoice.paid', 'checkout.session.completed', 'payment_intent.succeeded'].includes(event?.type)) {
-      await markInvoicePaid(req.db, { profileId, stripeInvoiceId, source: 'stripe_webhook' })
-    }
-    return res.json({ received: true })
-  } catch (err) {
-    routeLogger.warn('stripe webhook handler failed', { error: err?.message })
-    return res.status(400).json({ ok: false, error: 'webhook_error' })
-  }
-})
+// NOTE: the Stripe webhook lives in routes/stripeWebhook.js, mounted at
+// /api/stripe/webhook with express.raw + signature verification (server.js).
+// Recurring-invoice payments are handled there (kind === 'recurring_invoice').
 
 function getPublicAppUrl() {
   // Prefer the same envs used by auth flows.
