@@ -25,6 +25,7 @@ import crypto from 'node:crypto'
 import psl from 'psl'
 import { encryptRuntimeSecret, decryptRuntimeSecret } from '../../utils/runtimeSecrets.js'
 import { normalizeHost } from './hamiltonCredentialSessionService.js'
+import { isValidTotpSecret } from './hamiltonTotp.js'
 
 /**
  * Registrable domain (eTLD+1) via the Public Suffix List. Returns null for
@@ -65,6 +66,9 @@ async function ensureSchema(db) {
       password_ciphertext TEXT,
       password_iv TEXT,
       password_tag TEXT,
+      totp_secret_ciphertext TEXT,
+      totp_secret_iv TEXT,
+      totp_secret_tag TEXT,
       status TEXT NOT NULL DEFAULT 'active',
       last_used_at ${tsType},
       generated_by TEXT,
@@ -98,6 +102,9 @@ async function ensureSchema(db) {
       ['generated_at', tsType],
       ['password_revealed_once_at', tsType],
       ['managed_by', 'TEXT'],
+      ['totp_secret_ciphertext', 'TEXT'],
+      ['totp_secret_iv', 'TEXT'],
+      ['totp_secret_tag', 'TEXT'],
     ]
     for (const [name, type] of wanted) {
       if (have.has(name)) continue
@@ -112,6 +119,9 @@ async function ensureSchema(db) {
       `generated_at ${tsType}`,
       `password_revealed_once_at ${tsType}`,
       'managed_by TEXT',
+      'totp_secret_ciphertext TEXT',
+      'totp_secret_iv TEXT',
+      'totp_secret_tag TEXT',
     ]) {
       try { await db.exec(`ALTER TABLE hamilton_portal_credentials ADD COLUMN IF NOT EXISTS ${col};`) }
       catch { /* benign */ }
@@ -142,6 +152,9 @@ function rowToMasked(row) {
     login_url: row.login_url || null,
     username_masked: maskUsername(row.username),
     has_password: Boolean(row.password_ciphertext),
+    // Whether an authenticator-app (TOTP) seed is saved so Hamilton can clear a
+    // 2FA gate on her own. The seed itself is NEVER returned — only this flag.
+    has_totp: Boolean(row.totp_secret_ciphertext),
     status: row.status,
     last_used_at: row.last_used_at || null,
     // Hamilton-generated logins (he created the account on the user's behalf
@@ -197,7 +210,7 @@ export function generateStrongPassword(length = 28) {
  */
 export async function saveCredential(db, {
   userId, profileId, portalHost, username, password,
-  label = null, loginUrl = null, managedBy = 'user',
+  label = null, loginUrl = null, managedBy = 'user', totpSecret = null,
 } = {}) {
   if (!db || !userId || !profileId) throw new Error('userId and profileId required')
   const host = normalizeHost(portalHost)
@@ -210,6 +223,15 @@ export async function saveCredential(db, {
   const provenance = ['admin', 'user', 'hamilton'].includes(managedBy) ? managedBy : 'user'
   await ensureSchema(db)
 
+  // Optional authenticator-app seed. Validate now so a malformed seed is
+  // rejected at save time (clear error) rather than silently failing at login.
+  // Encrypt it with the same AES-256-GCM envelope as the password.
+  const totp = totpSecret && String(totpSecret).trim() ? String(totpSecret).trim() : null
+  if (totp && !isValidTotpSecret(totp)) {
+    throw new Error('totpSecret is not a valid authenticator (base32 seed or otpauth:// URI)')
+  }
+  const totpEnc = totp ? encryptRuntimeSecret(totp) : null
+
   const enc = encryptRuntimeSecret(String(password))
   const nowFn = db?.dialect === 'postgres' ? 'now()' : 'CURRENT_TIMESTAMP'
   // Idempotent on (profile, host, username) — multiple logins per host coexist,
@@ -219,14 +241,29 @@ export async function saveCredential(db, {
   ).get(String(profileId), host, String(username))
 
   if (existing) {
-    await db.prepare(
-      `UPDATE hamilton_portal_credentials SET
-         user_id = ?, label = ?, login_url = ?, username = ?,
-         password_ciphertext = ?, password_iv = ?, password_tag = ?,
-         managed_by = ?, status = 'active', updated_at = ${nowFn}
-       WHERE id = ?`,
-    ).run(String(userId), label, loginUrl, String(username),
-      enc.value_ciphertext, enc.iv, enc.tag, provenance, existing.id)
+    // Re-saving WITHOUT a totpSecret leaves any existing one intact (a password
+    // update shouldn't silently drop the 2FA seed); passing one replaces it.
+    if (totpEnc) {
+      await db.prepare(
+        `UPDATE hamilton_portal_credentials SET
+           user_id = ?, label = ?, login_url = ?, username = ?,
+           password_ciphertext = ?, password_iv = ?, password_tag = ?,
+           totp_secret_ciphertext = ?, totp_secret_iv = ?, totp_secret_tag = ?,
+           managed_by = ?, status = 'active', updated_at = ${nowFn}
+         WHERE id = ?`,
+      ).run(String(userId), label, loginUrl, String(username),
+        enc.value_ciphertext, enc.iv, enc.tag,
+        totpEnc.value_ciphertext, totpEnc.iv, totpEnc.tag, provenance, existing.id)
+    } else {
+      await db.prepare(
+        `UPDATE hamilton_portal_credentials SET
+           user_id = ?, label = ?, login_url = ?, username = ?,
+           password_ciphertext = ?, password_iv = ?, password_tag = ?,
+           managed_by = ?, status = 'active', updated_at = ${nowFn}
+         WHERE id = ?`,
+      ).run(String(userId), label, loginUrl, String(username),
+        enc.value_ciphertext, enc.iv, enc.tag, provenance, existing.id)
+    }
     return rowToMasked(await db.prepare('SELECT * FROM hamilton_portal_credentials WHERE id = ?').get(existing.id))
   }
 
@@ -234,10 +271,13 @@ export async function saveCredential(db, {
   await db.prepare(
     `INSERT INTO hamilton_portal_credentials
        (id, user_id, profile_id, portal_host, label, login_url, username,
-        password_ciphertext, password_iv, password_tag, managed_by, status, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ${nowFn}, ${nowFn})`,
+        password_ciphertext, password_iv, password_tag,
+        totp_secret_ciphertext, totp_secret_iv, totp_secret_tag,
+        managed_by, status, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ${nowFn}, ${nowFn})`,
   ).run(id, String(userId), String(profileId), host, label, loginUrl, String(username),
-    enc.value_ciphertext, enc.iv, enc.tag, provenance)
+    enc.value_ciphertext, enc.iv, enc.tag,
+    totpEnc?.value_ciphertext ?? null, totpEnc?.iv ?? null, totpEnc?.tag ?? null, provenance)
   return rowToMasked(await db.prepare('SELECT * FROM hamilton_portal_credentials WHERE id = ?').get(id))
 }
 
@@ -428,12 +468,26 @@ export async function getDecryptedCredential(db, { profileId, portalHost } = {})
   } catch {
     return null
   }
+  // Decrypt the authenticator seed too, when present, so the engine can derive
+  // the live 2FA code. A decrypt failure here is non-fatal: Hamilton still has
+  // username+password and falls back to the 2FA hard-stop.
+  let totpSecret = null
+  if (match.totp_secret_ciphertext) {
+    try {
+      totpSecret = decryptRuntimeSecret({
+        value_ciphertext: match.totp_secret_ciphertext,
+        iv: match.totp_secret_iv,
+        tag: match.totp_secret_tag,
+      })
+    } catch { totpSecret = null }
+  }
   return {
     id: match.id,
     portal_host: match.portal_host,
     login_url: match.login_url || null,
     username: match.username || null,
     password,
+    totp_secret: totpSecret,
   }
 }
 
