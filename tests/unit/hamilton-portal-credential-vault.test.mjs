@@ -158,6 +158,75 @@ describe('saveGeneratedCredential', () => {
   })
 })
 
+describe('TOTP (authenticator-app) seed storage', () => {
+  // RFC 6238 base32 seed used across these assertions.
+  const SEED = 'GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ'
+
+  it('saves an encrypted TOTP seed and exposes only has_totp to clients', async () => {
+    const db = makeDb()
+    const cred = await saveCredential(db, {
+      userId: 'u-1', profileId: 'p-1', portalHost: 'mtsu.edu',
+      username: 'real@user.com', password: 'pw-123456', totpSecret: SEED,
+    })
+    assert.equal(cred.has_totp, true, 'masked row advertises the seed presence')
+    assert.ok(!('totp_secret' in cred), 'never leak the seed plaintext')
+    assert.ok(!('totp_secret_ciphertext' in cred), 'never leak the seed ciphertext')
+
+    const rows = await listCredentialsForProfile(db, 'p-1')
+    assert.equal(rows[0].has_totp, true)
+    assert.ok(!('totp_secret' in rows[0]))
+  })
+
+  it('server-side decrypt returns the seed so the engine can derive a code', async () => {
+    const db = makeDb()
+    await saveCredential(db, {
+      userId: 'u-1', profileId: 'p-1', portalHost: 'mtsu.edu',
+      username: 'real@user.com', password: 'pw-123456', totpSecret: SEED,
+    })
+    const decrypted = await getDecryptedCredential(db, { profileId: 'p-1', portalHost: 'login.mtsu.edu' })
+    assert.equal(decrypted.totp_secret, SEED, 'autopilot path recovers the exact seed')
+  })
+
+  it('omitting totpSecret on re-save preserves an existing seed (no silent drop)', async () => {
+    const db = makeDb()
+    await saveCredential(db, {
+      userId: 'u-1', profileId: 'p-1', portalHost: 'mtsu.edu',
+      username: 'real@user.com', password: 'pw-1', totpSecret: SEED,
+    })
+    // Re-save (e.g. a password change) without re-supplying the seed.
+    await saveCredential(db, {
+      userId: 'u-1', profileId: 'p-1', portalHost: 'mtsu.edu',
+      username: 'real@user.com', password: 'pw-2',
+    })
+    const decrypted = await getDecryptedCredential(db, { profileId: 'p-1', portalHost: 'mtsu.edu' })
+    assert.equal(decrypted.password, 'pw-2', 'password updated')
+    assert.equal(decrypted.totp_secret, SEED, 'seed survived the password update')
+  })
+
+  it('credentials without a seed report has_totp:false and totp_secret:null', async () => {
+    const db = makeDb()
+    await saveCredential(db, {
+      userId: 'u-1', profileId: 'p-1', portalHost: 'mtsu.edu',
+      username: 'real@user.com', password: 'pw-1',
+    })
+    const rows = await listCredentialsForProfile(db, 'p-1')
+    assert.equal(rows[0].has_totp, false)
+    const decrypted = await getDecryptedCredential(db, { profileId: 'p-1', portalHost: 'mtsu.edu' })
+    assert.equal(decrypted.totp_secret, null)
+  })
+
+  it('rejects a malformed TOTP seed at save time', async () => {
+    const db = makeDb()
+    await assert.rejects(
+      () => saveCredential(db, {
+        userId: 'u-1', profileId: 'p-1', portalHost: 'mtsu.edu',
+        username: 'real@user.com', password: 'pw-1', totpSecret: 'not a real seed !!!',
+      }),
+      /valid authenticator/,
+    )
+  })
+})
+
 describe('revealPasswordOnceById', () => {
   it('returns the plaintext exactly once, then refuses forever', async () => {
     const db = makeDb()
