@@ -1994,6 +1994,10 @@ app.use('/api/saved-grants', savedGrantsRouter);
 app.use('/api/foundations', foundationsRouter);
 // John — Outreach Drafting Agent. Draft-only; never sends. Admin-only except /health.
 app.use('/api/john', lazyRouter('./routes/john.js'));
+// Owner Blocklist — canonical denylist fed by phone (Tasker) + Gmail filters +
+// manual entries. Enforced at auth, inbound, and outreach. Admin-only except
+// the token-authed /ingest endpoint devices push to.
+app.use('/api/blocklist', lazyRouter('./routes/blocklist.js'));
 // Yana Lead Discovery & Outreach pipeline. The router lives at
 // backend/routes/larry.js for filename stability; both paths serve the
 // same handlers. /api/yana-leads is the canonical path the admin UI

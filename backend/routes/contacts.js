@@ -8,6 +8,7 @@ import {
 } from '../utils/accessControl.js'
 
 import { createLogger } from '../utils/logger.js'
+import { enforce as enforceOwnerBlocklist } from '../services/blocklist/ownerBlocklistService.js'
 const routeLogger = createLogger('route:contacts')
 
 const router = express.Router()
@@ -169,6 +170,21 @@ router.post('/', async (req, res) => {
     const id = data.id ? String(data.id) : crypto.randomUUID()
     const name = String(data.name || '').trim()
     if (!name) return res.status(400).json({ error: 'name required' })
+
+    // Owner blocklist: refuse to store a contact whose email/phone/name is blocked.
+    const blocked = await enforceOwnerBlocklist(
+      req.db,
+      { email: data.email, phone: data.phone, name },
+      { context: 'inbound_contact' },
+    )
+    if (blocked.blocked) {
+      return res.status(403).json({
+        error: 'blocked',
+        error_type: 'blocked',
+        message: 'This contact is on the owner blocklist and cannot be added.',
+      })
+    }
+
     const profileId = data.profile_id ? String(data.profile_id) : null
 
     if (profileId) {

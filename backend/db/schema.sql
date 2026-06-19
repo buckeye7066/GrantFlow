@@ -3670,3 +3670,36 @@ CREATE TABLE IF NOT EXISTS yana_lead_runs (
 CREATE INDEX IF NOT EXISTS idx_yana_lead_runs_started ON yana_lead_runs(started_at);
 CREATE INDEX IF NOT EXISTS idx_yana_lead_runs_status  ON yana_lead_runs(status);
 
+-- Owner Blocklist — canonical denylist (see migration 109_owner_blocklist.sql).
+-- The users.status/blocked_* ban columns live in the migration only, on purpose,
+-- so a fresh-DB bootstrap never collides with that ALTER.
+CREATE TABLE IF NOT EXISTS owner_blocklist (
+  id TEXT PRIMARY KEY,
+  match_type TEXT NOT NULL,
+  match_value TEXT NOT NULL,
+  match_value_raw TEXT,
+  reason TEXT,
+  source TEXT,
+  enforcement TEXT NOT NULL DEFAULT 'block',
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  added_by_user_id TEXT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_owner_blocklist_type_value ON owner_blocklist(match_type, match_value);
+CREATE INDEX IF NOT EXISTS idx_owner_blocklist_type ON owner_blocklist(match_type);
+
+CREATE TABLE IF NOT EXISTS owner_blocklist_hits (
+  id TEXT PRIMARY KEY,
+  blocklist_id TEXT,
+  match_type TEXT,
+  match_value TEXT,
+  context TEXT,
+  subject_email TEXT,
+  subject_phone TEXT,
+  subject_name TEXT,
+  subject_organization TEXT,
+  enforcement TEXT,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_owner_blocklist_hits_created ON owner_blocklist_hits(created_at);
+

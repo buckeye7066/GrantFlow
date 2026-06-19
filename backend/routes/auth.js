@@ -6,6 +6,7 @@ import twilio from 'twilio'
 import { fileURLToPath } from 'url'
 import { dirname, join } from 'path'
 import { initializeAnyaOnLogin } from '../services/anyaLoginTrigger.js'
+import { enforce as enforceOwnerBlocklist } from '../services/blocklist/ownerBlocklistService.js'
 import { scheduleAdminGeoCrawlOnLogin } from '../services/adminGeoCrawlOnLogin.js'
 import { recordClientSignInEvent } from '../services/adminLoginEventStore.js'
 import { getOpenAIOptional } from '../utils/aiProviders.js'
@@ -1653,6 +1654,19 @@ router.post('/email/start', emailStartLimiter, async (req, res) => {
 
     // In production, enforce profile-email gating: allow only admin emails OR emails that match an existing profile.
     const normalizedEmail = normalizeEmail(email)
+
+    // Owner blocklist: a blocked email cannot begin authentication. Any existing
+    // account is marked `banned`. (No-op when the blocklist has no matching rule.)
+    const blockStart = await enforceOwnerBlocklist(
+      req.db,
+      { email: normalizedEmail },
+      { context: 'auth_email_start', banAccount: true },
+    )
+    if (blockStart.blocked) {
+      console.warn('[auth/email/start] Blocked by owner blocklist:', normalizedEmail)
+      return res.status(403).json({ error_type: 'blocked', error: 'This account has been blocked.' })
+    }
+
     const isAdmin = isAdminEmail(normalizedEmail)
     const profileMatch = await findProfileRowForEmail(req.db, normalizedEmail)
     if (isProd && !isAdmin && !profileMatch) {
@@ -1826,6 +1840,17 @@ router.post('/email/verify', async (req, res) => {
   }
   const code = normalizeSixDigitCode(codeRaw)
   if (!code) return res.status(400).json({ error: 'Code must be a 6-digit number' })
+
+  // Owner blocklist: a blocked email can never complete verification.
+  const blockVerify = await enforceOwnerBlocklist(
+    req.db,
+    { email },
+    { context: 'auth_email_verify', banAccount: true },
+  )
+  if (blockVerify.blocked) {
+    console.warn('[auth/email/verify] Blocked by owner blocklist:', email)
+    return res.status(403).json({ error_type: 'blocked', error: 'This account has been blocked.' })
+  }
 
   // Always compute the incoming hash.
   const incomingHash = hashValue(`${email}:${code}`)
@@ -2874,6 +2899,17 @@ router.post('/password/login', passwordRateLimiter, async (req, res) => {
     }
 
     const isProd = isProductionEnvironment()
+
+    // Owner blocklist: a blocked email cannot log in with a password either.
+    const blockLogin = await enforceOwnerBlocklist(
+      req.db,
+      { email },
+      { context: 'auth_password_login', banAccount: true },
+    )
+    if (blockLogin.blocked) {
+      console.warn('[auth/password/login] Blocked by owner blocklist:', email)
+      return res.status(403).json({ error_type: 'blocked', error: 'This account has been blocked.' })
+    }
 
     const isAdmin = isAdminEmail(email)
     const profileMatch = await findProfileRowForEmail(req.db, email)
