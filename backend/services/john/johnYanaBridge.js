@@ -29,6 +29,7 @@ import { makeYanaLeadPacket } from './johnTypes.js'
 import { getJohnConfig } from './johnOutreachSafety.js'
 import { makeSuppressionChecker } from './johnSuppressionService.js'
 import { isValidEmail } from './johnOutreachSafety.js'
+import { isExcludedEmail, isExcludedUrl } from '../yana/prospectExclusions.js'
 
 /**
  * The default lead source — empty. Real deployments should register a
@@ -77,6 +78,22 @@ function hasUsableEmail(lead) {
 }
 
 /**
+ * Drop a lead whose website or any email contact resolves to an excluded domain
+ * (grant-tech competitor, aggregator/directory, social, or junk infra). Keeps
+ * John from drafting outreach to e.g. a competitor's address that enrichment
+ * mistakenly scraped off an aggregator page.
+ */
+function isExcludedLead(lead) {
+  if (isExcludedUrl(lead?.website_url)) return true
+  const pts = Array.isArray(lead?.contact_points) ? lead.contact_points : []
+  return pts.some((p) => {
+    if (!p || (p.type !== 'email' && p.type !== 'mailto')) return false
+    const value = p.value || p.email
+    return value && isExcludedEmail(value)
+  })
+}
+
+/**
  * Fetch + filter + sort lead packets ready for John to draft.
  *
  * Returns:
@@ -118,6 +135,7 @@ export async function fetchLeadsForJohn({
     else if (config.requireContactSource && lead.source_urls.length === 0) drop = 'missing_contact_source'
     else if (Array.isArray(lead.do_not_contact_flags) && lead.do_not_contact_flags.length > 0) drop = 'do_not_contact'
     else if (!hasUsableEmail(lead)) drop = 'no_usable_email_contact'
+    else if (isExcludedLead(lead)) drop = 'excluded_domain'
     else if (lead.organization_name && supp.isSuppressed({ type: 'organization', value: lead.organization_name })) {
       drop = 'organization_suppressed'
     } else if (lead.lead_id && db && (await hasDraftForLead(db, lead.lead_id))) {

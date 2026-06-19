@@ -16,6 +16,7 @@
  */
 
 import { createLogger } from '../../utils/logger.js'
+import { homepageNameScore, isExcludedEmail, isExcludedUrl } from './prospectExclusions.js'
 
 const log = createLogger('yanaContactEnrichment')
 
@@ -112,17 +113,24 @@ export function makeContactEnricher(deps = {}) {
         return { ok: false, reason: 'search_failed' }
       }
 
-      const homepage = (results || [])
+      // Candidate homepages: real-looking, not a directory, not an excluded
+      // competitor/aggregator (e.g. the org's Instrumentl listing). Then prefer
+      // the one whose hostname actually matches the org name, so we don't grab a
+      // random unrelated site and scrape someone else's contact email.
+      const candidates = (results || [])
         .map((r) => String(r?.url || '').trim())
-        .find((u) => looksLikeOfficialSite(u))
-      if (!homepage) return { ok: false, reason: 'no_homepage_found' }
+        .filter((u) => u && looksLikeOfficialSite(u) && !isExcludedUrl(u))
+      if (candidates.length === 0) return { ok: false, reason: 'no_homepage_found' }
+      candidates.sort((a, b) => homepageNameScore(b, name) - homepageNameScore(a, name))
+      const homepage = candidates[0]
 
       let email = null
       let excerpt = null
       if (fetcher) {
         try {
           const html = await fetcher(homepage)
-          email = extractEmailsFromHtml(html)[0] || null
+          const found = extractEmailsFromHtml(html).find((e) => !isExcludedEmail(e)) || null
+          email = found
           excerpt = htmlToText(html)
         } catch (err) {
           log.warn(`enrich fetch failed for ${homepage}: ${err?.message || err}`)
