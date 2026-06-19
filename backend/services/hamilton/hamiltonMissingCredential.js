@@ -10,6 +10,9 @@
  * still trigger 2FA on their authenticator app / phone.
  */
 
+import { getDecryptedCredentialWithFallback } from './hamiltonPortalCredentialService.js'
+import { emitHamiltonNotificationToProfileAndAdmins } from './hamiltonNotifications.js'
+
 export const MISSING_CREDENTIAL_NOTIFICATION_TYPE = 'hamilton_missing_credential'
 
 export function hostOfUrl(u) {
@@ -57,4 +60,30 @@ export function missingCredentialNotice({ profileId, host, loginUrl = null, fund
       requires_authentication_note: true,
     },
   }
+}
+
+/**
+ * Check the vaults and, if no saved login exists for the portal (profile or admin
+ * vault), flag it to the profile owner + admins. Idempotent intent: callers pass
+ * a real host; if a credential already exists we do nothing. Returns
+ * { flagged, alreadyHadCredential, host }.
+ */
+export async function flagMissingPortalCredential(db, { profileId, profileUserId = null, portalHost, loginUrl = null, fundingTitle = null } = {}) {
+  const host = hostOfUrl(portalHost) || (portalHost ? String(portalHost).toLowerCase() : null)
+  if (!db || !profileId || !host) return { flagged: false, alreadyHadCredential: false, host }
+
+  const existing = await getDecryptedCredentialWithFallback(db, { profileId, portalHost: host }).catch(() => null)
+  if (existing) return { flagged: false, alreadyHadCredential: true, host }
+
+  const notice = missingCredentialNotice({ profileId, host, loginUrl, fundingTitle })
+  const ids = await emitHamiltonNotificationToProfileAndAdmins(db, {
+    profileId,
+    profileUserId,
+    type: notice.type,
+    title: notice.title,
+    message: notice.message,
+    severity: 'warning',
+    data: notice.data,
+  })
+  return { flagged: true, alreadyHadCredential: false, host, notification_ids: ids }
 }
