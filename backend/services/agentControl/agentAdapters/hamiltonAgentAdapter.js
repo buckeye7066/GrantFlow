@@ -127,12 +127,20 @@ export class HamiltonAgentAdapter extends BaseAgentAdapter {
     const maxBatch = Math.max(1, Math.min(25, Number(options?.hamilton_batch_size) || 5))
     let tasks = []
     try {
+      // application_tasks tracks the source via opportunity_id / grant_id
+      // (the canonical pair from automateSingleSource). The previous SELECT
+      // referenced a non-existent `funding_source_id` column AND a
+      // non-existent `resolved_at` column, so EVERY Hamilton run silently
+      // returned zero tasks and Hamilton looked broken in Mission Control
+      // even when the queue had real work. The status set below covers both
+      // the legacy ("queued","ready") and automation-task-extension
+      // ("analyzing","ready_to_start") flows defined in TASK_STATUSES.
       tasks = await db
         .prepare(`
-          SELECT id, profile_id, funding_source_id, automation_type, status
+          SELECT id, profile_id, opportunity_id, grant_id, automation_type,
+                 status, current_pipeline_stage, selected_from_stage
             FROM application_tasks
-           WHERE status IN ('queued','running')
-              OR (status = 'blocked' AND COALESCE(resolved_at, '') != '')
+           WHERE status IN ('queued','ready','analyzing','ready_to_start')
            ORDER BY updated_at ASC
            LIMIT ?
         `)
@@ -161,7 +169,17 @@ export class HamiltonAgentAdapter extends BaseAgentAdapter {
         const r = await automateSingleSource(db, {
           profileId: task.profile_id,
           userId: null,
-          source: { id: task.funding_source_id, kind: 'application_task' },
+          // automateSingleSource keys off opportunity_id OR grant_id (it
+          // throws "source must include opportunity_id or grant_id" if
+          // neither is present). Pass them straight through from the task
+          // row so Hamilton processes the right opportunity/grant and the
+          // pipeline-stage hint is preserved for stage transitions.
+          source: {
+            opportunity_id: task.opportunity_id || null,
+            grant_id: task.grant_id || null,
+            current_stage: task.current_pipeline_stage || task.selected_from_stage || null,
+            kind: 'application_task',
+          },
           options: { control_run_id: controlRunId },
         })
         results.push({ task_id: task.id, ok: true, status: r?.task?.status || 'unknown' })

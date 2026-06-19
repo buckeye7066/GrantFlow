@@ -6,6 +6,13 @@ import { guardProfileSectionForWrite } from '../utils/guardedProfileSectionWrite
 // behavior is now Hamilton Autopilot driving the live portal — see
 // backend/services/hamilton/hamiltonPortalProviders.js for the canonical
 // provider catalogue with automation_supported / session_reuse / etc.
+// Manual-import providers exposed to the user's school-portal merge UI.
+// Mirrors the institutional providers in
+// backend/services/hamilton/hamiltonPortalProviders.js so an Anastasia-shape
+// student can manually merge institutional aid (MTSU True Blue, MTSU
+// Centennial, etc.) into her pipeline even before Hamilton Autopilot is
+// granted SSO/2FA access. New providers should be added here AND in
+// hamiltonPortalProviders so the two surfaces stay aligned.
 const SCHOOL_PORTAL_PROVIDERS = Object.freeze([
   {
     id: 'tsac',
@@ -25,7 +32,71 @@ const SCHOOL_PORTAL_PROVIDERS = Object.freeze([
     description:
       'Manual import is supported as a fallback. Hamilton Autopilot can drive the public TSAC application form unattended once the user authorizes Autopilot.',
     limitations: [
-      'Yana refuses to type an FSA ID or other federal credential — those use saved session or vault references only.',
+      'Hamilton refuses to type an FSA ID or other federal credential — those use saved session or vault references only.',
+    ],
+  },
+  {
+    id: 'mtsu',
+    name: 'Middle Tennessee State University Financial Aid',
+    short_name: 'MTSU',
+    portal_url: 'https://www.mtsu.edu/financial-aid/',
+    integration_mode: 'pilot_manual_import',
+    integration_modes: ['pilot_manual_import', 'browser_autopilot', 'browser_session_reuse'],
+    live_supported: true,
+    automation_supported: true,
+    authentication_strategy: 'sso',
+    session_reuse_supported: true,
+    credential_reference_supported: true,
+    captcha_likely: false,
+    two_factor_likely: true,
+    adapter_name: 'genericUniversityFinancialAidAdapter',
+    description:
+      'Manual import lets the student paste their MTSU MyMT / AcademicWorks award letter so Hamilton can fold institutional aid (True Blue, Centennial, Honors, departmental) into the same pipeline that holds her FAFSA / TSAC awards. Browser Autopilot is also supported once the student authorizes a saved MTSU SSO session.',
+    limitations: [
+      'MTSU SSO is 2FA-protected; Hamilton stops for 2FA unless an active session is reused.',
+      'Hamilton never types a Pipeline MT password — it relies on saved session or vault reference.',
+    ],
+  },
+  {
+    id: 'fafsa',
+    name: 'Free Application for Federal Student Aid (FAFSA)',
+    short_name: 'FAFSA',
+    portal_url: 'https://studentaid.gov/h/apply-for-aid/fafsa',
+    integration_mode: 'pilot_manual_import',
+    integration_modes: ['pilot_manual_import', 'secure_credential_reference', 'browser_session_reuse'],
+    live_supported: true,
+    automation_supported: true,
+    authentication_strategy: 'fsa_id',
+    session_reuse_supported: true,
+    credential_reference_supported: true,
+    captcha_likely: false,
+    two_factor_likely: true,
+    adapter_name: 'genericUniversityFinancialAidAdapter',
+    description:
+      'Manual import lets the student paste their Student Aid Report / FAFSA Submission Summary awards so Pell + Direct Loans + Work-Study show up alongside institutional aid in the pipeline.',
+    limitations: [
+      'Hamilton never types an FSA ID password — federal portal is saved session / vault reference only.',
+    ],
+  },
+  {
+    id: 'common_app',
+    name: 'Common Application',
+    short_name: 'CommonApp',
+    portal_url: 'https://www.commonapp.org/',
+    integration_mode: 'pilot_manual_import',
+    integration_modes: ['pilot_manual_import', 'browser_autopilot'],
+    live_supported: true,
+    automation_supported: true,
+    authentication_strategy: 'username_password',
+    session_reuse_supported: true,
+    credential_reference_supported: true,
+    captcha_likely: true,
+    two_factor_likely: false,
+    adapter_name: 'genericAdmissionsPortalAdapter',
+    description:
+      'Manual import lets the student paste their Common App scholarship / fee-waiver awards so admissions-side aid appears in the same pipeline as financial aid awards.',
+    limitations: [
+      'CAPTCHA is likely on first login; Hamilton stops for CAPTCHA when running Autopilot.',
     ],
   },
 ])
