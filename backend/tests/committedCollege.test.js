@@ -181,7 +181,8 @@ describe('buildCollegeAidWorkspace', () => {
     expect(ws.aid.received_total).toBe(8000) // 6000 awarded + 2000 legacy
     expect(ws.aid.applied_total).toBe(4000)
     expect(ws.aid.applied_count).toBe(1)
-    expect(ws.unmet_need).toBe(22000) // 30000 - 8000 (applied does NOT reduce it)
+    expect(ws.aid.total_in_play).toBe(12000) // awarded + applied
+    expect(ws.unmet_need).toBe(18000) // 30000 - 8000 - 4000 (both awarded AND applied count)
     expect(ws.aid.pipeline.find((p) => p.id === 'a').secured).toBe(true)
     expect(ws.aid.pipeline.find((p) => p.id === 'c').secured).toBe(false)
   })
