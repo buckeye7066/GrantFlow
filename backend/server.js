@@ -2521,6 +2521,32 @@ if (process.env.NODE_ENV !== 'test') {
     // deterministic lead funnel in the background regardless of login.
     ;(async () => {
       try {
+        // Wire Yana's live-web contact enricher (Brave Search) BEFORE the
+        // scheduler starts, so the first discovery run can graduate prospects
+        // from needs_enrichment -> qualified. Gated: only activates when
+        // YANA_ALLOW_LIVE_WEB=true AND BRAVE_SEARCH_API_KEY is set; otherwise
+        // enrichment stays an honest NOOP and prospects sit at needs_enrichment.
+        try {
+          const braveKey = process.env.BRAVE_SEARCH_API_KEY
+          const liveWeb = /^(1|true|yes|on)$/i.test(String(process.env.YANA_ALLOW_LIVE_WEB || ''))
+          if (braveKey && liveWeb) {
+            const [{ makeBraveSearchProvider, makeHtmlFetcher }, { makeContactEnricher, setDefaultContactEnricher }] =
+              await Promise.all([
+                import('./services/yana/webSearchProvider.js'),
+                import('./services/yana/yanaContactEnrichment.js'),
+              ])
+            const enricher = makeContactEnricher({
+              searchProvider: makeBraveSearchProvider({ apiKey: braveKey }),
+              fetcher: makeHtmlFetcher(),
+            })
+            setDefaultContactEnricher(enricher)
+            console.log('[Server] Yana contact enricher wired (Brave Search, live web ON)')
+          } else {
+            console.log('[Server] Yana contact enricher is a NOOP (set YANA_ALLOW_LIVE_WEB=true + BRAVE_SEARCH_API_KEY to enable)')
+          }
+        } catch (enrichErr) {
+          console.warn('[Server] Yana contact enricher wiring failed (non-fatal):', enrichErr?.message || enrichErr)
+        }
         const { startYanaScheduler } = await import('./services/yana/yanaScheduler.js')
         const result = startYanaScheduler({ db })
         if (result?.started) console.log('[Server] Yana scheduler started')
