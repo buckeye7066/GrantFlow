@@ -491,6 +491,62 @@ export async function getDecryptedCredential(db, { profileId, portalHost } = {})
   }
 }
 
+/**
+ * The shared "admin vault" profile that holds owner-imported logins (e.g. the
+ * Chrome password export). Configured via HAMILTON_ADMIN_VAULT_PROFILE_ID so a
+ * profile without its own saved login can still authenticate to a portal the
+ * owner has a credential for. Empty → no fallback.
+ */
+export function adminVaultProfileId() {
+  const v = String(process.env.HAMILTON_ADMIN_VAULT_PROFILE_ID || '').trim()
+  return v || null
+}
+
+/**
+ * Like getDecryptedCredential, but if the profile has no saved login for the
+ * host it falls back to the shared admin vault. This is what lets Hamilton log
+ * in to any portal the OWNER has provisioned a credential for — using the
+ * profile's own login when present, otherwise the admin vault — instead of
+ * hard-stopping at the login gate. `source` tells the caller which vault matched.
+ */
+export async function getDecryptedCredentialWithFallback(db, { profileId, portalHost } = {}) {
+  const own = await getDecryptedCredential(db, { profileId, portalHost })
+  if (own) return { ...own, source: 'profile' }
+  const adminId = adminVaultProfileId()
+  if (adminId && String(adminId) !== String(profileId)) {
+    const shared = await getDecryptedCredential(db, { profileId: adminId, portalHost })
+    if (shared) return { ...shared, source: 'admin_vault' }
+  }
+  return null
+}
+
+/**
+ * The set of registrable domains (eTLD+1) we hold an ACTIVE login for — the
+ * profile's own vault plus the shared admin vault. The browser-automation guard
+ * uses this to treat "we have the owner's credential for this portal" as an
+ * implicit authorization to drive it, so profile-required portals don't hard-stop.
+ */
+export async function listCredentialedDomains(db, profileId) {
+  if (!db) return new Set()
+  await ensureSchema(db)
+  const ids = [profileId, adminVaultProfileId()].filter(Boolean).map(String)
+  if (ids.length === 0) return new Set()
+  const out = new Set()
+  for (const pid of [...new Set(ids)]) {
+    let rows = []
+    try {
+      rows = await db.prepare(
+        `SELECT portal_host FROM hamilton_portal_credentials WHERE profile_id = ? AND status = 'active'`,
+      ).all(pid)
+    } catch { rows = [] }
+    for (const r of rows || []) {
+      const d = registrableDomain(normalizeHost(r.portal_host))
+      if (d) out.add(d)
+    }
+  }
+  return out
+}
+
 export async function markCredentialUsed(db, id) {
   if (!db || !id) return
   await ensureSchema(db)
