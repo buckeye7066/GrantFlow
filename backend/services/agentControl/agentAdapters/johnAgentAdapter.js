@@ -113,29 +113,48 @@ export class JohnAgentAdapter extends BaseAgentAdapter {
       }
     }
 
+    const draftsCreated = result?.drafts_created ?? 0
+    const producedNothing = result?.ok === false || draftsCreated === 0
+    // A run that produced zero drafts is NOT an unqualified success. Raise its
+    // severity and carry John's own explanation (provider not configured / no
+    // qualified leads) so the operator sees WHY, instead of a silent green tick.
+    const severity = result?.ok === false ? 'high' : draftsCreated === 0 ? 'medium' : 'info'
+    const headline =
+      result?.ok === false
+        ? 'failed'
+        : draftsCreated === 0
+          ? 'produced no drafts'
+          : 'drafted'
     await signal?.recordEvent?.({
       eventType: 'agent.john.completed',
-      severity: result?.ok === false ? 'high' : 'info',
-      message: `John ${result?.ok === false ? 'failed' : 'drafted'} — ${result?.drafts_created || 0} drafts, ${result?.drafts_blocked || 0} blocked`,
+      severity,
+      message:
+        `John ${headline} — ${draftsCreated} drafts, ${result?.drafts_blocked || 0} blocked, ` +
+        `${result?.leads_considered ?? 0} leads considered` +
+        (result?.note ? `. ${result.note}` : ''),
       data: {
         john_run_id: result?.run_id || null,
-        drafts_created: result?.drafts_created ?? 0,
+        drafts_created: draftsCreated,
         drafts_blocked: result?.drafts_blocked ?? 0,
         leads_considered: result?.leads_considered ?? 0,
+        provider_ready: result?.provider_ready ?? null,
+        note: result?.note || null,
         allow_send: allowSend,
       },
     })
 
     return {
       ok: result?.ok !== false,
-      status: result?.ok === false ? 'failed' : 'completed',
+      status: result?.ok === false ? 'failed' : producedNothing ? 'completed_no_drafts' : 'completed',
       summary: {
         agent: 'john',
         john_run_id: result?.run_id || null,
-        drafts_created: result?.drafts_created ?? 0,
+        drafts_created: draftsCreated,
         drafts_blocked: result?.drafts_blocked ?? 0,
         drafts_failed: result?.drafts_failed ?? 0,
         leads_considered: result?.leads_considered ?? 0,
+        provider_ready: result?.provider_ready ?? null,
+        note: result?.note || null,
         allow_send: allowSend,
       },
     }

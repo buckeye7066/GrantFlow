@@ -178,6 +178,42 @@ export async function runJohn({
     const aliasCheck = await getLatestAliasCheck(db).catch(() => null)
     const pInst = provider || createOutlookProvider({ config: cfg, logger })
 
+    // Honest reporting: a "completed" run that produced nothing has, until now,
+    // looked identical to a successful one in Mission Control. Surface the two
+    // real reasons a draft cycle does nothing so operators are never told John
+    // "ran a full cycle" when he had nothing to draft or no mailbox to draft into.
+
+    // (a) Outlook provider not configured — no draft can ever reach the mailbox.
+    if (!pInst.ready) {
+      summary.provider_ready = false
+      summary.provider_missing = pInst.missing
+      summary.note =
+        `Outlook provider not configured (missing ${pInst.missing}). No Outlook drafts ` +
+        `can be created until MICROSOFT_TENANT_ID, MICROSOFT_CLIENT_ID, MICROSOFT_CLIENT_SECRET ` +
+        `and JOHN_PRIMARY_MAILBOX are set in the environment. ` +
+        `${fetched.leads.length} qualified lead(s) were ready to draft this run.`
+      logger?.warn?.('[John] ' + summary.note)
+      const status = RUN_STATUS.COMPLETED
+      await finishRun(db, runId, {
+        status,
+        completed_at: new Date().toISOString(),
+        yana_leads_considered: fetched.considered,
+        summary_json: summary,
+        error: 'provider_not_configured',
+      })
+      return { ok: false, run_id: runId, mode: m, status, provider_ready: false, ...summary }
+    }
+    summary.provider_ready = true
+
+    // (b) No qualified leads — Yana handed John nothing to draft.
+    if (fetched.leads.length === 0) {
+      summary.note =
+        `No qualified leads to draft. Yana must produce leads that are qualified AND have ` +
+        `public evidence + a contact source + lead_score ≥ ${cfg.minLeadScore}. ` +
+        `Filtered out this run: ${JSON.stringify(fetched.filtered_out || {})}.`
+      logger?.warn?.('[John] ' + summary.note)
+    }
+
     for (const lead of fetched.leads) {
       if (remaining <= 0) break
       if (dryRun) {
