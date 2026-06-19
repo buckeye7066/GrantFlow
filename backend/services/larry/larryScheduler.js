@@ -1,6 +1,21 @@
 /**
  * Larry — env-gated scheduler.
  *
+ * ⚠️  DEPRECATED ⚠️
+ * Larry's role (Client/Lead Discovery + outreach pipeline) has been
+ * succeeded by Yana + John in the canonical agent registry
+ * (backend/services/agentControl/agentControlTypes.js — ALL_AGENTS =
+ * ['sam', 'robert', 'yana', 'john', 'hamilton'], with Larry NOT
+ * listed). Yana is the lead-discovery agent; John handles outreach.
+ *
+ * Larry is kept ONLY for backward compatibility with deployments that
+ * still set LARRY_ENABLED=true. The scheduler now refuses to start
+ * when YANA_ENABLED is also truthy because both pipelines would
+ * double-discover the same prospects into different tables (and
+ * Larry runs outside Mission Control, so cancel/pause/emergency-stop
+ * don't reach it). Operators see a clear log line directing them to
+ * the Yana flags.
+ *
  * Wakes Larry up periodically when LARRY_ENABLED=true and
  * LARRY_RUN_ON_SCHEDULE=true. Default state is DISABLED. Even when scheduled,
  * the scheduler defaults to discovery+verify+score modes — never auto-send.
@@ -72,13 +87,57 @@ export function isCronMinuteMatch(spec, date = new Date()) {
   )
 }
 
-export function startLarryScheduler({ db, deps = {}, logger: externalLogger = null } = {}) {
+/**
+ * Detect whether Yana — the canonical successor — is also enabled.
+ * Mirrors getYanaConfig.enabled without importing Yana directly so
+ * Larry has zero runtime coupling to the new agent. Pure env read.
+ */
+function isYanaEnabled(env = process.env) {
+  const raw = String(env?.YANA_ENABLED ?? '').trim().toLowerCase()
+  return raw === '1' || raw === 'true' || raw === 'yes' || raw === 'on'
+}
+
+export function startLarryScheduler({
+  db,
+  deps = {},
+  logger: externalLogger = null,
+  env = process.env,
+} = {}) {
   const cfg = getLarryConfig()
   const log = logger(externalLogger)
 
   if (!cfg.enabled) {
     return { started: false, reason: 'LARRY_ENABLED=false' }
   }
+
+  // Deprecation guard: Yana is the canonical lead-discovery agent in
+  // ALL_AGENTS. If both schedulers came up, they'd double-discover the
+  // same prospects into different tables (`yana_lead_candidates` vs
+  // `larry_*`) and only Yana is reachable from the Agent Control
+  // Center. Refuse to start so operators see the conflict instead of
+  // silently paying for it.
+  if (isYanaEnabled(env)) {
+    const msg =
+      '[Larry/scheduler] DEPRECATED: refusing to start because YANA_ENABLED=true. ' +
+      'Larry has been superseded by Yana (lead discovery) + John (outreach). ' +
+      'Set LARRY_ENABLED=false and configure YANA_* / JOHN_* flags instead.'
+    if (typeof log.warn === 'function') log.warn(msg)
+    else log.info?.(msg)
+    return {
+      started: false,
+      reason: 'deprecated_superseded_by_yana',
+      detail: 'YANA_ENABLED=true; Larry refuses to run alongside Yana',
+    }
+  }
+
+  // Standalone Larry boot — still functional, but warn the operator
+  // that this is the deprecated path so it doesn't go unnoticed.
+  const deprecationNotice =
+    '[Larry/scheduler] DEPRECATION NOTICE: Larry is superseded by Yana + John. ' +
+    'Migrate to YANA_ENABLED / JOHN_ENABLED for unified Mission Control coverage.'
+  if (typeof log.warn === 'function') log.warn(deprecationNotice)
+  else log.info?.(deprecationNotice)
+
   if (!cfg.runOnSchedule && !cfg.runOnStartup) {
     return { started: false, reason: 'LARRY_RUN_ON_SCHEDULE=false and LARRY_RUN_ON_STARTUP=false' }
   }

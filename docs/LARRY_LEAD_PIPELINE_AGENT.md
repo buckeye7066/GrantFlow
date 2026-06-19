@@ -1,5 +1,31 @@
 # Larry — Lead Discovery & Outreach Agent
 
+> **⚠️ DEPRECATED — superseded by Yana + John.**
+>
+> Larry's role (Client/Lead Discovery + outreach pipeline) has been
+> taken over by:
+>
+> - **Yana** (`backend/services/yana/`) — discovers prospective-client
+>   leads, enriches contacts, and qualifies them for handoff.
+> - **John** (`backend/services/john/`) — drafts and sends outreach.
+>
+> Both are listed in the canonical `ALL_AGENTS` registry in
+> `backend/services/agentControl/agentControlTypes.js` and are
+> reachable from the Admin Agent Control Center (start / pause /
+> stop / cancel). Larry is **not** in `ALL_AGENTS` and runs outside
+> Mission Control.
+>
+> The Larry scheduler now refuses to start when `YANA_ENABLED=true`
+> to prevent both pipelines double-discovering the same prospects.
+> Migrate by setting `LARRY_ENABLED=false` and configuring `YANA_*`
+> + `JOHN_*` flags. See `tests/unit/larry-scheduler.test.mjs` for the
+> guard's exact behaviour.
+>
+> Larry's code, routes, tables, and admin UI are kept for backward
+> compatibility with existing deployments. They will be retired in a
+> follow-up PR after the Yana/John migration is verified in
+> production.
+
 Larry is GrantFlow's dedicated background agent for finding likely **GrantFlow
 clients** (prospective customers/users), verifying their public contact info,
 scoring how well they fit GrantFlow's mission, building structured lead
