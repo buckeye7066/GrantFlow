@@ -659,10 +659,10 @@ try {
 }
 
 // NOTE: Schema/migrations should be applied via `npm run migrate` in production.
-// We keep the legacy "apply schema on startup" behavior only for sqlite local dev.
-const shouldAutoMigrate =
-  String(process.env.DB_AUTO_MIGRATE || '').toLowerCase() === 'true' ||
-  (db.dialect === 'sqlite' && process.env.NODE_ENV !== 'production');
+// Boot policy is centralised in backend/startup/bootPolicy.js so server.js,
+// scripts, and tests all reason from the same truth.
+const { shouldAutoApplySchema } = await import('./startup/bootPolicy.js')
+const shouldAutoMigrate = shouldAutoApplySchema(process.env, db.dialect)
 
 // Load persisted runtime secrets (encrypted) if missing from environment.
 // This is intended as an emergency stopgap for hosted environments where env var updates are delayed.
@@ -828,20 +828,12 @@ if (shouldAutoMigrate) {
 // to off was producing real production outages — e.g. the Agent Control Center
 // reporting "relation \"robert_runs\" does not exist" because operators didn't know
 // they had to flip the flag manually after a deploy that added new agent telemetry
-// tables (sam_runs, robert_*, john_*, agent_activity_events, agent_daily_rollups,
-// hamilton_*, agent_control_*).
-const migrateOnBootEnv = String(process.env.MIGRATE_ON_BOOT || '').trim()
-const explicitlyOptedOut = /^(0|false|no|off)$/i.test(migrateOnBootEnv)
-const explicitlyOptedIn = /^(1|true|yes|on)$/i.test(migrateOnBootEnv)
-// In smoke mode the integration tests bootstrap a fresh sqlite DB from
-// `schema.sql` and then exercise specific routes; replaying every historical
-// migration on top of that schema produces real conflicts (e.g. adding
-// columns/triggers the test fixtures don't account for) and breaks the
-// avatar/upload/profile tests that rely on a clean fixture. Tests that
-// genuinely need migrations applied set MIGRATE_ON_BOOT=1 explicitly.
-const _smokeMode =
-  /^(1|true|yes|on)$/i.test(String(process.env.SMOKE_MODE || '').trim().toLowerCase())
-const shouldMigrateOnBoot = explicitlyOptedIn || (!explicitlyOptedOut && !_smokeMode)
+// tables.
+//
+// Decision is delegated to backend/startup/bootPolicy.js so this site never has
+// to reason about SMOKE_MODE / explicit opt-in/out tokens itself again.
+const { shouldMigrateOnBoot: _shouldMigrateOnBoot } = await import('./startup/bootPolicy.js')
+const shouldMigrateOnBoot = _shouldMigrateOnBoot(process.env)
 if (shouldMigrateOnBoot && !app.locals.db_startup_error) {
   try {
     const { runPendingMigrationsOnBoot } = await import('./db/migrate.js')
@@ -1101,15 +1093,12 @@ if (db.dialect === 'sqlite') {
   ensureCrawlerJobsSupportsAllTypes()
 }
 
-// Smoke mode: used by unit/contract tests (fast deterministic boot).
-// Many unit tests start the server with PORT=0 + DB_AUTO_MIGRATE=true but do not set SMOKE_MODE explicitly.
-// In that case, we infer smoke mode so that heavy startup tasks never block the "Ready" signal.
-const explicitSmoke = ['1', 'true', 'yes', 'on'].includes(String(process.env.SMOKE_MODE || '').trim().toLowerCase())
-const inferredSmoke =
-  String(PORT) === '0' &&
-  String(process.env.DB_AUTO_MIGRATE || '').trim().toLowerCase() === 'true' &&
-  String(process.env.NODE_ENV || '').trim().toLowerCase() !== 'production'
-const IS_SMOKE_MODE = explicitSmoke || inferredSmoke
+// Smoke mode (explicit + inferred) is decided in
+// backend/startup/bootPolicy.js so the policy is testable without
+// booting the server. Inferred smoke covers the unit-test pattern
+// of PORT=0 + DB_AUTO_MIGRATE=true + NODE_ENV != 'production'.
+const { isSmokeMode: _isSmokeMode } = await import('./startup/bootPolicy.js')
+const IS_SMOKE_MODE = _isSmokeMode(process.env, PORT)
 
 // Restore baseline data (profiles + sections, plus other seed tables if DB appears empty).
 // This makes the app self-heal after an ephemeral DB reset, so "real profiles" reappear on next login.
