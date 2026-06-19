@@ -27,6 +27,17 @@ import { buildDenylist, isDenied } from './denylist.js'
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 const CONNECTOR_VERSION = '1.0.0'
 
+// A bulk walker must survive malformed inputs. Some libraries (notably
+// pdf-parse / pdf.js on corrupt PDFs) reject an INTERNAL worker promise that
+// no local `await` owns, so a per-file try/catch can't catch it and Node 22
+// hard-exits. Convert those into warnings so one bad file never ends the scan.
+process.on('unhandledRejection', (reason) => {
+  console.warn('[connector] unhandled rejection (continuing):', reason?.message || reason)
+})
+process.on('uncaughtException', (err) => {
+  console.warn('[connector] uncaught exception (continuing):', err?.message || err)
+})
+
 async function loadConfig() {
   const explicit = path.join(HERE, 'config.json')
   const example = path.join(HERE, 'config.example.json')
