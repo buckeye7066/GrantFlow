@@ -112,8 +112,35 @@ function dispatch(action) {
   });
 }
 
-function toast({ id: providedId, duration, ...props }) {
+// Urgency ramp → toast variant (color) + how long it lingers. The more urgent,
+// the deeper the color (white→green→yellow→orange→red) and the longer it stays
+// (base 3.5s, +2s per level). Callers pass `urgency` (0–4 or a name); an explicit
+// `variant`/`duration` always wins.
+const URGENCY_LEVELS = {
+  info: 0, low: 0, none: 0,
+  success: 1, good: 1,
+  warning: 2, warn: 2, medium: 2,
+  elevated: 3, high: 3, orange: 3,
+  critical: 4, urgent: 4, destructive: 4, error: 4, danger: 4,
+};
+const URGENCY_VARIANT = ["default", "success", "warning", "elevated", "destructive"];
+function resolveUrgency(urgency) {
+  if (urgency === null || urgency === undefined) return null;
+  const level = typeof urgency === "number"
+    ? Math.max(0, Math.min(4, Math.round(urgency)))
+    : (URGENCY_LEVELS[String(urgency).toLowerCase()] ?? null);
+  if (level === null) return null;
+  return { variant: URGENCY_VARIANT[level], duration: TOAST_REMOVE_DELAY + level * 2000 };
+}
+
+function toast({ id: providedId, duration, variant, urgency, ...props }) {
   const id = providedId ? String(providedId) : genId();
+  // Derive color + lifetime from urgency when the caller didn't set them explicitly.
+  const u = resolveUrgency(urgency);
+  const resolvedVariant = variant ?? u?.variant;
+  const resolvedDuration = typeof duration === "number" ? duration : u?.duration;
+  if (resolvedVariant !== undefined) props.variant = resolvedVariant;
+  duration = resolvedDuration;
 
   const update = (props) =>
     dispatch({
