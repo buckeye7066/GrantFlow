@@ -1,5 +1,5 @@
 /**
- * Larry — fit scoring.
+ * Yana — fit scoring (legacy filename `larryFitScorer.js`).
  *
  * "Fit" answers the question: how likely is this organization to actually
  * benefit from GrantFlow? GrantFlow's audience is grant-seekers — orgs that

@@ -1,5 +1,5 @@
 /**
- * Larry — fit + urgency scoring.
+ * Yana — Lead Pipeline fit + urgency scoring.
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'

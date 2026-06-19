@@ -1,5 +1,5 @@
 /**
- * Larry — relationship tracker + DNC + suppression list.
+ * Yana — Lead Pipeline relationship tracker + DNC + suppression list.
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -11,7 +11,7 @@ import {
   isCooledOff,
 } from '../../backend/services/larry/larryRelationshipTracker.js'
 import { upsertProspectCandidate, getRelationship, findSuppressionsForProspect } from '../../backend/services/larry/larryRunStore.js'
-import { createInMemoryDb } from './larry-test-helpers.mjs'
+import { createInMemoryDb } from './yana-leads-test-helpers.mjs'
 
 test('contacted bumps contact_count and sets cooldown_until in the future', async () => {
   const db = createInMemoryDb()

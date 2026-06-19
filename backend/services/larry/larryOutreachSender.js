@@ -1,7 +1,7 @@
 /**
- * Larry — outreach sender.
+ * Yana — outreach sender (legacy filename `larryOutreachSender.js`).
  *
- * The most safety-critical file in Larry. Sending real outbound email to a
+ * The most safety-critical file in the Yana lead pipeline. Sending real outbound email to a
  * third party MUST be:
  *   1. Explicitly enabled (LARRY_ENABLED=true).
  *   2. Approved per attempt (attempt.approved_by_user_id set, unless the

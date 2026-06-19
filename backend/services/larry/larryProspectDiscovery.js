@@ -1,5 +1,5 @@
 /**
- * Larry — prospect discovery orchestrator.
+ * Yana — prospect discovery orchestrator (legacy filename `larryProspectDiscovery.js`).
  *
  * Discovery is intentionally pluggable: callers (real prod code, tests, the
  * scheduler) inject a `searchAdapter` that knows how to actually fetch a

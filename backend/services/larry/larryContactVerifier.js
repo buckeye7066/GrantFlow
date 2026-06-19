@@ -1,5 +1,5 @@
 /**
- * Larry — public contact-info verification.
+ * Yana — public contact-info verification (legacy filename `larryContactVerifier.js`).
  *
  * Verifies an organization's *publicly listed* contact info — website
  * reachable, email format/MX-style classification, phone digit-validity,
@@ -12,7 +12,7 @@
  *   webChecker({ url, config }) -> Promise<{ ok, status, finalUrl, error? }>
  *   mxChecker({ domain, config }) -> Promise<{ ok, mx_records?: number }>
  *
- * Both adapters are optional. When omitted Larry falls back to format-only
+ * Both adapters are optional. When omitted Yana falls back to format-only
  * classification, which is what observe-mode runs use.
  */
 

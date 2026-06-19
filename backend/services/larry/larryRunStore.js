@@ -1,5 +1,5 @@
 /**
- * Larry — durable persistence for runs, prospects, leads, outreach attempts,
+ * Yana — durable persistence for runs, prospects, leads, outreach attempts (legacy filename `larryRunStore.js`),
  * relationships, and suppression list. Every helper is dialect-aware so the
  * same code works against the better-sqlite3-style wrapper and the Postgres
  * pool wrapper. JSON columns are stored as TEXT on SQLite and JSONB on

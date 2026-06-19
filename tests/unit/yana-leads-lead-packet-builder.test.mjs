@@ -1,5 +1,5 @@
 /**
- * Larry — lead packet building + qualification.
+ * Yana — Lead Pipeline lead packet building + qualification.
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'

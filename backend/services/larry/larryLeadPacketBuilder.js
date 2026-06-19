@@ -1,7 +1,7 @@
 /**
- * Larry — lead packet builder.
+ * Yana — lead packet builder (legacy filename `larryLeadPacketBuilder.js`).
  *
- * A "lead packet" is the structured handoff Larry produces for each qualified
+ * A "lead packet" is the structured handoff Yana produces for each qualified
  * prospect. It carries everything an admin (or a downstream outreach system)
  * needs to make a confident send-or-skip decision:
  *

@@ -1,7 +1,7 @@
 /**
- * Larry — relationship tracker.
+ * Yana — relationship tracker (legacy filename `larryRelationshipTracker.js`).
  *
- * Tracks the per-prospect lifecycle once Larry starts engaging:
+ * Tracks the per-prospect lifecycle once Yana starts engaging:
  *   none → contacted → opened → replied → meeting → converted | declined
  *
  * Also owns the cooldown clock and the Do-Not-Contact (DNC) flag. DNC is the

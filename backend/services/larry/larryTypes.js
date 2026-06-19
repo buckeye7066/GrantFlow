@@ -1,12 +1,16 @@
 /**
- * Larry — Lead Discovery & Outreach Agent: shared types, constants, factories.
+ * Yana — Lead Discovery & Outreach Agent: shared types, constants, factories.
  *
- * Larry's mission:
+ * (Internal filenames and exports keep their `larry`/`LARRY_` spelling for
+ *  backward compatibility — the user-facing identity is Yana. See
+ *  docs/YANA_LEAD_PIPELINE_AGENT.md.)
+ *
+ * Yana's mission:
  *   Find likely GrantFlow CLIENTS (prospective customers/users), verify public
  *   organization & contact info, score fit + urgency, build a structured lead
  *   packet, and (only with explicit admin approval per attempt) send outreach.
  *
- * Larry is NOT:
+ * Yana is NOT:
  *   - A funding-discovery agent (that is Robert).
  *   - A user-facing assistant (that is Anya).
  *   - A code-health agent (that is Sam).
@@ -15,7 +19,7 @@
  *     human approval.
  */
 
-export const LARRY_AGENT_NAME = 'Larry'
+export const LARRY_AGENT_NAME = 'Yana'
 
 export const LARRY_MODES = Object.freeze({
   OBSERVE: 'observe',
@@ -114,9 +118,9 @@ export const SUPPRESSION_TYPES = Object.freeze({
 })
 
 /**
- * Reasons Larry rejects a prospect candidate or contact verification attempt.
+ * Reasons Yana rejects a prospect candidate or contact verification attempt.
  * Stored explicitly so an admin can audit *why* an organization was filtered
- * out — Larry must never silently drop prospects.
+ * out — Yana must never silently drop prospects.
  */
 export const PROSPECT_REJECTION_REASONS = Object.freeze({
   NO_NAME: 'no_name',
@@ -138,7 +142,7 @@ export const PROSPECT_REJECTION_REASONS = Object.freeze({
 })
 
 /**
- * Reasons Larry blocks a *send* attempt even after a draft is created.
+ * Reasons Yana blocks a *send* attempt even after a draft is created.
  * This mirrors the canonical opportunity-rejection list in Robert and lets the
  * admin console show exactly why an outreach didn't go out.
  */
@@ -158,7 +162,7 @@ export const SEND_BLOCK_REASONS = Object.freeze({
 })
 
 /**
- * Larry's internal categorization of fit for GrantFlow's product. These are
+ * Yana's internal categorization of fit for GrantFlow's product. These are
  * just labels for explainability — the score is the source of truth. Anything
  * that ships to a human is annotated with the reasons that produced the score.
  */

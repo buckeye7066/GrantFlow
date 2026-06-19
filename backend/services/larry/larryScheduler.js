@@ -1,24 +1,36 @@
 /**
- * Larry — env-gated scheduler.
+ * Yana — Lead Pipeline scheduler (env-gated, in-process cron).
  *
- * ⚠️  DEPRECATED ⚠️
- * Larry's role (Client/Lead Discovery + outreach pipeline) has been
- * succeeded by Yana + John in the canonical agent registry
- * (backend/services/agentControl/agentControlTypes.js — ALL_AGENTS =
- * ['sam', 'robert', 'yana', 'john', 'hamilton'], with Larry NOT
- * listed). Yana is the lead-discovery agent; John handles outreach.
+ * Naming history: this scheduler was originally shipped under the
+ * codename "Larry". The user-facing identity is now unified under
+ * "Yana" (GrantFlow's canonical lead-discovery agent). Internal
+ * filenames and exports keep their `larry`/`Larry` spelling for
+ * backward compatibility because there are pinned imports and tests
+ * that reference them; renaming them is a separate refactor.
  *
- * Larry is kept ONLY for backward compatibility with deployments that
- * still set LARRY_ENABLED=true. The scheduler now refuses to start
- * when YANA_ENABLED is also truthy because both pipelines would
- * double-discover the same prospects into different tables (and
- * Larry runs outside Mission Control, so cancel/pause/emergency-stop
- * don't reach it). Operators see a clear log line directing them to
- * the Yana flags.
+ * Two implementations of Yana coexist in the repo:
  *
- * Wakes Larry up periodically when LARRY_ENABLED=true and
- * LARRY_RUN_ON_SCHEDULE=true. Default state is DISABLED. Even when scheduled,
- * the scheduler defaults to discovery+verify+score modes — never auto-send.
+ *  1) The CANONICAL Yana client-discovery adapter at
+ *     backend/services/yana/yanaLeadDiscovery.js, listed in
+ *     ALL_AGENTS and wired to the Admin Agent Control Center
+ *     (start / pause / cancel / emergency-stop reach it). Enabled by
+ *     YANA_ENABLED=true.
+ *
+ *  2) This LEGACY Yana lead pipeline (the pre-rename "Larry"), kept
+ *     for backward compatibility with deployments that still set
+ *     LARRY_ENABLED=true (also accepted as YANA_LEADS_ENABLED). It
+ *     runs *outside* Mission Control on its own scheduler.
+ *
+ * To stop the two from double-discovering the same prospects into
+ * different tables (`yana_lead_candidates` vs `larry_*`), this
+ * scheduler refuses to start when YANA_ENABLED=true. Operators see a
+ * clear log line directing them to consolidate on the canonical
+ * adapter.
+ *
+ * Wakes the legacy Yana lead pipeline up periodically when
+ * LARRY_ENABLED=true and LARRY_RUN_ON_SCHEDULE=true. Default state is
+ * DISABLED. Even when scheduled, the scheduler defaults to
+ * discovery+verify+score modes — never auto-send.
  *
  * The scheduler:
  *   - never blocks server startup
@@ -90,7 +102,8 @@ export function isCronMinuteMatch(spec, date = new Date()) {
 /**
  * Detect whether Yana — the canonical successor — is also enabled.
  * Mirrors getYanaConfig.enabled without importing Yana directly so
- * Larry has zero runtime coupling to the new agent. Pure env read.
+ * the legacy lead pipeline has zero runtime coupling to the canonical
+ * Yana adapter. Pure env read.
  */
 function isYanaEnabled(env = process.env) {
   const raw = String(env?.YANA_ENABLED ?? '').trim().toLowerCase()
@@ -118,23 +131,24 @@ export function startLarryScheduler({
   // silently paying for it.
   if (isYanaEnabled(env)) {
     const msg =
-      '[Larry/scheduler] DEPRECATED: refusing to start because YANA_ENABLED=true. ' +
-      'Larry has been superseded by Yana (lead discovery) + John (outreach). ' +
-      'Set LARRY_ENABLED=false and configure YANA_* / JOHN_* flags instead.'
+      '[Yana/leads] refusing to start the legacy lead pipeline because YANA_ENABLED=true. ' +
+      'The canonical Yana client-discovery adapter (backend/services/yana/) is the supported path; ' +
+      'this older pipeline (formerly "Larry") would double-discover into different tables. ' +
+      'Set LARRY_ENABLED=false (alias YANA_LEADS_ENABLED=false) to silence this notice.'
     if (typeof log.warn === 'function') log.warn(msg)
     else log.info?.(msg)
     return {
       started: false,
       reason: 'deprecated_superseded_by_yana',
-      detail: 'YANA_ENABLED=true; Larry refuses to run alongside Yana',
+      detail: 'YANA_ENABLED=true; legacy Yana lead pipeline refuses to run alongside the canonical Yana adapter',
     }
   }
 
-  // Standalone Larry boot — still functional, but warn the operator
-  // that this is the deprecated path so it doesn't go unnoticed.
+  // Standalone legacy-Yana boot — still functional, but warn the operator
+  // that this is the older code path so it doesn't go unnoticed.
   const deprecationNotice =
-    '[Larry/scheduler] DEPRECATION NOTICE: Larry is superseded by Yana + John. ' +
-    'Migrate to YANA_ENABLED / JOHN_ENABLED for unified Mission Control coverage.'
+    '[Yana/leads] notice: running the legacy lead pipeline (formerly "Larry"). ' +
+    'For unified Mission Control coverage, migrate to YANA_ENABLED + JOHN_ENABLED.'
   if (typeof log.warn === 'function') log.warn(deprecationNotice)
   else log.info?.(deprecationNotice)
 
@@ -148,7 +162,7 @@ export function startLarryScheduler({
 
   async function runOnce(trigger) {
     if (STATE.running) {
-      log.info?.('[Larry/scheduler] skip: already running')
+      log.info?.('[Yana/leads] skip: already running')
       return
     }
     STATE.running = true
@@ -161,9 +175,9 @@ export function startLarryScheduler({
       })
       STATE.lastRunAt = new Date().toISOString()
       STATE.lastResult = { ok: result?.ok, run_id: result?.run_id, mode: result?.mode }
-      log.info?.('[Larry/scheduler] run complete', STATE.lastResult)
+      log.info?.('[Yana/leads] run complete', STATE.lastResult)
     } catch (err) {
-      log.warn?.('[Larry/scheduler] run failed', { error: err?.message || String(err) })
+      log.warn?.('[Yana/leads] run failed', { error: err?.message || String(err) })
       STATE.lastResult = { ok: false, error: err?.message || String(err) }
     } finally {
       STATE.running = false

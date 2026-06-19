@@ -1,25 +1,28 @@
 /**
- * Larry — public + admin API.
+ * Yana — Lead Pipeline (public + admin API).
  *
- *   GET  /api/larry/health                    public; only ok+agent+status
- *   GET  /api/larry/status                    admin
- *   POST /api/larry/run                       admin; body.mode picks the phase
- *   POST /api/larry/discover-prospects        admin; alias for run(mode=...)
- *   POST /api/larry/verify-contacts           admin; alias
- *   POST /api/larry/score-fit                 admin; alias
- *   POST /api/larry/build-packets             admin; alias
- *   POST /api/larry/qualify                   admin; alias
- *   POST /api/larry/draft-outreach            admin; alias
- *   POST /api/larry/send-outreach             admin; alias (still per-attempt approval)
- *   GET  /api/larry/runs                      admin; recent run history
- *   GET  /api/larry/prospects                 admin; review/triage queue
- *   GET  /api/larry/leads                     admin; lead review queue
- *   GET  /api/larry/leads/:id                 admin; full packet
- *   POST /api/larry/leads/:id/approve         admin; mark approved_for_outreach
- *   POST /api/larry/leads/:id/archive         admin
- *   POST /api/larry/outreach/:attemptId/approve   admin; approves a single send
- *   POST /api/larry/outreach/:attemptId/cancel    admin
- *   POST /api/larry/relationships/:prospectId/dnc admin; force DNC
+ * Mounted at /api/yana-leads/* (canonical) and /api/larry/* (legacy
+ * alias, still served for backward compatibility).
+ *
+ *   GET  /yana-leads/health                    public; only ok+agent+status
+ *   GET  /yana-leads/status                    admin
+ *   POST /yana-leads/run                       admin; body.mode picks the phase
+ *   POST /yana-leads/discover-prospects        admin; alias for run(mode=...)
+ *   POST /yana-leads/verify-contacts           admin; alias
+ *   POST /yana-leads/score-fit                 admin; alias
+ *   POST /yana-leads/build-packets             admin; alias
+ *   POST /yana-leads/qualify                   admin; alias
+ *   POST /yana-leads/draft-outreach            admin; alias
+ *   POST /yana-leads/send-outreach             admin; alias (still per-attempt approval)
+ *   GET  /yana-leads/runs                      admin; recent run history
+ *   GET  /yana-leads/prospects                 admin; review/triage queue
+ *   GET  /yana-leads/leads                     admin; lead review queue
+ *   GET  /yana-leads/leads/:id                 admin; full packet
+ *   POST /yana-leads/leads/:id/approve         admin; mark approved_for_outreach
+ *   POST /yana-leads/leads/:id/archive         admin
+ *   POST /yana-leads/outreach/:attemptId/approve   admin; approves a single send
+ *   POST /yana-leads/outreach/:attemptId/cancel    admin
+ *   POST /yana-leads/relationships/:prospectId/dnc admin; force DNC
  */
 
 import express from 'express'

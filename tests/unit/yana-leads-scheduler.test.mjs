@@ -1,5 +1,8 @@
 /**
- * Larry — scheduler: env-gated, no-op when disabled, cron parser.
+ * Yana — Lead Pipeline scheduler: env-gated, no-op when disabled, cron parser.
+ *
+ * Internal symbol names (`startLarryScheduler`, `stopLarryScheduler`,
+ * `LARRY_ENABLED`) are the legacy spellings of the Yana lead pipeline.
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -55,18 +58,20 @@ test('isCronMinuteMatch matches "0 * * * *" only on minute=0', () => {
 })
 
 // ---------------------------------------------------------------------------
-// Deprecation guard: Larry vs Yana
+// Conflict guard: legacy Yana lead pipeline vs canonical Yana adapter.
 //
-// Larry and Yana fill the same role (Client/Lead Discovery + outreach
-// pipeline). Yana is the canonical agent in agentControlTypes.ALL_AGENTS;
-// Larry is a deprecated predecessor kept only for backward compatibility.
-// If both schedulers came up, they'd double-discover the same prospects
-// into different tables (yana_lead_candidates vs larry_*) and Larry runs
-// outside Mission Control. The guard refuses to start Larry when Yana is
-// also enabled.
+// Two implementations of "Yana" exist: the canonical client-discovery
+// adapter wired to the Admin Agent Control Center
+// (agentControlTypes.ALL_AGENTS includes 'yana') and this older lead
+// pipeline (formerly codenamed "Larry"). If both schedulers came up,
+// they'd double-discover the same prospects into different tables
+// (yana_lead_candidates vs larry_*) and the legacy pipeline runs
+// outside Mission Control. The guard refuses to start the legacy
+// pipeline when YANA_ENABLED=true so operators consolidate on the
+// canonical adapter.
 // ---------------------------------------------------------------------------
 
-test('REGRESSION: Larry refuses to start when Yana is also enabled', () => {
+test('REGRESSION: legacy Yana lead pipeline refuses to start when canonical Yana adapter is enabled', () => {
   const saved = { ...process.env }
   process.env.LARRY_ENABLED = 'true'
   process.env.LARRY_RUN_ON_SCHEDULE = 'true'
@@ -84,10 +89,10 @@ test('REGRESSION: Larry refuses to start when Yana is also enabled', () => {
     assert.equal(result.started, false)
     assert.equal(result.reason, 'deprecated_superseded_by_yana')
     assert.match(result.detail, /YANA_ENABLED/)
-    // Operator must see a clear deprecation log line.
+    // Operator must see a clear log line explaining the conflict.
     assert.ok(
-      warnings.some((m) => /DEPRECATED.*YANA_ENABLED=true/.test(String(m))),
-      `expected deprecation warning, got: ${warnings.join(' | ')}`,
+      warnings.some((m) => /refusing to start.*YANA_ENABLED=true/.test(String(m))),
+      `expected conflict warning, got: ${warnings.join(' | ')}`,
     )
   } finally {
     Object.assign(process.env, saved)
@@ -106,7 +111,7 @@ test('Yana opt-in tokens (1 / true / yes / on) all trigger the guard', () => {
         logger: { warn() {}, info() {} },
         env: { YANA_ENABLED: token },
       })
-      assert.equal(result.started, false, `YANA_ENABLED=${token} must block Larry`)
+      assert.equal(result.started, false, `YANA_ENABLED=${token} must block the legacy pipeline`)
       assert.equal(result.reason, 'deprecated_superseded_by_yana')
       stopLarryScheduler()
     }
@@ -116,11 +121,11 @@ test('Yana opt-in tokens (1 / true / yes / on) all trigger the guard', () => {
   }
 })
 
-test('standalone Larry boot still emits a deprecation notice (operator visibility)', () => {
+test('standalone legacy-pipeline boot still emits a notice (operator visibility)', () => {
   const saved = { ...process.env }
   process.env.LARRY_ENABLED = 'true'
   // No schedule/startup flag → scheduler returns early on the second
-  // check, but the deprecation notice must still have been logged.
+  // check, but the operator notice must still have been logged.
   delete process.env.LARRY_RUN_ON_SCHEDULE
   delete process.env.LARRY_RUN_ON_STARTUP
   try {
@@ -131,8 +136,8 @@ test('standalone Larry boot still emits a deprecation notice (operator visibilit
       env: { YANA_ENABLED: 'false' },
     })
     assert.ok(
-      warnings.some((m) => /DEPRECATION NOTICE/.test(String(m))),
-      `expected deprecation notice on standalone Larry boot, got: ${warnings.join(' | ')}`,
+      warnings.some((m) => /\[Yana\/leads\] notice: running the legacy lead pipeline/.test(String(m))),
+      `expected legacy-pipeline notice on standalone boot, got: ${warnings.join(' | ')}`,
     )
   } finally {
     Object.assign(process.env, saved)
@@ -140,7 +145,41 @@ test('standalone Larry boot still emits a deprecation notice (operator visibilit
   }
 })
 
-test('Yana NOT enabled (or unset) does NOT trigger the guard — Larry still works standalone', () => {
+test('canonical YANA_LEADS_ENABLED env-var alias also enables the scheduler (precedence over LARRY_ENABLED)', () => {
+  const saved = { ...process.env }
+  delete process.env.LARRY_ENABLED
+  delete process.env.LARRY_RUN_ON_SCHEDULE
+  delete process.env.LARRY_RUN_ON_STARTUP
+  process.env.YANA_LEADS_ENABLED = 'true'
+  process.env.YANA_LEADS_RUN_ON_SCHEDULE = 'false'
+  process.env.YANA_LEADS_RUN_ON_STARTUP = 'false'
+  try {
+    // YANA_ENABLED is not set, so the conflict guard does not fire.
+    // Both run-on flags are false, so the scheduler returns early
+    // *after* honouring the YANA_LEADS_ENABLED master switch — exactly
+    // the same behaviour as if LARRY_ENABLED=true had been set with
+    // both run flags off.
+    const result = startLarryScheduler({
+      db: null,
+      logger: { warn() {}, info() {} },
+      env: {},
+    })
+    assert.equal(result.started, false)
+    assert.match(
+      result.reason,
+      /LARRY_RUN_ON_SCHEDULE=false and LARRY_RUN_ON_STARTUP=false/,
+      `expected the run-flag-off path (proves YANA_LEADS_ENABLED was honoured), got reason=${result.reason}`,
+    )
+  } finally {
+    Object.assign(process.env, saved)
+    delete process.env.YANA_LEADS_ENABLED
+    delete process.env.YANA_LEADS_RUN_ON_SCHEDULE
+    delete process.env.YANA_LEADS_RUN_ON_STARTUP
+    stopLarryScheduler()
+  }
+})
+
+test('Yana NOT enabled (or unset) does NOT trigger the guard — legacy pipeline still works standalone', () => {
   const saved = { ...process.env }
   process.env.LARRY_ENABLED = 'true'
   process.env.LARRY_RUN_ON_STARTUP = 'true'

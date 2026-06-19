@@ -1,8 +1,8 @@
 /**
- * Larry — outreach sender. Most important safety surface in Larry.
+ * Yana — Lead Pipeline outreach sender. Most important safety surface.
  *
  * These tests assert the sender NEVER calls the email adapter when:
- *   - Larry is disabled
+ *   - Yana is disabled
  *   - the attempt is not approved
  *   - no FROM_EMAIL is configured
  *   - the recipient is on the suppression list
@@ -21,7 +21,7 @@ import {
   addSuppressionEntry,
   upsertRelationship,
 } from '../../backend/services/larry/larryRunStore.js'
-import { createInMemoryDb } from './larry-test-helpers.mjs'
+import { createInMemoryDb } from './yana-leads-test-helpers.mjs'
 
 async function buildAttemptInDb(db, overrides = {}) {
   const prospect = await upsertProspectCandidate(db, {
@@ -51,7 +51,7 @@ async function buildAttemptInDb(db, overrides = {}) {
   return { prospect, lead, attempt }
 }
 
-test('refuses to send when Larry is disabled', async () => {
+test('refuses to send when Yana is disabled', async () => {
   const db = createInMemoryDb()
   const { prospect, attempt } = await buildAttemptInDb(db)
   const sender = (() => { throw new Error('sender must not be called') })

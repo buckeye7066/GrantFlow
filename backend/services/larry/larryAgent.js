@@ -1,5 +1,5 @@
 /**
- * Larry — agent orchestrator.
+ * Yana — Lead Pipeline orchestrator (legacy filename `larryAgent.js`).
  *
  * Owns the full pipeline:
  *   discover-prospects → verify-contacts → score-fit
@@ -228,7 +228,7 @@ export async function runLarry({
   const log = logger(req)
 
   if (!cfg.enabled) {
-    log.info?.('[Larry] disabled — refusing to run', safeMask({ mode }))
+    log.info?.('[Yana/leads] disabled — refusing to run', safeMask({ mode }))
     return {
       ok: false,
       agent: LARRY_AGENT_NAME,
@@ -298,7 +298,7 @@ export async function runLarry({
       summary,
     }
   } catch (err) {
-    log.error?.('[Larry] run failed', safeMask({ mode: effectiveMode, error: err?.message || String(err) }))
+    log.error?.('[Yana/leads] run failed', safeMask({ mode: effectiveMode, error: err?.message || String(err) }))
     summary.error = err?.message || String(err)
     await completeRun(db, runId, {
       status: LARRY_RUN_STATUS.FAILED,

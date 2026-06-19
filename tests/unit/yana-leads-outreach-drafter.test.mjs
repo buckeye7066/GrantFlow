@@ -1,5 +1,5 @@
 /**
- * Larry — outreach drafter + draft quality gate.
+ * Yana — Lead Pipeline outreach drafter + draft quality gate.
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'

@@ -1,5 +1,5 @@
 /**
- * Larry — outreach drafter.
+ * Yana — outreach drafter (legacy filename `larryOutreachDrafter.js`).
  *
  * Pure function that turns a lead packet into a draft email/letter. The
  * output is *only* a draft — sending always requires explicit per-attempt

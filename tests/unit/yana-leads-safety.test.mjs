@@ -1,5 +1,9 @@
 /**
- * Larry — safety predicates and config defaults.
+ * Yana — Lead Pipeline safety predicates and config defaults.
+ *
+ * Also covers the YANA_LEADS_* / LARRY_* env-var precedence: the
+ * canonical YANA_LEADS_* spelling wins when both are set, the legacy
+ * LARRY_* spelling is the fallback when only the legacy name is set.
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -15,6 +19,14 @@ import {
 } from '../../backend/services/larry/larrySafety.js'
 
 const ENV_KEYS = [
+  'YANA_LEADS_ENABLED',
+  'YANA_LEADS_RUN_ON_STARTUP',
+  'YANA_LEADS_RUN_ON_SCHEDULE',
+  'YANA_LEADS_MODE',
+  'YANA_LEADS_ALLOW_LIVE_WEB',
+  'YANA_LEADS_AUTO_SEND_OUTREACH',
+  'YANA_LEADS_REQUIRE_APPROVAL_TO_SEND',
+  'YANA_LEADS_FROM_EMAIL',
   'LARRY_ENABLED',
   'LARRY_RUN_ON_STARTUP',
   'LARRY_RUN_ON_SCHEDULE',
@@ -46,13 +58,44 @@ function withEnv(overrides, fn) {
   }
 }
 
-test('Larry is DISABLED by default', () => {
+test('Yana lead pipeline is DISABLED by default', () => {
   const cfg = withEnv({}, () => getLarryConfig())
-  assert.equal(cfg.enabled, false, 'LARRY_ENABLED defaults to false')
+  assert.equal(cfg.enabled, false, 'YANA_LEADS_ENABLED / LARRY_ENABLED defaults to false')
   assert.equal(cfg.mode, 'observe', 'default mode is observe')
   assert.equal(cfg.allowLiveWeb, false, 'live web is off by default')
   assert.equal(cfg.autoSendOutreach, false, 'auto-send is off by default')
   assert.equal(cfg.requireApprovalToSend, true, 'approval gate is on by default')
+})
+
+test('canonical YANA_LEADS_ENABLED enables the agent (parity with LARRY_ENABLED)', () => {
+  const cfg = withEnv({ YANA_LEADS_ENABLED: 'true' }, () => getLarryConfig())
+  assert.equal(cfg.enabled, true, 'YANA_LEADS_ENABLED=true must enable the agent')
+})
+
+test('canonical YANA_LEADS_* spellings take precedence over legacy LARRY_* spellings', () => {
+  const cfg = withEnv(
+    {
+      LARRY_ENABLED: 'false',
+      YANA_LEADS_ENABLED: 'true',
+      LARRY_MODE: 'observe',
+      YANA_LEADS_MODE: 'discover-prospects',
+      LARRY_ALLOW_LIVE_WEB: 'false',
+      YANA_LEADS_ALLOW_LIVE_WEB: 'true',
+    },
+    () => getLarryConfig(),
+  )
+  assert.equal(cfg.enabled, true, 'YANA_LEADS_ENABLED=true wins over LARRY_ENABLED=false')
+  assert.equal(cfg.mode, 'discover-prospects', 'YANA_LEADS_MODE wins over LARRY_MODE')
+  assert.equal(cfg.allowLiveWeb, true, 'YANA_LEADS_ALLOW_LIVE_WEB wins over LARRY_ALLOW_LIVE_WEB')
+})
+
+test('legacy LARRY_* still honoured when canonical YANA_LEADS_* is unset (back-compat)', () => {
+  const cfg = withEnv(
+    { LARRY_ENABLED: 'true', LARRY_MODE: 'discover-prospects' },
+    () => getLarryConfig(),
+  )
+  assert.equal(cfg.enabled, true, 'LARRY_ENABLED=true must still work')
+  assert.equal(cfg.mode, 'discover-prospects', 'LARRY_MODE must still work')
 })
 
 test('classifyEmail flags disposable, role, and generic providers', () => {

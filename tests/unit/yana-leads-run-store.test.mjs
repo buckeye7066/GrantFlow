@@ -1,5 +1,5 @@
 /**
- * Larry — run store: dedup, JSON round-trip, idempotency.
+ * Yana — Lead Pipeline run store: dedup, JSON round-trip, idempotency.
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -15,7 +15,7 @@ import {
   listLeads,
   countSendsInWindow,
 } from '../../backend/services/larry/larryRunStore.js'
-import { createInMemoryDb } from './larry-test-helpers.mjs'
+import { createInMemoryDb } from './yana-leads-test-helpers.mjs'
 
 test('startRun → completeRun records mode + status', async () => {
   const db = createInMemoryDb()

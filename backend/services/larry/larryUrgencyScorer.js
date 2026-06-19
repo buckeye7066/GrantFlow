@@ -1,5 +1,5 @@
 /**
- * Larry — urgency scoring.
+ * Yana — urgency scoring (legacy filename `larryUrgencyScorer.js`).
  *
  * Urgency is "why now?". A merely fitting org is interesting; a merely fitting
  * org with an active capital campaign is *urgent*. Urgency surfaces orgs that

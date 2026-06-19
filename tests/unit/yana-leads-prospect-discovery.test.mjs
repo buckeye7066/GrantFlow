@@ -1,5 +1,5 @@
 /**
- * Larry — prospect discovery: source planning + raw record normalization.
+ * Yana — Lead Pipeline prospect discovery: source planning + raw record normalization.
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -10,7 +10,7 @@ import {
   discoverProspects,
 } from '../../backend/services/larry/larryProspectDiscovery.js'
 import { PROSPECT_REJECTION_REASONS } from '../../backend/services/larry/larryTypes.js'
-import { createInMemoryDb } from './larry-test-helpers.mjs'
+import { createInMemoryDb } from './yana-leads-test-helpers.mjs'
 
 test('planProspectFetches biases toward national high-trust sources', () => {
   const plan = planProspectFetches({ applicantTypes: ['nonprofit'], maxSources: 3 })

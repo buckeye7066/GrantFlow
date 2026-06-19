@@ -1,13 +1,13 @@
 /**
- * Larry — agent orchestrator: mode gating, observe-mode safety, full-cycle
- * flow with injected adapters.
+ * Yana — Lead Pipeline orchestrator: mode gating, observe-mode safety,
+ * full-cycle flow with injected adapters.
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
 import { runLarry, getLarryStatus } from '../../backend/services/larry/larryAgent.js'
 import { LARRY_MODES } from '../../backend/services/larry/larryTypes.js'
-import { createInMemoryDb } from './larry-test-helpers.mjs'
+import { createInMemoryDb } from './yana-leads-test-helpers.mjs'
 
 test('refuses to run when LARRY_ENABLED=false', async () => {
   const db = createInMemoryDb()
@@ -123,7 +123,7 @@ test('getLarryStatus returns enabled/mode/samples without sending anything', asy
       maxOutreachSendsPerDay: 25,
     },
   })
-  assert.equal(status.agent, 'Larry')
+  assert.equal(status.agent, 'Yana')
   assert.equal(status.enabled, true)
   assert.equal(typeof status.samples.any_prospects, 'boolean')
 })

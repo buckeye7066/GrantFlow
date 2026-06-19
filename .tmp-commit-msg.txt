@@ -1,0 +1,59 @@
+refactor(agents): rename Larry → Yana everywhere user-facing
+
+Larry and Yana were two separate spellings of the same agent role
+(Client/Lead Discovery + outreach pipeline). This unifies them as
+"Yana" in every place a user, operator, or developer browsing the
+codebase actually reads the name.
+
+What changed
+- UI components: src/components/admin/AdminLarryConsole.jsx →
+  AdminYanaConsole.jsx; LarryLeadReviewModal.jsx →
+  YanaLeadReviewModal.jsx. Admin tab label, all toast titles, modal
+  header, console headings now say "Yana".
+- Frontend API calls switched to the canonical /api/yana-leads/*
+  paths (the backend serves both /api/yana-leads/* and the legacy
+  /api/larry/* aliases at the same router for back-compat).
+- Backend mounting: backend/server.js now mounts the lead-pipeline
+  router at /api/yana-leads (canonical) and /api/larry (legacy
+  alias), and the startup log line reads "Yana lead scheduler
+  started" instead of "Larry scheduler started".
+- Service file headers, log prefixes ('[Yana/leads] …' instead of
+  '[Larry/scheduler] …'), JSDoc, error/notice messages, and reason
+  detail strings all read "Yana".
+- Env-var aliases: backend/services/larry/larrySafety.js now reads
+  YANA_LEADS_* (canonical) first and falls back to LARRY_* (legacy)
+  so existing deployments don't have to flip every flag at once.
+  Default user-agent string is GrantFlowYanaBot/1.0.
+- LARRY_AGENT_NAME constant now resolves to 'Yana', so /api/larry/health
+  and /api/yana-leads/health both return { agent: 'Yana' }.
+- Docs: LARRY_LEAD_PIPELINE_AGENT.md → YANA_LEAD_PIPELINE_AGENT.md;
+  LARRY_OUTREACH_STRATEGY.md → YANA_OUTREACH_STRATEGY.md;
+  LARRY_IMPLEMENTATION_REPORT.md → YANA_LEAD_PIPELINE_IMPLEMENTATION_REPORT.md.
+  AGENT_AUTOMATION_CHARTER.md cross-link updated.
+- Tests: tests/unit/larry-*.test.mjs renamed to yana-leads-*.test.mjs
+  (12 files via git mv to preserve history). Test descriptions and
+  assertion messages now read "Yana"; new tests verify the
+  YANA_LEADS_* env-var precedence.
+- Conflict guard kept and reframed: the legacy lead pipeline still
+  refuses to start when YANA_ENABLED=true, but the message now
+  explains it as "two implementations of Yana coexisting" rather
+  than "Larry deprecated, migrate to Yana", matching the unified
+  naming.
+
+What did NOT change (intentional, for stability)
+- backend/services/larry/*.js filenames, backend/routes/larry.js,
+  the larry_* table prefix, and the LARRY_* env-var spellings — all
+  preserved as legacy on-disk identifiers because renaming applied
+  migrations and live env config is destructive. Documented in the
+  new YANA_LEAD_PIPELINE_AGENT.md and the implementation report.
+- /api/larry/* routes still mounted (alongside /api/yana-leads/*) so
+  in-flight clients keep working.
+- LARRY_AGENT_NAME export name kept (its value is 'Yana') to avoid a
+  fan-out import update across the route file.
+
+Verification
+- npm run -s lint: 0 errors (2 pre-existing warnings unrelated)
+- npm run -s typecheck: pass
+- node --test tests/unit/yana-leads-*.test.mjs: 76/76 pass
+- node scripts/check-env-examples.mjs: OK (.env.example regenerated
+  to include both YANA_LEADS_* and LARRY_* aliases)

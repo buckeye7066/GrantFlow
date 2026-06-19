@@ -54,7 +54,7 @@ Each agent has exactly one home adapter under
   user-selected one.
 
 The lead pipeline (Yana → John) is documented further in
-[LARRY_LEAD_PIPELINE_AGENT.md](./LARRY_LEAD_PIPELINE_AGENT.md) and
+[YANA_LEAD_PIPELINE_AGENT.md](./YANA_LEAD_PIPELINE_AGENT.md) and
 [AGENT_MISSION_CONTROL.md](./AGENT_MISSION_CONTROL.md).
 
 ---

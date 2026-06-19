@@ -1,10 +1,10 @@
 /**
- * Test helper: real in-memory SQLite database for Larry's unit tests.
+ * Test helper: real in-memory SQLite database for the Yana lead pipeline's unit tests.
  *
- * Uses better-sqlite3 in `:memory:` mode and applies Larry's migration so the
+ * Uses better-sqlite3 in `:memory:` mode and applies the lead pipeline's migration so the
  * tests run against the actual schema, not a hand-built mock. The wrapper
  * exposes the same async-shaped `prepare(sql).run/get/all` surface that the
- * Larry run store expects (better-sqlite3 itself is synchronous; awaiting a
+ * Yana lead-pipeline run store expects (better-sqlite3 itself is synchronous; awaiting a
  * synchronous value resolves to the value, so the run store works either
  * way).
  */

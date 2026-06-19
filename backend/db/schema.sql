@@ -1216,7 +1216,9 @@ CREATE TABLE IF NOT EXISTS sam_findings (
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
--- Yana's downstream hand-off queues (qualified leads forwarded to John / Larry).
+-- Yana's downstream hand-off queues (qualified leads forwarded to John).
+-- Note: a separate `yana_larry_queue` table exists for backward compatibility
+-- with the legacy Yana lead pipeline (formerly codenamed "Larry").
 CREATE TABLE IF NOT EXISTS yana_john_queue (
   id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
   lead_candidate_id TEXT,
@@ -2769,7 +2771,7 @@ CREATE INDEX IF NOT EXISTS idx_agent_rollups_agent_date
 -- ============================================================================
 -- John — Outreach Drafting Agent (Outlook drafts; never sends).
 -- See backend/db/migrations/083_john_tables.sql for canonical definitions.
--- Larry — Lead Discovery & Outreach Agent
+-- Yana — Lead Discovery & Outreach Agent (legacy table prefix `larry_*`).
 -- See backend/db/migrations/082_larry_tables.sql for the canonical definitions.
 -- Repeated here so fresh databases bootstrapped from schema.sql get the tables
 -- without needing to run the migration sequence.

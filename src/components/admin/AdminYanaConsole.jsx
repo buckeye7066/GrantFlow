@@ -1,3 +1,12 @@
+/**
+ * AdminYanaConsole — admin UI for Yana's Lead Discovery & Outreach pipeline.
+ *
+ * Formerly named AdminLarryConsole. Yana is GrantFlow's canonical
+ * lead-discovery agent (see backend/services/agentControl/agentControlTypes.js).
+ * The backend service files in backend/services/larry/ implement this
+ * pipeline; their filenames are preserved for stability while the
+ * user-facing identity is unified under "Yana".
+ */
 import React, { useCallback, useEffect, useMemo, useState } from "react"
 import {
   AlertCircle,
@@ -16,7 +25,7 @@ import { Badge } from "@/components/ui/badge"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { useToast } from "@/components/ui/use-toast"
 import { apiFetch } from "@/api/client"
-import LarryLeadReviewModal from "@/components/admin/LarryLeadReviewModal"
+import YanaLeadReviewModal from "@/components/admin/YanaLeadReviewModal"
 
 async function get(path) {
   return apiFetch(path)
@@ -45,7 +54,7 @@ function safeFormatTime(value) {
   }
 }
 
-export default function AdminLarryConsole() {
+export default function AdminYanaConsole() {
   const { toast } = useToast()
   const [busy, setBusy] = useState(false)
   const [status, setStatus] = useState(null)
@@ -56,16 +65,16 @@ export default function AdminLarryConsole() {
   const refresh = useCallback(async () => {
     try {
       const [s, r, l] = await Promise.all([
-        get("/api/larry/status"),
-        get("/api/larry/runs?limit=10"),
-        get("/api/larry/leads?limit=50"),
+        get("/api/yana-leads/status"),
+        get("/api/yana-leads/runs?limit=10"),
+        get("/api/yana-leads/leads?limit=50"),
       ])
       setStatus(s)
       setRuns(Array.isArray(r?.runs) ? r.runs : [])
       setLeads(Array.isArray(l?.leads) ? l.leads : [])
     } catch (err) {
       toast({
-        title: "Failed to load Larry status",
+        title: "Failed to load Yana status",
         description: err?.message || String(err),
         variant: "destructive",
       })
@@ -79,15 +88,15 @@ export default function AdminLarryConsole() {
   const run = async (mode) => {
     setBusy(true)
     try {
-      const res = await post("/api/larry/run", { mode })
+      const res = await post("/api/yana-leads/run", { mode })
       toast({
-        title: `Larry: ${mode}`,
+        title: `Yana: ${mode}`,
         description: res?.ok ? `run_id=${res.run_id || "(none)"}` : res?.reason || "completed",
       })
       await refresh()
     } catch (err) {
       toast({
-        title: `Larry ${mode} failed`,
+        title: `Yana ${mode} failed`,
         description: err?.message || String(err),
         variant: "destructive",
       })
@@ -120,7 +129,7 @@ export default function AdminLarryConsole() {
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <Mail className="w-5 h-5 text-amber-600" />
-            Larry — Lead Discovery & Outreach Agent
+            Yana — Lead Discovery & Outreach Agent
             {enabledBadge}
           </CardTitle>
         </CardHeader>
@@ -129,9 +138,9 @@ export default function AdminLarryConsole() {
             <ShieldAlert className="w-4 h-4" />
             <AlertDescription>
               <p className="text-sm">
-                Larry finds likely GrantFlow <strong>clients</strong>, verifies public contact info,
+                Yana finds likely GrantFlow <strong>clients</strong>, verifies public contact info,
                 scores fit and urgency, builds lead packets, and (only with explicit per-attempt
-                approval) sends outreach. Larry is <strong>not</strong> Anya, Robert, or a code-fixing
+                approval) sends outreach. Yana is <strong>not</strong> Anya, Robert, or a code-fixing
                 agent. Auto-send is off by default.
               </p>
               {status ? (
@@ -291,7 +300,7 @@ export default function AdminLarryConsole() {
         </CardContent>
       </Card>
 
-      <LarryLeadReviewModal
+      <YanaLeadReviewModal
         leadId={selectedLeadId}
         open={Boolean(selectedLeadId)}
         onClose={() => setSelectedLeadId(null)}

@@ -10,7 +10,7 @@
  *
  * The scheduler does NOT introduce a cron dependency; it parses a small
  * subset of crontab (minute, hour, day-of-month, month, day-of-week) and
- * polls every 60 seconds. That matches Larry's pattern.
+ * polls every 60 seconds. That matches the Yana lead pipeline's pattern.
  */
 
 import { runJohn } from './johnAgent.js'

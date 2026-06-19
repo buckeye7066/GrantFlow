@@ -1,7 +1,8 @@
 /**
- * Larry — safety helpers, env config, and pre-flight predicates.
+ * Yana — safety helpers, env config, and pre-flight predicates
+ * (legacy filename `larrySafety.js`).
  *
- * Everything Larry does on the open web or against a recipient must pass
+ * Everything the Yana lead pipeline does on the open web or against a recipient must pass
  * through one of these gates before more expensive verification, drafting, or
  * sending logic runs. The gates are intentionally cheap and pure so they can
  * be unit-tested without a database, network, or email provider.
@@ -38,43 +39,65 @@ export function readEnvString(name, fallback = null) {
   return v
 }
 
+// Canonical env-var names use the YANA_LEADS_* prefix; the legacy
+// LARRY_* spellings are still honoured as a fallback so existing
+// deployments don't have to flip every flag at once.
+function readBoolPref(canonicalName, legacyName, fallback) {
+  const canonicalRaw = readEnv(canonicalName)
+  if (canonicalRaw !== null && canonicalRaw !== '') return readEnvBool(canonicalName, fallback)
+  return readEnvBool(legacyName, fallback)
+}
+function readIntPref(canonicalName, legacyName, fallback) {
+  const canonicalRaw = readEnv(canonicalName)
+  if (canonicalRaw !== null && canonicalRaw !== '') return readEnvInt(canonicalName, fallback)
+  return readEnvInt(legacyName, fallback)
+}
+function readStringPref(canonicalName, legacyName, fallback) {
+  const canonicalRaw = readEnv(canonicalName)
+  if (canonicalRaw !== null && canonicalRaw !== '') return readEnvString(canonicalName, fallback)
+  return readEnvString(legacyName, fallback)
+}
+
 /**
- * Centralized Larry runtime configuration. Reading happens at call time so
- * tests can mutate `process.env` and immediately see the change. Defaults are
- * deliberately conservative: Larry is **off** unless the operator opts in,
- * and even when on he stays in observe mode unless the operator opts in
- * further.
+ * Centralized Yana lead-pipeline runtime configuration. Reading happens at
+ * call time so tests can mutate `process.env` and immediately see the change.
+ * Defaults are deliberately conservative: the agent is **off** unless the
+ * operator opts in, and even when on it stays in observe mode unless the
+ * operator opts in further.
+ *
+ * Env-var precedence per setting: `YANA_LEADS_*` (canonical) first, then
+ * `LARRY_*` (legacy) as fallback. Both spellings keep working.
  */
 export function getLarryConfig() {
   return {
-    enabled: readEnvBool('LARRY_ENABLED', false),
-    runOnStartup: readEnvBool('LARRY_RUN_ON_STARTUP', false),
-    runOnSchedule: readEnvBool('LARRY_RUN_ON_SCHEDULE', false),
-    schedule: readEnvString('LARRY_SCHEDULE', '0 * * * *'),
-    mode: readEnvString('LARRY_MODE', 'observe'),
-    maxProspectsPerRun: readEnvInt('LARRY_MAX_PROSPECTS_PER_RUN', 50),
-    maxVerifiesPerRun: readEnvInt('LARRY_MAX_VERIFIES_PER_RUN', 100),
-    maxLeadsPerRun: readEnvInt('LARRY_MAX_LEADS_PER_RUN', 50),
-    maxOutreachDraftsPerRun: readEnvInt('LARRY_MAX_OUTREACH_DRAFTS_PER_RUN', 20),
-    maxOutreachSendsPerDay: readEnvInt('LARRY_MAX_OUTREACH_SENDS_PER_DAY', 25),
-    timeoutMs: readEnvInt('LARRY_TIMEOUT_MS', 15000),
-    allowLiveWeb: readEnvBool('LARRY_ALLOW_LIVE_WEB', false),
-    allowSearchEngine: readEnvBool('LARRY_ALLOW_SEARCH_ENGINE', false),
-    persistProspects: readEnvBool('LARRY_PERSIST_PROSPECTS', true),
-    autoQualify: readEnvBool('LARRY_AUTO_QUALIFY', false),
-    autoDraftOutreach: readEnvBool('LARRY_AUTO_DRAFT_OUTREACH', false),
-    autoSendOutreach: readEnvBool('LARRY_AUTO_SEND_OUTREACH', false),
-    requireApprovalToSend: readEnvBool('LARRY_REQUIRE_APPROVAL_TO_SEND', true),
-    minFitScore: readEnvInt('LARRY_MIN_FIT_SCORE', 60),
-    minCompositeScore: readEnvInt('LARRY_MIN_COMPOSITE_SCORE', 65),
-    respectRobots: readEnvBool('LARRY_RESPECT_ROBOTS', true),
-    userAgent: readEnvString('LARRY_USER_AGENT', 'GrantFlowLarryBot/1.0'),
-    rateLimitPerDomainPerHour: readEnvInt('LARRY_RATE_LIMIT_PER_DOMAIN_PER_HOUR', 30),
-    failOpen: readEnvBool('LARRY_FAIL_OPEN', false),
-    fromEmail: readEnvString('LARRY_FROM_EMAIL', readEnvString('FROM_EMAIL', readEnvString('EMAIL_FROM', null))),
-    replyToEmail: readEnvString('LARRY_REPLY_TO_EMAIL', null),
-    bccCompliance: readEnvString('LARRY_BCC_COMPLIANCE', null),
-    pauseOnSendErrorThreshold: readEnvInt('LARRY_PAUSE_ON_SEND_ERROR_THRESHOLD', 3),
+    enabled: readBoolPref('YANA_LEADS_ENABLED', 'LARRY_ENABLED', false),
+    runOnStartup: readBoolPref('YANA_LEADS_RUN_ON_STARTUP', 'LARRY_RUN_ON_STARTUP', false),
+    runOnSchedule: readBoolPref('YANA_LEADS_RUN_ON_SCHEDULE', 'LARRY_RUN_ON_SCHEDULE', false),
+    schedule: readStringPref('YANA_LEADS_SCHEDULE', 'LARRY_SCHEDULE', '0 * * * *'),
+    mode: readStringPref('YANA_LEADS_MODE', 'LARRY_MODE', 'observe'),
+    maxProspectsPerRun: readIntPref('YANA_LEADS_MAX_PROSPECTS_PER_RUN', 'LARRY_MAX_PROSPECTS_PER_RUN', 50),
+    maxVerifiesPerRun: readIntPref('YANA_LEADS_MAX_VERIFIES_PER_RUN', 'LARRY_MAX_VERIFIES_PER_RUN', 100),
+    maxLeadsPerRun: readIntPref('YANA_LEADS_MAX_LEADS_PER_RUN', 'LARRY_MAX_LEADS_PER_RUN', 50),
+    maxOutreachDraftsPerRun: readIntPref('YANA_LEADS_MAX_OUTREACH_DRAFTS_PER_RUN', 'LARRY_MAX_OUTREACH_DRAFTS_PER_RUN', 20),
+    maxOutreachSendsPerDay: readIntPref('YANA_LEADS_MAX_OUTREACH_SENDS_PER_DAY', 'LARRY_MAX_OUTREACH_SENDS_PER_DAY', 25),
+    timeoutMs: readIntPref('YANA_LEADS_TIMEOUT_MS', 'LARRY_TIMEOUT_MS', 15000),
+    allowLiveWeb: readBoolPref('YANA_LEADS_ALLOW_LIVE_WEB', 'LARRY_ALLOW_LIVE_WEB', false),
+    allowSearchEngine: readBoolPref('YANA_LEADS_ALLOW_SEARCH_ENGINE', 'LARRY_ALLOW_SEARCH_ENGINE', false),
+    persistProspects: readBoolPref('YANA_LEADS_PERSIST_PROSPECTS', 'LARRY_PERSIST_PROSPECTS', true),
+    autoQualify: readBoolPref('YANA_LEADS_AUTO_QUALIFY', 'LARRY_AUTO_QUALIFY', false),
+    autoDraftOutreach: readBoolPref('YANA_LEADS_AUTO_DRAFT_OUTREACH', 'LARRY_AUTO_DRAFT_OUTREACH', false),
+    autoSendOutreach: readBoolPref('YANA_LEADS_AUTO_SEND_OUTREACH', 'LARRY_AUTO_SEND_OUTREACH', false),
+    requireApprovalToSend: readBoolPref('YANA_LEADS_REQUIRE_APPROVAL_TO_SEND', 'LARRY_REQUIRE_APPROVAL_TO_SEND', true),
+    minFitScore: readIntPref('YANA_LEADS_MIN_FIT_SCORE', 'LARRY_MIN_FIT_SCORE', 60),
+    minCompositeScore: readIntPref('YANA_LEADS_MIN_COMPOSITE_SCORE', 'LARRY_MIN_COMPOSITE_SCORE', 65),
+    respectRobots: readBoolPref('YANA_LEADS_RESPECT_ROBOTS', 'LARRY_RESPECT_ROBOTS', true),
+    userAgent: readStringPref('YANA_LEADS_USER_AGENT', 'LARRY_USER_AGENT', 'GrantFlowYanaBot/1.0'),
+    rateLimitPerDomainPerHour: readIntPref('YANA_LEADS_RATE_LIMIT_PER_DOMAIN_PER_HOUR', 'LARRY_RATE_LIMIT_PER_DOMAIN_PER_HOUR', 30),
+    failOpen: readBoolPref('YANA_LEADS_FAIL_OPEN', 'LARRY_FAIL_OPEN', false),
+    fromEmail: readStringPref('YANA_LEADS_FROM_EMAIL', 'LARRY_FROM_EMAIL', readEnvString('FROM_EMAIL', readEnvString('EMAIL_FROM', null))),
+    replyToEmail: readStringPref('YANA_LEADS_REPLY_TO_EMAIL', 'LARRY_REPLY_TO_EMAIL', null),
+    bccCompliance: readStringPref('YANA_LEADS_BCC_COMPLIANCE', 'LARRY_BCC_COMPLIANCE', null),
+    pauseOnSendErrorThreshold: readIntPref('YANA_LEADS_PAUSE_ON_SEND_ERROR_THRESHOLD', 'LARRY_PAUSE_ON_SEND_ERROR_THRESHOLD', 3),
   }
 }
 
@@ -114,7 +137,7 @@ function maskSecretString(s) {
 }
 
 /**
- * Loose URL safety predicate. Larry refuses to call placeholder hosts so a
+ * Loose URL safety predicate. Yana refuses to call placeholder hosts so a
  * misconfigured source doesn't cause real outbound traffic to example.com.
  */
 const PLACEHOLDER_HOSTS = new Set([
@@ -241,7 +264,7 @@ export function classifyPhone(phone) {
 }
 
 /**
- * Pre-flight check: should Larry refuse to draft an outreach against this
+ * Pre-flight check: should Yana refuse to draft an outreach against this
  * prospect? Returns null if OK, otherwise a {reason, detail} block.
  */
 export function checkProspectIsDraftable(prospect) {
@@ -266,7 +289,7 @@ export function checkSendIsAllowed({ attempt, prospect, relationship, suppressio
   const cfg = config || getLarryConfig()
 
   if (!cfg.enabled) {
-    return { reason: 'agent_disabled', detail: 'LARRY_ENABLED=false' }
+    return { reason: 'agent_disabled', detail: 'YANA_LEADS_ENABLED/LARRY_ENABLED=false' }
   }
 
   if (!attempt) {

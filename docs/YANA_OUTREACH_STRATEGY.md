@@ -1,13 +1,20 @@
-# Larry — Outreach Strategy
+# Yana — Outreach Strategy
 
-This document describes how Larry decides who to contact, when, with what
+This document describes how Yana (GrantFlow's Lead Discovery & Outreach
+Agent — formerly codenamed "Larry") decides who to contact, when, with what
 message, and through what channel. It is paired with
-`LARRY_LEAD_PIPELINE_AGENT.md` (the operator-facing doc) and exists to capture
-*why* Larry's defaults are what they are.
+`YANA_LEAD_PIPELINE_AGENT.md` (the operator-facing doc) and exists to capture
+*why* Yana's defaults are what they are.
+
+> **Note on naming.** Internal identifiers (the `larry_*` table prefix, the
+> `larryFitScorer`/`larryOutreachDrafter` module names, the `LARRY_*` env-var
+> spellings, and audit-log `action=larry:*` rows) are kept for backward
+> compatibility. The user-facing identity is "Yana"; the canonical env-var
+> aliases are `YANA_LEADS_*`. Both spellings work.
 
 ## Audience
 
-Larry's audience is "organizations that apply for grants" — not foundations,
+Yana's audience is "organizations that apply for grants" — not foundations,
 not federal agencies. The seed source registry deliberately points at
 directories of grant-seekers:
 
@@ -87,12 +94,12 @@ Channel preference, in order:
 3. `contact_form` — when there is a website but no contact path on file.
 4. `postal` — when only a mailing address is on file.
 
-Larry currently only implements `email` send. The other channels are stored as
+Yana currently only implements `email` send. The other channels are stored as
 recommendations on the packet for human handoff.
 
 ## Email draft
 
-Template: `larry_intro_v1`. Every draft includes:
+Template: `yana_intro_v1` (legacy: `larry_intro_v1`). Every draft includes:
 
 - The recipient's organization name (so it's never anonymous/templatic).
 - One concrete reason GrantFlow believes they'd benefit (the top fit reason).
@@ -117,7 +124,7 @@ Hard global block. Identifier types:
 - `organization` — exact org name (case-insensitive)
 - `phone` — digit-only phone
 
-When an admin marks a prospect DNC, Larry adds *all* available identifiers from
+When an admin marks a prospect DNC, Yana adds *all* available identifiers from
 that prospect to the suppression list so a future discovery run can't recreate
 them under a different prospect row.
 
@@ -130,25 +137,28 @@ clears the cooldown immediately, since humans are now in the loop.
 ## Daily cap
 
 `countSendsInWindow(db, {sinceIso})` is consulted before every send. When the
-last 24h of sent attempts ≥ `LARRY_MAX_OUTREACH_SENDS_PER_DAY` (default 25),
-the gate refuses with `daily_send_limit_reached`. The blocked send is recorded
-on the attempt row so the admin sees exactly why nothing went out.
+last 24h of sent attempts ≥ `YANA_LEADS_MAX_OUTREACH_SENDS_PER_DAY` (legacy
+`LARRY_MAX_OUTREACH_SENDS_PER_DAY`, default 25), the gate refuses with
+`daily_send_limit_reached`. The blocked send is recorded on the attempt row so
+the admin sees exactly why nothing went out.
 
 ## Domain rate limits
 
 `larry_domain_rate_limits` tracks request_count + window_start per domain.
-`LARRY_RATE_LIMIT_PER_DOMAIN_PER_HOUR` (default 30) caps adapter calls per
+`YANA_LEADS_RATE_LIMIT_PER_DOMAIN_PER_HOUR` (legacy
+`LARRY_RATE_LIMIT_PER_DOMAIN_PER_HOUR`, default 30) caps adapter calls per
 domain per hour. The window auto-resets after an hour without a request.
 
 ## Per-attempt admin approval
 
-Default: ON (`LARRY_REQUIRE_APPROVAL_TO_SEND=true`). When on, the send gate
-returns `send_not_approved` for any attempt without `approved_at` /
+Default: ON (`YANA_LEADS_REQUIRE_APPROVAL_TO_SEND=true`, also accepted as
+`LARRY_REQUIRE_APPROVAL_TO_SEND`). When on, the send gate returns
+`send_not_approved` for any attempt without `approved_at` /
 `approved_by_user_id`. The admin console requires an explicit click on
 "Approve" before the "Send" button is enabled, and "Dry-run send" is always
 available for spot-checking the gate without delivering to a real mailbox.
 
-## What Larry never does
+## What Yana never does
 
 - Send without per-attempt approval (when the default is left in place).
 - Bypass `email.js` / Resend (the same email pipeline the rest of the app uses).

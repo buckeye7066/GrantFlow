@@ -1,3 +1,10 @@
+/**
+ * YanaLeadReviewModal — review modal for Yana's Lead Discovery & Outreach pipeline.
+ *
+ * Formerly named LarryLeadReviewModal. Backend route paths
+ * (/api/larry/*) are still served for backward compatibility, but the
+ * UI now calls the canonical /api/yana-leads/* alias.
+ */
 import React, { useEffect, useState } from "react"
 import { Loader2, Mail, Send, ShieldAlert, X } from "lucide-react"
 import {
@@ -36,7 +43,7 @@ function ReasonList({ reasons, kind }) {
   )
 }
 
-export default function LarryLeadReviewModal({ leadId, open, onClose, onAfterChange }) {
+export default function YanaLeadReviewModal({ leadId, open, onClose, onAfterChange }) {
   const { toast } = useToast()
   const [loading, setLoading] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -47,7 +54,7 @@ export default function LarryLeadReviewModal({ leadId, open, onClose, onAfterCha
     if (!leadId || !open) return
     let alive = true
     setLoading(true)
-    get(`/api/larry/leads/${encodeURIComponent(leadId)}`)
+    get(`/api/yana-leads/leads/${encodeURIComponent(leadId)}`)
       .then((res) => {
         if (!alive) return
         if (res?.ok) {
@@ -73,7 +80,7 @@ export default function LarryLeadReviewModal({ leadId, open, onClose, onAfterCha
     if (!leadId) return
     setLoading(true)
     try {
-      const res = await get(`/api/larry/leads/${encodeURIComponent(leadId)}`)
+      const res = await get(`/api/yana-leads/leads/${encodeURIComponent(leadId)}`)
       if (res?.ok) {
         setLead(res.lead)
         setAttempts(Array.isArray(res.attempts) ? res.attempts : [])
@@ -87,7 +94,7 @@ export default function LarryLeadReviewModal({ leadId, open, onClose, onAfterCha
     if (!leadId) return
     setBusy(true)
     try {
-      const res = await post(`/api/larry/leads/${encodeURIComponent(leadId)}/approve`, {})
+      const res = await post(`/api/yana-leads/leads/${encodeURIComponent(leadId)}/approve`, {})
       if (res?.ok) {
         toast({ title: "Lead approved for outreach" })
         await reload()
@@ -108,7 +115,7 @@ export default function LarryLeadReviewModal({ leadId, open, onClose, onAfterCha
     if (!leadId) return
     setBusy(true)
     try {
-      const res = await post(`/api/larry/leads/${encodeURIComponent(leadId)}/archive`, {
+      const res = await post(`/api/yana-leads/leads/${encodeURIComponent(leadId)}/archive`, {
         reason: "admin_archived",
       })
       if (res?.ok) {
@@ -132,7 +139,7 @@ export default function LarryLeadReviewModal({ leadId, open, onClose, onAfterCha
     setBusy(true)
     try {
       const res = await post(
-        `/api/larry/relationships/${encodeURIComponent(lead.prospect_candidate_id)}/dnc`,
+        `/api/yana-leads/relationships/${encodeURIComponent(lead.prospect_candidate_id)}/dnc`,
         { reason: "admin_dnc" },
       )
       if (res?.ok) {
@@ -154,7 +161,7 @@ export default function LarryLeadReviewModal({ leadId, open, onClose, onAfterCha
   const approveAttempt = async (id) => {
     setBusy(true)
     try {
-      const res = await post(`/api/larry/outreach/${encodeURIComponent(id)}/approve`, {})
+      const res = await post(`/api/yana-leads/outreach/${encodeURIComponent(id)}/approve`, {})
       if (res?.ok) {
         toast({ title: "Outreach approved" })
         await reload()
@@ -174,7 +181,7 @@ export default function LarryLeadReviewModal({ leadId, open, onClose, onAfterCha
   const sendAttempt = async (id, dryRun = false) => {
     setBusy(true)
     try {
-      const res = await post(`/api/larry/outreach/${encodeURIComponent(id)}/send`, { dryRun })
+      const res = await post(`/api/yana-leads/outreach/${encodeURIComponent(id)}/send`, { dryRun })
       const blockedReason = res?.blocked?.reason
       if (res?.ok) {
         toast({ title: dryRun ? "Dry-run send completed" : "Outreach sent" })
@@ -201,7 +208,7 @@ export default function LarryLeadReviewModal({ leadId, open, onClose, onAfterCha
   const cancelAttempt = async (id) => {
     setBusy(true)
     try {
-      const res = await post(`/api/larry/outreach/${encodeURIComponent(id)}/cancel`, {
+      const res = await post(`/api/yana-leads/outreach/${encodeURIComponent(id)}/cancel`, {
         reason: "admin_cancel",
       })
       if (res?.ok) {
@@ -249,7 +256,7 @@ export default function LarryLeadReviewModal({ leadId, open, onClose, onAfterCha
             <Alert>
               <ShieldAlert className="w-4 h-4" />
               <AlertDescription className="text-xs">
-                Larry never sends outreach without explicit per-attempt approval. Send is
+                Yana never sends outreach without explicit per-attempt approval. Send is
                 additionally gated by the suppression list, the relationship cooldown, and the
                 daily send cap.
               </AlertDescription>

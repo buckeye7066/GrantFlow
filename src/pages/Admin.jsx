@@ -9,7 +9,7 @@ import AdminMaintenance from '@/components/admin/AdminMaintenance';
 import AdminAnyaConsole from '@/components/admin/AdminAnyaConsole';
 import AdminHamiltonHardStops from '@/components/admin/AdminHamiltonHardStops.jsx';
 import AdminJohnConsole from '@/components/admin/AdminJohnConsole';
-import AdminLarryConsole from '@/components/admin/AdminLarryConsole';
+import AdminYanaConsole from '@/components/admin/AdminYanaConsole';
 import AdminRobertConsole from '@/components/admin/AdminRobertConsole';
 import AdminSamConsole from '@/components/admin/AdminSamConsole';
 import AdminServiceApplications from '@/components/admin/AdminServiceApplications';
@@ -113,9 +113,9 @@ export default function Admin() {
               <Bot className="w-4 h-4 mr-2" />
               John
             </TabsTrigger>
-            <TabsTrigger value="larry">
+            <TabsTrigger value="yana-leads">
               <Mail className="w-4 h-4 mr-2" />
-              Larry
+              Yana
             </TabsTrigger>
             <TabsTrigger value="robert">
               <Bot className="w-4 h-4 mr-2" />
@@ -199,8 +199,8 @@ export default function Admin() {
             <AdminJohnConsole />
           </TabsContent>
 
-          <TabsContent value="larry" className="mt-6">
-            <AdminLarryConsole />
+          <TabsContent value="yana-leads" className="mt-6">
+            <AdminYanaConsole />
           </TabsContent>
 
           <TabsContent value="robert" className="mt-6">
