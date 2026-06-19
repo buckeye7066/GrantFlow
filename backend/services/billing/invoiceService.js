@@ -279,8 +279,21 @@ export async function runBillingCycle(db, { now = new Date(), force = false } = 
  * have one. Used once to start all existing profiles' billing as of a given
  * instant (the owner asked for 09:00 ET this morning).
  */
-export async function backfillBillingAnchor(db, anchorIso) {
+export async function backfillBillingAnchor(db, anchorIso, { provisionAll = true } = {}) {
   await ensureInvoiceSchema(db)
+  let provisioned = 0
+  // Billing accounts are created lazily, so "start ALL existing profiles' billing"
+  // means first ensuring every active profile HAS an account, then anchoring.
+  if (provisionAll) {
+    const { ensureBillingAccount } = await import('../billingAccounts.js')
+    let profiles = []
+    try {
+      profiles = await db.prepare(`SELECT id FROM profiles WHERE status IS NULL OR status NOT IN ('deleted','suspended')`).all()
+    } catch { try { profiles = await db.prepare('SELECT id FROM profiles').all() } catch { profiles = [] } }
+    for (const p of profiles || []) {
+      try { await ensureBillingAccount(db, p.id); provisioned += 1 } catch { /* skip */ }
+    }
+  }
   const res = await db.prepare(`UPDATE billing_accounts SET billing_anchor_at = ? WHERE billing_anchor_at IS NULL`).run(anchorIso)
-  return { updated: res?.changes ?? null, anchor: anchorIso }
+  return { provisioned, anchored: res?.changes ?? null, anchor: anchorIso }
 }
