@@ -47,6 +47,7 @@ export const TASK_STATUSES = Object.freeze([
   'waiting_for_login',
   'waiting_for_2fa',
   'waiting_for_captcha',
+  'waiting_for_window',
   'waiting_for_missing_info',
   'filling_portal',
   'saving_portal_draft',

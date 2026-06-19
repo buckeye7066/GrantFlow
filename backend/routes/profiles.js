@@ -31,6 +31,7 @@ import { isDesignatedProfileId } from '../utils/ensureDesignatedProfiles.js'
 import { resolveUploadsDir } from '../utils/uploadsDir.js'
 import { ADMIN_EMAILS } from '../config/constants.js'
 import { countSeats, describeSeatTier, evaluateSeatChange } from '../services/billing/seatTier.js'
+import { normalizeSchedule } from '../services/hamilton/portalAccessSchedule.js'
 import { syncProfileFieldsFromSection, syncDisplayNameToBasicInformation } from '../utils/profileSectionSync.js'
 import { deriveNamePartsIntoBasicInfo } from '../../shared/nameParsing.js'
 import { guardProfileSectionPayload } from '../utils/profileSuggestionGuards.js'
@@ -875,6 +876,83 @@ router.delete('/:id/emails/:emailId', async (req, res) => {
     const emailId = String(req.params.emailId)
     const result = await removeProfileEmail(req.db, { profileId, emailId })
     res.json(result)
+  } catch (error) {
+    res.status(500).json(formatError(error))
+  }
+})
+
+// ── Hamilton portal-access schedule ────────────────────────────────────────
+// The time-of-day window(s) during which Hamilton may access portals
+// unattended, so the owner is available for any sign-in / 2FA. Stored on the
+// automation_preferences profile section under `portal_access`.
+async function loadAutomationPreferences(db, profileId) {
+  try {
+    const row = await db
+      .prepare(`SELECT data FROM profile_sections WHERE profile_id = ? AND section_key = 'automation_preferences' LIMIT 1`)
+      .get(String(profileId))
+    if (!row?.data) return {}
+    return typeof row.data === 'string' ? JSON.parse(row.data) : row.data
+  } catch { return {} }
+}
+
+async function saveAutomationPreferences(db, profileId, prefs, updatedBy) {
+  const data = JSON.stringify(prefs)
+  const existing = await db
+    .prepare(`SELECT 1 AS x FROM profile_sections WHERE profile_id = ? AND section_key = 'automation_preferences'`)
+    .get(String(profileId))
+  if (existing) {
+    await db
+      .prepare(`UPDATE profile_sections SET data = ?, updated_by = ?, updated_at = CURRENT_TIMESTAMP WHERE profile_id = ? AND section_key = 'automation_preferences'`)
+      .run(data, updatedBy, String(profileId))
+  } else {
+    await db
+      .prepare(`INSERT INTO profile_sections (profile_id, section_key, data, updated_by) VALUES (?, 'automation_preferences', ?, ?)`)
+      .run(String(profileId), data, updatedBy)
+  }
+}
+
+router.get('/:id/portal-access-schedule', async (req, res) => {
+  try {
+    if (!isAuthenticatedFromCtx(req.ctx)) return res.status(401).json({ error: 'Authentication required' })
+    const profileId = String(req.params.id)
+    const prefs = await loadAutomationPreferences(req.db, profileId)
+    res.json({ schedule: normalizeSchedule(prefs) })
+  } catch (error) {
+    res.status(500).json(formatError(error))
+  }
+})
+
+router.put('/:id/portal-access-schedule', async (req, res) => {
+  try {
+    if (!isAuthenticatedFromCtx(req.ctx)) return res.status(401).json({ error: 'Authentication required' })
+    const profileId = String(req.params.id)
+    const profileRow = await req.db.prepare('SELECT user_id FROM profiles WHERE id = ?').get(profileId)
+    const canManage =
+      req.ctx?.isAdmin === true ||
+      (req.ctx?.userId && profileRow?.user_id && String(profileRow.user_id) === String(req.ctx.userId)) ||
+      (req.ctx?.activeProfileId && String(req.ctx.activeProfileId) === profileId)
+    if (!canManage) return res.status(403).json({ error: 'Not authorized to manage this profile' })
+
+    // Validate by normalizing — bad windows are dropped; an empty/disabled
+    // schedule means "any time" (the prior always-on behavior).
+    const incoming = {
+      enabled: req.body?.enabled === true,
+      timezone: req.body?.timezone,
+      windows: Array.isArray(req.body?.windows) ? req.body.windows : [],
+    }
+    const normalized = normalizeSchedule({ portal_access: incoming })
+    if (incoming.enabled && normalized.windows.length === 0) {
+      return res.status(400).json({ error: 'At least one valid time window (start/end as HH:MM) is required when enabled.' })
+    }
+
+    const prefs = await loadAutomationPreferences(req.db, profileId)
+    prefs.portal_access = {
+      enabled: normalized.enabled,
+      timezone: normalized.timezone,
+      windows: normalized.windows.map((w) => ({ start: w.start, end: w.end })),
+    }
+    await saveAutomationPreferences(req.db, profileId, prefs, req.ctx?.userId ?? null)
+    res.json({ schedule: normalizeSchedule(prefs) })
   } catch (error) {
     res.status(500).json(formatError(error))
   }

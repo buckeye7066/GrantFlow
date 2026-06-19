@@ -35,6 +35,7 @@ import UniversityApplicationsSection from "@/components/profiles/UniversityAppli
 import StudentPortalsCard from "@/components/profiles/StudentPortalsCard.jsx"
 import SavedLoginsCard from "@/components/profiles/SavedLoginsCard.jsx"
 import OrgMembersCard from "@/components/profiles/OrgMembersCard.jsx"
+import PortalAccessScheduleCard from "@/components/profiles/PortalAccessScheduleCard.jsx"
 import CommittedCollegeWorkspace from "@/components/profiles/CommittedCollegeWorkspace.jsx"
 import SchoolPortalLinkPanel from "@/components/profiles/SchoolPortalLinkPanel.jsx"
 import HealthResourcesCard from "@/components/profiles/HealthResourcesCard.jsx"
@@ -791,6 +792,7 @@ export default function ProfileDetail() {
                 Hamilton uses them to sign in to any grant/application portal she
                 automates from the pipeline. */}
             <SavedLoginsCard profileId={profileId} />
+            <PortalAccessScheduleCard profileId={profileId} />
           </TabsContent>
 
           <TabsContent value="item-funding" className="mt-6">

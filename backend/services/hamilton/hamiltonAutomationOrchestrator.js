@@ -58,6 +58,7 @@ import {
 } from './hamiltonPortalCredentialService.js'
 import { isAuthBlocker, planAuthBackup } from './hamiltonAuthBackupPlan.js'
 import { missingCredentialNotice, hostOfUrl } from './hamiltonMissingCredential.js'
+import { normalizeSchedule, isWithinWindow, nextWindowStart } from './portalAccessSchedule.js'
 import {
   preflightSingleSource,
   readAuthorizations,
@@ -683,6 +684,34 @@ async function runAutopilotPathway(db, {
   // the owner has a saved login for (profile or admin vault). Lets Hamilton reach
   // any portal the profile actually requires instead of hard-stopping on the
   // static allowlist, without opening her up to arbitrary hosts.
+  // Scheduled portal-access window: on an AUTONOMOUS (unattended) run, only drive
+  // portals during the profile's chosen window(s) so the user is available for any
+  // sign-in / 2FA prompt. Outside the window we defer the task to the next window
+  // start. User-initiated runs (no options.autonomous) are never gated — the user
+  // is already present.
+  if (options?.autonomous) {
+    const schedule = normalizeSchedule(profile?.automation_preferences || profile?.sections?.automation_preferences || {})
+    if (schedule.enabled && !isWithinWindow(schedule, new Date())) {
+      const nextAt = nextWindowStart(schedule, new Date())
+      await updateApplicationTask(db, task.id, {
+        status: 'waiting_for_window',
+        nextRetryAt: nextAt,
+        lastAgentMessage: `Outside the scheduled portal-access window; Hamilton will resume at the next window (${nextAt}).`,
+      })
+      await appendTaskEvent(db, {
+        taskId: task.id, eventType: 'note', status: 'waiting_for_window', step: 'schedule',
+        message: `Deferred to the scheduled portal-access window (${nextAt}).`,
+        actorUserId: userId, actorRole: 'agent',
+      })
+      await updateAutopilotRun(db, run.id, {
+        status: 'deferred',
+        result: { deferred: true, deferred_to: nextAt, reason: 'portal_access_window' },
+        finishedAt: new Date().toISOString(),
+      })
+      return { task: await reload(db, task.id), classification, autopilot_run: run.id, deferred: true, next_window_at: nextAt }
+    }
+  }
+
   const credentialedDomains = await listCredentialedDomains(db, task.profile_id).catch(() => new Set())
   const profilePortalHosts = deriveProfilePortalHosts({ profile, opportunity, grant })
   const extraAllowedHosts = [...new Set([...credentialedDomains, ...profilePortalHosts])]
