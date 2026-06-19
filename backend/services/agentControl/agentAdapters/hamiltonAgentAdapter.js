@@ -148,7 +148,7 @@ export class HamiltonAgentAdapter extends BaseAgentAdapter {
                  status, current_pipeline_stage, selected_from_stage
             FROM application_tasks
            WHERE status IN ('queued','ready','analyzing','ready_to_start')
-              OR (status IN ('waiting_for_login','waiting_for_2fa','waiting_for_captcha')
+              OR (status IN ('waiting_for_login','waiting_for_2fa','waiting_for_captcha','waiting_for_window')
                   AND next_retry_at IS NOT NULL AND next_retry_at <= ?)
            ORDER BY updated_at ASC
            LIMIT ?
@@ -189,7 +189,10 @@ export class HamiltonAgentAdapter extends BaseAgentAdapter {
             current_stage: task.current_pipeline_stage || task.selected_from_stage || null,
             kind: 'application_task',
           },
-          options: { control_run_id: controlRunId },
+          // autonomous=true marks this as a scheduled (unattended) run so the
+          // orchestrator honors the profile's portal-access window; user-initiated
+          // runs from the route omit it and run immediately.
+          options: { control_run_id: controlRunId, autonomous: true },
         })
         results.push({ task_id: task.id, ok: true, status: r?.task?.status || 'unknown' })
         processed += 1
