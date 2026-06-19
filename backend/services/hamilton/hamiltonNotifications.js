@@ -45,6 +45,9 @@ export const HAMILTON_USER_NOTIFICATION_TYPES = Object.freeze([
   'hamilton_failed',
   'hamilton_2fa_required',
   'hamilton_captcha_required',
+  // A portal needs a saved login the owner hasn't added yet (sent to the student
+  // and admins, with a deep link to add it).
+  'hamilton_missing_credential',
   // Hard-Stop Resolver dual alerts — user side.
   'hamilton_hard_stop',
   'hamilton_payment_required',
