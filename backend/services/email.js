@@ -74,6 +74,31 @@ function getResend() {
   return resendClient
 }
 
+/**
+ * Generic send with cc support. Returns { ok, id?, skipped?, error? } and never
+ * throws — callers (invoicing, dunning) treat email as best-effort. `from`
+ * defaults to FROM_EMAIL; `cc` accepts a string or array.
+ */
+export async function sendEmail({ to, cc = null, subject, html, text, from = null } = {}) {
+  if (!to || !subject) return { ok: false, error: 'to_and_subject_required' }
+  const resend = getResend()
+  if (!resend || !getFromEmail()) return { ok: false, skipped: true, error: 'email_not_configured' }
+  try {
+    const payload = {
+      from: from || getFromEmail(),
+      to: Array.isArray(to) ? to : [to],
+      subject: String(subject),
+      ...(html ? { html } : {}),
+      ...(text ? { text } : {}),
+    }
+    if (cc) payload.cc = Array.isArray(cc) ? cc : [cc]
+    const result = await resend.emails.send(payload)
+    return { ok: true, id: result?.data?.id || result?.id || null }
+  } catch (err) {
+    return { ok: false, error: err?.message || String(err) }
+  }
+}
+
 export async function sendVerificationEmail(email, code) {
   if (!email) return false
   if (!code) return false

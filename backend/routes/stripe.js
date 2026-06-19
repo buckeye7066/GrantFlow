@@ -7,11 +7,47 @@ import { roundBillableMinutes } from '../services/hourlyRounding.js'
 import { resolveChargeForQuote } from '../services/pricing/chargeResolver.js'
 import { getQuote } from '../services/pricing/quoteBuilder.js'
 import { PRICING_CATALOG_VERSION } from '../services/pricing/pricingTypes.js'
+import { markInvoicePaid } from '../services/billing/invoiceService.js'
 
 import { createLogger } from '../utils/logger.js'
 const routeLogger = createLogger('route:stripe')
 
 const router = express.Router()
+
+/**
+ * Stripe webhook → flips an invoice to PAID (and lifts any suspension) when
+ * Stripe reports payment. Dormant until STRIPE_SECRET_KEY + STRIPE_WEBHOOK_SECRET
+ * are configured. NOTE: for signature verification this route must receive the
+ * RAW request body (mount express.raw on this path in server.js before the JSON
+ * parser); until Stripe is wired we accept the parsed body and skip verification.
+ * Payment → invoice mapping uses Stripe metadata.profile_id / the stripe invoice id.
+ */
+router.post('/webhook', async (req, res) => {
+  const secret = process.env.STRIPE_WEBHOOK_SECRET
+  if (!process.env.STRIPE_SECRET_KEY) {
+    return res.status(503).json({ ok: false, error: 'stripe_not_configured' })
+  }
+  try {
+    let event = req.body
+    if (secret && Buffer.isBuffer(req.body)) {
+      // Real verification path (raw body present).
+      const { default: Stripe } = await import('stripe')
+      const stripe = new Stripe(process.env.STRIPE_SECRET_KEY)
+      event = stripe.webhooks.constructEvent(req.body, req.headers['stripe-signature'], secret)
+    }
+    const type = event?.type
+    const obj = event?.data?.object || {}
+    const profileId = obj?.metadata?.profile_id || null
+    const stripeInvoiceId = obj?.invoice || obj?.id || null
+    if (['invoice.paid', 'checkout.session.completed', 'payment_intent.succeeded'].includes(type)) {
+      await markInvoicePaid(req.db, { profileId, stripeInvoiceId, source: 'stripe_webhook' })
+    }
+    return res.json({ received: true })
+  } catch (err) {
+    routeLogger.warn('stripe webhook failed', { error: err?.message })
+    return res.status(400).json({ ok: false, error: 'webhook_error' })
+  }
+})
 
 function getPublicAppUrl() {
   // Prefer the same envs used by auth flows.
