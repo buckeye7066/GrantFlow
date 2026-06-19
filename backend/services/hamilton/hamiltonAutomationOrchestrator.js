@@ -57,6 +57,7 @@ import {
   registrableDomain,
 } from './hamiltonPortalCredentialService.js'
 import { isAuthBlocker, planAuthBackup } from './hamiltonAuthBackupPlan.js'
+import { missingCredentialNotice, hostOfUrl } from './hamiltonMissingCredential.js'
 import {
   preflightSingleSource,
   readAuthorizations,
@@ -945,19 +946,49 @@ async function runAutopilotPathway(db, {
         actorRole: 'agent',
         details: { autopilot_run_id: run.id, blocker_kind: engineResult.blocker_kind, next_retry_at: plan.nextRetryAt, retry_count: priorRetries + 1 },
       })
-      await emitHamiltonNotificationToProfileAndAdmins(db, {
-        profileId: task.profile_id,
-        profileUserId: task.user_id,
-        type: blockerNotificationType(engineResult.blocker_kind),
-        title: blockerTitle(engineResult.blocker_kind),
-        message: plan.message,
-        severity: 'warning',
-        data: {
-          task_id: task.id, run_id: run.id, blocker_kind: engineResult.blocker_kind,
-          auto_retry: true, next_retry_at: plan.nextRetryAt, attempt: plan.attempt, max_attempts: plan.maxAttempts,
-          portal_url: url,
-        },
-      })
+      // If the gate is a login and we hold NO credential for this host (neither
+      // the profile vault nor the shared admin vault), flag it as a missing
+      // credential with a deep link that jumps to the prefilled add-login form —
+      // so the student (next login) or the admin (next login) can add it and
+      // Hamilton resumes. Otherwise emit the normal "sign in / approve" gate.
+      const blockerHost = hostOfUrl(url)
+      const credentialMissing = !!blockerHost
+        && !credentialedDomains.has(registrableDomain(blockerHost) || blockerHost)
+      if (credentialMissing) {
+        const notice = missingCredentialNotice({
+          profileId: task.profile_id,
+          host: blockerHost,
+          loginUrl: url,
+          fundingTitle: opportunity?.title || grant?.title || null,
+        })
+        await emitHamiltonNotificationToProfileAndAdmins(db, {
+          profileId: task.profile_id,
+          profileUserId: task.user_id,
+          type: notice.type,
+          title: notice.title,
+          message: notice.message,
+          severity: 'warning',
+          data: {
+            ...notice.data,
+            task_id: task.id, run_id: run.id, blocker_kind: engineResult.blocker_kind,
+            auto_retry: true, next_retry_at: plan.nextRetryAt, attempt: plan.attempt, max_attempts: plan.maxAttempts,
+          },
+        })
+      } else {
+        await emitHamiltonNotificationToProfileAndAdmins(db, {
+          profileId: task.profile_id,
+          profileUserId: task.user_id,
+          type: blockerNotificationType(engineResult.blocker_kind),
+          title: blockerTitle(engineResult.blocker_kind),
+          message: plan.message,
+          severity: 'warning',
+          data: {
+            task_id: task.id, run_id: run.id, blocker_kind: engineResult.blocker_kind,
+            auto_retry: true, next_retry_at: plan.nextRetryAt, attempt: plan.attempt, max_attempts: plan.maxAttempts,
+            portal_url: url,
+          },
+        })
+      }
     } else {
       // Not an auth blocker, or the backoff is exhausted — hand to a human.
       await updateApplicationTask(db, task.id, {

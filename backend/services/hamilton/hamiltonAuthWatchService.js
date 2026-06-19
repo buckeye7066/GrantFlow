@@ -15,6 +15,9 @@ const AUTH_NOTIFICATION_TYPES = Object.freeze([
   'hamilton_login_required',
   'hamilton_2fa_required',
   'hamilton_captcha_required',
+  // A portal needs a saved login the owner hasn't added yet — surfaced at the
+  // next login of the student and the admin so either can add it.
+  'hamilton_missing_credential',
   // admin recipient variants
   'hamilton_admin_login_required',
 ])
