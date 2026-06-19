@@ -7,7 +7,7 @@
  * available via any API — manual export only).
  */
 import express from 'express'
-import { importContactsAsLeads, OWNER_SEED_CONTACTS } from '../services/yana/yanaContactsImport.js'
+import { importContactsAsLeads, OWNER_SEED_CONTACTS, parseContactsCsv } from '../services/yana/yanaContactsImport.js'
 import { createLogger } from '../utils/logger.js'
 
 const router = express.Router()
@@ -24,7 +24,10 @@ function requireAdmin(req, res) {
 router.post('/import', async (req, res) => {
   if (!requireAdmin(req, res)) return
   try {
-    const contacts = Array.isArray(req.body?.contacts) ? req.body.contacts : []
+    // Accept an explicit list OR a pasted/uploaded CSV (Google/Outlook export).
+    const contacts = Array.isArray(req.body?.contacts)
+      ? req.body.contacts
+      : (req.body?.csv ? parseContactsCsv(String(req.body.csv)) : [])
     const source = String(req.body?.source || 'owner_contacts').slice(0, 40)
     const result = await importContactsAsLeads(req.db, { contacts, source, actorUserId: req.ctx?.userId || null })
     log.info('contacts imported', { source, ...result, details: undefined })

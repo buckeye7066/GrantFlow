@@ -8,6 +8,9 @@
  * (handled by the Toaster + FlashHighlighter).
  */
 
+// Urgency drives BOTH color (white→green→yellow→orange→red) and how long the
+// toast stays (base 3.5s, +2s per level) — see use-toast.jsx. An explicit
+// `duration` in options still overrides.
 function build(base, options = {}) {
   const { navigateTo = null, flash = null, duration } = options || {};
   const toastArgs = { ...base };
@@ -18,17 +21,22 @@ function build(base, options = {}) {
 }
 
 export function showSuccessToast(toast, title, description, options) {
-  toast(build({ title, description }, options));
+  toast(build({ urgency: "success", title, description }, options)); // green
 }
 
 export function showErrorToast(toast, title, description, options) {
-  toast(build({ variant: "destructive", title, description }, options));
+  toast(build({ urgency: "critical", title, description }, options)); // red, longest
 }
 
 export function showWarningToast(toast, title, description, options) {
-  toast(build({ title, description, duration: 6000 }, options));
+  toast(build({ urgency: "warning", title, description }, options)); // yellow
 }
 
 export function showInfoToast(toast, title, description, options) {
-  toast(build({ title, description, duration: 5000 }, options));
+  toast(build({ urgency: "info", title, description }, options)); // white, shortest
+}
+
+// Orange — between a warning and a critical error (e.g. action needed soon).
+export function showElevatedToast(toast, title, description, options) {
+  toast(build({ urgency: "elevated", title, description }, options));
 }

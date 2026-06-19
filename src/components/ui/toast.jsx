@@ -25,11 +25,19 @@ const toastVariants = cva(
   "group pointer-events-auto relative flex w-full items-start justify-between gap-4 overflow-hidden rounded-lg border p-4 pr-10 shadow-lg shadow-slate-900/10 transition-all data-[swipe=cancel]:translate-x-0 data-[swipe=end]:translate-x-[var(--radix-toast-swipe-end-x)] data-[swipe=move]:translate-x-[var(--radix-toast-swipe-move-x)] data-[swipe=move]:transition-none data-[state=open]:animate-in data-[state=closed]:animate-out data-[swipe=end]:animate-out data-[state=closed]:fade-out-80 data-[state=closed]:slide-out-to-right-full data-[state=open]:slide-in-from-top-full data-[state=open]:sm:slide-in-from-bottom-full",
   {
     variants: {
+      // Urgency ramp (least → most urgent): white → green → yellow → orange → red.
+      // The deeper the color, the more urgent the message.
       variant: {
         default:
           "border-slate-200 bg-white text-slate-900 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-50",
+        success:
+          "border-emerald-300 bg-emerald-100 text-emerald-950 dark:border-emerald-800 dark:bg-emerald-950 dark:text-emerald-50",
+        warning:
+          "border-amber-400 bg-amber-200 text-amber-950 dark:border-amber-700 dark:bg-amber-950 dark:text-amber-50",
+        elevated:
+          "border-orange-500 bg-orange-300 text-orange-950 dark:border-orange-700 dark:bg-orange-950 dark:text-orange-50",
         destructive:
-          "destructive group border-red-200 bg-red-50 text-red-950 dark:border-red-900 dark:bg-red-950 dark:text-red-50",
+          "destructive group border-red-500 bg-red-300 text-red-950 dark:border-red-800 dark:bg-red-950 dark:text-red-50",
       },
     },
     defaultVariants: {

@@ -81,6 +81,34 @@ export async function importContactsAsLeads(db, { contacts = [], source = 'owner
   return { imported, skipped, invalid, details }
 }
 
+/**
+ * Parse a contacts CSV (Google Contacts / Outlook / generic "Name,Email") into
+ * [{email, name}]. Header-aware (finds any email column and a name / first-name
+ * / last-name column); falls back to detecting an email-looking cell per row.
+ */
+export function parseContactsCsv(text) {
+  if (!text || typeof text !== 'string') return []
+  const lines = text.split(/\r?\n/).filter((l) => l.trim())
+  if (!lines.length) return []
+  const splitRow = (line) => line.split(',').map((c) => c.trim().replace(/^"|"$/g, ''))
+  const header = splitRow(lines[0]).map((h) => h.toLowerCase())
+  const emailIdx = header.findIndex((h) => /e-?mail/.test(h))
+  const nameIdx = header.findIndex((h) => h === 'name' || /full ?name|display ?name/.test(h))
+  const firstIdx = header.findIndex((h) => /first ?name/.test(h))
+  const lastIdx = header.findIndex((h) => /last ?name/.test(h))
+  const hasHeader = emailIdx !== -1 || nameIdx !== -1 || firstIdx !== -1
+  const out = []
+  for (const line of hasHeader ? lines.slice(1) : lines) {
+    const cells = splitRow(line)
+    let email = emailIdx !== -1 ? cells[emailIdx] : null
+    let name = nameIdx !== -1 ? cells[nameIdx] : null
+    if (!name && (firstIdx !== -1 || lastIdx !== -1)) name = [cells[firstIdx], cells[lastIdx]].filter(Boolean).join(' ').trim() || null
+    if (!email) email = cells.find((c) => EMAIL_RE.test(c)) || null
+    if (email) out.push({ email, name: name || null })
+  }
+  return out
+}
+
 /** The owner's own email addresses, seeded as the first contacts/leads. */
 export const OWNER_SEED_CONTACTS = Object.freeze([
   'firerookie_74@yahoo.com',
