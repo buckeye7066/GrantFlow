@@ -16,6 +16,19 @@
 
 import fetch from 'node-fetch';
 import { createLogger } from '../../utils/logger.js'
+import { isPlaceholderUrl } from '../../config/urlRules.js'
+
+/**
+ * Accept a crawled third-party URL only if it's a real http(s) URL (the
+ * canonical placeholder check also rejects localhost/127.0.0.1/non-http
+ * schemes), otherwise fall back to the trusted portal URL. Prevents unsanitized
+ * Socrata `record.url` values from being persisted as an opportunity's source.
+ */
+function safeSourceUrl(candidate, fallback) {
+  const c = typeof candidate === 'string' ? candidate.trim() : '';
+  if (c && !isPlaceholderUrl(c) && c.length <= 2048) return c;
+  return fallback;
+}
 const log = createLogger('stateOpenDataConnector')
 
 const RATE_LIMIT_MS = 1000; // 1 request per second
@@ -163,7 +176,7 @@ export async function searchStateData(state, params = {}) {
             sponsor: record.agency || record.grantor || `${state} State Government`,
             source: portal.domain,
             source_id: record.id || record.program_number || null,
-            source_url: record.url || record.program_url || portalUrl,
+            source_url: safeSourceUrl(record.url || record.program_url, portalUrl),
             description: record.description || record.program_description || `State grant program in ${state}`,
             deadline: record.deadline || record.close_date || null,
             deadline_type: record.deadline ? 'fixed' : 'rolling',

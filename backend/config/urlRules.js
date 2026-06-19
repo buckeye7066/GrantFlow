@@ -126,6 +126,96 @@ export const SSRF_BLOCKED_HOSTS = new Set([
   'metadata.google.internal',
 ])
 
+/**
+ * Is the given IP literal in a private / loopback / link-local / reserved range
+ * that an outbound crawl or link-check must never reach? Covers IPv4 and the
+ * common IPv6 cases (including IPv4-mapped ::ffff:a.b.c.d).
+ *
+ * @param {string} ip
+ * @returns {boolean}
+ */
+export function isPrivateIp(ip) {
+  if (!ip || typeof ip !== 'string') return true // fail closed
+  let addr = ip.trim().toLowerCase()
+
+  // IPv4-mapped IPv6 (::ffff:192.168.0.1) → evaluate the embedded v4.
+  const mapped = addr.match(/^::ffff:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/)
+  if (mapped) addr = mapped[1]
+
+  if (addr.includes(':')) {
+    // IPv6
+    if (addr === '::1' || addr === '::') return true // loopback / unspecified
+    if (addr.startsWith('fe80')) return true // link-local
+    if (addr.startsWith('fc') || addr.startsWith('fd')) return true // unique-local fc00::/7
+    return false
+  }
+
+  const parts = addr.split('.')
+  if (parts.length !== 4) return true // not a clean dotted-quad → fail closed
+  const o = parts.map((p) => Number(p))
+  if (o.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) return true
+  const [a, b] = o
+  if (a === 10) return true // 10.0.0.0/8
+  if (a === 127) return true // 127.0.0.0/8 loopback
+  if (a === 0) return true // 0.0.0.0/8
+  if (a === 169 && b === 254) return true // 169.254.0.0/16 link-local (cloud metadata)
+  if (a === 172 && b >= 16 && b <= 31) return true // 172.16.0.0/12
+  if (a === 192 && b === 168) return true // 192.168.0.0/16
+  if (a === 100 && b >= 64 && b <= 127) return true // 100.64.0.0/10 CGNAT
+  if (a === 192 && b === 0) return true // 192.0.0.0/24 IETF protocol assignments
+  if (a === 198 && (b === 18 || b === 19)) return true // 198.18.0.0/15 benchmarking
+  if (a >= 224) return true // multicast / reserved (224.0.0.0/3)
+  return false
+}
+
+/**
+ * SSRF gate for outbound fetches against untrusted/ingested URLs.
+ *
+ * Validates scheme (http/https only), rejects known metadata/loopback hostnames,
+ * and — crucially — resolves the hostname via DNS and rejects if ANY resolved
+ * address is private/loopback/link-local (defeats hostnames that point at
+ * internal infrastructure). Call this BEFORE fetching crawled/ingested URLs.
+ *
+ * NOTE: callers that follow redirects should re-validate each hop's URL, since
+ * this only checks the initial target.
+ *
+ * @param {string} url
+ * @returns {Promise<{ ok: boolean, reason?: string }>}
+ */
+export async function assertSsrfSafeUrl(url) {
+  if (!url || typeof url !== 'string') return { ok: false, reason: 'empty_url' }
+  let parsed
+  try {
+    parsed = new URL(url.trim())
+  } catch {
+    return { ok: false, reason: 'unparseable_url' }
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    return { ok: false, reason: `blocked_scheme:${parsed.protocol}` }
+  }
+  const host = parsed.hostname.toLowerCase().replace(/^\[|\]$/g, '')
+  if (SSRF_BLOCKED_HOSTS.has(host)) return { ok: false, reason: `blocked_host:${host}` }
+
+  // If the host is already an IP literal, check it directly (no DNS needed).
+  const isIpLiteral = /^[0-9.]+$/.test(host) || host.includes(':')
+  if (isIpLiteral) {
+    return isPrivateIp(host) ? { ok: false, reason: `private_ip:${host}` } : { ok: true }
+  }
+
+  // Resolve the hostname and reject if any address is private.
+  try {
+    const dns = await import('node:dns')
+    const records = await dns.promises.lookup(host, { all: true })
+    if (!records.length) return { ok: false, reason: 'dns_no_records' }
+    for (const r of records) {
+      if (isPrivateIp(r.address)) return { ok: false, reason: `resolves_private:${r.address}` }
+    }
+    return { ok: true }
+  } catch (err) {
+    return { ok: false, reason: `dns_error:${err?.code || err?.message || 'unknown'}` }
+  }
+}
+
 // ── Link verification skip list ─────────────────────────────────────────
 // These domains should not be HEAD-checked by the link verifier.
 

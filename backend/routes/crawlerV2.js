@@ -15,6 +15,7 @@ function requireAdminOrToken(req, res) {
 }
 
 router.get('/health', async (req, res) => {
+  if (!requireAdminOrToken(req, res)) return
   try {
     const lastRun = await req.db
       .prepare(

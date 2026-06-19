@@ -49,6 +49,23 @@ describe('Vehicle Opportunities Pipeline', () => {
     vi.clearAllMocks();
   });
 
+  // ── Auth: ingest is a machine-fed endpoint behind a shared secret ──────────
+  it('rejects an unauthenticated ingest request', async () => {
+    const res = await request(app)
+      .post('/api/vehicles/ingest')
+      .send({ title: 'Anonymous Car', link: 'https://example.com/cars/anon' });
+
+    // No admin/ctx and no ingest token → 403 (token configured but not supplied).
+    expect(res.status).toBe(403);
+    expect(res.body.ok).toBe(false);
+
+    // Nothing should have been written.
+    const row = db
+      .prepare('SELECT id FROM vehicle_opportunities WHERE link = ?')
+      .get('https://example.com/cars/anon');
+    expect(row).toBeFalsy();
+  });
+
   // ── Test 1: Successful ingestion ────────────────────────────────────────────
   it('inserts a valid vehicle and returns 201', async () => {
     const payload = {
@@ -67,7 +84,7 @@ describe('Vehicle Opportunities Pipeline', () => {
     };
 
     const res = await request(app)
-      .post('/api/vehicles/ingest')
+      .post('/api/vehicles/ingest').set(TEST_ADMIN_AUTH_HEADER)
       .send(payload);
 
     expect(res.status).toBe(201);
@@ -97,14 +114,14 @@ describe('Vehicle Opportunities Pipeline', () => {
 
     // First insert
     const first = await request(app)
-      .post('/api/vehicles/ingest')
+      .post('/api/vehicles/ingest').set(TEST_ADMIN_AUTH_HEADER)
       .send(payload);
     expect(first.status).toBe(201);
     expect(first.body.inserted).toBe(true);
 
     // Second insert — same link
     const second = await request(app)
-      .post('/api/vehicles/ingest')
+      .post('/api/vehicles/ingest').set(TEST_ADMIN_AUTH_HEADER)
       .send(payload);
     expect(second.status).toBe(200);
     expect(second.body.ok).toBe(true);
@@ -129,7 +146,7 @@ describe('Vehicle Opportunities Pipeline', () => {
     };
 
     const res = await request(app)
-      .post('/api/vehicles/ingest')
+      .post('/api/vehicles/ingest').set(TEST_ADMIN_AUTH_HEADER)
       .send(payload);
 
     expect(res.status).toBe(422);
@@ -154,7 +171,7 @@ describe('Vehicle Opportunities Pipeline', () => {
     };
 
     const res = await request(app)
-      .post('/api/vehicles/ingest')
+      .post('/api/vehicles/ingest').set(TEST_ADMIN_AUTH_HEADER)
       .send(payload);
 
     expect(res.status).toBe(201);
@@ -164,7 +181,7 @@ describe('Vehicle Opportunities Pipeline', () => {
   // ── Test 4: Validation — missing required fields ────────────────────────────
   it('returns 400 when required field "title" is missing', async () => {
     const res = await request(app)
-      .post('/api/vehicles/ingest')
+      .post('/api/vehicles/ingest').set(TEST_ADMIN_AUTH_HEADER)
       .send({ link: 'https://example.com/cars/no-title' });
 
     expect(res.status).toBe(400);
@@ -177,7 +194,7 @@ describe('Vehicle Opportunities Pipeline', () => {
 
   it('returns 400 when required field "link" is missing', async () => {
     const res = await request(app)
-      .post('/api/vehicles/ingest')
+      .post('/api/vehicles/ingest').set(TEST_ADMIN_AUTH_HEADER)
       .send({ title: 'Some Car' });
 
     expect(res.status).toBe(400);
@@ -197,7 +214,7 @@ describe('Vehicle Opportunities Pipeline', () => {
     };
 
     const res = await request(app)
-      .post('/api/vehicles/ingest')
+      .post('/api/vehicles/ingest').set(TEST_ADMIN_AUTH_HEADER)
       .send(payload);
 
     expect(res.status).toBe(201);
@@ -214,11 +231,11 @@ describe('Vehicle Opportunities Pipeline', () => {
     };
 
     // First insert
-    await request(app).post('/api/vehicles/ingest').send(payload);
+    await request(app).post('/api/vehicles/ingest').set(TEST_ADMIN_AUTH_HEADER).send(payload);
     vi.clearAllMocks();
 
     // Second (duplicate) insert
-    const res = await request(app).post('/api/vehicles/ingest').send(payload);
+    const res = await request(app).post('/api/vehicles/ingest').set(TEST_ADMIN_AUTH_HEADER).send(payload);
     expect(res.status).toBe(200);
     expect(scheduleDebouncedVehicleSync).not.toHaveBeenCalled();
   });

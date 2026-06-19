@@ -102,13 +102,17 @@ async function fetchGeoIndexIds(db, zips, limit = 3000) {
     const ph = zips.map(() => '?').join(',')
     const isPostgres = db?.dialect === 'postgres'
     const activeVal = isPostgres ? 'TRUE' : '1'
+    // Coerce LIMIT to a bounded integer before interpolation — never trust the
+    // caller-supplied value verbatim in SQL (LIMIT can't be parameterized
+    // portably across both drivers through this wrapper).
+    const safeLimit = Math.max(1, Math.min(100000, Math.floor(Number(limit)) || 3000))
     const sql = `
       SELECT DISTINCT gi.opportunity_id
       FROM funding_opportunity_geo_index gi
       JOIN funding_opportunities fo ON fo.id = gi.opportunity_id
       WHERE gi.zip IN (${ph})
         AND fo.is_active = ${activeVal}
-      LIMIT ${limit}
+      LIMIT ${safeLimit}
     `
     const rows = await db.prepare(sql).all(...zips)
     return (rows || []).map((r) => r.opportunity_id).filter(Boolean)

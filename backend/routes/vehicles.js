@@ -10,6 +10,7 @@
  */
 
 import express from 'express';
+import crypto from 'node:crypto';
 import { randomUUID } from 'crypto';
 import { formatError } from '../middleware/errorHandler.js';
 import { scheduleDebouncedVehicleSync } from '../services/githubSyncVehicles.js';
@@ -17,6 +18,52 @@ import { createLogger } from '../utils/logger.js'
 const routeLogger = createLogger('route:vehicles')
 
 const router = express.Router();
+
+/**
+ * Constant-time secret comparison. timingSafeEqual throws on unequal lengths,
+ * so the length check both prevents that and short-circuits mismatches without
+ * leaking length via timing once we're past it.
+ */
+function timingSafeEq(a, b) {
+  if (!a || !b) return false;
+  const ba = Buffer.from(String(a));
+  const bb = Buffer.from(String(b));
+  return ba.length === bb.length && crypto.timingSafeEqual(ba, bb);
+}
+
+function resolveVehiclesIngestToken() {
+  return (
+    process.env.VEHICLES_INGEST_TOKEN ||
+    process.env.ADMIN_TOKEN ||
+    process.env.ANYA_ADMIN_TOKEN ||
+    null
+  );
+}
+
+/**
+ * Shared-secret guard for the machine-fed ingest endpoint.
+ *
+ * /ingest is pushed to by an external scraper (each insert triggers an outbound
+ * GitHub sync), so it is intentionally callable without a user session — but it
+ * must NOT be anonymous. We require VEHICLES_INGEST_TOKEN (falling back to the
+ * admin token) supplied via x-vehicles-token or Authorization: Bearer, mirroring
+ * the blocklist ingest pattern. A logged-in admin (req.ctx.isAdmin) also passes.
+ */
+function ingestAuth(req, res, next) {
+  if (req.ctx?.isAdmin === true || req.user?.is_admin === true) return next();
+  const configured = resolveVehiclesIngestToken();
+  if (!configured) {
+    return res
+      .status(401)
+      .json({ ok: false, error: 'Ingest token not configured (set VEHICLES_INGEST_TOKEN)' });
+  }
+  const headerToken =
+    req.headers['x-vehicles-token'] || req.headers.authorization?.replace('Bearer ', '');
+  if (!timingSafeEq(headerToken, configured)) {
+    return res.status(403).json({ ok: false, error: 'Invalid ingest token' });
+  }
+  return next();
+}
 
 /**
  * Sanitize and coerce an inbound vehicle payload.
@@ -114,7 +161,7 @@ function detectScam(data) {
  *   422  { ok: false, error, rejected: true, reason }
  *   500  { ok: false, error }
  */
-router.post('/ingest', async (req, res) => {
+router.post('/ingest', ingestAuth, async (req, res) => {
   const db = req.db;
   const { data, errors } = validateAndCoerce(req.body || {});
 

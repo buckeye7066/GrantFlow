@@ -1273,6 +1273,9 @@ router.post('/discover-needs', enforceTierCapability(TIER_CAPABILITIES.DOCUMENT_
   try {
     const { profile_id, custom_goal } = req.body;
     if (!profile_id) return res.status(400).json({ error: 'profile_id is required' });
+    // IDOR guard: this reads the full profile PII below, so verify the caller may
+    // access this organization/profile (sibling routes /match, /analyze/eligibility do the same).
+    if (!(await ensureOrganizationAccess(req, res, String(profile_id)))) return;
 
     const profile = await req.db.prepare(`
       SELECT p.*
@@ -1381,6 +1384,8 @@ router.post('/generate-profile-todo', enforceTierCapability(TIER_CAPABILITIES.DO
   try {
     const { profile_id } = req.body;
     if (!profile_id) return res.status(400).json({ error: 'profile_id is required' });
+    // IDOR guard: reads the full profile + its grants/sections below — verify access first.
+    if (!(await ensureOrganizationAccess(req, res, String(profile_id)))) return;
 
     const db = req.db;
 

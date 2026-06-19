@@ -1,6 +1,7 @@
 import express from 'express'
 import crypto from 'crypto'
 import { sendServiceApplicationEmail } from '../services/email.js'
+import { sensitiveRateLimiter } from '../middleware/rateLimiting.js'
 import { isDesignatedProfileId } from '../utils/ensureDesignatedProfiles.js'
 
 import { createLogger } from '../utils/logger.js'
@@ -101,7 +102,11 @@ async function saveApplicationToDb(db, data) {
  * POST /api/service-application
  * Generic endpoint for contact forms and service applications
  */
-router.post('/', async (req, res) => {
+// These two endpoints are intentionally public (contact form + service-application
+// intake — no login). They write a DB row and trigger an outbound email, so they
+// are throttled with the strict 5/min/IP limiter to prevent email-bombing and
+// storage-exhaustion by anonymous callers.
+router.post('/', sensitiveRateLimiter, async (req, res) => {
   try {
     const { type, name, email, subject, message } = req.body // recipient intentionally omitted â always use SERVICE_APPLICATION_EMAIL
 
@@ -175,7 +180,7 @@ router.post('/', async (req, res) => {
  * POST /api/service-application/submit
  * Submit a service application and send via email
  */
-router.post('/submit', async (req, res) => {
+router.post('/submit', sensitiveRateLimiter, async (req, res) => {
   try {
     const {
       fullName,
