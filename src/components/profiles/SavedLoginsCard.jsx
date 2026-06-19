@@ -1,7 +1,8 @@
-import React, { useState } from "react"
+import React, { useEffect, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { Bot, Copy, Eye, FileUp, KeyRound, Loader2, Lock, Plus, ShieldCheck, Sparkles, Trash2, Upload } from "lucide-react"
+import { Bot, Check, Copy, Eye, FileUp, KeyRound, Loader2, Lock, Plus, ShieldCheck, Smartphone, Sparkles, Trash2, Upload } from "lucide-react"
 import { apiFetch } from "@/api/client"
+import { generateTotp, isValidTotpSecret, secondsRemaining } from "@/lib/totpPreview"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -26,7 +27,10 @@ export default function SavedLoginsCard({ profileId }) {
   const { toast } = useToast()
   const queryClient = useQueryClient()
   const [open, setOpen] = useState(false)
-  const [form, setForm] = useState({ portalHost: "", login_url: "", username: "", password: "", label: "" })
+  const [form, setForm] = useState({ portalHost: "", login_url: "", username: "", password: "", label: "", totp: "" })
+  // Live authenticator-code preview so the user can confirm the secret they
+  // pasted produces the same rotating code their phone shows — before saving.
+  const [totpPreview, setTotpPreview] = useState({ code: null, seconds: 30 })
   // Hamilton-generated credential flow: separate dialog so the user only ever
   // supplies host + username; the server picks the password.
   const [genOpen, setGenOpen] = useState(false)
@@ -65,12 +69,20 @@ export default function SavedLoginsCard({ profileId }) {
           username: form.username,
           password: form.password,
           label: form.label || null,
+          // Optional authenticator-app secret. Sent only when present and valid;
+          // encrypted at rest server-side and never returned to the browser.
+          totp_secret: form.totp.trim() && isValidTotpSecret(form.totp) ? form.totp.trim() : null,
         }),
       }),
     onSuccess: () => {
-      toast({ title: "Login saved", description: "Hamilton can now sign in to this portal for this profile." })
+      toast({
+        title: "Login saved",
+        description: form.totp.trim()
+          ? "Hamilton can now sign in and clear the authenticator-app step for this portal."
+          : "Hamilton can now sign in to this portal for this profile.",
+      })
       setOpen(false)
-      setForm({ portalHost: "", login_url: "", username: "", password: "", label: "" })
+      setForm({ portalHost: "", login_url: "", username: "", password: "", label: "", totp: "" })
       queryClient.invalidateQueries({ queryKey: ["hamilton-credentials", profileId] })
     },
     onError: (err) => {
@@ -232,7 +244,32 @@ export default function SavedLoginsCard({ profileId }) {
     reader.readAsText(file)
   }
 
-  const canSave = form.username.trim() && form.password.trim() && (form.portalHost.trim() || form.login_url.trim())
+  // Authenticator-secret validation + live code preview. The secret is optional,
+  // so an empty field is fine; a non-empty-but-invalid one blocks save and shows
+  // a hint. When valid, we regenerate the 6-digit code every second so the user
+  // can match it against their phone.
+  const totpEntered = form.totp.trim()
+  const totpValid = totpEntered ? isValidTotpSecret(form.totp) : true
+  useEffect(() => {
+    if (!open || !totpEntered || !totpValid) {
+      setTotpPreview({ code: null, seconds: 30 })
+      return undefined
+    }
+    let active = true
+    const tick = async () => {
+      try {
+        const code = await generateTotp(form.totp)
+        if (active) setTotpPreview({ code, seconds: secondsRemaining(Date.now(), form.totp) })
+      } catch {
+        if (active) setTotpPreview({ code: null, seconds: 30 })
+      }
+    }
+    tick()
+    const id = setInterval(tick, 1000)
+    return () => { active = false; clearInterval(id) }
+  }, [open, form.totp, totpEntered, totpValid])
+
+  const canSave = form.username.trim() && form.password.trim() && (form.portalHost.trim() || form.login_url.trim()) && totpValid
   const canGenerate = genForm.username.trim() && (genForm.portalHost.trim() || genForm.login_url.trim())
   const canImport = importCsvText.trim().length > 0 && /[,\t]/.test(importCsvText.split("\n")[0] || "")
 
@@ -279,8 +316,8 @@ export default function SavedLoginsCard({ profileId }) {
         <Alert className="border-indigo-200 bg-indigo-50">
           <ShieldCheck className="h-4 w-4 text-indigo-700" />
           <AlertDescription className="text-indigo-950 text-sm">
-            Passwords are <span className="font-semibold">encrypted at rest</span> and never shown again or sent back to your browser.
-            Hamilton uses them only to sign in to that portal during autopilot — and still stops at CAPTCHA, 2FA, payment, or signature.
+            Passwords (and any authenticator-app key) are <span className="font-semibold">encrypted at rest</span> and never shown again or sent back to your browser.
+            Hamilton uses them only to sign in to that portal during autopilot. Add an authenticator-app key below and she can clear that 2FA step too — she still stops at CAPTCHA, payment, or signature.
           </AlertDescription>
         </Alert>
 
@@ -301,6 +338,12 @@ export default function SavedLoginsCard({ profileId }) {
                       <Badge className="text-[11px] bg-amber-100 text-amber-800 border-amber-200 hover:bg-amber-100 gap-1">
                         <Bot className="h-3 w-3" />
                         Generated by {c.generated_by === "hamilton" ? "Hamilton" : c.generated_by}
+                      </Badge>
+                    )}
+                    {c.has_totp && (
+                      <Badge className="text-[11px] bg-violet-100 text-violet-800 border-violet-200 hover:bg-violet-100 gap-1">
+                        <Smartphone className="h-3 w-3" />
+                        2FA ready
                       </Badge>
                     )}
                   </div>
@@ -586,6 +629,52 @@ Example,https://example.com/login,user@example.com,hunter2,'
               <Label htmlFor="cred-label">Label (optional)</Label>
               <Input id="cred-label" placeholder="MTSU student login"
                 value={form.label} onChange={(e) => set("label", e.target.value)} />
+            </div>
+
+            {/* Optional authenticator-app (TOTP) secret. Lets Hamilton clear a
+                2FA gate on her own. Live code preview = instant confirmation the
+                secret is right, before saving. */}
+            <div className="space-y-1.5 rounded-md border border-violet-200 bg-violet-50/60 p-3">
+              <div className="flex items-center gap-2">
+                <Smartphone className="h-4 w-4 text-violet-600" />
+                <Label htmlFor="cred-totp" className="text-violet-950">
+                  Authenticator app code <span className="font-normal text-violet-700">— optional</span>
+                </Label>
+              </div>
+              <Input
+                id="cred-totp"
+                autoComplete="off"
+                spellCheck={false}
+                placeholder="Paste the setup key  (e.g. JBSW Y3DP EHPK 3PXP)"
+                value={form.totp}
+                onChange={(e) => set("totp", e.target.value)}
+                className={!totpValid ? "border-red-300 focus-visible:ring-red-400" : ""}
+              />
+              <p className="text-xs text-violet-800/80">
+                Only if this portal uses an authenticator app (Google Authenticator, Authy, Microsoft Authenticator…).
+                When you turn on 2FA, choose <span className="font-medium">“Can’t scan the QR code?”</span> and paste the
+                <span className="font-medium"> setup key</span> it shows. A full <code>otpauth://</code> link works too. Leave blank otherwise.
+              </p>
+              {totpEntered && !totpValid && (
+                <p className="text-xs font-medium text-red-600">
+                  That doesn’t look like an authenticator setup key. Paste the letters/numbers (spaces are fine) or the full otpauth:// link.
+                </p>
+              )}
+              {totpEntered && totpValid && totpPreview.code && (
+                <div className="flex items-center gap-2 rounded-md bg-white border border-violet-200 px-2.5 py-1.5">
+                  <Check className="h-4 w-4 text-emerald-600 shrink-0" />
+                  <span className="text-xs text-slate-500">Looks good — code now:</span>
+                  <code className="font-mono text-base font-semibold tracking-widest text-violet-900 tabular-nums">
+                    {totpPreview.code.slice(0, 3)} {totpPreview.code.slice(3)}
+                  </code>
+                  <span className="ml-auto text-[11px] text-slate-400 tabular-nums">refreshes in {totpPreview.seconds}s</span>
+                </div>
+              )}
+              {totpEntered && totpValid && totpPreview.code && (
+                <p className="text-[11px] text-slate-500">
+                  This should match the code in your authenticator app right now. If it doesn’t, the key was entered wrong.
+                </p>
+              )}
             </div>
           </div>
           <DialogFooter>

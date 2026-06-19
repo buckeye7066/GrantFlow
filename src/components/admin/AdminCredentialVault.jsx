@@ -155,7 +155,14 @@ export default function AdminCredentialVault() {
                 {rows.map((c) => (
                   <tr key={c.id} className="border-t border-slate-100">
                     <td className="px-3 py-2 font-medium text-slate-900">{c.portal_host}</td>
-                    <td className="px-3 py-2 text-slate-600">{c.username_masked || '—'}</td>
+                    <td className="px-3 py-2 text-slate-600">
+                      <span className="inline-flex items-center gap-1.5">
+                        {c.username_masked || '—'}
+                        {c.has_totp && (
+                          <Badge className="text-[10px] bg-violet-100 text-violet-800 border-violet-200 hover:bg-violet-100">2FA</Badge>
+                        )}
+                      </span>
+                    </td>
                     <td className="px-3 py-2 text-xs text-slate-500">{c.label || '—'}</td>
                     <td className="px-3 py-2">
                       <select
