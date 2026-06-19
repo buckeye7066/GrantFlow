@@ -135,16 +135,25 @@ export class HamiltonAgentAdapter extends BaseAgentAdapter {
       // even when the queue had real work. The status set below covers both
       // the legacy ("queued","ready") and automation-task-extension
       // ("analyzing","ready_to_start") flows defined in TASK_STATUSES.
+      // Also re-pick auth-blocked tasks (login / 2FA / captcha) whose backoff
+      // timer is due — this is Hamilton's "keep trying to authenticate" backup
+      // plan. Each retry re-checks the vault + saved sessions, so she resumes
+      // the moment the user signs in once. Compare against a JS-supplied ISO
+      // `now` so the format matches the stored ISO next_retry_at (avoids the
+      // SQLite CURRENT_TIMESTAMP vs ISO lexicographic mismatch).
+      const nowIso = new Date().toISOString()
       tasks = await db
         .prepare(`
           SELECT id, profile_id, opportunity_id, grant_id, automation_type,
                  status, current_pipeline_stage, selected_from_stage
             FROM application_tasks
            WHERE status IN ('queued','ready','analyzing','ready_to_start')
+              OR (status IN ('waiting_for_login','waiting_for_2fa','waiting_for_captcha')
+                  AND next_retry_at IS NOT NULL AND next_retry_at <= ?)
            ORDER BY updated_at ASC
            LIMIT ?
         `)
-        .all(maxBatch)
+        .all(nowIso, maxBatch)
       if (!Array.isArray(tasks)) tasks = []
     } catch { /* table missing on bare DBs — empty list is fine */ }
 

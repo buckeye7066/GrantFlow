@@ -263,6 +263,9 @@ export async function ensureApplicationTaskSchema(db) {
   await ensureColumn('allow_auto_submit', boolType, defFalse)
   await ensureColumn('started_at', tsType)
   await ensureColumn('completed_at', tsType)
+  // Auth backup plan: auto-retry scheduling for login/2FA/captcha-blocked tasks.
+  await ensureColumn('next_retry_at', tsType)
+  await ensureColumn('retry_count', 'INTEGER', '0')
 
   ensuredSchema = true
 }
@@ -312,6 +315,8 @@ function rowToTask(row) {
     submitted_at: row.submitted_at ?? null,
     completed_at: row.completed_at ?? null,
     cancelled_at: row.cancelled_at ?? null,
+    next_retry_at: row.next_retry_at ?? null,
+    retry_count: Number(row.retry_count) || 0,
     created_at: row.created_at,
     updated_at: row.updated_at,
   }
@@ -520,6 +525,8 @@ export async function updateApplicationTask(db, taskId, {
   submittedAt,
   completedAt,
   cancelledAt,
+  nextRetryAt,
+  retryCount,
 } = {}) {
   if (!taskId) throw new Error('taskId required')
   if (status !== undefined && !TASK_STATUSES.includes(status)) {
@@ -557,6 +564,8 @@ export async function updateApplicationTask(db, taskId, {
   if (submittedAt !== undefined) { sets.push('submitted_at = ?'); params.push(submittedAt ?? null) }
   if (completedAt !== undefined) { sets.push('completed_at = ?'); params.push(completedAt ?? null) }
   if (cancelledAt !== undefined) { sets.push('cancelled_at = ?'); params.push(cancelledAt ?? null) }
+  if (nextRetryAt !== undefined) { sets.push('next_retry_at = ?'); params.push(nextRetryAt ?? null) }
+  if (retryCount !== undefined) { sets.push('retry_count = ?'); params.push(Number.isFinite(Number(retryCount)) ? Number(retryCount) : 0) }
 
   if (sets.length === 1) return await getApplicationTask(db, taskId)
 

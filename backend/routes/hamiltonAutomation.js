@@ -83,6 +83,7 @@ import {
   deleteManagedCredential,
 } from '../services/hamilton/hamiltonPortalCredentialService.js'
 import { importCredentialsFromCsv } from '../services/hamilton/hamiltonCredentialCsvImport.js'
+import { getAuthWatchSummary } from '../services/hamilton/hamiltonAuthWatchService.js'
 import {
   authorizeAttestation,
   revokeAttestation,
@@ -887,6 +888,21 @@ router.post('/credentials/import-csv', express.json({ limit: '5mb' }), async (re
     return res.json({ ok: true, ...result })
   } catch (err) {
     return res.status(400).json({ error: 'import_failed', detail: err?.message, message: err?.message })
+  }
+})
+
+// Login-priming summary: what authentication help Hamilton needs from the
+// current user right now. Drives the post-login toast so the user knows to
+// watch for verification requests. Any authenticated user; scoped to their own
+// notifications + their profiles' waiting tasks.
+router.get('/auth-watch', async (req, res) => {
+  const user = requireAuthenticatedUser(req, res)
+  if (!user) return
+  try {
+    const summary = await getAuthWatchSummary(req.db, { userId: getAuthUserId(user) })
+    return res.json({ ok: true, ...summary })
+  } catch (err) {
+    return res.status(500).json({ error: 'auth_watch_failed', detail: err?.message })
   }
 })
 

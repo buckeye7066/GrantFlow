@@ -5,6 +5,7 @@ import Pages from '@/pages/index.jsx'
 import { Toaster } from '@/components/ui/toaster'
 import SessionExpiredDialog from '@/components/auth/SessionExpiredDialog'
 import HamiltonToastBridge from '@/components/hamilton/HamiltonToastBridge'
+import HamiltonAuthPrimingToast from '@/components/hamilton/HamiltonAuthPrimingToast'
 import client from '@/api/client';
 import RouteErrorBoundary from '@/components/shared/RouteErrorBoundary.jsx'
 import FlashHighlighter from '@/components/shared/FlashHighlighter.jsx'
@@ -99,6 +100,7 @@ function App() {
       <FlashHighlighter />
       <SessionExpiredDialog />
       <HamiltonToastBridge />
+      <HamiltonAuthPrimingToast />
     </Router>
   )
 }

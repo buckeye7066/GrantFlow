@@ -50,6 +50,7 @@ import {
 import { canonicalStage } from '../../../shared/pipelineStages.js'
 import { runAutopilot } from './hamiltonAutopilotEngine.js'
 import { getDecryptedCredential, markCredentialUsed } from './hamiltonPortalCredentialService.js'
+import { isAuthBlocker, planAuthBackup } from './hamiltonAuthBackupPlan.js'
 import {
   preflightSingleSource,
   readAuthorizations,
@@ -822,29 +823,76 @@ async function runAutopilotPathway(db, {
       details: { autopilot_run_id: run.id },
     })
   } else if (engineResult.status === 'blocked') {
-    await updateApplicationTask(db, task.id, {
-      status: 'blocked',
-      lastAgentMessage: `Hamilton Autopilot stopped: ${engineResult.blocker_kind} — ${engineResult.blocker_detail}`,
-    })
-    await appendTaskEvent(db, {
-      taskId: task.id,
-      eventType: 'blocked',
-      status: 'blocked',
-      step: 'autopilot',
-      message: engineResult.blocker_detail || 'Hard blocker',
-      actorUserId: userId,
-      actorRole: 'agent',
-      details: { autopilot_run_id: run.id, blocker_kind: engineResult.blocker_kind },
-    })
-    await emitHamiltonNotificationToProfileAndAdmins(db, {
-      profileId: task.profile_id,
-      profileUserId: task.user_id,
-      type: blockerNotificationType(engineResult.blocker_kind),
-      title: blockerTitle(engineResult.blocker_kind),
-      message: engineResult.blocker_detail || 'Hamilton Autopilot needs your help to continue.',
-      severity: 'warning',
-      data: { task_id: task.id, run_id: run.id, blocker_kind: engineResult.blocker_kind },
-    })
+    // Automation is king: for authentication blockers (login / 2FA / captcha /
+    // SSO) we DON'T dead-end. We defer the task into a waiting_for_* state with
+    // a next_retry_at and let the periodic runner re-attempt it on a backoff
+    // schedule — every retry re-checks the vault + saved sessions, so the moment
+    // the user signs in once (or a vault password is added) Hamilton resumes on
+    // her own. Hamilton keeps working other applications in the meantime.
+    const priorRetries = Number((await reload(db, task.id))?.retry_count) || 0
+    const plan = isAuthBlocker(engineResult.blocker_kind)
+      ? planAuthBackup({ blockerKind: engineResult.blocker_kind, retryCount: priorRetries })
+      : { isAuth: false }
+
+    if (plan.isAuth && !plan.exhausted) {
+      await updateApplicationTask(db, task.id, {
+        status: plan.status,
+        nextRetryAt: plan.nextRetryAt,
+        retryCount: priorRetries + 1,
+        lastAgentMessage: plan.message,
+      })
+      await appendTaskEvent(db, {
+        taskId: task.id,
+        eventType: 'blocked',
+        status: plan.status,
+        step: 'autopilot',
+        message: `Auth gate (${engineResult.blocker_kind}); deferring — retry #${plan.attempt}/${plan.maxAttempts} at ${plan.nextRetryAt}.`,
+        actorUserId: userId,
+        actorRole: 'agent',
+        details: { autopilot_run_id: run.id, blocker_kind: engineResult.blocker_kind, next_retry_at: plan.nextRetryAt, retry_count: priorRetries + 1 },
+      })
+      await emitHamiltonNotificationToProfileAndAdmins(db, {
+        profileId: task.profile_id,
+        profileUserId: task.user_id,
+        type: blockerNotificationType(engineResult.blocker_kind),
+        title: blockerTitle(engineResult.blocker_kind),
+        message: plan.message,
+        severity: 'warning',
+        data: {
+          task_id: task.id, run_id: run.id, blocker_kind: engineResult.blocker_kind,
+          auto_retry: true, next_retry_at: plan.nextRetryAt, attempt: plan.attempt, max_attempts: plan.maxAttempts,
+          portal_url: url,
+        },
+      })
+    } else {
+      // Not an auth blocker, or the backoff is exhausted — hand to a human.
+      await updateApplicationTask(db, task.id, {
+        status: 'blocked',
+        nextRetryAt: null,
+        lastAgentMessage: plan.exhausted
+          ? plan.message
+          : `Hamilton Autopilot stopped: ${engineResult.blocker_kind} — ${engineResult.blocker_detail}`,
+      })
+      await appendTaskEvent(db, {
+        taskId: task.id,
+        eventType: 'blocked',
+        status: 'blocked',
+        step: 'autopilot',
+        message: engineResult.blocker_detail || 'Hard blocker',
+        actorUserId: userId,
+        actorRole: 'agent',
+        details: { autopilot_run_id: run.id, blocker_kind: engineResult.blocker_kind, exhausted_auth_retries: Boolean(plan.exhausted) },
+      })
+      await emitHamiltonNotificationToProfileAndAdmins(db, {
+        profileId: task.profile_id,
+        profileUserId: task.user_id,
+        type: blockerNotificationType(engineResult.blocker_kind),
+        title: blockerTitle(engineResult.blocker_kind),
+        message: plan.exhausted ? plan.message : (engineResult.blocker_detail || 'Hamilton Autopilot needs your help to continue.'),
+        severity: 'warning',
+        data: { task_id: task.id, run_id: run.id, blocker_kind: engineResult.blocker_kind, portal_url: url },
+      })
+    }
   } else {
     // failed
     await updateApplicationTask(db, task.id, {
