@@ -50,7 +50,12 @@ import {
 } from './hamiltonNotifications.js'
 import { canonicalStage } from '../../../shared/pipelineStages.js'
 import { runAutopilot } from './hamiltonAutopilotEngine.js'
-import { getDecryptedCredential, markCredentialUsed } from './hamiltonPortalCredentialService.js'
+import {
+  getDecryptedCredentialWithFallback,
+  listCredentialedDomains,
+  markCredentialUsed,
+  registrableDomain,
+} from './hamiltonPortalCredentialService.js'
 import { isAuthBlocker, planAuthBackup } from './hamiltonAuthBackupPlan.js'
 import {
   preflightSingleSource,
@@ -86,13 +91,64 @@ export function browserAutomationHostAllowlist() {
     .filter(Boolean)
 }
 
-export function browserAutomationPermittedForUrl(url) {
+function hostMatchesAny(host, list) {
+  const want = registrableDomain(host) || host
+  return list.some((a) => {
+    const e = String(a || '').toLowerCase().trim()
+    if (!e) return false
+    return host === e || host.endsWith(`.${e}`) || registrableDomain(e) === want
+  })
+}
+
+/**
+ * May Hamilton drive a real browser at this URL?
+ *
+ * Browser automation must be globally enabled. Then a host is permitted if it is
+ * on the static env allowlist OR in `extraAllowedHosts` — the latter being hosts
+ * the PROFILE legitimately requires (its declared portals + any host the owner
+ * has a saved login for, in the profile or admin vault). This is what lets
+ * Hamilton point at any portal a profile actually needs without a hard stop,
+ * while still refusing arbitrary internet hosts the owner never provisioned.
+ *
+ * An empty static allowlist preserves the prior fleet-wide behavior.
+ */
+export function browserAutomationPermittedForUrl(url, { extraAllowedHosts = [] } = {}) {
   if (!isBrowserAutomationEnabled()) return false
   const allow = browserAutomationHostAllowlist()
-  if (allow.length === 0) return true // enabled with no allowlist → fleet-wide
+  if (allow.length === 0 && extraAllowedHosts.length === 0) return true // no restriction configured
   let host = ''
   try { host = new URL(url).hostname.toLowerCase() } catch { return false }
-  return allow.some((a) => host === a || host.endsWith(`.${a}`))
+  if (allow.length === 0) return true // fleet-wide allowlist still wins
+  return hostMatchesAny(host, allow) || hostMatchesAny(host, extraAllowedHosts)
+}
+
+/**
+ * Hosts a profile legitimately needs Hamilton to drive: portals it declares
+ * (committed-college financial-aid/student portals, university-application
+ * portal URLs) plus the funding source's own application URL. Combined with the
+ * owner's credentialed domains, these are treated as authorized targets.
+ */
+export function deriveProfilePortalHosts({ profile, opportunity, grant, portalLink } = {}) {
+  const urls = []
+  const pushUrl = (u) => { if (u && typeof u === 'string') urls.push(u) }
+
+  // Committed-college + university-application declared portals.
+  const uni = profile?.university_applications || profile?.sections?.university_applications || {}
+  for (const app of Array.isArray(uni?.applications) ? uni.applications : []) {
+    pushUrl(app?.website_url)
+    const portals = app?.portals || {}
+    for (const k of Object.keys(portals)) pushUrl(portals[k])
+  }
+  // Funding-source application URL + any saved portal link.
+  pushUrl(opportunity?.application_url || opportunity?.url)
+  pushUrl(grant?.application_url)
+  pushUrl(portalLink?.portal_url || portalLink?.login_url)
+
+  const hosts = new Set()
+  for (const u of urls) {
+    try { hosts.add(new URL(u).hostname.toLowerCase()) } catch { /* skip non-URLs */ }
+  }
+  return hosts
 }
 
 async function loadProfileBundle(db, profileId) {
@@ -622,10 +678,18 @@ async function runAutopilotPathway(db, {
   // forbids automation), so the applicant still gets a complete, submittable
   // document. This makes the env flag authoritative on this path and lets
   // browser automation be trialed on one low-stakes host before going fleet-wide.
-  if (!browserAutomationPermittedForUrl(url)) {
+  // Hosts this profile is authorized to drive: its declared portals + every host
+  // the owner has a saved login for (profile or admin vault). Lets Hamilton reach
+  // any portal the profile actually requires instead of hard-stopping on the
+  // static allowlist, without opening her up to arbitrary hosts.
+  const credentialedDomains = await listCredentialedDomains(db, task.profile_id).catch(() => new Set())
+  const profilePortalHosts = deriveProfilePortalHosts({ profile, opportunity, grant })
+  const extraAllowedHosts = [...new Set([...credentialedDomains, ...profilePortalHosts])]
+
+  if (!browserAutomationPermittedForUrl(url, { extraAllowedHosts })) {
     const reason = !isBrowserAutomationEnabled()
       ? 'HAMILTON_ENABLE_BROWSER_AUTOMATION is not true'
-      : 'portal host is not on HAMILTON_BROWSER_AUTOMATION_HOST_ALLOWLIST'
+      : 'portal host is not on the allowlist and the profile has no declared portal or saved credential for it'
     const packet = await generateAndSavePacket(db, {
       profile, opportunity, grant, automationType: 'pdf_docx', taskId: task.id, userId,
     }).catch((err) => ({ error: err?.message || String(err) }))
@@ -685,7 +749,10 @@ async function runAutopilotPathway(db, {
   let loginCredential = null
   if (authorizations.use_saved_credentials_reference) {
     try {
-      loginCredential = await getDecryptedCredential(db, { profileId: task.profile_id, portalHost: url })
+      // Profile's own saved login first, then the shared admin vault — so a
+      // portal the owner provisioned a credential for can authenticate even if
+      // it isn't saved on this specific profile.
+      loginCredential = await getDecryptedCredentialWithFallback(db, { profileId: task.profile_id, portalHost: url })
     } catch { loginCredential = null }
   }
 
