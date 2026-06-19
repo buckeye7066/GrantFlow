@@ -71,7 +71,16 @@ function startServer(extraEnv = {}) {
       }
       try {
         const res = await fetch(`http://127.0.0.1:${port}/healthz`)
-        if (res.ok) return { port }
+        if (res.ok) {
+          // Don't return until /healthz also confirms the schema bootstrap
+          // is healthy. Without this gate, this test (and others that open
+          // their own better-sqlite3 connection) used to race
+          // "INSERT INTO users" against a not-yet-created users table, with
+          // the schema apply failing silently inside server.js.
+          let body = null
+          try { body = await res.json() } catch { body = null }
+          if (body && body.schema_bootstrap_failed === false) return { port }
+        }
       } catch {
         // retry
       }

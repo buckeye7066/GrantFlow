@@ -171,9 +171,44 @@ router.get('/api/health', async (req, res) => {
   }
 })
 
-// Liveness only
-router.get('/healthz', (_req, res) => {
-  res.status(200).json({ ok: true, status: 'ok', timestamp: new Date().toISOString() })
+// Liveness probe + schema-bootstrap gate.
+//
+// Returns 503 when the boot-time schema apply silently failed or any
+// required base table is missing. This is the single signal smoke-mode
+// integration tests (e.g. tests/unit/auth-access-check.test.mjs) check
+// before opening their own better-sqlite3 connection — without it,
+// /healthz would return 200 against a half-bootstrapped DB and the test
+// would race "INSERT INTO users" against a missing table.
+//
+// Mission rule: "Counts displayed in the UI must map 1:1 to backend
+// response fields" — same principle for liveness: the body must reflect
+// the actual boot state, not just "we're listening".
+router.get('/healthz', (req, res) => {
+  const locals = req.app?.locals || {}
+  const schemaBootstrapFailed = Boolean(locals.schema_bootstrap_failed)
+  const dbStartupError = locals.db_startup_error || null
+  const missingTables = Array.isArray(locals.schema_bootstrap_missing_tables)
+    ? locals.schema_bootstrap_missing_tables
+    : []
+
+  if (schemaBootstrapFailed || dbStartupError) {
+    return res.status(503).json({
+      ok: false,
+      status: 'degraded',
+      reason: schemaBootstrapFailed ? 'schema_bootstrap_failed' : 'db_startup_error',
+      schema_bootstrap_failed: schemaBootstrapFailed,
+      missing_tables: missingTables,
+      detail: locals.schema_bootstrap_error || dbStartupError || null,
+      timestamp: new Date().toISOString(),
+    })
+  }
+
+  res.status(200).json({
+    ok: true,
+    status: 'ok',
+    schema_bootstrap_failed: false,
+    timestamp: new Date().toISOString(),
+  })
 })
 
 // Storage health (safe, read-only)

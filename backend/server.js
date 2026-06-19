@@ -751,6 +751,16 @@ const validTables = new Set(['profiles', 'crawler_jobs', 'users', 'organizations
 const validColumnPattern = /^[a-z_]+$/;
 
 // Apply full schema first so fresh DBs (e.g. unit tests) have base tables, then add any missing columns.
+//
+// IMPORTANT: if the schema apply fails we MUST surface that to /healthz instead
+// of swallowing it. Previously a silent failure here could let /healthz return
+// 200 while the `users`/`profiles` tables didn't exist, causing race-condition
+// CI flakes (e.g. tests/unit/auth-access-check.test.mjs:217 → "no such table:
+// users"). Mission rule: "If results are found but not displayed, treat this
+// as a bug, not a UX choice" — same applies to a half-bootstrapped DB.
+app.locals.schema_bootstrap_failed = false
+app.locals.schema_bootstrap_error = null
+app.locals.schema_bootstrap_missing_tables = []
 if (shouldAutoMigrate) {
   const schemaPath = join(__dirname, 'db', 'schema.sql');
   if (fs.existsSync(schemaPath)) {
@@ -759,9 +769,52 @@ if (shouldAutoMigrate) {
       await db.exec(schema);
       console.info('[database] Schema applied (auto-migrate enabled)', { dialect: db.dialect });
     } catch (schemaError) {
+      app.locals.schema_bootstrap_failed = true
+      app.locals.schema_bootstrap_error = schemaError?.message || String(schemaError)
       console.error('[database] Error running schema migrations:', schemaError);
       // Do not hard-exit; keep the service reachable for diagnostics.
     }
+  } else {
+    app.locals.schema_bootstrap_failed = true
+    app.locals.schema_bootstrap_error = `schema.sql not found at ${schemaPath}`
+    console.error('[database]', app.locals.schema_bootstrap_error)
+  }
+
+  // Positive invariant probe: assert every required base table exists. This
+  // catches the case where schema.exec succeeded for the first N statements
+  // and then silently failed inside a CREATE TABLE we depended on (e.g.
+  // `users`), which would otherwise let /healthz return 200 against a DB
+  // that's missing critical tables.
+  try {
+    for (const tbl of validTables) {
+      try {
+        await db.prepare(`SELECT 1 FROM ${tbl} LIMIT 1`).get()
+      } catch (probeErr) {
+        const msg = String(probeErr?.message || probeErr).toLowerCase()
+        // sqlite: "no such table: X"; postgres: 42P01 'relation "X" does not exist'
+        if (msg.includes('no such table') || msg.includes('does not exist')) {
+          app.locals.schema_bootstrap_missing_tables.push(tbl)
+          app.locals.schema_bootstrap_failed = true
+        }
+        // Other errors (e.g. permissions) are not bootstrap failures; ignore.
+      }
+    }
+    if (app.locals.schema_bootstrap_missing_tables.length > 0) {
+      console.error(
+        '[database] Schema bootstrap incomplete; missing tables:',
+        app.locals.schema_bootstrap_missing_tables.join(', '),
+      )
+      if (!app.locals.schema_bootstrap_error) {
+        app.locals.schema_bootstrap_error =
+          `missing tables: ${app.locals.schema_bootstrap_missing_tables.join(', ')}`
+      }
+    }
+  } catch (probeOuterErr) {
+    // Probe machinery itself broke — surface but don't crash.
+    console.warn(
+      '[database] Schema invariant probe threw (non-fatal):',
+      probeOuterErr?.message || probeOuterErr,
+    )
   }
 }
 

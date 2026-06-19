@@ -76,6 +76,12 @@ seed/*.db-journal
 # Backup files and temporary artifacts
 *.bak
 tmp/
+# Ad-hoc local probe scripts (e.g. .tmp-test-agent-self-heal.mjs).
+# These are written to validate a fix end-to-end and deleted after; this
+# pattern is the safety net so they never accidentally land in git.
+.tmp-*.mjs
+.tmp-*.js
+.tmp-*.sqlite
 
 # Scratch/debugging tooling produced by codemod or audit passes.
 # Anything under scripts/ that starts with `_` is one-off, not shipped.
