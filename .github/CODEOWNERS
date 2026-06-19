@@ -1,0 +1,45 @@
+# GrantFlow CODEOWNERS
+#
+# Single human owner for the whole repo: buckeye7066. CODEOWNERS in
+# GitHub triggers automatic review requests on PRs against `main`,
+# which gives one final notification path even when the auto-push-fixes
+# agent rule lands changes directly on main and the PR-based workflow
+# is reserved for non-fix work.
+#
+# Mission rule: "There is only one GrantFlow admin/operator:
+# buckeye7066@gmail.com." Routing every code review to that account
+# keeps the chain of custody simple and matches existing alerting.
+
+* @buckeye7066
+
+# High-blast-radius areas: same owner, but called out so a future
+# multi-owner setup can split these without re-discovering them.
+
+# Boot, schema, migration, mission-control orchestration
+/backend/server.js                       @buckeye7066
+/backend/startup/                        @buckeye7066
+/backend/db/migrations/                  @buckeye7066
+/backend/db/postgres/migrations/         @buckeye7066
+/backend/db/schema.sql                   @buckeye7066
+/backend/db/migrate.js                   @buckeye7066
+
+# Matching / crawling / connectors — directly govern Mission Goals
+# #1, #2, #6, #8 ("real funding only", "match actual needs",
+# "intelligent crawling", "avoid zero results").
+/backend/services/crawlerJobState.js     @buckeye7066
+/backend/services/crawlerDispatcher.js   @buckeye7066
+/backend/services/grantCatalog.js        @buckeye7066
+/backend/services/anya*                  @buckeye7066
+
+# Agents (Sam, Robert, Yana, John, Hamilton) — orchestration logic
+# changes routinely cause the "agent shows as Not installed" symptom
+# users have hit before, so changes here are review-priority.
+/backend/services/agentControl/          @buckeye7066
+/backend/services/sam/                   @buckeye7066
+/backend/services/hamilton/              @buckeye7066
+/backend/services/yana/                  @buckeye7066
+
+# Mission rules / agent behavior. Changes here change the AGENT, not
+# the application — must be reviewed.
+/.cursor/rules/                          @buckeye7066
+/AGENTS.md                               @buckeye7066
