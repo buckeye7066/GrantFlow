@@ -15,6 +15,22 @@ function normalizeLimit(val, fallback = 200) {
   return Math.min(500, n)
 }
 
+// Shared profile-id resolution. The frontend sends the active profile as the
+// `X-Profile-Id` header, but the GET handler only read `?profile_id=` — a
+// contract mismatch that returned 400 on every initial Outreach load. Resolve
+// from query string, then the header, then the request context's active profile.
+function resolveProfileId(req, { fromBody = false } = {}) {
+  const candidates = [
+    fromBody ? req.body?.profile_id : req.query?.profile_id,
+    req.headers?.['x-profile-id'],
+    req.ctx?.activeProfileId,
+  ]
+  for (const c of candidates) {
+    if (c !== undefined && c !== null && String(c).trim() !== '') return String(c).trim()
+  }
+  return null
+}
+
 async function ensureProfileAccess(req, res, profileId) {
   if (!requireAuthenticatedUser(req, res)) return null
   // user validation passed
@@ -43,8 +59,13 @@ async function ensureProfileAccess(req, res, profileId) {
 
 router.get('/', async (req, res) => {
   try {
-    const profileId = req.query.profile_id ? String(req.query.profile_id) : null
-    if (!profileId) return res.status(400).json({ error: 'profile_id required' })
+    const profileId = resolveProfileId(req)
+    if (!profileId) {
+      // No profile context yet (initial tab load before a profile is active).
+      // Return an empty result at 200 so the Communication Log renders cleanly
+      // instead of surfacing a 400.
+      return res.json({ profile_id: null, organization_id: null, items: [] })
+    }
 
     const profileRow = await ensureProfileAccess(req, res, profileId)
     if (!profileRow) return
@@ -88,7 +109,9 @@ router.get('/', async (req, res) => {
 router.post('/', async (req, res) => {
   try {
     const data = req.body ?? {}
-    const profileId = data.profile_id ? String(data.profile_id) : null
+    // Creating a log genuinely needs a profile; accept it from the body, the
+    // X-Profile-Id header, or the active profile context (shared resolver).
+    const profileId = resolveProfileId(req, { fromBody: true })
     if (!profileId) return res.status(400).json({ error: 'profile_id required' })
 
     const profileRow = await ensureProfileAccess(req, res, profileId)

@@ -66,20 +66,42 @@ export default function SavedGrants() {
     if (!synced) sync()
   }, [synced, sync])
 
-  const { data: grants = [], isLoading } = useQuery({
+  const { data, isLoading } = useQuery({
     queryKey: ['savedGrants', savedIds],
     queryFn: async () => {
-      if (savedIds.length === 0) return []
-      const results = await Promise.allSettled(
-        savedIds.map((id) => apiFetch(`/api/grants/${id}`).catch(() => null))
+      if (savedIds.length === 0) return { grants: [], missingIds: [] }
+      const settled = await Promise.allSettled(
+        savedIds.map(async (id) => {
+          try {
+            const grant = await apiFetch(`/api/grants/${id}`)
+            return { id, grant }
+          } catch (err) {
+            // A 404 means the saved grant's target no longer exists. Other
+            // errors (network / 5xx) are transient and must NOT be treated as
+            // "permanently gone".
+            return { id, grant: null, missing: err?.status === 404 }
+          }
+        })
       )
-      return results
-        .filter((r) => r.status === 'fulfilled' && r.value)
-        .map((r) => r.value)
+      const grants = []
+      const missingIds = []
+      for (const r of settled) {
+        if (r.status !== 'fulfilled') continue
+        if (r.value.grant) grants.push(r.value.grant)
+        else if (r.value.missing) missingIds.push(r.value.id)
+      }
+      return { grants, missingIds }
     },
     enabled: savedIds.length > 0,
     staleTime: 30_000,
   })
+
+  const grants = data?.grants ?? []
+  const missingIds = data?.missingIds ?? []
+
+  const removeAllUnavailable = React.useCallback(() => {
+    missingIds.forEach((id) => removeGrant(id))
+  }, [missingIds, removeGrant])
 
   return (
     <div className="p-6 md:p-8">
@@ -113,6 +135,18 @@ export default function SavedGrants() {
           </div>
         )}
 
+        {savedIds.length > 0 && !isLoading && missingIds.length > 0 && (
+          <div className="mb-4 flex items-center justify-between gap-3 rounded-md border border-dashed border-slate-300 bg-slate-50 px-4 py-3">
+            <p className="text-sm text-slate-600">
+              {missingIds.length} saved grant{missingIds.length === 1 ? ' is' : 's are'} no longer available.
+            </p>
+            <Button type="button" size="sm" variant="outline" onClick={removeAllUnavailable}>
+              <Trash2 className="w-3.5 h-3.5 mr-1" />
+              Remove {missingIds.length} unavailable
+            </Button>
+          </div>
+        )}
+
         {savedIds.length > 0 && !isLoading && (
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
             {savedIds.map((id) => {
@@ -140,9 +174,21 @@ export default function SavedGrants() {
                       </div>
                     </>
                   ) : (
-                    <Card>
-                      <CardContent className="p-4 flex items-center justify-between gap-3">
-                        <p className="text-sm text-slate-500 truncate">Grant ID: {id}</p>
+                    <Card className="border-dashed">
+                      <CardContent className="p-4 flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="text-sm font-medium text-slate-700">
+                            {missingIds.includes(id)
+                              ? 'This grant is no longer available'
+                              : "Couldn't load this grant"}
+                          </p>
+                          <p className="text-xs text-slate-400 mt-1">
+                            {missingIds.includes(id)
+                              ? 'It was removed from the source since you saved it. You can safely remove it.'
+                              : 'A temporary error occurred. It may reappear on refresh.'}
+                          </p>
+                          <p className="text-[10px] text-slate-300 mt-1 truncate">Ref: {id}</p>
+                        </div>
                         <Button
                           type="button"
                           size="sm"
