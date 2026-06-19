@@ -43,6 +43,7 @@ import {
 } from "@/api/crawlers"
 import { listProfiles, getProfile } from "@/api/profiles"
 import { useAuthStore } from "@/stores/authStore"
+import { useTierEntitlements } from "@/hooks/useTierEntitlements"
 import { cn } from "@/lib/utils"
 import { getAnyaProfileTasks, updateAnyaTask } from "@/lib/anyaClient"
 import PipelineAutomationPanel from "@/components/pipeline/PipelineAutomationPanel"
@@ -1665,10 +1666,12 @@ export default function Automation() {
     enabled: Boolean(isAdmin ? (selectedProfile && selectedProfile !== "none") : activeProfileId),
   })
 
-  const tier = profileDetailQuery.data?.billing?.tier ?? null
-  const canPipelineAutomation = isAdmin || Boolean(tier?.enable_pipeline_automation)
-  const canItemFunding = isAdmin || Boolean(tier?.enable_item_funding)
-  const canDocumentAI = isAdmin || Boolean(tier?.enable_document_ai)
+  // Centralized entitlement gate (admins bypass inside the hook).
+  const automationEntitlements = useTierEntitlements(isAdmin ? (selectedProfile !== "none" ? selectedProfile : null) : activeProfileId)
+  const tier = automationEntitlements.tier ?? profileDetailQuery.data?.billing?.tier ?? null
+  const canPipelineAutomation = automationEntitlements.capabilities.pipelineAutomation
+  const canItemFunding = automationEntitlements.capabilities.itemFunding
+  const canDocumentAI = automationEntitlements.capabilities.documentAI
 
   const profileForTasks = isAdmin ? selectedProfile : activeProfileId
 

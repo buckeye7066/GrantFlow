@@ -37,7 +37,7 @@ import { listProfiles, getProfile } from "@/api/profiles"
 import { createCrawlerJob, searchSpecificNeed } from "@/api/crawlers"
 import { cn } from "@/lib/utils"
 import { useAuthStore } from "@/stores/authStore"
-import { canUseFeature } from "@/utils/tier"
+import { useTierEntitlements } from "@/hooks/useTierEntitlements"
 import { formatReasonText } from "@/utils/reasonText"
 
 function safeArray(value) {
@@ -382,8 +382,11 @@ export default function ItemFunding() {
   })
 
   const selectedProfile = selectedProfileQuery.data ?? null
-  const selectedTier = selectedProfile?.billing?.tier ?? null
-  const canItemFunding = isAdmin || canUseFeature(selectedProfile?.billing, "enable_item_funding")
+  const itemEntitlements = useTierEntitlements(
+    filters.profileId && filters.profileId !== "all" ? filters.profileId : null,
+  )
+  const selectedTier = itemEntitlements.tier ?? selectedProfile?.billing?.tier ?? null
+  const canItemFunding = itemEntitlements.capabilities.itemFunding
   const hasSelectedProfile = Boolean(filters.profileId && filters.profileId !== "all")
   const opportunitiesResponse = opportunitiesQuery.data ?? null
   const opportunities = opportunitiesResponse?.data ?? []
