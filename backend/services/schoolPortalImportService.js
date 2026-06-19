@@ -302,6 +302,155 @@ function createPipelineStage(award, connection) {
   }
 }
 
+/**
+ * Upsert a merged school-portal award into funding_opportunities so it
+ * shows up in the user's Discover Grants list and is visible to the
+ * canonical matcher pipeline.
+ *
+ * Issue #534 acceptance criteria: "Merged scholarships appear in the
+ * user's opportunities list and can be edited or removed." Without
+ * this row, imported TSAC awards would only live in the
+ * university_applications profile section — invisible to the matcher,
+ * Discover Grants, the analytics counts, and the agent surfaces.
+ *
+ * IMPORTANT privacy note: only PUBLIC scholarship metadata is written
+ * to the global table (title, sponsor, amount range, public URL,
+ * description). Student-specific award status / academic year /
+ * school name stay in the profile section only.
+ *
+ * Returns true if a row was written, false on graceful failure
+ * (missing table, etc.). Never throws — failure to write the global
+ * row must NOT block the per-profile merge.
+ */
+export async function upsertSchoolPortalAwardAsOpportunity(db, award, connection) {
+  if (!db || !award || !award.id || !award.title) return false
+  if (!connection) connection = {}
+
+  const sponsor = safeText(award.provider_name) || safeText(connection.provider_name) || 'School Portal'
+  const description = safeText(award.description) || `Imported from ${sponsor}`
+  const sourceUrl = safeText(award.portal_url) || safeText(connection.portal_url) || null
+  const applyUrl = safeText(award.source_url) || sourceUrl
+  const amountMin = Number.isFinite(Number(award.amount)) ? Number(award.amount) : null
+  const amountMax = amountMin
+
+  const insertSql = `
+    INSERT INTO funding_opportunities (
+      id, title, sponsor, source, source_id, source_url,
+      record_origin, description,
+      amount_min, amount_max, amount_description,
+      application_url, apply_url, application_mode,
+      opportunity_type, opportunity_kind, source_trust_tier,
+      is_active, last_verified_at,
+      categories, keywords, eligibility_bullets,
+      created_at, updated_at
+    ) VALUES (
+      ?, ?, ?, ?, ?, ?,
+      ?, ?,
+      ?, ?, ?,
+      ?, ?, ?,
+      ?, ?, ?,
+      ?, CURRENT_TIMESTAMP,
+      ?, ?, ?,
+      CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+    )
+  `
+  const updateSql = `
+    UPDATE funding_opportunities
+       SET title = ?,
+           sponsor = ?,
+           source_url = ?,
+           description = ?,
+           amount_min = COALESCE(?, amount_min),
+           amount_max = COALESCE(?, amount_max),
+           application_url = COALESCE(?, application_url),
+           apply_url = COALESCE(?, apply_url),
+           updated_at = CURRENT_TIMESTAMP
+     WHERE id = ?
+  `
+
+  const insertArgs = [
+    award.id,
+    award.title,
+    sponsor,
+    'school_portal',
+    safeText(award.external_id) || null,
+    sourceUrl,
+    'school_portal',
+    description,
+    amountMin,
+    amountMax,
+    award.amount_display || null,
+    applyUrl,
+    applyUrl,
+    'portal',
+    'scholarship',
+    'school_portal',
+    'official_portal',
+    1,
+    JSON.stringify(['scholarship', 'school_portal']),
+    JSON.stringify(['scholarship', 'school portal', sponsor.toLowerCase()].filter(Boolean)),
+    JSON.stringify([]),
+  ]
+
+  try {
+    await db.prepare(insertSql).run(...insertArgs)
+    return true
+  } catch (err) {
+    const msg = String(err?.message || err).toLowerCase()
+    // Already present (PK collision) — fall through to UPDATE.
+    if (
+      msg.includes('unique') ||
+      msg.includes('duplicate') ||
+      msg.includes('primary key')
+    ) {
+      try {
+        await db
+          .prepare(updateSql)
+          .run(
+            award.title,
+            sponsor,
+            sourceUrl,
+            description,
+            amountMin,
+            amountMax,
+            applyUrl,
+            applyUrl,
+            award.id,
+          )
+        return true
+      } catch {
+        return false
+      }
+    }
+    // Missing table / other error — fail soft so the per-profile merge
+    // still completes. Operator will see the warning in logs.
+    if (msg.includes('no such table') || msg.includes('does not exist')) {
+      return false
+    }
+    return false
+  }
+}
+
+/**
+ * Remove a previously-imported school-portal award row from the
+ * global funding_opportunities table when the user unlinks it from
+ * their profile. Pairs with removeMergedSchoolPortalAward.
+ *
+ * Idempotent and graceful: missing row / missing table both return
+ * false silently.
+ */
+export async function removeSchoolPortalAwardOpportunity(db, awardId) {
+  if (!db || !awardId) return false
+  try {
+    const result = await db
+      .prepare(`DELETE FROM funding_opportunities WHERE id = ? AND source = 'school_portal'`)
+      .run(awardId)
+    return Boolean(result?.changes)
+  } catch {
+    return false
+  }
+}
+
 function mergedAwardsFromApplications(applications) {
   return applications.flatMap((application) =>
     safeArray(application?.imported_portal_awards).map((award) => ({
@@ -505,8 +654,21 @@ export async function mergeSchoolPortalAwards(db, profileId, payload, updatedBy)
   }
 
   const saved = await saveUniversityApplicationsSection(db, profileId, nextData, updatedBy)
+
+  // Issue #534: Make the merged awards visible in Discover Grants by
+  // upserting them into funding_opportunities with record_origin =
+  // 'school_portal'. Per-row failures (e.g. missing table) are
+  // swallowed by the upsert helper so they never block the per-profile
+  // merge — the section save above is the source of truth.
+  let opportunitiesUpserted = 0
+  for (const award of selectedAwards) {
+    const ok = await upsertSchoolPortalAwardAsOpportunity(db, award, connection)
+    if (ok) opportunitiesUpserted += 1
+  }
+
   return {
     merged_count: mergedCount,
+    opportunities_upserted: opportunitiesUpserted,
     workspace: buildWorkspace(saved),
   }
 }
@@ -543,7 +705,13 @@ export async function removeMergedSchoolPortalAward(db, profileId, payload, upda
     updatedBy,
   )
 
+  // Mirror the in-section removal into the global funding_opportunities
+  // table so the unlinked award stops showing up in Discover Grants.
+  // Idempotent & graceful — missing row / missing table both no-op.
+  const opportunityRemoved = await removeSchoolPortalAwardOpportunity(db, awardId)
+
   return {
+    opportunity_removed: opportunityRemoved,
     workspace: buildWorkspace(saved),
   }
 }
