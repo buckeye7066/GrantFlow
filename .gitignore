@@ -109,3 +109,9 @@ GrantFlow-main/
 repo/
 
 .vercel
+
+# Never commit real credential routing maps or password exports (secrets)
+**/hamilton-routes.local.json
+**/*routes.local.json
+**/*Passwords*.csv
+**/*passwords*.csv

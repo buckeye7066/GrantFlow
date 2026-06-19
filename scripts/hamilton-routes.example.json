@@ -1,0 +1,24 @@
+[
+  {
+    "profileId": "<individual-profile-uuid>",
+    "label": "Jane Doe",
+    "match": {
+      "usernames": ["jane.doe@example.com", "jdoe_legacy"],
+      "usernamePrefixes": ["janedoe", "jdoe"],
+      "emailDomains": ["jane-personal.example"],
+      "hosts": [],
+      "keywords": ["janedoe"]
+    }
+  },
+  {
+    "profileId": "<org-profile-uuid>",
+    "label": "Acme Org",
+    "match": {
+      "usernames": [],
+      "usernamePrefixes": [],
+      "emailDomains": ["acme.example"],
+      "hosts": ["acme.example"],
+      "keywords": ["acme"]
+    }
+  }
+]
