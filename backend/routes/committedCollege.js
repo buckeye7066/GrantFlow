@@ -13,6 +13,7 @@
  */
 
 import express from 'express'
+import { randomUUID } from 'crypto'
 import { requireAuthenticatedUser, getAuthUserId, getAccessibleProfileIds } from '../utils/accessControl.js'
 import {
   commitToCollege,
@@ -20,6 +21,9 @@ import {
   buildCollegeAidWorkspace,
   resolveCommittedCollege,
   getApplications,
+  addAidEntry,
+  updateAidEntry,
+  removeAidEntry,
 } from '../services/college/committedCollege.js'
 import { planCollegeFundingMerge } from '../services/college/collegeFundingMerge.js'
 import {
@@ -398,6 +402,87 @@ router.post('/profiles/:profileId/committed-college/cost-of-attendance', async (
   } catch (err) {
     log.error('POST committed-college/cost-of-attendance failed', { error: err?.message })
     return res.status(500).json({ ok: false, error: 'cost_of_attendance_failed' })
+  }
+})
+
+/**
+ * Scholarships / financial-aid entries on the committed college.
+ *   POST   .../committed-college/aid            — add { name, amount, status, source?, notes?, deadline?, renewable? }
+ *   PATCH  .../committed-college/aid/:entryId    — update (partial)
+ *   DELETE .../committed-college/aid/:entryId    — remove
+ *
+ * status ∈ awarded|received|accepted (secured → reduces unmet need) or
+ * applied|pending (tracked but not counted) or declined. Each returns the
+ * recomputed workspace so the UI updates aid-received / unmet-need in one round-trip.
+ */
+async function recomputeWorkspace(db, profileId, nextUni, sections) {
+  return buildCollegeAidWorkspace({
+    sections: { ...sections, university_applications: nextUni },
+    matchedFunding: await loadMatchedFunding(db, profileId),
+    hamiltonTasks: await loadHamiltonTasks(db, profileId),
+  })
+}
+
+router.post('/profiles/:profileId/committed-college/aid', async (req, res) => {
+  const user = requireAuthenticatedUser(req, res)
+  if (!user) return
+  const { profileId } = req.params
+  if (!(await userMayAccessProfile(req, profileId))) return res.status(403).json({ error: 'Forbidden' })
+  try {
+    const sections = await loadSections(req.db, profileId)
+    const uni = sections.university_applications || { applications: [] }
+    const result = addAidEntry(uni, req.body || {}, { id: randomUUID(), now: new Date().toISOString() })
+    if (!result.ok) {
+      const code = result.error === 'no_committed_college' ? 409 : 400
+      return res.status(code).json({ ok: false, error: result.error })
+    }
+    await persistUniversityApplications(req.db, profileId, getAuthUserId(user), result.section)
+    return res.json({ ok: true, entry: result.entry, workspace: await recomputeWorkspace(req.db, profileId, result.section, sections) })
+  } catch (err) {
+    log.error('POST committed-college/aid failed', { error: err?.message })
+    return res.status(500).json({ ok: false, error: 'aid_add_failed' })
+  }
+})
+
+router.patch('/profiles/:profileId/committed-college/aid/:entryId', async (req, res) => {
+  const user = requireAuthenticatedUser(req, res)
+  if (!user) return
+  const { profileId, entryId } = req.params
+  if (!(await userMayAccessProfile(req, profileId))) return res.status(403).json({ error: 'Forbidden' })
+  try {
+    const sections = await loadSections(req.db, profileId)
+    const uni = sections.university_applications || { applications: [] }
+    const result = updateAidEntry(uni, entryId, req.body || {}, { now: new Date().toISOString() })
+    if (!result.ok) {
+      const code = result.error === 'aid_entry_not_found' ? 404 : result.error === 'no_committed_college' ? 409 : 400
+      return res.status(code).json({ ok: false, error: result.error })
+    }
+    await persistUniversityApplications(req.db, profileId, getAuthUserId(user), result.section)
+    return res.json({ ok: true, entry: result.entry, workspace: await recomputeWorkspace(req.db, profileId, result.section, sections) })
+  } catch (err) {
+    log.error('PATCH committed-college/aid failed', { error: err?.message })
+    return res.status(500).json({ ok: false, error: 'aid_update_failed' })
+  }
+})
+
+router.delete('/profiles/:profileId/committed-college/aid/:entryId', async (req, res) => {
+  const user = requireAuthenticatedUser(req, res)
+  if (!user) return
+  const { profileId, entryId } = req.params
+  if (!(await userMayAccessProfile(req, profileId))) return res.status(403).json({ error: 'Forbidden' })
+  try {
+    const sections = await loadSections(req.db, profileId)
+    const uni = sections.university_applications || { applications: [] }
+    const result = removeAidEntry(uni, entryId)
+    if (!result.ok) {
+      const code = result.error === 'aid_entry_not_found' ? 404 : result.error === 'no_committed_college' ? 409 : 400
+      return res.status(code).json({ ok: false, error: result.error })
+    }
+    await persistUniversityApplications(req.db, profileId, getAuthUserId(user), result.section)
+    return res.json({ ok: true, workspace: await recomputeWorkspace(req.db, profileId, result.section, sections) })
+  } catch (err) {
+    log.error('DELETE committed-college/aid failed', { error: err?.message })
+    return res.status(500).json({ ok: false, error: 'aid_remove_failed' })
   }
 })
 

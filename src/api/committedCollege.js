@@ -54,6 +54,36 @@ export async function setCommittedCollegeCOA(profileId, coa = {}) {
   })
 }
 
+/**
+ * Add a scholarship / financial-aid entry to the committed college's pipeline.
+ * entry = { name, amount?, status (awarded|applied|pending|received|declined),
+ *           source?, notes?, deadline?, renewable? }. Returns { entry, workspace }.
+ */
+export async function addCommittedCollegeAid(profileId, entry = {}) {
+  assertRealProfileId(profileId, 'addCommittedCollegeAid')
+  return apiFetch(`/api/profiles/${profileId}/committed-college/aid`, {
+    method: 'POST',
+    body: JSON.stringify(entry),
+  })
+}
+
+/** Update one aid entry (partial patch). Returns { entry, workspace }. */
+export async function updateCommittedCollegeAid(profileId, entryId, patch = {}) {
+  assertRealProfileId(profileId, 'updateCommittedCollegeAid')
+  return apiFetch(`/api/profiles/${profileId}/committed-college/aid/${entryId}`, {
+    method: 'PATCH',
+    body: JSON.stringify(patch),
+  })
+}
+
+/** Remove one aid entry. Returns { workspace }. */
+export async function removeCommittedCollegeAid(profileId, entryId) {
+  assertRealProfileId(profileId, 'removeCommittedCollegeAid')
+  return apiFetch(`/api/profiles/${profileId}/committed-college/aid/${entryId}`, {
+    method: 'DELETE',
+  })
+}
+
 /** GET the FAFSA lifecycle status (stage, label, next action, ordered stages). */
 export async function getFafsaStatus(profileId) {
   assertRealProfileId(profileId, 'getFafsaStatus')

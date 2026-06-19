@@ -33,6 +33,34 @@ const STATUS_RANK = Object.freeze({
 // Already "dropped off" — a commit elsewhere should not touch these.
 const TERMINAL_STATUSES = new Set(['declined', 'denied', 'rejected', 'withdrawn', 'archived'])
 
+// ── Financial-aid-pipeline entry statuses ───────────────────────────────────
+// Aid entries (scholarships/grants the student logged on their committed
+// college) carry a status. Only SECURED money reduces unmet need; "applied for"
+// is tracked but not yet counted.
+export const AID_STATUSES = Object.freeze(['awarded', 'received', 'accepted', 'applied', 'pending', 'declined'])
+// Statuses that mean "applied but not yet won" — tracked, not counted as received.
+const AID_PENDING_STATUSES = new Set(['applied', 'pending', 'in_review', 'submitted'])
+// Statuses that mean "no money" — tracked, not counted.
+const AID_DECLINED_STATUSES = new Set(['declined', 'denied', 'rejected', 'withdrawn'])
+
+/**
+ * Does this aid entry represent money actually secured (counts toward "aid
+ * received" / reduces unmet need)? Backward-compatible: an entry with NO status
+ * is treated as secured (older pipelines logged amounts without a status).
+ */
+export function aidIsSecured(entry) {
+  const s = normStatus(entry?.status)
+  if (!s) return true
+  if (AID_PENDING_STATUSES.has(s)) return false
+  if (AID_DECLINED_STATUSES.has(s)) return false
+  return true // awarded / received / accepted / anything else affirmative
+}
+
+/** Is this entry an "applied for, not yet decided" scholarship? */
+export function aidIsPending(entry) {
+  return AID_PENDING_STATUSES.has(normStatus(entry?.status))
+}
+
 export function normStatus(s) { return String(s || '').trim().toLowerCase() }
 export function isCommittedStatus(s) { return COMMITTED_STATUSES.includes(normStatus(s)) }
 function rankStatus(s) {
@@ -110,6 +138,86 @@ export function uncommitArchived(uniSection, collegeId) {
   return { ok: true, section: { ...uniSection, applications } }
 }
 
+/**
+ * Normalize a caller-supplied aid entry into the stored shape. `id` is provided
+ * by the caller (route) so this stays pure/deterministic. Returns
+ * { ok, error?, entry? }.
+ */
+export function normalizeAidEntry(input = {}, { id = null } = {}) {
+  const name = String(input.name ?? input.title ?? '').trim()
+  if (!name) return { ok: false, error: 'name_required' }
+  const status = normStatus(input.status) || 'awarded'
+  if (!AID_STATUSES.includes(status)) return { ok: false, error: 'invalid_status' }
+  const amount = numOrNull(input.amount)
+  if (amount !== null && amount < 0) return { ok: false, error: 'invalid_amount' }
+  return {
+    ok: true,
+    entry: {
+      id: id || input.id || null,
+      name,
+      amount,
+      status,
+      source: input.source ? String(input.source).slice(0, 120) : null,
+      renewable: input.renewable === true,
+      notes: input.notes ? String(input.notes).slice(0, 2000) : null,
+      deadline: input.deadline ? String(input.deadline).slice(0, 40) : null,
+    },
+  }
+}
+
+function committedPipeline(uniSection) {
+  const committed = resolveCommittedCollege(uniSection)
+  if (!committed) return { committed: null }
+  return { committed, pipeline: Array.isArray(committed.financial_aid_pipeline) ? committed.financial_aid_pipeline : [] }
+}
+
+function withCommittedPipeline(uniSection, committedId, nextPipeline) {
+  return {
+    ...uniSection,
+    applications: getApplications(uniSection).map((a) => (
+      String(a.id) === String(committedId) ? { ...a, financial_aid_pipeline: nextPipeline } : a
+    )),
+  }
+}
+
+/**
+ * Add a scholarship/aid entry to the committed college's financial-aid pipeline.
+ * `id`/`now` injected by the caller. Returns { ok, error?, section?, entry? }.
+ */
+export function addAidEntry(uniSection, input, { id, now = null } = {}) {
+  const { committed, pipeline } = committedPipeline(uniSection)
+  if (!committed) return { ok: false, error: 'no_committed_college', section: uniSection }
+  const norm = normalizeAidEntry(input, { id })
+  if (!norm.ok) return { ok: false, error: norm.error, section: uniSection }
+  const entry = { ...norm.entry, added_at: now, updated_at: now }
+  const next = [...pipeline, entry]
+  return { ok: true, section: withCommittedPipeline(uniSection, committed.id, next), entry }
+}
+
+/** Update an existing aid entry by id (partial patch). */
+export function updateAidEntry(uniSection, entryId, patch = {}, { now = null } = {}) {
+  const { committed, pipeline } = committedPipeline(uniSection)
+  if (!committed) return { ok: false, error: 'no_committed_college', section: uniSection }
+  const idx = pipeline.findIndex((a) => String(a?.id) === String(entryId))
+  if (idx === -1) return { ok: false, error: 'aid_entry_not_found', section: uniSection }
+  const merged = { ...pipeline[idx], ...patch, id: pipeline[idx].id }
+  const norm = normalizeAidEntry(merged, { id: pipeline[idx].id })
+  if (!norm.ok) return { ok: false, error: norm.error, section: uniSection }
+  const next = pipeline.map((a, i) => (
+    i === idx ? { ...norm.entry, added_at: pipeline[idx].added_at || now, updated_at: now } : a
+  ))
+  return { ok: true, section: withCommittedPipeline(uniSection, committed.id, next), entry: next[idx] }
+}
+
+/** Remove an aid entry by id. */
+export function removeAidEntry(uniSection, entryId) {
+  const { committed, pipeline } = committedPipeline(uniSection)
+  if (!committed) return { ok: false, error: 'no_committed_college', section: uniSection }
+  const next = pipeline.filter((a) => String(a?.id) !== String(entryId))
+  if (next.length === pipeline.length) return { ok: false, error: 'aid_entry_not_found', section: uniSection }
+  return { ok: true, section: withCommittedPipeline(uniSection, committed.id, next) }
+}
+
 function summarizeHamiltonTasks(tasks = []) {
   const list = Array.isArray(tasks) ? tasks : []
   const blocked = list.filter((t) => String(t?.status || '').includes('blocked'))
@@ -166,7 +274,16 @@ export function buildCollegeAidWorkspace({ sections = {}, matchedFunding = [], h
   }
 
   const aidPipeline = Array.isArray(college.financial_aid_pipeline) ? college.financial_aid_pipeline : []
-  const aidReceived = aidPipeline.reduce((sum, a) => sum + (numOrNull(a?.amount) || 0), 0)
+  // Only SECURED aid (awarded/received, or legacy status-less entries) reduces
+  // unmet need; "applied for" is tracked separately so the student can see what's
+  // still pending without it inflating their covered total.
+  const aidReceived = aidPipeline
+    .filter(aidIsSecured)
+    .reduce((sum, a) => sum + (numOrNull(a?.amount) || 0), 0)
+  const aidApplied = aidPipeline
+    .filter(aidIsPending)
+    .reduce((sum, a) => sum + (numOrNull(a?.amount) || 0), 0)
+  const aidAppliedCount = aidPipeline.filter(aidIsPending).length
   const matchedFundingTotal = (Array.isArray(matchedFunding) ? matchedFunding : [])
     .reduce((sum, f) => sum + (numOrNull(f?.amount ?? f?.award_amount) || 0), 0)
 
@@ -202,7 +319,23 @@ export function buildCollegeAidWorkspace({ sections = {}, matchedFunding = [], h
     },
     cost_of_attendance: coa,
     fafsa,
-    aid: { received_total: aidReceived, pipeline: aidPipeline },
+    aid: {
+      received_total: aidReceived,
+      applied_total: aidApplied,
+      applied_count: aidAppliedCount,
+      // Normalized, id-bearing items so the UI can render/edit each entry.
+      pipeline: aidPipeline.map((a) => ({
+        id: a.id || null,
+        name: a.name || a.title || 'Scholarship',
+        amount: numOrNull(a.amount),
+        status: normStatus(a.status) || 'awarded',
+        source: a.source || null,
+        renewable: a.renewable === true,
+        notes: a.notes || null,
+        deadline: a.deadline || null,
+        secured: aidIsSecured(a),
+      })),
+    },
     matched_funding: {
       count: Array.isArray(matchedFunding) ? matchedFunding.length : 0,
       total: matchedFundingTotal,

@@ -1,6 +1,6 @@
 import React, { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { GraduationCap, ExternalLink, CheckCircle2, AlertTriangle, FileWarning, CalendarClock, Bot } from 'lucide-react'
+import { GraduationCap, ExternalLink, CheckCircle2, AlertTriangle, FileWarning, CalendarClock, Bot, Award, Plus, Trash2 } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -14,6 +14,7 @@ import {
   setCommittedCollegeCOA, mergeCommittedCollegeFunding,
   getFafsaStatus, setFafsaStatus,
   getFafsaVerification, setFafsaVerificationDoc,
+  addCommittedCollegeAid, updateCommittedCollegeAid, removeCommittedCollegeAid,
 } from '@/api/committedCollege.js'
 import { Input } from '@/components/ui/input'
 import CollegeFundingMergeModal from './CollegeFundingMergeModal.jsx'
@@ -77,6 +78,49 @@ export default function CommittedCollegeWorkspace({ profileId, applications = []
     onSuccess: () => { toast({ title: 'Cost of attendance saved' }); setCoaOpen(false); invalidate() },
     onError: (err) => toast({ title: 'Save failed', description: err?.message, variant: 'destructive' }),
   })
+
+  // ── Scholarships / financial-aid pipeline ────────────────────────────────
+  const emptyAid = { name: '', amount: '', status: 'awarded', source: '' }
+  const [aidOpen, setAidOpen] = useState(false)
+  const [aidForm, setAidForm] = useState(emptyAid)
+  const [editingAidId, setEditingAidId] = useState(null)
+
+  const resetAidForm = () => { setAidForm(emptyAid); setEditingAidId(null); setAidOpen(false) }
+
+  const addAid = useMutation({
+    mutationFn: (entry) => addCommittedCollegeAid(profileId, entry),
+    onSuccess: () => { toast({ title: 'Scholarship added' }); resetAidForm(); invalidate() },
+    onError: (err) => toast({ title: 'Could not add', description: err?.message, variant: 'destructive' }),
+  })
+  const editAid = useMutation({
+    mutationFn: ({ id, patch }) => updateCommittedCollegeAid(profileId, id, patch),
+    onSuccess: () => { toast({ title: 'Scholarship updated' }); resetAidForm(); invalidate() },
+    onError: (err) => toast({ title: 'Could not update', description: err?.message, variant: 'destructive' }),
+  })
+  const deleteAid = useMutation({
+    mutationFn: (id) => removeCommittedCollegeAid(profileId, id),
+    onSuccess: () => { toast({ title: 'Scholarship removed' }); invalidate() },
+    onError: (err) => toast({ title: 'Could not remove', description: err?.message, variant: 'destructive' }),
+  })
+
+  const openAddAid = () => { setAidForm(emptyAid); setEditingAidId(null); setAidOpen(true) }
+  const openEditAid = (item) => {
+    setAidForm({ name: item.name || '', amount: item.amount ?? '', status: item.status || 'awarded', source: item.source || '' })
+    setEditingAidId(item.id)
+    setAidOpen(true)
+  }
+  const submitAid = () => {
+    const entry = {
+      name: aidForm.name.trim(),
+      amount: aidForm.amount === '' ? null : Number(aidForm.amount),
+      status: aidForm.status,
+      source: aidForm.source.trim() || null,
+    }
+    if (!entry.name) { toast({ title: 'Name is required', variant: 'destructive' }); return }
+    if (editingAidId) editAid.mutate({ id: editingAidId, patch: entry })
+    else addAid.mutate(entry)
+  }
+  const aidBusy = addAid.isPending || editAid.isPending
 
   // One-click "Automate with Hamilton": consent → hand off ALL matched funding.
   const quickAutomate = useMutation({
@@ -316,6 +360,122 @@ export default function CommittedCollegeWorkspace({ profileId, applications = []
                   ))}
                 </ul>
               </div>
+            ) : null}
+          </div>
+
+          <Separator />
+
+          {/* Scholarships & financial aid (manually tracked) */}
+          <div>
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-1.5 text-sm font-medium text-slate-900">
+                <Award className="h-4 w-4 text-emerald-600" /> Scholarships &amp; aid
+              </div>
+              <Button size="sm" variant="outline" onClick={openAddAid}>
+                <Plus className="mr-1 h-3.5 w-3.5" /> Add scholarship
+              </Button>
+            </div>
+            <div className="mt-1 text-xs text-slate-500">
+              Awarded aid counts toward “Aid received” above and lowers unmet need. Applied-for scholarships are tracked as pending until you mark them awarded.
+              {workspace.aid?.applied_count
+                ? ` · ${workspace.aid.applied_count} pending (${fmt(workspace.aid.applied_total)})`
+                : ''}
+            </div>
+
+            {/* Add / edit form */}
+            {aidOpen ? (
+              <div className="mt-3 rounded-md border border-slate-200 bg-slate-50 p-3">
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                  <label className="text-xs text-slate-600 sm:col-span-2">
+                    Scholarship / aid name
+                    <Input
+                      value={aidForm.name}
+                      onChange={(e) => setAidForm((f) => ({ ...f, name: e.target.value }))}
+                      className="mt-1"
+                      placeholder="e.g. MTSU Provost Scholarship"
+                    />
+                  </label>
+                  <label className="text-xs text-slate-600">
+                    Amount
+                    <Input
+                      type="number" inputMode="decimal" min="0"
+                      value={aidForm.amount}
+                      onChange={(e) => setAidForm((f) => ({ ...f, amount: e.target.value }))}
+                      className="mt-1" placeholder="$"
+                    />
+                  </label>
+                  <label className="text-xs text-slate-600">
+                    Status
+                    <Select value={aidForm.status} onValueChange={(v) => setAidForm((f) => ({ ...f, status: v }))}>
+                      <SelectTrigger className="mt-1 h-9"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="awarded">Awarded</SelectItem>
+                        <SelectItem value="applied">Applied (pending)</SelectItem>
+                        <SelectItem value="pending">Pending decision</SelectItem>
+                        <SelectItem value="declined">Declined</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </label>
+                  <label className="text-xs text-slate-600 sm:col-span-2">
+                    Source <span className="text-slate-400">(optional)</span>
+                    <Input
+                      value={aidForm.source}
+                      onChange={(e) => setAidForm((f) => ({ ...f, source: e.target.value }))}
+                      className="mt-1" placeholder="e.g. Institutional, State (TSAA), External / Foundation"
+                    />
+                  </label>
+                </div>
+                <div className="mt-3 flex justify-end gap-2">
+                  <Button size="sm" variant="outline" onClick={resetAidForm} disabled={aidBusy}>Cancel</Button>
+                  <Button size="sm" onClick={submitAid} disabled={aidBusy}>
+                    {aidBusy ? 'Saving…' : editingAidId ? 'Save changes' : 'Add scholarship'}
+                  </Button>
+                </div>
+              </div>
+            ) : null}
+
+            {/* Existing entries */}
+            {workspace.aid?.pipeline?.length ? (
+              <ul className="mt-3 space-y-2">
+                {workspace.aid.pipeline.map((item) => (
+                  <li key={item.id || item.name} className="flex items-center justify-between gap-3 rounded-md border border-slate-200 p-2.5">
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="truncate text-sm font-medium text-slate-900">{item.name}</span>
+                        <Badge
+                          variant="outline"
+                          className={item.secured
+                            ? 'bg-emerald-100 text-emerald-700 border-emerald-200'
+                            : item.status === 'declined'
+                              ? 'bg-slate-100 text-slate-500 border-slate-200'
+                              : 'bg-amber-100 text-amber-800 border-amber-200'}
+                        >
+                          {item.secured ? 'Awarded' : item.status === 'declined' ? 'Declined' : 'Applied'}
+                        </Badge>
+                      </div>
+                      <div className="text-xs text-slate-500">
+                        {fmt(item.amount)}{item.source ? ` · ${item.source}` : ''}
+                      </div>
+                    </div>
+                    <div className="flex shrink-0 items-center gap-1">
+                      <Button size="sm" variant="ghost" className="h-7 px-2 text-slate-600" onClick={() => openEditAid(item)}>Edit</Button>
+                      <Button
+                        size="sm" variant="ghost"
+                        className="h-7 px-2 text-rose-600 hover:text-rose-700"
+                        onClick={() => deleteAid.mutate(item.id)}
+                        disabled={deleteAid.isPending}
+                        aria-label={`Remove ${item.name}`}
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </Button>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            ) : !aidOpen ? (
+              <p className="mt-3 text-sm text-slate-500">
+                No scholarships logged yet. Add ones {c.name || 'this college'} has awarded, or ones the student has applied for, to track aid received vs. unmet need.
+              </p>
             ) : null}
           </div>
 
