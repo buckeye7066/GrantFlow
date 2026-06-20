@@ -3,13 +3,17 @@
  * relabel-profiles.mjs
  *
  * Audit EVERY profile and set the correct canonical `primary_type` from its own
- * data (display_name + sections + linked organization). This is the one-time
- * data-quality sweep that backs the owner's decision that the billed tier (and
- * section applicability, crawler planning, eligibility) follows a profile's
- * TYPE — so the types must actually be right in the DB.
+ * data. This is the one-time data-quality sweep that backs the owner's decision
+ * that the billed tier (and section applicability, crawler planning,
+ * eligibility) follows a profile's TYPE — so the types must actually be right.
  *
- * It is CONSERVATIVE: it only proposes a change when a heuristic is confident,
- * and it never invents a type that is not a canonical id in
+ * It is CONSERVATIVE: it proposes a change only from (a) owner-specified known
+ * fixes and (b) high-signal display-NAME keywords. It deliberately does NOT
+ * infer "student" from the education section, because that section is polluted
+ * with boilerplate defaults (valedictorian / pell_grant_eligible /
+ * fafsa_completed) on plainly non-student profiles — an unreliable signal that
+ * mis-tagged a PT business, the admin vault, and a fire department as students
+ * in the first dry run. It never invents a type that is not a canonical id in
  * shared/profileTypeOptions.js / backend/services/profileTypeRegistry.js.
  *
  * Usage (run IN-CONTAINER on prod so DATABASE_URL points at Postgres):
@@ -33,26 +37,28 @@ const KNOWN_FIXES = Object.freeze({
 
 // ── Name-keyword heuristics → canonical primary_type ────────────────────────
 // Ordered: the FIRST rule that matches the (lowercased) display name wins.
-// Keep these conservative — only high-signal keywords.
+// Keep these conservative — only high-signal keywords on the ORGANIZATION/NAME
+// axis. We deliberately do NOT infer "student" from profile sections: the
+// education section is polluted with boilerplate defaults (valedictorian,
+// pell_grant_eligible, fafsa_completed) on non-student profiles, so it is not a
+// trustworthy signal. Student relabels come from the owner-specified KNOWN_FIXES
+// only.
 const NAME_RULES = [
+  // Booster / parent / band / foundation groups attached to a school are
+  // nonprofits, NOT the school itself — must run BEFORE the school rule.
+  { type: 'nonprofit', re: /\b(band|booster(s)?|pta|pto|parent[- ]teacher|alumni|foundation|club|society|guild)\b/ },
   // Faith / nonprofit
-  { type: 'nonprofit', re: /\b(church|ministry|ministries|cogop|cog op|c\.o\.g|assembly|tabernacle|chapel|congregation|parish|fellowship|foundation|charit(y|ies)|nonprofit|non-profit|501c3|outreach|mission(s)?)\b/ },
+  { type: 'nonprofit', re: /\b(church|ministry|ministries|cogop|cog op|c\.o\.g|assembly|tabernacle|chapel|congregation|parish|fellowship|charit(y|ies)|nonprofit|non-profit|501c3|outreach|mission(s)?)\b/ },
   // Government / civic — flagged for owner (could be a more specific public type)
-  { type: 'organization', re: /\b(department|district|county|municipal(ity)?|city of|town of|township|borough|village|authority|commission|board of|agency|bureau)\b/, flag: 'government/civic — owner may pick a more specific public type' },
-  // Schools
-  { type: 'school', re: /\b(school|academy|high school|elementary|middle school|isd|usd)\b/ },
+  { type: 'organization', re: /\b(fire department|police department|sheriff|department|district|municipal(ity)?|city of|town of|township|borough|authority|commission|board of|bureau)\b/, flag: 'government/civic — owner may pick a more specific public type (e.g. volunteer_fire_department, municipality)' },
+  // Schools (actual school sites — boosters/bands already handled above)
+  { type: 'school', re: /\b(high school|elementary school|middle school|academy|isd|usd)\b/ },
   // Obvious businesses
-  { type: 'organization', re: /\b(llc|inc\.?|incorporated|corp\.?|corporation|company|co\.|enterprises?|holdings|ventures|group|partners|associates|consulting|services|solutions|industries)\b/, flag: 'looks like a business — verify organization/business' },
+  { type: 'organization', re: /\b(llc|inc\.?|incorporated|corp\.?|corporation|company|enterprises?|holdings|ventures|consulting|industries)\b/, flag: 'looks like a business — verify organization/business' },
 ]
 
 function lc(value) {
   return String(value ?? '').trim().toLowerCase()
-}
-
-function safeJsonParse(value) {
-  if (!value) return null
-  if (typeof value === 'object') return value
-  try { return JSON.parse(value) } catch { return null }
 }
 
 /**
@@ -73,7 +79,7 @@ function looksLikePersonName(name) {
  * Decide the canonical primary_type for a profile from its data. Returns
  * { proposed, reason, flag } or null when no confident change is warranted.
  */
-function decideType(profile, sections) {
+function decideType(profile) {
   const current = profile.primary_type || ''
   const currentCanonical = resolveProfileType(current) || current
   const name = lc(profile.display_name)
@@ -83,13 +89,7 @@ function decideType(profile, sections) {
     return { proposed: KNOWN_FIXES[profile.id], reason: 'owner-specified known fix' }
   }
 
-  // 2. An education section with real content => student (unless already an org type).
-  const education = safeJsonParse(sections.education)
-  const hasEducationSignal = education && Object.values(education).some(
-    (v) => v !== null && v !== undefined && v !== '' && !(Array.isArray(v) && v.length === 0),
-  )
-
-  // 3. Name keyword rules.
+  // 2. Name keyword rules (high-signal organization/name axis only).
   for (const rule of NAME_RULES) {
     if (rule.re.test(name)) {
       if (currentCanonical === rule.type) return null // already correct
@@ -97,14 +97,7 @@ function decideType(profile, sections) {
     }
   }
 
-  // 4. Education signal on a person-named profile → student.
-  if (hasEducationSignal && (looksLikePersonName(profile.display_name) || currentCanonical === 'individual' || !currentCanonical)) {
-    if (currentCanonical !== 'student') {
-      return { proposed: 'student', reason: 'has education section content + person-style name' }
-    }
-  }
-
-  // 5. Person-named profile with a non-canonical / legacy individual-ish type →
+  // 3. Person-named profile with a non-canonical / legacy individual-ish type →
   //    individual (keep them, don't lose them; mission rule).
   const LEGACY_INDIVIDUALISH = new Set(['caregiver', 'senior', 'individual_need', 'person', 'adult'])
   if (looksLikePersonName(profile.display_name) && LEGACY_INDIVIDUALISH.has(lc(current))) {
@@ -112,15 +105,6 @@ function decideType(profile, sections) {
   }
 
   return null
-}
-
-async function loadSections(profileId) {
-  const rows = await db
-    .prepare('SELECT section_key, data FROM profile_sections WHERE profile_id = ?')
-    .all(String(profileId))
-  const out = {}
-  for (const r of rows || []) out[r.section_key] = r.data
-  return out
 }
 
 async function main() {
@@ -133,8 +117,7 @@ async function main() {
 
   const changes = []
   for (const p of profiles) {
-    const sections = await loadSections(p.id)
-    const decision = decideType(p, sections)
+    const decision = decideType(p)
     if (!decision) continue
     const oldType = p.primary_type || '(none)'
     if (lc(oldType) === lc(decision.proposed)) continue
