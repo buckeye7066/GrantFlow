@@ -94,9 +94,14 @@ export function normalizeProfileSignals(profileSignals) {
   // States: prefer the multi-state array the signals pipeline provides, else the
   // single resolved state. Uppercased 2-letter codes, deduped, order-stable.
   const loc = (ps.location && typeof ps.location === 'object') ? ps.location : {}
-  const rawStates = Array.isArray(loc.states) && loc.states.length
-    ? loc.states
-    : (loc.state ? [loc.state] : [])
+  // The signals pipeline exposes the multi-state array at the TOP level
+  // (`ps.states`, primary-first). Prefer it; fall back to a nested location.states
+  // then the single primary state so single-address profiles are unchanged.
+  const rawStates = Array.isArray(ps.states) && ps.states.length
+    ? ps.states
+    : (Array.isArray(loc.states) && loc.states.length
+      ? loc.states
+      : (loc.state ? [loc.state] : []))
   const states = []
   const seen = new Set()
   for (const s of rawStates) {
@@ -113,7 +118,24 @@ export function normalizeProfileSignals(profileSignals) {
     edu.currentSchool || edu.school_name || rawEdu.school_name || rawEdu.current_institution || null
   const schoolName = schoolNameRaw ? String(schoolNameRaw).trim() || null : null
 
-  return { primaryType, isStudent, isIndividualOrFamily, isOrg, needs, assistance, states, schoolName }
+  // Student-ADJACENT: a profile can be a real student without being typed one
+  // (e.g. primary_type 'individual' but with an education section / college
+  // applications). Treat as a student for the FAFSA/ACT/College-Board tiles when
+  // there's a concrete education signal — but never for an org. Mirrors the
+  // recall fix's requiresStudent softening so a TN student still gets FAFSA/ACT.
+  const uniApps = (ps.rawSections && ps.rawSections.university_applications) || ps.university_applications || {}
+  const hasUniversityApps = Array.isArray(uniApps.applications) && uniApps.applications.length > 0
+  const eduEnrolled = Boolean(
+    edu.grade_level || edu.field_of_study || edu.currently_enrolled || edu.highest_level
+    || rawEdu.grade_level || rawEdu.field_of_study || rawEdu.currently_enrolled,
+  )
+  const interest = new Set(
+    [...asSet(ps.needs), ...asSet(ps.assistance), ...asSet(ps.intents)].map((x) => String(x).toLowerCase()),
+  )
+  const eduIntent = ['education', 'student_aid', 'scholarship', 'school', 'college', 'tuition'].some((k) => interest.has(k))
+  const isStudentLike = !isOrg && (isStudent || Boolean(schoolName) || hasUniversityApps || eduEnrolled || eduIntent)
+
+  return { primaryType, isStudent, isStudentLike, isIndividualOrFamily, isOrg, needs, assistance, states, schoolName }
 }
 
 // ── per-state benefit portal resolver ────────────────────────────────────────
@@ -240,7 +262,7 @@ export const PROCESS_PORTALS = [
     url: 'https://studentaid.gov/',
     kind: 'process',
     scope: 'national',
-    appliesWhen: (ps) => ps.isStudent,
+    appliesWhen: (ps) => ps.isStudentLike,
   },
   {
     id: 'act',
@@ -248,7 +270,7 @@ export const PROCESS_PORTALS = [
     url: 'https://www.act.org/',
     kind: 'process',
     scope: 'national',
-    appliesWhen: (ps) => ps.isStudent,
+    appliesWhen: (ps) => ps.isStudentLike,
   },
   {
     id: 'collegeboard_sat',
@@ -256,7 +278,7 @@ export const PROCESS_PORTALS = [
     url: 'https://www.collegeboard.org/',
     kind: 'process',
     scope: 'national',
-    appliesWhen: (ps) => ps.isStudent,
+    appliesWhen: (ps) => ps.isStudentLike,
   },
   {
     id: 'collegeboard_css',
@@ -264,7 +286,7 @@ export const PROCESS_PORTALS = [
     url: 'https://cssprofile.collegeboard.org/',
     kind: 'process',
     scope: 'national',
-    appliesWhen: (ps) => ps.isStudent,
+    appliesWhen: (ps) => ps.isStudentLike,
   },
 
   // ── INDIVIDUAL / FAMILY / NEED: national benefit anchors ───────────────────
