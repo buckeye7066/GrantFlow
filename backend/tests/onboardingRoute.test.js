@@ -326,6 +326,21 @@ describe('/api/onboarding routes — Anya conversational funnel', () => {
     expect(otpRow).toBeTruthy()
   })
 
+  it('resolves a known ZIP to city/state/county for location auto-fill', async () => {
+    const r = await request(app).get('/api/onboarding/zip/37205')
+    expect(r.status).toBe(200)
+    expect(r.body.state).toBe('TN')
+    expect(r.body.city).toMatch(/nashville/i)
+    expect(r.body.zip).toBe('37205')
+  })
+
+  it('rejects a malformed ZIP and 404s an unknown one', async () => {
+    const bad = await request(app).get('/api/onboarding/zip/abc')
+    expect(bad.status).toBe(400)
+    const unknown = await request(app).get('/api/onboarding/zip/00000')
+    expect(unknown.status).toBe(404)
+  })
+
   it('rejects /answer for unknown sessions', async () => {
     const r = await request(app)
       .post('/api/onboarding/answer')

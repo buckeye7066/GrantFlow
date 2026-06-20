@@ -111,6 +111,17 @@ export async function sendVerificationEmail(email, code) {
     const from = getFromEmail()
     if (!from) return false
 
+    // The sign-in URL points at the public GrantFlow landing page on the
+    // Axiom Biolabs website (configurable, but defaults there on purpose so
+    // every sign-in email also drives traffic to the marketing site).
+    const signInUrl = String(process.env.GRANTFLOW_SIGNIN_URL || 'https://www.axiombiolabs.org/grantflow').trim()
+    const safeSignInUrl = signInUrl
+      .replace(/&/g, '&amp;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#x27;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+
     const subject = 'Your GrantFlow Verification Code'
     const html = `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
@@ -120,10 +131,18 @@ export async function sendVerificationEmail(email, code) {
           ${String(code).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')}
         </div>
         <p>This code will expire in 10 minutes.</p>
+        <p style="margin: 24px 0;">
+          <a href="${safeSignInUrl}" style="display: inline-block; padding: 12px 18px; background: #2563eb; color: #fff; text-decoration: none; border-radius: 8px; font-weight: 600;">
+            Sign in to GrantFlow
+          </a>
+        </p>
+        <p style="font-size: 13px; color: #475569;">Or copy and paste this link into your browser:<br />
+          <a href="${safeSignInUrl}" style="color: #2563eb;">${safeSignInUrl}</a>
+        </p>
         <p>If you didn't request this code, you can safely ignore this email.</p>
       </div>
     `
-    const text = `Your GrantFlow verification code is: ${code}\n\nThis code will expire in 10 minutes.\n\nIf you didn't request this code, you can safely ignore this email.`
+    const text = `Your GrantFlow verification code is: ${code}\n\nThis code will expire in 10 minutes.\n\nSign in here: ${signInUrl}\n\nIf you didn't request this code, you can safely ignore this email.`
 
     const result = await resend.emails.send({
       from,

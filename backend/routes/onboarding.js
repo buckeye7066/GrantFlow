@@ -35,6 +35,7 @@ import {
   serializeQuestion,
 } from '../services/anyaInterviewEngine.js'
 import { canonicalizeProfileTypeId } from '../../shared/profileTypeOptions.js'
+import { resolveZipLocation } from '../services/geo/zipCountyResolver.js'
 
 const router = Router()
 
@@ -184,6 +185,27 @@ router.post('/start', async (req, res) => {
       detail: process.env.NODE_ENV === 'production' ? undefined : err?.message,
     })
   }
+})
+
+// ---------------------------------------------------------------------------
+// GET /api/onboarding/zip/:zip  (public ZIP → city/state/county lookup)
+//
+// Powers the auto-fill on the location step: as soon as a visitor types a
+// valid 5-digit ZIP the frontend pre-populates city + state for them. Uses
+// the offline `zipcodes-nrviens` dataset so we never send the user's ZIP to
+// a third-party geocoder. Unauthenticated by design — this runs before the
+// user has any credential.
+// ---------------------------------------------------------------------------
+router.get('/zip/:zip', (req, res) => {
+  const zip = String(req.params.zip || '').trim()
+  if (!/^\d{5}$/.test(zip)) {
+    return res.status(400).json({ error: 'ZIP must be 5 digits.' })
+  }
+  const location = resolveZipLocation(zip)
+  if (!location) {
+    return res.status(404).json({ error: 'Unknown ZIP code.' })
+  }
+  return res.json(location)
 })
 
 // ---------------------------------------------------------------------------

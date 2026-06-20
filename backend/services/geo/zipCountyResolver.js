@@ -60,6 +60,44 @@ export function getZipCountyMappingSource() {
 }
 
 /**
+ * Resolve a full city / state / county for a US ZIP code.
+ *
+ * Used by the public onboarding flow to auto-fill the location step the
+ * moment a visitor types a valid ZIP — no network call, no leaking the
+ * user's ZIP to a third-party geocoder. Returns null when the ZIP is
+ * malformed or unknown.
+ *
+ * Returns: { zip, city, state, county } | null
+ */
+export function resolveZipLocation(zip) {
+  const z = String(zip || '').trim()
+  if (!/^\d{5}$/.test(z)) return null
+  const mapping = loadMappingOnce()
+
+  if (cachedFromZipcodesDataset && mapping?.__zipcodes_dataset__) {
+    try {
+      const row = mapping.__zipcodes_dataset__.lookup(z)
+      if (!row) return null
+      const state = row.state ? String(row.state).trim().toUpperCase() : null
+      const city = row.city ? String(row.city).trim() : null
+      const county = row.county ? String(row.county).trim() : null
+      if (!state && !city) return null
+      return { zip: z, city, state, county }
+    } catch {
+      return null
+    }
+  }
+
+  const entry = mapping?.[z] ?? null
+  if (!entry || typeof entry !== 'object') return null
+  const state = entry.state ? String(entry.state).trim().toUpperCase() : null
+  const city = entry.city ? String(entry.city).trim() : null
+  const county = entry.county ? String(entry.county).trim() : null
+  if (!state && !city) return null
+  return { zip: z, city, state, county }
+}
+
+/**
  * Resolve county name for a US ZIP code.
  *
  * Mapping file format (zip_county_map.json):

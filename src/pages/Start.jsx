@@ -15,7 +15,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Link } from 'react-router-dom'
-import { Loader2, Send, CheckCircle2, Sparkles, MapPin, Mail, ArrowRight } from 'lucide-react'
+import { Loader2, Send, CheckCircle2, Sparkles, MapPin, Mail, ArrowRight, PlayCircle } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -27,6 +27,7 @@ import { cn } from '@/lib/utils'
 import { apiFetch } from '@/api/client'
 import { useAuthStore } from '@/stores/authStore'
 import { useToast } from '@/components/ui/use-toast'
+import OnboardingVideo from '@/components/onboarding/OnboardingVideo'
 
 const SESSION_KEY = 'grantflow:onboarding-session'
 const US_STATES = [
@@ -148,7 +149,28 @@ function LocationQuestion({ question, onSubmit, busy }) {
   const [stateCode, setStateCode] = useState('')
   const [city, setCity] = useState('')
   const [county, setCounty] = useState('')
+  const [zipLooking, setZipLooking] = useState(false)
   const canSubmit = /^\d{5}(-\d{4})?$/.test(zip.trim()) && /^[A-Z]{2}$/.test(stateCode.trim().toUpperCase())
+
+  // Auto-fill city + state the moment a valid 5-digit ZIP is entered. We
+  // overwrite city/state (the ZIP is authoritative) but only fill county when
+  // it's still blank, so a user who typed their own county isn't overridden.
+  useEffect(() => {
+    const z = zip.trim()
+    if (!/^\d{5}$/.test(z)) return
+    let cancelled = false
+    setZipLooking(true)
+    apiFetch(`/api/onboarding/zip/${z}`)
+      .then((loc) => {
+        if (cancelled || !loc) return
+        if (loc.state) setStateCode(loc.state.toUpperCase())
+        if (loc.city) setCity(loc.city)
+        if (loc.county) setCounty((prev) => prev.trim() ? prev : loc.county)
+      })
+      .catch(() => { /* unknown ZIP — leave fields for manual entry */ })
+      .finally(() => { if (!cancelled) setZipLooking(false) })
+    return () => { cancelled = true }
+  }, [zip])
   return (
     <form
       className="space-y-3"
@@ -178,7 +200,11 @@ function LocationQuestion({ question, onSubmit, busy }) {
               autoFocus
               className="pl-9"
             />
+            {zipLooking ? (
+              <Loader2 className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 animate-spin text-slate-400" />
+            ) : null}
           </div>
+          <p className="mt-1 text-xs text-slate-500">I'll fill in your city and state automatically.</p>
         </div>
         <div>
           <Label htmlFor="state">State</Label>
@@ -260,7 +286,7 @@ function TextQuestion({ question, onSubmit, busy, multiline = false }) {
   )
 }
 
-function EmailQuestion({ question, onSubmit, busy }) {
+function EmailQuestion({ question, onSubmit, busy, onWatchVideo }) {
   const [value, setValue] = useState('')
   const valid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim())
   return (
@@ -289,6 +315,20 @@ function EmailQuestion({ question, onSubmit, busy }) {
           {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowRight className="h-4 w-4" />}
           Send my sign-in code
         </Button>
+      </div>
+      <div className="rounded-xl border border-blue-100 bg-blue-50/60 px-3 py-2.5">
+        <p className="text-xs text-slate-600">
+          New to GrantFlow? Take 2 minutes to see how it works —{' '}
+          <button
+            type="button"
+            onClick={onWatchVideo}
+            className="inline-flex items-center gap-1 font-medium text-blue-700 underline underline-offset-2 hover:text-blue-900"
+          >
+            <PlayCircle className="h-3.5 w-3.5" />
+            watch the how-to video
+          </button>
+          .
+        </p>
       </div>
     </form>
   )
@@ -324,6 +364,8 @@ export default function Start() {
   const [otpCode, setOtpCode] = useState('')
   const [otpBusy, setOtpBusy] = useState(false)
   const [otpError, setOtpError] = useState(null)
+  // How-to video modal (offered on the email step)
+  const [showVideo, setShowVideo] = useState(false)
 
   const scrollerRef = useRef(null)
 
@@ -471,7 +513,7 @@ export default function Start() {
       case 'location':     return <LocationQuestion question={question} onSubmit={submitAnswer} busy={busy} />
       case 'long_text':    return <TextQuestion question={question} onSubmit={submitAnswer} busy={busy} multiline />
       case 'text':         return <TextQuestion question={question} onSubmit={submitAnswer} busy={busy} />
-      case 'email':        return <EmailQuestion question={question} onSubmit={submitAnswer} busy={busy} />
+      case 'email':        return <EmailQuestion question={question} onSubmit={submitAnswer} busy={busy} onWatchVideo={() => setShowVideo(true)} />
       default:             return null
     }
   }
@@ -547,6 +589,12 @@ export default function Start() {
           We never share or sell your information. Your answers stay tied to your profile.
         </footer>
       </div>
+
+      <OnboardingVideo
+        open={showVideo}
+        onComplete={() => setShowVideo(false)}
+        onSkip={() => setShowVideo(false)}
+      />
     </div>
   )
 }

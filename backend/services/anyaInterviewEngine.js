@@ -187,11 +187,13 @@ export const QUESTIONS = Object.freeze({
     id: 'intro',
     kind: 'announce',
     prompt:
-      "Hi — I'm Anya. I help you find real funding that fits who you actually are. " +
-      "Grants, benefits, scholarships, programs — whatever's out there for your situation. " +
-      "I'll ask a handful of quick questions (about 2 minutes), then I'll start looking. " +
-      "Sound good?",
-    cta: "Yes, let's start",
+      "Hi there — I'm Anya, and I'm really glad you're here. 😊\n\n" +
+      "My whole job is to help you find real funding that fits who you actually are — " +
+      "grants, benefits, scholarships, programs, whatever's out there for your situation. " +
+      "There are no wrong answers here, and anything you're not sure about you can skip.\n\n" +
+      "I'll ask just a handful of quick questions (about 2 minutes), then I'll get right to work finding matches for you. " +
+      "Ready when you are.",
+    cta: "Let's do it",
     apply: (state) => state,
     next: () => 'who',
   },
@@ -200,8 +202,8 @@ export const QUESTIONS = Object.freeze({
   who: {
     id: 'who',
     kind: 'choice',
-    prompt: "First — who am I helping today?",
-    help: "Pick the closest match. We'll narrow it down on the next screen.",
+    prompt: "First things first — who am I helping you find funding for today?",
+    help: "Just pick whatever's closest — we'll fine-tune it together on the next screen.",
     options: [
       { value: 'personal_group',  label: 'Myself or my family' },
       { value: 'student',         label: 'A student' },
@@ -235,9 +237,10 @@ export const QUESTIONS = Object.freeze({
     id: 'location',
     kind: 'location',
     prompt:
-      "Where are you (or the org/school/department) located? " +
-      "Even just a ZIP and state helps me find local programs first.",
-    help: "City and county are optional — they help me match neighborhood-level funding.",
+      "Great — thanks for sharing that. Now, where are you located? " +
+      "Just pop in your ZIP and I'll fill in your city and state for you. " +
+      "This helps me put local programs right at the top of your list.",
+    help: "City and county are optional — they just help me find neighborhood-level funding for you.",
     fields: [
       { name: 'zip',   label: 'ZIP code',  required: true,  format: 'zip' },
       { name: 'state', label: 'State',     required: true,  format: 'state' },
@@ -761,8 +764,8 @@ export const QUESTIONS = Object.freeze({
   name: {
     id: 'name',
     kind: 'text',
-    prompt: "What should I call this profile?",
-    help: "This is just a label so you can find it later — your real name, your org name, or anything that makes sense.",
+    prompt: "Almost done — what should I call this profile?",
+    help: "This is just a friendly label so you can find it later — your name, your org's name, or whatever feels right to you.",
     placeholder: "e.g. 'Jordan Smith' or 'Hope Community Church'",
     validate: (answer) => {
       const trimmed = String(answer ?? '').trim()
@@ -782,9 +785,9 @@ export const QUESTIONS = Object.freeze({
     id: 'email',
     kind: 'email',
     prompt:
-      "Last thing — what's the best email to send your matches to? " +
-      "I'll send a quick sign-in code there so we can save your work.",
-    help: "I never share or sell your email. It's only used for sign-in and your funding alerts.",
+      "Last thing, I promise — what's the best email to reach you at? " +
+      "I'll send a quick 6-digit sign-in code there so we can save everything and I can send you matches as they come in.",
+    help: "I'll never share or sell your email — it's only ever used for your sign-in and your funding alerts.",
     placeholder: "you@example.com",
     validate: (answer) => {
       const trimmed = String(answer ?? '').trim().toLowerCase()
