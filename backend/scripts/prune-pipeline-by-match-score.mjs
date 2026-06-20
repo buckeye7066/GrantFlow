@@ -48,13 +48,12 @@ async function resolveProfiles(name) {
   const like = `%${name.toLowerCase()}%`
   return db
     .prepare(
-      `SELECT id, display_name, name, primary_type, status
+      `SELECT id, display_name, primary_type, status
          FROM profiles
-        WHERE (lower(COALESCE(display_name, '')) LIKE ?
-            OR lower(COALESCE(name, '')) LIKE ?)
+        WHERE lower(COALESCE(display_name, '')) LIKE ?
           AND (status IS NULL OR status <> 'deleted')`,
     )
-    .all(like, like)
+    .all(like)
 }
 
 async function cascadeDeleteAndTombstone(grant) {
