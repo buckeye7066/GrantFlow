@@ -14,8 +14,15 @@
  * Auth: authenticated caller, profile-access scoped exactly like the rest of the
  * profile surface (admin sees all; others only profiles they can access).
  *
- * Degrades gracefully: a profile with no portals returns { portals: [] }, and
- * the resolver never throws, so this endpoint does not 500 on sparse data.
+ * The response also carries `mailFaxSources: [...]` — the profile's REAL funding
+ * sources (URL present) that are NOT login/application portals (they apply by
+ * mail/fax/email, or are info-only pages). The UI shows these in a separate
+ * "Apply by mail/fax/email" section with a printable application packet, never as
+ * a login tile. Search-engine / generic junk hosts are excluded from both lists.
+ *
+ * Degrades gracefully: a profile with no portals returns
+ * { portals: [], mailFaxSources: [] }, and the resolver never throws, so this
+ * endpoint does not 500 on sparse data.
  *
  * Mounted at /api so the path is /api/profiles/:id/portals — alongside the
  * studentPortals + committedCollege routers, without colliding with the main
@@ -53,10 +60,10 @@ router.get('/profiles/:id/portals', async (req, res) => {
     const result = await getProfilePortals(req.db, profileId)
     return res.json(result)
   } catch (err) {
-    // getProfilePortals already degrades to { portals: [] } internally; this is
-    // a final net so the dashboard never sees a 500.
+    // getProfilePortals already degrades to { portals: [], mailFaxSources: [] }
+    // internally; this is a final net so the dashboard never sees a 500.
     log.error('profile_portals_failed', { profileId, err: err?.message })
-    return res.json({ portals: [] })
+    return res.json({ portals: [], mailFaxSources: [] })
   }
 })
 

@@ -804,7 +804,7 @@ export default function ProfileDetail() {
                   that applies to this profile is shown — the user clicks a red
                   tile to log in once (no typing), and ready/green tiles expose
                   two-way sync. */}
-              <ProfilePortalsCard profileId={profileId} />
+              <ProfilePortalsCard profileId={profileId} profileName={profile?.display_name || ""} />
               {/* The manual portal-host/URL entry forms are de-emphasized: kept
                   for power users under a disclosure, since the dashboard above is
                   now the primary way to set up portals. */}

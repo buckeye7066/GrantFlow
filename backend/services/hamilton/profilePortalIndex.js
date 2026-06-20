@@ -117,6 +117,116 @@ function isRealConnector(connector) {
   return Boolean(connector && connector.id && connector.id !== 'generic')
 }
 
+// ── PORTAL vs NON-PORTAL classification ──────────────────────────────────────
+// RULE: a funding source is "real" if it has a URL. A real LOGIN/APPLICATION
+// portal becomes a dashboard tile; anything that is NOT a portal (info-only page,
+// or applies by mail/fax/email) does NOT get a tile — instead it becomes a
+// printable application PACKET. Generic search engines / social hosts are junk
+// and excluded entirely.
+
+// Junk: search engines, social, link shorteners, generic doc hosts — never a
+// portal AND never a real funding source. Matched on registrable host.
+const JUNK_HOSTS = new Set([
+  'google.com', 'google.co.uk', 'bing.com', 'duckduckgo.com', 'yahoo.com',
+  'ask.com', 'baidu.com', 'yandex.com', 'ecosia.org',
+  'facebook.com', 'fb.com', 'twitter.com', 'x.com', 'instagram.com',
+  'linkedin.com', 'youtube.com', 'youtu.be', 'reddit.com', 'pinterest.com',
+  'tiktok.com', 'threads.net',
+  'bit.ly', 'tinyurl.com', 't.co', 'goo.gl', 'lnkd.in',
+  'wikipedia.org', 'example.com', 'localhost',
+])
+
+// Known online-application / scholarship-portal platforms: if a candidate's
+// registrable host is one of these, it is unambiguously a real application
+// portal regardless of path or application_method.
+const PORTAL_PLATFORM_HOSTS = new Set([
+  'academicworks.com', 'communityforce.com', 'smapply.io', 'smapply.org',
+  'submittable.com', 'awardspring.com', 'scholarshipuniverse.com',
+  'bold.org', 'goingmerry.com', 'scholarships.com', 'commonapp.org',
+  'fastweb.com', 'scholarsapp.com', 'mykaleidoscope.com', 'cappex.com',
+  'salesforce.com', 'force.com', 'fluidreview.com', 'wizehive.com',
+  'grantinterface.com', 'grantrequest.com', 'fluxx.io',
+])
+
+// Path affordances that indicate a login / application portal rather than an
+// informational homepage. Tested case-insensitively against the URL path.
+const PORTAL_PATH_RE = /(\/login|\/log-?in|\/signin|\/sign-?in|\/sign-?on|\/sso|\/apply|\/application|\/applicant|\/portal|\/account|\/admissions|\/auth|\/register|\/dashboard|\/myaccount|\/students?\/)/i
+
+// application_method values (normalized lowercase) that mean "online portal".
+const PORTAL_METHODS = new Set(['portal', 'online', 'web', 'website', 'account', 'electronic'])
+
+// application_method values that mean "NOT a portal — apply by mail/fax/email/
+// paper". These force a packet even when a URL is present.
+const NONPORTAL_METHODS = new Set(['mail', 'fax', 'email', 'e-mail', 'pdf', 'paper', 'postal', 'in_person', 'in-person'])
+
+function normalizeMethod(method) {
+  return String(method === null || method === undefined ? '' : method).trim().toLowerCase()
+}
+
+/** Path portion of a URL, '' when unparseable. */
+function urlPath(input) {
+  const s = String(input || '').trim()
+  if (!s) return ''
+  try {
+    const withProto = /^https?:\/\//i.test(s) ? s : `https://${s}`
+    return new URL(withProto).pathname || ''
+  } catch {
+    return ''
+  }
+}
+
+/**
+ * Classify ONE candidate (URL + its source's application_method) as a real
+ * portal, a non-portal mail/fax/email source, or junk to drop entirely.
+ *
+ * Decision order (honest, conservative):
+ *   1. No host / junk host        → 'junk'  (never shown anywhere)
+ *   2. application_method ∈ mail/fax/email/paper → 'nonportal' (packet)
+ *   3. real (non-generic) connector matches the host → 'portal'
+ *   4. application_method ∈ portal/online/web/account → 'portal'
+ *   5. host is a known application platform           → 'portal'
+ *   6. URL path looks like a login/application portal → 'portal'
+ *   7. ambiguous (bare homepage, no affordance)       → 'nonportal' (packet)
+ *
+ * The honest fallback is NON-PORTAL: we never show a login tile for something
+ * that may not have a portal. Hamilton can promote it to a portal later once a
+ * real login URL is discovered.
+ *
+ * @returns {{ verdict: 'portal'|'nonportal'|'junk', host: string }}
+ */
+function classifyCandidate(url, applicationMethod) {
+  const host = portalKeyHost(url)
+  if (!host) return { verdict: 'junk', host: '' }
+  if (JUNK_HOSTS.has(host)) return { verdict: 'junk', host }
+
+  const method = normalizeMethod(applicationMethod)
+  if (NONPORTAL_METHODS.has(method)) return { verdict: 'nonportal', host }
+
+  const connector = resolveConnector({ host })
+  if (isRealConnector(connector)) return { verdict: 'portal', host }
+
+  if (PORTAL_METHODS.has(method)) return { verdict: 'portal', host }
+  if (PORTAL_PLATFORM_HOSTS.has(host)) return { verdict: 'portal', host }
+
+  const path = urlPath(url)
+  if (path && path !== '/' && PORTAL_PATH_RE.test(path)) return { verdict: 'portal', host }
+
+  // Ambiguous: a real URL but no portal affordance → packet, not a login tile.
+  return { verdict: 'nonportal', host }
+}
+
+/**
+ * Register a non-portal (mail/fax/email) real funding source for the packet UI,
+ * deduped by (host + grantId/opportunityId/title). Carries the per-source
+ * contact block so Hamilton can produce a printable application packet.
+ */
+function addMailFaxSource(acc, source) {
+  if (!source || !source.host) return
+  const key = `${source.host}::${source.grantId || ''}::${source.opportunityId || ''}::${source.title || ''}`
+  if (acc.has(key)) return
+  acc.set(key, source)
+}
+
 // ── source extraction (dedup by registrable host) ────────────────────────────
 
 /**
@@ -144,15 +254,21 @@ function addSource(acc, host, kind, source) {
 
 /**
  * Pipeline grants for the profile that reference a portal/application URL. Each
- * contributes its registrable host with kind 'funding_source' and a source
- * descriptor { title, grantId, opportunityId }.
+ * is classified PORTAL vs NON-PORTAL (see classifyCandidate): real login/
+ * application portals contribute a dashboard tile (kind 'funding_source') into
+ * `acc`; non-portal real sources (URL present but apply by mail/fax/email, or an
+ * info-only homepage) contribute a mail/fax packet entry into `mailFax`; junk
+ * hosts are dropped entirely.
  */
-async function collectFromPipeline(db, profileId, acc) {
+async function collectFromPipeline(db, profileId, acc, mailFax) {
   let rows = []
   try {
     rows = await db.prepare(
       `SELECT g.id AS grant_id, g.title AS grant_title,
               g.application_url, g.portal_url, g.url,
+              g.application_method,
+              g.contact_name, g.contact_email, g.contact_phone,
+              g.funder_fax, g.funder_address,
               g.funding_opportunity_id,
               fo.application_url AS fo_application_url,
               fo.apply_url       AS fo_apply_url,
@@ -169,7 +285,9 @@ async function collectFromPipeline(db, profileId, acc) {
     try {
       rows = await db.prepare(
         `SELECT id AS grant_id, title AS grant_title,
-                application_url, portal_url, url, funding_opportunity_id
+                application_url, portal_url, url, application_method,
+                contact_name, contact_email, contact_phone,
+                funder_fax, funder_address, funding_opportunity_id
            FROM grants WHERE profile_id = ?`,
       ).all(String(profileId))
     } catch (err2) {
@@ -182,12 +300,33 @@ async function collectFromPipeline(db, profileId, acc) {
       r.application_url, r.portal_url, r.url,
       r.fo_application_url, r.fo_apply_url, r.fo_apply_guidelines_url, r.fo_source_url,
     )
-    const host = portalKeyHost(candidate)
-    if (!host) continue
-    addSource(acc, host, 'funding_source', {
-      title: firstNonEmpty(r.grant_title, host),
+    if (!candidate) continue // no URL → not a "real" funding source per the rule.
+    const { verdict, host } = classifyCandidate(candidate, r.application_method)
+    if (verdict === 'junk' || !host) continue
+    const title = firstNonEmpty(r.grant_title, host)
+    if (verdict === 'portal') {
+      addSource(acc, host, 'funding_source', {
+        title,
+        grantId: r.grant_id || null,
+        opportunityId: r.funding_opportunity_id || null,
+      })
+      continue
+    }
+    // NON-PORTAL: apply by mail/fax/email or info-only page → packet entry.
+    addMailFaxSource(mailFax, {
+      title,
       grantId: r.grant_id || null,
       opportunityId: r.funding_opportunity_id || null,
+      host,
+      url: candidate,
+      applicationMethod: firstNonEmpty(r.application_method) || null,
+      contact: {
+        name: firstNonEmpty(r.contact_name) || null,
+        email: firstNonEmpty(r.contact_email) || null,
+        phone: firstNonEmpty(r.contact_phone) || null,
+        fax: firstNonEmpty(r.funder_fax) || null,
+        address: firstNonEmpty(r.funder_address) || null,
+      },
     })
   }
 }
@@ -384,18 +523,26 @@ async function readCacheMap(db, profileId) {
  * is missing. NEVER throws: any failure degrades to the best partial list, and
  * a profile with no portals returns [].
  *
- * @returns {Promise<{ portals: Array<object> }>}
+ * @returns {Promise<{ portals: Array<object>, mailFaxSources: Array<object> }>}
  */
 export async function getProfilePortals(db, profileId, { refresh = true } = {}) {
-  if (!db || !profileId) return { portals: [] }
+  if (!db || !profileId) return { portals: [], mailFaxSources: [] }
   try {
     await ensureProfilePortalIndexSchema(db)
 
     const acc = new Map()
-    await collectFromPipeline(db, profileId, acc)
+    const mailFax = new Map()
+    await collectFromPipeline(db, profileId, acc, mailFax)
     await collectFromColleges(db, profileId, acc)
     await collectFromIdentity(db, profileId, acc)
-    if (acc.size === 0) return { portals: [] }
+
+    // Non-portal real sources (apply by mail/fax/email or info-only homepage):
+    // sorted by title for a stable list the packet UI can render.
+    const mailFaxSources = [...mailFax.values()].sort(
+      (a, b) => String(a.title).localeCompare(String(b.title)),
+    )
+
+    if (acc.size === 0) return { portals: [], mailFaxSources }
 
     const cache = await readCacheMap(db, profileId)
 
@@ -464,10 +611,10 @@ export async function getProfilePortals(db, profileId, { refresh = true } = {}) 
       if (a.kind !== b.kind) return a.kind === 'school' ? -1 : 1
       return String(a.label).localeCompare(String(b.label))
     })
-    return { portals }
+    return { portals, mailFaxSources }
   } catch (err) {
     log.error('get_profile_portals_failed', { profileId: String(profileId), err: err?.message })
-    return { portals: [] }
+    return { portals: [], mailFaxSources: [] }
   }
 }
 
@@ -482,7 +629,8 @@ export async function preResolveProfilePortals(db, profileId) {
   try {
     await ensureProfilePortalIndexSchema(db)
     const acc = new Map()
-    await collectFromPipeline(db, profileId, acc)
+    // The cache only stores real portals; mail/fax sources are computed on read.
+    await collectFromPipeline(db, profileId, acc, new Map())
     await collectFromColleges(db, profileId, acc)
     await collectFromIdentity(db, profileId, acc)
     let resolved = 0
