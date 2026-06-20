@@ -54,6 +54,7 @@
 
 import { createLogger } from '../utils/logger.js'
 import { reconcileDismissedGrants } from '../services/pipelineDismissals.js'
+import { isTrustedRecordOrigin } from '../config/relevanceFloor.js'
 
 const log = createLogger('startup:enforceInvariants')
 
@@ -81,6 +82,23 @@ export const RELEVANCE_FLOOR = Number.parseInt(
  * Matches the insert-gate default the partner agent is introducing.
  */
 const RELEVANCE_FLOOR_FALLBACK = 55
+
+/**
+ * LENIENT purge floor. The boot sweep is the destructive NET, so it must be at
+ * least as lenient as the insert gate — INSERT floor >= PURGE floor — or it
+ * would turn around and delete rows the insert gate just (correctly) admitted
+ * (e.g. trusted student aid admitted at the 40 trusted floor, or a 50–54 row).
+ *
+ * The audit caught a "floor collapse": both the insert gate and this purge
+ * resolved to the SAME config value (55), so the purge could delete 50–54 rows
+ * that should survive. We restore the documented split — the purge uses
+ * min(resolvedFloor, 50) so it can never exceed 50 and never exceed the insert
+ * floor. Override the cap via env PIPELINE_PURGE_RELEVANCE_FLOOR.
+ */
+const PURGE_FLOOR_CAP = (() => {
+  const v = Number.parseInt(process.env.PIPELINE_PURGE_RELEVANCE_FLOOR || '50', 10)
+  return Number.isFinite(v) && v > 0 ? v : 50
+})()
 
 let _floorCache // memoized { value, source }
 
@@ -193,6 +211,30 @@ function changesOf(result) {
 }
 
 /**
+ * Return the set of column names on the `grants` table for the active dialect.
+ * Dialect-agnostic (PRAGMA on SQLite, information_schema on Postgres) and
+ * defensive: any probe failure yields an empty set so callers degrade to the
+ * minimal required columns rather than crashing the boot sweep.
+ */
+async function listGrantColumns(db) {
+  try {
+    if ((db?.dialect || 'sqlite') === 'postgres') {
+      const rows = await db
+        .prepare(
+          `SELECT column_name FROM information_schema.columns
+           WHERE table_schema = 'public' AND table_name = 'grants'`,
+        )
+        .all()
+      return new Set((rows || []).map((r) => String(r.column_name)))
+    }
+    const cols = await db.prepare('PRAGMA table_info(grants)').all()
+    return new Set((cols || []).map((c) => String(c.name)))
+  } catch {
+    return new Set()
+  }
+}
+
+/**
  * INVARIANT: STICKY DELETES (canonical_rules.md — sticky-delete rule).
  *
  * "A funding source a user deleted from a profile pipeline stays gone." We
@@ -285,15 +327,21 @@ export async function enforceNoCrossProfileBleed(db) {
  */
 export async function enforceNoDuplicateGrants(db) {
   return runInvariant('no_duplicate_grants', async () => {
-    // Pull only the columns the keep-best decision needs. Profile-scoped rows
-    // only (a NULL profile_id has no "within-profile" peers to dedupe against).
+    // Pull the columns the keep-best decision + the strengthened title+funder
+    // dedup key need. Profile-scoped rows only (a NULL profile_id has no
+    // "within-profile" peers to dedupe against). deadline/url/amount corroborate
+    // the weak title+funder key; they may be absent on older/test schemas, so we
+    // select only the OPTIONAL columns that actually exist (a missing corroborator
+    // simply means the weak key won't fire for lack of agreement).
+    const grantCols = await listGrantColumns(db)
+    const optional = ['deadline', 'url', 'application_url', 'amount_requested'].filter((c) => grantCols.has(c))
+    const selectCols = [
+      'id', 'profile_id', 'funding_opportunity_id', 'fingerprint',
+      'title', 'funder', 'status', 'match_score', 'created_at',
+      ...optional,
+    ].join(', ')
     const rows = await db
-      .prepare(
-        `SELECT id, profile_id, funding_opportunity_id, fingerprint,
-                title, funder, status, match_score, created_at
-         FROM grants
-         WHERE profile_id IS NOT NULL`,
-      )
+      .prepare(`SELECT ${selectCols} FROM grants WHERE profile_id IS NOT NULL`)
       .all()
 
     // Build duplicate clusters keyed within each profile. A single grant can
@@ -321,6 +369,15 @@ export async function enforceNoDuplicateGrants(db) {
     // keyBuckets: dedupe-key -> first row id seen with that key. Each key is
     // namespaced by profile so we never cross profiles.
     const norm = (v) => String(v ?? '').trim().toLowerCase()
+    const urlHost = (v) => {
+      const s = norm(v)
+      if (!s) return ''
+      try {
+        return new URL(s.includes('://') ? s : `https://${s}`).host
+      } catch {
+        return ''
+      }
+    }
     const keyBuckets = new Map()
     const linkByKey = (key, id) => {
       if (!key) return
@@ -337,8 +394,26 @@ export async function enforceNoDuplicateGrants(db) {
       }
       const title = norm(row.title)
       if (title !== '') {
-        // title+funder (funder may be empty; still a valid weak key per spec)
-        linkByKey(`p:${p}|tf:${title}|${norm(row.funder)}`, row.id)
+        // STRENGTHENED title+funder key (recall guard against false-duplicate
+        // collapse): the weak title-based key is only valid when there is a
+        // NON-EMPTY funder AND at least one MORE agreeing field (amount,
+        // deadline, or url-host). An empty/shared funder, or title+funder with
+        // no corroborating field, is NOT enough to merge — distinct programs
+        // that happen to share a title (or have a blank funder) stay separate.
+        const funder = norm(row.funder)
+        const host = urlHost(row.url ?? row.application_url)
+        const deadline = norm(row.deadline)
+        const amount = norm(row.amount_requested)
+        if (funder !== '') {
+          const corroborator =
+            (amount !== '' && `amt:${amount}`) ||
+            (deadline !== '' && `dl:${deadline}`) ||
+            (host !== '' && `host:${host}`) ||
+            ''
+          if (corroborator) {
+            linkByKey(`p:${p}|tf:${title}|${funder}|${corroborator}`, row.id)
+          }
+        }
       }
     }
 
@@ -452,34 +527,66 @@ const PURGEABLE_DISCOVERY_STATUSES = Object.freeze([
 
 export async function enforceRelevanceFloor(db) {
   return runInvariant('relevance_floor', async () => {
-    const { value: floor, source: floorSource } = await getRelevanceFloor()
+    const { value: insertFloor, source: insertFloorSource } = await getRelevanceFloor()
+    // Purge with the LENIENT floor (never above PURGE_FLOOR_CAP, and never above
+    // the insert floor) so the net can't delete rows the insert gate admitted.
+    const floor = Math.min(insertFloor, PURGE_FLOOR_CAP)
+    const floorSource = `${insertFloorSource}→purge(min ${PURGE_FLOOR_CAP})`
 
     const protectedPh = PROTECTED_PIPELINE_STATUSES.map(() => '?').join(', ')
 
     // Candidate predicate (count + delete share it): below floor, non-null
-    // score, NOT a protected/working status. Name-pattern protection is applied
-    // in JS (regex) so it works identically on SQLite + Postgres.
+    // score, NOT a protected/working status. Name-pattern + trusted-origin
+    // protection are applied in JS so they work identically on SQLite + Postgres.
+    //
+    // Trusted-origin resolution: grants has no record_origin column, so we LEFT
+    // JOIN funding_opportunities (the row's source of vetting). The join is
+    // defensive — if funding_opportunities or its record_origin column is
+    // absent, we fall back to a no-origin query and simply skip the exemption.
     const baseWhere = `
-      match_score IS NOT NULL
-      AND match_score < ?
-      AND (status IS NULL OR status NOT IN (${protectedPh}))
+      g.match_score IS NOT NULL
+      AND g.match_score < ?
+      AND (g.status IS NULL OR g.status NOT IN (${protectedPh}))
     `
 
-    const candidates = await db
-      .prepare(
-        `SELECT id, title, funder, status FROM grants WHERE ${baseWhere}`,
-      )
-      .all(floor, ...PROTECTED_PIPELINE_STATUSES)
+    let candidates
+    try {
+      candidates = await db
+        .prepare(
+          `SELECT g.id, g.title, g.funder, g.status, fo.record_origin AS record_origin
+           FROM grants g
+           LEFT JOIN funding_opportunities fo ON fo.id = g.funding_opportunity_id
+           WHERE ${baseWhere}`,
+        )
+        .all(floor, ...PROTECTED_PIPELINE_STATUSES)
+    } catch {
+      // funding_opportunities / record_origin not available — degrade to a
+      // plain grants query with no origin (no trusted exemption possible).
+      const rows = await db
+        .prepare(
+          `SELECT id, title, funder, status FROM grants
+           WHERE match_score IS NOT NULL AND match_score < ?
+             AND (status IS NULL OR status NOT IN (${protectedPh}))`,
+        )
+        .all(floor, ...PROTECTED_PIPELINE_STATUSES)
+      candidates = (rows || []).map((r) => ({ ...r, record_origin: null }))
+    }
 
-    // Apply the MTSU/portal name guard + the early-status allowlist in JS. We
-    // only ever delete rows in an explicitly-purgeable discovery status (or NULL
-    // status), never an unrecognized status we don't understand.
+    // Apply the MTSU/portal name guard, trusted-origin exemption, and the
+    // early-status allowlist in JS. We only ever delete rows in an explicitly-
+    // purgeable discovery status (or NULL status), never an unrecognized status
+    // we don't understand, and NEVER a vetted/trusted-origin row.
+    let trustedExempt = 0
     const purgeable = candidates.filter((r) => {
       const status = (r.status === null || r.status === undefined) ? null : String(r.status)
       const isEarly =
         status === null || PURGEABLE_DISCOVERY_STATUSES.includes(status)
       if (!isEarly) return false
       if (PROTECTED_NAME_PATTERN.test(`${r.title ?? ''} ${r.funder ?? ''}`)) return false
+      if (isTrustedRecordOrigin(r.record_origin)) {
+        trustedExempt += 1
+        return false
+      }
       return true
     })
 
@@ -494,11 +601,11 @@ export async function enforceRelevanceFloor(db) {
           floorSource,
         })
       }
-      return { scanned: violators, repaired: 0, enforced: false, floor, floorSource }
+      return { scanned: violators, repaired: 0, enforced: false, floor, floorSource, trustedExempt }
     }
 
     if (violators === 0) {
-      return { scanned: 0, repaired: 0, enforced: true, floor, floorSource }
+      return { scanned: 0, repaired: 0, enforced: true, floor, floorSource, trustedExempt }
     }
 
     const ids = purgeable.map((r) => r.id)
@@ -511,9 +618,9 @@ export async function enforceRelevanceFloor(db) {
       repaired += changesOf(result) || slice.length
     }
     if (repaired > 0) {
-      log.info('purged below-floor pipeline grants', { repaired, floor, floorSource })
+      log.info('purged below-floor pipeline grants', { repaired, floor, floorSource, trustedExempt })
     }
-    return { scanned: violators, repaired, enforced: true, floor, floorSource }
+    return { scanned: violators, repaired, enforced: true, floor, floorSource, trustedExempt }
   })
 }
 
