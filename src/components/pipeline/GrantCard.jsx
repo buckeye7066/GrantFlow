@@ -19,6 +19,8 @@ import { isHumanReviewNeeded, getStageHelp } from '@/components/pipeline/pipelin
 import HamiltonTaskBadge from '@/components/hamilton/HamiltonTaskBadge';
 import HamiltonTaskDrawer from '@/components/hamilton/HamiltonTaskDrawer';
 import { useHamiltonSelection } from '@/components/hamilton/HamiltonSelectionContext';
+import PortalLoginButton from '@/components/portal/PortalLoginButton';
+import { safeHttpUrl } from '@/lib/safeUrl';
 
 function getGrantDetailUrl(grant, isDiscoveryResult = false) {
   if (grant.id) {
@@ -554,6 +556,26 @@ export default function GrantCard({ grant, organization, organizationName, onSta
               )}
             </div>
           )}
+
+          {/* Portal login — visible on pipeline cards so opening the portal and
+              saving the login for Hamilton is always one click away. Stop the
+              click from bubbling to the card's <Link>. */}
+          {isInPipeline && (() => {
+            const portalUrl =
+              safeHttpUrl(grant.application_url) ||
+              safeHttpUrl(grant.url) ||
+              safeHttpUrl(grant.source_url) ||
+              safeHttpUrl(grant.portal_url);
+            if (!portalUrl) return null;
+            return (
+              <div className="pt-1" onClick={(e) => { e.preventDefault(); e.stopPropagation(); }}>
+                <PortalLoginButton
+                  profileId={grant.profile_id || profileId}
+                  url={portalUrl}
+                />
+              </div>
+            );
+          })()}
 
           {/* Hamilton — application-completion agent. Visible on pipeline cards
               (isInPipeline) so the user sees a "Let Hamilton help" CTA without
