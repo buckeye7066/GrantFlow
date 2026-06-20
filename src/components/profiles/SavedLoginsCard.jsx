@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { Bot, Check, Copy, Eye, FileUp, KeyRound, Loader2, Lock, Plus, ShieldCheck, Smartphone, Sparkles, Trash2, Upload } from "lucide-react"
+import { Bot, Check, Copy, Eye, FileUp, KeyRound, Loader2, Lock, Plus, ShieldCheck, Smartphone, Sparkles, Trash2, Upload, Wand2 } from "lucide-react"
 import { apiFetch } from "@/api/client"
+import { suggestPortalLogin } from "@/api/hamilton"
 import { generateTotp, isValidTotpSecret, secondsRemaining } from "@/lib/totpPreview"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
@@ -49,6 +50,82 @@ export default function SavedLoginsCard({ profileId }) {
 
   const set = (k, v) => setForm((s) => ({ ...s, [k]: v }))
   const setGen = (k, v) => setGenForm((s) => ({ ...s, [k]: v }))
+
+  // "✨ Auto-fill with Hamilton" state. When a suggestion lands we show a subtle
+  // "filled by Hamilton — edit if needed" hint under the affected dialog.
+  const [addFilledByHamilton, setAddFilledByHamilton] = useState(false)
+  const [genFilledByHamilton, setGenFilledByHamilton] = useState(false)
+
+  // Apply a best-effort suggestion to a form without clobbering anything the
+  // user already typed. Returns true if it changed at least one field.
+  const applySuggestion = (suggestion, current, applyFn) => {
+    if (!suggestion) return false
+    let changed = false
+    const next = {}
+    if (suggestion.portalHost && !current.portalHost.trim()) { next.portalHost = suggestion.portalHost; changed = true }
+    if (suggestion.loginUrl && !current.login_url.trim()) { next.login_url = suggestion.loginUrl; changed = true }
+    if (suggestion.username && !current.username.trim()) { next.username = suggestion.username; changed = true }
+    if (suggestion.label && !current.label.trim()) { next.label = suggestion.label; changed = true }
+    if (changed) applyFn(next)
+    return changed
+  }
+
+  // Auto-fill the Add-login dialog. Passes the typed partial as both a host hint
+  // and a free-text context so Hamilton can resolve a portal she already knows.
+  const addSuggestMutation = useMutation({
+    mutationFn: () => suggestPortalLogin(profileId, {
+      portalHost: form.portalHost || form.login_url || null,
+      context: form.portalHost || form.label || null,
+    }),
+    onSuccess: (resp) => {
+      const filled = applySuggestion(resp, form, (next) => setForm((s) => ({ ...s, ...next })))
+      setAddFilledByHamilton(filled)
+      if (!filled) {
+        toast({ title: "Nothing to auto-fill yet", description: "Type the portal name or pick it from an opportunity, then try again." })
+      }
+    },
+    onError: (err) => {
+      toast({ variant: "destructive", title: "Auto-fill failed", description: err?.message || "Enter the details manually." })
+    },
+  })
+
+  const genSuggestMutation = useMutation({
+    mutationFn: () => suggestPortalLogin(profileId, {
+      portalHost: genForm.portalHost || genForm.login_url || null,
+      context: genForm.portalHost || genForm.label || null,
+    }),
+    onSuccess: (resp) => {
+      const filled = applySuggestion(resp, genForm, (next) => setGenForm((s) => ({ ...s, ...next })))
+      setGenFilledByHamilton(filled)
+      if (!filled) {
+        toast({ title: "Nothing to auto-fill yet", description: "Type the portal name or pick it from an opportunity, then try again." })
+      }
+    },
+    onError: (err) => {
+      toast({ variant: "destructive", title: "Auto-fill failed", description: err?.message || "Enter the details manually." })
+    },
+  })
+
+  // On open, default the username to the profile's primary email when the user
+  // hasn't typed one. We reuse the suggest endpoint (username comes from the
+  // profile) so we never duplicate the email-resolution logic on the client.
+  useEffect(() => {
+    if (!open || !profileId || form.username.trim()) return
+    let active = true
+    suggestPortalLogin(profileId, {})
+      .then((resp) => { if (active && resp?.username) setForm((s) => (s.username.trim() ? s : { ...s, username: resp.username })) })
+      .catch(() => { /* manual entry still works */ })
+    return () => { active = false }
+  }, [open, profileId])
+
+  useEffect(() => {
+    if (!genOpen || !profileId || genForm.username.trim()) return
+    let active = true
+    suggestPortalLogin(profileId, {})
+      .then((resp) => { if (active && resp?.username) setGenForm((s) => (s.username.trim() ? s : { ...s, username: resp.username })) })
+      .catch(() => { /* manual entry still works */ })
+    return () => { active = false }
+  }, [genOpen, profileId])
 
   // Deep-link target for Hamilton's "Add a login for <host>" flag: when the URL
   // carries ?addLogin=<host>&loginUrl=<url>, open the add-login dialog prefilled
@@ -513,7 +590,7 @@ Example,https://example.com/login,user@example.com,hunter2,'
 
       {/* Hamilton-generated login dialog: user supplies host + username; the
           server picks the password. Password is shown ONCE in the next dialog. */}
-      <Dialog open={genOpen} onOpenChange={setGenOpen}>
+      <Dialog open={genOpen} onOpenChange={(o) => { setGenOpen(o); if (!o) setGenFilledByHamilton(false) }}>
         <DialogContent className="max-w-lg">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
@@ -521,11 +598,32 @@ Example,https://example.com/login,user@example.com,hunter2,'
               Have Hamilton pick a strong password
             </DialogTitle>
             <DialogDescription>
-              Tell Hamilton the portal and the username you want to use. He'll pick a strong, random password, save it
-              encrypted in this vault, and show it to you exactly once so you can also store it elsewhere.
+              Tell Hamilton the portal and the username you want to use — or let Hamilton auto-fill what he already
+              knows. He'll pick a strong, random password, save it encrypted in this vault, and show it to you exactly
+              once so you can also store it elsewhere.
             </DialogDescription>
           </DialogHeader>
           <div className="grid gap-3">
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-xs text-slate-500">Hamilton usually already knows the portal and your username.</p>
+              <Button
+                type="button" variant="outline" size="sm"
+                className="h-7 gap-1 px-2 text-xs border-indigo-200 bg-indigo-50 text-indigo-900 hover:bg-indigo-100"
+                onClick={() => genSuggestMutation.mutate()}
+                disabled={genSuggestMutation.isPending}
+                title="Let Hamilton fill the portal site, login URL, and username"
+              >
+                {genSuggestMutation.isPending
+                  ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  : <Wand2 className="h-3.5 w-3.5" />}
+                Auto-fill with Hamilton
+              </Button>
+            </div>
+            {genFilledByHamilton && (
+              <p className="text-xs text-indigo-600 flex items-center gap-1">
+                <Sparkles className="h-3 w-3" /> Filled by Hamilton — edit if needed.
+              </p>
+            )}
             <div className="space-y-1">
               <Label htmlFor="gen-host">Portal site or login URL</Label>
               <Input id="gen-host" placeholder="commonapp.org  (or https://app.commonapp.org/login)"
@@ -608,15 +706,36 @@ Example,https://example.com/login,user@example.com,hunter2,'
         </DialogContent>
       </Dialog>
 
-      <Dialog open={open} onOpenChange={setOpen}>
+      <Dialog open={open} onOpenChange={(o) => { setOpen(o); if (!o) setAddFilledByHamilton(false) }}>
         <DialogContent className="max-w-lg">
           <DialogHeader>
             <DialogTitle>Add a portal login</DialogTitle>
             <DialogDescription>
-              Hamilton will use this to sign in to the portal for this profile. The password is encrypted and never displayed again.
+              Hamilton already knows the portal (and usually your username) — tap <span className="font-medium">Auto-fill with Hamilton</span> and
+              you only need to enter your password (and a 2FA key if the portal uses one). The password is encrypted and never displayed again.
             </DialogDescription>
           </DialogHeader>
           <div className="grid gap-3">
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-xs text-slate-500">Only your password + 2FA are really required.</p>
+              <Button
+                type="button" variant="outline" size="sm"
+                className="h-7 gap-1 px-2 text-xs border-indigo-200 bg-indigo-50 text-indigo-900 hover:bg-indigo-100"
+                onClick={() => addSuggestMutation.mutate()}
+                disabled={addSuggestMutation.isPending}
+                title="Let Hamilton fill the portal site, login URL, and username"
+              >
+                {addSuggestMutation.isPending
+                  ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  : <Wand2 className="h-3.5 w-3.5" />}
+                Auto-fill with Hamilton
+              </Button>
+            </div>
+            {addFilledByHamilton && (
+              <p className="text-xs text-indigo-600 flex items-center gap-1">
+                <Sparkles className="h-3 w-3" /> Filled by Hamilton — edit if needed.
+              </p>
+            )}
             <div className="space-y-1">
               <Label htmlFor="cred-host">Portal site or login URL</Label>
               <Input id="cred-host" placeholder="mtsu.edu  (or https://login.mtsu.edu)"
