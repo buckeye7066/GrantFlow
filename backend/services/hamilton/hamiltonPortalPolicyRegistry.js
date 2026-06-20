@@ -82,6 +82,19 @@ const SEED_POLICIES = Object.freeze([
     fallback_path: 'pdf_docx',
     notes: 'University SSO required; rely on saved session when reuse is authorized.',
   }),
+  Object.freeze({
+    // Mirrors the mtsu.edu school entry. Cleveland State Community College
+    // uses portal SSO; policy specifics should be re-verified against the
+    // live CSCC portal once a session is captured.
+    portal_host: 'clevelandstatecc.edu',
+    automation_allowed: true,
+    agent_submission_allowed: true,
+    scraping_allowed: false,
+    api_available: false,
+    manual_only: false,
+    fallback_path: 'pdf_docx',
+    notes: 'Community college SSO required; rely on saved session when reuse is authorized.',
+  }),
 ])
 
 async function ensureSchema(db) {

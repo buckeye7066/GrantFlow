@@ -54,6 +54,25 @@ const SEED_PROVIDERS = Object.freeze([
     adapter_name: 'genericUniversityFinancialAidAdapter',
   }),
   Object.freeze({
+    // Scaffolded by mirroring the MTSU entry. The specific apply-flow
+    // selectors and SSO login steps for Cleveland State must be validated
+    // against the live CSCC portal after a real session is captured.
+    id: 'cscc',
+    name: 'Cleveland State Community College',
+    short_name: 'CSCC',
+    portal_url: 'https://www.clevelandstatecc.edu/admissions-aid/financial-aid',
+    integration_modes: ['browser_autopilot', 'browser_session_reuse'],
+    live_supported: true,
+    automation_supported: true,
+    authentication_strategy: 'sso',
+    session_reuse_supported: true,
+    credential_reference_supported: true,
+    captcha_likely: false,
+    two_factor_likely: true,
+    tos_notes: 'Community college SSO. Hamilton stops for 2FA unless an active session is reused.',
+    adapter_name: 'genericUniversityFinancialAidAdapter',
+  }),
+  Object.freeze({
     id: 'fafsa',
     name: 'Free Application for Federal Student Aid',
     short_name: 'FAFSA',
