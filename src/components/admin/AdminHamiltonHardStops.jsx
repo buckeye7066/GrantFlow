@@ -14,6 +14,7 @@ import { Badge } from '@/components/ui/badge'
 import { Loader2, RefreshCw, AlertTriangle, CheckCircle2, X } from 'lucide-react'
 import { useToast } from '@/components/ui/use-toast'
 import { showInfoToast, showErrorToast } from '@/components/shared/toastHelpers'
+import HamiltonInlineHardStopFix from '@/components/hamilton/HamiltonInlineHardStopFix'
 
 const ACTION_LABEL = {
   provide_info: 'Provide info',
@@ -74,6 +75,13 @@ export default function AdminHamiltonHardStops() {
   }, [toast])
 
   useEffect(() => { load() }, [load])
+
+  // Inline fixer already saved the field + cleared the stop server-side; drop the
+  // row and refresh the task columns so a resumed task moves to "active".
+  const handleInlineResolved = useCallback((blocker) => {
+    setBlockers((prev) => prev.filter((x) => x.id !== blocker.id))
+    load()
+  }, [load])
 
   async function resume(b) {
     setBusy(b.id)
@@ -157,12 +165,15 @@ export default function AdminHamiltonHardStops() {
               <tr key={b.id} className="border-t border-slate-100">
                 <td className="px-3 py-2 font-mono text-[11px] text-slate-700">{(b.profile_id || '').slice(0, 8)}</td>
                 <td className="px-3 py-2 font-mono text-[11px] text-slate-700">{(b.funding_source_id || '—').slice(0, 8)}</td>
-                <td className="px-3 py-2">
+                <td className="px-3 py-2 max-w-sm">
                   <div className="font-medium text-slate-900">{b.blocker_title || b.blocker_type}</div>
                   <div className="text-xs text-slate-500">{b.blocker_message || ''}</div>
                   <span className={`mt-1 inline-block text-[10px] px-2 py-0.5 rounded border ${severityClass(b.severity)}`}>
                     {b.blocker_type.replace(/_/g, ' ')}
                   </span>
+                  {/* Inline fix: for a missing/ambiguous field, type the value here
+                      and it's saved back to the profile + Hamilton resumes. */}
+                  <HamiltonInlineHardStopFix blocker={b} onResolved={handleInlineResolved} />
                 </td>
                 <td className="px-3 py-2 text-xs text-slate-700">
                   {b.user_required && <div>User</div>}

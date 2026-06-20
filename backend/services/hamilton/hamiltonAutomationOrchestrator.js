@@ -68,6 +68,7 @@ import {
   updateAutopilotRun,
 } from './hamiltonAuthorizationStore.js'
 import { resolveBlocker } from './hamiltonHardStopResolver.js'
+import { getPolicyFor } from './hamiltonPortalPolicyRegistry.js'
 
 const PERSONA_VERSION = 'hamilton-mba-2026'
 
@@ -716,10 +717,24 @@ async function runAutopilotPathway(db, {
   const profilePortalHosts = deriveProfilePortalHosts({ profile, opportunity, grant })
   const extraAllowedHosts = [...new Set([...credentialedDomains, ...profilePortalHosts])]
 
-  if (!browserAutomationPermittedForUrl(url, { extraAllowedHosts })) {
-    const reason = !isBrowserAutomationEnabled()
-      ? 'HAMILTON_ENABLE_BROWSER_AUTOMATION is not true'
-      : 'portal host is not on the allowlist and the profile has no declared portal or saved credential for it'
+  // Legal gate (authoritative): the per-host policy registry is the compliance
+  // boundary. Automation is permitted on every host by default and BLOCKED only
+  // where a portal's terms forbid agent automation (automation_allowed === false,
+  // e.g. studentaid.gov / commonapp.org). This is what makes a fleet-wide /
+  // empty HAMILTON_BROWSER_AUTOMATION_HOST_ALLOWLIST safe: the allowlist is now a
+  // pure operational override, while ToS compliance is enforced here at launch —
+  // Hamilton never opens a browser on a site that prohibits it, she degrades to
+  // the lawful fallback packet instead.
+  const portalHostForPolicy = hostOfUrl(url)
+  const portalPolicy = await getPolicyFor(db, portalHostForPolicy).catch(() => null)
+  const policyForbidsAutomation = !!(portalPolicy && portalPolicy.automation_allowed === false)
+
+  if (policyForbidsAutomation || !browserAutomationPermittedForUrl(url, { extraAllowedHosts })) {
+    const reason = policyForbidsAutomation
+      ? `portal terms forbid agent automation (${portalHostForPolicy || 'this host'}); Hamilton respects the site's ToS and uses the lawful ${portalPolicy.fallback_path || 'pdf_docx'} packet instead`
+      : !isBrowserAutomationEnabled()
+        ? 'HAMILTON_ENABLE_BROWSER_AUTOMATION is not true'
+        : 'portal host is not on the allowlist and the profile has no declared portal or saved credential for it'
     const packet = await generateAndSavePacket(db, {
       profile, opportunity, grant, automationType: 'pdf_docx', taskId: task.id, userId,
     }).catch((err) => ({ error: err?.message || String(err) }))

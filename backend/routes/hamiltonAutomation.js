@@ -109,6 +109,8 @@ import {
   getBlocker,
 } from '../services/hamilton/hamiltonBlockerStore.js'
 import { resolveBlocker } from '../services/hamilton/hamiltonHardStopResolver.js'
+import { resolveProfileFieldTarget, inlineFieldForBlocker } from '../services/hamilton/profileFieldTargets.js'
+import { setProfileSectionField } from '../services/profileFieldWriter.js'
 import { isAdminUser, HAMILTON_ADMIN_EMAIL } from '../services/hamilton/hamiltonAdminAccount.js'
 import { markNotificationsResolved } from '../services/hamilton/hamiltonNotifications.js'
 import { createLogger } from '../utils/logger.js'
@@ -1082,7 +1084,10 @@ router.get('/admin/hard-stops', async (req, res) => {
   if (!isAdminUser(user)) return res.status(403).json({ error: 'forbidden_admin_only' })
   try {
     const limit = Math.max(1, Math.min(500, Number.parseInt(req.query.limit || '200', 10) || 200))
-    const blockers = await listOpenAdminBlockers(req.db, { limit })
+    const rawBlockers = await listOpenAdminBlockers(req.db, { limit })
+    // Annotate each stop with its inline-fix descriptor (or null) so the UI only
+    // renders a "type the value here" input for stops the save endpoint accepts.
+    const blockers = (rawBlockers || []).map((b) => ({ ...b, inline_field: inlineFieldForBlocker(b) }))
     return res.json({ ok: true, blockers, admin_email: HAMILTON_ADMIN_EMAIL })
   } catch (err) {
     log.error('admin_hard_stops_failed', { err: err?.message })
@@ -1136,6 +1141,145 @@ router.post('/admin/hard-stops/:blockerId/resolve', async (req, res) => {
   } catch (err) {
     log.error('admin_hard_stop_resolve_failed', { err: err?.message, blockerId })
     return res.status(500).json({ error: 'resolve_failed', detail: err?.message })
+  }
+})
+
+// The field key a missing/ambiguous-info blocker points at, if any. Mirrors
+// blockerFieldKey() in src/config/hamiltonHardStopTargets.js.
+function blockerFieldKey(blocker) {
+  const m = blocker?.metadata || {}
+  return m.field || m.key || m.missing_info_key || m.missing_field || null
+}
+
+// Admin: resolve a missing/ambiguous-field hard stop INLINE — the operator types
+// the value right in the hard-stop banner and we (1) write it back into the
+// profile section it was missing from, (2) cache it as a resolved field so
+// Hamilton reuses it on this and every future portal, (3) mark the blocker
+// resolved + clear its notifications, and (4) re-run Hamilton so she continues
+// from where she stopped. This is the "bring the fix to the banner" path.
+router.post('/admin/hard-stops/:blockerId/resolve-field', async (req, res) => {
+  const user = requireAuthenticatedUser(req, res)
+  if (!user) return
+  if (!isAdminUser(user)) return res.status(403).json({ error: 'forbidden_admin_only' })
+
+  const blockerId = String(req.params.blockerId || '')
+  if (!blockerId) return res.status(400).json({ error: 'blocker_id_required' })
+
+  const rawValue = req.body?.value
+  const value = typeof rawValue === 'string' ? rawValue.trim() : rawValue
+  if (value === undefined || value === null || String(value).trim() === '') {
+    return res.status(400).json({ error: 'value_required', message: 'Enter a value to save.' })
+  }
+  if (String(value).length > 2000) {
+    return res.status(400).json({ error: 'value_too_long', message: 'Value is too long (max 2000 characters).' })
+  }
+
+  try {
+    const blocker = await getBlocker(req.db, blockerId)
+    if (!blocker) return res.status(404).json({ error: 'blocker_not_found' })
+
+    // Only missing/ambiguous-field stops are inline-fixable. Anything else
+    // (login, document, payment, signature) is handled on its own surface.
+    const inlineTypes = new Set(['missing_required_information', 'ambiguous_required_field'])
+    if (!inlineTypes.has(blocker.blocker_type)) {
+      return res.status(409).json({ error: 'not_inline_fixable', message: 'This hard stop is not a missing-field stop.' })
+    }
+
+    const fieldKey = blockerFieldKey(blocker)
+    const target = fieldKey ? resolveProfileFieldTarget(fieldKey) : null
+    if (!target) {
+      return res.status(422).json({
+        error: 'field_not_mappable',
+        message: `Hamilton could not map "${fieldKey || 'this field'}" to an editable profile field. Fix it on the profile instead.`,
+      })
+    }
+
+    const profileId = blocker.profile_id
+    if (!profileId) return res.status(422).json({ error: 'blocker_has_no_profile' })
+
+    // 1. Write the value back into the profile section it was missing from.
+    let saveResult
+    try {
+      saveResult = await setProfileSectionField(req.db, {
+        profileId,
+        sectionKey: target.section,
+        field: target.field,
+        value,
+        updatedBy: getAuthUserId(user),
+      })
+    } catch (saveErr) {
+      if (saveErr?.code === 'field_rejected') {
+        return res.status(422).json({ error: 'field_rejected', message: saveErr.message, rejected: saveErr.rejected })
+      }
+      throw saveErr
+    }
+
+    // 2. Cache it for Hamilton's reuse (so she never re-asks for this field).
+    await saveResolvedField(req.db, {
+      profileId,
+      userId: getAuthUserId(user),
+      fieldKey: target.key,
+      fieldValue: String(value),
+      source: 'user',
+      confidence: 1.0,
+    }).catch(() => {})
+
+    // 3. Mark this blocker resolved + clear the notifications it raised.
+    const resolved = await resolveBlockerById(req.db, {
+      blockerId,
+      strategy: 'inline_field_fix',
+      detail: `Operator supplied "${target.label}" inline; saved to ${target.section}.${target.field}.`,
+      resolvedByUserId: getAuthUserId(user),
+    })
+    const notifIds = [resolved?.user_notification_id, ...((resolved?.admin_notification_ids) || [])].filter(Boolean)
+    if (notifIds.length > 0) await markNotificationsResolved(req.db, notifIds)
+
+    // 4. Resume Hamilton from where she stopped (automation is king).
+    let rerun = null
+    if (resolved?.task_id) {
+      await appendTaskEvent(req.db, {
+        taskId: resolved.task_id,
+        eventType: 'blocker_resolved',
+        step: 'inline_field_fix',
+        message: `"${target.label}" supplied inline and saved to the profile. Re-running Hamilton.`,
+        actorUserId: getAuthUserId(user),
+        actorRole: 'admin',
+        details: { field_key: target.key, section: target.section, field: target.field },
+      })
+      try {
+        const task = await getApplicationTask(req.db, resolved.task_id)
+        const profile = task ? await loadProfile(req.db, task.profile_id) : null
+        if (task && profile) {
+          rerun = await automateSingleSource(req.db, {
+            profile,
+            profileId: task.profile_id,
+            userId: getAuthUserId(user),
+            source: {
+              opportunity_id: task.opportunity_id,
+              grant_id: task.grant_id,
+              task_id: task.id,
+              current_stage: task.current_pipeline_stage || task.selected_from_stage,
+            },
+            options: { autopilot: true, allow_auto_submit: true },
+          })
+        }
+      } catch (rerunErr) {
+        // The field is saved and the blocker is cleared regardless; a failed
+        // auto-resume is non-fatal (the operator can re-run from the dashboard).
+        log.warn('inline_field_fix_rerun_failed', { err: rerunErr?.message, taskId: resolved.task_id })
+      }
+    }
+
+    return res.json({
+      ok: true,
+      blocker: resolved,
+      saved_field: { key: target.key, section: target.section, field: target.field, label: target.label },
+      rejected: saveResult.rejected,
+      rerun: rerun ? { task_id: rerun?.task?.id, status: rerun?.task?.status } : null,
+    })
+  } catch (err) {
+    log.error('admin_hard_stop_resolve_field_failed', { err: err?.message, blockerId })
+    return res.status(500).json({ error: 'resolve_field_failed', detail: err?.message })
   }
 })
 
