@@ -34,6 +34,38 @@ const routeLogger = createLogger('route:realCrawlers')
 
 const router = express.Router()
 
+// Server-side time budget for the inline /run crawl. The gateway (Railway/
+// Vercel) drops the request with a 504 well before a full live crawl can
+// finish, leaving the client hanging with no response. We race the crawl
+// work against this budget so the handler ALWAYS responds in time — falling
+// back to whatever DB-backed/nearby opportunities are already available (or
+// an empty list) flagged with `partial: true, timed_out: true`.
+// HAMILTON-style env override; default 22s sits under a typical 30s gateway cap.
+const CRAWL_BUDGET_MS = Number(process.env.CRAWL_TIME_BUDGET_MS) || 22000
+
+// Sentinel returned when the crawl pipeline overruns the time budget. Distinct
+// object identity so the caller can branch without ambiguity vs a real result.
+const CRAWL_TIMEOUT = Symbol('crawl-timeout')
+
+/**
+ * Race an async crawl-producing function against the server-side time budget.
+ * Resolves to the function's value, or CRAWL_TIMEOUT if the budget elapsed
+ * first. Never rejects on timeout — the in-flight work is abandoned (its
+ * eventual settlement is ignored) so the request can respond immediately.
+ */
+async function withCrawlBudget(fn, budgetMs = CRAWL_BUDGET_MS) {
+  let timer = null
+  const timeout = new Promise((resolve) => {
+    timer = setTimeout(() => resolve(CRAWL_TIMEOUT), Math.max(1, budgetMs))
+    if (typeof timer?.unref === 'function') timer.unref()
+  })
+  try {
+    return await Promise.race([Promise.resolve().then(fn), timeout])
+  } finally {
+    if (timer) clearTimeout(timer)
+  }
+}
+
 /**
  * Persist per-source crawler outcomes so missionHealth can answer
  * "did we actually query Grants.gov for this profile, or just plan
@@ -172,6 +204,66 @@ function safeJsonParse(val, fallback) {
   if (Array.isArray(val)) return val;
   if (!val || typeof val !== 'string') return fallback;
   try { return JSON.parse(val); } catch { return fallback; }
+}
+
+/**
+ * BUG 2 fix — exclude opportunities that are already in this profile's
+ * pipeline (grants table) so already-added sources don't reappear in a fresh
+ * crawl. Matches primarily on funding_opportunity_id; falls back to a
+ * normalized title match when ids are absent. Tolerant by design: any failure
+ * returns the input unchanged so the dedup query NEVER blocks results.
+ */
+function normalizeOppTitle(t) {
+  return String(t || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+}
+
+async function excludeExistingPipeline(db, profileId, opportunities) {
+  if (!Array.isArray(opportunities) || opportunities.length === 0) return opportunities;
+  if (!db || typeof db.prepare !== 'function' || !profileId) return opportunities;
+  try {
+    const existing = await db
+      .prepare(
+        'SELECT DISTINCT funding_opportunity_id FROM grants WHERE profile_id = ? AND funding_opportunity_id IS NOT NULL',
+      )
+      .all(profileId);
+    const existingIds = new Set((existing || []).map((g) => g.funding_opportunity_id).filter(Boolean));
+
+    // Fallback: also collect the titles of grants already in the pipeline so
+    // we can exclude by normalized title when a crawl result has no stable id.
+    const existingTitles = new Set();
+    try {
+      const titleRows = await db
+        .prepare('SELECT title FROM grants WHERE profile_id = ?')
+        .all(profileId);
+      for (const row of titleRows || []) {
+        const norm = normalizeOppTitle(row?.title);
+        if (norm) existingTitles.add(norm);
+      }
+    } catch (titleErr) {
+      // Title fallback is best-effort; id-based exclusion still applies.
+      routeLogger.warn(`[RealCrawlers] pipeline-dedup title lookup failed: ${titleErr?.message ?? titleErr}`);
+    }
+
+    if (existingIds.size === 0 && existingTitles.size === 0) return opportunities;
+
+    const before = opportunities.length;
+    const deduped = opportunities.filter((opp) => {
+      const oppId = opp?.id ?? opp?.funding_opportunity_id ?? null;
+      if (oppId !== null && oppId !== undefined && existingIds.has(oppId)) return false;
+      const norm = normalizeOppTitle(opp?.title || opp?.name);
+      if (norm && existingTitles.has(norm)) return false;
+      return true;
+    });
+    if (deduped.length < before) {
+      routeLogger.info(
+        `[RealCrawlers] pipeline-dedup: ${before} → ${deduped.length} (excluded ${before - deduped.length} already-in-pipeline for profile ${profileId})`,
+      );
+    }
+    return deduped;
+  } catch (err) {
+    routeLogger.warn(`[RealCrawlers] pipeline-dedup failed (continuing, no exclusion): ${err?.message ?? err}`);
+    return opportunities;
+  }
 }
 
 const CRAWLER_TYPES = [
@@ -330,6 +422,11 @@ router.post('/run', ensureAuth, async (req, res) => {
       derivedSearchTerms = buildGrantsGovQueryTerms(profileContext)
     } catch { /* best-effort */ }
 
+    // BUG 1 fix — run the full crawl pipeline (runCrawler + scoring/filtering/
+    // trust assembly) under a server-side time budget so we always respond
+    // before the gateway 504s. The pipeline body returns the values the final
+    // response needs; on overrun we fall back to DB-backed nearby opportunities.
+    const pipeline = async () => {
     const result = await runCrawler(db, profile_id, {
       minScore: Math.max(1, Math.floor(min_match_score * 0.25)),
       maxResults: strategy.maxResults || 100,
@@ -388,19 +485,22 @@ router.post('/run', ensureAuth, async (req, res) => {
     // If strategy was gated, return early with reason
     if (result.debug?.gated) {
       const duration = Date.now() - startTime
-      return res.json({
-        success: true,
-        crawler_type,
-        count: 0,
-        total_found: 0,
-        filtered_count: 0,
-        min_match_score,
-        duration,
-        opportunities: [],
-        gated: true,
-        gate_reason: result.debug.gateReason,
-        debug: result.debug,
-      })
+      return {
+        __gated: true,
+        payload: {
+          success: true,
+          crawler_type,
+          count: 0,
+          total_found: 0,
+          filtered_count: 0,
+          min_match_score,
+          duration,
+          opportunities: [],
+          gated: true,
+          gate_reason: result.debug.gateReason,
+          debug: result.debug,
+        },
+      }
     }
 
     const mapped = result.results.map(mapResultToFrontendShape)
@@ -652,6 +752,80 @@ router.post('/run', ensureAuth, async (req, res) => {
       `[RealCrawlers] ${crawler_type}: curated=${result.results.length} nearby=${nearbyOpps.length} allMapped=${allMapped.length} → returned=${decorated.length} (min_score=${min_match_score}, strict=${strictMinScore}) in ${duration}ms`,
     )
 
+    return {
+      result,
+      decorated,
+      allMapped,
+      nearbyOpps,
+      dropCounts,
+      trustDropCounts,
+      thresholdFallbackMessage,
+      duration,
+    }
+    } // end pipeline()
+
+    // Race the pipeline against the server-side time budget.
+    const pipelineOutcome = await withCrawlBudget(pipeline)
+
+    // BUG 1 fix — budget exceeded: respond with DB-backed nearby opportunities
+    // (whatever is already available) flagged partial/timed_out, instead of
+    // hanging until the gateway 504s. Best-effort; never throws.
+    if (pipelineOutcome === CRAWL_TIMEOUT) {
+      const duration = Date.now() - startTime
+      routeLogger.warn(
+        `[RealCrawlers] ${crawler_type} for profile ${profile_id} exceeded crawl budget ${CRAWL_BUDGET_MS}ms — responding with partial DB-backed results`,
+      )
+      let partialOpps = []
+      try {
+        partialOpps = await queryNearbyOpportunities(db, { location: { state: profileContext?.profile?.state || profileContext?.signals?.location?.state } }, [], profileContext, 30)
+      } catch (partialErr) {
+        routeLogger.warn(`[RealCrawlers] partial nearby query failed: ${partialErr?.message ?? partialErr}`)
+        partialOpps = []
+      }
+      // Apply the same dedup against the profile's existing pipeline (BUG 2)
+      // so timed-out responses don't resurface already-added sources.
+      partialOpps = await excludeExistingPipeline(db, profile_id, partialOpps)
+      return res.json({
+        success: true,
+        partial: true,
+        timed_out: true,
+        message: `Search is taking longer than expected; showing funding sources already available for your area. Run again shortly for the full results.`,
+        crawler_type,
+        count: partialOpps.length,
+        total_found: partialOpps.length,
+        filtered_count: partialOpps.length,
+        min_match_score,
+        duration,
+        opportunities: partialOpps,
+        coverage_plan: coveragePlan,
+        coverage_report: coverageReport,
+        used_live: false,
+        used_db_fallback: true,
+        used_curated: false,
+      })
+    }
+
+    // Gated strategy short-circuit (the pipeline returns a payload to send as-is).
+    if (pipelineOutcome?.__gated) {
+      return res.json(pipelineOutcome.payload)
+    }
+
+    let {
+      result,
+      decorated,
+      allMapped,
+      nearbyOpps,
+      dropCounts,
+      trustDropCounts,
+      thresholdFallbackMessage,
+      duration,
+    } = pipelineOutcome
+
+    // BUG 2 fix — exclude opportunities already in this profile's pipeline
+    // (grants table) so already-added sources don't reappear. Tolerant:
+    // never blocks results on the dedup query.
+    decorated = await excludeExistingPipeline(db, profile_id, decorated)
+
     res.json({
       success: true,
       crawler_type,
@@ -717,7 +891,7 @@ router.post('/run', ensureAuth, async (req, res) => {
         matchedCount: result.debug?.matchedCount || 0,
         demotedForUrl: result.debug?.demotedForUrl || 0,
         matchStats: result.debug?.matchStats || {},
-        canonicalDrops: canonicalDropCounts,
+        canonicalDrops: dropCounts.canonical,
         timing: result.debug?.timing || {},
         analysis: {
           state: result.analysis.location?.state,
