@@ -20,9 +20,23 @@ const DIRECTORY_RESOURCES = [
 export async function runUtilitiesHardshipEngine(profile, options = {}) {
   try {
     // Filter resources based on profile needs, location, eligibility
+    // Multi-address aware: a state-specific resource is excluded only when it
+    // matches NONE of the profile's states. Single-address profiles collapse to
+    // one state, so behavior is unchanged. Reads `states` (all addresses) and
+    // falls back to the single primary `location.state`.
+    const profileStateList = (() => {
+      const out = []
+      const add = (v) => {
+        const s = String(v ?? '').trim()
+        if (s && !out.includes(s)) out.push(s)
+      }
+      add(profile.location?.state ?? '')
+      if (Array.isArray(profile.states)) for (const st of profile.states) add(st)
+      return out.filter(Boolean)
+    })()
     const filteredResources = DIRECTORY_RESOURCES.filter(resource => {
       // Basic eligibility check
-      if (profile.location?.state && resource.state_specific && resource.state_specific !== profile.location.state) {
+      if (profileStateList.length > 0 && resource.state_specific && !profileStateList.includes(resource.state_specific)) {
         return false
       }
       // Check if utility assistance matches profile needs

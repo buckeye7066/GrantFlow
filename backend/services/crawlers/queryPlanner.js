@@ -428,11 +428,21 @@ function profileSignalTerms(facets = {}, crawlerType = 'comprehensive') {
 
 export { profileSignalTerms }
 
-export function planCrawlerQueries({ crawlerType, facets = {}, location = null }) {
+export function planCrawlerQueries({ crawlerType, facets = {}, location = null, locations = null }) {
   const normalizedCrawlerType = normalizeString(crawlerType || 'comprehensive') || 'comprehensive'
   const intentConfidence = normalizeConfidence(facets?.intent?.confidence)
   const allowAggressiveMustNot = intentConfidence >= INTENT_MUST_NOT_CONFIDENCE_THRESHOLD
   const effectiveLocation = location || facets?.geo || {}
+  // Multi-address aware (STRICTLY ADDITIVE): build geo / state-aid / state-analog
+  // terms for EVERY resolved address (e.g. home OH + school TN), not just the
+  // primary, so local funding is crawled for both locations and both states.
+  // Bounded to 2 as designed so the crawl never explodes. A single-address
+  // profile yields one entry → identical query set to before.
+  const effectiveLocations = (Array.isArray(locations) && locations.length
+    ? locations
+    : [effectiveLocation]
+  ).filter((l) => l && (l.state || l.zip || l.city || l.county)).slice(0, 2)
+  const planLocations = effectiveLocations.length ? effectiveLocations : [effectiveLocation]
   const intentTokens = (typeof buildIntentTokens === 'function') ? buildIntentTokens({ facets }) : { mustTerms: [], shouldTerms: [], mustNotTerms: [] }
 
   const mustTerms = [...(intentTokens?.mustTerms || [])]
@@ -444,7 +454,7 @@ export function planCrawlerQueries({ crawlerType, facets = {}, location = null }
   const requiredConcepts = [...(CRAWLER_REQUIRED_CONCEPTS[normalizedCrawlerType] || ['grant'])]
   const dedupeKeys = ['source_url', 'application_url', 'url', 'title', 'sponsor']
 
-  shouldTerms.push(...geoTerms(effectiveLocation))
+  for (const loc of planLocations) shouldTerms.push(...geoTerms(loc))
   shouldTerms.push(...applicantTerms(facets))
 
   const signalTerms = profileSignalTerms(facets, normalizedCrawlerType)
@@ -462,9 +472,11 @@ export function planCrawlerQueries({ crawlerType, facets = {}, location = null }
     // even before the student types the acronyms. Mirrors the STATE_STUDENT_AID
     // map in profileHelpers (keeps the two in step for a relatable, state-aware
     // student crawl). Missing/unknown state simply adds nothing — neutral.
-    const studentState = normalizeString(effectiveLocation?.state || '').toUpperCase()
-    const stateAid = STATE_STUDENT_AID_TERMS[studentState]
-    if (stateAid) shouldTerms.push(...stateAid)
+    for (const loc of planLocations) {
+      const studentState = normalizeString(loc?.state || '').toUpperCase()
+      const stateAid = STATE_STUDENT_AID_TERMS[studentState]
+      if (stateAid) shouldTerms.push(...stateAid)
+    }
     dedupeKeys.push('opportunity_number')
   }
   if (normalizedCrawlerType === 'government_funding') {
@@ -493,10 +505,13 @@ export function planCrawlerQueries({ crawlerType, facets = {}, location = null }
   if (normalizedCrawlerType === 'ecf_benefits') {
     mustTerms.push('medicaid waiver')
     shouldTerms.push('community based support')
-    const stateTerms = stateAnalogTerms(effectiveLocation?.state || '')
-    shouldTerms.push(...stateTerms)
-    const userState = normalizeString(effectiveLocation?.state || '').toUpperCase()
-    if (!userState || userState === 'TN') {
+    const userStates = []
+    for (const loc of planLocations) {
+      shouldTerms.push(...stateAnalogTerms(loc?.state || ''))
+      const st = normalizeString(loc?.state || '').toUpperCase()
+      if (st && !userStates.includes(st)) userStates.push(st)
+    }
+    if (userStates.length === 0 || userStates.includes('TN')) {
       preferredSponsors.push('TennCare', 'Tennessee DIDD')
     }
     dedupeKeys.push('benefit_categories')

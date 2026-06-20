@@ -4,6 +4,31 @@ import { createLogger } from '../../utils/logger.js'
 const log = createLogger('matchEngine')
 
 /**
+ * profileStates(analysis) — ALL of a profile's states, deduped, primary-first.
+ *
+ * STRICTLY ADDITIVE: reads `analysis.states` (primary-first list from
+ * buildProfileSignals) when present, else falls back to `analysis.location.state`
+ * so single-address profiles / older snapshots return exactly their one state.
+ * Returns normalized 2-letter codes; empty array when none is known (NEUTRAL).
+ *
+ * @param {object|null} analysis - crawler analysis shape
+ * @returns {string[]} normalized state codes, primary first, deduped
+ */
+function profileStates(analysis) {
+  const out = []
+  const add = (v) => {
+    const norm = normalizeState(v)
+    if (norm && !out.includes(norm)) out.push(norm)
+  }
+  const primary = analysis?.location?.state ?? null
+  if (primary) add(primary)
+  if (Array.isArray(analysis?.states)) {
+    for (const st of analysis.states) add(st)
+  }
+  return out
+}
+
+/**
  * crawlers/matchEngine.js — CANDIDATE PREFILTER (NOT the match authority).
  *
  * Mission rule: `computeMatchDecision()` from
@@ -395,24 +420,29 @@ export function scoreProgram(program, analysis, strategyOpts = {}) {
 
   // ── State match (20 points) ──
   // v4: Use normalizeState for robust comparison ("TN" === "Tennessee" === "tn")
+  // Multi-address aware: in-state if the program's state matches ANY of the
+  // profile's states (home OH + school TN → both count). Single-address profiles
+  // collapse to one state → identical to the old behavior.
   maxPossible += 20;
-    const profileState = normalizeState(analysis.location?.state);
+    const profileStateList = profileStates(analysis);
+    const profileState = profileStateList[0] || normalizeState(analysis.location?.state);
     const programState = normalizeState(program.stateRestriction);
     if (!program.stateRestriction || program.stateRestriction === 'nationwide') {
           score += 15;
           matchReasons.push('Available nationwide');
-    } else if (profileState && programState && profileState === programState) {
+    } else if (programState && profileStateList.includes(programState)) {
           score += 20;
-          matchReasons.push(`Available in ${profileState}`);
-    } else if (!profileState) {
+          matchReasons.push(`Available in ${programState}`);
+    } else if (profileStateList.length === 0) {
           score += 5;
           matchReasons.push(`State-specific program (${program.stateRestriction}) — your state not set`);
     } else {
           // v4: Reduced from -30 to -15. State mismatch is a soft signal, not a disqualifier.
           // A housing program in CA still has value for someone in TN (they might be relocating,
-          // or the program might have national components).
+          // or the program might have national components). Only penalizes when the program's
+          // state matches NONE of the profile's states.
           eligibilityPenalty -= 15;
-          matchReasons.push(`State mismatch: ${program.stateRestriction} vs ${profileState} (reduced penalty)`);
+          matchReasons.push(`State mismatch: ${program.stateRestriction} vs ${profileStateList.join('/')} (reduced penalty)`);
     }
 
   // ── Applicant type match (10 points) ──
@@ -580,7 +610,7 @@ export function scoreProgram(program, analysis, strategyOpts = {}) {
       } else if (program.schoolMatch.zips?.some(z => schoolZips.includes(z))) {
               score += 4;
               matchReasons.push('School is in the program service area');
-      } else if (program.schoolMatch.states?.some(s => schoolStates.includes(s) || s === analysis.location?.state)) {
+      } else if (program.schoolMatch.states?.some(s => schoolStates.includes(s) || profileStateList.includes(normalizeState(s)))) {
               score += 3;
               matchReasons.push(`Program available in student's state`);
       }
@@ -681,8 +711,9 @@ export function scoreProgram(program, analysis, strategyOpts = {}) {
       scoreBreakdown: {
         category: Math.round(categoryScore),
         intent: intentBonus,
-        locality: (profileState && programState && profileState === programState) ? 20 : (!program.stateRestriction || program.stateRestriction === 'nationwide' ? 15 : (!profileState ? 5 : 0)),
-        eligibility: score - categoryScore - intentBonus - ((profileState && program.stateRestriction === profileState) ? 20 : (!program.stateRestriction ? 15 : 5)),
+        // Locality reflects in-state credit for ANY of the profile's states.
+        locality: (programState && profileStateList.includes(programState)) ? 20 : (!program.stateRestriction || program.stateRestriction === 'nationwide' ? 15 : (profileStateList.length === 0 ? 5 : 0)),
+        eligibility: score - categoryScore - intentBonus - ((programState && profileStateList.includes(programState)) ? 20 : (!program.stateRestriction ? 15 : 5)),
         trust: (program.type === 'portal' || program.type === 'referral') ? 5 : 0,
         penalties: negPenalty,
         normalized: normalizedScore,

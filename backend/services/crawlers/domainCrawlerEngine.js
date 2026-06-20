@@ -124,7 +124,20 @@ function applyExclusions(opportunities, config) {
 function lightPreScore(opp, profile, config) {
   const signals = profile?.signals ?? null
   const keywordSet = signals?.keywordSet
-  const profileState = (signals?.location?.state ?? profile?.state ?? '').toLowerCase().trim()
+  // Multi-address aware: collect every state the profile is tied to (primary-first),
+  // falling back to the single primary/flat state so single-address profiles behave
+  // exactly as before. Lowercased for substring checks against opportunity text.
+  const profileStateList = (() => {
+    const out = []
+    const add = (v) => {
+      const s = String(v ?? '').toLowerCase().trim()
+      if (s && !out.includes(s)) out.push(s)
+    }
+    add(signals?.location?.state ?? profile?.state ?? '')
+    if (Array.isArray(signals?.states)) for (const st of signals.states) add(st)
+    return out.filter(Boolean)
+  })()
+  const profileState = profileStateList[0] ?? ''
 
   if (!keywordSet || typeof keywordSet.has !== 'function') {
     return 50 // neutral
@@ -146,8 +159,8 @@ function lightPreScore(opp, profile, config) {
     if (text.includes(k)) matches += 2
   }
 
-  // Location boost: if the opportunity text references the user's state, lift the pre-score
-  if (profileState && text.includes(profileState)) matches += 3
+  // Location boost: if the opportunity text references ANY of the user's states, lift the pre-score
+  if (profileStateList.some((st) => text.includes(st))) matches += 3
 
   if (matches > 0) return Math.min(85, 50 + matches * 8)
   return 50
