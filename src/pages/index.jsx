@@ -14,6 +14,7 @@ const DiscoverGrants = lazy(() => import("./DiscoverGrants"), 'DiscoverGrants');
 const SmartMatcher = lazy(() => import("./SmartMatcher"), 'SmartMatcher');
 const ItemFunding = lazy(() => import("./ItemFunding"), 'ItemFunding');
 const Pipeline = lazy(() => import("./Pipeline"), 'Pipeline');
+const HamiltonProcessing = lazy(() => import("./HamiltonProcessing"), 'HamiltonProcessing');
 const Applications = lazy(() => import("./Applications"), 'Applications');
 const Proposals = lazy(() => import("./Proposals"), 'Proposals');
 const Outreach = lazy(() => import("./Outreach"), 'Outreach');
@@ -106,6 +107,8 @@ const PAGES = {
     ItemFunding: ItemFunding,
     
     Pipeline: Pipeline,
+
+    HamiltonProcessing: HamiltonProcessing,
 
     Applications: Applications,
 
@@ -282,6 +285,8 @@ function LayoutRoutes() {
                 <Route path="/ItemFunding" element={withGate(<ItemFunding />, "ItemFunding")} />
 
                 <Route path="/Pipeline" element={withGate(<Pipeline />, "Pipeline")} />
+
+                <Route path="/HamiltonProcessing" element={withGate(<HamiltonProcessing />, "HamiltonProcessing")} />
 
                 <Route path="/Applications" element={withGate(<Applications />, "Applications")} />
 
