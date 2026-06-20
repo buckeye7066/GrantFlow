@@ -46,6 +46,70 @@ function mapRow(row) {
   }
 }
 
+// Map a Hamilton application_tasks.status to the tracker's status vocabulary.
+function mapHamiltonStatus(taskStatus) {
+  const s = String(taskStatus || '')
+  if (s === 'submitted') return 'submitted'
+  if (s === 'completed' || s === 'completed_draft' || s === 'draft_completed') return 'submitted'
+  if (s === 'cancelled') return 'withdrawn'
+  // Everything else still in flight (queued/analyzing/filling_portal/generating/
+  // waiting_for_review/ready_to_print_mail/ready_to_fax/blocked_*/failed/…) is
+  // an in-progress application from the tracker's point of view.
+  return 'in_progress'
+}
+
+// Pull Hamilton's automated applications (application_tasks) for this caller,
+// shaped like grant_applications so the tracker can show them alongside manual
+// ones. Read-only; tolerant of the table being absent.
+async function fetchHamiltonApplications(db, { isAdmin, userId, filterProfileId, filterStatus, limit }) {
+  const clauses = []
+  const params = []
+  if (!isAdmin) { clauses.push('t.user_id = ?'); params.push(String(userId)) }
+  if (filterProfileId) { clauses.push('t.profile_id = ?'); params.push(String(filterProfileId)) }
+  const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : ''
+  let rows = []
+  try {
+    rows = await db.prepare(
+      `SELECT t.id, t.profile_id, t.user_id, t.opportunity_id, t.grant_id,
+              t.status AS task_status, t.submitted_at, t.created_at, t.updated_at,
+              COALESCE(fo.title, g.title) AS title,
+              COALESCE(fo.sponsor, g.funder) AS funder_name
+         FROM application_tasks t
+         LEFT JOIN funding_opportunities fo ON fo.id = t.opportunity_id
+         LEFT JOIN grants g ON g.id = t.grant_id
+         ${where}
+        ORDER BY t.updated_at DESC LIMIT ?`,
+    ).all(...params, Math.min(500, Number(limit) || 200))
+  } catch {
+    return [] // application_tasks (or a joined table) not present — nothing to merge
+  }
+  return (rows || [])
+    .map((r) => ({
+      id: r.id,
+      profile_id: r.profile_id,
+      opportunity_id: r.opportunity_id ?? null,
+      pipeline_grant_id: r.grant_id ?? null,
+      user_id: r.user_id,
+      status: mapHamiltonStatus(r.task_status),
+      title: r.title ?? null,
+      grant_name: r.title ?? 'Hamilton application',
+      funder_name: r.funder_name ?? null,
+      amount_requested: null,
+      amount_awarded: null,
+      deadline_date: null,
+      submitted_at: r.submitted_at ?? null,
+      response_expected_date: null,
+      response_received_at: null,
+      notes: null,
+      contact_name: null,
+      contact_email: null,
+      created_at: r.created_at ?? null,
+      updated_at: r.updated_at ?? null,
+      source: 'hamilton',
+    }))
+    .filter((r) => !filterStatus || r.status === filterStatus)
+}
+
 // GET /api/grant-applications — list applications for authenticated user
 router.get('/', async (req, res) => {
   const user = requireAuthenticatedUser(req, res)
@@ -93,7 +157,26 @@ router.get('/', async (req, res) => {
       )
       .all(...params, limit)
 
-    return res.json((rows || []).map(mapRow))
+    const manual = (rows || []).map(mapRow)
+
+    // Hamilton writes its automated applications to application_tasks, NOT
+    // grant_applications, so the tracker used to show nothing for anything
+    // Hamilton submitted. Merge Hamilton's tasks in (mapped to the same shape),
+    // deduped against manual rows by opportunity, so the tracker reflects BOTH
+    // manual applications and everything Hamilton has worked/submitted.
+    const hamilton = await fetchHamiltonApplications(req.db, {
+      isAdmin: !!req.ctx?.isAdmin, userId: String(userId), filterProfileId, filterStatus, limit,
+    }).catch((err) => { routeLogger.warn('[grant-applications] hamilton merge failed:', err?.message); return [] })
+
+    const seenOpp = new Set(manual.map((r) => r.opportunity_id).filter(Boolean))
+    const merged = [...manual]
+    for (const h of hamilton) {
+      if (h.opportunity_id && seenOpp.has(h.opportunity_id)) continue
+      merged.push(h)
+    }
+    merged.sort((a, b) => String(b.updated_at || '').localeCompare(String(a.updated_at || '')))
+
+    return res.json(merged)
   } catch (error) {
     routeLogger.error('[grant-applications] list error:', error)
     return res.status(500).json({ error: error?.message || String(error) })
