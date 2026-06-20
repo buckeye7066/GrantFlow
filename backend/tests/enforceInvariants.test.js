@@ -76,8 +76,8 @@ function insertProfile(db, { id, orgId }) {
 function insertGrant(db, g) {
   const id = g.id || crypto.randomUUID()
   db.prepare(
-    `INSERT INTO grants (id, created_at, organization_id, profile_id, funding_opportunity_id, title, funder, status, match_score, amount_awarded, fingerprint)
-     VALUES (?, COALESCE(?, CURRENT_TIMESTAMP), ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO grants (id, created_at, organization_id, profile_id, funding_opportunity_id, title, funder, status, match_score, amount_awarded, fingerprint, url)
+     VALUES (?, COALESCE(?, CURRENT_TIMESTAMP), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     id,
     g.created_at ?? null,
@@ -90,6 +90,7 @@ function insertGrant(db, g) {
     g.match_score ?? null,
     g.amount_awarded ?? null,
     g.fingerprint ?? null,
+    g.url ?? null,
   )
   return id
 }
@@ -245,7 +246,11 @@ describe('enforceInvariants — no duplicate grants', () => {
     expect(oldDiscovered).toBeTruthy()
   })
 
-  it('treats same lower(title)+lower(funder) as duplicates and keeps the oldest when status ties', async () => {
+  it('treats same lower(title)+lower(funder)+corroborator as duplicates and keeps the oldest when status ties', async () => {
+    // NOTE: the title+funder dedup key is now STRENGTHENED (recall guard): it
+    // requires a NON-EMPTY funder AND one more agreeing field (amount, deadline,
+    // or url-host) before merging. These two rows share a url host, so they are
+    // still recognized as the same program and collapse to one survivor.
     const db = makeDb()
     insertProfile(db, { id: 'p1', orgId: 'org1' })
     const oldest = insertGrant(db, {
@@ -257,6 +262,7 @@ describe('enforceInvariants — no duplicate grants', () => {
       status: 'discovered',
       match_score: 80,
       created_at: '2024-01-01 00:00:00',
+      url: 'https://hrsa.gov/community-health-fund',
     })
     insertGrant(db, {
       id: 'g-b',
@@ -267,6 +273,7 @@ describe('enforceInvariants — no duplicate grants', () => {
       status: 'discovered',
       match_score: 80,
       created_at: '2024-02-01 00:00:00',
+      url: 'https://hrsa.gov/community-health-fund',
     })
 
     const res = await enforceNoDuplicateGrants(db)
@@ -360,10 +367,12 @@ describe('enforceInvariants — relevance floor', () => {
   })
 
   it('PURGES below-floor discovery grants by DEFAULT (no opt-in needed)', async () => {
+    // The boot purge uses the LENIENT floor (min(insertFloor, 50)) so it can
+    // never delete a row the insert gate admitted. A clearly-junk 30 is below
+    // that lenient floor and is purged.
     const db = makeDb()
     insertProfile(db, { id: 'p1', orgId: 'org1' })
-    const { value: floor } = await getRelevanceFloor()
-    insertGrant(db, { profile_id: 'p1', organization_id: 'org1', title: 'Junk', match_score: floor - 1, status: 'discovered' })
+    insertGrant(db, { profile_id: 'p1', organization_id: 'org1', title: 'Junk', match_score: 30, status: 'discovered' })
 
     const res = await enforceRelevanceFloor(db)
     expect(res.ok).toBe(true)
@@ -372,12 +381,24 @@ describe('enforceInvariants — relevance floor', () => {
     expect(count(db)).toBe(0)
   })
 
+  it('does NOT purge a 50–54 row the insert gate would admit (lenient purge floor)', async () => {
+    // Regression for the audit's "floor collapse": purge floor must be <= insert
+    // floor, so a 54 (below the 55 insert floor but at/above the 50 purge floor)
+    // is NOT destroyed by the boot net.
+    const db = makeDb()
+    insertProfile(db, { id: 'p1', orgId: 'org1' })
+    insertGrant(db, { profile_id: 'p1', organization_id: 'org1', title: 'Borderline', match_score: 54, status: 'discovered' })
+
+    const res = await enforceRelevanceFloor(db)
+    expect(res.repaired).toBe(0)
+    expect(count(db)).toBe(1)
+  })
+
   it('does NOT purge when ENFORCE_RELEVANCE_FLOOR=0 (explicit disable)', async () => {
     process.env.ENFORCE_RELEVANCE_FLOOR = '0'
     const db = makeDb()
     insertProfile(db, { id: 'p1', orgId: 'org1' })
-    const { value: floor } = await getRelevanceFloor()
-    insertGrant(db, { profile_id: 'p1', organization_id: 'org1', title: 'Junk', match_score: floor - 1, status: 'discovered' })
+    insertGrant(db, { profile_id: 'p1', organization_id: 'org1', title: 'Junk', match_score: 30, status: 'discovered' })
 
     const res = await enforceRelevanceFloor(db)
     expect(res.enforced).toBe(false)
@@ -418,12 +439,11 @@ describe('enforceInvariants — relevance floor', () => {
   it('never deletes MTSU / portal-named rows even when below floor & discovered', async () => {
     const db = makeDb()
     insertProfile(db, { id: 'p1', orgId: 'org1' })
-    const { value: floor } = await getRelevanceFloor()
-    insertGrant(db, { id: 'm1', profile_id: 'p1', organization_id: 'org1', title: 'MTSU Research Award', match_score: floor - 5, status: 'discovered' })
-    insertGrant(db, { id: 'm2', profile_id: 'p1', organization_id: 'org1', title: 'Middle Tennessee State University grant', match_score: floor - 5, status: 'discovered' })
-    insertGrant(db, { id: 'm3', profile_id: 'p1', organization_id: 'org1', title: 'Generic award', funder: 'TN Portal System', match_score: floor - 5, status: 'discovered' })
+    insertGrant(db, { id: 'm1', profile_id: 'p1', organization_id: 'org1', title: 'MTSU Research Award', match_score: 30, status: 'discovered' })
+    insertGrant(db, { id: 'm2', profile_id: 'p1', organization_id: 'org1', title: 'Middle Tennessee State University grant', match_score: 30, status: 'discovered' })
+    insertGrant(db, { id: 'm3', profile_id: 'p1', organization_id: 'org1', title: 'Generic award', funder: 'TN Portal System', match_score: 30, status: 'discovered' })
     // A genuine junk row alongside, to prove the purge still fires for non-protected names.
-    insertGrant(db, { id: 'junk', profile_id: 'p1', organization_id: 'org1', title: 'Random low score', match_score: floor - 5, status: 'discovered' })
+    insertGrant(db, { id: 'junk', profile_id: 'p1', organization_id: 'org1', title: 'Random low score', match_score: 30, status: 'discovered' })
 
     const res = await enforceRelevanceFloor(db)
     expect(res.repaired).toBe(1)

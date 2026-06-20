@@ -130,7 +130,18 @@ export function evaluateEligibility(profileNorm, oppNorm) {
 
   if (oppNorm.deadlineStatus === 'closed') ineligibilityReasons.push('Application deadline has passed')
   if (oppNorm.requiresVeteran && !profileNorm.isVeteran) ineligibilityReasons.push('Requires veteran status')
-  if (oppNorm.requiresStudent && !profileNorm.isStudent) ineligibilityReasons.push('Requires student status')
+  if (oppNorm.requiresStudent && !profileNorm.isStudent) {
+    // Recall guard: only HARD-REJECT when the profile affirmatively contradicts
+    // student status (a non-student org/business/researcher with no education
+    // signal). When the profile is student-adjacent (or simply unknown), treat
+    // student status as a MISSING field → REVIEW, not REJECT, so legitimately
+    // relevant student aid isn't silently dropped for a near-student.
+    if (profileContradictsStudent(profileNorm)) {
+      ineligibilityReasons.push('Requires student status')
+    } else {
+      missingFields.push('student_status')
+    }
+  }
   if (oppNorm.requiresWomen) {
     const isFemale = profileGenderIsFemale(profileNorm)
     if (isFemale === false) ineligibilityReasons.push('Requires women/female applicants')
@@ -450,6 +461,99 @@ function profileWantsStudentAid(profileNorm, effectiveSignals) {
   const signalNeeds =
     effectiveSignals?.needs instanceof Set ? Array.from(effectiveSignals.needs) : []
   return signalNeeds.some((n) => ['student_aid', 'cost_of_attendance', 'scholarship'].includes(String(n)))
+}
+
+/**
+ * STUDENT-ADJACENT detection (recall guard for student aid).
+ *
+ * A `requiresStudent` opportunity used to HARD-REJECT any profile whose
+ * `isStudent` flag was not affirmatively true, which silently dropped
+ * legitimately relevant aid (TN HOPE, Pell, TSAA, STEP UP, Reconnect, Aspire)
+ * for profiles that are obviously near-students but never checked the literal
+ * "is_student" box. We instead downgrade those to REVIEW (missing field), and
+ * keep the hard REJECT ONLY when the profile affirmatively CONTRADICTS student
+ * status (a business/nonprofit/researcher org with no education signal at all).
+ *
+ * "Student-adjacent" = ANY of:
+ *   - already detected isStudent (caller may still want the signal),
+ *   - typical student age (~16–24) or a youth/young-adult age group/demographic,
+ *   - an education section was present at all (academics gpa/act/sat captured,
+ *     or a first-generation / education demographic flag),
+ *   - an explicit education field (school_name, grade_level, field_of_study,
+ *     degree_program, highest_level, currently_enrolled) on the raw profile or
+ *     its education section,
+ *   - applicant type includes "student",
+ *   - declared needs include education / student_aid / scholarship / tuition /
+ *     cost_of_attendance.
+ *
+ * @param {Object} profileNorm normalized profile (from normalizeProfile)
+ * @param {Object} [rawProfile] optional raw profile/sections for field probing
+ */
+function isStudentAdjacent(profileNorm, rawProfile = null) {
+  if (!profileNorm) return false
+  if (profileNorm.isStudent) return true
+
+  // Age window (numeric age or age group / demographic bucket).
+  const numericAge = Number(profileNorm.age)
+  if (Number.isFinite(numericAge) && numericAge >= 16 && numericAge <= 24) return true
+  const ageGroup = String(profileNorm.ageGroup ?? '').toLowerCase()
+  if (/\b(youth|teen|young[\s_-]?adult|student|college|high[\s_-]?school|18[-\s]?24|16[-\s]?24)\b/.test(ageGroup)) {
+    return true
+  }
+  const demographics = Array.isArray(profileNorm.demographics) ? profileNorm.demographics : []
+  if (demographics.some((d) => ['youth', 'young_adult', 'first_generation'].includes(String(d)))) {
+    return true
+  }
+
+  // Declared / inferred needs that imply education funding intent.
+  const cats = Array.isArray(profileNorm.needCategories) ? profileNorm.needCategories : []
+  if (cats.some((n) => ['education', 'student_aid', 'scholarship', 'tuition', 'cost_of_attendance', 'professional_development'].includes(String(n)))) {
+    return true
+  }
+
+  // Academics block captured (education section was present + parsed).
+  const academics = profileNorm.academics ?? null
+  if (academics && (academics.gpa || academics.act || academics.sat)) return true
+
+  // Applicant types include "student".
+  const applicantTypes = Array.isArray(profileNorm.applicantTypes)
+    ? profileNorm.applicantTypes
+    : (profileNorm.applicantTypes && typeof profileNorm.applicantTypes[Symbol.iterator] === 'function'
+        ? Array.from(profileNorm.applicantTypes)
+        : [])
+  if (applicantTypes.some((t) => String(t).toLowerCase().includes('student'))) return true
+
+  // Probe the raw profile / education section for explicit education fields the
+  // normalizer doesn't surface as a flag but which clearly indicate a student.
+  const prof = rawProfile?.profile ?? rawProfile ?? null
+  const sections = rawProfile?.sections ?? prof?.sections ?? null
+  const eduSection =
+    sections?.education ?? sections?.education_information ?? sections?.student ?? null
+  if (eduSection) return true // an education section present AT ALL is student-adjacent
+  if (prof && typeof prof === 'object') {
+    const eduFields = [
+      prof.school_name, prof.grade_level, prof.field_of_study,
+      prof.degree_program, prof.highest_level, prof.currently_enrolled,
+      prof.is_student, prof.enrolled_in_school,
+    ]
+    if (eduFields.some((v) => v !== null && v !== undefined && String(v).trim() !== '' && v !== false)) {
+      return true
+    }
+  }
+
+  return false
+}
+
+/**
+ * True iff the profile AFFIRMATIVELY contradicts being a student — i.e. it is a
+ * clearly non-student organization/business/researcher with NO student-adjacent
+ * signal at all. Only such profiles keep the hard REJECT for student-only aid.
+ */
+function profileContradictsStudent(profileNorm, rawProfile = null) {
+  if (!profileNorm) return false
+  if (isStudentAdjacent(profileNorm, rawProfile)) return false
+  const nonStudentEntity = ['business', 'nonprofit', 'organization', 'researcher', 'government']
+  return nonStudentEntity.includes(String(profileNorm.entityType ?? ''))
 }
 
 function isStudentAidOpportunity(opportunity, oppNorm) {
@@ -2148,8 +2252,19 @@ export function makeDecision(score, profile, opportunity, normalizedProfile = nu
   }
 
   if ((opp.requires_student || RE_STUDENT_ONLY.test(oppText)) && !isStudentProfile) {
-    reasons.push('Student-only program; profile is not a student')
-    return { decision: 'REJECT', explanation: 'Opportunity requires student status.', reasons }
+    // Recall guard (mirror evaluateEligibility): hard-REJECT only when the
+    // profile affirmatively contradicts student status; otherwise downgrade to
+    // REVIEW so a near-student isn't silently denied legitimately relevant aid.
+    if (profileContradictsStudent(np, prof)) {
+      reasons.push('Student-only program; profile is not a student')
+      return { decision: 'REJECT', explanation: 'Opportunity requires student status.', reasons }
+    }
+    reasons.push('Student-only program; profile student status unconfirmed — review (missing: student_status)')
+    return {
+      decision: 'REVIEW',
+      explanation: 'Opportunity requires student status; profile appears student-adjacent but student status is unconfirmed. Confirm enrollment.',
+      reasons,
+    }
   }
 
   if ((opp.requires_women || RE_WOMEN_ONLY.test(oppText)) && profileGenderIsFemale(np) === false) {
@@ -2208,13 +2323,34 @@ export function makeDecision(score, profile, opportunity, normalizedProfile = nu
   // A bare `state: 'XX'` + `is_national: 0` is NOT sufficient to hard-REJECT
   // because many non-national opportunities still accept cross-state applicants
   // (per backend/tests/makeDecision.geography.test.js regression coverage).
-  const profState = String(prof.state || '').trim()
+  // Prefer the normalized, section-aware profile state (np.state) over the raw
+  // top-level field so a profile whose state lives in a section is correctly
+  // resolved (e.g. "Tennessee" → "TN") before the comparison. MISSING state is
+  // NEUTRAL: when the profile state is unresolved we never hard-REJECT on
+  // state-exclusivity — at worst we downgrade to REVIEW.
+  const profState = String((np?.state ?? prof.state) || '').trim()
   const oppStateRaw = String(opp.state || '').trim()
   const oppIsNational = Boolean(opp.is_national) || oppStateRaw.toLowerCase() === 'nationwide'
-  if (profState && oppStateRaw && !oppIsNational) {
-    const pNorm = normalizeState(profState)
-    const oNorm = normalizeState(oppStateRaw)
-    if (pNorm && oNorm && pNorm !== oNorm) {
+  const pNormState = normalizeState(profState)
+  const oNormState = normalizeState(oppStateRaw)
+  if (oppStateRaw && !oppIsNational && oNormState) {
+    if (!pNormState) {
+      // Profile state is MISSING/unresolved. Per canonical_rules "missing =
+      // neutral": do NOT REJECT even when the opportunity is state-exclusive;
+      // surface it for review so the user can confirm residency themselves.
+      const RE_STATE_EXCLUSIVE_MISSING = /\b(residents?\s+only|must\s+be\s+a?\s*resident|must\s+reside\s+in|limited\s+to\s+residents|for\s+\w+(?:\s+\w+)?\s+residents?|\w+\s+residents?\s+(?:only|facing|who|experiencing|must)|exclusively\s+for\s+\w+(?:\s+\w+)?\s+residents?)\b/i
+      if (RE_STATE_EXCLUSIVE_MISSING.test(oppText) || opp.state_residents_only === true) {
+        reasons.push(`Geographic note — opportunity is for ${oppStateRaw} residents; profile state unknown (confirm eligibility)`)
+        return {
+          decision: 'REVIEW',
+          explanation: `Opportunity appears limited to ${oppStateRaw} residents but the profile's state is unknown. Confirm residency on the program page.`,
+          reasons,
+        }
+      }
+      // No exclusivity signal + unknown profile state: fall through to scoring.
+    } else if (pNormState !== oNormState) {
+      const pNorm = pNormState
+      const oNorm = oNormState
       // Residency-scope signals: any phrase tying "residents" to a qualifier is
       // treated as an explicit state-scope declaration.
       //   • "residents only" / "must be a resident" / "must reside in"

@@ -18,7 +18,7 @@ import crypto from 'crypto'
 import { applyRelevanceFilter, extractProfileData } from './relevanceFilter.js'
 import { computeMatchDecision, normalizeProfile, computeProfileFingerprint, normalizeOpportunity, computeOpportunityFingerprint } from './matchEngine.js'
 import { isPipelineSourceAllowed } from '../config/pipelineAllowedSources.js'
-import { RELEVANCE_FLOOR } from '../config/relevanceFloor.js'
+import { RELEVANCE_FLOOR, TRUSTED_RELEVANCE_FLOOR, isTrustedRecordOrigin } from '../config/relevanceFloor.js'
 import { evaluateExclusion } from './exclusionEngine.js'
 import {
   grantFingerprintFromOpportunity,
@@ -284,25 +284,41 @@ export async function saveToProfilePipeline(
 
     adjustedScore = Math.round(Math.max(0, Math.min(100, adjustedScore)))
 
+    // TRUSTED-SOURCE FLOOR EXEMPTION (recall fix for vetted student aid).
+    //
+    // Legitimately relevant aid from a vetted source (curated catalog,
+    // scholarship/school crawler, federal feed, explicitly-verified) routinely
+    // scores 40–54 — most visibly student aid that the student-aid score caps
+    // pin into the 40s. The 55 floor silently drops it. For such rows, when the
+    // decision is NOT REJECT (REJECT already returned at Gate 2), we lower the
+    // effective floor to TRUSTED_RELEVANCE_FLOOR (40). Untrusted/open-web rows
+    // keep the full RELEVANCE_FLOOR. Precision is bounded by the origin
+    // allowlist + the REJECT gate, both of which still apply.
+    const recordOrigin = opportunity?.record_origin ?? null
+    const trusted = isTrustedRecordOrigin(recordOrigin)
+    const decisionIsReject = decision?.decision === 'REJECT' // already returned above; defensive
+    const effectiveFloor = (trusted && !decisionIsReject) ? TRUSTED_RELEVANCE_FLOOR : RELEVANCE_FLOOR
+    const effectiveThreshold = Math.max(callerThreshold, effectiveFloor)
+
     // Gate 5: Score threshold (hard relevance floor).
     // IMPORTANT: do not bypass this for ACCEPT/REVIEW. A score below the
     // effective threshold is not eligible for automatic pipeline insertion.
-    // `threshold` is already clamped to >= RELEVANCE_FLOOR above, so this is the
-    // canonical hard floor no caller can lower.
-    if (adjustedScore < threshold) {
-      const flooredByCanonical = threshold === RELEVANCE_FLOOR && callerThreshold < RELEVANCE_FLOOR
+    // `effectiveThreshold` is clamped to >= the (possibly trusted-lowered) floor,
+    // so this remains a canonical hard floor no caller can drop below.
+    if (adjustedScore < effectiveThreshold) {
+      const flooredByCanonical = effectiveThreshold === effectiveFloor && callerThreshold < effectiveFloor
       log.info(
-        `[opportunityMatcher] Gate:THRESHOLD suppressed "${opportunity.title}" — score ${adjustedScore}% < ${threshold}% (relevance floor ${RELEVANCE_FLOOR}, caller asked ${callerThreshold}), decision was ${decision?.decision ?? 'null'}`,
+        `[opportunityMatcher] Gate:THRESHOLD suppressed "${opportunity.title}" — score ${adjustedScore}% < ${effectiveThreshold}% (floor ${effectiveFloor}${trusted ? ' [trusted origin ' + recordOrigin + ']' : ''}, caller asked ${callerThreshold}), decision was ${decision?.decision ?? 'null'}`,
       )
       return {
         saved: false,
         reason: flooredByCanonical
-          ? `Match score ${adjustedScore}% below canonical relevance floor ${RELEVANCE_FLOOR}%`
-          : `Match score ${adjustedScore}% below ${threshold}% threshold`,
+          ? `Match score ${adjustedScore}% below relevance floor ${effectiveFloor}%`
+          : `Match score ${adjustedScore}% below ${effectiveThreshold}% threshold`,
         gate: 'THRESHOLD',
         matchPercentage: adjustedScore,
-        threshold,
-        relevanceFloor: RELEVANCE_FLOOR,
+        threshold: effectiveThreshold,
+        relevanceFloor: effectiveFloor,
         decision: decision?.decision ?? null,
       }
     }
@@ -566,7 +582,7 @@ export async function saveToProfilePipeline(
     return {
       saved: true,
       matchPercentage,
-      threshold,
+      threshold: effectiveThreshold,
       pipelineId: grantId,
       decision: decision?.decision ?? null,
     }
