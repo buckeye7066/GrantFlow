@@ -39,6 +39,23 @@ function argValue(flag, fallback = null) {
 const isDryRun = !process.argv.includes('--apply')
 const keepUnscored = process.argv.includes('--keep-unscored')
 const threshold = Number.parseFloat(argValue('--threshold', '80')) || 80
+
+// Rows matching this regex (against title OR funder) are NEVER deleted, even if
+// they score below the threshold. Protects the MTSU portals/logins being wired
+// up for Hamilton and any portal/login/admissions entries. Override with
+// --protect-regex "..." or disable with --no-protect.
+const noProtect = process.argv.includes('--no-protect')
+const protectPattern = argValue(
+  '--protect-regex',
+  'mtsu|middle tennessee state|portal|sign[- ]?in|log[- ]?in|admissions',
+)
+const protectRe = noProtect ? null : new RegExp(protectPattern, 'i')
+
+function isProtected(grant) {
+  if (!protectRe) return false
+  const hay = `${grant?.title || ''} ${grant?.funder || ''}`
+  return protectRe.test(hay)
+}
 const names = String(argValue('--names', 'Anastasia,Robert'))
   .split(',')
   .map((s) => s.trim())
@@ -135,10 +152,20 @@ async function main() {
           .all(profile.id, threshold),
       )
 
-    console.log(`\n[prune] Profile ${profile.display_name || profile.name} (${profile.id}): ${grants.length} source(s) below ${threshold}%`)
-    for (const g of grants) {
-      const score = g.match_score === null || g.match_score === undefined ? 'NULL' : g.match_score
-      console.log(`   - [${score}] ${g.title || '(untitled)'} — ${g.funder || 'unknown funder'}`)
+    const candidates = grants.filter((g) => !isProtected(g))
+    const protectedRows = grants.filter((g) => isProtected(g))
+    console.log(`\n[prune] Profile ${profile.display_name} (${profile.id}): ${grants.length} below ${threshold}% → ${candidates.length} to remove, ${protectedRows.length} protected`)
+    if (protectedRows.length > 0) {
+      console.log('   PROTECTED (kept despite low score):')
+      for (const g of protectedRows) {
+        const score = g.match_score == null ? 'NULL' : g.match_score
+        console.log(`     · [${score}] ${g.title || '(untitled)'} — ${g.funder || 'unknown funder'}`)
+      }
+    }
+    console.log('   REMOVING:')
+    for (const g of candidates) {
+      const score = g.match_score == null ? 'NULL' : g.match_score
+      console.log(`     - [${score}] ${g.title || '(untitled)'} — ${g.funder || 'unknown funder'}`)
       if (!isDryRun) {
         await cascadeDeleteAndTombstone(g)
         totalRemoved += 1
