@@ -13,6 +13,8 @@ import { describe, it, expect, beforeEach } from 'vitest'
 process.env.RUNTIME_SECRETS_KEY = 'a'.repeat(64)
 
 const Database = (await import('better-sqlite3')).default
+const express = (await import('express')).default
+const request = (await import('supertest')).default
 const { saveCredential } = await import('../services/hamilton/hamiltonPortalCredentialService.js')
 const {
   getProfilePortals,
@@ -20,6 +22,11 @@ const {
   ensureProfilePortalIndexSchema,
   _resetProfilePortalIndexSchemaCache,
 } = await import('../services/hamilton/profilePortalIndex.js')
+const {
+  resolveProcessPortals,
+  resolveStateBenefitUrl,
+} = await import('../services/hamilton/processPortals.js')
+const profilePortalsRouter = (await import('../routes/profilePortals.js')).default
 
 function makeDb() {
   const db = new Database(':memory:')
@@ -43,6 +50,14 @@ function makeDb() {
   return db
 }
 
+// The DERIVED portals only (pipeline grants + colleges + saved identity).
+// PROCESS/benefit/school tiles are resolved separately (and tested on their own
+// below), so the classification tests here filter them out to assert precisely
+// on what the derivation produced.
+function derivedOnly(portals) {
+  return (portals || []).filter((p) => !p.isProcessPortal)
+}
+
 describe('getProfilePortals', () => {
   let db
   beforeEach(async () => {
@@ -52,30 +67,36 @@ describe('getProfilePortals', () => {
     await ensureProfilePortalIndexSchema(db)
   })
 
-  it('returns empty portals + mailFaxSources for a profile with no portals', async () => {
+  it('returns no DERIVED portals + no mailFaxSources for a profile with no pipeline/colleges', async () => {
     const out = await getProfilePortals(db, 'p1')
-    expect(out).toEqual({ portals: [], mailFaxSources: [] })
+    // Process/benefit tiles may exist (an individual profile can see SSA/211),
+    // but nothing is DERIVED from pipeline/colleges, and there are no mail/fax
+    // sources.
+    expect(derivedOnly(out.portals)).toEqual([])
+    expect(out.mailFaxSources).toEqual([])
   })
 
   it('derives a funding_source portal from a pipeline grant with an online application_method', async () => {
     db.prepare('INSERT INTO grants (id, profile_id, title, application_url, application_method) VALUES (?, ?, ?, ?, ?)')
       .run('g1', 'p1', 'Gates Grant', 'https://apply.gates.org/forms/123', 'portal')
     const { portals, mailFaxSources } = await getProfilePortals(db, 'p1')
-    expect(portals).toHaveLength(1)
+    const derived = derivedOnly(portals)
+    expect(derived).toHaveLength(1)
     expect(mailFaxSources).toHaveLength(0)
-    expect(portals[0].portalHost).toBe('gates.org')
-    expect(portals[0].kind).toBe('funding_source')
-    expect(portals[0].status).toBe('needs_setup')
-    expect(portals[0].loginUrl).toContain('gates.org')
-    expect(portals[0].sources[0]).toMatchObject({ title: 'Gates Grant', grantId: 'g1' })
+    expect(derived[0].portalHost).toBe('gates.org')
+    expect(derived[0].kind).toBe('funding_source')
+    expect(derived[0].status).toBe('needs_setup')
+    expect(derived[0].loginUrl).toContain('gates.org')
+    expect(derived[0].sources[0]).toMatchObject({ title: 'Gates Grant', grantId: 'g1' })
   })
 
   it('treats a login/apply URL path as a portal even without application_method', async () => {
     db.prepare('INSERT INTO grants (id, profile_id, title, application_url) VALUES (?, ?, ?, ?)')
       .run('g1', 'p1', 'AcademicWorks Award', 'https://foundation.example.org/apply/scholarship')
     const { portals, mailFaxSources } = await getProfilePortals(db, 'p1')
-    expect(portals).toHaveLength(1)
-    expect(portals[0].portalHost).toBe('example.org')
+    const derived = derivedOnly(portals)
+    expect(derived).toHaveLength(1)
+    expect(derived[0].portalHost).toBe('example.org')
     expect(mailFaxSources).toHaveLength(0)
   })
 
@@ -83,8 +104,9 @@ describe('getProfilePortals', () => {
     db.prepare('INSERT INTO grants (id, profile_id, title, application_url) VALUES (?, ?, ?, ?)')
       .run('g1', 'p1', 'Bold Scholarship', 'https://bold.org/scholarships/foo')
     const { portals } = await getProfilePortals(db, 'p1')
-    expect(portals).toHaveLength(1)
-    expect(portals[0].portalHost).toBe('bold.org')
+    const derived = derivedOnly(portals)
+    expect(derived).toHaveLength(1)
+    expect(derived[0].portalHost).toBe('bold.org')
   })
 
   it('routes a mail/fax/email source to mailFaxSources (NOT a portal tile)', async () => {
@@ -94,7 +116,7 @@ describe('getProfilePortals', () => {
       .run('g1', 'p1', 'Smith Family Foundation', 'https://smithfamilyfdn.org', 'mail',
         'Jane Smith', 'grants@smithfamilyfdn.org', '555-1212', '555-3434', '1 Main St, Townville')
     const { portals, mailFaxSources } = await getProfilePortals(db, 'p1')
-    expect(portals).toHaveLength(0)
+    expect(derivedOnly(portals)).toHaveLength(0)
     expect(mailFaxSources).toHaveLength(1)
     const s = mailFaxSources[0]
     expect(s.host).toBe('smithfamilyfdn.org')
@@ -114,7 +136,7 @@ describe('getProfilePortals', () => {
     db.prepare('INSERT INTO grants (id, profile_id, title, url) VALUES (?, ?, ?, ?)')
       .run('g1', 'p1', 'Generic Foundation', 'https://genericfdn.org/')
     const { portals, mailFaxSources } = await getProfilePortals(db, 'p1')
-    expect(portals).toHaveLength(0)
+    expect(derivedOnly(portals)).toHaveLength(0)
     expect(mailFaxSources).toHaveLength(1)
     expect(mailFaxSources[0].host).toBe('genericfdn.org')
   })
@@ -123,7 +145,7 @@ describe('getProfilePortals', () => {
     db.prepare('INSERT INTO grants (id, profile_id, title, application_url) VALUES (?, ?, ?, ?)')
       .run('g1', 'p1', 'Junk', 'https://www.google.com/search?q=grants')
     const { portals, mailFaxSources } = await getProfilePortals(db, 'p1')
-    expect(portals).toHaveLength(0)
+    expect(derivedOnly(portals)).toHaveLength(0)
     expect(mailFaxSources).toHaveLength(0)
   })
 
@@ -137,13 +159,14 @@ describe('getProfilePortals', () => {
         ],
       }))
     const { portals } = await getProfilePortals(db, 'p1')
-    expect(portals).toHaveLength(1)
-    expect(portals[0].portalHost).toBe('mtsu.edu')
-    expect(portals[0].kind).toBe('school')
+    const derived = derivedOnly(portals)
+    expect(derived).toHaveLength(1)
+    expect(derived[0].portalHost).toBe('mtsu.edu')
+    expect(derived[0].kind).toBe('school')
     // mtsu is a REAL connector → two-way sync supported + friendly label.
-    expect(portals[0].supportsTwoWaySync).toBe(true)
-    expect(portals[0].connectorId).toBe('mtsu')
-    expect(portals[0].sources.length).toBe(2)
+    expect(derived[0].supportsTwoWaySync).toBe(true)
+    expect(derived[0].connectorId).toBe('mtsu')
+    expect(derived[0].sources.length).toBe(2)
   })
 
   it('marks status ready when the profile holds a credential for the host', async () => {
@@ -167,9 +190,239 @@ describe('getProfilePortals', () => {
     const cached = db.prepare('SELECT * FROM profile_portal_index WHERE profile_id = ?').all('p1')
     expect(cached).toHaveLength(1)
     expect(cached[0].portal_host).toBe('gates.org')
-    // With refresh:false the read must still serve from the warmed cache.
+    // With refresh:false the derived (cached) funding portal must still serve
+    // from the warmed cache. Filter to the derived portal — process/benefit
+    // tiles may co-reside but are resolved separately, not from this cache.
     const { portals } = await getProfilePortals(db, 'p1', { refresh: false })
-    expect(portals).toHaveLength(1)
-    expect(portals[0].loginUrl).toContain('gates.org')
+    const derived = portals.filter((p) => !p.isProcessPortal)
+    expect(derived).toHaveLength(1)
+    expect(derived[0].loginUrl).toContain('gates.org')
+  })
+})
+
+// ── PROCESS portals: relevance + geography gating ────────────────────────────
+// These exercise the declarative registry directly with synthetic signals so the
+// gating logic is verified independent of the full profile-context pipeline.
+
+function ids(tiles) {
+  return tiles.map((t) => t.id)
+}
+
+describe('resolveProcessPortals — relevance + geo gating', () => {
+  it('a STUDENT gets FAFSA + ACT + College Board (national, no state needed)', () => {
+    const tiles = resolveProcessPortals({
+      applicantType: 'student',
+      needs: new Set(),
+      location: { state: 'TN' },
+    })
+    const got = ids(tiles)
+    expect(got).toContain('fafsa')
+    expect(got).toContain('act')
+    expect(got).toContain('collegeboard_sat')
+    expect(got).toContain('collegeboard_css')
+    // A student is NOT an org → no Grants.gov/SAM.gov.
+    expect(got).not.toContain('grants_gov')
+    expect(got).not.toContain('sam_gov')
+  })
+
+  it('a NON-student individual does NOT get FAFSA/ACT', () => {
+    const tiles = resolveProcessPortals({
+      applicantType: 'individual',
+      needs: new Set(['food']),
+      location: { state: 'TN' },
+    })
+    const got = ids(tiles)
+    expect(got).not.toContain('fafsa')
+    expect(got).not.toContain('act')
+  })
+
+  it('lists the student\'s own high school as a school tile (loginUrl may be null)', () => {
+    const tiles = resolveProcessPortals({
+      applicantType: 'student',
+      needs: new Set(),
+      location: { state: 'TN' },
+      education: { school_name: 'Central High School' },
+    })
+    const school = tiles.find((t) => t.kind === 'school')
+    expect(school).toBeTruthy()
+    expect(school.label).toBe('Central High School')
+    // No resolvable portal → tile still shows, loginUrl null.
+    expect(school.loginUrl).toBe(null)
+  })
+
+  it('shows in-state benefit portals only when the matching need is present', () => {
+    const tiles = resolveProcessPortals({
+      applicantType: 'family',
+      needs: new Set(['food', 'healthcare']),
+      location: { state: 'TN' },
+    })
+    const got = ids(tiles)
+    // food → SNAP (TN), healthcare → Medicaid (TN)
+    expect(got).toContain('snap:TN')
+    expect(got).toContain('medicaid:TN')
+    // No utilities/employment need → no LIHEAP/unemployment.
+    expect(got).not.toContain('liheap:TN')
+    expect(got).not.toContain('unemployment:TN')
+    // Each state tile points at the correct state's portal — never another state.
+    const snap = tiles.find((t) => t.id === 'snap:TN')
+    expect(snap.loginUrl).toContain('tn.gov')
+    expect(snap.state).toBe('TN')
+  })
+
+  it('NEVER shows another state\'s benefit portal (single-state profile)', () => {
+    const tiles = resolveProcessPortals({
+      applicantType: 'individual',
+      needs: new Set(['food']),
+      location: { state: 'OH' },
+    })
+    const snapTiles = tiles.filter((t) => t.id.startsWith('snap:'))
+    expect(snapTiles).toHaveLength(1)
+    expect(snapTiles[0].id).toBe('snap:OH')
+    expect(snapTiles[0].loginUrl).toContain('ohio.gov')
+  })
+
+  it('an OUT-OF-STATE student gets benefit portals for BOTH states (home + school)', () => {
+    const tiles = resolveProcessPortals({
+      applicantType: 'student',
+      needs: new Set(['food']),
+      location: { states: ['OH', 'TN'] },
+    })
+    const snapTiles = tiles.filter((t) => t.id.startsWith('snap:')).map((t) => t.id).sort()
+    expect(snapTiles).toEqual(['snap:OH', 'snap:TN'])
+    // Still a student → also FAFSA.
+    expect(ids(tiles)).toContain('fafsa')
+  })
+
+  it('unknown state falls back to a federal benefit finder, never a wrong state', () => {
+    expect(resolveStateBenefitUrl('CA', 'snap')).toMatch(/benefits\.gov/i)
+    expect(resolveStateBenefitUrl('TN', 'snap')).toMatch(/tn\.gov/i)
+    expect(resolveStateBenefitUrl('OH', 'medicaid')).toMatch(/ohio\.gov/i)
+  })
+
+  it('a NONPROFIT/ORG gets Grants.gov + SAM.gov and no student/benefit tiles', () => {
+    const tiles = resolveProcessPortals({
+      applicantType: 'nonprofit',
+      needs: new Set(['food']),
+      location: { state: 'TN' },
+    })
+    const got = ids(tiles)
+    expect(got).toContain('grants_gov')
+    expect(got).toContain('sam_gov')
+    expect(got).not.toContain('fafsa')
+    // An org is not an individual/family → no SNAP benefit tile.
+    expect(got.some((id) => id.startsWith('snap:'))).toBe(false)
+  })
+})
+
+// ── Packet → Documents: save + status shape ──────────────────────────────────
+
+function makePacketApp(db) {
+  const app = express()
+  app.use(express.json())
+  app.use((req, _res, next) => {
+    req.db = db
+    req.user = { role: 'admin', id: 'admin1' }
+    req.ctx = { userId: 'admin1', isAdmin: true }
+    next()
+  })
+  app.use('/api', profilePortalsRouter)
+  return app
+}
+
+function makePacketDb() {
+  const db = new Database(':memory:')
+  db.exec(`
+    CREATE TABLE profiles (id TEXT PRIMARY KEY, display_name TEXT, primary_type TEXT, updated_at DATETIME);
+    CREATE TABLE profile_sections (profile_id TEXT, section_key TEXT, data TEXT);
+    CREATE TABLE grants (
+      id TEXT PRIMARY KEY, profile_id TEXT, title TEXT,
+      application_url TEXT, portal_url TEXT, source_url TEXT, url TEXT,
+      application_method TEXT,
+      contact_name TEXT, contact_email TEXT, contact_phone TEXT,
+      funder_fax TEXT, funder_address TEXT,
+      funding_opportunity_id TEXT
+    );
+    CREATE TABLE funding_opportunities (
+      id TEXT PRIMARY KEY, title TEXT, name TEXT,
+      application_url TEXT, apply_url TEXT, apply_guidelines_url TEXT
+    );
+    CREATE TABLE documents (
+      id TEXT PRIMARY KEY, profile_id TEXT, grant_id TEXT,
+      name TEXT, type TEXT, mime_type TEXT, file_size INTEGER,
+      extracted_text TEXT, processing_status TEXT, notes TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE TABLE profile_documents (profile_id TEXT, document_id TEXT, PRIMARY KEY (profile_id, document_id));
+  `)
+  db.prepare('INSERT INTO profiles (id, display_name) VALUES (?, ?)').run('p1', 'Test Profile')
+  return db
+}
+
+describe('POST /api/profiles/:id/portals/packet → Documents + status shape', () => {
+  beforeEach(() => { _resetProfilePortalIndexSchemaCache() })
+
+  const source = {
+    title: 'Smith Family Foundation',
+    grantId: 'g1',
+    host: 'smithfamilyfdn.org',
+    url: 'https://smithfamilyfdn.org',
+    applicationMethod: 'mail',
+    contact: { name: 'Jane Smith', email: 'grants@smithfamilyfdn.org', address: '1 Main St' },
+  }
+
+  it('saves the packet as a durable Document and returns a documentId', async () => {
+    const db = makePacketDb()
+    const app = makePacketApp(db)
+    const res = await request(app)
+      .post('/api/profiles/p1/portals/packet')
+      .send({ source, profileName: 'Test Profile' })
+    expect(res.status).toBe(200)
+    expect(res.body.documentId).toBeTruthy()
+    expect(res.body.reused).toBe(false)
+
+    const doc = db.prepare('SELECT * FROM documents WHERE id = ?').get(res.body.documentId)
+    expect(doc.type).toBe('application_packet')
+    expect(doc.name).toBe('Smith Family Foundation application packet')
+    expect(doc.mime_type).toBe('text/html')
+    // The stored copy carries the rendered packet HTML.
+    expect(String(doc.extracted_text)).toContain('Application Packet')
+    // Durable bytes column was self-healed onto the documents table.
+    const cols = db.prepare('PRAGMA table_info(documents)').all().map((c) => c.name)
+    expect(cols).toContain('file_bytes')
+
+    // Re-saving the same source re-uses the existing document (idempotent).
+    const res2 = await request(app)
+      .post('/api/profiles/p1/portals/packet')
+      .send({ source, profileName: 'Test Profile' })
+    expect(res2.body.documentId).toBe(res.body.documentId)
+    expect(res2.body.reused).toBe(true)
+  })
+
+  it('GET portals annotates each mailFaxSource with a packet status shape', async () => {
+    const db = makePacketDb()
+    const app = makePacketApp(db)
+    db.prepare(`INSERT INTO grants
+      (id, profile_id, title, url, application_method, contact_name)
+      VALUES (?, ?, ?, ?, ?, ?)`)
+      .run('g1', 'p1', 'Smith Family Foundation', 'https://smithfamilyfdn.org', 'mail', 'Jane Smith')
+
+    // Before saving: packet.generated is false with the full shape present.
+    const before = await request(app).get('/api/profiles/p1/portals')
+    expect(before.status).toBe(200)
+    expect(before.body.mailFaxSources).toHaveLength(1)
+    expect(before.body.mailFaxSources[0].packet).toEqual({
+      generated: false,
+      documentId: null,
+      at: null,
+    })
+
+    // Save, then the same source reports generated:true + a documentId.
+    const saved = await request(app)
+      .post('/api/profiles/p1/portals/packet')
+      .send({ source, profileName: 'Test Profile' })
+    const after = await request(app).get('/api/profiles/p1/portals')
+    const pkt = after.body.mailFaxSources[0].packet
+    expect(pkt.generated).toBe(true)
+    expect(pkt.documentId).toBe(saved.body.documentId)
   })
 })
