@@ -36,6 +36,7 @@ import StudentPortalsCard from "@/components/profiles/StudentPortalsCard.jsx"
 import SavedLoginsCard from "@/components/profiles/SavedLoginsCard.jsx"
 import PortalSessionsCard from "@/components/hamilton/PortalSessionsCard.jsx"
 import PortalSyncCard from "@/components/hamilton/PortalSyncCard.jsx"
+import ProfilePortalsCard from "@/components/hamilton/ProfilePortalsCard.jsx"
 import OrgMembersCard from "@/components/profiles/OrgMembersCard.jsx"
 import PortalAccessScheduleCard from "@/components/profiles/PortalAccessScheduleCard.jsx"
 import CommittedCollegeWorkspace from "@/components/profiles/CommittedCollegeWorkspace.jsx"
@@ -799,18 +800,33 @@ export default function ProfileDetail() {
                   the pipeline. Everything here is scoped to this profile only.
                 </p>
               </div>
-              {/* Saved portal logins — available for every profile type, since
-                  Hamilton uses them to sign in to any grant/application portal she
-                  automates from the pipeline. */}
-              <SavedLoginsCard profileId={profileId} />
-              {/* Saved portal SESSIONS (captured logins) — the self-serve "log in
-                  from your phone or computer" capture flow + disclaimer. */}
-              <PortalSessionsCard profileId={profileId} />
-              {/* Two-way portal data sync — pull real data (test scores, aid
-                  awards) into GrantFlow and push GrantFlow funding/awards back
-                  into the portal, using the saved session above. Shows real
-                  per-host run status. */}
-              <PortalSyncCard profileId={profileId} />
+              {/* PRIMARY path: the auto-listed Portals dashboard. Every portal
+                  that applies to this profile is shown — the user clicks a red
+                  tile to log in once (no typing), and ready/green tiles expose
+                  two-way sync. */}
+              <ProfilePortalsCard profileId={profileId} />
+              {/* The manual portal-host/URL entry forms are de-emphasized: kept
+                  for power users under a disclosure, since the dashboard above is
+                  now the primary way to set up portals. */}
+              <details className="rounded-lg border border-slate-200 bg-slate-50/60 p-4">
+                <summary className="cursor-pointer text-sm font-medium text-slate-700">
+                  Advanced — add a portal manually
+                </summary>
+                <div className="mt-4 space-y-6">
+                  {/* Saved portal logins — available for every profile type, since
+                      Hamilton uses them to sign in to any grant/application portal she
+                      automates from the pipeline. */}
+                  <SavedLoginsCard profileId={profileId} />
+                  {/* Saved portal SESSIONS (captured logins) — the self-serve "log in
+                      from your phone or computer" capture flow + disclaimer. */}
+                  <PortalSessionsCard profileId={profileId} />
+                  {/* Two-way portal data sync — pull real data (test scores, aid
+                      awards) into GrantFlow and push GrantFlow funding/awards back
+                      into the portal, using the saved session above. Shows real
+                      per-host run status. */}
+                  <PortalSyncCard profileId={profileId} />
+                </div>
+              </details>
               <PortalAccessScheduleCard profileId={profileId} />
             </div>
             <div className="rounded-lg border bg-white p-6">

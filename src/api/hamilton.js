@@ -341,6 +341,17 @@ export function streamCloudLogin(liveSessionId, { onFrame, onError, onOpen } = {
   return { close: () => controller.abort() }
 }
 
+// ── Per-profile Portals dashboard ───────────────────────────────────────────
+// Every portal that applies to this profile (its schools + funding sources),
+// auto-listed so the user never has to type a portal name or URL — they click.
+// Returns { portals: [ { portalHost, loginUrl, label, kind, sources,
+// status, hasCredential, hasSession, connectorId, supportsTwoWaySync,
+// lastSync } ] }.
+export function listProfilePortals(profileId) {
+  if (!profileId) return Promise.reject(new Error('profileId required'))
+  return apiFetch(`/api/profiles/${encodeURIComponent(profileId)}/portals`)
+}
+
 // ── Two-way portal sync (Hamilton) ─────────────────────────────────────────
 // Endpoints provided by the portal-sync backend framework, mounted at
 // /api/hamilton/portal-sync. The status reader returns real portal_sync_runs

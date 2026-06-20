@@ -1982,6 +1982,12 @@ app.use('/api/notifications', notificationsRouter);
 // /profiles/:id/school-portals routes without colliding with the profiles
 // router (which uses :id).
 app.use('/api', lazyRouter('./routes/studentPortals.js'));
+// Per-profile "Portals" dashboard — GET /api/profiles/:id/portals returns every
+// portal applicable to a profile (derived from pipeline grants + target colleges
+// + saved credentials/sessions, deduped by registrable host), prepopulated with
+// a resolved login URL + label + green/red status. Same /:id path convention as
+// studentPortals; does not collide with the main profiles router.
+app.use('/api', lazyRouter('./routes/profilePortals.js'));
 // Committed-college financial-aid workspace (commit one school → others archive;
 // aggregate COA / FAFSA / aid / matched funding / Hamilton status). Same
 // /:profileId path convention as studentPortals.
@@ -2528,6 +2534,26 @@ if (process.env.NODE_ENV !== 'test') {
     console.log(`CORS origins: ${loggedCorsOrigins.join(', ')}`);
     const actualPort = server.address()?.port ?? PORT;
     console.log(`[Server] Ready on port ${actualPort}`);
+
+    // Profile Portals pre-resolve — warm the profile_portal_index cache (login
+    // URLs + labels + connectors) AHEAD of any dashboard click, so the per-
+    // profile Portals view renders instantly. Cheap + deterministic (no AI),
+    // best-effort, self-healing; the endpoint still computes on demand when the
+    // cache is cold. Runs ~25s after boot, then every 6h. Bounded by profile cap.
+    setTimeout(() => {
+      ;(async () => {
+        try {
+          const { preResolveActiveProfiles } = await import('./services/hamilton/profilePortalIndex.js')
+          const runOnce = () => preResolveActiveProfiles(db, { limit: 50 })
+            .then((r) => console.log('[profile-portals] pre-resolve:', JSON.stringify(r)))
+            .catch((err) => console.warn('[profile-portals] pre-resolve failed:', err?.message || err))
+          runOnce()
+          setInterval(runOnce, 6 * 60 * 60 * 1000)
+        } catch (err) {
+          console.warn('[profile-portals] pre-resolve scheduler skipped:', err?.message || err)
+        }
+      })()
+    }, 25_000);
 
     // Robert — funding-discovery agent scheduler. Disabled by default; only
     // starts if ROBERT_ENABLED and one of ROBERT_RUN_ON_SCHEDULE/STARTUP or
