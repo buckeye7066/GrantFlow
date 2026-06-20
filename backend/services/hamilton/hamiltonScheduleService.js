@@ -241,7 +241,13 @@ export async function emitSessionCaptureReminders(db, { profileId, lookbackHours
     profileUserId = row?.user_id || null
   } catch { profileUserId = null }
 
-  const cutoff = new Date(Date.now() - lookbackHours * 3600_000).toISOString()
+  // Space-format ('YYYY-MM-DD HH:MM:SS'), NOT ISO. notifications.created_at is
+  // written by SQLite CURRENT_TIMESTAMP (space-separated); an ISO cutoff ('…T…Z')
+  // sorts BEFORE any space-format value at char 10 (' ' < 'T'), so the dedup
+  // `created_at > cutoff` would never match and reminders would never dedup.
+  // Space-format compares correctly under SQLite (same shape) and Postgres
+  // (parses the literal to a timestamp).
+  const cutoff = new Date(Date.now() - lookbackHours * 3600_000).toISOString().slice(0, 19).replace('T', ' ')
   let emitted = 0
   for (const host of hosts) {
     // Dedup: skip if we already reminded about this host recently.
