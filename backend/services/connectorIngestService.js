@@ -30,6 +30,7 @@ import { fetchAssistanceListings } from '../src/integrations/samAssistanceListin
 import { fetchOpportunities as fetchSimplerGrants } from '../src/integrations/simplerGrants.js'
 import { searchOrganizations, orgToFundingOpportunity } from '../src/integrations/propublica990.js'
 import { fetchGrantsGov, transformGrantsGovOpportunity } from './grantsDotGovCrawler.js'
+import { fetchUSASpending } from './sources/usaSpending.js'
 import { upsertFundingOpportunity } from './opportunityInserter.js'
 import { createLogger } from '../utils/logger.js'
 
@@ -367,6 +368,21 @@ async function ingestFoundations(db, plan, limits, row) {
   }
 }
 
+async function ingestUsaSpending(db, plan, limits, row) {
+  // Past federal grant awards = funder-lead intelligence (which agencies fund
+  // this profile's needs). Keyword-driven; never a blank sweep — that would pull
+  // unrelated mega-awards. Records store inactive/historical, like NIH & NSF, so
+  // they surface as leads, not as open opportunities.
+  const queries = plan.terms.slice(0, limits.maxTerms)
+  if (queries.length === 0) return
+  for (const keyword of queries) {
+    const { opportunities } = await fetchUSASpending({ keyword, limit: limits.rowsPerQuery })
+    row.fetched += opportunities.length
+    await upsertAll(db, opportunities, row, { allowDirectories: true })
+    await sleep(limits.delayMs)
+  }
+}
+
 // `keyed` marks sources whose gate failure means "no API key" (vs. simply
 // not-applicable to this profile). Drives honest status in the coverage report.
 const SOURCES = [
@@ -377,6 +393,9 @@ const SOURCES = [
   { key: 'nih.reporter', run: ingestNihReporter, keyed: false, gate: (plan) => plan.wantsResearch },
   { key: 'nsf.awards', run: ingestNsfAwards, keyed: false, gate: (plan) => plan.wantsResearch },
   { key: 'propublica.990', run: ingestFoundations, keyed: false, gate: (plan) => plan.foundationSeeker },
+  // Federal award history = funder leads for orgs/governments (not individuals,
+  // who want benefits/scholarships). Keyless; gated like Federal Register.
+  { key: 'usaspending.gov', run: ingestUsaSpending, keyed: false, gate: (plan) => plan.federalApplicant },
 ]
 
 /**
