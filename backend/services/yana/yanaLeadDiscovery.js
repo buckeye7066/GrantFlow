@@ -35,6 +35,11 @@ import { isValidEmail } from '../john/johnOutreachSafety.js'
 import { createLogger } from '../../utils/logger.js'
 import { listProspectSources, getProspectSource } from './yanaProspectSources.js'
 import { getDefaultContactEnricher } from './yanaContactEnrichment.js'
+import {
+  recordEnrichmentRequest,
+  getOpenRequestForCandidate,
+  processEnrichmentRequests,
+} from './yanaEnrichmentRequests.js'
 
 const log = createLogger('yana-lead-discovery')
 
@@ -685,6 +690,15 @@ export async function runYanaDiscovery(db, {
   const runId = await startRun(db, { mode, trigger, createdByUserId })
   const summary = { agent: 'yana', mode, candidates_total: 0, candidates_qualified: 0, leads_pushed_to_john: 0 }
   try {
+    // First, answer John. Any leads he flagged as too thin to personalize get
+    // re-enriched here before we discover new ones, so the next outreach pass
+    // can write something specific instead of generic.
+    const enricherForRequests = prospectDeps.enricher || (allowLiveWeb ? getDefaultContactEnricher() : null)
+    summary.john_enrichment = await processEnrichmentRequests(db, {
+      enricher: enricherForRequests,
+      logger: log,
+    })
+
     const disc = await discoverLeadCandidates(db, { limit, runId, loadOrganizations: deps.loadOrganizations })
     summary.candidates_total = disc.candidates_total
     summary.candidates_qualified = disc.candidates_qualified
@@ -823,6 +837,24 @@ export function makeYanaLeadSource(db) {
         return { ok: false, error: err?.message || String(err) }
       }
       return { ok: true }
+    },
+    /**
+     * John → Yana back-channel. John calls this when a lead is too thin to
+     * personalize. We file/refresh an enrichment request; Yana services it at
+     * the top of her next discovery cycle (processEnrichmentRequests).
+     */
+    async requestEnrichment({ leadId, organizationName = null, missing = [], note = null } = {}) {
+      return recordEnrichmentRequest(db, {
+        candidateId: leadId,
+        organizationName,
+        missing,
+        note,
+        requestedBy: 'john',
+      })
+    },
+    /** Lets John read how many times he has already asked (his deferral cap). */
+    async getEnrichmentRequest({ leadId } = {}) {
+      return getOpenRequestForCandidate(db, leadId)
     },
   }
 }

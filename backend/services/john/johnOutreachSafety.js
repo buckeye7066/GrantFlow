@@ -80,6 +80,11 @@ export function getJohnConfig() {
     maxDraftsPerHour: readEnvInt('JOHN_MAX_DRAFTS_PER_HOUR', 10),
 
     minLeadScore: readEnvInt('JOHN_MIN_LEAD_SCORE', 70),
+    // When a lead is too thin to personalize, John asks Yana to enrich it and
+    // defers drafting up to this many times (giving Yana a cycle or two to
+    // respond) before he writes the best available version anyway — so a thin
+    // lead is never stuck forever, even when live-web enrichment is disabled.
+    maxEnrichmentDeferrals: readEnvInt('JOHN_MAX_ENRICHMENT_DEFERRALS', 1),
     requireYanaQualified: readEnvBool('JOHN_REQUIRE_YANA_QUALIFIED', true),
     requirePublicEvidence: readEnvBool('JOHN_REQUIRE_PUBLIC_EVIDENCE', true),
     requireContactSource: readEnvBool('JOHN_REQUIRE_CONTACT_SOURCE', true),

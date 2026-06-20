@@ -188,3 +188,38 @@ export async function markLeadQueuedForReview(leadSource, leadId, draftId) {
   }
   return { ok: true }
 }
+
+/**
+ * John → Yana: ask the lead source to enrich a lead that is too thin to
+ * personalize. Optional hook — a source that does not implement
+ * requestEnrichment() simply gets a no-op, so this never breaks older sources
+ * or tests. Returns the source's result (incl. `attempts`) when available so
+ * the orchestrator can apply its deferral cap.
+ */
+export async function requestLeadEnrichment(leadSource, { leadId, organizationName, missing, note } = {}) {
+  try {
+    if (leadSource && typeof leadSource.requestEnrichment === 'function') {
+      const res = await leadSource.requestEnrichment({ leadId, organizationName, missing, note })
+      return { ok: true, supported: true, ...(res || {}) }
+    }
+  } catch (err) {
+    return { ok: false, supported: true, error: err?.message || String(err) }
+  }
+  return { ok: true, supported: false }
+}
+
+/**
+ * Read John's currently-open enrichment request for a lead (how many times he
+ * has already asked), so he can stop deferring after a few tries and draft the
+ * best available version. No-op-safe for sources without the hook.
+ */
+export async function getEnrichmentRequest(leadSource, leadId) {
+  try {
+    if (leadSource && typeof leadSource.getEnrichmentRequest === 'function') {
+      return await leadSource.getEnrichmentRequest({ leadId })
+    }
+  } catch {
+    /* advisory */
+  }
+  return null
+}

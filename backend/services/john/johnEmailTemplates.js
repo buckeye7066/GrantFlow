@@ -23,28 +23,42 @@ export const APPROVED_SUBJECT_TEMPLATES = [
   'Quick note about {{PROJECT_OR_NEED}}',
 ]
 
-const OPT_OUT_LINE = `If this is not relevant, you can reply "no thanks" and I will not follow up.`
+export const OPT_OUT_LINE = `If this is not relevant, just reply "no thanks" and I won't follow up.`
 
+/**
+ * Body template.
+ *
+ * {{OPENING_LINE}} and {{ATTENTION_LINE}} are composed grammatically by the
+ * writer (johnEmailWriter) from whatever specific facts Yana supplied, so the
+ * email never renders the old "\u2026work around community-focused funding work"
+ * redundancy or the clumsy "what caught my attention about you was \u2026". When the
+ * facts are thin, ATTENTION_LINE is empty and the paragraph still reads cleanly
+ * (it flows straight into "Here is the short version:").
+ *
+ * Voice: an experienced, plain-spoken founder with an MBA \u2014 warm, specific,
+ * and free of hype. The compliant footer (opt-out + postal address) is always
+ * present verbatim.
+ */
 const DEFAULT_BODY_TEMPLATE = [
   '{{SALUTATION}}',
   '',
-  'I came across {{ORGANIZATION_NAME}} while looking at organizations doing meaningful work around {{EVIDENCE_TOPIC}}.',
+  '{{OPENING_LINE}}',
   '',
-  'I\u2019m Dr. John White, founder of GrantFlow. I didn\u2019t set out to build a product \u2014 I first built GrantFlow to fund my own research lab, Axiom BioLabs. It worked well enough that I began using the same engine for the mission and nonprofit work I\u2019m part of, and later to find scholarships and college-endowment opportunities for my own kids. Each time the pattern was the same: the work itself was never the hard part \u2014 finding the funding to sustain it was. That\u2019s the gap GrantFlow was built to close.',
+  'I\u2019m Dr. John White, the founder of GrantFlow, and I\u2019ll be honest about where it came from. I didn\u2019t set out to build software \u2014 I built it to fund my own research lab, Axiom BioLabs. When it actually worked, I started pointing the same engine at the nonprofit and ministry work I care about, and later at scholarships and college funding for my own kids. Every time, the lesson was the same: the work was never the hard part. Paying for it was. That\u2019s the gap GrantFlow was built to close.',
   '',
-  'What caught my attention about you was {{EVIDENCE_DETAIL}}. In practice, GrantFlow builds a profile of an organization \u2014 mission, location, focus areas, eligibility \u2014 and matches it to grants, foundation programs, scholarships, and other funding sources that genuinely fit, then keeps deadlines, documents, and progress organized in one place.',
+  '{{ATTENTION_LINE}}Here is the short version: GrantFlow builds a funding profile of an organization \u2014 its mission, location, focus areas, and eligibility \u2014 and matches that against grants, foundation programs, scholarships, and other funding that genuinely fits. Then it keeps every deadline, document, and application moving in one place, so nothing slips through the cracks.',
   '',
-  'Rather than describe it, I\u2019d rather you see it on your own terms. The link below opens a short conversation with Anya, our assistant; she\u2019ll learn about {{ORGANIZATION_NAME}} and run a live funding scan so you can see the kinds of matches it surfaces \u2014 no account needed to take a look. If what comes back looks worth it, you can decide from there whether to go further:',
+  'I\u2019d rather you judge it for yourself than take my word for it. The link below opens a short conversation with Anya, our assistant. She\u2019ll learn about {{ORGANIZATION_NAME}} and run a live funding scan so you can see the kind of matches it surfaces \u2014 no account needed just to look. If what comes back looks worth your time, you can take the next step from there:',
   '',
   '{{PROSPECT_LINK}}',
   '',
   'Respectfully,',
   '',
   'Dr. John White',
-  'GrantFlow / Axiom BioLabs',
+  'Founder, GrantFlow \u2014 Axiom BioLabs',
   'GrantFlow@axiombiolabs.org',
   '',
-  OPT_OUT_LINE,
+  '{{OPT_OUT_LINE}}',
   '',
   '{{PHYSICAL_ADDRESS}}',
 ].join('\n')

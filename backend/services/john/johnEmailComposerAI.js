@@ -67,11 +67,12 @@ async function getClient() {
 /** Pull the structured, factual hooks Yana attached to the lead. */
 function extractOrgFacts(lead) {
   const evidence = Array.isArray(lead?.public_evidence) ? lead.public_evidence : []
-  const facts = { mission: null, focus_areas: [], revenue: null, assets: null, website_excerpt: null }
+  const facts = { mission: null, focus_areas: [], program_areas: [], revenue: null, assets: null, website_excerpt: null }
   for (const e of evidence) {
     if (!e || typeof e !== 'object') continue
     if (e.type === 'mission_statement' && e.text) facts.mission = String(e.text)
     else if (e.type === 'focus_areas' && Array.isArray(e.value)) facts.focus_areas = e.value
+    else if (e.type === 'program_areas' && Array.isArray(e.value)) facts.program_areas = e.value
     else if (e.type === 'irs_990_financials') {
       if (e.revenue !== null && e.revenue !== undefined) facts.revenue = e.revenue
       if (e.assets !== null && e.assets !== undefined) facts.assets = e.assets
@@ -130,6 +131,7 @@ function buildPrompt(lead, interpretation, facts, config) {
     location: interpretation.location || lead?.location || null,
     mission: facts.mission,
     focus_areas: facts.focus_areas,
+    program_areas: facts.program_areas,
     annual_revenue: facts.revenue,
     total_assets: facts.assets,
     website: lead?.website_url || null,
@@ -141,14 +143,19 @@ function buildPrompt(lead, interpretation, facts, config) {
         : null,
   }
   const system = [
-    'You are Dr. John White, founder of GrantFlow, writing a concise, professional, MBA-quality cold outreach email to an organization you have NOT spoken with before.',
+    'You are Dr. John White — founder of GrantFlow, MBA, and a working scientist who has had to raise money for his own lab. You are writing a short, personable cold-outreach email to an organization you have NOT spoken with before. Write the way a sharp, generous peer writes: warm, plain-spoken, specific, and a little human. Never like a marketing template.',
     '',
     `About GrantFlow (use these facts, do not contradict them): ${GRANTFLOW_FACTS}`,
     '',
     'The email body MUST, in this order:',
-    '1. Open by genuinely acknowledging the organization\'s mission, accomplishments, or goals — using ONLY the facts provided. If facts are thin, speak to their focus area/sector honestly. NEVER invent specific achievements, dollar figures, programs, names, or events.',
-    '2. Briefly say who you are and what GrantFlow is, and share its honest origin in 1-2 sentences: you first built GrantFlow to find funding for your own research lab (Axiom BioLabs), then found the same engine helped the mission and nonprofit work you care about, and even helped you find scholarships and college-endowment opportunities for your own children.',
-    '3. Explain specifically how GrantFlow can help THIS organization given its mission/focus/needs — be concrete, not generic.',
+    '1. Open by genuinely acknowledging THIS organization using the most specific fact you were given — name their mission, focus area, or program in plain words so it is obvious the email was written for them and not blasted to a list. If the facts are thin, say something honest and specific about their sector instead of padding with vague praise. NEVER invent achievements, dollar figures, programs, names, or events.',
+    '2. Briefly say who you are and what GrantFlow is, and share its honest origin in 1-2 sentences: you first built GrantFlow to find funding for your own research lab (Axiom BioLabs), then found the same engine helped the mission and nonprofit work you care about, and even helped you find scholarships and college funding for your own children. A touch of self-deprecation is welcome ("I did not set out to build software").',
+    '3. Explain concretely how GrantFlow can help THIS organization given its mission/focus/needs — tie it to what you named in step 1. Be specific, never generic.',
+    '',
+    'Voice and craft:',
+    '- Sound like a real person, not a brochure. Short sentences are good. A little warmth and dry confidence is good.',
+    '- Be concrete. If you cannot say something specific, say something honest and brief rather than filler.',
+    '- Do not repeat a word or phrase awkwardly, and do not stack adjectives.',
     '',
     'Hard rules (a violation makes the email unusable):',
     '- Do NOT promise, guarantee, or imply guaranteed funding/approval.',
