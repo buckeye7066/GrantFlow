@@ -32,7 +32,10 @@ import {
   fetchLeadsForJohn,
   getRegisteredLeadSource,
   markLeadQueuedForReview,
+  requestLeadEnrichment,
 } from './johnYanaBridge.js'
+import { interpretLead } from './johnLeadInterpreter.js'
+import { assessLeadSufficiency } from './johnEvidenceSufficiency.js'
 import { computeRunBudget } from './johnRateLimiter.js'
 import { draftEmailForLead } from './johnDraftService.js'
 import { verifyAlias } from './johnAliasVerifier.js'
@@ -96,6 +99,8 @@ export async function runJohn({
     drafts_created: 0,
     drafts_blocked: 0,
     drafts_failed: 0,
+    deferred_for_enrichment: 0,
+    enrichment_requested: 0,
     daily_limit_remaining: 0,
     filtered_out: {},
     alias_report: null,
@@ -214,8 +219,40 @@ export async function runJohn({
       logger?.warn?.('[John] ' + summary.note)
     }
 
+    const maxDeferrals =
+      typeof cfg.maxEnrichmentDeferrals === 'number' ? cfg.maxEnrichmentDeferrals : 1
+
     for (const lead of fetched.leads) {
       if (remaining <= 0) break
+
+      // John ↔ Yana: if the packet is too thin to write a personable, specific
+      // email, ask Yana to enrich it. Defer drafting a few cycles to give her a
+      // chance to respond; past the cap, draft the best available version so a
+      // thin lead is never stuck (esp. when live-web enrichment is off).
+      const interpretation = interpretLead(lead)
+      const sufficiency = assessLeadSufficiency(lead, interpretation)
+      if (!sufficiency.sufficient && lead.lead_id) {
+        const req = await requestLeadEnrichment(src, {
+          leadId: lead.lead_id,
+          organizationName: lead.organization_name,
+          missing: sufficiency.missing,
+          note: sufficiency.note,
+        }).catch(() => ({ ok: false }))
+        if (req?.supported) summary.enrichment_requested += 1
+        const attempts = typeof req?.attempts === 'number' ? req.attempts : 1
+        if (req?.supported && attempts <= maxDeferrals) {
+          summary.deferred_for_enrichment += 1
+          summary.errors.push({
+            lead_id: lead.lead_id,
+            deferred_for_enrichment: true,
+            attempt: attempts,
+            missing: sufficiency.missing,
+          })
+          continue // do not consume draft budget on a deferral
+        }
+        // Cap reached (or source can't enrich): fall through and draft anyway.
+      }
+
       if (dryRun) {
         summary.drafts_created += 0
         summary.errors.push({ lead_id: lead.lead_id, dry_run: true })
