@@ -25,7 +25,7 @@ import { normalizeOpportunityState, normalizeState } from '../utils/stateNormali
 import { assembleFundingResults, TIERS as ZERO_RESULT_TIERS } from '../services/zeroResultLadder.js'
 import { evaluatePipelineSource } from '../config/pipelineAllowedSources.js'
 import { evaluateApplicantTypeEligibility } from '../services/applicantTypeGate.js'
-import { filterOutPipelineMembers } from '../services/pipelineExclusion.js'
+import { filterOutPipelineMembers, dedupeOpportunityList } from '../services/pipelineExclusion.js'
 import {
   detectProfessionalDevelopmentIntent,
   loadCuratedProfessionalDevelopmentPrograms,
@@ -962,6 +962,22 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
         capped = capped.filter((opp) => (opp.match_score ?? 0) >= minScore)
       }
 
+      // ── Intra-list dedup ─────────────────────────────────────────────────
+      // Collapse rows that refer to the same underlying award (same
+      // opportunity_id OR fingerprint OR normalized title+funder), keeping the
+      // best copy. matching.js merges catalog rows with curated PD programs, so
+      // the same scholarship can arrive twice under different source labels
+      // (e.g. "national_pd_program" + "national_pd_scholarship"); without this
+      // the user sees the same award twice. Display-only (no DB writes).
+      let duplicateCollapsedCount = 0
+      try {
+        const dd = dedupeOpportunityList(capped)
+        duplicateCollapsedCount = dd.removed
+        capped = dd.results
+      } catch (dedupeErr) {
+        routeLogger.warn(`[matching] result dedup skipped: ${dedupeErr?.message || dedupeErr}`)
+      }
+
       // ── Pipeline exclusion ───────────────────────────────────────────────
       // Never re-surface an opportunity the user already acted on: anything in
       // THIS profile's pipeline (any stage) or carrying a dismissal tombstone
@@ -1049,6 +1065,7 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
                 branded_program: pdIntent.branded?.label || undefined,
                 income_support_excluded: pdIntent.excludeIncomeSupport || undefined,
                 excluded_already_in_pipeline: pipelineExcludedCount || undefined,
+                duplicate_results_collapsed: duplicateCollapsedCount || undefined,
               },
               coverage_summary: {
                 total_candidates: rawCandidates.length,

@@ -14,6 +14,7 @@ import { DEFAULT_OPENAI_MODEL, OPENAI_TIMEOUT_MS, MAX_PROMPT_LENGTH } from '../c
 import { scoreOpportunity as calculateMatchScore } from '../services/matchEngine.js';
 import { trustedOriginClause, trustedSourceClause } from '../utils/recordOrigins.js';
 import { DEFAULT_MIN_SCORE, RELAX_THRESHOLDS, FALLBACK_TOP_N } from '../config/matchThresholds.js';
+import { filterOutPipelineMembers, dedupeOpportunityList } from '../services/pipelineExclusion.js';
 import { createOpenAIClient, summarizeOpenAIError } from '../utils/openaiClient.js';
 import { buildSchoolLookupFallbackData } from '../services/schoolLookupFallback.js'
 import { enforceTierCapability } from '../middleware/entitlements.js'
@@ -207,6 +208,22 @@ router.post('/comprehensive-match', async (req, res) => {
     }
     matched.sort((a, b) => b.fit_score - a.fit_score)
 
+    // Profile-scoped result surface: collapse duplicate rows and never
+    // re-surface a pipeline member / dismissed grant. Canonical helpers.
+    try {
+      matched = dedupeOpportunityList(matched).results
+    } catch (dedupeErr) {
+      routeLogger.warn(`[ai/comprehensive-match] dedup skipped: ${dedupeErr?.message || dedupeErr}`)
+    }
+    if (profileIdForIsolation && req.body?.include_pipeline !== true && req.body?.include_pipeline !== '1') {
+      try {
+        const filtered = await filterOutPipelineMembers(req.db, String(profileIdForIsolation), matched)
+        matched = filtered.results
+      } catch (exclErr) {
+        routeLogger.warn(`[ai/comprehensive-match] pipeline exclusion skipped: ${exclErr?.message || exclErr}`)
+      }
+    }
+
     res.json({
       opportunities: matched,
       total: scoredOpps.length,
@@ -342,11 +359,27 @@ router.post('/match', async (req, res) => {
     });
 
     // Sort by canonical score and limit (threshold from canonical config).
-    const topMatches = scoredOpportunities
+    let topMatches = scoredOpportunities
       .filter(o => o.match_score >= DEFAULT_MIN_SCORE)
       .sort((a, b) => b.match_score - a.match_score)
       .slice(0, limit);
-    
+
+    // Profile-scoped result surface: collapse duplicates + drop pipeline
+    // members / dismissed grants via the canonical helpers.
+    try {
+      topMatches = dedupeOpportunityList(topMatches).results;
+    } catch (dedupeErr) {
+      routeLogger.warn(`[ai/match] dedup skipped: ${dedupeErr?.message || dedupeErr}`);
+    }
+    if (req.body?.include_pipeline !== true && req.body?.include_pipeline !== '1') {
+      try {
+        const filtered = await filterOutPipelineMembers(req.db, String(profile_id), topMatches);
+        topMatches = filtered.results;
+      } catch (exclErr) {
+        routeLogger.warn(`[ai/match] pipeline exclusion skipped: ${exclErr?.message || exclErr}`);
+      }
+    }
+
     res.json({
       opportunities: topMatches,
       count: topMatches.length,
