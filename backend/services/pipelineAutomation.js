@@ -1,6 +1,26 @@
 import { buildPipelineAutomationPrompt, PIPELINE_ALLOWED_STATUSES } from '../prompts/pipelineAutomation.js'
 import { extractCompletionText } from '../utils/openai.js'
 import { summarizeOpenAIError } from '../utils/openaiClient.js'
+import { isAutomationEnabled } from '../../shared/automationPreferences.js'
+
+// Per-profile automation toggle: is pipeline auto-processing allowed for this
+// profile? Reads the automation_preferences profile section directly so the
+// scheduled job runner can skip a profile the user opted out of. Absent
+// preference defaults ON (current behaviour). See shared/automationPreferences.js.
+async function pipelineProcessingAllowedForProfile(db, profileId) {
+  if (!profileId) return true
+  try {
+    const row = await db
+      .prepare(`SELECT data FROM profile_sections WHERE profile_id = ? AND section_key = 'automation_preferences' LIMIT 1`)
+      .get(String(profileId))
+    const prefs = row?.data
+      ? (typeof row.data === 'string' ? JSON.parse(row.data) : row.data)
+      : {}
+    return isAutomationEnabled(prefs, 'pipeline_processing')
+  } catch {
+    return true // never let a read failure silently disable a user's automation
+  }
+}
 
 // STATUS_ORDER must match the frontend KanbanBoard STATUSES exactly
 const STATUS_ORDER = [
@@ -297,6 +317,20 @@ export async function processPipelineAutomationJob({ db, job, profileContext, ge
         String(parameters.process_all || '').toLowerCase() === 'true' ||
         parameters.all === true ||
         String(parameters.all || '').toLowerCase() === 'true'
+
+  // Per-profile automation toggle: skip a profile-scoped automation run when the
+  // user has turned OFF "Pipeline auto-processing" for this profile. We only gate
+  // the profile-scoped batch path (the scheduled "Process All for this profile"
+  // automation), not an explicit single-grant request.
+  if (profileId && !(await pipelineProcessingAllowedForProfile(db, profileId))) {
+    return {
+      evaluated: 0,
+      advanced: 0,
+      handoffs: 0,
+      skipped: true,
+      skipped_reason: 'pipeline_processing_disabled_for_profile',
+    }
+  }
 
   const statusPlaceholders = PROCESSABLE_STATUSES.map(() => '?').join(', ')
 

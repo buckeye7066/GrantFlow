@@ -15,6 +15,7 @@ import {
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import PipelinePotentialBreakdown from "@/components/profiles/PipelinePotentialBreakdown"
+import ProfileAutomationsCard from "@/components/profiles/ProfileAutomationsCard"
 import {
   ArrowRight,
   CalendarClock,
@@ -1033,6 +1034,12 @@ export default function ProfileOverview({
           </div>
         </div>
       </section>
+
+      {isRealProfileId(profile.id) ? (
+        <section>
+          <ProfileAutomationsCard profileId={profile.id} />
+        </section>
+      ) : null}
 
       {billing ? (
         <section className="rounded-3xl border border-slate-200 bg-white/80 backdrop-blur-sm shadow-sm p-6 md:p-8 space-y-4">
