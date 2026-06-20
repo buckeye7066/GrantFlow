@@ -23,6 +23,7 @@
 import { composeWithTemplate } from './johnEmailWriter.js'
 import { evaluateDraftSafety, getJohnConfig } from './johnOutreachSafety.js'
 import { SAFETY_STATUS } from './johnTypes.js'
+import { interpretLead } from './johnLeadInterpreter.js'
 import { listDrafts, updateDraft } from './johnRunStore.js'
 import { createOutlookProvider } from './johnOutlookProvider.js'
 
@@ -30,29 +31,44 @@ import { createOutlookProvider } from './johnOutlookProvider.js'
 const REFRESHABLE_STATUSES = new Set(['created', 'needs_sender_alias_review', 'needs_review'])
 
 /**
- * Rebuild an interpretation object from a stored draft row + its
- * personalization_json so composeWithTemplate reproduces the same per-org
- * personalization with the new template copy.
+ * Reconstruct the original Yana lead packet from a stored draft row. The draft
+ * service persists the lead's full evidence in source_evidence_json
+ * ({ public_evidence, source_urls }), so we can re-compose with the *same*
+ * org-specific facts and only the surrounding copy changes — the new writer
+ * reads its hook from the lead, so this is what preserves personalization
+ * (an empty lead would regenerate the generic fallback).
  */
-function interpretationFromDraft(row) {
+function leadFromDraft(row) {
+  const se = row.source_evidence_json || {}
   const p = row.personalization_json || {}
+  const contactPoints = row.recipient_email
+    ? [{
+        type: 'email',
+        value: row.recipient_email,
+        name: row.recipient_name || p.contact_name || null,
+        role: row.recipient_role || p.contact_role || null,
+        confidence: 0.9,
+      }]
+    : []
   return {
-    salutation: p.salutation || null,
+    lead_id: row.yana_lead_id || null,
     organization_name: row.organization_name || p.organization_name || null,
-    organization_type: null, // not used by the body template
-    contact: {
-      email: row.recipient_email || null,
-      name: row.recipient_name || p.contact_name || null,
-      role: row.recipient_role || p.contact_role || null,
-      generic: !!p.contact_generic_address,
-    },
-    evidence: {
-      // evidence_detail is the original full evidence text; deriveEvidenceTopic
-      // re-cuts it to reproduce the stored topic.
-      text: p.evidence_detail || p.evidence_topic || '',
-      source: p.evidence_source_url || null,
-    },
+    organization_type: p.organization_type || null,
+    contact_points: contactPoints,
+    public_evidence: Array.isArray(se.public_evidence) ? se.public_evidence : [],
+    source_urls: Array.isArray(se.source_urls) ? se.source_urls : [],
   }
+}
+
+/**
+ * Build the interpretation for composition, preserving the original salutation
+ * when one was stored (so we don't change "Hi Chief," to "Hi team," on refresh).
+ */
+function interpretationForDraft(row, lead) {
+  const p = row.personalization_json || {}
+  const base = interpretLead(lead)
+  if (p.salutation) base.salutation = p.salutation
+  return base
 }
 
 /**
@@ -97,8 +113,9 @@ export async function refreshDraftBodies(db, opts = {}) {
   for (const row of live) {
     const label = { draft_id: row.id, org: row.organization_name, provider_draft_id: row.provider_draft_id }
     try {
-      const interpretation = interpretationFromDraft(row)
-      const composed = composeWithTemplate({}, { config, interpretation })
+      const lead = leadFromDraft(row)
+      const interpretation = interpretationForDraft(row, lead)
+      const composed = composeWithTemplate(lead, { config, interpretation })
 
       // Nothing to do if the rendered body is already current.
       if (composed.body_text === row.body_text && composed.subject === row.subject) {
