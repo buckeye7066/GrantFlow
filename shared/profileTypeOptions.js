@@ -45,7 +45,8 @@ export const PROFILE_TYPE_OPTIONS = Object.freeze([
   // People & households
   { id: 'individual',                     group: 'People',     label: 'Individual',                      description: 'Single adult seeking benefits, scholarships, or grants.' },
   { id: 'family',                         group: 'People',     label: 'Family',                          description: 'Household with children or dependents.' },
-  { id: 'medical_need',                   group: 'People',     label: 'Medical / Health Need',           description: 'Person or family with medical, disability, or caregiving needs.' },
+  { id: 'medical_need',                   group: 'People',     label: 'Medical / Healthcare Assistance',  description: 'Person or family with medical, disability, or caregiving needs.' },
+  { id: 'homeschool_family',              group: 'People',     label: 'Homeschool Family',               description: 'Family educating children at home (curriculum, ESA, education funding).' },
   { id: 'senior',                         group: 'People',     label: 'Senior / Older Adult',            description: 'Adult 60+ seeking benefits, Medicare help, or senior programs.' },
   { id: 'veteran',                        group: 'People',     label: 'Veteran / Military Family',       description: 'Veteran or military family seeking benefits and support.' },
   { id: 'disabled_adult',                 group: 'People',     label: 'Adult with a Disability',         description: 'Person with a disability seeking benefits, services, or employment help.' },

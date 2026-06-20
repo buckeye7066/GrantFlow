@@ -19,15 +19,14 @@ import {
   CLIENT_CATEGORY_CONFIDENCE,
   SERVICE_KEYS,
 } from './pricingTypes.js'
+import {
+  profileTypeToClientCategory,
+  orgCategoryForBudget,
+  parseAnnualBudget,
+} from '../../../shared/profileTypeToClientCategory.js'
 
 const { INDIVIDUAL, SMALL, MID_SIZE, LARGE } = CLIENT_CATEGORIES
 const { HIGH, ESTIMATED, NEEDS_ADMIN_REVIEW } = CLIENT_CATEGORY_CONFIDENCE
-
-const INDIVIDUAL_PROFILE_TYPES = new Set([
-  'individual',
-  'family',
-  'student',
-])
 
 const ORG_PROFILE_TYPES = new Set([
   'nonprofit',
@@ -36,10 +35,27 @@ const ORG_PROFILE_TYPES = new Set([
   'school',
   'volunteer_fire_department',
   'small_business',
+  'business',
+  'organization',
   'other_organization',
 ])
 
+// The shared mapper returns the 4-code 'mid'; the pricing-engine return shape
+// uses the longer 'mid_size'. Map back so quote line items keep their labels.
+const SHARED_TO_ENGINE_CATEGORY = Object.freeze({
+  individual: INDIVIDUAL,
+  small: SMALL,
+  mid: MID_SIZE,
+  large: LARGE,
+})
+
 /**
+ * The billing client category is derived from the profile TYPE taxonomy via
+ * the single shared mapper (shared/profileTypeToClientCategory.js), so the
+ * tier a user is billed/entitled at always matches their profile type. This
+ * function layers the pricing-engine's confidence / reason / missing-field
+ * metadata on top of that one categorisation decision.
+ *
  * @returns {{
  *   client_category: string,
  *   confidence: string,
@@ -54,84 +70,88 @@ export function determineClientCategory({
 } = {}) {
   const missing = []
   const profileType = String(
-    profile.primary_type || profile.profile_type || intakeAnswers.profile_type || '',
+    profile.primary_type || profile.profile_type || profile.applicant_type ||
+    intakeAnswers.profile_type || '',
   ).toLowerCase()
+  const orgSubtype =
+    organization.org_subtype || organization.nonprofit_type ||
+    profile.org_subtype || profile.nonprofit_type || ''
 
-  if (INDIVIDUAL_PROFILE_TYPES.has(profileType)) {
+  const annualBudget = parseAnnualBudget(
+    pickFirstDefined([
+      organization.annual_budget,
+      profile.annual_budget,
+      intakeAnswers.annual_budget,
+      intakeAnswers.budget,
+    ]),
+  )
+
+  // ── The single categorisation decision (shared SoT) ───────────────────────
+  const sharedCategory = profileTypeToClientCategory({
+    primaryType: profileType,
+    orgSubtype,
+    annualBudget,
+  })
+  const clientCategory = SHARED_TO_ENGINE_CATEGORY[sharedCategory] || SMALL
+
+  // Individual tier — high confidence, nothing missing.
+  if (clientCategory === INDIVIDUAL) {
     return {
       client_category: INDIVIDUAL,
       confidence: HIGH,
-      reason: `Profile type "${profileType}" is always classified as Individual.`,
+      reason: profileType
+        ? `Profile type "${profileType}" maps to the Individual billing category.`
+        : 'No organization signals — defaulting to the Individual billing category.',
       missing_fields: [],
     }
   }
 
-  // From here on we treat the profile as an organization.
-  const annualBudget = pickFiniteNumber([
-    organization.annual_budget,
-    profile.annual_budget,
-    intakeAnswers.annual_budget,
-    intakeAnswers.budget,
-  ])
-
-  if (annualBudget === null) {
-    missing.push('annual_budget')
-  }
-
+  // ── Organization tiers — annotate the budget-derived band ─────────────────
   if (annualBudget !== null) {
-    if (annualBudget < CLIENT_CATEGORY_BUDGET_THRESHOLDS.small_max) {
-      return {
-        client_category: SMALL,
-        confidence: HIGH,
-        reason: `Annual budget $${annualBudget.toLocaleString()} is below the $${CLIENT_CATEGORY_BUDGET_THRESHOLDS.small_max.toLocaleString()} small-org threshold.`,
-        missing_fields: missing,
-      }
-    }
-    if (annualBudget <= CLIENT_CATEGORY_BUDGET_THRESHOLDS.mid_size_max) {
-      return {
-        client_category: MID_SIZE,
-        confidence: HIGH,
-        reason: `Annual budget $${annualBudget.toLocaleString()} falls in the $${CLIENT_CATEGORY_BUDGET_THRESHOLDS.small_max.toLocaleString()}–$${CLIENT_CATEGORY_BUDGET_THRESHOLDS.mid_size_max.toLocaleString()} mid-size band.`,
-        missing_fields: missing,
-      }
-    }
-    return {
-      client_category: LARGE,
-      confidence: HIGH,
-      reason: `Annual budget $${annualBudget.toLocaleString()} is above the $${CLIENT_CATEGORY_BUDGET_THRESHOLDS.mid_size_max.toLocaleString()} mid-size cap.`,
-      missing_fields: missing,
-    }
+    const band = orgCategoryForBudget(annualBudget)
+    const reason =
+      band === 'small'
+        ? `Annual budget $${annualBudget.toLocaleString()} is below the $${CLIENT_CATEGORY_BUDGET_THRESHOLDS.small_max.toLocaleString()} small-org threshold.`
+        : band === 'mid'
+          ? `Annual budget $${annualBudget.toLocaleString()} falls in the $${CLIENT_CATEGORY_BUDGET_THRESHOLDS.small_max.toLocaleString()}–$${CLIENT_CATEGORY_BUDGET_THRESHOLDS.mid_size_max.toLocaleString()} mid-size band.`
+          : `Annual budget $${annualBudget.toLocaleString()} is above the $${CLIENT_CATEGORY_BUDGET_THRESHOLDS.mid_size_max.toLocaleString()} mid-size cap.`
+    return { client_category: clientCategory, confidence: HIGH, reason, missing_fields: missing }
   }
 
-  // Budget unknown — fall back per the spec.
-  if (ORG_PROFILE_TYPES.has(profileType)) {
+  // Budget unknown — the shared mapper defaulted org → small.
+  missing.push('annual_budget')
+
+  if (ORG_PROFILE_TYPES.has(profileType) || orgSubtype) {
     const looksSmall = looksLikeSmallOrLocalOrg({ profile, intakeAnswers, organization })
-    if (looksSmall) {
-      return {
-        client_category: SMALL,
-        confidence: ESTIMATED,
-        reason:
-          'Annual budget unknown but profile signals (size, locality, narrative) suggest a small/local organization.',
-        missing_fields: missing,
-      }
-    }
     return {
-      client_category: SMALL,
-      confidence: NEEDS_ADMIN_REVIEW,
-      reason:
-        'Annual budget unknown and no small-org signals found — defaulting to Small Org for the quote and flagging for admin review.',
+      client_category: clientCategory,
+      confidence: looksSmall ? ESTIMATED : NEEDS_ADMIN_REVIEW,
+      reason: looksSmall
+        ? 'Annual budget unknown but profile signals (size, locality, narrative) suggest a small/local organization.'
+        : 'Annual budget unknown and no small-org signals found — defaulting to Small Org for the quote and flagging for admin review.',
       missing_fields: missing,
     }
   }
 
-  // Profile type unknown entirely.
+  // Profile type unknown entirely AND it resolved to an org tier (only happens
+  // when an org sub-type was supplied without a recognised type). Flag it.
   return {
-    client_category: SMALL,
+    client_category: clientCategory,
     confidence: NEEDS_ADMIN_REVIEW,
     reason:
       'Profile type and annual budget are both unknown. Defaulted to Small Org and flagged for admin review.',
     missing_fields: ['profile_type', 'annual_budget'],
   }
+}
+
+/**
+ * Return the first candidate that is not null/undefined/'' (preserves 0).
+ */
+function pickFirstDefined(candidates) {
+  for (const c of candidates) {
+    if (c !== null && c !== undefined && c !== '') return c
+  }
+  return null
 }
 
 function looksLikeSmallOrLocalOrg({ profile, intakeAnswers, organization }) {

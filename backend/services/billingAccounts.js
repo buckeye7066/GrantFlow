@@ -1,16 +1,55 @@
 import crypto from 'crypto'
 import { safeParseJSON } from '../utils/safeJson.js'
 import { TIERS as CATALOG_TIERS, orgTierForSeats } from '../../shared/tierCatalog.js'
+import { profileTypeToClientCategory } from '../../shared/profileTypeToClientCategory.js'
 import { countSeats } from './billing/seatTier.js'
 import { ADMIN_EMAILS } from '../config/constants.js'
 
 const ORG_TIER_IDS = new Set(['small_org', 'mid_size', 'large_org'])
 
 /**
+ * Derive the BILLING client category ('individual' | 'small' | 'mid' | 'large')
+ * a profile SHOULD be in, from its profile TYPE + (for orgs) annual budget, via
+ * the single shared mapper. This keeps the category the user is billed /
+ * entitled at aligned with their profile type. Pure read — never mutates and
+ * never throws (defaults to 'individual' if the profile can't be read).
+ */
+export async function deriveProfileClientCategory(db, profileId) {
+  try {
+    const profile = await db
+      .prepare('SELECT primary_type, organization_id FROM profiles WHERE id = ?')
+      .get(String(profileId))
+    if (!profile) return 'individual'
+
+    let annualBudget = null
+    let orgSubtype = ''
+    let primaryType = profile.primary_type
+    if (profile.organization_id) {
+      const org = await db
+        .prepare('SELECT annual_budget, nonprofit_type, applicant_type FROM organizations WHERE id = ?')
+        .get(String(profile.organization_id))
+      annualBudget = org?.annual_budget ?? null
+      orgSubtype = org?.nonprofit_type ?? ''
+      // An org row whose applicant_type marks it an organization should be
+      // treated as such even if the profile.primary_type is sparse.
+      if (!primaryType && org?.applicant_type) primaryType = org.applicant_type
+    }
+
+    return profileTypeToClientCategory({ primaryType, orgSubtype, annualBudget })
+  } catch {
+    return 'individual'
+  }
+}
+
+/**
  * Resolve what a profile is actually billed per month, wiring the seat count
  * into the amount: an organization account's monthly follows its seat-derived
  * tier (1 → small, 2–5 → mid, 6+ → large), unless an admin set a custom price or
  * the account is pro bono. Discounts apply on top. Pure read — never mutates.
+ *
+ * Also surfaces `client_category` — the category implied by the profile TYPE +
+ * org budget (via the shared mapper) — so callers can see the tier the profile
+ * type entitles the user to, independent of any manually-assigned tier.
  */
 export async function computeEffectiveBilling(db, profileId, account) {
   const tier = account?.tier || null
@@ -37,6 +76,8 @@ export async function computeEffectiveBilling(db, profileId, account) {
   const discountPct = Math.max(0, Math.min(100, Number(account?.discount_percent) || 0))
   const net = proBono ? 0 : Math.max(0, Math.round(effective * (1 - discountPct / 100)))
 
+  const clientCategory = await deriveProfileClientCategory(db, profileId)
+
   return {
     basis,
     seat_count: seatCount,
@@ -46,6 +87,7 @@ export async function computeEffectiveBilling(db, profileId, account) {
     discount_percent: discountPct,
     net_monthly_cents: net,
     is_pro_bono: proBono,
+    client_category: clientCategory,
   }
 }
 
