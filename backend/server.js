@@ -1926,6 +1926,7 @@ app.use('/api/funding-library', lazyRouter('./routes/fundingLibrary.js'));
 app.use('/api/programs', programsRouter);
 app.use('/api/milestones', milestonesRouter);
 app.use('/api/documents', documentsRouter);
+app.use('/api/award-compliance', lazyRouter('./routes/awardCompliance.js'));
 app.use('/api/expenses', expensesRouter);
 app.use('/api/budgets', budgetsRouter);
 app.use('/api/contacts', contactsRouter);
@@ -2728,6 +2729,25 @@ if (process.env.NODE_ENV !== 'test') {
         else console.log('[Server] Yana lead scheduler not started:', result?.reason || 'disabled')
       } catch (err) {
         console.warn('[Server] Yana lead scheduler startup skipped:', err?.message)
+      }
+    })()
+
+    // Hamilton — Application Autopilot scheduler. OFF by default; only arms when
+    // HAMILTON_RUN_ON_SCHEDULE=true AND HAMILTON_ENABLE_BROWSER_AUTOMATION=true.
+    // This is the timer that re-picks autonomous portal runs deferred to
+    // status='waiting_for_window' once their scheduled window opens: it drives
+    // the existing HamiltonAgentAdapter (which SELECTs due waiting_for_window /
+    // queued / auth-blocked tasks and re-runs the orchestrator with
+    // autonomous=true). Without it, deferred portal runs never resume on their
+    // own. Never blocks startup, never crashes the server on failure.
+    ;(async () => {
+      try {
+        const { startHamiltonScheduler } = await import('./services/hamilton/hamiltonScheduler.js')
+        const result = startHamiltonScheduler({ db })
+        if (result?.started) console.log('[Server] Hamilton scheduler started:', JSON.stringify(result))
+        else console.log('[Server] Hamilton scheduler not started:', result?.reason || 'disabled')
+      } catch (err) {
+        console.warn('[Server] Hamilton scheduler startup skipped:', err?.message)
       }
     })()
 
