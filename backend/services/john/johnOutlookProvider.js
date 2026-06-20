@@ -347,6 +347,44 @@ export function createOutlookProvider({
   }
 
   /**
+   * List recent messages from the primary mailbox's INBOX. Read-only (needs the
+   * app's Mail.Read/Mail.ReadWrite application permission, already consented).
+   * Returns the most recent `top` messages newest-first, optionally only those
+   * received on/after `sinceIso`. Used by the email→grant feeder to pull grant
+   * announcements GrantFlow can parse into funding opportunities.
+   */
+  async function listInboxMessages({ top = 25, sinceIso = null } = {}) {
+    if (!ready) {
+      const err = new Error(`Outlook provider not configured (missing ${missing || 'fetch'})`)
+      err.code = 'JOHN_OUTLOOK_NOT_CONFIGURED'
+      throw err
+    }
+    const token = await getAccessToken()
+    const mailbox = encodeURIComponent(config.primaryMailbox)
+    const lim = Math.max(1, Math.min(100, Number(top) || 25))
+    const select = 'id,internetMessageId,subject,from,receivedDateTime,bodyPreview,body'
+    let url =
+      `${GRAPH_BASE}/users/${mailbox}/mailFolders/inbox/messages` +
+      `?$select=${select}&$top=${lim}&$orderby=receivedDateTime desc`
+    if (sinceIso) {
+      url += `&$filter=${encodeURIComponent(`receivedDateTime ge ${sinceIso}`)}`
+    }
+    const res = await fetchImpl(url, {
+      method: 'GET',
+      headers: { authorization: `Bearer ${token}` },
+    })
+    if (!res.ok) {
+      const text = await safeText(res)
+      const err = new Error(`Outlook list inbox failed: ${res.status}`)
+      err.code = 'JOHN_OUTLOOK_LIST_INBOX_FAILED'
+      err.detail = redact(text)
+      throw err
+    }
+    const json = await res.json()
+    return { ok: true, messages: Array.isArray(json.value) ? json.value : [] }
+  }
+
+  /**
    * Verify the primary mailbox is reachable. Tries /users/{mailbox} which
    * returns 200 for an existing mailbox, 404 otherwise.
    */
@@ -380,6 +418,7 @@ export function createOutlookProvider({
     getMessage,
     updateDraftBody,
     listDrafts,
+    listInboxMessages,
     verifyMailbox,
     _internal: { buildMessagePayload },
   }

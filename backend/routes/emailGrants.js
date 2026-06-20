@@ -22,6 +22,7 @@ import crypto from 'node:crypto'
 import { db } from '../db/index.js'
 import { createLogger } from '../utils/logger.js'
 import { ingestEmails, getEmailGrantHealth, ensureEmailGrantSchema } from '../services/emailGrants/emailGrantIngestor.js'
+import { runOutlookGrantFeed } from '../services/emailGrants/outlookGrantFeeder.js'
 
 const router = express.Router()
 const log = createLogger('route:emailGrants')
@@ -98,6 +99,19 @@ router.get('/', adminAuth, async (req, res) => {
   try {
     const health = await getEmailGrantHealth(db, { limit: Number(req.query.limit) || 20 })
     res.json({ ok: true, ...health })
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err?.message })
+  }
+})
+
+// Pull grant emails straight from the configured Microsoft 365 inbox (the John
+// Outlook Graph bridge) and ingest them. No Gmail / Apps Script needed. Admin
+// or ingest-token; can also be wired to a schedule for hands-off operation.
+router.post('/sync-outlook', ingestAuth, async (req, res) => {
+  try {
+    const top = Math.max(1, Math.min(100, Number(req.body?.top) || 25))
+    const result = await runOutlookGrantFeed(db, { top, sinceIso: req.body?.since || null })
+    res.status(result.ok ? 200 : 200).json(result)
   } catch (err) {
     res.status(500).json({ ok: false, error: err?.message })
   }

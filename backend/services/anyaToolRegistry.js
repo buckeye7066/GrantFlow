@@ -3977,3 +3977,22 @@ registerTool({
     return { ok: true, ...health }
   },
 })
+
+registerTool({
+  name: 'owner.sync_email_grants_from_inbox',
+  description: 'OWNER ONLY. Pull recent grant-announcement emails from the connected Microsoft 365 inbox (dr.johnwhite@axiombiolabs.org, via the John Outlook Graph bridge) and parse them into funding opportunities. Use when the owner says "check my email for new grants" or "import grants from my inbox".',
+  requiresOwner: true,
+  schema: {
+    type: 'object',
+    properties: {
+      top: { type: 'number', description: 'How many recent inbox messages to scan (default 25, max 100)' },
+    },
+  },
+  handler: async (params, context) => {
+    const db = context?.db
+    if (!db) throw new Error('Database connection required')
+    const { runOutlookGrantFeed } = await import('./emailGrants/outlookGrantFeeder.js')
+    const top = Math.max(1, Math.min(100, Number(params?.top) || 25))
+    return runOutlookGrantFeed(db, { top })
+  },
+})
