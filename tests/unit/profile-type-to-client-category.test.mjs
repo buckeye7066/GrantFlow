@@ -70,6 +70,23 @@ test('organization buckets by annual budget — Small / Mid / Large', () => {
   assert.equal(profileTypeToClientCategory({ primaryType: 'organization', annualBudget: 50_000_000 }), 'large')
 })
 
+test('nonprofit is a TOP-LEVEL type that tiers as an organization by budget', () => {
+  // Owner decision: Nonprofit is its own top-level primary_type but tiers like
+  // any organization — small / mid / large by the org's annual budget, with an
+  // unknown budget defaulting to small. No org sub-type is required.
+  assert.equal(profileTypeToClientCategory({ primaryType: 'nonprofit' }), 'small')
+  assert.equal(profileTypeToClientCategory({ primaryType: 'nonprofit', annualBudget: 120_000 }), 'small')
+  assert.equal(profileTypeToClientCategory({ primaryType: 'nonprofit', annualBudget: 249_999 }), 'small')
+  assert.equal(profileTypeToClientCategory({ primaryType: 'nonprofit', annualBudget: 250_000 }), 'mid')
+  assert.equal(profileTypeToClientCategory({ primaryType: 'nonprofit', annualBudget: 900_000 }), 'mid')
+  assert.equal(profileTypeToClientCategory({ primaryType: 'nonprofit', annualBudget: 2_000_000 }), 'mid')
+  assert.equal(profileTypeToClientCategory({ primaryType: 'nonprofit', annualBudget: 2_000_001 }), 'large')
+  assert.equal(profileTypeToClientCategory({ primaryType: 'nonprofit', annualBudget: 5_000_000 }), 'large')
+  // Faith/community nonprofits (church/ministry) tier the same way.
+  assert.equal(profileTypeToClientCategory({ primaryType: 'church', annualBudget: 5_000_000 }), 'large')
+  assert.equal(profileTypeToClientCategory({ primaryType: 'ministry' }), 'small')
+})
+
 test('organization with unknown budget defaults to small', () => {
   assert.equal(profileTypeToClientCategory({ primaryType: 'organization' }), 'small')
   assert.equal(profileTypeToClientCategory({ primaryType: 'nonprofit', annualBudget: null }), 'small')
