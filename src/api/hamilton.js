@@ -342,11 +342,17 @@ export function streamCloudLogin(liveSessionId, { onFrame, onError, onOpen } = {
 }
 
 // ── Per-profile Portals dashboard ───────────────────────────────────────────
-// Every portal that applies to this profile (its schools + funding sources),
-// auto-listed so the user never has to type a portal name or URL — they click.
-// Returns { portals: [ { portalHost, loginUrl, label, kind, sources,
-// status, hasCredential, hasSession, connectorId, supportsTwoWaySync,
-// lastSync } ] }.
+// Every REAL login/application portal that applies to this profile (its schools
+// + the funding sources of pipeline grants), auto-listed so the user never has
+// to type a portal name or URL — they click. Returns:
+//   { portals: [ { portalHost, loginUrl, label, kind, sources, status,
+//                  hasCredential, hasSession, connectorId, supportsTwoWaySync,
+//                  lastSync } ],
+//     mailFaxSources: [ { title, grantId, opportunityId, host, url,
+//                  applicationMethod, contact:{name,email,phone,fax,address} } ] }
+// `mailFaxSources` are real funding sources (URL present) that are NOT portals —
+// they apply by mail/fax/email — so the UI offers a printable application packet
+// instead of a login tile. Junk/search hosts are excluded from both lists.
 export function listProfilePortals(profileId) {
   if (!profileId) return Promise.reject(new Error('profileId required'))
   return apiFetch(`/api/profiles/${encodeURIComponent(profileId)}/portals`)

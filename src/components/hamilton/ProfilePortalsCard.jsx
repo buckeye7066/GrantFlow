@@ -42,6 +42,7 @@ import {
   runPortalSyncRead,
   runPortalSyncWrite,
 } from "@/api/hamilton"
+import { openApplicationPacket } from "@/components/hamilton/applicationPacketPrint"
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -62,6 +63,8 @@ import {
   AlertTriangle,
   Clock,
   ArrowLeftRight,
+  Printer,
+  Mail,
 } from "lucide-react"
 
 function formatWhen(iso) {
@@ -128,7 +131,7 @@ const KIND_GROUPS = [
   { key: "funding_source", title: "Funding sources", Icon: Landmark },
 ]
 
-export default function ProfilePortalsCard({ profileId }) {
+export default function ProfilePortalsCard({ profileId, profileName = "" }) {
   const { toast } = useToast()
   const queryClient = useQueryClient()
 
@@ -140,6 +143,8 @@ export default function ProfilePortalsCard({ profileId }) {
   })
 
   const portals = Array.isArray(data?.portals) ? data.portals : []
+  // Real funding sources that are NOT login portals — apply by mail/fax/email.
+  const mailFaxSources = Array.isArray(data?.mailFaxSources) ? data.mailFaxSources : []
 
   const refetchPortals = () =>
     queryClient.invalidateQueries({ queryKey: ["hamilton-profile-portals", profileId] })
@@ -327,6 +332,58 @@ export default function ProfilePortalsCard({ profileId }) {
     )
   }
 
+  // A non-portal real funding source: apply by mail/fax/email. No login tile —
+  // instead show its contact block + a "Print application packet" action.
+  const renderMailFaxSource = (src, idx) => {
+    const host = src.host || ""
+    const title = src.title || host || "Funding source"
+    const method = String(src.applicationMethod || "").trim()
+    const contact = (src.contact && typeof src.contact === "object") ? src.contact : {}
+    const key = src.grantId || src.opportunityId || `${host}-${idx}`
+    return (
+      <li key={key} className="rounded-lg border border-slate-200 bg-slate-50/50 p-3">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div className="min-w-0 space-y-1">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="font-medium truncate">{title}</span>
+              <Badge variant="secondary" className="capitalize">
+                <Mail className="h-3 w-3 mr-1" /> Apply by {method || "mail/fax/email"}
+              </Badge>
+            </div>
+            {host && host !== title && <p className="text-xs text-muted-foreground truncate">{host}</p>}
+            <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-muted-foreground">
+              {contact.name && <span>{contact.name}</span>}
+              {contact.email && (
+                <a href={`mailto:${encodeURIComponent(contact.email)}`} className="text-indigo-600 hover:underline">{contact.email}</a>
+              )}
+              {contact.phone && <span>{contact.phone}</span>}
+              {contact.fax && <span>Fax: {contact.fax}</span>}
+              {contact.address && <span className="truncate">{contact.address}</span>}
+            </div>
+            {!contact.name && !contact.email && !contact.phone && !contact.fax && !contact.address && (
+              <p className="text-xs italic text-muted-foreground">
+                No contact details on file yet — the packet links the funder&rsquo;s page for how to apply.
+              </p>
+            )}
+          </div>
+          <div className="shrink-0">
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => openApplicationPacket({ profileName, source: src })}
+              title="Open a printable application packet — contact info + how to mail/fax/email"
+            >
+              <Printer className="h-4 w-4 mr-1.5" /> Print application packet
+            </Button>
+          </div>
+        </div>
+      </li>
+    )
+  }
+
+  const nothingToShow =
+    !isLoading && !isError && portals.length === 0 && mailFaxSources.length === 0
+
   return (
     <Card>
       <CardHeader>
@@ -358,7 +415,7 @@ export default function ProfilePortalsCard({ profileId }) {
           <p className="text-sm text-destructive">Could not load this profile&rsquo;s portals. Please try again.</p>
         )}
 
-        {!isLoading && !isError && portals.length === 0 && (
+        {nothingToShow && (
           <div className="rounded-lg border border-dashed border-muted-foreground/30 p-6 text-center">
             <Globe className="mx-auto h-6 w-6 text-muted-foreground" />
             <p className="mt-2 text-sm font-medium">No portals to show yet</p>
@@ -399,6 +456,22 @@ export default function ProfilePortalsCard({ profileId }) {
             </div>
           )
         })()}
+
+        {/* NON-PORTAL real funding sources: apply by mail/fax/email. These have
+            a URL but no login portal, so we never show a sign-in tile — instead
+            Hamilton produces a printable application packet. */}
+        {!isLoading && !isError && mailFaxSources.length > 0 && (
+          <div className="space-y-2">
+            <h4 className="flex items-center gap-1.5 text-sm font-semibold text-slate-700">
+              <Mail className="h-4 w-4" /> Apply by mail/fax/email
+            </h4>
+            <p className="text-xs text-muted-foreground">
+              These funders don&rsquo;t use an online login portal. Print an application packet — the
+              funder&rsquo;s contact info plus clear instructions on where to mail, fax, or email the application.
+            </p>
+            <ul className="space-y-2">{mailFaxSources.map(renderMailFaxSource)}</ul>
+          </div>
+        )}
       </CardContent>
     </Card>
   )

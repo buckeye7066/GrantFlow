@@ -30,6 +30,9 @@ function makeDb() {
     CREATE TABLE grants (
       id TEXT PRIMARY KEY, profile_id TEXT, title TEXT,
       application_url TEXT, portal_url TEXT, source_url TEXT, url TEXT,
+      application_method TEXT,
+      contact_name TEXT, contact_email TEXT, contact_phone TEXT,
+      funder_fax TEXT, funder_address TEXT,
       funding_opportunity_id TEXT
     );
     CREATE TABLE funding_opportunities (
@@ -49,21 +52,79 @@ describe('getProfilePortals', () => {
     await ensureProfilePortalIndexSchema(db)
   })
 
-  it('returns { portals: [] } for a profile with no portals', async () => {
+  it('returns empty portals + mailFaxSources for a profile with no portals', async () => {
     const out = await getProfilePortals(db, 'p1')
-    expect(out).toEqual({ portals: [] })
+    expect(out).toEqual({ portals: [], mailFaxSources: [] })
   })
 
-  it('derives a funding_source portal from a pipeline grant application_url', async () => {
-    db.prepare('INSERT INTO grants (id, profile_id, title, application_url) VALUES (?, ?, ?, ?)')
-      .run('g1', 'p1', 'Gates Grant', 'https://apply.gates.org/forms/123')
-    const { portals } = await getProfilePortals(db, 'p1')
+  it('derives a funding_source portal from a pipeline grant with an online application_method', async () => {
+    db.prepare('INSERT INTO grants (id, profile_id, title, application_url, application_method) VALUES (?, ?, ?, ?, ?)')
+      .run('g1', 'p1', 'Gates Grant', 'https://apply.gates.org/forms/123', 'portal')
+    const { portals, mailFaxSources } = await getProfilePortals(db, 'p1')
     expect(portals).toHaveLength(1)
+    expect(mailFaxSources).toHaveLength(0)
     expect(portals[0].portalHost).toBe('gates.org')
     expect(portals[0].kind).toBe('funding_source')
     expect(portals[0].status).toBe('needs_setup')
     expect(portals[0].loginUrl).toContain('gates.org')
     expect(portals[0].sources[0]).toMatchObject({ title: 'Gates Grant', grantId: 'g1' })
+  })
+
+  it('treats a login/apply URL path as a portal even without application_method', async () => {
+    db.prepare('INSERT INTO grants (id, profile_id, title, application_url) VALUES (?, ?, ?, ?)')
+      .run('g1', 'p1', 'AcademicWorks Award', 'https://foundation.example.org/apply/scholarship')
+    const { portals, mailFaxSources } = await getProfilePortals(db, 'p1')
+    expect(portals).toHaveLength(1)
+    expect(portals[0].portalHost).toBe('example.org')
+    expect(mailFaxSources).toHaveLength(0)
+  })
+
+  it('classifies a known application platform host as a portal', async () => {
+    db.prepare('INSERT INTO grants (id, profile_id, title, application_url) VALUES (?, ?, ?, ?)')
+      .run('g1', 'p1', 'Bold Scholarship', 'https://bold.org/scholarships/foo')
+    const { portals } = await getProfilePortals(db, 'p1')
+    expect(portals).toHaveLength(1)
+    expect(portals[0].portalHost).toBe('bold.org')
+  })
+
+  it('routes a mail/fax/email source to mailFaxSources (NOT a portal tile)', async () => {
+    db.prepare(`INSERT INTO grants
+      (id, profile_id, title, application_url, application_method, contact_name, contact_email, contact_phone, funder_fax, funder_address)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      .run('g1', 'p1', 'Smith Family Foundation', 'https://smithfamilyfdn.org', 'mail',
+        'Jane Smith', 'grants@smithfamilyfdn.org', '555-1212', '555-3434', '1 Main St, Townville')
+    const { portals, mailFaxSources } = await getProfilePortals(db, 'p1')
+    expect(portals).toHaveLength(0)
+    expect(mailFaxSources).toHaveLength(1)
+    const s = mailFaxSources[0]
+    expect(s.host).toBe('smithfamilyfdn.org')
+    expect(s.applicationMethod).toBe('mail')
+    expect(s.grantId).toBe('g1')
+    expect(s.url).toBe('https://smithfamilyfdn.org')
+    expect(s.contact).toMatchObject({
+      name: 'Jane Smith',
+      email: 'grants@smithfamilyfdn.org',
+      phone: '555-1212',
+      fax: '555-3434',
+      address: '1 Main St, Townville',
+    })
+  })
+
+  it('defaults an ambiguous info-only homepage to a mail/fax packet, not a tile', async () => {
+    db.prepare('INSERT INTO grants (id, profile_id, title, url) VALUES (?, ?, ?, ?)')
+      .run('g1', 'p1', 'Generic Foundation', 'https://genericfdn.org/')
+    const { portals, mailFaxSources } = await getProfilePortals(db, 'p1')
+    expect(portals).toHaveLength(0)
+    expect(mailFaxSources).toHaveLength(1)
+    expect(mailFaxSources[0].host).toBe('genericfdn.org')
+  })
+
+  it('excludes junk search-engine hosts from both lists', async () => {
+    db.prepare('INSERT INTO grants (id, profile_id, title, application_url) VALUES (?, ?, ?, ?)')
+      .run('g1', 'p1', 'Junk', 'https://www.google.com/search?q=grants')
+    const { portals, mailFaxSources } = await getProfilePortals(db, 'p1')
+    expect(portals).toHaveLength(0)
+    expect(mailFaxSources).toHaveLength(0)
   })
 
   it('derives a school portal from university_applications and dedups by host', async () => {
@@ -86,8 +147,8 @@ describe('getProfilePortals', () => {
   })
 
   it('marks status ready when the profile holds a credential for the host', async () => {
-    db.prepare('INSERT INTO grants (id, profile_id, title, application_url) VALUES (?, ?, ?, ?)')
-      .run('g1', 'p1', 'Gates Grant', 'https://apply.gates.org/forms/123')
+    db.prepare('INSERT INTO grants (id, profile_id, title, application_url, application_method) VALUES (?, ?, ?, ?, ?)')
+      .run('g1', 'p1', 'Gates Grant', 'https://apply.gates.org/forms/123', 'portal')
     await saveCredential(db, {
       userId: 'u1', profileId: 'p1', portalHost: 'gates.org',
       username: 'a@example.com', password: 'pw',
@@ -99,8 +160,8 @@ describe('getProfilePortals', () => {
   })
 
   it('pre-resolve warms the cache and read works with refresh disabled', async () => {
-    db.prepare('INSERT INTO grants (id, profile_id, title, application_url) VALUES (?, ?, ?, ?)')
-      .run('g1', 'p1', 'Gates Grant', 'https://apply.gates.org/forms/123')
+    db.prepare('INSERT INTO grants (id, profile_id, title, application_url, application_method) VALUES (?, ?, ?, ?, ?)')
+      .run('g1', 'p1', 'Gates Grant', 'https://apply.gates.org/forms/123', 'portal')
     const n = await preResolveProfilePortals(db, 'p1')
     expect(n).toBe(1)
     const cached = db.prepare('SELECT * FROM profile_portal_index WHERE profile_id = ?').all('p1')
