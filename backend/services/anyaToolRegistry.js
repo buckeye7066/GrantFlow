@@ -2175,6 +2175,24 @@ registerTool({
   handler: adminHealthCheck,
 })
 
+import { scanHamiltonSessionReadiness } from './hamilton/hamiltonScheduleService.js'
+
+// Makes the session-import + scheduling capability observable to the agents:
+// Anya can answer "which portals need a login session" and Sam mines the
+// findings[] into diagnostics (see samRegistry hamilton.sessionReadiness).
+registerTool({
+  name: 'admin.hamilton.sessionReadiness',
+  description: 'Lists profiles with active Hamilton application work whose portals need a login session captured (runs that will stall on login/2FA). Read-only. Admin only.',
+  requiresAdmin: true,
+  schema: {
+    type: 'object',
+    properties: {
+      limit: { type: 'integer', minimum: 1, maximum: 1000, description: 'Max active profiles to scan (default 500).' },
+    },
+  },
+  handler: async ({ limit } = {}, context) => scanHamiltonSessionReadiness(context?.db, { limit }),
+})
+
 registerTool({
   name: 'admin.health.logs',
   description: 'Get recent error/warning logs. Admin only.',

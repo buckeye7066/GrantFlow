@@ -109,3 +109,28 @@ export function nextWindowStart(schedule, date = new Date()) {
   const tp = tzParts(tomorrow, s.timezone)
   return zonedTimeToUtc(tp.year, tp.month, tp.day, earliest, s.timezone).toISOString()
 }
+
+/**
+ * Every distinct window START instant (ISO) between startDate and endDate,
+ * inclusive — used to plot Hamilton's scheduled access windows on the calendar.
+ * Returns [] for a disabled schedule (Hamilton can run anytime, so there is no
+ * fixed window to plot). Capped at `cap` days to bound work.
+ */
+export function windowStartsBetween(schedule, startDate, endDate, cap = 120) {
+  const s = schedule?.enabled ? schedule : normalizeSchedule(schedule)
+  if (!s.enabled) return []
+  const start = new Date(startDate)
+  const end = new Date(endDate)
+  const out = []
+  let dayCursor = new Date(start)
+  for (let i = 0; i < cap && dayCursor <= end; i += 1) {
+    const p = tzParts(dayCursor, s.timezone)
+    for (const w of s.windows) {
+      const inst = zonedTimeToUtc(p.year, p.month, p.day, w.startMin, s.timezone)
+      if (inst >= start && inst <= end) out.push(inst.toISOString())
+    }
+    // Advance one calendar day in the schedule's timezone.
+    dayCursor = new Date(zonedTimeToUtc(p.year, p.month, p.day, 0, s.timezone).getTime() + 24 * 60 * 60 * 1000)
+  }
+  return [...new Set(out)].sort()
+}

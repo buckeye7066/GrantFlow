@@ -54,6 +54,7 @@ import {
   readAuthorizations,
 } from '../services/hamilton/hamiltonPreflight.js'
 import { preflightAndResolveSelected } from '../services/hamilton/hamiltonPreflightResolver.js'
+import { getHamiltonReadiness, computeHamiltonCalendarEvents } from '../services/hamilton/hamiltonScheduleService.js'
 import { deriveNamePartsIntoBasicInfo } from '../../shared/nameParsing.js'
 import { listPortalProviders } from '../services/hamilton/hamiltonPortalProviders.js'
 import {
@@ -813,6 +814,47 @@ router.post('/sessions/:id/expire', async (req, res) => {
   if (!ctx) return
   const session = await markSessionExpired(req.db, req.params.id, req.body?.reason || null)
   return res.json({ ok: true, session })
+})
+
+// Login-time readiness: is a schedule set, which portals still need a session
+// captured (so the owner can clear 2FA), and when does Hamilton next run.
+// Powers the login reminder banner.
+router.get('/readiness', async (req, res) => {
+  const user = await requireProfileScope(req, res, req.query.profileId)
+  if (!user) return
+  try {
+    const readiness = await getHamiltonReadiness(req.db, { profileId: req.query.profileId })
+    return res.json({ ok: true, readiness })
+  } catch (err) {
+    log.error('hamilton_readiness_failed', { err: err?.message })
+    return res.status(500).json({ error: 'readiness_failed', detail: err?.message })
+  }
+})
+
+// Hamilton's scheduled application runs as calendar events for a month, each
+// flagged requires_presence when a portal it touches lacks a valid session.
+router.get('/calendar', async (req, res) => {
+  const user = await requireProfileScope(req, res, req.query.profileId)
+  if (!user) return
+  try {
+    const month = String(req.query.month || '') // YYYY-MM
+    let rangeStart
+    let rangeEnd
+    if (/^\d{4}-\d{2}$/.test(month)) {
+      const [y, m] = month.split('-').map(Number)
+      rangeStart = new Date(Date.UTC(y, m - 1, 1)).toISOString()
+      rangeEnd = new Date(Date.UTC(m === 12 ? y + 1 : y, m === 12 ? 0 : m, 1) - 1).toISOString()
+    } else {
+      const now = new Date()
+      rangeStart = now.toISOString()
+      rangeEnd = new Date(now.getTime() + 90 * 86400_000).toISOString()
+    }
+    const events = await computeHamiltonCalendarEvents(req.db, { profileId: req.query.profileId, rangeStart, rangeEnd })
+    return res.json({ ok: true, count: events.length, events })
+  } catch (err) {
+    log.error('hamilton_calendar_failed', { err: err?.message })
+    return res.status(500).json({ error: 'calendar_failed', detail: err?.message })
+  }
 })
 
 // Saved portal LOGINS (username + encrypted password) Hamilton uses to

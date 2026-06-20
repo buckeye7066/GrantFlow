@@ -303,6 +303,16 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
       }
     },
   },
+  {
+    id: 'hamilton.sessionReadiness',
+    label: 'Hamilton portal session readiness',
+    category: SAM_CATEGORIES.APPLICATION_WORKFLOW_INTEGRITY,
+    kind: CHECK_KIND.TOOL,
+    tool: 'admin.hamilton.sessionReadiness',
+    parameters: {},
+    severityOnFailure: SEVERITY.MEDIUM,
+    description: 'Delegates to admin.hamilton.sessionReadiness — flags profiles whose active Hamilton runs will stall on login/2FA because a portal has a saved login but no captured session (so the owner can capture one before the scheduled run).',
+  },
 ])
 
 // ---------------------------------------------------------------------------
