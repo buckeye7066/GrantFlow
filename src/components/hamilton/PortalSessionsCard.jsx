@@ -25,7 +25,6 @@ import {
   getPortalSessionCaptureToken,
   getCloudLoginStatus,
   startCloudLogin,
-  completeCloudLogin,
 } from "@/api/hamilton"
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -122,10 +121,15 @@ export default function PortalSessionsCard({ profileId }) {
   })
 
   // Option B (cloud interactive login): self-serve on any device, owner-independent.
-  // Off unless the deployment configured a hosted browser provider.
+  // The self_hosted provider is ON by default and serves the live login window
+  // from GrantFlow itself (a same-origin live view at /HamiltonLiveLogin), so it
+  // works on Railway's single public port with no extra setup.
   const [portalHost, setPortalHost] = useState("")
   const [loginUrl, setLoginUrl] = useState("")
-  const [liveSessionId, setLiveSessionId] = useState(null)
+  // True once a secure login window has been opened, so we can show a
+  // "finish in the window, then refresh" affordance. Capture/complete now
+  // happens inside the live-view window, not here.
+  const [liveOpened, setLiveOpened] = useState(false)
 
   const { data: cloudStatus } = useQuery({
     queryKey: ["hamilton-cloud-login-status"],
@@ -133,11 +137,6 @@ export default function PortalSessionsCard({ profileId }) {
     staleTime: 5 * 60_000,
   })
   const cloudConfigured = Boolean(cloudStatus?.configured)
-  // self_hosted streams Chromium's own DevTools inspector; on a single-port PaaS
-  // the interactive window only reaches a remote device when the deployment set
-  // HAMILTON_CLOUD_LOGIN_PUBLIC_BASE. Surface that honestly so the user isn't
-  // surprised if the window can't open and can fall back to Saved Login.
-  const cloudNeedsPublicBase = Boolean(cloudStatus?.requires_public_base)
 
   const cloudStartMutation = useMutation({
     mutationFn: () =>
@@ -147,23 +146,16 @@ export default function PortalSessionsCard({ profileId }) {
         label: portalHost.trim() ? `${portalHost.trim()} session` : null,
       }),
     onSuccess: (res) => {
-      setLiveSessionId(res?.liveSessionId || null)
+      // res.liveUrl points at our own full-screen live-view page
+      // (/HamiltonLiveLogin?session=...). The user logs in + clears 2FA there and
+      // clicks "Done" inside that window to capture the session.
       if (res?.liveUrl && typeof window !== "undefined") {
         window.open(res.liveUrl, "_blank", "noopener,noreferrer")
+        setLiveOpened(true)
       }
-      showSuccessToast(toast, "Secure login window opened", "Log in + clear 2FA there, then come back and tap “I’ve finished logging in”.")
+      showSuccessToast(toast, "Secure login window opened", "Sign in + approve 2FA in the new window, then click “Done” there. Come back and Refresh to see the saved session.")
     },
     onError: (err) => showErrorToast(toast, "Could not start cloud login", err?.message || "Please try again."),
-  })
-
-  const cloudCompleteMutation = useMutation({
-    mutationFn: () => completeCloudLogin(liveSessionId),
-    onSuccess: () => {
-      setLiveSessionId(null)
-      queryClient.invalidateQueries({ queryKey: ["hamilton-portal-sessions", profileId] })
-      showSuccessToast(toast, "Session captured", "Hamilton can now act inside this portal for this profile.")
-    },
-    onError: (err) => showErrorToast(toast, "Could not capture the session", err?.message || "Make sure you finished logging in, then retry."),
   })
 
   const handleCopy = (text, what) => {
@@ -229,33 +221,35 @@ export default function PortalSessionsCard({ profileId }) {
               {cloudConfigured ? (
                 <>
                   <p>
-                    GrantFlow opens a secure login window you complete yourself (including 2FA). When
-                    you’re done, tap “I’ve finished logging in” and the session is captured for this profile.
+                    GrantFlow opens a clean, full-screen secure login window with a live view of a real
+                    browser. You type your username + password and approve 2FA on your phone right there;
+                    when you’re done, click “Done — I’ve finished logging in” in that window and the session
+                    is captured for this profile.
                   </p>
-                  {cloudNeedsPublicBase && (
-                    <p className="text-xs text-emerald-800">
-                      Note: this deployment runs the self-hosted login browser. If the secure window
-                      doesn’t open on your device, use <strong>Saved Login</strong> below instead (it
-                      works everywhere), or ask an admin to capture from a computer.
-                    </p>
-                  )}
                   <div className="grid gap-2 sm:grid-cols-2">
                     <Input placeholder="Portal host (e.g. mtsu.edu)" value={portalHost} onChange={(e) => setPortalHost(e.target.value)} />
                     <Input placeholder="Login URL (optional)" value={loginUrl} onChange={(e) => setLoginUrl(e.target.value)} />
                   </div>
-                  {!liveSessionId ? (
+                  <div className="flex flex-wrap items-center gap-2">
                     <Button size="sm" disabled={!portalHost.trim() || cloudStartMutation.isPending} onClick={() => cloudStartMutation.mutate()}>
                       {cloudStartMutation.isPending ? <Loader2 className="h-4 w-4 mr-1.5 animate-spin" /> : <Globe className="h-4 w-4 mr-1.5" />}
                       Open secure login window
                     </Button>
-                  ) : (
-                    <div className="flex flex-wrap items-center gap-2">
-                      <Button size="sm" disabled={cloudCompleteMutation.isPending} onClick={() => cloudCompleteMutation.mutate()}>
-                        {cloudCompleteMutation.isPending ? <Loader2 className="h-4 w-4 mr-1.5 animate-spin" /> : <ShieldCheck className="h-4 w-4 mr-1.5" />}
-                        I’ve finished logging in
+                    {liveOpened && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => queryClient.invalidateQueries({ queryKey: ["hamilton-portal-sessions", profileId] })}
+                      >
+                        <ShieldCheck className="h-4 w-4 mr-1.5" /> Refresh saved sessions
                       </Button>
-                      <Button size="sm" variant="ghost" onClick={() => setLiveSessionId(null)}>Cancel</Button>
-                    </div>
+                    )}
+                  </div>
+                  {liveOpened && (
+                    <p className="text-xs text-emerald-800">
+                      Finished in the login window? Click <strong>Refresh saved sessions</strong> to see it
+                      appear below. If the window didn’t open, allow pop-ups for GrantFlow and try again.
+                    </p>
                   )}
                 </>
               ) : (

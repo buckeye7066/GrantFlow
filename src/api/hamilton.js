@@ -1,4 +1,6 @@
 ﻿import { apiFetch } from '@/api/apiClient'
+import client from '@/api/client'
+import { getApiBasePrefixForFetch } from '@/config/env.js'
 
 // â”€â”€ Student portals â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
@@ -251,6 +253,75 @@ export function cancelCloudLogin(liveSessionId) {
     method: 'POST',
     body: JSON.stringify({}),
   })
+}
+
+// Relay ONE normalized live-view input event (mouse / wheel / key) to the live
+// page. Coordinates x,y are 0..1 fractions of the displayed image; the server
+// scales them to the page viewport. Fire-and-forget from the caller's view.
+export function sendCloudLoginInput(liveSessionId, event) {
+  if (!liveSessionId) return Promise.reject(new Error('liveSessionId required'))
+  return apiFetch(`/api/hamilton/automation/sessions/cloud-login/${encodeURIComponent(liveSessionId)}/input`, {
+    method: 'POST',
+    body: JSON.stringify(event || {}),
+  })
+}
+
+// Open the live screen stream (SSE). We use fetch (not EventSource) so we can
+// send the Authorization header the backend's auth middleware requires — a
+// liveSessionId alone must never grant control. Calls onFrame({ data, metadata })
+// for every JPEG frame, onError(reason) on failure/stream-end. Returns a handle
+// with close() that aborts the stream.
+export function streamCloudLogin(liveSessionId, { onFrame, onError, onOpen } = {}) {
+  if (!liveSessionId) throw new Error('liveSessionId required')
+  const controller = new AbortController()
+  const base = getApiBasePrefixForFetch()
+  const url = `${base}/api/hamilton/automation/sessions/cloud-login/${encodeURIComponent(liveSessionId)}/stream`
+  const token = client.getToken?.()
+  const headers = { Accept: 'text/event-stream' }
+  if (token) headers.Authorization = `Bearer ${token}`
+
+  ;(async () => {
+    try {
+      const resp = await fetch(url, { method: 'GET', headers, signal: controller.signal })
+      if (!resp.ok || !resp.body) {
+        onError?.(`stream_http_${resp.status}`)
+        return
+      }
+      onOpen?.()
+      const reader = resp.body.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ''
+      // SSE frames are separated by a blank line. Parse incrementally.
+      for (;;) {
+        const { value, done } = await reader.read()
+        if (done) { onError?.('stream_ended'); break }
+        buffer += decoder.decode(value, { stream: true })
+        let sep
+        while ((sep = buffer.indexOf('\n\n')) !== -1) {
+          const chunk = buffer.slice(0, sep)
+          buffer = buffer.slice(sep + 2)
+          const lines = chunk.split('\n')
+          let eventType = 'message'
+          let dataLine = ''
+          for (const line of lines) {
+            if (line.startsWith(':')) continue // heartbeat comment
+            if (line.startsWith('event:')) eventType = line.slice(6).trim()
+            else if (line.startsWith('data:')) dataLine += line.slice(5).trim()
+          }
+          if (!dataLine) continue
+          let payload
+          try { payload = JSON.parse(dataLine) } catch { continue }
+          if (eventType === 'error') onError?.(payload?.error || 'stream_error')
+          else onFrame?.(payload)
+        }
+      }
+    } catch (err) {
+      if (controller.signal.aborted) return
+      onError?.(err?.message || 'stream_failed')
+    }
+  })()
+
+  return { close: () => controller.abort() }
 }
 
 // ── Two-way portal sync (Hamilton) ─────────────────────────────────────────
