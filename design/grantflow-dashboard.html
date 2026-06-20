@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Anastasia · GrantFlow</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700;12..96,800&family=Inter+Tight:wght@400;500;600&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet" />
+<style>
+  :root{
+    --ink:#14241F; --paper:#F2F5F1; --card:#FBFCFA; --line:#D7DED6;
+    --emerald:#16794E; --emerald-soft:#E2EFE7; --amber:#E6A23C; --amber-soft:#FBECCD; --coral:#E2543B; --coral-soft:#FBE7E1; --sage:#6FA68A;
+    --display:"Bricolage Grotesque",system-ui,sans-serif; --body:"Inter Tight",system-ui,sans-serif; --mono:"Space Mono",ui-monospace,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--paper);color:var(--ink);font-family:var(--body);line-height:1.5;-webkit-font-smoothing:antialiased}
+  .app{display:grid;grid-template-columns:228px 1fr;min-height:100vh}
+  .side{background:var(--ink);color:#cdd9d1;padding:20px 14px;display:flex;flex-direction:column;gap:4px}
+  .side .brand{display:flex;align-items:center;gap:9px;font-family:var(--display);font-weight:800;font-size:19px;color:#fff;margin:4px 6px 18px}
+  .side .brand .mark{width:20px;height:20px;border-radius:6px;background:linear-gradient(150deg,var(--emerald),var(--sage))}
+  .side a{display:flex;gap:10px;align-items:center;text-decoration:none;color:#aebdb4;padding:9px 11px;border-radius:9px;font-size:14.5px}
+  .side a.active{background:#1d322b;color:#fff}
+  .side a:hover{color:#fff}
+  .side .who{margin-top:auto;border-top:1px solid #2a3f37;padding-top:12px;display:flex;gap:10px;align-items:center}
+  .ava{width:32px;height:32px;border-radius:50%;background:linear-gradient(150deg,var(--amber),#cf7d18);display:flex;align-items:center;justify-content:center;font-weight:700;color:#3a2606;font-family:var(--display)}
+  .who small{display:block;color:#8aa093;font-size:12px}
+
+  main{padding:30px 40px 60px}
+  .topline{display:flex;align-items:flex-end;justify-content:space-between;gap:20px;flex-wrap:wrap}
+  .hello .eyebrow{font-family:var(--mono);font-size:12px;letter-spacing:.1em;text-transform:uppercase;color:var(--emerald)}
+  .hello h1{font-family:var(--display);font-weight:800;font-size:30px;letter-spacing:-.02em;margin:6px 0 0}
+  .b{font-family:var(--body);font-weight:600;font-size:14px;border-radius:10px;padding:10px 16px;border:1px solid var(--line);background:transparent;cursor:pointer;text-decoration:none;color:inherit;display:inline-flex;gap:8px;align-items:center}
+  .b.go{background:var(--emerald);color:#fff;border-color:transparent}
+  .b:hover{transform:translateY(-1px)}
+  :focus-visible{outline:3px solid var(--amber);outline-offset:2px}
+
+  /* hero metric */
+  .potential{margin:26px 0 8px;background:var(--ink);color:#eaf1ec;border-radius:20px;padding:26px 28px;display:flex;align-items:center;justify-content:space-between;gap:26px;flex-wrap:wrap;position:relative;overflow:hidden}
+  .potential::after{content:"";position:absolute;right:-60px;top:-60px;width:240px;height:240px;border-radius:50%;background:radial-gradient(circle,rgba(111,166,138,.35),transparent 65%)}
+  .potential .lab{font-family:var(--mono);font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:#9fb4a8}
+  .potential .fig{font-family:var(--mono);font-weight:700;font-size:clamp(40px,7vw,68px);line-height:.95;color:#fff;margin-top:6px}
+  .potential .note{color:#9fb4a8;font-size:13.5px;margin-top:8px}
+  .potential .mini{display:flex;gap:22px;position:relative}
+  .mini b{font-family:var(--mono);font-size:22px;color:#fff;display:block}
+  .mini span{font-size:12px;color:#9fb4a8;font-family:var(--mono);letter-spacing:.06em}
+  .mini .won b{color:var(--amber)}
+
+  /* the pipeline current */
+  .panel{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:22px;margin:18px 0}
+  .panel h2{font-family:var(--mono);font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:#5b6b63;margin:0 0 18px;font-weight:700}
+  .track{display:grid;grid-template-columns:repeat(4,1fr);gap:0;position:relative}
+  .track::before{content:"";position:absolute;left:6%;right:6%;top:21px;height:4px;border-radius:4px;background:linear-gradient(90deg,var(--emerald),var(--sage) 60%,var(--amber))}
+  .stn{position:relative;text-align:center;padding-top:0}
+  .stn .node{width:18px;height:18px;border-radius:50%;background:#fff;border:4px solid var(--emerald);margin:14px auto 14px;position:relative;z-index:2}
+  .stn:nth-child(3) .node{border-color:var(--sage)} .stn:nth-child(4) .node{border-color:var(--amber);background:var(--amber)}
+  .stn .nm{font-family:var(--display);font-weight:700;font-size:15px}
+  .stn .ct{font-family:var(--mono);font-size:12px;color:#5b6b63;margin-top:2px}
+  .stn .amt{font-family:var(--mono);font-size:15px;color:var(--ink);margin-top:6px}
+
+  .cols{display:grid;grid-template-columns:1.4fr 1fr;gap:18px}
+  /* hamilton status */
+  .ham{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:22px}
+  .ham .hdr{display:flex;align-items:center;gap:12px;margin-bottom:14px}
+  .pulse{width:11px;height:11px;border-radius:50%;background:var(--emerald);box-shadow:0 0 0 0 rgba(22,121,78,.6);animation:pulse 2s infinite}
+  @keyframes pulse{70%{box-shadow:0 0 0 10px rgba(22,121,78,0)}100%{box-shadow:0 0 0 0 rgba(22,121,78,0)}}
+  .ham h2{font-family:var(--display);font-weight:700;font-size:18px;margin:0}
+  .ham .sub{font-size:13.5px;color:#5b6b63;margin-left:auto;font-family:var(--mono)}
+  .act{display:flex;align-items:center;gap:12px;padding:12px 0;border-top:1px solid var(--line)}
+  .act:first-of-type{border-top:0}
+  .act .ic{width:30px;height:30px;border-radius:9px;display:flex;align-items:center;justify-content:center;font-size:14px;flex:none}
+  .ic.run{background:var(--emerald-soft);color:var(--emerald)} .ic.you{background:var(--coral-soft);color:var(--coral)} .ic.won{background:var(--amber-soft);color:#a76a16}
+  .act .t{font-size:14.5px} .act .t small{display:block;color:#5b6b63;font-size:12.5px}
+  .act .when{margin-left:auto;font-family:var(--mono);font-size:11.5px;color:#7a8a82}
+  .needbtn{margin-left:auto;font-family:var(--body);font-weight:600;font-size:13px;background:var(--coral);color:#fff;border:0;border-radius:8px;padding:7px 12px;cursor:pointer}
+
+  /* next actions */
+  .todo .item{display:flex;gap:11px;align-items:flex-start;padding:13px 0;border-top:1px solid var(--line)}
+  .todo .item:first-child{border-top:0}
+  .chk{width:18px;height:18px;border-radius:6px;border:2px solid var(--sage);flex:none;margin-top:2px}
+  .todo .t{font-size:14.5px}.todo .t small{display:block;color:#5b6b63;font-size:12.5px}
+  .pill{font-family:var(--mono);font-size:11px;padding:3px 8px;border-radius:999px;margin-left:auto;white-space:nowrap}
+  .pill.due{background:var(--coral-soft);color:#9a3320;border:1px solid #f1cabd}
+  .pill.soon{background:var(--amber-soft);color:#a76a16;border:1px solid #f0d59a}
+
+  @media (max-width:900px){.cols{grid-template-columns:1fr}.track{grid-template-columns:1fr 1fr;gap:18px}.track::before{display:none}.app{grid-template-columns:1fr}.side{flex-direction:row;flex-wrap:wrap}.side .who{margin:0 0 0 auto;border:0;padding:0}main{padding:22px 18px}}
+  @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style>
+</head>
+<body>
+<div class="app">
+  <aside class="side">
+    <div class="brand"><span class="mark"></span>GrantFlow</div>
+    <a href="#" class="active">▦ Pipeline</a>
+    <a href="#">⬡ Portals</a>
+    <a href="#">◷ Deadlines</a>
+    <a href="#">▤ Documents</a>
+    <a href="#">✦ Item funding</a>
+    <a href="#">$ Billing</a>
+    <div class="who"><span class="ava">A</span><div><strong style="color:#fff;font-size:13.5px">Anastasia White</strong><small>Student · Individual</small></div></div>
+  </aside>
+
+  <main>
+    <div class="topline">
+      <div class="hello"><span class="eyebrow">Welcome back</span><h1>Here's where your funding stands.</h1></div>
+      <a class="b go" href="#">Process with Hamilton →</a>
+    </div>
+
+    <section class="potential">
+      <div>
+        <div class="lab">Pipeline potential</div>
+        <div class="fig">$48,250</div>
+        <div class="note">Unrealized funding you qualify for — across 14 active sources.</div>
+      </div>
+      <div class="mini">
+        <div class="won"><b>$12,000</b><span>awarded</span></div>
+        <div><b>6</b><span>applied</span></div>
+        <div><b>8</b><span>preparing</span></div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>Your funding current</h2>
+      <div class="track">
+        <div class="stn"><div class="nm">Preparing</div><div class="node"></div><div class="ct mono">8 sources</div><div class="amt">$21,400</div></div>
+        <div class="stn"><div class="nm">Applied</div><div class="node"></div><div class="ct mono">6 sources</div><div class="amt">$14,850</div></div>
+        <div class="stn"><div class="nm">Under review</div><div class="node"></div><div class="ct mono">3 sources</div><div class="amt">$9,000</div></div>
+        <div class="stn"><div class="nm">Awarded</div><div class="node"></div><div class="ct mono">2 sources</div><div class="amt" style="color:#a76a16">$12,000</div></div>
+      </div>
+    </section>
+
+    <div class="cols">
+      <section class="ham">
+        <div class="hdr"><span class="pulse"></span><h2>Hamilton is working</h2><span class="sub">2 running · 1 needs you</span></div>
+        <div class="act"><span class="ic you">!</span><div class="t">MTSU scholarship — sign-in needed<small>Approve the 2FA on your phone to continue</small></div><button class="needbtn">Open</button></div>
+        <div class="act"><span class="ic run">⟳</span><div class="t">Federal Pell Grant<small>Filling your application…</small></div><span class="when">now</span></div>
+        <div class="act"><span class="ic run">⟳</span><div class="t">TN HOPE Scholarship<small>Submitting through PipelineMT</small></div><span class="when">2m ago</span></div>
+        <div class="act"><span class="ic won">$</span><div class="t">MTSU Centennial Scholarship<small>Awarded — $4,000</small></div><span class="when">yesterday</span></div>
+      </section>
+
+      <section class="ham todo">
+        <div class="hdr"><h2 style="font-family:var(--display)">Next for you</h2></div>
+        <div class="item"><span class="chk"></span><div class="t">Approve MTSU 2FA<small>Hamilton is paused on one sign-in</small></div><span class="pill due">do now</span></div>
+        <div class="item"><span class="chk"></span><div class="t">Add your home address<small>Unlocks Ohio aid alongside your TN school</small></div><span class="pill soon">2 min</span></div>
+        <div class="item"><span class="chk"></span><div class="t">Confirm ACT score (28)<small>So Hamilton can attach it to applications</small></div><span class="pill soon">soon</span></div>
+        <div class="item"><span class="chk"></span><div class="t">Review Gates Scholarship essay<small>Draft ready for your read</small></div><span class="pill soon">5 min</span></div>
+      </section>
+    </div>
+  </main>
+</div>
+</body>
+</html>
