@@ -245,3 +245,46 @@ export function cancelCloudLogin(liveSessionId) {
     body: JSON.stringify({}),
   })
 }
+
+// ── Two-way portal sync (Hamilton) ─────────────────────────────────────────
+// Endpoints provided by the portal-sync backend framework, mounted at
+// /api/hamilton/portal-sync. The status reader returns real portal_sync_runs
+// rows — the UI surfaces actual run status/errors, never a faked "synced!".
+
+// Pull data FROM the portal into this profile.
+export function runPortalSyncRead(profileId, portalHost) {
+  if (!profileId) return Promise.reject(new Error('profileId required'))
+  if (!portalHost) return Promise.reject(new Error('portalHost required'))
+  return apiFetch('/api/hamilton/portal-sync/read', {
+    method: 'POST',
+    body: JSON.stringify({ profileId, portalHost }),
+  })
+}
+
+// Push this profile's data TO the portal.
+export function runPortalSyncWrite(profileId, portalHost) {
+  if (!profileId) return Promise.reject(new Error('profileId required'))
+  if (!portalHost) return Promise.reject(new Error('portalHost required'))
+  return apiFetch('/api/hamilton/portal-sync/write', {
+    method: 'POST',
+    body: JSON.stringify({ profileId, portalHost }),
+  })
+}
+
+// Two-way sync (read + write).
+export function runPortalSyncBoth(profileId, portalHost) {
+  if (!profileId) return Promise.reject(new Error('profileId required'))
+  if (!portalHost) return Promise.reject(new Error('portalHost required'))
+  return apiFetch('/api/hamilton/portal-sync/sync', {
+    method: 'POST',
+    body: JSON.stringify({ profileId, portalHost }),
+  })
+}
+
+// Recent portal_sync_runs for a profile (optionally one host).
+export function listPortalSyncRuns(profileId, portalHost = null) {
+  if (!profileId) return Promise.reject(new Error('profileId required'))
+  const params = new URLSearchParams({ profileId })
+  if (portalHost) params.set('portalHost', portalHost)
+  return apiFetch(`/api/hamilton/portal-sync/runs?${params.toString()}`)
+}

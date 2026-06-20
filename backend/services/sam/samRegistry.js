@@ -201,6 +201,17 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
     description: 'Verifies the portal-policy registry endpoint is live so Hamilton can refuse automation on portals where it is not allowed.',
   },
   {
+    id: 'agent.hamilton.portalSync.health',
+    label: 'Hamilton portal sync (two-way) health',
+    category: SAM_CATEGORIES.APPLICATION_WORKFLOW_INTEGRITY,
+    kind: CHECK_KIND.HTTP,
+    method: 'GET',
+    path: '/api/admin/portal-sync/health',
+    expectStatus: 200,
+    severityOnFailure: SEVERITY.MEDIUM,
+    description: 'Surfaces the two-way portal sync status in Mission Control: which connectors are available (listConnectors) plus the latest portal_sync_runs status/timestamp/error per profile+host. Degrades to {ok:false,status:"not_installed"} (still HTTP 200) when the portal_sync_runs table has not been migrated in yet, so Sam reports "not installed" rather than a failure.',
+  },
+  {
     id: 'agent.hamilton.documents',
     label: 'Hamilton document stack',
     category: SAM_CATEGORIES.APPLICATION_WORKFLOW_INTEGRITY,

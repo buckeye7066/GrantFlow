@@ -3996,3 +3996,79 @@ registerTool({
     return runOutlookGrantFeed(db, { top })
   },
 })
+
+// ── Hamilton two-way portal sync ──────────────────────────────────────────
+//
+// Gating rationale: runPortalSync reads from / writes to a user's *authenticated*
+// portal session (Hamilton acts inside the real account using a saved login). That
+// is the same class of power as owner.run_agent / owner.run_crawler — it makes an
+// agent act on a portal on someone's behalf — so it is gated requiresOwner:true
+// (owner account buckeye7066@gmail.com only), enforced in invokeTool BEFORE the
+// handler runs. The status reader is read-only but is kept owner-scoped too, for
+// consistency with the other owner.* read-status tools (e.g. owner.email_grants_status).
+registerTool({
+  name: 'owner.run_portal_sync',
+  description: 'OWNER ONLY. Run Hamilton\'s two-way portal sync for a profile against one portal host: pull the latest data FROM the portal (read), push this profile\'s data TO the portal (write), or both. Uses the profile\'s saved/authenticated portal session, so it is owner-gated. Use when the owner says e.g. "sync MTSU for this profile" or "pull/push my portal data".',
+  requiresOwner: true,
+  schema: {
+    type: 'object',
+    properties: {
+      profileId: { type: 'string', description: 'Profile to sync.' },
+      portalHost: { type: 'string', description: 'Portal host to sync, e.g. mtsu.edu.' },
+      direction: {
+        type: 'string',
+        enum: ['read', 'write', 'both'],
+        description: "Sync direction: 'read' pulls from the portal, 'write' pushes to it, 'both' does both. Default 'read'.",
+      },
+    },
+    required: ['profileId', 'portalHost'],
+  },
+  handler: async (params, context) => {
+    const db = context?.db
+    if (!db) throw new Error('Database connection required')
+    const profileId = String(params?.profileId || '').trim()
+    const portalHost = String(params?.portalHost || '').trim()
+    if (!profileId) throw new Error('profileId is required')
+    if (!portalHost) throw new Error('portalHost is required')
+    const direction = ['read', 'write', 'both'].includes(params?.direction) ? params.direction : 'read'
+    const actorUserId = context?.ctx?.userId ?? context?.user?.id ?? 'anya_owner'
+    // The portal-sync framework is built by a parallel agent; import lazily so
+    // this tool registers cleanly even before that module is merged.
+    let runPortalSync
+    try {
+      ;({ runPortalSync } = await import('./hamilton/portalSync/index.js'))
+    } catch {
+      return { ok: false, error: 'portal_sync_unavailable', detail: 'Portal sync framework is not installed yet.' }
+    }
+    if (typeof runPortalSync !== 'function') {
+      return { ok: false, error: 'portal_sync_unavailable', detail: 'runPortalSync export missing.' }
+    }
+    return runPortalSync(db, { profileId, portalHost, direction, actorUserId })
+  },
+})
+
+registerTool({
+  name: 'owner.get_portal_sync_status',
+  description: 'OWNER ONLY. Show the latest two-way portal sync runs for a profile (optionally a single portal host): status, direction, connector, timestamp, and any error — read straight from portal_sync_runs (no faked "synced!" states). Use when the owner asks "did the portal sync work?" or "what\'s the portal sync status?".',
+  requiresOwner: true,
+  schema: {
+    type: 'object',
+    properties: {
+      profileId: { type: 'string', description: 'Profile to report on.' },
+      portalHost: { type: 'string', description: 'Optional: restrict to a single portal host, e.g. mtsu.edu.' },
+      limit: { type: 'number', description: 'How many recent runs to return (default 25, max 100).' },
+    },
+    required: ['profileId'],
+  },
+  handler: async (params, context) => {
+    const db = context?.db
+    if (!db) throw new Error('Database connection required')
+    const profileId = String(params?.profileId || '').trim()
+    if (!profileId) throw new Error('profileId is required')
+    const portalHost = params?.portalHost ? String(params.portalHost).trim() : null
+    const limit = Math.max(1, Math.min(100, Number(params?.limit) || 25))
+    const { getPortalSyncRuns } = await import('./hamilton/portalSync/portalSyncHealth.js')
+    const runs = await getPortalSyncRuns(db, { profileId, portalHost, limit })
+    return { ok: true, profile_id: profileId, portal_host: portalHost, count: runs.length, runs }
+  },
+})
