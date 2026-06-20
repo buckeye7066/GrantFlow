@@ -848,6 +848,35 @@ router.post('/sessions/:id/expire', async (req, res) => {
   return res.json({ ok: true, session })
 })
 
+// Convenience for the session-capture tool: hand the (already authenticated,
+// profile-scoped) caller a ready-to-use token so they don't have to copy a
+// bearer token out of DevTools. We reuse the caller's existing access token —
+// the same credential they already authenticated this request with — and return
+// it alongside the api base + profileId so the UI can render a pre-filled
+// `node tools/hamilton-session-capture/capture.mjs ...` command. The token is
+// only ever returned to the verified owner of the target profile over HTTPS.
+router.post('/sessions/capture-token', async (req, res) => {
+  const profileId = String(req.body?.profileId || req.body?.profile_id || '').trim()
+  const user = await requireProfileScope(req, res, profileId)
+  if (!user) return
+  const authHeader = String(req.headers?.authorization || '')
+  const token = authHeader.toLowerCase().startsWith('bearer ')
+    ? authHeader.slice(7).trim()
+    : authHeader.trim()
+  if (!token) {
+    return res.status(400).json({
+      error: 'no_bearer_token',
+      message: 'No bearer token on this request to hand to the capture tool.',
+    })
+  }
+  return res.json({
+    ok: true,
+    token,
+    profileId,
+    api_base: `${req.protocol}://${req.get('host')}`,
+  })
+})
+
 // Login-time readiness: is a schedule set, which portals still need a session
 // captured (so the owner can clear 2FA), and when does Hamilton next run.
 // Powers the login reminder banner.

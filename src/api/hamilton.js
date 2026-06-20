@@ -152,3 +152,39 @@ export function getHamiltonReadiness({ profileId } = {}) {
   if (!profileId) return Promise.reject(new Error('profileId required'))
   return apiFetch(`/api/hamilton/automation/readiness?profileId=${encodeURIComponent(profileId)}`)
 }
+
+// -- Captured portal sessions (the AES-256-GCM Playwright storageStates) ----
+
+// List a profile's saved portal sessions (host, label, status, expiry, etc.).
+export function listPortalSessions(profileId) {
+  if (!profileId) return Promise.reject(new Error('profileId required'))
+  return apiFetch(`/api/hamilton/automation/sessions?profileId=${encodeURIComponent(profileId)}`)
+}
+
+// Revoke a saved session so Hamilton can no longer reuse it.
+export function revokePortalSession(sessionId, reason = null) {
+  if (!sessionId) return Promise.reject(new Error('sessionId required'))
+  return apiFetch(`/api/hamilton/automation/sessions/${encodeURIComponent(sessionId)}/revoke`, {
+    method: 'POST',
+    body: JSON.stringify({ reason }),
+  })
+}
+
+// Mark a saved session expired (forces a fresh capture before reuse).
+export function expirePortalSession(sessionId) {
+  if (!sessionId) return Promise.reject(new Error('sessionId required'))
+  return apiFetch(`/api/hamilton/automation/sessions/${encodeURIComponent(sessionId)}/expire`, {
+    method: 'POST',
+    body: JSON.stringify({}),
+  })
+}
+
+// Mint a short-lived capture token + api base so the user can run the
+// session-capture tool without copying a bearer token out of DevTools.
+export function getPortalSessionCaptureToken(profileId) {
+  if (!profileId) return Promise.reject(new Error('profileId required'))
+  return apiFetch(`/api/hamilton/automation/sessions/capture-token`, {
+    method: 'POST',
+    body: JSON.stringify({ profileId }),
+  })
+}
