@@ -102,6 +102,40 @@ const KNOWN_ITEM_SOURCES = {
               keywords: ['van', 'wheelchair', 'accessible', 'conversion'],
       },
         ],
+    // Vehicles/vans specifically for ORGANIZATIONS (nonprofits, churches, schools).
+    // These programs grant or deeply discount vehicles to 501(c)(3)s and community groups.
+    nonprofit_vehicle: [
+      {
+              name: 'Good News Garage — Nonprofit Vehicle Partnerships',
+              url: 'https://www.goodnewsgarage.org/about/our-programs/',
+              description: 'Partners with social-service agencies and nonprofits to place donated, refurbished vehicles with the people and programs they serve.',
+              keywords: ['van', 'vehicle', 'nonprofit', 'agency', 'donation', 'fleet'],
+      },
+      {
+              name: 'Enterprise Mobility Foundation — Community Grants',
+              url: 'https://www.enterprisemobility.com/en/about/foundation.html',
+              description: 'Enterprise Mobility Foundation funds nonprofits, including transportation-access and mobility programs that need vehicles and vans for community service.',
+              keywords: ['van', 'vehicle', 'transportation', 'nonprofit', 'mobility', 'community'],
+      },
+      {
+              name: 'Ford Motor Company Fund — Community Grants',
+              url: 'https://www.fordfund.org/',
+              description: 'Ford Fund makes grants to nonprofits for community programs and mobility/transportation needs; some programs support vehicle access for service organizations.',
+              keywords: ['van', 'vehicle', 'transportation', 'nonprofit', 'mobility', 'corporate giving'],
+      },
+      {
+              name: 'Toyota USA Foundation & Community Grants',
+              url: 'https://www.toyota.com/usa/community/',
+              description: 'Toyota community and mobility grants supporting nonprofits, including organizations needing vehicles for outreach and transportation programs.',
+              keywords: ['van', 'vehicle', 'transportation', 'nonprofit', 'mobility', 'corporate giving'],
+      },
+      {
+              name: 'USDA Rural Development — Community Facilities (vehicles/equipment)',
+              url: 'https://www.rd.usda.gov/programs-services/community-facilities/community-facilities-direct-loan-grant-program',
+              description: 'Community Facilities grants/loans help rural nonprofits, tribes, and public bodies buy essential community equipment and vehicles (buses, vans, ambulances).',
+              keywords: ['van', 'bus', 'vehicle', 'rural', 'nonprofit', 'community facilities', 'usda'],
+      },
+        ],
     technology: [
       {
               name: 'TechSoup',
@@ -134,6 +168,39 @@ const KNOWN_ITEM_SOURCES = {
               keywords: ['internet', 'computer', 'affordable', 'low income'],
       },
         ],
+    // Education / classroom technology funders — for SCHOOLS, teachers, and youth programs.
+    school_technology: [
+      {
+              name: 'DonorsChoose — Classroom Project Funding',
+              url: 'https://www.donorschoose.org/',
+              description: 'Public-school teachers post classroom projects (laptops, tablets, STEM kits, supplies) and donors fund them. The leading crowdfunding platform for classroom tech and materials.',
+              keywords: ['classroom', 'teacher', 'school', 'technology', 'laptop', 'tablet', 'stem', 'supplies'],
+      },
+      {
+              name: 'Digital Wish — School Technology Grants',
+              url: 'https://www.digitalwish.org/',
+              description: 'Grants and discounted technology for schools and teachers, including computers, tablets, and classroom tech projects.',
+              keywords: ['school', 'teacher', 'technology', 'computer', 'tablet', 'classroom', 'grant'],
+      },
+      {
+              name: 'Tech for Learning (Computers with Causes)',
+              url: 'https://www.computerswithcauses.org/',
+              description: 'Donated computers and technology for schools, nonprofits, students, and educational programs.',
+              keywords: ['school', 'technology', 'computer', 'student', 'education', 'donation'],
+      },
+      {
+              name: 'E-Rate Program (Universal Service / USAC)',
+              url: 'https://www.usac.org/e-rate/',
+              description: 'Federal E-Rate program discounts internet access and connectivity for eligible schools and libraries.',
+              keywords: ['school', 'library', 'internet', 'connectivity', 'broadband', 'e-rate', 'federal'],
+      },
+      {
+              name: 'Best Buy Foundation — Teen Tech Centers & Grants',
+              url: 'https://corporate.bestbuy.com/best-buy-foundation/',
+              description: 'Corporate giving for technology access and STEM/teen programs at schools and youth-serving nonprofits.',
+              keywords: ['technology', 'stem', 'youth', 'school', 'teen', 'corporate giving', 'grant'],
+      },
+        ],
     equipment: [
       {
               name: 'Good360',
@@ -152,6 +219,18 @@ const KNOWN_ITEM_SOURCES = {
               url: 'https://www.rd.usda.gov/programs-services/all-programs',
               description: 'USDA programs for rural community equipment, including Community Facilities grants.',
               keywords: ['equipment', 'rural', 'community', 'usda'],
+      },
+      {
+              name: 'Walmart Community Grants — Local Equipment & Supplies',
+              url: 'https://walmart.org/how-we-give/local-community-grants',
+              description: 'Local store-level grants ($250–$5,000) to nonprofits, schools, and faith groups for equipment, supplies, and community programs.',
+              keywords: ['equipment', 'supplies', 'nonprofit', 'school', 'corporate giving', 'community grant'],
+      },
+      {
+              name: 'Lowe’s / Home Depot Community Improvement Grants',
+              url: 'https://corporate.homedepot.com/page/building-stronger-communities',
+              description: 'Corporate community grants and product donations for tools, equipment, and facility-improvement projects at nonprofits and community organizations.',
+              keywords: ['equipment', 'tools', 'supplies', 'nonprofit', 'facility', 'corporate giving'],
       },
         ],
     training: [
@@ -392,14 +471,209 @@ const KNOWN_ITEM_SOURCES = {
               keywords: ['nursing', 'workforce', 'return to practice', 'reinstatement', 'ana', 'career recovery'],
       },
     ],
+    // ---------------------------------------------------------------------
+    // APPLICANT-TYPE / CONTEXT categories (not keyed off the literal item).
+    // These are selected by the requesting profile's applicant type so that,
+    // e.g., a nonprofit asking for ANY item also sees capacity / in-kind /
+    // community-foundation funders that routinely cover equipment & vehicles.
+    // ---------------------------------------------------------------------
+    nonprofit_capacity: [
+      {
+              name: 'Good360 — Product Philanthropy for Nonprofits',
+              url: 'https://good360.org/get-help/nonprofit-membership/',
+              description: 'Connects vetted 501(c)(3) nonprofits with billions in donated goods — equipment, supplies, furniture, electronics, and more — from major corporate donors.',
+              keywords: ['nonprofit', 'in-kind', 'donation', 'equipment', 'supplies', 'product philanthropy'],
+      },
+      {
+              name: 'Candid / Foundation Directory (Find Funders)',
+              url: 'https://candid.org/find-funding',
+              description: 'The authoritative directory of U.S. foundations and grantmakers. Search by subject, geography, and support type (including equipment and capital) to find funders for your mission.',
+              keywords: ['nonprofit', 'foundation', 'grant', 'directory', 'capacity', 'capital'],
+      },
+      {
+              name: 'GrantWatch — Nonprofit & Equipment Grants',
+              url: 'https://www.grantwatch.com/cat/41/nonprofits-grants.html',
+              description: 'Curated, searchable listings of foundation, corporate, and government grants for nonprofits, including equipment, vehicle, and capacity-building grants.',
+              keywords: ['nonprofit', 'grant', 'equipment', 'capacity building', 'directory'],
+      },
+      {
+              name: 'Grants.gov — Federal Grants for Organizations',
+              url: 'https://www.grants.gov/search-grants',
+              description: 'Searchable catalog of all federal grant opportunities. Filter by eligibility (nonprofits, public agencies, schools) and category to find funding that can cover equipment and capital needs.',
+              keywords: ['nonprofit', 'federal', 'grant', 'organization', 'equipment', 'capital'],
+      },
+    ],
+    community_foundation: [
+      {
+              name: 'Council on Foundations — Community Foundation Locator',
+              url: 'https://www.cof.org/community-foundation-locator',
+              description: 'Find your local community foundation. Community foundations make local grants to nonprofits, schools, and projects — frequently funding equipment, vehicles, and program needs in their service area.',
+              keywords: ['community foundation', 'local', 'grant', 'nonprofit', 'regional'],
+      },
+      {
+              name: 'United Way — Local Chapter Finder',
+              url: 'https://www.unitedway.org/local',
+              description: 'Local United Way chapters fund and partner with community nonprofits, often supporting equipment, transportation, and program-delivery needs.',
+              keywords: ['united way', 'local', 'community', 'nonprofit', 'grant'],
+      },
+    ],
+    corporate_inkind: [
+      {
+              name: 'Good360 — Corporate In-Kind Donations',
+              url: 'https://good360.org/',
+              description: 'Routes excess and new product (electronics, furniture, equipment, supplies) from leading retailers and manufacturers to qualified nonprofits and schools.',
+              keywords: ['in-kind', 'corporate', 'donation', 'equipment', 'supplies', 'nonprofit'],
+      },
+      {
+              name: 'TechSoup — Donated & Discounted Tech for Orgs',
+              url: 'https://www.techsoup.org/',
+              description: 'Donated and deeply discounted software, hardware, and cloud services for nonprofits, libraries, and (in many programs) schools.',
+              keywords: ['in-kind', 'technology', 'software', 'hardware', 'nonprofit', 'library'],
+      },
+      {
+              name: 'Benevity / Corporate Community Giving Portals',
+              url: 'https://benevity.com/causes',
+              description: 'Many large employers run grant and product-giving programs through Benevity. Nonprofits can register to receive corporate grants and in-kind support.',
+              keywords: ['corporate giving', 'in-kind', 'grant', 'nonprofit', 'employer'],
+      },
+    ],
+    school_grants: [
+      {
+              name: 'U.S. Department of Education — Grant Programs',
+              url: 'https://www.ed.gov/grants-and-programs',
+              description: 'Federal education grant programs for schools and districts, including funding that can support equipment, technology, and program materials.',
+              keywords: ['school', 'education', 'federal', 'grant', 'district', 'technology', 'equipment'],
+      },
+      {
+              name: 'NEA Foundation — Grants for Educators',
+              url: 'https://www.neafoundation.org/for-educators/',
+              description: 'Grants to public-school educators for classroom resources, materials, and learning tools.',
+              keywords: ['school', 'teacher', 'educator', 'classroom', 'grant', 'materials'],
+      },
+      {
+              name: 'DonorsChoose — Classroom Project Funding',
+              url: 'https://www.donorschoose.org/',
+              description: 'Public-school teachers request classroom resources (technology, supplies, equipment) and donors fund them.',
+              keywords: ['school', 'teacher', 'classroom', 'technology', 'supplies', 'equipment'],
+      },
+    ],
+    faith_based: [
+      {
+              name: 'Lilly Endowment / Religion Grant Directories',
+              url: 'https://lillyendowment.org/for-grantseekers/',
+              description: 'Major funder of religious and community organizations. Good entry point for faith-based ministries seeking program, equipment, and capacity grants.',
+              keywords: ['faith-based', 'church', 'ministry', 'religious', 'grant', 'congregation'],
+      },
+      {
+              name: 'ECCU / Christian Community Foundations',
+              url: 'https://www.eccu.org/resources',
+              description: 'Resources and grant connections for churches and faith-based nonprofits, including vehicle, facility, and equipment needs.',
+              keywords: ['faith-based', 'church', 'ministry', 'vehicle', 'equipment', 'facility'],
+      },
+    ],
+    veteran_org: [
+      {
+              name: 'The Home Depot Foundation — Veteran Nonprofits',
+              url: 'https://corporate.homedepot.com/foundation',
+              description: 'Grants and product donations to nonprofits serving veterans, including facility, equipment, and vehicle-related projects.',
+              keywords: ['veteran', 'nonprofit', 'grant', 'equipment', 'facility', 'corporate giving'],
+      },
+      {
+              name: 'VA — Grants for Veteran-Serving Organizations',
+              url: 'https://www.va.gov/grants/',
+              description: 'Department of Veterans Affairs grant programs for organizations serving veterans, including transportation and supportive-services grants.',
+              keywords: ['veteran', 'va', 'grant', 'organization', 'transportation', 'supportive services'],
+      },
+    ],
+}
+
+/**
+ * Normalize whatever profile-ish object we are handed into the
+ * `buildProfileSignals()` shape we actually read from. Callers pass either a
+ * raw signals object, a `{ signals }` wrapper, or a resolved crawler context.
+ */
+function resolveSignals(profileLike) {
+  if (!profileLike || typeof profileLike !== 'object') return null
+  if (profileLike.signals && typeof profileLike.signals === 'object') return profileLike.signals
+  // Heuristic: a bare signals object has applicantTypes/needs/location keys.
+  if (profileLike.applicantTypes || profileLike.needs || profileLike.applicantType) return profileLike
+  return null
+}
+
+const toSet = (v) => (v instanceof Set ? v : new Set(Array.isArray(v) ? v : []))
+
+/**
+ * Detect the requesting profile's applicant type so we can add the right
+ * cross-cutting funder categories. Falls back to neutral (no extra gating) when
+ * signals are sparse — missing fields must never EXCLUDE results (canonical G4).
+ *
+ * Returns one of: 'nonprofit' | 'school' | 'business' | 'individual' | 'unknown'.
+ */
+function detectApplicantType(signals) {
+  if (!signals) return 'unknown'
+  const applicantType = String(signals.applicantType || '').toLowerCase()
+  const types = toSet(signals.applicantTypes)
+  const typeText = [...types].map((t) => String(t).toLowerCase()).join(' ')
+  const org = signals.organization || {}
+
+  const isSchool = /school|district|university|college|academy|classroom|teacher|educator/.test(typeText)
+  if (isSchool) return 'school'
+
+  if (applicantType === 'organization' || org.is501c3 || org.faithBased ||
+      /nonprofit|non-profit|501c3|501\(c\)|foundation|charit|ministry|church|community organization/.test(typeText)) {
+    return 'nonprofit'
+  }
+  if (applicantType === 'business' || /business|startup|entrepreneur|self_employed|llc|sole prop/.test(typeText)) {
+    return 'business'
+  }
+  if (applicantType === 'student' || applicantType === 'individual' || types.size > 0) {
+    return 'individual'
+  }
+  return 'unknown'
+}
+
+/**
+ * Given an applicant type + base item categories, return the extra
+ * cross-cutting KNOWN_ITEM_SOURCES categories that are relevant to who is
+ * asking. This is what makes "a nonprofit asking for a van" also surface
+ * vehicle-donation-for-nonprofits, in-kind, and community-foundation funders.
+ */
+function applicantTypeCategories(applicantType, baseCategories, signals) {
+  const out = new Set()
+  const base = new Set(baseCategories || [])
+  const isVehicle = base.has('vehicle') || base.has('van')
+  const isTech = base.has('technology')
+
+  if (applicantType === 'nonprofit') {
+    out.add('nonprofit_capacity')
+    out.add('community_foundation')
+    out.add('corporate_inkind')
+    if (isVehicle) out.add('nonprofit_vehicle')
+    if (signals?.organization?.faithBased) out.add('faith_based')
+    if (signals?.military instanceof Set && signals.military.size > 0) out.add('veteran_org')
+  } else if (applicantType === 'school') {
+    out.add('school_grants')
+    out.add('community_foundation')
+    out.add('corporate_inkind')
+    if (isTech) out.add('school_technology')
+    if (isVehicle) out.add('nonprofit_vehicle')
+  } else if (applicantType === 'business') {
+    out.add('small_business')
+  }
+  // 'individual' / 'unknown': rely on the item-keyed categories + need signals;
+  // do not bolt on org-only funders (keeps individual results precise).
+  return [...out]
 }
 
 /**
    * Parse the item request to extract what's being asked for and build search queries.
+   * When `profileLike` (signals or a {signals} wrapper) is supplied, the requesting
+   * profile's applicant type adds relevant funder categories so results match WHO
+   * is asking, not just WHAT they asked for.
    */
-function parseItemRequest(request) {
+function parseItemRequest(request, profileLike = null) {
     if (!request || typeof request !== 'string') {
-          return { raw: '', type: 'general', categories: [], searchQueries: [] }
+          return { raw: '', type: 'general', categories: [], searchQueries: [], applicantType: 'unknown' }
     }
 
   const lower = request.toLowerCase().trim()
@@ -431,22 +705,63 @@ function parseItemRequest(request) {
         }
   }
 
-  if (categories.length === 0) {
-        categories.push('general')
+  // --- Profile-aware category expansion ---------------------------------
+  // Add cross-cutting funder categories based on WHO is asking. Missing
+  // signals are neutral (applicantType 'unknown' adds nothing), never
+  // exclusionary, per canonical rule G4.
+  const signals = resolveSignals(profileLike)
+  const applicantType = detectApplicantType(signals)
+  for (const extra of applicantTypeCategories(applicantType, categories, signals)) {
+        if (!categories.includes(extra)) categories.push(extra)
   }
 
-  // Build search queries from the actual item request
+  // Always-on safety net: a "general" item request from an org should still
+  // reach broad funder directories so we never return zero (canonical G2).
+  if (categories.length === 0) {
+        if (applicantType === 'nonprofit') {
+              categories.push('nonprofit_capacity', 'community_foundation')
+        } else if (applicantType === 'school') {
+              categories.push('school_grants', 'community_foundation')
+        } else if (applicantType === 'business') {
+              categories.push('small_business')
+        } else {
+              categories.push('general')
+        }
+  }
+
+  // Build search queries from the actual item request.
   // Primary query: exactly what was asked for + "free" or "donation" or "grant"
   searchQueries.push(`free ${request}`)
     searchQueries.push(`${request} donation program`)
     searchQueries.push(`${request} grant assistance`)
-    searchQueries.push(`${request} nonprofit`)
+
+  // Applicant-type-aware queries: a nonprofit wants funder/in-kind language;
+  // a school wants classroom/district grant language.
+  if (applicantType === 'nonprofit') {
+        searchQueries.push(`${request} grant for nonprofits`)
+        searchQueries.push(`${request} in-kind donation nonprofit`)
+  } else if (applicantType === 'school') {
+        searchQueries.push(`${request} grant for schools`)
+        searchQueries.push(`${request} classroom grant`)
+  } else if (applicantType === 'business') {
+        searchQueries.push(`${request} small business grant`)
+  } else {
+        searchQueries.push(`${request} nonprofit`)
+  }
+
+  // Mission / focus-area keyword (community foundations & corporate giving
+  // skew toward mission-aligned applicants).
+  const missionKw = signals?.keywordSet instanceof Set
+        ? [...signals.keywordSet].find((k) => typeof k === 'string' && k.length >= 4)
+        : null
+  if (missionKw) searchQueries.push(`${request} ${missionKw} grant`)
 
   return {
         raw: request,
         type: categories[0],
         categories,
         searchQueries,
+        applicantType,
   }
 }
 
@@ -457,7 +772,9 @@ function parseItemRequest(request) {
 async function searchWebForItem(itemRequest, profile) {
     const results = []
         const seenUrls = new Set()
-    const signals = profile?.signals
+    // Accept a raw signals object, a {signals} wrapper, or a resolved context.
+    const signals = resolveSignals(profile)
+    const applicantType = detectApplicantType(signals)
 
   // Build targeted search queries
   const queries = []
@@ -467,12 +784,37 @@ async function searchWebForItem(itemRequest, profile) {
     queries.push(`"${itemRequest}" donation nonprofit`)
     queries.push(`"${itemRequest}" grant funding`)
 
+  // Applicant-type-aware queries — surface funders that match WHO is asking.
+  if (applicantType === 'nonprofit') {
+        queries.push(`"${itemRequest}" grant for nonprofits`)
+        queries.push(`"${itemRequest}" in-kind donation 501c3`)
+  } else if (applicantType === 'school') {
+        queries.push(`"${itemRequest}" grant for schools`)
+        queries.push(`"${itemRequest}" classroom grant`)
+  } else if (applicantType === 'business') {
+        queries.push(`"${itemRequest}" small business grant`)
+  }
+
   // Profile-enhanced queries
   const state = signals?.location?.state
     if (state) {
-          queries.push(`"${itemRequest}" free ${state}`)
+          // Org applicants benefit from a state community-foundation hint.
+          if (applicantType === 'nonprofit' || applicantType === 'school') {
+                queries.push(`"${itemRequest}" ${state} community foundation grant`)
+          } else {
+                queries.push(`"${itemRequest}" free ${state}`)
+          }
           queries.push(`"${itemRequest}" program ${state}`)
     }
+
+  // Mission / focus-area aware query (drives community-foundation & corporate
+  // giving relevance for org applicants). Neutral when signals are sparse.
+  const missionKw = signals?.keywordSet instanceof Set
+        ? [...signals.keywordSet].find((k) => typeof k === 'string' && k.length >= 4)
+        : null
+  if (missionKw && (applicantType === 'nonprofit' || applicantType === 'school')) {
+        queries.push(`"${itemRequest}" ${missionKw} grant`)
+  }
 
   // Profile-enhanced queries: use ALL available signals for targeted searches
   if (signals?.military?.size > 0) {
@@ -498,9 +840,10 @@ async function searchWebForItem(itemRequest, profile) {
     queries.push(`"${itemRequest}" student scholarship`)
   }
 
-  // Run searches (cap at 8 to cover more profile dimensions)
-  // (increased from 6 since we now have richer, more targeted queries)
-  const searchPromises = queries.slice(0, 8).map(async (query) => {
+  // De-duplicate queries (applicant-type + profile dimensions can overlap),
+  // then cap at 10 to cover the richer, more targeted query set.
+  const uniqueQueries = [...new Set(queries)]
+  const searchPromises = uniqueQueries.slice(0, 10).map(async (query) => {
         try {
                 const searchUrl = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`
 
@@ -630,10 +973,13 @@ export async function crawlItemFunding(profileInput, options = {}) {
   }
 
     const searchKeywords = signals ? mergePlanKeywords(buildSearchKeywords(profile, 10), queryPlan).slice(0, 20) : []
-        const parsed = parseItemRequest(itemRequest)
+        // Pass profile signals so categories reflect WHO is asking (applicant type),
+        // not just WHAT the item is.
+        const parsed = parseItemRequest(itemRequest, signals)
 
   log.info(`[ItemFundingCrawler] Searching for: "${itemRequest}"`)
     log.info(`[ItemFundingCrawler] Detected categories: ${parsed.categories.join(', ')}`)
+    log.info(`[ItemFundingCrawler] Applicant type: ${parsed.applicantType}`)
     log.info(`[ItemFundingCrawler] Profile: ${profile.display_name || profile.name || 'Unknown'}`)
 
   const seenUrls = new Set()
@@ -694,7 +1040,8 @@ export async function crawlItemFunding(profileInput, options = {}) {
   // === 2. LIVE WEB SEARCH for the specific item ===
   try {
         log.info(`[ItemFundingCrawler] Searching web for "${itemRequest}"...`)
-        const rawWebResults = await searchWebForItem(itemRequest, profile)
+        // Pass signals (wrapped) so web queries are applicant-type/profile aware.
+        const rawWebResults = await searchWebForItem(itemRequest, { profile, signals })
         const webResults = Array.isArray(rawWebResults) && rawWebResults !== null ? rawWebResults : []
 
       log.info(`[ItemFundingCrawler] Web search found ${webResults.length} results`)
@@ -764,6 +1111,60 @@ export async function crawlItemFunding(profileInput, options = {}) {
       }
   } catch (error) {
         console.error(`[ItemFundingCrawler] Web search error:`, error.message)
+  }
+
+  // === 3. ZERO-RESULT SAFETY NET (canonical G2) ===
+  // If nothing matched (e.g. live web search is unavailable because no network/
+  // search keys, AND the item didn't map to a known category), still return real,
+  // broad funder directories appropriate to the applicant type. Never return an
+  // empty set for a reasonable request.
+  if (results.length === 0) {
+        const fallbackCategories =
+              parsed.applicantType === 'school'
+                    ? ['school_grants', 'community_foundation', 'corporate_inkind']
+                    : parsed.applicantType === 'business'
+                          ? ['small_business']
+                          : ['nonprofit_capacity', 'community_foundation', 'corporate_inkind']
+        log.info(`[ItemFundingCrawler] Zero results — applying ${parsed.applicantType} fallback directories`)
+        for (const category of fallbackCategories) {
+              for (const source of KNOWN_ITEM_SOURCES[category] || []) {
+                    const urlKey = source.url.toLowerCase().replace(/\/$/, '')
+                    if (seenUrls.has(urlKey)) continue
+                    seenUrls.add(urlKey)
+                    const opp = {
+                          title: `${source.name} — ${category.replace(/_/g, ' ')}`,
+                          sponsor: source.name,
+                          description: source.description,
+                          url: source.url,
+                          application_url: source.url,
+                          source_url: source.url,
+                          amount_min: 0,
+                          amount_max: 0,
+                          amount_description: 'See source for program details',
+                          deadline: null,
+                          deadline_type: 'rolling',
+                          eligibility: `See ${source.name} website for eligibility`,
+                          is_national: true,
+                          categories: [category, 'item_funding'],
+                          keywords: [...(source.keywords || []), itemRequest.toLowerCase()],
+                          opportunity_type: 'program',
+                          item_requested: itemRequest,
+                    }
+                    if (!enforceOpportunityPolicy(opp).ok) continue
+                    results.push({
+                          ...opp,
+                          match_score: 45,
+                          match_reasons: [
+                                `Broad funder directory relevant to ${parsed.applicantType === 'unknown' ? 'your organization' : parsed.applicantType} applicants`,
+                                'Shown because no exact item match was found (start here)',
+                          ],
+                          matched_signals: [],
+                          crawler_type: 'item_funding',
+                          source: source.name,
+                          _discovery_method: 'fallback_directory',
+                    })
+              }
+        }
   }
 
   // Sort by match score
