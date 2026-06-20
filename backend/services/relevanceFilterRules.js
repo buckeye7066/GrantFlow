@@ -307,6 +307,50 @@ export const RELEVANCE_RULES = [
     reason: 'Demographic mismatch: veteran-focused program, profile has no veteran indicator',
   },
 
+  // ── 2b-hard. Demographic: EXPLICITLY veteran-EXCLUSIVE programs (hard) ─────
+  // The broad demographic_veteran_focused rule above is soft (penalize) because
+  // many "veteran services" programs also serve families / the public. THIS rule
+  // is the tight, unambiguous-exclusivity subset ("veterans only", "must be a
+  // veteran", "active-duty only", "exclusively for veterans") and is HARD: such
+  // a program literally cannot be applied to by a non-veteran, so it must never
+  // be surfaced (even via a relaxed fallback) for a profile with no veteran
+  // indicator. Conservative patterns only — no broad "veteran assistance" match.
+  {
+    id: 'demographic_veteran_exclusive',
+    category: 'demographic',
+    description: 'Explicitly veteran-exclusive programs for non-veteran profiles',
+    hard: true,
+    oppPattern: /\b(veterans?\s*only|must be (a|an)\s+veteran|veteran status required|active[-\s]duty( service members?)?\s*only|service members?\s*only|exclusively for veterans?)\b/i,
+    profileCheck: (pd) => !_isVeteranProfile(pd),
+    reason: 'Demographic exclusivity: veterans-only program, profile has no veteran indicator',
+  },
+
+  // ── 6c-hard. Geographic: explicitly RESIDENTS-ONLY of a different state ────
+  // Plain state mismatch stays SOFT (cross-state grants are often open). But
+  // language that EXPLICITLY restricts to residents of a specific state ("X
+  // residents only", "must be a resident of X", "open only to residents of X")
+  // is exclusive — a non-resident cannot apply — so when that state differs from
+  // the profile's, HARD-reject. Catches e.g. "Texas residents only" for a TN
+  // profile without dropping genuinely open cross-state opportunities.
+  {
+    id: 'geographic_residents_only_exclusive',
+    category: 'geographic',
+    description: 'Explicitly residents-only programs for a different state',
+    hard: true,
+    oppPattern: /\b(residents?\s+only|open only to residents|restricted to residents|must (be|reside)[^.]{0,25}resident|for residents of)\b/i,
+    profileCheck: (pd, _oppText, opportunity) => {
+      if (!opportunity || _isNationalOpportunity(opportunity)) return false
+      const profileState = _normalizeState((pd.state || '').toLowerCase().trim())
+      if (!profileState) return false
+      const oppState = _normalizeState((opportunity.state || '').toLowerCase().trim())
+      const titleAbbr = _extractStateNameFromTitle(opportunity.title || '')
+      const target = oppState || (titleAbbr ? String(titleAbbr).toLowerCase() : '')
+      if (!target) return false
+      return profileState !== target
+    },
+    reason: 'Geographic exclusivity: residents-only program for a different state than the profile',
+  },
+
   // ── 2c. Demographic: refugee/resettlement programs for non-immigrants ──────
   {
     id: 'demographic_refugee_only',

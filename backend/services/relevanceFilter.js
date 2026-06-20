@@ -58,14 +58,39 @@ export function extractStateNameFromTitle(title) {
  * @param {object} opportunity
  * @returns {string}
  */
+// Coerce a field that may be an array OR a JSON-encoded string OR a plain string
+// into an array of strings. DB rows frequently arrive with keywords/categories/
+// eligibility_bullets as JSON TEXT, which the old code silently dropped — so
+// eligibility/demographic rules never saw that text and ineligible opportunities
+// slipped through. This makes every data point on the opportunity visible to the
+// rules regardless of shape.
+function asTextList(v) {
+  if (!v) return []
+  if (Array.isArray(v)) return v.map((x) => String(x ?? ''))
+  if (typeof v === 'string') {
+    const s = v.trim()
+    if (s.startsWith('[')) {
+      try { const a = JSON.parse(s); if (Array.isArray(a)) return a.map((x) => String(x ?? '')) } catch { /* fall through */ }
+    }
+    return [s]
+  }
+  if (typeof v === 'object') { try { return [JSON.stringify(v)] } catch { return [] } }
+  return [String(v)]
+}
+
 function buildOppText(opportunity) {
   return [
     opportunity.title || '',
-    opportunity.description || '',
-    opportunity.sponsor || '',
-    ...(Array.isArray(opportunity.keywords) ? opportunity.keywords : []),
-    ...(Array.isArray(opportunity.categories) ? opportunity.categories : []),
-    ...(Array.isArray(opportunity.eligibility_bullets) ? opportunity.eligibility_bullets : []),
+    opportunity.description || opportunity.summary || '',
+    opportunity.sponsor || opportunity.funder || opportunity.organization || '',
+    // Eligibility / restriction prose — the single most important text for the
+    // demographic + entity-type + geographic exclusivity rules.
+    opportunity.eligibility_text || opportunity.eligibility || '',
+    opportunity.restrictions || opportunity.amount_description || '',
+    ...asTextList(opportunity.keywords),
+    ...asTextList(opportunity.categories),
+    ...asTextList(opportunity.eligibility_bullets),
+    ...asTextList(opportunity.tags),
   ]
     .join(' ')
     .toLowerCase()
@@ -111,6 +136,13 @@ export function applyRelevanceFilter(opportunity, profileData, opts = {}) {
   )
   if (isDirectoryResource) return { pass: true, directory: true }
 
+  // A HARD rule (or strict mode) always wins, regardless of rule order — so we
+  // must NOT return on the first soft match. Remember the first soft match but
+  // keep scanning; if any rule later in the list is hard (or we're in strict
+  // mode), it rejects. This is what lets a tight hard-exclusivity rule
+  // (e.g. demographic_veteran_exclusive) override a broader soft rule
+  // (demographic_veteran_focused) that happens to match the same text first.
+  let softMatch = null
   for (const rule of RELEVANCE_RULES) {
     const patternMatches = (rule.oppPattern === null || rule.oppPattern === undefined) || rule.oppPattern.test(oppText)
     if (!(patternMatches && rule.profileCheck(profileData, oppText, opportunity))) continue
@@ -118,15 +150,17 @@ export function applyRelevanceFilter(opportunity, profileData, opts = {}) {
     const reason =
       typeof rule.reason === 'function' ? rule.reason(profileData, opportunity) : rule.reason
 
-    // Rules explicitly marked hard:true, or legacy strict mode, reject
+    // Rules explicitly marked hard:true, or legacy strict mode, reject now.
     if (rule.hard === true || mode === 'strict') {
       return { pass: false, reason, ruleId: rule.id }
     }
 
-    // Soft mode: allow through but signal a penalty so the caller can
-    // adjust the match score rather than discarding the opportunity.
-    return { pass: true, softFail: true, reason, ruleId: rule.id, penalty: rule.penalty ?? 25 }
+    // Soft mode: remember the first soft penalty but keep looking for a hard rule.
+    if (!softMatch) {
+      softMatch = { pass: true, softFail: true, reason, ruleId: rule.id, penalty: rule.penalty ?? 25 }
+    }
   }
+  if (softMatch) return softMatch
 
   return { pass: true }
 }

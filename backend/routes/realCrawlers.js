@@ -217,6 +217,17 @@ function normalizeOppTitle(t) {
   return String(t || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
 }
 
+// Normalize a URL to a stable dedup key: drop scheme, querystring, hash, and a
+// trailing slash, lowercased. So http(s)://Host/path/?utm=… → host/path.
+function normalizeUrlForDedup(u) {
+  if (!u || typeof u !== 'string') return null;
+  let s = u.trim().toLowerCase();
+  if (!s) return null;
+  s = s.replace(/^https?:\/\//, '').replace(/^www\./, '');
+  s = s.split('#')[0].split('?')[0].replace(/\/+$/, '');
+  return s || null;
+}
+
 async function excludeExistingPipeline(db, profileId, opportunities) {
   if (!Array.isArray(opportunities) || opportunities.length === 0) return opportunities;
   if (!db || typeof db.prepare !== 'function' || !profileId) return opportunities;
@@ -228,28 +239,35 @@ async function excludeExistingPipeline(db, profileId, opportunities) {
       .all(profileId);
     const existingIds = new Set((existing || []).map((g) => g.funding_opportunity_id).filter(Boolean));
 
-    // Fallback: also collect the titles of grants already in the pipeline so
-    // we can exclude by normalized title when a crawl result has no stable id.
+    // Fallback: also collect titles AND application URLs of grants already in
+    // the pipeline. A re-crawled opportunity gets a NEW funding_opportunity_id
+    // (and sometimes a reworded title), so id-only dedup misses it — but its
+    // URL is stable, making URL the most reliable "same opportunity" key.
     const existingTitles = new Set();
+    const existingUrls = new Set();
     try {
-      const titleRows = await db
-        .prepare('SELECT title FROM grants WHERE profile_id = ?')
+      const rows = await db
+        .prepare('SELECT title, application_url FROM grants WHERE profile_id = ?')
         .all(profileId);
-      for (const row of titleRows || []) {
+      for (const row of rows || []) {
         const norm = normalizeOppTitle(row?.title);
         if (norm) existingTitles.add(norm);
+        const u = normalizeUrlForDedup(row?.application_url);
+        if (u) existingUrls.add(u);
       }
     } catch (titleErr) {
-      // Title fallback is best-effort; id-based exclusion still applies.
-      routeLogger.warn(`[RealCrawlers] pipeline-dedup title lookup failed: ${titleErr?.message ?? titleErr}`);
+      // Title/URL fallback is best-effort; id-based exclusion still applies.
+      routeLogger.warn(`[RealCrawlers] pipeline-dedup title/url lookup failed: ${titleErr?.message ?? titleErr}`);
     }
 
-    if (existingIds.size === 0 && existingTitles.size === 0) return opportunities;
+    if (existingIds.size === 0 && existingTitles.size === 0 && existingUrls.size === 0) return opportunities;
 
     const before = opportunities.length;
     const deduped = opportunities.filter((opp) => {
       const oppId = opp?.id ?? opp?.funding_opportunity_id ?? null;
       if (oppId !== null && oppId !== undefined && existingIds.has(oppId)) return false;
+      const u = normalizeUrlForDedup(opp?.application_url || opp?.url || opp?.source_url);
+      if (u && existingUrls.has(u)) return false;
       const norm = normalizeOppTitle(opp?.title || opp?.name);
       if (norm && existingTitles.has(norm)) return false;
       return true;
@@ -599,6 +617,12 @@ router.post('/run', ensureAuth, async (req, res) => {
           .filter((opp) => {
             const url = opp.url || opp.application_url || opp.source_url || ''
             if (!(typeof url === 'string' && url.startsWith('http'))) return false
+            // PERMANENT RELEVANCE FLOOR: even when relaxing the score floor, an
+            // opportunity must still be relevant to THIS profile (soft relevance
+            // pass). Never surface "nothing-to-do-with-the-profile" results just
+            // to avoid an empty list. Genuine directory resources are exempt.
+            const isDir = _isDirectoryOpp(opp)
+            if (!isDir && !applyRelevanceFilter(opp, profileData, { mode: 'soft' }).pass) return false
             return true
           })
           .sort((a, b) => (b.match_score ?? 0) - (a.match_score ?? 0))
@@ -674,6 +698,17 @@ router.post('/run', ensureAuth, async (req, res) => {
           const oppType = String(opp.opportunity_type || '').toLowerCase()
           if (['loan', 'loan_program', 'microloan'].includes(oppType) || opp.is_loan) return false
           if (opp.requires_match) return false
+          // PERMANENT RELEVANCE FLOOR (global): the "always show something" rule
+          // must NEVER show an opportunity that is irrelevant to this profile.
+          // Returning ZERO relevant results is correct and preferred over
+          // surfacing e.g. nursing-in-Texas to a TN forensic-science student.
+          // Hard-reject and soft-relevance failures are both excluded; genuine
+          // directory resources are exempt.
+          const isDir = _isDirectoryOpp(opp)
+          if (!isDir) {
+            if (opp.match_decision === 'REJECT') return false
+            if (!applyRelevanceFilter(opp, profileData, { mode: 'soft' }).pass) return false
+          }
           return true
         })
         .sort((a, b) => (b.match_score ?? 0) - (a.match_score ?? 0))
@@ -826,10 +861,25 @@ router.post('/run', ensureAuth, async (req, res) => {
     // never blocks results on the dedup query.
     decorated = await excludeExistingPipeline(db, profile_id, decorated)
 
+    // Profile-aware policy (lead-engineer decision): the crawlers now use the
+    // full profile (profile-derived source plan + search terms + relevance +
+    // canonical eligibility decision), so an empty result after relevance gating
+    // is an HONEST "no strong match for this profile" — not a failure to paper
+    // over. The old "always return ≥1" rule predates profile-aware matching and
+    // was surfacing irrelevant filler (e.g. nursing-in-Texas to a TN
+    // forensic-science student). We now return zero with a helpful empty-state
+    // message rather than mismatched results.
+    const relevanceSuppressed = decorated.length === 0 && allMapped.length > 0
+    const emptyStateMessage = relevanceSuppressed
+      ? `Found ${allMapped.length} candidate funding source(s), but none were a strong match for this profile, so none were added. Add more profile detail (needs, location, eligibility) or broaden the search to surface more.`
+      : null
+
     res.json({
       success: true,
       crawler_type,
       count: decorated.length,
+      relevance_suppressed: relevanceSuppressed,
+      message: emptyStateMessage,
       // total_found reflects candidates entering the filter pipeline (post-map+merge)
       // so the 1:1 invariant holds: total_found === allMapped.length, and
       // count is what passed filters. Legacy `curated_count` preserves old value.
