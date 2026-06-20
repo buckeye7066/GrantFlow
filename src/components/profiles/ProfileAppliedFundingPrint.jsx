@@ -6,6 +6,22 @@ import { Badge } from "@/components/ui/badge"
 import { Loader2, Printer } from "lucide-react"
 import { listGrants } from "@/api/grants"
 import { listDocuments } from "@/api/documents"
+import { safeHttpUrl } from "@/lib/safeUrl"
+
+// Only let a document URL into an href when it is an http(s) absolute URL or a
+// same-origin relative path — the shapes resolveDocumentUrl() actually produces
+// (absolute, "/...", or "uploads/..."). escapeHtml alone does NOT stop a
+// javascript:/data: scheme (no special chars to escape), so a stored file_url
+// of "javascript:..." would otherwise be a clickable XSS in the print window.
+// Anything else returns null and the caller renders the name as plain text.
+function safePrintHref(fileUrl) {
+  const raw = String(fileUrl ?? "").trim()
+  if (!raw) return null
+  // Same-origin relative path, but not protocol-relative ("//host" → cross-origin).
+  if (raw.startsWith("/") && !raw.startsWith("//")) return raw
+  if (/^uploads\//i.test(raw)) return `/${raw}`
+  return safeHttpUrl(raw)
+}
 
 function escapeHtml(value) {
   if (value === null) return ""
@@ -79,8 +95,14 @@ export default function ProfileAppliedFundingPrint({ organizationId, profileName
         const docLinks = docs
           .slice(0, 10)
           .map((doc) => {
-            const href = escapeHtml(`${doc.file_url}?disposition=inline`)
             const label = escapeHtml(doc.name || "Application document")
+            const safeHref = safePrintHref(doc.file_url)
+            if (!safeHref) {
+              // Unsafe or non-resolvable URL — show the name as plain text so a
+              // malicious file_url can never become a clickable link.
+              return `<li>${label}</li>`
+            }
+            const href = escapeHtml(`${safeHref}?disposition=inline`)
             return `<li><a href="${href}" target="_blank" rel="noopener noreferrer">${label}</a></li>`
           })
           .join("")
