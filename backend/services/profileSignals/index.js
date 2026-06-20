@@ -33,6 +33,31 @@ export function toSignalSet(value) {
 }
 
 /**
+ * Build the deduped, primary-first list of US states across ALL of a profile's
+ * addresses. Prefers the `states` array emitted by buildProfileSignals (primary +
+ * secondary), but always falls back to the primary `location.state` so older snapshots
+ * (taken before multi-address support) still expose at least their single state.
+ *
+ * @param {unknown} states - signals.states (string[] of 2-letter codes), may be absent
+ * @param {object} primaryLocation - signals.location
+ * @returns {string[]} deduped uppercase 2-letter state codes, primary first
+ */
+function dedupeStates(states, primaryLocation) {
+  const out = []
+  const add = (v) => {
+    if ((v === null || v === undefined)) return
+    const st = String(v).trim().toUpperCase()
+    if (st && !out.includes(st)) out.push(st)
+  }
+  // Primary first (back-compat with snapshots that predate `states`).
+  if (primaryLocation && primaryLocation.state) add(primaryLocation.state)
+  if (Array.isArray(states)) {
+    for (const st of states) add(st)
+  }
+  return out
+}
+
+/**
  * Detect high-level intents from analyzed signals.
  * Used by strategy registry to select/weight data sources.
  */
@@ -463,6 +488,17 @@ function toAnalysisShape(profileContext) {
     profileId: profileContext.profile_id || profileContext.profile?.id,
     profileName: profileContext.profile?.display_name || profileContext.profile?.name || null,
     location: s.location || {},
+    // Multi-location signals (primary + optional secondary address). `location` remains
+    // the primary for back-compat; `states` is the deduped, primary-first list of every
+    // state across all of the profile's addresses, and `locations` carries each resolved
+    // address ({ zip, state, city, county, type? }). Geo-gating + local crawlers should
+    // read `states`/`locations` so an out-of-state student (home OH + school TN) is
+    // covered in both states, not just the primary.
+    states: dedupeStates(s.states, s.location),
+    locations: Array.isArray(s.locations) && s.locations.length
+      ? s.locations
+      : (s.location && (s.location.state || s.location.zip || s.location.city) ? [s.location] : []),
+    secondaryLocation: s.secondaryLocation || null,
     applicantType: resolvedApplicantType,
     applicantTypeExplicit,
     needs: toSignalSet(s.needs),
