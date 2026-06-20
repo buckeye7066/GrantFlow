@@ -30,6 +30,59 @@ describe('collectNeedTerms', () => {
     const terms = collectNeedTerms({ profile: { needs: ['ab', 'x'.repeat(80), 'childcare'] } })
     expect(terms).toEqual(['childcare'])
   })
+
+  it('mines ALL discriminating signal facets, not just keywords/assistance/geographic', () => {
+    const terms = collectNeedTerms(
+      { profile: {} },
+      {
+        health: new Set(['kidney disease']),
+        military: new Set(['veteran']),
+        occupation: new Set(['nurse']),
+        family: new Set(['single parent']),
+        demographics: new Set(['native american']),
+        immigration: new Set(['refugee']),
+      },
+    )
+    // Each facet maps to a distinct funder pool — every one must reach the query.
+    for (const t of ['kidney disease', 'veteran', 'nurse', 'single parent', 'native american', 'refugee']) {
+      expect(terms).toContain(t)
+    }
+  })
+
+  it('interleaves facets so one facet cannot crowd the others out of a maxTerms slice', () => {
+    const terms = collectNeedTerms(
+      { profile: {} },
+      {
+        // Six keyword variants would, under naive concatenation, fill the first
+        // slots and bury the single high-signal veteran/disability terms.
+        keywords: new Set(['k1', 'k2', 'k3', 'k4', 'k5', 'k6']),
+        military: new Set(['veteran']),
+        health: new Set(['dialysis']),
+      },
+    )
+    const top4 = terms.slice(0, 4)
+    expect(top4).toContain('veteran')
+    expect(top4).toContain('dialysis')
+  })
+
+  it('explicit profile needs lead ahead of derived signal terms', () => {
+    const terms = collectNeedTerms(
+      { profile: { needs: ['rental assistance'] } },
+      { keywords: new Set(['budgeting']) },
+    )
+    expect(terms[0]).toBe('rental assistance')
+  })
+
+  it('strips content-free generic single tokens that make useless queries', () => {
+    const terms = collectNeedTerms(
+      { profile: {} },
+      { keywords: new Set(['assistance', 'help', 'funding', 'veteran housing']) },
+    )
+    expect(terms).not.toContain('assistance')
+    expect(terms).not.toContain('help')
+    expect(terms).not.toContain('funding')
+    expect(terms).toContain('veteran housing') // multi-word phrases are always kept
+  })
 })
 
 describe('buildConnectorQueryPlan', () => {

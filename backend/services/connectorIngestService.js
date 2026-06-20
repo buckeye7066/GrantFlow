@@ -98,36 +98,101 @@ const DEFAULT_PLAN = Object.freeze({
   wantsResearch: false,
 })
 
+// buildProfileSignals() emits a category Set per facet of the profile. We mine
+// ALL of the discriminating ones for live-source queries — not just keywords —
+// so a veteran's "veteran", a dialysis patient's condition, a single parent's
+// family status, a nurse's occupation, and a heritage scholarship demographic
+// each reach Grants.gov/NIH/NSF/SAM/Simpler/ProPublica. Ordered by discriminating
+// power: facets that map to a dedicated funder pool come first, so a bounded
+// maxTerms slice still keeps breadth across the profile.
+//   (genders / applicantTypes are deliberately omitted — gender alone is a poor
+//    funder query, and applicant type is already encoded as eligibility codes.)
+const SIGNAL_CATEGORY_ORDER = Object.freeze([
+  'health', // disease/disability foundations, NIH, condition-specific aid
+  'military', // VA, veteran service orgs, military-family relief
+  'occupation', // profession-specific relief (nurses, teachers, first responders)
+  'family', // single-parent, foster, caregiver, widow funds
+  'demographics', // heritage/race/identity scholarships & funds
+  'needs', // explicit need categories (housing, food, childcare…)
+  'assistance', // benefit programs (SNAP, LIHEAP, housing vouchers)
+  'geographic', // place-based (opportunity zone, appalachian, tribal land)
+  'immigration', // refugee/immigrant/new-American programs
+  'interests', // program/focus areas the applicant declared
+  'keywords', // broad catch-all — lowest discriminating power, so it goes last
+])
+
+// Content-free single tokens make useless keyword searches (they match the whole
+// pool, or none of it) and would waste a slot in the per-source query budget.
+// Multi-word phrases are always kept — they carry real specificity.
+const GENERIC_STOP_TERMS = new Set([
+  'assistance', 'help', 'support', 'aid', 'need', 'needs', 'fund', 'funds',
+  'funding', 'grant', 'grants', 'program', 'programs', 'service', 'services',
+  'general', 'other', 'misc', 'individual', 'person', 'people', 'family',
+  'money', 'cash', 'benefit', 'benefits', 'resource', 'resources', 'org',
+  'organization', 'nonprofit', 'business', 'opportunity', 'opportunities',
+])
+
 /**
- * Collect a small set of need/topic search terms from anywhere they may live on
- * the profile. Defensive: tolerates missing sections, arrays, Sets, or strings.
+ * Collect need/topic search terms from every discriminating facet of the
+ * profile. Defensive: tolerates missing sections, arrays, Sets, or strings.
+ *
+ * Explicit profile needs lead; the remaining facets are interleaved
+ * round-robin so a downstream `maxTerms` slice keeps category breadth instead
+ * of being monopolised by one facet's variants.
  *
  * @returns {string[]} de-duplicated lowercase terms (most specific first)
  */
 export function collectNeedTerms(profileContext = {}, signals = {}) {
-  const out = []
-  const push = (v) => {
-    if (!v) return
-    const s = String(v).toLowerCase().trim()
-    if (s && s.length >= 3 && s.length <= 60) out.push(s)
+  const seen = new Set()
+  const clean = (v) => {
+    if (v === null || v === undefined) return null
+    const s = String(v).toLowerCase().trim().replace(/\s+/g, ' ')
+    if (s.length < 3 || s.length > 60) return null
+    if (!s.includes(' ') && GENERIC_STOP_TERMS.has(s)) return null
+    return s
+  }
+  const bucketize = (values) => {
+    const bucket = []
+    const add = (v) => {
+      const c = clean(v)
+      if (c && !seen.has(c)) {
+        seen.add(c)
+        bucket.push(c)
+      }
+    }
+    if (values instanceof Set || Array.isArray(values)) values.forEach(add)
+    else if (values) add(values)
+    return bucket
   }
 
   const profile = profileContext.profile || {}
-  // Explicit needs are the strongest signal.
-  const needs = profile.needs || profileContext.needs
-  if (Array.isArray(needs)) needs.forEach(push)
-  // buildProfileSignals exposes keyword/assistance Sets — fold them in if present.
-  for (const key of ['keywords', 'assistance', 'geographic']) {
-    const v = signals?.[key]
-    if (v instanceof Set) v.forEach(push)
-    else if (Array.isArray(v)) v.forEach(push)
-  }
-  // A couple of free-text profile fields, lightly mined.
-  push(profile.primary_need)
-  push(profile.focus_area)
 
-  // De-dup preserving order.
-  return [...new Set(out)]
+  // Explicit, user-stated needs are the strongest signal — front-load them.
+  const explicit = bucketize([
+    ...(Array.isArray(profile.needs) ? profile.needs : []),
+    ...(Array.isArray(profileContext.needs) ? profileContext.needs : []),
+    profile.primary_need,
+    profile.focus_area,
+  ])
+
+  // One bucket per signal category, in discriminating-power order.
+  const buckets = SIGNAL_CATEGORY_ORDER.map((key) => bucketize(signals?.[key]))
+
+  // Round-robin across the category buckets: take the 1st of each, then the 2nd
+  // of each, and so on. This keeps a veteran-disabled-single-parent-nurse
+  // profile from spending its whole term budget on one facet.
+  const interleaved = []
+  for (let depth = 0, more = true; more; depth += 1) {
+    more = false
+    for (const bucket of buckets) {
+      if (depth < bucket.length) {
+        interleaved.push(bucket[depth])
+        more = true
+      }
+    }
+  }
+
+  return [...explicit, ...interleaved]
 }
 
 /** Resolve the query plan for a profile, merging in derived need terms. */
@@ -322,7 +387,7 @@ const SOURCES = [
  * @param {Object} args.profileContext     - { profile, sections, signals, ... }
  * @param {Object} [args.signals]          - buildProfileSignals() output (optional)
  * @param {Object} [args.limits]
- * @param {number} [args.limits.maxTerms=4]      - need terms used per source
+ * @param {number} [args.limits.maxTerms=8]      - need terms used per source (env: CONNECTOR_INGEST_MAX_TERMS)
  * @param {number} [args.limits.rowsPerQuery=25] - rows requested per query
  * @param {number} [args.limits.delayMs=300]     - politeness delay between calls
  * @returns {Promise<{ plan: Object, coverage: Array, totals: Object }>}
@@ -330,8 +395,14 @@ const SOURCES = [
 export async function ingestFromConnectors({ db, profileContext = {}, signals = {}, limits = {} } = {}) {
   if (!db) throw new Error('ingestFromConnectors requires a db handle')
 
+  // maxTerms bounds how many of the (now category-diverse) profile terms each
+  // source is queried with. 4 was far too tight — it starved every facet past
+  // the first one or two. 8 keeps breadth while staying polite; tune per
+  // environment via CONNECTOR_INGEST_MAX_TERMS without a code change.
+  const envMaxTerms = Number.parseInt(process.env.CONNECTOR_INGEST_MAX_TERMS ?? '', 10)
+  const defaultMaxTerms = Number.isFinite(envMaxTerms) && envMaxTerms > 0 ? envMaxTerms : 8
   const effLimits = {
-    maxTerms: Number.isFinite(limits.maxTerms) ? limits.maxTerms : 4,
+    maxTerms: Number.isFinite(limits.maxTerms) ? limits.maxTerms : defaultMaxTerms,
     rowsPerQuery: Number.isFinite(limits.rowsPerQuery) ? limits.rowsPerQuery : 25,
     delayMs: Number.isFinite(limits.delayMs) ? limits.delayMs : 300,
   }
