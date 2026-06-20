@@ -40,5 +40,14 @@ export const SAM_GOV_API_KEY_ENV = 'SAM_GOV_API_KEY'
  * variable) and fall back to the legacy SAM_GOV_API_KEY — so either works.
  */
 export function getSamGovApiKey() {
-  return process.env.SAM_GOV_PUBLIC_API_KEY || process.env.SAM_GOV_API_KEY || null
+  // Canonical name, documented legacy alias, then hand-entered variants seen in
+  // the Railway dashboard (env var names are case-sensitive on Linux, so a key
+  // saved as `Sam_gov_key` is otherwise invisible and silently disables SAM).
+  return (
+    process.env.SAM_GOV_PUBLIC_API_KEY ||
+    process.env.SAM_GOV_API_KEY ||
+    process.env.Sam_gov_key ||
+    process.env.SAM_GOV_KEY ||
+    null
+  )
 }

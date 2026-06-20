@@ -875,6 +875,12 @@ const DOC_STOPWORDS = new Set([
   'information', 'provide', 'provided', 'include', 'including', 'support',
   'request', 'requirements', 'eligible', 'eligibility', 'available', 'number',
   'address', 'email', 'phone', 'street', 'city', 'state', 'county', 'zip',
+  'across', 'around', 'toward', 'towards', 'upon', 'among', 'amongst', 'per',
+  'via', 'onto', 'out', 'down', 'again', 'further', 'against', 'throughout',
+  'regarding', 'concerning', 'serve', 'serves', 'serving', 'served', 'focus',
+  'focuses', 'focused', 'help', 'helps', 'helping', 'need', 'needs', 'make',
+  'makes', 'made', 'get', 'gets', 'got', 'use', 'uses', 'used', 'using',
+  'work', 'works', 'working', 'includes', 'provides', 'providing', 'across',
 ])
 
 /**
