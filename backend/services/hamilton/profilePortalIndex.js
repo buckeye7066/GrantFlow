@@ -152,11 +152,12 @@ async function collectFromPipeline(db, profileId, acc) {
   try {
     rows = await db.prepare(
       `SELECT g.id AS grant_id, g.title AS grant_title,
-              g.application_url, g.portal_url, g.source_url, g.url,
+              g.application_url, g.portal_url, g.url,
               g.funding_opportunity_id,
               fo.application_url AS fo_application_url,
               fo.apply_url       AS fo_apply_url,
-              fo.apply_guidelines_url AS fo_apply_guidelines_url
+              fo.apply_guidelines_url AS fo_apply_guidelines_url,
+              fo.source_url      AS fo_source_url
          FROM grants g
          LEFT JOIN funding_opportunities fo ON fo.id = g.funding_opportunity_id
         WHERE g.profile_id = ?`,
@@ -168,7 +169,7 @@ async function collectFromPipeline(db, profileId, acc) {
     try {
       rows = await db.prepare(
         `SELECT id AS grant_id, title AS grant_title,
-                application_url, portal_url, source_url, url, funding_opportunity_id
+                application_url, portal_url, url, funding_opportunity_id
            FROM grants WHERE profile_id = ?`,
       ).all(String(profileId))
     } catch (err2) {
@@ -178,8 +179,8 @@ async function collectFromPipeline(db, profileId, acc) {
   }
   for (const r of rows || []) {
     const candidate = firstNonEmpty(
-      r.application_url, r.portal_url, r.url, r.source_url,
-      r.fo_application_url, r.fo_apply_url, r.fo_apply_guidelines_url,
+      r.application_url, r.portal_url, r.url,
+      r.fo_application_url, r.fo_apply_url, r.fo_apply_guidelines_url, r.fo_source_url,
     )
     const host = portalKeyHost(candidate)
     if (!host) continue
