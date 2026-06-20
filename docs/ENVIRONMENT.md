@@ -121,6 +121,22 @@ The architecture works as follows:
 - **SMS (Twilio)**
   - `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_MESSAGING_SERVICE_SID` (or `TWILIO_FROM_NUMBER`)
 
+- **Hamilton browser automation**
+  - **`HAMILTON_ENABLE_BROWSER_AUTOMATION`** - `"true"` to let Hamilton drive a real Playwright browser; otherwise she degrades to the lawful pdf/docx packet.
+  - **`HAMILTON_BROWSER_AUTOMATION_HOST_ALLOWLIST`** - Optional comma-separated host allowlist (e.g. `tn.gov,mtsu.edu`). Empty = no restriction.
+  - **`HAMILTON_ALLOW_AUTOSUBMIT`** - `"true"` to let Hamilton submit portal applications (per-source authorization still gates it).
+  - **`HAMILTON_BROWSER_STORAGE_DIR`** - Optional on-disk dir for legacy storageState files (path-traversal guard root). Sessions are stored encrypted in Postgres regardless; Railway disk is ephemeral.
+
+- **Hamilton cloud interactive login (Option B — in-app portal session capture)**
+  - Lets a user log into a portal once (clearing 2FA themselves) so Hamilton can reuse the resulting AES-256-GCM-encrypted, profile-bound, revocable session. **ON globally by default** — no env required.
+  - **`HAMILTON_CLOUD_LOGIN_PROVIDER`** - `self_hosted` (DEFAULT), `cdp`, or `disabled`.
+    - `self_hosted` - Launches GrantFlow's own Playwright Chromium (the one already shipped for browser automation) and serves the interactive surface from Chromium's built-in DevTools inspector. No third-party service, no paid key.
+    - `cdp` - Use a hosted interactive Chrome (Browserless/Browserbase) for a polished streamed live URL. Requires `HAMILTON_CLOUD_LOGIN_CDP_ENDPOINT`.
+    - `disabled` - Turn the feature off; the UI falls back to Saved Login.
+  - **`HAMILTON_CLOUD_LOGIN_CDP_ENDPOINT`** - CDP/WebSocket endpoint of a hosted interactive Chrome. Setting this auto-selects the `cdp` provider unless `HAMILTON_CLOUD_LOGIN_PROVIDER` says otherwise.
+  - **`HAMILTON_CLOUD_LOGIN_PUBLIC_BASE`** - For `self_hosted` on a single-port PaaS (e.g. Railway): a public base URL that reverse-proxies Chromium's devtools endpoint so a remote device (phone) can reach the interactive window. If unset on such a host, the interactive window may not be reachable remotely (session capture still works for local/self-hosted hosts and via the CLI tool); the UI surfaces this and points users to Saved Login.
+  - **`HAMILTON_CLOUD_LOGIN_ENABLED`** - Back-compat kill switch: `"false"` disables cloud login regardless of provider.
+
 ### Optional observability
 
 - `LOG_LEVEL`

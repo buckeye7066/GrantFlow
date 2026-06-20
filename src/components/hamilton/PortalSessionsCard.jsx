@@ -133,6 +133,11 @@ export default function PortalSessionsCard({ profileId }) {
     staleTime: 5 * 60_000,
   })
   const cloudConfigured = Boolean(cloudStatus?.configured)
+  // self_hosted streams Chromium's own DevTools inspector; on a single-port PaaS
+  // the interactive window only reaches a remote device when the deployment set
+  // HAMILTON_CLOUD_LOGIN_PUBLIC_BASE. Surface that honestly so the user isn't
+  // surprised if the window can't open and can fall back to Saved Login.
+  const cloudNeedsPublicBase = Boolean(cloudStatus?.requires_public_base)
 
   const cloudStartMutation = useMutation({
     mutationFn: () =>
@@ -227,6 +232,13 @@ export default function PortalSessionsCard({ profileId }) {
                     GrantFlow opens a secure login window you complete yourself (including 2FA). When
                     you’re done, tap “I’ve finished logging in” and the session is captured for this profile.
                   </p>
+                  {cloudNeedsPublicBase && (
+                    <p className="text-xs text-emerald-800">
+                      Note: this deployment runs the self-hosted login browser. If the secure window
+                      doesn’t open on your device, use <strong>Saved Login</strong> below instead (it
+                      works everywhere), or ask an admin to capture from a computer.
+                    </p>
+                  )}
                   <div className="grid gap-2 sm:grid-cols-2">
                     <Input placeholder="Portal host (e.g. mtsu.edu)" value={portalHost} onChange={(e) => setPortalHost(e.target.value)} />
                     <Input placeholder="Login URL (optional)" value={loginUrl} onChange={(e) => setLoginUrl(e.target.value)} />
