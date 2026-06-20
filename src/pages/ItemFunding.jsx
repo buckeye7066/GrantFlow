@@ -40,6 +40,16 @@ import { useAuthStore } from "@/stores/authStore"
 import { useTierEntitlements } from "@/hooks/useTierEntitlements"
 import { formatReasonText } from "@/utils/reasonText"
 
+// Human-readable labels for the applicant type the backend detected from the
+// selected profile. This is what makes the search visibly profile-aware: the
+// user can see WHO we are searching as (which drives the funder categories).
+const APPLICANT_TYPE_LABELS = {
+  nonprofit: "Nonprofit / organization",
+  school: "School / educator",
+  business: "Small business",
+  individual: "Individual",
+}
+
 function safeArray(value) {
   if (!value) return []
   return Array.isArray(value) ? value : [value]
@@ -395,6 +405,9 @@ export default function ItemFunding() {
   // Live search results from specific-need endpoint
   const liveResults = liveSearchQuery.data?.opportunities ?? []
   const liveWebCount = liveSearchQuery.data?.web_search_results ?? 0
+  // Applicant type detected from the selected profile (drives profile-aware funder picks)
+  const applicantType = liveSearchQuery.data?.applicant_type ?? null
+  const applicantTypeLabel = APPLICANT_TYPE_LABELS[applicantType] ?? null
 
   const scoredResults = useMemo(() => {
     if (!submittedItem) return []
@@ -737,18 +750,27 @@ export default function ItemFunding() {
                 </Button>
               </div>
               {submittedItem ? (
-                <p className="text-xs text-slate-500">
-                  Showing {results.length} result{results.length === 1 ? "" : "s"} for{" "}
-                  <span className="font-semibold text-slate-700">{submittedItem}</span>
-                  {liveWebCount > 0 ? (
-                    <span className="text-emerald-600 ml-1">({liveWebCount} from live web search)</span>
+                <div className="text-xs text-slate-500 space-y-1 text-right">
+                  <p>
+                    Showing {results.length} result{results.length === 1 ? "" : "s"} for{" "}
+                    <span className="font-semibold text-slate-700">{submittedItem}</span>
+                    {liveWebCount > 0 ? (
+                      <span className="text-emerald-600 ml-1">({liveWebCount} from live web search)</span>
+                    ) : null}
+                    {liveSearchQuery.isLoading ? (
+                      <span className="text-blue-500 ml-1 inline-flex items-center gap-1">
+                        <Loader2 className="w-3 h-3 animate-spin" /> searching web…
+                      </span>
+                    ) : null}
+                  </p>
+                  {hasSelectedProfile && applicantTypeLabel ? (
+                    <p className="inline-flex items-center gap-1 text-slate-500">
+                      <Target className="w-3 h-3 text-emerald-500" />
+                      Searching as <span className="font-semibold text-slate-700">{applicantTypeLabel}</span>{" "}
+                      — funders matched to this profile
+                    </p>
                   ) : null}
-                  {liveSearchQuery.isLoading ? (
-                    <span className="text-blue-500 ml-1 inline-flex items-center gap-1">
-                      <Loader2 className="w-3 h-3 animate-spin" /> searching web…
-                    </span>
-                  ) : null}
-                </p>
+                </div>
               ) : null}
             </div>
           </CardContent>

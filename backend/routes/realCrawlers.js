@@ -1175,8 +1175,22 @@ router.post('/specific-need', ensureAuth, async (req, res) => {
 
     // 2. Run item-specific web search for the exact need text
     let webSearchCount = 0
+    let detectedApplicantType = 'unknown'
     try {
-      const parsed = parseItemRequest(need_text)
+      // Build the requesting profile's signals ONCE so both the known-source
+      // category pick AND the live web search reflect WHO is asking (applicant
+      // type, mission, location), not just the literal need text.
+      let webProfile
+      try {
+        const ctx = await loadProfileContext(db, profile_id)
+        const enriched = buildProfileFacets(ctx)
+        webProfile = { signals: enriched.signals, profile: enriched.profile }
+      } catch {
+        webProfile = { signals: { location: {}, military: new Set(), assistance: new Set(), health: new Set() } }
+      }
+
+      const parsed = parseItemRequest(need_text, webProfile.signals)
+      detectedApplicantType = parsed.applicantType || 'unknown'
 
       // Pull matching KNOWN_ITEM_SOURCES
       for (const category of parsed.categories) {
@@ -1208,15 +1222,8 @@ router.post('/specific-need', ensureAuth, async (req, res) => {
         }
       }
 
-      // Live DuckDuckGo web search — use real profile signals for targeted queries
-      let webProfile
-      try {
-        const ctx = await loadProfileContext(db, profile_id)
-        const enriched = buildProfileFacets(ctx)
-        webProfile = { signals: enriched.signals, profile: enriched.profile }
-      } catch {
-        webProfile = { signals: { location: {}, military: new Set(), assistance: new Set(), health: new Set() } }
-      }
+      // Live DuckDuckGo web search — uses the same profile signals built above
+      // so queries are applicant-type / mission / location aware.
       const webResults = await searchWebForItem(need_text, webProfile)
       routeLogger.info(`[specific-need] Web search for "${need_text}" found ${webResults.length} results`)
 
@@ -1273,6 +1280,7 @@ router.post('/specific-need', ensureAuth, async (req, res) => {
       count: final.length,
       total_candidates: result.results.length,
       web_search_results: webSearchCount,
+      applicant_type: detectedApplicantType,
       duration,
       opportunities: final,
     })
