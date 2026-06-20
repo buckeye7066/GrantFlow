@@ -56,6 +56,7 @@ import {
   markCredentialUsed,
   registrableDomain,
 } from './hamiltonPortalCredentialService.js'
+import { findValidSession, getSessionStorageState } from './hamiltonCredentialSessionService.js'
 import { isAuthBlocker, planAuthBackup } from './hamiltonAuthBackupPlan.js'
 import { missingCredentialNotice, hostOfUrl } from './hamiltonMissingCredential.js'
 import { normalizeSchedule, isWithinWindow, nextWindowStart } from './portalAccessSchedule.js'
@@ -801,10 +802,25 @@ async function runAutopilotPathway(db, {
     } catch { loginCredential = null }
   }
 
+  // Resolve a durable saved SESSION for this portal host (a storageState the
+  // user imported after clearing 2FA themselves). When present, Hamilton reuses
+  // it to act inside the real portal as the user — the same generic path for
+  // every profile + every school (MTSU, Cleveland State, …). Decrypted in
+  // memory and passed straight to Playwright; never logged or returned.
+  let storageState = null
+  if (authorizations.use_saved_session) {
+    try {
+      const saved = await findValidSession(db, { profileId: task.profile_id, portalHost: url })
+      if (saved?.has_storage_state) {
+        storageState = await getSessionStorageState(db, saved.id)
+      }
+    } catch { storageState = null }
+  }
+
   for (let attempt = 0; attempt < MAX_RESOLVER_ATTEMPTS; attempt += 1) {
     engineResult = await runAutopilot({
       url, profile, authorizations,
-      documents, storageStatePath, allowAutoSubmit, loginCredential,
+      documents, storageStatePath, storageState, allowAutoSubmit, loginCredential,
       headless: options?.headless ?? true,
     })
     if (loginCredential && engineResult?.logged_in) {

@@ -26,6 +26,7 @@
 
 import crypto from 'node:crypto'
 import path from 'node:path'
+import { encryptRuntimeSecret, decryptRuntimeSecret } from '../../utils/runtimeSecrets.js'
 
 // Per-db schema cache (WeakMap), not a process-global boolean: node:test runs a
 // file's top-level suites concurrently, each with its own in-memory db, and a
@@ -52,6 +53,7 @@ async function ensureSchema(db) {
       label TEXT,
       storage_state_path TEXT,
       storage_state_ref TEXT,
+      storage_state_encrypted ${jsonType},
       authentication_strategy TEXT,
       established_at ${tsType} DEFAULT ${nowFn},
       last_used_at ${tsType},
@@ -65,6 +67,14 @@ async function ensureSchema(db) {
     CREATE INDEX IF NOT EXISTS idx_hamilton_sessions_host    ON hamilton_saved_sessions(portal_host);
     CREATE INDEX IF NOT EXISTS idx_hamilton_sessions_status  ON hamilton_saved_sessions(status);
   `)
+  // Idempotently add storage_state_encrypted to pre-existing tables (CREATE
+  // TABLE IF NOT EXISTS won't alter a table that already exists in prod). This
+  // column holds the durable, AES-256-GCM-encrypted Playwright storageState so
+  // an imported session survives Railway's ephemeral-filesystem wipe (a path on
+  // disk would not). Stored as ciphertext JSON: { value_ciphertext, iv, tag }.
+  try {
+    await db.exec(`ALTER TABLE hamilton_saved_sessions ADD COLUMN storage_state_encrypted ${jsonType}`)
+  } catch { /* already present — fine */ }
   schemaReady.set(db, true)
 }
 
@@ -84,6 +94,10 @@ function rowToSession(row) {
     label: row.label || null,
     storage_state_path: row.storage_state_path || null,
     storage_state_ref: row.storage_state_ref || null,
+    // Never expose the ciphertext itself — just signal durable state exists so
+    // the engine knows to call getSessionStorageState() and the UI can show
+    // "session saved".
+    has_storage_state: !!row.storage_state_encrypted,
     authentication_strategy: row.authentication_strategy || null,
     established_at: row.established_at,
     last_used_at: row.last_used_at || null,
@@ -177,6 +191,96 @@ export async function recordSession(db, {
     authenticationStrategy, expiresAt, JSON.stringify(metadata || {}),
   )
   return rowToSession(await db.prepare('SELECT * FROM hamilton_saved_sessions WHERE id = ?').get(id))
+}
+
+function looksLikeStorageState(obj) {
+  // Playwright storageState shape: { cookies: [...], origins: [...] }.
+  return obj && typeof obj === 'object' &&
+    (Array.isArray(obj.cookies) || Array.isArray(obj.origins))
+}
+
+/**
+ * Import a session the USER established themselves: they completed login + 2FA
+ * in their own browser, exported the Playwright storageState (cookies + origin
+ * localStorage), and we store it — encrypted at rest with AES-256-GCM — so
+ * Hamilton can reuse it to act inside the real portal. This is the durable,
+ * ephemeral-filesystem-proof counterpart to recordSession's on-disk path.
+ *
+ * The storageState is multi-domain (an SSO login spans e.g.
+ * login.microsoftonline.com + the school host), so one row keyed on the portal
+ * host we drive carries the whole state.
+ *
+ * Idempotent on (user_id, profile_id, portal_host): re-import refreshes the
+ * existing row (expected, since sessions expire and get re-captured).
+ */
+export async function importSession(db, {
+  userId, profileId, portalHost, storageState,
+  label = null, authenticationStrategy = null, expiresAt = null, metadata = {},
+} = {}) {
+  if (!db || !userId || !profileId) throw new Error('userId and profileId required')
+  const host = normalizeHost(portalHost)
+  if (!host) throw new Error('portalHost required')
+  if (!looksLikeStorageState(storageState)) {
+    throw new Error('storageState must be a Playwright storage state object ({ cookies, origins }).')
+  }
+  await ensureSchema(db)
+  // Encrypt the JSON-serialised storage state; never persist it in the clear.
+  const encrypted = JSON.stringify(encryptRuntimeSecret(JSON.stringify(storageState)))
+  // Don't keep raw cookie values in metadata — only non-sensitive counts.
+  const safeMeta = {
+    ...(metadata || {}),
+    cookie_count: Array.isArray(storageState.cookies) ? storageState.cookies.length : 0,
+    origin_count: Array.isArray(storageState.origins) ? storageState.origins.length : 0,
+    imported_via: (metadata && metadata.imported_via) || 'browser_export',
+  }
+  const nowFn = db?.dialect === 'postgres' ? 'now()' : 'CURRENT_TIMESTAMP'
+  const existing = await db.prepare(
+    `SELECT id FROM hamilton_saved_sessions
+      WHERE user_id = ? AND profile_id = ? AND portal_host = ?
+      ORDER BY established_at DESC LIMIT 1`,
+  ).get(String(userId), String(profileId), host)
+  if (existing) {
+    await db.prepare(
+      `UPDATE hamilton_saved_sessions SET
+          label = ?, storage_state_encrypted = ?, authentication_strategy = ?,
+          expires_at = ?, status = 'valid', established_at = ${nowFn},
+          metadata_json = ?, updated_at = ${nowFn}
+        WHERE id = ?`,
+    ).run(label, encrypted, authenticationStrategy, expiresAt, JSON.stringify(safeMeta), existing.id)
+    return rowToSession(await db.prepare('SELECT * FROM hamilton_saved_sessions WHERE id = ?').get(existing.id))
+  }
+  const id = crypto.randomUUID()
+  await db.prepare(
+    `INSERT INTO hamilton_saved_sessions
+        (id, user_id, profile_id, portal_host, label, storage_state_encrypted,
+         authentication_strategy, established_at, expires_at, status, metadata_json, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ${nowFn}, ?, 'valid', ?, ${nowFn}, ${nowFn})`,
+  ).run(id, String(userId), String(profileId), host, label, encrypted,
+    authenticationStrategy, expiresAt, JSON.stringify(safeMeta))
+  return rowToSession(await db.prepare('SELECT * FROM hamilton_saved_sessions WHERE id = ?').get(id))
+}
+
+/**
+ * Decrypt and return the Playwright storageState OBJECT for a saved session, or
+ * null if the row has no encrypted state. Pass the result straight to
+ * `browser.newContext({ storageState })`. Marks the session used.
+ */
+export async function getSessionStorageState(db, sessionId) {
+  if (!db || !sessionId) return null
+  await ensureSchema(db)
+  const row = await db.prepare('SELECT * FROM hamilton_saved_sessions WHERE id = ?').get(String(sessionId))
+  if (!row || !row.storage_state_encrypted) return null
+  try {
+    const enc = typeof row.storage_state_encrypted === 'string'
+      ? JSON.parse(row.storage_state_encrypted)
+      : row.storage_state_encrypted
+    const plaintext = decryptRuntimeSecret(enc)
+    const storageState = JSON.parse(plaintext)
+    await markSessionUsed(db, sessionId)
+    return storageState
+  } catch {
+    return null
+  }
 }
 
 /**

@@ -534,6 +534,7 @@ export async function runAutopilot({
   authorizations,
   documents = [],
   storageStatePath = null,
+  storageState = null,
   allowAutoSubmit = null,
   loginCredential = null,
   headless = true,
@@ -562,9 +563,16 @@ export async function runAutopilot({
   }
 
   const browser = await chromium.launch({ headless })
-  const context = await browser.newContext(
-    storageStatePath && fs.existsSync(storageStatePath) ? { storageState: storageStatePath } : {},
-  )
+  // Prefer an in-memory storageState OBJECT (the durable, DB-backed session a
+  // user imported after clearing 2FA themselves) — it survives Railway's
+  // ephemeral filesystem, unlike an on-disk path. Fall back to a path if given.
+  let contextOptions = {}
+  if (storageState && typeof storageState === 'object') {
+    contextOptions = { storageState }
+  } else if (storageStatePath && fs.existsSync(storageStatePath)) {
+    contextOptions = { storageState: storageStatePath }
+  }
+  const context = await browser.newContext(contextOptions)
   const page = await context.newPage()
   const valuesByKey = readProfileValues(profile)
   const screenshotsRoot = screenshotsDir || path.join(os.tmpdir(), 'hamilton-autopilot-screens')

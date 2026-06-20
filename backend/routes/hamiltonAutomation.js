@@ -66,6 +66,7 @@ import {
 } from '../services/hamilton/hamiltonPaymentAuthorizationService.js'
 import {
   recordSession,
+  importSession,
   listSessionsForProfile,
   getSessionById,
   revokeSession,
@@ -776,6 +777,29 @@ router.post('/sessions', async (req, res) => {
     return res.json({ ok: true, session })
   } catch (err) {
     return res.status(400).json({ error: 'record_failed', detail: err?.message })
+  }
+})
+// Import a session the user established themselves (logged in + cleared 2FA in
+// their own browser) by posting the exported Playwright storageState. Stored
+// AES-256-GCM-encrypted so Hamilton can reuse it to act inside the real portal.
+// The ciphertext is never echoed back. Used by tools/hamilton-session-capture.
+router.post('/sessions/import', async (req, res) => {
+  const user = await requireProfileScope(req, res, req.body?.profileId)
+  if (!user) return
+  try {
+    const session = await importSession(req.db, {
+      userId: getAuthUserId(user),
+      profileId: req.body?.profileId,
+      portalHost: req.body?.portal_host || req.body?.portalHost || req.body?.portal_url,
+      storageState: req.body?.storage_state || req.body?.storageState,
+      label: req.body?.label || null,
+      authenticationStrategy: req.body?.authentication_strategy || req.body?.authenticationStrategy || null,
+      expiresAt: req.body?.expires_at || req.body?.expiresAt || null,
+      metadata: req.body?.metadata || {},
+    })
+    return res.json({ ok: true, session })
+  } catch (err) {
+    return res.status(400).json({ error: 'import_failed', detail: err?.message })
   }
 })
 router.post('/sessions/:id/revoke', async (req, res) => {
