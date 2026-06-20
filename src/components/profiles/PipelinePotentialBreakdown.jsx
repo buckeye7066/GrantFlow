@@ -27,6 +27,8 @@ import {
 } from "@/components/ui/dialog"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import HelpTip from "@/components/help/HelpTip"
+import { getStageHelp } from "@/components/pipeline/pipelineStageHelp"
 import { Loader2, ExternalLink, CalendarClock, ChevronRight, Printer } from "lucide-react"
 import { createPageUrl } from "@/utils"
 
@@ -61,6 +63,21 @@ function humanize(status) {
 
 function stageMeta(status) {
   return STAGE_META[status] || { label: humanize(status), phase: "Preparing", tone: "bg-slate-100 text-slate-700" }
+}
+
+// Plain-English explanation of each status badge, shown on hover. Reuses the
+// canonical PIPELINE_STAGE_HELP map (getStageHelp) so wording stays in sync with
+// the Kanban board. A couple of STAGE_META keys aren't in that map yet, so we
+// fill them in here.
+const EXTRA_STAGE_HELP = {
+  gathering_documents: "Collecting the forms, attachments, and supporting files the funder requires before the application can be written.",
+  ready_to_submit: "The application is complete and ready — it just needs to be sent or submitted through the funder's portal.",
+}
+
+function stageHelpText(status) {
+  const extra = EXTRA_STAGE_HELP[status]
+  if (extra) return extra
+  return getStageHelp(status).plainEnglish
 }
 
 const usd = new Intl.NumberFormat("en-US", {
@@ -267,9 +284,16 @@ export default function PipelinePotentialBreakdown({
 
                     <div className="flex items-center justify-between gap-2 mt-2">
                       <div className="flex items-center gap-2">
-                        <Badge variant="outline" className={`text-[10px] border-transparent ${meta.tone}`}>
-                          {meta.label}
-                        </Badge>
+                        <HelpTip text={stageHelpText(item.status)}>
+                          <span className="inline-flex cursor-help">
+                            <Badge
+                              variant="outline"
+                              className={`text-[10px] border-transparent ${meta.tone}`}
+                            >
+                              {meta.label}
+                            </Badge>
+                          </span>
+                        </HelpTip>
                         <span className="text-[10px] uppercase tracking-wide text-slate-400">{meta.phase}</span>
                       </div>
                       <a
