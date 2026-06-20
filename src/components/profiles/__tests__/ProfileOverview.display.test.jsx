@@ -2,10 +2,23 @@
 import React from "react"
 import { render, screen } from "@testing-library/react"
 import { describe, expect, it } from "vitest"
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 
 import ProfileOverview from "../ProfileOverview.jsx"
 import { formatInlinePreviewValue, renderValue } from "../profileOverviewHelpers.jsx"
 import { calculateProfileCompletion } from "@/utils/profileCompletion"
+
+// ProfileOverview renders PipelinePotentialBreakdown, which calls useQuery, so it
+// needs a QueryClientProvider in the tree.
+function renderWithQueryClient(ui) {
+  const queryClient = new QueryClient({
+    defaultOptions: {
+      queries: { retry: false },
+      mutations: { retry: false },
+    },
+  })
+  return render(<QueryClientProvider client={queryClient}>{ui}</QueryClientProvider>)
+}
 
 const baseProfile = {
   id: "profile-student",
@@ -48,7 +61,7 @@ describe("ProfileOverview display rendering", () => {
   })
 
   it("shows Not updated yet when section data is empty even if updated_at exists", () => {
-    render(
+    renderWithQueryClient(
       <ProfileOverview
         profile={{
           ...baseProfile,
@@ -67,7 +80,7 @@ describe("ProfileOverview display rendering", () => {
   })
 
   it("renders a section card count that matches completion totalSections", () => {
-    render(<ProfileOverview profile={baseProfile} />)
+    renderWithQueryClient(<ProfileOverview profile={baseProfile} />)
 
     const completion = calculateProfileCompletion(baseProfile)
     expect(screen.getByText(`${completion.totalSections} sections defined • ${completion.completedSections} fully populated`)).toBeTruthy()
