@@ -1966,6 +1966,36 @@ router.put('/:id', async (req, res) => {
   res.json(mapProfile(updated))
 })
 
+// Durable tombstone so boot seeders (ensureDesignatedProfiles, seedBaselineFromRepo)
+// never resurrect a deleted designated profile — even if its profiles row is gone.
+// Mirrors the canonical pattern in routes/admin.js.
+async function writeProfileTombstone(db, profileId, deletedBy, reason) {
+  const isPostgres = db?.dialect === 'postgres'
+  await db.prepare(
+    isPostgres
+      ? `CREATE TABLE IF NOT EXISTS profile_tombstones (
+           profile_id TEXT PRIMARY KEY,
+           deleted_at TIMESTAMPTZ DEFAULT now(),
+           deleted_by TEXT,
+           reason TEXT
+         )`
+      : `CREATE TABLE IF NOT EXISTS profile_tombstones (
+           profile_id TEXT PRIMARY KEY,
+           deleted_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+           deleted_by TEXT,
+           reason TEXT
+         )`,
+  ).run()
+  await db.prepare(
+    `INSERT INTO profile_tombstones (profile_id, deleted_at, deleted_by, reason)
+     VALUES (?, CURRENT_TIMESTAMP, ?, ?)
+     ON CONFLICT(profile_id) DO UPDATE SET
+       deleted_at = CURRENT_TIMESTAMP,
+       deleted_by = excluded.deleted_by,
+       reason = excluded.reason`,
+  ).run(String(profileId), deletedBy || null, reason || null)
+}
+
 router.delete('/:id', async (req, res) => {
   const { id } = req.params
   const authUserId = req.ctx?.userId ?? null
@@ -1988,11 +2018,22 @@ router.delete('/:id', async (req, res) => {
 
   // Designated/demo profiles are intentionally "ensured" by boot-time seeding.
   // If we hard-delete them, the seeder will re-create them on the next run.
-  // So for these IDs, always use a durable tombstone (soft-delete).
+  // So for these IDs, always use a durable tombstone (soft-delete) AND write a
+  // profile_tombstones row. The status='deleted' flag alone is NOT enough: if
+  // the row ever disappears (a prior hard delete, a drifted DB), the seeders'
+  // `WHERE status <> 'deleted'` guard has no row to check and they re-INSERT a
+  // fresh empty profile every boot. The tombstone row is what both
+  // ensureDesignatedProfiles and seedBaselineFromRepo consult to stay away
+  // permanently. (Root cause of the recurring "deleted profile reappears" flap.)
   if (isDesignatedProfileId(id)) {
     await req.db
       .prepare("UPDATE profiles SET status = 'deleted', updated_at = CURRENT_TIMESTAMP WHERE id = ?")
       .run(id)
+    try {
+      await writeProfileTombstone(req.db, id, authUserId, 'soft_deleted_designated_profile')
+    } catch (tombErr) {
+      console.warn('[profiles] failed to write profile tombstone (soft-delete still applied):', String(id), tombErr?.message || tombErr)
+    }
     console.warn('[profiles] Soft-deleted designated profile (tombstoned):', String(id))
     return res.status(204).send()
   }
