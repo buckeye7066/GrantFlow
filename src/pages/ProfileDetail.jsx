@@ -2,7 +2,7 @@ import React, { useRef, useEffect } from "react"
 import { useSearchParams, useNavigate } from "react-router-dom"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { syncTargetCollegesToApplications } from "@/utils/targetCollegesSync"
-import { AlertCircle, Loader2, Palette, Printer, KeyRound } from "lucide-react"
+import { AlertCircle, Loader2, Palette, Printer } from "lucide-react"
 import {
   getProfile,
   requestProfileSectionAI,
@@ -857,22 +857,11 @@ export default function ProfileDetail() {
                 user straight here. Previously these cards sat below the
                 "Go to Pipeline" box and were easy to miss. */}
             <div id="portal-logins" className="scroll-mt-24 space-y-6">
-              <div className="rounded-lg border border-indigo-200 bg-indigo-50/60 p-4">
-                <h3 className="text-base font-semibold text-indigo-900 flex items-center gap-2">
-                  <KeyRound className="w-4 h-4" />
-                  Teach Hamilton how to sign in
-                </h3>
-                <p className="text-sm text-indigo-800/80 mt-1">
-                  Add a saved login (username &amp; password) or capture a login
-                  session for any grant/application portal — e.g. MTSU. Hamilton
-                  uses these to sign in on this profile's behalf when processing
-                  the pipeline. Everything here is scoped to this profile only.
-                </p>
-              </div>
-              {/* PRIMARY path: the auto-listed Portals dashboard. Every portal
-                  that applies to this profile is shown — the user clicks a red
-                  tile to log in once (no typing), and ready/green tiles expose
-                  two-way sync. */}
+              {/* The Portals dashboard IS the page: every portal that applies to
+                  this profile (schools, funders, plus the right applications and
+                  benefits for its type + state) is auto-listed. Green = ready,
+                  red = click to log in once. No explainer clutter — the card
+                  speaks for itself. Power-user manual entry lives under Advanced. */}
               <ProfilePortalsCard profileId={profileId} profileName={profile?.display_name || ""} />
               {/* The manual portal-host/URL entry forms are de-emphasized: kept
                   for power users under a disclosure, since the dashboard above is

@@ -41,6 +41,8 @@ import {
   startCloudLogin,
   runPortalSyncRead,
   runPortalSyncWrite,
+  saveApplicationPacket,
+  packetDownloadUrl,
 } from "@/api/hamilton"
 import { openApplicationPacket } from "@/components/hamilton/applicationPacketPrint"
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/card"
@@ -65,6 +67,10 @@ import {
   ArrowLeftRight,
   Printer,
   Mail,
+  FileText,
+  HeartHandshake,
+  ClipboardList,
+  ExternalLink,
 } from "lucide-react"
 
 function formatWhen(iso) {
@@ -129,6 +135,8 @@ function openLiveLogin(res) {
 const KIND_GROUPS = [
   { key: "school", title: "Schools", Icon: GraduationCap },
   { key: "funding_source", title: "Funding sources", Icon: Landmark },
+  { key: "process", title: "Applications & forms", Icon: ClipboardList },
+  { key: "benefit", title: "Benefits & assistance", Icon: HeartHandshake },
 ]
 
 export default function ProfilePortalsCard({ profileId, profileName = "" }) {
@@ -204,6 +212,24 @@ export default function ProfilePortalsCard({ profileId, profileName = "" }) {
     onError: (err) => showErrorToast(toast, "Could not start push", err?.message || "Please try again."),
   })
 
+  // Save (or re-use) a durable application packet Document for a mail/fax source.
+  // The button ALSO opens the printable view; this mutation persists it so the
+  // page shows "Packet saved to Documents" with a link.
+  const packetMutation = useMutation({
+    mutationFn: (src) => saveApplicationPacket(profileId, { source: src, profileName }),
+    onSuccess: (res) => {
+      refetchPortals()
+      if (res?.documentId) {
+        showSuccessToast(
+          toast,
+          res?.reused ? "Packet already saved" : "Packet saved to Documents",
+          "You can print it now and find it later in this profile's Documents.",
+        )
+      }
+    },
+    onError: (err) => showErrorToast(toast, "Could not save the packet", err?.message || "It still opened for printing."),
+  })
+
   const busyLoginHost = loginMutation.isPending ? loginMutation.variables?.portalHost : null
   const busyReadHost = readMutation.isPending ? readMutation.variables?.portalHost : null
   const busyWriteHost = writeMutation.isPending ? writeMutation.variables?.portalHost : null
@@ -219,9 +245,11 @@ export default function ProfilePortalsCard({ profileId, profileName = "" }) {
     const isWriting = busyWriteHost === host
     const syncBusy = isReading || isWriting
 
+    const tileKey = host || portal.label || portal.connectorId || "tile"
+
     return (
       <li
-        key={portal.connectorId || host}
+        key={tileKey}
         className={`rounded-lg border p-3 ${ready ? "border-emerald-200 bg-emerald-50/40" : "border-rose-200 bg-rose-50/40"}`}
       >
         <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
@@ -307,7 +335,7 @@ export default function ProfilePortalsCard({ profileId, profileName = "" }) {
                   Refresh sign-in
                 </Button>
               </div>
-            ) : (
+            ) : host ? (
               <Button
                 size="sm"
                 disabled={isLoggingIn}
@@ -316,6 +344,18 @@ export default function ProfilePortalsCard({ profileId, profileName = "" }) {
                 {isLoggingIn ? <Loader2 className="h-4 w-4 mr-1.5 animate-spin" /> : <Globe className="h-4 w-4 mr-1.5" />}
                 Sign in to set up
               </Button>
+            ) : portal.loginUrl ? (
+              // Process/school tile we resolved a URL for but can't host-scope a
+              // login session: just open it in a new tab.
+              <Button size="sm" variant="outline" asChild>
+                <a href={portal.loginUrl} target="_blank" rel="noopener noreferrer">
+                  <ExternalLink className="h-4 w-4 mr-1.5" /> Open
+                </a>
+              </Button>
+            ) : (
+              // The student's own school with no resolved portal yet — still
+              // listed so it's not forgotten; no login to set up.
+              <span className="text-xs text-muted-foreground">Add this school&rsquo;s login under Advanced</span>
             )}
           </div>
         </div>
@@ -340,6 +380,15 @@ export default function ProfilePortalsCard({ profileId, profileName = "" }) {
     const method = String(src.applicationMethod || "").trim()
     const contact = (src.contact && typeof src.contact === "object") ? src.contact : {}
     const key = src.grantId || src.opportunityId || `${host}-${idx}`
+    const packet = (src.packet && typeof src.packet === "object") ? src.packet : {}
+    const packetSaved = Boolean(packet.generated && packet.documentId)
+    const downloadHref = packetSaved ? packetDownloadUrl(profileId, packet.documentId) : null
+    const isSaving = packetMutation.isPending && packetMutation.variables === src
+    // Open the printable packet AND save a durable copy to Documents in one click.
+    const handlePacket = () => {
+      openApplicationPacket({ profileName, source: src })
+      packetMutation.mutate(src)
+    }
     return (
       <li key={key} className="rounded-lg border border-slate-200 bg-slate-50/50 p-3">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
@@ -366,15 +415,28 @@ export default function ProfilePortalsCard({ profileId, profileName = "" }) {
               </p>
             )}
           </div>
-          <div className="shrink-0">
+          <div className="flex shrink-0 flex-col items-stretch gap-1.5 sm:items-end">
             <Button
               size="sm"
               variant="outline"
-              onClick={() => openApplicationPacket({ profileName, source: src })}
-              title="Open a printable application packet — contact info + how to mail/fax/email"
+              disabled={isSaving}
+              onClick={handlePacket}
+              title="Open a printable application packet and save a copy to this profile's Documents"
             >
-              <Printer className="h-4 w-4 mr-1.5" /> Print application packet
+              {isSaving ? <Loader2 className="h-4 w-4 mr-1.5 animate-spin" /> : <Printer className="h-4 w-4 mr-1.5" />}
+              Print &amp; save packet
             </Button>
+            {packetSaved && (
+              <span className="inline-flex items-center gap-1 text-xs text-emerald-700">
+                <FileText className="h-3 w-3" />
+                Packet saved to Documents
+                {downloadHref && (
+                  <a href={downloadHref} target="_blank" rel="noopener noreferrer" className="underline">
+                    view
+                  </a>
+                )}
+              </span>
+            )}
           </div>
         </div>
       </li>
@@ -393,9 +455,8 @@ export default function ProfilePortalsCard({ profileId, profileName = "" }) {
               <LayoutGrid className="h-4 w-4" /> Portals
             </CardTitle>
             <CardDescription>
-              Every portal that applies to this profile — its schools and the funding sources of grants
-              in its pipeline — is listed for you. No typing: a <strong>green</strong> portal is ready for
-              Hamilton to sign in; click a <strong>red</strong> one to log in once in a secure window.
+              <span className="text-emerald-700 font-medium">Green</span> means you&rsquo;re all set.{" "}
+              <span className="text-rose-700 font-medium">Red</span> means click it to log in once. That&rsquo;s it.
             </CardDescription>
           </div>
           <Button size="sm" variant="ghost" onClick={refetchPortals} title="Refresh portals">

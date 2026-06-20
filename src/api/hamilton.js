@@ -358,6 +358,26 @@ export function listProfilePortals(profileId) {
   return apiFetch(`/api/profiles/${encodeURIComponent(profileId)}/portals`)
 }
 
+// Render + SAVE an application packet for a non-portal funding source as a durable
+// Document on this profile (so the page reflects what Hamilton produced). Returns
+// { documentId, reused, at }. Idempotent: re-saving the same source returns the
+// existing document.
+export function saveApplicationPacket(profileId, { source, profileName = '' } = {}) {
+  if (!profileId) return Promise.reject(new Error('profileId required'))
+  if (!source) return Promise.reject(new Error('source required'))
+  return apiFetch(`/api/profiles/${encodeURIComponent(profileId)}/portals/packet`, {
+    method: 'POST',
+    body: JSON.stringify({ source, profileName }),
+  })
+}
+
+// Durable download URL for a saved packet document (serves the stored bytes so it
+// works even after Railway's filesystem is wiped).
+export function packetDownloadUrl(profileId, documentId) {
+  if (!profileId || !documentId) return null
+  return `/api/profiles/${encodeURIComponent(profileId)}/portals/packet/${encodeURIComponent(documentId)}/download`
+}
+
 // ── Two-way portal sync (Hamilton) ─────────────────────────────────────────
 // Endpoints provided by the portal-sync backend framework, mounted at
 // /api/hamilton/portal-sync. The status reader returns real portal_sync_runs

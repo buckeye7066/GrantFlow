@@ -48,6 +48,8 @@ import {
 import { resolveConnector, getConnectorForHost } from './portalSync/registry.js'
 import { suggestPortalLogin } from './hamiltonPortalLoginSuggester.js'
 import { listRuns } from './portalSync/store.js'
+import { resolveProcessPortals } from './processPortals.js'
+import { loadProfileSignals } from '../profileSignals/index.js'
 import { createLogger } from '../../utils/logger.js'
 
 const log = createLogger('service:profile-portal-index')
@@ -513,6 +515,62 @@ async function readCacheMap(db, profileId) {
   return out
 }
 
+// ── process / benefit / school portals (relevance + geo gated) ────────────────
+
+/**
+ * Load the profile's signals and resolve the applicable PROCESS portals (FAFSA/
+ * ACT/College Board for students, state benefit portals for need profiles,
+ * Grants.gov/SAM.gov for orgs, plus the student's own school) — already relevance
+ * + geography gated by processPortals.js. Never throws: any failure yields [].
+ */
+async function collectProcessPortals(db, profileId) {
+  try {
+    const { signals } = await loadProfileSignals(db, profileId)
+    return resolveProcessPortals(signals)
+  } catch (err) {
+    log.warn('process_portals_failed', { profileId: String(profileId), err: err?.message })
+    return []
+  }
+}
+
+/**
+ * Turn one resolved process-portal descriptor into a full dashboard tile, with
+ * live ready/needs_setup status computed exactly like derived portals. A school
+ * tile with no resolved host stays renderable (status needs_setup, no host).
+ */
+async function buildProcessTile(db, profileId, desc, { credentialDomains } = {}) {
+  const host = desc.portalHost || null
+  const connector = host ? getConnectorForHost(host) : null
+  const loginUrl = firstNonEmpty(desc.loginUrl) || (host ? `https://${host}` : null)
+  const label = firstNonEmpty(desc.label, host) || desc.label || ''
+
+  let hasCredential = false
+  let hasSession = false
+  if (host) {
+    const ready = await hasReadyIdentity(db, profileId, host, { credentialDomains })
+    hasCredential = ready.hasCredential
+    hasSession = ready.hasSession
+  }
+  const status = (hasCredential || hasSession) ? 'ready' : 'needs_setup'
+
+  return {
+    portalHost: host,
+    loginUrl,
+    label,
+    kind: desc.kind,
+    sources: Array.isArray(desc.sources) ? desc.sources : [],
+    status,
+    hasCredential,
+    hasSession,
+    connectorId: connector?.id || null,
+    supportsTwoWaySync: isRealConnector(connector),
+    lastSync: null,
+    isProcessPortal: true,
+    scope: desc.scope || null,
+    state: desc.state || null,
+  }
+}
+
 // ── public API ───────────────────────────────────────────────────────────────
 
 /**
@@ -542,7 +600,16 @@ export async function getProfilePortals(db, profileId, { refresh = true } = {}) 
       (a, b) => String(a.title).localeCompare(String(b.title)),
     )
 
-    if (acc.size === 0) return { portals: [], mailFaxSources }
+    // PROCESS portals (FAFSA/ACT/College Board, state benefits, Grants.gov/SAM,
+    // the student's own school) are relevance + geography gated and DO NOT depend
+    // on pipeline/college data — so a profile with no pipeline portals can still
+    // have process tiles. Resolve them up front.
+    const processPortals = await collectProcessPortals(db, profileId)
+
+    // Nothing at all to show → still degrade to an empty, well-shaped result.
+    if (acc.size === 0 && processPortals.length === 0) {
+      return { portals: [], mailFaxSources }
+    }
 
     const cache = await readCacheMap(db, profileId)
 
@@ -604,6 +671,20 @@ export async function getProfilePortals(db, profileId, { refresh = true } = {}) 
         supportsTwoWaySync,
         lastSync,
       })
+    }
+
+    // Merge in the gated PROCESS portals. Dedupe by host against the derived
+    // portals (a derived pipeline/college tile for the same host wins — it
+    // carries real sources), and dedupe process tiles among themselves by id.
+    const derivedHosts = new Set(portals.map((p) => p.portalHost).filter(Boolean))
+    const seenProcessIds = new Set()
+    for (const desc of processPortals) {
+      if (desc.id && seenProcessIds.has(desc.id)) continue
+      if (desc.id) seenProcessIds.add(desc.id)
+      if (desc.portalHost && derivedHosts.has(desc.portalHost)) continue
+      const tile = await buildProcessTile(db, profileId, desc, { credentialDomains })
+      portals.push(tile)
+      if (tile.portalHost) derivedHosts.add(tile.portalHost)
     }
 
     // Stable, helpful ordering: schools first, then funding sources, then by label.
