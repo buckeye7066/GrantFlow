@@ -40,7 +40,7 @@ import { setProfileSectionField } from '../../profileFieldWriter.js'
 import { upsertSchoolPortalAwardAsOpportunity } from '../../schoolPortalImportService.js'
 import { isDismissed } from '../../pipelineDismissals.js'
 import { createLogger } from '../../../utils/logger.js'
-import { listConnectors, getConnectorForHost } from './registry.js'
+import { listConnectors, getConnectorForHost, resolveConnector } from './registry.js'
 import {
   ensurePortalSyncSchema,
   recordRunStart,
@@ -48,7 +48,7 @@ import {
   listRuns,
 } from './store.js'
 
-export { listConnectors, getConnectorForHost, ensurePortalSyncSchema, listRuns }
+export { listConnectors, getConnectorForHost, resolveConnector, ensurePortalSyncSchema, listRuns }
 
 const log = createLogger('service:portalSync')
 
@@ -177,7 +177,14 @@ export async function runPortalSync(db, { profileId, portalHost, direction = 're
   if (!host) return { ok: false, direction, connectorId: null, runId: null, error: 'portalHost required' }
   const dir = VALID_DIRECTIONS.has(direction) ? direction : 'read'
 
-  const connector = getConnectorForHost(host)
+  // Load the saved login up front so connector resolution is credential-aware:
+  // an MTSU account saved under login.microsoftonline.com must route to the MTSU
+  // connector, not the generic one. resolveConnector always returns a connector
+  // (generic fallback), so any reachable host is syncable.
+  let credential = null
+  try { credential = await getDecryptedCredentialWithFallback(db, { profileId, portalHost: host }) } catch { credential = null }
+
+  const connector = resolveConnector({ host, username: credential?.username, label: credential?.label })
   const connectorId = connector?.id || null
 
   await ensurePortalSyncSchema(db).catch(() => {})
@@ -210,8 +217,7 @@ export async function runPortalSync(db, { profileId, portalHost, direction = 're
     const saved = await findValidSession(db, { profileId, portalHost: host })
     if (saved?.has_storage_state) storageState = await getSessionStorageState(db, saved.id)
   } catch { storageState = null }
-  let credential = null
-  try { credential = await getDecryptedCredentialWithFallback(db, { profileId, portalHost: host }) } catch { credential = null }
+  // `credential` was already resolved above for connector selection.
 
   if (!storageState && !credential) {
     return fail('no authenticated session or saved login for this profile + portal host')

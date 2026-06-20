@@ -22,6 +22,7 @@ import React from "react"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import {
   listPortalSessions,
+  listPortalCredentials,
   runPortalSyncRead,
   runPortalSyncWrite,
   listPortalSyncRuns,
@@ -84,11 +85,20 @@ export default function PortalSyncCard({ profileId }) {
   const { toast } = useToast()
   const queryClient = useQueryClient()
 
-  // The portals this profile can sync are the ones it has a saved login/session
-  // for — those are the accounts Hamilton can actually sign in to.
+  // The portals this profile can sync are the ones it has a saved login OR
+  // session for — those are the accounts Hamilton can actually sign in to.
   const sessionsQuery = useQuery({
     queryKey: ["hamilton-portal-sessions", profileId],
     queryFn: () => listPortalSessions(profileId),
+    enabled: !!profileId,
+    staleTime: 30_000,
+  })
+
+  // Saved logins (username/password) are also connectable portals — this is the
+  // common case (the user just enters username/password/2FA once).
+  const credentialsQuery = useQuery({
+    queryKey: ["hamilton-portal-credentials", profileId],
+    queryFn: () => listPortalCredentials(profileId),
     enabled: !!profileId,
     staleTime: 30_000,
   })
@@ -101,19 +111,29 @@ export default function PortalSyncCard({ profileId }) {
   })
 
   const sessions = Array.isArray(sessionsQuery.data?.sessions) ? sessionsQuery.data.sessions : []
+  const credentials = Array.isArray(credentialsQuery.data?.credentials) ? credentialsQuery.data.credentials : []
   const runs = Array.isArray(runsQuery.data?.runs) ? runsQuery.data.runs : []
 
-  // Unique portal hosts the profile has a (non-revoked) saved login for.
+  // Unique portal hosts the profile can sign in to — the union of saved
+  // sessions and saved logins (non-revoked). Hamilton owns navigation from the
+  // host, so the user never has to supply a URL.
   const hosts = React.useMemo(() => {
     const seen = new Map()
+    const add = (host, label) => {
+      if (!host || seen.has(host)) return
+      seen.set(host, { host, label: label || null })
+    }
     for (const s of sessions) {
-      const host = s?.portal_host
-      if (!host) continue
       if (String(s?.status || "").toLowerCase() === "revoked") continue
-      if (!seen.has(host)) seen.set(host, { host, label: s.label || null })
+      add(s?.portal_host, s?.label)
+    }
+    for (const c of credentials) {
+      if (String(c?.status || "").toLowerCase() === "revoked") continue
+      // Prefer a human label, else the masked username, so the row is identifiable.
+      add(c?.portal_host, c?.label || c?.username_masked || c?.username || null)
     }
     return [...seen.values()]
-  }, [sessions])
+  }, [sessions, credentials])
 
   // Latest run per host (runs come back newest-first from the API).
   const latestByHost = React.useMemo(() => {
@@ -155,7 +175,7 @@ export default function PortalSyncCard({ profileId }) {
     onError: (err) => showErrorToast(toast, "Could not start push", err?.message || "Please try again."),
   })
 
-  const isLoading = sessionsQuery.isLoading || runsQuery.isLoading
+  const isLoading = sessionsQuery.isLoading || credentialsQuery.isLoading || runsQuery.isLoading
   const busyHost = readMutation.isPending
     ? readMutation.variables
     : writeMutation.isPending
@@ -194,8 +214,9 @@ export default function PortalSyncCard({ profileId }) {
             <Globe className="mx-auto h-6 w-6 text-muted-foreground" />
             <p className="mt-2 text-sm font-medium">No connectable portals yet</p>
             <p className="mt-1 text-sm text-muted-foreground">
-              Add a saved login for a portal in <span className="font-medium">Saved portal sessions</span>{" "}
-              above. Once Hamilton can sign in to a portal, it shows up here for two-way sync.
+              Add a saved login (username, password, and 2FA) in{" "}
+              <span className="font-medium">Saved portal logins</span> above — that&rsquo;s all Hamilton
+              needs. Once it can sign in to a portal, it shows up here for two-way sync.
             </p>
           </div>
         )}

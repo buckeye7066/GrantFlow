@@ -161,6 +161,13 @@ export function listPortalSessions(profileId) {
   return apiFetch(`/api/hamilton/automation/sessions?profileId=${encodeURIComponent(profileId)}`)
 }
 
+// Saved portal LOGINS (username/password, encrypted at rest). These are also
+// portals Hamilton can sign in to — surfaced alongside sessions for sync.
+export function listPortalCredentials(profileId) {
+  if (!profileId) return Promise.reject(new Error('profileId required'))
+  return apiFetch(`/api/hamilton/automation/credentials?profileId=${encodeURIComponent(profileId)}`)
+}
+
 // Revoke a saved session so Hamilton can no longer reuse it.
 export function revokePortalSession(sessionId, reason = null) {
   if (!sessionId) return Promise.reject(new Error('sessionId required'))

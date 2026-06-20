@@ -285,8 +285,31 @@ function safeUrl(page) {
   try { return page.url() } catch { return null }
 }
 
+// Email/username domains and label hints that identify an MTSU account even when
+// the saved login lives under a shared IdP host (MTSU federates through Microsoft
+// — accounts log in at login.microsoftonline.com as <user>@mtmail.mtsu.edu).
+const MTSU_ACCOUNT_DOMAINS = /@(mtmail\.)?mtsu\.edu$/i
+const MTSU_IDP_HOSTS = /(^|\.)(login\.microsoftonline\.com|login\.microsoft\.com|microsoftonline\.com|office\.com)$/i
+
+/**
+ * Claim a saved credential as MTSU's. True when the host is an MTSU host, OR the
+ * credential is a shared-IdP login (Microsoft) whose username/label points at an
+ * MTSU account. Lets an MTSU login stored under login.microsoftonline.com route
+ * to this connector instead of the generic one.
+ * @param {{ host?:string, username?:string, label?:string }} ctx
+ */
+export function matchesCredential({ host, username = null, label = null } = {}) {
+  const h = normalizeHost(host)
+  if (h && hostMatch.test(h)) return true
+  const hay = `${username || ''} ${label || ''}`
+  if (MTSU_ACCOUNT_DOMAINS.test(String(username || ''))) return true
+  if (/\bmtsu\b|middle tennessee state/i.test(hay)) return true
+  if (h && MTSU_IDP_HOSTS.test(h) && /mtsu/i.test(hay)) return true
+  return false
+}
+
 /** @type {import('../types.js').PortalConnector} */
-const connector = { id, label, hostMatch, read, write }
+const connector = { id, label, hostMatch, matchesCredential, read, write }
 
 // Convenience: does this connector claim the given host?
 export function matchesHost(host) {
