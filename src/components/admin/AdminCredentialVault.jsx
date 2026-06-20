@@ -330,7 +330,7 @@ export default function AdminCredentialVault() {
 
       {/* Sticky action bar: assign pending, then mass-delete the marked. */}
       {creds.length > 0 && (
-        <div className="fixed bottom-0 left-0 right-0 z-10 flex flex-wrap items-center justify-end gap-3 border-t border-slate-200 bg-white/95 backdrop-blur px-4 py-3 shadow-[0_-1px_3px_rgba(0,0,0,0.06)]">
+        <div className="fixed bottom-0 left-0 right-0 z-40 flex flex-wrap items-center justify-end gap-3 border-t border-slate-200 bg-white/95 backdrop-blur px-4 py-3 pr-24 shadow-[0_-1px_3px_rgba(0,0,0,0.06)]">
           <span className="mr-auto text-xs text-slate-500">
             {counts.del} to delete · {counts.assign} to assign · {counts.keep} keep
           </span>
