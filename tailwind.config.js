@@ -11,7 +11,27 @@ export default {
         md: 'calc(var(--radius) - 2px)',
         sm: 'calc(var(--radius) - 4px)',
       },
+      fontFamily: {
+        // Funding Current design identity — opt-in aliases (do not change global body font).
+        display: ['"Bricolage Grotesque"', 'system-ui', 'sans-serif'],
+        'mono-money': ['"Space Mono"', 'ui-monospace', 'SFMono-Regular', 'monospace'],
+      },
       colors: {
+        // Funding Current palette — additive named tokens. The accent semantics
+        // ARE the product status language: emerald=ready, amber=awarded, coral=needs-you.
+        current: {
+          ink: '#14241F',
+          paper: '#F2F5F1',
+          card: '#FBFCFA',
+          line: '#D7DED6',
+          emerald: '#16794E',
+          emeraldSoft: '#E2EFE7',
+          amber: '#E6A23C',
+          amberSoft: '#FBECCD',
+          coral: '#E2543B',
+          coralSoft: '#FBE7E1',
+          sage: '#6FA68A',
+        },
         background: 'hsl(var(--background))',
         foreground: 'hsl(var(--foreground))',
         card: {
