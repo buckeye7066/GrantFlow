@@ -73,6 +73,7 @@ const AnyaIntakeResults = lazy(() => import("./AnyaIntakeResults"), 'AnyaIntakeR
 const PricingRequired = lazy(() => import("./PricingRequired"), 'PricingRequired');
 const ServiceAgreement = lazy(() => import("./ServiceAgreement"), 'ServiceAgreement');
 const CheckoutRequired = lazy(() => import("./CheckoutRequired"), 'CheckoutRequired');
+const HamiltonLiveLogin = lazy(() => import("./HamiltonLiveLogin"), 'HamiltonLiveLogin');
 
 import { Route, Routes, useLocation, Navigate } from 'react-router-dom';
 import { useAuthStore } from "@/stores/authStore";
@@ -407,6 +408,11 @@ export default function Pages() {
               */}
             <Route path="/start" element={withBoundary(<Start />, "Start")} />
             <Route path="/login" element={withBoundary(<Login />, "Login")} />
+            {/* Hamilton live login: a chrome-free, full-screen live-view window
+                the user drives to sign in + clear 2FA. Mounted ABOVE the gated
+                Layout so it renders without the app shell; server-side auth on
+                the stream/input/complete endpoints is the real access gate. */}
+            <Route path="/HamiltonLiveLogin" element={withBoundary(<HamiltonLiveLogin />, "HamiltonLiveLogin")} />
             <Route path="/set-password" element={withBoundary(<SetPassword />, "SetPassword")} />
             <Route path="/ServiceApplication" element={withBoundary(<ServiceApplication />, "ServiceApplication")} />
             <Route path="/auth/callback" element={withBoundary(<AuthCallback />, "AuthCallback")} />

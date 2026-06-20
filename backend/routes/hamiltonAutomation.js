@@ -86,6 +86,9 @@ import {
   isCloudLoginConfigured,
   startCloudLogin,
   getCloudLoginMeta,
+  getCloudLoginSession,
+  startScreencast,
+  dispatchInput,
   completeCloudLogin,
   cancelCloudLogin,
   cloudLoginStatus,
@@ -1019,9 +1022,101 @@ router.post('/sessions/cloud-login/start', async (req, res) => {
     loginUrl: req.body?.login_url || req.body?.loginUrl || null,
     label: req.body?.label || null,
     captureRequestId: req.body?.capture_request_id || null,
+    // Public origin of THIS request so the self_hosted liveUrl is absolute and
+    // points back at GrantFlow's own /HamiltonLiveLogin live-view page.
+    origin: `${req.protocol}://${req.get('host')}`,
   })
   if (!result.ok) return res.status(400).json({ error: 'cloud_login_start_failed', ...result })
   return res.json({ ok: true, ...result, disclaimer: CAPTURE_DISCLAIMER })
+})
+
+// Shared auth + profile-access guard for the live-view stream/input endpoints.
+// SECURITY: a liveSessionId alone MUST NOT grant control — every frame stream
+// and every input event re-verifies the authenticated caller may access the
+// live session's profile (admin bypass allowed via userMayAccessProfile). The
+// live session record carries the profileId it was started for.
+async function requireCloudLoginSessionAccess(req, res) {
+  const user = requireAuthenticatedUser(req, res)
+  if (!user) return null
+  const liveSessionId = String(req.params.liveSessionId || '')
+  const session = getCloudLoginSession(liveSessionId)
+  if (!session) {
+    res.status(404).json({ error: 'not_found_or_expired' })
+    return null
+  }
+  if (!(await userMayAccessProfile(req, user, session.meta?.profileId))) {
+    res.status(403).json({ error: 'forbidden' })
+    return null
+  }
+  return { user, liveSessionId, session }
+}
+
+// Live screen stream (SSE). Mirrors the live login page to the user's browser
+// frame-by-frame via CDP Page.startScreencast. Single-port + proxy-friendly:
+// it's a plain text/event-stream over the app's own public port (no extra ports,
+// no devtools exposure). The frontend /HamiltonLiveLogin page consumes this.
+router.get('/sessions/cloud-login/:liveSessionId/stream', async (req, res) => {
+  const ctx = await requireCloudLoginSessionAccess(req, res)
+  if (!ctx) return
+
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache, no-transform',
+    Connection: 'keep-alive',
+    'X-Accel-Buffering': 'no', // disable proxy buffering so frames flush live
+  })
+  res.write('retry: 3000\n\n')
+
+  let stop = null
+  let closed = false
+  // Heartbeat comment so intermediary proxies don't time the idle SSE out.
+  const heartbeat = setInterval(() => {
+    if (!closed) {
+      try { res.write(': ping\n\n') } catch { /* ignore */ }
+    }
+  }, 15_000)
+
+  const cleanup = () => {
+    if (closed) return
+    closed = true
+    clearInterval(heartbeat)
+    if (typeof stop === 'function') { stop().catch(() => {}) }
+    try { res.end() } catch { /* ignore */ }
+  }
+
+  req.on('close', cleanup)
+  req.on('error', cleanup)
+
+  try {
+    stop = await startScreencast(ctx.liveSessionId, (frame) => {
+      if (closed) return
+      try {
+        res.write(`data: ${JSON.stringify(frame)}\n\n`)
+      } catch {
+        cleanup()
+      }
+    })
+    if (!stop) {
+      res.write(`event: error\ndata: ${JSON.stringify({ error: 'stream_unavailable' })}\n\n`)
+      cleanup()
+    }
+  } catch (err) {
+    log.error('cloud_login_stream_failed', { err: err?.message })
+    try { res.write(`event: error\ndata: ${JSON.stringify({ error: 'stream_failed' })}\n\n`) } catch { /* ignore */ }
+    cleanup()
+  }
+})
+
+// Live input relay. One normalized event per POST → CDP Input.* on the live
+// page. Coordinates arrive as 0..1 fractions of the displayed image and are
+// scaled server-side by the latest frame's device size. Same auth + profile
+// gate as the stream — the liveSessionId never grants control on its own.
+router.post('/sessions/cloud-login/:liveSessionId/input', async (req, res) => {
+  const ctx = await requireCloudLoginSessionAccess(req, res)
+  if (!ctx) return
+  const result = await dispatchInput(ctx.liveSessionId, req.body || {})
+  if (!result.ok) return res.status(400).json({ error: 'input_failed', ...result })
+  return res.json({ ok: true })
 })
 
 // Finish: capture the authenticated session and import it (profile-bound). The

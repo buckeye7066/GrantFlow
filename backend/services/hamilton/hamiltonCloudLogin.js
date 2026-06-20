@@ -10,13 +10,16 @@
  * PROVIDERS (HAMILTON_CLOUD_LOGIN_PROVIDER):
  *
  *   - self_hosted (DEFAULT)  No third-party service, no paid API key. The
- *       backend launches its OWN Playwright Chromium (the same Playwright that
- *       already ships in the production image for Hamilton browser automation)
- *       via chromium.launchServer(), connects to it over CDP, opens the portal
- *       login page, and derives an interactive "live URL" from Chromium's own
- *       built-in DevTools front-end (which includes a screencast the user can
- *       see and drive). This is ON globally so any profile can capture a
- *       session — no per-deploy env required.
+ *       backend launches its OWN headless Playwright Chromium (the same
+ *       Playwright that already ships in the production image for Hamilton
+ *       browser automation) and opens the portal login page. The interactive
+ *       surface is served by GrantFlow ITSELF: the live page is mirrored to the
+ *       user's browser frame-by-frame over a same-origin SSE stream (CDP
+ *       `Page.startScreencast`), and the user's clicks / typing are relayed back
+ *       over a same-origin POST endpoint (CDP `Input.*`). Because both the
+ *       stream and the input channel ride the app's own single public port, this
+ *       works on Railway with no extra ports, no devtools exposure, and no
+ *       third-party service. ON globally so any profile can capture a session.
  *
  *   - cdp                    A HOSTED interactive Chrome (a CDP provider such as
  *       Browserless/Browserbase) reached via HAMILTON_CLOUD_LOGIN_CDP_ENDPOINT.
@@ -27,31 +30,31 @@
  *   - disabled               Turn the feature off entirely (callers fall back to
  *       Saved Login). Set HAMILTON_CLOUD_LOGIN_PROVIDER=disabled.
  *
- * INTERACTIVE-VIEW LIMITATION (be honest):
- *   The session CAPTURE (storageState) is fully real in every mode. The
- *   interactive *viewing* surface differs:
- *     - cdp providers stream a polished live URL anywhere.
- *     - self_hosted serves Chromium's own DevTools inspector. That page is only
- *       reachable if the host's devtools port is reachable by the user's
- *       browser. On a single-port PaaS (e.g. Railway) that port is not publicly
- *       routed by default, so set HAMILTON_CLOUD_LOGIN_PUBLIC_BASE to a base URL
- *       that reverse-proxies the devtools endpoint (or run the cdp provider).
- *       On local/self-hosted boxes the devtools URL works as-is. We NEVER fake a
- *       live URL: if none can be produced, start fails with a clear reason.
- *
- *   - Live sessions are held in-memory with a TTL; a single backend instance is
- *     assumed for the interactive window (acceptable for the capture flow).
+ * HONEST LIMITATIONS:
+ *   - The session CAPTURE (storageState) is fully real in every mode.
+ *   - The self_hosted live view is a JPEG screencast (quality ~60); it is a
+ *     real, drivable mirror of the page but not pixel-perfect video, and input
+ *     has a small round-trip latency (one POST per event). That is fine for
+ *     typing credentials + approving a 2FA push.
+ *   - Live sessions are held in-memory with a TTL; a SINGLE backend instance is
+ *     assumed for the interactive window (the stream/input endpoints must reach
+ *     the same instance that holds the live browser). Acceptable for capture.
  */
 
 import http from 'node:http'
 import https from 'node:https'
-import net from 'node:net'
 import { createLogger } from '../../utils/logger.js'
 
 const log = createLogger('service:hamiltonCloudLogin')
 
 const SESSION_TTL_MS = 15 * 60_000
-const sessions = new Map() // liveSessionId -> { browser, server, context, page, meta, createdAt }
+// liveSessionId -> {
+//   browser, server, context, page, meta, createdAt,
+//   screencastCdp,   // CDP session driving Page.startScreencast (1 active stream)
+//   inputCdp,        // CDP session for Input.* dispatch
+//   lastFrameMeta,   // { deviceWidth, deviceHeight, ... } from the latest frame
+// }
+const sessions = new Map()
 
 const DEFAULT_PROVIDER = 'self_hosted'
 
@@ -69,10 +72,6 @@ export function cloudLoginProvider() {
 
 function cdpEndpoint() {
   return String(process.env.HAMILTON_CLOUD_LOGIN_CDP_ENDPOINT || '').trim()
-}
-
-function publicDevtoolsBase() {
-  return String(process.env.HAMILTON_CLOUD_LOGIN_PUBLIC_BASE || '').trim().replace(/\/+$/, '')
 }
 
 /**
@@ -102,6 +101,8 @@ function sweepExpired() {
 }
 
 async function closeQuietly(s) {
+  try { await s?.screencastCdp?.detach() } catch { /* ignore */ }
+  try { await s?.inputCdp?.detach() } catch { /* ignore */ }
   try { await s?.browser?.close() } catch { /* ignore */ }
   try { await s?.server?.close() } catch { /* ignore */ }
 }
@@ -121,96 +122,27 @@ async function acquireProviderLiveUrl(page) {
 }
 
 /**
- * Fetch JSON from a CDP http debug endpoint (e.g. http://127.0.0.1:PORT/json).
+ * Build the same-origin live-view URL the user opens. The frontend route mirrors
+ * the page (SSE screencast) and relays input — so it's our own page, served on
+ * the app's single public port. The caller (route) supplies the public origin;
+ * we just encode the live session + portal host. We pass a relative URL when no
+ * origin is known so the frontend resolves it against its own origin.
  */
-function fetchDebugJson(httpBase, pathSuffix = '/json/list') {
-  return new Promise((resolve) => {
-    let url
-    try { url = new URL(`${httpBase.replace(/\/+$/, '')}${pathSuffix}`) } catch { return resolve(null) }
-    const client = url.protocol === 'https:' ? https : http
-    const req = client.get(url, { timeout: 4000 }, (resp) => {
-      let body = ''
-      resp.on('data', (c) => { body += c })
-      resp.on('end', () => {
-        try { resolve(JSON.parse(body)) } catch { resolve(null) }
-      })
-    })
-    req.on('error', () => resolve(null))
-    req.on('timeout', () => { req.destroy(); resolve(null) })
-  })
-}
-
-/** Reserve a free localhost TCP port for Chromium's remote-debugging endpoint. */
-function pickFreePort() {
-  return new Promise((resolve, reject) => {
-    const srv = net.createServer()
-    srv.unref()
-    srv.on('error', reject)
-    srv.listen(0, '127.0.0.1', () => {
-      const { port } = srv.address()
-      srv.close(() => resolve(port))
-    })
-  })
-}
-
-/** Poll the CDP http endpoint until Chromium is listening (or time out). */
-async function waitForDebugEndpoint(httpBase, { tries = 30, intervalMs = 200 } = {}) {
-  for (let i = 0; i < tries; i += 1) {
-    const ver = await fetchDebugJson(httpBase, '/json/version')
-    if (ver) return true
-    await new Promise((r) => setTimeout(r, intervalMs))
-  }
-  return false
-}
-
-/**
- * Derive an interactive live URL for the SELF-HOSTED Chromium from its built-in
- * DevTools front-end. We hit the CDP http endpoint's /json/list to get the
- * page's devtoolsFrontendUrl (a real, interactive remote inspector with a
- * screencast). When HAMILTON_CLOUD_LOGIN_PUBLIC_BASE is set we rebase the URL
- * onto that public origin so a remote user (phone) can reach it through a
- * reverse proxy; otherwise we return the local devtools URL (works on local /
- * self-hosted hosts and when the port is otherwise reachable).
- *
- * Returns null when no interactive surface can be produced — we never fake one.
- */
-async function acquireSelfHostedLiveUrl(httpBase) {
-  const list = await fetchDebugJson(httpBase)
-  const pageEntry = Array.isArray(list)
-    ? (list.find((e) => e.type === 'page' && e.devtoolsFrontendUrl) || list.find((e) => e.devtoolsFrontendUrl))
-    : null
-  if (!pageEntry?.devtoolsFrontendUrl) return null
-
-  const pub = publicDevtoolsBase()
-  if (!pub) {
-    // Local devtools URL: absolute when the entry gives one, else prefix the host.
-    const f = pageEntry.devtoolsFrontendUrl
-    return /^https?:\/\//i.test(f) ? f : `${httpBase}${f.startsWith('/') ? '' : '/'}${f}`
-  }
-  // Rebase the devtools frontend path + ws query onto the public proxy origin.
-  // The frontend URL embeds ?ws=<host>/<guid>; rewrite that host to the public
-  // base so the inspector connects back through the same proxy.
-  try {
-    const local = new URL(/^https?:\/\//i.test(pageEntry.devtoolsFrontendUrl)
-      ? pageEntry.devtoolsFrontendUrl
-      : `${httpBase}${pageEntry.devtoolsFrontendUrl}`)
-    const pubUrl = new URL(pub)
-    const wsQuery = local.searchParams.get('ws')
-    if (wsQuery) {
-      const wsRebased = wsQuery.replace(/^[^/]+/, pubUrl.host)
-      local.searchParams.set('ws', wsRebased)
-    }
-    return `${pub}${local.pathname}${local.search}`
-  } catch {
-    return null
-  }
+function buildSelfHostedLiveUrl({ liveSessionId, portalHost, origin }) {
+  const params = new URLSearchParams({ session: liveSessionId })
+  if (portalHost) params.set('host', portalHost)
+  const path = `/HamiltonLiveLogin?${params.toString()}`
+  return origin ? `${String(origin).replace(/\/+$/, '')}${path}` : path
 }
 
 /**
  * Start an interactive cloud login. Returns { ok, liveSessionId, liveUrl } on
  * success, or { ok:false, reason } when not configured / unsupported.
+ *
+ * `origin` (optional) is the public origin of the calling request so the
+ * self_hosted liveUrl can be absolute; if omitted a relative URL is returned.
  */
-export async function startCloudLogin({ userId, profileId, portalHost, loginUrl, label, captureRequestId = null } = {}) {
+export async function startCloudLogin({ userId, profileId, portalHost, loginUrl, label, captureRequestId = null, origin = null } = {}) {
   if (!isCloudLoginConfigured()) return { ok: false, reason: 'not_configured' }
   sweepExpired()
   const target = loginUrl || (portalHost ? `https://${portalHost}/` : null)
@@ -225,16 +157,14 @@ export async function startCloudLogin({ userId, profileId, portalHost, loginUrl,
 
   const provider = cloudLoginProvider()
   let browser
-  let server = null
   try {
-    let liveUrl = null
     if (provider === 'cdp') {
       // Hosted interactive Chrome (Browserless / Browserbase).
       browser = await chromium.connectOverCDP(cdpEndpoint())
       const context = browser.contexts()[0] || (await browser.newContext())
       const page = context.pages()[0] || (await context.newPage())
       await page.goto(target, { waitUntil: 'domcontentloaded' }).catch(() => {})
-      liveUrl = await acquireProviderLiveUrl(page)
+      const liveUrl = await acquireProviderLiveUrl(page)
       if (!liveUrl) {
         await closeQuietly({ browser })
         return { ok: false, reason: 'provider_no_live_url' }
@@ -242,51 +172,201 @@ export async function startCloudLogin({ userId, profileId, portalHost, loginUrl,
       return finalizeStart({ browser, server: null, context, page, userId, profileId, portalHost, target, label, captureRequestId, liveUrl })
     }
 
-    // self_hosted: launch our OWN Chromium with a real Chrome remote-debugging
-    // port. We drive it with normal Playwright objects (no connectOverCDP — that
-    // expects a raw CDP socket; launch() gives us the browser directly) AND mine
-    // the debug port's /json endpoint for Chromium's built-in DevTools front-end
-    // URL, which IS the interactive screencast surface the user opens.
-    const debugPort = await pickFreePort()
-    const httpBase = `http://127.0.0.1:${debugPort}`
+    // self_hosted: launch our OWN headless Chromium. We mirror the page to the
+    // user's browser ourselves (SSE screencast + POST input), so we don't need a
+    // remote-debugging port, a devtools front-end, or a public devtools base.
+    // CDP Page.startScreencast works fine in headless Chromium.
     browser = await chromium.launch({
-      headless: false,
-      args: [`--remote-debugging-port=${debugPort}`, '--remote-debugging-address=127.0.0.1'],
+      headless: true,
+      args: ['--no-sandbox', '--disable-dev-shm-usage'],
     })
-    const context = browser.contexts()[0] || (await browser.newContext())
-    const page = context.pages()[0] || (await context.newPage())
-    await waitForDebugEndpoint(httpBase)
+    const context = await browser.newContext({ viewport: { width: 1280, height: 900 } })
+    const page = await context.newPage()
     await page.goto(target, { waitUntil: 'domcontentloaded' }).catch(() => {})
-    liveUrl = await acquireSelfHostedLiveUrl(httpBase)
-    if (!liveUrl) {
-      await closeQuietly({ browser, server })
-      // Honest failure: the capture engine works, but no interactive surface
-      // could be exposed on this host (no reachable devtools port / no public
-      // base configured). Don't pretend a window opened.
-      return { ok: false, reason: 'no_interactive_surface' }
-    }
-    return finalizeStart({ browser, server, context, page, userId, profileId, portalHost, target, label, captureRequestId, liveUrl })
+    const liveSessionId = makeLiveSessionId()
+    const liveUrl = buildSelfHostedLiveUrl({ liveSessionId, portalHost, origin })
+    return finalizeStart({ browser, server: null, context, page, userId, profileId, portalHost, target, label, captureRequestId, liveUrl, liveSessionId })
   } catch (err) {
-    await closeQuietly({ browser, server })
+    await closeQuietly({ browser })
     log.error('cloud login start failed', { error: err?.message, provider })
     return { ok: false, reason: 'connect_failed', detail: err?.message }
   }
 }
 
-function finalizeStart({ browser, server, context, page, userId, profileId, portalHost, target, label, captureRequestId, liveUrl }) {
-  const liveSessionId = `cl_${Date.now().toString(36)}_${Math.floor(performance.now()).toString(36)}`
-  sessions.set(liveSessionId, {
+function makeLiveSessionId() {
+  return `cl_${Date.now().toString(36)}_${Math.floor(performance.now()).toString(36)}`
+}
+
+function finalizeStart({ browser, server, context, page, userId, profileId, portalHost, target, label, captureRequestId, liveUrl, liveSessionId }) {
+  const id = liveSessionId || makeLiveSessionId()
+  sessions.set(id, {
     browser, server, context, page,
+    screencastCdp: null,
+    inputCdp: null,
+    lastFrameMeta: null,
     meta: { userId, profileId: String(profileId), portalHost, loginUrl: target, label, captureRequestId },
     createdAt: Date.now(),
   })
-  log.info('cloud login session started', { liveSessionId, profileId: String(profileId), portalHost, provider: cloudLoginProvider() })
-  return { ok: true, liveSessionId, liveUrl, expires_in_ms: SESSION_TTL_MS }
+  log.info('cloud login session started', { liveSessionId: id, profileId: String(profileId), portalHost, provider: cloudLoginProvider() })
+  return { ok: true, liveSessionId: id, liveUrl, expires_in_ms: SESSION_TTL_MS }
 }
 
 export function getCloudLoginMeta(liveSessionId) {
   const s = sessions.get(liveSessionId)
   return s ? { ...s.meta, createdAt: s.createdAt } : null
+}
+
+/**
+ * Live-view accessor used by the stream + input routes. Returns the raw session
+ * record (page, meta, cdp handles) or null when the session is gone/expired.
+ * The route is responsible for the profile-access check via meta before use.
+ */
+export function getCloudLoginSession(liveSessionId) {
+  return sessions.get(liveSessionId) || null
+}
+
+/**
+ * Open (once) a CDP screencast on the live page and invoke onFrame for every
+ * frame. The caller (SSE route) acks each frame and forwards it to the client;
+ * we record the latest frame metadata so the input route can scale normalized
+ * coordinates. Returns a stop() that detaches and stops the screencast.
+ *
+ * Only ONE screencast viewer is supported per live session (the capture flow is
+ * single-viewer by design). Re-attaching stops any prior screencast first.
+ */
+export async function startScreencast(liveSessionId, onFrame, { quality = 60, maxWidth = 1280, maxHeight = 1280 } = {}) {
+  const s = sessions.get(liveSessionId)
+  if (!s || !s.page) return null
+  // Tear down a previous viewer's screencast if one was left attached.
+  if (s.screencastCdp) {
+    try { await s.screencastCdp.send('Page.stopScreencast') } catch { /* ignore */ }
+    try { await s.screencastCdp.detach() } catch { /* ignore */ }
+    s.screencastCdp = null
+  }
+  const cdp = await s.page.context().newCDPSession(s.page)
+  s.screencastCdp = cdp
+  cdp.on('Page.screencastFrame', async (frame) => {
+    try {
+      s.lastFrameMeta = frame?.metadata || s.lastFrameMeta
+      onFrame({ data: frame.data, metadata: frame.metadata })
+    } catch { /* consumer error — ignore, keep stream alive */ }
+    try { await cdp.send('Page.screencastFrameAck', { sessionId: frame.sessionId }) } catch { /* ignore */ }
+  })
+  await cdp.send('Page.startScreencast', {
+    format: 'jpeg',
+    quality,
+    maxWidth,
+    maxHeight,
+    everyNthFrame: 1,
+  })
+  return async function stop() {
+    try { await cdp.send('Page.stopScreencast') } catch { /* ignore */ }
+    try { await cdp.detach() } catch { /* ignore */ }
+    if (s.screencastCdp === cdp) s.screencastCdp = null
+  }
+}
+
+/** Lazily create (and cache) the Input.* CDP session for a live session. */
+async function ensureInputCdp(s) {
+  if (s.inputCdp) return s.inputCdp
+  s.inputCdp = await s.page.context().newCDPSession(s.page)
+  return s.inputCdp
+}
+
+/**
+ * Translate ONE normalized input event into a CDP Input.* dispatch on the live
+ * page. Coordinates (x, y) arrive as 0..1 fractions of the displayed image; we
+ * scale them by the page viewport (preferring the latest screencast frame's
+ * device size, falling back to the Playwright viewport). Returns { ok } or
+ * { ok:false, reason }.
+ */
+export async function dispatchInput(liveSessionId, event) {
+  const s = sessions.get(liveSessionId)
+  if (!s || !s.page) return { ok: false, reason: 'not_found_or_expired' }
+  if (!event || typeof event !== 'object') return { ok: false, reason: 'bad_event' }
+
+  const cdp = await ensureInputCdp(s)
+  const vp = s.page.viewportSize() || { width: 1280, height: 900 }
+  const width = Number(s.lastFrameMeta?.deviceWidth) || vp.width || 1280
+  const height = Number(s.lastFrameMeta?.deviceHeight) || vp.height || 900
+
+  const scaleX = (nx) => Math.max(0, Math.min(width, Math.round(Number(nx) * width)))
+  const scaleY = (ny) => Math.max(0, Math.min(height, Math.round(Number(ny) * height)))
+
+  const type = String(event.type || '')
+
+  try {
+    if (type === 'mousemove' || type === 'mousedown' || type === 'mouseup' || type === 'click') {
+      const x = scaleX(event.x)
+      const y = scaleY(event.y)
+      const button = event.button === 2 ? 'right' : event.button === 1 ? 'middle' : 'left'
+      if (type === 'mousemove') {
+        await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y, button: 'none' })
+      } else if (type === 'mousedown') {
+        await cdp.send('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button, clickCount: 1 })
+      } else if (type === 'mouseup') {
+        await cdp.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button, clickCount: 1 })
+      } else {
+        // A full tap/click: move + press + release.
+        await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y, button: 'none' })
+        await cdp.send('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button, clickCount: 1 })
+        await cdp.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button, clickCount: 1 })
+      }
+      return { ok: true }
+    }
+
+    if (type === 'wheel' || type === 'scroll') {
+      const x = scaleX(event.x)
+      const y = scaleY(event.y)
+      await cdp.send('Input.dispatchMouseEvent', {
+        type: 'mouseWheel',
+        x,
+        y,
+        deltaX: Number(event.deltaX) || 0,
+        deltaY: Number(event.deltaY) || 0,
+      })
+      return { ok: true }
+    }
+
+    if (type === 'keydown' || type === 'keyup' || type === 'char') {
+      const cdpType = type === 'keydown' ? 'keyDown' : type === 'keyup' ? 'keyUp' : 'char'
+      const payload = {
+        type: cdpType,
+        key: typeof event.key === 'string' ? event.key : undefined,
+        code: typeof event.code === 'string' ? event.code : undefined,
+        text: typeof event.text === 'string' ? event.text : undefined,
+        windowsVirtualKeyCode: Number.isFinite(event.keyCode) ? event.keyCode : undefined,
+        modifiers: Number.isFinite(event.modifiers) ? event.modifiers : 0,
+      }
+      await cdp.send('Input.dispatchKeyEvent', payload)
+      return { ok: true }
+    }
+
+    return { ok: false, reason: 'unsupported_event' }
+  } catch (err) {
+    return { ok: false, reason: 'dispatch_failed', detail: err?.message }
+  }
+}
+
+/**
+ * Fetch JSON from a CDP http debug endpoint. Retained for the (still supported)
+ * cdp provider's optional health probing; unused by self_hosted now.
+ */
+export function fetchDebugJson(httpBase, pathSuffix = '/json/list') {
+  return new Promise((resolve) => {
+    let url
+    try { url = new URL(`${httpBase.replace(/\/+$/, '')}${pathSuffix}`) } catch { return resolve(null) }
+    const client = url.protocol === 'https:' ? https : http
+    const req = client.get(url, { timeout: 4000 }, (resp) => {
+      let body = ''
+      resp.on('data', (c) => { body += c })
+      resp.on('end', () => {
+        try { resolve(JSON.parse(body)) } catch { resolve(null) }
+      })
+    })
+    req.on('error', () => resolve(null))
+    req.on('timeout', () => { req.destroy(); resolve(null) })
+  })
 }
 
 /**
@@ -327,10 +407,10 @@ export function cloudLoginStatus() {
     configured,
     provider,
     active_sessions: sessions.size,
-    // self_hosted streams Chromium's own DevTools inspector; for remote users on
-    // a single-port PaaS, set HAMILTON_CLOUD_LOGIN_PUBLIC_BASE so the inspector
-    // is reachable through a reverse proxy. Surfaced so the UI can hint at it.
-    requires_public_base: provider === 'self_hosted' && !publicDevtoolsBase(),
+    // self_hosted now serves the interactive view from GrantFlow itself (a
+    // same-origin SSE screencast + POST input), so it needs NO public devtools
+    // base and works on a single-port PaaS out of the box.
+    requires_public_base: false,
     reason: configured
       ? null
       : 'Cloud login is disabled (HAMILTON_CLOUD_LOGIN_PROVIDER=disabled). Use Saved Login, or set HAMILTON_CLOUD_LOGIN_PROVIDER=self_hosted (default) / =cdp with HAMILTON_CLOUD_LOGIN_CDP_ENDPOINT.',
