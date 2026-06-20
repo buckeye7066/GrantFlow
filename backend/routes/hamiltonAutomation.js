@@ -54,6 +54,7 @@ import {
   readAuthorizations,
 } from '../services/hamilton/hamiltonPreflight.js'
 import { preflightAndResolveSelected } from '../services/hamilton/hamiltonPreflightResolver.js'
+import { deriveNamePartsIntoBasicInfo } from '../../shared/nameParsing.js'
 import { listPortalProviders } from '../services/hamilton/hamiltonPortalProviders.js'
 import {
   authorizePayment,
@@ -145,11 +146,39 @@ async function userMayAccessProfile(req, user, profileId) {
   return accessible.has(String(profileId))
 }
 
+// Load the FULL profile — the base row PLUS every profile_sections blob nested
+// under its section_key — so preflight and automation can "parse the whole
+// profile" instead of only seeing the bare profiles columns. This used to
+// return just `SELECT * FROM profiles`, which left profile.basic_information
+// (and every other section) undefined; preflight then raised false "missing
+// first name / last name / email / school" hard stops for data that was sitting
+// right there in profile_sections. Mirrors loadProfileBundle (orchestrator) and
+// hamiltonApplicationAgent.loadProfile, including the read-time name-derivation
+// safety net so a profile carrying only full_name/display_name still resolves
+// first_name/last_name.
 async function loadProfile(db, profileId) {
   if (!db || !profileId) return null
   try {
     const row = await db.prepare('SELECT * FROM profiles WHERE id = ? LIMIT 1').get(String(profileId))
-    return row || null
+    if (!row) return null
+    let sectionRows = []
+    try {
+      sectionRows = await db
+        .prepare('SELECT section_key, data FROM profile_sections WHERE profile_id = ?')
+        .all(String(profileId))
+    } catch { sectionRows = [] }
+    const sections = {}
+    for (const r of sectionRows || []) {
+      try { sections[r.section_key] = typeof r.data === 'string' ? JSON.parse(r.data) : r.data } catch { /* ignore */ }
+    }
+    // Read-time safety net: derive first/last from full_name or the profile's
+    // display_name so preflight never false-flags names the backfill migration
+    // has not split yet.
+    try {
+      const derived = deriveNamePartsIntoBasicInfo(sections.basic_information || {}, row.display_name)
+      if (derived.changed) sections.basic_information = derived.data
+    } catch { /* non-fatal */ }
+    return { ...row, sections, ...sections }
   } catch { return null }
 }
 
@@ -1235,33 +1264,46 @@ router.post('/admin/hard-stops/:blockerId/resolve-field', async (req, res) => {
     if (notifIds.length > 0) await markNotificationsResolved(req.db, notifIds)
 
     // 4. Resume Hamilton from where she stopped (automation is king).
+    //
+    // CRITICAL: everything below is best-effort and must NEVER 500 the request.
+    // The field write (step 1) and blocker resolution (step 3) are the
+    // user-visible result and have already committed. Two classes of blocker
+    // carry a task_id that is NOT a real application_tasks row:
+    //   - preflight-synthetic blockers ("preflight_<profileId>_<oppId>"), and
+    //   - orphaned blockers whose task the 2026-06-19 pipeline prune deleted.
+    // Logging a task event or resuming against either FK-violates
+    // application_task_events and previously surfaced as a 500 even though the
+    // value saved fine. So we resolve the task FIRST and only log + resume when
+    // it genuinely exists, wrapping the whole step so any failure is swallowed.
     let rerun = null
     if (resolved?.task_id) {
-      await appendTaskEvent(req.db, {
-        taskId: resolved.task_id,
-        eventType: 'blocker_resolved',
-        step: 'inline_field_fix',
-        message: `"${target.label}" supplied inline and saved to the profile. Re-running Hamilton.`,
-        actorUserId: getAuthUserId(user),
-        actorRole: 'admin',
-        details: { field_key: target.key, section: target.section, field: target.field },
-      })
       try {
         const task = await getApplicationTask(req.db, resolved.task_id)
-        const profile = task ? await loadProfile(req.db, task.profile_id) : null
-        if (task && profile) {
-          rerun = await automateSingleSource(req.db, {
-            profile,
-            profileId: task.profile_id,
-            userId: getAuthUserId(user),
-            source: {
-              opportunity_id: task.opportunity_id,
-              grant_id: task.grant_id,
-              task_id: task.id,
-              current_stage: task.current_pipeline_stage || task.selected_from_stage,
-            },
-            options: { autopilot: true, allow_auto_submit: true },
+        if (task) {
+          await appendTaskEvent(req.db, {
+            taskId: task.id,
+            eventType: 'blocker_resolved',
+            step: 'inline_field_fix',
+            message: `"${target.label}" supplied inline and saved to the profile. Re-running Hamilton.`,
+            actorUserId: getAuthUserId(user),
+            actorRole: 'admin',
+            details: { field_key: target.key, section: target.section, field: target.field },
           })
+          const profile = await loadProfile(req.db, task.profile_id)
+          if (profile) {
+            rerun = await automateSingleSource(req.db, {
+              profile,
+              profileId: task.profile_id,
+              userId: getAuthUserId(user),
+              source: {
+                opportunity_id: task.opportunity_id,
+                grant_id: task.grant_id,
+                task_id: task.id,
+                current_stage: task.current_pipeline_stage || task.selected_from_stage,
+              },
+              options: { autopilot: true, allow_auto_submit: true },
+            })
+          }
         }
       } catch (rerunErr) {
         // The field is saved and the blocker is cleared regardless; a failed

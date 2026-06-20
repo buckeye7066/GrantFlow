@@ -68,8 +68,13 @@ export async function preflightAndResolveSource(db, {
   const opportunity = source.opportunity_id ? await loadOpportunity(db, source.opportunity_id) : null
   const grant       = source.grant_id ? await loadGrant(db, source.grant_id) : null
 
+  // Fetch the resolved-field cache up front so preflight counts any value the
+  // operator already supplied (and reused across portals) as present, instead
+  // of re-raising a hard stop for it.
+  const cachedFields = await getResolvedFieldsAsMap(db, profileId)
+
   const base = await preflightSingleSource(db, {
-    profile, profileId, source, opportunity, grant,
+    profile, profileId, source, opportunity, grant, resolvedFields: cachedFields,
   })
 
   const portalUrl = base.classification.resolved_url || null
@@ -90,7 +95,7 @@ export async function preflightAndResolveSource(db, {
   const session = host ? await findValidSession(db, { profileId, portalHost: host }) : null
   const policy = await getPolicyFor(db, host)
   const attestations = await listActiveAttestations(db, profileId)
-  const cachedFields = await getResolvedFieldsAsMap(db, profileId)
+  // cachedFields already loaded above (used by preflight + readiness).
 
   // Deadline check.
   const deadlineMs = deadlineFromOpportunity(opportunity)

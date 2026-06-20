@@ -60,6 +60,57 @@ function pickFirst(profile, paths) {
   return undefined
 }
 
+function normKey(k) { return String(k || '').trim().toLowerCase().replace(/[\s-]+/g, '_') }
+
+// Every reasonable spelling/synonym a value might be stored under, so a deep
+// scan recognises it wherever it lives in the profile tree.
+const FIELD_ALIASES = Object.freeze({
+  first_name: ['first_name', 'firstname', 'given_name', 'givenname', 'fname'],
+  last_name: ['last_name', 'lastname', 'surname', 'family_name', 'familyname', 'lname'],
+  email: ['email', 'email_address', 'emailaddress', 'primary_email', 'contact_email'],
+  phone: ['phone', 'phone_number', 'cell', 'cell_phone', 'cellphone', 'mobile', 'mobile_phone', 'telephone', 'contact_phone'],
+  school_name: ['school_name', 'school', 'university', 'college', 'institution', 'current_school', 'current_institution', 'institution_name'],
+  household_income: ['household_income', 'annual_income', 'annual_household_income', 'family_income', 'income', 'gross_income'],
+})
+
+/**
+ * Deep-scan the WHOLE profile tree for the first non-empty value stored under
+ * any of `keys` (or their aliases), at any nesting depth. This is the
+ * "parse the whole profile" safety net: Hamilton should never raise a
+ * missing-field hard stop for a value that is sitting somewhere in the profile
+ * (e.g. school under academic_status.current_institution, a cell under
+ * basic_information.demographics.phone) just because it is not at the one path
+ * we happened to check first.
+ */
+function deepFindByKeys(root, keys) {
+  const wanted = new Set()
+  for (const k of keys) for (const a of (FIELD_ALIASES[normKey(k)] || [normKey(k)])) wanted.add(a)
+  const seen = new Set()
+  const stack = [root]
+  while (stack.length) {
+    const node = stack.pop()
+    if (!node || typeof node !== 'object') continue
+    if (seen.has(node)) continue
+    seen.add(node)
+    if (Array.isArray(node)) { for (const item of node) stack.push(item); continue }
+    for (const [k, v] of Object.entries(node)) {
+      if (wanted.has(normKey(k)) && nonEmpty(v) && (typeof v !== 'object')) return v
+      if (v && typeof v === 'object') stack.push(v)
+    }
+  }
+  return undefined
+}
+
+// A field counts as present if it sits at an explicit path, OR anywhere in the
+// profile under a known alias, OR the operator already supplied it (resolved
+// field cache). Only then do we trust a "missing" verdict.
+function fieldPresent(profile, paths, key, resolvedFields) {
+  if (nonEmpty(pickFirst(profile, paths))) return true
+  if (resolvedFields && nonEmpty(resolvedFields[normKey(key)])) return true
+  if (nonEmpty(deepFindByKeys(profile, [key]))) return true
+  return false
+}
+
 function looksLikeStudentFunding(opportunity) {
   const text = [opportunity?.title, opportunity?.description, opportunity?.eligibility_text]
     .filter(Boolean).join(' ')
@@ -99,15 +150,18 @@ function hasDocOfType(documents, predicate) {
  * Check ONE source. Returns the per-source report described above.
  */
 export async function preflightSingleSource(db, {
-  profile, profileId, source, opportunity, grant, portalLink = null,
+  profile, profileId, source, opportunity, grant, portalLink = null, resolvedFields = null,
 } = {}) {
   const blockers = []
   const warnings = []
   const classification = classifyFundingSource({ opportunity, grant, profile, portalLink })
 
-  // 1. Required identity / contact fields.
+  // 1. Required identity / contact fields. A field is only "missing" if it is
+  // absent at its explicit path AND nowhere else in the profile under a known
+  // alias AND not already in the resolved-field cache — so Hamilton parses the
+  // whole profile before flagging anything.
   for (const f of REQUIRED_IDENTITY_FIELDS) {
-    if (!nonEmpty(pickFirst(profile, f.paths))) {
+    if (!fieldPresent(profile, f.paths, f.key, resolvedFields)) {
       blockers.push({
         kind: 'missing_field', key: f.key,
         label: `Profile is missing ${f.key.replace(/_/g, ' ')}`,
@@ -116,11 +170,16 @@ export async function preflightSingleSource(db, {
     }
   }
 
-  // 2. Student funding requires school + program info.
+  // 2. Student funding requires school + program info. Accept a school named in
+  // a university_applications entry OR anywhere else in the profile (e.g.
+  // academic_status.current_institution, basic_information.current_school) so a
+  // student already carrying their school on the profile is never blocked.
   if (looksLikeStudentFunding(opportunity)) {
     const apps = pickFirst(profile, ['university_applications.applications']) || []
     const firstApp = Array.isArray(apps) && apps.length > 0 ? apps[0] : null
-    if (!firstApp || !nonEmpty(firstApp.name)) {
+    const hasSchool = (firstApp && nonEmpty(firstApp.name)) ||
+      fieldPresent(profile, [], 'school_name', resolvedFields)
+    if (!hasSchool) {
       blockers.push({
         kind: 'missing_field', key: 'school_name',
         label: 'Profile is missing school / university',
@@ -131,7 +190,7 @@ export async function preflightSingleSource(db, {
 
   // 3. Financial-aid sources require income/household info.
   if (requiresFinancialFields(opportunity)) {
-    if (!nonEmpty(pickFirst(profile, ['financial_information.household_income', 'household.income', 'household_income']))) {
+    if (!fieldPresent(profile, ['financial_information.household_income', 'household.income', 'household_income'], 'household_income', resolvedFields)) {
       warnings.push({
         kind: 'missing_field', key: 'household_income',
         label: 'Household income not on file',
