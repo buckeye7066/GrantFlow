@@ -1368,7 +1368,9 @@ export default function FundingOpportunities() {
     }
     const match = scoreOpportunity(opportunity, selectedProfile)
     const summary = buildOpportunitySummary(opportunity, selectedProfile, match)
-    const printWindow = window.open("", "_blank", "noopener,noreferrer")
+    // No "noopener" — it makes window.open() return null, so the document.write
+    // below never runs and the print tab opens blank. Same-origin content we own.
+    const printWindow = window.open("", "_blank")
     if (!printWindow) {
       toast({
         variant: "destructive",

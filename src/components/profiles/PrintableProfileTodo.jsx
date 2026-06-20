@@ -213,7 +213,9 @@ export default function PrintableProfileTodo({ profileId, profileName }) {
 
   const handlePrint = () => {
     if (!todoData?.todo) return
-    const win = window.open("", "_blank", "noopener,noreferrer")
+    // No "noopener" — it makes window.open() return null, so the document.write
+    // below never runs and the tab opens blank. Same-origin content we own.
+    const win = window.open("", "_blank")
     if (!win) return
     let html
     try {

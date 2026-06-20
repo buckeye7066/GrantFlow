@@ -93,7 +93,9 @@ export default function DocumentList({ profileId }) {
       return;
     }
     if (!doc.extracted_text) return;
-    const printable = window.open('', '_blank', 'noopener,noreferrer');
+    // No "noopener" — it makes window.open() return null, so document.write
+    // below never runs and the tab opens blank. Same-origin content we own.
+    const printable = window.open('', '_blank');
     if (!printable) return;
     const safeTitle = (doc.name || 'Document')
       .replace(/&/g, '&amp;')

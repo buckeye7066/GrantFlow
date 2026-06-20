@@ -273,7 +273,9 @@ function BillingAccountCard({ account, tiers, onSave, saving }) {
       totalDue,
     })
 
-    const invoiceWindow = window.open('', '_blank', 'noopener,noreferrer')
+    // No "noopener" — it makes window.open() return null, so document.write
+    // below never runs and the invoice tab opens blank. Same-origin content we own.
+    const invoiceWindow = window.open('', '_blank')
     if (invoiceWindow) {
       invoiceWindow.document.write(invoiceHTML)
       invoiceWindow.document.close()

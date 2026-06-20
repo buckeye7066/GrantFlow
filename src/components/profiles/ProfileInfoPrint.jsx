@@ -54,7 +54,9 @@ export default function ProfileInfoPrint({ profile }) {
   if (!profile) return null
 
   const handlePrint = () => {
-    const win = window.open("", "_blank", "noopener,noreferrer")
+    // No "noopener" — it makes window.open() return null, so the document.write
+    // below never runs and the tab opens blank. Same-origin content we own.
+    const win = window.open("", "_blank")
     if (!win) return
 
     const safeTitle = escapeHtml(`${profile.display_name ?? "Profile"} — Profile Summary`)

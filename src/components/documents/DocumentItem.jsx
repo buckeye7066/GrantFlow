@@ -123,7 +123,9 @@ export default function DocumentItem({ document, onDelete }) {
   };
 
   const openTextPrintWindow = (title, content) => {
-    const printable = window.open('', '_blank', 'noopener,noreferrer');
+    // No "noopener" — it makes window.open() return null, so document.write
+    // below never runs and the tab opens blank. Same-origin content we own.
+    const printable = window.open('', '_blank');
     if (!printable) return;
     const safeTitle = escapeHtml(title || 'Document');
     const safeContent = escapeHtml(content || '');

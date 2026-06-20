@@ -67,7 +67,9 @@ export default function ProfileAppliedFundingPrint({ organizationId, profileName
   const isLoading = grantsQuery.isLoading || docsQuery.isLoading
 
   const handlePrintSummary = () => {
-    const win = window.open("", "_blank", "noopener,noreferrer")
+    // No "noopener" — it makes window.open() return null, so the document.write
+    // below never runs and the tab opens blank. Same-origin content we own.
+    const win = window.open("", "_blank")
     if (!win) return
 
     const safeTitle = escapeHtml(`${profileName ?? "Profile"} — Applied Funding Sources`)

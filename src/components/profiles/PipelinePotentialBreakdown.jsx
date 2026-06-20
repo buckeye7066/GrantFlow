@@ -156,7 +156,12 @@ function contactLines(item) {
  */
 function openPrintableBreakdown({ profileName, formattedTotal, items }) {
   if (typeof window === "undefined") return
-  const win = window.open("", "_blank", "noopener,noreferrer,width=900,height=1100")
+  // NB: do NOT pass "noopener"/"noreferrer" here. Those features make
+  // window.open() return null (the whole point is to sever the handle), which
+  // would leave us unable to write the document — the tab opens blank. The
+  // child is a same-origin about:blank we fully control, so there is nothing to
+  // protect against by severing it.
+  const win = window.open("", "_blank", "width=900,height=1100")
   if (!win) return // popup blocked — caller surfaces nothing; the in-app dialog still works
 
   const generatedAt = new Date().toLocaleString()
