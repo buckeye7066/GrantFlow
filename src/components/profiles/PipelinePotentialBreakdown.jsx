@@ -115,6 +115,18 @@ function escapeHtml(value) {
     .replace(/'/g, "&#39;")
 }
 
+// Only allow http(s) links to be rendered as clickable hrefs — blocks
+// javascript:/data: scheme injection from a stored application_url.
+function safeHttpUrl(u) {
+  if (!u) return null
+  try {
+    const p = new URL(String(u))
+    return p.protocol === "http:" || p.protocol === "https:" ? p.href : null
+  } catch {
+    return null
+  }
+}
+
 // The pipeline phases, in process order, so the printout reads top-to-bottom as
 // the funding moves from preparation → applied → approved.
 const PHASE_ORDER = ["Preparing", "Applied", "Approved"]
@@ -141,7 +153,8 @@ function contactLines(item) {
   if (item?.contact_fax) lines.push(["Fax", item.contact_fax])
   if (item?.contact_address) lines.push(["Address", item.contact_address])
   if (item?.application_method) lines.push(["How to apply", item.application_method])
-  if (item?.application_url) lines.push(["Apply / details", item.application_url])
+  const applyUrl = safeHttpUrl(item?.application_url)
+  if (applyUrl) lines.push(["Apply / details", applyUrl])
   return lines
 }
 
@@ -356,20 +369,25 @@ export default function PipelinePotentialBreakdown({
                       <p className="text-xs text-slate-600 mt-1.5 line-clamp-2">{item.description}</p>
                     )}
 
-                    {(item.contact_name || item.contact_email || item.contact_phone || item.application_url) && (
-                      <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-slate-500">
-                        {item.contact_name && <span>{item.contact_name}</span>}
-                        {item.contact_email && (
-                          <a href={`mailto:${item.contact_email}`} className="text-indigo-600 hover:underline">{item.contact_email}</a>
-                        )}
-                        {item.contact_phone && <span>{item.contact_phone}</span>}
-                        {item.application_url && (
-                          <a href={item.application_url} target="_blank" rel="noopener noreferrer" className="text-indigo-600 hover:underline inline-flex items-center gap-0.5">
-                            Apply <ExternalLink className="w-2.5 h-2.5" />
-                          </a>
-                        )}
-                      </div>
-                    )}
+                    {(() => {
+                      const applyHref = safeHttpUrl(item.application_url)
+                      const hasContact = item.contact_name || item.contact_email || item.contact_phone || applyHref
+                      if (!hasContact) return null
+                      return (
+                        <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-slate-500">
+                          {item.contact_name && <span>{item.contact_name}</span>}
+                          {item.contact_email && (
+                            <a href={`mailto:${encodeURIComponent(item.contact_email)}`} className="text-indigo-600 hover:underline">{item.contact_email}</a>
+                          )}
+                          {item.contact_phone && <span>{item.contact_phone}</span>}
+                          {applyHref && (
+                            <a href={applyHref} target="_blank" rel="noopener noreferrer" className="text-indigo-600 hover:underline inline-flex items-center gap-0.5">
+                              Apply <ExternalLink className="w-2.5 h-2.5" />
+                            </a>
+                          )}
+                        </div>
+                      )
+                    })()}
 
                     <div className="flex items-center justify-between gap-2 mt-2">
                       <div className="flex items-center gap-2">
