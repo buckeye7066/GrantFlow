@@ -1,5 +1,4 @@
 import React from "react"
-import { useNavigate } from "react-router-dom"
 import { KeyRound, ExternalLink, LogIn } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { createPageUrl } from "@/utils"
@@ -38,25 +37,22 @@ export default function PortalLoginButton({
   variant = "outline",
   className = "",
 }) {
-  const navigate = useNavigate()
   const href = safeHttpUrl(url)
   const host = hostFromUrl(url)
   const canSaveLogin = Boolean(profileId) && Boolean(host)
 
-  const handleSaveLogin = (e) => {
-    // These controls frequently live on clickable card rows — keep a click
-    // here from also activating the card behind it.
-    e.preventDefault()
-    e.stopPropagation()
-    navigate(
-      createPageUrl("ProfileDetail", {
+  // Plain anchor (not useNavigate) so this control works in ANY render context
+  // — including the many card surfaces and tests that aren't wrapped in a
+  // <Router> — and so a full navigation re-runs SavedLoginsCard's mount effect
+  // that reads ?addLogin/?loginUrl and opens the pre-filled dialog.
+  const saveLoginHref = canSaveLogin
+    ? createPageUrl("ProfileDetail", {
         id: profileId,
         tab: "pipeline",
         addLogin: host,
         loginUrl: href || url || "",
-      }),
-    )
-  }
+      })
+    : null
 
   return (
     <div className={`inline-flex items-center gap-1 ${className}`} data-portal-login>
@@ -93,14 +89,16 @@ export default function PortalLoginButton({
 
       {canSaveLogin && (
         <Button
+          asChild
           variant="ghost"
           size={size === "icon" ? "icon" : "sm"}
           className="gap-1.5 text-indigo-700 hover:text-indigo-800"
-          onClick={handleSaveLogin}
           title="Save this portal's login so Hamilton can sign in for you"
         >
-          <KeyRound className="h-3.5 w-3.5" />
-          {size === "icon" ? null : "Save login for Hamilton"}
+          <a href={saveLoginHref} onClick={(e) => e.stopPropagation()}>
+            <KeyRound className="h-3.5 w-3.5" />
+            {size === "icon" ? null : "Save login for Hamilton"}
+          </a>
         </Button>
       )}
     </div>
