@@ -60,6 +60,7 @@ import { findValidSession, getSessionStorageState } from './hamiltonCredentialSe
 import { isAuthBlocker, planAuthBackup } from './hamiltonAuthBackupPlan.js'
 import { missingCredentialNotice, hostOfUrl } from './hamiltonMissingCredential.js'
 import { normalizeSchedule, isWithinWindow, nextWindowStart } from './portalAccessSchedule.js'
+import { isAutomationEnabled } from '../../../shared/automationPreferences.js'
 import {
   preflightSingleSource,
   readAuthorizations,
@@ -692,6 +693,29 @@ async function runAutopilotPathway(db, {
   // start. User-initiated runs (no options.autonomous) are never gated — the user
   // is already present.
   if (options?.autonomous) {
+    // Per-profile automation toggle: the user can turn OFF unattended Hamilton
+    // auto-apply for this profile. When off we never drive an autonomous run —
+    // the user can still launch Hamilton by hand (which is not `autonomous`).
+    // Absent preference defaults ON (current behaviour). See
+    // shared/automationPreferences.js.
+    const automationPrefs = profile?.automation_preferences || profile?.sections?.automation_preferences || {}
+    if (!isAutomationEnabled(automationPrefs, 'hamilton_autopilot')) {
+      await updateApplicationTask(db, task.id, {
+        status: 'ready_to_start',
+        lastAgentMessage: 'Hamilton auto-apply is turned off for this profile. Launch Hamilton manually to run this application.',
+      })
+      await appendTaskEvent(db, {
+        taskId: task.id, eventType: 'note', status: 'ready_to_start', step: 'automation_disabled',
+        message: 'Skipped autonomous run: Hamilton auto-apply is disabled in this profile\'s Automations settings.',
+        actorUserId: userId, actorRole: 'agent',
+      })
+      await updateAutopilotRun(db, run.id, {
+        status: 'deferred',
+        result: { deferred: true, reason: 'hamilton_autopilot_disabled_for_profile' },
+        finishedAt: new Date().toISOString(),
+      })
+      return { task: await reload(db, task.id), classification, autopilot_run: run.id, deferred: true, reason: 'hamilton_autopilot_disabled' }
+    }
     const schedule = normalizeSchedule(profile?.automation_preferences || profile?.sections?.automation_preferences || {})
     if (schedule.enabled && !isWithinWindow(schedule, new Date())) {
       const nextAt = nextWindowStart(schedule, new Date())
@@ -785,6 +809,15 @@ async function runAutopilotPathway(db, {
   let storageStatePath = options?.storageStatePath || null
   let documents = Array.isArray(options?.documents) ? [...options.documents] : []
   let allowAutoSubmit = options?.allow_auto_submit ?? authorizations.submit_applications
+  // Per-profile automation toggle: turning OFF "Hamilton auto-submit" forces a
+  // hand-back before submission regardless of the per-application authorization.
+  // Absent preference defaults ON (current behaviour).
+  {
+    const autoSubmitPrefs = profile?.automation_preferences || profile?.sections?.automation_preferences || {}
+    if (allowAutoSubmit && !isAutomationEnabled(autoSubmitPrefs, 'hamilton_auto_submit')) {
+      allowAutoSubmit = false
+    }
+  }
   let engineResult = null
   let degradedDirective = null
 

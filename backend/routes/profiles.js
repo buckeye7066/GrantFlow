@@ -32,6 +32,7 @@ import { resolveUploadsDir } from '../utils/uploadsDir.js'
 import { ADMIN_EMAILS } from '../config/constants.js'
 import { countSeats, describeSeatTier, evaluateSeatChange } from '../services/billing/seatTier.js'
 import { normalizeSchedule } from '../services/hamilton/portalAccessSchedule.js'
+import { normalizeAutomationToggles, AUTOMATION_TOGGLES } from '../../shared/automationPreferences.js'
 import { buildAwardSummary } from '../services/awardSummary.js'
 import { resolveCommittedCollege } from '../services/college/committedCollege.js'
 import { syncProfileFieldsFromSection, syncDisplayNameToBasicInformation } from '../utils/profileSectionSync.js'
@@ -962,6 +963,61 @@ router.put('/:id/portal-access-schedule', async (req, res) => {
     }
     await saveAutomationPreferences(req.db, profileId, prefs, req.ctx?.userId ?? null)
     res.json({ schedule: normalizeSchedule(prefs) })
+  } catch (error) {
+    res.status(500).json(formatError(error))
+  }
+})
+
+// ── Per-profile automation toggles ─────────────────────────────────────────
+// Which automations are allowed to run for THIS profile. Stored on the
+// automation_preferences profile section under `automations`. Defaults are all
+// ON so a profile with no saved preference behaves exactly as before. The
+// canonical toggle list + normalization live in shared/automationPreferences.js
+// and the same keys are enforced at each automation's run gate.
+router.get('/:id/automation-preferences', async (req, res) => {
+  try {
+    if (!isAuthenticatedFromCtx(req.ctx)) return res.status(401).json({ error: 'Authentication required' })
+    const profileId = String(req.params.id)
+    const profileRow = await req.db.prepare('SELECT user_id FROM profiles WHERE id = ?').get(profileId)
+    const canView =
+      req.ctx?.isAdmin === true ||
+      (req.ctx?.userId && profileRow?.user_id && String(profileRow.user_id) === String(req.ctx.userId)) ||
+      (req.ctx?.activeProfileId && String(req.ctx.activeProfileId) === profileId)
+    if (!canView) return res.status(403).json({ error: 'Not authorized to view this profile' })
+    const prefs = await loadAutomationPreferences(req.db, profileId)
+    res.json({
+      automations: normalizeAutomationToggles(prefs?.automations),
+      definitions: AUTOMATION_TOGGLES,
+    })
+  } catch (error) {
+    res.status(500).json(formatError(error))
+  }
+})
+
+router.put('/:id/automation-preferences', async (req, res) => {
+  try {
+    if (!isAuthenticatedFromCtx(req.ctx)) return res.status(401).json({ error: 'Authentication required' })
+    const profileId = String(req.params.id)
+    const profileRow = await req.db.prepare('SELECT user_id FROM profiles WHERE id = ?').get(profileId)
+    const canManage =
+      req.ctx?.isAdmin === true ||
+      (req.ctx?.userId && profileRow?.user_id && String(profileRow.user_id) === String(req.ctx.userId)) ||
+      (req.ctx?.activeProfileId && String(req.ctx.activeProfileId) === profileId)
+    if (!canManage) return res.status(403).json({ error: 'Not authorized to manage this profile' })
+
+    // Accept either { automations: {...} } or a bare {...} of toggle keys.
+    // normalizeAutomationToggles drops unknown keys and coerces to booleans, so
+    // an absent key keeps its behaviour-preserving default.
+    const incoming = req.body?.automations && typeof req.body.automations === 'object'
+      ? req.body.automations
+      : (req.body || {})
+    const prefs = await loadAutomationPreferences(req.db, profileId)
+    prefs.automations = normalizeAutomationToggles(incoming)
+    await saveAutomationPreferences(req.db, profileId, prefs, req.ctx?.userId ?? null)
+    res.json({
+      automations: prefs.automations,
+      definitions: AUTOMATION_TOGGLES,
+    })
   } catch (error) {
     res.status(500).json(formatError(error))
   }

@@ -992,10 +992,12 @@ router.post('/sessions/capture-requests/:id/cancel', async (req, res) => {
 })
 
 // ── Cloud interactive login (Option B) ──────────────────────────────────────
-// Self-serve, any device, owner-independent: the backend opens a hosted browser
-// the user drives from their phone to log in + clear 2FA, then we capture the
-// session. OFF unless HAMILTON_CLOUD_LOGIN_* is configured (graceful fallback to
-// Saved Login). The captured session imports through the same profile-bound path.
+// Self-serve, any device, owner-independent: the backend opens a browser the
+// user drives to log in + clear 2FA, then we capture the session. ON GLOBALLY by
+// default via the self_hosted provider (uses the Playwright that already ships in
+// the prod image — no third-party service). Set HAMILTON_CLOUD_LOGIN_PROVIDER=cdp
+// (+ endpoint) for a hosted streamed window, or =disabled to turn it off. The
+// captured session imports through the same profile-bound, encrypted path.
 
 router.get('/sessions/cloud-login/status', async (req, res) => {
   const user = requireAuthenticatedUser(req, res)
