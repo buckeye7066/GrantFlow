@@ -2,11 +2,21 @@
 import React from "react"
 import { render, screen } from "@testing-library/react"
 import { describe, expect, it, vi } from "vitest"
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import ProfileOverview from "./ProfileOverview.jsx"
+
+// ProfileOverview renders PipelinePotentialBreakdown, which calls useQuery, so it
+// needs a QueryClientProvider in the tree.
+function renderWithQueryClient(ui) {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  })
+  return render(<QueryClientProvider client={queryClient}>{ui}</QueryClientProvider>)
+}
 
 describe("profile completion display", () => {
   it("does not count stored but non-applicable sections as complete", () => {
-    render(
+    renderWithQueryClient(
       <ProfileOverview
         profile={{
           id: "profile-family",
