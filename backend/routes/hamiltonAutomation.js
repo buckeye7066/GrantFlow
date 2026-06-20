@@ -1360,6 +1360,28 @@ router.delete('/admin/credentials/:id', async (req, res) => {
   }
 })
 
+// Bulk-remove admin-managed logins in one action ("Delete N marked" on the
+// vault triage worklist). Each id is deleted best-effort with the same per-id
+// guard as the single delete (only admin-placed rows can go); one bad row does
+// not abort the sweep. Returns how many of the requested ids were deleted.
+router.post('/admin/credentials/bulk-delete', async (req, res) => {
+  if (!requireAdmin(req, res)) return
+  const rawIds = Array.isArray(req.body?.ids) ? req.body.ids : []
+  const ids = [...new Set(rawIds.map((id) => String(id || '')).filter(Boolean))]
+  if (ids.length === 0) return res.status(400).json({ error: 'ids_required' })
+  let deleted = 0
+  for (const id of ids) {
+    try {
+      const result = await deleteManagedCredential(req.db, id)
+      if (result?.deleted) deleted += 1
+    } catch (err) {
+      // Keep going so one bad row never aborts the whole clean-up sweep.
+      log.warn('admin_credential_bulk_delete_row_failed', { id, err: err?.message })
+    }
+  }
+  return res.json({ ok: true, deleted, total: ids.length })
+})
+
 // Standing attestations.
 router.get('/attestations', async (req, res) => {
   const user = await requireProfileScope(req, res, req.query.profileId)
