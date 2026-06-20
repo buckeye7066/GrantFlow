@@ -1,11 +1,29 @@
 import crypto from 'crypto'
 import { safeParseJSON } from '../utils/safeJson.js'
-import { TIERS as CATALOG_TIERS, orgTierForSeats } from '../../shared/tierCatalog.js'
+import { TIERS as CATALOG_TIERS, tierById } from '../../shared/tierCatalog.js'
 import { profileTypeToClientCategory } from '../../shared/profileTypeToClientCategory.js'
-import { countSeats } from './billing/seatTier.js'
-import { ADMIN_EMAILS } from '../config/constants.js'
 
-const ORG_TIER_IDS = new Set(['small_org', 'mid_size', 'large_org'])
+/**
+ * Canonical mapping from a profile's BILLING client category (the 4-code form
+ * returned by shared/profileTypeToClientCategory.js) to the tierCatalog tier id
+ * the profile should be BILLED at. This is the single place the type+budget
+ * taxonomy turns into a priced tier — the owner-decided rule that the assigned
+ * tier follows profile type + budget, NOT seat count.
+ *
+ *   individual → 'individual'  ($0/mo, pay-as-you-go individual/family tier)
+ *   small      → 'small_org'   (small organization)
+ *   mid        → 'mid_size'    (mid-sized organization)
+ *   large      → 'large_org'   (large organization)
+ *
+ * Keys are the only tier ids referenced; all exist in shared/tierCatalog.js
+ * (no new tier keys are invented).
+ */
+export const CLIENT_CATEGORY_TO_TIER_ID = Object.freeze({
+  individual: 'individual',
+  small: 'small_org',
+  mid: 'mid_size',
+  large: 'large_org',
+})
 
 /**
  * Derive the BILLING client category ('individual' | 'small' | 'mid' | 'large')
@@ -42,31 +60,32 @@ export async function deriveProfileClientCategory(db, profileId) {
 }
 
 /**
- * Resolve what a profile is actually billed per month, wiring the seat count
- * into the amount: an organization account's monthly follows its seat-derived
- * tier (1 → small, 2–5 → mid, 6+ → large), unless an admin set a custom price or
- * the account is pro bono. Discounts apply on top. Pure read — never mutates.
+ * Resolve what a profile is actually billed per month. Per the owner's decision,
+ * the BASE tier a profile is charged at follows its PROFILE TYPE + (for orgs)
+ * annual budget — via shared/profileTypeToClientCategory.js mapped through
+ * CLIENT_CATEGORY_TO_TIER_ID — NOT the seat (login) count. An admin custom price
+ * and the pro-bono flag still win, and percentage discounts still apply on top,
+ * exactly as before. Pure read — never mutates.
  *
- * Also surfaces `client_category` — the category implied by the profile TYPE +
- * org budget (via the shared mapper) — so callers can see the tier the profile
- * type entitles the user to, independent of any manually-assigned tier.
+ * `client_category` is the 4-code category implied by the profile type + budget;
+ * `tier_id` / `tier_basis` surface which catalog tier that category selected, so
+ * callers can see the type-derived tier independent of the manually-assigned one.
  */
 export async function computeEffectiveBilling(db, profileId, account) {
-  const tier = account?.tier || null
-  const isOrgTier = tier && ORG_TIER_IDS.has(tier.id)
-  let seatCount = null
-  let seatTierId = null
-  let baseMonthly = Number(tier?.base_monthly_cents) || 0
-  let basis = 'assigned_tier'
+  const assignedTier = account?.tier || null
 
-  if (isOrgTier) {
-    try {
-      const rows = await db.prepare('SELECT email FROM profile_emails WHERE profile_id = ?').all(String(profileId))
-      seatCount = countSeats(rows, ADMIN_EMAILS)
-      const seatTier = orgTierForSeats(seatCount || 1)
-      if (seatTier) { seatTierId = seatTier.id; baseMonthly = seatTier.monthly_cents; basis = 'seats' }
-    } catch { /* fall back to the assigned tier price */ }
-  }
+  // The category (and thus base tier) is derived from the profile TYPE + budget.
+  const clientCategory = await deriveProfileClientCategory(db, profileId)
+  const typeTierId = CLIENT_CATEGORY_TO_TIER_ID[clientCategory] || null
+  const typeTier = typeTierId ? tierById(typeTierId) : null
+
+  // Prefer the type+budget-derived tier price. Fall back to the assigned tier's
+  // stored price only if the catalog lookup somehow fails (defensive).
+  let tierId = typeTier ? typeTier.id : (assignedTier?.id || null)
+  let baseMonthly = typeTier
+    ? Number(typeTier.monthly_cents) || 0
+    : Number(assignedTier?.base_monthly_cents) || 0
+  let basis = typeTier ? 'profile_type' : 'assigned_tier'
 
   let effective = baseMonthly
   if (Number.isInteger(account?.custom_monthly_cents)) { effective = account.custom_monthly_cents; basis = 'custom_override' }
@@ -76,12 +95,10 @@ export async function computeEffectiveBilling(db, profileId, account) {
   const discountPct = Math.max(0, Math.min(100, Number(account?.discount_percent) || 0))
   const net = proBono ? 0 : Math.max(0, Math.round(effective * (1 - discountPct / 100)))
 
-  const clientCategory = await deriveProfileClientCategory(db, profileId)
-
   return {
     basis,
-    seat_count: seatCount,
-    seat_tier_id: seatTierId,
+    tier_id: tierId,
+    tier_basis: typeTier ? 'profile_type' : 'assigned_tier',
     base_monthly_cents: baseMonthly,
     effective_monthly_cents: effective,
     discount_percent: discountPct,
