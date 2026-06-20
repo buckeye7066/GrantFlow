@@ -28,6 +28,7 @@ import { runAllDomainEngines } from '../services/crawlers/domainEngines/index.js
 import { crawlStateWaiverBenefits, evaluateStateWaiverEligibility } from '../services/crawlers/stateWaiverBenefitsCrawler.js'
 import { planCoverage, buildCoverageReport, buildGrantsGovQueryTerms, getSource, loadCrawlerSourceRuntimeStatus } from '../services/sourceRegistry.js'
 import { deriveCoverageOutcomes, summariseOutcomes } from '../services/coverageOutcomes.js'
+import { filterOutPipelineMembers, dedupeOpportunityList } from '../services/pipelineExclusion.js'
 
 import { createLogger } from '../utils/logger.js'
 const routeLogger = createLogger('route:realCrawlers')
@@ -207,81 +208,31 @@ function safeJsonParse(val, fallback) {
 }
 
 /**
- * BUG 2 fix — exclude opportunities that are already in this profile's
- * pipeline (grants table) so already-added sources don't reappear in a fresh
- * crawl. Matches primarily on funding_opportunity_id; falls back to a
- * normalized title match when ids are absent. Tolerant by design: any failure
+ * Exclude opportunities already in (or dismissed from) this profile's pipeline,
+ * then collapse intra-list duplicates. Delegates to the ONE canonical,
+ * profile-scoped helper (backend/services/pipelineExclusion.js) instead of a
+ * parallel local filter — so this surface matches discovery/matching on id +
+ * fingerprint + normalized title+funder AND honors dismissal tombstones (which
+ * the old local id/url/title-only filter ignored). Tolerant: any failure
  * returns the input unchanged so the dedup query NEVER blocks results.
  */
-function normalizeOppTitle(t) {
-  return String(t || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
-}
-
-// Normalize a URL to a stable dedup key: drop scheme, querystring, hash, and a
-// trailing slash, lowercased. So http(s)://Host/path/?utm=… → host/path.
-function normalizeUrlForDedup(u) {
-  if (!u || typeof u !== 'string') return null;
-  let s = u.trim().toLowerCase();
-  if (!s) return null;
-  s = s.replace(/^https?:\/\//, '').replace(/^www\./, '');
-  s = s.split('#')[0].split('?')[0].replace(/\/+$/, '');
-  return s || null;
-}
-
 async function excludeExistingPipeline(db, profileId, opportunities) {
   if (!Array.isArray(opportunities) || opportunities.length === 0) return opportunities;
   if (!db || typeof db.prepare !== 'function' || !profileId) return opportunities;
+  let working = opportunities;
   try {
-    const existing = await db
-      .prepare(
-        'SELECT DISTINCT funding_opportunity_id FROM grants WHERE profile_id = ? AND funding_opportunity_id IS NOT NULL',
-      )
-      .all(profileId);
-    const existingIds = new Set((existing || []).map((g) => g.funding_opportunity_id).filter(Boolean));
-
-    // Fallback: also collect titles AND application URLs of grants already in
-    // the pipeline. A re-crawled opportunity gets a NEW funding_opportunity_id
-    // (and sometimes a reworded title), so id-only dedup misses it — but its
-    // URL is stable, making URL the most reliable "same opportunity" key.
-    const existingTitles = new Set();
-    const existingUrls = new Set();
-    try {
-      const rows = await db
-        .prepare('SELECT title, application_url FROM grants WHERE profile_id = ?')
-        .all(profileId);
-      for (const row of rows || []) {
-        const norm = normalizeOppTitle(row?.title);
-        if (norm) existingTitles.add(norm);
-        const u = normalizeUrlForDedup(row?.application_url);
-        if (u) existingUrls.add(u);
-      }
-    } catch (titleErr) {
-      // Title/URL fallback is best-effort; id-based exclusion still applies.
-      routeLogger.warn(`[RealCrawlers] pipeline-dedup title/url lookup failed: ${titleErr?.message ?? titleErr}`);
-    }
-
-    if (existingIds.size === 0 && existingTitles.size === 0 && existingUrls.size === 0) return opportunities;
-
-    const before = opportunities.length;
-    const deduped = opportunities.filter((opp) => {
-      const oppId = opp?.id ?? opp?.funding_opportunity_id ?? null;
-      if (oppId !== null && oppId !== undefined && existingIds.has(oppId)) return false;
-      const u = normalizeUrlForDedup(opp?.application_url || opp?.url || opp?.source_url);
-      if (u && existingUrls.has(u)) return false;
-      const norm = normalizeOppTitle(opp?.title || opp?.name);
-      if (norm && existingTitles.has(norm)) return false;
-      return true;
-    });
-    if (deduped.length < before) {
-      routeLogger.info(
-        `[RealCrawlers] pipeline-dedup: ${before} → ${deduped.length} (excluded ${before - deduped.length} already-in-pipeline for profile ${profileId})`,
-      );
-    }
-    return deduped;
+    const filtered = await filterOutPipelineMembers(db, String(profileId), working);
+    working = filtered.results;
   } catch (err) {
-    routeLogger.warn(`[RealCrawlers] pipeline-dedup failed (continuing, no exclusion): ${err?.message ?? err}`);
-    return opportunities;
+    routeLogger.warn(`[RealCrawlers] pipeline exclusion failed (continuing, no exclusion): ${err?.message ?? err}`);
   }
+  try {
+    const dd = dedupeOpportunityList(working);
+    working = dd.results;
+  } catch (err) {
+    routeLogger.warn(`[RealCrawlers] result dedup failed (continuing): ${err?.message ?? err}`);
+  }
+  return working;
 }
 
 const CRAWLER_TYPES = [

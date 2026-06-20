@@ -416,13 +416,26 @@ export function scoreProgram(program, analysis, strategyOpts = {}) {
     }
 
   // ── Applicant type match (10 points) ──
-  maxPossible += 10;
-    if (program.applicantType && program.applicantType !== analysis.applicantType) {
-          eligibilityPenalty -= 25;
-          matchReasons.push(`Applicant type: ${program.applicantType} (you: ${analysis.applicantType})`);
+  // Canonical rule G4: missing/unknown profile fields are NEUTRAL, never
+  // disqualifying. buildProfileSignals() defaults applicantType to 'individual'
+  // for BOTH an explicitly-individual person AND a profile that never declared a
+  // type. When the type was NOT explicitly determined (applicantTypeExplicit ===
+  // false), a program that targets a different applicant type must NOT subtract
+  // points — we don't award the applicant-type bonus and we don't count it toward
+  // maxPossible, so the program is judged on its other merits (it can still clear
+  // the floor on category/intent/locality). Only an EXPLICIT mismatch penalizes.
+  if (program.applicantType && program.applicantType !== analysis.applicantType) {
+    if (analysis.applicantTypeExplicit === false) {
+      matchReasons.push(`Applicant type: ${program.applicantType} (yours not specified — neutral)`);
     } else {
-          score += 10;
+      maxPossible += 10;
+      eligibilityPenalty -= 25;
+      matchReasons.push(`Applicant type: ${program.applicantType} (you: ${analysis.applicantType})`);
     }
+  } else {
+    maxPossible += 10;
+    score += 10;
+  }
 
   // ── Demographic match (10 points) ──
   // Only count toward maxPossible when the program targets specific demographics.

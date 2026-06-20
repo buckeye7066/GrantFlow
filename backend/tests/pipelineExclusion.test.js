@@ -15,7 +15,7 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import Database from 'better-sqlite3'
 import { grantFingerprintFromOpportunity } from '../utils/grantFingerprint.js'
-import { filterOutPipelineMembers } from '../services/pipelineExclusion.js'
+import { filterOutPipelineMembers, dedupeOpportunityList } from '../services/pipelineExclusion.js'
 
 function makeDb() {
   const raw = new Database(':memory:')
@@ -123,6 +123,104 @@ describe('filterOutPipelineMembers', () => {
     const opportunities = [{ id: 'a' }, { id: 'b' }]
     const { results, excluded } = await filterOutPipelineMembers(db, 'p1', opportunities)
     expect(excluded).toBe(0)
+    expect(results).toHaveLength(2)
+  })
+
+  it('excludes a pipeline member re-crawled under a NEW id/source by title+funder', async () => {
+    // Repro of the reported leak: the same scholarship is in the pipeline, then
+    // re-crawled under a new catalog id AND a different source label, so its
+    // deadline/url (and therefore its fingerprint) drift. Only normalized
+    // title+funder still matches — this MUST exclude it.
+    insertGrant(db, {
+      id: 'g-hope',
+      profile_id: 'p1',
+      funding_opportunity_id: 'national_pd_program:hope',
+      title: 'Tennessee HOPE Aspire Award',
+      funder: 'Tennessee Student Assistance Corporation',
+      deadline: '2026-09-01',
+      url: 'https://tn.gov/collegepays/hope-aspire',
+    })
+    const opportunities = [
+      {
+        // brand-new id, different source label, drifted deadline + url
+        id: 'national_pd_scholarship:hope',
+        title: 'Tennessee HOPE Aspire Award',
+        sponsor: 'Tennessee Student Assistance Corporation',
+        deadline: '2027-09-01',
+        url: 'https://tn.gov/different-path',
+        match_score: 96,
+      },
+      { id: 'fresh-1', title: 'Some Other Grant', sponsor: 'Other', url: 'https://x.org/o' },
+    ]
+    const { results, excluded } = await filterOutPipelineMembers(db, 'p1', opportunities)
+    expect(excluded).toBe(1)
+    expect(results.map((o) => o.id)).toEqual(['fresh-1'])
+  })
+
+  it('does NOT exclude same generic title when funder differs', async () => {
+    // title+funder (not bare title) avoids over-suppressing unrelated programs
+    // that happen to share a generic name.
+    insertGrant(db, {
+      id: 'g-gen',
+      profile_id: 'p1',
+      funding_opportunity_id: 'gen-1',
+      title: 'General Operating Support',
+      funder: 'Foundation A',
+    })
+    const opportunities = [
+      { id: 'other', title: 'General Operating Support', sponsor: 'Foundation B', url: 'https://b.org' },
+    ]
+    const { results, excluded } = await filterOutPipelineMembers(db, 'p1', opportunities)
+    expect(excluded).toBe(0)
+    expect(results.map((o) => o.id)).toEqual(['other'])
+  })
+})
+
+describe('dedupeOpportunityList', () => {
+  it('collapses duplicate rows for the same award (different source labels), keeping the best', () => {
+    const list = [
+      {
+        id: 'national_pd_program:hope',
+        source: 'national_pd_program',
+        title: 'Tennessee HOPE Aspire Award',
+        sponsor: 'Tennessee Student Assistance Corporation',
+        match_score: 89,
+      },
+      {
+        id: 'national_pd_scholarship:hope',
+        source: 'national_pd_scholarship',
+        title: 'Tennessee HOPE Aspire Award',
+        sponsor: 'Tennessee Student Assistance Corporation',
+        match_score: 100, // higher score + more complete → this copy must win
+        description: 'Award for continuing students.',
+        url: 'https://tn.gov/collegepays/hope-aspire',
+      },
+      { id: 'unrelated', title: 'The Gates Scholarship', sponsor: 'Gates Foundation', match_score: 95 },
+    ]
+    const { results, removed } = dedupeOpportunityList(list)
+    expect(removed).toBe(1)
+    expect(results).toHaveLength(2)
+    const hope = results.find((o) => o.title === 'Tennessee HOPE Aspire Award')
+    expect(hope.id).toBe('national_pd_scholarship:hope')
+    expect(hope.match_score).toBe(100)
+    expect(results.some((o) => o.title === 'The Gates Scholarship')).toBe(true)
+  })
+
+  it('collapses by shared opportunity_id even when titles differ slightly', () => {
+    const list = [
+      { id: 'opp-1', title: 'Program', match_score: 50 },
+      { opportunity_id: 'opp-1', title: 'Program (renamed)', match_score: 70 },
+    ]
+    const { results, removed } = dedupeOpportunityList(list)
+    expect(removed).toBe(1)
+    expect(results).toHaveLength(1)
+    expect(results[0].match_score).toBe(70)
+  })
+
+  it('keeps rows with no stable key instead of collapsing blanks', () => {
+    const list = [{ match_score: 10 }, { match_score: 20 }]
+    const { results, removed } = dedupeOpportunityList(list)
+    expect(removed).toBe(0)
     expect(results).toHaveLength(2)
   })
 })

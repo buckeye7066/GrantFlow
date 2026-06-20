@@ -20,6 +20,7 @@ import express from 'express'
 import crypto from 'crypto'
 
 import { ensureProfileAccess } from '../utils/accessControl.js'
+import { filterOutPipelineMembers } from '../services/pipelineExclusion.js'
 import { logAuditEvent, AUDIT_CATEGORIES, SEVERITY } from '../services/auditService.js'
 import { getRobertConfig, maskSecrets } from '../services/robert/robertSafety.js'
 import {
@@ -298,6 +299,23 @@ function resolveActiveProfileId(req) {
   )
 }
 
+/**
+ * Drop recommendation rows whose opportunity is already in (or dismissed from)
+ * this profile's pipeline, using the ONE canonical, profile-scoped helper. A
+ * recommendation carries `opportunity_id`, which the helper keys on. Tolerant:
+ * any failure returns the list unchanged so we never blank the queue.
+ */
+async function excludePipelineRecommendations(db, profileId, items) {
+  if (!Array.isArray(items) || items.length === 0) return items
+  try {
+    const candidates = items.map((rec) => ({ _rec: rec, id: rec.opportunity_id ?? rec.id }))
+    const filtered = await filterOutPipelineMembers(db, String(profileId), candidates)
+    return filtered.results.map((c) => c._rec)
+  } catch {
+    return items
+  }
+}
+
 router.get('/recommendations', requireAuth, async (req, res) => {
   try {
     const profileId = String(resolveActiveProfileId(req) || '')
@@ -305,9 +323,10 @@ router.get('/recommendations', requireAuth, async (req, res) => {
     if (!(await ensureProfileAccess(req, res, profileId))) return
     const limit = Math.max(1, Math.min(200, Number(req.query.limit) || 50))
     const since = req.query.since ? String(req.query.since) : null
-    const items = since
+    const rawItems = since
       ? await listRecommendationsSince(req.db, profileId, since, { limit })
       : await listPendingRecommendationsForProfile(req.db, profileId, { limit })
+    const items = await excludePipelineRecommendations(req.db, profileId, rawItems)
     return res.json({ ok: true, profile_id: profileId, recommendations: items })
   } catch (err) { return handleError(res, err) }
 })
@@ -342,7 +361,8 @@ router.get('/recommendations/stream', requireAuth, async (req, res) => {
     if (!(await ensureProfileAccess(req, res, profileId))) return
     const sinceISO = req.query.since ? String(req.query.since) : null
     const limit = Math.max(1, Math.min(50, Number(req.query.limit) || 20))
-    const items = await listRecommendationsSince(req.db, profileId, sinceISO, { limit })
+    const rawItems = await listRecommendationsSince(req.db, profileId, sinceISO, { limit })
+    const items = await excludePipelineRecommendations(req.db, profileId, rawItems)
     res.set('Cache-Control', 'no-store')
     return res.json({
       ok: true,

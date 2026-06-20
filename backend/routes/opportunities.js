@@ -7,6 +7,7 @@ import {
   assessOpportunityTrust,
   buildTrustMetadata,
 } from '../services/opportunityTrust.js'
+import { filterOutPipelineMembers, dedupeOpportunityList } from '../services/pipelineExclusion.js'
 
 import { createLogger } from '../utils/logger.js'
 const routeLogger = createLogger('route:opportunities')
@@ -1319,10 +1320,11 @@ router.get('/geo/scored', async (req, res) => {
     }
 
     // Decorate rows
-    const decorated = rows.map(decorateOpportunity).filter(Boolean);
+    let decorated = rows.map(decorateOpportunity).filter(Boolean);
 
     // If profile_id provided, compute match scores using the canonical matchingEngine.
-    if (profileId && profileId !== 'all' && profileId !== 'admin') {
+    const isRealProfile = profileId && profileId !== 'all' && profileId !== 'admin';
+    if (isRealProfile) {
       try {
         const { loadProfileContext } = await import('../services/profileHelpers.js');
         const { scoreOpportunity } = await import('../services/matchEngine.js');
@@ -1339,6 +1341,23 @@ router.get('/geo/scored', async (req, res) => {
       } catch (scoringError) {
         console.warn('[opportunities/geo/scored] Profile scoring failed, returning unscored:', scoringError?.message);
         // Continue without scores rather than failing the request
+      }
+
+      // Profile-scoped match list → never re-surface a pipeline member or
+      // dismissed grant, and collapse duplicate rows. Canonical helper; admin
+      // can opt out with include_pipeline=1. Tolerant: failure leaves results.
+      if (req.query?.include_pipeline !== '1') {
+        try {
+          const filtered = await filterOutPipelineMembers(db, String(profileId), decorated);
+          decorated = filtered.results;
+        } catch (exclErr) {
+          routeLogger.warn(`[opportunities/geo/scored] pipeline exclusion skipped: ${exclErr?.message || exclErr}`);
+        }
+      }
+      try {
+        decorated = dedupeOpportunityList(decorated).results;
+      } catch (dedupeErr) {
+        routeLogger.warn(`[opportunities/geo/scored] dedup skipped: ${dedupeErr?.message || dedupeErr}`);
       }
     }
 

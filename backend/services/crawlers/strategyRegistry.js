@@ -53,10 +53,15 @@ const STRATEGIES = {
   student_grants: {
     id: 'student_grants',
     label: 'Student Grants & Scholarships',
-    candidateSources: ['federal', 'scholarships', 'national', 'schoolCards'],
+    // 'state' added so a state-resident student (e.g. TN) also picks up the
+    // state's student-aid and benefit portals (TANF/childcare for student
+    // parents, state grant offices) — these are state-filtered downstream, so
+    // recall rises without cross-state junk. 'scholarships' already carries the
+    // state-restricted awards (TN HOPE / TSAA / STEP UP / Aspire / Promise).
+    candidateSources: ['federal', 'scholarships', 'state', 'national', 'schoolCards'],
     hardGates: ['education'],
-    needEmphasis: ['scholarship', 'education'],
-    intentBoost: { education: 20 },
+    needEmphasis: ['scholarship', 'education', 'financial_aid', 'living_expenses', 'cost_of_attendance'],
+    intentBoost: { education: 20, scholarship: 15, financial_aid: 10 },
     urlPolicy: 'standard',
     maxResults: 80,
     minScore: 20,

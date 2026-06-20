@@ -448,11 +448,23 @@ function buildRawInputs(profile, sections) {
  */
 function toAnalysisShape(profileContext) {
   const s = profileContext.signals || {}
+  const applicantTypes = toSignalSet(s.applicantTypes)
+  // Was the applicant type DETERMINED from a real profile signal, or did it
+  // fall back to the generic 'individual' default? buildProfileSignals() returns
+  // applicantType='individual' both for an explicitly-individual person AND for a
+  // profile that simply never declared a type. The matcher must treat the latter
+  // as NEUTRAL (canonical rule G4: "missing profile fields must not disqualify").
+  // The type is "explicit" when EITHER the resolved type is something other than
+  // the bare default, OR the raw applicantTypes set carried a concrete value.
+  const resolvedApplicantType = s.applicantType || 'individual'
+  const applicantTypeExplicit =
+    resolvedApplicantType !== 'individual' || applicantTypes.size > 0
   return {
     profileId: profileContext.profile_id || profileContext.profile?.id,
     profileName: profileContext.profile?.display_name || profileContext.profile?.name || null,
     location: s.location || {},
-    applicantType: s.applicantType || 'individual',
+    applicantType: resolvedApplicantType,
+    applicantTypeExplicit,
     needs: toSignalSet(s.needs),
     demographics: toSignalSet(s.demographics),
     health: toSignalSet(s.health),
@@ -472,7 +484,7 @@ function toAnalysisShape(profileContext) {
     keywordSet: toSignalSet(s.keywordSet),
     phrases: toSignalSet(s.phrases),
     intentPhrases: toSignalSet(s.intentPhrases),
-    applicantTypes: toSignalSet(s.applicantTypes),
+    applicantTypes,
     assistance: toSignalSet(s.assistance),
     genders: toSignalSet(s.genders),
     academics: s.academics || {},

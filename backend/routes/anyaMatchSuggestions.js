@@ -16,6 +16,7 @@ import { requireAuthenticatedUser } from '../utils/accessControl.js'
 import { isAdminUserWithDb } from '../utils/accessControl.js'
 import { safeParseJSON } from '../utils/safeJson.js'
 import { isScoutMutedForUser } from '../services/anyaMatchScout.js'
+import { filterOutPipelineMembers } from '../services/pipelineExclusion.js'
 import { createLogger } from '../utils/logger.js'
 
 const routeLogger = createLogger('route:anya-match-suggestions')
@@ -167,10 +168,49 @@ router.get('/pending', async (req, res) => {
     return res.json({ suggestions: [], muted: false })
   }
 
-  const suggestions = (rows || []).map((row) => ({
+  let suggestions = (rows || []).map((row) => ({
     ...mapSuggestionRow(row),
     profile_name: row.profile_name || null,
   }))
+
+  // Never surface a suggestion for something already in (or dismissed from)
+  // that suggestion's OWN profile pipeline. Suggestions are user-scoped but can
+  // span several profiles, so we exclude per profile_id with the canonical,
+  // profile-scoped helper (no cross-profile bleed-over). Recall over
+  // suppression: any failure leaves the list untouched.
+  try {
+    const byProfile = new Map()
+    for (const s of suggestions) {
+      const pid = s.profile_id ? String(s.profile_id) : ''
+      if (!byProfile.has(pid)) byProfile.set(pid, [])
+      byProfile.get(pid).push(s)
+    }
+    const kept = []
+    for (const [pid, group] of byProfile) {
+      if (!pid) {
+        kept.push(...group)
+        continue
+      }
+      // Build identity-bearing candidates the helper can key on (it reads
+      // id/opportunity_id, title, funder/sponsor). Keep a back-reference to the
+      // original suggestion so we can return the unmodified shape.
+      const candidates = group.map((s) => ({
+        _suggestion: s,
+        id: s.opportunity_id ?? s.id,
+        title: s.title,
+        funder: s.funder ?? s.opportunity_data?.funder ?? s.opportunity_data?.sponsor ?? null,
+      }))
+      const filtered = await filterOutPipelineMembers(req.db, pid, candidates)
+      // filterOutPipelineMembers preserves object identity in `results`.
+      for (const c of filtered.results) kept.push(c._suggestion)
+    }
+    suggestions = kept
+  } catch (exclErr) {
+    routeLogger.warn('[match-suggestions] /pending pipeline exclusion skipped', {
+      err: exclErr?.message || String(exclErr),
+    })
+  }
+
   return res.json({ suggestions, muted: false })
 })
 
