@@ -25,6 +25,7 @@ import { normalizeOpportunityState, normalizeState } from '../utils/stateNormali
 import { assembleFundingResults, TIERS as ZERO_RESULT_TIERS } from '../services/zeroResultLadder.js'
 import { evaluatePipelineSource } from '../config/pipelineAllowedSources.js'
 import { evaluateApplicantTypeEligibility } from '../services/applicantTypeGate.js'
+import { filterOutPipelineMembers } from '../services/pipelineExclusion.js'
 import {
   detectProfessionalDevelopmentIntent,
   loadCuratedProfessionalDevelopmentPrograms,
@@ -950,6 +951,36 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
         }))
       }
 
+      // ── Hard min-score floor (strict mode) ───────────────────────────────
+      // When the caller is strict (the Discover/SmartMatcher slider, admin
+      // batch runs at a fixed min_score), the user's minimum match % is an
+      // absolute floor: nothing below it may ever appear. Belt-and-suspenders
+      // over the per-path filters above so no fallback/ladder/annotation step
+      // can reintroduce a sub-threshold row. (User directive: "if the slider
+      // is at 70, no results below 70 should show — globally & permanently.")
+      if (strictMin && Number.isFinite(minScore)) {
+        capped = capped.filter((opp) => (opp.match_score ?? 0) >= minScore)
+      }
+
+      // ── Pipeline exclusion ───────────────────────────────────────────────
+      // Never re-surface an opportunity the user already acted on: anything in
+      // THIS profile's pipeline (any stage) or carrying a dismissal tombstone
+      // is removed. Profile-scoped, so it also guarantees no cross-profile
+      // bleed-over. Admin/debug callers can opt out with ?include_pipeline=1.
+      // (User directive: "crawlers still return results already in the
+      // pipeline — fix this globally and permanently.")
+      let pipelineExcludedCount = 0
+      if (req.query.include_pipeline !== '1') {
+        try {
+          const filtered = await filterOutPipelineMembers(req.db, profileId, capped)
+          pipelineExcludedCount = filtered.excluded
+          capped = filtered.results
+        } catch (exclErr) {
+          // Recall over suppression — a filter failure must not blank results.
+          routeLogger.warn(`[matching] pipeline exclusion skipped: ${exclErr?.message || exclErr}`)
+        }
+      }
+
       // Mission rule (Phase 3): every match output must carry a
       // profile_signal_audit so users/Anya/tests can answer "what facts from
       // my profile did the matcher actually use?".
@@ -1017,6 +1048,7 @@ router.get('/profile/:profileId/opportunities', async (req, res) => {
                 professional_development_intent: pdIntent.active || undefined,
                 branded_program: pdIntent.branded?.label || undefined,
                 income_support_excluded: pdIntent.excludeIncomeSupport || undefined,
+                excluded_already_in_pipeline: pipelineExcludedCount || undefined,
               },
               coverage_summary: {
                 total_candidates: rawCandidates.length,

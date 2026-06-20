@@ -292,6 +292,12 @@ export default function SmartMatcher() {
                 qs.set('min_score', String(minScore))
                 qs.set('limit', '500')
                 qs.set('skip_readiness_check', '1')
+                // Honor the min-match slider as a HARD floor: strict mode tells
+                // the backend not to relax the threshold to "show something".
+                // Nothing below `minScore` may appear. (Mirrors DiscoverGrants.)
+                qs.set('strict', '1')
+                qs.set('allow_relax', '0')
+                qs.set('relax', '0')
                 const fromIntent =
                   Array.isArray(parsedSearchTerms) && parsedSearchTerms.length > 0
                     ? parsedSearchTerms.map((t) => String(t).toLowerCase().trim()).filter(Boolean)
@@ -334,8 +340,16 @@ export default function SmartMatcher() {
   }, [scoredResponse])
 
   const filteredOpportunities = useMemo(() => {
-        return [...scoredOpportunities].sort((a, b) => (b.match_score ?? 0) - (a.match_score ?? 0))
-  }, [scoredOpportunities])
+        // Defense in depth: even if any backend path leaks a sub-threshold row,
+        // the UI honors the slider as a HARD floor — nothing below minScore shows.
+        const floor = Math.min(100, Math.max(0, Number(minScore) || 0))
+        return [...scoredOpportunities]
+          .filter((o) => {
+            const score = Number(o.match_score ?? o.match ?? -Infinity)
+            return Number.isFinite(score) && score >= floor
+          })
+          .sort((a, b) => (b.match_score ?? 0) - (a.match_score ?? 0))
+  }, [scoredOpportunities, minScore])
 
   const topMatches = filteredOpportunities.filter(o => (o.match_score ?? 0) >= 85)
     const goodMatches = filteredOpportunities.filter(o => (o.match_score ?? 0) >= 70 && (o.match_score ?? 0) < 85)

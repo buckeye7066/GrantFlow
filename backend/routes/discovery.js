@@ -7,6 +7,7 @@ import { DEFAULT_MIN_SCORE, RELAX_THRESHOLDS, FALLBACK_TOP_N } from '../config/m
 import { loadProfileContext, buildProfileSignalAudit } from '../services/profileHelpers.js'
 import { buildProfileFacets } from '../services/profile/profileTaxonomy.js'
 import { deduplicateOpportunities, decorateOpportunityFreshness } from '../services/opportunityMatcher.js'
+import { filterOutPipelineMembers } from '../services/pipelineExclusion.js'
 import { resolveGeoCoverage, buildGeoCoverageClause } from '../services/geo/geoCoverageService.js'
 import { assessOpportunityTrust } from '../services/opportunityTrust.js'
 import { assembleFundingResults } from '../services/zeroResultLadder.js'
@@ -427,10 +428,25 @@ router.post('/comprehensiveMatch', async (req, res) => {
       }))
     }
 
+    // Pipeline exclusion: drop anything already in THIS profile's pipeline or
+    // dismissed. Profile-scoped → no cross-profile bleed-over.
+    const profileIdForExclusion = typeof profile_json === 'string' ? profile_json : (profile?.id ?? null)
+    let excludedAlreadyInPipeline = 0
+    if (profileIdForExclusion && req.body?.include_pipeline !== true && req.body?.include_pipeline !== '1') {
+      try {
+        const filtered = await filterOutPipelineMembers(req.db, String(profileIdForExclusion), finalOpportunities)
+        finalOpportunities = filtered.results
+        excludedAlreadyInPipeline = filtered.excluded
+      } catch (exclErr) {
+        routeLogger.warn(`[comprehensiveMatch] pipeline exclusion skipped: ${exclErr?.message || exclErr}`)
+      }
+    }
+
     res.json({
       success: true,
       opportunities: finalOpportunities,
       total: finalOpportunities.length,
+      excluded_already_in_pipeline: excludedAlreadyInPipeline || undefined,
       page,
       threshold_used: matchThreshold,
       threshold_relaxed: wasRelaxed || ladder.threshold_relaxed ? true : undefined,
@@ -600,12 +616,29 @@ router.post('/searchOpportunities', async (req, res) => {
       })
       .filter(Boolean);
     // Deduplicate before returning (display-only; no DB records are changed)
-    const results = deduplicateOpportunities(rawResults);
-    
+    const deduped = deduplicateOpportunities(rawResults);
+
+    // Pipeline exclusion: never re-surface a grant already in this profile's
+    // pipeline or dismissed. Profile-scoped (no cross-profile bleed-over).
+    // Skipped when no profile_id (admin global browse) or include_pipeline=1.
+    let results = deduped;
+    let excludedAlreadyInPipeline = 0;
+    if (profile_id && req.body?.include_pipeline !== true && req.body?.include_pipeline !== '1') {
+      try {
+        const filtered = await filterOutPipelineMembers(req.db, String(profile_id), deduped);
+        results = filtered.results;
+        excludedAlreadyInPipeline = filtered.excluded;
+      } catch (exclErr) {
+        // Recall over suppression — a filter failure must not blank results.
+        console.warn('[searchOpportunities] pipeline exclusion skipped:', exclErr?.message || exclErr);
+      }
+    }
+
     res.json({
       success: true,
       results,
       total,
+      excluded_already_in_pipeline: excludedAlreadyInPipeline || undefined,
       page,
       per_page,
       has_more: offset + opportunities.length < total

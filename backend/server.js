@@ -2001,6 +2001,11 @@ app.use('/api/john', lazyRouter('./routes/john.js'));
 // manual entries. Enforced at auth, inbound, and outreach. Admin-only except
 // the token-authed /ingest endpoint devices push to.
 app.use('/api/blocklist', lazyRouter('./routes/blocklist.js'));
+// Email → Grant ingestion. The owner's inbox bridge (Gmail Apps Script /
+// forwarder) POSTs grant-announcement emails to the token-authed /ingest
+// endpoint; parsed grants enter the catalog and flow through Smart Match /
+// Discover. Admin can review/reject ingestions.
+app.use('/api/email-grants', lazyRouter('./routes/emailGrants.js'));
 // Yana Lead Discovery & Outreach pipeline. The router lives at
 // backend/routes/larry.js for filename stability; both paths serve the
 // same handlers. /api/yana-leads is the canonical path the admin UI

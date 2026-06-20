@@ -323,6 +323,38 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
     severityOnFailure: SEVERITY.MEDIUM,
     description: 'Delegates to admin.compliance.overdue — surfaces awarded funding whose restrictions are overdue, short on required spending, or over an exact-category requirement, so the owner can log compliant spending (with proof) before it becomes a real compliance problem.',
   },
+  {
+    id: 'emailGrants.ingestionHealth',
+    label: 'Email → Grant ingestion health',
+    category: SAM_CATEGORIES.CRAWLER_RELIABILITY,
+    kind: CHECK_KIND.INTERNAL,
+    severityOnFailure: SEVERITY.LOW,
+    description: 'Confirms the inbox→grant pipeline is installed and not silently erroring. Flags when emails are arriving but a disproportionate share end in status=error (e.g. AI provider down or insert gate misconfigured).',
+    async run({ db }) {
+      try {
+        const { getEmailGrantHealth } = await import('../emailGrants/emailGrantIngestor.js')
+        const health = await getEmailGrantHealth(db, { limit: 1 })
+        if (!health.installed) {
+          // Fail open — feature simply hasn't been used / migrated yet.
+          return { ok: true, summary: `email_grant_ingestions not present yet (${health.reason || 'unknown'})` }
+        }
+        const tally = health.tally || {}
+        const errors = Number(tally.error || 0)
+        const total = Object.values(tally).reduce((a, b) => a + (Number(b) || 0), 0)
+        // Only a real signal once we have a few emails and errors dominate.
+        if (total >= 5 && errors > total / 2) {
+          return {
+            ok: false,
+            summary: `Email ingestion failing: ${errors}/${total} ended in error`,
+            evidence: tally,
+          }
+        }
+        return { ok: true, summary: `email ingestion ok (${JSON.stringify(tally)})` }
+      } catch (err) {
+        return { ok: true, summary: `email ingestion check skipped (${err?.message || 'unknown'})` }
+      }
+    },
+  },
 ])
 
 // ---------------------------------------------------------------------------

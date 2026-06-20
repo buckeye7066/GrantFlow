@@ -3958,3 +3958,22 @@ registerTool({
     return { ok: true, job_id: creation.jobId, type: params.type, profile_id: params.profileId }
   },
 })
+
+registerTool({
+  name: 'owner.email_grants_status',
+  description: 'OWNER ONLY. Show the status of grants ingested from the owner\'s email inbox bridge — how many were imported into the catalog, skipped, or rejected, and the most recent emails. Use when the owner asks "what grants came in from my email?" or to check the inbox-to-grant pipeline.',
+  requiresOwner: true,
+  schema: {
+    type: 'object',
+    properties: {
+      limit: { type: 'number', description: 'How many recent ingestions to return (default 20, max 100)' },
+    },
+  },
+  handler: async (params, context) => {
+    const db = context?.db
+    if (!db) throw new Error('Database connection required')
+    const { getEmailGrantHealth } = await import('./emailGrants/emailGrantIngestor.js')
+    const health = await getEmailGrantHealth(db, { limit: Number(params?.limit) || 20 })
+    return { ok: true, ...health }
+  },
+})
