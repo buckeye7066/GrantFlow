@@ -28,7 +28,8 @@ import {
   RefreshCw,
   Copy,
   Check,
-  Key
+  Key,
+  ExternalLink
 } from 'lucide-react';
 
 export default function AdminDiagnostics() {
@@ -326,13 +327,68 @@ export default function AdminDiagnostics() {
   const getFundingStatusBadge = (source) => {
     const configured = Boolean(source?.configured)
     const required = Boolean(source?.key_required)
-    const label = configured ? 'configured' : required ? 'missing key' : 'optional'
+    const label = configured ? 'configured' : required ? 'API KEY NEEDED' : 'optional'
     const cls = configured
       ? 'bg-green-100 text-green-800 border-green-300'
       : required
         ? 'bg-red-100 text-red-800 border-red-300'
         : 'bg-slate-100 text-slate-800 border-slate-300'
     return <Badge className={cls}>{label}</Badge>
+  }
+
+  // "How do I get this key?" — surfaces the per-source setup guidance (signup
+  // link + numbered steps + caveats) that the backend already returns. Shown
+  // prominently when a key is missing so the owner can go get it in one click.
+  const renderFundingSetup = (source) => {
+    const setup = source?.setup || {}
+    const configured = Boolean(source?.configured)
+    const needsKey = !configured && Boolean(source?.key_required)
+    const signup = setup.signup_url || source?.docs_url || null
+    const steps = Array.isArray(setup.steps) ? setup.steps : []
+
+    if (configured) {
+      return <span className="text-xs text-slate-400">—</span>
+    }
+
+    // Keyless/optional sources: nothing to obtain, just note it.
+    if (!needsKey && (source?.env_vars || []).length === 0) {
+      return <span className="text-xs text-slate-500">No key needed</span>
+    }
+
+    return (
+      <div className="space-y-2">
+        {signup ? (
+          <a
+            href={signup}
+            target="_blank"
+            rel="noreferrer"
+            className={`inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-semibold ${
+              needsKey
+                ? 'bg-red-600 text-white hover:bg-red-700'
+                : 'bg-slate-700 text-white hover:bg-slate-800'
+            }`}
+          >
+            Get API key <ExternalLink className="w-3.5 h-3.5" />
+          </a>
+        ) : null}
+        {Number(setup.est_minutes) > 0 ? (
+          <span className="ml-2 text-xs text-slate-500">~{setup.est_minutes} min</span>
+        ) : null}
+        {steps.length > 0 ? (
+          <details className="text-xs text-slate-700">
+            <summary className="cursor-pointer text-blue-600 hover:underline">How to get it</summary>
+            <ol className="mt-1 list-decimal space-y-1 pl-5 text-slate-700">
+              {steps.map((step, i) => (
+                <li key={i}>{step}</li>
+              ))}
+            </ol>
+          </details>
+        ) : null}
+        {setup.caveats ? (
+          <p className="text-xs text-amber-700">⚠ {setup.caveats}</p>
+        ) : null}
+      </div>
+    )
   }
 
   const handleNavigate = (url) => {
@@ -1060,6 +1116,7 @@ export default function AdminDiagnostics() {
                   <TableHead>Provider</TableHead>
                   <TableHead>Status</TableHead>
                   <TableHead>Env vars</TableHead>
+                  <TableHead>Get the key</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -1100,11 +1157,12 @@ export default function AdminDiagnostics() {
                         </div>
                       )}
                     </TableCell>
+                    <TableCell className="align-top">{renderFundingSetup(src)}</TableCell>
                   </TableRow>
                 ))}
                 {(!fundingSources || fundingSources.length === 0) && (
                   <TableRow>
-                    <TableCell colSpan={3} className="text-sm text-slate-600">
+                    <TableCell colSpan={4} className="text-sm text-slate-600">
                       No funding providers returned.
                     </TableCell>
                   </TableRow>
