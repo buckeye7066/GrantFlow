@@ -184,6 +184,18 @@ async function loadProfile(db, profileId) {
   } catch { return null }
 }
 
+// Run a long-running automation orchestration detached from the HTTP request so
+// the response returns immediately (browser automation routinely exceeds the
+// gateway timeout). The orchestrator writes task state to the DB as it goes, so
+// progress is observable via GET /tasks. Errors are logged, never thrown into a
+// already-sent response. The db handle (pool/singleton) stays valid after the
+// response is flushed, so the closure can keep using req.db.
+function runAutomationInBackground(label, work) {
+  Promise.resolve()
+    .then(work)
+    .catch((err) => log.error('background_automation_failed', { label, err: err?.message }))
+}
+
 async function loadTaskAndAuthorise(req, res, taskId) {
   const user = requireAuthenticatedUser(req, res)
   if (!user) return null
@@ -268,22 +280,28 @@ router.post('/start', startLimiter, async (req, res) => {
     return res.status(403).json({ error: 'forbidden' })
   }
 
-  try {
-    const result = await automateSelected(req.db, {
-      profileId,
-      userId: getAuthUserId(user),
-      selectedSources,
-      options: {
-        generate_pdf: req.body?.options?.generate_pdf !== false,
-        generate_docx: req.body?.options?.generate_docx !== false,
-        portal_automation: req.body?.options?.portal_automation !== false,
-      },
-    })
-    return res.json({ ok: true, ...result })
-  } catch (err) {
-    log.error('automate_selected_failed', { profileId, err: err?.message })
-    return res.status(err?.status || 500).json({ error: 'automation_failed', detail: err?.message })
-  }
+  // Kick off the automation OFF the request path and return immediately.
+  // Portal/browser automation can take minutes (Playwright nav timeouts × pages
+  // × resolver retries), far exceeding the gateway's ~30-60s limit — running it
+  // inline produced "server is taking too long to respond". The orchestrator
+  // persists each task's state to the DB as it works, so the client polls
+  // GET /tasks for live progress. See runAutomationInBackground.
+  runAutomationInBackground('automate_selected', () => automateSelected(req.db, {
+    profileId,
+    userId: getAuthUserId(user),
+    selectedSources,
+    options: {
+      generate_pdf: req.body?.options?.generate_pdf !== false,
+      generate_docx: req.body?.options?.generate_docx !== false,
+      portal_automation: req.body?.options?.portal_automation !== false,
+    },
+  }))
+  return res.status(202).json({
+    ok: true,
+    queued: true,
+    queued_count: selectedSources.length,
+    message: 'Hamilton is working in the background. Watch the Automation tab for progress.',
+  })
 })
 
 router.get('/tasks', async (req, res) => {
@@ -442,11 +460,12 @@ router.post('/tasks/:taskId/approve', async (req, res) => {
 router.post('/tasks/:taskId/retry', async (req, res) => {
   const ctx = await loadTaskAndAuthorise(req, res, req.params.taskId)
   if (!ctx) return
-  // Re-run the orchestrator on this single source.
+  // Re-run the orchestrator on this single source — in the background so the
+  // request doesn't hang on browser automation.
   try {
     const profile = await loadProfile(req.db, ctx.task.profile_id)
     if (!profile) return res.status(404).json({ error: 'profile_not_found' })
-    const result = await automateSingleSource(req.db, {
+    runAutomationInBackground('retry_single', () => automateSingleSource(req.db, {
       profile,
       profileId: ctx.task.profile_id,
       userId: getAuthUserId(ctx.user),
@@ -455,8 +474,8 @@ router.post('/tasks/:taskId/retry', async (req, res) => {
         grant_id: ctx.task.grant_id,
         current_stage: ctx.task.current_pipeline_stage || ctx.task.selected_from_stage,
       },
-    })
-    return res.json({ ok: true, ...result })
+    }))
+    return res.status(202).json({ ok: true, queued: true, task_id: ctx.task.id, message: 'Hamilton is re-running this application in the background.' })
   } catch (err) {
     log.error('retry_failed', { err: err?.message })
     return res.status(500).json({ error: 'retry_failed', detail: err?.message })
@@ -604,24 +623,25 @@ router.post('/start-autopilot', startLimiter, async (req, res) => {
   if (!profileId) return res.status(400).json({ error: 'profile_id_required' })
   if (selectedSources.length === 0) return res.status(400).json({ error: 'selected_sources_required' })
   if (!(await userMayAccessProfile(req, user, profileId))) return res.status(403).json({ error: 'forbidden' })
-  try {
-    const result = await automateSelected(req.db, {
-      profileId,
-      userId: getAuthUserId(user),
-      selectedSources,
-      options: {
-        autopilot: true,
-        allow_auto_submit: req.body?.options?.allow_auto_submit !== false,
-        documents: Array.isArray(req.body?.options?.documents) ? req.body.options.documents : [],
-        storageStatePath: req.body?.options?.storage_state_path || null,
-        headless: req.body?.options?.headless !== false,
-      },
-    })
-    return res.json({ ok: true, ...result })
-  } catch (err) {
-    log.error('start_autopilot_failed', { err: err?.message })
-    return res.status(err?.status || 500).json({ error: 'start_failed', detail: err?.message })
-  }
+  // Background: autopilot drives real portals and can run for minutes.
+  runAutomationInBackground('start_autopilot', () => automateSelected(req.db, {
+    profileId,
+    userId: getAuthUserId(user),
+    selectedSources,
+    options: {
+      autopilot: true,
+      allow_auto_submit: req.body?.options?.allow_auto_submit !== false,
+      documents: Array.isArray(req.body?.options?.documents) ? req.body.options.documents : [],
+      storageStatePath: req.body?.options?.storage_state_path || null,
+      headless: req.body?.options?.headless !== false,
+    },
+  }))
+  return res.status(202).json({
+    ok: true,
+    queued: true,
+    queued_count: selectedSources.length,
+    message: 'Hamilton autopilot is running in the background. Watch the Automation tab for progress.',
+  })
 })
 
 // ── Phase D — Resolve a hard blocker and continue ───────────────────
@@ -657,7 +677,8 @@ router.post('/tasks/:taskId/resolve-blocker', async (req, res) => {
     })
     const profile = await loadProfile(req.db, ctx.task.profile_id)
     if (!profile) return res.status(404).json({ error: 'profile_not_found' })
-    const result = await automateSingleSource(req.db, {
+    // Resume in the background so clearing a blocker doesn't hang on the re-run.
+    runAutomationInBackground('resolve_blocker_resume', () => automateSingleSource(req.db, {
       profile,
       profileId: ctx.task.profile_id,
       userId: getAuthUserId(ctx.user),
@@ -668,8 +689,8 @@ router.post('/tasks/:taskId/resolve-blocker', async (req, res) => {
         current_stage: ctx.task.current_pipeline_stage || ctx.task.selected_from_stage,
       },
       options: { autopilot: true, allow_auto_submit: true },
-    })
-    return res.json({ ok: true, resolved_blockers: resolvedBlockers, ...result })
+    }))
+    return res.status(202).json({ ok: true, queued: true, resolved_blockers: resolvedBlockers, task_id: ctx.task.id, message: 'Blocker cleared. Hamilton is resuming in the background.' })
   } catch (err) {
     log.error('resolve_blocker_failed', { err: err?.message })
     return res.status(500).json({ error: 'resolve_failed', detail: err?.message })
@@ -1372,7 +1393,11 @@ router.post('/admin/hard-stops/:blockerId/resolve-field', async (req, res) => {
           })
           const profile = await loadProfile(req.db, task.profile_id)
           if (profile) {
-            rerun = await automateSingleSource(req.db, {
+            // Resume in the BACKGROUND — the field is already saved; never make
+            // the operator's inline fix wait on (or time out against) a full
+            // browser re-run.
+            rerun = { task_id: task.id, queued: true }
+            runAutomationInBackground('inline_field_fix_resume', () => automateSingleSource(req.db, {
               profile,
               profileId: task.profile_id,
               userId: getAuthUserId(user),
@@ -1383,7 +1408,7 @@ router.post('/admin/hard-stops/:blockerId/resolve-field', async (req, res) => {
                 current_stage: task.current_pipeline_stage || task.selected_from_stage,
               },
               options: { autopilot: true, allow_auto_submit: true },
-            })
+            }))
           }
         }
       } catch (rerunErr) {
@@ -1398,7 +1423,7 @@ router.post('/admin/hard-stops/:blockerId/resolve-field', async (req, res) => {
       blocker: resolved,
       saved_field: { key: target.key, section: target.section, field: target.field, label: target.label },
       rejected: saveResult.rejected,
-      rerun: rerun ? { task_id: rerun?.task?.id, status: rerun?.task?.status } : null,
+      rerun: rerun ? { task_id: rerun.task_id, status: 'queued' } : null,
     })
   } catch (err) {
     log.error('admin_hard_stop_resolve_field_failed', { err: err?.message, blockerId })
