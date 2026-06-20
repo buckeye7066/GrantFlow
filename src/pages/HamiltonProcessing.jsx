@@ -33,6 +33,8 @@ import {
 import { useToast } from "@/components/ui/use-toast";
 import { Sparkles, Trash2, Loader2, Filter, ExternalLink } from "lucide-react";
 import HamiltonAutopilotAuthorization from "@/components/hamilton/HamiltonAutopilotAuthorization";
+import { isGrantExpired } from "@/components/shared/grantUtils";
+import { isRenderableUrl } from "@/lib/matchDisplayThresholds";
 
 /**
  * HamiltonProcessing
@@ -63,15 +65,18 @@ const ACTIONS = Object.freeze({ LEAVE: "leave", PROCESS: "process", DELETE: "del
 /**
  * Decide the default action for a freshly-loaded source.
  *
- * DESIGN NOTE (intentional default): every source starts on "Leave" so the
- * page never queues Hamilton or deletes anything until the user explicitly
- * opts a row in. That keeps a destructive/irreversible action from ever being
- * the default. If you'd rather pre-select likely-ready sources for Hamilton
- * (e.g. non-expired rows that have an actionable application URL), this is the
- * one place to change it — return ACTIONS.PROCESS for those rows.
+ * DESIGN NOTE (automation-forward default, per "Automation is King"):
+ * a source defaults to PROCESS when it is Hamilton-ready — not expired and
+ * carrying an actionable application URL for Hamilton to work — and to LEAVE
+ * otherwise. We never default to DELETE: deletion is irreversible, so it stays
+ * strictly opt-in. Pre-selecting PROCESS only *stages* the choice; nothing is
+ * authorized or submitted until the user clicks "Process … with Hamilton" and
+ * clears the authorize/preflight gate, so this default never auto-acts.
  */
-function defaultActionFor(_grant) {
-  return ACTIONS.LEAVE;
+function defaultActionFor(grant) {
+  const url = grantUrl(grant);
+  const ready = !isGrantExpired(grant) && isRenderableUrl(url);
+  return ready ? ACTIONS.PROCESS : ACTIONS.LEAVE;
 }
 
 function grantFunder(g) {
