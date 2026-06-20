@@ -17,28 +17,41 @@ const SOURCE_NAME = 'usaspending.gov';
  * @param {object} options - Fetch options
  * @param {number} options.limit - Max number of records to fetch
  * @param {number} options.page - Page number for pagination
+ * @param {string} [options.keyword] - single profile term to keyword-filter awards by
+ * @param {string[]} [options.keywords] - multiple terms (merged with keyword)
  * @returns {Promise<object>} Normalized opportunities and metadata
  */
 export async function fetchUSASpending(options = {}) {
-  const { limit = 100, page = 1 } = options;
-  
-  log.info(`[usaspending.gov] Fetching opportunities (limit: ${limit}, page: ${page})`);
-  
+  const { limit = 100, page = 1, keyword = null, keywords = null } = options;
+
+  // Keyword-filter so a profile pulls the slice of federal awards that match its
+  // needs (→ the agencies that fund those needs), not just the biggest awards.
+  const kwList = [keyword, ...(Array.isArray(keywords) ? keywords : [])]
+    .map((k) => (k === null || k === undefined ? '' : String(k).trim()))
+    .filter((k) => k.length >= 3 && k.length <= 60);
+
+  log.info(
+    `[usaspending.gov] Fetching opportunities (limit: ${limit}, page: ${page}, terms: ${kwList.length})`,
+  );
+
   try {
     // Use the spending by award endpoint to find recent grants
     const url = `${API_BASE}/search/spending_by_award/`;
-    
+
     // Build request payload
+    const filters = {
+      award_type_codes: ['02', '03', '04', '05'], // Grant types
+      time_period: [
+        {
+          start_date: getDateMonthsAgo(12), // Last 12 months
+          end_date: getCurrentDate(),
+        },
+      ],
+    };
+    if (kwList.length > 0) filters.keywords = kwList;
+
     const payload = {
-      filters: {
-        award_type_codes: ['02', '03', '04', '05'], // Grant types
-        time_period: [
-          {
-            start_date: getDateMonthsAgo(12), // Last 12 months
-            end_date: getCurrentDate(),
-          },
-        ],
-      },
+      filters,
       fields: [
         'Award ID',
         'Recipient Name',
