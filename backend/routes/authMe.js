@@ -18,6 +18,20 @@ import { ensureProfileEmailSchema } from '../utils/accessControl.js'
 import { createLogger } from '../utils/logger.js'
 const routeLogger = createLogger('route:authMe')
 
+// Attach avatar_download_url so the post-login UI (profile selector / cards /
+// header) can render the avatar. Without this, /api/auth/me returned profiles
+// with no avatar at all, so the picture "disappeared" after every login even
+// though it was stored. Mirrors mapProfile in routes/profiles.js: a file-backed
+// avatar is served via the stable DB-backed download endpoint.
+function withAvatarDownloadUrl(p) {
+  if (!p || typeof p !== 'object') return p
+  const rawAvatar = p.avatar_url ?? null
+  const avatar_download_url = rawAvatar && String(rawAvatar).includes('/uploads/')
+    ? `/api/profiles/${String(p.id)}/avatar/download`
+    : null
+  return { ...p, avatar_url: rawAvatar, avatar_download_url }
+}
+
 // ---------------------------------------------------------------------------
 // Rate limiter: 100 requests per 5 minutes per IP
 // ---------------------------------------------------------------------------
@@ -133,7 +147,7 @@ export function createAuthMeRouter({ db, adminName, adminEmail }) {
             profiles = await db
               .prepare(
                 `
-                  SELECT id, display_name, organization_id, status
+                  SELECT id, display_name, organization_id, status, avatar_url
                   FROM profiles
                   WHERE status IS NULL OR status <> 'deleted'
                   ORDER BY created_at DESC
@@ -172,7 +186,7 @@ export function createAuthMeRouter({ db, adminName, adminEmail }) {
               profiles = await db
                 .prepare(
                   `
-                    SELECT DISTINCT p.id, p.display_name, p.organization_id, p.status
+                    SELECT DISTINCT p.id, p.display_name, p.organization_id, p.status, p.avatar_url
                     FROM profiles p
                     LEFT JOIN profile_emails pe ON pe.profile_id = p.id
                     WHERE (p.user_id = ?
@@ -186,7 +200,7 @@ export function createAuthMeRouter({ db, adminName, adminEmail }) {
               profiles = await db
                 .prepare(
                   `
-                    SELECT id, display_name, organization_id, status
+                    SELECT id, display_name, organization_id, status, avatar_url
                     FROM profiles
                     WHERE user_id = ?
                       AND (status IS NULL OR status <> 'deleted')
@@ -218,7 +232,7 @@ export function createAuthMeRouter({ db, adminName, adminEmail }) {
             // a stale is_admin that contradicts req.ctx (e.g. after a role promotion).
             is_admin: isAdminUser,
           },
-          profiles: Array.isArray(profiles) ? profiles : [],
+          profiles: (Array.isArray(profiles) ? profiles : []).map(withAvatarDownloadUrl),
           active_profile_id: safeActiveProfileId,
         })
       }
