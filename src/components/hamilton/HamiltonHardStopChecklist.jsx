@@ -23,7 +23,8 @@ import { Badge } from "@/components/ui/badge"
 import { AlertTriangle, CheckCircle2, ChevronRight, Loader2, RefreshCw } from "lucide-react"
 import { useToast } from "@/components/ui/use-toast"
 import { showErrorToast, showSuccessToast } from "@/components/shared/toastHelpers"
-import { resolveHardStopTarget } from "@/config/hamiltonHardStopTargets"
+import { resolveHardStopTarget, resolveInlineField } from "@/config/hamiltonHardStopTargets"
+import HamiltonInlineHardStopFix from "@/components/hamilton/HamiltonInlineHardStopFix"
 
 function severityClass(s) {
   switch (s) {
@@ -62,6 +63,12 @@ export default function HamiltonHardStopChecklist({ profileId }) {
   }, [profileId])
 
   useEffect(() => { load() }, [load])
+
+  // The inline fixer already saved + cleared the stop server-side; just drop the
+  // row so it disappears from the list immediately.
+  const handleInlineResolved = useCallback((blocker) => {
+    setBlockers((prev) => prev.filter((b) => b.id !== blocker.id))
+  }, [])
 
   async function resolve(blocker) {
     setResolvingId(blocker.id)
@@ -108,6 +115,7 @@ export default function HamiltonHardStopChecklist({ profileId }) {
         <ul className="divide-y divide-slate-100">
           {blockers.map((b) => {
             const target = resolveHardStopTarget(b)
+            const inline = resolveInlineField(b)
             const isResolving = resolvingId === b.id
             return (
               <li key={b.id} className={`px-4 py-3 ${severityClass(b.severity)} border-l-4`}>
@@ -141,19 +149,28 @@ export default function HamiltonHardStopChecklist({ profileId }) {
                   </Button>
                 </div>
 
-                {/* What to do once you get there */}
-                <ol className="mt-2 ml-1 space-y-0.5 text-xs text-slate-600 list-decimal list-inside">
-                  {target.instructions.map((line, i) => (
-                    <li key={i}>{line}</li>
-                  ))}
-                </ol>
+                {/* Inline fix: for a missing/ambiguous field, fill it right here. */}
+                {inline && (
+                  <HamiltonInlineHardStopFix blocker={b} onResolved={handleInlineResolved} />
+                )}
 
-                {/* Click to go straight to where it's fixed */}
+                {/* What to do (hidden once an inline input is shown — typing the
+                    value is the instruction). */}
+                {!inline && (
+                  <ol className="mt-2 ml-1 space-y-0.5 text-xs text-slate-600 list-decimal list-inside">
+                    {target.instructions.map((line, i) => (
+                      <li key={i}>{line}</li>
+                    ))}
+                  </ol>
+                )}
+
+                {/* Go straight to where it's fixed. Primary action for non-inline
+                    stops; a secondary "or fix it on the profile" link otherwise. */}
                 <Link
                   to={target.href}
-                  className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-indigo-700 hover:text-indigo-900 hover:underline"
+                  className={`mt-2 inline-flex items-center gap-1 ${inline ? "text-[11px] text-slate-500 hover:text-slate-700" : "text-xs font-medium text-indigo-700 hover:text-indigo-900"} hover:underline`}
                 >
-                  {target.actionLabel}
+                  {inline ? "Or fix it on the profile" : target.actionLabel}
                   <span className="text-slate-400">· {target.fixedWhere}</span>
                   <ChevronRight className="w-3 h-3" />
                 </Link>

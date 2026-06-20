@@ -23,12 +23,45 @@
 
 import { createPageUrl } from "@/utils"
 import { withFlashParam } from "@/lib/flashHighlight"
-import { buildProfileSectionLink } from "@/config/missingInfoTargets"
+import {
+  buildProfileSectionLink,
+  resolveMissingInfoTarget,
+  EDITABLE_SECTIONS,
+} from "@/config/missingInfoTargets"
 
 /** The field key a "missing info / ambiguous field" blocker points at, if any. */
 function blockerFieldKey(blocker) {
   const m = blocker?.metadata || {}
   return m.field || m.key || m.missing_info_key || m.missing_field || null
+}
+
+/** blocker_types whose value can be supplied inline (typed in the banner). */
+const INLINE_FIXABLE_TYPES = new Set(["missing_required_information", "ambiguous_required_field"])
+
+/**
+ * If this blocker is a missing/ambiguous scalar profile field, return what the
+ * inline fixer needs to render an input and save it back to the profile:
+ *   { fieldKey, sectionKey, field, label }
+ * Otherwise null — the row falls back to the navigate-to-fix link. Only fields
+ * that live in an editable profile section qualify (documents, saved logins,
+ * university_applications, etc. are fixed on their own surfaces).
+ */
+export function resolveInlineField(blocker) {
+  if (!blocker) return null
+  // Server-authoritative: the API annotates each stop with `inline_field` (an
+  // object when fixable, null when not) computed from the backend field map, so
+  // the UI never offers an input the save endpoint would reject. Trust it when
+  // present; fall back to client computation only for un-annotated payloads.
+  if (Object.prototype.hasOwnProperty.call(blocker, "inline_field")) {
+    return blocker.inline_field || null
+  }
+  if (!INLINE_FIXABLE_TYPES.has(blocker.blocker_type)) return null
+  const fieldKey = blockerFieldKey(blocker)
+  if (!fieldKey) return null
+  const target = resolveMissingInfoTarget(fieldKey)
+  if (!target || target.isDocument) return null
+  if (!target.section || !target.field || !EDITABLE_SECTIONS.has(target.section)) return null
+  return { fieldKey: target.key, sectionKey: target.section, field: target.field, label: target.label || fieldKey }
 }
 
 /** ProfileDetail "Pipeline" tab, flashing the Saved portal logins card. */
@@ -252,4 +285,4 @@ export function resolveHardStopTarget(blocker) {
   }
 }
 
-export default { HARD_STOP_TARGETS, UNKNOWN_TARGET, resolveHardStopTarget }
+export default { HARD_STOP_TARGETS, UNKNOWN_TARGET, resolveHardStopTarget, resolveInlineField }

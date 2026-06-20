@@ -59,6 +59,20 @@ const SEED_POLICIES = Object.freeze([
     notes: 'Public scholarship application form. Standard form completion only.',
   }),
   Object.freeze({
+    // TSAC's CollegePays portal moved from tn.gov to the "College for TN"
+    // (collegefortn.org) site run by THEC. Same public scholarship/aid
+    // application surface, same policy as the legacy tn.gov entry.
+    portal_host: 'collegefortn.org',
+    automation_allowed: true,
+    agent_submission_allowed: true,
+    scraping_allowed: false,
+    api_available: false,
+    manual_only: false,
+    fallback_path: 'pdf_docx',
+    source_of_policy: 'https://www.collegefortn.org/',
+    notes: 'Public TSAC / College for TN scholarship application surface. Standard form completion only.',
+  }),
+  Object.freeze({
     portal_host: 'mtsu.edu',
     automation_allowed: true,
     agent_submission_allowed: true,
