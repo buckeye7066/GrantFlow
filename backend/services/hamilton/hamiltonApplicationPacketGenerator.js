@@ -289,22 +289,40 @@ function buildInstructionLines({ automationType, address, fax, email, url, due, 
       lines.push('Print the Hamilton-generated application packet (DOCX or PDF).')
       lines.push('Sign every page that requires a signature. Hamilton never auto-signs anything.')
       lines.push('Place the signed packet, ID copy, transcript, and any other listed attachments into a single envelope.')
-      if (address) lines.push(`Mail to: ${address}`)
-      else lines.push('[ MISSING — funder mailing address. Hamilton refuses to invent one. ]')
+      if (address) {
+        lines.push(`Mail to: ${address}`)
+      } else {
+        // No address on file — give an ACTIONABLE next step instead of a dead end.
+        lines.push('Mailing address not on file. Find the funder\'s submission/mailing address before sending:')
+        if (url) lines.push(`  • On the funder application page: ${url}`)
+        lines.push('  • Or call/email the funder to confirm where to mail the packet (see Funder contact above).')
+        lines.push('  • Write the confirmed address on the envelope; do not guess.')
+      }
       lines.push('USPS Certified Mail with tracking is recommended.')
       lines.push(`Write "${subject}" on the envelope (or use the funder reference number when known).`)
       if (due) lines.push(`Postmark by: ${due}`)
       lines.push('Keep a complete copy of the packet for your records.')
       break
     case 'fax':
-      if (fax) lines.push(`Fax the packet to: ${fax}`)
-      else lines.push('[ MISSING — funder fax number. ]')
+      if (fax) {
+        lines.push(`Fax the packet to: ${fax}`)
+      } else {
+        lines.push('Fax number not on file. Find the funder\'s fax number before sending:')
+        if (url) lines.push(`  • On the funder application page: ${url}`)
+        lines.push('  • Or call/email the funder to confirm the fax number (see Funder contact above).')
+      }
       lines.push('Include a cover sheet with applicant name, funder name, and number of pages.')
       if (due) lines.push(`Send by: ${due}`)
+      lines.push('Keep the fax confirmation receipt for your records.')
       break
     case 'email':
-      if (email) lines.push(`Email the PDF (preferred) to: ${email}`)
-      else lines.push('[ MISSING — funder submission email. ]')
+      if (email) {
+        lines.push(`Email the PDF (preferred) to: ${email}`)
+      } else {
+        lines.push('Submission email not on file. Find the funder\'s submission email before sending:')
+        if (url) lines.push(`  • On the funder application page: ${url}`)
+        lines.push('  • Or call/contact the funder to confirm the submission email (see Funder contact above).')
+      }
       lines.push(`Subject: ${subject}`)
       lines.push('Attach: signed PDF, transcript, ID copy, and any required documents.')
       if (due) lines.push(`Send by: ${due}`)
