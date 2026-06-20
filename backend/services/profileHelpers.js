@@ -856,6 +856,86 @@ function collectNarrativeKeywords(section = {}, register) {
   })
 }
 
+// Stopwords for document-text mining: ordinary English + grant/admin boilerplate
+// that would otherwise dominate frequency counts and add nothing discriminating.
+const DOC_STOPWORDS = new Set([
+  'the', 'and', 'for', 'that', 'this', 'with', 'will', 'are', 'was', 'were',
+  'have', 'has', 'had', 'not', 'but', 'you', 'your', 'our', 'their', 'they',
+  'them', 'his', 'her', 'she', 'him', 'who', 'whom', 'which', 'what', 'when',
+  'where', 'how', 'why', 'all', 'any', 'can', 'may', 'must', 'shall', 'should',
+  'would', 'could', 'from', 'into', 'over', 'under', 'about', 'above', 'below',
+  'than', 'then', 'them', 'these', 'those', 'such', 'each', 'every', 'some',
+  'more', 'most', 'other', 'also', 'been', 'being', 'because', 'while', 'during',
+  'between', 'within', 'through', 'after', 'before', 'once', 'only', 'very',
+  'here', 'there', 'both', 'few', 'many', 'much', 'own', 'same', 'does', 'did',
+  'doing', 'done', 'one', 'two', 'three', 'first', 'second', 'page', 'date',
+  'name', 'please', 'thank', 'thanks', 'sincerely', 'dear', 'regards',
+  'application', 'applicant', 'apply', 'program', 'programs', 'grant', 'grants',
+  'funding', 'fund', 'project', 'organization', 'org', 'services', 'service',
+  'information', 'provide', 'provided', 'include', 'including', 'support',
+  'request', 'requirements', 'eligible', 'eligibility', 'available', 'number',
+  'address', 'email', 'phone', 'street', 'city', 'state', 'county', 'zip',
+])
+
+/**
+ * Mine salient keyword/bigram terms out of uploaded document text so a user's
+ * own documents (mission statements, needs assessments, support letters) feed
+ * discovery. Bounded and frequency-ranked to stay relatable, never noisy: caps
+ * documents scanned, characters per document, and terms emitted.
+ *
+ * @param {Array<{extracted_text?: string}>} documents
+ * @param {(term: string) => void} register
+ * @param {{maxDocs?: number, maxCharsPerDoc?: number, maxTerms?: number}} [opts]
+ */
+function collectDocumentKeywords(documents = [], register, opts = {}) {
+  if (typeof register !== 'function' || !Array.isArray(documents) || documents.length === 0) return
+  const maxDocs = opts.maxDocs ?? 8
+  const maxCharsPerDoc = opts.maxCharsPerDoc ?? 6000
+  const maxTerms = opts.maxTerms ?? 25
+
+  const text = documents
+    .slice(0, maxDocs)
+    .map((d) => String(d?.extracted_text || '').slice(0, maxCharsPerDoc))
+    .join('\n')
+    .toLowerCase()
+  if (!text.trim()) return
+
+  // Tokenize to alphabetic words (keep internal hyphens), length 4..24.
+  const tokens = (text.match(/[a-z][a-z-]{2,23}/g) || []).filter(
+    (w) => w.length >= 4 && !DOC_STOPWORDS.has(w),
+  )
+  if (tokens.length === 0) return
+
+  const unigram = new Map()
+  const bigram = new Map()
+  for (let i = 0; i < tokens.length; i += 1) {
+    unigram.set(tokens[i], (unigram.get(tokens[i]) || 0) + 1)
+    // Bigrams of adjacent salient tokens capture phrases like "kidney dialysis".
+    if (i + 1 < tokens.length) {
+      const bg = `${tokens[i]} ${tokens[i + 1]}`
+      bigram.set(bg, (bigram.get(bg) || 0) + 1)
+    }
+  }
+
+  // Rank: phrases that recur (count >= 2) first, then the most frequent single
+  // terms. Frequency, then length, breaks ties toward more specific terms.
+  const rankedBigrams = [...bigram.entries()]
+    .filter(([, c]) => c >= 2)
+    .sort((a, b) => b[1] - a[1] || b[0].length - a[0].length)
+    .slice(0, Math.ceil(maxTerms / 2))
+    .map(([term]) => term)
+  const rankedUnigrams = [...unigram.entries()]
+    .sort((a, b) => b[1] - a[1] || b[0].length - a[0].length)
+    .map(([term]) => term)
+
+  const emitted = []
+  for (const term of [...rankedBigrams, ...rankedUnigrams]) {
+    if (emitted.length >= maxTerms) break
+    emitted.push(term)
+    register(term)
+  }
+}
+
 export function extractCityFromContext({ profile, sections, jobParameters = {} }) {
   return extractCityFromSections({ profile, sections, jobParameters })
 }
@@ -897,7 +977,7 @@ function extractCityFromAddress(address) {
   return null
 }
 
-export function buildProfileSignals({ profile, sections, asOf = null }) {
+export function buildProfileSignals({ profile, sections, asOf = null, documents = [] }) {
   let asOfDate = null
   if (asOf) {
     const d = new Date(asOf)
@@ -990,6 +1070,12 @@ export function buildProfileSignals({ profile, sections, asOf = null }) {
     if (!Array.isArray(values)) return
     values.forEach((value) => registerKeyword(value))
   }
+
+  // ============ UPLOADED DOCUMENTS (mission statements, needs assessments) ============
+  // The user's own documents are profile information too. Mine their salient
+  // terms into keywordSet so they enrich matching AND (as the lowest-priority
+  // facet) the live-source queries. Bounded + frequency-ranked to stay relatable.
+  collectDocumentKeywords(documents, registerKeyword)
 
   // ============ COMPREHENSIVE APPLICATION (PROFILE TAB) ============
   // This section is intentionally stored as a single "full application" payload, but crawlers should still

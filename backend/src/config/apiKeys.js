@@ -31,8 +31,17 @@ function readEnv(name) {
  * @returns {FundingApiKeys}
  */
 export function loadFundingApiKeys() {
+  // Canonical name first, then documented alias, then case/spelling variants we
+  // have actually seen set by hand in the Railway dashboard. Env var names are
+  // case-sensitive on Linux, so a key saved as `Sam_gov_key` is invisible to
+  // `SAM_GOV_PUBLIC_API_KEY` — this fallback keeps a hand-entered key working
+  // instead of silently disabling the whole SAM.gov source.
   const SAM_GOV_PUBLIC_API_KEY =
-    readEnv('SAM_GOV_PUBLIC_API_KEY') || readEnv('SAM_GOV_API_KEY') || null
+    readEnv('SAM_GOV_PUBLIC_API_KEY') ||
+    readEnv('SAM_GOV_API_KEY') ||
+    readEnv('Sam_gov_key') ||
+    readEnv('SAM_GOV_KEY') ||
+    null
 
   return Object.freeze({
     GRANTS_GOV_API_KEY: readEnv('GRANTS_GOV_API_KEY'),
