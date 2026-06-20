@@ -342,7 +342,20 @@ export async function seedBaselineFromRepo(db, opts = {}) {
         primary_type = excluded.primary_type,
         status = excluded.status,
         tags = excluded.tags,
-        avatar_url = excluded.avatar_url,
+        -- AVATAR CHURN GUARD: this baseline re-seed runs at boot (selfHeal.js /
+        -- server.js) and on-demand from the admin "force" route, re-upserting
+        -- EVERY profile in one transaction. The repo seed snapshot does not carry
+        -- live avatars (p.avatar_url is almost always null and avatar_data is never
+        -- exported), so a plain "avatar_url = excluded.avatar_url" wiped uploaded
+        -- avatars across many profiles at one instant. Preserve any existing live
+        -- avatar_url and only adopt the seed value when it is a real (non-empty)
+        -- string and the row has none. Legitimate avatar replacement still happens
+        -- via the dedicated POST /:id/avatar endpoint, which sets the column directly.
+        -- (avatar_data BYTEA is intentionally absent from this upsert and is never touched.)
+        avatar_url = COALESCE(
+          profiles.avatar_url,
+          NULLIF(TRIM(COALESCE(excluded.avatar_url, '')), '')
+        ),
         organization_id = excluded.organization_id,
         updated_at = CURRENT_TIMESTAMP
       -- Never resurrect profiles that a user/admin explicitly deleted.
