@@ -1144,6 +1144,24 @@ router.patch('/:id/status', mutationRateLimiter, async (req, res) => {
       })()
     }
 
+    // Non-blocking: when a grant becomes awarded/approved, best-effort parse its
+    // free-text fields for restriction phrases ("$X must be spent on supplies",
+    // "spend within N days") and pre-create DRAFT compliance rules the owner can
+    // confirm/edit. NEVER invents numbers; creates nothing when nothing is
+    // parseable. Fully isolated so it can never break the status update.
+    if ((status === 'awarded' || status === 'approved') && grant?.profile_id) {
+      ;(async () => {
+        try {
+          const { deriveDraftRulesForGrant } = await import(
+            '../services/awardCompliance/awardComplianceStore.js'
+          )
+          await deriveDraftRulesForGrant(req.db, grant, { createdBy: 'grant-status-awarded' })
+        } catch {
+          // Compliance rule derivation must not affect the status update response.
+        }
+      })()
+    }
+
     res.json(grant);
   } catch (error) {
     console.error('Error updating grant status:', error);

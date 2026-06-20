@@ -2193,6 +2193,27 @@ registerTool({
   handler: async ({ limit } = {}, context) => scanHamiltonSessionReadiness(context?.db, { limit }),
 })
 
+// Makes Award Compliance & Restriction Tracking observable to the agents:
+// Anya can answer "which awards are overdue / short on required spending" and
+// Sam mines the findings[] into diagnostics (see samRegistry award.compliance).
+// Read-only; never auto-marks anything compliant — "met" requires logged
+// spend entries summing to the requirement.
+registerTool({
+  name: 'admin.compliance.overdue',
+  description: 'Lists awarded funding restrictions that are OVERDUE, SHORT on required spending, or OVER an exact-category requirement (potential non-compliance). Read-only. Admin only.',
+  requiresAdmin: true,
+  schema: {
+    type: 'object',
+    properties: {
+      limit: { type: 'integer', minimum: 1, maximum: 5000, description: 'Max rules to scan (default 1000).' },
+    },
+  },
+  handler: async ({ limit } = {}, context) => {
+    const { scanAwardComplianceFindings } = await import('./awardCompliance/awardComplianceStore.js')
+    return scanAwardComplianceFindings(context?.db, { limit })
+  },
+})
+
 registerTool({
   name: 'admin.health.logs',
   description: 'Get recent error/warning logs. Admin only.',

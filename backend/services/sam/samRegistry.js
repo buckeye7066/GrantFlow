@@ -313,6 +313,16 @@ export const DIAGNOSTIC_CHECKS = Object.freeze([
     severityOnFailure: SEVERITY.MEDIUM,
     description: 'Delegates to admin.hamilton.sessionReadiness — flags profiles whose active Hamilton runs will stall on login/2FA because a portal has a saved login but no captured session (so the owner can capture one before the scheduled run).',
   },
+  {
+    id: 'award.compliance',
+    label: 'Award compliance / restriction tracking',
+    category: SAM_CATEGORIES.APPLICATION_WORKFLOW_INTEGRITY,
+    kind: CHECK_KIND.TOOL,
+    tool: 'admin.compliance.overdue',
+    parameters: {},
+    severityOnFailure: SEVERITY.MEDIUM,
+    description: 'Delegates to admin.compliance.overdue — surfaces awarded funding whose restrictions are overdue, short on required spending, or over an exact-category requirement, so the owner can log compliant spending (with proof) before it becomes a real compliance problem.',
+  },
 ])
 
 // ---------------------------------------------------------------------------
