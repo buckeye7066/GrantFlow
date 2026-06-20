@@ -18,7 +18,10 @@ const SCHOOL_PORTAL_PROVIDERS = Object.freeze([
     id: 'tsac',
     name: 'Tennessee Student Assistance Corporation (TSAC)',
     short_name: 'TSAC',
-    portal_url: 'https://www.tn.gov/collegepays.html',
+    // TSAC's legacy tn.gov/collegepays.html portal was retired and now 302-redirects
+    // to the "College for TN" (collegefortn.org) site run by THEC. Point at the live
+    // financial-aid landing page instead of the dead tn.gov URL.
+    portal_url: 'https://www.collegefortn.org/about-financial-aid/',
     integration_mode: 'pilot_manual_import',
     integration_modes: ['pilot_manual_import', 'browser_autopilot'],
     live_supported: true,

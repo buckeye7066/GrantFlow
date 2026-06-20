@@ -22,7 +22,9 @@ const SEED_PROVIDERS = Object.freeze([
     id: 'tsac',
     name: 'Tennessee Student Assistance Corporation (TSAC)',
     short_name: 'TSAC',
-    portal_url: 'https://www.tn.gov/collegepays.html',
+    // Legacy tn.gov/collegepays.html now 302-redirects to the "College for TN"
+    // (collegefortn.org) site run by THEC. Use the live landing page.
+    portal_url: 'https://www.collegefortn.org/about-financial-aid/',
     integration_modes: ['pilot_manual_import', 'browser_autopilot'],
     live_supported: true,
     automation_supported: true,
