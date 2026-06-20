@@ -1751,7 +1751,11 @@ router.get('/:id/pipeline-potential', async (req, res) => {
       .prepare(
         `SELECT g.id, g.title, g.funder, g.status, g.deadline,
                 g.amount_requested, g.amount_min, g.amount_max,
-                g.notes, fo.description AS opportunity_description
+                g.notes, fo.description AS opportunity_description,
+                g.contact_name, g.contact_email, g.contact_phone,
+                g.funder_fax, g.funder_address,
+                g.application_url, g.application_method,
+                fo.application_url AS opportunity_application_url
            FROM grants g
            LEFT JOIN funding_opportunities fo ON fo.id = g.funding_opportunity_id
           WHERE g.profile_id = ? AND g.status IN (${placeholders})
@@ -1760,6 +1764,10 @@ router.get('/:id/pipeline-potential', async (req, res) => {
       .all(id, ...PIPELINE_ACTIVE_STATUSES)
     items = (rows || []).map((g) => {
       const desc = (g.notes && String(g.notes).trim()) || g.opportunity_description || null
+      const norm = (v) => {
+        const s = v == null ? '' : String(v).trim()
+        return s.length ? s : null
+      }
       return {
         id: g.id,
         title: g.title,
@@ -1769,8 +1777,16 @@ router.get('/:id/pipeline-potential', async (req, res) => {
         amount_requested: g.amount_requested ?? null,
         amount_min: g.amount_min ?? null,
         amount_max: g.amount_max ?? null,
-        // Keep the payload small — the card just needs a one-liner.
-        description: desc ? String(desc).slice(0, 280) : null,
+        // A fuller description for the printable packet (still capped).
+        description: desc ? String(desc).slice(0, 600) : null,
+        // Contact + how-to-apply, so the printout stands on its own.
+        contact_name: norm(g.contact_name),
+        contact_email: norm(g.contact_email),
+        contact_phone: norm(g.contact_phone),
+        contact_fax: norm(g.funder_fax),
+        contact_address: norm(g.funder_address),
+        application_url: norm(g.application_url) || norm(g.opportunity_application_url),
+        application_method: norm(g.application_method),
       }
     })
   } catch (error) {

@@ -115,6 +115,36 @@ function escapeHtml(value) {
     .replace(/'/g, "&#39;")
 }
 
+// The pipeline phases, in process order, so the printout reads top-to-bottom as
+// the funding moves from preparation → applied → approved.
+const PHASE_ORDER = ["Preparing", "Applied", "Approved"]
+
+// Best-estimate dollar value for a source (used for per-phase subtotals so each
+// section sums to something meaningful even when a source has a range, not a
+// single requested figure).
+function estimatedValue(item) {
+  const req = Number(item?.amount_requested)
+  if (Number.isFinite(req) && req > 0) return req
+  const max = Number(item?.amount_max)
+  if (Number.isFinite(max) && max > 0) return max
+  const min = Number(item?.amount_min)
+  if (Number.isFinite(min) && min > 0) return min
+  return 0
+}
+
+// Human contact + how-to-apply lines for a source, present-fields only.
+function contactLines(item) {
+  const lines = []
+  if (item?.contact_name) lines.push(["Contact", item.contact_name])
+  if (item?.contact_email) lines.push(["Email", item.contact_email])
+  if (item?.contact_phone) lines.push(["Phone", item.contact_phone])
+  if (item?.contact_fax) lines.push(["Fax", item.contact_fax])
+  if (item?.contact_address) lines.push(["Address", item.contact_address])
+  if (item?.application_method) lines.push(["How to apply", item.application_method])
+  if (item?.application_url) lines.push(["Apply / details", item.application_url])
+  return lines
+}
+
 /**
  * Build a clean, self-contained printable document for the breakdown and open
  * it in a new window. The browser's print dialog handles both physical printing
@@ -127,20 +157,56 @@ function openPrintableBreakdown({ profileName, formattedTotal, items }) {
   if (!win) return // popup blocked — caller surfaces nothing; the in-app dialog still works
 
   const generatedAt = new Date().toLocaleString()
-  const rows = items
-    .map((item) => {
-      const meta = stageMeta(item.status)
-      return `
-        <tr>
-          <td>
-            <div class="title">${escapeHtml(item.title || "Untitled source")}</div>
-            ${item.funder ? `<div class="funder">${escapeHtml(item.funder)}</div>` : ""}
-            ${item.description ? `<div class="desc">${escapeHtml(item.description)}</div>` : ""}
+
+  // Render one source row: full description + contact / how-to-apply block so
+  // each funding source stands on its own when printed.
+  const renderRow = (item) => {
+    const meta = stageMeta(item.status)
+    const contacts = contactLines(item)
+    const contactHtml = contacts.length
+      ? `<div class="contact">${contacts
+          .map(([label, val]) => `<span class="c-row"><span class="c-label">${escapeHtml(label)}:</span> ${escapeHtml(val)}</span>`)
+          .join("")}</div>`
+      : `<div class="contact c-none">No contact details on file — see the funder's site for how to apply.</div>`
+    return `
+      <tr>
+        <td>
+          <div class="title">${escapeHtml(item.title || "Untitled source")}</div>
+          ${item.funder ? `<div class="funder">${escapeHtml(item.funder)}</div>` : ""}
+          ${item.description ? `<div class="desc">${escapeHtml(item.description)}</div>` : ""}
+          ${contactHtml}
+        </td>
+        <td class="num">${escapeHtml(formatAmount(item))}</td>
+        <td>${escapeHtml(formatDeadline(item.deadline))}</td>
+        <td>${escapeHtml(meta.label)}</td>
+      </tr>`
+  }
+
+  // Group sources by pipeline phase, in process order, so the printout clearly
+  // shows where each source sits. Each phase gets a header + subtotal.
+  const byPhase = new Map()
+  for (const item of items) {
+    const phase = stageMeta(item.status).phase
+    if (!byPhase.has(phase)) byPhase.set(phase, [])
+    byPhase.get(phase).push(item)
+  }
+  const orderedPhases = [
+    ...PHASE_ORDER.filter((p) => byPhase.has(p)),
+    ...[...byPhase.keys()].filter((p) => !PHASE_ORDER.includes(p)),
+  ]
+  const rows = orderedPhases
+    .map((phase) => {
+      const group = byPhase.get(phase)
+      const subtotal = group.reduce((s, it) => s + estimatedValue(it), 0)
+      const header = `
+        <tr class="phase-head">
+          <td colspan="4">
+            <span class="phase-name">${escapeHtml(phase)}</span>
+            <span class="phase-count">${group.length} source${group.length === 1 ? "" : "s"}</span>
+            <span class="phase-sub">est. ${escapeHtml(usd.format(Math.round(subtotal)))}</span>
           </td>
-          <td class="num">${escapeHtml(formatAmount(item))}</td>
-          <td>${escapeHtml(formatDeadline(item.deadline))}</td>
-          <td>${escapeHtml(meta.label)}<div class="phase">${escapeHtml(meta.phase)}</div></td>
         </tr>`
+      return header + group.map(renderRow).join("")
     })
     .join("")
 
@@ -162,7 +228,15 @@ function openPrintableBreakdown({ profileName, formattedTotal, items }) {
   .title { font-weight: 600; }
   .funder { color: #64748b; font-size: 11px; }
   .desc { color: #475569; font-size: 11px; margin-top: 3px; }
-  .phase { color: #94a3b8; font-size: 10px; text-transform: uppercase; }
+  .contact { margin-top: 5px; padding-top: 5px; border-top: 1px dashed #e2e8f0; display: flex; flex-direction: column; gap: 1px; }
+  .c-row { font-size: 11px; color: #334155; }
+  .c-label { color: #64748b; font-weight: 600; }
+  .c-none { font-size: 10px; color: #94a3b8; font-style: italic; }
+  tr.phase-head td { background: #f1f5f9; border-bottom: 2px solid #cbd5e1; padding: 7px 6px; }
+  .phase-name { font-weight: 700; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: #1e293b; }
+  .phase-count { color: #64748b; font-size: 11px; margin-left: 8px; }
+  .phase-sub { float: right; font-weight: 700; font-size: 12px; color: #334155; }
+  tr { page-break-inside: avoid; }
   .foot { margin-top: 14px; font-size: 11px; color: #64748b; display: flex; justify-content: space-between; }
   .print-btn { margin: 16px 0; padding: 8px 14px; font-size: 13px; border: 1px solid #6366f1; background: #6366f1; color: #fff; border-radius: 6px; cursor: pointer; }
   @media print { .print-btn { display: none; } body { margin: 0; } }
@@ -280,6 +354,21 @@ export default function PipelinePotentialBreakdown({
 
                     {item.description && (
                       <p className="text-xs text-slate-600 mt-1.5 line-clamp-2">{item.description}</p>
+                    )}
+
+                    {(item.contact_name || item.contact_email || item.contact_phone || item.application_url) && (
+                      <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-slate-500">
+                        {item.contact_name && <span>{item.contact_name}</span>}
+                        {item.contact_email && (
+                          <a href={`mailto:${item.contact_email}`} className="text-indigo-600 hover:underline">{item.contact_email}</a>
+                        )}
+                        {item.contact_phone && <span>{item.contact_phone}</span>}
+                        {item.application_url && (
+                          <a href={item.application_url} target="_blank" rel="noopener noreferrer" className="text-indigo-600 hover:underline inline-flex items-center gap-0.5">
+                            Apply <ExternalLink className="w-2.5 h-2.5" />
+                          </a>
+                        )}
+                      </div>
                     )}
 
                     <div className="flex items-center justify-between gap-2 mt-2">
