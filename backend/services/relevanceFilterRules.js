@@ -54,9 +54,39 @@ function _normalizeState(s) {
   return _STATE_ABBREVIATIONS[s] || s
 }
 
+// Federal portals (and the agencies behind them) post programs that are open
+// nationwide regardless of any stray `state` value that crept onto the row.
+const _NATIONAL_FUNDER_DOMAINS = [
+  'grants.gov', 'benefits.gov', 'sam.gov', 'sba.gov', 'usa.gov', 'va.gov',
+  'hud.gov', 'ed.gov', 'nih.gov', 'nsf.gov', 'usda.gov', 'hhs.gov',
+  'energy.gov', 'epa.gov', 'irs.gov', 'ssa.gov', 'acf.hhs.gov',
+]
+
+// Explicit "this is open everywhere" phrasing. Deliberately strict — we only
+// promote to national on an affirmative statement, never on mere absence, so a
+// genuinely state-restricted program is not flung open to every profile.
+const _NATIONAL_SCOPE_PATTERN =
+  /\b(?:nationwide|all 50 states|all fifty states|available in all states|open to (?:all|any) (?:u\.?s\.? )?(?:states|residents)|no geographic (?:restriction|limit)|any state|coast to coast|national(?:ly available| in scope| program))\b/i
+
 function _isNationalOpportunity(opportunity) {
+  if (!opportunity) return false
+  if (opportunity.is_national) return true
+
   const oppState = (opportunity.state || '').toLowerCase().trim()
-  return !oppState || oppState === 'nationwide' || oppState === 'national' || Boolean(opportunity.is_national)
+  if (!oppState || oppState === 'nationwide' || oppState === 'national' || oppState === 'us' || oppState === 'usa') {
+    return true
+  }
+
+  // A federal-portal application/source URL means the program is nationally
+  // available even if a state column was populated during ingest.
+  const urls = `${opportunity.application_url || ''} ${opportunity.source_url || ''} ${opportunity.url || ''}`.toLowerCase()
+  if (urls && _NATIONAL_FUNDER_DOMAINS.some((d) => urls.includes(d))) return true
+
+  // Affirmative national-scope prose anywhere in the descriptive fields.
+  const prose = `${opportunity.title || ''} ${opportunity.description || ''} ${opportunity.eligibility || ''} ${opportunity.eligibility_criteria || ''} ${opportunity.geographic_scope || opportunity.scope || ''}`
+  if (prose && _NATIONAL_SCOPE_PATTERN.test(prose)) return true
+
+  return false
 }
 
 function _extractStateNameFromTitle(title) {
@@ -771,7 +801,7 @@ export const RELEVANCE_RULES = [
     description: 'Opportunity title names a different state than the profile',
     oppPattern: null, // Trigger depends on extractStateNameFromTitle, not a simple text scan
     profileCheck: (pd, _oppText, opportunity) => {
-      if (!opportunity || opportunity.is_national) return false
+      if (!opportunity || _isNationalOpportunity(opportunity)) return false
       const profileState = (pd.state || '').toLowerCase().trim()
       if (!profileState) return false
       const titleStateAbbr = _extractStateNameFromTitle(opportunity.title || '')

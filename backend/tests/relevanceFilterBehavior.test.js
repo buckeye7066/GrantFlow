@@ -61,6 +61,46 @@ describe('content_procurement_contract rule', () => {
   })
 })
 
+describe('national-opportunity inference (geographic false-negative fix)', () => {
+  // Profile in TN; opportunity carries a stray IL state value.
+  const outOfState = (overrides = {}) => ({
+    title: 'Emergency Family Support Fund',
+    description: 'Direct financial help for families facing hardship',
+    keywords: '',
+    state: 'IL',
+    is_national: false,
+    application_url: 'https://example.org/apply',
+    ...overrides,
+  })
+
+  it('still rejects a genuinely state-restricted out-of-state program (no over-inference)', () => {
+    const result = applyRelevanceFilter(outOfState(), BASE_PROFILE)
+    expect(result.pass).toBe(false)
+    expect(result.ruleId).toBe('geographic_state_mismatch')
+  })
+
+  it('keeps an out-of-state row whose application lives on a federal portal', () => {
+    const opp = outOfState({ application_url: 'https://www.grants.gov/web/grants/view-opportunity.html?oppId=12345' })
+    const result = applyRelevanceFilter(opp, BASE_PROFILE)
+    expect(result.pass).toBe(true)
+  })
+
+  it('keeps an out-of-state row that states it is available nationwide', () => {
+    const opp = outOfState({ description: 'This program is available nationwide to residents of any state.' })
+    const result = applyRelevanceFilter(opp, BASE_PROFILE)
+    expect(result.pass).toBe(true)
+  })
+
+  it('does not penalize a national program whose title names a state', () => {
+    const opp = outOfState({
+      title: 'Illinois-administered National Caregiver Relief Fund',
+      description: 'A nationwide program open to all states.',
+    })
+    const result = applyRelevanceFilter(opp, BASE_PROFILE)
+    expect(result.pass).toBe(true)
+  })
+})
+
 describe('content_fundraising_crowdfunding rule', () => {
   it('rejects a donate-to title', () => {
     const opp = makeOpp({ title: 'Donate to Help Our Community Center' })
