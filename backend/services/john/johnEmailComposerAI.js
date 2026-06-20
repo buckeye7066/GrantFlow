@@ -32,7 +32,7 @@ const GRANTFLOW_FACTS = [
   'GrantFlow is a funding discovery and application-tracking platform.',
   'It builds a profile of an organization (mission, location, needs, eligibility) and matches it to grants, scholarships, benefits, foundation programs, and other funding sources that actually fit.',
   'It then helps track deadlines, documents, and application progress in one place.',
-  'It is built for churches, nonprofits, schools, volunteer fire departments, ministries, families, students, and small organizations — groups that rarely have a dedicated grant writer.',
+  'It is built for churches, nonprofits, schools, volunteer fire departments, ministries, families, students, and small organizations, the kind of groups that rarely have a dedicated grant writer.',
   'Founder: Dr. John White (Axiom BioLabs).',
   'Origin (true, may be shared honestly): Dr. White first built GrantFlow to find funding for his own research lab, Axiom BioLabs; he then found the same engine helped the mission and nonprofit work he cares about, and helped him find scholarships and college-endowment opportunities for his own children.',
 ].join(' ')
@@ -99,7 +99,7 @@ function buildFooter(config, organizationName) {
   const org = String(organizationName || '').trim() || 'your organization'
   return [
     '',
-    `Rather than just describe it, I’d like you to see it for yourself. You can talk through your work with Anya, our assistant, and she’ll pull a live scan of funding sources that fit ${org} — no account or commitment needed. If what comes back is useful, you can choose to create an account from there:`,
+    `Rather than just describe it, I’d like you to see it for yourself. You can talk through your work with Anya, our assistant, and she’ll pull a live scan of funding sources that fit ${org}, with no account or commitment needed. If what comes back is useful, you can choose to create an account from there:`,
     ...(link ? ['', link] : []),
     '',
     'Respectfully,',
@@ -143,14 +143,14 @@ function buildPrompt(lead, interpretation, facts, config) {
         : null,
   }
   const system = [
-    'You are Dr. John White — founder of GrantFlow, MBA, and a working scientist who has had to raise money for his own lab. You are writing a short, personable cold-outreach email to an organization you have NOT spoken with before. Write the way a sharp, generous peer writes: warm, plain-spoken, specific, and a little human. Never like a marketing template.',
+    'You are Dr. John White, founder of GrantFlow, MBA, and a working scientist who has had to raise money for his own lab. You are writing a short, personable cold-outreach email to an organization you have NOT spoken with before. Write the way a sharp, generous peer writes: warm, plain-spoken, specific, and a little human. Never like a marketing template.',
     '',
     `About GrantFlow (use these facts, do not contradict them): ${GRANTFLOW_FACTS}`,
     '',
     'The email body MUST, in this order:',
-    '1. Open by genuinely acknowledging THIS organization using the most specific fact you were given — name their mission, focus area, or program in plain words so it is obvious the email was written for them and not blasted to a list. If the facts are thin, say something honest and specific about their sector instead of padding with vague praise. NEVER invent achievements, dollar figures, programs, names, or events.',
+    '1. Open by genuinely acknowledging THIS organization using the most specific fact you were given. Name their mission, focus area, or program in plain words so it is obvious the email was written for them and not blasted to a list. If the facts are thin, say something honest and specific about their sector instead of padding with vague praise. NEVER invent achievements, dollar figures, programs, names, or events.',
     '2. Briefly say who you are and what GrantFlow is, and share its honest origin in 1-2 sentences: you first built GrantFlow to find funding for your own research lab (Axiom BioLabs), then found the same engine helped the mission and nonprofit work you care about, and even helped you find scholarships and college funding for your own children. A touch of self-deprecation is welcome ("I did not set out to build software").',
-    '3. Explain concretely how GrantFlow can help THIS organization given its mission/focus/needs — tie it to what you named in step 1. Be specific, never generic.',
+    '3. Explain concretely how GrantFlow can help THIS organization given its mission/focus/needs, tying it to what you named in step 1. Be specific, never generic.',
     '',
     'Voice and craft:',
     '- Sound like a real person, not a brochure. Short sentences are good. A little warmth and dry confidence is good.',
@@ -162,14 +162,28 @@ function buildPrompt(lead, interpretation, facts, config) {
     '- Do NOT claim any prior relationship, meeting, or conversation.',
     '- Do NOT use urgency, pressure, scarcity, or "act now" language.',
     '- No hype, no exclamation-heavy marketing voice. Credible, peer-to-peer, respectful.',
+    '- Do NOT use em-dashes or en-dashes (— or –) anywhere. Use commas, periods, parentheses, or a colon instead.',
     '- 130-190 words for the body. Plain text.',
-    '- Do NOT write a call to action, an offer to run a scan, a link, a signature, a sign-off, an opt-out line, or a postal address — ALL of those are added separately by the system. End immediately after explaining how GrantFlow can help this organization (step 3).',
+    '- Do NOT write a call to action, an offer to run a scan, a link, a signature, a sign-off, an opt-out line, or a postal address. ALL of those are added separately by the system. End immediately after explaining how GrantFlow can help this organization (step 3).',
     '- Write a subject line that is specific and non-deceptive. Do NOT start with "Re:" or "Urgent", and never use the words guaranteed, approved, or congratulations.',
     '',
     'Return ONLY a JSON object: {"subject": "...", "body": "..."} with no markdown, no commentary.',
   ].join('\n')
   const user = `Organization facts (JSON):\n${JSON.stringify(ctx, null, 2)}\n\nWrite the email now as JSON {"subject","body"}.`
   return { system, user }
+}
+
+/**
+ * Hard guarantee that no em-dash or en-dash survives into a sent email, even if
+ * the model ignores the prompt rule. A dash used as a pause/parenthetical reads
+ * cleanly as a comma; we then tidy any doubled commas or space-before-comma the
+ * substitution can introduce.
+ */
+function stripDashes(text) {
+  return String(text || '')
+    .replace(/\s*[—–]\s*/g, ', ')
+    .replace(/\s+,/g, ',')
+    .replace(/,\s*,/g, ',')
 }
 
 function parseJsonObject(text) {
@@ -219,8 +233,8 @@ export async function composeEmailWithAI(lead, opts = {}) {
     return { ok: false, reason: 'unparseable_output' }
   }
 
-  let subject = String(parsed.subject).replace(/\s+/g, ' ').trim().slice(0, 180)
-  const aiBody = String(parsed.body).trim()
+  let subject = stripDashes(String(parsed.subject).replace(/\s+/g, ' ').trim()).slice(0, 180)
+  const aiBody = stripDashes(String(parsed.body).trim())
 
   // Greeting: prefer the model's own opening only if it greets; otherwise lead
   // with the interpreter's safe salutation.

@@ -54,7 +54,7 @@ function buildOpeningLine(orgName, hookPhrase) {
   if (hookPhrase) {
     return `I came across ${org} while looking into ${hookPhrase}, and your work stood out enough that I wanted to reach out directly.`
   }
-  return `I came across ${org} while looking for organizations whose mission tends to outrun their budget \u2014 and from what I can see, yours is doing real work that deserves to be funded.`
+  return `I came across ${org} while looking for organizations whose mission tends to outrun their budget, and from what I can see, yours is doing real work that deserves to be funded.`
 }
 
 /**

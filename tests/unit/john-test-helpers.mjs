@@ -92,7 +92,7 @@ export function applyDefaultJohnEnv() {
     // Deterministic copy path: force the template composer (no live LLM call)
     // and pin the self-serve prospect link the email invites recipients to.
     JOHN_AI_DRAFTING: 'off',
-    JOHN_PROSPECT_LINK: 'https://app.axiombiolabs.org/start',
+    JOHN_PROSPECT_LINK: 'https://www.axiombiolabs.org/grantflow',
     JOHN_PRIMARY_MAILBOX: 'dr.johnwhite@axiombiolabs.org',
     JOHN_FROM_ALIAS: 'GrantFlow@axiombiolabs.org',
     JOHN_REPLY_TO: 'GrantFlow@axiombiolabs.org',
