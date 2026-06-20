@@ -32,6 +32,7 @@ import seedHousingFundingOpportunities from '../utils/seedHousingFunding.js';
 import { seedServiceCatalogFromExtract } from '../services/serviceCatalogStore.js';
 import { repairOrphanedJobProfiles } from '../utils/repairOrphanedJobProfiles.js';
 import { reconcileDismissedGrants } from '../services/pipelineDismissals.js';
+import { runEnforceInvariants } from './enforceInvariants.js';
 
 export async function runSelfHeal({ db, uploadsDir, IS_SMOKE_MODE, baseDir }) {
   // ── 1. Upload-avatar repair ───────────────────────────────────────────────
@@ -406,6 +407,19 @@ export async function runSelfHeal({ db, uploadsDir, IS_SMOKE_MODE, baseDir }) {
     console.info('[startup] reconcileDismissedGrants', { removed });
   } catch (error) {
     console.warn('[startup] Failed to reconcile dismissed grants:', error?.message || error);
+  }
+
+  // ── 9. Enforce ALL machine-checkable product invariants (rule-by-construction) ──
+  // The canonical choke point. Re-asserts every automatable canonical_rules.md
+  // invariant against the live DB (sticky deletes, no cross-profile/tenant
+  // bleed, relevance floor) — detect + repair/quarantine, regardless of which
+  // code path created the violation. Re-running reconcileDismissedGrants inside
+  // is idempotent. See backend/startup/enforceInvariants.js for the full list,
+  // and the "INVARIANTS" section of docs/canonical_rules.md + CLAUDE.md.
+  try {
+    await runEnforceInvariants(db);
+  } catch (error) {
+    console.warn('[startup] Failed to enforce product invariants:', error?.message || error);
   }
 }
 

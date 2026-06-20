@@ -114,6 +114,46 @@ Hard rules:
 - Admin access must be enforced server-side; UI-only protection is insufficient.
 - Auth/session tokens handled securely; avoid leaking across accounts.
 
+## INVARIANTS — enforce at a choke point, never trust per-call discipline
+
+**Why this section exists:** The same class of bug kept recurring because a
+canonical rule above was enforced only by *convention* ("remember to check the
+tombstone in every insert path", "remember to scope by `profile_id`
+everywhere"). Every new code path that forgot the check re-introduced the
+violation (deleted grants reappearing, cross-profile bleed, junk piling up).
+
+**The standing rule for ALL future changes (humans and agents):** Do not rely
+on remembering to do the right thing in each call site. A machine-checkable
+product rule MUST be re-asserted in ONE place against the live DB so it holds
+regardless of which path created the data. The per-call gate (e.g. a DISMISSED
+check before insert) is the first line of defense; the boot sweep is the net.
+When you add or change behavior that touches one of these invariants, you change
+the single enforcer + its test — you do NOT scatter new ad-hoc checks.
+
+The canonical enforcer is **`backend/startup/enforceInvariants.js`**, run on
+every boot from `runSelfHeal()` in `backend/startup/selfHeal.js` (step 9, after
+`reconcileDismissedGrants`). It mirrors `backend/startup/ensureSchemaInvariants.js`:
+each invariant is its own guarded, idempotent, dialect-agnostic step that detects
+violations, repairs/quarantines them, and logs a structured summary. Schema-shape
+DDL stays in `ensureSchemaInvariants.js`; data-repair invariants go here.
+
+| Invariant (rule above) | Single enforcer (one function) | Test that guards it |
+| --- | --- | --- |
+| **Sticky deletes** — a source a user deleted from a profile pipeline stays gone | `reconcileDismissedGrants()` in `backend/services/pipelineDismissals.js`, re-run by `enforceStickyDeletes()` | `backend/tests/enforceInvariants.test.js` ("sticky deletes") |
+| **No cross-profile / cross-tenant bleed** (G4, G8) — a grant's `organization_id` must equal its `profile_id`'s org | `enforceNoCrossProfileBleed()` (re-aligns to the profile's org; profile_id is the authoritative tenancy signal) | `backend/tests/enforceInvariants.test.js` ("no cross-profile / cross-tenant bleed") |
+| **Relevance / match-score floor** (G4 + prune playbook) — pipeline must not accumulate junk (`match_score < 50`, excl. NULL) | `enforceRelevanceFloor()` (count-only by default; deletes only when `ENFORCE_RELEVANCE_FLOOR=1`; never touches NULL scores or protected statuses) | `backend/tests/enforceInvariants.test.js` ("relevance floor") |
+
+**Guardrails baked into the enforcer (do not weaken):**
+- NULL `match_score` is NEVER junk (G4 "missing fields are neutral").
+- Grants in `PROTECTED_PIPELINE_STATUSES` (submitted/awarded/drafting/… + legacy) are NEVER auto-purged — that is user work (Mission Goal #10).
+- `reality_status='downgraded'` / `link_unverified` means "URL not yet pinged", NOT "dead" — never delete on that signal (G2/G5).
+- Tombstone matching and every comparison are profile-scoped so one profile can never delete another's data.
+
+**Invariants documented but NOT yet auto-enforced (TODO — add a step + test before relying on convention):**
+- **Source allowlist / denylist** — blocklist currently matches 0 grant funders in prod; auto-purge needs a confirmed funder→blocklist match rule before it's safe to delete on.
+- **Zero-result-but-no-junk** (G2) — "relax constraints and re-score on empty" is a request-time behavior, not a stored-state invariant; can't be reconciled by a boot sweep.
+- **Agent observability rule** — any change in an agent's scope must be visible to Sam (diagnostics) + usable by Anya; this is a wiring/process rule, enforced in review, not by a DB sweep.
+
 ## Known gaps / TODOs (must become hard rules once implemented)
 
 - Standardized crawler output schema: `{ raw, normalized, score_0_1, explain, provenance }`
