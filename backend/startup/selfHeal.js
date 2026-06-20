@@ -32,7 +32,7 @@ import seedHousingFundingOpportunities from '../utils/seedHousingFunding.js';
 import { seedServiceCatalogFromExtract } from '../services/serviceCatalogStore.js';
 import { repairOrphanedJobProfiles } from '../utils/repairOrphanedJobProfiles.js';
 import { reconcileDismissedGrants } from '../services/pipelineDismissals.js';
-import { runEnforceInvariants } from './enforceInvariants.js';
+import { runEnforceInvariants, enforceNoDuplicateGrants } from './enforceInvariants.js';
 
 export async function runSelfHeal({ db, uploadsDir, IS_SMOKE_MODE, baseDir }) {
   // ── 1. Upload-avatar repair ───────────────────────────────────────────────
@@ -420,6 +420,21 @@ export async function runSelfHeal({ db, uploadsDir, IS_SMOKE_MODE, baseDir }) {
     await runEnforceInvariants(db);
   } catch (error) {
     console.warn('[startup] Failed to enforce product invariants:', error?.message || error);
+  }
+
+  // ── 10. Final dedupe backstop (rule-by-construction) ──────────────────────
+  // runEnforceInvariants already collapses within-profile duplicate grants, but
+  // we re-assert it explicitly here as the last boot action so the pipeline can
+  // never end a boot holding duplicates regardless of ordering. Profile-scoped,
+  // keep-best, idempotent (a clean DB yields zero removals). Never throws.
+  try {
+    const dup = await enforceNoDuplicateGrants(db);
+    console.info('[startup] enforceNoDuplicateGrants', {
+      duplicatesRemoved: dup?.duplicatesRemoved ?? 0,
+      profilesAffected: dup?.profilesAffected ?? 0,
+    });
+  } catch (error) {
+    console.warn('[startup] Failed to dedupe grants:', error?.message || error);
   }
 }
 

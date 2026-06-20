@@ -64,11 +64,70 @@ const log = createLogger('startup:enforceInvariants')
  * `grants.match_score < RELEVANCE_FLOOR` (excluding NULL) is the ONLY clean
  * "this is junk for this profile" signal. NULL match_score is NEVER junk
  * (it predates scoring / was added manually), and is left untouched.
+ *
+ * NOTE: the AUTHORITATIVE floor used by both the per-insert gate and this purge
+ * is `RELEVANCE_FLOOR` exported from backend/config/relevanceFloor.js (owned by
+ * another agent). We resolve it lazily at run time (see getRelevanceFloor) so a
+ * floor change in ONE place re-tunes both the insert gate and this sweep. This
+ * legacy constant remains a back-compat fallback only.
  */
 export const RELEVANCE_FLOOR = Number.parseInt(
   process.env.PIPELINE_RELEVANCE_FLOOR || '50',
   10,
 ) || 50
+
+/**
+ * Hard fallback if neither the shared config nor an env override is available.
+ * Matches the insert-gate default the partner agent is introducing.
+ */
+const RELEVANCE_FLOOR_FALLBACK = 55
+
+let _floorCache // memoized { value, source }
+
+/**
+ * Resolve the canonical relevance floor used by the insert gate, so the purge
+ * uses the SAME number. Resolution order:
+ *   1. backend/config/relevanceFloor.js export `RELEVANCE_FLOOR` (source of truth).
+ *   2. PIPELINE_RELEVANCE_FLOOR env (legacy override).
+ *   3. RELEVANCE_FLOOR_FALLBACK (55).
+ *
+ * The config import is LAZY + guarded: the file may not exist yet (another
+ * agent is creating it), so a missing module must never crash boot — we just
+ * fall back and record the source so the log is honest about which path won.
+ */
+export async function getRelevanceFloor() {
+  if (_floorCache) return _floorCache
+  let value
+  let source
+  try {
+    const mod = await import('../config/relevanceFloor.js')
+    const fromConfig = Number(mod?.RELEVANCE_FLOOR)
+    if (Number.isFinite(fromConfig)) {
+      value = fromConfig
+      source = 'config/relevanceFloor.js'
+    }
+  } catch {
+    // module not resolvable yet — fall through to env / fallback
+  }
+  if (value === undefined) {
+    const fromEnv = Number.parseInt(process.env.PIPELINE_RELEVANCE_FLOOR || '', 10)
+    if (Number.isFinite(fromEnv)) {
+      value = fromEnv
+      source = 'env:PIPELINE_RELEVANCE_FLOOR'
+    }
+  }
+  if (value === undefined) {
+    value = RELEVANCE_FLOOR_FALLBACK
+    source = 'fallback(55):config-not-resolvable'
+  }
+  _floorCache = { value, source }
+  return _floorCache
+}
+
+/** Test-only: clear the memoized floor so env/config changes re-resolve. */
+export function __resetFloorCache() {
+  _floorCache = undefined
+}
 
 /**
  * Pipeline statuses that mean the USER has invested work in this grant. A
@@ -103,6 +162,14 @@ export const PROTECTED_PIPELINE_STATUSES = Object.freeze([
   'report',
   'closed',
 ])
+
+/**
+ * Names that mark protected MTSU / portal work. The relevance-floor purge must
+ * NEVER delete a row whose title or funder matches this, even if it is in an
+ * early status and scores below the floor — these rows back the Hamilton portal
+ * automation + MTSU credential work and are hand-curated, not crawler junk.
+ */
+export const PROTECTED_NAME_PATTERN = /mtsu|middle tennessee state|portal/i
 
 /**
  * Wraps a single invariant in a try/catch that logs but never throws.
@@ -187,67 +254,266 @@ export async function enforceNoCrossProfileBleed(db) {
 }
 
 /**
+ * INVARIANT: NO DUPLICATE GRANTS WITHIN A PROFILE
+ * (canonical_rules.md G4 + pipeline-prune playbook — one row per opportunity per
+ * profile).
+ *
+ * Many ingest paths (crawler re-runs, seed re-upserts, email/laptop ingestion,
+ * legacy direct inserts) can land the SAME opportunity in a profile's pipeline
+ * more than once. Duplicates inflate the pipeline, confuse the user, and make
+ * "deleted stays gone" harder to reason about. Two grants are duplicates iff
+ * they share a profile_id AND any one of:
+ *   - the same funding_opportunity_id, OR
+ *   - the same fingerprint, OR
+ *   - the same lower(title) + lower(funder).
+ *
+ * STRICTLY PROFILE-SCOPED: we NEVER merge across profiles (that would be the
+ * cross-profile bleed we separately forbid) — every comparison is partitioned
+ * by profile_id.
+ *
+ * KEEP-BEST RULE (collapse each duplicate cluster to ONE survivor):
+ *   1. Prefer the MOST-PROGRESSED status (a row the user has worked on wins over
+ *      a raw discovered dupe) — Mission Goal #10, never destroy user work.
+ *   2. Tie-break: keep the OLDEST row (created first) — it is the canonical
+ *      original; later inserts are the re-adds.
+ *   3. Tie-break: prefer a row whose match_score IS NOT NULL (scored > unscored).
+ *   4. Final deterministic tie-break: lowest id, so the sweep is idempotent.
+ * All non-survivors in the cluster are deleted.
+ *
+ * Idempotent: after one pass each cluster has a single row, so a re-run is a
+ * no-op (clusters of size 1 are skipped).
+ */
+export async function enforceNoDuplicateGrants(db) {
+  return runInvariant('no_duplicate_grants', async () => {
+    // Pull only the columns the keep-best decision needs. Profile-scoped rows
+    // only (a NULL profile_id has no "within-profile" peers to dedupe against).
+    const rows = await db
+      .prepare(
+        `SELECT id, profile_id, funding_opportunity_id, fingerprint,
+                title, funder, status, match_score, created_at
+         FROM grants
+         WHERE profile_id IS NOT NULL`,
+      )
+      .all()
+
+    // Build duplicate clusters keyed within each profile. A single grant can
+    // belong to multiple keys (opp-id AND title+funder); we use union-find so
+    // transitively-linked rows collapse into ONE cluster.
+    const parent = new Map()
+    const find = (x) => {
+      let r = x
+      while (parent.get(r) !== r) r = parent.get(r)
+      let c = x
+      while (parent.get(c) !== r) {
+        const next = parent.get(c)
+        parent.set(c, r)
+        c = next
+      }
+      return r
+    }
+    const union = (a, b) => {
+      const ra = find(a)
+      const rb = find(b)
+      if (ra !== rb) parent.set(ra, rb)
+    }
+    for (const row of rows) parent.set(row.id, row.id)
+
+    // keyBuckets: dedupe-key -> first row id seen with that key. Each key is
+    // namespaced by profile so we never cross profiles.
+    const norm = (v) => String(v ?? '').trim().toLowerCase()
+    const keyBuckets = new Map()
+    const linkByKey = (key, id) => {
+      if (!key) return
+      if (keyBuckets.has(key)) union(keyBuckets.get(key), id)
+      else keyBuckets.set(key, id)
+    }
+    for (const row of rows) {
+      const p = norm(row.profile_id)
+      if (row.funding_opportunity_id != null && norm(row.funding_opportunity_id) !== '') {
+        linkByKey(`p:${p}|opp:${norm(row.funding_opportunity_id)}`, row.id)
+      }
+      if (row.fingerprint != null && norm(row.fingerprint) !== '') {
+        linkByKey(`p:${p}|fp:${norm(row.fingerprint)}`, row.id)
+      }
+      const title = norm(row.title)
+      if (title !== '') {
+        // title+funder (funder may be empty; still a valid weak key per spec)
+        linkByKey(`p:${p}|tf:${title}|${norm(row.funder)}`, row.id)
+      }
+    }
+
+    // Group rows by cluster root.
+    const byId = new Map(rows.map((r) => [r.id, r]))
+    const clusters = new Map()
+    for (const row of rows) {
+      const root = find(row.id)
+      if (!clusters.has(root)) clusters.set(root, [])
+      clusters.get(root).push(row)
+    }
+
+    // Most-progressed first: index into PROTECTED order = how far along. A
+    // protected/working status outranks a discovery status; among discovery
+    // statuses they're equal (rank -1) and fall to the next tie-break.
+    const progressRank = (status) => {
+      const idx = PROTECTED_PIPELINE_STATUSES.indexOf(String(status ?? ''))
+      return idx // -1 (not protected/discovery) sorts last
+    }
+    const createdMs = (v) => {
+      const t = Date.parse(String(v ?? ''))
+      return Number.isFinite(t) ? t : Number.POSITIVE_INFINITY // unknown = "newest"
+    }
+
+    const toDelete = []
+    const affectedProfiles = new Set()
+    for (const cluster of clusters.values()) {
+      if (cluster.length < 2) continue
+      const sorted = [...cluster].sort((a, b) => {
+        // 1. most-progressed status wins (higher rank first)
+        const pr = progressRank(b.status) - progressRank(a.status)
+        if (pr !== 0) return pr
+        // 2. oldest first
+        const ca = createdMs(a.created_at)
+        const cb = createdMs(b.created_at)
+        if (ca !== cb) return ca - cb
+        // 3. non-null match_score preferred
+        const sa = a.match_score == null ? 1 : 0
+        const sb = b.match_score == null ? 1 : 0
+        if (sa !== sb) return sa - sb
+        // 4. deterministic: lowest id
+        return String(a.id).localeCompare(String(b.id))
+      })
+      const survivor = sorted[0]
+      affectedProfiles.add(survivor.profile_id)
+      for (let i = 1; i < sorted.length; i += 1) toDelete.push(sorted[i].id)
+    }
+
+    if (toDelete.length === 0) {
+      return { scanned: rows.length, repaired: 0, profilesAffected: 0, duplicatesRemoved: 0 }
+    }
+
+    // Delete in chunks to stay well under any parameter limit on either dialect.
+    const CHUNK = 200
+    let removed = 0
+    for (let i = 0; i < toDelete.length; i += CHUNK) {
+      const slice = toDelete.slice(i, i + CHUNK)
+      const ph = slice.map(() => '?').join(', ')
+      const result = await db
+        .prepare(`DELETE FROM grants WHERE id IN (${ph})`)
+        .run(...slice)
+      removed += changesOf(result) || slice.length
+    }
+
+    const summary = {
+      profilesAffected: affectedProfiles.size,
+      duplicatesRemoved: removed,
+    }
+    log.info('collapsed duplicate grants within profiles (kept best per cluster)', summary)
+    return { scanned: rows.length, repaired: removed, ...summary }
+  })
+}
+
+/**
  * INVARIANT: RELEVANCE / MATCH-SCORE FLOOR
  * (canonical_rules.md G4 + pipeline-prune playbook).
  *
  * The per-profile pipeline must not silently accumulate junk: a grant with a
- * non-null match_score strictly below RELEVANCE_FLOOR is irrelevant to that
- * profile and should not occupy pipeline space.
+ * non-null match_score strictly below the canonical floor is irrelevant to that
+ * profile and should not occupy pipeline space. This sweep now DELETES that junk
+ * BY DEFAULT (it used to only count) so the pipeline stays clean without an
+ * operator opt-in — the per-insert gate is the first line, this is the net.
  *
- * GUARDRAILS (so we never destroy user work or violate G2/G4/G5):
- *   - NULL match_score is NEVER touched (no score ≠ junk; G4 "missing fields
- *     are neutral").
- *   - Grants in any PROTECTED_PIPELINE_STATUSES are NEVER touched (user has
- *     invested work; Mission Goal #10).
- *   - We only act on rows still in a discovery-ish status, matching the
- *     prune-playbook posture (it only ever pruned match<50 and explicitly
- *     protected submitted/awarded/pending_review).
+ * The floor value is resolved from the SAME source as the insert gate
+ * (backend/config/relevanceFloor.js via getRelevanceFloor), so the two can
+ * never drift; it falls back to 55 if that config is not yet resolvable.
  *
- * Because deleting here would skip the sticky-delete tombstone (and could
- * resurrect on the next crawl), this invariant is conservative: it is GATED
- * OFF by default (ENFORCE_RELEVANCE_FLOOR) and, when on, only removes rows
- * that are simultaneously below the floor AND in a non-protected status. The
- * default-on action is to merely COUNT violators and log them, so operators
- * see the signal without risking data loss until they opt in.
+ * GUARDRAILS (so we never destroy user work or violate G2/G4/G5) — a row is
+ * deleted ONLY when ALL of these hold:
+ *   - match_score IS NOT NULL  (NULL score ≠ junk; G4 "missing fields neutral").
+ *   - match_score < floor.
+ *   - status is an EARLY / discovered stage (discovered / discovery / interested
+ *     / NULL) — anything in PROTECTED_PIPELINE_STATUSES (gathering_documents and
+ *     beyond, submitted, awarded, …) is user work and is NEVER deleted.
+ *   - title/funder does NOT match PROTECTED_NAME_PATTERN (protect MTSU/portal
+ *     work even if it looks like low-score discovery junk).
+ *
+ * OVERRIDE: enforcement is ON by default. Set ENFORCE_RELEVANCE_FLOOR=0 to
+ * DISABLE the delete (revert to count-only) without a code change.
  */
+// Early/discovery statuses we are willing to purge below the floor. Everything
+// not in this set is treated as "do not auto-delete" (and PROTECTED statuses are
+// excluded outright), so the purge can only ever reach raw discovery junk.
+const PURGEABLE_DISCOVERY_STATUSES = Object.freeze([
+  'discovered',
+  'discovery',
+  'interested',
+  'new',
+  'matched',
+])
+
 export async function enforceRelevanceFloor(db) {
   return runInvariant('relevance_floor', async () => {
-    const placeholders = PROTECTED_PIPELINE_STATUSES.map(() => '?').join(', ')
+    const { value: floor, source: floorSource } = await getRelevanceFloor()
 
-    const countRow = await db
+    const protectedPh = PROTECTED_PIPELINE_STATUSES.map(() => '?').join(', ')
+
+    // Candidate predicate (count + delete share it): below floor, non-null
+    // score, NOT a protected/working status. Name-pattern protection is applied
+    // in JS (regex) so it works identically on SQLite + Postgres.
+    const baseWhere = `
+      match_score IS NOT NULL
+      AND match_score < ?
+      AND (status IS NULL OR status NOT IN (${protectedPh}))
+    `
+
+    const candidates = await db
       .prepare(
-        `SELECT COUNT(*) AS n FROM grants
-         WHERE match_score IS NOT NULL
-           AND match_score < ?
-           AND (status IS NULL OR status NOT IN (${placeholders}))`,
+        `SELECT id, title, funder, status FROM grants WHERE ${baseWhere}`,
       )
-      .get(RELEVANCE_FLOOR, ...PROTECTED_PIPELINE_STATUSES)
-    const violators = Number(countRow?.n ?? 0)
+      .all(floor, ...PROTECTED_PIPELINE_STATUSES)
 
-    const enforce = _parseBoolEnv(process.env.ENFORCE_RELEVANCE_FLOOR) === true
-    if (!enforce) {
+    // Apply the MTSU/portal name guard + the early-status allowlist in JS. We
+    // only ever delete rows in an explicitly-purgeable discovery status (or NULL
+    // status), never an unrecognized status we don't understand.
+    const purgeable = candidates.filter((r) => {
+      const status = r.status == null ? null : String(r.status)
+      const isEarly =
+        status === null || PURGEABLE_DISCOVERY_STATUSES.includes(status)
+      if (!isEarly) return false
+      if (PROTECTED_NAME_PATTERN.test(`${r.title ?? ''} ${r.funder ?? ''}`)) return false
+      return true
+    })
+
+    const violators = purgeable.length
+
+    const disabled = _parseBoolEnv(process.env.ENFORCE_RELEVANCE_FLOOR) === false
+    if (disabled) {
       if (violators > 0) {
-        log.warn('below-floor grants present (enforcement OFF — set ENFORCE_RELEVANCE_FLOOR=1 to purge)', {
+        log.warn('below-floor grants present (purge DISABLED via ENFORCE_RELEVANCE_FLOOR=0)', {
           violators,
-          floor: RELEVANCE_FLOOR,
+          floor,
+          floorSource,
         })
       }
-      return { scanned: violators, repaired: 0, enforced: false }
+      return { scanned: violators, repaired: 0, enforced: false, floor, floorSource }
     }
 
-    const result = await db
-      .prepare(
-        `DELETE FROM grants
-         WHERE match_score IS NOT NULL
-           AND match_score < ?
-           AND (status IS NULL OR status NOT IN (${placeholders}))`,
-      )
-      .run(RELEVANCE_FLOOR, ...PROTECTED_PIPELINE_STATUSES)
-    const repaired = changesOf(result)
-    if (repaired > 0) {
-      log.info('purged below-floor pipeline grants', { repaired, floor: RELEVANCE_FLOOR })
+    if (violators === 0) {
+      return { scanned: 0, repaired: 0, enforced: true, floor, floorSource }
     }
-    return { scanned: violators, repaired, enforced: true }
+
+    const ids = purgeable.map((r) => r.id)
+    const CHUNK = 200
+    let repaired = 0
+    for (let i = 0; i < ids.length; i += CHUNK) {
+      const slice = ids.slice(i, i + CHUNK)
+      const ph = slice.map(() => '?').join(', ')
+      const result = await db.prepare(`DELETE FROM grants WHERE id IN (${ph})`).run(...slice)
+      repaired += changesOf(result) || slice.length
+    }
+    if (repaired > 0) {
+      log.info('purged below-floor pipeline grants', { repaired, floor, floorSource })
+    }
+    return { scanned: violators, repaired, enforced: true, floor, floorSource }
   })
 }
 
@@ -270,6 +536,7 @@ export async function runEnforceInvariants(db, { logger = log } = {}) {
   const steps = []
   steps.push(await enforceStickyDeletes(db))
   steps.push(await enforceNoCrossProfileBleed(db))
+  steps.push(await enforceNoDuplicateGrants(db))
   steps.push(await enforceRelevanceFloor(db))
 
   const failed = steps.filter((s) => !s.ok).length
@@ -285,6 +552,9 @@ export async function runEnforceInvariants(db, { logger = log } = {}) {
       repaired: s.repaired ?? 0,
       ...(s.quarantined !== undefined ? { quarantined: s.quarantined } : {}),
       ...(s.scanned !== undefined ? { scanned: s.scanned } : {}),
+      ...(s.duplicatesRemoved !== undefined ? { duplicatesRemoved: s.duplicatesRemoved } : {}),
+      ...(s.profilesAffected !== undefined ? { profilesAffected: s.profilesAffected } : {}),
+      ...(s.floor !== undefined ? { floor: s.floor, floorSource: s.floorSource } : {}),
     })),
   })
 
@@ -299,4 +569,10 @@ function _parseBoolEnv(value) {
   return null
 }
 
-export const __testables = { PROTECTED_PIPELINE_STATUSES, RELEVANCE_FLOOR }
+export const __testables = {
+  PROTECTED_PIPELINE_STATUSES,
+  PROTECTED_NAME_PATTERN,
+  PURGEABLE_DISCOVERY_STATUSES,
+  RELEVANCE_FLOOR,
+  RELEVANCE_FLOOR_FALLBACK,
+}
