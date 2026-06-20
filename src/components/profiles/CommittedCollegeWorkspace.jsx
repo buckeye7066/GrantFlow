@@ -19,6 +19,8 @@ import {
 import { Input } from '@/components/ui/input'
 import CollegeFundingMergeModal from './CollegeFundingMergeModal.jsx'
 import HamiltonAutomationConsent from './HamiltonAutomationConsent.jsx'
+import PortalLoginButton from '@/components/portal/PortalLoginButton'
+import { safeHttpUrl } from '@/lib/safeUrl'
 
 const TERMINAL = new Set(['declined', 'denied', 'rejected', 'withdrawn', 'archived'])
 const COMMITTED = new Set(['committed', 'enrolled', 'attending', 'current', 'matriculated', 'deposited'])
@@ -249,6 +251,14 @@ export default function CommittedCollegeWorkspace({ profileId, applications = []
                     Financial aid site <ExternalLink className="h-3.5 w-3.5" />
                   </a>
                 ) : null}
+                {/* One-click portal login + save-login for Hamilton. */}
+                <div className="mt-2">
+                  <PortalLoginButton
+                    profileId={profileId}
+                    url={safeHttpUrl(c.portals?.student_portal_url) || safeHttpUrl(c.website_url)}
+                    label="Log in to student portal"
+                  />
+                </div>
               </div>
               <Button size="sm" variant="outline" onClick={() => uncommit.mutate(c.id)} disabled={uncommit.isPending}>
                 Change

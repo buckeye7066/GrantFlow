@@ -38,6 +38,8 @@ import PortalAssistantPanel from '../components/ai/PortalAssistantPanel';
 import PrintableApplicationPanel from '../components/ai/PrintableApplicationPanel';
 import { createLogger } from '@/utils/logger';
 import client, { apiFetch } from '@/api/client'
+import PortalLoginButton from '@/components/portal/PortalLoginButton';
+import { safeHttpUrl } from '@/lib/safeUrl';
 
 const toMessage = (e) => (e instanceof Error ? e.message : String(e ?? ''));
 
@@ -547,7 +549,18 @@ export default function GrantDetail() {
             <p className="text-slate-600">from {grant.funder}</p>
           </div>
           <div className="flex items-center gap-2 flex-wrap">
-            {['discovered', 'interested', 'drafting', 'portal', 'application_prep', 'revision'].includes(grant.status) && ( 
+            {(() => {
+              const portalUrl =
+                safeHttpUrl(grant.application_url) ||
+                safeHttpUrl(grant.url) ||
+                safeHttpUrl(grant.source_url) ||
+                safeHttpUrl(grant.portal_url);
+              if (!portalUrl) return null;
+              return (
+                <PortalLoginButton profileId={grant.profile_id} url={portalUrl} />
+              );
+            })()}
+            {['discovered', 'interested', 'drafting', 'portal', 'application_prep', 'revision'].includes(grant.status) && (
               <Button 
                 onClick={handleApplyWithAI} 
                 className="bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-700 hover:to-blue-700 gap-2 shadow-lg"

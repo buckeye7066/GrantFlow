@@ -31,6 +31,8 @@ import HelpTip from "@/components/help/HelpTip"
 import { getStageHelp } from "@/components/pipeline/pipelineStageHelp"
 import { Loader2, ExternalLink, CalendarClock, ChevronRight, Printer } from "lucide-react"
 import { createPageUrl } from "@/utils"
+import PortalLoginButton from "@/components/portal/PortalLoginButton"
+import { safeHttpUrl } from "@/lib/safeUrl"
 
 // Stage label + tone, mirroring the pipeline board (KanbanBoard STATUSES) and
 // covering the legacy status names the backend still tracks. Anything unmapped
@@ -113,18 +115,6 @@ function escapeHtml(value) {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;")
-}
-
-// Only allow http(s) links to be rendered as clickable hrefs — blocks
-// javascript:/data: scheme injection from a stored application_url.
-function safeHttpUrl(u) {
-  if (!u) return null
-  try {
-    const p = new URL(String(u))
-    return p.protocol === "http:" || p.protocol === "https:" ? p.href : null
-  } catch {
-    return null
-  }
 }
 
 // The pipeline phases, in process order, so the printout reads top-to-bottom as
@@ -409,6 +399,14 @@ export default function PipelinePotentialBreakdown({
                       >
                         Open <ExternalLink className="w-3 h-3" />
                       </a>
+                    </div>
+
+                    {/* One-click portal login + save-login for Hamilton, per source. */}
+                    <div className="mt-2">
+                      <PortalLoginButton
+                        profileId={profileId}
+                        url={safeHttpUrl(item.application_url) || safeHttpUrl(item.url) || safeHttpUrl(item.source_url) || safeHttpUrl(item.portal_url)}
+                      />
                     </div>
                   </li>
                 )

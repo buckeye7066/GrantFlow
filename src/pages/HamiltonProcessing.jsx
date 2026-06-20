@@ -36,6 +36,7 @@ import HamiltonAutopilotAuthorization from "@/components/hamilton/HamiltonAutopi
 import HamiltonHardStopChecklist from "@/components/hamilton/HamiltonHardStopChecklist";
 import { isGrantExpired } from "@/components/shared/grantUtils";
 import { isRenderableUrl } from "@/lib/matchDisplayThresholds";
+import PortalLoginButton from "@/components/portal/PortalLoginButton";
 
 /**
  * HamiltonProcessing
@@ -385,6 +386,12 @@ export default function HamiltonProcessing() {
                               </a>
                             )}
                           </div>
+                          {/* One-click portal login + save-login for Hamilton. */}
+                          {url && (
+                            <div className="mt-1.5">
+                              <PortalLoginButton profileId={profileId} url={url} />
+                            </div>
+                          )}
                         </TableCell>
                         <TableCell>
                           <span className="text-xs capitalize text-slate-700">

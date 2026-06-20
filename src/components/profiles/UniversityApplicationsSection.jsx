@@ -38,6 +38,8 @@ import UniversityApplicationForm from "./UniversityApplicationForm.jsx"
 import { deleteDocument, ingestDocument, listDocuments } from "@/api/documents"
 import DocumentItem from "@/components/documents/DocumentItem"
 import { useSchoolAIAssist, mapAIDataToApplicationPatch, AIAssistButton, AIAssistLog, SchoolAIAssistStyles } from "./SchoolCardAIAssist"
+import PortalLoginButton from "@/components/portal/PortalLoginButton"
+import { safeHttpUrl } from "@/lib/safeUrl"
 
 const STATUS_STYLES = {
   planning: { label: "Planning", className: "bg-slate-100 text-slate-700 border-slate-200" },
@@ -935,6 +937,7 @@ export default function UniversityApplicationsSection({
                 <ApplicationCard
                   key={application.id}
                   application={application}
+                  profileId={profileId}
                   onEdit={() => handleEditApplication(application)}
                   onDelete={() => setDeleteTarget(application)}
                   onToggleStage={handleTogglePipelineStatus}
@@ -1022,6 +1025,7 @@ const UNIVERSITY_DOC_TYPES = [
 
 function ApplicationCard({
   application,
+  profileId,
   onEdit,
   onDelete,
   onToggleStage,
@@ -1352,6 +1356,14 @@ function ApplicationCard({
           </div>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
+          {/* Prominent, consistent "log in to the portal" control so the path
+              to the student portal (and saving the login for Hamilton) is
+              obvious without opening the editor. */}
+          <PortalLoginButton
+            profileId={profileId}
+            url={safeHttpUrl(portals.student_portal_url) || safeHttpUrl(application.website_url)}
+            label="Log in to student portal"
+          />
           <ExternalLinkButton href={application.website_url}>Website</ExternalLinkButton>
           <ExternalLinkButton href={portals.admissions_url}>Admissions</ExternalLinkButton>
           <ExternalLinkButton href={portals.financial_aid_url}>Financial Aid</ExternalLinkButton>
