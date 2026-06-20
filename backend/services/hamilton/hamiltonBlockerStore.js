@@ -236,6 +236,35 @@ export async function resolveOpenBlockersForTask(db, {
   return open
 }
 
+/**
+ * Resolve a SINGLE blocker by id (as opposed to resolveOpenBlockersForTask,
+ * which clears every open blocker on the task). Used by the operator
+ * hard-stop checklist so ticking one item off never silently resolves a
+ * sibling stop on the same task. No-op (returns null) if the blocker is
+ * missing or already resolved. Returns the resolved blocker row so the
+ * caller can clear its related notifications.
+ */
+export async function resolveBlockerById(db, {
+  blockerId, strategy = 'user_action', detail = null, resolvedByUserId = null,
+} = {}) {
+  if (!db || !blockerId) return null
+  await ensureSchema(db)
+  const existing = await getBlocker(db, blockerId)
+  if (!existing || existing.resolved_at) return existing || null
+  const nowFn = db?.dialect === 'postgres' ? 'now()' : 'CURRENT_TIMESTAMP'
+  await db.prepare(
+    `UPDATE hamilton_blockers
+        SET resolved_at = ${nowFn}, resolution_strategy = ?, resolved_by_user_id = ?,
+            updated_at = ${nowFn}
+      WHERE id = ?`,
+  ).run(strategy, resolvedByUserId, String(blockerId))
+  await recordResolution(db, {
+    blockerId, taskId: existing.task_id, strategy, outcome: 'resolved',
+    detail, resolvedByUserId,
+  })
+  return rowToBlocker(await db.prepare('SELECT * FROM hamilton_blockers WHERE id = ?').get(String(blockerId)))
+}
+
 export async function recordResolution(db, {
   blockerId, taskId, strategy, outcome,
   detail = null, metadata = {}, resolvedByUserId = null,

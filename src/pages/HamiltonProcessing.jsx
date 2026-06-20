@@ -33,6 +33,7 @@ import {
 import { useToast } from "@/components/ui/use-toast";
 import { Sparkles, Trash2, Loader2, Filter, ExternalLink } from "lucide-react";
 import HamiltonAutopilotAuthorization from "@/components/hamilton/HamiltonAutopilotAuthorization";
+import HamiltonHardStopChecklist from "@/components/hamilton/HamiltonHardStopChecklist";
 import { isGrantExpired } from "@/components/shared/grantUtils";
 import { isRenderableUrl } from "@/lib/matchDisplayThresholds";
 
@@ -295,6 +296,10 @@ export default function HamiltonProcessing() {
             </Select>
           </div>
         </div>
+
+        {/* Actionable hard-stop checklist — the same stops you get toasts for,
+            each linking to where it's fixed, removed as you clear them. */}
+        {profileId && <HamiltonHardStopChecklist profileId={profileId} />}
 
         {!profileId ? (
           <div className="text-center py-20 text-slate-600">

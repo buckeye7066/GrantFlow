@@ -1527,6 +1527,28 @@ router.get('/:id/report-packet', async (req, res) => {
   })
 })
 
+// Canonical "active pipeline" statuses that count toward a profile's Pipeline
+// Potential. Both the headline `pipeline_funds_total` and the per-source
+// breakdown (GET /:id/pipeline-potential) read from this one list, so the
+// breakdown always sums to the figure shown on the card. Awarded / declined /
+// archived are intentionally excluded — Pipeline Potential is unrealized money.
+const PIPELINE_ACTIVE_STATUSES = Object.freeze([
+  'discovery',
+  'discovered',
+  'interested',
+  'auto_applied',
+  'drafting',
+  'app_prep',
+  'application_prep',
+  'revision',
+  'portal',
+  'submitted',
+  'pending_review',
+  'under_review',
+  'follow_up',
+  'report',
+])
+
 router.get('/:id', async (req, res) => {
   const { id } = req.params
   const isAdmin = req.ctx?.isAdmin === true
@@ -1595,24 +1617,11 @@ router.get('/:id', async (req, res) => {
     billing = null
   }
 
-  // Compute pipeline_funds_total for the detail view (same logic as enrichProfileWithSummary)
+  // Compute pipeline_funds_total for the detail view (same logic as enrichProfileWithSummary).
+  // Uses the shared PIPELINE_ACTIVE_STATUSES so the /:id/pipeline-potential
+  // breakdown below always reconciles to this number.
   let pipelineTotal = 0
-  const activeStatuses = [
-    'discovery',
-    'discovered',
-    'interested',
-    'auto_applied',
-    'drafting',
-    'app_prep',
-    'application_prep',
-    'revision',
-    'portal',
-    'submitted',
-    'pending_review',
-    'under_review',
-    'follow_up',
-    'report',
-  ]
+  const activeStatuses = PIPELINE_ACTIVE_STATUSES
   const pipelinePlaceholders = activeStatuses.map(() => '?').join(',')
   try {
     const pipelineRow = await req.db
@@ -1646,6 +1655,80 @@ router.get('/:id', async (req, res) => {
     billing,
     pipeline_funds_total: pipelineTotal,
   })
+})
+
+// GET /api/profiles/:id/pipeline-potential
+//
+// The per-source breakdown behind a profile's "Pipeline Potential" figure:
+// which funding sources make it up, a short description of each, the dollar
+// amount or range, the deadline to apply, and the current pipeline stage
+// (so the operator can see whether each has been applied / is under review /
+// etc.). This powers the click-through on the Pipeline Potential card.
+//
+// Scoped exactly like the profile detail route — only someone who can already
+// see the profile can see its private pipeline numbers.
+router.get('/:id/pipeline-potential', async (req, res) => {
+  const { id } = req.params
+  const isAdmin = req.ctx?.isAdmin === true
+  const userId = req.ctx?.userId ?? null
+
+  let row = null
+  try {
+    row = await req.db.prepare(`${profileSelect} WHERE p.id = ?`).get(id)
+  } catch (error) {
+    console.error('[profiles] Failed to load profile row for pipeline-potential:', error)
+    return res.status(500).json(formatError(error))
+  }
+  if (!row || row.status === 'deleted') {
+    return res.status(404).json({ error: 'Profile not found' })
+  }
+  if (!isAdmin) {
+    if (!userId) return res.status(401).json({ error: 'Authentication required' })
+    if (!canAccessProfileRowFromCtx(req.ctx, row)) {
+      return res.status(403).json({ error: 'Access denied' })
+    }
+  }
+
+  const placeholders = PIPELINE_ACTIVE_STATUSES.map(() => '?').join(',')
+  let items = []
+  try {
+    const rows = await req.db
+      .prepare(
+        `SELECT g.id, g.title, g.funder, g.status, g.deadline,
+                g.amount_requested, g.amount_min, g.amount_max,
+                g.notes, fo.description AS opportunity_description
+           FROM grants g
+           LEFT JOIN funding_opportunities fo ON fo.id = g.funding_opportunity_id
+          WHERE g.profile_id = ? AND g.status IN (${placeholders})
+          ORDER BY COALESCE(g.amount_requested, g.amount_max, g.amount_min, 0) DESC, g.title ASC`,
+      )
+      .all(id, ...PIPELINE_ACTIVE_STATUSES)
+    items = (rows || []).map((g) => {
+      const desc = (g.notes && String(g.notes).trim()) || g.opportunity_description || null
+      return {
+        id: g.id,
+        title: g.title,
+        funder: g.funder || null,
+        status: g.status,
+        deadline: g.deadline || null,
+        amount_requested: g.amount_requested ?? null,
+        amount_min: g.amount_min ?? null,
+        amount_max: g.amount_max ?? null,
+        // Keep the payload small — the card just needs a one-liner.
+        description: desc ? String(desc).slice(0, 280) : null,
+      }
+    })
+  } catch (error) {
+    // Legacy DBs without grants.profile_id: degrade to an empty breakdown
+    // rather than 500 (the headline total already has the same fallback).
+    if (!/profile_id/i.test(error?.message || '')) {
+      console.warn('[profiles] pipeline-potential query failed:', error?.message)
+    }
+    items = []
+  }
+
+  const total = items.reduce((sum, g) => sum + (Number(g.amount_requested) || 0), 0)
+  return res.json({ profile_id: id, total, count: items.length, items })
 })
 
 const TOP_LEVEL_PROFILE_KEYS = new Set(['display_name', 'primary_type', 'organization_id', 'status', 'tags'])

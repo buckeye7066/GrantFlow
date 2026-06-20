@@ -105,6 +105,8 @@ import {
   listBlockersForTask,
   listOpenAdminBlockers,
   resolveOpenBlockersForTask,
+  resolveBlockerById,
+  getBlocker,
 } from '../services/hamilton/hamiltonBlockerStore.js'
 import { resolveBlocker } from '../services/hamilton/hamiltonHardStopResolver.js'
 import { isAdminUser, HAMILTON_ADMIN_EMAIL } from '../services/hamilton/hamiltonAdminAccount.js'
@@ -1085,6 +1087,55 @@ router.get('/admin/hard-stops', async (req, res) => {
   } catch (err) {
     log.error('admin_hard_stops_failed', { err: err?.message })
     return res.status(500).json({ error: 'list_failed' })
+  }
+})
+
+// Admin: resolve ONE hard stop from the operator checklist. Marks just this
+// blocker resolved (not its siblings on the same task) and clears the
+// persistent notifications it raised so the bell + toast list stay in sync.
+// This is what powers "once the hard stop is taken care of, take it off the
+// list" on the Hamilton processing window.
+router.post('/admin/hard-stops/:blockerId/resolve', async (req, res) => {
+  const user = requireAuthenticatedUser(req, res)
+  if (!user) return
+  if (!isAdminUser(user)) return res.status(403).json({ error: 'forbidden_admin_only' })
+  const blockerId = String(req.params.blockerId || '')
+  if (!blockerId) return res.status(400).json({ error: 'blocker_id_required' })
+  try {
+    const existing = await getBlocker(req.db, blockerId)
+    if (!existing) return res.status(404).json({ error: 'blocker_not_found' })
+
+    const note = String(req.body?.note || '').slice(0, 500) || 'Resolved from Hamilton processing checklist.'
+    const resolved = await resolveBlockerById(req.db, {
+      blockerId,
+      strategy: 'user_action',
+      detail: note,
+      resolvedByUserId: getAuthUserId(user),
+    })
+
+    // Clear the persistent notifications tied to this blocker so the bell and
+    // the toast list stop surfacing a stop the operator already handled.
+    const notifIds = [
+      resolved?.user_notification_id,
+      ...((resolved?.admin_notification_ids) || []),
+    ].filter(Boolean)
+    if (notifIds.length > 0) await markNotificationsResolved(req.db, notifIds)
+
+    if (resolved?.task_id) {
+      await appendTaskEvent(req.db, {
+        taskId: resolved.task_id,
+        eventType: 'blocker_resolved',
+        step: 'admin_checklist',
+        message: `Hard stop "${resolved.blocker_type}" cleared from the processing checklist.`,
+        actorUserId: getAuthUserId(user),
+        actorRole: 'admin',
+      })
+    }
+
+    return res.json({ ok: true, blocker: resolved })
+  } catch (err) {
+    log.error('admin_hard_stop_resolve_failed', { err: err?.message, blockerId })
+    return res.status(500).json({ error: 'resolve_failed', detail: err?.message })
   }
 })
 

@@ -14,6 +14,7 @@ import {
 } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import PipelinePotentialBreakdown from "@/components/profiles/PipelinePotentialBreakdown"
 import {
   ArrowRight,
   CalendarClock,
@@ -1004,10 +1005,13 @@ export default function ProfileOverview({
             </div>
           </div>
           <div className="flex flex-col items-start gap-3 md:flex-row md:items-center">
-            <div className={`rounded-2xl border px-4 py-3 ${theme.pipelineCard}`}>
-              <p className={`text-xs font-medium uppercase tracking-wide ${theme.pipelineLabel}`}>Pipeline Potential</p>
-              <p className="text-2xl font-bold mt-1">{formattedFundsTotal}</p>
-            </div>
+            <PipelinePotentialBreakdown
+              profileId={profile?.id}
+              profileName={profile?.display_name || profile?.organization_name || ""}
+              formattedTotal={formattedFundsTotal}
+              cardClassName={theme.pipelineCard}
+              labelClassName={theme.pipelineLabel}
+            />
             {onEditSection ? (
               <div className="flex items-center gap-2">
                 <Button
