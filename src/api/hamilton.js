@@ -134,3 +134,21 @@ export function statusLabel(status) {
 export function portalTypeLabel(portalType) {
   return PORTAL_TYPE_LABELS[portalType] || portalType || 'Portal'
 }
+
+// -- Scheduled runs on the calendar + login readiness --------------------
+
+// Hamilton's scheduled application runs as calendar events (each flagged
+// requires_presence when a portal it touches needs login/2FA).
+export function getHamiltonCalendar({ profileId, month } = {}) {
+  if (!profileId) return Promise.reject(new Error('profileId required'))
+  const qs = new URLSearchParams({ profileId })
+  if (month) qs.set('month', month)
+  return apiFetch(`/api/hamilton/automation/calendar?${qs.toString()}`)
+}
+
+// Login-time readiness: schedule status, next run, and which portals still need
+// a session captured so Hamilton can act inside the real account.
+export function getHamiltonReadiness({ profileId } = {}) {
+  if (!profileId) return Promise.reject(new Error('profileId required'))
+  return apiFetch(`/api/hamilton/automation/readiness?profileId=${encodeURIComponent(profileId)}`)
+}

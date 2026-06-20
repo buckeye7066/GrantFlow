@@ -1,6 +1,8 @@
 import React, { useState, useMemo } from "react"
 import { useQuery } from "@tanstack/react-query"
 import { getCalendarDeadlines } from "@/api/foundations"
+import { getHamiltonCalendar } from "@/api/hamilton"
+import HamiltonReadinessBanner from "@/components/hamilton/HamiltonReadinessBanner"
 import client from "@/api/client"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
@@ -28,10 +30,22 @@ export default function Calendar() {
     queryFn: () => getCalendarDeadlines({ month: monthStr, profileId: profileId || undefined }),
     staleTime: 60_000,
   })
+  // Hamilton's scheduled application runs (profile-scoped) — folded into the
+  // same calendar feed, each flagged when you may need to be available for 2FA.
+  const { data: hamiltonResult } = useQuery({
+    queryKey: ["hamilton-calendar", monthStr, profileId],
+    queryFn: () => getHamiltonCalendar({ month: monthStr, profileId }),
+    enabled: !!profileId,
+    staleTime: 60_000,
+  })
+
   const calEvents = useMemo(() => {
     const payload = calendarResult?.data ?? calendarResult ?? {}
-    return Array.isArray(payload.events) ? payload.events : []
-  }, [calendarResult])
+    const deadlineEvents = Array.isArray(payload.events) ? payload.events : []
+    const hPayload = hamiltonResult?.data ?? hamiltonResult ?? {}
+    const hamiltonEvents = Array.isArray(hPayload.events) ? hPayload.events : []
+    return [...deadlineEvents, ...hamiltonEvents]
+  }, [calendarResult, hamiltonResult])
 
   // Also load grants from pipeline for the existing view
   const { data: grants = [] } = useQuery({
@@ -109,6 +123,8 @@ export default function Calendar() {
           </div>
         </div>
 
+        {profileId ? <HamiltonReadinessBanner profileId={profileId} /> : null}
+
         <div className="grid lg:grid-cols-3 gap-6">
           {/* Calendar Grid */}
           <Card className="lg:col-span-2">
@@ -167,12 +183,17 @@ export default function Calendar() {
                                 <div
                                   key={i}
                                   className={`text-[10px] leading-tight truncate rounded px-1 ${
-                                    ev.calendar_source === "pipeline"
-                                      ? "bg-blue-100 text-blue-800"
-                                      : "bg-emerald-100 text-emerald-800"
+                                    ev.calendar_source === "hamilton_run"
+                                      ? (ev.requires_presence ? "bg-amber-200 text-amber-900" : "bg-violet-100 text-violet-800")
+                                      : ev.calendar_source === "pipeline"
+                                        ? "bg-blue-100 text-blue-800"
+                                        : "bg-emerald-100 text-emerald-800"
                                   }`}
+                                  title={ev.calendar_source === "hamilton_run" ? ev.detail : undefined}
                                 >
-                                  {ev.title?.slice(0, 20)}
+                                  {ev.calendar_source === "hamilton_run"
+                                    ? `${ev.requires_presence ? "⚠ " : "🤖 "}${ev.title?.slice(0, 18)}`
+                                    : ev.title?.slice(0, 20)}
                                 </div>
                               ))}
                               {events.length > 3 && (
